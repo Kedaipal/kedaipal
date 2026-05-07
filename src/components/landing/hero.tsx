@@ -137,7 +137,7 @@ export function Hero() {
 
 					<motion.h1
 						variants={revealUp}
-						className="text-5xl font-bold leading-[0.95] md:text-7xl"
+						className="text-4xl font-bold leading-[0.95] md:text-7xl"
 						style={{ letterSpacing: "-0.04em" }}
 					>
 						{m.hero_headline_part1()}{" "}
@@ -188,12 +188,13 @@ export function Hero() {
 										placeholder="yourstore"
 										className="min-w-0 flex-1 bg-transparent py-3 pr-2 text-sm font-medium outline-none placeholder:text-muted-foreground/40"
 									/>
-									<Button asChild size="sm" className="m-1.5 shrink-0 px-5">
+									<Button asChild size="sm" className="m-1.5 shrink-0 px-3 sm:px-5">
 										<Link
 											to="/sign-up/$"
 											params={{ _splat: slug ? `?store=${slug}` : "" }}
 										>
-											Claim this store
+											<span className="hidden sm:inline">Claim this store</span>
+											<ArrowRight className="sm:hidden" />
 										</Link>
 									</Button>
 								</div>
