@@ -58,6 +58,7 @@ function NavAuthCta() {
 
 export function Nav() {
 	const [menuOpen, setMenuOpen] = useState(false);
+	const [scrolled, setScrolled] = useState(false);
 
 	const closeMenu = useCallback(() => setMenuOpen(false), []);
 
@@ -70,6 +71,14 @@ export function Nav() {
 		return () => document.removeEventListener("keydown", onKeyDown);
 	}, [menuOpen]);
 
+	useEffect(() => {
+		function onScroll() {
+			setScrolled(window.scrollY > 64);
+		}
+		window.addEventListener("scroll", onScroll, { passive: true });
+		return () => window.removeEventListener("scroll", onScroll);
+	}, []);
+
 	const navLinks = [
 		{ href: "#features", label: m.nav_features() },
 		{ href: "#how", label: m.nav_how() },
@@ -78,7 +87,13 @@ export function Nav() {
 	];
 
 	return (
-		<nav className="sticky top-0 z-40 w-full border-b border-border/60 bg-background/80 backdrop-blur-md">
+		<nav
+			className={`sticky top-0 z-40 w-full transition-all duration-300 ${
+				scrolled || menuOpen
+					? "border-b border-border/60 bg-background/95 shadow-sm backdrop-blur-lg"
+					: "border-b border-transparent bg-transparent"
+			}`}
+		>
 			<div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5 md:px-8">
 				<a href="#top" className="flex items-center">
 					<img src="/logo-3.svg" alt="Kedaipal" className="h-9 w-auto" />

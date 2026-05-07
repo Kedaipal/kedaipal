@@ -16,38 +16,41 @@ export function SetupStrip() {
 			aria-labelledby="setup-heading"
 			className="border-b border-border/60"
 		>
-			<div className="mx-auto max-w-6xl px-5 py-20 md:px-8 md:py-28">
+			<div className="mx-auto max-w-6xl px-5 py-24 md:px-8 md:py-32">
 				<div className="mx-auto max-w-2xl text-center">
 					<p className="text-xs font-semibold uppercase tracking-widest text-accent">
 						{m.setup_label()}
 					</p>
 					<h2
 						id="setup-heading"
-						className="mt-3 text-3xl font-bold tracking-tight md:text-5xl"
+						className="mt-3 text-3xl font-bold md:text-5xl"
+						style={{ letterSpacing: "-0.02em" }}
 					>
 						{m.setup_heading()}
 					</h2>
-					<p className="mt-4 text-base text-muted-foreground md:text-lg">
+					<p className="mt-4 text-base leading-relaxed text-muted-foreground md:text-lg">
 						{m.setup_sub()}
 					</p>
 				</div>
 				<div className="relative mt-14 grid gap-8 md:grid-cols-3">
 					{steps.map((s, i) => (
-						<div key={s.title} className="flex flex-col gap-4">
+						<div key={s.title} className="flex flex-col gap-5">
 							<div className="flex items-center gap-3">
-								<div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-accent text-sm font-bold text-accent-foreground">
+								<div className="flex size-12 shrink-0 items-center justify-center rounded-full bg-accent text-base font-bold text-accent-foreground ring-4 ring-accent/15">
 									{i + 1}
 								</div>
 								{i < steps.length - 1 && (
-									<div className="hidden h-px flex-1 bg-accent/20 md:block" />
+									<div className="hidden h-px flex-1 bg-gradient-to-r from-accent/30 to-accent/10 md:block" />
 								)}
 							</div>
-							<h3 className="text-lg font-semibold">{s.title}</h3>
-							<p className="text-sm text-muted-foreground">{s.body}</p>
+							<h3 className="text-xl font-semibold">{s.title}</h3>
+							<p className="text-sm leading-relaxed text-muted-foreground">
+								{s.body}
+							</p>
 						</div>
 					))}
 				</div>
-				<div className="mt-12 flex justify-center">
+				<div className="mt-14 flex justify-center">
 					<Button asChild size="lg" className="h-12 px-8 text-base">
 						{isSignedIn ? (
 							<Link to="/app">

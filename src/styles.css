@@ -52,6 +52,39 @@
 	padding-top: env(safe-area-inset-top);
 }
 
+/* =============================================
+   Landing page design system — elevated layer
+   ============================================= */
+
+/* Hero atmospheric mesh — subtle mint glow from top-center + light navy hint */
+@utility bg-hero-mesh {
+	background-image:
+		url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E"),
+		radial-gradient(ellipse 80% 55% at 50% -5%, hsl(160 84% 39% / 0.09), transparent),
+		radial-gradient(ellipse 45% 35% at 95% 90%, hsl(222 47% 11% / 0.04), transparent);
+	background-size: 200px 200px, auto, auto;
+	background-repeat: repeat, no-repeat, no-repeat;
+	background-color: hsl(0 0% 100%);
+}
+
+/* Final CTA mesh — mint glow on deep navy */
+@utility bg-cta-mesh {
+	background-image:
+		radial-gradient(ellipse 75% 80% at 50% 50%, hsl(160 84% 39% / 0.22), transparent 70%),
+		radial-gradient(ellipse 100% 50% at 0% 100%, hsl(160 84% 39% / 0.08), transparent 60%);
+	background-color: hsl(222 47% 11%);
+}
+
+/* Problem section — barely-there warm tint */
+@utility bg-problem-warm {
+	background-color: hsl(30 60% 98%);
+}
+
+/* Display-scale letter-spacing for large headings */
+@utility tracking-display {
+	letter-spacing: -0.04em;
+}
+
 @theme inline {
 	--font-heading:
 		'Red Hat Display Variable', sans-serif;

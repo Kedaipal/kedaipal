@@ -9,13 +9,13 @@
 	"nav_start_free": "Mula percuma",
 	"nav_go_to_dashboard": "Pergi ke Dashboard",
 
-	"hero_badge": "Percuma sepanjang beta",
+	"hero_badge": "Percuma — setiap ciri, tiada kad",
 	"hero_headline_part1": "Pesanan WhatsApp anda,",
 	"hero_headline_part2": "akhirnya tersusun.",
 	"hero_subhead": "Kedaipal ialah hab pesanan untuk perniagaan kecil yang menjual produk — kedai roti, kedai luar, butik, sesiapa sahaja yang ambil pesanan. Lancarkan di WhatsApp hari ini, kemudian satukan Shopee, Lazada dan TikTok Shop sambil berkembang — semua dari satu papan pemuka.",
-	"hero_cta_primary": "Mula percuma",
+	"hero_cta_primary": "Tuntut kedai percuma anda",
 	"hero_cta_secondary": "Lihat cara ia berfungsi",
-	"hero_trust": "Tiada kad kredit · Kedai hidup dalam 60 saat · Data anda kekal milik anda",
+	"hero_trust": "Kedai anda percuma — tiada kad kredit, tiada helah. Hidup dalam 5 minit.",
 	"hero_phone_alt": "Sembang WhatsApp yang membawa kepada etalase Kedaipal dan pengesahan pesanan",
 	"hero_phone_badge": "Pesanan baharu",
 
@@ -69,8 +69,8 @@
 	"feature_7_body": "Save quotes. Set reminders. Re-engage a 2-week-old conversation in two taps. The customers who take longer to decide become customers who actually buy.",
 
 	"slow_yes_eyebrow": "For the slow yes",
-	"slow_yes_heading": "Most outdoor customers don't buy on the first message. Kedaipal is built for that.",
-	"slow_yes_sub": "Tents, packs, sleeping bags — these are research purchases. People ask, disappear, come back, ask again. With Kedaipal, every conversation is one tap away, with full history. The slow customers become closed sales, not lost ones.",
+	"slow_yes_heading": "Kebanyakan pelanggan tidak beli pada mesej pertama. Kedaipal dibina untuk itu.",
+	"slow_yes_sub": "Sama ada pesanan makanan pukal, kek pra-tempah, atau pembelian peralatan — pelanggan tanya, senyap, kemudian balik semula. Dengan Kedaipal, setiap perbualan hanya satu ketukan jauh, dengan sejarah penuh. Pelanggan yang lambat bertukar menjadi jualan tertutup, bukan yang hilang.",
 	"slow_yes_1_title": "Save a quote, follow up later",
 	"slow_yes_1_body": "Send a price, save it as a parked order, set a reminder. The customer who said \"I'll think about it\" gets a friendly nudge in 3 days — automatically.",
 	"slow_yes_1_status": "Rolling out — beta access",
@@ -99,8 +99,10 @@
 	"pricing_include_2": "Pesanan tanpa had",
 	"pricing_include_3": "Automasi WhatsApp",
 	"pricing_include_4": "Akses papan pemuka",
-	"pricing_future": "Pelan berbayar dari RM 49/bulan selepas beta. Pengguna beta kunci harga pengasas.",
-	"pricing_cta": "Namakan kedai anda — percuma",
+	"pricing_anchor": "Kebanyakan alat pesanan WhatsApp mengenakan caj RM 200–500/bulan. Kedaipal semasa beta: percuma. Selepas beta: dari RM 79/bulan. Pengguna beta kunci harga pengasas.",
+	"pricing_future": "Dari RM 79/bulan selepas beta · Itu kurang dari RM 3 sehari — lebih murah dari teh tarik.",
+	"pricing_compare_heading": "Kenapa Kedaipal?",
+	"pricing_cta": "Dapatkan kedai percuma anda sekarang",
 
 	"faq_label": "Soalan Lazim",
 	"faq_heading": "Soalan, dijawab.",
@@ -121,13 +123,15 @@
 	"faq_q_8": "Adakah harga akan kekal percuma selamanya?",
 	"faq_a_8": "Tidak — Kedaipal akan beralih ke peringkat berbayar selepas beta. Pengguna beta akan dapat harga pengasas yang dikunci sebagai tanda terima kasih.",
 	"faq_q_9": "Will this work for me even if business is slow right now?",
-	"faq_a_9": "Yes — that's actually exactly what it's built for. When inquiries are taking longer to convert, the cost of losing one in your inbox is higher, not lower. Kedaipal makes sure every conversation gets followed up. Set up takes under 5 minutes; you'll see the difference in the first week.",
+	"faq_a_9": "Bila pesanan lebih perlahan, kos terlepas satu susulan lebih tinggi — bukan lebih rendah. Satu perbualan yang dipulihkan minggu ini boleh menampung sebulan langganan. Kedaipal pastikan tiada yang terlepas.",
 	"faq_q_10": "Who's behind Kedaipal?",
-	"faq_a_10": "A solo developer (Arif Rahman) building this with a small group of Malaysian outdoor shops as design partners. Active development, weekly updates, real human at the other end of the chat. Not a big team, but you'll always reach a person.",
+	"faq_a_10": "Seorang pembangun solo (Arif Rahman) membina ini bersama sekumpulan kecil peruncit Malaysia — F&B, peralatan luar, fesyen — sebagai rakan reka bentuk. Pembangunan aktif, kemas kini mingguan, manusia sebenar di hujung chat. Bukan pasukan besar, tapi anda sentiasa boleh hubungi seseorang.",
+	"faq_see_all": "Lihat semua soalan",
+	"faq_see_less": "Lihat lebih sedikit soalan",
 
 	"final_heading": "Mula dengan WhatsApp hari ini. Kembang ke mana-mana esok.",
 	"final_sub": "Lima minit untuk sediakan. Percuma sepanjang beta. Setiap saluran, satu hab.",
-	"final_cta": "Mula percuma",
+	"final_cta": "Tuntut kedai percuma anda",
 
 	"footer_tagline": "Kawan peniaga kedai. Dibuat di Asia Tenggara.",
 	"footer_copyright": "© {year} Kedaipal. Hak cipta terpelihara.",
@@ -172,6 +176,8 @@
 
 	"footer_privacy": "Privasi",
 	"footer_terms": "Terma",
+
+	"features_full_list": "Senarai ciri penuh →",
 
 	"lang_switcher_label": "Bahasa",
 	"lang_en": "English",

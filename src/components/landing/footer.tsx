@@ -3,8 +3,8 @@ import { m } from "../../paraglide/messages";
 
 export function Footer() {
 	return (
-		<footer className="border-border/60 bg-background pb-[max(2rem,env(safe-area-inset-bottom))]">
-			<div className="mx-auto max-w-6xl px-5 py-12 md:px-8">
+		<footer className="border-border/60 bg-gradient-to-b from-muted/20 to-background pb-[max(2rem,env(safe-area-inset-bottom))]">
+			<div className="mx-auto max-w-6xl px-5 py-14 md:px-8">
 				<div className="flex flex-col items-start justify-between gap-6 md:flex-row md:items-center">
 					<div className="flex items-center">
 						<img src="/logo-3.svg" alt="Kedaipal" className="h-9 w-auto" />
