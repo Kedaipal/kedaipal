@@ -194,7 +194,7 @@ function ProductsRoute() {
 				) : null}
 			</div>
 
-			<div className="-mx-5 flex gap-2 overflow-x-auto px-5 pb-1">
+			<div className="-mx-5 flex gap-2 overflow-x-auto px-5 pb-1 lg:mx-0 lg:px-0">
 				{filterOptions.map((opt) => (
 					<button
 						key={opt.key}
@@ -247,7 +247,7 @@ function ProductsRoute() {
 					</Button>
 				</div>
 			) : (
-				<ul className="flex flex-col gap-3">
+				<ul className="flex flex-col gap-3 lg:grid lg:grid-cols-2 lg:gap-3 xl:grid-cols-3">
 					{filtered.map((p) => {
 						const outOfStock = p.active && p.stock === 0;
 						const lowStock = p.active && p.stock > 0 && p.stock <= 3;
@@ -318,7 +318,7 @@ function ProductsRoute() {
 
 function ProductListSkeleton() {
 	return (
-		<ul className="flex flex-col gap-3">
+		<ul className="flex flex-col gap-3 lg:grid lg:grid-cols-2 lg:gap-3 xl:grid-cols-3">
 			{[0, 1, 2, 3, 4].map((n) => (
 				<li
 					key={n}

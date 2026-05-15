@@ -64,7 +64,9 @@ The database schema already treats WhatsApp as one `channel` on retailers/produc
 | Hosting | Cloudflare Workers/Pages + Convex Cloud |
 | Tooling | pnpm, Biome, Vitest |
 
-**Hard requirement:** mobile-first across the entire product. Storefront traffic comes from WhatsApp's in-app browser on phones, and retailers run their shop from a phone, not a laptop. Single-column layouts, ≥44px tap targets, sticky/bottom-anchored CTAs.
+**Storefront — strictly mobile-first.** Storefront traffic comes from WhatsApp's in-app browser on phones, so the public `/<slug>` experience is single-column, ≥44px tap targets, sticky/bottom-anchored CTAs. Desktop is not a target there.
+
+**Dashboard — mobile + desktop responsive.** Retailers triage orders on a phone in the field but do bulk product editing, settings, and order review on a laptop. The `/app/*` shell renders a bottom-tab layout below `lg` (1024px) and a collapsible left sidebar with a centered `max-w-6xl` content column on `lg+`. Both layouts share the same routes and data hooks; the switch is CSS-only.
 
 ---
 
@@ -179,7 +181,7 @@ Online payments are deferred to the first paid release — see [Payments Archite
 - **Vertical specificity is the primary wedge.** Outdoor gear is not a limitation — it's the beachhead.
 - **Validate before building.** MVP sequencing prioritizes conversations with shop owners before engineering effort.
 - **Invest in real moats** (data, community, localization) — not weak ones.
-- **Phone-first for everyone.** Both shoppers and retailers live on mobile.
+- **Phone-first by default.** Storefront is phone-only; the dashboard is phone-primary but ships a real desktop layout for retailers doing bulk work on a laptop.
 - **Keep the `channel` abstraction intact.** Every future marketplace connector depends on it.
 
 ---

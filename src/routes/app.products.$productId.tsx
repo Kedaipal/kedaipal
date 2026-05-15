@@ -12,7 +12,7 @@ export const Route = createFileRoute("/app/products/$productId")({
 
 function ProductDetailSkeleton() {
 	return (
-		<div className="flex flex-col gap-4">
+		<div className="flex flex-col gap-4 lg:max-w-2xl">
 			<Skeleton className="h-4 w-20 rounded" />
 			<Skeleton className="h-7 w-36 rounded" />
 			<div className="flex flex-col gap-4">
@@ -58,7 +58,7 @@ function EditProductRoute() {
 	}
 
 	return (
-		<div className="flex flex-col gap-4">
+		<div className="flex flex-col gap-4 lg:max-w-2xl">
 			<div className="flex items-center gap-2">
 				<Link
 					to="/app/products"

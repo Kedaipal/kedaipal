@@ -62,7 +62,7 @@ export const Route = createFileRoute("/app/settings")({
 
 function SettingsSkeleton() {
 	return (
-		<div className="flex flex-col gap-6">
+		<div className="flex flex-col gap-6 lg:max-w-3xl">
 			<section className="flex flex-col gap-2">
 				<Skeleton className="h-7 w-24" />
 				<Skeleton className="h-4 w-48" />
@@ -167,7 +167,7 @@ function SettingsRoute() {
 	);
 
 	return (
-		<div className="flex flex-col gap-6">
+		<div className="flex flex-col gap-6 lg:max-w-3xl">
 			<section className="flex flex-col gap-2">
 				<h2 className="text-xl font-bold">Settings</h2>
 				<p className="text-sm text-muted-foreground">

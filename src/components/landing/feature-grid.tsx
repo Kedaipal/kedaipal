@@ -3,10 +3,26 @@ import { m } from "../../paraglide/messages";
 import { FadeIn } from "./fade-in";
 
 const HERO_FEATURES = [
-	{ icon: MessageCircle, title: () => m.feature_2_title(), body: () => m.feature_2_body() },
-	{ icon: Store, title: () => m.feature_1_title(), body: () => m.feature_1_body() },
-	{ icon: BarChart3, title: () => m.feature_3_title(), body: () => m.feature_3_body() },
-	{ icon: BellRing, title: () => m.feature_7_title(), body: () => m.feature_7_body() },
+	{
+		icon: MessageCircle,
+		title: () => m.feature_2_title(),
+		body: () => m.feature_2_body(),
+	},
+	{
+		icon: Store,
+		title: () => m.feature_1_title(),
+		body: () => m.feature_1_body(),
+	},
+	{
+		icon: BarChart3,
+		title: () => m.feature_3_title(),
+		body: () => m.feature_3_body(),
+	},
+	{
+		icon: BellRing,
+		title: () => m.feature_7_title(),
+		body: () => m.feature_7_body(),
+	},
 ];
 
 export function FeatureGrid() {

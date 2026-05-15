@@ -227,7 +227,7 @@ function OrderDetailRoute() {
 	const askForProofUrl = buildAskForProofWaUrl();
 
 	return (
-		<div className="flex flex-col gap-5">
+		<div className="flex flex-col gap-5 lg:max-w-3xl">
 			{/* Back nav */}
 			<Link
 				to="/app/orders"

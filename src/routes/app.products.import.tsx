@@ -199,7 +199,7 @@ function ImportProductsRoute() {
 		!previewing;
 
 	return (
-		<div className="flex flex-col gap-5">
+		<div className="flex flex-col gap-5 lg:max-w-3xl">
 			<div className="flex items-center gap-2">
 				<Link
 					to="/app/products"

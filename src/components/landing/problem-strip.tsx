@@ -52,7 +52,9 @@ export function ProblemStrip() {
 									<span className="text-xs font-bold uppercase tracking-widest text-destructive/50">
 										{String(i + 1).padStart(2, "0")}
 									</span>
-									<h3 className="mt-1 text-xl font-bold md:text-2xl">{p.title}</h3>
+									<h3 className="mt-1 text-xl font-bold md:text-2xl">
+										{p.title}
+									</h3>
 									<p className="mt-3 max-w-xl text-base leading-relaxed text-muted-foreground">
 										{p.body}
 									</p>

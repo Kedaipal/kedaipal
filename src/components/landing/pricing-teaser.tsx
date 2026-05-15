@@ -12,8 +12,16 @@ const TIER_INCLUDES = [
 ] as const;
 
 const COMPARISON_ROWS = [
-	{ label: "Custom website build", price: "RM 3,000–10,000 one-time", highlight: false },
-	{ label: "Shopify + WhatsApp plugin", price: "RM 130–200/mo", highlight: false },
+	{
+		label: "Custom website build",
+		price: "RM 3,000–10,000 one-time",
+		highlight: false,
+	},
+	{
+		label: "Shopify + WhatsApp plugin",
+		price: "RM 130–200/mo",
+		highlight: false,
+	},
 	{ label: "Kedaipal (after beta)", price: "from RM 79/mo", highlight: false },
 	{ label: "Kedaipal (beta)", price: "Free", highlight: true },
 ] as const;

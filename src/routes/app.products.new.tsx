@@ -15,7 +15,7 @@ function NewProductRoute() {
 	if (!retailer) return null;
 
 	return (
-		<div className="flex flex-col gap-4">
+		<div className="flex flex-col gap-4 lg:max-w-2xl">
 			<div className="flex items-center gap-2">
 				<Link
 					to="/app/products"

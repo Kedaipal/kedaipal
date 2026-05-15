@@ -24,11 +24,7 @@ const revealUp = {
 
 function PhoneMockupContent() {
 	return (
-		<div
-			className="relative"
-			role="img"
-			aria-label={m.hero_phone_alt()}
-		>
+		<div className="relative" role="img" aria-label={m.hero_phone_alt()}>
 			<div className="relative h-[560px] w-[280px] rounded-[2.5rem] border-8 border-foreground/90 bg-foreground [filter:drop-shadow(0_32px_48px_hsl(222_47%_11%_/_0.14))]">
 				<div className="absolute left-1/2 top-2 z-10 h-5 w-24 -translate-x-1/2 rounded-full bg-foreground" />
 				<div className="relative flex h-full w-full flex-col overflow-hidden rounded-[2rem] bg-[#ECE5DD]">
@@ -38,7 +34,9 @@ function PhoneMockupContent() {
 						</div>
 						<div className="flex-1">
 							<p className="text-sm font-semibold">{m.phone_store_name()}</p>
-							<p className="text-[10px] text-white/80">{m.phone_store_status()}</p>
+							<p className="text-[10px] text-white/80">
+								{m.phone_store_status()}
+							</p>
 						</div>
 					</div>
 					<div className="flex flex-1 flex-col gap-2 p-3">
@@ -57,7 +55,9 @@ function PhoneMockupContent() {
 									<p className="text-[11px] font-semibold text-slate-800">
 										{m.phone_store_name()}
 									</p>
-									<p className="text-[9px] text-slate-500">{m.phone_store_url()}</p>
+									<p className="text-[9px] text-slate-500">
+										{m.phone_store_url()}
+									</p>
 								</div>
 							</div>
 							<p className="pt-2 text-[10px] font-semibold text-accent">
@@ -68,7 +68,9 @@ function PhoneMockupContent() {
 							{m.phone_chat_3()}
 						</div>
 						<div className="max-w-[90%] self-end rounded-xl rounded-tr-sm bg-[#DCF8C6] px-3 py-2 shadow-sm">
-							<p className="text-[11px] font-bold text-slate-800">{m.phone_order_id()}</p>
+							<p className="text-[11px] font-bold text-slate-800">
+								{m.phone_order_id()}
+							</p>
 							<div className="mt-1 space-y-0.5 text-[10px] text-slate-700">
 								<p>• {m.phone_order_item()}</p>
 								<p>• {m.phone_order_total()}</p>
@@ -180,15 +182,17 @@ export function Hero() {
 										value={slug}
 										onChange={(e) =>
 											setSlug(
-												e.target.value
-													.toLowerCase()
-													.replace(/[^a-z0-9-]/g, ""),
+												e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""),
 											)
 										}
 										placeholder="yourstore"
 										className="min-w-0 flex-1 bg-transparent py-3 pr-2 text-sm font-medium outline-none placeholder:text-muted-foreground/40"
 									/>
-									<Button asChild size="sm" className="m-1.5 shrink-0 px-3 sm:px-5">
+									<Button
+										asChild
+										size="sm"
+										className="m-1.5 shrink-0 px-3 sm:px-5"
+									>
 										<Link
 											to="/sign-up/$"
 											params={{ _splat: slug ? `?store=${slug}` : "" }}
@@ -204,7 +208,8 @@ export function Hero() {
 									className="h-auto self-start px-0 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-transparent"
 								>
 									<a href="#how">
-										{m.hero_cta_secondary()} <ArrowRight className="ml-1 size-4" />
+										{m.hero_cta_secondary()}{" "}
+										<ArrowRight className="ml-1 size-4" />
 									</a>
 								</Button>
 							</>

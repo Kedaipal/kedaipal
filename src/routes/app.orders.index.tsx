@@ -68,7 +68,7 @@ function OrdersRoute() {
 				)}
 			</div>
 
-			<div className="-mx-5 flex gap-2 overflow-x-auto px-5 pb-1">
+			<div className="-mx-5 flex gap-2 overflow-x-auto px-5 pb-1 lg:mx-0 lg:px-0 lg:flex-wrap lg:overflow-visible">
 				{STATUSES.map((s) => {
 					const badge =
 						s === "pending" && counts?.pending
@@ -123,7 +123,7 @@ function OrdersRoute() {
 					</div>
 				</div>
 			) : (
-				<ul className="flex flex-col gap-2">
+				<ul className="flex flex-col gap-2 lg:grid lg:grid-cols-2 lg:gap-3">
 					{result.page.map((o) => (
 						<li key={o._id}>
 							<Link
@@ -178,7 +178,7 @@ const STATUS_STYLES: Record<OrderStatus, string> = {
 
 function OrderListSkeleton() {
 	return (
-		<ul className="flex flex-col gap-2">
+		<ul className="flex flex-col gap-2 lg:grid lg:grid-cols-2 lg:gap-3">
 			{[0, 1, 2, 3].map((n) => (
 				<li
 					key={n}

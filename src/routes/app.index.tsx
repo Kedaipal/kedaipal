@@ -46,7 +46,7 @@ function DashboardSkeleton() {
 			</section>
 
 			{/* Stats grid */}
-			<section className="grid grid-cols-2 gap-3">
+			<section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
 				{[0, 1, 2, 3].map((n) => (
 					<div
 						key={n}
@@ -331,7 +331,7 @@ function DashboardHome() {
 
 			{/* Stats grid — hidden for brand-new users */}
 			{!isNew ? (
-				<section className="grid grid-cols-2 gap-3">
+				<section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
 					<StatTile
 						to="/app/orders"
 						icon={Clock}
@@ -368,81 +368,81 @@ function DashboardHome() {
 				</section>
 			) : null}
 
-			{/* Recent orders — hidden for brand-new users */}
+			{/* Recent orders + sales channels — desktop side-by-side, mobile stacked */}
 			{!isNew ? (
-				<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-5">
-					<div className="flex items-center justify-between">
-						<h3 className="text-sm font-semibold">Recent orders</h3>
-						<Link
-							to="/app/orders"
-							className="text-xs font-medium text-accent hover:underline"
-						>
-							View all →
-						</Link>
-					</div>
-					{recentOrders.length === 0 ? (
-						<EmptyOrders hasProduct={hasProduct} />
-					) : (
-						<ul className="flex flex-col gap-2">
-							{recentOrders.map((order) => (
-								<li key={order._id}>
-									<Link
-										to="/app/orders/$shortId"
-										params={{ shortId: order.shortId }}
-										className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-3 transition-colors hover:bg-accent/5"
-									>
-										<div className="flex min-w-0 flex-col gap-0.5">
-											<p className="truncate font-mono text-sm font-medium">
-												{order.shortId}
-											</p>
-											<p className="truncate text-xs text-muted-foreground">
-												{order.customer?.name ?? "Anonymous"} ·{" "}
-												{order.items.length} item
-												{order.items.length === 1 ? "" : "s"}
-											</p>
-										</div>
-										<div className="flex shrink-0 flex-col items-end gap-1">
-											<p className="text-sm font-semibold">
-												{formatPrice(order.total, order.currency)}
-											</p>
-											<StatusBadge status={order.status} />
-										</div>
-									</Link>
-								</li>
-							))}
-						</ul>
-					)}
-				</section>
-			) : null}
+				<div className="flex flex-col gap-6 lg:grid lg:grid-cols-3 lg:items-start lg:gap-6">
+					<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-5 lg:col-span-2">
+						<div className="flex items-center justify-between">
+							<h3 className="text-sm font-semibold">Recent orders</h3>
+							<Link
+								to="/app/orders"
+								className="text-xs font-medium text-accent hover:underline"
+							>
+								View all →
+							</Link>
+						</div>
+						{recentOrders.length === 0 ? (
+							<EmptyOrders hasProduct={hasProduct} />
+						) : (
+							<ul className="flex flex-col gap-2">
+								{recentOrders.map((order) => (
+									<li key={order._id}>
+										<Link
+											to="/app/orders/$shortId"
+											params={{ shortId: order.shortId }}
+											className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-3 transition-colors hover:bg-accent/5"
+										>
+											<div className="flex min-w-0 flex-col gap-0.5">
+												<p className="truncate font-mono text-sm font-medium">
+													{order.shortId}
+												</p>
+												<p className="truncate text-xs text-muted-foreground">
+													{order.customer?.name ?? "Anonymous"} ·{" "}
+													{order.items.length} item
+													{order.items.length === 1 ? "" : "s"}
+												</p>
+											</div>
+											<div className="flex shrink-0 flex-col items-end gap-1">
+												<p className="text-sm font-semibold">
+													{formatPrice(order.total, order.currency)}
+												</p>
+												<StatusBadge status={order.status} />
+											</div>
+										</Link>
+									</li>
+								))}
+							</ul>
+						)}
+					</section>
 
-			{/* Sales channels teaser — hidden for brand-new users */}
-			{!isNew ? (
-				<section className="flex flex-col gap-3">
-					<h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-						Sales channels
-					</h3>
-					<Link
-						to="/app/settings"
-						search={{ tab: "integrations" }}
-						className="flex items-center gap-4 rounded-2xl border border-border bg-card p-4 transition-colors hover:bg-accent/5"
-					>
-						<div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[#EE4D2D]/10 text-[#EE4D2D]">
-							<ShopeeIcon className="size-6" />
-						</div>
-						<div className="flex flex-1 flex-col gap-0.5">
-							<div className="flex items-center gap-2">
-								<p className="text-sm font-semibold">Shopee</p>
-								<span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
-									Coming soon
-								</span>
+					{/* Sales channels teaser */}
+					<section className="flex flex-col gap-3 lg:col-span-1">
+						<h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+							Sales channels
+						</h3>
+						<Link
+							to="/app/settings"
+							search={{ tab: "integrations" }}
+							className="flex items-center gap-4 rounded-2xl border border-border bg-card p-4 transition-colors hover:bg-accent/5"
+						>
+							<div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[#EE4D2D]/10 text-[#EE4D2D]">
+								<ShopeeIcon className="size-6" />
 							</div>
-							<p className="text-xs text-muted-foreground">
-								Sync products & orders from Shopee
-							</p>
-						</div>
-						<ArrowRight className="size-4 shrink-0 text-muted-foreground" />
-					</Link>
-				</section>
+							<div className="flex flex-1 flex-col gap-0.5">
+								<div className="flex items-center gap-2">
+									<p className="text-sm font-semibold">Shopee</p>
+									<span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
+										Coming soon
+									</span>
+								</div>
+								<p className="text-xs text-muted-foreground">
+									Sync products & orders from Shopee
+								</p>
+							</div>
+							<ArrowRight className="size-4 shrink-0 text-muted-foreground" />
+						</Link>
+					</section>
+				</div>
 			) : null}
 		</div>
 	);
