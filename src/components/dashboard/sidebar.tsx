@@ -1,4 +1,4 @@
-import { UserButton } from "@clerk/tanstack-react-start";
+import { UserButton, useUser } from "@clerk/tanstack-react-start";
 import { Link, type LinkProps } from "@tanstack/react-router";
 import type { FunctionReturnType } from "convex/server";
 import {
@@ -26,6 +26,14 @@ interface SidebarProps {
 
 export function Sidebar({ retailer, actionableCount }: SidebarProps) {
 	const [collapsed, setCollapsed] = useSidebarCollapsed();
+	const { user } = useUser();
+	const userEmail = user?.primaryEmailAddress?.emailAddress ?? null;
+	const userName =
+		user?.fullName ||
+		user?.firstName ||
+		user?.username ||
+		userEmail?.split("@")[0] ||
+		null;
 
 	return (
 		<aside
@@ -87,12 +95,32 @@ export function Sidebar({ retailer, actionableCount }: SidebarProps) {
 			</nav>
 
 			<div className="flex flex-col gap-1 border-t border-border p-2">
+				<div
+					className={cn(
+						"flex items-center gap-2 rounded-lg px-2 py-2",
+						collapsed && "justify-center px-0",
+					)}
+				>
+					<UserButton />
+					{!collapsed && (userName || userEmail) ? (
+						<div className="flex min-w-0 flex-col">
+							{userName ? (
+								<span className="truncate text-xs font-medium">{userName}</span>
+							) : null}
+							{userEmail ? (
+								<span className="truncate text-[10px] text-muted-foreground">
+									{userEmail}
+								</span>
+							) : null}
+						</div>
+					) : null}
+				</div>
 				<button
 					type="button"
 					onClick={() => setCollapsed(!collapsed)}
 					className={cn(
-						"flex h-10 items-center rounded-lg text-sm text-muted-foreground transition-colors hover:bg-accent/10 hover:text-foreground",
-						collapsed ? "justify-center" : "gap-3 px-3",
+						"flex h-9 items-center rounded-lg text-xs font-medium text-muted-foreground transition-colors hover:bg-accent/10 hover:text-foreground",
+						collapsed ? "justify-center" : "gap-2 px-3",
 					)}
 					aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
 					title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
@@ -102,28 +130,10 @@ export function Sidebar({ retailer, actionableCount }: SidebarProps) {
 					) : (
 						<>
 							<ChevronLeft className="size-4 shrink-0" />
-							<span className="text-xs font-medium">Collapse</span>
+							<span>Collapse</span>
 						</>
 					)}
 				</button>
-				<div
-					className={cn(
-						"flex items-center gap-2 rounded-lg px-2 py-2",
-						collapsed && "justify-center px-0",
-					)}
-				>
-					<UserButton />
-					{!collapsed ? (
-						<div className="flex min-w-0 flex-col">
-							<span className="truncate text-xs font-medium">
-								{retailer.storeName}
-							</span>
-							<span className="truncate font-mono text-[10px] text-muted-foreground">
-								kedaipal.com/{retailer.slug}
-							</span>
-						</div>
-					) : null}
-				</div>
 			</div>
 		</aside>
 	);
@@ -161,7 +171,7 @@ function SidebarLink({
 				collapsed ? "justify-center" : "gap-3 px-3",
 			)}
 			activeProps={{
-				className: "bg-accent/15 text-foreground font-semibold",
+				className: "bg-accent/12 text-foreground font-semibold",
 			}}
 			inactiveProps={{
 				className:
@@ -170,6 +180,12 @@ function SidebarLink({
 		>
 			{({ isActive }) => (
 				<>
+					{isActive && !collapsed ? (
+						<span
+							aria-hidden
+							className="absolute left-0 top-1/2 h-7 w-1.5 -translate-y-1/2 rounded-r-full bg-accent"
+						/>
+					) : null}
 					<span className="relative shrink-0">
 						<Icon
 							className={cn(

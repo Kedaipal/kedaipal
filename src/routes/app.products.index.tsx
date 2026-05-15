@@ -4,6 +4,7 @@ import { Download, Upload } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
+import { PageHeader } from "../components/dashboard/page-header";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
 import { convexErrorMessage, formatPrice } from "../lib/format";
@@ -100,13 +101,30 @@ function ProductsRoute() {
 	}
 
 	return (
-		<div className="flex flex-col gap-4">
-			<div className="flex flex-wrap items-center justify-between gap-3">
+		<div className="flex flex-col gap-4 lg:gap-5">
+			<PageHeader
+				title="Products"
+				subtitle={
+					products === undefined
+						? "Loading…"
+						: `${counts.active} active · ${counts.archived} archived`
+				}
+				actions={
+					<Button asChild>
+						<Link to="/app/products/new">+ New product</Link>
+					</Button>
+				}
+			/>
+			<div className="flex flex-wrap items-center justify-between gap-3 lg:hidden">
 				<div className="flex min-w-0 flex-col gap-1">
 					<h2 className="text-xl font-bold">Products</h2>
-					<p className="text-xs text-muted-foreground">
-						{counts.active} active · {counts.archived} archived
-					</p>
+					{products === undefined ? (
+						<Skeleton className="h-3 w-32 rounded" />
+					) : (
+						<p className="text-xs text-muted-foreground">
+							{counts.active} active · {counts.archived} archived
+						</p>
+					)}
 				</div>
 				<Button asChild className="h-11">
 					<Link to="/app/products/new">+ New</Link>
@@ -149,7 +167,7 @@ function ProductsRoute() {
 				) : null}
 			</div>
 
-			<div className="relative">
+			<div className="relative lg:max-w-md">
 				<svg
 					className="pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
 					viewBox="0 0 24 24"
@@ -194,7 +212,7 @@ function ProductsRoute() {
 				) : null}
 			</div>
 
-			<div className="-mx-5 flex gap-2 overflow-x-auto px-5 pb-1 lg:mx-0 lg:px-0">
+			<div className="-mx-5 flex gap-2 overflow-x-auto px-5 pb-1 lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0">
 				{filterOptions.map((opt) => (
 					<button
 						key={opt.key}
@@ -208,16 +226,18 @@ function ProductsRoute() {
 						)}
 					>
 						{opt.label}
-						<span
-							className={cn(
-								"flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none",
-								status === opt.key
-									? "bg-background text-foreground"
-									: "bg-muted text-muted-foreground",
-							)}
-						>
-							{counts[opt.key]}
-						</span>
+						{products !== undefined ? (
+							<span
+								className={cn(
+									"flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none",
+									status === opt.key
+										? "bg-background text-foreground"
+										: "bg-muted text-muted-foreground",
+								)}
+							>
+								{counts[opt.key]}
+							</span>
+						) : null}
 					</button>
 				))}
 			</div>
@@ -319,16 +339,20 @@ function ProductsRoute() {
 function ProductListSkeleton() {
 	return (
 		<ul className="flex flex-col gap-3 lg:grid lg:grid-cols-2 lg:gap-3 xl:grid-cols-3">
-			{[0, 1, 2, 3, 4].map((n) => (
+			{[0, 1, 2, 3, 4, 5].map((n) => (
 				<li
 					key={n}
 					className="flex min-h-16 items-center gap-3 rounded-2xl border border-border bg-card p-3"
 				>
 					<Skeleton className="size-16 shrink-0 rounded-xl" />
-					<div className="flex flex-1 flex-col gap-2">
-						<Skeleton className="h-4 w-2/3 rounded" />
-						<Skeleton className="h-3 w-1/3 rounded" />
+					<div className="flex min-w-0 flex-1 flex-col gap-1.5">
+						<Skeleton className="h-4 w-3/5 rounded" />
+						<div className="flex items-center gap-2">
+							<Skeleton className="h-3.5 w-14 rounded" />
+							<Skeleton className="h-3 w-16 rounded" />
+						</div>
 					</div>
+					<Skeleton className="size-4 shrink-0 rounded" />
 				</li>
 			))}
 		</ul>

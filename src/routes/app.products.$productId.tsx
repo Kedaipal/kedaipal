@@ -2,6 +2,10 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import {
+	PageHeader,
+	PageHeaderSkeleton,
+} from "../components/dashboard/page-header";
 import { ProductForm } from "../components/forms/product-form";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
@@ -13,30 +17,45 @@ export const Route = createFileRoute("/app/products/$productId")({
 function ProductDetailSkeleton() {
 	return (
 		<div className="flex flex-col gap-4 lg:max-w-2xl">
-			<Skeleton className="h-4 w-20 rounded" />
-			<Skeleton className="h-7 w-36 rounded" />
-			<div className="flex flex-col gap-4">
-				<Skeleton className="aspect-square w-full rounded-2xl" />
-				<div className="flex flex-col gap-2">
-					<Skeleton className="h-3 w-12 rounded" />
-					<Skeleton className="h-11 w-full rounded-xl" />
-				</div>
-				<div className="flex flex-col gap-2">
-					<Skeleton className="h-3 w-16 rounded" />
-					<Skeleton className="h-24 w-full rounded-xl" />
-				</div>
-				<div className="flex gap-3">
-					<div className="flex flex-1 flex-col gap-2">
-						<Skeleton className="h-3 w-10 rounded" />
-						<Skeleton className="h-11 w-full rounded-xl" />
-					</div>
-					<div className="flex flex-1 flex-col gap-2">
-						<Skeleton className="h-3 w-10 rounded" />
-						<Skeleton className="h-11 w-full rounded-xl" />
-					</div>
-				</div>
+			<PageHeaderSkeleton hasBack hasSubtitle hasActions />
+			{/* Mobile back + title */}
+			<div className="flex flex-col gap-2 lg:hidden">
+				<Skeleton className="h-4 w-20 rounded" />
+				<Skeleton className="h-7 w-36 rounded" />
+			</div>
+			{/* Image grid */}
+			<div className="grid grid-cols-3 gap-2">
+				<Skeleton className="aspect-square w-full rounded-xl" />
+				<Skeleton className="aspect-square w-full rounded-xl" />
+				<Skeleton className="aspect-square w-full rounded-xl" />
+			</div>
+			{/* Name field */}
+			<div className="flex flex-col gap-2">
+				<Skeleton className="h-3 w-12 rounded" />
 				<Skeleton className="h-11 w-full rounded-xl" />
 			</div>
+			{/* Description field */}
+			<div className="flex flex-col gap-2">
+				<Skeleton className="h-3 w-20 rounded" />
+				<Skeleton className="h-24 w-full rounded-xl" />
+			</div>
+			{/* Price + Stock fields */}
+			<div className="flex gap-3">
+				<div className="flex flex-1 flex-col gap-2">
+					<Skeleton className="h-3 w-10 rounded" />
+					<Skeleton className="h-11 w-full rounded-xl" />
+				</div>
+				<div className="flex flex-1 flex-col gap-2">
+					<Skeleton className="h-3 w-10 rounded" />
+					<Skeleton className="h-11 w-full rounded-xl" />
+				</div>
+			</div>
+			{/* SKU field */}
+			<div className="flex flex-col gap-2">
+				<Skeleton className="h-3 w-10 rounded" />
+				<Skeleton className="h-11 w-full rounded-xl" />
+			</div>
+			<Skeleton className="h-12 w-full rounded-md" />
 		</div>
 	);
 }
@@ -59,7 +78,34 @@ function EditProductRoute() {
 
 	return (
 		<div className="flex flex-col gap-4 lg:max-w-2xl">
-			<div className="flex items-center gap-2">
+			<PageHeader
+				title="Edit product"
+				subtitle={product.name}
+				back={{ to: "/app/products", label: "Products" }}
+				actions={
+					product.active ? (
+						<Button
+							variant="secondary"
+							onClick={async () => {
+								await archive({ productId: product._id });
+								navigate({ to: "/app/products" });
+							}}
+						>
+							Archive
+						</Button>
+					) : (
+						<Button
+							variant="secondary"
+							onClick={async () => {
+								await update({ productId: product._id, active: true });
+							}}
+						>
+							Restore
+						</Button>
+					)
+				}
+			/>
+			<div className="flex items-center gap-2 lg:hidden">
 				<Link
 					to="/app/products"
 					className="text-sm text-muted-foreground hover:text-foreground"
@@ -67,7 +113,7 @@ function EditProductRoute() {
 					← Products
 				</Link>
 			</div>
-			<h2 className="text-xl font-bold">Edit product</h2>
+			<h2 className="text-xl font-bold lg:hidden">Edit product</h2>
 
 			<ProductForm
 				key={product._id}
@@ -100,7 +146,7 @@ function EditProductRoute() {
 			{product.active ? (
 				<Button
 					variant="secondary"
-					className="h-11"
+					className="h-11 lg:hidden"
 					onClick={async () => {
 						await archive({ productId: product._id });
 						navigate({ to: "/app/products" });
@@ -111,7 +157,7 @@ function EditProductRoute() {
 			) : (
 				<Button
 					variant="secondary"
-					className="h-11"
+					className="h-11 lg:hidden"
 					onClick={async () => {
 						await update({ productId: product._id, active: true });
 					}}
