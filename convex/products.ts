@@ -1,6 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
+import { internalQuery, mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
 import { rateLimiter } from "./lib/rateLimiter";
 
 const MAX_IMAGES_PER_PRODUCT = 5;
@@ -530,5 +530,21 @@ export const reorder = mutation({
 			sortOrder,
 			updatedAt: Date.now(),
 		});
+	},
+});
+
+/**
+ * Admin/MCP query — lists all products for a retailer (active + inactive)
+ * without requiring Clerk auth. Callable only from internal Convex functions
+ * or via the HTTP API with the deploy key.
+ */
+export const internalListAll = internalQuery({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }) => {
+		const rows = await ctx.db
+			.query("products")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.collect();
+		return Promise.all(rows.map((row) => withImageUrls(ctx, row)));
 	},
 });

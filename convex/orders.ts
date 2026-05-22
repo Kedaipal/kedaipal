@@ -2,7 +2,7 @@ import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { mutation, query } from "./_generated/server";
+import { internalQuery, mutation, query } from "./_generated/server";
 import { assertValidAddress } from "./lib/address";
 import { computeOrderTotals, generateShortId } from "./lib/order";
 import { rateLimiter } from "./lib/rateLimiter";
@@ -618,5 +618,33 @@ export const generateOrderProofUploadUrl = mutation({
 		}
 
 		return ctx.storage.generateUploadUrl();
+	},
+});
+
+/**
+ * Admin/MCP query — lists orders for a retailer without requiring Clerk auth.
+ * Callable only from internal Convex functions or via the HTTP API with the
+ * deploy key. Used by the convex-mcp-server for admin inspection.
+ */
+export const internalListByRetailer = internalQuery({
+	args: {
+		retailerId: v.id("retailers"),
+		status: v.optional(statusValidator),
+	},
+	handler: async (ctx, { retailerId, status }) => {
+		if (status) {
+			return ctx.db
+				.query("orders")
+				.withIndex("by_retailer_status", (q) =>
+					q.eq("retailerId", retailerId).eq("status", status),
+				)
+				.order("desc")
+				.collect();
+		}
+		return ctx.db
+			.query("orders")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.order("desc")
+			.collect();
 	},
 });

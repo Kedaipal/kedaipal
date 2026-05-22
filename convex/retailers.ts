@@ -55,7 +55,7 @@ function sanitizePaymentInstructions(
 	return Object.keys(out).length > 0 ? out : undefined;
 }
 import type { Id } from "./_generated/dataModel";
-import { internalMutation, mutation, query, type QueryCtx } from "./_generated/server";
+import { internalMutation, internalQuery, mutation, query, type QueryCtx } from "./_generated/server";
 import { ConvexError } from "convex/values";
 import { rateLimiter } from "./lib/rateLimiter";
 import {
@@ -615,6 +615,129 @@ export const listSlugsForSitemap = query({
 	handler: async (ctx): Promise<Array<{ slug: string; updatedAt: number }>> => {
 		const rows = await ctx.db.query("retailers").collect();
 		return rows.map((r) => ({ slug: r.slug, updatedAt: r._creationTime }));
+	},
+});
+
+/**
+ * Internal query — returns every retailer row with logo + payment QR URLs
+ * resolved. Callable only from internal actions/mutations, not from the browser.
+ * Use this for admin scripts, crons, or internal HTTP endpoints.
+ */
+export const internalListAllRetailers = internalQuery({
+	args: {},
+	handler: async (ctx): Promise<RetailerPublic[]> => {
+		const rows = await ctx.db.query("retailers").collect();
+		return Promise.all(
+			rows.map(async (row) => {
+				const paymentInstructions = row.paymentInstructions as
+					| PaymentInstructionsShape
+					| undefined;
+				let paymentQrImageUrl: string | undefined;
+				if (paymentInstructions?.qrImageStorageId) {
+					const url = await ctx.storage.getUrl(
+						paymentInstructions.qrImageStorageId,
+					);
+					paymentQrImageUrl = url ?? undefined;
+				}
+				let logoUrl: string | undefined;
+				if (row.logoStorageId) {
+					const url = await ctx.storage.getUrl(row.logoStorageId);
+					logoUrl = url ?? undefined;
+				}
+				return {
+					_id: row._id,
+					slug: row.slug,
+					storeName: row.storeName,
+					waPhone: row.waPhone,
+					notifyEmail: row.notifyEmail,
+					logoStorageId: row.logoStorageId,
+					logoUrl,
+					currency: (row.currency as SupportedCurrency) ?? DEFAULT_CURRENCY,
+					locale: row.locale ?? DEFAULT_LOCALE,
+					messageTemplates: row.messageTemplates as
+						| MessageTemplatesShape
+						| undefined,
+					paymentInstructions,
+					paymentQrImageUrl,
+				};
+			}),
+		);
+	},
+});
+
+/**
+ * Admin query — lists all retailers. Only accessible to the user whose Clerk
+ * subject matches the ADMIN_USER_ID environment variable.
+ *
+ * Set ADMIN_USER_ID in your Convex dashboard environment variables:
+ *   npx convex env set ADMIN_USER_ID "user_xxxxxxxxxxxxxxxx"
+ *
+ * Returns retailers ordered by creation time (newest first), plus
+ * `_creationTime` so you can see when each account signed up.
+ */
+export const adminListRetailers = query({
+	args: {},
+	handler: async (
+		ctx,
+	): Promise<
+		Array<
+			RetailerPublic & {
+				userId: string;
+				createdAt: number;
+				updatedAt: number;
+			}
+		>
+	> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new ConvexError("Not authenticated");
+
+		const adminUserId = process.env.ADMIN_USER_ID;
+		if (!adminUserId) throw new ConvexError("Admin not configured");
+		if (identity.subject !== adminUserId) throw new ConvexError("Forbidden");
+
+		const rows = await ctx.db.query("retailers").collect();
+
+		// Newest sign-ups first
+		rows.sort((a, b) => b.createdAt - a.createdAt);
+
+		return Promise.all(
+			rows.map(async (row) => {
+				const paymentInstructions = row.paymentInstructions as
+					| PaymentInstructionsShape
+					| undefined;
+				let paymentQrImageUrl: string | undefined;
+				if (paymentInstructions?.qrImageStorageId) {
+					const url = await ctx.storage.getUrl(
+						paymentInstructions.qrImageStorageId,
+					);
+					paymentQrImageUrl = url ?? undefined;
+				}
+				let logoUrl: string | undefined;
+				if (row.logoStorageId) {
+					const url = await ctx.storage.getUrl(row.logoStorageId);
+					logoUrl = url ?? undefined;
+				}
+				return {
+					_id: row._id,
+					userId: row.userId,
+					slug: row.slug,
+					storeName: row.storeName,
+					waPhone: row.waPhone,
+					notifyEmail: row.notifyEmail,
+					logoStorageId: row.logoStorageId,
+					logoUrl,
+					currency: (row.currency as SupportedCurrency) ?? DEFAULT_CURRENCY,
+					locale: row.locale ?? DEFAULT_LOCALE,
+					messageTemplates: row.messageTemplates as
+						| MessageTemplatesShape
+						| undefined,
+					paymentInstructions,
+					paymentQrImageUrl,
+					createdAt: row.createdAt,
+					updatedAt: row.updatedAt,
+				};
+			}),
+		);
 	},
 });
 
