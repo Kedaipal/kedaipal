@@ -27,7 +27,7 @@ function NavAuthCta() {
 	const { isSignedIn } = useAuth();
 	if (isSignedIn) {
 		return (
-			<Button asChild size="lg">
+			<Button asChild size="lg" className="hidden md:inline-flex">
 				<Link to="/app">
 					{m.nav_go_to_dashboard()}
 					<ArrowRight />
@@ -47,7 +47,7 @@ function NavAuthCta() {
 					{m.nav_sign_in()}
 				</Link>
 			</Button>
-			<Button asChild size="lg">
+			<Button asChild size="lg" className="hidden md:inline-flex">
 				<Link to="/sign-up/$" params={{ _splat: "" }}>
 					{m.nav_start_free()}
 				</Link>
@@ -56,8 +56,37 @@ function NavAuthCta() {
 	);
 }
 
+function MobileMenuAuthCta({ onClose }: { onClose: () => void }) {
+	const { isSignedIn } = useAuth();
+	if (isSignedIn) {
+		return (
+			<Button asChild size="lg" className="w-full">
+				<Link to="/app" onClick={onClose}>
+					{m.nav_go_to_dashboard()}
+					<ArrowRight />
+				</Link>
+			</Button>
+		);
+	}
+	return (
+		<div className="flex flex-col gap-2">
+			<Button asChild variant="outline" size="lg" className="w-full">
+				<Link to="/sign-in/$" params={{ _splat: "" }} onClick={onClose}>
+					{m.nav_sign_in()}
+				</Link>
+			</Button>
+			<Button asChild size="lg" className="w-full">
+				<Link to="/sign-up/$" params={{ _splat: "" }} onClick={onClose}>
+					{m.nav_start_free()}
+				</Link>
+			</Button>
+		</div>
+	);
+}
+
 export function Nav() {
 	const [menuOpen, setMenuOpen] = useState(false);
+	const [scrolled, setScrolled] = useState(false);
 
 	const closeMenu = useCallback(() => setMenuOpen(false), []);
 
@@ -70,6 +99,14 @@ export function Nav() {
 		return () => document.removeEventListener("keydown", onKeyDown);
 	}, [menuOpen]);
 
+	useEffect(() => {
+		function onScroll() {
+			setScrolled(window.scrollY > 64);
+		}
+		window.addEventListener("scroll", onScroll, { passive: true });
+		return () => window.removeEventListener("scroll", onScroll);
+	}, []);
+
 	const navLinks = [
 		{ href: "#features", label: m.nav_features() },
 		{ href: "#how", label: m.nav_how() },
@@ -78,10 +115,16 @@ export function Nav() {
 	];
 
 	return (
-		<nav className="sticky top-0 z-40 w-full border-b border-border/60 bg-background/80 backdrop-blur-md">
+		<nav
+			className={`sticky top-0 z-40 w-full transition-all duration-300 ${
+				scrolled || menuOpen
+					? "border-b border-border/60 bg-background/95 shadow-sm backdrop-blur-lg"
+					: "border-b border-transparent bg-transparent"
+			}`}
+		>
 			<div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5 md:px-8">
 				<a href="#top" className="flex items-center">
-					<img src="/logo-3.svg" alt="Kedaipal" className="h-9 w-auto" />
+					<img src="/logo-3.svg" alt="Kedaipal" className="h-7 w-auto sm:h-9" />
 				</a>
 				<div className="hidden items-center gap-8 md:flex">
 					{navLinks.map((link) => (
@@ -123,6 +166,9 @@ export function Nav() {
 								{link.label}
 							</a>
 						))}
+					</div>
+					<div className="mt-3 border-t border-border/60 pt-3">
+						<MobileMenuAuthCta onClose={closeMenu} />
 					</div>
 				</div>
 			)}

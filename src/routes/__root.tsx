@@ -6,6 +6,7 @@ import { ConvexProviderWithClerk } from "convex/react-clerk";
 import { Toaster } from "sonner";
 import { getConvexClient } from "../lib/convex";
 import { clientEnv } from "../lib/env";
+import { useGoogleAnalytics } from "../hooks/useGoogleAnalytics";
 import appCss from "../styles.css?url";
 
 export const Route = createRootRoute({
@@ -96,6 +97,7 @@ function SetupNotice() {
 }
 
 function RootDocument({ children }: { children: React.ReactNode }) {
+	useGoogleAnalytics();
 	return (
 		<html lang="en" suppressHydrationWarning>
 			<head>

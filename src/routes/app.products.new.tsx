@@ -1,6 +1,7 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
+import { PageHeader } from "../components/dashboard/page-header";
 import { ProductForm } from "../components/forms/product-form";
 
 export const Route = createFileRoute("/app/products/new")({
@@ -15,8 +16,12 @@ function NewProductRoute() {
 	if (!retailer) return null;
 
 	return (
-		<div className="flex flex-col gap-4">
-			<div className="flex items-center gap-2">
+		<div className="flex flex-col gap-4 lg:max-w-2xl">
+			<PageHeader
+				title="New product"
+				back={{ to: "/app/products", label: "Products" }}
+			/>
+			<div className="flex items-center gap-2 lg:hidden">
 				<Link
 					to="/app/products"
 					className="text-sm text-muted-foreground hover:text-foreground"
@@ -24,7 +29,7 @@ function NewProductRoute() {
 					← Products
 				</Link>
 			</div>
-			<h2 className="text-xl font-bold">New product</h2>
+			<h2 className="text-xl font-bold lg:hidden">New product</h2>
 
 			<ProductForm
 				currency={retailer.currency}

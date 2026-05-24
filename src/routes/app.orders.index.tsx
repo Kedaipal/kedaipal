@@ -3,6 +3,7 @@ import { useQuery } from "convex/react";
 import { ChevronRight, ShoppingBag } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
+import { PageHeader } from "../components/dashboard/page-header";
 import { Skeleton } from "../components/ui/skeleton";
 import { formatPrice } from "../lib/format";
 import { cn } from "../lib/utils";
@@ -58,17 +59,29 @@ function OrdersRoute() {
 	if (!retailer) return null;
 
 	return (
-		<div className="flex flex-col gap-5">
-			<div className="flex items-center justify-between">
+		<div className="flex flex-col gap-5 lg:gap-6">
+			<PageHeader
+				title="Orders"
+				subtitle={
+					result === undefined
+						? "Loading…"
+						: result.page.length === 0
+							? "No orders yet"
+							: `${result.page.length} order${result.page.length === 1 ? "" : "s"}`
+				}
+			/>
+			<div className="flex items-center justify-between lg:hidden">
 				<h2 className="text-xl font-bold">Orders</h2>
-				{result && result.page.length > 0 && (
+				{result === undefined ? (
+					<Skeleton className="h-4 w-16 rounded" />
+				) : result.page.length > 0 ? (
 					<span className="text-sm text-muted-foreground">
 						{result.page.length} order{result.page.length === 1 ? "" : "s"}
 					</span>
-				)}
+				) : null}
 			</div>
 
-			<div className="-mx-5 flex gap-2 overflow-x-auto px-5 pb-1">
+			<div className="-mx-5 flex gap-2 overflow-x-auto px-5 pb-1 lg:mx-0 lg:px-0 lg:flex-wrap lg:overflow-visible">
 				{STATUSES.map((s) => {
 					const badge =
 						s === "pending" && counts?.pending
@@ -123,7 +136,7 @@ function OrdersRoute() {
 					</div>
 				</div>
 			) : (
-				<ul className="flex flex-col gap-2">
+				<ul className="flex flex-col gap-2 lg:grid lg:grid-cols-2 lg:gap-3">
 					{result.page.map((o) => (
 						<li key={o._id}>
 							<Link
@@ -178,24 +191,24 @@ const STATUS_STYLES: Record<OrderStatus, string> = {
 
 function OrderListSkeleton() {
 	return (
-		<ul className="flex flex-col gap-2">
-			{[0, 1, 2, 3].map((n) => (
+		<ul className="flex flex-col gap-2 lg:grid lg:grid-cols-2 lg:gap-3">
+			{[0, 1, 2, 3, 4].map((n) => (
 				<li
 					key={n}
 					className="flex items-center gap-3 rounded-2xl border border-border bg-card p-4"
 				>
-					<div className="flex flex-1 flex-col gap-2">
+					<div className="flex min-w-0 flex-1 flex-col gap-1.5">
 						<div className="flex items-center gap-2">
-							<Skeleton className="h-4 w-20 rounded" />
-							<Skeleton className="h-5 w-16 rounded-full" />
+							<Skeleton className="h-4 w-16 rounded" />
+							<Skeleton className="h-4 w-16 rounded-full" />
 						</div>
-						<Skeleton className="h-3 w-36 rounded" />
-						<div className="flex items-center justify-between">
-							<Skeleton className="h-3 w-14 rounded" />
+						<Skeleton className="h-3.5 w-40 rounded" />
+						<div className="mt-0.5 flex items-center justify-between">
+							<Skeleton className="h-3 w-12 rounded" />
 							<Skeleton className="h-4 w-16 rounded" />
 						</div>
 					</div>
-					<Skeleton className="h-4 w-4 rounded" />
+					<Skeleton className="size-4 shrink-0 rounded" />
 				</li>
 			))}
 		</ul>

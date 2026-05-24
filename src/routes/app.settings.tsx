@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
+import { Building2, Info, Music2, Store } from "lucide-react";
 import { type FormEvent, type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
@@ -11,6 +12,10 @@ import {
 	TEMPLATE_KEYS,
 	type TemplateKey,
 } from "../../convex/lib/whatsappCopy";
+import {
+	PageHeader,
+	PageHeaderSkeleton,
+} from "../components/dashboard/page-header";
 import { useAppForm } from "../components/forms/form";
 import { ShopeeIcon } from "../components/icons/shopee-icon";
 import { Button } from "../components/ui/button";
@@ -43,9 +48,48 @@ const SETTINGS_TABS: ReadonlyArray<{ id: SettingsTab; label: string }> = [
 
 function Card({ children }: { children: ReactNode }) {
 	return (
-		<section className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-4">
+		<section className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-5 lg:p-6">
 			{children}
 		</section>
+	);
+}
+
+function SectionHeading({
+	title,
+	description,
+}: {
+	title: string;
+	description?: string;
+}) {
+	return (
+		<div className="flex flex-col gap-1">
+			<h3 className="text-sm font-semibold text-foreground">{title}</h3>
+			{description ? (
+				<p className="text-xs text-muted-foreground leading-relaxed">
+					{description}
+				</p>
+			) : null}
+		</div>
+	);
+}
+
+const SAVE_BTN_CLASS = "h-11 lg:h-10 lg:w-auto lg:self-end lg:min-w-[160px]";
+
+function InfoBanner({
+	title,
+	children,
+}: {
+	title: string;
+	children: ReactNode;
+}) {
+	return (
+		<div className="flex gap-3 rounded-xl border border-accent/20 bg-accent/5 px-4 py-3.5">
+			<Info className="size-4 shrink-0 text-accent mt-0.5" aria-hidden="true" />
+			<div className="flex flex-col gap-1.5 text-sm text-muted-foreground leading-relaxed">
+				<p className="font-medium text-foreground">{title}</p>
+				{children}
+			</div>
+		</div>
 	);
 }
 
@@ -62,31 +106,39 @@ export const Route = createFileRoute("/app/settings")({
 
 function SettingsSkeleton() {
 	return (
-		<div className="flex flex-col gap-6">
-			<section className="flex flex-col gap-2">
+		<div className="flex flex-col gap-6 lg:max-w-2xl">
+			<PageHeaderSkeleton hasSubtitle />
+			<section className="flex flex-col gap-2 lg:hidden">
 				<Skeleton className="h-7 w-24" />
 				<Skeleton className="h-4 w-48" />
 			</section>
 
 			{/* Tab bar */}
 			<div className="flex gap-1 border-b border-input">
-				{[0, 1, 2].map((n) => (
-					<Skeleton key={n} className="h-11 w-20" />
+				{[64, 88, 80, 96].map((w) => (
+					<Skeleton
+						key={w}
+						className="h-11 rounded-none"
+						style={{ width: w }}
+					/>
 				))}
 			</div>
 
 			{/* Form cards */}
 			<div className="flex flex-col gap-6 pt-2">
-				{[0, 1].map((n) => (
+				{[0, 1, 2].map((n) => (
 					<section
 						key={n}
 						className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-4"
 					>
-						<div className="flex flex-col gap-1">
-							<Skeleton className="h-4 w-28" />
-							<Skeleton className="h-3 w-full" />
+						<div className="flex flex-col gap-1.5">
+							<Skeleton className="h-4 w-32" />
+							<Skeleton className="h-3 w-2/3" />
 						</div>
-						<Skeleton className="h-11 w-full rounded-xl" />
+						<div className="flex flex-col gap-2">
+							<Skeleton className="h-3 w-20" />
+							<Skeleton className="h-11 w-full rounded-xl" />
+						</div>
 						<Skeleton className="h-12 w-full rounded-md" />
 					</section>
 				))}
@@ -130,35 +182,28 @@ function SettingsRoute() {
 
 	const slugRenameForm = (
 		<Card>
-			<div className="flex flex-col gap-1">
-				<h3 className="text-sm font-medium">Storefront URL</h3>
-				<p className="text-xs text-muted-foreground">
-					Rename your public storefront slug. Old links keep redirecting for 90
-					days.
-				</p>
-			</div>
-			<form onSubmit={onSubmit} className="flex flex-col gap-4">
-				<label className="flex flex-col gap-2">
-					<span className="text-sm font-medium">Rename slug</span>
-					<div className="flex items-center rounded-xl border border-input bg-background pl-4 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/50">
-						<span className="select-none text-muted-foreground">
-							kedaipal.com/
-						</span>
-						<input
-							type="text"
-							value={newSlug}
-							onChange={(e) => setNewSlug(e.target.value.toLowerCase())}
-							placeholder="new-slug"
-							className="min-h-11 flex-1 bg-transparent pl-0 pr-4 font-mono text-base outline-none"
-						/>
-					</div>
-					<Hint state={availability} />
-				</label>
-
+			<SectionHeading
+				title="Storefront URL"
+				description="Rename your public storefront slug. Old links keep redirecting for 90 days."
+			/>
+			<form onSubmit={onSubmit} className="flex flex-col gap-3">
+				<div className="flex items-center rounded-xl border border-input bg-background pl-4 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/50">
+					<span className="select-none text-sm text-muted-foreground">
+						kedaipal.com/
+					</span>
+					<input
+						type="text"
+						value={newSlug}
+						onChange={(e) => setNewSlug(e.target.value.toLowerCase())}
+						placeholder="new-slug"
+						className="min-h-11 flex-1 bg-transparent pl-0 pr-4 font-mono text-base outline-none"
+					/>
+				</div>
+				<Hint state={availability} />
 				<Button
 					type="submit"
 					disabled={availability.status !== "available" || saving}
-					className="h-12"
+					className={SAVE_BTN_CLASS}
 				>
 					{saving ? "Saving…" : "Rename"}
 				</Button>
@@ -167,23 +212,31 @@ function SettingsRoute() {
 	);
 
 	return (
-		<div className="flex flex-col gap-6">
-			<section className="flex flex-col gap-2">
+		<div className="flex flex-col gap-6 lg:max-w-2xl">
+			<PageHeader
+				title="Settings"
+				subtitle={
+					<span>
+						Current slug: <span className="font-mono">{retailer.slug}</span>
+					</span>
+				}
+			/>
+			<section className="flex flex-col gap-2 lg:hidden">
 				<h2 className="text-xl font-bold">Settings</h2>
 				<p className="text-sm text-muted-foreground">
 					Current slug: <span className="font-mono">{retailer.slug}</span>
 				</p>
 			</section>
 
-			<div className="flex gap-1 overflow-x-auto border-b border-input">
+			<div className="-mx-4 flex gap-1 overflow-x-auto overflow-y-hidden border-b border-input px-4 lg:mx-0 lg:px-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
 				{SETTINGS_TABS.map((t) => (
 					<button
 						key={t.id}
 						type="button"
 						onClick={() => setActiveTab(t.id)}
-						className={`min-h-11 whitespace-nowrap px-4 text-sm font-medium transition-colors ${
+						className={`relative min-h-11 whitespace-nowrap px-4 text-sm font-medium transition-colors ${
 							activeTab === t.id
-								? "border-b-2 border-primary text-primary"
+								? "text-primary after:absolute after:inset-x-3 after:-bottom-px after:h-0.5 after:rounded-full after:bg-primary"
 								: "text-muted-foreground hover:text-foreground"
 						}`}
 					>
@@ -224,11 +277,8 @@ function SettingsRoute() {
 
 			{activeTab === "whatsapp" ? (
 				<div className="flex flex-col gap-6 pt-2">
-					<div className="rounded-xl border border-border bg-muted/40 px-4 py-3 flex flex-col gap-2">
-						<p className="text-sm font-medium">
-							How WhatsApp works on Kedaipal
-						</p>
-						<p className="text-sm text-muted-foreground">
+					<InfoBanner title="How WhatsApp works on Kedaipal">
+						<p>
 							All automated order messages (confirmations, packed, shipped,
 							delivered) are sent from{" "}
 							<span className="font-medium text-foreground">
@@ -236,12 +286,12 @@ function SettingsRoute() {
 							</span>{" "}
 							on your behalf — no Meta account needed.
 						</p>
-						<p className="text-sm text-muted-foreground">
+						<p>
 							Add your personal WhatsApp number below so buyers can reach you
 							directly. It appears as a tappable contact link in automated
 							messages.
 						</p>
-					</div>
+					</InfoBanner>
 
 					<Card>
 						<WaPhoneForm
@@ -282,67 +332,37 @@ function SettingsRoute() {
 
 			{activeTab === "integrations" ? (
 				<div className="flex flex-col gap-6 pt-2">
-					<div className="rounded-xl border border-border bg-muted/40 px-4 py-3 flex flex-col gap-2">
-						<p className="text-sm font-medium">Marketplace channels</p>
-						<p className="text-sm text-muted-foreground">
+					<InfoBanner title="Sales channels">
+						<p>
 							Connect your marketplace accounts to sync products and orders
 							automatically. More channels are on the way.
 						</p>
-					</div>
+					</InfoBanner>
 
-					<Card>
-						<div className="flex items-start gap-4">
-							<div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[#EE4D2D]/10 text-[#EE4D2D]">
-								<ShopeeIcon className="size-6" />
-							</div>
-							<div className="flex flex-1 flex-col gap-1">
-								<div className="flex items-center gap-2">
-									<h3 className="text-sm font-semibold">Shopee</h3>
-									<span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
-										Coming soon
-									</span>
-								</div>
-								<p className="text-xs text-muted-foreground">
-									Sync your Shopee products and orders into Kedaipal. Manage
-									everything from one dashboard.
-								</p>
-							</div>
-						</div>
-						<Button disabled className="h-12 w-full">
-							Connect Shopee
-						</Button>
-					</Card>
-
-					<Card>
-						<div className="flex items-start gap-4">
-							<div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
-								<svg
-									xmlns="http://www.w3.org/2000/svg"
-									viewBox="0 0 24 24"
-									fill="none"
-									stroke="currentColor"
-									strokeWidth="2"
-									strokeLinecap="round"
-									strokeLinejoin="round"
-									className="size-6"
-									aria-hidden="true"
-								>
-									<circle cx="12" cy="12" r="10" />
-									<line x1="12" y1="8" x2="12" y2="16" />
-									<line x1="8" y1="12" x2="16" y2="12" />
-								</svg>
-							</div>
-							<div className="flex flex-1 flex-col gap-1">
-								<h3 className="text-sm font-semibold text-muted-foreground">
-									More channels
-								</h3>
-								<p className="text-xs text-muted-foreground">
-									Lazada, TikTok Shop, and more marketplace integrations are
-									planned. Stay tuned!
-								</p>
-							</div>
-						</div>
-					</Card>
+					<IntegrationCard
+						name="Shopee"
+						description="Sync your Shopee products and orders into Kedaipal. Manage everything from one dashboard."
+						tint="bg-[#EE4D2D]/10 text-[#EE4D2D]"
+						icon={<ShopeeIcon className="size-6" />}
+					/>
+					<IntegrationCard
+						name="Lazada"
+						description="Sync your Lazada products and orders into Kedaipal. Manage everything from one dashboard."
+						tint="bg-[#0F146D]/10 text-[#0F146D] dark:bg-[#0F146D]/30 dark:text-[#9aa6ff]"
+						icon={<Store className="size-6" />}
+					/>
+					<IntegrationCard
+						name="TikTok Shop"
+						description="Sync your TikTok Shop orders into Kedaipal so you never miss a sale."
+						tint="bg-foreground/10 text-foreground"
+						icon={<Music2 className="size-6" />}
+					/>
+					<IntegrationCard
+						name="StoreHub"
+						description="Reconcile your in-store StoreHub sales alongside online orders."
+						tint="bg-[#FF7A00]/10 text-[#FF7A00]"
+						icon={<Building2 className="size-6" />}
+					/>
 				</div>
 			) : null}
 		</div>
@@ -392,13 +412,11 @@ function StoreNameForm({
 
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
-			<div className="flex flex-col gap-1">
-				<h3 className="text-sm font-medium">Business name</h3>
-				<p className="text-xs text-muted-foreground">
-					Shown on your storefront header and WhatsApp messages.
-				</p>
-			</div>
-			<label className="flex flex-col gap-2">
+			<SectionHeading
+				title="Business name"
+				description="Shown on your storefront header and WhatsApp messages."
+			/>
+			<div className="flex flex-col gap-1.5">
 				<input
 					type="text"
 					value={value}
@@ -407,11 +425,15 @@ function StoreNameForm({
 					maxLength={80}
 					className="min-h-11 rounded-xl border border-input bg-background px-4 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 				/>
-				<span className="text-xs text-muted-foreground">
+				<span className="self-end text-xs text-muted-foreground tabular-nums">
 					{value.trim().length}/80
 				</span>
-			</label>
-			<Button type="submit" disabled={!dirty || saving} className="h-12">
+			</div>
+			<Button
+				type="submit"
+				disabled={!dirty || saving}
+				className={SAVE_BTN_CLASS}
+			>
 				{saving ? "Saving…" : "Save name"}
 			</Button>
 		</form>
@@ -466,14 +488,11 @@ function LogoForm({
 	}
 
 	return (
-		<div className="flex flex-col gap-3">
-			<div className="flex flex-col gap-1">
-				<h3 className="text-sm font-medium">Store logo</h3>
-				<p className="text-xs text-muted-foreground">
-					Square images work best. Shown on your storefront header and
-					dashboard. Max ~2MB.
-				</p>
-			</div>
+		<div className="flex flex-col gap-4">
+			<SectionHeading
+				title="Store logo"
+				description="Square images work best. Shown on your storefront header and dashboard. Max ~2MB."
+			/>
 
 			{previewUrl ? (
 				<div className="flex items-start gap-4">
@@ -604,14 +623,10 @@ function PaymentInstructionsForm({
 
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
-			<div className="flex flex-col gap-1">
-				<h3 className="text-sm font-medium">Payment details</h3>
-				<p className="text-xs text-muted-foreground">
-					Shown to shoppers in the WhatsApp confirmation reply after they place
-					an order. Leave any field blank to skip it. Visible only after order —
-					not on your public storefront.
-				</p>
-			</div>
+			<SectionHeading
+				title="Payment details"
+				description="Shown to shoppers in the WhatsApp confirmation reply after they place an order. Leave any field blank to skip it. Visible only after order — not on your public storefront."
+			/>
 
 			<label className="flex flex-col gap-1">
 				<span className="text-sm font-medium">Bank name</span>
@@ -698,17 +713,21 @@ function PaymentInstructionsForm({
 				</span>
 			</label>
 
-			<div className="flex gap-2">
-				<Button type="submit" className="h-12 flex-1" disabled={uploading}>
-					{uploading ? "Uploading…" : "Save payment details"}
-				</Button>
+			<div className="flex gap-2 lg:justify-end">
 				<Button
 					type="button"
 					variant="outline"
-					className="h-12"
+					className="h-11 lg:h-10"
 					onClick={clearAll}
 				>
 					Clear all
+				</Button>
+				<Button
+					type="submit"
+					className="h-11 flex-1 lg:h-10 lg:flex-none lg:min-w-[180px]"
+					disabled={uploading}
+				>
+					{uploading ? "Uploading…" : "Save payment details"}
 				</Button>
 			</div>
 		</form>
@@ -764,8 +783,10 @@ function MessageTemplatesForm({
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
 			<div className="flex flex-col gap-1">
-				<h3 className="text-sm font-medium">WhatsApp message templates</h3>
-				<p className="text-xs text-muted-foreground">
+				<h3 className="text-sm font-semibold text-foreground">
+					WhatsApp message templates
+				</h3>
+				<p className="text-xs text-muted-foreground leading-relaxed">
 					Override the default copy. Use{" "}
 					<code className="font-mono">{"{shortId}"}</code> and{" "}
 					<code className="font-mono">{"{storeName}"}</code> as variables. Leave
@@ -823,7 +844,7 @@ function MessageTemplatesForm({
 				})}
 			</div>
 
-			<Button type="submit" className="h-12">
+			<Button type="submit" className={SAVE_BTN_CLASS}>
 				Save templates
 			</Button>
 		</form>
@@ -870,7 +891,7 @@ function LocaleForm({
 				</span>
 			</label>
 
-			<Button type="submit" disabled={!dirty} className="h-12">
+			<Button type="submit" disabled={!dirty} className={SAVE_BTN_CLASS}>
 				Save language
 			</Button>
 		</form>
@@ -928,7 +949,7 @@ function CurrencyForm({
 						<Button
 							type="submit"
 							disabled={!dirty || !canSubmit || isSubmitting}
-							className="h-12"
+							className={SAVE_BTN_CLASS}
 						>
 							{isSubmitting ? "Saving…" : "Save currency"}
 						</Button>
@@ -992,7 +1013,7 @@ function NotifyEmailForm({
 						<Button
 							type="submit"
 							disabled={!dirty || !canSubmit || isSubmitting}
-							className="h-12"
+							className={SAVE_BTN_CLASS}
 						>
 							{isSubmitting ? "Saving…" : "Save email"}
 						</Button>
@@ -1058,7 +1079,7 @@ function WaPhoneForm({
 						<Button
 							type="submit"
 							disabled={!dirty || !canSubmit || isSubmitting}
-							className="h-12"
+							className={SAVE_BTN_CLASS}
 						>
 							{isSubmitting ? "Saving…" : "Save contact number"}
 						</Button>
@@ -1066,6 +1087,45 @@ function WaPhoneForm({
 				}}
 			</form.Subscribe>
 		</form>
+	);
+}
+
+function IntegrationCard({
+	name,
+	description,
+	tint,
+	icon,
+}: {
+	name: string;
+	description: string;
+	tint: string;
+	icon: ReactNode;
+}) {
+	return (
+		<Card>
+			<div className="flex items-start gap-4">
+				<div
+					className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ${tint}`}
+				>
+					{icon}
+				</div>
+				<div className="flex flex-1 flex-col gap-1">
+					<div className="flex items-center gap-2">
+						<h3 className="text-sm font-semibold">{name}</h3>
+						<span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
+							Coming soon
+						</span>
+					</div>
+					<p className="text-xs text-muted-foreground">{description}</p>
+				</div>
+			</div>
+			<Button
+				disabled
+				className="h-11 w-full lg:h-10 lg:w-auto lg:self-end lg:min-w-[160px]"
+			>
+				Connect {name}
+			</Button>
+		</Card>
 	);
 }
 

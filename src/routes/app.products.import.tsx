@@ -4,6 +4,7 @@ import { Download, FileSpreadsheet, Upload } from "lucide-react";
 import { type ChangeEvent, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
+import { PageHeader } from "../components/dashboard/page-header";
 import { Button } from "../components/ui/button";
 import {
 	downloadOutdoorGearSampleCsv,
@@ -199,8 +200,12 @@ function ImportProductsRoute() {
 		!previewing;
 
 	return (
-		<div className="flex flex-col gap-5">
-			<div className="flex items-center gap-2">
+		<div className="flex flex-col gap-5 lg:max-w-3xl">
+			<PageHeader
+				title="Import products"
+				back={{ to: "/app/products", label: "Products" }}
+			/>
+			<div className="flex items-center gap-2 lg:hidden">
 				<Link
 					to="/app/products"
 					className="text-sm text-muted-foreground hover:text-foreground"

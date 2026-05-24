@@ -17,6 +17,10 @@ import { type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import {
+	PageHeader,
+	PageHeaderSkeleton,
+} from "../components/dashboard/page-header";
+import {
 	DeliveryAddressDisplay,
 	formatAddressInline,
 } from "../components/storefront/delivery-address-display";
@@ -31,34 +35,59 @@ export const Route = createFileRoute("/app/orders/$shortId")({
 
 function OrderDetailSkeleton() {
 	return (
-		<div className="flex flex-col gap-5">
-			<Skeleton className="h-4 w-16 rounded" />
-			<div className="flex items-center justify-between">
-				<Skeleton className="h-7 w-28 rounded" />
-				<Skeleton className="h-5 w-20 rounded-full" />
+		<div className="flex flex-col gap-5 lg:max-w-3xl">
+			<PageHeaderSkeleton hasBack hasSubtitle />
+			{/* Mobile back */}
+			<Skeleton className="h-4 w-16 rounded lg:hidden" />
+			{/* Mobile title + status */}
+			<div className="flex items-start justify-between gap-3">
+				<div className="flex flex-col gap-1.5 lg:hidden">
+					<Skeleton className="h-7 w-28 rounded" />
+					<Skeleton className="h-3 w-40 rounded" />
+				</div>
+				<div className="ml-auto flex flex-col items-end gap-1.5">
+					<Skeleton className="h-5 w-20 rounded-full" />
+					<Skeleton className="h-5 w-24 rounded-full" />
+				</div>
 			</div>
-			<div className="flex flex-col gap-2 rounded-2xl border border-border bg-card p-4">
+			{/* Customer card */}
+			<div className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 				<Skeleton className="h-3 w-16 rounded" />
-				<Skeleton className="h-5 w-32 rounded" />
-				<Skeleton className="h-4 w-24 rounded" />
+				<div className="flex items-center gap-3">
+					<Skeleton className="h-9 w-9 shrink-0 rounded-full" />
+					<div className="flex min-w-0 flex-1 flex-col gap-1.5">
+						<Skeleton className="h-4 w-32 rounded" />
+						<Skeleton className="h-3 w-28 rounded" />
+					</div>
+				</div>
 			</div>
+			{/* Delivery method */}
+			<div className="flex items-center gap-3 rounded-2xl border border-border bg-card p-4">
+				<Skeleton className="h-9 w-9 shrink-0 rounded-full" />
+				<div className="flex flex-col gap-1.5">
+					<Skeleton className="h-3 w-20 rounded" />
+					<Skeleton className="h-4 w-24 rounded" />
+				</div>
+			</div>
+			{/* Items */}
 			<div className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 				<Skeleton className="h-3 w-10 rounded" />
-				{Array.from({ length: 3 }).map((_, i) => (
-					// biome-ignore lint/suspicious/noArrayIndexKey: skeleton placeholders are stable
+				{[0, 1, 2].map((i) => (
 					<div key={i} className="flex items-start justify-between gap-3">
-						<div className="flex flex-1 flex-col gap-1">
+						<div className="flex flex-1 flex-col gap-1.5">
 							<Skeleton className="h-4 w-40 rounded" />
 							<Skeleton className="h-3 w-24 rounded" />
 						</div>
 						<Skeleton className="h-4 w-14 rounded" />
 					</div>
 				))}
-				<div className="mt-2 flex items-center justify-between border-t border-border pt-3">
-					<Skeleton className="h-5 w-10 rounded" />
-					<Skeleton className="h-5 w-20 rounded" />
+				<div className="mt-1 flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2.5">
+					<Skeleton className="h-4 w-10 rounded" />
+					<Skeleton className="h-4 w-20 rounded" />
 				</div>
 			</div>
+			{/* Action button placeholder */}
+			<Skeleton className="h-11 w-full rounded-md" />
 		</div>
 	);
 }
@@ -227,11 +256,19 @@ function OrderDetailRoute() {
 	const askForProofUrl = buildAskForProofWaUrl();
 
 	return (
-		<div className="flex flex-col gap-5">
-			{/* Back nav */}
+		<div className="flex flex-col gap-5 lg:max-w-3xl">
+			<PageHeader
+				title={`#${order.shortId}`}
+				subtitle={new Date(order._creationTime).toLocaleString(undefined, {
+					dateStyle: "medium",
+					timeStyle: "short",
+				})}
+				back={{ to: "/app/orders", label: "Orders" }}
+			/>
+			{/* Back nav (mobile only) */}
 			<Link
 				to="/app/orders"
-				className="flex w-fit items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
+				className="flex w-fit items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground lg:hidden"
 			>
 				<ChevronLeft className="size-4" />
 				Orders
@@ -239,7 +276,7 @@ function OrderDetailRoute() {
 
 			{/* Order header */}
 			<div className="flex items-start justify-between gap-3">
-				<div>
+				<div className="lg:hidden">
 					<h2 className="font-mono text-2xl font-bold tracking-tight">
 						#{order.shortId}
 					</h2>

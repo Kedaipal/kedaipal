@@ -135,18 +135,19 @@ export function HowItWorks() {
 			aria-labelledby="how-heading"
 			className="border-b border-border/60"
 		>
-			<div className="mx-auto max-w-6xl px-5 py-20 md:px-8 md:py-28">
+			<div className="mx-auto max-w-6xl px-5 py-24 md:px-8 md:py-32">
 				<div className="mx-auto max-w-2xl text-center">
 					<p className="text-xs font-semibold uppercase tracking-widest text-accent">
 						{m.how_label()}
 					</p>
 					<h2
 						id="how-heading"
-						className="mt-3 text-3xl font-bold tracking-tight md:text-5xl"
+						className="mt-3 text-3xl font-bold md:text-5xl"
+						style={{ letterSpacing: "-0.02em" }}
 					>
 						{m.how_heading()}
 					</h2>
-					<p className="mt-4 text-base text-muted-foreground md:text-lg">
+					<p className="mt-4 text-base leading-relaxed text-muted-foreground md:text-lg">
 						{m.how_sub()}
 					</p>
 				</div>
@@ -162,10 +163,10 @@ export function HowItWorks() {
 								aria-pressed={isActive}
 								aria-label={`Step ${stepNum}: ${s.title}`}
 								className={cn(
-									"relative flex h-full w-full flex-col rounded-2xl border p-5 text-left transition-all",
+									"relative flex h-full w-full flex-col rounded-2xl border p-5 text-left transition-all duration-200",
 									"hover:border-accent/50 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
 									isActive
-										? "border-accent bg-accent/5 shadow-md"
+										? "border-accent bg-accent/5 shadow-[0_0_0_3px_hsl(160_84%_39%_/_0.12)] shadow-md"
 										: "border-border bg-card shadow-sm",
 								)}
 							>
@@ -206,16 +207,19 @@ export function HowItWorks() {
 				</div>
 
 				{activeStep !== null && howStepDetails[activeStep - 1] && (
-					<div className="mt-6 overflow-hidden rounded-2xl border border-accent/30 bg-card shadow-md">
+					<div className="mt-6 overflow-hidden rounded-2xl border border-accent/20 bg-card shadow-md">
 						<div className="grid gap-0 md:grid-cols-2">
-							<div className="flex flex-col justify-center gap-4 p-8">
+							<div className="flex flex-col justify-center gap-4 border-l-4 border-accent/40 p-8">
 								<span className="text-xs font-bold uppercase tracking-widest text-accent">
 									Step {activeStep} of 4
 								</span>
-								<h3 className="text-2xl font-bold tracking-tight">
+								<h3
+									className="text-2xl font-bold"
+									style={{ letterSpacing: "-0.02em" }}
+								>
 									{howStepDetails[activeStep - 1].heading}
 								</h3>
-								<p className="text-base text-muted-foreground">
+								<p className="text-base leading-relaxed text-muted-foreground">
 									{howStepDetails[activeStep - 1].description}
 								</p>
 							</div>

@@ -69,7 +69,9 @@ The database schema already treats WhatsApp as one `channel` on retailers/produc
 | Hosting | Cloudflare Workers/Pages + Convex Cloud |
 | Tooling | pnpm, Biome, Vitest |
 
-**Hard requirement:** mobile-first across the entire product. Storefront traffic comes from WhatsApp's in-app browser on phones, and retailers run their shop from a phone, not a laptop. Single-column layouts, ≥44px tap targets, sticky/bottom-anchored CTAs.
+**Storefront — strictly mobile-first.** Storefront traffic comes from WhatsApp's in-app browser on phones, so the public `/<slug>` experience is single-column, ≥44px tap targets, sticky/bottom-anchored CTAs. Desktop is not a target there.
+
+**Dashboard — mobile + desktop responsive.** Retailers triage orders on a phone in the field but do bulk product editing, settings, and order review on a laptop. The `/app/*` shell renders a bottom-tab layout below `lg` (1024px) and a collapsible left sidebar with a centered `max-w-6xl` content column on `lg+`. Both layouts share the same routes and data hooks; the switch is CSS-only.
 
 ---
 
@@ -231,7 +233,7 @@ This is a deliberate strategic choice, not a stopgap:
 - **Shared-WABA is a feature, not a stopgap.** Eliminating Meta verification friction is the structural moat. Don't accept BYO WABA pressure from anyone.
 - **Validate before scaling spend.** Especially for paid acquisition — the Sprint 6 Targeted Ads task has a Phase 0 RM500–1k validation gate before any meaningful spend.
 - **Invest in real moats** (data, opt-outs / customer DB lock-in, MY localization, shared-WABA acquisition friction) — not weak ones (tech stack, pricing parity, first-mover).
-- **Phone-first for everyone.** Both shoppers and retailers live on mobile. The dashboard, storefront, and PWA are all designed for thumbs, not mouse cursors.
+- **Phone-first by default.** Both shoppers and retailers live on mobile, so the storefront, dashboard, and PWA are designed for thumbs first — but the dashboard ships a real desktop layout for retailers doing bulk work on a laptop.
 - **Keep the `channel` abstraction intact.** Every future marketplace connector (Shopee, Lazada, TikTok Shop) depends on it — even though those connectors are now parked behind F&B core.
 
 ---
