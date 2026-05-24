@@ -1054,14 +1054,10 @@ function WaPhoneForm({
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
 			<form.AppField name="waPhone">
 				{(field) => (
-					<field.TextField
+					<field.PhoneField
 						label="Your contact WhatsApp number"
-						placeholder="60123456789"
-						type="tel"
-						inputMode="tel"
-						mono
 						required
-						description="Country code + number, digits only. Shown to buyers in order confirmations and updates so they can reach you directly."
+						description="Shown to buyers in order confirmations and updates so they can reach you directly."
 					/>
 				)}
 			</form.AppField>
@@ -1074,7 +1070,10 @@ function WaPhoneForm({
 				})}
 			>
 				{({ canSubmit, isSubmitting, values }) => {
-					const dirty = values.waPhone.trim() !== current.trim();
+					// Compare digits-only: PhoneField keeps state in E.164 (`+60…`)
+					// while `current` is stored without the `+`.
+					const dirty =
+						values.waPhone.replace(/\D/g, "") !== current.replace(/\D/g, "");
 					return (
 						<Button
 							type="submit"

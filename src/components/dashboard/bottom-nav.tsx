@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { Home, Package, Settings, ShoppingBag } from "lucide-react";
+import { Home, Package, Settings, ShoppingBag, Users } from "lucide-react";
 import { cn } from "../../lib/utils";
 
 interface BottomNavProps {
@@ -95,6 +95,33 @@ export function BottomNav({ actionableCount }: BottomNavProps) {
 								)}
 							>
 								Orders
+							</span>
+						</>
+					)}
+				</Link>
+				<Link
+					to="/app/customers"
+					activeProps={{ className: "text-foreground" }}
+					inactiveProps={{ className: "text-muted-foreground" }}
+					className="flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 text-[10px]"
+				>
+					{({ isActive }) => (
+						<>
+							<Users
+								className={cn(
+									"size-5",
+									isActive
+										? "fill-foreground stroke-background"
+										: "stroke-muted-foreground",
+								)}
+							/>
+							<span
+								className={cn(
+									"font-medium",
+									isActive ? "text-foreground" : "text-muted-foreground",
+								)}
+							>
+								Customers
 							</span>
 						</>
 					)}

@@ -97,9 +97,49 @@ export default defineSchema({
 		.index("by_retailer_active", ["retailerId", "active"])
 		.index("by_retailer_sku", ["retailerId", "sku"]),
 
+	/**
+	 * First-class customer entity, keyed by (retailerId, waPhone). Aggregates
+	 * are denormalized and refreshed on order create/cancel so the dashboard
+	 * list/detail views never scan the orders table to compute lifetime value.
+	 */
+	customers: defineTable({
+		retailerId: v.id("retailers"),
+		waPhone: v.string(),
+		// Retailer-edited override — source of truth for the display name.
+		name: v.optional(v.string()),
+		// Raw pushname from the WhatsApp webhook, auto-refreshed on inbound
+		// messages. Never overwrites the retailer-edited `name`.
+		waProfileName: v.optional(v.string()),
+		// Retailer-private notes (e.g. "allergic to nuts"). Never exposed to shoppers.
+		notes: v.optional(v.string()),
+		// Lowercase haystack (name + pushname + phone) powering full-text search.
+		// Rebuilt whenever any of those fields change.
+		searchText: v.string(),
+		// Denormalized aggregates — refreshed on order create/cancel.
+		orderCount: v.number(),
+		totalSpent: v.number(),
+		firstOrderAt: v.number(),
+		lastOrderAt: v.number(),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_retailer", ["retailerId"])
+		.index("by_retailer_phone", ["retailerId", "waPhone"])
+		.index("by_retailer_lastOrder", ["retailerId", "lastOrderAt"])
+		.index("by_retailer_ltv", ["retailerId", "totalSpent"])
+		.index("by_retailer_orderCount", ["retailerId", "orderCount"])
+		.searchIndex("search_customers", {
+			searchField: "searchText",
+			filterFields: ["retailerId"],
+		}),
+
 	orders: defineTable({
 		retailerId: v.id("retailers"),
 		shortId: v.string(),
+		// Link to the aggregated customer record. Optional during backfill and
+		// for orders that arrive without a phone (link-in-bio checkout); stamped
+		// once the (retailerId, waPhone) pair is known.
+		customerId: v.optional(v.id("customers")),
 		items: v.array(
 			v.object({
 				productId: v.id("products"),
@@ -171,7 +211,8 @@ export default defineSchema({
 		.index("by_retailer", ["retailerId"])
 		.index("by_retailer_status", ["retailerId", "status"])
 		.index("by_retailer_payment", ["retailerId", "paymentStatus"])
-		.index("by_shortId", ["shortId"]),
+		.index("by_shortId", ["shortId"])
+		.index("by_customer", ["customerId"]),
 
 	orderEvents: defineTable({
 		orderId: v.id("orders"),

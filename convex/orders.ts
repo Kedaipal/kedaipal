@@ -3,6 +3,10 @@ import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
+import {
+	decrementAggregatesForCancel,
+	linkOrderToCustomer,
+} from "./customers";
 import { assertValidAddress } from "./lib/address";
 import { computeOrderTotals, generateShortId } from "./lib/order";
 import { rateLimiter } from "./lib/rateLimiter";
@@ -200,6 +204,20 @@ export const create = mutation({
 			createdAt: now,
 		});
 
+		// Link to the aggregated customer record when we already know the phone.
+		// Phone-less orders (link-in-bio checkout) are linked later when the
+		// shopper messages the WhatsApp number — see confirmOrderFromWhatsApp.
+		if (sanitizedCustomer.waPhone) {
+			await linkOrderToCustomer(ctx, {
+				retailerId: args.retailerId,
+				waPhone: sanitizedCustomer.waPhone,
+				orderId,
+				orderTotal: total,
+				orderCreatedAt: now,
+				customerName: sanitizedCustomer.name,
+			});
+		}
+
 		// Fire-and-forget email alert to the retailer about the new order.
 		await ctx.scheduler.runAfter(
 			0,
@@ -343,6 +361,15 @@ export const updateStatus = mutation({
 				await ctx.db.patch(productId, {
 					stock: fresh.stock + qty,
 					updatedAt: now,
+				});
+			}
+
+			// Reverse this order's contribution to the customer's lifetime
+			// aggregates. Same first-transition guard keeps it idempotent.
+			if (order.customerId) {
+				await decrementAggregatesForCancel(ctx, {
+					customerId: order.customerId,
+					orderTotal: order.total,
 				});
 			}
 		}

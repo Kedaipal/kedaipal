@@ -1,6 +1,8 @@
 import { httpRouter } from "convex/server";
 import { internal } from "./_generated/api";
 import { httpAction } from "./_generated/server";
+import { verifyMetaSignature } from "./lib/whatsappSignature";
+import { extractInboundMessages } from "./lib/whatsappWebhook";
 
 const http = httpRouter();
 
@@ -34,15 +36,41 @@ http.route({
 	path: "/webhook/whatsapp",
 	method: "POST",
 	handler: httpAction(async (ctx, req) => {
-		// Always respond 200 quickly so Meta doesn't retry; do work async.
+		// Verify the request genuinely came from Meta before acting on it. This
+		// endpoint mutates order + customer state, so an unauthenticated POST is
+		// a spoofing vector. Meta signs the raw body with the app secret.
+		const appSecret = process.env.WHATSAPP_APP_SECRET;
+		const rawBody = await req.text();
+		const signature = req.headers.get("x-hub-signature-256");
+
+		if (!appSecret) {
+			// Fail closed: without the secret we cannot authenticate anything.
+			// Set WHATSAPP_APP_SECRET in the Convex deployment env before deploy.
+			console.error(
+				"WA webhook rejected: WHATSAPP_APP_SECRET is not configured",
+			);
+			return new Response("server misconfigured", { status: 500 });
+		}
+
+		const valid = await verifyMetaSignature({
+			body: rawBody,
+			signatureHeader: signature,
+			appSecret,
+		});
+		if (!valid) {
+			console.warn("WA webhook rejected: invalid X-Hub-Signature-256");
+			return new Response("invalid signature", { status: 401 });
+		}
+
+		// Signature OK — parse the raw body we already verified.
 		let payload: unknown;
 		try {
-			payload = await req.json();
+			payload = JSON.parse(rawBody);
 		} catch {
 			return new Response("bad json", { status: 400 });
 		}
 
-		const messages = extractTextMessages(payload);
+		const messages = extractInboundMessages(payload);
 		console.log("WA webhook POST", {
 			messageCount: messages.length,
 			firstFrom: messages[0]?.from,
@@ -51,45 +79,12 @@ http.route({
 			await ctx.runAction(internal.whatsapp.handleInbound, {
 				fromPhone: msg.from,
 				text: msg.text,
+				profileName: msg.profileName,
 			});
 		}
 
 		return new Response("ok", { status: 200 });
 	}),
 });
-
-type InboundText = { from: string; text: string };
-
-function extractTextMessages(payload: unknown): InboundText[] {
-	const out: InboundText[] = [];
-	if (!payload || typeof payload !== "object") return out;
-	const entries = (payload as { entry?: unknown[] }).entry;
-	if (!Array.isArray(entries)) return out;
-	for (const entry of entries) {
-		if (!entry || typeof entry !== "object") continue;
-		const changes = (entry as { changes?: unknown[] }).changes;
-		if (!Array.isArray(changes)) continue;
-		for (const change of changes) {
-			if (!change || typeof change !== "object") continue;
-			const value = (change as { value?: unknown }).value;
-			if (!value || typeof value !== "object") continue;
-			const messages = (value as { messages?: unknown[] }).messages;
-			if (!Array.isArray(messages)) continue;
-			for (const m of messages) {
-				if (!m || typeof m !== "object") continue;
-				const from = (m as { from?: unknown }).from;
-				const type = (m as { type?: unknown }).type;
-				if (typeof from !== "string") continue;
-				if (type !== "text") continue;
-				const textObj = (m as { text?: unknown }).text;
-				if (!textObj || typeof textObj !== "object") continue;
-				const body = (textObj as { body?: unknown }).body;
-				if (typeof body !== "string") continue;
-				out.push({ from, text: body });
-			}
-		}
-	}
-	return out;
-}
 
 export default http;

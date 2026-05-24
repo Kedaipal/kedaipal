@@ -21,6 +21,32 @@ export function convexErrorMessage(err: unknown): string {
 	return (err as Error).message;
 }
 
+/**
+ * Compact "time ago" label (e.g. "just now", "5m ago", "3h ago", "2d ago").
+ * Falls back to an absolute date once older than ~a month.
+ */
+export function formatRelativeTime(epochMs: number): string {
+	const diff = Date.now() - epochMs;
+	const minute = 60_000;
+	const hour = 60 * minute;
+	const day = 24 * hour;
+	if (diff < minute) return "just now";
+	if (diff < hour) return `${Math.floor(diff / minute)}m ago`;
+	if (diff < day) return `${Math.floor(diff / hour)}h ago`;
+	const days = Math.floor(diff / day);
+	if (days < 31) return `${days}d ago`;
+	return formatShortDate(epochMs);
+}
+
+/** Absolute date like "2 May 2026". */
+export function formatShortDate(epochMs: number): string {
+	return new Date(epochMs).toLocaleDateString(undefined, {
+		day: "numeric",
+		month: "short",
+		year: "numeric",
+	});
+}
+
 export function formatPrice(minorUnits: number, currency: string): string {
 	const major = minorUnits / 100;
 	try {

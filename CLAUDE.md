@@ -51,6 +51,10 @@ Kedaipal owns **one Meta-verified WhatsApp Business Account** that handles outbo
 6. Retailer dashboard (products, inventory, orders, settings — live via Convex) ✅
 7. Customer tracking page with "I've paid" flow + manual payment claim ✅
 
+## Recently Shipped (post-MVP)
+- **Customer Database (CRM-lite)** ✅ — `customers` entity keyed by `(retailerId, waPhone)` with denormalized lifetime aggregates, auto-captured WhatsApp pushname, private notes, and a `/app/customers` dashboard (list + detail). Backend + UI. The S1 "Customer DB" roadmap item. See [`docs/customer-database.md`](./docs/customer-database.md). Blocks Automated Reminders + Broadcast.
+- **Webhook signature verification** ✅ — inbound `POST /webhook/whatsapp` verifies Meta's `X-Hub-Signature-256`. See [`docs/whatsapp-webhook-security.md`](./docs/whatsapp-webhook-security.md).
+
 ## Active Roadmap (17 tasks, 6 sprints, May 25 → Aug 16, 2026)
 Tracked in [ClickUp Product Roadmap](https://app.clickup.com/90182681518/v/li/901818308046). High-level:
 - **S1–S3 (revenue plumbing):** Customer DB, Order Inbox, Date Picker, Subscription Billing, Legal Pack, Landing+Pricing Rewrite, Setup Wizard, White-Glove Scheduler, PostHog → **first paid customer by Jul 5**
@@ -63,6 +67,8 @@ Tracked in [ClickUp Product Roadmap](https://app.clickup.com/90182681518/v/li/90
 - Mobile-first: ≥44px tap targets, single-column, sticky CTAs, bottom-anchored actions
 - Multi-tenant via slugs from day one
 - **All outbound messages flow through `wabaProtection.canSend()` gateway** once Sprint 4 ships — enforces rate limits + opt-outs + Meta quality status
+- **Inbound `POST /webhook/whatsapp` verifies Meta's `X-Hub-Signature-256`** (HMAC-SHA256 with `WHATSAPP_APP_SECRET`) and **fails closed** — set the env var before deploying or webhooks 500
+- **Customers are keyed by `(retailerId, waPhone)`; aggregates are denormalized** (refreshed on order create/cancel via `linkOrderToCustomer`/`decrementAggregatesForCancel`, counted once per order). Display name resolves `name → waProfileName → phone` via `getDisplayName`, mirrored in `convex/lib/customer.ts` + `src/lib/customer.ts`. A retailer-edited `name` is never overwritten by an inbound pushname.
 - Customer payment gateway is **retailer-owned** (HitPay Connect / Billplz / Stripe Connect) — Kedaipal is never the merchant of record for shopper transactions
 
 ## Competitive Positioning (Orderla)

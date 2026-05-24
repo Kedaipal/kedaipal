@@ -23,10 +23,12 @@ import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as AppSettingsRouteImport } from './routes/app.settings'
 import { Route as AppProductsIndexRouteImport } from './routes/app.products.index'
 import { Route as AppOrdersIndexRouteImport } from './routes/app.orders.index'
+import { Route as AppCustomersIndexRouteImport } from './routes/app.customers.index'
 import { Route as AppProductsNewRouteImport } from './routes/app.products.new'
 import { Route as AppProductsImportRouteImport } from './routes/app.products.import'
 import { Route as AppProductsProductIdRouteImport } from './routes/app.products.$productId'
 import { Route as AppOrdersShortIdRouteImport } from './routes/app.orders.$shortId'
+import { Route as AppCustomersCustomerIdRouteImport } from './routes/app.customers.$customerId'
 
 const TermsRoute = TermsRouteImport.update({
   id: '/terms',
@@ -98,6 +100,11 @@ const AppOrdersIndexRoute = AppOrdersIndexRouteImport.update({
   path: '/orders/',
   getParentRoute: () => AppRoute,
 } as any)
+const AppCustomersIndexRoute = AppCustomersIndexRouteImport.update({
+  id: '/customers/',
+  path: '/customers/',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppProductsNewRoute = AppProductsNewRouteImport.update({
   id: '/products/new',
   path: '/products/new',
@@ -118,6 +125,11 @@ const AppOrdersShortIdRoute = AppOrdersShortIdRouteImport.update({
   path: '/orders/$shortId',
   getParentRoute: () => AppRoute,
 } as any)
+const AppCustomersCustomerIdRoute = AppCustomersCustomerIdRouteImport.update({
+  id: '/customers/$customerId',
+  path: '/customers/$customerId',
+  getParentRoute: () => AppRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -132,10 +144,12 @@ export interface FileRoutesByFullPath {
   '/sign-up/$': typeof SignUpSplatRoute
   '/track/$shortId': typeof TrackShortIdRoute
   '/app/': typeof AppIndexRoute
+  '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
   '/app/orders/$shortId': typeof AppOrdersShortIdRoute
   '/app/products/$productId': typeof AppProductsProductIdRoute
   '/app/products/import': typeof AppProductsImportRoute
   '/app/products/new': typeof AppProductsNewRoute
+  '/app/customers/': typeof AppCustomersIndexRoute
   '/app/orders/': typeof AppOrdersIndexRoute
   '/app/products/': typeof AppProductsIndexRoute
 }
@@ -151,10 +165,12 @@ export interface FileRoutesByTo {
   '/sign-up/$': typeof SignUpSplatRoute
   '/track/$shortId': typeof TrackShortIdRoute
   '/app': typeof AppIndexRoute
+  '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
   '/app/orders/$shortId': typeof AppOrdersShortIdRoute
   '/app/products/$productId': typeof AppProductsProductIdRoute
   '/app/products/import': typeof AppProductsImportRoute
   '/app/products/new': typeof AppProductsNewRoute
+  '/app/customers': typeof AppCustomersIndexRoute
   '/app/orders': typeof AppOrdersIndexRoute
   '/app/products': typeof AppProductsIndexRoute
 }
@@ -172,10 +188,12 @@ export interface FileRoutesById {
   '/sign-up/$': typeof SignUpSplatRoute
   '/track/$shortId': typeof TrackShortIdRoute
   '/app/': typeof AppIndexRoute
+  '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
   '/app/orders/$shortId': typeof AppOrdersShortIdRoute
   '/app/products/$productId': typeof AppProductsProductIdRoute
   '/app/products/import': typeof AppProductsImportRoute
   '/app/products/new': typeof AppProductsNewRoute
+  '/app/customers/': typeof AppCustomersIndexRoute
   '/app/orders/': typeof AppOrdersIndexRoute
   '/app/products/': typeof AppProductsIndexRoute
 }
@@ -194,10 +212,12 @@ export interface FileRouteTypes {
     | '/sign-up/$'
     | '/track/$shortId'
     | '/app/'
+    | '/app/customers/$customerId'
     | '/app/orders/$shortId'
     | '/app/products/$productId'
     | '/app/products/import'
     | '/app/products/new'
+    | '/app/customers/'
     | '/app/orders/'
     | '/app/products/'
   fileRoutesByTo: FileRoutesByTo
@@ -213,10 +233,12 @@ export interface FileRouteTypes {
     | '/sign-up/$'
     | '/track/$shortId'
     | '/app'
+    | '/app/customers/$customerId'
     | '/app/orders/$shortId'
     | '/app/products/$productId'
     | '/app/products/import'
     | '/app/products/new'
+    | '/app/customers'
     | '/app/orders'
     | '/app/products'
   id:
@@ -233,10 +255,12 @@ export interface FileRouteTypes {
     | '/sign-up/$'
     | '/track/$shortId'
     | '/app/'
+    | '/app/customers/$customerId'
     | '/app/orders/$shortId'
     | '/app/products/$productId'
     | '/app/products/import'
     | '/app/products/new'
+    | '/app/customers/'
     | '/app/orders/'
     | '/app/products/'
   fileRoutesById: FileRoutesById
@@ -354,6 +378,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppOrdersIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/app/customers/': {
+      id: '/app/customers/'
+      path: '/customers'
+      fullPath: '/app/customers/'
+      preLoaderRoute: typeof AppCustomersIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/app/products/new': {
       id: '/app/products/new'
       path: '/products/new'
@@ -382,16 +413,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppOrdersShortIdRouteImport
       parentRoute: typeof AppRoute
     }
+    '/app/customers/$customerId': {
+      id: '/app/customers/$customerId'
+      path: '/customers/$customerId'
+      fullPath: '/app/customers/$customerId'
+      preLoaderRoute: typeof AppCustomersCustomerIdRouteImport
+      parentRoute: typeof AppRoute
+    }
   }
 }
 
 interface AppRouteChildren {
   AppSettingsRoute: typeof AppSettingsRoute
   AppIndexRoute: typeof AppIndexRoute
+  AppCustomersCustomerIdRoute: typeof AppCustomersCustomerIdRoute
   AppOrdersShortIdRoute: typeof AppOrdersShortIdRoute
   AppProductsProductIdRoute: typeof AppProductsProductIdRoute
   AppProductsImportRoute: typeof AppProductsImportRoute
   AppProductsNewRoute: typeof AppProductsNewRoute
+  AppCustomersIndexRoute: typeof AppCustomersIndexRoute
   AppOrdersIndexRoute: typeof AppOrdersIndexRoute
   AppProductsIndexRoute: typeof AppProductsIndexRoute
 }
@@ -399,10 +439,12 @@ interface AppRouteChildren {
 const AppRouteChildren: AppRouteChildren = {
   AppSettingsRoute: AppSettingsRoute,
   AppIndexRoute: AppIndexRoute,
+  AppCustomersCustomerIdRoute: AppCustomersCustomerIdRoute,
   AppOrdersShortIdRoute: AppOrdersShortIdRoute,
   AppProductsProductIdRoute: AppProductsProductIdRoute,
   AppProductsImportRoute: AppProductsImportRoute,
   AppProductsNewRoute: AppProductsNewRoute,
+  AppCustomersIndexRoute: AppCustomersIndexRoute,
   AppOrdersIndexRoute: AppOrdersIndexRoute,
   AppProductsIndexRoute: AppProductsIndexRoute,
 }
