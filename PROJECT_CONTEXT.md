@@ -16,16 +16,21 @@ Name is finalized. Earlier working names (KedaiSync, GearChat) are retired.
 
 ## Target Customer
 
-- **Who:** 1–5 employee shops, 50–500 SKUs.
+- **Who:** Established WhatsApp-first sellers doing **20–500 orders/month**, solo or 1–3 helpers, ~10–200 SKUs.
 - **Where:** Malaysia first (locale support shipped for `en` and `ms`). Singapore is an adjacent market. Product is not locked to the region long-term.
-- **First vertical:** outdoor / camping & hiking gear retailers. Vertical-agnostic by design — outdoor gear is the beachhead, not the ceiling.
-- **How they sell today:** physical store + WhatsApp + Shopee / Lazada / TikTok Shop.
-- **Core pains:**
-  - Orders getting lost in WhatsApp chat history.
-  - Inventory mismatches across channels.
-  - No unified order view across physical + online channels.
+- **Current cohort focus:** **F&B home sellers** — cake decorators (booking 30–80 cakes/month at RM180–500 AOV), frozen food sellers with reseller networks (RM15–80k/month, 10–80 resellers), kuih and pastry sellers running pre-order businesses. *Outdoor gear was the original beachhead but real-world adoption skewed F&B; product is positioned broadly enough to serve any pre-order WhatsApp business.*
+- **How they sell today:** WhatsApp (primary) + Instagram / Facebook Status for promotion + sometimes Shopee Food / TikTok for awareness.
+- **Universal core pains:**
+  - **"I'm missing orders buried in WhatsApp chat history."** Every seller above ~20 orders/week feels this.
+  - **"I'm chasing customers for payment confirmation."** Endless "sis dah bayar ke?" messages.
+  - **"I can't remember who this returning customer is."** No recall of past orders, preferences, dietary notes.
+- **Cohort-specific pains:**
+  - **Cakes:** double-booked delivery dates, design briefs scattered across chat, deposit chasing.
+  - **Frozen + reseller:** "stock ada lagi tak?" chaos, accidental oversells, no wholesale pricing tier.
+  - **Kuih/pastry:** route management, weekend rush, repeat-order shortcut.
+- **What unlocks them:** the universal pains are the wedge; cohort pains are the depth.
 
-The founder has an existing personal network of MY camping/hiking shop owners — first customer base and early moat driver.
+The founder's existing MY camping/hiking shop network remains useful for referrals, but the active distribution motion targets F&B home sellers via direct WhatsApp/IG outreach and the "Graduate from Orderla" acquisition channel (planned Sprint 5–6).
 
 ---
 
@@ -84,7 +89,22 @@ The database schema already treats WhatsApp as one `channel` on retailers/produc
 - Onboarding, sign-in, sign-up
 - Dashboard: `/app` (index, products list/new/detail/import, orders list/detail, settings)
 
-**Current phase:** MVP is substantially implemented. Focus is piloting with the first real shop(s) from the founder's network and iterating based on validation signal.
+**Current phase (May 2026):** MVP fully shipped. Active focus is the 12-week launch sprint to first paid customer (target Jul 5, 2026) and predictable acquisition channel (target Aug 16, 2026). 17-task backlog tracked in [ClickUp Product Roadmap](https://app.clickup.com/90182681518/v/li/901818308046) across 6 two-week sprints. Critical path:
+- **S1 (May 25 → Jun 7):** Customer DB, Order Inbox, Legal Pack, Subscription Billing start
+- **S2 (Jun 8 → Jun 21):** Landing Rewrite, Setup Wizard, White-Glove Scheduler, PostHog
+- **S3 (Jun 22 → Jul 5):** Subscription Billing finish, Pricing Page, Date Picker → **first revenue collectable**
+- **S4 (Jul 6 → Jul 19):** WABA Protection, Automated Reminders, PWA + Push
+- **S5 (Jul 20 → Aug 2):** Customer Payment Gateway, "Graduate from Orderla" landing + CSV import
+- **S6 (Aug 3 → Aug 16):** Broadcast, Targeted Ads (Phase 0 validation only)
+
+**Pilots (as of 2026-05-22):**
+| Retailer | Location | Vertical | Status |
+|---|---|---|---|
+| Karls Outdoor | JB | Outdoor gear | Onboarded Apr 10 — holdover from outdoor beachhead, needs cohort-aware re-engagement |
+| ModeLoop | KL | Jewelry | Bug-hunting only — wrong vertical |
+| PK.Tacticals | KL | Clothing | Bug-hunting only — wrong vertical |
+
+**Distribution goal:** 2–4 paying retailers by Jul 5, 2026 — concentrated on cake decorator + frozen reseller cohorts via direct outreach, replacing the existing wrong-vertical pilots.
 
 ---
 
@@ -137,9 +157,31 @@ Online payments are deferred to the first paid release — see [Payments Archite
 
 ## Business Model
 
-- Solo dev-founder. Sub-$5K budget.
-- Target pricing: **RM79–149/month**.
-- Meta setup requires no company registration for MVP: personal Facebook account → free Meta Business Account → WhatsApp Business Account → Developer App → test number. Business verification deferred until real volume.
+- Solo dev-founder. Sub-USD$5K initial budget.
+- **Pricing locked (May 2026):** 3 tiers, 14-day free trial (no card), no free tier yet.
+
+| Tier | Monthly | Annual | Orders/mo | Users | Target customer |
+|---|---|---|---|---|---|
+| **Starter** | RM79 | RM790 | 100 | 1 | Just starting to feel pain (10–50 orders/mo) |
+| **Pro** ★ | RM149 | RM1,490 | 500 | 2 | **Target tier** — established seller (50–300 orders/mo) |
+| **Scale** | RM299 | RM2,990 | Unlimited | 5 | Reseller + wholesale models (300+ orders/mo) |
+
+- Annual = 10 months paid, 12 received (~17% off).
+- No transaction fees, no per-user surcharges, no per-message billing (Meta charges WA template messages directly — transparent pass-through).
+- **Free tier deferred** until 50+ paying customers validate the paid motion; revisit if 30%+ of inbound prospects cite "Orderla is free" as the primary blocker.
+- Detailed strategy: [`pricing-strategy.md`](../../Documents/Kedaipal/01_Strategy/pricing-strategy.md).
+
+### Revenue collection
+- **Subscription billing (retailers → Kedaipal):** Stripe + HitPay/Billplz, settled to the Singapore entity (see [Founder & Operating Entity](#founder--operating-entity)).
+- **Customer payments (shoppers → retailers):** never touched by Kedaipal — retailer-owned gateway accounts (see [Payments Architecture](#payments-architecture)).
+
+### WhatsApp infrastructure model — shared WABA (permanent)
+Kedaipal operates a **single Meta-verified WhatsApp Business Account** shared across all retailers. Meta business verification completed Apr 2026. Retailers do NOT need their own WABA, business verification, or SSM registration.
+
+This is a deliberate strategic choice, not a stopgap:
+- **Differentiator:** every competitor (WATI, SleekFlow, Respond, EasyStore + WhatsApp) requires retailers to set up their own WABA. That kills 70–80% of SMB signups before they see the product. Kedaipal's "no Meta setup needed, live in 5 minutes" is the structural moat.
+- **Trade-off:** WABA risk is concentrated — one bad-actor retailer can degrade deliverability for everyone. Mitigated by the [WABA Protection task](https://app.clickup.com/t/86expmgep) (per-retailer rate limits, cross-retailer opt-out enforcement, Meta quality webhook integration, admin kill switches).
+- **Future:** when scaling past ~500 retailers, add additional Kedaipal-owned numbers to the WABA and load-balance retailers across them. Architecturally trivial.
 
 ---
 
@@ -155,40 +197,51 @@ Online payments are deferred to the first paid release — see [Payments Archite
 
 ## Competitive Landscape
 
-- **Horizontal competitors** (Orderla.my, Take App, Boutir): leave the outdoor/camping niche underserved. No vertical-specific catalog templates, sync workflows, or community tooling.
-- **Enterprise tools** (SleekFlow, Respond.io): too complex and expensive for 1–5 employee shops. Not the competition.
-- **Kedaipal's opening:** the underserved small-retailer segment in MY, starting with a specific vertical the founder already has trust in.
+**Direct competitor (the one that matters):** **Orderla.my** — built by iReka Soft, 20,000+ MY merchants, RM100M+ GMV over 5 years. Free / Plus RM30 / Pro RM100. Their product is a **form** that pre-fills a WhatsApp message; Kedaipal's product is a **full storefront** with cart, catalog, and real-time order pipeline. Orderla themselves acknowledged the form model's ceiling by building Orderla Commerce (orderla.co) as a separate storefront product.
+
+**Kedaipal's public positioning vs Orderla:** *"Where Orderla users graduate to when their order form falls apart."* Targeting their existing 20k merchants who've outgrown forms is cheaper than cold-educating new prospects. See [`benchmark-orderla.md`](../../Documents/Kedaipal/01_Strategy/benchmark-orderla.md) for the full deep dive.
+
+**Adjacent / oblique competitors:**
+- **EasyStore (RM249–399)** — full e-commerce platform, overserves the home-seller cohort, requires retailer to set up WhatsApp connector separately. Different shape.
+- **StoreHub (RM102+)** — POS-first, requires hardware, restaurant-focused. Not the same buyer.
+- **WATI / SleekFlow / Respond.io ($59–399)** — WhatsApp inbox/CRM tools, not order hubs. Also require retailer to set up their own WABA + Meta business verification.
+- **Interakt (India, ~RM55–190)** — messaging-first, doesn't solve order management at home-seller scale.
+- **Free tools (Google Sheets + WhatsApp Business)** — works until ~20 orders/week, then collapses. Kedaipal's wedge upgrade.
+
+**Kedaipal's opening:** the gap between Orderla's free-form simplicity and EasyStore's expensive e-commerce overkill. The bullseye is *established WhatsApp pre-order sellers doing 20–500 orders/month*, mainly F&B for now.
 
 ### Moat drivers
 
 **Real moats (invest here):**
-- Existing MY retailer relationships and community trust in the camping retail niche.
-- Switching costs via accumulated order and catalog data.
-- WhatsApp Business API verification lead time.
-- MY/SG localization depth — Ringgit pricing, Shopee/Lazada/TikTok Shop integrations, bilingual copy.
+- **No-Meta-setup acquisition advantage** — every competitor in WhatsApp commerce requires retailers to set up their own WABA. Kedaipal's shared-WABA model eliminates the #1 onboarding friction.
+- **Switching costs via accumulated order, customer, and broadcast data** — once a retailer has 6 months of customer history and a working broadcast list, leaving is painful.
+- **MY/SG localization depth** — Ringgit pricing, FPX/HitPay payment integration, bilingual (en/ms) WhatsApp templates, planned Shopee/Lazada/TikTok Shop integrations.
+- **F&B-specific workflow features** (Sprint 2+) — date picker, capacity caps, custom design briefs, tiered pricing — features Orderla's form model can't bolt on cleanly.
 
 **Weak moats (don't over-index on):**
 - Tech stack choices.
-- Pricing.
-- First-mover status.
+- Pricing — easily matched, and Orderla can drop prices to defend.
+- First-mover status — Orderla had 5 years; we don't have that lead.
 
 ---
 
 ## Guiding Principles
 
-- **Vertical specificity is the primary wedge.** Outdoor gear is not a limitation — it's the beachhead.
-- **Validate before building.** MVP sequencing prioritizes conversations with shop owners before engineering effort.
-- **Invest in real moats** (data, community, localization) — not weak ones.
-- **Phone-first for everyone.** Both shoppers and retailers live on mobile.
-- **Keep the `channel` abstraction intact.** Every future marketplace connector depends on it.
+- **Universal pain × universal TAM beats vertical depth at this stage.** Solve "missed WhatsApp orders + payment chase" for any pre-order F&B seller — pitch the same product with cohort-specific examples (cake / frozen / kuih) rather than building separate vertical products.
+- **Shared-WABA is a feature, not a stopgap.** Eliminating Meta verification friction is the structural moat. Don't accept BYO WABA pressure from anyone.
+- **Validate before scaling spend.** Especially for paid acquisition — the Sprint 6 Targeted Ads task has a Phase 0 RM500–1k validation gate before any meaningful spend.
+- **Invest in real moats** (data, opt-outs / customer DB lock-in, MY localization, shared-WABA acquisition friction) — not weak ones (tech stack, pricing parity, first-mover).
+- **Phone-first for everyone.** Both shoppers and retailers live on mobile. The dashboard, storefront, and PWA are all designed for thumbs, not mouse cursors.
+- **Keep the `channel` abstraction intact.** Every future marketplace connector (Shopee, Lazada, TikTok Shop) depends on it — even though those connectors are now parked behind F&B core.
 
 ---
 
 ## Open Questions
 
-- **Stripe Singapore vs HitPay** for SaaS subscription billing — decide at first paid retailer.
-- **First retailer-side gateway to officially support and document end-to-end** — CHIP vs Billplz vs ToyyibPay (each retailer can still bring others later).
+- **HitPay vs Billplz** as the first MY subscription billing rail (Stripe Singapore handles cards) — decide before Sprint 3.
+- **Which retailer-side customer payment gateway to officially document first** — HitPay Connect vs Billplz vs Stripe Connect (Sprint 5 task).
 - **SG sole prop vs Pte Ltd** — defer until liability or cap-table considerations force the call.
-- Inventory source of truth once retailers also sell on Shopee / Lazada (Kedaipal vs sync vs webhook-driven reconciliation).
-- Marketplace connector ordering post-MVP (Shopee likely first in MY).
-- Domain status for `kedaipal.com`.
+- **When to revisit free tier** — current trigger: ≥30% of inbound prospects citing "Orderla is free" as their primary blocker, OR 50+ paying customers reached.
+- **Inventory source of truth** once retailers also sell on Shopee / Lazada (Kedaipal as master vs sync vs webhook-driven reconciliation) — parked, not active.
+- **Marketplace connector ordering** post-F&B core (Shopee likely first in MY) — parked behind the 6-sprint roadmap.
+- **Lawyer engagement trigger** — currently template-based (Iubenda/Termly + self-drafted AUP). Revisit on first enterprise deal, first fundraise, first legal threat, 50+ paying customers, or SG/ID expansion.
