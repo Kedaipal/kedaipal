@@ -9,6 +9,7 @@ import {
 	Package,
 	Settings,
 	ShoppingBag,
+	Users,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { api } from "../../../convex/_generated/api";
@@ -84,6 +85,12 @@ export function Sidebar({ retailer, actionableCount }: SidebarProps) {
 					label="Orders"
 					collapsed={collapsed}
 					badge={actionableCount}
+				/>
+				<SidebarLink
+					to="/app/customers"
+					icon={Users}
+					label="Customers"
+					collapsed={collapsed}
 				/>
 				<SidebarLink
 					to="/app/settings"

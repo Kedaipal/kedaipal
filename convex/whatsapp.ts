@@ -6,6 +6,8 @@ import {
 	internalMutation,
 	internalQuery,
 } from "./_generated/server";
+import { linkOrderToCustomer, refreshWaProfileName } from "./customers";
+import { assertValidWaPhone } from "./lib/slug";
 import { sendCtaUrlWithImage, sendImage, sendText } from "./lib/whatsapp";
 import {
 	paymentQrCaption,
@@ -43,10 +45,12 @@ export const confirmOrderFromWhatsApp = internalMutation({
 	args: {
 		shortId: v.string(),
 		fromPhone: v.string(),
+		// Sender's WhatsApp pushname, captured from the webhook contacts array.
+		profileName: v.optional(v.string()),
 	},
 	handler: async (
 		ctx,
-		{ shortId, fromPhone },
+		{ shortId, fromPhone, profileName },
 	): Promise<{
 		matched: boolean;
 		alreadyConfirmed: boolean;
@@ -60,35 +64,58 @@ export const confirmOrderFromWhatsApp = internalMutation({
 		if (!order) return { matched: false, alreadyConfirmed: false };
 
 		const now = Date.now();
+		const wasPending = order.status === "pending";
 		const patch: Partial<Doc<"orders">> = { updatedAt: now };
 		if (!order.customer.waPhone) {
 			patch.customer = { ...order.customer, waPhone: fromPhone };
 		}
-
-		if (order.status === "pending") {
+		if (wasPending) {
 			patch.status = "confirmed";
+		}
+		// Persist status/phone changes (skip a pure updatedAt churn-write when
+		// nothing else changed, preserving the previous idempotent behaviour).
+		if (wasPending || patch.customer !== undefined) {
 			await ctx.db.patch(order._id, patch);
+		}
+		if (wasPending) {
 			await ctx.db.insert("orderEvents", {
 				orderId: order._id,
 				status: "confirmed",
 				note: "Confirmed via WhatsApp",
 				createdAt: now,
 			});
-			return {
-				matched: true,
-				alreadyConfirmed: false,
-				orderId: order._id,
-				retailerId: order.retailerId,
-			};
 		}
 
-		// Already past pending — idempotent. Still patch waPhone if needed.
-		if (Object.keys(patch).length > 1) {
-			await ctx.db.patch(order._id, patch);
+		// Customer linking + pushname capture. Orders that arrived with a phone
+		// were already linked at checkout (customerId set) — skip to avoid double
+		// counting. Phone-less orders are linked here (the late-bind case).
+		let customerId = order.customerId;
+		if (!customerId) {
+			const linkPhone = order.customer.waPhone ?? fromPhone;
+			let normalized: string | null = null;
+			try {
+				normalized = assertValidWaPhone(linkPhone);
+			} catch {
+				normalized = null;
+			}
+			if (normalized) {
+				customerId = await linkOrderToCustomer(ctx, {
+					retailerId: order.retailerId,
+					waPhone: normalized,
+					orderId: order._id,
+					orderTotal: order.total,
+					orderCreatedAt: order.createdAt,
+					customerName: order.customer.name,
+				});
+			}
 		}
+		if (customerId && profileName) {
+			await refreshWaProfileName(ctx, { customerId, profileName });
+		}
+
 		return {
 			matched: true,
-			alreadyConfirmed: true,
+			alreadyConfirmed: !wasPending,
 			orderId: order._id,
 			retailerId: order.retailerId,
 		};
@@ -186,8 +213,9 @@ export const handleInbound = internalAction({
 	args: {
 		fromPhone: v.string(),
 		text: v.string(),
+		profileName: v.optional(v.string()),
 	},
-	handler: async (ctx, { fromPhone, text }): Promise<void> => {
+	handler: async (ctx, { fromPhone, text, profileName }): Promise<void> => {
 		console.log("WA inbound received", {
 			fromPhone,
 			textLength: text.length,
@@ -215,7 +243,7 @@ export const handleInbound = internalAction({
 		console.log("WA inbound parsed shortId", { fromPhone, shortId });
 		const result = await ctx.runMutation(
 			internal.whatsapp.confirmOrderFromWhatsApp,
-			{ shortId, fromPhone },
+			{ shortId, fromPhone, profileName },
 		);
 		console.log("WA confirm result", { fromPhone, shortId, ...result });
 

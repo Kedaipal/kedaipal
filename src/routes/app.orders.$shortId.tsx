@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "convex/react";
 import {
 	BadgeCheck,
 	ChevronLeft,
+	ChevronRight,
 	Copy,
 	ExternalLink,
 	HandCoins,
@@ -460,6 +461,19 @@ function OrderDetailRoute() {
 						</a>
 					) : null}
 				</div>
+				{order.customerId ? (
+					<Link
+						to="/app/customers/$customerId"
+						params={{ customerId: order.customerId }}
+						className="flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+					>
+						<span className="flex items-center gap-2">
+							<User className="size-4 text-muted-foreground" />
+							View customer profile
+						</span>
+						<ChevronRight className="size-4 text-muted-foreground" />
+					</Link>
+				) : null}
 			</section>
 
 			{/* Delivery method */}

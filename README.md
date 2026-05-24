@@ -49,6 +49,22 @@ pnpm install
 pnpm dev
 ```
 
+### Environment variables
+
+Frontend vars live in `.env.local`; backend vars are set on the Convex deployment (`npx convex env set KEY value`, add `--prod` for production).
+
+| Variable | Where | Purpose |
+|---|---|---|
+| `NEXT_PUBLIC_CONVEX_URL` | frontend | Convex deployment URL |
+| `CLERK_JWT_ISSUER_DOMAIN` | Convex | Clerk JWT issuer for auth |
+| `APP_URL` | Convex | Base URL used in WhatsApp/tracking links |
+| `WHATSAPP_ACCESS_TOKEN` | Convex | Cloud API bearer token (outbound sends) |
+| `WHATSAPP_PHONE_NUMBER_ID` | Convex | Sender phone number ID |
+| `WHATSAPP_VERIFY_TOKEN` | Convex | Webhook subscription handshake (GET) |
+| `WHATSAPP_APP_SECRET` | Convex | **Webhook signature verification** — Meta App → Settings → Basic. The webhook **fails closed**, so set this before deploying or inbound webhooks return 500. See [`docs/whatsapp-webhook-security.md`](./docs/whatsapp-webhook-security.md). |
+| `WHATSAPP_CHECKOUT_PHONE` | Convex | Number the storefront `wa.me` handoff targets |
+| `RESEND_API_KEY`, `EMAIL_FROM` | Convex | Retailer email notifications (see [`docs/email-notifications.md`](./docs/email-notifications.md)) |
+
 ### Build for production
 
 ```bash

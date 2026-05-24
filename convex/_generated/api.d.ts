@@ -9,10 +9,12 @@
  */
 
 import type * as crons from "../crons.js";
+import type * as customers from "../customers.js";
 import type * as email from "../email.js";
 import type * as http from "../http.js";
 import type * as lib_address from "../lib/address.js";
 import type * as lib_currency from "../lib/currency.js";
+import type * as lib_customer from "../lib/customer.js";
 import type * as lib_email from "../lib/email.js";
 import type * as lib_emailCopy from "../lib/emailCopy.js";
 import type * as lib_order from "../lib/order.js";
@@ -20,6 +22,8 @@ import type * as lib_rateLimiter from "../lib/rateLimiter.js";
 import type * as lib_slug from "../lib/slug.js";
 import type * as lib_whatsapp from "../lib/whatsapp.js";
 import type * as lib_whatsappCopy from "../lib/whatsappCopy.js";
+import type * as lib_whatsappSignature from "../lib/whatsappSignature.js";
+import type * as lib_whatsappWebhook from "../lib/whatsappWebhook.js";
 import type * as orders from "../orders.js";
 import type * as products from "../products.js";
 import type * as retailers from "../retailers.js";
@@ -34,10 +38,12 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   crons: typeof crons;
+  customers: typeof customers;
   email: typeof email;
   http: typeof http;
   "lib/address": typeof lib_address;
   "lib/currency": typeof lib_currency;
+  "lib/customer": typeof lib_customer;
   "lib/email": typeof lib_email;
   "lib/emailCopy": typeof lib_emailCopy;
   "lib/order": typeof lib_order;
@@ -45,6 +51,8 @@ declare const fullApi: ApiFromModules<{
   "lib/slug": typeof lib_slug;
   "lib/whatsapp": typeof lib_whatsapp;
   "lib/whatsappCopy": typeof lib_whatsappCopy;
+  "lib/whatsappSignature": typeof lib_whatsappSignature;
+  "lib/whatsappWebhook": typeof lib_whatsappWebhook;
   orders: typeof orders;
   products: typeof products;
   retailers: typeof retailers;
