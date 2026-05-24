@@ -1,8 +1,10 @@
 # Kedaipal
 
-**Kedaipal** ("kedai" = shop + "pal") is a WhatsApp-first B2B SaaS order hub for small retailers. WhatsApp is the primary wedge — shoppers receive a CTA link, browse a hosted storefront, build a cart, and complete the order via a `wa.me` deep link. The retailer dashboard handles products, inventory, and order management in real time.
+**Kedaipal** ("kedai" = shop + "pal") is a WhatsApp-first B2B SaaS order hub for serious WhatsApp sellers in Malaysia. Shoppers receive a CTA link, browse a hosted storefront, build a cart, and complete the order via a `wa.me` deep link. The retailer dashboard handles products, inventory, customers, and order management in real time.
 
-First vertical: **outdoor gear retailers** in Malaysia.
+**Current cohort focus:** Established **F&B home sellers** (cake decorators, frozen food + reseller networks, kuih and pastry sellers) doing 20+ orders/week. Product is positioned broadly enough to serve any pre-order WhatsApp business.
+
+**Differentiator:** Kedaipal runs a shared Meta-verified WhatsApp Business Account, so retailers don't need to set up their own WABA or complete Meta business verification. Sign up, share your storefront link, live in 5 minutes.
 
 ---
 
@@ -12,10 +14,15 @@ First vertical: **outdoor gear retailers** in Malaysia.
 |---|---|
 | Storefront | `kedaipal.com/<retailer-slug>` — no shopper auth required |
 | Dashboard | Clerk-protected retailer admin |
-| Order flow | WhatsApp CTA → storefront → cart → `wa.me` deep link with `ORDER#id` → Convex confirms |
+| Order flow | WhatsApp CTA → storefront → cart → `wa.me` deep link with `ORD-XXXX` → Convex confirms |
 | Catalog | Hosted in Convex (not Meta Commerce Catalog) |
-| Payments | Offline / COD / bank transfer for MVP |
-| Roadmap | Shopee, Lazada, TikTok Shop, StoreHub connectors post-MVP |
+| WhatsApp | Shared Kedaipal-owned WABA — no Meta verification required of retailers |
+| Pricing | 3 tiers: Starter RM79 / Pro RM149 / Scale RM299 + 14-day trial (no card) |
+| Customer payments | Retailer-owned gateway (HitPay Connect / Billplz / Stripe Connect) — Kedaipal never touches order money |
+| Subscription billing | Stripe Singapore + HitPay/Billplz |
+| Roadmap | Shopee, Lazada, TikTok Shop, StoreHub connectors — parked behind F&B core |
+
+See [`PROJECT_CONTEXT.md`](./PROJECT_CONTEXT.md) for full strategic context and [`CLAUDE.md`](./CLAUDE.md) for code-level conventions.
 
 ---
 
