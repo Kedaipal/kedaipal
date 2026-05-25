@@ -1,8 +1,7 @@
 import { httpRouter } from "convex/server";
 import { internal } from "./_generated/api";
 import { httpAction } from "./_generated/server";
-import { verifyMetaSignature } from "./lib/whatsappSignature";
-import { extractInboundMessages } from "./lib/whatsappWebhook";
+import { getAdapter } from "./lib/channels/registry";
 
 const http = httpRouter();
 
@@ -36,48 +35,40 @@ http.route({
 	path: "/webhook/whatsapp",
 	method: "POST",
 	handler: httpAction(async (ctx, req) => {
+		const adapter = getAdapter("whatsapp");
+
 		// Verify the request genuinely came from Meta before acting on it. This
 		// endpoint mutates order + customer state, so an unauthenticated POST is
 		// a spoofing vector. Meta signs the raw body with the app secret.
-		const appSecret = process.env.WHATSAPP_APP_SECRET;
 		const rawBody = await req.text();
-		const signature = req.headers.get("x-hub-signature-256");
 
-		if (!appSecret) {
-			// Fail closed: without the secret we cannot authenticate anything.
-			// Set WHATSAPP_APP_SECRET in the Convex deployment env before deploy.
+		// Fail closed when the secret is absent: without it we cannot
+		// authenticate anything, so distinguish this misconfiguration (500) from
+		// a genuine bad/missing signature (401, handled by the adapter below).
+		// Set WHATSAPP_APP_SECRET in the Convex deployment env before deploy.
+		if (!process.env.WHATSAPP_APP_SECRET) {
 			console.error(
 				"WA webhook rejected: WHATSAPP_APP_SECRET is not configured",
 			);
 			return new Response("server misconfigured", { status: 500 });
 		}
 
-		const valid = await verifyMetaSignature({
-			body: rawBody,
-			signatureHeader: signature,
-			appSecret,
-		});
+		const valid = await adapter.verifySignature(rawBody, req.headers);
 		if (!valid) {
 			console.warn("WA webhook rejected: invalid X-Hub-Signature-256");
 			return new Response("invalid signature", { status: 401 });
 		}
 
-		// Signature OK — parse the raw body we already verified.
-		let payload: unknown;
-		try {
-			payload = JSON.parse(rawBody);
-		} catch {
-			return new Response("bad json", { status: 400 });
-		}
-
-		const messages = extractInboundMessages(payload);
+		// Signature OK — the adapter parses the raw body we already verified into
+		// channel-agnostic envelopes.
+		const messages = adapter.parseInbound(rawBody, req.headers);
 		console.log("WA webhook POST", {
 			messageCount: messages.length,
-			firstFrom: messages[0]?.from,
+			firstFrom: messages[0]?.channelUserId,
 		});
 		for (const msg of messages) {
 			await ctx.runAction(internal.whatsapp.handleInbound, {
-				fromPhone: msg.from,
+				fromPhone: msg.channelUserId,
 				text: msg.text,
 				profileName: msg.profileName,
 			});

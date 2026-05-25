@@ -7,8 +7,8 @@ import {
 	internalQuery,
 } from "./_generated/server";
 import { linkOrderToCustomer, refreshWaProfileName } from "./customers";
+import { getAdapter } from "./lib/channels/registry";
 import { assertValidWaPhone } from "./lib/slug";
-import { sendCtaUrlWithImage, sendImage, sendText } from "./lib/whatsapp";
 import {
 	paymentQrCaption,
 	pickLocale,
@@ -228,11 +228,13 @@ export const handleInbound = internalAction({
 				storeName: "",
 			});
 
+		const wa = getAdapter("whatsapp");
+
 		const match = text.match(SHORT_ID_REGEX);
 		if (!match) {
 			console.log("WA inbound no shortId match → fallback", { fromPhone });
 			try {
-				await sendText(fromPhone, fallback());
+				await wa.send(fromPhone, { kind: "text", body: fallback() });
 			} catch (err) {
 				console.error("WA fallback send failed", err);
 			}
@@ -250,7 +252,7 @@ export const handleInbound = internalAction({
 		if (!result.matched) {
 			console.log("WA confirm not matched → fallback", { shortId, fromPhone });
 			try {
-				await sendText(fromPhone, fallback());
+				await wa.send(fromPhone, { kind: "text", body: fallback() });
 			} catch (err) {
 				console.error("WA fallback send failed", err);
 			}
@@ -290,27 +292,23 @@ export const handleInbound = internalAction({
 			? `${confirmWithRef}\n${paymentBlock}`
 			: confirmWithRef;
 		const brandImageUrl = "https://kedaipal.com/logo-2.png";
-		// CTA URL buttons require HTTPS — in dev (APP_URL=http://localhost:3000)
-		// the button would be rejected by Meta, so we fall back to a plain image
-		// with caption. In prod, the shopper gets a tappable "I've paid" button.
-		const canUseButton = trackingUrl.startsWith("https://");
+		// Emit a CTA intent — the adapter renders it as a tappable "I've paid"
+		// button in prod and degrades to a plain image with caption when the
+		// channel/environment can't honour interactive buttons (e.g. non-HTTPS
+		// APP_URL in dev).
 		try {
-			if (canUseButton) {
-				await sendCtaUrlWithImage(
-					fromPhone,
-					brandImageUrl,
-					body,
-					"I've paid",
-					trackingUrl,
-				);
-			} else {
-				await sendImage(fromPhone, brandImageUrl, body);
-			}
+			await wa.send(fromPhone, {
+				kind: "cta",
+				body,
+				buttonText: "I've paid",
+				url: trackingUrl,
+				imageUrl: brandImageUrl,
+			});
 		} catch (err) {
 			// Fall back to plain text if interactive/image send fails
 			console.error("WA confirm send failed, falling back to text", err);
 			try {
-				await sendText(fromPhone, body);
+				await wa.send(fromPhone, { kind: "text", body });
 			} catch (textErr) {
 				console.error("WA confirm send failed", textErr);
 			}
@@ -322,7 +320,11 @@ export const handleInbound = internalAction({
 		const qrUrl = meta?.payment.qrImageUrl;
 		if (qrUrl) {
 			try {
-				await sendImage(fromPhone, qrUrl, paymentQrCaption(locale));
+				await wa.send(fromPhone, {
+					kind: "image",
+					imageUrl: qrUrl,
+					caption: paymentQrCaption(locale),
+				});
 			} catch (err) {
 				console.error("WA payment QR send failed", err);
 			}
@@ -385,7 +387,10 @@ export const notifyStatusChange = internalAction({
 			deliveryMethod: meta.deliveryMethod,
 		});
 		try {
-			await sendText(meta.customerWaPhone, body);
+			await getAdapter("whatsapp").send(meta.customerWaPhone, {
+				kind: "text",
+				body,
+			});
 		} catch (err) {
 			console.error("WA status notify failed", err);
 		}
@@ -435,7 +440,10 @@ export const notifyPaymentReceived = internalAction({
 			trackingUrl,
 		});
 		try {
-			await sendText(meta.customerWaPhone, body);
+			await getAdapter("whatsapp").send(meta.customerWaPhone, {
+				kind: "text",
+				body,
+			});
 		} catch (err) {
 			console.error("WA payment-received send failed", err);
 		}
@@ -473,10 +481,10 @@ export const sendTestRetailerAlert = internalAction({
 			return;
 		}
 		try {
-			await sendText(
-				retailer.waPhone,
-				`Kedaipal test alert for ${retailer.storeName}. If you see this, WhatsApp delivery is working.`,
-			);
+			await getAdapter("whatsapp").send(retailer.waPhone, {
+				kind: "text",
+				body: `Kedaipal test alert for ${retailer.storeName}. If you see this, WhatsApp delivery is working.`,
+			});
 			console.log(
 				`Diagnostic alert sent (storeName=${retailer.storeName}, to=${retailer.waPhone})`,
 			);
