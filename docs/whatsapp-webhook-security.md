@@ -19,14 +19,17 @@ The handler now verifies this before acting:
 1. Read the **raw body** (`req.text()`) — must be the exact bytes Meta signed; never re-serialize.
 2. If `WHATSAPP_APP_SECRET` is unset → **fail closed** with `500` (operator error; Meta will retry 5xx).
 3. Recompute the HMAC and constant-time compare against the header → `401` on mismatch.
-4. Only then `JSON.parse` the already-verified raw body and dispatch.
+4. Only then parse the already-verified raw body and dispatch.
+
+> **As of 2026-05-25** the POST handler routes through the WhatsApp `ChannelAdapter` (`convex/lib/channels/whatsapp/adapter.ts`) rather than calling the parser/verifier directly — see [`messaging-channels.md`](./messaging-channels.md). The route still owns the explicit missing-secret → `500` check (so a misconfiguration is distinct from a bad signature); `adapter.verifySignature` returns the `401`/`200` decision, and `adapter.parseInbound` does the parse. **One behavior change:** a signed-but-unparseable body now returns `200 + console.error` (logged + acked) instead of the old `400` — a correctly-signed Meta body is always valid JSON, so this avoids a needless Meta retry while keeping the anomaly observable.
 
 ### Files
 
 | Path | Purpose |
 |---|---|
 | `convex/lib/whatsappSignature.ts` | `verifyMetaSignature` + `computeMetaSignature` using Web Crypto (`crypto.subtle`) — edge-runtime compatible, no Convex imports, constant-time compare, case-normalized |
-| `convex/http.ts` | POST handler reads raw body, verifies, fails closed / rejects, then parses |
+| `convex/lib/channels/whatsapp/adapter.ts` | Wraps `verifyMetaSignature` (`verifySignature`) and `extractInboundMessages` (`parseInbound`); reads `WHATSAPP_APP_SECRET` + the `x-hub-signature-256` header |
+| `convex/http.ts` | POST handler reads raw body, fails closed on missing secret, then delegates verify + parse to the adapter |
 | `convex/lib/whatsappSignature.test.ts` | 9 unit tests (valid, wrong secret, tampered body, missing/empty/malformed header, hex-case) |
 | `convex/http.test.ts` | 5 integration tests via `t.fetch` (missing/invalid/wrong-secret → 401, valid → 200, missing secret → 500) |
 
