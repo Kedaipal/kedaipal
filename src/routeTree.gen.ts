@@ -13,6 +13,7 @@ import { Route as TermsRouteImport } from './routes/terms'
 import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
+import { Route as CostRouteImport } from './routes/cost'
 import { Route as AppRouteImport } from './routes/app'
 import { Route as SlugRouteImport } from './routes/$slug'
 import { Route as IndexRouteImport } from './routes/index'
@@ -48,6 +49,11 @@ const PrivacyRoute = PrivacyRouteImport.update({
 const OnboardingRoute = OnboardingRouteImport.update({
   id: '/onboarding',
   path: '/onboarding',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CostRoute = CostRouteImport.update({
+  id: '/cost',
+  path: '/cost',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppRoute = AppRouteImport.update({
@@ -135,6 +141,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/$slug': typeof SlugRoute
   '/app': typeof AppRouteWithChildren
+  '/cost': typeof CostRoute
   '/onboarding': typeof OnboardingRoute
   '/privacy': typeof PrivacyRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
@@ -156,6 +163,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/$slug': typeof SlugRoute
+  '/cost': typeof CostRoute
   '/onboarding': typeof OnboardingRoute
   '/privacy': typeof PrivacyRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
@@ -179,6 +187,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/$slug': typeof SlugRoute
   '/app': typeof AppRouteWithChildren
+  '/cost': typeof CostRoute
   '/onboarding': typeof OnboardingRoute
   '/privacy': typeof PrivacyRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
@@ -203,6 +212,7 @@ export interface FileRouteTypes {
     | '/'
     | '/$slug'
     | '/app'
+    | '/cost'
     | '/onboarding'
     | '/privacy'
     | '/sitemap.xml'
@@ -224,6 +234,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/$slug'
+    | '/cost'
     | '/onboarding'
     | '/privacy'
     | '/sitemap.xml'
@@ -246,6 +257,7 @@ export interface FileRouteTypes {
     | '/'
     | '/$slug'
     | '/app'
+    | '/cost'
     | '/onboarding'
     | '/privacy'
     | '/sitemap.xml'
@@ -269,6 +281,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   SlugRoute: typeof SlugRoute
   AppRoute: typeof AppRouteWithChildren
+  CostRoute: typeof CostRoute
   OnboardingRoute: typeof OnboardingRoute
   PrivacyRoute: typeof PrivacyRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
@@ -306,6 +319,13 @@ declare module '@tanstack/react-router' {
       path: '/onboarding'
       fullPath: '/onboarding'
       preLoaderRoute: typeof OnboardingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/cost': {
+      id: '/cost'
+      path: '/cost'
+      fullPath: '/cost'
+      preLoaderRoute: typeof CostRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/app': {
@@ -455,6 +475,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   SlugRoute: SlugRoute,
   AppRoute: AppRouteWithChildren,
+  CostRoute: CostRoute,
   OnboardingRoute: OnboardingRoute,
   PrivacyRoute: PrivacyRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
