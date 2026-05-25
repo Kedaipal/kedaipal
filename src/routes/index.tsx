@@ -12,7 +12,6 @@ import { Nav } from "../components/landing/nav";
 import { PricingTeaser } from "../components/landing/pricing-teaser";
 import { ProblemStrip } from "../components/landing/problem-strip";
 import { SetupStrip } from "../components/landing/setup-strip";
-import { SlowYesStrip } from "../components/landing/slow-yes-strip";
 
 const SEO_TITLE =
 	"Kedaipal — WhatsApp Order Hub for F&B Home Sellers in Malaysia";
@@ -133,8 +132,7 @@ function Landing() {
 			<CostCta />
 			<ProblemStrip />
 			<HowItWorks />
-			<SlowYesStrip />
-			<SetupStrip />
+<SetupStrip />
 			<FeatureGrid />
 			<PricingTeaser />
 			<Faq />
