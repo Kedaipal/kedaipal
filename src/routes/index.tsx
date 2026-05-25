@@ -1,9 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
+import { CostCta } from "../components/landing/cost-cta";
 import { Faq } from "../components/landing/faq";
 import { FeatureGrid } from "../components/landing/feature-grid";
 import { FinalCta } from "../components/landing/final-cta";
 import { Footer } from "../components/landing/footer";
+import { FoundingTen } from "../components/landing/founding-ten";
 import { Hero } from "../components/landing/hero";
 import { HowItWorks } from "../components/landing/how-it-works";
 import { Nav } from "../components/landing/nav";
@@ -13,9 +15,9 @@ import { SetupStrip } from "../components/landing/setup-strip";
 import { SlowYesStrip } from "../components/landing/slow-yes-strip";
 
 const SEO_TITLE =
-	"Kedaipal — WhatsApp Order Hub for Small Retailers in Malaysia";
+	"Kedaipal — WhatsApp Order Hub for F&B Home Sellers in Malaysia";
 const SEO_DESC =
-	"Turn WhatsApp into your order hub. Kedaipal lets small retailers launch a storefront, manage orders, and track inventory — free during beta, no code needed.";
+	"Stop losing orders buried in WhatsApp. Kedaipal gives cake makers, frozen food sellers, and kuih suppliers a real storefront and order pipeline — 14-day free trial, no Meta setup needed.";
 const SITE_URL = "https://kedaipal.com";
 const OG_IMAGE = `${SITE_URL}/android-chrome-512x512.png`;
 
@@ -27,7 +29,7 @@ const jsonLd = [
 		url: SITE_URL,
 		logo: OG_IMAGE,
 		description:
-			"B2B SaaS order hub for small retailers. Start on WhatsApp, grow to Shopee, Lazada, and TikTok Shop — all from one dashboard.",
+			"B2B SaaS order hub for F&B home sellers. Stop losing orders buried in WhatsApp — real storefront, real order pipeline, no Meta setup needed.",
 	},
 	{
 		"@context": "https://schema.org",
@@ -127,12 +129,13 @@ function Landing() {
 		<main className="min-h-dvh bg-background text-foreground">
 			<Nav />
 			<Hero />
+			<FoundingTen />
+			<CostCta />
 			<ProblemStrip />
 			<HowItWorks />
 			<SlowYesStrip />
 			<SetupStrip />
 			<FeatureGrid />
-			{/* <SocialProof /> */}
 			<PricingTeaser />
 			<Faq />
 			<FinalCta />

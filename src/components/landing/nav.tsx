@@ -110,7 +110,6 @@ export function Nav() {
 	const navLinks = [
 		{ href: "#features", label: m.nav_features() },
 		{ href: "#how", label: m.nav_how() },
-		{ href: "#pricing", label: m.nav_pricing() },
 		{ href: "#faq", label: m.nav_faq() },
 	];
 
@@ -136,6 +135,12 @@ export function Nav() {
 							{link.label}
 						</a>
 					))}
+					<Link
+						to="/pricing"
+						className="text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+					>
+						{m.nav_pricing()}
+					</Link>
 				</div>
 				<div className="flex items-center gap-2">
 					<LanguageSwitcher />
@@ -166,6 +171,13 @@ export function Nav() {
 								{link.label}
 							</a>
 						))}
+						<Link
+							to="/pricing"
+							onClick={closeMenu}
+							className="rounded-lg px-3 py-3 text-base font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+						>
+							{m.nav_pricing()}
+						</Link>
 					</div>
 					<div className="mt-3 border-t border-border/60 pt-3">
 						<MobileMenuAuthCta onClose={closeMenu} />

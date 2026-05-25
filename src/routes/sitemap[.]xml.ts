@@ -9,6 +9,8 @@ export const Route = createFileRoute("/sitemap.xml")({
 
 		const urls = [
 			`  <url>\n    <loc>${SITE_URL}/</loc>\n    <changefreq>weekly</changefreq>\n    <priority>1.0</priority>\n  </url>`,
+			`  <url>\n    <loc>${SITE_URL}/pricing</loc>\n    <changefreq>weekly</changefreq>\n    <priority>0.9</priority>\n  </url>`,
+			`  <url>\n    <loc>${SITE_URL}/cost</loc>\n    <changefreq>monthly</changefreq>\n    <priority>0.7</priority>\n  </url>`,
 			...slugs.map(({ slug, updatedAt }) => {
 				const lastmod = new Date(updatedAt).toISOString().split("T")[0];
 				return `  <url>\n    <loc>${SITE_URL}/${slug}</loc>\n    <lastmod>${lastmod}</lastmod>\n    <changefreq>daily</changefreq>\n    <priority>0.8</priority>\n  </url>`;
