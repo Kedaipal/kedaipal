@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "convex:dev": "convex dev",
     "dev": "vite dev --port 3000",
+    "dev:all": "concurrently -n \"convex,fe\" -c \"blue,green\" \"pnpm convex:dev\" \"pnpm dev\"",
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
@@ -20,7 +21,8 @@
     "lint": "biome lint",
     "check": "biome check",
     "deploy": "pnpm run build && wrangler deploy",
-    "seed": "npx convex run seed:run"
+    "seed": "npx convex run seed:run",
+    "optimize:images": "node scripts/optimize-images.mjs"
   },
   "dependencies": {
     "@clerk/tanstack-react-start": "^1.0.11",
@@ -71,8 +73,10 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.1.4",
+    "concurrently": "^9.2.1",
     "convex-test": "^0.0.47",
     "jsdom": "^28.1.0",
+    "sharp": "^0.34.5",
     "typescript": "^5.7.2",
     "vite": "^7.3.1",
     "vite-tsconfig-paths": "^5.1.4",

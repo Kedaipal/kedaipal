@@ -365,6 +365,18 @@ export function CheckoutSheet({
 									</Button>
 								)}
 							</form.Subscribe>
+							<p className="mt-3 text-center text-xs text-muted-foreground">
+								By placing this order, you agree to our{" "}
+								<a
+									href="/privacy"
+									target="_blank"
+									rel="noopener noreferrer"
+									className="underline hover:text-foreground"
+								>
+									Privacy Policy
+								</a>
+								.
+							</p>
 						</div>
 					</form>
 				</Dialog.Content>

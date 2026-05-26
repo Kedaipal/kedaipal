@@ -20,6 +20,7 @@ import type * as lib_currency from "../lib/currency.js";
 import type * as lib_customer from "../lib/customer.js";
 import type * as lib_email from "../lib/email.js";
 import type * as lib_emailCopy from "../lib/emailCopy.js";
+import type * as lib_legal from "../lib/legal.js";
 import type * as lib_order from "../lib/order.js";
 import type * as lib_rateLimiter from "../lib/rateLimiter.js";
 import type * as lib_slug from "../lib/slug.js";
@@ -52,6 +53,7 @@ declare const fullApi: ApiFromModules<{
   "lib/customer": typeof lib_customer;
   "lib/email": typeof lib_email;
   "lib/emailCopy": typeof lib_emailCopy;
+  "lib/legal": typeof lib_legal;
   "lib/order": typeof lib_order;
   "lib/rateLimiter": typeof lib_rateLimiter;
   "lib/slug": typeof lib_slug;

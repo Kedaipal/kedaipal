@@ -2,6 +2,7 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { Bell, MessageCircle, ShoppingCart, Store } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
+import { ResponsiveImage } from "./responsive-image";
 
 function getHowStepDetails() {
 	return [
@@ -25,36 +26,15 @@ function getHowStepDetails() {
 			heading: m.how_detail_2_heading(),
 			description: m.how_detail_2_desc(),
 			preview: (
-				<div className="space-y-3 rounded-xl border border-border bg-card p-4">
-					<div className="flex items-center gap-3 border-b border-border pb-3">
-						<div className="flex size-9 items-center justify-center rounded-lg bg-accent/10">
-							<Store className="size-4 text-accent" />
-						</div>
-						<div>
-							<p className="text-sm font-semibold">
-								{m.how_detail_2_store_name()}
-							</p>
-							<p className="text-xs text-muted-foreground">
-								{m.how_detail_2_store_url()}
-							</p>
-						</div>
-					</div>
-					<div className="grid grid-cols-2 gap-2">
-						{[m.how_detail_2_product_1(), m.how_detail_2_product_2()].map(
-							(item) => (
-								<div
-									key={item}
-									className="rounded-lg border border-border bg-muted/40 p-2"
-								>
-									<div className="mb-1.5 h-12 rounded bg-accent/10" />
-									<p className="text-[11px] font-medium leading-tight">
-										{item}
-									</p>
-								</div>
-							),
-						)}
-					</div>
-				</div>
+				<ResponsiveImage
+					name="storefront"
+					alt={m.how_detail_2_visual_alt()}
+					widths={[280, 560, 840]}
+					sizes="(max-width: 768px) 220px, 260px"
+					width={953}
+					height={1912}
+					className="mx-auto h-auto w-[220px] md:w-[260px]"
+				/>
 			),
 		},
 		{

@@ -122,9 +122,9 @@ export function Nav() {
 			}`}
 		>
 			<div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5 md:px-8">
-				<a href="#top" className="flex items-center">
+				<Link to="/" className="flex items-center" aria-label={m.nav_home()}>
 					<img src="/logo-3.svg" alt="Kedaipal" className="h-7 w-auto sm:h-9" />
-				</a>
+				</Link>
 				<div className="hidden items-center gap-8 md:flex">
 					{navLinks.map((link) => (
 						<a

@@ -62,6 +62,18 @@ export default defineSchema({
 				note: v.optional(v.string()),
 			}),
 		),
+		// Legal consent tracking. Versions are ISO dates mirrored from
+		// convex/lib/legal.ts; *AcceptedAt is the epoch-ms acceptance time;
+		// acceptanceIp is a best-effort client IP captured at acceptance for
+		// legal defensibility. Stamped at onboarding (createRetailer) and on
+		// re-acceptance (recordConsentAcceptance).
+		termsAcceptedAt: v.optional(v.number()),
+		termsVersion: v.optional(v.string()),
+		privacyAcceptedAt: v.optional(v.number()),
+		privacyVersion: v.optional(v.string()),
+		aupAcceptedAt: v.optional(v.number()),
+		aupVersion: v.optional(v.string()),
+		acceptanceIp: v.optional(v.string()),
 		channel: v.literal("whatsapp"),
 		createdAt: v.number(),
 		updatedAt: v.number(),
