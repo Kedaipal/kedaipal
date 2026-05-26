@@ -138,6 +138,7 @@
 
 	"nav_menu_open": "Buka menu",
 	"nav_menu_close": "Tutup menu",
+	"nav_home": "Laman utama Kedaipal",
 
 	"how_detail_1_heading": "Pelanggan hantar mesej WhatsApp",
 	"how_detail_1_desc": "Pelanggan anda mesej nombor WhatsApp Business anda. Tiada muat turun aplikasi, tiada buat akaun — hanya sembang biasa yang mereka sudah tahu guna.",
@@ -145,6 +146,7 @@
 	"how_detail_1_chat_2": "Ada! Layari menu penuh kami di sini 👇",
 	"how_detail_2_heading": "Mereka layari etalase anda",
 	"how_detail_2_desc": "Kedaipal hantar butang CTA yang paut ke etalase berjenama anda di kedaipal.com/kedai-anda. Pelanggan layari produk, lihat gambar, dan semak inventori — semua di telefon.",
+	"how_detail_2_visual_alt": "Etalase Kedaipal di telefon memaparkan produk makanan sejuk beku dengan harga dan butang Tambah",
 	"how_detail_2_store_name": "Maya's Bakery",
 	"how_detail_2_store_url": "kedaipal.com/mayas-bakery",
 	"how_detail_2_product_1": "Kotak Brownie (8 keping) — RM 65",
@@ -176,6 +178,7 @@
 
 	"footer_privacy": "Privasi",
 	"footer_terms": "Terma",
+	"footer_aup": "Penggunaan Boleh Terima",
 
 	"features_full_list": "Senarai ciri penuh →",
 

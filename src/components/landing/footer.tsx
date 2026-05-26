@@ -25,6 +25,12 @@ export function Footer() {
 						>
 							{m.footer_terms()}
 						</Link>
+						<Link
+							to="/acceptable-use"
+							className="transition-colors hover:text-foreground"
+						>
+							{m.footer_aup()}
+						</Link>
 					</div>
 					<p>{m.footer_tagline()}</p>
 				</div>

@@ -69,6 +69,20 @@ import {
 	assertValidStoreName,
 	assertValidWaPhone,
 } from "./lib/slug";
+import {
+	AUP_VERSION,
+	PRIVACY_VERSION,
+	TERMS_VERSION,
+} from "./lib/legal";
+
+/** Trim and bound a best-effort client IP before persisting. */
+function sanitizeAcceptanceIp(ip: string | undefined): string | undefined {
+	if (ip === undefined) return undefined;
+	const trimmed = ip.trim();
+	if (trimmed.length === 0) return undefined;
+	// IPv6 max textual length is 45 chars; clamp generously to avoid storing junk.
+	return trimmed.slice(0, 64);
+}
 
 const SLUG_HISTORY_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
 
@@ -143,6 +157,12 @@ type RetailerPublic = {
 	messageTemplates?: MessageTemplatesShape;
 	paymentInstructions?: PaymentInstructionsShape;
 	paymentQrImageUrl?: string;
+	// Accepted legal-doc versions, surfaced so the dashboard can detect a
+	// version bump and prompt re-acceptance. Acceptance timestamps and IP are
+	// intentionally not exposed to the client.
+	termsVersion?: string;
+	privacyVersion?: string;
+	aupVersion?: string;
 };
 
 async function loadRetailerForUser(
@@ -180,6 +200,9 @@ async function loadRetailerForUser(
 		messageTemplates: row.messageTemplates as MessageTemplatesShape | undefined,
 		paymentInstructions,
 		paymentQrImageUrl,
+		termsVersion: row.termsVersion,
+		privacyVersion: row.privacyVersion,
+		aupVersion: row.aupVersion,
 	};
 }
 
@@ -328,6 +351,9 @@ export const createRetailer = mutation({
 		storeName: v.string(),
 		slug: v.string(),
 		waPhone: v.optional(v.string()),
+		// Best-effort client IP captured at the consent moment. Optional —
+		// onboarding never blocks if IP lookup fails.
+		acceptanceIp: v.optional(v.string()),
 	},
 	handler: async (ctx, args): Promise<{ slug: string }> => {
 		const identity = await ctx.auth.getUserIdentity();
@@ -384,6 +410,10 @@ export const createRetailer = mutation({
 		}
 
 		const now = Date.now();
+		// Consent is implied: the onboarding UI gates submission on a required,
+		// not-pre-checked "I agree" checkbox. Stamp the server-side current
+		// versions (never client-supplied) for tamper resistance.
+		const acceptanceIp = sanitizeAcceptanceIp(args.acceptanceIp);
 		await ctx.db.insert("retailers", {
 			userId,
 			slug,
@@ -392,6 +422,13 @@ export const createRetailer = mutation({
 			notifyEmail,
 			currency: DEFAULT_CURRENCY,
 			channel: "whatsapp",
+			termsAcceptedAt: now,
+			termsVersion: TERMS_VERSION,
+			privacyAcceptedAt: now,
+			privacyVersion: PRIVACY_VERSION,
+			aupAcceptedAt: now,
+			aupVersion: AUP_VERSION,
+			acceptanceIp,
 			createdAt: now,
 			updatedAt: now,
 		});
@@ -473,6 +510,38 @@ export const updateSettings = mutation({
 		}
 
 		await ctx.db.patch(retailer._id, patch);
+		return { ok: true };
+	},
+});
+
+/**
+ * Re-stamp the signed-in retailer's legal consent to the current document
+ * versions. Called by the dashboard re-acceptance banner after a version bump.
+ * Like createRetailer, versions are taken server-side (never client-supplied).
+ */
+export const recordConsentAcceptance = mutation({
+	args: {
+		acceptanceIp: v.optional(v.string()),
+	},
+	handler: async (ctx, args): Promise<{ ok: true }> => {
+		const userId = await requireUserId(ctx);
+		const retailer = await ctx.db
+			.query("retailers")
+			.withIndex("by_user", (q) => q.eq("userId", userId))
+			.first();
+		if (!retailer) throw new ConvexError("No store to update");
+
+		const now = Date.now();
+		await ctx.db.patch(retailer._id, {
+			termsAcceptedAt: now,
+			termsVersion: TERMS_VERSION,
+			privacyAcceptedAt: now,
+			privacyVersion: PRIVACY_VERSION,
+			aupAcceptedAt: now,
+			aupVersion: AUP_VERSION,
+			acceptanceIp: sanitizeAcceptanceIp(args.acceptanceIp),
+			updatedAt: now,
+		});
 		return { ok: true };
 	},
 });
@@ -631,5 +700,110 @@ export const internalPurgeExpiredSlugHistory = internalMutation({
 			}
 		}
 		return { purged };
+	},
+});
+
+type DeleteUserResult =
+	| { deleted: false }
+	| {
+			deleted: true;
+			retailerId: Id<"retailers">;
+			counts: { orders: number; products: number; customers: number };
+	  };
+
+/**
+ * Hard-delete a user and every tenant artifact they own, keyed by Clerk
+ * subject (`userId`). Cascades through orders (+ their orderEvents and payment
+ * proof files), products (+ their image files), customers, and parked
+ * slugHistory rows, then removes the retailer's logo / payment-QR blobs and the
+ * retailer row itself. Runs as a single ACID mutation, so it's all-or-nothing.
+ *
+ * Internal-only: there is no shopper/retailer-facing path to this. Invoke it
+ * from a Clerk "user.deleted" webhook handler, a GDPR erasure job, or the
+ * Convex dashboard.
+ *
+ * Idempotent — returns `{ deleted: false }` when the user has no retailer.
+ *
+ * NOTE: deletion is bounded by the tenant's data volume. A single Convex
+ * mutation has read/write-set limits, so a Scale-tier retailer with very large
+ * order history could exceed them. If that becomes real, split this into a
+ * paginated batch driven by `ctx.scheduler`. The slugHistory scan is a full
+ * table read (no by-retailer index) but that table is small and TTL-pruned.
+ */
+export const deleteUser = internalMutation({
+	args: { userId: v.string() },
+	handler: async (ctx, { userId }): Promise<DeleteUserResult> => {
+		const retailer = await ctx.db
+			.query("retailers")
+			.withIndex("by_user", (q) => q.eq("userId", userId))
+			.first();
+		if (!retailer) return { deleted: false };
+		const retailerId = retailer._id;
+
+		// Best-effort: a missing/already-deleted blob must not abort the cascade.
+		const deleteFile = async (storageId: string | undefined): Promise<void> => {
+			if (!storageId) return;
+			try {
+				await ctx.storage.delete(storageId as Id<"_storage">);
+			} catch {
+				// blob already gone — ignore
+			}
+		};
+
+		// Orders → their events + payment proof files.
+		const orders = await ctx.db
+			.query("orders")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.collect();
+		for (const order of orders) {
+			const events = await ctx.db
+				.query("orderEvents")
+				.withIndex("by_order", (q) => q.eq("orderId", order._id))
+				.collect();
+			for (const event of events) await ctx.db.delete(event._id);
+			await deleteFile(order.paymentProofStorageId);
+			await ctx.db.delete(order._id);
+		}
+
+		// Products → their image files.
+		const products = await ctx.db
+			.query("products")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.collect();
+		for (const product of products) {
+			for (const imageId of product.imageStorageIds) await deleteFile(imageId);
+			await ctx.db.delete(product._id);
+		}
+
+		// Customers.
+		const customers = await ctx.db
+			.query("customers")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.collect();
+		for (const customer of customers) await ctx.db.delete(customer._id);
+
+		// Parked slug-history rows (no by-retailer index; small, TTL-pruned table).
+		const history = await ctx.db.query("slugHistory").collect();
+		for (const row of history) {
+			if (row.retailerId === retailerId) await ctx.db.delete(row._id);
+		}
+
+		// Retailer-level storage, then the retailer row.
+		await deleteFile(retailer.logoStorageId);
+		const paymentInstructions = retailer.paymentInstructions as
+			| PaymentInstructionsShape
+			| undefined;
+		await deleteFile(paymentInstructions?.qrImageStorageId);
+		await ctx.db.delete(retailerId);
+
+		return {
+			deleted: true,
+			retailerId,
+			counts: {
+				orders: orders.length,
+				products: products.length,
+				customers: customers.length,
+			},
+		};
 	},
 });

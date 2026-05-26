@@ -1,10 +1,11 @@
 import { useAuth } from "@clerk/tanstack-react-start";
 import { Link } from "@tanstack/react-router";
 import { motion, useReducedMotion } from "framer-motion";
-import { ArrowRight, Bell, Sparkles, Store } from "lucide-react";
+import { ArrowRight, Bell, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { m } from "../../paraglide/messages";
 import { Button } from "../ui/button";
+import { ResponsiveImage } from "./responsive-image";
 
 const staggerContainer = {
 	hidden: {},
@@ -24,64 +25,17 @@ const revealUp = {
 
 function PhoneMockupContent() {
 	return (
-		<div className="relative" role="img" aria-label={m.hero_phone_alt()}>
-			<div className="relative h-[560px] w-[280px] rounded-[2.5rem] border-8 border-foreground/90 bg-foreground [filter:drop-shadow(0_32px_48px_hsl(222_47%_11%_/_0.14))]">
-				<div className="absolute left-1/2 top-2 z-10 h-5 w-24 -translate-x-1/2 rounded-full bg-foreground" />
-				<div className="relative flex h-full w-full flex-col overflow-hidden rounded-[2rem] bg-[#ECE5DD]">
-					<div className="flex items-center gap-3 bg-[#128C7E] px-4 py-3 pt-8 text-white">
-						<div className="flex size-9 items-center justify-center rounded-full bg-white/20 text-sm font-bold">
-							K
-						</div>
-						<div className="flex-1">
-							<p className="text-sm font-semibold">{m.phone_store_name()}</p>
-							<p className="text-[10px] text-white/80">
-								{m.phone_store_status()}
-							</p>
-						</div>
-					</div>
-					<div className="flex flex-1 flex-col gap-2 p-3">
-						<div className="max-w-[85%] self-start rounded-xl rounded-tl-sm bg-white px-3 py-2 text-xs text-slate-800 shadow-sm">
-							{m.phone_chat_1()}
-						</div>
-						<div className="max-w-[85%] self-end rounded-xl rounded-tr-sm bg-[#DCF8C6] px-3 py-2 text-xs text-slate-800 shadow-sm">
-							{m.phone_chat_2()}
-						</div>
-						<div className="max-w-[85%] self-end rounded-xl rounded-tr-sm bg-white px-3 py-2 shadow-sm">
-							<div className="flex items-center gap-2 border-b border-slate-200 pb-2">
-								<div className="flex size-8 items-center justify-center rounded bg-accent/20">
-									<Store className="size-4 text-accent" />
-								</div>
-								<div className="flex-1">
-									<p className="text-[11px] font-semibold text-slate-800">
-										{m.phone_store_name()}
-									</p>
-									<p className="text-[9px] text-slate-500">
-										{m.phone_store_url()}
-									</p>
-								</div>
-							</div>
-							<p className="pt-2 text-[10px] font-semibold text-accent">
-								{m.phone_store_cta()}
-							</p>
-						</div>
-						<div className="max-w-[85%] self-start rounded-xl rounded-tl-sm bg-white px-3 py-2 text-xs text-slate-800 shadow-sm">
-							{m.phone_chat_3()}
-						</div>
-						<div className="max-w-[90%] self-end rounded-xl rounded-tr-sm bg-[#DCF8C6] px-3 py-2 shadow-sm">
-							<p className="text-[11px] font-bold text-slate-800">
-								{m.phone_order_id()}
-							</p>
-							<div className="mt-1 space-y-0.5 text-[10px] text-slate-700">
-								<p>• {m.phone_order_item()}</p>
-								<p>• {m.phone_order_total()}</p>
-							</div>
-							<p className="mt-1 text-[9px] font-semibold text-[#128C7E]">
-								{m.phone_order_status()}
-							</p>
-						</div>
-					</div>
-				</div>
-			</div>
+		<div className="relative">
+			<ResponsiveImage
+				name="whatsapp"
+				alt={m.hero_phone_alt()}
+				widths={[280, 560, 840]}
+				sizes="(max-width: 768px) 260px, 300px"
+				width={953}
+				height={1912}
+				priority
+				className="h-auto w-[260px] md:w-[300px] [filter:drop-shadow(0_32px_48px_hsl(222_47%_11%_/_0.14))]"
+			/>
 			<div className="absolute -right-4 top-24 hidden rounded-xl border border-border bg-card px-3 py-2 shadow-lg md:block motion-reduce:transform-none">
 				<div className="flex items-center gap-2">
 					<Bell className="size-4 text-accent" />
