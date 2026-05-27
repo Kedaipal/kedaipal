@@ -1,6 +1,6 @@
 # Payment Confirmation Handshake — Implementation Roadmap
 
-Reference doc for the manual two-button payment confirmation pattern. **Designed but not implemented.** This file is the menu of changes to pick up when we ship it. No payment gateway required — solves the "did the money land?" handshake using the bank-transfer / DuitNow QR flow we already have.
+Reference doc for the manual two-button payment confirmation pattern. **Status: shipped (in production).** This file is kept for the original design rationale (problem framing, why we deferred, future PSP swap-in); for how the flow behaves today, see the canonical reference: [`payment-handshake.md`](./payment-handshake.md). No payment gateway required — solves the "did the money land?" handshake using the bank-transfer / DuitNow QR flow we already have.
 
 ## Context (2026-04-28)
 

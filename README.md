@@ -24,6 +24,8 @@
 
 See [`PROJECT_CONTEXT.md`](./PROJECT_CONTEXT.md) for full strategic context and [`CLAUDE.md`](./CLAUDE.md) for code-level conventions.
 
+**New to the codebase?** Start with **[`docs/onboarding.md`](./docs/onboarding.md)** — a guided knowledge-transfer path for engineers. The full documentation index lives at [`docs/README.md`](./docs/README.md).
+
 ---
 
 ## Tech Stack
@@ -55,7 +57,7 @@ Frontend vars live in `.env.local`; backend vars are set on the Convex deploymen
 
 | Variable | Where | Purpose |
 |---|---|---|
-| `NEXT_PUBLIC_CONVEX_URL` | frontend | Convex deployment URL |
+| `VITE_CONVEX_URL` | frontend | Convex deployment URL (auto-populated by `convex dev`) |
 | `CLERK_JWT_ISSUER_DOMAIN` | Convex | Clerk JWT issuer for auth |
 | `APP_URL` | Convex | Base URL used in WhatsApp/tracking links |
 | `WHATSAPP_ACCESS_TOKEN` | Convex | Cloud API bearer token (outbound sends) |
