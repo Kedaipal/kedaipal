@@ -94,7 +94,7 @@ export function CostCalculator({
 	return (
 		<div className="mx-auto max-w-xl px-5 pb-32 pt-8 md:pt-12">
 			<header className="text-center">
-				<span className="inline-flex items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-accent">
+				<span className="inline-flex items-center gap-2 rounded-full border border-destructive/30 bg-destructive/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-destructive">
 					<TrendingDown className="size-3" />
 					The real cost of WhatsApp-only orders
 				</span>
@@ -203,7 +203,7 @@ function ResultCard({ result, ratioLabel }: ResultCardProps) {
 				"mt-6 overflow-hidden rounded-2xl border shadow-sm",
 				result.disqualified
 					? "border-border bg-muted/40"
-					: "border-accent/30 bg-card",
+					: "border-destructive/30 bg-card",
 			)}
 		>
 			{result.disqualified ? (
@@ -227,7 +227,7 @@ function QualifiedBody({ result, ratioLabel }: ResultCardProps) {
 			<p className="text-sm font-medium text-muted-foreground">
 				WhatsApp-only ordering is costing you about
 			</p>
-			<p className="mt-1 text-4xl font-bold tracking-tight text-accent md:text-5xl">
+			<p className="mt-1 text-4xl font-bold tracking-tight text-destructive md:text-5xl">
 				{rm(result.total)}
 				<span className="text-xl font-semibold text-muted-foreground">
 					{" "}
@@ -238,13 +238,15 @@ function QualifiedBody({ result, ratioLabel }: ResultCardProps) {
 			<dl className="mt-5 space-y-2 text-sm">
 				<div className="flex items-center justify-between">
 					<dt className="text-muted-foreground">Missed-order revenue</dt>
-					<dd className="font-medium tabular-nums">
+					<dd className="font-medium tabular-nums text-destructive">
 						{rm(result.missedRevenue)}
 					</dd>
 				</div>
 				<div className="flex items-center justify-between">
 					<dt className="text-muted-foreground">Time chasing payments</dt>
-					<dd className="font-medium tabular-nums">{rm(result.chaseCost)}</dd>
+					<dd className="font-medium tabular-nums text-destructive">
+						{rm(result.chaseCost)}
+					</dd>
 				</div>
 			</dl>
 
