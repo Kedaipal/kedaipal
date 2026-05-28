@@ -12,3 +12,6 @@ dist-ssr
 __unconfig*
 todos.json
 src/paraglide/
+
+# graphify knowledge graph build artifacts (regenerable via /graphify)
+graphify-out/
