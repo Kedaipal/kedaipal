@@ -362,6 +362,47 @@ function TrackingRoute() {
 				</a>
 			) : null}
 
+			{/* Pickup location — shown for self-collect orders that have a snapshot.
+			    Reads the frozen snapshot (not the live pickupLocations row) so a
+			    retailer edit after the order was placed never rewrites history. */}
+			{isSelfCollect && order.pickupSnapshot ? (
+				<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+						Pick up at
+					</p>
+					<div className="flex items-start gap-2">
+						<MapPin
+							className="size-4 shrink-0 text-accent mt-0.5"
+							aria-hidden="true"
+						/>
+						<div className="flex min-w-0 flex-1 flex-col gap-1">
+							<p className="text-sm font-semibold leading-tight">
+								{order.pickupSnapshot.label}
+							</p>
+							<p className="text-xs text-muted-foreground whitespace-pre-line">
+								{order.pickupSnapshot.address}
+							</p>
+						</div>
+					</div>
+					{order.pickupSnapshot.mapsUrl ? (
+						<a
+							href={order.pickupSnapshot.mapsUrl}
+							target="_blank"
+							rel="noreferrer"
+							className="flex items-center gap-1.5 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
+						>
+							<ExternalLink className="size-3.5" />
+							Open in maps
+						</a>
+					) : null}
+					{order.pickupSnapshot.notes ? (
+						<p className="rounded-lg bg-muted/40 px-3 py-2 text-xs text-foreground whitespace-pre-line">
+							{order.pickupSnapshot.notes}
+						</p>
+					) : null}
+				</section>
+			) : null}
+
 			{/* Delivery address — shown for delivery orders that have an address */}
 			{!isSelfCollect && order.deliveryAddress ? (
 				<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">

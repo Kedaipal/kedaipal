@@ -18,6 +18,7 @@ import {
 } from "../components/dashboard/page-header";
 import { useAppForm } from "../components/forms/form";
 import { ShopeeIcon } from "../components/icons/shopee-icon";
+import { PickupLocationsTab } from "../components/settings/pickup-locations-tab";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
@@ -37,12 +38,18 @@ const LOCALE_OPTIONS = [
 	{ value: "ms", label: "Bahasa Malaysia" },
 ] as const;
 
-type SettingsTab = "store" | "whatsapp" | "payments" | "integrations";
+type SettingsTab =
+	| "store"
+	| "whatsapp"
+	| "payments"
+	| "pickup"
+	| "integrations";
 
 const SETTINGS_TABS: ReadonlyArray<{ id: SettingsTab; label: string }> = [
 	{ id: "store", label: "Store" },
 	{ id: "whatsapp", label: "WhatsApp" },
 	{ id: "payments", label: "Payments" },
+	{ id: "pickup", label: "Pickup" },
 	{ id: "integrations", label: "Integrations" },
 ];
 
@@ -95,7 +102,7 @@ function InfoBanner({
 
 export const Route = createFileRoute("/app/settings")({
 	validateSearch: (search: Record<string, unknown>) => ({
-		tab: (["store", "whatsapp", "payments", "integrations"].includes(
+		tab: (["store", "whatsapp", "payments", "pickup", "integrations"].includes(
 			search.tab as string,
 		)
 			? search.tab
@@ -328,6 +335,13 @@ function SettingsRoute() {
 						/>
 					</Card>
 				</div>
+			) : null}
+
+			{activeTab === "pickup" ? (
+				<PickupLocationsTab
+					retailerId={retailer._id}
+					offerSelfCollect={retailer.offerSelfCollect ?? false}
+				/>
 			) : null}
 
 			{activeTab === "integrations" ? (

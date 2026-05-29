@@ -8,6 +8,7 @@ import {
 	CreditCard,
 	Globe,
 	type LucideIcon,
+	MapPin,
 	MessageCircle,
 	Music2,
 	Package,
@@ -106,6 +107,10 @@ function DashboardHome() {
 		api.orders.countActionable,
 		retailer ? { retailerId: retailer._id } : "skip",
 	);
+	const pickupStatus = useQuery(
+		api.pickupLocations.hasAnyActive,
+		retailer ? { retailerId: retailer._id } : "skip",
+	);
 	const recentOrdersPage = useQuery(
 		api.orders.listByRetailer,
 		retailer
@@ -155,6 +160,12 @@ function DashboardHome() {
 				payment.note),
 	);
 
+	// The Pickup checklist step is intentionally hidden for delivery-only
+	// retailers — adding it as auto-done would just be visual noise. Surfaces
+	// only when the retailer has opted in via the Pickup settings tab.
+	const offersSelfCollect = retailer.offerSelfCollect ?? false;
+	const hasPickupLocation = pickupStatus?.hasAny ?? false;
+
 	const checklist: ChecklistItem[] = [
 		{
 			key: "wa",
@@ -191,6 +202,22 @@ function DashboardHome() {
 			to: "/app/settings",
 			tab: "payments",
 		},
+		...(offersSelfCollect
+			? [
+					{
+						key: "pickup",
+						step: 4,
+						done: hasPickupLocation,
+						icon: MapPin,
+						title: "Add a pickup location",
+						why: "Buyers picking self-collect won't see the option on your storefront until you add at least one location.",
+						time: "~2 min",
+						cta: "Go to Settings",
+						to: "/app/settings",
+						tab: "pickup" as const,
+					},
+				]
+			: []),
 	];
 
 	const completedCount = checklist.filter((c) => c.done).length;
@@ -482,7 +509,12 @@ function DashboardHome() {
 	);
 }
 
-type SettingsTab = "store" | "whatsapp" | "payments" | "integrations";
+type SettingsTab =
+	| "store"
+	| "whatsapp"
+	| "payments"
+	| "pickup"
+	| "integrations";
 
 type ChecklistItem = {
 	key: string;

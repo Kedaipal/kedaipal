@@ -133,6 +133,11 @@ export const checkoutFormSchema = z
 		name: z.string().max(60, "Name must be at most 60 characters"),
 		deliveryMethod: deliveryMethodSchema,
 		address: addressFormFieldsSchema,
+		// Convex id of the chosen pickup location when deliveryMethod is
+		// self_collect and the retailer has 2+ active locations. The
+		// "required" check lives in the submit handler because it depends on
+		// runtime data (the live location count) not knowable to the schema.
+		pickupLocationId: z.string(),
 	})
 	.superRefine((val, ctx) => {
 		if (val.deliveryMethod !== "delivery") return;
