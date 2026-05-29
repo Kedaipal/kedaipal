@@ -74,6 +74,11 @@ export default defineSchema({
 		aupAcceptedAt: v.optional(v.number()),
 		aupVersion: v.optional(v.string()),
 		acceptanceIp: v.optional(v.string()),
+		// Retailer opt-in for offering self-collect at checkout. Storefront only
+		// surfaces the self-collect option when this is true AND the retailer has
+		// at least one active pickup location. Undefined treated as false so
+		// existing retailers default to delivery-only until they opt in.
+		offerSelfCollect: v.optional(v.boolean()),
 		channel: v.literal("whatsapp"),
 		createdAt: v.number(),
 		updatedAt: v.number(),
@@ -196,6 +201,24 @@ export default defineSchema({
 				mapsUrl: v.optional(v.string()),
 			}),
 		),
+		// Reference to the retailer's pickup location when deliveryMethod ===
+		// "self_collect". Required at order-create time iff the retailer has
+		// offerSelfCollect = true AND ≥1 active pickup location. Soft-deleting
+		// the referenced location later does not invalidate the order — the
+		// frozen `pickupSnapshot` below carries the historical detail.
+		pickupLocationId: v.optional(v.id("pickupLocations")),
+		// Frozen copy of the pickup location at order-creation time. Never
+		// mutated after insert; safe to display on the tracking page and in
+		// WhatsApp messages even if the retailer later edits or deactivates
+		// the source location.
+		pickupSnapshot: v.optional(
+			v.object({
+				label: v.string(),
+				address: v.string(),
+				mapsUrl: v.optional(v.string()),
+				notes: v.optional(v.string()),
+			}),
+		),
 		// Optional external carrier tracking URL set by the retailer when marking
 		// shipped. Surfaced on the customer tracking page and included in the
 		// WhatsApp shipped notification. Only relevant for delivery orders.
@@ -225,6 +248,31 @@ export default defineSchema({
 		.index("by_retailer_payment", ["retailerId", "paymentStatus"])
 		.index("by_shortId", ["shortId"])
 		.index("by_customer", ["customerId"]),
+
+	/**
+	 * Retailer-managed library of self-collect pickup locations. Frozen onto
+	 * an order via `orders.pickupSnapshot` at create time so deactivating /
+	 * editing a location later doesn't rewrite history.
+	 */
+	pickupLocations: defineTable({
+		retailerId: v.id("retailers"),
+		label: v.string(),
+		address: v.string(),
+		mapsUrl: v.optional(v.string()),
+		notes: v.optional(v.string()),
+		// Soft-delete flag. Retailers deactivate (rather than hard-delete) so
+		// historical order snapshots remain meaningful. Inactive rows are
+		// hidden from the storefront picker but still listed in settings under
+		// a "show inactive" toggle.
+		isActive: v.boolean(),
+		// Ascending integer used to drive the picker order. The settings UI
+		// surfaces up/down arrows that swap sortOrder with the neighbour.
+		sortOrder: v.number(),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_retailer", ["retailerId"])
+		.index("by_retailer_active", ["retailerId", "isActive"]),
 
 	orderEvents: defineTable({
 		orderId: v.id("orders"),

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { assertValidMapsUrl } from "../../convex/lib/mapsUrl";
 
 /**
  * Client-side Zod schemas for forms. These mirror server-side validators in
@@ -205,3 +206,51 @@ export const productFormSchema = z.object({
 
 export type ProductFormInput = z.input<typeof productFormSchema>;
 export type ProductFormOutput = z.output<typeof productFormSchema>;
+
+// Pickup location settings form. mapsUrl is optional but, if provided, must
+// pass the strict domain allowlist in `convex/lib/mapsUrl.ts` (Waze + Google
+// Maps share-sheet hosts). Empty string is normalised to undefined.
+export const pickupLocationFormSchema = z.object({
+	label: z
+		.string()
+		.trim()
+		.min(1, "Label is required")
+		.max(60, "Label must be at most 60 characters"),
+	address: z
+		.string()
+		.trim()
+		.min(3, "Address must be at least 3 characters")
+		.max(500, "Address must be at most 500 characters"),
+	mapsUrl: z
+		.string()
+		.transform((s) => s.trim())
+		.refine(
+			(s) => {
+				if (s.length === 0) return true;
+				try {
+					assertValidMapsUrl(s);
+					return true;
+				} catch {
+					return false;
+				}
+			},
+			"Maps URL must be a Waze or Google Maps link (https://)",
+		)
+		.transform((s) => (s.length > 0 ? s : undefined)),
+	notes: z
+		.string()
+		.max(200, "Notes must be at most 200 characters")
+		.transform((s) => (s.trim().length > 0 ? s.trim() : undefined)),
+});
+
+export type PickupLocationFormInput = z.input<typeof pickupLocationFormSchema>;
+export type PickupLocationFormOutput = z.output<
+	typeof pickupLocationFormSchema
+>;
+
+export const emptyPickupLocationForm: PickupLocationFormInput = {
+	label: "",
+	address: "",
+	mapsUrl: "",
+	notes: "",
+};

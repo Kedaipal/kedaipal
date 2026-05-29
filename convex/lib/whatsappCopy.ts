@@ -287,3 +287,51 @@ export function paymentQrCaption(locale: Locale): string {
 	return paymentLabels[locale].qrCaption;
 }
 
+// ---------------------------------------------------------------------------
+// Self-collect pickup snapshot
+// ---------------------------------------------------------------------------
+
+export type PickupSnapshot = {
+	label: string;
+	address: string;
+	mapsUrl?: string;
+	notes?: string;
+};
+
+const pickupLabels: Record<Locale, { header: string }> = {
+	en: { header: "📍 Pickup details" },
+	ms: { header: "📍 Maklumat pengambilan" },
+};
+
+/**
+ * Render the pickup-location block appended to the confirm message for
+ * self-collect orders. Returns "" when the snapshot is missing so the caller
+ * can string-concat unconditionally — mirrors `renderPaymentInstructions`.
+ *
+ * Output (note leading blank line so consecutive blocks separate visually):
+ *   ""
+ *   "📍 Pickup details"
+ *   "<label>"
+ *   "<address>"
+ *   "<mapsUrl>"   (optional)
+ *   ""
+ *   "<notes>"     (optional)
+ */
+export function renderPickupBlock(
+	locale: Locale,
+	snapshot: PickupSnapshot | undefined,
+): string {
+	if (!snapshot) return "";
+	const labels = pickupLabels[locale];
+	const lines: string[] = [""];
+	lines.push(labels.header);
+	lines.push(snapshot.label);
+	lines.push(snapshot.address);
+	if (snapshot.mapsUrl) lines.push(snapshot.mapsUrl);
+	if (snapshot.notes) {
+		lines.push("");
+		lines.push(snapshot.notes);
+	}
+	return lines.join("\n");
+}
+
