@@ -161,6 +161,10 @@ type RetailerPublic = {
 	// hides the self-collect option entirely when false (regardless of pickup
 	// location count). Undefined treated as false.
 	offerSelfCollect?: boolean;
+	// Whether the retailer has opened the Pickup settings tab at least once.
+	// Drives checklist step-4 dismissal — set to true on first tab visit by
+	// `markPickupSetupSeen`.
+	pickupSetupSeen?: boolean;
 	// Accepted legal-doc versions, surfaced so the dashboard can detect a
 	// version bump and prompt re-acceptance. Acceptance timestamps and IP are
 	// intentionally not exposed to the client.
@@ -205,6 +209,7 @@ async function loadRetailerForUser(
 		paymentInstructions,
 		paymentQrImageUrl,
 		offerSelfCollect: row.offerSelfCollect,
+		pickupSetupSeen: row.pickupSetupSeen,
 		termsVersion: row.termsVersion,
 		privacyVersion: row.privacyVersion,
 		aupVersion: row.aupVersion,
@@ -428,6 +433,11 @@ export const createRetailer = mutation({
 			notifyEmail,
 			currency: DEFAULT_CURRENCY,
 			channel: "whatsapp",
+			// Default self-collect ON so new retailers discover the pickup feature
+			// in the onboarding checklist. They can toggle it off from Settings →
+			// Pickup; that visit also dismisses checklist step 4 (via
+			// markPickupSetupSeen).
+			offerSelfCollect: true,
 			termsAcceptedAt: now,
 			termsVersion: TERMS_VERSION,
 			privacyAcceptedAt: now,
@@ -554,6 +564,31 @@ export const recordConsentAcceptance = mutation({
 			updatedAt: now,
 		});
 		return { ok: true };
+	},
+});
+
+/**
+ * Idempotent: mark the signed-in retailer as having visited the Pickup
+ * settings tab at least once. Drives the dashboard checklist's step-4
+ * dismissal so a seller who deliberately skips self-collect isn't nagged.
+ * No-op if already true.
+ */
+export const markPickupSetupSeen = mutation({
+	args: {},
+	handler: async (ctx): Promise<{ updated: boolean }> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) return { updated: false };
+		const retailer = await ctx.db
+			.query("retailers")
+			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+			.first();
+		if (!retailer) return { updated: false };
+		if (retailer.pickupSetupSeen === true) return { updated: false };
+		await ctx.db.patch(retailer._id, {
+			pickupSetupSeen: true,
+			updatedAt: Date.now(),
+		});
+		return { updated: true };
 	},
 });
 

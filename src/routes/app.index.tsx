@@ -160,11 +160,17 @@ function DashboardHome() {
 				payment.note),
 	);
 
-	// The Pickup checklist step is intentionally hidden for delivery-only
-	// retailers — adding it as auto-done would just be visual noise. Surfaces
-	// only when the retailer has opted in via the Pickup settings tab.
+	// The Pickup step is shown to any retailer with self-collect on (default
+	// for new retailers, see createRetailer). Two paths dismiss it:
+	//   1. The retailer visits the Pickup settings tab — pickupSetupSeen flips
+	//      true, step shows as strikethrough done.
+	//   2. The retailer adds an active pickup location — hasAnyActive flips
+	//      true, step shows as strikethrough done.
+	// Pre-existing retailers without offerSelfCollect set don't see the step
+	// at all (no surprise nag on first dashboard load post-deploy).
 	const offersSelfCollect = retailer.offerSelfCollect ?? false;
 	const hasPickupLocation = pickupStatus?.hasAny ?? false;
+	const pickupSetupSeen = retailer.pickupSetupSeen ?? false;
 
 	const checklist: ChecklistItem[] = [
 		{
@@ -207,14 +213,15 @@ function DashboardHome() {
 					{
 						key: "pickup",
 						step: 4,
-						done: hasPickupLocation,
+						done: pickupSetupSeen || hasPickupLocation,
 						icon: MapPin,
 						title: "Add a pickup location",
-						why: "Buyers picking self-collect won't see the option on your storefront until you add at least one location.",
+						why: "Buyers picking self-collect won't see the option on your storefront until you add at least one location. Skip if you only do delivery.",
 						time: "~2 min",
 						cta: "Go to Settings",
 						to: "/app/settings",
 						tab: "pickup" as const,
+						optional: true,
 					},
 				]
 			: []),
@@ -527,6 +534,8 @@ type ChecklistItem = {
 	cta: string;
 	to: string;
 	tab?: SettingsTab;
+	/** Renders an "Optional" pill so the seller knows they can skip. */
+	optional?: boolean;
 };
 
 function ChecklistRow({
@@ -564,6 +573,11 @@ function ChecklistRow({
 							<span className="text-[10px] font-bold uppercase tracking-wider text-accent">
 								Step {item.step}
 							</span>
+							{item.optional ? (
+								<span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+									Optional
+								</span>
+							) : null}
 							<span className="text-[10px] text-muted-foreground">
 								{item.time}
 							</span>
@@ -596,7 +610,14 @@ function ChecklistRow({
 						{item.step}
 					</div>
 					<div className="flex-1">
-						<p className="text-sm font-medium">{item.title}</p>
+						<div className="flex items-center gap-2">
+							<p className="text-sm font-medium">{item.title}</p>
+							{item.optional ? (
+								<span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+									Optional
+								</span>
+							) : null}
+						</div>
 						<p className="text-xs text-muted-foreground">{item.time}</p>
 					</div>
 					<ArrowRight className="size-4 shrink-0 text-muted-foreground" />

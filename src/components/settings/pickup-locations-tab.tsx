@@ -7,7 +7,7 @@ import {
 	Pencil,
 	Plus,
 } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
@@ -98,6 +98,20 @@ export function PickupLocationsTab({
 	const setActive = useMutation(api.pickupLocations.setActive);
 	const moveUp = useMutation(api.pickupLocations.moveUp);
 	const moveDown = useMutation(api.pickupLocations.moveDown);
+	const markPickupSetupSeen = useMutation(api.retailers.markPickupSetupSeen);
+
+	// Fire-and-forget on first mount so step 4 of the dashboard checklist
+	// dismisses. Server-side is idempotent (no-op when already true) so a
+	// double-render or re-mount doesn't double-write. We don't await or surface
+	// errors — failing this is purely cosmetic for the checklist.
+	const seenFired = useRef(false);
+	useEffect(() => {
+		if (seenFired.current) return;
+		seenFired.current = true;
+		markPickupSetupSeen({}).catch(() => {
+			seenFired.current = false; // allow retry on subsequent mount
+		});
+	}, [markPickupSetupSeen]);
 
 	const [editing, setEditing] = useState<
 		Doc<"pickupLocations"> | "new" | null

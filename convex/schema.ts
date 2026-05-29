@@ -76,9 +76,15 @@ export default defineSchema({
 		acceptanceIp: v.optional(v.string()),
 		// Retailer opt-in for offering self-collect at checkout. Storefront only
 		// surfaces the self-collect option when this is true AND the retailer has
-		// at least one active pickup location. Undefined treated as false so
-		// existing retailers default to delivery-only until they opt in.
+		// at least one active pickup location. New retailers default to true
+		// (set in createRetailer) so the Pickup checklist step is discoverable
+		// during onboarding; pre-existing rows stay undefined (treated as false).
 		offerSelfCollect: v.optional(v.boolean()),
+		// Set to true the first time the retailer opens the Pickup settings tab.
+		// Used by the dashboard checklist to mark step 4 done after a single
+		// visit, even if the retailer chose to skip self-collect — keeps the
+		// onboarding flow from nagging an uninterested seller.
+		pickupSetupSeen: v.optional(v.boolean()),
 		channel: v.literal("whatsapp"),
 		createdAt: v.number(),
 		updatedAt: v.number(),
