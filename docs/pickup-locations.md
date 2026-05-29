@@ -41,18 +41,22 @@ pickupSnapshot?:    { label, address, mapsUrl?, notes? },
 
 The snapshot is **frozen at order create / `updatePickupLocation`** and never mutated afterwards — editing the source location does not rewrite history.
 
-`retailers` table gained `offerSelfCollect?: v.optional(v.boolean())` (default-`false`-when-undefined) — the explicit toggle that gates the storefront, checkout invariants, and dashboard checklist visibility. See **Visibility gating** below.
+`retailers` table gained two fields:
+
+- `offerSelfCollect?: v.optional(v.boolean())` — the explicit toggle that gates the storefront, checkout invariants, and dashboard checklist visibility. **New retailers default to `true`** (set in `createRetailer`) so the Pickup checklist step is discoverable during onboarding. Pre-existing rows stay undefined and are treated as `false` — no migration, no surprise nag.
+- `pickupSetupSeen?: v.optional(v.boolean())` — set the first time the seller opens the Pickup settings tab. Drives checklist step-4 dismissal so a seller who deliberately skips self-collect isn't nagged. See **Visibility gating** below.
 
 ### Files
 
 | Path | Purpose |
 |---|---|
 | `convex/lib/mapsUrl.ts` | Pure shared validator — `assertValidMapsUrl`, `isValidMapsUrl`, `ALLOWED_MAPS_HOSTS` (no Convex imports). Imported from both Convex mutations and the client Zod schema. |
-| `convex/pickupLocations.ts` | Queries (`listForRetailer`, `listActivePublicBySlug`, `hasAnyActive`), mutations (`create`, `update`, `setActive`, `moveUp`, `moveDown`). Self-contained `requireRetailerOwner` / `requireOwnedLocation` helpers mirroring the `customers.ts` pattern. |
-| `convex/pickupLocations.test.ts` | 17 integration tests — CRUD, soft-delete/restore, sort-order swap (including "skip inactive neighbour"), tenant isolation, `hasAnyActive`. |
+| `convex/pickupLocations.ts` | Queries (`listForRetailer`, `listActivePublicBySlug`, `hasAnyActive`), mutations (`create`, `update`, `setActive`, `reorder`). Self-contained `requireRetailerOwner` / `requireOwnedLocation` helpers mirroring the `customers.ts` pattern. |
+| `convex/pickupLocations.test.ts` | 20 integration tests — CRUD, soft-delete/restore, bulk `reorder` (happy path, identity no-op, length mismatch, duplicate id, inactive id, foreign tenant, inactive-untouched invariant), tenant isolation, `hasAnyActive`. |
 | `convex/orders.ts` | `create` extended with the pickup invariants; new `updatePickupLocation` mutation (pending-only, mirrors `updateDeliveryAddress`). |
 | `convex/orders.test.ts` | +10 tests — strict-branch enforcement, snapshot freeze, inactive/foreign-tenant id rejection, legacy zero-info path preservation, full `updatePickupLocation` lifecycle. |
-| `convex/retailers.ts` | `updateSettings` accepts `offerSelfCollect`; `RetailerPublic` + both `getMyRetailer` and `getRetailerBySlug` surface it. |
+| `convex/retailers.ts` | `updateSettings` accepts `offerSelfCollect`; `createRetailer` defaults it to `true`. Idempotent `markPickupSetupSeen` mutation called from the Pickup tab on mount. `RetailerPublic` surfaces `offerSelfCollect` everywhere and `pickupSetupSeen` on `getMyRetailer` only. |
+| `convex/retailers.test.ts` | +6 tests covering the default-true behaviour and `markPickupSetupSeen` (auth, missing retailer, first-call patch, idempotency, per-user scoping). |
 | `convex/lib/whatsappCopy.ts` | New `PickupSnapshot` type + `renderPickupBlock(locale, snapshot)` (EN/MS). Returns `""` for missing snapshot so callers concat unconditionally. |
 | `convex/lib/whatsappCopy.test.ts` | +6 tests for `renderPickupBlock`. |
 | `convex/whatsapp.ts` | `getRetailerLocaleForOrder` surfaces `pickupSnapshot`; confirm send layers the pickup block between the confirm body and the transfer-reference line. |
@@ -64,7 +68,8 @@ The snapshot is **frozen at order create / `updatePickupLocation`** and never mu
 | `src/components/storefront/cart-bar.tsx` | Drills `offerSelfCollect` + `pickupLocations` through. |
 | `src/components/storefront/checkout-sheet.tsx` | Self-Collect button hidden when unavailable; 0/1/2+ branching (auto-confirm card for 1, required radio for 2+); pickup block inlined into the `wa.me` prefilled text. |
 | `src/routes/track.$shortId.tsx` | "Pick up at" card for self-collect orders, rendered from the frozen snapshot. |
-| `src/routes/app.index.tsx` | Dashboard checklist step 4 (only when `offerSelfCollect` is on); pulls `hasAnyActive` for the done state. |
+| `src/routes/app.index.tsx` | Dashboard checklist step 4 (only when `offerSelfCollect` is on); marked "Optional" via the pill in both expanded and collapsed row variants. Done logic: `pickupSetupSeen \|\| hasAnyActive`. |
+| `src/routes/app.orders.$shortId.tsx` | Seller order detail — "Pick up at" card mirroring the delivery address block, plus a "Notify store manager" panel with a pre-built copy-to-clipboard snippet for forwarding to whoever runs the pickup spot. |
 
 ### Visibility gating (toggle + count)
 
@@ -78,7 +83,18 @@ When either is closed, the Self Collect button is hidden entirely — buyers nev
 
 - **`orders.create`** strict-branch — when `deliveryMethod === "self_collect"` and `offerSelfCollect === true` and ≥1 active location exists, `pickupLocationId` is **required** and is verified to belong to the retailer and be active before the snapshot is frozen onto the order.
 - **`orders.create`** legacy-zero-info path — when either gate is closed, a `self_collect` order is accepted with no pickup info (matches the historical behaviour — preserved deliberately).
-- **Dashboard checklist step 4** — included in the array only when `offerSelfCollect === true`. Delivery-only retailers don't see it at all (not "auto-done", just gone).
+- **Dashboard checklist step 4** — appears for every retailer with `offerSelfCollect === true` (which is the default for new retailers) so the feature is discoverable during onboarding. Pre-existing retailers with `offerSelfCollect` unset don't see it. The step is marked "Optional" via a small pill so sellers know they can skip without consequence.
+
+### Onboarding & checklist dismissal
+
+Step 4 has two independent paths to "done":
+
+1. **Visited dismissal** — when the seller opens the Pickup settings tab for the first time, `PickupLocationsTab` fires the idempotent `markPickupSetupSeen` mutation. `retailer.pickupSetupSeen` flips to `true` and step 4 renders as strikethrough done, even if the seller didn't add any locations.
+2. **Completion** — adding at least one active pickup location flips `hasAnyActive` to `true`, which also strikes the step through.
+
+Step 4 `done = pickupSetupSeen || hasPickupLocation`. Either signal is enough — a seller who's clearly seen the feature and chose to skip it doesn't get nagged, and a seller who configured a pickup point is rewarded for completing it.
+
+The mutation uses a `useRef` guard in the React layer to prevent re-firing on re-renders. The server-side mutation is also idempotent (no-op when already `true`), so a stale double-call is harmless.
 
 ### Pickup snapshot lifecycle
 
@@ -140,12 +156,46 @@ The `wa.me` prefilled text now inlines `📍 Self Collect at: <label>\n<address>
 
 - **"Pickup" tab** added to `/app/settings`, between Payments and Integrations.
 - **Top card:** `offerSelfCollect` toggle. Amber callout when the toggle is on but zero active locations exist ("buyers won't see the option until you add one").
-- **Main card:** locations list with up/down arrow buttons (mobile-friendly, ≥44px tap targets — true drag-and-drop is backlogged). Each row: label, address, optional "Open in maps" link, notes, edit button, active/hidden toggle. Inactive rows live behind a "Show inactive (N)" collapsible. Empty state with a CTA when no locations exist.
+- **Main card:** locations list with **drag-and-drop reorder** (`@dnd-kit/core` + `@dnd-kit/sortable`). Each active row exposes a `GripVertical` handle on the left — drag listeners are bound to the handle only, so tapping Edit / the active toggle never starts a drag. Sensors: `PointerSensor` (8 px distance), `TouchSensor` (250 ms hold + 5 px tolerance), `KeyboardSensor` (arrow-key reorder for a11y). `touch-none` on the handle prevents mobile scroll-while-drag.
+- **Optimistic drop:** dropping a row applies the new order to local state immediately, fires the `reorder` mutation in the background, and reverts + toasts on failure. Convex's reactive query then ships the authoritative order back on success — same as the optimistic state, so no flicker.
+- Each row also shows: label, address, optional "Open in maps" link, notes, edit button, active/hidden toggle. Inactive rows live behind a "Show inactive (N)" collapsible. Empty state with a CTA when no locations exist.
 - **Reactivating** a soft-deleted row sends it to the end of the active list so it doesn't ambush the retailer's current ordering.
+
+### `reorder` mutation invariants
+
+`pickupLocations.reorder(retailerId, orderedIds)` rewrites `sortOrder` to the index of each id (0..N-1) so the result is gap-free. Validates that `orderedIds` is **exactly** the set of currently-active ids for the retailer:
+
+- Length must match the active set (catches a stale client whose cache lost or gained a row after someone else added/deactivated a location).
+- No duplicates.
+- No foreign or inactive ids.
+- Tenant-scoped via `requireRetailerOwner`.
+
+Inactive rows' `sortOrder` values are intentionally untouched — preserving them keeps `setActive(true)`'s "push to end" semantics (`Math.max(allSortOrders) + 1`) robust against drift.
 
 ### Dashboard checklist
 
-Setup checklist on `/app` gains a 4th step `"pickup"` only when `retailer.offerSelfCollect === true`. `done = hasAnyActive`. Deep-links to `/app/settings?tab=pickup`. Delivery-only retailers (`offerSelfCollect === false`) keep the existing 3-step checklist unchanged.
+Setup checklist on `/app` gains a 4th step `"pickup"` when `retailer.offerSelfCollect === true` (default for new retailers). Marked "Optional" via a small pill in both the expanded and collapsed row variants. Done logic: `pickupSetupSeen || hasAnyActive`. Deep-links to `/app/settings?tab=pickup`. Pre-existing retailers with `offerSelfCollect` unset keep the original 3-step checklist unchanged.
+
+### Order detail (seller view)
+
+`/app/orders/$shortId` for self-collect orders renders two extra blocks, both reading from the frozen `pickupSnapshot`:
+
+- **"Pick up at" card** — label, address, optional notes, with Copy and Maps buttons (Maps only when the snapshot has a `mapsUrl`). Mirrors the existing "Delivery Address" section visually.
+- **"Notify store manager" panel** — a pre-built message snippet in a `<pre>` block with a "Copy message" button. Format:
+
+  ```
+  📦 New pickup order ORD-AB23 — Main Store
+  Customer: Ali (+60 12-345 6789)
+
+  Items:
+  • 1× Mango Kush Seed (RM 50.00)
+
+  Total: RM 50.00
+
+  Please prepare for collection.
+  ```
+
+  Customer line resolves `name → phone → "Anonymous"`; phone runs through the shared `formatPhone` helper. Fixed format for v1 — per-retailer override is future work, only revisit if retailers ask. Seller can edit the message after pasting it into the manager's chat.
 
 ## Env requirements
 
@@ -157,7 +207,6 @@ The pricing plan caps Starter at **1 active pickup location** and lets Pro+ have
 
 ## Known limitations
 
-- **No true drag-and-drop reorder.** Up/down arrow buttons only. DnD via `dnd-kit` with touch sensors is backlogged — only shipped if time permits before the demo window. Up/down arrows are mobile-friendly and good enough for a screen retailers use a handful of times.
 - **No hard-delete.** Soft-delete only. A retailer cannot permanently remove a location, even one with zero orders against it. Acceptable for v1; revisit if the inactive list becomes cluttered.
 - **`channelUserId` migration not part of this feature.** Identity is still keyed by `waPhone` on `orders.customer` and `customers`. The channel-adapter Phase 4–6 migration is independent and unblocked separately.
 - **No React component tests.** Same constraint as the customer-database feature — pure helpers are unit-tested, UI components are verified via `tsc` + manual end-to-end in the browser.
@@ -165,6 +214,5 @@ The pricing plan caps Starter at **1 active pickup location** and lets Pro+ have
 ## Future work
 
 - **Tier cap enforcement** when subscription billing lands (Starter = 1 active, Pro+ = unlimited) — single check inside `pickupLocations.create`, plus a soft over-cap banner in `listForRetailer` for retailers downgraded from Pro.
-- **Drag-and-drop reorder** via `dnd-kit` + touch sensor.
 - **Pickup time slots / appointments** — currently a free-form `notes` field. A structured slot picker (Mon–Sat 10am–6pm, etc.) would unlock the cake/kuih cohort's actual workflow.
 - **Pickup location attached to a specific product** — for retailers where only some products are pickup-eligible (e.g. frozen-only). Not requested yet; flag the use case if it surfaces.

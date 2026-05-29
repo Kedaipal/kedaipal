@@ -294,66 +294,59 @@ export const setActive = mutation({
 });
 
 /**
- * Swap sortOrder with the active neighbor immediately above (lower sortOrder).
- * Inactive rows are skipped — reordering only operates on the visible subset
- * so the user's mental model matches what they see.
+ * Bulk-reorder the active pickup locations. Caller passes the full ordered
+ * list of active ids; server rewrites `sortOrder` to the index of each id
+ * (0..N-1) so the result is gap-free.
+ *
+ * Validates that `orderedIds` is exactly the set of currently-active ids for
+ * the retailer — no duplicates, no missing, no foreign / inactive ids. This
+ * catches a stale client that reordered against an outdated cache after
+ * someone else added or deactivated a location.
+ *
+ * Inactive rows are intentionally untouched. Their existing `sortOrder` value
+ * is preserved (and `setActive(true)` continues to send a reactivated row to
+ * the end via `Math.max(allSortOrders) + 1`).
  */
-export const moveUp = mutation({
-	args: { pickupLocationId: v.id("pickupLocations") },
-	handler: async (ctx, { pickupLocationId }): Promise<void> => {
-		const location = await requireOwnedLocation(ctx, pickupLocationId);
-		if (!location.isActive) return;
-
-		const siblings = await ctx.db
-			.query("pickupLocations")
-			.withIndex("by_retailer_active", (q) =>
-				q.eq("retailerId", location.retailerId).eq("isActive", true),
-			)
-			.collect();
-		const sorted = siblings.sort((a, b) => a.sortOrder - b.sortOrder);
-		const idx = sorted.findIndex((r) => r._id === pickupLocationId);
-		if (idx <= 0) return; // already at top
-
-		const above = sorted[idx - 1];
-		const now = Date.now();
-		const aboveOrder = above.sortOrder;
-		await ctx.db.patch(above._id, {
-			sortOrder: location.sortOrder,
-			updatedAt: now,
-		});
-		await ctx.db.patch(pickupLocationId, {
-			sortOrder: aboveOrder,
-			updatedAt: now,
-		});
+export const reorder = mutation({
+	args: {
+		retailerId: v.id("retailers"),
+		orderedIds: v.array(v.id("pickupLocations")),
 	},
-});
+	handler: async (ctx, { retailerId, orderedIds }): Promise<void> => {
+		await requireRetailerOwner(ctx, retailerId);
 
-export const moveDown = mutation({
-	args: { pickupLocationId: v.id("pickupLocations") },
-	handler: async (ctx, { pickupLocationId }): Promise<void> => {
-		const location = await requireOwnedLocation(ctx, pickupLocationId);
-		if (!location.isActive) return;
-
-		const siblings = await ctx.db
+		const activeRows = await ctx.db
 			.query("pickupLocations")
 			.withIndex("by_retailer_active", (q) =>
-				q.eq("retailerId", location.retailerId).eq("isActive", true),
+				q.eq("retailerId", retailerId).eq("isActive", true),
 			)
 			.collect();
-		const sorted = siblings.sort((a, b) => a.sortOrder - b.sortOrder);
-		const idx = sorted.findIndex((r) => r._id === pickupLocationId);
-		if (idx === -1 || idx >= sorted.length - 1) return; // already at bottom
 
-		const below = sorted[idx + 1];
+		if (orderedIds.length !== activeRows.length) {
+			throw new ConvexError(
+				"Order list must contain every active pickup location exactly once",
+			);
+		}
+		const activeIds = new Set(activeRows.map((r) => r._id));
+		const seen = new Set<string>();
+		for (const id of orderedIds) {
+			if (!activeIds.has(id)) {
+				throw new ConvexError(
+					"Pickup location not found or no longer active",
+				);
+			}
+			if (seen.has(id)) {
+				throw new ConvexError("Duplicate id in order list");
+			}
+			seen.add(id);
+		}
+
 		const now = Date.now();
-		const belowOrder = below.sortOrder;
-		await ctx.db.patch(below._id, {
-			sortOrder: location.sortOrder,
-			updatedAt: now,
-		});
-		await ctx.db.patch(pickupLocationId, {
-			sortOrder: belowOrder,
-			updatedAt: now,
-		});
+		for (let i = 0; i < orderedIds.length; i++) {
+			await ctx.db.patch(orderedIds[i], {
+				sortOrder: i,
+				updatedAt: now,
+			});
+		}
 	},
 });

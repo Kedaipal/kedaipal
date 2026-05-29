@@ -27,6 +27,7 @@ import {
 } from "../components/storefront/delivery-address-display";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
+import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
 import { formatPhone } from "../lib/customer";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import { StatusBadge } from "./app.orders.index";
@@ -741,14 +742,7 @@ function OrderDetailRoute() {
 	);
 }
 
-type PickupSnapshotShape = {
-	label: string;
-	address: string;
-	mapsUrl?: string;
-	notes?: string;
-};
-
-function formatPickupInline(snapshot: PickupSnapshotShape): string {
+function formatPickupInline(snapshot: PickupSnapshot): string {
 	const lines = [snapshot.label, snapshot.address];
 	if (snapshot.mapsUrl) lines.push(snapshot.mapsUrl);
 	if (snapshot.notes) lines.push(snapshot.notes);
@@ -765,7 +759,7 @@ function buildNotifyManagerMessage({
 	currency,
 }: {
 	shortId: string;
-	location: PickupSnapshotShape;
+	location: PickupSnapshot;
 	customerName: string | undefined;
 	customerWaPhone: string | undefined;
 	items: ReadonlyArray<{ name: string; quantity: number; price: number }>;
@@ -806,7 +800,7 @@ function NotifyManagerCard({
 	currency,
 }: {
 	shortId: string;
-	location: PickupSnapshotShape;
+	location: PickupSnapshot;
 	customerName: string | undefined;
 	customerWaPhone: string | undefined;
 	items: ReadonlyArray<{ name: string; quantity: number; price: number }>;

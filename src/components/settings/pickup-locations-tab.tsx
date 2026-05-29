@@ -1,13 +1,24 @@
-import { useMutation, useQuery } from "convex/react";
 import {
-	ArrowDown,
-	ArrowUp,
-	ExternalLink,
-	MapPin,
-	Pencil,
-	Plus,
-} from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+	DndContext,
+	type DragEndEvent,
+	KeyboardSensor,
+	PointerSensor,
+	TouchSensor,
+	closestCenter,
+	useSensor,
+	useSensors,
+} from "@dnd-kit/core";
+import {
+	SortableContext,
+	arrayMove,
+	sortableKeyboardCoordinates,
+	useSortable,
+	verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { useMutation, useQuery } from "convex/react";
+import { ExternalLink, GripVertical, MapPin, Pencil, Plus } from "lucide-react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
@@ -96,8 +107,7 @@ export function PickupLocationsTab({
 	});
 	const updateSettings = useMutation(api.retailers.updateSettings);
 	const setActive = useMutation(api.pickupLocations.setActive);
-	const moveUp = useMutation(api.pickupLocations.moveUp);
-	const moveDown = useMutation(api.pickupLocations.moveDown);
+	const reorder = useMutation(api.pickupLocations.reorder);
 	const markPickupSetupSeen = useMutation(api.retailers.markPickupSetupSeen);
 
 	// Fire-and-forget on first mount so step 4 of the dashboard checklist
@@ -150,17 +160,75 @@ export function PickupLocationsTab({
 		}
 	}
 
-	async function handleMove(
-		location: Doc<"pickupLocations">,
-		direction: "up" | "down",
-	) {
+	// --- Drag-and-drop reorder ---
+	//
+	// We keep an optimistic `localOrder` of active ids that the SortableContext
+	// renders in. On drop:
+	//   1. Compute the new order via @dnd-kit/sortable's arrayMove.
+	//   2. Apply it to `localOrder` immediately (UI updates instantly).
+	//   3. Fire the reorder mutation. If it fails, revert localOrder so the UI
+	//      snaps back and the seller sees the toast.
+	// Convex's reactive query then ships the authoritative order back on
+	// success, which matches localOrder so no flicker.
+	//
+	// Reconciliation is gated by a primitive string key (`activeIdsKey`) so the
+	// effect only fires when the server's active set or order ACTUALLY changes
+	// — adding the recomputed-each-render `activeIds` array to the deps would
+	// re-sync on every parent render, clobbering optimistic state between drop
+	// and mutation-ack and producing a visible "snap back, then re-jump"
+	// stutter.
+	const activeIds = active.map((l) => l._id);
+	const activeIdsKey = activeIds.join("|");
+	const [localOrder, setLocalOrder] = useState<Array<Id<"pickupLocations">>>(
+		activeIds,
+	);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional —
+	// see the comment above. activeIds is read via closure on the render where
+	// activeIdsKey actually changes, so we get the latest server order without
+	// the per-render reset.
+	useEffect(() => {
+		setLocalOrder(activeIds);
+	}, [activeIdsKey]);
+
+	const orderedActive = useMemo(() => {
+		const byId = new Map(active.map((l) => [l._id, l]));
+		return localOrder
+			.map((id) => byId.get(id))
+			.filter((l): l is Doc<"pickupLocations"> => l !== undefined);
+	}, [active, localOrder]);
+
+	const sensors = useSensors(
+		// Mouse / pen: a small drag distance must elapse before a drag starts so
+		// click-on-edit / click-on-toggle isn't misinterpreted as a drag.
+		useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+		// Touch: a brief hold disambiguates drag intent from a scroll/tap. The
+		// `touch-none` class on the grip handle prevents the page from scrolling
+		// while the user holds it.
+		useSensor(TouchSensor, {
+			activationConstraint: { delay: 250, tolerance: 5 },
+		}),
+		// Keyboard a11y: arrow keys move a focused row.
+		useSensor(KeyboardSensor, {
+			coordinateGetter: sortableKeyboardCoordinates,
+		}),
+	);
+
+	async function handleDragEnd(event: DragEndEvent) {
+		const { active: draggedItem, over } = event;
+		if (!over || draggedItem.id === over.id) return;
+		const oldIndex = localOrder.indexOf(
+			draggedItem.id as Id<"pickupLocations">,
+		);
+		const newIndex = localOrder.indexOf(over.id as Id<"pickupLocations">);
+		if (oldIndex === -1 || newIndex === -1) return;
+
+		const next = arrayMove(localOrder, oldIndex, newIndex);
+		const previous = localOrder;
+		setLocalOrder(next);
 		try {
-			if (direction === "up") {
-				await moveUp({ pickupLocationId: location._id });
-			} else {
-				await moveDown({ pickupLocationId: location._id });
-			}
+			await reorder({ retailerId, orderedIds: next });
 		} catch (err) {
+			setLocalOrder(previous);
 			toast.error(convexErrorMessage(err));
 		}
 	}
@@ -210,24 +278,27 @@ export function PickupLocationsTab({
 				) : active.length === 0 ? (
 					<EmptyState onAdd={() => setEditing("new")} />
 				) : (
-					<ul className="flex flex-col gap-2">
-						{active.map((loc, i) => (
-							<LocationRow
-								key={loc._id}
-								location={loc}
-								onEdit={() => setEditing(loc)}
-								onMoveUp={
-									i === 0 ? undefined : () => handleMove(loc, "up")
-								}
-								onMoveDown={
-									i === active.length - 1
-										? undefined
-										: () => handleMove(loc, "down")
-								}
-								onToggleActive={(next) => handleToggleActive(loc, next)}
-							/>
-						))}
-					</ul>
+					<DndContext
+						sensors={sensors}
+						collisionDetection={closestCenter}
+						onDragEnd={handleDragEnd}
+					>
+						<SortableContext
+							items={localOrder}
+							strategy={verticalListSortingStrategy}
+						>
+							<ul className="flex flex-col gap-2">
+								{orderedActive.map((loc) => (
+									<SortableLocationRow
+										key={loc._id}
+										location={loc}
+										onEdit={() => setEditing(loc)}
+										onToggleActive={(next) => handleToggleActive(loc, next)}
+									/>
+								))}
+							</ul>
+						</SortableContext>
+					</DndContext>
 				)}
 
 				{inactive.length > 0 ? (
@@ -267,26 +338,27 @@ export function PickupLocationsTab({
 	);
 }
 
-function LocationRow({
+/**
+ * Body of a pickup row (icon + label/address/link/notes + action bar). Used
+ * inside both row variants below; takes an optional leading slot for the
+ * drag handle so the sortable variant can inject one without re-implementing
+ * the rest of the layout.
+ */
+function LocationRowBody({
 	location,
 	onEdit,
-	onMoveUp,
-	onMoveDown,
 	onToggleActive,
+	dragHandle,
 }: {
 	location: Doc<"pickupLocations">;
 	onEdit: () => void;
-	onMoveUp?: () => void;
-	onMoveDown?: () => void;
 	onToggleActive: (next: boolean) => void;
+	dragHandle?: ReactNode;
 }) {
 	return (
-		<li
-			className={`flex flex-col gap-3 rounded-xl border border-border bg-background p-4 ${
-				location.isActive ? "" : "opacity-60"
-			}`}
-		>
+		<>
 			<div className="flex items-start gap-3">
+				{dragHandle}
 				<MapPin
 					className="size-4 shrink-0 text-accent mt-0.5"
 					aria-hidden="true"
@@ -317,39 +389,15 @@ function LocationRow({
 				</div>
 			</div>
 			<div className="flex items-center justify-between gap-2 border-t border-border pt-3">
-				<div className="flex items-center gap-1">
-					{location.isActive ? (
-						<>
-							<button
-								type="button"
-								onClick={onMoveUp}
-								disabled={!onMoveUp}
-								aria-label={`Move ${location.label} up`}
-								className="flex size-11 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-30"
-							>
-								<ArrowUp className="size-4" />
-							</button>
-							<button
-								type="button"
-								onClick={onMoveDown}
-								disabled={!onMoveDown}
-								aria-label={`Move ${location.label} down`}
-								className="flex size-11 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-30"
-							>
-								<ArrowDown className="size-4" />
-							</button>
-						</>
-					) : null}
-					<button
-						type="button"
-						onClick={onEdit}
-						aria-label={`Edit ${location.label}`}
-						className="flex h-11 items-center gap-1.5 rounded-lg px-3 text-xs font-medium text-foreground transition-colors hover:bg-muted"
-					>
-						<Pencil className="size-3.5" />
-						Edit
-					</button>
-				</div>
+				<button
+					type="button"
+					onClick={onEdit}
+					aria-label={`Edit ${location.label}`}
+					className="flex h-11 items-center gap-1.5 rounded-lg px-3 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+				>
+					<Pencil className="size-3.5" />
+					Edit
+				</button>
 				<div className="flex items-center gap-2">
 					<span className="text-xs text-muted-foreground">
 						{location.isActive ? "Active" : "Hidden"}
@@ -361,6 +409,94 @@ function LocationRow({
 					/>
 				</div>
 			</div>
+		</>
+	);
+}
+
+/**
+ * Sortable variant for active rows — wraps the row with `useSortable` and
+ * exposes a `GripVertical` drag handle on the left. Listeners are attached
+ * ONLY to the handle so tapping Edit / the active toggle doesn't start a drag.
+ *
+ * `touch-none` on the handle is critical on mobile — without it the page
+ * would scroll while the seller tries to drag.
+ */
+function SortableLocationRow({
+	location,
+	onEdit,
+	onToggleActive,
+}: {
+	location: Doc<"pickupLocations">;
+	onEdit: () => void;
+	onToggleActive: (next: boolean) => void;
+}) {
+	const {
+		attributes,
+		listeners,
+		setNodeRef,
+		transform,
+		transition,
+		isDragging,
+	} = useSortable({ id: location._id });
+	// Keep the row fully opaque while dragging — the border-accent + shadow is
+	// enough visual indicator. Snapping opacity from <1 back to 1 on drop reads
+	// as a flicker; using only properties that animate via `transition` keeps
+	// the drop landing smooth.
+	const style = {
+		transform: CSS.Transform.toString(transform),
+		transition,
+		zIndex: isDragging ? 10 : "auto",
+	};
+
+	return (
+		<li
+			ref={setNodeRef}
+			style={style}
+			className={`flex flex-col gap-3 rounded-xl border bg-background p-4 transition-shadow ${
+				isDragging ? "border-accent shadow-lg" : "border-border"
+			}`}
+		>
+			<LocationRowBody
+				location={location}
+				onEdit={onEdit}
+				onToggleActive={onToggleActive}
+				dragHandle={
+					<button
+						type="button"
+						aria-label={`Drag to reorder ${location.label}`}
+						{...attributes}
+						{...listeners}
+						className="flex size-11 shrink-0 cursor-grab touch-none items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted active:cursor-grabbing"
+					>
+						<GripVertical className="size-4" />
+					</button>
+				}
+			/>
+		</li>
+	);
+}
+
+/**
+ * Plain (non-draggable) variant for inactive rows. No grip handle — inactive
+ * rows live behind the "Show inactive" collapsible and aren't part of the
+ * sortable set.
+ */
+function LocationRow({
+	location,
+	onEdit,
+	onToggleActive,
+}: {
+	location: Doc<"pickupLocations">;
+	onEdit: () => void;
+	onToggleActive: (next: boolean) => void;
+}) {
+	return (
+		<li className="flex flex-col gap-3 rounded-xl border border-border bg-background p-4 opacity-60">
+			<LocationRowBody
+				location={location}
+				onEdit={onEdit}
+				onToggleActive={onToggleActive}
+			/>
 		</li>
 	);
 }

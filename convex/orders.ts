@@ -11,6 +11,7 @@ import { assertValidAddress } from "./lib/address";
 import { computeOrderTotals, generateShortId } from "./lib/order";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidWaPhone } from "./lib/slug";
+import type { PickupSnapshot } from "./lib/whatsappCopy";
 
 const addressValidator = v.object({
 	line1: v.string(),
@@ -21,13 +22,6 @@ const addressValidator = v.object({
 	notes: v.optional(v.string()),
 	mapsUrl: v.optional(v.string()),
 });
-
-type PickupSnapshot = {
-	label: string;
-	address: string;
-	mapsUrl?: string;
-	notes?: string;
-};
 
 const MAX_ITEMS_PER_ORDER = 100;
 const SHORT_ID_RETRIES = 3;

@@ -212,53 +212,38 @@ describe("pickupLocations — soft-delete & restore", () => {
 	});
 });
 
-describe("pickupLocations — sort order swap", () => {
-	test("moveUp swaps with the previous active row", async () => {
+describe("pickupLocations — reorder", () => {
+	test("rewrites sortOrder to the index of each id (0..N-1)", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
-		await seedLocation(t, USER_A, retailer._id, "A");
+		const idA = await seedLocation(t, USER_A, retailer._id, "A");
 		const idB = await seedLocation(t, USER_A, retailer._id, "B");
-		await seedLocation(t, USER_A, retailer._id, "C");
+		const idC = await seedLocation(t, USER_A, retailer._id, "C");
 		const asUser = t.withIdentity({ subject: USER_A });
 
-		await asUser.mutation(api.pickupLocations.moveUp, {
-			pickupLocationId: idB,
+		await asUser.mutation(api.pickupLocations.reorder, {
+			retailerId: retailer._id,
+			orderedIds: [idC, idA, idB],
 		});
 
 		const publicRows = await t.query(
 			api.pickupLocations.listActivePublicBySlug,
 			{ slug: retailer.slug },
 		);
-		expect(publicRows.map((r) => r.label)).toEqual(["B", "A", "C"]);
+		expect(publicRows.map((r) => r.label)).toEqual(["C", "A", "B"]);
+		expect(publicRows.map((r) => r.sortOrder)).toEqual([0, 1, 2]);
 	});
 
-	test("moveDown swaps with the next active row", async () => {
+	test("identity reorder is a valid no-op", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const idA = await seedLocation(t, USER_A, retailer._id, "A");
-		await seedLocation(t, USER_A, retailer._id, "B");
+		const idB = await seedLocation(t, USER_A, retailer._id, "B");
 		const asUser = t.withIdentity({ subject: USER_A });
 
-		await asUser.mutation(api.pickupLocations.moveDown, {
-			pickupLocationId: idA,
-		});
-
-		const publicRows = await t.query(
-			api.pickupLocations.listActivePublicBySlug,
-			{ slug: retailer.slug },
-		);
-		expect(publicRows.map((r) => r.label)).toEqual(["B", "A"]);
-	});
-
-	test("moveUp on the top row is a no-op", async () => {
-		const t = setup();
-		const retailer = await seedRetailer(t, USER_A);
-		const idA = await seedLocation(t, USER_A, retailer._id, "A");
-		await seedLocation(t, USER_A, retailer._id, "B");
-		const asUser = t.withIdentity({ subject: USER_A });
-
-		await asUser.mutation(api.pickupLocations.moveUp, {
-			pickupLocationId: idA,
+		await asUser.mutation(api.pickupLocations.reorder, {
+			retailerId: retailer._id,
+			orderedIds: [idA, idB],
 		});
 		const publicRows = await t.query(
 			api.pickupLocations.listActivePublicBySlug,
@@ -267,28 +252,101 @@ describe("pickupLocations — sort order swap", () => {
 		expect(publicRows.map((r) => r.label)).toEqual(["A", "B"]);
 	});
 
-	test("moveUp skips an inactive neighbour", async () => {
+	test("rejects when orderedIds length mismatches the active set", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
-		await seedLocation(t, USER_A, retailer._id, "A");
-		const idB = await seedLocation(t, USER_A, retailer._id, "B");
-		const idC = await seedLocation(t, USER_A, retailer._id, "C");
+		const idA = await seedLocation(t, USER_A, retailer._id, "A");
+		await seedLocation(t, USER_A, retailer._id, "B");
 		const asUser = t.withIdentity({ subject: USER_A });
 
-		// Deactivate B → active order is just [A, C]. moveUp on C should put C
-		// above A, not above B.
+		await expect(
+			asUser.mutation(api.pickupLocations.reorder, {
+				retailerId: retailer._id,
+				orderedIds: [idA],
+			}),
+		).rejects.toThrow(/every active pickup location exactly once/);
+	});
+
+	test("rejects duplicate ids", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const idA = await seedLocation(t, USER_A, retailer._id, "A");
+		await seedLocation(t, USER_A, retailer._id, "B");
+		const asUser = t.withIdentity({ subject: USER_A });
+
+		await expect(
+			asUser.mutation(api.pickupLocations.reorder, {
+				retailerId: retailer._id,
+				orderedIds: [idA, idA],
+			}),
+		).rejects.toThrow(/Duplicate id/);
+	});
+
+	test("rejects an inactive id", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const idA = await seedLocation(t, USER_A, retailer._id, "A");
+		const idB = await seedLocation(t, USER_A, retailer._id, "B");
+		const asUser = t.withIdentity({ subject: USER_A });
+
 		await asUser.mutation(api.pickupLocations.setActive, {
 			pickupLocationId: idB,
 			isActive: false,
 		});
-		await asUser.mutation(api.pickupLocations.moveUp, {
-			pickupLocationId: idC,
+		await expect(
+			asUser.mutation(api.pickupLocations.reorder, {
+				retailerId: retailer._id,
+				orderedIds: [idA, idB],
+			}),
+		).rejects.toThrow(/every active pickup location exactly once/);
+	});
+
+	test("user B cannot reorder user A's pickup locations", async () => {
+		const t = setup();
+		const retailerA = await seedRetailer(t, USER_A, "_a");
+		await seedRetailer(t, USER_B, "_b");
+		const idA = await seedLocation(t, USER_A, retailerA._id, "A");
+		const asB = t.withIdentity({ subject: USER_B });
+
+		await expect(
+			asB.mutation(api.pickupLocations.reorder, {
+				retailerId: retailerA._id,
+				orderedIds: [idA],
+			}),
+		).rejects.toThrow(/Forbidden/);
+	});
+
+	test("leaves inactive rows' sortOrder untouched", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const idA = await seedLocation(t, USER_A, retailer._id, "A");
+		const idB = await seedLocation(t, USER_A, retailer._id, "B");
+		const idC = await seedLocation(t, USER_A, retailer._id, "C");
+		const asUser = t.withIdentity({ subject: USER_A });
+
+		// Deactivate B and snapshot its sortOrder; reorder active [C, A]
+		await asUser.mutation(api.pickupLocations.setActive, {
+			pickupLocationId: idB,
+			isActive: false,
 		});
-		const publicRows = await t.query(
-			api.pickupLocations.listActivePublicBySlug,
-			{ slug: retailer.slug },
+		const before = await asUser.query(
+			api.pickupLocations.listForRetailer,
+			{ retailerId: retailer._id },
 		);
-		expect(publicRows.map((r) => r.label)).toEqual(["C", "A"]);
+		const bSortOrderBefore = before.find((r) => r._id === idB)?.sortOrder;
+
+		await asUser.mutation(api.pickupLocations.reorder, {
+			retailerId: retailer._id,
+			orderedIds: [idC, idA],
+		});
+
+		const after = await asUser.query(
+			api.pickupLocations.listForRetailer,
+			{ retailerId: retailer._id },
+		);
+		expect(after.find((r) => r._id === idB)?.sortOrder).toBe(
+			bSortOrderBefore,
+		);
 	});
 });
 
