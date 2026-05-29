@@ -20,6 +20,7 @@ How the product actually works. Read in this order.
 | [order-lifecycle.md](./order-lifecycle.md) | Checkout → `wa.me` handoff → confirmation → fulfilment state machine. |
 | [payment-handshake.md](./payment-handshake.md) | The `unpaid → claimed → received` payment flow (shipped). |
 | [customer-database.md](./customer-database.md) | CRM-lite: customer entity, denormalized aggregates, name resolution, search. |
+| [pickup-locations.md](./pickup-locations.md) | Self-collect: multi-location library, toggle+count gating, frozen snapshot lifecycle, WhatsApp confirm composition. |
 | [validation-and-rate-limits.md](./validation-and-rate-limits.md) | Trust boundaries, rate limits, input validation, mirrored validators, legal consent. |
 
 ## Architecture & security

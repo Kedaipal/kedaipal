@@ -1012,3 +1012,307 @@ describe("orders", () => {
 		});
 	});
 });
+
+describe("orders — self-collect pickup invariants", () => {
+	async function seedRetailerWithPickup(
+		t: ReturnType<typeof convexTest>,
+		userId: string,
+		opts: { offerSelfCollect: boolean; label?: string } = {
+			offerSelfCollect: true,
+			label: "Main",
+		},
+	) {
+		const retailer = await seedRetailer(t, userId);
+		const asUser = t.withIdentity({ subject: userId });
+		if (opts.offerSelfCollect) {
+			await asUser.mutation(api.retailers.updateSettings, {
+				offerSelfCollect: true,
+			});
+		}
+		const { pickupLocationId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: opts.label ?? "Main",
+				address: "12 Jln Tun Razak, 50400 KL",
+				mapsUrl: "https://maps.app.goo.gl/abc",
+				notes: "Bring your order ID.",
+			},
+		);
+		return { retailer, pickupLocationId };
+	}
+
+	test("self_collect order with toggle on and ≥1 location requires pickupLocationId", async () => {
+		const t = setup();
+		const { retailer } = await seedRetailerWithPickup(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryMethod: "self_collect",
+			}),
+		).rejects.toThrow(/Pick a pickup location/);
+	});
+
+	test("self_collect order freezes the snapshot at insert time", async () => {
+		const t = setup();
+		const { retailer, pickupLocationId } = await seedRetailerWithPickup(
+			t,
+			USER_A,
+		);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			pickupLocationId,
+		});
+		const order = await t.query(api.orders.get, { shortId });
+		expect(order?.pickupLocationId).toBe(pickupLocationId);
+		expect(order?.pickupSnapshot).toEqual({
+			label: "Main",
+			address: "12 Jln Tun Razak, 50400 KL",
+			mapsUrl: "https://maps.app.goo.gl/abc",
+			notes: "Bring your order ID.",
+		});
+
+		// Edit the source location — historical snapshot must not move
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.pickupLocations.update, {
+			pickupLocationId,
+			label: "Renamed",
+			address: "New address",
+		});
+		const reread = await t.query(api.orders.get, { shortId });
+		expect(reread?.pickupSnapshot?.label).toBe("Main");
+		expect(reread?.pickupSnapshot?.address).toBe("12 Jln Tun Razak, 50400 KL");
+	});
+
+	test("self_collect order rejects an inactive pickupLocationId", async () => {
+		const t = setup();
+		const { retailer, pickupLocationId } = await seedRetailerWithPickup(
+			t,
+			USER_A,
+		);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const asUser = t.withIdentity({ subject: USER_A });
+
+		// Add a second active location so the strict branch still fires after
+		// the first is deactivated.
+		await asUser.mutation(api.pickupLocations.create, {
+			retailerId: retailer._id,
+			label: "Other",
+			address: "Other addr",
+		});
+		await asUser.mutation(api.pickupLocations.setActive, {
+			pickupLocationId,
+			isActive: false,
+		});
+
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryMethod: "self_collect",
+				pickupLocationId,
+			}),
+		).rejects.toThrow(/no longer available/);
+	});
+
+	test("self_collect order rejects a pickupLocationId from another retailer", async () => {
+		const t = setup();
+		const { retailer: retailerA } = await seedRetailerWithPickup(t, USER_A);
+		const { pickupLocationId: foreignId } = await seedRetailerWithPickup(
+			t,
+			USER_B,
+			{ offerSelfCollect: true, label: "B-Main" },
+		);
+		const productId = await seedProduct(t, USER_A, retailerA._id);
+
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailerA._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryMethod: "self_collect",
+				pickupLocationId: foreignId,
+			}),
+		).rejects.toThrow(/not found/);
+	});
+
+	test("delivery order with a pickupLocationId is rejected", async () => {
+		const t = setup();
+		const { retailer, pickupLocationId } = await seedRetailerWithPickup(
+			t,
+			USER_A,
+		);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+				pickupLocationId,
+			}),
+		).rejects.toThrow(/should not include a pickup location/);
+	});
+
+	test("self_collect with toggle off preserves legacy zero-info path", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		// Note: no pickup locations created, toggle is off → strict branch is
+		// closed. The order should succeed and carry no pickup info.
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+		});
+		const order = await t.query(api.orders.get, { shortId });
+		expect(order?.pickupLocationId).toBeUndefined();
+		expect(order?.pickupSnapshot).toBeUndefined();
+	});
+
+	test("updatePickupLocation swaps the snapshot on a pending order", async () => {
+		const t = setup();
+		const { retailer, pickupLocationId: firstId } =
+			await seedRetailerWithPickup(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const { pickupLocationId: secondId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Second",
+				address: "20 Jln Ampang, KL",
+			},
+		);
+
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			pickupLocationId: firstId,
+		});
+
+		await t.mutation(api.orders.updatePickupLocation, {
+			shortId,
+			pickupLocationId: secondId,
+		});
+
+		const order = await t.query(api.orders.get, { shortId });
+		expect(order?.pickupLocationId).toBe(secondId);
+		expect(order?.pickupSnapshot?.label).toBe("Second");
+		expect(order?.pickupSnapshot?.address).toBe("20 Jln Ampang, KL");
+	});
+
+	test("updatePickupLocation rejects inactive target", async () => {
+		const t = setup();
+		const { retailer, pickupLocationId: firstId } =
+			await seedRetailerWithPickup(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const { pickupLocationId: secondId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Second",
+				address: "20 Jln Ampang, KL",
+			},
+		);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			pickupLocationId: firstId,
+		});
+		await asUser.mutation(api.pickupLocations.setActive, {
+			pickupLocationId: secondId,
+			isActive: false,
+		});
+		await expect(
+			t.mutation(api.orders.updatePickupLocation, {
+				shortId,
+				pickupLocationId: secondId,
+			}),
+		).rejects.toThrow(/no longer available/);
+	});
+
+	test("updatePickupLocation refuses non-pending order", async () => {
+		const t = setup();
+		const { retailer, pickupLocationId: firstId } =
+			await seedRetailerWithPickup(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			pickupLocationId: firstId,
+		});
+		const order = await t.query(api.orders.get, { shortId });
+		await asUser.mutation(api.orders.updateStatus, {
+			orderId: order!._id,
+			status: "confirmed",
+		});
+		await expect(
+			t.mutation(api.orders.updatePickupLocation, {
+				shortId,
+				pickupLocationId: firstId,
+			}),
+		).rejects.toThrow(/while the order is pending/);
+	});
+
+	test("updatePickupLocation refuses delivery order", async () => {
+		const t = setup();
+		const { retailer, pickupLocationId } = await seedRetailerWithPickup(
+			t,
+			USER_A,
+		);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		await expect(
+			t.mutation(api.orders.updatePickupLocation, {
+				shortId,
+				pickupLocationId,
+			}),
+		).rejects.toThrow(/Delivery orders/);
+	});
+});

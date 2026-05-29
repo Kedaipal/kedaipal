@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import {
 	paymentQrCaption,
 	renderPaymentInstructions,
+	renderPickupBlock,
 	renderSystemMessage,
 } from "./whatsappCopy";
 
@@ -123,5 +124,63 @@ describe("renderSystemMessage", () => {
 		).toBe(
 			"Gunakan ORD-AB23 sebagai rujukan pemindahan supaya kami boleh padankan.",
 		);
+	});
+});
+
+describe("renderPickupBlock", () => {
+	test("returns empty string when snapshot is undefined", () => {
+		expect(renderPickupBlock("en", undefined)).toBe("");
+	});
+
+	test("renders English header with label and address", () => {
+		const out = renderPickupBlock("en", {
+			label: "Main Store",
+			address: "12 Jalan Tun Razak, 50400 Kuala Lumpur",
+		});
+		expect(out).toBe(
+			"\n📍 Pickup details\nMain Store\n12 Jalan Tun Razak, 50400 Kuala Lumpur",
+		);
+	});
+
+	test("renders Bahasa Malaysia header", () => {
+		const out = renderPickupBlock("ms", {
+			label: "Kedai Utama",
+			address: "12 Jalan Tun Razak, 50400 KL",
+		});
+		expect(out.split("\n")[1]).toBe("📍 Maklumat pengambilan");
+	});
+
+	test("includes mapsUrl on its own line when present", () => {
+		const out = renderPickupBlock("en", {
+			label: "Main Store",
+			address: "12 Jln Tun Razak, KL",
+			mapsUrl: "https://maps.app.goo.gl/abc",
+		});
+		expect(out).toContain("\nhttps://maps.app.goo.gl/abc");
+	});
+
+	test("appends notes with a blank-line separator", () => {
+		const out = renderPickupBlock("en", {
+			label: "Main Store",
+			address: "12 Jln Tun Razak, KL",
+			notes: "Pickup hours: 10am – 6pm Mon–Sat.",
+		});
+		// Address then blank line then notes
+		expect(out).toContain(
+			"\n12 Jln Tun Razak, KL\n\nPickup hours: 10am – 6pm Mon–Sat.",
+		);
+	});
+
+	test("omits mapsUrl and notes when both absent", () => {
+		const out = renderPickupBlock("en", {
+			label: "Main Store",
+			address: "12 Jln Tun Razak, KL",
+		});
+		expect(out.split("\n")).toEqual([
+			"",
+			"📍 Pickup details",
+			"Main Store",
+			"12 Jln Tun Razak, KL",
+		]);
 	});
 });
