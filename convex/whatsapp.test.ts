@@ -673,7 +673,7 @@ describe("whatsapp payment received", () => {
 	});
 });
 
-describe("whatsapp confirm — location pin", () => {
+describe("whatsapp confirm — single message (no follow-up location pin)", () => {
 	async function seedSelfCollectRetailer(t: ReturnType<typeof convexTest>) {
 		const asUser = t.withIdentity({ subject: USER });
 		await asUser.mutation(api.retailers.createRetailer, {
@@ -697,7 +697,7 @@ describe("whatsapp confirm — location pin", () => {
 		return { retailerId: retailer._id, productId, asUser };
 	}
 
-	test("self-collect order with coords → confirm sends a location pin after the CTA", async () => {
+	test("self-collect order with coords → confirm body includes the derived maps URL, no separate location message is sent", async () => {
 		const t = setup();
 		const fetchMock = installFetchMock();
 		const { retailerId, productId, asUser } = await seedSelfCollectRetailer(t);
@@ -709,6 +709,7 @@ describe("whatsapp confirm — location pin", () => {
 				address: "12 Jln Tun Razak, 50400 KL",
 				latitude: 3.158,
 				longitude: 101.712,
+				placeId: "ChIJ_pickup",
 			},
 		);
 		const { shortId } = await t.mutation(api.orders.create, {
@@ -726,60 +727,35 @@ describe("whatsapp confirm — location pin", () => {
 			text: `Hi, my order ${shortId}`,
 		});
 
-		const locationCall = fetchMock
-			.waCalls()
-			.find(
-				(c) => (c.body as { type?: string } | null)?.type === "location",
-			);
-		expect(locationCall).toBeDefined();
-		const loc = (locationCall?.body as {
-			location: { latitude: string; longitude: string; name: string; address: string };
-		}).location;
-		expect(loc.latitude).toBe("3.158");
-		expect(loc.longitude).toBe("101.712");
-		expect(loc.name).toBe("Main Store");
-		expect(loc.address).toBe("12 Jln Tun Razak, 50400 KL");
-		fetchMock.restore();
-	});
-
-	test("self-collect order without coords (legacy) → no location pin sent", async () => {
-		const t = setup();
-		const fetchMock = installFetchMock();
-		const { retailerId, productId, asUser } = await seedSelfCollectRetailer(t);
-		const { pickupLocationId } = await asUser.mutation(
-			api.pickupLocations.create,
-			{
-				retailerId,
-				label: "Main Store",
-				address: "12 Jln Tun Razak, 50400 KL",
-				// no lat/lng
-			},
-		);
-		const { shortId } = await t.mutation(api.orders.create, {
-			retailerId,
-			items: [{ productId, quantity: 1 }],
-			currency: "MYR",
-			channel: "whatsapp",
-			customer: { name: "Ali", waPhone: "60123456789" },
-			deliveryMethod: "self_collect",
-			pickupLocationId,
-		});
-
-		await t.action(internal.whatsapp.handleInbound, {
-			fromPhone: "60123456789",
-			text: `Hi, my order ${shortId}`,
-		});
-
+		// No `type: "location"` send anywhere — that infrastructure is gone.
 		const locationCalls = fetchMock
 			.waCalls()
 			.filter(
 				(c) => (c.body as { type?: string } | null)?.type === "location",
 			);
 		expect(locationCalls).toHaveLength(0);
+
+		// The pickup block (with maps URL) lands inside the confirm CTA body.
+		const ctaCall = fetchMock
+			.waCalls()
+			.find(
+				(c) => (c.body as { type?: string } | null)?.type === "interactive",
+			);
+		expect(ctaCall).toBeDefined();
+		const body = (
+			ctaCall?.body as {
+				interactive: { body: { text: string } };
+			}
+		).interactive.body.text;
+		expect(body).toContain("Pickup details");
+		expect(body).toContain("Main Store");
+		expect(body).toContain(
+			"https://www.google.com/maps/place/?q=place_id:ChIJ_pickup",
+		);
 		fetchMock.restore();
 	});
 
-	test("delivery order with buyer coords → confirm sends a location pin", async () => {
+	test("delivery order: no location pin sent (confirm body is unchanged for delivery)", async () => {
 		const t = setup();
 		const fetchMock = installFetchMock();
 		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
@@ -796,33 +772,9 @@ describe("whatsapp confirm — location pin", () => {
 				postcode: "47301",
 				latitude: 3.1,
 				longitude: 101.6,
+				placeId: "ChIJ_delivery",
 			},
 		});
-
-		await t.action(internal.whatsapp.handleInbound, {
-			fromPhone: "60123456789",
-			text: `Hi, my order ${shortId}`,
-		});
-
-		const locationCall = fetchMock
-			.waCalls()
-			.find(
-				(c) => (c.body as { type?: string } | null)?.type === "location",
-			);
-		expect(locationCall).toBeDefined();
-		const loc = (locationCall?.body as {
-			location: { latitude: string; longitude: string };
-		}).location;
-		expect(loc.latitude).toBe("3.1");
-		expect(loc.longitude).toBe("101.6");
-		fetchMock.restore();
-	});
-
-	test("delivery order without coords → no location pin sent", async () => {
-		const t = setup();
-		const fetchMock = installFetchMock();
-		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
-		const shortId = await createPendingOrder(t, retailerId, productId);
 
 		await t.action(internal.whatsapp.handleInbound, {
 			fromPhone: "60123456789",

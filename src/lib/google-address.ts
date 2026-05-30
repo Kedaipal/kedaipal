@@ -1,4 +1,9 @@
 import type { GoogleAddressComponent } from "../../convex/google";
+// Re-export the shared maps-URL helper so existing client callsites don't
+// have to update their import path. The canonical home is `convex/lib/mapsUrl.ts`
+// because the same logic is needed inside Convex functions (rendering the
+// WhatsApp confirm message), and src/ cannot be imported from convex/.
+export { deriveMapsUrl } from "../../convex/lib/mapsUrl";
 import {
 	type CheckoutAddressValues,
 	type MyState,
@@ -89,50 +94,6 @@ function composeLine1(
 	// premise name for non-street addresses.
 	const firstChunk = formattedAddress.split(",")[0]?.trim() ?? "";
 	return firstChunk;
-}
-
-/**
- * Resolve a "best available" Google Maps URL for a pickup location or delivery
- * address. Priority:
- *   1. Seller-pasted `mapsUrl` (legacy rows, full original share URL).
- *   2. `placeId` — opens the named place page in Google Maps with the place's
- *      actual name in the search bar (NOT raw coordinates), thanks to Google's
- *      documented `?q=place_id:<ID>` form. This is the prettiest experience.
- *   3. `latitude`/`longitude` — fallback for delivery addresses (no place ID)
- *      or legacy rows. Opens with lat/lng in the search bar.
- *   4. Returns undefined when nothing is set.
- *
- * Used by:
- *   - The checkout sheet's pickup picker + summary card (storefront "Open in
- *     maps" link).
- *   - The `wa.me` prefilled message builder (gives the seller a short, working
- *     navigation link instead of the ugly 350-char Google places share URL).
- *   - Seller order detail + settings pickup list.
- */
-export function deriveMapsUrl(loc: {
-	mapsUrl?: string;
-	latitude?: number;
-	longitude?: number;
-	placeId?: string;
-}): string | undefined {
-	const url = loc.mapsUrl?.trim();
-	if (url && url.length > 0) return url;
-	const placeId = loc.placeId?.trim();
-	if (placeId && placeId.length > 0) {
-		// Place-by-id form: Google Maps opens centered on the place with its
-		// name shown in the search bar instead of raw coordinates. This is the
-		// API Google documents for "open a place from a stored place_id".
-		return `https://www.google.com/maps/place/?q=place_id:${placeId}`;
-	}
-	if (
-		typeof loc.latitude === "number" &&
-		typeof loc.longitude === "number"
-	) {
-		// Same URL form as the tracking-page "Open in Google Maps" button so
-		// retailers get a consistent destination regardless of entry point.
-		return `https://www.google.com/maps/search/?api=1&query=${loc.latitude},${loc.longitude}`;
-	}
-	return undefined;
 }
 
 export function parseGoogleAddress(

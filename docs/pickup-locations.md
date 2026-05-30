@@ -151,16 +151,19 @@ Pickup locations had a stricter allowlist than delivery addresses (Waze + Google
 
 ### WhatsApp confirm composition
 
-Order of the confirm message + follow-ups when a self-collect snapshot is present:
+Single-message confirm. The pickup info (label, address, **clickable maps URL**, optional notes) is embedded directly into the confirm CTA body so the buyer gets everything they need in one tap:
 
 ```
-1. Confirm text:
+1. Confirm text + CTA:
    {confirmBody}                  // retailer-overridable template
    \n
    📍 Pickup details              // renderPickupBlock — non-overridable
    {label}
    {address}
-   {mapsUrl?}                     // ONLY when no lat/lng — see suppression rule
+   {mapsUrl}                      // deriveMapsUrl: mapsUrl → place_id → lat/lng
+                                  //   - mapsUrl form: seller-pasted (legacy)
+                                  //   - place_id form: opens NAMED place page
+                                  //   - lat/lng form: search by coords
    \n
    {notes?}
    \n\n
@@ -169,18 +172,16 @@ Order of the confirm message + follow-ups when a self-collect snapshot is presen
    💳 Payment details             // renderPaymentInstructions, if any
    [I've paid button]             // CTA
 
-2. Location pin (separate message)  // ONLY when lat/lng present — tappable map
-                                    // preview that opens in buyer's default
-                                    // maps app (Waze/Google/Apple)
-
-3. Payment QR image (separate)      // if configured
+2. Payment QR image (separate)    // if configured
 ```
 
 The pickup block is appended *after* the user-overridable confirm template — retailers can customise their own copy without being able to break the pickup info. No new template variables were added to the override surface.
 
-**`mapsUrl` suppression:** `renderPickupBlock` drops the inline `mapsUrl` line when the snapshot has both `latitude` AND `longitude` — the dedicated location pin sent as message #2 makes the inline URL redundant noise. Legacy snapshots without coords still get the URL inline so navigation isn't lost.
+**Maps URL inline (not a separate location pin):** `renderPickupBlock` always includes a clickable Google Maps URL derived via `deriveMapsUrl`. The placeId-based URL form opens the **named place page** in Google Maps (shows "Eco Majestic" in the search bar, not raw coordinates) — that's the prettiest experience the buyer gets without us having to send a follow-up message.
 
-**Location pin (delivery orders too):** Delivery orders that captured a `deliveryAddress.latitude`/`longitude` from Google autocomplete also get a location pin after their confirm (record-keeping + verification for the buyer). Pin "name" is `address.line1`, "address" is a one-line composition of the full address.
+**Why no follow-up location pin:** an earlier iteration sent a WhatsApp `type: "location"` message after the confirm CTA, giving the buyer a tappable map preview. We pulled that — sending two messages per order felt noisy, the second one had no body text, and the embedded URL in the confirm body gives the same one-tap navigation outcome. The `sendLocation` adapter helper and `OutboundMessage.location` variant were removed alongside the call site.
+
+**Delivery side:** the confirm text for delivery orders doesn't include the buyer's own address — they know where they live. So nothing to embed for delivery; the confirm message stays unchanged.
 
 ### Tracking page navigation buttons
 

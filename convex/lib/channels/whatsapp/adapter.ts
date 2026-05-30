@@ -17,7 +17,6 @@ import {
 	sendCtaUrlButton,
 	sendCtaUrlWithImage,
 	sendImage,
-	sendLocation,
 	sendText,
 } from "../../whatsapp";
 import { extractInboundMessages } from "../../whatsappWebhook";
@@ -70,9 +69,6 @@ async function send(to: string, msg: OutboundMessage): Promise<void> {
 			}
 			return;
 		}
-		case "location":
-			await sendLocation(to, msg.latitude, msg.longitude, msg.name, msg.address);
-			return;
 	}
 }
 

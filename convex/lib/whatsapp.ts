@@ -128,32 +128,3 @@ export async function sendTemplate(
 	});
 }
 
-/**
- * Send a WhatsApp location pin. On the recipient's end this renders as a
- * tappable map preview that opens in their default maps app (Waze, Google
- * Maps, Apple Maps — whatever they have set). This is the canonical pattern
- * for sharing addresses on WhatsApp; we use it after order confirm to give
- * the buyer one-tap navigation to the pickup / delivery point.
- *
- * Meta requires latitude/longitude as strings in the wire payload.
- */
-export async function sendLocation(
-	toPhone: string,
-	latitude: number,
-	longitude: number,
-	name: string,
-	address: string,
-): Promise<void> {
-	await postMessage({
-		messaging_product: "whatsapp",
-		recipient_type: "individual",
-		to: toPhone,
-		type: "location",
-		location: {
-			latitude: String(latitude),
-			longitude: String(longitude),
-			name,
-			address,
-		},
-	});
-}

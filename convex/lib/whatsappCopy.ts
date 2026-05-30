@@ -1,5 +1,7 @@
 // WhatsApp message copy catalog. Pure — no Convex imports — to keep testable.
 
+import { deriveMapsUrl } from "./mapsUrl";
+
 export type Locale = "en" | "ms";
 
 export type DeliveryMethod = "delivery" | "self_collect";
@@ -330,14 +332,17 @@ export function renderPickupBlock(
 	lines.push(labels.header);
 	lines.push(snapshot.label);
 	lines.push(snapshot.address);
-	// When we have coordinates, the WhatsApp location pin (sent as a follow-up
-	// message) replaces the inline mapsUrl — keeps the confirm text clean and
-	// avoids "ugly long URL" criticism. Legacy snapshots without lat/lng still
-	// get the URL inline so navigation isn't lost.
-	const hasCoords =
-		typeof snapshot.latitude === "number" &&
-		typeof snapshot.longitude === "number";
-	if (!hasCoords && snapshot.mapsUrl) lines.push(snapshot.mapsUrl);
+	// Embed a clickable maps URL inline so the buyer gets one-tap navigation
+	// without us having to send a separate WhatsApp location-pin message.
+	// Priority: mapsUrl → placeId-derived → lat/lng-derived (see deriveMapsUrl).
+	// Skipped when none are available (free-text legacy rows).
+	const mapsUrl = deriveMapsUrl({
+		mapsUrl: snapshot.mapsUrl,
+		latitude: snapshot.latitude,
+		longitude: snapshot.longitude,
+		placeId: snapshot.placeId,
+	});
+	if (mapsUrl) lines.push(mapsUrl);
 	if (snapshot.notes) {
 		lines.push("");
 		lines.push(snapshot.notes);

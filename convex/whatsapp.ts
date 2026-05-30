@@ -29,58 +29,6 @@ type ResolvedPayment = {
 	qrImageUrl: string | undefined;
 };
 
-type LocationPin = {
-	latitude: number;
-	longitude: number;
-	name: string;
-	address: string;
-};
-
-/**
- * Pick the location pin for the confirm reply. Self-collect orders point at
- * their pickup snapshot; delivery orders point at the buyer's destination.
- * Returns `undefined` when no coordinates were captured (legacy orders or
- * buyers who skipped Google autocomplete) — caller silently skips the send.
- */
-function resolveLocationPin(meta: {
-	deliveryMethod: DeliveryMethod;
-	pickupSnapshot: PickupSnapshot | undefined;
-	deliveryAddress: Doc<"orders">["deliveryAddress"];
-}): LocationPin | undefined {
-	if (meta.deliveryMethod === "self_collect") {
-		const s = meta.pickupSnapshot;
-		if (!s || typeof s.latitude !== "number" || typeof s.longitude !== "number")
-			return undefined;
-		return {
-			latitude: s.latitude,
-			longitude: s.longitude,
-			name: s.label,
-			address: s.address,
-		};
-	}
-	const addr = meta.deliveryAddress;
-	if (
-		!addr ||
-		typeof addr.latitude !== "number" ||
-		typeof addr.longitude !== "number"
-	)
-		return undefined;
-	// Compose a one-line address as both name and address — buyers see the
-	// same string twice, but WhatsApp's location card uses `name` as the
-	// preview heading and `address` as the body, so the duplication reads
-	// cleanly.
-	const parts: string[] = [addr.line1];
-	if (addr.line2 && addr.line2.trim().length > 0) parts.push(addr.line2);
-	parts.push(`${addr.postcode} ${addr.city}`);
-	parts.push(addr.state);
-	const oneLine = parts.join(", ");
-	return {
-		latitude: addr.latitude,
-		longitude: addr.longitude,
-		name: addr.line1,
-		address: oneLine,
-	};
-}
 
 const statusValidator = v.union(
 	v.literal("pending"),
@@ -230,7 +178,6 @@ export const getRetailerLocaleForOrder = internalQuery({
 		messageTemplates: MessageTemplates | undefined;
 		deliveryMethod: DeliveryMethod;
 		pickupSnapshot: PickupSnapshot | undefined;
-		deliveryAddress: Doc<"orders">["deliveryAddress"];
 		payment: ResolvedPayment;
 	} | null> => {
 		const order = await ctx.db
@@ -257,7 +204,6 @@ export const getRetailerLocaleForOrder = internalQuery({
 				| undefined,
 			deliveryMethod: (order.deliveryMethod as DeliveryMethod | undefined) ?? "delivery",
 			pickupSnapshot: order.pickupSnapshot,
-			deliveryAddress: order.deliveryAddress,
 			payment: { instructions, qrImageUrl },
 		};
 	},
@@ -377,27 +323,6 @@ export const handleInbound = internalAction({
 				await wa.send(fromPhone, { kind: "text", body });
 			} catch (textErr) {
 				console.error("WA confirm send failed", textErr);
-			}
-		}
-
-		// Location pin — sent as a follow-up so the buyer gets a tappable map
-		// preview that opens in their default maps app. For self-collect orders
-		// the pin points at the pickup spot; for delivery it points at the
-		// buyer's destination. Skipped when no coordinates were captured (legacy
-		// orders / buyers who didn't pick a Google suggestion). Failures are
-		// isolated from the confirm reply.
-		const locationPin = meta ? resolveLocationPin(meta) : undefined;
-		if (locationPin) {
-			try {
-				await wa.send(fromPhone, {
-					kind: "location",
-					latitude: locationPin.latitude,
-					longitude: locationPin.longitude,
-					name: locationPin.name,
-					address: locationPin.address,
-				});
-			} catch (err) {
-				console.error("WA location pin send failed", err);
 			}
 		}
 

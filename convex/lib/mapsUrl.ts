@@ -66,3 +66,38 @@ export function isValidMapsUrl(raw: string): boolean {
 		return false;
 	}
 }
+
+/**
+ * Resolve a "best available" Google Maps URL for a pickup location or delivery
+ * address. Priority:
+ *   1. Seller-pasted `mapsUrl` (legacy rows, full original share URL).
+ *   2. `placeId` — opens the named place page in Google Maps with the place's
+ *      actual name in the search bar (NOT raw coordinates), thanks to Google's
+ *      documented `?q=place_id:<ID>` form. This is the prettiest experience.
+ *   3. `latitude`/`longitude` — fallback for rows without a placeId. Opens
+ *      with lat/lng in the search bar.
+ *   4. Returns undefined when nothing is set.
+ *
+ * Lives in `convex/lib/` so it's importable from both Convex functions
+ * (rendering the WhatsApp confirm message) AND the React client.
+ */
+export function deriveMapsUrl(loc: {
+	mapsUrl?: string;
+	latitude?: number;
+	longitude?: number;
+	placeId?: string;
+}): string | undefined {
+	const url = loc.mapsUrl?.trim();
+	if (url && url.length > 0) return url;
+	const placeId = loc.placeId?.trim();
+	if (placeId && placeId.length > 0) {
+		return `https://www.google.com/maps/place/?q=place_id:${placeId}`;
+	}
+	if (
+		typeof loc.latitude === "number" &&
+		typeof loc.longitude === "number"
+	) {
+		return `https://www.google.com/maps/search/?api=1&query=${loc.latitude},${loc.longitude}`;
+	}
+	return undefined;
+}

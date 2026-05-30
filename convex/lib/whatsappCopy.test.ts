@@ -184,33 +184,56 @@ describe("renderPickupBlock", () => {
 		]);
 	});
 
-	test("suppresses mapsUrl when lat/lng are present (location pin replaces it)", () => {
+	test("includes the seller-pasted mapsUrl when set (legacy precedence)", () => {
 		const out = renderPickupBlock("en", {
 			label: "Main Store",
 			address: "12 Jln Tun Razak, KL",
 			mapsUrl: "https://maps.app.goo.gl/abc",
 			latitude: 3.158,
 			longitude: 101.712,
+			placeId: "ChIJxxx",
 		});
-		// mapsUrl line dropped — the WhatsApp location pin sent as a follow-up
-		// makes the inline URL redundant noise.
-		expect(out).not.toContain("https://maps.app.goo.gl/abc");
+		// mapsUrl wins the deriveMapsUrl priority chain.
+		expect(out).toContain("https://maps.app.goo.gl/abc");
+		expect(out).not.toContain("place_id:");
+	});
+
+	test("falls back to a placeId-based URL when no mapsUrl", () => {
+		const out = renderPickupBlock("en", {
+			label: "Main Store",
+			address: "12 Jln Tun Razak, KL",
+			placeId: "ChIJ_pickup",
+			latitude: 3.158,
+			longitude: 101.712,
+		});
+		expect(out).toContain(
+			"https://www.google.com/maps/place/?q=place_id:ChIJ_pickup",
+		);
+	});
+
+	test("falls back to a lat/lng search URL when no mapsUrl and no placeId", () => {
+		const out = renderPickupBlock("en", {
+			label: "Main Store",
+			address: "12 Jln Tun Razak, KL",
+			latitude: 3.158,
+			longitude: 101.712,
+		});
+		expect(out).toContain(
+			"https://www.google.com/maps/search/?api=1&query=3.158,101.712",
+		);
+	});
+
+	test("omits the URL line entirely when nothing usable is set", () => {
+		const out = renderPickupBlock("en", {
+			label: "Main Store",
+			address: "12 Jln Tun Razak, KL",
+		});
+		expect(out).not.toContain("https://");
 		expect(out.split("\n")).toEqual([
 			"",
 			"📍 Pickup details",
 			"Main Store",
 			"12 Jln Tun Razak, KL",
 		]);
-	});
-
-	test("keeps mapsUrl when only one of lat/lng is set (legacy fallback)", () => {
-		const out = renderPickupBlock("en", {
-			label: "Main Store",
-			address: "12 Jln Tun Razak, KL",
-			mapsUrl: "https://maps.app.goo.gl/abc",
-			latitude: 3.158,
-			// longitude missing — not a usable pin, so keep the URL
-		});
-		expect(out).toContain("https://maps.app.goo.gl/abc");
 	});
 });
