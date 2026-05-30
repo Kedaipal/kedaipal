@@ -46,6 +46,8 @@ interface SanitizedDeliveryAddress {
 	postcode: string;
 	notes?: string;
 	mapsUrl?: string;
+	latitude?: number;
+	longitude?: number;
 }
 
 function loadSavedAddress(): CheckoutAddressValues {
@@ -62,6 +64,8 @@ function loadSavedAddress(): CheckoutAddressValues {
 			postcode: typeof parsed.postcode === "string" ? parsed.postcode : "",
 			notes: typeof parsed.notes === "string" ? parsed.notes : "",
 			mapsUrl: typeof parsed.mapsUrl === "string" ? parsed.mapsUrl : "",
+			latitude: typeof parsed.latitude === "string" ? parsed.latitude : "",
+			longitude: typeof parsed.longitude === "string" ? parsed.longitude : "",
 		};
 	} catch {
 		return emptyAddress;
@@ -81,6 +85,17 @@ function sanitizeAddress(raw: CheckoutAddressValues): SanitizedDeliveryAddress {
 	const line2 = raw.line2.trim();
 	const notes = raw.notes.trim();
 	const mapsUrl = raw.mapsUrl.trim();
+	// lat/lng come in as strings from form state. Parse to numbers; drop on
+	// any parse failure or invalid range — the order is still valid without.
+	const latNum = raw.latitude.trim().length > 0 ? Number(raw.latitude) : NaN;
+	const lngNum = raw.longitude.trim().length > 0 ? Number(raw.longitude) : NaN;
+	const validCoords =
+		Number.isFinite(latNum) &&
+		Number.isFinite(lngNum) &&
+		latNum >= -90 &&
+		latNum <= 90 &&
+		lngNum >= -180 &&
+		lngNum <= 180;
 	return {
 		line1: raw.line1.trim(),
 		line2: line2.length > 0 ? line2 : undefined,
@@ -89,6 +104,8 @@ function sanitizeAddress(raw: CheckoutAddressValues): SanitizedDeliveryAddress {
 		postcode: raw.postcode.trim(),
 		notes: notes.length > 0 ? notes : undefined,
 		mapsUrl: mapsUrl.length > 0 ? mapsUrl : undefined,
+		latitude: validCoords ? latNum : undefined,
+		longitude: validCoords ? lngNum : undefined,
 	};
 }
 
@@ -390,7 +407,11 @@ export function CheckoutSheet({
 								<form.Subscribe selector={(s) => s.values.deliveryMethod}>
 									{(deliveryMethod) =>
 										deliveryMethod === "delivery" ? (
-											<AddressFieldset form={form} fields="address" />
+											<AddressFieldset
+												form={form}
+												fields="address"
+												retailerId={retailerId}
+											/>
 										) : selfCollectAvailable ? (
 											singlePickup ? (
 												<PickupSummaryCard location={singlePickup} />

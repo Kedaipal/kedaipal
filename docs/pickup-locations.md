@@ -1,6 +1,6 @@
 # Self-Collect Pickup Locations — Implementation Reference
 
-Reference doc for the multi-location self-collect feature. **Backend + dashboard + storefront + tracking UI shipped.** This file documents what exists, why it was built this way, and what depends on it next.
+Reference doc for the multi-location self-collect feature. **Backend + dashboard + storefront + tracking UI + Google Places autocomplete + WhatsApp location pin shipped.** This file documents what exists, why it was built this way, and what depends on it next.
 
 ## Context (2026-05-29)
 
@@ -21,25 +21,29 @@ New `pickupLocations` table — retailer-managed library, soft-deleted (never ha
 pickupLocations: {
   retailerId,
   label,            // 1–60 chars
-  address,          // 3–500 chars
-  mapsUrl?,         // strict Waze + Google Maps allowlist, ≤500 chars
+  address,          // 3–500 chars (Google formattedAddress when autocomplete used)
+  mapsUrl?,         // legacy fallback; strict Waze + Google Maps allowlist, ≤500 chars
   notes?,           // ≤200 chars
+  latitude?,        // captured from Google Places autocomplete
+  longitude?,       // — both written together or not at all
+  placeId?,         // Google's stable place identifier
   isActive,         // soft-delete flag
-  sortOrder,        // ascending; up/down arrows swap with active neighbour
+  sortOrder,        // ascending; drag-and-drop reorder writes 0..N-1
   createdAt, updatedAt,
 }
 ```
 
 Indexes: `by_retailer`, `by_retailer_active`.
 
-`orders` table gained two optional fields:
+`orders` table gained pickup + delivery coordinate fields:
 
 ```
 pickupLocationId?:  v.id("pickupLocations"),
-pickupSnapshot?:    { label, address, mapsUrl?, notes? },
+pickupSnapshot?:    { label, address, mapsUrl?, notes?, latitude?, longitude? },
+deliveryAddress?:   { line1, line2?, city, state, postcode, notes?, mapsUrl?, latitude?, longitude? },
 ```
 
-The snapshot is **frozen at order create / `updatePickupLocation`** and never mutated afterwards — editing the source location does not rewrite history.
+The pickup snapshot (and the buyer's chosen `deliveryAddress`) is **frozen at order create / `updatePickupLocation`** and never mutated afterwards — editing the source location does not rewrite history.
 
 `retailers` table gained two fields:
 
@@ -50,14 +54,23 @@ The snapshot is **frozen at order create / `updatePickupLocation`** and never mu
 
 | Path | Purpose |
 |---|---|
-| `convex/lib/mapsUrl.ts` | Pure shared validator — `assertValidMapsUrl`, `isValidMapsUrl`, `ALLOWED_MAPS_HOSTS` (no Convex imports). Imported from both Convex mutations and the client Zod schema. |
-| `convex/pickupLocations.ts` | Queries (`listForRetailer`, `listActivePublicBySlug`, `hasAnyActive`), mutations (`create`, `update`, `setActive`, `reorder`). Self-contained `requireRetailerOwner` / `requireOwnedLocation` helpers mirroring the `customers.ts` pattern. |
-| `convex/pickupLocations.test.ts` | 20 integration tests — CRUD, soft-delete/restore, bulk `reorder` (happy path, identity no-op, length mismatch, duplicate id, inactive id, foreign tenant, inactive-untouched invariant), tenant isolation, `hasAnyActive`. |
+| `convex/google.ts` | Server-side proxy for Google Places API (New). `autocompleteAddress` + `getPlaceDetails` actions. API key (`GOOGLE_MAPS_API_KEY`) never reaches the browser; results scoped to `includedRegionCodes: ["my"]`; session-token billing pattern; field mask locked to Essentials tier. Rate-limited via `googleAutocomplete` (30/min) and `googlePlaceDetails` (10/min) buckets, keyed by Clerk subject (settings caller) or `retailerId` (storefront). |
+| `convex/google.test.ts` | 10 tests — short-input no-op, payload normalization, header/body/region forwarding, error handling (403/404/missing key/missing rate key/missing coordinates). Stubs `globalThis.fetch` to assert exact wire payloads. |
+| `convex/lib/mapsUrl.ts` | Pure shared validator — `assertValidMapsUrl`, `isValidMapsUrl`, `ALLOWED_MAPS_HOSTS` (no Convex imports). Used by legacy pasted-link path only; new autocomplete captures derive maps URLs from lat/lng instead. |
+| `src/lib/google-address.ts` | Pure client helpers — `parseGoogleAddress` maps Google `addressComponents` into our `{ line1, city, state, postcode }` shape; `normalizeMyState` resolves Federal Territory variants ("Wilayah Persekutuan Kuala Lumpur" → "WP Kuala Lumpur") and alternate spellings ("Penang" → "Pulau Pinang", "Malacca" → "Melaka") into our `MY_STATES` enum. |
+| `src/lib/google-address.test.ts` | 10 tests covering both helpers — Federal Territory variants, alt spellings, case-insensitive matching, named-building line1 fallback, `postal_town` fall-through, unknown-state graceful empty. |
+| `src/components/forms/google-address-autocomplete.tsx` | Reusable combobox shared by the pickup-settings dialog and the buyer-checkout `AddressFieldset`. Debounced (300ms), session-token managed internally, keyboard/mouse navigation, loading/error/no-results/escape states. Public storefront callers pass `retailerId` for rate-limit scoping; authenticated callers omit it (action falls back to Clerk subject). |
+| `convex/pickupLocations.ts` | Queries (`listForRetailer`, `listActivePublicBySlug` — surfaces lat/lng for the storefront picker, `hasAnyActive`), mutations (`create`, `update`, `setActive`, `reorder`). `create`/`update` accept `latitude`/`longitude`/`placeId`; `update` accepts `null` for those fields to explicitly clear coords. `sanitizeCoords` enforces WGS84 ranges; lat/lng are all-or-nothing (silently dropped when only one is provided). |
+| `convex/pickupLocations.test.ts` | 26 integration tests — CRUD, soft-delete/restore, bulk `reorder`, tenant isolation, `hasAnyActive`, and the Google-autocomplete field group (create stores coords, range rejection, all-or-nothing drop, `update` with null clears, public listing surfaces coords, order snapshot freeze including coords). |
 | `convex/orders.ts` | `create` extended with the pickup invariants; new `updatePickupLocation` mutation (pending-only, mirrors `updateDeliveryAddress`). |
 | `convex/orders.test.ts` | +10 tests — strict-branch enforcement, snapshot freeze, inactive/foreign-tenant id rejection, legacy zero-info path preservation, full `updatePickupLocation` lifecycle. |
 | `convex/retailers.ts` | `updateSettings` accepts `offerSelfCollect`; `createRetailer` defaults it to `true`. Idempotent `markPickupSetupSeen` mutation called from the Pickup tab on mount. `RetailerPublic` surfaces `offerSelfCollect` everywhere and `pickupSetupSeen` on `getMyRetailer` only. |
 | `convex/retailers.test.ts` | +6 tests covering the default-true behaviour and `markPickupSetupSeen` (auth, missing retailer, first-call patch, idempotency, per-user scoping). |
-| `convex/lib/whatsappCopy.ts` | New `PickupSnapshot` type + `renderPickupBlock(locale, snapshot)` (EN/MS). Returns `""` for missing snapshot so callers concat unconditionally. |
+| `convex/lib/whatsappCopy.ts` | `PickupSnapshot` type now carries optional `latitude`/`longitude`. `renderPickupBlock` **suppresses the inline `mapsUrl`** when lat/lng are set — the WhatsApp location pin sent as a follow-up replaces the inline URL, keeping the confirm text clean. Legacy snapshots without coords still get the URL inline. |
+| `convex/lib/whatsapp.ts` | New `sendLocation(toPhone, lat, lng, name, address)` calling Meta's `/messages` endpoint with `type: "location"`. Stringifies lat/lng per Meta's spec. |
+| `convex/lib/channels/types.ts` | `OutboundMessage` union gained `kind: "location"` variant — channel-neutral so any future adapter (Telegram, WeChat) implements a `location` send or degrades to text. |
+| `convex/lib/channels/whatsapp/adapter.ts` | Adapter `send` switch handles the new `location` kind by delegating to `sendLocation`. |
+| `convex/whatsapp.ts` | `getRetailerLocaleForOrder` surfaces `deliveryAddress` so the confirm-flow can read its coords. New `resolveLocationPin(meta)` helper picks the right pin (pickup snapshot for self-collect, delivery address for delivery) and returns `undefined` when no coords were captured. Confirm flow sends the pin after the CTA — isolated `try/catch` so a location-send failure doesn't break the rest of the confirm. |
 | `convex/lib/whatsappCopy.test.ts` | +6 tests for `renderPickupBlock`. |
 | `convex/whatsapp.ts` | `getRetailerLocaleForOrder` surfaces `pickupSnapshot`; confirm send layers the pickup block between the confirm body and the transfer-reference line. |
 | `src/lib/schemas.ts` | `pickupLocationFormSchema` (Zod, refines `mapsUrl` via the shared validator); `checkoutFormSchema` gained `pickupLocationId: z.string()`. |
@@ -110,37 +123,71 @@ It is read by:
 
 Edits to the source `pickupLocations` row (label, address, mapsUrl, notes) **never propagate** to existing orders. Deactivating the source row (`isActive = false`) also leaves the historical snapshot intact; the only effect is that `updatePickupLocation` will refuse to switch a pending order to that now-inactive id.
 
-### `mapsUrl` allowlist
+### Google Places autocomplete (sellers + buyers)
 
-Pickup locations enforce a stricter allowlist than delivery addresses — scoped to the two share-sheet formats Malaysian shoppers actually use:
+Both the pickup-settings address input and the buyer's delivery address form use a **shared `<GoogleAddressAutocomplete>` component** that calls the Convex action proxy (`autocompleteAddress` → `getPlaceDetails`). The API key lives only in the Convex deployment env (`GOOGLE_MAPS_API_KEY`), never in the client bundle.
 
-```
-waze.com, www.waze.com, maps.app.goo.gl, goo.gl, maps.google.com, www.google.com
-```
+**Architecture decisions:**
 
-`https://` only, ≤500 chars. The validator throws a human-readable `Error` so callers (Convex mutations vs Zod refine) choose how to surface it. The existing delivery-address `mapsUrl` validator in `convex/lib/address.ts` was intentionally **not** tightened to the same allowlist — grandfathered to avoid invalidating existing delivery rows.
+- **Convex action proxy** instead of a referrer-restricted browser key. Cleaner key rotation, central rate-limiting via the existing `rateLimiter` (`googleAutocomplete` 30/min, `googlePlaceDetails` 10/min), and one place to add future logging/cost accounting. Per-request cost is the Convex action invocation (cheap) plus Google's bundled session price.
+- **Session tokens** — the client component generates a UUID per "type → see suggestions → pick" cycle and passes it to both actions. Google bundles autocomplete queries + one Place Details call into a single billable session at the Essentials tier (~$17/1000 sessions). A new token is generated after each successful pick to start a fresh session.
+- **Malaysia only** — `includedRegionCodes: ["my"]` on autocomplete so we never get suggestions from SG/TH.
+- **Essentials field mask** — `id,formattedAddress,addressComponents,location` only. The cheapest billable tier and all we need.
+- **Graceful manual-entry fallback** — buyers who type a not-on-Google address can still submit; their order just gets no location pin (everything else works).
+
+**State normalization:** `parseGoogleAddress` (in `src/lib/google-address.ts`) maps Google's `addressComponents` into our structured form. The trickiest bit is the state field — `normalizeMyState` resolves:
+
+- Federal Territories: `Wilayah Persekutuan Kuala Lumpur` / `Federal Territory of Kuala Lumpur` / `Kuala Lumpur` all → `WP Kuala Lumpur` (same for Labuan/Putrajaya)
+- Alternate spellings: `Penang` → `Pulau Pinang`, `Malacca` → `Melaka`
+- Everything else: case-insensitive match against `MY_STATES`
+
+Unknown states return `undefined`, in which case the form leaves the state field blank for the buyer to pick.
+
+### Legacy `mapsUrl` allowlist
+
+Pickup locations had a stricter allowlist than delivery addresses (Waze + Google Maps share-sheet hosts only). After the autocomplete migration, the `mapsUrl` field is **no longer user-facing for new captures** — coordinates from Google drive the maps experience instead. The field stays on the schema for legacy rows; the strict validator in `convex/lib/mapsUrl.ts` and its allowlist are retained for any rare legacy edit path.
 
 ### WhatsApp confirm composition
 
-Order of the confirm message body when a self-collect snapshot is present:
+Order of the confirm message + follow-ups when a self-collect snapshot is present:
 
 ```
-{confirmBody}                  // retailer-overridable template
-\n
-📍 Pickup details              // renderPickupBlock — non-overridable
-{label}
-{address}
-{mapsUrl?}
-\n
-{notes?}
-\n\n
-{transferReferenceLine}        // system message, non-overridable
-\n
-💳 Payment details             // renderPaymentInstructions, if any
-...
+1. Confirm text:
+   {confirmBody}                  // retailer-overridable template
+   \n
+   📍 Pickup details              // renderPickupBlock — non-overridable
+   {label}
+   {address}
+   {mapsUrl?}                     // ONLY when no lat/lng — see suppression rule
+   \n
+   {notes?}
+   \n\n
+   {transferReferenceLine}        // system message, non-overridable
+   \n
+   💳 Payment details             // renderPaymentInstructions, if any
+   [I've paid button]             // CTA
+
+2. Location pin (separate message)  // ONLY when lat/lng present — tappable map
+                                    // preview that opens in buyer's default
+                                    // maps app (Waze/Google/Apple)
+
+3. Payment QR image (separate)      // if configured
 ```
 
 The pickup block is appended *after* the user-overridable confirm template — retailers can customise their own copy without being able to break the pickup info. No new template variables were added to the override surface.
+
+**`mapsUrl` suppression:** `renderPickupBlock` drops the inline `mapsUrl` line when the snapshot has both `latitude` AND `longitude` — the dedicated location pin sent as message #2 makes the inline URL redundant noise. Legacy snapshots without coords still get the URL inline so navigation isn't lost.
+
+**Location pin (delivery orders too):** Delivery orders that captured a `deliveryAddress.latitude`/`longitude` from Google autocomplete also get a location pin after their confirm (record-keeping + verification for the buyer). Pin "name" is `address.line1`, "address" is a one-line composition of the full address.
+
+### Tracking page navigation buttons
+
+For self-collect orders the tracking page (`/track/<shortId>`) renders **two side-by-side buttons** when the pickup snapshot has lat/lng:
+
+- **Open in Waze** → `https://waze.com/ul?ll=<lat>,<lng>&navigate=yes`
+- **Open in Google Maps** → `https://www.google.com/maps/search/?api=1&query=<lat>,<lng>`
+
+Both URLs are derived from stored coordinates — no app-specific data is captured separately. Legacy snapshots without coords fall back to the single "Open in maps" link from the retailer's `mapsUrl`. If neither is present, no buttons render.
 
 ### Storefront checkout branching
 
@@ -199,7 +246,8 @@ Setup checklist on `/app` gains a 4th step `"pickup"` when `retailer.offerSelfCo
 
 ## Env requirements
 
-None beyond what already exists.
+- **`GOOGLE_MAPS_API_KEY`** (Convex deployment env, set via `npx convex env set`). Server-side only — never `VITE_`-prefixed. Required for Google autocomplete; absence causes the proxy actions to throw a sanitized error. Owner-managed; restricted to "Places API (New)" and the Kedaipal HTTP referrer allowlist.
+- Everything else (WhatsApp Cloud API, etc.) unchanged.
 
 ## Tier gating (deferred)
 
@@ -214,5 +262,6 @@ The pricing plan caps Starter at **1 active pickup location** and lets Pro+ have
 ## Future work
 
 - **Tier cap enforcement** when subscription billing lands (Starter = 1 active, Pro+ = unlimited) — single check inside `pickupLocations.create`, plus a soft over-cap banner in `listForRetailer` for retailers downgraded from Pro.
+- **Click-to-send "notify store manager"** — per-location `managerWaPhone` + a `wa.me` deep-link button on the order detail page so the seller can forward the pre-built message in one tap instead of copy/paste. (Parked in favour of the Google autocomplete bundle; revisit when retailers ask.)
 - **Pickup time slots / appointments** — currently a free-form `notes` field. A structured slot picker (Mon–Sat 10am–6pm, etc.) would unlock the cake/kuih cohort's actual workflow.
 - **Pickup location attached to a specific product** — for retailers where only some products are pickup-eligible (e.g. frozen-only). Not requested yet; flag the use case if it surfaces.

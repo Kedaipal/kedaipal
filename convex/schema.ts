@@ -205,6 +205,12 @@ export default defineSchema({
 				postcode: v.string(),
 				notes: v.optional(v.string()),
 				mapsUrl: v.optional(v.string()),
+				// Captured from Google Places autocomplete when the buyer picks
+				// a suggestion. Optional because legacy orders + free-form
+				// manual entry won't have coordinates. Drives the WhatsApp
+				// location pin sent after confirm.
+				latitude: v.optional(v.number()),
+				longitude: v.optional(v.number()),
 			}),
 		),
 		// Reference to the retailer's pickup location when deliveryMethod ===
@@ -223,6 +229,12 @@ export default defineSchema({
 				address: v.string(),
 				mapsUrl: v.optional(v.string()),
 				notes: v.optional(v.string()),
+				// Frozen at order create. Drives the WhatsApp location pin
+				// sent after confirm + the Waze/Google buttons on the
+				// tracking page. Optional so orders against legacy pickup
+				// locations (created before autocomplete) keep working.
+				latitude: v.optional(v.number()),
+				longitude: v.optional(v.number()),
 			}),
 		),
 		// Optional external carrier tracking URL set by the retailer when marking
@@ -266,6 +278,12 @@ export default defineSchema({
 		address: v.string(),
 		mapsUrl: v.optional(v.string()),
 		notes: v.optional(v.string()),
+		// Coordinates + Google place identifier captured via Places
+		// autocomplete. Optional — legacy rows created via free-form text
+		// don't have these. New autocomplete-captured rows write all three.
+		latitude: v.optional(v.number()),
+		longitude: v.optional(v.number()),
+		placeId: v.optional(v.string()),
 		// Soft-delete flag. Retailers deactivate (rather than hard-delete) so
 		// historical order snapshots remain meaningful. Inactive rows are
 		// hidden from the storefront picker but still listed in settings under

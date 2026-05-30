@@ -434,3 +434,179 @@ describe("pickupLocations — hasAnyActive", () => {
 		expect(out.hasAny).toBe(true);
 	});
 });
+
+describe("pickupLocations — Google autocomplete fields", () => {
+	test("create stores latitude, longitude, and placeId when provided", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+
+		const { pickupLocationId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Main",
+				address: "12 Jln Tun Razak, 50400 KL",
+				latitude: 3.158,
+				longitude: 101.712,
+				placeId: "ChIJ_abc",
+			},
+		);
+		const rows = await asUser.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		const row = rows.find((r) => r._id === pickupLocationId);
+		expect(row?.latitude).toBeCloseTo(3.158);
+		expect(row?.longitude).toBeCloseTo(101.712);
+		expect(row?.placeId).toBe("ChIJ_abc");
+	});
+
+	test("create rejects out-of-range coordinates", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+
+		await expect(
+			asUser.mutation(api.pickupLocations.create, {
+				retailerId: retailer._id,
+				label: "X",
+				address: "Some address",
+				latitude: 91,
+				longitude: 0,
+			}),
+		).rejects.toThrow(/latitude must be between/);
+
+		await expect(
+			asUser.mutation(api.pickupLocations.create, {
+				retailerId: retailer._id,
+				label: "X",
+				address: "Some address",
+				latitude: 0,
+				longitude: 181,
+			}),
+		).rejects.toThrow(/longitude must be between/);
+	});
+
+	test("create drops coordinates silently when one is missing (all-or-nothing)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+
+		const { pickupLocationId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Half-pinned",
+				address: "Some address",
+				latitude: 3.158,
+				// longitude omitted
+			},
+		);
+		const rows = await asUser.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		const row = rows.find((r) => r._id === pickupLocationId);
+		expect(row?.latitude).toBeUndefined();
+		expect(row?.longitude).toBeUndefined();
+	});
+
+	test("update with null lat/lng clears stored coordinates", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+
+		const { pickupLocationId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Pinned",
+				address: "Some address",
+				latitude: 3.158,
+				longitude: 101.712,
+				placeId: "ChIJ_abc",
+			},
+		);
+		await asUser.mutation(api.pickupLocations.update, {
+			pickupLocationId,
+			latitude: null,
+			longitude: null,
+			placeId: null,
+		});
+		const rows = await asUser.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		const row = rows.find((r) => r._id === pickupLocationId);
+		expect(row?.latitude).toBeUndefined();
+		expect(row?.longitude).toBeUndefined();
+		expect(row?.placeId).toBeUndefined();
+	});
+
+	test("listActivePublicBySlug surfaces lat/lng for the storefront picker", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.pickupLocations.create, {
+			retailerId: retailer._id,
+			label: "Main",
+			address: "12 Jln Tun Razak, 50400 KL",
+			latitude: 3.158,
+			longitude: 101.712,
+		});
+
+		const rows = await t.query(api.pickupLocations.listActivePublicBySlug, {
+			slug: retailer.slug,
+		});
+		expect(rows[0].latitude).toBeCloseTo(3.158);
+		expect(rows[0].longitude).toBeCloseTo(101.712);
+	});
+
+	test("orders.create freezes coordinates onto the pickup snapshot", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.retailers.updateSettings, {
+			offerSelfCollect: true,
+		});
+		const { pickupLocationId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Main",
+				address: "12 Jln Tun Razak, 50400 KL",
+				latitude: 3.158,
+				longitude: 101.712,
+			},
+		);
+		const productId = await asUser.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Kuih Tepung",
+			price: 1000,
+			currency: "MYR",
+			stock: 50,
+			imageStorageIds: [],
+			sortOrder: 0,
+		});
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryMethod: "self_collect",
+			pickupLocationId,
+		});
+
+		const order = await t.query(api.orders.get, { shortId });
+		expect(order?.pickupSnapshot?.latitude).toBeCloseTo(3.158);
+		expect(order?.pickupSnapshot?.longitude).toBeCloseTo(101.712);
+
+		// And the coords survive a subsequent location edit.
+		await asUser.mutation(api.pickupLocations.update, {
+			pickupLocationId,
+			latitude: 10,
+			longitude: 20,
+		});
+		const reread = await t.query(api.orders.get, { shortId });
+		expect(reread?.pickupSnapshot?.latitude).toBeCloseTo(3.158);
+	});
+});

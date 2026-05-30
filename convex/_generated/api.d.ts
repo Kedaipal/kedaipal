@@ -11,6 +11,7 @@
 import type * as crons from "../crons.js";
 import type * as customers from "../customers.js";
 import type * as email from "../email.js";
+import type * as google from "../google.js";
 import type * as http from "../http.js";
 import type * as lib_address from "../lib/address.js";
 import type * as lib_channels_registry from "../lib/channels/registry.js";
@@ -46,6 +47,7 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   customers: typeof customers;
   email: typeof email;
+  google: typeof google;
   http: typeof http;
   "lib/address": typeof lib_address;
   "lib/channels/registry": typeof lib_channels_registry;

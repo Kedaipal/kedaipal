@@ -3,7 +3,7 @@ import { X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { type FormEvent, useState } from "react";
 import { api } from "../../../convex/_generated/api";
-import type { Doc } from "../../../convex/_generated/dataModel";
+import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import { convexErrorMessage } from "../../lib/format";
 import {
 	addressEditFormSchema,
@@ -19,6 +19,12 @@ interface AddressEditDialogProps {
 	onClose: () => void;
 	shortId: string;
 	currentAddress: Doc<"orders">["deliveryAddress"];
+	/**
+	 * Used by the Google autocomplete inside the field group to scope rate
+	 * limiting (the dialog is unauthenticated — same trust model as the
+	 * tracking page itself).
+	 */
+	retailerId: Id<"retailers"> | undefined;
 }
 
 function toFormValues(
@@ -33,6 +39,8 @@ function toFormValues(
 		postcode: addr.postcode,
 		notes: addr.notes ?? "",
 		mapsUrl: addr.mapsUrl ?? "",
+		latitude: addr.latitude !== undefined ? String(addr.latitude) : "",
+		longitude: addr.longitude !== undefined ? String(addr.longitude) : "",
 	};
 }
 
@@ -41,6 +49,7 @@ export function AddressEditDialog({
 	onClose,
 	shortId,
 	currentAddress,
+	retailerId,
 }: AddressEditDialogProps) {
 	const updateAddress = useMutation(api.orders.updateDeliveryAddress);
 	const [serverError, setServerError] = useState<string | null>(null);
@@ -53,6 +62,16 @@ export function AddressEditDialog({
 			const line2 = value.line2.trim();
 			const notes = value.notes.trim();
 			const mapsUrl = value.mapsUrl.trim();
+			const latNum = value.latitude.trim().length > 0 ? Number(value.latitude) : NaN;
+			const lngNum =
+				value.longitude.trim().length > 0 ? Number(value.longitude) : NaN;
+			const validCoords =
+				Number.isFinite(latNum) &&
+				Number.isFinite(lngNum) &&
+				latNum >= -90 &&
+				latNum <= 90 &&
+				lngNum >= -180 &&
+				lngNum <= 180;
 			try {
 				await updateAddress({
 					shortId,
@@ -64,6 +83,8 @@ export function AddressEditDialog({
 						postcode: value.postcode.trim(),
 						notes: notes.length > 0 ? notes : undefined,
 						mapsUrl: mapsUrl.length > 0 ? mapsUrl : undefined,
+						latitude: validCoords ? latNum : undefined,
+						longitude: validCoords ? lngNum : undefined,
 					},
 				});
 				onClose();
@@ -117,7 +138,10 @@ export function AddressEditDialog({
 									postcode: "postcode",
 									notes: "notes",
 									mapsUrl: "mapsUrl",
+									latitude: "latitude",
+									longitude: "longitude",
 								}}
+								retailerId={retailerId}
 							/>
 							{serverError ? (
 								<p className="mt-4 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">

@@ -88,6 +88,27 @@ function sanitizeNotes(raw: string | undefined): string | undefined {
 	return trimmed;
 }
 
+/**
+ * Validate a lat/lng pair from the Google action proxy. Both must be present
+ * and inside the standard WGS84 ranges; otherwise we drop them (don't half-
+ * store coordinates). Returns undefined when either is missing — coordinates
+ * are an all-or-nothing field group.
+ */
+function sanitizeCoords(
+	latitude: number | undefined,
+	longitude: number | undefined,
+): { latitude: number; longitude: number } | undefined {
+	if (typeof latitude !== "number" || typeof longitude !== "number") return undefined;
+	if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return undefined;
+	if (latitude < -90 || latitude > 90) {
+		throw new ConvexError("latitude must be between -90 and 90");
+	}
+	if (longitude < -180 || longitude > 180) {
+		throw new ConvexError("longitude must be between -180 and 180");
+	}
+	return { latitude, longitude };
+}
+
 // ---------------------------------------------------------------------------
 // Queries
 // ---------------------------------------------------------------------------
@@ -126,6 +147,8 @@ export const listActivePublicBySlug = query({
 			address: string;
 			mapsUrl?: string;
 			notes?: string;
+			latitude?: number;
+			longitude?: number;
 			sortOrder: number;
 		}>
 	> => {
@@ -151,6 +174,8 @@ export const listActivePublicBySlug = query({
 				address: r.address,
 				mapsUrl: r.mapsUrl,
 				notes: r.notes,
+				latitude: r.latitude,
+				longitude: r.longitude,
 				sortOrder: r.sortOrder,
 			}));
 	},
@@ -185,10 +210,16 @@ export const create = mutation({
 		address: v.string(),
 		mapsUrl: v.optional(v.string()),
 		notes: v.optional(v.string()),
+		// Captured from Google Places autocomplete. All three flow together —
+		// the create call either has all three or none. Optional so retailers
+		// who skip the autocomplete and type freely still get a working row.
+		latitude: v.optional(v.number()),
+		longitude: v.optional(v.number()),
+		placeId: v.optional(v.string()),
 	},
 	handler: async (
 		ctx,
-		{ retailerId, label, address, mapsUrl, notes },
+		{ retailerId, label, address, mapsUrl, notes, latitude, longitude, placeId },
 	): Promise<{ pickupLocationId: Id<"pickupLocations"> }> => {
 		await requireRetailerOwner(ctx, retailerId);
 
@@ -196,6 +227,8 @@ export const create = mutation({
 		const cleanAddress = sanitizeAddress(address);
 		const cleanMapsUrl = sanitizeMapsUrl(mapsUrl);
 		const cleanNotes = sanitizeNotes(notes);
+		const cleanCoords = sanitizeCoords(latitude, longitude);
+		const cleanPlaceId = placeId?.trim() || undefined;
 
 		// New rows go to the end of the list. Reading the current max sortOrder
 		// keeps numbers stable when the user reorders later — no need to renumber
@@ -216,6 +249,9 @@ export const create = mutation({
 			address: cleanAddress,
 			mapsUrl: cleanMapsUrl,
 			notes: cleanNotes,
+			latitude: cleanCoords?.latitude,
+			longitude: cleanCoords?.longitude,
+			placeId: cleanPlaceId,
 			isActive: true,
 			sortOrder: nextSortOrder,
 			createdAt: now,
@@ -233,10 +269,17 @@ export const update = mutation({
 		// Empty string clears the field. Undefined means "no change".
 		mapsUrl: v.optional(v.string()),
 		notes: v.optional(v.string()),
+		// Google autocomplete fields. Pass all three together when the user
+		// picks a suggestion. Pass `null` for all three to clear (used when a
+		// previously-autocompleted row is edited back to free text and we
+		// want to drop the stale coordinates).
+		latitude: v.optional(v.union(v.number(), v.null())),
+		longitude: v.optional(v.union(v.number(), v.null())),
+		placeId: v.optional(v.union(v.string(), v.null())),
 	},
 	handler: async (
 		ctx,
-		{ pickupLocationId, label, address, mapsUrl, notes },
+		{ pickupLocationId, label, address, mapsUrl, notes, latitude, longitude, placeId },
 	): Promise<void> => {
 		await requireOwnedLocation(ctx, pickupLocationId);
 
@@ -245,6 +288,9 @@ export const update = mutation({
 			address: string;
 			mapsUrl: string | undefined;
 			notes: string | undefined;
+			latitude: number | undefined;
+			longitude: number | undefined;
+			placeId: string | undefined;
 			updatedAt: number;
 		}> = { updatedAt: Date.now() };
 
@@ -252,6 +298,26 @@ export const update = mutation({
 		if (address !== undefined) patch.address = sanitizeAddress(address);
 		if (mapsUrl !== undefined) patch.mapsUrl = sanitizeMapsUrl(mapsUrl);
 		if (notes !== undefined) patch.notes = sanitizeNotes(notes);
+
+		// Coordinates flow together. null = clear, number = set. Undefined =
+		// don't touch. Either both lat AND lng must be numbers, or both null.
+		if (latitude !== undefined || longitude !== undefined) {
+			if (latitude === null || longitude === null) {
+				patch.latitude = undefined;
+				patch.longitude = undefined;
+			} else if (typeof latitude === "number" && typeof longitude === "number") {
+				const clean = sanitizeCoords(latitude, longitude);
+				patch.latitude = clean?.latitude;
+				patch.longitude = clean?.longitude;
+			} else {
+				throw new ConvexError(
+					"latitude and longitude must be set together (both numbers or both null)",
+				);
+			}
+		}
+		if (placeId !== undefined) {
+			patch.placeId = placeId === null ? undefined : placeId.trim() || undefined;
+		}
 
 		await ctx.db.patch(pickupLocationId, patch);
 	},

@@ -21,6 +21,11 @@ const addressValidator = v.object({
 	postcode: v.string(),
 	notes: v.optional(v.string()),
 	mapsUrl: v.optional(v.string()),
+	// Coordinates captured from Google Places autocomplete on the buyer's
+	// checkout form. Optional — falls through cleanly when the buyer typed
+	// the address manually.
+	latitude: v.optional(v.number()),
+	longitude: v.optional(v.number()),
 });
 
 const MAX_ITEMS_PER_ORDER = 100;
@@ -160,6 +165,8 @@ export const create = mutation({
 					address: location.address,
 					mapsUrl: location.mapsUrl,
 					notes: location.notes,
+					latitude: location.latitude,
+					longitude: location.longitude,
 				};
 			}
 		}
@@ -584,6 +591,8 @@ export const updatePickupLocation = mutation({
 				address: location.address,
 				mapsUrl: location.mapsUrl,
 				notes: location.notes,
+				latitude: location.latitude,
+				longitude: location.longitude,
 			},
 			updatedAt: now,
 		});

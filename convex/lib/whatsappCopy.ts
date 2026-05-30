@@ -296,6 +296,8 @@ export type PickupSnapshot = {
 	address: string;
 	mapsUrl?: string;
 	notes?: string;
+	latitude?: number;
+	longitude?: number;
 };
 
 const pickupLabels: Record<Locale, { header: string }> = {
@@ -327,7 +329,14 @@ export function renderPickupBlock(
 	lines.push(labels.header);
 	lines.push(snapshot.label);
 	lines.push(snapshot.address);
-	if (snapshot.mapsUrl) lines.push(snapshot.mapsUrl);
+	// When we have coordinates, the WhatsApp location pin (sent as a follow-up
+	// message) replaces the inline mapsUrl — keeps the confirm text clean and
+	// avoids "ugly long URL" criticism. Legacy snapshots without lat/lng still
+	// get the URL inline so navigation isn't lost.
+	const hasCoords =
+		typeof snapshot.latitude === "number" &&
+		typeof snapshot.longitude === "number";
+	if (!hasCoords && snapshot.mapsUrl) lines.push(snapshot.mapsUrl);
 	if (snapshot.notes) {
 		lines.push("");
 		lines.push(snapshot.notes);

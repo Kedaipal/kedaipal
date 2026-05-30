@@ -21,6 +21,13 @@ import { components } from "../_generated/api";
  *   URL for a payment screenshot. Keyed by shortId so a single order can't
  *   exhaust the system. Slightly tighter than paymentClaim — one upload URL
  *   per claim attempt is the realistic ceiling.
+ * - `googleAutocomplete`: public (storefront) + authenticated (settings)
+ *   Convex action that proxies Google Places autocomplete. Keyed by retailerId
+ *   for storefront callers and Clerk subject for settings callers. Bucket sized
+ *   for typing bursts (debounced ~300ms client-side, so ~3 reqs/sec ceiling).
+ * - `googlePlaceDetails`: paired action that fetches structured place details
+ *   after the user picks an autocomplete suggestion. Tighter — one details
+ *   fetch per "session" is the realistic ceiling.
  */
 export const rateLimiter = new RateLimiter(components.rateLimiter, {
 	orderCreate: {
@@ -59,5 +66,17 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		rate: 3,
 		period: MINUTE,
 		capacity: 2,
+	},
+	googleAutocomplete: {
+		kind: "token bucket",
+		rate: 30,
+		period: MINUTE,
+		capacity: 10,
+	},
+	googlePlaceDetails: {
+		kind: "token bucket",
+		rate: 10,
+		period: MINUTE,
+		capacity: 3,
 	},
 });

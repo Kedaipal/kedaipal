@@ -384,17 +384,7 @@ function TrackingRoute() {
 							</p>
 						</div>
 					</div>
-					{order.pickupSnapshot.mapsUrl ? (
-						<a
-							href={order.pickupSnapshot.mapsUrl}
-							target="_blank"
-							rel="noreferrer"
-							className="flex items-center gap-1.5 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
-						>
-							<ExternalLink className="size-3.5" />
-							Open in maps
-						</a>
-					) : null}
+					<PickupNavButtons snapshot={order.pickupSnapshot} />
 					{order.pickupSnapshot.notes ? (
 						<p className="rounded-lg bg-muted/40 px-3 py-2 text-xs text-foreground whitespace-pre-line">
 							{order.pickupSnapshot.notes}
@@ -456,6 +446,7 @@ function TrackingRoute() {
 				onClose={() => setEditingAddress(false)}
 				shortId={order.shortId}
 				currentAddress={order.deliveryAddress}
+				retailerId={order.retailerId}
 			/>
 
 			<IvePaidDialog
@@ -497,4 +488,64 @@ function TrackingRoute() {
 			</section>
 		</main>
 	);
+}
+
+/**
+ * Navigation buttons for a self-collect pickup. When we have lat/lng (Google
+ * autocomplete-captured locations) we render TWO buttons — Waze and Google
+ * Maps — so the buyer can pick their preferred app. Legacy snapshots without
+ * coordinates fall back to the single "Open in maps" link the retailer
+ * pasted.
+ */
+function PickupNavButtons({
+	snapshot,
+}: {
+	snapshot: NonNullable<
+		ReturnType<typeof useQuery<typeof api.orders.get>>
+	>["pickupSnapshot"];
+}) {
+	if (!snapshot) return null;
+	const { latitude, longitude, mapsUrl } = snapshot;
+	const hasCoords = typeof latitude === "number" && typeof longitude === "number";
+
+	if (hasCoords) {
+		const wazeUrl = `https://waze.com/ul?ll=${latitude},${longitude}&navigate=yes`;
+		const googleUrl = `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
+		return (
+			<div className="grid grid-cols-2 gap-2">
+				<a
+					href={wazeUrl}
+					target="_blank"
+					rel="noreferrer"
+					className="flex items-center justify-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2.5 text-xs font-semibold text-foreground transition-colors hover:bg-accent/5"
+				>
+					<MapPin className="size-3.5 text-accent" aria-hidden="true" />
+					Open in Waze
+				</a>
+				<a
+					href={googleUrl}
+					target="_blank"
+					rel="noreferrer"
+					className="flex items-center justify-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2.5 text-xs font-semibold text-foreground transition-colors hover:bg-accent/5"
+				>
+					<MapPin className="size-3.5 text-accent" aria-hidden="true" />
+					Open in Google Maps
+				</a>
+			</div>
+		);
+	}
+	if (mapsUrl) {
+		return (
+			<a
+				href={mapsUrl}
+				target="_blank"
+				rel="noreferrer"
+				className="flex items-center gap-1.5 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
+			>
+				<ExternalLink className="size-3.5" />
+				Open in maps
+			</a>
+		);
+	}
+	return null;
 }

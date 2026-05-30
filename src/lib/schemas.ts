@@ -118,6 +118,11 @@ export const strictAddressSchema = z.object({
 // Loose form-state shape: every field is always present as a string so
 // TanStack Form can mount the inputs whether delivery or self_collect is
 // selected. Strict validation runs only when delivery is chosen.
+//
+// `latitude` and `longitude` are stringified numbers captured from Google
+// Places autocomplete — kept as strings here to match TanStack Form's
+// all-string form state. Empty when the buyer skipped autocomplete; the
+// submit handler in checkout-sheet parses them back to numbers.
 export const addressFormFieldsSchema = z.object({
 	line1: z.string(),
 	line2: z.string(),
@@ -126,6 +131,8 @@ export const addressFormFieldsSchema = z.object({
 	postcode: z.string(),
 	notes: z.string(),
 	mapsUrl: z.string(),
+	latitude: z.string(),
+	longitude: z.string(),
 });
 
 export const checkoutFormSchema = z
@@ -180,6 +187,8 @@ export const emptyAddress: CheckoutAddressValues = {
 	postcode: "",
 	notes: "",
 	mapsUrl: "",
+	latitude: "",
+	longitude: "",
 };
 
 // Product form. Price is entered as a major-unit decimal string (e.g. "120" or

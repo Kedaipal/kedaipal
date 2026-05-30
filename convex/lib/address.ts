@@ -48,6 +48,8 @@ export interface RawAddress {
 	postcode: string;
 	notes?: string;
 	mapsUrl?: string;
+	latitude?: number;
+	longitude?: number;
 }
 
 export interface SanitizedAddress {
@@ -58,6 +60,8 @@ export interface SanitizedAddress {
 	postcode: string;
 	notes?: string;
 	mapsUrl?: string;
+	latitude?: number;
+	longitude?: number;
 }
 
 function trimmedOrUndefined(raw: string | undefined): string | undefined {
@@ -121,6 +125,26 @@ export function assertValidAddress(addr: RawAddress): SanitizedAddress {
 	const mapsUrlRaw = trimmedOrUndefined(addr.mapsUrl);
 	const mapsUrl = mapsUrlRaw !== undefined ? assertValidUrl(mapsUrlRaw) : undefined;
 
+	// Coordinates flow through as an all-or-nothing pair. Bounded checks keep a
+	// malformed client from poisoning the order doc; we silently drop instead
+	// of throwing because the address is still valid without them — the only
+	// downstream consumer is the WhatsApp location pin (optional feature).
+	let latitude: number | undefined;
+	let longitude: number | undefined;
+	if (
+		typeof addr.latitude === "number" &&
+		typeof addr.longitude === "number" &&
+		Number.isFinite(addr.latitude) &&
+		Number.isFinite(addr.longitude) &&
+		addr.latitude >= -90 &&
+		addr.latitude <= 90 &&
+		addr.longitude >= -180 &&
+		addr.longitude <= 180
+	) {
+		latitude = addr.latitude;
+		longitude = addr.longitude;
+	}
+
 	return {
 		line1,
 		line2,
@@ -129,5 +153,7 @@ export function assertValidAddress(addr: RawAddress): SanitizedAddress {
 		postcode,
 		notes,
 		mapsUrl,
+		latitude,
+		longitude,
 	};
 }

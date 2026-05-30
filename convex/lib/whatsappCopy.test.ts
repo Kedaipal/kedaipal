@@ -183,4 +183,34 @@ describe("renderPickupBlock", () => {
 			"12 Jln Tun Razak, KL",
 		]);
 	});
+
+	test("suppresses mapsUrl when lat/lng are present (location pin replaces it)", () => {
+		const out = renderPickupBlock("en", {
+			label: "Main Store",
+			address: "12 Jln Tun Razak, KL",
+			mapsUrl: "https://maps.app.goo.gl/abc",
+			latitude: 3.158,
+			longitude: 101.712,
+		});
+		// mapsUrl line dropped — the WhatsApp location pin sent as a follow-up
+		// makes the inline URL redundant noise.
+		expect(out).not.toContain("https://maps.app.goo.gl/abc");
+		expect(out.split("\n")).toEqual([
+			"",
+			"📍 Pickup details",
+			"Main Store",
+			"12 Jln Tun Razak, KL",
+		]);
+	});
+
+	test("keeps mapsUrl when only one of lat/lng is set (legacy fallback)", () => {
+		const out = renderPickupBlock("en", {
+			label: "Main Store",
+			address: "12 Jln Tun Razak, KL",
+			mapsUrl: "https://maps.app.goo.gl/abc",
+			latitude: 3.158,
+			// longitude missing — not a usable pin, so keep the URL
+		});
+		expect(out).toContain("https://maps.app.goo.gl/abc");
+	});
 });

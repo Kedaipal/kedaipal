@@ -27,6 +27,20 @@ export type OutboundMessage =
 			url: string;
 			/** Optional image header shown above the CTA body. */
 			imageUrl?: string;
+	  }
+	| {
+			/**
+			 * A geographical pin. On WhatsApp this renders as a tappable map
+			 * preview that opens in the recipient's default maps app (Waze,
+			 * Google Maps, Apple Maps). Adapters whose channel doesn't support
+			 * native location messages should degrade to a text fallback with
+			 * lat/lng coordinates.
+			 */
+			kind: "location";
+			latitude: number;
+			longitude: number;
+			name: string;
+			address: string;
 	  };
 
 /**

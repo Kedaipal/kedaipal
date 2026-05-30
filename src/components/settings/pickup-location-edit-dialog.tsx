@@ -1,15 +1,14 @@
 import { useMutation } from "convex/react";
-import { X } from "lucide-react";
+import { MapPin, X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { type FormEvent, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import { convexErrorMessage } from "../../lib/format";
 import {
-	emptyPickupLocationForm,
-	type PickupLocationFormInput,
-	pickupLocationFormSchema,
-} from "../../lib/schemas";
+	GoogleAddressAutocomplete,
+	type GoogleSelectedAddress,
+} from "../forms/google-address-autocomplete";
 import { useAppForm } from "../forms/form";
 import { Button } from "../ui/button";
 
@@ -24,15 +23,23 @@ interface PickupLocationEditDialogProps {
 	retailerId: Id<"retailers">;
 }
 
-function toFormValues(
-	loc: Doc<"pickupLocations"> | undefined,
-): PickupLocationFormInput {
-	if (!loc) return emptyPickupLocationForm;
+/**
+ * Coordinate state held by the dialog while the user picks (or skips) Google
+ * autocomplete. The address text itself is the form's source of truth — these
+ * three travel together when the user picks a Google suggestion, and stay
+ * undefined if the user types freely.
+ */
+type GeoState = {
+	latitude: number | undefined;
+	longitude: number | undefined;
+	placeId: string | undefined;
+};
+
+function initialGeo(loc: Doc<"pickupLocations"> | undefined): GeoState {
 	return {
-		label: loc.label,
-		address: loc.address,
-		mapsUrl: loc.mapsUrl ?? "",
-		notes: loc.notes ?? "",
+		latitude: loc?.latitude,
+		longitude: loc?.longitude,
+		placeId: loc?.placeId,
 	};
 }
 
@@ -45,36 +52,54 @@ export function PickupLocationEditDialog({
 	const createLocation = useMutation(api.pickupLocations.create);
 	const updateLocation = useMutation(api.pickupLocations.update);
 	const [serverError, setServerError] = useState<string | null>(null);
+	const [geo, setGeo] = useState<GeoState>(() => initialGeo(location));
 
 	const isEditing = location !== undefined;
 	const title = isEditing ? "Edit pickup location" : "Add pickup location";
 	const submitLabel = isEditing ? "Save changes" : "Add location";
 
 	const form = useAppForm({
-		defaultValues: toFormValues(location),
-		validators: { onChange: pickupLocationFormSchema },
+		defaultValues: {
+			label: location?.label ?? "",
+			address: location?.address ?? "",
+			notes: location?.notes ?? "",
+		},
 		onSubmit: async ({ value }) => {
 			setServerError(null);
 			const label = value.label.trim();
 			const address = value.address.trim();
-			const mapsUrl = value.mapsUrl.trim();
 			const notes = value.notes.trim();
+			if (label.length === 0) {
+				setServerError("Label is required.");
+				return;
+			}
+			if (address.length < 3) {
+				setServerError("Address is required.");
+				return;
+			}
 			try {
 				if (isEditing && location) {
 					await updateLocation({
 						pickupLocationId: location._id,
 						label,
 						address,
-						mapsUrl,
 						notes,
+						// Pass coordinates through whether they changed or not.
+						// `undefined` means "no change" server-side — we never
+						// want to clear them implicitly on a label/notes edit.
+						latitude: geo.latitude,
+						longitude: geo.longitude,
+						placeId: geo.placeId,
 					});
 				} else {
 					await createLocation({
 						retailerId,
 						label,
 						address,
-						mapsUrl: mapsUrl.length > 0 ? mapsUrl : undefined,
 						notes: notes.length > 0 ? notes : undefined,
+						latitude: geo.latitude,
+						longitude: geo.longitude,
+						placeId: geo.placeId,
 					});
 				}
 				onClose();
@@ -84,11 +109,33 @@ export function PickupLocationEditDialog({
 		},
 	});
 
+	function handleAutocompleteSelect(payload: GoogleSelectedAddress) {
+		// Mirror Google's formatted address into the form's address field so the
+		// user sees the canonical version.
+		form.setFieldValue("address", payload.formattedAddress);
+		setGeo({
+			latitude: payload.latitude,
+			longitude: payload.longitude,
+			placeId: payload.placeId,
+		});
+	}
+
+	function handleManualAddressEdit(text: string) {
+		form.setFieldValue("address", text);
+		// If the user clears or edits away from the Google-picked address, drop
+		// the stale coordinates — they no longer correspond to what's on file.
+		if (geo.placeId !== undefined && text !== location?.address) {
+			setGeo({ latitude: undefined, longitude: undefined, placeId: undefined });
+		}
+	}
+
 	function handleSubmit(e: FormEvent) {
 		e.preventDefault();
 		e.stopPropagation();
 		form.handleSubmit();
 	}
+
+	const hasCoords = geo.latitude !== undefined && geo.longitude !== undefined;
 
 	return (
 		<Dialog.Root open={open} onOpenChange={(o) => !o && onClose()}>
@@ -128,27 +175,21 @@ export function PickupLocationEditDialog({
 									/>
 								)}
 							</form.AppField>
-							<form.AppField name="address">
-								{(field) => (
-									<field.TextareaField
-										label="Address"
-										required
-										placeholder="No 12, Jalan Tun Razak, 50400 Kuala Lumpur"
-										rows={3}
-									/>
-								)}
-							</form.AppField>
-							<form.AppField name="mapsUrl">
-								{(field) => (
-									<field.TextField
-										label="Waze or Google Maps link (optional)"
-										placeholder="https://maps.app.goo.gl/…"
-										type="url"
-										inputMode="url"
-										description="Paste a share link from Waze or Google Maps so buyers can navigate in one tap."
-									/>
-								)}
-							</form.AppField>
+
+							<GoogleAddressAutocomplete
+								initialValue={location?.address ?? ""}
+								label="Address"
+								required
+								placeholder="Start typing an address in Malaysia…"
+								description={
+									hasCoords
+										? "✓ Pinned via Google Maps — buyers will get a tappable location pin in WhatsApp."
+										: "Pick a Google suggestion to enable the WhatsApp location pin. You can also type freely if your spot isn't on Google yet."
+								}
+								onSelect={handleAutocompleteSelect}
+								onTextChange={handleManualAddressEdit}
+							/>
+
 							<form.AppField name="notes">
 								{(field) => (
 									<field.TextareaField
@@ -158,10 +199,25 @@ export function PickupLocationEditDialog({
 									/>
 								)}
 							</form.AppField>
+
 							{serverError ? (
 								<p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
 									{serverError}
 								</p>
+							) : null}
+
+							{/* Surface the pinned coords when present so the seller knows what
+							    they've committed to. Compact, debug-friendly. */}
+							{hasCoords ? (
+								<div className="flex items-center gap-2 rounded-lg bg-accent/5 px-3 py-2 text-xs text-muted-foreground">
+									<MapPin
+										className="size-3.5 shrink-0 text-accent"
+										aria-hidden="true"
+									/>
+									<span className="font-mono">
+										{geo.latitude?.toFixed(5)}, {geo.longitude?.toFixed(5)}
+									</span>
+								</div>
 							) : null}
 						</div>
 
