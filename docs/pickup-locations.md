@@ -225,6 +225,10 @@ Inactive rows' `sortOrder` values are intentionally untouched — preserving the
 
 Setup checklist on `/app` gains a 4th step `"pickup"` when `retailer.offerSelfCollect === true` (default for new retailers). Marked "Optional" via a small pill in both the expanded and collapsed row variants. Done logic: `pickupSetupSeen || hasAnyActive`. Deep-links to `/app/settings?tab=pickup`. Pre-existing retailers with `offerSelfCollect` unset keep the original 3-step checklist unchanged.
 
+### Orders list (seller view)
+
+`/app/orders` shows a small `DeliveryMethodBadge` next to the status badge on every order card — `📦 Pickup` or `🚚 Delivery` (icon-matched to the storefront checkout toggle for visual continuity). Muted styling so it doesn't compete with the status badge; the goal is at-a-glance triage info. Pickup orders typically need a different ops flow (notify store manager, prepare for collection), so spotting them in the list without opening the detail page matters.
+
 ### Order detail (seller view)
 
 `/app/orders/$shortId` for self-collect orders renders two extra blocks. The "Pick up at" card reads from the **frozen** `pickupSnapshot`; the "Notify store manager" panel pulls the **live** pickup location row via `pickupLocations.getOwnedById` so it routes to the *current* manager (not whoever was on the snapshot at order create).
