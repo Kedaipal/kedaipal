@@ -27,9 +27,11 @@ import {
 } from "../components/storefront/delivery-address-display";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
+import type { Id } from "../../convex/_generated/dataModel";
 import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
 import { formatPhone } from "../lib/customer";
 import { convexErrorMessage, formatPrice } from "../lib/format";
+import { deriveMapsUrl } from "../lib/google-address";
 import { StatusBadge } from "./app.orders.index";
 
 export const Route = createFileRoute("/app/orders/$shortId")({
@@ -555,18 +557,21 @@ function OrderDetailRoute() {
 								<Copy className="size-3.5" />
 								Copy
 							</button>
-							{order.pickupSnapshot.mapsUrl ? (
-								<a
-									href={order.pickupSnapshot.mapsUrl}
-									target="_blank"
-									rel="noreferrer"
-									className="flex h-9 items-center gap-1 rounded-full px-3 text-xs font-medium text-accent hover:bg-accent/10"
-									aria-label="Open in Maps"
-								>
-									<MapPin className="size-3.5" />
-									Maps
-								</a>
-							) : null}
+							{(() => {
+								const mapsUrl = deriveMapsUrl(order.pickupSnapshot);
+								return mapsUrl ? (
+									<a
+										href={mapsUrl}
+										target="_blank"
+										rel="noreferrer"
+										className="flex h-9 items-center gap-1 rounded-full px-3 text-xs font-medium text-accent hover:bg-accent/10"
+										aria-label="Open in Maps"
+									>
+										<MapPin className="size-3.5" />
+										Maps
+									</a>
+								) : null;
+							})()}
 						</div>
 					</div>
 					<div className="flex flex-col gap-1">
@@ -592,6 +597,7 @@ function OrderDetailRoute() {
 				<NotifyManagerCard
 					shortId={order.shortId}
 					location={order.pickupSnapshot}
+					pickupLocationId={order.pickupLocationId}
 					customerName={order.customer.name}
 					customerWaPhone={order.customer.waPhone}
 					items={order.items}
@@ -628,7 +634,7 @@ function OrderDetailRoute() {
 							</button>
 							<a
 								href={
-									order.deliveryAddress.mapsUrl ??
+									deriveMapsUrl(order.deliveryAddress) ??
 									`https://maps.google.com/?q=${encodeURIComponent(
 										formatAddressInline(order.deliveryAddress),
 									)}`
@@ -744,7 +750,8 @@ function OrderDetailRoute() {
 
 function formatPickupInline(snapshot: PickupSnapshot): string {
 	const lines = [snapshot.label, snapshot.address];
-	if (snapshot.mapsUrl) lines.push(snapshot.mapsUrl);
+	const mapsUrl = deriveMapsUrl(snapshot);
+	if (mapsUrl) lines.push(mapsUrl);
 	if (snapshot.notes) lines.push(snapshot.notes);
 	return lines.join("\n");
 }
@@ -793,6 +800,7 @@ function buildNotifyManagerMessage({
 function NotifyManagerCard({
 	shortId,
 	location,
+	pickupLocationId,
 	customerName,
 	customerWaPhone,
 	items,
@@ -801,6 +809,13 @@ function NotifyManagerCard({
 }: {
 	shortId: string;
 	location: PickupSnapshot;
+	/**
+	 * Used to fetch the LIVE pickup location row so the seller's "Notify"
+	 * button always routes to the current manager — not whoever happened to
+	 * be on the snapshot at order creation. Undefined for legacy orders
+	 * placed before the multi-location feature shipped.
+	 */
+	pickupLocationId: Id<"pickupLocations"> | undefined;
 	customerName: string | undefined;
 	customerWaPhone: string | undefined;
 	items: ReadonlyArray<{ name: string; quantity: number; price: number }>;
@@ -808,6 +823,20 @@ function NotifyManagerCard({
 	currency: string;
 }) {
 	const [copied, setCopied] = useState(false);
+	// Fetch live manager contact. Skipped when there's no pickupLocationId on
+	// the order (legacy orders), in which case we fall back to the snapshot-
+	// only Copy flow.
+	const liveLocation = useQuery(
+		api.pickupLocations.getOwnedById,
+		pickupLocationId ? { pickupLocationId } : "skip",
+	);
+	const managerName = liveLocation?.managerName?.trim();
+	const managerWaPhone = liveLocation?.managerWaPhone?.trim();
+	// Phone is the gate — without it there's no wa.me link to open. Name is
+	// purely cosmetic (button label); when absent the button renders with a
+	// generic label so the seller still gets the one-tap benefit.
+	const hasManagerPhone = Boolean(managerWaPhone && managerWaPhone.length > 0);
+
 	const message = buildNotifyManagerMessage({
 		shortId,
 		location,
@@ -817,6 +846,13 @@ function NotifyManagerCard({
 		total,
 		currency,
 	});
+
+	const notifyHref = hasManagerPhone
+		? `https://wa.me/${managerWaPhone}?text=${encodeURIComponent(message)}`
+		: undefined;
+	const notifyLabel = managerName
+		? `Notify ${managerName} on WhatsApp`
+		: "Notify on WhatsApp";
 
 	function handleCopy() {
 		navigator.clipboard
@@ -838,20 +874,40 @@ function NotifyManagerCard({
 				<button
 					type="button"
 					onClick={handleCopy}
-					className="flex h-9 items-center gap-1 rounded-full px-3 text-xs font-medium text-accent hover:bg-accent/10"
+					className="flex h-9 items-center gap-1 rounded-full px-3 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
 					aria-label="Copy notify-manager message"
 				>
 					<Copy className="size-3.5" />
-					{copied ? "Copied!" : "Copy message"}
+					{copied ? "Copied!" : "Copy"}
 				</button>
 			</div>
 			<pre className="whitespace-pre-wrap break-words rounded-lg bg-muted/40 px-3 py-2.5 font-sans text-xs leading-relaxed text-foreground">
 				{message}
 			</pre>
-			<p className="text-xs text-muted-foreground">
-				Tap copy and forward to whoever runs this pickup spot. You can edit it
-				before sending.
-			</p>
+			{notifyHref ? (
+				<a
+					href={notifyHref}
+					target="_blank"
+					rel="noreferrer"
+					className="flex h-11 items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+				>
+					<MessageCircle className="size-4" />
+					{notifyLabel}
+				</a>
+			) : (
+				<p className="text-xs text-muted-foreground">
+					Tap copy and forward to whoever runs this pickup spot. You can edit it
+					before sending. Add a manager number in{" "}
+					<Link
+						to="/app/settings"
+						search={{ tab: "pickup" }}
+						className="font-medium text-accent underline-offset-2 hover:underline"
+					>
+						Settings → Pickup
+					</Link>{" "}
+					for a one-tap button here.
+				</p>
+			)}
 		</section>
 	);
 }

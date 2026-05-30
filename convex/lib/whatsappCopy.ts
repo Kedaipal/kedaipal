@@ -298,6 +298,7 @@ export type PickupSnapshot = {
 	notes?: string;
 	latitude?: number;
 	longitude?: number;
+	placeId?: string;
 };
 
 const pickupLabels: Record<Locale, { header: string }> = {

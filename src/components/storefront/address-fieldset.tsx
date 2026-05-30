@@ -34,6 +34,7 @@ export const AddressFieldset = withFieldGroup({
 		mapsUrl: "",
 		latitude: "",
 		longitude: "",
+		placeId: "",
 	} satisfies CheckoutAddressValues,
 	props: {
 		retailerId: undefined as Id<"retailers"> | undefined,
@@ -53,6 +54,9 @@ export const AddressFieldset = withFieldGroup({
 			// parse back to numbers at submit time in checkout-sheet).
 			group.setFieldValue("latitude", String(payload.latitude));
 			group.setFieldValue("longitude", String(payload.longitude));
+			// Place ID travels alongside lat/lng so derived maps URLs deep-link
+			// to the named place page (not just raw coords).
+			group.setFieldValue("placeId", payload.placeId);
 		}
 
 		return (

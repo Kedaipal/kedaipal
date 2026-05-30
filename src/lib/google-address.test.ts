@@ -1,6 +1,10 @@
 /// <reference types="vite/client" />
 import { describe, expect, test } from "vitest";
-import { normalizeMyState, parseGoogleAddress } from "./google-address";
+import {
+	deriveMapsUrl,
+	normalizeMyState,
+	parseGoogleAddress,
+} from "./google-address";
 
 describe("normalizeMyState", () => {
 	test("maps Federal Territory variants for Kuala Lumpur", () => {
@@ -137,5 +141,65 @@ describe("parseGoogleAddress", () => {
 			"Atlantis Province",
 		);
 		expect(result.state).toBe("");
+	});
+});
+
+describe("deriveMapsUrl", () => {
+	test("prefers the seller-pasted mapsUrl when set", () => {
+		expect(
+			deriveMapsUrl({
+				mapsUrl: "https://maps.app.goo.gl/abc",
+				placeId: "ChIJ_abc",
+				latitude: 3.158,
+				longitude: 101.712,
+			}),
+		).toBe("https://maps.app.goo.gl/abc");
+	});
+
+	test("uses placeId form when no mapsUrl — opens place by name in Google Maps", () => {
+		expect(
+			deriveMapsUrl({
+				placeId: "ChIJ_abc",
+				latitude: 3.158,
+				longitude: 101.712,
+			}),
+		).toBe("https://www.google.com/maps/place/?q=place_id:ChIJ_abc");
+	});
+
+	test("falls back to a lat/lng search URL when no mapsUrl and no placeId", () => {
+		expect(
+			deriveMapsUrl({
+				latitude: 3.158,
+				longitude: 101.712,
+			}),
+		).toBe("https://www.google.com/maps/search/?api=1&query=3.158,101.712");
+	});
+
+	test("treats an empty mapsUrl/placeId as absent and falls through", () => {
+		expect(
+			deriveMapsUrl({
+				mapsUrl: "   ",
+				placeId: "  ",
+				latitude: 3.158,
+				longitude: 101.712,
+			}),
+		).toBe("https://www.google.com/maps/search/?api=1&query=3.158,101.712");
+	});
+
+	test("returns undefined when nothing usable is present", () => {
+		expect(deriveMapsUrl({})).toBeUndefined();
+	});
+
+	test("returns undefined when only one of lat/lng is set and no placeId", () => {
+		expect(deriveMapsUrl({ latitude: 3.158 })).toBeUndefined();
+		expect(deriveMapsUrl({ longitude: 101.712 })).toBeUndefined();
+	});
+
+	test("placeId alone is enough even without coordinates", () => {
+		expect(
+			deriveMapsUrl({
+				placeId: "ChIJ_abc",
+			}),
+		).toBe("https://www.google.com/maps/place/?q=place_id:ChIJ_abc");
 	});
 });

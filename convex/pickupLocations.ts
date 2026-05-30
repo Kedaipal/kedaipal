@@ -3,11 +3,13 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
 import { mutation, query } from "./_generated/server";
 import { assertValidMapsUrl } from "./lib/mapsUrl";
+import { assertValidWaPhone } from "./lib/slug";
 
 const LABEL_MAX = 60;
 const ADDRESS_MIN = 3;
 const ADDRESS_MAX = 500;
 const NOTES_MAX = 200;
+const MANAGER_NAME_MAX = 60;
 
 // ---------------------------------------------------------------------------
 // Auth helpers — mirror the pattern in convex/customers.ts so each module is
@@ -88,6 +90,29 @@ function sanitizeNotes(raw: string | undefined): string | undefined {
 	return trimmed;
 }
 
+function sanitizeManagerName(raw: string | undefined): string | undefined {
+	if (raw === undefined) return undefined;
+	const trimmed = raw.trim();
+	if (trimmed.length === 0) return undefined;
+	if (trimmed.length > MANAGER_NAME_MAX) {
+		throw new ConvexError(
+			`Manager name must be at most ${MANAGER_NAME_MAX} characters`,
+		);
+	}
+	return trimmed;
+}
+
+function sanitizeManagerWaPhone(raw: string | undefined): string | undefined {
+	if (raw === undefined) return undefined;
+	const trimmed = raw.trim();
+	if (trimmed.length === 0) return undefined;
+	try {
+		return assertValidWaPhone(trimmed);
+	} catch (err) {
+		throw new ConvexError((err as Error).message);
+	}
+}
+
 /**
  * Validate a lat/lng pair from the Google action proxy. Both must be present
  * and inside the standard WGS84 ranges; otherwise we drop them (don't half-
@@ -149,6 +174,7 @@ export const listActivePublicBySlug = query({
 			notes?: string;
 			latitude?: number;
 			longitude?: number;
+			placeId?: string;
 			sortOrder: number;
 		}>
 	> => {
@@ -176,8 +202,35 @@ export const listActivePublicBySlug = query({
 				notes: r.notes,
 				latitude: r.latitude,
 				longitude: r.longitude,
+				placeId: r.placeId,
 				sortOrder: r.sortOrder,
 			}));
+	},
+});
+
+/**
+ * Fetch a single pickup location by id, scoped to the calling retailer. Used
+ * by the seller order detail page to read the LIVE manager contact (not the
+ * frozen snapshot) — manager info should always reflect the current setting
+ * so swapping a manager next week reroutes today's pending orders too.
+ *
+ * Returns null when the id doesn't exist or doesn't belong to the caller, so
+ * callers don't have to distinguish "404" from "forbidden" — both are "we
+ * can't show you this row, fall back to the snapshot-only path."
+ */
+export const getOwnedById = query({
+	args: { pickupLocationId: v.id("pickupLocations") },
+	handler: async (
+		ctx,
+		{ pickupLocationId },
+	): Promise<Doc<"pickupLocations"> | null> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) return null;
+		const location = await ctx.db.get(pickupLocationId);
+		if (!location) return null;
+		const retailer = await ctx.db.get(location.retailerId);
+		if (!retailer || retailer.userId !== identity.subject) return null;
+		return location;
 	},
 });
 
@@ -216,10 +269,25 @@ export const create = mutation({
 		latitude: v.optional(v.number()),
 		longitude: v.optional(v.number()),
 		placeId: v.optional(v.string()),
+		// Optional store-manager contact. When set, the seller order detail
+		// page surfaces a one-tap "Notify <name>" wa.me button.
+		managerName: v.optional(v.string()),
+		managerWaPhone: v.optional(v.string()),
 	},
 	handler: async (
 		ctx,
-		{ retailerId, label, address, mapsUrl, notes, latitude, longitude, placeId },
+		{
+			retailerId,
+			label,
+			address,
+			mapsUrl,
+			notes,
+			latitude,
+			longitude,
+			placeId,
+			managerName,
+			managerWaPhone,
+		},
 	): Promise<{ pickupLocationId: Id<"pickupLocations"> }> => {
 		await requireRetailerOwner(ctx, retailerId);
 
@@ -229,6 +297,8 @@ export const create = mutation({
 		const cleanNotes = sanitizeNotes(notes);
 		const cleanCoords = sanitizeCoords(latitude, longitude);
 		const cleanPlaceId = placeId?.trim() || undefined;
+		const cleanManagerName = sanitizeManagerName(managerName);
+		const cleanManagerWaPhone = sanitizeManagerWaPhone(managerWaPhone);
 
 		// New rows go to the end of the list. Reading the current max sortOrder
 		// keeps numbers stable when the user reorders later — no need to renumber
@@ -252,6 +322,8 @@ export const create = mutation({
 			latitude: cleanCoords?.latitude,
 			longitude: cleanCoords?.longitude,
 			placeId: cleanPlaceId,
+			managerName: cleanManagerName,
+			managerWaPhone: cleanManagerWaPhone,
 			isActive: true,
 			sortOrder: nextSortOrder,
 			createdAt: now,
@@ -276,10 +348,24 @@ export const update = mutation({
 		latitude: v.optional(v.union(v.number(), v.null())),
 		longitude: v.optional(v.union(v.number(), v.null())),
 		placeId: v.optional(v.union(v.string(), v.null())),
+		// Store manager contact. Empty string clears.
+		managerName: v.optional(v.string()),
+		managerWaPhone: v.optional(v.string()),
 	},
 	handler: async (
 		ctx,
-		{ pickupLocationId, label, address, mapsUrl, notes, latitude, longitude, placeId },
+		{
+			pickupLocationId,
+			label,
+			address,
+			mapsUrl,
+			notes,
+			latitude,
+			longitude,
+			placeId,
+			managerName,
+			managerWaPhone,
+		},
 	): Promise<void> => {
 		await requireOwnedLocation(ctx, pickupLocationId);
 
@@ -291,6 +377,8 @@ export const update = mutation({
 			latitude: number | undefined;
 			longitude: number | undefined;
 			placeId: string | undefined;
+			managerName: string | undefined;
+			managerWaPhone: string | undefined;
 			updatedAt: number;
 		}> = { updatedAt: Date.now() };
 
@@ -298,6 +386,10 @@ export const update = mutation({
 		if (address !== undefined) patch.address = sanitizeAddress(address);
 		if (mapsUrl !== undefined) patch.mapsUrl = sanitizeMapsUrl(mapsUrl);
 		if (notes !== undefined) patch.notes = sanitizeNotes(notes);
+		if (managerName !== undefined)
+			patch.managerName = sanitizeManagerName(managerName);
+		if (managerWaPhone !== undefined)
+			patch.managerWaPhone = sanitizeManagerWaPhone(managerWaPhone);
 
 		// Coordinates flow together. null = clear, number = set. Undefined =
 		// don't touch. Either both lat AND lng must be numbers, or both null.

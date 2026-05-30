@@ -41,6 +41,7 @@ function toFormValues(
 		mapsUrl: addr.mapsUrl ?? "",
 		latitude: addr.latitude !== undefined ? String(addr.latitude) : "",
 		longitude: addr.longitude !== undefined ? String(addr.longitude) : "",
+		placeId: addr.placeId ?? "",
 	};
 }
 
@@ -72,6 +73,7 @@ export function AddressEditDialog({
 				latNum <= 90 &&
 				lngNum >= -180 &&
 				lngNum <= 180;
+			const placeId = value.placeId.trim();
 			try {
 				await updateAddress({
 					shortId,
@@ -85,6 +87,7 @@ export function AddressEditDialog({
 						mapsUrl: mapsUrl.length > 0 ? mapsUrl : undefined,
 						latitude: validCoords ? latNum : undefined,
 						longitude: validCoords ? lngNum : undefined,
+						placeId: placeId.length > 0 ? placeId : undefined,
 					},
 				});
 				onClose();
@@ -140,6 +143,7 @@ export function AddressEditDialog({
 									mapsUrl: "mapsUrl",
 									latitude: "latitude",
 									longitude: "longitude",
+									placeId: "placeId",
 								}}
 								retailerId={retailerId}
 							/>

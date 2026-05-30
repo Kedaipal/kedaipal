@@ -50,6 +50,7 @@ export interface RawAddress {
 	mapsUrl?: string;
 	latitude?: number;
 	longitude?: number;
+	placeId?: string;
 }
 
 export interface SanitizedAddress {
@@ -62,6 +63,7 @@ export interface SanitizedAddress {
 	mapsUrl?: string;
 	latitude?: number;
 	longitude?: number;
+	placeId?: string;
 }
 
 function trimmedOrUndefined(raw: string | undefined): string | undefined {
@@ -145,6 +147,8 @@ export function assertValidAddress(addr: RawAddress): SanitizedAddress {
 		longitude = addr.longitude;
 	}
 
+	const placeId = trimmedOrUndefined(addr.placeId);
+
 	return {
 		line1,
 		line2,
@@ -155,5 +159,6 @@ export function assertValidAddress(addr: RawAddress): SanitizedAddress {
 		mapsUrl,
 		latitude,
 		longitude,
+		placeId,
 	};
 }

@@ -610,3 +610,247 @@ describe("pickupLocations — Google autocomplete fields", () => {
 		expect(reread?.pickupSnapshot?.latitude).toBeCloseTo(3.158);
 	});
 });
+
+describe("pickupLocations — store manager contact", () => {
+	test("create stores managerName and managerWaPhone", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+
+		const { pickupLocationId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Main",
+				address: "12 Jln Tun Razak, KL",
+				managerName: "  Aishah  ",
+				managerWaPhone: "60123456789",
+			},
+		);
+		const rows = await asUser.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		const row = rows.find((r) => r._id === pickupLocationId);
+		expect(row?.managerName).toBe("Aishah");
+		expect(row?.managerWaPhone).toBe("60123456789");
+	});
+
+	test("create rejects an invalid manager phone", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+
+		await expect(
+			asUser.mutation(api.pickupLocations.create, {
+				retailerId: retailer._id,
+				label: "Main",
+				address: "12 Jln Tun Razak, KL",
+				managerWaPhone: "not-a-phone",
+			}),
+		).rejects.toThrow(/8.{1,3}15/);
+	});
+
+	test("update with empty string clears manager fields", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const { pickupLocationId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Main",
+				address: "12 Jln Tun Razak, KL",
+				managerName: "Aishah",
+				managerWaPhone: "60123456789",
+			},
+		);
+		await asUser.mutation(api.pickupLocations.update, {
+			pickupLocationId,
+			managerName: "",
+			managerWaPhone: "",
+		});
+		const rows = await asUser.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		const row = rows.find((r) => r._id === pickupLocationId);
+		expect(row?.managerName).toBeUndefined();
+		expect(row?.managerWaPhone).toBeUndefined();
+	});
+
+	test("listActivePublicBySlug does NOT expose manager fields to buyers", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.pickupLocations.create, {
+			retailerId: retailer._id,
+			label: "Main",
+			address: "12 Jln Tun Razak, KL",
+			managerName: "Aishah",
+			managerWaPhone: "60123456789",
+		});
+
+		const publicRows = await t.query(
+			api.pickupLocations.listActivePublicBySlug,
+			{ slug: retailer.slug },
+		);
+		// Even on a JSON re-parse the manager fields must not exist.
+		const row = publicRows[0] as Record<string, unknown>;
+		expect(row.managerName).toBeUndefined();
+		expect(row.managerWaPhone).toBeUndefined();
+	});
+});
+
+describe("pickupLocations.getOwnedById", () => {
+	test("returns the row when called by the owning retailer", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const { pickupLocationId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Main",
+				address: "12 Jln Tun Razak, KL",
+				managerName: "Aishah",
+				managerWaPhone: "60123456789",
+			},
+		);
+		const row = await asUser.query(api.pickupLocations.getOwnedById, {
+			pickupLocationId,
+		});
+		expect(row?._id).toBe(pickupLocationId);
+		expect(row?.managerWaPhone).toBe("60123456789");
+	});
+
+	test("returns null for a foreign retailer's row", async () => {
+		const t = setup();
+		const retailerA = await seedRetailer(t, USER_A, "_a");
+		await seedRetailer(t, USER_B, "_b");
+		const id = await seedLocation(t, USER_A, retailerA._id, "Main");
+		const asB = t.withIdentity({ subject: USER_B });
+
+		const row = await asB.query(api.pickupLocations.getOwnedById, {
+			pickupLocationId: id,
+		});
+		expect(row).toBeNull();
+	});
+
+	test("returns null when unauthenticated", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const id = await seedLocation(t, USER_A, retailer._id, "Main");
+
+		const row = await t.query(api.pickupLocations.getOwnedById, {
+			pickupLocationId: id,
+		});
+		expect(row).toBeNull();
+	});
+});
+
+describe("pickupLocations — manager fields are independently optional", () => {
+	test("create accepts phone alone (no name) — Notify button gets generic label", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+
+		const { pickupLocationId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Main",
+				address: "12 Jln Tun Razak, KL",
+				managerWaPhone: "60123456789",
+			},
+		);
+		const rows = await asUser.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		const row = rows.find((r) => r._id === pickupLocationId);
+		expect(row?.managerName).toBeUndefined();
+		expect(row?.managerWaPhone).toBe("60123456789");
+	});
+
+	test("create accepts name alone (no phone) — no Notify button rendered but the name is stored", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+
+		const { pickupLocationId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Main",
+				address: "12 Jln Tun Razak, KL",
+				managerName: "Aishah",
+			},
+		);
+		const rows = await asUser.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		const row = rows.find((r) => r._id === pickupLocationId);
+		expect(row?.managerName).toBe("Aishah");
+		expect(row?.managerWaPhone).toBeUndefined();
+	});
+
+	test("update can clear just one field without touching the other", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const { pickupLocationId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Main",
+				address: "12 Jln Tun Razak, KL",
+				managerName: "Aishah",
+				managerWaPhone: "60123456789",
+			},
+		);
+
+		await asUser.mutation(api.pickupLocations.update, {
+			pickupLocationId,
+			managerName: "",
+		});
+		const rows = await asUser.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		const row = rows.find((r) => r._id === pickupLocationId);
+		expect(row?.managerName).toBeUndefined();
+		expect(row?.managerWaPhone).toBe("60123456789");
+	});
+});
+
+describe("orders — delivery placeId", () => {
+	test("orders.create stores placeId on the delivery address when supplied", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const productId = await asUser.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Rendang 1kg",
+			price: 10000,
+			currency: "MYR",
+			stock: 50,
+			imageStorageIds: [],
+			sortOrder: 0,
+		});
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryAddress: {
+				line1: "12 Jln Mawar 3",
+				city: "Petaling Jaya",
+				state: "Selangor",
+				postcode: "47301",
+				latitude: 3.1,
+				longitude: 101.6,
+				placeId: "ChIJ_delivery",
+			},
+		});
+		const order = await t.query(api.orders.get, { shortId });
+		expect(order?.deliveryAddress?.placeId).toBe("ChIJ_delivery");
+	});
+});

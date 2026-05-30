@@ -63,12 +63,16 @@ export function PickupLocationEditDialog({
 			label: location?.label ?? "",
 			address: location?.address ?? "",
 			notes: location?.notes ?? "",
+			managerName: location?.managerName ?? "",
+			managerWaPhone: location?.managerWaPhone ?? "",
 		},
 		onSubmit: async ({ value }) => {
 			setServerError(null);
 			const label = value.label.trim();
 			const address = value.address.trim();
 			const notes = value.notes.trim();
+			const managerName = value.managerName.trim();
+			const managerWaPhone = value.managerWaPhone.trim();
 			if (label.length === 0) {
 				setServerError("Label is required.");
 				return;
@@ -90,6 +94,10 @@ export function PickupLocationEditDialog({
 						latitude: geo.latitude,
 						longitude: geo.longitude,
 						placeId: geo.placeId,
+						// Send manager fields unconditionally so empty input
+						// becomes "clear". Server treats empty string as undefined.
+						managerName,
+						managerWaPhone,
 					});
 				} else {
 					await createLocation({
@@ -100,6 +108,9 @@ export function PickupLocationEditDialog({
 						latitude: geo.latitude,
 						longitude: geo.longitude,
 						placeId: geo.placeId,
+						managerName: managerName.length > 0 ? managerName : undefined,
+						managerWaPhone:
+							managerWaPhone.length > 0 ? managerWaPhone : undefined,
 					});
 				}
 				onClose();
@@ -199,6 +210,42 @@ export function PickupLocationEditDialog({
 									/>
 								)}
 							</form.AppField>
+
+							<div className="flex flex-col gap-3 rounded-xl border border-input bg-muted/30 p-4">
+								<div className="flex flex-col gap-1">
+									<h4 className="text-sm font-semibold text-foreground">
+										Store manager
+									</h4>
+									<p className="text-xs text-muted-foreground leading-relaxed">
+										Optional. When you set a WhatsApp number, every pickup
+										order at this location gets a one-tap{" "}
+										<span className="font-medium text-foreground">
+											Notify {"<name>"}
+										</span>{" "}
+										button on the order page so you can forward order details
+										on WhatsApp without copy-pasting. The name field is just
+										used to label the button — leave it blank for a generic
+										"Notify on WhatsApp" button.
+									</p>
+								</div>
+								<form.AppField name="managerName">
+									{(field) => (
+										<field.TextField
+											label="Manager name"
+											placeholder="Aishah"
+											autoComplete="off"
+										/>
+									)}
+								</form.AppField>
+								<form.AppField name="managerWaPhone">
+									{(field) => (
+										<field.PhoneField
+											label="Manager WhatsApp number"
+											description="Include country code, e.g. 60123456789."
+										/>
+									)}
+								</form.AppField>
+							</div>
 
 							{serverError ? (
 								<p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">

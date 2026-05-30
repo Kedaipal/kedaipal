@@ -26,6 +26,7 @@ const addressValidator = v.object({
 	// the address manually.
 	latitude: v.optional(v.number()),
 	longitude: v.optional(v.number()),
+	placeId: v.optional(v.string()),
 });
 
 const MAX_ITEMS_PER_ORDER = 100;
@@ -167,6 +168,7 @@ export const create = mutation({
 					notes: location.notes,
 					latitude: location.latitude,
 					longitude: location.longitude,
+					placeId: location.placeId,
 				};
 			}
 		}
@@ -593,6 +595,7 @@ export const updatePickupLocation = mutation({
 				notes: location.notes,
 				latitude: location.latitude,
 				longitude: location.longitude,
+				placeId: location.placeId,
 			},
 			updatedAt: now,
 		});

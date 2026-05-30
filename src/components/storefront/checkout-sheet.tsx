@@ -6,6 +6,7 @@ import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
+import { deriveMapsUrl } from "../../lib/google-address";
 import {
 	type CheckoutAddressValues,
 	checkoutFormSchema,
@@ -24,6 +25,9 @@ export interface PublicPickupLocation {
 	address: string;
 	mapsUrl?: string;
 	notes?: string;
+	latitude?: number;
+	longitude?: number;
+	placeId?: string;
 	sortOrder: number;
 }
 
@@ -48,6 +52,7 @@ interface SanitizedDeliveryAddress {
 	mapsUrl?: string;
 	latitude?: number;
 	longitude?: number;
+	placeId?: string;
 }
 
 function loadSavedAddress(): CheckoutAddressValues {
@@ -66,6 +71,7 @@ function loadSavedAddress(): CheckoutAddressValues {
 			mapsUrl: typeof parsed.mapsUrl === "string" ? parsed.mapsUrl : "",
 			latitude: typeof parsed.latitude === "string" ? parsed.latitude : "",
 			longitude: typeof parsed.longitude === "string" ? parsed.longitude : "",
+			placeId: typeof parsed.placeId === "string" ? parsed.placeId : "",
 		};
 	} catch {
 		return emptyAddress;
@@ -96,6 +102,7 @@ function sanitizeAddress(raw: CheckoutAddressValues): SanitizedDeliveryAddress {
 		latNum <= 90 &&
 		lngNum >= -180 &&
 		lngNum <= 180;
+	const placeId = raw.placeId.trim();
 	return {
 		line1: raw.line1.trim(),
 		line2: line2.length > 0 ? line2 : undefined,
@@ -106,6 +113,7 @@ function sanitizeAddress(raw: CheckoutAddressValues): SanitizedDeliveryAddress {
 		mapsUrl: mapsUrl.length > 0 ? mapsUrl : undefined,
 		latitude: validCoords ? latNum : undefined,
 		longitude: validCoords ? lngNum : undefined,
+		placeId: placeId.length > 0 ? placeId : undefined,
 	};
 }
 
@@ -138,14 +146,16 @@ function buildWaMessage(
 		if (pickupLocation) {
 			lines.push(`📍 Self Collect at: ${pickupLocation.label}`);
 			lines.push(pickupLocation.address);
-			if (pickupLocation.mapsUrl) lines.push(pickupLocation.mapsUrl);
+			const mapsUrl = deriveMapsUrl(pickupLocation);
+			if (mapsUrl) lines.push(mapsUrl);
 			if (pickupLocation.notes) lines.push(pickupLocation.notes);
 		} else {
 			lines.push("📍 Self Collect");
 		}
 	} else if (deliveryAddress) {
 		lines.push(`🚚 Deliver to: ${formatAddressOneLine(deliveryAddress)}`);
-		if (deliveryAddress.mapsUrl) lines.push(`📍 ${deliveryAddress.mapsUrl}`);
+		const mapsUrl = deriveMapsUrl(deliveryAddress);
+		if (mapsUrl) lines.push(`📍 ${mapsUrl}`);
 		if (deliveryAddress.notes) lines.push(`📝 ${deliveryAddress.notes}`);
 	} else {
 		lines.push("🚚 Delivery");
@@ -508,17 +518,20 @@ function PickupSummaryCard({ location }: { location: PublicPickupLocation }) {
 					<p className="text-xs text-muted-foreground whitespace-pre-line">
 						{location.address}
 					</p>
-					{location.mapsUrl ? (
-						<a
-							href={location.mapsUrl}
-							target="_blank"
-							rel="noreferrer"
-							className="flex items-center gap-1 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
-						>
-							<ExternalLink className="size-3" />
-							Open in maps
-						</a>
-					) : null}
+					{(() => {
+						const mapsUrl = deriveMapsUrl(location);
+						return mapsUrl ? (
+							<a
+								href={mapsUrl}
+								target="_blank"
+								rel="noreferrer"
+								className="flex items-center gap-1 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
+							>
+								<ExternalLink className="size-3" />
+								Open in maps
+							</a>
+						) : null;
+					})()}
 					{location.notes ? (
 						<p className="text-xs text-muted-foreground whitespace-pre-line">
 							{location.notes}
@@ -550,6 +563,7 @@ function PickupLocationRadioList({
 			<div className="flex flex-col gap-2">
 				{locations.map((loc) => {
 					const selected = value === loc._id;
+					const mapsUrl = deriveMapsUrl(loc);
 					return (
 						<label
 							key={loc._id}
@@ -574,9 +588,9 @@ function PickupLocationRadioList({
 								<span className="text-xs text-muted-foreground whitespace-pre-line">
 									{loc.address}
 								</span>
-								{loc.mapsUrl ? (
+								{mapsUrl ? (
 									<a
-										href={loc.mapsUrl}
+										href={mapsUrl}
 										target="_blank"
 										rel="noreferrer"
 										onClick={(e) => e.stopPropagation()}

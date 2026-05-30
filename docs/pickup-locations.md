@@ -39,9 +39,11 @@ Indexes: `by_retailer`, `by_retailer_active`.
 
 ```
 pickupLocationId?:  v.id("pickupLocations"),
-pickupSnapshot?:    { label, address, mapsUrl?, notes?, latitude?, longitude? },
-deliveryAddress?:   { line1, line2?, city, state, postcode, notes?, mapsUrl?, latitude?, longitude? },
+pickupSnapshot?:    { label, address, mapsUrl?, notes?, latitude?, longitude?, placeId? },
+deliveryAddress?:   { line1, line2?, city, state, postcode, notes?, mapsUrl?, latitude?, longitude?, placeId? },
 ```
+
+Both `pickupSnapshot` and `deliveryAddress` carry `placeId` so derived maps URLs deep-link to the named Google place page (clean, "Eco Majestic" in the search bar) instead of falling back to raw lat/lng search. `placeId` is captured by Google Places autocomplete on both the seller-side pickup form AND the buyer-side delivery form, then frozen onto the order at create time.
 
 The pickup snapshot (and the buyer's chosen `deliveryAddress`) is **frozen at order create / `updatePickupLocation`** and never mutated afterwards — editing the source location does not rewrite history.
 
@@ -225,10 +227,11 @@ Setup checklist on `/app` gains a 4th step `"pickup"` when `retailer.offerSelfCo
 
 ### Order detail (seller view)
 
-`/app/orders/$shortId` for self-collect orders renders two extra blocks, both reading from the frozen `pickupSnapshot`:
+`/app/orders/$shortId` for self-collect orders renders two extra blocks. The "Pick up at" card reads from the **frozen** `pickupSnapshot`; the "Notify store manager" panel pulls the **live** pickup location row via `pickupLocations.getOwnedById` so it routes to the *current* manager (not whoever was on the snapshot at order create).
 
-- **"Pick up at" card** — label, address, optional notes, with Copy and Maps buttons (Maps only when the snapshot has a `mapsUrl`). Mirrors the existing "Delivery Address" section visually.
-- **"Notify store manager" panel** — a pre-built message snippet in a `<pre>` block with a "Copy message" button. Format:
+- **"Pick up at" card** — label, address, optional notes, with Copy and Maps buttons (Maps only when the snapshot has a `mapsUrl`, `placeId`, or lat/lng). Mirrors the existing "Delivery Address" section visually.
+- **"Notify store manager" panel** — pre-built message snippet in a `<pre>` block with a `Copy` button. When the live pickup location has a `managerWaPhone`, the panel also renders a primary **`Notify <managerName> on WhatsApp`** button that opens `https://wa.me/<phone>?text=<encoded snippet>`. One tap → WhatsApp opens with the message already filled in to the manager's chat → seller hits Send. Falls back gracefully to Copy-only with an inline hint pointing at Settings → Pickup when no manager phone is set.
+- **Snippet format:**
 
   ```
   📦 New pickup order ORD-AB23 — Main Store
@@ -242,7 +245,19 @@ Setup checklist on `/app` gains a 4th step `"pickup"` when `retailer.offerSelfCo
   Please prepare for collection.
   ```
 
-  Customer line resolves `name → phone → "Anonymous"`; phone runs through the shared `formatPhone` helper. Fixed format for v1 — per-retailer override is future work, only revisit if retailers ask. Seller can edit the message after pasting it into the manager's chat.
+  Customer line resolves `name → phone → "Anonymous"`; phone runs through the shared `formatPhone` helper. Fixed format for v1 — per-retailer override is future work, only revisit if retailers ask. Seller can edit the message after the wa.me link opens WhatsApp (or after pasting from the Copy button).
+
+### Store manager contact (per pickup location)
+
+Sellers can optionally attach a `managerName` + `managerWaPhone` to each pickup location from Settings → Pickup. The fields are:
+
+- **Not frozen onto the order snapshot** — fetched live at order detail render time via `pickupLocations.getOwnedById`. Reason: if a seller swaps managers, today's pending pickup orders should route to the *new* manager. Snapshot pattern only applies to buyer-facing data (label, address, lat/lng).
+- **Not exposed on the public storefront query** — `listActivePublicBySlug` filters them out. Manager info is operational, not buyer-facing.
+- **Validated server-side** — `managerWaPhone` runs through the same `assertValidWaPhone` used by the retailer's primary contact number (8–15 digits, country code required). `managerName` trimmed, ≤60 chars.
+- **Empty string = clear** on `update`, matching the existing optional-field convention.
+- **Phone is the gate, name is cosmetic.** The Notify button on the order detail page renders whenever `managerWaPhone` is set — the wa.me link only needs the phone. `managerName` is purely the button label: present → "Notify Aishah on WhatsApp", absent → "Notify on WhatsApp". The two fields are independently optional; sellers can set either, both, or neither.
+
+The seller order detail page uses these fields to render either the primary "Notify Aishah on WhatsApp" button or the Copy-only fallback with a hint linking to Settings.
 
 ## Env requirements
 
@@ -262,6 +277,5 @@ The pricing plan caps Starter at **1 active pickup location** and lets Pro+ have
 ## Future work
 
 - **Tier cap enforcement** when subscription billing lands (Starter = 1 active, Pro+ = unlimited) — single check inside `pickupLocations.create`, plus a soft over-cap banner in `listForRetailer` for retailers downgraded from Pro.
-- **Click-to-send "notify store manager"** — per-location `managerWaPhone` + a `wa.me` deep-link button on the order detail page so the seller can forward the pre-built message in one tap instead of copy/paste. (Parked in favour of the Google autocomplete bundle; revisit when retailers ask.)
 - **Pickup time slots / appointments** — currently a free-form `notes` field. A structured slot picker (Mon–Sat 10am–6pm, etc.) would unlock the cake/kuih cohort's actual workflow.
 - **Pickup location attached to a specific product** — for retailers where only some products are pickup-eligible (e.g. frozen-only). Not requested yet; flag the use case if it surfaces.

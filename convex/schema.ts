@@ -211,6 +211,9 @@ export default defineSchema({
 				// location pin sent after confirm.
 				latitude: v.optional(v.number()),
 				longitude: v.optional(v.number()),
+				// Google Place ID — when set, maps URLs deep-link to the
+				// named place page instead of raw lat/lng search.
+				placeId: v.optional(v.string()),
 			}),
 		),
 		// Reference to the retailer's pickup location when deliveryMethod ===
@@ -235,6 +238,9 @@ export default defineSchema({
 				// locations (created before autocomplete) keep working.
 				latitude: v.optional(v.number()),
 				longitude: v.optional(v.number()),
+				// Google Place ID — frozen so the Maps URL can deep-link
+				// to the named place page (not just lat/lng search).
+				placeId: v.optional(v.string()),
 			}),
 		),
 		// Optional external carrier tracking URL set by the retailer when marking
@@ -284,6 +290,14 @@ export default defineSchema({
 		latitude: v.optional(v.number()),
 		longitude: v.optional(v.number()),
 		placeId: v.optional(v.string()),
+		// Optional contact info for the person running this pickup spot. When
+		// set, the seller order detail page surfaces a "Notify <name>" wa.me
+		// button so the seller can forward the order details in one tap.
+		// Intentionally NOT frozen onto the order snapshot — pickup orders
+		// should always route to the *current* manager, even if the seller
+		// swaps them after an order is placed.
+		managerName: v.optional(v.string()),
+		managerWaPhone: v.optional(v.string()),
 		// Soft-delete flag. Retailers deactivate (rather than hard-delete) so
 		// historical order snapshots remain meaningful. Inactive rows are
 		// hidden from the storefront picker but still listed in settings under

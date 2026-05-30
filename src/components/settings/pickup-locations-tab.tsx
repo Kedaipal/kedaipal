@@ -17,12 +17,21 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useMutation, useQuery } from "convex/react";
-import { ExternalLink, GripVertical, MapPin, Pencil, Plus } from "lucide-react";
+import {
+	ExternalLink,
+	GripVertical,
+	MapPin,
+	Pencil,
+	Phone,
+	Plus,
+} from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
+import { formatPhone } from "../../lib/customer";
 import { convexErrorMessage } from "../../lib/format";
+import { deriveMapsUrl } from "../../lib/google-address";
 import { Button } from "../ui/button";
 import { Skeleton } from "../ui/skeleton";
 import { PickupLocationEditDialog } from "./pickup-location-edit-dialog";
@@ -370,20 +379,38 @@ function LocationRowBody({
 					<p className="text-xs text-muted-foreground whitespace-pre-line">
 						{location.address}
 					</p>
-					{location.mapsUrl ? (
-						<a
-							href={location.mapsUrl}
-							target="_blank"
-							rel="noreferrer"
-							className="flex items-center gap-1 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
-						>
-							<ExternalLink className="size-3" />
-							Open in maps
-						</a>
-					) : null}
+					{(() => {
+						const mapsUrl = deriveMapsUrl(location);
+						return mapsUrl ? (
+							<a
+								href={mapsUrl}
+								target="_blank"
+								rel="noreferrer"
+								className="flex items-center gap-1 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
+							>
+								<ExternalLink className="size-3" />
+								Open in maps
+							</a>
+						) : null;
+					})()}
 					{location.notes ? (
 						<p className="text-xs text-muted-foreground whitespace-pre-line">
 							{location.notes}
+						</p>
+					) : null}
+					{location.managerName || location.managerWaPhone ? (
+						<p className="flex items-center gap-1 text-xs text-muted-foreground">
+							<Phone
+								className="size-3 shrink-0 text-accent"
+								aria-hidden="true"
+							/>
+							<span>
+								Manager:{" "}
+								{location.managerName ?? "—"}
+								{location.managerWaPhone
+									? ` · ${formatPhone(location.managerWaPhone)}`
+									: ""}
+							</span>
 						</p>
 					) : null}
 				</div>

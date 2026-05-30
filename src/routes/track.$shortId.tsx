@@ -23,6 +23,7 @@ import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import { formatPrice } from "../lib/format";
+import { deriveMapsUrl } from "../lib/google-address";
 
 type PaymentStatus = "unpaid" | "claimed" | "received";
 
@@ -412,17 +413,20 @@ function TrackingRoute() {
 						) : null}
 					</div>
 					<DeliveryAddressDisplay address={order.deliveryAddress} />
-					{order.deliveryAddress.mapsUrl ? (
-						<a
-							href={order.deliveryAddress.mapsUrl}
-							target="_blank"
-							rel="noreferrer"
-							className="flex items-center gap-1.5 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
-						>
-							<MapPin className="size-3.5" />
-							Open pinned location
-						</a>
-					) : null}
+					{(() => {
+						const mapsUrl = deriveMapsUrl(order.deliveryAddress);
+						return mapsUrl ? (
+							<a
+								href={mapsUrl}
+								target="_blank"
+								rel="noreferrer"
+								className="flex items-center gap-1.5 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
+							>
+								<MapPin className="size-3.5" />
+								Open pinned location
+							</a>
+						) : null;
+					})()}
 					{!canEditAddress ? (
 						<p className="text-xs text-muted-foreground">
 							Contact the store to change this address.

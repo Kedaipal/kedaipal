@@ -123,6 +123,8 @@ export const strictAddressSchema = z.object({
 // Places autocomplete — kept as strings here to match TanStack Form's
 // all-string form state. Empty when the buyer skipped autocomplete; the
 // submit handler in checkout-sheet parses them back to numbers.
+// `placeId` travels alongside lat/lng so derived maps URLs deep-link to
+// the named Google place rather than raw coords.
 export const addressFormFieldsSchema = z.object({
 	line1: z.string(),
 	line2: z.string(),
@@ -133,6 +135,7 @@ export const addressFormFieldsSchema = z.object({
 	mapsUrl: z.string(),
 	latitude: z.string(),
 	longitude: z.string(),
+	placeId: z.string(),
 });
 
 export const checkoutFormSchema = z
@@ -189,6 +192,7 @@ export const emptyAddress: CheckoutAddressValues = {
 	mapsUrl: "",
 	latitude: "",
 	longitude: "",
+	placeId: "",
 };
 
 // Product form. Price is entered as a major-unit decimal string (e.g. "120" or

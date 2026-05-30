@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
-import { ChevronRight, ShoppingBag } from "lucide-react";
+import { ChevronRight, Package, ShoppingBag, Truck } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import { PageHeader } from "../components/dashboard/page-header";
@@ -145,11 +145,14 @@ function OrdersRoute() {
 								className="group flex items-center gap-3 rounded-2xl border border-border bg-card p-4 transition-all hover:border-ring hover:shadow-sm"
 							>
 								<div className="flex min-w-0 flex-1 flex-col gap-1.5">
-									<div className="flex items-center gap-2">
+									<div className="flex flex-wrap items-center gap-2">
 										<span className="font-mono text-sm font-semibold">
 											#{o.shortId}
 										</span>
 										<StatusBadge status={o.status as OrderStatus} />
+										<DeliveryMethodBadge
+											method={o.deliveryMethod ?? "delivery"}
+										/>
 									</div>
 									<div className="flex items-center gap-2 text-sm text-muted-foreground">
 										<span className="min-w-0 truncate">
@@ -174,6 +177,30 @@ function OrdersRoute() {
 				</ul>
 			)}
 		</div>
+	);
+}
+
+/**
+ * At-a-glance indicator of how the customer is receiving the order. Sits next
+ * to the status badge in each order row so the seller can spot pickup orders
+ * (which need a different ops flow — notify store manager, prepare for
+ * collection) without opening the detail page.
+ */
+function DeliveryMethodBadge({
+	method,
+}: {
+	method: "delivery" | "self_collect";
+}) {
+	const isPickup = method === "self_collect";
+	const Icon = isPickup ? Package : Truck;
+	return (
+		<span
+			className="inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
+			aria-label={isPickup ? "Self collect order" : "Delivery order"}
+		>
+			<Icon className="size-3" aria-hidden="true" />
+			{isPickup ? "Pickup" : "Delivery"}
+		</span>
 	);
 }
 
