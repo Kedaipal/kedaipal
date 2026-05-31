@@ -10,6 +10,12 @@ const ADDRESS_MIN = 3;
 const ADDRESS_MAX = 500;
 const NOTES_MAX = 200;
 const MANAGER_NAME_MAX = 60;
+// Google Place IDs are typically 27–100 chars; cap generously at 300 to reject
+// arbitrarily long strings while leaving headroom for any future Google ID
+// format. The cap protects the buyer-supplied surface on orders.create too —
+// keep `PLACE_ID_MAX` in lockstep with the delivery-address validator in
+// convex/lib/address.ts.
+const PLACE_ID_MAX = 300;
 
 // ---------------------------------------------------------------------------
 // Auth helpers — mirror the pattern in convex/customers.ts so each module is
@@ -78,6 +84,23 @@ function sanitizeMapsUrl(raw: string | undefined): string | undefined {
 	} catch (err) {
 		throw new ConvexError((err as Error).message);
 	}
+}
+
+/**
+ * Trim + enforce the {@link PLACE_ID_MAX} cap. Google Place IDs are short
+ * (typically 27–100 chars), but this field flows in directly from authenticated
+ * retailers via the create/update mutations AND from the public buyer surface
+ * on orders.create deliveryAddress — both need the same cap so a malicious
+ * client can't write an arbitrarily long string into the DB.
+ */
+function sanitizePlaceId(raw: string | undefined): string | undefined {
+	if (raw === undefined) return undefined;
+	const trimmed = raw.trim();
+	if (trimmed.length === 0) return undefined;
+	if (trimmed.length > PLACE_ID_MAX) {
+		throw new ConvexError(`Invalid place ID (max ${PLACE_ID_MAX} characters)`);
+	}
+	return trimmed;
 }
 
 function sanitizeNotes(raw: string | undefined): string | undefined {
@@ -296,7 +319,7 @@ export const create = mutation({
 		const cleanMapsUrl = sanitizeMapsUrl(mapsUrl);
 		const cleanNotes = sanitizeNotes(notes);
 		const cleanCoords = sanitizeCoords(latitude, longitude);
-		const cleanPlaceId = placeId?.trim() || undefined;
+		const cleanPlaceId = sanitizePlaceId(placeId);
 		const cleanManagerName = sanitizeManagerName(managerName);
 		const cleanManagerWaPhone = sanitizeManagerWaPhone(managerWaPhone);
 
@@ -307,10 +330,13 @@ export const create = mutation({
 			.query("pickupLocations")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 			.collect();
+		// `reduce` instead of `Math.max(...spread)` — spreading a large array
+		// into call arguments throws `RangeError: Maximum call stack size
+		// exceeded` once the engine's arg-limit (~65k) is breached. A retailer
+		// won't realistically hit that with pickup locations, but reduce
+		// is the safer pattern and costs nothing.
 		const nextSortOrder =
-			existing.length === 0
-				? 0
-				: Math.max(...existing.map((r) => r.sortOrder)) + 1;
+			existing.reduce((max, r) => Math.max(max, r.sortOrder), -1) + 1;
 
 		const now = Date.now();
 		const pickupLocationId = await ctx.db.insert("pickupLocations", {
@@ -408,7 +434,8 @@ export const update = mutation({
 			}
 		}
 		if (placeId !== undefined) {
-			patch.placeId = placeId === null ? undefined : placeId.trim() || undefined;
+			patch.placeId =
+				placeId === null ? undefined : sanitizePlaceId(placeId);
 		}
 
 		await ctx.db.patch(pickupLocationId, patch);
@@ -441,10 +468,10 @@ export const setActive = mutation({
 					q.eq("retailerId", location.retailerId),
 				)
 				.collect();
+			// Same `reduce` pattern as in `create` — avoid the
+			// `Math.max(...spread)` arg-limit footgun.
 			patch.sortOrder =
-				siblings.length === 0
-					? 0
-					: Math.max(...siblings.map((r) => r.sortOrder)) + 1;
+				siblings.reduce((max, r) => Math.max(max, r.sortOrder), -1) + 1;
 		}
 
 		await ctx.db.patch(pickupLocationId, patch);
@@ -463,7 +490,7 @@ export const setActive = mutation({
  *
  * Inactive rows are intentionally untouched. Their existing `sortOrder` value
  * is preserved (and `setActive(true)` continues to send a reactivated row to
- * the end via `Math.max(allSortOrders) + 1`).
+ * the end via `max(allSortOrders) + 1`).
  */
 export const reorder = mutation({
 	args: {

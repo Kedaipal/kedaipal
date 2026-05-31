@@ -39,6 +39,11 @@ const CITY_MIN = 2;
 const CITY_MAX = 60;
 const NOTES_MAX = 200;
 const MAPS_URL_MAX = 500;
+// Google Place IDs are typically 27–100 chars; cap at 300 with headroom.
+// Kept in lockstep with `PLACE_ID_MAX` in convex/pickupLocations.ts — both
+// the seller-supplied (pickup) and buyer-supplied (delivery checkout)
+// surfaces apply the same cap.
+const PLACE_ID_MAX = 300;
 
 export interface RawAddress {
 	line1: string;
@@ -148,6 +153,9 @@ export function assertValidAddress(addr: RawAddress): SanitizedAddress {
 	}
 
 	const placeId = trimmedOrUndefined(addr.placeId);
+	if (placeId !== undefined && placeId.length > PLACE_ID_MAX) {
+		throw new Error(`Invalid place ID (max ${PLACE_ID_MAX} characters)`);
+	}
 
 	return {
 		line1,

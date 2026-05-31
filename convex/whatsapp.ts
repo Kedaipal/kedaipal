@@ -29,7 +29,6 @@ type ResolvedPayment = {
 	qrImageUrl: string | undefined;
 };
 
-
 const statusValidator = v.union(
 	v.literal("pending"),
 	v.literal("confirmed"),

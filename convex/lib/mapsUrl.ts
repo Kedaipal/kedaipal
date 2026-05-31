@@ -16,13 +16,17 @@ export const MAPS_URL_MAX = 500;
 /**
  * Hosts we accept on a pickup location's mapsUrl. Covers the two share-sheet
  * formats Malaysian shoppers actually use: Waze deep links and Google Maps
- * (incl. the short-link domain).
+ * (incl. Google's own short-link domain `maps.app.goo.gl`).
+ *
+ * Intentionally NOT including the legacy `goo.gl` general shortener — Google
+ * shut down `goo.gl` redirects on 2025-08-25 (all return 404), so accepting
+ * those URLs would just give buyers a dead link. `maps.app.goo.gl` is the
+ * Maps-app share domain and is still live; it stays.
  */
 export const ALLOWED_MAPS_HOSTS = new Set<string>([
 	"waze.com",
 	"www.waze.com",
 	"maps.app.goo.gl",
-	"goo.gl",
 	"maps.google.com",
 	"www.google.com",
 ]);

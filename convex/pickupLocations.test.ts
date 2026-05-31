@@ -854,3 +854,97 @@ describe("orders — delivery placeId", () => {
 		expect(order?.deliveryAddress?.placeId).toBe("ChIJ_delivery");
 	});
 });
+
+describe("pickupLocations — placeId length cap (PR review fix)", () => {
+	test("create rejects a placeId longer than the cap", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const huge = "x".repeat(301);
+		await expect(
+			asUser.mutation(api.pickupLocations.create, {
+				retailerId: retailer._id,
+				label: "Main",
+				address: "12 Jln Tun Razak, KL",
+				placeId: huge,
+			}),
+		).rejects.toThrow(/Invalid place ID/);
+	});
+
+	test("create accepts a placeId at the cap boundary", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const exact = "x".repeat(300);
+		const { pickupLocationId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Main",
+				address: "12 Jln Tun Razak, KL",
+				placeId: exact,
+			},
+		);
+		const rows = await asUser.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		const row = rows.find((r) => r._id === pickupLocationId);
+		expect(row?.placeId).toBe(exact);
+	});
+
+	test("update rejects a placeId longer than the cap", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const { pickupLocationId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Main",
+				address: "12 Jln Tun Razak, KL",
+				placeId: "ChIJ_short",
+			},
+		);
+		const huge = "y".repeat(301);
+		await expect(
+			asUser.mutation(api.pickupLocations.update, {
+				pickupLocationId,
+				placeId: huge,
+			}),
+		).rejects.toThrow(/Invalid place ID/);
+	});
+});
+
+describe("orders — delivery address placeId length cap (PR review fix)", () => {
+	test("orders.create rejects an oversized placeId on delivery", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const productId = await asUser.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Rendang 1kg",
+			price: 10000,
+			currency: "MYR",
+			stock: 50,
+			imageStorageIds: [],
+			sortOrder: 0,
+		});
+		const huge = "z".repeat(301);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer: { name: "Ali", waPhone: "60123456789" },
+				deliveryAddress: {
+					line1: "12 Jln Mawar 3",
+					city: "Petaling Jaya",
+					state: "Selangor",
+					postcode: "47301",
+					placeId: huge,
+				},
+			}),
+		).rejects.toThrow(/Invalid place ID/);
+	});
+});
