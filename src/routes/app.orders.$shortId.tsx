@@ -27,6 +27,7 @@ import {
 } from "../components/storefront/delivery-address-display";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
+import { formatPhone } from "../lib/customer";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import { StatusBadge } from "./app.orders.index";
 
@@ -432,40 +433,62 @@ function OrderDetailRoute() {
 				</section>
 			) : null}
 
-			{/* Customer */}
-			<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+			{/* Customer — WhatsApp-branded card. Buyer with a waPhone gets the
+			    chat-app treatment (green avatar, prominent "Open chat" CTA) so
+			    the seller never misses the action. Anonymous buyers (no phone
+			    captured) fall back to a neutral row with just the name. */}
+			<section
+				className={
+					order.customer.waPhone
+						? "flex flex-col gap-3 rounded-2xl border border-green-600/30 bg-gradient-to-br from-green-500/5 to-green-500/10 p-4"
+						: "flex flex-col gap-3 rounded-2xl border border-border bg-card p-4"
+				}
+			>
 				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 					Customer
 				</p>
 				<div className="flex items-center gap-3">
-					<div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted">
-						<User className="size-4 text-muted-foreground" />
-					</div>
+					{order.customer.waPhone ? (
+						<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-green-600 text-white">
+							<MessageCircle className="size-5" />
+						</div>
+					) : (
+						<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-muted">
+							<User className="size-5 text-muted-foreground" />
+						</div>
+					)}
 					<div className="min-w-0 flex-1">
-						<p className="font-medium">{order.customer.name ?? "Anonymous"}</p>
+						<p className="font-semibold">
+							{order.customer.name ?? "Anonymous"}
+						</p>
 						{order.customer.waPhone ? (
 							<p className="font-mono text-xs text-muted-foreground">
-								{order.customer.waPhone}
+								{formatPhone(order.customer.waPhone)} · via WhatsApp
 							</p>
 						) : null}
 					</div>
-					{order.customer.waPhone ? (
-						<a
-							href={`https://wa.me/${order.customer.waPhone}`}
-							target="_blank"
-							rel="noreferrer"
-							className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-green-500/10 text-green-600 transition-colors hover:bg-green-500/20"
-							aria-label="Message on WhatsApp"
-						>
-							<MessageCircle className="size-4" />
-						</a>
-					) : null}
 				</div>
+				{order.customer.waPhone ? (
+					<a
+						href={`https://wa.me/${order.customer.waPhone}`}
+						target="_blank"
+						rel="noreferrer"
+						className="flex h-11 items-center justify-center gap-2 rounded-xl bg-green-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-green-700"
+					>
+						<MessageCircle className="size-4" />
+						Open chat in WhatsApp
+					</a>
+				) : null}
 				{order.customerId ? (
+					// View profile sits inside the same section so the two
+					// related actions read as one customer block. Uses a card
+					// background (vs the section's green tint) so it visually
+					// separates from the WhatsApp action above without
+					// breaking the cohesion.
 					<Link
 						to="/app/customers/$customerId"
 						params={{ customerId: order.customerId }}
-						className="flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+						className="flex items-center justify-between rounded-xl border border-border bg-background px-3 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted"
 					>
 						<span className="flex items-center gap-2">
 							<User className="size-4 text-muted-foreground" />
@@ -667,3 +690,4 @@ function OrderDetailRoute() {
 		</div>
 	);
 }
+
