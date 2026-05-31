@@ -5,6 +5,10 @@ import { Button } from "../ui/button";
 import { FadeIn } from "./fade-in";
 
 const TOTAL_SPOTS = 10;
+// Hardcoded to 0 until the 86expn2qg billing build ships the live
+// `api.foundingTen.spotsTaken` query. When that lands, swap this constant
+// for a useQuery call — three render sites (this block, the pricing-teaser
+// Pro pill, the pricing-page banner) read off the same source.
 const SPOTS_TAKEN = 0;
 
 const SPOTS = Array.from({ length: TOTAL_SPOTS }, (_, i) => ({
@@ -36,10 +40,13 @@ export function FoundingTen() {
 							The first 10 businesses that build Kedaipal with us.
 						</h2>
 						<p className="mt-4 text-base leading-relaxed text-muted-foreground">
-							Founding members lock in the lowest price that will ever exist,
-							get direct influence over the product roadmap, and become part of
-							the origin story of the order hub built for Malaysian F&amp;B
-							sellers.
+							First 10 paying Pro retailers lock in{" "}
+							<span className="font-semibold text-foreground">
+								30% off for life — RM 104/mo Pro forever
+							</span>{" "}
+							— plus a Founding Member badge, direct input on the roadmap, and
+							white-glove onboarding. When the 10 spots are gone, they&apos;re
+							gone.
 						</p>
 					</div>
 				</FadeIn>
@@ -65,8 +72,10 @@ export function FoundingTen() {
 						))}
 					</div>
 					<p className="mt-4 text-center text-sm font-medium text-muted-foreground">
-						<span className="font-bold text-foreground">{remaining}</span> of{" "}
-						{TOTAL_SPOTS} founding spots still open
+						<span className="font-bold text-foreground">
+							{remaining} of {TOTAL_SPOTS}
+						</span>{" "}
+						Founding spots open — RM 104/mo Pro forever
 					</p>
 				</FadeIn>
 
@@ -74,16 +83,16 @@ export function FoundingTen() {
 					<div className="mt-10 grid gap-5 sm:grid-cols-3">
 						{[
 							{
-								label: "Locked-in pricing",
-								body: "Pay the founder rate forever — the lowest price that will ever exist for Kedaipal.",
+								label: "Locked-in price forever",
+								body: "RM 104/mo Pro — 30% off the standard rate, for as long as you stay subscribed. No renewals, no price hikes.",
 							},
 							{
-								label: "Direct product input",
-								body: "Your workflow shapes the roadmap. Founding members get a direct line to the builder.",
+								label: "Direct line to the founder",
+								body: "WhatsApp group with Arif. Roadmap input, feature requests, bugs — straight to the builder, no support queue.",
 							},
 							{
-								label: "Origin story",
-								body: "Your business is featured as a Kedaipal founding seller — the ones who were here first.",
+								label: "Founding Member badge",
+								body: "Your business listed as a Kedaipal founding seller. The ones who were here on day one.",
 							},
 						].map((item) => (
 							<div
@@ -109,7 +118,7 @@ export function FoundingTen() {
 								</Link>
 							) : (
 								<Link to="/sign-up/$" params={{ _splat: "" }}>
-									Apply for a founding spot
+									Claim a Founding 10 spot
 									<ArrowRight className="ml-2 size-4" />
 								</Link>
 							)}

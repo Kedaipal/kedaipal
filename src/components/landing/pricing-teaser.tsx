@@ -105,6 +105,11 @@ export function PricingTeaser() {
 										Most popular
 									</span>
 								)}
+								{tier.id === "scale" && (
+									<span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-muted px-3 py-0.5 text-xs font-bold uppercase tracking-wider text-muted-foreground">
+										Coming soon
+									</span>
+								)}
 
 								<p
 									className={`text-sm font-semibold uppercase tracking-wider ${tier.popular ? "text-accent" : "text-muted-foreground"}`}
@@ -125,7 +130,8 @@ export function PricingTeaser() {
 									<div className="mt-3 flex items-center gap-2 rounded-lg border border-accent/30 bg-accent/5 px-3 py-2">
 										<Star className="size-3.5 shrink-0 fill-accent text-accent" />
 										<p className="text-xs font-semibold text-accent">
-											Founding 10: RM {tier.foundingPrice}/mo forever
+											Founding 10 price: RM {tier.foundingPrice}/mo forever (10
+											spots)
 										</p>
 									</div>
 								)}
@@ -140,7 +146,18 @@ export function PricingTeaser() {
 								</ul>
 
 								<div className="mt-6">
-									{isSignedIn ? (
+									{tier.id === "scale" ? (
+										// Scale tier is visible-but-disabled — keeps the layout
+										// rhythm of three cards while signalling "not yet". No
+										// link wrap because there's nowhere meaningful to go.
+										<Button
+											className="w-full"
+											variant="outline"
+											disabled
+										>
+											Coming soon
+										</Button>
+									) : isSignedIn ? (
 										<Button
 											asChild
 											className="w-full"

@@ -240,8 +240,8 @@ describe("products", () => {
 		).rejects.toThrow(/Duplicate sku "DUP"/);
 	});
 
-	test("bulkUpsert: pure-update batch is not blocked by beta cap", async () => {
-		// Seed the retailer right at the 50-product beta cap, all with SKUs,
+	test("bulkUpsert: pure-update batch is not blocked by product cap", async () => {
+		// Seed the retailer right at the 50-product cap, all with SKUs,
 		// then send a 50-row upsert that all match existing rows. No new
 		// inserts — should succeed despite the cap.
 		const t = setup();

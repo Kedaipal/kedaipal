@@ -41,7 +41,7 @@ const jsonLd = [
 			"@type": "Offer",
 			price: "0",
 			priceCurrency: "MYR",
-			description: "Free during beta",
+			description: "14-day free trial · From RM 79/mo",
 		},
 	},
 	{
@@ -53,7 +53,10 @@ const jsonLd = [
 				name: "Do I need my own WhatsApp Business number?",
 				acceptedAnswer: {
 					"@type": "Answer",
-					text: "During the beta, you can share a test number we provide. When you're ready for production, you'll connect your own WhatsApp Business number through the Meta Cloud API.",
+					// Keep in sync with messages/en.json → faq_a_1. JSON-LD can't
+					// import paraglide at build time (server-side static), so this
+					// is a manual mirror — update both when copy changes.
+					text: "No — Kedaipal owns one Meta-verified WhatsApp Business Account that handles all outbound messaging. You don't need your own WABA, business verification, or SSM registration. Your store name appears in every message. Live in under 5 minutes.",
 				},
 			},
 			{
@@ -61,7 +64,8 @@ const jsonLd = [
 				name: "Do I need a registered company?",
 				acceptedAnswer: {
 					"@type": "Answer",
-					text: "Not for the beta. For production WhatsApp Business API access, Meta eventually requires business verification, but we'll walk you through that when the time comes.",
+					// Mirror of messages/en.json → faq_a_2.
+					text: "No. Kedaipal handles all WhatsApp Business API access centrally — you never need to register with Meta. A registered company is not required to use Kedaipal.",
 				},
 			},
 			{
@@ -77,15 +81,17 @@ const jsonLd = [
 				name: "Is Kedaipal WhatsApp-only?",
 				acceptedAnswer: {
 					"@type": "Answer",
-					text: "No. WhatsApp is where most beta users start because it's the channel their customers already use every day. Shopee, Lazada, and TikTok Shop connectors are actively rolling out during beta.",
+					// Mirror of messages/en.json → faq_a_5.
+					text: "No. WhatsApp is where most F&B home sellers start because it's the channel their customers already use every day. Shopee, Lazada, and TikTok Shop connectors are on the roadmap — every channel will unify into one dashboard.",
 				},
 			},
 			{
 				"@type": "Question",
-				name: "Will pricing stay free forever?",
+				// Mirror of messages/en.json → faq_q_8 / faq_a_8.
+				name: "Is there a free trial?",
 				acceptedAnswer: {
 					"@type": "Answer",
-					text: "No — Kedaipal will move to paid tiers after beta. Beta users get locked-in founder pricing as a thank-you.",
+					text: "Yes — every plan starts with 14 days free, no credit card. You'll only be asked to pick a plan and add payment at the end of the trial. Cancel anytime in between and pay nothing.",
 				},
 			},
 		],

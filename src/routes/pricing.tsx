@@ -161,8 +161,8 @@ const FAQS = [
 		a: "Bank transfer, DuitNow QR, and e-wallet screenshot — all supported from day one. Online payment gateway (FPX, GrabPay, TNG) for shopper-to-retailer payments is on the S5 roadmap. Kedaipal never touches your order money — your gateway, your settlement.",
 	},
 	{
-		q: "Is it really free right now?",
-		a: "Yes — Kedaipal is in beta and everything is free. No credit card, no catch. When billing infrastructure launches, you'll be prompted to pick a plan. Beta users who sign up now lock in founder pricing.",
+		q: "What happens at the end of the 14-day trial?",
+		a: "You'll be prompted to pick a plan and add a payment method. If you don't, your storefront stays accessible but new orders pause until you do. You can cancel anytime during the trial and pay nothing. Existing orders, customers, and product data are kept for 90 days if you cancel.",
 	},
 	{
 		q: "Does Kedaipal work if my customers are already chatting me on personal WhatsApp?",
@@ -204,6 +204,11 @@ function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 			{tier.popular && (
 				<span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-accent px-3 py-0.5 text-xs font-bold uppercase tracking-wider text-accent-foreground">
 					Most popular
+				</span>
+			)}
+			{tier.id === "scale" && (
+				<span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-muted px-3 py-0.5 text-xs font-bold uppercase tracking-wider text-muted-foreground">
+					Coming soon
 				</span>
 			)}
 
@@ -256,7 +261,14 @@ function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 			</ul>
 
 			<div className="mt-6">
-				{isSignedIn ? (
+				{tier.id === "scale" ? (
+					// Scale tier is visible-but-disabled — keeps the three-card
+					// layout rhythm while signalling "not yet". No Link wrap —
+					// there's nowhere meaningful to send the click.
+					<Button className="w-full" variant="outline" disabled>
+						Coming soon
+					</Button>
+				) : isSignedIn ? (
 					<Button
 						asChild
 						className="w-full"
@@ -289,11 +301,6 @@ function PricingPage() {
 		<main className="min-h-dvh bg-background text-foreground">
 			<Nav />
 
-			{/* Beta banner */}
-			<div className="border-b border-accent/20 bg-accent/10 px-5 py-3 text-center text-sm font-medium text-accent">
-				Kedaipal is currently in beta — everything is free. Pricing below takes effect when billing launches.
-			</div>
-
 			{/* Hero */}
 			<section className="border-b border-border/60 bg-hero-mesh">
 				<div className="mx-auto max-w-4xl px-5 py-20 text-center md:px-8 md:py-28">
@@ -305,12 +312,12 @@ function PricingPage() {
 							className="mt-3 text-4xl font-bold tracking-tight md:text-6xl"
 							style={{ letterSpacing: "-0.03em" }}
 						>
-							Free now. Simple pricing when billing launches.
+							Simple pricing. 14-day free trial.
 						</h1>
 						<p className="mx-auto mt-5 max-w-xl text-lg leading-relaxed text-muted-foreground">
-							Everything is free during beta — no credit card, no catch. Tiers
-							below show what you'll pay after billing ships. Beta users lock in
-							founder pricing.
+							Start free for 14 days on any plan — no credit card. Pick the
+							tier that matches your order volume. Founding 10 retailers lock
+							in 30% off Pro for life.
 						</p>
 					</FadeIn>
 
@@ -377,12 +384,12 @@ function PricingPage() {
 									Founding 10
 								</p>
 								<h2 className="mt-1 text-xl font-bold md:text-2xl">
-									10 spots · 30% off for life · RM 104/mo Pro forever
+									Founding 10 · RM 104/mo Pro forever · 30% off for life
 								</h2>
 								<p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-									The first 10 F&B home sellers who build Kedaipal with us lock
-									in RM 104/mo Pro pricing permanently — no renewals, no
-									inflation. Direct line to the product roadmap.{" "}
+									The first 10 F&B home sellers who go Pro lock in RM 104/mo
+									permanently — no renewals, no price hikes — plus a Founding
+									Member badge and direct input on the roadmap.{" "}
 									<span className="font-semibold text-foreground">
 										10 of 10 spots still open.
 									</span>
@@ -391,7 +398,8 @@ function PricingPage() {
 							<div className="shrink-0">
 								<Button asChild size="lg" className="h-12 px-6">
 									<Link to="/sign-up/$" params={{ _splat: "" }}>
-										Claim a spot <ArrowRight className="size-4" />
+										Claim a Founding 10 spot{" "}
+										<ArrowRight className="size-4" />
 									</Link>
 								</Button>
 							</div>
@@ -512,16 +520,17 @@ function PricingPage() {
 							className="text-3xl font-bold md:text-4xl"
 							style={{ letterSpacing: "-0.02em" }}
 						>
-							Get started free while beta lasts.
+							Start your 14-day free trial.
 						</h2>
 						<p className="mx-auto mt-4 max-w-lg text-base text-muted-foreground">
-							No credit card. No Meta setup. Free during beta — apply for a
-							Founding 10 spot to lock in the best price permanently.
+							No credit card. No Meta setup. Apply for a Founding 10 spot
+							during signup to lock in RM 104/mo Pro forever.
 						</p>
 						<div className="mt-8 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
 							<Button asChild size="lg" className="h-12 px-8 text-base">
 								<Link to="/sign-up/$" params={{ _splat: "" }}>
-									Start free trial <ArrowRight className="size-4" />
+									Start 14-day free trial{" "}
+									<ArrowRight className="size-4" />
 								</Link>
 							</Button>
 							<Button asChild variant="ghost" size="lg" className="h-12 px-8 text-base">
