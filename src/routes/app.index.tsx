@@ -173,10 +173,11 @@ function DashboardHome() {
 	const hasPickupLocation = pickupStatus?.hasAny ?? false;
 	const pickupSetupSeen = retailer.pickupSetupSeen ?? false;
 
-	const checklist: ChecklistItem[] = [
+	// Step numbers are derived from position below (not hardcoded), so any
+	// conditional item being excluded auto-renumbers the rest with no gaps.
+	const checklistItems: Omit<ChecklistItem, "step">[] = [
 		{
 			key: "wa",
-			step: 1,
 			done: hasWaPhone,
 			icon: Phone,
 			title: "Add your WhatsApp number",
@@ -188,7 +189,6 @@ function DashboardHome() {
 		},
 		{
 			key: "product",
-			step: 2,
 			done: hasProduct,
 			icon: Package,
 			title: "Add your first product",
@@ -199,7 +199,6 @@ function DashboardHome() {
 		},
 		{
 			key: "payment",
-			step: 3,
 			done: hasPayment,
 			icon: CreditCard,
 			title: "Add payment details",
@@ -210,9 +209,7 @@ function DashboardHome() {
 			tab: "payments",
 		},
 		{
-			// Greeting step is unconditional — always shown to every retailer.
 			key: "greeting",
-			step: 4,
 			done: retailer.onboardingGreetingSetup ?? false,
 			icon: MessageCircle,
 			title: "Auto-reply when customers message you directly",
@@ -222,14 +219,10 @@ function DashboardHome() {
 			to: "",
 			optional: true,
 		},
-		// Pickup step is conditional — only surfaces for retailers offering
-		// self-collect (default true for new retailers from createRetailer).
-		// Renders as Step 5 when present.
 		...(offersSelfCollect
 			? [
 					{
 						key: "pickup",
-						step: 5,
 						done: pickupSetupSeen || hasPickupLocation,
 						icon: MapPin,
 						title: "Add a pickup location",
@@ -243,6 +236,11 @@ function DashboardHome() {
 				]
 			: []),
 	];
+
+	const checklist: ChecklistItem[] = checklistItems.map((item, i) => ({
+		...item,
+		step: i + 1,
+	}));
 
 	const completedCount = checklist.filter((c) => c.done).length;
 	const allDone = completedCount === checklist.length;
