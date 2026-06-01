@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { PageHeader } from "../components/dashboard/page-header";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import {
@@ -181,12 +182,12 @@ function ProductsRoute() {
 					<circle cx="11" cy="11" r="7" />
 					<path d="m20 20-3.5-3.5" />
 				</svg>
-				<input
+				<Input
 					type="search"
 					value={rawQuery}
 					onChange={(e) => setRawQuery(e.target.value)}
 					placeholder="Search products…"
-					className="h-11 w-full rounded-2xl border border-border bg-card pl-11 pr-10 text-sm outline-none transition-colors focus:border-ring focus:ring-2 focus:ring-ring/30"
+					className="h-11 w-full rounded-2xl border-border bg-card pl-11 pr-10 text-sm"
 				/>
 				{rawQuery ? (
 					<button

@@ -126,7 +126,7 @@ export function ProductForm({
 				{(field) => (
 					<field.TextField
 						label="Name"
-						placeholder="Tent — 4 person"
+						placeholder="e.g. Product name"
 						required
 					/>
 				)}
@@ -135,7 +135,7 @@ export function ProductForm({
 				{(field) => (
 					<field.TextField
 						label="SKU"
-						placeholder="TENT-4P"
+						placeholder="e.g. ITEM-001"
 						description="Optional. Stable identifier used by bulk export/import to match existing products."
 					/>
 				)}

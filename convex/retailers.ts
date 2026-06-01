@@ -163,6 +163,9 @@ type RetailerPublic = {
 	termsVersion?: string;
 	privacyVersion?: string;
 	aupVersion?: string;
+	// Whether the optional "WhatsApp Business greeting message" onboarding step
+	// has been marked done/skipped. Drives the setup checklist on the dashboard.
+	onboardingGreetingSetup?: boolean;
 };
 
 async function loadRetailerForUser(
@@ -203,6 +206,7 @@ async function loadRetailerForUser(
 		termsVersion: row.termsVersion,
 		privacyVersion: row.privacyVersion,
 		aupVersion: row.aupVersion,
+		onboardingGreetingSetup: row.onboardingGreetingSetup,
 	};
 }
 
@@ -541,6 +545,31 @@ export const recordConsentAcceptance = mutation({
 			aupVersion: AUP_VERSION,
 			acceptanceIp: sanitizeAcceptanceIp(args.acceptanceIp),
 			updatedAt: now,
+		});
+		return { ok: true };
+	},
+});
+
+/**
+ * Mark the optional "WhatsApp Business greeting message" onboarding step as
+ * done. Called by the dashboard setup checklist for both "Mark as done" and
+ * "Skip for now" — either way the step is persisted as complete so it collapses
+ * across sessions and the checklist can reach all-done. No-op aside from the
+ * flag: the greeting itself is configured by the seller in the WhatsApp app.
+ */
+export const markGreetingSetupDone = mutation({
+	args: {},
+	handler: async (ctx): Promise<{ ok: true }> => {
+		const userId = await requireUserId(ctx);
+		const retailer = await ctx.db
+			.query("retailers")
+			.withIndex("by_user", (q) => q.eq("userId", userId))
+			.first();
+		if (!retailer) throw new ConvexError("No store to update");
+
+		await ctx.db.patch(retailer._id, {
+			onboardingGreetingSetup: true,
+			updatedAt: Date.now(),
 		});
 		return { ok: true };
 	},

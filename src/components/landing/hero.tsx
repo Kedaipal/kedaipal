@@ -5,6 +5,7 @@ import { ArrowRight, Bell, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { m } from "../../paraglide/messages";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { ResponsiveImage } from "./responsive-image";
 
 const staggerContainer = {
@@ -131,7 +132,7 @@ export function Hero() {
 									<span className="select-none whitespace-nowrap pl-4 text-sm font-medium text-muted-foreground">
 										kedaipal.com/
 									</span>
-									<input
+									<Input
 										type="text"
 										value={slug}
 										onChange={(e) =>
@@ -140,7 +141,8 @@ export function Hero() {
 											)
 										}
 										placeholder="yourstore"
-										className="min-w-0 flex-1 bg-transparent py-3 pr-2 text-sm font-medium outline-none placeholder:text-muted-foreground/40"
+										variant="bare"
+										className="min-w-0 flex-1 py-3 pr-2 text-sm font-medium placeholder:text-muted-foreground/40"
 									/>
 									<Button
 										asChild
