@@ -5,6 +5,7 @@ import { type FormEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage } from "../lib/format";
 import { slugify } from "../lib/slug";
@@ -97,12 +98,12 @@ function OnboardingForm() {
 
 			<form onSubmit={handleSubmit} className="flex flex-col gap-5">
 				<Field label="Store name">
-					<input
+					<Input
 						type="text"
 						value={storeName}
 						onChange={(e) => setStoreName(e.target.value)}
-						placeholder="Arif Outdoor"
-						className="min-h-11 rounded-xl border border-input bg-background px-4 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+						placeholder=""
+						variant="field"
 					/>
 				</Field>
 
@@ -111,7 +112,7 @@ function OnboardingForm() {
 						<span className="select-none text-muted-foreground">
 							kedaipal.com/
 						</span>
-						<input
+						<Input
 							type="text"
 							value={slug}
 							onChange={(e) => {
@@ -119,7 +120,8 @@ function OnboardingForm() {
 								setSlugEdited(true);
 							}}
 							placeholder="your-slug"
-							className="min-h-11 flex-1 bg-transparent pl-0 pr-4 font-mono text-base outline-none"
+							variant="bare"
+							className="min-h-11 flex-1 pr-4 font-mono text-base"
 						/>
 					</div>
 					<AvailabilityHint state={availability} />

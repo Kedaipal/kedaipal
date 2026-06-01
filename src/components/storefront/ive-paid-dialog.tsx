@@ -5,6 +5,7 @@ import { type FormEvent, useRef, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import { convexErrorMessage } from "../../lib/format";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 
 interface IvePaidDialogProps {
 	open: boolean;
@@ -127,7 +128,7 @@ export function IvePaidDialog({
 										(optional)
 									</span>
 								</label>
-								<input
+								<Input
 									id="payment-reference"
 									type="text"
 									inputMode="text"
@@ -136,7 +137,8 @@ export function IvePaidDialog({
 									onChange={(e) => setReference(e.target.value)}
 									placeholder="e.g. TXN20260429-9988"
 									maxLength={80}
-									className="h-12 w-full rounded-xl border border-border bg-background px-3 text-base placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+									variant="field"
+									className="h-12 px-3"
 								/>
 								<p className="text-xs text-muted-foreground">
 									From your bank app — helps the store match your transfer.

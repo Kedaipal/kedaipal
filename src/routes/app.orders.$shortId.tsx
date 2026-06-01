@@ -26,6 +26,7 @@ import {
 	formatAddressInline,
 } from "../components/storefront/delivery-address-display";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { formatPhone } from "../lib/customer";
 import { convexErrorMessage, formatPrice } from "../lib/format";
@@ -616,14 +617,13 @@ function OrderDetailRoute() {
 
 					{editingCarrier ? (
 						<div className="flex flex-col gap-2">
-							<input
-								// biome-ignore lint/a11y/noAutofocus: intentional UX — input appears on user action
+							<Input
 								autoFocus
 								type="url"
 								value={carrierInput}
 								onChange={(e) => setCarrierInput(e.target.value)}
 								placeholder="https://www.spx.my/track?..."
-								className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+								className="h-10 w-full rounded-lg border-border px-3 text-sm"
 							/>
 							<p className="text-xs text-muted-foreground">
 								SPX, Lalamove, NinjaVan, J&amp;T, etc. Sent to the customer via
@@ -690,4 +690,3 @@ function OrderDetailRoute() {
 		</div>
 	);
 }
-

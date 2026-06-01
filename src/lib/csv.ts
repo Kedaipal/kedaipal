@@ -33,8 +33,8 @@ export {
 export function buildProductCsvTemplate(): string {
 	return [
 		PRODUCT_IMPORT_HEADER,
-		"TENT-4P,Tent — 4 person,Lightweight 4-season tent,499.00,12",
-		"HL-200,Headlamp 200lm,Rechargeable USB-C,89.50,30",
+		"ITEM-001,Sample product one,A short description of this product,29.90,20",
+		"ITEM-002,Sample product two,Another short product description,49.00,15",
 	].join("\n");
 }
 
@@ -49,27 +49,24 @@ export function downloadProductCsvTemplate(): void {
 }
 
 /**
- * Vertical-specific sample template for outdoor gear retailers. The rows
- * reflect the pilot vertical's realistic product mix (tent, sleeping bag,
- * backpack, headlamp, stove). A retailer can download this, tweak names and
- * prices in their spreadsheet, and re-upload to bootstrap their catalog.
+ * A fuller sample catalog (header + several example rows) so a retailer can
+ * download it, tweak the names, descriptions and prices in their spreadsheet,
+ * and re-upload to bootstrap their catalog. Intentionally vertical-agnostic —
+ * generic placeholder products that fit any store.
  */
-export function buildOutdoorGearSampleCsv(): string {
+export function buildSampleProductsCsv(): string {
 	return [
 		PRODUCT_IMPORT_HEADER,
-		'TENT-4P,4-person 4-season tent,"Lightweight aluminium poles, weatherproof fly",799.00,8',
-		'SB-COMF-15,Comfort sleeping bag (15°C),"Synthetic fill, compact pack size",189.00,15',
-		'BP-45L,45L trekking backpack,"Adjustable torso, hydration-ready",259.00,12',
-		'HL-300,Headlamp 300lm,"Rechargeable USB-C, dimmer + red-light mode",129.50,40',
-		'ST-MULTI-1,Multi-fuel camp stove,"Petrol / kerosene / alcohol, with carry case",349.00,10',
+		'ITEM-001,Sample product one,"A short description of this product",29.90,20',
+		'ITEM-002,Sample product two,"Another short product description",49.00,15',
+		'ITEM-003,Sample product three,"Describe what makes this item special",99.00,10',
+		'ITEM-004,Sample product four,"Key details shoppers want to know",15.50,40',
+		'ITEM-005,Sample product five,"Optional notes about the product",250.00,8',
 	].join("\n");
 }
 
-export function downloadOutdoorGearSampleCsv(): void {
-	triggerCsvDownload(
-		buildOutdoorGearSampleCsv(),
-		"kedaipal-products-outdoor-gear-sample.csv",
-	);
+export function downloadSampleProductsCsv(): void {
+	triggerCsvDownload(buildSampleProductsCsv(), "kedaipal-products-sample.csv");
 }
 
 function triggerCsvDownload(content: string, filename: string): void {
