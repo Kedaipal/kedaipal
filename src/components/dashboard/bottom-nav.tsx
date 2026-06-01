@@ -23,9 +23,10 @@ export function BottomNav({ actionableCount }: BottomNavProps) {
 								className={cn(
 									"size-5",
 									isActive
-										? "fill-foreground stroke-foreground"
+										? "stroke-accent"
 										: "stroke-muted-foreground",
 								)}
+								strokeWidth={isActive ? 2.5 : 1.75}
 							/>
 							<span
 								className={cn(
@@ -50,9 +51,10 @@ export function BottomNav({ actionableCount }: BottomNavProps) {
 								className={cn(
 									"size-5",
 									isActive
-										? "fill-foreground stroke-background"
+										? "stroke-accent"
 										: "stroke-muted-foreground",
 								)}
+								strokeWidth={isActive ? 2.5 : 1.75}
 							/>
 							<span
 								className={cn(
@@ -78,9 +80,10 @@ export function BottomNav({ actionableCount }: BottomNavProps) {
 									className={cn(
 										"size-5",
 										isActive
-											? "fill-foreground stroke-background"
+											? "stroke-accent"
 											: "stroke-muted-foreground",
 									)}
+									strokeWidth={isActive ? 2.5 : 1.75}
 								/>
 								{actionableCount > 0 ? (
 									<span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-orange-500 px-1 text-[9px] font-bold leading-none text-white">
@@ -111,9 +114,10 @@ export function BottomNav({ actionableCount }: BottomNavProps) {
 								className={cn(
 									"size-5",
 									isActive
-										? "fill-foreground stroke-background"
+										? "stroke-accent"
 										: "stroke-muted-foreground",
 								)}
+								strokeWidth={isActive ? 2.5 : 1.75}
 							/>
 							<span
 								className={cn(
@@ -139,9 +143,10 @@ export function BottomNav({ actionableCount }: BottomNavProps) {
 								className={cn(
 									"size-5",
 									isActive
-										? "fill-foreground stroke-background"
+										? "stroke-accent"
 										: "stroke-muted-foreground",
 								)}
+								strokeWidth={isActive ? 2.5 : 1.75}
 							/>
 							<span
 								className={cn(

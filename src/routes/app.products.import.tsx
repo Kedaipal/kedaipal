@@ -7,8 +7,8 @@ import { api } from "../../convex/_generated/api";
 import { PageHeader } from "../components/dashboard/page-header";
 import { Button } from "../components/ui/button";
 import {
-	downloadOutdoorGearSampleCsv,
 	downloadProductCsvTemplate,
+	downloadSampleProductsCsv,
 	parseProductsCsv,
 } from "../lib/csv";
 import { convexErrorMessage, formatPrice } from "../lib/format";
@@ -291,10 +291,10 @@ function ImportProductsRoute() {
 					<Button
 						type="button"
 						variant="secondary"
-						onClick={downloadOutdoorGearSampleCsv}
+						onClick={downloadSampleProductsCsv}
 						className="h-11"
 					>
-						<Download className="mr-2 size-4" aria-hidden /> Outdoor gear sample
+						<Download className="mr-2 size-4" aria-hidden /> Sample products
 					</Button>
 				</div>
 			</section>

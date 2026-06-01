@@ -20,6 +20,7 @@ import { useAppForm } from "../components/forms/form";
 import { ShopeeIcon } from "../components/icons/shopee-icon";
 import { PickupLocationsTab } from "../components/settings/pickup-locations-tab";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage } from "../lib/format";
@@ -198,12 +199,13 @@ function SettingsRoute() {
 					<span className="select-none text-sm text-muted-foreground">
 						kedaipal.com/
 					</span>
-					<input
+					<Input
 						type="text"
 						value={newSlug}
 						onChange={(e) => setNewSlug(e.target.value.toLowerCase())}
 						placeholder="new-slug"
-						className="min-h-11 flex-1 bg-transparent pl-0 pr-4 font-mono text-base outline-none"
+						variant="bare"
+						className="min-h-11 flex-1 pr-4 font-mono text-base"
 					/>
 				</div>
 				<Hint state={availability} />
@@ -431,13 +433,13 @@ function StoreNameForm({
 				description="Shown on your storefront header and WhatsApp messages."
 			/>
 			<div className="flex flex-col gap-1.5">
-				<input
+				<Input
 					type="text"
 					value={value}
 					onChange={(e) => setValue(e.target.value)}
 					placeholder="Your Store Name"
 					maxLength={80}
-					className="min-h-11 rounded-xl border border-input bg-background px-4 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+					variant="field"
 				/>
 				<span className="self-end text-xs text-muted-foreground tabular-nums">
 					{value.trim().length}/80
@@ -644,38 +646,39 @@ function PaymentInstructionsForm({
 
 			<label className="flex flex-col gap-1">
 				<span className="text-sm font-medium">Bank name</span>
-				<input
+				<Input
 					type="text"
 					value={draft.bankName}
 					onChange={(e) => setField("bankName", e.target.value)}
 					placeholder="Maybank"
 					maxLength={120}
-					className="min-h-11 rounded-xl border border-input bg-background px-4 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+					variant="field"
 				/>
 			</label>
 
 			<label className="flex flex-col gap-1">
 				<span className="text-sm font-medium">Account holder name</span>
-				<input
+				<Input
 					type="text"
 					value={draft.bankAccountName}
 					onChange={(e) => setField("bankAccountName", e.target.value)}
-					placeholder="Acme Outdoor Sdn Bhd"
+					placeholder="Your Business Sdn Bhd"
 					maxLength={120}
-					className="min-h-11 rounded-xl border border-input bg-background px-4 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+					variant="field"
 				/>
 			</label>
 
 			<label className="flex flex-col gap-1">
 				<span className="text-sm font-medium">Account number</span>
-				<input
+				<Input
 					type="text"
 					value={draft.bankAccountNumber}
 					onChange={(e) => setField("bankAccountNumber", e.target.value)}
 					placeholder="5123 4567 8901"
 					inputMode="numeric"
 					maxLength={120}
-					className="min-h-11 rounded-xl border border-input bg-background px-4 font-mono text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+					variant="field"
+					className="font-mono"
 				/>
 			</label>
 

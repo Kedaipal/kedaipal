@@ -83,6 +83,7 @@ function CostPage() {
 				min: inputs.chaseMin,
 			},
 			replace: true,
+			resetScroll: false,
 		});
 	};
 

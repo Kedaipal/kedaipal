@@ -4,6 +4,7 @@ import { useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
+import { Input } from "../ui/input";
 import { ProductCard, type StorefrontProduct } from "./product-card";
 import { ProductDetailSheet } from "./product-detail-sheet";
 
@@ -65,12 +66,12 @@ export function ProductGrid({ retailerId, cart }: ProductGridProps) {
 			{/* Search bar */}
 			<div className="relative mb-4">
 				<Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-				<input
+				<Input
 					type="search"
 					value={searchQuery}
 					onChange={(e) => setSearchQuery(e.target.value)}
 					placeholder="Search products…"
-					className="w-full rounded-xl border border-border bg-muted/50 py-3 pl-10 pr-10 text-sm outline-none transition-colors focus:border-accent focus:bg-background"
+					className="h-11 w-full rounded-xl border-border bg-muted/50 pl-10 pr-10 text-sm focus:bg-background"
 				/>
 				{searchQuery && (
 					<button

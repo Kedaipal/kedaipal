@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { api } from "../../convex/_generated/api";
+import { GreetingChecklistRow } from "../components/dashboard/greeting-checklist-row";
 import {
 	PageHeader,
 	PageHeaderSkeleton,
@@ -208,11 +209,27 @@ function DashboardHome() {
 			to: "/app/settings",
 			tab: "payments",
 		},
+		{
+			// Greeting step is unconditional — always shown to every retailer.
+			key: "greeting",
+			step: 4,
+			done: retailer.onboardingGreetingSetup ?? false,
+			icon: MessageCircle,
+			title: "Auto-reply when customers message you directly",
+			why: "Set a free greeting on your WhatsApp Business app so customers who message your personal number get your store link instantly — before you even pick up your phone.",
+			time: "~2 min",
+			cta: "",
+			to: "",
+			optional: true,
+		},
+		// Pickup step is conditional — only surfaces for retailers offering
+		// self-collect (default true for new retailers from createRetailer).
+		// Renders as Step 5 when present.
 		...(offersSelfCollect
 			? [
 					{
 						key: "pickup",
-						step: 4,
+						step: 5,
 						done: pickupSetupSeen || hasPickupLocation,
 						icon: MapPin,
 						title: "Add a pickup location",
@@ -379,7 +396,16 @@ function DashboardHome() {
 						{checklist.map((item, i) => {
 							const isNext =
 								!item.done && checklist.slice(0, i).every((c) => c.done);
-							return (
+							return item.key === "greeting" ? (
+								<GreetingChecklistRow
+									key={item.key}
+									item={item}
+									expanded={isNext}
+									storeName={retailer.storeName}
+									slug={retailer.slug}
+									locale={retailer.locale}
+								/>
+							) : (
 								<ChecklistRow key={item.key} item={item} expanded={isNext} />
 							);
 						})}
@@ -523,7 +549,7 @@ type SettingsTab =
 	| "pickup"
 	| "integrations";
 
-type ChecklistItem = {
+export type ChecklistItem = {
 	key: string;
 	step: number;
 	done: boolean;

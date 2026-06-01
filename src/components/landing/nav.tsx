@@ -108,9 +108,9 @@ export function Nav() {
 	}, []);
 
 	const navLinks = [
-		{ href: "#features", label: m.nav_features() },
-		{ href: "#how", label: m.nav_how() },
-		{ href: "#faq", label: m.nav_faq() },
+		{ href: "/#features", label: m.nav_features() },
+		{ href: "/#how", label: m.nav_how() },
+		{ href: "/#faq", label: m.nav_faq() },
 	];
 
 	return (
@@ -135,6 +135,12 @@ export function Nav() {
 							{link.label}
 						</a>
 					))}
+					<Link
+						to="/cost"
+						className="text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+					>
+						{m.nav_cost()}
+					</Link>
 					<Link
 						to="/pricing"
 						className="text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
@@ -171,6 +177,13 @@ export function Nav() {
 								{link.label}
 							</a>
 						))}
+						<Link
+							to="/cost"
+							onClick={closeMenu}
+							className="rounded-lg px-3 py-3 text-base font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+						>
+							{m.nav_cost()}
+						</Link>
 						<Link
 							to="/pricing"
 							onClick={closeMenu}
