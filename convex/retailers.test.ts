@@ -266,6 +266,41 @@ describe("retailers legal consent", () => {
 	});
 });
 
+describe("retailers greeting onboarding", () => {
+	test("markGreetingSetupDone flips the flag for the authed retailer", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "greeting");
+
+		const before = await asA.query(api.retailers.getMyRetailer);
+		expect(before?.onboardingGreetingSetup ?? false).toBe(false);
+
+		await asA.mutation(api.retailers.markGreetingSetupDone, {});
+
+		const after = await asA.query(api.retailers.getMyRetailer);
+		expect(after?.onboardingGreetingSetup).toBe(true);
+	});
+
+	test("markGreetingSetupDone is scoped per retailer", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "greeting-a");
+		await seed(t, USER_B, "greeting-b");
+
+		await asA.mutation(api.retailers.markGreetingSetupDone, {});
+
+		const asB = t.withIdentity({ subject: USER_B });
+		const b = await asB.query(api.retailers.getMyRetailer);
+		expect(b?.onboardingGreetingSetup ?? false).toBe(false);
+	});
+
+	test("markGreetingSetupDone errors when the user has no store", async () => {
+		const t = setup();
+		const asA = t.withIdentity({ subject: USER_A });
+		await expect(
+			asA.mutation(api.retailers.markGreetingSetupDone, {}),
+		).rejects.toThrow(/No store/);
+	});
+});
+
 describe("retailers deleteUser (internal cascade)", () => {
 	/**
 	 * Seed a fully-populated tenant for USER_A: retailer + logo + payment QR,

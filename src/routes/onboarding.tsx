@@ -102,7 +102,7 @@ function OnboardingForm() {
 						type="text"
 						value={storeName}
 						onChange={(e) => setStoreName(e.target.value)}
-						placeholder=""
+						placeholder="e.g. Your store name"
 						variant="field"
 					/>
 				</Field>
