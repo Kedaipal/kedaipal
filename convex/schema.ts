@@ -74,6 +74,10 @@ export default defineSchema({
 		aupAcceptedAt: v.optional(v.number()),
 		aupVersion: v.optional(v.string()),
 		acceptanceIp: v.optional(v.string()),
+		// Onboarding checklist: marks the optional "WhatsApp Business greeting
+		// message" setup step as done (or skipped). Persisted so the step stays
+		// collapsed across sessions and the setup checklist can reach all-done.
+		onboardingGreetingSetup: v.optional(v.boolean()),
 		channel: v.literal("whatsapp"),
 		createdAt: v.number(),
 		updatedAt: v.number(),

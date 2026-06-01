@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { api } from "../../convex/_generated/api";
+import { GreetingChecklistRow } from "../components/dashboard/greeting-checklist-row";
 import {
 	PageHeader,
 	PageHeaderSkeleton,
@@ -191,6 +192,18 @@ function DashboardHome() {
 			to: "/app/settings",
 			tab: "payments",
 		},
+		{
+			key: "greeting",
+			step: 4,
+			done: retailer.onboardingGreetingSetup ?? false,
+			icon: MessageCircle,
+			title: "Auto-reply when customers message you directly",
+			why: "Set a free greeting on your WhatsApp Business app so customers who message your personal number get your store link instantly — before you even pick up your phone.",
+			time: "~2 min",
+			cta: "",
+			to: "",
+			optional: true,
+		},
 	];
 
 	const completedCount = checklist.filter((c) => c.done).length;
@@ -345,7 +358,16 @@ function DashboardHome() {
 						{checklist.map((item, i) => {
 							const isNext =
 								!item.done && checklist.slice(0, i).every((c) => c.done);
-							return (
+							return item.key === "greeting" ? (
+								<GreetingChecklistRow
+									key={item.key}
+									item={item}
+									expanded={isNext}
+									storeName={retailer.storeName}
+									slug={retailer.slug}
+									locale={retailer.locale}
+								/>
+							) : (
 								<ChecklistRow key={item.key} item={item} expanded={isNext} />
 							);
 						})}
@@ -484,7 +506,7 @@ function DashboardHome() {
 
 type SettingsTab = "store" | "whatsapp" | "payments" | "integrations";
 
-type ChecklistItem = {
+export type ChecklistItem = {
 	key: string;
 	step: number;
 	done: boolean;
@@ -495,6 +517,9 @@ type ChecklistItem = {
 	cta: string;
 	to: string;
 	tab?: SettingsTab;
+	// Optional steps render an "Optional" pill and are safe to skip; the seller
+	// can still complete the rest of setup without them.
+	optional?: boolean;
 };
 
 function ChecklistRow({
@@ -532,6 +557,11 @@ function ChecklistRow({
 							<span className="text-[10px] font-bold uppercase tracking-wider text-accent">
 								Step {item.step}
 							</span>
+							{item.optional ? (
+								<span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+									Optional
+								</span>
+							) : null}
 							<span className="text-[10px] text-muted-foreground">
 								{item.time}
 							</span>
