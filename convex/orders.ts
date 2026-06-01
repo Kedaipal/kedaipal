@@ -11,6 +11,7 @@ import { assertValidAddress } from "./lib/address";
 import { computeOrderTotals, generateShortId } from "./lib/order";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidWaPhone } from "./lib/slug";
+import type { PickupSnapshot } from "./lib/whatsappCopy";
 
 const addressValidator = v.object({
 	line1: v.string(),
@@ -20,6 +21,12 @@ const addressValidator = v.object({
 	postcode: v.string(),
 	notes: v.optional(v.string()),
 	mapsUrl: v.optional(v.string()),
+	// Coordinates captured from Google Places autocomplete on the buyer's
+	// checkout form. Optional — falls through cleanly when the buyer typed
+	// the address manually.
+	latitude: v.optional(v.number()),
+	longitude: v.optional(v.number()),
+	placeId: v.optional(v.string()),
 });
 
 const MAX_ITEMS_PER_ORDER = 100;
@@ -68,6 +75,7 @@ export const create = mutation({
 			v.union(v.literal("delivery"), v.literal("self_collect")),
 		),
 		deliveryAddress: v.optional(addressValidator),
+		pickupLocationId: v.optional(v.id("pickupLocations")),
 	},
 	handler: async (ctx, args): Promise<{ shortId: string }> => {
 		// Rate limit FIRST — public endpoint, throttle per storefront before any DB reads.
@@ -86,6 +94,17 @@ export const create = mutation({
 		if (effectiveDeliveryMethod === "self_collect" && args.deliveryAddress) {
 			throw new ConvexError(
 				"Self-collect orders should not include an address",
+			);
+		}
+		// Pickup invariant mirror: pickupLocationId is only meaningful for
+		// self_collect. Reject it on delivery orders so a stale client form can't
+		// poison the order doc.
+		if (
+			effectiveDeliveryMethod === "delivery" &&
+			args.pickupLocationId !== undefined
+		) {
+			throw new ConvexError(
+				"Delivery orders should not include a pickup location",
 			);
 		}
 		let sanitizedAddress: ReturnType<typeof assertValidAddress> | undefined;
@@ -114,6 +133,45 @@ export const create = mutation({
 
 		const retailer = await ctx.db.get(args.retailerId);
 		if (!retailer) throw new ConvexError("Retailer not found");
+
+		// Self-collect pickup resolution. The storefront only surfaces self-collect
+		// when (offerSelfCollect && ≥1 active location), so the strict branch fires
+		// whenever both gates are open server-side; when either is closed we
+		// preserve the original behaviour (no pickup info on the order).
+		let sanitizedPickupSnapshot: PickupSnapshot | undefined;
+		let resolvedPickupLocationId: Id<"pickupLocations"> | undefined;
+		if (effectiveDeliveryMethod === "self_collect" && retailer.offerSelfCollect === true) {
+			const activeCount = await ctx.db
+				.query("pickupLocations")
+				.withIndex("by_retailer_active", (q) =>
+					q.eq("retailerId", args.retailerId).eq("isActive", true),
+				)
+				.first();
+			if (activeCount !== null) {
+				if (!args.pickupLocationId) {
+					throw new ConvexError(
+						"Pick a pickup location to continue with self-collect",
+					);
+				}
+				const location = await ctx.db.get(args.pickupLocationId);
+				if (!location || location.retailerId !== args.retailerId) {
+					throw new ConvexError("Pickup location not found");
+				}
+				if (!location.isActive) {
+					throw new ConvexError("That pickup location is no longer available");
+				}
+				resolvedPickupLocationId = location._id;
+				sanitizedPickupSnapshot = {
+					label: location.label,
+					address: location.address,
+					mapsUrl: location.mapsUrl,
+					notes: location.notes,
+					latitude: location.latitude,
+					longitude: location.longitude,
+					placeId: location.placeId,
+				};
+			}
+		}
 
 		if (args.items.length === 0)
 			throw new ConvexError("Order must have at least one item");
@@ -194,6 +252,8 @@ export const create = mutation({
 			customer: sanitizedCustomer,
 			deliveryMethod: effectiveDeliveryMethod,
 			deliveryAddress: sanitizedAddress,
+			pickupLocationId: resolvedPickupLocationId,
+			pickupSnapshot: sanitizedPickupSnapshot,
 			createdAt: now,
 			updatedAt: now,
 		});
@@ -479,6 +539,70 @@ export const updateDeliveryAddress = mutation({
 			orderId: order._id,
 			status: "pending",
 			note: "address_updated",
+			createdAt: now,
+		});
+	},
+});
+
+/**
+ * Public mutation that lets the shopper switch their self-collect pickup point
+ * while the order is still pending. Same trust model as `updateDeliveryAddress`
+ * — shortId is the capability — and same status gate (pending-only). The new
+ * snapshot is frozen onto the order, so subsequent edits to the source
+ * location do not rewrite history.
+ */
+export const updatePickupLocation = mutation({
+	args: {
+		shortId: v.string(),
+		pickupLocationId: v.id("pickupLocations"),
+	},
+	handler: async (ctx, { shortId, pickupLocationId }): Promise<void> => {
+		await rateLimiter.limit(ctx, "addressUpdate", {
+			key: shortId,
+			throws: true,
+		});
+
+		const order = await ctx.db
+			.query("orders")
+			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+			.first();
+		if (!order) throw new ConvexError("Order not found");
+
+		if (order.status !== "pending") {
+			throw new ConvexError(
+				"Pickup location can only be edited while the order is pending",
+			);
+		}
+		if (order.deliveryMethod !== "self_collect") {
+			throw new ConvexError("Delivery orders do not have a pickup location");
+		}
+
+		const location = await ctx.db.get(pickupLocationId);
+		if (!location || location.retailerId !== order.retailerId) {
+			throw new ConvexError("Pickup location not found");
+		}
+		if (!location.isActive) {
+			throw new ConvexError("That pickup location is no longer available");
+		}
+
+		const now = Date.now();
+		await ctx.db.patch(order._id, {
+			pickupLocationId: location._id,
+			pickupSnapshot: {
+				label: location.label,
+				address: location.address,
+				mapsUrl: location.mapsUrl,
+				notes: location.notes,
+				latitude: location.latitude,
+				longitude: location.longitude,
+				placeId: location.placeId,
+			},
+			updatedAt: now,
+		});
+		await ctx.db.insert("orderEvents", {
+			orderId: order._id,
+			status: "pending",
+			note: "pickup_location_updated",
 			createdAt: now,
 		});
 	},

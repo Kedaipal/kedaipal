@@ -14,12 +14,14 @@ import {
 	pickLocale,
 	renderMessage,
 	renderPaymentInstructions,
+	renderPickupBlock,
 	renderSystemMessage,
 	SHORT_ID_REGEX,
 	type DeliveryMethod,
 	type Locale,
 	type MessageTemplates,
 	type PaymentInstructions,
+	type PickupSnapshot,
 } from "./lib/whatsappCopy";
 
 type ResolvedPayment = {
@@ -174,6 +176,7 @@ export const getRetailerLocaleForOrder = internalQuery({
 		retailerWaPhone: string | undefined;
 		messageTemplates: MessageTemplates | undefined;
 		deliveryMethod: DeliveryMethod;
+		pickupSnapshot: PickupSnapshot | undefined;
 		payment: ResolvedPayment;
 	} | null> => {
 		const order = await ctx.db
@@ -199,6 +202,7 @@ export const getRetailerLocaleForOrder = internalQuery({
 				| MessageTemplates
 				| undefined,
 			deliveryMethod: (order.deliveryMethod as DeliveryMethod | undefined) ?? "delivery",
+			pickupSnapshot: order.pickupSnapshot,
 			payment: { instructions, qrImageUrl },
 		};
 	},
@@ -287,7 +291,14 @@ export const handleInbound = internalAction({
 			locale,
 			meta?.payment.instructions,
 		);
-		const confirmWithRef = `${confirmBody}\n\n${transferReferenceLine}`;
+		const pickupBlock = renderPickupBlock(locale, meta?.pickupSnapshot);
+		// Layout: confirm → [pickup block] → blank line → transfer reference →
+		// [payment block]. Pickup goes first so the buyer sees the WHERE before
+		// the WHEN/HOW of paying.
+		const confirmWithPickup = pickupBlock
+			? `${confirmBody}\n${pickupBlock}`
+			: confirmBody;
+		const confirmWithRef = `${confirmWithPickup}\n\n${transferReferenceLine}`;
 		const body = paymentBlock
 			? `${confirmWithRef}\n${paymentBlock}`
 			: confirmWithRef;

@@ -117,6 +117,13 @@ export const strictAddressSchema = z.object({
 // Loose form-state shape: every field is always present as a string so
 // TanStack Form can mount the inputs whether delivery or self_collect is
 // selected. Strict validation runs only when delivery is chosen.
+//
+// `latitude` and `longitude` are stringified numbers captured from Google
+// Places autocomplete — kept as strings here to match TanStack Form's
+// all-string form state. Empty when the buyer skipped autocomplete; the
+// submit handler in checkout-sheet parses them back to numbers.
+// `placeId` travels alongside lat/lng so derived maps URLs deep-link to
+// the named Google place rather than raw coords.
 export const addressFormFieldsSchema = z.object({
 	line1: z.string(),
 	line2: z.string(),
@@ -125,6 +132,9 @@ export const addressFormFieldsSchema = z.object({
 	postcode: z.string(),
 	notes: z.string(),
 	mapsUrl: z.string(),
+	latitude: z.string(),
+	longitude: z.string(),
+	placeId: z.string(),
 });
 
 export const checkoutFormSchema = z
@@ -132,6 +142,11 @@ export const checkoutFormSchema = z
 		name: z.string().max(60, "Name must be at most 60 characters"),
 		deliveryMethod: deliveryMethodSchema,
 		address: addressFormFieldsSchema,
+		// Convex id of the chosen pickup location when deliveryMethod is
+		// self_collect and the retailer has 2+ active locations. The
+		// "required" check lives in the submit handler because it depends on
+		// runtime data (the live location count) not knowable to the schema.
+		pickupLocationId: z.string(),
 	})
 	.superRefine((val, ctx) => {
 		if (val.deliveryMethod !== "delivery") return;
@@ -174,6 +189,9 @@ export const emptyAddress: CheckoutAddressValues = {
 	postcode: "",
 	notes: "",
 	mapsUrl: "",
+	latitude: "",
+	longitude: "",
+	placeId: "",
 };
 
 // Product form. Price is entered as a major-unit decimal string (e.g. "120" or
@@ -205,3 +223,4 @@ export const productFormSchema = z.object({
 
 export type ProductFormInput = z.input<typeof productFormSchema>;
 export type ProductFormOutput = z.output<typeof productFormSchema>;
+

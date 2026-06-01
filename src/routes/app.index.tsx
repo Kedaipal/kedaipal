@@ -8,6 +8,7 @@ import {
 	CreditCard,
 	Globe,
 	type LucideIcon,
+	MapPin,
 	MessageCircle,
 	Music2,
 	Package,
@@ -107,6 +108,10 @@ function DashboardHome() {
 		api.orders.countActionable,
 		retailer ? { retailerId: retailer._id } : "skip",
 	);
+	const pickupStatus = useQuery(
+		api.pickupLocations.hasAnyActive,
+		retailer ? { retailerId: retailer._id } : "skip",
+	);
 	const recentOrdersPage = useQuery(
 		api.orders.listByRetailer,
 		retailer
@@ -156,10 +161,23 @@ function DashboardHome() {
 				payment.note),
 	);
 
-	const checklist: ChecklistItem[] = [
+	// The Pickup step is shown to any retailer with self-collect on (default
+	// for new retailers, see createRetailer). Two paths dismiss it:
+	//   1. The retailer visits the Pickup settings tab — pickupSetupSeen flips
+	//      true, step shows as strikethrough done.
+	//   2. The retailer adds an active pickup location — hasAnyActive flips
+	//      true, step shows as strikethrough done.
+	// Pre-existing retailers without offerSelfCollect set don't see the step
+	// at all (no surprise nag on first dashboard load post-deploy).
+	const offersSelfCollect = retailer.offerSelfCollect ?? false;
+	const hasPickupLocation = pickupStatus?.hasAny ?? false;
+	const pickupSetupSeen = retailer.pickupSetupSeen ?? false;
+
+	// Step numbers are derived from position below (not hardcoded), so any
+	// conditional item being excluded auto-renumbers the rest with no gaps.
+	const checklistItems: Omit<ChecklistItem, "step">[] = [
 		{
 			key: "wa",
-			step: 1,
 			done: hasWaPhone,
 			icon: Phone,
 			title: "Add your WhatsApp number",
@@ -171,7 +189,6 @@ function DashboardHome() {
 		},
 		{
 			key: "product",
-			step: 2,
 			done: hasProduct,
 			icon: Package,
 			title: "Add your first product",
@@ -182,7 +199,6 @@ function DashboardHome() {
 		},
 		{
 			key: "payment",
-			step: 3,
 			done: hasPayment,
 			icon: CreditCard,
 			title: "Add payment details",
@@ -194,7 +210,6 @@ function DashboardHome() {
 		},
 		{
 			key: "greeting",
-			step: 4,
 			done: retailer.onboardingGreetingSetup ?? false,
 			icon: MessageCircle,
 			title: "Auto-reply when customers message you directly",
@@ -204,7 +219,28 @@ function DashboardHome() {
 			to: "",
 			optional: true,
 		},
+		...(offersSelfCollect
+			? [
+					{
+						key: "pickup",
+						done: pickupSetupSeen || hasPickupLocation,
+						icon: MapPin,
+						title: "Add a pickup location",
+						why: "Buyers picking self-collect won't see the option on your storefront until you add at least one location. Skip if you only do delivery.",
+						time: "~2 min",
+						cta: "Go to Settings",
+						to: "/app/settings",
+						tab: "pickup" as const,
+						optional: true,
+					},
+				]
+			: []),
 	];
+
+	const checklist: ChecklistItem[] = checklistItems.map((item, i) => ({
+		...item,
+		step: i + 1,
+	}));
 
 	const completedCount = checklist.filter((c) => c.done).length;
 	const allDone = completedCount === checklist.length;
@@ -504,7 +540,12 @@ function DashboardHome() {
 	);
 }
 
-type SettingsTab = "store" | "whatsapp" | "payments" | "integrations";
+type SettingsTab =
+	| "store"
+	| "whatsapp"
+	| "payments"
+	| "pickup"
+	| "integrations";
 
 export type ChecklistItem = {
 	key: string;
@@ -517,8 +558,7 @@ export type ChecklistItem = {
 	cta: string;
 	to: string;
 	tab?: SettingsTab;
-	// Optional steps render an "Optional" pill and are safe to skip; the seller
-	// can still complete the rest of setup without them.
+	/** Renders an "Optional" pill so the seller knows they can skip. */
 	optional?: boolean;
 };
 
@@ -558,7 +598,7 @@ function ChecklistRow({
 								Step {item.step}
 							</span>
 							{item.optional ? (
-								<span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+								<span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
 									Optional
 								</span>
 							) : null}
@@ -594,7 +634,14 @@ function ChecklistRow({
 						{item.step}
 					</div>
 					<div className="flex-1">
-						<p className="text-sm font-medium">{item.title}</p>
+						<div className="flex items-center gap-2">
+							<p className="text-sm font-medium">{item.title}</p>
+							{item.optional ? (
+								<span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+									Optional
+								</span>
+							) : null}
+						</div>
 						<p className="text-xs text-muted-foreground">{item.time}</p>
 					</div>
 					<ArrowRight className="size-4 shrink-0 text-muted-foreground" />

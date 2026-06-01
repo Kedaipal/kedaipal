@@ -74,6 +74,17 @@ export default defineSchema({
 		aupAcceptedAt: v.optional(v.number()),
 		aupVersion: v.optional(v.string()),
 		acceptanceIp: v.optional(v.string()),
+		// Retailer opt-in for offering self-collect at checkout. Storefront only
+		// surfaces the self-collect option when this is true AND the retailer has
+		// at least one active pickup location. New retailers default to true
+		// (set in createRetailer) so the Pickup checklist step is discoverable
+		// during onboarding; pre-existing rows stay undefined (treated as false).
+		offerSelfCollect: v.optional(v.boolean()),
+		// Set to true the first time the retailer opens the Pickup settings tab.
+		// Used by the dashboard checklist to mark step 4 done after a single
+		// visit, even if the retailer chose to skip self-collect — keeps the
+		// onboarding flow from nagging an uninterested seller.
+		pickupSetupSeen: v.optional(v.boolean()),
 		// Onboarding checklist: marks the optional "WhatsApp Business greeting
 		// message" setup step as done (or skipped). Persisted so the step stays
 		// collapsed across sessions and the setup checklist can reach all-done.
@@ -198,6 +209,42 @@ export default defineSchema({
 				postcode: v.string(),
 				notes: v.optional(v.string()),
 				mapsUrl: v.optional(v.string()),
+				// Captured from Google Places autocomplete when the buyer picks
+				// a suggestion. Optional because legacy orders + free-form
+				// manual entry won't have coordinates. Drives the WhatsApp
+				// location pin sent after confirm.
+				latitude: v.optional(v.number()),
+				longitude: v.optional(v.number()),
+				// Google Place ID — when set, maps URLs deep-link to the
+				// named place page instead of raw lat/lng search.
+				placeId: v.optional(v.string()),
+			}),
+		),
+		// Reference to the retailer's pickup location when deliveryMethod ===
+		// "self_collect". Required at order-create time iff the retailer has
+		// offerSelfCollect = true AND ≥1 active pickup location. Soft-deleting
+		// the referenced location later does not invalidate the order — the
+		// frozen `pickupSnapshot` below carries the historical detail.
+		pickupLocationId: v.optional(v.id("pickupLocations")),
+		// Frozen copy of the pickup location at order-creation time. Never
+		// mutated after insert; safe to display on the tracking page and in
+		// WhatsApp messages even if the retailer later edits or deactivates
+		// the source location.
+		pickupSnapshot: v.optional(
+			v.object({
+				label: v.string(),
+				address: v.string(),
+				mapsUrl: v.optional(v.string()),
+				notes: v.optional(v.string()),
+				// Frozen at order create. Drives the WhatsApp location pin
+				// sent after confirm + the Waze/Google buttons on the
+				// tracking page. Optional so orders against legacy pickup
+				// locations (created before autocomplete) keep working.
+				latitude: v.optional(v.number()),
+				longitude: v.optional(v.number()),
+				// Google Place ID — frozen so the Maps URL can deep-link
+				// to the named place page (not just lat/lng search).
+				placeId: v.optional(v.string()),
 			}),
 		),
 		// Optional external carrier tracking URL set by the retailer when marking
@@ -229,6 +276,45 @@ export default defineSchema({
 		.index("by_retailer_payment", ["retailerId", "paymentStatus"])
 		.index("by_shortId", ["shortId"])
 		.index("by_customer", ["customerId"]),
+
+	/**
+	 * Retailer-managed library of self-collect pickup locations. Frozen onto
+	 * an order via `orders.pickupSnapshot` at create time so deactivating /
+	 * editing a location later doesn't rewrite history.
+	 */
+	pickupLocations: defineTable({
+		retailerId: v.id("retailers"),
+		label: v.string(),
+		address: v.string(),
+		mapsUrl: v.optional(v.string()),
+		notes: v.optional(v.string()),
+		// Coordinates + Google place identifier captured via Places
+		// autocomplete. Optional — legacy rows created via free-form text
+		// don't have these. New autocomplete-captured rows write all three.
+		latitude: v.optional(v.number()),
+		longitude: v.optional(v.number()),
+		placeId: v.optional(v.string()),
+		// Optional contact info for the person running this pickup spot. When
+		// set, the seller order detail page surfaces a "Notify <name>" wa.me
+		// button so the seller can forward the order details in one tap.
+		// Intentionally NOT frozen onto the order snapshot — pickup orders
+		// should always route to the *current* manager, even if the seller
+		// swaps them after an order is placed.
+		managerName: v.optional(v.string()),
+		managerWaPhone: v.optional(v.string()),
+		// Soft-delete flag. Retailers deactivate (rather than hard-delete) so
+		// historical order snapshots remain meaningful. Inactive rows are
+		// hidden from the storefront picker but still listed in settings under
+		// a "show inactive" toggle.
+		isActive: v.boolean(),
+		// Ascending integer used to drive the picker order. The settings UI
+		// surfaces up/down arrows that swap sortOrder with the neighbour.
+		sortOrder: v.number(),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_retailer", ["retailerId"])
+		.index("by_retailer_active", ["retailerId", "isActive"]),
 
 	orderEvents: defineTable({
 		orderId: v.id("orders"),

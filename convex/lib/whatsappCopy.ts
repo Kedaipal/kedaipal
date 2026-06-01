@@ -1,5 +1,7 @@
 // WhatsApp message copy catalog. Pure — no Convex imports — to keep testable.
 
+import { deriveMapsUrl } from "./mapsUrl";
+
 export type Locale = "en" | "ms";
 
 export type DeliveryMethod = "delivery" | "self_collect";
@@ -285,5 +287,66 @@ export function renderPaymentInstructions(
 
 export function paymentQrCaption(locale: Locale): string {
 	return paymentLabels[locale].qrCaption;
+}
+
+// ---------------------------------------------------------------------------
+// Self-collect pickup snapshot
+// ---------------------------------------------------------------------------
+
+export type PickupSnapshot = {
+	label: string;
+	address: string;
+	mapsUrl?: string;
+	notes?: string;
+	latitude?: number;
+	longitude?: number;
+	placeId?: string;
+};
+
+const pickupLabels: Record<Locale, { header: string }> = {
+	en: { header: "📍 Pickup details" },
+	ms: { header: "📍 Maklumat pengambilan" },
+};
+
+/**
+ * Render the pickup-location block appended to the confirm message for
+ * self-collect orders. Returns "" when the snapshot is missing so the caller
+ * can string-concat unconditionally — mirrors `renderPaymentInstructions`.
+ *
+ * Output (note leading blank line so consecutive blocks separate visually):
+ *   ""
+ *   "📍 Pickup details"
+ *   "<label>"
+ *   "<address>"
+ *   "<mapsUrl>"   (optional)
+ *   ""
+ *   "<notes>"     (optional)
+ */
+export function renderPickupBlock(
+	locale: Locale,
+	snapshot: PickupSnapshot | undefined,
+): string {
+	if (!snapshot) return "";
+	const labels = pickupLabels[locale];
+	const lines: string[] = [""];
+	lines.push(labels.header);
+	lines.push(snapshot.label);
+	lines.push(snapshot.address);
+	// Embed a clickable maps URL inline so the buyer gets one-tap navigation
+	// without us having to send a separate WhatsApp location-pin message.
+	// Priority: mapsUrl → placeId-derived → lat/lng-derived (see deriveMapsUrl).
+	// Skipped when none are available (free-text legacy rows).
+	const mapsUrl = deriveMapsUrl({
+		mapsUrl: snapshot.mapsUrl,
+		latitude: snapshot.latitude,
+		longitude: snapshot.longitude,
+		placeId: snapshot.placeId,
+	});
+	if (mapsUrl) lines.push(mapsUrl);
+	if (snapshot.notes) {
+		lines.push("");
+		lines.push(snapshot.notes);
+	}
+	return lines.join("\n");
 }
 

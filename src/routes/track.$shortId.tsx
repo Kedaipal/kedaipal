@@ -23,6 +23,7 @@ import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import { formatPrice } from "../lib/format";
+import { deriveMapsUrl } from "../lib/google-address";
 
 type PaymentStatus = "unpaid" | "claimed" | "received";
 
@@ -362,6 +363,37 @@ function TrackingRoute() {
 				</a>
 			) : null}
 
+			{/* Pickup location — shown for self-collect orders that have a snapshot.
+			    Reads the frozen snapshot (not the live pickupLocations row) so a
+			    retailer edit after the order was placed never rewrites history. */}
+			{isSelfCollect && order.pickupSnapshot ? (
+				<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+						Pick up at
+					</p>
+					<div className="flex items-start gap-2">
+						<MapPin
+							className="size-4 shrink-0 text-accent mt-0.5"
+							aria-hidden="true"
+						/>
+						<div className="flex min-w-0 flex-1 flex-col gap-1">
+							<p className="text-sm font-semibold leading-tight">
+								{order.pickupSnapshot.label}
+							</p>
+							<p className="text-xs text-muted-foreground whitespace-pre-line">
+								{order.pickupSnapshot.address}
+							</p>
+						</div>
+					</div>
+					<PickupNavButtons snapshot={order.pickupSnapshot} />
+					{order.pickupSnapshot.notes ? (
+						<p className="rounded-lg bg-muted/40 px-3 py-2 text-xs text-foreground whitespace-pre-line">
+							{order.pickupSnapshot.notes}
+						</p>
+					) : null}
+				</section>
+			) : null}
+
 			{/* Delivery address — shown for delivery orders that have an address */}
 			{!isSelfCollect && order.deliveryAddress ? (
 				<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
@@ -381,17 +413,20 @@ function TrackingRoute() {
 						) : null}
 					</div>
 					<DeliveryAddressDisplay address={order.deliveryAddress} />
-					{order.deliveryAddress.mapsUrl ? (
-						<a
-							href={order.deliveryAddress.mapsUrl}
-							target="_blank"
-							rel="noreferrer"
-							className="flex items-center gap-1.5 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
-						>
-							<MapPin className="size-3.5" />
-							Open pinned location
-						</a>
-					) : null}
+					{(() => {
+						const mapsUrl = deriveMapsUrl(order.deliveryAddress);
+						return mapsUrl ? (
+							<a
+								href={mapsUrl}
+								target="_blank"
+								rel="noreferrer"
+								className="flex items-center gap-1.5 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
+							>
+								<MapPin className="size-3.5" />
+								Open pinned location
+							</a>
+						) : null;
+					})()}
 					{!canEditAddress ? (
 						<p className="text-xs text-muted-foreground">
 							Contact the store to change this address.
@@ -415,6 +450,7 @@ function TrackingRoute() {
 				onClose={() => setEditingAddress(false)}
 				shortId={order.shortId}
 				currentAddress={order.deliveryAddress}
+				retailerId={order.retailerId}
 			/>
 
 			<IvePaidDialog
@@ -456,4 +492,64 @@ function TrackingRoute() {
 			</section>
 		</main>
 	);
+}
+
+/**
+ * Navigation buttons for a self-collect pickup. When we have lat/lng (Google
+ * autocomplete-captured locations) we render TWO buttons — Waze and Google
+ * Maps — so the buyer can pick their preferred app. Legacy snapshots without
+ * coordinates fall back to the single "Open in maps" link the retailer
+ * pasted.
+ */
+function PickupNavButtons({
+	snapshot,
+}: {
+	snapshot: NonNullable<
+		ReturnType<typeof useQuery<typeof api.orders.get>>
+	>["pickupSnapshot"];
+}) {
+	if (!snapshot) return null;
+	const { latitude, longitude, mapsUrl } = snapshot;
+	const hasCoords = typeof latitude === "number" && typeof longitude === "number";
+
+	if (hasCoords) {
+		const wazeUrl = `https://waze.com/ul?ll=${latitude},${longitude}&navigate=yes`;
+		const googleUrl = `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
+		return (
+			<div className="grid grid-cols-2 gap-2">
+				<a
+					href={wazeUrl}
+					target="_blank"
+					rel="noreferrer"
+					className="flex items-center justify-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2.5 text-xs font-semibold text-foreground transition-colors hover:bg-accent/5"
+				>
+					<MapPin className="size-3.5 text-accent" aria-hidden="true" />
+					Open in Waze
+				</a>
+				<a
+					href={googleUrl}
+					target="_blank"
+					rel="noreferrer"
+					className="flex items-center justify-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2.5 text-xs font-semibold text-foreground transition-colors hover:bg-accent/5"
+				>
+					<MapPin className="size-3.5 text-accent" aria-hidden="true" />
+					Open in Google Maps
+				</a>
+			</div>
+		);
+	}
+	if (mapsUrl) {
+		return (
+			<a
+				href={mapsUrl}
+				target="_blank"
+				rel="noreferrer"
+				className="flex items-center gap-1.5 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
+			>
+				<ExternalLink className="size-3.5" />
+				Open in maps
+			</a>
+		);
+	}
+	return null;
 }

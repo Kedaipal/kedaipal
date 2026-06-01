@@ -454,3 +454,67 @@ describe("retailers deleteUser (internal cascade)", () => {
 		});
 	});
 });
+
+describe("retailers — pickup onboarding defaults", () => {
+	test("createRetailer sets offerSelfCollect=true by default", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "pickup-default-store");
+		const retailer = await asA.query(api.retailers.getMyRetailer);
+		expect(retailer?.offerSelfCollect).toBe(true);
+		// pickupSetupSeen stays unset until the seller actually visits the tab
+		expect(retailer?.pickupSetupSeen).toBeUndefined();
+	});
+});
+
+describe("retailers.markPickupSetupSeen", () => {
+	test("returns updated=false when unauthenticated", async () => {
+		const t = setup();
+		const result = await t.mutation(api.retailers.markPickupSetupSeen, {});
+		expect(result.updated).toBe(false);
+	});
+
+	test("returns updated=false when the user has no retailer yet", async () => {
+		const t = setup();
+		const asA = t.withIdentity({ subject: USER_A });
+		// No createRetailer — user is signed in but hasn't onboarded.
+		const result = await asA.mutation(api.retailers.markPickupSetupSeen, {});
+		expect(result.updated).toBe(false);
+	});
+
+	test("first call patches pickupSetupSeen=true and returns updated=true", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "seen-store");
+		const before = await asA.query(api.retailers.getMyRetailer);
+		expect(before?.pickupSetupSeen).toBeUndefined();
+
+		const result = await asA.mutation(api.retailers.markPickupSetupSeen, {});
+		expect(result.updated).toBe(true);
+
+		const after = await asA.query(api.retailers.getMyRetailer);
+		expect(after?.pickupSetupSeen).toBe(true);
+	});
+
+	test("second call is a no-op (idempotent)", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "seen-idempotent");
+		await asA.mutation(api.retailers.markPickupSetupSeen, {});
+
+		const second = await asA.mutation(api.retailers.markPickupSetupSeen, {});
+		expect(second.updated).toBe(false);
+		const retailer = await asA.query(api.retailers.getMyRetailer);
+		expect(retailer?.pickupSetupSeen).toBe(true);
+	});
+
+	test("scoped per user — calling as USER_A does not affect USER_B's retailer", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "seen-a");
+		const asB = await seed(t, USER_B, "seen-b");
+
+		await asA.mutation(api.retailers.markPickupSetupSeen, {});
+
+		const aRetailer = await asA.query(api.retailers.getMyRetailer);
+		const bRetailer = await asB.query(api.retailers.getMyRetailer);
+		expect(aRetailer?.pickupSetupSeen).toBe(true);
+		expect(bRetailer?.pickupSetupSeen).toBeUndefined();
+	});
+});

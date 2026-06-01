@@ -157,6 +157,14 @@ type RetailerPublic = {
 	messageTemplates?: MessageTemplatesShape;
 	paymentInstructions?: PaymentInstructionsShape;
 	paymentQrImageUrl?: string;
+	// Whether the retailer is offering self-collect on the storefront. Storefront
+	// hides the self-collect option entirely when false (regardless of pickup
+	// location count). Undefined treated as false.
+	offerSelfCollect?: boolean;
+	// Whether the retailer has opened the Pickup settings tab at least once.
+	// Drives checklist step-4 dismissal — set to true on first tab visit by
+	// `markPickupSetupSeen`.
+	pickupSetupSeen?: boolean;
 	// Accepted legal-doc versions, surfaced so the dashboard can detect a
 	// version bump and prompt re-acceptance. Acceptance timestamps and IP are
 	// intentionally not exposed to the client.
@@ -203,6 +211,8 @@ async function loadRetailerForUser(
 		messageTemplates: row.messageTemplates as MessageTemplatesShape | undefined,
 		paymentInstructions,
 		paymentQrImageUrl,
+		offerSelfCollect: row.offerSelfCollect,
+		pickupSetupSeen: row.pickupSetupSeen,
 		termsVersion: row.termsVersion,
 		privacyVersion: row.privacyVersion,
 		aupVersion: row.aupVersion,
@@ -272,6 +282,7 @@ export const getRetailerBySlug = query({
 					messageTemplates: active.messageTemplates as
 						| MessageTemplatesShape
 						| undefined,
+					offerSelfCollect: active.offerSelfCollect,
 					// paymentInstructions intentionally omitted from the public
 					// storefront payload — only revealed in the WhatsApp confirm
 					// reply after the shopper commits to an order.
@@ -426,6 +437,11 @@ export const createRetailer = mutation({
 			notifyEmail,
 			currency: DEFAULT_CURRENCY,
 			channel: "whatsapp",
+			// Default self-collect ON so new retailers discover the pickup feature
+			// in the onboarding checklist. They can toggle it off from Settings →
+			// Pickup; that visit also dismisses checklist step 4 (via
+			// markPickupSetupSeen).
+			offerSelfCollect: true,
 			termsAcceptedAt: now,
 			termsVersion: TERMS_VERSION,
 			privacyAcceptedAt: now,
@@ -456,6 +472,7 @@ export const updateSettings = mutation({
 		paymentInstructions: v.optional(paymentInstructionsValidator),
 		// Empty string clears the logo. Undefined means "no change".
 		logoStorageId: v.optional(v.string()),
+		offerSelfCollect: v.optional(v.boolean()),
 	},
 	handler: async (ctx, args): Promise<{ ok: true }> => {
 		const userId = await requireUserId(ctx);
@@ -474,6 +491,7 @@ export const updateSettings = mutation({
 			locale: Locale;
 			messageTemplates: MessageTemplatesShape | undefined;
 			paymentInstructions: PaymentInstructionsShape | undefined;
+			offerSelfCollect: boolean;
 			updatedAt: number;
 		}> = { updatedAt: Date.now() };
 
@@ -512,6 +530,9 @@ export const updateSettings = mutation({
 			const trimmed = args.logoStorageId.trim();
 			patch.logoStorageId = trimmed.length > 0 ? trimmed : undefined;
 		}
+		if (args.offerSelfCollect !== undefined) {
+			patch.offerSelfCollect = args.offerSelfCollect;
+		}
 
 		await ctx.db.patch(retailer._id, patch);
 		return { ok: true };
@@ -547,6 +568,31 @@ export const recordConsentAcceptance = mutation({
 			updatedAt: now,
 		});
 		return { ok: true };
+	},
+});
+
+/**
+ * Idempotent: mark the signed-in retailer as having visited the Pickup
+ * settings tab at least once. Drives the dashboard checklist's step-4
+ * dismissal so a seller who deliberately skips self-collect isn't nagged.
+ * No-op if already true.
+ */
+export const markPickupSetupSeen = mutation({
+	args: {},
+	handler: async (ctx): Promise<{ updated: boolean }> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) return { updated: false };
+		const retailer = await ctx.db
+			.query("retailers")
+			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+			.first();
+		if (!retailer) return { updated: false };
+		if (retailer.pickupSetupSeen === true) return { updated: false };
+		await ctx.db.patch(retailer._id, {
+			pickupSetupSeen: true,
+			updatedAt: Date.now(),
+		});
+		return { updated: true };
 	},
 });
 

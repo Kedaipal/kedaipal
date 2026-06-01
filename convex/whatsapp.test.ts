@@ -672,3 +672,121 @@ describe("whatsapp payment received", () => {
 		fetchMock.restore();
 	});
 });
+
+describe("whatsapp confirm — single message (no follow-up location pin)", () => {
+	async function seedSelfCollectRetailer(t: ReturnType<typeof convexTest>) {
+		const asUser = t.withIdentity({ subject: USER });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: "Pin Test Store",
+			slug: "pin-test",
+		});
+		await asUser.mutation(api.retailers.updateSettings, {
+			offerSelfCollect: true,
+		});
+		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		const productId = await asUser.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Kuih Tepung",
+			price: 1000,
+			currency: "MYR",
+			stock: 50,
+			imageStorageIds: [],
+			sortOrder: 0,
+		});
+		return { retailerId: retailer._id, productId, asUser };
+	}
+
+	test("self-collect order with coords → confirm body includes the derived maps URL, no separate location message is sent", async () => {
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const { retailerId, productId, asUser } = await seedSelfCollectRetailer(t);
+		const { pickupLocationId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId,
+				label: "Main Store",
+				address: "12 Jln Tun Razak, 50400 KL",
+				latitude: 3.158,
+				longitude: 101.712,
+				placeId: "ChIJ_pickup",
+			},
+		);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryMethod: "self_collect",
+			pickupLocationId,
+		});
+
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: `Hi, my order ${shortId}`,
+		});
+
+		// No `type: "location"` send anywhere — that infrastructure is gone.
+		const locationCalls = fetchMock
+			.waCalls()
+			.filter(
+				(c) => (c.body as { type?: string } | null)?.type === "location",
+			);
+		expect(locationCalls).toHaveLength(0);
+
+		// The pickup block (with maps URL) lands inside the confirm CTA body.
+		const ctaCall = fetchMock
+			.waCalls()
+			.find(
+				(c) => (c.body as { type?: string } | null)?.type === "interactive",
+			);
+		expect(ctaCall).toBeDefined();
+		const body = (
+			ctaCall?.body as {
+				interactive: { body: { text: string } };
+			}
+		).interactive.body.text;
+		expect(body).toContain("Pickup details");
+		expect(body).toContain("Main Store");
+		expect(body).toContain(
+			"https://www.google.com/maps/place/?q=place_id:ChIJ_pickup",
+		);
+		fetchMock.restore();
+	});
+
+	test("delivery order: no location pin sent (confirm body is unchanged for delivery)", async () => {
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryAddress: {
+				line1: "12 Jln Mawar 3",
+				city: "Petaling Jaya",
+				state: "Selangor",
+				postcode: "47301",
+				latitude: 3.1,
+				longitude: 101.6,
+				placeId: "ChIJ_delivery",
+			},
+		});
+
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: `Hi, my order ${shortId}`,
+		});
+
+		const locationCalls = fetchMock
+			.waCalls()
+			.filter(
+				(c) => (c.body as { type?: string } | null)?.type === "location",
+			);
+		expect(locationCalls).toHaveLength(0);
+		fetchMock.restore();
+	});
+});

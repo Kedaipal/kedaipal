@@ -28,8 +28,11 @@ import {
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
+import type { Id } from "../../convex/_generated/dataModel";
+import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
 import { formatPhone } from "../lib/customer";
 import { convexErrorMessage, formatPrice } from "../lib/format";
+import { deriveMapsUrl } from "../lib/google-address";
 import { StatusBadge } from "./app.orders.index";
 
 export const Route = createFileRoute("/app/orders/$shortId")({
@@ -441,7 +444,7 @@ function OrderDetailRoute() {
 			<section
 				className={
 					order.customer.waPhone
-						? "flex flex-col gap-3 rounded-2xl border border-green-600/30 bg-gradient-to-br from-green-500/5 to-green-500/10 p-4"
+						? "flex flex-col gap-3 rounded-2xl border border-green-600/30 bg-linear-to-br from-green-500/5 to-green-500/10 p-4"
 						: "flex flex-col gap-3 rounded-2xl border border-border bg-card p-4"
 				}
 			>
@@ -550,6 +553,82 @@ function OrderDetailRoute() {
 				</div>
 			</section>
 
+			{/* Pickup location (self-collect orders only) — reads frozen snapshot
+			    so a later retailer edit never rewrites historical order info. */}
+			{isSelfCollect && order.pickupSnapshot ? (
+				<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+					<div className="flex items-center justify-between">
+						<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+							Pick up at
+						</p>
+						<div className="flex items-center gap-1">
+							<button
+								type="button"
+								onClick={() => {
+									if (!order.pickupSnapshot) return;
+									const text = formatPickupInline(order.pickupSnapshot);
+									navigator.clipboard
+										.writeText(text)
+										.then(() => toast.success("Pickup info copied"))
+										.catch(() =>
+											toast.error("Couldn't copy — please copy manually"),
+										);
+								}}
+								className="flex h-9 items-center gap-1 rounded-full px-3 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+								aria-label="Copy pickup info"
+							>
+								<Copy className="size-3.5" />
+								Copy
+							</button>
+							{(() => {
+								const mapsUrl = deriveMapsUrl(order.pickupSnapshot);
+								return mapsUrl ? (
+									<a
+										href={mapsUrl}
+										target="_blank"
+										rel="noreferrer"
+										className="flex h-9 items-center gap-1 rounded-full px-3 text-xs font-medium text-accent hover:bg-accent/10"
+										aria-label="Open in Maps"
+									>
+										<MapPin className="size-3.5" />
+										Maps
+									</a>
+								) : null;
+							})()}
+						</div>
+					</div>
+					<div className="flex flex-col gap-1">
+						<p className="text-sm font-semibold leading-tight">
+							{order.pickupSnapshot.label}
+						</p>
+						<p className="text-sm text-muted-foreground whitespace-pre-line">
+							{order.pickupSnapshot.address}
+						</p>
+						{order.pickupSnapshot.notes ? (
+							<p className="mt-1 rounded-lg bg-muted/40 px-3 py-2 text-xs text-foreground whitespace-pre-line">
+								{order.pickupSnapshot.notes}
+							</p>
+						) : null}
+					</div>
+				</section>
+			) : null}
+
+			{/* Notify store manager (self-collect orders only) — copy-button hands
+			    the seller a ready-to-forward message for whoever runs the pickup
+			    location. Fixed format for v1; per-retailer override is future work. */}
+			{isSelfCollect && order.pickupSnapshot ? (
+				<NotifyManagerCard
+					shortId={order.shortId}
+					location={order.pickupSnapshot}
+					pickupLocationId={order.pickupLocationId}
+					customerName={order.customer.name}
+					customerWaPhone={order.customer.waPhone}
+					items={order.items}
+					total={order.total}
+					currency={order.currency}
+				/>
+			) : null}
+
 			{/* Delivery address (delivery orders only) */}
 			{!isSelfCollect && order.deliveryAddress ? (
 				<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
@@ -578,7 +657,7 @@ function OrderDetailRoute() {
 							</button>
 							<a
 								href={
-									order.deliveryAddress.mapsUrl ??
+									deriveMapsUrl(order.deliveryAddress) ??
 									`https://maps.google.com/?q=${encodeURIComponent(
 										formatAddressInline(order.deliveryAddress),
 									)}`
@@ -688,5 +767,169 @@ function OrderDetailRoute() {
 				</section>
 			) : null}
 		</div>
+	);
+}
+
+function formatPickupInline(snapshot: PickupSnapshot): string {
+	const lines = [snapshot.label, snapshot.address];
+	const mapsUrl = deriveMapsUrl(snapshot);
+	if (mapsUrl) lines.push(mapsUrl);
+	if (snapshot.notes) lines.push(snapshot.notes);
+	return lines.join("\n");
+}
+
+function buildNotifyManagerMessage({
+	shortId,
+	location,
+	customerName,
+	customerWaPhone,
+	items,
+	total,
+	currency,
+}: {
+	shortId: string;
+	location: PickupSnapshot;
+	customerName: string | undefined;
+	customerWaPhone: string | undefined;
+	items: ReadonlyArray<{ name: string; quantity: number; price: number }>;
+	total: number;
+	currency: string;
+}): string {
+	const lines: string[] = [];
+	lines.push(`📦 New pickup order ${shortId} — ${location.label}`);
+	const customerLine = customerName
+		? customerWaPhone
+			? `Customer: ${customerName} (${formatPhone(customerWaPhone)})`
+			: `Customer: ${customerName}`
+		: customerWaPhone
+			? `Customer: ${formatPhone(customerWaPhone)}`
+			: "Customer: Anonymous";
+	lines.push(customerLine);
+	lines.push("");
+	lines.push("Items:");
+	for (const item of items) {
+		lines.push(
+			`• ${item.quantity}× ${item.name} (${formatPrice(item.price * item.quantity, currency)})`,
+		);
+	}
+	lines.push("");
+	lines.push(`Total: ${formatPrice(total, currency)}`);
+	lines.push("");
+	lines.push("Please prepare for collection.");
+	return lines.join("\n");
+}
+
+function NotifyManagerCard({
+	shortId,
+	location,
+	pickupLocationId,
+	customerName,
+	customerWaPhone,
+	items,
+	total,
+	currency,
+}: {
+	shortId: string;
+	location: PickupSnapshot;
+	/**
+	 * Used to fetch the LIVE pickup location row so the seller's "Notify"
+	 * button always routes to the current manager — not whoever happened to
+	 * be on the snapshot at order creation. Undefined for legacy orders
+	 * placed before the multi-location feature shipped.
+	 */
+	pickupLocationId: Id<"pickupLocations"> | undefined;
+	customerName: string | undefined;
+	customerWaPhone: string | undefined;
+	items: ReadonlyArray<{ name: string; quantity: number; price: number }>;
+	total: number;
+	currency: string;
+}) {
+	const [copied, setCopied] = useState(false);
+	// Fetch live manager contact. Skipped when there's no pickupLocationId on
+	// the order (legacy orders), in which case we fall back to the snapshot-
+	// only Copy flow.
+	const liveLocation = useQuery(
+		api.pickupLocations.getOwnedById,
+		pickupLocationId ? { pickupLocationId } : "skip",
+	);
+	const managerName = liveLocation?.managerName?.trim();
+	const managerWaPhone = liveLocation?.managerWaPhone?.trim();
+	// Phone is the gate — without it there's no wa.me link to open. Name is
+	// purely cosmetic (button label); when absent the button renders with a
+	// generic label so the seller still gets the one-tap benefit.
+	const hasManagerPhone = Boolean(managerWaPhone && managerWaPhone.length > 0);
+
+	const message = buildNotifyManagerMessage({
+		shortId,
+		location,
+		customerName,
+		customerWaPhone,
+		items,
+		total,
+		currency,
+	});
+
+	const notifyHref = hasManagerPhone
+		? `https://wa.me/${managerWaPhone}?text=${encodeURIComponent(message)}`
+		: undefined;
+	const notifyLabel = managerName
+		? `Notify ${managerName} on WhatsApp`
+		: "Notify on WhatsApp";
+
+	function handleCopy() {
+		navigator.clipboard
+			.writeText(message)
+			.then(() => {
+				setCopied(true);
+				toast.success("Message copied — paste it in your store chat");
+				setTimeout(() => setCopied(false), 2000);
+			})
+			.catch(() => toast.error("Couldn't copy — please copy manually"));
+	}
+
+	return (
+		<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+			<div className="flex items-center justify-between">
+				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+					Notify store manager
+				</p>
+				<button
+					type="button"
+					onClick={handleCopy}
+					className="flex h-9 items-center gap-1 rounded-full px-3 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+					aria-label="Copy notify-manager message"
+				>
+					<Copy className="size-3.5" />
+					{copied ? "Copied!" : "Copy"}
+				</button>
+			</div>
+			<pre className="whitespace-pre-wrap wrap-break-words rounded-lg bg-muted/40 px-3 py-2.5 font-sans text-xs leading-relaxed text-foreground">
+				{message}
+			</pre>
+			{notifyHref ? (
+				<a
+					href={notifyHref}
+					target="_blank"
+					rel="noreferrer"
+					className="flex h-11 items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+				>
+					<MessageCircle className="size-4" />
+					{notifyLabel}
+				</a>
+			) : (
+				<p className="text-xs text-muted-foreground">
+					Tap copy and forward to whoever runs this pickup spot. You can edit it
+					before sending. Add a manager number in{" "}
+					<Link
+						to="/app/settings"
+						search={{ tab: "pickup" }}
+						className="font-medium text-accent underline-offset-2 hover:underline"
+					>
+						Settings → Pickup
+					</Link>{" "}
+					for a one-tap button here.
+				</p>
+			)}
+		</section>
 	);
 }

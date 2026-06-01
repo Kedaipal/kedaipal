@@ -11,6 +11,7 @@
 import type * as crons from "../crons.js";
 import type * as customers from "../customers.js";
 import type * as email from "../email.js";
+import type * as google from "../google.js";
 import type * as http from "../http.js";
 import type * as lib_address from "../lib/address.js";
 import type * as lib_channels_registry from "../lib/channels/registry.js";
@@ -21,6 +22,7 @@ import type * as lib_customer from "../lib/customer.js";
 import type * as lib_email from "../lib/email.js";
 import type * as lib_emailCopy from "../lib/emailCopy.js";
 import type * as lib_legal from "../lib/legal.js";
+import type * as lib_mapsUrl from "../lib/mapsUrl.js";
 import type * as lib_order from "../lib/order.js";
 import type * as lib_rateLimiter from "../lib/rateLimiter.js";
 import type * as lib_slug from "../lib/slug.js";
@@ -29,6 +31,7 @@ import type * as lib_whatsappCopy from "../lib/whatsappCopy.js";
 import type * as lib_whatsappSignature from "../lib/whatsappSignature.js";
 import type * as lib_whatsappWebhook from "../lib/whatsappWebhook.js";
 import type * as orders from "../orders.js";
+import type * as pickupLocations from "../pickupLocations.js";
 import type * as products from "../products.js";
 import type * as retailers from "../retailers.js";
 import type * as seed from "../seed.js";
@@ -44,6 +47,7 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   customers: typeof customers;
   email: typeof email;
+  google: typeof google;
   http: typeof http;
   "lib/address": typeof lib_address;
   "lib/channels/registry": typeof lib_channels_registry;
@@ -54,6 +58,7 @@ declare const fullApi: ApiFromModules<{
   "lib/email": typeof lib_email;
   "lib/emailCopy": typeof lib_emailCopy;
   "lib/legal": typeof lib_legal;
+  "lib/mapsUrl": typeof lib_mapsUrl;
   "lib/order": typeof lib_order;
   "lib/rateLimiter": typeof lib_rateLimiter;
   "lib/slug": typeof lib_slug;
@@ -62,6 +67,7 @@ declare const fullApi: ApiFromModules<{
   "lib/whatsappSignature": typeof lib_whatsappSignature;
   "lib/whatsappWebhook": typeof lib_whatsappWebhook;
   orders: typeof orders;
+  pickupLocations: typeof pickupLocations;
   products: typeof products;
   retailers: typeof retailers;
   seed: typeof seed;
