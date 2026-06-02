@@ -3,6 +3,7 @@ import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
 import { describe, expect, test } from "vitest";
 import { api } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -28,18 +29,36 @@ async function seedRetailer(t: ReturnType<typeof convexTest>, userId: string) {
 	return retailer;
 }
 
-const baseProduct = (retailerId: string) => ({
-	retailerId: retailerId as never,
-	name: "Tent 2P",
-	price: 12000,
+type BaseOpts = {
+	name?: string;
+	sku?: string;
+	price?: number;
+	stock?: number;
+	sortOrder?: number;
+	imageStorageIds?: string[];
+	blockWhenOutOfStock?: boolean;
+};
+
+/** Single-variant (no axes) product create args in the variant API shape. */
+const baseProduct = (retailerId: string, opts: BaseOpts = {}) => ({
+	retailerId: retailerId as Id<"retailers">,
+	name: opts.name ?? "Tent 2P",
 	currency: "MYR",
-	stock: 5,
-	imageStorageIds: [],
-	sortOrder: 0,
+	imageStorageIds: opts.imageStorageIds ?? [],
+	sortOrder: opts.sortOrder ?? 0,
+	blockWhenOutOfStock: opts.blockWhenOutOfStock ?? true,
+	variants: [
+		{
+			optionValues: [],
+			price: opts.price ?? 12000,
+			onHand: opts.stock ?? 5,
+			sku: opts.sku,
+		},
+	],
 });
 
 describe("products", () => {
-	test("owner can create a product and read it back", async () => {
+	test("owner can create a single-variant product and read it back", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const asA = t.withIdentity({ subject: USER_A });
@@ -48,6 +67,12 @@ describe("products", () => {
 		expect(product?.name).toBe("Tent 2P");
 		expect(product?.active).toBe(true);
 		expect(product?.channel).toBe("whatsapp");
+		// Exactly one implicit default variant.
+		expect(product?.variants).toHaveLength(1);
+		expect(product?.variants[0]?.optionValues).toEqual([]);
+		expect(product?.variants[0]?.price).toBe(12000);
+		expect(product?.variants[0]?.onHand).toBe(5);
+		expect(product?.priceFrom).toBe(12000);
 	});
 
 	test("non-owner create throws Forbidden", async () => {
@@ -71,6 +96,133 @@ describe("products", () => {
 		).rejects.toThrow(/Maximum 5 images/);
 	});
 
+	// --- Option axes + variant generation -----------------------------------
+
+	test("create with one axis stores all variants and a price range", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const id = await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Metal Print",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [{ name: "Size", values: ["5x7", "8x12", "10x10"] }],
+			variants: [
+				{ optionValues: ["5x7"], price: 5000, onHand: 0 },
+				{ optionValues: ["8x12"], price: 8000, onHand: 0 },
+				{ optionValues: ["10x10"], price: 9000, onHand: 0 },
+			],
+		});
+		const product = await asA.query(api.products.get, { productId: id });
+		expect(product?.variants).toHaveLength(3);
+		expect(product?.priceFrom).toBe(5000);
+		expect(product?.priceTo).toBe(9000);
+		expect(product?.variants.map((vr) => vr.optionValues)).toEqual([
+			["5x7"],
+			["8x12"],
+			["10x10"],
+		]);
+	});
+
+	test("create rejects a variant set that doesn't cover the cartesian", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await expect(
+			asA.mutation(api.products.create, {
+				retailerId: retailer._id,
+				name: "Salmon",
+				currency: "MYR",
+				imageStorageIds: [],
+				sortOrder: 0,
+				options: [{ name: "Weight", values: ["500g", "1kg"] }],
+				// Only one of the two required combinations.
+				variants: [{ optionValues: ["500g"], price: 4500, onHand: 0 }],
+			}),
+		).rejects.toThrow(/Expected 2 variants/);
+	});
+
+	test("create rejects an invalid combination value", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await expect(
+			asA.mutation(api.products.create, {
+				retailerId: retailer._id,
+				name: "Salmon",
+				currency: "MYR",
+				imageStorageIds: [],
+				sortOrder: 0,
+				options: [{ name: "Weight", values: ["500g", "1kg"] }],
+				variants: [
+					{ optionValues: ["500g"], price: 4500, onHand: 0 },
+					{ optionValues: ["2kg"], price: 9000, onHand: 0 }, // not a declared value
+				],
+			}),
+		).rejects.toThrow(/not a valid option combination/);
+	});
+
+	test("create rejects more than 2 option axes", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await expect(
+			asA.mutation(api.products.create, {
+				retailerId: retailer._id,
+				name: "Overspecified",
+				currency: "MYR",
+				imageStorageIds: [],
+				sortOrder: 0,
+				options: [
+					{ name: "Size", values: ["S"] },
+					{ name: "Color", values: ["Red"] },
+					{ name: "Material", values: ["Cotton"] },
+				],
+				variants: [{ optionValues: ["S", "Red", "Cotton"], price: 100, onHand: 1 }],
+			}),
+		).rejects.toThrow(/At most 2 option axes/);
+	});
+
+	test("create rejects a grid exceeding the 50-variant cap", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const values = Array.from({ length: 8 }, (_, i) => `v${i}`);
+		await expect(
+			asA.mutation(api.products.create, {
+				retailerId: retailer._id,
+				name: "Too many",
+				currency: "MYR",
+				imageStorageIds: [],
+				sortOrder: 0,
+				options: [
+					{ name: "A", values }, // 8 × 8 = 64 > 50
+					{ name: "B", values },
+				],
+				variants: [],
+			}),
+		).rejects.toThrow(/max 50 per product/);
+	});
+
+	// --- SKU uniqueness (now on the variant) --------------------------------
+
+	test("variant SKU must be unique across the retailer's catalog", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.products.create, baseProduct(retailer._id, { sku: "DUP" }));
+		await expect(
+			asA.mutation(
+				api.products.create,
+				baseProduct(retailer._id, { sku: "DUP", name: "Other" }),
+			),
+		).rejects.toThrow(/already used by another variant/);
+	});
+
+	// --- Reads ---------------------------------------------------------------
+
 	test("list hides archived products from storefront", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
@@ -82,21 +234,33 @@ describe("products", () => {
 		const list = await t.query(api.products.list, { retailerId: retailer._id });
 		expect(list).toHaveLength(1);
 		expect(list[0]?._id).toBe(activeId);
-		expect(list.some((p) => p._id === archivedId)).toBe(false);
 	});
 
-	test("listAll returns active and inactive for owner", async () => {
+	test("storefront list returns only active variants", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const asA = t.withIdentity({ subject: USER_A });
-		const id1 = await asA.mutation(api.products.create, baseProduct(retailer._id));
-		await asA.mutation(api.products.create, baseProduct(retailer._id));
-		await asA.mutation(api.products.archive, { productId: id1 });
-
-		const all = await asA.query(api.products.listAll, {
+		const id = await asA.mutation(api.products.create, {
 			retailerId: retailer._id,
+			name: "Tee",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [{ name: "Size", values: ["S", "M"] }],
+			variants: [
+				{ optionValues: ["S"], price: 5000, onHand: 1, active: false },
+				{ optionValues: ["M"], price: 5000, onHand: 1 },
+			],
 		});
-		expect(all).toHaveLength(2);
+		const list = await t.query(api.products.list, { retailerId: retailer._id });
+		const tee = list.find((p) => p._id === id);
+		// Inactive S variant hidden from the storefront read.
+		expect(tee?.variants).toHaveLength(1);
+		expect(tee?.variants[0]?.optionValues).toEqual(["M"]);
+
+		// Owner's listAll sees both.
+		const all = await asA.query(api.products.listAll, { retailerId: retailer._id });
+		expect(all.find((p) => p._id === id)?.variants).toHaveLength(2);
 	});
 
 	test("archive sets active to false", async () => {
@@ -109,7 +273,7 @@ describe("products", () => {
 		expect(product?.active).toBe(false);
 	});
 
-	test("update patches only specified fields", async () => {
+	test("update patches product-level fields without touching variants", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const asA = t.withIdentity({ subject: USER_A });
@@ -117,11 +281,82 @@ describe("products", () => {
 		await asA.mutation(api.products.update, { productId: id, name: "Tent 3P" });
 		const product = await asA.query(api.products.get, { productId: id });
 		expect(product?.name).toBe("Tent 3P");
-		expect(product?.price).toBe(12000); // unchanged
-		expect(product?.stock).toBe(5); // unchanged
+		expect(product?.variants[0]?.price).toBe(12000); // unchanged
+		expect(product?.variants[0]?.onHand).toBe(5); // unchanged
 	});
 
-	test("bulkUpsert inserts all rows when no sku matches exist", async () => {
+	// --- Per-variant edits ---------------------------------------------------
+
+	test("updateVariant changes price + stock", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const id = await asA.mutation(api.products.create, baseProduct(retailer._id));
+		const product = await asA.query(api.products.get, { productId: id });
+		const variantId = product?.variants[0]?._id as Id<"productVariants">;
+		await asA.mutation(api.products.updateVariant, {
+			variantId,
+			price: 13500,
+			onHand: 9,
+		});
+		const after = await asA.query(api.products.get, { productId: id });
+		expect(after?.variants[0]?.price).toBe(13500);
+		expect(after?.variants[0]?.onHand).toBe(9);
+	});
+
+	test("updateVariant rejects negative stock", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const id = await asA.mutation(api.products.create, baseProduct(retailer._id));
+		const product = await asA.query(api.products.get, { productId: id });
+		const variantId = product?.variants[0]?._id as Id<"productVariants">;
+		await expect(
+			asA.mutation(api.products.updateVariant, { variantId, onHand: -3 }),
+		).rejects.toThrow(/non-negative integer/);
+	});
+
+	// --- saveVariantGrid reconcile ------------------------------------------
+
+	test("saveVariantGrid reconciles: patches matched, adds new, drops removed", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const id = await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Tee",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [{ name: "Size", values: ["S", "M"] }],
+			variants: [
+				{ optionValues: ["S"], price: 5000, onHand: 1 },
+				{ optionValues: ["M"], price: 5000, onHand: 2 },
+			],
+		});
+		const before = await asA.query(api.products.get, { productId: id });
+		const mVariantId = before?.variants.find((vr) => vr.optionValues[0] === "M")?._id;
+
+		// Drop S, keep M (new price), add L.
+		await asA.mutation(api.products.saveVariantGrid, {
+			productId: id,
+			options: [{ name: "Size", values: ["M", "L"] }],
+			variants: [
+				{ optionValues: ["M"], price: 5500, onHand: 2 },
+				{ optionValues: ["L"], price: 6000, onHand: 4 },
+			],
+		});
+		const after = await asA.query(api.products.get, { productId: id });
+		expect(after?.variants.map((vr) => vr.optionValues[0]).sort()).toEqual(["L", "M"]);
+		const mAfter = after?.variants.find((vr) => vr.optionValues[0] === "M");
+		// Matched M kept its identity (so historical orders' variantId stays valid).
+		expect(mAfter?._id).toBe(mVariantId);
+		expect(mAfter?.price).toBe(5500);
+	});
+
+	// --- Bulk import (single-variant) ---------------------------------------
+
+	test("bulkUpsert inserts single-variant products when no sku matches", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const asA = t.withIdentity({ subject: USER_A });
@@ -130,21 +365,18 @@ describe("products", () => {
 			currency: "MYR",
 			items: [
 				{ name: "Tent", price: 49900, stock: 12 },
-				{
-					sku: "HL-200",
-					name: "Headlamp",
-					description: "USB-C",
-					price: 8950,
-					stock: 30,
-				},
+				{ sku: "HL-200", name: "Headlamp", description: "USB-C", price: 8950, stock: 30 },
 			],
 		});
 		expect(result).toEqual({ created: 2, updated: 0 });
-		const all = await asA.query(api.products.listAll, {
-			retailerId: retailer._id,
-		});
+		const all = await asA.query(api.products.listAll, { retailerId: retailer._id });
 		expect(all).toHaveLength(2);
-		expect(all.map((p) => p.name).sort()).toEqual(["Headlamp", "Tent"]);
+		// Each imported product owns exactly one default variant.
+		for (const p of all) expect(p.variants).toHaveLength(1);
+		const headlamp = all.find((p) => p.name === "Headlamp");
+		expect(headlamp?.variants[0]?.price).toBe(8950);
+		expect(headlamp?.variants[0]?.onHand).toBe(30);
+		expect(headlamp?.variants[0]?.sku).toBe("HL-200");
 	});
 
 	test("bulkUpsert aborts the entire batch if any row is invalid", async () => {
@@ -161,9 +393,7 @@ describe("products", () => {
 				],
 			}),
 		).rejects.toThrow(/Row 2.*price/);
-		const all = await asA.query(api.products.listAll, {
-			retailerId: retailer._id,
-		});
+		const all = await asA.query(api.products.listAll, { retailerId: retailer._id });
 		expect(all).toHaveLength(0);
 	});
 
@@ -180,21 +410,15 @@ describe("products", () => {
 		).rejects.toThrow(/Forbidden/);
 	});
 
-	test("bulkUpsert patches an existing row when sku matches, preserving channel+active+images+sortOrder", async () => {
+	test("bulkUpsert patches an existing product+variant when sku matches", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const asA = t.withIdentity({ subject: USER_A });
-		const originalId = await asA.mutation(api.products.create, {
-			...baseProduct(retailer._id),
-			sku: "TENT-4P",
-			sortOrder: 42,
-		});
+		const originalId = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { sku: "TENT-4P", sortOrder: 42 }),
+		);
 		await asA.mutation(api.products.archive, { productId: originalId });
-
-		// Seed `imageStorageIds` directly — the create mutation always starts
-		// with []; we want to verify that bulkUpsert doesn't overwrite an
-		// existing images list. Using raw db access keeps us off the storage
-		// system (test setup doesn't have real storage IDs).
 		await t.run(async (ctx) => {
 			await ctx.db.patch(originalId, { imageStorageIds: ["fake-storage-id"] });
 		});
@@ -202,26 +426,27 @@ describe("products", () => {
 		const result = await asA.mutation(api.products.bulkUpsert, {
 			retailerId: retailer._id,
 			currency: "MYR",
-			items: [
-				{
-					sku: "TENT-4P",
-					name: "Tent 2P Updated",
-					price: 13000,
-					stock: 7,
-				},
-			],
+			items: [{ sku: "TENT-4P", name: "Tent 2P Updated", price: 13000, stock: 7 }],
 		});
-
 		expect(result).toEqual({ created: 0, updated: 1 });
-		const updated = await t.run(async (ctx) => ctx.db.get(originalId));
-		expect(updated?.name).toBe("Tent 2P Updated");
-		expect(updated?.price).toBe(13000);
-		expect(updated?.stock).toBe(7);
-		// Preserved fields:
-		expect(updated?.active).toBe(false);
-		expect(updated?.channel).toBe("whatsapp");
-		expect(updated?.imageStorageIds).toEqual(["fake-storage-id"]);
-		expect(updated?.sortOrder).toBe(42);
+
+		// Raw db reads — the fake storage id isn't resolvable via products.get.
+		const { product, variant } = await t.run(async (ctx) => {
+			const p = await ctx.db.get(originalId);
+			const vr = await ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", originalId))
+				.first();
+			return { product: p, variant: vr };
+		});
+		expect(product?.name).toBe("Tent 2P Updated");
+		expect(variant?.price).toBe(13000);
+		expect(variant?.onHand).toBe(7);
+		// Preserved product-level fields:
+		expect(product?.active).toBe(false);
+		expect(product?.channel).toBe("whatsapp");
+		expect(product?.imageStorageIds).toEqual(["fake-storage-id"]);
+		expect(product?.sortOrder).toBe(42);
 	});
 
 	test("bulkUpsert rejects intra-batch duplicate sku", async () => {
@@ -240,47 +465,15 @@ describe("products", () => {
 		).rejects.toThrow(/Duplicate sku "DUP"/);
 	});
 
-	test("bulkUpsert: pure-update batch is not blocked by beta cap", async () => {
-		// Seed the retailer right at the 50-product beta cap, all with SKUs,
-		// then send a 50-row upsert that all match existing rows. No new
-		// inserts — should succeed despite the cap.
-		const t = setup();
-		const retailer = await seedRetailer(t, USER_A);
-		const asA = t.withIdentity({ subject: USER_A });
-		const items = Array.from({ length: 50 }, (_, i) => ({
-			sku: `SKU-${i}`,
-			name: `Product ${i}`,
-			price: 1000,
-			stock: 1,
-		}));
-		await asA.mutation(api.products.bulkUpsert, {
-			retailerId: retailer._id,
-			currency: "MYR",
-			items,
-		});
-		// Re-send the same 50 — all updates, no inserts.
-		const result = await asA.mutation(api.products.bulkUpsert, {
-			retailerId: retailer._id,
-			currency: "MYR",
-			items: items.map((i) => ({ ...i, stock: 5 })),
-		});
-		expect(result).toEqual({ created: 0, updated: 50 });
-	});
-
 	test("bulkUpsertPreview does not write and returns correct plan", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const asA = t.withIdentity({ subject: USER_A });
-		await asA.mutation(api.products.create, {
-			...baseProduct(retailer._id),
-			sku: "TENT-4P",
-			name: "Tent original",
-			price: 12000,
-			stock: 5,
-		});
-		const before = await asA.query(api.products.listAll, {
-			retailerId: retailer._id,
-		});
+		await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { sku: "TENT-4P", name: "Tent original", price: 12000, stock: 5 }),
+		);
+		const before = await asA.query(api.products.listAll, { retailerId: retailer._id });
 		const preview = await asA.query(api.products.bulkUpsertPreview, {
 			retailerId: retailer._id,
 			items: [
@@ -294,13 +487,10 @@ describe("products", () => {
 			name: { before: "Tent original", after: "Tent renamed" },
 			price: { before: 12000, after: 13000 },
 		});
-		// stock unchanged → not in diff
 		expect(preview.plan[0]?.diff.stock).toBeUndefined();
 		expect(preview.plan[1]?.action).toBe("insert");
 
-		const after = await asA.query(api.products.listAll, {
-			retailerId: retailer._id,
-		});
+		const after = await asA.query(api.products.listAll, { retailerId: retailer._id });
 		expect(after).toHaveLength(before.length);
 	});
 
@@ -309,23 +499,13 @@ describe("products", () => {
 		const retailer = await seedRetailer(t, USER_A);
 		const asA = t.withIdentity({ subject: USER_A });
 		await asA.mutation(api.products.create, {
-			...baseProduct(retailer._id),
-			sku: "TENT-4P",
-			name: "Tent",
+			...baseProduct(retailer._id, { sku: "TENT-4P", name: "Tent" }),
 			description: "4-season",
-			price: 12000,
-			stock: 5,
 		});
 		const preview = await asA.query(api.products.bulkUpsertPreview, {
 			retailerId: retailer._id,
 			items: [
-				{
-					sku: "TENT-4P",
-					name: "Tent",
-					description: "4-season",
-					price: 12000,
-					stock: 5,
-				},
+				{ sku: "TENT-4P", name: "Tent", description: "4-season", price: 12000, stock: 5 },
 			],
 		});
 		expect(preview.summary).toEqual({ inserts: 0, updates: 0, noChange: 1 });

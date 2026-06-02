@@ -29,6 +29,12 @@ async function seedRetailer(t: ReturnType<typeof convexTest>, userId: string) {
 	return retailer;
 }
 
+/**
+ * Seed a single-variant product. Returns the productId (order tests pass it as
+ * the item key — orders.create resolves the sole variant). Defaults to
+ * blockWhenOutOfStock so the stock-decrement/rejection tests exercise the hard
+ * stock path; made-to-order products never decrement.
+ */
 async function seedProduct(
 	t: ReturnType<typeof convexTest>,
 	userId: string,
@@ -38,27 +44,55 @@ async function seedProduct(
 		price: number;
 		currency: string;
 		stock: number;
+		blockWhenOutOfStock: boolean;
 	}> = {},
-) {
+): Promise<Id<"products">> {
 	const asUser = t.withIdentity({ subject: userId });
 	return asUser.mutation(api.products.create, {
 		retailerId,
 		name: overrides.name ?? "Tent 2P",
-		price: overrides.price ?? 12000,
 		currency: overrides.currency ?? "MYR",
-		stock: overrides.stock ?? 100,
 		imageStorageIds: [],
 		sortOrder: 0,
+		blockWhenOutOfStock: overrides.blockWhenOutOfStock ?? true,
+		variants: [
+			{
+				optionValues: [],
+				price: overrides.price ?? 12000,
+				onHand: overrides.stock ?? 100,
+			},
+		],
 	});
 }
 
+/** Read on-hand stock from a single-variant product's default variant. */
 async function getProductStock(
-	t: ReturnType<typeof convexTest>,
+	t: ReturnType<typeof setup>,
 	productId: Id<"products">,
 ): Promise<number> {
-	const p = await t.run(async (ctx) => ctx.db.get(productId));
-	if (!p) throw new Error("product missing");
-	return p.stock;
+	return t.run(async (ctx) => {
+		const vr = await ctx.db
+			.query("productVariants")
+			.withIndex("by_product", (q) => q.eq("productId", productId))
+			.first();
+		if (!vr) throw new Error("variant missing");
+		return vr.onHand;
+	});
+}
+
+/** Resolve a single-variant product's default variant id (for direct edits). */
+async function defaultVariantId(
+	t: ReturnType<typeof setup>,
+	productId: Id<"products">,
+): Promise<Id<"productVariants">> {
+	return t.run(async (ctx) => {
+		const vr = await ctx.db
+			.query("productVariants")
+			.withIndex("by_product", (q) => q.eq("productId", productId))
+			.first();
+		if (!vr) throw new Error("variant missing");
+		return vr._id;
+	});
 }
 
 const customer = { name: "Ali", waPhone: "60123456789" };
@@ -124,9 +158,10 @@ describe("orders", () => {
 			customer,
 			deliveryAddress: validAddress,
 		});
-		// Mutate product price after order creation.
+		// Mutate the variant price after order creation — snapshot must hold.
 		const asA = t.withIdentity({ subject: USER_A });
-		await asA.mutation(api.products.update, { productId, price: 99999 });
+		const variantId = await defaultVariantId(t, productId);
+		await asA.mutation(api.products.updateVariant, { variantId, price: 99999 });
 		const order = await t.query(api.orders.get, { shortId });
 		expect(order?.items[0].price).toBe(10000);
 	});
@@ -358,6 +393,95 @@ describe("orders", () => {
 			deliveryAddress: validAddress,
 		});
 		expect(await getProductStock(t, productId)).toBe(7);
+	});
+
+	test("made-to-order product sells at zero stock and does not decrement", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			stock: 0,
+			blockWhenOutOfStock: false,
+		});
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 3 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		expect(shortId).toBeTruthy();
+		// onHand untouched — made-to-order products don't track depletion.
+		expect(await getProductStock(t, productId)).toBe(0);
+	});
+
+	test("order by explicit variantId snapshots the variant label", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Salmon",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			blockWhenOutOfStock: true,
+			options: [{ name: "Weight", values: ["500g", "1kg"] }],
+			variants: [
+				{ optionValues: ["500g"], price: 4500, onHand: 5 },
+				{ optionValues: ["1kg"], price: 8500, onHand: 5 },
+			],
+		});
+		const oneKg = await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", productId))
+				.collect();
+			return rows.find((r) => r.optionValues[0] === "1kg")!;
+		});
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ variantId: oneKg._id, quantity: 2 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { shortId });
+		expect(order?.items[0].variantLabel).toBe("1kg");
+		expect(order?.items[0].price).toBe(8500);
+		expect(order?.total).toBe(17000);
+		// Decremented the 1kg variant only.
+		const after = await t.run(async (ctx) => ctx.db.get(oneKg._id));
+		expect(after?.onHand).toBe(3);
+	});
+
+	test("ordering a multi-variant product by bare productId is rejected", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Tee",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [{ name: "Size", values: ["S", "M"] }],
+			variants: [
+				{ optionValues: ["S"], price: 5000, onHand: 5 },
+				{ optionValues: ["M"], price: 5000, onHand: 5 },
+			],
+		});
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+			}),
+		).rejects.toThrow(/multiple variants/);
 	});
 
 	test("create rejects when quantity exceeds stock", async () => {

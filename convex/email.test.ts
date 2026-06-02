@@ -65,11 +65,10 @@ async function seedRetailerWithEmail(
 	const productId = await asUser.mutation(api.products.create, {
 		retailerId: retailer._id,
 		name: "Tent 2P",
-		price: 12000,
 		currency: "MYR",
-		stock: 100,
 		imageStorageIds: [],
 		sortOrder: 0,
+		variants: [{ optionValues: [], price: 12000, onHand: 100 }],
 	});
 	return { retailerId: retailer._id, productId };
 }

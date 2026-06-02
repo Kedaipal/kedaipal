@@ -104,17 +104,39 @@ export default defineSchema({
 
 	products: defineTable({
 		retailerId: v.id("retailers"),
-		// Stable retailer-provided identifier. Optional because products created
-		// before Sprint 1 (or via the single-product form without a SKU) won't
-		// have one. When present + matched, drives bulk upsert behavior.
+		// DEPRECATED — moved to productVariants. Kept optional during the
+		// flat→variant migration (widen-migrate-narrow) so pre-variant rows keep
+		// validating. SKU uniqueness now lives on the variant. Dropped in the
+		// separate narrow migration. See docs/product-variants.md §5.
 		sku: v.optional(v.string()),
 		name: v.string(),
+		// Product-level rich text rendered as sanitized markdown on the storefront
+		// (specs + "what's included"). NOT the home for store-wide FAQ.
 		description: v.optional(v.string()),
-		price: v.number(),
+		// DEPRECATED — moved to productVariants.price/.onHand. Optional during
+		// migration; new variant-first products omit them. Reads go through
+		// productVariants. Dropped in the narrow migration.
+		price: v.optional(v.number()),
 		currency: v.string(),
-		stock: v.number(),
+		stock: v.optional(v.number()),
 		imageStorageIds: v.array(v.string()),
 		active: v.boolean(),
+		// Option axes this product varies along, ordered (drives picker order).
+		// Empty array (or undefined on pre-migration rows) = no axes → exactly
+		// one implicit variant with optionValues:[]. Capped at 2 axes. Bounded,
+		// so safe to embed (not an unbounded list).
+		options: v.optional(
+			v.array(
+				v.object({
+					name: v.string(),
+					values: v.array(v.string()),
+				}),
+			),
+		),
+		// When true, a variant with onHand<=0 is unsellable (hard stock block).
+		// Undefined/false = made-to-order: sold-out combos stay sellable (frozen
+		// pack-to-order, metal prints). See docs/product-variants.md §5/§7.
+		blockWhenOutOfStock: v.optional(v.boolean()),
 		channel: v.union(v.literal("whatsapp")),
 		sortOrder: v.number(),
 		createdAt: v.number(),
@@ -122,6 +144,38 @@ export default defineSchema({
 	})
 		.index("by_retailer", ["retailerId"])
 		.index("by_retailer_active", ["retailerId", "active"])
+		.index("by_retailer_sku", ["retailerId", "sku"]),
+
+	/**
+	 * First-class sellable unit. Every product resolves to ≥1 variant — a
+	 * product with no option axes gets exactly one implicit variant
+	 * (optionValues: []). There is no separate "simple product" code path.
+	 * `optionValues` is positionally aligned with the parent `products.options`.
+	 * Frozen onto orders via `orders.items[].variantLabel`. See
+	 * docs/product-variants.md §5.
+	 */
+	productVariants: defineTable({
+		productId: v.id("products"),
+		// Denormalized so the per-retailer SKU uniqueness index can live here.
+		retailerId: v.id("retailers"),
+		// Positionally aligned with product.options; [] for the implicit default.
+		optionValues: v.array(v.string()),
+		sku: v.optional(v.string()),
+		price: v.number(),
+		onHand: v.number(),
+		// Reserved-but-not-yet-sold count. Stays 0 until HitPay reservation/hold
+		// lands — forward-wired now so no later migration. See §9.
+		reserved: v.number(),
+		// Parcel weight in grams, feeds weight-band delivery (separate task).
+		// 0 = unset (backfilled/legacy variants read as weightless until edited).
+		parcelWeightG: v.number(),
+		imageStorageIds: v.array(v.string()),
+		active: v.boolean(),
+		sortOrder: v.number(),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_product", ["productId"])
 		.index("by_retailer_sku", ["retailerId", "sku"]),
 
 	/**
@@ -170,7 +224,13 @@ export default defineSchema({
 		items: v.array(
 			v.object({
 				productId: v.id("products"),
+				// The sellable unit ordered. Optional only for historical orders
+				// created before variants existed; new orders always set it.
+				variantId: v.optional(v.id("productVariants")),
 				name: v.string(),
+				// Human label of the chosen option values ("1kg / Fillet"). Empty
+				// for single-variant products. Frozen at order-create time.
+				variantLabel: v.optional(v.string()),
 				price: v.number(),
 				quantity: v.number(),
 			}),

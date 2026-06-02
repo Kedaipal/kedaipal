@@ -59,11 +59,10 @@ async function seedRetailerWithLocale(
 	const productId = await asUser.mutation(api.products.create, {
 		retailerId: retailer._id,
 		name: "Tent 2P",
-		price: 12000,
 		currency: "MYR",
-		stock: 100,
 		imageStorageIds: [],
 		sortOrder: 0,
+		variants: [{ optionValues: [], price: 12000, onHand: 100 }],
 	});
 	return { retailerId: retailer._id, productId };
 }
@@ -688,11 +687,10 @@ describe("whatsapp confirm — single message (no follow-up location pin)", () =
 		const productId = await asUser.mutation(api.products.create, {
 			retailerId: retailer._id,
 			name: "Kuih Tepung",
-			price: 1000,
 			currency: "MYR",
-			stock: 50,
 			imageStorageIds: [],
 			sortOrder: 0,
+			variants: [{ optionValues: [], price: 1000, onHand: 50 }],
 		});
 		return { retailerId: retailer._id, productId, asUser };
 	}

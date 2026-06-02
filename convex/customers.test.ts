@@ -49,11 +49,10 @@ async function seedProduct(
 	return asUser.mutation(api.products.create, {
 		retailerId,
 		name: "Rendang 1kg",
-		price,
 		currency: "MYR",
-		stock: 1000,
 		imageStorageIds: [],
 		sortOrder: 0,
+		variants: [{ optionValues: [], price, onHand: 1000 }],
 	});
 }
 
