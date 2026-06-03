@@ -41,6 +41,7 @@ Forward-looking design docs. Confirm current status against [`CLAUDE.md`](../CLA
 | [payment-handshake-roadmap.md](./payment-handshake-roadmap.md) | **Shipped** — superseded by [payment-handshake.md](./payment-handshake.md); kept for design rationale. |
 | [bulk-product-upload-roadmap.md](./bulk-product-upload-roadmap.md) | CSV/XLSX import feature menu + execution order. |
 | [product-variants-roadmap.md](./product-variants-roadmap.md) | **Shipped** — superseded by [product-variants.md](./product-variants.md); kept for the import/export shape discussion. |
+| [proof-approval.md](./proof-approval.md) | **Designed, not built** — made-to-order mockup/proof approval: per-product gate, buyer approve/request-changes loop, deadlock waiver. |
 | [marketplace-integration.md](./marketplace-integration.md) | Shopee / TikTok Shop integration research + phased roadmap. |
 
 ## Conventions
