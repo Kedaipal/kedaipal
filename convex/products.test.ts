@@ -354,6 +354,61 @@ describe("products", () => {
 		expect(mAfter?.price).toBe(5500);
 	});
 
+	test("create + saveVariantGrid persist per-variant active and images", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const id = await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Tee",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [{ name: "Size", values: ["S", "M"] }],
+			variants: [
+				{ optionValues: ["S"], price: 5000, onHand: 1, active: false },
+				{
+					optionValues: ["M"],
+					price: 5000,
+					onHand: 1,
+					imageStorageIds: ["img-m"],
+				},
+			],
+		});
+
+		// Raw read — fake storage ids aren't resolvable via products.get.
+		const created = await t.run((ctx) =>
+			ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", id))
+				.collect(),
+		);
+		const sCreated = created.find((v) => v.optionValues[0] === "S");
+		const mCreated = created.find((v) => v.optionValues[0] === "M");
+		expect(sCreated?.active).toBe(false);
+		expect(mCreated?.imageStorageIds).toEqual(["img-m"]);
+
+		// saveVariantGrid round-trips active + images too.
+		await asA.mutation(api.products.saveVariantGrid, {
+			productId: id,
+			options: [{ name: "Size", values: ["S", "M"] }],
+			variants: [
+				{ optionValues: ["S"], price: 5000, onHand: 1, active: true },
+				{ optionValues: ["M"], price: 5000, onHand: 1, imageStorageIds: [] },
+			],
+		});
+		const saved = await t.run((ctx) =>
+			ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", id))
+				.collect(),
+		);
+		expect(saved.find((v) => v.optionValues[0] === "S")?.active).toBe(true);
+		expect(saved.find((v) => v.optionValues[0] === "M")?.imageStorageIds).toEqual(
+			[],
+		);
+	});
+
 	// --- Bulk import (single-variant) ---------------------------------------
 
 	test("bulkUpsert inserts single-variant products when no sku matches", async () => {

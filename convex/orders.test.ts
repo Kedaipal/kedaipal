@@ -578,6 +578,32 @@ describe("orders", () => {
 		expect(await getProductStock(t, productId)).toBe(10);
 	});
 
+	test("cancelling a made-to-order order does not change stock (never decremented)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			stock: 0,
+			blockWhenOutOfStock: false,
+		});
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 4 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		expect(await getProductStock(t, productId)).toBe(0); // not decremented
+		const order = await t.query(api.orders.get, { shortId });
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: order!._id,
+			status: "cancelled",
+		});
+		// Made-to-order variants are never restocked (they were never decremented).
+		expect(await getProductStock(t, productId)).toBe(0);
+	});
+
 	test("cancelling an already-cancelled order is a no-op for stock", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);

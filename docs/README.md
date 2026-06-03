@@ -21,6 +21,7 @@ How the product actually works. Read in this order.
 | [payment-handshake.md](./payment-handshake.md) | The `unpaid → claimed → received` payment flow (shipped). |
 | [customer-database.md](./customer-database.md) | CRM-lite: customer entity, denormalized aggregates, name resolution, search. |
 | [pickup-locations.md](./pickup-locations.md) | Self-collect: multi-location library, toggle+count gating, frozen snapshot lifecycle, WhatsApp confirm composition. |
+| [product-variants.md](./product-variants.md) | Option-axes + variant-rows model: `productVariants` table, storefront pickers + grey-out, made-to-order toggle, variant-grid editor. |
 | [validation-and-rate-limits.md](./validation-and-rate-limits.md) | Trust boundaries, rate limits, input validation, mirrored validators, legal consent. |
 
 ## Architecture & security
@@ -39,7 +40,7 @@ Forward-looking design docs. Confirm current status against [`CLAUDE.md`](../CLA
 |---|---|
 | [payment-handshake-roadmap.md](./payment-handshake-roadmap.md) | **Shipped** — superseded by [payment-handshake.md](./payment-handshake.md); kept for design rationale. |
 | [bulk-product-upload-roadmap.md](./bulk-product-upload-roadmap.md) | CSV/XLSX import feature menu + execution order. |
-| [product-variants-roadmap.md](./product-variants-roadmap.md) | Variant schema design (size/color). |
+| [product-variants-roadmap.md](./product-variants-roadmap.md) | **Shipped** — superseded by [product-variants.md](./product-variants.md); kept for the import/export shape discussion. |
 | [marketplace-integration.md](./marketplace-integration.md) | Shopee / TikTok Shop integration research + phased roadmap. |
 
 ## Conventions

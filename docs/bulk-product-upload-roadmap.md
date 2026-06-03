@@ -55,7 +55,7 @@ Fields retailers will ask for:
 - `weight_grams`, `dimensions` — shipping calc (future)
 - `image_urls` — pipe-separated; fetched + stored server-side via scheduled action
 - `active` — publish/unpublish via sheet
-- `variant_group` — size/color (probably post-MVP; reserve the column)
+- `variant_group` — size/color. **Variants have since shipped** ([`product-variants.md`](./product-variants.md)): products now own `productVariants` with per-variant price/stock/SKU. Bulk import currently creates **single-variant** products only and matches on the variant SKU; multi-variant CSV (one row per `optionValues` combination, grouped by `variant_group`/`sku`) is the dedicated bulk-import rework this feature blocks.
 
 ### 6. UX Polish
 - **Column mapping UI** — if headers don't match, dropdown "your column `harga` → our field `price`". Kills the #1 onboarding support ticket.
