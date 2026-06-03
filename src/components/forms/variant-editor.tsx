@@ -56,11 +56,27 @@ function emptyRow(optionValues: string[]): VariantRow {
  */
 function rebuildRows(options: OptionAxis[], prev: VariantRow[]): VariantRow[] {
 	const byLabel = new Map(prev.map((r) => [variantLabel(r.optionValues), r]));
+	// When the seller adds their first axis, carry the price/stock they may have
+	// already typed in single-variant mode into every generated row. SKU + image
+	// stay per-row blank — those must be unique per variant.
+	const seed =
+		prev.length === 1 && prev[0].optionValues.length === 0 ? prev[0] : null;
 	return cartesian(options).map((optionValues) => {
 		const existing = byLabel.get(variantLabel(optionValues));
-		return existing ?? emptyRow(optionValues);
+		if (existing) return existing;
+		const base = emptyRow(optionValues);
+		return seed ? { ...base, price: seed.price, stock: seed.stock } : base;
 	});
 }
+
+// Quick-start axis templates for the cohort (F&B + metal prints). Tapping one
+// pre-fills a new axis name + common starter values that the seller then edits.
+const AXIS_PRESETS: { name: string; values: string[] }[] = [
+	{ name: "Size", values: ["Small", "Medium", "Large"] },
+	{ name: "Weight", values: ["500g", "1kg"] },
+	{ name: "Flavour", values: [] },
+	{ name: "Pack", values: ["Single", "Box of 6", "Box of 12"] },
+];
 
 export function VariantEditor({
 	value,
@@ -91,6 +107,14 @@ export function VariantEditor({
 	function addAxis() {
 		if (options.length >= MAX_AXES) return;
 		setOptions([...options, { name: "", values: [] }]);
+		setValueDrafts((d) => [...d, ""]);
+	}
+
+	function addPresetAxis(preset: { name: string; values: string[] }) {
+		if (options.length >= MAX_AXES) return;
+		if (options.some((a) => a.name.toLowerCase() === preset.name.toLowerCase()))
+			return;
+		setOptions([...options, { name: preset.name, values: [...preset.values] }]);
 		setValueDrafts((d) => [...d, ""]);
 	}
 
@@ -262,16 +286,37 @@ export function VariantEditor({
 				))}
 
 				{options.length < MAX_AXES ? (
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						onClick={addAxis}
-						className="self-start"
-					>
-						<Plus className="size-4" />
-						{hasOptions ? "Add another option" : "Add an option"}
-					</Button>
+					<div className="flex flex-col gap-2">
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							onClick={addAxis}
+							className="self-start"
+						>
+							<Plus className="size-4" />
+							{hasOptions ? "Add another option" : "Add an option"}
+						</Button>
+						<div className="flex flex-wrap items-center gap-1.5">
+							<span className="text-xs text-muted-foreground">Quick add:</span>
+							{AXIS_PRESETS.map((preset) => {
+								const used = options.some(
+									(a) => a.name.toLowerCase() === preset.name.toLowerCase(),
+								);
+								return (
+									<button
+										key={preset.name}
+										type="button"
+										disabled={used}
+										onClick={() => addPresetAxis(preset)}
+										className="rounded-full border border-border px-2.5 py-1 text-xs font-medium hover:border-accent disabled:opacity-40"
+									>
+										+ {preset.name}
+									</button>
+								);
+							})}
+						</div>
+					</div>
 				) : null}
 				{overCap ? (
 					<p className="text-xs text-destructive">

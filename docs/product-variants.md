@@ -208,6 +208,36 @@ cutover care, not raw build time — tracked in the migration task.
 
 ---
 
+### Competitive validation — why 2 axes / 50 variants (added 2026-06-03)
+
+The 1–2 axis cap was checked against the marketplaces Malaysians actually use, and
+it is **exact parity**, not a shortfall:
+
+| Platform | Max variation axes | Total SKU/combo cap |
+|---|---|---|
+| **TikTok Shop** | **2** (Variation 1 + 2) | 100 SKUs |
+| **Shopee (MY)** | **2** tiers | **≤50 combinations** |
+| **Lazada** | **2** (since Jul 2025) | ≤20 per axis, category-dependent |
+| **Meta (FB/IG Shops)** | recognised variant fields (color/size/material/pattern) | feed-based |
+| **Kedaipal** | **2** (`MAX_OPTION_AXES`) | **50** (`MAX_VARIANTS_PER_PRODUCT`) |
+
+Key finding: the giants do **not** absorb "vast product variety" with *more variation
+axes* — they cap at 2 universally. Variety is handled in a **second, separate layer**:
+**category-driven attribute templates** (brand, material, ingredients, halal, weight,
+size-chart) that *describe* a product and drive search/filter/compliance but **do not
+generate SKUs**. Picking a category reveals a tailored attribute set and constrains
+which variations are even allowed.
+
+Decision for Kedaipal: **keep 2 axes + 50 cap** (settled), and **do not** build a
+category-attribute engine — that is marketplace-scale machinery for a *general* platform
+spanning electronics→groceries. As a **single-store, vertical-focused** storefront, the
+product-level **markdown description already carries the descriptive long-tail**
+("what's included", ingredients, specs). The right-sized version of "templates by type"
+for our cohort is the lightweight **preset axis chips** (tap *Size* / *Weight* / *Flavour*
+/ *Pack* to pre-fill an axis) — a nudge, not an engine. Implemented in the variant editor.
+Staying at 2 axes also maps cleanly onto the parked marketplace connectors (no lossy
+down-convert later). Sources captured in the originating research thread.
+
 ### Real-world reference
 
 [metalpix.my](https://metalpix.my) product page uses a single "Size" axis as wrapping pills
