@@ -330,9 +330,13 @@ export function validateVariantRow(
 	const priceStr = (raw.price ?? "").trim();
 	let price = 0;
 	if (priceStr.length === 0) errors.push("price is required");
-	else if (!/^\d+(\.\d{1,2})?$/.test(priceStr))
-		errors.push("price must be a number, e.g. 120 or 120.50");
-	else price = Math.round(Number.parseFloat(priceStr) * 100);
+	else {
+		const n = Number.parseFloat(priceStr);
+		if (!Number.isFinite(n) || n < 0)
+			errors.push("price must be a non-negative number, e.g. 120 or 120.50");
+		// Rounded to integer sen (2 dp) — matches the dashboard editor rule.
+		else price = Math.round(n * 100);
+	}
 
 	const stockStr = (raw.stock ?? "").trim();
 	let onHand = 0;

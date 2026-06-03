@@ -631,111 +631,135 @@ export const archive = mutation({
 });
 
 // ---------------------------------------------------------------------------
-// Bulk import (single-variant products only — multi-variant import is a
-// separate subtask that this feature blocks; see docs/product-variants.md §9).
-// SKU now matches on the default variant. Each imported product owns exactly
-// one variant (optionValues: []).
+// Bulk import — variant-aware (one-row-per-variant; see
+// docs/bulk-product-upload-roadmap.md + product-variants.md §9).
+//
+// The client groups a sheet into products with their full (auto-filled) variant
+// set and sends them here. Per product we either CREATE (insert the product +
+// full variant set) or UPDATE-by-SKU (rows whose SKU matches existing variants
+// update those variants in place). Import is UPSERT-ONLY: it never deletes
+// variants the sheet omits, and it never adds a new variant into an existing
+// product (that's a dashboard edit — surfaced as a skip in the preview).
 // ---------------------------------------------------------------------------
 
-const bulkImportItemValidator = v.object({
+const importVariantValidator = v.object({
+	optionValues: v.array(v.string()),
 	sku: v.optional(v.string()),
-	name: v.string(),
-	description: v.optional(v.string()),
-	price: v.number(),
-	stock: v.number(),
+	price: v.number(), // minor units
+	onHand: v.number(),
+	parcelWeightG: v.optional(v.number()),
+	active: v.boolean(),
 });
 
-interface NormalizedBulkItem {
-	sku: string | undefined;
-	item: {
-		sku?: string;
-		name: string;
-		description?: string;
-		price: number;
-		stock: number;
-	};
-}
+const importProductValidator = v.object({
+	name: v.string(),
+	description: v.optional(v.string()),
+	options: v.array(optionAxisValidator),
+	variants: v.array(importVariantValidator),
+});
 
-function preValidateBulkItems(
-	items: { sku?: string; name: string; price: number; stock: number }[],
-): NormalizedBulkItem[] {
-	const normalized: NormalizedBulkItem[] = items.map((item, i) => {
-		const rowNum = i + 1;
-		if (item.name.trim().length === 0)
-			throw new ConvexError(`Row ${rowNum}: name is required`);
-		if (item.name.length > 120)
-			throw new ConvexError(`Row ${rowNum}: name must be at most 120 characters`);
-		if (item.price < 0)
-			throw new ConvexError(`Row ${rowNum}: price must be non-negative`);
-		if (!Number.isInteger(item.stock) || item.stock < 0)
-			throw new ConvexError(`Row ${rowNum}: stock must be a non-negative integer`);
-		const sku = normalizeSku(item.sku, `Row ${rowNum}`);
-		return { sku, item: item as NormalizedBulkItem["item"] };
-	});
+type ImportProduct = {
+	name: string;
+	description?: string;
+	options: OptionAxis[];
+	variants: VariantInput[];
+};
 
-	const skuSeen = new Map<string, number>();
-	normalized.forEach(({ sku }, i) => {
-		if (!sku) return;
-		const prev = skuSeen.get(sku);
-		if (prev !== undefined)
-			throw new ConvexError(`Duplicate sku "${sku}" in rows ${prev + 1} and ${i + 1}`);
-		skuSeen.set(sku, i);
-	});
+type ImportClassification =
+	| { mode: "create" }
+	| {
+			mode: "update";
+			product: Doc<"products">;
+			existingBySku: Map<string, Doc<"productVariants">>;
+	  };
 
-	return normalized;
-}
-
-/** Find the single-variant product whose default variant carries this SKU. */
-async function findProductByVariantSku(
+/**
+ * Classify an imported product as a create or an update. Update wins if ANY of
+ * its SKUs already exists on a variant; all matched SKUs must belong to the same
+ * product (else a cross-product clash — rejected).
+ */
+async function classifyImportProduct(
 	ctx: MutationCtx | QueryCtx,
 	retailerId: Id<"retailers">,
-	sku: string,
-): Promise<{ product: Doc<"products">; variant: Doc<"productVariants"> } | null> {
-	const variant = await ctx.db
-		.query("productVariants")
-		.withIndex("by_retailer_sku", (q) =>
-			q.eq("retailerId", retailerId).eq("sku", sku),
-		)
-		.first();
-	if (!variant) return null;
-	const product = await ctx.db.get(variant.productId);
-	if (!product) return null;
-	return { product, variant };
+	product: ImportProduct,
+): Promise<ImportClassification> {
+	let target: Doc<"products"> | null = null;
+	const existingBySku = new Map<string, Doc<"productVariants">>();
+	for (const variant of product.variants) {
+		const sku = normalizeSku(variant.sku, "Variant");
+		if (!sku) continue;
+		const existing = await ctx.db
+			.query("productVariants")
+			.withIndex("by_retailer_sku", (q) =>
+				q.eq("retailerId", retailerId).eq("sku", sku),
+			)
+			.first();
+		if (!existing) continue;
+		if (target && existing.productId !== target._id)
+			throw new ConvexError(
+				`SKU "${sku}" belongs to a different product than the rest of "${product.name}"`,
+			);
+		if (!target) {
+			const p = await ctx.db.get(existing.productId);
+			if (!p) continue;
+			target = p;
+		}
+		existingBySku.set(sku, existing);
+	}
+	if (!target) return { mode: "create" };
+	return { mode: "update", product: target, existingBySku };
+}
+
+function totalImportVariants(products: ImportProduct[]): number {
+	return products.reduce((sum, p) => sum + p.variants.length, 0);
+}
+
+/** Intra-batch SKU uniqueness across ALL products in the payload. */
+function assertNoDuplicateSkusInBatch(products: ImportProduct[]): void {
+	const seen = new Set<string>();
+	for (const p of products) {
+		for (const variant of p.variants) {
+			const sku = normalizeSku(variant.sku, "Variant");
+			if (!sku) continue;
+			if (seen.has(sku))
+				throw new ConvexError(`Duplicate SKU "${sku}" within this import`);
+			seen.add(sku);
+		}
+	}
 }
 
 export const bulkUpsert = mutation({
 	args: {
 		retailerId: v.id("retailers"),
 		currency: v.string(),
-		items: v.array(bulkImportItemValidator),
+		products: v.array(importProductValidator),
 	},
 	handler: async (ctx, args): Promise<{ created: number; updated: number }> => {
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productBulkImport", { key: userId, throws: true });
 		await requireRetailerOwnership(ctx, args.retailerId);
 
-		if (args.items.length === 0) throw new ConvexError("No products to import");
-		if (args.items.length > MAX_BULK_IMPORT_BATCH)
+		const products = args.products as ImportProduct[];
+		if (products.length === 0) throw new ConvexError("No products to import");
+		const variantTotal = totalImportVariants(products);
+		if (variantTotal > MAX_BULK_IMPORT_BATCH)
 			throw new ConvexError(
-				`Maximum ${MAX_BULK_IMPORT_BATCH} products per batch (received ${args.items.length})`,
+				`Maximum ${MAX_BULK_IMPORT_BATCH} variant rows per batch (received ${variantTotal})`,
 			);
 
-		const normalized = preValidateBulkItems(args.items);
+		assertNoDuplicateSkusInBatch(products);
 
-		const classifications: (NormalizedBulkItem & {
-			existing: { product: Doc<"products">; variant: Doc<"productVariants"> } | null;
-		})[] = [];
-		for (const entry of normalized) {
-			if (!entry.sku) {
-				classifications.push({ ...entry, existing: null });
-				continue;
-			}
-			const existing = await findProductByVariantSku(ctx, args.retailerId, entry.sku);
-			classifications.push({ ...entry, existing });
+		// Classify every product (create vs update) before any writes.
+		const classified: { product: ImportProduct; c: ImportClassification }[] = [];
+		for (const product of products) {
+			classified.push({
+				product,
+				c: await classifyImportProduct(ctx, args.retailerId, product),
+			});
 		}
 
-		const insertCount = classifications.filter((c) => c.existing === null).length;
-
+		// Beta product cap — only creates count.
+		const insertCount = classified.filter((x) => x.c.mode === "create").length;
 		const existingCount = await ctx.db
 			.query("products")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", args.retailerId))
@@ -749,50 +773,62 @@ export const bulkUpsert = mutation({
 		const now = Date.now();
 		let created = 0;
 		let updated = 0;
-		for (const [i, { sku, item, existing }] of classifications.entries()) {
-			if (existing) {
-				await ctx.db.patch(existing.product._id, {
-					name: item.name.trim(),
-					description: item.description,
-					currency: args.currency,
-					updatedAt: now,
-				});
-				await ctx.db.patch(existing.variant._id, {
-					price: item.price,
-					onHand: item.stock,
-					updatedAt: now,
-				});
-				updated++;
-			} else {
+
+		for (const { product, c } of classified) {
+			if (c.mode === "create") {
+				// Same validation as the single-product create: full cartesian,
+				// integer price/stock, per-retailer SKU uniqueness.
+				const options = normalizeOptionsOrThrow(product.options);
+				const variants = validateVariantSet(options, product.variants);
+				for (const variant of variants) {
+					if (variant.sku)
+						await assertVariantSkuUnique(ctx, args.retailerId, variant.sku);
+				}
 				const productId = await ctx.db.insert("products", {
 					retailerId: args.retailerId,
-					name: item.name.trim(),
-					description: item.description,
+					name: product.name.trim(),
+					description: product.description,
 					currency: args.currency,
 					imageStorageIds: [],
-					options: [],
-					sortOrder: now + i,
+					options,
+					sortOrder: now + created,
 					active: true,
 					channel: "whatsapp",
 					createdAt: now,
 					updatedAt: now,
 				});
-				await ctx.db.insert("productVariants", {
-					productId,
-					retailerId: args.retailerId,
-					optionValues: [],
-					sku,
-					price: item.price,
-					onHand: item.stock,
-					reserved: 0,
-					parcelWeightG: 0,
-					imageStorageIds: [],
-					active: true,
-					sortOrder: 0,
-					createdAt: now,
+				await insertVariants(ctx, productId, args.retailerId, variants, now);
+				created++;
+			} else {
+				await ctx.db.patch(c.product._id, {
+					name: product.name.trim(),
+					description: product.description,
+					currency: args.currency,
 					updatedAt: now,
 				});
-				created++;
+				// Update matched variants in place; skip unmatched (never add a new
+				// variant to an existing product, never delete unlisted ones).
+				for (const variant of product.variants) {
+					const sku = normalizeSku(variant.sku, "Variant");
+					if (!sku) continue;
+					const existing = c.existingBySku.get(sku);
+					if (!existing) continue;
+					if (!Number.isInteger(variant.price) || variant.price < 0)
+						throw new ConvexError(
+							`Variant "${sku}": price must be a non-negative integer (sen)`,
+						);
+					if (!Number.isInteger(variant.onHand) || variant.onHand < 0)
+						throw new ConvexError(
+							`Variant "${sku}": stock must be a non-negative integer`,
+						);
+					await ctx.db.patch(existing._id, {
+						price: variant.price,
+						onHand: variant.onHand,
+						parcelWeightG: variant.parcelWeightG ?? existing.parcelWeightG,
+						updatedAt: now,
+					});
+				}
+				updated++;
 			}
 		}
 
@@ -800,67 +836,138 @@ export const bulkUpsert = mutation({
 	},
 });
 
+type PreviewEntry = {
+	name: string;
+	action: "create" | "update" | "error";
+	productId: Id<"products"> | null;
+	variantCount: number;
+	changedVariants: number; // create: new active variants; update: variants whose price/stock change
+	skippedVariants: number; // update: provided variants with no matching existing variant
+	autoFilled: number; // inactive auto-filled combinations
+	warnings: string[];
+};
+
+/**
+ * Non-mutating dry-run for `bulkUpsert`. Classifies each product as create /
+ * update / error and reports per-product + summary counts so the UI can show
+ * "3 products · 11 variants · 2 new / 1 update" before committing. Advisory —
+ * `bulkUpsert` re-classifies at commit time.
+ */
 export const bulkUpsertPreview = query({
 	args: {
 		retailerId: v.id("retailers"),
-		items: v.array(bulkImportItemValidator),
+		products: v.array(importProductValidator),
 	},
 	handler: async (ctx, args) => {
 		await requireRetailerOwnership(ctx, args.retailerId);
+		const products = args.products as ImportProduct[];
+		if (totalImportVariants(products) > MAX_BULK_IMPORT_BATCH)
+			throw new ConvexError(
+				`Preview exceeds ${MAX_BULK_IMPORT_BATCH} variant rows`,
+			);
 
-		if (args.items.length > MAX_BULK_IMPORT_BATCH)
-			throw new ConvexError(`Preview exceeds max batch size ${MAX_BULK_IMPORT_BATCH}`);
-
-		const normalized = preValidateBulkItems(args.items);
-
-		const plan: Array<{
-			rowNumber: number;
-			sku: string | undefined;
-			action: "insert" | "update";
-			productId: Id<"products"> | null;
-			diff: {
-				name?: { before: string; after: string };
-				description?: { before: string | undefined; after: string | undefined };
-				price?: { before: number; after: number };
-				stock?: { before: number; after: number };
-			};
-		}> = [];
-		let inserts = 0;
+		const plan: PreviewEntry[] = [];
+		let creates = 0;
 		let updates = 0;
-		let noChange = 0;
+		let variantsTotal = 0;
+		let autoFilledTotal = 0;
 
-		for (const [i, { sku, item }] of normalized.entries()) {
-			const rowNumber = i + 1;
-			if (!sku) {
-				inserts++;
-				plan.push({ rowNumber, sku: undefined, action: "insert", productId: null, diff: {} });
+		for (const product of products) {
+			const autoFilled = product.variants.filter((vr) => !vr.active).length;
+			variantsTotal += product.variants.length;
+			autoFilledTotal += autoFilled;
+
+			let c: ImportClassification;
+			try {
+				c = await classifyImportProduct(ctx, args.retailerId, product);
+			} catch (err) {
+				plan.push({
+					name: product.name,
+					action: "error",
+					productId: null,
+					variantCount: product.variants.length,
+					changedVariants: 0,
+					skippedVariants: 0,
+					autoFilled,
+					warnings: [(err as Error).message],
+				});
 				continue;
 			}
-			const existing = await findProductByVariantSku(ctx, args.retailerId, sku);
-			if (!existing) {
-				inserts++;
-				plan.push({ rowNumber, sku, action: "insert", productId: null, diff: {} });
-				continue;
+
+			if (c.mode === "create") {
+				// Surface validation errors (incomplete grid, dup combo, etc.) now.
+				try {
+					const options = normalizeOptionsOrThrow(product.options);
+					validateVariantSet(options, product.variants);
+				} catch (err) {
+					plan.push({
+						name: product.name,
+						action: "error",
+						productId: null,
+						variantCount: product.variants.length,
+						changedVariants: 0,
+						skippedVariants: 0,
+						autoFilled,
+						warnings: [(err as Error).message],
+					});
+					continue;
+				}
+				creates++;
+				plan.push({
+					name: product.name,
+					action: "create",
+					productId: null,
+					variantCount: product.variants.length,
+					changedVariants: product.variants.filter((vr) => vr.active).length,
+					skippedVariants: 0,
+					autoFilled,
+					warnings: [],
+				});
+			} else {
+				updates++;
+				let changed = 0;
+				let skipped = 0;
+				const warnings: string[] = [];
+				for (const variant of product.variants) {
+					const sku = normalizeSku(variant.sku, "Variant");
+					if (!sku) {
+						if (variant.active) skipped++; // a real row we can't key on
+						continue;
+					}
+					const existing = c.existingBySku.get(sku);
+					if (!existing) {
+						skipped++;
+						warnings.push(
+							`"${sku}" isn't an existing variant — add new variants in the dashboard`,
+						);
+						continue;
+					}
+					if (existing.price !== variant.price || existing.onHand !== variant.onHand)
+						changed++;
+				}
+				plan.push({
+					name: product.name,
+					action: "update",
+					productId: c.product._id,
+					variantCount: product.variants.length,
+					changedVariants: changed,
+					skippedVariants: skipped,
+					autoFilled,
+					warnings,
+				});
 			}
-
-			const newName = item.name.trim();
-			const diff: (typeof plan)[number]["diff"] = {};
-			if (existing.product.name !== newName)
-				diff.name = { before: existing.product.name, after: newName };
-			if ((existing.product.description ?? undefined) !== (item.description ?? undefined))
-				diff.description = { before: existing.product.description, after: item.description };
-			if (existing.variant.price !== item.price)
-				diff.price = { before: existing.variant.price, after: item.price };
-			if (existing.variant.onHand !== item.stock)
-				diff.stock = { before: existing.variant.onHand, after: item.stock };
-
-			const hasChange = Object.keys(diff).length > 0;
-			if (hasChange) updates++;
-			else noChange++;
-			plan.push({ rowNumber, sku, action: "update", productId: existing.product._id, diff });
 		}
 
-		return { plan, summary: { inserts, updates, noChange } };
+		return {
+			plan,
+			summary: {
+				products: products.length,
+				creates,
+				updates,
+				variants: variantsTotal,
+				autoFilled: autoFilledTotal,
+			},
+		};
 	},
 });
 
