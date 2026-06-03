@@ -138,7 +138,10 @@ function buildWaMessage(
 	lines.push("");
 	lines.push(`Order: ${shortId}`);
 	for (const item of cart.items) {
-		lines.push(`• ${item.quantity}x ${item.name}`);
+		const name = item.optionLabel
+			? `${item.name} (${item.optionLabel})`
+			: item.name;
+		lines.push(`• ${item.quantity}x ${name}`);
 	}
 	lines.push("");
 	lines.push(`Total: ${formatPrice(cart.total, cart.currency)}`);
@@ -181,8 +184,7 @@ export function CheckoutSheet({
 	// AND has at least one active pickup location. Both gates must be open or
 	// we fall back to delivery-only — the toggle button is hidden entirely so
 	// the buyer never sees a non-functional option.
-	const selfCollectAvailable =
-		offerSelfCollect && pickupLocations.length > 0;
+	const selfCollectAvailable = offerSelfCollect && pickupLocations.length > 0;
 	// Stable sort so the auto-select / radio list match the retailer's
 	// configured order — the query already returns sorted, but defending against
 	// upstream reordering is cheap and removes a class of subtle bugs.
@@ -241,7 +243,7 @@ export function CheckoutSheet({
 				const { shortId } = await createOrder({
 					retailerId,
 					items: cart.items.map((i) => ({
-						productId: i.productId,
+						variantId: i.variantId,
 						quantity: i.quantity,
 					})),
 					currency: cart.currency,
@@ -315,7 +317,7 @@ export function CheckoutSheet({
 								<ul className="flex flex-col gap-3">
 									{cart.items.map((item) => (
 										<li
-											key={item.productId}
+											key={item.variantId}
 											className="flex items-center gap-3 rounded-xl border border-border p-3"
 										>
 											{item.imageUrl ? (
@@ -331,6 +333,11 @@ export function CheckoutSheet({
 												<span className="text-sm font-medium leading-tight">
 													{item.name}
 												</span>
+												{item.optionLabel ? (
+													<span className="text-xs font-medium text-muted-foreground">
+														{item.optionLabel}
+													</span>
+												) : null}
 												<span className="text-xs text-muted-foreground">
 													{item.quantity} ×{" "}
 													{formatPrice(item.price, item.currency)}
@@ -345,7 +352,7 @@ export function CheckoutSheet({
 												</span>
 												<button
 													type="button"
-													onClick={() => cart.removeItem(item.productId)}
+													onClick={() => cart.removeItem(item.variantId)}
 													className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-muted"
 													aria-label={`Remove ${item.name}`}
 												>
@@ -512,9 +519,14 @@ function PickupSummaryCard({ location }: { location: PublicPickupLocation }) {
 	return (
 		<section className="flex flex-col gap-2 rounded-xl border-2 border-accent/30 bg-accent/5 p-4">
 			<div className="flex items-start gap-2">
-				<MapPin className="size-4 shrink-0 text-accent mt-0.5" aria-hidden="true" />
+				<MapPin
+					className="size-4 shrink-0 text-accent mt-0.5"
+					aria-hidden="true"
+				/>
 				<div className="flex min-w-0 flex-col gap-1">
-					<p className="text-sm font-semibold leading-tight">{location.label}</p>
+					<p className="text-sm font-semibold leading-tight">
+						{location.label}
+					</p>
 					<p className="text-xs text-muted-foreground whitespace-pre-line">
 						{location.address}
 					</p>

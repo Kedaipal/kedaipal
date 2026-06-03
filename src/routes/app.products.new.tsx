@@ -37,14 +37,14 @@ function NewProductRoute() {
 				onSubmit={async (values) => {
 					await create({
 						retailerId: retailer._id,
-						sku: values.sku,
 						name: values.name,
 						description: values.description,
-						price: values.price,
 						currency: retailer.currency,
-						stock: values.stock,
 						imageStorageIds: values.imageStorageIds,
 						sortOrder: Date.now(),
+						options: values.options,
+						blockWhenOutOfStock: values.blockWhenOutOfStock,
+						variants: values.variants,
 					});
 					navigate({ to: "/app/products" });
 				}}

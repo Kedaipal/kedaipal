@@ -67,6 +67,7 @@ function EditProductRoute() {
 		productId: productId as Id<"products">,
 	});
 	const update = useMutation(api.products.update);
+	const saveVariantGrid = useMutation(api.products.saveVariantGrid);
 	const archive = useMutation(api.products.archive);
 
 	if (product === undefined) {
@@ -119,25 +120,38 @@ function EditProductRoute() {
 				key={product._id}
 				currency={product.currency}
 				initialValues={{
-					sku: product.sku,
 					name: product.name,
 					description: product.description,
-					price: product.price,
-					stock: product.stock,
+					blockWhenOutOfStock: product.blockWhenOutOfStock,
 					imageStorageIds: product.imageStorageIds,
 					imageUrls: product.imageUrls,
+					options: product.options ?? [],
+					variants: product.variants.map((vr) => ({
+						optionValues: vr.optionValues,
+						sku: vr.sku,
+						price: vr.price,
+						onHand: vr.onHand,
+						active: vr.active,
+						imageStorageIds: vr.imageStorageIds,
+						imageUrls: vr.imageUrls,
+					})),
 				}}
 				submitLabel="Save changes"
 				onSubmit={async (values) => {
-					// Passing null clears an existing SKU when the user blanks the field.
+					// Product-level fields, then the option axes + variant grid. Two
+					// mutations: `update` never touches variants; `saveVariantGrid`
+					// reconciles them (preserving variant ids for matched combos).
 					await update({
 						productId: product._id,
-						sku: values.sku ?? null,
 						name: values.name,
-						description: values.description,
-						price: values.price,
-						stock: values.stock,
+						description: values.description ?? null,
 						imageStorageIds: values.imageStorageIds,
+						blockWhenOutOfStock: values.blockWhenOutOfStock,
+					});
+					await saveVariantGrid({
+						productId: product._id,
+						options: values.options,
+						variants: values.variants,
 					});
 					navigate({ to: "/app/products" });
 				}}

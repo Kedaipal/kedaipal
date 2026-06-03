@@ -3,7 +3,15 @@
 Finalized, boss-approved plan for generalizing products from flat single-SKU to the
 standard **option-axes + variant-rows** model (the Shopify/Shopee/TikTok-Shop shape).
 This supersedes [`product-variants-roadmap.md`](./product-variants-roadmap.md) (the
-pre-build menu of decisions). **Status: in build** on `zaki/#86extjqxf-explore-variants-for-inventory`.
+pre-build menu of decisions).
+
+**Status: implemented** on `zaki/#86extjqxf-explore-variants-for-inventory` —
+backend + storefront + dashboard editor + WhatsApp/email labels, with tests
+(373 passing), typecheck, and lint green. Pushed to the **dev** Convex deployment
+only. Still pending: manual QA by Zaki + boss sign-off, and the staged
+**production** rollout (widen → backfill → switch → narrow), which is the separate
+migration task — not done here. `convex run migrations:backfillDefaultVariants`
+backfills default variants for pre-existing flat products.
 
 ## 1. Why this feature
 

@@ -4,9 +4,13 @@ import { useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
+import { variantLabel } from "../../lib/variant";
 import { Input } from "../ui/input";
 import { ProductCard, type StorefrontProduct } from "./product-card";
-import { ProductDetailSheet } from "./product-detail-sheet";
+import {
+	ProductDetailSheet,
+	type StorefrontVariant,
+} from "./product-detail-sheet";
 
 interface ProductGridProps {
 	retailerId: Id<"retailers">;
@@ -48,17 +52,31 @@ export function ProductGrid({ retailerId, cart }: ProductGridProps) {
 			)
 		: products;
 
-	const quickAdd = (p: StorefrontProduct) => {
+	const addVariant = (
+		p: StorefrontProduct,
+		variant: StorefrontVariant,
+		qty: number,
+	) => {
+		const label = variantLabel(variant.optionValues);
 		cart.addItem(
 			{
+				variantId: variant._id,
 				productId: p._id,
 				name: p.name,
-				price: p.price,
+				optionLabel: label || undefined,
+				price: variant.price,
 				currency: p.currency,
-				imageUrl: p.imageUrls[0],
+				imageUrl: variant.imageUrls[0] ?? p.imageUrls[0],
 			},
-			1,
+			qty,
 		);
+	};
+
+	// Quick-add only fires for single-variant products (multi-variant cards open
+	// the sheet instead), so the sole variant is unambiguous.
+	const quickAdd = (p: StorefrontProduct) => {
+		const variant = p.variants[0];
+		if (variant) addVariant(p, variant, 1);
 	};
 
 	return (
@@ -123,17 +141,8 @@ export function ProductGrid({ retailerId, cart }: ProductGridProps) {
 			<ProductDetailSheet
 				product={openProduct}
 				onClose={() => setOpenProduct(null)}
-				onAdd={(p, qty) => {
-					cart.addItem(
-						{
-							productId: p._id,
-							name: p.name,
-							price: p.price,
-							currency: p.currency,
-							imageUrl: p.imageUrls[0],
-						},
-						qty,
-					);
+				onAdd={(p, variant, qty) => {
+					addVariant(p, variant, qty);
 					setOpenProduct(null);
 				}}
 			/>

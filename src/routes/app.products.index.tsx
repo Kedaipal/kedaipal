@@ -83,12 +83,16 @@ function ProductsRoute() {
 		}
 		setExporting(kind);
 		try {
+			// Single-row-per-product export — represents the default/first variant.
+			// Full multi-variant export is the separate bulk-import rework subtask
+			// (docs/product-variants.md §9); here multi-variant products export
+			// their starting price + total stock.
 			const rows: ExportableProduct[] = filtered.map((p) => ({
-				sku: p.sku,
+				sku: p.variants.length === 1 ? p.variants[0]?.sku : undefined,
 				name: p.name,
 				description: p.description,
-				price: p.price,
-				stock: p.stock,
+				price: p.priceFrom,
+				stock: p.totalOnHand,
 				active: p.active,
 			}));
 			const fileBase = `kedaipal-${retailer.slug}`;
@@ -270,8 +274,12 @@ function ProductsRoute() {
 			) : (
 				<ul className="flex flex-col gap-3 lg:grid lg:grid-cols-2 lg:gap-3 xl:grid-cols-3">
 					{filtered.map((p) => {
-						const outOfStock = p.active && p.stock === 0;
-						const lowStock = p.active && p.stock > 0 && p.stock <= 3;
+						const blockOOS = p.blockWhenOutOfStock === true;
+						const outOfStock = p.active && !p.inStock;
+						const lowStock =
+							p.active && blockOOS && p.totalOnHand > 0 && p.totalOnHand <= 3;
+						const priceVaries = p.priceTo > p.priceFrom;
+						const variantCount = p.variants.length;
 						return (
 							<li key={p._id}>
 								<Link
@@ -292,10 +300,13 @@ function ProductsRoute() {
 										<span className="truncate font-medium">{p.name}</span>
 										<div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
 											<span className="font-semibold text-foreground">
-												{formatPrice(p.price, p.currency)}
+												{priceVaries ? "from " : ""}
+												{formatPrice(p.priceFrom, p.currency)}
 											</span>
 											<span className="text-muted-foreground">
-												· stock {p.stock}
+												{variantCount > 1
+													? `· ${variantCount} variants`
+													: `· stock ${p.totalOnHand}`}
 											</span>
 											{outOfStock ? (
 												<span className="rounded-full bg-red-500/10 px-2 py-0.5 text-[11px] font-medium text-red-600 dark:text-red-400">

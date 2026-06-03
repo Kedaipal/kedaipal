@@ -466,13 +466,20 @@ function TrackingRoute() {
 					Items
 				</p>
 				<ul className="flex flex-col divide-y divide-border">
-					{order.items.map((item) => (
+					{order.items.map((item, i) => (
 						<li
-							key={item.productId}
+							key={item.variantId ?? `${item.productId}-${i}`}
 							className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0"
 						>
 							<div className="min-w-0 flex-1">
-								<p className="truncate text-sm font-medium">{item.name}</p>
+								<p className="truncate text-sm font-medium">
+									{item.name}
+									{item.variantLabel ? (
+										<span className="ml-1.5 font-normal text-muted-foreground">
+											{item.variantLabel}
+										</span>
+									) : null}
+								</p>
 								<p className="text-xs text-muted-foreground">
 									{item.quantity} × {formatPrice(item.price, order.currency)}
 								</p>
@@ -510,7 +517,8 @@ function PickupNavButtons({
 }) {
 	if (!snapshot) return null;
 	const { latitude, longitude, mapsUrl } = snapshot;
-	const hasCoords = typeof latitude === "number" && typeof longitude === "number";
+	const hasCoords =
+		typeof latitude === "number" && typeof longitude === "number";
 
 	if (hasCoords) {
 		const wazeUrl = `https://waze.com/ul?ll=${latitude},${longitude}&navigate=yes`;
