@@ -8,6 +8,7 @@ import { PageHeader } from "../components/dashboard/page-header";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
+import { BULK_IO_ENABLED } from "../lib/feature-flags";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import {
 	downloadProductsCsv,
@@ -136,41 +137,43 @@ function ProductsRoute() {
 				</Button>
 			</div>
 
-			<div className="flex flex-wrap items-center gap-x-1 gap-y-1 text-sm">
-				<Button asChild variant="ghost" className="h-8 px-2 text-sm">
-					<Link to="/app/products/import">
-						<Upload className="mr-1.5 size-3.5" aria-hidden />
-						Import
-					</Link>
-				</Button>
-				{counts.all > 0 ? (
-					<>
-						<span aria-hidden className="text-muted-foreground/40">
-							·
-						</span>
-						<Button
-							type="button"
-							variant="ghost"
-							className="h-8 px-2 text-sm"
-							disabled={exporting !== null}
-							onClick={() => handleExport("csv")}
-						>
-							<Download className="mr-1.5 size-3.5" aria-hidden />
-							{exporting === "csv" ? "Exporting…" : "Export CSV"}
-						</Button>
-						<Button
-							type="button"
-							variant="ghost"
-							className="h-8 px-2 text-sm"
-							disabled={exporting !== null}
-							onClick={() => handleExport("xlsx")}
-						>
-							<Download className="mr-1.5 size-3.5" aria-hidden />
-							{exporting === "xlsx" ? "Exporting…" : "Export XLSX"}
-						</Button>
-					</>
-				) : null}
-			</div>
+			{BULK_IO_ENABLED ? (
+				<div className="flex flex-wrap items-center gap-x-1 gap-y-1 text-sm">
+					<Button asChild variant="ghost" className="h-8 px-2 text-sm">
+						<Link to="/app/products/import">
+							<Upload className="mr-1.5 size-3.5" aria-hidden />
+							Import
+						</Link>
+					</Button>
+					{counts.all > 0 ? (
+						<>
+							<span aria-hidden className="text-muted-foreground/40">
+								·
+							</span>
+							<Button
+								type="button"
+								variant="ghost"
+								className="h-8 px-2 text-sm"
+								disabled={exporting !== null}
+								onClick={() => handleExport("csv")}
+							>
+								<Download className="mr-1.5 size-3.5" aria-hidden />
+								{exporting === "csv" ? "Exporting…" : "Export CSV"}
+							</Button>
+							<Button
+								type="button"
+								variant="ghost"
+								className="h-8 px-2 text-sm"
+								disabled={exporting !== null}
+								onClick={() => handleExport("xlsx")}
+							>
+								<Download className="mr-1.5 size-3.5" aria-hidden />
+								{exporting === "xlsx" ? "Exporting…" : "Export XLSX"}
+							</Button>
+						</>
+					) : null}
+				</div>
+			) : null}
 
 			<div className="relative lg:max-w-md">
 				<svg

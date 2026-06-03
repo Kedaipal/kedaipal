@@ -1,4 +1,9 @@
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	Link,
+	redirect,
+	useNavigate,
+} from "@tanstack/react-router";
 import { useConvex, useMutation, useQuery } from "convex/react";
 import { Download, FileSpreadsheet, Upload } from "lucide-react";
 import { type ChangeEvent, useState } from "react";
@@ -17,9 +22,15 @@ import {
 	PRODUCT_IMPORT_COLUMNS,
 	type ProductImportRow,
 } from "../lib/product-import";
+import { BULK_IO_ENABLED } from "../lib/feature-flags";
 import { parseProductsXlsx } from "../lib/xlsx";
 
 export const Route = createFileRoute("/app/products/import")({
+	// Bulk import is hidden until reworked for the variant schema — guard the
+	// direct URL too, not just the nav button. See lib/feature-flags.ts.
+	beforeLoad: () => {
+		if (!BULK_IO_ENABLED) throw redirect({ to: "/app/products" });
+	},
 	component: ImportProductsRoute,
 });
 
