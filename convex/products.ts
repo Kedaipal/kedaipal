@@ -128,6 +128,12 @@ async function productWithVariants(
 	const variants = opts.activeOnly ? all.filter((vr) => vr.active) : all;
 	const prices = variants.map((vr) => vr.price);
 	const totalOnHand = variants.reduce((sum, vr) => sum + vr.onHand, 0);
+	// Availability is always judged on ACTIVE variants only, regardless of which
+	// set we're returning — otherwise the dashboard read (activeOnly:false) would
+	// count deactivated variants' stock and report a sold-out product as in stock.
+	const activeOnHand = all
+		.filter((vr) => vr.active)
+		.reduce((sum, vr) => sum + vr.onHand, 0);
 	return {
 		...base,
 		variants,
@@ -136,8 +142,8 @@ async function productWithVariants(
 		priceTo: prices.length ? Math.max(...prices) : 0,
 		totalOnHand,
 		// "In stock" for made-to-order products is always true; for hard-block
-		// products it requires at least one variant with on-hand stock.
-		inStock: product.blockWhenOutOfStock ? totalOnHand > 0 : true,
+		// products it requires at least one ACTIVE variant with on-hand stock.
+		inStock: product.blockWhenOutOfStock ? activeOnHand > 0 : true,
 	};
 }
 
@@ -206,8 +212,9 @@ function validateVariantSet(
 			);
 		seenCombos.push(variant.optionValues);
 
-		if (variant.price < 0)
-			throw new ConvexError(`${context}: price must be non-negative`);
+		// Price is stored as integer minor units (sen) — reject fractional sen.
+		if (!Number.isInteger(variant.price) || variant.price < 0)
+			throw new ConvexError(`${context}: price must be a non-negative integer (sen)`);
 		if (!Number.isInteger(variant.onHand) || variant.onHand < 0)
 			throw new ConvexError(`${context}: stock must be a non-negative integer`);
 		if (
@@ -290,7 +297,13 @@ export const get = query({
 	handler: async (ctx, { productId }) => {
 		const row = await ctx.db.get(productId);
 		if (!row) return null;
-		return productWithVariants(ctx, row, { activeOnly: false });
+		// Inactive variants (price/stock/SKU) are owner-only. The owning retailer
+		// editing in the dashboard sees the full set; any other caller — including
+		// an unauthenticated direct query — gets active variants only.
+		const identity = await ctx.auth.getUserIdentity();
+		const owner = await ctx.db.get(row.retailerId);
+		const isOwner = identity !== null && owner?.userId === identity.subject;
+		return productWithVariants(ctx, row, { activeOnly: !isOwner });
 	},
 });
 
@@ -507,9 +520,34 @@ export const saveVariantGrid = mutation({
 				});
 			}
 		}
-		// Delete combinations the grid no longer contains.
-		for (const prior of existing) {
-			if (!matched.has(prior._id)) await ctx.db.delete(prior._id);
+		// Remove combinations the grid no longer contains. A removed variant that
+		// an in-flight order (still cancellable) references must NOT be hard-
+		// deleted — its row is needed so cancel-restock can return that order's
+		// stock (updateStatus skips a variant it can't load). Soft-deactivate
+		// those instead; hard-delete the rest.
+		const removed = existing.filter((e) => !matched.has(e._id));
+		if (removed.length > 0) {
+			const referenced = new Set<Id<"productVariants">>();
+			for (const status of ["pending", "confirmed", "packed"] as const) {
+				const openOrders = await ctx.db
+					.query("orders")
+					.withIndex("by_retailer_status", (q) =>
+						q.eq("retailerId", product.retailerId).eq("status", status),
+					)
+					.collect();
+				for (const order of openOrders) {
+					for (const item of order.items) {
+						if (item.variantId) referenced.add(item.variantId);
+					}
+				}
+			}
+			for (const prior of removed) {
+				if (referenced.has(prior._id)) {
+					await ctx.db.patch(prior._id, { active: false, updatedAt: now });
+				} else {
+					await ctx.db.delete(prior._id);
+				}
+			}
 		}
 
 		await ctx.db.patch(args.productId, { options, updatedAt: now });

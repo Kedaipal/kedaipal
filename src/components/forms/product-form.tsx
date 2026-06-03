@@ -142,21 +142,28 @@ export function ProductForm({
 			const variants: ProductFormSubmitValues["variants"] = [];
 			for (const row of editor.rows) {
 				const label = variantLabel(row.optionValues) || "this product";
-				if (!PRICE_RE.test(row.price.trim())) {
-					setServerError(
-						`Enter a valid price for ${label} (e.g. 120 or 120.50).`,
-					);
-					return;
-				}
-				if (!INT_RE.test(row.stock.trim())) {
-					setServerError(`Enter a whole-number stock for ${label}.`);
-					return;
+				const priceOk = PRICE_RE.test(row.price.trim());
+				const stockOk = INT_RE.test(row.stock.trim());
+				// Inactive (deactivated) variants are hidden from buyers, so don't
+				// block the whole save on their price/stock — just fall back to 0 for
+				// any blank/invalid field. Active variants must be fully valid.
+				if (row.active) {
+					if (!priceOk) {
+						setServerError(
+							`Enter a valid price for ${label} (e.g. 120 or 120.50).`,
+						);
+						return;
+					}
+					if (!stockOk) {
+						setServerError(`Enter a whole-number stock for ${label}.`);
+						return;
+					}
 				}
 				variants.push({
 					optionValues: row.optionValues,
 					sku: row.sku.trim() || undefined,
-					price: Math.round(Number.parseFloat(row.price) * 100),
-					onHand: Number.parseInt(row.stock, 10),
+					price: priceOk ? Math.round(Number.parseFloat(row.price) * 100) : 0,
+					onHand: stockOk ? Number.parseInt(row.stock, 10) : 0,
 					active: row.active,
 					imageStorageIds: row.imageStorageIds,
 				});

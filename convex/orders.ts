@@ -195,7 +195,7 @@ export const create = mutation({
 		// we enforce + decrement onHand vs treat as made-to-order/unlimited).
 		const requestedByVariant = new Map<
 			Id<"productVariants">,
-			{ qty: number; block: boolean; label: string }
+			{ qty: number; block: boolean; onHand: number }
 		>();
 		for (const item of args.items) {
 			if (!Number.isInteger(item.quantity) || item.quantity < 1)
@@ -243,7 +243,11 @@ export const create = mutation({
 			// the "nothing gets missed" promise intact.
 			if (block && variant.onHand < newRequested)
 				throw new ConvexError(`Only ${variant.onHand} of "${displayName}" in stock`);
-			requestedByVariant.set(variantId, { qty: newRequested, block, label });
+			requestedByVariant.set(variantId, {
+				qty: newRequested,
+				block,
+				onHand: variant.onHand,
+			});
 			snapshotItems.push({
 				productId: variant.productId,
 				variantId,
@@ -257,14 +261,15 @@ export const create = mutation({
 		const { subtotal, total } = computeOrderTotals(snapshotItems);
 		const now = Date.now();
 
-		// Reserve stock — only for hard-block variants. Same transaction, so any
-		// failure rolls back automatically. Re-fetch fresh to avoid stale values.
-		for (const [variantId, { qty, block }] of requestedByVariant) {
+		// Reserve stock for hard-block variants, in the same transaction (atomic;
+		// rolls back on any failure). Convex mutations are OCC transactions — both
+		// the validation read above and this write see one consistent snapshot, and
+		// a conflicting concurrent write retries the whole mutation. So the on-hand
+		// read during validation is still authoritative; no re-read is needed.
+		for (const [variantId, { qty, block, onHand }] of requestedByVariant) {
 			if (!block) continue;
-			const fresh = await ctx.db.get(variantId);
-			if (!fresh) throw new Error("Variant disappeared mid-transaction");
 			await ctx.db.patch(variantId, {
-				onHand: fresh.onHand - qty,
+				onHand: onHand - qty,
 				updatedAt: now,
 			});
 		}

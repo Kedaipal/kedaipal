@@ -1,7 +1,9 @@
 import { useMutation } from "convex/react";
 import { ImagePlus, Plus, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
+import { convexErrorMessage } from "../../lib/format";
 import { cartesian, type OptionAxis, variantLabel } from "../../lib/variant";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -89,6 +91,23 @@ export function VariantEditor({
 	const [valueDrafts, setValueDrafts] = useState<string[]>([]);
 	const generateUploadUrl = useMutation(api.products.generateUploadUrl);
 	const [uploadingRow, setUploadingRow] = useState<number | null>(null);
+	// Track blob: preview URLs so they're revoked on overwrite/remove/unmount
+	// (createObjectURL pins the file in memory until revoked).
+	const blobUrls = useRef<Set<string>>(new Set());
+	useEffect(
+		() => () => {
+			for (const u of blobUrls.current) URL.revokeObjectURL(u);
+		},
+		[],
+	);
+
+	function revokeRowBlob(index: number) {
+		const prev = rows[index]?.imageUrl;
+		if (prev?.startsWith("blob:")) {
+			URL.revokeObjectURL(prev);
+			blobUrls.current.delete(prev);
+		}
+	}
 
 	const variantCount = useMemo(() => cartesian(options).length, [options]);
 	const overCap = variantCount > MAX_VARIANTS;
@@ -169,11 +188,20 @@ export function VariantEditor({
 				body: file,
 			});
 			if (!res.ok) throw new Error("Upload failed");
-			const { storageId } = (await res.json()) as { storageId: string };
+			// Validate the response shape before trusting it — an error body would
+			// otherwise store `undefined` as a storage id and surface server-side.
+			const body = (await res.json()) as { storageId?: unknown };
+			if (typeof body.storageId !== "string")
+				throw new Error("Upload failed: unexpected response");
+			revokeRowBlob(index); // drop the previous preview before replacing
+			const previewUrl = URL.createObjectURL(file);
+			blobUrls.current.add(previewUrl);
 			setRow(index, {
-				imageStorageIds: [storageId],
-				imageUrl: URL.createObjectURL(file),
+				imageStorageIds: [body.storageId],
+				imageUrl: previewUrl,
 			});
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
 		} finally {
 			setUploadingRow(null);
 		}
@@ -389,12 +417,13 @@ export function VariantEditor({
 													/>
 													<button
 														type="button"
-														onClick={() =>
+														onClick={() => {
+															revokeRowBlob(i);
 															setRow(i, {
 																imageStorageIds: [],
 																imageUrl: undefined,
-															})
-														}
+															});
+														}}
 														className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-background text-xs shadow ring-1 ring-border"
 														aria-label="Remove image"
 													>
@@ -412,7 +441,9 @@ export function VariantEditor({
 														type="file"
 														accept="image/*"
 														disabled={uploadingRow !== null}
-														onChange={(e) => uploadRowImage(i, e.target.files)}
+														onChange={(e) =>
+															void uploadRowImage(i, e.target.files)
+														}
 														className="hidden"
 													/>
 												</label>

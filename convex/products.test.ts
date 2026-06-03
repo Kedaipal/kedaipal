@@ -221,6 +221,131 @@ describe("products", () => {
 		).rejects.toThrow(/already used by another variant/);
 	});
 
+	test("create rejects a non-integer price (fractional sen)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await expect(
+			asA.mutation(api.products.create, {
+				retailerId: retailer._id,
+				name: "Frac",
+				currency: "MYR",
+				imageStorageIds: [],
+				sortOrder: 0,
+				variants: [{ optionValues: [], price: 9.999, onHand: 1 }],
+			}),
+		).rejects.toThrow(/price must be a non-negative integer/);
+	});
+
+	test("inStock ignores inactive variants on the dashboard read", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		// Hard-block product: the only ACTIVE variant is sold out; an inactive
+		// variant still has stock. inStock must be false on both read paths.
+		const id = await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Tee",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			blockWhenOutOfStock: true,
+			options: [{ name: "Size", values: ["S", "M"] }],
+			variants: [
+				{ optionValues: ["S"], price: 5000, onHand: 0 }, // active, sold out
+				{ optionValues: ["M"], price: 5000, onHand: 9, active: false }, // hidden, in stock
+			],
+		});
+		const dash = await asA.query(api.products.get, { productId: id });
+		expect(dash?.inStock).toBe(false);
+		const store = await t.query(api.products.list, { retailerId: retailer._id });
+		expect(store.find((p) => p._id === id)?.inStock).toBe(false);
+	});
+
+	test("get exposes inactive variants to the owner but not to others", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const id = await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Tee",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [{ name: "Size", values: ["S", "M"] }],
+			variants: [
+				{ optionValues: ["S"], price: 5000, onHand: 1, active: false },
+				{ optionValues: ["M"], price: 5000, onHand: 1 },
+			],
+		});
+		// Owner sees both variants (for editing).
+		const asOwner = await asA.query(api.products.get, { productId: id });
+		expect(asOwner?.variants).toHaveLength(2);
+		// Unauthenticated / non-owner caller gets active variants only.
+		const anon = await t.query(api.products.get, { productId: id });
+		expect(anon?.variants).toHaveLength(1);
+		expect(anon?.variants[0]?.optionValues).toEqual(["M"]);
+	});
+
+	test("saveVariantGrid soft-deactivates a removed variant held by an open order, hard-deletes the rest", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const id = await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Tee",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [{ name: "Size", values: ["S", "M", "L"] }],
+			variants: [
+				{ optionValues: ["S"], price: 5000, onHand: 5 },
+				{ optionValues: ["M"], price: 5000, onHand: 5 },
+				{ optionValues: ["L"], price: 5000, onHand: 5 },
+			],
+		});
+		const before = await asA.query(api.products.get, { productId: id });
+		const sId = before?.variants.find((v) => v.optionValues[0] === "S")?._id;
+		const lId = before?.variants.find((v) => v.optionValues[0] === "L")?._id;
+
+		// A pending order references variant S.
+		await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ variantId: sId as Id<"productVariants">, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali" },
+			deliveryAddress: {
+				line1: "12 Jln Mawar",
+				city: "PJ",
+				state: "Selangor",
+				postcode: "47301",
+			},
+		});
+
+		// Drop S and L from the grid, keep M.
+		await asA.mutation(api.products.saveVariantGrid, {
+			productId: id,
+			options: [{ name: "Size", values: ["M"] }],
+			variants: [{ optionValues: ["M"], price: 5000, onHand: 5 }],
+		});
+
+		const rows = await t.run((ctx) =>
+			ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", id))
+				.collect(),
+		);
+		// S is referenced by an open order → kept but deactivated (stock restorable).
+		const s = rows.find((r) => r._id === sId);
+		expect(s).toBeTruthy();
+		expect(s?.active).toBe(false);
+		// L had no order → hard-deleted.
+		expect(rows.find((r) => r._id === lId)).toBeUndefined();
+		// M survives, active.
+		expect(rows.find((r) => r.optionValues[0] === "M")?.active).toBe(true);
+	});
+
 	// --- Reads ---------------------------------------------------------------
 
 	test("list hides archived products from storefront", async () => {
