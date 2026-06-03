@@ -8,6 +8,7 @@ import { PageHeader } from "../components/dashboard/page-header";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
+import { BULK_IO_ENABLED } from "../lib/feature-flags";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import {
 	downloadProductsCsv,
@@ -83,12 +84,16 @@ function ProductsRoute() {
 		}
 		setExporting(kind);
 		try {
+			// Single-row-per-product export — represents the default/first variant.
+			// Full multi-variant export is the separate bulk-import rework subtask
+			// (docs/product-variants.md §9); here multi-variant products export
+			// their starting price + total stock.
 			const rows: ExportableProduct[] = filtered.map((p) => ({
-				sku: p.sku,
+				sku: p.variants.length === 1 ? p.variants[0]?.sku : undefined,
 				name: p.name,
 				description: p.description,
-				price: p.price,
-				stock: p.stock,
+				price: p.priceFrom,
+				stock: p.totalOnHand,
 				active: p.active,
 			}));
 			const fileBase = `kedaipal-${retailer.slug}`;
@@ -132,41 +137,43 @@ function ProductsRoute() {
 				</Button>
 			</div>
 
-			<div className="flex flex-wrap items-center gap-x-1 gap-y-1 text-sm">
-				<Button asChild variant="ghost" className="h-8 px-2 text-sm">
-					<Link to="/app/products/import">
-						<Upload className="mr-1.5 size-3.5" aria-hidden />
-						Import
-					</Link>
-				</Button>
-				{counts.all > 0 ? (
-					<>
-						<span aria-hidden className="text-muted-foreground/40">
-							·
-						</span>
-						<Button
-							type="button"
-							variant="ghost"
-							className="h-8 px-2 text-sm"
-							disabled={exporting !== null}
-							onClick={() => handleExport("csv")}
-						>
-							<Download className="mr-1.5 size-3.5" aria-hidden />
-							{exporting === "csv" ? "Exporting…" : "Export CSV"}
-						</Button>
-						<Button
-							type="button"
-							variant="ghost"
-							className="h-8 px-2 text-sm"
-							disabled={exporting !== null}
-							onClick={() => handleExport("xlsx")}
-						>
-							<Download className="mr-1.5 size-3.5" aria-hidden />
-							{exporting === "xlsx" ? "Exporting…" : "Export XLSX"}
-						</Button>
-					</>
-				) : null}
-			</div>
+			{BULK_IO_ENABLED ? (
+				<div className="flex flex-wrap items-center gap-x-1 gap-y-1 text-sm">
+					<Button asChild variant="ghost" className="h-8 px-2 text-sm">
+						<Link to="/app/products/import">
+							<Upload className="mr-1.5 size-3.5" aria-hidden />
+							Import
+						</Link>
+					</Button>
+					{counts.all > 0 ? (
+						<>
+							<span aria-hidden className="text-muted-foreground/40">
+								·
+							</span>
+							<Button
+								type="button"
+								variant="ghost"
+								className="h-8 px-2 text-sm"
+								disabled={exporting !== null}
+								onClick={() => handleExport("csv")}
+							>
+								<Download className="mr-1.5 size-3.5" aria-hidden />
+								{exporting === "csv" ? "Exporting…" : "Export CSV"}
+							</Button>
+							<Button
+								type="button"
+								variant="ghost"
+								className="h-8 px-2 text-sm"
+								disabled={exporting !== null}
+								onClick={() => handleExport("xlsx")}
+							>
+								<Download className="mr-1.5 size-3.5" aria-hidden />
+								{exporting === "xlsx" ? "Exporting…" : "Export XLSX"}
+							</Button>
+						</>
+					) : null}
+				</div>
+			) : null}
 
 			<div className="relative lg:max-w-md">
 				<svg
@@ -270,8 +277,12 @@ function ProductsRoute() {
 			) : (
 				<ul className="flex flex-col gap-3 lg:grid lg:grid-cols-2 lg:gap-3 xl:grid-cols-3">
 					{filtered.map((p) => {
-						const outOfStock = p.active && p.stock === 0;
-						const lowStock = p.active && p.stock > 0 && p.stock <= 3;
+						const blockOOS = p.blockWhenOutOfStock === true;
+						const outOfStock = p.active && !p.inStock;
+						const lowStock =
+							p.active && blockOOS && p.totalOnHand > 0 && p.totalOnHand <= 3;
+						const priceVaries = p.priceTo > p.priceFrom;
+						const variantCount = p.variants.length;
 						return (
 							<li key={p._id}>
 								<Link
@@ -292,10 +303,13 @@ function ProductsRoute() {
 										<span className="truncate font-medium">{p.name}</span>
 										<div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
 											<span className="font-semibold text-foreground">
-												{formatPrice(p.price, p.currency)}
+												{priceVaries ? "from " : ""}
+												{formatPrice(p.priceFrom, p.currency)}
 											</span>
 											<span className="text-muted-foreground">
-												· stock {p.stock}
+												{variantCount > 1
+													? `· ${variantCount} variants`
+													: `· stock ${p.totalOnHand}`}
 											</span>
 											{outOfStock ? (
 												<span className="rounded-full bg-red-500/10 px-2 py-0.5 text-[11px] font-medium text-red-600 dark:text-red-400">

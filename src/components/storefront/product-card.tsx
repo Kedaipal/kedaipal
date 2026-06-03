@@ -1,5 +1,5 @@
 import type { FunctionReturnType } from "convex/server";
-import { Plus } from "lucide-react";
+import { Plus, SlidersHorizontal } from "lucide-react";
 import type { api } from "../../../convex/_generated/api";
 import { formatPrice } from "../../lib/format";
 import { Button } from "../ui/button";
@@ -15,8 +15,18 @@ interface ProductCardProps {
 }
 
 export function ProductCard({ product, onOpen, onQuickAdd }: ProductCardProps) {
-	const outOfStock = product.stock <= 0;
-	const lowStock = !outOfStock && product.stock <= 5;
+	// Multi-variant products can't be quick-added — the buyer must pick options
+	// in the detail sheet first.
+	const hasOptions = (product.options?.length ?? 0) > 0;
+	const blockOOS = product.blockWhenOutOfStock === true;
+	// "In stock" rolls up across variants; only hard-block products can be out.
+	const outOfStock = !product.inStock;
+	const lowStock =
+		!outOfStock &&
+		blockOOS &&
+		product.totalOnHand > 0 &&
+		product.totalOnHand <= 5;
+	const priceVaries = product.priceTo > product.priceFrom;
 	const firstImage = product.imageUrls[0];
 
 	return (
@@ -61,18 +71,37 @@ export function ProductCard({ product, onOpen, onQuickAdd }: ProductCardProps) {
 					{product.name}
 				</button>
 				<p className="text-base font-bold tabular-nums">
-					{formatPrice(product.price, product.currency)}
+					{priceVaries ? (
+						<span className="text-xs font-medium text-muted-foreground">
+							from{" "}
+						</span>
+					) : null}
+					{formatPrice(product.priceFrom, product.currency)}
 				</p>
-				<Button
-					type="button"
-					onClick={() => onQuickAdd(product)}
-					disabled={outOfStock}
-					size="sm"
-					className="mt-auto h-11 w-full rounded-xl"
-				>
-					<Plus className="size-4" />
-					Add
-				</Button>
+				{hasOptions ? (
+					<Button
+						type="button"
+						onClick={() => onOpen(product)}
+						disabled={outOfStock}
+						size="sm"
+						variant="outline"
+						className="mt-auto h-11 w-full rounded-xl"
+					>
+						<SlidersHorizontal className="size-4" />
+						Choose
+					</Button>
+				) : (
+					<Button
+						type="button"
+						onClick={() => onQuickAdd(product)}
+						disabled={outOfStock}
+						size="sm"
+						className="mt-auto h-11 w-full rounded-xl"
+					>
+						<Plus className="size-4" />
+						Add
+					</Button>
+				)}
 			</div>
 		</div>
 	);

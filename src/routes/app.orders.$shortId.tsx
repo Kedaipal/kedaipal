@@ -17,6 +17,8 @@ import {
 import { type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
+import type { Id } from "../../convex/_generated/dataModel";
+import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
 import {
 	PageHeader,
 	PageHeaderSkeleton,
@@ -28,8 +30,6 @@ import {
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
-import type { Id } from "../../convex/_generated/dataModel";
-import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
 import { formatPhone } from "../lib/customer";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import { deriveMapsUrl } from "../lib/google-address";
@@ -528,13 +528,20 @@ function OrderDetailRoute() {
 					Items
 				</p>
 				<ul className="flex flex-col divide-y divide-border">
-					{order.items.map((item) => (
+					{order.items.map((item, i) => (
 						<li
-							key={item.productId}
+							key={item.variantId ?? `${item.productId}-${i}`}
 							className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0"
 						>
 							<div className="min-w-0 flex-1">
-								<p className="truncate text-sm font-medium">{item.name}</p>
+								<p className="truncate text-sm font-medium">
+									{item.name}
+									{item.variantLabel ? (
+										<span className="ml-1.5 font-normal text-muted-foreground">
+											{item.variantLabel}
+										</span>
+									) : null}
+								</p>
 								<p className="text-xs text-muted-foreground">
 									{item.quantity} × {formatPrice(item.price, order.currency)}
 								</p>
@@ -791,7 +798,12 @@ function buildNotifyManagerMessage({
 	location: PickupSnapshot;
 	customerName: string | undefined;
 	customerWaPhone: string | undefined;
-	items: ReadonlyArray<{ name: string; quantity: number; price: number }>;
+	items: ReadonlyArray<{
+		name: string;
+		quantity: number;
+		price: number;
+		variantLabel?: string;
+	}>;
 	total: number;
 	currency: string;
 }): string {
@@ -808,8 +820,11 @@ function buildNotifyManagerMessage({
 	lines.push("");
 	lines.push("Items:");
 	for (const item of items) {
+		const name = item.variantLabel
+			? `${item.name} (${item.variantLabel})`
+			: item.name;
 		lines.push(
-			`• ${item.quantity}× ${item.name} (${formatPrice(item.price * item.quantity, currency)})`,
+			`• ${item.quantity}× ${name} (${formatPrice(item.price * item.quantity, currency)})`,
 		);
 	}
 	lines.push("");
@@ -840,7 +855,12 @@ function NotifyManagerCard({
 	pickupLocationId: Id<"pickupLocations"> | undefined;
 	customerName: string | undefined;
 	customerWaPhone: string | undefined;
-	items: ReadonlyArray<{ name: string; quantity: number; price: number }>;
+	items: ReadonlyArray<{
+		name: string;
+		quantity: number;
+		price: number;
+		variantLabel?: string;
+	}>;
 	total: number;
 	currency: string;
 }) {

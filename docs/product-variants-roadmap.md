@@ -1,4 +1,9 @@
-# Product Variants — Implementation Reference
+# Product Variants — Roadmap (SUPERSEDED)
+
+> **Superseded by [`product-variants.md`](./product-variants.md)** (ticket `86extjqxf`, in build).
+> This file is the pre-build *menu of decisions*; the decisions are now locked in the spec.
+> Kept for the import/export shape discussion (§"Import / Export Impact"), which the bulk-import
+> subtask still draws on. For everything else, read the spec.
 
 Reference doc for adding Shopee/Lazada-style variant support (size, color, etc.) to products. Not a plan — a menu of decisions to make when we pick this up, and a pointer to what the current flat schema needs to migrate cleanly.
 

@@ -11,6 +11,7 @@ import { assertValidAddress } from "./lib/address";
 import { computeOrderTotals, generateShortId } from "./lib/order";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidWaPhone } from "./lib/slug";
+import { variantLabel } from "./lib/variant";
 import type { PickupSnapshot } from "./lib/whatsappCopy";
 
 const addressValidator = v.object({
@@ -51,7 +52,9 @@ const transitionStatusValidator = v.union(
 
 type OrderItemSnapshot = {
 	productId: Id<"products">;
+	variantId: Id<"productVariants">;
 	name: string;
+	variantLabel?: string;
 	price: number;
 	quantity: number;
 };
@@ -61,7 +64,14 @@ export const create = mutation({
 		retailerId: v.id("retailers"),
 		items: v.array(
 			v.object({
-				productId: v.id("products"),
+				// Orders reference the sellable variant. `variantId` is preferred
+				// (the storefront cart always sends it). `productId` is accepted as
+				// a convenience for single-variant products — it resolves to that
+				// product's sole variant; ambiguous for multi-variant products and
+				// rejected. Eases the flat→variant migration window. The parent
+				// product is resolved server-side for name/currency/active + stock.
+				variantId: v.optional(v.id("productVariants")),
+				productId: v.optional(v.id("products")),
 				quantity: v.number(),
 			}),
 		),
@@ -179,33 +189,71 @@ export const create = mutation({
 			throw new ConvexError(`Maximum ${MAX_ITEMS_PER_ORDER} items per order`);
 
 		const snapshotItems: OrderItemSnapshot[] = [];
-		// Sum requested quantities per product so a single order with two line
-		// items pointing at the same product is validated and decremented once.
-		const requestedByProduct = new Map<Id<"products">, number>();
+		// Sum requested quantities per variant so a single order with two line
+		// items pointing at the same variant is validated and decremented once.
+		// Tracks whether the parent product hard-blocks on stock (drives whether
+		// we enforce + decrement onHand vs treat as made-to-order/unlimited).
+		const requestedByVariant = new Map<
+			Id<"productVariants">,
+			{ qty: number; block: boolean; onHand: number }
+		>();
 		for (const item of args.items) {
 			if (!Number.isInteger(item.quantity) || item.quantity < 1)
 				throw new ConvexError("Quantity must be a positive integer");
-			const product = await ctx.db.get(item.productId);
-			if (!product) throw new ConvexError(`Product ${item.productId} not found`);
-			if (product.retailerId !== args.retailerId)
-				throw new ConvexError("Product does not belong to this retailer");
-			if (!product.active)
-				throw new ConvexError(`Product "${product.name}" is not available`);
+
+			// Resolve the sellable variant from variantId (preferred) or a
+			// single-variant product's productId (migration convenience).
+			let variant: Doc<"productVariants"> | null;
+			if (item.variantId) {
+				variant = await ctx.db.get(item.variantId);
+				if (!variant) throw new ConvexError(`Variant ${item.variantId} not found`);
+			} else if (item.productId) {
+				const variants = await ctx.db
+					.query("productVariants")
+					.withIndex("by_product", (q) => q.eq("productId", item.productId!))
+					.collect();
+				if (variants.length === 0)
+					throw new ConvexError("Product has no variants");
+				if (variants.length > 1)
+					throw new ConvexError(
+						"This product has multiple variants — specify which one",
+					);
+				variant = variants[0];
+			} else {
+				throw new ConvexError("Each item needs a variantId or productId");
+			}
+			if (variant.retailerId !== args.retailerId)
+				throw new ConvexError("Variant does not belong to this retailer");
+			const product = await ctx.db.get(variant.productId);
+			if (!product) throw new ConvexError("Product not found");
+			const variantId = variant._id;
+			const label = variantLabel(variant.optionValues);
+			const displayName = label ? `${product.name} (${label})` : product.name;
+			if (!product.active || !variant.active)
+				throw new ConvexError(`"${displayName}" is not available`);
 			if (product.currency !== args.currency)
 				throw new ConvexError(
-					`Currency mismatch: order is ${args.currency} but "${product.name}" is ${product.currency}`,
+					`Currency mismatch: order is ${args.currency} but "${displayName}" is ${product.currency}`,
 				);
-			const requestedSoFar = requestedByProduct.get(item.productId) ?? 0;
-			const newRequested = requestedSoFar + item.quantity;
-			if (product.stock < newRequested)
-				throw new ConvexError(
-					`Only ${product.stock} of "${product.name}" in stock`,
-				);
-			requestedByProduct.set(item.productId, newRequested);
+			const block = product.blockWhenOutOfStock === true;
+			const prior = requestedByVariant.get(variantId);
+			const newRequested = (prior?.qty ?? 0) + item.quantity;
+			// Stock is only enforced for hard-block products. Made-to-order
+			// products (frozen pack-to-order, metal prints) never block — keeps
+			// the "nothing gets missed" promise intact.
+			if (block && variant.onHand < newRequested)
+				throw new ConvexError(`Only ${variant.onHand} of "${displayName}" in stock`);
+			requestedByVariant.set(variantId, {
+				qty: newRequested,
+				block,
+				onHand: variant.onHand,
+			});
 			snapshotItems.push({
-				productId: item.productId,
+				productId: variant.productId,
+				variantId,
 				name: product.name,
-				price: product.price,
+				variantLabel: label || undefined,
+				price: variant.price,
 				quantity: item.quantity,
 			});
 		}
@@ -213,13 +261,15 @@ export const create = mutation({
 		const { subtotal, total } = computeOrderTotals(snapshotItems);
 		const now = Date.now();
 
-		// Reserve stock — patch each product. Same transaction, so any failure
-		// rolls back automatically. Re-fetch fresh to avoid stale closure values.
-		for (const [productId, qty] of requestedByProduct) {
-			const fresh = await ctx.db.get(productId);
-			if (!fresh) throw new Error("Product disappeared mid-transaction");
-			await ctx.db.patch(productId, {
-				stock: fresh.stock - qty,
+		// Reserve stock for hard-block variants, in the same transaction (atomic;
+		// rolls back on any failure). Convex mutations are OCC transactions — both
+		// the validation read above and this write see one consistent snapshot, and
+		// a conflicting concurrent write retries the whole mutation. So the on-hand
+		// read during validation is still authoritative; no re-read is needed.
+		for (const [variantId, { qty, block, onHand }] of requestedByVariant) {
+			if (!block) continue;
+			await ctx.db.patch(variantId, {
+				onHand: onHand - qty,
 				updatedAt: now,
 			});
 		}
@@ -406,20 +456,26 @@ export const updateStatus = mutation({
 		const now = Date.now();
 
 		// Restore stock on the FIRST transition into cancelled. Idempotent —
-		// re-cancelling a cancelled order is a no-op for stock.
+		// re-cancelling a cancelled order is a no-op for stock. Only variants
+		// whose parent product hard-blocks were ever decremented, so only those
+		// are restored. Items without a variantId are legacy (pre-variant) orders
+		// and are skipped.
 		if (status === "cancelled" && order.status !== "cancelled") {
-			const restoreByProduct = new Map<Id<"products">, number>();
+			const restoreByVariant = new Map<Id<"productVariants">, number>();
 			for (const item of order.items) {
-				restoreByProduct.set(
-					item.productId,
-					(restoreByProduct.get(item.productId) ?? 0) + item.quantity,
+				if (!item.variantId) continue;
+				restoreByVariant.set(
+					item.variantId,
+					(restoreByVariant.get(item.variantId) ?? 0) + item.quantity,
 				);
 			}
-			for (const [productId, qty] of restoreByProduct) {
-				const fresh = await ctx.db.get(productId);
-				if (!fresh) continue; // product was deleted; nothing to restore
-				await ctx.db.patch(productId, {
-					stock: fresh.stock + qty,
+			for (const [variantId, qty] of restoreByVariant) {
+				const fresh = await ctx.db.get(variantId);
+				if (!fresh) continue; // variant was deleted; nothing to restore
+				const product = await ctx.db.get(fresh.productId);
+				if (product?.blockWhenOutOfStock !== true) continue; // made-to-order
+				await ctx.db.patch(variantId, {
+					onHand: fresh.onHand + qty,
 					updatedAt: now,
 				});
 			}

@@ -19,7 +19,8 @@ erDiagram
     retailers ||--o{ slugHistory : "renamed from"
     customers ||--o{ orders : "places (nullable)"
     orders ||--o{ orderEvents : "audited by"
-    products ||--o{ orders : "snapshotted into items[]"
+    products ||--o{ productVariants : "varies into"
+    productVariants ||--o{ orders : "snapshotted into items[]"
 
     retailers {
         string userId "Clerk sub"
@@ -46,13 +47,29 @@ erDiagram
     }
     products {
         id retailerId
-        string sku "optional, upsert key"
         string name
-        number price
+        string description "markdown, storefront"
         string currency
-        number stock
+        array options "0-2 option axes (name+values)"
+        boolean blockWhenOutOfStock "optional"
         array imageStorageIds
         boolean active "soft delete"
+        number sortOrder
+        number price "DEPRECATED — moved to variant"
+        number stock "DEPRECATED — moved to variant"
+        string sku "DEPRECATED — moved to variant"
+    }
+    productVariants {
+        id productId
+        id retailerId "denormalized for sku index"
+        array optionValues "aligned to products.options"
+        string sku "optional, per-retailer unique"
+        number price
+        number onHand
+        number reserved "0 until HitPay"
+        number parcelWeightG "feeds weight-band delivery"
+        array imageStorageIds
+        boolean active
         number sortOrder
     }
     orders {
@@ -110,17 +127,41 @@ Audit trail of old slugs so renamed storefronts keep resolving for a grace windo
 
 ### `products`
 
-Catalog items, scoped to a retailer. **Soft-deleted** via `active: boolean` — never hard-deleted, so historical order line items stay resolvable.
+Catalog items, scoped to a retailer. **Soft-deleted** via `active: boolean` — never hard-deleted, so historical order line items stay resolvable. A product is the *listing*; the sellable units are its [`productVariants`](#productvariants). Every product resolves to **≥1 variant** — a no-option product has exactly one implicit variant (`optionValues: []`); there is no separate "simple product" code path. Full design: [`product-variants.md`](./product-variants.md).
 
 | Field | Type | Notes |
 |---|---|---|
-| `sku` | string? | Stable retailer ID. When present, drives bulk-import upsert via `by_retailer_sku`. |
-| `name`, `description`, `price`, `currency`, `stock` | — | `currency` must match the order currency at checkout. |
-| `imageStorageIds` | string[] | Convex storage references (up to 5). |
+| `name` | string | Listing title. |
+| `description` | string? | Rendered as **sanitized markdown** on the storefront (specs, "what's included"). |
+| `currency` | string | Must match the order currency at checkout. |
+| `options` | object[]? | 0–2 **option axes** `{name, values[]}`, ordered (drives picker order). Empty/undefined = no axes. Capped at 2 axes / 50 variants. |
+| `blockWhenOutOfStock` | boolean? | `true` = a variant with `onHand ≤ 0` is unsellable. Undefined/false = **made-to-order** (sold-out combos stay sellable). |
+| `imageStorageIds` | string[] | Product-level hero gallery (up to 5). |
 | `active` | boolean | Soft-delete flag. |
 | `sortOrder` | number | Custom storefront ranking. |
+| `price`, `stock`, `sku` | **DEPRECATED** | Moved to `productVariants`. Kept optional during the flat→variant migration (widen-migrate-narrow); dropped in the narrow step. **Do not read.** |
 
-**Indexes:** `by_retailer`, `by_retailer_active` (storefront shows active only), `by_retailer_sku` (upsert collision check).
+**Indexes:** `by_retailer`, `by_retailer_active` (storefront shows active only), `by_retailer_sku` (legacy; SKU uniqueness now enforced on the variant).
+
+### `productVariants`
+
+The first-class **sellable unit**. `optionValues` is positionally aligned with the parent `products.options`. SKU uniqueness moved here (SKUs identify sellable units). Frozen onto orders via `orders.items[].variantId`/`variantLabel`.
+
+| Field | Type | Notes |
+|---|---|---|
+| `productId` | id | Parent listing. |
+| `retailerId` | id | Denormalized so the per-retailer SKU index can live here. |
+| `optionValues` | string[] | Positionally aligned with `products.options`; `[]` for the implicit default. |
+| `sku` | string? | Optional, **unique per retailer** (`by_retailer_sku`). |
+| `price` | number | Minor units. Server-authoritative at order time. |
+| `onHand` | number | Stock. Decremented on order create / restored on cancel **only when** the parent product hard-blocks. |
+| `reserved` | number | Forward-wired for HitPay holds; stays `0` until payments go live. |
+| `parcelWeightG` | number | Parcel weight (grams). Feeds weight-band delivery (separate task); `0` = unset. |
+| `imageStorageIds` | string[] | Per-variant images (up to 3); storefront falls back to the product hero when empty. |
+| `active` | boolean | Per-variant deactivate — inactive variants are hidden from the storefront. |
+| `sortOrder` | number | Row order within the product. |
+
+**Indexes:** `by_product` (load a listing's variants), `by_retailer_sku` (SKU uniqueness check).
 
 ### `customers`
 
@@ -150,7 +191,7 @@ The core transactional entity. Two independent dimensions:
 |---|---|---|
 | `shortId` | string | `ORD-XXXX`. Alphabet excludes `O/0/I/1` (visual clarity in WhatsApp). Acts as a capability token for public mutations. |
 | `customerId` | id? | Link to aggregated customer. Optional — null for phone-less link-in-bio checkouts until the phone is known. |
-| `items` | object[] | Price/name **snapshots** `{productId, name, price, quantity}` — immune to later product edits. |
+| `items` | object[] | Line **snapshots** `{productId, variantId?, name, variantLabel?, price, quantity}` — immune to later product/variant edits. `variantId`/`variantLabel` absent only on legacy (pre-variant) orders. |
 | `subtotal`, `total`, `currency` | — | Computed by `computeOrderTotals` ([`convex/lib/order.ts`](../convex/lib/order.ts)); currently `total === subtotal`. |
 | `status` | union | Fulfilment pipeline (see above). |
 | `customer` | object | Denormalized `{name?, waPhone?}` snapshot — channel-agnostic checkout capture. |
@@ -175,6 +216,7 @@ Validation helpers that must run on **both** the Convex backend and the React fr
 |---|---|---|
 | Slug / phone / email | [`convex/lib/slug.ts`](../convex/lib/slug.ts) | [`src/lib/slug.ts`](../src/lib/slug.ts) |
 | Customer display name | [`convex/lib/customer.ts`](../convex/lib/customer.ts) | [`src/lib/customer.ts`](../src/lib/customer.ts) |
+| Variant helpers (label, cartesian, caps) | [`convex/lib/variant.ts`](../convex/lib/variant.ts) | [`src/lib/variant.ts`](../src/lib/variant.ts) |
 | Legal versions | [`convex/lib/legal.ts`](../convex/lib/legal.ts) | [`src/lib/legal.ts`](../src/lib/legal.ts) |
 | Address (backend) / form schema (frontend) | [`convex/lib/address.ts`](../convex/lib/address.ts) | [`src/lib/schemas.ts`](../src/lib/schemas.ts) |
 

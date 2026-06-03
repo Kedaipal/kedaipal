@@ -4,35 +4,92 @@ import { Info } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import { convexErrorMessage } from "../../lib/format";
-import { productFormSchema } from "../../lib/schemas";
+import { productDetailsSchema } from "../../lib/schemas";
+import { variantLabel } from "../../lib/variant";
 import { Button } from "../ui/button";
 import { useAppForm } from "./form";
+import {
+	VariantEditor,
+	type VariantEditorState,
+	type VariantRow,
+} from "./variant-editor";
 
 const MAX_IMAGES = 5;
 
 export interface ProductFormSubmitValues {
-	sku?: string;
 	name: string;
 	description?: string;
-	price: number;
-	stock: number;
+	blockWhenOutOfStock: boolean;
 	imageStorageIds: string[];
+	options: { name: string; values: string[] }[];
+	variants: {
+		optionValues: string[];
+		sku?: string;
+		price: number;
+		onHand: number;
+		active: boolean;
+		imageStorageIds: string[];
+	}[];
 }
 
 interface ProductFormProps {
 	initialValues?: {
-		sku?: string;
 		name?: string;
 		description?: string;
-		price?: number; // minor units
-		stock?: number;
+		blockWhenOutOfStock?: boolean;
 		imageStorageIds?: string[];
 		imageUrls?: string[];
+		options?: { name: string; values: string[] }[];
+		variants?: {
+			optionValues: string[];
+			sku?: string;
+			price: number;
+			onHand: number;
+			active?: boolean;
+			imageStorageIds?: string[];
+			imageUrls?: string[];
+		}[];
 	};
 	currency: string;
 	submitLabel: string;
 	onSubmit: (values: ProductFormSubmitValues) => Promise<void>;
 }
+
+/** Seed the editor state from existing variants, or a single empty default row. */
+function initialEditorState(
+	initial: ProductFormProps["initialValues"],
+): VariantEditorState {
+	const options = initial?.options ?? [];
+	const variants = initial?.variants;
+	if (variants && variants.length > 0) {
+		const rows: VariantRow[] = variants.map((vr) => ({
+			optionValues: vr.optionValues,
+			sku: vr.sku ?? "",
+			price: (vr.price / 100).toFixed(2),
+			stock: String(vr.onHand),
+			active: vr.active ?? true,
+			imageStorageIds: vr.imageStorageIds ?? [],
+			imageUrl: vr.imageUrls?.[0],
+		}));
+		return { options, rows };
+	}
+	return {
+		options: [],
+		rows: [
+			{
+				optionValues: [],
+				sku: "",
+				price: "",
+				stock: "",
+				active: true,
+				imageStorageIds: [],
+			},
+		],
+	};
+}
+
+const PRICE_RE = /^\d+(\.\d{1,2})?$/;
+const INT_RE = /^\d+$/;
 
 export function ProductForm({
 	initialValues,
@@ -50,31 +107,81 @@ export function ProductForm({
 	);
 	const [uploading, setUploading] = useState(false);
 	const [serverError, setServerError] = useState<string | null>(null);
+	const [blockOOS, setBlockOOS] = useState(
+		initialValues?.blockWhenOutOfStock ?? false,
+	);
+	const [editor, setEditor] = useState<VariantEditorState>(() =>
+		initialEditorState(initialValues),
+	);
 
 	const form = useAppForm({
 		defaultValues: {
-			sku: initialValues?.sku ?? "",
 			name: initialValues?.name ?? "",
 			description: initialValues?.description ?? "",
-			price:
-				initialValues?.price !== undefined
-					? (initialValues.price / 100).toFixed(2)
-					: "",
-			stock:
-				initialValues?.stock !== undefined ? String(initialValues.stock) : "",
 		},
-		validators: { onChange: productFormSchema },
+		validators: { onChange: productDetailsSchema },
 		onSubmit: async ({ value }) => {
 			setServerError(null);
-			const parsed = productFormSchema.parse(value);
+			const parsed = productDetailsSchema.parse(value);
+
+			// --- Client-side validation of options + the variant grid ----------
+			const hasOptions = editor.options.length > 0;
+			if (hasOptions) {
+				for (const axis of editor.options) {
+					if (axis.name.trim().length === 0) {
+						setServerError("Every option needs a name.");
+						return;
+					}
+					if (axis.values.length === 0) {
+						setServerError(`Option "${axis.name}" needs at least one value.`);
+						return;
+					}
+				}
+			}
+
+			const variants: ProductFormSubmitValues["variants"] = [];
+			for (const row of editor.rows) {
+				const label = variantLabel(row.optionValues) || "this product";
+				const priceOk = PRICE_RE.test(row.price.trim());
+				const stockOk = INT_RE.test(row.stock.trim());
+				// Inactive (deactivated) variants are hidden from buyers, so don't
+				// block the whole save on their price/stock — just fall back to 0 for
+				// any blank/invalid field. Active variants must be fully valid.
+				if (row.active) {
+					if (!priceOk) {
+						setServerError(
+							`Enter a valid price for ${label} (e.g. 120 or 120.50).`,
+						);
+						return;
+					}
+					if (!stockOk) {
+						setServerError(`Enter a whole-number stock for ${label}.`);
+						return;
+					}
+				}
+				variants.push({
+					optionValues: row.optionValues,
+					sku: row.sku.trim() || undefined,
+					price: priceOk ? Math.round(Number.parseFloat(row.price) * 100) : 0,
+					onHand: stockOk ? Number.parseInt(row.stock, 10) : 0,
+					active: row.active,
+					imageStorageIds: row.imageStorageIds,
+				});
+			}
+
 			try {
 				await onSubmit({
-					sku: parsed.sku,
 					name: parsed.name,
 					description: parsed.description,
-					price: parsed.price,
-					stock: parsed.stock,
+					blockWhenOutOfStock: blockOOS,
 					imageStorageIds: images.map((i) => i.id),
+					options: hasOptions
+						? editor.options.map((a) => ({
+								name: a.name.trim(),
+								values: a.values,
+							}))
+						: [],
+					variants,
 				});
 			} catch (err) {
 				setServerError(convexErrorMessage(err));
@@ -131,36 +238,22 @@ export function ProductForm({
 					/>
 				)}
 			</form.AppField>
-			<form.AppField name="sku">
-				{(field) => (
-					<field.TextField
-						label="SKU"
-						placeholder="e.g. ITEM-001"
-						description="Optional. Stable identifier used by bulk export/import to match existing products."
-					/>
-				)}
-			</form.AppField>
 			<form.AppField name="description">
 				{(field) => (
 					<field.TextareaField
 						label="Description"
-						placeholder="Optional details shoppers should see"
+						placeholder="Optional. Supports markdown — use **bold**, lists, and headings for specs & what's included."
 					/>
 				)}
 			</form.AppField>
+
 			<div className="flex flex-col gap-1">
-				<form.AppField name="price">
-					{(field) => (
-						<field.TextField
-							label={`Price (${currency})`}
-							placeholder="120.00"
-							type="text"
-							inputMode="numeric"
-							required
-							description="Decimal number, e.g. 120 or 120.50."
-						/>
-					)}
-				</form.AppField>
+				<VariantEditor
+					value={editor}
+					onChange={setEditor}
+					currency={currency}
+					blockWhenOutOfStock={blockOOS}
+				/>
 				<Link
 					to="/app/settings"
 					search={{ tab: "store" }}
@@ -170,17 +263,22 @@ export function ProductForm({
 					Currency is set per store — change it in Settings.
 				</Link>
 			</div>
-			<form.AppField name="stock">
-				{(field) => (
-					<field.TextField
-						label="Stock"
-						placeholder="10"
-						type="text"
-						inputMode="numeric"
-						required
-					/>
-				)}
-			</form.AppField>
+
+			<label className="flex items-start gap-2.5 rounded-xl border border-border p-3 text-sm">
+				<input
+					type="checkbox"
+					checked={blockOOS}
+					onChange={(e) => setBlockOOS(e.target.checked)}
+					className="mt-0.5 size-4"
+				/>
+				<span>
+					<span className="font-medium">Stop orders when out of stock</span>
+					<span className="block text-xs text-muted-foreground">
+						Leave off for made-to-order items (cakes, frozen packs) — buyers can
+						still order at zero stock.
+					</span>
+				</span>
+			</label>
 
 			<div className="flex flex-col gap-2">
 				<span className="text-sm font-medium">

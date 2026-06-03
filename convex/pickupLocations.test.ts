@@ -580,11 +580,10 @@ describe("pickupLocations — Google autocomplete fields", () => {
 		const productId = await asUser.mutation(api.products.create, {
 			retailerId: retailer._id,
 			name: "Kuih Tepung",
-			price: 1000,
 			currency: "MYR",
-			stock: 50,
 			imageStorageIds: [],
 			sortOrder: 0,
+			variants: [{ optionValues: [], price: 1000, onHand: 50 }],
 		});
 		const { shortId } = await t.mutation(api.orders.create, {
 			retailerId: retailer._id,
@@ -828,11 +827,10 @@ describe("orders — delivery placeId", () => {
 		const productId = await asUser.mutation(api.products.create, {
 			retailerId: retailer._id,
 			name: "Rendang 1kg",
-			price: 10000,
 			currency: "MYR",
-			stock: 50,
 			imageStorageIds: [],
 			sortOrder: 0,
+			variants: [{ optionValues: [], price: 10000, onHand: 50 }],
 		});
 		const { shortId } = await t.mutation(api.orders.create, {
 			retailerId: retailer._id,
@@ -923,11 +921,10 @@ describe("orders — delivery address placeId length cap (PR review fix)", () =>
 		const productId = await asUser.mutation(api.products.create, {
 			retailerId: retailer._id,
 			name: "Rendang 1kg",
-			price: 10000,
 			currency: "MYR",
-			stock: 50,
 			imageStorageIds: [],
 			sortOrder: 0,
+			variants: [{ optionValues: [], price: 10000, onHand: 50 }],
 		});
 		const huge = "z".repeat(301);
 		await expect(
