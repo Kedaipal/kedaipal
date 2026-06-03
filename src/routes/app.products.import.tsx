@@ -16,13 +16,13 @@ import {
 	downloadSampleProductsCsv,
 	parseProductsCsv,
 } from "../lib/csv";
+import { BULK_IO_ENABLED } from "../lib/feature-flags";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import {
 	type ParsedProductImport,
 	PRODUCT_IMPORT_COLUMNS,
 	type ProductImportRow,
 } from "../lib/product-import";
-import { BULK_IO_ENABLED } from "../lib/feature-flags";
 import { parseProductsXlsx } from "../lib/xlsx";
 
 export const Route = createFileRoute("/app/products/import")({
