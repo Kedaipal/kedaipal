@@ -47,6 +47,26 @@ export function formatShortDate(epochMs: number): string {
 	});
 }
 
+/** Strip everything but digits — for whole-number inputs (stock, quantity). */
+export function sanitizeIntInput(v: string): string {
+	return v.replace(/\D/g, "");
+}
+
+/**
+ * Normalize a typed price string to 2 decimal places (sen precision) for on-blur
+ * formatting — "12.999" → "13.00", "12.5" → "12.50". Blank stays blank; an
+ * unparseable or negative value is returned unchanged so form validation can
+ * surface it. Converts the *display* string only; the integer-sen conversion
+ * still happens at submit via `Math.round(value * 100)`.
+ */
+export function normalizePriceInput(v: string): string {
+	const t = v.trim();
+	if (t === "") return "";
+	const n = Number.parseFloat(t);
+	if (!Number.isFinite(n) || n < 0) return t;
+	return n.toFixed(2);
+}
+
 export function formatPrice(minorUnits: number, currency: string): string {
 	const major = minorUnits / 100;
 	try {

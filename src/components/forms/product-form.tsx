@@ -88,7 +88,6 @@ function initialEditorState(
 	};
 }
 
-const PRICE_RE = /^\d+(\.\d{1,2})?$/;
 const INT_RE = /^\d+$/;
 
 export function ProductForm({
@@ -142,7 +141,11 @@ export function ProductForm({
 			const variants: ProductFormSubmitValues["variants"] = [];
 			for (const row of editor.rows) {
 				const label = variantLabel(row.optionValues) || "this product";
-				const priceOk = PRICE_RE.test(row.price.trim());
+				// Price: any non-negative number; rounded to integer sen (2 dp).
+				const priceStr = row.price.trim();
+				const priceNum = Number.parseFloat(priceStr);
+				const priceOk =
+					priceStr.length > 0 && Number.isFinite(priceNum) && priceNum >= 0;
 				const stockOk = INT_RE.test(row.stock.trim());
 				// Inactive (deactivated) variants are hidden from buyers, so don't
 				// block the whole save on their price/stock — just fall back to 0 for
@@ -162,7 +165,7 @@ export function ProductForm({
 				variants.push({
 					optionValues: row.optionValues,
 					sku: row.sku.trim() || undefined,
-					price: priceOk ? Math.round(Number.parseFloat(row.price) * 100) : 0,
+					price: priceOk ? Math.round(priceNum * 100) : 0,
 					onHand: stockOk ? Number.parseInt(row.stock, 10) : 0,
 					active: row.active,
 					imageStorageIds: row.imageStorageIds,
