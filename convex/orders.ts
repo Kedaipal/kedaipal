@@ -909,8 +909,9 @@ export const submitMockup = mutation({
 			note: "mockup_submitted",
 			createdAt: now,
 		});
-		// TODO(notifications): schedule WhatsApp send of the mockup image +
-		// "review your mockup" link to the buyer.
+		await ctx.scheduler.runAfter(0, internal.whatsapp.notifyMockupSubmitted, {
+			orderId,
+		});
 	},
 });
 
@@ -942,7 +943,9 @@ export const approveMockup = mutation({
 			note: "mockup_approved",
 			createdAt: now,
 		});
-		// TODO(notifications): alert the seller that the mockup was approved.
+		await ctx.scheduler.runAfter(0, internal.email.notifyMockupApproved, {
+			orderId: order._id,
+		});
 	},
 });
 
@@ -977,7 +980,11 @@ export const requestMockupChanges = mutation({
 					: "changes_requested",
 			createdAt: now,
 		});
-		// TODO(notifications): alert the seller that changes were requested.
+		await ctx.scheduler.runAfter(
+			0,
+			internal.email.notifyMockupChangesRequested,
+			{ orderId: order._id },
+		);
 	},
 });
 

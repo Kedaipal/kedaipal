@@ -5,7 +5,12 @@ export type Locale = "en" | "ms";
 
 export type DeliveryMethod = "delivery" | "self_collect";
 
-export type RetailerEmailKey = "newOrder" | "orderConfirmed" | "paymentClaimed";
+export type RetailerEmailKey =
+	| "newOrder"
+	| "orderConfirmed"
+	| "paymentClaimed"
+	| "mockupApproved"
+	| "mockupChangesRequested";
 
 export type RetailerEmailVars = {
 	shortId: string;
@@ -20,6 +25,8 @@ export type RetailerEmailVars = {
 	// resolved Convex storage URL for the screenshot, if any.
 	paymentReference?: string;
 	proofUrl?: string;
+	// Optional — only set when key === "mockupChangesRequested".
+	mockupChangeNote?: string;
 };
 
 const deliveryLabel: Record<Locale, Record<DeliveryMethod, string>> = {
@@ -114,6 +121,33 @@ const en = {
 		const text = `🪙 Payment claimed for ${v.shortId}\n${v.itemCount} item(s) · ${v.totalFormatted}\nCustomer: ${v.customerName}\n${refTextLine}\n${proofTextLine}\n\nVerify in your bank app, then confirm in your dashboard.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
+	mockupApproved: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `🎨 Mockup approved for ${v.shortId}`;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> — ${escapeHtml(v.customerName)} approved the mockup.`,
+			`You're clear to produce and pack this order.`,
+		];
+		const html = wrapHtml("🎨", `Mockup approved — ${v.shortId}`, lines, v.dashboardUrl, "Open dashboard");
+		const text = `🎨 Mockup approved for ${v.shortId}\n${v.customerName} approved the mockup — you're clear to produce.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	mockupChangesRequested: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `✏️ Mockup changes requested for ${v.shortId}`;
+		const noteLine = v.mockupChangeNote
+			? `Requested changes: <em>${escapeHtml(v.mockupChangeNote)}</em>`
+			: `No note provided.`;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> — ${escapeHtml(v.customerName)} asked for changes to the mockup.`,
+			noteLine,
+			`Update the mockup and re-send it for approval.`,
+		];
+		const html = wrapHtml("✏️", `Changes requested — ${v.shortId}`, lines, v.dashboardUrl, "Open dashboard");
+		const noteText = v.mockupChangeNote
+			? `Requested changes: ${v.mockupChangeNote}`
+			: `No note provided.`;
+		const text = `✏️ Mockup changes requested for ${v.shortId}\n${v.customerName} asked for changes.\n${noteText}\nUpdate and re-send for approval.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
 };
 
 const ms = {
@@ -170,6 +204,33 @@ const ms = {
 			? `Tangkapan resit: ${v.proofUrl}`
 			: `Tangkapan resit: tidak dinyatakan`;
 		const text = `🪙 Pembayaran diterima untuk ${v.shortId}\n${v.itemCount} item · ${v.totalFormatted}\nPelanggan: ${v.customerName}\n${refTextLine}\n${proofTextLine}\n\nSahkan di aplikasi bank anda, kemudian sahkan di dashboard.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	mockupApproved: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `🎨 Mockup diluluskan untuk ${v.shortId}`;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> — ${escapeHtml(v.customerName)} telah meluluskan mockup.`,
+			`Anda boleh teruskan pengeluaran dan pembungkusan.`,
+		];
+		const html = wrapHtml("🎨", `Mockup diluluskan — ${v.shortId}`, lines, v.dashboardUrl, "Buka dashboard");
+		const text = `🎨 Mockup diluluskan untuk ${v.shortId}\n${v.customerName} telah meluluskan mockup — anda boleh teruskan.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	mockupChangesRequested: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `✏️ Pindaan mockup diminta untuk ${v.shortId}`;
+		const noteLine = v.mockupChangeNote
+			? `Pindaan diminta: <em>${escapeHtml(v.mockupChangeNote)}</em>`
+			: `Tiada nota diberikan.`;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> — ${escapeHtml(v.customerName)} meminta pindaan pada mockup.`,
+			noteLine,
+			`Kemas kini mockup dan hantar semula untuk kelulusan.`,
+		];
+		const html = wrapHtml("✏️", `Pindaan diminta — ${v.shortId}`, lines, v.dashboardUrl, "Buka dashboard");
+		const noteText = v.mockupChangeNote
+			? `Pindaan diminta: ${v.mockupChangeNote}`
+			: `Tiada nota diberikan.`;
+		const text = `✏️ Pindaan mockup diminta untuk ${v.shortId}\n${v.customerName} meminta pindaan.\n${noteText}\nKemas kini dan hantar semula.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 };

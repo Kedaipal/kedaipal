@@ -1,7 +1,11 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import type { Doc } from "./_generated/dataModel";
-import { internalAction, internalQuery } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
+import {
+	type ActionCtx,
+	internalAction,
+	internalQuery,
+} from "./_generated/server";
 import { sendEmail } from "./lib/email";
 import {
 	type DeliveryMethod,
@@ -36,6 +40,7 @@ export const getOrderForRetailerEmail = internalQuery({
 		locale: Locale;
 		paymentReference: string | undefined;
 		paymentProofStorageId: string | undefined;
+		mockupChangeNote: string | undefined;
 	} | null> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) return null;
@@ -54,7 +59,75 @@ export const getOrderForRetailerEmail = internalQuery({
 			locale: (retailer.locale as Locale | undefined) ?? "en",
 			paymentReference: order.paymentReference,
 			paymentProofStorageId: order.paymentProofStorageId,
+			mockupChangeNote: order.mockupChangeNote,
 		};
+	},
+});
+
+/**
+ * Seller alerts for the mockup-approval loop. Scheduled from
+ * orders.approveMockup / orders.requestMockupChanges. Fire-and-forget; errors
+ * are swallowed so the buyer's mutation never fails on an outbound issue.
+ */
+async function sendMockupSellerEmail(
+	ctx: ActionCtx,
+	orderId: Id<"orders">,
+	key: "mockupApproved" | "mockupChangesRequested",
+): Promise<void> {
+	let meta: {
+		shortId: string;
+		itemCount: number;
+		total: number;
+		currency: string;
+		customerName: string;
+		deliveryMethod: DeliveryMethod;
+		notifyEmail: string | undefined;
+		storeName: string;
+		locale: Locale;
+		mockupChangeNote: string | undefined;
+	} | null = null;
+	try {
+		meta = await ctx.runQuery(internal.email.getOrderForRetailerEmail, {
+			orderId,
+		});
+	} catch (err) {
+		console.error(`Email ${key} lookup failed`, err);
+		return;
+	}
+	if (!meta || !meta.notifyEmail) return;
+
+	const totalFormatted = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
+	const dashboardUrl = `${process.env.APP_URL ?? "https://kedaipal.com"}/app/orders/${meta.shortId}`;
+	const { subject, html, text } = renderRetailerEmail(meta.locale, key, {
+		shortId: meta.shortId,
+		itemCount: meta.itemCount,
+		totalFormatted,
+		customerName: meta.customerName,
+		deliveryMethod: meta.deliveryMethod,
+		storeName: meta.storeName,
+		dashboardUrl,
+		mockupChangeNote: meta.mockupChangeNote,
+	});
+	try {
+		await sendEmail(meta.notifyEmail, subject, html, text);
+	} catch (err) {
+		console.error(
+			`Email ${key} failed (shortId=${meta.shortId}): ${err instanceof Error ? err.message : String(err)}`,
+		);
+	}
+}
+
+export const notifyMockupApproved = internalAction({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<void> => {
+		await sendMockupSellerEmail(ctx, orderId, "mockupApproved");
+	},
+});
+
+export const notifyMockupChangesRequested = internalAction({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<void> => {
+		await sendMockupSellerEmail(ctx, orderId, "mockupChangesRequested");
 	},
 });
 

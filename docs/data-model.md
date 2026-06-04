@@ -136,6 +136,7 @@ Catalog items, scoped to a retailer. **Soft-deleted** via `active: boolean` — 
 | `currency` | string | Must match the order currency at checkout. |
 | `options` | object[]? | 0–2 **option axes** `{name, values[]}`, ordered (drives picker order). Empty/undefined = no axes. Capped at 2 axes / 50 variants. |
 | `blockWhenOutOfStock` | boolean? | `true` = a variant with `onHand ≤ 0` is unsellable. Undefined/false = **made-to-order** (sold-out combos stay sellable). |
+| `requiresProof` | boolean? | `true` = orders containing this product are **mockup-gated** (can't be packed until the buyer approves a mockup). See [`proof-approval.md`](./proof-approval.md). |
 | `imageStorageIds` | string[] | Product-level hero gallery (up to 5). |
 | `active` | boolean | Soft-delete flag. |
 | `sortOrder` | number | Custom storefront ranking. |
@@ -199,8 +200,9 @@ The core transactional entity. Two independent dimensions:
 | `deliveryAddress` | object? | **Invariant:** required when `delivery`, forbidden when `self_collect`. Validated by [`convex/lib/address.ts`](../convex/lib/address.ts). |
 | `carrierTrackingUrl` | string? | Set by retailer on `shipped`; surfaced in tracking + WhatsApp. |
 | `paymentStatus`, `paymentReference`, `paymentClaimedAt`, `paymentReceivedAt`, `paymentProofStorageId` | — | Payment handshake (independent of `status`). |
+| `mockupStatus`, `mockupImageStorageId`, `mockupChangeNote`, `mockupSubmittedAt`, `mockupApprovedAt`, `mockupWaivedAt` | — | **Mockup/proof approval** — a *third* independent dimension (like payment), gating `confirmed→packed`. `mockupStatus`: `pending → submitted → approved` (+ `changes_requested` loop). Undefined = order has no proof-required item. ⚠️ "mockup" ≠ payment "proof". See [`proof-approval.md`](./proof-approval.md). |
 
-**Indexes:** `by_retailer`, `by_retailer_status`, `by_retailer_payment`, `by_shortId` (public tracking + confirmation lookup), `by_customer`.
+**Indexes:** `by_retailer`, `by_retailer_status`, `by_retailer_payment`, `by_retailer_mockup`, `by_shortId` (public tracking + confirmation lookup), `by_customer`.
 
 ### `orderEvents`
 

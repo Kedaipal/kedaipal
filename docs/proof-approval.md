@@ -1,9 +1,14 @@
 # Proof / Mockup Approval — Feature Spec
 
-Design spec for a **made-to-order proof approval** workflow: the seller sends the
-buyer a mockup/proof before producing the final item, and production is **gated**
-on the buyer's approval. **Status: in build.** This doc is the artifact to share
-for sign-off and turn into a ticket.
+Design spec + implementation reference for a **made-to-order proof approval**
+workflow: the seller sends the buyer a mockup before producing the final item,
+and production is **gated** on the buyer's approval.
+
+**Status: implemented** on `zaki/<proof-approval branch>` — schema, the
+`confirmed→packed` gate, the mockup state machine + mutations, dashboard +
+tracking UI, and notifications (WhatsApp mockup-image-to-buyer + seller email on
+approve/changes). Tests green. **Deferred:** proactive reminder *nudges* (the v1
+waiver is purely time-based — see the note below); per-round mockup images.
 
 > **Naming (build decision, 2026-06-04):** code identifiers use **`mockup`**, not
 > `proof`, because the codebase already uses "proof" throughout for the buyer's

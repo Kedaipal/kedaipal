@@ -461,6 +461,102 @@ export const notifyPaymentReceived = internalAction({
 	},
 });
 
+/**
+ * Internal query: load the data needed to send a buyer the mockup for review.
+ */
+export const getMockupNotifyMeta = internalQuery({
+	args: { orderId: v.id("orders") },
+	handler: async (
+		ctx,
+		{ orderId },
+	): Promise<{
+		shortId: string;
+		customerWaPhone: string | undefined;
+		customerName: string | undefined;
+		storeName: string;
+		locale: Locale;
+		mockupImageUrl: string | undefined;
+	} | null> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) return null;
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) return null;
+		let mockupImageUrl: string | undefined;
+		if (order.mockupImageStorageId) {
+			const url = await ctx.storage.getUrl(order.mockupImageStorageId);
+			mockupImageUrl = url ?? undefined;
+		}
+		return {
+			shortId: order.shortId,
+			customerWaPhone: order.customer.waPhone,
+			customerName: order.customer.name,
+			storeName: retailer.storeName,
+			locale: (retailer.locale as Locale | undefined) ?? "en",
+			mockupImageUrl,
+		};
+	},
+});
+
+/**
+ * Scheduled by orders.submitMockup. Sends the buyer the mockup image + a CTA to
+ * review/approve it on the tracking page. Errors swallowed (logged) so the
+ * originating mutation never fails on an outbound issue.
+ */
+export const notifyMockupSubmitted = internalAction({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<void> => {
+		let meta: {
+			shortId: string;
+			customerWaPhone: string | undefined;
+			customerName: string | undefined;
+			storeName: string;
+			locale: Locale;
+			mockupImageUrl: string | undefined;
+		} | null = null;
+		try {
+			meta = await ctx.runQuery(internal.whatsapp.getMockupNotifyMeta, {
+				orderId,
+			});
+		} catch (err) {
+			console.error("WA mockup-submitted lookup failed", err);
+			return;
+		}
+		if (!meta || !meta.customerWaPhone) return;
+
+		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
+		const trackingUrl = `${appUrl}/track/${meta.shortId}`;
+		const greeting = meta.customerName ? ` ${meta.customerName}` : "";
+		const body =
+			meta.locale === "ms"
+				? `Hai${greeting}! Mockup untuk pesanan ${meta.shortId} dari ${meta.storeName} sudah siap. Sila semak dan luluskan sebelum kami mula membuatnya: ${trackingUrl}`
+				: `Hi${greeting}! The mockup for your ${meta.storeName} order ${meta.shortId} is ready. Please review and approve it before we start making it: ${trackingUrl}`;
+		const buttonText = meta.locale === "ms" ? "Semak mockup" : "Review mockup";
+
+		const wa = getAdapter("whatsapp");
+		try {
+			await wa.send(
+				meta.customerWaPhone,
+				meta.mockupImageUrl
+					? {
+							kind: "cta",
+							body,
+							buttonText,
+							url: trackingUrl,
+							imageUrl: meta.mockupImageUrl,
+						}
+					: { kind: "text", body },
+			);
+		} catch (err) {
+			console.error("WA mockup-submitted send failed, falling back to text", err);
+			try {
+				await wa.send(meta.customerWaPhone, { kind: "text", body });
+			} catch (textErr) {
+				console.error("WA mockup-submitted send failed", textErr);
+			}
+		}
+	},
+});
+
 // Re-export validator for tests / other modules.
 export { statusValidator };
 
