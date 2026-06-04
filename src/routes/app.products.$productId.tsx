@@ -123,6 +123,7 @@ function EditProductRoute() {
 					name: product.name,
 					description: product.description,
 					blockWhenOutOfStock: product.blockWhenOutOfStock,
+					requiresProof: product.requiresProof,
 					imageStorageIds: product.imageStorageIds,
 					imageUrls: product.imageUrls,
 					options: product.options ?? [],
@@ -147,6 +148,7 @@ function EditProductRoute() {
 						description: values.description ?? null,
 						imageStorageIds: values.imageStorageIds,
 						blockWhenOutOfStock: values.blockWhenOutOfStock,
+						requiresProof: values.requiresProof,
 					});
 					await saveVariantGrid({
 						productId: product._id,

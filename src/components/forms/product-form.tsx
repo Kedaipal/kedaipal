@@ -20,6 +20,7 @@ export interface ProductFormSubmitValues {
 	name: string;
 	description?: string;
 	blockWhenOutOfStock: boolean;
+	requiresProof: boolean;
 	imageStorageIds: string[];
 	options: { name: string; values: string[] }[];
 	variants: {
@@ -37,6 +38,7 @@ interface ProductFormProps {
 		name?: string;
 		description?: string;
 		blockWhenOutOfStock?: boolean;
+		requiresProof?: boolean;
 		imageStorageIds?: string[];
 		imageUrls?: string[];
 		options?: { name: string; values: string[] }[];
@@ -110,6 +112,9 @@ export function ProductForm({
 	const [blockOOS, setBlockOOS] = useState(
 		initialValues?.blockWhenOutOfStock ?? false,
 	);
+	const [requiresProof, setRequiresProof] = useState(
+		initialValues?.requiresProof ?? false,
+	);
 	const [editor, setEditor] = useState<VariantEditorState>(() =>
 		initialEditorState(initialValues),
 	);
@@ -174,6 +179,7 @@ export function ProductForm({
 					name: parsed.name,
 					description: parsed.description,
 					blockWhenOutOfStock: blockOOS,
+					requiresProof,
 					imageStorageIds: images.map((i) => i.id),
 					options: hasOptions
 						? editor.options.map((a) => ({
@@ -276,6 +282,23 @@ export function ProductForm({
 					<span className="block text-xs text-muted-foreground">
 						Leave off for made-to-order items (cakes, frozen packs) — buyers can
 						still order at zero stock.
+					</span>
+				</span>
+			</label>
+
+			<label className="flex items-start gap-2.5 rounded-xl border border-border p-3 text-sm">
+				<input
+					type="checkbox"
+					checked={requiresProof}
+					onChange={(e) => setRequiresProof(e.target.checked)}
+					className="mt-0.5 size-4"
+				/>
+				<span>
+					<span className="font-medium">Require mockup approval</span>
+					<span className="block text-xs text-muted-foreground">
+						For custom/made-to-order items (printing, engraving). Orders with
+						this product can't be packed until you send a mockup and the buyer
+						approves it.
 					</span>
 				</span>
 			</label>

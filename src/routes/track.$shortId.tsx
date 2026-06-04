@@ -1,5 +1,5 @@
 import { createFileRoute, notFound } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import {
 	BadgeCheck,
 	CheckCircle,
@@ -7,6 +7,7 @@ import {
 	ExternalLink,
 	HandCoins,
 	Hourglass,
+	ImageIcon,
 	MapPin,
 	Package,
 	Pencil,
@@ -15,6 +16,7 @@ import {
 	XCircle,
 } from "lucide-react";
 import { type ReactNode, useState } from "react";
+import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
@@ -22,7 +24,7 @@ import { IvePaidDialog } from "../components/storefront/ive-paid-dialog";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
-import { formatPrice } from "../lib/format";
+import { convexErrorMessage, formatPrice } from "../lib/format";
 import { deriveMapsUrl } from "../lib/google-address";
 
 type PaymentStatus = "unpaid" | "claimed" | "received";
@@ -305,6 +307,11 @@ function TrackingRoute() {
 				</section>
 			) : null}
 
+			{/* Mockup approval — buyer reviews the seller's proof before production. */}
+			{!isCancelled && order.mockupStatus !== undefined ? (
+				<MockupReview shortId={order.shortId} order={order} />
+			) : null}
+
 			{/* Progress timeline — not shown for cancelled orders */}
 			{!isCancelled ? (
 				<div className="mt-6 flex flex-col gap-0">
@@ -560,4 +567,155 @@ function PickupNavButtons({
 		);
 	}
 	return null;
+}
+
+type TrackedOrder = NonNullable<
+	ReturnType<typeof useQuery<typeof api.orders.get>>
+>;
+
+/** Buyer-facing mockup review: approve or request changes on the seller's proof. */
+function MockupReview({
+	shortId,
+	order,
+}: {
+	shortId: string;
+	order: TrackedOrder;
+}) {
+	const approve = useMutation(api.orders.approveMockup);
+	const requestChanges = useMutation(api.orders.requestMockupChanges);
+	const mockupUrl = useQuery(api.orders.getMockupUrl, { shortId });
+	const [note, setNote] = useState("");
+	const [showNote, setShowNote] = useState(false);
+	const [busy, setBusy] = useState(false);
+
+	const status = order.mockupStatus;
+
+	async function handleApprove() {
+		setBusy(true);
+		try {
+			await approve({ shortId });
+			toast.success("Mockup approved — thank you!");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	async function handleRequestChanges() {
+		setBusy(true);
+		try {
+			await requestChanges({ shortId, note: note.trim() || undefined });
+			toast.success("Sent — the seller will update your mockup");
+			setShowNote(false);
+			setNote("");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	return (
+		<section className="mt-4 flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+			<div className="flex items-center gap-3">
+				<ImageIcon className="size-5 text-accent" />
+				<div className="min-w-0 flex-1">
+					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+						Mockup
+					</p>
+					<p className="font-semibold">
+						{status === "approved"
+							? "You approved this mockup"
+							: status === "submitted"
+								? "Please review your mockup"
+								: status === "changes_requested"
+									? "Changes requested"
+									: "Mockup in progress"}
+					</p>
+				</div>
+			</div>
+
+			{order.mockupImageStorageId && mockupUrl ? (
+				<a
+					href={mockupUrl}
+					target="_blank"
+					rel="noreferrer"
+					className="block overflow-hidden rounded-xl border border-border bg-white"
+				>
+					<img
+						src={mockupUrl}
+						alt="Your mockup"
+						className="block max-h-72 w-full object-contain"
+					/>
+				</a>
+			) : null}
+
+			{status === "pending" ? (
+				<p className="text-sm text-muted-foreground">
+					The seller is preparing your mockup — we'll show it here when it's
+					ready to review.
+				</p>
+			) : null}
+			{status === "changes_requested" ? (
+				<p className="text-sm text-muted-foreground">
+					The seller is updating your mockup based on your feedback.
+				</p>
+			) : null}
+			{status === "approved" ? (
+				<p className="text-sm text-emerald-700">
+					Approved — the seller will start making your order.
+				</p>
+			) : null}
+
+			{status === "submitted" ? (
+				showNote ? (
+					<div className="flex flex-col gap-2">
+						<textarea
+							value={note}
+							onChange={(e) => setNote(e.target.value)}
+							maxLength={500}
+							rows={3}
+							placeholder="What would you like changed? (optional)"
+							className="w-full rounded-xl border border-border bg-background p-3 text-sm"
+						/>
+						<div className="flex gap-2">
+							<Button
+								onClick={handleRequestChanges}
+								disabled={busy}
+								className="h-11 flex-1"
+							>
+								Send changes
+							</Button>
+							<Button
+								variant="secondary"
+								onClick={() => setShowNote(false)}
+								disabled={busy}
+								className="h-11"
+							>
+								Cancel
+							</Button>
+						</div>
+					</div>
+				) : (
+					<div className="flex flex-col gap-2">
+						<Button
+							onClick={handleApprove}
+							disabled={busy}
+							className="h-12 w-full text-base"
+						>
+							Approve mockup
+						</Button>
+						<button
+							type="button"
+							onClick={() => setShowNote(true)}
+							className="text-sm font-medium text-muted-foreground underline-offset-2 hover:underline"
+						>
+							Request changes
+						</button>
+					</div>
+				)
+			) : null}
+		</section>
+	);
 }
