@@ -534,6 +534,100 @@ describe("products", () => {
 		);
 	});
 
+	test("create + saveVariantGrid persist per-variant block + requiresProof", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const id = await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Art print",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [{ name: "Size", values: ["10x10", "Custom"] }],
+			variants: [
+				{
+					optionValues: ["10x10"],
+					price: 5000,
+					onHand: 3,
+					blockWhenOutOfStock: true,
+					requiresProof: false,
+				},
+				{
+					optionValues: ["Custom"],
+					price: 0,
+					onHand: 0,
+					blockWhenOutOfStock: false,
+					requiresProof: true,
+				},
+			],
+		});
+
+		// products.get resolves the per-variant flags onto each returned variant.
+		const product = await asA.query(api.products.get, { productId: id });
+		const fixed = product?.variants.find((v) => v.optionValues[0] === "10x10");
+		const custom = product?.variants.find((v) => v.optionValues[0] === "Custom");
+		expect(fixed?.blockWhenOutOfStock).toBe(true);
+		expect(fixed?.requiresProof).toBe(false);
+		expect(custom?.blockWhenOutOfStock).toBe(false);
+		expect(custom?.requiresProof).toBe(true);
+
+		// saveVariantGrid round-trips the flags (flip Custom to hard-block).
+		await asA.mutation(api.products.saveVariantGrid, {
+			productId: id,
+			options: [{ name: "Size", values: ["10x10", "Custom"] }],
+			variants: [
+				{
+					optionValues: ["10x10"],
+					price: 5000,
+					onHand: 3,
+					blockWhenOutOfStock: true,
+					requiresProof: false,
+				},
+				{
+					optionValues: ["Custom"],
+					price: 9000,
+					onHand: 0,
+					blockWhenOutOfStock: true,
+					requiresProof: true,
+				},
+			],
+		});
+		const saved = await t.run((ctx) =>
+			ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", id))
+				.collect(),
+		);
+		const savedCustom = saved.find((v) => v.optionValues[0] === "Custom");
+		expect(savedCustom?.blockWhenOutOfStock).toBe(true);
+		expect(savedCustom?.requiresProof).toBe(true);
+	});
+
+	test("get falls back to product-level flags for variants without their own", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		// Single-variant product carrying product-level flags; the variant row is
+		// created WITHOUT per-variant flags (legacy shape).
+		const id = await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Legacy made-to-order",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			blockWhenOutOfStock: false,
+			requiresProof: true,
+			variants: [{ optionValues: [], price: 5000, onHand: 0 }],
+		});
+		const product = await asA.query(api.products.get, { productId: id });
+		// Resolved from the product-level defaults.
+		expect(product?.variants[0]?.blockWhenOutOfStock).toBe(false);
+		expect(product?.variants[0]?.requiresProof).toBe(true);
+		// Made-to-order ⇒ in stock at zero on-hand.
+		expect(product?.inStock).toBe(true);
+	});
+
 	// --- Bulk import (single-variant) ---------------------------------------
 
 	test("bulkUpsert inserts single-variant products when no sku matches", async () => {

@@ -228,7 +228,11 @@ export const create = mutation({
 				throw new ConvexError("Variant does not belong to this retailer");
 			const product = await ctx.db.get(variant.productId);
 			if (!product) throw new ConvexError("Product not found");
-			if (product.requiresProof === true) requiresMockup = true;
+			// Per-variant flags fall back to the (deprecated) product-level defaults
+			// so legacy variants behave unchanged. Lets a mixed product gate only its
+			// made-to-order "Custom" variant, not the fixed sizes.
+			const variantRequiresProof = variant.requiresProof ?? product.requiresProof;
+			if (variantRequiresProof === true) requiresMockup = true;
 			const variantId = variant._id;
 			const label = variantLabel(variant.optionValues);
 			const displayName = label ? `${product.name} (${label})` : product.name;
@@ -238,7 +242,7 @@ export const create = mutation({
 				throw new ConvexError(
 					`Currency mismatch: order is ${args.currency} but "${displayName}" is ${product.currency}`,
 				);
-			const block = product.blockWhenOutOfStock === true;
+			const block = (variant.blockWhenOutOfStock ?? product.blockWhenOutOfStock) === true;
 			const prior = requestedByVariant.get(variantId);
 			const newRequested = (prior?.qty ?? 0) + item.quantity;
 			// Stock is only enforced for hard-block products. Made-to-order
@@ -491,7 +495,11 @@ export const updateStatus = mutation({
 				const fresh = await ctx.db.get(variantId);
 				if (!fresh) continue; // variant was deleted; nothing to restore
 				const product = await ctx.db.get(fresh.productId);
-				if (product?.blockWhenOutOfStock !== true) continue; // made-to-order
+				if (!product) continue;
+				// Mirror the create-time decrement: a variant was only reserved when
+				// its resolved flag hard-blocks (per-variant override ?? product default).
+				const block = fresh.blockWhenOutOfStock ?? product.blockWhenOutOfStock;
+				if (block !== true) continue; // made-to-order — never decremented
 				await ctx.db.patch(variantId, {
 					onHand: fresh.onHand + qty,
 					updatedAt: now,

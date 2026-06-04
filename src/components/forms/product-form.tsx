@@ -19,8 +19,6 @@ const MAX_IMAGES = 5;
 export interface ProductFormSubmitValues {
 	name: string;
 	description?: string;
-	blockWhenOutOfStock: boolean;
-	requiresProof: boolean;
 	imageStorageIds: string[];
 	options: { name: string; values: string[] }[];
 	variants: {
@@ -29,6 +27,8 @@ export interface ProductFormSubmitValues {
 		price: number;
 		onHand: number;
 		active: boolean;
+		blockWhenOutOfStock: boolean;
+		requiresProof: boolean;
 		imageStorageIds: string[];
 	}[];
 }
@@ -37,6 +37,8 @@ interface ProductFormProps {
 	initialValues?: {
 		name?: string;
 		description?: string;
+		// Deprecated product-level defaults — used only to seed per-variant flags
+		// for legacy products whose variants predate the per-variant columns.
 		blockWhenOutOfStock?: boolean;
 		requiresProof?: boolean;
 		imageStorageIds?: string[];
@@ -48,6 +50,8 @@ interface ProductFormProps {
 			price: number;
 			onHand: number;
 			active?: boolean;
+			blockWhenOutOfStock?: boolean;
+			requiresProof?: boolean;
 			imageStorageIds?: string[];
 			imageUrls?: string[];
 		}[];
@@ -64,17 +68,26 @@ function initialEditorState(
 	const options = initial?.options ?? [];
 	const variants = initial?.variants;
 	if (variants && variants.length > 0) {
+		// Editing: preserve each variant's resolved flag exactly. The `?? product
+		// ?? false` chain mirrors the old runtime (an unset flag meant made-to-order),
+		// so opening a legacy product never silently flips it to hard-block.
+		const blockFallback = initial?.blockWhenOutOfStock ?? false;
+		const proofFallback = initial?.requiresProof ?? false;
 		const rows: VariantRow[] = variants.map((vr) => ({
 			optionValues: vr.optionValues,
 			sku: vr.sku ?? "",
 			price: (vr.price / 100).toFixed(2),
 			stock: String(vr.onHand),
 			active: vr.active ?? true,
+			blockWhenOutOfStock: vr.blockWhenOutOfStock ?? blockFallback,
+			requiresProof: vr.requiresProof ?? proofFallback,
 			imageStorageIds: vr.imageStorageIds ?? [],
 			imageUrl: vr.imageUrls?.[0],
 		}));
 		return { options, rows };
 	}
+	// Brand-new product: default the starting row to hard-block (the common case —
+	// a real stock item). Made-to-order is an explicit per-row opt-out.
 	return {
 		options: [],
 		rows: [
@@ -84,6 +97,8 @@ function initialEditorState(
 				price: "",
 				stock: "",
 				active: true,
+				blockWhenOutOfStock: true,
+				requiresProof: false,
 				imageStorageIds: [],
 			},
 		],
@@ -109,12 +124,6 @@ export function ProductForm({
 	);
 	const [uploading, setUploading] = useState(false);
 	const [serverError, setServerError] = useState<string | null>(null);
-	const [blockOOS, setBlockOOS] = useState(
-		initialValues?.blockWhenOutOfStock ?? false,
-	);
-	const [requiresProof, setRequiresProof] = useState(
-		initialValues?.requiresProof ?? false,
-	);
 	const [editor, setEditor] = useState<VariantEditorState>(() =>
 		initialEditorState(initialValues),
 	);
@@ -170,6 +179,8 @@ export function ProductForm({
 					price: priceOk ? Math.round(Number.parseFloat(row.price) * 100) : 0,
 					onHand: stockOk ? Number.parseInt(row.stock, 10) : 0,
 					active: row.active,
+					blockWhenOutOfStock: row.blockWhenOutOfStock,
+					requiresProof: row.requiresProof,
 					imageStorageIds: row.imageStorageIds,
 				});
 			}
@@ -178,8 +189,6 @@ export function ProductForm({
 				await onSubmit({
 					name: parsed.name,
 					description: parsed.description,
-					blockWhenOutOfStock: blockOOS,
-					requiresProof,
 					imageStorageIds: images.map((i) => i.id),
 					options: hasOptions
 						? editor.options.map((a) => ({
@@ -258,7 +267,6 @@ export function ProductForm({
 					value={editor}
 					onChange={setEditor}
 					currency={currency}
-					blockWhenOutOfStock={blockOOS}
 				/>
 				<Link
 					to="/app/settings"
@@ -269,39 +277,6 @@ export function ProductForm({
 					Currency is set per store — change it in Settings.
 				</Link>
 			</div>
-
-			<label className="flex items-start gap-2.5 rounded-xl border border-border p-3 text-sm">
-				<input
-					type="checkbox"
-					checked={blockOOS}
-					onChange={(e) => setBlockOOS(e.target.checked)}
-					className="mt-0.5 size-4"
-				/>
-				<span>
-					<span className="font-medium">Stop orders when out of stock</span>
-					<span className="block text-xs text-muted-foreground">
-						Leave off for made-to-order items (cakes, frozen packs) — buyers can
-						still order at zero stock.
-					</span>
-				</span>
-			</label>
-
-			<label className="flex items-start gap-2.5 rounded-xl border border-border p-3 text-sm">
-				<input
-					type="checkbox"
-					checked={requiresProof}
-					onChange={(e) => setRequiresProof(e.target.checked)}
-					className="mt-0.5 size-4"
-				/>
-				<span>
-					<span className="font-medium">Require mockup approval</span>
-					<span className="block text-xs text-muted-foreground">
-						For custom/made-to-order items (printing, engraving). Orders with
-						this product can't be packed until you send a mockup and the buyer
-						approves it.
-					</span>
-				</span>
-			</label>
 
 			<div className="flex flex-col gap-2">
 				<span className="text-sm font-medium">

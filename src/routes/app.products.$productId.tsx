@@ -122,8 +122,6 @@ function EditProductRoute() {
 				initialValues={{
 					name: product.name,
 					description: product.description,
-					blockWhenOutOfStock: product.blockWhenOutOfStock,
-					requiresProof: product.requiresProof,
 					imageStorageIds: product.imageStorageIds,
 					imageUrls: product.imageUrls,
 					options: product.options ?? [],
@@ -133,22 +131,23 @@ function EditProductRoute() {
 						price: vr.price,
 						onHand: vr.onHand,
 						active: vr.active,
+						// Resolved per-variant server-side (override ?? product default).
+						blockWhenOutOfStock: vr.blockWhenOutOfStock,
+						requiresProof: vr.requiresProof,
 						imageStorageIds: vr.imageStorageIds,
 						imageUrls: vr.imageUrls,
 					})),
 				}}
 				submitLabel="Save changes"
 				onSubmit={async (values) => {
-					// Product-level fields, then the option axes + variant grid. Two
-					// mutations: `update` never touches variants; `saveVariantGrid`
-					// reconciles them (preserving variant ids for matched combos).
+					// Product-level scalar fields, then the option axes + variant grid.
+					// The hard-block + mockup flags now live per-variant on the grid
+					// (`saveVariantGrid`); `update` only handles name/description/images.
 					await update({
 						productId: product._id,
 						name: values.name,
 						description: values.description ?? null,
 						imageStorageIds: values.imageStorageIds,
-						blockWhenOutOfStock: values.blockWhenOutOfStock,
-						requiresProof: values.requiresProof,
 					});
 					await saveVariantGrid({
 						productId: product._id,

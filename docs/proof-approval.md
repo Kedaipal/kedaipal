@@ -87,8 +87,8 @@ proof:       (none) → pending → submitted → approved       (independent, N
 
 ## 5. Acceptance criteria
 
-- A product has a `requiresProof` toggle (default off). Independent of other product settings.
-- **Whole-order gating:** an order containing **≥1** `requiresProof` item is gated. Mixed orders (some custom, some ready-made) gate the **entire** order. Orders with no such item are never gated (`proofStatus` stays undefined).
+- Each **variant** has a `requiresProof` toggle (default off), set per-row in the variant-grid editor (alongside price/stock). Reads fall back to the deprecated product-level flag when a variant's own is unset. Independent of other settings. This lets a single listing pair ready-made fixed sizes (no proof) with a made-to-order "Custom" variant (proof required) — the art-on-print case.
+- **Whole-order gating:** an order containing **≥1** `requiresProof` **variant** is gated. Mixed orders (some custom, some ready-made) gate the **entire** order. Orders with no such variant are never gated (`proofStatus`/`mockupStatus` stays undefined).
 - A gated order starts at `proofStatus: "pending"` on creation and is **badged "Mockup needed"** in the dashboard.
 - The seller can upload an image mockup and send it; doing so sets `submitted`, stores the image, and **sends the mockup over WhatsApp** to the buyer with a tracking-page link.
 - The **tracking page** shows the current mockup and, while `submitted`, two buyer actions: **Approve** and **Request changes** (with a free-text note, capped length).
@@ -101,8 +101,8 @@ proof:       (none) → pending → submitted → approved       (independent, N
 
 ## 6. Schema changes (`convex/schema.ts`)
 
-**`products`** — add:
-- `requiresProof: v.optional(v.boolean())` — the per-product toggle.
+**`productVariants`** — add:
+- `requiresProof: v.optional(v.boolean())` — the **per-variant** toggle. (`products.requiresProof` remains as a deprecated read-fallback for legacy variants.)
 
 **`orders`** — add the independent proof dimension:
 - `proofStatus: v.optional(v.union(v.literal("pending"), v.literal("submitted"), v.literal("changes_requested"), v.literal("approved")))`
@@ -116,10 +116,10 @@ keeps v1 simple. (If per-round images become a requirement later, promote to a
 
 ## 7. Code touch points
 
-- **`convex/schema.ts`** — `products.requiresProof`, the `orders` proof fields.
-- **`convex/products.ts`** — surface `requiresProof` in create/update; expose on reads.
+- **`convex/schema.ts`** — `productVariants.requiresProof` (per-variant), the `orders` mockup fields. `products.requiresProof` kept as deprecated fallback.
+- **`convex/products.ts`** — accept `requiresProof` per variant in create/`saveVariantGrid`; resolve `variant.requiresProof ?? product.requiresProof` on reads.
 - **`convex/orders.ts`**
-  - `create`: if any line's product has `requiresProof`, set `proofStatus: "pending"`.
+  - `create`: if any line's variant resolves `requiresProof` (override ?? product), set `mockupStatus: "pending"`.
   - `updateStatus`: **gate** `→ packed` on `proofStatus === "approved" || proofWaivedAt`.
   - `submitProof(orderId, storageId)` (owner): set `submitted`, store image, event, schedule WhatsApp send.
   - `approveProof(shortId)` / `requestProofChanges(shortId, note)` (public, capability = `shortId`, rate-limited like `claimPayment`): transition + event + notify seller.
@@ -157,10 +157,10 @@ The escape must keep a human in the loop and **never silently auto-produce**:
 
 ## 9. Edge cases
 
-- **Mixed orders** — any proof-required item gates the **whole** order (decided). Simpler than per-line gating, and a custom seller's order is usually all-custom.
+- **Mixed orders** — any proof-required **variant** gates the **whole** order (decided). Simpler than per-line gating. Gating is decided per-variant (`requiresProof` resolves override ?? product), so one listing can mix gated and ungated variants while the order-level gate stays all-or-nothing.
 - **Re-submission loop** — `changes_requested → submitted → …` any number of rounds; each is an `orderEvents` entry. Latest `proofImageStorageId` wins.
 - **Cancellation** — a gated order can still be cancelled at any time (proof gate only blocks *forward* production, not cancel).
-- **Toggle changed after order exists** — `proofStatus` is stamped at order-create time from the then-current `requiresProof`; flipping the product toggle later doesn't retro-gate existing orders (frozen-intent, like other snapshots).
+- **Toggle changed after order exists** — `mockupStatus` is stamped at order-create time from the then-current per-variant `requiresProof`; flipping a variant's toggle later doesn't retro-gate existing orders (frozen-intent, like other snapshots).
 - **No tracking phone / link-in-bio** — the buyer still reviews via the tracking page (capability = `shortId`); WhatsApp delivery of the mockup is best-effort, same as other notifications.
 - **Proof timing** — this seller's flow is **pay → mockup → produce**, so the gate sits post-confirm. (Some businesses approve *before* payment; configurable timing is a possible later extension, out of scope.)
 

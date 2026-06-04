@@ -21,6 +21,11 @@ export type VariantRow = {
 	stock: string;
 	/** Per-row deactivate — inactive variants are hidden from the storefront. */
 	active: boolean;
+	/** Hard-block: stop orders for this variant when it's out of stock. Off =
+	 * made-to-order (price/stock are nominal, never runs out). */
+	blockWhenOutOfStock: boolean;
+	/** Orders containing this variant are gated on buyer mockup approval. */
+	requiresProof: boolean;
 	/** Stored Convex storage ids (0 or 1 for the grid). Submitted to the server. */
 	imageStorageIds: string[];
 	/** Preview URL only (object URL or existing image URL); not submitted. */
@@ -36,8 +41,6 @@ interface VariantEditorProps {
 	value: VariantEditorState;
 	onChange: (next: VariantEditorState) => void;
 	currency: string;
-	/** When false, made-to-order — stock columns are de-emphasised. */
-	blockWhenOutOfStock: boolean;
 }
 
 function emptyRow(optionValues: string[]): VariantRow {
@@ -47,6 +50,10 @@ function emptyRow(optionValues: string[]): VariantRow {
 		price: "",
 		stock: "",
 		active: true,
+		// Default to hard-block (the common case: real stock items). Made-to-order
+		// is opt-out per row. Mockup approval is opt-in.
+		blockWhenOutOfStock: true,
+		requiresProof: false,
 		imageStorageIds: [],
 	};
 }
@@ -67,7 +74,15 @@ function rebuildRows(options: OptionAxis[], prev: VariantRow[]): VariantRow[] {
 		const existing = byLabel.get(variantLabel(optionValues));
 		if (existing) return existing;
 		const base = emptyRow(optionValues);
-		return seed ? { ...base, price: seed.price, stock: seed.stock } : base;
+		return seed
+			? {
+					...base,
+					price: seed.price,
+					stock: seed.stock,
+					blockWhenOutOfStock: seed.blockWhenOutOfStock,
+					requiresProof: seed.requiresProof,
+				}
+			: base;
 	});
 }
 
@@ -84,7 +99,6 @@ export function VariantEditor({
 	value,
 	onChange,
 	currency,
-	blockWhenOutOfStock,
 }: VariantEditorProps) {
 	const { options, rows } = value;
 	const hasOptions = options.length > 0;
@@ -176,6 +190,13 @@ export function VariantEditor({
 		onChange({ options, rows: rows.map((r) => ({ ...r, [field]: v })) });
 	}
 
+	function bulkFillFlag(
+		field: "blockWhenOutOfStock" | "requiresProof",
+		v: boolean,
+	) {
+		onChange({ options, rows: rows.map((r) => ({ ...r, [field]: v })) });
+	}
+
 	async function uploadRowImage(index: number, files: FileList | null) {
 		if (!files || files.length === 0) return;
 		const file = files[0];
@@ -240,6 +261,36 @@ export function VariantEditor({
 							value={rows[0]?.sku ?? ""}
 							onChange={(e) => setRow(0, { sku: e.target.value })}
 						/>
+					</label>
+					<label className="col-span-2 flex items-start gap-2.5 text-sm">
+						<input
+							type="checkbox"
+							checked={rows[0]?.blockWhenOutOfStock ?? true}
+							onChange={(e) =>
+								setRow(0, { blockWhenOutOfStock: e.target.checked })
+							}
+							className="mt-0.5 size-4 shrink-0"
+						/>
+						<span>
+							<span className="font-medium">Stop orders when out of stock</span>
+							<span className="block text-xs text-muted-foreground">
+								Off = made-to-order (price/stock are nominal, never runs out).
+							</span>
+						</span>
+					</label>
+					<label className="col-span-2 flex items-start gap-2.5 text-sm">
+						<input
+							type="checkbox"
+							checked={rows[0]?.requiresProof ?? false}
+							onChange={(e) => setRow(0, { requiresProof: e.target.checked })}
+							className="mt-0.5 size-4 shrink-0"
+						/>
+						<span>
+							<span className="font-medium">Require mockup approval</span>
+							<span className="block text-xs text-muted-foreground">
+								Buyer signs off on a mockup before you start production.
+							</span>
+						</span>
 					</label>
 				</div>
 			) : null}
@@ -371,6 +422,38 @@ export function VariantEditor({
 							onChange={(e) => bulkFill("stock", e.target.value)}
 						/>
 					</div>
+					{/* Apply a flag to every row at once — toggles set ALL rows. */}
+					<div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+						<span>Apply to all:</span>
+						<button
+							type="button"
+							onClick={() =>
+								bulkFillFlag(
+									"blockWhenOutOfStock",
+									!rows.every((r) => r.blockWhenOutOfStock),
+								)
+							}
+							className="rounded-full border border-border px-2.5 py-1 font-medium hover:border-accent"
+						>
+							{rows.every((r) => r.blockWhenOutOfStock)
+								? "All made-to-order"
+								: "All stop when OOS"}
+						</button>
+						<button
+							type="button"
+							onClick={() =>
+								bulkFillFlag(
+									"requiresProof",
+									!rows.every((r) => r.requiresProof),
+								)
+							}
+							className="rounded-full border border-border px-2.5 py-1 font-medium hover:border-accent"
+						>
+							{rows.every((r) => r.requiresProof)
+								? "None need approval"
+								: "All need approval"}
+						</button>
+					</div>
 					<div className="overflow-x-auto rounded-xl border border-border">
 						<table className="w-full text-sm">
 							<thead className="bg-muted/50 text-left text-xs text-muted-foreground">
@@ -379,12 +462,20 @@ export function VariantEditor({
 									<th className="p-2 font-medium">Variant</th>
 									<th className="p-2 font-medium">Img</th>
 									<th className="p-2 font-medium">Price ({currency})</th>
-									<th
-										className={`p-2 font-medium ${blockWhenOutOfStock ? "" : "text-muted-foreground/50"}`}
-									>
-										Stock
-									</th>
+									<th className="p-2 font-medium">Stock</th>
 									<th className="p-2 font-medium">SKU</th>
+									<th
+										className="whitespace-nowrap p-2 font-medium"
+										title="Stop orders when out of stock"
+									>
+										Stop OOS
+									</th>
+									<th
+										className="p-2 font-medium"
+										title="Require buyer mockup approval"
+									>
+										Approval
+									</th>
 								</tr>
 							</thead>
 							<tbody>
@@ -473,6 +564,28 @@ export function VariantEditor({
 												value={row.sku}
 												onChange={(e) => setRow(i, { sku: e.target.value })}
 												className="h-9 w-28"
+											/>
+										</td>
+										<td className="p-2 text-center">
+											<input
+												type="checkbox"
+												checked={row.blockWhenOutOfStock}
+												onChange={(e) =>
+													setRow(i, { blockWhenOutOfStock: e.target.checked })
+												}
+												className="size-4"
+												aria-label={`Stop orders for ${variantLabel(row.optionValues)} when out of stock`}
+											/>
+										</td>
+										<td className="p-2 text-center">
+											<input
+												type="checkbox"
+												checked={row.requiresProof}
+												onChange={(e) =>
+													setRow(i, { requiresProof: e.target.checked })
+												}
+												className="size-4"
+												aria-label={`Require mockup approval for ${variantLabel(row.optionValues)}`}
 											/>
 										</td>
 									</tr>

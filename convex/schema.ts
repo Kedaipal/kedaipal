@@ -133,12 +133,11 @@ export default defineSchema({
 				}),
 			),
 		),
-		// When true, a variant with onHand<=0 is unsellable (hard stock block).
-		// Undefined/false = made-to-order: sold-out combos stay sellable (frozen
-		// pack-to-order, metal prints). See docs/product-variants.md §5/§7.
+		// DEPRECATED — moved to productVariants (per-variant). Kept as a read
+		// fallback for variants that haven't been backfilled. See proof-approval.md
+		// + product-variants.md §5/§7.
 		blockWhenOutOfStock: v.optional(v.boolean()),
-		// When true, any order containing this product is gated on buyer mockup
-		// approval before it can move into production. See docs/proof-approval.md.
+		// DEPRECATED — moved to productVariants.requiresProof (per-variant).
 		requiresProof: v.optional(v.boolean()),
 		channel: v.union(v.literal("whatsapp")),
 		sortOrder: v.number(),
@@ -174,6 +173,14 @@ export default defineSchema({
 		parcelWeightG: v.number(),
 		imageStorageIds: v.array(v.string()),
 		active: v.boolean(),
+		// Per-variant overrides of the (now-deprecated) product-level flags, so a
+		// product can mix stock-tracked sizes with a made-to-order "Custom" size,
+		// or gate only one variant on mockup approval. Reads prefer the variant
+		// value and fall back to the product-level flag for un-backfilled rows.
+		// `true` = hard stock block; undefined/false = made-to-order.
+		blockWhenOutOfStock: v.optional(v.boolean()),
+		// `true` = an order containing THIS variant is mockup-gated.
+		requiresProof: v.optional(v.boolean()),
 		sortOrder: v.number(),
 		createdAt: v.number(),
 		updatedAt: v.number(),

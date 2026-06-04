@@ -125,15 +125,28 @@ async function productWithVariants(
 ) {
 	const base = await withImageUrls(ctx, product);
 	const all = await loadVariants(ctx, product._id);
-	const variants = opts.activeOnly ? all.filter((vr) => vr.active) : all;
+	// Resolve the per-variant flags, falling back to the (deprecated) product-level
+	// defaults so legacy variants that predate the per-variant columns keep behaving
+	// exactly as before. Downstream callers (storefront sellability, order create)
+	// read these resolved values, never the raw nullable columns.
+	const resolved = all.map((vr) => ({
+		...vr,
+		blockWhenOutOfStock: vr.blockWhenOutOfStock ?? product.blockWhenOutOfStock,
+		requiresProof: vr.requiresProof ?? product.requiresProof,
+	}));
+	const variants = opts.activeOnly ? resolved.filter((vr) => vr.active) : resolved;
 	const prices = variants.map((vr) => vr.price);
 	const totalOnHand = variants.reduce((sum, vr) => sum + vr.onHand, 0);
 	// Availability is always judged on ACTIVE variants only, regardless of which
 	// set we're returning — otherwise the dashboard read (activeOnly:false) would
 	// count deactivated variants' stock and report a sold-out product as in stock.
-	const activeOnHand = all
+	// A variant contributes to "in stock" if it's made-to-order (never blocks) OR
+	// it hard-blocks but still has on-hand units. Now resolved per-variant, so a
+	// mixed product (fixed sizes + a made-to-order "Custom") is in stock whenever
+	// ANY active variant is sellable.
+	const inStock = resolved
 		.filter((vr) => vr.active)
-		.reduce((sum, vr) => sum + vr.onHand, 0);
+		.some((vr) => (vr.blockWhenOutOfStock ? vr.onHand > 0 : true));
 	return {
 		...base,
 		variants,
@@ -141,9 +154,7 @@ async function productWithVariants(
 		priceFrom: prices.length ? Math.min(...prices) : 0,
 		priceTo: prices.length ? Math.max(...prices) : 0,
 		totalOnHand,
-		// "In stock" for made-to-order products is always true; for hard-block
-		// products it requires at least one ACTIVE variant with on-hand stock.
-		inStock: product.blockWhenOutOfStock ? activeOnHand > 0 : true,
+		inStock,
 	};
 }
 
@@ -166,6 +177,8 @@ const variantInputValidator = v.object({
 	parcelWeightG: v.optional(v.number()),
 	imageStorageIds: v.optional(v.array(v.string())),
 	active: v.optional(v.boolean()),
+	blockWhenOutOfStock: v.optional(v.boolean()),
+	requiresProof: v.optional(v.boolean()),
 });
 
 type VariantInput = {
@@ -176,6 +189,8 @@ type VariantInput = {
 	parcelWeightG?: number;
 	imageStorageIds?: string[];
 	active?: boolean;
+	blockWhenOutOfStock?: boolean;
+	requiresProof?: boolean;
 };
 
 /**
@@ -395,6 +410,8 @@ async function insertVariants(
 			parcelWeightG: variant.parcelWeightG ?? 0,
 			imageStorageIds: variant.imageStorageIds ?? [],
 			active: variant.active ?? true,
+			blockWhenOutOfStock: variant.blockWhenOutOfStock,
+			requiresProof: variant.requiresProof,
 			sortOrder: i,
 			createdAt: now,
 			updatedAt: now,
@@ -504,6 +521,8 @@ export const saveVariantGrid = mutation({
 					parcelWeightG: variant.parcelWeightG ?? prior.parcelWeightG,
 					imageStorageIds: variant.imageStorageIds ?? prior.imageStorageIds,
 					active: variant.active ?? prior.active,
+					blockWhenOutOfStock: variant.blockWhenOutOfStock,
+					requiresProof: variant.requiresProof,
 					sortOrder: i,
 					updatedAt: now,
 				});
@@ -519,6 +538,8 @@ export const saveVariantGrid = mutation({
 					parcelWeightG: variant.parcelWeightG ?? 0,
 					imageStorageIds: variant.imageStorageIds ?? [],
 					active: variant.active ?? true,
+					blockWhenOutOfStock: variant.blockWhenOutOfStock,
+					requiresProof: variant.requiresProof,
 					sortOrder: i,
 					createdAt: now,
 					updatedAt: now,

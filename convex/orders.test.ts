@@ -1636,3 +1636,147 @@ describe("orders — mockup approval", () => {
 		).rejects.toThrow(/Forbidden/);
 	});
 });
+
+describe("orders — per-variant flags", () => {
+	// The art-on-print case: fixed sizes are normal stock items (hard-block,
+	// no proof); the "Custom" variant is made-to-order (never blocks) and needs
+	// buyer mockup approval. Both flags are set per-row, not on the product.
+	async function seedArtPrint(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const productId = await asUser.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Art print",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [{ name: "Size", values: ["10x10", "Custom"] }],
+			variants: [
+				{
+					optionValues: ["10x10"],
+					price: 5000,
+					onHand: 3,
+					blockWhenOutOfStock: true,
+					requiresProof: false,
+				},
+				{
+					optionValues: ["Custom"],
+					price: 0,
+					onHand: 0,
+					blockWhenOutOfStock: false,
+					requiresProof: true,
+				},
+			],
+		});
+		const variants = await t.run(async (ctx) =>
+			ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", productId))
+				.collect(),
+		);
+		const fixed = variants.find((v) => v.optionValues[0] === "10x10")!;
+		const custom = variants.find((v) => v.optionValues[0] === "Custom")!;
+		return { retailer, productId, fixed, custom };
+	}
+
+	test("ordering only a fixed-size variant does NOT gate the order", async () => {
+		const t = setup();
+		const { retailer, fixed } = await seedArtPrint(t);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ variantId: fixed._id, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { shortId });
+		expect(order?.mockupStatus).toBeUndefined();
+		// Hard-block variant was decremented.
+		expect((await t.run(async (ctx) => ctx.db.get(fixed._id)))?.onHand).toBe(2);
+	});
+
+	test("ordering the Custom variant gates the order on mockup approval", async () => {
+		const t = setup();
+		const { retailer, custom } = await seedArtPrint(t);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ variantId: custom._id, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { shortId });
+		expect(order?.mockupStatus).toBe("pending");
+	});
+
+	test("the Custom (made-to-order) variant sells at zero stock and never decrements", async () => {
+		const t = setup();
+		const { retailer, custom } = await seedArtPrint(t);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ variantId: custom._id, quantity: 7 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		expect(shortId).toMatch(/^ORD-/);
+		// onHand stays at 0 — made-to-order variants are never reserved.
+		expect((await t.run(async (ctx) => ctx.db.get(custom._id)))?.onHand).toBe(0);
+	});
+
+	test("a fixed-size variant still rejects when it runs out of stock", async () => {
+		const t = setup();
+		const { retailer, fixed } = await seedArtPrint(t);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ variantId: fixed._id, quantity: 99 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+			}),
+		).rejects.toThrow(/in stock/);
+	});
+
+	test("cancelling restores stock only for the hard-block variant in a mixed order", async () => {
+		const t = setup();
+		const { retailer, fixed, custom } = await seedArtPrint(t);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [
+				{ variantId: fixed._id, quantity: 2 },
+				{ variantId: custom._id, quantity: 1 },
+			],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		// Fixed decremented 3 → 1; custom untouched at 0.
+		expect((await t.run(async (ctx) => ctx.db.get(fixed._id)))?.onHand).toBe(1);
+		const order = await t.query(api.orders.get, { shortId });
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orders.updateStatus, {
+				orderId: order!._id,
+				status: "cancelled",
+			});
+		// Fixed restored to 3; custom still 0 (was never decremented).
+		expect((await t.run(async (ctx) => ctx.db.get(fixed._id)))?.onHand).toBe(3);
+		expect((await t.run(async (ctx) => ctx.db.get(custom._id)))?.onHand).toBe(0);
+	});
+
+	test("storefront inStock is true for a mixed product even when fixed sizes sell out", async () => {
+		const t = setup();
+		const { productId, fixed } = await seedArtPrint(t);
+		// Drain the fixed size to zero.
+		await t.run(async (ctx) => ctx.db.patch(fixed._id, { onHand: 0 }));
+		const product = await t.query(api.products.get, { productId });
+		// The made-to-order Custom variant keeps the product sellable.
+		expect(product?.inStock).toBe(true);
+	});
+});

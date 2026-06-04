@@ -18,12 +18,16 @@ export function ProductCard({ product, onOpen, onQuickAdd }: ProductCardProps) {
 	// Multi-variant products can't be quick-added — the buyer must pick options
 	// in the detail sheet first.
 	const hasOptions = (product.options?.length ?? 0) > 0;
-	const blockOOS = product.blockWhenOutOfStock === true;
-	// "In stock" rolls up across variants; only hard-block products can be out.
+	// A product "can run out" if any of its variants hard-blocks (flags are now
+	// resolved per-variant server-side). Only then does the low-stock badge apply.
+	const canRunOut = product.variants.some(
+		(v) => v.blockWhenOutOfStock === true,
+	);
+	// "In stock" rolls up across variants; only hard-block variants can be out.
 	const outOfStock = !product.inStock;
 	const lowStock =
 		!outOfStock &&
-		blockOOS &&
+		canRunOut &&
 		product.totalOnHand > 0 &&
 		product.totalOnHand <= 5;
 	const priceVaries = product.priceTo > product.priceFrom;
