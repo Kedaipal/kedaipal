@@ -45,6 +45,7 @@ async function seedProduct(
 		currency: string;
 		stock: number;
 		blockWhenOutOfStock: boolean;
+		requiresProof: boolean;
 	}> = {},
 ): Promise<Id<"products">> {
 	const asUser = t.withIdentity({ subject: userId });
@@ -55,6 +56,7 @@ async function seedProduct(
 		imageStorageIds: [],
 		sortOrder: 0,
 		blockWhenOutOfStock: overrides.blockWhenOutOfStock ?? true,
+		requiresProof: overrides.requiresProof ?? false,
 		variants: [
 			{
 				optionValues: [],
@@ -1464,5 +1466,173 @@ describe("orders — self-collect pickup invariants", () => {
 				pickupLocationId,
 			}),
 		).rejects.toThrow(/Delivery orders/);
+	});
+});
+
+describe("orders — mockup approval", () => {
+	async function gatedOrder(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			requiresProof: true,
+			blockWhenOutOfStock: false,
+		});
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { shortId });
+		return { retailer, shortId, order: order! };
+	}
+
+	const asA = (t: ReturnType<typeof setup>) =>
+		t.withIdentity({ subject: USER_A });
+
+	test("an order with a requiresProof item starts at mockupStatus pending", async () => {
+		const t = setup();
+		const { order } = await gatedOrder(t);
+		expect(order.mockupStatus).toBe("pending");
+	});
+
+	test("an order with no requiresProof item is not gated", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { shortId });
+		expect(order?.mockupStatus).toBeUndefined();
+	});
+
+	test("the gate blocks → packed until approved, then allows it", async () => {
+		const t = setup();
+		const { shortId, order } = await gatedOrder(t);
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "confirmed",
+		});
+		// Gated: can't pack yet.
+		await expect(
+			asA(t).mutation(api.orders.updateStatus, {
+				orderId: order._id,
+				status: "packed",
+			}),
+		).rejects.toThrow(/mockup approval/i);
+
+		// Seller submits, buyer approves.
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "mock-1",
+		});
+		await t.mutation(api.orders.approveMockup, { shortId });
+		const approved = await t.query(api.orders.get, { shortId });
+		expect(approved?.mockupStatus).toBe("approved");
+
+		// Now packing succeeds.
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "packed",
+		});
+		expect((await t.query(api.orders.get, { shortId }))?.status).toBe("packed");
+	});
+
+	test("submit → request changes → resubmit loops back to submitted", async () => {
+		const t = setup();
+		const { shortId, order } = await gatedOrder(t);
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "mock-1",
+		});
+		await t.mutation(api.orders.requestMockupChanges, {
+			shortId,
+			note: "make it bigger",
+		});
+		let o = await t.query(api.orders.get, { shortId });
+		expect(o?.mockupStatus).toBe("changes_requested");
+		expect(o?.mockupChangeNote).toBe("make it bigger");
+
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "mock-2",
+		});
+		o = await t.query(api.orders.get, { shortId });
+		expect(o?.mockupStatus).toBe("submitted");
+		expect(o?.mockupChangeNote).toBeUndefined(); // cleared on resubmit
+	});
+
+	test("approveMockup rejects when nothing is awaiting approval", async () => {
+		const t = setup();
+		const { shortId } = await gatedOrder(t); // still 'pending', no mockup sent
+		await expect(
+			t.mutation(api.orders.approveMockup, { shortId }),
+		).rejects.toThrow(/awaiting your approval/i);
+	});
+
+	test("waive is blocked before the grace window, allowed after", async () => {
+		const t = setup();
+		const { shortId, order } = await gatedOrder(t);
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "mock-1",
+		});
+		// Too soon.
+		await expect(
+			asA(t).mutation(api.orders.waiveMockup, { orderId: order._id }),
+		).rejects.toThrow(/after the buyer has had time/i);
+
+		// Backdate the submission past the grace window.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order._id, {
+				mockupSubmittedAt: Date.now() - 49 * 60 * 60 * 1000,
+			});
+		});
+		await asA(t).mutation(api.orders.waiveMockup, { orderId: order._id });
+		const waived = await t.query(api.orders.get, { shortId });
+		expect(waived?.mockupWaivedAt).toBeTypeOf("number");
+
+		// Waiver opens the gate.
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "confirmed",
+		});
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "packed",
+		});
+		expect((await t.query(api.orders.get, { shortId }))?.status).toBe("packed");
+	});
+
+	test("a gated order can still be cancelled (the gate only blocks production)", async () => {
+		const t = setup();
+		const { order } = await gatedOrder(t);
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "cancelled",
+		});
+		// No throw — cancellation isn't gated.
+	});
+
+	test("mockup mutations reject a non-owner / unauthenticated caller", async () => {
+		const t = setup();
+		const { order } = await gatedOrder(t);
+		await expect(
+			t.mutation(api.orders.submitMockup, {
+				orderId: order._id,
+				storageId: "x",
+			}),
+		).rejects.toThrow(/Not authenticated/);
+		const asB = t.withIdentity({ subject: USER_B });
+		await expect(
+			asB.mutation(api.orders.waiveMockup, { orderId: order._id }),
+		).rejects.toThrow(/Forbidden/);
 	});
 });

@@ -67,6 +67,13 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		period: MINUTE,
 		capacity: 2,
 	},
+	// Public buyer mockup approve / request-changes actions (keyed by retailerId).
+	mockupReview: {
+		kind: "token bucket",
+		rate: 5,
+		period: MINUTE,
+		capacity: 3,
+	},
 	googleAutocomplete: {
 		kind: "token bucket",
 		rate: 30,

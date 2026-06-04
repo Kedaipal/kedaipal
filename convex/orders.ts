@@ -197,6 +197,8 @@ export const create = mutation({
 			Id<"productVariants">,
 			{ qty: number; block: boolean; onHand: number }
 		>();
+		// Whole-order mockup gating: set if ANY line's product requires a proof.
+		let requiresMockup = false;
 		for (const item of args.items) {
 			if (!Number.isInteger(item.quantity) || item.quantity < 1)
 				throw new ConvexError("Quantity must be a positive integer");
@@ -226,6 +228,7 @@ export const create = mutation({
 				throw new ConvexError("Variant does not belong to this retailer");
 			const product = await ctx.db.get(variant.productId);
 			if (!product) throw new ConvexError("Product not found");
+			if (product.requiresProof === true) requiresMockup = true;
 			const variantId = variant._id;
 			const label = variantLabel(variant.optionValues);
 			const displayName = label ? `${product.name} (${label})` : product.name;
@@ -304,6 +307,7 @@ export const create = mutation({
 			deliveryAddress: sanitizedAddress,
 			pickupLocationId: resolvedPickupLocationId,
 			pickupSnapshot: sanitizedPickupSnapshot,
+			mockupStatus: requiresMockup ? "pending" : undefined,
 			createdAt: now,
 			updatedAt: now,
 		});
@@ -452,6 +456,20 @@ export const updateStatus = mutation({
 		const retailer = await ctx.db.get(order.retailerId);
 		if (!retailer) throw new Error("Retailer not found");
 		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+
+		// Mockup gate: a proof-required order can't move into production (packed)
+		// until the buyer has approved the mockup or the seller has waived it.
+		// Gates only the forward production step — cancelling is always allowed.
+		if (
+			status === "packed" &&
+			order.mockupStatus !== undefined &&
+			order.mockupStatus !== "approved" &&
+			order.mockupWaivedAt === undefined
+		) {
+			throw new ConvexError(
+				"Awaiting mockup approval — the buyer must approve the mockup (or you can proceed without approval) before this order can be packed",
+			);
+		}
 
 		const now = Date.now();
 
@@ -825,5 +843,191 @@ export const generateOrderProofUploadUrl = mutation({
 		}
 
 		return ctx.storage.generateUploadUrl();
+	},
+});
+
+// ---------------------------------------------------------------------------
+// Mockup / proof approval (docs/proof-approval.md). Code says "mockup", not
+// "proof" — "proof" is the buyer's payment screenshot. Independent dimension;
+// the confirmed→packed gate lives at the top of updateStatus above.
+// ---------------------------------------------------------------------------
+
+const MOCKUP_NOTE_MAX = 500;
+// Grace after a mockup is sent before the seller may proceed without the buyer's
+// approval (the deadlock escape). v1 is purely time-based — no reminder
+// precondition until the Reminders Cron lands.
+export const MOCKUP_WAIVE_GRACE_MS = 48 * 60 * 60 * 1000; // 48h
+
+/** Owner-only: mint a one-shot upload URL for a mockup image. */
+export const generateMockupUploadUrl = mutation({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<string> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Not authenticated");
+		await rateLimiter.limit(ctx, "productWrite", { key: identity.subject, throws: true });
+		const order = await ctx.db.get(orderId);
+		if (!order) throw new ConvexError("Order not found");
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) throw new Error("Retailer not found");
+		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		if (order.mockupStatus === undefined)
+			throw new ConvexError("This order doesn't require a mockup");
+		return ctx.storage.generateUploadUrl();
+	},
+});
+
+/** Owner-only: attach a mockup and send it to the buyer → status `submitted`. */
+export const submitMockup = mutation({
+	args: { orderId: v.id("orders"), storageId: v.string() },
+	handler: async (ctx, { orderId, storageId }): Promise<void> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Not authenticated");
+		await rateLimiter.limit(ctx, "productWrite", { key: identity.subject, throws: true });
+		const order = await ctx.db.get(orderId);
+		if (!order) throw new ConvexError("Order not found");
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) throw new Error("Retailer not found");
+		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		if (order.mockupStatus === undefined)
+			throw new ConvexError("This order doesn't require a mockup");
+		if (order.mockupStatus === "approved")
+			throw new ConvexError("The mockup is already approved");
+		const id = storageId.trim();
+		if (!id) throw new ConvexError("Missing mockup image");
+
+		const now = Date.now();
+		await ctx.db.patch(orderId, {
+			mockupStatus: "submitted",
+			mockupImageStorageId: id,
+			mockupSubmittedAt: now,
+			mockupChangeNote: undefined,
+			updatedAt: now,
+		});
+		await ctx.db.insert("orderEvents", {
+			orderId,
+			status: order.status,
+			note: "mockup_submitted",
+			createdAt: now,
+		});
+		// TODO(notifications): schedule WhatsApp send of the mockup image +
+		// "review your mockup" link to the buyer.
+	},
+});
+
+/** Public (buyer): approve the current mockup. shortId is the capability. */
+export const approveMockup = mutation({
+	args: { shortId: v.string() },
+	handler: async (ctx, { shortId }): Promise<void> => {
+		const order = await ctx.db
+			.query("orders")
+			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+			.first();
+		if (!order) throw new ConvexError("Order not found");
+		await rateLimiter.limit(ctx, "mockupReview", { key: order.retailerId, throws: true });
+		if (order.mockupStatus === undefined)
+			throw new ConvexError("This order has no mockup to approve");
+		if (order.mockupStatus === "approved") return; // idempotent
+		if (order.mockupStatus !== "submitted")
+			throw new ConvexError("There's no mockup awaiting your approval yet");
+
+		const now = Date.now();
+		await ctx.db.patch(order._id, {
+			mockupStatus: "approved",
+			mockupApprovedAt: now,
+			updatedAt: now,
+		});
+		await ctx.db.insert("orderEvents", {
+			orderId: order._id,
+			status: order.status,
+			note: "mockup_approved",
+			createdAt: now,
+		});
+		// TODO(notifications): alert the seller that the mockup was approved.
+	},
+});
+
+/** Public (buyer): request changes to the current mockup. */
+export const requestMockupChanges = mutation({
+	args: { shortId: v.string(), note: v.optional(v.string()) },
+	handler: async (ctx, { shortId, note }): Promise<void> => {
+		const order = await ctx.db
+			.query("orders")
+			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+			.first();
+		if (!order) throw new ConvexError("Order not found");
+		await rateLimiter.limit(ctx, "mockupReview", { key: order.retailerId, throws: true });
+		if (order.mockupStatus !== "submitted")
+			throw new ConvexError("There's no mockup awaiting your review yet");
+		const trimmed = note?.trim();
+		if (trimmed && trimmed.length > MOCKUP_NOTE_MAX)
+			throw new ConvexError(`Note must be ${MOCKUP_NOTE_MAX} characters or fewer`);
+
+		const now = Date.now();
+		await ctx.db.patch(order._id, {
+			mockupStatus: "changes_requested",
+			mockupChangeNote: trimmed && trimmed.length > 0 ? trimmed : undefined,
+			updatedAt: now,
+		});
+		await ctx.db.insert("orderEvents", {
+			orderId: order._id,
+			status: order.status,
+			note:
+				trimmed && trimmed.length > 0
+					? `changes_requested: ${trimmed}`
+					: "changes_requested",
+			createdAt: now,
+		});
+		// TODO(notifications): alert the seller that changes were requested.
+	},
+});
+
+/** Owner-only: proceed without buyer approval (deadlock escape, time-guarded). */
+export const waiveMockup = mutation({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<void> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Not authenticated");
+		await rateLimiter.limit(ctx, "productWrite", { key: identity.subject, throws: true });
+		const order = await ctx.db.get(orderId);
+		if (!order) throw new ConvexError("Order not found");
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) throw new Error("Retailer not found");
+		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		if (order.mockupStatus === undefined)
+			throw new ConvexError("This order doesn't require a mockup");
+		if (order.mockupStatus === "approved" || order.mockupWaivedAt !== undefined)
+			return; // gate already open
+		if (order.mockupSubmittedAt === undefined)
+			throw new ConvexError("Send the mockup to the buyer first");
+		if (Date.now() - order.mockupSubmittedAt < MOCKUP_WAIVE_GRACE_MS)
+			throw new ConvexError(
+				"You can only proceed without approval after the buyer has had time to respond",
+			);
+
+		const now = Date.now();
+		await ctx.db.patch(orderId, { mockupWaivedAt: now, updatedAt: now });
+		await ctx.db.insert("orderEvents", {
+			orderId,
+			status: order.status,
+			note: "mockup_waived",
+			createdAt: now,
+		});
+	},
+});
+
+/**
+ * Public query: resolve the current mockup image into a viewable URL for the
+ * tracking page. shortId is the capability (same trust model as the rest of the
+ * tracking page).
+ */
+export const getMockupUrl = query({
+	args: { shortId: v.string() },
+	handler: async (ctx, { shortId }): Promise<string | null> => {
+		const order = await ctx.db
+			.query("orders")
+			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+			.first();
+		if (!order?.mockupImageStorageId) return null;
+		return (await ctx.storage.getUrl(order.mockupImageStorageId)) ?? null;
 	},
 });

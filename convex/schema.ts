@@ -137,6 +137,9 @@ export default defineSchema({
 		// Undefined/false = made-to-order: sold-out combos stay sellable (frozen
 		// pack-to-order, metal prints). See docs/product-variants.md §5/§7.
 		blockWhenOutOfStock: v.optional(v.boolean()),
+		// When true, any order containing this product is gated on buyer mockup
+		// approval before it can move into production. See docs/proof-approval.md.
+		requiresProof: v.optional(v.boolean()),
 		channel: v.union(v.literal("whatsapp")),
 		sortOrder: v.number(),
 		createdAt: v.number(),
@@ -328,12 +331,31 @@ export default defineSchema({
 		paymentClaimedAt: v.optional(v.number()),
 		paymentReceivedAt: v.optional(v.number()),
 		paymentProofStorageId: v.optional(v.string()),
+		// Mockup/proof approval — a third independent dimension (like payment),
+		// gating the confirmed→packed transition for made-to-order orders.
+		// Undefined = order has no proof-required item (no gate). See
+		// docs/proof-approval.md. NOTE: "mockup" (not "proof") in code — "proof"
+		// is the buyer's PAYMENT screenshot (paymentProofStorageId above).
+		mockupStatus: v.optional(
+			v.union(
+				v.literal("pending"), // needs a mockup; seller hasn't sent one
+				v.literal("submitted"), // seller sent it; awaiting the buyer
+				v.literal("changes_requested"), // buyer wants changes; back to seller
+				v.literal("approved"), // buyer approved; gate open
+			),
+		),
+		mockupImageStorageId: v.optional(v.string()), // current mockup
+		mockupChangeNote: v.optional(v.string()), // buyer's requested changes
+		mockupSubmittedAt: v.optional(v.number()),
+		mockupApprovedAt: v.optional(v.number()),
+		mockupWaivedAt: v.optional(v.number()), // seller proceeded without approval
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
 		.index("by_retailer", ["retailerId"])
 		.index("by_retailer_status", ["retailerId", "status"])
 		.index("by_retailer_payment", ["retailerId", "paymentStatus"])
+		.index("by_retailer_mockup", ["retailerId", "mockupStatus"])
 		.index("by_shortId", ["shortId"])
 		.index("by_customer", ["customerId"]),
 

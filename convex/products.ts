@@ -321,6 +321,7 @@ export const create = mutation({
 		sortOrder: v.number(),
 		options: v.optional(v.array(optionAxisValidator)),
 		blockWhenOutOfStock: v.optional(v.boolean()),
+		requiresProof: v.optional(v.boolean()),
 		variants: v.array(variantInputValidator),
 	},
 	handler: async (ctx, args): Promise<Id<"products">> => {
@@ -360,6 +361,7 @@ export const create = mutation({
 			imageStorageIds: args.imageStorageIds,
 			options,
 			blockWhenOutOfStock: args.blockWhenOutOfStock,
+			requiresProof: args.requiresProof,
 			sortOrder: args.sortOrder,
 			active: true,
 			channel: "whatsapp",
@@ -412,6 +414,7 @@ export const update = mutation({
 		sortOrder: v.optional(v.number()),
 		active: v.optional(v.boolean()),
 		blockWhenOutOfStock: v.optional(v.boolean()),
+		requiresProof: v.optional(v.boolean()),
 	},
 	handler: async (ctx, { productId, ...fields }): Promise<void> => {
 		const userId = await requireUserId(ctx);
@@ -437,6 +440,8 @@ export const update = mutation({
 		if (fields.active !== undefined) updates.active = fields.active;
 		if (fields.blockWhenOutOfStock !== undefined)
 			updates.blockWhenOutOfStock = fields.blockWhenOutOfStock;
+		if (fields.requiresProof !== undefined)
+			updates.requiresProof = fields.requiresProof;
 
 		await ctx.db.patch(productId, updates);
 	},

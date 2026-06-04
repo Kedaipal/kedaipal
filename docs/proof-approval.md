@@ -2,8 +2,20 @@
 
 Design spec for a **made-to-order proof approval** workflow: the seller sends the
 buyer a mockup/proof before producing the final item, and production is **gated**
-on the buyer's approval. **Status: designed, not built.** This doc is the artifact
-to share for sign-off and turn into a ticket.
+on the buyer's approval. **Status: in build.** This doc is the artifact to share
+for sign-off and turn into a ticket.
+
+> **Naming (build decision, 2026-06-04):** code identifiers use **`mockup`**, not
+> `proof`, because the codebase already uses "proof" throughout for the buyer's
+> **payment** screenshot (`paymentProofStorageId`, `getPaymentProofUrl`,
+> `generateOrderProofUploadUrl`, the `proofUpload` rate-limit key). So: `mockupStatus`,
+> `mockupImageStorageId`, `mockupChangeNote`, `submitMockup`, `approveMockup`,
+> `requestMockupChanges`, `waiveMockup`, `generateMockupUploadUrl`. Read "proof"
+> below as "mockup" in code.
+>
+> **v1 scope:** the waiver unlock is **time-based only** (the Reminders Cron in §8
+> is Sprint 4, not built yet) — `waiveMockup` is guarded by elapsed time since the
+> mockup was submitted; proactive buyer/seller nudges are an additive follow-up.
 
 ## 1. Why this feature
 
