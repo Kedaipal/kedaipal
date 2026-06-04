@@ -144,7 +144,7 @@ function ProductsRoute() {
 				<div className="flex flex-wrap items-center gap-x-1 gap-y-1 text-sm">
 					<Button asChild variant="ghost" className="h-8 px-2 text-sm">
 						<Link to="/app/products/import">
-							<Upload className="mr-1.5 size-3.5" aria-hidden />
+							<Download className="mr-1.5 size-3.5" aria-hidden />
 							Import
 						</Link>
 					</Button>
@@ -160,7 +160,7 @@ function ProductsRoute() {
 								disabled={exporting !== null}
 								onClick={() => handleExport("csv")}
 							>
-								<Download className="mr-1.5 size-3.5" aria-hidden />
+								<Upload className="mr-1.5 size-3.5" aria-hidden />
 								{exporting === "csv" ? "Exporting…" : "Export CSV"}
 							</Button>
 							<Button
@@ -170,7 +170,7 @@ function ProductsRoute() {
 								disabled={exporting !== null}
 								onClick={() => handleExport("xlsx")}
 							>
-								<Download className="mr-1.5 size-3.5" aria-hidden />
+								<Upload className="mr-1.5 size-3.5" aria-hidden />
 								{exporting === "xlsx" ? "Exporting…" : "Export XLSX"}
 							</Button>
 						</>
