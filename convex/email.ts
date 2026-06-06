@@ -72,7 +72,7 @@ export const getOrderForRetailerEmail = internalQuery({
 async function sendMockupSellerEmail(
 	ctx: ActionCtx,
 	orderId: Id<"orders">,
-	key: "mockupApproved" | "mockupChangesRequested",
+	key: "mockupApproved" | "mockupChangesRequested" | "mockupDeclined",
 ): Promise<void> {
 	let meta: {
 		shortId: string;
@@ -128,6 +128,13 @@ export const notifyMockupChangesRequested = internalAction({
 	args: { orderId: v.id("orders") },
 	handler: async (ctx, { orderId }): Promise<void> => {
 		await sendMockupSellerEmail(ctx, orderId, "mockupChangesRequested");
+	},
+});
+
+export const notifyMockupDeclined = internalAction({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<void> => {
+		await sendMockupSellerEmail(ctx, orderId, "mockupDeclined");
 	},
 });
 

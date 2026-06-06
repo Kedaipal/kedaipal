@@ -90,11 +90,19 @@ export function ProductDetailSheet({
 	}
 
 	const priceVaries = product.priceTo > product.priceFrom;
+	// A selected made-to-order variant at RM0 shows "Price on quote" — the seller
+	// sets the real price on the mockup after the order is placed.
+	const selectedIsQuote =
+		selectedVariant?.requiresProof === true && selectedVariant.price === 0;
 	const priceLabel = selectedVariant
-		? formatPrice(selectedVariant.price, product.currency)
-		: priceVaries
-			? `from ${formatPrice(product.priceFrom, product.currency)}`
-			: formatPrice(product.priceFrom, product.currency);
+		? selectedIsQuote
+			? "Price on quote"
+			: formatPrice(selectedVariant.price, product.currency)
+		: product.hasQuotePricing && product.priceTo === 0
+			? "Price on quote"
+			: priceVaries || product.hasQuotePricing
+				? `from ${formatPrice(product.priceFrom, product.currency)}`
+				: formatPrice(product.priceFrom, product.currency);
 
 	return (
 		<Dialog.Root open={open} onOpenChange={(o) => !o && onClose()}>

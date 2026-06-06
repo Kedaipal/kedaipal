@@ -67,6 +67,7 @@ export function ProductGrid({ retailerId, cart }: ProductGridProps) {
 				price: variant.price,
 				currency: p.currency,
 				imageUrl: variant.imageUrls[0] ?? p.imageUrls[0],
+				quoteOnRequest: variant.requiresProof === true && variant.price === 0,
 			},
 			qty,
 		);

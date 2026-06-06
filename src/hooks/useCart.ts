@@ -22,6 +22,9 @@ export type CartItem = {
 	currency: string;
 	quantity: number;
 	imageUrl?: string;
+	// True for a made-to-order variant sold at RM0 — the price is quoted by the
+	// seller after the order (on the mockup). Rendered as "Price on quote".
+	quoteOnRequest?: boolean;
 };
 
 type CartState = {

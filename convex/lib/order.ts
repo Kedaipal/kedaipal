@@ -22,12 +22,20 @@ export type OrderTotals = {
 	total: number;
 };
 
+/**
+ * `subtotal` is the sum of line snapshots. `total` adds the optional
+ * `quotedAmount` (minor units) — the seller's quote for made-to-order/custom
+ * work, set on the mockup and folded in here so there's a single source of
+ * truth for the order total. Negative quotes are floored to 0.
+ */
 export function computeOrderTotals(
 	items: ReadonlyArray<OrderItemPricing>,
+	quotedAmount?: number,
 ): OrderTotals {
 	const subtotal = items.reduce(
 		(sum, item) => sum + item.price * item.quantity,
 		0,
 	);
-	return { subtotal, total: subtotal };
+	const quote = Math.max(0, quotedAmount ?? 0);
+	return { subtotal, total: subtotal + quote };
 }

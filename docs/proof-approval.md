@@ -104,15 +104,45 @@ proof:       (none) → pending → submitted → approved       (independent, N
 **`productVariants`** — add:
 - `requiresProof: v.optional(v.boolean())` — the **per-variant** toggle. (`products.requiresProof` remains as a deprecated read-fallback for legacy variants.)
 
-**`orders`** — add the independent proof dimension:
-- `proofStatus: v.optional(v.union(v.literal("pending"), v.literal("submitted"), v.literal("changes_requested"), v.literal("approved")))`
-- `proofImageStorageId: v.optional(v.string())` — current mockup.
-- `proofChangeNote: v.optional(v.string())` — buyer's requested changes.
-- `proofSubmittedAt`, `proofApprovedAt`, `proofWaivedAt`: `v.optional(v.number())`.
+**`orders`** — add the independent proof dimension (code uses `mockup*`, not `proof*`):
+- `mockupStatus: v.optional(v.union(v.literal("pending"), v.literal("submitted"), v.literal("changes_requested"), v.literal("approved")))`
+- `mockupImageStorageId: v.optional(v.string())` — current mockup.
+- `mockupChangeNote: v.optional(v.string())` — buyer's requested changes.
+- `mockupSubmittedAt`, `mockupApprovedAt`, `mockupWaivedAt`: `v.optional(v.number())`.
+- `mockupQuotedAmount: v.optional(v.number())` — **the seller's price for the custom work** (minor units), set on the mockup submission and folded into `total` via `computeOrderTotals`. See §11.
 
 Multiple mockup rounds are captured by `orderEvents` (history), not a child table —
 keeps v1 simple. (If per-round images become a requirement later, promote to a
 `proofRounds` child table.)
+
+## 11. Custom-work pricing (quote-on-mockup) + decline
+
+Made-to-order "Custom" variants sell at **RM0** on the storefront ("Price on
+quote") because the real price isn't known until the mockup is designed. The
+quote rides on the mockup approval — they're one decision for the buyer.
+
+**Flow (pay-once-after-quote):**
+1. Buyer orders the custom variant (snapshot price 0). In-stock lines are reserved as usual; nothing is paid yet.
+2. Seller **submits the mockup with a price** (`submitMockup({ storageId, quotedAmount })`). The quote is re-enterable each round — the latest wins. It folds into `total` immediately as a *proposed* total, and the customer's denormalized `totalSpent` is kept in step via `adjustAggregatesForTotalChange`.
+3. Buyer **approves** (design + price → gate opens, total locks), **requests changes** (loop), or **declines the item**.
+4. Buyer pays the finalized `total` through the existing payment flow — unchanged.
+
+**Decline (`declineMockupItem`, capability = `shortId`):** drops every
+`requiresProof` line, recomputes `total` (quote cleared), and **re-evaluates the
+gate** — with no proof-required line left, `mockupStatus` clears and the
+ready-made remainder proceeds. A custom-only order that's declined is
+**cancelled** (stock restored, aggregates reversed). The seller is emailed
+(`notifyMockupDeclined`).
+
+**Why order-level, not per-line:** one mockup ⇒ one quote per order. Pricing the
+custom work at the order level (a single `mockupQuotedAmount` folded into the
+total) is unambiguous for any number of custom lines and reads cleanly on the
+receipt (*Items · Custom work · Total*). `subtotal` stays line-derived.
+
+**Split fulfilment is deliberately out of scope** — fulfilment stays
+whole-order. Because payment follows the quote, there are no already-paid items
+held behind an un-approved custom item, so the motivation for partial pickup is
+absent. Revisit as its own feature if real demand appears.
 
 ## 7. Code touch points
 

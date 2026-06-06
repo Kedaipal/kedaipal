@@ -137,14 +137,18 @@ function buildWaMessage(
 	lines.push(`Hi ${storeName}, I'd like to place this order:`);
 	lines.push("");
 	lines.push(`Order: ${shortId}`);
+	let hasQuoteItem = false;
 	for (const item of cart.items) {
 		const name = item.optionLabel
 			? `${item.name} (${item.optionLabel})`
 			: item.name;
-		lines.push(`• ${item.quantity}x ${name}`);
+		const suffix = item.quoteOnRequest ? " — price on quote" : "";
+		if (item.quoteOnRequest) hasQuoteItem = true;
+		lines.push(`• ${item.quantity}x ${name}${suffix}`);
 	}
 	lines.push("");
 	lines.push(`Total: ${formatPrice(cart.total, cart.currency)}`);
+	if (hasQuoteItem) lines.push("(Custom item price to be confirmed by seller)");
 	if (deliveryMethod === "self_collect") {
 		if (pickupLocation) {
 			lines.push(`📍 Self Collect at: ${pickupLocation.label}`);
@@ -339,16 +343,19 @@ export function CheckoutSheet({
 													</span>
 												) : null}
 												<span className="text-xs text-muted-foreground">
-													{item.quantity} ×{" "}
-													{formatPrice(item.price, item.currency)}
+													{item.quoteOnRequest
+														? `${item.quantity} × Price on quote`
+														: `${item.quantity} × ${formatPrice(item.price, item.currency)}`}
 												</span>
 											</div>
 											<div className="flex items-center gap-2">
 												<span className="text-sm font-semibold">
-													{formatPrice(
-														item.price * item.quantity,
-														item.currency,
-													)}
+													{item.quoteOnRequest
+														? "On quote"
+														: formatPrice(
+																item.price * item.quantity,
+																item.currency,
+															)}
 												</span>
 												<button
 													type="button"

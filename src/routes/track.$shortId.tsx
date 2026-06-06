@@ -583,18 +583,34 @@ function MockupReview({
 }) {
 	const approve = useMutation(api.orders.approveMockup);
 	const requestChanges = useMutation(api.orders.requestMockupChanges);
+	const declineItem = useMutation(api.orders.declineMockupItem);
 	const mockupUrl = useQuery(api.orders.getMockupUrl, { shortId });
 	const [note, setNote] = useState("");
 	const [showNote, setShowNote] = useState(false);
+	const [confirmDecline, setConfirmDecline] = useState(false);
 	const [busy, setBusy] = useState(false);
 
 	const status = order.mockupStatus;
+	const quoted = order.mockupQuotedAmount;
 
 	async function handleApprove() {
 		setBusy(true);
 		try {
 			await approve({ shortId });
 			toast.success("Mockup approved — thank you!");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	async function handleDecline() {
+		setBusy(true);
+		try {
+			await declineItem({ shortId });
+			toast.success("Custom item removed from your order");
+			setConfirmDecline(false);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -649,6 +665,25 @@ function MockupReview({
 						className="block max-h-72 w-full object-contain"
 					/>
 				</a>
+			) : null}
+
+			{quoted != null && quoted > 0 ? (
+				<div className="flex flex-col gap-1 rounded-xl bg-muted/50 p-3 text-sm">
+					<div className="flex items-center justify-between">
+						<span className="text-muted-foreground">
+							Custom item{status === "approved" ? "" : " (proposed)"}
+						</span>
+						<span className="font-semibold tabular-nums">
+							{formatPrice(quoted, order.currency)}
+						</span>
+					</div>
+					<div className="flex items-center justify-between border-t border-border pt-1">
+						<span className="text-muted-foreground">Order total</span>
+						<span className="font-semibold tabular-nums">
+							{formatPrice(order.total, order.currency)}
+						</span>
+					</div>
+				</div>
 			) : null}
 
 			{status === "pending" ? (
@@ -714,6 +749,45 @@ function MockupReview({
 							Request changes
 						</button>
 					</div>
+				)
+			) : null}
+
+			{/* Decline the custom item — available until it's approved. Removes the
+			    custom line; any other items in the order carry on. */}
+			{status !== "approved" && !showNote ? (
+				confirmDecline ? (
+					<div className="flex flex-col gap-2 rounded-xl border border-border bg-muted/30 p-3">
+						<p className="text-sm">
+							Remove the custom item from your order? Any other items stay and
+							proceed as normal. This can't be undone.
+						</p>
+						<div className="flex gap-2">
+							<Button
+								variant="destructive"
+								onClick={handleDecline}
+								disabled={busy}
+								className="h-11 flex-1"
+							>
+								Yes, remove it
+							</Button>
+							<Button
+								variant="secondary"
+								onClick={() => setConfirmDecline(false)}
+								disabled={busy}
+								className="h-11"
+							>
+								Keep it
+							</Button>
+						</div>
+					</div>
+				) : (
+					<button
+						type="button"
+						onClick={() => setConfirmDecline(true)}
+						className="self-start text-xs font-medium text-muted-foreground underline-offset-2 hover:underline"
+					>
+						Decline the custom item
+					</button>
 				)
 			) : null}
 		</section>

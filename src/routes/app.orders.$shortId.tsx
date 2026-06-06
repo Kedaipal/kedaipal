@@ -560,6 +560,17 @@ function OrderDetailRoute() {
 						</li>
 					))}
 				</ul>
+				{order.mockupQuotedAmount != null && order.mockupQuotedAmount > 0 ? (
+					<div className="flex items-center justify-between px-3 text-sm text-muted-foreground">
+						<span>
+							Custom work
+							{order.mockupStatus === "approved" ? "" : " (proposed)"}
+						</span>
+						<span className="tabular-nums">
+							{formatPrice(order.mockupQuotedAmount, order.currency)}
+						</span>
+					</div>
+				) : null}
 				<div className="flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2.5 text-sm font-bold">
 					<span>Total</span>
 					<span className="tabular-nums">
@@ -807,13 +818,35 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 	});
 	const [uploading, setUploading] = useState(false);
 	const [waiving, setWaiving] = useState(false);
+	const [savingPrice, setSavingPrice] = useState(false);
+	// Quote for the custom work (major-unit string as typed). Seeded from the
+	// order's current quote so re-sends/edits keep the last value.
+	const [priceInput, setPriceInput] = useState(
+		order.mockupQuotedAmount != null
+			? (order.mockupQuotedAmount / 100).toFixed(2)
+			: "",
+	);
 
 	const status = order.mockupStatus;
 	const waived = order.mockupWaivedAt != null;
 
+	// Parse the typed quote into minor units. Empty = no quote sent (made-to-order
+	// items with a fixed storefront price don't need one). Invalid → undefined.
+	function parsedQuote(): number | undefined {
+		const trimmed = priceInput.trim();
+		if (trimmed === "") return undefined;
+		if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) return undefined;
+		return Math.round(Number.parseFloat(trimmed) * 100);
+	}
+
 	async function handleUpload(e: ChangeEvent<HTMLInputElement>) {
 		const file = e.target.files?.[0];
 		if (!file) return;
+		if (priceInput.trim() !== "" && parsedQuote() === undefined) {
+			toast.error("Enter a valid price (e.g. 120 or 120.50) or clear it");
+			e.target.value = "";
+			return;
+		}
 		setUploading(true);
 		try {
 			const url = await generateUploadUrl({ orderId: order._id });
@@ -824,12 +857,40 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 			});
 			if (!res.ok) throw new Error("Upload failed");
 			const { storageId } = (await res.json()) as { storageId: string };
-			await submitMockup({ orderId: order._id, storageId });
+			await submitMockup({
+				orderId: order._id,
+				storageId,
+				quotedAmount: parsedQuote(),
+			});
 			toast.success("Mockup sent to the buyer for approval");
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
 			setUploading(false);
+		}
+	}
+
+	// Update the quote without re-uploading — re-sends the existing mockup with
+	// the new price (buyer is re-notified). Only available once a mockup exists.
+	async function handleSavePrice() {
+		const quote = parsedQuote();
+		if (priceInput.trim() !== "" && quote === undefined) {
+			toast.error("Enter a valid price (e.g. 120 or 120.50)");
+			return;
+		}
+		if (!order.mockupImageStorageId) return;
+		setSavingPrice(true);
+		try {
+			await submitMockup({
+				orderId: order._id,
+				storageId: order.mockupImageStorageId,
+				quotedAmount: quote,
+			});
+			toast.success("Price updated and re-sent to the buyer");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSavingPrice(false);
 		}
 	}
 
@@ -917,6 +978,47 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 				<p className="text-sm text-muted-foreground">
 					You chose to proceed without the buyer's approval.
 				</p>
+			) : null}
+
+			{status !== "approved" ? (
+				<div className="flex flex-col gap-1.5">
+					<label htmlFor="mockup-quote" className="text-sm font-medium">
+						Custom item price{" "}
+						<span className="font-normal text-muted-foreground">
+							(optional — for quote-on-request items)
+						</span>
+					</label>
+					<div className="flex items-center gap-2">
+						<div className="relative flex-1">
+							<span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+								{order.currency}
+							</span>
+							<Input
+								id="mockup-quote"
+								inputMode="decimal"
+								placeholder="120.00"
+								value={priceInput}
+								onChange={(e) => setPriceInput(e.target.value)}
+								className="h-11 pl-12"
+							/>
+						</div>
+						{order.mockupImageStorageId ? (
+							<Button
+								type="button"
+								variant="secondary"
+								onClick={handleSavePrice}
+								disabled={savingPrice}
+								className="h-11 shrink-0"
+							>
+								{savingPrice ? "…" : "Save price"}
+							</Button>
+						) : null}
+					</div>
+					<p className="text-xs text-muted-foreground">
+						Sent with the mockup. The buyer approves the design and price
+						together; the order total updates automatically.
+					</p>
+				</div>
 			) : null}
 
 			{needsMockup || status === "submitted" ? (

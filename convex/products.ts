@@ -135,7 +135,13 @@ async function productWithVariants(
 		requiresProof: vr.requiresProof ?? product.requiresProof,
 	}));
 	const variants = opts.activeOnly ? resolved.filter((vr) => vr.active) : resolved;
-	const prices = variants.map((vr) => vr.price);
+	// A made-to-order variant at price 0 is "price on quote" — the seller sets the
+	// real price on the mockup. Exclude those from the displayed range so a mixed
+	// listing reads "from RM50" (its priced sizes) instead of a misleading "RM0".
+	const isQuoteVariant = (vr: { requiresProof?: boolean; price: number }) =>
+		vr.requiresProof === true && vr.price === 0;
+	const prices = variants.filter((vr) => !isQuoteVariant(vr)).map((vr) => vr.price);
+	const hasQuotePricing = variants.some(isQuoteVariant);
 	const totalOnHand = variants.reduce((sum, vr) => sum + vr.onHand, 0);
 	// Availability is always judged on ACTIVE variants only, regardless of which
 	// set we're returning — otherwise the dashboard read (activeOnly:false) would
@@ -153,6 +159,7 @@ async function productWithVariants(
 		variantCount: variants.length,
 		priceFrom: prices.length ? Math.min(...prices) : 0,
 		priceTo: prices.length ? Math.max(...prices) : 0,
+		hasQuotePricing,
 		totalOnHand,
 		inStock,
 	};

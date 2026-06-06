@@ -4,6 +4,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
 import {
+	adjustAggregatesForTotalChange,
 	decrementAggregatesForCancel,
 	linkOrderToCustomer,
 } from "./customers";
@@ -861,6 +862,9 @@ export const generateOrderProofUploadUrl = mutation({
 // ---------------------------------------------------------------------------
 
 const MOCKUP_NOTE_MAX = 500;
+// Sanity cap on a custom-work quote (minor units) — RM1,000,000. Guards typos
+// like an extra few zeros from producing an absurd total.
+const MOCKUP_QUOTE_MAX = 100_000_000;
 // Grace after a mockup is sent before the seller may proceed without the buyer's
 // approval (the deadlock escape). v1 is purely time-based — no reminder
 // precondition until the Reminders Cron lands.
@@ -884,10 +888,20 @@ export const generateMockupUploadUrl = mutation({
 	},
 });
 
-/** Owner-only: attach a mockup and send it to the buyer → status `submitted`. */
+/**
+ * Owner-only: attach a mockup and send it to the buyer → status `submitted`.
+ * `quotedAmount` (minor units, optional) is the seller's price for the custom
+ * work. It's re-enterable on each round; when present it's folded into `total`
+ * immediately as a *proposed* total (the buyer locks it by approving). Omit it
+ * for made-to-order items that already carry a fixed storefront price.
+ */
 export const submitMockup = mutation({
-	args: { orderId: v.id("orders"), storageId: v.string() },
-	handler: async (ctx, { orderId, storageId }): Promise<void> => {
+	args: {
+		orderId: v.id("orders"),
+		storageId: v.string(),
+		quotedAmount: v.optional(v.number()),
+	},
+	handler: async (ctx, { orderId, storageId, quotedAmount }): Promise<void> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error("Not authenticated");
 		await rateLimiter.limit(ctx, "productWrite", { key: identity.subject, throws: true });
@@ -903,18 +917,43 @@ export const submitMockup = mutation({
 		const id = storageId.trim();
 		if (!id) throw new ConvexError("Missing mockup image");
 
+		// Resolve the effective quote: a provided value overwrites the prior one
+		// (re-pricing across rounds); omitting it keeps whatever was set before.
+		let effectiveQuote = order.mockupQuotedAmount;
+		if (quotedAmount !== undefined) {
+			if (!Number.isInteger(quotedAmount) || quotedAmount < 0)
+				throw new ConvexError("Quote must be a whole, non-negative amount");
+			if (quotedAmount > MOCKUP_QUOTE_MAX)
+				throw new ConvexError("Quote is unrealistically large — check the amount");
+			effectiveQuote = quotedAmount;
+		}
+
 		const now = Date.now();
+		const { subtotal, total } = computeOrderTotals(order.items, effectiveQuote);
+		// Keep the customer's denormalized totalSpent in step with the new total.
+		if (order.customerId)
+			await adjustAggregatesForTotalChange(ctx, {
+				customerId: order.customerId,
+				delta: total - order.total,
+			});
+
 		await ctx.db.patch(orderId, {
 			mockupStatus: "submitted",
 			mockupImageStorageId: id,
 			mockupSubmittedAt: now,
 			mockupChangeNote: undefined,
+			mockupQuotedAmount: effectiveQuote,
+			subtotal,
+			total,
 			updatedAt: now,
 		});
 		await ctx.db.insert("orderEvents", {
 			orderId,
 			status: order.status,
-			note: "mockup_submitted",
+			note:
+				effectiveQuote && effectiveQuote > 0
+					? `mockup_submitted (quote ${effectiveQuote})`
+					: "mockup_submitted",
 			createdAt: now,
 		});
 		await ctx.scheduler.runAfter(0, internal.whatsapp.notifyMockupSubmitted, {
@@ -1026,6 +1065,128 @@ export const waiveMockup = mutation({
 			status: order.status,
 			note: "mockup_waived",
 			createdAt: now,
+		});
+	},
+});
+
+/**
+ * Public (buyer): decline the custom (made-to-order) item. shortId is the
+ * capability. Drops every `requiresProof` line from the order, recomputes the
+ * total (clearing the quote), and re-opens the fulfilment gate so the remaining
+ * ready-made items proceed normally. If the order was custom-only, declining is
+ * equivalent to cancelling it (stock restored, aggregates reversed).
+ */
+export const declineMockupItem = mutation({
+	args: { shortId: v.string() },
+	handler: async (ctx, { shortId }): Promise<void> => {
+		const order = await ctx.db
+			.query("orders")
+			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+			.first();
+		if (!order) throw new ConvexError("Order not found");
+		await rateLimiter.limit(ctx, "mockupReview", { key: order.retailerId, throws: true });
+		if (order.mockupStatus === undefined)
+			throw new ConvexError("This order has no custom item to decline");
+		if (order.mockupStatus === "approved")
+			throw new ConvexError("The custom item has already been approved");
+
+		// Resolve which lines are the made-to-order/custom ones (requiresProof
+		// resolves true: per-variant override ?? product default).
+		const customVariantIds = new Set<string>();
+		for (const item of order.items) {
+			if (!item.variantId) continue;
+			const variant = await ctx.db.get(item.variantId);
+			if (!variant) continue;
+			const product = await ctx.db.get(variant.productId);
+			if (!product) continue;
+			if ((variant.requiresProof ?? product.requiresProof) === true)
+				customVariantIds.add(item.variantId);
+		}
+		if (customVariantIds.size === 0)
+			throw new ConvexError("No custom item on this order to decline");
+
+		const kept = order.items.filter(
+			(i) => !i.variantId || !customVariantIds.has(i.variantId),
+		);
+		const dropped = order.items.filter(
+			(i) => i.variantId && customVariantIds.has(i.variantId),
+		);
+
+		const now = Date.now();
+
+		// Restore stock for any dropped line that hard-blocks (defensive — custom
+		// items are normally made-to-order and were never reserved).
+		const restoreByVariant = new Map<Id<"productVariants">, number>();
+		for (const item of dropped) {
+			if (!item.variantId) continue;
+			restoreByVariant.set(
+				item.variantId,
+				(restoreByVariant.get(item.variantId) ?? 0) + item.quantity,
+			);
+		}
+		for (const [variantId, qty] of restoreByVariant) {
+			const fresh = await ctx.db.get(variantId);
+			if (!fresh) continue;
+			const product = await ctx.db.get(fresh.productId);
+			if (!product) continue;
+			if ((fresh.blockWhenOutOfStock ?? product.blockWhenOutOfStock) !== true)
+				continue;
+			await ctx.db.patch(variantId, { onHand: fresh.onHand + qty, updatedAt: now });
+		}
+
+		const droppedNote = `custom_declined: ${dropped
+			.map((i) => (i.variantLabel ? `${i.name} (${i.variantLabel})` : i.name))
+			.join(", ")}`;
+
+		// Custom-only order → declining is a cancellation.
+		if (kept.length === 0) {
+			if (order.status !== "cancelled" && order.customerId)
+				await decrementAggregatesForCancel(ctx, {
+					customerId: order.customerId,
+					orderTotal: order.total,
+				});
+			await ctx.db.patch(order._id, {
+				status: "cancelled",
+				mockupStatus: undefined,
+				mockupQuotedAmount: undefined,
+				updatedAt: now,
+			});
+			await ctx.db.insert("orderEvents", {
+				orderId: order._id,
+				status: "cancelled",
+				note: droppedNote,
+				createdAt: now,
+			});
+			await ctx.scheduler.runAfter(0, internal.email.notifyMockupDeclined, {
+				orderId: order._id,
+			});
+			return;
+		}
+
+		// Mixed order → keep the ready-made items, drop the custom one, clear the
+		// quote + gate, recompute the total.
+		const { subtotal, total } = computeOrderTotals(kept);
+		if (order.customerId)
+			await adjustAggregatesForTotalChange(ctx, {
+				customerId: order.customerId,
+				delta: total - order.total,
+			});
+		await ctx.db.patch(order._id, {
+			items: kept,
+			subtotal,
+			total,
+			mockupStatus: undefined,
+			mockupQuotedAmount: undefined,
+			updatedAt: now,
+		});
+		await ctx.db.insert("orderEvents", {
+			orderId: order._id,
+			status: order.status,
+			note: droppedNote,
+			createdAt: now,
+		});
+		await ctx.scheduler.runAfter(0, internal.email.notifyMockupDeclined, {
+			orderId: order._id,
 		});
 	},
 });

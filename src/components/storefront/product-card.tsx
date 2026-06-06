@@ -31,6 +31,10 @@ export function ProductCard({ product, onOpen, onQuickAdd }: ProductCardProps) {
 		product.totalOnHand > 0 &&
 		product.totalOnHand <= 5;
 	const priceVaries = product.priceTo > product.priceFrom;
+	// "Price on quote": made-to-order variants at RM0 (seller quotes on the mockup).
+	// allQuote = no priced variants at all; showFrom = a cheaper/quote option exists.
+	const allQuote = product.hasQuotePricing && product.priceTo === 0;
+	const showFrom = priceVaries || product.hasQuotePricing;
 	const firstImage = product.imageUrls[0];
 
 	return (
@@ -75,12 +79,18 @@ export function ProductCard({ product, onOpen, onQuickAdd }: ProductCardProps) {
 					{product.name}
 				</button>
 				<p className="text-base font-bold tabular-nums">
-					{priceVaries ? (
-						<span className="text-xs font-medium text-muted-foreground">
-							from{" "}
-						</span>
-					) : null}
-					{formatPrice(product.priceFrom, product.currency)}
+					{allQuote ? (
+						<span className="text-sm font-semibold">Price on quote</span>
+					) : (
+						<>
+							{showFrom ? (
+								<span className="text-xs font-medium text-muted-foreground">
+									from{" "}
+								</span>
+							) : null}
+							{formatPrice(product.priceFrom, product.currency)}
+						</>
+					)}
 				</p>
 				{hasOptions ? (
 					<Button

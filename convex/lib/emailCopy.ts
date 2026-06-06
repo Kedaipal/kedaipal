@@ -10,7 +10,8 @@ export type RetailerEmailKey =
 	| "orderConfirmed"
 	| "paymentClaimed"
 	| "mockupApproved"
-	| "mockupChangesRequested";
+	| "mockupChangesRequested"
+	| "mockupDeclined";
 
 export type RetailerEmailVars = {
 	shortId: string;
@@ -148,6 +149,17 @@ const en = {
 		const text = `✏️ Mockup changes requested for ${v.shortId}\n${v.customerName} asked for changes.\n${noteText}\nUpdate and re-send for approval.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
+	mockupDeclined: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `🚫 Custom item declined for ${v.shortId}`;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> — ${escapeHtml(v.customerName)} declined the custom item.`,
+			`The custom line was removed; the order total is now <strong>${escapeHtml(v.totalFormatted)}</strong>.`,
+			`Any remaining ready-made items can proceed as normal.`,
+		];
+		const html = wrapHtml("🚫", `Custom item declined — ${v.shortId}`, lines, v.dashboardUrl, "Open dashboard");
+		const text = `🚫 Custom item declined for ${v.shortId}\n${v.customerName} declined the custom item.\nNew total: ${v.totalFormatted}. Remaining ready-made items can proceed.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
 };
 
 const ms = {
@@ -231,6 +243,17 @@ const ms = {
 			? `Pindaan diminta: ${v.mockupChangeNote}`
 			: `Tiada nota diberikan.`;
 		const text = `✏️ Pindaan mockup diminta untuk ${v.shortId}\n${v.customerName} meminta pindaan.\n${noteText}\nKemas kini dan hantar semula.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	mockupDeclined: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `🚫 Item custom ditolak untuk ${v.shortId}`;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> — ${escapeHtml(v.customerName)} menolak item custom.`,
+			`Baris custom telah dibuang; jumlah pesanan kini <strong>${escapeHtml(v.totalFormatted)}</strong>.`,
+			`Item sedia-ada yang lain boleh diteruskan seperti biasa.`,
+		];
+		const html = wrapHtml("🚫", `Item custom ditolak — ${v.shortId}`, lines, v.dashboardUrl, "Buka dashboard");
+		const text = `🚫 Item custom ditolak untuk ${v.shortId}\n${v.customerName} menolak item custom.\nJumlah baru: ${v.totalFormatted}. Item sedia-ada lain boleh diteruskan.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 };

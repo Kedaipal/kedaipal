@@ -356,6 +356,12 @@ export default defineSchema({
 		mockupSubmittedAt: v.optional(v.number()),
 		mockupApprovedAt: v.optional(v.number()),
 		mockupWaivedAt: v.optional(v.number()), // seller proceeded without approval
+		// Seller's quoted price for the custom (made-to-order) work, in minor
+		// units. Set/updated on each mockup submission (re-priceable per round) and
+		// folded into `total` via computeOrderTotals. Undefined = no quote (the
+		// custom line, if any, is sold at its storefront price). Cleared when the
+		// buyer declines the custom item. See docs/proof-approval.md.
+		mockupQuotedAmount: v.optional(v.number()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
