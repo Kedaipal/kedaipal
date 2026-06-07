@@ -6,7 +6,9 @@ and production is **gated** on the buyer's approval.
 
 **Status: implemented** on `zaki/<proof-approval branch>` — schema, the
 `confirmed→packed` gate, the mockup state machine + mutations, dashboard +
-tracking UI, and notifications (WhatsApp mockup-image-to-buyer + seller email on
+tracking UI, custom-work quote pricing (§11), **payment-ask gating** (the
+"I've paid" prompt is deferred until the mockup gate opens — §11a), and
+notifications (WhatsApp mockup-image-to-buyer + seller email on
 approve/changes). Tests green. **Deferred:** proactive reminder *nudges* (the v1
 waiver is purely time-based — see the note below); per-round mockup images.
 
@@ -125,7 +127,19 @@ quote rides on the mockup approval — they're one decision for the buyer.
 1. Buyer orders the custom variant (snapshot price 0). In-stock lines are reserved as usual; nothing is paid yet.
 2. Seller **submits the mockup with a price** (`submitMockup({ storageId, quotedAmount })`). The quote is re-enterable each round — the latest wins. It folds into `total` immediately as a *proposed* total, and the customer's denormalized `totalSpent` is kept in step via `adjustAggregatesForTotalChange`.
 3. Buyer **approves** (design + price → gate opens, total locks), **requests changes** (loop), or **declines the item**.
-4. Buyer pays the finalized `total` through the existing payment flow — unchanged.
+4. Buyer pays the finalized `total` through the existing payment flow — **but the payment ask is gated** (see below).
+
+### 11a. Payment ask is gated behind the mockup gate
+
+A custom order shouldn't be asked to pay before the buyer has seen and approved
+the design + price — otherwise they'd pay against an unknown (RM0) total. So the
+**"I've paid" prompt is deferred** for any order whose mockup gate is closed.
+
+- **Gate closed** = `mockupStatus` set, not `approved`, and `mockupWaivedAt` unset (`isMockupGateClosed` in `convex/whatsapp.ts`). Surfaced to the confirm flow as `getRetailerLocaleForOrder().mockupPending`.
+- **First bot reply (custom order):** plain-text confirm (`mockupPendingConfirm` system copy) — "order received, a design is coming to approve, no payment needed yet." **No** payment block, **no** QR, **no** "I've paid" CTA.
+- **First bot reply (normal order):** unchanged — full confirm + payment block + "I've paid" CTA.
+- **Gate opens → payment prompt fires.** `approveMockup` (buyer) and `waiveMockup` (seller deadlock escape) both schedule `internal.whatsapp.notifyPaymentDue({ orderId, reason })`, which sends the deferred "I've paid" prompt (intro = `paymentDueApproved` / `paymentDueWaived`, then the standard pickup + transfer-reference + payment block, shared with the confirm reply via `sendPaymentMessage`).
+- **Re-confirm after the gate opens** (buyer re-sends `ORD-XXXX`) takes the normal branch, so the pay button shows again — idempotent.
 
 **Decline (`declineMockupItem`, capability = `shortId`):** drops every
 `requiresProof` line, recomputes `total` (quote cleared), and **re-evaluates the

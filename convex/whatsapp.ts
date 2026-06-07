@@ -8,6 +8,7 @@ import {
 } from "./_generated/server";
 import { linkOrderToCustomer, refreshWaProfileName } from "./customers";
 import { getAdapter } from "./lib/channels/registry";
+import type { ChannelAdapter } from "./lib/channels/types";
 import { assertValidWaPhone } from "./lib/slug";
 import {
 	paymentQrCaption,
@@ -178,6 +179,9 @@ export const getRetailerLocaleForOrder = internalQuery({
 		deliveryMethod: DeliveryMethod;
 		pickupSnapshot: PickupSnapshot | undefined;
 		payment: ResolvedPayment;
+		// True while a custom item still awaits buyer mockup approval — the
+		// payment prompt is deferred until the gate opens (approve or waive).
+		mockupPending: boolean;
 	} | null> => {
 		const order = await ctx.db
 			.query("orders")
@@ -204,9 +208,95 @@ export const getRetailerLocaleForOrder = internalQuery({
 			deliveryMethod: (order.deliveryMethod as DeliveryMethod | undefined) ?? "delivery",
 			pickupSnapshot: order.pickupSnapshot,
 			payment: { instructions, qrImageUrl },
+			mockupPending: isMockupGateClosed(order),
 		};
 	},
 });
+
+/**
+ * The mockup gate is "closed" while a custom item still needs buyer sign-off:
+ * the order carries a `mockupStatus`, it isn't yet `approved`, and the seller
+ * hasn't waived. While closed we defer the payment prompt (no "I've paid").
+ * Open it by approving or waiving. Non-custom orders have no `mockupStatus` and
+ * are never gated.
+ */
+function isMockupGateClosed(order: Doc<"orders">): boolean {
+	return (
+		order.mockupStatus !== undefined &&
+		order.mockupStatus !== "approved" &&
+		order.mockupWaivedAt === undefined
+	);
+}
+
+/**
+ * Send the buyer the payment ask: `introBody` (the confirm template, or a
+ * mockup-approved/waived intro) → [pickup block] → transfer-reference line →
+ * [payment block], rendered as an "I've paid" CTA (degrades to text), followed
+ * by the QR image if configured. Shared by the confirm reply and the
+ * post-mockup payment prompt so both stay byte-for-byte consistent.
+ */
+async function sendPaymentMessage(
+	wa: ChannelAdapter,
+	toPhone: string,
+	args: {
+		introBody: string;
+		locale: Locale;
+		shortId: string;
+		storeName: string;
+		trackingUrl: string;
+		pickupSnapshot: PickupSnapshot | undefined;
+		payment: ResolvedPayment;
+	},
+): Promise<void> {
+	const { introBody, locale, shortId, storeName, trackingUrl, pickupSnapshot, payment } = args;
+	// Hard-coded, non-overridable: tells the shopper to use the order ID as the
+	// transfer reference — the only deterministic way to match a bank
+	// notification to an order, so it's always present.
+	const transferReferenceLine = renderSystemMessage(locale, "transferReferenceLine", {
+		shortId,
+		storeName,
+	});
+	const paymentBlock = renderPaymentInstructions(locale, payment.instructions);
+	const pickupBlock = renderPickupBlock(locale, pickupSnapshot);
+	// Layout: intro → [pickup] → blank line → transfer reference → [payment].
+	// Pickup first so the buyer sees the WHERE before the WHEN/HOW of paying.
+	const withPickup = pickupBlock ? `${introBody}\n${pickupBlock}` : introBody;
+	const withRef = `${withPickup}\n\n${transferReferenceLine}`;
+	const body = paymentBlock ? `${withRef}\n${paymentBlock}` : withRef;
+	const brandImageUrl = "https://kedaipal.com/logo-2.png";
+	// CTA intent — the adapter renders a tappable "I've paid" button in prod and
+	// degrades to a plain image with caption when buttons can't be honoured
+	// (e.g. non-HTTPS APP_URL in dev).
+	try {
+		await wa.send(toPhone, {
+			kind: "cta",
+			body,
+			buttonText: "I've paid",
+			url: trackingUrl,
+			imageUrl: brandImageUrl,
+		});
+	} catch (err) {
+		console.error("WA payment send failed, falling back to text", err);
+		try {
+			await wa.send(toPhone, { kind: "text", body });
+		} catch (textErr) {
+			console.error("WA payment send failed", textErr);
+		}
+	}
+	// QR image, if configured, follows as a separate image so the buyer can
+	// long-press to save it. Failures are isolated from the message above.
+	if (payment.qrImageUrl) {
+		try {
+			await wa.send(toPhone, {
+				kind: "image",
+				imageUrl: payment.qrImageUrl,
+				caption: paymentQrCaption(locale),
+			});
+		} catch (err) {
+			console.error("WA payment QR send failed", err);
+		}
+	}
+}
 
 /**
  * Process an inbound WhatsApp text message. Searches for an ORD-XXXX token,
@@ -272,73 +362,39 @@ export const handleInbound = internalAction({
 		const contactPhone = meta?.retailerWaPhone;
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
 		const trackingUrl = `${appUrl}/track/${shortId}`;
-		const confirmBody = renderMessage(
-			meta?.messageTemplates,
-			locale,
-			"confirm",
-			{ shortId, storeName, contactPhone, trackingUrl, deliveryMethod: meta?.deliveryMethod ?? "delivery" },
-		);
-		// Hard-coded, non-overridable: tells the shopper to use the order ID as
-		// the transfer reference. This is the only deterministic way the retailer
-		// can match a bank notification to an order, so it must always be present
-		// regardless of any retailer-customised confirm template.
-		const transferReferenceLine = renderSystemMessage(
-			locale,
-			"transferReferenceLine",
-			{ shortId, storeName },
-		);
-		const paymentBlock = renderPaymentInstructions(
-			locale,
-			meta?.payment.instructions,
-		);
-		const pickupBlock = renderPickupBlock(locale, meta?.pickupSnapshot);
-		// Layout: confirm → [pickup block] → blank line → transfer reference →
-		// [payment block]. Pickup goes first so the buyer sees the WHERE before
-		// the WHEN/HOW of paying.
-		const confirmWithPickup = pickupBlock
-			? `${confirmBody}\n${pickupBlock}`
-			: confirmBody;
-		const confirmWithRef = `${confirmWithPickup}\n\n${transferReferenceLine}`;
-		const body = paymentBlock
-			? `${confirmWithRef}\n${paymentBlock}`
-			: confirmWithRef;
-		const brandImageUrl = "https://kedaipal.com/logo-2.png";
-		// Emit a CTA intent — the adapter renders it as a tappable "I've paid"
-		// button in prod and degrades to a plain image with caption when the
-		// channel/environment can't honour interactive buttons (e.g. non-HTTPS
-		// APP_URL in dev).
-		try {
-			await wa.send(fromPhone, {
-				kind: "cta",
-				body,
-				buttonText: "I've paid",
-				url: trackingUrl,
-				imageUrl: brandImageUrl,
-			});
-		} catch (err) {
-			// Fall back to plain text if interactive/image send fails
-			console.error("WA confirm send failed, falling back to text", err);
-			try {
-				await wa.send(fromPhone, { kind: "text", body });
-			} catch (textErr) {
-				console.error("WA confirm send failed", textErr);
-			}
-		}
 
-		// QR image, if configured, is sent as a follow-up image message so the
-		// shopper can long-press to save it. Failures are isolated from the text
-		// reply above.
-		const qrUrl = meta?.payment.qrImageUrl;
-		if (qrUrl) {
+		if (meta?.mockupPending) {
+			// Order still has a custom item awaiting buyer mockup approval — defer
+			// the whole payment ask. Send a plain confirm telling them a design is
+			// coming; the "I've paid" prompt follows on approval/waiver (see
+			// notifyPaymentDue). No payment block, no QR, no CTA button.
+			const gatedBody = renderSystemMessage(locale, "mockupPendingConfirm", {
+				shortId,
+				storeName,
+				contactPhone,
+				trackingUrl,
+			});
 			try {
-				await wa.send(fromPhone, {
-					kind: "image",
-					imageUrl: qrUrl,
-					caption: paymentQrCaption(locale),
-				});
+				await wa.send(fromPhone, { kind: "text", body: gatedBody });
 			} catch (err) {
-				console.error("WA payment QR send failed", err);
+				console.error("WA gated-confirm send failed", err);
 			}
+		} else {
+			const confirmBody = renderMessage(
+				meta?.messageTemplates,
+				locale,
+				"confirm",
+				{ shortId, storeName, contactPhone, trackingUrl, deliveryMethod: meta?.deliveryMethod ?? "delivery" },
+			);
+			await sendPaymentMessage(wa, fromPhone, {
+				introBody: confirmBody,
+				locale,
+				shortId,
+				storeName,
+				trackingUrl,
+				pickupSnapshot: meta?.pickupSnapshot,
+				payment: meta?.payment ?? { instructions: undefined, qrImageUrl: undefined },
+			});
 		}
 
 		// Email the retailer about the newly confirmed order (only on first
@@ -554,6 +610,98 @@ export const notifyMockupSubmitted = internalAction({
 				console.error("WA mockup-submitted send failed", textErr);
 			}
 		}
+	},
+});
+
+/**
+ * Internal query: load everything needed to send the buyer a payment prompt
+ * once the mockup gate opens. Distinct from getRetailerLocaleForOrder because
+ * this path is keyed by orderId (scheduled from a mutation) and needs the
+ * buyer's phone.
+ */
+export const getPaymentPromptMeta = internalQuery({
+	args: { orderId: v.id("orders") },
+	handler: async (
+		ctx,
+		{ orderId },
+	): Promise<{
+		shortId: string;
+		customerWaPhone: string | undefined;
+		locale: Locale;
+		storeName: string;
+		pickupSnapshot: PickupSnapshot | undefined;
+		payment: ResolvedPayment;
+	} | null> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) return null;
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) return null;
+		const instructions = retailer.paymentInstructions as
+			| PaymentInstructions
+			| undefined;
+		let qrImageUrl: string | undefined;
+		if (instructions?.qrImageStorageId) {
+			const url = await ctx.storage.getUrl(instructions.qrImageStorageId);
+			qrImageUrl = url ?? undefined;
+		}
+		return {
+			shortId: order.shortId,
+			customerWaPhone: order.customer.waPhone,
+			locale: (retailer.locale as Locale | undefined) ?? "en",
+			storeName: retailer.storeName,
+			pickupSnapshot: order.pickupSnapshot,
+			payment: { instructions, qrImageUrl },
+		};
+	},
+});
+
+/**
+ * Scheduled by orders.approveMockup / orders.waiveMockup. Now that the mockup
+ * gate is open, send the buyer the payment ask (the "I've paid" prompt) that
+ * was deferred at confirm time. `reason` only picks the intro line; the payment
+ * body is identical to the standard confirm reply. Errors swallowed (logged).
+ */
+export const notifyPaymentDue = internalAction({
+	args: {
+		orderId: v.id("orders"),
+		reason: v.union(v.literal("approved"), v.literal("waived")),
+	},
+	handler: async (ctx, { orderId, reason }): Promise<void> => {
+		let meta: {
+			shortId: string;
+			customerWaPhone: string | undefined;
+			locale: Locale;
+			storeName: string;
+			pickupSnapshot: PickupSnapshot | undefined;
+			payment: ResolvedPayment;
+		} | null = null;
+		try {
+			meta = await ctx.runQuery(internal.whatsapp.getPaymentPromptMeta, {
+				orderId,
+			});
+		} catch (err) {
+			console.error("WA payment-due lookup failed", err);
+			return;
+		}
+		if (!meta || !meta.customerWaPhone) return;
+
+		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
+		const trackingUrl = `${appUrl}/track/${meta.shortId}`;
+		const introBody = renderSystemMessage(
+			meta.locale,
+			reason === "approved" ? "paymentDueApproved" : "paymentDueWaived",
+			{ shortId: meta.shortId, storeName: meta.storeName },
+		);
+		const wa = getAdapter("whatsapp");
+		await sendPaymentMessage(wa, meta.customerWaPhone, {
+			introBody,
+			locale: meta.locale,
+			shortId: meta.shortId,
+			storeName: meta.storeName,
+			trackingUrl,
+			pickupSnapshot: meta.pickupSnapshot,
+			payment: meta.payment,
+		});
 	},
 });
 

@@ -993,6 +993,12 @@ export const approveMockup = mutation({
 		await ctx.scheduler.runAfter(0, internal.email.notifyMockupApproved, {
 			orderId: order._id,
 		});
+		// Gate is now open → send the buyer the payment prompt that was deferred
+		// at confirm time (the "I've paid" CTA over WhatsApp).
+		await ctx.scheduler.runAfter(0, internal.whatsapp.notifyPaymentDue, {
+			orderId: order._id,
+			reason: "approved",
+		});
 	},
 });
 
@@ -1065,6 +1071,12 @@ export const waiveMockup = mutation({
 			status: order.status,
 			note: "mockup_waived",
 			createdAt: now,
+		});
+		// Gate forced open without buyer approval → the buyer still needs to pay,
+		// so send the payment prompt deferred at confirm time.
+		await ctx.scheduler.runAfter(0, internal.whatsapp.notifyPaymentDue, {
+			orderId,
+			reason: "waived",
 		});
 	},
 });
