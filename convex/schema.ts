@@ -133,10 +133,12 @@ export default defineSchema({
 				}),
 			),
 		),
-		// When true, a variant with onHand<=0 is unsellable (hard stock block).
-		// Undefined/false = made-to-order: sold-out combos stay sellable (frozen
-		// pack-to-order, metal prints). See docs/product-variants.md §5/§7.
+		// DEPRECATED — moved to productVariants (per-variant). Kept as a read
+		// fallback for variants that haven't been backfilled. See proof-approval.md
+		// + product-variants.md §5/§7.
 		blockWhenOutOfStock: v.optional(v.boolean()),
+		// DEPRECATED — moved to productVariants.requiresProof (per-variant).
+		requiresProof: v.optional(v.boolean()),
 		channel: v.union(v.literal("whatsapp")),
 		sortOrder: v.number(),
 		createdAt: v.number(),
@@ -171,6 +173,14 @@ export default defineSchema({
 		parcelWeightG: v.number(),
 		imageStorageIds: v.array(v.string()),
 		active: v.boolean(),
+		// Per-variant overrides of the (now-deprecated) product-level flags, so a
+		// product can mix stock-tracked sizes with a made-to-order "Custom" size,
+		// or gate only one variant on mockup approval. Reads prefer the variant
+		// value and fall back to the product-level flag for un-backfilled rows.
+		// `true` = hard stock block; undefined/false = made-to-order.
+		blockWhenOutOfStock: v.optional(v.boolean()),
+		// `true` = an order containing THIS variant is mockup-gated.
+		requiresProof: v.optional(v.boolean()),
 		sortOrder: v.number(),
 		createdAt: v.number(),
 		updatedAt: v.number(),
@@ -328,12 +338,37 @@ export default defineSchema({
 		paymentClaimedAt: v.optional(v.number()),
 		paymentReceivedAt: v.optional(v.number()),
 		paymentProofStorageId: v.optional(v.string()),
+		// Mockup/proof approval — a third independent dimension (like payment),
+		// gating the confirmed→packed transition for made-to-order orders.
+		// Undefined = order has no proof-required item (no gate). See
+		// docs/proof-approval.md. NOTE: "mockup" (not "proof") in code — "proof"
+		// is the buyer's PAYMENT screenshot (paymentProofStorageId above).
+		mockupStatus: v.optional(
+			v.union(
+				v.literal("pending"), // needs a mockup; seller hasn't sent one
+				v.literal("submitted"), // seller sent it; awaiting the buyer
+				v.literal("changes_requested"), // buyer wants changes; back to seller
+				v.literal("approved"), // buyer approved; gate open
+			),
+		),
+		mockupImageStorageId: v.optional(v.string()), // current mockup
+		mockupChangeNote: v.optional(v.string()), // buyer's requested changes
+		mockupSubmittedAt: v.optional(v.number()),
+		mockupApprovedAt: v.optional(v.number()),
+		mockupWaivedAt: v.optional(v.number()), // seller proceeded without approval
+		// Seller's quoted price for the custom (made-to-order) work, in minor
+		// units. Set/updated on each mockup submission (re-priceable per round) and
+		// folded into `total` via computeOrderTotals. Undefined = no quote (the
+		// custom line, if any, is sold at its storefront price). Cleared when the
+		// buyer declines the custom item. See docs/proof-approval.md.
+		mockupQuotedAmount: v.optional(v.number()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
 		.index("by_retailer", ["retailerId"])
 		.index("by_retailer_status", ["retailerId", "status"])
 		.index("by_retailer_payment", ["retailerId", "paymentStatus"])
+		.index("by_retailer_mockup", ["retailerId", "mockupStatus"])
 		.index("by_shortId", ["shortId"])
 		.index("by_customer", ["customerId"]),
 

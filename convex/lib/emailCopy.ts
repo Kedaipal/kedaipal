@@ -5,7 +5,13 @@ export type Locale = "en" | "ms";
 
 export type DeliveryMethod = "delivery" | "self_collect";
 
-export type RetailerEmailKey = "newOrder" | "orderConfirmed" | "paymentClaimed";
+export type RetailerEmailKey =
+	| "newOrder"
+	| "orderConfirmed"
+	| "paymentClaimed"
+	| "mockupApproved"
+	| "mockupChangesRequested"
+	| "mockupDeclined";
 
 export type RetailerEmailVars = {
 	shortId: string;
@@ -20,6 +26,12 @@ export type RetailerEmailVars = {
 	// resolved Convex storage URL for the screenshot, if any.
 	paymentReference?: string;
 	proofUrl?: string;
+	// Optional — only set when key === "mockupChangesRequested".
+	mockupChangeNote?: string;
+	// True when the order has a made-to-order custom item that needs a mockup
+	// approved before it can be packed (and before the buyer is asked to pay).
+	// Surfaced on the newOrder / orderConfirmed alerts so the seller knows to act.
+	requiresMockup?: boolean;
 };
 
 const deliveryLabel: Record<Locale, Record<DeliveryMethod, string>> = {
@@ -61,26 +73,35 @@ ${body}
 const en = {
 	newOrder: (v: RetailerEmailVars): RenderedEmail => {
 		const subject = `🔔 New order ${v.shortId} · ${v.totalFormatted}`;
+		const mockupHtml = `⚠️ <strong>Custom item</strong> — send a mockup for the buyer to approve. Payment is held until they do.`;
+		const mockupText = `⚠️ Custom item — send a mockup for the buyer to approve. Payment is held until they do.`;
 		const lines = [
 			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} item(s) · ${escapeHtml(v.totalFormatted)}`,
 			`Customer: ${escapeHtml(v.customerName)}`,
 			`Method: ${deliveryLabel.en[v.deliveryMethod]}`,
+			...(v.requiresMockup ? [mockupHtml] : []),
 			`Open your dashboard to manage this order.`,
 		];
 		const html = wrapHtml("🔔", `New order ${v.shortId}`, lines, v.dashboardUrl, "Open dashboard");
-		const text = `🔔 New order ${v.shortId}\n${v.itemCount} item(s) · ${v.totalFormatted}\nCustomer: ${v.customerName}\nMethod: ${deliveryLabel.en[v.deliveryMethod]}\n\nOpen your dashboard to manage this order.\n${v.dashboardUrl}`;
+		const text = `🔔 New order ${v.shortId}\n${v.itemCount} item(s) · ${v.totalFormatted}\nCustomer: ${v.customerName}\nMethod: ${deliveryLabel.en[v.deliveryMethod]}\n${v.requiresMockup ? `\n${mockupText}\n` : ""}\nOpen your dashboard to manage this order.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	orderConfirmed: (v: RetailerEmailVars): RenderedEmail => {
 		const subject = `✅ Order ${v.shortId} confirmed · ${v.totalFormatted}`;
+		const nextStepsHtml = v.requiresMockup
+			? `⚠️ <strong>Custom item</strong> — send a mockup for the buyer to approve before packing. Payment is held until they approve.`
+			: `Ready for next steps — pack and ship when payment lands.`;
+		const nextStepsText = v.requiresMockup
+			? `⚠️ Custom item — send a mockup for the buyer to approve before packing. Payment is held until they approve.`
+			: `Ready for next steps — pack and ship when payment lands.`;
 		const lines = [
 			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} item(s) · ${escapeHtml(v.totalFormatted)}`,
 			`Customer: ${escapeHtml(v.customerName)}`,
 			`Method: ${deliveryLabel.en[v.deliveryMethod]}`,
-			`Ready for next steps — pack and ship when payment lands.`,
+			nextStepsHtml,
 		];
 		const html = wrapHtml("✅", `Order ${v.shortId} confirmed`, lines, v.dashboardUrl, "Open dashboard");
-		const text = `✅ Order ${v.shortId} confirmed\n${v.itemCount} item(s) · ${v.totalFormatted}\nCustomer: ${v.customerName}\nMethod: ${deliveryLabel.en[v.deliveryMethod]}\n\nReady for next steps.\n${v.dashboardUrl}`;
+		const text = `✅ Order ${v.shortId} confirmed\n${v.itemCount} item(s) · ${v.totalFormatted}\nCustomer: ${v.customerName}\nMethod: ${deliveryLabel.en[v.deliveryMethod]}\n\n${nextStepsText}\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	paymentClaimed: (v: RetailerEmailVars): RenderedEmail => {
@@ -114,31 +135,78 @@ const en = {
 		const text = `🪙 Payment claimed for ${v.shortId}\n${v.itemCount} item(s) · ${v.totalFormatted}\nCustomer: ${v.customerName}\n${refTextLine}\n${proofTextLine}\n\nVerify in your bank app, then confirm in your dashboard.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
+	mockupApproved: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `🎨 Mockup approved for ${v.shortId}`;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> — ${escapeHtml(v.customerName)} approved the mockup.`,
+			`You're clear to produce and pack this order.`,
+		];
+		const html = wrapHtml("🎨", `Mockup approved — ${v.shortId}`, lines, v.dashboardUrl, "Open dashboard");
+		const text = `🎨 Mockup approved for ${v.shortId}\n${v.customerName} approved the mockup — you're clear to produce.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	mockupChangesRequested: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `✏️ Mockup changes requested for ${v.shortId}`;
+		const noteLine = v.mockupChangeNote
+			? `Requested changes: <em>${escapeHtml(v.mockupChangeNote)}</em>`
+			: `No note provided.`;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> — ${escapeHtml(v.customerName)} asked for changes to the mockup.`,
+			noteLine,
+			`Update the mockup and re-send it for approval.`,
+		];
+		const html = wrapHtml("✏️", `Changes requested — ${v.shortId}`, lines, v.dashboardUrl, "Open dashboard");
+		const noteText = v.mockupChangeNote
+			? `Requested changes: ${v.mockupChangeNote}`
+			: `No note provided.`;
+		const text = `✏️ Mockup changes requested for ${v.shortId}\n${v.customerName} asked for changes.\n${noteText}\nUpdate and re-send for approval.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	mockupDeclined: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `🚫 Custom item declined for ${v.shortId}`;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> — ${escapeHtml(v.customerName)} declined the custom item.`,
+			`The custom line was removed; the order total is now <strong>${escapeHtml(v.totalFormatted)}</strong>.`,
+			`Any remaining ready-made items can proceed as normal.`,
+		];
+		const html = wrapHtml("🚫", `Custom item declined — ${v.shortId}`, lines, v.dashboardUrl, "Open dashboard");
+		const text = `🚫 Custom item declined for ${v.shortId}\n${v.customerName} declined the custom item.\nNew total: ${v.totalFormatted}. Remaining ready-made items can proceed.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
 };
 
 const ms = {
 	newOrder: (v: RetailerEmailVars): RenderedEmail => {
 		const subject = `🔔 Pesanan baru ${v.shortId} · ${v.totalFormatted}`;
+		const mockupHtml = `⚠️ <strong>Item custom</strong> — hantar mockup untuk kelulusan pembeli. Bayaran ditahan sehingga mereka luluskan.`;
+		const mockupText = `⚠️ Item custom — hantar mockup untuk kelulusan pembeli. Bayaran ditahan sehingga mereka luluskan.`;
 		const lines = [
 			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} item · ${escapeHtml(v.totalFormatted)}`,
 			`Pelanggan: ${escapeHtml(v.customerName)}`,
 			`Kaedah: ${deliveryLabel.ms[v.deliveryMethod]}`,
+			...(v.requiresMockup ? [mockupHtml] : []),
 			`Buka dashboard anda untuk menguruskan pesanan ini.`,
 		];
 		const html = wrapHtml("🔔", `Pesanan baru ${v.shortId}`, lines, v.dashboardUrl, "Buka dashboard");
-		const text = `🔔 Pesanan baru ${v.shortId}\n${v.itemCount} item · ${v.totalFormatted}\nPelanggan: ${v.customerName}\nKaedah: ${deliveryLabel.ms[v.deliveryMethod]}\n\nBuka dashboard anda untuk menguruskan pesanan ini.\n${v.dashboardUrl}`;
+		const text = `🔔 Pesanan baru ${v.shortId}\n${v.itemCount} item · ${v.totalFormatted}\nPelanggan: ${v.customerName}\nKaedah: ${deliveryLabel.ms[v.deliveryMethod]}\n${v.requiresMockup ? `\n${mockupText}\n` : ""}\nBuka dashboard anda untuk menguruskan pesanan ini.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	orderConfirmed: (v: RetailerEmailVars): RenderedEmail => {
 		const subject = `✅ Pesanan ${v.shortId} disahkan · ${v.totalFormatted}`;
+		const nextStepsHtml = v.requiresMockup
+			? `⚠️ <strong>Item custom</strong> — hantar mockup untuk kelulusan pembeli sebelum membungkus. Bayaran ditahan sehingga mereka luluskan.`
+			: `Sedia untuk langkah seterusnya.`;
+		const nextStepsText = v.requiresMockup
+			? `⚠️ Item custom — hantar mockup untuk kelulusan pembeli sebelum membungkus. Bayaran ditahan sehingga mereka luluskan.`
+			: `Sedia untuk langkah seterusnya.`;
 		const lines = [
 			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} item · ${escapeHtml(v.totalFormatted)}`,
 			`Pelanggan: ${escapeHtml(v.customerName)}`,
 			`Kaedah: ${deliveryLabel.ms[v.deliveryMethod]}`,
-			`Sedia untuk langkah seterusnya.`,
+			nextStepsHtml,
 		];
 		const html = wrapHtml("✅", `Pesanan ${v.shortId} disahkan`, lines, v.dashboardUrl, "Buka dashboard");
-		const text = `✅ Pesanan ${v.shortId} telah disahkan\n${v.itemCount} item · ${v.totalFormatted}\nPelanggan: ${v.customerName}\nKaedah: ${deliveryLabel.ms[v.deliveryMethod]}\n\nSedia untuk langkah seterusnya.\n${v.dashboardUrl}`;
+		const text = `✅ Pesanan ${v.shortId} telah disahkan\n${v.itemCount} item · ${v.totalFormatted}\nPelanggan: ${v.customerName}\nKaedah: ${deliveryLabel.ms[v.deliveryMethod]}\n\n${nextStepsText}\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	paymentClaimed: (v: RetailerEmailVars): RenderedEmail => {
@@ -170,6 +238,44 @@ const ms = {
 			? `Tangkapan resit: ${v.proofUrl}`
 			: `Tangkapan resit: tidak dinyatakan`;
 		const text = `🪙 Pembayaran diterima untuk ${v.shortId}\n${v.itemCount} item · ${v.totalFormatted}\nPelanggan: ${v.customerName}\n${refTextLine}\n${proofTextLine}\n\nSahkan di aplikasi bank anda, kemudian sahkan di dashboard.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	mockupApproved: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `🎨 Mockup diluluskan untuk ${v.shortId}`;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> — ${escapeHtml(v.customerName)} telah meluluskan mockup.`,
+			`Anda boleh teruskan pengeluaran dan pembungkusan.`,
+		];
+		const html = wrapHtml("🎨", `Mockup diluluskan — ${v.shortId}`, lines, v.dashboardUrl, "Buka dashboard");
+		const text = `🎨 Mockup diluluskan untuk ${v.shortId}\n${v.customerName} telah meluluskan mockup — anda boleh teruskan.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	mockupChangesRequested: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `✏️ Pindaan mockup diminta untuk ${v.shortId}`;
+		const noteLine = v.mockupChangeNote
+			? `Pindaan diminta: <em>${escapeHtml(v.mockupChangeNote)}</em>`
+			: `Tiada nota diberikan.`;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> — ${escapeHtml(v.customerName)} meminta pindaan pada mockup.`,
+			noteLine,
+			`Kemas kini mockup dan hantar semula untuk kelulusan.`,
+		];
+		const html = wrapHtml("✏️", `Pindaan diminta — ${v.shortId}`, lines, v.dashboardUrl, "Buka dashboard");
+		const noteText = v.mockupChangeNote
+			? `Pindaan diminta: ${v.mockupChangeNote}`
+			: `Tiada nota diberikan.`;
+		const text = `✏️ Pindaan mockup diminta untuk ${v.shortId}\n${v.customerName} meminta pindaan.\n${noteText}\nKemas kini dan hantar semula.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	mockupDeclined: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `🚫 Item custom ditolak untuk ${v.shortId}`;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> — ${escapeHtml(v.customerName)} menolak item custom.`,
+			`Baris custom telah dibuang; jumlah pesanan kini <strong>${escapeHtml(v.totalFormatted)}</strong>.`,
+			`Item sedia-ada yang lain boleh diteruskan seperti biasa.`,
+		];
+		const html = wrapHtml("🚫", `Item custom ditolak — ${v.shortId}`, lines, v.dashboardUrl, "Buka dashboard");
+		const text = `🚫 Item custom ditolak untuk ${v.shortId}\n${v.customerName} menolak item custom.\nJumlah baru: ${v.totalFormatted}. Item sedia-ada lain boleh diteruskan.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 };

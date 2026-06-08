@@ -45,6 +45,7 @@ async function seedProduct(
 		currency: string;
 		stock: number;
 		blockWhenOutOfStock: boolean;
+		requiresProof: boolean;
 	}> = {},
 ): Promise<Id<"products">> {
 	const asUser = t.withIdentity({ subject: userId });
@@ -55,6 +56,7 @@ async function seedProduct(
 		imageStorageIds: [],
 		sortOrder: 0,
 		blockWhenOutOfStock: overrides.blockWhenOutOfStock ?? true,
+		requiresProof: overrides.requiresProof ?? false,
 		variants: [
 			{
 				optionValues: [],
@@ -1464,5 +1466,706 @@ describe("orders — self-collect pickup invariants", () => {
 				pickupLocationId,
 			}),
 		).rejects.toThrow(/Delivery orders/);
+	});
+});
+
+describe("orders — mockup approval", () => {
+	async function gatedOrder(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			requiresProof: true,
+			blockWhenOutOfStock: false,
+		});
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { shortId });
+		return { retailer, shortId, order: order! };
+	}
+
+	const asA = (t: ReturnType<typeof setup>) =>
+		t.withIdentity({ subject: USER_A });
+
+	test("an order with a requiresProof item starts at mockupStatus pending", async () => {
+		const t = setup();
+		const { order } = await gatedOrder(t);
+		expect(order.mockupStatus).toBe("pending");
+	});
+
+	test("an order with no requiresProof item is not gated", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { shortId });
+		expect(order?.mockupStatus).toBeUndefined();
+	});
+
+	test("the gate blocks → packed until approved, then allows it", async () => {
+		const t = setup();
+		const { shortId, order } = await gatedOrder(t);
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "confirmed",
+		});
+		// Gated: can't pack yet.
+		await expect(
+			asA(t).mutation(api.orders.updateStatus, {
+				orderId: order._id,
+				status: "packed",
+			}),
+		).rejects.toThrow(/mockup approval/i);
+
+		// Seller submits, buyer approves.
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "mock-1",
+		});
+		await t.mutation(api.orders.approveMockup, { shortId });
+		const approved = await t.query(api.orders.get, { shortId });
+		expect(approved?.mockupStatus).toBe("approved");
+
+		// Now packing succeeds.
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "packed",
+		});
+		expect((await t.query(api.orders.get, { shortId }))?.status).toBe("packed");
+	});
+
+	test("the gate blocks seller markPaymentReceived until approved", async () => {
+		const t = setup();
+		const { shortId, order } = await gatedOrder(t);
+
+		// Gated (mockupStatus pending): seller can't mark payment received.
+		await expect(
+			asA(t).mutation(api.orders.markPaymentReceived, { orderId: order._id }),
+		).rejects.toThrow(/Approve or remove the custom item/i);
+
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "mock-1",
+		});
+		await t.mutation(api.orders.approveMockup, { shortId });
+
+		// Gate open → marking payment received now succeeds.
+		await asA(t).mutation(api.orders.markPaymentReceived, {
+			orderId: order._id,
+		});
+		expect((await t.query(api.orders.get, { shortId }))?.paymentStatus).toBe(
+			"received",
+		);
+	});
+
+	test("the gate blocks buyer claimPayment until approved", async () => {
+		const t = setup();
+		const { shortId, order } = await gatedOrder(t);
+
+		await expect(
+			t.mutation(api.orders.claimPayment, { shortId }),
+		).rejects.toThrow(/approve the mockup before paying/i);
+
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "mock-1",
+		});
+		await t.mutation(api.orders.approveMockup, { shortId });
+
+		await t.mutation(api.orders.claimPayment, { shortId });
+		expect((await t.query(api.orders.get, { shortId }))?.paymentStatus).toBe(
+			"claimed",
+		);
+	});
+
+	test("a waived order lets the seller mark payment received", async () => {
+		const t = setup();
+		const { shortId, order } = await gatedOrder(t);
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "mock-1",
+		});
+		// Force the grace window to have elapsed (48h grace), then waive.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order._id, {
+				mockupSubmittedAt: Date.now() - 49 * 60 * 60 * 1000,
+			});
+		});
+		await asA(t).mutation(api.orders.waiveMockup, { orderId: order._id });
+
+		await asA(t).mutation(api.orders.markPaymentReceived, {
+			orderId: order._id,
+		});
+		expect((await t.query(api.orders.get, { shortId }))?.paymentStatus).toBe(
+			"received",
+		);
+	});
+
+	test("submit → request changes → resubmit loops back to submitted", async () => {
+		const t = setup();
+		const { shortId, order } = await gatedOrder(t);
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "mock-1",
+		});
+		await t.mutation(api.orders.requestMockupChanges, {
+			shortId,
+			note: "make it bigger",
+		});
+		let o = await t.query(api.orders.get, { shortId });
+		expect(o?.mockupStatus).toBe("changes_requested");
+		expect(o?.mockupChangeNote).toBe("make it bigger");
+
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "mock-2",
+		});
+		o = await t.query(api.orders.get, { shortId });
+		expect(o?.mockupStatus).toBe("submitted");
+		expect(o?.mockupChangeNote).toBeUndefined(); // cleared on resubmit
+	});
+
+	test("approveMockup rejects when nothing is awaiting approval", async () => {
+		const t = setup();
+		const { shortId } = await gatedOrder(t); // still 'pending', no mockup sent
+		await expect(
+			t.mutation(api.orders.approveMockup, { shortId }),
+		).rejects.toThrow(/awaiting your approval/i);
+	});
+
+	test("waive is blocked before the grace window, allowed after", async () => {
+		const t = setup();
+		const { shortId, order } = await gatedOrder(t);
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "mock-1",
+		});
+		// Too soon.
+		await expect(
+			asA(t).mutation(api.orders.waiveMockup, { orderId: order._id }),
+		).rejects.toThrow(/after the buyer has had time/i);
+
+		// Backdate the submission past the grace window.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order._id, {
+				mockupSubmittedAt: Date.now() - 49 * 60 * 60 * 1000,
+			});
+		});
+		await asA(t).mutation(api.orders.waiveMockup, { orderId: order._id });
+		const waived = await t.query(api.orders.get, { shortId });
+		expect(waived?.mockupWaivedAt).toBeTypeOf("number");
+
+		// Waiver opens the gate.
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "confirmed",
+		});
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "packed",
+		});
+		expect((await t.query(api.orders.get, { shortId }))?.status).toBe("packed");
+	});
+
+	test("a gated order can still be cancelled (the gate only blocks production)", async () => {
+		const t = setup();
+		const { order } = await gatedOrder(t);
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "cancelled",
+		});
+		// No throw — cancellation isn't gated.
+	});
+
+	test("mockup mutations reject a non-owner / unauthenticated caller", async () => {
+		const t = setup();
+		const { order } = await gatedOrder(t);
+		await expect(
+			t.mutation(api.orders.submitMockup, {
+				orderId: order._id,
+				storageId: "x",
+			}),
+		).rejects.toThrow(/Not authenticated/);
+		const asB = t.withIdentity({ subject: USER_B });
+		await expect(
+			asB.mutation(api.orders.waiveMockup, { orderId: order._id }),
+		).rejects.toThrow(/Forbidden/);
+	});
+});
+
+describe("orders — per-variant flags", () => {
+	// The art-on-print case: fixed sizes are normal stock items (hard-block,
+	// no proof); the "Custom" variant is made-to-order (never blocks) and needs
+	// buyer mockup approval. Both flags are set per-row, not on the product.
+	async function seedArtPrint(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const productId = await asUser.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Art print",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [{ name: "Size", values: ["10x10", "Custom"] }],
+			variants: [
+				{
+					optionValues: ["10x10"],
+					price: 5000,
+					onHand: 3,
+					blockWhenOutOfStock: true,
+					requiresProof: false,
+				},
+				{
+					optionValues: ["Custom"],
+					price: 0,
+					onHand: 0,
+					blockWhenOutOfStock: false,
+					requiresProof: true,
+				},
+			],
+		});
+		const variants = await t.run(async (ctx) =>
+			ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", productId))
+				.collect(),
+		);
+		const fixed = variants.find((v) => v.optionValues[0] === "10x10")!;
+		const custom = variants.find((v) => v.optionValues[0] === "Custom")!;
+		return { retailer, productId, fixed, custom };
+	}
+
+	test("ordering only a fixed-size variant does NOT gate the order", async () => {
+		const t = setup();
+		const { retailer, fixed } = await seedArtPrint(t);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ variantId: fixed._id, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { shortId });
+		expect(order?.mockupStatus).toBeUndefined();
+		// Hard-block variant was decremented.
+		expect((await t.run(async (ctx) => ctx.db.get(fixed._id)))?.onHand).toBe(2);
+	});
+
+	test("ordering the Custom variant gates the order on mockup approval", async () => {
+		const t = setup();
+		const { retailer, custom } = await seedArtPrint(t);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ variantId: custom._id, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { shortId });
+		expect(order?.mockupStatus).toBe("pending");
+	});
+
+	test("the Custom (made-to-order) variant sells at zero stock and never decrements", async () => {
+		const t = setup();
+		const { retailer, custom } = await seedArtPrint(t);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ variantId: custom._id, quantity: 7 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		expect(shortId).toMatch(/^ORD-/);
+		// onHand stays at 0 — made-to-order variants are never reserved.
+		expect((await t.run(async (ctx) => ctx.db.get(custom._id)))?.onHand).toBe(0);
+	});
+
+	test("a fixed-size variant still rejects when it runs out of stock", async () => {
+		const t = setup();
+		const { retailer, fixed } = await seedArtPrint(t);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ variantId: fixed._id, quantity: 99 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+			}),
+		).rejects.toThrow(/in stock/);
+	});
+
+	test("cancelling restores stock only for the hard-block variant in a mixed order", async () => {
+		const t = setup();
+		const { retailer, fixed, custom } = await seedArtPrint(t);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [
+				{ variantId: fixed._id, quantity: 2 },
+				{ variantId: custom._id, quantity: 1 },
+			],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		// Fixed decremented 3 → 1; custom untouched at 0.
+		expect((await t.run(async (ctx) => ctx.db.get(fixed._id)))?.onHand).toBe(1);
+		const order = await t.query(api.orders.get, { shortId });
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orders.updateStatus, {
+				orderId: order!._id,
+				status: "cancelled",
+			});
+		// Fixed restored to 3; custom still 0 (was never decremented).
+		expect((await t.run(async (ctx) => ctx.db.get(fixed._id)))?.onHand).toBe(3);
+		expect((await t.run(async (ctx) => ctx.db.get(custom._id)))?.onHand).toBe(0);
+	});
+
+	test("storefront inStock is true for a mixed product even when fixed sizes sell out", async () => {
+		const t = setup();
+		const { productId, fixed } = await seedArtPrint(t);
+		// Drain the fixed size to zero.
+		await t.run(async (ctx) => ctx.db.patch(fixed._id, { onHand: 0 }));
+		const product = await t.query(api.products.get, { productId });
+		// The made-to-order Custom variant keeps the product sellable.
+		expect(product?.inStock).toBe(true);
+	});
+});
+
+describe("orders — custom quote + decline", () => {
+	const asA = (t: ReturnType<typeof setup>) => t.withIdentity({ subject: USER_A });
+
+	// A mixed art-print: one fixed-size stock item + one made-to-order "Custom"
+	// (RM0 storefront price, requiresProof). Returns both variants + a seeded
+	// order containing the requested lines.
+	async function seedOrder(
+		t: ReturnType<typeof setup>,
+		opts: { fixedQty?: number; customQty?: number } = {},
+	) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await asA(t).mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Art print",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [{ name: "Size", values: ["10x10", "Custom"] }],
+			variants: [
+				{
+					optionValues: ["10x10"],
+					price: 5000,
+					onHand: 5,
+					blockWhenOutOfStock: true,
+					requiresProof: false,
+				},
+				{
+					optionValues: ["Custom"],
+					price: 0,
+					onHand: 0,
+					blockWhenOutOfStock: false,
+					requiresProof: true,
+				},
+			],
+		});
+		const variants = await t.run(async (ctx) =>
+			ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", productId))
+				.collect(),
+		);
+		const fixed = variants.find((v) => v.optionValues[0] === "10x10")!;
+		const custom = variants.find((v) => v.optionValues[0] === "Custom")!;
+		const items: { variantId: Id<"productVariants">; quantity: number }[] = [];
+		if (opts.fixedQty) items.push({ variantId: fixed._id, quantity: opts.fixedQty });
+		if (opts.customQty)
+			items.push({ variantId: custom._id, quantity: opts.customQty });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items,
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = (await t.query(api.orders.get, { shortId }))!;
+		return { retailer, productId, fixed, custom, shortId, order };
+	}
+
+	/** Read a customer's denormalized totalSpent by phone. */
+	async function totalSpent(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+	): Promise<number> {
+		return t.run(async (ctx) => {
+			const c = await ctx.db
+				.query("customers")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			return c?.totalSpent ?? 0;
+		});
+	}
+
+	test("submitMockup with a quote raises the order total", async () => {
+		const t = setup();
+		const { order, shortId } = await seedOrder(t, { fixedQty: 1, customQty: 1 });
+		expect(order.total).toBe(5000); // custom line is RM0 at checkout
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "mock-1",
+			quotedAmount: 12000,
+		});
+		const after = await t.query(api.orders.get, { shortId });
+		expect(after?.mockupQuotedAmount).toBe(12000);
+		expect(after?.subtotal).toBe(5000);
+		expect(after?.total).toBe(17000);
+	});
+
+	test("re-pricing across rounds: latest quote wins in the total", async () => {
+		const t = setup();
+		const { order, shortId } = await seedOrder(t, { fixedQty: 1, customQty: 1 });
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "m1",
+			quotedAmount: 12000,
+		});
+		await t.mutation(api.orders.requestMockupChanges, { shortId, note: "bigger" });
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "m2",
+			quotedAmount: 15000,
+		});
+		const after = await t.query(api.orders.get, { shortId });
+		expect(after?.mockupQuotedAmount).toBe(15000);
+		expect(after?.total).toBe(20000);
+	});
+
+	test("updateMockupQuote re-prices without re-pinging or resetting the waiver clock", async () => {
+		const t = setup();
+		const { order, shortId } = await seedOrder(t, { fixedQty: 1, customQty: 1 });
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "m1",
+			quotedAmount: 12000,
+		});
+		const submitted = await t.query(api.orders.get, { shortId });
+		const submittedAt = submitted?.mockupSubmittedAt;
+		expect(submittedAt).toBeDefined();
+
+		// Count the WA mockup-submit jobs already scheduled (one from submitMockup).
+		const jobsBefore = await t.run((ctx) =>
+			ctx.db.system.query("_scheduled_functions").collect(),
+		);
+		const pingsBefore = jobsBefore.filter((j) =>
+			j.name.includes("notifyMockupSubmitted"),
+		).length;
+
+		await asA(t).mutation(api.orders.updateMockupQuote, {
+			orderId: order._id,
+			quotedAmount: 18000,
+		});
+
+		const after = await t.query(api.orders.get, { shortId });
+		expect(after?.mockupQuotedAmount).toBe(18000);
+		expect(after?.total).toBe(23000); // 5000 fixed + 18000 quote
+		// Status + waiver clock untouched — the buyer sees the price live.
+		expect(after?.mockupStatus).toBe("submitted");
+		expect(after?.mockupSubmittedAt).toBe(submittedAt);
+		// No new "review your mockup" WhatsApp ping scheduled.
+		const jobsAfter = await t.run((ctx) =>
+			ctx.db.system.query("_scheduled_functions").collect(),
+		);
+		const pingsAfter = jobsAfter.filter((j) =>
+			j.name.includes("notifyMockupSubmitted"),
+		).length;
+		expect(pingsAfter).toBe(pingsBefore);
+	});
+
+	test("updateMockupQuote keeps the customer's totalSpent in step", async () => {
+		const t = setup();
+		const { retailer, order } = await seedOrder(t, { fixedQty: 1, customQty: 1 });
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "m1",
+			quotedAmount: 12000,
+		});
+		expect(await totalSpent(t, retailer._id)).toBe(17000);
+		await asA(t).mutation(api.orders.updateMockupQuote, {
+			orderId: order._id,
+			quotedAmount: 9000,
+		});
+		expect(await totalSpent(t, retailer._id)).toBe(14000);
+	});
+
+	test("updateMockupQuote rejects before a mockup is sent and after approval", async () => {
+		const t = setup();
+		const { order, shortId } = await seedOrder(t, { fixedQty: 1, customQty: 1 });
+		// No mockup image yet → rejected.
+		await expect(
+			asA(t).mutation(api.orders.updateMockupQuote, {
+				orderId: order._id,
+				quotedAmount: 9000,
+			}),
+		).rejects.toThrow(/Send the mockup before pricing/i);
+
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "m1",
+			quotedAmount: 12000,
+		});
+		await t.mutation(api.orders.approveMockup, { shortId });
+		// Approved → locked, can't re-price.
+		await expect(
+			asA(t).mutation(api.orders.updateMockupQuote, {
+				orderId: order._id,
+				quotedAmount: 9000,
+			}),
+		).rejects.toThrow(/already approved/i);
+	});
+
+	test("approve locks the quoted total", async () => {
+		const t = setup();
+		const { order, shortId } = await seedOrder(t, { fixedQty: 1, customQty: 1 });
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "m1",
+			quotedAmount: 12000,
+		});
+		await t.mutation(api.orders.approveMockup, { shortId });
+		const after = await t.query(api.orders.get, { shortId });
+		expect(after?.mockupStatus).toBe("approved");
+		expect(after?.total).toBe(17000);
+	});
+
+	test("the quote keeps the customer's totalSpent in step", async () => {
+		const t = setup();
+		const { retailer, order } = await seedOrder(t, { fixedQty: 1, customQty: 1 });
+		expect(await totalSpent(t, retailer._id)).toBe(5000);
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "m1",
+			quotedAmount: 12000,
+		});
+		expect(await totalSpent(t, retailer._id)).toBe(17000);
+	});
+
+	test("decline on a mixed order drops the custom line, recomputes, opens the gate", async () => {
+		const t = setup();
+		const { retailer, order, shortId, fixed } = await seedOrder(t, {
+			fixedQty: 2,
+			customQty: 1,
+		});
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "m1",
+			quotedAmount: 12000,
+		});
+		// total = 2*5000 + 12000 = 22000; totalSpent tracks it.
+		expect(await totalSpent(t, retailer._id)).toBe(22000);
+
+		await t.mutation(api.orders.declineMockupItem, { shortId });
+		const after = await t.query(api.orders.get, { shortId });
+		// Custom line gone, quote cleared, total back to the fixed items.
+		expect(after?.items).toHaveLength(1);
+		expect(after?.items[0].variantId).toBe(fixed._id);
+		expect(after?.total).toBe(10000);
+		expect(after?.mockupQuotedAmount).toBeUndefined();
+		expect(after?.mockupStatus).toBeUndefined();
+		expect(after?.status).not.toBe("cancelled");
+		expect(await totalSpent(t, retailer._id)).toBe(10000);
+
+		// The buyer is nudged to pay for the remaining ready-made items over
+		// WhatsApp (the gate just opened on a still-unpaid order).
+		const jobs = await t.run((ctx) =>
+			ctx.db.system.query("_scheduled_functions").collect(),
+		);
+		expect(
+			jobs.some(
+				(j) =>
+					j.name.includes("notifyPaymentDue") &&
+					(j.args as Array<{ reason?: string }>)[0]?.reason === "declined",
+			),
+		).toBe(true);
+
+		// Gate is open — the order can now be packed.
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "confirmed",
+		});
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "packed",
+		});
+		expect((await t.query(api.orders.get, { shortId }))?.status).toBe("packed");
+	});
+
+	test("decline on a custom-only order cancels it", async () => {
+		const t = setup();
+		const { retailer, order, shortId } = await seedOrder(t, { customQty: 1 });
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "m1",
+			quotedAmount: 12000,
+		});
+		await t.mutation(api.orders.declineMockupItem, { shortId });
+		const after = await t.query(api.orders.get, { shortId });
+		expect(after?.status).toBe("cancelled");
+		expect(after?.mockupStatus).toBeUndefined();
+		// Aggregates fully reversed for the cancelled order.
+		expect(await totalSpent(t, retailer._id)).toBe(0);
+
+		// Nothing left to pay for → no payment nudge (unlike the mixed-order case).
+		const jobs = await t.run((ctx) =>
+			ctx.db.system.query("_scheduled_functions").collect(),
+		);
+		expect(jobs.some((j) => j.name.includes("notifyPaymentDue"))).toBe(false);
+	});
+
+	test("decline is rejected once the mockup is approved", async () => {
+		const t = setup();
+		const { order, shortId } = await seedOrder(t, { fixedQty: 1, customQty: 1 });
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "m1",
+			quotedAmount: 12000,
+		});
+		await t.mutation(api.orders.approveMockup, { shortId });
+		await expect(
+			t.mutation(api.orders.declineMockupItem, { shortId }),
+		).rejects.toThrow(/already been approved/i);
+	});
+
+	test("submitMockup rejects a negative or oversized quote", async () => {
+		const t = setup();
+		const { order } = await seedOrder(t, { fixedQty: 1, customQty: 1 });
+		await expect(
+			asA(t).mutation(api.orders.submitMockup, {
+				orderId: order._id,
+				storageId: "m1",
+				quotedAmount: -100,
+			}),
+		).rejects.toThrow(/non-negative/i);
+		await expect(
+			asA(t).mutation(api.orders.submitMockup, {
+				orderId: order._id,
+				storageId: "m1",
+				quotedAmount: 100_000_001,
+			}),
+		).rejects.toThrow(/unrealistically large/i);
 	});
 });

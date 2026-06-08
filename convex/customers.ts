@@ -302,6 +302,25 @@ export async function decrementAggregatesForCancel(
 	});
 }
 
+/**
+ * Adjust a customer's `totalSpent` by a signed delta (minor units) when an
+ * order's total changes *without* changing the order count — e.g. a made-to-order
+ * quote is added/revised on the mockup, or the buyer declines the custom item.
+ * `orderCount` is intentionally left alone (still one order). Floors at zero.
+ */
+export async function adjustAggregatesForTotalChange(
+	ctx: MutationCtx,
+	{ customerId, delta }: { customerId: Id<"customers">; delta: number },
+): Promise<void> {
+	if (delta === 0) return;
+	const customer = await ctx.db.get(customerId);
+	if (!customer) return;
+	await ctx.db.patch(customerId, {
+		totalSpent: Math.max(0, customer.totalSpent + delta),
+		updatedAt: Date.now(),
+	});
+}
+
 // ---------------------------------------------------------------------------
 // Backfill migration
 // ---------------------------------------------------------------------------

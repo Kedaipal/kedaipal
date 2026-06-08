@@ -125,25 +125,43 @@ async function productWithVariants(
 ) {
 	const base = await withImageUrls(ctx, product);
 	const all = await loadVariants(ctx, product._id);
-	const variants = opts.activeOnly ? all.filter((vr) => vr.active) : all;
-	const prices = variants.map((vr) => vr.price);
+	// Resolve the per-variant flags, falling back to the (deprecated) product-level
+	// defaults so legacy variants that predate the per-variant columns keep behaving
+	// exactly as before. Downstream callers (storefront sellability, order create)
+	// read these resolved values, never the raw nullable columns.
+	const resolved = all.map((vr) => ({
+		...vr,
+		blockWhenOutOfStock: vr.blockWhenOutOfStock ?? product.blockWhenOutOfStock,
+		requiresProof: vr.requiresProof ?? product.requiresProof,
+	}));
+	const variants = opts.activeOnly ? resolved.filter((vr) => vr.active) : resolved;
+	// A made-to-order variant at price 0 is "price on quote" — the seller sets the
+	// real price on the mockup. Exclude those from the displayed range so a mixed
+	// listing reads "from RM50" (its priced sizes) instead of a misleading "RM0".
+	const isQuoteVariant = (vr: { requiresProof?: boolean; price: number }) =>
+		vr.requiresProof === true && vr.price === 0;
+	const prices = variants.filter((vr) => !isQuoteVariant(vr)).map((vr) => vr.price);
+	const hasQuotePricing = variants.some(isQuoteVariant);
 	const totalOnHand = variants.reduce((sum, vr) => sum + vr.onHand, 0);
 	// Availability is always judged on ACTIVE variants only, regardless of which
 	// set we're returning — otherwise the dashboard read (activeOnly:false) would
 	// count deactivated variants' stock and report a sold-out product as in stock.
-	const activeOnHand = all
+	// A variant contributes to "in stock" if it's made-to-order (never blocks) OR
+	// it hard-blocks but still has on-hand units. Now resolved per-variant, so a
+	// mixed product (fixed sizes + a made-to-order "Custom") is in stock whenever
+	// ANY active variant is sellable.
+	const inStock = resolved
 		.filter((vr) => vr.active)
-		.reduce((sum, vr) => sum + vr.onHand, 0);
+		.some((vr) => (vr.blockWhenOutOfStock ? vr.onHand > 0 : true));
 	return {
 		...base,
 		variants,
 		variantCount: variants.length,
 		priceFrom: prices.length ? Math.min(...prices) : 0,
 		priceTo: prices.length ? Math.max(...prices) : 0,
+		hasQuotePricing,
 		totalOnHand,
-		// "In stock" for made-to-order products is always true; for hard-block
-		// products it requires at least one ACTIVE variant with on-hand stock.
-		inStock: product.blockWhenOutOfStock ? activeOnHand > 0 : true,
+		inStock,
 	};
 }
 
@@ -166,6 +184,8 @@ const variantInputValidator = v.object({
 	parcelWeightG: v.optional(v.number()),
 	imageStorageIds: v.optional(v.array(v.string())),
 	active: v.optional(v.boolean()),
+	blockWhenOutOfStock: v.optional(v.boolean()),
+	requiresProof: v.optional(v.boolean()),
 });
 
 type VariantInput = {
@@ -176,6 +196,8 @@ type VariantInput = {
 	parcelWeightG?: number;
 	imageStorageIds?: string[];
 	active?: boolean;
+	blockWhenOutOfStock?: boolean;
+	requiresProof?: boolean;
 };
 
 /**
@@ -321,6 +343,7 @@ export const create = mutation({
 		sortOrder: v.number(),
 		options: v.optional(v.array(optionAxisValidator)),
 		blockWhenOutOfStock: v.optional(v.boolean()),
+		requiresProof: v.optional(v.boolean()),
 		variants: v.array(variantInputValidator),
 	},
 	handler: async (ctx, args): Promise<Id<"products">> => {
@@ -360,6 +383,7 @@ export const create = mutation({
 			imageStorageIds: args.imageStorageIds,
 			options,
 			blockWhenOutOfStock: args.blockWhenOutOfStock,
+			requiresProof: args.requiresProof,
 			sortOrder: args.sortOrder,
 			active: true,
 			channel: "whatsapp",
@@ -393,6 +417,8 @@ async function insertVariants(
 			parcelWeightG: variant.parcelWeightG ?? 0,
 			imageStorageIds: variant.imageStorageIds ?? [],
 			active: variant.active ?? true,
+			blockWhenOutOfStock: variant.blockWhenOutOfStock,
+			requiresProof: variant.requiresProof,
 			sortOrder: i,
 			createdAt: now,
 			updatedAt: now,
@@ -412,6 +438,7 @@ export const update = mutation({
 		sortOrder: v.optional(v.number()),
 		active: v.optional(v.boolean()),
 		blockWhenOutOfStock: v.optional(v.boolean()),
+		requiresProof: v.optional(v.boolean()),
 	},
 	handler: async (ctx, { productId, ...fields }): Promise<void> => {
 		const userId = await requireUserId(ctx);
@@ -437,6 +464,8 @@ export const update = mutation({
 		if (fields.active !== undefined) updates.active = fields.active;
 		if (fields.blockWhenOutOfStock !== undefined)
 			updates.blockWhenOutOfStock = fields.blockWhenOutOfStock;
+		if (fields.requiresProof !== undefined)
+			updates.requiresProof = fields.requiresProof;
 
 		await ctx.db.patch(productId, updates);
 	},
@@ -499,6 +528,8 @@ export const saveVariantGrid = mutation({
 					parcelWeightG: variant.parcelWeightG ?? prior.parcelWeightG,
 					imageStorageIds: variant.imageStorageIds ?? prior.imageStorageIds,
 					active: variant.active ?? prior.active,
+					blockWhenOutOfStock: variant.blockWhenOutOfStock,
+					requiresProof: variant.requiresProof,
 					sortOrder: i,
 					updatedAt: now,
 				});
@@ -514,6 +545,8 @@ export const saveVariantGrid = mutation({
 					parcelWeightG: variant.parcelWeightG ?? 0,
 					imageStorageIds: variant.imageStorageIds ?? [],
 					active: variant.active ?? true,
+					blockWhenOutOfStock: variant.blockWhenOutOfStock,
+					requiresProof: variant.requiresProof,
 					sortOrder: i,
 					createdAt: now,
 					updatedAt: now,

@@ -1,9 +1,28 @@
 # Proof / Mockup Approval — Feature Spec
 
-Design spec for a **made-to-order proof approval** workflow: the seller sends the
-buyer a mockup/proof before producing the final item, and production is **gated**
-on the buyer's approval. **Status: designed, not built.** This doc is the artifact
-to share for sign-off and turn into a ticket.
+Design spec + implementation reference for a **made-to-order proof approval**
+workflow: the seller sends the buyer a mockup before producing the final item,
+and production is **gated** on the buyer's approval.
+
+**Status: implemented** on `zaki/<proof-approval branch>` — schema, the
+`confirmed→packed` gate, the mockup state machine + mutations, dashboard +
+tracking UI, custom-work quote pricing (§11), **payment-ask gating** (the
+"I've paid" prompt is deferred until the mockup gate opens — §11a), and
+notifications (WhatsApp mockup-image-to-buyer + seller email on
+approve/changes). Tests green. **Deferred:** proactive reminder *nudges* (the v1
+waiver is purely time-based — see the note below); per-round mockup images.
+
+> **Naming (build decision, 2026-06-04):** code identifiers use **`mockup`**, not
+> `proof`, because the codebase already uses "proof" throughout for the buyer's
+> **payment** screenshot (`paymentProofStorageId`, `getPaymentProofUrl`,
+> `generateOrderProofUploadUrl`, the `proofUpload` rate-limit key). So: `mockupStatus`,
+> `mockupImageStorageId`, `mockupChangeNote`, `submitMockup`, `approveMockup`,
+> `requestMockupChanges`, `waiveMockup`, `generateMockupUploadUrl`. Read "proof"
+> below as "mockup" in code.
+>
+> **v1 scope:** the waiver unlock is **time-based only** (the Reminders Cron in §8
+> is Sprint 4, not built yet) — `waiveMockup` is guarded by elapsed time since the
+> mockup was submitted; proactive buyer/seller nudges are an additive follow-up.
 
 ## 1. Why this feature
 
@@ -70,8 +89,8 @@ proof:       (none) → pending → submitted → approved       (independent, N
 
 ## 5. Acceptance criteria
 
-- A product has a `requiresProof` toggle (default off). Independent of other product settings.
-- **Whole-order gating:** an order containing **≥1** `requiresProof` item is gated. Mixed orders (some custom, some ready-made) gate the **entire** order. Orders with no such item are never gated (`proofStatus` stays undefined).
+- Each **variant** has a `requiresProof` toggle (default off), set per-row in the variant-grid editor (alongside price/stock). Reads fall back to the deprecated product-level flag when a variant's own is unset. Independent of other settings. This lets a single listing pair ready-made fixed sizes (no proof) with a made-to-order "Custom" variant (proof required) — the art-on-print case.
+- **Whole-order gating:** an order containing **≥1** `requiresProof` **variant** is gated. Mixed orders (some custom, some ready-made) gate the **entire** order. Orders with no such variant are never gated (`proofStatus`/`mockupStatus` stays undefined).
 - A gated order starts at `proofStatus: "pending"` on creation and is **badged "Mockup needed"** in the dashboard.
 - The seller can upload an image mockup and send it; doing so sets `submitted`, stores the image, and **sends the mockup over WhatsApp** to the buyer with a tracking-page link.
 - The **tracking page** shows the current mockup and, while `submitted`, two buyer actions: **Approve** and **Request changes** (with a free-text note, capped length).
@@ -84,25 +103,91 @@ proof:       (none) → pending → submitted → approved       (independent, N
 
 ## 6. Schema changes (`convex/schema.ts`)
 
-**`products`** — add:
-- `requiresProof: v.optional(v.boolean())` — the per-product toggle.
+**`productVariants`** — add:
+- `requiresProof: v.optional(v.boolean())` — the **per-variant** toggle. (`products.requiresProof` remains as a deprecated read-fallback for legacy variants.)
 
-**`orders`** — add the independent proof dimension:
-- `proofStatus: v.optional(v.union(v.literal("pending"), v.literal("submitted"), v.literal("changes_requested"), v.literal("approved")))`
-- `proofImageStorageId: v.optional(v.string())` — current mockup.
-- `proofChangeNote: v.optional(v.string())` — buyer's requested changes.
-- `proofSubmittedAt`, `proofApprovedAt`, `proofWaivedAt`: `v.optional(v.number())`.
+**`orders`** — add the independent proof dimension (code uses `mockup*`, not `proof*`):
+- `mockupStatus: v.optional(v.union(v.literal("pending"), v.literal("submitted"), v.literal("changes_requested"), v.literal("approved")))`
+- `mockupImageStorageId: v.optional(v.string())` — current mockup.
+- `mockupChangeNote: v.optional(v.string())` — buyer's requested changes.
+- `mockupSubmittedAt`, `mockupApprovedAt`, `mockupWaivedAt`: `v.optional(v.number())`.
+- `mockupQuotedAmount: v.optional(v.number())` — **the seller's price for the custom work** (minor units), set on the mockup submission and folded into `total` via `computeOrderTotals`. See §11.
 
 Multiple mockup rounds are captured by `orderEvents` (history), not a child table —
 keeps v1 simple. (If per-round images become a requirement later, promote to a
 `proofRounds` child table.)
 
+## 11. Custom-work pricing (quote-on-mockup) + decline
+
+Made-to-order "Custom" variants sell at **RM0** on the storefront ("Price on
+quote") because the real price isn't known until the mockup is designed. The
+quote rides on the mockup approval — they're one decision for the buyer.
+
+**Flow (pay-once-after-quote):**
+1. Buyer orders the custom variant (snapshot price 0). In-stock lines are reserved as usual; nothing is paid yet.
+2. Seller **submits the mockup with a price** (`submitMockup({ storageId, quotedAmount })`). The quote is re-enterable each round — the latest wins. It folds into `total` immediately as a *proposed* total, and the customer's denormalized `totalSpent` is kept in step via `adjustAggregatesForTotalChange`. Sending a (new) image re-pings the buyer and restarts the 48h waiver clock. **Re-pricing only** (dashboard "Save price") goes through a separate `updateMockupQuote` mutation that patches `mockupQuotedAmount` + `total` **without** re-sending the image, re-notifying the buyer, or touching `mockupSubmittedAt` — the buyer sees the new price live, so adjusting it several times can't spam them or reset the grace.
+3. Buyer **approves** (design + price → gate opens, total locks), **requests changes** (loop), or **declines the item**.
+4. Buyer pays the finalized `total` through the existing payment flow — **but the payment ask is gated** (see below).
+
+### 11a. Payment ask is gated behind the mockup gate
+
+A custom order shouldn't be asked to pay before the buyer has seen and approved
+the design + price — otherwise they'd pay against an unknown (RM0) total. So the
+**"I've paid" prompt is deferred** for any order whose mockup gate is closed.
+
+- **Gate closed** = `mockupStatus` set, not `approved`, and `mockupWaivedAt` unset. Defined once as `isMockupGateClosed` in **`convex/lib/order.ts`** and imported everywhere (server `orders.ts` + `whatsapp.ts`, and the dashboard/tracking pages) — change the gate rule in one place. Surfaced to the confirm flow as `getRetailerLocaleForOrder().mockupPending`.
+- **First bot reply (custom order):** a **branded image message** (kedaipal logo header) whose caption is `mockupPendingConfirm` system copy — "order received, a design is coming to approve, no payment needed yet" — plus the pickup block when self-collect. Same visual shape as the normal confirm, just **no** transfer-reference line, **no** payment block, **no** QR, **no** "I've paid" CTA (an image message instead of an interactive `cta_url` so there's no button to tap).
+- **First bot reply (normal order):** unchanged — full confirm + payment block + "I've paid" CTA.
+- **Gate opens → payment prompt fires.** `approveMockup` (buyer), `waiveMockup` (seller deadlock escape), and `declineMockupItem` on a *mixed* order (buyer removed the custom line, leaving a payable remainder) all schedule `internal.whatsapp.notifyPaymentDue({ orderId, reason })`, which sends the deferred "I've paid" prompt (intro = `paymentDueApproved` / `paymentDueWaived` / `paymentDueDeclined`, then the standard pickup + transfer-reference + payment block, shared with the confirm reply via `sendPaymentMessage`). The decline nudge is skipped if payment was already taken.
+- **Re-confirm after the gate opens** (buyer re-sends `ORD-XXXX`) takes the normal branch, so the pay button shows again — idempotent.
+
+**Tracking page (`track.$shortId.tsx`) while the gate is closed:**
+- The **"I've paid" button is disabled** and relabelled — "Awaiting mockup" (pre-submission) / "Awaiting your mockup approval" (`submitted`), with a one-line hint — so the buyer can't claim payment before the price is final. It reverts to the live "I've paid" once approved/waived.
+- The **Mockup card** uses status-style labels: `pending → "Pending mockup design"`, `submitted → "Pending mockup approval"`, `changes_requested → "Pending mockup update"`, `approved → "Mockup approved"`.
+- The **progress timeline** splices a virtual **mockup node** right after "Confirmed" for custom orders (same labels as the card), so the buyer sees the approval step that gates Packed. It's the *current* step while the gate is closed and `done` once approved/waived. Non-custom orders render the plain fulfilment list.
+- The **items receipt** reconciles the order-level quote: the made-to-order line is snapshotted at RM0, so once the buyer locks the quote (approve/waive) we fold it onto that single price-0 line — the line shows the real price and the line totals sum to `Total` (no stray "RM 0.00"). While still *proposed*, or when it can't be pinned to exactly one price-0 line, it renders as a labelled **"Custom work (proposed)"** line above Total instead. Mirrors the seller order detail's "Custom work" line.
+- Seller order detail keeps its action-oriented mockup badges ("Mockup needed" / "Awaiting buyer"). Its **"Mark payment received" button is disabled** while the gate is closed (relabelled "Awaiting mockup approval", with a hint) — the seller can't record payment before the buyer's been asked and the price is final. It enables on approve / waive / removing the custom item.
+
+**Server-enforced, not just UI** (`isMockupGateClosed`, shared from `convex/lib/order.ts`): the gate guards three mutations so a direct call can't bypass the disabled buttons —
+- `updateStatus → "packed"` (production gate, pre-existing),
+- `markPaymentReceived` (seller) — throws while gated,
+- `claimPayment` (buyer "I've paid") — throws while gated.
+All three share the one helper, alongside the timeline / payment-button reads, so the gate is defined once and applied everywhere.
+
+**Rate limiting:** seller mockup actions (`generateMockupUploadUrl`, `submitMockup`, `updateMockupQuote`, `waiveMockup`) use a dedicated **`mockupSubmit`** bucket (10/min, burst 5) keyed by Clerk subject — separate from `productWrite` so a bulk product edit can't starve a seller out of sending a time-sensitive mockup (and vice versa). Buyer review actions stay on `mockupReview`.
+
+**Seller new-order / order-confirmed email** (`emailCopy.ts`, gated on `requiresMockup = mockupStatus !== undefined`) carries a "⚠️ Custom item — send a mockup… payment is held until they approve" line (EN + MS), so a seller scanning alerts knows the order needs a mockup before payment unlocks.
+
+**Buyer can also drop the custom item entirely** at any point before approval via `declineMockupItem` ("Remove this custom item" on the tracking page) — distinct from "Request changes" (the mockup-revision loop). On a mixed order it removes the custom line, the remainder proceeds, and the buyer gets a WhatsApp payment nudge for it; on a custom-only order it cancels. See §11.
+
+**Non-custom orders are entirely unaffected** — no `mockupStatus`, so every branch above falls through to the original behavior.
+
+**Remove the custom item (`declineMockupItem`, capability = `shortId`):** the
+buyer's "Remove this custom item" action — distinct from "Request changes" (the
+mockup-revision loop). Drops every `requiresProof` line, recomputes `total`
+(quote cleared), and **re-evaluates the gate** — with no proof-required line
+left, `mockupStatus` clears and the ready-made remainder proceeds. A custom-only
+order that's removed is **cancelled** (stock restored, aggregates reversed). The
+seller is emailed (`notifyMockupDeclined`). On a **mixed** order, because the
+gate just opened on a still-unpaid remainder, the buyer is also nudged to pay
+over WhatsApp (`notifyPaymentDue` with `reason: "declined"`) — see §11a.
+
+**Why order-level, not per-line:** one mockup ⇒ one quote per order. Pricing the
+custom work at the order level (a single `mockupQuotedAmount` folded into the
+total) is unambiguous for any number of custom lines and reads cleanly on the
+receipt (*Items · Custom work · Total*). `subtotal` stays line-derived.
+
+**Split fulfilment is deliberately out of scope** — fulfilment stays
+whole-order. Because payment follows the quote, there are no already-paid items
+held behind an un-approved custom item, so the motivation for partial pickup is
+absent. Revisit as its own feature if real demand appears.
+
 ## 7. Code touch points
 
-- **`convex/schema.ts`** — `products.requiresProof`, the `orders` proof fields.
-- **`convex/products.ts`** — surface `requiresProof` in create/update; expose on reads.
+- **`convex/schema.ts`** — `productVariants.requiresProof` (per-variant), the `orders` mockup fields. `products.requiresProof` kept as deprecated fallback.
+- **`convex/products.ts`** — accept `requiresProof` per variant in create/`saveVariantGrid`; resolve `variant.requiresProof ?? product.requiresProof` on reads.
 - **`convex/orders.ts`**
-  - `create`: if any line's product has `requiresProof`, set `proofStatus: "pending"`.
+  - `create`: if any line's variant resolves `requiresProof` (override ?? product), set `mockupStatus: "pending"`.
   - `updateStatus`: **gate** `→ packed` on `proofStatus === "approved" || proofWaivedAt`.
   - `submitProof(orderId, storageId)` (owner): set `submitted`, store image, event, schedule WhatsApp send.
   - `approveProof(shortId)` / `requestProofChanges(shortId, note)` (public, capability = `shortId`, rate-limited like `claimPayment`): transition + event + notify seller.
@@ -140,10 +225,10 @@ The escape must keep a human in the loop and **never silently auto-produce**:
 
 ## 9. Edge cases
 
-- **Mixed orders** — any proof-required item gates the **whole** order (decided). Simpler than per-line gating, and a custom seller's order is usually all-custom.
+- **Mixed orders** — any proof-required **variant** gates the **whole** order (decided). Simpler than per-line gating. Gating is decided per-variant (`requiresProof` resolves override ?? product), so one listing can mix gated and ungated variants while the order-level gate stays all-or-nothing.
 - **Re-submission loop** — `changes_requested → submitted → …` any number of rounds; each is an `orderEvents` entry. Latest `proofImageStorageId` wins.
 - **Cancellation** — a gated order can still be cancelled at any time (proof gate only blocks *forward* production, not cancel).
-- **Toggle changed after order exists** — `proofStatus` is stamped at order-create time from the then-current `requiresProof`; flipping the product toggle later doesn't retro-gate existing orders (frozen-intent, like other snapshots).
+- **Toggle changed after order exists** — `mockupStatus` is stamped at order-create time from the then-current per-variant `requiresProof`; flipping a variant's toggle later doesn't retro-gate existing orders (frozen-intent, like other snapshots).
 - **No tracking phone / link-in-bio** — the buyer still reviews via the tracking page (capability = `shortId`); WhatsApp delivery of the mockup is best-effort, same as other notifications.
 - **Proof timing** — this seller's flow is **pay → mockup → produce**, so the gate sits post-confirm. (Some businesses approve *before* payment; configurable timing is a possible later extension, out of scope.)
 

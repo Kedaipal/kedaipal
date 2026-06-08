@@ -153,6 +153,12 @@ function OrdersRoute() {
 										<DeliveryMethodBadge
 											method={o.deliveryMethod ?? "delivery"}
 										/>
+										{o.mockupStatus === "pending" ||
+										o.mockupStatus === "changes_requested" ? (
+											<span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+												Mockup pending
+											</span>
+										) : null}
 									</div>
 									<div className="flex items-center gap-2 text-sm text-muted-foreground">
 										<span className="min-w-0 truncate">
@@ -194,10 +200,7 @@ function DeliveryMethodBadge({
 	const isPickup = method === "self_collect";
 	const Icon = isPickup ? Package : Truck;
 	return (
-		<span
-			className="inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
-			aria-label={isPickup ? "Self collect order" : "Delivery order"}
-		>
+		<span className="inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
 			<Icon className="size-3" aria-hidden="true" />
 			{isPickup ? "Pickup" : "Delivery"}
 		</span>

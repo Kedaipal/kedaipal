@@ -9,6 +9,10 @@ export type VariantLike = {
 	optionValues: string[];
 	onHand: number;
 	active?: boolean;
+	// Resolved per-variant on the server (`variant.blockWhenOutOfStock ??
+	// product.blockWhenOutOfStock`). A mixed product can have made-to-order
+	// variants (false) alongside hard-block ones (true).
+	blockWhenOutOfStock?: boolean;
 };
 
 /** ["1kg","Fillet"] → "1kg / Fillet"; "" for the implicit default variant. */
@@ -39,14 +43,15 @@ export function sameOptionValues(
 }
 
 /**
- * Is this variant sellable right now? Made-to-order products (blockOOS=false)
- * are always sellable; hard-block products require on-hand stock. Inactive
- * variants are never sellable. The storefront list already filters to active
- * variants, so `active` is usually true here — checked defensively.
+ * Is this variant sellable right now? Made-to-order variants
+ * (`blockWhenOutOfStock` falsy) are always sellable; hard-block variants require
+ * on-hand stock. Inactive variants are never sellable. The storefront list
+ * already filters to active variants, so `active` is usually true here — checked
+ * defensively. The flag is resolved per-variant on the server.
  */
-export function isSellable(variant: VariantLike, blockOOS: boolean): boolean {
+export function isSellable(variant: VariantLike): boolean {
 	if (variant.active === false) return false;
-	if (!blockOOS) return true;
+	if (!variant.blockWhenOutOfStock) return true;
 	return variant.onHand > 0;
 }
 
@@ -55,12 +60,13 @@ export function isSellable(variant: VariantLike, blockOOS: boolean): boolean {
  * on the *other* axes — has at least one sellable variant. A value not in its
  * axis's set is greyed out (reason 1: no such combo; reason 2: sold out under
  * hard-block). `selection` is aligned to `options`; null = not yet chosen.
+ * Sellability is judged per-variant (each variant carries its resolved
+ * `blockWhenOutOfStock`).
  */
 export function availableValuesPerAxis(
 	options: readonly OptionAxis[],
 	variants: readonly VariantLike[],
 	selection: readonly (string | null)[],
-	blockOOS: boolean,
 ): Set<string>[] {
 	return options.map((axis, axisIndex) => {
 		const available = new Set<string>();
@@ -68,7 +74,7 @@ export function availableValuesPerAxis(
 			// Build a hypothetical selection: this axis pinned to `value`, every
 			// other axis kept at its current choice (null = wildcard).
 			const matches = variants.some((variant) => {
-				if (!isSellable(variant, blockOOS)) return false;
+				if (!isSellable(variant)) return false;
 				return options.every((_, i) => {
 					if (i === axisIndex) return variant.optionValues[i] === value;
 					const chosen = selection[i];

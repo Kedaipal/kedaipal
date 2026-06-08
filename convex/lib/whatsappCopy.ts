@@ -111,11 +111,26 @@ export function pickLocale(input: string | undefined | null): Locale {
 // can't break payment matching by editing a template.
 // ---------------------------------------------------------------------------
 
-export type SystemMessageKey = "paymentReceived" | "transferReferenceLine";
+export type SystemMessageKey =
+	| "paymentReceived"
+	| "transferReferenceLine"
+	| "mockupPendingConfirm"
+	| "paymentDueApproved"
+	| "paymentDueWaived"
+	| "paymentDueDeclined";
 
 type SystemCopy = {
 	paymentReceived: (v: CopyVars) => string;
 	transferReferenceLine: (v: CopyVars) => string;
+	// Confirm reply for an order that still has a custom item awaiting buyer
+	// mockup approval — payment is intentionally deferred (no "I've paid" yet).
+	mockupPendingConfirm: (v: CopyVars) => string;
+	// Intro lines that lead the payment prompt once the mockup gate opens, either
+	// by buyer approval, seller waiver, or the buyer removing the custom item from
+	// a mixed order (the ready-made remainder is now payable). Payment block follows.
+	paymentDueApproved: (v: CopyVars) => string;
+	paymentDueWaived: (v: CopyVars) => string;
+	paymentDueDeclined: (v: CopyVars) => string;
 };
 
 export const systemMessages: Record<Locale, SystemCopy> = {
@@ -126,6 +141,16 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			}`,
 		transferReferenceLine: ({ shortId }) =>
 			`Use ${shortId} as your transfer reference so we can match it.`,
+		mockupPendingConfirm: ({ shortId, storeName, contactPhone, trackingUrl }) =>
+			`✅ Order ${shortId} received! It includes a custom item, so ${storeName} will send you a design to approve first — no payment needed yet. We'll share payment details right after you approve.${
+				trackingUrl ? `\n\nTrack your order: ${trackingUrl}` : ""
+			}${contactLine(contactPhone, "en")}`,
+		paymentDueApproved: ({ shortId, storeName }) =>
+			`✅ Design approved for ${shortId}! Here's how to pay so ${storeName} can start making it:`,
+		paymentDueWaived: ({ shortId, storeName }) =>
+			`Here are the payment details for your order ${shortId} from ${storeName}:`,
+		paymentDueDeclined: ({ shortId, storeName }) =>
+			`No problem — the custom item was removed from ${shortId}. Here's how to pay for the rest of your order from ${storeName}:`,
 	},
 	ms: {
 		paymentReceived: ({ shortId, storeName, trackingUrl }) =>
@@ -134,6 +159,16 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			}`,
 		transferReferenceLine: ({ shortId }) =>
 			`Gunakan ${shortId} sebagai rujukan pemindahan supaya kami boleh padankan.`,
+		mockupPendingConfirm: ({ shortId, storeName, contactPhone, trackingUrl }) =>
+			`✅ Pesanan ${shortId} diterima! Ia termasuk item custom, jadi ${storeName} akan menghantar reka bentuk untuk kelulusan anda dahulu — belum perlu bayar lagi. Kami akan kongsi maklumat pembayaran sebaik anda luluskan.${
+				trackingUrl ? `\n\nJejak pesanan anda: ${trackingUrl}` : ""
+			}${contactLine(contactPhone, "ms")}`,
+		paymentDueApproved: ({ shortId, storeName }) =>
+			`✅ Reka bentuk untuk ${shortId} telah diluluskan! Berikut cara membayar supaya ${storeName} boleh mula membuatnya:`,
+		paymentDueWaived: ({ shortId, storeName }) =>
+			`Berikut maklumat pembayaran untuk pesanan ${shortId} dari ${storeName}:`,
+		paymentDueDeclined: ({ shortId, storeName }) =>
+			`Tiada masalah — item custom telah dibuang dari ${shortId}. Berikut cara membayar untuk baki pesanan anda dari ${storeName}:`,
 	},
 };
 

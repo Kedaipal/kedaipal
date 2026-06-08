@@ -79,8 +79,12 @@ surfaced as pill pickers on the storefront.
 
 **Modify `products` (line 105):**
 - add `options: v.array(v.object({ name: v.string(), values: v.array(v.string()) }))`
-- add `blockWhenOutOfStock: v.optional(v.boolean())` — per-product toggle gating reason (2)
-  above. Undefined/false = made-to-order (never block); true = hard-block sold-out combos.
+- add `blockWhenOutOfStock: v.optional(v.boolean())` — gating reason (2) above.
+  Undefined/false = made-to-order (never block); true = hard-block sold-out combos.
+  **Update:** this flag (and `requiresProof`) later moved to **per-variant** on
+  `productVariants` — set per row in the grid editor, with a read-fallback to this
+  product-level value for legacy variants (`variant.X ?? product.X`). See
+  [`data-model.md`](./data-model.md#productvariants) and [`proof-approval.md`](./proof-approval.md).
 - **Deprecate** (keep during migration, then drop) `price`, `stock`, `sku`.
 - `description` (`v.optional(v.string())`, line 112) — **no schema change**; only its
   storefront rendering upgrades to markdown (see §6).
@@ -149,9 +153,10 @@ client price (preserves the existing `{ productId, quantity }`-only trust model 
   narrows; disable impossible combos (reason 1 above).
 - **Concurrency:** two buyers, last unit — handled by the Convex transactional mutation on
   `onHand`. No locking tricks needed.
-- **Out-of-stock vs made-to-order:** the `blockWhenOutOfStock` toggle (§5). A hard 0-block
-  kills the orders the "nothing gets missed" promise covers, so frozen-food pack-to-order
-  and metal prints default to never-block.
+- **Out-of-stock vs made-to-order:** the `blockWhenOutOfStock` toggle (§5), now **per-variant**.
+  A hard 0-block kills the orders the "nothing gets missed" promise covers, so frozen-food
+  pack-to-order and metal prints stay never-block — and a "Custom" row can be made-to-order
+  while its fixed-size siblings hard-block.
 - **Variant image optional:** Metalpix uses one hero + a "Size Comparison" graphic instead
   of per-variant photos — don't require an image per variant; fall back to the hero.
 - **Description markdown sanitized** (render-side, allowlist) — strip scripts/raw HTML.

@@ -13,13 +13,40 @@ const SALMON_OPTIONS = [
 	{ name: "Cut", values: ["Fillet", "Whole"] },
 ];
 
-// Sellable everywhere except 1kg/Whole which is out of stock.
+// Sellable everywhere except 1kg/Whole which is out of stock. Hard-block flag is
+// resolved per-variant (the server folds in the product default before sending).
 const SALMON_VARIANTS = [
-	{ optionValues: ["500g", "Fillet"], onHand: 5, active: true },
-	{ optionValues: ["500g", "Whole"], onHand: 2, active: true },
-	{ optionValues: ["1kg", "Fillet"], onHand: 3, active: true },
-	{ optionValues: ["1kg", "Whole"], onHand: 0, active: true },
+	{
+		optionValues: ["500g", "Fillet"],
+		onHand: 5,
+		active: true,
+		blockWhenOutOfStock: true,
+	},
+	{
+		optionValues: ["500g", "Whole"],
+		onHand: 2,
+		active: true,
+		blockWhenOutOfStock: true,
+	},
+	{
+		optionValues: ["1kg", "Fillet"],
+		onHand: 3,
+		active: true,
+		blockWhenOutOfStock: true,
+	},
+	{
+		optionValues: ["1kg", "Whole"],
+		onHand: 0,
+		active: true,
+		blockWhenOutOfStock: true,
+	},
 ];
+
+// Same combos, but every variant is made-to-order (never blocks).
+const SALMON_MTO = SALMON_VARIANTS.map((v) => ({
+	...v,
+	blockWhenOutOfStock: false,
+}));
 
 describe("storefront variant helpers", () => {
 	test("cartesian + variantLabel basics", () => {
@@ -35,15 +62,26 @@ describe("storefront variant helpers", () => {
 
 	describe("isSellable", () => {
 		test("made-to-order is always sellable", () => {
-			expect(isSellable({ optionValues: [], onHand: 0 }, false)).toBe(true);
+			expect(
+				isSellable({ optionValues: [], onHand: 0, blockWhenOutOfStock: false }),
+			).toBe(true);
 		});
 		test("hard-block requires stock", () => {
-			expect(isSellable({ optionValues: [], onHand: 0 }, true)).toBe(false);
-			expect(isSellable({ optionValues: [], onHand: 1 }, true)).toBe(true);
+			expect(
+				isSellable({ optionValues: [], onHand: 0, blockWhenOutOfStock: true }),
+			).toBe(false);
+			expect(
+				isSellable({ optionValues: [], onHand: 1, blockWhenOutOfStock: true }),
+			).toBe(true);
 		});
 		test("inactive variants are never sellable", () => {
 			expect(
-				isSellable({ optionValues: [], onHand: 9, active: false }, false),
+				isSellable({
+					optionValues: [],
+					onHand: 9,
+					active: false,
+					blockWhenOutOfStock: false,
+				}),
 			).toBe(false);
 		});
 	});
@@ -54,7 +92,6 @@ describe("storefront variant helpers", () => {
 				SALMON_OPTIONS,
 				SALMON_VARIANTS,
 				[null, null],
-				true,
 			);
 			// Both weights still have at least one sellable cut.
 			expect([...weight].sort()).toEqual(["1kg", "500g"]);
@@ -62,23 +99,33 @@ describe("storefront variant helpers", () => {
 		});
 
 		test("selecting 1kg greys out Whole (its only 1kg combo is sold out)", () => {
-			const [, cut] = availableValuesPerAxis(
-				SALMON_OPTIONS,
-				SALMON_VARIANTS,
-				["1kg", null],
-				true,
-			);
+			const [, cut] = availableValuesPerAxis(SALMON_OPTIONS, SALMON_VARIANTS, [
+				"1kg",
+				null,
+			]);
 			expect([...cut]).toEqual(["Fillet"]);
 		});
 
 		test("made-to-order keeps the sold-out combo available", () => {
-			const [, cut] = availableValuesPerAxis(
-				SALMON_OPTIONS,
-				SALMON_VARIANTS,
-				["1kg", null],
-				false,
-			);
+			const [, cut] = availableValuesPerAxis(SALMON_OPTIONS, SALMON_MTO, [
+				"1kg",
+				null,
+			]);
 			expect([...cut].sort()).toEqual(["Fillet", "Whole"]);
+		});
+
+		test("mixed product — only the hard-block sold-out combo greys out", () => {
+			// 1kg/Whole hard-blocks (sold out → greyed); the rest are made-to-order.
+			const mixed = SALMON_VARIANTS.map((v) => ({
+				...v,
+				blockWhenOutOfStock:
+					v.optionValues[0] === "1kg" && v.optionValues[1] === "Whole",
+			}));
+			const [, cut] = availableValuesPerAxis(SALMON_OPTIONS, mixed, [
+				"1kg",
+				null,
+			]);
+			expect([...cut]).toEqual(["Fillet"]);
 		});
 	});
 

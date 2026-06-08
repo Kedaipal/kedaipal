@@ -69,3 +69,75 @@ export const backfillDefaultVariants = internalMutation({
 		return { created, isDone: page.isDone };
 	},
 });
+
+/**
+ * Materialize the per-variant `blockWhenOutOfStock` + `requiresProof` flags from
+ * the (now-deprecated) product-level fields. Reads already fall back to the
+ * product value (`variant.X ?? product.X`), so this is *not* required for
+ * correctness — it's a clean-up so the per-variant columns become the single
+ * source of truth and the product-level fields can be narrowed away later.
+ *
+ * Idempotent: only patches a variant whose flag is still `undefined`. A variant
+ * the seller has since edited per-row (flag already set) is left untouched.
+ * Batched + self-scheduling like backfillDefaultVariants.
+ *
+ * Run: `npx convex run migrations:backfillVariantFlags`
+ */
+export const backfillVariantFlags = internalMutation({
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (ctx, { cursor }) => {
+		const page = await ctx.db
+			.query("productVariants")
+			.paginate({ numItems: BATCH_SIZE, cursor: cursor ?? null });
+
+		const now = Date.now();
+		let patched = 0;
+		// Cache product lookups within the batch — many variants share a product.
+		const productCache = new Map<
+			string,
+			{ blockWhenOutOfStock?: boolean; requiresProof?: boolean } | null
+		>();
+		for (const variant of page.page) {
+			if (
+				variant.blockWhenOutOfStock !== undefined &&
+				variant.requiresProof !== undefined
+			)
+				continue; // both already set — nothing to materialize
+
+			const key = variant.productId;
+			let product = productCache.get(key);
+			if (product === undefined) {
+				const doc = await ctx.db.get(variant.productId);
+				product = doc
+					? {
+							blockWhenOutOfStock: doc.blockWhenOutOfStock,
+							requiresProof: doc.requiresProof,
+						}
+					: null;
+				productCache.set(key, product);
+			}
+			if (!product) continue; // orphan variant — leave for the integrity sweep
+
+			const patch: {
+				blockWhenOutOfStock?: boolean;
+				requiresProof?: boolean;
+				updatedAt: number;
+			} = { updatedAt: now };
+			if (variant.blockWhenOutOfStock === undefined)
+				patch.blockWhenOutOfStock = product.blockWhenOutOfStock ?? false;
+			if (variant.requiresProof === undefined)
+				patch.requiresProof = product.requiresProof ?? false;
+			await ctx.db.patch(variant._id, patch);
+			patched++;
+		}
+
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.migrations.backfillVariantFlags,
+				{ cursor: page.continueCursor },
+			);
+		}
+		return { patched, isDone: page.isDone };
+	},
+});

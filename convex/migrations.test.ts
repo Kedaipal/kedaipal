@@ -119,3 +119,101 @@ describe("backfillDefaultVariants migration", () => {
 		expect(variants[0].price).toBe(9900); // not overwritten
 	});
 });
+
+describe("backfillVariantFlags migration", () => {
+	/** Insert a product with product-level flags + a variant lacking its own. */
+	async function seedLegacyFlagShape(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		product: { blockWhenOutOfStock?: boolean; requiresProof?: boolean },
+	): Promise<Id<"products">> {
+		return t.run(async (ctx) => {
+			const now = Date.now();
+			const productId = await ctx.db.insert("products", {
+				retailerId,
+				name: "Legacy",
+				currency: "MYR",
+				imageStorageIds: [],
+				options: [],
+				blockWhenOutOfStock: product.blockWhenOutOfStock,
+				requiresProof: product.requiresProof,
+				active: true,
+				channel: "whatsapp",
+				sortOrder: 0,
+				createdAt: now,
+				updatedAt: now,
+			});
+			await ctx.db.insert("productVariants", {
+				productId,
+				retailerId,
+				optionValues: [],
+				price: 5000,
+				onHand: 0,
+				reserved: 0,
+				parcelWeightG: 0,
+				imageStorageIds: [],
+				active: true,
+				sortOrder: 0,
+				createdAt: now,
+				updatedAt: now,
+			});
+			return productId;
+		});
+	}
+
+	test("materializes both flags from the product onto a flagless variant", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const productId = await seedLegacyFlagShape(t, retailer._id, {
+			blockWhenOutOfStock: false,
+			requiresProof: true,
+		});
+
+		await t.mutation(internal.migrations.backfillVariantFlags, {});
+
+		const [variant] = await variantsOf(t, productId);
+		expect(variant.blockWhenOutOfStock).toBe(false);
+		expect(variant.requiresProof).toBe(true);
+	});
+
+	test("defaults to false when the product never set a flag", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const productId = await seedLegacyFlagShape(t, retailer._id, {});
+
+		await t.mutation(internal.migrations.backfillVariantFlags, {});
+
+		const [variant] = await variantsOf(t, productId);
+		expect(variant.blockWhenOutOfStock).toBe(false);
+		expect(variant.requiresProof).toBe(false);
+	});
+
+	test("never overwrites a flag the seller already set per-row", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const asUser = t.withIdentity({ subject: "user_mig" });
+		// Created the new way: the variant already carries blockWhenOutOfStock:true.
+		const productId = await asUser.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Already set",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			variants: [
+				{
+					optionValues: [],
+					price: 5000,
+					onHand: 3,
+					blockWhenOutOfStock: true,
+					requiresProof: false,
+				},
+			],
+		});
+
+		await t.mutation(internal.migrations.backfillVariantFlags, {});
+
+		const [variant] = await variantsOf(t, productId);
+		expect(variant.blockWhenOutOfStock).toBe(true);
+		expect(variant.requiresProof).toBe(false);
+	});
+});

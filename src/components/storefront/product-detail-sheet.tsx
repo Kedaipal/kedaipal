@@ -34,7 +34,6 @@ export function ProductDetailSheet({
 
 	const options = product?.options ?? [];
 	const variants = product?.variants ?? [];
-	const blockOOS = product?.blockWhenOutOfStock === true;
 
 	// Reset selection + quantity whenever a new product opens. Axes with a single
 	// value auto-select (one less tap); the implicit default variant resolves
@@ -50,8 +49,8 @@ export function ProductDetailSheet({
 	}, [product]);
 
 	const availability = useMemo(
-		() => availableValuesPerAxis(options, variants, selection, blockOOS),
-		[options, variants, selection, blockOOS],
+		() => availableValuesPerAxis(options, variants, selection),
+		[options, variants, selection],
 	);
 
 	const selectedVariant = useMemo(
@@ -65,9 +64,10 @@ export function ProductDetailSheet({
 		return <Dialog.Root open={false} onOpenChange={(o) => !o && onClose()} />;
 	}
 
-	const sellable = selectedVariant
-		? isSellable(selectedVariant, blockOOS)
-		: false;
+	const sellable = selectedVariant ? isSellable(selectedVariant) : false;
+	// The selected variant's resolved hard-block flag drives stock-bounded qty +
+	// the stock hint. Made-to-order variants are unbounded (made on demand).
+	const variantBlocks = selectedVariant?.blockWhenOutOfStock === true;
 	const hasOptions = options.length > 0;
 	// Gallery + price fall back to the product hero when the variant has none.
 	const images =
@@ -75,7 +75,7 @@ export function ProductDetailSheet({
 			? selectedVariant.imageUrls
 			: product.imageUrls;
 	const maxQty = selectedVariant
-		? blockOOS
+		? variantBlocks
 			? Math.max(1, selectedVariant.onHand)
 			: 99
 		: 1;
@@ -90,11 +90,19 @@ export function ProductDetailSheet({
 	}
 
 	const priceVaries = product.priceTo > product.priceFrom;
+	// A selected made-to-order variant at RM0 shows "Price on quote" — the seller
+	// sets the real price on the mockup after the order is placed.
+	const selectedIsQuote =
+		selectedVariant?.requiresProof === true && selectedVariant.price === 0;
 	const priceLabel = selectedVariant
-		? formatPrice(selectedVariant.price, product.currency)
-		: priceVaries
-			? `from ${formatPrice(product.priceFrom, product.currency)}`
-			: formatPrice(product.priceFrom, product.currency);
+		? selectedIsQuote
+			? "Price on quote"
+			: formatPrice(selectedVariant.price, product.currency)
+		: product.hasQuotePricing && product.priceTo === 0
+			? "Price on quote"
+			: priceVaries || product.hasQuotePricing
+				? `from ${formatPrice(product.priceFrom, product.currency)}`
+				: formatPrice(product.priceFrom, product.currency);
 
 	return (
 		<Dialog.Root open={open} onOpenChange={(o) => !o && onClose()}>
@@ -181,8 +189,8 @@ export function ProductDetailSheet({
 							</div>
 						) : null}
 
-						{/* Stock hint — only meaningful for hard-block products. */}
-						{selectedVariant && blockOOS ? (
+						{/* Stock hint — only meaningful for hard-block variants. */}
+						{selectedVariant && variantBlocks ? (
 							<p className="mt-3 text-xs text-muted-foreground">
 								{selectedVariant.onHand <= 0
 									? "Out of stock"

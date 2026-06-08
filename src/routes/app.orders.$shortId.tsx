@@ -2,22 +2,25 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import {
 	BadgeCheck,
+	CheckCircle2,
 	ChevronLeft,
 	ChevronRight,
 	Copy,
 	ExternalLink,
 	HandCoins,
 	Hourglass,
+	ImagePlus,
 	MapPin,
 	MessageCircle,
 	Package,
 	Truck,
 	User,
 } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ChangeEvent, type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
-import type { Id } from "../../convex/_generated/dataModel";
+import type { Doc, Id } from "../../convex/_generated/dataModel";
+import { isMockupGateClosed } from "../../convex/lib/order";
 import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
 import {
 	PageHeader,
@@ -211,6 +214,9 @@ function OrderDetailRoute() {
 	const editingCarrier = carrierInput !== null;
 	const paymentStatus = (order.paymentStatus ?? "unpaid") as PaymentStatus;
 	const paymentBadgeCfg = paymentBadge(paymentStatus);
+	// Production (→ packed) is blocked while a mockup is required but not yet
+	// approved or waived. Shared gate — same source as the server (lib/order).
+	const mockupGated = isMockupGateClosed(order);
 
 	async function handleTransition(next: Transition) {
 		if (!order) return;
@@ -293,7 +299,7 @@ function OrderDetailRoute() {
 						})}
 					</p>
 				</div>
-				<div className="flex flex-col items-end gap-1.5">
+				<div className="flex flex-col items-start gap-1.5">
 					<StatusBadge status={order.status} />
 					<span
 						className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${paymentBadgeCfg.className}`}
@@ -404,18 +410,26 @@ function OrderDetailRoute() {
 						</p>
 					</div>
 					<p className="text-sm text-muted-foreground">
-						The customer hasn't tapped "I've paid" yet. If you've already seen
-						the money in your bank app, mark it received here.
+						{mockupGated
+							? `Payment is locked until the custom item is sorted — ${
+									order.mockupStatus === "submitted"
+										? "the buyer is reviewing the mockup"
+										: "send the buyer a mockup to approve"
+								}. The buyer is only asked to pay once they approve (or you proceed without approval below).`
+							: `The customer hasn't tapped "I've paid" yet. If you've already seen the money in your bank app, mark it received here.`}
 					</p>
+					{/* While the mockup gate is closed the buyer hasn't been asked to pay
+					    and the price may not be final, so the seller can't mark payment
+					    received yet. Opens on approve / waive / removing the custom item. */}
 					<Button
 						onClick={handleMarkPaymentReceived}
 						isLoading={confirmingPayment}
-						disabled={confirmingPayment}
+						disabled={confirmingPayment || mockupGated}
 						variant="secondary"
 						className="h-11 w-full"
 					>
 						<BadgeCheck className="size-4" />
-						Mark payment received
+						{mockupGated ? "Awaiting mockup approval" : "Mark payment received"}
 					</Button>
 				</section>
 			) : null}
@@ -552,6 +566,17 @@ function OrderDetailRoute() {
 						</li>
 					))}
 				</ul>
+				{order.mockupQuotedAmount != null && order.mockupQuotedAmount > 0 ? (
+					<div className="flex items-center justify-between px-3 text-sm text-muted-foreground">
+						<span>
+							Custom work
+							{order.mockupStatus === "approved" ? "" : " (proposed)"}
+						</span>
+						<span className="tabular-nums">
+							{formatPrice(order.mockupQuotedAmount, order.currency)}
+						</span>
+					</div>
+				) : null}
 				<div className="flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2.5 text-sm font-bold">
 					<span>Total</span>
 					<span className="tabular-nums">
@@ -752,6 +777,8 @@ function OrderDetailRoute() {
 				</section>
 			) : null}
 
+			{order.mockupStatus !== undefined ? <MockupCard order={order} /> : null}
+
 			{/* Status actions */}
 			{transitions.length > 0 ? (
 				<section className="flex flex-col gap-3">
@@ -759,21 +786,296 @@ function OrderDetailRoute() {
 						Update Status
 					</p>
 					<div className="flex flex-col gap-2">
-						{transitions.map((t) => (
-							<Button
-								key={t}
-								onClick={() => handleTransition(t)}
-								disabled={pending !== null}
-								variant={t === "cancelled" ? "secondary" : "default"}
-								className="h-11 w-full"
-							>
-								{pending === t ? "Updating…" : transitionLabels[t]}
-							</Button>
-						))}
+						{transitions.map((t) => {
+							const blocked = t === "packed" && mockupGated;
+							return (
+								<Button
+									key={t}
+									onClick={() => handleTransition(t)}
+									disabled={pending !== null || blocked}
+									variant={t === "cancelled" ? "secondary" : "default"}
+									className="h-11 w-full"
+								>
+									{pending === t
+										? "Updating…"
+										: blocked
+											? `${transitionLabels[t]} — awaiting mockup`
+											: transitionLabels[t]}
+								</Button>
+							);
+						})}
 					</div>
 				</section>
 			) : null}
 		</div>
+	);
+}
+
+// Mirror of MOCKUP_WAIVE_GRACE_MS in convex/orders.ts — drives when the
+// "proceed without approval" escape becomes available in the UI.
+const MOCKUP_WAIVE_GRACE_MS = 48 * 60 * 60 * 1000;
+
+function MockupCard({ order }: { order: Doc<"orders"> }) {
+	const generateUploadUrl = useMutation(api.orders.generateMockupUploadUrl);
+	const submitMockup = useMutation(api.orders.submitMockup);
+	const updateMockupQuote = useMutation(api.orders.updateMockupQuote);
+	const waiveMockup = useMutation(api.orders.waiveMockup);
+	const mockupUrl = useQuery(api.orders.getMockupUrl, {
+		shortId: order.shortId,
+	});
+	const [uploading, setUploading] = useState(false);
+	const [waiving, setWaiving] = useState(false);
+	const [savingPrice, setSavingPrice] = useState(false);
+	// Quote for the custom work (major-unit string as typed). Seeded from the
+	// order's current quote so re-sends/edits keep the last value.
+	const [priceInput, setPriceInput] = useState(
+		order.mockupQuotedAmount != null
+			? (order.mockupQuotedAmount / 100).toFixed(2)
+			: "",
+	);
+
+	const status = order.mockupStatus;
+	const waived = order.mockupWaivedAt != null;
+
+	// Parse the typed quote into minor units. Empty = no quote sent (made-to-order
+	// items with a fixed storefront price don't need one). Invalid → undefined.
+	function parsedQuote(): number | undefined {
+		const trimmed = priceInput.trim();
+		if (trimmed === "") return undefined;
+		if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) return undefined;
+		return Math.round(Number.parseFloat(trimmed) * 100);
+	}
+
+	async function handleUpload(e: ChangeEvent<HTMLInputElement>) {
+		const file = e.target.files?.[0];
+		if (!file) return;
+		if (priceInput.trim() !== "" && parsedQuote() === undefined) {
+			toast.error("Enter a valid price (e.g. 120 or 120.50) or clear it");
+			e.target.value = "";
+			return;
+		}
+		setUploading(true);
+		try {
+			const url = await generateUploadUrl({ orderId: order._id });
+			const res = await fetch(url, {
+				method: "POST",
+				headers: { "Content-Type": file.type },
+				body: file,
+			});
+			if (!res.ok) throw new Error("Upload failed");
+			const { storageId } = (await res.json()) as { storageId: string };
+			await submitMockup({
+				orderId: order._id,
+				storageId,
+				quotedAmount: parsedQuote(),
+			});
+			toast.success("Mockup sent to the buyer for approval");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setUploading(false);
+		}
+	}
+
+	// Update the quote without re-uploading. Uses updateMockupQuote (not
+	// submitMockup) so it doesn't re-ping the buyer or reset the 48h waiver clock
+	// — the buyer sees the new price live on their tracking page. Only available
+	// once a mockup exists.
+	async function handleSavePrice() {
+		const quote = parsedQuote();
+		if (priceInput.trim() !== "" && quote === undefined) {
+			toast.error("Enter a valid price (e.g. 120 or 120.50)");
+			return;
+		}
+		if (!order.mockupImageStorageId) return;
+		setSavingPrice(true);
+		try {
+			await updateMockupQuote({ orderId: order._id, quotedAmount: quote });
+			toast.success("Price updated — the buyer sees it on their order page");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSavingPrice(false);
+		}
+	}
+
+	async function handleWaive() {
+		setWaiving(true);
+		try {
+			await waiveMockup({ orderId: order._id });
+			toast.success("Proceeding without buyer approval");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setWaiving(false);
+		}
+	}
+
+	const needsMockup = status === "pending" || status === "changes_requested";
+	const canWaive =
+		!waived &&
+		status !== "approved" &&
+		order.mockupSubmittedAt != null &&
+		Date.now() - order.mockupSubmittedAt >= MOCKUP_WAIVE_GRACE_MS;
+	// When the time-based waiver unlocks: 48h after the mockup was sent.
+	const waiveUnlockLabel =
+		order.mockupSubmittedAt != null
+			? new Date(order.mockupSubmittedAt + MOCKUP_WAIVE_GRACE_MS).toLocaleString(
+					undefined,
+					{ dateStyle: "medium", timeStyle: "short" },
+				)
+			: "";
+
+	const badge = waived
+		? { label: "Proceeding — no approval", cls: "bg-muted text-foreground" }
+		: status === "approved"
+			? { label: "Approved by buyer", cls: "bg-emerald-50 text-emerald-700" }
+			: status === "submitted"
+				? { label: "Awaiting buyer", cls: "bg-blue-50 text-blue-700" }
+				: { label: "Mockup needed", cls: "bg-amber-50 text-amber-800" };
+
+	return (
+		<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+			<div className="flex items-center justify-between">
+				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+					Mockup approval
+				</p>
+				<span
+					className={`rounded-full px-2 py-0.5 text-xs font-medium ${badge.cls}`}
+				>
+					{badge.label}
+				</span>
+			</div>
+
+			{status === "changes_requested" && order.mockupChangeNote ? (
+				<div className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">
+					<span className="font-medium">Buyer requested changes:</span>{" "}
+					{order.mockupChangeNote}
+				</div>
+			) : null}
+
+			{order.mockupImageStorageId ? (
+				mockupUrl ? (
+					<a
+						href={mockupUrl}
+						target="_blank"
+						rel="noreferrer"
+						className="block overflow-hidden rounded-xl border border-border bg-white"
+					>
+						<img
+							src={mockupUrl}
+							alt="Current mockup"
+							className="block max-h-64 w-full object-contain"
+						/>
+					</a>
+				) : (
+					<div className="rounded-xl border border-border bg-muted/30 p-4 text-center text-xs text-muted-foreground">
+						Loading mockup…
+					</div>
+				)
+			) : null}
+
+			{status === "submitted" ? (
+				<p className="text-sm text-muted-foreground">
+					Sent to the buyer — waiting for them to approve or request changes on
+					their order page.
+				</p>
+			) : null}
+			{status === "approved" ? (
+				<p className="flex items-center gap-1.5 text-sm text-emerald-700">
+					<CheckCircle2 className="size-4" /> Approved — you can pack this
+					order.
+				</p>
+			) : null}
+			{waived ? (
+				<p className="text-sm text-muted-foreground">
+					You chose to proceed without the buyer's approval.
+				</p>
+			) : null}
+
+			{status !== "approved" ? (
+				<div className="flex flex-col gap-1.5">
+					<label htmlFor="mockup-quote" className="text-sm font-medium">
+						Custom item price{" "}
+						<span className="font-normal text-muted-foreground">
+							(optional — for quote-on-request items)
+						</span>
+					</label>
+					<div className="flex items-center gap-2">
+						<div className="relative flex-1">
+							<span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+								{order.currency}
+							</span>
+							<Input
+								id="mockup-quote"
+								inputMode="decimal"
+								placeholder="120.00"
+								value={priceInput}
+								onChange={(e) => setPriceInput(e.target.value)}
+								className="h-11 pl-12"
+							/>
+						</div>
+						{order.mockupImageStorageId ? (
+							<Button
+								type="button"
+								variant="secondary"
+								onClick={handleSavePrice}
+								disabled={savingPrice}
+								className="h-11 shrink-0"
+							>
+								{savingPrice ? "…" : "Save price"}
+							</Button>
+						) : null}
+					</div>
+					<p className="text-xs text-muted-foreground">
+						Sent with the mockup. The buyer approves the design and price
+						together; the order total updates automatically.
+					</p>
+				</div>
+			) : null}
+
+			{needsMockup || status === "submitted" ? (
+				<label className="flex h-11 cursor-pointer items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90">
+					<ImagePlus className="size-4" />
+					{uploading
+						? "Sending…"
+						: status === "submitted"
+							? "Replace mockup"
+							: "Upload & send mockup"}
+					<input
+						type="file"
+						accept="image/*"
+						disabled={uploading}
+						onChange={handleUpload}
+						className="hidden"
+					/>
+				</label>
+			) : null}
+
+			{canWaive ? (
+				<Button
+					variant="secondary"
+					onClick={handleWaive}
+					disabled={waiving}
+					className="h-11 w-full"
+				>
+					{waiving ? "…" : "Proceed without approval"}
+				</Button>
+			) : status === "submitted" && !waived ? (
+				<p className="text-xs text-muted-foreground">
+					Waiting on the buyer to approve. If they haven't responded by{" "}
+					<span className="font-medium text-foreground">
+						{waiveUnlockLabel}
+					</span>{" "}
+					(48 hours after you sent the mockup), a{" "}
+					<span className="font-medium text-foreground">
+						“Proceed without approval”
+					</span>{" "}
+					button appears here — letting you start production without their
+					sign-off so the order is never stuck waiting.
+				</p>
+			) : null}
+		</section>
 	);
 }
 

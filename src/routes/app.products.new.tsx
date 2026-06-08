@@ -43,7 +43,6 @@ function NewProductRoute() {
 						imageStorageIds: values.imageStorageIds,
 						sortOrder: Date.now(),
 						options: values.options,
-						blockWhenOutOfStock: values.blockWhenOutOfStock,
 						variants: values.variants,
 					});
 					navigate({ to: "/app/products" });

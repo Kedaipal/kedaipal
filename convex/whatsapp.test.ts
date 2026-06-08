@@ -413,6 +413,157 @@ describe("whatsapp inbound", () => {
 	});
 });
 
+describe("whatsapp confirm — custom item defers the payment ask", () => {
+	// Seed a made-to-order product (requiresProof) and an order for it. The
+	// order is created with mockupStatus "pending", so the mockup gate is closed.
+	async function seedCustomOrder(
+		t: ReturnType<typeof convexTest>,
+		locale: "en" | "ms" = "en",
+	): Promise<{ shortId: string; orderId: Id<"orders"> }> {
+		const asUser = t.withIdentity({ subject: USER });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: "Cake Studio",
+			slug: `cake-${locale}`,
+		});
+		if (locale !== "en") {
+			await asUser.mutation(api.retailers.updateSettings, { locale });
+		}
+		await asUser.mutation(api.retailers.updateSettings, {
+			paymentInstructions: { bankName: "Maybank", bankAccountNumber: "5123-4567" },
+		});
+		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		const productId = await asUser.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Custom Birthday Cake",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			requiresProof: true,
+			variants: [{ optionValues: [], price: 0, onHand: 0 }],
+		});
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryAddress: {
+				line1: "12 Jln Mawar 3",
+				city: "Petaling Jaya",
+				state: "Selangor",
+				postcode: "47301",
+			},
+		});
+		const order = await t.query(api.orders.get, { shortId });
+		return { shortId, orderId: order!._id };
+	}
+
+	test("custom order → branded image confirm, no 'I've paid' button or payment block", async () => {
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const { shortId } = await seedCustomOrder(t);
+
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: shortId,
+		});
+
+		// Exactly one WA message: a branded image (logo header) with a caption —
+		// no QR follow-up, no interactive CTA, no payment details yet.
+		expect(fetchMock.waCalls()).toHaveLength(1);
+		const body = fetchMock.waCalls()[0].body as {
+			type: string;
+			image?: { link: string; caption?: string };
+		};
+		expect(body.type).toBe("image");
+		expect(body.image?.link).toBe("https://kedaipal.com/logo-2.png");
+		const caption = body.image?.caption ?? "";
+		expect(caption).toContain(shortId);
+		expect(caption).toContain("design to approve");
+		expect(caption).not.toContain("I've paid");
+		expect(caption).not.toContain("transfer reference");
+		expect(caption).not.toContain("Maybank");
+		fetchMock.restore();
+	});
+
+	test("notifyPaymentDue (approved) sends the deferred 'I've paid' prompt", async () => {
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const { orderId, shortId } = await seedCustomOrder(t);
+
+		await t.action(internal.whatsapp.notifyPaymentDue, {
+			orderId,
+			reason: "approved",
+		});
+
+		expect(fetchMock.waCalls().length).toBeGreaterThanOrEqual(1);
+		const body = fetchMock.waCalls()[0].body as {
+			type: string;
+			interactive: {
+				type: string;
+				body: { text: string };
+				action: { parameters: { display_text: string; url: string } };
+			};
+		};
+		expect(body.type).toBe("interactive");
+		expect(body.interactive.type).toBe("cta_url");
+		expect(body.interactive.action.parameters.display_text).toBe("I've paid");
+		expect(body.interactive.action.parameters.url).toContain(`/track/${shortId}`);
+		expect(body.interactive.body.text).toContain("approved");
+		expect(body.interactive.body.text).toContain(
+			`Use ${shortId} as your transfer reference`,
+		);
+		expect(body.interactive.body.text).toContain("Maybank");
+		fetchMock.restore();
+	});
+
+	test("notifyPaymentDue (waived) sends the payment prompt with the waiver intro", async () => {
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const { orderId, shortId } = await seedCustomOrder(t);
+
+		await t.action(internal.whatsapp.notifyPaymentDue, {
+			orderId,
+			reason: "waived",
+		});
+
+		const body = fetchMock.waCalls()[0].body as {
+			interactive: {
+				body: { text: string };
+				action: { parameters: { display_text: string } };
+			};
+		};
+		expect(body.interactive.action.parameters.display_text).toBe("I've paid");
+		expect(body.interactive.body.text).toContain(
+			`payment details for your order ${shortId}`,
+		);
+		fetchMock.restore();
+	});
+
+	test("notifyPaymentDue (declined) sends the payment prompt for the remainder", async () => {
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const { orderId, shortId } = await seedCustomOrder(t);
+
+		await t.action(internal.whatsapp.notifyPaymentDue, {
+			orderId,
+			reason: "declined",
+		});
+
+		const body = fetchMock.waCalls()[0].body as {
+			interactive: {
+				body: { text: string };
+				action: { parameters: { display_text: string } };
+			};
+		};
+		expect(body.interactive.action.parameters.display_text).toBe("I've paid");
+		expect(body.interactive.body.text).toContain("custom item was removed");
+		expect(body.interactive.body.text).toContain(shortId);
+		fetchMock.restore();
+	});
+});
+
 describe("whatsapp outbound on status change", () => {
 	test("notifyStatusChange sends localized message for each status", async () => {
 		const cases: Array<{

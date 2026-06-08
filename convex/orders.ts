@@ -4,11 +4,16 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
 import {
+	adjustAggregatesForTotalChange,
 	decrementAggregatesForCancel,
 	linkOrderToCustomer,
 } from "./customers";
 import { assertValidAddress } from "./lib/address";
-import { computeOrderTotals, generateShortId } from "./lib/order";
+import {
+	computeOrderTotals,
+	generateShortId,
+	isMockupGateClosed,
+} from "./lib/order";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidWaPhone } from "./lib/slug";
 import { variantLabel } from "./lib/variant";
@@ -197,6 +202,8 @@ export const create = mutation({
 			Id<"productVariants">,
 			{ qty: number; block: boolean; onHand: number }
 		>();
+		// Whole-order mockup gating: set if ANY line's product requires a proof.
+		let requiresMockup = false;
 		for (const item of args.items) {
 			if (!Number.isInteger(item.quantity) || item.quantity < 1)
 				throw new ConvexError("Quantity must be a positive integer");
@@ -226,6 +233,11 @@ export const create = mutation({
 				throw new ConvexError("Variant does not belong to this retailer");
 			const product = await ctx.db.get(variant.productId);
 			if (!product) throw new ConvexError("Product not found");
+			// Per-variant flags fall back to the (deprecated) product-level defaults
+			// so legacy variants behave unchanged. Lets a mixed product gate only its
+			// made-to-order "Custom" variant, not the fixed sizes.
+			const variantRequiresProof = variant.requiresProof ?? product.requiresProof;
+			if (variantRequiresProof === true) requiresMockup = true;
 			const variantId = variant._id;
 			const label = variantLabel(variant.optionValues);
 			const displayName = label ? `${product.name} (${label})` : product.name;
@@ -235,7 +247,7 @@ export const create = mutation({
 				throw new ConvexError(
 					`Currency mismatch: order is ${args.currency} but "${displayName}" is ${product.currency}`,
 				);
-			const block = product.blockWhenOutOfStock === true;
+			const block = (variant.blockWhenOutOfStock ?? product.blockWhenOutOfStock) === true;
 			const prior = requestedByVariant.get(variantId);
 			const newRequested = (prior?.qty ?? 0) + item.quantity;
 			// Stock is only enforced for hard-block products. Made-to-order
@@ -304,6 +316,7 @@ export const create = mutation({
 			deliveryAddress: sanitizedAddress,
 			pickupLocationId: resolvedPickupLocationId,
 			pickupSnapshot: sanitizedPickupSnapshot,
+			mockupStatus: requiresMockup ? "pending" : undefined,
 			createdAt: now,
 			updatedAt: now,
 		});
@@ -453,6 +466,15 @@ export const updateStatus = mutation({
 		if (!retailer) throw new Error("Retailer not found");
 		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
 
+		// Mockup gate: a proof-required order can't move into production (packed)
+		// until the buyer has approved the mockup or the seller has waived it.
+		// Gates only the forward production step — cancelling is always allowed.
+		if (status === "packed" && isMockupGateClosed(order)) {
+			throw new ConvexError(
+				"Awaiting mockup approval — the buyer must approve the mockup (or you can proceed without approval) before this order can be packed",
+			);
+		}
+
 		const now = Date.now();
 
 		// Restore stock on the FIRST transition into cancelled. Idempotent —
@@ -473,7 +495,11 @@ export const updateStatus = mutation({
 				const fresh = await ctx.db.get(variantId);
 				if (!fresh) continue; // variant was deleted; nothing to restore
 				const product = await ctx.db.get(fresh.productId);
-				if (product?.blockWhenOutOfStock !== true) continue; // made-to-order
+				if (!product) continue;
+				// Mirror the create-time decrement: a variant was only reserved when
+				// its resolved flag hard-blocks (per-variant override ?? product default).
+				const block = fresh.blockWhenOutOfStock ?? product.blockWhenOutOfStock;
+				if (block !== true) continue; // made-to-order — never decremented
 				await ctx.db.patch(variantId, {
 					onHand: fresh.onHand + qty,
 					updatedAt: now,
@@ -697,6 +723,13 @@ export const claimPayment = mutation({
 		if (order.paymentStatus === "received") {
 			throw new ConvexError("Payment already confirmed");
 		}
+		// Payment is gated behind mockup approval — the buyer's tracking page
+		// disables "I've paid" while the gate is closed; reject a direct call too.
+		if (isMockupGateClosed(order)) {
+			throw new ConvexError(
+				"Please approve the mockup before paying — your order total is confirmed once you approve the design.",
+			);
+		}
 
 		const trimmedRef = reference?.trim();
 		if (trimmedRef && trimmedRef.length > PAYMENT_REFERENCE_MAX) {
@@ -759,6 +792,14 @@ export const markPaymentReceived = mutation({
 		if (order.paymentStatus === "received") {
 			// Idempotent — second click is a no-op.
 			return;
+		}
+		// Can't mark payment received while the mockup gate is closed — the buyer
+		// hasn't been asked to pay and the price may not be final. Mirrors the
+		// disabled dashboard button; defense-in-depth against a direct call.
+		if (isMockupGateClosed(order)) {
+			throw new ConvexError(
+				"Approve or remove the custom item first — the buyer is asked to pay only after the mockup is approved (or you proceed without approval).",
+			);
 		}
 
 		const now = Date.now();
@@ -825,5 +866,448 @@ export const generateOrderProofUploadUrl = mutation({
 		}
 
 		return ctx.storage.generateUploadUrl();
+	},
+});
+
+// ---------------------------------------------------------------------------
+// Mockup / proof approval (docs/proof-approval.md). Code says "mockup", not
+// "proof" — "proof" is the buyer's payment screenshot. Independent dimension;
+// the confirmed→packed gate lives at the top of updateStatus above.
+// ---------------------------------------------------------------------------
+
+const MOCKUP_NOTE_MAX = 500;
+// Sanity cap on a custom-work quote (minor units) — RM1,000,000. Guards typos
+// like an extra few zeros from producing an absurd total.
+const MOCKUP_QUOTE_MAX = 100_000_000;
+// Grace after a mockup is sent before the seller may proceed without the buyer's
+// approval (the deadlock escape). v1 is purely time-based — no reminder
+// precondition until the Reminders Cron lands.
+export const MOCKUP_WAIVE_GRACE_MS = 48 * 60 * 60 * 1000; // 48h
+
+// `isMockupGateClosed` is defined once in ./lib/order (shared with whatsapp.ts
+// and the dashboard/tracking pages).
+
+/**
+ * Validate an optional new quote against the prior one, returning the effective
+ * quote (minor units). Omitting `quotedAmount` keeps whatever was set before;
+ * providing one re-prices. Shared by submitMockup + updateMockupQuote.
+ */
+function resolveMockupQuote(
+	quotedAmount: number | undefined,
+	prior: number | undefined,
+): number | undefined {
+	if (quotedAmount === undefined) return prior;
+	if (!Number.isInteger(quotedAmount) || quotedAmount < 0)
+		throw new ConvexError("Quote must be a whole, non-negative amount");
+	if (quotedAmount > MOCKUP_QUOTE_MAX)
+		throw new ConvexError("Quote is unrealistically large — check the amount");
+	return quotedAmount;
+}
+
+/** Owner-only: mint a one-shot upload URL for a mockup image. */
+export const generateMockupUploadUrl = mutation({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<string> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Not authenticated");
+		await rateLimiter.limit(ctx, "mockupSubmit", { key: identity.subject, throws: true });
+		const order = await ctx.db.get(orderId);
+		if (!order) throw new ConvexError("Order not found");
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) throw new Error("Retailer not found");
+		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		if (order.mockupStatus === undefined)
+			throw new ConvexError("This order doesn't require a mockup");
+		return ctx.storage.generateUploadUrl();
+	},
+});
+
+/**
+ * Owner-only: attach a mockup and send it to the buyer → status `submitted`.
+ * `quotedAmount` (minor units, optional) is the seller's price for the custom
+ * work. It's re-enterable on each round; when present it's folded into `total`
+ * immediately as a *proposed* total (the buyer locks it by approving). Omit it
+ * for made-to-order items that already carry a fixed storefront price.
+ */
+export const submitMockup = mutation({
+	args: {
+		orderId: v.id("orders"),
+		storageId: v.string(),
+		quotedAmount: v.optional(v.number()),
+	},
+	handler: async (ctx, { orderId, storageId, quotedAmount }): Promise<void> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Not authenticated");
+		await rateLimiter.limit(ctx, "mockupSubmit", { key: identity.subject, throws: true });
+		const order = await ctx.db.get(orderId);
+		if (!order) throw new ConvexError("Order not found");
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) throw new Error("Retailer not found");
+		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		if (order.mockupStatus === undefined)
+			throw new ConvexError("This order doesn't require a mockup");
+		if (order.mockupStatus === "approved")
+			throw new ConvexError("The mockup is already approved");
+		const id = storageId.trim();
+		if (!id) throw new ConvexError("Missing mockup image");
+
+		const effectiveQuote = resolveMockupQuote(
+			quotedAmount,
+			order.mockupQuotedAmount,
+		);
+
+		const now = Date.now();
+		const { subtotal, total } = computeOrderTotals(order.items, effectiveQuote);
+		// Keep the customer's denormalized totalSpent in step with the new total.
+		if (order.customerId)
+			await adjustAggregatesForTotalChange(ctx, {
+				customerId: order.customerId,
+				delta: total - order.total,
+			});
+
+		await ctx.db.patch(orderId, {
+			mockupStatus: "submitted",
+			mockupImageStorageId: id,
+			mockupSubmittedAt: now,
+			mockupChangeNote: undefined,
+			mockupQuotedAmount: effectiveQuote,
+			subtotal,
+			total,
+			updatedAt: now,
+		});
+		await ctx.db.insert("orderEvents", {
+			orderId,
+			status: order.status,
+			note:
+				effectiveQuote && effectiveQuote > 0
+					? `mockup_submitted (quote ${effectiveQuote})`
+					: "mockup_submitted",
+			createdAt: now,
+		});
+		await ctx.scheduler.runAfter(0, internal.whatsapp.notifyMockupSubmitted, {
+			orderId,
+		});
+	},
+});
+
+/**
+ * Owner-only: re-price the custom work WITHOUT re-sending the mockup. Patches
+ * `mockupQuotedAmount` + recomputes `total` (the buyer sees it live on the
+ * tracking page), but — unlike submitMockup — does NOT touch `mockupSubmittedAt`
+ * (so the 48h waiver clock keeps running) and does NOT notify the buyer over
+ * WhatsApp. This is what the dashboard "Save price" control calls, so adjusting
+ * the price several times can't spam the buyer or reset the waiver grace.
+ */
+export const updateMockupQuote = mutation({
+	args: { orderId: v.id("orders"), quotedAmount: v.optional(v.number()) },
+	handler: async (ctx, { orderId, quotedAmount }): Promise<void> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Not authenticated");
+		await rateLimiter.limit(ctx, "mockupSubmit", { key: identity.subject, throws: true });
+		const order = await ctx.db.get(orderId);
+		if (!order) throw new ConvexError("Order not found");
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) throw new Error("Retailer not found");
+		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		if (order.mockupStatus === undefined)
+			throw new ConvexError("This order doesn't require a mockup");
+		if (order.mockupStatus === "approved")
+			throw new ConvexError("The mockup is already approved");
+		if (!order.mockupImageStorageId)
+			throw new ConvexError("Send the mockup before pricing it");
+
+		const effectiveQuote = resolveMockupQuote(
+			quotedAmount,
+			order.mockupQuotedAmount,
+		);
+		const now = Date.now();
+		const { subtotal, total } = computeOrderTotals(order.items, effectiveQuote);
+		// Keep the customer's denormalized totalSpent in step with the new total.
+		if (order.customerId)
+			await adjustAggregatesForTotalChange(ctx, {
+				customerId: order.customerId,
+				delta: total - order.total,
+			});
+		await ctx.db.patch(orderId, {
+			mockupQuotedAmount: effectiveQuote,
+			subtotal,
+			total,
+			updatedAt: now,
+		});
+		await ctx.db.insert("orderEvents", {
+			orderId,
+			status: order.status,
+			note:
+				effectiveQuote && effectiveQuote > 0
+					? `mockup_quote_updated (quote ${effectiveQuote})`
+					: "mockup_quote_updated",
+			createdAt: now,
+		});
+	},
+});
+
+/** Public (buyer): approve the current mockup. shortId is the capability. */
+export const approveMockup = mutation({
+	args: { shortId: v.string() },
+	handler: async (ctx, { shortId }): Promise<void> => {
+		const order = await ctx.db
+			.query("orders")
+			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+			.first();
+		if (!order) throw new ConvexError("Order not found");
+		await rateLimiter.limit(ctx, "mockupReview", { key: order.retailerId, throws: true });
+		if (order.mockupStatus === undefined)
+			throw new ConvexError("This order has no mockup to approve");
+		if (order.mockupStatus === "approved") return; // idempotent
+		if (order.mockupStatus !== "submitted")
+			throw new ConvexError("There's no mockup awaiting your approval yet");
+
+		const now = Date.now();
+		await ctx.db.patch(order._id, {
+			mockupStatus: "approved",
+			mockupApprovedAt: now,
+			updatedAt: now,
+		});
+		await ctx.db.insert("orderEvents", {
+			orderId: order._id,
+			status: order.status,
+			note: "mockup_approved",
+			createdAt: now,
+		});
+		await ctx.scheduler.runAfter(0, internal.email.notifyMockupApproved, {
+			orderId: order._id,
+		});
+		// Gate is now open → send the buyer the payment prompt that was deferred
+		// at confirm time (the "I've paid" CTA over WhatsApp).
+		await ctx.scheduler.runAfter(0, internal.whatsapp.notifyPaymentDue, {
+			orderId: order._id,
+			reason: "approved",
+		});
+	},
+});
+
+/** Public (buyer): request changes to the current mockup. */
+export const requestMockupChanges = mutation({
+	args: { shortId: v.string(), note: v.optional(v.string()) },
+	handler: async (ctx, { shortId, note }): Promise<void> => {
+		const order = await ctx.db
+			.query("orders")
+			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+			.first();
+		if (!order) throw new ConvexError("Order not found");
+		await rateLimiter.limit(ctx, "mockupReview", { key: order.retailerId, throws: true });
+		if (order.mockupStatus !== "submitted")
+			throw new ConvexError("There's no mockup awaiting your review yet");
+		const trimmed = note?.trim();
+		if (trimmed && trimmed.length > MOCKUP_NOTE_MAX)
+			throw new ConvexError(`Note must be ${MOCKUP_NOTE_MAX} characters or fewer`);
+
+		const now = Date.now();
+		await ctx.db.patch(order._id, {
+			mockupStatus: "changes_requested",
+			mockupChangeNote: trimmed && trimmed.length > 0 ? trimmed : undefined,
+			updatedAt: now,
+		});
+		await ctx.db.insert("orderEvents", {
+			orderId: order._id,
+			status: order.status,
+			note:
+				trimmed && trimmed.length > 0
+					? `changes_requested: ${trimmed}`
+					: "changes_requested",
+			createdAt: now,
+		});
+		await ctx.scheduler.runAfter(
+			0,
+			internal.email.notifyMockupChangesRequested,
+			{ orderId: order._id },
+		);
+	},
+});
+
+/** Owner-only: proceed without buyer approval (deadlock escape, time-guarded). */
+export const waiveMockup = mutation({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<void> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Not authenticated");
+		await rateLimiter.limit(ctx, "mockupSubmit", { key: identity.subject, throws: true });
+		const order = await ctx.db.get(orderId);
+		if (!order) throw new ConvexError("Order not found");
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) throw new Error("Retailer not found");
+		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		if (order.mockupStatus === undefined)
+			throw new ConvexError("This order doesn't require a mockup");
+		if (order.mockupStatus === "approved" || order.mockupWaivedAt !== undefined)
+			return; // gate already open
+		if (order.mockupSubmittedAt === undefined)
+			throw new ConvexError("Send the mockup to the buyer first");
+		if (Date.now() - order.mockupSubmittedAt < MOCKUP_WAIVE_GRACE_MS)
+			throw new ConvexError(
+				"You can only proceed without approval after the buyer has had time to respond",
+			);
+
+		const now = Date.now();
+		await ctx.db.patch(orderId, { mockupWaivedAt: now, updatedAt: now });
+		await ctx.db.insert("orderEvents", {
+			orderId,
+			status: order.status,
+			note: "mockup_waived",
+			createdAt: now,
+		});
+		// Gate forced open without buyer approval → the buyer still needs to pay,
+		// so send the payment prompt deferred at confirm time.
+		await ctx.scheduler.runAfter(0, internal.whatsapp.notifyPaymentDue, {
+			orderId,
+			reason: "waived",
+		});
+	},
+});
+
+/**
+ * Public (buyer): decline the custom (made-to-order) item. shortId is the
+ * capability. Drops every `requiresProof` line from the order, recomputes the
+ * total (clearing the quote), and re-opens the fulfilment gate so the remaining
+ * ready-made items proceed normally. If the order was custom-only, declining is
+ * equivalent to cancelling it (stock restored, aggregates reversed).
+ */
+export const declineMockupItem = mutation({
+	args: { shortId: v.string() },
+	handler: async (ctx, { shortId }): Promise<void> => {
+		const order = await ctx.db
+			.query("orders")
+			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+			.first();
+		if (!order) throw new ConvexError("Order not found");
+		await rateLimiter.limit(ctx, "mockupReview", { key: order.retailerId, throws: true });
+		if (order.mockupStatus === undefined)
+			throw new ConvexError("This order has no custom item to decline");
+		if (order.mockupStatus === "approved")
+			throw new ConvexError("The custom item has already been approved");
+
+		// Resolve which lines are the made-to-order/custom ones (requiresProof
+		// resolves true: per-variant override ?? product default).
+		const customVariantIds = new Set<string>();
+		for (const item of order.items) {
+			if (!item.variantId) continue;
+			const variant = await ctx.db.get(item.variantId);
+			if (!variant) continue;
+			const product = await ctx.db.get(variant.productId);
+			if (!product) continue;
+			if ((variant.requiresProof ?? product.requiresProof) === true)
+				customVariantIds.add(item.variantId);
+		}
+		if (customVariantIds.size === 0)
+			throw new ConvexError("No custom item on this order to decline");
+
+		const kept = order.items.filter(
+			(i) => !i.variantId || !customVariantIds.has(i.variantId),
+		);
+		const dropped = order.items.filter(
+			(i) => i.variantId && customVariantIds.has(i.variantId),
+		);
+
+		const now = Date.now();
+
+		// Restore stock for any dropped line that hard-blocks (defensive — custom
+		// items are normally made-to-order and were never reserved).
+		const restoreByVariant = new Map<Id<"productVariants">, number>();
+		for (const item of dropped) {
+			if (!item.variantId) continue;
+			restoreByVariant.set(
+				item.variantId,
+				(restoreByVariant.get(item.variantId) ?? 0) + item.quantity,
+			);
+		}
+		for (const [variantId, qty] of restoreByVariant) {
+			const fresh = await ctx.db.get(variantId);
+			if (!fresh) continue;
+			const product = await ctx.db.get(fresh.productId);
+			if (!product) continue;
+			if ((fresh.blockWhenOutOfStock ?? product.blockWhenOutOfStock) !== true)
+				continue;
+			await ctx.db.patch(variantId, { onHand: fresh.onHand + qty, updatedAt: now });
+		}
+
+		const droppedNote = `custom_declined: ${dropped
+			.map((i) => (i.variantLabel ? `${i.name} (${i.variantLabel})` : i.name))
+			.join(", ")}`;
+
+		// Custom-only order → declining is a cancellation.
+		if (kept.length === 0) {
+			if (order.status !== "cancelled" && order.customerId)
+				await decrementAggregatesForCancel(ctx, {
+					customerId: order.customerId,
+					orderTotal: order.total,
+				});
+			await ctx.db.patch(order._id, {
+				status: "cancelled",
+				mockupStatus: undefined,
+				mockupQuotedAmount: undefined,
+				updatedAt: now,
+			});
+			await ctx.db.insert("orderEvents", {
+				orderId: order._id,
+				status: "cancelled",
+				note: droppedNote,
+				createdAt: now,
+			});
+			await ctx.scheduler.runAfter(0, internal.email.notifyMockupDeclined, {
+				orderId: order._id,
+			});
+			return;
+		}
+
+		// Mixed order → keep the ready-made items, drop the custom one, clear the
+		// quote + gate, recompute the total.
+		const { subtotal, total } = computeOrderTotals(kept);
+		if (order.customerId)
+			await adjustAggregatesForTotalChange(ctx, {
+				customerId: order.customerId,
+				delta: total - order.total,
+			});
+		await ctx.db.patch(order._id, {
+			items: kept,
+			subtotal,
+			total,
+			mockupStatus: undefined,
+			mockupQuotedAmount: undefined,
+			updatedAt: now,
+		});
+		await ctx.db.insert("orderEvents", {
+			orderId: order._id,
+			status: order.status,
+			note: droppedNote,
+			createdAt: now,
+		});
+		await ctx.scheduler.runAfter(0, internal.email.notifyMockupDeclined, {
+			orderId: order._id,
+		});
+		// The gate is now open and the buyer owes for the ready-made remainder, but
+		// they may close the page — nudge them with the payment prompt over
+		// WhatsApp. Skip if payment was already taken (e.g. seller marked received).
+		if ((order.paymentStatus ?? "unpaid") === "unpaid")
+			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyPaymentDue, {
+				orderId: order._id,
+				reason: "declined",
+			});
+	},
+});
+
+/**
+ * Public query: resolve the current mockup image into a viewable URL for the
+ * tracking page. shortId is the capability (same trust model as the rest of the
+ * tracking page).
+ */
+export const getMockupUrl = query({
+	args: { shortId: v.string() },
+	handler: async (ctx, { shortId }): Promise<string | null> => {
+		const order = await ctx.db
+			.query("orders")
+			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+			.first();
+		if (!order?.mockupImageStorageId) return null;
+		return (await ctx.storage.getUrl(order.mockupImageStorageId)) ?? null;
 	},
 });

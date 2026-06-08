@@ -51,7 +51,8 @@ erDiagram
         string description "markdown, storefront"
         string currency
         array options "0-2 option axes (name+values)"
-        boolean blockWhenOutOfStock "optional"
+        boolean blockWhenOutOfStock "DEPRECATED — moved to variant"
+        boolean requiresProof "DEPRECATED — moved to variant"
         array imageStorageIds
         boolean active "soft delete"
         number sortOrder
@@ -66,6 +67,8 @@ erDiagram
         string sku "optional, per-retailer unique"
         number price
         number onHand
+        boolean blockWhenOutOfStock "optional, per-variant"
+        boolean requiresProof "optional, per-variant"
         number reserved "0 until HitPay"
         number parcelWeightG "feeds weight-band delivery"
         array imageStorageIds
@@ -135,10 +138,10 @@ Catalog items, scoped to a retailer. **Soft-deleted** via `active: boolean` — 
 | `description` | string? | Rendered as **sanitized markdown** on the storefront (specs, "what's included"). |
 | `currency` | string | Must match the order currency at checkout. |
 | `options` | object[]? | 0–2 **option axes** `{name, values[]}`, ordered (drives picker order). Empty/undefined = no axes. Capped at 2 axes / 50 variants. |
-| `blockWhenOutOfStock` | boolean? | `true` = a variant with `onHand ≤ 0` is unsellable. Undefined/false = **made-to-order** (sold-out combos stay sellable). |
 | `imageStorageIds` | string[] | Product-level hero gallery (up to 5). |
 | `active` | boolean | Soft-delete flag. |
 | `sortOrder` | number | Custom storefront ranking. |
+| `blockWhenOutOfStock`, `requiresProof` | **DEPRECATED** | Moved to `productVariants` (now **per-variant**). Reads fall back to these product-level values when a variant's own flag is unset (`variant.X ?? product.X`), so they're kept optional until the narrow step. **Set the variant flags, not these.** |
 | `price`, `stock`, `sku` | **DEPRECATED** | Moved to `productVariants`. Kept optional during the flat→variant migration (widen-migrate-narrow); dropped in the narrow step. **Do not read.** |
 
 **Indexes:** `by_retailer`, `by_retailer_active` (storefront shows active only), `by_retailer_sku` (legacy; SKU uniqueness now enforced on the variant).
@@ -154,7 +157,9 @@ The first-class **sellable unit**. `optionValues` is positionally aligned with t
 | `optionValues` | string[] | Positionally aligned with `products.options`; `[]` for the implicit default. |
 | `sku` | string? | Optional, **unique per retailer** (`by_retailer_sku`). |
 | `price` | number | Minor units. Server-authoritative at order time. |
-| `onHand` | number | Stock. Decremented on order create / restored on cancel **only when** the parent product hard-blocks. |
+| `onHand` | number | Stock. Decremented on order create / restored on cancel **only when** this variant hard-blocks (`blockWhenOutOfStock` resolves true). |
+| `blockWhenOutOfStock` | boolean? | **Per-variant.** `true` = this variant with `onHand ≤ 0` is unsellable. Undefined/false = **made-to-order** (sells at zero, never reserved). Falls back to the deprecated product-level flag when unset. Lets a mixed listing pair fixed sizes (hard-block) with a "Custom" made-to-order variant. |
+| `requiresProof` | boolean? | **Per-variant.** `true` = any order containing this variant is **mockup-gated** (can't be packed until the buyer approves a mockup). Falls back to the product-level flag when unset. See [`proof-approval.md`](./proof-approval.md). |
 | `reserved` | number | Forward-wired for HitPay holds; stays `0` until payments go live. |
 | `parcelWeightG` | number | Parcel weight (grams). Feeds weight-band delivery (separate task); `0` = unset. |
 | `imageStorageIds` | string[] | Per-variant images (up to 3); storefront falls back to the product hero when empty. |
@@ -199,8 +204,9 @@ The core transactional entity. Two independent dimensions:
 | `deliveryAddress` | object? | **Invariant:** required when `delivery`, forbidden when `self_collect`. Validated by [`convex/lib/address.ts`](../convex/lib/address.ts). |
 | `carrierTrackingUrl` | string? | Set by retailer on `shipped`; surfaced in tracking + WhatsApp. |
 | `paymentStatus`, `paymentReference`, `paymentClaimedAt`, `paymentReceivedAt`, `paymentProofStorageId` | — | Payment handshake (independent of `status`). |
+| `mockupStatus`, `mockupImageStorageId`, `mockupChangeNote`, `mockupSubmittedAt`, `mockupApprovedAt`, `mockupWaivedAt` | — | **Mockup/proof approval** — a *third* independent dimension (like payment), gating `confirmed→packed`. `mockupStatus`: `pending → submitted → approved` (+ `changes_requested` loop). Undefined = order has no proof-required item. ⚠️ "mockup" ≠ payment "proof". See [`proof-approval.md`](./proof-approval.md). |
 
-**Indexes:** `by_retailer`, `by_retailer_status`, `by_retailer_payment`, `by_shortId` (public tracking + confirmation lookup), `by_customer`.
+**Indexes:** `by_retailer`, `by_retailer_status`, `by_retailer_payment`, `by_retailer_mockup`, `by_shortId` (public tracking + confirmation lookup), `by_customer`.
 
 ### `orderEvents`
 
