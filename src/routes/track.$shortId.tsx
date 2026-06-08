@@ -18,6 +18,7 @@ import {
 import { type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
+import { isMockupGateClosed } from "../../convex/lib/order";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
 import { IvePaidDialog } from "../components/storefront/ive-paid-dialog";
@@ -232,11 +233,10 @@ function TrackingRoute() {
 	const paymentConfig = getPaymentConfig(paymentStatus);
 	// While a custom item still awaits mockup approval, the price isn't final, so
 	// the payment ask is held back (no live "I've paid" — see the bot flow too).
-	// Gate opens on approval or seller waiver.
-	const mockupGateClosed =
-		order.mockupStatus !== undefined &&
-		order.mockupStatus !== "approved" &&
-		order.mockupWaivedAt == null;
+	// Gate opens on approval or seller waiver. Shared gate — same source as the
+	// server (lib/order). `mockupGateOpen` is the distinct "actively opened"
+	// concept used only for the receipt below.
+	const mockupGateClosed = isMockupGateClosed(order);
 	const mockupGateOpen =
 		order.mockupStatus === "approved" || order.mockupWaivedAt != null;
 

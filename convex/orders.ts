@@ -9,7 +9,11 @@ import {
 	linkOrderToCustomer,
 } from "./customers";
 import { assertValidAddress } from "./lib/address";
-import { computeOrderTotals, generateShortId } from "./lib/order";
+import {
+	computeOrderTotals,
+	generateShortId,
+	isMockupGateClosed,
+} from "./lib/order";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidWaPhone } from "./lib/slug";
 import { variantLabel } from "./lib/variant";
@@ -880,20 +884,24 @@ const MOCKUP_QUOTE_MAX = 100_000_000;
 // precondition until the Reminders Cron lands.
 export const MOCKUP_WAIVE_GRACE_MS = 48 * 60 * 60 * 1000; // 48h
 
+// `isMockupGateClosed` is defined once in ./lib/order (shared with whatsapp.ts
+// and the dashboard/tracking pages).
+
 /**
- * The mockup gate is "closed" while a custom item still needs buyer sign-off:
- * the order carries a `mockupStatus`, it isn't `approved`, and the seller hasn't
- * waived. While closed, BOTH production (→ packed) and payment (buyer claim /
- * seller mark-received) are blocked — the buyer isn't asked to pay until the
- * design + price are agreed. Opens on approve, waive, or removing the custom
- * item (which clears `mockupStatus`). Non-custom orders are never gated.
+ * Validate an optional new quote against the prior one, returning the effective
+ * quote (minor units). Omitting `quotedAmount` keeps whatever was set before;
+ * providing one re-prices. Shared by submitMockup + updateMockupQuote.
  */
-function isMockupGateClosed(order: Doc<"orders">): boolean {
-	return (
-		order.mockupStatus !== undefined &&
-		order.mockupStatus !== "approved" &&
-		order.mockupWaivedAt === undefined
-	);
+function resolveMockupQuote(
+	quotedAmount: number | undefined,
+	prior: number | undefined,
+): number | undefined {
+	if (quotedAmount === undefined) return prior;
+	if (!Number.isInteger(quotedAmount) || quotedAmount < 0)
+		throw new ConvexError("Quote must be a whole, non-negative amount");
+	if (quotedAmount > MOCKUP_QUOTE_MAX)
+		throw new ConvexError("Quote is unrealistically large — check the amount");
+	return quotedAmount;
 }
 
 /** Owner-only: mint a one-shot upload URL for a mockup image. */
@@ -902,7 +910,7 @@ export const generateMockupUploadUrl = mutation({
 	handler: async (ctx, { orderId }): Promise<string> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error("Not authenticated");
-		await rateLimiter.limit(ctx, "productWrite", { key: identity.subject, throws: true });
+		await rateLimiter.limit(ctx, "mockupSubmit", { key: identity.subject, throws: true });
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
 		const retailer = await ctx.db.get(order.retailerId);
@@ -930,7 +938,7 @@ export const submitMockup = mutation({
 	handler: async (ctx, { orderId, storageId, quotedAmount }): Promise<void> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error("Not authenticated");
-		await rateLimiter.limit(ctx, "productWrite", { key: identity.subject, throws: true });
+		await rateLimiter.limit(ctx, "mockupSubmit", { key: identity.subject, throws: true });
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
 		const retailer = await ctx.db.get(order.retailerId);
@@ -943,16 +951,10 @@ export const submitMockup = mutation({
 		const id = storageId.trim();
 		if (!id) throw new ConvexError("Missing mockup image");
 
-		// Resolve the effective quote: a provided value overwrites the prior one
-		// (re-pricing across rounds); omitting it keeps whatever was set before.
-		let effectiveQuote = order.mockupQuotedAmount;
-		if (quotedAmount !== undefined) {
-			if (!Number.isInteger(quotedAmount) || quotedAmount < 0)
-				throw new ConvexError("Quote must be a whole, non-negative amount");
-			if (quotedAmount > MOCKUP_QUOTE_MAX)
-				throw new ConvexError("Quote is unrealistically large — check the amount");
-			effectiveQuote = quotedAmount;
-		}
+		const effectiveQuote = resolveMockupQuote(
+			quotedAmount,
+			order.mockupQuotedAmount,
+		);
 
 		const now = Date.now();
 		const { subtotal, total } = computeOrderTotals(order.items, effectiveQuote);
@@ -984,6 +986,62 @@ export const submitMockup = mutation({
 		});
 		await ctx.scheduler.runAfter(0, internal.whatsapp.notifyMockupSubmitted, {
 			orderId,
+		});
+	},
+});
+
+/**
+ * Owner-only: re-price the custom work WITHOUT re-sending the mockup. Patches
+ * `mockupQuotedAmount` + recomputes `total` (the buyer sees it live on the
+ * tracking page), but — unlike submitMockup — does NOT touch `mockupSubmittedAt`
+ * (so the 48h waiver clock keeps running) and does NOT notify the buyer over
+ * WhatsApp. This is what the dashboard "Save price" control calls, so adjusting
+ * the price several times can't spam the buyer or reset the waiver grace.
+ */
+export const updateMockupQuote = mutation({
+	args: { orderId: v.id("orders"), quotedAmount: v.optional(v.number()) },
+	handler: async (ctx, { orderId, quotedAmount }): Promise<void> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Not authenticated");
+		await rateLimiter.limit(ctx, "mockupSubmit", { key: identity.subject, throws: true });
+		const order = await ctx.db.get(orderId);
+		if (!order) throw new ConvexError("Order not found");
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) throw new Error("Retailer not found");
+		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		if (order.mockupStatus === undefined)
+			throw new ConvexError("This order doesn't require a mockup");
+		if (order.mockupStatus === "approved")
+			throw new ConvexError("The mockup is already approved");
+		if (!order.mockupImageStorageId)
+			throw new ConvexError("Send the mockup before pricing it");
+
+		const effectiveQuote = resolveMockupQuote(
+			quotedAmount,
+			order.mockupQuotedAmount,
+		);
+		const now = Date.now();
+		const { subtotal, total } = computeOrderTotals(order.items, effectiveQuote);
+		// Keep the customer's denormalized totalSpent in step with the new total.
+		if (order.customerId)
+			await adjustAggregatesForTotalChange(ctx, {
+				customerId: order.customerId,
+				delta: total - order.total,
+			});
+		await ctx.db.patch(orderId, {
+			mockupQuotedAmount: effectiveQuote,
+			subtotal,
+			total,
+			updatedAt: now,
+		});
+		await ctx.db.insert("orderEvents", {
+			orderId,
+			status: order.status,
+			note:
+				effectiveQuote && effectiveQuote > 0
+					? `mockup_quote_updated (quote ${effectiveQuote})`
+					: "mockup_quote_updated",
+			createdAt: now,
 		});
 	},
 });
@@ -1073,7 +1131,7 @@ export const waiveMockup = mutation({
 	handler: async (ctx, { orderId }): Promise<void> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error("Not authenticated");
-		await rateLimiter.limit(ctx, "productWrite", { key: identity.subject, throws: true });
+		await rateLimiter.limit(ctx, "mockupSubmit", { key: identity.subject, throws: true });
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
 		const retailer = await ctx.db.get(order.retailerId);

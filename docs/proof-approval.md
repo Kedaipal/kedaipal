@@ -125,7 +125,7 @@ quote rides on the mockup approval — they're one decision for the buyer.
 
 **Flow (pay-once-after-quote):**
 1. Buyer orders the custom variant (snapshot price 0). In-stock lines are reserved as usual; nothing is paid yet.
-2. Seller **submits the mockup with a price** (`submitMockup({ storageId, quotedAmount })`). The quote is re-enterable each round — the latest wins. It folds into `total` immediately as a *proposed* total, and the customer's denormalized `totalSpent` is kept in step via `adjustAggregatesForTotalChange`.
+2. Seller **submits the mockup with a price** (`submitMockup({ storageId, quotedAmount })`). The quote is re-enterable each round — the latest wins. It folds into `total` immediately as a *proposed* total, and the customer's denormalized `totalSpent` is kept in step via `adjustAggregatesForTotalChange`. Sending a (new) image re-pings the buyer and restarts the 48h waiver clock. **Re-pricing only** (dashboard "Save price") goes through a separate `updateMockupQuote` mutation that patches `mockupQuotedAmount` + `total` **without** re-sending the image, re-notifying the buyer, or touching `mockupSubmittedAt` — the buyer sees the new price live, so adjusting it several times can't spam them or reset the grace.
 3. Buyer **approves** (design + price → gate opens, total locks), **requests changes** (loop), or **declines the item**.
 4. Buyer pays the finalized `total` through the existing payment flow — **but the payment ask is gated** (see below).
 
@@ -135,7 +135,7 @@ A custom order shouldn't be asked to pay before the buyer has seen and approved
 the design + price — otherwise they'd pay against an unknown (RM0) total. So the
 **"I've paid" prompt is deferred** for any order whose mockup gate is closed.
 
-- **Gate closed** = `mockupStatus` set, not `approved`, and `mockupWaivedAt` unset (`isMockupGateClosed` in `convex/whatsapp.ts`). Surfaced to the confirm flow as `getRetailerLocaleForOrder().mockupPending`.
+- **Gate closed** = `mockupStatus` set, not `approved`, and `mockupWaivedAt` unset. Defined once as `isMockupGateClosed` in **`convex/lib/order.ts`** and imported everywhere (server `orders.ts` + `whatsapp.ts`, and the dashboard/tracking pages) — change the gate rule in one place. Surfaced to the confirm flow as `getRetailerLocaleForOrder().mockupPending`.
 - **First bot reply (custom order):** a **branded image message** (kedaipal logo header) whose caption is `mockupPendingConfirm` system copy — "order received, a design is coming to approve, no payment needed yet" — plus the pickup block when self-collect. Same visual shape as the normal confirm, just **no** transfer-reference line, **no** payment block, **no** QR, **no** "I've paid" CTA (an image message instead of an interactive `cta_url` so there's no button to tap).
 - **First bot reply (normal order):** unchanged — full confirm + payment block + "I've paid" CTA.
 - **Gate opens → payment prompt fires.** `approveMockup` (buyer), `waiveMockup` (seller deadlock escape), and `declineMockupItem` on a *mixed* order (buyer removed the custom line, leaving a payable remainder) all schedule `internal.whatsapp.notifyPaymentDue({ orderId, reason })`, which sends the deferred "I've paid" prompt (intro = `paymentDueApproved` / `paymentDueWaived` / `paymentDueDeclined`, then the standard pickup + transfer-reference + payment block, shared with the confirm reply via `sendPaymentMessage`). The decline nudge is skipped if payment was already taken.
@@ -148,11 +148,13 @@ the design + price — otherwise they'd pay against an unknown (RM0) total. So t
 - The **items receipt** reconciles the order-level quote: the made-to-order line is snapshotted at RM0, so once the buyer locks the quote (approve/waive) we fold it onto that single price-0 line — the line shows the real price and the line totals sum to `Total` (no stray "RM 0.00"). While still *proposed*, or when it can't be pinned to exactly one price-0 line, it renders as a labelled **"Custom work (proposed)"** line above Total instead. Mirrors the seller order detail's "Custom work" line.
 - Seller order detail keeps its action-oriented mockup badges ("Mockup needed" / "Awaiting buyer"). Its **"Mark payment received" button is disabled** while the gate is closed (relabelled "Awaiting mockup approval", with a hint) — the seller can't record payment before the buyer's been asked and the price is final. It enables on approve / waive / removing the custom item.
 
-**Server-enforced, not just UI** (`isMockupGateClosed` in `convex/orders.ts`): the gate guards three mutations so a direct call can't bypass the disabled buttons —
+**Server-enforced, not just UI** (`isMockupGateClosed`, shared from `convex/lib/order.ts`): the gate guards three mutations so a direct call can't bypass the disabled buttons —
 - `updateStatus → "packed"` (production gate, pre-existing),
 - `markPaymentReceived` (seller) — throws while gated,
 - `claimPayment` (buyer "I've paid") — throws while gated.
 All three share the one helper, alongside the timeline / payment-button reads, so the gate is defined once and applied everywhere.
+
+**Rate limiting:** seller mockup actions (`generateMockupUploadUrl`, `submitMockup`, `updateMockupQuote`, `waiveMockup`) use a dedicated **`mockupSubmit`** bucket (10/min, burst 5) keyed by Clerk subject — separate from `productWrite` so a bulk product edit can't starve a seller out of sending a time-sensitive mockup (and vice versa). Buyer review actions stay on `mockupReview`.
 
 **Seller new-order / order-confirmed email** (`emailCopy.ts`, gated on `requiresMockup = mockupStatus !== undefined`) carries a "⚠️ Custom item — send a mockup… payment is held until they approve" line (EN + MS), so a seller scanning alerts knows the order needs a mockup before payment unlocks.
 

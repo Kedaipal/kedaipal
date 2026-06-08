@@ -9,6 +9,7 @@ import {
 import { linkOrderToCustomer, refreshWaProfileName } from "./customers";
 import { getAdapter } from "./lib/channels/registry";
 import type { ChannelAdapter } from "./lib/channels/types";
+import { isMockupGateClosed } from "./lib/order";
 import { assertValidWaPhone } from "./lib/slug";
 import {
 	paymentQrCaption,
@@ -212,21 +213,6 @@ export const getRetailerLocaleForOrder = internalQuery({
 		};
 	},
 });
-
-/**
- * The mockup gate is "closed" while a custom item still needs buyer sign-off:
- * the order carries a `mockupStatus`, it isn't yet `approved`, and the seller
- * hasn't waived. While closed we defer the payment prompt (no "I've paid").
- * Open it by approving or waiving. Non-custom orders have no `mockupStatus` and
- * are never gated.
- */
-function isMockupGateClosed(order: Doc<"orders">): boolean {
-	return (
-		order.mockupStatus !== undefined &&
-		order.mockupStatus !== "approved" &&
-		order.mockupWaivedAt === undefined
-	);
-}
 
 /**
  * Send the buyer the payment ask: `introBody` (the confirm template, or a

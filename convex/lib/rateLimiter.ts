@@ -74,6 +74,16 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		period: MINUTE,
 		capacity: 3,
 	},
+	// Authenticated seller mockup actions (upload URL, submit, quote update),
+	// keyed by Clerk subject. Separate from `productWrite` so a bulk product edit
+	// can't starve a seller out of sending a time-sensitive mockup for a waiting
+	// order (and vice versa).
+	mockupSubmit: {
+		kind: "token bucket",
+		rate: 10,
+		period: MINUTE,
+		capacity: 5,
+	},
 	googleAutocomplete: {
 		kind: "token bucket",
 		rate: 30,

@@ -1955,6 +1955,89 @@ describe("orders — custom quote + decline", () => {
 		expect(after?.total).toBe(20000);
 	});
 
+	test("updateMockupQuote re-prices without re-pinging or resetting the waiver clock", async () => {
+		const t = setup();
+		const { order, shortId } = await seedOrder(t, { fixedQty: 1, customQty: 1 });
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "m1",
+			quotedAmount: 12000,
+		});
+		const submitted = await t.query(api.orders.get, { shortId });
+		const submittedAt = submitted?.mockupSubmittedAt;
+		expect(submittedAt).toBeDefined();
+
+		// Count the WA mockup-submit jobs already scheduled (one from submitMockup).
+		const jobsBefore = await t.run((ctx) =>
+			ctx.db.system.query("_scheduled_functions").collect(),
+		);
+		const pingsBefore = jobsBefore.filter((j) =>
+			j.name.includes("notifyMockupSubmitted"),
+		).length;
+
+		await asA(t).mutation(api.orders.updateMockupQuote, {
+			orderId: order._id,
+			quotedAmount: 18000,
+		});
+
+		const after = await t.query(api.orders.get, { shortId });
+		expect(after?.mockupQuotedAmount).toBe(18000);
+		expect(after?.total).toBe(23000); // 5000 fixed + 18000 quote
+		// Status + waiver clock untouched — the buyer sees the price live.
+		expect(after?.mockupStatus).toBe("submitted");
+		expect(after?.mockupSubmittedAt).toBe(submittedAt);
+		// No new "review your mockup" WhatsApp ping scheduled.
+		const jobsAfter = await t.run((ctx) =>
+			ctx.db.system.query("_scheduled_functions").collect(),
+		);
+		const pingsAfter = jobsAfter.filter((j) =>
+			j.name.includes("notifyMockupSubmitted"),
+		).length;
+		expect(pingsAfter).toBe(pingsBefore);
+	});
+
+	test("updateMockupQuote keeps the customer's totalSpent in step", async () => {
+		const t = setup();
+		const { retailer, order } = await seedOrder(t, { fixedQty: 1, customQty: 1 });
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "m1",
+			quotedAmount: 12000,
+		});
+		expect(await totalSpent(t, retailer._id)).toBe(17000);
+		await asA(t).mutation(api.orders.updateMockupQuote, {
+			orderId: order._id,
+			quotedAmount: 9000,
+		});
+		expect(await totalSpent(t, retailer._id)).toBe(14000);
+	});
+
+	test("updateMockupQuote rejects before a mockup is sent and after approval", async () => {
+		const t = setup();
+		const { order, shortId } = await seedOrder(t, { fixedQty: 1, customQty: 1 });
+		// No mockup image yet → rejected.
+		await expect(
+			asA(t).mutation(api.orders.updateMockupQuote, {
+				orderId: order._id,
+				quotedAmount: 9000,
+			}),
+		).rejects.toThrow(/Send the mockup before pricing/i);
+
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "m1",
+			quotedAmount: 12000,
+		});
+		await t.mutation(api.orders.approveMockup, { shortId });
+		// Approved → locked, can't re-price.
+		await expect(
+			asA(t).mutation(api.orders.updateMockupQuote, {
+				orderId: order._id,
+				quotedAmount: 9000,
+			}),
+		).rejects.toThrow(/already approved/i);
+	});
+
 	test("approve locks the quoted total", async () => {
 		const t = setup();
 		const { order, shortId } = await seedOrder(t, { fixedQty: 1, customQty: 1 });

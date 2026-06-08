@@ -20,6 +20,7 @@ import { type ChangeEvent, type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
+import { isMockupGateClosed } from "../../convex/lib/order";
 import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
 import {
 	PageHeader,
@@ -214,11 +215,8 @@ function OrderDetailRoute() {
 	const paymentStatus = (order.paymentStatus ?? "unpaid") as PaymentStatus;
 	const paymentBadgeCfg = paymentBadge(paymentStatus);
 	// Production (→ packed) is blocked while a mockup is required but not yet
-	// approved or waived. Mirrors the server gate in updateStatus.
-	const mockupGated =
-		order.mockupStatus !== undefined &&
-		order.mockupStatus !== "approved" &&
-		order.mockupWaivedAt === undefined;
+	// approved or waived. Shared gate — same source as the server (lib/order).
+	const mockupGated = isMockupGateClosed(order);
 
 	async function handleTransition(next: Transition) {
 		if (!order) return;
@@ -820,6 +818,7 @@ const MOCKUP_WAIVE_GRACE_MS = 48 * 60 * 60 * 1000;
 function MockupCard({ order }: { order: Doc<"orders"> }) {
 	const generateUploadUrl = useMutation(api.orders.generateMockupUploadUrl);
 	const submitMockup = useMutation(api.orders.submitMockup);
+	const updateMockupQuote = useMutation(api.orders.updateMockupQuote);
 	const waiveMockup = useMutation(api.orders.waiveMockup);
 	const mockupUrl = useQuery(api.orders.getMockupUrl, {
 		shortId: order.shortId,
@@ -878,8 +877,10 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 		}
 	}
 
-	// Update the quote without re-uploading — re-sends the existing mockup with
-	// the new price (buyer is re-notified). Only available once a mockup exists.
+	// Update the quote without re-uploading. Uses updateMockupQuote (not
+	// submitMockup) so it doesn't re-ping the buyer or reset the 48h waiver clock
+	// — the buyer sees the new price live on their tracking page. Only available
+	// once a mockup exists.
 	async function handleSavePrice() {
 		const quote = parsedQuote();
 		if (priceInput.trim() !== "" && quote === undefined) {
@@ -889,12 +890,8 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 		if (!order.mockupImageStorageId) return;
 		setSavingPrice(true);
 		try {
-			await submitMockup({
-				orderId: order._id,
-				storageId: order.mockupImageStorageId,
-				quotedAmount: quote,
-			});
-			toast.success("Price updated and re-sent to the buyer");
+			await updateMockupQuote({ orderId: order._id, quotedAmount: quote });
+			toast.success("Price updated — the buyer sees it on their order page");
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
