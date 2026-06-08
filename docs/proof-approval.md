@@ -136,17 +136,39 @@ the design + price — otherwise they'd pay against an unknown (RM0) total. So t
 **"I've paid" prompt is deferred** for any order whose mockup gate is closed.
 
 - **Gate closed** = `mockupStatus` set, not `approved`, and `mockupWaivedAt` unset (`isMockupGateClosed` in `convex/whatsapp.ts`). Surfaced to the confirm flow as `getRetailerLocaleForOrder().mockupPending`.
-- **First bot reply (custom order):** plain-text confirm (`mockupPendingConfirm` system copy) — "order received, a design is coming to approve, no payment needed yet." **No** payment block, **no** QR, **no** "I've paid" CTA.
+- **First bot reply (custom order):** a **branded image message** (kedaipal logo header) whose caption is `mockupPendingConfirm` system copy — "order received, a design is coming to approve, no payment needed yet" — plus the pickup block when self-collect. Same visual shape as the normal confirm, just **no** transfer-reference line, **no** payment block, **no** QR, **no** "I've paid" CTA (an image message instead of an interactive `cta_url` so there's no button to tap).
 - **First bot reply (normal order):** unchanged — full confirm + payment block + "I've paid" CTA.
-- **Gate opens → payment prompt fires.** `approveMockup` (buyer) and `waiveMockup` (seller deadlock escape) both schedule `internal.whatsapp.notifyPaymentDue({ orderId, reason })`, which sends the deferred "I've paid" prompt (intro = `paymentDueApproved` / `paymentDueWaived`, then the standard pickup + transfer-reference + payment block, shared with the confirm reply via `sendPaymentMessage`).
+- **Gate opens → payment prompt fires.** `approveMockup` (buyer), `waiveMockup` (seller deadlock escape), and `declineMockupItem` on a *mixed* order (buyer removed the custom line, leaving a payable remainder) all schedule `internal.whatsapp.notifyPaymentDue({ orderId, reason })`, which sends the deferred "I've paid" prompt (intro = `paymentDueApproved` / `paymentDueWaived` / `paymentDueDeclined`, then the standard pickup + transfer-reference + payment block, shared with the confirm reply via `sendPaymentMessage`). The decline nudge is skipped if payment was already taken.
 - **Re-confirm after the gate opens** (buyer re-sends `ORD-XXXX`) takes the normal branch, so the pay button shows again — idempotent.
 
-**Decline (`declineMockupItem`, capability = `shortId`):** drops every
-`requiresProof` line, recomputes `total` (quote cleared), and **re-evaluates the
-gate** — with no proof-required line left, `mockupStatus` clears and the
-ready-made remainder proceeds. A custom-only order that's declined is
-**cancelled** (stock restored, aggregates reversed). The seller is emailed
-(`notifyMockupDeclined`).
+**Tracking page (`track.$shortId.tsx`) while the gate is closed:**
+- The **"I've paid" button is disabled** and relabelled — "Awaiting mockup" (pre-submission) / "Awaiting your mockup approval" (`submitted`), with a one-line hint — so the buyer can't claim payment before the price is final. It reverts to the live "I've paid" once approved/waived.
+- The **Mockup card** uses status-style labels: `pending → "Pending mockup design"`, `submitted → "Pending mockup approval"`, `changes_requested → "Pending mockup update"`, `approved → "Mockup approved"`.
+- The **progress timeline** splices a virtual **mockup node** right after "Confirmed" for custom orders (same labels as the card), so the buyer sees the approval step that gates Packed. It's the *current* step while the gate is closed and `done` once approved/waived. Non-custom orders render the plain fulfilment list.
+- The **items receipt** reconciles the order-level quote: the made-to-order line is snapshotted at RM0, so once the buyer locks the quote (approve/waive) we fold it onto that single price-0 line — the line shows the real price and the line totals sum to `Total` (no stray "RM 0.00"). While still *proposed*, or when it can't be pinned to exactly one price-0 line, it renders as a labelled **"Custom work (proposed)"** line above Total instead. Mirrors the seller order detail's "Custom work" line.
+- Seller order detail keeps its action-oriented mockup badges ("Mockup needed" / "Awaiting buyer"). Its **"Mark payment received" button is disabled** while the gate is closed (relabelled "Awaiting mockup approval", with a hint) — the seller can't record payment before the buyer's been asked and the price is final. It enables on approve / waive / removing the custom item.
+
+**Server-enforced, not just UI** (`isMockupGateClosed` in `convex/orders.ts`): the gate guards three mutations so a direct call can't bypass the disabled buttons —
+- `updateStatus → "packed"` (production gate, pre-existing),
+- `markPaymentReceived` (seller) — throws while gated,
+- `claimPayment` (buyer "I've paid") — throws while gated.
+All three share the one helper, alongside the timeline / payment-button reads, so the gate is defined once and applied everywhere.
+
+**Seller new-order / order-confirmed email** (`emailCopy.ts`, gated on `requiresMockup = mockupStatus !== undefined`) carries a "⚠️ Custom item — send a mockup… payment is held until they approve" line (EN + MS), so a seller scanning alerts knows the order needs a mockup before payment unlocks.
+
+**Buyer can also drop the custom item entirely** at any point before approval via `declineMockupItem` ("Remove this custom item" on the tracking page) — distinct from "Request changes" (the mockup-revision loop). On a mixed order it removes the custom line, the remainder proceeds, and the buyer gets a WhatsApp payment nudge for it; on a custom-only order it cancels. See §11.
+
+**Non-custom orders are entirely unaffected** — no `mockupStatus`, so every branch above falls through to the original behavior.
+
+**Remove the custom item (`declineMockupItem`, capability = `shortId`):** the
+buyer's "Remove this custom item" action — distinct from "Request changes" (the
+mockup-revision loop). Drops every `requiresProof` line, recomputes `total`
+(quote cleared), and **re-evaluates the gate** — with no proof-required line
+left, `mockupStatus` clears and the ready-made remainder proceeds. A custom-only
+order that's removed is **cancelled** (stock restored, aggregates reversed). The
+seller is emailed (`notifyMockupDeclined`). On a **mixed** order, because the
+gate just opened on a still-unpaid remainder, the buyer is also nudged to pay
+over WhatsApp (`notifyPaymentDue` with `reason: "declined"`) — see §11a.
 
 **Why order-level, not per-line:** one mockup ⇒ one quote per order. Pricing the
 custom work at the order level (a single `mockupQuotedAmount` folded into the

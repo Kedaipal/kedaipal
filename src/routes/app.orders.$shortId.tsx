@@ -301,7 +301,7 @@ function OrderDetailRoute() {
 						})}
 					</p>
 				</div>
-				<div className="flex flex-col items-end gap-1.5">
+				<div className="flex flex-col items-start gap-1.5">
 					<StatusBadge status={order.status} />
 					<span
 						className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${paymentBadgeCfg.className}`}
@@ -412,18 +412,26 @@ function OrderDetailRoute() {
 						</p>
 					</div>
 					<p className="text-sm text-muted-foreground">
-						The customer hasn't tapped "I've paid" yet. If you've already seen
-						the money in your bank app, mark it received here.
+						{mockupGated
+							? `Payment is locked until the custom item is sorted — ${
+									order.mockupStatus === "submitted"
+										? "the buyer is reviewing the mockup"
+										: "send the buyer a mockup to approve"
+								}. The buyer is only asked to pay once they approve (or you proceed without approval below).`
+							: `The customer hasn't tapped "I've paid" yet. If you've already seen the money in your bank app, mark it received here.`}
 					</p>
+					{/* While the mockup gate is closed the buyer hasn't been asked to pay
+					    and the price may not be final, so the seller can't mark payment
+					    received yet. Opens on approve / waive / removing the custom item. */}
 					<Button
 						onClick={handleMarkPaymentReceived}
 						isLoading={confirmingPayment}
-						disabled={confirmingPayment}
+						disabled={confirmingPayment || mockupGated}
 						variant="secondary"
 						className="h-11 w-full"
 					>
 						<BadgeCheck className="size-4" />
-						Mark payment received
+						{mockupGated ? "Awaiting mockup approval" : "Mark payment received"}
 					</Button>
 				</section>
 			) : null}
@@ -912,6 +920,14 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 		status !== "approved" &&
 		order.mockupSubmittedAt != null &&
 		Date.now() - order.mockupSubmittedAt >= MOCKUP_WAIVE_GRACE_MS;
+	// When the time-based waiver unlocks: 48h after the mockup was sent.
+	const waiveUnlockLabel =
+		order.mockupSubmittedAt != null
+			? new Date(order.mockupSubmittedAt + MOCKUP_WAIVE_GRACE_MS).toLocaleString(
+					undefined,
+					{ dateStyle: "medium", timeStyle: "short" },
+				)
+			: "";
 
 	const badge = waived
 		? { label: "Proceeding — no approval", cls: "bg-muted text-foreground" }
@@ -1050,8 +1066,16 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 				</Button>
 			) : status === "submitted" && !waived ? (
 				<p className="text-xs text-muted-foreground">
-					If the buyer goes quiet, you'll be able to proceed without approval
-					once they've had time to respond.
+					Waiting on the buyer to approve. If they haven't responded by{" "}
+					<span className="font-medium text-foreground">
+						{waiveUnlockLabel}
+					</span>{" "}
+					(48 hours after you sent the mockup), a{" "}
+					<span className="font-medium text-foreground">
+						“Proceed without approval”
+					</span>{" "}
+					button appears here — letting you start production without their
+					sign-off so the order is never stuck waiting.
 				</p>
 			) : null}
 		</section>

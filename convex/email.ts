@@ -41,6 +41,7 @@ export const getOrderForRetailerEmail = internalQuery({
 		paymentReference: string | undefined;
 		paymentProofStorageId: string | undefined;
 		mockupChangeNote: string | undefined;
+		requiresMockup: boolean;
 	} | null> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) return null;
@@ -60,6 +61,8 @@ export const getOrderForRetailerEmail = internalQuery({
 			paymentReference: order.paymentReference,
 			paymentProofStorageId: order.paymentProofStorageId,
 			mockupChangeNote: order.mockupChangeNote,
+			// A set mockupStatus means the order has a made-to-order custom line.
+			requiresMockup: order.mockupStatus !== undefined,
 		};
 	},
 });
@@ -158,6 +161,7 @@ export const notifyRetailerOrderAlert = internalAction({
 			notifyEmail: string | undefined;
 			storeName: string;
 			locale: Locale;
+			requiresMockup: boolean;
 		} | null = null;
 		try {
 			meta = await ctx.runQuery(internal.email.getOrderForRetailerEmail, {
@@ -193,6 +197,7 @@ export const notifyRetailerOrderAlert = internalAction({
 			deliveryMethod: meta.deliveryMethod,
 			storeName: meta.storeName,
 			dashboardUrl,
+			requiresMockup: meta.requiresMockup,
 		});
 
 		try {

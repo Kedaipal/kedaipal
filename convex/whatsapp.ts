@@ -365,19 +365,36 @@ export const handleInbound = internalAction({
 
 		if (meta?.mockupPending) {
 			// Order still has a custom item awaiting buyer mockup approval — defer
-			// the whole payment ask. Send a plain confirm telling them a design is
-			// coming; the "I've paid" prompt follows on approval/waiver (see
-			// notifyPaymentDue). No payment block, no QR, no CTA button.
-			const gatedBody = renderSystemMessage(locale, "mockupPendingConfirm", {
+			// the payment ask. Same branded layout as the normal confirm (logo
+			// header + pickup block) but WITHOUT the transfer-reference line,
+			// payment block, QR, or "I've paid" CTA — there's no price to pay yet.
+			// The full payment prompt follows on approval/waiver (notifyPaymentDue).
+			const gatedConfirm = renderSystemMessage(locale, "mockupPendingConfirm", {
 				shortId,
 				storeName,
 				contactPhone,
 				trackingUrl,
 			});
+			const pickupBlock = renderPickupBlock(locale, meta?.pickupSnapshot);
+			const gatedBody = pickupBlock
+				? `${gatedConfirm}\n${pickupBlock}`
+				: gatedConfirm;
+			const brandImageUrl = "https://kedaipal.com/logo-2.png";
 			try {
-				await wa.send(fromPhone, { kind: "text", body: gatedBody });
+				// Image message carries the brand logo as the header without needing
+				// an interactive button (which would force a CTA we don't want here).
+				await wa.send(fromPhone, {
+					kind: "image",
+					imageUrl: brandImageUrl,
+					caption: gatedBody,
+				});
 			} catch (err) {
-				console.error("WA gated-confirm send failed", err);
+				console.error("WA gated-confirm send failed, falling back to text", err);
+				try {
+					await wa.send(fromPhone, { kind: "text", body: gatedBody });
+				} catch (textErr) {
+					console.error("WA gated-confirm send failed", textErr);
+				}
 			}
 		} else {
 			const confirmBody = renderMessage(
@@ -656,15 +673,21 @@ export const getPaymentPromptMeta = internalQuery({
 });
 
 /**
- * Scheduled by orders.approveMockup / orders.waiveMockup. Now that the mockup
- * gate is open, send the buyer the payment ask (the "I've paid" prompt) that
- * was deferred at confirm time. `reason` only picks the intro line; the payment
- * body is identical to the standard confirm reply. Errors swallowed (logged).
+ * Scheduled by orders.approveMockup / orders.waiveMockup, and by
+ * orders.declineMockupItem when a buyer drops the custom item from a mixed order
+ * (the ready-made remainder is now payable). Now that the mockup gate is open,
+ * send the buyer the payment ask (the "I've paid" prompt) that was deferred at
+ * confirm time. `reason` only picks the intro line; the payment body is
+ * identical to the standard confirm reply. Errors swallowed (logged).
  */
 export const notifyPaymentDue = internalAction({
 	args: {
 		orderId: v.id("orders"),
-		reason: v.union(v.literal("approved"), v.literal("waived")),
+		reason: v.union(
+			v.literal("approved"),
+			v.literal("waived"),
+			v.literal("declined"),
+		),
 	},
 	handler: async (ctx, { orderId, reason }): Promise<void> => {
 		let meta: {
@@ -687,11 +710,16 @@ export const notifyPaymentDue = internalAction({
 
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
 		const trackingUrl = `${appUrl}/track/${meta.shortId}`;
-		const introBody = renderSystemMessage(
-			meta.locale,
-			reason === "approved" ? "paymentDueApproved" : "paymentDueWaived",
-			{ shortId: meta.shortId, storeName: meta.storeName },
-		);
+		const introKey =
+			reason === "approved"
+				? "paymentDueApproved"
+				: reason === "waived"
+					? "paymentDueWaived"
+					: "paymentDueDeclined";
+		const introBody = renderSystemMessage(meta.locale, introKey, {
+			shortId: meta.shortId,
+			storeName: meta.storeName,
+		});
 		const wa = getAdapter("whatsapp");
 		await sendPaymentMessage(wa, meta.customerWaPhone, {
 			introBody,

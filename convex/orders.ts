@@ -465,12 +465,7 @@ export const updateStatus = mutation({
 		// Mockup gate: a proof-required order can't move into production (packed)
 		// until the buyer has approved the mockup or the seller has waived it.
 		// Gates only the forward production step — cancelling is always allowed.
-		if (
-			status === "packed" &&
-			order.mockupStatus !== undefined &&
-			order.mockupStatus !== "approved" &&
-			order.mockupWaivedAt === undefined
-		) {
+		if (status === "packed" && isMockupGateClosed(order)) {
 			throw new ConvexError(
 				"Awaiting mockup approval — the buyer must approve the mockup (or you can proceed without approval) before this order can be packed",
 			);
@@ -724,6 +719,13 @@ export const claimPayment = mutation({
 		if (order.paymentStatus === "received") {
 			throw new ConvexError("Payment already confirmed");
 		}
+		// Payment is gated behind mockup approval — the buyer's tracking page
+		// disables "I've paid" while the gate is closed; reject a direct call too.
+		if (isMockupGateClosed(order)) {
+			throw new ConvexError(
+				"Please approve the mockup before paying — your order total is confirmed once you approve the design.",
+			);
+		}
 
 		const trimmedRef = reference?.trim();
 		if (trimmedRef && trimmedRef.length > PAYMENT_REFERENCE_MAX) {
@@ -786,6 +788,14 @@ export const markPaymentReceived = mutation({
 		if (order.paymentStatus === "received") {
 			// Idempotent — second click is a no-op.
 			return;
+		}
+		// Can't mark payment received while the mockup gate is closed — the buyer
+		// hasn't been asked to pay and the price may not be final. Mirrors the
+		// disabled dashboard button; defense-in-depth against a direct call.
+		if (isMockupGateClosed(order)) {
+			throw new ConvexError(
+				"Approve or remove the custom item first — the buyer is asked to pay only after the mockup is approved (or you proceed without approval).",
+			);
 		}
 
 		const now = Date.now();
@@ -869,6 +879,22 @@ const MOCKUP_QUOTE_MAX = 100_000_000;
 // approval (the deadlock escape). v1 is purely time-based — no reminder
 // precondition until the Reminders Cron lands.
 export const MOCKUP_WAIVE_GRACE_MS = 48 * 60 * 60 * 1000; // 48h
+
+/**
+ * The mockup gate is "closed" while a custom item still needs buyer sign-off:
+ * the order carries a `mockupStatus`, it isn't `approved`, and the seller hasn't
+ * waived. While closed, BOTH production (→ packed) and payment (buyer claim /
+ * seller mark-received) are blocked — the buyer isn't asked to pay until the
+ * design + price are agreed. Opens on approve, waive, or removing the custom
+ * item (which clears `mockupStatus`). Non-custom orders are never gated.
+ */
+function isMockupGateClosed(order: Doc<"orders">): boolean {
+	return (
+		order.mockupStatus !== undefined &&
+		order.mockupStatus !== "approved" &&
+		order.mockupWaivedAt === undefined
+	);
+}
 
 /** Owner-only: mint a one-shot upload URL for a mockup image. */
 export const generateMockupUploadUrl = mutation({
@@ -1200,6 +1226,14 @@ export const declineMockupItem = mutation({
 		await ctx.scheduler.runAfter(0, internal.email.notifyMockupDeclined, {
 			orderId: order._id,
 		});
+		// The gate is now open and the buyer owes for the ready-made remainder, but
+		// they may close the page — nudge them with the payment prompt over
+		// WhatsApp. Skip if payment was already taken (e.g. seller marked received).
+		if ((order.paymentStatus ?? "unpaid") === "unpaid")
+			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyPaymentDue, {
+				orderId: order._id,
+				reason: "declined",
+			});
 	},
 });
 

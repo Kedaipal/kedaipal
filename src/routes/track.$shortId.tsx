@@ -230,6 +230,74 @@ function TrackingRoute() {
 	const canEditAddress = order.status === "pending" && !isSelfCollect;
 	const paymentStatus = (order.paymentStatus ?? "unpaid") as PaymentStatus;
 	const paymentConfig = getPaymentConfig(paymentStatus);
+	// While a custom item still awaits mockup approval, the price isn't final, so
+	// the payment ask is held back (no live "I've paid" — see the bot flow too).
+	// Gate opens on approval or seller waiver.
+	const mockupGateClosed =
+		order.mockupStatus !== undefined &&
+		order.mockupStatus !== "approved" &&
+		order.mockupWaivedAt == null;
+	const mockupGateOpen =
+		order.mockupStatus === "approved" || order.mockupWaivedAt != null;
+
+	// Receipt reconciliation for the custom-work quote (order-level, minor units).
+	// The made-to-order line is snapshotted at price 0, so the quote would
+	// otherwise be invisible on the items list (a stray "RM 0.00" next to a
+	// non-zero Total). Once the buyer locks it (approve/waive) we fold the quote
+	// onto the single price-0 line so the receipt reads normally; while it's still
+	// proposed — or can't be pinned to exactly one line — we show it as a separate
+	// "Custom work" line instead, so the line prices always sum to Total.
+	const customQuote = order.mockupQuotedAmount ?? 0;
+	const zeroPricedLineIdx = order.items.reduce<number[]>((acc, it, i) => {
+		if (it.price === 0) acc.push(i);
+		return acc;
+	}, []);
+	const quoteLineIdx =
+		customQuote > 0 && mockupGateOpen && zeroPricedLineIdx.length === 1
+			? zeroPricedLineIdx[0]
+			: null;
+	const showCustomWorkLine = customQuote > 0 && quoteLineIdx === null;
+
+	// Timeline nodes: the fulfilment statuses, with a virtual "mockup" step
+	// spliced in right after Confirmed for custom orders so the buyer sees where
+	// approval sits (and that it gates Packed). Non-custom orders get the plain
+	// fulfilment list.
+	const reachedIdx = STATUS_ORDER.indexOf(
+		order.status as (typeof STATUS_ORDER)[number],
+	);
+	const timelineNodes: Array<{
+		key: string;
+		label: string;
+		icon: ReactNode;
+		isDone: boolean;
+		isCurrent: boolean;
+	}> = [];
+	for (const [i, s] of STATUS_ORDER.entries()) {
+		const sc = statusConfig[s];
+		timelineNodes.push({
+			key: s,
+			label: sc?.label ?? s,
+			icon: sc?.icon,
+			isDone: i <= reachedIdx,
+			// For a gated custom order the active step is the mockup, not Confirmed.
+			isCurrent: s === order.status && !(s === "confirmed" && mockupGateClosed),
+		});
+		if (s === "confirmed" && order.mockupStatus !== undefined) {
+			timelineNodes.push({
+				key: "mockup",
+				label: mockupGateOpen
+					? "Mockup approved"
+					: order.mockupStatus === "submitted"
+						? "Pending mockup approval"
+						: order.mockupStatus === "changes_requested"
+							? "Pending mockup update"
+							: "Pending mockup design",
+				icon: <ImageIcon className="size-5" />,
+				isDone: mockupGateOpen,
+				isCurrent: mockupGateClosed && reachedIdx >= 1,
+			});
+		}
+	}
 
 	return (
 		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-12 pt-10">
@@ -279,12 +347,27 @@ function TrackingRoute() {
 					</div>
 
 					{paymentStatus === "unpaid" ? (
-						<Button
-							onClick={() => setClaimingPayment(true)}
-							className="h-12 w-full text-base"
-						>
-							I've paid
-						</Button>
+						mockupGateClosed ? (
+							<>
+								<Button disabled className="h-12 w-full text-base">
+									{order.mockupStatus === "submitted"
+										? "Awaiting your mockup approval"
+										: "Awaiting mockup"}
+								</Button>
+								<p className="text-xs opacity-80">
+									{order.mockupStatus === "submitted"
+										? "Approve the mockup below to unlock payment."
+										: "Payment opens once you approve the seller's mockup."}
+								</p>
+							</>
+						) : (
+							<Button
+								onClick={() => setClaimingPayment(true)}
+								className="h-12 w-full text-base"
+							>
+								I've paid
+							</Button>
+						)
 					) : null}
 
 					{paymentStatus === "claimed" ? (
@@ -315,44 +398,36 @@ function TrackingRoute() {
 			{/* Progress timeline — not shown for cancelled orders */}
 			{!isCancelled ? (
 				<div className="mt-6 flex flex-col gap-0">
-					{STATUS_ORDER.map((s, i) => {
-						const reached = STATUS_ORDER.indexOf(
-							order.status as (typeof STATUS_ORDER)[number],
-						);
-						const isDone = i <= reached;
-						const isCurrent = s === order.status;
-						const sc = statusConfig[s];
-						return (
-							<div key={s} className="flex gap-3">
-								{/* spine */}
-								<div className="flex flex-col items-center">
+					{timelineNodes.map((node, i) => (
+						<div key={node.key} className="flex gap-3">
+							{/* spine */}
+							<div className="flex flex-col items-center">
+								<div
+									className={`flex size-8 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${
+										node.isDone
+											? "border-accent bg-accent text-accent-foreground"
+											: "border-border bg-card text-muted-foreground"
+									}`}
+								>
+									{node.icon}
+								</div>
+								{i < timelineNodes.length - 1 ? (
 									<div
-										className={`flex size-8 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${
-											isDone
-												? "border-accent bg-accent text-accent-foreground"
-												: "border-border bg-card text-muted-foreground"
-										}`}
-									>
-										{sc?.icon}
-									</div>
-									{i < STATUS_ORDER.length - 1 ? (
-										<div
-											className={`w-0.5 flex-1 transition-colors ${isDone && !isCurrent ? "bg-accent" : "bg-border"}`}
-											style={{ minHeight: 28 }}
-										/>
-									) : null}
-								</div>
-								{/* label */}
-								<div className="pb-6 pt-1">
-									<p
-										className={`text-sm font-medium ${isCurrent ? "text-foreground" : isDone ? "text-foreground/70" : "text-muted-foreground"}`}
-									>
-										{sc?.label}
-									</p>
-								</div>
+										className={`w-0.5 flex-1 transition-colors ${node.isDone && !node.isCurrent ? "bg-accent" : "bg-border"}`}
+										style={{ minHeight: 28 }}
+									/>
+								) : null}
 							</div>
-						);
-					})}
+							{/* label */}
+							<div className="pb-6 pt-1">
+								<p
+									className={`text-sm font-medium ${node.isCurrent ? "text-foreground" : node.isDone ? "text-foreground/70" : "text-muted-foreground"}`}
+								>
+									{node.label}
+								</p>
+							</div>
+						</div>
+					))}
 				</div>
 			) : null}
 
@@ -473,30 +548,49 @@ function TrackingRoute() {
 					Items
 				</p>
 				<ul className="flex flex-col divide-y divide-border">
-					{order.items.map((item, i) => (
-						<li
-							key={item.variantId ?? `${item.productId}-${i}`}
-							className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0"
-						>
-							<div className="min-w-0 flex-1">
-								<p className="truncate text-sm font-medium">
-									{item.name}
-									{item.variantLabel ? (
-										<span className="ml-1.5 font-normal text-muted-foreground">
-											{item.variantLabel}
-										</span>
-									) : null}
+					{order.items.map((item, i) => {
+						// Folded quote: this single made-to-order line carries the
+						// locked custom-work price instead of its RM0 snapshot.
+						const isQuoteLine = i === quoteLineIdx;
+						const lineTotal = isQuoteLine
+							? customQuote
+							: item.price * item.quantity;
+						const unitPrice = isQuoteLine
+							? customQuote / item.quantity
+							: item.price;
+						return (
+							<li
+								key={item.variantId ?? `${item.productId}-${i}`}
+								className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0"
+							>
+								<div className="min-w-0 flex-1">
+									<p className="truncate text-sm font-medium">
+										{item.name}
+										{item.variantLabel ? (
+											<span className="ml-1.5 font-normal text-muted-foreground">
+												{item.variantLabel}
+											</span>
+										) : null}
+									</p>
+									<p className="text-xs text-muted-foreground">
+										{item.quantity} × {formatPrice(unitPrice, order.currency)}
+									</p>
+								</div>
+								<p className="shrink-0 text-sm font-semibold tabular-nums">
+									{formatPrice(lineTotal, order.currency)}
 								</p>
-								<p className="text-xs text-muted-foreground">
-									{item.quantity} × {formatPrice(item.price, order.currency)}
-								</p>
-							</div>
-							<p className="shrink-0 text-sm font-semibold tabular-nums">
-								{formatPrice(item.price * item.quantity, order.currency)}
-							</p>
-						</li>
-					))}
+							</li>
+						);
+					})}
 				</ul>
+				{showCustomWorkLine ? (
+					<div className="flex items-center justify-between px-3 text-sm text-muted-foreground">
+						<span>Custom work{mockupGateOpen ? "" : " (proposed)"}</span>
+						<span className="tabular-nums">
+							{formatPrice(customQuote, order.currency)}
+						</span>
+					</div>
+				) : null}
 				<div className="flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2.5 text-sm font-bold">
 					<span>Total</span>
 					<span className="tabular-nums">
@@ -642,12 +736,12 @@ function MockupReview({
 					</p>
 					<p className="font-semibold">
 						{status === "approved"
-							? "You approved this mockup"
+							? "Mockup approved"
 							: status === "submitted"
-								? "Please review your mockup"
+								? "Pending mockup approval"
 								: status === "changes_requested"
-									? "Changes requested"
-									: "Mockup in progress"}
+									? "Pending mockup update"
+									: "Pending mockup design"}
 					</p>
 				</div>
 			</div>
@@ -752,8 +846,9 @@ function MockupReview({
 				)
 			) : null}
 
-			{/* Decline the custom item — available until it's approved. Removes the
-			    custom line; any other items in the order carry on. */}
+			{/* Remove the custom item — available until it's approved. Drops the
+			    custom line; any other items in the order carry on. Distinct from
+			    "Request changes" (the mockup-revision loop). */}
 			{status !== "approved" && !showNote ? (
 				confirmDecline ? (
 					<div className="flex flex-col gap-2 rounded-xl border border-border bg-muted/30 p-3">
@@ -786,7 +881,7 @@ function MockupReview({
 						onClick={() => setConfirmDecline(true)}
 						className="self-start text-xs font-medium text-muted-foreground underline-offset-2 hover:underline"
 					>
-						Decline the custom item
+						Remove this custom item
 					</button>
 				)
 			) : null}

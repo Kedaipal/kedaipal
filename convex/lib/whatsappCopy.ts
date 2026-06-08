@@ -116,7 +116,8 @@ export type SystemMessageKey =
 	| "transferReferenceLine"
 	| "mockupPendingConfirm"
 	| "paymentDueApproved"
-	| "paymentDueWaived";
+	| "paymentDueWaived"
+	| "paymentDueDeclined";
 
 type SystemCopy = {
 	paymentReceived: (v: CopyVars) => string;
@@ -125,9 +126,11 @@ type SystemCopy = {
 	// mockup approval — payment is intentionally deferred (no "I've paid" yet).
 	mockupPendingConfirm: (v: CopyVars) => string;
 	// Intro lines that lead the payment prompt once the mockup gate opens, either
-	// by buyer approval or seller waiver. The payment block is appended after.
+	// by buyer approval, seller waiver, or the buyer removing the custom item from
+	// a mixed order (the ready-made remainder is now payable). Payment block follows.
 	paymentDueApproved: (v: CopyVars) => string;
 	paymentDueWaived: (v: CopyVars) => string;
+	paymentDueDeclined: (v: CopyVars) => string;
 };
 
 export const systemMessages: Record<Locale, SystemCopy> = {
@@ -146,6 +149,8 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`✅ Design approved for ${shortId}! Here's how to pay so ${storeName} can start making it:`,
 		paymentDueWaived: ({ shortId, storeName }) =>
 			`Here are the payment details for your order ${shortId} from ${storeName}:`,
+		paymentDueDeclined: ({ shortId, storeName }) =>
+			`No problem — the custom item was removed from ${shortId}. Here's how to pay for the rest of your order from ${storeName}:`,
 	},
 	ms: {
 		paymentReceived: ({ shortId, storeName, trackingUrl }) =>
@@ -162,6 +167,8 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`✅ Reka bentuk untuk ${shortId} telah diluluskan! Berikut cara membayar supaya ${storeName} boleh mula membuatnya:`,
 		paymentDueWaived: ({ shortId, storeName }) =>
 			`Berikut maklumat pembayaran untuk pesanan ${shortId} dari ${storeName}:`,
+		paymentDueDeclined: ({ shortId, storeName }) =>
+			`Tiada masalah — item custom telah dibuang dari ${shortId}. Berikut cara membayar untuk baki pesanan anda dari ${storeName}:`,
 	},
 };
 

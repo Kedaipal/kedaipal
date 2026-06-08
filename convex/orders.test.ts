@@ -1545,6 +1545,73 @@ describe("orders — mockup approval", () => {
 		expect((await t.query(api.orders.get, { shortId }))?.status).toBe("packed");
 	});
 
+	test("the gate blocks seller markPaymentReceived until approved", async () => {
+		const t = setup();
+		const { shortId, order } = await gatedOrder(t);
+
+		// Gated (mockupStatus pending): seller can't mark payment received.
+		await expect(
+			asA(t).mutation(api.orders.markPaymentReceived, { orderId: order._id }),
+		).rejects.toThrow(/Approve or remove the custom item/i);
+
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "mock-1",
+		});
+		await t.mutation(api.orders.approveMockup, { shortId });
+
+		// Gate open → marking payment received now succeeds.
+		await asA(t).mutation(api.orders.markPaymentReceived, {
+			orderId: order._id,
+		});
+		expect((await t.query(api.orders.get, { shortId }))?.paymentStatus).toBe(
+			"received",
+		);
+	});
+
+	test("the gate blocks buyer claimPayment until approved", async () => {
+		const t = setup();
+		const { shortId, order } = await gatedOrder(t);
+
+		await expect(
+			t.mutation(api.orders.claimPayment, { shortId }),
+		).rejects.toThrow(/approve the mockup before paying/i);
+
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "mock-1",
+		});
+		await t.mutation(api.orders.approveMockup, { shortId });
+
+		await t.mutation(api.orders.claimPayment, { shortId });
+		expect((await t.query(api.orders.get, { shortId }))?.paymentStatus).toBe(
+			"claimed",
+		);
+	});
+
+	test("a waived order lets the seller mark payment received", async () => {
+		const t = setup();
+		const { shortId, order } = await gatedOrder(t);
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "mock-1",
+		});
+		// Force the grace window to have elapsed (48h grace), then waive.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order._id, {
+				mockupSubmittedAt: Date.now() - 49 * 60 * 60 * 1000,
+			});
+		});
+		await asA(t).mutation(api.orders.waiveMockup, { orderId: order._id });
+
+		await asA(t).mutation(api.orders.markPaymentReceived, {
+			orderId: order._id,
+		});
+		expect((await t.query(api.orders.get, { shortId }))?.paymentStatus).toBe(
+			"received",
+		);
+	});
+
 	test("submit → request changes → resubmit loops back to submitted", async () => {
 		const t = setup();
 		const { shortId, order } = await gatedOrder(t);
@@ -1939,6 +2006,19 @@ describe("orders — custom quote + decline", () => {
 		expect(after?.status).not.toBe("cancelled");
 		expect(await totalSpent(t, retailer._id)).toBe(10000);
 
+		// The buyer is nudged to pay for the remaining ready-made items over
+		// WhatsApp (the gate just opened on a still-unpaid order).
+		const jobs = await t.run((ctx) =>
+			ctx.db.system.query("_scheduled_functions").collect(),
+		);
+		expect(
+			jobs.some(
+				(j) =>
+					j.name.includes("notifyPaymentDue") &&
+					(j.args as Array<{ reason?: string }>)[0]?.reason === "declined",
+			),
+		).toBe(true);
+
 		// Gate is open — the order can now be packed.
 		await asA(t).mutation(api.orders.updateStatus, {
 			orderId: order._id,
@@ -1965,6 +2045,12 @@ describe("orders — custom quote + decline", () => {
 		expect(after?.mockupStatus).toBeUndefined();
 		// Aggregates fully reversed for the cancelled order.
 		expect(await totalSpent(t, retailer._id)).toBe(0);
+
+		// Nothing left to pay for → no payment nudge (unlike the mixed-order case).
+		const jobs = await t.run((ctx) =>
+			ctx.db.system.query("_scheduled_functions").collect(),
+		);
+		expect(jobs.some((j) => j.name.includes("notifyPaymentDue"))).toBe(false);
 	});
 
 	test("decline is rejected once the mockup is approved", async () => {
