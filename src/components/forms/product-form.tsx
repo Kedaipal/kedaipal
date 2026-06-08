@@ -3,7 +3,7 @@ import { useMutation } from "convex/react";
 import { Info } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { api } from "../../../convex/_generated/api";
-import { convexErrorMessage } from "../../lib/format";
+import { convexErrorMessage, parsePriceInput } from "../../lib/format";
 import { productDetailsSchema } from "../../lib/schemas";
 import { variantLabel } from "../../lib/variant";
 import { Button } from "../ui/button";
@@ -105,7 +105,6 @@ function initialEditorState(
 	};
 }
 
-const PRICE_RE = /^\d+(\.\d{1,2})?$/;
 const INT_RE = /^\d+$/;
 
 export function ProductForm({
@@ -156,7 +155,12 @@ export function ProductForm({
 			const variants: ProductFormSubmitValues["variants"] = [];
 			for (const row of editor.rows) {
 				const label = variantLabel(row.optionValues) || "this product";
-				const priceOk = PRICE_RE.test(row.price.trim());
+				// Price: any non-negative number; rounded to integer sen (2 dp).
+				// parsePriceInput handles comma separators and rejects (rather than
+				// silently truncating) anything non-numeric — see src/lib/format.ts.
+				const priceStr = row.price.trim();
+				const priceNum = parsePriceInput(priceStr);
+				const priceOk = priceNum !== null;
 				const stockOk = INT_RE.test(row.stock.trim());
 				// Inactive (deactivated) variants are hidden from buyers, so don't
 				// block the whole save on their price/stock — just fall back to 0 for
@@ -176,7 +180,7 @@ export function ProductForm({
 				variants.push({
 					optionValues: row.optionValues,
 					sku: row.sku.trim() || undefined,
-					price: priceOk ? Math.round(Number.parseFloat(row.price) * 100) : 0,
+					price: priceNum !== null ? Math.round(priceNum * 100) : 0,
 					onHand: stockOk ? Number.parseInt(row.stock, 10) : 0,
 					active: row.active,
 					blockWhenOutOfStock: row.blockWhenOutOfStock,

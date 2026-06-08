@@ -84,17 +84,20 @@ function ProductsRoute() {
 		}
 		setExporting(kind);
 		try {
-			// Single-row-per-product export — represents the default/first variant.
-			// Full multi-variant export is the separate bulk-import rework subtask
-			// (docs/product-variants.md §9); here multi-variant products export
-			// their starting price + total stock.
+			// One row per active variant, round-trippable with the import parser.
 			const rows: ExportableProduct[] = filtered.map((p) => ({
-				sku: p.variants.length === 1 ? p.variants[0]?.sku : undefined,
+				handle: p._id,
 				name: p.name,
 				description: p.description,
-				price: p.priceFrom,
-				stock: p.totalOnHand,
-				active: p.active,
+				options: p.options ?? [],
+				variants: p.variants.map((vr) => ({
+					optionValues: vr.optionValues,
+					sku: vr.sku,
+					price: vr.price,
+					onHand: vr.onHand,
+					parcelWeightG: vr.parcelWeightG,
+					active: vr.active,
+				})),
 			}));
 			const fileBase = `kedaipal-${retailer.slug}`;
 			if (kind === "csv") downloadProductsCsv(rows, fileBase);
@@ -141,7 +144,7 @@ function ProductsRoute() {
 				<div className="flex flex-wrap items-center gap-x-1 gap-y-1 text-sm">
 					<Button asChild variant="ghost" className="h-8 px-2 text-sm">
 						<Link to="/app/products/import">
-							<Upload className="mr-1.5 size-3.5" aria-hidden />
+							<Download className="mr-1.5 size-3.5" aria-hidden />
 							Import
 						</Link>
 					</Button>
@@ -157,7 +160,7 @@ function ProductsRoute() {
 								disabled={exporting !== null}
 								onClick={() => handleExport("csv")}
 							>
-								<Download className="mr-1.5 size-3.5" aria-hidden />
+								<Upload className="mr-1.5 size-3.5" aria-hidden />
 								{exporting === "csv" ? "Exporting…" : "Export CSV"}
 							</Button>
 							<Button
@@ -167,7 +170,7 @@ function ProductsRoute() {
 								disabled={exporting !== null}
 								onClick={() => handleExport("xlsx")}
 							>
-								<Download className="mr-1.5 size-3.5" aria-hidden />
+								<Upload className="mr-1.5 size-3.5" aria-hidden />
 								{exporting === "xlsx" ? "Exporting…" : "Export XLSX"}
 							</Button>
 						</>

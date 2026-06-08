@@ -180,7 +180,7 @@ assume "variants covers customization." Scope it as its own ticket after this sh
 
 ## 9. Dependencies / blocks
 
-- **Blocks the bulk-import rework** (subtask) — import must create products + variants once price/stock/sku move off the product.
+- **Bulk-import rework** (subtask) — **shipped** (2026-06-04): variant-aware one-row-per-variant import/export with auto-fill + upsert-by-SKU. See [`bulk-product-upload-roadmap.md` § Shipped](./bulk-product-upload-roadmap.md#shipped--variant-aware-importexport-2026-06-04).
 - **Blocks the data migration** (separate task) — existing flat products must be backfilled
   to default variants before reads switch. Migration is its **own reviewable unit** (it does
   not ride this feature PR): additive → backfill default variants → dual-write behind a

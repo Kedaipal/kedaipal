@@ -1,78 +1,79 @@
 import ExcelJS from "exceljs";
 import Papa from "papaparse";
+import { VARIANT_IMPORT_COLUMNS } from "./product-import";
 
 /**
- * Product bulk export. Produces CSV and XLSX files whose shape is the same as
- * the bulk-import parser expects (see `src/lib/product-import.ts`) so an
- * export → edit → re-import round-trip works without column mapping.
+ * Product bulk export — one row per (active) variant, in the exact column shape
+ * the import parser expects (`VARIANT_IMPORT_COLUMNS`) so an export → edit →
+ * re-import round-trip works without column mapping.
  *
- * - Prices are written as major-unit strings (e.g. "120.50") to survive
- *   spreadsheet locale formatting (`120,50`) and Excel's "General" number
- *   auto-casting. The importer in PR 3 will also tolerate numeric cells.
- * - `active` is written as `"true"` / `"false"` — forward-looking; the Sprint
- *   1 importer ignores this column, but a later "richer schema" sprint will
- *   parse it for publish/unpublish via sheet.
+ * - Prices are written as major-unit strings (e.g. "120.50").
+ * - Only ACTIVE variants are exported. Combinations that were auto-filled
+ *   inactive on import are omitted and re-auto-filled on the next import, so the
+ *   common "edit my live prices/stock" round-trip is preserved. (Manually
+ *   deactivated variants are not exported — a known v1 limitation.)
+ * - `product_handle` is the product id, a stable grouping key that survives
+ *   name edits.
  */
 
-export const PRODUCT_EXPORT_COLUMNS = [
-	"sku",
-	"name",
-	"description",
-	"price",
-	"stock",
-	"active",
-] as const;
+export const PRODUCT_EXPORT_COLUMNS = VARIANT_IMPORT_COLUMNS;
 
-export type ProductExportColumn = (typeof PRODUCT_EXPORT_COLUMNS)[number];
-
-export interface ExportableProduct {
+export interface ExportableVariant {
+	optionValues: string[];
 	sku?: string;
-	name: string;
-	description?: string;
 	price: number; // minor units
-	stock: number;
+	onHand: number;
+	parcelWeightG: number;
 	active: boolean;
 }
 
-interface ExportRow {
-	sku: string;
+export interface ExportableProduct {
+	handle: string; // stable grouping key (product id)
 	name: string;
-	description: string;
-	price: string;
-	stock: string;
-	active: string;
+	description?: string;
+	options: { name: string; values: string[] }[];
+	variants: ExportableVariant[];
 }
 
-function productToExportRow(p: ExportableProduct): ExportRow {
-	return {
-		sku: p.sku ?? "",
-		name: p.name,
-		description: p.description ?? "",
-		price: (p.price / 100).toFixed(2),
-		stock: String(p.stock),
-		active: p.active ? "true" : "false",
-	};
+type ExportRow = Record<(typeof VARIANT_IMPORT_COLUMNS)[number], string>;
+
+/** One export row per active variant of a product. */
+function productToExportRows(p: ExportableProduct): ExportRow[] {
+	return p.variants
+		.filter((vr) => vr.active)
+		.map((vr) => ({
+			product_handle: p.handle,
+			name: p.name,
+			description: p.description ?? "",
+			option1_name: p.options[0]?.name ?? "",
+			option1_value: vr.optionValues[0] ?? "",
+			option2_name: p.options[1]?.name ?? "",
+			option2_value: vr.optionValues[1] ?? "",
+			sku: vr.sku ?? "",
+			price: (vr.price / 100).toFixed(2),
+			stock: String(vr.onHand),
+			weight_grams: String(vr.parcelWeightG),
+		}));
 }
 
-/**
- * Render products as a CSV string. Header row is always included. Quoting is
- * handled by Papaparse — descriptions with commas, newlines, or quotes survive
- * the round-trip.
- */
+export function productsToExportRows(
+	products: ExportableProduct[],
+): ExportRow[] {
+	return products.flatMap(productToExportRows);
+}
+
+/** Render products as a CSV string (header always included). */
 export function productsToCsvString(products: ExportableProduct[]): string {
 	return Papa.unparse(
 		{
 			fields: Array.from(PRODUCT_EXPORT_COLUMNS),
-			data: products.map(productToExportRow),
+			data: productsToExportRows(products),
 		},
 		{ newline: "\n" },
 	);
 }
 
-/**
- * Render products as an XLSX Blob. First sheet "Products". Header row
- * bolded, columns auto-sized to sensible widths.
- */
+/** Render products as an XLSX Blob (first sheet "Products"). */
 export async function productsToXlsxBlob(
 	products: ExportableProduct[],
 ): Promise<Blob> {
@@ -84,7 +85,7 @@ export async function productsToXlsxBlob(
 		width: col === "description" ? 40 : col === "name" ? 28 : 14,
 	}));
 	ws.getRow(1).font = { bold: true };
-	for (const p of products) ws.addRow(productToExportRow(p));
+	for (const row of productsToExportRows(products)) ws.addRow(row);
 	const buffer = await wb.xlsx.writeBuffer();
 	return new Blob([buffer], {
 		type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

@@ -3,7 +3,11 @@ import { ImagePlus, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
-import { convexErrorMessage } from "../../lib/format";
+import {
+	convexErrorMessage,
+	normalizePriceInput,
+	sanitizeIntInput,
+} from "../../lib/format";
 import { cartesian, type OptionAxis, variantLabel } from "../../lib/variant";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -240,6 +244,9 @@ export function VariantEditor({
 							placeholder="120.00"
 							value={rows[0]?.price ?? ""}
 							onChange={(e) => setRow(0, { price: e.target.value })}
+							onBlur={(e) =>
+								setRow(0, { price: normalizePriceInput(e.target.value) })
+							}
 						/>
 					</label>
 					<label className="flex flex-col gap-1 text-sm font-medium">
@@ -248,7 +255,9 @@ export function VariantEditor({
 							inputMode="numeric"
 							placeholder="10"
 							value={rows[0]?.stock ?? ""}
-							onChange={(e) => setRow(0, { stock: e.target.value })}
+							onChange={(e) =>
+								setRow(0, { stock: sanitizeIntInput(e.target.value) })
+							}
 						/>
 					</label>
 					<label className="col-span-2 flex flex-col gap-1 text-sm font-medium">
@@ -344,22 +353,40 @@ export function VariantEditor({
 									</button>
 								</span>
 							))}
-							<Input
-								placeholder="Add value + Enter"
-								value={valueDrafts[axisIndex] ?? ""}
-								onChange={(e) =>
-									setValueDrafts((d) =>
-										d.map((val, i) => (i === axisIndex ? e.target.value : val)),
-									)
-								}
-								onKeyDown={(e) => {
-									if (e.key === "Enter" || e.key === ",") {
-										e.preventDefault();
-										addValue(axisIndex);
+							<div className="flex items-center gap-1">
+								<Input
+									placeholder="Add value"
+									value={valueDrafts[axisIndex] ?? ""}
+									onChange={(e) =>
+										setValueDrafts((d) =>
+											d.map((val, i) =>
+												i === axisIndex ? e.target.value : val,
+											),
+										)
 									}
-								}}
-								className="h-8 w-36 text-xs"
-							/>
+									onKeyDown={(e) => {
+										if (e.key === "Enter" || e.key === ",") {
+											e.preventDefault();
+											addValue(axisIndex);
+										}
+									}}
+									// Commit on blur too: Android soft keyboards don't fire a
+									// reliable Enter keydown (the key moves focus instead), so
+									// losing focus is our cross-platform "lock it in" signal.
+									// No-op on iOS/desktop where the draft is already cleared by
+									// the keydown/button path.
+									onBlur={() => addValue(axisIndex)}
+									className="h-8 w-28 text-xs"
+								/>
+								<button
+									type="button"
+									onClick={() => addValue(axisIndex)}
+									className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground hover:border-accent"
+									aria-label="Add value"
+								>
+									<Plus className="size-3.5" />
+								</button>
+							</div>
 						</div>
 					</div>
 				))}
@@ -414,12 +441,17 @@ export function VariantEditor({
 							placeholder="Fill all prices"
 							className="h-9 text-xs"
 							onChange={(e) => bulkFill("price", e.target.value)}
+							onBlur={(e) =>
+								bulkFill("price", normalizePriceInput(e.target.value))
+							}
 						/>
 						<Input
 							inputMode="numeric"
 							placeholder="Fill all stock"
 							className="h-9 text-xs"
-							onChange={(e) => bulkFill("stock", e.target.value)}
+							onChange={(e) =>
+								bulkFill("stock", sanitizeIntInput(e.target.value))
+							}
 						/>
 					</div>
 					{/* Apply a flag to every row at once — toggles set ALL rows. */}
@@ -546,6 +578,11 @@ export function VariantEditor({
 												placeholder="0.00"
 												value={row.price}
 												onChange={(e) => setRow(i, { price: e.target.value })}
+												onBlur={(e) =>
+													setRow(i, {
+														price: normalizePriceInput(e.target.value),
+													})
+												}
 												className="h-9 w-24"
 											/>
 										</td>
@@ -554,7 +591,9 @@ export function VariantEditor({
 												inputMode="numeric"
 												placeholder="0"
 												value={row.stock}
-												onChange={(e) => setRow(i, { stock: e.target.value })}
+												onChange={(e) =>
+													setRow(i, { stock: sanitizeIntInput(e.target.value) })
+												}
 												className="h-9 w-20"
 											/>
 										</td>
