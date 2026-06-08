@@ -15,7 +15,7 @@ async function buildWorkbook(
 }
 
 describe("parseProductsXlsx", () => {
-	test("parses valid rows with sku column", async () => {
+	test("parses rows into single-variant products with sku", async () => {
 		const buf = await buildWorkbook(
 			["sku", "name", "description", "price", "stock"],
 			[
@@ -25,31 +25,29 @@ describe("parseProductsXlsx", () => {
 		);
 		const result = await parseProductsXlsx(buf);
 		expect(result.errorRows).toEqual([]);
-		expect(result.validRows).toHaveLength(2);
-		expect(result.validRows[0]).toMatchObject({
-			rowNumber: 2,
-			sku: "TENT-4P",
-			name: "Tent",
-			price: 49900,
-			stock: 12,
-		});
-		expect(result.validRows[1]?.sku).toBeUndefined();
+		expect(result.products).toHaveLength(2);
+		const tent = result.products.find((p) => p.name === "Tent");
+		expect(tent?.variants[0].sku).toBe("TENT-4P");
+		expect(tent?.variants[0].price).toBe(49900);
+		expect(
+			result.products.find((p) => p.name === "Headlamp")?.variants[0].sku,
+		).toBeUndefined();
 	});
 
-	test("coerces numeric price cells to strings", async () => {
+	test("coerces numeric price cells to sen", async () => {
 		const buf = await buildWorkbook(
 			["name", "price", "stock"],
 			[["Tent", 499.5, 12]],
 		);
 		const result = await parseProductsXlsx(buf);
 		expect(result.errorRows).toEqual([]);
-		expect(result.validRows[0]?.price).toBe(49950);
+		expect(result.products[0].variants[0].price).toBe(49950);
 	});
 
 	test("flags missing required columns", async () => {
 		const buf = await buildWorkbook(["name", "price"], [["Tent", "499"]]);
 		const result = await parseProductsXlsx(buf);
-		expect(result.validRows).toEqual([]);
+		expect(result.products).toEqual([]);
 		expect(result.errorRows[0].errors[0]).toMatch(/stock/);
 	});
 
@@ -60,7 +58,21 @@ describe("parseProductsXlsx", () => {
 		);
 		const result = await parseProductsXlsx(buf);
 		expect(result.errorRows).toEqual([]);
-		expect(result.validRows[0]?.sku).toBe("TENT-4P");
+		expect(result.products[0].variants[0].sku).toBe("TENT-4P");
+	});
+
+	test("parses a multi-variant sheet into one grouped product", async () => {
+		const buf = await buildWorkbook(
+			["name", "option1_name", "option1_value", "sku", "price", "stock"],
+			[
+				["Tee", "Size", "S", "TEE-S", "39", "10"],
+				["Tee", "Size", "M", "TEE-M", "39", "12"],
+			],
+		);
+		const result = await parseProductsXlsx(buf);
+		expect(result.errorRows).toEqual([]);
+		expect(result.products).toHaveLength(1);
+		expect(result.products[0].variants).toHaveLength(2);
 	});
 
 	test("skips blank rows between data", async () => {
@@ -74,6 +86,6 @@ describe("parseProductsXlsx", () => {
 		);
 		const result = await parseProductsXlsx(buf);
 		expect(result.errorRows).toEqual([]);
-		expect(result.validRows).toHaveLength(2);
+		expect(result.products).toHaveLength(2);
 	});
 });

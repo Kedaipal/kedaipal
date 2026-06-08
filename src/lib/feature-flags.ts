@@ -8,4 +8,4 @@
  * `/app/products/import` route redirects to the product list.
  * See docs/bulk-product-upload-roadmap.md + docs/product-variants.md §9.
  */
-export const BULK_IO_ENABLED = false;
+export const BULK_IO_ENABLED = true;

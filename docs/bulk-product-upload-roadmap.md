@@ -2,6 +2,57 @@
 
 Review of the current bulk import flow and a prioritized list of features that would measurably help retailers. Not a plan — a reference menu to pull from when we pick up the next round of work.
 
+## Shipped — variant-aware import/export (2026-06-04)
+
+The importer + exporter were reworked for the variant schema (subtask of
+[`product-variants.md`](./product-variants.md)). Key design, now live:
+
+- **One row per variant.** Rows are grouped into a product by `product_handle`
+  (falls back to `name`); option axes are inferred from `option1_*`/`option2_*`
+  columns. Legacy 4-column sheets (`name,description,price,stock`) still import
+  as single-variant products — fully back-compatible.
+- **Auto-fill (full-grid guarantee).** Any cartesian combination the sheet omits
+  is added as an **inactive** variant at 0 price / 0 stock, so the data always
+  forms the complete grid the variant model requires. The seller re-activates
+  them later. An ⓘ note in the importer explains this.
+- **Upsert by variant SKU; never deletes.** A row whose SKU matches an existing
+  variant **updates** it (price/stock/weight) + product fields; unlisted variants
+  are left untouched (so a partial stock-update sheet is safe). A row with a new
+  SKU aimed at an existing product is **skipped + warned** ("add new variants in
+  the dashboard") — adding variants to an existing product via import is a
+  deferred follow-up. Rows with no SKU create new products.
+- **Price = 2 dp (rounded to sen); stock = whole number** — matches the dashboard
+  editor; the parser rounds price and rejects non-integer stock.
+- **Blank `weight_grams` = preserve on update.** A blank/omitted weight cell parses
+  to `undefined` (not `0`), so on update the existing variant's weight is kept
+  (`parcelWeightG ?? existing`); on insert it defaults to `0`. An explicit `0` is
+  a real value. Exports always populate the column, so round-trips set it
+  explicitly — only hand-blanked cells hit the preserve path.
+- **Option values are matched case-insensitively** within a product (first casing
+  wins for the axis). Two rows that differ only by case (`Cut=Fillet` /
+  `Cut=fillet`) resolve to the **same** variant and are reported as a duplicate —
+  never silently collapsed with one row's price/stock dropped.
+- **Export = one row per *active* variant**, in the exact import column shape, so
+  export → edit → re-import round-trips. Auto-filled inactive placeholders are
+  omitted (re-auto-filled on import). *Limitation:* a manually-deactivated variant
+  isn't exported (would need an `active` column on both sides — a follow-up).
+- **Columns:** `product_handle, name, description, option1_name, option1_value,
+  option2_name, option2_value, sku, price, stock, weight_grams`. Images are not
+  imported (avoids a dual storage-id/URL model) — added per product in the editor.
+- **Caps:** `MAX_BULK_IMPORT_BATCH = 50` now counts **variant rows** (the client
+  chunks products to stay under it); `MAX_VARIANTS_PER_PRODUCT = 50`;
+  `MAX_PRODUCTS_PER_RETAILER = 50` (beta).
+
+**Files:** parser/grouping `src/lib/product-import.ts`; CSV `src/lib/csv.ts`; XLSX
+`src/lib/xlsx.ts`; export `src/lib/product-export.ts`; UI
+`src/routes/app.products.import.tsx`; backend `bulkUpsert`/`bulkUpsertPreview` in
+`convex/products.ts`. Gated by `BULK_IO_ENABLED` in `src/lib/feature-flags.ts`.
+**Deferred follow-ups:** image import (fetch-and-store), add-variant-to-existing
+via import, full active-state round-trip.
+
+The rest of this doc is the original pre-rework menu — kept for the richer-schema
+ideas (column mapping UI, "clean up my sheet" AI, photo→product) not yet built.
+
 ## Current State (2026-04-20)
 
 **Files:**

@@ -5,7 +5,8 @@ import {
 	useNavigate,
 } from "@tanstack/react-router";
 import { useConvex, useMutation, useQuery } from "convex/react";
-import { Download, FileSpreadsheet, Upload } from "lucide-react";
+import type { FunctionReturnType } from "convex/server";
+import { Download, FileSpreadsheet, Info, Upload } from "lucide-react";
 import { type ChangeEvent, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
@@ -17,81 +18,106 @@ import {
 	parseProductsCsv,
 } from "../lib/csv";
 import { BULK_IO_ENABLED } from "../lib/feature-flags";
-import { convexErrorMessage, formatPrice } from "../lib/format";
+import { convexErrorMessage } from "../lib/format";
 import {
-	type ParsedProductImport,
-	PRODUCT_IMPORT_COLUMNS,
-	type ProductImportRow,
+	type GroupedImportResult,
+	type GroupedProductImport,
+	VARIANT_IMPORT_COLUMNS,
 } from "../lib/product-import";
 import { parseProductsXlsx } from "../lib/xlsx";
 
 export const Route = createFileRoute("/app/products/import")({
-	// Bulk import is hidden until reworked for the variant schema — guard the
-	// direct URL too, not just the nav button. See lib/feature-flags.ts.
 	beforeLoad: () => {
 		if (!BULK_IO_ENABLED) throw redirect({ to: "/app/products" });
 	},
 	component: ImportProductsRoute,
 });
 
-const CHUNK_SIZE = 50;
+// Each bulkUpsert call carries at most this many VARIANT rows (mirrors
+// MAX_BULK_IMPORT_BATCH on the server). Products are chunked to stay under it.
+const MAX_VARIANTS_PER_BATCH = 50;
 
-const SCHEMA_DOCS: Array<{
-	column: string;
-	type: string;
-	required: boolean;
-	notes: string;
-}> = [
-	{
-		column: "sku",
-		type: "text",
-		required: false,
-		notes: "Max 60 characters. Stable identifier used for updates.",
-	},
-	{ column: "name", type: "text", required: true, notes: "Max 120 characters" },
-	{
-		column: "description",
-		type: "text",
-		required: false,
-		notes: "Max 1000 characters",
-	},
-	{
-		column: "price",
-		type: "decimal",
-		required: true,
-		notes: "Major units in store currency, e.g. 120 or 120.50",
-	},
-	{ column: "stock", type: "integer", required: true, notes: "≥ 0" },
-];
+const SCHEMA_DOCS: Array<{ column: string; required: boolean; notes: string }> =
+	[
+		{
+			column: "product_handle",
+			required: false,
+			notes: "Groups a product's variant rows. Falls back to name.",
+		},
+		{
+			column: "name",
+			required: true,
+			notes: "Product name (max 120). Last row wins per product.",
+		},
+		{ column: "description", required: false, notes: "Max 1000 characters" },
+		{
+			column: "option1_name / option1_value",
+			required: false,
+			notes: 'First axis, e.g. "Size" / "M"',
+		},
+		{
+			column: "option2_name / option2_value",
+			required: false,
+			notes: "Second axis (optional)",
+		},
+		{
+			column: "sku",
+			required: false,
+			notes: "Per-variant. Matching SKUs update existing variants.",
+		},
+		{
+			column: "price",
+			required: true,
+			notes: "Major units, rounded to 2 dp (e.g. 120 or 120.50)",
+		},
+		{ column: "stock", required: true, notes: "Whole number ≥ 0" },
+		{
+			column: "weight_grams",
+			required: false,
+			notes: "Parcel weight (for delivery). Defaults to 0.",
+		},
+	];
 
-interface PlanRow {
-	rowNumber: number;
-	sku: string | undefined;
-	action: "insert" | "update";
-	diff: {
-		name?: { before: string; after: string };
-		description?: {
-			before: string | undefined;
-			after: string | undefined;
-		};
-		price?: { before: number; after: number };
-		stock?: { before: number; after: number };
+type PreviewResult = FunctionReturnType<typeof api.products.bulkUpsertPreview>;
+type PlanEntry = PreviewResult["plan"][number];
+type PreviewSummary = PreviewResult["summary"];
+
+/** Map a parsed grouped product to the bulkUpsert API shape. */
+function toApiProduct(p: GroupedProductImport) {
+	return {
+		name: p.name,
+		description: p.description,
+		options: p.options,
+		variants: p.variants.map((vr) => ({
+			optionValues: vr.optionValues,
+			sku: vr.sku,
+			price: vr.price,
+			onHand: vr.onHand,
+			parcelWeightG: vr.parcelWeightG,
+			active: vr.active,
+		})),
 	};
 }
 
-interface PreviewPlan {
-	plan: PlanRow[];
-	summary: { inserts: number; updates: number; noChange: number };
-}
-
-function itemsForApi(rows: ProductImportRow[]) {
-	return rows.map((r) => ({
-		sku: r.sku,
-		name: r.name,
-		description: r.description,
-		price: r.price,
-		stock: r.stock,
-	}));
+/** Split products into batches whose total variant count stays under the cap. */
+function chunkByVariants(
+	products: GroupedProductImport[],
+): GroupedProductImport[][] {
+	const chunks: GroupedProductImport[][] = [];
+	let cur: GroupedProductImport[] = [];
+	let count = 0;
+	for (const p of products) {
+		const n = p.variants.length;
+		if (cur.length > 0 && count + n > MAX_VARIANTS_PER_BATCH) {
+			chunks.push(cur);
+			cur = [];
+			count = 0;
+		}
+		cur.push(p);
+		count += n;
+	}
+	if (cur.length > 0) chunks.push(cur);
+	return chunks;
 }
 
 function ImportProductsRoute() {
@@ -100,14 +126,13 @@ function ImportProductsRoute() {
 	const retailer = useQuery(api.retailers.getMyRetailer);
 	const bulkUpsert = useMutation(api.products.bulkUpsert);
 
-	const [parsed, setParsed] = useState<ParsedProductImport | null>(null);
+	const [parsed, setParsed] = useState<GroupedImportResult | null>(null);
 	const [fileName, setFileName] = useState<string | null>(null);
 	const [importing, setImporting] = useState(false);
 	const [previewing, setPreviewing] = useState(false);
-	const [preview, setPreview] = useState<PreviewPlan | null>(null);
-	const [progress, setProgress] = useState<{
-		done: number;
-		total: number;
+	const [preview, setPreview] = useState<{
+		plan: PlanEntry[];
+		summary: PreviewSummary;
 	} | null>(null);
 
 	if (!retailer) return null;
@@ -115,16 +140,14 @@ function ImportProductsRoute() {
 	async function handleFile(e: ChangeEvent<HTMLInputElement>) {
 		const file = e.target.files?.[0];
 		if (!file) return;
-		resetDerivedState();
+		setPreview(null);
 		setFileName(file.name);
 		try {
 			const lower = file.name.toLowerCase();
 			if (lower.endsWith(".xlsx") || lower.endsWith(".xls")) {
-				const buffer = await file.arrayBuffer();
-				setParsed(await parseProductsXlsx(buffer));
+				setParsed(await parseProductsXlsx(await file.arrayBuffer()));
 			} else {
-				const text = await file.text();
-				setParsed(parseProductsCsv(text));
+				setParsed(parseProductsCsv(await file.text()));
 			}
 		} catch (err) {
 			setParsed(null);
@@ -132,46 +155,37 @@ function ImportProductsRoute() {
 		}
 	}
 
-	function resetDerivedState() {
-		setProgress(null);
-		setPreview(null);
-	}
-
 	function reset() {
-		resetDerivedState();
 		setParsed(null);
+		setPreview(null);
 		setFileName(null);
 	}
 
 	async function handlePreview() {
-		if (!parsed || parsed.validRows.length === 0 || !retailer) return;
+		if (!parsed || parsed.products.length === 0 || !retailer) return;
 		setPreviewing(true);
 		try {
-			const rows = parsed.validRows;
-			const totalChunks = Math.ceil(rows.length / CHUNK_SIZE);
-			const mergedPlan: PlanRow[] = [];
-			const mergedSummary = { inserts: 0, updates: 0, noChange: 0 };
-			for (let i = 0; i < totalChunks; i++) {
-				const slice = rows.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-				const result = await convex.query(api.products.bulkUpsertPreview, {
+			const plan: PlanEntry[] = [];
+			const summary: PreviewSummary = {
+				products: 0,
+				creates: 0,
+				updates: 0,
+				variants: 0,
+				autoFilled: 0,
+			};
+			for (const chunk of chunkByVariants(parsed.products)) {
+				const res = await convex.query(api.products.bulkUpsertPreview, {
 					retailerId: retailer._id,
-					items: itemsForApi(slice),
+					products: chunk.map(toApiProduct),
 				});
-				const offset = i * CHUNK_SIZE;
-				for (const entry of result.plan) {
-					mergedPlan.push({
-						...entry,
-						// Map the preview's chunk-local rowNumber to the parsed row's
-						// source rowNumber so expandable rows line up with the sheet.
-						rowNumber:
-							slice[entry.rowNumber - 1]?.rowNumber ?? offset + entry.rowNumber,
-					});
-				}
-				mergedSummary.inserts += result.summary.inserts;
-				mergedSummary.updates += result.summary.updates;
-				mergedSummary.noChange += result.summary.noChange;
+				plan.push(...res.plan);
+				summary.products += res.summary.products;
+				summary.creates += res.summary.creates;
+				summary.updates += res.summary.updates;
+				summary.variants += res.summary.variants;
+				summary.autoFilled += res.summary.autoFilled;
 			}
-			setPreview({ plan: mergedPlan, summary: mergedSummary });
+			setPreview({ plan, summary });
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -180,20 +194,15 @@ function ImportProductsRoute() {
 	}
 
 	async function handleConfirm() {
-		if (!parsed || parsed.validRows.length === 0 || !retailer) return;
+		if (!parsed || parsed.products.length === 0 || !retailer) return;
 		setImporting(true);
-		const rows = parsed.validRows;
-		const totalChunks = Math.ceil(rows.length / CHUNK_SIZE);
-		setProgress({ done: 0, total: rows.length });
 		try {
-			for (let i = 0; i < totalChunks; i++) {
-				const slice = rows.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+			for (const chunk of chunkByVariants(parsed.products)) {
 				await bulkUpsert({
 					retailerId: retailer._id,
 					currency: retailer.currency,
-					items: itemsForApi(slice),
+					products: chunk.map(toApiProduct),
 				});
-				setProgress({ done: (i + 1) * CHUNK_SIZE, total: rows.length });
 			}
 			toast.success("Import complete");
 			navigate({ to: "/app/products" });
@@ -204,10 +213,13 @@ function ImportProductsRoute() {
 		}
 	}
 
+	const hasParseErrors = (parsed?.errorRows.length ?? 0) > 0;
+	const hasPreviewErrors =
+		preview?.plan.some((p) => p.action === "error") ?? false;
 	const canPreview =
 		parsed !== null &&
-		parsed.validRows.length > 0 &&
-		parsed.errorRows.length === 0 &&
+		parsed.products.length > 0 &&
+		!hasParseErrors &&
 		!previewing;
 
 	return (
@@ -224,7 +236,6 @@ function ImportProductsRoute() {
 					← Products
 				</Link>
 			</div>
-
 			<h2 className="text-xl font-bold">Import products</h2>
 
 			<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
@@ -234,12 +245,12 @@ function ImportProductsRoute() {
 						aria-hidden
 					/>
 					<div className="flex flex-col gap-1">
-						<p className="font-medium">CSV or Excel format</p>
+						<p className="font-medium">CSV or Excel — one row per variant</p>
 						<p className="text-sm text-muted-foreground">
-							The first row must be a header with these exact column names:
+							Header row with these columns:
 							<br />
 							<span className="font-mono text-xs">
-								{PRODUCT_IMPORT_COLUMNS.join(", ")}
+								{VARIANT_IMPORT_COLUMNS.join(", ")}
 							</span>
 						</p>
 					</div>
@@ -250,7 +261,6 @@ function ImportProductsRoute() {
 						<thead className="bg-muted/50 text-xs uppercase text-muted-foreground">
 							<tr>
 								<th className="px-3 py-2">Column</th>
-								<th className="px-3 py-2">Type</th>
 								<th className="px-3 py-2">Required</th>
 								<th className="px-3 py-2">Notes</th>
 							</tr>
@@ -261,10 +271,7 @@ function ImportProductsRoute() {
 									key={col.column}
 									className="border-t border-border align-top"
 								>
-									<td className="px-3 py-2 font-mono">{col.column}</td>
-									<td className="px-3 py-2 text-muted-foreground">
-										{col.type}
-									</td>
+									<td className="px-3 py-2 font-mono text-xs">{col.column}</td>
 									<td className="px-3 py-2">{col.required ? "✓" : ""}</td>
 									<td className="px-3 py-2 text-muted-foreground">
 										{col.notes}
@@ -275,19 +282,18 @@ function ImportProductsRoute() {
 					</table>
 				</div>
 
-				<p className="text-xs text-muted-foreground">
-					Prices use your store currency ({retailer.currency}). Change it in{" "}
-					<Link
-						to="/app/settings"
-						search={{ tab: "store" }}
-						className="underline"
-					>
-						Settings
-					</Link>
-					. Rows with a matching SKU update existing products in place;
-					everything else is created new. Images are not supported in bulk — add
-					them per product after importing.
-				</p>
+				<div className="flex items-start gap-2 rounded-xl bg-accent/5 p-3 text-xs text-muted-foreground">
+					<Info className="mt-0.5 size-4 shrink-0 text-accent" aria-hidden />
+					<span>
+						We complete the full variant grid for you — any option combination
+						you don't list is added as an <strong>inactive</strong> variant at 0
+						price / 0 stock. Re-activate it from the product editor when you
+						have stock. Rows with a SKU matching an existing variant{" "}
+						<strong>update</strong> it; unlisted variants are never deleted.
+						Images aren't imported — add them per product. Prices use{" "}
+						{retailer.currency}.
+					</span>
+				</div>
 
 				<div className="flex flex-wrap gap-2">
 					<Button
@@ -296,8 +302,7 @@ function ImportProductsRoute() {
 						onClick={downloadProductCsvTemplate}
 						className="h-11"
 					>
-						<Download className="mr-2 size-4" aria-hidden /> Download CSV
-						template
+						<Download className="mr-2 size-4" aria-hidden /> CSV template
 					</Button>
 					<Button
 						type="button"
@@ -317,7 +322,7 @@ function ImportProductsRoute() {
 						{fileName ?? "Choose a CSV or Excel file"}
 					</span>
 					<span className="text-xs text-muted-foreground">
-						Or drag &amp; drop — imported in batches of 50 rows.
+						Imported in batches of {MAX_VARIANTS_PER_BATCH} variant rows.
 					</span>
 					<input
 						type="file"
@@ -326,7 +331,6 @@ function ImportProductsRoute() {
 						className="hidden"
 					/>
 				</label>
-
 				{parsed ? (
 					<Button
 						type="button"
@@ -339,26 +343,13 @@ function ImportProductsRoute() {
 				) : null}
 			</section>
 
-			{parsed ? (
-				<PreviewSection parsed={parsed} currency={retailer.currency} />
-			) : null}
+			{parsed ? <ParseSummary parsed={parsed} /> : null}
 
 			{preview ? (
-				<DiffSection
-					plan={preview.plan}
-					summary={preview.summary}
-					currency={retailer.currency}
-				/>
+				<PreviewSection plan={preview.plan} summary={preview.summary} />
 			) : null}
 
-			{progress ? (
-				<p className="rounded-lg bg-accent/10 px-3 py-2 text-sm text-accent-foreground">
-					Importing… {Math.min(progress.done, progress.total)} /{" "}
-					{progress.total}
-				</p>
-			) : null}
-
-			{parsed && parsed.validRows.length > 0 && !preview ? (
+			{parsed && parsed.products.length > 0 && !preview ? (
 				<Button
 					type="button"
 					onClick={handlePreview}
@@ -367,7 +358,7 @@ function ImportProductsRoute() {
 				>
 					{previewing
 						? "Previewing…"
-						: `Preview changes for ${parsed.validRows.length} row${parsed.validRows.length === 1 ? "" : "s"}`}
+						: `Preview ${parsed.summary.productCount} product${parsed.summary.productCount === 1 ? "" : "s"} · ${parsed.summary.variantCount} variant${parsed.summary.variantCount === 1 ? "" : "s"}`}
 				</Button>
 			) : null}
 
@@ -376,12 +367,12 @@ function ImportProductsRoute() {
 					<Button
 						type="button"
 						onClick={handleConfirm}
-						disabled={importing}
+						disabled={importing || hasPreviewErrors}
 						className="h-12 flex-1"
 					>
 						{importing
 							? "Importing…"
-							: `Confirm — ${preview.summary.inserts} new, ${preview.summary.updates} updated`}
+							: `Confirm — ${preview.summary.creates} new, ${preview.summary.updates} updated`}
 					</Button>
 					<Button
 						type="button"
@@ -398,194 +389,125 @@ function ImportProductsRoute() {
 	);
 }
 
-function PreviewSection({
-	parsed,
-	currency,
-}: {
-	parsed: ParsedProductImport;
-	currency: string;
-}) {
+function ParseSummary({ parsed }: { parsed: GroupedImportResult }) {
 	return (
 		<section className="flex flex-col gap-3">
-			<div className="flex items-center justify-between">
-				<h3 className="font-semibold">Preview</h3>
-				<div className="flex gap-3 text-xs">
-					<span className="text-accent">{parsed.validRows.length} valid</span>
-					{parsed.errorRows.length > 0 ? (
-						<span className="text-destructive">
-							{parsed.errorRows.length} error
-							{parsed.errorRows.length === 1 ? "" : "s"}
-						</span>
-					) : null}
-				</div>
+			<div className="flex flex-wrap items-center gap-3 text-xs">
+				<span className="text-accent">
+					{parsed.summary.productCount} products
+				</span>
+				<span className="text-foreground">
+					{parsed.summary.variantCount} variants
+				</span>
+				{parsed.summary.autoFilledCount > 0 ? (
+					<span className="text-muted-foreground">
+						{parsed.summary.autoFilledCount} auto-filled
+					</span>
+				) : null}
+				{parsed.errorRows.length > 0 ? (
+					<span className="text-destructive">
+						{parsed.errorRows.length} error
+						{parsed.errorRows.length === 1 ? "" : "s"}
+					</span>
+				) : null}
 			</div>
-
 			{parsed.errorRows.length > 0 ? (
 				<ul className="flex flex-col gap-2 rounded-xl border border-destructive/30 bg-destructive/5 p-3">
 					{parsed.errorRows.map((row) => (
-						<li key={row.rowNumber} className="text-sm">
+						<li key={`${row.rowNumber}-${row.errors[0]}`} className="text-sm">
 							<span className="font-mono font-medium">
-								{row.rowNumber === 0 ? "Header" : `Row ${row.rowNumber}`}:
+								{row.rowNumber === 0 ? "File" : `Row ${row.rowNumber}`}:
 							</span>{" "}
 							<span className="text-destructive">{row.errors.join("; ")}</span>
 						</li>
 					))}
 				</ul>
 			) : null}
-
-			{parsed.validRows.length > 0 ? (
-				<div className="overflow-x-auto rounded-xl border border-border">
-					<table className="w-full text-left text-sm">
-						<thead className="bg-muted/50 text-xs uppercase text-muted-foreground">
-							<tr>
-								<th className="px-3 py-2">#</th>
-								<th className="px-3 py-2">SKU</th>
-								<th className="px-3 py-2">Name</th>
-								<th className="px-3 py-2">Price</th>
-								<th className="px-3 py-2">Stock</th>
-							</tr>
-						</thead>
-						<tbody>
-							{parsed.validRows.slice(0, 20).map((row) => (
-								<tr key={row.rowNumber} className="border-t border-border">
-									<td className="px-3 py-2 font-mono text-muted-foreground">
-										{row.rowNumber}
-									</td>
-									<td className="px-3 py-2 font-mono text-xs">
-										{row.sku ?? (
-											<span className="text-muted-foreground">—</span>
-										)}
-									</td>
-									<td className="px-3 py-2">{row.name}</td>
-									<td className="px-3 py-2">
-										{formatPrice(row.price, currency)}
-									</td>
-									<td className="px-3 py-2">{row.stock}</td>
-								</tr>
-							))}
-						</tbody>
-					</table>
-					{parsed.validRows.length > 20 ? (
-						<p className="border-t border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-							… and {parsed.validRows.length - 20} more
-						</p>
-					) : null}
-				</div>
-			) : null}
 		</section>
 	);
 }
 
-function DiffSection({
+function PreviewSection({
 	plan,
 	summary,
-	currency,
 }: {
-	plan: PlanRow[];
-	summary: { inserts: number; updates: number; noChange: number };
-	currency: string;
+	plan: PlanEntry[];
+	summary: PreviewSummary;
 }) {
 	const [showAll, setShowAll] = useState(false);
-	const rowsWithChanges = plan.filter(
-		(p) => p.action === "insert" || Object.keys(p.diff).length > 0,
-	);
-	const visible = showAll ? rowsWithChanges : rowsWithChanges.slice(0, 15);
-
+	const visible = showAll ? plan : plan.slice(0, 20);
 	return (
 		<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 			<div className="flex flex-wrap items-center justify-between gap-2">
-				<h3 className="font-semibold">Changes</h3>
+				<h3 className="font-semibold">Preview</h3>
 				<div className="flex gap-3 text-xs">
-					<span className="text-accent">{summary.inserts} new</span>
+					<span className="text-accent">{summary.creates} new</span>
 					<span className="text-foreground">{summary.updates} updated</span>
 					<span className="text-muted-foreground">
-						{summary.noChange} unchanged
+						{summary.variants} variants
 					</span>
 				</div>
 			</div>
-
-			{rowsWithChanges.length === 0 ? (
-				<p className="text-sm text-muted-foreground">
-					All rows already match what's in your store. Nothing to import.
-				</p>
-			) : (
-				<ul className="flex flex-col gap-2">
-					{visible.map((row) => (
-						<li
-							key={row.rowNumber}
-							className="rounded-xl border border-border bg-background p-3 text-sm"
-						>
-							<div className="flex items-center justify-between gap-2">
-								<span className="font-mono text-xs text-muted-foreground">
-									Row {row.rowNumber}{" "}
-									{row.sku ? <span>· {row.sku}</span> : null}
-								</span>
-								<span
-									className={
-										row.action === "insert"
-											? "rounded-full bg-accent/10 px-2 py-0.5 text-xs text-accent"
-											: "rounded-full bg-muted px-2 py-0.5 text-xs"
-									}
-								>
-									{row.action === "insert" ? "new" : "update"}
-								</span>
-							</div>
-							{row.action === "update" ? (
-								<ul className="mt-2 flex flex-col gap-1 text-xs text-muted-foreground">
-									{row.diff.name ? (
-										<DiffField label="Name">
-											{row.diff.name.before} → {row.diff.name.after}
-										</DiffField>
-									) : null}
-									{row.diff.price ? (
-										<DiffField label="Price">
-											{formatPrice(row.diff.price.before, currency)} →{" "}
-											{formatPrice(row.diff.price.after, currency)}
-										</DiffField>
-									) : null}
-									{row.diff.stock ? (
-										<DiffField label="Stock">
-											{row.diff.stock.before} → {row.diff.stock.after}
-										</DiffField>
-									) : null}
-									{row.diff.description ? (
-										<DiffField label="Description">
-											{row.diff.description.before ?? "(empty)"} →{" "}
-											{row.diff.description.after ?? "(empty)"}
-										</DiffField>
-									) : null}
-								</ul>
-							) : null}
-						</li>
-					))}
-				</ul>
-			)}
-
-			{rowsWithChanges.length > 15 && !showAll ? (
+			<ul className="flex flex-col gap-2">
+				{visible.map((p) => (
+					<li
+						key={`${p.name}-${p.productId ?? p.action}`}
+						className="rounded-xl border border-border bg-background p-3 text-sm"
+					>
+						<div className="flex items-center justify-between gap-2">
+							<span className="font-medium">{p.name}</span>
+							<Badge action={p.action} />
+						</div>
+						<p className="mt-1 text-xs text-muted-foreground">
+							{p.action === "create"
+								? `${p.variantCount} variant${p.variantCount === 1 ? "" : "s"}${p.autoFilled > 0 ? ` · ${p.autoFilled} auto-filled inactive` : ""}`
+								: p.action === "update"
+									? `${p.changedVariants} changed${p.skippedVariants > 0 ? ` · ${p.skippedVariants} skipped` : ""}`
+									: null}
+						</p>
+						{p.warnings.length > 0 ? (
+							<ul className="mt-1 flex flex-col gap-0.5">
+								{p.warnings.map((w) => (
+									<li
+										key={w}
+										className={
+											p.action === "error"
+												? "text-xs text-destructive"
+												: "text-xs text-amber-600 dark:text-amber-500"
+										}
+									>
+										{w}
+									</li>
+								))}
+							</ul>
+						) : null}
+					</li>
+				))}
+			</ul>
+			{plan.length > 20 && !showAll ? (
 				<Button
 					type="button"
 					variant="secondary"
 					onClick={() => setShowAll(true)}
 					className="h-10 self-start text-sm"
 				>
-					Show {rowsWithChanges.length - 15} more
+					Show {plan.length - 20} more
 				</Button>
 			) : null}
 		</section>
 	);
 }
 
-function DiffField({
-	label,
-	children,
-}: {
-	label: string;
-	children: React.ReactNode;
-}) {
+function Badge({ action }: { action: PlanEntry["action"] }) {
+	const map = {
+		create: "bg-accent/10 text-accent",
+		update: "bg-muted text-foreground",
+		error: "bg-destructive/10 text-destructive",
+	} as const;
+	const label = { create: "new", update: "update", error: "error" } as const;
 	return (
-		<li className="flex gap-2">
-			<span className="w-20 shrink-0 font-medium text-foreground">{label}</span>
-			<span className="min-w-0 break-words">{children}</span>
-		</li>
+		<span className={`rounded-full px-2 py-0.5 text-xs ${map[action]}`}>
+			{label[action]}
+		</span>
 	);
 }
