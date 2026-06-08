@@ -1,6 +1,9 @@
 import { describe, expect, test } from "vitest";
 import {
+	buildVariantGrid,
+	dedupeProvidedVariants,
 	groupVariantRows,
+	inferAxes,
 	parseVariantImport,
 	type RawImportRow,
 	type VariantImportRow,
@@ -73,6 +76,21 @@ describe("validateVariantRow", () => {
 			2,
 		);
 		expect("errors" in r).toBe(true);
+	});
+
+	test("blank weight stays undefined (preserve-on-update), not 0", () => {
+		const blank = validateVariantRow(
+			{ name: "X", price: "10", stock: "1" },
+			2,
+		) as VariantImportRow;
+		expect(blank.parcelWeightG).toBeUndefined();
+
+		const explicit = validateVariantRow(
+			{ name: "X", price: "10", stock: "1", weight_grams: "0" },
+			2,
+		) as VariantImportRow;
+		// An explicit "0" is a real value (sets weight to 0), distinct from blank.
+		expect(explicit.parcelWeightG).toBe(0);
 	});
 });
 
@@ -214,6 +232,101 @@ describe("groupVariantRows — auto-fill", () => {
 		]);
 		expect(res.products[0].name).toBe("Salmon Deluxe");
 		expect(res.products[0].warnings[0]).toMatch(/Multiple names/);
+	});
+
+	test("case-only value differences collide → reported, never silently dropped", () => {
+		// row A "Fillet" + row B "fillet" used to collapse the axis to one value
+		// while row B's data was discarded (its raw-case key missed the canonical
+		// combo). Now they canonicalize to the same variant → duplicate error.
+		const res = groupVariantRows([
+			row({
+				rowNumber: 2,
+				name: "Salmon",
+				groupingKey: "salmon",
+				optionNames: ["Cut"],
+				optionValues: ["Fillet"],
+				price: 8500,
+				sku: "S-F",
+			}),
+			row({
+				rowNumber: 3,
+				name: "Salmon",
+				groupingKey: "salmon",
+				optionNames: ["Cut"],
+				optionValues: ["fillet"],
+				price: 9900,
+				sku: "S-f",
+			}),
+		]);
+		expect(res.products).toHaveLength(0);
+		expect(res.errorRows).toHaveLength(1);
+		expect(res.errorRows[0].rowNumber).toBe(3); // the second (colliding) row
+		expect(res.errorRows[0].errors[0]).toMatch(/Duplicate variant/);
+	});
+
+	test("a provided variant's blank weight propagates as undefined", () => {
+		const res = groupVariantRows([
+			row({
+				rowNumber: 2,
+				name: "Tee",
+				groupingKey: "tee",
+				optionNames: ["Size"],
+				optionValues: ["S"],
+				sku: "TEE-S",
+				parcelWeightG: undefined,
+			}),
+		]);
+		const active = res.products[0].variants.find((v) => v.active);
+		expect(active?.parcelWeightG).toBeUndefined();
+	});
+});
+
+describe("groupVariantRows helpers (independently testable)", () => {
+	test("inferAxes collects distinct values, first casing wins", () => {
+		const out = inferAxes([
+			row({ optionNames: ["Cut"], optionValues: ["Fillet"] }),
+			row({ optionNames: ["Cut"], optionValues: ["fillet"] }),
+			row({ optionNames: ["Cut"], optionValues: ["Whole"] }),
+		]);
+		expect("options" in out && out.options).toEqual([
+			{ name: "Cut", values: ["Fillet", "Whole"] },
+		]);
+	});
+
+	test("inferAxes errors on a no-option product spanning >1 row", () => {
+		const out = inferAxes([row({}), row({ rowNumber: 3 })]);
+		expect("error" in out && out.error.errors[0]).toMatch(/spans multiple rows/);
+	});
+
+	test("dedupeProvidedVariants keys by canonical casing", () => {
+		const options = [{ name: "Cut", values: ["Fillet"] }];
+		const ok = dedupeProvidedVariants(
+			[row({ optionNames: ["Cut"], optionValues: ["fillet"] })],
+			options,
+		);
+		// "fillet" canonicalizes to the "Fillet" axis value.
+		expect("provided" in ok && ok.provided.has("Fillet")).toBe(true);
+	});
+
+	test("buildVariantGrid auto-fills omitted combinations", () => {
+		const options = [{ name: "Size", values: ["S", "M"] }];
+		const provided = new Map([
+			["S", row({ optionNames: ["Size"], optionValues: ["S"], price: 100 })],
+		]);
+		const out = buildVariantGrid(options, provided, row({}));
+		expect("variants" in out && out.variants).toHaveLength(2);
+		expect("autoFilled" in out && out.autoFilled).toBe(1);
+	});
+
+	test("buildVariantGrid errors past the per-product cap", () => {
+		// 8 × 8 = 64 > MAX_VARIANTS_PER_PRODUCT (50).
+		const eight = ["a", "b", "c", "d", "e", "f", "g", "h"];
+		const options = [
+			{ name: "A", values: eight },
+			{ name: "B", values: eight },
+		];
+		const out = buildVariantGrid(options, new Map(), row({ name: "Big" }));
+		expect("error" in out && out.error.errors[0]).toMatch(/expands to 64/);
 	});
 });
 

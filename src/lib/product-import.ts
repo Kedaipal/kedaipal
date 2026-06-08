@@ -235,7 +235,9 @@ export interface VariantImportRow {
 	sku: string | undefined;
 	price: number; // minor units
 	onHand: number;
-	parcelWeightG: number;
+	// undefined = the weight cell was blank → preserve the existing variant's
+	// weight on update (server falls back to 0 on insert). See validateVariantRow.
+	parcelWeightG: number | undefined;
 }
 
 export interface GroupedVariant {
@@ -243,7 +245,7 @@ export interface GroupedVariant {
 	sku: string | undefined;
 	price: number; // minor units
 	onHand: number;
-	parcelWeightG: number;
+	parcelWeightG: number | undefined; // undefined = preserve-on-update (see above)
 	active: boolean; // false for auto-filled combinations
 }
 
@@ -344,15 +346,20 @@ export function validateVariantRow(
 	else if (!/^\d+$/.test(stockStr)) errors.push("stock must be a whole number");
 	else onHand = Number.parseInt(stockStr, 10);
 
+	// Blank weight stays UNDEFINED (not 0) so importing an edit sheet that leaves
+	// the column blank preserves the existing variant's weight on update (server:
+	// `parcelWeightG ?? existing`); on insert it defaults to 0. Exports always
+	// populate this column, so only hand-blanked cells hit the preserve path.
 	const weightStr = (raw.weight_grams ?? "").trim();
-	let parcelWeightG = 0;
+	let parcelWeightG: number | undefined;
 	if (weightStr.length > 0) {
 		if (!/^\d+$/.test(weightStr))
 			errors.push("weight_grams must be a whole number");
 		else {
-			parcelWeightG = Number.parseInt(weightStr, 10);
-			if (parcelWeightG > PRODUCT_WEIGHT_MAX)
+			const w = Number.parseInt(weightStr, 10);
+			if (w > PRODUCT_WEIGHT_MAX)
 				errors.push("weight_grams is unreasonably large");
+			else parcelWeightG = w;
 		}
 	}
 
@@ -373,12 +380,172 @@ export function validateVariantRow(
 	};
 }
 
+type AxisOption = { name: string; values: string[] };
+
+/** One-line grouping error builder (the synthetic `raw: {}` matches callers). */
+function groupingError(
+	rowNumber: number,
+	message: string,
+): ProductImportRowError {
+	return { rowNumber, raw: {}, errors: [message] };
+}
+
 /**
- * Group validated variant rows into products. Per product: axis names come from
- * the first row (all rows must match), axis values are collected in
- * first-appearance order, and any missing cartesian combination is auto-filled
- * as an inactive 0/0 variant. Product-level fields are last-writer-wins with a
- * drift warning. Returns grouped products + per-row grouping errors.
+ * Infer the option axes for one product's rows. Every row must declare the same
+ * axes (names + order, case-insensitively); distinct values are then collected
+ * per axis in first-appearance order (first casing wins). Returns the options or
+ * a single grouping error (axis mismatch / no-option product spanning >1 row).
+ */
+export function inferAxes(
+	groupRows: VariantImportRow[],
+): { options: AxisOption[] } | { error: ProductImportRowError } {
+	const first = groupRows[0];
+	const axisNames = first.optionNames;
+
+	const mismatch = groupRows.find(
+		(r) =>
+			r.optionNames.length !== axisNames.length ||
+			!r.optionNames.every(
+				(n, i) => n.toLowerCase() === axisNames[i].toLowerCase(),
+			),
+	);
+	if (mismatch)
+		return {
+			error: groupingError(
+				mismatch.rowNumber,
+				`Option columns for "${first.name}" don't match its other rows`,
+			),
+		};
+
+	if (axisNames.length === 0 && groupRows.length > 1)
+		return {
+			error: groupingError(
+				groupRows[1].rowNumber,
+				`"${first.name}" has no option columns but spans multiple rows`,
+			),
+		};
+
+	const axisValues: string[][] = axisNames.map(() => []);
+	for (const r of groupRows)
+		r.optionValues.forEach((val, i) => {
+			if (!axisValues[i].some((v) => v.toLowerCase() === val.toLowerCase()))
+				axisValues[i].push(val);
+		});
+
+	return {
+		options: axisNames.map((name, i) => ({ name, values: axisValues[i] })),
+	};
+}
+
+/**
+ * Canonicalize a row's option values to each axis's first-appearance casing, so
+ * a value typed with different casing across rows ("Fillet" vs "fillet") maps to
+ * the SAME variant. Without this the raw-case label would miss the canonical
+ * combo and the row's price/stock/SKU would be silently discarded.
+ */
+function canonicalizeValues(
+	optionValues: string[],
+	options: AxisOption[],
+): string[] {
+	return optionValues.map(
+		(val, i) =>
+			options[i]?.values.find((v) => v.toLowerCase() === val.toLowerCase()) ??
+			val,
+	);
+}
+
+/**
+ * Map each provided combination to its row, keyed by the CANONICAL variant label
+ * so case-only differences collide and are reported as a duplicate (never
+ * silently discarded). Returns the map or the first duplicate error.
+ */
+export function dedupeProvidedVariants(
+	groupRows: VariantImportRow[],
+	options: AxisOption[],
+): { provided: Map<string, VariantImportRow> } | { error: ProductImportRowError } {
+	const provided = new Map<string, VariantImportRow>();
+	for (const r of groupRows) {
+		const label = variantLabel(canonicalizeValues(r.optionValues, options));
+		if (provided.has(label))
+			return {
+				error: groupingError(
+					r.rowNumber,
+					`Duplicate variant "${label || groupRows[0].name}"`,
+				),
+			};
+		provided.set(label, r);
+	}
+	return { provided };
+}
+
+/**
+ * Expand the full cartesian grid from `options`: each combination the sheet
+ * provided keeps its row; every omitted one is AUTO-FILLED as an inactive 0/0
+ * variant. Errors if the grid exceeds the per-product cap.
+ */
+export function buildVariantGrid(
+	options: AxisOption[],
+	provided: Map<string, VariantImportRow>,
+	first: VariantImportRow,
+):
+	| { variants: GroupedVariant[]; autoFilled: number }
+	| { error: ProductImportRowError } {
+	const combos = cartesian(options);
+	if (combos.length > MAX_VARIANTS_PER_PRODUCT)
+		return {
+			error: groupingError(
+				first.rowNumber,
+				`"${first.name}" expands to ${combos.length} variants (max ${MAX_VARIANTS_PER_PRODUCT})`,
+			),
+		};
+
+	let autoFilled = 0;
+	const variants: GroupedVariant[] = combos.map((optionValues) => {
+		const r = provided.get(variantLabel(optionValues));
+		if (r)
+			return {
+				optionValues,
+				sku: r.sku,
+				price: r.price,
+				onHand: r.onHand,
+				parcelWeightG: r.parcelWeightG,
+				active: true,
+			};
+		autoFilled++;
+		return {
+			optionValues,
+			sku: undefined,
+			price: 0,
+			onHand: 0,
+			parcelWeightG: 0,
+			active: false,
+		};
+	});
+	return { variants, autoFilled };
+}
+
+/** Product-level fields are last-writer-wins; warn when rows disagree. */
+function productFieldsWithWarnings(groupRows: VariantImportRow[]): {
+	name: string;
+	description: string | undefined;
+	warnings: string[];
+} {
+	const last = groupRows[groupRows.length - 1];
+	const warnings: string[] = [];
+	if (new Set(groupRows.map((r) => r.name)).size > 1)
+		warnings.push(`Multiple names; using "${last.name}"`);
+	if (new Set(groupRows.map((r) => r.description ?? "")).size > 1)
+		warnings.push("Multiple descriptions; using the last row's");
+	return { name: last.name, description: last.description, warnings };
+}
+
+/**
+ * Group validated variant rows into products. Orchestrates the per-product
+ * rules — each a small, independently testable helper: {@link inferAxes} (axis
+ * names + values), {@link dedupeProvidedVariants} (one row per combination,
+ * case-insensitive), {@link buildVariantGrid} (cartesian expand + auto-fill +
+ * cap), and last-writer-wins product fields. Returns grouped products + per-row
+ * grouping errors.
  */
 export function groupVariantRows(
 	rows: VariantImportRow[],
@@ -402,122 +569,33 @@ export function groupVariantRows(
 	for (const key of order) {
 		const groupRows = groups.get(key) as VariantImportRow[];
 		const first = groupRows[0];
-		const warnings: string[] = [];
-		const axisNames = first.optionNames;
 
-		// Every row of a product must declare the same axes (names + order).
-		const mismatch = groupRows.find(
-			(row) =>
-				row.optionNames.length !== axisNames.length ||
-				!row.optionNames.every(
-					(n, i) => n.toLowerCase() === axisNames[i].toLowerCase(),
-				),
-		);
-		if (mismatch) {
-			errorRows.push({
-				rowNumber: mismatch.rowNumber,
-				raw: {},
-				errors: [
-					`Option columns for "${first.name}" don't match its other rows`,
-				],
-			});
+		const axes = inferAxes(groupRows);
+		if ("error" in axes) {
+			errorRows.push(axes.error);
+			continue;
+		}
+		const deduped = dedupeProvidedVariants(groupRows, axes.options);
+		if ("error" in deduped) {
+			errorRows.push(deduped.error);
+			continue;
+		}
+		const grid = buildVariantGrid(axes.options, deduped.provided, first);
+		if ("error" in grid) {
+			errorRows.push(grid.error);
 			continue;
 		}
 
-		// No-option product → exactly one row.
-		if (axisNames.length === 0 && groupRows.length > 1) {
-			errorRows.push({
-				rowNumber: groupRows[1].rowNumber,
-				raw: {},
-				errors: [
-					`"${first.name}" has no option columns but spans multiple rows`,
-				],
-			});
-			continue;
-		}
-
-		// Distinct values per axis, first-appearance order.
-		const axisValues: string[][] = axisNames.map(() => []);
-		for (const row of groupRows) {
-			row.optionValues.forEach((val, i) => {
-				if (!axisValues[i].some((v) => v.toLowerCase() === val.toLowerCase()))
-					axisValues[i].push(val);
-			});
-		}
-		const options = axisNames.map((name, i) => ({
-			name,
-			values: axisValues[i],
-		}));
-
-		// Provided variants, deduped by combination.
-		const provided = new Map<string, VariantImportRow>();
-		const dupRow = groupRows.find((row) => {
-			const label = variantLabel(row.optionValues);
-			if (provided.has(label)) return true;
-			provided.set(label, row);
-			return false;
-		});
-		if (dupRow) {
-			errorRows.push({
-				rowNumber: dupRow.rowNumber,
-				raw: {},
-				errors: [
-					`Duplicate variant "${variantLabel(dupRow.optionValues) || first.name}"`,
-				],
-			});
-			continue;
-		}
-
-		const combos = cartesian(options);
-		if (combos.length > MAX_VARIANTS_PER_PRODUCT) {
-			errorRows.push({
-				rowNumber: first.rowNumber,
-				raw: {},
-				errors: [
-					`"${first.name}" expands to ${combos.length} variants (max ${MAX_VARIANTS_PER_PRODUCT})`,
-				],
-			});
-			continue;
-		}
-
-		// Last-writer-wins product fields + drift warnings.
-		const last = groupRows[groupRows.length - 1];
-		if (new Set(groupRows.map((r) => r.name)).size > 1)
-			warnings.push(`Multiple names; using "${last.name}"`);
-		if (new Set(groupRows.map((r) => r.description ?? "")).size > 1)
-			warnings.push("Multiple descriptions; using the last row's");
-
-		let autoFilled = 0;
-		const variants: GroupedVariant[] = combos.map((optionValues) => {
-			const row = provided.get(variantLabel(optionValues));
-			if (row)
-				return {
-					optionValues,
-					sku: row.sku,
-					price: row.price,
-					onHand: row.onHand,
-					parcelWeightG: row.parcelWeightG,
-					active: true,
-				};
-			autoFilled++;
-			return {
-				optionValues,
-				sku: undefined,
-				price: 0,
-				onHand: 0,
-				parcelWeightG: 0,
-				active: false,
-			};
-		});
-
-		autoFilledTotal += autoFilled;
-		variantCount += variants.length;
+		const { name, description, warnings } =
+			productFieldsWithWarnings(groupRows);
+		autoFilledTotal += grid.autoFilled;
+		variantCount += grid.variants.length;
 		products.push({
-			name: last.name,
-			description: last.description,
-			options,
-			variants,
-			autoFilledCount: autoFilled,
+			name,
+			description,
+			options: axes.options,
+			variants: grid.variants,
+			autoFilledCount: grid.autoFilled,
 			warnings,
 		});
 	}

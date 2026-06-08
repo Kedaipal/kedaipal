@@ -23,6 +23,15 @@ The importer + exporter were reworked for the variant schema (subtask of
   deferred follow-up. Rows with no SKU create new products.
 - **Price = 2 dp (rounded to sen); stock = whole number** — matches the dashboard
   editor; the parser rounds price and rejects non-integer stock.
+- **Blank `weight_grams` = preserve on update.** A blank/omitted weight cell parses
+  to `undefined` (not `0`), so on update the existing variant's weight is kept
+  (`parcelWeightG ?? existing`); on insert it defaults to `0`. An explicit `0` is
+  a real value. Exports always populate the column, so round-trips set it
+  explicitly — only hand-blanked cells hit the preserve path.
+- **Option values are matched case-insensitively** within a product (first casing
+  wins for the axis). Two rows that differ only by case (`Cut=Fillet` /
+  `Cut=fillet`) resolve to the **same** variant and are reported as a duplicate —
+  never silently collapsed with one row's price/stock dropped.
 - **Export = one row per *active* variant**, in the exact import column shape, so
   export → edit → re-import round-trips. Auto-filled inactive placeholders are
   omitted (re-auto-filled on import). *Limitation:* a manually-deactivated variant
