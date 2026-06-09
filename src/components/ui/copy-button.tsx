@@ -47,7 +47,7 @@ export function CopyButton({
 			onClick={handleCopy}
 			aria-label={ariaLabel}
 			className={cn(
-				"flex h-9 shrink-0 items-center gap-1 rounded-full px-3 text-xs font-medium transition-colors",
+				"flex h-11 min-h-[44px] shrink-0 items-center gap-1 rounded-full px-3 text-xs font-medium transition-colors",
 				copied
 					? "text-emerald-600"
 					: "text-muted-foreground hover:bg-muted hover:text-foreground",
