@@ -237,13 +237,37 @@ describe("googleMapsNavUrl", () => {
 });
 
 describe("wazeNavUrl", () => {
-	test("navigates by coordinates", () => {
+	test("navigates by coordinates when no query is given", () => {
 		expect(wazeNavUrl({ latitude: 3.158, longitude: 101.712 })).toBe(
 			"https://waze.com/ul?ll=3.158,101.712&navigate=yes",
 		);
 	});
 
-	test("undefined without coords (Waze has no placeId concept)", () => {
+	test("includes q (name, encoded) + ll coords so mobile can name it, pin stays exact", () => {
+		expect(
+			wazeNavUrl({
+				query: "Eco Majestic, 1 Jln Eco, 43500 Semenyih",
+				latitude: 2.95,
+				longitude: 101.86,
+			}),
+		).toBe(
+			"https://waze.com/ul?q=Eco%20Majestic%2C%201%20Jln%20Eco%2C%2043500%20Semenyih&ll=2.95,101.86&navigate=yes",
+		);
+	});
+
+	test("query alone (no coords) → q-only search", () => {
+		expect(wazeNavUrl({ query: "Kedai Ali" })).toBe(
+			"https://waze.com/ul?q=Kedai%20Ali&navigate=yes",
+		);
+	});
+
+	test("blank query falls back to coordinate navigation", () => {
+		expect(
+			wazeNavUrl({ query: "   ", latitude: 3.158, longitude: 101.712 }),
+		).toBe("https://waze.com/ul?ll=3.158,101.712&navigate=yes");
+	});
+
+	test("undefined when neither a query nor coords are present", () => {
 		expect(wazeNavUrl({})).toBeUndefined();
 		expect(wazeNavUrl({ latitude: 3.158 })).toBeUndefined();
 		// @ts-expect-error placeId isn't a Waze input.

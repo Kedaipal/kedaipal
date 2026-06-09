@@ -133,17 +133,32 @@ export function googleMapsNavUrl(loc: {
 }
 
 /**
- * Waze deep-link for **navigation**. Waze has no Google `place_id` concept, so it
- * always navigates by coordinates. Returns undefined without coordinates.
+ * Waze deep-link for **navigation**. Waze has no web named-place URL we can build
+ * from our data (a named destination needs a Waze-specific venue id,
+ * `to=place.<id>`, not derivable from a Google `placeId`), so we pass both:
+ * - `q=<name, address>` — the **Waze mobile app** searches this and can show the
+ *   place by name;
+ * - `ll=<lat>,<lng>` — keeps the **pin exact** everywhere (on desktop web Waze
+ *   rewrites it to `to=ll.…` → correct pin, coords label; the `q` is ignored
+ *   there but harmless).
+ * Falls back to coordinate-only nav when no `query` is supplied; returns
+ * undefined when neither a query nor coordinates are available.
  */
 export function wazeNavUrl(loc: {
 	latitude?: number;
 	longitude?: number;
+	query?: string;
 }): string | undefined {
-	if (
-		typeof loc.latitude === "number" &&
-		typeof loc.longitude === "number"
-	) {
+	const query = loc.query?.trim();
+	const hasCoords =
+		typeof loc.latitude === "number" && typeof loc.longitude === "number";
+	if (query) {
+		const parts = [`q=${encodeURIComponent(query)}`];
+		if (hasCoords) parts.push(`ll=${loc.latitude},${loc.longitude}`);
+		parts.push("navigate=yes");
+		return `https://waze.com/ul?${parts.join("&")}`;
+	}
+	if (hasCoords) {
 		return `https://waze.com/ul?ll=${loc.latitude},${loc.longitude}&navigate=yes`;
 	}
 	return undefined;

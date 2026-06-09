@@ -684,11 +684,15 @@ function PickupNavButtons({
 	>["pickupSnapshot"];
 }) {
 	if (!snapshot) return null;
-	// Google prefers the named place (placeId) over raw lat/lng so it opens on the
-	// place card, not an unnamed pin — consistent with the WhatsApp confirm link
-	// (both go through the shared helpers). Waze navigates by coordinates.
+	// Google opens on the NAMED place (placeId), consistent with the WhatsApp
+	// confirm link. Waze gets `q=<name, address>` (so the mobile app can show the
+	// name) plus `ll` coords to keep the pin exact (desktop web shows coords +
+	// correct pin — Waze has no web named-place URL we can build). See wazeNavUrl.
 	const googleUrl = googleMapsNavUrl(snapshot);
-	const wazeUrl = wazeNavUrl(snapshot);
+	const wazeQuery = [snapshot.label, snapshot.address]
+		.filter((s) => s && s.trim().length > 0)
+		.join(", ");
+	const wazeUrl = wazeNavUrl({ ...snapshot, query: wazeQuery });
 
 	if (googleUrl && wazeUrl) {
 		return (
