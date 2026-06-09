@@ -312,7 +312,13 @@ export function renderPaymentInstructions(
 	lines.push(labels.header);
 	if (bank) lines.push(`${labels.bank}: ${bank}`);
 	if (accName) lines.push(`${labels.accountName}: ${accName}`);
-	if (accNum) lines.push(`${labels.accountNumber}: ${accNum}`);
+	// Account number goes on its OWN line (label above, bare number below) so a
+	// long-press in WhatsApp selects just the number — no "Account: " prefix to
+	// trim. The web track page has a one-tap copy button for the same reason.
+	if (accNum) {
+		lines.push(`${labels.accountNumber}:`);
+		lines.push(accNum);
+	}
 	if (note) {
 		if (hasBankBlock) lines.push("");
 		lines.push(note);

@@ -295,7 +295,9 @@ describe("whatsapp inbound", () => {
 		expect(text).toContain("💳 Payment details");
 		expect(text).toContain("Bank: Maybank");
 		expect(text).toContain("Name: Acme Outdoor");
-		expect(text).toContain("Account: 5123-4567");
+		// Account number on its own line (label above, bare number below).
+		expect(text).toContain("Account:");
+		expect(text.split("\n")).toContain("5123-4567");
 		expect(text).toContain("Send receipt after transfer.");
 		fetchMock.restore();
 	});
@@ -324,7 +326,8 @@ describe("whatsapp inbound", () => {
 		expect(text).toContain("disahkan");
 		expect(text).toContain("💳 Maklumat pembayaran");
 		expect(text).toContain("Bank: CIMB");
-		expect(text).toContain("Akaun: 9988");
+		expect(text).toContain("Akaun:");
+		expect(text.split("\n")).toContain("9988");
 		fetchMock.restore();
 	});
 

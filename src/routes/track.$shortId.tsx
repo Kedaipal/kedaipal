@@ -19,6 +19,7 @@ import { type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { isMockupGateClosed } from "../../convex/lib/order";
+import { CopyButton } from "../components/ui/copy-button";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
 import { IvePaidDialog } from "../components/storefront/ive-paid-dialog";
@@ -213,6 +214,9 @@ function TrackingSkeleton() {
 function TrackingRoute() {
 	const { shortId } = Route.useParams();
 	const order = useQuery(api.orders.get, { shortId });
+	const paymentInstructions = useQuery(api.orders.getPaymentInstructions, {
+		shortId,
+	});
 	const [editingAddress, setEditingAddress] = useState(false);
 	const [claimingPayment, setClaimingPayment] = useState(false);
 
@@ -385,6 +389,65 @@ function TrackingRoute() {
 							>
 								Update proof
 							</button>
+						</div>
+					) : null}
+				</section>
+			) : null}
+
+			{/* How to pay — the seller's bank/QR details with one-tap copy on the
+			    account number (the MY bank-transfer friction point). Shown while a
+			    payment is still due and not deferred behind a closed mockup gate;
+			    hidden once received/cancelled or when nothing is configured. */}
+			{!isCancelled &&
+			!mockupGateClosed &&
+			paymentStatus !== "received" &&
+			paymentInstructions ? (
+				<section className="mt-4 flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+						How to pay
+					</p>
+					{paymentInstructions.bankName ? (
+						<div className="flex items-baseline justify-between gap-3 text-sm">
+							<span className="text-muted-foreground">Bank</span>
+							<span className="font-medium">{paymentInstructions.bankName}</span>
+						</div>
+					) : null}
+					{paymentInstructions.bankAccountName ? (
+						<div className="flex items-baseline justify-between gap-3 text-sm">
+							<span className="text-muted-foreground">Name</span>
+							<span className="text-right font-medium">
+								{paymentInstructions.bankAccountName}
+							</span>
+						</div>
+					) : null}
+					{paymentInstructions.bankAccountNumber ? (
+						<div className="flex items-center justify-between gap-2 rounded-xl bg-muted/50 px-3 py-2.5">
+							<div className="min-w-0">
+								<p className="text-xs text-muted-foreground">Account number</p>
+								<p className="break-all font-mono text-base font-semibold">
+									{paymentInstructions.bankAccountNumber}
+								</p>
+							</div>
+							<CopyButton
+								value={paymentInstructions.bankAccountNumber}
+								ariaLabel="Copy account number"
+								successMessage="Account number copied"
+							/>
+						</div>
+					) : null}
+					{paymentInstructions.note ? (
+						<p className="whitespace-pre-line break-words text-sm text-muted-foreground">
+							{paymentInstructions.note}
+						</p>
+					) : null}
+					{paymentInstructions.qrImageUrl ? (
+						<div className="flex flex-col items-center gap-1.5 pt-1">
+							<img
+								src={paymentInstructions.qrImageUrl}
+								alt="Payment QR code"
+								className="max-h-56 w-auto rounded-lg border border-border bg-white"
+							/>
+							<p className="text-xs text-muted-foreground">Scan to pay</p>
 						</div>
 					) : null}
 				</section>

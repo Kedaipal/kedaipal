@@ -122,6 +122,44 @@ describe("orders", () => {
 		expect(shortId).toMatch(/^ORD-[A-Z2-9]{4}$/);
 	});
 
+	test("getPaymentInstructions returns trimmed seller details; null when none", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+
+		// Nothing configured → null (track page hides the section).
+		expect(
+			await t.query(api.orders.getPaymentInstructions, { shortId }),
+		).toBeNull();
+
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				paymentInstructions: {
+					bankName: "Maybank",
+					bankAccountNumber: "  5123-4567  ",
+					note: "   ",
+				},
+			});
+		});
+		const pi = await t.query(api.orders.getPaymentInstructions, { shortId });
+		expect(pi?.bankName).toBe("Maybank");
+		expect(pi?.bankAccountNumber).toBe("5123-4567"); // trimmed
+		expect(pi?.note).toBeUndefined(); // whitespace-only → undefined
+
+		// Unknown order → null.
+		expect(
+			await t.query(api.orders.getPaymentInstructions, { shortId: "ORD-ZZZZ" }),
+		).toBeNull();
+	});
+
 	test("computes correct subtotal and total", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);

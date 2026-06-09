@@ -32,7 +32,10 @@ describe("renderPaymentInstructions", () => {
 		expect(out).toContain("💳 Payment details");
 		expect(out).toContain("Bank: Maybank");
 		expect(out).toContain("Name: Acme Outdoor Sdn Bhd");
-		expect(out).toContain("Account: 5123 4567 8901");
+		// Account number sits on its OWN line (label above, bare number below) so a
+		// long-press in WhatsApp selects just the number.
+		expect(out).toContain("Account:");
+		expect(out.split("\n")).toContain("5123 4567 8901");
 	});
 
 	test("renders Bahasa Malaysia labels", () => {
@@ -42,7 +45,8 @@ describe("renderPaymentInstructions", () => {
 		});
 		expect(out).toContain("💳 Maklumat pembayaran");
 		expect(out).toContain("Bank: Maybank");
-		expect(out).toContain("Akaun: 5123");
+		expect(out).toContain("Akaun:");
+		expect(out.split("\n")).toContain("5123");
 	});
 
 	test("renders note even without bank fields (QR-only retailer)", () => {
@@ -69,7 +73,7 @@ describe("renderPaymentInstructions", () => {
 			bankAccountNumber: "\t5123\n",
 		});
 		expect(out).toContain("Bank: Maybank");
-		expect(out).toContain("Account: 5123");
+		expect(out.split("\n")).toContain("5123");
 	});
 
 	test("paymentQrCaption is locale-aware", () => {
