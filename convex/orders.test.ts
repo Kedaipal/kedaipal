@@ -159,6 +159,71 @@ describe("orders", () => {
 			await t.query(api.orders.getPaymentInstructions, { shortId: "ORD-ZZZZ" }),
 		).toBeNull();
 	});
+	
+	test("persists a trimmed customerNote; whitespace-only → undefined", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+
+		const withNote = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+			customerNote: "  no onions, deliver after 5pm  ",
+		});
+		expect(
+			(await t.query(api.orders.get, { shortId: withNote.shortId }))
+				?.customerNote,
+		).toBe("no onions, deliver after 5pm");
+
+		const blankNote = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+			customerNote: "   \n  ",
+		});
+		expect(
+			(await t.query(api.orders.get, { shortId: blankNote.shortId }))
+				?.customerNote,
+		).toBeUndefined();
+
+		// Omitted entirely → undefined (legacy-safe).
+		const noNote = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		
+		expect(
+			(await t.query(api.orders.get, { shortId: noNote.shortId }))?.customerNote,
+		).toBeUndefined();
+	});
+
+	test("rejects a customerNote over the length cap", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+				customerNote: "x".repeat(501),
+			}),
+		).rejects.toThrow(/500 characters or fewer/i);
+	});
 
 	test("computes correct subtotal and total", async () => {
 		const t = setup();

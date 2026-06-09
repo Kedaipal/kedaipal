@@ -36,6 +36,7 @@ const addressValidator = v.object({
 });
 
 const MAX_ITEMS_PER_ORDER = 100;
+const MAX_CUSTOMER_NOTE = 500;
 const SHORT_ID_RETRIES = 3;
 
 const statusValidator = v.union(
@@ -91,6 +92,8 @@ export const create = mutation({
 		),
 		deliveryAddress: v.optional(addressValidator),
 		pickupLocationId: v.optional(v.id("pickupLocations")),
+		// Optional free-text instruction the shopper typed at checkout.
+		customerNote: v.optional(v.string()),
 	},
 	handler: async (ctx, args): Promise<{ shortId: string }> => {
 		// Rate limit FIRST — public endpoint, throttle per storefront before any DB reads.
@@ -145,6 +148,17 @@ export const create = mutation({
 			name: args.customer.name?.trim() || undefined,
 			waPhone: customerWaPhone,
 		};
+
+		// Order note: trim, treat whitespace-only as absent, hard-cap length
+		// (defense-in-depth — the client also caps + counts). Stored as plain text;
+		// read-side views escape it (React default), so no markdown/HTML injection.
+		const trimmedNote = args.customerNote?.trim();
+		if (trimmedNote && trimmedNote.length > MAX_CUSTOMER_NOTE)
+			throw new ConvexError(
+				`Note must be ${MAX_CUSTOMER_NOTE} characters or fewer`,
+			);
+		const sanitizedCustomerNote =
+			trimmedNote && trimmedNote.length > 0 ? trimmedNote : undefined;
 
 		const retailer = await ctx.db.get(args.retailerId);
 		if (!retailer) throw new ConvexError("Retailer not found");
@@ -316,6 +330,7 @@ export const create = mutation({
 			deliveryAddress: sanitizedAddress,
 			pickupLocationId: resolvedPickupLocationId,
 			pickupSnapshot: sanitizedPickupSnapshot,
+			customerNote: sanitizedCustomerNote,
 			mockupStatus: requiresMockup ? "pending" : undefined,
 			createdAt: now,
 			updatedAt: now,

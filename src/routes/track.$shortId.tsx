@@ -11,6 +11,7 @@ import {
 	MapPin,
 	Package,
 	Pencil,
+	StickyNote,
 	Store,
 	Truck,
 	XCircle,
@@ -665,6 +666,22 @@ function TrackingRoute() {
 					</span>
 				</div>
 			</section>
+
+			{/* Echo the shopper's note so they can confirm it was received. Plain
+			    text, escaped by React; newlines preserved. Hidden when absent. */}
+			{order.customerNote ? (
+				<section className="mt-4 flex gap-3 rounded-2xl border border-border bg-card p-4">
+					<StickyNote className="size-5 shrink-0 text-accent" />
+					<div className="min-w-0 flex-1">
+						<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+							Your note
+						</p>
+						<p className="mt-1 whitespace-pre-line break-words text-sm">
+							{order.customerNote}
+						</p>
+					</div>
+				</section>
+			) : null}
 		</main>
 	);
 }

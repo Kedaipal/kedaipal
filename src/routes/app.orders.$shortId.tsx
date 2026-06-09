@@ -13,6 +13,7 @@ import {
 	MapPin,
 	MessageCircle,
 	Package,
+	StickyNote,
 	Truck,
 	User,
 } from "lucide-react";
@@ -309,6 +310,22 @@ function OrderDetailRoute() {
 					</span>
 				</div>
 			</div>
+
+			{/* Shopper's note — front-and-centre so it isn't missed when fulfilling.
+			    Plain text, escaped by React; newlines preserved. Hidden when absent. */}
+			{order.customerNote ? (
+				<section className="flex gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4">
+					<StickyNote className="size-5 shrink-0 text-amber-600" />
+					<div className="min-w-0 flex-1">
+						<p className="text-xs font-semibold uppercase tracking-widest text-amber-700">
+							Note from customer
+						</p>
+						<p className="mt-1 whitespace-pre-line break-words text-sm text-amber-950">
+							{order.customerNote}
+						</p>
+					</div>
+				</section>
+			) : null}
 
 			{/* Payment claim — actionable when shopper has tapped "I've paid". */}
 			{paymentStatus === "claimed" ? (
