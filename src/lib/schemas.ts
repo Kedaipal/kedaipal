@@ -147,6 +147,10 @@ export const checkoutFormSchema = z
 		// "required" check lives in the submit handler because it depends on
 		// runtime data (the live location count) not knowable to the schema.
 		pickupLocationId: z.string(),
+		// Optional free-text instruction for the seller. Always a string in form
+		// state (empty allowed); trimmed to undefined at submit. Cap mirrors the
+		// server (MAX_CUSTOMER_NOTE in convex/orders.ts).
+		note: z.string().max(500, "Note must be at most 500 characters"),
 	})
 	.superRefine((val, ctx) => {
 		if (val.deliveryMethod !== "delivery") return;
