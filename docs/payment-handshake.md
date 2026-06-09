@@ -64,6 +64,15 @@ Optional per-retailer config (`retailers.paymentInstructions`), each sub-field i
 
 Rendered into the confirmation reply via `renderPaymentInstructions`; the QR is sent as a **separate follow-up image** so the shopper can long-press to save it.
 
+### One-tap copy (reduce bank-transfer friction)
+
+The bank account number is the value shoppers must copy to pay, and a long-press in WhatsApp grabbed the `Account: ` label too. Two fixes (Sukhjeet / Metalpix beta feedback, 5 Jun 2026):
+
+- **WhatsApp message** — `renderPaymentInstructions` puts the bare account number on its **own line** (label on the line above), so a long-press selects just the number.
+- **Track page** — a "How to pay" section (`track.$shortId.tsx`) shows the same bank/QR details with a **one-tap `CopyButton`** on the account number (`src/components/ui/copy-button.tsx` — reusable, check-mark + toast, degrades when the Clipboard API is unavailable). Backed by the public `orders.getPaymentInstructions({ shortId })` query (capability = shortId; trims fields, resolves the QR URL, returns `null` when nothing is configured). Shown while payment is still due (`paymentStatus !== "received"`) and not deferred behind a closed mockup gate; the QR is shown inline too.
+
+Copy is currently scoped to the **bank account number** — a structured DuitNow ID field (and its own copy) lands with the multi-method payment-config task.
+
 ## Notification summary
 
 | Event | Trigger | Channel | Recipient |

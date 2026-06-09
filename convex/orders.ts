@@ -409,6 +409,56 @@ export const get = query({
 });
 
 /**
+ * Public: resolve the seller's payment instructions for the tracking page, keyed
+ * by shortId (the capability — same trust model as the rest of the track page;
+ * these details are already shown to the buyer in the WhatsApp confirm reply).
+ * Trims each field, resolves the QR storage id to a URL, and returns `null` when
+ * the seller has nothing configured (track page hides the section).
+ */
+export const getPaymentInstructions = query({
+	args: { shortId: v.string() },
+	handler: async (
+		ctx,
+		{ shortId },
+	): Promise<{
+		bankName?: string;
+		bankAccountName?: string;
+		bankAccountNumber?: string;
+		note?: string;
+		qrImageUrl?: string;
+	} | null> => {
+		const order = await ctx.db
+			.query("orders")
+			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+			.first();
+		if (!order) return null;
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer?.paymentInstructions) return null;
+		const pi = retailer.paymentInstructions;
+
+		const bankName = pi.bankName?.trim() || undefined;
+		const bankAccountName = pi.bankAccountName?.trim() || undefined;
+		const bankAccountNumber = pi.bankAccountNumber?.trim() || undefined;
+		const note = pi.note?.trim() || undefined;
+		let qrImageUrl: string | undefined;
+		if (pi.qrImageStorageId) {
+			const url = await ctx.storage.getUrl(pi.qrImageStorageId);
+			qrImageUrl = url ?? undefined;
+		}
+
+		if (
+			!bankName &&
+			!bankAccountName &&
+			!bankAccountNumber &&
+			!note &&
+			!qrImageUrl
+		)
+			return null;
+		return { bankName, bankAccountName, bankAccountNumber, note, qrImageUrl };
+	},
+});
+
+/**
  * Resolve the payment-proof storage ID into a viewable URL for the dashboard.
  * Auth-gated (Clerk) — only the owning retailer can see the screenshot. Public
  * shoppers must not be able to fish proof images for arbitrary shortIds, so

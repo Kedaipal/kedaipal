@@ -105,3 +105,61 @@ export function deriveMapsUrl(loc: {
 	}
 	return undefined;
 }
+
+/**
+ * Google Maps deep-link for **navigation**, preferring a named place (`placeId`)
+ * over raw coordinates so it opens on the actual place card — not an unnamed pin
+ * at lat/lng (the "ugly lat/lng on the map" problem). Unlike `deriveMapsUrl`,
+ * this ignores any retailer-pasted custom `mapsUrl` because it is specifically
+ * the Google target (used next to a separate Waze button). Returns undefined
+ * when neither a placeId nor coordinates are available.
+ */
+export function googleMapsNavUrl(loc: {
+	latitude?: number;
+	longitude?: number;
+	placeId?: string;
+}): string | undefined {
+	const placeId = loc.placeId?.trim();
+	if (placeId && placeId.length > 0) {
+		return `https://www.google.com/maps/place/?q=place_id:${placeId}`;
+	}
+	if (
+		typeof loc.latitude === "number" &&
+		typeof loc.longitude === "number"
+	) {
+		return `https://www.google.com/maps/search/?api=1&query=${loc.latitude},${loc.longitude}`;
+	}
+	return undefined;
+}
+
+/**
+ * Waze deep-link for **navigation**. Waze has no web named-place URL we can build
+ * from our data (a named destination needs a Waze-specific venue id,
+ * `to=place.<id>`, not derivable from a Google `placeId`), so we pass both:
+ * - `q=<name, address>` — the **Waze mobile app** searches this and can show the
+ *   place by name;
+ * - `ll=<lat>,<lng>` — keeps the **pin exact** everywhere (on desktop web Waze
+ *   rewrites it to `to=ll.…` → correct pin, coords label; the `q` is ignored
+ *   there but harmless).
+ * Falls back to coordinate-only nav when no `query` is supplied; returns
+ * undefined when neither a query nor coordinates are available.
+ */
+export function wazeNavUrl(loc: {
+	latitude?: number;
+	longitude?: number;
+	query?: string;
+}): string | undefined {
+	const query = loc.query?.trim();
+	const hasCoords =
+		typeof loc.latitude === "number" && typeof loc.longitude === "number";
+	if (query) {
+		const parts = [`q=${encodeURIComponent(query)}`];
+		if (hasCoords) parts.push(`ll=${loc.latitude},${loc.longitude}`);
+		parts.push("navigate=yes");
+		return `https://waze.com/ul?${parts.join("&")}`;
+	}
+	if (hasCoords) {
+		return `https://waze.com/ul?ll=${loc.latitude},${loc.longitude}&navigate=yes`;
+	}
+	return undefined;
+}

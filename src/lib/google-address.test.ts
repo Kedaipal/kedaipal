@@ -2,8 +2,10 @@
 import { describe, expect, test } from "vitest";
 import {
 	deriveMapsUrl,
+	googleMapsNavUrl,
 	normalizeMyState,
 	parseGoogleAddress,
+	wazeNavUrl,
 } from "./google-address";
 
 describe("normalizeMyState", () => {
@@ -201,5 +203,74 @@ describe("deriveMapsUrl", () => {
 				placeId: "ChIJ_abc",
 			}),
 		).toBe("https://www.google.com/maps/place/?q=place_id:ChIJ_abc");
+	});
+});
+
+describe("googleMapsNavUrl", () => {
+	test("prefers placeId over coords (opens the named place, not a lat/lng pin)", () => {
+		expect(
+			googleMapsNavUrl({
+				placeId: "ChIJ_abc",
+				latitude: 3.158,
+				longitude: 101.712,
+			}),
+		).toBe("https://www.google.com/maps/place/?q=place_id:ChIJ_abc");
+	});
+
+	test("ignores a pasted mapsUrl — this is specifically the Google target", () => {
+		// @ts-expect-error mapsUrl isn't part of the nav-helper input by design.
+		const url = googleMapsNavUrl({ mapsUrl: "https://waze.com/ul?ll=1,2", placeId: "ChIJ_abc" });
+		expect(url).toBe("https://www.google.com/maps/place/?q=place_id:ChIJ_abc");
+	});
+
+	test("falls back to a lat/lng search URL without a placeId", () => {
+		expect(googleMapsNavUrl({ latitude: 3.158, longitude: 101.712 })).toBe(
+			"https://www.google.com/maps/search/?api=1&query=3.158,101.712",
+		);
+	});
+
+	test("undefined when neither placeId nor full coords present", () => {
+		expect(googleMapsNavUrl({})).toBeUndefined();
+		expect(googleMapsNavUrl({ latitude: 3.158 })).toBeUndefined();
+		expect(googleMapsNavUrl({ placeId: "   " })).toBeUndefined();
+	});
+});
+
+describe("wazeNavUrl", () => {
+	test("navigates by coordinates when no query is given", () => {
+		expect(wazeNavUrl({ latitude: 3.158, longitude: 101.712 })).toBe(
+			"https://waze.com/ul?ll=3.158,101.712&navigate=yes",
+		);
+	});
+
+	test("includes q (name, encoded) + ll coords so mobile can name it, pin stays exact", () => {
+		expect(
+			wazeNavUrl({
+				query: "Eco Majestic, 1 Jln Eco, 43500 Semenyih",
+				latitude: 2.95,
+				longitude: 101.86,
+			}),
+		).toBe(
+			"https://waze.com/ul?q=Eco%20Majestic%2C%201%20Jln%20Eco%2C%2043500%20Semenyih&ll=2.95,101.86&navigate=yes",
+		);
+	});
+
+	test("query alone (no coords) → q-only search", () => {
+		expect(wazeNavUrl({ query: "Kedai Ali" })).toBe(
+			"https://waze.com/ul?q=Kedai%20Ali&navigate=yes",
+		);
+	});
+
+	test("blank query falls back to coordinate navigation", () => {
+		expect(
+			wazeNavUrl({ query: "   ", latitude: 3.158, longitude: 101.712 }),
+		).toBe("https://waze.com/ul?ll=3.158,101.712&navigate=yes");
+	});
+
+	test("undefined when neither a query nor coords are present", () => {
+		expect(wazeNavUrl({})).toBeUndefined();
+		expect(wazeNavUrl({ latitude: 3.158 })).toBeUndefined();
+		// @ts-expect-error placeId isn't a Waze input.
+		expect(wazeNavUrl({ placeId: "ChIJ_abc" })).toBeUndefined();
 	});
 });
