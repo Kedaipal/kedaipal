@@ -27,7 +27,11 @@ import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import { convexErrorMessage, formatPrice } from "../lib/format";
-import { deriveMapsUrl } from "../lib/google-address";
+import {
+	deriveMapsUrl,
+	googleMapsNavUrl,
+	wazeNavUrl,
+} from "../lib/google-address";
 
 type PaymentStatus = "unpaid" | "claimed" | "received";
 
@@ -680,13 +684,13 @@ function PickupNavButtons({
 	>["pickupSnapshot"];
 }) {
 	if (!snapshot) return null;
-	const { latitude, longitude, mapsUrl } = snapshot;
-	const hasCoords =
-		typeof latitude === "number" && typeof longitude === "number";
+	// Google prefers the named place (placeId) over raw lat/lng so it opens on the
+	// place card, not an unnamed pin — consistent with the WhatsApp confirm link
+	// (both go through the shared helpers). Waze navigates by coordinates.
+	const googleUrl = googleMapsNavUrl(snapshot);
+	const wazeUrl = wazeNavUrl(snapshot);
 
-	if (hasCoords) {
-		const wazeUrl = `https://waze.com/ul?ll=${latitude},${longitude}&navigate=yes`;
-		const googleUrl = `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
+	if (googleUrl && wazeUrl) {
 		return (
 			<div className="grid grid-cols-2 gap-2">
 				<a
@@ -710,10 +714,25 @@ function PickupNavButtons({
 			</div>
 		);
 	}
-	if (mapsUrl) {
+	// PlaceId without coords → Google only (Waze can't navigate without lat/lng).
+	if (googleUrl) {
 		return (
 			<a
-				href={mapsUrl}
+				href={googleUrl}
+				target="_blank"
+				rel="noreferrer"
+				className="flex items-center gap-1.5 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
+			>
+				<ExternalLink className="size-3.5" />
+				Open in Google Maps
+			</a>
+		);
+	}
+	// Legacy snapshot with only a retailer-pasted maps link.
+	if (snapshot.mapsUrl) {
+		return (
+			<a
+				href={snapshot.mapsUrl}
 				target="_blank"
 				rel="noreferrer"
 				className="flex items-center gap-1.5 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"

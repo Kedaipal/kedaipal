@@ -3,7 +3,11 @@ import type { GoogleAddressComponent } from "../../convex/google";
 // have to update their import path. The canonical home is `convex/lib/mapsUrl.ts`
 // because the same logic is needed inside Convex functions (rendering the
 // WhatsApp confirm message), and src/ cannot be imported from convex/.
-export { deriveMapsUrl } from "../../convex/lib/mapsUrl";
+export {
+	deriveMapsUrl,
+	googleMapsNavUrl,
+	wazeNavUrl,
+} from "../../convex/lib/mapsUrl";
 import {
 	type CheckoutAddressValues,
 	type MyState,

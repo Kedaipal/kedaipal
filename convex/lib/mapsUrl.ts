@@ -105,3 +105,46 @@ export function deriveMapsUrl(loc: {
 	}
 	return undefined;
 }
+
+/**
+ * Google Maps deep-link for **navigation**, preferring a named place (`placeId`)
+ * over raw coordinates so it opens on the actual place card — not an unnamed pin
+ * at lat/lng (the "ugly lat/lng on the map" problem). Unlike `deriveMapsUrl`,
+ * this ignores any retailer-pasted custom `mapsUrl` because it is specifically
+ * the Google target (used next to a separate Waze button). Returns undefined
+ * when neither a placeId nor coordinates are available.
+ */
+export function googleMapsNavUrl(loc: {
+	latitude?: number;
+	longitude?: number;
+	placeId?: string;
+}): string | undefined {
+	const placeId = loc.placeId?.trim();
+	if (placeId && placeId.length > 0) {
+		return `https://www.google.com/maps/place/?q=place_id:${placeId}`;
+	}
+	if (
+		typeof loc.latitude === "number" &&
+		typeof loc.longitude === "number"
+	) {
+		return `https://www.google.com/maps/search/?api=1&query=${loc.latitude},${loc.longitude}`;
+	}
+	return undefined;
+}
+
+/**
+ * Waze deep-link for **navigation**. Waze has no Google `place_id` concept, so it
+ * always navigates by coordinates. Returns undefined without coordinates.
+ */
+export function wazeNavUrl(loc: {
+	latitude?: number;
+	longitude?: number;
+}): string | undefined {
+	if (
+		typeof loc.latitude === "number" &&
+		typeof loc.longitude === "number"
+	) {
+		return `https://waze.com/ul?ll=${loc.latitude},${loc.longitude}&navigate=yes`;
+	}
+	return undefined;
+}
