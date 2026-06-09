@@ -236,7 +236,6 @@ function ImportProductsRoute() {
 					← Products
 				</Link>
 			</div>
-			<h2 className="text-xl font-bold">Import products</h2>
 
 			<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 				<div className="flex items-start gap-3">

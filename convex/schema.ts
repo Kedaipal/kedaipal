@@ -317,6 +317,12 @@ export default defineSchema({
 				placeId: v.optional(v.string()),
 			}),
 		),
+		// Free-text instruction the shopper attached at checkout ("no onions",
+		// "deliver after 5pm"). Optional; absent on orders created before this
+		// field. Distinct from deliveryAddress.notes (address/gate detail, delivery
+		// only) — this is order-level and applies to self-collect too. Trimmed +
+		// length-capped server-side; rendered escaped (plain text, no markdown).
+		customerNote: v.optional(v.string()),
 		// Optional external carrier tracking URL set by the retailer when marking
 		// shipped. Surfaced on the customer tracking page and included in the
 		// WhatsApp shipped notification. Only relevant for delivery orders.

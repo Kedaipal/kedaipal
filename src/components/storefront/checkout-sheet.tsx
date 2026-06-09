@@ -132,6 +132,7 @@ function buildWaMessage(
 	deliveryMethod: "delivery" | "self_collect",
 	deliveryAddress: SanitizedDeliveryAddress | undefined,
 	pickupLocation: PublicPickupLocation | undefined,
+	note: string | undefined,
 ): string {
 	const lines: string[] = [];
 	lines.push(`Hi ${storeName}, I'd like to place this order:`);
@@ -166,6 +167,15 @@ function buildWaMessage(
 		if (deliveryAddress.notes) lines.push(`📝 ${deliveryAddress.notes}`);
 	} else {
 		lines.push("🚚 Delivery");
+	}
+	// Order note last, in a clearly delimited section. It sits AFTER the
+	// "Order: ORD-XXXX" line, so even if the note text contains something that
+	// looks like an order token, the inbound parser still matches the real ID
+	// (first match) — see SHORT_ID_REGEX in whatsappCopy.
+	if (note) {
+		lines.push("");
+		lines.push("📝 Note for seller:");
+		lines.push(note);
 	}
 	return lines.join("\n");
 }
@@ -206,6 +216,9 @@ export function CheckoutSheet({
 			// Empty when delivery, the chosen id when self-collect with 2+ options,
 			// unused when self-collect with exactly 1 option (auto-resolved at submit).
 			pickupLocationId: "",
+			// Optional free-text instruction for the seller (local form state — the
+			// note is order-level, not a cart item, so it doesn't belong in useCart).
+			note: "",
 		},
 		validators: { onChange: checkoutFormSchema },
 		onSubmit: async ({ value }) => {
@@ -243,6 +256,10 @@ export function CheckoutSheet({
 				}
 			}
 
+			const trimmedNote = value.note?.trim();
+			const customerNote =
+				trimmedNote && trimmedNote.length > 0 ? trimmedNote : undefined;
+
 			try {
 				const { shortId } = await createOrder({
 					retailerId,
@@ -258,6 +275,7 @@ export function CheckoutSheet({
 					deliveryMethod: value.deliveryMethod,
 					deliveryAddress: sanitizedAddress,
 					pickupLocationId: resolvedPickupLocationId,
+					customerNote,
 				});
 				const message = buildWaMessage(
 					storeName,
@@ -266,6 +284,7 @@ export function CheckoutSheet({
 					value.deliveryMethod,
 					sanitizedAddress,
 					resolvedPickupLocation,
+					customerNote,
 				);
 				const url = `https://wa.me/${checkoutPhone}?text=${encodeURIComponent(message)}`;
 				if (value.deliveryMethod === "delivery") saveAddress(value.address);
@@ -453,6 +472,17 @@ export function CheckoutSheet({
 										) : null
 									}
 								</form.Subscribe>
+
+								<form.AppField name="note">
+									{(field) => (
+										<field.TextareaField
+											label="Note for seller (optional)"
+											placeholder="Any special instructions? e.g. no onions, deliver after 5pm"
+											rows={3}
+											maxLength={500}
+										/>
+									)}
+								</form.AppField>
 							</div>
 
 							{noCheckoutPhone ? (
