@@ -7,7 +7,7 @@ const SEO_DESC =
 	"The rules every Kedaipal retailer agrees to follow to keep our shared WhatsApp number trusted: no spam, respect opt-outs, no illegal goods.";
 const SITE_URL = "https://kedaipal.com";
 const PAGE_URL = `${SITE_URL}/acceptable-use`;
-const OG_IMAGE = `${SITE_URL}/android-chrome-512x512.png`;
+const OG_IMAGE = `${SITE_URL}/og-image.png`;
 
 const contactLink = (
 	<a

@@ -16,7 +16,7 @@ const SEO_DESC =
 	"Free calculator: in 60 seconds, work out the real monthly cost of missed orders and chasing payments over WhatsApp — and what plugging the leak is worth.";
 const SITE_URL = "https://kedaipal.com";
 const PAGE_URL = `${SITE_URL}/cost`;
-const OG_IMAGE = `${SITE_URL}/android-chrome-512x512.png`;
+const OG_IMAGE = `${SITE_URL}/og-image.png`;
 
 /**
  * Optional prefill params so a shared `/cost?w=40&aov=35&m=5&min=5` link
