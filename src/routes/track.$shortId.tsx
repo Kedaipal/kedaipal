@@ -20,11 +20,11 @@ import { type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { isMockupGateClosed } from "../../convex/lib/order";
-import { CopyButton } from "../components/ui/copy-button";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
 import { IvePaidDialog } from "../components/storefront/ive-paid-dialog";
 import { Button } from "../components/ui/button";
+import { CopyButton } from "../components/ui/copy-button";
 import { Skeleton } from "../components/ui/skeleton";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import { convexErrorMessage, formatPrice } from "../lib/format";
@@ -414,7 +414,9 @@ function TrackingRoute() {
 					{paymentInstructions.bankName ? (
 						<div className="flex items-baseline justify-between gap-3 text-sm">
 							<span className="text-muted-foreground">Bank</span>
-							<span className="font-medium">{paymentInstructions.bankName}</span>
+							<span className="font-medium">
+								{paymentInstructions.bankName}
+							</span>
 						</div>
 					) : null}
 					{paymentInstructions.bankAccountName ? (

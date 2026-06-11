@@ -937,10 +937,9 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 	// When the time-based waiver unlocks: 48h after the mockup was sent.
 	const waiveUnlockLabel =
 		order.mockupSubmittedAt != null
-			? new Date(order.mockupSubmittedAt + MOCKUP_WAIVE_GRACE_MS).toLocaleString(
-					undefined,
-					{ dateStyle: "medium", timeStyle: "short" },
-				)
+			? new Date(
+					order.mockupSubmittedAt + MOCKUP_WAIVE_GRACE_MS,
+				).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
 			: "";
 
 	const badge = waived
