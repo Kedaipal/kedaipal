@@ -1,8 +1,8 @@
-import { ChevronDown } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useState } from "react";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
-import { Button } from "../ui/button";
+import { Eyebrow } from "./landing-ui";
 
 export function Faq() {
 	const [openIndex, setOpenIndex] = useState<number | null>(0);
@@ -29,56 +29,52 @@ export function Faq() {
 		: primaryItems;
 
 	return (
-		<section
-			id="faq"
-			aria-labelledby="faq-heading"
-			className="border-b border-border/60"
-		>
+		<section id="faq" aria-labelledby="faq-heading" className="bg-background">
 			<div className="mx-auto max-w-3xl px-5 py-24 md:px-8 md:py-32">
 				<div className="text-center">
-					<p className="text-xs font-semibold uppercase tracking-widest text-accent">
-						{m.faq_label()}
-					</p>
+					<Eyebrow className="justify-center">{m.faq_label()}</Eyebrow>
 					<h2
 						id="faq-heading"
-						className="mt-3 text-3xl font-bold md:text-5xl"
+						className="mt-4 text-3xl font-bold md:text-5xl"
 						style={{ letterSpacing: "-0.02em" }}
 					>
 						{m.faq_heading()}
 					</h2>
 				</div>
-				<div className="mt-12 space-y-3">
+				<div className="mt-12 divide-y divide-border border-y border-border">
 					{visibleItems.map((item, i) => {
 						const isOpen = openIndex === i;
 						const panelId = `faq-panel-${i}`;
 						const buttonId = `faq-button-${i}`;
 						return (
-							<div
-								key={item.q}
-								className="overflow-hidden rounded-xl border border-border bg-card shadow-sm"
-							>
-								<Button
+							<div key={item.q}>
+								<button
 									type="button"
-									variant="ghost"
 									id={buttonId}
 									aria-expanded={isOpen}
 									aria-controls={panelId}
 									onClick={() => setOpenIndex(isOpen ? null : i)}
-									className="h-auto w-full justify-between gap-4 rounded-none px-5 py-4 text-left text-base font-semibold whitespace-normal"
+									className="flex w-full items-center justify-between gap-4 py-5 text-left transition-colors hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
 								>
-									<span>{item.q}</span>
-									<ChevronDown
+									<span className="text-base font-semibold md:text-lg">
+										{item.q}
+									</span>
+									<span
 										className={cn(
-											"size-5 shrink-0 text-muted-foreground transition-transform duration-200 motion-reduce:transition-none",
-											isOpen && "rotate-180",
+											"flex size-9 shrink-0 items-center justify-center rounded-full border transition-all duration-200 motion-reduce:transition-none",
+											isOpen
+												? "rotate-45 border-accent bg-accent text-accent-foreground"
+												: "border-border text-muted-foreground",
 										)}
-									/>
-								</Button>
+									>
+										<Plus className="size-4" />
+									</span>
+								</button>
 								<section
 									id={panelId}
 									aria-labelledby={buttonId}
 									hidden={!isOpen}
-									className="border-t border-border px-5 py-4 text-sm text-muted-foreground"
+									className="pb-6 pr-12 text-sm leading-relaxed text-muted-foreground"
 								>
 									{item.a}
 								</section>

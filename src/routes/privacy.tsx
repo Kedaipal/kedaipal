@@ -7,7 +7,7 @@ const SEO_DESC =
 	"How Kedaipal collects, uses, and protects information from retailers and shoppers using our WhatsApp order hub.";
 const SITE_URL = "https://kedaipal.com";
 const PAGE_URL = `${SITE_URL}/privacy`;
-const OG_IMAGE = `${SITE_URL}/android-chrome-512x512.png`;
+const OG_IMAGE = `${SITE_URL}/og-image.png`;
 
 export const Route = createFileRoute("/privacy")({
 	head: () => ({
