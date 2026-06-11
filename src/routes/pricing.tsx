@@ -11,7 +11,9 @@ import {
 } from "../components/landing/landing-ui";
 import { Nav } from "../components/landing/nav";
 import { Button } from "../components/ui/button";
+import { buildWaContactLink } from "../lib/contact";
 import { cn } from "../lib/utils";
+import { m } from "../paraglide/messages";
 
 const SEO_TITLE = "Pricing — Kedaipal WhatsApp Order Hub";
 const SEO_DESC =
@@ -414,14 +416,15 @@ function PricingPage() {
 								</p>
 							</div>
 							<div className="relative shrink-0">
-								<Link
-									to="/sign-up/$"
-									params={{ _splat: "" }}
+								<a
+									href={buildWaContactLink(m.founding_wa_message())}
+									target="_blank"
+									rel="noopener noreferrer"
 									className={ctaPillClass("accent")}
 								>
 									Claim a spot{" "}
 									<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
-								</Link>
+								</a>
 							</div>
 						</div>
 					</FadeIn>

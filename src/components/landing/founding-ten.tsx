@@ -1,6 +1,5 @@
-import { useAuth } from "@clerk/tanstack-react-start";
-import { Link } from "@tanstack/react-router";
 import { ArrowRight, Star } from "lucide-react";
+import { buildWaContactLink } from "../../lib/contact";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { FadeIn } from "./fade-in";
@@ -15,7 +14,6 @@ const SPOTS = Array.from({ length: TOTAL_SPOTS }, (_, i) => ({
 }));
 
 export function FoundingTen() {
-	const { isSignedIn } = useAuth();
 	const remaining = TOTAL_SPOTS - SPOTS_TAKEN;
 
 	const perks = [
@@ -102,21 +100,17 @@ export function FoundingTen() {
 						</div>
 
 						<div className="relative mt-10 flex justify-center">
-							{isSignedIn ? (
-								<Link to="/app" className={ctaPillClass("accent")}>
-									{m.nav_go_to_dashboard()}
-									<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
-								</Link>
-							) : (
-								<Link
-									to="/sign-up/$"
-									params={{ _splat: "" }}
-									className={ctaPillClass("accent")}
-								>
-									{m.founding_cta()}
-									<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
-								</Link>
-							)}
+							{/* Applying for a founding spot is a conversation, not a signup —
+							    open a WhatsApp chat with a prefilled message. */}
+							<a
+								href={buildWaContactLink(m.founding_wa_message())}
+								target="_blank"
+								rel="noopener noreferrer"
+								className={ctaPillClass("accent")}
+							>
+								{m.founding_cta()}
+								<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
+							</a>
 						</div>
 					</div>
 				</FadeIn>
