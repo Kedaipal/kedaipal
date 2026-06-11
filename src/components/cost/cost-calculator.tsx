@@ -10,14 +10,9 @@ import {
 	DEFAULT_INPUTS,
 	FOUNDING_PRICE_RM,
 } from "#/lib/calculator";
+import { buildWaContactLink } from "#/lib/contact";
 import { formatPrice } from "#/lib/format";
 import { cn } from "#/lib/utils";
-
-/**
- * Founding Member WhatsApp number for the DM CTA. wa.me requires digits only —
- * country code, no `+` or spaces (here: +60 18-473 5095 → "60184735095").
- */
-const FOUNDING_WA_NUMBER = "60184735095";
 
 /** Render an RM major-unit amount via the shared minor-unit formatter. */
 function rm(major: number): string {
@@ -28,7 +23,7 @@ function buildWaLink(monthlyCost: number): string {
 	const message = `Hi Kedaipal! I worked out WhatsApp-only ordering is costing me about ${rm(
 		monthlyCost,
 	)}/mo. I'd like to join as a Founding Member (RM${FOUNDING_PRICE_RM}/mo).`;
-	return `https://wa.me/${FOUNDING_WA_NUMBER}?text=${encodeURIComponent(message)}`;
+	return buildWaContactLink(message);
 }
 
 interface SliderRowProps {
@@ -243,14 +238,11 @@ function ResultCard({ result, ratioLabel }: ResultCardProps) {
 						: "border-white/10 text-primary-foreground/60",
 				)}
 			>
-				<span
-					className={cn(
-						"flex items-center rounded-lg px-2 py-1",
-						!result.disqualified && "bg-white/95",
-					)}
-				>
-					<img src="/logo-3.svg" alt="Kedaipal" className="h-5 w-auto" />
-				</span>
+				<img
+					src={result.disqualified ? "/logo-3.svg" : "/logo-dark.svg"}
+					alt="Kedaipal"
+					className="h-5 w-auto"
+				/>
 				<span>kedaipal.com/cost</span>
 			</div>
 		</div>

@@ -7,7 +7,7 @@ const SEO_DESC =
 	"The terms that govern use of Kedaipal's WhatsApp order hub for retailers and shoppers.";
 const SITE_URL = "https://kedaipal.com";
 const PAGE_URL = `${SITE_URL}/terms`;
-const OG_IMAGE = `${SITE_URL}/android-chrome-512x512.png`;
+const OG_IMAGE = `${SITE_URL}/og-image.png`;
 
 export const Route = createFileRoute("/terms")({
 	head: () => ({
