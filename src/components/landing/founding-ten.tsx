@@ -1,8 +1,10 @@
 import { useAuth } from "@clerk/tanstack-react-start";
 import { Link } from "@tanstack/react-router";
 import { ArrowRight, Star } from "lucide-react";
-import { Button } from "../ui/button";
+import { cn } from "../../lib/utils";
+import { m } from "../../paraglide/messages";
 import { FadeIn } from "./fade-in";
+import { ctaPillClass, Sticker } from "./landing-ui";
 
 const TOTAL_SPOTS = 10;
 const SPOTS_TAKEN = 0;
@@ -16,104 +18,106 @@ export function FoundingTen() {
 	const { isSignedIn } = useAuth();
 	const remaining = TOTAL_SPOTS - SPOTS_TAKEN;
 
+	const perks = [
+		{ label: m.founding_perk_1_label(), body: m.founding_perk_1_body() },
+		{ label: m.founding_perk_2_label(), body: m.founding_perk_2_body() },
+		{ label: m.founding_perk_3_label(), body: m.founding_perk_3_body() },
+	];
+
 	return (
-		<section
-			aria-labelledby="founding-ten-heading"
-			className="border-b border-border/60 bg-accent/[0.03]"
-		>
+		<section aria-labelledby="founding-ten-heading" className="bg-background">
 			<div className="mx-auto max-w-6xl px-5 py-20 md:px-8 md:py-28">
 				<FadeIn>
-					<div className="mx-auto max-w-2xl text-center">
-						<span className="inline-flex items-center gap-1.5 rounded-full border border-accent/30 bg-accent/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-accent">
-							<Star className="size-3 fill-accent" />
-							Founding 10
-						</span>
-						<h2
-							id="founding-ten-heading"
-							className="mt-4 text-3xl font-bold tracking-tight md:text-4xl"
-							style={{ letterSpacing: "-0.02em" }}
-						>
-							The first 10 businesses that build Kedaipal with us.
-						</h2>
-						<p className="mt-4 text-base leading-relaxed text-muted-foreground">
-							Founding members lock in the lowest price that will ever exist,
-							get direct influence over the product roadmap, and become part of
-							the origin story of the order hub built for Malaysian F&amp;B
-							sellers.
+					{/* Membership-card panel */}
+					<div className="relative overflow-hidden rounded-[2rem] bg-cta-mesh px-6 py-14 text-primary-foreground shadow-2xl md:px-14 md:py-20">
+						{/* Decorative rings */}
+						<div
+							aria-hidden
+							className="pointer-events-none absolute -right-24 -top-24 size-[300px] rounded-full border border-white/[0.06]"
+						/>
+						<div
+							aria-hidden
+							className="pointer-events-none absolute -bottom-32 -left-16 size-[360px] rounded-full border border-white/[0.05]"
+						/>
+
+						<div className="relative mx-auto max-w-2xl text-center">
+							<Sticker tone="accent" rotate={-1.5}>
+								<Star className="size-3 fill-current" />
+								{m.founding_label()}
+							</Sticker>
+							<h2
+								id="founding-ten-heading"
+								className="mt-5 text-3xl font-bold tracking-tight md:text-4xl"
+								style={{ letterSpacing: "-0.02em" }}
+							>
+								{m.founding_heading()}
+							</h2>
+							<p className="mt-4 text-base leading-relaxed text-primary-foreground/65">
+								{m.founding_sub()}
+							</p>
+						</div>
+
+						<div className="relative mt-12 grid grid-cols-5 gap-2.5 sm:grid-cols-10 sm:gap-3">
+							{SPOTS.map(({ n, taken }) => (
+								<div
+									key={n}
+									className={cn(
+										"flex aspect-square flex-col items-center justify-center rounded-2xl border-2 text-sm font-bold transition-colors",
+										taken
+											? "border-accent bg-accent/20 text-accent"
+											: "border-dashed border-white/20 text-white/40",
+									)}
+								>
+									<span className="sr-only">
+										{taken
+											? m.founding_spot_taken({ n })
+											: m.founding_spot_open({ n })}
+									</span>
+									{taken ? (
+										<span aria-hidden className="text-lg">
+											✓
+										</span>
+									) : (
+										<span aria-hidden>{n}</span>
+									)}
+								</div>
+							))}
+						</div>
+						<p className="relative mt-4 text-center text-sm font-medium text-primary-foreground/60">
+							{m.founding_remaining({ remaining, total: TOTAL_SPOTS })}
 						</p>
-					</div>
-				</FadeIn>
 
-				<FadeIn delay={0.1}>
-					<div className="mt-12 grid grid-cols-5 gap-3 sm:grid-cols-10">
-						{SPOTS.map(({ n, taken }) => (
-							<div
-								key={n}
-								className={`flex aspect-square flex-col items-center justify-center rounded-2xl border text-xs font-bold transition-colors ${
-									taken
-										? "border-accent/40 bg-accent/10 text-accent"
-										: "border-border/60 bg-card text-muted-foreground/40"
-								}`}
-								aria-label={taken ? `Spot ${n} — taken` : `Spot ${n} — open`}
-							>
-								{taken ? (
-									<span className="text-lg">✓</span>
-								) : (
-									<span>{n}</span>
-								)}
-							</div>
-						))}
-					</div>
-					<p className="mt-4 text-center text-sm font-medium text-muted-foreground">
-						<span className="font-bold text-foreground">{remaining}</span> of{" "}
-						{TOTAL_SPOTS} founding spots still open
-					</p>
-				</FadeIn>
+						<div className="relative mt-10 grid gap-4 sm:grid-cols-3">
+							{perks.map((item) => (
+								<div
+									key={item.label}
+									className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 backdrop-blur-sm"
+								>
+									<p className="text-sm font-bold">{item.label}</p>
+									<p className="mt-1.5 text-sm leading-relaxed text-primary-foreground/60">
+										{item.body}
+									</p>
+								</div>
+							))}
+						</div>
 
-				<FadeIn delay={0.15}>
-					<div className="mt-10 grid gap-5 sm:grid-cols-3">
-						{[
-							{
-								label: "Locked-in pricing",
-								body: "Pay the founder rate forever — the lowest price that will ever exist for Kedaipal.",
-							},
-							{
-								label: "Direct product input",
-								body: "Your workflow shapes the roadmap. Founding members get a direct line to the builder.",
-							},
-							{
-								label: "Origin story",
-								body: "Your business is featured as a Kedaipal founding seller — the ones who were here first.",
-							},
-						].map((item) => (
-							<div
-								key={item.label}
-								className="rounded-2xl border border-border bg-card p-5"
-							>
-								<p className="text-sm font-bold text-foreground">{item.label}</p>
-								<p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-									{item.body}
-								</p>
-							</div>
-						))}
-					</div>
-				</FadeIn>
-
-				<FadeIn delay={0.2}>
-					<div className="mt-10 flex justify-center">
-						<Button asChild size="lg" className="h-12 px-8 text-base">
+						<div className="relative mt-10 flex justify-center">
 							{isSignedIn ? (
-								<Link to="/app">
-									Go to dashboard
-									<ArrowRight className="ml-2 size-4" />
+								<Link to="/app" className={ctaPillClass("accent")}>
+									{m.nav_go_to_dashboard()}
+									<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
 								</Link>
 							) : (
-								<Link to="/sign-up/$" params={{ _splat: "" }}>
-									Apply for a founding spot
-									<ArrowRight className="ml-2 size-4" />
+								<Link
+									to="/sign-up/$"
+									params={{ _splat: "" }}
+									className={ctaPillClass("accent")}
+								>
+									{m.founding_cta()}
+									<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
 								</Link>
 							)}
-						</Button>
+						</div>
 					</div>
 				</FadeIn>
 			</div>

@@ -13,10 +13,9 @@ import { PricingTeaser } from "../components/landing/pricing-teaser";
 import { ProblemStrip } from "../components/landing/problem-strip";
 import { SetupStrip } from "../components/landing/setup-strip";
 
-const SEO_TITLE =
-	"Kedaipal — WhatsApp Order Hub for F&B Home Sellers in Malaysia";
+const SEO_TITLE = "Kedaipal — WhatsApp Order Hub for Home Sellers in Malaysia";
 const SEO_DESC =
-	"Stop losing orders buried in WhatsApp. Kedaipal gives cake makers, frozen food sellers, and kuih suppliers a real storefront and order pipeline — 14-day free trial, no Meta setup needed.";
+	"Stop losing orders buried in WhatsApp. Kedaipal turns your product catalog into a real storefront and order pipeline — 14-day free trial, no Meta setup needed.";
 const SITE_URL = "https://kedaipal.com";
 const OG_IMAGE = `${SITE_URL}/android-chrome-512x512.png`;
 
@@ -28,7 +27,7 @@ const jsonLd = [
 		url: SITE_URL,
 		logo: OG_IMAGE,
 		description:
-			"B2B SaaS order hub for F&B home sellers. Stop losing orders buried in WhatsApp — real storefront, real order pipeline, no Meta setup needed.",
+			"B2B SaaS order hub for home sellers. Stop losing orders buried in WhatsApp — real storefront, real order pipeline, no Meta setup needed.",
 	},
 	{
 		"@context": "https://schema.org",
@@ -128,12 +127,12 @@ function Landing() {
 		<main className="min-h-dvh bg-background text-foreground">
 			<Nav />
 			<Hero />
-			<FoundingTen />
-			<CostCta />
 			<ProblemStrip />
+			<CostCta />
 			<HowItWorks />
-<SetupStrip />
+			<SetupStrip />
 			<FeatureGrid />
+			<FoundingTen />
 			<PricingTeaser />
 			<Faq />
 			<FinalCta />
