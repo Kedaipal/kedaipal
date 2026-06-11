@@ -2,9 +2,9 @@
 //
 // Usage: node scripts/generate-og-image.mjs
 //
-// Composites the brand wordmark (logo-3.svg, rendered on a white pill so it
-// reads on the dark background) over a navy + mint-glow canvas with the
-// hero headline. Re-run after changing the headline or brand assets.
+// Composites the dark-background brand lockup (logo-dark.svg) over a navy +
+// mint-glow canvas with the hero headline. Re-run after changing the
+// headline or brand assets.
 
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -37,24 +37,12 @@ const background = `
 </svg>`;
 
 async function run() {
-	const logoSvg = await readFile(path.join(root, "public/logo-3.svg"));
-	// Wordmark is 358.6×76.2 — render at 280px wide on a white pill.
-	const logo = await sharp(logoSvg).resize({ width: 280 }).png().toBuffer();
-	const logoMeta = await sharp(logo).metadata();
-
-	const pillPad = { x: 28, y: 20 };
-	const pillW = (logoMeta.width ?? 280) + pillPad.x * 2;
-	const pillH = (logoMeta.height ?? 60) + pillPad.y * 2;
-	const pill = `
-<svg width="${pillW}" height="${pillH}" xmlns="http://www.w3.org/2000/svg">
-  <rect width="${pillW}" height="${pillH}" rx="${pillH / 2}" fill="#FFFFFF"/>
-</svg>`;
+	const logoSvg = await readFile(path.join(root, "public/logo-dark.svg"));
+	// Wordmark is ~359×77 — render at 300px wide for the dark canvas.
+	const logo = await sharp(logoSvg).resize({ width: 300 }).png().toBuffer();
 
 	const png = await sharp(Buffer.from(background))
-		.composite([
-			{ input: Buffer.from(pill), left: 80, top: 90 },
-			{ input: logo, left: 80 + pillPad.x, top: 90 + pillPad.y },
-		])
+		.composite([{ input: logo, left: 80, top: 100 }])
 		.png({ compressionLevel: 9 })
 		.toBuffer();
 

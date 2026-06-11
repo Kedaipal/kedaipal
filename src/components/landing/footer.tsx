@@ -6,9 +6,7 @@ export function Footer() {
 		<footer className="bg-primary pb-[max(2rem,env(safe-area-inset-bottom))] text-primary-foreground">
 			<div className="mx-auto max-w-6xl px-5 py-14 md:px-8">
 				<div className="flex flex-col items-start justify-between gap-6 md:flex-row md:items-center">
-					<div className="flex items-center rounded-xl bg-background/95 px-3 py-2">
-						<img src="/logo-3.svg" alt="Kedaipal" className="h-8 w-auto" />
-					</div>
+					<img src="/logo-dark.svg" alt="Kedaipal" className="h-8 w-auto" />
 				</div>
 				<div className="mt-8 flex flex-col gap-2 border-t border-white/10 pt-6 text-xs text-primary-foreground/60 md:flex-row md:items-center md:justify-between">
 					<p>{m.footer_copyright({ year: new Date().getFullYear() })}</p>

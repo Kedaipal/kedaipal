@@ -238,14 +238,11 @@ function ResultCard({ result, ratioLabel }: ResultCardProps) {
 						: "border-white/10 text-primary-foreground/60",
 				)}
 			>
-				<span
-					className={cn(
-						"flex items-center rounded-lg px-2 py-1",
-						!result.disqualified && "bg-white/95",
-					)}
-				>
-					<img src="/logo-3.svg" alt="Kedaipal" className="h-5 w-auto" />
-				</span>
+				<img
+					src={result.disqualified ? "/logo-3.svg" : "/logo-dark.svg"}
+					alt="Kedaipal"
+					className="h-5 w-auto"
+				/>
 				<span>kedaipal.com/cost</span>
 			</div>
 		</div>
