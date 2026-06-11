@@ -98,6 +98,88 @@ describe("retailers logo", () => {
 	});
 });
 
+describe("retailers payment methods", () => {
+	test("updateSettings saves the array, re-numbers sortOrder, clears legacy", async () => {
+		const t = setup();
+		const asA = await seed(t, "user_pm_a", "pm-a");
+		const qrId = await t.run(async (ctx) =>
+			ctx.storage.store(
+				new Blob([new Uint8Array([1, 2, 3, 4])], { type: "image/png" }),
+			),
+		);
+		// Pre-seed a legacy single object to prove it's cleared on multi-method save.
+		await asA.mutation(api.retailers.updateSettings, {
+			paymentInstructions: { bankName: "Old Bank", bankAccountNumber: "111" },
+		});
+
+		await asA.mutation(api.retailers.updateSettings, {
+			paymentMethods: [
+				{ type: "bank", label: "Maybank", bankAccountNumber: "  5123  " },
+				{ type: "qr", label: "DuitNow", qrImageStorageId: qrId },
+				// Empty bank — dropped by sanitize.
+				{ type: "bank", label: "Empty" },
+			],
+		});
+
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.paymentMethods).toHaveLength(2);
+		expect(me?.paymentMethods?.[0]).toMatchObject({
+			type: "bank",
+			label: "Maybank",
+			bankAccountNumber: "5123",
+			sortOrder: 0,
+		});
+		expect(me?.paymentMethods?.[1]).toMatchObject({
+			type: "qr",
+			label: "DuitNow",
+			sortOrder: 1,
+		});
+		// Legacy object cleared on the underlying row.
+		const row = await t.run(async (ctx) =>
+			ctx.db
+				.query("retailers")
+				.withIndex("by_user", (q) => q.eq("userId", "user_pm_a"))
+				.first(),
+		);
+		expect(row?.paymentInstructions).toBeUndefined();
+	});
+
+	test("backfill migrates legacy → array and clears legacy; idempotent", async () => {
+		const t = setup();
+		const asA = await seed(t, "user_pm_b", "pm-b");
+		const qrId = await t.run(async (ctx) =>
+			ctx.storage.store(
+				new Blob([new Uint8Array([1, 2, 3, 4])], { type: "image/png" }),
+			),
+		);
+		await asA.mutation(api.retailers.updateSettings, {
+			paymentInstructions: {
+				bankName: "Maybank",
+				bankAccountNumber: "5123",
+				qrImageStorageId: qrId,
+			},
+		});
+
+		const first = await t.mutation(internal.retailers.backfillPaymentMethods, {});
+		expect(first.migrated).toBe(1);
+
+		const me = await asA.query(api.retailers.getMyRetailer);
+		// bank + qr → 2 methods.
+		expect(me?.paymentMethods).toHaveLength(2);
+		const row = await t.run(async (ctx) =>
+			ctx.db
+				.query("retailers")
+				.withIndex("by_user", (q) => q.eq("userId", "user_pm_b"))
+				.first(),
+		);
+		expect(row?.paymentInstructions).toBeUndefined();
+
+		// Second run is a no-op (already migrated).
+		const second = await t.mutation(internal.retailers.backfillPaymentMethods, {});
+		expect(second.migrated).toBe(0);
+	});
+});
+
 describe("retailers slug rename", () => {
 	test("rename parks old slug in history and activates new slug", async () => {
 		const t = setup();

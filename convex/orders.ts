@@ -14,6 +14,7 @@ import {
 	generateShortId,
 	isMockupGateClosed,
 } from "./lib/order";
+import { type PaymentMethod, resolvePaymentMethods } from "./lib/payment";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidWaPhone } from "./lib/slug";
 import { variantLabel } from "./lib/variant";
@@ -409,52 +410,38 @@ export const get = query({
 });
 
 /**
- * Public: resolve the seller's payment instructions for the tracking page, keyed
- * by shortId (the capability — same trust model as the rest of the track page;
- * these details are already shown to the buyer in the WhatsApp confirm reply).
- * Trims each field, resolves the QR storage id to a URL, and returns `null` when
- * the seller has nothing configured (track page hides the section).
+ * Public: resolve the seller's payment methods for the tracking page, keyed by
+ * shortId (the capability — same trust model as the rest of the track page;
+ * these details already go to the buyer in the WhatsApp confirm reply).
+ * Legacy-aware via `resolvePaymentMethods`; QR storage ids resolved to URLs.
+ * Returns `null` when the seller has nothing configured (track page hides it).
  */
-export const getPaymentInstructions = query({
+export const getPaymentMethods = query({
 	args: { shortId: v.string() },
 	handler: async (
 		ctx,
 		{ shortId },
-	): Promise<{
-		bankName?: string;
-		bankAccountName?: string;
-		bankAccountNumber?: string;
-		note?: string;
-		qrImageUrl?: string;
-	} | null> => {
+	): Promise<Array<PaymentMethod & { qrImageUrl?: string }> | null> => {
 		const order = await ctx.db
 			.query("orders")
 			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
 			.first();
 		if (!order) return null;
 		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer?.paymentInstructions) return null;
-		const pi = retailer.paymentInstructions;
+		if (!retailer) return null;
+		const methods = resolvePaymentMethods(retailer);
+		if (methods.length === 0) return null;
 
-		const bankName = pi.bankName?.trim() || undefined;
-		const bankAccountName = pi.bankAccountName?.trim() || undefined;
-		const bankAccountNumber = pi.bankAccountNumber?.trim() || undefined;
-		const note = pi.note?.trim() || undefined;
-		let qrImageUrl: string | undefined;
-		if (pi.qrImageStorageId) {
-			const url = await ctx.storage.getUrl(pi.qrImageStorageId);
-			qrImageUrl = url ?? undefined;
+		const resolved: Array<PaymentMethod & { qrImageUrl?: string }> = [];
+		for (const m of methods) {
+			let qrImageUrl: string | undefined;
+			if (m.type === "qr" && m.qrImageStorageId) {
+				const url = await ctx.storage.getUrl(m.qrImageStorageId);
+				qrImageUrl = url ?? undefined;
+			}
+			resolved.push({ ...m, qrImageUrl });
 		}
-
-		if (
-			!bankName &&
-			!bankAccountName &&
-			!bankAccountNumber &&
-			!note &&
-			!qrImageUrl
-		)
-			return null;
-		return { bankName, bankAccountName, bankAccountNumber, note, qrImageUrl };
+		return resolved;
 	},
 });
 

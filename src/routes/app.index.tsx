@@ -151,15 +151,7 @@ function DashboardHome() {
 	const productCount = products?.length ?? 0;
 	const activeProductCount = products?.filter((p) => p.active).length ?? 0;
 	const hasProduct = productCount > 0;
-	const payment = retailer.paymentInstructions;
-	const hasPayment = Boolean(
-		payment &&
-			(payment.bankName ||
-				payment.bankAccountName ||
-				payment.bankAccountNumber ||
-				payment.qrImageStorageId ||
-				payment.note),
-	);
+	const hasPayment = (retailer.paymentMethods?.length ?? 0) > 0;
 
 	// The Pickup step is shown to any retailer with self-collect on (default
 	// for new retailers, see createRetailer). Two paths dismiss it:

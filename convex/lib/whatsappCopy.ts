@@ -1,6 +1,7 @@
 // WhatsApp message copy catalog. Pure — no Convex imports — to keep testable.
 
 import { deriveMapsUrl } from "./mapsUrl";
+import type { PaymentMethod } from "./payment";
 
 export type Locale = "en" | "ms";
 
@@ -250,14 +251,6 @@ export function defaultTemplate(locale: Locale, key: TemplateKey): string {
 // Payment instructions
 // ---------------------------------------------------------------------------
 
-export type PaymentInstructions = {
-	bankName?: string;
-	bankAccountName?: string;
-	bankAccountNumber?: string;
-	qrImageStorageId?: string;
-	note?: string;
-};
-
 const paymentLabels: Record<
 	Locale,
 	{
@@ -265,6 +258,7 @@ const paymentLabels: Record<
 		bank: string;
 		accountName: string;
 		accountNumber: string;
+		qrFollows: string;
 		qrCaption: string;
 	}
 > = {
@@ -273,6 +267,7 @@ const paymentLabels: Record<
 		bank: "Bank",
 		accountName: "Name",
 		accountNumber: "Account",
+		qrFollows: "Scan the QR below 👇",
 		qrCaption: "Scan to pay",
 	},
 	ms: {
@@ -280,54 +275,62 @@ const paymentLabels: Record<
 		bank: "Bank",
 		accountName: "Nama",
 		accountNumber: "Akaun",
+		qrFollows: "Imbas QR di bawah 👇",
 		qrCaption: "Imbas untuk bayar",
 	},
 };
 
 /**
- * Render the payment instructions block as plain text. Returns empty string if
- * no bank fields and no note are present (QR-only retailers get a header line
- * only when bank/note are absent — the QR image carries its own caption).
- *
- * Pure: no Convex / no storage. Caller resolves the QR storage URL separately.
+ * Render the payment block listing ALL configured methods as plain text. Each
+ * method is a labelled sub-block (`*label*` — WhatsApp renders this bold):
+ *  - `bank` → Bank / Name / Account-number-on-its-own-line (so a long-press
+ *    selects just the number; the web track page has a one-tap copy too);
+ *  - `qr` → a "scan the QR below" line — the image itself is sent as a separate
+ *    follow-up message by the caller (one per QR, captioned with the label).
+ * Returns "" when there are no methods. Pure: no Convex / no storage; the caller
+ * resolves QR storage URLs and sends the images.
  */
-export function renderPaymentInstructions(
+export function renderPaymentMethods(
 	locale: Locale,
-	instructions: PaymentInstructions | undefined,
+	methods: ReadonlyArray<PaymentMethod>,
 ): string {
-	if (!instructions) return "";
+	if (methods.length === 0) return "";
 	const labels = paymentLabels[locale];
-	const lines: string[] = [];
+	const lines: string[] = ["", labels.header];
 
-	const bank = instructions.bankName?.trim();
-	const accName = instructions.bankAccountName?.trim();
-	const accNum = instructions.bankAccountNumber?.trim();
-	const note = instructions.note?.trim();
-
-	const hasBankBlock = Boolean(bank || accName || accNum);
-	const hasAny = hasBankBlock || Boolean(note);
-	if (!hasAny) return "";
-
-	lines.push("");
-	lines.push(labels.header);
-	if (bank) lines.push(`${labels.bank}: ${bank}`);
-	if (accName) lines.push(`${labels.accountName}: ${accName}`);
-	// Account number goes on its OWN line (label above, bare number below) so a
-	// long-press in WhatsApp selects just the number — no "Account: " prefix to
-	// trim. The web track page has a one-tap copy button for the same reason.
-	if (accNum) {
-		lines.push(`${labels.accountNumber}:`);
-		lines.push(accNum);
-	}
-	if (note) {
-		if (hasBankBlock) lines.push("");
-		lines.push(note);
+	for (const m of methods) {
+		const label = m.label.trim();
+		lines.push("");
+		lines.push(`*${label}*`);
+		if (m.type === "bank") {
+			const bank = m.bankName?.trim();
+			const accName = m.bankAccountName?.trim();
+			const accNum = m.bankAccountNumber?.trim();
+			// Skip a redundant "Bank: X" line when the label already IS the bank name.
+			if (bank && bank.toLowerCase() !== label.toLowerCase())
+				lines.push(`${labels.bank}: ${bank}`);
+			if (accName) lines.push(`${labels.accountName}: ${accName}`);
+			if (accNum) {
+				lines.push(`${labels.accountNumber}:`);
+				lines.push(accNum);
+			}
+		} else {
+			lines.push(labels.qrFollows);
+		}
+		const note = m.note?.trim();
+		if (note) lines.push(note);
 	}
 	return lines.join("\n");
 }
 
-export function paymentQrCaption(locale: Locale): string {
-	return paymentLabels[locale].qrCaption;
+/**
+ * Caption for a QR follow-up image. Includes the method's label when given (so a
+ * buyer with several QRs knows which is which), else the generic "scan to pay".
+ */
+export function paymentQrCaption(locale: Locale, label?: string): string {
+	const base = paymentLabels[locale].qrCaption;
+	const trimmed = label?.trim();
+	return trimmed ? `${trimmed} — ${base}` : base;
 }
 
 // ---------------------------------------------------------------------------
@@ -352,7 +355,7 @@ const pickupLabels: Record<Locale, { header: string }> = {
 /**
  * Render the pickup-location block appended to the confirm message for
  * self-collect orders. Returns "" when the snapshot is missing so the caller
- * can string-concat unconditionally — mirrors `renderPaymentInstructions`.
+ * can string-concat unconditionally — mirrors `renderPaymentMethods`.
  *
  * Output (note leading blank line so consecutive blocks separate visually):
  *   ""

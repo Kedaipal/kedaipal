@@ -1,6 +1,15 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
-import { Building2, Info, Music2, Store } from "lucide-react";
+import {
+	Building2,
+	Info,
+	Landmark,
+	Music2,
+	Plus,
+	QrCode,
+	Store,
+	Trash2,
+} from "lucide-react";
 import { type FormEvent, type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
@@ -20,6 +29,7 @@ import { useAppForm } from "../components/forms/form";
 import { ShopeeIcon } from "../components/icons/shopee-icon";
 import { PickupLocationsTab } from "../components/settings/pickup-locations-tab";
 import { Button } from "../components/ui/button";
+import { SortableList } from "../components/ui/sortable-list";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
@@ -328,11 +338,10 @@ function SettingsRoute() {
 			{activeTab === "payments" ? (
 				<div className="flex flex-col gap-6 pt-2">
 					<Card>
-						<PaymentInstructionsForm
-							current={retailer.paymentInstructions}
-							currentQrUrl={retailer.paymentQrImageUrl}
-							onSave={(paymentInstructions) =>
-								updateSettings({ paymentInstructions })
+						<PaymentMethodsForm
+							current={retailer.paymentMethods ?? []}
+							onSave={(paymentMethods) =>
+								updateSettings({ paymentMethods })
 							}
 						/>
 					</Card>
@@ -385,21 +394,22 @@ function SettingsRoute() {
 	);
 }
 
-type PaymentInstructionsDraft = {
+// One editable payment method in the settings form. `qrPreviewUrl` is the
+// resolved (or freshly-uploaded object) URL for display only — not persisted.
+type MethodDraft = {
+	// Stable React key so reordering doesn't remount inputs / lose focus.
+	_key: string;
+	type: "bank" | "qr";
+	label: string;
 	bankName: string;
 	bankAccountName: string;
 	bankAccountNumber: string;
 	qrImageStorageId: string;
+	qrPreviewUrl?: string;
 	note: string;
 };
 
-const EMPTY_PAYMENT_DRAFT: PaymentInstructionsDraft = {
-	bankName: "",
-	bankAccountName: "",
-	bankAccountNumber: "",
-	qrImageStorageId: "",
-	note: "",
-};
+const MAX_METHODS = 8;
 
 function StoreNameForm({
 	current,
@@ -554,51 +564,114 @@ function LogoForm({
 	);
 }
 
-function PaymentInstructionsForm({
+type PaymentMethodWire = {
+	type: "bank" | "qr";
+	label: string;
+	bankName?: string;
+	bankAccountName?: string;
+	bankAccountNumber?: string;
+	qrImageStorageId?: string;
+	note?: string;
+	sortOrder: number;
+};
+
+function newDraft(type: "bank" | "qr"): MethodDraft {
+	return {
+		_key: crypto.randomUUID(),
+		type,
+		label: "",
+		bankName: "",
+		bankAccountName: "",
+		bankAccountNumber: "",
+		qrImageStorageId: "",
+		qrPreviewUrl: undefined,
+		note: "",
+	};
+}
+
+function PaymentMethodsForm({
 	current,
-	currentQrUrl,
 	onSave,
 }: {
-	current:
-		| {
-				bankName?: string;
-				bankAccountName?: string;
-				bankAccountNumber?: string;
-				qrImageStorageId?: string;
-				note?: string;
-		  }
-		| undefined;
-	currentQrUrl: string | undefined;
-	onSave: (instructions: PaymentInstructionsDraft) => Promise<unknown>;
+	current: Array<{
+		type: "bank" | "qr";
+		label: string;
+		bankName?: string;
+		bankAccountName?: string;
+		bankAccountNumber?: string;
+		qrImageStorageId?: string;
+		qrImageUrl?: string;
+		note?: string;
+	}>;
+	onSave: (methods: PaymentMethodWire[]) => Promise<unknown>;
 }) {
 	const generateQrUploadUrl = useMutation(
 		api.retailers.generatePaymentQrUploadUrl,
 	);
 
-	const [draft, setDraft] = useState<PaymentInstructionsDraft>(() => ({
-		bankName: current?.bankName ?? "",
-		bankAccountName: current?.bankAccountName ?? "",
-		bankAccountNumber: current?.bankAccountNumber ?? "",
-		qrImageStorageId: current?.qrImageStorageId ?? "",
-		note: current?.note ?? "",
-	}));
-	// Local preview URL for a freshly uploaded file (object URL). Falls back to
-	// the persisted Convex storage URL on initial render.
-	const [localPreview, setLocalPreview] = useState<string | null>(null);
-	const [uploading, setUploading] = useState(false);
+	// Methods are kept grouped (all banks, then all QRs) so the array order ==
+	// what renders (banks in the WA text block, QRs as follow-up images). Sorting
+	// is therefore within a type only.
+	const [methods, setMethods] = useState<MethodDraft[]>(() => {
+		const seeded = current.map((m) => ({
+			_key: crypto.randomUUID(),
+			type: m.type,
+			label: m.label,
+			bankName: m.bankName ?? "",
+			bankAccountName: m.bankAccountName ?? "",
+			bankAccountNumber: m.bankAccountNumber ?? "",
+			qrImageStorageId: m.qrImageStorageId ?? "",
+			qrPreviewUrl: m.qrImageUrl,
+			note: m.note ?? "",
+		}));
+		return [
+			...seeded.filter((m) => m.type === "bank"),
+			...seeded.filter((m) => m.type === "qr"),
+		];
+	});
+	const [uploadingKey, setUploadingKey] = useState<string | null>(null);
+	const [saving, setSaving] = useState(false);
 
-	const previewUrl = localPreview ?? currentQrUrl ?? null;
+	const banks = methods.filter((m) => m.type === "bank");
+	const qrs = methods.filter((m) => m.type === "qr");
 
-	function setField<K extends keyof PaymentInstructionsDraft>(
-		key: K,
-		value: PaymentInstructionsDraft[K],
-	) {
-		setDraft((prev) => ({ ...prev, [key]: value }));
+	function update(key: string, patch: Partial<MethodDraft>) {
+		setMethods((prev) =>
+			prev.map((m) => (m._key === key ? { ...m, ...patch } : m)),
+		);
+	}
+	function removeMethod(key: string) {
+		setMethods((prev) => prev.filter((m) => m._key !== key));
+	}
+	function addMethod(type: "bank" | "qr") {
+		if (methods.length >= MAX_METHODS) {
+			toast.error(`You can add at most ${MAX_METHODS} payment methods`);
+			return;
+		}
+		setMethods((prev) => {
+			const draft = newDraft(type);
+			const b = prev.filter((m) => m.type === "bank");
+			const q = prev.filter((m) => m.type === "qr");
+			// New bank slots at the end of the bank group; new QR at the very end.
+			return type === "bank" ? [...b, draft, ...q] : [...b, ...q, draft];
+		});
+	}
+	// Reorder within a single type, preserving the other group + the grouping.
+	function reorderType(type: "bank" | "qr", orderedKeys: string[]) {
+		setMethods((prev) => {
+			const b = prev.filter((m) => m.type === "bank");
+			const q = prev.filter((m) => m.type === "qr");
+			const reorder = (list: MethodDraft[]) =>
+				orderedKeys
+					.map((k) => list.find((m) => m._key === k))
+					.filter((m): m is MethodDraft => m !== undefined);
+			return type === "bank" ? [...reorder(b), ...q] : [...b, ...reorder(q)];
+		});
 	}
 
-	async function handleQrFile(file: File | null) {
+	async function handleQrFile(key: string, file: File | null) {
 		if (!file) return;
-		setUploading(true);
+		setUploadingKey(key);
 		try {
 			const url = await generateQrUploadUrl();
 			const res = await fetch(url, {
@@ -608,145 +681,265 @@ function PaymentInstructionsForm({
 			});
 			if (!res.ok) throw new Error("Upload failed");
 			const { storageId } = (await res.json()) as { storageId: string };
-			setField("qrImageStorageId", storageId);
-			setLocalPreview(URL.createObjectURL(file));
+			update(key, {
+				qrImageStorageId: storageId,
+				qrPreviewUrl: URL.createObjectURL(file),
+			});
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
-			setUploading(false);
+			setUploadingKey(null);
 		}
-	}
-
-	function removeQr() {
-		setField("qrImageStorageId", "");
-		setLocalPreview(null);
-	}
-
-	function clearAll() {
-		setDraft(EMPTY_PAYMENT_DRAFT);
-		setLocalPreview(null);
 	}
 
 	async function handleSubmit(e: FormEvent) {
 		e.preventDefault();
+		setSaving(true);
 		try {
-			await onSave(draft);
-			toast.success("Payment details saved.");
+			// `methods` is already banks-then-QRs, so index === sortOrder.
+			const wire: PaymentMethodWire[] = methods.map((m, i) => {
+				const label =
+					m.label.trim() ||
+					(m.type === "qr" ? "QR code" : m.bankName.trim() || "Bank transfer");
+				return {
+					type: m.type,
+					label,
+					bankName: m.type === "bank" ? m.bankName.trim() || undefined : undefined,
+					bankAccountName:
+						m.type === "bank" ? m.bankAccountName.trim() || undefined : undefined,
+					bankAccountNumber:
+						m.type === "bank" ? m.bankAccountNumber.trim() || undefined : undefined,
+					qrImageStorageId:
+						m.type === "qr" ? m.qrImageStorageId || undefined : undefined,
+					note: m.note.trim() || undefined,
+					sortOrder: i,
+				};
+			});
+			await onSave(wire);
+			toast.success("Payment methods saved.");
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
 		}
 	}
 
+	// One method's editable card. `handle` is the drag grip from SortableList.
+	function methodCard(m: MethodDraft, handle: ReactNode) {
+		return (
+			<div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
+				<div className="flex items-center gap-2">
+					{handle}
+					<span className="text-sm font-medium text-muted-foreground">
+						{m.type === "bank" ? "Bank account" : "QR code"}
+					</span>
+					<button
+						type="button"
+						onClick={() => removeMethod(m._key)}
+						aria-label="Remove method"
+						className="ml-auto flex size-11 items-center justify-center rounded-full text-destructive hover:bg-destructive/10"
+					>
+						<Trash2 className="size-4" />
+					</button>
+				</div>
+
+				<label className="flex flex-col gap-1">
+					<span className="text-sm font-medium">Label</span>
+					<Input
+						type="text"
+						value={m.label}
+						onChange={(e) => update(m._key, { label: e.target.value })}
+						placeholder={m.type === "bank" ? "Maybank" : "DuitNow QR"}
+						maxLength={60}
+						variant="field"
+					/>
+				</label>
+
+				{m.type === "bank" ? (
+					<>
+						<label className="flex flex-col gap-1">
+							<span className="text-sm font-medium">Bank name</span>
+							<Input
+								type="text"
+								value={m.bankName}
+								onChange={(e) => update(m._key, { bankName: e.target.value })}
+								placeholder="Maybank"
+								maxLength={120}
+								variant="field"
+							/>
+						</label>
+						<label className="flex flex-col gap-1">
+							<span className="text-sm font-medium">Account holder name</span>
+							<Input
+								type="text"
+								value={m.bankAccountName}
+								onChange={(e) =>
+									update(m._key, { bankAccountName: e.target.value })
+								}
+								placeholder="Your Business Sdn Bhd"
+								maxLength={120}
+								variant="field"
+							/>
+						</label>
+						<label className="flex flex-col gap-1">
+							<span className="text-sm font-medium">Account number</span>
+							<Input
+								type="text"
+								value={m.bankAccountNumber}
+								onChange={(e) =>
+									update(m._key, { bankAccountNumber: e.target.value })
+								}
+								placeholder="5123 4567 8901"
+								inputMode="numeric"
+								maxLength={120}
+								variant="field"
+								className="font-mono"
+							/>
+						</label>
+					</>
+				) : (
+					<div className="flex flex-col gap-2">
+						<span className="text-sm font-medium">QR image</span>
+						{m.qrPreviewUrl ? (
+							<div className="flex flex-col items-start gap-2">
+								<img
+									src={m.qrPreviewUrl}
+									alt="Payment QR"
+									className="h-44 w-44 rounded-xl border border-input object-contain"
+								/>
+								<button
+									type="button"
+									onClick={() =>
+										update(m._key, {
+											qrImageStorageId: "",
+											qrPreviewUrl: undefined,
+										})
+									}
+									className="text-xs text-destructive underline"
+								>
+									Remove QR
+								</button>
+							</div>
+						) : (
+							<label className="flex h-28 cursor-pointer items-center justify-center rounded-xl border border-dashed border-input bg-background text-sm text-muted-foreground hover:bg-accent/5">
+								{uploadingKey === m._key
+									? "Uploading…"
+									: "Tap to upload QR image"}
+								<input
+									type="file"
+									accept="image/*"
+									className="hidden"
+									onChange={(e) =>
+										handleQrFile(m._key, e.target.files?.[0] ?? null)
+									}
+									disabled={uploadingKey === m._key}
+								/>
+							</label>
+						)}
+					</div>
+				)}
+
+				<label className="flex flex-col gap-1">
+					<span className="text-sm font-medium">Note (optional)</span>
+					<textarea
+						value={m.note}
+						onChange={(e) => update(m._key, { note: e.target.value })}
+						placeholder="e.g. Send your receipt after transfer."
+						rows={2}
+						maxLength={500}
+						className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+					/>
+				</label>
+			</div>
+		);
+	}
+
+	const atCap = methods.length >= MAX_METHODS;
+
 	return (
-		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
+		<form onSubmit={handleSubmit} className="flex flex-col gap-6">
 			<SectionHeading
-				title="Payment details"
-				description="Shown to shoppers in the WhatsApp confirmation reply after they place an order. Leave any field blank to skip it. Visible only after order — not on your public storefront."
+				title="Payment methods"
+				description="Add your banks and QR codes — shoppers see all of them in the WhatsApp confirmation reply and on their order page (only after they order, never on your public storefront). Drag the handle to reorder within each group."
 			/>
 
-			<label className="flex flex-col gap-1">
-				<span className="text-sm font-medium">Bank name</span>
-				<Input
-					type="text"
-					value={draft.bankName}
-					onChange={(e) => setField("bankName", e.target.value)}
-					placeholder="Maybank"
-					maxLength={120}
-					variant="field"
-				/>
-			</label>
-
-			<label className="flex flex-col gap-1">
-				<span className="text-sm font-medium">Account holder name</span>
-				<Input
-					type="text"
-					value={draft.bankAccountName}
-					onChange={(e) => setField("bankAccountName", e.target.value)}
-					placeholder="Your Business Sdn Bhd"
-					maxLength={120}
-					variant="field"
-				/>
-			</label>
-
-			<label className="flex flex-col gap-1">
-				<span className="text-sm font-medium">Account number</span>
-				<Input
-					type="text"
-					value={draft.bankAccountNumber}
-					onChange={(e) => setField("bankAccountNumber", e.target.value)}
-					placeholder="5123 4567 8901"
-					inputMode="numeric"
-					maxLength={120}
-					variant="field"
-					className="font-mono"
-				/>
-			</label>
-
-			<div className="flex flex-col gap-2">
-				<span className="text-sm font-medium">
-					Payment QR code (DuitNow / TNG / etc.)
-				</span>
-				{previewUrl ? (
-					<div className="flex flex-col items-start gap-2">
-						<img
-							src={previewUrl}
-							alt="Payment QR"
-							className="h-48 w-48 rounded-xl border border-input object-contain"
-						/>
-						<button
-							type="button"
-							onClick={removeQr}
-							className="text-xs text-destructive underline"
-						>
-							Remove QR
-						</button>
-					</div>
+			{/* Bank accounts — shown together in the WhatsApp payment details. */}
+			<div className="flex flex-col gap-3">
+				<div className="flex items-center justify-between gap-2">
+					<span className="inline-flex items-center gap-1.5 text-sm font-semibold">
+						<Landmark className="size-4" />
+						Bank accounts
+					</span>
+					<Button
+						type="button"
+						variant="outline"
+						className="h-9"
+						onClick={() => addMethod("bank")}
+						disabled={atCap}
+					>
+						<Plus className="size-4" />
+						Add bank
+					</Button>
+				</div>
+				{banks.length === 0 ? (
+					<p className="rounded-xl border border-dashed border-input bg-muted/20 px-4 py-4 text-center text-sm text-muted-foreground">
+						No bank accounts yet.
+					</p>
 				) : (
-					<label className="flex h-32 cursor-pointer items-center justify-center rounded-xl border border-dashed border-input bg-background text-sm text-muted-foreground hover:bg-accent/5">
-						{uploading ? "Uploading…" : "Tap to upload QR image"}
-						<input
-							type="file"
-							accept="image/*"
-							className="hidden"
-							onChange={(e) => handleQrFile(e.target.files?.[0] ?? null)}
-							disabled={uploading}
-						/>
-					</label>
+					<SortableList
+						items={banks}
+						getId={(m) => m._key}
+						onReorder={(ids) => reorderType("bank", ids)}
+						renderItem={(m, handle) => methodCard(m, handle)}
+						className="flex flex-col gap-3"
+					/>
 				)}
 			</div>
 
-			<label className="flex flex-col gap-1">
-				<span className="text-sm font-medium">Note to shopper</span>
-				<textarea
-					value={draft.note}
-					onChange={(e) => setField("note", e.target.value)}
-					placeholder="Send your payment receipt to our WhatsApp number after transfer."
-					rows={3}
-					maxLength={500}
-					className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-				/>
-				<span className="text-xs text-muted-foreground">
-					{draft.note.length}/500
-				</span>
-			</label>
-
-			<div className="flex gap-2 lg:justify-end">
-				<Button
-					type="button"
-					variant="outline"
-					className="h-11 lg:h-10"
-					onClick={clearAll}
-				>
-					Clear all
-				</Button>
-				<Button
-					type="submit"
-					className="h-11 flex-1 lg:h-10 lg:flex-none lg:min-w-[180px]"
-					disabled={uploading}
-				>
-					{uploading ? "Uploading…" : "Save payment details"}
-				</Button>
+			{/* QR codes — each sent as its own follow-up image on WhatsApp. */}
+			<div className="flex flex-col gap-3">
+				<div className="flex items-center justify-between gap-2">
+					<span className="inline-flex items-center gap-1.5 text-sm font-semibold">
+						<QrCode className="size-4" />
+						QR codes
+					</span>
+					<Button
+						type="button"
+						variant="outline"
+						className="h-9"
+						onClick={() => addMethod("qr")}
+						disabled={atCap}
+					>
+						<Plus className="size-4" />
+						Add QR
+					</Button>
+				</div>
+				{qrs.length === 0 ? (
+					<p className="rounded-xl border border-dashed border-input bg-muted/20 px-4 py-4 text-center text-sm text-muted-foreground">
+						No QR codes yet.
+					</p>
+				) : (
+					<SortableList
+						items={qrs}
+						getId={(m) => m._key}
+						onReorder={(ids) => reorderType("qr", ids)}
+						renderItem={(m, handle) => methodCard(m, handle)}
+						className="flex flex-col gap-3"
+					/>
+				)}
 			</div>
+
+			<Button
+				type="submit"
+				className="h-11 lg:h-10 lg:self-end lg:min-w-[180px]"
+				disabled={saving || uploadingKey !== null}
+			>
+				{uploadingKey !== null
+					? "Uploading…"
+					: saving
+						? "Saving…"
+						: "Save payment methods"}
+			</Button>
 		</form>
 	);
 }

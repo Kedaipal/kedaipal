@@ -293,7 +293,9 @@ describe("whatsapp inbound", () => {
 		expect(text).toContain(shortId);
 		expect(text).toContain("confirmed");
 		expect(text).toContain("💳 Payment details");
-		expect(text).toContain("Bank: Maybank");
+		// Legacy single object is synthesized into one bank method; label = bank
+		// name, shown as a bold heading (no redundant "Bank:" line).
+		expect(text).toContain("*Maybank*");
 		expect(text).toContain("Name: Acme Outdoor");
 		// Account number on its own line (label above, bare number below).
 		expect(text).toContain("Account:");
@@ -325,7 +327,7 @@ describe("whatsapp inbound", () => {
 		const text = body.interactive.body.text;
 		expect(text).toContain("disahkan");
 		expect(text).toContain("💳 Maklumat pembayaran");
-		expect(text).toContain("Bank: CIMB");
+		expect(text).toContain("*CIMB*");
 		expect(text).toContain("Akaun:");
 		expect(text.split("\n")).toContain("9988");
 		fetchMock.restore();
@@ -375,7 +377,8 @@ describe("whatsapp inbound", () => {
 		};
 		expect(qrBody.type).toBe("image");
 		expect(qrBody.image.link).toMatch(/^https?:\/\//);
-		expect(qrBody.image.caption).toBe("Scan to pay");
+		// Caption is prefixed with the method label (legacy QR → "QR code").
+		expect(qrBody.image.caption).toBe("QR code — Scan to pay");
 		fetchMock.restore();
 	});
 

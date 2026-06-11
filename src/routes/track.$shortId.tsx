@@ -219,9 +219,7 @@ function TrackingSkeleton() {
 function TrackingRoute() {
 	const { shortId } = Route.useParams();
 	const order = useQuery(api.orders.get, { shortId });
-	const paymentInstructions = useQuery(api.orders.getPaymentInstructions, {
-		shortId,
-	});
+	const paymentMethods = useQuery(api.orders.getPaymentMethods, { shortId });
 	const [editingAddress, setEditingAddress] = useState(false);
 	const [claimingPayment, setClaimingPayment] = useState(false);
 
@@ -399,62 +397,76 @@ function TrackingRoute() {
 				</section>
 			) : null}
 
-			{/* How to pay — the seller's bank/QR details with one-tap copy on the
-			    account number (the MY bank-transfer friction point). Shown while a
-			    payment is still due and not deferred behind a closed mockup gate;
-			    hidden once received/cancelled or when nothing is configured. */}
+			{/* How to pay — the seller's payment methods (banks + QRs) with one-tap
+			    copy on each account number (the MY bank-transfer friction point).
+			    Shown while a payment is still due and not deferred behind a closed
+			    mockup gate; hidden once received/cancelled or when none configured. */}
 			{!isCancelled &&
 			!mockupGateClosed &&
 			paymentStatus !== "received" &&
-			paymentInstructions ? (
-				<section className="mt-4 flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+			paymentMethods &&
+			paymentMethods.length > 0 ? (
+				<section className="mt-4 flex flex-col gap-4 rounded-2xl border border-border bg-card p-4">
 					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 						How to pay
 					</p>
-					{paymentInstructions.bankName ? (
-						<div className="flex items-baseline justify-between gap-3 text-sm">
-							<span className="text-muted-foreground">Bank</span>
-							<span className="font-medium">{paymentInstructions.bankName}</span>
-						</div>
-					) : null}
-					{paymentInstructions.bankAccountName ? (
-						<div className="flex items-baseline justify-between gap-3 text-sm">
-							<span className="text-muted-foreground">Name</span>
-							<span className="text-right font-medium">
-								{paymentInstructions.bankAccountName}
-							</span>
-						</div>
-					) : null}
-					{paymentInstructions.bankAccountNumber ? (
-						<div className="flex items-center justify-between gap-2 rounded-xl bg-muted/50 px-3 py-2.5">
-							<div className="min-w-0">
-								<p className="text-xs text-muted-foreground">Account number</p>
-								<p className="break-all font-mono text-base font-semibold">
-									{paymentInstructions.bankAccountNumber}
+					{paymentMethods.map((m, i) => (
+						<div
+							key={`${m.label}-${i}`}
+							className="flex flex-col gap-2 border-border [&:not(:first-of-type)]:border-t [&:not(:first-of-type)]:pt-4"
+						>
+							<p className="text-sm font-semibold">{m.label}</p>
+							{m.type === "bank" ? (
+								<>
+									{m.bankName && m.bankName !== m.label ? (
+										<div className="flex items-baseline justify-between gap-3 text-sm">
+											<span className="text-muted-foreground">Bank</span>
+											<span className="font-medium">{m.bankName}</span>
+										</div>
+									) : null}
+									{m.bankAccountName ? (
+										<div className="flex items-baseline justify-between gap-3 text-sm">
+											<span className="text-muted-foreground">Name</span>
+											<span className="text-right font-medium">
+												{m.bankAccountName}
+											</span>
+										</div>
+									) : null}
+									{m.bankAccountNumber ? (
+										<div className="flex items-center justify-between gap-2 rounded-xl bg-muted/50 px-3 py-2.5">
+											<div className="min-w-0">
+												<p className="text-xs text-muted-foreground">
+													Account number
+												</p>
+												<p className="break-all font-mono text-base font-semibold">
+													{m.bankAccountNumber}
+												</p>
+											</div>
+											<CopyButton
+												value={m.bankAccountNumber}
+												ariaLabel="Copy account number"
+												successMessage="Account number copied"
+											/>
+										</div>
+									) : null}
+								</>
+							) : m.qrImageUrl ? (
+								<div className="flex flex-col items-center gap-1.5">
+									<img
+										src={m.qrImageUrl}
+										alt={`${m.label} QR code`}
+										className="max-h-56 w-auto rounded-lg border border-border bg-white"
+									/>
+									<p className="text-xs text-muted-foreground">Scan to pay</p>
+								</div>
+							) : null}
+							{m.note ? (
+								<p className="whitespace-pre-line break-words text-sm text-muted-foreground">
+									{m.note}
 								</p>
-							</div>
-							<CopyButton
-								value={paymentInstructions.bankAccountNumber}
-								ariaLabel="Copy account number"
-								successMessage="Account number copied"
-							/>
+							) : null}
 						</div>
-					) : null}
-					{paymentInstructions.note ? (
-						<p className="whitespace-pre-line break-words text-sm text-muted-foreground">
-							{paymentInstructions.note}
-						</p>
-					) : null}
-					{paymentInstructions.qrImageUrl ? (
-						<div className="flex flex-col items-center gap-1.5 pt-1">
-							<img
-								src={paymentInstructions.qrImageUrl}
-								alt="Payment QR code"
-								className="max-h-56 w-auto rounded-lg border border-border bg-white"
-							/>
-							<p className="text-xs text-muted-foreground">Scan to pay</p>
-						</div>
-					) : null}
+					))}
 				</section>
 			) : null}
 
