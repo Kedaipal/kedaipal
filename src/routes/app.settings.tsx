@@ -725,7 +725,36 @@ function PaymentMethodsForm({
 	}
 
 	// One method's editable card. `handle` is the drag grip from SortableList.
-	function methodCard(m: MethodDraft, handle: ReactNode) {
+	// While a drag is in progress (`state.isSorting`), the whole group collapses
+	// to single-line rows (just the label) so a tall list is easy to rearrange;
+	// the floating overlay copy (`state.isOverlay`) gets a lifted shadow.
+	function methodCard(
+		m: MethodDraft,
+		handle: ReactNode,
+		state: { isSorting: boolean; isOverlay: boolean },
+	) {
+		const displayLabel =
+			m.label.trim() ||
+			(m.type === "bank"
+				? m.bankName.trim() || "Bank account"
+				: "QR code");
+		if (state.isSorting) {
+			return (
+				<div
+					className={`flex items-center gap-2 rounded-xl border bg-card p-3 ${
+						state.isOverlay ? "border-accent shadow-lg" : "border-border"
+					}`}
+				>
+					{handle}
+					{m.type === "bank" ? (
+						<Landmark className="size-4 shrink-0 text-muted-foreground" />
+					) : (
+						<QrCode className="size-4 shrink-0 text-muted-foreground" />
+					)}
+					<span className="truncate text-sm font-medium">{displayLabel}</span>
+				</div>
+			);
+		}
 		return (
 			<div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
 				<div className="flex items-center gap-2">
@@ -890,7 +919,7 @@ function PaymentMethodsForm({
 						items={banks}
 						getId={(m) => m._key}
 						onReorder={(ids) => reorderType("bank", ids)}
-						renderItem={(m, handle) => methodCard(m, handle)}
+						renderItem={(m, handle, state) => methodCard(m, handle, state)}
 						className="flex flex-col gap-3"
 					/>
 				)}
@@ -923,7 +952,7 @@ function PaymentMethodsForm({
 						items={qrs}
 						getId={(m) => m._key}
 						onReorder={(ids) => reorderType("qr", ids)}
-						renderItem={(m, handle) => methodCard(m, handle)}
+						renderItem={(m, handle, state) => methodCard(m, handle, state)}
 						className="flex flex-col gap-3"
 					/>
 				)}
