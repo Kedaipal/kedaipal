@@ -138,7 +138,7 @@ Catalog items, scoped to a retailer. **Soft-deleted** via `active: boolean` — 
 | `description` | string? | Rendered as **sanitized markdown** on the storefront (specs, "what's included"). |
 | `currency` | string | Must match the order currency at checkout. |
 | `options` | object[]? | 0–2 **option axes** `{name, values[]}`, ordered (drives picker order). Empty/undefined = no axes. Capped at 2 axes / 50 variants. |
-| `imageStorageIds` | string[] | Product-level hero gallery (up to 5). |
+| `imageStorageIds` | string[] | Product-level hero gallery (up to 5). **Order is meaningful** — index 0 is the storefront cover. The listing editor lets the seller drag-to-reorder the gallery (same `SortableList` primitive as elsewhere); the array is persisted in display order, no separate "primary" flag. |
 | `active` | boolean | Soft-delete flag. |
 | `sortOrder` | number | Custom storefront ranking. **Storefront** `list` (active-only) orders ascending `sortOrder`, then `createdAt`. **Dashboard** `listAll` orders **active-first, then `sortOrder`, then `createdAt`** — so archived products sink to the end (archiving moves a product down with no renumber). `create` sets `sortOrder: Date.now()` so new products append. Inline drag-and-drop in the dashboard "All" view reorders the **active** products and calls `products.reorder({ retailerId, orderedIds })` (full set: reordered active + archived kept last), which assigns `sortOrder = index`. |
 | `blockWhenOutOfStock`, `requiresProof` | **DEPRECATED** | Moved to `productVariants` (now **per-variant**). Reads fall back to these product-level values when a variant's own flag is unset (`variant.X ?? product.X`), so they're kept optional until the narrow step. **Set the variant flags, not these.** |

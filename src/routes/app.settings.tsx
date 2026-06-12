@@ -29,11 +29,12 @@ import { useAppForm } from "../components/forms/form";
 import { ShopeeIcon } from "../components/icons/shopee-icon";
 import { PickupLocationsTab } from "../components/settings/pickup-locations-tab";
 import { Button } from "../components/ui/button";
-import { SortableList } from "../components/ui/sortable-list";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
+import { SortableList } from "../components/ui/sortable-list";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage } from "../lib/format";
+import { reorderByIds } from "../lib/reorder";
 import {
 	settingsNotifyEmailFormSchema,
 	settingsWaPhoneFormSchema,
@@ -340,9 +341,7 @@ function SettingsRoute() {
 					<Card>
 						<PaymentMethodsForm
 							current={retailer.paymentMethods ?? []}
-							onSave={(paymentMethods) =>
-								updateSettings({ paymentMethods })
-							}
+							onSave={(paymentMethods) => updateSettings({ paymentMethods })}
 						/>
 					</Card>
 				</div>
@@ -662,9 +661,7 @@ function PaymentMethodsForm({
 			const b = prev.filter((m) => m.type === "bank");
 			const q = prev.filter((m) => m.type === "qr");
 			const reorder = (list: MethodDraft[]) =>
-				orderedKeys
-					.map((k) => list.find((m) => m._key === k))
-					.filter((m): m is MethodDraft => m !== undefined);
+				reorderByIds(list, orderedKeys, (m) => m._key);
 			return type === "bank" ? [...reorder(b), ...q] : [...b, ...reorder(q)];
 		});
 	}
@@ -704,11 +701,16 @@ function PaymentMethodsForm({
 				return {
 					type: m.type,
 					label,
-					bankName: m.type === "bank" ? m.bankName.trim() || undefined : undefined,
+					bankName:
+						m.type === "bank" ? m.bankName.trim() || undefined : undefined,
 					bankAccountName:
-						m.type === "bank" ? m.bankAccountName.trim() || undefined : undefined,
+						m.type === "bank"
+							? m.bankAccountName.trim() || undefined
+							: undefined,
 					bankAccountNumber:
-						m.type === "bank" ? m.bankAccountNumber.trim() || undefined : undefined,
+						m.type === "bank"
+							? m.bankAccountNumber.trim() || undefined
+							: undefined,
 					qrImageStorageId:
 						m.type === "qr" ? m.qrImageStorageId || undefined : undefined,
 					note: m.note.trim() || undefined,
@@ -735,9 +737,7 @@ function PaymentMethodsForm({
 	) {
 		const displayLabel =
 			m.label.trim() ||
-			(m.type === "bank"
-				? m.bankName.trim() || "Bank account"
-				: "QR code");
+			(m.type === "bank" ? m.bankName.trim() || "Bank account" : "QR code");
 		if (state.isSorting) {
 			return (
 				<div

@@ -18,6 +18,7 @@ import {
 	downloadProductsXlsx,
 	type ExportableProduct,
 } from "../lib/product-export";
+import { reorderByIds } from "../lib/reorder";
 import { cn } from "../lib/utils";
 
 type StatusFilter = "all" | "active" | "archived";
@@ -414,10 +415,7 @@ function SortableProductGrid({
 		setLocalOrder(activeIds);
 	}, [activeKey]);
 
-	const byId = new Map(products.map((p) => [p._id, p] as const));
-	const orderedActive = localOrder
-		.map((id) => byId.get(id))
-		.filter((prod): prod is ProductListItem => prod !== undefined);
+	const orderedActive = reorderByIds(products, localOrder, (p) => p._id);
 
 	async function handleReorder(orderedActiveIds: string[]) {
 		const prev = localOrder;
