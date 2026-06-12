@@ -1,13 +1,16 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { Download, Upload } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
+import type { Id } from "../../convex/_generated/dataModel";
 import { PageHeader } from "../components/dashboard/page-header";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
+import { SortableList } from "../components/ui/sortable-list";
 import { BULK_IO_ENABLED } from "../lib/feature-flags";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import {
@@ -18,6 +21,8 @@ import {
 import { cn } from "../lib/utils";
 
 type StatusFilter = "all" | "active" | "archived";
+
+type ProductListItem = FunctionReturnType<typeof api.products.listAll>[number];
 
 export const Route = createFileRoute("/app/products/")({
 	component: ProductsRoute,
@@ -61,6 +66,12 @@ function ProductsRoute() {
 			return true;
 		});
 	}, [products, query, status]);
+
+	// Drag-to-reorder is enabled only in the unfiltered "All" view (the list is
+	// then the retailer's complete set). Needs 2+ active products — only active
+	// ones are draggable; archived sit in a fixed tail.
+	const canReorder =
+		status === "all" && query.trim() === "" && counts.active >= 2;
 
 	if (!retailer) return null;
 
@@ -277,79 +288,180 @@ function ProductsRoute() {
 						Clear filters
 					</Button>
 				</div>
+			) : canReorder ? (
+				<SortableProductGrid retailerId={retailer._id} products={filtered} />
 			) : (
-				<ul className="flex flex-col gap-3 lg:grid lg:grid-cols-2 lg:gap-3 xl:grid-cols-3">
-					{filtered.map((p) => {
-						const blockOOS = p.blockWhenOutOfStock === true;
-						const outOfStock = p.active && !p.inStock;
-						const lowStock =
-							p.active && blockOOS && p.totalOnHand > 0 && p.totalOnHand <= 3;
-						const priceVaries = p.priceTo > p.priceFrom;
-						const variantCount = p.variants.length;
-						return (
-							<li key={p._id}>
-								<Link
-									to="/app/products/$productId"
-									params={{ productId: p._id }}
-									className="flex min-h-16 items-center gap-3 rounded-2xl border border-border bg-card p-3 transition-colors hover:border-ring hover:bg-accent/5"
-								>
-									<div className="size-16 shrink-0 overflow-hidden rounded-xl bg-muted ring-1 ring-border/60">
-										{p.imageUrls[0] ? (
-											<img
-												src={p.imageUrls[0]}
-												alt=""
-												className="size-full object-cover"
-											/>
-										) : null}
-									</div>
-									<div className="flex min-w-0 flex-1 flex-col gap-1">
-										<span className="truncate font-medium">{p.name}</span>
-										<div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-											<span className="font-semibold text-foreground">
-												{priceVaries ? "from " : ""}
-												{formatPrice(p.priceFrom, p.currency)}
-											</span>
-											<span className="text-muted-foreground">
-												{variantCount > 1
-													? `· ${variantCount} variants`
-													: `· stock ${p.totalOnHand}`}
-											</span>
-											{outOfStock ? (
-												<span className="rounded-full bg-red-500/10 px-2 py-0.5 text-[11px] font-medium text-red-600 dark:text-red-400">
-													Out of stock
-												</span>
-											) : lowStock ? (
-												<span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-400">
-													Low stock
-												</span>
-											) : null}
-										</div>
-									</div>
-									<div className="flex shrink-0 flex-col items-end gap-1">
-										{!p.active ? (
-											<span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-												Archived
-											</span>
-										) : null}
-										<svg
-											viewBox="0 0 24 24"
-											fill="none"
-											stroke="currentColor"
-											strokeWidth="2"
-											strokeLinecap="round"
-											strokeLinejoin="round"
-											className="size-4 text-muted-foreground"
-											aria-hidden="true"
-										>
-											<path d="m9 18 6-6-6-6" />
-										</svg>
-									</div>
-								</Link>
-							</li>
-						);
-					})}
+				<ul className="grid grid-cols-1 gap-3 lg:grid-cols-2 lg:gap-3 xl:grid-cols-3">
+					{filtered.map((p) => (
+						<li key={p._id}>
+							<ProductCard product={p} />
+						</li>
+					))}
 				</ul>
 			)}
+		</div>
+	);
+}
+
+function ProductCard({
+	product: p,
+	dragHandle,
+}: {
+	product: ProductListItem;
+	dragHandle?: ReactNode;
+}) {
+	const blockOOS = p.blockWhenOutOfStock === true;
+	const outOfStock = p.active && !p.inStock;
+	const lowStock =
+		p.active && blockOOS && p.totalOnHand > 0 && p.totalOnHand <= 3;
+	const priceVaries = p.priceTo > p.priceFrom;
+	const variantCount = p.variants.length;
+	// Archived products read greyed wherever they appear (All view, Archived tab,
+	// and the reorder tail).
+	const dim = p.active ? "" : " opacity-55";
+
+	const link = (
+		<Link
+			to="/app/products/$productId"
+			params={{ productId: p._id }}
+			className={
+				(dragHandle
+					? "flex min-h-16 min-w-0 flex-1 items-center gap-3 py-3 pr-3"
+					: "flex min-h-16 items-center gap-3 rounded-2xl border border-border bg-card p-3 transition-colors hover:border-ring hover:bg-accent/5") +
+				dim
+			}
+		>
+			<div className="size-16 shrink-0 overflow-hidden rounded-xl bg-muted ring-1 ring-border/60">
+				{p.imageUrls[0] ? (
+					<img src={p.imageUrls[0]} alt="" className="size-full object-cover" />
+				) : null}
+			</div>
+			<div className="flex min-w-0 flex-1 flex-col gap-1">
+				<span className="truncate font-medium">{p.name}</span>
+				<div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+					<span className="font-semibold text-foreground">
+						{priceVaries ? "from " : ""}
+						{formatPrice(p.priceFrom, p.currency)}
+					</span>
+					<span className="text-muted-foreground">
+						{variantCount > 1
+							? `· ${variantCount} variants`
+							: `· stock ${p.totalOnHand}`}
+					</span>
+					{outOfStock ? (
+						<span className="rounded-full bg-red-500/10 px-2 py-0.5 text-[11px] font-medium text-red-600 dark:text-red-400">
+							Out of stock
+						</span>
+					) : lowStock ? (
+						<span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-400">
+							Low stock
+						</span>
+					) : null}
+				</div>
+			</div>
+			<div className="flex shrink-0 flex-col items-end gap-1">
+				{!p.active ? (
+					<span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+						Archived
+					</span>
+				) : null}
+				<svg
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					strokeWidth="2"
+					strokeLinecap="round"
+					strokeLinejoin="round"
+					className="size-4 text-muted-foreground"
+					aria-hidden="true"
+				>
+					<path d="m9 18 6-6-6-6" />
+				</svg>
+			</div>
+		</Link>
+	);
+
+	if (!dragHandle) return link;
+	return (
+		<div className="flex items-center gap-1 rounded-2xl border border-border bg-card pl-1 transition-colors hover:border-ring hover:bg-accent/5">
+			{dragHandle}
+			{link}
+		</div>
+	);
+}
+
+function SortableProductGrid({
+	retailerId,
+	products,
+}: {
+	retailerId: Id<"retailers">;
+	products: ProductListItem[];
+}) {
+	const reorder = useMutation(api.products.reorder);
+	// `products` arrives active-first (server `byActiveThenSort`). Only the active
+	// products are draggable; archived ones are a fixed, greyed tail.
+	const activeProducts = products.filter((p) => p.active);
+	const inactiveProducts = products.filter((p) => !p.active);
+
+	const activeIds = activeProducts.map((p) => p._id);
+	const activeKey = activeIds.join("|");
+	// Optimistic order so a drop updates instantly; the reactive query re-syncs
+	// after the mutation. Reconcile only when the active set/order changes.
+	const [localOrder, setLocalOrder] = useState<Id<"products">[]>(activeIds);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reconcile on
+	// activeKey only, not on the per-render activeIds array.
+	useEffect(() => {
+		setLocalOrder(activeIds);
+	}, [activeKey]);
+
+	const byId = new Map(products.map((p) => [p._id, p] as const));
+	const orderedActive = localOrder
+		.map((id) => byId.get(id))
+		.filter((prod): prod is ProductListItem => prod !== undefined);
+
+	async function handleReorder(orderedActiveIds: string[]) {
+		const prev = localOrder;
+		const nextActive = orderedActiveIds as Id<"products">[];
+		setLocalOrder(nextActive); // optimistic
+		// Full set for the mutation: reordered active first, archived kept at the end.
+		const full = [...nextActive, ...inactiveProducts.map((p) => p._id)];
+		try {
+			await reorder({ retailerId, orderedIds: full });
+		} catch (err) {
+			setLocalOrder(prev); // revert on failure
+			toast.error(convexErrorMessage(err));
+		}
+	}
+
+	const gridClass =
+		"grid grid-cols-1 gap-3 lg:grid-cols-2 lg:gap-3 xl:grid-cols-3";
+
+	return (
+		<div className="flex flex-col gap-4">
+			<SortableList
+				items={orderedActive}
+				getId={(prod) => prod._id}
+				onReorder={handleReorder}
+				strategy="grid"
+				className={gridClass}
+				renderItem={(prod, handle) => (
+					<ProductCard product={prod} dragHandle={handle} />
+				)}
+			/>
+			{inactiveProducts.length > 0 ? (
+				<div className="flex flex-col gap-3">
+					<p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
+						Archived · not shown on storefront
+					</p>
+					<ul className={gridClass}>
+						{inactiveProducts.map((p) => (
+							<li key={p._id}>
+								<ProductCard product={p} />
+							</li>
+						))}
+					</ul>
+				</div>
+			) : null}
 		</div>
 	);
 }

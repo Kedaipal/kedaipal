@@ -18,6 +18,10 @@ interface ProductGridProps {
 }
 
 export function ProductGrid({ retailerId, cart }: ProductGridProps) {
+	// `products.list` returns active products already sorted by the retailer's
+	// `sortOrder` (set via the dashboard reorder). We render in that order — the
+	// search filter below preserves it — so the storefront reflects the seller's
+	// chosen sequence.
 	const products = useQuery(api.products.list, { retailerId });
 	const [openProduct, setOpenProduct] = useState<StorefrontProduct | null>(
 		null,

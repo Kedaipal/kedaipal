@@ -865,13 +865,162 @@ describe("products", () => {
 		expect(preview.plan[0]?.warnings[0]).toMatch(/dashboard/);
 	});
 
-	test("reorder updates sortOrder", async () => {
+	test("reorder assigns sortOrder by position; listAll reflects it", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const asA = t.withIdentity({ subject: USER_A });
-		const id = await asA.mutation(api.products.create, baseProduct(retailer._id));
-		await asA.mutation(api.products.reorder, { productId: id, sortOrder: 99 });
-		const product = await asA.query(api.products.get, { productId: id });
-		expect(product?.sortOrder).toBe(99);
+		const a = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "A", sku: "A" }),
+		);
+		const b = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "B", sku: "B" }),
+		);
+		const c = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "C", sku: "C" }),
+		);
+
+		await asA.mutation(api.products.reorder, {
+			retailerId: retailer._id,
+			orderedIds: [c, a, b],
+		});
+
+		const sorted = await asA.query(api.products.listAll, {
+			retailerId: retailer._id,
+		});
+		expect(sorted.map((p) => p.name)).toEqual(["C", "A", "B"]);
+		expect(sorted.map((p) => p.sortOrder)).toEqual([0, 1, 2]);
+	});
+
+	test("reorder rejects a list that isn't exactly the product set", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const a = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { sku: "A" }),
+		);
+		await asA.mutation(api.products.create, baseProduct(retailer._id, { sku: "B" }));
+
+		// Missing one id.
+		await expect(
+			asA.mutation(api.products.reorder, {
+				retailerId: retailer._id,
+				orderedIds: [a],
+			}),
+		).rejects.toThrow(/every product exactly once/i);
+
+		// Duplicate id.
+		await expect(
+			asA.mutation(api.products.reorder, {
+				retailerId: retailer._id,
+				orderedIds: [a, a],
+			}),
+		).rejects.toThrow(/Duplicate/i);
+	});
+
+	test("reorder is rejected for a non-owner", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const a = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { sku: "A" }),
+		);
+		const asB = t.withIdentity({ subject: USER_B });
+		await expect(
+			asB.mutation(api.products.reorder, {
+				retailerId: retailer._id,
+				orderedIds: [a],
+			}),
+		).rejects.toThrow();
+	});
+
+	test("listAll sorts archived products to the end; reorder keeps active first", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const a = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "A", sku: "A" }),
+		);
+		const b = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "B", sku: "B" }),
+		);
+		const c = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "C", sku: "C" }),
+		);
+
+		// Archive B → it sinks to the end of the dashboard list, no renumber needed.
+		await asA.mutation(api.products.archive, { productId: b });
+		expect(
+			(await asA.query(api.products.listAll, { retailerId: retailer._id })).map(
+				(p) => p.name,
+			),
+		).toEqual(["A", "C", "B"]);
+
+		// Reorder the active products (C before A); the mutation gets the full set
+		// with the archived id kept last.
+		await asA.mutation(api.products.reorder, {
+			retailerId: retailer._id,
+			orderedIds: [c, a, b],
+		});
+		expect(
+			(await asA.query(api.products.listAll, { retailerId: retailer._id })).map(
+				(p) => p.name,
+			),
+		).toEqual(["C", "A", "B"]);
+		// Storefront (active only) shows the active order; archived excluded.
+		expect(
+			(await asA.query(api.products.list, { retailerId: retailer._id })).map(
+				(p) => p.name,
+			),
+		).toEqual(["C", "A"]);
+	});
+
+	test("reorder only patches products whose position changed", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const a = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "A", sku: "A" }),
+		);
+		const b = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "B", sku: "B" }),
+		);
+		const c = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "C", sku: "C" }),
+		);
+
+		// Lock in positions 0, 1, 2.
+		await asA.mutation(api.products.reorder, {
+			retailerId: retailer._id,
+			orderedIds: [a, b, c],
+		});
+		const updatedAtOf = (id: Id<"products">) =>
+			t.run(async (ctx) => (await ctx.db.get(id))?.updatedAt);
+		const cBefore = await updatedAtOf(c);
+
+		// Swap A and B; C stays at index 2 → must NOT be re-patched.
+		await asA.mutation(api.products.reorder, {
+			retailerId: retailer._id,
+			orderedIds: [b, a, c],
+		});
+
+		// C's position didn't change → not re-patched (updatedAt untouched), even
+		// though the order DID change (A and B swapped) — proving selective writes.
+		expect(await updatedAtOf(c)).toBe(cBefore);
+		expect(
+			(await asA.query(api.products.listAll, { retailerId: retailer._id })).map(
+				(p) => p.name,
+			),
+		).toEqual(["B", "A", "C"]);
 	});
 });
