@@ -144,6 +144,42 @@ describe("retailers payment methods", () => {
 		expect(row?.paymentInstructions).toBeUndefined();
 	});
 
+	test("garbage-collects orphaned QR blobs on remove / replace", async () => {
+		const t = setup();
+		const asA = await seed(t, "user_pm_gc", "pm-gc");
+		const storeBlob = () =>
+			t.run(async (ctx) =>
+				ctx.storage.store(
+					new Blob([new Uint8Array([1, 2, 3, 4])], { type: "image/png" }),
+				),
+			);
+		const exists = async (id: string) =>
+			(await t.run(async (ctx) => ctx.storage.getUrl(id))) !== null;
+
+		const qr1 = await storeBlob();
+		const qr2 = await storeBlob();
+		await asA.mutation(api.retailers.updateSettings, {
+			paymentMethods: [
+				{ type: "qr", label: "DuitNow", qrImageStorageId: qr1 },
+				{ type: "qr", label: "TNG", qrImageStorageId: qr2 },
+			],
+		});
+		expect(await exists(qr1)).toBe(true);
+		expect(await exists(qr2)).toBe(true);
+
+		// Remove the TNG method and replace DuitNow's image with a new blob.
+		const qr1b = await storeBlob();
+		await asA.mutation(api.retailers.updateSettings, {
+			paymentMethods: [
+				{ type: "qr", label: "DuitNow", qrImageStorageId: qr1b },
+			],
+		});
+		// Both the removed method's blob and the replaced one are GC'd; the new one stays.
+		expect(await exists(qr2)).toBe(false); // method deleted
+		expect(await exists(qr1)).toBe(false); // image replaced
+		expect(await exists(qr1b)).toBe(true); // current
+	});
+
 	test("backfill migrates legacy → array and clears legacy; idempotent", async () => {
 		const t = setup();
 		const asA = await seed(t, "user_pm_b", "pm-b");

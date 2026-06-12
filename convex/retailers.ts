@@ -91,6 +91,7 @@ import {
 	TERMS_VERSION,
 } from "./lib/legal";
 import {
+	collectQrStorageIds,
 	type PaymentMethod,
 	resolvePaymentMethods,
 	sanitizePaymentMethods,
@@ -556,9 +557,27 @@ export const updateSettings = mutation({
 		}
 		if (args.paymentMethods !== undefined) {
 			// Re-number sortOrder to the array (display) order, then sanitize.
-			patch.paymentMethods = sanitizePaymentMethods(
+			const sanitized = sanitizePaymentMethods(
 				args.paymentMethods.map((m, i) => ({ ...m, sortOrder: i })),
 			);
+			// Garbage-collect orphaned QR blobs: any QR image previously stored
+			// (in the array OR the legacy object) that the new set no longer
+			// references — covers replace, "Remove QR", and method deletion.
+			// Best-effort; a missing/already-deleted blob must not abort the save.
+			const nextQr = new Set(
+				(sanitized ?? [])
+					.filter((m) => m.type === "qr" && m.qrImageStorageId)
+					.map((m) => m.qrImageStorageId as string),
+			);
+			for (const prevId of collectQrStorageIds(retailer)) {
+				if (nextQr.has(prevId)) continue;
+				try {
+					await ctx.storage.delete(prevId as Id<"_storage">);
+				} catch {
+					// already gone — ignore
+				}
+			}
+			patch.paymentMethods = sanitized;
 			// Saving via the multi-method UI migrates this retailer off the legacy
 			// single object — clear it so reads don't double-count.
 			patch.paymentInstructions = undefined;
@@ -934,12 +953,10 @@ export const deleteUser = internalMutation({
 			if (row.retailerId === retailerId) await ctx.db.delete(row._id);
 		}
 
-		// Retailer-level storage, then the retailer row. Delete QR images across
-		// every configured method (and the legacy single object, via the resolver).
+		// Retailer-level storage, then the retailer row. Delete every QR image —
+		// across the methods array AND the legacy single object.
 		await deleteFile(retailer.logoStorageId);
-		for (const m of resolvePaymentMethods(retailer)) {
-			if (m.type === "qr") await deleteFile(m.qrImageStorageId);
-		}
+		for (const qrId of collectQrStorageIds(retailer)) await deleteFile(qrId);
 		await ctx.db.delete(retailerId);
 
 		return {

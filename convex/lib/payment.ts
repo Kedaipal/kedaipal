@@ -105,6 +105,26 @@ export function resolvePaymentMethods(retailer: {
 }
 
 /**
+ * Every QR-image storage id currently referenced by a retailer — across the
+ * `paymentMethods` array AND the legacy single object. Used to (a) garbage-
+ * collect blobs no longer referenced after a payment edit, and (b) delete all
+ * QR blobs when the account is deleted.
+ */
+export function collectQrStorageIds(retailer: {
+	paymentMethods?: PaymentMethod[];
+	paymentInstructions?: LegacyPaymentInstructions;
+}): string[] {
+	const ids: string[] = [];
+	for (const m of retailer.paymentMethods ?? []) {
+		const id = m.type === "qr" ? m.qrImageStorageId?.trim() : undefined;
+		if (id) ids.push(id);
+	}
+	const legacy = retailer.paymentInstructions?.qrImageStorageId?.trim();
+	if (legacy) ids.push(legacy);
+	return ids;
+}
+
+/**
  * Validate + normalize an incoming methods array from the settings form: trim
  * fields, enforce caps, drop methods with no usable content, default labels, and
  * re-number `sortOrder` to the array order (0..n). Throws `ConvexError` on a cap

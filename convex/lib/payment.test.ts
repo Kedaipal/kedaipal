@@ -1,6 +1,7 @@
 import { ConvexError } from "convex/values";
 import { describe, expect, test } from "vitest";
 import {
+	collectQrStorageIds,
 	legacyToPaymentMethods,
 	MAX_PAYMENT_METHODS,
 	type PaymentMethod,
@@ -171,5 +172,36 @@ describe("sanitizePaymentMethods", () => {
 				},
 			]),
 		).toThrow(/exceeds/i);
+	});
+});
+
+describe("collectQrStorageIds", () => {
+	test("gathers QR ids from the methods array (bank methods ignored)", () => {
+		expect(
+			collectQrStorageIds({
+				paymentMethods: [
+					{ type: "bank", label: "Maybank", bankAccountNumber: "1", sortOrder: 0 },
+					{ type: "qr", label: "DuitNow", qrImageStorageId: " kg:a ", sortOrder: 1 },
+					{ type: "qr", label: "TNG", qrImageStorageId: "kg:b", sortOrder: 2 },
+				],
+			}),
+		).toEqual(["kg:a", "kg:b"]);
+	});
+
+	test("includes the legacy single-object QR id", () => {
+		expect(
+			collectQrStorageIds({ paymentInstructions: { qrImageStorageId: "kg:legacy" } }),
+		).toEqual(["kg:legacy"]);
+	});
+
+	test("nothing configured → []", () => {
+		expect(collectQrStorageIds({})).toEqual([]);
+		expect(
+			collectQrStorageIds({
+				paymentMethods: [
+					{ type: "bank", label: "B", bankAccountNumber: "1", sortOrder: 0 },
+				],
+			}),
+		).toEqual([]);
 	});
 });

@@ -219,7 +219,20 @@ function TrackingSkeleton() {
 function TrackingRoute() {
 	const { shortId } = Route.useParams();
 	const order = useQuery(api.orders.get, { shortId });
-	const paymentMethods = useQuery(api.orders.getPaymentMethods, { shortId });
+	// Only subscribe to payment methods when the "How to pay" section can actually
+	// render. Skipping for cancelled / already-paid / mockup-gated orders avoids a
+	// second order+retailer read+subscription on this hot public path. (Kept a
+	// separate query rather than folding into orders.get so the seller's
+	// orders.get path doesn't pay for retailer + QR-URL resolution it never uses.)
+	const showPaymentSection =
+		order != null &&
+		order.status !== "cancelled" &&
+		(order.paymentStatus ?? "unpaid") !== "received" &&
+		!isMockupGateClosed(order);
+	const paymentMethods = useQuery(
+		api.orders.getPaymentMethods,
+		showPaymentSection ? { shortId } : "skip",
+	);
 	const [editingAddress, setEditingAddress] = useState(false);
 	const [claimingPayment, setClaimingPayment] = useState(false);
 
