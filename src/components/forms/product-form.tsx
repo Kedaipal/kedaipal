@@ -4,9 +4,11 @@ import { Info } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import { convexErrorMessage, parsePriceInput } from "../../lib/format";
+import { reorderByIds } from "../../lib/reorder";
 import { productDetailsSchema } from "../../lib/schemas";
 import { variantLabel } from "../../lib/variant";
 import { Button } from "../ui/button";
+import { SortableList } from "../ui/sortable-list";
 import { useAppForm } from "./form";
 import {
 	VariantEditor,
@@ -240,6 +242,10 @@ export function ProductForm({
 		setImages((prev) => prev.filter((i) => i.id !== id));
 	}
 
+	function reorderImages(orderedIds: string[]) {
+		setImages((prev) => reorderByIds(prev, orderedIds, (img) => img.id));
+	}
+
 	function handleSubmit(e: FormEvent) {
 		e.preventDefault();
 		e.stopPropagation();
@@ -289,25 +295,59 @@ export function ProductForm({
 						({images.length}/{MAX_IMAGES})
 					</span>
 				</span>
+				{images.length > 1 ? (
+					<p className="text-xs text-muted-foreground">
+						Drag to reorder — the first image is your storefront cover.
+					</p>
+				) : null}
 				<div className="grid grid-cols-3 gap-2">
-					{images.map((img) => (
-						<div
-							key={img.id}
-							className="relative aspect-square overflow-hidden rounded-xl bg-muted"
-						>
-							{img.url ? (
-								<img src={img.url} alt="" className="size-full object-cover" />
-							) : null}
-							<button
-								type="button"
-								onClick={() => removeImage(img.id)}
-								className="absolute right-1 top-1 flex size-7 items-center justify-center rounded-full bg-background/90 text-sm shadow"
-								aria-label="Remove image"
-							>
-								×
-							</button>
-						</div>
-					))}
+					{/* `className="contents"` lets the sortable <li>s join this grid
+					    directly, so the "+ Add" tile flows in the next free cell. */}
+					{images.length > 0 ? (
+						<SortableList
+							items={images}
+							getId={(img) => img.id}
+							onReorder={reorderImages}
+							strategy="grid"
+							className="contents"
+							renderItem={(img, handle) => (
+								<div className="relative aspect-square w-full overflow-hidden rounded-xl bg-muted">
+									{img.url ? (
+										<img
+											src={img.url}
+											alt=""
+											className="size-full object-cover"
+										/>
+									) : null}
+									{/* Cover badge on the first image — reordering changes
+									    which image leads on the storefront. */}
+									{img.id === images[0]?.id ? (
+										<span className="absolute bottom-1 left-1 rounded-md bg-background/90 px-1.5 py-0.5 text-[10px] font-medium shadow">
+											Cover
+										</span>
+									) : null}
+									{/* Grip handle only matters with 2+ images. */}
+									{images.length > 1 ? (
+										<span className="absolute left-1 top-1 rounded-lg bg-background/90 shadow">
+											{handle}
+										</span>
+									) : null}
+									{/* 44px tap target (mobile rule) with a lighter visible
+									    chip, so two corner controls don't crowd the cell. */}
+									<button
+										type="button"
+										onClick={() => removeImage(img.id)}
+										className="absolute right-0 top-0 flex size-11 items-center justify-center"
+										aria-label="Remove image"
+									>
+										<span className="flex size-8 items-center justify-center rounded-full bg-background/90 text-lg leading-none shadow">
+											×
+										</span>
+									</button>
+								</div>
+							)}
+						/>
+					) : null}
 					{images.length < MAX_IMAGES ? (
 						<label className="flex aspect-square cursor-pointer items-center justify-center rounded-xl border border-dashed border-border text-sm text-muted-foreground hover:border-ring">
 							{uploading ? "Uploading…" : "+ Add"}
