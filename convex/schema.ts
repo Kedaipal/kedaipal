@@ -50,9 +50,10 @@ export default defineSchema({
 				),
 			}),
 		),
-		// Optional payment payout details surfaced to the shopper in the WA
-		// confirmation reply. Each field is independent — retailer can configure
-		// bank only, QR only, or both.
+		// DEPRECATED — superseded by `paymentMethods` (multi-method). Kept readable
+		// during the widen→backfill→narrow migration so un-migrated rows still
+		// surface payment details; `resolvePaymentMethods` (convex/lib/payment.ts)
+		// synthesizes methods from it. Dropped in a later narrow migration.
 		paymentInstructions: v.optional(
 			v.object({
 				bankName: v.optional(v.string()),
@@ -61,6 +62,24 @@ export default defineSchema({
 				qrImageStorageId: v.optional(v.string()),
 				note: v.optional(v.string()),
 			}),
+		),
+		// Multiple payment methods surfaced to the shopper in the WA confirm reply
+		// + tracking page. Each is a `bank` (account details) or a `qr` (uploaded
+		// image), with a label and sort order. Established sellers run several
+		// banks/QRs; this replaces the single `paymentInstructions` object above.
+		paymentMethods: v.optional(
+			v.array(
+				v.object({
+					type: v.union(v.literal("bank"), v.literal("qr")),
+					label: v.string(),
+					bankName: v.optional(v.string()),
+					bankAccountName: v.optional(v.string()),
+					bankAccountNumber: v.optional(v.string()),
+					qrImageStorageId: v.optional(v.string()),
+					note: v.optional(v.string()),
+					sortOrder: v.number(),
+				}),
+			),
 		),
 		// Legal consent tracking. Versions are ISO dates mirrored from
 		// convex/lib/legal.ts; *AcceptedAt is the epoch-ms acceptance time;

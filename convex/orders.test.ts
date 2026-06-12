@@ -122,7 +122,7 @@ describe("orders", () => {
 		expect(shortId).toMatch(/^ORD-[A-Z2-9]{4}$/);
 	});
 
-	test("getPaymentInstructions returns trimmed seller details; null when none", async () => {
+	test("getPaymentMethods returns the methods array; null when none", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const productId = await seedProduct(t, USER_A, retailer._id);
@@ -136,27 +136,51 @@ describe("orders", () => {
 		});
 
 		// Nothing configured → null (track page hides the section).
-		expect(
-			await t.query(api.orders.getPaymentInstructions, { shortId }),
-		).toBeNull();
+		expect(await t.query(api.orders.getPaymentMethods, { shortId })).toBeNull();
 
 		await t.run(async (ctx) => {
 			await ctx.db.patch(retailer._id, {
+				paymentMethods: [
+					{
+						type: "bank",
+						label: "Maybank",
+						bankName: "Maybank",
+						bankAccountNumber: "5123-4567",
+						sortOrder: 0,
+					},
+					{
+						type: "bank",
+						label: "CIMB",
+						bankName: "CIMB",
+						bankAccountNumber: "8001-2233",
+						sortOrder: 1,
+					},
+				],
+			});
+		});
+		const methods = await t.query(api.orders.getPaymentMethods, { shortId });
+		expect(methods).toHaveLength(2);
+		expect(methods?.[0].label).toBe("Maybank");
+		expect(methods?.[1].bankAccountNumber).toBe("8001-2233");
+
+		// Legacy single object is still read (synthesized into one method).
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				paymentMethods: undefined,
 				paymentInstructions: {
-					bankName: "Maybank",
-					bankAccountNumber: "  5123-4567  ",
-					note: "   ",
+					bankName: "Hong Leong",
+					bankAccountNumber: "  9000-1111  ",
 				},
 			});
 		});
-		const pi = await t.query(api.orders.getPaymentInstructions, { shortId });
-		expect(pi?.bankName).toBe("Maybank");
-		expect(pi?.bankAccountNumber).toBe("5123-4567"); // trimmed
-		expect(pi?.note).toBeUndefined(); // whitespace-only → undefined
+		const legacy = await t.query(api.orders.getPaymentMethods, { shortId });
+		expect(legacy).toHaveLength(1);
+		expect(legacy?.[0].label).toBe("Hong Leong");
+		expect(legacy?.[0].bankAccountNumber).toBe("9000-1111"); // trimmed
 
 		// Unknown order → null.
 		expect(
-			await t.query(api.orders.getPaymentInstructions, { shortId: "ORD-ZZZZ" }),
+			await t.query(api.orders.getPaymentMethods, { shortId: "ORD-ZZZZ" }),
 		).toBeNull();
 	});
 	

@@ -22,6 +22,22 @@ const paymentInstructionsValidator = v.object({
 	note: v.optional(v.string()),
 });
 
+// Multi-method payment validator (matches schema.retailers.paymentMethods).
+// `sortOrder` is optional on the wire — `sanitizePaymentMethods` re-numbers to
+// the array order, so the client can just send methods in display order.
+const paymentMethodsValidator = v.array(
+	v.object({
+		type: v.union(v.literal("bank"), v.literal("qr")),
+		label: v.string(),
+		bankName: v.optional(v.string()),
+		bankAccountName: v.optional(v.string()),
+		bankAccountNumber: v.optional(v.string()),
+		qrImageStorageId: v.optional(v.string()),
+		note: v.optional(v.string()),
+		sortOrder: v.optional(v.number()),
+	}),
+);
+
 const PAYMENT_FIELD_MAX = 120;
 const PAYMENT_NOTE_MAX = 500;
 
@@ -74,6 +90,12 @@ import {
 	PRIVACY_VERSION,
 	TERMS_VERSION,
 } from "./lib/legal";
+import {
+	collectQrStorageIds,
+	type PaymentMethod,
+	resolvePaymentMethods,
+	sanitizePaymentMethods,
+} from "./lib/payment";
 
 /** Trim and bound a best-effort client IP before persisting. */
 function sanitizeAcceptanceIp(ip: string | undefined): string | undefined {
@@ -155,8 +177,10 @@ type RetailerPublic = {
 	currency: SupportedCurrency;
 	locale: Locale;
 	messageTemplates?: MessageTemplatesShape;
-	paymentInstructions?: PaymentInstructionsShape;
-	paymentQrImageUrl?: string;
+	// Resolved payment methods (legacy-aware) with each QR storage id turned into
+	// a viewable URL — what the settings UI renders + edits. Omitted from the
+	// public storefront payload (only `getMyRetailer` populates it).
+	paymentMethods?: Array<PaymentMethod & { qrImageUrl?: string }>;
 	// Whether the retailer is offering self-collect on the storefront. Storefront
 	// hides the self-collect option entirely when false (regardless of pickup
 	// location count). Undefined treated as false.
@@ -185,13 +209,15 @@ async function loadRetailerForUser(
 		.withIndex("by_user", (q) => q.eq("userId", userId))
 		.first();
 	if (!row) return null;
-	const paymentInstructions = row.paymentInstructions as
-		| PaymentInstructionsShape
-		| undefined;
-	let paymentQrImageUrl: string | undefined;
-	if (paymentInstructions?.qrImageStorageId) {
-		const url = await ctx.storage.getUrl(paymentInstructions.qrImageStorageId);
-		paymentQrImageUrl = url ?? undefined;
+	const resolvedMethods = resolvePaymentMethods(row);
+	const paymentMethods: Array<PaymentMethod & { qrImageUrl?: string }> = [];
+	for (const m of resolvedMethods) {
+		let qrImageUrl: string | undefined;
+		if (m.type === "qr" && m.qrImageStorageId) {
+			const url = await ctx.storage.getUrl(m.qrImageStorageId);
+			qrImageUrl = url ?? undefined;
+		}
+		paymentMethods.push({ ...m, qrImageUrl });
 	}
 	let logoUrl: string | undefined;
 	if (row.logoStorageId) {
@@ -209,8 +235,7 @@ async function loadRetailerForUser(
 		currency: (row.currency as SupportedCurrency) ?? DEFAULT_CURRENCY,
 		locale: row.locale ?? DEFAULT_LOCALE,
 		messageTemplates: row.messageTemplates as MessageTemplatesShape | undefined,
-		paymentInstructions,
-		paymentQrImageUrl,
+		paymentMethods,
 		offerSelfCollect: row.offerSelfCollect,
 		pickupSetupSeen: row.pickupSetupSeen,
 		termsVersion: row.termsVersion,
@@ -470,6 +495,9 @@ export const updateSettings = mutation({
 		locale: v.optional(v.union(v.literal("en"), v.literal("ms"))),
 		messageTemplates: v.optional(messageTemplatesValidator),
 		paymentInstructions: v.optional(paymentInstructionsValidator),
+		// Multi-method payment config. When provided, supersedes (and clears) the
+		// legacy single `paymentInstructions` object on this retailer.
+		paymentMethods: v.optional(paymentMethodsValidator),
 		// Empty string clears the logo. Undefined means "no change".
 		logoStorageId: v.optional(v.string()),
 		offerSelfCollect: v.optional(v.boolean()),
@@ -491,6 +519,7 @@ export const updateSettings = mutation({
 			locale: Locale;
 			messageTemplates: MessageTemplatesShape | undefined;
 			paymentInstructions: PaymentInstructionsShape | undefined;
+			paymentMethods: PaymentMethod[] | undefined;
 			offerSelfCollect: boolean;
 			updatedAt: number;
 		}> = { updatedAt: Date.now() };
@@ -525,6 +554,33 @@ export const updateSettings = mutation({
 			patch.paymentInstructions = sanitizePaymentInstructions(
 				args.paymentInstructions,
 			);
+		}
+		if (args.paymentMethods !== undefined) {
+			// Re-number sortOrder to the array (display) order, then sanitize.
+			const sanitized = sanitizePaymentMethods(
+				args.paymentMethods.map((m, i) => ({ ...m, sortOrder: i })),
+			);
+			// Garbage-collect orphaned QR blobs: any QR image previously stored
+			// (in the array OR the legacy object) that the new set no longer
+			// references — covers replace, "Remove QR", and method deletion.
+			// Best-effort; a missing/already-deleted blob must not abort the save.
+			const nextQr = new Set(
+				(sanitized ?? [])
+					.filter((m) => m.type === "qr" && m.qrImageStorageId)
+					.map((m) => m.qrImageStorageId as string),
+			);
+			for (const prevId of collectQrStorageIds(retailer)) {
+				if (nextQr.has(prevId)) continue;
+				try {
+					await ctx.storage.delete(prevId as Id<"_storage">);
+				} catch {
+					// already gone — ignore
+				}
+			}
+			patch.paymentMethods = sanitized;
+			// Saving via the multi-method UI migrates this retailer off the legacy
+			// single object — clear it so reads don't double-count.
+			patch.paymentInstructions = undefined;
 		}
 		if (args.logoStorageId !== undefined) {
 			const trimmed = args.logoStorageId.trim();
@@ -734,9 +790,9 @@ export const generateLogoUploadUrl = mutation({
 });
 
 /**
- * Generate a one-shot upload URL for the retailer's payment QR image.
- * The frontend POSTs the file to this URL, then stores the returned
- * `storageId` via `updateSettings({ paymentInstructions: { qrImageStorageId } })`.
+ * Generate a one-shot upload URL for a payment-method QR image. The frontend
+ * POSTs the file here, then stores the returned `storageId` on a `qr` method and
+ * saves the array via `updateSettings({ paymentMethods })`.
  */
 export const generatePaymentQrUploadUrl = mutation({
 	args: {},
@@ -744,6 +800,40 @@ export const generatePaymentQrUploadUrl = mutation({
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		return ctx.storage.generateUploadUrl();
+	},
+});
+
+/**
+ * One-time backfill: migrate retailers from the legacy single
+ * `paymentInstructions` object to the `paymentMethods` array, then clear the
+ * legacy field. Idempotent — skips rows already on `paymentMethods` or with no
+ * legacy data. Run in dev:  npx convex run retailers:backfillPaymentMethods
+ */
+export const backfillPaymentMethods = internalMutation({
+	args: {},
+	handler: async (ctx): Promise<{ migrated: number; skipped: number }> => {
+		const rows = await ctx.db.query("retailers").collect();
+		let migrated = 0;
+		let skipped = 0;
+		for (const row of rows) {
+			// Already migrated, or nothing to migrate.
+			if (row.paymentMethods && row.paymentMethods.length > 0) {
+				skipped++;
+				continue;
+			}
+			const methods = resolvePaymentMethods(row); // legacy-derived here
+			if (methods.length === 0) {
+				skipped++;
+				continue;
+			}
+			await ctx.db.patch(row._id, {
+				paymentMethods: methods,
+				paymentInstructions: undefined,
+				updatedAt: Date.now(),
+			});
+			migrated++;
+		}
+		return { migrated, skipped };
 	},
 });
 
@@ -863,12 +953,10 @@ export const deleteUser = internalMutation({
 			if (row.retailerId === retailerId) await ctx.db.delete(row._id);
 		}
 
-		// Retailer-level storage, then the retailer row.
+		// Retailer-level storage, then the retailer row. Delete every QR image —
+		// across the methods array AND the legacy single object.
 		await deleteFile(retailer.logoStorageId);
-		const paymentInstructions = retailer.paymentInstructions as
-			| PaymentInstructionsShape
-			| undefined;
-		await deleteFile(paymentInstructions?.qrImageStorageId);
+		for (const qrId of collectQrStorageIds(retailer)) await deleteFile(qrId);
 		await ctx.db.delete(retailerId);
 
 		return {

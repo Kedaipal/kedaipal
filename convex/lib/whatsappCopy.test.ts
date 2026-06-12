@@ -1,84 +1,92 @@
 /// <reference types="vite/client" />
 import { describe, expect, test } from "vitest";
+import type { PaymentMethod } from "./payment";
 import {
 	paymentQrCaption,
-	renderPaymentInstructions,
+	renderPaymentMethods,
 	renderPickupBlock,
 	renderSystemMessage,
 } from "./whatsappCopy";
 
-describe("renderPaymentInstructions", () => {
-	test("returns empty string when instructions undefined", () => {
-		expect(renderPaymentInstructions("en", undefined)).toBe("");
+function bank(over: Partial<PaymentMethod> = {}): PaymentMethod {
+	return {
+		type: "bank",
+		label: "Maybank",
+		bankName: "Maybank",
+		bankAccountName: "Acme Outdoor Sdn Bhd",
+		bankAccountNumber: "5123 4567 8901",
+		sortOrder: 0,
+		...over,
+	};
+}
+
+describe("renderPaymentMethods", () => {
+	test("returns empty string when there are no methods", () => {
+		expect(renderPaymentMethods("en", [])).toBe("");
 	});
 
-	test("returns empty string when all fields blank or whitespace", () => {
-		expect(
-			renderPaymentInstructions("en", {
-				bankName: "  ",
-				bankAccountName: "",
-				bankAccountNumber: undefined,
-				note: "   ",
-			}),
-		).toBe("");
-	});
-
-	test("renders English bank block with all fields", () => {
-		const out = renderPaymentInstructions("en", {
-			bankName: "Maybank",
-			bankAccountName: "Acme Outdoor Sdn Bhd",
-			bankAccountNumber: "5123 4567 8901",
-		});
+	test("renders a bank method with the label as a bold heading", () => {
+		const out = renderPaymentMethods("en", [bank()]);
 		expect(out).toContain("💳 Payment details");
-		expect(out).toContain("Bank: Maybank");
+		expect(out).toContain("*Maybank*");
+		// label === bankName → no redundant "Bank: Maybank" line.
+		expect(out).not.toContain("Bank: Maybank");
 		expect(out).toContain("Name: Acme Outdoor Sdn Bhd");
-		// Account number sits on its OWN line (label above, bare number below) so a
-		// long-press in WhatsApp selects just the number.
+		// Account number on its OWN line so a long-press selects just the number.
 		expect(out).toContain("Account:");
 		expect(out.split("\n")).toContain("5123 4567 8901");
 	});
 
-	test("renders Bahasa Malaysia labels", () => {
-		const out = renderPaymentInstructions("ms", {
-			bankName: "Maybank",
-			bankAccountNumber: "5123",
-		});
-		expect(out).toContain("💳 Maklumat pembayaran");
+	test("shows the bank name line when it differs from the label", () => {
+		const out = renderPaymentMethods("en", [
+			bank({ label: "Main account", bankName: "Maybank" }),
+		]);
+		expect(out).toContain("*Main account*");
 		expect(out).toContain("Bank: Maybank");
+	});
+
+	test("lists multiple methods, each as its own labelled block", () => {
+		const out = renderPaymentMethods("en", [
+			bank({ label: "Maybank", bankAccountNumber: "111" }),
+			bank({
+				label: "CIMB",
+				bankName: "CIMB",
+				bankAccountNumber: "222",
+				sortOrder: 1,
+			}),
+		]);
+		expect(out).toContain("*Maybank*");
+		expect(out).toContain("*CIMB*");
+		expect(out.split("\n")).toContain("111");
+		expect(out.split("\n")).toContain("222");
+	});
+
+	test("a QR method points to the image (sent separately), with its note", () => {
+		const out = renderPaymentMethods("en", [
+			{
+				type: "qr",
+				label: "DuitNow QR",
+				qrImageStorageId: "kg:abc",
+				note: "Scan to pay via DuitNow.",
+				sortOrder: 0,
+			},
+		]);
+		expect(out).toContain("*DuitNow QR*");
+		expect(out).toContain("Scan the QR below 👇");
+		expect(out).toContain("Scan to pay via DuitNow.");
+	});
+
+	test("Bahasa Malaysia labels", () => {
+		const out = renderPaymentMethods("ms", [bank({ bankAccountNumber: "5123" })]);
+		expect(out).toContain("💳 Maklumat pembayaran");
 		expect(out).toContain("Akaun:");
 		expect(out.split("\n")).toContain("5123");
 	});
 
-	test("renders note even without bank fields (QR-only retailer)", () => {
-		const out = renderPaymentInstructions("en", {
-			qrImageStorageId: "kg:abc",
-			note: "Scan the QR above to pay via DuitNow.",
-		});
-		expect(out).toContain("💳 Payment details");
-		expect(out).toContain("Scan the QR above to pay via DuitNow.");
-	});
-
-	test("omits missing fields cleanly", () => {
-		const out = renderPaymentInstructions("en", {
-			bankName: "Maybank",
-		});
-		expect(out).toContain("Bank: Maybank");
-		expect(out).not.toContain("Name:");
-		expect(out).not.toContain("Account:");
-	});
-
-	test("trims whitespace inside fields", () => {
-		const out = renderPaymentInstructions("en", {
-			bankName: "  Maybank  ",
-			bankAccountNumber: "\t5123\n",
-		});
-		expect(out).toContain("Bank: Maybank");
-		expect(out.split("\n")).toContain("5123");
-	});
-
-	test("paymentQrCaption is locale-aware", () => {
+	test("paymentQrCaption — generic, and prefixed with a label when given", () => {
 		expect(paymentQrCaption("en")).toBe("Scan to pay");
 		expect(paymentQrCaption("ms")).toBe("Imbas untuk bayar");
+		expect(paymentQrCaption("en", "DuitNow")).toBe("DuitNow — Scan to pay");
 	});
 });
 

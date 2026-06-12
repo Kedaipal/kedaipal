@@ -10,26 +10,56 @@ import { linkOrderToCustomer, refreshWaProfileName } from "./customers";
 import { getAdapter } from "./lib/channels/registry";
 import type { ChannelAdapter } from "./lib/channels/types";
 import { isMockupGateClosed } from "./lib/order";
+import {
+	type LegacyPaymentInstructions,
+	type PaymentMethod,
+	resolvePaymentMethods,
+} from "./lib/payment";
 import { assertValidWaPhone } from "./lib/slug";
 import {
 	paymentQrCaption,
 	pickLocale,
 	renderMessage,
-	renderPaymentInstructions,
+	renderPaymentMethods,
 	renderPickupBlock,
 	renderSystemMessage,
 	SHORT_ID_REGEX,
 	type DeliveryMethod,
 	type Locale,
 	type MessageTemplates,
-	type PaymentInstructions,
 	type PickupSnapshot,
 } from "./lib/whatsappCopy";
 
+// A payment method with its QR storage id resolved to a viewable URL (qr only).
+type ResolvedPaymentMethod = PaymentMethod & { qrImageUrl?: string };
+
 type ResolvedPayment = {
-	instructions: PaymentInstructions | undefined;
-	qrImageUrl: string | undefined;
+	methods: ResolvedPaymentMethod[];
 };
+
+/**
+ * Resolve a retailer's payment methods (legacy-aware) and turn each `qr`
+ * method's storage id into a viewable URL for the confirm/payment messages.
+ */
+async function resolvePaymentForMessage(
+	ctx: { storage: { getUrl: (id: string) => Promise<string | null> } },
+	retailer: {
+		paymentMethods?: PaymentMethod[];
+		paymentInstructions?: LegacyPaymentInstructions;
+	},
+): Promise<ResolvedPayment> {
+	const methods = resolvePaymentMethods(retailer);
+	const resolved: ResolvedPaymentMethod[] = [];
+	for (const m of methods) {
+		let qrImageUrl: string | undefined;
+		if (m.type === "qr" && m.qrImageStorageId) {
+			const url = await ctx.storage.getUrl(m.qrImageStorageId);
+			qrImageUrl = url ?? undefined;
+		}
+		resolved.push({ ...m, qrImageUrl });
+	}
+	return { methods: resolved };
+}
 
 const statusValidator = v.union(
 	v.literal("pending"),
@@ -191,14 +221,6 @@ export const getRetailerLocaleForOrder = internalQuery({
 		if (!order) return null;
 		const retailer = await ctx.db.get(order.retailerId);
 		if (!retailer) return null;
-		const instructions = retailer.paymentInstructions as
-			| PaymentInstructions
-			| undefined;
-		let qrImageUrl: string | undefined;
-		if (instructions?.qrImageStorageId) {
-			const url = await ctx.storage.getUrl(instructions.qrImageStorageId);
-			qrImageUrl = url ?? undefined;
-		}
 		return {
 			locale: (retailer.locale as Locale | undefined) ?? "en",
 			storeName: retailer.storeName,
@@ -208,7 +230,7 @@ export const getRetailerLocaleForOrder = internalQuery({
 				| undefined,
 			deliveryMethod: (order.deliveryMethod as DeliveryMethod | undefined) ?? "delivery",
 			pickupSnapshot: order.pickupSnapshot,
-			payment: { instructions, qrImageUrl },
+			payment: await resolvePaymentForMessage(ctx, retailer),
 			mockupPending: isMockupGateClosed(order),
 		};
 	},
@@ -242,7 +264,7 @@ async function sendPaymentMessage(
 		shortId,
 		storeName,
 	});
-	const paymentBlock = renderPaymentInstructions(locale, payment.instructions);
+	const paymentBlock = renderPaymentMethods(locale, payment.methods);
 	const pickupBlock = renderPickupBlock(locale, pickupSnapshot);
 	// Layout: intro → [pickup] → blank line → transfer reference → [payment].
 	// Pickup first so the buyer sees the WHERE before the WHEN/HOW of paying.
@@ -269,14 +291,16 @@ async function sendPaymentMessage(
 			console.error("WA payment send failed", textErr);
 		}
 	}
-	// QR image, if configured, follows as a separate image so the buyer can
+	// Each configured QR method follows as its own image (captioned with the
+	// method label, so a buyer with several QRs knows which is which) so they can
 	// long-press to save it. Failures are isolated from the message above.
-	if (payment.qrImageUrl) {
+	for (const m of payment.methods) {
+		if (m.type !== "qr" || !m.qrImageUrl) continue;
 		try {
 			await wa.send(toPhone, {
 				kind: "image",
-				imageUrl: payment.qrImageUrl,
-				caption: paymentQrCaption(locale),
+				imageUrl: m.qrImageUrl,
+				caption: paymentQrCaption(locale, m.label),
 			});
 		} catch (err) {
 			console.error("WA payment QR send failed", err);
@@ -396,7 +420,7 @@ export const handleInbound = internalAction({
 				storeName,
 				trackingUrl,
 				pickupSnapshot: meta?.pickupSnapshot,
-				payment: meta?.payment ?? { instructions: undefined, qrImageUrl: undefined },
+				payment: meta?.payment ?? { methods: [] },
 			});
 		}
 
@@ -639,21 +663,13 @@ export const getPaymentPromptMeta = internalQuery({
 		if (!order) return null;
 		const retailer = await ctx.db.get(order.retailerId);
 		if (!retailer) return null;
-		const instructions = retailer.paymentInstructions as
-			| PaymentInstructions
-			| undefined;
-		let qrImageUrl: string | undefined;
-		if (instructions?.qrImageStorageId) {
-			const url = await ctx.storage.getUrl(instructions.qrImageStorageId);
-			qrImageUrl = url ?? undefined;
-		}
 		return {
 			shortId: order.shortId,
 			customerWaPhone: order.customer.waPhone,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
 			storeName: retailer.storeName,
 			pickupSnapshot: order.pickupSnapshot,
-			payment: { instructions, qrImageUrl },
+			payment: await resolvePaymentForMessage(ctx, retailer),
 		};
 	},
 });
