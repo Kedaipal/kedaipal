@@ -332,13 +332,17 @@ export function ProductForm({
 											{handle}
 										</span>
 									) : null}
+									{/* 44px tap target (mobile rule) with a lighter visible
+									    chip, so two corner controls don't crowd the cell. */}
 									<button
 										type="button"
 										onClick={() => removeImage(img.id)}
-										className="absolute right-1 top-1 flex size-7 items-center justify-center rounded-full bg-background/90 text-sm shadow"
+										className="absolute right-0 top-0 flex size-11 items-center justify-center"
 										aria-label="Remove image"
 									>
-										×
+										<span className="flex size-8 items-center justify-center rounded-full bg-background/90 text-lg leading-none shadow">
+											×
+										</span>
 									</button>
 								</div>
 							)}
