@@ -13,6 +13,7 @@ import {
 } from "@dnd-kit/core";
 import {
 	arrayMove,
+	rectSortingStrategy,
 	SortableContext,
 	sortableKeyboardCoordinates,
 	useSortable,
@@ -103,12 +104,22 @@ export function SortableList<T>({
 	onReorder,
 	renderItem,
 	className = "flex flex-col gap-2",
+	strategy = "list",
 }: {
 	items: ReadonlyArray<T>;
 	getId: (item: T) => string;
 	onReorder: (orderedIds: string[]) => void;
-	renderItem: (item: T, handle: ReactNode, state: SortableItemState) => ReactNode;
+	renderItem: (
+		item: T,
+		handle: ReactNode,
+		state: SortableItemState,
+	) => ReactNode;
 	className?: string;
+	/**
+	 * `"list"` — vertical single column (default). `"grid"` — a responsive grid
+	 * (rows reflow in 2D); the caller supplies grid classes via `className`.
+	 */
+	strategy?: "list" | "grid";
 }) {
 	const sensors = useSortableSensors();
 	const [activeId, setActiveId] = useState<string | null>(null);
@@ -145,7 +156,14 @@ export function SortableList<T>({
 			onDragCancel={() => setActiveId(null)}
 			onDragEnd={handleDragEnd}
 		>
-			<SortableContext items={ids} strategy={verticalListSortingStrategy}>
+			<SortableContext
+				items={ids}
+				strategy={
+					strategy === "grid"
+						? rectSortingStrategy
+						: verticalListSortingStrategy
+				}
+			>
 				<ul className={className}>
 					{items.map((item) => (
 						<SortableRow
@@ -180,7 +198,11 @@ function SortableRow<T>({
 	id: string;
 	item: T;
 	isSorting: boolean;
-	renderItem: (item: T, handle: ReactNode, state: SortableItemState) => ReactNode;
+	renderItem: (
+		item: T,
+		handle: ReactNode,
+		state: SortableItemState,
+	) => ReactNode;
 }) {
 	const {
 		attributes,

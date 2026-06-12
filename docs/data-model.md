@@ -140,7 +140,7 @@ Catalog items, scoped to a retailer. **Soft-deleted** via `active: boolean` — 
 | `options` | object[]? | 0–2 **option axes** `{name, values[]}`, ordered (drives picker order). Empty/undefined = no axes. Capped at 2 axes / 50 variants. |
 | `imageStorageIds` | string[] | Product-level hero gallery (up to 5). |
 | `active` | boolean | Soft-delete flag. |
-| `sortOrder` | number | Custom storefront ranking. |
+| `sortOrder` | number | Custom storefront ranking. **Storefront** `list` (active-only) orders ascending `sortOrder`, then `createdAt`. **Dashboard** `listAll` orders **active-first, then `sortOrder`, then `createdAt`** — so archived products sink to the end (archiving moves a product down with no renumber). `create` sets `sortOrder: Date.now()` so new products append. Inline drag-and-drop in the dashboard "All" view reorders the **active** products and calls `products.reorder({ retailerId, orderedIds })` (full set: reordered active + archived kept last), which assigns `sortOrder = index`. |
 | `blockWhenOutOfStock`, `requiresProof` | **DEPRECATED** | Moved to `productVariants` (now **per-variant**). Reads fall back to these product-level values when a variant's own flag is unset (`variant.X ?? product.X`), so they're kept optional until the narrow step. **Set the variant flags, not these.** |
 | `price`, `stock`, `sku` | **DEPRECATED** | Moved to `productVariants`. Kept optional during the flat→variant migration (widen-migrate-narrow); dropped in the narrow step. **Do not read.** |
 

@@ -285,6 +285,21 @@ function normalizeOptionsOrThrow(
 // Queries
 // ---------------------------------------------------------------------------
 
+// Render order: ascending `sortOrder`, with `createdAt` as a stable tie-break
+// (reordered products sit first; not-yet-ordered ones fall back to creation
+// order — new products get `sortOrder: Date.now()` in create(), so they append).
+function bySortOrder(a: Doc<"products">, b: Doc<"products">): number {
+	return a.sortOrder - b.sortOrder || a.createdAt - b.createdAt;
+}
+
+// Dashboard "All" order: active products first (in their sortOrder), archived
+// sunk to the end. Keeps the storefront-relevant products clustered at the top
+// for easy reordering, and archiving a product naturally moves it down without
+// any renumbering.
+function byActiveThenSort(a: Doc<"products">, b: Doc<"products">): number {
+	return Number(b.active) - Number(a.active) || bySortOrder(a, b);
+}
+
 export const list = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }) => {
@@ -294,6 +309,7 @@ export const list = query({
 				q.eq("retailerId", retailerId).eq("active", true),
 			)
 			.collect();
+		rows.sort(bySortOrder);
 		return Promise.all(
 			rows.map((row) => productWithVariants(ctx, row, { activeOnly: true })),
 		);
@@ -308,6 +324,7 @@ export const listAll = query({
 			.query("products")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 			.collect();
+		rows.sort(byActiveThenSort);
 		return Promise.all(
 			rows.map((row) => productWithVariants(ctx, row, { activeOnly: false })),
 		);
@@ -1013,18 +1030,43 @@ export const generateUploadUrl = mutation({
 	},
 });
 
+/**
+ * Bulk reorder: assign `sortOrder = index` to the retailer's products in the
+ * given order. `orderedIds` must be exactly the retailer's full product set
+ * (active + archived) — the dashboard reorder list shows them all, and global
+ * sortOrder keeps the storefront (active-only) order unambiguous. Mirrors
+ * pickupLocations.reorder. Concurrent reorders are last-write-wins.
+ */
 export const reorder = mutation({
 	args: {
-		productId: v.id("products"),
-		sortOrder: v.number(),
+		retailerId: v.id("retailers"),
+		orderedIds: v.array(v.id("products")),
 	},
-	handler: async (ctx, { productId, sortOrder }): Promise<void> => {
+	handler: async (ctx, { retailerId, orderedIds }): Promise<void> => {
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
-		await requireProductOwnership(ctx, productId);
-		await ctx.db.patch(productId, {
-			sortOrder,
-			updatedAt: Date.now(),
-		});
+		await requireRetailerOwnership(ctx, retailerId);
+
+		const rows = await ctx.db
+			.query("products")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.collect();
+		if (orderedIds.length !== rows.length) {
+			throw new ConvexError(
+				"Order list must contain every product exactly once",
+			);
+		}
+		const validIds = new Set(rows.map((r) => r._id));
+		const seen = new Set<string>();
+		for (const id of orderedIds) {
+			if (!validIds.has(id)) throw new ConvexError("Product not found");
+			if (seen.has(id)) throw new ConvexError("Duplicate id in order list");
+			seen.add(id);
+		}
+
+		const now = Date.now();
+		for (let i = 0; i < orderedIds.length; i++) {
+			await ctx.db.patch(orderedIds[i], { sortOrder: i, updatedAt: now });
+		}
 	},
 });
