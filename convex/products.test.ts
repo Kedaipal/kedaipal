@@ -981,4 +981,46 @@ describe("products", () => {
 			),
 		).toEqual(["C", "A"]);
 	});
+
+	test("reorder only patches products whose position changed", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const a = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "A", sku: "A" }),
+		);
+		const b = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "B", sku: "B" }),
+		);
+		const c = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "C", sku: "C" }),
+		);
+
+		// Lock in positions 0, 1, 2.
+		await asA.mutation(api.products.reorder, {
+			retailerId: retailer._id,
+			orderedIds: [a, b, c],
+		});
+		const updatedAtOf = (id: Id<"products">) =>
+			t.run(async (ctx) => (await ctx.db.get(id))?.updatedAt);
+		const cBefore = await updatedAtOf(c);
+
+		// Swap A and B; C stays at index 2 → must NOT be re-patched.
+		await asA.mutation(api.products.reorder, {
+			retailerId: retailer._id,
+			orderedIds: [b, a, c],
+		});
+
+		// C's position didn't change → not re-patched (updatedAt untouched), even
+		// though the order DID change (A and B swapped) — proving selective writes.
+		expect(await updatedAtOf(c)).toBe(cBefore);
+		expect(
+			(await asA.query(api.products.listAll, { retailerId: retailer._id })).map(
+				(p) => p.name,
+			),
+		).toEqual(["B", "A", "C"]);
+	});
 });

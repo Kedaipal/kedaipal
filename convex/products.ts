@@ -1056,17 +1056,23 @@ export const reorder = mutation({
 				"Order list must contain every product exactly once",
 			);
 		}
-		const validIds = new Set(rows.map((r) => r._id));
+		const byId = new Map(rows.map((r) => [r._id, r]));
 		const seen = new Set<string>();
 		for (const id of orderedIds) {
-			if (!validIds.has(id)) throw new ConvexError("Product not found");
+			if (!byId.has(id)) throw new ConvexError("Product not found");
 			if (seen.has(id)) throw new ConvexError("Duplicate id in order list");
 			seen.add(id);
 		}
 
+		// Patch ONLY the products whose position actually changed — a drag usually
+		// moves a few. Skipping the rest avoids needless `updatedAt` churn and
+		// reduces OCC contention with a concurrent edit on an unmoved product.
 		const now = Date.now();
 		for (let i = 0; i < orderedIds.length; i++) {
-			await ctx.db.patch(orderedIds[i], { sortOrder: i, updatedAt: now });
+			const row = byId.get(orderedIds[i]);
+			if (row && row.sortOrder !== i) {
+				await ctx.db.patch(orderedIds[i], { sortOrder: i, updatedAt: now });
+			}
 		}
 	},
 });
