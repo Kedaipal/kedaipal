@@ -197,11 +197,15 @@ Built exactly to the spec above, with these decisions/deviations worth recording
   order-detail page) now returns `{ ...order, statusLabels, retailerLocale }` —
   one extra `db.get(retailerId)` on that path. `deliveryMethod` was already on the
   order. Labels resolve live (retroactive; no per-order snapshot).
-- **Settings UI.** New "Order status labels" card in the **WhatsApp** settings tab,
-  directly under the message-templates card, with copy that flags it as the short
-  pill label (not the full WhatsApp message). Two-column EN/MS, six rows, 24-char
-  `maxLength`, placeholders = the resolved default for the retailer's primary
-  fulfilment mode (`offerSelfCollect ? self_collect : delivery`).
+- **Settings UI.** Dedicated **"Order status"** settings tab (grouped with Pickup
+  as the fulfilment cluster — these labels are about the order process, not
+  messaging; it's also where Phase 2's custom stages will live). Intro banner +
+  a two-column EN/MS form, six rows, 24-char `maxLength`, placeholders = the
+  resolved default for the retailer's primary fulfilment mode
+  (`offerSelfCollect ? self_collect : delivery`). The settings route's tab
+  allowlist is now derived from the tab list (`SETTINGS_TAB_IDS`) so it can't
+  drift. _(Originally drafted under the WhatsApp tab next to message-templates;
+  moved out — status labels are fulfilment-flow config, unrelated to WhatsApp.)_
 - **Out of scope held:** WhatsApp copy still uses `messageTemplates` (DECISION 4a);
   email untouched.
 

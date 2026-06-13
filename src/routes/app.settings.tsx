@@ -63,15 +63,24 @@ type SettingsTab =
 	| "whatsapp"
 	| "payments"
 	| "pickup"
+	| "order-status"
 	| "integrations";
 
 const SETTINGS_TABS: ReadonlyArray<{ id: SettingsTab; label: string }> = [
 	{ id: "store", label: "Store" },
 	{ id: "whatsapp", label: "WhatsApp" },
 	{ id: "payments", label: "Payments" },
+	// Grouped with Pickup as the fulfilment cluster — these stage labels are
+	// about the order process, not messaging. Phase 2 (custom ordered stages)
+	// will extend this tab.
 	{ id: "pickup", label: "Pickup" },
+	{ id: "order-status", label: "Order status" },
 	{ id: "integrations", label: "Integrations" },
 ];
+
+const SETTINGS_TAB_IDS: ReadonlyArray<SettingsTab> = SETTINGS_TABS.map(
+	(t) => t.id,
+);
 
 function Card({ children }: { children: ReactNode }) {
 	return (
@@ -122,9 +131,7 @@ function InfoBanner({
 
 export const Route = createFileRoute("/app/settings")({
 	validateSearch: (search: Record<string, unknown>) => ({
-		tab: (["store", "whatsapp", "payments", "pickup", "integrations"].includes(
-			search.tab as string,
-		)
+		tab: (SETTINGS_TAB_IDS.includes(search.tab as SettingsTab)
 			? search.tab
 			: "store") as SettingsTab,
 	}),
@@ -341,13 +348,6 @@ function SettingsRoute() {
 							}
 						/>
 					</Card>
-					<Card>
-						<StatusLabelsForm
-							current={retailer.statusLabels}
-							offerSelfCollect={retailer.offerSelfCollect ?? false}
-							onSave={(statusLabels) => updateSettings({ statusLabels })}
-						/>
-					</Card>
 				</div>
 			) : null}
 
@@ -367,6 +367,33 @@ function SettingsRoute() {
 					retailerId={retailer._id}
 					offerSelfCollect={retailer.offerSelfCollect ?? false}
 				/>
+			) : null}
+
+			{activeTab === "order-status" ? (
+				<div className="flex flex-col gap-6 pt-2">
+					<InfoBanner title="Name your order stages">
+						<p>
+							These are the short labels buyers see on their order-tracking
+							timeline, and that you see on your dashboard (status badges, tabs,
+							and the “Mark as …” buttons). Rename them to fit how you actually
+							work — a tailor might call “Packed” something like “Sewing”, or a
+							pickup-only seller might prefer “Ready to collect” over “Shipped”.
+						</p>
+						<p>
+							This is separate from your WhatsApp message wording (under the
+							WhatsApp tab) — it only changes the short stage label. Leave a
+							field blank to keep the default.
+						</p>
+					</InfoBanner>
+
+					<Card>
+						<StatusLabelsForm
+							current={retailer.statusLabels}
+							offerSelfCollect={retailer.offerSelfCollect ?? false}
+							onSave={(statusLabels) => updateSettings({ statusLabels })}
+						/>
+					</Card>
+				</div>
 			) : null}
 
 			{activeTab === "integrations" ? (
@@ -1158,15 +1185,12 @@ function StatusLabelsForm({
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
 			<div className="flex flex-col gap-1">
 				<h3 className="text-sm font-semibold text-foreground">
-					Order status labels
+					Stage labels
 				</h3>
 				<p className="text-xs text-muted-foreground leading-relaxed">
-					The short stage names buyers see on their order-tracking timeline and
-					you see on your dashboard (badges, tabs, buttons).{" "}
-					<span className="font-medium text-foreground">
-						This is not the full WhatsApp message above
-					</span>{" "}
-					— just the pill label. Leave blank to use the default.
+					Fill the English and Bahasa Malaysia label for any stage you want to
+					rename. Buyers see the label in your store's language; your dashboard
+					always shows the English one. Placeholders show the current default.
 				</p>
 			</div>
 
