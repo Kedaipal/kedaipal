@@ -29,6 +29,12 @@ import { ShopeeIcon } from "../components/icons/shopee-icon";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
 import { formatPrice } from "../lib/format";
+import {
+	type DeliveryMethod,
+	type OrderStatus,
+	resolveStatusLabel,
+	type StatusLabels,
+} from "../lib/orderStatus";
 
 export const Route = createFileRoute("/app/")({
 	component: DashboardHome,
@@ -152,6 +158,21 @@ function DashboardHome() {
 	const activeProductCount = products?.filter((p) => p.active).length ?? 0;
 	const hasProduct = productCount > 0;
 	const hasPayment = (retailer.paymentMethods?.length ?? 0) > 0;
+
+	// Hero stat tiles share the seller's status vocabulary. Dashboard chrome is
+	// EN-only, so resolve in EN; pending/confirmed don't vary by fulfilment mode
+	// but we pass the retailer's primary method for consistency with the rest of
+	// the dashboard.
+	const statusLabels = retailer.statusLabels as StatusLabels | undefined;
+	const retailerMethod: DeliveryMethod = retailer.offerSelfCollect
+		? "self_collect"
+		: "delivery";
+	const heroLabel = (status: OrderStatus) =>
+		resolveStatusLabel(status, {
+			labels: statusLabels,
+			deliveryMethod: retailerMethod,
+			locale: "en",
+		});
 
 	// The Pickup step is shown to any retailer with self-collect on (default
 	// for new retailers, see createRetailer). Two paths dismiss it:
@@ -409,7 +430,7 @@ function DashboardHome() {
 					<StatTile
 						to="/app/orders"
 						icon={Clock}
-						label="Pending"
+						label={heroLabel("pending")}
 						value={pendingCount}
 						accent={pendingCount > 0}
 						sub="Awaiting confirm"
@@ -418,7 +439,7 @@ function DashboardHome() {
 					<StatTile
 						to="/app/orders"
 						icon={CheckCircle2}
-						label="Confirmed"
+						label={heroLabel("confirmed")}
 						value={confirmedCount}
 						sub="In progress"
 						loading={countsLoading}
@@ -485,7 +506,18 @@ function DashboardHome() {
 												<p className="text-sm font-semibold tabular-nums">
 													{formatPrice(order.total, order.currency)}
 												</p>
-												<StatusBadge status={order.status} />
+												<StatusBadge
+													status={order.status}
+													label={resolveStatusLabel(
+														order.status as OrderStatus,
+														{
+															labels: statusLabels,
+															deliveryMethod: (order.deliveryMethod ??
+																"delivery") as DeliveryMethod,
+															locale: "en",
+														},
+													)}
+												/>
 											</div>
 										</Link>
 									</li>
@@ -759,7 +791,7 @@ function SalesChannelTeaser({
 	);
 }
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({ status, label }: { status: string; label?: string }) {
 	const styles: Record<string, string> = {
 		pending: "bg-amber-500/15 text-amber-700 dark:text-amber-400",
 		confirmed: "bg-blue-500/15 text-blue-700 dark:text-blue-400",
@@ -773,7 +805,7 @@ function StatusBadge({ status }: { status: string }) {
 		<span
 			className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${cls}`}
 		>
-			{status}
+			{label ?? status}
 		</span>
 	);
 }

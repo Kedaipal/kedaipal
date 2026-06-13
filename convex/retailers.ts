@@ -14,6 +14,23 @@ const messageTemplatesValidator = v.object({
 	ms: v.optional(localeOverridesValidator),
 });
 
+// Per-retailer SHORT status labels (tracking timeline / dashboard). Six optional
+// strings per locale, mirroring `statusLabels` on the schema. Sanitized +
+// length-capped in `sanitizeStatusLabels`.
+const statusLabelOverridesValidator = v.object({
+	pending: v.optional(v.string()),
+	confirmed: v.optional(v.string()),
+	packed: v.optional(v.string()),
+	shipped: v.optional(v.string()),
+	delivered: v.optional(v.string()),
+	cancelled: v.optional(v.string()),
+});
+
+const statusLabelsValidator = v.object({
+	en: v.optional(statusLabelOverridesValidator),
+	ms: v.optional(statusLabelOverridesValidator),
+});
+
 const paymentInstructionsValidator = v.object({
 	bankName: v.optional(v.string()),
 	bankAccountName: v.optional(v.string()),
@@ -96,6 +113,12 @@ import {
 	resolvePaymentMethods,
 	sanitizePaymentMethods,
 } from "./lib/payment";
+import {
+	ORDER_STATUS_KEYS,
+	STATUS_LABEL_MAX_LENGTH,
+	type StatusLabelMap,
+	type StatusLabels,
+} from "./lib/orderStatus";
 
 /** Trim and bound a best-effort client IP before persisting. */
 function sanitizeAcceptanceIp(ip: string | undefined): string | undefined {
@@ -165,6 +188,38 @@ function sanitizeMessageTemplates(
 	return Object.keys(out).length > 0 ? out : undefined;
 }
 
+// Trim each status label, treat empty/whitespace as unset (so a seller can't
+// blank a stage to ""), and enforce the per-label char cap server-side — not
+// just in CSS — so an over-long / emoji-stuffed label can't break the pills.
+function sanitizeStatusLabelOverrides(
+	input: StatusLabelMap | undefined,
+): StatusLabelMap | undefined {
+	if (!input) return undefined;
+	const out: StatusLabelMap = {};
+	for (const key of ORDER_STATUS_KEYS) {
+		const raw = input[key];
+		if (raw === undefined) continue;
+		const trimmed = raw.trim();
+		if (trimmed.length === 0) continue; // empty → reset to default
+		if (trimmed.length > STATUS_LABEL_MAX_LENGTH) {
+			throw new ConvexError(
+				`Status label "${key}" exceeds ${STATUS_LABEL_MAX_LENGTH} characters`,
+			);
+		}
+		out[key] = trimmed;
+	}
+	return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function sanitizeStatusLabels(input: StatusLabels): StatusLabels | undefined {
+	const en = sanitizeStatusLabelOverrides(input.en);
+	const ms = sanitizeStatusLabelOverrides(input.ms);
+	const out: StatusLabels = {};
+	if (en) out.en = en;
+	if (ms) out.ms = ms;
+	return Object.keys(out).length > 0 ? out : undefined;
+}
+
 type RetailerPublic = {
 	_id: Id<"retailers">;
 	slug: string;
@@ -177,6 +232,9 @@ type RetailerPublic = {
 	currency: SupportedCurrency;
 	locale: Locale;
 	messageTemplates?: MessageTemplatesShape;
+	// Per-retailer SHORT status labels (tracking timeline / dashboard). Omitted
+	// keys fall back to defaults at render time via convex/lib/orderStatus.ts.
+	statusLabels?: StatusLabels;
 	// Resolved payment methods (legacy-aware) with each QR storage id turned into
 	// a viewable URL — what the settings UI renders + edits. Omitted from the
 	// public storefront payload (only `getMyRetailer` populates it).
@@ -235,6 +293,7 @@ async function loadRetailerForUser(
 		currency: (row.currency as SupportedCurrency) ?? DEFAULT_CURRENCY,
 		locale: row.locale ?? DEFAULT_LOCALE,
 		messageTemplates: row.messageTemplates as MessageTemplatesShape | undefined,
+		statusLabels: row.statusLabels as StatusLabels | undefined,
 		paymentMethods,
 		offerSelfCollect: row.offerSelfCollect,
 		pickupSetupSeen: row.pickupSetupSeen,
@@ -494,6 +553,7 @@ export const updateSettings = mutation({
 		currency: v.optional(v.string()),
 		locale: v.optional(v.union(v.literal("en"), v.literal("ms"))),
 		messageTemplates: v.optional(messageTemplatesValidator),
+		statusLabels: v.optional(statusLabelsValidator),
 		paymentInstructions: v.optional(paymentInstructionsValidator),
 		// Multi-method payment config. When provided, supersedes (and clears) the
 		// legacy single `paymentInstructions` object on this retailer.
@@ -518,6 +578,7 @@ export const updateSettings = mutation({
 			currency: SupportedCurrency;
 			locale: Locale;
 			messageTemplates: MessageTemplatesShape | undefined;
+			statusLabels: StatusLabels | undefined;
 			paymentInstructions: PaymentInstructionsShape | undefined;
 			paymentMethods: PaymentMethod[] | undefined;
 			offerSelfCollect: boolean;
@@ -549,6 +610,9 @@ export const updateSettings = mutation({
 		}
 		if (args.messageTemplates !== undefined) {
 			patch.messageTemplates = sanitizeMessageTemplates(args.messageTemplates);
+		}
+		if (args.statusLabels !== undefined) {
+			patch.statusLabels = sanitizeStatusLabels(args.statusLabels);
 		}
 		if (args.paymentInstructions !== undefined) {
 			patch.paymentInstructions = sanitizePaymentInstructions(

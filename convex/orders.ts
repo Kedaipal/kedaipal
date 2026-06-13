@@ -14,6 +14,7 @@ import {
 	generateShortId,
 	isMockupGateClosed,
 } from "./lib/order";
+import type { Locale, StatusLabels } from "./lib/orderStatus";
 import { type PaymentMethod, resolvePaymentMethods } from "./lib/payment";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidWaPhone } from "./lib/slug";
@@ -373,14 +374,17 @@ export const create = mutation({
  */
 export const countActionable = query({
 	args: { retailerId: v.id("retailers") },
-	handler: async (ctx, { retailerId }): Promise<{ pending: number; confirmed: number }> => {
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{ pending: number; confirmed: number; mockupPending: number }> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error("Not authenticated");
 		const retailer = await ctx.db.get(retailerId);
 		if (!retailer) throw new Error("Retailer not found");
 		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
 
-		const [pendingRows, confirmedRows] = await Promise.all([
+		const [pendingRows, confirmedRows, mockupRows] = await Promise.all([
 			ctx.db
 				.query("orders")
 				.withIndex("by_retailer_status", (q) =>
@@ -393,19 +397,58 @@ export const countActionable = query({
 					q.eq("retailerId", retailerId).eq("status", "confirmed"),
 				)
 				.collect(),
+			// Seller-actionable mockup states ("changes_requested" + "pending") are
+			// adjacent on the by_retailer_mockup index, so one contiguous range
+			// catches exactly them — "approved"/"submitted"/undefined fall outside.
+			// Mirrors the (..pending) range used by listByRetailer's mockup filter.
+			ctx.db
+				.query("orders")
+				.withIndex("by_retailer_mockup", (q) =>
+					q
+						.eq("retailerId", retailerId)
+						.gte("mockupStatus", "changes_requested")
+						.lte("mockupStatus", "pending"),
+				)
+				.collect(),
 		]);
 
-		return { pending: pendingRows.length, confirmed: confirmedRows.length };
+		return {
+			pending: pendingRows.length,
+			confirmed: confirmedRows.length,
+			mockupPending: mockupRows.length,
+		};
 	},
 });
 
+// The order plus the slice of the owning retailer needed to resolve buyer-facing
+// status labels (tracking timeline + the seller's order-detail view). The order
+// already carries `deliveryMethod`; we fold in the retailer's `statusLabels` +
+// `locale` so the client resolver (src/lib/orderStatus.ts) has everything to
+// render relabelled stages. See docs/order-status-customization.md.
+export type OrderWithStatusLabels = Doc<"orders"> & {
+	statusLabels?: StatusLabels;
+	retailerLocale: Locale;
+};
+
 export const get = query({
 	args: { shortId: v.string() },
-	handler: async (ctx, { shortId }): Promise<Doc<"orders"> | null> => {
-		return ctx.db
+	handler: async (
+		ctx,
+		{ shortId },
+	): Promise<OrderWithStatusLabels | null> => {
+		const order = await ctx.db
 			.query("orders")
 			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
 			.first();
+		if (!order) return null;
+		// One extra doc read on this hot public path so labels resolve from live
+		// retailer config (relabelling is retroactive — no per-order snapshot).
+		const retailer = await ctx.db.get(order.retailerId);
+		return {
+			...order,
+			statusLabels: retailer?.statusLabels as StatusLabels | undefined,
+			retailerLocale: (retailer?.locale ?? "en") as Locale,
+		};
 	},
 });
 
@@ -472,14 +515,38 @@ export const listByRetailer = query({
 	args: {
 		retailerId: v.id("retailers"),
 		status: v.optional(statusValidator),
+		// When true, return only orders awaiting the seller's mockup action
+		// (mockupStatus "pending" or "changes_requested"), ignoring `status`.
+		// Drives the "Mockup pending" filter pill on the orders page.
+		mockupPending: v.optional(v.boolean()),
 		paginationOpts: paginationOptsValidator,
 	},
-	handler: async (ctx, { retailerId, status, paginationOpts }) => {
+	handler: async (
+		ctx,
+		{ retailerId, status, mockupPending, paginationOpts },
+	) => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error("Not authenticated");
 		const retailer = await ctx.db.get(retailerId);
 		if (!retailer) throw new Error("Retailer not found");
 		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+
+		if (mockupPending) {
+			// "changes_requested" and "pending" are adjacent on the index (nothing
+			// sorts between them), so a single contiguous range is exactly the
+			// seller-actionable set — fully indexed + paginatable. Ordered desc by
+			// index key: pending group (newest first), then changes_requested.
+			return ctx.db
+				.query("orders")
+				.withIndex("by_retailer_mockup", (q) =>
+					q
+						.eq("retailerId", retailerId)
+						.gte("mockupStatus", "changes_requested")
+						.lte("mockupStatus", "pending"),
+				)
+				.order("desc")
+				.paginate(paginationOpts);
+		}
 
 		if (status) {
 			return ctx.db

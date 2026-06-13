@@ -50,6 +50,39 @@ export default defineSchema({
 				),
 			}),
 		),
+		// Per-retailer overrides for the SHORT status labels shown on the buyer
+		// tracking-page timeline/pills + the seller dashboard (badges, tabs,
+		// transition buttons). Distinct from `messageTemplates` above, which is
+		// the full WhatsApp message body. Any key omitted (or blank after trim)
+		// falls back to the delivery-method preset, then the base default —
+		// resolved at render time in convex/lib/orderStatus.ts. Phase 1 of
+		// per-retailer status customization; presentation only, the canonical
+		// `orders.status` union is untouched. See
+		// docs/order-status-customization.md.
+		statusLabels: v.optional(
+			v.object({
+				en: v.optional(
+					v.object({
+						pending: v.optional(v.string()),
+						confirmed: v.optional(v.string()),
+						packed: v.optional(v.string()),
+						shipped: v.optional(v.string()),
+						delivered: v.optional(v.string()),
+						cancelled: v.optional(v.string()),
+					}),
+				),
+				ms: v.optional(
+					v.object({
+						pending: v.optional(v.string()),
+						confirmed: v.optional(v.string()),
+						packed: v.optional(v.string()),
+						shipped: v.optional(v.string()),
+						delivered: v.optional(v.string()),
+						cancelled: v.optional(v.string()),
+					}),
+				),
+			}),
+		),
 		// DEPRECATED — superseded by `paymentMethods` (multi-method). Kept readable
 		// during the widen→backfill→narrow migration so un-migrated rows still
 		// surface payment details; `resolvePaymentMethods` (convex/lib/payment.ts)

@@ -2296,3 +2296,139 @@ describe("orders — custom quote + decline", () => {
 		).rejects.toThrow(/unrealistically large/i);
 	});
 });
+
+describe("orders — mockup-pending filter", () => {
+	const asA = (t: ReturnType<typeof setup>) =>
+		t.withIdentity({ subject: USER_A });
+
+	// Create one requiresProof order and drive it to a target mockup state.
+	// Returns { orderId, shortId }.
+	async function gatedOrder(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+		target: "pending" | "submitted" | "changes_requested" | "approved",
+	) {
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { shortId });
+		if (!order) throw new Error("order not created");
+		if (target !== "pending") {
+			await asA(t).mutation(api.orders.submitMockup, {
+				orderId: order._id,
+				storageId: "mock-1",
+			});
+		}
+		if (target === "changes_requested") {
+			await t.mutation(api.orders.requestMockupChanges, { shortId });
+		}
+		if (target === "approved") {
+			await t.mutation(api.orders.approveMockup, { shortId });
+		}
+		return { orderId: order._id, shortId };
+	}
+
+	// Seed every mockup state (+ a non-gated order) and return the actionable set.
+	async function seedAllStates(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const proofProduct = await seedProduct(t, USER_A, retailer._id, {
+			requiresProof: true,
+			blockWhenOutOfStock: false,
+		});
+		const plainProduct = await seedProduct(t, USER_A, retailer._id, {
+			name: "Plain",
+		});
+
+		const pending = await gatedOrder(t, retailer._id, proofProduct, "pending");
+		const changes = await gatedOrder(
+			t,
+			retailer._id,
+			proofProduct,
+			"changes_requested",
+		);
+		await gatedOrder(t, retailer._id, proofProduct, "submitted");
+		await gatedOrder(t, retailer._id, proofProduct, "approved");
+		// Non-gated order (mockupStatus undefined) — must never appear.
+		await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId: plainProduct, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+
+		return { retailer, actionable: new Set([pending.shortId, changes.shortId]) };
+	}
+
+	test("listByRetailer mockupPending returns only pending + changes_requested", async () => {
+		const t = setup();
+		const { retailer, actionable } = await seedAllStates(t);
+
+		const page = await asA(t).query(api.orders.listByRetailer, {
+			retailerId: retailer._id,
+			mockupPending: true,
+			paginationOpts: { numItems: 50, cursor: null },
+		});
+
+		expect(page.page).toHaveLength(2);
+		expect(new Set(page.page.map((o) => o.shortId))).toEqual(actionable);
+		for (const o of page.page) {
+			expect(["pending", "changes_requested"]).toContain(o.mockupStatus);
+		}
+	});
+
+	test("mockupPending ignores the status arg when both are passed", async () => {
+		const t = setup();
+		const { retailer, actionable } = await seedAllStates(t);
+		// status would otherwise restrict to pending fulfilment; mockupPending wins.
+		const page = await asA(t).query(api.orders.listByRetailer, {
+			retailerId: retailer._id,
+			status: "delivered",
+			mockupPending: true,
+			paginationOpts: { numItems: 50, cursor: null },
+		});
+		expect(new Set(page.page.map((o) => o.shortId))).toEqual(actionable);
+	});
+
+	test("countActionable reports the mockup-pending count", async () => {
+		const t = setup();
+		const { retailer } = await seedAllStates(t);
+		const counts = await asA(t).query(api.orders.countActionable, {
+			retailerId: retailer._id,
+		});
+		expect(counts.mockupPending).toBe(2);
+	});
+
+	test("no mockup-pending orders → empty page + zero count", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+
+		const page = await asA(t).query(api.orders.listByRetailer, {
+			retailerId: retailer._id,
+			mockupPending: true,
+			paginationOpts: { numItems: 50, cursor: null },
+		});
+		expect(page.page).toHaveLength(0);
+
+		const counts = await asA(t).query(api.orders.countActionable, {
+			retailerId: retailer._id,
+		});
+		expect(counts.mockupPending).toBe(0);
+	});
+});

@@ -22,6 +22,14 @@ import {
 	type TemplateKey,
 } from "../../convex/lib/whatsappCopy";
 import {
+	defaultStatusLabel,
+	type DeliveryMethod,
+	ORDER_STATUS_KEYS,
+	type OrderStatus,
+	STATUS_LABEL_MAX_LENGTH,
+	type StatusLabels,
+} from "../lib/orderStatus";
+import {
 	PageHeader,
 	PageHeaderSkeleton,
 } from "../components/dashboard/page-header";
@@ -331,6 +339,13 @@ function SettingsRoute() {
 							onSave={(messageTemplates) =>
 								updateSettings({ messageTemplates })
 							}
+						/>
+					</Card>
+					<Card>
+						<StatusLabelsForm
+							current={retailer.statusLabels}
+							offerSelfCollect={retailer.offerSelfCollect ?? false}
+							onSave={(statusLabels) => updateSettings({ statusLabels })}
 						/>
 					</Card>
 				</div>
@@ -1085,6 +1100,118 @@ function MessageTemplatesForm({
 
 			<Button type="submit" className={SAVE_BTN_CLASS}>
 				Save templates
+			</Button>
+		</form>
+	);
+}
+
+// Which canonical pipeline stage each row renames. The slash variants flag the
+// two stages whose default wording differs for pickup orders, so the seller
+// knows a single label covers both fulfilment modes.
+const STATUS_ROW_LABELS: Record<OrderStatus, string> = {
+	pending: "New / Pending",
+	confirmed: "Confirmed",
+	packed: "Packed",
+	shipped: "Shipped / Ready for pickup",
+	delivered: "Delivered / Collected",
+	cancelled: "Cancelled",
+};
+
+function StatusLabelsForm({
+	current,
+	offerSelfCollect,
+	onSave,
+}: {
+	current: StatusLabels | undefined;
+	offerSelfCollect: boolean;
+	onSave: (statusLabels: StatusLabels) => Promise<unknown>;
+}) {
+	const [draft, setDraft] = useState<StatusLabels>(() => current ?? {});
+	const [saving, setSaving] = useState(false);
+
+	// Placeholders show the default the buyer would otherwise see. A retailer's
+	// orders can be either method, but we hint with their primary mode so a
+	// pickup-only seller sees "Ready for Pickup" rather than "On the Way".
+	const method: DeliveryMethod = offerSelfCollect ? "self_collect" : "delivery";
+
+	function setField(locale: Locale, key: OrderStatus, value: string) {
+		setDraft((prev) => ({
+			...prev,
+			[locale]: { ...(prev[locale] ?? {}), [key]: value },
+		}));
+	}
+
+	async function handleSubmit(e: FormEvent) {
+		e.preventDefault();
+		setSaving(true);
+		try {
+			await onSave(draft);
+			toast.success("Status labels saved.");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	return (
+		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
+			<div className="flex flex-col gap-1">
+				<h3 className="text-sm font-semibold text-foreground">
+					Order status labels
+				</h3>
+				<p className="text-xs text-muted-foreground leading-relaxed">
+					The short stage names buyers see on their order-tracking timeline and
+					you see on your dashboard (badges, tabs, buttons).{" "}
+					<span className="font-medium text-foreground">
+						This is not the full WhatsApp message above
+					</span>{" "}
+					— just the pill label. Leave blank to use the default.
+				</p>
+			</div>
+
+			{/* Column headers — align with the two inputs in each row below. */}
+			<div className="grid grid-cols-2 gap-2">
+				<span className="text-xs font-medium text-muted-foreground">
+					English
+				</span>
+				<span className="text-xs font-medium text-muted-foreground">
+					Bahasa Malaysia
+				</span>
+			</div>
+
+			<div className="flex flex-col gap-4">
+				{ORDER_STATUS_KEYS.map((status) => (
+					<div key={status} className="flex flex-col gap-1.5">
+						<span className="text-sm font-medium">
+							{STATUS_ROW_LABELS[status]}
+						</span>
+						<div className="grid grid-cols-2 gap-2">
+							<Input
+								type="text"
+								variant="field"
+								maxLength={STATUS_LABEL_MAX_LENGTH}
+								value={draft.en?.[status] ?? ""}
+								onChange={(e) => setField("en", status, e.target.value)}
+								placeholder={defaultStatusLabel(status, method, "en")}
+								aria-label={`${STATUS_ROW_LABELS[status]} label (English)`}
+							/>
+							<Input
+								type="text"
+								variant="field"
+								maxLength={STATUS_LABEL_MAX_LENGTH}
+								value={draft.ms?.[status] ?? ""}
+								onChange={(e) => setField("ms", status, e.target.value)}
+								placeholder={defaultStatusLabel(status, method, "ms")}
+								aria-label={`${STATUS_ROW_LABELS[status]} label (Bahasa Malaysia)`}
+							/>
+						</div>
+					</div>
+				))}
+			</div>
+
+			<Button type="submit" disabled={saving} className={SAVE_BTN_CLASS}>
+				{saving ? "Saving…" : "Save status labels"}
 			</Button>
 		</form>
 	);

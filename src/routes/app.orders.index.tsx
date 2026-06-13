@@ -6,6 +6,11 @@ import { api } from "../../convex/_generated/api";
 import { PageHeader } from "../components/dashboard/page-header";
 import { Skeleton } from "../components/ui/skeleton";
 import { formatPrice } from "../lib/format";
+import {
+	type DeliveryMethod,
+	resolveStatusLabel,
+	type StatusLabels,
+} from "../lib/orderStatus";
 import { cn } from "../lib/utils";
 
 export const Route = createFileRoute("/app/orders/")({
@@ -15,6 +20,12 @@ export const Route = createFileRoute("/app/orders/")({
 const STATUSES = [
 	"all",
 	"pending",
+	// Not a fulfilment status — a cross-cutting filter for orders awaiting the
+	// seller's mockup action (mockupStatus pending / changes_requested). Sits
+	// here, next to "pending", because it's an order-blocking "needs you now"
+	// state: both attention-required filters cluster at the front, ahead of the
+	// in-progress + terminal pipeline stages.
+	"mockup",
 	"confirmed",
 	"packed",
 	"shipped",
@@ -23,7 +34,7 @@ const STATUSES = [
 ] as const;
 type StatusFilter = (typeof STATUSES)[number];
 
-type OrderStatus = Exclude<StatusFilter, "all">;
+type OrderStatus = Exclude<StatusFilter, "all" | "mockup">;
 
 function relativeTime(ms: number): string {
 	const diff = Date.now() - ms;
@@ -45,7 +56,9 @@ function OrdersRoute() {
 		retailer
 			? {
 					retailerId: retailer._id,
-					status: filter === "all" ? undefined : filter,
+					status:
+						filter === "all" || filter === "mockup" ? undefined : filter,
+					mockupPending: filter === "mockup" ? true : undefined,
 					paginationOpts: { numItems: 50, cursor: null },
 				}
 			: "skip",
@@ -57,6 +70,15 @@ function OrdersRoute() {
 	);
 
 	if (!retailer) return null;
+
+	// Tab labels aren't per-order, so resolve against the retailer's primary
+	// fulfilment mode (self-collect sellers see "Ready for Pickup", etc.).
+	// Dashboard chrome is EN-only, so labels resolve in EN. Per-row badges below
+	// use each order's own deliveryMethod.
+	const labels = retailer.statusLabels as StatusLabels | undefined;
+	const retailerMethod: DeliveryMethod = retailer.offerSelfCollect
+		? "self_collect"
+		: "delivery";
 
 	return (
 		<div className="flex flex-col gap-5 lg:gap-6">
@@ -88,20 +110,32 @@ function OrdersRoute() {
 							? counts.pending
 							: s === "confirmed" && counts?.confirmed
 								? counts.confirmed
-								: null;
+								: s === "mockup" && counts?.mockupPending
+									? counts.mockupPending
+									: null;
+					const tabLabel =
+						s === "all"
+							? "All"
+							: s === "mockup"
+								? "Mockup pending"
+								: resolveStatusLabel(s, {
+										labels,
+										deliveryMethod: retailerMethod,
+										locale: "en",
+									});
 					return (
 						<button
 							key={s}
 							type="button"
 							onClick={() => setFilter(s)}
 							className={cn(
-								"flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-sm capitalize transition-colors",
+								"flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-sm transition-colors",
 								filter === s
 									? "border-foreground bg-foreground text-background"
 									: "border-border bg-background text-muted-foreground hover:border-foreground/30 hover:text-foreground",
 							)}
 						>
-							{s}
+							{tabLabel}
 							{badge !== null ? (
 								<span
 									className={cn(
@@ -110,7 +144,9 @@ function OrdersRoute() {
 											? "bg-background text-foreground"
 											: s === "pending"
 												? "bg-orange-500 text-white"
-												: "bg-blue-500 text-white",
+												: s === "mockup"
+													? "bg-amber-500 text-white"
+													: "bg-blue-500 text-white",
 									)}
 								>
 									{badge > 99 ? "99+" : badge}
@@ -149,7 +185,15 @@ function OrdersRoute() {
 										<span className="font-mono text-sm font-semibold">
 											#{o.shortId}
 										</span>
-										<StatusBadge status={o.status as OrderStatus} />
+										<StatusBadge
+											status={o.status as OrderStatus}
+											label={resolveStatusLabel(o.status as OrderStatus, {
+												labels,
+												deliveryMethod: (o.deliveryMethod ??
+													"delivery") as DeliveryMethod,
+												locale: "en",
+											})}
+										/>
 										<DeliveryMethodBadge
 											method={o.deliveryMethod ?? "delivery"}
 										/>
@@ -245,15 +289,28 @@ function OrderListSkeleton() {
 	);
 }
 
-export function StatusBadge({ status }: { status: OrderStatus }) {
+export function StatusBadge({
+	status,
+	label,
+}: {
+	status: OrderStatus;
+	/**
+	 * Resolved display text. Defaults to the raw status (capitalized) when
+	 * omitted; pass a resolved label from `resolveStatusLabel` to honour a
+	 * retailer's custom stage names. Custom labels keep their own casing, so the
+	 * `capitalize` class is only applied to the raw-status fallback.
+	 */
+	label?: string;
+}) {
 	return (
 		<span
 			className={cn(
-				"rounded-full px-2 py-0.5 text-[11px] font-semibold capitalize",
+				"rounded-full px-2 py-0.5 text-[11px] font-semibold",
+				label ? "" : "capitalize",
 				STATUS_STYLES[status],
 			)}
 		>
-			{status}
+			{label ?? status}
 		</span>
 	);
 }

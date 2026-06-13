@@ -197,7 +197,7 @@ absent. Revisit as its own feature if real demand appears.
 - **`convex/email.ts` / `emailCopy.ts`** — seller alerts: "mockup approved", "changes requested".
 - **`convex/crons.ts`** — reminder sweeps (§8): nudge the buyer while `submitted`, nudge the seller while `pending`/`changes_requested`, and unlock the waiver after the grace window.
 - **Dashboard order detail (`src/routes/app.orders.$shortId.tsx`)** — "Mockup needed" badge, upload+send control, current proof state, the post-grace **"Proceed without approval"** waiver (with warning), and the `→ packed` button disabled with reason while gated.
-- **Dashboard orders list / index** — a "Mockup pending" filter/badge so a high-volume seller sees them at a glance (the core anti-forgetting surface).
+- **Dashboard orders list / index (`src/routes/app.orders.index.tsx`)** — a per-row "Mockup pending" badge **and** a "Mockup pending" filter pill (with a count badge from `countActionable.mockupPending`) so a high-volume seller sees them at a glance (the core anti-forgetting surface). The filter is backed by `listByRetailer({ mockupPending: true })`, which scans the seller-actionable range of the `by_retailer_mockup` index (`changes_requested`–`pending`, which are adjacent so the range is exactly those two states; `submitted`/`approved`/none fall outside). When set, it overrides the fulfilment-`status` arg.
 - **Tracking page (`src/routes/track.$shortId.tsx`)** — render the mockup + **Approve / Request changes** (note box) while `submitted`; show approved/awaiting states otherwise.
 
 ## 8. Deadlock escape — reminders, then a deliberate waiver

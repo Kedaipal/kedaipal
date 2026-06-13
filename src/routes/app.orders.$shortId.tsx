@@ -37,6 +37,10 @@ import { Skeleton } from "../components/ui/skeleton";
 import { formatPhone } from "../lib/customer";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import { deriveMapsUrl } from "../lib/google-address";
+import {
+	resolveStatusLabel,
+	resolveTransitionLabel,
+} from "../lib/orderStatus";
 import { StatusBadge } from "./app.orders.index";
 
 export const Route = createFileRoute("/app/orders/$shortId")({
@@ -119,30 +123,6 @@ const NEXT_STATUS: Record<string, Transition[]> = {
 	cancelled: [],
 };
 
-const DELIVERY_TRANSITION_LABELS: Record<Transition, string> = {
-	confirmed: "Confirm Order",
-	packed: "Mark as Packed",
-	shipped: "Mark as Shipped",
-	delivered: "Mark as Delivered",
-	cancelled: "Cancel Order",
-};
-
-const SELF_COLLECT_TRANSITION_LABELS: Record<Transition, string> = {
-	confirmed: "Confirm Order",
-	packed: "Mark as Packed",
-	shipped: "Ready for Pickup",
-	delivered: "Mark as Collected",
-	cancelled: "Cancel Order",
-};
-
-function getTransitionLabels(
-	method: DeliveryMethod,
-): Record<Transition, string> {
-	return method === "self_collect"
-		? SELF_COLLECT_TRANSITION_LABELS
-		: DELIVERY_TRANSITION_LABELS;
-}
-
 type PaymentStatus = "unpaid" | "claimed" | "received";
 
 function paymentBadge(status: PaymentStatus): {
@@ -208,7 +188,14 @@ function OrderDetailRoute() {
 
 	const deliveryMethod = (order.deliveryMethod ?? "delivery") as DeliveryMethod;
 	const isSelfCollect = deliveryMethod === "self_collect";
-	const transitionLabels = getTransitionLabels(deliveryMethod);
+	// Dashboard chrome is English-only (per the i18n scope), so resolve seller-
+	// facing labels in EN — a retailer's EN custom labels still flow through.
+	// The buyer tracking page resolves in the store's locale instead.
+	const statusLabelOpts = {
+		labels: order.statusLabels,
+		deliveryMethod,
+		locale: "en" as const,
+	};
 	const transitions = NEXT_STATUS[order.status] ?? [];
 	const showCarrierSection =
 		!isSelfCollect && !["pending", "cancelled"].includes(order.status);
@@ -301,7 +288,10 @@ function OrderDetailRoute() {
 					</p>
 				</div>
 				<div className="flex flex-col items-start gap-1.5">
-					<StatusBadge status={order.status} />
+					<StatusBadge
+						status={order.status}
+						label={resolveStatusLabel(order.status, statusLabelOpts)}
+					/>
 					<span
 						className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${paymentBadgeCfg.className}`}
 					>
@@ -805,6 +795,7 @@ function OrderDetailRoute() {
 					<div className="flex flex-col gap-2">
 						{transitions.map((t) => {
 							const blocked = t === "packed" && mockupGated;
+							const label = resolveTransitionLabel(t, statusLabelOpts);
 							return (
 								<Button
 									key={t}
@@ -816,8 +807,8 @@ function OrderDetailRoute() {
 									{pending === t
 										? "Updating…"
 										: blocked
-											? `${transitionLabels[t]} — awaiting mockup`
-											: transitionLabels[t]}
+											? `${label} — awaiting mockup`
+											: label}
 								</Button>
 							);
 						})}

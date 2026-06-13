@@ -29,6 +29,12 @@ import { Skeleton } from "../components/ui/skeleton";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import {
+	type Locale,
+	type OrderStatus,
+	resolveStatusLabel,
+	type StatusLabels,
+} from "../lib/orderStatus";
+import {
 	deriveMapsUrl,
 	googleMapsNavUrl,
 	wazeNavUrl,
@@ -101,25 +107,34 @@ type DeliveryMethod = "delivery" | "self_collect";
 
 type StatusCfg = { label: string; icon: ReactNode; color: string };
 
-function getStatusConfig(method: DeliveryMethod): Record<string, StatusCfg> {
+// Icons + colors are fixed per canonical status; only the text is retailer-
+// customizable. Labels resolve at render time (override → method preset → base
+// default) so a relabel is retroactive across all in-flight orders.
+function getStatusConfig(
+	method: DeliveryMethod,
+	labels: StatusLabels | undefined,
+	locale: Locale,
+): Record<string, StatusCfg> {
+	const label = (status: OrderStatus) =>
+		resolveStatusLabel(status, { labels, deliveryMethod: method, locale });
 	return {
 		pending: {
-			label: "Order Received",
+			label: label("pending"),
 			icon: <Clock className="size-5" />,
 			color: "text-amber-500",
 		},
 		confirmed: {
-			label: "Confirmed",
+			label: label("confirmed"),
 			icon: <CheckCircle className="size-5" />,
 			color: "text-blue-500",
 		},
 		packed: {
-			label: "Packed",
+			label: label("packed"),
 			icon: <Package className="size-5" />,
 			color: "text-violet-500",
 		},
 		shipped: {
-			label: method === "self_collect" ? "Ready for Pickup" : "On the Way",
+			label: label("shipped"),
 			icon:
 				method === "self_collect" ? (
 					<Store className="size-5" />
@@ -129,12 +144,12 @@ function getStatusConfig(method: DeliveryMethod): Record<string, StatusCfg> {
 			color: "text-orange-500",
 		},
 		delivered: {
-			label: method === "self_collect" ? "Collected" : "Delivered",
+			label: label("delivered"),
 			icon: <CheckCircle className="size-5" />,
 			color: "text-green-500",
 		},
 		cancelled: {
-			label: "Cancelled",
+			label: label("cancelled"),
 			icon: <XCircle className="size-5" />,
 			color: "text-destructive",
 		},
@@ -245,7 +260,11 @@ function TrackingRoute() {
 
 	const deliveryMethod = (order.deliveryMethod ?? "delivery") as DeliveryMethod;
 	const isSelfCollect = deliveryMethod === "self_collect";
-	const statusConfig = getStatusConfig(deliveryMethod);
+	const statusConfig = getStatusConfig(
+		deliveryMethod,
+		order.statusLabels,
+		order.retailerLocale,
+	);
 	const config = statusConfig[order.status];
 	const isCancelled = order.status === "cancelled";
 	const canEditAddress = order.status === "pending" && !isSelfCollect;

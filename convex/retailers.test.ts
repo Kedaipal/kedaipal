@@ -636,3 +636,111 @@ describe("retailers.markPickupSetupSeen", () => {
 		expect(bRetailer?.pickupSetupSeen).toBeUndefined();
 	});
 });
+
+describe("statusLabels (Phase 1 order status customization)", () => {
+	test("updateSettings saves labels; getMyRetailer surfaces them", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "labels-store");
+		await asA.mutation(api.retailers.updateSettings, {
+			statusLabels: {
+				en: { shipped: "Out for delivery", delivered: "Done" },
+				ms: { shipped: "Dalam penghantaran" },
+			},
+		});
+
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.statusLabels).toEqual({
+			en: { shipped: "Out for delivery", delivered: "Done" },
+			ms: { shipped: "Dalam penghantaran" },
+		});
+	});
+
+	test("trims whitespace and drops empty / whitespace-only labels", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "labels-trim");
+		await asA.mutation(api.retailers.updateSettings, {
+			statusLabels: {
+				en: {
+					shipped: "  Ready to collect  ",
+					packed: "   ", // whitespace-only → dropped
+					delivered: "", // empty → dropped
+				},
+			},
+		});
+
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.statusLabels).toEqual({ en: { shipped: "Ready to collect" } });
+	});
+
+	test("an all-empty payload clears statusLabels back to undefined", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "labels-clear");
+		await asA.mutation(api.retailers.updateSettings, {
+			statusLabels: { en: { shipped: "Ready" } },
+		});
+		// Now blank every field — sanitize collapses to undefined.
+		await asA.mutation(api.retailers.updateSettings, {
+			statusLabels: { en: { shipped: "" }, ms: { packed: "   " } },
+		});
+
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.statusLabels).toBeUndefined();
+	});
+
+	test("rejects a label over the 24-char cap", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "labels-cap");
+		await expect(
+			asA.mutation(api.retailers.updateSettings, {
+				statusLabels: {
+					en: { shipped: "x".repeat(25) },
+				},
+			}),
+		).rejects.toThrow(/24 characters/);
+	});
+
+	test("accepts a label exactly at the 24-char cap", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "labels-cap-ok");
+		const exact = "x".repeat(24);
+		await asA.mutation(api.retailers.updateSettings, {
+			statusLabels: { en: { shipped: exact } },
+		});
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.statusLabels?.en?.shipped).toBe(exact);
+	});
+
+	test("orders.get surfaces the retailer's statusLabels + locale", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "labels-order");
+		await asA.mutation(api.retailers.updateSettings, {
+			locale: "ms",
+			statusLabels: { ms: { shipped: "Sedia diambil" } },
+		});
+		const retailer = await asA.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("no retailer");
+
+		// Insert an order directly so we can read it back through orders.get.
+		const shortId = "ORD-TEST";
+		await t.run(async (ctx) => {
+			await ctx.db.insert("orders", {
+				retailerId: retailer._id,
+				shortId,
+				items: [],
+				subtotal: 0,
+				total: 0,
+				currency: "MYR",
+				status: "shipped",
+				channel: "whatsapp",
+				customer: {},
+				deliveryMethod: "self_collect",
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			});
+		});
+
+		const order = await t.query(api.orders.get, { shortId });
+		expect(order?.retailerLocale).toBe("ms");
+		expect(order?.statusLabels).toEqual({ ms: { shipped: "Sedia diambil" } });
+	});
+});
