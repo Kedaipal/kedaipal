@@ -181,6 +181,40 @@ export function renderSystemMessage(
 	return systemMessages[locale][key](vars);
 }
 
+/**
+ * Phase 2 — generic "your order moved to <stage>" update, sent when a seller
+ * advances an order INTO a custom stage that shares its canonical anchor with
+ * the previous one (i.e. no canonical status change, so the rich status
+ * templates above don't fire) and the stage has `notify: true`. Anchor-CROSSING
+ * moves keep using the existing `renderMessage` status copy (+ messageTemplates
+ * overrides), so this never duplicates or replaces those. Not retailer-
+ * overridable — the seller controls the wording via the stage label/description.
+ */
+export function renderStageUpdate(
+	locale: Locale,
+	args: {
+		shortId: string;
+		stageLabel: string;
+		stageDescription?: string;
+		trackingUrl?: string;
+		contactPhone?: string;
+	},
+): string {
+	const desc = args.stageDescription?.trim()
+		? `\n${args.stageDescription.trim()}`
+		: "";
+	const track = args.trackingUrl
+		? locale === "ms"
+			? `\n\nJejak pesanan anda: ${args.trackingUrl}`
+			: `\n\nTrack your order: ${args.trackingUrl}`
+		: "";
+	const head =
+		locale === "ms"
+			? `📦 Kemaskini pesanan ${args.shortId}: ${args.stageLabel}.`
+			: `📦 Order ${args.shortId} update: ${args.stageLabel}.`;
+	return `${head}${desc}${track}${contactLine(args.contactPhone, locale)}`;
+}
+
 // Matches ORD-XXXX where X is from the alphabet in lib/order.ts
 // (excludes O, 0, I, 1). Reused by inbound parser to keep alphabet in sync.
 export const SHORT_ID_REGEX = /ORD-[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{4}/;

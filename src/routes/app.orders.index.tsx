@@ -8,7 +8,10 @@ import { Skeleton } from "../components/ui/skeleton";
 import { formatPrice } from "../lib/format";
 import {
 	type DeliveryMethod,
-	resolveStatusLabel,
+	resolveAnchorLabel,
+	resolveCurrentStage,
+	resolveStages,
+	stageLabel,
 	type StatusLabels,
 } from "../lib/orderStatus";
 import { cn } from "../lib/utils";
@@ -71,14 +74,19 @@ function OrdersRoute() {
 
 	if (!retailer) return null;
 
-	// Tab labels aren't per-order, so resolve against the retailer's primary
-	// fulfilment mode (self-collect sellers see "Ready for Pickup", etc.).
-	// Dashboard chrome is EN-only, so labels resolve in EN. Per-row badges below
-	// use each order's own deliveryMethod.
+	// Filter tabs are canonical-status buckets, but they speak the seller's
+	// vocabulary: each anchor bucket shows the seller's first stage with that
+	// anchor (or the Phase-1 default). Dashboard chrome is EN-only. Per-row
+	// badges below show each order's CURRENT stage label.
 	const labels = retailer.statusLabels as StatusLabels | undefined;
 	const retailerMethod: DeliveryMethod = retailer.offerSelfCollect
 		? "self_collect"
 		: "delivery";
+	const stages = resolveStages({
+		orderStages: retailer.orderStages,
+		labels,
+		deliveryMethod: retailerMethod,
+	});
 
 	return (
 		<div className="flex flex-col gap-5 lg:gap-6">
@@ -118,7 +126,8 @@ function OrdersRoute() {
 							? "All"
 							: s === "mockup"
 								? "Mockup pending"
-								: resolveStatusLabel(s, {
+								: resolveAnchorLabel(s, {
+										stages,
 										labels,
 										deliveryMethod: retailerMethod,
 										locale: "en",
@@ -187,12 +196,22 @@ function OrdersRoute() {
 										</span>
 										<StatusBadge
 											status={o.status as OrderStatus}
-											label={resolveStatusLabel(o.status as OrderStatus, {
-												labels,
-												deliveryMethod: (o.deliveryMethod ??
-													"delivery") as DeliveryMethod,
-												locale: "en",
-											})}
+											label={(() => {
+												// Row badge shows the order's CURRENT stage label.
+												const cs = resolveCurrentStage(
+													{ status: o.status, currentStageId: o.currentStageId },
+													stages,
+												);
+												return cs
+													? stageLabel(cs, "en")
+													: resolveAnchorLabel(o.status as OrderStatus, {
+															stages,
+															labels,
+															deliveryMethod: (o.deliveryMethod ??
+																"delivery") as DeliveryMethod,
+															locale: "en",
+														});
+											})()}
 										/>
 										<DeliveryMethodBadge
 											method={o.deliveryMethod ?? "delivery"}

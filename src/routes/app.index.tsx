@@ -32,7 +32,10 @@ import { formatPrice } from "../lib/format";
 import {
 	type DeliveryMethod,
 	type OrderStatus,
-	resolveStatusLabel,
+	resolveAnchorLabel,
+	resolveCurrentStage,
+	resolveStages,
+	stageLabel,
 	type StatusLabels,
 } from "../lib/orderStatus";
 
@@ -167,8 +170,14 @@ function DashboardHome() {
 	const retailerMethod: DeliveryMethod = retailer.offerSelfCollect
 		? "self_collect"
 		: "delivery";
+	const stages = resolveStages({
+		orderStages: retailer.orderStages,
+		labels: statusLabels,
+		deliveryMethod: retailerMethod,
+	});
 	const heroLabel = (status: OrderStatus) =>
-		resolveStatusLabel(status, {
+		resolveAnchorLabel(status, {
+			stages,
 			labels: statusLabels,
 			deliveryMethod: retailerMethod,
 			locale: "en",
@@ -508,15 +517,27 @@ function DashboardHome() {
 												</p>
 												<StatusBadge
 													status={order.status}
-													label={resolveStatusLabel(
-														order.status as OrderStatus,
-														{
-															labels: statusLabels,
-															deliveryMethod: (order.deliveryMethod ??
-																"delivery") as DeliveryMethod,
-															locale: "en",
-														},
-													)}
+													label={(() => {
+														const cs = resolveCurrentStage(
+															{
+																status: order.status,
+																currentStageId: order.currentStageId,
+															},
+															stages,
+														);
+														return cs
+															? stageLabel(cs, "en")
+															: resolveAnchorLabel(
+																	order.status as OrderStatus,
+																	{
+																		stages,
+																		labels: statusLabels,
+																		deliveryMethod: (order.deliveryMethod ??
+																			"delivery") as DeliveryMethod,
+																		locale: "en",
+																	},
+																);
+													})()}
 												/>
 											</div>
 										</Link>

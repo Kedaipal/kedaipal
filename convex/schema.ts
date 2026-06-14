@@ -83,6 +83,36 @@ export default defineSchema({
 				),
 			}),
 		),
+		// Phase 2 of order-status customization: a seller-defined, ordered list of
+		// buyer-visible stages (cap 20), each pinned to ONE canonical anchor
+		// (confirmed/packed/shipped/delivered). `orders.currentStageId` points at
+		// the seller's stage; the canonical `orders.status` is DERIVED from the
+		// stage's anchor. Absent => the resolver synthesizes the 5 default stages
+		// from `statusLabels` (so an un-configured retailer flows through the SAME
+		// stage code path). pending/cancelled are system-managed, never stages.
+		// Bounded (≤20) so it's safe to embed. See docs/order-status-customization.md.
+		orderStages: v.optional(
+			v.array(
+				v.object({
+					id: v.string(),
+					anchor: v.union(
+						v.literal("confirmed"),
+						v.literal("packed"),
+						v.literal("shipped"),
+						v.literal("delivered"),
+					),
+					label: v.object({ en: v.string(), ms: v.optional(v.string()) }),
+					description: v.optional(
+						v.object({
+							en: v.optional(v.string()),
+							ms: v.optional(v.string()),
+						}),
+					),
+					notify: v.boolean(),
+					sortOrder: v.number(),
+				}),
+			),
+		),
 		// DEPRECATED — superseded by `paymentMethods` (multi-method). Kept readable
 		// during the widen→backfill→narrow migration so un-migrated rows still
 		// surface payment details; `resolvePaymentMethods` (convex/lib/payment.ts)
@@ -308,6 +338,13 @@ export default defineSchema({
 			v.literal("delivered"),
 			v.literal("cancelled"),
 		),
+		// Phase 2: the seller-defined stage this order currently sits at (id from
+		// retailers.orderStages, or a synthesized "default:<anchor>" id). The
+		// canonical `status` above stays the source of truth for all gates and is
+		// derived from this stage's anchor on each advance. Optional: orders that
+		// predate stages (or never advanced) derive their stage from `status` at
+		// read time — no backfill required. See docs/order-status-customization.md.
+		currentStageId: v.optional(v.string()),
 		channel: v.union(v.literal("whatsapp")),
 		customer: v.object({
 			name: v.optional(v.string()),
@@ -479,6 +516,12 @@ export default defineSchema({
 			v.literal("delivered"),
 			v.literal("cancelled"),
 		),
+		// Phase 2: which seller stage this event advanced into, plus a FROZEN
+		// label snapshot (pickupSnapshot pattern) so the order history stays
+		// readable even if the stage is later renamed or deleted. Both optional —
+		// canonical-only transitions (e.g. cancel) and pre-Phase-2 events omit them.
+		stageId: v.optional(v.string()),
+		stageLabel: v.optional(v.string()),
 		note: v.optional(v.string()),
 		createdAt: v.number(),
 	}).index("by_order", ["orderId"]),

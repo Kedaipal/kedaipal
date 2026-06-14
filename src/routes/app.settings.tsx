@@ -22,12 +22,15 @@ import {
 	type TemplateKey,
 } from "../../convex/lib/whatsappCopy";
 import {
-	defaultStatusLabel,
-	type DeliveryMethod,
-	ORDER_STATUS_KEYS,
-	type OrderStatus,
-	STATUS_LABEL_MAX_LENGTH,
-	type StatusLabels,
+	ANCHOR_UI_LABELS,
+	collectStageConfigErrors,
+	MAX_ORDER_STAGES,
+	type OrderStage,
+	resolveStages,
+	STAGE_ANCHORS,
+	STAGE_DESCRIPTION_MAX_LENGTH,
+	STAGE_LABEL_MAX_LENGTH,
+	type StageAnchor,
 } from "../lib/orderStatus";
 import {
 	PageHeader,
@@ -371,26 +374,32 @@ function SettingsRoute() {
 
 			{activeTab === "order-status" ? (
 				<div className="flex flex-col gap-6 pt-2">
-					<InfoBanner title="Name your order stages">
+					<InfoBanner title="Your order journey">
 						<p>
-							These are the short labels buyers see on their order-tracking
-							timeline, and that you see on your dashboard (status badges, tabs,
-							and the “Mark as …” buttons). Rename them to fit how you actually
-							work — a tailor might call “Packed” something like “Sewing”, or a
-							pickup-only seller might prefer “Ready to collect” over “Shipped”.
+							Define the stages an order moves through — buyers see this as a
+							live timeline on their tracking page, and you advance orders
+							stage-by-stage from the dashboard. Rename them to fit how you work
+							(a tailor might use “Sewing”; a tent-wash “Washing → Drying”), add
+							your own steps, and write a short note buyers see for each.
 						</p>
 						<p>
-							This is separate from your WhatsApp message wording (under the
-							WhatsApp tab) — it only changes the short stage label. Leave a
-							field blank to keep the default.
+							Each stage “counts as” one of four milestones so the rest of the
+							system (payments, packing, tracking) keeps working. Start from the
+							defaults below and change as much or as little as you like.
 						</p>
 					</InfoBanner>
 
 					<Card>
-						<StatusLabelsForm
-							current={retailer.statusLabels}
-							offerSelfCollect={retailer.offerSelfCollect ?? false}
-							onSave={(statusLabels) => updateSettings({ statusLabels })}
+						<StageEditor
+							seed={resolveStages({
+								orderStages: retailer.orderStages,
+								labels: retailer.statusLabels,
+								deliveryMethod: retailer.offerSelfCollect
+									? "self_collect"
+									: "delivery",
+							})}
+							isCustomized={Boolean(retailer.orderStages?.length)}
+							onSave={(orderStages) => updateSettings({ orderStages })}
 						/>
 					</Card>
 				</div>
@@ -1132,48 +1141,106 @@ function MessageTemplatesForm({
 	);
 }
 
-// Which canonical pipeline stage each row renames. The slash variants flag the
-// two stages whose default wording differs for pickup orders, so the seller
-// knows a single label covers both fulfilment modes.
-const STATUS_ROW_LABELS: Record<OrderStatus, string> = {
-	pending: "New / Pending",
-	confirmed: "Confirmed",
-	packed: "Packed",
-	shipped: "Shipped / Ready for pickup",
-	delivered: "Delivered / Collected",
-	cancelled: "Cancelled",
+// One editable stage in the StageEditor. `_key` is a stable React key so drag
+// reordering doesn't remount inputs; `id` is the server id ("" = new stage).
+type StageDraft = {
+	_key: string;
+	id: string;
+	anchor: StageAnchor;
+	labelEn: string;
+	labelMs: string;
+	descEn: string;
+	descMs: string;
+	notify: boolean;
 };
 
-function StatusLabelsForm({
-	current,
-	offerSelfCollect,
+function seedToDraft(s: OrderStage): StageDraft {
+	return {
+		_key: crypto.randomUUID(),
+		// Synthesized defaults ("default:<anchor>") aren't real ids — saving turns
+		// them into configured stages with fresh ids.
+		id: s.id.startsWith("default:") ? "" : s.id,
+		anchor: s.anchor,
+		labelEn: s.label.en,
+		labelMs: s.label.ms ?? "",
+		descEn: s.description?.en ?? "",
+		descMs: s.description?.ms ?? "",
+		notify: s.notify,
+	};
+}
+
+// Map drafts to the wire/validation shape (stable id for dup-checking).
+function draftsToStages(drafts: StageDraft[]): OrderStage[] {
+	return drafts.map((d, i) => ({
+		id: d.id || d._key,
+		anchor: d.anchor,
+		label: {
+			en: d.labelEn.trim(),
+			...(d.labelMs.trim() ? { ms: d.labelMs.trim() } : {}),
+		},
+		...(d.descEn.trim() || d.descMs.trim()
+			? {
+					description: {
+						...(d.descEn.trim() ? { en: d.descEn.trim() } : {}),
+						...(d.descMs.trim() ? { ms: d.descMs.trim() } : {}),
+					},
+				}
+			: {}),
+		notify: d.notify,
+		sortOrder: i,
+	}));
+}
+
+function StageEditor({
+	seed,
+	isCustomized,
 	onSave,
 }: {
-	current: StatusLabels | undefined;
-	offerSelfCollect: boolean;
-	onSave: (statusLabels: StatusLabels) => Promise<unknown>;
+	seed: OrderStage[];
+	isCustomized: boolean;
+	onSave: (stages: OrderStage[]) => Promise<unknown>;
 }) {
-	const [draft, setDraft] = useState<StatusLabels>(() => current ?? {});
+	const [drafts, setDrafts] = useState<StageDraft[]>(() => seed.map(seedToDraft));
 	const [saving, setSaving] = useState(false);
 
-	// Placeholders show the default the buyer would otherwise see. A retailer's
-	// orders can be either method, but we hint with their primary mode so a
-	// pickup-only seller sees "Ready for Pickup" rather than "On the Way".
-	const method: DeliveryMethod = offerSelfCollect ? "self_collect" : "delivery";
-
-	function setField(locale: Locale, key: OrderStatus, value: string) {
-		setDraft((prev) => ({
+	function update(key: string, patch: Partial<StageDraft>) {
+		setDrafts((prev) =>
+			prev.map((d) => (d._key === key ? { ...d, ...patch } : d)),
+		);
+	}
+	function remove(key: string) {
+		setDrafts((prev) => prev.filter((d) => d._key !== key));
+	}
+	function addStage() {
+		if (drafts.length >= MAX_ORDER_STAGES) {
+			toast.error(`You can have at most ${MAX_ORDER_STAGES} stages.`);
+			return;
+		}
+		setDrafts((prev) => [
 			...prev,
-			[locale]: { ...(prev[locale] ?? {}), [key]: value },
-		}));
+			{
+				_key: crypto.randomUUID(),
+				id: "",
+				// Default to the last stage's anchor so the monotonic rule holds and
+				// the seller usually doesn't need to touch the dropdown.
+				anchor: prev[prev.length - 1]?.anchor ?? "confirmed",
+				labelEn: "",
+				labelMs: "",
+				descEn: "",
+				descMs: "",
+				notify: false, // intermediate stages default off (DECISION 2)
+			},
+		]);
 	}
 
-	async function handleSubmit(e: FormEvent) {
-		e.preventDefault();
+	const errors = collectStageConfigErrors(draftsToStages(drafts));
+	const canSave = drafts.length > 0 && errors.length === 0 && !saving;
+
+	async function handleSave() {
 		setSaving(true);
 		try {
-			await onSave(draft);
-			toast.success("Status labels saved.");
+			await onSave(draftsToStages(drafts));
+			toast.success("Order stages saved.");
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -1181,63 +1248,230 @@ function StatusLabelsForm({
 		}
 	}
 
-	return (
-		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
-			<div className="flex flex-col gap-1">
-				<h3 className="text-sm font-semibold text-foreground">
-					Stage labels
-				</h3>
-				<p className="text-xs text-muted-foreground leading-relaxed">
-					Fill the English and Bahasa Malaysia label for any stage you want to
-					rename. Buyers see the label in your store's language; your dashboard
-					always shows the English one. Placeholders show the current default.
-				</p>
-			</div>
+	async function handleReset() {
+		setSaving(true);
+		try {
+			await onSave([]); // empty → server clears → synthesized defaults
+			toast.success("Reset to the default stages.");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
+		}
+	}
 
-			{/* Column headers — align with the two inputs in each row below. */}
-			<div className="grid grid-cols-2 gap-2">
-				<span className="text-xs font-medium text-muted-foreground">
-					English
-				</span>
-				<span className="text-xs font-medium text-muted-foreground">
-					Bahasa Malaysia
-				</span>
-			</div>
+	function stageCard(
+		d: StageDraft,
+		index: number,
+		handle: ReactNode,
+		state: { isSorting: boolean; isOverlay: boolean },
+	) {
+		const displayLabel = d.labelEn.trim() || `Stage ${index + 1}`;
+		if (state.isSorting) {
+			return (
+				<div
+					className={`flex items-center gap-2 rounded-xl border bg-card p-3 ${
+						state.isOverlay ? "border-accent shadow-lg" : "border-border"
+					}`}
+				>
+					{handle}
+					<span className="truncate text-sm font-medium">{displayLabel}</span>
+					<span className="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+						{ANCHOR_UI_LABELS[d.anchor]}
+					</span>
+				</div>
+			);
+		}
+		return (
+			<div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
+				<div className="flex items-center gap-2">
+					{handle}
+					<span className="text-sm font-medium text-muted-foreground">
+						Stage {index + 1}
+					</span>
+					<button
+						type="button"
+						onClick={() => remove(d._key)}
+						aria-label="Remove stage"
+						className="ml-auto flex size-11 items-center justify-center rounded-full text-destructive hover:bg-destructive/10"
+					>
+						<Trash2 className="size-4" />
+					</button>
+				</div>
 
-			<div className="flex flex-col gap-4">
-				{ORDER_STATUS_KEYS.map((status) => (
-					<div key={status} className="flex flex-col gap-1.5">
-						<span className="text-sm font-medium">
-							{STATUS_ROW_LABELS[status]}
+				<div className="grid grid-cols-2 gap-2">
+					<label className="flex flex-col gap-1">
+						<span className="text-xs font-medium text-muted-foreground">
+							Label (English)
 						</span>
-						<div className="grid grid-cols-2 gap-2">
-							<Input
-								type="text"
-								variant="field"
-								maxLength={STATUS_LABEL_MAX_LENGTH}
-								value={draft.en?.[status] ?? ""}
-								onChange={(e) => setField("en", status, e.target.value)}
-								placeholder={defaultStatusLabel(status, method, "en")}
-								aria-label={`${STATUS_ROW_LABELS[status]} label (English)`}
-							/>
-							<Input
-								type="text"
-								variant="field"
-								maxLength={STATUS_LABEL_MAX_LENGTH}
-								value={draft.ms?.[status] ?? ""}
-								onChange={(e) => setField("ms", status, e.target.value)}
-								placeholder={defaultStatusLabel(status, method, "ms")}
-								aria-label={`${STATUS_ROW_LABELS[status]} label (Bahasa Malaysia)`}
-							/>
-						</div>
-					</div>
-				))}
+						<Input
+							type="text"
+							variant="field"
+							maxLength={STAGE_LABEL_MAX_LENGTH}
+							value={d.labelEn}
+							onChange={(e) => update(d._key, { labelEn: e.target.value })}
+							placeholder="e.g. Sewing"
+						/>
+					</label>
+					<label className="flex flex-col gap-1">
+						<span className="text-xs font-medium text-muted-foreground">
+							Label (Bahasa Malaysia)
+						</span>
+						<Input
+							type="text"
+							variant="field"
+							maxLength={STAGE_LABEL_MAX_LENGTH}
+							value={d.labelMs}
+							onChange={(e) => update(d._key, { labelMs: e.target.value })}
+							placeholder="Optional"
+						/>
+					</label>
+				</div>
+
+				<label className="flex flex-col gap-1">
+					<span className="text-xs font-medium text-muted-foreground">
+						Counts as
+					</span>
+					<select
+						value={d.anchor}
+						onChange={(e) => {
+							const anchor = e.target.value as StageAnchor;
+							// Confirmed stages never WhatsApp the buyer, so clear notify
+							// when switching to it (keeps the count + UI honest).
+							update(d._key, {
+								anchor,
+								...(anchor === "confirmed" ? { notify: false } : {}),
+							});
+						}}
+						className="min-h-11 rounded-xl border border-input bg-background px-4 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+					>
+						{STAGE_ANCHORS.map((a) => (
+							<option key={a} value={a}>
+								{ANCHOR_UI_LABELS[a]}
+							</option>
+						))}
+					</select>
+				</label>
+
+				<div className="grid grid-cols-1 gap-2">
+					<label className="flex flex-col gap-1">
+						<span className="text-xs font-medium text-muted-foreground">
+							Buyer note (optional) — English
+						</span>
+						<textarea
+							value={d.descEn}
+							onChange={(e) => update(d._key, { descEn: e.target.value })}
+							placeholder="e.g. Drying — usually 1–2 days depending on weather"
+							rows={2}
+							maxLength={STAGE_DESCRIPTION_MAX_LENGTH}
+							className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+						/>
+					</label>
+					<label className="flex flex-col gap-1">
+						<span className="text-xs font-medium text-muted-foreground">
+							Buyer note (optional) — Bahasa Malaysia
+						</span>
+						<textarea
+							value={d.descMs}
+							onChange={(e) => update(d._key, { descMs: e.target.value })}
+							placeholder="Pilihan"
+							rows={2}
+							maxLength={STAGE_DESCRIPTION_MAX_LENGTH}
+							className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+						/>
+					</label>
+				</div>
+
+				{d.anchor === "confirmed" ? (
+					// Confirmed = the order-accepted moment; the buyer is already
+					// messaged by the confirmation/payment flow, so no per-stage toggle.
+					<p className="text-xs text-muted-foreground">
+						Buyers are notified automatically when the order is confirmed.
+					</p>
+				) : (
+					<label className="flex items-center gap-2 text-sm">
+						<input
+							type="checkbox"
+							checked={d.notify}
+							onChange={(e) => update(d._key, { notify: e.target.checked })}
+							className="size-4"
+						/>
+						<span>
+							Send the buyer a WhatsApp when the order enters this stage
+						</span>
+					</label>
+				)}
+			</div>
+		);
+	}
+
+	return (
+		<div className="flex flex-col gap-4">
+			<div className="flex items-center justify-between gap-2">
+				<SectionHeading
+					title="Stages"
+					description="Drag to reorder. Each stage must “count as” the same milestone as the one before it, or a later one."
+				/>
+				<Button
+					type="button"
+					variant="outline"
+					className="h-9 shrink-0"
+					onClick={addStage}
+					disabled={drafts.length >= MAX_ORDER_STAGES}
+				>
+					<Plus className="size-4" />
+					Add stage
+				</Button>
 			</div>
 
-			<Button type="submit" disabled={saving} className={SAVE_BTN_CLASS}>
-				{saving ? "Saving…" : "Save status labels"}
-			</Button>
-		</form>
+			{drafts.length === 0 ? (
+				<p className="rounded-xl border border-dashed border-input bg-muted/20 px-4 py-4 text-center text-sm text-muted-foreground">
+					No stages — add at least one, or reset to the defaults.
+				</p>
+			) : (
+				<SortableList
+					items={drafts}
+					getId={(d) => d._key}
+					onReorder={(ids) =>
+						setDrafts((prev) => reorderByIds(prev, ids, (d) => d._key))
+					}
+					renderItem={(d, handle, state) =>
+						stageCard(d, drafts.indexOf(d), handle, state)
+					}
+					className="flex flex-col gap-3"
+				/>
+			)}
+
+			{errors.length > 0 ? (
+				<ul className="flex flex-col gap-1 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-xs text-destructive">
+					{errors.map((e) => (
+						<li key={e}>• {e}</li>
+					))}
+				</ul>
+			) : null}
+
+			<div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-end">
+				{isCustomized ? (
+					<Button
+						type="button"
+						variant="ghost"
+						onClick={handleReset}
+						disabled={saving}
+						className="h-11 lg:h-10 lg:w-auto"
+					>
+						Reset to defaults
+					</Button>
+				) : null}
+				<Button
+					type="button"
+					onClick={handleSave}
+					disabled={!canSave}
+					className={SAVE_BTN_CLASS}
+				>
+					{saving ? "Saving…" : "Save stages"}
+				</Button>
+			</div>
+		</div>
 	);
 }
 

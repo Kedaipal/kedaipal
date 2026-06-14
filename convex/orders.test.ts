@@ -2432,3 +2432,181 @@ describe("orders — mockup-pending filter", () => {
 		expect(counts.mockupPending).toBe(0);
 	});
 });
+
+describe("orders — Phase 2 stage advance (advanceToStage)", () => {
+	const asA = (t: ReturnType<typeof setup>) =>
+		t.withIdentity({ subject: USER_A });
+
+	async function plainOrder(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { shortId });
+		if (!order) throw new Error("no order");
+		return { retailer, order, shortId };
+	}
+
+	async function events(t: ReturnType<typeof setup>, orderId: Id<"orders">) {
+		return t.run((ctx) =>
+			ctx.db
+				.query("orderEvents")
+				.withIndex("by_order", (q) => q.eq("orderId", orderId))
+				.collect(),
+		);
+	}
+
+	test("default-synthesis: advancing default:<anchor> derives canonical status + records the stage", async () => {
+		const t = setup();
+		const { order, shortId } = await plainOrder(t);
+
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: "default:confirmed",
+		});
+		let o = await t.query(api.orders.get, { shortId });
+		expect(o?.status).toBe("confirmed");
+		expect(o?.currentStageId).toBe("default:confirmed");
+
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: "default:packed",
+		});
+		o = await t.query(api.orders.get, { shortId });
+		expect(o?.status).toBe("packed");
+		expect(o?.currentStageId).toBe("default:packed");
+
+		const evs = await events(t, order._id);
+		const packed = evs.find((e) => e.stageId === "default:packed");
+		expect(packed?.status).toBe("packed");
+		expect(packed?.stageLabel).toBe("Packed"); // frozen EN snapshot
+	});
+
+	test("rejects an unknown stage id", async () => {
+		const t = setup();
+		const { order } = await plainOrder(t);
+		await expect(
+			asA(t).mutation(api.orders.advanceToStage, {
+				orderId: order._id,
+				stageId: "nope",
+			}),
+		).rejects.toThrow(/Unknown stage/i);
+	});
+
+	test("a cancelled order can't be advanced", async () => {
+		const t = setup();
+		const { order } = await plainOrder(t);
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "cancelled",
+		});
+		await expect(
+			asA(t).mutation(api.orders.advanceToStage, {
+				orderId: order._id,
+				stageId: "default:confirmed",
+			}),
+		).rejects.toThrow(/cancelled/i);
+	});
+
+	test("mockup gate blocks advancing into a packed stage until approved", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			requiresProof: true,
+			blockWhenOutOfStock: false,
+		});
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { shortId });
+		if (!order) throw new Error("no order");
+
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: "default:confirmed",
+		});
+		// Gated: can't move into production.
+		await expect(
+			asA(t).mutation(api.orders.advanceToStage, {
+				orderId: order._id,
+				stageId: "default:packed",
+			}),
+		).rejects.toThrow(/mockup/i);
+		// Closing the bypass: jumping straight to a shipped-anchored stage is also blocked.
+		await expect(
+			asA(t).mutation(api.orders.advanceToStage, {
+				orderId: order._id,
+				stageId: "default:shipped",
+			}),
+		).rejects.toThrow(/mockup/i);
+
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "m1",
+		});
+		await t.mutation(api.orders.approveMockup, { shortId });
+
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: "default:packed",
+		});
+		expect((await t.query(api.orders.get, { shortId }))?.status).toBe("packed");
+	});
+
+	test("configured intra-anchor stages keep canonical status but move currentStageId", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await asA(t).mutation(api.retailers.updateSettings, {
+			orderStages: [
+				{ anchor: "confirmed", label: { en: "Accepted" }, notify: true },
+				{ anchor: "packed", label: { en: "Cleaning" }, notify: false },
+				{ anchor: "packed", label: { en: "Drying" }, notify: true },
+				{ anchor: "delivered", label: { en: "Collected" }, notify: true },
+			],
+		});
+		const me = await asA(t).query(api.retailers.getMyRetailer);
+		const stages = me?.orderStages ?? [];
+		const cleaning = stages.find((s) => s.label.en === "Cleaning")!;
+		const drying = stages.find((s) => s.label.en === "Drying")!;
+
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { shortId });
+		if (!order) throw new Error("no order");
+
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: cleaning.id,
+		});
+		let o = await t.query(api.orders.get, { shortId });
+		expect(o?.status).toBe("packed");
+		expect(o?.currentStageId).toBe(cleaning.id);
+
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: drying.id,
+		});
+		o = await t.query(api.orders.get, { shortId });
+		expect(o?.status).toBe("packed"); // unchanged within the anchor
+		expect(o?.currentStageId).toBe(drying.id);
+		expect(o?.orderStages?.length).toBe(4); // surfaced for the timeline
+	});
+});

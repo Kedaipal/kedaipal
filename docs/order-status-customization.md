@@ -1,7 +1,7 @@
 # Order Status Customization (Per-Retailer Stages)
 
-**Status:** Phase 1 **shipped** (14 Jun 2026); Phase 2 specced for sign-off.
-**Date:** 13 Jun 2026 (Phase 1 shipped 14 Jun 2026)
+**Status:** Phase 1 **shipped** (14 Jun 2026); Phase 2 **shipped** (14 Jun 2026).
+**Date:** 13 Jun 2026 (Phase 1 + 2 shipped 14 Jun 2026)
 **Related:** [`order-lifecycle.md`](./order-lifecycle.md) · [`proof-approval.md`](./proof-approval.md) · [`messaging-channels.md`](./messaging-channels.md)
 **ClickUp:** Bearcamp onboarding [`86exxt0g4`](https://app.clickup.com/t/86exxt0g4) · Discussion [`86exxt46h`](https://app.clickup.com/t/86exxt46h)
 
@@ -213,6 +213,9 @@ Built exactly to the spec above, with these decisions/deviations worth recording
 
 ## Phase 2 — Anchored custom stages (buyer-visible granularity)
 
+> **✅ Shipped 14 Jun 2026.** As-built notes + deviations are in
+> [_Phase 2 — as shipped_](#phase-2--as-shipped) at the end of this section.
+
 **Goal:** a seller defines an ordered list of buyer-visible stages, each pinned to a
 canonical anchor, with optional per-stage descriptions. The buyer sees the granular
 journey on the tracking page; the seller advances stage-by-stage on the dashboard.
@@ -284,6 +287,67 @@ dashboard transitions + dynamic tracking timeline + per-stage WA copy/notify +
 anchor-mapped gates + migration + tests + docs). Tier: TBD (revisit when Scale
 packaging is decided; ships ungated unless gating infra exists by then).
 
+### Phase 2 — as shipped
+
+Built on the real Phase-1 surface (resolver + `statusLabels`), with these
+decisions/deviations recorded:
+
+- **Schema.** `retailers.orderStages` (≤20), `orders.currentStageId`, and
+  `orderEvents.stageId` + frozen `stageLabel`. Stage `label` is `{ en: required,
+  ms?: optional }` and `description` is `{ en?, ms? }` (both optional) — slightly
+  humaner than the doc's `{en,ms}` so a seller can fill one language; MS falls
+  back to EN at render. Canonical `status` unions untouched.
+- **Resolver (convex + src mirror, shared tests).** `resolveStages` /
+  `synthesizeDefaultStages` (the un-configured retailer flows through the SAME
+  path — defaults are 4 anchor stages built from `statusLabels`), `resolveCurrentStage`
+  (derives from `status` when `currentStageId` is missing/stale — no backfill),
+  `stageLabel`/`stageDescription`, `collectStageConfigErrors`/`assertValidOrderStages`
+  (cap, monotonic anchors, band, label caps), `stageNotifyPlan`, and
+  `resolveAnchorLabel` (dashboard buckets speak the seller's vocabulary).
+- **Advance.** New `orders.advanceToStage({orderId, stageId})` derives the
+  canonical status from `stage.anchor`. `updateStatus` is **kept** for cancel
+  (stock-restore/aggregates) and as the canonical path. The **mockup gate is
+  checked by anchor ordinal** (`>= packed`), which also closes the bypass where a
+  config skips the packed anchor — config can't ship a made-to-order item without
+  mockup resolution. Carrier URL still only on a shipped-anchored entry.
+- **Notify model (the one fork the spec didn't fully pin).** `stage.notify` is the
+  single source of truth, routed by the pure `stageNotifyPlan`:
+  anchor-**crossing** → `notifyStatusChange` (reuses the rich Phase-1 status copy
+  **and `messageTemplates` overrides** — zero regression); **within** an anchor →
+  the new generic `notifyStageEntry` (`renderStageUpdate`); `confirmed` → nothing
+  (the confirm/payment flow owns buyer comms then, as today).
+- **Migration: none.** Intentionally read-time + additive — synthesis covers
+  retailers without `orderStages`, derivation covers orders without
+  `currentStageId`, and every new field is optional. A no-op migration would be
+  dead scaffolding, so none was written. _(Deviation from the brief's "use the
+  migrations component".)_
+- **Settings UI.** The dedicated stage editor (Order status tab) **replaces** the
+  Phase-1 `StatusLabelsForm` — stages are the general model, so renaming a stage
+  subsumes relabeling. Add/remove, EN+MS label, optional EN+MS buyer note, anchor
+  dropdown ("counts as → Accepted / In production / Ready / Done", DECISION 1),
+  per-stage notify toggle (new intermediate stages default **off**, DECISION 2),
+  inline validation, and a "Reset to defaults". **Reorder via the shared
+  `SortableList` (@dnd-kit), not up/down arrows** — the project's recorded
+  drag-to-sort standard overrides the brief's "up/down" note.
+- **Dashboard.** Order detail advances via the seller's stage list (next stage +
+  Cancel), not the hardcoded `NEXT_STATUS`. Orders-list filter tabs + hero stay
+  canonical-status **buckets** but label via `resolveAnchorLabel`; per-row badges
+  + the detail badge show the order's **current stage** label.
+- **Tracking page.** Timeline renders the full ordered stage list (pending node +
+  stages), highlights the current stage, shows its description inline, and splices
+  the mockup node at the production boundary (first packed-or-later stage).
+- **Limits (refines DECISION 3 + 5).** ≤20 stages total. **Boundary milestones are
+  singular: exactly one "Accepted" (confirmed) and one "Done" (delivered)** — the
+  multi-stage granularity lives in the middle (In production / Ready) band. This
+  keeps "accepted"/"done" as natural single moments and avoids a multi-Done
+  dashboard-advance edge + a dead notify toggle on extra Accepted stages.
+  **At most 5 stages may notify on WhatsApp** (confirmed never sends, so it's not
+  counted) — an **interim cost guard**, to be re-tuned alongside the WABA
+  rate-limit / per-tier messaging-cost work (so a Scale-vs-Starter seller can't
+  blow the shared WABA budget by ticking notify on every stage). All three are
+  enforced in `collectStageConfigErrors` (inline in the editor) + the mutation.
+- **Tier:** ungated (consistent with Phase 1).
+
 ---
 
 ## Open decisions (for Zaki's sign-off)
@@ -306,5 +370,7 @@ packaging is decided; ships ungated unless gating infra exists by then).
   Bearcamp is self-collect (existing WA copy already says "ready for pickup"/
   "collected"), so there's no gap on day one, and Phase 2's per-stage copy subsumes
   this.
-- **DECISION 5 — Stage cap (Phase 2).** **Recommend:** 20 stages / retailer (well
-  above any real F&B or service flow; keeps the embedded array bounded).
+- **DECISION 5 — Stage cap (Phase 2).** **Decided + extended:** 20 stages / retailer,
+  **plus** exactly one Accepted (confirmed) and one Done (delivered) stage, **plus**
+  ≤5 notify-enabled stages (interim WhatsApp cost guard — confirmed excluded; revisit
+  with the WABA rate-limit / per-tier cost work). See _Phase 2 — as shipped → Limits_.

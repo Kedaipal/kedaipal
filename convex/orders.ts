@@ -14,7 +14,15 @@ import {
 	generateShortId,
 	isMockupGateClosed,
 } from "./lib/order";
-import type { Locale, StatusLabels } from "./lib/orderStatus";
+import {
+	anchorOrdinal,
+	type Locale,
+	type OrderStage,
+	resolveStages,
+	stageLabel,
+	stageNotifyPlan,
+	type StatusLabels,
+} from "./lib/orderStatus";
 import { type PaymentMethod, resolvePaymentMethods } from "./lib/payment";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidWaPhone } from "./lib/slug";
@@ -427,6 +435,10 @@ export const countActionable = query({
 // render relabelled stages. See docs/order-status-customization.md.
 export type OrderWithStatusLabels = Doc<"orders"> & {
 	statusLabels?: StatusLabels;
+	// Phase 2: the retailer's configured stages (undefined => buyer/seller
+	// resolve the synthesized defaults from statusLabels). Drives the tracking
+	// timeline + the seller's dynamic advance buttons.
+	orderStages?: OrderStage[];
 	retailerLocale: Locale;
 };
 
@@ -447,6 +459,7 @@ export const get = query({
 		return {
 			...order,
 			statusLabels: retailer?.statusLabels as StatusLabels | undefined,
+			orderStages: retailer?.orderStages as OrderStage[] | undefined,
 			retailerLocale: (retailer?.locale ?? "en") as Locale,
 		};
 	},
@@ -660,6 +673,119 @@ export const updateStatus = mutation({
 			internal.whatsapp.notifyStatusChange,
 			{ orderId },
 		);
+	},
+});
+
+/**
+ * Phase 2: advance an order INTO one of the retailer's stages (their configured
+ * `orderStages`, or a synthesized "default:<anchor>" stage — same code path
+ * either way). The canonical `orders.status` is DERIVED from the stage's anchor,
+ * so every Layer-1 gate keeps working unchanged:
+ *  - the mockup gate blocks reaching production (any packed-or-later anchor)
+ *    while a required mockup is unapproved/​unwaived — config can't bypass it;
+ *  - the carrier-URL field is accepted only when entering a shipped-anchored
+ *    stage.
+ * Cancellation is NOT a stage (terminal, system-managed) — use `updateStatus`
+ * for that, which keeps the stock-restore/aggregate logic. Notification policy:
+ * `stage.notify` is the single source of truth — an anchor-CROSSING move reuses
+ * the rich `notifyStatusChange` copy (so `messageTemplates` overrides + the
+ * delivery/self_collect wording are preserved with zero regression); a notifying
+ * move WITHIN an anchor sends the generic `notifyStageEntry` update; `confirmed`
+ * never messages from here (the confirm/payment flow owns buyer comms at that
+ * point), matching today's behaviour.
+ */
+export const advanceToStage = mutation({
+	args: {
+		orderId: v.id("orders"),
+		stageId: v.string(),
+		note: v.optional(v.string()),
+		// Accepted only when the target stage is shipped-anchored; ignored otherwise.
+		carrierTrackingUrl: v.optional(v.string()),
+	},
+	handler: async (
+		ctx,
+		{ orderId, stageId, note, carrierTrackingUrl },
+	): Promise<void> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Not authenticated");
+
+		const order = await ctx.db.get(orderId);
+		if (!order) throw new Error("Order not found");
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) throw new Error("Retailer not found");
+		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+
+		if (order.status === "cancelled") {
+			throw new ConvexError("A cancelled order can't be advanced.");
+		}
+
+		const stages = resolveStages({
+			orderStages: retailer.orderStages as OrderStage[] | undefined,
+			labels: retailer.statusLabels as StatusLabels | undefined,
+			deliveryMethod:
+				(order.deliveryMethod as "delivery" | "self_collect" | undefined) ??
+				"delivery",
+		});
+		const stage = stages.find((s) => s.id === stageId);
+		if (!stage) throw new ConvexError("Unknown stage for this order.");
+
+		const targetStatus = stage.anchor;
+
+		// Mockup gate: production (packed) or anything later cannot proceed while a
+		// required mockup is unresolved. Checking by anchor ordinal (not just
+		// "packed") closes the bypass where a config skips the packed anchor.
+		if (
+			anchorOrdinal(targetStatus) >= anchorOrdinal("packed") &&
+			isMockupGateClosed(order)
+		) {
+			throw new ConvexError(
+				"Awaiting mockup approval — the buyer must approve the mockup (or you can proceed without approval) before this order can move into production.",
+			);
+		}
+
+		const now = Date.now();
+		const statusChanged = order.status !== targetStatus;
+
+		const patch: Partial<{
+			status: typeof targetStatus;
+			currentStageId: string;
+			carrierTrackingUrl: string;
+			updatedAt: number;
+		}> = { status: targetStatus, currentStageId: stage.id, updatedAt: now };
+		if (targetStatus === "shipped" && carrierTrackingUrl) {
+			const trimmed = carrierTrackingUrl.trim();
+			if (trimmed.length > 0) patch.carrierTrackingUrl = trimmed;
+		}
+		await ctx.db.patch(orderId, patch);
+
+		// Freeze the EN label onto the event so order history survives a later
+		// rename/delete of the stage (pickupSnapshot pattern).
+		await ctx.db.insert("orderEvents", {
+			orderId,
+			status: targetStatus,
+			stageId: stage.id,
+			stageLabel: stageLabel(stage, "en"),
+			note,
+			createdAt: now,
+		});
+
+		const plan = stageNotifyPlan({
+			notify: stage.notify,
+			targetAnchor: targetStatus,
+			statusChanged,
+		});
+		if (plan === "canonical") {
+			// Anchor crossing → rich canonical copy (messageTemplates-aware).
+			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyStatusChange, {
+				orderId,
+			});
+		} else if (plan === "stage") {
+			// Within the same anchor → generic stage update.
+			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyStageEntry, {
+				orderId,
+				stageId: stage.id,
+			});
+		}
 	},
 });
 
