@@ -17,6 +17,11 @@ export function Faq() {
 	];
 
 	const secondaryItems = [
+		// Custom-order question leads the secondary set — first thing revealed on
+		// "See all", since made-to-order (cake decorators, persona #1) is core to the
+		// target cohort. Kept out of the primary 5 to avoid JSON-LD churn and
+		// displacing a universal buying objection.
+		{ q: m.faq_q_11(), a: m.faq_a_11() },
 		{ q: m.faq_q_2(), a: m.faq_a_2() },
 		{ q: m.faq_q_4(), a: m.faq_a_4() },
 		{ q: m.faq_q_5(), a: m.faq_a_5() },

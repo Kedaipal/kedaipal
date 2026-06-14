@@ -130,6 +130,18 @@ const FEATURES: Feature[] = [
 	},
 	{ label: "Manual payment claim", starter: true, pro: true, scale: true },
 	{ label: "Inventory tracking", starter: true, pro: true, scale: true },
+	{
+		label: "Product variants (up to 50 per product)",
+		starter: true,
+		pro: true,
+		scale: true,
+	},
+	{
+		label: "Mockup approval for custom orders",
+		starter: true,
+		pro: true,
+		scale: true,
+	},
 	{ label: "Customer database (CRM)", starter: false, pro: true, scale: true },
 	{
 		label: "Order inbox",

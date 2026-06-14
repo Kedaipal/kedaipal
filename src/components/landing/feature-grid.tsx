@@ -1,4 +1,11 @@
-import { BarChart3, BellRing, MessageCircle, Store } from "lucide-react";
+import {
+	BarChart3,
+	BellRing,
+	Boxes,
+	ClipboardCheck,
+	MessageCircle,
+	Store,
+} from "lucide-react";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { FadeIn } from "./fade-in";
@@ -16,6 +23,23 @@ const HERO_FEATURES = [
 		icon: Store,
 		title: () => m.feature_1_title(),
 		body: () => m.feature_1_body(),
+		dark: false,
+		span: "",
+	},
+	// "What you can sell" row — variants (wide, longer copy) + the custom-order
+	// mockup gate, our strongest made-to-order differentiator. Placed mid-grid by
+	// meaning, not appended last.
+	{
+		icon: Boxes,
+		title: () => m.feature_8_title(),
+		body: () => m.feature_8_body(),
+		dark: false,
+		span: "lg:col-span-2",
+	},
+	{
+		icon: ClipboardCheck,
+		title: () => m.feature_9_title(),
+		body: () => m.feature_9_body(),
 		dark: false,
 		span: "",
 	},
