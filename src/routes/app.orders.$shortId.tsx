@@ -37,6 +37,13 @@ import { Skeleton } from "../components/ui/skeleton";
 import { formatPhone } from "../lib/customer";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import { deriveMapsUrl } from "../lib/google-address";
+import {
+	anchorOrdinal,
+	resolveCurrentStage,
+	resolveStages,
+	resolveStatusLabel,
+	stageLabel,
+} from "../lib/orderStatus";
 import { StatusBadge } from "./app.orders.index";
 
 export const Route = createFileRoute("/app/orders/$shortId")({
@@ -102,46 +109,7 @@ function OrderDetailSkeleton() {
 	);
 }
 
-type Transition =
-	| "confirmed"
-	| "packed"
-	| "shipped"
-	| "delivered"
-	| "cancelled";
 type DeliveryMethod = "delivery" | "self_collect";
-
-const NEXT_STATUS: Record<string, Transition[]> = {
-	pending: ["confirmed", "cancelled"],
-	confirmed: ["packed", "cancelled"],
-	packed: ["shipped", "cancelled"],
-	shipped: ["delivered"],
-	delivered: [],
-	cancelled: [],
-};
-
-const DELIVERY_TRANSITION_LABELS: Record<Transition, string> = {
-	confirmed: "Confirm Order",
-	packed: "Mark as Packed",
-	shipped: "Mark as Shipped",
-	delivered: "Mark as Delivered",
-	cancelled: "Cancel Order",
-};
-
-const SELF_COLLECT_TRANSITION_LABELS: Record<Transition, string> = {
-	confirmed: "Confirm Order",
-	packed: "Mark as Packed",
-	shipped: "Ready for Pickup",
-	delivered: "Mark as Collected",
-	cancelled: "Cancel Order",
-};
-
-function getTransitionLabels(
-	method: DeliveryMethod,
-): Record<Transition, string> {
-	return method === "self_collect"
-		? SELF_COLLECT_TRANSITION_LABELS
-		: DELIVERY_TRANSITION_LABELS;
-}
 
 type PaymentStatus = "unpaid" | "claimed" | "received";
 
@@ -188,13 +156,15 @@ function OrderDetailRoute() {
 	const { shortId } = Route.useParams();
 	const order = useQuery(api.orders.get, { shortId });
 	const updateStatus = useMutation(api.orders.updateStatus);
+	const advanceToStage = useMutation(api.orders.advanceToStage);
 	const setCarrierUrl = useMutation(api.orders.setCarrierTrackingUrl);
 	const markPaymentReceived = useMutation(api.orders.markPaymentReceived);
 	const proofUrl = useQuery(
 		api.orders.getPaymentProofUrl,
 		order?.paymentProofStorageId ? { orderId: order._id } : "skip",
 	);
-	const [pending, setPending] = useState<Transition | null>(null);
+	// Holds the id of the in-flight advance target ("cancel" for cancellation).
+	const [pending, setPending] = useState<string | null>(null);
 	const [carrierInput, setCarrierInput] = useState<string | null>(null);
 	const [savingCarrier, setSavingCarrier] = useState(false);
 	const [confirmingPayment, setConfirmingPayment] = useState(false);
@@ -208,22 +178,58 @@ function OrderDetailRoute() {
 
 	const deliveryMethod = (order.deliveryMethod ?? "delivery") as DeliveryMethod;
 	const isSelfCollect = deliveryMethod === "self_collect";
-	const transitionLabels = getTransitionLabels(deliveryMethod);
-	const transitions = NEXT_STATUS[order.status] ?? [];
+	// Dashboard chrome is English-only (per the i18n scope), so resolve seller-
+	// facing labels in EN — a retailer's EN custom labels still flow through.
+	// The buyer tracking page resolves in the store's locale instead.
+	const statusLabelOpts = {
+		labels: order.statusLabels,
+		deliveryMethod,
+		locale: "en" as const,
+	};
+	// Phase 2 stage model: the seller's ordered stages (their config, or the
+	// synthesized defaults — same path), the order's current stage, and the next
+	// stage to advance into. Dashboard chrome is EN.
+	const stages = resolveStages({
+		orderStages: order.orderStages,
+		labels: order.statusLabels,
+		deliveryMethod,
+	});
+	const currentStage = resolveCurrentStage(
+		{ status: order.status, currentStageId: order.currentStageId },
+		stages,
+	);
+	const currentIdx = currentStage
+		? stages.findIndex((s) => s.id === currentStage.id)
+		: -1; // pending: not yet in the band → next is the first stage
+	const nextStage =
+		order.status === "cancelled" ? undefined : stages[currentIdx + 1];
+	const isTerminal = order.status === "cancelled" || order.status === "delivered";
 	const showCarrierSection =
 		!isSelfCollect && !["pending", "cancelled"].includes(order.status);
 	const editingCarrier = carrierInput !== null;
 	const paymentStatus = (order.paymentStatus ?? "unpaid") as PaymentStatus;
 	const paymentBadgeCfg = paymentBadge(paymentStatus);
-	// Production (→ packed) is blocked while a mockup is required but not yet
-	// approved or waived. Shared gate — same source as the server (lib/order).
+	// Production (any packed-or-later stage) is blocked while a mockup is required
+	// but not yet approved/waived. Shared gate — same source as the server.
 	const mockupGated = isMockupGateClosed(order);
 
-	async function handleTransition(next: Transition) {
+	async function handleAdvance(stageId: string) {
 		if (!order) return;
-		setPending(next);
+		setPending(stageId);
 		try {
-			await updateStatus({ orderId: order._id, status: next });
+			await advanceToStage({ orderId: order._id, stageId });
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setPending(null);
+		}
+	}
+
+	async function handleCancel() {
+		if (!order) return;
+		setPending("cancel");
+		try {
+			await updateStatus({ orderId: order._id, status: "cancelled" });
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -301,7 +307,14 @@ function OrderDetailRoute() {
 					</p>
 				</div>
 				<div className="flex flex-col items-start gap-1.5">
-					<StatusBadge status={order.status} />
+					<StatusBadge
+						status={order.status}
+						label={
+							currentStage
+								? stageLabel(currentStage, "en")
+								: resolveStatusLabel(order.status, statusLabelOpts)
+						}
+					/>
 					<span
 						className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${paymentBadgeCfg.className}`}
 					>
@@ -796,31 +809,53 @@ function OrderDetailRoute() {
 
 			{order.mockupStatus !== undefined ? <MockupCard order={order} /> : null}
 
-			{/* Status actions */}
-			{transitions.length > 0 ? (
+			{/* Stage actions — advance through the seller's stage list one step at a
+			    time (synthesized defaults when unconfigured). Cancel stays available
+			    until the order is terminal. */}
+			{!isTerminal ? (
 				<section className="flex flex-col gap-3">
 					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 						Update Status
 					</p>
 					<div className="flex flex-col gap-2">
-						{transitions.map((t) => {
-							const blocked = t === "packed" && mockupGated;
-							return (
-								<Button
-									key={t}
-									onClick={() => handleTransition(t)}
-									disabled={pending !== null || blocked}
-									variant={t === "cancelled" ? "secondary" : "default"}
-									className="h-11 w-full"
-								>
-									{pending === t
-										? "Updating…"
-										: blocked
-											? `${transitionLabels[t]} — awaiting mockup`
-											: transitionLabels[t]}
-								</Button>
-							);
-						})}
+						{nextStage
+							? (() => {
+									// Advancing into production (packed or later) is blocked
+									// while the mockup gate is closed — mirrors the server.
+									const blocked =
+										anchorOrdinal(nextStage.anchor) >=
+											anchorOrdinal("packed") && mockupGated;
+									// First move out of pending into a confirmed-anchored stage
+									// keeps the familiar "Confirm Order" verb; everything else
+									// reads "Mark as {stage}".
+									const advanceLabel =
+										order.status === "pending" &&
+										nextStage.anchor === "confirmed"
+											? "Confirm Order"
+											: `Mark as ${stageLabel(nextStage, "en")}`;
+									return (
+										<Button
+											onClick={() => handleAdvance(nextStage.id)}
+											disabled={pending !== null || blocked}
+											className="h-11 w-full"
+										>
+											{pending === nextStage.id
+												? "Updating…"
+												: blocked
+													? `${advanceLabel} — awaiting mockup`
+													: advanceLabel}
+										</Button>
+									);
+								})()
+							: null}
+						<Button
+							onClick={handleCancel}
+							disabled={pending !== null}
+							variant="secondary"
+							className="h-11 w-full"
+						>
+							{pending === "cancel" ? "Updating…" : "Cancel Order"}
+						</Button>
 					</div>
 				</section>
 			) : null}

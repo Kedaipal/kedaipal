@@ -29,6 +29,17 @@ import { Skeleton } from "../components/ui/skeleton";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import {
+	anchorOrdinal,
+	type Locale,
+	type OrderStatus,
+	resolveCurrentStage,
+	resolveStages,
+	resolveStatusLabel,
+	stageDescription,
+	stageLabel,
+	type StatusLabels,
+} from "../lib/orderStatus";
+import {
 	deriveMapsUrl,
 	googleMapsNavUrl,
 	wazeNavUrl,
@@ -101,25 +112,34 @@ type DeliveryMethod = "delivery" | "self_collect";
 
 type StatusCfg = { label: string; icon: ReactNode; color: string };
 
-function getStatusConfig(method: DeliveryMethod): Record<string, StatusCfg> {
+// Icons + colors are fixed per canonical status; only the text is retailer-
+// customizable. Labels resolve at render time (override → method preset → base
+// default) so a relabel is retroactive across all in-flight orders.
+function getStatusConfig(
+	method: DeliveryMethod,
+	labels: StatusLabels | undefined,
+	locale: Locale,
+): Record<string, StatusCfg> {
+	const label = (status: OrderStatus) =>
+		resolveStatusLabel(status, { labels, deliveryMethod: method, locale });
 	return {
 		pending: {
-			label: "Order Received",
+			label: label("pending"),
 			icon: <Clock className="size-5" />,
 			color: "text-amber-500",
 		},
 		confirmed: {
-			label: "Confirmed",
+			label: label("confirmed"),
 			icon: <CheckCircle className="size-5" />,
 			color: "text-blue-500",
 		},
 		packed: {
-			label: "Packed",
+			label: label("packed"),
 			icon: <Package className="size-5" />,
 			color: "text-violet-500",
 		},
 		shipped: {
-			label: method === "self_collect" ? "Ready for Pickup" : "On the Way",
+			label: label("shipped"),
 			icon:
 				method === "self_collect" ? (
 					<Store className="size-5" />
@@ -129,25 +149,17 @@ function getStatusConfig(method: DeliveryMethod): Record<string, StatusCfg> {
 			color: "text-orange-500",
 		},
 		delivered: {
-			label: method === "self_collect" ? "Collected" : "Delivered",
+			label: label("delivered"),
 			icon: <CheckCircle className="size-5" />,
 			color: "text-green-500",
 		},
 		cancelled: {
-			label: "Cancelled",
+			label: label("cancelled"),
 			icon: <XCircle className="size-5" />,
 			color: "text-destructive",
 		},
 	};
 }
-
-const STATUS_ORDER = [
-	"pending",
-	"confirmed",
-	"packed",
-	"shipped",
-	"delivered",
-] as const;
 
 function OrderNotFound() {
 	const { shortId } = Route.useParams();
@@ -245,7 +257,11 @@ function TrackingRoute() {
 
 	const deliveryMethod = (order.deliveryMethod ?? "delivery") as DeliveryMethod;
 	const isSelfCollect = deliveryMethod === "self_collect";
-	const statusConfig = getStatusConfig(deliveryMethod);
+	const statusConfig = getStatusConfig(
+		deliveryMethod,
+		order.statusLabels,
+		order.retailerLocale,
+	);
 	const config = statusConfig[order.status];
 	const isCancelled = order.status === "cancelled";
 	const canEditAddress = order.status === "pending" && !isSelfCollect;
@@ -278,45 +294,78 @@ function TrackingRoute() {
 			: null;
 	const showCustomWorkLine = customQuote > 0 && quoteLineIdx === null;
 
-	// Timeline nodes: the fulfilment statuses, with a virtual "mockup" step
-	// spliced in right after Confirmed for custom orders so the buyer sees where
-	// approval sits (and that it gates Packed). Non-custom orders get the plain
-	// fulfilment list.
-	const reachedIdx = STATUS_ORDER.indexOf(
-		order.status as (typeof STATUS_ORDER)[number],
+	// Phase 2: the timeline IS the seller's full ordered stage list (their config,
+	// or the synthesized defaults — same code path), led by the "order received"
+	// (pending) node. Every stage is visible; the current one is highlighted with
+	// its description inline. For custom orders a virtual mockup node is spliced
+	// in at the production boundary (before the first packed-or-later stage).
+	const stageLocale = order.retailerLocale;
+	const stages = resolveStages({
+		orderStages: order.orderStages,
+		labels: order.statusLabels,
+		deliveryMethod,
+	});
+	const currentStage = resolveCurrentStage(
+		{ status: order.status, currentStageId: order.currentStageId },
+		stages,
 	);
+	const stageIdx = currentStage
+		? stages.findIndex((s) => s.id === currentStage.id)
+		: -1;
+	// Combined position into the rendered list: 0 = pending node, 1..N = stages.
+	const currentPos =
+		order.status === "pending" ? 0 : stageIdx >= 0 ? stageIdx + 1 : 0;
+
 	const timelineNodes: Array<{
 		key: string;
 		label: string;
 		icon: ReactNode;
+		description?: string;
 		isDone: boolean;
 		isCurrent: boolean;
-	}> = [];
-	for (const [i, s] of STATUS_ORDER.entries()) {
-		const sc = statusConfig[s];
+	}> = [
+		{
+			key: "pending",
+			label: statusConfig.pending.label,
+			icon: statusConfig.pending.icon,
+			isDone: true, // any order on this page has at least been received
+			isCurrent: currentPos === 0,
+		},
+	];
+	for (const [i, stage] of stages.entries()) {
+		const pos = i + 1;
 		timelineNodes.push({
-			key: s,
-			label: sc?.label ?? s,
-			icon: sc?.icon,
-			isDone: i <= reachedIdx,
-			// For a gated custom order the active step is the mockup, not Confirmed.
-			isCurrent: s === order.status && !(s === "confirmed" && mockupGateClosed),
+			key: stage.id,
+			label: stageLabel(stage, stageLocale),
+			icon: statusConfig[stage.anchor]?.icon,
+			description:
+				pos === currentPos ? stageDescription(stage, stageLocale) : undefined,
+			isDone: pos <= currentPos,
+			isCurrent: pos === currentPos,
 		});
-		if (s === "confirmed" && order.mockupStatus !== undefined) {
-			timelineNodes.push({
-				key: "mockup",
-				label: mockupGateOpen
-					? "Mockup approved"
-					: order.mockupStatus === "submitted"
-						? "Pending mockup approval"
-						: order.mockupStatus === "changes_requested"
-							? "Pending mockup update"
-							: "Pending mockup design",
-				icon: <ImageIcon className="size-5" />,
-				isDone: mockupGateOpen,
-				isCurrent: mockupGateClosed && reachedIdx >= 1,
-			});
+	}
+	if (order.mockupStatus !== undefined) {
+		// While the gate is closed the mockup is the active step, not the stage.
+		if (mockupGateClosed && currentPos >= 1 && timelineNodes[currentPos]) {
+			timelineNodes[currentPos].isCurrent = false;
 		}
+		const firstProd = stages.findIndex(
+			(s) => anchorOrdinal(s.anchor) >= anchorOrdinal("packed"),
+		);
+		const insertAt = firstProd >= 0 ? firstProd + 1 : timelineNodes.length;
+		timelineNodes.splice(insertAt, 0, {
+			key: "mockup",
+			label: mockupGateOpen
+				? "Mockup approved"
+				: order.mockupStatus === "submitted"
+					? "Pending mockup approval"
+					: order.mockupStatus === "changes_requested"
+						? "Pending mockup update"
+						: "Pending mockup design",
+			icon: <ImageIcon className="size-5" />,
+			isDone: mockupGateOpen,
+			isCurrent: mockupGateClosed && currentPos >= 1,
+		});
 	}
 
 	return (
@@ -342,7 +391,11 @@ function TrackingRoute() {
 					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 						Status
 					</p>
-					<p className="font-semibold">{config?.label ?? order.status}</p>
+					<p className="font-semibold">
+						{currentStage
+							? stageLabel(currentStage, stageLocale)
+							: (config?.label ?? order.status)}
+					</p>
 				</div>
 			</div>
 
@@ -511,13 +564,18 @@ function TrackingRoute() {
 									/>
 								) : null}
 							</div>
-							{/* label */}
+							{/* label (+ the current stage's buyer-visible description) */}
 							<div className="pb-6 pt-1">
 								<p
 									className={`text-sm font-medium ${node.isCurrent ? "text-foreground" : node.isDone ? "text-foreground/70" : "text-muted-foreground"}`}
 								>
 									{node.label}
 								</p>
+								{node.description ? (
+									<p className="mt-0.5 text-xs text-muted-foreground">
+										{node.description}
+									</p>
+								) : null}
 							</div>
 						</div>
 					))}

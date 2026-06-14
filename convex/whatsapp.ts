@@ -15,6 +15,13 @@ import {
 	type PaymentMethod,
 	resolvePaymentMethods,
 } from "./lib/payment";
+import {
+	type OrderStage,
+	resolveStages,
+	stageDescription,
+	stageLabel,
+	type StatusLabels,
+} from "./lib/orderStatus";
 import { assertValidWaPhone } from "./lib/slug";
 import {
 	paymentQrCaption,
@@ -22,6 +29,7 @@ import {
 	renderMessage,
 	renderPaymentMethods,
 	renderPickupBlock,
+	renderStageUpdate,
 	renderSystemMessage,
 	SHORT_ID_REGEX,
 	type DeliveryMethod,
@@ -175,6 +183,11 @@ export const getOrderWithRetailer = internalQuery({
 		deliveryMethod: DeliveryMethod;
 		locale: Locale;
 		messageTemplates: MessageTemplates | undefined;
+		// Phase 2: stage config + this order's current stage, for stage-update
+		// notifications (notifyStageEntry).
+		orderStages: OrderStage[] | undefined;
+		statusLabels: StatusLabels | undefined;
+		currentStageId: string | undefined;
 	} | null> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) return null;
@@ -193,6 +206,9 @@ export const getOrderWithRetailer = internalQuery({
 			messageTemplates: retailer.messageTemplates as
 				| MessageTemplates
 				| undefined,
+			orderStages: retailer.orderStages as OrderStage[] | undefined,
+			statusLabels: retailer.statusLabels as StatusLabels | undefined,
+			currentStageId: order.currentStageId,
 		};
 	},
 });
@@ -487,6 +503,56 @@ export const notifyStatusChange = internalAction({
 			});
 		} catch (err) {
 			console.error("WA status notify failed", err);
+		}
+	},
+});
+
+/**
+ * Phase 2: scheduled by orders.advanceToStage when a seller advances an order
+ * into a custom stage that does NOT cross a canonical anchor (so the rich status
+ * templates in `notifyStatusChange` don't fire) and the stage has `notify: true`
+ * — e.g. Cleaning → Washing, both anchored to `packed`. Sends one generic
+ * stage-update message built from the stage's (store-locale) label + optional
+ * description. Same swallow-errors / no-op-on-missing-waPhone shape as the other
+ * notify actions. Anchor-CROSSING moves go through notifyStatusChange instead,
+ * so this never double-sends.
+ */
+export const notifyStageEntry = internalAction({
+	args: { orderId: v.id("orders"), stageId: v.string() },
+	handler: async (ctx, { orderId, stageId }): Promise<void> => {
+		const meta = await ctx
+			.runQuery(internal.whatsapp.getOrderWithRetailer, { orderId })
+			.catch((err) => {
+				console.error("WA stage-update lookup failed", err);
+				return null;
+			});
+		if (!meta) return;
+		if (!meta.customerWaPhone) return;
+
+		const locale = pickLocale(meta.locale);
+		const stages = resolveStages({
+			orderStages: meta.orderStages,
+			labels: meta.statusLabels,
+			deliveryMethod: meta.deliveryMethod,
+		});
+		const stage = stages.find((s) => s.id === stageId);
+		if (!stage) return; // stage was deleted between schedule + run — drop silently
+
+		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
+		const body = renderStageUpdate(locale, {
+			shortId: meta.shortId,
+			stageLabel: stageLabel(stage, locale),
+			stageDescription: stageDescription(stage, locale),
+			trackingUrl: `${appUrl}/track/${meta.shortId}`,
+			contactPhone: meta.retailerWaPhone,
+		});
+		try {
+			await getAdapter("whatsapp").send(meta.customerWaPhone, {
+				kind: "text",
+				body,
+			});
+		} catch (err) {
+			console.error("WA stage-update notify failed", err);
 		}
 	},
 });

@@ -14,6 +14,95 @@ const messageTemplatesValidator = v.object({
 	ms: v.optional(localeOverridesValidator),
 });
 
+// Per-retailer SHORT status labels (tracking timeline / dashboard). Six optional
+// strings per locale, mirroring `statusLabels` on the schema. Sanitized +
+// length-capped in `sanitizeStatusLabels`.
+const statusLabelOverridesValidator = v.object({
+	pending: v.optional(v.string()),
+	confirmed: v.optional(v.string()),
+	packed: v.optional(v.string()),
+	shipped: v.optional(v.string()),
+	delivered: v.optional(v.string()),
+	cancelled: v.optional(v.string()),
+});
+
+const statusLabelsValidator = v.object({
+	en: v.optional(statusLabelOverridesValidator),
+	ms: v.optional(statusLabelOverridesValidator),
+});
+
+// Phase 2 custom stages. `id`/`sortOrder` optional on the wire — the server
+// generates missing ids and renumbers sortOrder to the array (display) order,
+// like sanitizePaymentMethods. Cap / monotonic-anchor / label rules enforced in
+// sanitizeOrderStages via assertValidOrderStages.
+const orderStagesValidator = v.array(
+	v.object({
+		id: v.optional(v.string()),
+		anchor: v.union(
+			v.literal("confirmed"),
+			v.literal("packed"),
+			v.literal("shipped"),
+			v.literal("delivered"),
+		),
+		label: v.object({ en: v.string(), ms: v.optional(v.string()) }),
+		description: v.optional(
+			v.object({ en: v.optional(v.string()), ms: v.optional(v.string()) }),
+		),
+		notify: v.boolean(),
+		sortOrder: v.optional(v.number()),
+	}),
+);
+
+// Loose wire shape (id/sortOrder optional) before sanitize normalizes it.
+type OrderStageInput = {
+	id?: string;
+	anchor: StageAnchor;
+	label: { en: string; ms?: string };
+	description?: { en?: string; ms?: string };
+	notify: boolean;
+	sortOrder?: number;
+};
+
+/**
+ * Normalize a proposed stage list: trim labels/descriptions (dropping blank
+ * locale fields), generate stable ids for new stages, renumber `sortOrder` to
+ * the array (display) order, then enforce the config rules (cap, band,
+ * monotonic anchors, label caps) via `assertValidOrderStages`. Empty array →
+ * undefined, which makes the retailer fall back to synthesized default stages.
+ * Throws a plain Error on a rule violation; the mutation wraps it in ConvexError.
+ */
+function sanitizeOrderStages(
+	input: OrderStageInput[] | undefined,
+): OrderStage[] | undefined {
+	if (!input || input.length === 0) return undefined;
+	const out: OrderStage[] = input.map((s, i) => {
+		const en = (s.label?.en ?? "").trim();
+		const ms = (s.label?.ms ?? "").trim();
+		const descEn = (s.description?.en ?? "").trim();
+		const descMs = (s.description?.ms ?? "").trim();
+		const description =
+			descEn || descMs
+				? {
+						...(descEn ? { en: descEn } : {}),
+						...(descMs ? { ms: descMs } : {}),
+					}
+				: undefined;
+		// Reuse a client-supplied stable id; mint one for a brand-new stage. Never
+		// collides with synthesized "default:<anchor>" ids.
+		const id = (s.id ?? "").trim() || crypto.randomUUID();
+		return {
+			id,
+			anchor: s.anchor,
+			label: { en, ...(ms ? { ms } : {}) },
+			...(description ? { description } : {}),
+			notify: Boolean(s.notify),
+			sortOrder: i,
+		};
+	});
+	assertValidOrderStages(out);
+	return out;
+}
+
 const paymentInstructionsValidator = v.object({
 	bankName: v.optional(v.string()),
 	bankAccountName: v.optional(v.string()),
@@ -96,6 +185,15 @@ import {
 	resolvePaymentMethods,
 	sanitizePaymentMethods,
 } from "./lib/payment";
+import {
+	assertValidOrderStages,
+	ORDER_STATUS_KEYS,
+	type OrderStage,
+	type StageAnchor,
+	STATUS_LABEL_MAX_LENGTH,
+	type StatusLabelMap,
+	type StatusLabels,
+} from "./lib/orderStatus";
 
 /** Trim and bound a best-effort client IP before persisting. */
 function sanitizeAcceptanceIp(ip: string | undefined): string | undefined {
@@ -165,6 +263,38 @@ function sanitizeMessageTemplates(
 	return Object.keys(out).length > 0 ? out : undefined;
 }
 
+// Trim each status label, treat empty/whitespace as unset (so a seller can't
+// blank a stage to ""), and enforce the per-label char cap server-side — not
+// just in CSS — so an over-long / emoji-stuffed label can't break the pills.
+function sanitizeStatusLabelOverrides(
+	input: StatusLabelMap | undefined,
+): StatusLabelMap | undefined {
+	if (!input) return undefined;
+	const out: StatusLabelMap = {};
+	for (const key of ORDER_STATUS_KEYS) {
+		const raw = input[key];
+		if (raw === undefined) continue;
+		const trimmed = raw.trim();
+		if (trimmed.length === 0) continue; // empty → reset to default
+		if (trimmed.length > STATUS_LABEL_MAX_LENGTH) {
+			throw new ConvexError(
+				`Status label "${key}" exceeds ${STATUS_LABEL_MAX_LENGTH} characters`,
+			);
+		}
+		out[key] = trimmed;
+	}
+	return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function sanitizeStatusLabels(input: StatusLabels): StatusLabels | undefined {
+	const en = sanitizeStatusLabelOverrides(input.en);
+	const ms = sanitizeStatusLabelOverrides(input.ms);
+	const out: StatusLabels = {};
+	if (en) out.en = en;
+	if (ms) out.ms = ms;
+	return Object.keys(out).length > 0 ? out : undefined;
+}
+
 type RetailerPublic = {
 	_id: Id<"retailers">;
 	slug: string;
@@ -177,6 +307,12 @@ type RetailerPublic = {
 	currency: SupportedCurrency;
 	locale: Locale;
 	messageTemplates?: MessageTemplatesShape;
+	// Per-retailer SHORT status labels (tracking timeline / dashboard). Omitted
+	// keys fall back to defaults at render time via convex/lib/orderStatus.ts.
+	statusLabels?: StatusLabels;
+	// Phase 2 custom stages (ordered). Undefined => the resolver synthesizes the
+	// default stages from statusLabels. Surfaced for the settings stage editor.
+	orderStages?: OrderStage[];
 	// Resolved payment methods (legacy-aware) with each QR storage id turned into
 	// a viewable URL — what the settings UI renders + edits. Omitted from the
 	// public storefront payload (only `getMyRetailer` populates it).
@@ -235,6 +371,8 @@ async function loadRetailerForUser(
 		currency: (row.currency as SupportedCurrency) ?? DEFAULT_CURRENCY,
 		locale: row.locale ?? DEFAULT_LOCALE,
 		messageTemplates: row.messageTemplates as MessageTemplatesShape | undefined,
+		statusLabels: row.statusLabels as StatusLabels | undefined,
+		orderStages: row.orderStages as OrderStage[] | undefined,
 		paymentMethods,
 		offerSelfCollect: row.offerSelfCollect,
 		pickupSetupSeen: row.pickupSetupSeen,
@@ -494,6 +632,8 @@ export const updateSettings = mutation({
 		currency: v.optional(v.string()),
 		locale: v.optional(v.union(v.literal("en"), v.literal("ms"))),
 		messageTemplates: v.optional(messageTemplatesValidator),
+		statusLabels: v.optional(statusLabelsValidator),
+		orderStages: v.optional(orderStagesValidator),
 		paymentInstructions: v.optional(paymentInstructionsValidator),
 		// Multi-method payment config. When provided, supersedes (and clears) the
 		// legacy single `paymentInstructions` object on this retailer.
@@ -518,6 +658,8 @@ export const updateSettings = mutation({
 			currency: SupportedCurrency;
 			locale: Locale;
 			messageTemplates: MessageTemplatesShape | undefined;
+			statusLabels: StatusLabels | undefined;
+			orderStages: OrderStage[] | undefined;
 			paymentInstructions: PaymentInstructionsShape | undefined;
 			paymentMethods: PaymentMethod[] | undefined;
 			offerSelfCollect: boolean;
@@ -549,6 +691,16 @@ export const updateSettings = mutation({
 		}
 		if (args.messageTemplates !== undefined) {
 			patch.messageTemplates = sanitizeMessageTemplates(args.messageTemplates);
+		}
+		if (args.statusLabels !== undefined) {
+			patch.statusLabels = sanitizeStatusLabels(args.statusLabels);
+		}
+		if (args.orderStages !== undefined) {
+			try {
+				patch.orderStages = sanitizeOrderStages(args.orderStages);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
 		}
 		if (args.paymentInstructions !== undefined) {
 			patch.paymentInstructions = sanitizePaymentInstructions(

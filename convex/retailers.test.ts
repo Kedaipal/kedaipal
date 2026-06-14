@@ -636,3 +636,247 @@ describe("retailers.markPickupSetupSeen", () => {
 		expect(bRetailer?.pickupSetupSeen).toBeUndefined();
 	});
 });
+
+describe("statusLabels (Phase 1 order status customization)", () => {
+	test("updateSettings saves labels; getMyRetailer surfaces them", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "labels-store");
+		await asA.mutation(api.retailers.updateSettings, {
+			statusLabels: {
+				en: { shipped: "Out for delivery", delivered: "Done" },
+				ms: { shipped: "Dalam penghantaran" },
+			},
+		});
+
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.statusLabels).toEqual({
+			en: { shipped: "Out for delivery", delivered: "Done" },
+			ms: { shipped: "Dalam penghantaran" },
+		});
+	});
+
+	test("trims whitespace and drops empty / whitespace-only labels", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "labels-trim");
+		await asA.mutation(api.retailers.updateSettings, {
+			statusLabels: {
+				en: {
+					shipped: "  Ready to collect  ",
+					packed: "   ", // whitespace-only → dropped
+					delivered: "", // empty → dropped
+				},
+			},
+		});
+
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.statusLabels).toEqual({ en: { shipped: "Ready to collect" } });
+	});
+
+	test("an all-empty payload clears statusLabels back to undefined", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "labels-clear");
+		await asA.mutation(api.retailers.updateSettings, {
+			statusLabels: { en: { shipped: "Ready" } },
+		});
+		// Now blank every field — sanitize collapses to undefined.
+		await asA.mutation(api.retailers.updateSettings, {
+			statusLabels: { en: { shipped: "" }, ms: { packed: "   " } },
+		});
+
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.statusLabels).toBeUndefined();
+	});
+
+	test("rejects a label over the 24-char cap", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "labels-cap");
+		await expect(
+			asA.mutation(api.retailers.updateSettings, {
+				statusLabels: {
+					en: { shipped: "x".repeat(25) },
+				},
+			}),
+		).rejects.toThrow(/24 characters/);
+	});
+
+	test("accepts a label exactly at the 24-char cap", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "labels-cap-ok");
+		const exact = "x".repeat(24);
+		await asA.mutation(api.retailers.updateSettings, {
+			statusLabels: { en: { shipped: exact } },
+		});
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.statusLabels?.en?.shipped).toBe(exact);
+	});
+
+	test("orders.get surfaces the retailer's statusLabels + locale", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "labels-order");
+		await asA.mutation(api.retailers.updateSettings, {
+			locale: "ms",
+			statusLabels: { ms: { shipped: "Sedia diambil" } },
+		});
+		const retailer = await asA.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("no retailer");
+
+		// Insert an order directly so we can read it back through orders.get.
+		const shortId = "ORD-TEST";
+		await t.run(async (ctx) => {
+			await ctx.db.insert("orders", {
+				retailerId: retailer._id,
+				shortId,
+				items: [],
+				subtotal: 0,
+				total: 0,
+				currency: "MYR",
+				status: "shipped",
+				channel: "whatsapp",
+				customer: {},
+				deliveryMethod: "self_collect",
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			});
+		});
+
+		const order = await t.query(api.orders.get, { shortId });
+		expect(order?.retailerLocale).toBe("ms");
+		expect(order?.statusLabels).toEqual({ ms: { shipped: "Sedia diambil" } });
+	});
+});
+
+describe("orderStages (Phase 2 custom stages)", () => {
+	const SUIT = [
+		{ anchor: "confirmed" as const, label: { en: "Accepted" }, notify: true },
+		{ anchor: "packed" as const, label: { en: "Cleaning", ms: "Mencuci" }, notify: false },
+		{ anchor: "packed" as const, label: { en: "Drying" }, notify: false, description: { en: "1–2 days" } },
+		{ anchor: "delivered" as const, label: { en: "Collected" }, notify: true },
+	];
+
+	test("saves stages; getMyRetailer surfaces them with ids + renumbered sortOrder", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "stages-store");
+		await asA.mutation(api.retailers.updateSettings, { orderStages: SUIT });
+
+		const me = await asA.query(api.retailers.getMyRetailer);
+		const stages = me?.orderStages;
+		expect(stages).toHaveLength(4);
+		// sortOrder renumbered to array order; every stage got a stable id.
+		expect(stages?.map((s) => s.sortOrder)).toEqual([0, 1, 2, 3]);
+		expect(stages?.every((s) => typeof s.id === "string" && s.id.length > 0)).toBe(true);
+		expect(stages?.[1]).toMatchObject({ anchor: "packed", label: { en: "Cleaning", ms: "Mencuci" } });
+		expect(stages?.[2].description).toEqual({ en: "1–2 days" });
+	});
+
+	test("trims labels and drops blank ms/description fields", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "stages-trim");
+		await asA.mutation(api.retailers.updateSettings, {
+			orderStages: [
+				{ anchor: "confirmed", label: { en: "  Accepted  ", ms: "   " }, notify: true, description: { en: "", ms: "  " } },
+			],
+		});
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.orderStages?.[0].label).toEqual({ en: "Accepted" });
+		expect(me?.orderStages?.[0].description).toBeUndefined();
+	});
+
+	test("reusing a supplied id keeps it stable across saves", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "stages-stable");
+		await asA.mutation(api.retailers.updateSettings, { orderStages: SUIT });
+		const first = await asA.query(api.retailers.getMyRetailer);
+		const ids = first?.orderStages?.map((s) => s.id) ?? [];
+		// Re-save echoing the ids back → unchanged.
+		await asA.mutation(api.retailers.updateSettings, {
+			orderStages: (first?.orderStages ?? []).map((s) => ({ ...s })),
+		});
+		const second = await asA.query(api.retailers.getMyRetailer);
+		expect(second?.orderStages?.map((s) => s.id)).toEqual(ids);
+	});
+
+	test("empty array clears stages back to undefined (use defaults)", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "stages-clear");
+		await asA.mutation(api.retailers.updateSettings, { orderStages: SUIT });
+		await asA.mutation(api.retailers.updateSettings, { orderStages: [] });
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.orderStages).toBeUndefined();
+	});
+
+	test("rejects a backwards anchor (monotonic rule)", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "stages-mono");
+		await expect(
+			asA.mutation(api.retailers.updateSettings, {
+				orderStages: [
+					{ anchor: "packed", label: { en: "Cleaning" }, notify: false },
+					{ anchor: "confirmed", label: { en: "Accepted" }, notify: true },
+				],
+			}),
+		).rejects.toThrow(/out of order/i);
+	});
+
+	test("rejects exceeding the 20-stage cap", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "stages-cap");
+		const many = Array.from({ length: 21 }, () => ({
+			anchor: "packed" as const,
+			label: { en: "Step" },
+			notify: false,
+		}));
+		await expect(
+			asA.mutation(api.retailers.updateSettings, { orderStages: many }),
+		).rejects.toThrow(/At most 20/);
+	});
+
+	test("rejects a stage with no English label", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "stages-nolabel");
+		await expect(
+			asA.mutation(api.retailers.updateSettings, {
+				orderStages: [{ anchor: "confirmed", label: { en: "  " }, notify: true }],
+			}),
+		).rejects.toThrow(/English label/i);
+	});
+
+	test("rejects more than one Accepted (confirmed) stage", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "stages-2accepted");
+		await expect(
+			asA.mutation(api.retailers.updateSettings, {
+				orderStages: [
+					{ anchor: "confirmed", label: { en: "Received" }, notify: false },
+					{ anchor: "confirmed", label: { en: "Reviewing" }, notify: false },
+				],
+			}),
+		).rejects.toThrow(/Only one "Accepted"/);
+	});
+
+	test("rejects more than one Done (delivered) stage", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "stages-2done");
+		await expect(
+			asA.mutation(api.retailers.updateSettings, {
+				orderStages: [
+					{ anchor: "delivered", label: { en: "Collected" }, notify: true },
+					{ anchor: "delivered", label: { en: "Reviewed" }, notify: true },
+				],
+			}),
+		).rejects.toThrow(/Only one "Done"/);
+	});
+
+	test("rejects more than 5 notifying stages", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "stages-notifycap");
+		await expect(
+			asA.mutation(api.retailers.updateSettings, {
+				orderStages: Array.from({ length: 6 }, (_, i) => ({
+					anchor: "packed" as const,
+					label: { en: `Step ${i}` },
+					notify: true,
+				})),
+			}),
+		).rejects.toThrow(/can notify the buyer/i);
+	});
+});
