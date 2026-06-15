@@ -26,6 +26,7 @@ import { IvePaidDialog } from "../components/storefront/ive-paid-dialog";
 import { Button } from "../components/ui/button";
 import { CopyButton } from "../components/ui/copy-button";
 import { Skeleton } from "../components/ui/skeleton";
+import { ZoomableImage } from "../components/ui/zoomable-image";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import {
@@ -518,12 +519,15 @@ function TrackingRoute() {
 								</>
 							) : m.qrImageUrl ? (
 								<div className="flex flex-col items-center gap-1.5">
-									<img
+									<ZoomableImage
 										src={m.qrImageUrl}
 										alt={`${m.label} QR code`}
+										caption={m.label}
 										className="max-h-56 w-auto rounded-lg border border-border bg-white"
 									/>
-									<p className="text-xs text-muted-foreground">Scan to pay</p>
+									<p className="text-xs text-muted-foreground">
+										Tap to enlarge &amp; scan
+									</p>
 								</div>
 							) : null}
 							{m.note ? (
@@ -933,18 +937,13 @@ function MockupReview({
 			</div>
 
 			{order.mockupImageStorageId && mockupUrl ? (
-				<a
-					href={mockupUrl}
-					target="_blank"
-					rel="noreferrer"
-					className="block overflow-hidden rounded-xl border border-border bg-white"
-				>
-					<img
-						src={mockupUrl}
-						alt="Your mockup"
-						className="block max-h-72 w-full object-contain"
-					/>
-				</a>
+				<ZoomableImage
+					src={mockupUrl}
+					alt="Your mockup"
+					caption="Your mockup"
+					wrapperClassName="block w-full overflow-hidden rounded-xl border border-border bg-white"
+					className="block max-h-72 w-full object-contain"
+				/>
 			) : null}
 
 			{quoted != null && quoted > 0 ? (

@@ -9,6 +9,7 @@ import {
 } from "../../lib/variant";
 import { Button } from "../ui/button";
 import { Markdown } from "../ui/markdown";
+import { ZoomableImage } from "../ui/zoomable-image";
 import type { StorefrontProduct } from "./product-card";
 
 export type StorefrontVariant = StorefrontProduct["variants"][number];
@@ -131,11 +132,13 @@ export function ProductDetailSheet({
 						{images.length > 0 ? (
 							<div className="-mx-5 mb-4 flex snap-x snap-mandatory gap-2 overflow-x-auto px-5">
 								{images.map((url) => (
-									<img
+									<ZoomableImage
 										key={url}
 										src={url}
 										alt={product.name}
-										className="aspect-square w-64 shrink-0 snap-start rounded-2xl object-cover"
+										caption={product.name}
+										wrapperClassName="w-64 shrink-0 snap-start"
+										className="aspect-square w-full rounded-2xl object-cover"
 									/>
 								))}
 							</div>
