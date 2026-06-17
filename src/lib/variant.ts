@@ -13,7 +13,21 @@ export type VariantLike = {
 	// product.blockWhenOutOfStock`). A mixed product can have made-to-order
 	// variants (false) alongside hard-block ones (true).
 	blockWhenOutOfStock?: boolean;
+	// The custom / made-to-order line lives OUTSIDE the option-axis grid, so it's
+	// excluded from pill availability + selection resolution. See getCustomLine +
+	// docs/custom-option.md.
+	isCustom?: boolean;
 };
+
+/**
+ * The product's single custom / made-to-order line, if it offers one. Selected
+ * via its own storefront CTA — never through the axis pills.
+ */
+export function getCustomLine<T extends VariantLike>(
+	variants: readonly T[],
+): T | null {
+	return variants.find((v) => v.isCustom) ?? null;
+}
 
 /** ["1kg","Fillet"] → "1kg / Fillet"; "" for the implicit default variant. */
 export function variantLabel(optionValues: readonly string[]): string {
@@ -74,6 +88,7 @@ export function availableValuesPerAxis(
 			// Build a hypothetical selection: this axis pinned to `value`, every
 			// other axis kept at its current choice (null = wildcard).
 			const matches = variants.some((variant) => {
+				if (variant.isCustom) return false; // not an axis-addressable variant
 				if (!isSellable(variant)) return false;
 				return options.every((_, i) => {
 					if (i === axisIndex) return variant.optionValues[i] === value;
@@ -97,8 +112,11 @@ export function resolveVariant<T extends VariantLike>(
 ): T | null {
 	if (selection.some((s) => s === null)) return null;
 	return (
-		variants.find((variant) =>
-			sameOptionValues(variant.optionValues, selection),
+		variants.find(
+			// Skip the custom line — for a no-axes product it ALSO has optionValues
+			// [], so it would otherwise shadow the real default variant.
+			(variant) =>
+				!variant.isCustom && sameOptionValues(variant.optionValues, selection),
 		) ?? null
 	);
 }

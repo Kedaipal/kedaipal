@@ -29,7 +29,7 @@
 				"noLabelWithoutControl": {
 					"level": "error",
 					"options": {
-						"inputComponents": ["Input"]
+						"inputComponents": ["Input", "PriceInput", "StockInput"]
 					}
 				}
 			}

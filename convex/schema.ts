@@ -263,6 +263,20 @@ export default defineSchema({
 		blockWhenOutOfStock: v.optional(v.boolean()),
 		// `true` = an order containing THIS variant is mockup-gated.
 		requiresProof: v.optional(v.boolean()),
+		// Custom / made-to-order line: a single per-product variant that lives
+		// OUTSIDE the option-axis cartesian. `optionValues` is [] (like a no-axes
+		// default — disambiguated from it by this flag, never by optionValues), and
+		// it always behaves as made-to-order + mockup-gated (blockWhenOutOfStock
+		// false, requiresProof true). Lets a product offer "S/M/L … plus a bespoke
+		// custom order" without multiplying "Custom" across every size. See
+		// docs/custom-option.md.
+		isCustom: v.optional(v.boolean()),
+		// Buyer-facing name for the custom line (default "Custom"). Only meaningful
+		// when isCustom is true.
+		customLabel: v.optional(v.string()),
+		// Optional prompt shown to the buyer when they pick the custom line, telling
+		// them what to specify ("Tell us your design, flavour & date"). isCustom only.
+		customPrompt: v.optional(v.string()),
 		sortOrder: v.number(),
 		createdAt: v.number(),
 		updatedAt: v.number(),

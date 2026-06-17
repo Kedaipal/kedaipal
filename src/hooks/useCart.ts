@@ -25,6 +25,10 @@ export type CartItem = {
 	// True for a made-to-order variant sold at RM0 — the price is quoted by the
 	// seller after the order (on the mockup). Rendered as "Price on quote".
 	quoteOnRequest?: boolean;
+	// Buyer's request for a custom / made-to-order line ("unicorn theme, size 8").
+	// Captured at add-time; composed (labelled) into the order's customerNote at
+	// checkout so the seller sees it in WhatsApp + the dashboard. See docs/custom-option.md.
+	note?: string;
 };
 
 type CartState = {
@@ -52,7 +56,13 @@ function reducer(state: CartState, action: CartAction): CartState {
 				return {
 					items: state.items.map((i) =>
 						i.variantId === action.item.variantId
-							? { ...i, quantity: i.quantity + action.quantity }
+							? {
+									...i,
+									quantity: i.quantity + action.quantity,
+									// Re-requesting a custom line updates its note (latest wins);
+									// keep the prior note if this add carried none.
+									note: action.item.note ?? i.note,
+								}
 							: i,
 					),
 				};

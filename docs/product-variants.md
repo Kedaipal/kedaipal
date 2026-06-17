@@ -126,9 +126,10 @@ client price (preserves the existing `{ productId, quantity }`-only trust model 
 - **`convex/orders.ts` + `convex/lib/order.ts`** — order create reads/decrements
   `productVariants.onHand` in the transactional mutation (Convex gives concurrency
   correctness for free); totals + `orders.items` carry `variantId`/`variantLabel`.
-- **`src/routes/app.products.$productId.tsx`** — the new variant-grid editor (axis builder +
-  cartesian grid + bulk-fill) AND the product description editor (plain textarea; markdown
-  authored as plain text).
+- **`src/components/forms/product-form.tsx` + `variant-editor.tsx`** — the variant-grid editor
+  (axis builder + cartesian grid + bulk-fill, responsive cards/table) AND the product
+  description editor (textarea with a live markdown **preview** toggle — see §12). Mounted by
+  the `app.products.new` / `app.products.$productId` routes.
 - **`src/routes/app.products.index.tsx`** — product list shows "from RM X" / variant count.
   ⚠️ This read now **aggregates `productVariants` per product** — fetch by `by_product` and
   reduce; do **not** query per-row in a loop (read-amplification / N+1 watch).
@@ -250,3 +251,51 @@ down-convert later). Sources captured in the originating research thread.
 graphic (no per-variant photos), and bundles "what's included" into the product description
 as free text. Confirms the 1-axis pill picker as the v1 target, description-as-markdown for
 specs, and that the grey-out/stock half is exercised by F&B, not by their made-to-order prints.
+
+## 12. Seller-form clarity pass (added 2026-06-15)
+
+The variant grid shipped functionally complete but several high-value capabilities were
+hard to discover or read. This pass (no schema/behaviour change — pure UI) addresses that.
+Lives in `src/components/forms/variant-editor.tsx` + `product-form.tsx`.
+
+- **Fulfilment as a positive choice.** The `blockWhenOutOfStock` checkbox ("Stop orders when
+  out of stock — off = made-to-order") was a confusing double-negative. Replaced with a
+  two-segment toggle — **📦 Track stock** vs **🧑‍🍳 Made to order** (`FulfilmentToggle`,
+  `aria-pressed`). Field semantics unchanged: pressed "Track stock" = `blockWhenOutOfStock:true`.
+- **Mockup approval, legibly.** `requiresProof` copy rewritten so a cake decorator recognises
+  it ("…e.g. a cake decorator gets the design approved before baking"). `MockupApprovalToggle`.
+- **One-time legend for the grid.** Per-variant toggles render `compact` (no inline helper —
+  repeating it under 50 cards is noise), so a single `<dl>` legend above the grid defines
+  📦 Track stock / 🧑‍🍳 Made to order / Approval once. Inline text, not a hover `title` —
+  works on touch (the desktop table's `title=` tooltips don't).
+- **Mobile-first variant grid.** The 8-column horizontal-scroll `<table>` violated the
+  mobile-first rule. Now **responsive**: stacked labeled cards (`<ul class="sm:hidden">`)
+  below `sm`, the dense table at `sm+` (for power-users editing toward the 50-variant cap).
+  Image upload/remove is single-sourced via `renderRowImage`; price/stock normalization via
+  shared `PriceInput`/`StockInput` (registered in biome `noLabelWithoutControl.inputComponents`).
+- **Bulk "apply to all" labels** now describe the action the tap performs ("Make all
+  made-to-order" / "Require approval on all") rather than the resulting state.
+- **Description markdown is now previewable.** `product-form.tsx` adds a "Preview formatting"
+  toggle rendering the *same* `<Markdown>` component the storefront uses (seller preview ===
+  buyer render), plus a live 1000-char counter (matches `productDetailsSchema`) and a
+  "Pricing & stock" section heading that signposts variants up-front.
+- **Tests:** `src/components/forms/variant-editor.test.tsx` — the repo's first component test
+  (per-file `@vitest-environment jsdom`, `convex/react` stubbed); covers the fulfilment
+  reframe, approval copy, and the responsive card+table render.
+
+### Considered & deferred — buyer geolocation button
+A browser-Geolocation "use my current location" button (reverse-geocode to prefill the
+delivery form) was scoped and **dropped**: the existing Places **autocomplete** already
+captures the precise lat/lng pin, GPS indoors often lands on an approximate address the buyer
+must correct anyway, and F&B buyers usually order *for* an address they aren't standing at.
+Marginal easement, not built. Revisit only if buyers report address-entry pain.
+
+## 13. Custom / made-to-order option (added 2026-06-17)
+
+A bespoke "Custom" line is **not** a variant axis value — it's not combinable with Size, so
+forcing it through the cartesian multiplied it across every size. The custom option lets a
+product offer **one** made-to-order line that lives **outside** the grid (a `productVariants`
+row flagged `isCustom`, told apart from a no-axes default by the flag, never by `optionValues`).
+It reuses the `requiresProof` → `mockupStatus` re-quote machinery end-to-end (no order-flow
+changes). Full spec — data model, the reconcile/resolve invariant care, seller + buyer UX —
+in [`docs/custom-option.md`](./custom-option.md).

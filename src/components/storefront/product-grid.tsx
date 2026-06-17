@@ -1,6 +1,7 @@
 import { useQuery } from "convex/react";
 import { Search, X } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
@@ -60,8 +61,13 @@ export function ProductGrid({ retailerId, cart }: ProductGridProps) {
 		p: StorefrontProduct,
 		variant: StorefrontVariant,
 		qty: number,
+		note?: string,
 	) => {
-		const label = variantLabel(variant.optionValues);
+		// The custom line has no optionValues — label it with its custom name so the
+		// cart + order can tell it apart from the default variant.
+		const label = variant.isCustom
+			? (variant.customLabel ?? "Custom")
+			: variantLabel(variant.optionValues);
 		cart.addItem(
 			{
 				variantId: variant._id,
@@ -72,9 +78,11 @@ export function ProductGrid({ retailerId, cart }: ProductGridProps) {
 				currency: p.currency,
 				imageUrl: variant.imageUrls[0] ?? p.imageUrls[0],
 				quoteOnRequest: variant.requiresProof === true && variant.price === 0,
+				note,
 			},
 			qty,
 		);
+		toast.success(`Added ${label ? `${p.name} — ${label}` : p.name} to cart`);
 	};
 
 	// Quick-add only fires for single-variant products (multi-variant cards open
@@ -146,10 +154,10 @@ export function ProductGrid({ retailerId, cart }: ProductGridProps) {
 			<ProductDetailSheet
 				product={openProduct}
 				onClose={() => setOpenProduct(null)}
-				onAdd={(p, variant, qty) => {
-					addVariant(p, variant, qty);
-					setOpenProduct(null);
-				}}
+				// Stay open after adding so a buyer can add a standard variant AND
+				// request the custom line from the same product without reopening. The
+				// toast + cart bar confirm the add; they close via the X when done.
+				onAdd={(p, variant, qty, note) => addVariant(p, variant, qty, note)}
 			/>
 		</>
 	);

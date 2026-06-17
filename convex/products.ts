@@ -4,7 +4,10 @@ import { mutation, type MutationCtx, query, type QueryCtx } from "./_generated/s
 import { rateLimiter } from "./lib/rateLimiter";
 import {
 	cartesian,
+	DEFAULT_CUSTOM_LABEL,
 	isValidCombination,
+	MAX_CUSTOM_LABEL_LENGTH,
+	MAX_CUSTOM_PROMPT_LENGTH,
 	type OptionAxis,
 	normalizeOptions,
 	sameOptionValues,
@@ -176,7 +179,8 @@ const optionAxisValidator = v.object({
 
 const variantInputValidator = v.object({
 	// Positionally aligned with the product's option axes; [] for the implicit
-	// default variant of a no-axes product.
+	// default variant of a no-axes product AND for the custom line (the two are
+	// told apart by `isCustom`, never by optionValues).
 	optionValues: v.array(v.string()),
 	sku: v.optional(v.string()),
 	price: v.number(),
@@ -186,6 +190,11 @@ const variantInputValidator = v.object({
 	active: v.optional(v.boolean()),
 	blockWhenOutOfStock: v.optional(v.boolean()),
 	requiresProof: v.optional(v.boolean()),
+	// Custom / made-to-order line — lives outside the cartesian. See
+	// validateVariantSet + docs/custom-option.md.
+	isCustom: v.optional(v.boolean()),
+	customLabel: v.optional(v.string()),
+	customPrompt: v.optional(v.string()),
 });
 
 type VariantInput = {
@@ -198,31 +207,88 @@ type VariantInput = {
 	active?: boolean;
 	blockWhenOutOfStock?: boolean;
 	requiresProof?: boolean;
+	isCustom?: boolean;
+	customLabel?: string;
+	customPrompt?: string;
 };
 
 /**
- * Validate a full set of variant inputs against the product's option axes:
- * every variant must name a valid combination, the set must cover the cartesian
- * exactly (no missing, no extra, no duplicate combos), and each row must pass
- * field-level checks. Normalizes SKUs and enforces intra-batch SKU uniqueness.
- * Returns the cleaned variant inputs. Throws `ConvexError` on any violation.
+ * Validate, normalize, and coerce the single custom / made-to-order line. It
+ * lives OUTSIDE the cartesian: no optionValues, always made-to-order +
+ * mockup-gated, optional price (0 = "price on quote"), optional label/prompt.
+ * Throws `ConvexError` on violation. See docs/custom-option.md.
+ */
+function validateCustomLine(variant: VariantInput): VariantInput {
+	const context = "Custom option";
+	if (variant.optionValues.length !== 0)
+		throw new ConvexError(`${context} must not be tied to any option values`);
+	if (!Number.isInteger(variant.price) || variant.price < 0)
+		throw new ConvexError(`${context}: price must be a non-negative integer (sen)`);
+	if (
+		variant.imageStorageIds !== undefined &&
+		variant.imageStorageIds.length > MAX_IMAGES_PER_VARIANT
+	)
+		throw new ConvexError(`${context}: at most ${MAX_IMAGES_PER_VARIANT} images`);
+
+	const label = (variant.customLabel ?? "").trim() || DEFAULT_CUSTOM_LABEL;
+	if (label.length > MAX_CUSTOM_LABEL_LENGTH)
+		throw new ConvexError(
+			`${context}: name must be at most ${MAX_CUSTOM_LABEL_LENGTH} characters`,
+		);
+	const prompt = (variant.customPrompt ?? "").trim();
+	if (prompt.length > MAX_CUSTOM_PROMPT_LENGTH)
+		throw new ConvexError(
+			`${context}: prompt must be at most ${MAX_CUSTOM_PROMPT_LENGTH} characters`,
+		);
+
+	return {
+		optionValues: [],
+		price: variant.price,
+		// Always made-to-order + mockup-gated; stock is meaningless for a bespoke
+		// line, so these are coerced server-side regardless of what the client sent.
+		onHand: 0,
+		active: variant.active ?? true,
+		blockWhenOutOfStock: false,
+		requiresProof: true,
+		imageStorageIds: variant.imageStorageIds,
+		isCustom: true,
+		customLabel: label,
+		customPrompt: prompt.length > 0 ? prompt : undefined,
+		// A bespoke line carries no SKU — it's not an inventory unit.
+		sku: undefined,
+	};
+}
+
+/**
+ * Validate a full set of variant inputs. The set is split into the cartesian
+ * MATRIX (isCustom falsy) and an optional CUSTOM line (isCustom true). The matrix
+ * must cover the product's option axes exactly (no missing, extra, or duplicate
+ * combos) and pass field-level checks; the custom line (at most one) is validated
+ * + coerced separately and appended. Normalizes SKUs and enforces intra-batch SKU
+ * uniqueness across the matrix. Returns the cleaned inputs (matrix, then custom).
+ * Throws `ConvexError` on any violation.
  */
 function validateVariantSet(
 	options: OptionAxis[],
 	variants: VariantInput[],
 ): VariantInput[] {
-	if (variants.length === 0)
+	const matrix = variants.filter((vr) => !vr.isCustom);
+	const customLines = variants.filter((vr) => vr.isCustom);
+
+	if (customLines.length > 1)
+		throw new ConvexError("A product can have at most one custom option");
+	if (matrix.length === 0)
 		throw new ConvexError("A product needs at least one variant");
 
 	const expected = cartesian(options); // includes [[]] for no-axes products
-	if (variants.length !== expected.length)
+	if (matrix.length !== expected.length)
 		throw new ConvexError(
-			`Expected ${expected.length} variants for these options, got ${variants.length}`,
+			`Expected ${expected.length} variants for these options, got ${matrix.length}`,
 		);
 
 	const seenCombos: string[][] = [];
 	const skuSeen = new Set<string>();
-	const cleaned: VariantInput[] = variants.map((variant, i) => {
+	const cleaned: VariantInput[] = matrix.map((variant, i) => {
 		const context = `Variant ${i + 1}`;
 		if (!isValidCombination(options, variant.optionValues))
 			throw new ConvexError(
@@ -256,7 +322,8 @@ function validateVariantSet(
 				throw new ConvexError(`Duplicate SKU "${sku}" within this product`);
 			skuSeen.add(sku);
 		}
-		return { ...variant, sku };
+		// Defensive: matrix rows must never carry custom-line fields.
+		return { ...variant, sku, isCustom: false, customLabel: undefined, customPrompt: undefined };
 	});
 
 	// Confirm every expected combination is present (covers the "missing combo"
@@ -267,6 +334,8 @@ function validateVariantSet(
 				`Missing variant for combination "${variantLabel(combo)}"`,
 			);
 	}
+
+	if (customLines.length === 1) cleaned.push(validateCustomLine(customLines[0]));
 	return cleaned;
 }
 
@@ -436,6 +505,9 @@ async function insertVariants(
 			active: variant.active ?? true,
 			blockWhenOutOfStock: variant.blockWhenOutOfStock,
 			requiresProof: variant.requiresProof,
+			isCustom: variant.isCustom,
+			customLabel: variant.customLabel,
+			customPrompt: variant.customPrompt,
 			sortOrder: i,
 			createdAt: now,
 			updatedAt: now,
@@ -533,8 +605,15 @@ export const saveVariantGrid = mutation({
 		const matched = new Set<Id<"productVariants">>();
 		for (let i = 0; i < variants.length; i++) {
 			const variant = variants[i];
-			const prior = existing.find((e) =>
-				sameOptionValues(e.optionValues, variant.optionValues),
+			// Identity = (isCustom, optionValues). The custom line and a no-axes
+			// default BOTH have optionValues [] — keying on optionValues alone would
+			// fuse them, so the isCustom flag disambiguates. Excludes already-matched
+			// rows so two []-keyed rows can't both bind to the same prior.
+			const prior = existing.find(
+				(e) =>
+					!matched.has(e._id) &&
+					Boolean(e.isCustom) === Boolean(variant.isCustom) &&
+					sameOptionValues(e.optionValues, variant.optionValues),
 			);
 			if (prior) {
 				matched.add(prior._id);
@@ -547,6 +626,9 @@ export const saveVariantGrid = mutation({
 					active: variant.active ?? prior.active,
 					blockWhenOutOfStock: variant.blockWhenOutOfStock,
 					requiresProof: variant.requiresProof,
+					isCustom: variant.isCustom,
+					customLabel: variant.customLabel,
+					customPrompt: variant.customPrompt,
 					sortOrder: i,
 					updatedAt: now,
 				});
@@ -564,6 +646,9 @@ export const saveVariantGrid = mutation({
 					active: variant.active ?? true,
 					blockWhenOutOfStock: variant.blockWhenOutOfStock,
 					requiresProof: variant.requiresProof,
+					isCustom: variant.isCustom,
+					customLabel: variant.customLabel,
+					customPrompt: variant.customPrompt,
 					sortOrder: i,
 					createdAt: now,
 					updatedAt: now,

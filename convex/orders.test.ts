@@ -122,6 +122,50 @@ describe("orders", () => {
 		expect(shortId).toMatch(/^ORD-[A-Z2-9]{4}$/);
 	});
 
+	test("custom-line order is labelled with customLabel and gates on mockup", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Cake",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			variants: [
+				{ optionValues: [], price: 2000, onHand: 5 },
+				{ optionValues: [], price: 0, onHand: 0, isCustom: true, customLabel: "Bespoke" },
+			],
+		});
+		const customVariantId = await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", productId))
+				.collect();
+			const c = rows.find((r) => r.isCustom);
+			if (!c) throw new Error("no custom variant");
+			return c._id;
+		});
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ variantId: customVariantId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		// Labelled by its custom name (not an unlabelled row), and the custom line's
+		// requiresProof puts the whole order into the mockup-approval gate.
+		expect(order?.items[0]?.variantLabel).toBe("Bespoke");
+		expect(order?.mockupStatus).toBe("pending");
+	});
+
 	test("getPaymentMethods returns the methods array; null when none", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);

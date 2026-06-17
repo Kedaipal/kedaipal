@@ -136,6 +136,9 @@ function EditProductRoute() {
 						requiresProof: vr.requiresProof,
 						imageStorageIds: vr.imageStorageIds,
 						imageUrls: vr.imageUrls,
+						isCustom: vr.isCustom,
+						customLabel: vr.customLabel,
+						customPrompt: vr.customPrompt,
 					})),
 				}}
 				submitLabel="Save changes"

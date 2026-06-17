@@ -263,7 +263,12 @@ export const create = mutation({
 			const variantRequiresProof = variant.requiresProof ?? product.requiresProof;
 			if (variantRequiresProof === true) requiresMockup = true;
 			const variantId = variant._id;
-			const label = variantLabel(variant.optionValues);
+			// The custom line has no optionValues — label it with its custom name so
+			// the order, WhatsApp confirm, and seller dashboard show "… (Custom)"
+			// rather than an unlabelled row indistinguishable from the default.
+			const label = variant.isCustom
+				? (variant.customLabel ?? "Custom")
+				: variantLabel(variant.optionValues);
 			const displayName = label ? `${product.name} (${label})` : product.name;
 			if (!product.active || !variant.active)
 				throw new ConvexError(`"${displayName}" is not available`);
