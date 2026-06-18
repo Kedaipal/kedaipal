@@ -872,6 +872,7 @@ const MAX_MOCKUP_IMAGES = 5;
 
 function MockupCard({ order }: { order: Doc<"orders"> }) {
 	const generateUploadUrl = useMutation(api.orders.generateMockupUploadUrl);
+	const discardMockupUploads = useMutation(api.orders.discardMockupUploads);
 	const submitMockup = useMutation(api.orders.submitMockup);
 	const updateMockupQuote = useMutation(api.orders.updateMockupQuote);
 	const waiveMockup = useMutation(api.orders.waiveMockup);
@@ -915,10 +916,11 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 			return;
 		}
 		setUploading(true);
+		// Hoisted so the catch can clean up blobs already uploaded before a failure.
+		const storageIds: string[] = [];
 		try {
 			// Upload each selected image, then send them together as the mockup set
 			// (replacing any previous one). Sequential keeps it simple + ordered.
-			const storageIds: string[] = [];
 			for (const file of Array.from(files)) {
 				const url = await generateUploadUrl({ orderId: order._id });
 				const res = await fetch(url, {
@@ -941,6 +943,14 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 					: "Mockup sent to the buyer for approval",
 			);
 		} catch (err) {
+			// If some images uploaded but submit never landed (a mid-loop failure, or
+			// submitMockup itself threw), those blobs are unreferenced — delete them
+			// so they don't orphan. Best-effort; a cleanup failure is non-fatal.
+			if (storageIds.length > 0) {
+				void discardMockupUploads({ orderId: order._id, storageIds }).catch(
+					() => {},
+				);
+			}
 			toast.error(convexErrorMessage(err));
 		} finally {
 			setUploading(false);

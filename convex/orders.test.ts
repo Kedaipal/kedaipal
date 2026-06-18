@@ -1711,6 +1711,45 @@ describe("orders — mockup approval", () => {
 		).rejects.toThrow(/missing mockup image/i);
 	});
 
+	test("discardMockupUploads deletes orphaned blobs but protects a live mockup", async () => {
+		const t = setup();
+		const { order } = await gatedOrder(t);
+		// One blob we'll attach (referenced), one left orphaned by a failed upload.
+		const liveId = await t.run((ctx) =>
+			ctx.storage.store(new Blob(["live"], { type: "image/png" })),
+		);
+		const orphanId = await t.run((ctx) =>
+			ctx.storage.store(new Blob(["orphan"], { type: "image/png" })),
+		);
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageIds: [liveId],
+		});
+
+		await asA(t).mutation(api.orders.discardMockupUploads, {
+			orderId: order._id,
+			storageIds: [liveId, orphanId],
+		});
+
+		const liveUrl = await t.run((ctx) => ctx.storage.getUrl(liveId));
+		const orphanUrl = await t.run((ctx) => ctx.storage.getUrl(orphanId));
+		expect(liveUrl).not.toBeNull(); // referenced by the order → protected
+		expect(orphanUrl).toBeNull(); // unreferenced → deleted
+	});
+
+	test("discardMockupUploads is owner-only", async () => {
+		const t = setup();
+		const { order } = await gatedOrder(t);
+		await expect(
+			t
+				.withIdentity({ subject: "someone-else" })
+				.mutation(api.orders.discardMockupUploads, {
+					orderId: order._id,
+					storageIds: ["x"],
+				}),
+		).rejects.toThrow(/forbidden/i);
+	});
+
 	test("an order with no requiresProof item is not gated", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);

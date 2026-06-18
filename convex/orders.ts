@@ -1187,6 +1187,32 @@ export const generateMockupUploadUrl = mutation({
 });
 
 /**
+ * Owner-only: delete mockup blobs that were uploaded but never attached — e.g.
+ * the seller picked 5 images and the 3rd upload failed, so `submitMockup` never
+ * ran and images 1–2 would otherwise orphan. Defensive: never deletes an id that
+ * the order currently references (a live mockup). Best-effort; the client fires
+ * this on a failed multi-upload.
+ */
+export const discardMockupUploads = mutation({
+	args: { orderId: v.id("orders"), storageIds: v.array(v.string()) },
+	handler: async (ctx, { orderId, storageIds }): Promise<void> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Not authenticated");
+		const order = await ctx.db.get(orderId);
+		if (!order) return; // order gone → nothing to protect; let the blobs GC
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) throw new Error("Retailer not found");
+		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		const referenced = new Set(resolveMockupImageIds(order));
+		for (const id of storageIds) {
+			const trimmed = id.trim();
+			if (!trimmed || referenced.has(trimmed)) continue;
+			await ctx.storage.delete(trimmed);
+		}
+	},
+});
+
+/**
  * Owner-only: attach a mockup and send it to the buyer → status `submitted`.
  * `quotedAmount` (minor units, optional) is the seller's price for the custom
  * work. It's re-enterable on each round; when present it's folded into `total`
