@@ -68,6 +68,10 @@ export function ProductGrid({ retailerId, cart }: ProductGridProps) {
 		const label = variant.isCustom
 			? (variant.customLabel ?? "Custom")
 			: variantLabel(variant.optionValues);
+		// Re-requesting an already-in-cart custom line updates the note, not the qty.
+		const updatingCustom =
+			variant.isCustom === true &&
+			cart.items.some((i) => i.variantId === variant._id);
 		cart.addItem(
 			{
 				variantId: variant._id,
@@ -78,11 +82,16 @@ export function ProductGrid({ retailerId, cart }: ProductGridProps) {
 				currency: p.currency,
 				imageUrl: variant.imageUrls[0] ?? p.imageUrls[0],
 				quoteOnRequest: variant.requiresProof === true && variant.price === 0,
+				isCustom: variant.isCustom,
 				note,
 			},
 			qty,
 		);
-		toast.success(`Added ${label ? `${p.name} — ${label}` : p.name} to cart`);
+		toast.success(
+			updatingCustom
+				? "Custom request updated"
+				: `Added ${label ? `${p.name} — ${label}` : p.name} to cart`,
+		);
 	};
 
 	// Quick-add only fires for single-variant products (multi-variant cards open

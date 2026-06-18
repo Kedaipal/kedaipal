@@ -30,21 +30,21 @@ import { ZoomableImage } from "../components/ui/zoomable-image";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import {
+	deriveMapsUrl,
+	googleMapsNavUrl,
+	wazeNavUrl,
+} from "../lib/google-address";
+import {
 	anchorOrdinal,
 	type Locale,
 	type OrderStatus,
 	resolveCurrentStage,
 	resolveStages,
 	resolveStatusLabel,
+	type StatusLabels,
 	stageDescription,
 	stageLabel,
-	type StatusLabels,
 } from "../lib/orderStatus";
-import {
-	deriveMapsUrl,
-	googleMapsNavUrl,
-	wazeNavUrl,
-} from "../lib/google-address";
 
 type PaymentStatus = "unpaid" | "claimed" | "received";
 
@@ -868,7 +868,7 @@ function MockupReview({
 	const approve = useMutation(api.orders.approveMockup);
 	const requestChanges = useMutation(api.orders.requestMockupChanges);
 	const declineItem = useMutation(api.orders.declineMockupItem);
-	const mockupUrl = useQuery(api.orders.getMockupUrl, { shortId });
+	const mockupUrls = useQuery(api.orders.getMockupUrls, { shortId });
 	const [note, setNote] = useState("");
 	const [showNote, setShowNote] = useState(false);
 	const [confirmDecline, setConfirmDecline] = useState(false);
@@ -936,14 +936,29 @@ function MockupReview({
 				</div>
 			</div>
 
-			{order.mockupImageStorageId && mockupUrl ? (
-				<ZoomableImage
-					src={mockupUrl}
-					alt="Your mockup"
-					caption="Your mockup"
-					wrapperClassName="block w-full overflow-hidden rounded-xl border border-border bg-white"
-					className="block max-h-72 w-full object-contain"
-				/>
+			{mockupUrls && mockupUrls.length > 0 ? (
+				mockupUrls.length === 1 ? (
+					<ZoomableImage
+						src={mockupUrls[0]}
+						alt="Your mockup"
+						caption="Your mockup"
+						wrapperClassName="block w-full overflow-hidden rounded-xl border border-border bg-white"
+						className="block max-h-72 w-full object-contain"
+					/>
+				) : (
+					<div className="grid grid-cols-2 gap-2">
+						{mockupUrls.map((url, i) => (
+							<ZoomableImage
+								key={url}
+								src={url}
+								alt={`Your mockup ${i + 1}`}
+								caption={`Your mockup ${i + 1}`}
+								wrapperClassName="block w-full overflow-hidden rounded-xl border border-border bg-white"
+								className="block aspect-square w-full object-cover"
+							/>
+						))}
+					</div>
+				)
 			) : null}
 
 			{quoted != null && quoted > 0 ? (

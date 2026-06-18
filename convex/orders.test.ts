@@ -1668,6 +1668,49 @@ describe("orders — mockup approval", () => {
 		expect(order.mockupStatus).toBe("pending");
 	});
 
+	test("submitMockup stores multiple images + keeps the singular in sync", async () => {
+		const t = setup();
+		const { order } = await gatedOrder(t);
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageIds: ["m1", "m2", "m3"],
+		});
+		const fresh = await t.run((ctx) => ctx.db.get(order._id));
+		expect(fresh?.mockupImageStorageIds).toEqual(["m1", "m2", "m3"]);
+		// Singular stays as [0] for legacy readers (WhatsApp send + quote guard).
+		expect(fresh?.mockupImageStorageId).toBe("m1");
+		expect(fresh?.mockupStatus).toBe("submitted");
+	});
+
+	test("submitMockup accepts a single storageId (back-compat) → array of one", async () => {
+		const t = setup();
+		const { order } = await gatedOrder(t);
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "solo",
+		});
+		const fresh = await t.run((ctx) => ctx.db.get(order._id));
+		expect(fresh?.mockupImageStorageIds).toEqual(["solo"]);
+		expect(fresh?.mockupImageStorageId).toBe("solo");
+	});
+
+	test("submitMockup rejects more than 5 images, and an empty set", async () => {
+		const t = setup();
+		const { order } = await gatedOrder(t);
+		await expect(
+			asA(t).mutation(api.orders.submitMockup, {
+				orderId: order._id,
+				storageIds: ["a", "b", "c", "d", "e", "f"],
+			}),
+		).rejects.toThrow(/at most 5 mockup images/i);
+		await expect(
+			asA(t).mutation(api.orders.submitMockup, {
+				orderId: order._id,
+				storageIds: [],
+			}),
+		).rejects.toThrow(/missing mockup image/i);
+	});
+
 	test("an order with no requiresProof item is not gated", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);

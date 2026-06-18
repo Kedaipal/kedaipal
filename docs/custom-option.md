@@ -111,8 +111,13 @@ out of the grid rows.
   storefront's always-`variantId` path is required — no regression for true
   single-variant products.
 - **Quick-add** is disabled when a custom line exists.
-- **Quantity** is allowed for custom orders (e.g. 10 custom cupcakes); the seller
-  quotes the total on the mockup.
+- **Quantity is locked to 1** for the custom line — it's one bespoke negotiation
+  (the mockup + quote are per-order: one mockup set, one quoted total, one
+  approval). Re-requesting **updates the note** instead of stacking qty
+  (`CartItem.isCustom` → the cart reducer keeps qty 1). Scope/quantity/price are
+  settled via the buyer's note + the seller's mockup + single quote. The seller can
+  attach **up to 5 mockup images** (designs/angles, or one per item) — see
+  `docs/proof-approval.md` §6.
 - **Removing the custom option** with live custom orders is safe — orders snapshot
   the item name/price at create time (same as any variant).
 

@@ -460,7 +460,13 @@ export default defineSchema({
 				v.literal("approved"), // buyer approved; gate open
 			),
 		),
-		mockupImageStorageId: v.optional(v.string()), // current mockup
+		// Current mockup image(s). `mockupImageStorageIds` is the source of truth
+		// (1–5 images, e.g. multiple designs/angles or one-per-item for a multi-part
+		// custom order). `mockupImageStorageId` is kept in sync as `[0]` for legacy
+		// readers (WhatsApp send + the quote guard) and pre-multi orders. Reads
+		// resolve `mockupImageStorageIds ?? [mockupImageStorageId]`. See docs/proof-approval.md.
+		mockupImageStorageId: v.optional(v.string()),
+		mockupImageStorageIds: v.optional(v.array(v.string())),
 		mockupChangeNote: v.optional(v.string()), // buyer's requested changes
 		mockupSubmittedAt: v.optional(v.number()),
 		mockupApprovedAt: v.optional(v.number()),

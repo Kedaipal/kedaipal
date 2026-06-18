@@ -108,7 +108,8 @@ proof:       (none) → pending → submitted → approved       (independent, N
 
 **`orders`** — add the independent proof dimension (code uses `mockup*`, not `proof*`):
 - `mockupStatus: v.optional(v.union(v.literal("pending"), v.literal("submitted"), v.literal("changes_requested"), v.literal("approved")))`
-- `mockupImageStorageId: v.optional(v.string())` — current mockup.
+- `mockupImageStorageId: v.optional(v.string())` — kept in sync as `[0]` for legacy readers (the WhatsApp send + the quote guard).
+- `mockupImageStorageIds: v.optional(v.array(v.string()))` — **the source of truth: 1–5 mockup images** (added 2026-06-17 for richer / multi-part custom orders — multiple designs, angles, or one image per item). Reads resolve `mockupImageStorageIds ?? [mockupImageStorageId]` (`resolveMockupImageIds`). `submitMockup` accepts `storageIds: string[]` (and the single `storageId` as back-compat), writes both fields; `getMockupUrls` returns the resolved list; the seller composer (multi-select upload, replaces the set) and the buyer tracking page both render a gallery. WhatsApp still sends the first image as the CTA hero, with the full set on the tracking page. Additive optional column → no backfill.
 - `mockupChangeNote: v.optional(v.string())` — buyer's requested changes.
 - `mockupSubmittedAt`, `mockupApprovedAt`, `mockupWaivedAt`: `v.optional(v.number())`.
 - `mockupQuotedAmount: v.optional(v.number())` — **the seller's price for the custom work** (minor units), set on the mockup submission and folded into `total` via `computeOrderTotals`. See §11.

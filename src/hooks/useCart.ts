@@ -29,6 +29,10 @@ export type CartItem = {
 	// Captured at add-time; composed (labelled) into the order's customerNote at
 	// checkout so the seller sees it in WhatsApp + the dashboard. See docs/custom-option.md.
 	note?: string;
+	// The custom / made-to-order line. Locked to qty 1 — it's one bespoke
+	// negotiation (the seller's single mockup + quote settle scope, quantity, and
+	// final price). Re-requesting updates the note instead of incrementing qty.
+	isCustom?: boolean;
 };
 
 type CartState = {
@@ -58,7 +62,11 @@ function reducer(state: CartState, action: CartAction): CartState {
 						i.variantId === action.item.variantId
 							? {
 									...i,
-									quantity: i.quantity + action.quantity,
+									// A custom line stays qty 1 (one bespoke negotiation);
+									// any other variant accumulates as usual.
+									quantity: i.isCustom
+										? i.quantity
+										: i.quantity + action.quantity,
 									// Re-requesting a custom line updates its note (latest wins);
 									// keep the prior note if this add carried none.
 									note: action.item.note ?? i.note,
