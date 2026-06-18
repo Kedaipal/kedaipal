@@ -2736,3 +2736,189 @@ describe("orders — Phase 2 stage advance (advanceToStage)", () => {
 		expect(o?.orderStages?.length).toBe(4); // surfaced for the timeline
 	});
 });
+
+describe("orders — inbox search", () => {
+	async function mkOrder(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+		who: { name?: string; waPhone?: string },
+	) {
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: who,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { shortId });
+		return order!;
+	}
+
+	test("buckets + counts + text search (id / name / phone)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 100 });
+		const asA = t.withIdentity({ subject: USER_A });
+
+		const o1 = await mkOrder(t, retailer._id, productId, {
+			name: "Alice",
+			waPhone: "60123456789",
+		}); // pending → new
+		const o2 = await mkOrder(t, retailer._id, productId, {
+			name: "Bob",
+			waPhone: "60198887777",
+		});
+		const o3 = await mkOrder(t, retailer._id, productId, { name: "Charlie" });
+		const o4 = await mkOrder(t, retailer._id, productId, { name: "Dana" });
+
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: o2._id,
+			status: "confirmed",
+		}); // in_progress
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: o3._id,
+			status: "delivered",
+		}); // completed
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: o4._id,
+			status: "cancelled",
+		}); // cancelled
+
+		const all = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		expect(all.counts).toEqual({
+			new: 1,
+			in_progress: 1,
+			completed: 1,
+			cancelled: 1,
+			mockupPending: 0,
+		});
+		expect(all.total).toBe(4);
+
+		const news = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "new",
+		});
+		expect(news.orders.map((o) => o._id)).toEqual([o1._id]);
+
+		const inProgress = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "in_progress",
+		});
+		expect(inProgress.orders.map((o) => o._id)).toEqual([o2._id]);
+
+		// Name (partial, case-insensitive).
+		const byName = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			searchText: "ali",
+		});
+		expect(byName.orders.map((o) => o._id)).toEqual([o1._id]);
+
+		// Phone trailing digits.
+		const byPhone = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			searchText: "8887777",
+		});
+		expect(byPhone.orders.map((o) => o._id)).toEqual([o2._id]);
+
+		// Order #.
+		const byId = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			searchText: o1.shortId,
+		});
+		expect(byId.orders.map((o) => o._id)).toContain(o1._id);
+	});
+
+	test("payment filter treats undefined as unpaid", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const asA = t.withIdentity({ subject: USER_A });
+		const o = await mkOrder(t, retailer._id, productId, { name: "Eve" });
+
+		const unpaid = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			paymentStatuses: ["unpaid"],
+		});
+		expect(unpaid.orders.map((x) => x._id)).toContain(o._id);
+
+		await t.run((ctx) => ctx.db.patch(o._id, { paymentStatus: "received" }));
+		const stillUnpaid = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			paymentStatuses: ["unpaid"],
+		});
+		expect(stillUnpaid.orders.map((x) => x._id)).not.toContain(o._id);
+		const received = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			paymentStatuses: ["received"],
+		});
+		expect(received.orders.map((x) => x._id)).toContain(o._id);
+	});
+
+	test("search matches item name (e.g. 'vanilla')", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			name: "Vanilla Cake",
+		});
+		const o = await mkOrder(t, retailer._id, productId, { name: "Zoe" });
+		const byItem = await t
+			.withIdentity({ subject: USER_A })
+			.query(api.orders.searchOrders, {
+				retailerId: retailer._id,
+				bucket: "all",
+				searchText: "vanilla",
+			});
+		expect(byItem.orders.map((x) => x._id)).toContain(o._id);
+	});
+
+	test("mockupPending filter + count isolate orders awaiting a mockup", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const plainId = await seedProduct(t, USER_A, retailer._id);
+		const customId = await seedProduct(t, USER_A, retailer._id, {
+			requiresProof: true,
+			blockWhenOutOfStock: false,
+		});
+		const plain = await mkOrder(t, retailer._id, plainId, { name: "A" });
+		const needs = await mkOrder(t, retailer._id, customId, { name: "B" });
+		const asA = t.withIdentity({ subject: USER_A });
+
+		const all = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		expect(all.counts.mockupPending).toBe(1);
+
+		const filtered = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			mockupPending: true,
+		});
+		expect(filtered.orders.map((x) => x._id)).toEqual([needs._id]);
+		expect(filtered.orders.map((x) => x._id)).not.toContain(plain._id);
+	});
+
+	test("searchOrders is owner-only", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await expect(
+			t
+				.withIdentity({ subject: "intruder" })
+				.query(api.orders.searchOrders, {
+					retailerId: retailer._id,
+					bucket: "all",
+				}),
+		).rejects.toThrow(/forbidden/i);
+	});
+});

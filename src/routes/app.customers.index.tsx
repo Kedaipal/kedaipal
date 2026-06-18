@@ -95,7 +95,7 @@ function CustomersRoute() {
 
 			{/* Sort (mobile — desktop sorts via table headers) */}
 			{!searching ? (
-				<div className="-mx-5 flex gap-2 overflow-x-auto px-5 pb-1 lg:hidden">
+				<div className="-mx-5 flex gap-2 overflow-x-auto px-5 pb-1 [scrollbar-width:none] lg:hidden [&::-webkit-scrollbar]:hidden">
 					{SORTS.map((s) => (
 						<button
 							key={s.key}

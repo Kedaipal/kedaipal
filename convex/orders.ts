@@ -9,6 +9,7 @@ import {
 	linkOrderToCustomer,
 } from "./customers";
 import { assertValidAddress } from "./lib/address";
+import { BUCKET_STATUSES, statusToBucket } from "./lib/orderBuckets";
 import {
 	computeOrderTotals,
 	generateShortId,
@@ -361,6 +362,7 @@ export const create = mutation({
 			pickupSnapshot: sanitizedPickupSnapshot,
 			customerNote: sanitizedCustomerNote,
 			mockupStatus: requiresMockup ? "pending" : undefined,
+			statusChangedAt: now,
 			createdAt: now,
 			updatedAt: now,
 		});
@@ -597,6 +599,133 @@ export const listByRetailer = query({
 	},
 });
 
+// Upper bound on how many of a retailer's orders the inbox scans per query.
+// At the Phase-1 target (≤500 orders/retailer) this loads everything; beyond it,
+// the oldest orders fall outside the scan (flagged via `capped`). Counts +
+// filtering are in-memory over this set — see docs/order-inbox.md for why this
+// beats indexed pagination + an Aggregate at this scale.
+const MAX_INBOX_SCAN = 1000;
+
+/**
+ * Order inbox: one query that returns the filtered/searched page **plus** the
+ * per-bucket counts (over the full set, independent of the active filters), in a
+ * single subscription. Buckets are fulfilment-based; payment status + date are
+ * orthogonal filters; search matches order #, customer name (partial, CI), and
+ * phone (trailing digits). Owner-only.
+ */
+export const searchOrders = query({
+	args: {
+		retailerId: v.id("retailers"),
+		bucket: v.union(
+			v.literal("all"),
+			v.literal("new"),
+			v.literal("in_progress"),
+			v.literal("completed"),
+			v.literal("cancelled"),
+		),
+		paymentStatuses: v.optional(
+			v.array(
+				v.union(
+					v.literal("unpaid"),
+					v.literal("claimed"),
+					v.literal("received"),
+				),
+			),
+		),
+		dateFrom: v.optional(v.number()),
+		dateTo: v.optional(v.number()),
+		// Cross-cutting: only orders awaiting the seller's mockup action
+		// (mockupStatus pending / changes_requested). ANDs with the other filters.
+		mockupPending: v.optional(v.boolean()),
+		searchText: v.optional(v.string()),
+		limit: v.optional(v.number()),
+	},
+	handler: async (
+		ctx,
+		{
+			retailerId,
+			bucket,
+			paymentStatuses,
+			dateFrom,
+			dateTo,
+			mockupPending,
+			searchText,
+			limit,
+		},
+	) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Not authenticated");
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new Error("Retailer not found");
+		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+
+		const all = await ctx.db
+			.query("orders")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.order("desc")
+			.take(MAX_INBOX_SCAN);
+
+		// Bucket counts (+ the cross-cutting mockup-pending count) over the full
+		// set — independent of the active filters/search so the chips always show
+		// true totals.
+		const counts = {
+			new: 0,
+			in_progress: 0,
+			completed: 0,
+			cancelled: 0,
+			mockupPending: 0,
+		};
+		const needsMockup = (s: string | undefined) =>
+			s === "pending" || s === "changes_requested";
+		for (const o of all) {
+			counts[statusToBucket(o.status)]++;
+			if (needsMockup(o.mockupStatus)) counts.mockupPending++;
+		}
+
+		const term = (searchText ?? "").trim().toLowerCase();
+		const digits = term.replace(/\D/g, "");
+		const payset =
+			paymentStatuses && paymentStatuses.length > 0
+				? new Set(paymentStatuses)
+				: null;
+		const bucketStatuses =
+			bucket === "all" ? null : new Set(BUCKET_STATUSES[bucket]);
+
+		const filtered = all.filter((o) => {
+			if (bucketStatuses && !bucketStatuses.has(o.status)) return false;
+			if (mockupPending && !needsMockup(o.mockupStatus)) return false;
+			// Undefined paymentStatus reads as "unpaid".
+			if (payset && !payset.has(o.paymentStatus ?? "unpaid")) return false;
+			if (dateFrom !== undefined && o.createdAt < dateFrom) return false;
+			if (dateTo !== undefined && o.createdAt > dateTo) return false;
+			if (term.length > 0) {
+				const name = (o.customer.name ?? "").toLowerCase();
+				const phone = (o.customer.waPhone ?? "").replace(/\D/g, "");
+				const idHit = o.shortId.toLowerCase().includes(term);
+				const nameHit = name.length > 0 && name.includes(term);
+				// Phone: match on trailing digits (handles +60 / 0 / local-part typing).
+				const phoneHit = digits.length >= 4 && phone.endsWith(digits);
+				// Item name / variant ("vanilla cake") — already in memory, so cheap.
+				const itemHit = o.items.some(
+					(it) =>
+						it.name.toLowerCase().includes(term) ||
+						(it.variantLabel ?? "").toLowerCase().includes(term),
+				);
+				if (!idHit && !nameHit && !phoneHit && !itemHit) return false;
+			}
+			return true;
+		});
+
+		const take = Math.max(1, Math.min(limit ?? 50, 200));
+		return {
+			orders: filtered.slice(0, take),
+			total: filtered.length,
+			counts,
+			capped: all.length >= MAX_INBOX_SCAN,
+		};
+	},
+});
+
 export const updateStatus = mutation({
 	args: {
 		orderId: v.id("orders"),
@@ -667,8 +796,15 @@ export const updateStatus = mutation({
 			}
 		}
 
-		const patch: Partial<{ status: typeof status; updatedAt: number; carrierTrackingUrl: string }> = {
+		const patch: Partial<{
+			status: typeof status;
+			statusChangedAt: number;
+			updatedAt: number;
+			carrierTrackingUrl: string;
+		}> = {
 			status,
+			// updateStatus is always a canonical transition → stamp the status clock.
+			statusChangedAt: now,
 			updatedAt: now,
 		};
 		if (status === "shipped" && carrierTrackingUrl) {
@@ -769,8 +905,12 @@ export const advanceToStage = mutation({
 			status: typeof targetStatus;
 			currentStageId: string;
 			carrierTrackingUrl: string;
+			statusChangedAt: number;
 			updatedAt: number;
 		}> = { status: targetStatus, currentStageId: stage.id, updatedAt: now };
+		// Reset the status clock only when the canonical status actually changes
+		// (a within-anchor stage move keeps the same "Pending/Confirmed/…" bucket).
+		if (statusChanged) patch.statusChangedAt = now;
 		if (targetStatus === "shipped" && carrierTrackingUrl) {
 			const trimmed = carrierTrackingUrl.trim();
 			if (trimmed.length > 0) patch.carrierTrackingUrl = trimmed;

@@ -477,6 +477,11 @@ export default defineSchema({
 		// custom line, if any, is sold at its storefront price). Cleared when the
 		// buyer declines the custom item. See docs/proof-approval.md.
 		mockupQuotedAmount: v.optional(v.number()),
+		// When the canonical `status` last changed — drives the "time in status"
+		// badge in the order inbox (e.g. "Pending 2h"). Stamped on create + every
+		// status transition. Optional: pre-inbox orders fall back to updatedAt /
+		// createdAt at read time, so no backfill. See docs/order-inbox.md.
+		statusChangedAt: v.optional(v.number()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
