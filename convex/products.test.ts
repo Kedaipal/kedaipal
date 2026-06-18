@@ -1023,4 +1023,135 @@ describe("products", () => {
 			),
 		).toEqual(["B", "A", "C"]);
 	});
+
+	// --- Custom / made-to-order line (docs/custom-option.md) -----------------
+
+	describe("custom option", () => {
+		test("create adds the custom line outside the cartesian, coerced made-to-order", async () => {
+			const t = setup();
+			const retailer = await seedRetailer(t, USER_A);
+			const asA = t.withIdentity({ subject: USER_A });
+			const id = await asA.mutation(api.products.create, {
+				retailerId: retailer._id,
+				name: "Cake",
+				currency: "MYR",
+				imageStorageIds: [],
+				sortOrder: 0,
+				options: [{ name: "Size", values: ["S", "M"] }],
+				variants: [
+					{ optionValues: ["S"], price: 1000, onHand: 3 },
+					{ optionValues: ["M"], price: 1500, onHand: 2 },
+					{
+						optionValues: [],
+						price: 0,
+						onHand: 0,
+						isCustom: true,
+						customLabel: "Bespoke",
+						customPrompt: "Tell us your theme",
+					},
+				],
+			});
+			const product = await asA.query(api.products.get, { productId: id });
+			// 2 matrix variants + 1 custom — custom does NOT multiply across sizes.
+			expect(product?.variants).toHaveLength(3);
+			const custom = product?.variants.find((v) => v.isCustom);
+			expect(custom?.customLabel).toBe("Bespoke");
+			expect(custom?.customPrompt).toBe("Tell us your theme");
+			// Coerced server-side regardless of input: made-to-order + mockup-gated.
+			expect(custom?.blockWhenOutOfStock).toBe(false);
+			expect(custom?.requiresProof).toBe(true);
+			expect(custom?.price).toBe(0);
+			// A RM0 quote variant is excluded from the displayed price range.
+			expect(product?.priceFrom).toBe(1000);
+			expect(product?.priceTo).toBe(1500);
+			expect(product?.hasQuotePricing).toBe(true);
+		});
+
+		test("blank custom label defaults to \"Custom\"", async () => {
+			const t = setup();
+			const retailer = await seedRetailer(t, USER_A);
+			const asA = t.withIdentity({ subject: USER_A });
+			const id = await asA.mutation(api.products.create, {
+				...baseProduct(retailer._id),
+				variants: [
+					{ optionValues: [], price: 2000, onHand: 5 },
+					{ optionValues: [], price: 0, onHand: 0, isCustom: true },
+				],
+			});
+			const product = await asA.query(api.products.get, { productId: id });
+			expect(product?.variants.find((v) => v.isCustom)?.customLabel).toBe(
+				"Custom",
+			);
+		});
+
+		test("a no-axes default and a custom line coexist and reconcile by identity", async () => {
+			const t = setup();
+			const retailer = await seedRetailer(t, USER_A);
+			const asA = t.withIdentity({ subject: USER_A });
+			// Both rows have optionValues [] — only isCustom tells them apart.
+			const id = await asA.mutation(api.products.create, {
+				...baseProduct(retailer._id),
+				variants: [
+					{ optionValues: [], price: 2000, onHand: 5 },
+					{ optionValues: [], price: 0, onHand: 0, isCustom: true },
+				],
+			});
+			const before = await asA.query(api.products.get, { productId: id });
+			expect(before?.variants).toHaveLength(2);
+			const defaultId = before?.variants.find((v) => !v.isCustom)?._id;
+
+			// Edit both via the grid save: change the default + custom price. The
+			// two []-keyed rows must NOT fuse — reconciliation keys on isCustom.
+			await asA.mutation(api.products.saveVariantGrid, {
+				productId: id,
+				options: [],
+				variants: [
+					{ optionValues: [], price: 2500, onHand: 8 },
+					{ optionValues: [], price: 500, onHand: 0, isCustom: true },
+				],
+			});
+			const after = await asA.query(api.products.get, { productId: id });
+			expect(after?.variants).toHaveLength(2);
+			// The default variant kept its _id (historical orders stay valid).
+			expect(after?.variants.find((v) => !v.isCustom)?._id).toBe(defaultId);
+			expect(after?.variants.find((v) => !v.isCustom)?.price).toBe(2500);
+			expect(after?.variants.find((v) => v.isCustom)?.price).toBe(500);
+		});
+
+		test("rejects more than one custom line", async () => {
+			const t = setup();
+			const retailer = await seedRetailer(t, USER_A);
+			const asA = t.withIdentity({ subject: USER_A });
+			await expect(
+				asA.mutation(api.products.create, {
+					...baseProduct(retailer._id),
+					variants: [
+						{ optionValues: [], price: 2000, onHand: 5 },
+						{ optionValues: [], price: 0, onHand: 0, isCustom: true },
+						{ optionValues: [], price: 0, onHand: 0, isCustom: true },
+					],
+				}),
+			).rejects.toThrow(/at most one custom option/i);
+		});
+
+		test("rejects a custom line tied to option values", async () => {
+			const t = setup();
+			const retailer = await seedRetailer(t, USER_A);
+			const asA = t.withIdentity({ subject: USER_A });
+			await expect(
+				asA.mutation(api.products.create, {
+					retailerId: retailer._id,
+					name: "Cake",
+					currency: "MYR",
+					imageStorageIds: [],
+					sortOrder: 0,
+					options: [{ name: "Size", values: ["S"] }],
+					variants: [
+						{ optionValues: ["S"], price: 1000, onHand: 3 },
+						{ optionValues: ["S"], price: 0, onHand: 0, isCustom: true },
+					],
+				}),
+			).rejects.toThrow(/must not be tied to any option values/i);
+		});
+	});
 });

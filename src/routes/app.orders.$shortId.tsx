@@ -203,7 +203,8 @@ function OrderDetailRoute() {
 		: -1; // pending: not yet in the band → next is the first stage
 	const nextStage =
 		order.status === "cancelled" ? undefined : stages[currentIdx + 1];
-	const isTerminal = order.status === "cancelled" || order.status === "delivered";
+	const isTerminal =
+		order.status === "cancelled" || order.status === "delivered";
 	const showCarrierSection =
 		!isSelfCollect && !["pending", "cancelled"].includes(order.status);
 	const editingCarrier = carrierInput !== null;
@@ -866,13 +867,16 @@ function OrderDetailRoute() {
 // Mirror of MOCKUP_WAIVE_GRACE_MS in convex/orders.ts — drives when the
 // "proceed without approval" escape becomes available in the UI.
 const MOCKUP_WAIVE_GRACE_MS = 48 * 60 * 60 * 1000;
+// Mirror of MAX_MOCKUP_IMAGES in convex/orders.ts.
+const MAX_MOCKUP_IMAGES = 5;
 
 function MockupCard({ order }: { order: Doc<"orders"> }) {
 	const generateUploadUrl = useMutation(api.orders.generateMockupUploadUrl);
+	const discardMockupUploads = useMutation(api.orders.discardMockupUploads);
 	const submitMockup = useMutation(api.orders.submitMockup);
 	const updateMockupQuote = useMutation(api.orders.updateMockupQuote);
 	const waiveMockup = useMutation(api.orders.waiveMockup);
-	const mockupUrl = useQuery(api.orders.getMockupUrl, {
+	const mockupUrls = useQuery(api.orders.getMockupUrls, {
 		shortId: order.shortId,
 	});
 	const [uploading, setUploading] = useState(false);
@@ -899,33 +903,58 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 	}
 
 	async function handleUpload(e: ChangeEvent<HTMLInputElement>) {
-		const file = e.target.files?.[0];
-		if (!file) return;
+		const files = e.target.files;
+		if (!files || files.length === 0) return;
+		if (files.length > MAX_MOCKUP_IMAGES) {
+			toast.error(`Up to ${MAX_MOCKUP_IMAGES} images at a time`);
+			e.target.value = "";
+			return;
+		}
 		if (priceInput.trim() !== "" && parsedQuote() === undefined) {
 			toast.error("Enter a valid price (e.g. 120 or 120.50) or clear it");
 			e.target.value = "";
 			return;
 		}
 		setUploading(true);
+		// Hoisted so the catch can clean up blobs already uploaded before a failure.
+		const storageIds: string[] = [];
 		try {
-			const url = await generateUploadUrl({ orderId: order._id });
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": file.type },
-				body: file,
-			});
-			if (!res.ok) throw new Error("Upload failed");
-			const { storageId } = (await res.json()) as { storageId: string };
+			// Upload each selected image, then send them together as the mockup set
+			// (replacing any previous one). Sequential keeps it simple + ordered.
+			for (const file of Array.from(files)) {
+				const url = await generateUploadUrl({ orderId: order._id });
+				const res = await fetch(url, {
+					method: "POST",
+					headers: { "Content-Type": file.type },
+					body: file,
+				});
+				if (!res.ok) throw new Error("Upload failed");
+				const { storageId } = (await res.json()) as { storageId: string };
+				storageIds.push(storageId);
+			}
 			await submitMockup({
 				orderId: order._id,
-				storageId,
+				storageIds,
 				quotedAmount: parsedQuote(),
 			});
-			toast.success("Mockup sent to the buyer for approval");
+			toast.success(
+				storageIds.length > 1
+					? `${storageIds.length} mockups sent to the buyer for approval`
+					: "Mockup sent to the buyer for approval",
+			);
 		} catch (err) {
+			// If some images uploaded but submit never landed (a mid-loop failure, or
+			// submitMockup itself threw), those blobs are unreferenced — delete them
+			// so they don't orphan. Best-effort; a cleanup failure is non-fatal.
+			if (storageIds.length > 0) {
+				void discardMockupUploads({ orderId: order._id, storageIds }).catch(
+					() => {},
+				);
+			}
 			toast.error(convexErrorMessage(err));
 		} finally {
 			setUploading(false);
+			e.target.value = "";
 		}
 	}
 
@@ -1005,25 +1034,34 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 				</div>
 			) : null}
 
-			{order.mockupImageStorageId ? (
-				mockupUrl ? (
-					<a
-						href={mockupUrl}
-						target="_blank"
-						rel="noreferrer"
-						className="block overflow-hidden rounded-xl border border-border bg-white"
-					>
-						<img
-							src={mockupUrl}
-							alt="Current mockup"
-							className="block max-h-64 w-full object-contain"
-						/>
-					</a>
-				) : (
-					<div className="rounded-xl border border-border bg-muted/30 p-4 text-center text-xs text-muted-foreground">
-						Loading mockup…
-					</div>
-				)
+			{mockupUrls && mockupUrls.length > 0 ? (
+				<div
+					className={mockupUrls.length === 1 ? "" : "grid grid-cols-3 gap-2"}
+				>
+					{mockupUrls.map((url) => (
+						<a
+							key={url}
+							href={url}
+							target="_blank"
+							rel="noreferrer"
+							className="block overflow-hidden rounded-xl border border-border bg-white"
+						>
+							<img
+								src={url}
+								alt="Current mockup"
+								className={
+									mockupUrls.length === 1
+										? "block max-h-64 w-full object-contain"
+										: "block aspect-square w-full object-cover"
+								}
+							/>
+						</a>
+					))}
+				</div>
+			) : order.mockupImageStorageId ? (
+				<div className="rounded-xl border border-border bg-muted/30 p-4 text-center text-xs text-muted-foreground">
+					Loading mockup…
+				</div>
 			) : null}
 
 			{status === "submitted" ? (
@@ -1086,21 +1124,28 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 			) : null}
 
 			{needsMockup || status === "submitted" ? (
-				<label className="flex h-11 cursor-pointer items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90">
-					<ImagePlus className="size-4" />
-					{uploading
-						? "Sending…"
-						: status === "submitted"
-							? "Replace mockup"
-							: "Upload & send mockup"}
-					<input
-						type="file"
-						accept="image/*"
-						disabled={uploading}
-						onChange={handleUpload}
-						className="hidden"
-					/>
-				</label>
+				<div className="flex flex-col gap-1">
+					<label className="flex h-11 cursor-pointer items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90">
+						<ImagePlus className="size-4" />
+						{uploading
+							? "Sending…"
+							: status === "submitted"
+								? "Replace mockup"
+								: "Upload & send mockup"}
+						<input
+							type="file"
+							accept="image/*"
+							multiple
+							disabled={uploading}
+							onChange={handleUpload}
+							className="hidden"
+						/>
+					</label>
+					<p className="text-center text-xs text-muted-foreground">
+						Up to {MAX_MOCKUP_IMAGES} images — e.g. different designs, angles,
+						or one per item. Sending replaces the current set.
+					</p>
+				</div>
 			) : null}
 
 			{canWaive ? (

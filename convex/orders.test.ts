@@ -122,6 +122,50 @@ describe("orders", () => {
 		expect(shortId).toMatch(/^ORD-[A-Z2-9]{4}$/);
 	});
 
+	test("custom-line order is labelled with customLabel and gates on mockup", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Cake",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			variants: [
+				{ optionValues: [], price: 2000, onHand: 5 },
+				{ optionValues: [], price: 0, onHand: 0, isCustom: true, customLabel: "Bespoke" },
+			],
+		});
+		const customVariantId = await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", productId))
+				.collect();
+			const c = rows.find((r) => r.isCustom);
+			if (!c) throw new Error("no custom variant");
+			return c._id;
+		});
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ variantId: customVariantId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		// Labelled by its custom name (not an unlabelled row), and the custom line's
+		// requiresProof puts the whole order into the mockup-approval gate.
+		expect(order?.items[0]?.variantLabel).toBe("Bespoke");
+		expect(order?.mockupStatus).toBe("pending");
+	});
+
 	test("getPaymentMethods returns the methods array; null when none", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
@@ -1622,6 +1666,88 @@ describe("orders — mockup approval", () => {
 		const t = setup();
 		const { order } = await gatedOrder(t);
 		expect(order.mockupStatus).toBe("pending");
+	});
+
+	test("submitMockup stores multiple images + keeps the singular in sync", async () => {
+		const t = setup();
+		const { order } = await gatedOrder(t);
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageIds: ["m1", "m2", "m3"],
+		});
+		const fresh = await t.run((ctx) => ctx.db.get(order._id));
+		expect(fresh?.mockupImageStorageIds).toEqual(["m1", "m2", "m3"]);
+		// Singular stays as [0] for legacy readers (WhatsApp send + quote guard).
+		expect(fresh?.mockupImageStorageId).toBe("m1");
+		expect(fresh?.mockupStatus).toBe("submitted");
+	});
+
+	test("submitMockup accepts a single storageId (back-compat) → array of one", async () => {
+		const t = setup();
+		const { order } = await gatedOrder(t);
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageId: "solo",
+		});
+		const fresh = await t.run((ctx) => ctx.db.get(order._id));
+		expect(fresh?.mockupImageStorageIds).toEqual(["solo"]);
+		expect(fresh?.mockupImageStorageId).toBe("solo");
+	});
+
+	test("submitMockup rejects more than 5 images, and an empty set", async () => {
+		const t = setup();
+		const { order } = await gatedOrder(t);
+		await expect(
+			asA(t).mutation(api.orders.submitMockup, {
+				orderId: order._id,
+				storageIds: ["a", "b", "c", "d", "e", "f"],
+			}),
+		).rejects.toThrow(/at most 5 mockup images/i);
+		await expect(
+			asA(t).mutation(api.orders.submitMockup, {
+				orderId: order._id,
+				storageIds: [],
+			}),
+		).rejects.toThrow(/missing mockup image/i);
+	});
+
+	test("discardMockupUploads deletes orphaned blobs but protects a live mockup", async () => {
+		const t = setup();
+		const { order } = await gatedOrder(t);
+		// One blob we'll attach (referenced), one left orphaned by a failed upload.
+		const liveId = await t.run((ctx) =>
+			ctx.storage.store(new Blob(["live"], { type: "image/png" })),
+		);
+		const orphanId = await t.run((ctx) =>
+			ctx.storage.store(new Blob(["orphan"], { type: "image/png" })),
+		);
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order._id,
+			storageIds: [liveId],
+		});
+
+		await asA(t).mutation(api.orders.discardMockupUploads, {
+			orderId: order._id,
+			storageIds: [liveId, orphanId],
+		});
+
+		const liveUrl = await t.run((ctx) => ctx.storage.getUrl(liveId));
+		const orphanUrl = await t.run((ctx) => ctx.storage.getUrl(orphanId));
+		expect(liveUrl).not.toBeNull(); // referenced by the order → protected
+		expect(orphanUrl).toBeNull(); // unreferenced → deleted
+	});
+
+	test("discardMockupUploads is owner-only", async () => {
+		const t = setup();
+		const { order } = await gatedOrder(t);
+		await expect(
+			t
+				.withIdentity({ subject: "someone-else" })
+				.mutation(api.orders.discardMockupUploads, {
+					orderId: order._id,
+					storageIds: ["x"],
+				}),
+		).rejects.toThrow(/forbidden/i);
 	});
 
 	test("an order with no requiresProof item is not gated", async () => {

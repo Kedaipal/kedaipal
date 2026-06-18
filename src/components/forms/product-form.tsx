@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
-import { Info } from "lucide-react";
+import { Eye, Info } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import { convexErrorMessage, parsePriceInput } from "../../lib/format";
@@ -8,9 +8,11 @@ import { reorderByIds } from "../../lib/reorder";
 import { productDetailsSchema } from "../../lib/schemas";
 import { variantLabel } from "../../lib/variant";
 import { Button } from "../ui/button";
+import { Markdown } from "../ui/markdown";
 import { SortableList } from "../ui/sortable-list";
 import { useAppForm } from "./form";
 import {
+	type CustomLineDraft,
 	VariantEditor,
 	type VariantEditorState,
 	type VariantRow,
@@ -32,6 +34,11 @@ export interface ProductFormSubmitValues {
 		blockWhenOutOfStock: boolean;
 		requiresProof: boolean;
 		imageStorageIds: string[];
+		// The custom / made-to-order line is submitted as a flagged entry in this
+		// same array (server splits matrix vs custom). See docs/custom-option.md.
+		isCustom?: boolean;
+		customLabel?: string;
+		customPrompt?: string;
 	}[];
 }
 
@@ -56,6 +63,9 @@ interface ProductFormProps {
 			requiresProof?: boolean;
 			imageStorageIds?: string[];
 			imageUrls?: string[];
+			isCustom?: boolean;
+			customLabel?: string;
+			customPrompt?: string;
 		}[];
 	};
 	currency: string;
@@ -75,21 +85,40 @@ function initialEditorState(
 		// so opening a legacy product never silently flips it to hard-block.
 		const blockFallback = initial?.blockWhenOutOfStock ?? false;
 		const proofFallback = initial?.requiresProof ?? false;
-		const rows: VariantRow[] = variants.map((vr) => ({
-			optionValues: vr.optionValues,
-			sku: vr.sku ?? "",
-			price: (vr.price / 100).toFixed(2),
-			stock: String(vr.onHand),
-			active: vr.active ?? true,
-			blockWhenOutOfStock: vr.blockWhenOutOfStock ?? blockFallback,
-			requiresProof: vr.requiresProof ?? proofFallback,
-			imageStorageIds: vr.imageStorageIds ?? [],
-			imageUrl: vr.imageUrls?.[0],
-		}));
-		return { options, rows };
+		// The custom line lives outside the grid — pull it out so it doesn't become
+		// a grid row, and seed the dedicated custom editor from it.
+		const customVariant = variants.find((vr) => vr.isCustom);
+		const rows: VariantRow[] = variants
+			.filter((vr) => !vr.isCustom)
+			.map((vr) => ({
+				optionValues: vr.optionValues,
+				sku: vr.sku ?? "",
+				price: (vr.price / 100).toFixed(2),
+				stock: String(vr.onHand),
+				active: vr.active ?? true,
+				blockWhenOutOfStock: vr.blockWhenOutOfStock ?? blockFallback,
+				requiresProof: vr.requiresProof ?? proofFallback,
+				imageStorageIds: vr.imageStorageIds ?? [],
+				imageUrl: vr.imageUrls?.[0],
+			}));
+		const customLine: CustomLineDraft | null = customVariant
+			? {
+					label: customVariant.customLabel ?? "",
+					// price 0 = "Price on quote" → show as blank in the editor.
+					price:
+						customVariant.price === 0
+							? ""
+							: (customVariant.price / 100).toFixed(2),
+					prompt: customVariant.customPrompt ?? "",
+					imageStorageIds: customVariant.imageStorageIds ?? [],
+					imageUrl: customVariant.imageUrls?.[0],
+				}
+			: null;
+		return { options, rows, customLine };
 	}
 	// Brand-new product: default the starting row to hard-block (the common case —
-	// a real stock item). Made-to-order is an explicit per-row opt-out.
+	// a real stock item). Made-to-order is an explicit per-row opt-out. No custom
+	// line until the seller opts in.
 	return {
 		options: [],
 		rows: [
@@ -104,6 +133,7 @@ function initialEditorState(
 				imageStorageIds: [],
 			},
 		],
+		customLine: null,
 	};
 }
 
@@ -125,6 +155,7 @@ export function ProductForm({
 	);
 	const [uploading, setUploading] = useState(false);
 	const [serverError, setServerError] = useState<string | null>(null);
+	const [showPreview, setShowPreview] = useState(false);
 	const [editor, setEditor] = useState<VariantEditorState>(() =>
 		initialEditorState(initialValues),
 	);
@@ -188,6 +219,37 @@ export function ProductForm({
 					blockWhenOutOfStock: row.blockWhenOutOfStock,
 					requiresProof: row.requiresProof,
 					imageStorageIds: row.imageStorageIds,
+				});
+			}
+
+			// Custom line (if enabled) — a flagged entry in the same array. Price is
+			// optional: blank = "Price on quote" (0). The server coerces the made-to-
+			// order + mockup flags and the default label.
+			if (editor.customLine) {
+				const cl = editor.customLine;
+				const priceStr = cl.price.trim();
+				let customPrice = 0;
+				if (priceStr.length > 0) {
+					const n = parsePriceInput(priceStr);
+					if (n === null) {
+						setServerError(
+							"Enter a valid starting price for the custom option, or leave it blank for price on quote.",
+						);
+						return;
+					}
+					customPrice = Math.round(n * 100);
+				}
+				variants.push({
+					optionValues: [],
+					price: customPrice,
+					onHand: 0,
+					active: true,
+					blockWhenOutOfStock: false,
+					requiresProof: true,
+					imageStorageIds: cl.imageStorageIds,
+					isCustom: true,
+					customLabel: cl.label.trim() || undefined,
+					customPrompt: cl.prompt.trim() || undefined,
 				});
 			}
 
@@ -263,16 +325,53 @@ export function ProductForm({
 					/>
 				)}
 			</form.AppField>
-			<form.AppField name="description">
-				{(field) => (
-					<field.TextareaField
-						label="Description"
-						placeholder="Optional. Supports markdown — use **bold**, lists, and headings for specs & what's included."
-					/>
-				)}
-			</form.AppField>
+			<div className="flex flex-col gap-1.5">
+				<form.AppField name="description">
+					{(field) => (
+						<field.TextareaField
+							label="Description"
+							placeholder="Optional. Use **bold**, - bullet lists, and ## headings for specs & what's included."
+							description="Formatting supported — buyers see it rendered on your storefront."
+							maxLength={1000}
+						/>
+					)}
+				</form.AppField>
+				{/* Live preview using the same renderer the storefront uses, so what
+				    the seller previews is exactly what the buyer sees. */}
+				<form.Subscribe selector={(s) => s.values.description ?? ""}>
+					{(desc) => {
+						const trimmed = desc.trim();
+						return (
+							<div className="flex flex-col gap-1.5">
+								<button
+									type="button"
+									onClick={() => setShowPreview((v) => !v)}
+									disabled={trimmed.length === 0}
+									className="inline-flex items-center gap-1.5 self-start text-xs font-medium text-muted-foreground hover:text-foreground disabled:opacity-50"
+								>
+									<Eye className="size-3.5" aria-hidden />
+									{showPreview ? "Hide preview" : "Preview formatting"}
+								</button>
+								{showPreview && trimmed.length > 0 ? (
+									<div className="rounded-xl border border-border bg-card/40 p-3">
+										<Markdown>{desc}</Markdown>
+									</div>
+								) : null}
+							</div>
+						);
+					}}
+				</form.Subscribe>
+			</div>
 
-			<div className="flex flex-col gap-1">
+			<div className="flex flex-col gap-2">
+				<div className="flex flex-col gap-0.5">
+					<span className="text-sm font-medium">Pricing & stock</span>
+					<span className="text-xs text-muted-foreground">
+						Selling more than one version (sizes, flavours, weights)? Add
+						options below to create variants — each with its own price, stock
+						and photo.
+					</span>
+				</div>
 				<VariantEditor
 					value={editor}
 					onChange={setEditor}

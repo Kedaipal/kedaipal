@@ -8,6 +8,7 @@ import {
 	normalizePriceInput,
 	sanitizeIntInput,
 } from "../../lib/format";
+import { cn } from "../../lib/utils";
 import { cartesian, type OptionAxis, variantLabel } from "../../lib/variant";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -36,9 +37,27 @@ export type VariantRow = {
 	imageUrl?: string;
 };
 
+/**
+ * The optional custom / made-to-order line — one per product, edited outside the
+ * variant grid (it's not part of the cartesian). Always made-to-order +
+ * mockup-gated on save; see docs/custom-option.md.
+ */
+export type CustomLineDraft = {
+	/** Buyer-facing name; blank falls back to "Custom" on save. */
+	label: string;
+	/** Major-unit price string. Blank = "Price on quote" (seller quotes on the mockup). */
+	price: string;
+	/** Optional guidance shown to the buyer ("Tell us your design, flavour & date"). */
+	prompt: string;
+	imageStorageIds: string[];
+	imageUrl?: string;
+};
+
 export type VariantEditorState = {
 	options: OptionAxis[];
 	rows: VariantRow[];
+	/** Null when the product offers no custom line. */
+	customLine: CustomLineDraft | null;
 };
 
 interface VariantEditorProps {
@@ -99,16 +118,159 @@ const AXIS_PRESETS: { name: string; values: string[] }[] = [
 	{ name: "Pack", values: ["Single", "Box of 6", "Box of 12"] },
 ];
 
+/** Price input with on-blur normalization (e.g. "120,5" → "120.50"). */
+function PriceInput({
+	value,
+	onChange,
+	className,
+}: {
+	value: string;
+	onChange: (next: string) => void;
+	className?: string;
+}) {
+	return (
+		<Input
+			inputMode="decimal"
+			placeholder="0.00"
+			value={value}
+			onChange={(e) => onChange(e.target.value)}
+			onBlur={(e) => onChange(normalizePriceInput(e.target.value))}
+			className={className}
+		/>
+	);
+}
+
+/** Integer stock input — strips non-digits as you type. */
+function StockInput({
+	value,
+	onChange,
+	className,
+}: {
+	value: string;
+	onChange: (next: string) => void;
+	className?: string;
+}) {
+	return (
+		<Input
+			inputMode="numeric"
+			placeholder="0"
+			value={value}
+			onChange={(e) => onChange(sanitizeIntInput(e.target.value))}
+			className={className}
+		/>
+	);
+}
+
+/**
+ * Fulfilment mode as a positive two-way choice instead of a "stop orders when
+ * out of stock" checkbox (which read as a confusing double-negative). The
+ * underlying field is still `blockWhenOutOfStock`: true = track stock, false =
+ * made-to-order. `compact` drops the label + helper for the per-variant grid.
+ */
+function FulfilmentToggle({
+	value,
+	onChange,
+	compact = false,
+}: {
+	value: boolean;
+	onChange: (next: boolean) => void;
+	compact?: boolean;
+}) {
+	const optionClass = (selected: boolean) =>
+		cn(
+			"flex items-center justify-center gap-1.5 rounded-lg border font-medium transition-colors",
+			compact ? "px-2 py-1 text-xs" : "px-3 py-2 text-sm",
+			selected
+				? "border-accent bg-accent/10 text-foreground"
+				: "border-border text-muted-foreground hover:border-accent/60",
+		);
+	return (
+		<div className="flex flex-col gap-1.5">
+			{compact ? null : <span className="text-sm font-medium">Fulfilment</span>}
+			<div className="grid grid-cols-2 gap-1.5">
+				<button
+					type="button"
+					aria-pressed={value}
+					onClick={() => onChange(true)}
+					className={optionClass(value)}
+				>
+					📦 Track stock
+				</button>
+				<button
+					type="button"
+					aria-pressed={!value}
+					onClick={() => onChange(false)}
+					className={optionClass(!value)}
+				>
+					🧑‍🍳 Made to order
+				</button>
+			</div>
+			{compact ? null : (
+				<p className="text-xs text-muted-foreground">
+					{value
+						? "Orders stop automatically when stock reaches zero."
+						: "Never runs out — stock is just a guide for you. Buyers can always order."}
+				</p>
+			)}
+		</div>
+	);
+}
+
+/**
+ * Mockup-approval opt-in. The field is `requiresProof`; copy is written so a
+ * cake decorator recognises it as theirs. `compact` drops the explainer for the
+ * per-variant grid card.
+ */
+function MockupApprovalToggle({
+	checked,
+	onChange,
+	compact = false,
+}: {
+	checked: boolean;
+	onChange: (next: boolean) => void;
+	compact?: boolean;
+}) {
+	return (
+		<label className="flex items-start gap-2.5 text-sm">
+			<input
+				type="checkbox"
+				checked={checked}
+				onChange={(e) => onChange(e.target.checked)}
+				className="mt-0.5 size-4 shrink-0"
+			/>
+			<span>
+				<span className="font-medium">
+					Require mockup approval before making it
+				</span>
+				{compact ? null : (
+					<span className="block text-xs text-muted-foreground">
+						The buyer signs off on a photo or mockup before you start — e.g. a
+						cake decorator gets the design approved before baking. The order
+						can't move to “packed” until they approve.
+					</span>
+				)}
+			</span>
+		</label>
+	);
+}
+
 export function VariantEditor({
 	value,
 	onChange,
 	currency,
 }: VariantEditorProps) {
-	const { options, rows } = value;
+	const { options, rows, customLine } = value;
 	const hasOptions = options.length > 0;
 	const [valueDrafts, setValueDrafts] = useState<string[]>([]);
 	const generateUploadUrl = useMutation(api.products.generateUploadUrl);
 	const [uploadingRow, setUploadingRow] = useState<number | null>(null);
+	const [uploadingCustom, setUploadingCustom] = useState(false);
+
+	// Merge a partial into the full editor state — preserves sibling fields
+	// (notably `customLine`) that a given setter doesn't touch.
+	function update(partial: Partial<VariantEditorState>) {
+		onChange({ ...value, ...partial });
+	}
 	// Track blob: preview URLs so they're revoked on overwrite/remove/unmount
 	// (createObjectURL pins the file in memory until revoked).
 	const blobUrls = useRef<Set<string>>(new Set());
@@ -131,12 +293,11 @@ export function VariantEditor({
 	const overCap = variantCount > MAX_VARIANTS;
 
 	function setOptions(nextOptions: OptionAxis[]) {
-		onChange({ options: nextOptions, rows: rebuildRows(nextOptions, rows) });
+		update({ options: nextOptions, rows: rebuildRows(nextOptions, rows) });
 	}
 
 	function setRow(index: number, patch: Partial<VariantRow>) {
-		onChange({
-			options,
+		update({
 			rows: rows.map((r, i) => (i === index ? { ...r, ...patch } : r)),
 		});
 	}
@@ -191,14 +352,66 @@ export function VariantEditor({
 	}
 
 	function bulkFill(field: "price" | "stock", v: string) {
-		onChange({ options, rows: rows.map((r) => ({ ...r, [field]: v })) });
+		update({ rows: rows.map((r) => ({ ...r, [field]: v })) });
 	}
 
 	function bulkFillFlag(
 		field: "blockWhenOutOfStock" | "requiresProof",
 		v: boolean,
 	) {
-		onChange({ options, rows: rows.map((r) => ({ ...r, [field]: v })) });
+		update({ rows: rows.map((r) => ({ ...r, [field]: v })) });
+	}
+
+	// --- Custom line ---------------------------------------------------------
+	function setCustomLine(patch: Partial<CustomLineDraft>) {
+		if (!customLine) return;
+		update({ customLine: { ...customLine, ...patch } });
+	}
+
+	function toggleCustomLine(enabled: boolean) {
+		if (enabled) {
+			update({
+				customLine: { label: "", price: "", prompt: "", imageStorageIds: [] },
+			});
+		} else {
+			if (customLine?.imageUrl?.startsWith("blob:")) {
+				URL.revokeObjectURL(customLine.imageUrl);
+				blobUrls.current.delete(customLine.imageUrl);
+			}
+			update({ customLine: null });
+		}
+	}
+
+	async function uploadCustomImage(files: FileList | null) {
+		if (!files || files.length === 0 || !customLine) return;
+		const file = files[0];
+		setUploadingCustom(true);
+		try {
+			const url = await generateUploadUrl();
+			const res = await fetch(url, {
+				method: "POST",
+				headers: { "Content-Type": file.type },
+				body: file,
+			});
+			if (!res.ok) throw new Error("Upload failed");
+			const body = (await res.json()) as { storageId?: unknown };
+			if (typeof body.storageId !== "string")
+				throw new Error("Upload failed: unexpected response");
+			if (customLine.imageUrl?.startsWith("blob:")) {
+				URL.revokeObjectURL(customLine.imageUrl);
+				blobUrls.current.delete(customLine.imageUrl);
+			}
+			const previewUrl = URL.createObjectURL(file);
+			blobUrls.current.add(previewUrl);
+			setCustomLine({
+				imageStorageIds: [body.storageId],
+				imageUrl: previewUrl,
+			});
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setUploadingCustom(false);
+		}
 	}
 
 	async function uploadRowImage(index: number, files: FileList | null) {
@@ -232,6 +445,46 @@ export function VariantEditor({
 		}
 	}
 
+	// Shared image cell — used by both the mobile cards and the desktop table so
+	// upload/remove behaviour stays single-sourced.
+	function renderRowImage(i: number, row: VariantRow) {
+		return row.imageUrl ? (
+			<div className="relative size-10">
+				<img
+					src={row.imageUrl}
+					alt=""
+					className="size-10 rounded-lg object-cover"
+				/>
+				<button
+					type="button"
+					onClick={() => {
+						revokeRowBlob(i);
+						setRow(i, { imageStorageIds: [], imageUrl: undefined });
+					}}
+					className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-background text-xs shadow ring-1 ring-border"
+					aria-label="Remove image"
+				>
+					<X className="size-3" />
+				</button>
+			</div>
+		) : (
+			<label className="flex size-10 cursor-pointer items-center justify-center rounded-lg border border-dashed border-border text-muted-foreground hover:border-ring">
+				{uploadingRow === i ? (
+					<span className="text-[10px]">…</span>
+				) : (
+					<ImagePlus className="size-4" />
+				)}
+				<input
+					type="file"
+					accept="image/*"
+					disabled={uploadingRow !== null}
+					onChange={(e) => void uploadRowImage(i, e.target.files)}
+					className="hidden"
+				/>
+			</label>
+		);
+	}
+
 	return (
 		<div className="flex flex-col gap-4">
 			{/* Single-variant mode: one price/stock/sku trio. */}
@@ -239,25 +492,16 @@ export function VariantEditor({
 				<div className="grid grid-cols-2 gap-3">
 					<label className="flex flex-col gap-1 text-sm font-medium">
 						Price ({currency})
-						<Input
-							inputMode="decimal"
-							placeholder="120.00"
+						<PriceInput
 							value={rows[0]?.price ?? ""}
-							onChange={(e) => setRow(0, { price: e.target.value })}
-							onBlur={(e) =>
-								setRow(0, { price: normalizePriceInput(e.target.value) })
-							}
+							onChange={(v) => setRow(0, { price: v })}
 						/>
 					</label>
 					<label className="flex flex-col gap-1 text-sm font-medium">
 						Stock
-						<Input
-							inputMode="numeric"
-							placeholder="10"
+						<StockInput
 							value={rows[0]?.stock ?? ""}
-							onChange={(e) =>
-								setRow(0, { stock: sanitizeIntInput(e.target.value) })
-							}
+							onChange={(v) => setRow(0, { stock: v })}
 						/>
 					</label>
 					<label className="col-span-2 flex flex-col gap-1 text-sm font-medium">
@@ -271,36 +515,16 @@ export function VariantEditor({
 							onChange={(e) => setRow(0, { sku: e.target.value })}
 						/>
 					</label>
-					<label className="col-span-2 flex items-start gap-2.5 text-sm">
-						<input
-							type="checkbox"
-							checked={rows[0]?.blockWhenOutOfStock ?? true}
-							onChange={(e) =>
-								setRow(0, { blockWhenOutOfStock: e.target.checked })
-							}
-							className="mt-0.5 size-4 shrink-0"
+					<div className="col-span-2 flex flex-col gap-3 border-t border-border pt-3">
+						<FulfilmentToggle
+							value={rows[0]?.blockWhenOutOfStock ?? true}
+							onChange={(v) => setRow(0, { blockWhenOutOfStock: v })}
 						/>
-						<span>
-							<span className="font-medium">Stop orders when out of stock</span>
-							<span className="block text-xs text-muted-foreground">
-								Off = made-to-order (price/stock are nominal, never runs out).
-							</span>
-						</span>
-					</label>
-					<label className="col-span-2 flex items-start gap-2.5 text-sm">
-						<input
-							type="checkbox"
+						<MockupApprovalToggle
 							checked={rows[0]?.requiresProof ?? false}
-							onChange={(e) => setRow(0, { requiresProof: e.target.checked })}
-							className="mt-0.5 size-4 shrink-0"
+							onChange={(v) => setRow(0, { requiresProof: v })}
 						/>
-						<span>
-							<span className="font-medium">Require mockup approval</span>
-							<span className="block text-xs text-muted-foreground">
-								Buyer signs off on a mockup before you start production.
-							</span>
-						</span>
-					</label>
+					</div>
 				</div>
 			) : null}
 
@@ -454,8 +678,9 @@ export function VariantEditor({
 							}
 						/>
 					</div>
-					{/* Apply a flag to every row at once — toggles set ALL rows. */}
-					<div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+					{/* Apply a flag to every row at once — toggles set ALL rows. Labels
+					    describe the action the tap performs (not the current state). */}
+					<div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
 						<span>Apply to all:</span>
 						<button
 							type="button"
@@ -468,8 +693,8 @@ export function VariantEditor({
 							className="rounded-full border border-border px-2.5 py-1 font-medium hover:border-accent"
 						>
 							{rows.every((r) => r.blockWhenOutOfStock)
-								? "All made-to-order"
-								: "All stop when OOS"}
+								? "Make all made-to-order"
+								: "Track stock for all"}
 						</button>
 						<button
 							type="button"
@@ -482,11 +707,104 @@ export function VariantEditor({
 							className="rounded-full border border-border px-2.5 py-1 font-medium hover:border-accent"
 						>
 							{rows.every((r) => r.requiresProof)
-								? "None need approval"
-								: "All need approval"}
+								? "Remove approval from all"
+								: "Require approval on all"}
 						</button>
 					</div>
-					<div className="overflow-x-auto rounded-xl border border-border">
+
+					{/* One-time legend for the per-variant flags. The grid toggles are
+					    compact (no inline helper) so the meaning lives here once, rather
+					    than repeated under every card. Inline text (not a hover tooltip)
+					    so it works on touch. */}
+					<dl className="flex flex-col gap-1 rounded-lg bg-muted/40 p-2.5 text-xs text-muted-foreground">
+						<div className="flex gap-1.5">
+							<dt className="font-medium text-foreground">📦 Track stock</dt>
+							<dd>— orders stop automatically when that variant sells out.</dd>
+						</div>
+						<div className="flex gap-1.5">
+							<dt className="font-medium text-foreground">
+								🧑‍🍳 Made to order
+							</dt>
+							<dd>— never runs out; you make each one on demand.</dd>
+						</div>
+						<div className="flex gap-1.5">
+							<dt className="font-medium text-foreground">Approval</dt>
+							<dd>
+								— buyer signs off on a mockup before you start (e.g. a cake
+								design); blocks the order until they approve.
+							</dd>
+						</div>
+					</dl>
+
+					{/* Mobile: stacked cards. An 8-column table is unreadable on a phone,
+					    and sellers manage their catalog on mobile (mobile-first rule). */}
+					<ul className="flex flex-col gap-2 sm:hidden">
+						{rows.map((row, i) => (
+							<li
+								key={variantLabel(row.optionValues)}
+								className={cn(
+									"flex flex-col gap-3 rounded-xl border border-border p-3",
+									!row.active && "opacity-60",
+								)}
+							>
+								<div className="flex items-center gap-2.5">
+									<input
+										type="checkbox"
+										checked={row.active}
+										onChange={(e) => setRow(i, { active: e.target.checked })}
+										className="size-4 shrink-0"
+										aria-label={`${row.active ? "Deactivate" : "Activate"} ${variantLabel(row.optionValues)}`}
+									/>
+									<span className="min-w-0 flex-1 truncate text-sm font-medium">
+										{variantLabel(row.optionValues)}
+									</span>
+									{renderRowImage(i, row)}
+								</div>
+								<div className="grid grid-cols-2 gap-2">
+									<label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+										Price ({currency})
+										<PriceInput
+											value={row.price}
+											onChange={(v) => setRow(i, { price: v })}
+											className="h-10"
+										/>
+									</label>
+									<label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+										Stock
+										<StockInput
+											value={row.stock}
+											onChange={(v) => setRow(i, { stock: v })}
+											className="h-10"
+										/>
+									</label>
+									<label className="col-span-2 flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+										SKU (optional)
+										<Input
+											placeholder="ITEM-001"
+											value={row.sku}
+											onChange={(e) => setRow(i, { sku: e.target.value })}
+											className="h-10"
+										/>
+									</label>
+								</div>
+								<div className="flex flex-col gap-2.5 border-t border-border pt-2.5">
+									<FulfilmentToggle
+										value={row.blockWhenOutOfStock}
+										onChange={(v) => setRow(i, { blockWhenOutOfStock: v })}
+										compact
+									/>
+									<MockupApprovalToggle
+										checked={row.requiresProof}
+										onChange={(v) => setRow(i, { requiresProof: v })}
+										compact
+									/>
+								</div>
+							</li>
+						))}
+					</ul>
+
+					{/* Desktop: dense table for power-users editing up to 50 variants. */}
+					<div className="hidden overflow-x-auto rounded-xl border border-border sm:block">
 						<table className="w-full text-sm">
 							<thead className="bg-muted/50 text-left text-xs text-muted-foreground">
 								<tr>
@@ -498,13 +816,13 @@ export function VariantEditor({
 									<th className="p-2 font-medium">SKU</th>
 									<th
 										className="whitespace-nowrap p-2 font-medium"
-										title="Stop orders when out of stock"
+										title="Checked = track stock and stop orders when sold out. Unchecked = made to order."
 									>
-										Stop OOS
+										Track stock
 									</th>
 									<th
 										className="p-2 font-medium"
-										title="Require buyer mockup approval"
+										title="Require buyer mockup approval before production"
 									>
 										Approval
 									</th>
@@ -530,70 +848,18 @@ export function VariantEditor({
 										<td className="whitespace-nowrap p-2 font-medium">
 											{variantLabel(row.optionValues)}
 										</td>
+										<td className="p-2">{renderRowImage(i, row)}</td>
 										<td className="p-2">
-											{row.imageUrl ? (
-												<div className="relative size-10">
-													<img
-														src={row.imageUrl}
-														alt=""
-														className="size-10 rounded-lg object-cover"
-													/>
-													<button
-														type="button"
-														onClick={() => {
-															revokeRowBlob(i);
-															setRow(i, {
-																imageStorageIds: [],
-																imageUrl: undefined,
-															});
-														}}
-														className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-background text-xs shadow ring-1 ring-border"
-														aria-label="Remove image"
-													>
-														<X className="size-3" />
-													</button>
-												</div>
-											) : (
-												<label className="flex size-10 cursor-pointer items-center justify-center rounded-lg border border-dashed border-border text-muted-foreground hover:border-ring">
-													{uploadingRow === i ? (
-														<span className="text-[10px]">…</span>
-													) : (
-														<ImagePlus className="size-4" />
-													)}
-													<input
-														type="file"
-														accept="image/*"
-														disabled={uploadingRow !== null}
-														onChange={(e) =>
-															void uploadRowImage(i, e.target.files)
-														}
-														className="hidden"
-													/>
-												</label>
-											)}
-										</td>
-										<td className="p-2">
-											<Input
-												inputMode="decimal"
-												placeholder="0.00"
+											<PriceInput
 												value={row.price}
-												onChange={(e) => setRow(i, { price: e.target.value })}
-												onBlur={(e) =>
-													setRow(i, {
-														price: normalizePriceInput(e.target.value),
-													})
-												}
+												onChange={(v) => setRow(i, { price: v })}
 												className="h-9 w-24"
 											/>
 										</td>
 										<td className="p-2">
-											<Input
-												inputMode="numeric"
-												placeholder="0"
+											<StockInput
 												value={row.stock}
-												onChange={(e) =>
-													setRow(i, { stock: sanitizeIntInput(e.target.value) })
-												}
+												onChange={(v) => setRow(i, { stock: v })}
 												className="h-9 w-20"
 											/>
 										</td>
@@ -613,7 +879,7 @@ export function VariantEditor({
 													setRow(i, { blockWhenOutOfStock: e.target.checked })
 												}
 												className="size-4"
-												aria-label={`Stop orders for ${variantLabel(row.optionValues)} when out of stock`}
+												aria-label={`Track stock for ${variantLabel(row.optionValues)} (uncheck for made to order)`}
 											/>
 										</td>
 										<td className="p-2 text-center">
@@ -634,6 +900,121 @@ export function VariantEditor({
 					</div>
 				</div>
 			) : null}
+
+			{/* Custom / made-to-order line — sits OUTSIDE the grid, so a bespoke
+			    option shows up exactly once instead of multiplying across every
+			    size/flavour. See docs/custom-option.md. */}
+			<div className="flex flex-col gap-3 rounded-xl border border-border p-3">
+				<label className="flex items-start gap-2.5 text-sm">
+					<input
+						type="checkbox"
+						checked={customLine !== null}
+						onChange={(e) => toggleCustomLine(e.target.checked)}
+						className="mt-0.5 size-4 shrink-0"
+					/>
+					<span>
+						<span className="font-medium">
+							Also offer a custom / made-to-order option
+						</span>
+						<span className="block text-xs text-muted-foreground">
+							A separate “Custom” line buyers can request — made to order, with
+							a mockup they approve (and any quote you set) before paying. Kept
+							out of the grid above, so it appears once.
+						</span>
+					</span>
+				</label>
+
+				{customLine ? (
+					<div className="flex flex-col gap-3 rounded-lg bg-muted/40 p-3">
+						<div className="flex items-start gap-3">
+							{customLine.imageUrl ? (
+								<div className="relative size-14 shrink-0">
+									<img
+										src={customLine.imageUrl}
+										alt=""
+										className="size-14 rounded-lg object-cover"
+									/>
+									<button
+										type="button"
+										onClick={() => {
+											if (customLine.imageUrl?.startsWith("blob:")) {
+												URL.revokeObjectURL(customLine.imageUrl);
+												blobUrls.current.delete(customLine.imageUrl);
+											}
+											setCustomLine({
+												imageStorageIds: [],
+												imageUrl: undefined,
+											});
+										}}
+										className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-background text-xs shadow ring-1 ring-border"
+										aria-label="Remove custom image"
+									>
+										<X className="size-3" />
+									</button>
+								</div>
+							) : (
+								<label className="flex size-14 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-dashed border-border text-muted-foreground hover:border-ring">
+									{uploadingCustom ? (
+										<span className="text-[10px]">…</span>
+									) : (
+										<ImagePlus className="size-4" />
+									)}
+									<input
+										type="file"
+										accept="image/*"
+										disabled={uploadingCustom}
+										onChange={(e) => void uploadCustomImage(e.target.files)}
+										className="hidden"
+									/>
+								</label>
+							)}
+							<label className="flex flex-1 flex-col gap-1 text-sm font-medium">
+								Option name
+								<Input
+									value={customLine.label}
+									onChange={(e) => setCustomLine({ label: e.target.value })}
+									placeholder="Custom"
+									maxLength={40}
+								/>
+							</label>
+						</div>
+
+						<label className="flex flex-col gap-1 text-sm font-medium">
+							Starting price ({currency}){" "}
+							<span className="font-normal text-muted-foreground">
+								(optional)
+							</span>
+							<PriceInput
+								value={customLine.price}
+								onChange={(v) => setCustomLine({ price: v })}
+							/>
+							<span className="text-xs font-normal text-muted-foreground">
+								Leave blank to show “Price on quote” — you set the price on the
+								mockup after the order comes in.
+							</span>
+						</label>
+
+						<label className="flex flex-col gap-1 text-sm font-medium">
+							What should the buyer tell you?{" "}
+							<span className="font-normal text-muted-foreground">
+								(optional)
+							</span>
+							<textarea
+								value={customLine.prompt}
+								onChange={(e) => setCustomLine({ prompt: e.target.value })}
+								rows={2}
+								maxLength={280}
+								placeholder="e.g. Tell us your design, flavour, size & date needed"
+								className="rounded-xl border border-input bg-background px-3 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+							/>
+						</label>
+
+						<p className="text-xs text-muted-foreground">
+							🧑‍🍳 Made to order · ✅ buyer approves a mockup before you start.
+						</p>
+					</div>
+				) : null}
+			</div>
 		</div>
 	);
 }

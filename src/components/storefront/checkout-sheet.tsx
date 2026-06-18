@@ -7,6 +7,7 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { deriveMapsUrl } from "../../lib/google-address";
+import { composeCustomerNote } from "../../lib/order-note";
 import {
 	type CheckoutAddressValues,
 	checkoutFormSchema,
@@ -257,8 +258,12 @@ export function CheckoutSheet({
 			}
 
 			const trimmedNote = value.note?.trim();
-			const customerNote =
+			const generalNote =
 				trimmedNote && trimmedNote.length > 0 ? trimmedNote : undefined;
+			// Fold any per-line custom requests into the single order note so they
+			// reach the seller via the existing customerNote channel (WhatsApp + the
+			// dashboard + email) — no per-item schema needed. See docs/custom-option.md.
+			const customerNote = composeCustomerNote(cart.items, generalNote);
 
 			try {
 				const { shortId } = await createOrder({
@@ -366,6 +371,11 @@ export function CheckoutSheet({
 														? `${item.quantity} × Price on quote`
 														: `${item.quantity} × ${formatPrice(item.price, item.currency)}`}
 												</span>
+												{item.note ? (
+													<span className="mt-1 rounded-md bg-muted/60 px-2 py-1 text-[11px] leading-snug text-muted-foreground">
+														📝 {item.note}
+													</span>
+												) : null}
 											</div>
 											<div className="flex items-center gap-2">
 												<span className="text-sm font-semibold">

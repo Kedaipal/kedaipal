@@ -263,6 +263,20 @@ export default defineSchema({
 		blockWhenOutOfStock: v.optional(v.boolean()),
 		// `true` = an order containing THIS variant is mockup-gated.
 		requiresProof: v.optional(v.boolean()),
+		// Custom / made-to-order line: a single per-product variant that lives
+		// OUTSIDE the option-axis cartesian. `optionValues` is [] (like a no-axes
+		// default — disambiguated from it by this flag, never by optionValues), and
+		// it always behaves as made-to-order + mockup-gated (blockWhenOutOfStock
+		// false, requiresProof true). Lets a product offer "S/M/L … plus a bespoke
+		// custom order" without multiplying "Custom" across every size. See
+		// docs/custom-option.md.
+		isCustom: v.optional(v.boolean()),
+		// Buyer-facing name for the custom line (default "Custom"). Only meaningful
+		// when isCustom is true.
+		customLabel: v.optional(v.string()),
+		// Optional prompt shown to the buyer when they pick the custom line, telling
+		// them what to specify ("Tell us your design, flavour & date"). isCustom only.
+		customPrompt: v.optional(v.string()),
 		sortOrder: v.number(),
 		createdAt: v.number(),
 		updatedAt: v.number(),
@@ -446,7 +460,13 @@ export default defineSchema({
 				v.literal("approved"), // buyer approved; gate open
 			),
 		),
-		mockupImageStorageId: v.optional(v.string()), // current mockup
+		// Current mockup image(s). `mockupImageStorageIds` is the source of truth
+		// (1–5 images, e.g. multiple designs/angles or one-per-item for a multi-part
+		// custom order). `mockupImageStorageId` is kept in sync as `[0]` for legacy
+		// readers (WhatsApp send + the quote guard) and pre-multi orders. Reads
+		// resolve `mockupImageStorageIds ?? [mockupImageStorageId]`. See docs/proof-approval.md.
+		mockupImageStorageId: v.optional(v.string()),
+		mockupImageStorageIds: v.optional(v.array(v.string())),
 		mockupChangeNote: v.optional(v.string()), // buyer's requested changes
 		mockupSubmittedAt: v.optional(v.number()),
 		mockupApprovedAt: v.optional(v.number()),

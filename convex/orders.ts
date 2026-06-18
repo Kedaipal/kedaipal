@@ -48,6 +48,20 @@ const addressValidator = v.object({
 const MAX_ITEMS_PER_ORDER = 100;
 const MAX_CUSTOMER_NOTE = 500;
 const SHORT_ID_RETRIES = 3;
+// Up to 5 mockup images per order (designs/angles, or one per item in a
+// multi-part custom order) — mirrors the product-image cap. See docs/proof-approval.md.
+const MAX_MOCKUP_IMAGES = 5;
+
+/**
+ * The order's mockup image ids, newest model first. `mockupImageStorageIds` is
+ * the source of truth; legacy/pre-multi orders fall back to the singular
+ * `mockupImageStorageId`. Returns [] when no mockup has been sent.
+ */
+function resolveMockupImageIds(order: Doc<"orders">): string[] {
+	if (order.mockupImageStorageIds && order.mockupImageStorageIds.length > 0)
+		return order.mockupImageStorageIds;
+	return order.mockupImageStorageId ? [order.mockupImageStorageId] : [];
+}
 
 const statusValidator = v.union(
 	v.literal("pending"),
@@ -263,7 +277,12 @@ export const create = mutation({
 			const variantRequiresProof = variant.requiresProof ?? product.requiresProof;
 			if (variantRequiresProof === true) requiresMockup = true;
 			const variantId = variant._id;
-			const label = variantLabel(variant.optionValues);
+			// The custom line has no optionValues — label it with its custom name so
+			// the order, WhatsApp confirm, and seller dashboard show "… (Custom)"
+			// rather than an unlabelled row indistinguishable from the default.
+			const label = variant.isCustom
+				? (variant.customLabel ?? "Custom")
+				: variantLabel(variant.optionValues);
 			const displayName = label ? `${product.name} (${label})` : product.name;
 			if (!product.active || !variant.active)
 				throw new ConvexError(`"${displayName}" is not available`);
@@ -1168,6 +1187,32 @@ export const generateMockupUploadUrl = mutation({
 });
 
 /**
+ * Owner-only: delete mockup blobs that were uploaded but never attached — e.g.
+ * the seller picked 5 images and the 3rd upload failed, so `submitMockup` never
+ * ran and images 1–2 would otherwise orphan. Defensive: never deletes an id that
+ * the order currently references (a live mockup). Best-effort; the client fires
+ * this on a failed multi-upload.
+ */
+export const discardMockupUploads = mutation({
+	args: { orderId: v.id("orders"), storageIds: v.array(v.string()) },
+	handler: async (ctx, { orderId, storageIds }): Promise<void> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Not authenticated");
+		const order = await ctx.db.get(orderId);
+		if (!order) return; // order gone → nothing to protect; let the blobs GC
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) throw new Error("Retailer not found");
+		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		const referenced = new Set(resolveMockupImageIds(order));
+		for (const id of storageIds) {
+			const trimmed = id.trim();
+			if (!trimmed || referenced.has(trimmed)) continue;
+			await ctx.storage.delete(trimmed);
+		}
+	},
+});
+
+/**
  * Owner-only: attach a mockup and send it to the buyer → status `submitted`.
  * `quotedAmount` (minor units, optional) is the seller's price for the custom
  * work. It's re-enterable on each round; when present it's folded into `total`
@@ -1177,10 +1222,16 @@ export const generateMockupUploadUrl = mutation({
 export const submitMockup = mutation({
 	args: {
 		orderId: v.id("orders"),
-		storageId: v.string(),
+		// `storageIds` is preferred (1–5 images). `storageId` is the single-image
+		// back-compat path. Exactly one must resolve to ≥1 id.
+		storageId: v.optional(v.string()),
+		storageIds: v.optional(v.array(v.string())),
 		quotedAmount: v.optional(v.number()),
 	},
-	handler: async (ctx, { orderId, storageId, quotedAmount }): Promise<void> => {
+	handler: async (
+		ctx,
+		{ orderId, storageId, storageIds, quotedAmount },
+	): Promise<void> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error("Not authenticated");
 		await rateLimiter.limit(ctx, "mockupSubmit", { key: identity.subject, throws: true });
@@ -1193,8 +1244,12 @@ export const submitMockup = mutation({
 			throw new ConvexError("This order doesn't require a mockup");
 		if (order.mockupStatus === "approved")
 			throw new ConvexError("The mockup is already approved");
-		const id = storageId.trim();
-		if (!id) throw new ConvexError("Missing mockup image");
+		const ids = (storageIds ?? (storageId ? [storageId] : []))
+			.map((s) => s.trim())
+			.filter((s) => s.length > 0);
+		if (ids.length === 0) throw new ConvexError("Missing mockup image");
+		if (ids.length > MAX_MOCKUP_IMAGES)
+			throw new ConvexError(`At most ${MAX_MOCKUP_IMAGES} mockup images`);
 
 		const effectiveQuote = resolveMockupQuote(
 			quotedAmount,
@@ -1212,7 +1267,10 @@ export const submitMockup = mutation({
 
 		await ctx.db.patch(orderId, {
 			mockupStatus: "submitted",
-			mockupImageStorageId: id,
+			// Source of truth is the array; the singular stays in sync as [0] for
+			// legacy readers (WhatsApp send + the quote guard).
+			mockupImageStorageIds: ids,
+			mockupImageStorageId: ids[0],
 			mockupSubmittedAt: now,
 			mockupChangeNote: undefined,
 			mockupQuotedAmount: effectiveQuote,
@@ -1541,18 +1599,21 @@ export const declineMockupItem = mutation({
 });
 
 /**
- * Public query: resolve the current mockup image into a viewable URL for the
- * tracking page. shortId is the capability (same trust model as the rest of the
- * tracking page).
+ * Public query: resolve the current mockup image(s) into viewable URLs for the
+ * tracking page (and the seller's order detail). shortId is the capability (same
+ * trust model as the rest of the tracking page). Returns [] when none / unresolved.
  */
-export const getMockupUrl = query({
+export const getMockupUrls = query({
 	args: { shortId: v.string() },
-	handler: async (ctx, { shortId }): Promise<string | null> => {
+	handler: async (ctx, { shortId }): Promise<string[]> => {
 		const order = await ctx.db
 			.query("orders")
 			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
 			.first();
-		if (!order?.mockupImageStorageId) return null;
-		return (await ctx.storage.getUrl(order.mockupImageStorageId)) ?? null;
+		if (!order) return [];
+		const urls = await Promise.all(
+			resolveMockupImageIds(order).map((id) => ctx.storage.getUrl(id)),
+		);
+		return urls.filter((u): u is string => u !== null);
 	},
 });

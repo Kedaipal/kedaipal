@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { formatPrice } from "../../lib/format";
 import {
 	availableValuesPerAxis,
+	getCustomLine,
 	isSellable,
 	resolveVariant,
 } from "../../lib/variant";
@@ -21,6 +22,8 @@ interface ProductDetailSheetProps {
 		product: StorefrontProduct,
 		variant: StorefrontVariant,
 		quantity: number,
+		// Buyer's request, for the custom line (their size/colour/design spec).
+		note?: string,
 	) => void;
 }
 
@@ -32,6 +35,8 @@ export function ProductDetailSheet({
 	const [quantity, setQuantity] = useState(1);
 	// Per-axis selection, aligned to product.options; null = not yet chosen.
 	const [selection, setSelection] = useState<(string | null)[]>([]);
+	// Buyer's free-text request for the custom line (their spec).
+	const [customNote, setCustomNote] = useState("");
 
 	const options = product?.options ?? [];
 	const variants = product?.variants ?? [];
@@ -42,6 +47,7 @@ export function ProductDetailSheet({
 	useEffect(() => {
 		if (!product) return;
 		setQuantity(1);
+		setCustomNote("");
 		setSelection(
 			(product.options ?? []).map((axis) =>
 				axis.values.length === 1 ? axis.values[0] : null,
@@ -58,6 +64,7 @@ export function ProductDetailSheet({
 		() => resolveVariant(variants, selection),
 		[variants, selection],
 	);
+	const customLine = useMemo(() => getCustomLine(variants), [variants]);
 
 	const open = product !== null;
 	if (!product) {
@@ -65,9 +72,12 @@ export function ProductDetailSheet({
 		return <Dialog.Root open={false} onOpenChange={(o) => !o && onClose()} />;
 	}
 
+	// The bottom bar reflects the STANDARD variant (the axis selection). The custom
+	// line is an INDEPENDENT add with its own button (see the custom card below) —
+	// the two aren't mutually exclusive, so a buyer can add both in one visit.
 	const sellable = selectedVariant ? isSellable(selectedVariant) : false;
-	// The selected variant's resolved hard-block flag drives stock-bounded qty +
-	// the stock hint. Made-to-order variants are unbounded (made on demand).
+	// The selected variant's resolved hard-block flag drives stock-bounded qty + the
+	// stock hint. Made-to-order variants are unbounded (made on demand).
 	const variantBlocks = selectedVariant?.blockWhenOutOfStock === true;
 	const hasOptions = options.length > 0;
 	// Gallery + price fall back to the product hero when the variant has none.
@@ -104,6 +114,12 @@ export function ProductDetailSheet({
 			: priceVaries || product.hasQuotePricing
 				? `from ${formatPrice(product.priceFrom, product.currency)}`
 				: formatPrice(product.priceFrom, product.currency);
+
+	// Custom line's own price label (independent of the standard selection).
+	const customPriceLabel =
+		customLine && customLine.price > 0
+			? `from ${formatPrice(customLine.price, product.currency)}`
+			: "Price on quote";
 
 	return (
 		<Dialog.Root open={open} onOpenChange={(o) => !o && onClose()}>
@@ -201,6 +217,81 @@ export function ProductDetailSheet({
 										? `Only ${selectedVariant.onHand} left`
 										: `${selectedVariant.onHand} in stock`}
 							</p>
+						) : null}
+
+						{/* Custom / made-to-order line — a self-contained, INDEPENDENT add
+						    (its own button), not mutually exclusive with the variant pills.
+						    Shows once regardless of how many sizes/flavours exist. */}
+						{customLine ? (
+							<div className="mt-5 rounded-xl border border-border p-3">
+								{hasOptions ? (
+									<p className="mb-2 text-xs font-medium text-muted-foreground">
+										Or order a custom one
+									</p>
+								) : null}
+								<div className="flex items-center gap-3">
+									{customLine.imageUrls[0] ? (
+										<ZoomableImage
+											src={customLine.imageUrls[0]}
+											alt={customLine.customLabel ?? "Custom"}
+											caption={customLine.customLabel ?? "Custom"}
+											wrapperClassName="size-12 shrink-0"
+											className="size-12 rounded-lg object-cover"
+										/>
+									) : (
+										<span className="flex size-12 shrink-0 items-center justify-center rounded-lg bg-muted text-lg">
+											🧑‍🍳
+										</span>
+									)}
+									<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+										<span className="flex items-center gap-2">
+											<span className="text-sm font-semibold">
+												{customLine.customLabel ?? "Custom"}
+											</span>
+											<span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+												Made to order
+											</span>
+										</span>
+										<span className="text-xs text-muted-foreground">
+											{customPriceLabel}
+										</span>
+									</span>
+								</div>
+								{/* The seller's prompt becomes the placeholder so the buyer can
+								    actually type their spec — the whole point of a custom line. */}
+								<label className="mt-3 flex flex-col gap-1">
+									<span className="text-xs font-medium text-muted-foreground">
+										Your request
+									</span>
+									<textarea
+										value={customNote}
+										onChange={(e) => setCustomNote(e.target.value)}
+										rows={2}
+										maxLength={280}
+										placeholder={
+											customLine.customPrompt ||
+											"Tell the seller what you'd like — size, colour, design, date…"
+										}
+										className="rounded-xl border border-input bg-background px-3 py-2 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+									/>
+								</label>
+								<Button
+									type="button"
+									variant="outline"
+									onClick={() => {
+										onAdd(
+											product,
+											customLine,
+											1,
+											customNote.trim() || undefined,
+										);
+										setCustomNote("");
+									}}
+									className="mt-3 h-11 w-full"
+								>
+									Request custom order
+								</Button>
+							</div>
 						) : null}
 
 						{product.description ? (

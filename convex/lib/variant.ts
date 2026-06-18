@@ -15,6 +15,11 @@ export const MAX_VALUES_PER_AXIS = 25;
 export const MAX_VARIANTS_PER_PRODUCT = 50;
 export const MAX_AXIS_NAME_LENGTH = 40;
 export const MAX_VALUE_LENGTH = 60;
+// Custom / made-to-order line (docs/custom-option.md). One per product, lives
+// outside the cartesian, so it doesn't count toward MAX_VARIANTS_PER_PRODUCT.
+export const MAX_CUSTOM_LABEL_LENGTH = 40;
+export const MAX_CUSTOM_PROMPT_LENGTH = 280;
+export const DEFAULT_CUSTOM_LABEL = "Custom";
 
 /**
  * Human label for a variant from its positional option values:

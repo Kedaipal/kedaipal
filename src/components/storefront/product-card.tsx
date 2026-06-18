@@ -16,8 +16,11 @@ interface ProductCardProps {
 
 export function ProductCard({ product, onOpen, onQuickAdd }: ProductCardProps) {
 	// Multi-variant products can't be quick-added — the buyer must pick options
-	// in the detail sheet first.
+	// in the detail sheet first. A custom line also forces the detail sheet so the
+	// buyer can see (and choose) the made-to-order option. See docs/custom-option.md.
 	const hasOptions = (product.options?.length ?? 0) > 0;
+	const hasCustom = product.variants.some((v) => v.isCustom);
+	const needsDetail = hasOptions || hasCustom;
 	// A product "can run out" if any of its variants hard-blocks (flags are now
 	// resolved per-variant server-side). Only then does the low-stock badge apply.
 	const canRunOut = product.variants.some(
@@ -92,7 +95,12 @@ export function ProductCard({ product, onOpen, onQuickAdd }: ProductCardProps) {
 						</>
 					)}
 				</p>
-				{hasOptions ? (
+				{hasCustom ? (
+					<span className="w-fit rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+						Custom available
+					</span>
+				) : null}
+				{needsDetail ? (
 					<Button
 						type="button"
 						onClick={() => onOpen(product)}
