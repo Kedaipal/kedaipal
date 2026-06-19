@@ -84,6 +84,19 @@ export const list = query({
 	},
 });
 
+/** Total customer count for the retailer — drives the dashboard stat tile. */
+export const count = query({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<number> => {
+		await requireRetailerOwner(ctx, retailerId);
+		const rows = await ctx.db
+			.query("customers")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.collect();
+		return rows.length;
+	},
+});
+
 export const get = query({
 	args: { customerId: v.id("customers") },
 	handler: async (
