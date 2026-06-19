@@ -2,13 +2,14 @@ import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { mutation, query } from "./_generated/server";
+import { mutation, type MutationCtx, query } from "./_generated/server";
 import {
 	adjustAggregatesForTotalChange,
 	decrementAggregatesForCancel,
 	linkOrderToCustomer,
 } from "./customers";
 import { assertValidAddress } from "./lib/address";
+import { BUCKET_STATUSES, statusToBucket } from "./lib/orderBuckets";
 import {
 	computeOrderTotals,
 	generateShortId,
@@ -361,6 +362,7 @@ export const create = mutation({
 			pickupSnapshot: sanitizedPickupSnapshot,
 			customerNote: sanitizedCustomerNote,
 			mockupStatus: requiresMockup ? "pending" : undefined,
+			statusChangedAt: now,
 			createdAt: now,
 			updatedAt: now,
 		});
@@ -597,6 +599,218 @@ export const listByRetailer = query({
 	},
 });
 
+// Upper bound on how many of a retailer's orders the inbox scans per query.
+// At the Phase-1 target (≤500 orders/retailer) this loads everything; beyond it,
+// the oldest orders fall outside the scan (flagged via `capped`). Counts +
+// filtering are in-memory over this set — see docs/order-inbox.md for why this
+// beats indexed pagination + an Aggregate at this scale.
+const MAX_INBOX_SCAN = 1000;
+
+/**
+ * Order inbox: one query that returns the filtered/searched page **plus** the
+ * per-bucket counts (over the full set, independent of the active filters), in a
+ * single subscription. Buckets are fulfilment-based; payment status + date are
+ * orthogonal filters; search matches order #, customer name (partial, CI), and
+ * phone (trailing digits). Owner-only.
+ */
+export const searchOrders = query({
+	args: {
+		retailerId: v.id("retailers"),
+		bucket: v.union(
+			v.literal("all"),
+			v.literal("new"),
+			v.literal("in_progress"),
+			v.literal("completed"),
+			v.literal("cancelled"),
+		),
+		paymentStatuses: v.optional(
+			v.array(
+				v.union(
+					v.literal("unpaid"),
+					v.literal("claimed"),
+					v.literal("received"),
+				),
+			),
+		),
+		dateFrom: v.optional(v.number()),
+		dateTo: v.optional(v.number()),
+		// Cross-cutting: only orders awaiting the seller's mockup action
+		// (mockupStatus pending / changes_requested). ANDs with the other filters.
+		mockupPending: v.optional(v.boolean()),
+		searchText: v.optional(v.string()),
+		limit: v.optional(v.number()),
+	},
+	handler: async (
+		ctx,
+		{
+			retailerId,
+			bucket,
+			paymentStatuses,
+			dateFrom,
+			dateTo,
+			mockupPending,
+			searchText,
+			limit,
+		},
+	) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Not authenticated");
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new Error("Retailer not found");
+		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+
+		const all = await ctx.db
+			.query("orders")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.order("desc")
+			.take(MAX_INBOX_SCAN);
+
+		// Bucket counts (+ the cross-cutting mockup-pending count) over the full
+		// set — independent of the active filters/search so the chips always show
+		// true totals.
+		const counts = {
+			new: 0,
+			in_progress: 0,
+			completed: 0,
+			cancelled: 0,
+			mockupPending: 0,
+		};
+		const needsMockup = (s: string | undefined) =>
+			s === "pending" || s === "changes_requested";
+		for (const o of all) {
+			counts[statusToBucket(o.status)]++;
+			if (needsMockup(o.mockupStatus)) counts.mockupPending++;
+		}
+
+		const term = (searchText ?? "").trim().toLowerCase();
+		const digits = term.replace(/\D/g, "");
+		const payset =
+			paymentStatuses && paymentStatuses.length > 0
+				? new Set(paymentStatuses)
+				: null;
+		const bucketStatuses =
+			bucket === "all" ? null : new Set(BUCKET_STATUSES[bucket]);
+
+		const filtered = all.filter((o) => {
+			if (bucketStatuses && !bucketStatuses.has(o.status)) return false;
+			if (mockupPending && !needsMockup(o.mockupStatus)) return false;
+			// Undefined paymentStatus reads as "unpaid".
+			if (payset && !payset.has(o.paymentStatus ?? "unpaid")) return false;
+			if (dateFrom !== undefined && o.createdAt < dateFrom) return false;
+			if (dateTo !== undefined && o.createdAt > dateTo) return false;
+			if (term.length > 0) {
+				const name = (o.customer.name ?? "").toLowerCase();
+				const phone = (o.customer.waPhone ?? "").replace(/\D/g, "");
+				const idHit = o.shortId.toLowerCase().includes(term);
+				const nameHit = name.length > 0 && name.includes(term);
+				// Phone: match on trailing digits (handles +60 / 0 / local-part typing).
+				const phoneHit = digits.length >= 4 && phone.endsWith(digits);
+				// Item name / variant ("vanilla cake") — already in memory, so cheap.
+				const itemHit = o.items.some(
+					(it) =>
+						it.name.toLowerCase().includes(term) ||
+						(it.variantLabel ?? "").toLowerCase().includes(term),
+				);
+				if (!idHit && !nameHit && !phoneHit && !itemHit) return false;
+			}
+			return true;
+		});
+
+		const take = Math.max(1, Math.min(limit ?? 50, 200));
+		return {
+			orders: filtered.slice(0, take),
+			total: filtered.length,
+			counts,
+			capped: all.length >= MAX_INBOX_SCAN,
+		};
+	},
+});
+
+type TransitionStatus =
+	| "confirmed"
+	| "packed"
+	| "shipped"
+	| "delivered"
+	| "cancelled";
+
+/**
+ * Apply a canonical status transition to an ALREADY-AUTHORIZED order: restore
+ * stock + reverse the customer's lifetime aggregates on the first move into
+ * "cancelled", stamp `status` + `statusChangedAt`, append an `orderEvent`, and
+ * schedule the WhatsApp notification. Shared by `updateStatus` (single) and
+ * `bulkUpdateStatus` so neither can drift from the gate/stock semantics.
+ *
+ * The caller owns auth AND the mockup gate (single throws; bulk skips), so this
+ * helper assumes the transition is permitted.
+ */
+async function applyStatusTransition(
+	ctx: MutationCtx,
+	order: Doc<"orders">,
+	status: TransitionStatus,
+	opts: { note?: string; carrierTrackingUrl?: string } = {},
+): Promise<void> {
+	const now = Date.now();
+
+	// Restore stock on the FIRST transition into cancelled. Idempotent —
+	// re-cancelling a cancelled order is a no-op for stock. Only variants whose
+	// parent product hard-blocks were ever decremented, so only those are
+	// restored. Items without a variantId are legacy (pre-variant) orders, skipped.
+	if (status === "cancelled" && order.status !== "cancelled") {
+		const restoreByVariant = new Map<Id<"productVariants">, number>();
+		for (const item of order.items) {
+			if (!item.variantId) continue;
+			restoreByVariant.set(
+				item.variantId,
+				(restoreByVariant.get(item.variantId) ?? 0) + item.quantity,
+			);
+		}
+		for (const [variantId, qty] of restoreByVariant) {
+			const fresh = await ctx.db.get(variantId);
+			if (!fresh) continue; // variant was deleted; nothing to restore
+			const product = await ctx.db.get(fresh.productId);
+			if (!product) continue;
+			// Mirror the create-time decrement: a variant was only reserved when
+			// its resolved flag hard-blocks (per-variant override ?? product default).
+			const block = fresh.blockWhenOutOfStock ?? product.blockWhenOutOfStock;
+			if (block !== true) continue; // made-to-order — never decremented
+			await ctx.db.patch(variantId, { onHand: fresh.onHand + qty, updatedAt: now });
+		}
+
+		// Reverse this order's contribution to the customer's lifetime aggregates.
+		// Same first-transition guard keeps it idempotent.
+		if (order.customerId) {
+			await decrementAggregatesForCancel(ctx, {
+				customerId: order.customerId,
+				orderTotal: order.total,
+			});
+		}
+	}
+
+	const patch: Partial<{
+		status: TransitionStatus;
+		statusChangedAt: number;
+		updatedAt: number;
+		carrierTrackingUrl: string;
+	}> = { status, statusChangedAt: now, updatedAt: now };
+	if (status === "shipped" && opts.carrierTrackingUrl) {
+		const trimmed = opts.carrierTrackingUrl.trim();
+		if (trimmed.length > 0) patch.carrierTrackingUrl = trimmed;
+	}
+	await ctx.db.patch(order._id, patch);
+	await ctx.db.insert("orderEvents", {
+		orderId: order._id,
+		status,
+		note: opts.note,
+		createdAt: now,
+	});
+
+	// Fire-and-forget WhatsApp notification. Scheduled (not awaited) so the
+	// mutation stays a pure transaction and the action runs with network access.
+	await ctx.scheduler.runAfter(0, internal.whatsapp.notifyStatusChange, {
+		orderId: order._id,
+	});
+}
+
 export const updateStatus = mutation({
 	args: {
 		orderId: v.id("orders"),
@@ -626,72 +840,56 @@ export const updateStatus = mutation({
 			);
 		}
 
-		const now = Date.now();
+		await applyStatusTransition(ctx, order, status, { note, carrierTrackingUrl });
+	},
+});
 
-		// Restore stock on the FIRST transition into cancelled. Idempotent —
-		// re-cancelling a cancelled order is a no-op for stock. Only variants
-		// whose parent product hard-blocks were ever decremented, so only those
-		// are restored. Items without a variantId are legacy (pre-variant) orders
-		// and are skipped.
-		if (status === "cancelled" && order.status !== "cancelled") {
-			const restoreByVariant = new Map<Id<"productVariants">, number>();
-			for (const item of order.items) {
-				if (!item.variantId) continue;
-				restoreByVariant.set(
-					item.variantId,
-					(restoreByVariant.get(item.variantId) ?? 0) + item.quantity,
-				);
-			}
-			for (const [variantId, qty] of restoreByVariant) {
-				const fresh = await ctx.db.get(variantId);
-				if (!fresh) continue; // variant was deleted; nothing to restore
-				const product = await ctx.db.get(fresh.productId);
-				if (!product) continue;
-				// Mirror the create-time decrement: a variant was only reserved when
-				// its resolved flag hard-blocks (per-variant override ?? product default).
-				const block = fresh.blockWhenOutOfStock ?? product.blockWhenOutOfStock;
-				if (block !== true) continue; // made-to-order — never decremented
-				await ctx.db.patch(variantId, {
-					onHand: fresh.onHand + qty,
-					updatedAt: now,
-				});
-			}
+/**
+ * Bulk-apply one canonical status to many orders (the inbox's multi-select). Uses
+ * the SAME per-order path as `updateStatus` so the mockup gate + stock-restore
+ * can't be bypassed. Per-order it SKIPS (rather than failing the batch) when the
+ * order is already in that status or is mockup-gated for "packed" — and reports
+ * a summary. All orders must belong to the caller's retailer.
+ */
+export const bulkUpdateStatus = mutation({
+	args: {
+		orderIds: v.array(v.id("orders")),
+		status: transitionStatusValidator,
+	},
+	handler: async (
+		ctx,
+		{ orderIds, status },
+	): Promise<{ updated: number; skipped: number }> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Not authenticated");
+		if (orderIds.length === 0) return { updated: 0, skipped: 0 };
+		if (orderIds.length > 100)
+			throw new ConvexError("Too many orders selected (max 100)");
 
-			// Reverse this order's contribution to the customer's lifetime
-			// aggregates. Same first-transition guard keeps it idempotent.
-			if (order.customerId) {
-				await decrementAggregatesForCancel(ctx, {
-					customerId: order.customerId,
-					orderTotal: order.total,
-				});
+		let updated = 0;
+		let skipped = 0;
+		for (const orderId of orderIds) {
+			const order = await ctx.db.get(orderId);
+			if (!order) throw new ConvexError("Order not found");
+			const retailer = await ctx.db.get(order.retailerId);
+			if (!retailer) throw new Error("Retailer not found");
+			// Ownership is enforced for every order — a foreign id fails the batch.
+			if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+
+			// Skip no-ops + transitions blocked by the mockup gate (don't fail the
+			// whole batch on one ineligible order).
+			if (order.status === status) {
+				skipped++;
+				continue;
 			}
+			if (status === "packed" && isMockupGateClosed(order)) {
+				skipped++;
+				continue;
+			}
+			await applyStatusTransition(ctx, order, status);
+			updated++;
 		}
-
-		const patch: Partial<{ status: typeof status; updatedAt: number; carrierTrackingUrl: string }> = {
-			status,
-			updatedAt: now,
-		};
-		if (status === "shipped" && carrierTrackingUrl) {
-			const trimmed = carrierTrackingUrl.trim();
-			if (trimmed.length > 0) {
-				patch.carrierTrackingUrl = trimmed;
-			}
-		}
-		await ctx.db.patch(orderId, patch);
-		await ctx.db.insert("orderEvents", {
-			orderId,
-			status,
-			note,
-			createdAt: now,
-		});
-
-		// Fire-and-forget WhatsApp notification. Scheduled (not awaited) so the
-		// mutation stays a pure transaction and the action runs with network access.
-		await ctx.scheduler.runAfter(
-			0,
-			internal.whatsapp.notifyStatusChange,
-			{ orderId },
-		);
+		return { updated, skipped };
 	},
 });
 
@@ -769,8 +967,12 @@ export const advanceToStage = mutation({
 			status: typeof targetStatus;
 			currentStageId: string;
 			carrierTrackingUrl: string;
+			statusChangedAt: number;
 			updatedAt: number;
 		}> = { status: targetStatus, currentStageId: stage.id, updatedAt: now };
+		// Reset the status clock only when the canonical status actually changes
+		// (a within-anchor stage move keeps the same "Pending/Confirmed/…" bucket).
+		if (statusChanged) patch.statusChangedAt = now;
 		if (targetStatus === "shipped" && carrierTrackingUrl) {
 			const trimmed = carrierTrackingUrl.trim();
 			if (trimmed.length > 0) patch.carrierTrackingUrl = trimmed;

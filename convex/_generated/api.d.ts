@@ -24,6 +24,7 @@ import type * as lib_emailCopy from "../lib/emailCopy.js";
 import type * as lib_legal from "../lib/legal.js";
 import type * as lib_mapsUrl from "../lib/mapsUrl.js";
 import type * as lib_order from "../lib/order.js";
+import type * as lib_orderBuckets from "../lib/orderBuckets.js";
 import type * as lib_orderStatus from "../lib/orderStatus.js";
 import type * as lib_payment from "../lib/payment.js";
 import type * as lib_rateLimiter from "../lib/rateLimiter.js";
@@ -64,6 +65,7 @@ declare const fullApi: ApiFromModules<{
   "lib/legal": typeof lib_legal;
   "lib/mapsUrl": typeof lib_mapsUrl;
   "lib/order": typeof lib_order;
+  "lib/orderBuckets": typeof lib_orderBuckets;
   "lib/orderStatus": typeof lib_orderStatus;
   "lib/payment": typeof lib_payment;
   "lib/rateLimiter": typeof lib_rateLimiter;

@@ -1,0 +1,64 @@
+// @vitest-environment jsdom
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { activeFilterCount, OrderFilters } from "./order-filters";
+
+afterEach(cleanup);
+
+describe("OrderFilters", () => {
+	it("counts payment + date range + mockup", () => {
+		expect(activeFilterCount({ payment: [], mockup: false })).toBe(0);
+		// 2 payment + 1 date range (both bounds) + 1 mockup = 4.
+		expect(
+			activeFilterCount({
+				payment: ["unpaid", "received"],
+				from: 1,
+				to: 2,
+				mockup: true,
+			}),
+		).toBe(4);
+		// A single date bound still counts as one.
+		expect(activeFilterCount({ payment: [], from: 1, mockup: false })).toBe(1);
+	});
+
+	it("toggling a payment chip reports the new selection", () => {
+		const onChange = vi.fn();
+		render(
+			<OrderFilters
+				value={{ payment: [], mockup: false }}
+				onChange={onChange}
+			/>,
+		);
+		// The mobile sheet is closed, so only the desktop controls render the chip.
+		fireEvent.click(screen.getByRole("button", { name: "Unpaid" }));
+		expect(onChange).toHaveBeenCalledWith({
+			payment: ["unpaid"],
+			mockup: false,
+		});
+	});
+
+	it("shows the mockup toggle (with count) only when relevant, and toggles it", () => {
+		const onChange = vi.fn();
+		const { rerender } = render(
+			<OrderFilters
+				value={{ payment: [], mockup: false }}
+				onChange={onChange}
+				mockupCount={0}
+			/>,
+		);
+		// No mockup-pending orders + not active → toggle hidden.
+		expect(screen.queryByRole("button", { name: /needs mockup/i })).toBeNull();
+
+		rerender(
+			<OrderFilters
+				value={{ payment: [], mockup: false }}
+				onChange={onChange}
+				mockupCount={3}
+			/>,
+		);
+		const toggle = screen.getByRole("button", { name: /needs mockup/i });
+		expect(toggle.textContent).toContain("3");
+		fireEvent.click(toggle);
+		expect(onChange).toHaveBeenCalledWith({ payment: [], mockup: true });
+	});
+});
