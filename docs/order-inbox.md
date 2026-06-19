@@ -117,8 +117,12 @@ helpers (`statusAgeMs`, `formatStatusAge`, `statusAgeSeverity`).
   **always-visible checkbox** as its own click target — the card itself still
   links to the order (two distinct CTAs; no "select mode" toggle to fight). Ticking
   one reveals a **Select all / Done** toolbar + a sticky bottom **bulk bar** ("N
-  selected" + a **"Mark as…"** menu of resolved status labels, Cancel destructive)
-  → `bulkUpdateStatus` → toast summary ("Updated 8 · skipped 2"). Selection clears
+  selected" + a **"Mark as…"** menu of resolved status labels) → `bulkUpdateStatus`
+  → toast summary ("Updated 8 · skipped 2"). **Destructive actions (Cancel) are
+  gated behind a confirm dialog** ("Cancel N orders? Customers will be notified…")
+  since bulk-cancel restores stock, reverses aggregates, and sends an unrecallable
+  WhatsApp cancellation to up to 100 customers; non-destructive actions apply
+  immediately. Selection clears
   when the view (bucket/search/filters) changes. The bar is `fixed` and sits over
   the mobile bottom-nav while selection is active.
 - **Bucket counts are retained across refetches** (`countsRef`) so the chips +

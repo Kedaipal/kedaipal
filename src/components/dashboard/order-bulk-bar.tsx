@@ -2,6 +2,14 @@ import { ChevronUp, X } from "lucide-react";
 import { useState } from "react";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "../ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 
 export type BulkAction = {
@@ -14,6 +22,11 @@ export type BulkAction = {
  * Sticky bottom bar shown while orders are multi-selected in the inbox. Houses
  * the "Mark as…" action menu (resolved status labels) + a clear. On mobile it
  * sits over the bottom nav — selection mode owns the bottom while it's active.
+ *
+ * Destructive actions (Cancel) are gated behind a confirm dialog — bulk-cancel
+ * restores stock, reverses customer aggregates, AND sends an unrecallable
+ * WhatsApp cancellation to every selected customer (up to 100), so a misclick is
+ * costly. Non-destructive actions apply immediately.
  */
 export function OrderBulkBar({
 	count,
@@ -29,6 +42,16 @@ export function OrderBulkBar({
 	busy?: boolean;
 }) {
 	const [open, setOpen] = useState(false);
+	const [pendingDestructive, setPendingDestructive] =
+		useState<BulkAction | null>(null);
+	const orderWord = count === 1 ? "order" : "orders";
+
+	function handleAction(a: BulkAction) {
+		setOpen(false);
+		if (a.destructive) setPendingDestructive(a);
+		else onApply(a.status);
+	}
+
 	return (
 		<div className="fixed inset-x-0 bottom-0 z-50 border-t border-border bg-background shadow-[0_-4px_16px_rgba(0,0,0,0.06)]">
 			<div className="mx-auto flex w-full max-w-md items-center gap-3 px-5 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:max-w-6xl lg:px-8">
@@ -45,7 +68,11 @@ export function OrderBulkBar({
 				</span>
 				<Popover open={open} onOpenChange={setOpen}>
 					<PopoverTrigger asChild>
-						<Button type="button" disabled={busy} className="ml-auto h-10 gap-1.5">
+						<Button
+							type="button"
+							disabled={busy}
+							className="ml-auto h-10 gap-1.5"
+						>
 							{busy ? "Updating…" : "Mark as"}
 							<ChevronUp className="size-4" />
 						</Button>
@@ -56,10 +83,7 @@ export function OrderBulkBar({
 								<button
 									key={a.status}
 									type="button"
-									onClick={() => {
-										setOpen(false);
-										onApply(a.status);
-									}}
+									onClick={() => handleAction(a)}
 									className={cn(
 										"flex h-10 items-center rounded-md px-3 text-left text-sm transition-colors hover:bg-muted",
 										a.destructive && "text-destructive hover:bg-destructive/10",
@@ -72,6 +96,44 @@ export function OrderBulkBar({
 					</PopoverContent>
 				</Popover>
 			</div>
+
+			{/* Confirm step for destructive bulk actions (e.g. Cancel). */}
+			<Dialog
+				open={pendingDestructive !== null}
+				onOpenChange={(o) => {
+					if (!o) setPendingDestructive(null);
+				}}
+			>
+				<DialogContent showCloseButton={false} className="sm:max-w-sm">
+					<DialogHeader>
+						<DialogTitle>
+							Cancel {count} {orderWord}?
+						</DialogTitle>
+						<DialogDescription>
+							{count === 1 ? "The customer" : "Customers"} will be notified over
+							WhatsApp, and this can't be undone.
+						</DialogDescription>
+					</DialogHeader>
+					<DialogFooter>
+						<Button
+							variant="outline"
+							onClick={() => setPendingDestructive(null)}
+						>
+							Keep {orderWord}
+						</Button>
+						<Button
+							variant="destructive"
+							onClick={() => {
+								const action = pendingDestructive;
+								setPendingDestructive(null);
+								if (action) onApply(action.status);
+							}}
+						>
+							Cancel {count} {orderWord}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</div>
 	);
 }
