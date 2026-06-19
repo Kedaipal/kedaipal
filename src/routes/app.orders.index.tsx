@@ -1,6 +1,7 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import {
+	Check,
 	ChevronRight,
 	Package,
 	Search,
@@ -8,9 +9,15 @@ import {
 	Truck,
 	X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
+import type { Id } from "../../convex/_generated/dataModel";
 import { INBOX_BUCKETS, type OrderBucket } from "../../convex/lib/orderBuckets";
+import {
+	type BulkAction,
+	OrderBulkBar,
+} from "../components/dashboard/order-bulk-bar";
 import {
 	OrderFilters,
 	type OrderFilterValue,
@@ -18,10 +25,11 @@ import {
 } from "../components/dashboard/order-filters";
 import { OrderTimeBadge } from "../components/dashboard/order-time-badge";
 import { PageHeader } from "../components/dashboard/page-header";
+import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDebounce } from "../hooks/useDebounce";
-import { formatPrice } from "../lib/format";
+import { convexErrorMessage, formatPrice } from "../lib/format";
 import {
 	type DeliveryMethod,
 	resolveAnchorLabel,
@@ -106,9 +114,17 @@ function OrdersRoute() {
 	const navigate = useNavigate({ from: Route.fullPath });
 	const retailer = useQuery(api.retailers.getMyRetailer);
 
+	const bulkUpdateStatus = useMutation(api.orders.bulkUpdateStatus);
+
 	const [searchInput, setSearchInput] = useState(q);
 	const debounced = useDebounce(searchInput.trim(), 250);
 	const [limit, setLimit] = useState(PAGE_SIZE);
+
+	// Multi-select (bulk actions). Checkboxes are always shown; tapping the card
+	// still opens the order. Selection clears whenever the view changes (different
+	// result set) — see the reset effect below.
+	const [selected, setSelected] = useState<Set<string>>(new Set());
+	const [bulkBusy, setBulkBusy] = useState(false);
 
 	const payKey = pay.join(",");
 	// Mirror the debounced search into the URL (shareable / survives refresh).
@@ -118,10 +134,12 @@ function OrdersRoute() {
 			replace: true,
 		});
 	}, [debounced, navigate]);
-	// Any change to the view (bucket / search / filters) resets the page size.
+	// Any change to the view (bucket / search / filters) resets the page size and
+	// clears any selection (the result set is different now).
 	// biome-ignore lint/correctness/useExhaustiveDependencies: these are intentional reset triggers, not values read in the body.
 	useEffect(() => {
 		setLimit(PAGE_SIZE);
+		setSelected(new Set());
 	}, [bucket, debounced, payKey, from, to, mockup]);
 
 	const result = useQuery(
@@ -139,6 +157,7 @@ function OrdersRoute() {
 				}
 			: "skip",
 	);
+	const countsRef = useRef<NonNullable<typeof result>["counts"] | null>(null);
 
 	if (!retailer) return <OrdersInboxSkeleton />;
 
@@ -154,7 +173,11 @@ function OrdersRoute() {
 
 	const loading = result === undefined;
 	const orders = result?.orders ?? [];
-	const counts = result?.counts;
+	// Bucket counts are independent of the active filters, so retain the last
+	// known set across refetches — otherwise the chips + "Needs mockup" toggle
+	// would flicker out every time a filter changes (the query reloads).
+	if (result?.counts) countsRef.current = result.counts;
+	const counts = result?.counts ?? countsRef.current ?? undefined;
 	const total = result?.total ?? 0;
 	const allCount = counts
 		? counts.new + counts.in_progress + counts.completed + counts.cancelled
@@ -189,6 +212,66 @@ function OrdersRoute() {
 		if (key === "all") return allCount;
 		return counts[key];
 	};
+
+	// --- Bulk multi-select ---------------------------------------------------
+	const visibleIds = orders.map((o) => o._id);
+	const allSelected =
+		visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
+
+	function toggleSelect(id: string) {
+		setSelected((prev) => {
+			const next = new Set(prev);
+			if (next.has(id)) next.delete(id);
+			else next.add(id);
+			return next;
+		});
+	}
+	function selectAllOnPage() {
+		setSelected(allSelected ? new Set() : new Set(visibleIds));
+	}
+	function clearSelection() {
+		setSelected(new Set());
+	}
+
+	// Bulk targets — the canonical forward transitions, resolved to the retailer's
+	// labels (matching the row badges). "Cancel" is destructive.
+	const bulkActions: BulkAction[] = [
+		"confirmed",
+		"packed",
+		"shipped",
+		"delivered",
+	]
+		.map((s) => ({
+			status: s as BulkAction["status"],
+			label: resolveAnchorLabel(s as OrderStatus, {
+				stages,
+				labels,
+				deliveryMethod: retailerMethod,
+				locale: "en",
+			}),
+		}))
+		.concat([
+			{ status: "cancelled", label: "Cancel orders", destructive: true },
+		] as BulkAction[]);
+
+	async function applyBulk(status: BulkAction["status"]) {
+		const ids = [...selected] as Id<"orders">[];
+		if (ids.length === 0) return;
+		setBulkBusy(true);
+		try {
+			const res = await bulkUpdateStatus({ orderIds: ids, status });
+			toast.success(
+				res.skipped > 0
+					? `Updated ${res.updated} · skipped ${res.skipped}`
+					: `Updated ${res.updated} order${res.updated === 1 ? "" : "s"}`,
+			);
+			clearSelection();
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setBulkBusy(false);
+		}
+	}
 
 	return (
 		<div className="flex flex-col gap-4 lg:gap-5">
@@ -273,6 +356,28 @@ function OrdersRoute() {
 				mockupCount={counts?.mockupPending}
 			/>
 
+			{/* Selection toolbar — appears once at least one order is ticked. */}
+			{selected.size > 0 ? (
+				<div className="flex items-center justify-end gap-2">
+					<Button
+						variant="outline"
+						size="sm"
+						className="h-8"
+						onClick={selectAllOnPage}
+					>
+						{allSelected ? "Clear all" : "Select all"}
+					</Button>
+					<Button
+						variant="ghost"
+						size="sm"
+						className="h-8"
+						onClick={clearSelection}
+					>
+						Done
+					</Button>
+				</div>
+			) : null}
+
 			{loading ? (
 				<OrderList.Skeleton />
 			) : orders.length === 0 ? (
@@ -285,65 +390,97 @@ function OrdersRoute() {
 			) : (
 				<>
 					<ul className="flex flex-col gap-2 lg:grid lg:grid-cols-2 lg:gap-3">
-						{orders.map((o) => (
-							<li key={o._id}>
-								<Link
-									to="/app/orders/$shortId"
-									params={{ shortId: o.shortId }}
-									className="group flex items-center gap-3 rounded-2xl border border-border bg-card p-4 transition-all hover:border-ring hover:shadow-sm"
-								>
-									<div className="flex min-w-0 flex-1 flex-col gap-1.5">
-										<div className="flex flex-wrap items-center gap-2">
-											<span className="font-mono text-sm font-semibold">
-												#{o.shortId}
+						{orders.map((o) => {
+							const isSel = selected.has(o._id);
+							const rowInner = (
+								<div className="flex min-w-0 flex-1 flex-col gap-1.5">
+									<div className="flex flex-wrap items-center gap-2">
+										<span className="font-mono text-sm font-semibold">
+											#{o.shortId}
+										</span>
+										<StatusBadge
+											status={o.status as OrderStatus}
+											label={(() => {
+												const cs = resolveCurrentStage(
+													{
+														status: o.status,
+														currentStageId: o.currentStageId,
+													},
+													stages,
+												);
+												return cs
+													? stageLabel(cs, "en")
+													: resolveAnchorLabel(o.status as OrderStatus, {
+															stages,
+															labels,
+															deliveryMethod: (o.deliveryMethod ??
+																"delivery") as DeliveryMethod,
+															locale: "en",
+														});
+											})()}
+										/>
+										<OrderTimeBadge order={o} now={now} />
+										<DeliveryMethodBadge
+											method={o.deliveryMethod ?? "delivery"}
+										/>
+										{o.mockupStatus === "pending" ||
+										o.mockupStatus === "changes_requested" ? (
+											<span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+												Mockup pending
 											</span>
-											<StatusBadge
-												status={o.status as OrderStatus}
-												label={(() => {
-													const cs = resolveCurrentStage(
-														{
-															status: o.status,
-															currentStageId: o.currentStageId,
-														},
-														stages,
-													);
-													return cs
-														? stageLabel(cs, "en")
-														: resolveAnchorLabel(o.status as OrderStatus, {
-																stages,
-																labels,
-																deliveryMethod: (o.deliveryMethod ??
-																	"delivery") as DeliveryMethod,
-																locale: "en",
-															});
-												})()}
-											/>
-											<OrderTimeBadge order={o} now={now} />
-											<DeliveryMethodBadge
-												method={o.deliveryMethod ?? "delivery"}
-											/>
-											{o.mockupStatus === "pending" ||
-											o.mockupStatus === "changes_requested" ? (
-												<span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
-													Mockup pending
-												</span>
-											) : null}
-										</div>
-										<div className="flex items-center justify-between gap-2">
-											<span className="min-w-0 truncate text-sm text-muted-foreground">
-												{o.customer.name ?? "Anonymous"}
-												{" · "}
-												{o.items.length} item{o.items.length === 1 ? "" : "s"}
-											</span>
-											<span className="shrink-0 text-sm font-semibold tabular-nums">
-												{formatPrice(o.total, o.currency)}
-											</span>
-										</div>
+										) : null}
 									</div>
-									<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-								</Link>
-							</li>
-						))}
+									<div className="flex items-center justify-between gap-2">
+										<span className="min-w-0 truncate text-sm text-muted-foreground">
+											{o.customer.name ?? "Anonymous"}
+											{" · "}
+											{o.items.length} item{o.items.length === 1 ? "" : "s"}
+										</span>
+										<span className="shrink-0 text-sm font-semibold tabular-nums">
+											{formatPrice(o.total, o.currency)}
+										</span>
+									</div>
+								</div>
+							);
+							return (
+								<li key={o._id}>
+									{/* Always-visible checkbox (its own click target) sits beside
+									    the card, which stays a normal link to the order. */}
+									<div
+										className={cn(
+											"group flex items-center gap-3 rounded-2xl border bg-card p-4 transition-all",
+											isSel
+												? "border-accent ring-1 ring-accent"
+												: "border-border hover:border-ring hover:shadow-sm",
+										)}
+									>
+										<button
+											type="button"
+											role="checkbox"
+											aria-checked={isSel}
+											aria-label={`Select order ${o.shortId}`}
+											onClick={() => toggleSelect(o._id)}
+											className={cn(
+												"flex size-5 shrink-0 items-center justify-center rounded-md border transition-colors",
+												isSel
+													? "border-accent bg-accent text-accent-foreground"
+													: "border-border bg-background hover:border-accent",
+											)}
+										>
+											{isSel ? <Check className="size-3.5" /> : null}
+										</button>
+										<Link
+											to="/app/orders/$shortId"
+											params={{ shortId: o.shortId }}
+											className="flex min-w-0 flex-1 items-center gap-3"
+										>
+											{rowInner}
+											<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+										</Link>
+									</div>
+								</li>
+							);
+						})}
 					</ul>
 
 					{orders.length < total ? (
@@ -355,8 +492,21 @@ function OrdersRoute() {
 							Load more ({total - orders.length} more)
 						</button>
 					) : null}
+					{selected.size > 0 ? (
+						<div className="h-20" aria-hidden="true" />
+					) : null}
 				</>
 			)}
+
+			{selected.size > 0 ? (
+				<OrderBulkBar
+					count={selected.size}
+					actions={bulkActions}
+					onApply={applyBulk}
+					onClear={clearSelection}
+					busy={bulkBusy}
+				/>
+			) : null}
 		</div>
 	);
 }

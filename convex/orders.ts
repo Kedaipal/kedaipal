@@ -2,7 +2,7 @@ import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { mutation, query } from "./_generated/server";
+import { mutation, type MutationCtx, query } from "./_generated/server";
 import {
 	adjustAggregatesForTotalChange,
 	decrementAggregatesForCancel,
@@ -726,6 +726,91 @@ export const searchOrders = query({
 	},
 });
 
+type TransitionStatus =
+	| "confirmed"
+	| "packed"
+	| "shipped"
+	| "delivered"
+	| "cancelled";
+
+/**
+ * Apply a canonical status transition to an ALREADY-AUTHORIZED order: restore
+ * stock + reverse the customer's lifetime aggregates on the first move into
+ * "cancelled", stamp `status` + `statusChangedAt`, append an `orderEvent`, and
+ * schedule the WhatsApp notification. Shared by `updateStatus` (single) and
+ * `bulkUpdateStatus` so neither can drift from the gate/stock semantics.
+ *
+ * The caller owns auth AND the mockup gate (single throws; bulk skips), so this
+ * helper assumes the transition is permitted.
+ */
+async function applyStatusTransition(
+	ctx: MutationCtx,
+	order: Doc<"orders">,
+	status: TransitionStatus,
+	opts: { note?: string; carrierTrackingUrl?: string } = {},
+): Promise<void> {
+	const now = Date.now();
+
+	// Restore stock on the FIRST transition into cancelled. Idempotent —
+	// re-cancelling a cancelled order is a no-op for stock. Only variants whose
+	// parent product hard-blocks were ever decremented, so only those are
+	// restored. Items without a variantId are legacy (pre-variant) orders, skipped.
+	if (status === "cancelled" && order.status !== "cancelled") {
+		const restoreByVariant = new Map<Id<"productVariants">, number>();
+		for (const item of order.items) {
+			if (!item.variantId) continue;
+			restoreByVariant.set(
+				item.variantId,
+				(restoreByVariant.get(item.variantId) ?? 0) + item.quantity,
+			);
+		}
+		for (const [variantId, qty] of restoreByVariant) {
+			const fresh = await ctx.db.get(variantId);
+			if (!fresh) continue; // variant was deleted; nothing to restore
+			const product = await ctx.db.get(fresh.productId);
+			if (!product) continue;
+			// Mirror the create-time decrement: a variant was only reserved when
+			// its resolved flag hard-blocks (per-variant override ?? product default).
+			const block = fresh.blockWhenOutOfStock ?? product.blockWhenOutOfStock;
+			if (block !== true) continue; // made-to-order — never decremented
+			await ctx.db.patch(variantId, { onHand: fresh.onHand + qty, updatedAt: now });
+		}
+
+		// Reverse this order's contribution to the customer's lifetime aggregates.
+		// Same first-transition guard keeps it idempotent.
+		if (order.customerId) {
+			await decrementAggregatesForCancel(ctx, {
+				customerId: order.customerId,
+				orderTotal: order.total,
+			});
+		}
+	}
+
+	const patch: Partial<{
+		status: TransitionStatus;
+		statusChangedAt: number;
+		updatedAt: number;
+		carrierTrackingUrl: string;
+	}> = { status, statusChangedAt: now, updatedAt: now };
+	if (status === "shipped" && opts.carrierTrackingUrl) {
+		const trimmed = opts.carrierTrackingUrl.trim();
+		if (trimmed.length > 0) patch.carrierTrackingUrl = trimmed;
+	}
+	await ctx.db.patch(order._id, patch);
+	await ctx.db.insert("orderEvents", {
+		orderId: order._id,
+		status,
+		note: opts.note,
+		createdAt: now,
+	});
+
+	// Fire-and-forget WhatsApp notification. Scheduled (not awaited) so the
+	// mutation stays a pure transaction and the action runs with network access.
+	await ctx.scheduler.runAfter(0, internal.whatsapp.notifyStatusChange, {
+		orderId: order._id,
+	});
+}
+
 export const updateStatus = mutation({
 	args: {
 		orderId: v.id("orders"),
@@ -755,79 +840,56 @@ export const updateStatus = mutation({
 			);
 		}
 
-		const now = Date.now();
+		await applyStatusTransition(ctx, order, status, { note, carrierTrackingUrl });
+	},
+});
 
-		// Restore stock on the FIRST transition into cancelled. Idempotent —
-		// re-cancelling a cancelled order is a no-op for stock. Only variants
-		// whose parent product hard-blocks were ever decremented, so only those
-		// are restored. Items without a variantId are legacy (pre-variant) orders
-		// and are skipped.
-		if (status === "cancelled" && order.status !== "cancelled") {
-			const restoreByVariant = new Map<Id<"productVariants">, number>();
-			for (const item of order.items) {
-				if (!item.variantId) continue;
-				restoreByVariant.set(
-					item.variantId,
-					(restoreByVariant.get(item.variantId) ?? 0) + item.quantity,
-				);
-			}
-			for (const [variantId, qty] of restoreByVariant) {
-				const fresh = await ctx.db.get(variantId);
-				if (!fresh) continue; // variant was deleted; nothing to restore
-				const product = await ctx.db.get(fresh.productId);
-				if (!product) continue;
-				// Mirror the create-time decrement: a variant was only reserved when
-				// its resolved flag hard-blocks (per-variant override ?? product default).
-				const block = fresh.blockWhenOutOfStock ?? product.blockWhenOutOfStock;
-				if (block !== true) continue; // made-to-order — never decremented
-				await ctx.db.patch(variantId, {
-					onHand: fresh.onHand + qty,
-					updatedAt: now,
-				});
-			}
+/**
+ * Bulk-apply one canonical status to many orders (the inbox's multi-select). Uses
+ * the SAME per-order path as `updateStatus` so the mockup gate + stock-restore
+ * can't be bypassed. Per-order it SKIPS (rather than failing the batch) when the
+ * order is already in that status or is mockup-gated for "packed" — and reports
+ * a summary. All orders must belong to the caller's retailer.
+ */
+export const bulkUpdateStatus = mutation({
+	args: {
+		orderIds: v.array(v.id("orders")),
+		status: transitionStatusValidator,
+	},
+	handler: async (
+		ctx,
+		{ orderIds, status },
+	): Promise<{ updated: number; skipped: number }> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Not authenticated");
+		if (orderIds.length === 0) return { updated: 0, skipped: 0 };
+		if (orderIds.length > 100)
+			throw new ConvexError("Too many orders selected (max 100)");
 
-			// Reverse this order's contribution to the customer's lifetime
-			// aggregates. Same first-transition guard keeps it idempotent.
-			if (order.customerId) {
-				await decrementAggregatesForCancel(ctx, {
-					customerId: order.customerId,
-					orderTotal: order.total,
-				});
+		let updated = 0;
+		let skipped = 0;
+		for (const orderId of orderIds) {
+			const order = await ctx.db.get(orderId);
+			if (!order) throw new ConvexError("Order not found");
+			const retailer = await ctx.db.get(order.retailerId);
+			if (!retailer) throw new Error("Retailer not found");
+			// Ownership is enforced for every order — a foreign id fails the batch.
+			if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+
+			// Skip no-ops + transitions blocked by the mockup gate (don't fail the
+			// whole batch on one ineligible order).
+			if (order.status === status) {
+				skipped++;
+				continue;
 			}
+			if (status === "packed" && isMockupGateClosed(order)) {
+				skipped++;
+				continue;
+			}
+			await applyStatusTransition(ctx, order, status);
+			updated++;
 		}
-
-		const patch: Partial<{
-			status: typeof status;
-			statusChangedAt: number;
-			updatedAt: number;
-			carrierTrackingUrl: string;
-		}> = {
-			status,
-			// updateStatus is always a canonical transition → stamp the status clock.
-			statusChangedAt: now,
-			updatedAt: now,
-		};
-		if (status === "shipped" && carrierTrackingUrl) {
-			const trimmed = carrierTrackingUrl.trim();
-			if (trimmed.length > 0) {
-				patch.carrierTrackingUrl = trimmed;
-			}
-		}
-		await ctx.db.patch(orderId, patch);
-		await ctx.db.insert("orderEvents", {
-			orderId,
-			status,
-			note,
-			createdAt: now,
-		});
-
-		// Fire-and-forget WhatsApp notification. Scheduled (not awaited) so the
-		// mutation stays a pure transaction and the action runs with network access.
-		await ctx.scheduler.runAfter(
-			0,
-			internal.whatsapp.notifyStatusChange,
-			{ orderId },
-		);
+		return { updated, skipped };
 	},
 });
 

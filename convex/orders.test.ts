@@ -2922,3 +2922,105 @@ describe("orders — inbox search", () => {
 		).rejects.toThrow(/forbidden/i);
 	});
 });
+
+describe("orders — bulk status", () => {
+	async function mk(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+	) {
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { shortId });
+		return order!;
+	}
+
+	test("applies the status to all eligible orders and skips no-ops", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 100 });
+		const asA = t.withIdentity({ subject: USER_A });
+		const o1 = await mk(t, retailer._id, productId);
+		const o2 = await mk(t, retailer._id, productId);
+		const o3 = await mk(t, retailer._id, productId);
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: o3._id,
+			status: "confirmed",
+		}); // already confirmed → skipped
+
+		const res = await asA.mutation(api.orders.bulkUpdateStatus, {
+			orderIds: [o1._id, o2._id, o3._id],
+			status: "confirmed",
+		});
+		expect(res).toEqual({ updated: 2, skipped: 1 });
+		for (const id of [o1._id, o2._id, o3._id]) {
+			expect((await t.run((ctx) => ctx.db.get(id)))?.status).toBe("confirmed");
+		}
+	});
+
+	test("skips mockup-gated orders when bulking to packed", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const plainId = await seedProduct(t, USER_A, retailer._id, { stock: 100 });
+		const gatedId = await seedProduct(t, USER_A, retailer._id, {
+			requiresProof: true,
+			blockWhenOutOfStock: false,
+		});
+		const asA = t.withIdentity({ subject: USER_A });
+		const plain = await mk(t, retailer._id, plainId);
+		const gated = await mk(t, retailer._id, gatedId);
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: plain._id,
+			status: "confirmed",
+		});
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: gated._id,
+			status: "confirmed",
+		});
+
+		const res = await asA.mutation(api.orders.bulkUpdateStatus, {
+			orderIds: [plain._id, gated._id],
+			status: "packed",
+		});
+		expect(res).toEqual({ updated: 1, skipped: 1 });
+		expect((await t.run((ctx) => ctx.db.get(plain._id)))?.status).toBe("packed");
+		// Gated order is untouched (mockup not approved).
+		expect((await t.run((ctx) => ctx.db.get(gated._id)))?.status).toBe(
+			"confirmed",
+		);
+	});
+
+	test("bulk cancel restores stock", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 10 });
+		const asA = t.withIdentity({ subject: USER_A });
+		const o = await mk(t, retailer._id, productId); // 10 → 9
+		expect(await getProductStock(t, productId)).toBe(9);
+		await asA.mutation(api.orders.bulkUpdateStatus, {
+			orderIds: [o._id],
+			status: "cancelled",
+		});
+		expect(await getProductStock(t, productId)).toBe(10); // restored
+	});
+
+	test("rejects the batch if any order isn't the caller's", async () => {
+		const t = setup();
+		await seedRetailer(t, USER_A);
+		const retailerB = await seedRetailer(t, USER_B);
+		const productB = await seedProduct(t, USER_B, retailerB._id);
+		const oB = await mk(t, retailerB._id, productB);
+		await expect(
+			t.withIdentity({ subject: USER_A }).mutation(api.orders.bulkUpdateStatus, {
+				orderIds: [oB._id],
+				status: "confirmed",
+			}),
+		).rejects.toThrow(/forbidden/i);
+	});
+});

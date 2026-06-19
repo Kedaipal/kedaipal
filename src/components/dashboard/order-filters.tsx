@@ -114,42 +114,38 @@ export function OrderFilters({
 	}
 
 	const controls = (
-		<div className="flex flex-col gap-4">
+		<div className="flex flex-col gap-4 lg:flex-row lg:flex-wrap lg:items-center lg:gap-x-5 lg:gap-y-3">
 			{showMockup ? (
-				<div className="flex flex-col gap-2">
-					<span className="text-xs font-medium text-muted-foreground">
-						Needs your action
-					</span>
-					<button
-						type="button"
-						aria-pressed={value.mockup}
-						onClick={() => onChange({ ...value, mockup: !value.mockup })}
-						className={cn(
-							"inline-flex h-9 w-fit items-center gap-1.5 rounded-full border px-3.5 text-sm font-medium transition-colors",
-							value.mockup
-								? "border-amber-500 bg-amber-500 text-white"
-								: "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300",
-						)}
-					>
-						<Palette className="size-3.5" aria-hidden="true" />
-						Needs mockup
-						{mockupCount ? (
-							<span
-								className={cn(
-									"flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none",
-									value.mockup
-										? "bg-white/25 text-white"
-										: "bg-amber-500 text-white",
-								)}
-							>
-								{mockupCount > 99 ? "99+" : mockupCount}
-							</span>
-						) : null}
-					</button>
-				</div>
+				<button
+					type="button"
+					aria-pressed={value.mockup}
+					onClick={() => onChange({ ...value, mockup: !value.mockup })}
+					className={cn(
+						"inline-flex h-9 w-fit items-center gap-1.5 rounded-full border px-3.5 text-sm font-medium transition-colors",
+						value.mockup
+							? "border-amber-500 bg-amber-500 text-white"
+							: "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300",
+					)}
+				>
+					<Palette className="size-3.5" aria-hidden="true" />
+					Needs mockup
+					{mockupCount ? (
+						<span
+							className={cn(
+								"flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none",
+								value.mockup
+									? "bg-white/25 text-white"
+									: "bg-amber-500 text-white",
+							)}
+						>
+							{mockupCount > 99 ? "99+" : mockupCount}
+						</span>
+					) : null}
+				</button>
 			) : null}
-			<div className="flex flex-col gap-2">
-				<span className="text-xs font-medium text-muted-foreground">
+
+			<div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:gap-2.5">
+				<span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80 lg:shrink-0">
 					Payment
 				</span>
 				<div className="flex flex-wrap gap-2">
@@ -174,12 +170,12 @@ export function OrderFilters({
 					})}
 				</div>
 			</div>
-			<div className="flex flex-col gap-2">
-				<span className="text-xs font-medium text-muted-foreground">
+
+			<div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:gap-2.5">
+				<span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80 lg:shrink-0">
 					Date placed
 				</span>
-				{/* Quick presets lead — most sellers want "recent", not arbitrary dates. */}
-				<div className="flex flex-wrap gap-1.5">
+				<div className="flex flex-wrap items-center gap-1.5">
 					{DATE_PRESETS.map((p) => {
 						const r = presetRange(p.kind);
 						const active = value.from === r.from && value.to === r.to;
@@ -209,7 +205,7 @@ export function OrderFilters({
 						onChange={(e) =>
 							onChange({ ...value, from: startOfDay(e.target.value) })
 						}
-						className="h-9 min-w-0 flex-1 rounded-lg border border-input bg-background px-3 text-sm text-muted-foreground outline-none focus:border-ring focus:text-foreground focus:ring-2 focus:ring-ring/50"
+						className="h-9 min-w-0 flex-1 rounded-lg border border-input bg-background px-3 text-sm text-muted-foreground outline-none focus:border-ring focus:text-foreground focus:ring-2 focus:ring-ring/50 lg:w-[8.5rem] lg:flex-none"
 						aria-label="From date"
 					/>
 					<span className="shrink-0 text-muted-foreground">–</span>
@@ -220,11 +216,12 @@ export function OrderFilters({
 						onChange={(e) =>
 							onChange({ ...value, to: endOfDay(e.target.value) })
 						}
-						className="h-9 min-w-0 flex-1 rounded-lg border border-input bg-background px-3 text-sm text-muted-foreground outline-none focus:border-ring focus:text-foreground focus:ring-2 focus:ring-ring/50"
+						className="h-9 min-w-0 flex-1 rounded-lg border border-input bg-background px-3 text-sm text-muted-foreground outline-none focus:border-ring focus:text-foreground focus:ring-2 focus:ring-ring/50 lg:w-[8.5rem] lg:flex-none"
 						aria-label="To date"
 					/>
 				</div>
 			</div>
+
 			{count > 0 ? (
 				<button
 					type="button"
@@ -236,7 +233,7 @@ export function OrderFilters({
 							mockup: false,
 						})
 					}
-					className="inline-flex h-8 w-fit items-center gap-1.5 self-start rounded-full border border-border bg-background px-3 text-xs font-medium text-muted-foreground transition-colors hover:border-foreground/30 hover:bg-muted hover:text-foreground"
+					className="inline-flex h-8 w-fit items-center gap-1.5 self-start rounded-full border border-border bg-background px-3 text-xs font-medium text-muted-foreground transition-colors hover:border-foreground/30 hover:bg-muted hover:text-foreground lg:self-auto"
 				>
 					<X className="size-3.5" aria-hidden="true" />
 					Clear filters

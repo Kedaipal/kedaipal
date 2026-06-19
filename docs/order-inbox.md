@@ -1,9 +1,9 @@
-# Order Inbox (Phase 1)
+# Order Inbox
 
-**Status:** shipped (Phase 1). ClickUp [Tier 1] Order Search & Inbox View
-(`86expm4xx`). Turns `/app/orders` from a flat list into a working inbox so no
-order sits forgotten. **Phase 2** (bulk multi-select + `bulkUpdateStatus`) is a
-separate follow-up.
+**Status:** shipped (Phase 1 + Phase 2). ClickUp [Tier 1] Order Search & Inbox
+View (`86expm4xx`). Turns `/app/orders` from a flat list into a working inbox so
+no order sits forgotten. Phase 1 = buckets/search/filters/time-badge/URL state;
+**Phase 2 = bulk multi-select + `bulkUpdateStatus`** (now done).
 
 ## Decisions (locked with the CTO)
 
@@ -12,8 +12,27 @@ separate follow-up.
 - **Payment status is an orthogonal filter + badge, NOT a bucket** — an order can
   be "confirmed" *and* "unpaid", so pulling it into its own bucket would yank it
   out of In-progress while still being worked. Payment is a multi-select filter.
-- **Phase it:** this PR is the inbox (buckets, search, filters, time-in-status,
-  URL state, mobile bottom-sheet). Bulk actions land in Phase 2.
+- **Phase it:** Phase 1 was the inbox; Phase 2 added bulk actions.
+
+## ⚠️ Two deliberate deviations from the ticket (`86expm4xx`)
+
+The implementation differs from two acceptance criteria **on purpose** — recorded
+here so the ticket and code don't read as out of sync:
+
+1. **"Awaiting Payment" is a *filter*, not a bucket.** The ticket lists it as an
+   inbox section alongside the fulfilment buckets, but payment status is
+   **orthogonal** to fulfilment (a confirmed order can be unpaid). Making it a
+   bucket would pull an in-progress order *out* of "In progress" while it's still
+   being worked. Instead it's the **Payment** multi-select filter (Unpaid /
+   Claimed / Paid) — select Unpaid+Claimed to get the "awaiting payment" view.
+2. **"Filter by status (multi-select)" is implemented as single-select buckets.**
+   The buckets *are* status groups (In progress = confirmed+packed+shipped), which
+   covers the user-story intent ("see new separated from completed"). Arbitrary
+   multi-status selection (e.g. pending **and** delivered together) is not
+   supported — buckets were the cleaner UX. If true multi-select is ever wanted,
+   it's a small add to `searchOrders` (`statuses[]`) + the chip UI.
+
+Everything else maps directly; bulk actions (the remaining AC) shipped in Phase 2.
 
 ## Data model
 
@@ -79,9 +98,30 @@ helpers (`statusAgeMs`, `formatStatusAge`, `statusAgeSeverity`).
   search (id/name/phone), payment filter treating `undefined` as unpaid, owner-only.
 - `order-time-badge.test.tsx`, `order-filters.test.tsx` — severity tone + filter
   toggling / active count.
+- `convex/orders.test.ts` → "orders — bulk status" — applies to all eligible +
+  skips no-ops, skips mockup-gated when bulking to packed, bulk-cancel restores
+  stock, foreign-order batch is rejected (owner-only).
+- `order-bulk-bar.test.tsx` — count + clear + the "Mark as" action menu.
 
-## Phase 2 (next)
+## Phase 2 — bulk actions (shipped)
 
-Bulk multi-select + `bulkUpdateStatus(orderIds[], newStatus)` reusing the existing
-`updateStatus` per-order path (so the mockup gate + stock-restore can't be
-bypassed), with only sensible transitions offered for the selection.
+- **`convex/orders.ts`**: the core of `updateStatus` was extracted into a shared
+  `applyStatusTransition(ctx, order, status)` helper (stock-restore-on-cancel +
+  aggregates, `statusChangedAt`, `orderEvent`, WhatsApp notify). New
+  **`bulkUpdateStatus(orderIds[], status)`** calls that same helper per order, so
+  the **mockup gate + stock-restore can't be bypassed**. Per-order it **skips**
+  (rather than failing the batch) when the order is already in that status or is
+  mockup-gated for `packed`, and returns `{ updated, skipped }`. Owner-checked for
+  every order; capped at 100/batch.
+- **UI** (`app.orders.index.tsx` + `order-bulk-bar.tsx`): every row has an
+  **always-visible checkbox** as its own click target — the card itself still
+  links to the order (two distinct CTAs; no "select mode" toggle to fight). Ticking
+  one reveals a **Select all / Done** toolbar + a sticky bottom **bulk bar** ("N
+  selected" + a **"Mark as…"** menu of resolved status labels, Cancel destructive)
+  → `bulkUpdateStatus` → toast summary ("Updated 8 · skipped 2"). Selection clears
+  when the view (bucket/search/filters) changes. The bar is `fixed` and sits over
+  the mobile bottom-nav while selection is active.
+- **Bucket counts are retained across refetches** (`countsRef`) so the chips +
+  "Needs mockup" toggle don't flicker out each time a filter changes (the query
+  reloads). The desktop filter row lays out horizontally (compact toolbar);
+  the mobile bottom-sheet keeps the stacked layout.
