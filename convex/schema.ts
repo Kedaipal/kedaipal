@@ -426,6 +426,11 @@ export default defineSchema({
 		// only) — this is order-level and applies to self-collect too. Trimmed +
 		// length-capped server-side; rendered escaped (plain text, no markdown).
 		customerNote: v.optional(v.string()),
+		// Optional reference image the buyer attached for a custom/made-to-order
+		// line (a photo says more than a note — e.g. a cake design). One per order.
+		// Storage id uploaded pre-order via the public customImageUpload mutation.
+		// See docs/custom-option.md.
+		customerImageStorageId: v.optional(v.string()),
 		// Optional external carrier tracking URL set by the retailer when marking
 		// shipped. Surfaced on the customer tracking page and included in the
 		// WhatsApp shipped notification. Only relevant for delivery orders.

@@ -6,7 +6,6 @@ import {
 	CheckCircle2,
 	Clock,
 	CreditCard,
-	Globe,
 	type LucideIcon,
 	MapPin,
 	MessageCircle,
@@ -16,6 +15,7 @@ import {
 	QrCode,
 	Share2,
 	Store,
+	Users,
 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { api } from "../../convex/_generated/api";
@@ -35,8 +35,8 @@ import {
 	resolveAnchorLabel,
 	resolveCurrentStage,
 	resolveStages,
-	stageLabel,
 	type StatusLabels,
+	stageLabel,
 } from "../lib/orderStatus";
 
 export const Route = createFileRoute("/app/")({
@@ -119,6 +119,10 @@ function DashboardHome() {
 	);
 	const pickupStatus = useQuery(
 		api.pickupLocations.hasAnyActive,
+		retailer ? { retailerId: retailer._id } : "skip",
+	);
+	const customerCount = useQuery(
+		api.customers.count,
 		retailer ? { retailerId: retailer._id } : "skip",
 	);
 	const recentOrdersPage = useQuery(
@@ -466,11 +470,12 @@ function DashboardHome() {
 						loading={productsLoading}
 					/>
 					<StatTile
-						to="/app/settings"
-						icon={Globe}
-						label="Language"
-						value={retailer.locale === "ms" ? "MS" : "EN"}
-						sub={retailer.locale === "ms" ? "Bahasa Malaysia" : "English"}
+						to="/app/customers"
+						icon={Users}
+						label="Customers"
+						value={customerCount ?? 0}
+						sub="Total"
+						loading={customerCount === undefined}
 					/>
 				</section>
 			) : null}

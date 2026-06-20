@@ -61,7 +61,7 @@ export function ProductGrid({ retailerId, cart }: ProductGridProps) {
 		p: StorefrontProduct,
 		variant: StorefrontVariant,
 		qty: number,
-		note?: string,
+		custom?: { note?: string; imageStorageId?: string },
 	) => {
 		// The custom line has no optionValues — label it with its custom name so the
 		// cart + order can tell it apart from the default variant.
@@ -83,7 +83,8 @@ export function ProductGrid({ retailerId, cart }: ProductGridProps) {
 				imageUrl: variant.imageUrls[0] ?? p.imageUrls[0],
 				quoteOnRequest: variant.requiresProof === true && variant.price === 0,
 				isCustom: variant.isCustom,
-				note,
+				note: custom?.note,
+				customImageStorageId: custom?.imageStorageId,
 			},
 			qty,
 		);
@@ -162,11 +163,12 @@ export function ProductGrid({ retailerId, cart }: ProductGridProps) {
 
 			<ProductDetailSheet
 				product={openProduct}
+				retailerId={retailerId}
 				onClose={() => setOpenProduct(null)}
 				// Stay open after adding so a buyer can add a standard variant AND
 				// request the custom line from the same product without reopening. The
 				// toast + cart bar confirm the add; they close via the X when done.
-				onAdd={(p, variant, qty, note) => addVariant(p, variant, qty, note)}
+				onAdd={(p, variant, qty, custom) => addVariant(p, variant, qty, custom)}
 			/>
 		</>
 	);

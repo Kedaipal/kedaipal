@@ -3024,3 +3024,90 @@ describe("orders — bulk status", () => {
 		).rejects.toThrow(/forbidden/i);
 	});
 });
+
+describe("orders — buyer custom image", () => {
+	test("create stores customerImageStorageId for a custom-line order; getCustomerImageUrl resolves it", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		// Custom-line product (requiresProof → mockup-gated, like the storefront).
+		const productId = await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Cake",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			variants: [
+				{ optionValues: [], price: 2000, onHand: 5 },
+				{ optionValues: [], price: 0, onHand: 0, isCustom: true },
+			],
+		});
+		const customVariantId = await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", productId))
+				.collect();
+			const c = rows.find((r) => r.isCustom);
+			if (!c) throw new Error("no custom variant");
+			return c._id;
+		});
+		const imageId = await t.run((ctx) =>
+			ctx.storage.store(new Blob(["ref"], { type: "image/png" })),
+		);
+
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ variantId: customVariantId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+			customerImageStorageId: imageId,
+		});
+
+		const order = await t.run((ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		expect(order?.customerImageStorageId).toBe(imageId);
+		const url = await t.query(api.orders.getCustomerImageUrl, { shortId });
+		expect(url).not.toBeNull();
+	});
+
+	test("create drops a stray image on a non-custom order", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 5 });
+		const imageId = await t.run((ctx) =>
+			ctx.storage.store(new Blob(["x"], { type: "image/png" })),
+		);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+			customerImageStorageId: imageId,
+		});
+		const order = await t.run((ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		// No custom/proof line → image ignored.
+		expect(order?.customerImageStorageId).toBeUndefined();
+	});
+
+	test("generateCustomImageUploadUrl requires a real store + returns a url", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const url = await t.mutation(api.orders.generateCustomImageUploadUrl, {
+			retailerId: retailer._id,
+		});
+		expect(typeof url).toBe("string");
+	});
+});

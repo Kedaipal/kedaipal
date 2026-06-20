@@ -594,3 +594,40 @@ describe("customers — cancellation", () => {
 		expect(list.page[0].totalSpent).toBe(10000);
 	});
 });
+
+describe("customers — count", () => {
+	test("counts distinct customers for the retailer; owner-only", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const asA = t.withIdentity({ subject: USER_A });
+
+		expect(
+			await asA.query(api.customers.count, { retailerId: retailer._id }),
+		).toBe(0);
+
+		await placeOrder(t, retailer._id, productId, {
+			name: "Ali",
+			waPhone: "60123456789",
+		});
+		await placeOrder(t, retailer._id, productId, {
+			name: "Bob",
+			waPhone: "60198887777",
+		});
+		// Same phone → same customer (keyed by (retailerId, waPhone)).
+		await placeOrder(t, retailer._id, productId, {
+			name: "Ali again",
+			waPhone: "60123456789",
+		});
+
+		expect(
+			await asA.query(api.customers.count, { retailerId: retailer._id }),
+		).toBe(2);
+
+		await expect(
+			t
+				.withIdentity({ subject: USER_B })
+				.query(api.customers.count, { retailerId: retailer._id }),
+		).rejects.toThrow(/forbidden/i);
+	});
+});

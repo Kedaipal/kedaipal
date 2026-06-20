@@ -34,6 +34,7 @@ import {
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
+import { ZoomableImage } from "../components/ui/zoomable-image";
 import { formatPhone } from "../lib/customer";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import { deriveMapsUrl } from "../lib/google-address";
@@ -162,6 +163,10 @@ function OrderDetailRoute() {
 	const proofUrl = useQuery(
 		api.orders.getPaymentProofUrl,
 		order?.paymentProofStorageId ? { orderId: order._id } : "skip",
+	);
+	const customerImageUrl = useQuery(
+		api.orders.getCustomerImageUrl,
+		order?.customerImageStorageId ? { shortId } : "skip",
 	);
 	// Holds the id of the in-flight advance target ("cancel" for cancellation).
 	const [pending, setPending] = useState<string | null>(null);
@@ -325,18 +330,33 @@ function OrderDetailRoute() {
 				</div>
 			</div>
 
-			{/* Shopper's note — front-and-centre so it isn't missed when fulfilling.
-			    Plain text, escaped by React; newlines preserved. Hidden when absent. */}
-			{order.customerNote ? (
+			{/* Shopper's note + optional custom-line reference photo — front-and-centre
+			    so it isn't missed when fulfilling. Plain text, escaped by React. */}
+			{order.customerNote || order.customerImageStorageId ? (
 				<section className="flex gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4">
 					<StickyNote className="size-5 shrink-0 text-amber-600" />
 					<div className="min-w-0 flex-1">
 						<p className="text-xs font-semibold uppercase tracking-widest text-amber-700">
-							Note from customer
+							{order.customerNote ? "Note from customer" : "From customer"}
 						</p>
-						<p className="mt-1 whitespace-pre-line break-words text-sm text-amber-950">
-							{order.customerNote}
-						</p>
+						{order.customerNote ? (
+							<p className="mt-1 whitespace-pre-line break-words text-sm text-amber-950">
+								{order.customerNote}
+							</p>
+						) : null}
+						{order.customerImageStorageId ? (
+							customerImageUrl ? (
+								<ZoomableImage
+									src={customerImageUrl}
+									alt="Customer reference photo"
+									caption="Customer reference photo"
+									wrapperClassName="mt-2 block w-fit overflow-hidden rounded-xl border border-amber-300 bg-white"
+									className="block max-h-56 w-auto object-contain"
+								/>
+							) : (
+								<div className="mt-2 h-24 w-32 animate-pulse rounded-xl bg-amber-200/50" />
+							)
+						) : null}
 					</div>
 				</section>
 			) : null}

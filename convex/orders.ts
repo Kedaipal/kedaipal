@@ -119,6 +119,10 @@ export const create = mutation({
 		pickupLocationId: v.optional(v.id("pickupLocations")),
 		// Optional free-text instruction the shopper typed at checkout.
 		customerNote: v.optional(v.string()),
+		// Optional reference image the buyer attached for a custom line, uploaded
+		// pre-order via generateCustomImageUploadUrl. Stored as-is (a stray/invalid
+		// id just resolves to no URL on display — same posture as proof images).
+		customerImageStorageId: v.optional(v.string()),
 	},
 	handler: async (ctx, args): Promise<{ shortId: string }> => {
 		// Rate limit FIRST — public endpoint, throttle per storefront before any DB reads.
@@ -361,6 +365,11 @@ export const create = mutation({
 			pickupLocationId: resolvedPickupLocationId,
 			pickupSnapshot: sanitizedPickupSnapshot,
 			customerNote: sanitizedCustomerNote,
+			// Only keep the buyer image when the order actually has a custom line —
+			// guards a stray id on a non-custom order.
+			customerImageStorageId: requiresMockup
+				? args.customerImageStorageId
+				: undefined,
 			mockupStatus: requiresMockup ? "pending" : undefined,
 			statusChangedAt: now,
 			createdAt: now,
@@ -1332,6 +1341,42 @@ export const generateOrderProofUploadUrl = mutation({
 		}
 
 		return ctx.storage.generateUploadUrl();
+	},
+});
+
+/**
+ * Public mutation: mint a one-shot upload URL for a buyer's reference image on a
+ * custom/made-to-order line, BEFORE the order exists (so keyed by retailerId, not
+ * shortId). The returned storageId is passed back to `orders.create`. Same trust
+ * posture as the storefront order-create flow — rate-limited, no auth.
+ */
+export const generateCustomImageUploadUrl = mutation({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<string> => {
+		await rateLimiter.limit(ctx, "customImageUpload", {
+			key: retailerId,
+			throws: true,
+		});
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		return ctx.storage.generateUploadUrl();
+	},
+});
+
+/**
+ * Public query: resolve the buyer's custom-line reference image to a viewable
+ * URL. shortId is the capability (same as the rest of the tracking page); the
+ * seller order-detail page reads it too.
+ */
+export const getCustomerImageUrl = query({
+	args: { shortId: v.string() },
+	handler: async (ctx, { shortId }): Promise<string | null> => {
+		const order = await ctx.db
+			.query("orders")
+			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+			.first();
+		if (!order?.customerImageStorageId) return null;
+		return (await ctx.storage.getUrl(order.customerImageStorageId)) ?? null;
 	},
 });
 

@@ -1,7 +1,10 @@
-import { Minus, Plus, X } from "lucide-react";
+import { useMutation } from "convex/react";
+import { ImagePlus, Loader2, Minus, Plus, X } from "lucide-react";
 import { Dialog } from "radix-ui";
-import { useEffect, useMemo, useState } from "react";
-import { formatPrice } from "../../lib/format";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { api } from "../../../convex/_generated/api";
+import type { Id } from "../../../convex/_generated/dataModel";
+import { convexErrorMessage, formatPrice } from "../../lib/format";
 import {
 	availableValuesPerAxis,
 	getCustomLine,
@@ -17,26 +20,41 @@ export type StorefrontVariant = StorefrontProduct["variants"][number];
 
 interface ProductDetailSheetProps {
 	product: StorefrontProduct | null;
+	retailerId: Id<"retailers">;
 	onClose: () => void;
 	onAdd: (
 		product: StorefrontProduct,
 		variant: StorefrontVariant,
 		quantity: number,
-		// Buyer's request, for the custom line (their size/colour/design spec).
-		note?: string,
+		// Buyer's request + optional reference image for the custom line.
+		custom?: { note?: string; imageStorageId?: string },
 	) => void;
 }
 
 export function ProductDetailSheet({
 	product,
+	retailerId,
 	onClose,
 	onAdd,
 }: ProductDetailSheetProps) {
+	const generateCustomImageUploadUrl = useMutation(
+		api.orders.generateCustomImageUploadUrl,
+	);
 	const [quantity, setQuantity] = useState(1);
 	// Per-axis selection, aligned to product.options; null = not yet chosen.
 	const [selection, setSelection] = useState<(string | null)[]>([]);
 	// Buyer's free-text request for the custom line (their spec).
 	const [customNote, setCustomNote] = useState("");
+	// Optional buyer reference image: uploaded on attach (storageId) + a local
+	// preview (blob URL, not persisted). See docs/custom-option.md.
+	const [customImage, setCustomImage] = useState<{
+		storageId: string;
+		preview: string;
+	} | null>(null);
+	const [uploadingImage, setUploadingImage] = useState(false);
+	const [imageError, setImageError] = useState<string | null>(null);
+	// Revoke any blob preview on unmount / replacement.
+	const blobRef = useRef<string | null>(null);
 
 	const options = product?.options ?? [];
 	const variants = product?.variants ?? [];
@@ -48,12 +66,60 @@ export function ProductDetailSheet({
 		if (!product) return;
 		setQuantity(1);
 		setCustomNote("");
+		setImageError(null);
+		if (blobRef.current) {
+			URL.revokeObjectURL(blobRef.current);
+			blobRef.current = null;
+		}
+		setCustomImage(null);
 		setSelection(
 			(product.options ?? []).map((axis) =>
 				axis.values.length === 1 ? axis.values[0] : null,
 			),
 		);
 	}, [product]);
+
+	// Revoke the last preview on unmount.
+	useEffect(
+		() => () => {
+			if (blobRef.current) URL.revokeObjectURL(blobRef.current);
+		},
+		[],
+	);
+
+	async function handleCustomImage(file: File | null) {
+		if (!file) return;
+		setImageError(null);
+		setUploadingImage(true);
+		try {
+			const url = await generateCustomImageUploadUrl({ retailerId });
+			const res = await fetch(url, {
+				method: "POST",
+				headers: { "Content-Type": file.type },
+				body: file,
+			});
+			if (!res.ok) throw new Error("Upload failed");
+			const body = (await res.json()) as { storageId?: unknown };
+			if (typeof body.storageId !== "string")
+				throw new Error("Upload failed: unexpected response");
+			if (blobRef.current) URL.revokeObjectURL(blobRef.current);
+			const preview = URL.createObjectURL(file);
+			blobRef.current = preview;
+			setCustomImage({ storageId: body.storageId, preview });
+		} catch (err) {
+			setImageError(convexErrorMessage(err));
+		} finally {
+			setUploadingImage(false);
+		}
+	}
+
+	function removeCustomImage() {
+		if (blobRef.current) {
+			URL.revokeObjectURL(blobRef.current);
+			blobRef.current = null;
+		}
+		setCustomImage(null);
+	}
 
 	const availability = useMemo(
 		() => availableValuesPerAxis(options, variants, selection),
@@ -275,17 +341,71 @@ export function ProductDetailSheet({
 										className="rounded-xl border border-input bg-background px-3 py-2 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 									/>
 								</label>
+
+								{/* Optional reference photo — a picture says more than a note. */}
+								<div className="mt-2 flex flex-col gap-1">
+									<span className="text-xs font-medium text-muted-foreground">
+										Reference photo (optional)
+									</span>
+									{customImage ? (
+										<div className="flex items-center gap-3">
+											<ZoomableImage
+												src={customImage.preview}
+												alt="Your reference"
+												caption="Your reference photo"
+												wrapperClassName="size-14 shrink-0"
+												className="size-14 rounded-lg object-cover"
+											/>
+											<button
+												type="button"
+												onClick={removeCustomImage}
+												className="text-xs font-medium text-destructive underline-offset-2 hover:underline"
+											>
+												Remove photo
+											</button>
+										</div>
+									) : (
+										<label className="flex h-11 cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-input bg-background text-sm text-muted-foreground hover:border-ring">
+											{uploadingImage ? (
+												<>
+													<Loader2 className="size-4 animate-spin" />
+													Uploading…
+												</>
+											) : (
+												<>
+													<ImagePlus className="size-4" />
+													Add a photo
+												</>
+											)}
+											<input
+												type="file"
+												accept="image/*"
+												disabled={uploadingImage}
+												onChange={(e) =>
+													void handleCustomImage(e.target.files?.[0] ?? null)
+												}
+												className="hidden"
+											/>
+										</label>
+									)}
+									{imageError ? (
+										<p className="text-xs text-destructive">{imageError}</p>
+									) : null}
+								</div>
+
 								<Button
 									type="button"
 									variant="outline"
+									disabled={uploadingImage}
 									onClick={() => {
-										onAdd(
-											product,
-											customLine,
-											1,
-											customNote.trim() || undefined,
-										);
+										onAdd(product, customLine, 1, {
+											note: customNote.trim() || undefined,
+											imageStorageId: customImage?.storageId,
+										});
 										setCustomNote("");
+										// Hand off ownership of the preview to the cart; don't revoke.
+										blobRef.current = null;
+										setCustomImage(null);
 									}}
 									className="mt-3 h-11 w-full"
 								>
