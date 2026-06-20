@@ -11,8 +11,10 @@
 import type * as crons from "../crons.js";
 import type * as customers from "../customers.js";
 import type * as email from "../email.js";
+import type * as foundingMembers from "../foundingMembers.js";
 import type * as google from "../google.js";
 import type * as http from "../http.js";
+import type * as invoices from "../invoices.js";
 import type * as lib_address from "../lib/address.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_channels_registry from "../lib/channels/registry.js";
@@ -56,8 +58,10 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   customers: typeof customers;
   email: typeof email;
+  foundingMembers: typeof foundingMembers;
   google: typeof google;
   http: typeof http;
+  invoices: typeof invoices;
   "lib/address": typeof lib_address;
   "lib/auth": typeof lib_auth;
   "lib/channels/registry": typeof lib_channels_registry;

@@ -6,7 +6,8 @@ out-of-band (DuitNow / bank), the admin flips "paid", and entitlement + Founding
 rank-claim happen atomically. Built behind a typed `PaymentProvider` seam so the
 future automated-billing integration touches only the adapter.
 
-**Status:** Phase 1 shipped (subscriptions exist + gate). Phases 2–4 below.
+**Status:** Phases 1 + 2 shipped (full backend: subscriptions, markPaid, founding
+rank, backfill, crons, gating). UI phases 3–4 below.
 
 ## Core model
 
@@ -92,12 +93,20 @@ open to comped full access, so they keep working between steps regardless.
   /`getAccess`/`assertSubscriptionActive` fail-safe guard), `createRetailer`
   two-path wiring + `getMyRetailer` carrying the subscription summary. Tests:
   `convex/lib/plans.test.ts`, `convex/subscriptions.test.ts`.
-- **Phase 2:** `invoices.markPaid` (atomic: invoice→paid → reconcile → entitlement
-  refresh → Founding rank claim), `foundingMembers.ts` (`claimRankIfEligible` +
-  `getSpotsRemaining`), the one-time **backfill**, the status **crons** (trial
-  expiry + founding overdue + renewal-chase), and wiring `assertSubscriptionActive`
-  onto `products.ts` + `updateSettings`. Founding welcome WhatsApp via the channel
-  adapter.
+- **Phase 2 (done):** `invoices.ts` — `markPaid` (atomic: invoice→paid → reconcile
+  → caps refreshed → `claimRankIfEligible` → schedule welcome WhatsApp), `listPending`
+  (admin), `myInvoices`. `foundingMembers.ts` — `claimRankIfEligible` (Pro-only,
+  no-prior-row, cohort ≤ 10, atomic in-txn) + `getSpotsRemaining`. Backfill
+  `subscriptions.internalBackfillSubscriptions` (active+comped, idempotent). Crons
+  `subscriptions.internalDailyBillingStatus` (trial expiry + active-overdue flips +
+  renewal log) wired in `crons.ts`. Soft-lock wired onto `products.create/update/
+  saveVariantGrid` + `updateSettings`. Founding welcome WhatsApp
+  `whatsapp.notifyFoundingWelcome` (sends to the seller, stamps `welcomedAt`).
+  Tests: `convex/invoices.test.ts` (markPaid happy/reject/comped/no-double/cohort-cap,
+  backfill, cron flips, gating blocks growth-writes while the storefront + orders
+  stay live).
+  **Before prod:** run `internalBackfillSubscriptions` after the schema deploy,
+  before relying on gating (existing retailers fail-open until then).
 - **Phase 3 (seller UI):** `SubscriptionBanner`, tier pill (sidebar +
   mobile-header), billing settings tab, dashboard CTAs. *Needs from CTO: Kedaipal's
   DuitNow/bank details + the `wa.me` number for past-due/welcome.*

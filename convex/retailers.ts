@@ -172,6 +172,7 @@ import {
 } from "./lib/plans";
 import {
 	type AccessState,
+	assertSubscriptionActive,
 	loadSubscription,
 	resolveAccess,
 } from "./subscriptions";
@@ -769,6 +770,8 @@ export const updateSettings = mutation({
 			.withIndex("by_user", (q) => q.eq("userId", userId))
 			.first();
 		if (!retailer) throw new ConvexError("No store to update");
+		// Soft-lock: a past_due seller can't edit store settings (growth-write).
+		await assertSubscriptionActive(ctx, retailer._id);
 
 		const patch: Partial<{
 			storeName: string;

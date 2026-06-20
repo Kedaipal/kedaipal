@@ -15,7 +15,12 @@
 
 import { ConvexError } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { type MutationCtx, query, type QueryCtx } from "./_generated/server";
+import {
+	internalMutation,
+	type MutationCtx,
+	query,
+	type QueryCtx,
+} from "./_generated/server";
 import { capsForPlan, type Plan, PLAN_CAPS } from "./lib/plans";
 
 type AnyCtx = QueryCtx | MutationCtx;
@@ -164,3 +169,113 @@ export const current = query({
 // Re-export so callers can map a plan → its canonical caps without importing the
 // pure module separately.
 export { PLAN_CAPS };
+
+// ---------------------------------------------------------------------------
+// Internal mutations (backfill + cron). Not callable from the client.
+// ---------------------------------------------------------------------------
+
+/**
+ * ONE-TIME backfill: every retailer that predates billing gets an `active +
+ * comped` Pro-caps subscription, so current pilots are never charged, never
+ * rank-claim, and never locked. Idempotent — skips retailers that already have a
+ * subscription. Run between schema deploy and gating enable (see
+ * docs/manual-subscription.md rollout sequence). Returns counts.
+ */
+export const internalBackfillSubscriptions = internalMutation({
+	args: {},
+	handler: async (ctx): Promise<{ created: number; skipped: number }> => {
+		const retailers = await ctx.db.query("retailers").collect();
+		const caps = capsForPlan("pro");
+		const now = Date.now();
+		let created = 0;
+		let skipped = 0;
+		for (const r of retailers) {
+			const existing = await loadSubscription(ctx, r._id);
+			if (existing) {
+				skipped++;
+				continue;
+			}
+			await ctx.db.insert("subscriptions", {
+				retailerId: r._id,
+				plan: "pro",
+				billingCycle: "monthly",
+				status: "active",
+				comped: true,
+				orderCap: caps.orderCap,
+				userCap: caps.userCap,
+				broadcastQuota: caps.broadcastQuota,
+				createdAt: now,
+				updatedAt: now,
+			});
+			created++;
+		}
+		return { created, skipped };
+	},
+});
+
+/**
+ * Daily status cron. Flips:
+ *  - `trialing → past_due` when the trial has lapsed (`trialEndsAt < now`).
+ *  - `active → past_due` when the retailer has a still-pending invoice past its
+ *    `dueDate` (founding ghost / unpaid renewal). Comped subs are never flipped.
+ * Also logs `active` subs nearing `currentPeriodEnd` so Arif chases the manual
+ * renewal. Runs once daily — a retailer keeps access up to ~24h past the boundary
+ * (acceptable grace). See docs/manual-subscription.md.
+ */
+export const internalDailyBillingStatus = internalMutation({
+	args: {},
+	handler: async (
+		ctx,
+	): Promise<{ trialExpired: number; overdue: number; renewalsDue: number }> => {
+		const now = Date.now();
+		let trialExpired = 0;
+		let overdue = 0;
+		let renewalsDue = 0;
+
+		// Trial expiry.
+		const trialing = await ctx.db
+			.query("subscriptions")
+			.withIndex("by_status", (q) => q.eq("status", "trialing"))
+			.collect();
+		for (const sub of trialing) {
+			if (sub.trialEndsAt !== undefined && sub.trialEndsAt < now) {
+				await ctx.db.patch(sub._id, { status: "past_due", updatedAt: now });
+				trialExpired++;
+			}
+		}
+
+		// Active overdue (founding ghost / unpaid renewal) + renewal-chase flag.
+		const RENEWAL_WINDOW_MS = 3 * 24 * 60 * 60 * 1000; // 3 days out
+		const active = await ctx.db
+			.query("subscriptions")
+			.withIndex("by_status", (q) => q.eq("status", "active"))
+			.collect();
+		for (const sub of active) {
+			if (sub.comped === true) continue;
+			const invoices = await ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", sub.retailerId))
+				.collect();
+			const overduePending = invoices.find(
+				(inv) => inv.status === "pending" && inv.dueDate < now,
+			);
+			if (overduePending) {
+				await ctx.db.patch(sub._id, { status: "past_due", updatedAt: now });
+				overdue++;
+				continue;
+			}
+			if (
+				sub.currentPeriodEnd !== undefined &&
+				sub.currentPeriodEnd - now <= RENEWAL_WINDOW_MS &&
+				sub.currentPeriodEnd > now
+			) {
+				renewalsDue++;
+				console.info(
+					`[billing] renewal due soon for retailer ${sub.retailerId} (periodEnd ${new Date(sub.currentPeriodEnd).toISOString()})`,
+				);
+			}
+		}
+
+		return { trialExpired, overdue, renewalsDue };
+	},
+});
