@@ -15,6 +15,7 @@ import type { ReactNode } from "react";
 import type { api } from "../../../convex/_generated/api";
 import { useSidebarCollapsed } from "../../hooks/useSidebarCollapsed";
 import { cn } from "../../lib/utils";
+import { TierPill } from "./tier-pill";
 
 type Retailer = NonNullable<
 	FunctionReturnType<typeof api.retailers.getMyRetailer>
@@ -64,6 +65,13 @@ export function Sidebar({ retailer, actionableCount }: SidebarProps) {
 					) : null}
 				</Link>
 			</div>
+
+			{/* Subscription tier pill — always-visible chrome (links to billing). */}
+			{!collapsed ? (
+				<div className="border-b border-border px-4 py-2">
+					<TierPill subscription={retailer.subscription} />
+				</div>
+			) : null}
 
 			<nav className="flex flex-1 flex-col gap-1 p-2">
 				<SidebarLink

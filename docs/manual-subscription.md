@@ -107,9 +107,19 @@ open to comped full access, so they keep working between steps regardless.
   stay live).
   **Before prod:** run `internalBackfillSubscriptions` after the schema deploy,
   before relying on gating (existing retailers fail-open until then).
-- **Phase 3 (seller UI):** `SubscriptionBanner`, tier pill (sidebar +
-  mobile-header), billing settings tab, dashboard CTAs. *Needs from CTO: Kedaipal's
-  DuitNow/bank details + the `wa.me` number for past-due/welcome.*
+- **Phase 3 (mostly done):** `subscriptions.paymentInstructions` query (env-sourced
+  bank/DuitNow text + Convex-storage QR + WA number), tier pill
+  (`tier-pill.tsx` in sidebar + mobile-header), `SubscriptionBanner` (app shell —
+  trial countdown in last 5 days / past-due CTA with `wa.me`), Billing settings tab
+  (`billing-tab.tsx` — plan/status, pending invoice + how-to-pay, founding ribbon,
+  history). Pure helpers + tests in `src/lib/subscription.ts`. **Remaining (light):**
+  the dashboard's one-time "Schedule your white-glove call" CTA on rank assignment
+  (the day-14 pay nudge is already covered by the banner).
+  **Env to set for real pay details:** `KEDAIPAL_BANK_NAME`,
+  `KEDAIPAL_BANK_ACCOUNT_NAME`, `KEDAIPAL_BANK_ACCOUNT_NUMBER`, `KEDAIPAL_DUITNOW_ID`,
+  `KEDAIPAL_PAYMENT_QR_STORAGE_ID` (upload QR to Convex storage first). WA number
+  reuses `WHATSAPP_CHECKOUT_PHONE`. Until set, the billing page shows a graceful
+  "message us for details" fallback.
 - **Phase 4 (admin + public UI):** admin billing route (list + mark-paid),
   storefront founding badge, landing spots counter, Scale "Coming soon" card +
   signup guard.

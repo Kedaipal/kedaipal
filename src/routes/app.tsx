@@ -4,6 +4,7 @@ import { useMutation, useQuery } from "convex/react";
 import { useEffect, useRef } from "react";
 import { api } from "../../convex/_generated/api";
 import { ConsentBanner } from "../components/app/consent-banner";
+import { SubscriptionBanner } from "../components/app/subscription-banner";
 import { BottomNav } from "../components/dashboard/bottom-nav";
 import { MobileHeader } from "../components/dashboard/mobile-header";
 import { Sidebar } from "../components/dashboard/sidebar";
@@ -74,6 +75,10 @@ function AppShell() {
 						privacyVersion: retailer.privacyVersion,
 						aupVersion: retailer.aupVersion,
 					}}
+				/>
+				<SubscriptionBanner
+					subscription={retailer.subscription}
+					slug={retailer.slug}
 				/>
 				<main className="flex-1 px-5 py-6 lg:mx-auto lg:w-full lg:max-w-6xl lg:px-8 lg:py-8">
 					<Outlet />

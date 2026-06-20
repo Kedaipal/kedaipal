@@ -28,6 +28,7 @@ import {
 } from "../components/dashboard/page-header";
 import { useAppForm } from "../components/forms/form";
 import { ShopeeIcon } from "../components/icons/shopee-icon";
+import { BillingTab } from "../components/settings/billing-tab";
 import { PickupLocationsTab } from "../components/settings/pickup-locations-tab";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -64,6 +65,7 @@ const LOCALE_OPTIONS = [
 
 type SettingsTab =
 	| "store"
+	| "billing"
 	| "whatsapp"
 	| "payments"
 	| "pickup"
@@ -72,6 +74,7 @@ type SettingsTab =
 
 const SETTINGS_TABS: ReadonlyArray<{ id: SettingsTab; label: string }> = [
 	{ id: "store", label: "Store" },
+	{ id: "billing", label: "Billing" },
 	{ id: "whatsapp", label: "WhatsApp" },
 	{ id: "payments", label: "Payments" },
 	// Grouped with Pickup as the fulfilment cluster — these stage labels are
@@ -313,6 +316,8 @@ function SettingsRoute() {
 					</Card>
 				</div>
 			) : null}
+
+			{activeTab === "billing" ? <BillingTab retailer={retailer} /> : null}
 
 			{activeTab === "whatsapp" ? (
 				<div className="flex flex-col gap-6 pt-2">
