@@ -264,6 +264,11 @@ export function CheckoutSheet({
 			// reach the seller via the existing customerNote channel (WhatsApp + the
 			// dashboard + email) — no per-item schema needed. See docs/custom-option.md.
 			const customerNote = composeCustomerNote(cart.items, generalNote);
+			// Order is one custom negotiation → one reference image. Take the first
+			// custom line's image (rare to have 2+ custom items in one order).
+			const customerImageStorageId = cart.items.find(
+				(i) => i.customImageStorageId,
+			)?.customImageStorageId;
 
 			try {
 				const { shortId } = await createOrder({
@@ -281,6 +286,7 @@ export function CheckoutSheet({
 					deliveryAddress: sanitizedAddress,
 					pickupLocationId: resolvedPickupLocationId,
 					customerNote,
+					customerImageStorageId,
 				});
 				const message = buildWaMessage(
 					storeName,
@@ -374,6 +380,11 @@ export function CheckoutSheet({
 												{item.note ? (
 													<span className="mt-1 rounded-md bg-muted/60 px-2 py-1 text-[11px] leading-snug text-muted-foreground">
 														📝 {item.note}
+													</span>
+												) : null}
+												{item.customImageStorageId ? (
+													<span className="mt-1 w-fit rounded-md bg-muted/60 px-2 py-1 text-[11px] leading-snug text-muted-foreground">
+														📎 Reference photo attached
 													</span>
 												) : null}
 											</div>

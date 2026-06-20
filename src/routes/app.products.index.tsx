@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
-import { Download, Upload } from "lucide-react";
+import { ChevronDown, Download, Upload } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
@@ -9,6 +9,11 @@ import type { Id } from "../../convex/_generated/dataModel";
 import { PageHeader } from "../components/dashboard/page-header";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import {
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "../components/ui/popover";
 import { Skeleton } from "../components/ui/skeleton";
 import { SortableList } from "../components/ui/sortable-list";
 import { BULK_IO_ENABLED } from "../lib/feature-flags";
@@ -28,6 +33,89 @@ type ProductListItem = FunctionReturnType<typeof api.products.listAll>[number];
 export const Route = createFileRoute("/app/products/")({
 	component: ProductsRoute,
 });
+
+/**
+ * Import / Export menu — an occasional bulk action (first-time import; periodic
+ * export), so it lives in the page header next to "+ New", not on the filter row.
+ * Self-contained (owns its popover state) so it can render in both the desktop
+ * header and the mobile header without sharing state. `iconOnly` shrinks it to an
+ * icon button for the tight mobile header.
+ */
+function BulkIoMenu({
+	canExport,
+	exporting,
+	onExport,
+	iconOnly = false,
+}: {
+	canExport: boolean;
+	exporting: "csv" | "xlsx" | null;
+	onExport: (kind: "csv" | "xlsx") => void;
+	iconOnly?: boolean;
+}) {
+	const [open, setOpen] = useState(false);
+	return (
+		<Popover open={open} onOpenChange={setOpen}>
+			<PopoverTrigger asChild>
+				<Button
+					type="button"
+					variant="outline"
+					className={
+						iconOnly ? "size-11 shrink-0 p-0" : "h-10 shrink-0 gap-1.5"
+					}
+					aria-label="Import or export products"
+				>
+					<Upload className="size-4" />
+					{iconOnly ? null : (
+						<>
+							<span>{exporting ? "Exporting…" : "Import / Export"}</span>
+							<ChevronDown className="size-4" />
+						</>
+					)}
+				</Button>
+			</PopoverTrigger>
+			<PopoverContent align="end" className="w-52 p-1">
+				<div className="flex flex-col">
+					<Link
+						to="/app/products/import"
+						onClick={() => setOpen(false)}
+						className="flex h-10 items-center gap-2 rounded-md px-3 text-sm transition-colors hover:bg-muted"
+					>
+						<Download className="size-4 text-muted-foreground" aria-hidden />
+						Import products
+					</Link>
+					{canExport ? (
+						<>
+							<button
+								type="button"
+								disabled={exporting !== null}
+								onClick={() => {
+									setOpen(false);
+									onExport("csv");
+								}}
+								className="flex h-10 items-center gap-2 rounded-md px-3 text-left text-sm transition-colors hover:bg-muted disabled:opacity-50"
+							>
+								<Upload className="size-4 text-muted-foreground" aria-hidden />
+								Export as CSV
+							</button>
+							<button
+								type="button"
+								disabled={exporting !== null}
+								onClick={() => {
+									setOpen(false);
+									onExport("xlsx");
+								}}
+								className="flex h-10 items-center gap-2 rounded-md px-3 text-left text-sm transition-colors hover:bg-muted disabled:opacity-50"
+							>
+								<Upload className="size-4 text-muted-foreground" aria-hidden />
+								Export as XLSX
+							</button>
+						</>
+					) : null}
+				</div>
+			</PopoverContent>
+		</Popover>
+	);
+}
 
 function ProductsRoute() {
 	const retailer = useQuery(api.retailers.getMyRetailer);
@@ -131,12 +219,21 @@ function ProductsRoute() {
 						: `${counts.active} active · ${counts.archived} archived`
 				}
 				actions={
-					<Button asChild>
-						<Link to="/app/products/new">+ New product</Link>
-					</Button>
+					<>
+						{BULK_IO_ENABLED ? (
+							<BulkIoMenu
+								canExport={counts.all > 0}
+								exporting={exporting}
+								onExport={handleExport}
+							/>
+						) : null}
+						<Button asChild className="h-10">
+							<Link to="/app/products/new">+ New product</Link>
+						</Button>
+					</>
 				}
 			/>
-			<div className="flex flex-wrap items-center justify-between gap-3 lg:hidden">
+			<div className="flex items-center justify-between gap-3 lg:hidden">
 				<div className="flex min-w-0 flex-col gap-1">
 					<h2 className="text-xl font-bold">Products</h2>
 					{products === undefined ? (
@@ -147,48 +244,20 @@ function ProductsRoute() {
 						</p>
 					)}
 				</div>
-				<Button asChild className="h-11">
-					<Link to="/app/products/new">+ New</Link>
-				</Button>
-			</div>
-
-			{BULK_IO_ENABLED ? (
-				<div className="flex flex-wrap items-center gap-x-1 gap-y-1 text-sm">
-					<Button asChild variant="ghost" className="h-8 px-2 text-sm">
-						<Link to="/app/products/import">
-							<Download className="mr-1.5 size-3.5" aria-hidden />
-							Import
-						</Link>
-					</Button>
-					{counts.all > 0 ? (
-						<>
-							<span aria-hidden className="text-muted-foreground/40">
-								·
-							</span>
-							<Button
-								type="button"
-								variant="ghost"
-								className="h-8 px-2 text-sm"
-								disabled={exporting !== null}
-								onClick={() => handleExport("csv")}
-							>
-								<Upload className="mr-1.5 size-3.5" aria-hidden />
-								{exporting === "csv" ? "Exporting…" : "Export CSV"}
-							</Button>
-							<Button
-								type="button"
-								variant="ghost"
-								className="h-8 px-2 text-sm"
-								disabled={exporting !== null}
-								onClick={() => handleExport("xlsx")}
-							>
-								<Upload className="mr-1.5 size-3.5" aria-hidden />
-								{exporting === "xlsx" ? "Exporting…" : "Export XLSX"}
-							</Button>
-						</>
+				<div className="flex shrink-0 items-center gap-2">
+					{BULK_IO_ENABLED ? (
+						<BulkIoMenu
+							canExport={counts.all > 0}
+							exporting={exporting}
+							onExport={handleExport}
+							iconOnly
+						/>
 					) : null}
+					<Button asChild className="h-11">
+						<Link to="/app/products/new">+ New</Link>
+					</Button>
 				</div>
-			) : null}
+			</div>
 
 			<div className="relative lg:max-w-md">
 				<svg
@@ -235,7 +304,9 @@ function ProductsRoute() {
 				) : null}
 			</div>
 
-			<div className="-mx-5 flex gap-2 overflow-x-auto px-5 pb-1 lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0">
+			{/* Status filters — chips only; the page scrolls them edge-to-edge on
+			    mobile. Import/Export lives in the header (next to New), not here. */}
+			<div className="-mx-5 flex gap-2 overflow-x-auto px-5 pb-1 [scrollbar-width:none] lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0 [&::-webkit-scrollbar]:hidden">
 				{filterOptions.map((opt) => (
 					<button
 						key={opt.key}

@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import {
 	Building2,
+	ChevronDown,
 	Info,
 	Landmark,
 	Music2,
@@ -22,17 +23,6 @@ import {
 	type TemplateKey,
 } from "../../convex/lib/whatsappCopy";
 import {
-	ANCHOR_UI_LABELS,
-	collectStageConfigErrors,
-	MAX_ORDER_STAGES,
-	type OrderStage,
-	resolveStages,
-	STAGE_ANCHORS,
-	STAGE_DESCRIPTION_MAX_LENGTH,
-	STAGE_LABEL_MAX_LENGTH,
-	type StageAnchor,
-} from "../lib/orderStatus";
-import {
 	PageHeader,
 	PageHeaderSkeleton,
 } from "../components/dashboard/page-header";
@@ -45,6 +35,17 @@ import { Skeleton } from "../components/ui/skeleton";
 import { SortableList } from "../components/ui/sortable-list";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage } from "../lib/format";
+import {
+	ANCHOR_UI_LABELS,
+	collectStageConfigErrors,
+	MAX_ORDER_STAGES,
+	type OrderStage,
+	resolveStages,
+	STAGE_ANCHORS,
+	STAGE_DESCRIPTION_MAX_LENGTH,
+	STAGE_LABEL_MAX_LENGTH,
+	type StageAnchor,
+} from "../lib/orderStatus";
 import { reorderByIds } from "../lib/reorder";
 import {
 	settingsNotifyEmailFormSchema,
@@ -374,18 +375,28 @@ function SettingsRoute() {
 
 			{activeTab === "order-status" ? (
 				<div className="flex flex-col gap-6 pt-2">
-					<InfoBanner title="Your order journey">
+					<InfoBanner title="How order stages work">
 						<p>
-							Define the stages an order moves through — buyers see this as a
-							live timeline on their tracking page, and you advance orders
-							stage-by-stage from the dashboard. Rename them to fit how you work
-							(a tailor might use “Sewing”; a tent-wash “Washing → Drying”), add
-							your own steps, and write a short note buyers see for each.
+							Build the steps your orders move through — name them however you
+							work. Buyers see them as a live timeline; you advance orders
+							step-by-step from the dashboard.
 						</p>
 						<p>
-							Each stage “counts as” one of four milestones so the rest of the
-							system (payments, packing, tracking) keeps working. Start from the
-							defaults below and change as much or as little as you like.
+							Every step maps to one of four built-in milestones via{" "}
+							<span className="font-medium text-foreground">“Counts as”</span>,
+							so payments, packing and tracking keep working:{" "}
+							<span className="font-medium text-foreground">Accepted</span> →{" "}
+							<span className="font-medium text-foreground">In production</span>{" "}
+							→ <span className="font-medium text-foreground">Ready</span> →{" "}
+							<span className="font-medium text-foreground">Done</span>.
+						</p>
+						<p>
+							<span className="font-medium text-foreground">
+								Your first step should count as “Accepted”, your last as “Done”
+							</span>{" "}
+							— map the steps in between to whichever milestone fits. E.g. a
+							cake shop: “Order received” (Accepted) → “Baking” (In production)
+							→ “Ready for pickup” (Ready) → “Collected” (Done).
 						</p>
 					</InfoBanner>
 
@@ -1200,8 +1211,23 @@ function StageEditor({
 	isCustomized: boolean;
 	onSave: (stages: OrderStage[]) => Promise<unknown>;
 }) {
-	const [drafts, setDrafts] = useState<StageDraft[]>(() => seed.map(seedToDraft));
+	const [drafts, setDrafts] = useState<StageDraft[]>(() =>
+		seed.map(seedToDraft),
+	);
 	const [saving, setSaving] = useState(false);
+	// Cards collapse to a one-line summary by default (a full stage card is tall on
+	// mobile, so the page reads better at a glance). Click a card to expand it.
+	// During a drag the row always renders compact (state.isSorting), and the
+	// expanded set is preserved so cards re-open exactly as they were afterwards.
+	const [expanded, setExpanded] = useState<Set<string>>(new Set());
+	function toggleExpand(key: string) {
+		setExpanded((prev) => {
+			const next = new Set(prev);
+			if (next.has(key)) next.delete(key);
+			else next.add(key);
+			return next;
+		});
+	}
 
 	function update(key: string, patch: Partial<StageDraft>) {
 		setDrafts((prev) =>
@@ -1216,10 +1242,13 @@ function StageEditor({
 			toast.error(`You can have at most ${MAX_ORDER_STAGES} stages.`);
 			return;
 		}
+		const key = crypto.randomUUID();
+		// Open the new (empty) stage so the seller can fill it in immediately.
+		setExpanded((prev) => new Set(prev).add(key));
 		setDrafts((prev) => [
 			...prev,
 			{
-				_key: crypto.randomUUID(),
+				_key: key,
 				id: "",
 				// Default to the last stage's anchor so the monotonic rule holds and
 				// the seller usually doesn't need to touch the dropdown.
@@ -1282,24 +1311,49 @@ function StageEditor({
 				</div>
 			);
 		}
-		return (
-			<div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
-				<div className="flex items-center gap-2">
+
+		const isExpanded = expanded.has(d._key);
+		if (!isExpanded) {
+			// Collapsed-by-default summary — same info as the drag row; click to open.
+			return (
+				<div className="flex items-center gap-2 rounded-xl border border-border bg-card p-3">
 					{handle}
-					<span className="text-sm font-medium text-muted-foreground">
-						Stage {index + 1}
-					</span>
 					<button
 						type="button"
-						onClick={() => remove(d._key)}
-						aria-label="Remove stage"
-						className="ml-auto flex size-11 items-center justify-center rounded-full text-destructive hover:bg-destructive/10"
+						onClick={() => toggleExpand(d._key)}
+						aria-expanded={false}
+						className="flex min-w-0 flex-1 items-center gap-2 text-left"
 					>
-						<Trash2 className="size-4" />
+						<span className="truncate text-sm font-medium">{displayLabel}</span>
+						<span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+							{ANCHOR_UI_LABELS[d.anchor]}
+						</span>
+						<ChevronDown className="ml-auto size-4 shrink-0 text-muted-foreground" />
+					</button>
+				</div>
+			);
+		}
+
+		return (
+			<div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
+				{/* Header mirrors the collapsed row exactly (handle + label + chevron
+				    far-right) so the toggle target doesn't jump when expanding. */}
+				<div className="flex items-center gap-2">
+					{handle}
+					<button
+						type="button"
+						onClick={() => toggleExpand(d._key)}
+						aria-expanded={true}
+						className="flex min-w-0 flex-1 items-center gap-2 text-left"
+					>
+						<span className="truncate text-sm font-medium">{displayLabel}</span>
+						<ChevronDown className="ml-auto size-4 shrink-0 rotate-180 text-muted-foreground" />
 					</button>
 				</div>
 
-				<div className="grid grid-cols-2 gap-2">
+				{/* Stack on mobile (full-width, never misaligned); two columns at sm+
+				    where the BM label fits one line so the inputs line up. */}
+				<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
 					<label className="flex flex-col gap-1">
 						<span className="text-xs font-medium text-muted-foreground">
 							Label (English)
@@ -1330,7 +1384,10 @@ function StageEditor({
 
 				<label className="flex flex-col gap-1">
 					<span className="text-xs font-medium text-muted-foreground">
-						Counts as
+						Counts as{" "}
+						<span className="font-normal">
+							— which milestone this step represents
+						</span>
 					</span>
 					<select
 						value={d.anchor}
@@ -1351,6 +1408,13 @@ function StageEditor({
 							</option>
 						))}
 					</select>
+					<span className="text-xs text-muted-foreground">
+						{d.anchor === "confirmed"
+							? "The order has been accepted. Use this for your first step."
+							: d.anchor === "delivered"
+								? "The order is complete. Use this for your last step."
+								: "A step while you're fulfilling the order."}
+					</span>
 				</label>
 
 				<div className="grid grid-cols-1 gap-2">
@@ -1401,6 +1465,17 @@ function StageEditor({
 						</span>
 					</label>
 				)}
+
+				{/* Destructive action lives at the bottom (out of the toggle header) so
+				    it can't be hit while quick-expanding/collapsing. */}
+				<button
+					type="button"
+					onClick={() => remove(d._key)}
+					className="flex h-9 items-center gap-1.5 self-start rounded-lg px-2 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10"
+				>
+					<Trash2 className="size-3.5" />
+					Remove stage
+				</button>
 			</div>
 		);
 	}

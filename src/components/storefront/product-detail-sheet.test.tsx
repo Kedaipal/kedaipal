@@ -1,10 +1,17 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Id } from "../../../convex/_generated/dataModel";
 import type { StorefrontProduct } from "./product-card";
 import { ProductDetailSheet } from "./product-detail-sheet";
 
+// The sheet uses useMutation for the buyer image upload; stub it so it renders
+// without a ConvexProvider.
+vi.mock("convex/react", () => ({ useMutation: () => vi.fn() }));
+
 afterEach(cleanup);
+
+const RID = "r1" as unknown as Id<"retailers">;
 
 // Minimal product: two standard sizes + a custom line. Empty images/description
 // keep the render to plain DOM (no ZoomableImage / Markdown).
@@ -58,7 +65,12 @@ describe("ProductDetailSheet — custom line is an independent add", () => {
 	it("requests the custom line with the buyer's note, without an axis selection", () => {
 		const onAdd = vi.fn();
 		render(
-			<ProductDetailSheet product={product} onClose={vi.fn()} onAdd={onAdd} />,
+			<ProductDetailSheet
+				product={product}
+				retailerId={RID}
+				onClose={vi.fn()}
+				onAdd={onAdd}
+			/>,
 		);
 
 		// Standard path can't be added until a size is picked…
@@ -73,18 +85,24 @@ describe("ProductDetailSheet — custom line is an independent add", () => {
 			screen.getByRole("button", { name: /request custom order/i }),
 		);
 		expect(onAdd).toHaveBeenCalledTimes(1);
+		// Note travels in the custom payload object; no image attached.
 		expect(onAdd).toHaveBeenCalledWith(
 			product,
 			expect.objectContaining({ isCustom: true }),
 			1,
-			"unicorn theme, size 8",
+			{ note: "unicorn theme, size 8", imageStorageId: undefined },
 		);
 	});
 
 	it("keeps the standard variant and custom line independent (not mutually exclusive)", () => {
 		const onAdd = vi.fn();
 		render(
-			<ProductDetailSheet product={product} onClose={vi.fn()} onAdd={onAdd} />,
+			<ProductDetailSheet
+				product={product}
+				retailerId={RID}
+				onClose={vi.fn()}
+				onAdd={onAdd}
+			/>,
 		);
 
 		// Pick a size → the bottom CTA becomes a real "Add to cart" for that variant.
@@ -97,7 +115,7 @@ describe("ProductDetailSheet — custom line is an independent add", () => {
 		);
 
 		// The custom request still works after a size was chosen — both are addable
-		// from the same open sheet. No note typed → undefined.
+		// from the same open sheet. No note/image → empty payload.
 		fireEvent.click(
 			screen.getByRole("button", { name: /request custom order/i }),
 		);
@@ -105,7 +123,7 @@ describe("ProductDetailSheet — custom line is an independent add", () => {
 			product,
 			expect.objectContaining({ isCustom: true }),
 			1,
-			undefined,
+			{ note: undefined, imageStorageId: undefined },
 		);
 		expect(onAdd).toHaveBeenCalledTimes(2);
 	});

@@ -89,6 +89,18 @@ out of the grid rows.
   `composeCustomerNote` (`src/lib/order-note.ts`), so it reaches the seller through
   the existing note channel (WhatsApp "Note for seller" + dashboard + email) with
   **no per-item order field**. It's also shown under the line in the cart review.
+- **Optional reference photo.** The custom card has an "Add a photo" control — a
+  picture says more than a note for a bespoke order (cake design, colour ref). The
+  image is **uploaded on attach** (matching the seller mockup pattern, since a
+  `File` can't survive cart persistence) via the public, rate-limited
+  `orders.generateCustomImageUploadUrl` (keyed by `retailerId` — the order doesn't
+  exist yet), and the resulting `storageId` rides the cart line
+  (`CartItem.customImageStorageId`). At checkout the first custom line's image is
+  passed to `orders.create` as **`customerImageStorageId`** (one image per order —
+  one custom negotiation; a stray id on a non-custom order is dropped server-side).
+  The seller sees it on the order-detail "Note from customer" card
+  (`orders.getCustomerImageUrl`, zoomable); the buyer sees a "📎 Reference photo
+  attached" chip in the cart review. **Rate limit:** `customImageUpload`.
 - The sheet **stays open after an add** (a toast confirms; the cart bar updates) so
   multiple items can be added without reopening. This applies to all products
   (`product-grid.tsx` `onAdd` no longer closes the sheet).
@@ -135,6 +147,9 @@ out of the grid rows.
   independent add carrying the buyer's note; not mutually exclusive with the pills.
 - `src/lib/order-note.test.ts`: `composeCustomerNote` labels per-item notes, orders
   them ahead of the general note, and returns `undefined` when empty.
+- `convex/orders.test.ts` → "buyer custom image": create stores
+  `customerImageStorageId` + `getCustomerImageUrl` resolves it; a stray image on a
+  non-custom order is dropped; `generateCustomImageUploadUrl` returns a URL.
 
 ## 8. Touch points
 
@@ -144,8 +159,12 @@ Authoring + resolution: `convex/schema.ts`, `convex/lib/variant.ts`,
 `src/routes/app.products.$productId.tsx`.
 
 Storefront + ordering: `src/components/storefront/product-detail-sheet.tsx`
-(independent add + buyer note + zoomable image), `…/product-card.tsx`,
-`…/product-grid.tsx` (note → cart, stay-open), `…/checkout-sheet.tsx`
-(`composeCustomerNote`), `src/hooks/useCart.ts` (`CartItem.note`),
-`src/lib/order-note.ts`. The order-line **label** uses `customLabel`
-(`convex/orders.ts`); otherwise the `requiresProof` → mockup path already covers it.
+(independent add + buyer note + reference-photo upload), `…/product-card.tsx`,
+`…/product-grid.tsx` (note/image → cart, stay-open), `…/checkout-sheet.tsx`
+(`composeCustomerNote` + first custom image → `customerImageStorageId`),
+`src/hooks/useCart.ts` (`CartItem.note` / `.customImageStorageId`),
+`src/lib/order-note.ts`. Backend: `orders.generateCustomImageUploadUrl` +
+`getCustomerImageUrl`, `orders.customerImageStorageId` (schema), `customImageUpload`
+rate limit; the order-line **label** uses `customLabel`. Seller view:
+`src/routes/app.orders.$shortId.tsx` ("Note from customer" card). Otherwise the
+`requiresProof` → mockup path already covers it.

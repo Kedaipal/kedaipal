@@ -33,6 +33,10 @@ export type CartItem = {
 	// negotiation (the seller's single mockup + quote settle scope, quantity, and
 	// final price). Re-requesting updates the note instead of incrementing qty.
 	isCustom?: boolean;
+	// Optional buyer reference image for a custom line. Uploaded on attach (Convex
+	// storage id; serializable so it survives cart persistence) and passed to
+	// orders.create at checkout. See docs/custom-option.md.
+	customImageStorageId?: string;
 };
 
 type CartState = {
@@ -67,9 +71,11 @@ function reducer(state: CartState, action: CartAction): CartState {
 									quantity: i.isCustom
 										? i.quantity
 										: i.quantity + action.quantity,
-									// Re-requesting a custom line updates its note (latest wins);
-									// keep the prior note if this add carried none.
+									// Re-requesting a custom line updates its note + image (latest
+									// wins); keep the prior values if this add carried none.
 									note: action.item.note ?? i.note,
+									customImageStorageId:
+										action.item.customImageStorageId ?? i.customImageStorageId,
 								}
 							: i,
 					),

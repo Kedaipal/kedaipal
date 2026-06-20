@@ -1,30 +1,5 @@
-import {
-	DndContext,
-	type DragEndEvent,
-	KeyboardSensor,
-	PointerSensor,
-	TouchSensor,
-	closestCenter,
-	useSensor,
-	useSensors,
-} from "@dnd-kit/core";
-import {
-	SortableContext,
-	arrayMove,
-	sortableKeyboardCoordinates,
-	useSortable,
-	verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
 import { useMutation, useQuery } from "convex/react";
-import {
-	ExternalLink,
-	GripVertical,
-	MapPin,
-	Pencil,
-	Phone,
-	Plus,
-} from "lucide-react";
+import { ExternalLink, MapPin, Pencil, Phone, Plus } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
@@ -34,6 +9,7 @@ import { convexErrorMessage } from "../../lib/format";
 import { deriveMapsUrl } from "../../lib/google-address";
 import { Button } from "../ui/button";
 import { Skeleton } from "../ui/skeleton";
+import { SortableList } from "../ui/sortable-list";
 import { PickupLocationEditDialog } from "./pickup-location-edit-dialog";
 
 interface PickupLocationsTabProps {
@@ -93,9 +69,7 @@ function ToggleSwitch({
 			disabled={disabled}
 			onClick={() => onChange(!on)}
 			className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border-2 transition-colors ${
-				on
-					? "border-accent bg-accent"
-					: "border-input bg-muted"
+				on ? "border-accent bg-accent" : "border-input bg-muted"
 			} ${disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}
 		>
 			<span
@@ -132,9 +106,9 @@ export function PickupLocationsTab({
 		});
 	}, [markPickupSetupSeen]);
 
-	const [editing, setEditing] = useState<
-		Doc<"pickupLocations"> | "new" | null
-	>(null);
+	const [editing, setEditing] = useState<Doc<"pickupLocations"> | "new" | null>(
+		null,
+	);
 	const [showInactive, setShowInactive] = useState(false);
 	const [toggling, setToggling] = useState(false);
 
@@ -188,9 +162,8 @@ export function PickupLocationsTab({
 	// stutter.
 	const activeIds = active.map((l) => l._id);
 	const activeIdsKey = activeIds.join("|");
-	const [localOrder, setLocalOrder] = useState<Array<Id<"pickupLocations">>>(
-		activeIds,
-	);
+	const [localOrder, setLocalOrder] =
+		useState<Array<Id<"pickupLocations">>>(activeIds);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional —
 	// see the comment above. activeIds is read via closure on the render where
 	// activeIdsKey actually changes, so we get the latest server order without
@@ -206,38 +179,14 @@ export function PickupLocationsTab({
 			.filter((l): l is Doc<"pickupLocations"> => l !== undefined);
 	}, [active, localOrder]);
 
-	const sensors = useSensors(
-		// Mouse / pen: a small drag distance must elapse before a drag starts so
-		// click-on-edit / click-on-toggle isn't misinterpreted as a drag.
-		useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
-		// Touch: a brief hold disambiguates drag intent from a scroll/tap. The
-		// `touch-none` class on the grip handle prevents the page from scrolling
-		// while the user holds it.
-		useSensor(TouchSensor, {
-			activationConstraint: { delay: 250, tolerance: 5 },
-		}),
-		// Keyboard a11y: arrow keys move a focused row.
-		useSensor(KeyboardSensor, {
-			coordinateGetter: sortableKeyboardCoordinates,
-		}),
-	);
-
-	async function handleDragEnd(event: DragEndEvent) {
-		const { active: draggedItem, over } = event;
-		if (!over || draggedItem.id === over.id) return;
-		const oldIndex = localOrder.indexOf(
-			draggedItem.id as Id<"pickupLocations">,
-		);
-		const newIndex = localOrder.indexOf(over.id as Id<"pickupLocations">);
-		if (oldIndex === -1 || newIndex === -1) return;
-
-		const next = arrayMove(localOrder, oldIndex, newIndex);
+	async function handleReorder(orderedIds: string[]) {
+		const next = orderedIds as Array<Id<"pickupLocations">>;
 		const previous = localOrder;
-		setLocalOrder(next);
+		setLocalOrder(next); // optimistic
 		try {
 			await reorder({ retailerId, orderedIds: next });
 		} catch (err) {
-			setLocalOrder(previous);
+			setLocalOrder(previous); // revert on failure
 			toast.error(convexErrorMessage(err));
 		}
 	}
@@ -287,27 +236,42 @@ export function PickupLocationsTab({
 				) : active.length === 0 ? (
 					<EmptyState onAdd={() => setEditing("new")} />
 				) : (
-					<DndContext
-						sensors={sensors}
-						collisionDetection={closestCenter}
-						onDragEnd={handleDragEnd}
-					>
-						<SortableContext
-							items={localOrder}
-							strategy={verticalListSortingStrategy}
-						>
-							<ul className="flex flex-col gap-2">
-								{orderedActive.map((loc) => (
-									<SortableLocationRow
-										key={loc._id}
+					<SortableList
+						items={orderedActive}
+						getId={(loc) => loc._id}
+						onReorder={handleReorder}
+						renderItem={(loc, handle, state) =>
+							state.isSorting ? (
+								// Collapsed one-line row while dragging (matches the order-status
+								// editor) — a tall list stays easy to rearrange.
+								<div
+									className={`flex items-center gap-2 rounded-xl border bg-background p-3 ${
+										state.isOverlay
+											? "border-accent shadow-lg"
+											: "border-border"
+									}`}
+								>
+									{handle}
+									<MapPin
+										className="size-4 shrink-0 text-accent"
+										aria-hidden="true"
+									/>
+									<span className="truncate text-sm font-medium">
+										{loc.label}
+									</span>
+								</div>
+							) : (
+								<div className="flex flex-col gap-3 rounded-xl border border-border bg-background p-4">
+									<LocationRowBody
 										location={loc}
 										onEdit={() => setEditing(loc)}
 										onToggleActive={(next) => handleToggleActive(loc, next)}
+										dragHandle={handle}
 									/>
-								))}
-							</ul>
-						</SortableContext>
-					</DndContext>
+								</div>
+							)
+						}
+					/>
 				)}
 
 				{inactive.length > 0 ? (
@@ -340,7 +304,7 @@ export function PickupLocationsTab({
 			<PickupLocationEditDialog
 				open={editing !== null}
 				onClose={() => setEditing(null)}
-				location={editing === "new" ? undefined : editing ?? undefined}
+				location={editing === "new" ? undefined : (editing ?? undefined)}
 				retailerId={retailerId}
 			/>
 		</div>
@@ -405,8 +369,7 @@ function LocationRowBody({
 								aria-hidden="true"
 							/>
 							<span>
-								Manager:{" "}
-								{location.managerName ?? "—"}
+								Manager: {location.managerName ?? "—"}
 								{location.managerWaPhone
 									? ` · ${formatPhone(location.managerWaPhone)}`
 									: ""}
@@ -437,69 +400,6 @@ function LocationRowBody({
 				</div>
 			</div>
 		</>
-	);
-}
-
-/**
- * Sortable variant for active rows — wraps the row with `useSortable` and
- * exposes a `GripVertical` drag handle on the left. Listeners are attached
- * ONLY to the handle so tapping Edit / the active toggle doesn't start a drag.
- *
- * `touch-none` on the handle is critical on mobile — without it the page
- * would scroll while the seller tries to drag.
- */
-function SortableLocationRow({
-	location,
-	onEdit,
-	onToggleActive,
-}: {
-	location: Doc<"pickupLocations">;
-	onEdit: () => void;
-	onToggleActive: (next: boolean) => void;
-}) {
-	const {
-		attributes,
-		listeners,
-		setNodeRef,
-		transform,
-		transition,
-		isDragging,
-	} = useSortable({ id: location._id });
-	// Keep the row fully opaque while dragging — the border-accent + shadow is
-	// enough visual indicator. Snapping opacity from <1 back to 1 on drop reads
-	// as a flicker; using only properties that animate via `transition` keeps
-	// the drop landing smooth.
-	const style = {
-		transform: CSS.Transform.toString(transform),
-		transition,
-		zIndex: isDragging ? 10 : "auto",
-	};
-
-	return (
-		<li
-			ref={setNodeRef}
-			style={style}
-			className={`flex flex-col gap-3 rounded-xl border bg-background p-4 transition-shadow ${
-				isDragging ? "border-accent shadow-lg" : "border-border"
-			}`}
-		>
-			<LocationRowBody
-				location={location}
-				onEdit={onEdit}
-				onToggleActive={onToggleActive}
-				dragHandle={
-					<button
-						type="button"
-						aria-label={`Drag to reorder ${location.label}`}
-						{...attributes}
-						{...listeners}
-						className="flex size-11 shrink-0 cursor-grab touch-none items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted active:cursor-grabbing"
-					>
-						<GripVertical className="size-4" />
-					</button>
-				}
-			/>
-		</li>
 	);
 }
 

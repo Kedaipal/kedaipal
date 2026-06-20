@@ -67,6 +67,15 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		period: MINUTE,
 		capacity: 2,
 	},
+	// Public mutation that mints an upload URL for a buyer's reference image on a
+	// custom/made-to-order line — BEFORE the order exists, so keyed by retailerId
+	// (no shortId yet). Sized like proofUpload — one image per checkout.
+	customImageUpload: {
+		kind: "token bucket",
+		rate: 3,
+		period: MINUTE,
+		capacity: 2,
+	},
 	// Public buyer mockup approve / request-changes actions (keyed by retailerId).
 	mockupReview: {
 		kind: "token bucket",
