@@ -5,6 +5,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { planPrice } from "../../convex/lib/plans";
 import { PageHeader } from "../components/dashboard/page-header";
 import { Button } from "../components/ui/button";
 import {
@@ -46,16 +47,249 @@ function AdminBillingRoute() {
 		);
 	}
 
+	return <AdminBillingContent />;
+}
+
+function AdminBillingContent() {
+	// Invoicing is the frequent task → default tab. Payment details are set-once.
+	const [tab, setTab] = useState<"invoices" | "payment">("invoices");
 	return (
 		<div className="flex flex-col gap-6 lg:max-w-3xl">
-			<PageHeader
-				title="Admin · Billing"
-				subtitle="Settle invoices + payment details"
-			/>
+			<PageHeader title="Admin · Billing" subtitle="Issue + settle invoices" />
 			<h2 className="text-xl font-bold lg:hidden">Admin · Billing</h2>
-			<PendingInvoices />
-			<PaymentConfigForm />
+
+			<div className="flex gap-1 border-b border-input">
+				{(
+					[
+						{ id: "invoices", label: "Invoices" },
+						{ id: "payment", label: "Payment details" },
+					] as const
+				).map((t) => (
+					<button
+						key={t.id}
+						type="button"
+						onClick={() => setTab(t.id)}
+						className={`relative min-h-11 whitespace-nowrap px-4 text-sm font-medium transition-colors ${
+							tab === t.id
+								? "text-primary after:absolute after:inset-x-3 after:-bottom-px after:h-0.5 after:rounded-full after:bg-primary"
+								: "text-muted-foreground hover:text-foreground"
+						}`}
+					>
+						{t.label}
+					</button>
+				))}
+			</div>
+
+			{tab === "invoices" ? (
+				<>
+					<IssueInvoiceForm />
+					<PendingInvoices />
+				</>
+			) : (
+				<PaymentConfigForm />
+			)}
 		</div>
+	);
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_DUE_DAYS = 14;
+
+function toDateInput(ms: number): string {
+	const d = new Date(ms);
+	const p = (n: number) => String(n).padStart(2, "0");
+	return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+function fromDateInput(value: string): number {
+	const [y, m, d] = value.split("-").map(Number);
+	return new Date(y, m - 1, d, 23, 59, 59, 999).getTime();
+}
+
+/**
+ * Issue a pending invoice — covers standard conversions/renewals AND onboarding a
+ * Founding-10 member (founding toggle). Built for minimal typing: amount is
+ * derived from plan + cycle + founding; the due date defaults to +14 days.
+ */
+function IssueInvoiceForm() {
+	const retailers = useQuery(api.invoices.listRetailersForAdmin, {});
+	const spotsRemaining = useQuery(api.foundingMembers.getSpotsRemaining, {});
+	const issue = useMutation(api.invoices.issueInvoice);
+
+	const [retailerId, setRetailerId] = useState<Id<"retailers"> | "">("");
+	const [plan, setPlan] = useState<"starter" | "pro">("pro");
+	const [cycle, setCycle] = useState<"monthly" | "annual">("monthly");
+	const [founding, setFounding] = useState(false);
+	const [dueDate, setDueDate] = useState(() =>
+		toDateInput(Date.now() + DEFAULT_DUE_DAYS * DAY_MS),
+	);
+	const [busy, setBusy] = useState(false);
+
+	// Founding is Pro-only — flipping it on forces Pro.
+	const effectivePlan = founding ? "pro" : plan;
+	// Derived amount (single source of truth from convex/lib/plans).
+	const total = planPrice(effectivePlan, cycle, founding);
+	const base = planPrice(effectivePlan, cycle, false);
+
+	const selected = retailers?.find((r) => r._id === retailerId);
+	const blocked = selected?.hasPending === true;
+
+	async function handleIssue() {
+		if (!retailerId) return;
+		setBusy(true);
+		try {
+			await issue({
+				retailerId,
+				plan: effectivePlan,
+				billingCycle: cycle,
+				founding,
+				dueDate: fromDateInput(dueDate),
+			});
+			toast.success("Invoice issued — it's now in Pending below.");
+			setRetailerId("");
+			setFounding(false);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	return (
+		<section className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-5 lg:p-6">
+			<div className="flex items-center justify-between gap-3">
+				<p className="text-sm font-semibold">Issue an invoice</p>
+				{spotsRemaining !== undefined ? (
+					<span className="text-xs text-muted-foreground">
+						{spotsRemaining}/10 founding spots left
+					</span>
+				) : null}
+			</div>
+
+			<label className="flex flex-col gap-1 text-sm font-medium">
+				Retailer
+				<select
+					value={retailerId}
+					onChange={(e) => setRetailerId(e.target.value as Id<"retailers">)}
+					className="min-h-11 rounded-xl border border-input bg-background px-3 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+				>
+					<option value="">Select a store…</option>
+					{retailers?.map((r) => (
+						<option key={r._id} value={r._id}>
+							{r.storeName} (/{r.slug}){r.status ? ` · ${r.status}` : ""}
+							{r.isFoundingMember ? " · founding" : ""}
+							{r.hasPending ? " · has pending" : ""}
+						</option>
+					))}
+				</select>
+			</label>
+
+			<div className="flex flex-wrap gap-x-6 gap-y-3">
+				<div className="flex flex-col gap-1.5">
+					<span className="text-xs font-medium text-muted-foreground">
+						Plan
+					</span>
+					<div className="flex gap-1.5">
+						{(["pro", "starter"] as const).map((p) => (
+							<button
+								key={p}
+								type="button"
+								disabled={founding && p !== "pro"}
+								onClick={() => setPlan(p)}
+								className={`h-9 rounded-full border px-3.5 text-sm font-medium capitalize transition-colors disabled:opacity-40 ${
+									effectivePlan === p
+										? "border-foreground bg-foreground text-background"
+										: "border-border bg-background text-muted-foreground hover:border-foreground/30"
+								}`}
+							>
+								{p}
+							</button>
+						))}
+						<span className="flex h-9 items-center rounded-full border border-dashed border-border px-3 text-xs text-muted-foreground">
+							Scale · soon
+						</span>
+					</div>
+				</div>
+
+				<div className="flex flex-col gap-1.5">
+					<span className="text-xs font-medium text-muted-foreground">
+						Billing
+					</span>
+					<div className="flex gap-1.5">
+						{(["monthly", "annual"] as const).map((c) => (
+							<button
+								key={c}
+								type="button"
+								onClick={() => setCycle(c)}
+								className={`h-9 rounded-full border px-3.5 text-sm font-medium capitalize transition-colors ${
+									cycle === c
+										? "border-foreground bg-foreground text-background"
+										: "border-border bg-background text-muted-foreground hover:border-foreground/30"
+								}`}
+							>
+								{c}
+							</button>
+						))}
+					</div>
+				</div>
+			</div>
+
+			<label className="flex items-center gap-2.5 text-sm">
+				<input
+					type="checkbox"
+					checked={founding}
+					onChange={(e) => setFounding(e.target.checked)}
+					className="size-4"
+				/>
+				<span>
+					<span className="font-medium">Founding Member invoice</span>
+					<span className="block text-xs text-muted-foreground">
+						Pro only · 30% lifetime discount · claims a rank when marked paid
+						{spotsRemaining === 0
+							? " (cohort full — no rank will be claimed)"
+							: ""}
+					</span>
+				</span>
+			</label>
+
+			<label className="flex flex-col gap-1 text-sm font-medium">
+				Due date
+				<Input
+					type="date"
+					value={dueDate}
+					onChange={(e) => setDueDate(e.target.value)}
+					variant="field"
+					className="w-fit"
+				/>
+			</label>
+
+			<div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+				<div>
+					<p className="text-xs text-muted-foreground">Amount</p>
+					<p className="text-xl font-bold tabular-nums">
+						{formatPrice(total, "MYR")}
+					</p>
+					{founding ? (
+						<p className="text-xs text-emerald-700">
+							{formatPrice(base, "MYR")} − {formatPrice(base - total, "MYR")}{" "}
+							founding discount
+						</p>
+					) : null}
+				</div>
+				<Button
+					type="button"
+					onClick={handleIssue}
+					disabled={!retailerId || busy || blocked}
+					className="h-11 lg:px-6"
+				>
+					{busy ? "Issuing…" : "Issue invoice"}
+				</Button>
+			</div>
+			{blocked ? (
+				<p className="text-xs text-amber-700">
+					This retailer already has a pending invoice — settle it first.
+				</p>
+			) : null}
+		</section>
 	);
 }
 

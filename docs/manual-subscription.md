@@ -6,9 +6,32 @@ out-of-band (DuitNow / bank), the admin flips "paid", and entitlement + Founding
 rank-claim happen atomically. Built behind a typed `PaymentProvider` seam so the
 future automated-billing integration touches only the adapter.
 
-**Status:** All phases shipped (1–4). Backend + seller UI + admin UI + public
-surfaces. Remaining for prod: run the backfill, set up payment details in the admin
-UI. The signup-side Scale guard is N/A in v1 (no user plan-selection input — see below).
+**Status:** All phases shipped (1–4) + the **admin Issue-invoice flow** (the
+operational piece that makes invoices actually appear). Remaining for prod: run the
+backfill, set payment details in the admin UI.
+
+## How invoices appear (the operational loop)
+
+A pending invoice is created in two ways:
+1. **Admin issues one** — `/app/admin/billing` → **Invoices** tab → `invoices.issueInvoice`
+   (pick retailer, plan, cycle, **founding** toggle, due date defaulting to +14d;
+   amount auto-derived from `lib/plans`). This is the path for trial **conversions**
+   and **renewals**, and for onboarding a **Founding-10** member (founding toggle =
+   30% Pro discount). Guards: rejects Scale (the v1 defense-in-depth home),
+   founding-non-Pro, and a duplicate pending per retailer.
+2. **Founding-intent signup** — `createRetailer({ intent: "founding" })` auto-creates
+   one (kept for a future no-trial founding signup entry).
+
+**⚠️ Rank vs. discount — important.** The Founding **rank** claims on a retailer's
+**first paid Pro invoice** (ticket-literal) — the `founding` toggle on the invoice
+controls the **30% discount**, NOT rank eligibility. So any Pro invoice paid while
+spots remain claims a rank; Starter never does; rank 11+ gets none. Operationally:
+**toggle founding ON for the first 10 Pro invoices** so those members also get the
+discount they're promised.
+
+Admin UI is **tabbed** (`app.admin.billing.tsx`): **Invoices** (issue form + pending
+list + mark-paid, the frequent task) and **Payment details** (set-once bank/QR).
+Tests: `convex/invoices.test.ts` (issueInvoice standard/founding/Starter/guards).
 
 ## Core model
 

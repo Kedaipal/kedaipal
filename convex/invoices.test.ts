@@ -226,6 +226,139 @@ describe("invoices.markPaid", () => {
 	});
 });
 
+describe("invoices.issueInvoice", () => {
+	async function seedPublic(
+		t: ReturnType<typeof setup>,
+		userId: string,
+		slug: string,
+	) {
+		const asUser = t.withIdentity({ subject: userId });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: `Store ${slug}`,
+			slug,
+		});
+		const retailerId = await t.run(async (ctx) => {
+			const r = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", slug))
+				.first();
+			return r!._id;
+		});
+		return { asUser, retailerId };
+	}
+
+	const due = () => Date.now() + 14 * 24 * 60 * 60 * 1000;
+
+	test("issues a standard Pro invoice; founding toggle = discount only (rank is first-paid-Pro)", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedPublic(t, "u1", "store-1");
+		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+			dueDate: due(),
+		});
+		const inv = await getInvoice(t, invoiceId);
+		expect(inv?.status).toBe("pending");
+		expect(inv?.total).toBe(14900); // standard Pro, no discount
+		expect(inv?.foundingDiscount).toBeUndefined();
+
+		// Shows on the retailer's billing page.
+		const mine = await asUser.query(api.invoices.myInvoices, {});
+		expect(mine.some((i) => i._id === invoiceId)).toBe(true);
+
+		// Per the ticket, the RANK claims on the first paid Pro invoice regardless
+		// of the discount toggle — the founding toggle only controls the price.
+		const res = await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId });
+		expect(res.rank).toBe(1);
+	});
+
+	test("Starter invoice never claims a rank", async () => {
+		const t = setup();
+		const { retailerId } = await seedPublic(t, "u1b", "store-1b");
+		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "starter",
+			billingCycle: "monthly",
+			founding: false,
+			dueDate: due(),
+		});
+		expect((await getInvoice(t, invoiceId))?.total).toBe(7900);
+		const res = await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId });
+		expect(res.rank).toBeNull();
+	});
+
+	test("a founding invoice claims the rank on mark-paid", async () => {
+		const t = setup();
+		const { retailerId } = await seedPublic(t, "u2", "store-2");
+		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: true,
+			dueDate: due(),
+		});
+		const inv = await getInvoice(t, invoiceId);
+		expect(inv?.total).toBe(10400); // founding Pro
+		expect(inv?.foundingDiscount).toBe(4500);
+
+		const res = await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId });
+		expect(res.rank).toBe(1);
+		expect((await getRetailer(t, retailerId))?.isFoundingMember).toBe(true);
+	});
+
+	test("rejects Scale + founding-non-Pro + duplicate pending + non-admin", async () => {
+		const t = setup();
+		const { retailerId } = await seedPublic(t, "u3", "store-3");
+		await expect(
+			asAdmin(t).mutation(api.invoices.issueInvoice, {
+				retailerId,
+				plan: "scale",
+				billingCycle: "monthly",
+				founding: false,
+				dueDate: due(),
+			}),
+		).rejects.toThrow(/scale is unavailable/i);
+		await expect(
+			asAdmin(t).mutation(api.invoices.issueInvoice, {
+				retailerId,
+				plan: "starter",
+				billingCycle: "monthly",
+				founding: true,
+				dueDate: due(),
+			}),
+		).rejects.toThrow(/only pro/i);
+		await expect(
+			t.withIdentity({ subject: "nope" }).mutation(api.invoices.issueInvoice, {
+				retailerId,
+				plan: "pro",
+				billingCycle: "monthly",
+				founding: false,
+				dueDate: due(),
+			}),
+		).rejects.toThrow(/not authorized/i);
+
+		// One pending, then a second issue is blocked.
+		await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+			dueDate: due(),
+		});
+		await expect(
+			asAdmin(t).mutation(api.invoices.issueInvoice, {
+				retailerId,
+				plan: "pro",
+				billingCycle: "monthly",
+				founding: false,
+				dueDate: due(),
+			}),
+		).rejects.toThrow(/already has a pending/i);
+	});
+});
+
 describe("backfill", () => {
 	test("creates active+comped for an existing retailer; idempotent", async () => {
 		const t = setup();

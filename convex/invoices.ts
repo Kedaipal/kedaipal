@@ -9,12 +9,21 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
 import { requireAdmin } from "./lib/auth";
-import { type Plan } from "./lib/plans";
+import { type BillingCycle, type Plan, planPrice } from "./lib/plans";
 import { getPaymentProvider } from "./payments/provider";
 import { claimRankIfEligible } from "./foundingMembers";
 import { defaultCapsForPlan } from "./subscriptions";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Short, human-ish invoice number with a random suffix (collisions negligible at
+ * manual-billing volume). */
+function generateInvoiceNumber(now: number): string {
+	const d = new Date(now);
+	const ym = `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+	const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
+	return `INV-${ym}-${rand}`;
+}
 
 function nextPeriodEnd(
 	cycle: Doc<"subscriptions">["billingCycle"],
@@ -98,6 +107,128 @@ export const markPaid = mutation({
 		}
 
 		return { rank };
+	},
+});
+
+/**
+ * Admin: issue a pending invoice to a retailer. Covers BOTH operational gaps —
+ * standard conversions/renewals AND onboarding a Founding-10 member (`founding:
+ * true` → 30% Pro discount; rank claims when this invoice is marked paid). Amounts
+ * are computed from the plan (single source of truth — Arif doesn't type them).
+ * The subscription's plan/cycle are aligned so mark-paid reconciles the right caps.
+ * Rejects Scale (the v1 defense-in-depth guard's home) and founding-non-Pro.
+ */
+export const issueInvoice = mutation({
+	args: {
+		retailerId: v.id("retailers"),
+		plan: v.union(
+			v.literal("starter"),
+			v.literal("pro"),
+			v.literal("scale"),
+		),
+		billingCycle: v.union(v.literal("monthly"), v.literal("annual")),
+		founding: v.boolean(),
+		dueDate: v.number(),
+	},
+	handler: async (
+		ctx,
+		{ retailerId, plan, billingCycle, founding, dueDate },
+	): Promise<{ invoiceId: Id<"invoices"> }> => {
+		await requireAdmin(ctx);
+		if (plan === "scale")
+			throw new ConvexError("Scale is unavailable for v1.");
+		if (founding && plan !== "pro")
+			throw new ConvexError("Only Pro qualifies for Founding Member.");
+
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Retailer not found");
+		const sub = await ctx.db
+			.query("subscriptions")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.first();
+		if (!sub) throw new ConvexError("Retailer has no subscription");
+
+		// Prevent accidental duplicate pendings — settle/void the existing one first.
+		const existingPending = await ctx.db
+			.query("invoices")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.filter((q) => q.eq(q.field("status"), "pending"))
+			.first();
+		if (existingPending)
+			throw new ConvexError(
+				`This retailer already has a pending invoice (${existingPending.invoiceNumber}). Settle or void it first.`,
+			);
+
+		const cycle = billingCycle as BillingCycle;
+		const base = planPrice(plan, cycle, false);
+		const total = planPrice(plan, cycle, founding);
+		const now = Date.now();
+
+		// Align the subscription to what's being billed so mark-paid reconciles the
+		// right caps. (Status stays as-is until paid → active.)
+		await ctx.db.patch(sub._id, {
+			plan,
+			billingCycle,
+			updatedAt: now,
+		});
+
+		const invoiceId = await ctx.db.insert("invoices", {
+			retailerId,
+			subscriptionId: sub._id,
+			invoiceNumber: generateInvoiceNumber(now),
+			amount: base,
+			foundingDiscount: founding ? base - total : undefined,
+			total,
+			currency: "MYR",
+			periodStart: now,
+			periodEnd: nextPeriodEnd(billingCycle, now),
+			dueDate,
+			status: "pending",
+			createdAt: now,
+		});
+		return { invoiceId };
+	},
+});
+
+/** Admin: retailers for the issue-invoice picker (id + store name + slug +
+ * status + founding flag). Capped — fine at Founding-10 scale. */
+export const listRetailersForAdmin = query({
+	args: {},
+	handler: async (
+		ctx,
+	): Promise<
+		Array<{
+			_id: Id<"retailers">;
+			storeName: string;
+			slug: string;
+			status?: Doc<"subscriptions">["status"];
+			isFoundingMember: boolean;
+			hasPending: boolean;
+		}>
+	> => {
+		await requireAdmin(ctx);
+		const retailers = await ctx.db.query("retailers").order("desc").take(200);
+		const rows = [];
+		for (const r of retailers) {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", r._id))
+				.first();
+			const pending = await ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", r._id))
+				.filter((q) => q.eq(q.field("status"), "pending"))
+				.first();
+			rows.push({
+				_id: r._id,
+				storeName: r.storeName,
+				slug: r.slug,
+				status: sub?.status,
+				isFoundingMember: r.isFoundingMember === true,
+				hasPending: pending !== null,
+			});
+		}
+		return rows;
 	},
 });
 
