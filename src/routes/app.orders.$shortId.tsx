@@ -153,6 +153,70 @@ function formatRelative(epochMs: number | undefined): string {
 	return `${Math.floor(diff / day)}d ago`;
 }
 
+function OrderProgressTimeline({
+	stages,
+	currentIndex,
+	cancelled,
+}: {
+	stages: ReturnType<typeof resolveStages>;
+	currentIndex: number;
+	cancelled: boolean;
+}) {
+	return (
+		<section className="rounded-2xl border border-border bg-card p-4 shadow-sm">
+			<div className="flex items-center justify-between gap-3">
+				<div>
+					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+						Order progress
+					</p>
+					<p className="mt-1 text-sm text-muted-foreground">
+						{cancelled
+							? "This order was cancelled."
+							: currentIndex < 0
+								? "Waiting for seller confirmation."
+								: `${currentIndex + 1} of ${stages.length} steps completed or active.`}
+					</p>
+				</div>
+			</div>
+			<ol className="mt-4 grid gap-2 sm:grid-cols-4">
+				{stages.map((stage, index) => {
+					const active = !cancelled && index === currentIndex;
+					const done = !cancelled && currentIndex >= 0 && index < currentIndex;
+					return (
+						<li
+							key={stage.id}
+							className={`rounded-xl border px-3 py-2 ${
+								active
+									? "border-accent bg-accent/10 text-foreground"
+									: done
+										? "border-emerald-200 bg-emerald-50 text-emerald-800"
+										: "border-border bg-background text-muted-foreground"
+							}`}
+						>
+							<div className="flex items-center gap-2">
+								<span
+									className={`flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
+										active
+											? "bg-accent text-accent-foreground"
+											: done
+												? "bg-emerald-600 text-white"
+												: "bg-muted text-muted-foreground"
+									}`}
+								>
+									{done ? <CheckCircle2 className="size-3.5" /> : index + 1}
+								</span>
+								<span className="min-w-0 truncate text-xs font-semibold">
+									{stageLabel(stage, "en")}
+								</span>
+							</div>
+						</li>
+					);
+				})}
+			</ol>
+		</section>
+	);
+}
+
 function OrderDetailRoute() {
 	const { shortId } = Route.useParams();
 	const order = useQuery(api.orders.get, { shortId });
@@ -329,6 +393,12 @@ function OrderDetailRoute() {
 					</span>
 				</div>
 			</div>
+
+			<OrderProgressTimeline
+				stages={stages}
+				currentIndex={currentIdx}
+				cancelled={order.status === "cancelled"}
+			/>
 
 			{/* Shopper's note + optional custom-line reference photo — front-and-centre
 			    so it isn't missed when fulfilling. Plain text, escaped by React. */}
