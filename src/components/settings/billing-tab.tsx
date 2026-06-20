@@ -30,7 +30,7 @@ function formatDate(ms: number): string {
 export function BillingTab({ retailer }: { retailer: Retailer }) {
 	const sub = retailer.subscription;
 	const invoices = useQuery(api.invoices.myInvoices, {}) ?? [];
-	const instructions = useQuery(api.subscriptions.paymentInstructions, {});
+	const instructions = useQuery(api.billing.paymentInstructions, {});
 
 	const pending = invoices.find((i) => i.status === "pending");
 	const history = invoices.filter((i) => i.status !== "pending");

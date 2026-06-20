@@ -19,7 +19,7 @@ export function SubscriptionBanner({
 	// WA number for the "message us to pay" CTA. Only the past-due banner needs it,
 	// so skip the query (and its storage.getUrl) on the common active/trialing path.
 	const instructions = useQuery(
-		api.subscriptions.paymentInstructions,
+		api.billing.paymentInstructions,
 		subscription?.status === "past_due" ? {} : "skip",
 	);
 

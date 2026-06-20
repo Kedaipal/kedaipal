@@ -115,11 +115,21 @@ open to comped full access, so they keep working between steps regardless.
   history). Pure helpers + tests in `src/lib/subscription.ts`. **Remaining (light):**
   the dashboard's one-time "Schedule your white-glove call" CTA on rank assignment
   (the day-14 pay nudge is already covered by the banner).
-  **Env to set for real pay details:** `KEDAIPAL_BANK_NAME`,
-  `KEDAIPAL_BANK_ACCOUNT_NAME`, `KEDAIPAL_BANK_ACCOUNT_NUMBER`, `KEDAIPAL_DUITNOW_ID`,
-  `KEDAIPAL_PAYMENT_QR_STORAGE_ID` (upload QR to Convex storage first). WA number
-  reuses `WHATSAPP_CHECKOUT_PHONE`. Until set, the billing page shows a graceful
-  "message us for details" fallback.
+  **Payment details are admin-editable in the UI** (not env) — see Phase 4.
+  Only the WA number stays env (`WHATSAPP_CHECKOUT_PHONE`).
+- **Phase 4 (in progress):** **`billingConfig`** singleton table + `convex/billing.ts`
+  (`paymentInstructions` reads the table + resolves the QR from Convex storage;
+  admin `getBillingConfig`/`updateBillingConfig`/`generateQrUploadUrl`; `amIAdmin`
+  for client hiding). **Admin route `/app/admin/billing`** (`src/routes/app.admin.billing.tsx`):
+  client-gated by `amIAdmin` (server `requireAdmin` is the real lock) — lists
+  pending invoices with a **confirm-then-mark-paid** flow (shows the founding-rank
+  result), plus an **edit-payment-details form** (bank fields + DuitNow + **QR
+  upload to Convex storage**, swap/remove). So the boss self-serves bank details +
+  QR with no CLI. Tests: `convex/billing.test.ts`. **Remaining Phase 4:** storefront
+  founding badge (`getRetailerBySlug` already exposes the flags), landing "X of 10"
+  counter (`foundingMembers.getSpotsRemaining` exists), Scale "Coming soon" pricing
+  card + signup guard, a conditional "Admin" nav link, and the deferred white-glove
+  dashboard CTA.
 - **Phase 4 (admin + public UI):** admin billing route (list + mark-paid),
   storefront founding badge, landing spots counter, Scale "Coming soon" card +
   signup guard.

@@ -624,6 +624,20 @@ export default defineSchema({
 		.index("by_retailer", ["retailerId"])
 		.index("by_status", ["status"]),
 
+	// Global Kedaipal payment details (retailers pay Kedaipal). A SINGLETON — one
+	// row, no retailerId. Admin-editable from /app/admin/billing so the boss can
+	// change bank details / swap the QR without a deploy. The QR image lives in
+	// Convex storage; this holds its id. See docs/manual-subscription.md.
+	billingConfig: defineTable({
+		bankName: v.optional(v.string()),
+		bankAccountName: v.optional(v.string()),
+		bankAccountNumber: v.optional(v.string()),
+		duitnowId: v.optional(v.string()),
+		qrImageStorageId: v.optional(v.string()),
+		updatedAt: v.number(),
+		updatedBy: v.optional(v.string()), // admin Clerk subject
+	}),
+
 	// Founding Member ledger — atomic rank claim (1..10). Source of truth for the
 	// denormalized retailer flags. A row exists iff a retailer claimed a rank.
 	foundingMembers: defineTable({

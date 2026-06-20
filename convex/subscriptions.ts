@@ -166,47 +166,6 @@ export const current = query({
 	},
 });
 
-/**
- * Kedaipal's OWN payment details for the billing page (retailers pay Kedaipal).
- * Global, not per-retailer — sourced from env (differs dev/prod, like the WA
- * number). Auth-gated (a signed-in retailer). QR image lives in Convex storage;
- * its id is in `KEDAIPAL_PAYMENT_QR_STORAGE_ID`. See docs/manual-subscription.md.
- */
-export const paymentInstructions = query({
-	args: {},
-	handler: async (
-		ctx,
-	): Promise<{
-		whatsappPhone?: string;
-		bankName?: string;
-		bankAccountName?: string;
-		bankAccountNumber?: string;
-		duitnowId?: string;
-		qrUrl?: string;
-	} | null> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) return null;
-		const env = (k: string) => {
-			const v = process.env[k];
-			return v && v.trim().length > 0 ? v.trim() : undefined;
-		};
-		let qrUrl: string | undefined;
-		const qrId = env("KEDAIPAL_PAYMENT_QR_STORAGE_ID");
-		if (qrId) {
-			const url = await ctx.storage.getUrl(qrId);
-			qrUrl = url ?? undefined;
-		}
-		return {
-			whatsappPhone: env("WHATSAPP_CHECKOUT_PHONE"),
-			bankName: env("KEDAIPAL_BANK_NAME"),
-			bankAccountName: env("KEDAIPAL_BANK_ACCOUNT_NAME"),
-			bankAccountNumber: env("KEDAIPAL_BANK_ACCOUNT_NUMBER"),
-			duitnowId: env("KEDAIPAL_DUITNOW_ID"),
-			qrUrl,
-		};
-	},
-});
-
 // Re-export so callers can map a plan → its canonical caps without importing the
 // pure module separately.
 export { PLAN_CAPS };
