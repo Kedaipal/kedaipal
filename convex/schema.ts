@@ -171,6 +171,12 @@ export default defineSchema({
 		// message" setup step as done (or skipped). Persisted so the step stays
 		// collapsed across sessions and the setup checklist can reach all-done.
 		onboardingGreetingSetup: v.optional(v.boolean()),
+		// Founding Member denormalized flags (fast storefront reads). Set once when
+		// the retailer's first Pro invoice is marked paid (rank ≤ 10); never revert,
+		// even on cancellation/refund. Source of truth is the `foundingMembers`
+		// ledger. See docs/manual-subscription.md.
+		isFoundingMember: v.optional(v.boolean()),
+		foundingMemberRank: v.optional(v.number()),
 		channel: v.literal("whatsapp"),
 		createdAt: v.number(),
 		updatedAt: v.number(),
@@ -555,4 +561,80 @@ export default defineSchema({
 		note: v.optional(v.string()),
 		createdAt: v.number(),
 	}).index("by_order", ["orderId"]),
+
+	// --- Manual subscription billing (docs/manual-subscription.md) -----------
+	// Per-retailer subscription. One row per retailer (created in-transaction by
+	// createRetailer). Entitlement caps are DENORMALIZED here so feature-gating
+	// reads them directly, never the `plan` field — keeps the seam clean for when
+	// automated billing arrives. `trialing` (plan = tier being trialed, default
+	// pro) → `active` (paid) / `past_due` (lapsed) / `cancelled`.
+	subscriptions: defineTable({
+		retailerId: v.id("retailers"),
+		plan: v.union(v.literal("starter"), v.literal("pro"), v.literal("scale")),
+		billingCycle: v.union(v.literal("monthly"), v.literal("annual")),
+		status: v.union(
+			v.literal("trialing"),
+			v.literal("active"),
+			v.literal("past_due"),
+			v.literal("cancelled"),
+		),
+		trialEndsAt: v.optional(v.number()),
+		currentPeriodStart: v.optional(v.number()),
+		currentPeriodEnd: v.optional(v.number()),
+		cancelledAt: v.optional(v.number()),
+		// Pilot / backfilled retailers: full access, never charged, ineligible for
+		// the Founding rank.
+		comped: v.optional(v.boolean()),
+		// Denormalized entitlements read by feature-gating. orderCap is SOFT in v1
+		// (nudge only, never blocks the public storefront); userCap + broadcastQuota
+		// are hard on seller-side surfaces.
+		orderCap: v.number(),
+		userCap: v.number(),
+		broadcastQuota: v.number(),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_retailer", ["retailerId"])
+		.index("by_status", ["status"]), // drives the cron status scans
+
+	// Per-period invoice. Admin marks it paid out-of-band (DuitNow / bank). The
+	// founding pending invoice carries a `dueDate` that drives the active→past_due
+	// overdue cron flip.
+	invoices: defineTable({
+		retailerId: v.id("retailers"),
+		subscriptionId: v.id("subscriptions"),
+		invoiceNumber: v.string(),
+		amount: v.number(), // base (minor units)
+		foundingDiscount: v.optional(v.number()), // 30% line if applicable
+		total: v.number(), // amount - foundingDiscount
+		currency: v.string(),
+		periodStart: v.number(),
+		periodEnd: v.number(),
+		dueDate: v.number(),
+		status: v.union(
+			v.literal("pending"),
+			v.literal("paid"),
+			v.literal("void"),
+		),
+		markedPaidAt: v.optional(v.number()),
+		markedPaidBy: v.optional(v.string()), // admin Clerk subject
+		paymentMethod: v.optional(v.string()), // "duitnow" / "bank_transfer" — freeform v1
+		createdAt: v.number(),
+	})
+		.index("by_retailer", ["retailerId"])
+		.index("by_status", ["status"]),
+
+	// Founding Member ledger — atomic rank claim (1..10). Source of truth for the
+	// denormalized retailer flags. A row exists iff a retailer claimed a rank.
+	foundingMembers: defineTable({
+		retailerId: v.id("retailers"),
+		rank: v.number(), // 1..10
+		plan: v.union(v.literal("pro"), v.literal("scale")), // tier at claim time
+		paidAt: v.number(),
+		firstInvoiceId: v.id("invoices"),
+		welcomedAt: v.optional(v.number()),
+		whiteGloveScheduledAt: v.optional(v.number()),
+	})
+		.index("by_rank", ["rank"])
+		.index("by_retailer", ["retailerId"]),
 });

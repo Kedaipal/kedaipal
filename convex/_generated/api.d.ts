@@ -14,6 +14,7 @@ import type * as email from "../email.js";
 import type * as google from "../google.js";
 import type * as http from "../http.js";
 import type * as lib_address from "../lib/address.js";
+import type * as lib_auth from "../lib/auth.js";
 import type * as lib_channels_registry from "../lib/channels/registry.js";
 import type * as lib_channels_types from "../lib/channels/types.js";
 import type * as lib_channels_whatsapp_adapter from "../lib/channels/whatsapp/adapter.js";
@@ -27,6 +28,7 @@ import type * as lib_order from "../lib/order.js";
 import type * as lib_orderBuckets from "../lib/orderBuckets.js";
 import type * as lib_orderStatus from "../lib/orderStatus.js";
 import type * as lib_payment from "../lib/payment.js";
+import type * as lib_plans from "../lib/plans.js";
 import type * as lib_rateLimiter from "../lib/rateLimiter.js";
 import type * as lib_slug from "../lib/slug.js";
 import type * as lib_variant from "../lib/variant.js";
@@ -36,10 +38,12 @@ import type * as lib_whatsappSignature from "../lib/whatsappSignature.js";
 import type * as lib_whatsappWebhook from "../lib/whatsappWebhook.js";
 import type * as migrations from "../migrations.js";
 import type * as orders from "../orders.js";
+import type * as payments_provider from "../payments/provider.js";
 import type * as pickupLocations from "../pickupLocations.js";
 import type * as products from "../products.js";
 import type * as retailers from "../retailers.js";
 import type * as seed from "../seed.js";
+import type * as subscriptions from "../subscriptions.js";
 import type * as whatsapp from "../whatsapp.js";
 
 import type {
@@ -55,6 +59,7 @@ declare const fullApi: ApiFromModules<{
   google: typeof google;
   http: typeof http;
   "lib/address": typeof lib_address;
+  "lib/auth": typeof lib_auth;
   "lib/channels/registry": typeof lib_channels_registry;
   "lib/channels/types": typeof lib_channels_types;
   "lib/channels/whatsapp/adapter": typeof lib_channels_whatsapp_adapter;
@@ -68,6 +73,7 @@ declare const fullApi: ApiFromModules<{
   "lib/orderBuckets": typeof lib_orderBuckets;
   "lib/orderStatus": typeof lib_orderStatus;
   "lib/payment": typeof lib_payment;
+  "lib/plans": typeof lib_plans;
   "lib/rateLimiter": typeof lib_rateLimiter;
   "lib/slug": typeof lib_slug;
   "lib/variant": typeof lib_variant;
@@ -77,10 +83,12 @@ declare const fullApi: ApiFromModules<{
   "lib/whatsappWebhook": typeof lib_whatsappWebhook;
   migrations: typeof migrations;
   orders: typeof orders;
+  "payments/provider": typeof payments_provider;
   pickupLocations: typeof pickupLocations;
   products: typeof products;
   retailers: typeof retailers;
   seed: typeof seed;
+  subscriptions: typeof subscriptions;
   whatsapp: typeof whatsapp;
 }>;
 
