@@ -5,7 +5,7 @@
 // sees the first). Once claimed, the denormalized retailer flags never revert.
 // See docs/manual-subscription.md.
 
-import { query } from "./_generated/server";
+import { mutation, query } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { FOUNDING_MEMBER_LIMIT, planQualifiesForFounding } from "./lib/plans";
@@ -64,5 +64,53 @@ export const getSpotsRemaining = query({
 	handler: async (ctx): Promise<number> => {
 		const claimed = await ctx.db.query("foundingMembers").collect();
 		return Math.max(0, FOUNDING_MEMBER_LIMIT - claimed.length);
+	},
+});
+
+/** The caller's own founding status — drives the one-time dashboard white-glove
+ * CTA. Null when the caller isn't a founding member. */
+export const myStatus = query({
+	args: {},
+	handler: async (
+		ctx,
+	): Promise<{ rank: number; whiteGloveScheduled: boolean } | null> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) return null;
+		const retailer = await ctx.db
+			.query("retailers")
+			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+			.first();
+		if (!retailer) return null;
+		const row = await ctx.db
+			.query("foundingMembers")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+			.first();
+		if (!row) return null;
+		return {
+			rank: row.rank,
+			whiteGloveScheduled: row.whiteGloveScheduledAt !== undefined,
+		};
+	},
+});
+
+/** The caller marks their white-glove call scheduled/dismissed — hides the
+ * one-time dashboard CTA. Self-service (the founding retailer themselves). */
+export const markWhiteGloveScheduled = mutation({
+	args: {},
+	handler: async (ctx): Promise<void> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Not authenticated");
+		const retailer = await ctx.db
+			.query("retailers")
+			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+			.first();
+		if (!retailer) return;
+		const row = await ctx.db
+			.query("foundingMembers")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+			.first();
+		if (row && row.whiteGloveScheduledAt === undefined) {
+			await ctx.db.patch(row._id, { whiteGloveScheduledAt: Date.now() });
+		}
 	},
 });

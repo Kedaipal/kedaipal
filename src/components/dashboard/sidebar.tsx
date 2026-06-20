@@ -8,6 +8,7 @@ import {
 	type LucideIcon,
 	Package,
 	Settings,
+	ShieldCheck,
 	ShoppingBag,
 	Users,
 } from "lucide-react";
@@ -24,9 +25,10 @@ type Retailer = NonNullable<
 interface SidebarProps {
 	retailer: Retailer;
 	actionableCount: number;
+	isAdmin?: boolean;
 }
 
-export function Sidebar({ retailer, actionableCount }: SidebarProps) {
+export function Sidebar({ retailer, actionableCount, isAdmin }: SidebarProps) {
 	const [collapsed, setCollapsed] = useSidebarCollapsed();
 	const { user } = useUser();
 	const userEmail = user?.primaryEmailAddress?.emailAddress ?? null;
@@ -107,6 +109,16 @@ export function Sidebar({ retailer, actionableCount }: SidebarProps) {
 					label="Settings"
 					collapsed={collapsed}
 				/>
+				{/* Admin-only — server `requireAdmin` is the real gate; this link is
+				    just convenience so admins don't type the URL. */}
+				{isAdmin ? (
+					<SidebarLink
+						to="/app/admin/billing"
+						icon={ShieldCheck}
+						label="Admin"
+						collapsed={collapsed}
+					/>
+				) : null}
 			</nav>
 
 			<div className="flex flex-col gap-1 border-t border-border p-2">

@@ -6,8 +6,9 @@ out-of-band (DuitNow / bank), the admin flips "paid", and entitlement + Founding
 rank-claim happen atomically. Built behind a typed `PaymentProvider` seam so the
 future automated-billing integration touches only the adapter.
 
-**Status:** Phases 1 + 2 shipped (full backend: subscriptions, markPaid, founding
-rank, backfill, crons, gating). UI phases 3–4 below.
+**Status:** All phases shipped (1–4). Backend + seller UI + admin UI + public
+surfaces. Remaining for prod: run the backfill, set up payment details in the admin
+UI. The signup-side Scale guard is N/A in v1 (no user plan-selection input — see below).
 
 ## Core model
 
@@ -130,6 +131,18 @@ open to comped full access, so they keep working between steps regardless.
   counter (`foundingMembers.getSpotsRemaining` exists), Scale "Coming soon" pricing
   card + signup guard, a conditional "Admin" nav link, and the deferred white-glove
   dashboard CTA.
+  **Phase 4 completed:** conditional **Admin nav link** (sidebar, gated on `amIAdmin`).
+  **Storefront founding badge** (`founding-member-badge.tsx` on `/<slug>` header,
+  reads the public denormalized flag). **Live landing counter** — `FoundingTen` now
+  reads `getSpotsRemaining` (defaults to all-open while loading; never shows a fake
+  "taken"). **Scale "Coming soon"** — pricing-teaser Scale card shows a disabled
+  "Coming soon" pill instead of a CTA + dimmed. **White-glove CTA** — one-time
+  dashboard card (`white-glove-card.tsx`) for a new Founding Member, `wa.me` to Arif,
+  dismiss via `foundingMembers.markWhiteGloveScheduled` (+ `myStatus` query).
+  **Scale signup guard:** intentionally not added — `createRetailer` takes no `plan`
+  arg (trial/founding are always Pro), so there is no user-facing scale input to
+  reject in v1. The guard belongs to a future plan-selection mutation;
+  `isPlanSelectable`/`planQualifiesForFounding` (in `lib/plans.ts`) are ready for it.
 - **Phase 4 (admin + public UI):** admin billing route (list + mark-paid),
   storefront founding badge, landing spots counter, Scale "Coming soon" card +
   signup guard.

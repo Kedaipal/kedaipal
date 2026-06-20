@@ -36,6 +36,7 @@ function AppShell() {
 		retailer ? { retailerId: retailer._id } : "skip",
 	);
 	const actionableCount = (counts?.pending ?? 0) + (counts?.confirmed ?? 0);
+	const isAdmin = useQuery(api.billing.amIAdmin) ?? false;
 	useOrderToastNotifications(counts);
 
 	useEffect(() => {
@@ -66,7 +67,11 @@ function AppShell() {
 
 	return (
 		<div className="flex min-h-dvh">
-			<Sidebar retailer={retailer} actionableCount={actionableCount} />
+			<Sidebar
+				retailer={retailer}
+				actionableCount={actionableCount}
+				isAdmin={isAdmin}
+			/>
 			<div className="mx-auto flex w-full max-w-md flex-1 flex-col lg:mx-0 lg:max-w-none">
 				<MobileHeader retailer={retailer} />
 				<ConsentBanner
