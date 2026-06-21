@@ -1,4 +1,8 @@
-import { RedirectToSignIn, Show } from "@clerk/tanstack-react-start";
+import {
+	RedirectToSignIn,
+	RedirectToSignUp,
+	Show,
+} from "@clerk/tanstack-react-start";
 import {
 	createFileRoute,
 	Link,
@@ -14,45 +18,50 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage } from "../lib/format";
+import {
+	decodeOnboardingPrefill,
+	type OnboardingPrefill,
+} from "../lib/onboarding-link";
 import { slugify } from "../lib/slug";
 
 /**
- * Optional prefill, carried in the URL. Set when Kedaipal staff generate an
- * "onboard a client" link from the admin billing page (`via=admin`) — the store
- * name / slug / WhatsApp number are seeded so the client just reviews + confirms.
- * The store is still created under the **client's own** Clerk login (they sign in
- * first), so ownership is never ambiguous. See docs/manual-subscription.md.
+ * Optional prefill, carried as a single URL-safe token (`?p=…`). Set when Kedaipal
+ * staff generate an "onboard a client" link from the admin billing page — the
+ * store name / slug / WhatsApp number are seeded so the client just reviews +
+ * confirms. The store is still created under the **client's own** Clerk login (they
+ * sign up first), so ownership is never ambiguous. A single token (vs separate
+ * query params) survives the Clerk auth redirect intact. See onboarding-link.ts.
  */
 type OnboardingSearch = {
-	store?: string;
-	slug?: string;
-	wa?: string;
-	via?: string;
+	prefill?: OnboardingPrefill;
 };
 
 export const Route = createFileRoute("/onboarding")({
 	validateSearch: (search: Record<string, unknown>): OnboardingSearch => {
-		const str = (v: unknown) =>
-			typeof v === "string" && v.trim().length > 0 ? v : undefined;
-		return {
-			store: str(search.store),
-			slug: str(search.slug),
-			wa: str(search.wa),
-			via: str(search.via),
-		};
+		const token = typeof search.p === "string" ? search.p : undefined;
+		return { prefill: decodeOnboardingPrefill(token) };
 	},
 	component: OnboardingRoute,
 });
 
 function OnboardingRoute() {
-	// Preserve the prefill query string across the sign-in round-trip — otherwise
-	// Clerk would bounce the client back to a bare /onboarding and drop the prefill.
+	// Preserve the prefill token across the auth round-trip — otherwise Clerk would
+	// bounce the client back to a bare /onboarding and drop the prefill.
 	const location = useLocation();
+	const search = Route.useSearch();
+	// An admin-invited client (has a prefill token) is brand-new — send them to
+	// SIGN-UP, not sign-in (sign-in would dead-end with "couldn't find account").
+	// Everyone else reaching /onboarding signed-out already has an account → sign-in.
+	const fallback = search.prefill ? (
+		<RedirectToSignUp
+			signUpForceRedirectUrl={location.href}
+			signUpFallbackRedirectUrl={location.href}
+		/>
+	) : (
+		<RedirectToSignIn signInForceRedirectUrl={location.href} />
+	);
 	return (
-		<Show
-			when="signed-in"
-			fallback={<RedirectToSignIn signInForceRedirectUrl={location.href} />}
-		>
+		<Show when="signed-in" fallback={fallback}>
 			<OnboardingForm />
 		</Show>
 	);
@@ -66,13 +75,14 @@ function OnboardingForm() {
 
 	// Assisted = an admin-generated prefill link. Seed the fields, surface the WA
 	// number for review, and tell the client what's going on.
-	const assisted = search.via === "admin";
+	const prefill = search.prefill;
+	const assisted = Boolean(prefill);
 
-	const [storeName, setStoreName] = useState(search.store ?? "");
-	const [slug, setSlug] = useState(search.slug ?? "");
+	const [storeName, setStoreName] = useState(prefill?.store ?? "");
+	const [slug, setSlug] = useState(prefill?.slug ?? "");
 	// If a slug came in the link, treat it as hand-set so it's not re-derived.
-	const [slugEdited, setSlugEdited] = useState(Boolean(search.slug));
-	const [waPhone, setWaPhone] = useState(search.wa ?? "");
+	const [slugEdited, setSlugEdited] = useState(Boolean(prefill?.slug));
+	const [waPhone, setWaPhone] = useState(prefill?.wa ?? "");
 	const [submitting, setSubmitting] = useState(false);
 	const [agreed, setAgreed] = useState(false);
 

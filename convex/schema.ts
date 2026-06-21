@@ -182,7 +182,11 @@ export default defineSchema({
 		updatedAt: v.number(),
 	})
 		.index("by_user", ["userId"])
-		.index("by_slug", ["slug"]),
+		.index("by_slug", ["slug"])
+		// Admin "onboard a client" pre-check: is a store already registered to this
+		// email? notifyEmail is stored normalized (trim + lowercase via
+		// assertValidEmail), so an equality lookup is exact. See docs/vendor-identity.md.
+		.index("by_notify_email", ["notifyEmail"]),
 
 	slugHistory: defineTable({
 		oldSlug: v.string(),

@@ -181,6 +181,7 @@ import {
 	DEFAULT_CURRENCY,
 	type SupportedCurrency,
 } from "./lib/currency";
+import { requireAdmin } from "./lib/auth";
 import {
 	assertValidEmail,
 	assertValidSlug,
@@ -549,6 +550,40 @@ export const checkSlugAvailability = query({
 		}
 
 		return { status: "available" };
+	},
+});
+
+/**
+ * Admin pre-check for "onboard a client": is a store already registered to this
+ * email? We're strictly 1 login : 1 store and Clerk enforces one account per
+ * email, so a duplicate email means the invite link would dead-end (the client
+ * would land back in their existing store). Surfacing it up front saves a wasted
+ * invite. We check our own `notifyEmail` (the right question — "already owns a
+ * store" — not merely "exists in Clerk"); it's stored normalized so equality is
+ * exact. notifyEmail is editable, so this is a strong heuristic, not a hard
+ * guarantee — the real 1:1 gate still lives in `createRetailer`. Admin-only to
+ * avoid leaking whether an email is registered. See docs/vendor-identity.md.
+ */
+export const checkEmailHasStore = query({
+	args: { email: v.string() },
+	handler: async (
+		ctx,
+		{ email },
+	): Promise<{ exists: boolean; storeName?: string; slug?: string }> => {
+		await requireAdmin(ctx);
+		let normalized: string;
+		try {
+			normalized = assertValidEmail(email);
+		} catch {
+			// Not a valid email yet (still typing) — nothing to warn about.
+			return { exists: false };
+		}
+		const existing = await ctx.db
+			.query("retailers")
+			.withIndex("by_notify_email", (q) => q.eq("notifyEmail", normalized))
+			.first();
+		if (!existing) return { exists: false };
+		return { exists: true, storeName: existing.storeName, slug: existing.slug };
 	},
 });
 

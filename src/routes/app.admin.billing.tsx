@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import { Check, Copy, ImagePlus, ShieldX, UserPlus } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
@@ -130,8 +130,25 @@ function OnboardClientCard() {
 	const derivedSlug = slugEdited ? slug : slugify(storeName);
 	const availability = useSlugAvailability(derivedSlug);
 
+	// Live email pre-check (debounced) — Clerk allows one account per email and
+	// we're 1 store per login, so a duplicate email means the invite would dead-end.
+	// Warn before the link is sent. Only query once it looks like an email.
+	const [debouncedEmail, setDebouncedEmail] = useState("");
+	useEffect(() => {
+		const t = setTimeout(() => setDebouncedEmail(email.trim()), 350);
+		return () => clearTimeout(t);
+	}, [email]);
+	const emailLooksValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(debouncedEmail);
+	const emailCheck = useQuery(
+		api.retailers.checkEmailHasStore,
+		emailLooksValid ? { email: debouncedEmail } : "skip",
+	);
+	const emailTaken = emailCheck?.exists === true;
+
 	const ready =
-		storeName.trim().length >= 2 && availability.status === "available";
+		storeName.trim().length >= 2 &&
+		availability.status === "available" &&
+		!emailTaken;
 
 	const link =
 		typeof window === "undefined"
@@ -149,8 +166,8 @@ function OnboardClientCard() {
 			setCopied(true);
 			toast.success(
 				email.trim()
-					? `Link copied — send it to ${email.trim()}.`
-					: "Link copied — send it to your client.",
+					? `Invite link copied. Paste it to ${email.trim()} yourself (WhatsApp/email) — Kedaipal doesn't send it.`
+					: "Invite link copied. Paste it to your client yourself — Kedaipal doesn't send it.",
 			);
 			setTimeout(() => setCopied(false), 2000);
 		} catch {
@@ -231,6 +248,12 @@ function OnboardClientCard() {
 						placeholder="client@email.com"
 						variant="field"
 					/>
+					{emailTaken ? (
+						<span className="text-xs text-destructive">
+							⚠ A store ({emailCheck?.storeName}) already uses this email. They
+							can't create a second one — it's one store per login.
+						</span>
+					) : null}
 				</label>
 			</div>
 

@@ -44,19 +44,26 @@ card that produces a **prefilled onboarding link**:
 1. Admin fills store name (slug auto-derives, with **live availability** so a taken
    slug never ships in a link), optional WhatsApp number, optional client email
    (just the "send it to" contact — not encoded).
-2. Admin copies the link (`<origin>/onboarding?store=…&slug=…&wa=…&via=admin`,
-   built by `src/lib/onboarding-link.ts`) and sends it via WhatsApp/email.
-3. The client opens it → signs in **once** (Clerk; the prefill survives the
-   sign-in round-trip because `onboarding.tsx` sets `signInForceRedirectUrl` to the
-   full current URL) → onboarding shows an "**Kedaipal set this up for you**" banner
-   with the fields prefilled (incl. a WhatsApp field, only shown in `via=admin`
-   mode) → taps **Create store**. The store is created under **their** account.
+2. Admin copies the link (`<origin>/onboarding?p=<token>` — the store/slug/WhatsApp
+   prefill is packed into one URL-safe base64url token by `src/lib/onboarding-link.ts`,
+   so it survives the Clerk auth redirect intact; separate query params get mangled)
+   and sends it via WhatsApp/email.
+3. The client opens it → **signs up** for a new account. Because `via=admin`,
+   `onboarding.tsx` routes signed-out invitees to sign-**up**, not sign-in — a new
+   client has no account to sign into yet (routing them to sign-in dead-ends with
+   "couldn't find account"). The prefill survives account creation because the
+   invite URL is handed to Clerk as the post-signup redirect, and the `/sign-up`
+   route uses `fallbackRedirectUrl` (not a hard `forceRedirectUrl`) so that redirect
+   wins → onboarding shows an "**Kedaipal set this up for you**" banner with the
+   fields prefilled (incl. a WhatsApp field, only shown in `via=admin` mode) → taps
+   **Create store**. The store is created under **their** account.
 4. The store now appears in the Issue-invoice picker → admin issues their invoice
    (Founding toggle for the first 10 Pro members).
 
 **Why a link, not direct creation:** ownership stays correct with zero new failure
 modes (no orphaned stores, no claim/email-matching edge cases). The client's only
-step is a one-tap sign-in. `via=admin` / `founding` is **not** a privileged URL arg
+step is creating their own account. `via=admin` / `founding` is **not** a privileged
+URL arg
 — the store is created on the normal trial path; the Founding **rank** still only
 claims via admin mark-paid, so a hand-crafted link grants nothing.
 
