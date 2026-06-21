@@ -186,6 +186,11 @@ export const issueInvoice = mutation({
 			status: "pending",
 			createdAt: now,
 		});
+		// Ping the seller out-of-app — they won't always be in the dashboard.
+		// Fire-and-forget so a mail issue never fails the issue mutation.
+		await ctx.scheduler.runAfter(0, internal.billingEmail.notifyInvoiceIssued, {
+			invoiceId,
+		});
 		return { invoiceId };
 	},
 });
@@ -277,6 +282,36 @@ export const listPending = query({
 			});
 		}
 		return rows;
+	},
+});
+
+/** The caller's soonest-due **pending** invoice (or null). Powers the dashboard
+ * "invoice due soon" warning banner — kept tiny so it's cheap to poll alongside
+ * the shell. */
+export const myNextDueInvoice = query({
+	args: {},
+	handler: async (
+		ctx,
+	): Promise<{ dueDate: number; total: number; currency: string } | null> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) return null;
+		const retailer = await ctx.db
+			.query("retailers")
+			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+			.first();
+		if (!retailer) return null;
+		const pending = await ctx.db
+			.query("invoices")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+			.filter((q) => q.eq(q.field("status"), "pending"))
+			.collect();
+		if (pending.length === 0) return null;
+		const soonest = pending.reduce((a, b) => (b.dueDate < a.dueDate ? b : a));
+		return {
+			dueDate: soonest.dueDate,
+			total: soonest.total,
+			currency: soonest.currency,
+		};
 	},
 });
 

@@ -45,7 +45,7 @@ type RenderedEmail = {
 	text: string;
 };
 
-function escapeHtml(s: string): string {
+export function escapeHtml(s: string): string {
 	return s
 		.replaceAll("&", "&amp;")
 		.replaceAll("<", "&lt;")
@@ -54,7 +54,7 @@ function escapeHtml(s: string): string {
 		.replaceAll("'", "&#39;");
 }
 
-function wrapHtml(headlineEmoji: string, headline: string, lines: string[], dashboardUrl: string, ctaLabel: string): string {
+export function wrapHtml(headlineEmoji: string, headline: string, lines: string[], dashboardUrl: string, ctaLabel: string): string {
 	const body = lines.map((l) => `<p style="margin:0 0 8px 0;font-size:14px;color:#1f2937;">${l}</p>`).join("");
 	return `<!doctype html><html><body style="margin:0;padding:0;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f9fafb;padding:24px 16px;">

@@ -476,6 +476,49 @@ describe("daily billing cron", () => {
 
 		expect((await getSubFor(t, foundingId))?.status).toBe("past_due");
 	});
+
+	test("emails a pre-due-date reminder once, only inside the 3-day window", async () => {
+		const t = setup();
+		const { retailerId, invoiceId } = await seedFounding(t, "u_rem", "rem-store");
+		// Due in 2 days → inside the reminder window.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(invoiceId, {
+				dueDate: Date.now() + 2 * 24 * 60 * 60 * 1000,
+			});
+		});
+
+		const first = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(first.remindersSent).toBe(1);
+		expect((await getInvoice(t, invoiceId))?.reminderSentAt).toBeTypeOf("number");
+
+		// Second daily run does not re-send (reminderSentAt is stamped).
+		const second = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(second.remindersSent).toBe(0);
+		// Keep the unused retailerId referenced for clarity of intent.
+		expect(retailerId).toBeDefined();
+	});
+
+	test("does not remind an invoice still far from its due date", async () => {
+		const t = setup();
+		const { invoiceId } = await seedFounding(t, "u_far", "far-store");
+		await t.run(async (ctx) => {
+			await ctx.db.patch(invoiceId, {
+				dueDate: Date.now() + 10 * 24 * 60 * 60 * 1000, // 10 days out
+			});
+		});
+		const res = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(res.remindersSent).toBe(0);
+		expect((await getInvoice(t, invoiceId))?.reminderSentAt).toBeUndefined();
+	});
 });
 
 describe("soft-lock gating", () => {

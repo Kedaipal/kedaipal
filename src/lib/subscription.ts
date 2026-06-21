@@ -17,13 +17,56 @@ const PLAN_LABEL: Record<SubscriptionView["plan"], string> = {
 	scale: "Scale",
 };
 
+/** Whole days until a future timestamp (rounded up, never negative). */
+export function daysUntil(ts: number | undefined, now: number): number {
+	if (ts === undefined) return 0;
+	return Math.max(0, Math.ceil((ts - now) / DAY_MS));
+}
+
 /** Whole days left in trial (rounded up, never negative). */
 export function trialDaysLeft(
 	trialEndsAt: number | undefined,
 	now: number,
 ): number {
-	if (trialEndsAt === undefined) return 0;
-	return Math.max(0, Math.ceil((trialEndsAt - now) / DAY_MS));
+	return daysUntil(trialEndsAt, now);
+}
+
+export const PAYMENT_WARN_DAYS = 5;
+
+/**
+ * What the dashboard subscription banner should show. Pure so it's unit-tested.
+ * Precedence: a real `past_due` lock → a soon-due **pending invoice** (the most
+ * concrete "pay me" — applies whether trialing or active) → a trial ending soon.
+ * Comped/paid-with-nothing-due → nothing. `pendingDueAt` is the soonest pending
+ * invoice's due date (undefined when none).
+ */
+export type BannerState =
+	| { kind: "none" }
+	| { kind: "pastDue" }
+	| { kind: "invoiceWarn"; daysLeft: number }
+	| { kind: "trialWarn"; daysLeft: number; ended: boolean };
+
+export function resolveBannerState(
+	sub: SubscriptionView | undefined,
+	pendingDueAt: number | undefined,
+	now: number,
+	warnDays = PAYMENT_WARN_DAYS,
+): BannerState {
+	if (!sub || sub.comped) return { kind: "none" };
+	if (sub.status === "past_due") return { kind: "pastDue" };
+
+	if (pendingDueAt !== undefined) {
+		const daysLeft = daysUntil(pendingDueAt, now);
+		if (daysLeft <= warnDays) return { kind: "invoiceWarn", daysLeft };
+	}
+
+	if (sub.status === "trialing") {
+		const daysLeft = trialDaysLeft(sub.trialEndsAt, now);
+		if (daysLeft <= warnDays)
+			return { kind: "trialWarn", daysLeft, ended: daysLeft <= 0 };
+	}
+
+	return { kind: "none" };
 }
 
 export type TierTone = "neutral" | "trial" | "warn";

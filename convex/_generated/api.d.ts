@@ -9,6 +9,7 @@
  */
 
 import type * as billing from "../billing.js";
+import type * as billingEmail from "../billingEmail.js";
 import type * as crons from "../crons.js";
 import type * as customers from "../customers.js";
 import type * as email from "../email.js";
@@ -18,6 +19,7 @@ import type * as http from "../http.js";
 import type * as invoices from "../invoices.js";
 import type * as lib_address from "../lib/address.js";
 import type * as lib_auth from "../lib/auth.js";
+import type * as lib_billingEmailCopy from "../lib/billingEmailCopy.js";
 import type * as lib_channels_registry from "../lib/channels/registry.js";
 import type * as lib_channels_types from "../lib/channels/types.js";
 import type * as lib_channels_whatsapp_adapter from "../lib/channels/whatsapp/adapter.js";
@@ -57,6 +59,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   billing: typeof billing;
+  billingEmail: typeof billingEmail;
   crons: typeof crons;
   customers: typeof customers;
   email: typeof email;
@@ -66,6 +69,7 @@ declare const fullApi: ApiFromModules<{
   invoices: typeof invoices;
   "lib/address": typeof lib_address;
   "lib/auth": typeof lib_auth;
+  "lib/billingEmailCopy": typeof lib_billingEmailCopy;
   "lib/channels/registry": typeof lib_channels_registry;
   "lib/channels/types": typeof lib_channels_types;
   "lib/channels/whatsapp/adapter": typeof lib_channels_whatsapp_adapter;

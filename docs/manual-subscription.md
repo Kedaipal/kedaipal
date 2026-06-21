@@ -29,6 +29,24 @@ spots remain claims a rank; Starter never does; rank 11+ gets none. Operationall
 **toggle founding ON for the first 10 Pro invoices** so those members also get the
 discount they're promised.
 
+### Invoice email notifications
+
+Sellers won't always be in the dashboard, so an invoice doesn't sit silent:
+
+- **Issue-time** — `issueInvoice` schedules `billingEmail.notifyInvoiceIssued`: a
+  "new invoice" email with the amount (+ founding-discount line), due date, and
+  **how to pay** (bank/DuitNow from `billingConfig` + a link to the billing page).
+- **Reminder** — the daily cron emails `billingEmail.notifyInvoiceReminder` **once**
+  per pending invoice in the window `[due − 3 days, due)`; `invoices.reminderSentAt`
+  makes it idempotent across runs. Overdue invoices are left to the soft-lock +
+  in-app banner, not another email.
+
+Both are **fire-and-forget** (errors swallowed + logged, never fail the
+mutation/cron) and **localized** (en/ms). Copy lives in `convex/lib/billingEmailCopy.ts`
+(separate from the order-event emails — different domain), sent via the existing
+Resend client (`RESEND_API_KEY` / `EMAIL_FROM`). A WhatsApp ping is the planned
+follow-up once a Meta template + the central send gateway land (Sprint 4).
+
 Admin UI is **tabbed** (`app.admin.billing.tsx`): **Invoices** (onboard-a-client +
 issue form + pending list + mark-paid, the frequent task) and **Payment details**
 (set-once bank/QR). Tests: `convex/invoices.test.ts` (issueInvoice
@@ -176,7 +194,10 @@ backfill no longer mints comped subscriptions.
 - **Phase 3 (mostly done):** `subscriptions.paymentInstructions` query (env-sourced
   bank/DuitNow text + Convex-storage QR + WA number), tier pill
   (`tier-pill.tsx` in sidebar + mobile-header), `SubscriptionBanner` (app shell —
-  trial countdown in last 5 days / past-due CTA with `wa.me`), Billing settings tab
+  escalating: amber **invoice-due-soon** (any pending invoice ≤5 days out, via
+  `invoices.myNextDueInvoice`) + amber **trial-ending** (≤5 days) warnings, both
+  **dismissable** for the session; red non-dismissable **past_due** CTA with
+  `wa.me`. Pure decision in `resolveBannerState`), Billing settings tab
   (`billing-tab.tsx` — plan/status, pending invoice + how-to-pay, founding ribbon,
   history). Pure helpers + tests in `src/lib/subscription.ts`. **Remaining (light):**
   the dashboard's one-time "Schedule your white-glove call" CTA on rank assignment

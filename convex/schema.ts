@@ -623,6 +623,9 @@ export default defineSchema({
 		markedPaidAt: v.optional(v.number()),
 		markedPaidBy: v.optional(v.string()), // admin Clerk subject
 		paymentMethod: v.optional(v.string()), // "duitnow" / "bank_transfer" — freeform v1
+		// Stamped when the pre-due-date reminder email is sent, so the daily cron
+		// sends it at most once. See convex/billingEmail.ts.
+		reminderSentAt: v.optional(v.number()),
 		createdAt: v.number(),
 	})
 		.index("by_retailer", ["retailerId"])

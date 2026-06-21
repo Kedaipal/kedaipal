@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+	resolveBannerState,
 	type SubscriptionView,
 	shouldNudgePayment,
 	tierPill,
@@ -67,5 +68,58 @@ describe("shouldNudgePayment", () => {
 			),
 		).toBe(false);
 		expect(shouldNudgePayment(sub({ status: "active" }), NOW)).toBe(false);
+	});
+});
+
+describe("resolveBannerState", () => {
+	test("no banner for comped, missing, or healthy active with nothing due", () => {
+		expect(resolveBannerState(undefined, undefined, NOW).kind).toBe("none");
+		expect(resolveBannerState(sub({ comped: true }), NOW + DAY, NOW).kind).toBe(
+			"none",
+		);
+		expect(
+			resolveBannerState(sub({ status: "active" }), undefined, NOW).kind,
+		).toBe("none");
+	});
+
+	test("past_due wins over everything", () => {
+		expect(
+			resolveBannerState(sub({ status: "past_due" }), NOW + DAY, NOW).kind,
+		).toBe("pastDue");
+	});
+
+	test("active with a pending invoice due within 5 days → invoiceWarn", () => {
+		expect(
+			resolveBannerState(sub({ status: "active" }), NOW + 3 * DAY, NOW),
+		).toEqual({ kind: "invoiceWarn", daysLeft: 3 });
+		// Still >5 days out → no banner.
+		expect(
+			resolveBannerState(sub({ status: "active" }), NOW + 8 * DAY, NOW).kind,
+		).toBe("none");
+	});
+
+	test("pending invoice takes precedence over the trial countdown", () => {
+		const s = sub({ status: "trialing", trialEndsAt: NOW + 4 * DAY });
+		expect(resolveBannerState(s, NOW + 2 * DAY, NOW)).toEqual({
+			kind: "invoiceWarn",
+			daysLeft: 2,
+		});
+	});
+
+	test("trialing within 5 days (no invoice) → trialWarn; ended flag at/below 0", () => {
+		expect(
+			resolveBannerState(
+				sub({ status: "trialing", trialEndsAt: NOW + 2 * DAY }),
+				undefined,
+				NOW,
+			),
+		).toEqual({ kind: "trialWarn", daysLeft: 2, ended: false });
+		expect(
+			resolveBannerState(
+				sub({ status: "trialing", trialEndsAt: NOW - DAY }),
+				undefined,
+				NOW,
+			),
+		).toEqual({ kind: "trialWarn", daysLeft: 0, ended: true });
 	});
 });

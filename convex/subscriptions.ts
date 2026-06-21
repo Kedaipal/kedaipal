@@ -14,6 +14,7 @@
 // See docs/manual-subscription.md.
 
 import { ConvexError } from "convex/values";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
 	internalMutation,
@@ -251,18 +252,27 @@ export const internalBackfillSubscriptions = internalMutation({
  *  - `active → past_due` when the retailer has a still-pending invoice past its
  *    `dueDate` (founding ghost / unpaid renewal). Comped subs are never flipped.
  * Also logs `active` subs nearing `currentPeriodEnd` so Arif chases the manual
- * renewal. Runs once daily — a retailer keeps access up to ~24h past the boundary
+ * renewal, and emails a one-time pre-due-date reminder for pending invoices.
+ * Runs once daily — a retailer keeps access up to ~24h past the boundary
  * (acceptable grace). See docs/manual-subscription.md.
  */
+const REMINDER_DAYS_BEFORE = 3;
+
 export const internalDailyBillingStatus = internalMutation({
 	args: {},
 	handler: async (
 		ctx,
-	): Promise<{ trialExpired: number; overdue: number; renewalsDue: number }> => {
+	): Promise<{
+		trialExpired: number;
+		overdue: number;
+		renewalsDue: number;
+		remindersSent: number;
+	}> => {
 		const now = Date.now();
 		let trialExpired = 0;
 		let overdue = 0;
 		let renewalsDue = 0;
+		let remindersSent = 0;
 
 		// Trial expiry.
 		const trialing = await ctx.db
@@ -308,6 +318,28 @@ export const internalDailyBillingStatus = internalMutation({
 			}
 		}
 
-		return { trialExpired, overdue, renewalsDue };
+		// Pre-due-date reminder email — once per pending invoice, in the window
+		// [due − 3 days, due). Stamping `reminderSentAt` keeps it idempotent across
+		// daily runs. Overdue invoices are handled by the soft-lock + banner above,
+		// not another email.
+		const reminderFrom = now;
+		const reminderTo = now + REMINDER_DAYS_BEFORE * DAY_MS;
+		const pending = await ctx.db
+			.query("invoices")
+			.withIndex("by_status", (q) => q.eq("status", "pending"))
+			.collect();
+		for (const inv of pending) {
+			if (inv.reminderSentAt !== undefined) continue;
+			if (inv.dueDate <= reminderFrom || inv.dueDate > reminderTo) continue;
+			await ctx.db.patch(inv._id, { reminderSentAt: now });
+			await ctx.scheduler.runAfter(
+				0,
+				internal.billingEmail.notifyInvoiceReminder,
+				{ invoiceId: inv._id },
+			);
+			remindersSent++;
+		}
+
+		return { trialExpired, overdue, renewalsDue, remindersSent };
 	},
 });
