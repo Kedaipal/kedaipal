@@ -21,7 +21,9 @@ import {
 	query,
 	type QueryCtx,
 } from "./_generated/server";
-import { capsForPlan, type Plan, PLAN_CAPS } from "./lib/plans";
+import { capsForPlan, type Plan, PLAN_CAPS, TRIAL_DAYS } from "./lib/plans";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 type AnyCtx = QueryCtx | MutationCtx;
 
@@ -175,23 +177,53 @@ export { PLAN_CAPS };
 // ---------------------------------------------------------------------------
 
 /**
- * ONE-TIME backfill: every retailer that predates billing gets an `active +
- * comped` Pro-caps subscription, so current pilots are never charged, never
- * rank-claim, and never locked. Idempotent — skips retailers that already have a
- * subscription. Run between schema deploy and gating enable (see
+ * ONE-TIME backfill: every retailer that predates billing is dropped into the
+ * normal lifecycle on a fresh **14-day Pro trial** (`trialing`, non-comped, Pro
+ * caps). They're NOT free forever — the trial countdown banner shows, and the
+ * daily cron soft-locks them to `past_due` when it lapses, exactly like a new
+ * signup. Grandfathered shops therefore get a fair 14-day runway from the moment
+ * billing goes live, then must convert.
+ *
+ * Convergent + idempotent:
+ *  - no subscription → create a trialing one (`created`).
+ *  - a leftover `comped` row from an earlier backfill run → convert it to the
+ *    same 14-day trial (`converted`). At v1 `comped` is only ever produced by an
+ *    earlier backfill, so this safely heals a re-run without touching real subs.
+ *  - any other (real) subscription → leave untouched (`skipped`).
+ *
+ * Run once between the schema deploy and gating enable (see
  * docs/manual-subscription.md rollout sequence). Returns counts.
  */
 export const internalBackfillSubscriptions = internalMutation({
 	args: {},
-	handler: async (ctx): Promise<{ created: number; skipped: number }> => {
+	handler: async (
+		ctx,
+	): Promise<{ created: number; converted: number; skipped: number }> => {
 		const retailers = await ctx.db.query("retailers").collect();
 		const caps = capsForPlan("pro");
 		const now = Date.now();
+		const trialEndsAt = now + TRIAL_DAYS * DAY_MS;
 		let created = 0;
+		let converted = 0;
 		let skipped = 0;
 		for (const r of retailers) {
 			const existing = await loadSubscription(ctx, r._id);
 			if (existing) {
+				// Heal a stale comped row from a previous backfill into the trial.
+				if (existing.comped === true) {
+					await ctx.db.patch(existing._id, {
+						plan: "pro",
+						status: "trialing",
+						trialEndsAt,
+						comped: false,
+						orderCap: caps.orderCap,
+						userCap: caps.userCap,
+						broadcastQuota: caps.broadcastQuota,
+						updatedAt: now,
+					});
+					converted++;
+					continue;
+				}
 				skipped++;
 				continue;
 			}
@@ -199,8 +231,8 @@ export const internalBackfillSubscriptions = internalMutation({
 				retailerId: r._id,
 				plan: "pro",
 				billingCycle: "monthly",
-				status: "active",
-				comped: true,
+				status: "trialing",
+				trialEndsAt,
 				orderCap: caps.orderCap,
 				userCap: caps.userCap,
 				broadcastQuota: caps.broadcastQuota,
@@ -209,7 +241,7 @@ export const internalBackfillSubscriptions = internalMutation({
 			});
 			created++;
 		}
-		return { created, skipped };
+		return { created, converted, skipped };
 	},
 });
 

@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
-import { ImagePlus, ShieldX } from "lucide-react";
+import { Check, Copy, ImagePlus, ShieldX, UserPlus } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
@@ -18,7 +18,10 @@ import {
 } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
+import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage, formatPrice } from "../lib/format";
+import { buildOnboardingInviteLink } from "../lib/onboarding-link";
+import { slugify } from "../lib/slug";
 
 export const Route = createFileRoute("/app/admin/billing")({
 	component: AdminBillingRoute,
@@ -82,6 +85,7 @@ function AdminBillingContent() {
 
 			{tab === "invoices" ? (
 				<>
+					<OnboardClientCard />
 					<IssueInvoiceForm />
 					<PendingInvoices />
 				</>
@@ -103,6 +107,172 @@ function toDateInput(ms: number): string {
 function fromDateInput(value: string): number {
 	const [y, m, d] = value.split("-").map(Number);
 	return new Date(y, m - 1, d, 23, 59, 59, 999).getTime();
+}
+
+/**
+ * Onboard a client on their behalf. A retailer is always owned 1:1 by the
+ * client's own Clerk login — we can't create it *for* them without an orphaned,
+ * un-loginable store. So instead the admin fills the details here and gets a
+ * prefilled onboarding link to send; the client opens it, signs in once, and
+ * confirms — the store is created under *their* account. After they confirm, they
+ * appear in the Issue-invoice picker below. See docs/manual-subscription.md.
+ */
+function OnboardClientCard() {
+	const [storeName, setStoreName] = useState("");
+	const [slug, setSlug] = useState("");
+	const [slugEdited, setSlugEdited] = useState(false);
+	const [waPhone, setWaPhone] = useState("");
+	const [email, setEmail] = useState("");
+	const [copied, setCopied] = useState(false);
+
+	// Mirror the onboarding form: derive the slug from the name until hand-edited,
+	// and check availability live so we never hand out a link to a taken slug.
+	const derivedSlug = slugEdited ? slug : slugify(storeName);
+	const availability = useSlugAvailability(derivedSlug);
+
+	const ready =
+		storeName.trim().length >= 2 && availability.status === "available";
+
+	const link =
+		typeof window === "undefined"
+			? ""
+			: buildOnboardingInviteLink(window.location.origin, {
+					storeName,
+					slug: derivedSlug,
+					waPhone,
+				});
+
+	async function handleCopy() {
+		if (!ready || !link) return;
+		try {
+			await navigator.clipboard.writeText(link);
+			setCopied(true);
+			toast.success(
+				email.trim()
+					? `Link copied — send it to ${email.trim()}.`
+					: "Link copied — send it to your client.",
+			);
+			setTimeout(() => setCopied(false), 2000);
+		} catch {
+			toast.error("Couldn't copy — long-press the link to copy it manually.");
+		}
+	}
+
+	return (
+		<section className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-5 lg:p-6">
+			<div className="flex items-start gap-3">
+				<div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent/10">
+					<UserPlus className="size-4 text-accent" />
+				</div>
+				<div className="flex flex-col gap-0.5">
+					<p className="text-sm font-semibold">Onboard a client</p>
+					<p className="text-xs text-muted-foreground">
+						Fill what you know, then send the link. They confirm under their own
+						login — then issue their invoice below.
+					</p>
+				</div>
+			</div>
+
+			<label className="flex flex-col gap-1 text-sm font-medium">
+				Store name
+				<Input
+					value={storeName}
+					onChange={(e) => setStoreName(e.target.value)}
+					placeholder="e.g. Mak Cik Kuih"
+					variant="field"
+				/>
+			</label>
+
+			<label className="flex flex-col gap-1 text-sm font-medium">
+				Store link
+				<div className="flex items-center rounded-xl border border-input bg-background pl-3 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/50">
+					<span className="select-none text-sm text-muted-foreground">
+						kedaipal.com/
+					</span>
+					<Input
+						value={derivedSlug}
+						onChange={(e) => {
+							setSlug(e.target.value);
+							setSlugEdited(true);
+						}}
+						placeholder="store-slug"
+						variant="bare"
+						className="min-h-11 flex-1 pr-3 font-mono text-sm"
+					/>
+				</div>
+				{storeName.trim().length >= 2 ? (
+					<SlugHint state={availability} />
+				) : null}
+			</label>
+
+			<div className="flex flex-col gap-3 sm:flex-row">
+				<label className="flex flex-1 flex-col gap-1 text-sm font-medium">
+					WhatsApp number
+					<Input
+						type="tel"
+						inputMode="tel"
+						value={waPhone}
+						onChange={(e) => setWaPhone(e.target.value)}
+						placeholder="60123456789"
+						variant="field"
+						className="font-mono"
+					/>
+				</label>
+				<label className="flex flex-1 flex-col gap-1 text-sm font-medium">
+					Client email{" "}
+					<span className="font-normal text-muted-foreground">
+						(to send to)
+					</span>
+					<Input
+						type="email"
+						inputMode="email"
+						value={email}
+						onChange={(e) => setEmail(e.target.value)}
+						placeholder="client@email.com"
+						variant="field"
+					/>
+				</label>
+			</div>
+
+			{ready && link ? (
+				<div className="flex flex-col gap-2 rounded-xl border border-dashed border-border bg-muted/30 p-3">
+					<p className="break-all font-mono text-xs text-muted-foreground">
+						{link}
+					</p>
+				</div>
+			) : null}
+
+			<Button
+				type="button"
+				onClick={handleCopy}
+				disabled={!ready}
+				className="h-11 lg:w-auto lg:self-start lg:px-6"
+			>
+				{copied ? (
+					<>
+						<Check className="size-4" /> Copied
+					</>
+				) : (
+					<>
+						<Copy className="size-4" /> Copy invite link
+					</>
+				)}
+			</Button>
+		</section>
+	);
+}
+
+/** Compact slug-availability line for the onboard-a-client form. */
+function SlugHint({
+	state,
+}: {
+	state: ReturnType<typeof useSlugAvailability>;
+}) {
+	if (state.status === "idle" || state.status === "checking") return null;
+	if (state.status === "available")
+		return <p className="text-xs text-accent">✓ Available</p>;
+	const message = state.status === "taken" ? "Slug is taken" : state.message;
+	return <p className="text-xs text-destructive">✗ {message}</p>;
 }
 
 /**

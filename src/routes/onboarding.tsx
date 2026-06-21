@@ -1,6 +1,12 @@
 import { RedirectToSignIn, Show } from "@clerk/tanstack-react-start";
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	Link,
+	useLocation,
+	useNavigate,
+} from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
+import { Sparkles } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
@@ -10,15 +16,42 @@ import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage } from "../lib/format";
 import { slugify } from "../lib/slug";
 
+/**
+ * Optional prefill, carried in the URL. Set when Kedaipal staff generate an
+ * "onboard a client" link from the admin billing page (`via=admin`) — the store
+ * name / slug / WhatsApp number are seeded so the client just reviews + confirms.
+ * The store is still created under the **client's own** Clerk login (they sign in
+ * first), so ownership is never ambiguous. See docs/manual-subscription.md.
+ */
+type OnboardingSearch = {
+	store?: string;
+	slug?: string;
+	wa?: string;
+	via?: string;
+};
+
 export const Route = createFileRoute("/onboarding")({
+	validateSearch: (search: Record<string, unknown>): OnboardingSearch => {
+		const str = (v: unknown) =>
+			typeof v === "string" && v.trim().length > 0 ? v : undefined;
+		return {
+			store: str(search.store),
+			slug: str(search.slug),
+			wa: str(search.wa),
+			via: str(search.via),
+		};
+	},
 	component: OnboardingRoute,
 });
 
 function OnboardingRoute() {
+	// Preserve the prefill query string across the sign-in round-trip — otherwise
+	// Clerk would bounce the client back to a bare /onboarding and drop the prefill.
+	const location = useLocation();
 	return (
 		<Show
 			when="signed-in"
-			fallback={<RedirectToSignIn signInForceRedirectUrl="/onboarding" />}
+			fallback={<RedirectToSignIn signInForceRedirectUrl={location.href} />}
 		>
 			<OnboardingForm />
 		</Show>
@@ -27,12 +60,19 @@ function OnboardingRoute() {
 
 function OnboardingForm() {
 	const navigate = useNavigate();
+	const search = Route.useSearch();
 	const retailer = useQuery(api.retailers.getMyRetailer);
 	const createRetailer = useMutation(api.retailers.createRetailer);
 
-	const [storeName, setStoreName] = useState("");
-	const [slug, setSlug] = useState("");
-	const [slugEdited, setSlugEdited] = useState(false);
+	// Assisted = an admin-generated prefill link. Seed the fields, surface the WA
+	// number for review, and tell the client what's going on.
+	const assisted = search.via === "admin";
+
+	const [storeName, setStoreName] = useState(search.store ?? "");
+	const [slug, setSlug] = useState(search.slug ?? "");
+	// If a slug came in the link, treat it as hand-set so it's not re-derived.
+	const [slugEdited, setSlugEdited] = useState(Boolean(search.slug));
+	const [waPhone, setWaPhone] = useState(search.wa ?? "");
 	const [submitting, setSubmitting] = useState(false);
 	const [agreed, setAgreed] = useState(false);
 
@@ -67,7 +107,12 @@ function OnboardingForm() {
 		}
 		setSubmitting(true);
 		try {
-			await createRetailer({ storeName: storeName.trim(), slug });
+			const trimmedWa = waPhone.trim();
+			await createRetailer({
+				storeName: storeName.trim(),
+				slug,
+				...(trimmedWa.length > 0 ? { waPhone: trimmedWa } : {}),
+			});
 			navigate({ to: "/app" });
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -87,7 +132,9 @@ function OnboardingForm() {
 				<p className="text-xs font-semibold uppercase tracking-widest text-accent">
 					Step 1 of 1
 				</p>
-				<h1 className="text-3xl font-bold leading-tight">Name your store</h1>
+				<h1 className="text-3xl font-bold leading-tight">
+					{assisted ? "Confirm your store" : "Name your store"}
+				</h1>
 				<p className="text-sm text-muted-foreground">
 					This becomes your public link:{" "}
 					<span className="font-mono text-foreground">
@@ -95,6 +142,17 @@ function OnboardingForm() {
 					</span>
 				</p>
 			</header>
+
+			{assisted ? (
+				<div className="flex items-start gap-3 rounded-xl border border-accent/30 bg-accent/5 px-4 py-3 text-sm">
+					<Sparkles className="mt-0.5 size-4 shrink-0 text-accent" />
+					<p className="text-muted-foreground">
+						Kedaipal set this up for you. Review the details below and tap{" "}
+						<span className="font-medium text-foreground">Create store</span> —
+						you can change anything later in Settings.
+					</p>
+				</div>
+			) : null}
 
 			<form onSubmit={handleSubmit} className="flex flex-col gap-5">
 				<Field label="Store name">
@@ -126,6 +184,22 @@ function OnboardingForm() {
 					</div>
 					<AvailabilityHint state={availability} />
 				</Field>
+
+				{assisted ? (
+					<Field label="WhatsApp number">
+						<Input
+							type="tel"
+							inputMode="tel"
+							value={waPhone}
+							onChange={(e) => setWaPhone(e.target.value)}
+							placeholder="e.g. 60123456789"
+							variant="field"
+						/>
+						<span className="text-xs text-muted-foreground">
+							The number buyers reach you on. Leave blank to add it later.
+						</span>
+					</Field>
+				) : null}
 
 				<label className="flex items-start gap-3 text-sm text-muted-foreground">
 					<input

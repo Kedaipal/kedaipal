@@ -29,9 +29,36 @@ spots remain claims a rank; Starter never does; rank 11+ gets none. Operationall
 **toggle founding ON for the first 10 Pro invoices** so those members also get the
 discount they're promised.
 
-Admin UI is **tabbed** (`app.admin.billing.tsx`): **Invoices** (issue form + pending
-list + mark-paid, the frequent task) and **Payment details** (set-once bank/QR).
-Tests: `convex/invoices.test.ts` (issueInvoice standard/founding/Starter/guards).
+Admin UI is **tabbed** (`app.admin.billing.tsx`): **Invoices** (onboard-a-client +
+issue form + pending list + mark-paid, the frequent task) and **Payment details**
+(set-once bank/QR). Tests: `convex/invoices.test.ts` (issueInvoice
+standard/founding/Starter/guards), `src/lib/onboarding-link.test.ts` (invite link).
+
+## Onboarding a client by hand (admin "Onboard a client")
+
+A retailer is owned **1:1 by the client's own Clerk login** — staff can't create a
+store *for* a client without an orphaned, un-loginable row. So the admin doesn't
+create the store directly; instead the **Invoices** tab has an **Onboard a client**
+card that produces a **prefilled onboarding link**:
+
+1. Admin fills store name (slug auto-derives, with **live availability** so a taken
+   slug never ships in a link), optional WhatsApp number, optional client email
+   (just the "send it to" contact — not encoded).
+2. Admin copies the link (`<origin>/onboarding?store=…&slug=…&wa=…&via=admin`,
+   built by `src/lib/onboarding-link.ts`) and sends it via WhatsApp/email.
+3. The client opens it → signs in **once** (Clerk; the prefill survives the
+   sign-in round-trip because `onboarding.tsx` sets `signInForceRedirectUrl` to the
+   full current URL) → onboarding shows an "**Kedaipal set this up for you**" banner
+   with the fields prefilled (incl. a WhatsApp field, only shown in `via=admin`
+   mode) → taps **Create store**. The store is created under **their** account.
+4. The store now appears in the Issue-invoice picker → admin issues their invoice
+   (Founding toggle for the first 10 Pro members).
+
+**Why a link, not direct creation:** ownership stays correct with zero new failure
+modes (no orphaned stores, no claim/email-matching edge cases). The client's only
+step is a one-tap sign-in. `via=admin` / `founding` is **not** a privileged URL arg
+— the store is created on the normal trial path; the Founding **rank** still only
+claims via admin mark-paid, so a hand-crafted link grants nothing.
 
 ## Core model
 
@@ -102,12 +129,18 @@ doesn't change.
 
 1. **Deploy schema** (3 new tables + optional retailer flags — additive, validates
    against existing data; new retailers get subscriptions from here on).
-2. **Run the backfill** `internalMutation` (Phase 2): create an `active + comped`
-   subscription for every pre-existing retailer.
+2. **Run the backfill** `internalMutation` (Phase 2): drop every pre-existing
+   retailer onto a fresh **14-day Pro trial** (`trialing`, non-comped). They are
+   **not** free forever — the trial banner shows and the daily cron soft-locks them
+   to `past_due` when it lapses, exactly like a new signup. (The backfill is
+   convergent: a leftover `comped` row from an earlier run is healed into the same
+   trial; real subscriptions are left untouched.)
 3. **THEN enable gating** (Phase 2 wires `assertSubscriptionActive`).
 
 Until step 2, existing retailers have no subscription row → `resolveAccess` fails
-open to comped full access, so they keep working between steps regardless.
+open to comped full access, so they keep working between steps regardless. The
+`comped` state is now reserved for that **missing-row fail-safe only** — the
+backfill no longer mints comped subscriptions.
 
 ## Phasing
 
@@ -121,7 +154,9 @@ open to comped full access, so they keep working between steps regardless.
   → caps refreshed → `claimRankIfEligible` → schedule welcome WhatsApp), `listPending`
   (admin), `myInvoices`. `foundingMembers.ts` — `claimRankIfEligible` (Pro-only,
   no-prior-row, cohort ≤ 10, atomic in-txn) + `getSpotsRemaining`. Backfill
-  `subscriptions.internalBackfillSubscriptions` (active+comped, idempotent). Crons
+  `subscriptions.internalBackfillSubscriptions` (drops pre-billing retailers onto a
+  14-day trial, non-comped; convergent/idempotent — heals leftover comped rows).
+  Crons
   `subscriptions.internalDailyBillingStatus` (trial expiry + active-overdue flips +
   renewal log) wired in `crons.ts`. Soft-lock wired onto `products.create/update/
   saveVariantGrid` + `updateSettings`. Founding welcome WhatsApp

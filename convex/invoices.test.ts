@@ -360,7 +360,7 @@ describe("invoices.issueInvoice", () => {
 });
 
 describe("backfill", () => {
-	test("creates active+comped for an existing retailer; idempotent", async () => {
+	test("drops a pre-billing retailer onto a 14-day trial (not comped); idempotent", async () => {
 		const t = setup();
 		// Simulate a pre-billing retailer: create then delete its subscription.
 		const asUser = t.withIdentity({ subject: "u_pre" });
@@ -381,22 +381,57 @@ describe("backfill", () => {
 			return r!._id;
 		});
 
+		const before = Date.now();
 		const first = await t.mutation(
 			internal.subscriptions.internalBackfillSubscriptions,
 			{},
 		);
 		expect(first.created).toBe(1);
 		const sub = await getSubFor(t, retailerId);
-		expect(sub?.status).toBe("active");
-		expect(sub?.comped).toBe(true);
+		// Treated like a fresh signup: trialing, non-comped, ~14 days runway.
+		expect(sub?.status).toBe("trialing");
+		expect(sub?.comped).not.toBe(true);
+		expect(sub?.trialEndsAt).toBeGreaterThan(before + 13 * 24 * 60 * 60 * 1000);
 
-		// Second run is a no-op.
+		// Second run leaves the real trialing sub alone.
 		const second = await t.mutation(
 			internal.subscriptions.internalBackfillSubscriptions,
 			{},
 		);
 		expect(second.created).toBe(0);
+		expect(second.converted).toBe(0);
 		expect(second.skipped).toBeGreaterThanOrEqual(1);
+	});
+
+	test("heals a leftover comped row from an earlier backfill into the trial", async () => {
+		const t = setup();
+		const asUser = t.withIdentity({ subject: "u_comped" });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: "Comped Store",
+			slug: "comped-store",
+		});
+		// Simulate the OLD backfill output: an active + comped subscription.
+		const retailerId = await t.run(async (ctx) => {
+			const r = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", "comped-store"))
+				.first();
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", r!._id))
+				.first();
+			await ctx.db.patch(sub!._id, { status: "active", comped: true });
+			return r!._id;
+		});
+
+		const res = await t.mutation(
+			internal.subscriptions.internalBackfillSubscriptions,
+			{},
+		);
+		expect(res.converted).toBeGreaterThanOrEqual(1);
+		const sub = await getSubFor(t, retailerId);
+		expect(sub?.status).toBe("trialing");
+		expect(sub?.comped).toBe(false);
 	});
 });
 
