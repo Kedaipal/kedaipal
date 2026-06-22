@@ -5,7 +5,7 @@
 // shell is intentionally local here because invoices need a richer summary +
 // payment-details layout than order alerts.
 
-import { escapeHtml, type Locale, wrapHtml } from "./emailCopy";
+import { escapeHtml, type Locale, logoHeader, wrapHtml } from "./emailCopy";
 
 export type BillingEmailKey =
 	| "invoiceIssued"
@@ -183,7 +183,7 @@ function wrapBillingHtml(
 <table role="presentation" width="640" cellpadding="0" cellspacing="0" style="width:100%;max-width:640px;background:#ffffff;border:1px solid #e5e7eb;border-radius:20px;overflow:hidden;box-shadow:0 10px 30px rgba(15,23,42,.06);">
 <tr><td style="height:6px;background:${tone.accent};font-size:0;line-height:0;">&nbsp;</td></tr>
 <tr><td style="padding:28px 28px 20px 28px;">
-<p style="margin:0 0 16px 0;font-size:12px;font-weight:800;letter-spacing:.18em;text-transform:uppercase;color:#94a3b8;">Kedaipal</p>
+${logoHeader(18)}
 <div style="display:inline-block;margin:0 0 14px 0;padding:6px 10px;border-radius:999px;background:${tone.labelBg};color:${tone.labelColor};font-size:12px;font-weight:800;">${escapeHtml(v.invoiceNumber)}</div>
 <h1 style="margin:0;font-size:26px;line-height:1.18;color:#0f172a;">${escapeHtml(headline)}</h1>
 <p style="margin:12px 0 0 0;font-size:15px;line-height:1.65;color:#475569;">${intro}</p>

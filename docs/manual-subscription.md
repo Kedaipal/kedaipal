@@ -59,6 +59,17 @@ the planned follow-up once a Meta template + the central send gateway land (Spri
 ever — `issueInvoice` rejects a second (serializable read-then-insert); the only other
 insert path is the one-time founding-signup invoice on a brand-new retailer.
 
+**Branding + preview.** All retailer emails carry the Kedaipal logo header
+(`emailCopy.logoHeader` / `LOGO_URL` → the prod public asset, since email clients
+can't load localhost). Invoice emails use the richer card layout (`wrapBillingHtml`);
+order/trial emails use the simple shell (`wrapHtml`). To preview any template in a
+real inbox without DB surgery:
+```
+npx convex run billingEmail:sendSampleBillingEmail '{"to":"you@email.com","key":"invoiceIssued"}'
+```
+Keys: `invoiceIssued` · `invoiceReminder` · `invoiceOverdue` · `trialEndingSoon` ·
+`trialEnded`. Add `"locale":"ms"` or `"founding":true` for those variants.
+
 Admin UI is **tabbed** (`app.admin.billing.tsx`): **Invoices** (onboard-a-client +
 issue form + pending list + mark-paid, the frequent task) and **Payment details**
 (set-once bank/QR). Tests: `convex/invoices.test.ts` (issueInvoice
