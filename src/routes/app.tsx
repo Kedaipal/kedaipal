@@ -4,6 +4,7 @@ import { useMutation, useQuery } from "convex/react";
 import { useEffect, useRef } from "react";
 import { api } from "../../convex/_generated/api";
 import { ConsentBanner } from "../components/app/consent-banner";
+import { SubscriptionBanner } from "../components/app/subscription-banner";
 import { BottomNav } from "../components/dashboard/bottom-nav";
 import { MobileHeader } from "../components/dashboard/mobile-header";
 import { Sidebar } from "../components/dashboard/sidebar";
@@ -35,6 +36,7 @@ function AppShell() {
 		retailer ? { retailerId: retailer._id } : "skip",
 	);
 	const actionableCount = (counts?.pending ?? 0) + (counts?.confirmed ?? 0);
+	const isAdmin = useQuery(api.billing.amIAdmin) ?? false;
 	useOrderToastNotifications(counts);
 
 	useEffect(() => {
@@ -65,7 +67,11 @@ function AppShell() {
 
 	return (
 		<div className="flex min-h-dvh">
-			<Sidebar retailer={retailer} actionableCount={actionableCount} />
+			<Sidebar
+				retailer={retailer}
+				actionableCount={actionableCount}
+				isAdmin={isAdmin}
+			/>
 			<div className="mx-auto flex w-full max-w-md flex-1 flex-col lg:mx-0 lg:max-w-none">
 				<MobileHeader retailer={retailer} />
 				<ConsentBanner
@@ -74,6 +80,10 @@ function AppShell() {
 						privacyVersion: retailer.privacyVersion,
 						aupVersion: retailer.aupVersion,
 					}}
+				/>
+				<SubscriptionBanner
+					subscription={retailer.subscription}
+					slug={retailer.slug}
 				/>
 				<main className="flex-1 px-5 py-6 lg:mx-auto lg:w-full lg:max-w-6xl lg:px-8 lg:py-8">
 					<Outlet />

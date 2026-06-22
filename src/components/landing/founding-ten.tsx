@@ -1,4 +1,6 @@
+import { useQuery } from "convex/react";
 import { ArrowRight, Star } from "lucide-react";
+import { api } from "../../../convex/_generated/api";
 import { buildWaContactLink } from "../../lib/contact";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
@@ -6,15 +8,18 @@ import { FadeIn } from "./fade-in";
 import { ctaPillClass, Sticker } from "./landing-ui";
 
 const TOTAL_SPOTS = 10;
-const SPOTS_TAKEN = 0;
-
-const SPOTS = Array.from({ length: TOTAL_SPOTS }, (_, i) => ({
-	n: i + 1,
-	taken: i < SPOTS_TAKEN,
-}));
 
 export function FoundingTen() {
-	const remaining = TOTAL_SPOTS - SPOTS_TAKEN;
+	// Live count of founding spots remaining (public query). Defaults to all-open
+	// while loading + SSR — the honest fallback is "spots available", never a fake
+	// "taken". See docs/manual-subscription.md.
+	const remaining =
+		useQuery(api.foundingMembers.getSpotsRemaining) ?? TOTAL_SPOTS;
+	const spotsTaken = TOTAL_SPOTS - remaining;
+	const SPOTS = Array.from({ length: TOTAL_SPOTS }, (_, i) => ({
+		n: i + 1,
+		taken: i < spotsTaken,
+	}));
 
 	const perks = [
 		{ label: m.founding_perk_1_label(), body: m.founding_perk_1_body() },

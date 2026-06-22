@@ -32,6 +32,7 @@ import { Route as AppProductsImportRouteImport } from './routes/app.products.imp
 import { Route as AppProductsProductIdRouteImport } from './routes/app.products.$productId'
 import { Route as AppOrdersShortIdRouteImport } from './routes/app.orders.$shortId'
 import { Route as AppCustomersCustomerIdRouteImport } from './routes/app.customers.$customerId'
+import { Route as AppAdminBillingRouteImport } from './routes/app.admin.billing'
 
 const TermsRoute = TermsRouteImport.update({
   id: '/terms',
@@ -148,6 +149,11 @@ const AppCustomersCustomerIdRoute = AppCustomersCustomerIdRouteImport.update({
   path: '/customers/$customerId',
   getParentRoute: () => AppRoute,
 } as any)
+const AppAdminBillingRoute = AppAdminBillingRouteImport.update({
+  id: '/admin/billing',
+  path: '/admin/billing',
+  getParentRoute: () => AppRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -165,6 +171,7 @@ export interface FileRoutesByFullPath {
   '/sign-up/$': typeof SignUpSplatRoute
   '/track/$shortId': typeof TrackShortIdRoute
   '/app/': typeof AppIndexRoute
+  '/app/admin/billing': typeof AppAdminBillingRoute
   '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
   '/app/orders/$shortId': typeof AppOrdersShortIdRoute
   '/app/products/$productId': typeof AppProductsProductIdRoute
@@ -189,6 +196,7 @@ export interface FileRoutesByTo {
   '/sign-up/$': typeof SignUpSplatRoute
   '/track/$shortId': typeof TrackShortIdRoute
   '/app': typeof AppIndexRoute
+  '/app/admin/billing': typeof AppAdminBillingRoute
   '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
   '/app/orders/$shortId': typeof AppOrdersShortIdRoute
   '/app/products/$productId': typeof AppProductsProductIdRoute
@@ -215,6 +223,7 @@ export interface FileRoutesById {
   '/sign-up/$': typeof SignUpSplatRoute
   '/track/$shortId': typeof TrackShortIdRoute
   '/app/': typeof AppIndexRoute
+  '/app/admin/billing': typeof AppAdminBillingRoute
   '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
   '/app/orders/$shortId': typeof AppOrdersShortIdRoute
   '/app/products/$productId': typeof AppProductsProductIdRoute
@@ -242,6 +251,7 @@ export interface FileRouteTypes {
     | '/sign-up/$'
     | '/track/$shortId'
     | '/app/'
+    | '/app/admin/billing'
     | '/app/customers/$customerId'
     | '/app/orders/$shortId'
     | '/app/products/$productId'
@@ -266,6 +276,7 @@ export interface FileRouteTypes {
     | '/sign-up/$'
     | '/track/$shortId'
     | '/app'
+    | '/app/admin/billing'
     | '/app/customers/$customerId'
     | '/app/orders/$shortId'
     | '/app/products/$productId'
@@ -291,6 +302,7 @@ export interface FileRouteTypes {
     | '/sign-up/$'
     | '/track/$shortId'
     | '/app/'
+    | '/app/admin/billing'
     | '/app/customers/$customerId'
     | '/app/orders/$shortId'
     | '/app/products/$productId'
@@ -480,12 +492,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppCustomersCustomerIdRouteImport
       parentRoute: typeof AppRoute
     }
+    '/app/admin/billing': {
+      id: '/app/admin/billing'
+      path: '/admin/billing'
+      fullPath: '/app/admin/billing'
+      preLoaderRoute: typeof AppAdminBillingRouteImport
+      parentRoute: typeof AppRoute
+    }
   }
 }
 
 interface AppRouteChildren {
   AppSettingsRoute: typeof AppSettingsRoute
   AppIndexRoute: typeof AppIndexRoute
+  AppAdminBillingRoute: typeof AppAdminBillingRoute
   AppCustomersCustomerIdRoute: typeof AppCustomersCustomerIdRoute
   AppOrdersShortIdRoute: typeof AppOrdersShortIdRoute
   AppProductsProductIdRoute: typeof AppProductsProductIdRoute
@@ -499,6 +519,7 @@ interface AppRouteChildren {
 const AppRouteChildren: AppRouteChildren = {
   AppSettingsRoute: AppSettingsRoute,
   AppIndexRoute: AppIndexRoute,
+  AppAdminBillingRoute: AppAdminBillingRoute,
   AppCustomersCustomerIdRoute: AppCustomersCustomerIdRoute,
   AppOrdersShortIdRoute: AppOrdersShortIdRoute,
   AppProductsProductIdRoute: AppProductsProductIdRoute,

@@ -861,3 +861,80 @@ export const getRetailerForDiagnostic = internalQuery({
 		return { waPhone: retailer.waPhone, storeName: retailer.storeName };
 	},
 });
+
+// --- Founding Member welcome (docs/manual-subscription.md) ------------------
+
+export const getFoundingWelcomeMeta = internalQuery({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{
+		waPhone: string | undefined;
+		storeName: string;
+		locale: Locale;
+	} | null> => {
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) return null;
+		return {
+			waPhone: retailer.waPhone,
+			storeName: retailer.storeName,
+			locale: (retailer.locale as Locale | undefined) ?? "en",
+		};
+	},
+});
+
+/** Stamp `welcomedAt` on the retailer's founding-member row after the send. */
+export const markFoundingWelcomed = internalMutation({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<void> => {
+		const row = await ctx.db
+			.query("foundingMembers")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.first();
+		if (row && row.welcomedAt === undefined) {
+			await ctx.db.patch(row._id, { welcomedAt: Date.now() });
+		}
+	},
+});
+
+/**
+ * Scheduled by invoices.markPaid when a Founding rank is claimed. Sends the
+ * "Welcome, Founding Member #N of 10" WhatsApp to the retailer (the seller), then
+ * stamps welcomedAt. Errors swallowed (logged) so the originating mutation never
+ * fails on an outbound issue.
+ */
+export const notifyFoundingWelcome = internalAction({
+	args: { retailerId: v.id("retailers"), rank: v.number() },
+	handler: async (ctx, { retailerId, rank }): Promise<void> => {
+		let meta: {
+			waPhone: string | undefined;
+			storeName: string;
+			locale: Locale;
+		} | null = null;
+		try {
+			meta = await ctx.runQuery(internal.whatsapp.getFoundingWelcomeMeta, {
+				retailerId,
+			});
+		} catch (err) {
+			console.error("WA founding-welcome lookup failed", err);
+			return;
+		}
+		if (!meta || !meta.waPhone) return;
+
+		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
+		const billingUrl = `${appUrl}/app/settings?tab=billing`;
+		const body =
+			meta.locale === "ms"
+				? `🎉 Tahniah! Anda kini Founding Member #${rank} dari 10 di Kedaipal. Terima kasih kerana mempercayai kami awal — diskaun 30% seumur hidup anda kekal selamanya. Pasukan kami akan hubungi anda untuk sesi white-glove. Butiran: ${billingUrl}`
+				: `🎉 Welcome, Founding Member #${rank} of 10! Thank you for backing Kedaipal early — your 30% lifetime discount is locked in for good. We'll reach out to set up your white-glove onboarding call. Details: ${billingUrl}`;
+		try {
+			await getAdapter("whatsapp").send(meta.waPhone, { kind: "text", body });
+			await ctx.runMutation(internal.whatsapp.markFoundingWelcomed, {
+				retailerId,
+			});
+		} catch (err) {
+			console.error("WA founding-welcome send failed", err);
+		}
+	},
+});

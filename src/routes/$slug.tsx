@@ -2,6 +2,7 @@ import { createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { CartBar } from "../components/storefront/cart-bar";
+import { FoundingMemberBadge } from "../components/storefront/founding-member-badge";
 import { ProductGrid } from "../components/storefront/product-grid";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
@@ -200,11 +201,14 @@ function StorefrontRoute() {
 							className="h-16 w-16 shrink-0 rounded-2xl border-2 border-accent/20 bg-background object-contain shadow-sm"
 						/>
 					) : null}
-					<div>
+					<div className="flex flex-col gap-1">
 						<h1 className="text-2xl font-bold leading-tight tracking-tight">
 							{retailer.storeName}
 						</h1>
-						<p className="mt-0.5 text-sm text-muted-foreground">
+						{retailer.isFoundingMember ? (
+							<FoundingMemberBadge rank={retailer.foundingMemberRank} />
+						) : null}
+						<p className="text-sm text-muted-foreground">
 							Browse &amp; order on WhatsApp
 						</p>
 					</div>

@@ -100,7 +100,7 @@ async function sendMockupSellerEmail(
 	if (!meta || !meta.notifyEmail) return;
 
 	const totalFormatted = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
-	const dashboardUrl = `${process.env.APP_URL ?? "https://kedaipal.com"}/app/orders/${meta.shortId}`;
+	const dashboardUrl = `${process.env.SITE_URL ?? "https://kedaipal.com"}/app/orders/${meta.shortId}`;
 	const { subject, html, text } = renderRetailerEmail(meta.locale, key, {
 		shortId: meta.shortId,
 		itemCount: meta.itemCount,
@@ -187,7 +187,7 @@ export const notifyRetailerOrderAlert = internalAction({
 		const alertKey: RetailerEmailKey =
 			meta.status === "pending" ? "newOrder" : "orderConfirmed";
 		const totalFormatted = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
-		const dashboardUrl = `${process.env.APP_URL ?? "https://kedaipal.com"}/app/orders/${meta.shortId}`;
+		const dashboardUrl = `${process.env.SITE_URL ?? "https://kedaipal.com"}/app/orders/${meta.shortId}`;
 
 		const { subject, html, text } = renderRetailerEmail(meta.locale, alertKey, {
 			shortId: meta.shortId,
@@ -271,7 +271,7 @@ export const notifyPaymentClaimed = internalAction({
 		}
 
 		const totalFormatted = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
-		const dashboardUrl = `${process.env.APP_URL ?? "https://kedaipal.com"}/app/orders/${meta.shortId}`;
+		const dashboardUrl = `${process.env.SITE_URL ?? "https://kedaipal.com"}/app/orders/${meta.shortId}`;
 
 		const { subject, html, text } = renderRetailerEmail(
 			meta.locale,

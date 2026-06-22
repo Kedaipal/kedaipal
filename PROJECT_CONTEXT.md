@@ -94,6 +94,12 @@ The database schema already treats WhatsApp as one `channel` on retailers/produc
 
 **Inbound webhook security:** `POST /webhook/whatsapp` verifies Meta's `X-Hub-Signature-256` (HMAC-SHA256 with `WHATSAPP_APP_SECRET`) and fails closed — see [`docs/whatsapp-webhook-security.md`](./docs/whatsapp-webhook-security.md).
 
+**Recently shipped (post-MVP):**
+- **Customer Database (CRM-lite)** — `customers` entity keyed by `(retailerId, waPhone)` with denormalized lifetime aggregates, auto-captured WhatsApp pushname, private notes, and a `/app/customers` dashboard (list + detail). The S1 "Customer DB" roadmap item. See [`docs/customer-database.md`](./docs/customer-database.md). Blocks Automated Reminders + Broadcast.
+- **Channel adapter seam** (Phases 1–3) — WhatsApp is now one of N messaging channels behind a uniform `ChannelAdapter` (`convex/lib/channels/`). Outbound/inbound/signature all flow through `getAdapter("whatsapp")`; order orchestration is channel-neutral. Pure refactor, zero behavior change (one delta: signed-but-malformed webhook body → `200`+log, not `400`). Identity migration (`waPhone` → `channelUserId`, Phases 4–6) deferred until a 2nd channel is greenlit. See [`docs/messaging-channels.md`](./docs/messaging-channels.md).
+- **Mockup / proof approval** — made-to-order custom products gate production on buyer sign-off. Per-product `requiresProof` toggle → orders get an independent `mockupStatus` dimension (`pending → submitted → approved`, + `changes_requested` loop) blocking `confirmed→packed` until the buyer **approves on the tracking page** or the seller **waives** after a 48h grace. Code uses `mockup` (not `proof` — that's the payment screenshot). See [`docs/proof-approval.md`](./docs/proof-approval.md).
+- **Product Variants** — products generalized from flat single-SKU to **option-axes + variant-rows** (Shopify/Shopee/TikTok shape). New `productVariants` table holds per-variant price/stock/SKU/weight/image; `products` keeps **0–2 option axes** + a `blockWhenOutOfStock` toggle. Caps (2 axes / 50 variants) = TikTok/Shopee/Lazada parity. Schema widened (dev only); production backfill→narrow migration is a separate task. See [`docs/product-variants.md`](./docs/product-variants.md).
+
 **Current phase (May 2026):** MVP fully shipped. Active focus is the 12-week launch sprint to first paid customer (target Jul 5, 2026) and predictable acquisition channel (target Aug 16, 2026). 17-task backlog tracked in [ClickUp Product Roadmap](https://app.clickup.com/90182681518/v/li/901818308046) across 6 two-week sprints. Critical path:
 - **S1 (May 25 → Jun 7):** Customer DB, Order Inbox, Legal Pack, Subscription Billing start
 - **S2 (Jun 8 → Jun 21):** Landing Rewrite, Setup Wizard, White-Glove Scheduler, PostHog
@@ -174,7 +180,7 @@ Online payments are deferred to the first paid release — see [Payments Archite
 - Annual = 10 months paid, 12 received (~17% off).
 - No transaction fees, no per-user surcharges, no per-message billing (Meta charges WA template messages directly — transparent pass-through).
 - **Free tier deferred** until 50+ paying customers validate the paid motion; revisit if 30%+ of inbound prospects cite "Orderla is free" as the primary blocker.
-- Detailed strategy: [`pricing-strategy.md`](../../Documents/Kedaipal/01_Strategy/pricing-strategy.md).
+- Detailed strategy lives in `pricing-strategy.md` on Arif's machine only (not synced) — ask him for the latest version if you need the full writeup.
 
 ### Revenue collection
 - **Subscription billing (retailers → Kedaipal):** Stripe + HitPay/Billplz, settled to the Singapore entity (see [Founder & Operating Entity](#founder--operating-entity)).
@@ -204,7 +210,7 @@ This is a deliberate strategic choice, not a stopgap:
 
 **Direct competitor (the one that matters):** **Orderla.my** — built by iReka Soft, 20,000+ MY merchants, RM100M+ GMV over 5 years. Free / Plus RM30 / Pro RM100. Their product is a **form** that pre-fills a WhatsApp message; Kedaipal's product is a **full storefront** with cart, catalog, and real-time order pipeline. Orderla themselves acknowledged the form model's ceiling by building Orderla Commerce (orderla.co) as a separate storefront product.
 
-**Kedaipal's public positioning vs Orderla:** *"Where Orderla users graduate to when their order form falls apart."* Targeting their existing 20k merchants who've outgrown forms is cheaper than cold-educating new prospects. See [`benchmark-orderla.md`](../../Documents/Kedaipal/01_Strategy/benchmark-orderla.md) for the full deep dive.
+**Kedaipal's public positioning vs Orderla:** *"Where Orderla users graduate to when their order form falls apart."* Targeting their existing 20k merchants who've outgrown forms is cheaper than cold-educating new prospects. Full deep dive lives in `benchmark-orderla.md` on Arif's machine only (not synced) — ask him for the latest version.
 
 **Adjacent / oblique competitors:**
 - **EasyStore (RM249–399)** — full e-commerce platform, overserves the home-seller cohort, requires retailer to set up WhatsApp connector separately. Different shape.
