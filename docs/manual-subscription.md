@@ -29,23 +29,35 @@ spots remain claims a rank; Starter never does; rank 11+ gets none. Operationall
 **toggle founding ON for the first 10 Pro invoices** so those members also get the
 discount they're promised.
 
-### Invoice email notifications
+### Email notifications (capped, escalating — no spam)
 
-Sellers won't always be in the dashboard, so an invoice doesn't sit silent:
+Sellers won't always be in the dashboard, so deadlines don't sit silent. The hard
+rule: **at most 3 emails per paid cycle, 2 per trial**, each fired **once**. A
+prompt payer gets just the one "issued" email. Invoice creation + mark-paid stay
+**manual** (Arif) — these are notifications only, NOT auto-renewal.
 
-- **Issue-time** — `issueInvoice` schedules `billingEmail.notifyInvoiceIssued`: a
-  "new invoice" email with the amount (+ founding-discount line), due date, and
-  **how to pay** (bank/DuitNow from `billingConfig` + a link to the billing page).
-- **Reminder** — the daily cron emails `billingEmail.notifyInvoiceReminder` **once**
-  per pending invoice in the window `[due − 3 days, due)`; `invoices.reminderSentAt`
-  makes it idempotent across runs. Overdue invoices are left to the soft-lock +
-  in-app banner, not another email.
+**Paid vendor, per manually-issued invoice (≤3):**
+1. **Issued** — `issueInvoice` schedules `notifyInvoiceIssued` (amount + founding
+   discount, due date, how-to-pay).
+2. **Reminder** — daily cron, once, `[due − 3d, due)`, deduped by `invoices.reminderSentAt`.
+3. **Past due / locked** — when the cron flips the sub to `past_due` over the unpaid
+   invoice it schedules `notifyInvoiceOverdue` ("storefront stays live, pay to resume
+   editing"). Once, on the status transition.
 
-Both are **fire-and-forget** (errors swallowed + logged, never fail the
-mutation/cron) and **localized** (en/ms). Copy lives in `convex/lib/billingEmailCopy.ts`
-(separate from the order-event emails — different domain), sent via the existing
-Resend client (`RESEND_API_KEY` / `EMAIL_FROM`). A WhatsApp ping is the planned
-follow-up once a Meta template + the central send gateway land (Sprint 4).
+**Trial vendor (≤2):**
+1. **Ends in 3 days** — daily cron, once, deduped by `subscriptions.trialReminderSentAt`
+   (`notifyTrialEmail "trialEndingSoon"`). "Choose a plan" — trials have no invoice.
+2. **Trial ended / locked** — on the trialing→past_due flip (`notifyTrialEmail "trialEnded"`).
+
+All **fire-and-forget** (errors swallowed/logged), **localized** (en/ms). Invoice
+copy + trial copy in `convex/lib/billingEmailCopy.ts` (`renderBillingEmail` /
+`renderTrialEmail`), sent via Resend (`RESEND_API_KEY` / `EMAIL_FROM`). Email links
+use `SITE_URL` (the seller's own dashboard origin), not `APP_URL`. A WhatsApp ping is
+the planned follow-up once a Meta template + the central send gateway land (Sprint 4).
+
+**Single pending invoice invariant:** a retailer has **at most one** pending invoice
+ever — `issueInvoice` rejects a second (serializable read-then-insert); the only other
+insert path is the one-time founding-signup invoice on a brand-new retailer.
 
 Admin UI is **tabbed** (`app.admin.billing.tsx`): **Invoices** (onboard-a-client +
 issue form + pending list + mark-paid, the frequent task) and **Payment details**

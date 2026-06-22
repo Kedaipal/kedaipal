@@ -10,9 +10,15 @@ import { type ActionCtx, internalAction, internalQuery } from "./_generated/serv
 import {
 	type BillingEmailKey,
 	renderBillingEmail,
+	renderTrialEmail,
+	type TrialEmailKey,
 } from "./lib/billingEmailCopy";
 import { sendEmail } from "./lib/email";
 import type { Locale } from "./lib/emailCopy";
+
+function billingPageUrl(): string {
+	return `${process.env.SITE_URL ?? "https://kedaipal.com"}/app/settings?tab=billing`;
+}
 
 const MONTHS = [
 	"Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -116,7 +122,6 @@ async function sendInvoiceEmail(
 
 	const hasDiscount =
 		meta.foundingDiscount !== undefined && meta.foundingDiscount > 0;
-	const billingUrl = `${process.env.SITE_URL ?? "https://kedaipal.com"}/app/settings?tab=billing`;
 	const { subject, html, text } = renderBillingEmail(meta.locale, key, {
 		storeName: meta.storeName,
 		invoiceNumber: meta.invoiceNumber,
@@ -133,7 +138,7 @@ async function sendInvoiceEmail(
 		bankAccountName: meta.bankAccountName,
 		bankAccountNumber: meta.bankAccountNumber,
 		duitnowId: meta.duitnowId,
-		billingUrl,
+		billingUrl: billingPageUrl(),
 	});
 
 	try {
@@ -160,5 +165,75 @@ export const notifyInvoiceReminder = internalAction({
 	args: { invoiceId: v.id("invoices") },
 	handler: async (ctx, { invoiceId }): Promise<void> => {
 		await sendInvoiceEmail(ctx, invoiceId, "invoiceReminder");
+	},
+});
+
+/** Scheduled when the daily cron flips an active sub to past_due over an unpaid
+ * invoice — the "your store editing is now locked, pay to resume" notice. */
+export const notifyInvoiceOverdue = internalAction({
+	args: { invoiceId: v.id("invoices") },
+	handler: async (ctx, { invoiceId }): Promise<void> => {
+		await sendInvoiceEmail(ctx, invoiceId, "invoiceOverdue");
+	},
+});
+
+/** Minimal retailer contact for the invoice-less trial emails. */
+export const getRetailerForEmail = internalQuery({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{
+		notifyEmail: string | undefined;
+		storeName: string;
+		locale: Locale;
+	} | null> => {
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) return null;
+		return {
+			notifyEmail: retailer.notifyEmail,
+			storeName: retailer.storeName,
+			locale: (retailer.locale as Locale | undefined) ?? "en",
+		};
+	},
+});
+
+/** Trial nudges (no invoice). `trialEndingSoon` (~3 days left) and `trialEnded`
+ * (locked) — scheduled by the daily cron. Fire-and-forget. */
+export const notifyTrialEmail = internalAction({
+	args: {
+		retailerId: v.id("retailers"),
+		key: v.union(v.literal("trialEndingSoon"), v.literal("trialEnded")),
+		daysLeft: v.optional(v.number()),
+	},
+	handler: async (ctx, { retailerId, key, daysLeft }): Promise<void> => {
+		let meta: {
+			notifyEmail: string | undefined;
+			storeName: string;
+			locale: Locale;
+		} | null = null;
+		try {
+			meta = await ctx.runQuery(internal.billingEmail.getRetailerForEmail, {
+				retailerId,
+			});
+		} catch (err) {
+			console.error(`Trial email ${key} lookup failed`, err);
+			return;
+		}
+		if (!meta || !meta.notifyEmail) return;
+		const { subject, html, text } = renderTrialEmail(
+			meta.locale,
+			key as TrialEmailKey,
+			{ storeName: meta.storeName, billingUrl: billingPageUrl(), daysLeft },
+		);
+		try {
+			await sendEmail(meta.notifyEmail, subject, html, text);
+		} catch (err) {
+			console.error(
+				`Trial email ${key} failed (${retailerId}, to=${meta.notifyEmail}): ${
+					err instanceof Error ? err.message : String(err)
+				}`,
+			);
+		}
 	},
 });

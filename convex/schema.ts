@@ -583,6 +583,9 @@ export default defineSchema({
 			v.literal("cancelled"),
 		),
 		trialEndsAt: v.optional(v.number()),
+		// Stamped when the "trial ends in 3 days" email is sent, so the daily cron
+		// sends it at most once.
+		trialReminderSentAt: v.optional(v.number()),
 		currentPeriodStart: v.optional(v.number()),
 		currentPeriodEnd: v.optional(v.number()),
 		cancelledAt: v.optional(v.number()),

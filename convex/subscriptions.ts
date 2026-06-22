@@ -267,22 +267,41 @@ export const internalDailyBillingStatus = internalMutation({
 		overdue: number;
 		renewalsDue: number;
 		remindersSent: number;
+		trialReminders: number;
 	}> => {
 		const now = Date.now();
 		let trialExpired = 0;
 		let overdue = 0;
 		let renewalsDue = 0;
 		let remindersSent = 0;
+		let trialReminders = 0;
 
-		// Trial expiry.
+		// Trial expiry → lock + "trial ended" email (once, on the transition).
+		// Otherwise, "trial ends in 3 days" email (once, deduped by trialReminderSentAt).
 		const trialing = await ctx.db
 			.query("subscriptions")
 			.withIndex("by_status", (q) => q.eq("status", "trialing"))
 			.collect();
 		for (const sub of trialing) {
-			if (sub.trialEndsAt !== undefined && sub.trialEndsAt < now) {
+			if (sub.trialEndsAt === undefined) continue;
+			if (sub.trialEndsAt < now) {
 				await ctx.db.patch(sub._id, { status: "past_due", updatedAt: now });
 				trialExpired++;
+				await ctx.scheduler.runAfter(0, internal.billingEmail.notifyTrialEmail, {
+					retailerId: sub.retailerId,
+					key: "trialEnded",
+				});
+				continue;
+			}
+			const daysLeft = Math.ceil((sub.trialEndsAt - now) / DAY_MS);
+			if (daysLeft <= 3 && sub.trialReminderSentAt === undefined) {
+				await ctx.db.patch(sub._id, { trialReminderSentAt: now });
+				await ctx.scheduler.runAfter(0, internal.billingEmail.notifyTrialEmail, {
+					retailerId: sub.retailerId,
+					key: "trialEndingSoon",
+					daysLeft,
+				});
+				trialReminders++;
 			}
 		}
 
@@ -304,6 +323,12 @@ export const internalDailyBillingStatus = internalMutation({
 			if (overduePending) {
 				await ctx.db.patch(sub._id, { status: "past_due", updatedAt: now });
 				overdue++;
+				// "Now locked — pay to resume" email (once, on the transition).
+				await ctx.scheduler.runAfter(
+					0,
+					internal.billingEmail.notifyInvoiceOverdue,
+					{ invoiceId: overduePending._id },
+				);
 				continue;
 			}
 			if (
@@ -340,6 +365,6 @@ export const internalDailyBillingStatus = internalMutation({
 			remindersSent++;
 		}
 
-		return { trialExpired, overdue, renewalsDue, remindersSent };
+		return { trialExpired, overdue, renewalsDue, remindersSent, trialReminders };
 	},
 });

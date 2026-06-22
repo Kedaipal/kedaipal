@@ -519,6 +519,92 @@ describe("daily billing cron", () => {
 		expect(res.remindersSent).toBe(0);
 		expect((await getInvoice(t, invoiceId))?.reminderSentAt).toBeUndefined();
 	});
+
+	test("trial ending in ≤3 days → one trialEndingSoon reminder, then deduped", async () => {
+		const t = setup();
+		await t
+			.withIdentity({ subject: "u_trem" })
+			.mutation(api.retailers.createRetailer, {
+				storeName: "Trial Rem",
+				slug: "trial-rem",
+			});
+		const retailerId = await t.run(async (ctx) => {
+			const r = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", "trial-rem"))
+				.first();
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", r!._id))
+				.first();
+			await ctx.db.patch(sub!._id, {
+				trialEndsAt: Date.now() + 2 * 24 * 60 * 60 * 1000,
+			});
+			return r!._id;
+		});
+
+		const first = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(first.trialReminders).toBe(1);
+		expect((await getSubFor(t, retailerId))?.trialReminderSentAt).toBeTypeOf(
+			"number",
+		);
+
+		const second = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(second.trialReminders).toBe(0);
+	});
+
+	test("reminders fire again next cycle — dedup is per-invoice, not per-vendor", async () => {
+		const t = setup();
+		const DAY = 24 * 60 * 60 * 1000;
+		const { retailerId, invoiceId: cycle1 } = await seedFounding(
+			t,
+			"u_cyc",
+			"cyc-store",
+		);
+
+		// Cycle 1: due soon → reminded, then settled.
+		await t.run((ctx) => ctx.db.patch(cycle1, { dueDate: Date.now() + 2 * DAY }));
+		const r1 = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(r1.remindersSent).toBe(1);
+		await t.run((ctx) => ctx.db.patch(cycle1, { status: "paid" }));
+
+		// Cycle 2: a brand-new pending invoice, also due soon.
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.insert("invoices", {
+				retailerId,
+				subscriptionId: sub!._id,
+				invoiceNumber: "INV-CYCLE-2",
+				amount: 14900,
+				total: 10400,
+				currency: "MYR",
+				periodStart: Date.now(),
+				periodEnd: Date.now() + 30 * DAY,
+				dueDate: Date.now() + 2 * DAY,
+				status: "pending",
+				createdAt: Date.now(),
+			});
+		});
+
+		// The settled cycle-1 invoice's stamped reminder must NOT suppress cycle 2.
+		const r2 = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(r2.remindersSent).toBe(1);
+	});
 });
 
 describe("soft-lock gating", () => {

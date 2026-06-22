@@ -101,8 +101,8 @@ export function SubscriptionBanner({
 					pending ? ` · ${formatPrice(pending.total, pending.currency)}` : ""
 				}. Pay to keep your store active.`
 			: isEndedTrial
-				? "Your free trial has ended. Pay your first invoice to keep growing your store."
-				: `Your free trial ends in ${dayLabel(state.kind === "trialWarn" ? state.daysLeft : 0)}. Pay your first invoice to keep your store.`;
+				? "Your free trial has ended. Choose a plan to continue — your storefront stays live."
+				: `Your free trial ends in ${dayLabel(state.kind === "trialWarn" ? state.daysLeft : 0)}. Choose a plan to continue.`;
 
 	return (
 		<div

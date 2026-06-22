@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { type BillingEmailVars, renderBillingEmail } from "./billingEmailCopy";
+import {
+	type BillingEmailVars,
+	renderBillingEmail,
+	renderTrialEmail,
+} from "./billingEmailCopy";
 
 const base: BillingEmailVars = {
 	storeName: "Mak Kuih",
@@ -60,5 +64,40 @@ describe("renderBillingEmail", () => {
 		const { subject, html } = renderBillingEmail("ms", "invoiceIssued", base);
 		expect(subject).toContain("Bil baru");
 		expect(html).toContain("Cara bayar"); // "How to pay"
+	});
+
+	it("overdue email reads as a past-due lock notice + keeps pay details", () => {
+		const { subject, html } = renderBillingEmail("en", "invoiceOverdue", base);
+		expect(subject.toLowerCase()).toContain("past due");
+		expect(html.toLowerCase()).toContain("storefront");
+		expect(html).toContain("Maybank"); // can still pay to resume
+	});
+});
+
+describe("renderTrialEmail", () => {
+	const tv = {
+		storeName: "Mak Kuih",
+		billingUrl: "https://kedaipal.com/app/settings?tab=billing",
+	};
+
+	it("trialEndingSoon shows the days left + a choose-a-plan CTA", () => {
+		const { subject, html } = renderTrialEmail("en", "trialEndingSoon", {
+			...tv,
+			daysLeft: 3,
+		});
+		expect(subject).toContain("3 days");
+		expect(html).toContain("Choose a plan");
+		expect(html).toContain(tv.billingUrl);
+	});
+
+	it("trialEnded reads as a lock + does not mention an invoice", () => {
+		const { subject, html } = renderTrialEmail("en", "trialEnded", tv);
+		expect(subject.toLowerCase()).toContain("ended");
+		expect(html.toLowerCase()).not.toContain("invoice");
+	});
+
+	it("renders Malay trial copy", () => {
+		const { subject } = renderTrialEmail("ms", "trialEnded", tv);
+		expect(subject.toLowerCase()).toContain("percubaan");
 	});
 });
