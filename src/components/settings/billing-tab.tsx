@@ -209,11 +209,17 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 								<div>
 									<span className="font-mono">{inv.invoiceNumber}</span>
 									<span className="ml-2 text-xs text-muted-foreground">
-										{inv.markedPaidAt ? formatDate(inv.markedPaidAt) : ""}
+										{inv.markedPaidAt
+											? formatDate(inv.markedPaidAt)
+											: inv.voidedAt
+												? formatDate(inv.voidedAt)
+												: ""}
 									</span>
 								</div>
 								<div className="flex items-center gap-3">
-									<span className="tabular-nums">
+									<span
+										className={`tabular-nums ${inv.status === "void" ? "text-muted-foreground line-through" : ""}`}
+									>
 										{formatPrice(inv.total, inv.currency)}
 									</span>
 									<span
@@ -223,7 +229,11 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 												: "bg-muted text-muted-foreground"
 										}`}
 									>
-										{inv.status}
+										{inv.status === "paid"
+											? "Paid"
+											: inv.status === "void"
+												? "Cancelled"
+												: inv.status}
 									</span>
 								</div>
 							</li>

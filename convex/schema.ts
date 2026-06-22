@@ -626,6 +626,11 @@ export default defineSchema({
 		markedPaidAt: v.optional(v.number()),
 		markedPaidBy: v.optional(v.string()), // admin Clerk subject
 		paymentMethod: v.optional(v.string()), // "duitnow" / "bank_transfer" — freeform v1
+		// Soft-cancel audit (a pending invoice issued in error). The row is kept for
+		// history/reconciliation; status flips to "void". See invoices.voidInvoice.
+		voidedAt: v.optional(v.number()),
+		voidedBy: v.optional(v.string()), // admin Clerk subject
+		voidReason: v.optional(v.string()),
 		// Stamped when the pre-due-date reminder email is sent, so the daily cron
 		// sends it at most once. See convex/billingEmail.ts.
 		reminderSentAt: v.optional(v.number()),

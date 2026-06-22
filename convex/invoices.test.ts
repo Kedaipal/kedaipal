@@ -359,6 +359,56 @@ describe("invoices.issueInvoice", () => {
 	});
 });
 
+describe("invoices.voidInvoice", () => {
+	test("voids a pending invoice (kept, not deleted) and frees the pending slot", async () => {
+		const t = setup();
+		const { retailerId, invoiceId } = await seedFounding(
+			t,
+			"u_void",
+			"void-store",
+		);
+
+		const res = await asAdmin(t).mutation(api.invoices.voidInvoice, {
+			invoiceId,
+			reason: "wrong amount",
+		});
+		expect(res.ok).toBe(true);
+
+		const inv = await getInvoice(t, invoiceId);
+		expect(inv?.status).toBe("void"); // kept for audit, not deleted
+		expect(inv?.voidedBy).toBe(ADMIN);
+		expect(inv?.voidReason).toBe("wrong amount");
+
+		// Slot freed → a corrected invoice can now be issued (no dup-pending throw).
+		await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+			dueDate: Date.now() + 14 * 24 * 60 * 60 * 1000,
+		});
+	});
+
+	test("rejects voiding a paid invoice (that's a refund, not a void)", async () => {
+		const t = setup();
+		const { invoiceId } = await seedFounding(t, "u_void2", "void-store-2");
+		await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId });
+		await expect(
+			asAdmin(t).mutation(api.invoices.voidInvoice, { invoiceId }),
+		).rejects.toThrow(/only a pending/i);
+	});
+
+	test("rejects a non-admin", async () => {
+		const t = setup();
+		const { invoiceId } = await seedFounding(t, "u_void3", "void-store-3");
+		await expect(
+			t
+				.withIdentity({ subject: "nope" })
+				.mutation(api.invoices.voidInvoice, { invoiceId }),
+		).rejects.toThrow(/not authorized/i);
+	});
+});
+
 describe("backfill", () => {
 	test("drops a pre-billing retailer onto a 14-day trial (not comped); idempotent", async () => {
 		const t = setup();

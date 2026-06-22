@@ -195,6 +195,34 @@ export const issueInvoice = mutation({
 	},
 });
 
+/**
+ * Admin: void (soft-cancel) a pending invoice issued in error. We keep the row
+ * for audit/history/reconciliation — status flips to "void" — rather than hard
+ * deleting it. Only a **pending** invoice can be voided (a paid one would be a
+ * refund/credit, a separate flow). Voiding frees the single-pending-invoice slot
+ * so a corrected invoice can be issued; it does NOT touch subscription status
+ * (an overdue-driven lock stays — settle a replacement to reactivate).
+ */
+export const voidInvoice = mutation({
+	args: { invoiceId: v.id("invoices"), reason: v.optional(v.string()) },
+	handler: async (ctx, { invoiceId, reason }): Promise<{ ok: true }> => {
+		const adminSubject = await requireAdmin(ctx);
+		const invoice = await ctx.db.get(invoiceId);
+		if (!invoice) throw new ConvexError("Invoice not found");
+		if (invoice.status !== "pending")
+			throw new ConvexError(
+				`Only a pending invoice can be voided (this one is ${invoice.status}).`,
+			);
+		await ctx.db.patch(invoiceId, {
+			status: "void",
+			voidedAt: Date.now(),
+			voidedBy: adminSubject,
+			voidReason: reason?.trim() ? reason.trim() : undefined,
+		});
+		return { ok: true };
+	},
+});
+
 /** Admin: retailers for the issue-invoice picker (id + store name + slug +
  * status + founding flag). Capped — fine at Founding-10 scale. */
 export const listRetailersForAdmin = query({

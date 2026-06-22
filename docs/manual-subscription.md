@@ -70,8 +70,16 @@ npx convex run billingEmail:sendSampleBillingEmail '{"to":"you@email.com","key":
 Keys: `invoiceIssued` · `invoiceReminder` · `invoiceOverdue` · `trialEndingSoon` ·
 `trialEnded`. Add `"locale":"ms"` or `"founding":true` for those variants.
 
+**Voiding (issued in error).** `invoices.voidInvoice` (admin, pending-only) soft-cancels
+an invoice — status → `void`, kept for audit (stamps `voidedBy`/`voidedAt`/`voidReason`),
+**never hard-deleted** (audit trail + vendor history + reconciliation). It frees the
+single-pending slot so a corrected invoice can be issued, and does **not** touch
+subscription status. A paid invoice can't be voided (that's a refund — out of scope).
+The vendor's billing history shows it as "Cancelled". Admin "Void" button + confirm in
+the pending list.
+
 Admin UI is **tabbed** (`app.admin.billing.tsx`): **Invoices** (onboard-a-client +
-issue form + pending list + mark-paid, the frequent task) and **Payment details**
+issue form + pending list + mark-paid/void, the frequent task) and **Payment details**
 (set-once bank/QR). Tests: `convex/invoices.test.ts` (issueInvoice
 standard/founding/Starter/guards), `src/lib/onboarding-link.test.ts` (invite link).
 

@@ -526,30 +526,31 @@ function IssueInvoiceForm() {
 				</select>
 			</label>
 
-			<div className="grid gap-4 lg:grid-cols-2">
+			<div className="grid gap-4 rounded-2xl border border-border/70 bg-muted/20 p-3 lg:grid-cols-2 lg:p-4">
 				<div className="flex flex-col gap-1.5">
 					<span className="text-xs font-medium text-muted-foreground">
 						Plan
 					</span>
-					<div className="grid grid-cols-3 gap-2">
+					<div className="grid grid-cols-3 gap-1.5 rounded-xl bg-background p-1 shadow-inner shadow-border/40">
 						{(["pro", "starter"] as const).map((p) => (
 							<button
 								key={p}
 								type="button"
 								disabled={founding && p !== "pro"}
 								onClick={() => setPlan(p)}
-								className={`min-h-11 rounded-xl border px-3 text-sm font-medium capitalize transition-colors disabled:opacity-40 ${
+								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
 									effectivePlan === p
-										? "border-foreground bg-foreground text-background"
-										: "border-border bg-background text-muted-foreground hover:border-foreground/30"
+										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
+										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground"
 								}`}
 							>
+								{effectivePlan === p ? <Check className="size-3.5" /> : null}
 								{p}
 							</button>
 						))}
-						<span className="flex min-h-11 flex-col items-center justify-center rounded-xl border border-dashed border-border px-2 text-center text-xs leading-tight text-muted-foreground">
-							<span className="font-medium">Scale</span>
-							<span>soon</span>
+						<span className="flex min-h-10 flex-col items-center justify-center rounded-lg border border-dashed border-border/80 bg-muted/30 px-2 text-center text-[11px] leading-tight text-muted-foreground">
+							<span className="font-semibold">Scale</span>
+							<span className="text-[10px]">soon</span>
 						</span>
 					</div>
 				</div>
@@ -558,18 +559,19 @@ function IssueInvoiceForm() {
 					<span className="text-xs font-medium text-muted-foreground">
 						Billing
 					</span>
-					<div className="grid grid-cols-2 gap-2">
+					<div className="grid grid-cols-2 gap-1.5 rounded-xl bg-background p-1 shadow-inner shadow-border/40">
 						{(["monthly", "annual"] as const).map((c) => (
 							<button
 								key={c}
 								type="button"
 								onClick={() => setCycle(c)}
-								className={`min-h-11 rounded-xl border px-3 text-sm font-medium capitalize transition-colors ${
+								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold capitalize transition-all ${
 									cycle === c
-										? "border-foreground bg-foreground text-background"
-										: "border-border bg-background text-muted-foreground hover:border-foreground/30"
+										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
+										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground"
 								}`}
 							>
+								{cycle === c ? <Check className="size-3.5" /> : null}
 								{c}
 							</button>
 						))}
@@ -640,9 +642,14 @@ function IssueInvoiceForm() {
 function PendingInvoices() {
 	const invoices = useQuery(api.invoices.listPending, {});
 	const markPaid = useMutation(api.invoices.markPaid);
+	const voidInvoice = useMutation(api.invoices.voidInvoice);
 	const [confirming, setConfirming] = useState<
 		NonNullable<typeof invoices>[number] | null
 	>(null);
+	const [voiding, setVoiding] = useState<
+		NonNullable<typeof invoices>[number] | null
+	>(null);
+	const [voidReason, setVoidReason] = useState("");
 	const [busy, setBusy] = useState(false);
 
 	async function handleMarkPaid(id: Id<"invoices">) {
@@ -655,6 +662,22 @@ function PendingInvoices() {
 					: "Marked paid",
 			);
 			setConfirming(null);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	async function handleVoid(id: Id<"invoices">) {
+		setBusy(true);
+		try {
+			await voidInvoice({
+				invoiceId: id,
+				reason: voidReason.trim() ? voidReason.trim() : undefined,
+			});
+			toast.success("Invoice voided");
+			setVoiding(null);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -710,14 +733,28 @@ function PendingInvoices() {
 								<span className="text-sm font-semibold tabular-nums">
 									{formatPrice(inv.total, inv.currency)}
 								</span>
-								<Button
-									type="button"
-									size="sm"
-									className="h-9"
-									onClick={() => setConfirming(inv)}
-								>
-									Mark paid
-								</Button>
+								<div className="flex items-center gap-2">
+									<Button
+										type="button"
+										size="sm"
+										variant="outline"
+										className="h-9"
+										onClick={() => {
+											setVoidReason("");
+											setVoiding(inv);
+										}}
+									>
+										Void
+									</Button>
+									<Button
+										type="button"
+										size="sm"
+										className="h-9"
+										onClick={() => setConfirming(inv)}
+									>
+										Mark paid
+									</Button>
+								</div>
 							</div>
 						</li>
 					))}
@@ -748,6 +785,48 @@ function PendingInvoices() {
 							onClick={() => confirming && handleMarkPaid(confirming._id)}
 						>
 							{busy ? "Marking…" : "Mark paid"}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+
+			<Dialog
+				open={voiding !== null}
+				onOpenChange={(o) => {
+					if (!o) setVoiding(null);
+				}}
+			>
+				<DialogContent showCloseButton={false} className="sm:max-w-sm">
+					<DialogHeader>
+						<DialogTitle>Void {voiding?.invoiceNumber}?</DialogTitle>
+						<DialogDescription>
+							Cancels this pending invoice for {voiding?.storeName}. It stays in
+							their history as “Cancelled” and frees them up for a corrected
+							invoice. Use this for an invoice issued by mistake — not one
+							that's been paid.
+						</DialogDescription>
+					</DialogHeader>
+					<label className="flex flex-col gap-1 text-sm font-medium">
+						Reason{" "}
+						<span className="font-normal text-muted-foreground">
+							(optional)
+						</span>
+						<Input
+							value={voidReason}
+							onChange={(e) => setVoidReason(e.target.value)}
+							placeholder="e.g. wrong amount"
+							variant="field"
+						/>
+					</label>
+					<DialogFooter>
+						<Button variant="outline" onClick={() => setVoiding(null)}>
+							Keep invoice
+						</Button>
+						<Button
+							disabled={busy}
+							onClick={() => voiding && handleVoid(voiding._id)}
+						>
+							{busy ? "Voiding…" : "Void invoice"}
 						</Button>
 					</DialogFooter>
 				</DialogContent>
