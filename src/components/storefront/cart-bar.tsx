@@ -4,13 +4,15 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
 import { formatPrice } from "../../lib/format";
 import { Button } from "../ui/button";
-import { CheckoutSheet } from "./checkout-sheet";
+import { CheckoutSheet, type PublicPickupLocation } from "./checkout-sheet";
 
 interface CartBarProps {
 	cart: UseCart;
 	retailerId: Id<"retailers">;
 	storeName: string;
 	checkoutPhone: string | undefined;
+	offerSelfCollect: boolean;
+	pickupLocations: ReadonlyArray<PublicPickupLocation>;
 }
 
 export function CartBar({
@@ -18,6 +20,8 @@ export function CartBar({
 	retailerId,
 	storeName,
 	checkoutPhone,
+	offerSelfCollect,
+	pickupLocations,
 }: CartBarProps) {
 	const [checkoutOpen, setCheckoutOpen] = useState(false);
 	const empty = cart.itemCount === 0;
@@ -62,6 +66,8 @@ export function CartBar({
 				retailerId={retailerId}
 				storeName={storeName}
 				checkoutPhone={checkoutPhone}
+				offerSelfCollect={offerSelfCollect}
+				pickupLocations={pickupLocations}
 			/>
 		</>
 	);

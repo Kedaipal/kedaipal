@@ -10,12 +10,33 @@ import type { Id } from "../../convex/_generated/dataModel";
  */
 
 export type CartItem = {
+	// The sellable variant — the cart's dedupe identity. Two variants of the
+	// same product ("1kg / Fillet" vs "500g / Whole") are distinct lines.
+	variantId: Id<"productVariants">;
 	productId: Id<"products">;
 	name: string;
+	// Human label of the chosen option values ("1kg / Fillet"); absent for
+	// single-variant products. Rendered next to the product name.
+	optionLabel?: string;
 	price: number; // minor units
 	currency: string;
 	quantity: number;
 	imageUrl?: string;
+	// True for a made-to-order variant sold at RM0 — the price is quoted by the
+	// seller after the order (on the mockup). Rendered as "Price on quote".
+	quoteOnRequest?: boolean;
+	// Buyer's request for a custom / made-to-order line ("unicorn theme, size 8").
+	// Captured at add-time; composed (labelled) into the order's customerNote at
+	// checkout so the seller sees it in WhatsApp + the dashboard. See docs/custom-option.md.
+	note?: string;
+	// The custom / made-to-order line. Locked to qty 1 — it's one bespoke
+	// negotiation (the seller's single mockup + quote settle scope, quantity, and
+	// final price). Re-requesting updates the note instead of incrementing qty.
+	isCustom?: boolean;
+	// Optional buyer reference image for a custom line. Uploaded on attach (Convex
+	// storage id; serializable so it survives cart persistence) and passed to
+	// orders.create at checkout. See docs/custom-option.md.
+	customImageStorageId?: string;
 };
 
 type CartState = {
@@ -24,8 +45,8 @@ type CartState = {
 
 type CartAction =
 	| { type: "ADD"; item: Omit<CartItem, "quantity">; quantity: number }
-	| { type: "SET_QTY"; productId: Id<"products">; quantity: number }
-	| { type: "REMOVE"; productId: Id<"products"> }
+	| { type: "SET_QTY"; variantId: Id<"productVariants">; quantity: number }
+	| { type: "REMOVE"; variantId: Id<"productVariants"> }
 	| { type: "CLEAR" }
 	| { type: "HYDRATE"; items: CartItem[] };
 
@@ -37,13 +58,25 @@ function reducer(state: CartState, action: CartAction): CartState {
 			return { items: action.items };
 		case "ADD": {
 			const existing = state.items.find(
-				(i) => i.productId === action.item.productId,
+				(i) => i.variantId === action.item.variantId,
 			);
 			if (existing) {
 				return {
 					items: state.items.map((i) =>
-						i.productId === action.item.productId
-							? { ...i, quantity: i.quantity + action.quantity }
+						i.variantId === action.item.variantId
+							? {
+									...i,
+									// A custom line stays qty 1 (one bespoke negotiation);
+									// any other variant accumulates as usual.
+									quantity: i.isCustom
+										? i.quantity
+										: i.quantity + action.quantity,
+									// Re-requesting a custom line updates its note + image (latest
+									// wins); keep the prior values if this add carried none.
+									note: action.item.note ?? i.note,
+									customImageStorageId:
+										action.item.customImageStorageId ?? i.customImageStorageId,
+								}
 							: i,
 					),
 				};
@@ -55,12 +88,12 @@ function reducer(state: CartState, action: CartAction): CartState {
 		case "SET_QTY": {
 			if (action.quantity <= 0) {
 				return {
-					items: state.items.filter((i) => i.productId !== action.productId),
+					items: state.items.filter((i) => i.variantId !== action.variantId),
 				};
 			}
 			return {
 				items: state.items.map((i) =>
-					i.productId === action.productId
+					i.variantId === action.variantId
 						? { ...i, quantity: action.quantity }
 						: i,
 				),
@@ -68,7 +101,7 @@ function reducer(state: CartState, action: CartAction): CartState {
 		}
 		case "REMOVE":
 			return {
-				items: state.items.filter((i) => i.productId !== action.productId),
+				items: state.items.filter((i) => i.variantId !== action.variantId),
 			};
 		case "CLEAR":
 			return EMPTY_STATE;
@@ -90,6 +123,7 @@ function readPersisted(retailerId: string): CartItem[] {
 			(i): i is CartItem =>
 				typeof i === "object" &&
 				i !== null &&
+				typeof i.variantId === "string" &&
 				typeof i.productId === "string" &&
 				typeof i.name === "string" &&
 				typeof i.price === "number" &&
@@ -131,12 +165,13 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 		[],
 	);
 	const updateQuantity = useCallback(
-		(productId: Id<"products">, quantity: number) =>
-			dispatch({ type: "SET_QTY", productId, quantity }),
+		(variantId: Id<"productVariants">, quantity: number) =>
+			dispatch({ type: "SET_QTY", variantId, quantity }),
 		[],
 	);
 	const removeItem = useCallback(
-		(productId: Id<"products">) => dispatch({ type: "REMOVE", productId }),
+		(variantId: Id<"productVariants">) =>
+			dispatch({ type: "REMOVE", variantId }),
 		[],
 	);
 	const clearCart = useCallback(() => dispatch({ type: "CLEAR" }), []);

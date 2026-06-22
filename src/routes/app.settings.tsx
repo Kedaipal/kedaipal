@@ -1,6 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
-import { Building2, Info, Music2, Store } from "lucide-react";
+import {
+	Building2,
+	ChevronDown,
+	Info,
+	Landmark,
+	Music2,
+	Plus,
+	QrCode,
+	Store,
+	Trash2,
+} from "lucide-react";
 import { type FormEvent, type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
@@ -18,10 +28,25 @@ import {
 } from "../components/dashboard/page-header";
 import { useAppForm } from "../components/forms/form";
 import { ShopeeIcon } from "../components/icons/shopee-icon";
+import { PickupLocationsTab } from "../components/settings/pickup-locations-tab";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
+import { SortableList } from "../components/ui/sortable-list";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage } from "../lib/format";
+import {
+	ANCHOR_UI_LABELS,
+	collectStageConfigErrors,
+	MAX_ORDER_STAGES,
+	type OrderStage,
+	resolveStages,
+	STAGE_ANCHORS,
+	STAGE_DESCRIPTION_MAX_LENGTH,
+	STAGE_LABEL_MAX_LENGTH,
+	type StageAnchor,
+} from "../lib/orderStatus";
+import { reorderByIds } from "../lib/reorder";
 import {
 	settingsNotifyEmailFormSchema,
 	settingsWaPhoneFormSchema,
@@ -37,14 +62,29 @@ const LOCALE_OPTIONS = [
 	{ value: "ms", label: "Bahasa Malaysia" },
 ] as const;
 
-type SettingsTab = "store" | "whatsapp" | "payments" | "integrations";
+type SettingsTab =
+	| "store"
+	| "whatsapp"
+	| "payments"
+	| "pickup"
+	| "order-status"
+	| "integrations";
 
 const SETTINGS_TABS: ReadonlyArray<{ id: SettingsTab; label: string }> = [
 	{ id: "store", label: "Store" },
 	{ id: "whatsapp", label: "WhatsApp" },
 	{ id: "payments", label: "Payments" },
+	// Grouped with Pickup as the fulfilment cluster — these stage labels are
+	// about the order process, not messaging. Phase 2 (custom ordered stages)
+	// will extend this tab.
+	{ id: "pickup", label: "Pickup" },
+	{ id: "order-status", label: "Order status" },
 	{ id: "integrations", label: "Integrations" },
 ];
+
+const SETTINGS_TAB_IDS: ReadonlyArray<SettingsTab> = SETTINGS_TABS.map(
+	(t) => t.id,
+);
 
 function Card({ children }: { children: ReactNode }) {
 	return (
@@ -95,9 +135,7 @@ function InfoBanner({
 
 export const Route = createFileRoute("/app/settings")({
 	validateSearch: (search: Record<string, unknown>) => ({
-		tab: (["store", "whatsapp", "payments", "integrations"].includes(
-			search.tab as string,
-		)
+		tab: (SETTINGS_TAB_IDS.includes(search.tab as SettingsTab)
 			? search.tab
 			: "store") as SettingsTab,
 	}),
@@ -191,12 +229,13 @@ function SettingsRoute() {
 					<span className="select-none text-sm text-muted-foreground">
 						kedaipal.com/
 					</span>
-					<input
+					<Input
 						type="text"
 						value={newSlug}
 						onChange={(e) => setNewSlug(e.target.value.toLowerCase())}
 						placeholder="new-slug"
-						className="min-h-11 flex-1 bg-transparent pl-0 pr-4 font-mono text-base outline-none"
+						variant="bare"
+						className="min-h-11 flex-1 pr-4 font-mono text-base"
 					/>
 				</div>
 				<Hint state={availability} />
@@ -319,12 +358,59 @@ function SettingsRoute() {
 			{activeTab === "payments" ? (
 				<div className="flex flex-col gap-6 pt-2">
 					<Card>
-						<PaymentInstructionsForm
-							current={retailer.paymentInstructions}
-							currentQrUrl={retailer.paymentQrImageUrl}
-							onSave={(paymentInstructions) =>
-								updateSettings({ paymentInstructions })
-							}
+						<PaymentMethodsForm
+							current={retailer.paymentMethods ?? []}
+							onSave={(paymentMethods) => updateSettings({ paymentMethods })}
+						/>
+					</Card>
+				</div>
+			) : null}
+
+			{activeTab === "pickup" ? (
+				<PickupLocationsTab
+					retailerId={retailer._id}
+					offerSelfCollect={retailer.offerSelfCollect ?? false}
+				/>
+			) : null}
+
+			{activeTab === "order-status" ? (
+				<div className="flex flex-col gap-6 pt-2">
+					<InfoBanner title="How order stages work">
+						<p>
+							Build the steps your orders move through — name them however you
+							work. Buyers see them as a live timeline; you advance orders
+							step-by-step from the dashboard.
+						</p>
+						<p>
+							Every step maps to one of four built-in milestones via{" "}
+							<span className="font-medium text-foreground">“Counts as”</span>,
+							so payments, packing and tracking keep working:{" "}
+							<span className="font-medium text-foreground">Accepted</span> →{" "}
+							<span className="font-medium text-foreground">In production</span>{" "}
+							→ <span className="font-medium text-foreground">Ready</span> →{" "}
+							<span className="font-medium text-foreground">Done</span>.
+						</p>
+						<p>
+							<span className="font-medium text-foreground">
+								Your first step should count as “Accepted”, your last as “Done”
+							</span>{" "}
+							— map the steps in between to whichever milestone fits. E.g. a
+							cake shop: “Order received” (Accepted) → “Baking” (In production)
+							→ “Ready for pickup” (Ready) → “Collected” (Done).
+						</p>
+					</InfoBanner>
+
+					<Card>
+						<StageEditor
+							seed={resolveStages({
+								orderStages: retailer.orderStages,
+								labels: retailer.statusLabels,
+								deliveryMethod: retailer.offerSelfCollect
+									? "self_collect"
+									: "delivery",
+							})}
+							isCustomized={Boolean(retailer.orderStages?.length)}
+							onSave={(orderStages) => updateSettings({ orderStages })}
 						/>
 					</Card>
 				</div>
@@ -369,21 +455,22 @@ function SettingsRoute() {
 	);
 }
 
-type PaymentInstructionsDraft = {
+// One editable payment method in the settings form. `qrPreviewUrl` is the
+// resolved (or freshly-uploaded object) URL for display only — not persisted.
+type MethodDraft = {
+	// Stable React key so reordering doesn't remount inputs / lose focus.
+	_key: string;
+	type: "bank" | "qr";
+	label: string;
 	bankName: string;
 	bankAccountName: string;
 	bankAccountNumber: string;
 	qrImageStorageId: string;
+	qrPreviewUrl?: string;
 	note: string;
 };
 
-const EMPTY_PAYMENT_DRAFT: PaymentInstructionsDraft = {
-	bankName: "",
-	bankAccountName: "",
-	bankAccountNumber: "",
-	qrImageStorageId: "",
-	note: "",
-};
+const MAX_METHODS = 8;
 
 function StoreNameForm({
 	current,
@@ -417,13 +504,13 @@ function StoreNameForm({
 				description="Shown on your storefront header and WhatsApp messages."
 			/>
 			<div className="flex flex-col gap-1.5">
-				<input
+				<Input
 					type="text"
 					value={value}
 					onChange={(e) => setValue(e.target.value)}
 					placeholder="Your Store Name"
 					maxLength={80}
-					className="min-h-11 rounded-xl border border-input bg-background px-4 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+					variant="field"
 				/>
 				<span className="self-end text-xs text-muted-foreground tabular-nums">
 					{value.trim().length}/80
@@ -538,51 +625,112 @@ function LogoForm({
 	);
 }
 
-function PaymentInstructionsForm({
+type PaymentMethodWire = {
+	type: "bank" | "qr";
+	label: string;
+	bankName?: string;
+	bankAccountName?: string;
+	bankAccountNumber?: string;
+	qrImageStorageId?: string;
+	note?: string;
+	sortOrder: number;
+};
+
+function newDraft(type: "bank" | "qr"): MethodDraft {
+	return {
+		_key: crypto.randomUUID(),
+		type,
+		label: "",
+		bankName: "",
+		bankAccountName: "",
+		bankAccountNumber: "",
+		qrImageStorageId: "",
+		qrPreviewUrl: undefined,
+		note: "",
+	};
+}
+
+function PaymentMethodsForm({
 	current,
-	currentQrUrl,
 	onSave,
 }: {
-	current:
-		| {
-				bankName?: string;
-				bankAccountName?: string;
-				bankAccountNumber?: string;
-				qrImageStorageId?: string;
-				note?: string;
-		  }
-		| undefined;
-	currentQrUrl: string | undefined;
-	onSave: (instructions: PaymentInstructionsDraft) => Promise<unknown>;
+	current: Array<{
+		type: "bank" | "qr";
+		label: string;
+		bankName?: string;
+		bankAccountName?: string;
+		bankAccountNumber?: string;
+		qrImageStorageId?: string;
+		qrImageUrl?: string;
+		note?: string;
+	}>;
+	onSave: (methods: PaymentMethodWire[]) => Promise<unknown>;
 }) {
 	const generateQrUploadUrl = useMutation(
 		api.retailers.generatePaymentQrUploadUrl,
 	);
 
-	const [draft, setDraft] = useState<PaymentInstructionsDraft>(() => ({
-		bankName: current?.bankName ?? "",
-		bankAccountName: current?.bankAccountName ?? "",
-		bankAccountNumber: current?.bankAccountNumber ?? "",
-		qrImageStorageId: current?.qrImageStorageId ?? "",
-		note: current?.note ?? "",
-	}));
-	// Local preview URL for a freshly uploaded file (object URL). Falls back to
-	// the persisted Convex storage URL on initial render.
-	const [localPreview, setLocalPreview] = useState<string | null>(null);
-	const [uploading, setUploading] = useState(false);
+	// Methods are kept grouped (all banks, then all QRs) so the array order ==
+	// what renders (banks in the WA text block, QRs as follow-up images). Sorting
+	// is therefore within a type only.
+	const [methods, setMethods] = useState<MethodDraft[]>(() => {
+		const seeded = current.map((m) => ({
+			_key: crypto.randomUUID(),
+			type: m.type,
+			label: m.label,
+			bankName: m.bankName ?? "",
+			bankAccountName: m.bankAccountName ?? "",
+			bankAccountNumber: m.bankAccountNumber ?? "",
+			qrImageStorageId: m.qrImageStorageId ?? "",
+			qrPreviewUrl: m.qrImageUrl,
+			note: m.note ?? "",
+		}));
+		return [
+			...seeded.filter((m) => m.type === "bank"),
+			...seeded.filter((m) => m.type === "qr"),
+		];
+	});
+	const [uploadingKey, setUploadingKey] = useState<string | null>(null);
+	const [saving, setSaving] = useState(false);
 
-	const previewUrl = localPreview ?? currentQrUrl ?? null;
+	const banks = methods.filter((m) => m.type === "bank");
+	const qrs = methods.filter((m) => m.type === "qr");
 
-	function setField<K extends keyof PaymentInstructionsDraft>(
-		key: K,
-		value: PaymentInstructionsDraft[K],
-	) {
-		setDraft((prev) => ({ ...prev, [key]: value }));
+	function update(key: string, patch: Partial<MethodDraft>) {
+		setMethods((prev) =>
+			prev.map((m) => (m._key === key ? { ...m, ...patch } : m)),
+		);
+	}
+	function removeMethod(key: string) {
+		setMethods((prev) => prev.filter((m) => m._key !== key));
+	}
+	function addMethod(type: "bank" | "qr") {
+		if (methods.length >= MAX_METHODS) {
+			toast.error(`You can add at most ${MAX_METHODS} payment methods`);
+			return;
+		}
+		setMethods((prev) => {
+			const draft = newDraft(type);
+			const b = prev.filter((m) => m.type === "bank");
+			const q = prev.filter((m) => m.type === "qr");
+			// New bank slots at the end of the bank group; new QR at the very end.
+			return type === "bank" ? [...b, draft, ...q] : [...b, ...q, draft];
+		});
+	}
+	// Reorder within a single type, preserving the other group + the grouping.
+	function reorderType(type: "bank" | "qr", orderedKeys: string[]) {
+		setMethods((prev) => {
+			const b = prev.filter((m) => m.type === "bank");
+			const q = prev.filter((m) => m.type === "qr");
+			const reorder = (list: MethodDraft[]) =>
+				reorderByIds(list, orderedKeys, (m) => m._key);
+			return type === "bank" ? [...reorder(b), ...q] : [...b, ...reorder(q)];
+		});
 	}
 
-	async function handleQrFile(file: File | null) {
+	async function handleQrFile(key: string, file: File | null) {
 		if (!file) return;
-		setUploading(true);
+		setUploadingKey(key);
 		try {
 			const url = await generateQrUploadUrl();
 			const res = await fetch(url, {
@@ -592,144 +740,297 @@ function PaymentInstructionsForm({
 			});
 			if (!res.ok) throw new Error("Upload failed");
 			const { storageId } = (await res.json()) as { storageId: string };
-			setField("qrImageStorageId", storageId);
-			setLocalPreview(URL.createObjectURL(file));
+			update(key, {
+				qrImageStorageId: storageId,
+				qrPreviewUrl: URL.createObjectURL(file),
+			});
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
-			setUploading(false);
+			setUploadingKey(null);
 		}
-	}
-
-	function removeQr() {
-		setField("qrImageStorageId", "");
-		setLocalPreview(null);
-	}
-
-	function clearAll() {
-		setDraft(EMPTY_PAYMENT_DRAFT);
-		setLocalPreview(null);
 	}
 
 	async function handleSubmit(e: FormEvent) {
 		e.preventDefault();
+		setSaving(true);
 		try {
-			await onSave(draft);
-			toast.success("Payment details saved.");
+			// `methods` is already banks-then-QRs, so index === sortOrder.
+			const wire: PaymentMethodWire[] = methods.map((m, i) => {
+				const label =
+					m.label.trim() ||
+					(m.type === "qr" ? "QR code" : m.bankName.trim() || "Bank transfer");
+				return {
+					type: m.type,
+					label,
+					bankName:
+						m.type === "bank" ? m.bankName.trim() || undefined : undefined,
+					bankAccountName:
+						m.type === "bank"
+							? m.bankAccountName.trim() || undefined
+							: undefined,
+					bankAccountNumber:
+						m.type === "bank"
+							? m.bankAccountNumber.trim() || undefined
+							: undefined,
+					qrImageStorageId:
+						m.type === "qr" ? m.qrImageStorageId || undefined : undefined,
+					note: m.note.trim() || undefined,
+					sortOrder: i,
+				};
+			});
+			await onSave(wire);
+			toast.success("Payment methods saved.");
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
 		}
 	}
 
+	// One method's editable card. `handle` is the drag grip from SortableList.
+	// While a drag is in progress (`state.isSorting`), the whole group collapses
+	// to single-line rows (just the label) so a tall list is easy to rearrange;
+	// the floating overlay copy (`state.isOverlay`) gets a lifted shadow.
+	function methodCard(
+		m: MethodDraft,
+		handle: ReactNode,
+		state: { isSorting: boolean; isOverlay: boolean },
+	) {
+		const displayLabel =
+			m.label.trim() ||
+			(m.type === "bank" ? m.bankName.trim() || "Bank account" : "QR code");
+		if (state.isSorting) {
+			return (
+				<div
+					className={`flex items-center gap-2 rounded-xl border bg-card p-3 ${
+						state.isOverlay ? "border-accent shadow-lg" : "border-border"
+					}`}
+				>
+					{handle}
+					{m.type === "bank" ? (
+						<Landmark className="size-4 shrink-0 text-muted-foreground" />
+					) : (
+						<QrCode className="size-4 shrink-0 text-muted-foreground" />
+					)}
+					<span className="truncate text-sm font-medium">{displayLabel}</span>
+				</div>
+			);
+		}
+		return (
+			<div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
+				<div className="flex items-center gap-2">
+					{handle}
+					<span className="text-sm font-medium text-muted-foreground">
+						{m.type === "bank" ? "Bank account" : "QR code"}
+					</span>
+					<button
+						type="button"
+						onClick={() => removeMethod(m._key)}
+						aria-label="Remove method"
+						className="ml-auto flex size-11 items-center justify-center rounded-full text-destructive hover:bg-destructive/10"
+					>
+						<Trash2 className="size-4" />
+					</button>
+				</div>
+
+				<label className="flex flex-col gap-1">
+					<span className="text-sm font-medium">Label</span>
+					<Input
+						type="text"
+						value={m.label}
+						onChange={(e) => update(m._key, { label: e.target.value })}
+						placeholder={m.type === "bank" ? "Maybank" : "DuitNow QR"}
+						maxLength={60}
+						variant="field"
+					/>
+				</label>
+
+				{m.type === "bank" ? (
+					<>
+						<label className="flex flex-col gap-1">
+							<span className="text-sm font-medium">Bank name</span>
+							<Input
+								type="text"
+								value={m.bankName}
+								onChange={(e) => update(m._key, { bankName: e.target.value })}
+								placeholder="Maybank"
+								maxLength={120}
+								variant="field"
+							/>
+						</label>
+						<label className="flex flex-col gap-1">
+							<span className="text-sm font-medium">Account holder name</span>
+							<Input
+								type="text"
+								value={m.bankAccountName}
+								onChange={(e) =>
+									update(m._key, { bankAccountName: e.target.value })
+								}
+								placeholder="Your Business Sdn Bhd"
+								maxLength={120}
+								variant="field"
+							/>
+						</label>
+						<label className="flex flex-col gap-1">
+							<span className="text-sm font-medium">Account number</span>
+							<Input
+								type="text"
+								value={m.bankAccountNumber}
+								onChange={(e) =>
+									update(m._key, { bankAccountNumber: e.target.value })
+								}
+								placeholder="5123 4567 8901"
+								inputMode="numeric"
+								maxLength={120}
+								variant="field"
+								className="font-mono"
+							/>
+						</label>
+					</>
+				) : (
+					<div className="flex flex-col gap-2">
+						<span className="text-sm font-medium">QR image</span>
+						{m.qrPreviewUrl ? (
+							<div className="flex flex-col items-start gap-2">
+								<img
+									src={m.qrPreviewUrl}
+									alt="Payment QR"
+									className="h-44 w-44 rounded-xl border border-input object-contain"
+								/>
+								<button
+									type="button"
+									onClick={() =>
+										update(m._key, {
+											qrImageStorageId: "",
+											qrPreviewUrl: undefined,
+										})
+									}
+									className="text-xs text-destructive underline"
+								>
+									Remove QR
+								</button>
+							</div>
+						) : (
+							<label className="flex h-28 cursor-pointer items-center justify-center rounded-xl border border-dashed border-input bg-background text-sm text-muted-foreground hover:bg-accent/5">
+								{uploadingKey === m._key
+									? "Uploading…"
+									: "Tap to upload QR image"}
+								<input
+									type="file"
+									accept="image/*"
+									className="hidden"
+									onChange={(e) =>
+										handleQrFile(m._key, e.target.files?.[0] ?? null)
+									}
+									disabled={uploadingKey === m._key}
+								/>
+							</label>
+						)}
+					</div>
+				)}
+
+				<label className="flex flex-col gap-1">
+					<span className="text-sm font-medium">Note (optional)</span>
+					<textarea
+						value={m.note}
+						onChange={(e) => update(m._key, { note: e.target.value })}
+						placeholder="e.g. Send your receipt after transfer."
+						rows={2}
+						maxLength={500}
+						className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+					/>
+				</label>
+			</div>
+		);
+	}
+
+	const atCap = methods.length >= MAX_METHODS;
+
 	return (
-		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
+		<form onSubmit={handleSubmit} className="flex flex-col gap-6">
 			<SectionHeading
-				title="Payment details"
-				description="Shown to shoppers in the WhatsApp confirmation reply after they place an order. Leave any field blank to skip it. Visible only after order — not on your public storefront."
+				title="Payment methods"
+				description="Add your banks and QR codes — shoppers see all of them in the WhatsApp confirmation reply and on their order page (only after they order, never on your public storefront). Drag the handle to reorder within each group."
 			/>
 
-			<label className="flex flex-col gap-1">
-				<span className="text-sm font-medium">Bank name</span>
-				<input
-					type="text"
-					value={draft.bankName}
-					onChange={(e) => setField("bankName", e.target.value)}
-					placeholder="Maybank"
-					maxLength={120}
-					className="min-h-11 rounded-xl border border-input bg-background px-4 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-				/>
-			</label>
-
-			<label className="flex flex-col gap-1">
-				<span className="text-sm font-medium">Account holder name</span>
-				<input
-					type="text"
-					value={draft.bankAccountName}
-					onChange={(e) => setField("bankAccountName", e.target.value)}
-					placeholder="Acme Outdoor Sdn Bhd"
-					maxLength={120}
-					className="min-h-11 rounded-xl border border-input bg-background px-4 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-				/>
-			</label>
-
-			<label className="flex flex-col gap-1">
-				<span className="text-sm font-medium">Account number</span>
-				<input
-					type="text"
-					value={draft.bankAccountNumber}
-					onChange={(e) => setField("bankAccountNumber", e.target.value)}
-					placeholder="5123 4567 8901"
-					inputMode="numeric"
-					maxLength={120}
-					className="min-h-11 rounded-xl border border-input bg-background px-4 font-mono text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-				/>
-			</label>
-
-			<div className="flex flex-col gap-2">
-				<span className="text-sm font-medium">
-					Payment QR code (DuitNow / TNG / etc.)
-				</span>
-				{previewUrl ? (
-					<div className="flex flex-col items-start gap-2">
-						<img
-							src={previewUrl}
-							alt="Payment QR"
-							className="h-48 w-48 rounded-xl border border-input object-contain"
-						/>
-						<button
-							type="button"
-							onClick={removeQr}
-							className="text-xs text-destructive underline"
-						>
-							Remove QR
-						</button>
-					</div>
+			{/* Bank accounts — shown together in the WhatsApp payment details. */}
+			<div className="flex flex-col gap-3">
+				<div className="flex items-center justify-between gap-2">
+					<span className="inline-flex items-center gap-1.5 text-sm font-semibold">
+						<Landmark className="size-4" />
+						Bank accounts
+					</span>
+					<Button
+						type="button"
+						variant="outline"
+						className="h-9"
+						onClick={() => addMethod("bank")}
+						disabled={atCap}
+					>
+						<Plus className="size-4" />
+						Add bank
+					</Button>
+				</div>
+				{banks.length === 0 ? (
+					<p className="rounded-xl border border-dashed border-input bg-muted/20 px-4 py-4 text-center text-sm text-muted-foreground">
+						No bank accounts yet.
+					</p>
 				) : (
-					<label className="flex h-32 cursor-pointer items-center justify-center rounded-xl border border-dashed border-input bg-background text-sm text-muted-foreground hover:bg-accent/5">
-						{uploading ? "Uploading…" : "Tap to upload QR image"}
-						<input
-							type="file"
-							accept="image/*"
-							className="hidden"
-							onChange={(e) => handleQrFile(e.target.files?.[0] ?? null)}
-							disabled={uploading}
-						/>
-					</label>
+					<SortableList
+						items={banks}
+						getId={(m) => m._key}
+						onReorder={(ids) => reorderType("bank", ids)}
+						renderItem={(m, handle, state) => methodCard(m, handle, state)}
+						className="flex flex-col gap-3"
+					/>
 				)}
 			</div>
 
-			<label className="flex flex-col gap-1">
-				<span className="text-sm font-medium">Note to shopper</span>
-				<textarea
-					value={draft.note}
-					onChange={(e) => setField("note", e.target.value)}
-					placeholder="Send your payment receipt to our WhatsApp number after transfer."
-					rows={3}
-					maxLength={500}
-					className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-				/>
-				<span className="text-xs text-muted-foreground">
-					{draft.note.length}/500
-				</span>
-			</label>
-
-			<div className="flex gap-2 lg:justify-end">
-				<Button
-					type="button"
-					variant="outline"
-					className="h-11 lg:h-10"
-					onClick={clearAll}
-				>
-					Clear all
-				</Button>
-				<Button
-					type="submit"
-					className="h-11 flex-1 lg:h-10 lg:flex-none lg:min-w-[180px]"
-					disabled={uploading}
-				>
-					{uploading ? "Uploading…" : "Save payment details"}
-				</Button>
+			{/* QR codes — each sent as its own follow-up image on WhatsApp. */}
+			<div className="flex flex-col gap-3">
+				<div className="flex items-center justify-between gap-2">
+					<span className="inline-flex items-center gap-1.5 text-sm font-semibold">
+						<QrCode className="size-4" />
+						QR codes
+					</span>
+					<Button
+						type="button"
+						variant="outline"
+						className="h-9"
+						onClick={() => addMethod("qr")}
+						disabled={atCap}
+					>
+						<Plus className="size-4" />
+						Add QR
+					</Button>
+				</div>
+				{qrs.length === 0 ? (
+					<p className="rounded-xl border border-dashed border-input bg-muted/20 px-4 py-4 text-center text-sm text-muted-foreground">
+						No QR codes yet.
+					</p>
+				) : (
+					<SortableList
+						items={qrs}
+						getId={(m) => m._key}
+						onReorder={(ids) => reorderType("qr", ids)}
+						renderItem={(m, handle, state) => methodCard(m, handle, state)}
+						className="flex flex-col gap-3"
+					/>
+				)}
 			</div>
+
+			<Button
+				type="submit"
+				className="h-11 lg:h-10 lg:self-end lg:min-w-[180px]"
+				disabled={saving || uploadingKey !== null}
+			>
+				{uploadingKey !== null
+					? "Uploading…"
+					: saving
+						? "Saving…"
+						: "Save payment methods"}
+			</Button>
 		</form>
 	);
 }
@@ -848,6 +1149,404 @@ function MessageTemplatesForm({
 				Save templates
 			</Button>
 		</form>
+	);
+}
+
+// One editable stage in the StageEditor. `_key` is a stable React key so drag
+// reordering doesn't remount inputs; `id` is the server id ("" = new stage).
+type StageDraft = {
+	_key: string;
+	id: string;
+	anchor: StageAnchor;
+	labelEn: string;
+	labelMs: string;
+	descEn: string;
+	descMs: string;
+	notify: boolean;
+};
+
+function seedToDraft(s: OrderStage): StageDraft {
+	return {
+		_key: crypto.randomUUID(),
+		// Synthesized defaults ("default:<anchor>") aren't real ids — saving turns
+		// them into configured stages with fresh ids.
+		id: s.id.startsWith("default:") ? "" : s.id,
+		anchor: s.anchor,
+		labelEn: s.label.en,
+		labelMs: s.label.ms ?? "",
+		descEn: s.description?.en ?? "",
+		descMs: s.description?.ms ?? "",
+		notify: s.notify,
+	};
+}
+
+// Map drafts to the wire/validation shape (stable id for dup-checking).
+function draftsToStages(drafts: StageDraft[]): OrderStage[] {
+	return drafts.map((d, i) => ({
+		id: d.id || d._key,
+		anchor: d.anchor,
+		label: {
+			en: d.labelEn.trim(),
+			...(d.labelMs.trim() ? { ms: d.labelMs.trim() } : {}),
+		},
+		...(d.descEn.trim() || d.descMs.trim()
+			? {
+					description: {
+						...(d.descEn.trim() ? { en: d.descEn.trim() } : {}),
+						...(d.descMs.trim() ? { ms: d.descMs.trim() } : {}),
+					},
+				}
+			: {}),
+		notify: d.notify,
+		sortOrder: i,
+	}));
+}
+
+function StageEditor({
+	seed,
+	isCustomized,
+	onSave,
+}: {
+	seed: OrderStage[];
+	isCustomized: boolean;
+	onSave: (stages: OrderStage[]) => Promise<unknown>;
+}) {
+	const [drafts, setDrafts] = useState<StageDraft[]>(() =>
+		seed.map(seedToDraft),
+	);
+	const [saving, setSaving] = useState(false);
+	// Cards collapse to a one-line summary by default (a full stage card is tall on
+	// mobile, so the page reads better at a glance). Click a card to expand it.
+	// During a drag the row always renders compact (state.isSorting), and the
+	// expanded set is preserved so cards re-open exactly as they were afterwards.
+	const [expanded, setExpanded] = useState<Set<string>>(new Set());
+	function toggleExpand(key: string) {
+		setExpanded((prev) => {
+			const next = new Set(prev);
+			if (next.has(key)) next.delete(key);
+			else next.add(key);
+			return next;
+		});
+	}
+
+	function update(key: string, patch: Partial<StageDraft>) {
+		setDrafts((prev) =>
+			prev.map((d) => (d._key === key ? { ...d, ...patch } : d)),
+		);
+	}
+	function remove(key: string) {
+		setDrafts((prev) => prev.filter((d) => d._key !== key));
+	}
+	function addStage() {
+		if (drafts.length >= MAX_ORDER_STAGES) {
+			toast.error(`You can have at most ${MAX_ORDER_STAGES} stages.`);
+			return;
+		}
+		const key = crypto.randomUUID();
+		// Open the new (empty) stage so the seller can fill it in immediately.
+		setExpanded((prev) => new Set(prev).add(key));
+		setDrafts((prev) => [
+			...prev,
+			{
+				_key: key,
+				id: "",
+				// Default to the last stage's anchor so the monotonic rule holds and
+				// the seller usually doesn't need to touch the dropdown.
+				anchor: prev[prev.length - 1]?.anchor ?? "confirmed",
+				labelEn: "",
+				labelMs: "",
+				descEn: "",
+				descMs: "",
+				notify: false, // intermediate stages default off (DECISION 2)
+			},
+		]);
+	}
+
+	const errors = collectStageConfigErrors(draftsToStages(drafts));
+	const canSave = drafts.length > 0 && errors.length === 0 && !saving;
+
+	async function handleSave() {
+		setSaving(true);
+		try {
+			await onSave(draftsToStages(drafts));
+			toast.success("Order stages saved.");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	async function handleReset() {
+		setSaving(true);
+		try {
+			await onSave([]); // empty → server clears → synthesized defaults
+			toast.success("Reset to the default stages.");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	function stageCard(
+		d: StageDraft,
+		index: number,
+		handle: ReactNode,
+		state: { isSorting: boolean; isOverlay: boolean },
+	) {
+		const displayLabel = d.labelEn.trim() || `Stage ${index + 1}`;
+		if (state.isSorting) {
+			return (
+				<div
+					className={`flex items-center gap-2 rounded-xl border bg-card p-3 ${
+						state.isOverlay ? "border-accent shadow-lg" : "border-border"
+					}`}
+				>
+					{handle}
+					<span className="truncate text-sm font-medium">{displayLabel}</span>
+					<span className="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+						{ANCHOR_UI_LABELS[d.anchor]}
+					</span>
+				</div>
+			);
+		}
+
+		const isExpanded = expanded.has(d._key);
+		if (!isExpanded) {
+			// Collapsed-by-default summary — same info as the drag row; click to open.
+			return (
+				<div className="flex items-center gap-2 rounded-xl border border-border bg-card p-3">
+					{handle}
+					<button
+						type="button"
+						onClick={() => toggleExpand(d._key)}
+						aria-expanded={false}
+						className="flex min-w-0 flex-1 items-center gap-2 text-left"
+					>
+						<span className="truncate text-sm font-medium">{displayLabel}</span>
+						<span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+							{ANCHOR_UI_LABELS[d.anchor]}
+						</span>
+						<ChevronDown className="ml-auto size-4 shrink-0 text-muted-foreground" />
+					</button>
+				</div>
+			);
+		}
+
+		return (
+			<div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
+				{/* Header mirrors the collapsed row exactly (handle + label + chevron
+				    far-right) so the toggle target doesn't jump when expanding. */}
+				<div className="flex items-center gap-2">
+					{handle}
+					<button
+						type="button"
+						onClick={() => toggleExpand(d._key)}
+						aria-expanded={true}
+						className="flex min-w-0 flex-1 items-center gap-2 text-left"
+					>
+						<span className="truncate text-sm font-medium">{displayLabel}</span>
+						<ChevronDown className="ml-auto size-4 shrink-0 rotate-180 text-muted-foreground" />
+					</button>
+				</div>
+
+				{/* Stack on mobile (full-width, never misaligned); two columns at sm+
+				    where the BM label fits one line so the inputs line up. */}
+				<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+					<label className="flex flex-col gap-1">
+						<span className="text-xs font-medium text-muted-foreground">
+							Label (English)
+						</span>
+						<Input
+							type="text"
+							variant="field"
+							maxLength={STAGE_LABEL_MAX_LENGTH}
+							value={d.labelEn}
+							onChange={(e) => update(d._key, { labelEn: e.target.value })}
+							placeholder="e.g. Sewing"
+						/>
+					</label>
+					<label className="flex flex-col gap-1">
+						<span className="text-xs font-medium text-muted-foreground">
+							Label (Bahasa Malaysia)
+						</span>
+						<Input
+							type="text"
+							variant="field"
+							maxLength={STAGE_LABEL_MAX_LENGTH}
+							value={d.labelMs}
+							onChange={(e) => update(d._key, { labelMs: e.target.value })}
+							placeholder="Optional"
+						/>
+					</label>
+				</div>
+
+				<label className="flex flex-col gap-1">
+					<span className="text-xs font-medium text-muted-foreground">
+						Counts as{" "}
+						<span className="font-normal">
+							— which milestone this step represents
+						</span>
+					</span>
+					<select
+						value={d.anchor}
+						onChange={(e) => {
+							const anchor = e.target.value as StageAnchor;
+							// Confirmed stages never WhatsApp the buyer, so clear notify
+							// when switching to it (keeps the count + UI honest).
+							update(d._key, {
+								anchor,
+								...(anchor === "confirmed" ? { notify: false } : {}),
+							});
+						}}
+						className="min-h-11 rounded-xl border border-input bg-background px-4 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+					>
+						{STAGE_ANCHORS.map((a) => (
+							<option key={a} value={a}>
+								{ANCHOR_UI_LABELS[a]}
+							</option>
+						))}
+					</select>
+					<span className="text-xs text-muted-foreground">
+						{d.anchor === "confirmed"
+							? "The order has been accepted. Use this for your first step."
+							: d.anchor === "delivered"
+								? "The order is complete. Use this for your last step."
+								: "A step while you're fulfilling the order."}
+					</span>
+				</label>
+
+				<div className="grid grid-cols-1 gap-2">
+					<label className="flex flex-col gap-1">
+						<span className="text-xs font-medium text-muted-foreground">
+							Buyer note (optional) — English
+						</span>
+						<textarea
+							value={d.descEn}
+							onChange={(e) => update(d._key, { descEn: e.target.value })}
+							placeholder="e.g. Drying — usually 1–2 days depending on weather"
+							rows={2}
+							maxLength={STAGE_DESCRIPTION_MAX_LENGTH}
+							className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+						/>
+					</label>
+					<label className="flex flex-col gap-1">
+						<span className="text-xs font-medium text-muted-foreground">
+							Buyer note (optional) — Bahasa Malaysia
+						</span>
+						<textarea
+							value={d.descMs}
+							onChange={(e) => update(d._key, { descMs: e.target.value })}
+							placeholder="Pilihan"
+							rows={2}
+							maxLength={STAGE_DESCRIPTION_MAX_LENGTH}
+							className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+						/>
+					</label>
+				</div>
+
+				{d.anchor === "confirmed" ? (
+					// Confirmed = the order-accepted moment; the buyer is already
+					// messaged by the confirmation/payment flow, so no per-stage toggle.
+					<p className="text-xs text-muted-foreground">
+						Buyers are notified automatically when the order is confirmed.
+					</p>
+				) : (
+					<label className="flex items-center gap-2 text-sm">
+						<input
+							type="checkbox"
+							checked={d.notify}
+							onChange={(e) => update(d._key, { notify: e.target.checked })}
+							className="size-4"
+						/>
+						<span>
+							Send the buyer a WhatsApp when the order enters this stage
+						</span>
+					</label>
+				)}
+
+				{/* Destructive action lives at the bottom (out of the toggle header) so
+				    it can't be hit while quick-expanding/collapsing. */}
+				<button
+					type="button"
+					onClick={() => remove(d._key)}
+					className="flex h-9 items-center gap-1.5 self-start rounded-lg px-2 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10"
+				>
+					<Trash2 className="size-3.5" />
+					Remove stage
+				</button>
+			</div>
+		);
+	}
+
+	return (
+		<div className="flex flex-col gap-4">
+			<div className="flex items-center justify-between gap-2">
+				<SectionHeading
+					title="Stages"
+					description="Drag to reorder. Each stage must “count as” the same milestone as the one before it, or a later one."
+				/>
+				<Button
+					type="button"
+					variant="outline"
+					className="h-9 shrink-0"
+					onClick={addStage}
+					disabled={drafts.length >= MAX_ORDER_STAGES}
+				>
+					<Plus className="size-4" />
+					Add stage
+				</Button>
+			</div>
+
+			{drafts.length === 0 ? (
+				<p className="rounded-xl border border-dashed border-input bg-muted/20 px-4 py-4 text-center text-sm text-muted-foreground">
+					No stages — add at least one, or reset to the defaults.
+				</p>
+			) : (
+				<SortableList
+					items={drafts}
+					getId={(d) => d._key}
+					onReorder={(ids) =>
+						setDrafts((prev) => reorderByIds(prev, ids, (d) => d._key))
+					}
+					renderItem={(d, handle, state) =>
+						stageCard(d, drafts.indexOf(d), handle, state)
+					}
+					className="flex flex-col gap-3"
+				/>
+			)}
+
+			{errors.length > 0 ? (
+				<ul className="flex flex-col gap-1 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-xs text-destructive">
+					{errors.map((e) => (
+						<li key={e}>• {e}</li>
+					))}
+				</ul>
+			) : null}
+
+			<div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-end">
+				{isCustomized ? (
+					<Button
+						type="button"
+						variant="ghost"
+						onClick={handleReset}
+						disabled={saving}
+						className="h-11 lg:h-10 lg:w-auto"
+					>
+						Reset to defaults
+					</Button>
+				) : null}
+				<Button
+					type="button"
+					onClick={handleSave}
+					disabled={!canSave}
+					className={SAVE_BTN_CLASS}
+				>
+					{saving ? "Saving…" : "Save stages"}
+				</Button>
+			</div>
+		</div>
 	);
 }
 
@@ -1054,14 +1753,10 @@ function WaPhoneForm({
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
 			<form.AppField name="waPhone">
 				{(field) => (
-					<field.TextField
+					<field.PhoneField
 						label="Your contact WhatsApp number"
-						placeholder="60123456789"
-						type="tel"
-						inputMode="tel"
-						mono
 						required
-						description="Country code + number, digits only. Shown to buyers in order confirmations and updates so they can reach you directly."
+						description="Shown to buyers in order confirmations and updates so they can reach you directly."
 					/>
 				)}
 			</form.AppField>
@@ -1074,7 +1769,10 @@ function WaPhoneForm({
 				})}
 			>
 				{({ canSubmit, isSubmitting, values }) => {
-					const dirty = values.waPhone.trim() !== current.trim();
+					// Compare digits-only: PhoneField keeps state in E.164 (`+60…`)
+					// while `current` is stored without the `+`.
+					const dirty =
+						values.waPhone.replace(/\D/g, "") !== current.replace(/\D/g, "");
 					return (
 						<Button
 							type="submit"

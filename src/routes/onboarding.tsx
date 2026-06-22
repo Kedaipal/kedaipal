@@ -1,10 +1,11 @@
 import { RedirectToSignIn, Show } from "@clerk/tanstack-react-start";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import { type FormEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage } from "../lib/format";
 import { slugify } from "../lib/slug";
@@ -33,6 +34,7 @@ function OnboardingForm() {
 	const [slug, setSlug] = useState("");
 	const [slugEdited, setSlugEdited] = useState(false);
 	const [submitting, setSubmitting] = useState(false);
+	const [agreed, setAgreed] = useState(false);
 
 	const availability = useSlugAvailability(slug);
 
@@ -57,6 +59,12 @@ function OnboardingForm() {
 			return;
 		}
 		if (availability.status !== "available") return;
+		if (!agreed) {
+			toast.error(
+				"Please accept the Terms, Privacy Policy, and Acceptable Use Policy",
+			);
+			return;
+		}
 		setSubmitting(true);
 		try {
 			await createRetailer({ storeName: storeName.trim(), slug });
@@ -70,6 +78,7 @@ function OnboardingForm() {
 	const canSubmit =
 		storeName.trim().length >= 2 &&
 		availability.status === "available" &&
+		agreed &&
 		!submitting;
 
 	return (
@@ -89,12 +98,12 @@ function OnboardingForm() {
 
 			<form onSubmit={handleSubmit} className="flex flex-col gap-5">
 				<Field label="Store name">
-					<input
+					<Input
 						type="text"
 						value={storeName}
 						onChange={(e) => setStoreName(e.target.value)}
-						placeholder="Arif Outdoor"
-						className="min-h-11 rounded-xl border border-input bg-background px-4 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+						placeholder="e.g. Your store name"
+						variant="field"
 					/>
 				</Field>
 
@@ -103,7 +112,7 @@ function OnboardingForm() {
 						<span className="select-none text-muted-foreground">
 							kedaipal.com/
 						</span>
-						<input
+						<Input
 							type="text"
 							value={slug}
 							onChange={(e) => {
@@ -111,11 +120,48 @@ function OnboardingForm() {
 								setSlugEdited(true);
 							}}
 							placeholder="your-slug"
-							className="min-h-11 flex-1 bg-transparent pl-0 pr-4 font-mono text-base outline-none"
+							variant="bare"
+							className="min-h-11 flex-1 pr-4 font-mono text-base"
 						/>
 					</div>
 					<AvailabilityHint state={availability} />
 				</Field>
+
+				<label className="flex items-start gap-3 text-sm text-muted-foreground">
+					<input
+						type="checkbox"
+						checked={agreed}
+						onChange={(e) => setAgreed(e.target.checked)}
+						className="mt-0.5 size-5 shrink-0 rounded border-input accent-accent"
+					/>
+					<span>
+						I agree to the{" "}
+						<Link
+							to="/terms"
+							target="_blank"
+							className="font-medium text-foreground underline"
+						>
+							Terms
+						</Link>
+						,{" "}
+						<Link
+							to="/privacy"
+							target="_blank"
+							className="font-medium text-foreground underline"
+						>
+							Privacy Policy
+						</Link>
+						, and{" "}
+						<Link
+							to="/acceptable-use"
+							target="_blank"
+							className="font-medium text-foreground underline"
+						>
+							Acceptable Use Policy
+						</Link>
+						.
+					</span>
+				</label>
 			</form>
 
 			<div className="fixed inset-x-0 bottom-0 border-t border-border bg-background px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">

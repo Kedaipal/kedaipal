@@ -6,8 +6,8 @@ import {
 	CheckCircle2,
 	Clock,
 	CreditCard,
-	Globe,
 	type LucideIcon,
+	MapPin,
 	MessageCircle,
 	Music2,
 	Package,
@@ -15,9 +15,11 @@ import {
 	QrCode,
 	Share2,
 	Store,
+	Users,
 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { api } from "../../convex/_generated/api";
+import { GreetingChecklistRow } from "../components/dashboard/greeting-checklist-row";
 import {
 	PageHeader,
 	PageHeaderSkeleton,
@@ -27,6 +29,15 @@ import { ShopeeIcon } from "../components/icons/shopee-icon";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
 import { formatPrice } from "../lib/format";
+import {
+	type DeliveryMethod,
+	type OrderStatus,
+	resolveAnchorLabel,
+	resolveCurrentStage,
+	resolveStages,
+	type StatusLabels,
+	stageLabel,
+} from "../lib/orderStatus";
 
 export const Route = createFileRoute("/app/")({
 	component: DashboardHome,
@@ -106,6 +117,14 @@ function DashboardHome() {
 		api.orders.countActionable,
 		retailer ? { retailerId: retailer._id } : "skip",
 	);
+	const pickupStatus = useQuery(
+		api.pickupLocations.hasAnyActive,
+		retailer ? { retailerId: retailer._id } : "skip",
+	);
+	const customerCount = useQuery(
+		api.customers.count,
+		retailer ? { retailerId: retailer._id } : "skip",
+	);
 	const recentOrdersPage = useQuery(
 		api.orders.listByRetailer,
 		retailer
@@ -145,20 +164,46 @@ function DashboardHome() {
 	const productCount = products?.length ?? 0;
 	const activeProductCount = products?.filter((p) => p.active).length ?? 0;
 	const hasProduct = productCount > 0;
-	const payment = retailer.paymentInstructions;
-	const hasPayment = Boolean(
-		payment &&
-			(payment.bankName ||
-				payment.bankAccountName ||
-				payment.bankAccountNumber ||
-				payment.qrImageStorageId ||
-				payment.note),
-	);
+	const hasPayment = (retailer.paymentMethods?.length ?? 0) > 0;
 
-	const checklist: ChecklistItem[] = [
+	// Hero stat tiles share the seller's status vocabulary. Dashboard chrome is
+	// EN-only, so resolve in EN; pending/confirmed don't vary by fulfilment mode
+	// but we pass the retailer's primary method for consistency with the rest of
+	// the dashboard.
+	const statusLabels = retailer.statusLabels as StatusLabels | undefined;
+	const retailerMethod: DeliveryMethod = retailer.offerSelfCollect
+		? "self_collect"
+		: "delivery";
+	const stages = resolveStages({
+		orderStages: retailer.orderStages,
+		labels: statusLabels,
+		deliveryMethod: retailerMethod,
+	});
+	const heroLabel = (status: OrderStatus) =>
+		resolveAnchorLabel(status, {
+			stages,
+			labels: statusLabels,
+			deliveryMethod: retailerMethod,
+			locale: "en",
+		});
+
+	// The Pickup step is shown to any retailer with self-collect on (default
+	// for new retailers, see createRetailer). Two paths dismiss it:
+	//   1. The retailer visits the Pickup settings tab — pickupSetupSeen flips
+	//      true, step shows as strikethrough done.
+	//   2. The retailer adds an active pickup location — hasAnyActive flips
+	//      true, step shows as strikethrough done.
+	// Pre-existing retailers without offerSelfCollect set don't see the step
+	// at all (no surprise nag on first dashboard load post-deploy).
+	const offersSelfCollect = retailer.offerSelfCollect ?? false;
+	const hasPickupLocation = pickupStatus?.hasAny ?? false;
+	const pickupSetupSeen = retailer.pickupSetupSeen ?? false;
+
+	// Step numbers are derived from position below (not hardcoded), so any
+	// conditional item being excluded auto-renumbers the rest with no gaps.
+	const checklistItems: Omit<ChecklistItem, "step">[] = [
 		{
 			key: "wa",
-			step: 1,
 			done: hasWaPhone,
 			icon: Phone,
 			title: "Add your WhatsApp number",
@@ -170,7 +215,6 @@ function DashboardHome() {
 		},
 		{
 			key: "product",
-			step: 2,
 			done: hasProduct,
 			icon: Package,
 			title: "Add your first product",
@@ -181,7 +225,6 @@ function DashboardHome() {
 		},
 		{
 			key: "payment",
-			step: 3,
 			done: hasPayment,
 			icon: CreditCard,
 			title: "Add payment details",
@@ -191,7 +234,39 @@ function DashboardHome() {
 			to: "/app/settings",
 			tab: "payments",
 		},
+		{
+			key: "greeting",
+			done: retailer.onboardingGreetingSetup ?? false,
+			icon: MessageCircle,
+			title: "Auto-reply when customers message you directly",
+			why: "Set a free greeting on your WhatsApp Business app so customers who message your personal number get your store link instantly — before you even pick up your phone.",
+			time: "~2 min",
+			cta: "",
+			to: "",
+			optional: true,
+		},
+		...(offersSelfCollect
+			? [
+					{
+						key: "pickup",
+						done: pickupSetupSeen || hasPickupLocation,
+						icon: MapPin,
+						title: "Add a pickup location",
+						why: "Buyers picking self-collect won't see the option on your storefront until you add at least one location. Skip if you only do delivery.",
+						time: "~2 min",
+						cta: "Go to Settings",
+						to: "/app/settings",
+						tab: "pickup" as const,
+						optional: true,
+					},
+				]
+			: []),
 	];
+
+	const checklist: ChecklistItem[] = checklistItems.map((item, i) => ({
+		...item,
+		step: i + 1,
+	}));
 
 	const completedCount = checklist.filter((c) => c.done).length;
 	const allDone = completedCount === checklist.length;
@@ -345,7 +420,16 @@ function DashboardHome() {
 						{checklist.map((item, i) => {
 							const isNext =
 								!item.done && checklist.slice(0, i).every((c) => c.done);
-							return (
+							return item.key === "greeting" ? (
+								<GreetingChecklistRow
+									key={item.key}
+									item={item}
+									expanded={isNext}
+									storeName={retailer.storeName}
+									slug={retailer.slug}
+									locale={retailer.locale}
+								/>
+							) : (
 								<ChecklistRow key={item.key} item={item} expanded={isNext} />
 							);
 						})}
@@ -359,7 +443,7 @@ function DashboardHome() {
 					<StatTile
 						to="/app/orders"
 						icon={Clock}
-						label="Pending"
+						label={heroLabel("pending")}
 						value={pendingCount}
 						accent={pendingCount > 0}
 						sub="Awaiting confirm"
@@ -368,7 +452,7 @@ function DashboardHome() {
 					<StatTile
 						to="/app/orders"
 						icon={CheckCircle2}
-						label="Confirmed"
+						label={heroLabel("confirmed")}
 						value={confirmedCount}
 						sub="In progress"
 						loading={countsLoading}
@@ -386,11 +470,12 @@ function DashboardHome() {
 						loading={productsLoading}
 					/>
 					<StatTile
-						to="/app/settings"
-						icon={Globe}
-						label="Language"
-						value={retailer.locale === "ms" ? "MS" : "EN"}
-						sub={retailer.locale === "ms" ? "Bahasa Malaysia" : "English"}
+						to="/app/customers"
+						icon={Users}
+						label="Customers"
+						value={customerCount ?? 0}
+						sub="Total"
+						loading={customerCount === undefined}
 					/>
 				</section>
 			) : null}
@@ -435,7 +520,30 @@ function DashboardHome() {
 												<p className="text-sm font-semibold tabular-nums">
 													{formatPrice(order.total, order.currency)}
 												</p>
-												<StatusBadge status={order.status} />
+												<StatusBadge
+													status={order.status}
+													label={(() => {
+														const cs = resolveCurrentStage(
+															{
+																status: order.status,
+																currentStageId: order.currentStageId,
+															},
+															stages,
+														);
+														return cs
+															? stageLabel(cs, "en")
+															: resolveAnchorLabel(
+																	order.status as OrderStatus,
+																	{
+																		stages,
+																		labels: statusLabels,
+																		deliveryMethod: (order.deliveryMethod ??
+																			"delivery") as DeliveryMethod,
+																		locale: "en",
+																	},
+																);
+													})()}
+												/>
 											</div>
 										</Link>
 									</li>
@@ -482,9 +590,14 @@ function DashboardHome() {
 	);
 }
 
-type SettingsTab = "store" | "whatsapp" | "payments" | "integrations";
+type SettingsTab =
+	| "store"
+	| "whatsapp"
+	| "payments"
+	| "pickup"
+	| "integrations";
 
-type ChecklistItem = {
+export type ChecklistItem = {
 	key: string;
 	step: number;
 	done: boolean;
@@ -495,6 +608,8 @@ type ChecklistItem = {
 	cta: string;
 	to: string;
 	tab?: SettingsTab;
+	/** Renders an "Optional" pill so the seller knows they can skip. */
+	optional?: boolean;
 };
 
 function ChecklistRow({
@@ -532,6 +647,11 @@ function ChecklistRow({
 							<span className="text-[10px] font-bold uppercase tracking-wider text-accent">
 								Step {item.step}
 							</span>
+							{item.optional ? (
+								<span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+									Optional
+								</span>
+							) : null}
 							<span className="text-[10px] text-muted-foreground">
 								{item.time}
 							</span>
@@ -564,7 +684,14 @@ function ChecklistRow({
 						{item.step}
 					</div>
 					<div className="flex-1">
-						<p className="text-sm font-medium">{item.title}</p>
+						<div className="flex items-center gap-2">
+							<p className="text-sm font-medium">{item.title}</p>
+							{item.optional ? (
+								<span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+									Optional
+								</span>
+							) : null}
+						</div>
 						<p className="text-xs text-muted-foreground">{item.time}</p>
 					</div>
 					<ArrowRight className="size-4 shrink-0 text-muted-foreground" />
@@ -690,7 +817,7 @@ function SalesChannelTeaser({
 	);
 }
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({ status, label }: { status: string; label?: string }) {
 	const styles: Record<string, string> = {
 		pending: "bg-amber-500/15 text-amber-700 dark:text-amber-400",
 		confirmed: "bg-blue-500/15 text-blue-700 dark:text-blue-400",
@@ -704,7 +831,7 @@ function StatusBadge({ status }: { status: string }) {
 		<span
 			className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${cls}`}
 		>
-			{status}
+			{label ?? status}
 		</span>
 	);
 }

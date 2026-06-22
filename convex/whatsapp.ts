@@ -6,24 +6,68 @@ import {
 	internalMutation,
 	internalQuery,
 } from "./_generated/server";
-import { sendCtaUrlWithImage, sendImage, sendText } from "./lib/whatsapp";
+import { linkOrderToCustomer, refreshWaProfileName } from "./customers";
+import { getAdapter } from "./lib/channels/registry";
+import type { ChannelAdapter } from "./lib/channels/types";
+import { isMockupGateClosed } from "./lib/order";
+import {
+	type LegacyPaymentInstructions,
+	type PaymentMethod,
+	resolvePaymentMethods,
+} from "./lib/payment";
+import {
+	type OrderStage,
+	resolveStages,
+	stageDescription,
+	stageLabel,
+	type StatusLabels,
+} from "./lib/orderStatus";
+import { assertValidWaPhone } from "./lib/slug";
 import {
 	paymentQrCaption,
 	pickLocale,
 	renderMessage,
-	renderPaymentInstructions,
+	renderPaymentMethods,
+	renderPickupBlock,
+	renderStageUpdate,
 	renderSystemMessage,
 	SHORT_ID_REGEX,
 	type DeliveryMethod,
 	type Locale,
 	type MessageTemplates,
-	type PaymentInstructions,
+	type PickupSnapshot,
 } from "./lib/whatsappCopy";
 
+// A payment method with its QR storage id resolved to a viewable URL (qr only).
+type ResolvedPaymentMethod = PaymentMethod & { qrImageUrl?: string };
+
 type ResolvedPayment = {
-	instructions: PaymentInstructions | undefined;
-	qrImageUrl: string | undefined;
+	methods: ResolvedPaymentMethod[];
 };
+
+/**
+ * Resolve a retailer's payment methods (legacy-aware) and turn each `qr`
+ * method's storage id into a viewable URL for the confirm/payment messages.
+ */
+async function resolvePaymentForMessage(
+	ctx: { storage: { getUrl: (id: string) => Promise<string | null> } },
+	retailer: {
+		paymentMethods?: PaymentMethod[];
+		paymentInstructions?: LegacyPaymentInstructions;
+	},
+): Promise<ResolvedPayment> {
+	const methods = resolvePaymentMethods(retailer);
+	const resolved: ResolvedPaymentMethod[] = [];
+	for (const m of methods) {
+		let qrImageUrl: string | undefined;
+		if (m.type === "qr" && m.qrImageStorageId) {
+			const url = await ctx.storage.getUrl(m.qrImageStorageId);
+			qrImageUrl = url ?? undefined;
+		}
+		resolved.push({ ...m, qrImageUrl });
+	}
+	return { methods: resolved };
+}
 
 const statusValidator = v.union(
 	v.literal("pending"),
@@ -43,10 +87,12 @@ export const confirmOrderFromWhatsApp = internalMutation({
 	args: {
 		shortId: v.string(),
 		fromPhone: v.string(),
+		// Sender's WhatsApp pushname, captured from the webhook contacts array.
+		profileName: v.optional(v.string()),
 	},
 	handler: async (
 		ctx,
-		{ shortId, fromPhone },
+		{ shortId, fromPhone, profileName },
 	): Promise<{
 		matched: boolean;
 		alreadyConfirmed: boolean;
@@ -60,35 +106,58 @@ export const confirmOrderFromWhatsApp = internalMutation({
 		if (!order) return { matched: false, alreadyConfirmed: false };
 
 		const now = Date.now();
+		const wasPending = order.status === "pending";
 		const patch: Partial<Doc<"orders">> = { updatedAt: now };
 		if (!order.customer.waPhone) {
 			patch.customer = { ...order.customer, waPhone: fromPhone };
 		}
-
-		if (order.status === "pending") {
+		if (wasPending) {
 			patch.status = "confirmed";
+		}
+		// Persist status/phone changes (skip a pure updatedAt churn-write when
+		// nothing else changed, preserving the previous idempotent behaviour).
+		if (wasPending || patch.customer !== undefined) {
 			await ctx.db.patch(order._id, patch);
+		}
+		if (wasPending) {
 			await ctx.db.insert("orderEvents", {
 				orderId: order._id,
 				status: "confirmed",
 				note: "Confirmed via WhatsApp",
 				createdAt: now,
 			});
-			return {
-				matched: true,
-				alreadyConfirmed: false,
-				orderId: order._id,
-				retailerId: order.retailerId,
-			};
 		}
 
-		// Already past pending — idempotent. Still patch waPhone if needed.
-		if (Object.keys(patch).length > 1) {
-			await ctx.db.patch(order._id, patch);
+		// Customer linking + pushname capture. Orders that arrived with a phone
+		// were already linked at checkout (customerId set) — skip to avoid double
+		// counting. Phone-less orders are linked here (the late-bind case).
+		let customerId = order.customerId;
+		if (!customerId) {
+			const linkPhone = order.customer.waPhone ?? fromPhone;
+			let normalized: string | null = null;
+			try {
+				normalized = assertValidWaPhone(linkPhone);
+			} catch {
+				normalized = null;
+			}
+			if (normalized) {
+				customerId = await linkOrderToCustomer(ctx, {
+					retailerId: order.retailerId,
+					waPhone: normalized,
+					orderId: order._id,
+					orderTotal: order.total,
+					orderCreatedAt: order.createdAt,
+					customerName: order.customer.name,
+				});
+			}
 		}
+		if (customerId && profileName) {
+			await refreshWaProfileName(ctx, { customerId, profileName });
+		}
+
 		return {
 			matched: true,
-			alreadyConfirmed: true,
+			alreadyConfirmed: !wasPending,
 			orderId: order._id,
 			retailerId: order.retailerId,
 		};
@@ -114,6 +183,11 @@ export const getOrderWithRetailer = internalQuery({
 		deliveryMethod: DeliveryMethod;
 		locale: Locale;
 		messageTemplates: MessageTemplates | undefined;
+		// Phase 2: stage config + this order's current stage, for stage-update
+		// notifications (notifyStageEntry).
+		orderStages: OrderStage[] | undefined;
+		statusLabels: StatusLabels | undefined;
+		currentStageId: string | undefined;
 	} | null> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) return null;
@@ -132,6 +206,9 @@ export const getOrderWithRetailer = internalQuery({
 			messageTemplates: retailer.messageTemplates as
 				| MessageTemplates
 				| undefined,
+			orderStages: retailer.orderStages as OrderStage[] | undefined,
+			statusLabels: retailer.statusLabels as StatusLabels | undefined,
+			currentStageId: order.currentStageId,
 		};
 	},
 });
@@ -147,7 +224,11 @@ export const getRetailerLocaleForOrder = internalQuery({
 		retailerWaPhone: string | undefined;
 		messageTemplates: MessageTemplates | undefined;
 		deliveryMethod: DeliveryMethod;
+		pickupSnapshot: PickupSnapshot | undefined;
 		payment: ResolvedPayment;
+		// True while a custom item still awaits buyer mockup approval — the
+		// payment prompt is deferred until the gate opens (approve or waive).
+		mockupPending: boolean;
 	} | null> => {
 		const order = await ctx.db
 			.query("orders")
@@ -156,14 +237,6 @@ export const getRetailerLocaleForOrder = internalQuery({
 		if (!order) return null;
 		const retailer = await ctx.db.get(order.retailerId);
 		if (!retailer) return null;
-		const instructions = retailer.paymentInstructions as
-			| PaymentInstructions
-			| undefined;
-		let qrImageUrl: string | undefined;
-		if (instructions?.qrImageStorageId) {
-			const url = await ctx.storage.getUrl(instructions.qrImageStorageId);
-			qrImageUrl = url ?? undefined;
-		}
 		return {
 			locale: (retailer.locale as Locale | undefined) ?? "en",
 			storeName: retailer.storeName,
@@ -172,10 +245,84 @@ export const getRetailerLocaleForOrder = internalQuery({
 				| MessageTemplates
 				| undefined,
 			deliveryMethod: (order.deliveryMethod as DeliveryMethod | undefined) ?? "delivery",
-			payment: { instructions, qrImageUrl },
+			pickupSnapshot: order.pickupSnapshot,
+			payment: await resolvePaymentForMessage(ctx, retailer),
+			mockupPending: isMockupGateClosed(order),
 		};
 	},
 });
+
+/**
+ * Send the buyer the payment ask: `introBody` (the confirm template, or a
+ * mockup-approved/waived intro) → [pickup block] → transfer-reference line →
+ * [payment block], rendered as an "I've paid" CTA (degrades to text), followed
+ * by the QR image if configured. Shared by the confirm reply and the
+ * post-mockup payment prompt so both stay byte-for-byte consistent.
+ */
+async function sendPaymentMessage(
+	wa: ChannelAdapter,
+	toPhone: string,
+	args: {
+		introBody: string;
+		locale: Locale;
+		shortId: string;
+		storeName: string;
+		trackingUrl: string;
+		pickupSnapshot: PickupSnapshot | undefined;
+		payment: ResolvedPayment;
+	},
+): Promise<void> {
+	const { introBody, locale, shortId, storeName, trackingUrl, pickupSnapshot, payment } = args;
+	// Hard-coded, non-overridable: tells the shopper to use the order ID as the
+	// transfer reference — the only deterministic way to match a bank
+	// notification to an order, so it's always present.
+	const transferReferenceLine = renderSystemMessage(locale, "transferReferenceLine", {
+		shortId,
+		storeName,
+	});
+	const paymentBlock = renderPaymentMethods(locale, payment.methods);
+	const pickupBlock = renderPickupBlock(locale, pickupSnapshot);
+	// Layout: intro → [pickup] → blank line → transfer reference → [payment].
+	// Pickup first so the buyer sees the WHERE before the WHEN/HOW of paying.
+	const withPickup = pickupBlock ? `${introBody}\n${pickupBlock}` : introBody;
+	const withRef = `${withPickup}\n\n${transferReferenceLine}`;
+	const body = paymentBlock ? `${withRef}\n${paymentBlock}` : withRef;
+	const brandImageUrl = "https://kedaipal.com/logo-2.png";
+	// CTA intent — the adapter renders a tappable "I've paid" button in prod and
+	// degrades to a plain image with caption when buttons can't be honoured
+	// (e.g. non-HTTPS APP_URL in dev).
+	try {
+		await wa.send(toPhone, {
+			kind: "cta",
+			body,
+			buttonText: "I've paid",
+			url: trackingUrl,
+			imageUrl: brandImageUrl,
+		});
+	} catch (err) {
+		console.error("WA payment send failed, falling back to text", err);
+		try {
+			await wa.send(toPhone, { kind: "text", body });
+		} catch (textErr) {
+			console.error("WA payment send failed", textErr);
+		}
+	}
+	// Each configured QR method follows as its own image (captioned with the
+	// method label, so a buyer with several QRs knows which is which) so they can
+	// long-press to save it. Failures are isolated from the message above.
+	for (const m of payment.methods) {
+		if (m.type !== "qr" || !m.qrImageUrl) continue;
+		try {
+			await wa.send(toPhone, {
+				kind: "image",
+				imageUrl: m.qrImageUrl,
+				caption: paymentQrCaption(locale, m.label),
+			});
+		} catch (err) {
+			console.error("WA payment QR send failed", err);
+		}
+	}
+}
 
 /**
  * Process an inbound WhatsApp text message. Searches for an ORD-XXXX token,
@@ -186,8 +333,9 @@ export const handleInbound = internalAction({
 	args: {
 		fromPhone: v.string(),
 		text: v.string(),
+		profileName: v.optional(v.string()),
 	},
-	handler: async (ctx, { fromPhone, text }): Promise<void> => {
+	handler: async (ctx, { fromPhone, text, profileName }): Promise<void> => {
 		console.log("WA inbound received", {
 			fromPhone,
 			textLength: text.length,
@@ -200,11 +348,13 @@ export const handleInbound = internalAction({
 				storeName: "",
 			});
 
+		const wa = getAdapter("whatsapp");
+
 		const match = text.match(SHORT_ID_REGEX);
 		if (!match) {
 			console.log("WA inbound no shortId match → fallback", { fromPhone });
 			try {
-				await sendText(fromPhone, fallback());
+				await wa.send(fromPhone, { kind: "text", body: fallback() });
 			} catch (err) {
 				console.error("WA fallback send failed", err);
 			}
@@ -215,14 +365,14 @@ export const handleInbound = internalAction({
 		console.log("WA inbound parsed shortId", { fromPhone, shortId });
 		const result = await ctx.runMutation(
 			internal.whatsapp.confirmOrderFromWhatsApp,
-			{ shortId, fromPhone },
+			{ shortId, fromPhone, profileName },
 		);
 		console.log("WA confirm result", { fromPhone, shortId, ...result });
 
 		if (!result.matched) {
 			console.log("WA confirm not matched → fallback", { shortId, fromPhone });
 			try {
-				await sendText(fromPhone, fallback());
+				await wa.send(fromPhone, { kind: "text", body: fallback() });
 			} catch (err) {
 				console.error("WA fallback send failed", err);
 			}
@@ -238,66 +388,56 @@ export const handleInbound = internalAction({
 		const contactPhone = meta?.retailerWaPhone;
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
 		const trackingUrl = `${appUrl}/track/${shortId}`;
-		const confirmBody = renderMessage(
-			meta?.messageTemplates,
-			locale,
-			"confirm",
-			{ shortId, storeName, contactPhone, trackingUrl, deliveryMethod: meta?.deliveryMethod ?? "delivery" },
-		);
-		// Hard-coded, non-overridable: tells the shopper to use the order ID as
-		// the transfer reference. This is the only deterministic way the retailer
-		// can match a bank notification to an order, so it must always be present
-		// regardless of any retailer-customised confirm template.
-		const transferReferenceLine = renderSystemMessage(
-			locale,
-			"transferReferenceLine",
-			{ shortId, storeName },
-		);
-		const paymentBlock = renderPaymentInstructions(
-			locale,
-			meta?.payment.instructions,
-		);
-		const confirmWithRef = `${confirmBody}\n\n${transferReferenceLine}`;
-		const body = paymentBlock
-			? `${confirmWithRef}\n${paymentBlock}`
-			: confirmWithRef;
-		const brandImageUrl = "https://kedaipal.com/logo-2.png";
-		// CTA URL buttons require HTTPS — in dev (APP_URL=http://localhost:3000)
-		// the button would be rejected by Meta, so we fall back to a plain image
-		// with caption. In prod, the shopper gets a tappable "I've paid" button.
-		const canUseButton = trackingUrl.startsWith("https://");
-		try {
-			if (canUseButton) {
-				await sendCtaUrlWithImage(
-					fromPhone,
-					brandImageUrl,
-					body,
-					"I've paid",
-					trackingUrl,
-				);
-			} else {
-				await sendImage(fromPhone, brandImageUrl, body);
-			}
-		} catch (err) {
-			// Fall back to plain text if interactive/image send fails
-			console.error("WA confirm send failed, falling back to text", err);
-			try {
-				await sendText(fromPhone, body);
-			} catch (textErr) {
-				console.error("WA confirm send failed", textErr);
-			}
-		}
 
-		// QR image, if configured, is sent as a follow-up image message so the
-		// shopper can long-press to save it. Failures are isolated from the text
-		// reply above.
-		const qrUrl = meta?.payment.qrImageUrl;
-		if (qrUrl) {
+		if (meta?.mockupPending) {
+			// Order still has a custom item awaiting buyer mockup approval — defer
+			// the payment ask. Same branded layout as the normal confirm (logo
+			// header + pickup block) but WITHOUT the transfer-reference line,
+			// payment block, QR, or "I've paid" CTA — there's no price to pay yet.
+			// The full payment prompt follows on approval/waiver (notifyPaymentDue).
+			const gatedConfirm = renderSystemMessage(locale, "mockupPendingConfirm", {
+				shortId,
+				storeName,
+				contactPhone,
+				trackingUrl,
+			});
+			const pickupBlock = renderPickupBlock(locale, meta?.pickupSnapshot);
+			const gatedBody = pickupBlock
+				? `${gatedConfirm}\n${pickupBlock}`
+				: gatedConfirm;
+			const brandImageUrl = "https://kedaipal.com/logo-2.png";
 			try {
-				await sendImage(fromPhone, qrUrl, paymentQrCaption(locale));
+				// Image message carries the brand logo as the header without needing
+				// an interactive button (which would force a CTA we don't want here).
+				await wa.send(fromPhone, {
+					kind: "image",
+					imageUrl: brandImageUrl,
+					caption: gatedBody,
+				});
 			} catch (err) {
-				console.error("WA payment QR send failed", err);
+				console.error("WA gated-confirm send failed, falling back to text", err);
+				try {
+					await wa.send(fromPhone, { kind: "text", body: gatedBody });
+				} catch (textErr) {
+					console.error("WA gated-confirm send failed", textErr);
+				}
 			}
+		} else {
+			const confirmBody = renderMessage(
+				meta?.messageTemplates,
+				locale,
+				"confirm",
+				{ shortId, storeName, contactPhone, trackingUrl, deliveryMethod: meta?.deliveryMethod ?? "delivery" },
+			);
+			await sendPaymentMessage(wa, fromPhone, {
+				introBody: confirmBody,
+				locale,
+				shortId,
+				storeName,
+				trackingUrl,
+				pickupSnapshot: meta?.pickupSnapshot,
+				payment: meta?.payment ?? { methods: [] },
+			});
 		}
 
 		// Email the retailer about the newly confirmed order (only on first
@@ -357,9 +497,62 @@ export const notifyStatusChange = internalAction({
 			deliveryMethod: meta.deliveryMethod,
 		});
 		try {
-			await sendText(meta.customerWaPhone, body);
+			await getAdapter("whatsapp").send(meta.customerWaPhone, {
+				kind: "text",
+				body,
+			});
 		} catch (err) {
 			console.error("WA status notify failed", err);
+		}
+	},
+});
+
+/**
+ * Phase 2: scheduled by orders.advanceToStage when a seller advances an order
+ * into a custom stage that does NOT cross a canonical anchor (so the rich status
+ * templates in `notifyStatusChange` don't fire) and the stage has `notify: true`
+ * — e.g. Cleaning → Washing, both anchored to `packed`. Sends one generic
+ * stage-update message built from the stage's (store-locale) label + optional
+ * description. Same swallow-errors / no-op-on-missing-waPhone shape as the other
+ * notify actions. Anchor-CROSSING moves go through notifyStatusChange instead,
+ * so this never double-sends.
+ */
+export const notifyStageEntry = internalAction({
+	args: { orderId: v.id("orders"), stageId: v.string() },
+	handler: async (ctx, { orderId, stageId }): Promise<void> => {
+		const meta = await ctx
+			.runQuery(internal.whatsapp.getOrderWithRetailer, { orderId })
+			.catch((err) => {
+				console.error("WA stage-update lookup failed", err);
+				return null;
+			});
+		if (!meta) return;
+		if (!meta.customerWaPhone) return;
+
+		const locale = pickLocale(meta.locale);
+		const stages = resolveStages({
+			orderStages: meta.orderStages,
+			labels: meta.statusLabels,
+			deliveryMethod: meta.deliveryMethod,
+		});
+		const stage = stages.find((s) => s.id === stageId);
+		if (!stage) return; // stage was deleted between schedule + run — drop silently
+
+		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
+		const body = renderStageUpdate(locale, {
+			shortId: meta.shortId,
+			stageLabel: stageLabel(stage, locale),
+			stageDescription: stageDescription(stage, locale),
+			trackingUrl: `${appUrl}/track/${meta.shortId}`,
+			contactPhone: meta.retailerWaPhone,
+		});
+		try {
+			await getAdapter("whatsapp").send(meta.customerWaPhone, {
+				kind: "text",
+				body,
+			});
+		} catch (err) {
+			console.error("WA stage-update notify failed", err);
 		}
 	},
 });
@@ -407,10 +600,204 @@ export const notifyPaymentReceived = internalAction({
 			trackingUrl,
 		});
 		try {
-			await sendText(meta.customerWaPhone, body);
+			await getAdapter("whatsapp").send(meta.customerWaPhone, {
+				kind: "text",
+				body,
+			});
 		} catch (err) {
 			console.error("WA payment-received send failed", err);
 		}
+	},
+});
+
+/**
+ * Internal query: load the data needed to send a buyer the mockup for review.
+ */
+export const getMockupNotifyMeta = internalQuery({
+	args: { orderId: v.id("orders") },
+	handler: async (
+		ctx,
+		{ orderId },
+	): Promise<{
+		shortId: string;
+		customerWaPhone: string | undefined;
+		customerName: string | undefined;
+		storeName: string;
+		locale: Locale;
+		mockupImageUrl: string | undefined;
+	} | null> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) return null;
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) return null;
+		let mockupImageUrl: string | undefined;
+		if (order.mockupImageStorageId) {
+			const url = await ctx.storage.getUrl(order.mockupImageStorageId);
+			mockupImageUrl = url ?? undefined;
+		}
+		return {
+			shortId: order.shortId,
+			customerWaPhone: order.customer.waPhone,
+			customerName: order.customer.name,
+			storeName: retailer.storeName,
+			locale: (retailer.locale as Locale | undefined) ?? "en",
+			mockupImageUrl,
+		};
+	},
+});
+
+/**
+ * Scheduled by orders.submitMockup. Sends the buyer the mockup image + a CTA to
+ * review/approve it on the tracking page. Errors swallowed (logged) so the
+ * originating mutation never fails on an outbound issue.
+ */
+export const notifyMockupSubmitted = internalAction({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<void> => {
+		let meta: {
+			shortId: string;
+			customerWaPhone: string | undefined;
+			customerName: string | undefined;
+			storeName: string;
+			locale: Locale;
+			mockupImageUrl: string | undefined;
+		} | null = null;
+		try {
+			meta = await ctx.runQuery(internal.whatsapp.getMockupNotifyMeta, {
+				orderId,
+			});
+		} catch (err) {
+			console.error("WA mockup-submitted lookup failed", err);
+			return;
+		}
+		if (!meta || !meta.customerWaPhone) return;
+
+		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
+		const trackingUrl = `${appUrl}/track/${meta.shortId}`;
+		const greeting = meta.customerName ? ` ${meta.customerName}` : "";
+		const body =
+			meta.locale === "ms"
+				? `Hai${greeting}! Mockup untuk pesanan ${meta.shortId} dari ${meta.storeName} sudah siap. Sila semak dan luluskan sebelum kami mula membuatnya: ${trackingUrl}`
+				: `Hi${greeting}! The mockup for your ${meta.storeName} order ${meta.shortId} is ready. Please review and approve it before we start making it: ${trackingUrl}`;
+		const buttonText = meta.locale === "ms" ? "Semak mockup" : "Review mockup";
+
+		const wa = getAdapter("whatsapp");
+		try {
+			await wa.send(
+				meta.customerWaPhone,
+				meta.mockupImageUrl
+					? {
+							kind: "cta",
+							body,
+							buttonText,
+							url: trackingUrl,
+							imageUrl: meta.mockupImageUrl,
+						}
+					: { kind: "text", body },
+			);
+		} catch (err) {
+			console.error("WA mockup-submitted send failed, falling back to text", err);
+			try {
+				await wa.send(meta.customerWaPhone, { kind: "text", body });
+			} catch (textErr) {
+				console.error("WA mockup-submitted send failed", textErr);
+			}
+		}
+	},
+});
+
+/**
+ * Internal query: load everything needed to send the buyer a payment prompt
+ * once the mockup gate opens. Distinct from getRetailerLocaleForOrder because
+ * this path is keyed by orderId (scheduled from a mutation) and needs the
+ * buyer's phone.
+ */
+export const getPaymentPromptMeta = internalQuery({
+	args: { orderId: v.id("orders") },
+	handler: async (
+		ctx,
+		{ orderId },
+	): Promise<{
+		shortId: string;
+		customerWaPhone: string | undefined;
+		locale: Locale;
+		storeName: string;
+		pickupSnapshot: PickupSnapshot | undefined;
+		payment: ResolvedPayment;
+	} | null> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) return null;
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) return null;
+		return {
+			shortId: order.shortId,
+			customerWaPhone: order.customer.waPhone,
+			locale: (retailer.locale as Locale | undefined) ?? "en",
+			storeName: retailer.storeName,
+			pickupSnapshot: order.pickupSnapshot,
+			payment: await resolvePaymentForMessage(ctx, retailer),
+		};
+	},
+});
+
+/**
+ * Scheduled by orders.approveMockup / orders.waiveMockup, and by
+ * orders.declineMockupItem when a buyer drops the custom item from a mixed order
+ * (the ready-made remainder is now payable). Now that the mockup gate is open,
+ * send the buyer the payment ask (the "I've paid" prompt) that was deferred at
+ * confirm time. `reason` only picks the intro line; the payment body is
+ * identical to the standard confirm reply. Errors swallowed (logged).
+ */
+export const notifyPaymentDue = internalAction({
+	args: {
+		orderId: v.id("orders"),
+		reason: v.union(
+			v.literal("approved"),
+			v.literal("waived"),
+			v.literal("declined"),
+		),
+	},
+	handler: async (ctx, { orderId, reason }): Promise<void> => {
+		let meta: {
+			shortId: string;
+			customerWaPhone: string | undefined;
+			locale: Locale;
+			storeName: string;
+			pickupSnapshot: PickupSnapshot | undefined;
+			payment: ResolvedPayment;
+		} | null = null;
+		try {
+			meta = await ctx.runQuery(internal.whatsapp.getPaymentPromptMeta, {
+				orderId,
+			});
+		} catch (err) {
+			console.error("WA payment-due lookup failed", err);
+			return;
+		}
+		if (!meta || !meta.customerWaPhone) return;
+
+		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
+		const trackingUrl = `${appUrl}/track/${meta.shortId}`;
+		const introKey =
+			reason === "approved"
+				? "paymentDueApproved"
+				: reason === "waived"
+					? "paymentDueWaived"
+					: "paymentDueDeclined";
+		const introBody = renderSystemMessage(meta.locale, introKey, {
+			shortId: meta.shortId,
+			storeName: meta.storeName,
+		});
+		const wa = getAdapter("whatsapp");
+		await sendPaymentMessage(wa, meta.customerWaPhone, {
+			introBody,
+			locale: meta.locale,
+			shortId: meta.shortId,
+			storeName: meta.storeName,
+			trackingUrl,
+			pickupSnapshot: meta.pickupSnapshot,
+			payment: meta.payment,
+		});
 	},
 });
 
@@ -445,10 +832,10 @@ export const sendTestRetailerAlert = internalAction({
 			return;
 		}
 		try {
-			await sendText(
-				retailer.waPhone,
-				`Kedaipal test alert for ${retailer.storeName}. If you see this, WhatsApp delivery is working.`,
-			);
+			await getAdapter("whatsapp").send(retailer.waPhone, {
+				kind: "text",
+				body: `Kedaipal test alert for ${retailer.storeName}. If you see this, WhatsApp delivery is working.`,
+			});
 			console.log(
 				`Diagnostic alert sent (storeName=${retailer.storeName}, to=${retailer.waPhone})`,
 			);

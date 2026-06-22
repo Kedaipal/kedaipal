@@ -75,21 +75,24 @@ The database schema already treats WhatsApp as one `channel` on retailers/produc
 
 ---
 
-## What's Built (as of 2026-04-09)
+## What's Built (as of 2026-05-24)
 
 **Convex schema** (`convex/schema.ts`):
 - `retailers` — Clerk-linked, slug-addressed, with logo, currency, locale, per-retailer WA message template overrides (en/ms), and optional payment instructions (bank, QR image, note).
 - `slugHistory` — preserves old slugs for redirects after renames.
 - `products` — price, stock, multiple images, sort order, active flag.
-- `orders` — shortId, line items, customer, full status pipeline.
+- `orders` — shortId, line items, customer, full status pipeline, optional `customerId` link.
 - `orderEvents` — per-order status history.
+- `customers` — first-class CRM entity keyed by `(retailerId, waPhone)`, with retailer-edited name, auto-captured WhatsApp pushname, private notes, and denormalized lifetime aggregates (order count, total spent, first/last order). See [`docs/customer-database.md`](./docs/customer-database.md).
 
-**Convex modules:** `whatsapp.ts`, `lib/whatsapp.ts`, `lib/whatsappCopy.ts` (templated bilingual copy), `lib/order.ts`, `lib/slug.ts`, `lib/rateLimiter.ts`, `lib/currency.ts`, `http.ts` (webhooks), `crons.ts`, `seed.ts`. Test coverage on orders, products, retailers, whatsapp, and whatsappCopy.
+**Convex modules:** `whatsapp.ts`, `customers.ts`, `email.ts`, `lib/whatsapp.ts`, `lib/whatsappCopy.ts` (templated bilingual copy), `lib/whatsappWebhook.ts` (inbound parser + pushname capture), `lib/whatsappSignature.ts` (webhook HMAC verification), `lib/customer.ts`, `lib/order.ts`, `lib/slug.ts`, `lib/email.ts`, `lib/emailCopy.ts`, `lib/rateLimiter.ts`, `lib/currency.ts`, `http.ts` (signature-verified webhooks), `crons.ts`, `seed.ts`. Test coverage on orders, products, retailers, whatsapp, whatsappCopy, customers, email, http (webhook), and the pure libs.
 
 **Frontend routes** (`src/routes/`):
 - Public storefront: `/$slug`
 - Onboarding, sign-in, sign-up
-- Dashboard: `/app` (index, products list/new/detail/import, orders list/detail, settings)
+- Dashboard: `/app` (index, products list/new/detail/import, orders list/detail, customers list/detail, settings)
+
+**Inbound webhook security:** `POST /webhook/whatsapp` verifies Meta's `X-Hub-Signature-256` (HMAC-SHA256 with `WHATSAPP_APP_SECRET`) and fails closed — see [`docs/whatsapp-webhook-security.md`](./docs/whatsapp-webhook-security.md).
 
 **Current phase (May 2026):** MVP fully shipped. Active focus is the 12-week launch sprint to first paid customer (target Jul 5, 2026) and predictable acquisition channel (target Aug 16, 2026). 17-task backlog tracked in [ClickUp Product Roadmap](https://app.clickup.com/90182681518/v/li/901818308046) across 6 two-week sprints. Critical path:
 - **S1 (May 25 → Jun 7):** Customer DB, Order Inbox, Legal Pack, Subscription Billing start

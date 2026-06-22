@@ -2,20 +2,27 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import {
 	BadgeCheck,
+	CheckCircle2,
 	ChevronLeft,
+	ChevronRight,
 	Copy,
 	ExternalLink,
 	HandCoins,
 	Hourglass,
+	ImagePlus,
 	MapPin,
 	MessageCircle,
 	Package,
+	StickyNote,
 	Truck,
 	User,
 } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ChangeEvent, type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
+import type { Doc, Id } from "../../convex/_generated/dataModel";
+import { isMockupGateClosed } from "../../convex/lib/order";
+import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
 import {
 	PageHeader,
 	PageHeaderSkeleton,
@@ -25,8 +32,19 @@ import {
 	formatAddressInline,
 } from "../components/storefront/delivery-address-display";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
+import { ZoomableImage } from "../components/ui/zoomable-image";
+import { formatPhone } from "../lib/customer";
 import { convexErrorMessage, formatPrice } from "../lib/format";
+import { deriveMapsUrl } from "../lib/google-address";
+import {
+	anchorOrdinal,
+	resolveCurrentStage,
+	resolveStages,
+	resolveStatusLabel,
+	stageLabel,
+} from "../lib/orderStatus";
 import { StatusBadge } from "./app.orders.index";
 
 export const Route = createFileRoute("/app/orders/$shortId")({
@@ -92,46 +110,7 @@ function OrderDetailSkeleton() {
 	);
 }
 
-type Transition =
-	| "confirmed"
-	| "packed"
-	| "shipped"
-	| "delivered"
-	| "cancelled";
 type DeliveryMethod = "delivery" | "self_collect";
-
-const NEXT_STATUS: Record<string, Transition[]> = {
-	pending: ["confirmed", "cancelled"],
-	confirmed: ["packed", "cancelled"],
-	packed: ["shipped", "cancelled"],
-	shipped: ["delivered"],
-	delivered: [],
-	cancelled: [],
-};
-
-const DELIVERY_TRANSITION_LABELS: Record<Transition, string> = {
-	confirmed: "Confirm Order",
-	packed: "Mark as Packed",
-	shipped: "Mark as Shipped",
-	delivered: "Mark as Delivered",
-	cancelled: "Cancel Order",
-};
-
-const SELF_COLLECT_TRANSITION_LABELS: Record<Transition, string> = {
-	confirmed: "Confirm Order",
-	packed: "Mark as Packed",
-	shipped: "Ready for Pickup",
-	delivered: "Mark as Collected",
-	cancelled: "Cancel Order",
-};
-
-function getTransitionLabels(
-	method: DeliveryMethod,
-): Record<Transition, string> {
-	return method === "self_collect"
-		? SELF_COLLECT_TRANSITION_LABELS
-		: DELIVERY_TRANSITION_LABELS;
-}
 
 type PaymentStatus = "unpaid" | "claimed" | "received";
 
@@ -178,13 +157,19 @@ function OrderDetailRoute() {
 	const { shortId } = Route.useParams();
 	const order = useQuery(api.orders.get, { shortId });
 	const updateStatus = useMutation(api.orders.updateStatus);
+	const advanceToStage = useMutation(api.orders.advanceToStage);
 	const setCarrierUrl = useMutation(api.orders.setCarrierTrackingUrl);
 	const markPaymentReceived = useMutation(api.orders.markPaymentReceived);
 	const proofUrl = useQuery(
 		api.orders.getPaymentProofUrl,
 		order?.paymentProofStorageId ? { orderId: order._id } : "skip",
 	);
-	const [pending, setPending] = useState<Transition | null>(null);
+	const customerImageUrl = useQuery(
+		api.orders.getCustomerImageUrl,
+		order?.customerImageStorageId ? { shortId } : "skip",
+	);
+	// Holds the id of the in-flight advance target ("cancel" for cancellation).
+	const [pending, setPending] = useState<string | null>(null);
 	const [carrierInput, setCarrierInput] = useState<string | null>(null);
 	const [savingCarrier, setSavingCarrier] = useState(false);
 	const [confirmingPayment, setConfirmingPayment] = useState(false);
@@ -198,19 +183,59 @@ function OrderDetailRoute() {
 
 	const deliveryMethod = (order.deliveryMethod ?? "delivery") as DeliveryMethod;
 	const isSelfCollect = deliveryMethod === "self_collect";
-	const transitionLabels = getTransitionLabels(deliveryMethod);
-	const transitions = NEXT_STATUS[order.status] ?? [];
+	// Dashboard chrome is English-only (per the i18n scope), so resolve seller-
+	// facing labels in EN — a retailer's EN custom labels still flow through.
+	// The buyer tracking page resolves in the store's locale instead.
+	const statusLabelOpts = {
+		labels: order.statusLabels,
+		deliveryMethod,
+		locale: "en" as const,
+	};
+	// Phase 2 stage model: the seller's ordered stages (their config, or the
+	// synthesized defaults — same path), the order's current stage, and the next
+	// stage to advance into. Dashboard chrome is EN.
+	const stages = resolveStages({
+		orderStages: order.orderStages,
+		labels: order.statusLabels,
+		deliveryMethod,
+	});
+	const currentStage = resolveCurrentStage(
+		{ status: order.status, currentStageId: order.currentStageId },
+		stages,
+	);
+	const currentIdx = currentStage
+		? stages.findIndex((s) => s.id === currentStage.id)
+		: -1; // pending: not yet in the band → next is the first stage
+	const nextStage =
+		order.status === "cancelled" ? undefined : stages[currentIdx + 1];
+	const isTerminal =
+		order.status === "cancelled" || order.status === "delivered";
 	const showCarrierSection =
 		!isSelfCollect && !["pending", "cancelled"].includes(order.status);
 	const editingCarrier = carrierInput !== null;
 	const paymentStatus = (order.paymentStatus ?? "unpaid") as PaymentStatus;
 	const paymentBadgeCfg = paymentBadge(paymentStatus);
+	// Production (any packed-or-later stage) is blocked while a mockup is required
+	// but not yet approved/waived. Shared gate — same source as the server.
+	const mockupGated = isMockupGateClosed(order);
 
-	async function handleTransition(next: Transition) {
+	async function handleAdvance(stageId: string) {
 		if (!order) return;
-		setPending(next);
+		setPending(stageId);
 		try {
-			await updateStatus({ orderId: order._id, status: next });
+			await advanceToStage({ orderId: order._id, stageId });
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setPending(null);
+		}
+	}
+
+	async function handleCancel() {
+		if (!order) return;
+		setPending("cancel");
+		try {
+			await updateStatus({ orderId: order._id, status: "cancelled" });
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -287,8 +312,15 @@ function OrderDetailRoute() {
 						})}
 					</p>
 				</div>
-				<div className="flex flex-col items-end gap-1.5">
-					<StatusBadge status={order.status} />
+				<div className="flex flex-col items-start gap-1.5">
+					<StatusBadge
+						status={order.status}
+						label={
+							currentStage
+								? stageLabel(currentStage, "en")
+								: resolveStatusLabel(order.status, statusLabelOpts)
+						}
+					/>
 					<span
 						className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${paymentBadgeCfg.className}`}
 					>
@@ -297,6 +329,37 @@ function OrderDetailRoute() {
 					</span>
 				</div>
 			</div>
+
+			{/* Shopper's note + optional custom-line reference photo — front-and-centre
+			    so it isn't missed when fulfilling. Plain text, escaped by React. */}
+			{order.customerNote || order.customerImageStorageId ? (
+				<section className="flex gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4">
+					<StickyNote className="size-5 shrink-0 text-amber-600" />
+					<div className="min-w-0 flex-1">
+						<p className="text-xs font-semibold uppercase tracking-widest text-amber-700">
+							{order.customerNote ? "Note from customer" : "From customer"}
+						</p>
+						{order.customerNote ? (
+							<p className="mt-1 whitespace-pre-line break-words text-sm text-amber-950">
+								{order.customerNote}
+							</p>
+						) : null}
+						{order.customerImageStorageId ? (
+							customerImageUrl ? (
+								<ZoomableImage
+									src={customerImageUrl}
+									alt="Customer reference photo"
+									caption="Customer reference photo"
+									wrapperClassName="mt-2 block w-fit overflow-hidden rounded-xl border border-amber-300 bg-white"
+									className="block max-h-56 w-auto object-contain"
+								/>
+							) : (
+								<div className="mt-2 h-24 w-32 animate-pulse rounded-xl bg-amber-200/50" />
+							)
+						) : null}
+					</div>
+				</section>
+			) : null}
 
 			{/* Payment claim — actionable when shopper has tapped "I've paid". */}
 			{paymentStatus === "claimed" ? (
@@ -398,18 +461,26 @@ function OrderDetailRoute() {
 						</p>
 					</div>
 					<p className="text-sm text-muted-foreground">
-						The customer hasn't tapped "I've paid" yet. If you've already seen
-						the money in your bank app, mark it received here.
+						{mockupGated
+							? `Payment is locked until the custom item is sorted — ${
+									order.mockupStatus === "submitted"
+										? "the buyer is reviewing the mockup"
+										: "send the buyer a mockup to approve"
+								}. The buyer is only asked to pay once they approve (or you proceed without approval below).`
+							: `The customer hasn't tapped "I've paid" yet. If you've already seen the money in your bank app, mark it received here.`}
 					</p>
+					{/* While the mockup gate is closed the buyer hasn't been asked to pay
+					    and the price may not be final, so the seller can't mark payment
+					    received yet. Opens on approve / waive / removing the custom item. */}
 					<Button
 						onClick={handleMarkPaymentReceived}
 						isLoading={confirmingPayment}
-						disabled={confirmingPayment}
+						disabled={confirmingPayment || mockupGated}
 						variant="secondary"
 						className="h-11 w-full"
 					>
 						<BadgeCheck className="size-4" />
-						Mark payment received
+						{mockupGated ? "Awaiting mockup approval" : "Mark payment received"}
 					</Button>
 				</section>
 			) : null}
@@ -431,35 +502,70 @@ function OrderDetailRoute() {
 				</section>
 			) : null}
 
-			{/* Customer */}
-			<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+			{/* Customer — WhatsApp-branded card. Buyer with a waPhone gets the
+			    chat-app treatment (green avatar, prominent "Open chat" CTA) so
+			    the seller never misses the action. Anonymous buyers (no phone
+			    captured) fall back to a neutral row with just the name. */}
+			<section
+				className={
+					order.customer.waPhone
+						? "flex flex-col gap-3 rounded-2xl border border-green-600/30 bg-linear-to-br from-green-500/5 to-green-500/10 p-4"
+						: "flex flex-col gap-3 rounded-2xl border border-border bg-card p-4"
+				}
+			>
 				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 					Customer
 				</p>
 				<div className="flex items-center gap-3">
-					<div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted">
-						<User className="size-4 text-muted-foreground" />
-					</div>
+					{order.customer.waPhone ? (
+						<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-green-600 text-white">
+							<MessageCircle className="size-5" />
+						</div>
+					) : (
+						<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-muted">
+							<User className="size-5 text-muted-foreground" />
+						</div>
+					)}
 					<div className="min-w-0 flex-1">
-						<p className="font-medium">{order.customer.name ?? "Anonymous"}</p>
+						<p className="font-semibold">
+							{order.customer.name ?? "Anonymous"}
+						</p>
 						{order.customer.waPhone ? (
 							<p className="font-mono text-xs text-muted-foreground">
-								{order.customer.waPhone}
+								{formatPhone(order.customer.waPhone)} · via WhatsApp
 							</p>
 						) : null}
 					</div>
-					{order.customer.waPhone ? (
-						<a
-							href={`https://wa.me/${order.customer.waPhone}`}
-							target="_blank"
-							rel="noreferrer"
-							className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-green-500/10 text-green-600 transition-colors hover:bg-green-500/20"
-							aria-label="Message on WhatsApp"
-						>
-							<MessageCircle className="size-4" />
-						</a>
-					) : null}
 				</div>
+				{order.customer.waPhone ? (
+					<a
+						href={`https://wa.me/${order.customer.waPhone}`}
+						target="_blank"
+						rel="noreferrer"
+						className="flex h-11 items-center justify-center gap-2 rounded-xl bg-green-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-green-700"
+					>
+						<MessageCircle className="size-4" />
+						Open chat in WhatsApp
+					</a>
+				) : null}
+				{order.customerId ? (
+					// View profile sits inside the same section so the two
+					// related actions read as one customer block. Uses a card
+					// background (vs the section's green tint) so it visually
+					// separates from the WhatsApp action above without
+					// breaking the cohesion.
+					<Link
+						to="/app/customers/$customerId"
+						params={{ customerId: order.customerId }}
+						className="flex items-center justify-between rounded-xl border border-border bg-background px-3 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+					>
+						<span className="flex items-center gap-2">
+							<User className="size-4 text-muted-foreground" />
+							View customer profile
+						</span>
+						<ChevronRight className="size-4 text-muted-foreground" />
+					</Link>
+				) : null}
 			</section>
 
 			{/* Delivery method */}
@@ -487,13 +593,20 @@ function OrderDetailRoute() {
 					Items
 				</p>
 				<ul className="flex flex-col divide-y divide-border">
-					{order.items.map((item) => (
+					{order.items.map((item, i) => (
 						<li
-							key={item.productId}
+							key={item.variantId ?? `${item.productId}-${i}`}
 							className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0"
 						>
 							<div className="min-w-0 flex-1">
-								<p className="truncate text-sm font-medium">{item.name}</p>
+								<p className="truncate text-sm font-medium">
+									{item.name}
+									{item.variantLabel ? (
+										<span className="ml-1.5 font-normal text-muted-foreground">
+											{item.variantLabel}
+										</span>
+									) : null}
+								</p>
 								<p className="text-xs text-muted-foreground">
 									{item.quantity} × {formatPrice(item.price, order.currency)}
 								</p>
@@ -504,6 +617,17 @@ function OrderDetailRoute() {
 						</li>
 					))}
 				</ul>
+				{order.mockupQuotedAmount != null && order.mockupQuotedAmount > 0 ? (
+					<div className="flex items-center justify-between px-3 text-sm text-muted-foreground">
+						<span>
+							Custom work
+							{order.mockupStatus === "approved" ? "" : " (proposed)"}
+						</span>
+						<span className="tabular-nums">
+							{formatPrice(order.mockupQuotedAmount, order.currency)}
+						</span>
+					</div>
+				) : null}
 				<div className="flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2.5 text-sm font-bold">
 					<span>Total</span>
 					<span className="tabular-nums">
@@ -511,6 +635,82 @@ function OrderDetailRoute() {
 					</span>
 				</div>
 			</section>
+
+			{/* Pickup location (self-collect orders only) — reads frozen snapshot
+			    so a later retailer edit never rewrites historical order info. */}
+			{isSelfCollect && order.pickupSnapshot ? (
+				<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+					<div className="flex items-center justify-between">
+						<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+							Pick up at
+						</p>
+						<div className="flex items-center gap-1">
+							<button
+								type="button"
+								onClick={() => {
+									if (!order.pickupSnapshot) return;
+									const text = formatPickupInline(order.pickupSnapshot);
+									navigator.clipboard
+										.writeText(text)
+										.then(() => toast.success("Pickup info copied"))
+										.catch(() =>
+											toast.error("Couldn't copy — please copy manually"),
+										);
+								}}
+								className="flex h-9 items-center gap-1 rounded-full px-3 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+								aria-label="Copy pickup info"
+							>
+								<Copy className="size-3.5" />
+								Copy
+							</button>
+							{(() => {
+								const mapsUrl = deriveMapsUrl(order.pickupSnapshot);
+								return mapsUrl ? (
+									<a
+										href={mapsUrl}
+										target="_blank"
+										rel="noreferrer"
+										className="flex h-9 items-center gap-1 rounded-full px-3 text-xs font-medium text-accent hover:bg-accent/10"
+										aria-label="Open in Maps"
+									>
+										<MapPin className="size-3.5" />
+										Maps
+									</a>
+								) : null;
+							})()}
+						</div>
+					</div>
+					<div className="flex flex-col gap-1">
+						<p className="text-sm font-semibold leading-tight">
+							{order.pickupSnapshot.label}
+						</p>
+						<p className="text-sm text-muted-foreground whitespace-pre-line">
+							{order.pickupSnapshot.address}
+						</p>
+						{order.pickupSnapshot.notes ? (
+							<p className="mt-1 rounded-lg bg-muted/40 px-3 py-2 text-xs text-foreground whitespace-pre-line">
+								{order.pickupSnapshot.notes}
+							</p>
+						) : null}
+					</div>
+				</section>
+			) : null}
+
+			{/* Notify store manager (self-collect orders only) — copy-button hands
+			    the seller a ready-to-forward message for whoever runs the pickup
+			    location. Fixed format for v1; per-retailer override is future work. */}
+			{isSelfCollect && order.pickupSnapshot ? (
+				<NotifyManagerCard
+					shortId={order.shortId}
+					location={order.pickupSnapshot}
+					pickupLocationId={order.pickupLocationId}
+					customerName={order.customer.name}
+					customerWaPhone={order.customer.waPhone}
+					items={order.items}
+					total={order.total}
+					currency={order.currency}
+				/>
+			) : null}
 
 			{/* Delivery address (delivery orders only) */}
 			{!isSelfCollect && order.deliveryAddress ? (
@@ -540,7 +740,7 @@ function OrderDetailRoute() {
 							</button>
 							<a
 								href={
-									order.deliveryAddress.mapsUrl ??
+									deriveMapsUrl(order.deliveryAddress) ??
 									`https://maps.google.com/?q=${encodeURIComponent(
 										formatAddressInline(order.deliveryAddress),
 									)}`
@@ -579,14 +779,13 @@ function OrderDetailRoute() {
 
 					{editingCarrier ? (
 						<div className="flex flex-col gap-2">
-							<input
-								// biome-ignore lint/a11y/noAutofocus: intentional UX — input appears on user action
+							<Input
 								autoFocus
 								type="url"
 								value={carrierInput}
 								onChange={(e) => setCarrierInput(e.target.value)}
 								placeholder="https://www.spx.my/track?..."
-								className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+								className="h-10 w-full rounded-lg border-border px-3 text-sm"
 							/>
 							<p className="text-xs text-muted-foreground">
 								SPX, Lalamove, NinjaVan, J&amp;T, etc. Sent to the customer via
@@ -629,27 +828,546 @@ function OrderDetailRoute() {
 				</section>
 			) : null}
 
-			{/* Status actions */}
-			{transitions.length > 0 ? (
+			{order.mockupStatus !== undefined ? <MockupCard order={order} /> : null}
+
+			{/* Stage actions — advance through the seller's stage list one step at a
+			    time (synthesized defaults when unconfigured). Cancel stays available
+			    until the order is terminal. */}
+			{!isTerminal ? (
 				<section className="flex flex-col gap-3">
 					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 						Update Status
 					</p>
 					<div className="flex flex-col gap-2">
-						{transitions.map((t) => (
-							<Button
-								key={t}
-								onClick={() => handleTransition(t)}
-								disabled={pending !== null}
-								variant={t === "cancelled" ? "secondary" : "default"}
-								className="h-11 w-full"
-							>
-								{pending === t ? "Updating…" : transitionLabels[t]}
-							</Button>
-						))}
+						{nextStage
+							? (() => {
+									// Advancing into production (packed or later) is blocked
+									// while the mockup gate is closed — mirrors the server.
+									const blocked =
+										anchorOrdinal(nextStage.anchor) >=
+											anchorOrdinal("packed") && mockupGated;
+									// First move out of pending into a confirmed-anchored stage
+									// keeps the familiar "Confirm Order" verb; everything else
+									// reads "Mark as {stage}".
+									const advanceLabel =
+										order.status === "pending" &&
+										nextStage.anchor === "confirmed"
+											? "Confirm Order"
+											: `Mark as ${stageLabel(nextStage, "en")}`;
+									return (
+										<Button
+											onClick={() => handleAdvance(nextStage.id)}
+											disabled={pending !== null || blocked}
+											className="h-11 w-full"
+										>
+											{pending === nextStage.id
+												? "Updating…"
+												: blocked
+													? `${advanceLabel} — awaiting mockup`
+													: advanceLabel}
+										</Button>
+									);
+								})()
+							: null}
+						<Button
+							onClick={handleCancel}
+							disabled={pending !== null}
+							variant="secondary"
+							className="h-11 w-full"
+						>
+							{pending === "cancel" ? "Updating…" : "Cancel Order"}
+						</Button>
 					</div>
 				</section>
 			) : null}
 		</div>
+	);
+}
+
+// Mirror of MOCKUP_WAIVE_GRACE_MS in convex/orders.ts — drives when the
+// "proceed without approval" escape becomes available in the UI.
+const MOCKUP_WAIVE_GRACE_MS = 48 * 60 * 60 * 1000;
+// Mirror of MAX_MOCKUP_IMAGES in convex/orders.ts.
+const MAX_MOCKUP_IMAGES = 5;
+
+function MockupCard({ order }: { order: Doc<"orders"> }) {
+	const generateUploadUrl = useMutation(api.orders.generateMockupUploadUrl);
+	const discardMockupUploads = useMutation(api.orders.discardMockupUploads);
+	const submitMockup = useMutation(api.orders.submitMockup);
+	const updateMockupQuote = useMutation(api.orders.updateMockupQuote);
+	const waiveMockup = useMutation(api.orders.waiveMockup);
+	const mockupUrls = useQuery(api.orders.getMockupUrls, {
+		shortId: order.shortId,
+	});
+	const [uploading, setUploading] = useState(false);
+	const [waiving, setWaiving] = useState(false);
+	const [savingPrice, setSavingPrice] = useState(false);
+	// Quote for the custom work (major-unit string as typed). Seeded from the
+	// order's current quote so re-sends/edits keep the last value.
+	const [priceInput, setPriceInput] = useState(
+		order.mockupQuotedAmount != null
+			? (order.mockupQuotedAmount / 100).toFixed(2)
+			: "",
+	);
+
+	const status = order.mockupStatus;
+	const waived = order.mockupWaivedAt != null;
+
+	// Parse the typed quote into minor units. Empty = no quote sent (made-to-order
+	// items with a fixed storefront price don't need one). Invalid → undefined.
+	function parsedQuote(): number | undefined {
+		const trimmed = priceInput.trim();
+		if (trimmed === "") return undefined;
+		if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) return undefined;
+		return Math.round(Number.parseFloat(trimmed) * 100);
+	}
+
+	async function handleUpload(e: ChangeEvent<HTMLInputElement>) {
+		const files = e.target.files;
+		if (!files || files.length === 0) return;
+		if (files.length > MAX_MOCKUP_IMAGES) {
+			toast.error(`Up to ${MAX_MOCKUP_IMAGES} images at a time`);
+			e.target.value = "";
+			return;
+		}
+		if (priceInput.trim() !== "" && parsedQuote() === undefined) {
+			toast.error("Enter a valid price (e.g. 120 or 120.50) or clear it");
+			e.target.value = "";
+			return;
+		}
+		setUploading(true);
+		// Hoisted so the catch can clean up blobs already uploaded before a failure.
+		const storageIds: string[] = [];
+		try {
+			// Upload each selected image, then send them together as the mockup set
+			// (replacing any previous one). Sequential keeps it simple + ordered.
+			for (const file of Array.from(files)) {
+				const url = await generateUploadUrl({ orderId: order._id });
+				const res = await fetch(url, {
+					method: "POST",
+					headers: { "Content-Type": file.type },
+					body: file,
+				});
+				if (!res.ok) throw new Error("Upload failed");
+				const { storageId } = (await res.json()) as { storageId: string };
+				storageIds.push(storageId);
+			}
+			await submitMockup({
+				orderId: order._id,
+				storageIds,
+				quotedAmount: parsedQuote(),
+			});
+			toast.success(
+				storageIds.length > 1
+					? `${storageIds.length} mockups sent to the buyer for approval`
+					: "Mockup sent to the buyer for approval",
+			);
+		} catch (err) {
+			// If some images uploaded but submit never landed (a mid-loop failure, or
+			// submitMockup itself threw), those blobs are unreferenced — delete them
+			// so they don't orphan. Best-effort; a cleanup failure is non-fatal.
+			if (storageIds.length > 0) {
+				void discardMockupUploads({ orderId: order._id, storageIds }).catch(
+					() => {},
+				);
+			}
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setUploading(false);
+			e.target.value = "";
+		}
+	}
+
+	// Update the quote without re-uploading. Uses updateMockupQuote (not
+	// submitMockup) so it doesn't re-ping the buyer or reset the 48h waiver clock
+	// — the buyer sees the new price live on their tracking page. Only available
+	// once a mockup exists.
+	async function handleSavePrice() {
+		const quote = parsedQuote();
+		if (priceInput.trim() !== "" && quote === undefined) {
+			toast.error("Enter a valid price (e.g. 120 or 120.50)");
+			return;
+		}
+		if (!order.mockupImageStorageId) return;
+		setSavingPrice(true);
+		try {
+			await updateMockupQuote({ orderId: order._id, quotedAmount: quote });
+			toast.success("Price updated — the buyer sees it on their order page");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSavingPrice(false);
+		}
+	}
+
+	async function handleWaive() {
+		setWaiving(true);
+		try {
+			await waiveMockup({ orderId: order._id });
+			toast.success("Proceeding without buyer approval");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setWaiving(false);
+		}
+	}
+
+	const needsMockup = status === "pending" || status === "changes_requested";
+	const canWaive =
+		!waived &&
+		status !== "approved" &&
+		order.mockupSubmittedAt != null &&
+		Date.now() - order.mockupSubmittedAt >= MOCKUP_WAIVE_GRACE_MS;
+	// When the time-based waiver unlocks: 48h after the mockup was sent.
+	const waiveUnlockLabel =
+		order.mockupSubmittedAt != null
+			? new Date(
+					order.mockupSubmittedAt + MOCKUP_WAIVE_GRACE_MS,
+				).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+			: "";
+
+	const badge = waived
+		? { label: "Proceeding — no approval", cls: "bg-muted text-foreground" }
+		: status === "approved"
+			? { label: "Approved by buyer", cls: "bg-emerald-50 text-emerald-700" }
+			: status === "submitted"
+				? { label: "Awaiting buyer", cls: "bg-blue-50 text-blue-700" }
+				: { label: "Mockup needed", cls: "bg-amber-50 text-amber-800" };
+
+	return (
+		<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+			<div className="flex items-center justify-between">
+				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+					Mockup approval
+				</p>
+				<span
+					className={`rounded-full px-2 py-0.5 text-xs font-medium ${badge.cls}`}
+				>
+					{badge.label}
+				</span>
+			</div>
+
+			{status === "changes_requested" && order.mockupChangeNote ? (
+				<div className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">
+					<span className="font-medium">Buyer requested changes:</span>{" "}
+					{order.mockupChangeNote}
+				</div>
+			) : null}
+
+			{mockupUrls && mockupUrls.length > 0 ? (
+				<div
+					className={mockupUrls.length === 1 ? "" : "grid grid-cols-3 gap-2"}
+				>
+					{mockupUrls.map((url) => (
+						<a
+							key={url}
+							href={url}
+							target="_blank"
+							rel="noreferrer"
+							className="block overflow-hidden rounded-xl border border-border bg-white"
+						>
+							<img
+								src={url}
+								alt="Current mockup"
+								className={
+									mockupUrls.length === 1
+										? "block max-h-64 w-full object-contain"
+										: "block aspect-square w-full object-cover"
+								}
+							/>
+						</a>
+					))}
+				</div>
+			) : order.mockupImageStorageId ? (
+				<div className="rounded-xl border border-border bg-muted/30 p-4 text-center text-xs text-muted-foreground">
+					Loading mockup…
+				</div>
+			) : null}
+
+			{status === "submitted" ? (
+				<p className="text-sm text-muted-foreground">
+					Sent to the buyer — waiting for them to approve or request changes on
+					their order page.
+				</p>
+			) : null}
+			{status === "approved" ? (
+				<p className="flex items-center gap-1.5 text-sm text-emerald-700">
+					<CheckCircle2 className="size-4" /> Approved — you can pack this
+					order.
+				</p>
+			) : null}
+			{waived ? (
+				<p className="text-sm text-muted-foreground">
+					You chose to proceed without the buyer's approval.
+				</p>
+			) : null}
+
+			{status !== "approved" ? (
+				<div className="flex flex-col gap-1.5">
+					<label htmlFor="mockup-quote" className="text-sm font-medium">
+						Custom item price{" "}
+						<span className="font-normal text-muted-foreground">
+							(optional — for quote-on-request items)
+						</span>
+					</label>
+					<div className="flex items-center gap-2">
+						<div className="relative flex-1">
+							<span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+								{order.currency}
+							</span>
+							<Input
+								id="mockup-quote"
+								inputMode="decimal"
+								placeholder="120.00"
+								value={priceInput}
+								onChange={(e) => setPriceInput(e.target.value)}
+								className="h-11 pl-12"
+							/>
+						</div>
+						{order.mockupImageStorageId ? (
+							<Button
+								type="button"
+								variant="secondary"
+								onClick={handleSavePrice}
+								disabled={savingPrice}
+								className="h-11 shrink-0"
+							>
+								{savingPrice ? "…" : "Save price"}
+							</Button>
+						) : null}
+					</div>
+					<p className="text-xs text-muted-foreground">
+						Sent with the mockup. The buyer approves the design and price
+						together; the order total updates automatically.
+					</p>
+				</div>
+			) : null}
+
+			{needsMockup || status === "submitted" ? (
+				<div className="flex flex-col gap-1">
+					<label className="flex h-11 cursor-pointer items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90">
+						<ImagePlus className="size-4" />
+						{uploading
+							? "Sending…"
+							: status === "submitted"
+								? "Replace mockup"
+								: "Upload & send mockup"}
+						<input
+							type="file"
+							accept="image/*"
+							multiple
+							disabled={uploading}
+							onChange={handleUpload}
+							className="hidden"
+						/>
+					</label>
+					<p className="text-center text-xs text-muted-foreground">
+						Up to {MAX_MOCKUP_IMAGES} images — e.g. different designs, angles,
+						or one per item. Sending replaces the current set.
+					</p>
+				</div>
+			) : null}
+
+			{canWaive ? (
+				<Button
+					variant="secondary"
+					onClick={handleWaive}
+					disabled={waiving}
+					className="h-11 w-full"
+				>
+					{waiving ? "…" : "Proceed without approval"}
+				</Button>
+			) : status === "submitted" && !waived ? (
+				<p className="text-xs text-muted-foreground">
+					Waiting on the buyer to approve. If they haven't responded by{" "}
+					<span className="font-medium text-foreground">
+						{waiveUnlockLabel}
+					</span>{" "}
+					(48 hours after you sent the mockup), a{" "}
+					<span className="font-medium text-foreground">
+						“Proceed without approval”
+					</span>{" "}
+					button appears here — letting you start production without their
+					sign-off so the order is never stuck waiting.
+				</p>
+			) : null}
+		</section>
+	);
+}
+
+function formatPickupInline(snapshot: PickupSnapshot): string {
+	const lines = [snapshot.label, snapshot.address];
+	const mapsUrl = deriveMapsUrl(snapshot);
+	if (mapsUrl) lines.push(mapsUrl);
+	if (snapshot.notes) lines.push(snapshot.notes);
+	return lines.join("\n");
+}
+
+function buildNotifyManagerMessage({
+	shortId,
+	location,
+	customerName,
+	customerWaPhone,
+	items,
+	total,
+	currency,
+}: {
+	shortId: string;
+	location: PickupSnapshot;
+	customerName: string | undefined;
+	customerWaPhone: string | undefined;
+	items: ReadonlyArray<{
+		name: string;
+		quantity: number;
+		price: number;
+		variantLabel?: string;
+	}>;
+	total: number;
+	currency: string;
+}): string {
+	const lines: string[] = [];
+	lines.push(`📦 New pickup order ${shortId} — ${location.label}`);
+	const customerLine = customerName
+		? customerWaPhone
+			? `Customer: ${customerName} (${formatPhone(customerWaPhone)})`
+			: `Customer: ${customerName}`
+		: customerWaPhone
+			? `Customer: ${formatPhone(customerWaPhone)}`
+			: "Customer: Anonymous";
+	lines.push(customerLine);
+	lines.push("");
+	lines.push("Items:");
+	for (const item of items) {
+		const name = item.variantLabel
+			? `${item.name} (${item.variantLabel})`
+			: item.name;
+		lines.push(
+			`• ${item.quantity}× ${name} (${formatPrice(item.price * item.quantity, currency)})`,
+		);
+	}
+	lines.push("");
+	lines.push(`Total: ${formatPrice(total, currency)}`);
+	lines.push("");
+	lines.push("Please prepare for collection.");
+	return lines.join("\n");
+}
+
+function NotifyManagerCard({
+	shortId,
+	location,
+	pickupLocationId,
+	customerName,
+	customerWaPhone,
+	items,
+	total,
+	currency,
+}: {
+	shortId: string;
+	location: PickupSnapshot;
+	/**
+	 * Used to fetch the LIVE pickup location row so the seller's "Notify"
+	 * button always routes to the current manager — not whoever happened to
+	 * be on the snapshot at order creation. Undefined for legacy orders
+	 * placed before the multi-location feature shipped.
+	 */
+	pickupLocationId: Id<"pickupLocations"> | undefined;
+	customerName: string | undefined;
+	customerWaPhone: string | undefined;
+	items: ReadonlyArray<{
+		name: string;
+		quantity: number;
+		price: number;
+		variantLabel?: string;
+	}>;
+	total: number;
+	currency: string;
+}) {
+	const [copied, setCopied] = useState(false);
+	// Fetch live manager contact. Skipped when there's no pickupLocationId on
+	// the order (legacy orders), in which case we fall back to the snapshot-
+	// only Copy flow.
+	const liveLocation = useQuery(
+		api.pickupLocations.getOwnedById,
+		pickupLocationId ? { pickupLocationId } : "skip",
+	);
+	const managerName = liveLocation?.managerName?.trim();
+	const managerWaPhone = liveLocation?.managerWaPhone?.trim();
+	// Phone is the gate — without it there's no wa.me link to open. Name is
+	// purely cosmetic (button label); when absent the button renders with a
+	// generic label so the seller still gets the one-tap benefit.
+	const hasManagerPhone = Boolean(managerWaPhone && managerWaPhone.length > 0);
+
+	const message = buildNotifyManagerMessage({
+		shortId,
+		location,
+		customerName,
+		customerWaPhone,
+		items,
+		total,
+		currency,
+	});
+
+	const notifyHref = hasManagerPhone
+		? `https://wa.me/${managerWaPhone}?text=${encodeURIComponent(message)}`
+		: undefined;
+	const notifyLabel = managerName
+		? `Notify ${managerName} on WhatsApp`
+		: "Notify on WhatsApp";
+
+	function handleCopy() {
+		navigator.clipboard
+			.writeText(message)
+			.then(() => {
+				setCopied(true);
+				toast.success("Message copied — paste it in your store chat");
+				setTimeout(() => setCopied(false), 2000);
+			})
+			.catch(() => toast.error("Couldn't copy — please copy manually"));
+	}
+
+	return (
+		<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+			<div className="flex items-center justify-between">
+				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+					Notify store manager
+				</p>
+				<button
+					type="button"
+					onClick={handleCopy}
+					className="flex h-9 items-center gap-1 rounded-full px-3 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+					aria-label="Copy notify-manager message"
+				>
+					<Copy className="size-3.5" />
+					{copied ? "Copied!" : "Copy"}
+				</button>
+			</div>
+			<pre className="whitespace-pre-wrap wrap-break-words rounded-lg bg-muted/40 px-3 py-2.5 font-sans text-xs leading-relaxed text-foreground">
+				{message}
+			</pre>
+			{notifyHref ? (
+				<a
+					href={notifyHref}
+					target="_blank"
+					rel="noreferrer"
+					className="flex h-11 items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+				>
+					<MessageCircle className="size-4" />
+					{notifyLabel}
+				</a>
+			) : (
+				<p className="text-xs text-muted-foreground">
+					Tap copy and forward to whoever runs this pickup spot. You can edit it
+					before sending. Add a manager number in{" "}
+					<Link
+						to="/app/settings"
+						search={{ tab: "pickup" }}
+						className="font-medium text-accent underline-offset-2 hover:underline"
+					>
+						Settings → Pickup
+					</Link>{" "}
+					for a one-tap button here.
+				</p>
+			)}
+		</section>
 	);
 }

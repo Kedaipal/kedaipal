@@ -1,119 +1,346 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
-import { ChevronRight, ShoppingBag } from "lucide-react";
-import { useState } from "react";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useMutation, useQuery } from "convex/react";
+import {
+	Check,
+	ChevronRight,
+	Package,
+	Search,
+	ShoppingBag,
+	Truck,
+	X,
+} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
+import type { Id } from "../../convex/_generated/dataModel";
+import { INBOX_BUCKETS, type OrderBucket } from "../../convex/lib/orderBuckets";
+import {
+	type BulkAction,
+	OrderBulkBar,
+} from "../components/dashboard/order-bulk-bar";
+import {
+	OrderFilters,
+	type OrderFilterValue,
+	type PaymentStatus,
+} from "../components/dashboard/order-filters";
+import { OrderTimeBadge } from "../components/dashboard/order-time-badge";
 import { PageHeader } from "../components/dashboard/page-header";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
-import { formatPrice } from "../lib/format";
+import { useDebounce } from "../hooks/useDebounce";
+import { convexErrorMessage, formatPrice } from "../lib/format";
+import {
+	type DeliveryMethod,
+	resolveAnchorLabel,
+	resolveCurrentStage,
+	resolveStages,
+	type StatusLabels,
+	stageLabel,
+} from "../lib/orderStatus";
 import { cn } from "../lib/utils";
 
+type InboxBucket = OrderBucket | "all";
+const BUCKET_KEYS: InboxBucket[] = ["all", ...INBOX_BUCKETS.map((b) => b.key)];
+
+function isPaymentStatus(x: unknown): x is PaymentStatus {
+	return x === "unpaid" || x === "claimed" || x === "received";
+}
+
+// All optional (defaults applied in the component) so links elsewhere can target
+// `/app/orders` without specifying search, and defaults stay out of the URL.
+type InboxSearch = {
+	bucket?: InboxBucket;
+	q?: string;
+	pay?: PaymentStatus[];
+	from?: number;
+	to?: number;
+	/** Cross-cutting "needs mockup" toggle. */
+	mockup?: boolean;
+};
+
 export const Route = createFileRoute("/app/orders/")({
+	// URL is the source of truth for the view (refresh + share preserve it).
+	validateSearch: (search: Record<string, unknown>): InboxSearch => {
+		const rawBucket = search.bucket as InboxBucket;
+		// undefined ≡ "all" — keeps the default out of the URL.
+		const bucket =
+			BUCKET_KEYS.includes(rawBucket) && rawBucket !== "all"
+				? rawBucket
+				: undefined;
+		const payRaw = search.pay;
+		const payArr = Array.isArray(payRaw)
+			? payRaw
+			: payRaw != null
+				? [payRaw]
+				: [];
+		const pay = payArr.filter(isPaymentStatus);
+		const q =
+			typeof search.q === "string" && search.q.length > 0
+				? search.q
+				: undefined;
+		return {
+			bucket,
+			q,
+			pay: pay.length > 0 ? pay : undefined,
+			from: typeof search.from === "number" ? search.from : undefined,
+			to: typeof search.to === "number" ? search.to : undefined,
+			mockup:
+				search.mockup === true || search.mockup === "true" ? true : undefined,
+		};
+	},
 	component: OrdersRoute,
 });
 
-const STATUSES = [
-	"all",
-	"pending",
-	"confirmed",
-	"packed",
-	"shipped",
-	"delivered",
-	"cancelled",
-] as const;
-type StatusFilter = (typeof STATUSES)[number];
+type OrderStatus =
+	| "pending"
+	| "confirmed"
+	| "packed"
+	| "shipped"
+	| "delivered"
+	| "cancelled";
 
-type OrderStatus = Exclude<StatusFilter, "all">;
-
-function relativeTime(ms: number): string {
-	const diff = Date.now() - ms;
-	const mins = Math.floor(diff / 60_000);
-	if (mins < 1) return "just now";
-	if (mins < 60) return `${mins}m ago`;
-	const hrs = Math.floor(mins / 60);
-	if (hrs < 24) return `${hrs}h ago`;
-	const days = Math.floor(hrs / 24);
-	return `${days}d ago`;
-}
+const PAGE_SIZE = 50;
 
 function OrdersRoute() {
-	const [filter, setFilter] = useState<StatusFilter>("all");
+	const {
+		bucket = "all",
+		q = "",
+		pay = [],
+		from,
+		to,
+		mockup = false,
+	} = Route.useSearch();
+	const navigate = useNavigate({ from: Route.fullPath });
 	const retailer = useQuery(api.retailers.getMyRetailer);
 
+	const bulkUpdateStatus = useMutation(api.orders.bulkUpdateStatus);
+
+	const [searchInput, setSearchInput] = useState(q);
+	const debounced = useDebounce(searchInput.trim(), 250);
+	const [limit, setLimit] = useState(PAGE_SIZE);
+
+	// Multi-select (bulk actions). Checkboxes are always shown; tapping the card
+	// still opens the order. Selection clears whenever the view changes (different
+	// result set) — see the reset effect below.
+	const [selected, setSelected] = useState<Set<string>>(new Set());
+	const [bulkBusy, setBulkBusy] = useState(false);
+
+	const payKey = pay.join(",");
+	// Mirror the debounced search into the URL (shareable / survives refresh).
+	useEffect(() => {
+		navigate({
+			search: (prev) => ({ ...prev, q: debounced || undefined }),
+			replace: true,
+		});
+	}, [debounced, navigate]);
+	// Any change to the view (bucket / search / filters) resets the page size and
+	// clears any selection (the result set is different now).
+	// biome-ignore lint/correctness/useExhaustiveDependencies: these are intentional reset triggers, not values read in the body.
+	useEffect(() => {
+		setLimit(PAGE_SIZE);
+		setSelected(new Set());
+	}, [bucket, debounced, payKey, from, to, mockup]);
+
 	const result = useQuery(
-		api.orders.listByRetailer,
+		api.orders.searchOrders,
 		retailer
 			? {
 					retailerId: retailer._id,
-					status: filter === "all" ? undefined : filter,
-					paginationOpts: { numItems: 50, cursor: null },
+					bucket,
+					paymentStatuses: pay.length > 0 ? pay : undefined,
+					dateFrom: from,
+					dateTo: to,
+					mockupPending: mockup || undefined,
+					searchText: debounced || undefined,
+					limit,
 				}
 			: "skip",
 	);
+	const countsRef = useRef<NonNullable<typeof result>["counts"] | null>(null);
 
-	const counts = useQuery(
-		api.orders.countActionable,
-		retailer ? { retailerId: retailer._id } : "skip",
-	);
+	if (!retailer) return <OrdersInboxSkeleton />;
 
-	if (!retailer) return null;
+	const labels = retailer.statusLabels as StatusLabels | undefined;
+	const retailerMethod: DeliveryMethod = retailer.offerSelfCollect
+		? "self_collect"
+		: "delivery";
+	const stages = resolveStages({
+		orderStages: retailer.orderStages,
+		labels,
+		deliveryMethod: retailerMethod,
+	});
+
+	const loading = result === undefined;
+	const orders = result?.orders ?? [];
+	// Bucket counts are independent of the active filters, so retain the last
+	// known set across refetches — otherwise the chips + "Needs mockup" toggle
+	// would flicker out every time a filter changes (the query reloads).
+	if (result?.counts) countsRef.current = result.counts;
+	const counts = result?.counts ?? countsRef.current ?? undefined;
+	const total = result?.total ?? 0;
+	const allCount = counts
+		? counts.new + counts.in_progress + counts.completed + counts.cancelled
+		: undefined;
+	const now = Date.now();
+	const searching = debounced.length > 0;
+	const filtersActive = pay.length > 0 || from != null || to != null || mockup;
+
+	function setBucket(next: InboxBucket) {
+		navigate({
+			search: (prev) => ({
+				...prev,
+				bucket: next === "all" ? undefined : next,
+			}),
+		});
+	}
+
+	function setFilters(next: OrderFilterValue) {
+		navigate({
+			search: (prev) => ({
+				...prev,
+				pay: next.payment.length > 0 ? next.payment : undefined,
+				from: next.from,
+				to: next.to,
+				mockup: next.mockup ? true : undefined,
+			}),
+		});
+	}
+
+	const bucketCount = (key: InboxBucket): number | undefined => {
+		if (!counts) return undefined;
+		if (key === "all") return allCount;
+		return counts[key];
+	};
+
+	// --- Bulk multi-select ---------------------------------------------------
+	const visibleIds = orders.map((o) => o._id);
+	const allSelected =
+		visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
+
+	function toggleSelect(id: string) {
+		setSelected((prev) => {
+			const next = new Set(prev);
+			if (next.has(id)) next.delete(id);
+			else next.add(id);
+			return next;
+		});
+	}
+	function selectAllOnPage() {
+		setSelected(allSelected ? new Set() : new Set(visibleIds));
+	}
+	function clearSelection() {
+		setSelected(new Set());
+	}
+
+	// Bulk targets — the canonical forward transitions, resolved to the retailer's
+	// labels (matching the row badges). "Cancel" is destructive.
+	const bulkActions: BulkAction[] = [
+		"confirmed",
+		"packed",
+		"shipped",
+		"delivered",
+	]
+		.map((s) => ({
+			status: s as BulkAction["status"],
+			label: resolveAnchorLabel(s as OrderStatus, {
+				stages,
+				labels,
+				deliveryMethod: retailerMethod,
+				locale: "en",
+			}),
+		}))
+		.concat([
+			{ status: "cancelled", label: "Cancel orders", destructive: true },
+		] as BulkAction[]);
+
+	async function applyBulk(status: BulkAction["status"]) {
+		const ids = [...selected] as Id<"orders">[];
+		if (ids.length === 0) return;
+		setBulkBusy(true);
+		try {
+			const res = await bulkUpdateStatus({ orderIds: ids, status });
+			toast.success(
+				res.skipped > 0
+					? `Updated ${res.updated} · skipped ${res.skipped}`
+					: `Updated ${res.updated} order${res.updated === 1 ? "" : "s"}`,
+			);
+			clearSelection();
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setBulkBusy(false);
+		}
+	}
 
 	return (
-		<div className="flex flex-col gap-5 lg:gap-6">
+		<div className="flex flex-col gap-4 lg:gap-5">
 			<PageHeader
 				title="Orders"
 				subtitle={
-					result === undefined
-						? "Loading…"
-						: result.page.length === 0
-							? "No orders yet"
-							: `${result.page.length} order${result.page.length === 1 ? "" : "s"}`
+					loading ? "Loading…" : `${total} order${total === 1 ? "" : "s"}`
 				}
 			/>
 			<div className="flex items-center justify-between lg:hidden">
 				<h2 className="text-xl font-bold">Orders</h2>
-				{result === undefined ? (
-					<Skeleton className="h-4 w-16 rounded" />
-				) : result.page.length > 0 ? (
-					<span className="text-sm text-muted-foreground">
-						{result.page.length} order{result.page.length === 1 ? "" : "s"}
-					</span>
+			</div>
+
+			{/* Search */}
+			<div className="relative">
+				<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+				<Input
+					value={searchInput}
+					onChange={(e) => setSearchInput(e.target.value)}
+					placeholder="Search order #, name, phone or item"
+					className="h-11 pl-9 pr-9"
+					inputMode="search"
+				/>
+				{searchInput ? (
+					<button
+						type="button"
+						onClick={() => setSearchInput("")}
+						className="absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+						aria-label="Clear search"
+					>
+						<X className="size-4" />
+					</button>
 				) : null}
 			</div>
 
-			<div className="-mx-5 flex gap-2 overflow-x-auto px-5 pb-1 lg:mx-0 lg:px-0 lg:flex-wrap lg:overflow-visible">
-				{STATUSES.map((s) => {
-					const badge =
-						s === "pending" && counts?.pending
-							? counts.pending
-							: s === "confirmed" && counts?.confirmed
-								? counts.confirmed
-								: null;
+			{/* Bucket chips */}
+			<div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0 [&::-webkit-scrollbar]:hidden">
+				{BUCKET_KEYS.map((key) => {
+					const label =
+						key === "all"
+							? "All"
+							: (INBOX_BUCKETS.find((b) => b.key === key)?.label ?? key);
+					const count = bucketCount(key);
+					const active = bucket === key;
 					return (
 						<button
-							key={s}
+							key={key}
 							type="button"
-							onClick={() => setFilter(s)}
+							onClick={() => setBucket(key)}
 							className={cn(
-								"flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-sm capitalize transition-colors",
-								filter === s
+								"flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-sm transition-colors",
+								active
 									? "border-foreground bg-foreground text-background"
 									: "border-border bg-background text-muted-foreground hover:border-foreground/30 hover:text-foreground",
 							)}
 						>
-							{s}
-							{badge !== null ? (
+							{label}
+							{count ? (
 								<span
 									className={cn(
 										"flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none",
-										filter === s
+										active
 											? "bg-background text-foreground"
-											: s === "pending"
+											: key === "new"
 												? "bg-orange-500 text-white"
-												: "bg-blue-500 text-white",
+												: "bg-muted text-muted-foreground",
 									)}
 								>
-									{badge > 99 ? "99+" : badge}
+									{count > 99 ? "99+" : count}
 								</span>
 							) : null}
 						</button>
@@ -121,59 +348,187 @@ function OrdersRoute() {
 				})}
 			</div>
 
-			{result === undefined ? (
-				<OrderListSkeleton />
-			) : result.page.length === 0 ? (
-				<div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-border px-6 py-10 text-center">
-					<div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-						<ShoppingBag className="size-5 text-muted-foreground" />
-					</div>
-					<div>
-						<p className="font-medium">No orders yet</p>
-						<p className="mt-1 text-sm text-muted-foreground">
-							When shoppers checkout via WhatsApp, orders will appear here.
-						</p>
-					</div>
+			{/* Filters: mockup + payment + date — one coherent set (inline on
+			    desktop, bottom-sheet on mobile). */}
+			<OrderFilters
+				value={{ payment: pay, from, to, mockup }}
+				onChange={setFilters}
+				mockupCount={counts?.mockupPending}
+			/>
+
+			{/* Selection toolbar — appears once at least one order is ticked. */}
+			{selected.size > 0 ? (
+				<div className="flex items-center justify-end gap-2">
+					<Button
+						variant="outline"
+						size="sm"
+						className="h-8"
+						onClick={selectAllOnPage}
+					>
+						{allSelected ? "Clear all" : "Select all"}
+					</Button>
+					<Button
+						variant="ghost"
+						size="sm"
+						className="h-8"
+						onClick={clearSelection}
+					>
+						Done
+					</Button>
 				</div>
+			) : null}
+
+			{loading ? (
+				<OrderList.Skeleton />
+			) : orders.length === 0 ? (
+				<EmptyOrders
+					bucket={bucket}
+					searching={searching}
+					filtersActive={filtersActive}
+					mockup={mockup}
+				/>
 			) : (
-				<ul className="flex flex-col gap-2 lg:grid lg:grid-cols-2 lg:gap-3">
-					{result.page.map((o) => (
-						<li key={o._id}>
-							<Link
-								to="/app/orders/$shortId"
-								params={{ shortId: o.shortId }}
-								className="group flex items-center gap-3 rounded-2xl border border-border bg-card p-4 transition-all hover:border-ring hover:shadow-sm"
-							>
+				<>
+					<ul className="flex flex-col gap-2 lg:grid lg:grid-cols-2 lg:gap-3">
+						{orders.map((o) => {
+							const isSel = selected.has(o._id);
+							const rowInner = (
 								<div className="flex min-w-0 flex-1 flex-col gap-1.5">
-									<div className="flex items-center gap-2">
+									<div className="flex flex-wrap items-center gap-2">
 										<span className="font-mono text-sm font-semibold">
 											#{o.shortId}
 										</span>
-										<StatusBadge status={o.status as OrderStatus} />
+										<StatusBadge
+											status={o.status as OrderStatus}
+											label={(() => {
+												const cs = resolveCurrentStage(
+													{
+														status: o.status,
+														currentStageId: o.currentStageId,
+													},
+													stages,
+												);
+												return cs
+													? stageLabel(cs, "en")
+													: resolveAnchorLabel(o.status as OrderStatus, {
+															stages,
+															labels,
+															deliveryMethod: (o.deliveryMethod ??
+																"delivery") as DeliveryMethod,
+															locale: "en",
+														});
+											})()}
+										/>
+										<OrderTimeBadge order={o} now={now} />
+										<DeliveryMethodBadge
+											method={o.deliveryMethod ?? "delivery"}
+										/>
+										{o.mockupStatus === "pending" ||
+										o.mockupStatus === "changes_requested" ? (
+											<span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+												Mockup pending
+											</span>
+										) : null}
 									</div>
-									<div className="flex items-center gap-2 text-sm text-muted-foreground">
-										<span className="min-w-0 truncate">
+									<div className="flex items-center justify-between gap-2">
+										<span className="min-w-0 truncate text-sm text-muted-foreground">
 											{o.customer.name ?? "Anonymous"}
 											{" · "}
 											{o.items.length} item{o.items.length === 1 ? "" : "s"}
 										</span>
-									</div>
-									<div className="flex items-center justify-between">
-										<span className="text-[11px] text-muted-foreground">
-											{relativeTime(o._creationTime)}
-										</span>
-										<span className="text-sm font-semibold tabular-nums">
+										<span className="shrink-0 text-sm font-semibold tabular-nums">
 											{formatPrice(o.total, o.currency)}
 										</span>
 									</div>
 								</div>
-								<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-							</Link>
-						</li>
-					))}
-				</ul>
+							);
+							return (
+								<li key={o._id}>
+									{/* Always-visible checkbox (its own click target) sits beside
+									    the card, which stays a normal link to the order. */}
+									<div
+										className={cn(
+											"group flex items-center gap-3 rounded-2xl border bg-card p-4 transition-all",
+											isSel
+												? "border-accent ring-1 ring-accent"
+												: "border-border hover:border-ring hover:shadow-sm",
+										)}
+									>
+										<button
+											type="button"
+											role="checkbox"
+											aria-checked={isSel}
+											aria-label={`Select order ${o.shortId}`}
+											onClick={() => toggleSelect(o._id)}
+											className={cn(
+												"flex size-5 shrink-0 items-center justify-center rounded-md border transition-colors",
+												isSel
+													? "border-accent bg-accent text-accent-foreground"
+													: "border-border bg-background hover:border-accent",
+											)}
+										>
+											{isSel ? <Check className="size-3.5" /> : null}
+										</button>
+										<Link
+											to="/app/orders/$shortId"
+											params={{ shortId: o.shortId }}
+											className="flex min-w-0 flex-1 items-center gap-3"
+										>
+											{rowInner}
+											<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+										</Link>
+									</div>
+								</li>
+							);
+						})}
+					</ul>
+
+					{orders.length < total ? (
+						<button
+							type="button"
+							onClick={() => setLimit((n) => n + PAGE_SIZE)}
+							className="mx-auto flex h-10 items-center rounded-full border border-border px-5 text-sm font-medium text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
+						>
+							Load more ({total - orders.length} more)
+						</button>
+					) : null}
+					{selected.size > 0 ? (
+						<div className="h-20" aria-hidden="true" />
+					) : null}
+				</>
 			)}
+
+			{selected.size > 0 ? (
+				<OrderBulkBar
+					count={selected.size}
+					actions={bulkActions}
+					onApply={applyBulk}
+					onClear={clearSelection}
+					busy={bulkBusy}
+				/>
+			) : null}
 		</div>
+	);
+}
+
+/**
+ * At-a-glance indicator of how the customer is receiving the order. Sits next
+ * to the status badge in each order row so the seller can spot pickup orders
+ * (which need a different ops flow — notify store manager, prepare for
+ * collection) without opening the detail page.
+ */
+function DeliveryMethodBadge({
+	method,
+}: {
+	method: "delivery" | "self_collect";
+}) {
+	const isPickup = method === "self_collect";
+	const Icon = isPickup ? Package : Truck;
+	return (
+		<span className="inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+			<Icon className="size-3" aria-hidden="true" />
+			{isPickup ? "Pickup" : "Delivery"}
+		</span>
 	);
 }
 
@@ -189,41 +544,145 @@ const STATUS_STYLES: Record<OrderStatus, string> = {
 	cancelled: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200",
 };
 
-function OrderListSkeleton() {
+const OrderList = {
+	Skeleton() {
+		return (
+			<ul className="flex flex-col gap-2 lg:grid lg:grid-cols-2 lg:gap-3">
+				{[0, 1, 2, 3, 4].map((n) => (
+					<li
+						key={n}
+						className="flex items-center gap-3 rounded-2xl border border-border bg-card p-4"
+					>
+						<div className="flex min-w-0 flex-1 flex-col gap-1.5">
+							<div className="flex items-center gap-2">
+								<Skeleton className="h-4 w-16 rounded" />
+								<Skeleton className="h-4 w-16 rounded-full" />
+							</div>
+							<div className="flex items-center justify-between">
+								<Skeleton className="h-3.5 w-40 rounded" />
+								<Skeleton className="h-4 w-16 rounded" />
+							</div>
+						</div>
+						<Skeleton className="size-4 shrink-0 rounded" />
+					</li>
+				))}
+			</ul>
+		);
+	},
+};
+
+function OrdersInboxSkeleton() {
 	return (
-		<ul className="flex flex-col gap-2 lg:grid lg:grid-cols-2 lg:gap-3">
-			{[0, 1, 2, 3, 4].map((n) => (
-				<li
-					key={n}
-					className="flex items-center gap-3 rounded-2xl border border-border bg-card p-4"
-				>
-					<div className="flex min-w-0 flex-1 flex-col gap-1.5">
-						<div className="flex items-center gap-2">
-							<Skeleton className="h-4 w-16 rounded" />
-							<Skeleton className="h-4 w-16 rounded-full" />
-						</div>
-						<Skeleton className="h-3.5 w-40 rounded" />
-						<div className="mt-0.5 flex items-center justify-between">
-							<Skeleton className="h-3 w-12 rounded" />
-							<Skeleton className="h-4 w-16 rounded" />
-						</div>
-					</div>
-					<Skeleton className="size-4 shrink-0 rounded" />
-				</li>
-			))}
-		</ul>
+		<div className="flex flex-col gap-4 lg:gap-5">
+			<Skeleton className="h-7 w-28" />
+			<Skeleton className="h-11 w-full rounded-xl" />
+			<div className="flex gap-2">
+				{[64, 88, 96, 80].map((w) => (
+					<Skeleton key={w} className="h-9 rounded-full" style={{ width: w }} />
+				))}
+			</div>
+			<OrderList.Skeleton />
+		</div>
 	);
 }
 
-export function StatusBadge({ status }: { status: OrderStatus }) {
+export function StatusBadge({
+	status,
+	label,
+}: {
+	status: OrderStatus;
+	/**
+	 * Resolved display text. Defaults to the raw status (capitalized) when
+	 * omitted; pass a resolved label from `resolveStatusLabel` to honour a
+	 * retailer's custom stage names. Custom labels keep their own casing, so the
+	 * `capitalize` class is only applied to the raw-status fallback.
+	 */
+	label?: string;
+}) {
 	return (
 		<span
 			className={cn(
-				"rounded-full px-2 py-0.5 text-[11px] font-semibold capitalize",
+				"rounded-full px-2 py-0.5 text-[11px] font-semibold",
+				label ? "" : "capitalize",
 				STATUS_STYLES[status],
 			)}
 		>
-			{status}
+			{label ?? status}
 		</span>
 	);
+}
+
+function EmptyOrders({
+	bucket,
+	searching,
+	filtersActive,
+	mockup,
+}: {
+	bucket: InboxBucket;
+	searching: boolean;
+	filtersActive: boolean;
+	mockup: boolean;
+}) {
+	const { title, body } = emptyCopy(bucket, searching, filtersActive, mockup);
+	return (
+		<div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-border px-6 py-10 text-center">
+			<div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
+				<ShoppingBag className="size-5 text-muted-foreground" />
+			</div>
+			<div>
+				<p className="font-medium">{title}</p>
+				<p className="mt-1 max-w-xs text-sm text-muted-foreground">{body}</p>
+			</div>
+		</div>
+	);
+}
+
+function emptyCopy(
+	bucket: InboxBucket,
+	searching: boolean,
+	filtersActive: boolean,
+	mockup: boolean,
+): { title: string; body: string } {
+	if (searching)
+		return {
+			title: "No matches",
+			body: "No orders match your search. Try an order #, name, phone, or item.",
+		};
+	if (mockup)
+		return {
+			title: "No orders need a mockup",
+			body: "You're all caught up — nothing is waiting on a design right now.",
+		};
+	if (filtersActive)
+		return {
+			title: "No orders match your filters",
+			body: "Adjust or clear the payment / date filters to see more.",
+		};
+	switch (bucket) {
+		case "new":
+			return {
+				title: "No new orders",
+				body: "You're all caught up 🎉 New WhatsApp orders land here first.",
+			};
+		case "in_progress":
+			return {
+				title: "Nothing in progress",
+				body: "Orders you've confirmed, packed, or shipped will show here.",
+			};
+		case "completed":
+			return {
+				title: "No completed orders yet",
+				body: "Delivered orders move here once you mark them done.",
+			};
+		case "cancelled":
+			return {
+				title: "No cancelled orders",
+				body: "Nothing cancelled — good.",
+			};
+		default:
+			return {
+				title: "No orders yet",
+				body: "When shoppers checkout via WhatsApp, orders will appear here.",
+			};
+	}
 }

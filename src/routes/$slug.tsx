@@ -174,6 +174,13 @@ function StorefrontRoute() {
 	const cart = useCart(
 		result && result.status === "ok" ? result.retailer._id : undefined,
 	);
+	// Active pickup locations — public, unauthed. Only consulted by the checkout
+	// sheet when the retailer has self-collect on. Loading state (undefined) is
+	// folded into "no locations" at the call site to avoid blocking storefront
+	// render on a sidecar query.
+	const pickupLocations = useQuery(api.pickupLocations.listActivePublicBySlug, {
+		slug,
+	});
 
 	if (result === undefined || result.status !== "ok") {
 		return <StorefrontSkeleton />;
@@ -213,6 +220,8 @@ function StorefrontRoute() {
 				retailerId={retailer._id}
 				storeName={retailer.storeName}
 				checkoutPhone={retailer.checkoutPhone}
+				offerSelfCollect={retailer.offerSelfCollect ?? false}
+				pickupLocations={pickupLocations ?? []}
 			/>
 		</div>
 	);

@@ -53,6 +53,45 @@
 }
 
 /* =============================================
+   Landing v2 — signature details, expressed in
+   the existing theme palette (navy + mint).
+   ============================================= */
+
+/* Marquee strip */
+@keyframes kp-marquee {
+	to {
+		transform: translateX(-50%);
+	}
+}
+
+@utility animate-kp-marquee {
+	animation: kp-marquee 28s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.animate-kp-marquee {
+		animation: none;
+	}
+}
+
+/* Highlighter swipe behind accent words — mint */
+@utility kp-highlight {
+	background-image: linear-gradient(
+		to top,
+		hsl(160 84% 39% / 0.22) 0%,
+		hsl(160 84% 39% / 0.22) 38%,
+		transparent 38%
+	);
+	box-decoration-break: clone;
+	-webkit-box-decoration-break: clone;
+}
+
+/* Dashed "ticket" border */
+@utility kp-ticket-border {
+	border: 2px dashed hsl(222 47% 11% / 0.2);
+}
+
+/* =============================================
    Landing page design system — elevated layer
    ============================================= */
 

@@ -65,11 +65,10 @@ async function seedRetailerWithEmail(
 	const productId = await asUser.mutation(api.products.create, {
 		retailerId: retailer._id,
 		name: "Tent 2P",
-		price: 12000,
 		currency: "MYR",
-		stock: 100,
 		imageStorageIds: [],
 		sortOrder: 0,
+		variants: [{ optionValues: [], price: 12000, onHand: 100 }],
 	});
 	return { retailerId: retailer._id, productId };
 }
@@ -161,6 +160,42 @@ describe("email retailer order alert", () => {
 		const body = sends[0].body as { subject: string };
 		expect(body.subject).toContain("confirmed");
 		expect(body.subject).toContain(shortId);
+		fetchMock.restore();
+	});
+
+	test("flags a custom-item order so the seller knows to send a mockup first", async () => {
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const asUser = t.withIdentity({ subject: USER });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: "Cake Studio",
+			slug: "email-custom",
+		});
+		await asUser.mutation(api.retailers.updateSettings, {
+			notifyEmail: "ops@store.test",
+		});
+		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		const productId = await asUser.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Custom Cake",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			requiresProof: true,
+			variants: [{ optionValues: [], price: 0, onHand: 0 }],
+		});
+		const { orderId } = await createPendingOrder(t, retailer._id, productId);
+
+		await t.action(internal.email.notifyRetailerOrderAlert, { orderId });
+
+		const body = fetchMock.resendCalls()[0].body as {
+			html: string;
+			text: string;
+		};
+		expect(body.html).toContain("Custom item");
+		expect(body.text).toContain("Custom item");
+		expect(body.text).toContain("Payment is held");
 		fetchMock.restore();
 	});
 

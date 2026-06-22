@@ -14,6 +14,95 @@ const messageTemplatesValidator = v.object({
 	ms: v.optional(localeOverridesValidator),
 });
 
+// Per-retailer SHORT status labels (tracking timeline / dashboard). Six optional
+// strings per locale, mirroring `statusLabels` on the schema. Sanitized +
+// length-capped in `sanitizeStatusLabels`.
+const statusLabelOverridesValidator = v.object({
+	pending: v.optional(v.string()),
+	confirmed: v.optional(v.string()),
+	packed: v.optional(v.string()),
+	shipped: v.optional(v.string()),
+	delivered: v.optional(v.string()),
+	cancelled: v.optional(v.string()),
+});
+
+const statusLabelsValidator = v.object({
+	en: v.optional(statusLabelOverridesValidator),
+	ms: v.optional(statusLabelOverridesValidator),
+});
+
+// Phase 2 custom stages. `id`/`sortOrder` optional on the wire — the server
+// generates missing ids and renumbers sortOrder to the array (display) order,
+// like sanitizePaymentMethods. Cap / monotonic-anchor / label rules enforced in
+// sanitizeOrderStages via assertValidOrderStages.
+const orderStagesValidator = v.array(
+	v.object({
+		id: v.optional(v.string()),
+		anchor: v.union(
+			v.literal("confirmed"),
+			v.literal("packed"),
+			v.literal("shipped"),
+			v.literal("delivered"),
+		),
+		label: v.object({ en: v.string(), ms: v.optional(v.string()) }),
+		description: v.optional(
+			v.object({ en: v.optional(v.string()), ms: v.optional(v.string()) }),
+		),
+		notify: v.boolean(),
+		sortOrder: v.optional(v.number()),
+	}),
+);
+
+// Loose wire shape (id/sortOrder optional) before sanitize normalizes it.
+type OrderStageInput = {
+	id?: string;
+	anchor: StageAnchor;
+	label: { en: string; ms?: string };
+	description?: { en?: string; ms?: string };
+	notify: boolean;
+	sortOrder?: number;
+};
+
+/**
+ * Normalize a proposed stage list: trim labels/descriptions (dropping blank
+ * locale fields), generate stable ids for new stages, renumber `sortOrder` to
+ * the array (display) order, then enforce the config rules (cap, band,
+ * monotonic anchors, label caps) via `assertValidOrderStages`. Empty array →
+ * undefined, which makes the retailer fall back to synthesized default stages.
+ * Throws a plain Error on a rule violation; the mutation wraps it in ConvexError.
+ */
+function sanitizeOrderStages(
+	input: OrderStageInput[] | undefined,
+): OrderStage[] | undefined {
+	if (!input || input.length === 0) return undefined;
+	const out: OrderStage[] = input.map((s, i) => {
+		const en = (s.label?.en ?? "").trim();
+		const ms = (s.label?.ms ?? "").trim();
+		const descEn = (s.description?.en ?? "").trim();
+		const descMs = (s.description?.ms ?? "").trim();
+		const description =
+			descEn || descMs
+				? {
+						...(descEn ? { en: descEn } : {}),
+						...(descMs ? { ms: descMs } : {}),
+					}
+				: undefined;
+		// Reuse a client-supplied stable id; mint one for a brand-new stage. Never
+		// collides with synthesized "default:<anchor>" ids.
+		const id = (s.id ?? "").trim() || crypto.randomUUID();
+		return {
+			id,
+			anchor: s.anchor,
+			label: { en, ...(ms ? { ms } : {}) },
+			...(description ? { description } : {}),
+			notify: Boolean(s.notify),
+			sortOrder: i,
+		};
+	});
+	assertValidOrderStages(out);
+	return out;
+}
+
 const paymentInstructionsValidator = v.object({
 	bankName: v.optional(v.string()),
 	bankAccountName: v.optional(v.string()),
@@ -21,6 +110,22 @@ const paymentInstructionsValidator = v.object({
 	qrImageStorageId: v.optional(v.string()),
 	note: v.optional(v.string()),
 });
+
+// Multi-method payment validator (matches schema.retailers.paymentMethods).
+// `sortOrder` is optional on the wire — `sanitizePaymentMethods` re-numbers to
+// the array order, so the client can just send methods in display order.
+const paymentMethodsValidator = v.array(
+	v.object({
+		type: v.union(v.literal("bank"), v.literal("qr")),
+		label: v.string(),
+		bankName: v.optional(v.string()),
+		bankAccountName: v.optional(v.string()),
+		bankAccountNumber: v.optional(v.string()),
+		qrImageStorageId: v.optional(v.string()),
+		note: v.optional(v.string()),
+		sortOrder: v.optional(v.number()),
+	}),
+);
 
 const PAYMENT_FIELD_MAX = 120;
 const PAYMENT_NOTE_MAX = 500;
@@ -69,6 +174,35 @@ import {
 	assertValidStoreName,
 	assertValidWaPhone,
 } from "./lib/slug";
+import {
+	AUP_VERSION,
+	PRIVACY_VERSION,
+	TERMS_VERSION,
+} from "./lib/legal";
+import {
+	collectQrStorageIds,
+	type PaymentMethod,
+	resolvePaymentMethods,
+	sanitizePaymentMethods,
+} from "./lib/payment";
+import {
+	assertValidOrderStages,
+	ORDER_STATUS_KEYS,
+	type OrderStage,
+	type StageAnchor,
+	STATUS_LABEL_MAX_LENGTH,
+	type StatusLabelMap,
+	type StatusLabels,
+} from "./lib/orderStatus";
+
+/** Trim and bound a best-effort client IP before persisting. */
+function sanitizeAcceptanceIp(ip: string | undefined): string | undefined {
+	if (ip === undefined) return undefined;
+	const trimmed = ip.trim();
+	if (trimmed.length === 0) return undefined;
+	// IPv6 max textual length is 45 chars; clamp generously to avoid storing junk.
+	return trimmed.slice(0, 64);
+}
 
 const SLUG_HISTORY_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
 
@@ -129,6 +263,38 @@ function sanitizeMessageTemplates(
 	return Object.keys(out).length > 0 ? out : undefined;
 }
 
+// Trim each status label, treat empty/whitespace as unset (so a seller can't
+// blank a stage to ""), and enforce the per-label char cap server-side — not
+// just in CSS — so an over-long / emoji-stuffed label can't break the pills.
+function sanitizeStatusLabelOverrides(
+	input: StatusLabelMap | undefined,
+): StatusLabelMap | undefined {
+	if (!input) return undefined;
+	const out: StatusLabelMap = {};
+	for (const key of ORDER_STATUS_KEYS) {
+		const raw = input[key];
+		if (raw === undefined) continue;
+		const trimmed = raw.trim();
+		if (trimmed.length === 0) continue; // empty → reset to default
+		if (trimmed.length > STATUS_LABEL_MAX_LENGTH) {
+			throw new ConvexError(
+				`Status label "${key}" exceeds ${STATUS_LABEL_MAX_LENGTH} characters`,
+			);
+		}
+		out[key] = trimmed;
+	}
+	return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function sanitizeStatusLabels(input: StatusLabels): StatusLabels | undefined {
+	const en = sanitizeStatusLabelOverrides(input.en);
+	const ms = sanitizeStatusLabelOverrides(input.ms);
+	const out: StatusLabels = {};
+	if (en) out.en = en;
+	if (ms) out.ms = ms;
+	return Object.keys(out).length > 0 ? out : undefined;
+}
+
 type RetailerPublic = {
 	_id: Id<"retailers">;
 	slug: string;
@@ -141,8 +307,33 @@ type RetailerPublic = {
 	currency: SupportedCurrency;
 	locale: Locale;
 	messageTemplates?: MessageTemplatesShape;
-	paymentInstructions?: PaymentInstructionsShape;
-	paymentQrImageUrl?: string;
+	// Per-retailer SHORT status labels (tracking timeline / dashboard). Omitted
+	// keys fall back to defaults at render time via convex/lib/orderStatus.ts.
+	statusLabels?: StatusLabels;
+	// Phase 2 custom stages (ordered). Undefined => the resolver synthesizes the
+	// default stages from statusLabels. Surfaced for the settings stage editor.
+	orderStages?: OrderStage[];
+	// Resolved payment methods (legacy-aware) with each QR storage id turned into
+	// a viewable URL — what the settings UI renders + edits. Omitted from the
+	// public storefront payload (only `getMyRetailer` populates it).
+	paymentMethods?: Array<PaymentMethod & { qrImageUrl?: string }>;
+	// Whether the retailer is offering self-collect on the storefront. Storefront
+	// hides the self-collect option entirely when false (regardless of pickup
+	// location count). Undefined treated as false.
+	offerSelfCollect?: boolean;
+	// Whether the retailer has opened the Pickup settings tab at least once.
+	// Drives checklist step-4 dismissal — set to true on first tab visit by
+	// `markPickupSetupSeen`.
+	pickupSetupSeen?: boolean;
+	// Accepted legal-doc versions, surfaced so the dashboard can detect a
+	// version bump and prompt re-acceptance. Acceptance timestamps and IP are
+	// intentionally not exposed to the client.
+	termsVersion?: string;
+	privacyVersion?: string;
+	aupVersion?: string;
+	// Whether the optional "WhatsApp Business greeting message" onboarding step
+	// has been marked done/skipped. Drives the setup checklist on the dashboard.
+	onboardingGreetingSetup?: boolean;
 };
 
 async function loadRetailerForUser(
@@ -154,13 +345,15 @@ async function loadRetailerForUser(
 		.withIndex("by_user", (q) => q.eq("userId", userId))
 		.first();
 	if (!row) return null;
-	const paymentInstructions = row.paymentInstructions as
-		| PaymentInstructionsShape
-		| undefined;
-	let paymentQrImageUrl: string | undefined;
-	if (paymentInstructions?.qrImageStorageId) {
-		const url = await ctx.storage.getUrl(paymentInstructions.qrImageStorageId);
-		paymentQrImageUrl = url ?? undefined;
+	const resolvedMethods = resolvePaymentMethods(row);
+	const paymentMethods: Array<PaymentMethod & { qrImageUrl?: string }> = [];
+	for (const m of resolvedMethods) {
+		let qrImageUrl: string | undefined;
+		if (m.type === "qr" && m.qrImageStorageId) {
+			const url = await ctx.storage.getUrl(m.qrImageStorageId);
+			qrImageUrl = url ?? undefined;
+		}
+		paymentMethods.push({ ...m, qrImageUrl });
 	}
 	let logoUrl: string | undefined;
 	if (row.logoStorageId) {
@@ -178,8 +371,15 @@ async function loadRetailerForUser(
 		currency: (row.currency as SupportedCurrency) ?? DEFAULT_CURRENCY,
 		locale: row.locale ?? DEFAULT_LOCALE,
 		messageTemplates: row.messageTemplates as MessageTemplatesShape | undefined,
-		paymentInstructions,
-		paymentQrImageUrl,
+		statusLabels: row.statusLabels as StatusLabels | undefined,
+		orderStages: row.orderStages as OrderStage[] | undefined,
+		paymentMethods,
+		offerSelfCollect: row.offerSelfCollect,
+		pickupSetupSeen: row.pickupSetupSeen,
+		termsVersion: row.termsVersion,
+		privacyVersion: row.privacyVersion,
+		aupVersion: row.aupVersion,
+		onboardingGreetingSetup: row.onboardingGreetingSetup,
 	};
 }
 
@@ -245,6 +445,7 @@ export const getRetailerBySlug = query({
 					messageTemplates: active.messageTemplates as
 						| MessageTemplatesShape
 						| undefined,
+					offerSelfCollect: active.offerSelfCollect,
 					// paymentInstructions intentionally omitted from the public
 					// storefront payload — only revealed in the WhatsApp confirm
 					// reply after the shopper commits to an order.
@@ -328,6 +529,9 @@ export const createRetailer = mutation({
 		storeName: v.string(),
 		slug: v.string(),
 		waPhone: v.optional(v.string()),
+		// Best-effort client IP captured at the consent moment. Optional —
+		// onboarding never blocks if IP lookup fails.
+		acceptanceIp: v.optional(v.string()),
 	},
 	handler: async (ctx, args): Promise<{ slug: string }> => {
 		const identity = await ctx.auth.getUserIdentity();
@@ -384,6 +588,10 @@ export const createRetailer = mutation({
 		}
 
 		const now = Date.now();
+		// Consent is implied: the onboarding UI gates submission on a required,
+		// not-pre-checked "I agree" checkbox. Stamp the server-side current
+		// versions (never client-supplied) for tamper resistance.
+		const acceptanceIp = sanitizeAcceptanceIp(args.acceptanceIp);
 		await ctx.db.insert("retailers", {
 			userId,
 			slug,
@@ -392,6 +600,18 @@ export const createRetailer = mutation({
 			notifyEmail,
 			currency: DEFAULT_CURRENCY,
 			channel: "whatsapp",
+			// Default self-collect ON so new retailers discover the pickup feature
+			// in the onboarding checklist. They can toggle it off from Settings →
+			// Pickup; that visit also dismisses checklist step 4 (via
+			// markPickupSetupSeen).
+			offerSelfCollect: true,
+			termsAcceptedAt: now,
+			termsVersion: TERMS_VERSION,
+			privacyAcceptedAt: now,
+			privacyVersion: PRIVACY_VERSION,
+			aupAcceptedAt: now,
+			aupVersion: AUP_VERSION,
+			acceptanceIp,
 			createdAt: now,
 			updatedAt: now,
 		});
@@ -412,9 +632,15 @@ export const updateSettings = mutation({
 		currency: v.optional(v.string()),
 		locale: v.optional(v.union(v.literal("en"), v.literal("ms"))),
 		messageTemplates: v.optional(messageTemplatesValidator),
+		statusLabels: v.optional(statusLabelsValidator),
+		orderStages: v.optional(orderStagesValidator),
 		paymentInstructions: v.optional(paymentInstructionsValidator),
+		// Multi-method payment config. When provided, supersedes (and clears) the
+		// legacy single `paymentInstructions` object on this retailer.
+		paymentMethods: v.optional(paymentMethodsValidator),
 		// Empty string clears the logo. Undefined means "no change".
 		logoStorageId: v.optional(v.string()),
+		offerSelfCollect: v.optional(v.boolean()),
 	},
 	handler: async (ctx, args): Promise<{ ok: true }> => {
 		const userId = await requireUserId(ctx);
@@ -432,7 +658,11 @@ export const updateSettings = mutation({
 			currency: SupportedCurrency;
 			locale: Locale;
 			messageTemplates: MessageTemplatesShape | undefined;
+			statusLabels: StatusLabels | undefined;
+			orderStages: OrderStage[] | undefined;
 			paymentInstructions: PaymentInstructionsShape | undefined;
+			paymentMethods: PaymentMethod[] | undefined;
+			offerSelfCollect: boolean;
 			updatedAt: number;
 		}> = { updatedAt: Date.now() };
 
@@ -462,17 +692,139 @@ export const updateSettings = mutation({
 		if (args.messageTemplates !== undefined) {
 			patch.messageTemplates = sanitizeMessageTemplates(args.messageTemplates);
 		}
+		if (args.statusLabels !== undefined) {
+			patch.statusLabels = sanitizeStatusLabels(args.statusLabels);
+		}
+		if (args.orderStages !== undefined) {
+			try {
+				patch.orderStages = sanitizeOrderStages(args.orderStages);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
 		if (args.paymentInstructions !== undefined) {
 			patch.paymentInstructions = sanitizePaymentInstructions(
 				args.paymentInstructions,
 			);
 		}
+		if (args.paymentMethods !== undefined) {
+			// Re-number sortOrder to the array (display) order, then sanitize.
+			const sanitized = sanitizePaymentMethods(
+				args.paymentMethods.map((m, i) => ({ ...m, sortOrder: i })),
+			);
+			// Garbage-collect orphaned QR blobs: any QR image previously stored
+			// (in the array OR the legacy object) that the new set no longer
+			// references — covers replace, "Remove QR", and method deletion.
+			// Best-effort; a missing/already-deleted blob must not abort the save.
+			const nextQr = new Set(
+				(sanitized ?? [])
+					.filter((m) => m.type === "qr" && m.qrImageStorageId)
+					.map((m) => m.qrImageStorageId as string),
+			);
+			for (const prevId of collectQrStorageIds(retailer)) {
+				if (nextQr.has(prevId)) continue;
+				try {
+					await ctx.storage.delete(prevId as Id<"_storage">);
+				} catch {
+					// already gone — ignore
+				}
+			}
+			patch.paymentMethods = sanitized;
+			// Saving via the multi-method UI migrates this retailer off the legacy
+			// single object — clear it so reads don't double-count.
+			patch.paymentInstructions = undefined;
+		}
 		if (args.logoStorageId !== undefined) {
 			const trimmed = args.logoStorageId.trim();
 			patch.logoStorageId = trimmed.length > 0 ? trimmed : undefined;
 		}
+		if (args.offerSelfCollect !== undefined) {
+			patch.offerSelfCollect = args.offerSelfCollect;
+		}
 
 		await ctx.db.patch(retailer._id, patch);
+		return { ok: true };
+	},
+});
+
+/**
+ * Re-stamp the signed-in retailer's legal consent to the current document
+ * versions. Called by the dashboard re-acceptance banner after a version bump.
+ * Like createRetailer, versions are taken server-side (never client-supplied).
+ */
+export const recordConsentAcceptance = mutation({
+	args: {
+		acceptanceIp: v.optional(v.string()),
+	},
+	handler: async (ctx, args): Promise<{ ok: true }> => {
+		const userId = await requireUserId(ctx);
+		const retailer = await ctx.db
+			.query("retailers")
+			.withIndex("by_user", (q) => q.eq("userId", userId))
+			.first();
+		if (!retailer) throw new ConvexError("No store to update");
+
+		const now = Date.now();
+		await ctx.db.patch(retailer._id, {
+			termsAcceptedAt: now,
+			termsVersion: TERMS_VERSION,
+			privacyAcceptedAt: now,
+			privacyVersion: PRIVACY_VERSION,
+			aupAcceptedAt: now,
+			aupVersion: AUP_VERSION,
+			acceptanceIp: sanitizeAcceptanceIp(args.acceptanceIp),
+			updatedAt: now,
+		});
+		return { ok: true };
+	},
+});
+
+/**
+ * Idempotent: mark the signed-in retailer as having visited the Pickup
+ * settings tab at least once. Drives the dashboard checklist's step-4
+ * dismissal so a seller who deliberately skips self-collect isn't nagged.
+ * No-op if already true.
+ */
+export const markPickupSetupSeen = mutation({
+	args: {},
+	handler: async (ctx): Promise<{ updated: boolean }> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) return { updated: false };
+		const retailer = await ctx.db
+			.query("retailers")
+			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+			.first();
+		if (!retailer) return { updated: false };
+		if (retailer.pickupSetupSeen === true) return { updated: false };
+		await ctx.db.patch(retailer._id, {
+			pickupSetupSeen: true,
+			updatedAt: Date.now(),
+		});
+		return { updated: true };
+	},
+});
+
+/**
+ * Mark the optional "WhatsApp Business greeting message" onboarding step as
+ * done. Called by the dashboard setup checklist for both "Mark as done" and
+ * "Skip for now" — either way the step is persisted as complete so it collapses
+ * across sessions and the checklist can reach all-done. No-op aside from the
+ * flag: the greeting itself is configured by the seller in the WhatsApp app.
+ */
+export const markGreetingSetupDone = mutation({
+	args: {},
+	handler: async (ctx): Promise<{ ok: true }> => {
+		const userId = await requireUserId(ctx);
+		const retailer = await ctx.db
+			.query("retailers")
+			.withIndex("by_user", (q) => q.eq("userId", userId))
+			.first();
+		if (!retailer) throw new ConvexError("No store to update");
+
+		await ctx.db.patch(retailer._id, {
+			onboardingGreetingSetup: true,
+			updatedAt: Date.now(),
+		});
 		return { ok: true };
 	},
 });
@@ -590,9 +942,9 @@ export const generateLogoUploadUrl = mutation({
 });
 
 /**
- * Generate a one-shot upload URL for the retailer's payment QR image.
- * The frontend POSTs the file to this URL, then stores the returned
- * `storageId` via `updateSettings({ paymentInstructions: { qrImageStorageId } })`.
+ * Generate a one-shot upload URL for a payment-method QR image. The frontend
+ * POSTs the file here, then stores the returned `storageId` on a `qr` method and
+ * saves the array via `updateSettings({ paymentMethods })`.
  */
 export const generatePaymentQrUploadUrl = mutation({
 	args: {},
@@ -600,6 +952,40 @@ export const generatePaymentQrUploadUrl = mutation({
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		return ctx.storage.generateUploadUrl();
+	},
+});
+
+/**
+ * One-time backfill: migrate retailers from the legacy single
+ * `paymentInstructions` object to the `paymentMethods` array, then clear the
+ * legacy field. Idempotent — skips rows already on `paymentMethods` or with no
+ * legacy data. Run in dev:  npx convex run retailers:backfillPaymentMethods
+ */
+export const backfillPaymentMethods = internalMutation({
+	args: {},
+	handler: async (ctx): Promise<{ migrated: number; skipped: number }> => {
+		const rows = await ctx.db.query("retailers").collect();
+		let migrated = 0;
+		let skipped = 0;
+		for (const row of rows) {
+			// Already migrated, or nothing to migrate.
+			if (row.paymentMethods && row.paymentMethods.length > 0) {
+				skipped++;
+				continue;
+			}
+			const methods = resolvePaymentMethods(row); // legacy-derived here
+			if (methods.length === 0) {
+				skipped++;
+				continue;
+			}
+			await ctx.db.patch(row._id, {
+				paymentMethods: methods,
+				paymentInstructions: undefined,
+				updatedAt: Date.now(),
+			});
+			migrated++;
+		}
+		return { migrated, skipped };
 	},
 });
 
@@ -631,5 +1017,108 @@ export const internalPurgeExpiredSlugHistory = internalMutation({
 			}
 		}
 		return { purged };
+	},
+});
+
+type DeleteUserResult =
+	| { deleted: false }
+	| {
+			deleted: true;
+			retailerId: Id<"retailers">;
+			counts: { orders: number; products: number; customers: number };
+	  };
+
+/**
+ * Hard-delete a user and every tenant artifact they own, keyed by Clerk
+ * subject (`userId`). Cascades through orders (+ their orderEvents and payment
+ * proof files), products (+ their image files), customers, and parked
+ * slugHistory rows, then removes the retailer's logo / payment-QR blobs and the
+ * retailer row itself. Runs as a single ACID mutation, so it's all-or-nothing.
+ *
+ * Internal-only: there is no shopper/retailer-facing path to this. Invoke it
+ * from a Clerk "user.deleted" webhook handler, a GDPR erasure job, or the
+ * Convex dashboard.
+ *
+ * Idempotent — returns `{ deleted: false }` when the user has no retailer.
+ *
+ * NOTE: deletion is bounded by the tenant's data volume. A single Convex
+ * mutation has read/write-set limits, so a Scale-tier retailer with very large
+ * order history could exceed them. If that becomes real, split this into a
+ * paginated batch driven by `ctx.scheduler`. The slugHistory scan is a full
+ * table read (no by-retailer index) but that table is small and TTL-pruned.
+ */
+export const deleteUser = internalMutation({
+	args: { userId: v.string() },
+	handler: async (ctx, { userId }): Promise<DeleteUserResult> => {
+		const retailer = await ctx.db
+			.query("retailers")
+			.withIndex("by_user", (q) => q.eq("userId", userId))
+			.first();
+		if (!retailer) return { deleted: false };
+		const retailerId = retailer._id;
+
+		// Best-effort: a missing/already-deleted blob must not abort the cascade.
+		const deleteFile = async (storageId: string | undefined): Promise<void> => {
+			if (!storageId) return;
+			try {
+				await ctx.storage.delete(storageId as Id<"_storage">);
+			} catch {
+				// blob already gone — ignore
+			}
+		};
+
+		// Orders → their events + payment proof files.
+		const orders = await ctx.db
+			.query("orders")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.collect();
+		for (const order of orders) {
+			const events = await ctx.db
+				.query("orderEvents")
+				.withIndex("by_order", (q) => q.eq("orderId", order._id))
+				.collect();
+			for (const event of events) await ctx.db.delete(event._id);
+			await deleteFile(order.paymentProofStorageId);
+			await ctx.db.delete(order._id);
+		}
+
+		// Products → their image files.
+		const products = await ctx.db
+			.query("products")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.collect();
+		for (const product of products) {
+			for (const imageId of product.imageStorageIds) await deleteFile(imageId);
+			await ctx.db.delete(product._id);
+		}
+
+		// Customers.
+		const customers = await ctx.db
+			.query("customers")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.collect();
+		for (const customer of customers) await ctx.db.delete(customer._id);
+
+		// Parked slug-history rows (no by-retailer index; small, TTL-pruned table).
+		const history = await ctx.db.query("slugHistory").collect();
+		for (const row of history) {
+			if (row.retailerId === retailerId) await ctx.db.delete(row._id);
+		}
+
+		// Retailer-level storage, then the retailer row. Delete every QR image —
+		// across the methods array AND the legacy single object.
+		await deleteFile(retailer.logoStorageId);
+		for (const qrId of collectQrStorageIds(retailer)) await deleteFile(qrId);
+		await ctx.db.delete(retailerId);
+
+		return {
+			deleted: true,
+			retailerId,
+			counts: {
+				orders: orders.length,
+				products: products.length,
+				customers: customers.length,
+			},
+		};
 	},
 });
