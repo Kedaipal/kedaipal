@@ -1,6 +1,16 @@
 // Retailer-facing email copy catalog. Pure — no Convex imports — to keep testable.
 // Bilingual (en / ms) parity with the prior WhatsApp retailer alerts.
 
+// Brand logo for email headers. Must be an absolute, publicly-reachable URL (email
+// clients can't load localhost / app-relative assets), so it always points at the
+// prod public asset — correct even when sent from a dev deployment.
+export const LOGO_URL = "https://kedaipal.com/logo-2.png";
+
+/** Left-aligned brand logo block for email headers. */
+export function logoHeader(marginBottom = 16): string {
+	return `<img src="${LOGO_URL}" alt="Kedaipal" width="132" style="display:block;border:0;outline:none;text-decoration:none;height:auto;margin:0 0 ${marginBottom}px 0;" />`;
+}
+
 export type Locale = "en" | "ms";
 
 export type DeliveryMethod = "delivery" | "self_collect";
@@ -61,7 +71,7 @@ export function wrapHtml(headlineEmoji: string, headline: string, lines: string[
 <tr><td align="center">
 <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:12px;border:1px solid #e5e7eb;overflow:hidden;">
 <tr><td style="padding:24px;">
-<p style="margin:0 0 4px 0;font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#9ca3af;">Kedaipal</p>
+${logoHeader(16)}
 <h1 style="margin:0 0 16px 0;font-size:18px;color:#111827;">${headlineEmoji} ${escapeHtml(headline)}</h1>
 ${body}
 <p style="margin:24px 0 0 0;"><a href="${escapeHtml(dashboardUrl)}" style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:10px 16px;border-radius:8px;">${escapeHtml(ctaLabel)}</a></p>

@@ -15,9 +15,18 @@ export type OnboardingInviteFields = {
 	storeName: string;
 	slug?: string;
 	waPhone?: string;
+	// Founding-10 onboard: skip the 14-day trial, start a paid Pro plan from day one
+	// (creates an active sub + a pending founding invoice). Safe in the URL — the
+	// founding RANK still only claims when an admin marks the invoice paid.
+	founding?: boolean;
 };
 
-export type OnboardingPrefill = { store: string; slug?: string; wa?: string };
+export type OnboardingPrefill = {
+	store: string;
+	slug?: string;
+	wa?: string;
+	founding?: boolean;
+};
 
 /** The query-param key the invite token rides in. */
 export const ONBOARDING_PREFILL_PARAM = "p";
@@ -48,6 +57,7 @@ export function encodeOnboardingPrefill(
 	if (slug) payload.slug = slug;
 	const wa = fields.waPhone?.trim();
 	if (wa) payload.wa = wa;
+	if (fields.founding) payload.founding = true;
 	return base64UrlEncode(JSON.stringify(payload));
 }
 
@@ -60,11 +70,14 @@ export function decodeOnboardingPrefill(
 	try {
 		const obj = JSON.parse(base64UrlDecode(token)) as Record<string, unknown>;
 		if (typeof obj.store === "string" && obj.store.length > 0) {
-			return {
+			const prefill: OnboardingPrefill = {
 				store: obj.store,
 				slug: typeof obj.slug === "string" ? obj.slug : undefined,
 				wa: typeof obj.wa === "string" ? obj.wa : undefined,
 			};
+			// Only present when true, so it doesn't pollute the common (non-founding) shape.
+			if (obj.founding === true) prefill.founding = true;
+			return prefill;
 		}
 	} catch {
 		// malformed token — treat as no prefill

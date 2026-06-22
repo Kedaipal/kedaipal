@@ -265,6 +265,7 @@ export const internalDailyBillingStatus = internalMutation({
 	): Promise<{
 		trialExpired: number;
 		overdue: number;
+		lapsed: number;
 		renewalsDue: number;
 		remindersSent: number;
 		trialReminders: number;
@@ -272,6 +273,7 @@ export const internalDailyBillingStatus = internalMutation({
 		const now = Date.now();
 		let trialExpired = 0;
 		let overdue = 0;
+		let lapsed = 0;
 		let renewalsDue = 0;
 		let remindersSent = 0;
 		let trialReminders = 0;
@@ -331,6 +333,24 @@ export const internalDailyBillingStatus = internalMutation({
 				);
 				continue;
 			}
+			// Period lapsed with NO pending invoice → lock anyway. We never give a paid
+			// vendor free service past their cycle while waiting on Arif to issue a
+			// renewal. (A pending invoice with a future due date keeps them in grace.)
+			const hasPending = invoices.some((inv) => inv.status === "pending");
+			if (
+				!hasPending &&
+				sub.currentPeriodEnd !== undefined &&
+				sub.currentPeriodEnd < now
+			) {
+				await ctx.db.patch(sub._id, { status: "past_due", updatedAt: now });
+				lapsed++;
+				await ctx.scheduler.runAfter(
+					0,
+					internal.billingEmail.notifySubscriptionLapsed,
+					{ retailerId: sub.retailerId },
+				);
+				continue;
+			}
 			if (
 				sub.currentPeriodEnd !== undefined &&
 				sub.currentPeriodEnd - now <= RENEWAL_WINDOW_MS &&
@@ -365,6 +385,13 @@ export const internalDailyBillingStatus = internalMutation({
 			remindersSent++;
 		}
 
-		return { trialExpired, overdue, renewalsDue, remindersSent, trialReminders };
+		return {
+			trialExpired,
+			overdue,
+			lapsed,
+			renewalsDue,
+			remindersSent,
+			trialReminders,
+		};
 	},
 });

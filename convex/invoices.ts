@@ -15,6 +15,7 @@ import { claimRankIfEligible } from "./foundingMembers";
 import { defaultCapsForPlan } from "./subscriptions";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const DUE_GRACE_DAYS = 14; // pay-by window when the admin doesn't override it
 
 /** Short, human-ish invoice number with a random suffix (collisions negligible at
  * manual-billing volume). */
@@ -128,11 +129,13 @@ export const issueInvoice = mutation({
 		),
 		billingCycle: v.union(v.literal("monthly"), v.literal("annual")),
 		founding: v.boolean(),
-		dueDate: v.number(),
+		// Optional override; normally the system sets it (issue date + grace) so the
+		// admin doesn't pick a date. The actual paid CYCLE starts at mark-paid.
+		dueDate: v.optional(v.number()),
 	},
 	handler: async (
 		ctx,
-		{ retailerId, plan, billingCycle, founding, dueDate },
+		{ retailerId, plan, billingCycle, founding, dueDate: dueDateArg },
 	): Promise<{ invoiceId: Id<"invoices"> }> => {
 		await requireAdmin(ctx);
 		if (plan === "scale")
@@ -163,6 +166,9 @@ export const issueInvoice = mutation({
 		const base = planPrice(plan, cycle, false);
 		const total = planPrice(plan, cycle, founding);
 		const now = Date.now();
+		// System-set pay-by deadline (issue date + grace). The subscription's billing
+		// cycle is set later at mark-paid, so Pro only starts once payment lands.
+		const dueDate = dueDateArg ?? now + DUE_GRACE_DAYS * DAY_MS;
 
 		// Align the subscription to what's being billed so mark-paid reconciles the
 		// right caps. (Status stays as-is until paid → active.)
@@ -195,6 +201,34 @@ export const issueInvoice = mutation({
 	},
 });
 
+/**
+ * Admin: void (soft-cancel) a pending invoice issued in error. We keep the row
+ * for audit/history/reconciliation — status flips to "void" — rather than hard
+ * deleting it. Only a **pending** invoice can be voided (a paid one would be a
+ * refund/credit, a separate flow). Voiding frees the single-pending-invoice slot
+ * so a corrected invoice can be issued; it does NOT touch subscription status
+ * (an overdue-driven lock stays — settle a replacement to reactivate).
+ */
+export const voidInvoice = mutation({
+	args: { invoiceId: v.id("invoices"), reason: v.optional(v.string()) },
+	handler: async (ctx, { invoiceId, reason }): Promise<{ ok: true }> => {
+		const adminSubject = await requireAdmin(ctx);
+		const invoice = await ctx.db.get(invoiceId);
+		if (!invoice) throw new ConvexError("Invoice not found");
+		if (invoice.status !== "pending")
+			throw new ConvexError(
+				`Only a pending invoice can be voided (this one is ${invoice.status}).`,
+			);
+		await ctx.db.patch(invoiceId, {
+			status: "void",
+			voidedAt: Date.now(),
+			voidedBy: adminSubject,
+			voidReason: reason?.trim() ? reason.trim() : undefined,
+		});
+		return { ok: true };
+	},
+});
+
 /** Admin: retailers for the issue-invoice picker (id + store name + slug +
  * status + founding flag). Capped — fine at Founding-10 scale. */
 export const listRetailersForAdmin = query({
@@ -208,6 +242,7 @@ export const listRetailersForAdmin = query({
 			slug: string;
 			status?: Doc<"subscriptions">["status"];
 			isFoundingMember: boolean;
+			foundingIntent: boolean;
 			hasPending: boolean;
 		}>
 	> => {
@@ -230,6 +265,7 @@ export const listRetailersForAdmin = query({
 				slug: r.slug,
 				status: sub?.status,
 				isFoundingMember: r.isFoundingMember === true,
+				foundingIntent: sub?.foundingIntent === true,
 				hasPending: pending !== null,
 			});
 		}

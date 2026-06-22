@@ -194,6 +194,41 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 				</section>
 			) : null}
 
+			{/* No invoice yet, but they need to act → reach Arif on WhatsApp. Manual
+			    sub: Arif issues + activates once payment lands, so there's no
+			    self-serve plan picker. */}
+			{!pending &&
+			!sub?.comped &&
+			(sub?.status === "trialing" || sub?.status === "past_due") &&
+			instructions?.whatsappPhone ? (
+				<section className="flex flex-col gap-3 rounded-2xl border border-input bg-background p-5 lg:p-6">
+					<div>
+						<p className="text-sm font-medium">
+							{sub.status === "past_due"
+								? "Renew your subscription"
+								: "Ready to choose a plan?"}
+						</p>
+						<p className="mt-1 text-xs text-muted-foreground">
+							Message us on WhatsApp and we'll send your invoice. Your plan
+							activates once payment lands.
+						</p>
+					</div>
+					<a
+						href={`https://wa.me/${instructions.whatsappPhone.replace(/\D/g, "")}?text=${encodeURIComponent(
+							sub.status === "past_due"
+								? `Hi, I'd like to renew my Kedaipal subscription for my store (/${retailer.slug}).`
+								: `Hi, I'd like to choose a plan for my Kedaipal store (/${retailer.slug}).`,
+						)}`}
+						target="_blank"
+						rel="noreferrer"
+						className="inline-flex h-10 w-fit items-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
+					>
+						<ExternalLink className="size-4" />
+						Message us
+					</a>
+				</section>
+			) : null}
+
 			{/* History */}
 			{history.length > 0 ? (
 				<section className="flex flex-col gap-2 rounded-2xl border border-input bg-background p-5 lg:p-6">
@@ -209,11 +244,17 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 								<div>
 									<span className="font-mono">{inv.invoiceNumber}</span>
 									<span className="ml-2 text-xs text-muted-foreground">
-										{inv.markedPaidAt ? formatDate(inv.markedPaidAt) : ""}
+										{inv.markedPaidAt
+											? formatDate(inv.markedPaidAt)
+											: inv.voidedAt
+												? formatDate(inv.voidedAt)
+												: ""}
 									</span>
 								</div>
 								<div className="flex items-center gap-3">
-									<span className="tabular-nums">
+									<span
+										className={`tabular-nums ${inv.status === "void" ? "text-muted-foreground line-through" : ""}`}
+									>
 										{formatPrice(inv.total, inv.currency)}
 									</span>
 									<span
@@ -223,7 +264,11 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 												: "bg-muted text-muted-foreground"
 										}`}
 									>
-										{inv.status}
+										{inv.status === "paid"
+											? "Paid"
+											: inv.status === "void"
+												? "Cancelled"
+												: inv.status}
 									</span>
 								</div>
 							</li>

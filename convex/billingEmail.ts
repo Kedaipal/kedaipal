@@ -198,8 +198,98 @@ export const getRetailerForEmail = internalQuery({
 	},
 });
 
+/**
+ * DEV/QA preview: render any billing/trial email with representative sample data
+ * and send it to `to`, so the template can be eyeballed in a real inbox without
+ * touching the DB. CLI only (internalAction):
+ *   npx convex run billingEmail:sendSampleBillingEmail '{"to":"you@email.com","key":"invoiceIssued"}'
+ * Add "locale":"ms" or "founding":true to preview those variants.
+ */
+export const sendSampleBillingEmail = internalAction({
+	args: {
+		to: v.string(),
+		key: v.union(
+			v.literal("invoiceIssued"),
+			v.literal("invoiceReminder"),
+			v.literal("invoiceOverdue"),
+			v.literal("trialEndingSoon"),
+			v.literal("trialEnded"),
+		),
+		locale: v.optional(v.union(v.literal("en"), v.literal("ms"))),
+		founding: v.optional(v.boolean()),
+	},
+	handler: async (
+		_ctx,
+		{ to, key, locale, founding },
+	): Promise<{ sent: string; key: string }> => {
+		const loc: Locale = locale ?? "en";
+		const url = billingPageUrl();
+		const rendered =
+			key === "trialEndingSoon" || key === "trialEnded"
+				? renderTrialEmail(loc, key, {
+						storeName: "Sample Store",
+						billingUrl: url,
+						daysLeft: 3,
+					})
+				: renderBillingEmail(loc, key, {
+						storeName: "Sample Store",
+						invoiceNumber: "INV-202607-SAMPLE",
+						planLabel: "Pro · Monthly",
+						totalFormatted: founding ? "MYR 104.00" : "MYR 149.00",
+						baseFormatted: founding ? "MYR 149.00" : undefined,
+						discountFormatted: founding ? "MYR 45.00" : undefined,
+						dueDateFormatted: "5 Jul 2026",
+						bankName: "Maybank",
+						bankAccountName: "Kedaipal Sdn Bhd",
+						bankAccountNumber: "5123 4567 8901",
+						duitnowId: "kedaipal",
+						billingUrl: url,
+					});
+		await sendEmail(to, rendered.subject, rendered.html, rendered.text);
+		return { sent: to, key };
+	},
+});
+
+/** Send a retailer-only (no invoice) notice — trial nudges or the lapsed notice.
+ * Shared by the named actions below. Fire-and-forget. */
+async function sendRetailerNotice(
+	ctx: ActionCtx,
+	retailerId: Id<"retailers">,
+	key: TrialEmailKey,
+	daysLeft?: number,
+): Promise<void> {
+	let meta: {
+		notifyEmail: string | undefined;
+		storeName: string;
+		locale: Locale;
+	} | null = null;
+	try {
+		meta = await ctx.runQuery(internal.billingEmail.getRetailerForEmail, {
+			retailerId,
+		});
+	} catch (err) {
+		console.error(`Retailer notice ${key} lookup failed`, err);
+		return;
+	}
+	if (!meta || !meta.notifyEmail) return;
+	const { subject, html, text } = renderTrialEmail(meta.locale, key, {
+		storeName: meta.storeName,
+		billingUrl: billingPageUrl(),
+		daysLeft,
+	});
+	try {
+		await sendEmail(meta.notifyEmail, subject, html, text);
+	} catch (err) {
+		console.error(
+			`Retailer notice ${key} failed (${retailerId}, to=${meta.notifyEmail}): ${
+				err instanceof Error ? err.message : String(err)
+			}`,
+		);
+	}
+}
+
 /** Trial nudges (no invoice). `trialEndingSoon` (~3 days left) and `trialEnded`
- * (locked) — scheduled by the daily cron. Fire-and-forget. */
+ * (locked) — scheduled by the daily cron. */
 export const notifyTrialEmail = internalAction({
 	args: {
 		retailerId: v.id("retailers"),
@@ -207,33 +297,15 @@ export const notifyTrialEmail = internalAction({
 		daysLeft: v.optional(v.number()),
 	},
 	handler: async (ctx, { retailerId, key, daysLeft }): Promise<void> => {
-		let meta: {
-			notifyEmail: string | undefined;
-			storeName: string;
-			locale: Locale;
-		} | null = null;
-		try {
-			meta = await ctx.runQuery(internal.billingEmail.getRetailerForEmail, {
-				retailerId,
-			});
-		} catch (err) {
-			console.error(`Trial email ${key} lookup failed`, err);
-			return;
-		}
-		if (!meta || !meta.notifyEmail) return;
-		const { subject, html, text } = renderTrialEmail(
-			meta.locale,
-			key as TrialEmailKey,
-			{ storeName: meta.storeName, billingUrl: billingPageUrl(), daysLeft },
-		);
-		try {
-			await sendEmail(meta.notifyEmail, subject, html, text);
-		} catch (err) {
-			console.error(
-				`Trial email ${key} failed (${retailerId}, to=${meta.notifyEmail}): ${
-					err instanceof Error ? err.message : String(err)
-				}`,
-			);
-		}
+		await sendRetailerNotice(ctx, retailerId, key, daysLeft);
+	},
+});
+
+/** Scheduled when the daily cron locks a paid vendor whose period lapsed with no
+ * pending invoice (Arif hasn't issued a renewal). */
+export const notifySubscriptionLapsed = internalAction({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<void> => {
+		await sendRetailerNotice(ctx, retailerId, "subscriptionLapsed");
 	},
 });

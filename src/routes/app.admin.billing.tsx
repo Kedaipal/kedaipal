@@ -1,7 +1,20 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
-import { Check, Copy, ImagePlus, ShieldX, UserPlus } from "lucide-react";
-import { useEffect, useState } from "react";
+import {
+	Banknote,
+	CalendarClock,
+	Check,
+	CreditCard,
+	FilePlus2,
+	ImagePlus,
+	Landmark,
+	ListChecks,
+	ReceiptText,
+	Send,
+	ShieldX,
+	UserPlus,
+} from "lucide-react";
+import { type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
@@ -56,39 +69,71 @@ function AdminBillingRoute() {
 function AdminBillingContent() {
 	// Invoicing is the frequent task → default tab. Payment details are set-once.
 	const [tab, setTab] = useState<"invoices" | "payment">("invoices");
+	const tabs = [
+		{
+			id: "invoices",
+			label: "Invoices",
+			description: "Onboard clients, issue invoices, mark paid",
+			icon: <ReceiptText className="size-4" />,
+		},
+		{
+			id: "payment",
+			label: "Payment details",
+			description: "Kedaipal bank account and DuitNow QR",
+			icon: <CreditCard className="size-4" />,
+		},
+	] as const;
 	return (
-		<div className="flex flex-col gap-6 lg:max-w-3xl">
+		<div className="flex flex-col gap-6 lg:max-w-5xl">
 			<PageHeader title="Admin · Billing" subtitle="Issue + settle invoices" />
-			<h2 className="text-xl font-bold lg:hidden">Admin · Billing</h2>
+			<section className="flex flex-col gap-1 lg:hidden">
+				<h2 className="text-xl font-bold">Admin · Billing</h2>
+				<p className="text-sm text-muted-foreground">
+					Issue invoices and manage Kedaipal payment details.
+				</p>
+			</section>
 
-			<div className="flex gap-1 border-b border-input">
-				{(
-					[
-						{ id: "invoices", label: "Invoices" },
-						{ id: "payment", label: "Payment details" },
-					] as const
-				).map((t) => (
+			<AdminBillingOverview />
+
+			<div className="grid gap-2 sm:grid-cols-2">
+				{tabs.map((t) => (
 					<button
 						key={t.id}
 						type="button"
 						onClick={() => setTab(t.id)}
-						className={`relative min-h-11 whitespace-nowrap px-4 text-sm font-medium transition-colors ${
+						className={`flex items-center gap-3 rounded-2xl border p-3 text-left transition-all ${
 							tab === t.id
-								? "text-primary after:absolute after:inset-x-3 after:-bottom-px after:h-0.5 after:rounded-full after:bg-primary"
-								: "text-muted-foreground hover:text-foreground"
+								? "border-accent bg-accent/10 text-foreground shadow-sm"
+								: "border-border bg-card text-muted-foreground hover:border-foreground/20 hover:text-foreground"
 						}`}
 					>
-						{t.label}
+						<span
+							className={`flex size-9 shrink-0 items-center justify-center rounded-xl ${
+								tab === t.id
+									? "bg-accent text-accent-foreground"
+									: "bg-muted text-muted-foreground"
+							}`}
+						>
+							{t.icon}
+						</span>
+						<span className="min-w-0">
+							<span className="block text-sm font-semibold leading-tight">
+								{t.label}
+							</span>
+							<span className="mt-0.5 block text-xs leading-snug text-muted-foreground">
+								{t.description}
+							</span>
+						</span>
 					</button>
 				))}
 			</div>
 
 			{tab === "invoices" ? (
-				<>
+				<div className="flex flex-col gap-6">
 					<OnboardClientCard />
 					<IssueInvoiceForm />
 					<PendingInvoices />
-				</>
+				</div>
 			) : (
 				<PaymentConfigForm />
 			)}
@@ -96,18 +141,113 @@ function AdminBillingContent() {
 	);
 }
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_DUE_DAYS = 14;
+function AdminCard({
+	children,
+	className = "",
+}: {
+	children: ReactNode;
+	className?: string;
+}) {
+	return (
+		<section
+			className={`flex flex-col gap-4 rounded-2xl border border-border bg-card p-5 shadow-sm lg:p-6 ${className}`}
+		>
+			{children}
+		</section>
+	);
+}
 
-function toDateInput(ms: number): string {
-	const d = new Date(ms);
-	const p = (n: number) => String(n).padStart(2, "0");
-	return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+function AdminSectionHeading({
+	icon,
+	title,
+	description,
+	aside,
+}: {
+	icon: ReactNode;
+	title: string;
+	description: string;
+	aside?: ReactNode;
+}) {
+	return (
+		<div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+			<div className="flex min-w-0 items-start gap-3">
+				<div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent">
+					{icon}
+				</div>
+				<div className="min-w-0">
+					<h3 className="text-sm font-semibold">{title}</h3>
+					<p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+						{description}
+					</p>
+				</div>
+			</div>
+			{aside ? <div className="shrink-0 sm:pt-1">{aside}</div> : null}
+		</div>
+	);
 }
-function fromDateInput(value: string): number {
-	const [y, m, d] = value.split("-").map(Number);
-	return new Date(y, m - 1, d, 23, 59, 59, 999).getTime();
+
+function AdminBillingOverview() {
+	const invoices = useQuery(api.invoices.listPending, {});
+	const spotsRemaining = useQuery(api.foundingMembers.getSpotsRemaining, {});
+	const pendingTotal = invoices?.reduce((sum, inv) => sum + inv.total, 0) ?? 0;
+	const dueSoon =
+		invoices?.filter((inv) => inv.dueDate <= Date.now() + 7 * DAY_MS).length ??
+		0;
+	const stats = [
+		{
+			label: "Pending",
+			value: invoices === undefined ? "..." : String(invoices.length),
+			helper: "Invoices to settle",
+			icon: <ReceiptText className="size-4" />,
+			className: "border-blue-200 bg-blue-50 text-blue-800",
+		},
+		{
+			label: "Due soon",
+			value: invoices === undefined ? "..." : String(dueSoon),
+			helper: "Within 7 days",
+			icon: <CalendarClock className="size-4" />,
+			className: "border-amber-200 bg-amber-50 text-amber-800",
+		},
+		{
+			label: "Outstanding",
+			value: invoices === undefined ? "..." : formatPrice(pendingTotal, "MYR"),
+			helper: "Pending total",
+			icon: <Banknote className="size-4" />,
+			className: "border-emerald-200 bg-emerald-50 text-emerald-800",
+		},
+		{
+			label: "Founding",
+			value: spotsRemaining === undefined ? "..." : `${spotsRemaining}/10`,
+			helper: "Spots left",
+			icon: <ListChecks className="size-4" />,
+			className: "border-border bg-muted/50 text-foreground",
+		},
+	];
+
+	return (
+		<div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+			{stats.map((stat) => (
+				<div
+					key={stat.label}
+					className={`flex items-center gap-3 rounded-2xl border px-3 py-3 ${stat.className}`}
+				>
+					<div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-white/70">
+						{stat.icon}
+					</div>
+					<div className="min-w-0">
+						<p className="text-xs font-medium opacity-75">{stat.label}</p>
+						<p className="truncate font-mono text-lg font-bold leading-tight">
+							{stat.value}
+						</p>
+						<p className="truncate text-[11px] opacity-70">{stat.helper}</p>
+					</div>
+				</div>
+			))}
+		</div>
+	);
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Onboard a client on their behalf. A retailer is always owned 1:1 by the
@@ -123,7 +263,11 @@ function OnboardClientCard() {
 	const [slugEdited, setSlugEdited] = useState(false);
 	const [waPhone, setWaPhone] = useState("");
 	const [email, setEmail] = useState("");
+	const [founding, setFounding] = useState(false);
 	const [copied, setCopied] = useState(false);
+
+	const spotsRemaining = useQuery(api.foundingMembers.getSpotsRemaining, {});
+	const foundingAvailable = (spotsRemaining ?? 0) > 0;
 
 	// Mirror the onboarding form: derive the slug from the name until hand-edited,
 	// and check availability live so we never hand out a link to a taken slug.
@@ -157,6 +301,7 @@ function OnboardClientCard() {
 					storeName,
 					slug: derivedSlug,
 					waPhone,
+					founding: founding && foundingAvailable,
 				});
 
 	async function handleCopy() {
@@ -176,19 +321,12 @@ function OnboardClientCard() {
 	}
 
 	return (
-		<section className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-5 lg:p-6">
-			<div className="flex items-start gap-3">
-				<div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent/10">
-					<UserPlus className="size-4 text-accent" />
-				</div>
-				<div className="flex flex-col gap-0.5">
-					<p className="text-sm font-semibold">Onboard a client</p>
-					<p className="text-xs text-muted-foreground">
-						Fill what you know, then send the link. They confirm under their own
-						login — then issue their invoice below.
-					</p>
-				</div>
-			</div>
+		<AdminCard>
+			<AdminSectionHeading
+				icon={<UserPlus className="size-5" />}
+				title="Onboard a client"
+				description="Fill what you know, copy the invite link, and send it manually. They confirm under their own login before invoicing."
+			/>
 
 			<label className="flex flex-col gap-1 text-sm font-medium">
 				Store name
@@ -222,9 +360,9 @@ function OnboardClientCard() {
 				) : null}
 			</label>
 
-			<div className="flex flex-col gap-3 sm:flex-row">
-				<label className="flex flex-1 flex-col gap-1 text-sm font-medium">
-					WhatsApp number
+			<div className="grid gap-4 sm:grid-cols-2">
+				<label className="flex flex-col gap-1 text-sm font-medium">
+					<span className="min-h-5">WhatsApp number</span>
 					<Input
 						type="tel"
 						inputMode="tel"
@@ -235,10 +373,12 @@ function OnboardClientCard() {
 						className="font-mono"
 					/>
 				</label>
-				<label className="flex flex-1 flex-col gap-1 text-sm font-medium">
-					Client email{" "}
-					<span className="font-normal text-muted-foreground">
-						(to send to)
+				<label className="flex flex-col gap-1 text-sm font-medium">
+					<span className="flex min-h-5 items-center gap-1">
+						Client email
+						<span className="font-normal text-muted-foreground">
+							(to send to)
+						</span>
 					</span>
 					<Input
 						type="email"
@@ -250,12 +390,30 @@ function OnboardClientCard() {
 					/>
 					{emailTaken ? (
 						<span className="text-xs text-destructive">
-							⚠ A store ({emailCheck?.storeName}) already uses this email. They
-							can't create a second one — it's one store per login.
+							A store ({emailCheck?.storeName}) already uses this email. They
+							can't create a second one; it's one store per login.
 						</span>
 					) : null}
 				</label>
 			</div>
+
+			<label className="flex items-start gap-2.5 text-sm">
+				<input
+					type="checkbox"
+					checked={founding && foundingAvailable}
+					disabled={!foundingAvailable}
+					onChange={(e) => setFounding(e.target.checked)}
+					className="mt-0.5 size-4 disabled:opacity-50"
+				/>
+				<span>
+					<span className="font-medium">Founding Member</span>
+					<span className="block text-xs text-muted-foreground">
+						{foundingAvailable
+							? `1 month free (vs the 14-day trial), then their discounted Pro plan. ${spotsRemaining}/10 spots left.`
+							: "All 10 founding spots are taken."}
+					</span>
+				</span>
+			</label>
 
 			{ready && link ? (
 				<div className="flex flex-col gap-2 rounded-xl border border-dashed border-border bg-muted/30 p-3">
@@ -277,11 +435,11 @@ function OnboardClientCard() {
 					</>
 				) : (
 					<>
-						<Copy className="size-4" /> Copy invite link
+						<Send className="size-4" /> Copy invite link
 					</>
 				)}
 			</Button>
-		</section>
+		</AdminCard>
 	);
 }
 
@@ -312,10 +470,19 @@ function IssueInvoiceForm() {
 	const [plan, setPlan] = useState<"starter" | "pro">("pro");
 	const [cycle, setCycle] = useState<"monthly" | "annual">("monthly");
 	const [founding, setFounding] = useState(false);
-	const [dueDate, setDueDate] = useState(() =>
-		toDateInput(Date.now() + DEFAULT_DUE_DAYS * DAY_MS),
-	);
 	const [busy, setBusy] = useState(false);
+
+	const selected = retailers?.find((r) => r._id === retailerId);
+	const blocked = selected?.hasPending === true;
+	// Auto-apply (and lock) the founding discount when the store is already a
+	// Founding Member OR was onboarded as one (foundingIntent, still on the 1-month
+	// trial) — so the conversion/renewal invoice always carries their discount.
+	const isExistingFounding =
+		selected?.isFoundingMember === true || selected?.foundingIntent === true;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reset the founding toggle to the store's real status whenever the selection changes
+	useEffect(() => {
+		setFounding(isExistingFounding);
+	}, [retailerId]);
 
 	// Founding is Pro-only — flipping it on forces Pro.
 	const effectivePlan = founding ? "pro" : plan;
@@ -323,19 +490,17 @@ function IssueInvoiceForm() {
 	const total = planPrice(effectivePlan, cycle, founding);
 	const base = planPrice(effectivePlan, cycle, false);
 
-	const selected = retailers?.find((r) => r._id === retailerId);
-	const blocked = selected?.hasPending === true;
-
 	async function handleIssue() {
 		if (!retailerId) return;
 		setBusy(true);
 		try {
+			// No dueDate — the system sets it (issue + 14 days). The paid cycle
+			// starts at mark-paid.
 			await issue({
 				retailerId,
 				plan: effectivePlan,
 				billingCycle: cycle,
 				founding,
-				dueDate: fromDateInput(dueDate),
 			});
 			toast.success("Invoice issued — it's now in Pending below.");
 			setRetailerId("");
@@ -348,15 +513,19 @@ function IssueInvoiceForm() {
 	}
 
 	return (
-		<section className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-5 lg:p-6">
-			<div className="flex items-center justify-between gap-3">
-				<p className="text-sm font-semibold">Issue an invoice</p>
-				{spotsRemaining !== undefined ? (
-					<span className="text-xs text-muted-foreground">
-						{spotsRemaining}/10 founding spots left
-					</span>
-				) : null}
-			</div>
+		<AdminCard>
+			<AdminSectionHeading
+				icon={<FilePlus2 className="size-5" />}
+				title="Issue an invoice"
+				description="Pick a retailer, plan and cycle — the amount and due date (14 days) are set automatically. The paid cycle starts when you mark it paid."
+				aside={
+					spotsRemaining !== undefined ? (
+						<span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">
+							{spotsRemaining}/10 founding left
+						</span>
+					) : null
+				}
+			/>
 
 			<label className="flex flex-col gap-1 text-sm font-medium">
 				Retailer
@@ -376,29 +545,31 @@ function IssueInvoiceForm() {
 				</select>
 			</label>
 
-			<div className="flex flex-wrap gap-x-6 gap-y-3">
+			<div className="grid gap-4 rounded-2xl border border-border/70 bg-muted/20 p-3 lg:grid-cols-2 lg:p-4">
 				<div className="flex flex-col gap-1.5">
 					<span className="text-xs font-medium text-muted-foreground">
 						Plan
 					</span>
-					<div className="flex gap-1.5">
+					<div className="grid grid-cols-3 gap-1.5 rounded-xl bg-background p-1 shadow-inner shadow-border/40">
 						{(["pro", "starter"] as const).map((p) => (
 							<button
 								key={p}
 								type="button"
 								disabled={founding && p !== "pro"}
 								onClick={() => setPlan(p)}
-								className={`h-9 rounded-full border px-3.5 text-sm font-medium capitalize transition-colors disabled:opacity-40 ${
+								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
 									effectivePlan === p
-										? "border-foreground bg-foreground text-background"
-										: "border-border bg-background text-muted-foreground hover:border-foreground/30"
+										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
+										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground"
 								}`}
 							>
+								{effectivePlan === p ? <Check className="size-3.5" /> : null}
 								{p}
 							</button>
 						))}
-						<span className="flex h-9 items-center rounded-full border border-dashed border-border px-3 text-xs text-muted-foreground">
-							Scale · soon
+						<span className="flex min-h-10 flex-col items-center justify-center rounded-lg border border-dashed border-border/80 bg-muted/30 px-2 text-center text-[11px] leading-tight text-muted-foreground">
+							<span className="font-semibold">Scale</span>
+							<span className="text-[10px]">soon</span>
 						</span>
 					</div>
 				</div>
@@ -407,18 +578,19 @@ function IssueInvoiceForm() {
 					<span className="text-xs font-medium text-muted-foreground">
 						Billing
 					</span>
-					<div className="flex gap-1.5">
+					<div className="grid grid-cols-2 gap-1.5 rounded-xl bg-background p-1 shadow-inner shadow-border/40">
 						{(["monthly", "annual"] as const).map((c) => (
 							<button
 								key={c}
 								type="button"
 								onClick={() => setCycle(c)}
-								className={`h-9 rounded-full border px-3.5 text-sm font-medium capitalize transition-colors ${
+								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold capitalize transition-all ${
 									cycle === c
-										? "border-foreground bg-foreground text-background"
-										: "border-border bg-background text-muted-foreground hover:border-foreground/30"
+										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
+										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground"
 								}`}
 							>
+								{cycle === c ? <Check className="size-3.5" /> : null}
 								{c}
 							</button>
 						))}
@@ -430,33 +602,26 @@ function IssueInvoiceForm() {
 				<input
 					type="checkbox"
 					checked={founding}
+					disabled={isExistingFounding}
 					onChange={(e) => setFounding(e.target.checked)}
-					className="size-4"
+					className="size-4 disabled:opacity-60"
 				/>
 				<span>
 					<span className="font-medium">Founding Member invoice</span>
 					<span className="block text-xs text-muted-foreground">
-						Pro only · 30% lifetime discount · claims a rank when marked paid
-						{spotsRemaining === 0
-							? " (cohort full — no rank will be claimed)"
-							: ""}
+						{isExistingFounding
+							? "This store is a Founding Member — lifetime 30% discount applied automatically."
+							: `Pro only · 30% lifetime discount · claims a rank when marked paid${
+									spotsRemaining === 0
+										? " (cohort full — no rank will be claimed)"
+										: ""
+								}`}
 					</span>
 				</span>
 			</label>
 
-			<label className="flex flex-col gap-1 text-sm font-medium">
-				Due date
-				<Input
-					type="date"
-					value={dueDate}
-					onChange={(e) => setDueDate(e.target.value)}
-					variant="field"
-					className="w-fit"
-				/>
-			</label>
-
-			<div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-				<div>
+			<div className="grid gap-4 rounded-2xl border border-accent/20 bg-accent/5 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+				<div className="min-w-0">
 					<p className="text-xs text-muted-foreground">Amount</p>
 					<p className="text-xl font-bold tabular-nums">
 						{formatPrice(total, "MYR")}
@@ -472,7 +637,7 @@ function IssueInvoiceForm() {
 					type="button"
 					onClick={handleIssue}
 					disabled={!retailerId || busy || blocked}
-					className="h-11 lg:px-6"
+					className="h-11 w-full sm:w-auto sm:px-6"
 				>
 					{busy ? "Issuing…" : "Issue invoice"}
 				</Button>
@@ -482,16 +647,21 @@ function IssueInvoiceForm() {
 					This retailer already has a pending invoice — settle it first.
 				</p>
 			) : null}
-		</section>
+		</AdminCard>
 	);
 }
 
 function PendingInvoices() {
 	const invoices = useQuery(api.invoices.listPending, {});
 	const markPaid = useMutation(api.invoices.markPaid);
+	const voidInvoice = useMutation(api.invoices.voidInvoice);
 	const [confirming, setConfirming] = useState<
 		NonNullable<typeof invoices>[number] | null
 	>(null);
+	const [voiding, setVoiding] = useState<
+		NonNullable<typeof invoices>[number] | null
+	>(null);
+	const [voidReason, setVoidReason] = useState("");
 	const [busy, setBusy] = useState(false);
 
 	async function handleMarkPaid(id: Id<"invoices">) {
@@ -500,7 +670,7 @@ function PendingInvoices() {
 			const res = await markPaid({ invoiceId: id });
 			toast.success(
 				res.rank !== null
-					? `Marked paid — Founding Member #${res.rank} claimed 🎉`
+					? `Marked paid — Founding Member #${res.rank} claimed`
 					: "Marked paid",
 			);
 			setConfirming(null);
@@ -511,11 +681,29 @@ function PendingInvoices() {
 		}
 	}
 
+	async function handleVoid(id: Id<"invoices">) {
+		setBusy(true);
+		try {
+			await voidInvoice({
+				invoiceId: id,
+				reason: voidReason.trim() ? voidReason.trim() : undefined,
+			});
+			toast.success("Invoice voided");
+			setVoiding(null);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setBusy(false);
+		}
+	}
+
 	return (
-		<section className="flex flex-col gap-3 rounded-2xl border border-input bg-background p-5 lg:p-6">
-			<p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-				Pending invoices
-			</p>
+		<AdminCard>
+			<AdminSectionHeading
+				icon={<ListChecks className="size-5" />}
+				title="Pending invoices"
+				description="Settle invoices only after the payment has landed. Marking paid activates access and may claim a founding rank."
+			/>
 			{invoices === undefined ? (
 				<Skeleton className="h-16 w-full rounded-xl" />
 			) : invoices.length === 0 ? (
@@ -527,36 +715,58 @@ function PendingInvoices() {
 					{invoices.map((inv) => (
 						<li
 							key={inv._id}
-							className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border p-3"
+							className="grid gap-3 rounded-xl border border-border bg-background p-3 sm:grid-cols-[minmax(0,1fr)_auto]"
 						>
-							<div className="min-w-0">
-								<p className="truncate text-sm font-medium">
-									{inv.storeName}{" "}
-									<span className="font-mono text-xs text-muted-foreground">
+							<div className="min-w-0 space-y-2">
+								<div className="flex flex-wrap items-center gap-2">
+									<p className="min-w-0 truncate text-sm font-semibold">
+										{inv.storeName}
+									</p>
+									<span className="rounded-full bg-muted px-2 py-0.5 font-mono text-[11px] text-muted-foreground">
 										/{inv.slug}
 									</span>
-								</p>
-								<p className="text-xs text-muted-foreground">
-									<span className="font-mono">{inv.invoiceNumber}</span> ·{" "}
-									{inv.plan} · due{" "}
-									{new Date(inv.dueDate).toLocaleDateString(undefined, {
-										day: "numeric",
-										month: "short",
-									})}
-								</p>
+									<span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-medium uppercase text-accent">
+										{inv.plan}
+									</span>
+								</div>
+								<div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+									<span className="font-mono">{inv.invoiceNumber}</span>
+									<span>
+										Due{" "}
+										{new Date(inv.dueDate).toLocaleDateString(undefined, {
+											day: "numeric",
+											month: "short",
+											year: "numeric",
+										})}
+									</span>
+								</div>
 							</div>
-							<div className="flex items-center gap-3">
+							<div className="flex items-center justify-between gap-3 sm:justify-end">
 								<span className="text-sm font-semibold tabular-nums">
 									{formatPrice(inv.total, inv.currency)}
 								</span>
-								<Button
-									type="button"
-									size="sm"
-									className="h-9"
-									onClick={() => setConfirming(inv)}
-								>
-									Mark paid
-								</Button>
+								<div className="flex items-center gap-2">
+									<Button
+										type="button"
+										size="sm"
+										variant="outline"
+										className="h-9"
+										onClick={() => {
+											setVoidReason("");
+											setVoiding(inv);
+										}}
+									>
+										Void
+									</Button>
+									<Button
+										type="button"
+										size="sm"
+										className="h-9"
+										onClick={() => setConfirming(inv)}
+									>
+										Mark paid
+									</Button>
+								</div>
 							</div>
 						</li>
 					))}
@@ -591,7 +801,49 @@ function PendingInvoices() {
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
-		</section>
+
+			<Dialog
+				open={voiding !== null}
+				onOpenChange={(o) => {
+					if (!o) setVoiding(null);
+				}}
+			>
+				<DialogContent showCloseButton={false} className="sm:max-w-sm">
+					<DialogHeader>
+						<DialogTitle>Void {voiding?.invoiceNumber}?</DialogTitle>
+						<DialogDescription>
+							Cancels this pending invoice for {voiding?.storeName}. It stays in
+							their history as “Cancelled” and frees them up for a corrected
+							invoice. Use this for an invoice issued by mistake — not one
+							that's been paid.
+						</DialogDescription>
+					</DialogHeader>
+					<label className="flex flex-col gap-1 text-sm font-medium">
+						Reason{" "}
+						<span className="font-normal text-muted-foreground">
+							(optional)
+						</span>
+						<Input
+							value={voidReason}
+							onChange={(e) => setVoidReason(e.target.value)}
+							placeholder="e.g. wrong amount"
+							variant="field"
+						/>
+					</label>
+					<DialogFooter>
+						<Button variant="outline" onClick={() => setVoiding(null)}>
+							Keep invoice
+						</Button>
+						<Button
+							disabled={busy}
+							onClick={() => voiding && handleVoid(voiding._id)}
+						>
+							{busy ? "Voiding…" : "Void invoice"}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+		</AdminCard>
 	);
 }
 
@@ -669,112 +921,138 @@ function PaymentConfigForm() {
 	}
 
 	return (
-		<section className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-5 lg:p-6">
-			<div className="flex flex-col gap-1">
-				<p className="text-sm font-semibold">Kedaipal payment details</p>
-				<p className="text-xs text-muted-foreground">
-					Shown to retailers on their billing page. The WhatsApp number reuses
-					the storefront checkout number.
-				</p>
-			</div>
+		<AdminCard className="lg:max-w-3xl">
+			<AdminSectionHeading
+				icon={<Landmark className="size-5" />}
+				title="Kedaipal payment details"
+				description="Shown to retailers on their billing page. The WhatsApp number reuses the storefront checkout number."
+			/>
 
 			{draft === null ? (
 				<Skeleton className="h-40 w-full rounded-xl" />
 			) : (
 				<>
-					<label className="flex flex-col gap-1 text-sm font-medium">
-						Bank name
-						<Input
-							value={draft.bankName}
-							onChange={(e) => setDraft({ ...draft, bankName: e.target.value })}
-							placeholder="Maybank"
-							variant="field"
-						/>
-					</label>
-					<label className="flex flex-col gap-1 text-sm font-medium">
-						Account holder name
-						<Input
-							value={draft.bankAccountName}
-							onChange={(e) =>
-								setDraft({ ...draft, bankAccountName: e.target.value })
-							}
-							placeholder="Kedaipal Sdn Bhd"
-							variant="field"
-						/>
-					</label>
-					<label className="flex flex-col gap-1 text-sm font-medium">
-						Account number
-						<Input
-							value={draft.bankAccountNumber}
-							onChange={(e) =>
-								setDraft({ ...draft, bankAccountNumber: e.target.value })
-							}
-							placeholder="5123 4567 8901"
-							inputMode="numeric"
-							variant="field"
-							className="font-mono"
-						/>
-					</label>
-					<label className="flex flex-col gap-1 text-sm font-medium">
-						DuitNow ID
-						<Input
-							value={draft.duitnowId}
-							onChange={(e) =>
-								setDraft({ ...draft, duitnowId: e.target.value })
-							}
-							placeholder="DuitNow ID / phone"
-							variant="field"
-							className="font-mono"
-						/>
-					</label>
-
-					<div className="flex flex-col gap-2">
-						<span className="text-sm font-medium">DuitNow QR</span>
-						{config?.qrUrl ? (
-							<div className="flex items-start gap-3">
-								<img
-									src={config.qrUrl}
-									alt="DuitNow QR"
-									className="size-28 rounded-xl border border-border object-contain"
-								/>
-								<button
-									type="button"
-									onClick={handleQrRemove}
-									className="text-xs text-destructive underline"
-								>
-									Remove QR
-								</button>
-							</div>
-						) : (
-							<label className="flex h-28 w-fit cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-input bg-background px-6 text-sm text-muted-foreground hover:border-ring">
-								{uploading ? (
-									"Uploading…"
-								) : (
-									<>
-										<ImagePlus className="size-4" /> Upload QR
-									</>
-								)}
-								<input
-									type="file"
-									accept="image/*"
-									className="hidden"
-									disabled={uploading}
-									onChange={(e) => handleQrUpload(e.target.files?.[0] ?? null)}
+					<div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_13rem]">
+						<div className="flex flex-col gap-4">
+							<label className="flex flex-col gap-1 text-sm font-medium">
+								Bank name
+								<Input
+									value={draft.bankName}
+									onChange={(e) =>
+										setDraft({ ...draft, bankName: e.target.value })
+									}
+									placeholder="Maybank"
+									variant="field"
 								/>
 							</label>
-						)}
+							<label className="flex flex-col gap-1 text-sm font-medium">
+								Account holder name
+								<Input
+									value={draft.bankAccountName}
+									onChange={(e) =>
+										setDraft({ ...draft, bankAccountName: e.target.value })
+									}
+									placeholder="Kedaipal Sdn Bhd"
+									variant="field"
+								/>
+							</label>
+							<label className="flex flex-col gap-1 text-sm font-medium">
+								Account number
+								<Input
+									value={draft.bankAccountNumber}
+									onChange={(e) =>
+										setDraft({ ...draft, bankAccountNumber: e.target.value })
+									}
+									placeholder="5123 4567 8901"
+									inputMode="numeric"
+									variant="field"
+									className="font-mono"
+								/>
+							</label>
+							<label className="flex flex-col gap-1 text-sm font-medium">
+								DuitNow ID
+								<Input
+									value={draft.duitnowId}
+									onChange={(e) =>
+										setDraft({ ...draft, duitnowId: e.target.value })
+									}
+									placeholder="DuitNow ID / phone"
+									variant="field"
+									className="font-mono"
+								/>
+							</label>
+						</div>
+
+						<div className="flex flex-col gap-2">
+							<span className="text-sm font-medium">DuitNow QR</span>
+							{config?.qrUrl ? (
+								<div className="flex flex-col items-start gap-2 rounded-2xl border border-border bg-background p-3">
+									<img
+										src={config.qrUrl}
+										alt="DuitNow QR"
+										className="aspect-square w-full rounded-xl object-contain"
+									/>
+									<button
+										type="button"
+										onClick={handleQrRemove}
+										className="text-xs font-medium text-destructive underline-offset-2 hover:underline"
+									>
+										Remove QR
+									</button>
+								</div>
+							) : (
+								<label className="flex aspect-square w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-input bg-background px-6 text-center text-sm text-muted-foreground hover:border-ring">
+									{uploading ? (
+										"Uploading…"
+									) : (
+										<>
+											<ImagePlus className="size-5" /> Upload QR
+										</>
+									)}
+									<input
+										type="file"
+										accept="image/*"
+										className="hidden"
+										disabled={uploading}
+										onChange={(e) =>
+											handleQrUpload(e.target.files?.[0] ?? null)
+										}
+									/>
+								</label>
+							)}
+						</div>
+					</div>
+
+					<div className="rounded-2xl border border-border bg-muted/30 p-4">
+						<p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+							Retailer sees
+						</p>
+						<div className="mt-2 grid gap-2 text-sm sm:grid-cols-2">
+							<div>
+								<p className="text-xs text-muted-foreground">Bank</p>
+								<p className="font-medium">
+									{draft.bankName || "No bank name"}
+								</p>
+							</div>
+							<div>
+								<p className="text-xs text-muted-foreground">Account</p>
+								<p className="font-mono text-sm">
+									{draft.bankAccountNumber || "No account number"}
+								</p>
+							</div>
+						</div>
 					</div>
 
 					<Button
 						type="button"
 						onClick={handleSave}
 						disabled={saving}
-						className="h-11 lg:w-auto lg:self-start lg:px-6"
+						className="h-11 lg:w-auto lg:self-end lg:px-6"
 					>
 						{saving ? "Saving…" : "Save details"}
 					</Button>
 				</>
 			)}
-		</section>
+		</AdminCard>
 	);
 }

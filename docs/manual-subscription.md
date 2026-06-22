@@ -59,8 +59,27 @@ the planned follow-up once a Meta template + the central send gateway land (Spri
 ever — `issueInvoice` rejects a second (serializable read-then-insert); the only other
 insert path is the one-time founding-signup invoice on a brand-new retailer.
 
+**Branding + preview.** All retailer emails carry the Kedaipal logo header
+(`emailCopy.logoHeader` / `LOGO_URL` → the prod public asset, since email clients
+can't load localhost). Invoice emails use the richer card layout (`wrapBillingHtml`);
+order/trial emails use the simple shell (`wrapHtml`). To preview any template in a
+real inbox without DB surgery:
+```
+npx convex run billingEmail:sendSampleBillingEmail '{"to":"you@email.com","key":"invoiceIssued"}'
+```
+Keys: `invoiceIssued` · `invoiceReminder` · `invoiceOverdue` · `trialEndingSoon` ·
+`trialEnded`. Add `"locale":"ms"` or `"founding":true` for those variants.
+
+**Voiding (issued in error).** `invoices.voidInvoice` (admin, pending-only) soft-cancels
+an invoice — status → `void`, kept for audit (stamps `voidedBy`/`voidedAt`/`voidReason`),
+**never hard-deleted** (audit trail + vendor history + reconciliation). It frees the
+single-pending slot so a corrected invoice can be issued, and does **not** touch
+subscription status. A paid invoice can't be voided (that's a refund — out of scope).
+The vendor's billing history shows it as "Cancelled". Admin "Void" button + confirm in
+the pending list.
+
 Admin UI is **tabbed** (`app.admin.billing.tsx`): **Invoices** (onboard-a-client +
-issue form + pending list + mark-paid, the frequent task) and **Payment details**
+issue form + pending list + mark-paid/void, the frequent task) and **Payment details**
 (set-once bank/QR). Tests: `convex/invoices.test.ts` (issueInvoice
 standard/founding/Starter/guards), `src/lib/onboarding-link.test.ts` (invite link).
 
@@ -118,6 +137,35 @@ claims via admin mark-paid, so a hand-crafted link grants nothing.
    status. Soft-lock (`past_due`) freezes **only** the seller's dashboard
    growth-writes.
 
+## Locking (when the cron flips to `past_due`)
+
+The daily cron locks a vendor on any of:
+1. **Trial lapsed** (`trialing`, `trialEndsAt < now`).
+2. **Invoice overdue** (`active` with a pending invoice past its `dueDate`).
+3. **Period lapsed, no invoice** (`active`, `currentPeriodEnd < now`, and **no** pending
+   invoice) — we never give a paid vendor free service past their cycle while waiting on
+   Arif to issue a renewal. A pending invoice with a *future* due date keeps them in grace.
+
+Comped subs never lock. Each transition fires its one email (overdue → `notifyInvoiceOverdue`;
+trial → `trialEnded`; period-lapse → `notifySubscriptionLapsed`).
+
+## Issuing — system-set due date, cycle starts at payment
+
+The admin does **not** pick a due date. `issueInvoice` sets it to **issue + 14 days**
+(pay-by deadline). The actual paid **billing cycle** (`currentPeriodStart/End`) is set at
+**mark-paid** — so Pro only starts once payment lands, never at issue time. Founding members
+auto-get their lifetime discount: the issue form detects `isFoundingMember` and force-applies
+(and locks) the founding toggle, so Arif can't accidentally bill them full price on a renewal.
+
+## Deferred / known gaps (manual-sub era — revisit for auto-sub)
+
+- **No cancellation flow.** The `cancelled` status exists but nothing reaches it; a churning
+  vendor just stops paying and sits at `past_due`. Fine while billing is manual — needed once
+  we have automated subscriptions.
+- **No self-serve plan picker.** Trial-ended / lapsed vendors can't choose a plan in-app; the
+  "Choose a plan" CTA + billing page route them to **message Arif on WhatsApp**, who issues +
+  activates manually (no payment is auto-trusted). Revisit when payment is automated.
+
 ## Soft-lock (`past_due`)
 
 `assertSubscriptionActive(ctx, retailerId)` throws `ConvexError` when the
@@ -130,13 +178,22 @@ storefront. **Order cap is SOFT** — a nudge in the dashboard, never a block on
 
 ## Signup paths (`createRetailer`)
 
+**Founding-10 members get 1 month free; everyone else gets the 14-day trial.** The admin
+onboard-a-client form has a **"Founding Member"** toggle (gated on spots remaining). When set,
+the invite link carries `founding: true` in its token → onboarding passes `intent: "founding"`
+→ a **30-day trial** + `foundingIntent: true` on the subscription (no auto-invoice). At
+conversion Arif issues the founding invoice (monthly **or** annual — picked in the issue form),
+which auto-applies the founding discount because the issue form reads `foundingIntent`. Pay →
+rank claims. Safe in the URL: the founding **rank** still only claims when the admin marks the
+invoice paid.
+
 - **Public** (default / `intent: "public"`): `status: trialing`, `plan: pro`,
-  `trialEndsAt = now + 14d`, Pro-level caps. Tier is chosen at conversion, not
-  signup.
-- **Founding** (`intent: "founding"`): `status: active` + a **pending Pro invoice**
-  with a `dueDate` (founding price RM104, with the discount shown as a line). Pay →
-  rank claims (Phase 2). The 10-slot cap + admin mark-paid are the real rank gate,
-  so `intent` is not a privileged arg in v1.
+  `trialEndsAt = now + 14d`, Pro-level caps. Tier chosen at conversion.
+- **Founding** (`intent: "founding"`): `status: trialing`, `trialEndsAt = now + 30d`
+  (`FOUNDING_TRIAL_DAYS`, 1 month free), `foundingIntent: true`, Pro caps, **no invoice**.
+  The conversion invoice (issued by Arif, `founding` auto-applied) carries the RM104 founding
+  price + claims the rank on mark-paid. The 10-slot cap + mark-paid are the real rank gate,
+  so `intent` is not a privileged arg.
 
 ## Admin auth
 

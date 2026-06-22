@@ -1,7 +1,15 @@
 import { Link } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
-import { Eye, Info } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import {
+	Camera,
+	CheckCircle2,
+	Eye,
+	Info,
+	Layers3,
+	PackageCheck,
+	Save,
+} from "lucide-react";
+import { type FormEvent, type ReactNode, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import { convexErrorMessage, parsePriceInput } from "../../lib/format";
 import { reorderByIds } from "../../lib/reorder";
@@ -138,6 +146,84 @@ function initialEditorState(
 }
 
 const INT_RE = /^\d+$/;
+
+function ProductStepCard({
+	icon,
+	kicker,
+	title,
+	description,
+	children,
+}: {
+	icon: ReactNode;
+	kicker: string;
+	title: string;
+	description: string;
+	children: ReactNode;
+}) {
+	return (
+		<section className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+			<div className="flex gap-3 border-b border-border bg-muted/25 px-4 py-4 lg:px-5">
+				<div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-background text-accent ring-1 ring-border">
+					{icon}
+				</div>
+				<div className="min-w-0">
+					<p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+						{kicker}
+					</p>
+					<h3 className="text-base font-semibold leading-tight">{title}</h3>
+					<p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+						{description}
+					</p>
+				</div>
+			</div>
+			<div className="flex flex-col gap-4 p-4 lg:p-5">{children}</div>
+		</section>
+	);
+}
+
+function ProductReadiness({
+	hasName,
+	hasPrice,
+	imageCount,
+}: {
+	hasName: boolean;
+	hasPrice: boolean;
+	imageCount: number;
+}) {
+	const checks = [
+		{ label: "Product name", done: hasName },
+		{ label: "Price ready", done: hasPrice },
+		{
+			label: imageCount > 0 ? `${imageCount} photo added` : "Photo optional",
+			done: true,
+		},
+	];
+	return (
+		<div className="grid gap-2 rounded-2xl border border-accent/20 bg-accent/5 p-3 sm:grid-cols-3">
+			{checks.map((check) => (
+				<div
+					key={check.label}
+					className="flex items-center gap-2 rounded-xl bg-background/80 px-3 py-2 text-sm"
+				>
+					<CheckCircle2
+						className={`size-4 shrink-0 ${
+							check.done ? "text-accent" : "text-muted-foreground"
+						}`}
+					/>
+					<span
+						className={
+							check.done
+								? "font-medium text-foreground"
+								: "text-muted-foreground"
+						}
+					>
+						{check.label}
+					</span>
+				</div>
+			))}
+		</div>
+	);
+}
 
 export function ProductForm({
 	initialValues,
@@ -314,91 +400,89 @@ export function ProductForm({
 		form.handleSubmit();
 	}
 
+	const hasAnyPrice = editor.rows.some((row) => row.price.trim().length > 0);
+
 	return (
-		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
-			<form.AppField name="name">
-				{(field) => (
-					<field.TextField
-						label="Name"
-						placeholder="e.g. Product name"
-						required
+		<form onSubmit={handleSubmit} className="flex flex-col gap-5">
+			<form.Subscribe selector={(s) => s.values.name.trim().length > 0}>
+				{(hasName) => (
+					<ProductReadiness
+						hasName={hasName}
+						hasPrice={hasAnyPrice}
+						imageCount={images.length}
 					/>
 				)}
-			</form.AppField>
-			<div className="flex flex-col gap-1.5">
-				<form.AppField name="description">
+			</form.Subscribe>
+
+			<ProductStepCard
+				icon={<PackageCheck className="size-5" />}
+				kicker="Step 1"
+				title="Product basics"
+				description="Start with the name shoppers will recognise, then add a short description only if it helps them decide."
+			>
+				<form.AppField name="name">
 					{(field) => (
-						<field.TextareaField
-							label="Description"
-							placeholder="Optional. Use **bold**, - bullet lists, and ## headings for specs & what's included."
-							description="Formatting supported — buyers see it rendered on your storefront."
-							maxLength={1000}
+						<field.TextField
+							label="Name"
+							placeholder="e.g. Chocolate fudge brownies"
+							required
 						/>
 					)}
 				</form.AppField>
-				{/* Live preview using the same renderer the storefront uses, so what
-				    the seller previews is exactly what the buyer sees. */}
-				<form.Subscribe selector={(s) => s.values.description ?? ""}>
-					{(desc) => {
-						const trimmed = desc.trim();
-						return (
-							<div className="flex flex-col gap-1.5">
-								<button
-									type="button"
-									onClick={() => setShowPreview((v) => !v)}
-									disabled={trimmed.length === 0}
-									className="inline-flex items-center gap-1.5 self-start text-xs font-medium text-muted-foreground hover:text-foreground disabled:opacity-50"
-								>
-									<Eye className="size-3.5" aria-hidden />
-									{showPreview ? "Hide preview" : "Preview formatting"}
-								</button>
-								{showPreview && trimmed.length > 0 ? (
-									<div className="rounded-xl border border-border bg-card/40 p-3">
-										<Markdown>{desc}</Markdown>
-									</div>
-								) : null}
-							</div>
-						);
-					}}
-				</form.Subscribe>
-			</div>
-
-			<div className="flex flex-col gap-2">
-				<div className="flex flex-col gap-0.5">
-					<span className="text-sm font-medium">Pricing & stock</span>
-					<span className="text-xs text-muted-foreground">
-						Selling more than one version (sizes, flavours, weights)? Add
-						options below to create variants — each with its own price, stock
-						and photo.
-					</span>
+				<div className="flex flex-col gap-1.5">
+					<form.AppField name="description">
+						{(field) => (
+							<field.TextareaField
+								label="Description"
+								placeholder="Optional. Use **bold**, - bullet lists, and ## headings for specs & what's included."
+								description="Formatting supported — buyers see it rendered on your storefront."
+								maxLength={1000}
+							/>
+						)}
+					</form.AppField>
+					<form.Subscribe selector={(s) => s.values.description ?? ""}>
+						{(desc) => {
+							const trimmed = desc.trim();
+							return (
+								<div className="flex flex-col gap-1.5">
+									<button
+										type="button"
+										onClick={() => setShowPreview((v) => !v)}
+										disabled={trimmed.length === 0}
+										className="inline-flex items-center gap-1.5 self-start text-xs font-medium text-muted-foreground hover:text-foreground disabled:opacity-50"
+									>
+										<Eye className="size-3.5" aria-hidden />
+										{showPreview ? "Hide preview" : "Preview formatting"}
+									</button>
+									{showPreview && trimmed.length > 0 ? (
+										<div className="rounded-xl border border-border bg-muted/30 p-3">
+											<Markdown>{desc}</Markdown>
+										</div>
+									) : null}
+								</div>
+							);
+						}}
+					</form.Subscribe>
 				</div>
-				<VariantEditor
-					value={editor}
-					onChange={setEditor}
-					currency={currency}
-				/>
-				<Link
-					to="/app/settings"
-					search={{ tab: "store" }}
-					className="inline-flex items-center gap-1.5 self-start text-xs text-muted-foreground hover:text-foreground"
-				>
-					<Info className="size-3.5" aria-hidden />
-					Currency is set per store — change it in Settings.
-				</Link>
-			</div>
+			</ProductStepCard>
 
-			<div className="flex flex-col gap-2">
-				<span className="text-sm font-medium">
-					Images{" "}
-					<span className="text-muted-foreground">
-						({images.length}/{MAX_IMAGES})
+			<ProductStepCard
+				icon={<Camera className="size-5" />}
+				kicker="Step 2"
+				title="Photos"
+				description="Use the first image as the storefront cover. Extra images help shoppers compare angles, flavours, sizes, or packaging."
+			>
+				<div className="flex items-center justify-between gap-3">
+					<span className="text-sm font-medium">
+						Product images{" "}
+						<span className="text-muted-foreground">
+							({images.length}/{MAX_IMAGES})
+						</span>
 					</span>
-				</span>
-				{images.length > 1 ? (
-					<p className="text-xs text-muted-foreground">
-						Drag to reorder — the first image is your storefront cover.
-					</p>
-				) : null}
+					{images.length > 1 ? (
+						<p className="text-xs text-muted-foreground">Drag to reorder</p>
+					) : null}
+				</div>
 				<div className="grid grid-cols-3 gap-2">
 					{/* `className="contents"` lets the sortable <li>s join this grid
 					    directly, so the "+ Add" tile flows in the next free cell. */}
@@ -461,7 +545,34 @@ export function ProductForm({
 						</label>
 					) : null}
 				</div>
-			</div>
+			</ProductStepCard>
+
+			<ProductStepCard
+				icon={<Layers3 className="size-5" />}
+				kicker="Step 3"
+				title="Price, stock and options"
+				description="Keep it simple for one product, or add sizes, flavours, weights, and made-to-order choices when buyers need to choose."
+			>
+				<VariantEditor
+					value={editor}
+					onChange={setEditor}
+					currency={currency}
+				/>
+				<Link
+					to="/app/settings"
+					search={{ tab: "store" }}
+					className="inline-flex items-center gap-1.5 self-start rounded-full bg-muted px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+				>
+					<Info className="size-3.5" aria-hidden />
+					Currency is set in Settings
+				</Link>
+			</ProductStepCard>
+
+			{serverError ? (
+				<p className="rounded-xl border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+					{serverError}
+				</p>
+			) : null}
 
 			<form.Subscribe
 				selector={(s) => ({
@@ -473,18 +584,13 @@ export function ProductForm({
 					<Button
 						type="submit"
 						disabled={!canSubmit || isSubmitting || uploading}
-						className="h-12"
+						className="sticky bottom-20 z-10 h-12 shadow-lg shadow-accent/20 lg:static lg:shadow-none"
 					>
+						<Save className="size-4" />
 						{isSubmitting ? "Saving…" : submitLabel}
 					</Button>
 				)}
 			</form.Subscribe>
-
-			{serverError ? (
-				<p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
-					{serverError}
-				</p>
-			) : null}
 		</form>
 	);
 }
