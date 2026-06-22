@@ -14,9 +14,9 @@ interface MobileHeaderProps {
 
 export function MobileHeader({ retailer }: MobileHeaderProps) {
 	return (
-		<header className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-background/95 px-5 py-3 backdrop-blur lg:hidden">
-			<div className="flex items-center gap-2.5">
-				<img src="/logo.svg" alt="Kedaipal" className="h-8 w-auto" />
+		<header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-border bg-background/95 px-5 py-3 backdrop-blur lg:hidden">
+			<div className="flex min-w-0 flex-1 items-center gap-2.5">
+				<img src="/logo.svg" alt="Kedaipal" className="h-8 w-auto shrink-0" />
 				<div className="flex min-w-0 flex-col gap-0.5">
 					<Link
 						to="/app"
@@ -24,15 +24,21 @@ export function MobileHeader({ retailer }: MobileHeaderProps) {
 					>
 						{retailer.storeName}
 					</Link>
-					<div className="flex items-center gap-1.5">
-						<span className="truncate font-mono text-xs text-muted-foreground">
+					<div className="flex min-w-0 flex-col items-start gap-1">
+						<span className="max-w-full truncate font-mono text-xs text-muted-foreground">
 							kedaipal.com/{retailer.slug}
 						</span>
-						<TierPill subscription={retailer.subscription} />
+						<TierPill
+							subscription={retailer.subscription}
+							compact
+							className="py-0 text-[9px]"
+						/>
 					</div>
 				</div>
 			</div>
-			<UserButton />
+			<div className="shrink-0">
+				<UserButton />
+			</div>
 		</header>
 	);
 }
