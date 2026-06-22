@@ -110,6 +110,10 @@ interface Feature {
 	starter: FeatureValue;
 	pro: FeatureValue;
 	scale: FeatureValue;
+	// True = the capability isn't built yet. Shown with a "Coming soon" badge so the
+	// pricing table doesn't over-promise during beta. Keep in sync with what's
+	// actually shipped (see ClickUp 86exrhpfn + the entitlement tickets).
+	comingSoon?: boolean;
 }
 
 const FEATURES: Feature[] = [
@@ -119,7 +123,13 @@ const FEATURES: Feature[] = [
 		pro: "500",
 		scale: "Unlimited",
 	},
-	{ label: "Team members", starter: "1", pro: "2", scale: "5" },
+	{
+		label: "Team members",
+		starter: "1",
+		pro: "2",
+		scale: "5",
+		comingSoon: true,
+	},
 	{ label: "Hosted storefront", starter: true, pro: true, scale: true },
 	{ label: "Order pipeline", starter: true, pro: true, scale: true },
 	{
@@ -149,18 +159,55 @@ const FEATURES: Feature[] = [
 		pro: true,
 		scale: true,
 	},
-	{ label: "Date picker / pre-orders", starter: false, pro: true, scale: true },
-	{ label: "Automated reminders", starter: false, pro: true, scale: true },
+	{
+		label: "Date picker / pre-orders",
+		starter: false,
+		pro: true,
+		scale: true,
+		comingSoon: true,
+	},
+	{
+		label: "Automated reminders",
+		starter: false,
+		pro: true,
+		scale: true,
+		comingSoon: true,
+	},
 	{
 		label: "WhatsApp broadcasts",
 		starter: false,
 		pro: "100/mo",
 		scale: "Unlimited",
+		comingSoon: true,
 	},
-	{ label: "Tiered pricing", starter: false, pro: false, scale: true },
-	{ label: "Reseller portal", starter: false, pro: false, scale: true },
-	{ label: "Sales reports", starter: false, pro: false, scale: true },
-	{ label: "Custom domain", starter: false, pro: false, scale: true },
+	{
+		label: "Tiered pricing",
+		starter: false,
+		pro: false,
+		scale: true,
+		comingSoon: true,
+	},
+	{
+		label: "Reseller portal",
+		starter: false,
+		pro: false,
+		scale: true,
+		comingSoon: true,
+	},
+	{
+		label: "Sales reports",
+		starter: false,
+		pro: false,
+		scale: true,
+		comingSoon: true,
+	},
+	{
+		label: "Custom domain",
+		starter: false,
+		pro: false,
+		scale: true,
+		comingSoon: true,
+	},
 ];
 
 const FAQS = [
@@ -170,7 +217,7 @@ const FAQS = [
 	},
 	{
 		q: "Does Pro support multi-pickup-point orders?",
-		a: "Pro supports up to 2 team members and a single pickup/delivery address per order. Multi-pickup-point routing — where a single order can have different pickup locations (e.g. multiple collection points for a batch run) — ships with Scale. It's on the S5 roadmap.",
+		a: "Each order has a single pickup/delivery address. Multi-pickup-point routing — where a single order can have different pickup locations (e.g. multiple collection points for a batch run) — ships with Scale. It's on the S5 roadmap. (Team-member seats are coming soon.)",
 	},
 	{
 		q: "How does cold-chain Lalamove integration work?",
@@ -286,9 +333,12 @@ function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 					<Check className="size-4 shrink-0 text-accent" />
 					{tier.orderCap}
 				</li>
-				<li className="flex items-center gap-2 text-sm">
-					<Check className="size-4 shrink-0 text-accent" />
+				<li className="flex items-center gap-2 text-sm text-muted-foreground">
+					<Check className="size-4 shrink-0 text-muted-foreground/50" />
 					{tier.users} team member{tier.users > 1 ? "s" : ""}
+					<span className="rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-400">
+						Soon
+					</span>
 				</li>
 			</ul>
 
@@ -485,7 +535,20 @@ function PricingPage() {
 											className={i % 2 === 0 ? "bg-muted/20" : "bg-transparent"}
 										>
 											<td className="px-6 py-3 text-sm text-foreground">
-												{f.label}
+												<span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+													<span
+														className={
+															f.comingSoon ? "text-muted-foreground" : ""
+														}
+													>
+														{f.label}
+													</span>
+													{f.comingSoon ? (
+														<span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-400">
+															Coming soon
+														</span>
+													) : null}
+												</span>
 											</td>
 											<td className="px-4 py-3 text-center">
 												<FeatureCell value={f.starter} />
