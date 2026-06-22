@@ -73,6 +73,8 @@ export function planPrice(
 }
 
 export const TRIAL_DAYS = 14;
+/** Founding-10 perk: 1 month free instead of the standard 14-day trial. */
+export const FOUNDING_TRIAL_DAYS = 30;
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Founding cohort size — first 10 paying Pro retailers. */

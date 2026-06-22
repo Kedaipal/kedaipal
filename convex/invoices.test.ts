@@ -44,6 +44,9 @@ afterEach(() => {
 
 const asAdmin = (t: ReturnType<typeof setup>) => t.withIdentity({ subject: ADMIN });
 
+// A retailer at founding conversion: active sub + a pending founding invoice
+// (built directly so it doesn't depend on the signup path, which now gives
+// founding members a 1-month trial with no auto-invoice).
 async function seedFounding(
 	t: ReturnType<typeof setup>,
 	userId: string,
@@ -53,7 +56,6 @@ async function seedFounding(
 	await asUser.mutation(api.retailers.createRetailer, {
 		storeName: `Store ${slug}`,
 		slug,
-		intent: "founding",
 	});
 	const { retailerId, invoiceId } = await t.run(async (ctx) => {
 		const r = await ctx.db
@@ -61,12 +63,33 @@ async function seedFounding(
 			.withIndex("by_slug", (q) => q.eq("slug", slug))
 			.first();
 		if (!r) throw new Error("no retailer");
-		const inv = await ctx.db
-			.query("invoices")
+		const sub = await ctx.db
+			.query("subscriptions")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", r._id))
 			.first();
-		if (!inv) throw new Error("no invoice");
-		return { retailerId: r._id, invoiceId: inv._id };
+		if (!sub) throw new Error("no sub");
+		const now = Date.now();
+		const month = 30 * 24 * 60 * 60 * 1000;
+		await ctx.db.patch(sub._id, {
+			status: "active",
+			currentPeriodStart: now,
+			currentPeriodEnd: now + month,
+		});
+		const invoiceId = await ctx.db.insert("invoices", {
+			retailerId: r._id,
+			subscriptionId: sub._id,
+			invoiceNumber: `INV-FND-${slug}`,
+			amount: 14900,
+			foundingDiscount: 4500,
+			total: 10400,
+			currency: "MYR",
+			periodStart: now,
+			periodEnd: now + month,
+			dueDate: now + 14 * 24 * 60 * 60 * 1000,
+			status: "pending",
+			createdAt: now,
+		});
+		return { retailerId: r._id, invoiceId };
 	});
 	return { retailerId, invoiceId };
 }
@@ -248,6 +271,22 @@ describe("invoices.issueInvoice", () => {
 	}
 
 	const due = () => Date.now() + 14 * 24 * 60 * 60 * 1000;
+
+	test("auto-sets the due date (~14 days) when the admin doesn't pass one", async () => {
+		const t = setup();
+		const { retailerId } = await seedPublic(t, "u_autodue", "autodue-store");
+		const before = Date.now();
+		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+			// no dueDate — system should set it
+		});
+		const inv = await getInvoice(t, invoiceId);
+		expect(inv?.dueDate).toBeGreaterThan(before + 13 * 24 * 60 * 60 * 1000);
+		expect(inv?.dueDate).toBeLessThan(before + 15 * 24 * 60 * 60 * 1000);
+	});
 
 	test("issues a standard Pro invoice; founding toggle = discount only (rank is first-paid-Pro)", async () => {
 		const t = setup();
@@ -607,6 +646,47 @@ describe("daily billing cron", () => {
 			{},
 		);
 		expect(second.trialReminders).toBe(0);
+	});
+
+	test("locks an active vendor whose period lapsed with NO pending invoice", async () => {
+		const t = setup();
+		const { retailerId, invoiceId } = await seedFounding(t, "u_laps", "laps-store");
+		// Settle the invoice (no pending left), then expire the paid period.
+		await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId });
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, { currentPeriodEnd: Date.now() - 1000 });
+		});
+
+		const res = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(res.lapsed).toBe(1);
+		expect((await getSubFor(t, retailerId))?.status).toBe("past_due");
+	});
+
+	test("does NOT lapse-lock while a pending invoice still gives grace", async () => {
+		const t = setup();
+		const { retailerId } = await seedFounding(t, "u_grace", "grace-store");
+		// Period ended, but the founding invoice is still pending + due in the future.
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, { currentPeriodEnd: Date.now() - 1000 });
+		});
+
+		const res = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(res.lapsed).toBe(0);
+		expect((await getSubFor(t, retailerId))?.status).toBe("active");
 	});
 
 	test("reminders fire again next cycle — dedup is per-invoice, not per-vendor", async () => {

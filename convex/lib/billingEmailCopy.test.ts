@@ -100,4 +100,11 @@ describe("renderTrialEmail", () => {
 		const { subject } = renderTrialEmail("ms", "trialEnded", tv);
 		expect(subject.toLowerCase()).toContain("percubaan");
 	});
+
+	it("subscriptionLapsed reads as a lapsed-renewal notice (no invoice)", () => {
+		const { subject, html } = renderTrialEmail("en", "subscriptionLapsed", tv);
+		expect(subject.toLowerCase()).toContain("lapsed");
+		expect(html.toLowerCase()).not.toContain("invoice no");
+		expect(html).toContain("Message us to renew");
+	});
 });

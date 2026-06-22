@@ -15,6 +15,7 @@ import { claimRankIfEligible } from "./foundingMembers";
 import { defaultCapsForPlan } from "./subscriptions";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const DUE_GRACE_DAYS = 14; // pay-by window when the admin doesn't override it
 
 /** Short, human-ish invoice number with a random suffix (collisions negligible at
  * manual-billing volume). */
@@ -128,11 +129,13 @@ export const issueInvoice = mutation({
 		),
 		billingCycle: v.union(v.literal("monthly"), v.literal("annual")),
 		founding: v.boolean(),
-		dueDate: v.number(),
+		// Optional override; normally the system sets it (issue date + grace) so the
+		// admin doesn't pick a date. The actual paid CYCLE starts at mark-paid.
+		dueDate: v.optional(v.number()),
 	},
 	handler: async (
 		ctx,
-		{ retailerId, plan, billingCycle, founding, dueDate },
+		{ retailerId, plan, billingCycle, founding, dueDate: dueDateArg },
 	): Promise<{ invoiceId: Id<"invoices"> }> => {
 		await requireAdmin(ctx);
 		if (plan === "scale")
@@ -163,6 +166,9 @@ export const issueInvoice = mutation({
 		const base = planPrice(plan, cycle, false);
 		const total = planPrice(plan, cycle, founding);
 		const now = Date.now();
+		// System-set pay-by deadline (issue date + grace). The subscription's billing
+		// cycle is set later at mark-paid, so Pro only starts once payment lands.
+		const dueDate = dueDateArg ?? now + DUE_GRACE_DAYS * DAY_MS;
 
 		// Align the subscription to what's being billed so mark-paid reconciles the
 		// right caps. (Status stays as-is until paid → active.)
@@ -236,6 +242,7 @@ export const listRetailersForAdmin = query({
 			slug: string;
 			status?: Doc<"subscriptions">["status"];
 			isFoundingMember: boolean;
+			foundingIntent: boolean;
 			hasPending: boolean;
 		}>
 	> => {
@@ -258,6 +265,7 @@ export const listRetailersForAdmin = query({
 				slug: r.slug,
 				status: sub?.status,
 				isFoundingMember: r.isFoundingMember === true,
+				foundingIntent: sub?.foundingIntent === true,
 				hasPending: pending !== null,
 			});
 		}

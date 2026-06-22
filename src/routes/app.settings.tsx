@@ -12,6 +12,7 @@ import {
 	Music2,
 	Plus,
 	QrCode,
+	ReceiptText,
 	Settings2,
 	Store,
 	Trash2,
@@ -88,6 +89,12 @@ const SETTINGS_TABS: ReadonlyArray<{
 		label: "Store",
 		description: "Name, logo, URL and currency",
 		icon: <Store className="size-4" />,
+	},
+	{
+		id: "billing",
+		label: "Billing",
+		description: "Your Kedaipal subscription + invoices",
+		icon: <ReceiptText className="size-4" />,
 	},
 	{
 		id: "whatsapp",
@@ -232,8 +239,12 @@ function SettingsRoute() {
 	const renameSlug = useMutation(api.retailers.renameSlug);
 	const updateSettings = useMutation(api.retailers.updateSettings);
 
-	const { tab } = Route.useSearch();
-	const [activeTab, setActiveTab] = useState<SettingsTab>(tab);
+	// URL is the source of truth for the active tab, so deep links (e.g. the
+	// "View billing" banner → ?tab=billing) actually switch the tab even when the
+	// settings page is already mounted.
+	const { tab: activeTab } = Route.useSearch();
+	const navigate = Route.useNavigate();
+	const setActiveTab = (t: SettingsTab) => navigate({ search: { tab: t } });
 	const [newSlug, setNewSlug] = useState("");
 	const [saving, setSaving] = useState(false);
 

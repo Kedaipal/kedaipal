@@ -592,6 +592,10 @@ export default defineSchema({
 		// Pilot / backfilled retailers: full access, never charged, ineligible for
 		// the Founding rank.
 		comped: v.optional(v.boolean()),
+		// Set at a Founding-10 onboard (1-month trial). Flags the store so the
+		// conversion invoice auto-applies the founding discount + claims the rank,
+		// even before isFoundingMember is true. Cleared/irrelevant once claimed.
+		foundingIntent: v.optional(v.boolean()),
 		// Denormalized entitlements read by feature-gating. orderCap is SOFT in v1
 		// (nudge only, never blocks the public storefront); userCap + broadcastQuota
 		// are hard on seller-side surfaces.

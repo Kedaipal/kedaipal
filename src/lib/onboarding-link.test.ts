@@ -37,6 +37,17 @@ describe("onboarding invite token", () => {
 		});
 	});
 
+	it("carries the founding flag when set, omits it otherwise", () => {
+		const withFounding = decodeOnboardingPrefill(
+			encodeOnboardingPrefill({ storeName: "Mak Kuih", founding: true }),
+		);
+		expect(withFounding?.founding).toBe(true);
+		const without = decodeOnboardingPrefill(
+			encodeOnboardingPrefill({ storeName: "Mak Kuih" }),
+		);
+		expect(without?.founding).toBeFalsy();
+	});
+
 	it("handles unicode store names", () => {
 		const token = encodeOnboardingPrefill({ storeName: "Kuih Niçe 🍡" });
 		expect(decodeOnboardingPrefill(token)).toEqual({ store: "Kuih Niçe 🍡" });

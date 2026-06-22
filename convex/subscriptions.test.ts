@@ -95,35 +95,41 @@ describe("subscriptions — signup wiring", () => {
 		expect(retailer?.isFoundingMember).toBeUndefined();
 	});
 
-	test("founding signup → active subscription + pending invoice with dueDate", async () => {
+	test("founding signup → 1-month trial, foundingIntent flagged, NO invoice yet", async () => {
 		const t = setup();
 		const asA = t.withIdentity({ subject: "user_founding" });
+		const before = Date.now();
 		await asA.mutation(api.retailers.createRetailer, {
 			storeName: "Founding Store",
 			slug: "founding-store",
 			intent: "founding",
 		});
 
+		// 1 month free trial (vs 14 days), full Pro access, not frozen.
 		const access = await asA.query(api.subscriptions.current, {});
-		expect(access?.status).toBe("active");
+		expect(access?.status).toBe("trialing");
 		expect(access?.frozen).toBe(false);
 
-		// One pending Pro invoice at the discounted total, with the discount line.
-		const invoice = await t.run(async (ctx) => {
+		const { sub, invoiceCount } = await t.run(async (ctx) => {
 			const retailer = await ctx.db
 				.query("retailers")
 				.withIndex("by_slug", (q) => q.eq("slug", "founding-store"))
 				.first();
 			if (!retailer) throw new Error("no retailer");
-			return ctx.db
-				.query("invoices")
+			const sub = await ctx.db
+				.query("subscriptions")
 				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
 				.first();
+			const invoices = await ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.collect();
+			return { sub, invoiceCount: invoices.length };
 		});
-		expect(invoice?.status).toBe("pending");
-		expect(invoice?.total).toBe(10400); // RM104 founding
-		expect(invoice?.amount).toBe(14900); // RM149 base
-		expect(invoice?.foundingDiscount).toBe(4500);
-		expect(invoice?.dueDate).toBeGreaterThan(Date.now());
+		// 1 month free (~30 days) and flagged for the founding discount at conversion.
+		expect(sub?.trialEndsAt).toBeGreaterThan(before + 29 * 24 * 60 * 60 * 1000);
+		expect(sub?.foundingIntent).toBe(true);
+		// No auto-invoice — Arif issues it at conversion (monthly or annual).
+		expect(invoiceCount).toBe(0);
 	});
 });

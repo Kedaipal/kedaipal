@@ -248,17 +248,6 @@ function AdminBillingOverview() {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_DUE_DAYS = 14;
-
-function toDateInput(ms: number): string {
-	const d = new Date(ms);
-	const p = (n: number) => String(n).padStart(2, "0");
-	return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-function fromDateInput(value: string): number {
-	const [y, m, d] = value.split("-").map(Number);
-	return new Date(y, m - 1, d, 23, 59, 59, 999).getTime();
-}
 
 /**
  * Onboard a client on their behalf. A retailer is always owned 1:1 by the
@@ -274,7 +263,11 @@ function OnboardClientCard() {
 	const [slugEdited, setSlugEdited] = useState(false);
 	const [waPhone, setWaPhone] = useState("");
 	const [email, setEmail] = useState("");
+	const [founding, setFounding] = useState(false);
 	const [copied, setCopied] = useState(false);
+
+	const spotsRemaining = useQuery(api.foundingMembers.getSpotsRemaining, {});
+	const foundingAvailable = (spotsRemaining ?? 0) > 0;
 
 	// Mirror the onboarding form: derive the slug from the name until hand-edited,
 	// and check availability live so we never hand out a link to a taken slug.
@@ -308,6 +301,7 @@ function OnboardClientCard() {
 					storeName,
 					slug: derivedSlug,
 					waPhone,
+					founding: founding && foundingAvailable,
 				});
 
 	async function handleCopy() {
@@ -403,6 +397,24 @@ function OnboardClientCard() {
 				</label>
 			</div>
 
+			<label className="flex items-start gap-2.5 text-sm">
+				<input
+					type="checkbox"
+					checked={founding && foundingAvailable}
+					disabled={!foundingAvailable}
+					onChange={(e) => setFounding(e.target.checked)}
+					className="mt-0.5 size-4 disabled:opacity-50"
+				/>
+				<span>
+					<span className="font-medium">Founding Member</span>
+					<span className="block text-xs text-muted-foreground">
+						{foundingAvailable
+							? `1 month free (vs the 14-day trial), then their discounted Pro plan. ${spotsRemaining}/10 spots left.`
+							: "All 10 founding spots are taken."}
+					</span>
+				</span>
+			</label>
+
 			{ready && link ? (
 				<div className="flex flex-col gap-2 rounded-xl border border-dashed border-border bg-muted/30 p-3">
 					<p className="break-all font-mono text-xs text-muted-foreground">
@@ -458,10 +470,19 @@ function IssueInvoiceForm() {
 	const [plan, setPlan] = useState<"starter" | "pro">("pro");
 	const [cycle, setCycle] = useState<"monthly" | "annual">("monthly");
 	const [founding, setFounding] = useState(false);
-	const [dueDate, setDueDate] = useState(() =>
-		toDateInput(Date.now() + DEFAULT_DUE_DAYS * DAY_MS),
-	);
 	const [busy, setBusy] = useState(false);
+
+	const selected = retailers?.find((r) => r._id === retailerId);
+	const blocked = selected?.hasPending === true;
+	// Auto-apply (and lock) the founding discount when the store is already a
+	// Founding Member OR was onboarded as one (foundingIntent, still on the 1-month
+	// trial) — so the conversion/renewal invoice always carries their discount.
+	const isExistingFounding =
+		selected?.isFoundingMember === true || selected?.foundingIntent === true;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reset the founding toggle to the store's real status whenever the selection changes
+	useEffect(() => {
+		setFounding(isExistingFounding);
+	}, [retailerId]);
 
 	// Founding is Pro-only — flipping it on forces Pro.
 	const effectivePlan = founding ? "pro" : plan;
@@ -469,19 +490,17 @@ function IssueInvoiceForm() {
 	const total = planPrice(effectivePlan, cycle, founding);
 	const base = planPrice(effectivePlan, cycle, false);
 
-	const selected = retailers?.find((r) => r._id === retailerId);
-	const blocked = selected?.hasPending === true;
-
 	async function handleIssue() {
 		if (!retailerId) return;
 		setBusy(true);
 		try {
+			// No dueDate — the system sets it (issue + 14 days). The paid cycle
+			// starts at mark-paid.
 			await issue({
 				retailerId,
 				plan: effectivePlan,
 				billingCycle: cycle,
 				founding,
-				dueDate: fromDateInput(dueDate),
 			});
 			toast.success("Invoice issued — it's now in Pending below.");
 			setRetailerId("");
@@ -498,7 +517,7 @@ function IssueInvoiceForm() {
 			<AdminSectionHeading
 				icon={<FilePlus2 className="size-5" />}
 				title="Issue an invoice"
-				description="Choose a retailer, plan, billing cycle and due date. The amount is calculated automatically from the pricing rules."
+				description="Pick a retailer, plan and cycle — the amount and due date (14 days) are set automatically. The paid cycle starts when you mark it paid."
 				aside={
 					spotsRemaining !== undefined ? (
 						<span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">
@@ -583,29 +602,22 @@ function IssueInvoiceForm() {
 				<input
 					type="checkbox"
 					checked={founding}
+					disabled={isExistingFounding}
 					onChange={(e) => setFounding(e.target.checked)}
-					className="size-4"
+					className="size-4 disabled:opacity-60"
 				/>
 				<span>
 					<span className="font-medium">Founding Member invoice</span>
 					<span className="block text-xs text-muted-foreground">
-						Pro only · 30% lifetime discount · claims a rank when marked paid
-						{spotsRemaining === 0
-							? " (cohort full — no rank will be claimed)"
-							: ""}
+						{isExistingFounding
+							? "This store is a Founding Member — lifetime 30% discount applied automatically."
+							: `Pro only · 30% lifetime discount · claims a rank when marked paid${
+									spotsRemaining === 0
+										? " (cohort full — no rank will be claimed)"
+										: ""
+								}`}
 					</span>
 				</span>
-			</label>
-
-			<label className="flex flex-col gap-1 text-sm font-medium">
-				Due date
-				<Input
-					type="date"
-					value={dueDate}
-					onChange={(e) => setDueDate(e.target.value)}
-					variant="field"
-					className="w-full sm:w-fit"
-				/>
 			</label>
 
 			<div className="grid gap-4 rounded-2xl border border-accent/20 bg-accent/5 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">

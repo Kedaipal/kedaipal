@@ -166,8 +166,7 @@ import { rateLimiter } from "./lib/rateLimiter";
 import {
 	capsForPlan,
 	DAY_MS,
-	FOUNDING_MONTHLY_PRICE,
-	PLAN_MONTHLY_PRICE,
+	FOUNDING_TRIAL_DAYS,
 	TRIAL_DAYS,
 } from "./lib/plans";
 import {
@@ -593,17 +592,6 @@ export const checkEmailHasStore = query({
  * Race-safe: Convex mutations are serializable, so the read-then-insert pattern
  * cannot lose to a concurrent writer.
  */
-const PERIOD_DAYS = 30; // a monthly period for v1 (manual billing)
-
-/** Short, human-ish invoice number. Not strictly unique by construction, but the
- * random suffix makes collisions negligible at manual-billing volume. */
-function generateInvoiceNumber(now: number): string {
-	const d = new Date(now);
-	const ym = `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-	const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
-	return `INV-${ym}-${rand}`;
-}
-
 /**
  * Create the retailer's subscription in the SAME transaction as the retailer
  * insert. Public path → `trialing` (14d, Pro caps). Founding path → `active` +
@@ -617,36 +605,22 @@ async function createSubscriptionForRetailer(
 ): Promise<void> {
 	const caps = capsForPlan("pro"); // trial + founding both grant Pro-level access
 	if (intent === "founding") {
-		const subscriptionId = await ctx.db.insert("subscriptions", {
+		// Founding-10 perk: 1 month free (vs the standard 14-day trial), then a paid
+		// Pro plan. `foundingIntent` flags the store so the conversion invoice
+		// auto-applies the founding discount + claims the rank. No invoice yet —
+		// Arif issues it at conversion (and picks monthly or annual then).
+		await ctx.db.insert("subscriptions", {
 			retailerId,
 			plan: "pro",
 			billingCycle: "monthly",
-			status: "active",
-			currentPeriodStart: now,
-			currentPeriodEnd: now + PERIOD_DAYS * DAY_MS,
+			status: "trialing",
+			trialEndsAt: now + FOUNDING_TRIAL_DAYS * DAY_MS,
+			foundingIntent: true,
 			orderCap: caps.orderCap,
 			userCap: caps.userCap,
 			broadcastQuota: caps.broadcastQuota,
 			createdAt: now,
 			updatedAt: now,
-		});
-		// First invoice at the founding (discounted) price, with the discount shown
-		// as a line. dueDate drives the active→past_due overdue cron flip.
-		const base = PLAN_MONTHLY_PRICE.pro;
-		const total = FOUNDING_MONTHLY_PRICE.pro;
-		await ctx.db.insert("invoices", {
-			retailerId,
-			subscriptionId,
-			invoiceNumber: generateInvoiceNumber(now),
-			amount: base,
-			foundingDiscount: base - total,
-			total,
-			currency: "MYR",
-			periodStart: now,
-			periodEnd: now + PERIOD_DAYS * DAY_MS,
-			dueDate: now + TRIAL_DAYS * DAY_MS, // ~2 weeks to settle
-			status: "pending",
-			createdAt: now,
 		});
 		return;
 	}

@@ -302,8 +302,12 @@ const render: Record<
 	},
 };
 
-/** Trial emails — no invoice attached, so a separate (smaller) var shape. */
-export type TrialEmailKey = "trialEndingSoon" | "trialEnded";
+/** Retailer notices with no invoice attached (trial nudges + a lapsed-subscription
+ * notice), so a separate (smaller) var shape. */
+export type TrialEmailKey =
+	| "trialEndingSoon"
+	| "trialEnded"
+	| "subscriptionLapsed";
 
 export type TrialEmailVars = {
 	storeName: string;
@@ -339,6 +343,17 @@ const trialRender: Record<
 			const text = `🔒 Your Kedaipal free trial has ended\n${t.en.storeStaysLive}\nChoose a plan to continue.\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
+		subscriptionLapsed: (v) => {
+			const subject = "🔒 Your Kedaipal subscription has lapsed";
+			const lines = [
+				`Hi ${escapeHtml(v.storeName)}, your subscription period has ended and isn't renewed yet.`,
+				t.en.storeStaysLive,
+				"Message us to renew and we'll send your invoice.",
+			];
+			const html = wrapHtml("🔒", "Your subscription has lapsed", lines, v.billingUrl, t.en.choosePlan);
+			const text = `🔒 Your Kedaipal subscription has lapsed\n${t.en.storeStaysLive}\nMessage us to renew and we'll send your invoice.\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
 	},
 	ms: {
 		trialEndingSoon: (v) => {
@@ -362,6 +377,17 @@ const trialRender: Record<
 			];
 			const html = wrapHtml("🔒", "Percubaan percuma anda telah tamat", lines, v.billingUrl, t.ms.choosePlan);
 			const text = `🔒 Percubaan percuma Kedaipal anda telah tamat\n${t.ms.storeStaysLive}\nPilih pelan untuk terus.\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		subscriptionLapsed: (v) => {
+			const subject = "🔒 Langganan Kedaipal anda telah luput";
+			const lines = [
+				`Hai ${escapeHtml(v.storeName)}, tempoh langganan anda telah tamat dan belum diperbaharui.`,
+				t.ms.storeStaysLive,
+				"Hubungi kami untuk memperbaharui dan kami akan hantar bil anda.",
+			];
+			const html = wrapHtml("🔒", "Langganan anda telah luput", lines, v.billingUrl, t.ms.choosePlan);
+			const text = `🔒 Langganan Kedaipal anda telah luput\n${t.ms.storeStaysLive}\nHubungi kami untuk memperbaharui.\n\n${v.billingUrl}`;
 			return { subject, html, text };
 		},
 	},

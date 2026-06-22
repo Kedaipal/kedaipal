@@ -122,6 +122,8 @@ function OnboardingForm() {
 				storeName: storeName.trim(),
 				slug,
 				...(trimmedWa.length > 0 ? { waPhone: trimmedWa } : {}),
+				// Founding-10: 1 month free, then a discounted Pro plan.
+				...(prefill?.founding ? { intent: "founding" as const } : {}),
 			});
 			navigate({ to: "/app" });
 		} catch (err) {
@@ -157,9 +159,32 @@ function OnboardingForm() {
 				<div className="flex items-start gap-3 rounded-xl border border-accent/30 bg-accent/5 px-4 py-3 text-sm">
 					<Sparkles className="mt-0.5 size-4 shrink-0 text-accent" />
 					<p className="text-muted-foreground">
-						Kedaipal set this up for you. Review the details below and tap{" "}
-						<span className="font-medium text-foreground">Create store</span> —
-						you can change anything later in Settings.
+						{prefill?.founding ? (
+							<>
+								You're being set up as a{" "}
+								<span className="font-medium text-foreground">
+									Founding Member
+								</span>{" "}
+								—{" "}
+								<span className="font-medium text-foreground">
+									1 month free
+								</span>
+								, then your discounted Pro plan begins. Review the details and
+								tap{" "}
+								<span className="font-medium text-foreground">
+									Create store
+								</span>
+								.
+							</>
+						) : (
+							<>
+								Kedaipal set this up for you. Review the details below and tap{" "}
+								<span className="font-medium text-foreground">
+									Create store
+								</span>{" "}
+								— you can change anything later in Settings.
+							</>
+						)}
 					</p>
 				</div>
 			) : null}
