@@ -25,6 +25,7 @@ import {
 	PageHeaderSkeleton,
 } from "../components/dashboard/page-header";
 import { StorefrontQrDialog } from "../components/dashboard/storefront-qr-dialog";
+import { WhiteGloveCard } from "../components/dashboard/white-glove-card";
 import { ShopeeIcon } from "../components/icons/shopee-icon";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
@@ -289,6 +290,7 @@ function DashboardHome() {
 					</span>
 				}
 			/>
+			<WhiteGloveCard slug={retailer.slug} />
 			{/* Welcome banner — only for brand-new users */}
 			{isNew ? (
 				<section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-accent/20 via-accent/10 to-background p-6">
