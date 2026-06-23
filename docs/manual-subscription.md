@@ -19,15 +19,32 @@ A pending invoice is created in two ways:
    and **renewals**, and for onboarding a **Founding-10** member (founding toggle =
    30% Pro discount). Guards: rejects Scale (the v1 defense-in-depth home),
    founding-non-Pro, and a duplicate pending per retailer.
-2. **Founding-intent signup** — `createRetailer({ intent: "founding" })` auto-creates
-   one (kept for a future no-trial founding signup entry).
+2. **Founding-intent signup** — `createRetailer({ intent: "founding" })` reserves the
+   rank + flags `foundingIntent`, but issues **no** auto-invoice (Arif issues it).
 
-**⚠️ Rank vs. discount — important.** The Founding **rank** claims on a retailer's
-**first paid Pro invoice** (ticket-literal) — the `founding` toggle on the invoice
-controls the **30% discount**, NOT rank eligibility. So any Pro invoice paid while
-spots remain claims a rank; Starter never does; rank 11+ gets none. Operationally:
-**toggle founding ON for the first 10 Pro invoices** so those members also get the
-discount they're promised.
+**⚠️ A founding signup does NOT start the paid Pro plan (set 2026-06-23).** The PAID
+Pro subscription begins **only when Arif marks the founding invoice paid** (`markPaid`
+→ `status: "active"` + fresh period). Until then the founding member rides the **same
+14-day trial as everyone else** — `status: "trialing"` — and if that trial lapses
+before they pay, they're soft-locked exactly like any other unpaid trial. We never
+pre-activate Pro at onboard (that would be free service before money lands).
+
+**⚠️ Founding is EXPLICIT + RESERVED AT ONBOARD (changed 2026-06-23, supersedes the
+ticket-literal "claims on first paid Pro invoice").** Reserving a slot (rank assigned,
+`retailers.isFoundingMember`/`foundingMemberRank` set, badge live, counter ticks down)
+is SEPARATE from starting the paid plan — it happens at the moment founding is
+*designated*, while the paid plan waits for payment:
+- **Onboard** with the Founding toggle → `reserveFoundingRank` runs at **signup**
+  (so Arif can't over-commit past 10, and the badge shows from day one), but the sub
+  stays `trialing` until the founding invoice is paid.
+- **Promote** a standard vendor → a **founding invoice** (founding toggle on →
+  `foundingDiscount` set). Reserved when that invoice is **marked paid** (or at
+  signup if they were onboarded founding).
+
+A **plain Pro invoice never claims a rank** — founding must be deliberate. The
+`founding` toggle still controls the 30% discount; the issue form auto-applies it
+for `isFoundingMember || foundingIntent`. `paidAt`/`firstInvoiceId` on the
+`foundingMembers` row fill in when the first founding invoice is paid.
 
 ### Email notifications (capped, escalating — no spam)
 
@@ -48,6 +65,10 @@ prompt payer gets just the one "issued" email. Invoice creation + mark-paid stay
 1. **Ends in 3 days** — daily cron, once, deduped by `subscriptions.trialReminderSentAt`
    (`notifyTrialEmail "trialEndingSoon"`). "Choose a plan" — trials have no invoice.
 2. **Trial ended / locked** — on the trialing→past_due flip (`notifyTrialEmail "trialEnded"`).
+
+**On payment (positive, not dunning):** `markPaid` schedules `notifyPaymentReceived` — a
+**welcome** email on the retailer's first-ever paid invoice, a **thanks** on every renewal
+after (`renderPaymentEmail`, same logo'd shell, no how-to-pay). Separate from the dunning cap.
 
 All **fire-and-forget** (errors swallowed/logged), **localized** (en/ms). Invoice
 copy + trial copy in `convex/lib/billingEmailCopy.ts` (`renderBillingEmail` /
@@ -152,8 +173,12 @@ trial → `trialEnded`; period-lapse → `notifySubscriptionLapsed`).
 ## Issuing — system-set due date, cycle starts at payment
 
 The admin does **not** pick a due date. `issueInvoice` sets it to **issue + 14 days**
-(pay-by deadline). The actual paid **billing cycle** (`currentPeriodStart/End`) is set at
-**mark-paid** — so Pro only starts once payment lands, never at issue time. Founding members
+(pay-by deadline). The **billed plan + cycle live on the invoice** (`invoices.plan` /
+`billingCycle`), NOT the subscription — so issuing a Pro invoice to a Starter seller
+does **not** change their visible tier until they pay; `markPaid` reconciles the sub
+from the invoice. Voiding therefore leaves the tier untouched. The actual paid
+**billing cycle** (`currentPeriodStart/End`) is set at **mark-paid** — so Pro only
+starts once payment lands, never at issue time. Founding members
 auto-get their lifetime discount: the issue form detects `isFoundingMember` and force-applies
 (and locks) the founding toggle, so Arif can't accidentally bill them full price on a renewal.
 
@@ -178,22 +203,20 @@ storefront. **Order cap is SOFT** — a nudge in the dashboard, never a block on
 
 ## Signup paths (`createRetailer`)
 
-**Founding-10 members get 1 month free; everyone else gets the 14-day trial.** The admin
-onboard-a-client form has a **"Founding Member"** toggle (gated on spots remaining). When set,
-the invite link carries `founding: true` in its token → onboarding passes `intent: "founding"`
-→ a **30-day trial** + `foundingIntent: true` on the subscription (no auto-invoice). At
-conversion Arif issues the founding invoice (monthly **or** annual — picked in the issue form),
-which auto-applies the founding discount because the issue form reads `foundingIntent`. Pay →
-rank claims. Safe in the URL: the founding **rank** still only claims when the admin marks the
-invoice paid.
+**Founding-10 members get NO free trial** (they're paying Pro customers); regular signups get
+the 14-day trial. The admin onboard-a-client form has a **"Founding Member"** toggle (gated on
+spots remaining). When set, the invite link carries `founding: true` → onboarding passes
+`intent: "founding"` → an **active** sub (Pro caps, no trial) with a 14-day pay-by window, +
+`foundingIntent: true`. The slot is **reserved at signup** (rank assigned, badge live). Arif
+issues the founding invoice (monthly **or** annual — the issue form auto-applies the discount
+from `foundingIntent`); the paid cycle is confirmed at mark-paid.
 
 - **Public** (default / `intent: "public"`): `status: trialing`, `plan: pro`,
   `trialEndsAt = now + 14d`, Pro-level caps. Tier chosen at conversion.
-- **Founding** (`intent: "founding"`): `status: trialing`, `trialEndsAt = now + 30d`
-  (`FOUNDING_TRIAL_DAYS`, 1 month free), `foundingIntent: true`, Pro caps, **no invoice**.
-  The conversion invoice (issued by Arif, `founding` auto-applied) carries the RM104 founding
-  price + claims the rank on mark-paid. The 10-slot cap + mark-paid are the real rank gate,
-  so `intent` is not a privileged arg.
+- **Founding** (`intent: "founding"`): `status: active` (NO trial), `currentPeriodEnd =
+  now + 14d` (pay-by window, not free), `foundingIntent: true`, reserved rank, Pro caps,
+  **no invoice**. They set up their store; pay the founding invoice (RM104, monthly/annual) to
+  confirm the cycle. Unpaid within the window → lapse/overdue lock.
 
 ## Admin auth
 

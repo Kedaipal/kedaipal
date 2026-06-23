@@ -9,7 +9,9 @@ import type { Id } from "./_generated/dataModel";
 import { type ActionCtx, internalAction, internalQuery } from "./_generated/server";
 import {
 	type BillingEmailKey,
+	type PaymentEmailKey,
 	renderBillingEmail,
+	renderPaymentEmail,
 	renderTrialEmail,
 	type TrialEmailKey,
 } from "./lib/billingEmailCopy";
@@ -214,6 +216,8 @@ export const sendSampleBillingEmail = internalAction({
 			v.literal("invoiceOverdue"),
 			v.literal("trialEndingSoon"),
 			v.literal("trialEnded"),
+			v.literal("welcome"),
+			v.literal("thanks"),
 		),
 		locale: v.optional(v.union(v.literal("en"), v.literal("ms"))),
 		founding: v.optional(v.boolean()),
@@ -225,13 +229,20 @@ export const sendSampleBillingEmail = internalAction({
 		const loc: Locale = locale ?? "en";
 		const url = billingPageUrl();
 		const rendered =
-			key === "trialEndingSoon" || key === "trialEnded"
-				? renderTrialEmail(loc, key, {
+			key === "welcome" || key === "thanks"
+				? renderPaymentEmail(loc, key, {
 						storeName: "Sample Store",
-						billingUrl: url,
-						daysLeft: 3,
+						planLabel: "Pro · Monthly",
+						totalFormatted: founding ? "MYR 104.00" : "MYR 149.00",
+						dashboardUrl: url,
 					})
-				: renderBillingEmail(loc, key, {
+				: key === "trialEndingSoon" || key === "trialEnded"
+					? renderTrialEmail(loc, key, {
+							storeName: "Sample Store",
+							billingUrl: url,
+							daysLeft: 3,
+						})
+					: renderBillingEmail(loc, key, {
 						storeName: "Sample Store",
 						invoiceNumber: "INV-202607-SAMPLE",
 						planLabel: "Pro · Monthly",
@@ -298,6 +309,40 @@ export const notifyTrialEmail = internalAction({
 	},
 	handler: async (ctx, { retailerId, key, daysLeft }): Promise<void> => {
 		await sendRetailerNotice(ctx, retailerId, key, daysLeft);
+	},
+});
+
+/** Scheduled by invoices.markPaid — a "welcome" on the retailer's first-ever
+ * payment, a "thanks" on every renewal after. Same logo'd template. */
+export const notifyPaymentReceived = internalAction({
+	args: { invoiceId: v.id("invoices"), firstTime: v.boolean() },
+	handler: async (ctx, { invoiceId, firstTime }): Promise<void> => {
+		let meta: InvoiceEmailMeta | null = null;
+		try {
+			meta = await ctx.runQuery(internal.billingEmail.getInvoiceForEmail, {
+				invoiceId,
+			});
+		} catch (err) {
+			console.error("Payment-received email lookup failed", err);
+			return;
+		}
+		if (!meta || !meta.notifyEmail) return;
+		const key: PaymentEmailKey = firstTime ? "welcome" : "thanks";
+		const { subject, html, text } = renderPaymentEmail(meta.locale, key, {
+			storeName: meta.storeName,
+			planLabel: planLabel(meta.plan, meta.billingCycle),
+			totalFormatted: formatMoney(meta.total, meta.currency),
+			dashboardUrl: billingPageUrl(),
+		});
+		try {
+			await sendEmail(meta.notifyEmail, subject, html, text);
+		} catch (err) {
+			console.error(
+				`Payment-received email failed (${meta.invoiceNumber}): ${
+					err instanceof Error ? err.message : String(err)
+				}`,
+			);
+		}
 	},
 });
 

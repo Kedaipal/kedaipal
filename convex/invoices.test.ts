@@ -44,9 +44,10 @@ afterEach(() => {
 
 const asAdmin = (t: ReturnType<typeof setup>) => t.withIdentity({ subject: ADMIN });
 
-// A retailer at founding conversion: active sub + a pending founding invoice
-// (built directly so it doesn't depend on the signup path, which now gives
-// founding members a 1-month trial with no auto-invoice).
+// A founding member awaiting their first payment: still on the 14-day TRIAL (the
+// real founding-onboard state — the paid Pro plan only starts at mark-paid) with a
+// pending founding invoice. Built directly so it doesn't depend on the admin
+// issue-invoice path, letting markPaid prove the trialing → active transition.
 async function seedFounding(
 	t: ReturnType<typeof setup>,
 	userId: string,
@@ -70,11 +71,9 @@ async function seedFounding(
 		if (!sub) throw new Error("no sub");
 		const now = Date.now();
 		const month = 30 * 24 * 60 * 60 * 1000;
-		await ctx.db.patch(sub._id, {
-			status: "active",
-			currentPeriodStart: now,
-			currentPeriodEnd: now + month,
-		});
+		// Leave the sub on its signup trial (status "trialing", foundingIntent flagged) —
+		// markPaid is what flips it to active.
+		await ctx.db.patch(sub._id, { foundingIntent: true });
 		const invoiceId = await ctx.db.insert("invoices", {
 			retailerId: r._id,
 			subscriptionId: sub._id,
@@ -110,6 +109,9 @@ describe("invoices.markPaid", () => {
 	test("founding invoice → paid + active + rank 1 + badge", async () => {
 		const t = setup();
 		const { retailerId, invoiceId } = await seedFounding(t, "u1", "store-1");
+
+		// Precondition: the founding member is on the trial, NOT yet a paid Pro.
+		expect((await getSubFor(t, retailerId))?.status).toBe("trialing");
 
 		const res = await asAdmin(t).mutation(api.invoices.markPaid, {
 			invoiceId,
@@ -288,7 +290,7 @@ describe("invoices.issueInvoice", () => {
 		expect(inv?.dueDate).toBeLessThan(before + 15 * 24 * 60 * 60 * 1000);
 	});
 
-	test("issues a standard Pro invoice; founding toggle = discount only (rank is first-paid-Pro)", async () => {
+	test("a STANDARD Pro invoice claims NO founding rank — founding must be explicit", async () => {
 		const t = setup();
 		const { asUser, retailerId } = await seedPublic(t, "u1", "store-1");
 		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
@@ -302,15 +304,32 @@ describe("invoices.issueInvoice", () => {
 		expect(inv?.status).toBe("pending");
 		expect(inv?.total).toBe(14900); // standard Pro, no discount
 		expect(inv?.foundingDiscount).toBeUndefined();
+		expect(inv?.plan).toBe("pro"); // billed plan lives on the invoice now
 
-		// Shows on the retailer's billing page.
 		const mine = await asUser.query(api.invoices.myInvoices, {});
 		expect(mine.some((i) => i._id === invoiceId)).toBe(true);
 
-		// Per the ticket, the RANK claims on the first paid Pro invoice regardless
-		// of the discount toggle — the founding toggle only controls the price.
+		// Founding is now reserved at onboard or via a FOUNDING invoice — a plain
+		// Pro upgrade never consumes a slot.
+		const res = await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId });
+		expect(res.rank).toBeNull();
+		expect((await getRetailer(t, retailerId))?.isFoundingMember).toBeUndefined();
+	});
+
+	test("a FOUNDING invoice (founding toggle on) claims the rank when marked paid", async () => {
+		const t = setup();
+		const { retailerId } = await seedPublic(t, "u_fnd", "fnd-store");
+		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: true,
+			dueDate: due(),
+		});
+		expect((await getInvoice(t, invoiceId))?.foundingDiscount).toBe(4500);
 		const res = await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId });
 		expect(res.rank).toBe(1);
+		expect((await getRetailer(t, retailerId))?.isFoundingMember).toBe(true);
 	});
 
 	test("Starter invoice never claims a rank", async () => {
@@ -534,7 +553,7 @@ describe("daily billing cron", () => {
 				storeName: "Trial Store",
 				slug: "trial-store",
 			});
-		// A founding (active) retailer whose invoice is overdue.
+		// A founding retailer who already converted (active) whose renewal invoice is overdue.
 		const { retailerId: foundingId } = await seedFounding(t, "u_f", "f-store");
 
 		await t.run(async (ctx) => {
@@ -548,7 +567,12 @@ describe("daily billing cron", () => {
 				.withIndex("by_retailer", (q) => q.eq("retailerId", tr!._id))
 				.first();
 			await ctx.db.patch(trialSub!._id, { trialEndsAt: Date.now() - 1000 });
-			// Make the founding invoice overdue.
+			// The founding store has converted (active); make its invoice overdue.
+			const fSub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", foundingId))
+				.first();
+			await ctx.db.patch(fSub!._id, { status: "active" });
 			const inv = await ctx.db
 				.query("invoices")
 				.withIndex("by_retailer", (q) => q.eq("retailerId", foundingId))
@@ -672,13 +696,17 @@ describe("daily billing cron", () => {
 	test("does NOT lapse-lock while a pending invoice still gives grace", async () => {
 		const t = setup();
 		const { retailerId } = await seedFounding(t, "u_grace", "grace-store");
-		// Period ended, but the founding invoice is still pending + due in the future.
+		// A converted (active) vendor: period ended, but the invoice is still pending +
+		// due in the future, so grace holds.
 		await t.run(async (ctx) => {
 			const sub = await ctx.db
 				.query("subscriptions")
 				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 				.first();
-			await ctx.db.patch(sub!._id, { currentPeriodEnd: Date.now() - 1000 });
+			await ctx.db.patch(sub!._id, {
+				status: "active",
+				currentPeriodEnd: Date.now() - 1000,
+			});
 		});
 
 		const res = await t.mutation(

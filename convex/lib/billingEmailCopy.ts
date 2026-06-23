@@ -401,6 +401,76 @@ export function renderTrialEmail(
 	return trialRender[locale][key](vars);
 }
 
+/** Payment-received emails — sent when an admin marks an invoice paid. `welcome`
+ * for a retailer's first-ever payment, `thanks` for a renewal. No invoice/pay
+ * panel (it's already settled) — same logo'd shell as the rest. */
+export type PaymentEmailKey = "welcome" | "thanks";
+
+export type PaymentEmailVars = {
+	storeName: string;
+	planLabel: string; // e.g. "Pro · Monthly"
+	totalFormatted: string; // e.g. "MYR 104.00"
+	dashboardUrl: string;
+};
+
+const paymentRender: Record<
+	Locale,
+	Record<PaymentEmailKey, (v: PaymentEmailVars) => RenderedEmail>
+> = {
+	en: {
+		welcome: (v) => {
+			const subject = `🎉 Welcome to Kedaipal ${v.planLabel.split(" ")[0]}`;
+			const lines = [
+				`Hi ${escapeHtml(v.storeName)}, your payment landed — your <strong>${escapeHtml(v.planLabel)}</strong> plan is now active.`,
+				`Welcome aboard, and thank you for choosing Kedaipal. Here's to growing your store.`,
+			];
+			const html = wrapHtml("🎉", "Payment received — welcome!", lines, v.dashboardUrl, "Open dashboard");
+			const text = `🎉 Welcome to Kedaipal\nYour payment landed — your ${v.planLabel} plan is now active.\nThank you for choosing Kedaipal.\n\n${v.dashboardUrl}`;
+			return { subject, html, text };
+		},
+		thanks: (v) => {
+			const subject = "🙏 Thanks for your payment";
+			const lines = [
+				`Hi ${escapeHtml(v.storeName)}, we've received your <strong>${escapeHtml(v.planLabel)}</strong> payment of ${escapeHtml(v.totalFormatted)}.`,
+				`Thanks for your continued support — it genuinely means a lot.`,
+			];
+			const html = wrapHtml("🙏", "Payment received — thank you", lines, v.dashboardUrl, "Open dashboard");
+			const text = `🙏 Thanks for your payment\nWe've received your ${v.planLabel} payment of ${v.totalFormatted}.\nThanks for your continued support.\n\n${v.dashboardUrl}`;
+			return { subject, html, text };
+		},
+	},
+	ms: {
+		welcome: (v) => {
+			const subject = `🎉 Selamat datang ke Kedaipal ${v.planLabel.split(" ")[0]}`;
+			const lines = [
+				`Hai ${escapeHtml(v.storeName)}, pembayaran anda telah diterima — pelan <strong>${escapeHtml(v.planLabel)}</strong> anda kini aktif.`,
+				`Selamat menyertai, dan terima kasih kerana memilih Kedaipal. Semoga kedai anda terus berkembang.`,
+			];
+			const html = wrapHtml("🎉", "Pembayaran diterima — selamat datang!", lines, v.dashboardUrl, "Buka dashboard");
+			const text = `🎉 Selamat datang ke Kedaipal\nPembayaran anda telah diterima — pelan ${v.planLabel} anda kini aktif.\nTerima kasih kerana memilih Kedaipal.\n\n${v.dashboardUrl}`;
+			return { subject, html, text };
+		},
+		thanks: (v) => {
+			const subject = "🙏 Terima kasih atas pembayaran anda";
+			const lines = [
+				`Hai ${escapeHtml(v.storeName)}, kami telah menerima pembayaran <strong>${escapeHtml(v.planLabel)}</strong> anda sebanyak ${escapeHtml(v.totalFormatted)}.`,
+				`Terima kasih atas sokongan berterusan anda — ia amat bermakna.`,
+			];
+			const html = wrapHtml("🙏", "Pembayaran diterima — terima kasih", lines, v.dashboardUrl, "Buka dashboard");
+			const text = `🙏 Terima kasih atas pembayaran anda\nKami telah menerima pembayaran ${v.planLabel} anda sebanyak ${v.totalFormatted}.\nTerima kasih atas sokongan anda.\n\n${v.dashboardUrl}`;
+			return { subject, html, text };
+		},
+	},
+};
+
+export function renderPaymentEmail(
+	locale: Locale,
+	key: PaymentEmailKey,
+	vars: PaymentEmailVars,
+): RenderedEmail {
+	return paymentRender[locale][key](vars);
+}
+
 export function renderBillingEmail(
 	locale: Locale,
 	key: BillingEmailKey,

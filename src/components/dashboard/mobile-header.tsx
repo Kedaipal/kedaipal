@@ -30,6 +30,7 @@ export function MobileHeader({ retailer }: MobileHeaderProps) {
 						</span>
 						<TierPill
 							subscription={retailer.subscription}
+							foundingRank={retailer.foundingMemberRank}
 							compact
 							className="py-0 text-[9px]"
 						/>

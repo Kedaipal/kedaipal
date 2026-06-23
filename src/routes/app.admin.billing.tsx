@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import {
+	Award,
 	Banknote,
 	CalendarClock,
 	Check,
@@ -133,6 +134,7 @@ function AdminBillingContent() {
 					<OnboardClientCard />
 					<IssueInvoiceForm />
 					<PendingInvoices />
+					<FoundingMembersList />
 				</div>
 			) : (
 				<PaymentConfigForm />
@@ -409,7 +411,7 @@ function OnboardClientCard() {
 					<span className="font-medium">Founding Member</span>
 					<span className="block text-xs text-muted-foreground">
 						{foundingAvailable
-							? `1 month free (vs the 14-day trial), then their discounted Pro plan. ${spotsRemaining}/10 spots left.`
+							? `Reserves a founding rank + the lifetime discount. Starts on the normal 14-day trial; Pro begins once they pay the founding invoice. ${spotsRemaining}/10 spots left.`
 							: "All 10 founding spots are taken."}
 					</span>
 				</span>
@@ -456,6 +458,33 @@ function SlugHint({
 	return <p className="text-xs text-destructive">✗ {message}</p>;
 }
 
+const STATUS_LABEL: Record<string, string> = {
+	trialing: "Trial",
+	active: "Active",
+	past_due: "Past due",
+	cancelled: "Cancelled",
+};
+
+/** Human-readable dropdown label: "Mak Kuih (/mak-kuih) · Pro · Trial · Founding · has pending". */
+function retailerOptionLabel(r: {
+	storeName: string;
+	slug: string;
+	status?: string;
+	plan?: string;
+	isFoundingMember: boolean;
+	foundingIntent: boolean;
+	hasPending: boolean;
+}): string {
+	const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+	const parts = [`${r.storeName} (/${r.slug})`];
+	if (r.plan) parts.push(cap(r.plan));
+	if (r.status) parts.push(STATUS_LABEL[r.status] ?? cap(r.status));
+	if (r.isFoundingMember) parts.push("Founding");
+	else if (r.foundingIntent) parts.push("Founding (trial)");
+	if (r.hasPending) parts.push("has pending");
+	return parts.join(" · ");
+}
+
 /**
  * Issue a pending invoice — covers standard conversions/renewals AND onboarding a
  * Founding-10 member (founding toggle). Built for minimal typing: amount is
@@ -475,7 +504,7 @@ function IssueInvoiceForm() {
 	const selected = retailers?.find((r) => r._id === retailerId);
 	const blocked = selected?.hasPending === true;
 	// Auto-apply (and lock) the founding discount when the store is already a
-	// Founding Member OR was onboarded as one (foundingIntent, still on the 1-month
+	// Founding Member OR was onboarded as one (foundingIntent, still on the 14-day
 	// trial) — so the conversion/renewal invoice always carries their discount.
 	const isExistingFounding =
 		selected?.isFoundingMember === true || selected?.foundingIntent === true;
@@ -537,9 +566,7 @@ function IssueInvoiceForm() {
 					<option value="">Select a store…</option>
 					{retailers?.map((r) => (
 						<option key={r._id} value={r._id}>
-							{r.storeName} (/{r.slug}){r.status ? ` · ${r.status}` : ""}
-							{r.isFoundingMember ? " · founding" : ""}
-							{r.hasPending ? " · has pending" : ""}
+							{retailerOptionLabel(r)}
 						</option>
 					))}
 				</select>
@@ -843,6 +870,94 @@ function PendingInvoices() {
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
+		</AdminCard>
+	);
+}
+
+function foundingStatus(m: { status?: string; paid: boolean }): {
+	label: string;
+	className: string;
+} {
+	if (m.status === "past_due")
+		return {
+			label: "Past due",
+			className: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
+		};
+	if (m.paid && m.status === "active")
+		return {
+			label: "Active",
+			className:
+				"bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+		};
+	if (m.status === "trialing")
+		return {
+			label: "Pending payment",
+			className:
+				"bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
+		};
+	return {
+		label: m.status ?? "—",
+		className: "bg-muted text-muted-foreground",
+	};
+}
+
+function FoundingMembersList() {
+	const members = useQuery(api.foundingMembers.listForAdmin, {});
+	const spotsRemaining = useQuery(api.foundingMembers.getSpotsRemaining, {});
+
+	return (
+		<AdminCard>
+			<AdminSectionHeading
+				icon={<Award className="size-5" />}
+				title="Founding members"
+				description="The 10-slot cohort — who's reserved and where they are in the pay cycle."
+				aside={
+					spotsRemaining !== undefined ? (
+						<span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+							{10 - spotsRemaining}/10 claimed
+						</span>
+					) : null
+				}
+			/>
+			{members === undefined ? (
+				<Skeleton className="h-16 w-full rounded-xl" />
+			) : members.length === 0 ? (
+				<p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
+					No founding members yet — onboard one with the Founding toggle, or
+					tick Founding when issuing an invoice.
+				</p>
+			) : (
+				<ul className="flex flex-col gap-2">
+					{members.map((m) => {
+						const s = foundingStatus(m);
+						return (
+							<li
+								key={m.rank}
+								className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-background p-3"
+							>
+								<div className="flex min-w-0 items-center gap-2.5">
+									<span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-amber-100 text-xs font-bold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+										#{m.rank}
+									</span>
+									<span className="min-w-0">
+										<span className="block truncate text-sm font-semibold">
+											{m.storeName}
+										</span>
+										<span className="font-mono text-xs text-muted-foreground">
+											/{m.slug}
+										</span>
+									</span>
+								</div>
+								<span
+									className={`rounded-full px-2.5 py-1 text-xs font-medium ${s.className}`}
+								>
+									{s.label}
+								</span>
+							</li>
+						);
+					})}
+				</ul>
+			)}
 		</AdminCard>
 	);
 }
