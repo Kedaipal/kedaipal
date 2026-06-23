@@ -27,7 +27,7 @@ import { Button } from "../components/ui/button";
 import { CopyButton } from "../components/ui/copy-button";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
-import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
+import { getConvexHttpClient } from "../lib/convex-server";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import {
 	deriveMapsUrl,
@@ -61,19 +61,19 @@ function getPaymentConfig(status: PaymentStatus): PaymentCfg {
 				label: "Payment Confirmed",
 				icon: <BadgeCheck className="size-5" />,
 				tone: "border-emerald-200 bg-emerald-50 text-emerald-700",
-			};
+			}
 		case "claimed":
 			return {
 				label: "Payment Submitted",
 				icon: <Hourglass className="size-5" />,
 				tone: "border-blue-200 bg-blue-50 text-blue-700",
-			};
+			}
 		default:
 			return {
 				label: "Payment Unpaid",
 				icon: <HandCoins className="size-5" />,
 				tone: "border-amber-200 bg-amber-50 text-amber-800",
-			};
+			}
 	}
 }
 
@@ -89,21 +89,24 @@ function formatRelativeTime(epochMs: number | undefined): string {
 	return `${Math.floor(diff / day)}d ago`;
 }
 
-export const Route = createFileRoute("/track/$shortId")({
+export const Route = createFileRoute("/track/$token")({
 	loader: async ({ params }) => {
 		const client = getConvexHttpClient();
 		const order = await client.query(api.orders.get, {
-			shortId: params.shortId,
+			token: params.token,
 		});
 		if (!order) throw notFound();
-		return { shortId: params.shortId };
+		// Surface only the human-readable shortId to the page head — never echo the
+		// secret token into a title/canonical that could leak via referrer/history.
+		return { shortId: order.shortId };
 	},
-	head: ({ params }) => ({
+	head: ({ loaderData }) => ({
 		meta: [
-			{ title: `Order ${params.shortId} — Kedaipal` },
+			{ title: `Order ${loaderData?.shortId ?? ""} — Kedaipal` },
+			// noindex + no canonical: the URL carries a capability token, so it must
+			// never be indexed or advertised.
 			{ name: "robots", content: "noindex" },
 		],
-		links: [{ rel: "canonical", href: `${SITE_URL}/track/${params.shortId}` }],
 	}),
 	notFoundComponent: OrderNotFound,
 	component: TrackingRoute,
@@ -159,20 +162,21 @@ function getStatusConfig(
 			icon: <XCircle className="size-5" />,
 			color: "text-destructive",
 		},
-	};
+	}
 }
 
 function OrderNotFound() {
-	const { shortId } = Route.useParams();
+	// Intentionally does NOT echo the URL token — it's a capability, and the link
+	// may simply be stale. Keep the message generic.
 	return (
 		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-3 px-5 text-center">
 			<h1 className="text-2xl font-bold">Order not found</h1>
 			<p className="text-sm text-muted-foreground">
-				No order with ID{" "}
-				<span className="font-mono font-semibold">{shortId}</span>.
+				This tracking link is invalid or has expired. Please use the latest
+				link from your WhatsApp chat with the store.
 			</p>
 		</main>
-	);
+	)
 }
 
 function TrackingSkeleton() {
@@ -226,12 +230,12 @@ function TrackingSkeleton() {
 				<Skeleton className="h-10 w-full rounded-xl" />
 			</section>
 		</main>
-	);
+	)
 }
 
 function TrackingRoute() {
-	const { shortId } = Route.useParams();
-	const order = useQuery(api.orders.get, { shortId });
+	const { token } = Route.useParams();
+	const order = useQuery(api.orders.get, { token });
 	// Only subscribe to payment methods when the "How to pay" section can actually
 	// render. Skipping for cancelled / already-paid / mockup-gated orders avoids a
 	// second order+retailer read+subscription on this hot public path. (Kept a
@@ -244,8 +248,8 @@ function TrackingRoute() {
 		!isMockupGateClosed(order);
 	const paymentMethods = useQuery(
 		api.orders.getPaymentMethods,
-		showPaymentSection ? { shortId } : "skip",
-	);
+		showPaymentSection ? { token } : "skip",
+	)
 	const [editingAddress, setEditingAddress] = useState(false);
 	const [claimingPayment, setClaimingPayment] = useState(false);
 
@@ -262,7 +266,7 @@ function TrackingRoute() {
 		deliveryMethod,
 		order.statusLabels,
 		order.retailerLocale,
-	);
+	)
 	const config = statusConfig[order.status];
 	const isCancelled = order.status === "cancelled";
 	const canEditAddress = order.status === "pending" && !isSelfCollect;
@@ -292,7 +296,7 @@ function TrackingRoute() {
 	const quoteLineIdx =
 		customQuote > 0 && mockupGateOpen && zeroPricedLineIdx.length === 1
 			? zeroPricedLineIdx[0]
-			: null;
+			: null
 	const showCustomWorkLine = customQuote > 0 && quoteLineIdx === null;
 
 	// Phase 2: the timeline IS the seller's full ordered stage list (their config,
@@ -305,14 +309,14 @@ function TrackingRoute() {
 		orderStages: order.orderStages,
 		labels: order.statusLabels,
 		deliveryMethod,
-	});
+	})
 	const currentStage = resolveCurrentStage(
 		{ status: order.status, currentStageId: order.currentStageId },
 		stages,
-	);
+	)
 	const stageIdx = currentStage
 		? stages.findIndex((s) => s.id === currentStage.id)
-		: -1;
+		: -1
 	// Combined position into the rendered list: 0 = pending node, 1..N = stages.
 	const currentPos =
 		order.status === "pending" ? 0 : stageIdx >= 0 ? stageIdx + 1 : 0;
@@ -332,7 +336,7 @@ function TrackingRoute() {
 			isDone: true, // any order on this page has at least been received
 			isCurrent: currentPos === 0,
 		},
-	];
+	]
 	for (const [i, stage] of stages.entries()) {
 		const pos = i + 1;
 		timelineNodes.push({
@@ -343,7 +347,7 @@ function TrackingRoute() {
 				pos === currentPos ? stageDescription(stage, stageLocale) : undefined,
 			isDone: pos <= currentPos,
 			isCurrent: pos === currentPos,
-		});
+		})
 	}
 	if (order.mockupStatus !== undefined) {
 		// While the gate is closed the mockup is the active step, not the stage.
@@ -352,7 +356,7 @@ function TrackingRoute() {
 		}
 		const firstProd = stages.findIndex(
 			(s) => anchorOrdinal(s.anchor) >= anchorOrdinal("packed"),
-		);
+		)
 		const insertAt = firstProd >= 0 ? firstProd + 1 : timelineNodes.length;
 		timelineNodes.splice(insertAt, 0, {
 			key: "mockup",
@@ -366,7 +370,7 @@ function TrackingRoute() {
 			icon: <ImageIcon className="size-5" />,
 			isDone: mockupGateOpen,
 			isCurrent: mockupGateClosed && currentPos >= 1,
-		});
+		})
 	}
 
 	return (
@@ -521,7 +525,7 @@ function TrackingRoute() {
 								<div className="flex flex-col items-center gap-1.5">
 									<ZoomableImage
 										src={m.qrImageUrl}
-										alt={`${m.label} QR code`}
+										alt={"${m.label} QR code"}
 										caption={m.label}
 										className="max-h-56 w-auto rounded-lg border border-border bg-white"
 									/>
@@ -542,7 +546,7 @@ function TrackingRoute() {
 
 			{/* Mockup approval — buyer reviews the seller's proof before production. */}
 			{!isCancelled && order.mockupStatus !== undefined ? (
-				<MockupReview shortId={order.shortId} order={order} />
+				<MockupReview token={token} order={order} />
 			) : null}
 
 			{/* Progress timeline — not shown for cancelled orders */}
@@ -662,7 +666,7 @@ function TrackingRoute() {
 								<MapPin className="size-3.5" />
 								Open pinned location
 							</a>
-						) : null;
+						) : null
 					})()}
 					{!canEditAddress ? (
 						<p className="text-xs text-muted-foreground">
@@ -685,7 +689,7 @@ function TrackingRoute() {
 			<AddressEditDialog
 				open={editingAddress}
 				onClose={() => setEditingAddress(false)}
-				shortId={order.shortId}
+				token={token}
 				currentAddress={order.deliveryAddress}
 				retailerId={order.retailerId}
 			/>
@@ -693,6 +697,7 @@ function TrackingRoute() {
 			<IvePaidDialog
 				open={claimingPayment}
 				onClose={() => setClaimingPayment(false)}
+				token={token}
 				shortId={order.shortId}
 				hasExistingClaim={paymentStatus === "claimed"}
 			/>
@@ -712,7 +717,7 @@ function TrackingRoute() {
 							: item.price * item.quantity;
 						const unitPrice = isQuoteLine
 							? customQuote / item.quantity
-							: item.price;
+							: item.price
 						return (
 							<li
 								key={item.variantId ?? `${item.productId}-${i}`}
@@ -735,7 +740,7 @@ function TrackingRoute() {
 									{formatPrice(lineTotal, order.currency)}
 								</p>
 							</li>
-						);
+						)
 					})}
 				</ul>
 				{showCustomWorkLine ? (
@@ -770,7 +775,7 @@ function TrackingRoute() {
 				</section>
 			) : null}
 		</main>
-	);
+	)
 }
 
 /**
@@ -820,7 +825,7 @@ function PickupNavButtons({
 					Open in Google Maps
 				</a>
 			</div>
-		);
+		)
 	}
 	// PlaceId without coords → Google only (Waze can't navigate without lat/lng).
 	if (googleUrl) {
@@ -834,7 +839,7 @@ function PickupNavButtons({
 				<ExternalLink className="size-3.5" />
 				Open in Google Maps
 			</a>
-		);
+		)
 	}
 	// Legacy snapshot with only a retailer-pasted maps link.
 	if (snapshot.mapsUrl) {
@@ -848,7 +853,7 @@ function PickupNavButtons({
 				<ExternalLink className="size-3.5" />
 				Open in maps
 			</a>
-		);
+		)
 	}
 	return null;
 }
@@ -859,16 +864,16 @@ type TrackedOrder = NonNullable<
 
 /** Buyer-facing mockup review: approve or request changes on the seller's proof. */
 function MockupReview({
-	shortId,
+	token,
 	order,
 }: {
-	shortId: string;
+	token: string;
 	order: TrackedOrder;
 }) {
 	const approve = useMutation(api.orders.approveMockup);
 	const requestChanges = useMutation(api.orders.requestMockupChanges);
 	const declineItem = useMutation(api.orders.declineMockupItem);
-	const mockupUrls = useQuery(api.orders.getMockupUrls, { shortId });
+	const mockupUrls = useQuery(api.orders.getMockupUrls, { token });
 	const [note, setNote] = useState("");
 	const [showNote, setShowNote] = useState(false);
 	const [confirmDecline, setConfirmDecline] = useState(false);
@@ -880,7 +885,7 @@ function MockupReview({
 	async function handleApprove() {
 		setBusy(true);
 		try {
-			await approve({ shortId });
+			await approve({ token });
 			toast.success("Mockup approved — thank you!");
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -892,7 +897,7 @@ function MockupReview({
 	async function handleDecline() {
 		setBusy(true);
 		try {
-			await declineItem({ shortId });
+			await declineItem({ token });
 			toast.success("Custom item removed from your order");
 			setConfirmDecline(false);
 		} catch (err) {
@@ -905,7 +910,7 @@ function MockupReview({
 	async function handleRequestChanges() {
 		setBusy(true);
 		try {
-			await requestChanges({ shortId, note: note.trim() || undefined });
+			await requestChanges({ token, note: note.trim() || undefined });
 			toast.success("Sent — the seller will update your mockup");
 			setShowNote(false);
 			setNote("");
@@ -1086,5 +1091,5 @@ function MockupReview({
 				)
 			) : null}
 		</section>
-	);
+	)
 }

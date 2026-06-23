@@ -20,7 +20,7 @@ import { Route as AcceptableUseRouteImport } from './routes/acceptable-use'
 import { Route as SlugRouteImport } from './routes/$slug'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppIndexRouteImport } from './routes/app.index'
-import { Route as TrackShortIdRouteImport } from './routes/track.$shortId'
+import { Route as TrackTokenRouteImport } from './routes/track.$token'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as AppSettingsRouteImport } from './routes/app.settings'
@@ -89,9 +89,9 @@ const AppIndexRoute = AppIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppRoute,
 } as any)
-const TrackShortIdRoute = TrackShortIdRouteImport.update({
-  id: '/track/$shortId',
-  path: '/track/$shortId',
+const TrackTokenRoute = TrackTokenRouteImport.update({
+  id: '/track/$token',
+  path: '/track/$token',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SignUpSplatRoute = SignUpSplatRouteImport.update({
@@ -169,7 +169,7 @@ export interface FileRoutesByFullPath {
   '/app/settings': typeof AppSettingsRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
-  '/track/$shortId': typeof TrackShortIdRoute
+  '/track/$token': typeof TrackTokenRoute
   '/app/': typeof AppIndexRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
   '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
@@ -194,7 +194,7 @@ export interface FileRoutesByTo {
   '/app/settings': typeof AppSettingsRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
-  '/track/$shortId': typeof TrackShortIdRoute
+  '/track/$token': typeof TrackTokenRoute
   '/app': typeof AppIndexRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
   '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
@@ -221,7 +221,7 @@ export interface FileRoutesById {
   '/app/settings': typeof AppSettingsRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
-  '/track/$shortId': typeof TrackShortIdRoute
+  '/track/$token': typeof TrackTokenRoute
   '/app/': typeof AppIndexRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
   '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
@@ -249,7 +249,7 @@ export interface FileRouteTypes {
     | '/app/settings'
     | '/sign-in/$'
     | '/sign-up/$'
-    | '/track/$shortId'
+    | '/track/$token'
     | '/app/'
     | '/app/admin/billing'
     | '/app/customers/$customerId'
@@ -274,7 +274,7 @@ export interface FileRouteTypes {
     | '/app/settings'
     | '/sign-in/$'
     | '/sign-up/$'
-    | '/track/$shortId'
+    | '/track/$token'
     | '/app'
     | '/app/admin/billing'
     | '/app/customers/$customerId'
@@ -300,7 +300,7 @@ export interface FileRouteTypes {
     | '/app/settings'
     | '/sign-in/$'
     | '/sign-up/$'
-    | '/track/$shortId'
+    | '/track/$token'
     | '/app/'
     | '/app/admin/billing'
     | '/app/customers/$customerId'
@@ -326,7 +326,7 @@ export interface RootRouteChildren {
   TermsRoute: typeof TermsRoute
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
-  TrackShortIdRoute: typeof TrackShortIdRoute
+  TrackTokenRoute: typeof TrackTokenRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -408,11 +408,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppIndexRouteImport
       parentRoute: typeof AppRoute
     }
-    '/track/$shortId': {
-      id: '/track/$shortId'
-      path: '/track/$shortId'
-      fullPath: '/track/$shortId'
-      preLoaderRoute: typeof TrackShortIdRouteImport
+    '/track/$token': {
+      id: '/track/$token'
+      path: '/track/$token'
+      fullPath: '/track/$token'
+      preLoaderRoute: typeof TrackTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/sign-up/$': {
@@ -545,7 +545,7 @@ const rootRouteChildren: RootRouteChildren = {
   TermsRoute: TermsRoute,
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,
-  TrackShortIdRoute: TrackShortIdRoute,
+  TrackTokenRoute: TrackTokenRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

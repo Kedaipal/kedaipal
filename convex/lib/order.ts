@@ -12,6 +12,31 @@ export function generateShortId(): string {
 	return id;
 }
 
+// URL-safe alphabet for the tracking token (no padding chars). 24 chars over a
+// 62-symbol alphabet ≈ 142 bits of entropy.
+const TOKEN_ALPHABET =
+	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+const TOKEN_LENGTH = 24;
+
+/**
+ * High-entropy, unguessable capability token for the buyer's no-auth tracking
+ * page. Unlike `shortId` (a short human ref), this MUST be cryptographically
+ * random — it's the only thing standing between an attacker and a customer's
+ * order/PII on the public `/track/<token>` page. Uses Web Crypto
+ * (`crypto.getRandomValues`), available in both Convex runtimes. Rejection-free
+ * modulo bias is negligible here (62 divides evenly enough into 256 that the
+ * skew is far below any practical concern for a capability token).
+ */
+export function generateTrackingToken(): string {
+	const bytes = new Uint8Array(TOKEN_LENGTH);
+	crypto.getRandomValues(bytes);
+	let token = "";
+	for (let i = 0; i < TOKEN_LENGTH; i++) {
+		token += TOKEN_ALPHABET[bytes[i] % TOKEN_ALPHABET.length];
+	}
+	return token;
+}
+
 export type OrderItemPricing = {
 	price: number;
 	quantity: number;

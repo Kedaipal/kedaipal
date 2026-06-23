@@ -332,7 +332,17 @@ export default defineSchema({
 
 	orders: defineTable({
 		retailerId: v.id("retailers"),
+		// Short, human-readable order ref (ORD-XXXX). Shown to humans everywhere
+		// (WhatsApp, receipts, dashboard) but is NOT a secret — it's only ~1M
+		// combinations, so it must never be the capability for the no-auth tracking
+		// page. That role belongs to `trackingToken` below.
 		shortId: v.string(),
+		// High-entropy capability token for the buyer's no-auth tracking page
+		// (`/track/<token>`) and the public buyer mutations (payment claim, address
+		// edit, mockup approve…). Unguessable by design so the page can't be
+		// enumerated. Optional only during the backfill window — every new order
+		// gets one at create. See docs/infra-cost-scaling.md §6.
+		trackingToken: v.optional(v.string()),
 		// Link to the aggregated customer record. Optional during backfill and
 		// for orders that arrive without a phone (link-in-bio checkout); stamped
 		// once the (retailerId, waPhone) pair is known.
@@ -505,6 +515,7 @@ export default defineSchema({
 		.index("by_retailer_payment", ["retailerId", "paymentStatus"])
 		.index("by_retailer_mockup", ["retailerId", "mockupStatus"])
 		.index("by_shortId", ["shortId"])
+		.index("by_tracking_token", ["trackingToken"])
 		.index("by_customer", ["customerId"]),
 
 	/**

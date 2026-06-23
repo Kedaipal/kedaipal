@@ -14,6 +14,24 @@ function setup() {
 	return t;
 }
 
+/** Resolve an order's buyer tracking token from its shortId (see orders.test.ts). */
+async function tk(
+	t: ReturnType<typeof setup>,
+	shortId: string,
+): Promise<string> {
+	return await t.run(async (ctx) => {
+		const o = await ctx.db
+			.query("orders")
+			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+			.first();
+		if (!o) return "__no_such_order__";
+		if (o.trackingToken) return o.trackingToken;
+		const token = `tok_${shortId}`;
+		await ctx.db.patch(o._id, { trackingToken: token });
+		return token;
+	});
+}
+
 const USER_A = "user_test_a";
 const USER_B = "user_test_b";
 
@@ -595,7 +613,7 @@ describe("pickupLocations — Google autocomplete fields", () => {
 			pickupLocationId,
 		});
 
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(order?.pickupSnapshot?.latitude).toBeCloseTo(3.158);
 		expect(order?.pickupSnapshot?.longitude).toBeCloseTo(101.712);
 
@@ -605,7 +623,7 @@ describe("pickupLocations — Google autocomplete fields", () => {
 			latitude: 10,
 			longitude: 20,
 		});
-		const reread = await t.query(api.orders.get, { shortId });
+		const reread = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(reread?.pickupSnapshot?.latitude).toBeCloseTo(3.158);
 	});
 });
@@ -848,7 +866,7 @@ describe("orders — delivery placeId", () => {
 				placeId: "ChIJ_delivery",
 			},
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(order?.deliveryAddress?.placeId).toBe("ChIJ_delivery");
 	});
 });

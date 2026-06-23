@@ -2,7 +2,12 @@ import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { mutation, type MutationCtx, query } from "./_generated/server";
+import {
+	mutation,
+	type MutationCtx,
+	query,
+	type QueryCtx,
+} from "./_generated/server";
 import {
 	adjustAggregatesForTotalChange,
 	decrementAggregatesForCancel,
@@ -13,6 +18,7 @@ import { BUCKET_STATUSES, statusToBucket } from "./lib/orderBuckets";
 import {
 	computeOrderTotals,
 	generateShortId,
+	generateTrackingToken,
 	isMockupGateClosed,
 } from "./lib/order";
 import {
@@ -90,6 +96,55 @@ type OrderItemSnapshot = {
 	quantity: number;
 };
 
+/**
+ * Look up an order by its high-entropy tracking token — the capability for the
+ * buyer's no-auth tracking page + public buyer mutations. Replaces the old
+ * shortId-as-capability (shortId is ~1M combinations, enumerable). See
+ * docs/infra-cost-scaling.md §6.
+ */
+async function orderByToken(
+	ctx: QueryCtx | MutationCtx,
+	trackingToken: string,
+): Promise<Doc<"orders"> | null> {
+	return ctx.db
+		.query("orders")
+		.withIndex("by_tracking_token", (q) =>
+			q.eq("trackingToken", trackingToken),
+		)
+		.first();
+}
+
+/**
+ * Resolve an order for an endpoint shared by the buyer tracking page and the
+ * authenticated seller dashboard. Two distinct trust models:
+ *   - `token` → the buyer's unguessable capability; no auth required.
+ *   - `shortId` → NOT a secret (short, human-facing), so it is only honoured for
+ *     an authenticated retailer who OWNS the order. This closes both the buyer
+ *     enumeration hole and the prior seller-side gap where any signed-in user
+ *     could read any order by shortId.
+ * Exactly one of the two must be supplied.
+ */
+async function resolveSharedOrder(
+	ctx: QueryCtx,
+	{ token, shortId }: { token?: string; shortId?: string },
+): Promise<Doc<"orders"> | null> {
+	if (token) return orderByToken(ctx, token);
+	if (shortId) {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new ConvexError("Not authenticated");
+		const order = await ctx.db
+			.query("orders")
+			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+			.first();
+		if (!order) return null;
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer || retailer.userId !== identity.subject)
+			throw new ConvexError("Forbidden");
+		return order;
+	}
+	throw new ConvexError("Provide a tracking token or order ref");
+}
+
 export const create = mutation({
 	args: {
 		retailerId: v.id("retailers"),
@@ -124,7 +179,10 @@ export const create = mutation({
 		// id just resolves to no URL on display — same posture as proof images).
 		customerImageStorageId: v.optional(v.string()),
 	},
-	handler: async (ctx, args): Promise<{ shortId: string }> => {
+	handler: async (
+		ctx,
+		args,
+	): Promise<{ shortId: string; trackingToken: string }> => {
 		// Rate limit FIRST — public endpoint, throttle per storefront before any DB reads.
 		await rateLimiter.limit(ctx, "orderCreate", {
 			key: args.retailerId,
@@ -350,9 +408,14 @@ export const create = mutation({
 		if (!shortId)
 			throw new ConvexError("Failed to generate unique order ID, please retry");
 
+		// Unguessable capability for the no-auth tracking page. 142 bits of entropy
+		// → a collision check would be theatre; just generate it.
+		const trackingToken = generateTrackingToken();
+
 		const orderId = await ctx.db.insert("orders", {
 			retailerId: args.retailerId,
 			shortId,
+			trackingToken,
 			items: snapshotItems,
 			subtotal,
 			total,
@@ -403,7 +466,7 @@ export const create = mutation({
 			{ orderId },
 		);
 
-		return { shortId };
+		return { shortId, trackingToken };
 	},
 });
 
@@ -473,15 +536,18 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 };
 
 export const get = query({
-	args: { shortId: v.string() },
+	// Buyer tracking page passes `token` (unguessable capability). Seller
+	// dashboard passes `shortId` (authenticated + ownership-checked). See
+	// resolveSharedOrder.
+	args: {
+		shortId: v.optional(v.string()),
+		token: v.optional(v.string()),
+	},
 	handler: async (
 		ctx,
-		{ shortId },
+		{ shortId, token },
 	): Promise<OrderWithStatusLabels | null> => {
-		const order = await ctx.db
-			.query("orders")
-			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
-			.first();
+		const order = await resolveSharedOrder(ctx, { token, shortId });
 		if (!order) return null;
 		// One extra doc read on this hot public path so labels resolve from live
 		// retailer config (relabelling is retroactive — no per-order snapshot).
@@ -496,22 +562,19 @@ export const get = query({
 });
 
 /**
- * Public: resolve the seller's payment methods for the tracking page, keyed by
- * shortId (the capability — same trust model as the rest of the track page;
- * these details already go to the buyer in the WhatsApp confirm reply).
- * Legacy-aware via `resolvePaymentMethods`; QR storage ids resolved to URLs.
- * Returns `null` when the seller has nothing configured (track page hides it).
+ * Public: resolve the seller's payment methods for the buyer's tracking page,
+ * keyed by the tracking token (the capability — same details already go to the
+ * buyer in the WhatsApp confirm reply). Legacy-aware via `resolvePaymentMethods`;
+ * QR storage ids resolved to URLs. Returns `null` when the seller has nothing
+ * configured (track page hides it).
  */
 export const getPaymentMethods = query({
-	args: { shortId: v.string() },
+	args: { token: v.string() },
 	handler: async (
 		ctx,
-		{ shortId },
+		{ token },
 	): Promise<Array<PaymentMethod & { qrImageUrl?: string }> | null> => {
-		const order = await ctx.db
-			.query("orders")
-			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
-			.first();
+		const order = await orderByToken(ctx, token);
 		if (!order) return null;
 		const retailer = await ctx.db.get(order.retailerId);
 		if (!retailer) return null;
@@ -1056,19 +1119,16 @@ export const setCarrierTrackingUrl = mutation({
  */
 export const updateDeliveryAddress = mutation({
 	args: {
-		shortId: v.string(),
+		token: v.string(),
 		deliveryAddress: addressValidator,
 	},
-	handler: async (ctx, { shortId, deliveryAddress }): Promise<void> => {
+	handler: async (ctx, { token, deliveryAddress }): Promise<void> => {
 		await rateLimiter.limit(ctx, "addressUpdate", {
-			key: shortId,
+			key: token,
 			throws: true,
 		});
 
-		const order = await ctx.db
-			.query("orders")
-			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
-			.first();
+		const order = await orderByToken(ctx, token);
 		if (!order) throw new ConvexError("Order not found");
 
 		if (order.status !== "pending") {
@@ -1110,19 +1170,16 @@ export const updateDeliveryAddress = mutation({
  */
 export const updatePickupLocation = mutation({
 	args: {
-		shortId: v.string(),
+		token: v.string(),
 		pickupLocationId: v.id("pickupLocations"),
 	},
-	handler: async (ctx, { shortId, pickupLocationId }): Promise<void> => {
+	handler: async (ctx, { token, pickupLocationId }): Promise<void> => {
 		await rateLimiter.limit(ctx, "addressUpdate", {
-			key: shortId,
+			key: token,
 			throws: true,
 		});
 
-		const order = await ctx.db
-			.query("orders")
-			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
-			.first();
+		const order = await orderByToken(ctx, token);
 		if (!order) throw new ConvexError("Order not found");
 
 		if (order.status !== "pending") {
@@ -1177,23 +1234,20 @@ const PAYMENT_REFERENCE_MAX = 80;
  */
 export const claimPayment = mutation({
 	args: {
-		shortId: v.string(),
+		token: v.string(),
 		reference: v.optional(v.string()),
 		proofStorageId: v.optional(v.string()),
 	},
 	handler: async (
 		ctx,
-		{ shortId, reference, proofStorageId },
+		{ token, reference, proofStorageId },
 	): Promise<void> => {
 		await rateLimiter.limit(ctx, "paymentClaim", {
-			key: shortId,
+			key: token,
 			throws: true,
 		});
 
-		const order = await ctx.db
-			.query("orders")
-			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
-			.first();
+		const order = await orderByToken(ctx, token);
 		if (!order) throw new ConvexError("Order not found");
 		if (order.paymentStatus === "received") {
 			throw new ConvexError("Payment already confirmed");
@@ -1324,17 +1378,14 @@ export const markPaymentReceived = mutation({
  * `received` so we don't accept proof for a closed claim.
  */
 export const generateOrderProofUploadUrl = mutation({
-	args: { shortId: v.string() },
-	handler: async (ctx, { shortId }): Promise<string> => {
+	args: { token: v.string() },
+	handler: async (ctx, { token }): Promise<string> => {
 		await rateLimiter.limit(ctx, "proofUpload", {
-			key: shortId,
+			key: token,
 			throws: true,
 		});
 
-		const order = await ctx.db
-			.query("orders")
-			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
-			.first();
+		const order = await orderByToken(ctx, token);
 		if (!order) throw new ConvexError("Order not found");
 		if (order.paymentStatus === "received") {
 			throw new ConvexError("Payment already confirmed");
@@ -1364,17 +1415,18 @@ export const generateCustomImageUploadUrl = mutation({
 });
 
 /**
- * Public query: resolve the buyer's custom-line reference image to a viewable
- * URL. shortId is the capability (same as the rest of the tracking page); the
- * seller order-detail page reads it too.
+ * Resolve the buyer's custom-line reference image to a viewable URL. Dual-use:
+ * the buyer's tracking page passes `token`; the seller order-detail page passes
+ * `shortId` (authenticated + ownership-checked). See resolveSharedOrder.
  */
 export const getCustomerImageUrl = query({
-	args: { shortId: v.string() },
-	handler: async (ctx, { shortId }): Promise<string | null> => {
-		const order = await ctx.db
-			.query("orders")
-			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
-			.first();
+	// Dual-use: buyer `token`, or authenticated seller `shortId`.
+	args: {
+		shortId: v.optional(v.string()),
+		token: v.optional(v.string()),
+	},
+	handler: async (ctx, { shortId, token }): Promise<string | null> => {
+		const order = await resolveSharedOrder(ctx, { token, shortId });
 		if (!order?.customerImageStorageId) return null;
 		return (await ctx.storage.getUrl(order.customerImageStorageId)) ?? null;
 	},
@@ -1596,14 +1648,11 @@ export const updateMockupQuote = mutation({
 	},
 });
 
-/** Public (buyer): approve the current mockup. shortId is the capability. */
+/** Public (buyer): approve the current mockup. The tracking token is the capability. */
 export const approveMockup = mutation({
-	args: { shortId: v.string() },
-	handler: async (ctx, { shortId }): Promise<void> => {
-		const order = await ctx.db
-			.query("orders")
-			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
-			.first();
+	args: { token: v.string() },
+	handler: async (ctx, { token }): Promise<void> => {
+		const order = await orderByToken(ctx, token);
 		if (!order) throw new ConvexError("Order not found");
 		await rateLimiter.limit(ctx, "mockupReview", { key: order.retailerId, throws: true });
 		if (order.mockupStatus === undefined)
@@ -1638,12 +1687,9 @@ export const approveMockup = mutation({
 
 /** Public (buyer): request changes to the current mockup. */
 export const requestMockupChanges = mutation({
-	args: { shortId: v.string(), note: v.optional(v.string()) },
-	handler: async (ctx, { shortId, note }): Promise<void> => {
-		const order = await ctx.db
-			.query("orders")
-			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
-			.first();
+	args: { token: v.string(), note: v.optional(v.string()) },
+	handler: async (ctx, { token, note }): Promise<void> => {
+		const order = await orderByToken(ctx, token);
 		if (!order) throw new ConvexError("Order not found");
 		await rateLimiter.limit(ctx, "mockupReview", { key: order.retailerId, throws: true });
 		if (order.mockupStatus !== "submitted")
@@ -1716,19 +1762,16 @@ export const waiveMockup = mutation({
 });
 
 /**
- * Public (buyer): decline the custom (made-to-order) item. shortId is the
- * capability. Drops every `requiresProof` line from the order, recomputes the
+ * Public (buyer): decline the custom (made-to-order) item. The tracking token is
+ * the capability. Drops every `requiresProof` line from the order, recomputes the
  * total (clearing the quote), and re-opens the fulfilment gate so the remaining
  * ready-made items proceed normally. If the order was custom-only, declining is
  * equivalent to cancelling it (stock restored, aggregates reversed).
  */
 export const declineMockupItem = mutation({
-	args: { shortId: v.string() },
-	handler: async (ctx, { shortId }): Promise<void> => {
-		const order = await ctx.db
-			.query("orders")
-			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
-			.first();
+	args: { token: v.string() },
+	handler: async (ctx, { token }): Promise<void> => {
+		const order = await orderByToken(ctx, token);
 		if (!order) throw new ConvexError("Order not found");
 		await rateLimiter.limit(ctx, "mockupReview", { key: order.retailerId, throws: true });
 		if (order.mockupStatus === undefined)
@@ -1851,12 +1894,13 @@ export const declineMockupItem = mutation({
  * trust model as the rest of the tracking page). Returns [] when none / unresolved.
  */
 export const getMockupUrls = query({
-	args: { shortId: v.string() },
-	handler: async (ctx, { shortId }): Promise<string[]> => {
-		const order = await ctx.db
-			.query("orders")
-			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
-			.first();
+	// Dual-use: buyer `token`, or authenticated seller `shortId`.
+	args: {
+		shortId: v.optional(v.string()),
+		token: v.optional(v.string()),
+	},
+	handler: async (ctx, { shortId, token }): Promise<string[]> => {
+		const order = await resolveSharedOrder(ctx, { token, shortId });
 		if (!order) return [];
 		const urls = await Promise.all(
 			resolveMockupImageIds(order).map((id) => ctx.storage.getUrl(id)),

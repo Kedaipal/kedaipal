@@ -14,6 +14,24 @@ function setup() {
 	return t;
 }
 
+/** Resolve an order's buyer tracking token from its shortId (see orders.test.ts). */
+async function tk(
+	t: ReturnType<typeof setup>,
+	shortId: string,
+): Promise<string> {
+	return await t.run(async (ctx) => {
+		const o = await ctx.db
+			.query("orders")
+			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+			.first();
+		if (!o) return "__no_such_order__";
+		if (o.trackingToken) return o.trackingToken;
+		const token = `tok_${shortId}`;
+		await ctx.db.patch(o._id, { trackingToken: token });
+		return token;
+	});
+}
+
 const USER = "user_wa_test";
 
 type FetchCall = { url: string; body: unknown };
@@ -117,7 +135,7 @@ describe("whatsapp inbound", () => {
 			text: `Hi, my order ${shortId}`,
 		});
 
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(order?.status).toBe("confirmed");
 		expect(order?.customer.waPhone).toBe("60123456789");
 		expect(fetchMock.calls).toHaveLength(1);
@@ -140,7 +158,7 @@ describe("whatsapp inbound", () => {
 		);
 		expect(body.interactive.action.parameters.display_text).toBe("I've paid");
 		expect(body.interactive.action.parameters.url).toContain(
-			`/track/${shortId}`,
+			`/track/${await tk(t, shortId)}`,
 		);
 		expect(body.interactive.body.text).toContain(shortId);
 		expect(body.interactive.body.text).toContain("confirmed");
@@ -235,7 +253,7 @@ describe("whatsapp inbound", () => {
 			text: shortId,
 		});
 
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		const events = await t.run(async (ctx) =>
 			ctx.db
 				.query("orderEvents")
@@ -461,7 +479,7 @@ describe("whatsapp confirm — custom item defers the payment ask", () => {
 				postcode: "47301",
 			},
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		return { shortId, orderId: order!._id };
 	}
 
@@ -515,7 +533,7 @@ describe("whatsapp confirm — custom item defers the payment ask", () => {
 		expect(body.type).toBe("interactive");
 		expect(body.interactive.type).toBe("cta_url");
 		expect(body.interactive.action.parameters.display_text).toBe("I've paid");
-		expect(body.interactive.action.parameters.url).toContain(`/track/${shortId}`);
+		expect(body.interactive.action.parameters.url).toContain(`/track/${await tk(t, shortId)}`);
 		expect(body.interactive.body.text).toContain("approved");
 		expect(body.interactive.body.text).toContain(
 			`Use ${shortId} as your transfer reference`,
@@ -604,7 +622,7 @@ describe("whatsapp outbound on status change", () => {
 
 			// Patch the order's status directly, then invoke the action.
 			// This avoids the scheduler so the test stays deterministic.
-			const order = await t.query(api.orders.get, { shortId });
+			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 			await t.run(async (ctx) => {
 				await ctx.db.patch(order!._id, { status: c.status });
 			});
@@ -654,7 +672,7 @@ describe("whatsapp outbound on status change", () => {
 		fetchMock.calls.length = 0;
 
 		// Packed via direct status patch — should use custom packed template
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		await t.run(async (ctx) => {
 			await ctx.db.patch(order!._id, { status: "packed" });
 		});
@@ -682,7 +700,7 @@ describe("whatsapp outbound on status change", () => {
 		});
 		fetchMock.calls.length = 0;
 
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		await t.run(async (ctx) => {
 			await ctx.db.patch(order!._id, { status: "shipped" });
 		});
@@ -761,7 +779,7 @@ describe("whatsapp payment received", () => {
 		});
 		fetchMock.calls.length = 0;
 
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		await t.action(internal.whatsapp.notifyPaymentReceived, {
 			orderId: order!._id,
 		});
@@ -788,7 +806,7 @@ describe("whatsapp payment received", () => {
 		});
 		fetchMock.calls.length = 0;
 
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		await t.action(internal.whatsapp.notifyPaymentReceived, {
 			orderId: order!._id,
 		});

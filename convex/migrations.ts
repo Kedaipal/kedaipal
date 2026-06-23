@@ -15,6 +15,7 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalMutation } from "./_generated/server";
+import { generateTrackingToken } from "./lib/order";
 
 const BATCH_SIZE = 50;
 
@@ -135,6 +136,46 @@ export const backfillVariantFlags = internalMutation({
 			await ctx.scheduler.runAfter(
 				0,
 				internal.migrations.backfillVariantFlags,
+				{ cursor: page.continueCursor },
+			);
+		}
+		return { patched, isDone: page.isDone };
+	},
+});
+
+/**
+ * Backfill the `trackingToken` capability on orders created before the
+ * shortId→token hardening (docs/infra-cost-scaling.md §6). Every order needs an
+ * unguessable token so its no-auth tracking page can't be enumerated. New orders
+ * get one at create; this fills the gap for existing rows.
+ *
+ * Idempotent: only generates a token for orders that lack one. Batched +
+ * self-scheduling to stay within mutation transaction limits.
+ *
+ * Run: `npx convex run migrations:backfillTrackingTokens`
+ */
+export const backfillTrackingTokens = internalMutation({
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (ctx, { cursor }) => {
+		const page = await ctx.db
+			.query("orders")
+			.paginate({ numItems: BATCH_SIZE, cursor: cursor ?? null });
+
+		const now = Date.now();
+		let patched = 0;
+		for (const order of page.page) {
+			if (order.trackingToken) continue; // already has one — idempotent skip
+			await ctx.db.patch(order._id, {
+				trackingToken: generateTrackingToken(),
+				updatedAt: now,
+			});
+			patched++;
+		}
+
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.migrations.backfillTrackingTokens,
 				{ cursor: page.continueCursor },
 			);
 		}
