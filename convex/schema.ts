@@ -615,6 +615,15 @@ export default defineSchema({
 		retailerId: v.id("retailers"),
 		subscriptionId: v.id("subscriptions"),
 		invoiceNumber: v.string(),
+		// The plan/cycle being BILLED on this invoice. Lives on the invoice (not the
+		// subscription) so issuing doesn't change the seller's visible tier before they
+		// pay — mark-paid reconciles the sub from these. Optional for pre-existing rows.
+		plan: v.optional(
+			v.union(v.literal("starter"), v.literal("pro"), v.literal("scale")),
+		),
+		billingCycle: v.optional(
+			v.union(v.literal("monthly"), v.literal("annual")),
+		),
 		amount: v.number(), // base (minor units)
 		foundingDiscount: v.optional(v.number()), // 30% line if applicable
 		total: v.number(), // amount - foundingDiscount
@@ -663,8 +672,10 @@ export default defineSchema({
 		retailerId: v.id("retailers"),
 		rank: v.number(), // 1..10
 		plan: v.union(v.literal("pro"), v.literal("scale")), // tier at claim time
-		paidAt: v.number(),
-		firstInvoiceId: v.id("invoices"),
+		// The slot is RESERVED at founding onboard (signup), so these are filled
+		// later when the first founding invoice is actually paid (null until then).
+		paidAt: v.optional(v.number()),
+		firstInvoiceId: v.optional(v.id("invoices")),
 		welcomedAt: v.optional(v.number()),
 		whiteGloveScheduledAt: v.optional(v.number()),
 	})

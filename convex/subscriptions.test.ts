@@ -95,17 +95,18 @@ describe("subscriptions — signup wiring", () => {
 		expect(retailer?.isFoundingMember).toBeUndefined();
 	});
 
-	test("founding signup → 1-month trial, foundingIntent flagged, NO invoice yet", async () => {
+	test("founding signup → trialing (paid Pro only at mark-paid), foundingIntent flagged, NO invoice yet", async () => {
 		const t = setup();
-		const asA = t.withIdentity({ subject: "user_founding" });
 		const before = Date.now();
+		const asA = t.withIdentity({ subject: "user_founding" });
 		await asA.mutation(api.retailers.createRetailer, {
 			storeName: "Founding Store",
 			slug: "founding-store",
 			intent: "founding",
 		});
 
-		// 1 month free trial (vs 14 days), full Pro access, not frozen.
+		// Same 14-day trial as everyone else — the PAID Pro plan only starts when Arif
+		// marks the founding invoice paid. We must not pre-activate Pro at onboard.
 		const access = await asA.query(api.subscriptions.current, {});
 		expect(access?.status).toBe("trialing");
 		expect(access?.frozen).toBe(false);
@@ -126,10 +127,24 @@ describe("subscriptions — signup wiring", () => {
 				.collect();
 			return { sub, invoiceCount: invoices.length };
 		});
-		// 1 month free (~30 days) and flagged for the founding discount at conversion.
-		expect(sub?.trialEndsAt).toBeGreaterThan(before + 29 * 24 * 60 * 60 * 1000);
+		// 14-day trial window; flagged for the founding discount on the invoice Arif issues.
+		const trialDays = ((sub?.trialEndsAt ?? 0) - before) / (24 * 60 * 60 * 1000);
+		expect(trialDays).toBeGreaterThan(13.9);
+		expect(trialDays).toBeLessThan(14.1);
 		expect(sub?.foundingIntent).toBe(true);
-		// No auto-invoice — Arif issues it at conversion (monthly or annual).
+		// No auto-invoice — Arif issues it (monthly or annual).
 		expect(invoiceCount).toBe(0);
+
+		// The slot is RESERVED at onboard (not at payment): rank assigned, badge set,
+		// and the public counter ticks down — so Arif can't over-commit past 10.
+		const retailer = await t.run((ctx) =>
+			ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", "founding-store"))
+				.first(),
+		);
+		expect(retailer?.isFoundingMember).toBe(true);
+		expect(retailer?.foundingMemberRank).toBe(1);
+		expect(await asA.query(api.foundingMembers.getSpotsRemaining, {})).toBe(9);
 	});
 });

@@ -122,7 +122,8 @@ function OnboardingForm() {
 				storeName: storeName.trim(),
 				slug,
 				...(trimmedWa.length > 0 ? { waPhone: trimmedWa } : {}),
-				// Founding-10: 1 month free, then a discounted Pro plan.
+				// Founding-10: starts on the normal 14-day trial; the discounted Pro
+				// plan begins once Arif marks their founding invoice paid.
 				...(prefill?.founding ? { intent: "founding" as const } : {}),
 			});
 			navigate({ to: "/app" });
@@ -165,12 +166,8 @@ function OnboardingForm() {
 								<span className="font-medium text-foreground">
 									Founding Member
 								</span>{" "}
-								—{" "}
-								<span className="font-medium text-foreground">
-									1 month free
-								</span>
-								, then your discounted Pro plan begins. Review the details and
-								tap{" "}
+								— your discounted Pro plan starts once you settle the first
+								invoice. Review the details and tap{" "}
 								<span className="font-medium text-foreground">
 									Create store
 								</span>

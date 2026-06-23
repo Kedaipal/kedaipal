@@ -11,7 +11,7 @@ import { mutation, query } from "./_generated/server";
 import { requireAdmin } from "./lib/auth";
 import { type BillingCycle, type Plan, planPrice } from "./lib/plans";
 import { getPaymentProvider } from "./payments/provider";
-import { claimRankIfEligible } from "./foundingMembers";
+import { reserveFoundingRank, stampFoundingPaid } from "./foundingMembers";
 import { defaultCapsForPlan } from "./subscriptions";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -59,6 +59,15 @@ export const markPaid = mutation({
 		const sub = await ctx.db.get(invoice.subscriptionId);
 		if (!sub) throw new ConvexError("Subscription not found for invoice");
 
+		// First-ever payment? (drives welcome vs thanks email below). Counted before
+		// we flip this invoice, so it reflects PRIOR paid invoices.
+		const priorPaid = await ctx.db
+			.query("invoices")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", invoice.retailerId))
+			.filter((q) => q.eq(q.field("status"), "paid"))
+			.first();
+		const firstTime = priorPaid === null;
+
 		const now = Date.now();
 		// Normalize the payment fact through the provider seam (pure; we own the txn).
 		const record = getPaymentProvider().recordPayment({
@@ -75,37 +84,52 @@ export const markPaid = mutation({
 			paymentMethod: record.method,
 		});
 
-		// 2) Reconcile the subscription: active + fresh period + caps re-denormalized
-		//    from the plan (never read `plan` downstream — caps are the seam).
-		const caps = defaultCapsForPlan(sub.plan as Plan);
+		// 2) Reconcile the subscription FROM THE INVOICE (plan/cycle live on the
+		//    invoice, not the sub — so issuing never changes the seller's visible tier
+		//    before they pay). Falls back to the sub for pre-existing invoices.
+		const billedPlan = (invoice.plan ?? sub.plan) as Plan;
+		const billedCycle = invoice.billingCycle ?? sub.billingCycle;
+		const caps = defaultCapsForPlan(billedPlan);
 		await ctx.db.patch(sub._id, {
+			plan: billedPlan,
+			billingCycle: billedCycle,
 			status: "active",
 			currentPeriodStart: now,
-			currentPeriodEnd: nextPeriodEnd(sub.billingCycle, now),
+			currentPeriodEnd: nextPeriodEnd(billedCycle, now),
 			orderCap: caps.orderCap,
 			userCap: caps.userCap,
 			broadcastQuota: caps.broadcastQuota,
 			updatedAt: now,
 		});
 
-		// 3) Founding rank claim — skipped for comped (pilot/backfill) retailers.
+		// 3) Founding — the slot is reserved at onboard (signup). For the
+		//    "promote a standard vendor" path (a founding invoice for someone not yet
+		//    reserved), reserve it now + welcome them. A plain (non-founding) invoice
+		//    never claims. Either way, stamp the payment onto the founding row. We
+		//    return the rank ONLY for a fresh reservation, so the admin "claimed" toast
+		//    fires once (onboard members were already claimed + welcomed at signup).
 		let rank: number | null = null;
 		if (sub.comped !== true) {
-			rank = await claimRankIfEligible(ctx, {
-				retailerId: invoice.retailerId,
-				firstInvoiceId: invoiceId,
-				plan: sub.plan,
-				paidAt: now,
-			});
+			if (invoice.foundingDiscount !== undefined) {
+				const reserved = await reserveFoundingRank(ctx, invoice.retailerId);
+				if (reserved !== null) {
+					rank = reserved;
+					await ctx.scheduler.runAfter(
+						0,
+						internal.whatsapp.notifyFoundingWelcome,
+						{ retailerId: invoice.retailerId, rank: reserved },
+					);
+				}
+			}
+			await stampFoundingPaid(ctx, invoice.retailerId, invoiceId, now);
 		}
 
-		// 4) Welcome flow — fire-and-forget so the mutation stays a pure transaction.
-		if (rank !== null) {
-			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyFoundingWelcome, {
-				retailerId: invoice.retailerId,
-				rank,
-			});
-		}
+		// 4) Welcome (first payment) / thanks (renewal) email — fire-and-forget.
+		await ctx.scheduler.runAfter(
+			0,
+			internal.billingEmail.notifyPaymentReceived,
+			{ invoiceId, firstTime },
+		);
 
 		return { rank };
 	},
@@ -170,18 +194,15 @@ export const issueInvoice = mutation({
 		// cycle is set later at mark-paid, so Pro only starts once payment lands.
 		const dueDate = dueDateArg ?? now + DUE_GRACE_DAYS * DAY_MS;
 
-		// Align the subscription to what's being billed so mark-paid reconciles the
-		// right caps. (Status stays as-is until paid → active.)
-		await ctx.db.patch(sub._id, {
-			plan,
-			billingCycle,
-			updatedAt: now,
-		});
-
+		// The billed plan/cycle live ON THE INVOICE — we do NOT touch the sub here, so
+		// the seller's visible tier stays put until they actually pay (mark-paid
+		// reconciles the sub from these). Voiding therefore leaves the tier untouched.
 		const invoiceId = await ctx.db.insert("invoices", {
 			retailerId,
 			subscriptionId: sub._id,
 			invoiceNumber: generateInvoiceNumber(now),
+			plan,
+			billingCycle,
 			amount: base,
 			foundingDiscount: founding ? base - total : undefined,
 			total,
@@ -241,6 +262,7 @@ export const listRetailersForAdmin = query({
 			storeName: string;
 			slug: string;
 			status?: Doc<"subscriptions">["status"];
+			plan?: Doc<"subscriptions">["plan"];
 			isFoundingMember: boolean;
 			foundingIntent: boolean;
 			hasPending: boolean;
@@ -264,6 +286,7 @@ export const listRetailersForAdmin = query({
 				storeName: r.storeName,
 				slug: r.slug,
 				status: sub?.status,
+				plan: sub?.plan,
 				isFoundingMember: r.isFoundingMember === true,
 				foundingIntent: sub?.foundingIntent === true,
 				hasPending: pending !== null,
@@ -314,7 +337,7 @@ export const listPending = query({
 				currency: inv.currency,
 				dueDate: inv.dueDate,
 				createdAt: inv.createdAt,
-				plan: (sub?.plan ?? "pro") as Plan,
+				plan: (inv.plan ?? sub?.plan ?? "pro") as Plan,
 			});
 		}
 		return rows;

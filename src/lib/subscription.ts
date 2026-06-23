@@ -69,29 +69,45 @@ export function resolveBannerState(
 	return { kind: "none" };
 }
 
-export type TierTone = "neutral" | "trial" | "warn";
+export type TierTone = "neutral" | "trial" | "warn" | "founding";
 
 export type TierPill = { label: string; tone: TierTone };
 
-/** Compact tier label for the nav pill — "Pro", "Trial · 5 days left", "Past due". */
-export function tierPill(sub: SubscriptionView, now: number): TierPill {
+/** Compact tier label for the nav pill. With a `foundingRank`, founding members
+ * read "Founding #N · 28 days left" / "Founding #N" instead of a plain "Trial". */
+export function tierPill(
+	sub: SubscriptionView,
+	now: number,
+	foundingRank?: number,
+): TierPill {
+	const fm = foundingRank ? `Founding #${foundingRank}` : null;
 	switch (sub.status) {
 		case "trialing": {
 			const days = trialDaysLeft(sub.trialEndsAt, now);
+			const ended = days <= 0;
+			const left = ended
+				? "trial ended"
+				: `${days} day${days === 1 ? "" : "s"} left`;
+			if (fm) {
+				return {
+					label: `${fm} · ${left}`,
+					tone: ended ? "warn" : "founding",
+				};
+			}
 			return {
-				label:
-					days <= 0
-						? "Trial ended"
-						: `Trial · ${days} day${days === 1 ? "" : "s"} left`,
-				tone: days <= 0 ? "warn" : "trial",
+				label: ended ? "Trial ended" : `Trial · ${left}`,
+				tone: ended ? "warn" : "trial",
 			};
 		}
 		case "past_due":
-			return { label: "Past due", tone: "warn" };
+			return { label: fm ? `${fm} · Past due` : "Past due", tone: "warn" };
 		case "cancelled":
-			return { label: "Cancelled", tone: "warn" };
+			return { label: fm ? `${fm} · Cancelled` : "Cancelled", tone: "warn" };
 		default:
-			return { label: PLAN_LABEL[sub.plan], tone: "neutral" };
+			return {
+				label: fm ?? PLAN_LABEL[sub.plan],
+				tone: fm ? "founding" : "neutral",
+			};
 	}
 }
 

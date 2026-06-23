@@ -47,7 +47,7 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 		if (sub.status === "past_due") return "Past due";
 		if (sub.status === "cancelled") return "Cancelled";
 		if (sub.currentPeriodEnd)
-			return `Active · renews ${formatDate(sub.currentPeriodEnd)}`;
+			return `Active · expires ${formatDate(sub.currentPeriodEnd)}`;
 		return "Active";
 	})();
 
@@ -101,6 +101,28 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 					<p className="text-xs text-muted-foreground">
 						Your account is on the house — no invoices to settle.
 					</p>
+				) : null}
+
+				{/* Starter → Pro upgrade (manual sub: routes the request to Arif on WA). */}
+				{sub?.plan === "starter" &&
+				sub.status === "active" &&
+				instructions?.whatsappPhone ? (
+					<div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
+						<p className="text-xs text-muted-foreground">
+							Want more orders, team seats and broadcasts? Move up to Pro.
+						</p>
+						<a
+							href={`https://wa.me/${instructions.whatsappPhone.replace(/\D/g, "")}?text=${encodeURIComponent(
+								`Hi, I'd like to upgrade from Starter to Pro for my Kedaipal store (/${retailer.slug}).`,
+							)}`}
+							target="_blank"
+							rel="noreferrer"
+							className="inline-flex h-9 w-fit shrink-0 items-center gap-1.5 rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
+						>
+							<ExternalLink className="size-4" />
+							Upgrade to Pro
+						</a>
+					</div>
 				) : null}
 			</section>
 

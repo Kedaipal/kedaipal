@@ -159,16 +159,13 @@ function sanitizePaymentInstructions(
 	trimField("note", PAYMENT_NOTE_MAX);
 	return Object.keys(out).length > 0 ? out : undefined;
 }
+import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { internalMutation, mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
 import { ConvexError } from "convex/values";
+import { reserveFoundingRank } from "./foundingMembers";
 import { rateLimiter } from "./lib/rateLimiter";
-import {
-	capsForPlan,
-	DAY_MS,
-	FOUNDING_TRIAL_DAYS,
-	TRIAL_DAYS,
-} from "./lib/plans";
+import { capsForPlan, DAY_MS, TRIAL_DAYS } from "./lib/plans";
 import {
 	type AccessState,
 	assertSubscriptionActive,
@@ -594,8 +591,10 @@ export const checkEmailHasStore = query({
  */
 /**
  * Create the retailer's subscription in the SAME transaction as the retailer
- * insert. Public path → `trialing` (14d, Pro caps). Founding path → `active` +
- * a pending Pro invoice (with `dueDate`) so the rank can claim on first paid.
+ * insert. Both paths start on the SAME 14-day `trialing` (Pro caps) — a founding
+ * member is just a trial + `foundingIntent` + a reserved rank. The PAID Pro plan
+ * only begins when Arif marks the founding invoice paid (markPaid → `active`); we
+ * never pre-activate Pro at onboard.
  */
 async function createSubscriptionForRetailer(
 	ctx: MutationCtx,
@@ -605,16 +604,21 @@ async function createSubscriptionForRetailer(
 ): Promise<void> {
 	const caps = capsForPlan("pro"); // trial + founding both grant Pro-level access
 	if (intent === "founding") {
-		// Founding-10 perk: 1 month free (vs the standard 14-day trial), then a paid
-		// Pro plan. `foundingIntent` flags the store so the conversion invoice
-		// auto-applies the founding discount + claims the rank. No invoice yet —
-		// Arif issues it at conversion (and picks monthly or annual then).
+		// Founding-10: the PAID Pro subscription only starts when Arif confirms the
+		// founding invoice paid (markPaid → status "active" + fresh period). Until then
+		// the founding member rides the SAME 14-day trial as everyone else — and if the
+		// trial lapses before they pay, they're locked like any other unpaid trial. We
+		// must NOT pre-activate Pro at onboard: that would be free service before money
+		// lands. The founding-ness here is just two flags layered on the normal trial:
+		//   1. `foundingIntent` — so the invoice Arif issues auto-applies the discount.
+		//   2. a reserved founding rank — so Arif can't over-commit past 10 and the
+		//      "Founding #N" badge/spot show from day one (the rank is held, not yet paid).
 		await ctx.db.insert("subscriptions", {
 			retailerId,
 			plan: "pro",
 			billingCycle: "monthly",
 			status: "trialing",
-			trialEndsAt: now + FOUNDING_TRIAL_DAYS * DAY_MS,
+			trialEndsAt: now + TRIAL_DAYS * DAY_MS,
 			foundingIntent: true,
 			orderCap: caps.orderCap,
 			userCap: caps.userCap,
@@ -622,6 +626,15 @@ async function createSubscriptionForRetailer(
 			createdAt: now,
 			updatedAt: now,
 		});
+		// Reserve the founding slot now (at onboard), not at payment — over-commit guard
+		// + immediate badge. The paid cycle is confirmed later at mark-paid. Welcome them.
+		const rank = await reserveFoundingRank(ctx, retailerId);
+		if (rank !== null) {
+			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyFoundingWelcome, {
+				retailerId,
+				rank,
+			});
+		}
 		return;
 	}
 	// Public funnel: 14-day no-card trial granting Pro-level access. Tier is
@@ -648,10 +661,10 @@ export const createRetailer = mutation({
 		// Best-effort client IP captured at the consent moment. Optional —
 		// onboarding never blocks if IP lookup fails.
 		acceptanceIp: v.optional(v.string()),
-		// Signup path. "public" (default) → 14-day trial. "founding" → no trial,
-		// active + pending Pro invoice from day one (Founding-10 intercept onboard).
-		// The real rank gate is admin mark-paid + the 10-slot cap, so this is not a
-		// privileged arg in v1. See docs/manual-subscription.md.
+		// Signup path. Both start a 14-day trial; "founding" additionally flags the
+		// store (`foundingIntent`) and reserves a Founding-10 rank, but the paid Pro
+		// plan still only starts at admin mark-paid. The real rank gate is mark-paid +
+		// the 10-slot cap, so this is not a privileged arg in v1. See docs/manual-subscription.md.
 		intent: v.optional(v.union(v.literal("public"), v.literal("founding"))),
 	},
 	handler: async (ctx, args): Promise<{ slug: string }> => {

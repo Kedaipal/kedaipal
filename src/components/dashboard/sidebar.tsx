@@ -71,7 +71,10 @@ export function Sidebar({ retailer, actionableCount, isAdmin }: SidebarProps) {
 			{/* Subscription tier pill — always-visible chrome (links to billing). */}
 			{!collapsed ? (
 				<div className="border-b border-border px-4 py-2">
-					<TierPill subscription={retailer.subscription} />
+					<TierPill
+						subscription={retailer.subscription}
+						foundingRank={retailer.foundingMemberRank}
+					/>
 				</div>
 			) : null}
 

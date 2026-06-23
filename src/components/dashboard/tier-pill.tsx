@@ -10,15 +10,17 @@ import { cn } from "../../lib/utils";
  */
 export function TierPill({
 	subscription,
+	foundingRank,
 	compact = false,
 	className,
 }: {
 	subscription?: SubscriptionView;
+	foundingRank?: number;
 	compact?: boolean;
 	className?: string;
 }) {
 	if (!subscription) return null;
-	const { label, tone } = tierPill(subscription, Date.now());
+	const { label, tone } = tierPill(subscription, Date.now(), foundingRank);
 	const displayLabel =
 		compact && subscription.status === "trialing"
 			? label.replace(/(\d+) days? left/i, "$1d left")
@@ -26,9 +28,11 @@ export function TierPill({
 	const toneClass =
 		tone === "warn"
 			? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
-			: tone === "trial"
-				? "border border-accent/20 bg-accent/10 text-accent dark:bg-accent/15"
-				: "bg-muted text-muted-foreground";
+			: tone === "founding"
+				? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+				: tone === "trial"
+					? "border border-accent/20 bg-accent/10 text-accent dark:bg-accent/15"
+					: "bg-muted text-muted-foreground";
 	return (
 		<Link
 			to="/app/settings"

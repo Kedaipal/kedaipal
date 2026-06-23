@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	type BillingEmailVars,
 	renderBillingEmail,
+	renderPaymentEmail,
 	renderTrialEmail,
 } from "./billingEmailCopy";
 
@@ -106,5 +107,32 @@ describe("renderTrialEmail", () => {
 		expect(subject.toLowerCase()).toContain("lapsed");
 		expect(html.toLowerCase()).not.toContain("invoice no");
 		expect(html).toContain("Message us to renew");
+	});
+});
+
+describe("renderPaymentEmail", () => {
+	const pv = {
+		storeName: "Mak Kuih",
+		planLabel: "Pro · Monthly",
+		totalFormatted: "MYR 104.00",
+		dashboardUrl: "https://kedaipal.com/app/settings?tab=billing",
+	};
+
+	it("welcome (first payment) reads as a welcome, no how-to-pay", () => {
+		const { subject, html } = renderPaymentEmail("en", "welcome", pv);
+		expect(subject.toLowerCase()).toContain("welcome");
+		expect(html).toContain("Pro · Monthly");
+		expect(html.toLowerCase()).not.toContain("how to pay");
+	});
+
+	it("thanks (renewal) reads as a thank-you and shows the amount", () => {
+		const { subject, html } = renderPaymentEmail("en", "thanks", pv);
+		expect(subject.toLowerCase()).toContain("thanks");
+		expect(html).toContain("MYR 104.00");
+	});
+
+	it("renders Malay payment copy", () => {
+		const { subject } = renderPaymentEmail("ms", "welcome", pv);
+		expect(subject.toLowerCase()).toContain("selamat datang");
 	});
 });
