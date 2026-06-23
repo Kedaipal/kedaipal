@@ -225,6 +225,7 @@ function StorefrontRoute() {
 				storeName={retailer.storeName}
 				checkoutPhone={retailer.checkoutPhone}
 				offerSelfCollect={retailer.offerSelfCollect ?? false}
+				offerDelivery={retailer.offerDelivery ?? true}
 				pickupLocations={pickupLocations ?? []}
 			/>
 		</div>

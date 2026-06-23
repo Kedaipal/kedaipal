@@ -1430,10 +1430,10 @@ function NotifyManagerCard({
 					before sending. Add a manager number in{" "}
 					<Link
 						to="/app/settings"
-						search={{ tab: "pickup" }}
+						search={{ tab: "fulfilment" }}
 						className="font-medium text-accent underline-offset-2 hover:underline"
 					>
-						Settings → Pickup
+						Settings → Fulfilment
 					</Link>{" "}
 					for a one-tap button here.
 				</p>

@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "convex/react";
-import { ExternalLink, MapPin, Pencil, Phone, Plus } from "lucide-react";
+import { ExternalLink, MapPin, Pencil, Phone, Plus, Truck } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
@@ -12,9 +12,10 @@ import { Skeleton } from "../ui/skeleton";
 import { SortableList } from "../ui/sortable-list";
 import { PickupLocationEditDialog } from "./pickup-location-edit-dialog";
 
-interface PickupLocationsTabProps {
+interface FulfilmentTabProps {
 	retailerId: Id<"retailers">;
 	offerSelfCollect: boolean;
+	offerDelivery: boolean;
 }
 
 function Card({ children }: { children: ReactNode }) {
@@ -81,10 +82,11 @@ function ToggleSwitch({
 	);
 }
 
-export function PickupLocationsTab({
+export function FulfilmentTab({
 	retailerId,
 	offerSelfCollect,
-}: PickupLocationsTabProps) {
+	offerDelivery,
+}: FulfilmentTabProps) {
 	const locations = useQuery(api.pickupLocations.listForRetailer, {
 		retailerId,
 	});
@@ -115,7 +117,31 @@ export function PickupLocationsTab({
 	const active = locations?.filter((l) => l.isActive) ?? [];
 	const inactive = locations?.filter((l) => !l.isActive) ?? [];
 
-	async function handleToggleOffer(next: boolean) {
+	// Fulfilment invariant (mirrors the server guard in retailers.updateSettings):
+	// a storefront must keep ≥1 WORKING method. Self-collect only "works" with an
+	// active location, so once we know the location list we can pre-disable the
+	// toggle that would strand the store and show an actionable reason. The server
+	// still enforces this — the disabled state is courtesy, not the gate.
+	const selfCollectWorking = offerSelfCollect && active.length > 0;
+	const deliveryIsLastMethod =
+		locations !== undefined && offerDelivery && !selfCollectWorking;
+	const selfCollectIsLastMethod = offerSelfCollect && !offerDelivery;
+	const deliveryToggleDisabled = toggling || deliveryIsLastMethod;
+	const selfCollectToggleDisabled = toggling || selfCollectIsLastMethod;
+
+	async function handleToggleDelivery(next: boolean) {
+		setToggling(true);
+		try {
+			await updateSettings({ offerDelivery: next });
+			toast.success(next ? "Delivery enabled." : "Delivery turned off.");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setToggling(false);
+		}
+	}
+
+	async function handleToggleSelfCollect(next: boolean) {
 		setToggling(true);
 		try {
 			await updateSettings({ offerSelfCollect: next });
@@ -196,17 +222,49 @@ export function PickupLocationsTab({
 			<Card>
 				<div className="flex items-start justify-between gap-4">
 					<SectionHeading
-						title="Offer self-collect"
+						title="Delivery"
+						description="When on, buyers can enter a delivery address at checkout. No setup needed — they just type where their order should go."
+					/>
+					<ToggleSwitch
+						on={offerDelivery}
+						onChange={handleToggleDelivery}
+						disabled={deliveryToggleDisabled}
+						label="Offer delivery on the storefront"
+					/>
+				</div>
+				<div className="flex items-center gap-2 text-xs text-muted-foreground">
+					<Truck className="size-4 shrink-0 text-accent" aria-hidden="true" />
+					<span>The fast default — most F&amp;B sellers keep this on.</span>
+				</div>
+				{deliveryIsLastMethod ? (
+					<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+						Delivery is your storefront&apos;s only working way to receive
+						orders right now. Add an active pickup location (and keep
+						self-collect on) before switching to pickup-only.
+					</p>
+				) : null}
+			</Card>
+
+			<Card>
+				<div className="flex items-start justify-between gap-4">
+					<SectionHeading
+						title="Self-collect"
 						description="When on, buyers see a self-collect option at checkout — but only when you also have at least one active pickup location below."
 					/>
 					<ToggleSwitch
 						on={offerSelfCollect}
-						onChange={handleToggleOffer}
-						disabled={toggling}
+						onChange={handleToggleSelfCollect}
+						disabled={selfCollectToggleDisabled}
 						label="Offer self-collect on the storefront"
 					/>
 				</div>
-				{offerSelfCollect && active.length === 0 ? (
+				{selfCollectIsLastMethod ? (
+					<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+						Self-collect is your storefront&apos;s only working way to receive
+						orders right now (delivery is off). Turn delivery back on before
+						turning this off.
+					</p>
+				) : offerSelfCollect && active.length === 0 ? (
 					<p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
 						Self-collect is on but you have no active pickup locations yet —
 						buyers won&apos;t see the option until you add one.

@@ -1,6 +1,73 @@
-# Self-Collect Pickup Locations — Implementation Reference
+# Fulfilment (Delivery + Self-Collect) — Implementation Reference
 
-Reference doc for the multi-location self-collect feature. **Backend + dashboard + storefront + tracking UI + Google Places autocomplete + WhatsApp location pin shipped.** This file documents what exists, why it was built this way, and what depends on it next.
+Reference doc for how buyers receive their orders. Kedaipal has **two symmetric, optional
+fulfilment methods**: **delivery** (zero-config — the buyer types an address) and
+**self-collect** (a retailer-managed library of pickup locations). A seller can offer
+delivery only, self-collect only, or both — with one hard guarantee: **the storefront
+always keeps at least one _working_ method.**
+
+> The bulk of this doc (everything from "Self-collect pickup locations" onward) covers the
+> self-collect subsystem, which shipped first. The section immediately below covers making
+> **delivery optional** (ClickUp `86exu4grm`) and the cross-method invariant that ties the
+> two together.
+
+## Optional delivery + the working-method invariant (2026-06-23)
+
+Originally delivery was implicitly always-on and self-collect was the only opt-in method
+(`retailers.offerSelfCollect`). Delivery is now a first-class toggle
+(`retailers.offerDelivery`), so the two methods are symmetric.
+
+### The invariant
+
+A storefront must always keep **≥1 _working_ fulfilment method**. "Working" ≠ "toggled on":
+
+- **Delivery works** when `offerDelivery` (effective) is on.
+- **Self-collect works** when `offerSelfCollect` (effective) is on **AND** the retailer has
+  **≥1 active pickup location**.
+
+Three actions are rejected when they would leave zero working methods:
+
+1. Turning **delivery off** with no active pickup location → *"Add an active pickup location
+   before switching to pickup-only…"*
+2. Turning **self-collect off** while delivery is also off → blocked.
+3. **Deactivating the last active pickup location** while delivery is off → blocked.
+
+Enforced **server-side** (the source of truth) in `retailers.updateSettings` and
+`pickupLocations.setActive`, mirrored in the **Fulfilment settings UI** as a
+disabled-toggle-with-reason, and defended a third time on the **storefront checkout** (a
+*"not accepting orders right now"* state instead of an empty picker). `orders.create` also
+rejects a `delivery` order when the retailer doesn't offer delivery, closing the
+stale-storefront-tab gap.
+
+### Default asymmetry (the one subtle bit)
+
+| Field | New-retailer default | Legacy row (`undefined`) effective | Why |
+|---|---|---|---|
+| `offerSelfCollect` | `true` | `false` | Opt-in; legacy rows never had it. |
+| `offerDelivery` | `true` | **`true`** | Every pre-existing retailer always had delivery — `undefined` must read as on or every live storefront breaks. No migration. |
+
+Effective reads everywhere: `offerDelivery ?? true`, `offerSelfCollect ?? false`.
+
+### Surfaces
+
+- **Settings → Fulfilment** (renamed from "Pickup"; `?tab=pickup` deep-links redirect):
+  Delivery toggle card + Self-collect toggle card (both wired to the invariant) above the
+  pickup-locations list. Component: `src/components/settings/fulfilment-tab.tsx`.
+- **Storefront checkout** (`checkout-sheet.tsx`): drills `offerDelivery` through
+  `$slug.tsx` → `cart-bar.tsx`. Shows the two-button method picker only when **both** are
+  offered; a single method drops straight to its form (address / pickup picker).
+- **Dashboard checklist** (`app.index.tsx`): the optional "Add a pickup location" step
+  became **"Set up delivery & pickup,"** shown to *every* retailer (so a delivery-only
+  seller discovers pickup-only is possible). Done = `pickupSetupSeen || hasPickupLocation`.
+- **Tests:** `retailers.test.ts` (default + the four invariant transitions),
+  `pickupLocations.test.ts` (`setActive` last-location guard),
+  `orders.test.ts` (delivery-off rejection + legacy pass-through).
+
+---
+
+## Self-collect pickup locations
+
+Reference for the multi-location self-collect feature. **Backend + dashboard + storefront + tracking UI + Google Places autocomplete + WhatsApp location pin shipped.** This section documents what exists, why it was built this way, and what depends on it next.
 
 ## Context (2026-05-29)
 
