@@ -456,6 +456,30 @@ export const setActive = mutation({
 		const location = await requireOwnedLocation(ctx, pickupLocationId);
 		if (location.isActive === isActive) return; // idempotent
 
+		// Fulfilment invariant: don't let the seller hide the LAST active pickup
+		// location while delivery is off — that would leave the storefront with no
+		// working way to receive orders. `location` is still active here (we
+		// returned early above if it already matched), so it's counted among the
+		// active rows below. Delivery undefined → effectively on (legacy default),
+		// so this only ever blocks a pickup-only seller.
+		if (!isActive) {
+			const retailer = await ctx.db.get(location.retailerId);
+			const offersDelivery = (retailer?.offerDelivery ?? true) === true;
+			if (!offersDelivery) {
+				const activeRows = await ctx.db
+					.query("pickupLocations")
+					.withIndex("by_retailer_active", (q) =>
+						q.eq("retailerId", location.retailerId).eq("isActive", true),
+					)
+					.collect();
+				if (activeRows.length <= 1) {
+					throw new ConvexError(
+						"Turn delivery back on or add another pickup location first — hiding this one would leave your storefront with no way to receive orders.",
+					);
+				}
+			}
+		}
+
 		const patch: Partial<Doc<"pickupLocations">> = {
 			isActive,
 			updatedAt: Date.now(),

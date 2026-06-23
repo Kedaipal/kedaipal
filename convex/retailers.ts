@@ -331,6 +331,11 @@ type RetailerPublic = {
 	// hides the self-collect option entirely when false (regardless of pickup
 	// location count). Undefined treated as false.
 	offerSelfCollect?: boolean;
+	// Whether the retailer is offering delivery on the storefront. Mirror of
+	// offerSelfCollect, but undefined is treated as TRUE (legacy retailers always
+	// had delivery). Storefront and settings invariant guarantee ≥1 working
+	// method, so the buyer always sees a way to receive their order.
+	offerDelivery?: boolean;
 	// Whether the retailer has opened the Pickup settings tab at least once.
 	// Drives checklist step-4 dismissal — set to true on first tab visit by
 	// `markPickupSetupSeen`.
@@ -400,6 +405,7 @@ async function loadRetailerForUser(
 		orderStages: row.orderStages as OrderStage[] | undefined,
 		paymentMethods,
 		offerSelfCollect: row.offerSelfCollect,
+		offerDelivery: row.offerDelivery,
 		pickupSetupSeen: row.pickupSetupSeen,
 		termsVersion: row.termsVersion,
 		privacyVersion: row.privacyVersion,
@@ -474,6 +480,7 @@ export const getRetailerBySlug = query({
 						| MessageTemplatesShape
 						| undefined,
 					offerSelfCollect: active.offerSelfCollect,
+					offerDelivery: active.offerDelivery,
 					// Founding badge is public-safe; subscription state is NOT included.
 					isFoundingMember: active.isFoundingMember,
 					foundingMemberRank: active.foundingMemberRank,
@@ -739,6 +746,10 @@ export const createRetailer = mutation({
 			// Pickup; that visit also dismisses checklist step 4 (via
 			// markPickupSetupSeen).
 			offerSelfCollect: true,
+			// Delivery on by default too. Both methods start enabled so a new
+			// retailer can sell immediately; the Fulfilment settings tab lets them
+			// switch to pickup-only (guarded so they can't disable both).
+			offerDelivery: true,
 			termsAcceptedAt: now,
 			termsVersion: TERMS_VERSION,
 			privacyAcceptedAt: now,
@@ -784,6 +795,7 @@ export const updateSettings = mutation({
 		// Empty string clears the logo. Undefined means "no change".
 		logoStorageId: v.optional(v.string()),
 		offerSelfCollect: v.optional(v.boolean()),
+		offerDelivery: v.optional(v.boolean()),
 	},
 	handler: async (ctx, args): Promise<{ ok: true }> => {
 		const userId = await requireUserId(ctx);
@@ -808,6 +820,7 @@ export const updateSettings = mutation({
 			paymentInstructions: PaymentInstructionsShape | undefined;
 			paymentMethods: PaymentMethod[] | undefined;
 			offerSelfCollect: boolean;
+			offerDelivery: boolean;
 			updatedAt: number;
 		}> = { updatedAt: Date.now() };
 
@@ -885,6 +898,45 @@ export const updateSettings = mutation({
 		}
 		if (args.offerSelfCollect !== undefined) {
 			patch.offerSelfCollect = args.offerSelfCollect;
+		}
+		if (args.offerDelivery !== undefined) {
+			patch.offerDelivery = args.offerDelivery;
+		}
+
+		// Fulfilment invariant: a storefront must always keep at least one WORKING
+		// way to receive orders. "Working" ≠ "toggled on": delivery works when
+		// offerDelivery (effective) is on; self-collect works only when
+		// offerSelfCollect (effective) is on AND ≥1 active pickup location exists.
+		// Enforced here (the source of truth) and mirrored as a disabled toggle in
+		// the Fulfilment settings UI. Effective reads use the legacy defaults:
+		// delivery undefined → true, self-collect undefined → false.
+		if (args.offerDelivery !== undefined || args.offerSelfCollect !== undefined) {
+			const nextOfferDelivery =
+				args.offerDelivery ?? retailer.offerDelivery ?? true;
+			const nextOfferSelfCollect =
+				args.offerSelfCollect ?? retailer.offerSelfCollect ?? false;
+			let selfCollectWorking = false;
+			if (nextOfferSelfCollect) {
+				const firstActive = await ctx.db
+					.query("pickupLocations")
+					.withIndex("by_retailer_active", (q) =>
+						q.eq("retailerId", retailer._id).eq("isActive", true),
+					)
+					.first();
+				selfCollectWorking = firstActive !== null;
+			}
+			if (!nextOfferDelivery && !selfCollectWorking) {
+				// Tailor the message to what the seller was trying to do so the UI
+				// can surface an actionable reason.
+				if (args.offerDelivery === false && nextOfferSelfCollect) {
+					throw new ConvexError(
+						"Add an active pickup location before switching to pickup-only — otherwise your storefront has no way to receive orders.",
+					);
+				}
+				throw new ConvexError(
+					"Keep at least one way for buyers to receive orders — turn the other fulfilment method on before disabling this one.",
+				);
+			}
 		}
 
 		await ctx.db.patch(retailer._id, patch);

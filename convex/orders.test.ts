@@ -3188,5 +3188,75 @@ describe("tracking-link capability (shortId hardening)", () => {
 		await expect(
 			t.mutation(api.orders.claimPayment, { token: shortId }),
 		).rejects.toThrow(/Order not found/);
+
+	});
+});
+
+describe("orders — delivery offered gating", () => {
+	test("rejects a delivery order when the retailer doesn't offer delivery", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		// Simulate a pickup-only retailer (the updateSettings guard requires an
+		// active location to reach this state; patching directly keeps the test
+		// focused on orders.create).
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, { offerDelivery: false });
+		});
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+			}),
+		).rejects.toThrow(/offering delivery/i);
+	});
+
+	test("allows a delivery order for a legacy retailer (offerDelivery unset)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		// Legacy rows have no offerDelivery field; effective read is `?? true`.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, { offerDelivery: undefined });
+		});
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		expect(shortId).toMatch(/^ORD-[A-Z2-9]{4}$/);
+	});
+
+	test("allows a self_collect order when delivery is off", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const asA = t.withIdentity({ subject: USER_A });
+		const { pickupLocationId } = await asA.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Studio",
+				address: "12 Jln Tun Razak, 50400 Kuala Lumpur",
+			},
+		);
+		await asA.mutation(api.retailers.updateSettings, { offerDelivery: false });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			pickupLocationId,
+		});
+		expect(shortId).toMatch(/^ORD-[A-Z2-9]{4}$/);
 	});
 });

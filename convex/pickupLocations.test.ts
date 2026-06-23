@@ -963,3 +963,55 @@ describe("orders — delivery address placeId length cap (PR review fix)", () =>
 		).rejects.toThrow(/Invalid place ID/);
 	});
 });
+
+describe("pickupLocations — fulfilment invariant on setActive", () => {
+	test("deactivating the last active location is rejected when delivery is off", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A, "lastoff");
+		const asA = t.withIdentity({ subject: USER_A });
+		const locId = await seedLocation(t, USER_A, retailer._id, "Studio");
+		// One active location → self-collect works → allowed to turn delivery off.
+		await asA.mutation(api.retailers.updateSettings, { offerDelivery: false });
+		// Now hiding that last location would strand the storefront → rejected.
+		await expect(
+			asA.mutation(api.pickupLocations.setActive, {
+				pickupLocationId: locId,
+				isActive: false,
+			}),
+		).rejects.toThrow(/no way to receive orders/i);
+	});
+
+	test("deactivating the last active location is allowed when delivery is on", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A, "laston");
+		const asA = t.withIdentity({ subject: USER_A });
+		const locId = await seedLocation(t, USER_A, retailer._id, "Studio");
+		// Delivery stays on (default) → fine to hide the only pickup location.
+		await asA.mutation(api.pickupLocations.setActive, {
+			pickupLocationId: locId,
+			isActive: false,
+		});
+		const rows = await asA.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		expect(rows.find((r) => r._id === locId)?.isActive).toBe(false);
+	});
+
+	test("deactivating a non-last location is allowed even when delivery is off", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A, "nonlast");
+		const asA = t.withIdentity({ subject: USER_A });
+		const loc1 = await seedLocation(t, USER_A, retailer._id, "Studio");
+		await seedLocation(t, USER_A, retailer._id, "Warehouse");
+		await asA.mutation(api.retailers.updateSettings, { offerDelivery: false });
+		// Two active locations → hiding one still leaves a working method.
+		await asA.mutation(api.pickupLocations.setActive, {
+			pickupLocationId: loc1,
+			isActive: false,
+		});
+		const rows = await asA.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		expect(rows.find((r) => r._id === loc1)?.isActive).toBe(false);
+	});
+});
