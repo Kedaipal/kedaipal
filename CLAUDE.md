@@ -29,16 +29,7 @@ Kedaipal owns **one Meta-verified WhatsApp Business Account** that handles outbo
 
 **Implication:** "No Meta verification needed — live in 5 minutes" is the structural moat vs. WATI / SleekFlow / EasyStore / Orderla. WABA quality is a shared resource — protections live in [`Sprint 4 WABA Protection task`](https://app.clickup.com/t/86expmgep).
 
-## Pricing (locked, 3 tiers + 14-day trial)
-| Tier | Price | Orders/mo | Users | Includes |
-|---|---|---|---|---|
-| **Starter** | RM79 | 100 | 1 | Storefront, order pipeline, manual payment claim, basic CRM |
-| **Pro** ★ | RM149 | 500 | 2 | + Customer DB, date picker, order inbox, reminders, broadcast (100/mo) |
-| **Scale** | RM299 | Unlimited | 5 | + Tiered pricing, reseller portal, unlimited broadcasts, sales reports, custom domain |
-
-**14-day free trial, no credit card.** No free tier yet — revisit at 50 paying customers.
-**Annual:** 10 months paid, 12 received (~17% off).
-**Detailed strategy:** [`/Users/arifrahman/Workspaces/Documents/Kedaipal/01_Strategy/pricing-strategy.md`](../../../Documents/Kedaipal/01_Strategy/pricing-strategy.md)
+Pricing, business model, and founder/entity details: see [`PROJECT_CONTEXT.md`](./PROJECT_CONTEXT.md#business-model).
 
 ## Tech Stack
 - **Messaging:** WhatsApp Cloud API direct (no BSP). Production WABA verified Apr 2026.
@@ -91,8 +82,7 @@ Tracked in [ClickUp Product Roadmap](https://app.clickup.com/90182681518/v/li/90
 - **Customers are keyed by `(retailerId, waPhone)`; aggregates are denormalized** (refreshed on order create/cancel via `linkOrderToCustomer`/`decrementAggregatesForCancel`, counted once per order). Display name resolves `name → waProfileName → phone` via `getDisplayName`, mirrored in `convex/lib/customer.ts` + `src/lib/customer.ts`. A retailer-edited `name` is never overwritten by an inbound pushname.
 - Customer payment gateway is **retailer-owned** (HitPay Connect / Billplz / Stripe Connect) — Kedaipal is never the merchant of record for shopper transactions
 
-## Competitive Positioning (Orderla)
-Orderla.my (20k+ MY merchants, RM30 Plus / RM100 Pro) is the entrenched incumbent for WhatsApp ordering. Their product is a **form**; Kedaipal is a **full storefront**. Public positioning: *"Where Orderla users graduate to when their order form falls apart."* Detailed analysis: [`/Users/arifrahman/Workspaces/Documents/Kedaipal/01_Strategy/benchmark-orderla.md`](../../../Documents/Kedaipal/01_Strategy/benchmark-orderla.md).
+Competitive positioning vs Orderla: see [`PROJECT_CONTEXT.md`](./PROJECT_CONTEXT.md#competitive-landscape).
 
 ## Out of Scope (current sprint horizon)
 - Meta Commerce Catalog integration

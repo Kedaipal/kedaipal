@@ -159,15 +159,25 @@ function sanitizePaymentInstructions(
 	trimField("note", PAYMENT_NOTE_MAX);
 	return Object.keys(out).length > 0 ? out : undefined;
 }
+import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { internalMutation, mutation, query, type QueryCtx } from "./_generated/server";
+import { internalMutation, mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
 import { ConvexError } from "convex/values";
+import { reserveFoundingRank } from "./foundingMembers";
 import { rateLimiter } from "./lib/rateLimiter";
+import { capsForPlan, DAY_MS, TRIAL_DAYS } from "./lib/plans";
+import {
+	type AccessState,
+	assertSubscriptionActive,
+	loadSubscription,
+	resolveAccess,
+} from "./subscriptions";
 import {
 	assertSupportedCurrency,
 	DEFAULT_CURRENCY,
 	type SupportedCurrency,
 } from "./lib/currency";
+import { requireAdmin } from "./lib/auth";
 import {
 	assertValidEmail,
 	assertValidSlug,
@@ -339,6 +349,15 @@ type RetailerPublic = {
 	// Whether the optional "WhatsApp Business greeting message" onboarding step
 	// has been marked done/skipped. Drives the setup checklist on the dashboard.
 	onboardingGreetingSetup?: boolean;
+	// Subscription/entitlement summary — drives the nav tier pill + soft-lock UI.
+	// Populated only by the OWNER read (`getMyRetailer`); deliberately omitted from
+	// the public storefront payload (`getRetailerBySlug`) so subscription state
+	// never leaks to shoppers. Fail-safe: a retailer missing a subscription row
+	// resolves to comped full access (see resolveAccess). See docs/manual-subscription.md.
+	subscription?: AccessState;
+	// Denormalized Founding Member flags (badge / ribbon) — public-safe.
+	isFoundingMember?: boolean;
+	foundingMemberRank?: number;
 };
 
 async function loadRetailerForUser(
@@ -365,6 +384,12 @@ async function loadRetailerForUser(
 		const url = await ctx.storage.getUrl(row.logoStorageId);
 		logoUrl = url ?? undefined;
 	}
+	const sub = await loadSubscription(ctx, row._id);
+	if (!sub) {
+		console.warn(
+			`[retailers] no subscription row for retailer ${row._id} — failing open (comped full access)`,
+		);
+	}
 	return {
 		_id: row._id,
 		slug: row.slug,
@@ -386,6 +411,9 @@ async function loadRetailerForUser(
 		privacyVersion: row.privacyVersion,
 		aupVersion: row.aupVersion,
 		onboardingGreetingSetup: row.onboardingGreetingSetup,
+		subscription: resolveAccess(sub),
+		isFoundingMember: row.isFoundingMember,
+		foundingMemberRank: row.foundingMemberRank,
 	};
 }
 
@@ -453,6 +481,9 @@ export const getRetailerBySlug = query({
 						| undefined,
 					offerSelfCollect: active.offerSelfCollect,
 					offerDelivery: active.offerDelivery,
+					// Founding badge is public-safe; subscription state is NOT included.
+					isFoundingMember: active.isFoundingMember,
+					foundingMemberRank: active.foundingMemberRank,
 					// paymentInstructions intentionally omitted from the public
 					// storefront payload — only revealed in the WhatsApp confirm
 					// reply after the shopper commits to an order.
@@ -526,11 +557,109 @@ export const checkSlugAvailability = query({
 });
 
 /**
+ * Admin pre-check for "onboard a client": is a store already registered to this
+ * email? We're strictly 1 login : 1 store and Clerk enforces one account per
+ * email, so a duplicate email means the invite link would dead-end (the client
+ * would land back in their existing store). Surfacing it up front saves a wasted
+ * invite. We check our own `notifyEmail` (the right question — "already owns a
+ * store" — not merely "exists in Clerk"); it's stored normalized so equality is
+ * exact. notifyEmail is editable, so this is a strong heuristic, not a hard
+ * guarantee — the real 1:1 gate still lives in `createRetailer`. Admin-only to
+ * avoid leaking whether an email is registered. See docs/vendor-identity.md.
+ */
+export const checkEmailHasStore = query({
+	args: { email: v.string() },
+	handler: async (
+		ctx,
+		{ email },
+	): Promise<{ exists: boolean; storeName?: string; slug?: string }> => {
+		await requireAdmin(ctx);
+		let normalized: string;
+		try {
+			normalized = assertValidEmail(email);
+		} catch {
+			// Not a valid email yet (still typing) — nothing to warn about.
+			return { exists: false };
+		}
+		const existing = await ctx.db
+			.query("retailers")
+			.withIndex("by_notify_email", (q) => q.eq("notifyEmail", normalized))
+			.first();
+		if (!existing) return { exists: false };
+		return { exists: true, storeName: existing.storeName, slug: existing.slug };
+	},
+});
+
+/**
  * Create the signed-in user's retailer. Enforces strict 1:1 user↔retailer.
  *
  * Race-safe: Convex mutations are serializable, so the read-then-insert pattern
  * cannot lose to a concurrent writer.
  */
+/**
+ * Create the retailer's subscription in the SAME transaction as the retailer
+ * insert. Both paths start on the SAME 14-day `trialing` (Pro caps) — a founding
+ * member is just a trial + `foundingIntent` + a reserved rank. The PAID Pro plan
+ * only begins when Arif marks the founding invoice paid (markPaid → `active`); we
+ * never pre-activate Pro at onboard.
+ */
+async function createSubscriptionForRetailer(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	intent: "public" | "founding",
+	now: number,
+): Promise<void> {
+	const caps = capsForPlan("pro"); // trial + founding both grant Pro-level access
+	if (intent === "founding") {
+		// Founding-10: the PAID Pro subscription only starts when Arif confirms the
+		// founding invoice paid (markPaid → status "active" + fresh period). Until then
+		// the founding member rides the SAME 14-day trial as everyone else — and if the
+		// trial lapses before they pay, they're locked like any other unpaid trial. We
+		// must NOT pre-activate Pro at onboard: that would be free service before money
+		// lands. The founding-ness here is just two flags layered on the normal trial:
+		//   1. `foundingIntent` — so the invoice Arif issues auto-applies the discount.
+		//   2. a reserved founding rank — so Arif can't over-commit past 10 and the
+		//      "Founding #N" badge/spot show from day one (the rank is held, not yet paid).
+		await ctx.db.insert("subscriptions", {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			status: "trialing",
+			trialEndsAt: now + TRIAL_DAYS * DAY_MS,
+			foundingIntent: true,
+			orderCap: caps.orderCap,
+			userCap: caps.userCap,
+			broadcastQuota: caps.broadcastQuota,
+			createdAt: now,
+			updatedAt: now,
+		});
+		// Reserve the founding slot now (at onboard), not at payment — over-commit guard
+		// + immediate badge. The paid cycle is confirmed later at mark-paid. Welcome them.
+		const rank = await reserveFoundingRank(ctx, retailerId);
+		if (rank !== null) {
+			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyFoundingWelcome, {
+				retailerId,
+				rank,
+			});
+		}
+		return;
+	}
+	// Public funnel: 14-day no-card trial granting Pro-level access. Tier is
+	// chosen at conversion, not signup; `plan` holds the trialed tier (pro).
+	await ctx.db.insert("subscriptions", {
+		retailerId,
+		plan: "pro",
+		billingCycle: "monthly",
+		status: "trialing",
+		trialEndsAt: now + TRIAL_DAYS * DAY_MS,
+		orderCap: caps.orderCap,
+		userCap: caps.userCap,
+		broadcastQuota: caps.broadcastQuota,
+		createdAt: now,
+		updatedAt: now,
+	});
+}
+
 export const createRetailer = mutation({
 	args: {
 		storeName: v.string(),
@@ -539,6 +668,11 @@ export const createRetailer = mutation({
 		// Best-effort client IP captured at the consent moment. Optional —
 		// onboarding never blocks if IP lookup fails.
 		acceptanceIp: v.optional(v.string()),
+		// Signup path. Both start a 14-day trial; "founding" additionally flags the
+		// store (`foundingIntent`) and reserves a Founding-10 rank, but the paid Pro
+		// plan still only starts at admin mark-paid. The real rank gate is mark-paid +
+		// the 10-slot cap, so this is not a privileged arg in v1. See docs/manual-subscription.md.
+		intent: v.optional(v.union(v.literal("public"), v.literal("founding"))),
 	},
 	handler: async (ctx, args): Promise<{ slug: string }> => {
 		const identity = await ctx.auth.getUserIdentity();
@@ -599,7 +733,7 @@ export const createRetailer = mutation({
 		// not-pre-checked "I agree" checkbox. Stamp the server-side current
 		// versions (never client-supplied) for tamper resistance.
 		const acceptanceIp = sanitizeAcceptanceIp(args.acceptanceIp);
-		await ctx.db.insert("retailers", {
+		const retailerId = await ctx.db.insert("retailers", {
 			userId,
 			slug,
 			storeName,
@@ -626,6 +760,15 @@ export const createRetailer = mutation({
 			createdAt: now,
 			updatedAt: now,
 		});
+
+		// Create the subscription (+ founding invoice) in the same transaction, so
+		// a retailer always has a subscription row. See createSubscriptionForRetailer.
+		await createSubscriptionForRetailer(
+			ctx,
+			retailerId,
+			args.intent ?? "public",
+			now,
+		);
 
 		return { slug };
 	},
@@ -661,6 +804,8 @@ export const updateSettings = mutation({
 			.withIndex("by_user", (q) => q.eq("userId", userId))
 			.first();
 		if (!retailer) throw new ConvexError("No store to update");
+		// Soft-lock: a past_due seller can't edit store settings (growth-write).
+		await assertSubscriptionActive(ctx, retailer._id);
 
 		const patch: Partial<{
 			storeName: string;

@@ -1,6 +1,7 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import {
+	AlertCircle,
 	Check,
 	ChevronRight,
 	Package,
@@ -282,79 +283,88 @@ function OrdersRoute() {
 				}
 			/>
 			<div className="flex items-center justify-between lg:hidden">
-				<h2 className="text-xl font-bold">Orders</h2>
+				<div>
+					<h2 className="text-xl font-bold">Orders</h2>
+					<p className="text-sm text-muted-foreground">
+						{loading ? "Loading…" : `${total} total`}
+					</p>
+				</div>
 			</div>
 
-			{/* Search */}
-			<div className="relative">
-				<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-				<Input
-					value={searchInput}
-					onChange={(e) => setSearchInput(e.target.value)}
-					placeholder="Search order #, name, phone or item"
-					className="h-11 pl-9 pr-9"
-					inputMode="search"
-				/>
-				{searchInput ? (
-					<button
-						type="button"
-						onClick={() => setSearchInput("")}
-						className="absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
-						aria-label="Clear search"
-					>
-						<X className="size-4" />
-					</button>
-				) : null}
-			</div>
-
-			{/* Bucket chips */}
-			<div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0 [&::-webkit-scrollbar]:hidden">
-				{BUCKET_KEYS.map((key) => {
-					const label =
-						key === "all"
-							? "All"
-							: (INBOX_BUCKETS.find((b) => b.key === key)?.label ?? key);
-					const count = bucketCount(key);
-					const active = bucket === key;
-					return (
-						<button
-							key={key}
-							type="button"
-							onClick={() => setBucket(key)}
-							className={cn(
-								"flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-sm transition-colors",
-								active
-									? "border-foreground bg-foreground text-background"
-									: "border-border bg-background text-muted-foreground hover:border-foreground/30 hover:text-foreground",
-							)}
-						>
-							{label}
-							{count ? (
-								<span
-									className={cn(
-										"flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none",
-										active
-											? "bg-background text-foreground"
-											: key === "new"
-												? "bg-orange-500 text-white"
-												: "bg-muted text-muted-foreground",
-									)}
-								>
-									{count > 99 ? "99+" : count}
-								</span>
-							) : null}
-						</button>
-					);
-				})}
-			</div>
-
-			{/* Filters: mockup + payment + date — one coherent set (inline on
-			    desktop, bottom-sheet on mobile). */}
-			<OrderFilters
-				value={{ payment: pay, from, to, mockup }}
-				onChange={setFilters}
-				mockupCount={counts?.mockupPending}
+			<OrderInboxOverview
+				counts={counts}
+				allCount={allCount}
+				loading={loading}
 			/>
+
+			<section className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-3 shadow-sm lg:p-4">
+				<div className="relative">
+					<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+					<Input
+						value={searchInput}
+						onChange={(e) => setSearchInput(e.target.value)}
+						placeholder="Search order #, name, phone or item"
+						className="h-11 rounded-xl pl-9 pr-9"
+						inputMode="search"
+					/>
+					{searchInput ? (
+						<button
+							type="button"
+							onClick={() => setSearchInput("")}
+							className="absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+							aria-label="Clear search"
+						>
+							<X className="size-4" />
+						</button>
+					) : null}
+				</div>
+
+				<div className="-mx-3 flex gap-2 overflow-x-auto px-3 pb-1 [scrollbar-width:none] lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0 [&::-webkit-scrollbar]:hidden">
+					{BUCKET_KEYS.map((key) => {
+						const label =
+							key === "all"
+								? "All"
+								: (INBOX_BUCKETS.find((b) => b.key === key)?.label ?? key);
+						const count = bucketCount(key);
+						const active = bucket === key;
+						return (
+							<button
+								key={key}
+								type="button"
+								onClick={() => setBucket(key)}
+								className={cn(
+									"flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-sm transition-colors",
+									active
+										? "border-foreground bg-foreground text-background"
+										: "border-border bg-background text-muted-foreground hover:border-foreground/30 hover:text-foreground",
+								)}
+							>
+								{label}
+								{count ? (
+									<span
+										className={cn(
+											"flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none",
+											active
+												? "bg-background text-foreground"
+												: key === "new"
+													? "bg-orange-500 text-white"
+													: "bg-muted text-muted-foreground",
+										)}
+									>
+										{count > 99 ? "99+" : count}
+									</span>
+								) : null}
+							</button>
+						);
+					})}
+				</div>
+
+				<OrderFilters
+					value={{ payment: pay, from, to, mockup }}
+					onChange={setFilters}
+					mockupCount={counts?.mockupPending}
+				/>
+			</section>
 
 			{/* Selection toolbar — appears once at least one order is ticked. */}
 			{selected.size > 0 ? (
@@ -456,8 +466,7 @@ function OrdersRoute() {
 									>
 										<button
 											type="button"
-											role="checkbox"
-											aria-checked={isSel}
+											aria-pressed={isSel}
 											aria-label={`Select order ${o.shortId}`}
 											onClick={() => toggleSelect(o._id)}
 											className={cn(
@@ -529,6 +538,75 @@ function DeliveryMethodBadge({
 			<Icon className="size-3" aria-hidden="true" />
 			{isPickup ? "Pickup" : "Delivery"}
 		</span>
+	);
+}
+
+function OrderInboxOverview({
+	counts,
+	allCount,
+	loading,
+}: {
+	counts:
+		| {
+				new: number;
+				in_progress: number;
+				completed: number;
+				cancelled: number;
+				mockupPending: number;
+		  }
+		| undefined;
+	allCount: number | undefined;
+	loading: boolean;
+}) {
+	const stats = [
+		{
+			label: "New",
+			value: counts?.new,
+			icon: <AlertCircle className="size-4" />,
+			className: "text-orange-700 bg-orange-50 border-orange-200",
+		},
+		{
+			label: "In progress",
+			value: counts?.in_progress,
+			icon: <Package className="size-4" />,
+			className: "text-blue-700 bg-blue-50 border-blue-200",
+		},
+		{
+			label: "Done",
+			value: counts?.completed,
+			icon: <Check className="size-4" />,
+			className: "text-emerald-700 bg-emerald-50 border-emerald-200",
+		},
+		{
+			label: "All orders",
+			value: allCount,
+			icon: <ShoppingBag className="size-4" />,
+			className: "text-foreground bg-muted/50 border-border",
+		},
+	];
+
+	return (
+		<div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+			{stats.map((stat) => (
+				<div
+					key={stat.label}
+					className={cn(
+						"flex items-center gap-3 rounded-2xl border px-3 py-3",
+						stat.className,
+					)}
+				>
+					<div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-white/70">
+						{stat.icon}
+					</div>
+					<div className="min-w-0">
+						<p className="text-xs font-medium opacity-75">{stat.label}</p>
+						<p className="font-mono text-lg font-bold leading-tight">
+							{loading || stat.value == null ? "..." : stat.value}
+						</p>
+					</div>
+				</div>
+			))}
+		</div>
 	);
 }
 

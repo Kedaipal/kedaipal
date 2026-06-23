@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { AUP_VERSION, PRIVACY_VERSION, TERMS_VERSION } from "./lib/legal";
@@ -959,5 +959,68 @@ describe("orderStages (Phase 2 custom stages)", () => {
 				})),
 			}),
 		).rejects.toThrow(/can notify the buyer/i);
+	});
+});
+
+describe("retailers.checkEmailHasStore (admin onboard pre-check)", () => {
+	const ADMIN = "user_admin_email";
+	let prev: string | undefined;
+	beforeAll(() => {
+		prev = process.env.ADMIN_USER_IDS;
+		process.env.ADMIN_USER_IDS = ADMIN;
+	});
+	afterAll(() => {
+		process.env.ADMIN_USER_IDS = prev;
+	});
+
+	const asAdmin = (t: ReturnType<typeof setup>) =>
+		t.withIdentity({ subject: ADMIN });
+
+	async function seedWithEmail(
+		t: ReturnType<typeof setup>,
+		userId: string,
+		slug: string,
+		email: string,
+	) {
+		await t
+			.withIdentity({ subject: userId, email })
+			.mutation(api.retailers.createRetailer, { storeName: "Email Store", slug });
+	}
+
+	test("flags an email that already owns a store (case-insensitive)", async () => {
+		const t = setup();
+		await seedWithEmail(t, "u_e1", "email-store-1", "vendor@example.com");
+		// Stored normalized → a differently-cased lookup still matches.
+		const res = await asAdmin(t).query(api.retailers.checkEmailHasStore, {
+			email: "Vendor@Example.com",
+		});
+		expect(res.exists).toBe(true);
+		expect(res.slug).toBe("email-store-1");
+	});
+
+	test("returns not-found for an unregistered email", async () => {
+		const t = setup();
+		await seedWithEmail(t, "u_e1", "email-store-1", "vendor@example.com");
+		const res = await asAdmin(t).query(api.retailers.checkEmailHasStore, {
+			email: "nobody@example.com",
+		});
+		expect(res.exists).toBe(false);
+	});
+
+	test("an unparseable email is treated as not-found (no throw while typing)", async () => {
+		const t = setup();
+		const res = await asAdmin(t).query(api.retailers.checkEmailHasStore, {
+			email: "not-an-email",
+		});
+		expect(res.exists).toBe(false);
+	});
+
+	test("rejects a non-admin caller", async () => {
+		const t = setup();
+		await expect(
+			t
+				.withIdentity({ subject: "u_random" })
+				.query(api.retailers.checkEmailHasStore, { email: "vendor@example.com" }),
+		).rejects.toThrow(/not authorized/i);
 	});
 });

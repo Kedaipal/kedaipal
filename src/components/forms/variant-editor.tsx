@@ -1,5 +1,5 @@
 import { useMutation } from "convex/react";
-import { ImagePlus, Plus, X } from "lucide-react";
+import { ChefHat, ImagePlus, PackageCheck, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
@@ -194,7 +194,8 @@ function FulfilmentToggle({
 					onClick={() => onChange(true)}
 					className={optionClass(value)}
 				>
-					📦 Track stock
+					<PackageCheck className={compact ? "size-3.5" : "size-4"} />
+					Track stock
 				</button>
 				<button
 					type="button"
@@ -202,7 +203,8 @@ function FulfilmentToggle({
 					onClick={() => onChange(false)}
 					className={optionClass(!value)}
 				>
-					🧑‍🍳 Made to order
+					<ChefHat className={compact ? "size-3.5" : "size-4"} />
+					Made to order
 				</button>
 			</div>
 			{compact ? null : (
@@ -718,12 +720,16 @@ export function VariantEditor({
 					    so it works on touch. */}
 					<dl className="flex flex-col gap-1 rounded-lg bg-muted/40 p-2.5 text-xs text-muted-foreground">
 						<div className="flex gap-1.5">
-							<dt className="font-medium text-foreground">📦 Track stock</dt>
+							<dt className="inline-flex items-center gap-1 font-medium text-foreground">
+								<PackageCheck className="size-3.5" />
+								Track stock
+							</dt>
 							<dd>— orders stop automatically when that variant sells out.</dd>
 						</div>
 						<div className="flex gap-1.5">
-							<dt className="font-medium text-foreground">
-								🧑‍🍳 Made to order
+							<dt className="inline-flex items-center gap-1 font-medium text-foreground">
+								<ChefHat className="size-3.5" />
+								Made to order
 							</dt>
 							<dd>— never runs out; you make each one on demand.</dd>
 						</div>

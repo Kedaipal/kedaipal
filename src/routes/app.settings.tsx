@@ -3,11 +3,17 @@ import { useMutation, useQuery } from "convex/react";
 import {
 	Building2,
 	ChevronDown,
+	ClipboardList,
+	CreditCard,
 	Info,
 	Landmark,
+	MapPinned,
+	MessageCircle,
 	Music2,
 	Plus,
 	QrCode,
+	ReceiptText,
+	Settings2,
 	Store,
 	Trash2,
 } from "lucide-react";
@@ -28,6 +34,7 @@ import {
 } from "../components/dashboard/page-header";
 import { useAppForm } from "../components/forms/form";
 import { ShopeeIcon } from "../components/icons/shopee-icon";
+import { BillingTab } from "../components/settings/billing-tab";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -64,6 +71,7 @@ const LOCALE_OPTIONS = [
 
 type SettingsTab =
 	| "store"
+	| "billing"
 	| "whatsapp"
 	| "payments"
 	| "fulfilment"
@@ -77,15 +85,56 @@ const LEGACY_TAB_ALIASES: Record<string, SettingsTab> = {
 	pickup: "fulfilment",
 };
 
-const SETTINGS_TABS: ReadonlyArray<{ id: SettingsTab; label: string }> = [
-	{ id: "store", label: "Store" },
-	{ id: "whatsapp", label: "WhatsApp" },
-	{ id: "payments", label: "Payments" },
+const SETTINGS_TABS: ReadonlyArray<{
+	id: SettingsTab;
+	label: string;
+	description: string;
+	icon: ReactNode;
+}> = [
+	{
+		id: "store",
+		label: "Store",
+		description: "Name, logo, URL and currency",
+		icon: <Store className="size-4" />,
+	},
+	{
+		id: "billing",
+		label: "Billing",
+		description: "Your Kedaipal subscription + invoices",
+		icon: <ReceiptText className="size-4" />,
+	},
+	{
+		id: "whatsapp",
+		label: "WhatsApp",
+		description: "Contact number and messages",
+		icon: <MessageCircle className="size-4" />,
+	},
+	{
+		id: "payments",
+		label: "Payments",
+		description: "Bank accounts and QR codes",
+		icon: <CreditCard className="size-4" />,
+	},
 	// One home for "how buyers get their order" — delivery + self-collect toggles
 	// and the pickup-location library all live here.
-	{ id: "fulfilment", label: "Fulfilment" },
-	{ id: "order-status", label: "Order status" },
-	{ id: "integrations", label: "Integrations" },
+	{
+		id: "fulfilment",
+		label: "Fulfilment",
+		description: "Delivery & self-collect options",
+		icon: <MapPinned className="size-4" />,
+	},
+	{
+		id: "order-status",
+		label: "Order status",
+		description: "Buyer-facing order stages",
+		icon: <ClipboardList className="size-4" />,
+	},
+	{
+		id: "integrations",
+		label: "Integrations",
+		description: "Sales channels",
+		icon: <Settings2 className="size-4" />,
+	},
 ];
 
 const SETTINGS_TAB_IDS: ReadonlyArray<SettingsTab> = SETTINGS_TABS.map(
@@ -202,8 +251,12 @@ function SettingsRoute() {
 	const renameSlug = useMutation(api.retailers.renameSlug);
 	const updateSettings = useMutation(api.retailers.updateSettings);
 
-	const { tab } = Route.useSearch();
-	const [activeTab, setActiveTab] = useState<SettingsTab>(tab);
+	// URL is the source of truth for the active tab, so deep links (e.g. the
+	// "View billing" banner → ?tab=billing) actually switch the tab even when the
+	// settings page is already mounted.
+	const { tab: activeTab } = Route.useSearch();
+	const navigate = Route.useNavigate();
+	const setActiveTab = (t: SettingsTab) => navigate({ search: { tab: t } });
 	const [newSlug, setNewSlug] = useState("");
 	const [saving, setSaving] = useState(false);
 
@@ -279,19 +332,35 @@ function SettingsRoute() {
 				</p>
 			</section>
 
-			<div className="-mx-4 flex gap-1 overflow-x-auto overflow-y-hidden border-b border-input px-4 lg:mx-0 lg:px-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+			<div className="-mx-4 flex gap-2 overflow-x-auto overflow-y-hidden px-4 pb-1 lg:mx-0 lg:grid lg:grid-cols-3 lg:px-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
 				{SETTINGS_TABS.map((t) => (
 					<button
 						key={t.id}
 						type="button"
 						onClick={() => setActiveTab(t.id)}
-						className={`relative min-h-11 whitespace-nowrap px-4 text-sm font-medium transition-colors ${
+						className={`flex min-w-[10rem] items-center gap-3 rounded-2xl border p-3 text-left transition-all lg:min-w-0 ${
 							activeTab === t.id
-								? "text-primary after:absolute after:inset-x-3 after:-bottom-px after:h-0.5 after:rounded-full after:bg-primary"
-								: "text-muted-foreground hover:text-foreground"
+								? "border-accent bg-accent/10 text-foreground shadow-sm"
+								: "border-border bg-card text-muted-foreground hover:border-foreground/20 hover:text-foreground"
 						}`}
 					>
-						{t.label}
+						<span
+							className={`flex size-8 shrink-0 items-center justify-center rounded-xl ${
+								activeTab === t.id
+									? "bg-accent text-accent-foreground"
+									: "bg-muted text-muted-foreground"
+							}`}
+						>
+							{t.icon}
+						</span>
+						<span className="min-w-0">
+							<span className="block text-sm font-semibold leading-tight">
+								{t.label}
+							</span>
+							<span className="mt-0.5 hidden text-xs leading-snug text-muted-foreground sm:block">
+								{t.description}
+							</span>
+						</span>
 					</button>
 				))}
 			</div>
@@ -325,6 +394,8 @@ function SettingsRoute() {
 					</Card>
 				</div>
 			) : null}
+
+			{activeTab === "billing" ? <BillingTab retailer={retailer} /> : null}
 
 			{activeTab === "whatsapp" ? (
 				<div className="flex flex-col gap-6 pt-2">
@@ -705,10 +776,19 @@ function PaymentMethodsForm({
 	});
 	const [uploadingKey, setUploadingKey] = useState<string | null>(null);
 	const [saving, setSaving] = useState(false);
+	const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
 	const banks = methods.filter((m) => m.type === "bank");
 	const qrs = methods.filter((m) => m.type === "qr");
 
+	function toggleExpand(key: string) {
+		setExpanded((prev) => {
+			const next = new Set(prev);
+			if (next.has(key)) next.delete(key);
+			else next.add(key);
+			return next;
+		});
+	}
 	function update(key: string, patch: Partial<MethodDraft>) {
 		setMethods((prev) =>
 			prev.map((m) => (m._key === key ? { ...m, ...patch } : m)),
@@ -716,14 +796,20 @@ function PaymentMethodsForm({
 	}
 	function removeMethod(key: string) {
 		setMethods((prev) => prev.filter((m) => m._key !== key));
+		setExpanded((prev) => {
+			const next = new Set(prev);
+			next.delete(key);
+			return next;
+		});
 	}
 	function addMethod(type: "bank" | "qr") {
 		if (methods.length >= MAX_METHODS) {
 			toast.error(`You can add at most ${MAX_METHODS} payment methods`);
 			return;
 		}
+		const draft = newDraft(type);
+		setExpanded((prev) => new Set(prev).add(draft._key));
 		setMethods((prev) => {
-			const draft = newDraft(type);
 			const b = prev.filter((m) => m.type === "bank");
 			const q = prev.filter((m) => m.type === "qr");
 			// New bank slots at the end of the bank group; new QR at the very end.
@@ -813,6 +899,7 @@ function PaymentMethodsForm({
 		const displayLabel =
 			m.label.trim() ||
 			(m.type === "bank" ? m.bankName.trim() || "Bank account" : "QR code");
+		const MethodIcon = m.type === "bank" ? Landmark : QrCode;
 		if (state.isSorting) {
 			return (
 				<div
@@ -821,12 +908,31 @@ function PaymentMethodsForm({
 					}`}
 				>
 					{handle}
-					{m.type === "bank" ? (
-						<Landmark className="size-4 shrink-0 text-muted-foreground" />
-					) : (
-						<QrCode className="size-4 shrink-0 text-muted-foreground" />
-					)}
+					<MethodIcon className="size-4 shrink-0 text-muted-foreground" />
 					<span className="truncate text-sm font-medium">{displayLabel}</span>
+				</div>
+			);
+		}
+		const isExpanded = expanded.has(m._key);
+		if (!isExpanded) {
+			return (
+				<div className="flex items-center gap-2 rounded-xl border border-border bg-card p-3">
+					{handle}
+					<button
+						type="button"
+						onClick={() => toggleExpand(m._key)}
+						aria-expanded={false}
+						className="flex min-w-0 flex-1 items-center gap-2 text-left"
+					>
+						<MethodIcon className="size-4 shrink-0 text-muted-foreground" />
+						<span className="min-w-0 flex-1 truncate text-sm font-medium">
+							{displayLabel}
+						</span>
+						<span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+							{m.type === "bank" ? "Bank" : "QR"}
+						</span>
+						<ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+					</button>
 				</div>
 			);
 		}
@@ -834,16 +940,20 @@ function PaymentMethodsForm({
 			<div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
 				<div className="flex items-center gap-2">
 					{handle}
-					<span className="text-sm font-medium text-muted-foreground">
-						{m.type === "bank" ? "Bank account" : "QR code"}
-					</span>
 					<button
 						type="button"
-						onClick={() => removeMethod(m._key)}
-						aria-label="Remove method"
-						className="ml-auto flex size-11 items-center justify-center rounded-full text-destructive hover:bg-destructive/10"
+						onClick={() => toggleExpand(m._key)}
+						aria-expanded={true}
+						className="flex min-w-0 flex-1 items-center gap-2 text-left"
 					>
-						<Trash2 className="size-4" />
+						<MethodIcon className="size-4 shrink-0 text-muted-foreground" />
+						<span className="min-w-0 flex-1 truncate text-sm font-medium">
+							{displayLabel}
+						</span>
+						<span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+							{m.type === "bank" ? "Bank" : "QR"}
+						</span>
+						<ChevronDown className="size-4 shrink-0 rotate-180 text-muted-foreground" />
 					</button>
 				</div>
 
@@ -954,6 +1064,15 @@ function PaymentMethodsForm({
 						className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 					/>
 				</label>
+
+				<button
+					type="button"
+					onClick={() => removeMethod(m._key)}
+					className="flex h-9 items-center gap-1.5 self-start rounded-lg px-2 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10"
+				>
+					<Trash2 className="size-3.5" />
+					Remove payment method
+				</button>
 			</div>
 		);
 	}

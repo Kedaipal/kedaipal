@@ -15,3 +15,8 @@ src/paraglide/
 
 # graphify knowledge graph build artifacts (regenerable via /graphify)
 graphify-out/
+
+# only for individual dev usage
+.dev.vars
+.mcp.json
+.claude/*

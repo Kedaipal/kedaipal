@@ -180,12 +180,22 @@ export default defineSchema({
 		// message" setup step as done (or skipped). Persisted so the step stays
 		// collapsed across sessions and the setup checklist can reach all-done.
 		onboardingGreetingSetup: v.optional(v.boolean()),
+		// Founding Member denormalized flags (fast storefront reads). Set once when
+		// the retailer's first Pro invoice is marked paid (rank ≤ 10); never revert,
+		// even on cancellation/refund. Source of truth is the `foundingMembers`
+		// ledger. See docs/manual-subscription.md.
+		isFoundingMember: v.optional(v.boolean()),
+		foundingMemberRank: v.optional(v.number()),
 		channel: v.literal("whatsapp"),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
 		.index("by_user", ["userId"])
-		.index("by_slug", ["slug"]),
+		.index("by_slug", ["slug"])
+		// Admin "onboard a client" pre-check: is a store already registered to this
+		// email? notifyEmail is stored normalized (trim + lowercase via
+		// assertValidEmail), so an equality lookup is exact. See docs/vendor-identity.md.
+		.index("by_notify_email", ["notifyEmail"]),
 
 	slugHistory: defineTable({
 		oldSlug: v.string(),
@@ -564,4 +574,120 @@ export default defineSchema({
 		note: v.optional(v.string()),
 		createdAt: v.number(),
 	}).index("by_order", ["orderId"]),
+
+	// --- Manual subscription billing (docs/manual-subscription.md) -----------
+	// Per-retailer subscription. One row per retailer (created in-transaction by
+	// createRetailer). Entitlement caps are DENORMALIZED here so feature-gating
+	// reads them directly, never the `plan` field — keeps the seam clean for when
+	// automated billing arrives. `trialing` (plan = tier being trialed, default
+	// pro) → `active` (paid) / `past_due` (lapsed) / `cancelled`.
+	subscriptions: defineTable({
+		retailerId: v.id("retailers"),
+		plan: v.union(v.literal("starter"), v.literal("pro"), v.literal("scale")),
+		billingCycle: v.union(v.literal("monthly"), v.literal("annual")),
+		status: v.union(
+			v.literal("trialing"),
+			v.literal("active"),
+			v.literal("past_due"),
+			v.literal("cancelled"),
+		),
+		trialEndsAt: v.optional(v.number()),
+		// Stamped when the "trial ends in 3 days" email is sent, so the daily cron
+		// sends it at most once.
+		trialReminderSentAt: v.optional(v.number()),
+		currentPeriodStart: v.optional(v.number()),
+		currentPeriodEnd: v.optional(v.number()),
+		cancelledAt: v.optional(v.number()),
+		// Pilot / backfilled retailers: full access, never charged, ineligible for
+		// the Founding rank.
+		comped: v.optional(v.boolean()),
+		// Set at a Founding-10 onboard (1-month trial). Flags the store so the
+		// conversion invoice auto-applies the founding discount + claims the rank,
+		// even before isFoundingMember is true. Cleared/irrelevant once claimed.
+		foundingIntent: v.optional(v.boolean()),
+		// Denormalized entitlements read by feature-gating. orderCap is SOFT in v1
+		// (nudge only, never blocks the public storefront); userCap + broadcastQuota
+		// are hard on seller-side surfaces.
+		orderCap: v.number(),
+		userCap: v.number(),
+		broadcastQuota: v.number(),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_retailer", ["retailerId"])
+		.index("by_status", ["status"]), // drives the cron status scans
+
+	// Per-period invoice. Admin marks it paid out-of-band (DuitNow / bank). The
+	// founding pending invoice carries a `dueDate` that drives the active→past_due
+	// overdue cron flip.
+	invoices: defineTable({
+		retailerId: v.id("retailers"),
+		subscriptionId: v.id("subscriptions"),
+		invoiceNumber: v.string(),
+		// The plan/cycle being BILLED on this invoice. Lives on the invoice (not the
+		// subscription) so issuing doesn't change the seller's visible tier before they
+		// pay — mark-paid reconciles the sub from these. Optional for pre-existing rows.
+		plan: v.optional(
+			v.union(v.literal("starter"), v.literal("pro"), v.literal("scale")),
+		),
+		billingCycle: v.optional(
+			v.union(v.literal("monthly"), v.literal("annual")),
+		),
+		amount: v.number(), // base (minor units)
+		foundingDiscount: v.optional(v.number()), // 30% line if applicable
+		total: v.number(), // amount - foundingDiscount
+		currency: v.string(),
+		periodStart: v.number(),
+		periodEnd: v.number(),
+		dueDate: v.number(),
+		status: v.union(
+			v.literal("pending"),
+			v.literal("paid"),
+			v.literal("void"),
+		),
+		markedPaidAt: v.optional(v.number()),
+		markedPaidBy: v.optional(v.string()), // admin Clerk subject
+		paymentMethod: v.optional(v.string()), // "duitnow" / "bank_transfer" — freeform v1
+		// Soft-cancel audit (a pending invoice issued in error). The row is kept for
+		// history/reconciliation; status flips to "void". See invoices.voidInvoice.
+		voidedAt: v.optional(v.number()),
+		voidedBy: v.optional(v.string()), // admin Clerk subject
+		voidReason: v.optional(v.string()),
+		// Stamped when the pre-due-date reminder email is sent, so the daily cron
+		// sends it at most once. See convex/billingEmail.ts.
+		reminderSentAt: v.optional(v.number()),
+		createdAt: v.number(),
+	})
+		.index("by_retailer", ["retailerId"])
+		.index("by_status", ["status"]),
+
+	// Global Kedaipal payment details (retailers pay Kedaipal). A SINGLETON — one
+	// row, no retailerId. Admin-editable from /app/admin/billing so the boss can
+	// change bank details / swap the QR without a deploy. The QR image lives in
+	// Convex storage; this holds its id. See docs/manual-subscription.md.
+	billingConfig: defineTable({
+		bankName: v.optional(v.string()),
+		bankAccountName: v.optional(v.string()),
+		bankAccountNumber: v.optional(v.string()),
+		duitnowId: v.optional(v.string()),
+		qrImageStorageId: v.optional(v.string()),
+		updatedAt: v.number(),
+		updatedBy: v.optional(v.string()), // admin Clerk subject
+	}),
+
+	// Founding Member ledger — atomic rank claim (1..10). Source of truth for the
+	// denormalized retailer flags. A row exists iff a retailer claimed a rank.
+	foundingMembers: defineTable({
+		retailerId: v.id("retailers"),
+		rank: v.number(), // 1..10
+		plan: v.union(v.literal("pro"), v.literal("scale")), // tier at claim time
+		// The slot is RESERVED at founding onboard (signup), so these are filled
+		// later when the first founding invoice is actually paid (null until then).
+		paidAt: v.optional(v.number()),
+		firstInvoiceId: v.optional(v.id("invoices")),
+		welcomedAt: v.optional(v.number()),
+		whiteGloveScheduledAt: v.optional(v.number()),
+	})
+		.index("by_rank", ["rank"])
+		.index("by_retailer", ["retailerId"]),
 });

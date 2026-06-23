@@ -12,8 +12,10 @@ function SignUpPage() {
 				routing="path"
 				path="/sign-up"
 				signInUrl="/sign-in"
+				// fallback (not force) so an admin invite's signUpForceRedirectUrl —
+				// the prefilled /onboarding?…&via=admin URL — survives account creation.
+				// Plain self-signups (no redirect param) still land on /onboarding.
 				fallbackRedirectUrl="/onboarding"
-				forceRedirectUrl="/onboarding"
 			/>
 		</main>
 	);

@@ -15,6 +15,9 @@ interface TeaserTier {
 	tagline: string;
 	features: string[];
 	popular: boolean;
+	// Scale is disabled for v1 launch — "Coming soon" pill replaces the CTA. Schema
+	// keeps it so re-enabling needs no migration. See docs/manual-subscription.md.
+	comingSoon?: boolean;
 }
 
 function getTiers(): TeaserTier[] {
@@ -60,6 +63,7 @@ function getTiers(): TeaserTier[] {
 				m.pricing_feat_5_users(),
 			],
 			popular: false,
+			comingSoon: true,
 		},
 	];
 }
@@ -109,6 +113,7 @@ export function PricingTeaser() {
 										: "border border-border bg-card shadow-sm lg:my-0",
 									tier.id === "starter" && "lg:rounded-r-none lg:border-r-0",
 									tier.id === "scale" && "lg:rounded-l-none lg:border-l-0",
+									tier.comingSoon && "opacity-80",
 								)}
 							>
 								{tier.popular && (
@@ -170,28 +175,34 @@ export function PricingTeaser() {
 								</ul>
 
 								<div className="mt-7">
-									<Button
-										asChild
-										size="lg"
-										className={cn(
-											"h-11 w-full rounded-full",
-											!tier.popular &&
-												"border-border bg-background text-foreground hover:bg-muted",
-										)}
-										variant={tier.popular ? "default" : "outline"}
-									>
-										{isSignedIn ? (
-											<Link to="/app">
-												{m.nav_go_to_dashboard()}
-												<ArrowRight />
-											</Link>
-										) : (
-											<Link to="/sign-up/$" params={{ _splat: "" }}>
-												{m.pricing_cta()}
-												<ArrowRight />
-											</Link>
-										)}
-									</Button>
+									{tier.comingSoon ? (
+										<div className="flex h-11 w-full items-center justify-center rounded-full border border-dashed border-border bg-muted/40 text-sm font-semibold text-muted-foreground">
+											Coming soon
+										</div>
+									) : (
+										<Button
+											asChild
+											size="lg"
+											className={cn(
+												"h-11 w-full rounded-full",
+												!tier.popular &&
+													"border-border bg-background text-foreground hover:bg-muted",
+											)}
+											variant={tier.popular ? "default" : "outline"}
+										>
+											{isSignedIn ? (
+												<Link to="/app">
+													{m.nav_go_to_dashboard()}
+													<ArrowRight />
+												</Link>
+											) : (
+												<Link to="/sign-up/$" params={{ _splat: "" }}>
+													{m.pricing_cta()}
+													<ArrowRight />
+												</Link>
+											)}
+										</Button>
+									)}
 								</div>
 							</div>
 						))}

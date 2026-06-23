@@ -2,6 +2,7 @@ import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
 import { rateLimiter } from "./lib/rateLimiter";
+import { assertSubscriptionActive } from "./subscriptions";
 import {
 	cartesian,
 	DEFAULT_CUSTOM_LABEL,
@@ -436,6 +437,9 @@ export const create = mutation({
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		await requireRetailerOwnership(ctx, args.retailerId);
+		// Soft-lock: a past_due seller can't grow their catalog (storefront + order
+		// pipeline stay live). See docs/manual-subscription.md.
+		await assertSubscriptionActive(ctx, args.retailerId);
 
 		const existingCount = await ctx.db
 			.query("products")
@@ -532,7 +536,8 @@ export const update = mutation({
 	handler: async (ctx, { productId, ...fields }): Promise<void> => {
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
-		await requireProductOwnership(ctx, productId);
+		const ownedProduct = await requireProductOwnership(ctx, productId);
+		await assertSubscriptionActive(ctx, ownedProduct.retailerId);
 
 		if (
 			fields.imageStorageIds !== undefined &&
@@ -577,6 +582,7 @@ export const saveVariantGrid = mutation({
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		const product = await requireProductOwnership(ctx, args.productId);
+		await assertSubscriptionActive(ctx, product.retailerId);
 
 		const options = normalizeOptionsOrThrow(args.options);
 		const variants = validateVariantSet(options, args.variants);
