@@ -101,9 +101,9 @@ Auth-gated (Clerk); ownership checked (`retailer.userId === identity.subject`). 
 - **Audit** — every transition writes an `orderEvents` row.
 - **Notification** — schedules `notifyStatusChange` (fire-and-forget). It no-ops for `pending`/`confirmed` (those are covered by the confirmation flow) and when the order has no `customerWaPhone`. Messages are localized; `shipped` includes the carrier URL when set.
 
-## Public shopper mutations (capability = `shortId`)
+## Public shopper mutations (capability = `trackingToken`)
 
-Trust model: knowing the `shortId` is the capability — anyone with the tracking link can act. Each is rate-limited per `shortId`.
+Trust model: knowing the high-entropy `orders.trackingToken` is the capability — anyone with the tracking link (`/track/<token>`) can act. The human `shortId` is NOT a secret. Each is rate-limited per `token`. See [`infra-cost-scaling.md` §6](./infra-cost-scaling.md).
 
 - **`updateDeliveryAddress`** — only while `pending` (locked after confirmation); rejected for `self_collect`. Writes an `"address_updated"` event.
 - **Payment mutations** (`claimPayment`, `generateOrderProofUploadUrl`) — see [`payment-handshake.md`](./payment-handshake.md).

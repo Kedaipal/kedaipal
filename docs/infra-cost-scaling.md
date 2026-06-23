@@ -199,18 +199,41 @@ isolation). **Decision pending — do not build against it yet.**
 - **Secret scoping** (`src/lib/env.ts`): server vs `VITE_` client split correct;
   `.dev.vars` / `.env.local` gitignored.
 
-### Findings (tracked as tickets)
-- 🔴 **HIGH — `shortId` is a 4-char (~1M space) bearer token.** Same
-  `ORD-XXXX` guards both reading the order (customer PII: name, phone, address,
-  geo) and mutating it (`claimPayment`, `updateDeliveryAddress`,
-  `updatePickupLocation`, `approveMockup`, …). Per-shortId rate limits don't stop
-  *cross-ID enumeration*; `orders.get` (a query) has no throttle at all.
-  Enumerable → PII harvest (PDPA exposure) + tampering. Also a collision risk
-  past ~50–100k lifetime orders (32⁴, 3 retries).
+### ✅ FIXED — `shortId` capability hardening (was 🔴 HIGH)
+**The finding:** `shortId` (`ORD-XXXX`, ~1M space) was the *only* credential for
+both reading an order (customer PII: name, phone, address, geo) and mutating it
+(`claimPayment`, `updateDeliveryAddress`, `updatePickupLocation`,
+`approveMockup`, …). Per-shortId rate limits didn't stop cross-ID enumeration;
+`orders.get` had no throttle at all → PII harvest (PDPA) + tampering, plus a
+collision risk past ~50–100k orders.
+
+**The fix (shipped — Option 1, "separate token"):**
+- New `orders.trackingToken` — 24 chars, crypto-random (`crypto.getRandomValues`,
+  ~142 bits), generated at order create (`lib/order.ts: generateTrackingToken`),
+  indexed `by_tracking_token`. `shortId` stays the short human ref shown in
+  WhatsApp; it is **no longer a secret**.
+- Buyer tracking page is now `/track/<token>`; the URL is built from the token in
+  every WhatsApp message. Token is never echoed into page titles/canonical.
+- **Capability model:** buyer (no-auth) endpoints are keyed by `token`
+  (`getPaymentMethods`, `claimPayment`, `updateDeliveryAddress`,
+  `updatePickupLocation`, `generateOrderProofUploadUrl`, `approveMockup`,
+  `requestMockupChanges`, `declineMockupItem`). The endpoints shared with the
+  seller dashboard (`get`, `getMockupUrls`, `getCustomerImageUrl`) accept
+  `token` (buyer, unauth) **or** `shortId` (seller, **authenticated + ownership-
+  checked** via `resolveSharedOrder`) — which also closed a latent hole where any
+  signed-in user could read any order by shortId.
+- Backfill: `migrations.backfillTrackingTokens` (idempotent, batched). Run on dev
+  ✅ (39 orders). **Must run after each future deploy** so pre-existing orders get
+  tokens. Note: tracking links sent over WhatsApp *before* deploy point at
+  `/track/ORD-XXXX` and 404 after cutover; the next status message carries the
+  fresh token link.
+- Tests: all buyer-view test calls go through the token; 5 new tests assert the
+  capability model (token works, unknown token → null, anonymous shortId read
+  rejected, non-owner forbidden, owner allowed).
 - 🟠 **MEDIUM — status updates fail silently past 24h** (free-form text outside
   the service window; errors swallowed). UX dead-end + the reason out-of-window
   utility templates are needed.
-- 🟡 **LOW — `seed:run` was a public mutation** → fixed to `internalMutation`.
+- ✅ **`seed:run` was a public mutation** → fixed to `internalMutation`.
 - 🟡 **LOW — uploads aren't type/size-validated** (bounded storage-cost abuse).
 - 🟡 **LOW — dead env var `ALLOW_TEST_HELPERS`** set in Convex but unused in
   code → remove.
@@ -249,11 +272,22 @@ message ledger you already designed.
 ---
 
 ## 8. Recommended action order
-1. `shortId` capability hardening (HIGH security) — ticket.
+1. ✅ `shortId` capability hardening (HIGH security) — **DONE** (ticket
+   `86ey1fggw`). See §6.
 2. Pull minimal WABA `canSend()` + `optOuts` + `outboundMessageLog` forward from
    S4 — comment on `86expmgep`.
 3. Finite Scale `broadcastQuota` + single source of truth with WABA caps —
-   ticket.
-4. Out-of-window status updates via utility templates — ticket.
-5. `seed:run` → internal + drop dead `ALLOW_TEST_HELPERS` — done in code.
-6. Wire Sentry — ticket.
+   ticket `86ey1fghx`.
+4. Out-of-window status updates via utility templates — ticket `86ey1fgjw`.
+5. ✅ `seed:run` → internal — **DONE**. (Dead `ALLOW_TEST_HELPERS` dev env var
+   still to drop via `npx convex env remove`.)
+6. Wire Sentry — ticket `86ey1fgkn`.
+
+## Ticket index
+| Ticket | Title | Status |
+|---|---|---|
+| [`86ey1fggw`](https://app.clickup.com/t/86ey1fggw) | [Security] shortId capability hardening | ✅ done |
+| [`86ey1fghx`](https://app.clickup.com/t/86ey1fghx) | [Billing] finite Scale broadcast quota + overage | open |
+| [`86ey1fgjw`](https://app.clickup.com/t/86ey1fgjw) | [Infra] out-of-window utility templates | open |
+| [`86ey1fgkn`](https://app.clickup.com/t/86ey1fgkn) | [Infra] observability baseline (Sentry) | open |
+| [`86expmgep`](https://app.clickup.com/t/86expmgep) | [Infra] WABA Protection & Kill Switch | backlog |
