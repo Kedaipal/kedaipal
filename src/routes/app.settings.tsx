@@ -28,7 +28,7 @@ import {
 } from "../components/dashboard/page-header";
 import { useAppForm } from "../components/forms/form";
 import { ShopeeIcon } from "../components/icons/shopee-icon";
-import { PickupLocationsTab } from "../components/settings/pickup-locations-tab";
+import { FulfilmentTab } from "../components/settings/fulfilment-tab";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
@@ -66,18 +66,24 @@ type SettingsTab =
 	| "store"
 	| "whatsapp"
 	| "payments"
-	| "pickup"
+	| "fulfilment"
 	| "order-status"
 	| "integrations";
+
+// Legacy deep-link support: the fulfilment tab used to be "pickup" (self-collect
+// only). Old bookmarks / checklist links carry `?tab=pickup` — normalise them so
+// they land on the broadened Fulfilment tab instead of falling back to Store.
+const LEGACY_TAB_ALIASES: Record<string, SettingsTab> = {
+	pickup: "fulfilment",
+};
 
 const SETTINGS_TABS: ReadonlyArray<{ id: SettingsTab; label: string }> = [
 	{ id: "store", label: "Store" },
 	{ id: "whatsapp", label: "WhatsApp" },
 	{ id: "payments", label: "Payments" },
-	// Grouped with Pickup as the fulfilment cluster — these stage labels are
-	// about the order process, not messaging. Phase 2 (custom ordered stages)
-	// will extend this tab.
-	{ id: "pickup", label: "Pickup" },
+	// One home for "how buyers get their order" — delivery + self-collect toggles
+	// and the pickup-location library all live here.
+	{ id: "fulfilment", label: "Fulfilment" },
 	{ id: "order-status", label: "Order status" },
 	{ id: "integrations", label: "Integrations" },
 ];
@@ -134,11 +140,17 @@ function InfoBanner({
 }
 
 export const Route = createFileRoute("/app/settings")({
-	validateSearch: (search: Record<string, unknown>) => ({
-		tab: (SETTINGS_TAB_IDS.includes(search.tab as SettingsTab)
-			? search.tab
-			: "store") as SettingsTab,
-	}),
+	validateSearch: (search: Record<string, unknown>) => {
+		const raw =
+			typeof search.tab === "string"
+				? (LEGACY_TAB_ALIASES[search.tab] ?? search.tab)
+				: search.tab;
+		return {
+			tab: (SETTINGS_TAB_IDS.includes(raw as SettingsTab)
+				? raw
+				: "store") as SettingsTab,
+		};
+	},
 	component: SettingsRoute,
 });
 
@@ -366,10 +378,11 @@ function SettingsRoute() {
 				</div>
 			) : null}
 
-			{activeTab === "pickup" ? (
-				<PickupLocationsTab
+			{activeTab === "fulfilment" ? (
+				<FulfilmentTab
 					retailerId={retailer._id}
 					offerSelfCollect={retailer.offerSelfCollect ?? false}
+					offerDelivery={retailer.offerDelivery ?? true}
 				/>
 			) : null}
 

@@ -162,6 +162,15 @@ export default defineSchema({
 		// (set in createRetailer) so the Pickup checklist step is discoverable
 		// during onboarding; pre-existing rows stay undefined (treated as false).
 		offerSelfCollect: v.optional(v.boolean()),
+		// Retailer opt-in for offering delivery at checkout. Mirror of
+		// offerSelfCollect, but with the OPPOSITE legacy default: undefined is
+		// treated as TRUE because every pre-existing retailer has always offered
+		// delivery — flipping that to false would silently break every live
+		// storefront. New retailers get true (set in createRetailer). Effective
+		// read everywhere is `offerDelivery ?? true`. The storefront and the
+		// settings invariant guarantee a store always keeps ≥1 WORKING fulfilment
+		// method (delivery, or self-collect with ≥1 active pickup location).
+		offerDelivery: v.optional(v.boolean()),
 		// Set to true the first time the retailer opens the Pickup settings tab.
 		// Used by the dashboard checklist to mark step 4 done after a single
 		// visit, even if the retailer chose to skip self-collect — keeps the

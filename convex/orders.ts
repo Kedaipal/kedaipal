@@ -192,6 +192,18 @@ export const create = mutation({
 		const retailer = await ctx.db.get(args.retailerId);
 		if (!retailer) throw new ConvexError("Retailer not found");
 
+		// Delivery must be on offer. Mirrors the storefront gate (which hides the
+		// delivery option when offerDelivery is off) and closes the gap where a
+		// stale storefront tab could still POST a delivery order after the seller
+		// switched to pickup-only. Legacy retailers (offerDelivery unset) read as
+		// effectively offering delivery, so they're unaffected.
+		if (
+			effectiveDeliveryMethod === "delivery" &&
+			(retailer.offerDelivery ?? true) === false
+		) {
+			throw new ConvexError("This store isn't offering delivery right now");
+		}
+
 		// Self-collect pickup resolution. The storefront only surfaces self-collect
 		// when (offerSelfCollect && ≥1 active location), so the strict branch fires
 		// whenever both gates are open server-side; when either is closed we

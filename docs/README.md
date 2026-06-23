@@ -21,7 +21,7 @@ How the product actually works. Read in this order.
 | [order-note.md](./order-note.md) | Shopper's free-text note at checkout: persisted on the order, carried in the `wa.me` body, surfaced to the seller + echoed to the buyer. |
 | [payment-handshake.md](./payment-handshake.md) | The `unpaid → claimed → received` payment flow (shipped). |
 | [customer-database.md](./customer-database.md) | CRM-lite: customer entity, denormalized aggregates, name resolution, search. |
-| [pickup-locations.md](./pickup-locations.md) | Self-collect: multi-location library, toggle+count gating, frozen snapshot lifecycle, WhatsApp confirm composition. |
+| [fulfilment.md](./fulfilment.md) | Delivery + self-collect as optional, symmetric methods: per-method toggles, the working-method invariant, multi-location pickup library, frozen snapshot lifecycle, WhatsApp confirm composition. |
 | [product-variants.md](./product-variants.md) | Option-axes + variant-rows model: `productVariants` table, storefront pickers + grey-out, per-variant made-to-order + mockup-approval flags, variant-grid editor. |
 | [validation-and-rate-limits.md](./validation-and-rate-limits.md) | Trust boundaries, rate limits, input validation, mirrored validators, legal consent. |
 

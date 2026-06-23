@@ -12,6 +12,7 @@ interface CartBarProps {
 	storeName: string;
 	checkoutPhone: string | undefined;
 	offerSelfCollect: boolean;
+	offerDelivery: boolean;
 	pickupLocations: ReadonlyArray<PublicPickupLocation>;
 }
 
@@ -21,6 +22,7 @@ export function CartBar({
 	storeName,
 	checkoutPhone,
 	offerSelfCollect,
+	offerDelivery,
 	pickupLocations,
 }: CartBarProps) {
 	const [checkoutOpen, setCheckoutOpen] = useState(false);
@@ -67,6 +69,7 @@ export function CartBar({
 				storeName={storeName}
 				checkoutPhone={checkoutPhone}
 				offerSelfCollect={offerSelfCollect}
+				offerDelivery={offerDelivery}
 				pickupLocations={pickupLocations}
 			/>
 		</>

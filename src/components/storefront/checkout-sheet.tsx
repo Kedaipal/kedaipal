@@ -40,6 +40,7 @@ interface CheckoutSheetProps {
 	storeName: string;
 	checkoutPhone: string | undefined;
 	offerSelfCollect: boolean;
+	offerDelivery: boolean;
 	pickupLocations: ReadonlyArray<PublicPickupLocation>;
 }
 
@@ -189,6 +190,7 @@ export function CheckoutSheet({
 	storeName,
 	checkoutPhone,
 	offerSelfCollect,
+	offerDelivery,
 	pickupLocations,
 }: CheckoutSheetProps) {
 	const createOrder = useMutation(api.orders.create);
@@ -197,9 +199,19 @@ export function CheckoutSheet({
 	const noCheckoutPhone = !checkoutPhone;
 	// Self-collect surfaces on the storefront only when the retailer opted in
 	// AND has at least one active pickup location. Both gates must be open or
-	// we fall back to delivery-only — the toggle button is hidden entirely so
 	// the buyer never sees a non-functional option.
 	const selfCollectAvailable = offerSelfCollect && pickupLocations.length > 0;
+	// Delivery is zero-config (buyer types an address) so it only depends on the
+	// retailer's opt-in. The settings invariant guarantees at least one of these
+	// is true, so `neitherAvailable` is a defensive fallback, not a normal state.
+	const deliveryAvailable = offerDelivery;
+	const bothAvailable = deliveryAvailable && selfCollectAvailable;
+	const neitherAvailable = !deliveryAvailable && !selfCollectAvailable;
+	// Default to delivery when offered, otherwise self-collect — so a pickup-only
+	// store opens straight on the pickup picker with no dead delivery branch.
+	const defaultMethod: "delivery" | "self_collect" = deliveryAvailable
+		? "delivery"
+		: "self_collect";
 	// Stable sort so the auto-select / radio list match the retailer's
 	// configured order — the query already returns sorted, but defending against
 	// upstream reordering is cheap and removes a class of subtle bugs.
@@ -212,7 +224,7 @@ export function CheckoutSheet({
 	const form = useAppForm({
 		defaultValues: {
 			name: "",
-			deliveryMethod: "delivery" as "delivery" | "self_collect",
+			deliveryMethod: defaultMethod,
 			address: loadSavedAddress(),
 			// Empty when delivery, the chosen id when self-collect with 2+ options,
 			// unused when self-collect with exactly 1 option (auto-resolved at submit).
@@ -421,35 +433,30 @@ export function CheckoutSheet({
 										/>
 									)}
 								</form.AppField>
-								{/* Delivery method — self-collect button hidden when the retailer
-								    hasn't opted in or has no active pickup locations, so buyers
-								    never see an option that can't be used. */}
-								<form.AppField name="deliveryMethod">
-									{(field) => (
-										<fieldset className="flex flex-col gap-2">
-											<legend className="text-sm font-medium">
-												How would you like to receive your order?
-											</legend>
-											<div
-												className={
-													selfCollectAvailable
-														? "grid grid-cols-2 gap-2"
-														: "grid grid-cols-1 gap-2"
-												}
-											>
-												<button
-													type="button"
-													onClick={() => field.handleChange("delivery")}
-													className={`flex flex-col items-center gap-1.5 rounded-xl border-2 px-3 py-3 text-sm font-medium transition-colors ${
-														field.state.value === "delivery"
-															? "border-accent bg-accent/5 text-accent"
-															: "border-border bg-card text-muted-foreground hover:border-accent/40"
-													}`}
-												>
-													<Truck className="size-5" />
-													Delivery
-												</button>
-												{selfCollectAvailable ? (
+								{/* Method picker only when BOTH methods are offered. With a
+								    single method there's nothing to choose, so we drop straight
+								    to that method's form below (delivery → address, self-collect
+								    → pickup picker). The settings invariant keeps ≥1 on offer. */}
+								{bothAvailable ? (
+									<form.AppField name="deliveryMethod">
+										{(field) => (
+											<fieldset className="flex flex-col gap-2">
+												<legend className="text-sm font-medium">
+													How would you like to receive your order?
+												</legend>
+												<div className="grid grid-cols-2 gap-2">
+													<button
+														type="button"
+														onClick={() => field.handleChange("delivery")}
+														className={`flex flex-col items-center gap-1.5 rounded-xl border-2 px-3 py-3 text-sm font-medium transition-colors ${
+															field.state.value === "delivery"
+																? "border-accent bg-accent/5 text-accent"
+																: "border-border bg-card text-muted-foreground hover:border-accent/40"
+														}`}
+													>
+														<Truck className="size-5" />
+														Delivery
+													</button>
 													<button
 														type="button"
 														onClick={() => field.handleChange("self_collect")}
@@ -462,37 +469,44 @@ export function CheckoutSheet({
 														<Package className="size-5" />
 														Self Collect
 													</button>
-												) : null}
-											</div>
-										</fieldset>
-									)}
-								</form.AppField>
+												</div>
+											</fieldset>
+										)}
+									</form.AppField>
+								) : null}
 
-								<form.Subscribe selector={(s) => s.values.deliveryMethod}>
-									{(deliveryMethod) =>
-										deliveryMethod === "delivery" ? (
-											<AddressFieldset
-												form={form}
-												fields="address"
-												retailerId={retailerId}
-											/>
-										) : selfCollectAvailable ? (
-											singlePickup ? (
-												<PickupSummaryCard location={singlePickup} />
-											) : (
-												<form.AppField name="pickupLocationId">
-													{(field) => (
-														<PickupLocationRadioList
-															locations={sortedPickups}
-															value={field.state.value}
-															onChange={(id) => field.handleChange(id)}
-														/>
-													)}
-												</form.AppField>
-											)
-										) : null
-									}
-								</form.Subscribe>
+								{neitherAvailable ? (
+									<p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+										This store isn&apos;t accepting orders right now. Please
+										check back soon or message the store owner.
+									</p>
+								) : (
+									<form.Subscribe selector={(s) => s.values.deliveryMethod}>
+										{(deliveryMethod) =>
+											deliveryMethod === "delivery" ? (
+												<AddressFieldset
+													form={form}
+													fields="address"
+													retailerId={retailerId}
+												/>
+											) : selfCollectAvailable ? (
+												singlePickup ? (
+													<PickupSummaryCard location={singlePickup} />
+												) : (
+													<form.AppField name="pickupLocationId">
+														{(field) => (
+															<PickupLocationRadioList
+																locations={sortedPickups}
+																value={field.state.value}
+																onChange={(id) => field.handleChange(id)}
+															/>
+														)}
+													</form.AppField>
+												)
+											) : null
+										}
+									</form.Subscribe>
+								)}
 
 								<form.AppField name="note">
 									{(field) => (
@@ -540,7 +554,8 @@ export function CheckoutSheet({
 											!canSubmit ||
 											isSubmitting ||
 											cart.items.length === 0 ||
-											noCheckoutPhone
+											noCheckoutPhone ||
+											neitherAvailable
 										}
 										className="h-12 w-full text-base"
 									>

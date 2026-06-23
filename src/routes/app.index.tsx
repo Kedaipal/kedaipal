@@ -187,15 +187,13 @@ function DashboardHome() {
 			locale: "en",
 		});
 
-	// The Pickup step is shown to any retailer with self-collect on (default
-	// for new retailers, see createRetailer). Two paths dismiss it:
-	//   1. The retailer visits the Pickup settings tab — pickupSetupSeen flips
+	// The Fulfilment step is shown to EVERY retailer — delivery is universal, and
+	// this is where a delivery-only seller learns pickup-only is even an option.
+	// Two paths dismiss it (reusing the existing pickupSetupSeen signal — the
+	// Fulfilment tab sets it on mount):
+	//   1. The retailer opens the Fulfilment settings tab — pickupSetupSeen flips
 	//      true, step shows as strikethrough done.
-	//   2. The retailer adds an active pickup location — hasAnyActive flips
-	//      true, step shows as strikethrough done.
-	// Pre-existing retailers without offerSelfCollect set don't see the step
-	// at all (no surprise nag on first dashboard load post-deploy).
-	const offersSelfCollect = retailer.offerSelfCollect ?? false;
+	//   2. The retailer adds an active pickup location — hasAnyActive flips true.
 	const hasPickupLocation = pickupStatus?.hasAny ?? false;
 	const pickupSetupSeen = retailer.pickupSetupSeen ?? false;
 
@@ -245,22 +243,18 @@ function DashboardHome() {
 			to: "",
 			optional: true,
 		},
-		...(offersSelfCollect
-			? [
-					{
-						key: "pickup",
-						done: pickupSetupSeen || hasPickupLocation,
-						icon: MapPin,
-						title: "Add a pickup location",
-						why: "Buyers picking self-collect won't see the option on your storefront until you add at least one location. Skip if you only do delivery.",
-						time: "~2 min",
-						cta: "Go to Settings",
-						to: "/app/settings",
-						tab: "pickup" as const,
-						optional: true,
-					},
-				]
-			: []),
+		{
+			key: "fulfilment",
+			done: pickupSetupSeen || hasPickupLocation,
+			icon: MapPin,
+			title: "Set up delivery & pickup",
+			why: "Delivery is on by default — buyers just type their address. Add self-collect points if you offer pickup, or switch to pickup-only. You decide how buyers get their order.",
+			time: "~2 min",
+			cta: "Go to Settings",
+			to: "/app/settings",
+			tab: "fulfilment" as const,
+			optional: true,
+		},
 	];
 
 	const checklist: ChecklistItem[] = checklistItems.map((item, i) => ({
@@ -594,7 +588,7 @@ type SettingsTab =
 	| "store"
 	| "whatsapp"
 	| "payments"
-	| "pickup"
+	| "fulfilment"
 	| "integrations";
 
 export type ChecklistItem = {

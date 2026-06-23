@@ -3,6 +3,7 @@ import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
 import { describe, expect, test } from "vitest";
 import { api, internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { AUP_VERSION, PRIVACY_VERSION, TERMS_VERSION } from "./lib/legal";
 import schema from "./schema";
 
@@ -581,6 +582,86 @@ describe("retailers — pickup onboarding defaults", () => {
 		expect(retailer?.offerSelfCollect).toBe(true);
 		// pickupSetupSeen stays unset until the seller actually visits the tab
 		expect(retailer?.pickupSetupSeen).toBeUndefined();
+	});
+});
+
+describe("retailers — fulfilment defaults & invariant", () => {
+	async function addPickup(
+		asUser: ReturnType<ReturnType<typeof convexTest>["withIdentity"]>,
+		retailerId: Id<"retailers">,
+	) {
+		await asUser.mutation(api.pickupLocations.create, {
+			retailerId,
+			label: "Studio",
+			address: "12 Jln Tun Razak, 50400 Kuala Lumpur",
+		});
+	}
+
+	test("createRetailer sets offerDelivery=true by default", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "delivery-default-store");
+		const retailer = await asA.query(api.retailers.getMyRetailer);
+		expect(retailer?.offerDelivery).toBe(true);
+	});
+
+	test("turns delivery off when self-collect has an active location", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "pickup-only-store");
+		const retailer = await asA.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("no retailer");
+		await addPickup(asA, retailer._id);
+
+		await asA.mutation(api.retailers.updateSettings, { offerDelivery: false });
+
+		const after = await asA.query(api.retailers.getMyRetailer);
+		expect(after?.offerDelivery).toBe(false);
+		expect(after?.offerSelfCollect).toBe(true);
+	});
+
+	test("rejects turning delivery off with no active pickup location", async () => {
+		const t = setup();
+		// offerSelfCollect defaults true, but zero active locations → self-collect
+		// is not a WORKING method, so delivery-off would strand the storefront.
+		const asA = await seed(t, USER_A, "no-pickup-store");
+		await expect(
+			asA.mutation(api.retailers.updateSettings, { offerDelivery: false }),
+		).rejects.toThrow(/pickup location/i);
+	});
+
+	test("rejects turning delivery off when self-collect is also off", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "both-off-store");
+		await asA.mutation(api.retailers.updateSettings, {
+			offerSelfCollect: false,
+		});
+		await expect(
+			asA.mutation(api.retailers.updateSettings, { offerDelivery: false }),
+		).rejects.toThrow(/at least one/i);
+	});
+
+	test("rejects turning self-collect off when delivery is also off", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "selfcollect-off-store");
+		const retailer = await asA.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("no retailer");
+		await addPickup(asA, retailer._id);
+		// Delivery off is allowed (self-collect works); now removing self-collect
+		// too would leave zero methods.
+		await asA.mutation(api.retailers.updateSettings, { offerDelivery: false });
+		await expect(
+			asA.mutation(api.retailers.updateSettings, { offerSelfCollect: false }),
+		).rejects.toThrow(/at least one/i);
+	});
+
+	test("allows turning self-collect off while delivery stays on", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "delivery-only-store");
+		await asA.mutation(api.retailers.updateSettings, {
+			offerSelfCollect: false,
+		});
+		const after = await asA.query(api.retailers.getMyRetailer);
+		expect(after?.offerSelfCollect).toBe(false);
+		expect(after?.offerDelivery).toBe(true);
 	});
 });
 
