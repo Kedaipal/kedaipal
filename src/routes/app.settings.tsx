@@ -668,7 +668,7 @@ function StoreDescriptionForm({
 					className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 				/>
 				<span className="self-end text-xs text-muted-foreground tabular-nums">
-					{value.trim().length}/{STORE_DESCRIPTION_MAX}
+					{value.length}/{STORE_DESCRIPTION_MAX}
 				</span>
 			</div>
 			<Button
