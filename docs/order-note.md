@@ -37,7 +37,7 @@ no migration; legacy orders read as "no note". No index.
 4. **Seller view** (`app.orders.$shortId.tsx`) — rendered as a distinct amber
    "Note from customer" block right under the header (front-and-centre, not in a
    sub-panel). Hidden entirely when absent.
-5. **Buyer echo** (`track.$shortId.tsx`) — shown as a "Your note" block under the
+5. **Buyer echo** (`track.$token.tsx`) — shown as a "Your note" block under the
    order summary so the shopper can confirm it stuck.
 
 ## Safety

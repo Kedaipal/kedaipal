@@ -149,7 +149,7 @@ The pickup snapshot (and the buyer's chosen `deliveryAddress`) is **frozen at or
 | `src/routes/$slug.tsx` | Sidecar `listActivePublicBySlug` query passed through `CartBar` to `CheckoutSheet`. |
 | `src/components/storefront/cart-bar.tsx` | Drills `offerSelfCollect` + `pickupLocations` through. |
 | `src/components/storefront/checkout-sheet.tsx` | Self-Collect button hidden when unavailable; 0/1/2+ branching (auto-confirm card for 1, required radio for 2+); pickup block inlined into the `wa.me` prefilled text. |
-| `src/routes/track.$shortId.tsx` | "Pick up at" card for self-collect orders, rendered from the frozen snapshot. |
+| `src/routes/track.$token.tsx` | "Pick up at" card for self-collect orders, rendered from the frozen snapshot. |
 | `src/routes/app.index.tsx` | Dashboard checklist step 4 (only when `offerSelfCollect` is on); marked "Optional" via the pill in both expanded and collapsed row variants. Done logic: `pickupSetupSeen \|\| hasAnyActive`. |
 | `src/routes/app.orders.$shortId.tsx` | Seller order detail — "Pick up at" card mirroring the delivery address block, plus a "Notify store manager" panel with a pre-built copy-to-clipboard snippet for forwarding to whoever runs the pickup spot. |
 
@@ -183,12 +183,12 @@ The mutation uses a `useRef` guard in the React layer to prevent re-firing on re
 `pickupSnapshot` is the **single source of truth for all buyer-visible pickup details** after order creation. It is written by:
 
 - **`orders.create`** — copies the resolved `pickupLocations` row at insert time.
-- **`orders.updatePickupLocation(shortId, pickupLocationId)`** — public mutation, pending-only, rate-limited under `addressUpdate`. Same trust model as `updateDeliveryAddress` (shortId is the capability). Mirrors `updateDeliveryAddress`'s pending-only guard and writes a `pickup_location_updated` `orderEvents` audit row.
+- **`orders.updatePickupLocation(token, pickupLocationId)`** — public mutation, pending-only, rate-limited under `addressUpdate`. Same trust model as `updateDeliveryAddress` (the tracking token is the capability; `shortId` is not a secret — see [`infra-cost-scaling.md` §6](./infra-cost-scaling.md)). Mirrors `updateDeliveryAddress`'s pending-only guard and writes a `pickup_location_updated` `orderEvents` audit row.
 
 It is read by:
 
 - **`convex/whatsapp.ts`** confirm flow — surfaced via `getRetailerLocaleForOrder` and rendered into the WhatsApp confirmation message via `renderPickupBlock`.
-- **`src/routes/track.$shortId.tsx`** — the "Pick up at" card.
+- **`src/routes/track.$token.tsx`** — the "Pick up at" card.
 
 Edits to the source `pickupLocations` row (label, address, mapsUrl, notes) **never propagate** to existing orders. Deactivating the source row (`isActive = false`) also leaves the historical snapshot intact; the only effect is that `updatePickupLocation` will refuse to switch a pending order to that now-inactive id.
 
@@ -252,7 +252,7 @@ The pickup block is appended *after* the user-overridable confirm template — r
 
 ### Tracking page navigation buttons
 
-For self-collect orders the tracking page (`/track/<shortId>`) renders **two side-by-side buttons** when the pickup snapshot has lat/lng:
+For self-collect orders the tracking page (`/track/<token>`) renders **two side-by-side buttons** when the pickup snapshot has lat/lng:
 
 - **Open in Waze** → `https://waze.com/ul?ll=<lat>,<lng>&navigate=yes`
 - **Open in Google Maps** → `https://www.google.com/maps/search/?api=1&query=<lat>,<lng>`

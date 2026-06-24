@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
+import { consumeOrderConfirmedToastSuppression } from "../lib/orderToastSuppression";
 
 interface ActionableCounts {
 	pending: number;
@@ -40,7 +41,7 @@ export function useOrderToastNotifications(
 			);
 		}
 
-		if (newConfirmed > 0) {
+		if (newConfirmed > 0 && !consumeOrderConfirmedToastSuppression()) {
 			toast.success(
 				newConfirmed === 1
 					? "Order confirmed"

@@ -32,6 +32,14 @@ import {
 	formatAddressInline,
 } from "../components/storefront/delivery-address-display";
 import { Button } from "../components/ui/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
@@ -45,6 +53,7 @@ import {
 	resolveStatusLabel,
 	stageLabel,
 } from "../lib/orderStatus";
+import { suppressNextOrderConfirmedToast } from "../lib/orderToastSuppression";
 import { StatusBadge } from "./app.orders.index";
 
 export const Route = createFileRoute("/app/orders/$shortId")({
@@ -237,6 +246,7 @@ function OrderDetailRoute() {
 	const [carrierInput, setCarrierInput] = useState<string | null>(null);
 	const [savingCarrier, setSavingCarrier] = useState(false);
 	const [confirmingPayment, setConfirmingPayment] = useState(false);
+	const [confirmPaymentOpen, setConfirmPaymentOpen] = useState(false);
 
 	if (order === undefined) {
 		return <OrderDetailSkeleton />;
@@ -327,8 +337,12 @@ function OrderDetailRoute() {
 		if (!order) return;
 		setConfirmingPayment(true);
 		try {
+			// Marking payment on a pending order auto-confirms it too, which
+			// would otherwise also fire the generic "Order confirmed" toast.
+			if (order.status === "pending") suppressNextOrderConfirmedToast();
 			await markPaymentReceived({ orderId: order._id });
 			toast.success("Payment confirmed — customer notified on WhatsApp");
+			setConfirmPaymentOpen(false);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -502,7 +516,7 @@ function OrderDetailRoute() {
 
 					<div className="flex flex-col gap-2">
 						<Button
-							onClick={handleMarkPaymentReceived}
+							onClick={() => setConfirmPaymentOpen(true)}
 							isLoading={confirmingPayment}
 							disabled={confirmingPayment}
 							className="h-11 w-full"
@@ -543,7 +557,7 @@ function OrderDetailRoute() {
 					    and the price may not be final, so the seller can't mark payment
 					    received yet. Opens on approve / waive / removing the custom item. */}
 					<Button
-						onClick={handleMarkPaymentReceived}
+						onClick={() => setConfirmPaymentOpen(true)}
 						isLoading={confirmingPayment}
 						disabled={confirmingPayment || mockupGated}
 						variant="secondary"
@@ -950,6 +964,39 @@ function OrderDetailRoute() {
 					</div>
 				</section>
 			) : null}
+
+			<Dialog
+				open={confirmPaymentOpen}
+				onOpenChange={(o) => {
+					if (!o) setConfirmPaymentOpen(false);
+				}}
+			>
+				<DialogContent showCloseButton={false} className="sm:max-w-sm">
+					<DialogHeader>
+						<DialogTitle>Mark #{order.shortId} as paid?</DialogTitle>
+						<DialogDescription>
+							This confirms payment was received and notifies the customer on
+							WhatsApp. Make sure you've checked the amount in your bank app
+							first — this can't be undone here.
+						</DialogDescription>
+					</DialogHeader>
+					<DialogFooter>
+						<Button
+							variant="outline"
+							onClick={() => setConfirmPaymentOpen(false)}
+						>
+							Cancel
+						</Button>
+						<Button
+							isLoading={confirmingPayment}
+							disabled={confirmingPayment}
+							onClick={handleMarkPaymentReceived}
+						>
+							Mark payment received
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</div>
 	);
 }

@@ -28,9 +28,9 @@ stateDiagram-v2
 
 ## Shopper flow — claim payment
 
-On the tracking page (`/track/<shortId>`), the shopper taps **"I've paid"**. Trust model: knowing the `shortId` is the capability (same as the rest of the public tracking surface).
+On the tracking page (`/track/<token>`), the shopper taps **"I've paid"**. Trust model: knowing the high-entropy `orders.trackingToken` is the capability (the human `shortId` is NOT a secret — see [`infra-cost-scaling.md` §6](./infra-cost-scaling.md)).
 
-1. **(Optional) attach a screenshot** — `generateOrderProofUploadUrl(shortId)` mints a one-shot Convex storage upload URL. Rate-limited `proofUpload` (3/min per shortId). Refused once `received`.
+1. **(Optional) attach a screenshot** — `generateOrderProofUploadUrl(token)` mints a one-shot Convex storage upload URL. Rate-limited `proofUpload` (3/min per token). Refused once `received`.
 2. **`claimPayment(shortId, reference?, proofStorageId?)`** — rate-limited `paymentClaim` (5/min per shortId):
    - Rejected only if already `received` ("Payment already confirmed") — a retailer-confirmed payment can't be re-claimed.
    - **Idempotent otherwise**: re-submitting overwrites `paymentReference` / `paymentProofStorageId` and refreshes `paymentClaimedAt`. This lets a shopper fix a typo'd reference or add a screenshot they forgot.
@@ -79,7 +79,7 @@ paymentMethods?: Array<{
 
 **Rendering:**
 - **WhatsApp confirm reply** — `renderPaymentMethods(locale, methods)` lists every bank method as a labelled (`*bold*`) sub-block with the **account number on its own line** (so a long-press selects just the number); each `qr` method is sent as a **separate follow-up image**, captioned with its label.
-- **Track page** — a "How to pay" section (`track.$shortId.tsx`) iterates the methods (bank cards + QR images) with a **one-tap `CopyButton`** on each account number (`src/components/ui/copy-button.tsx` — reusable, check-mark + toast, degrades when the Clipboard API is unavailable). Backed by the public `orders.getPaymentMethods({ shortId })` query (capability = shortId; legacy-aware, resolves QR URLs, `null` when none). Shown while payment is still due (`paymentStatus !== "received"`) and not deferred behind a closed mockup gate.
+- **Track page** — a "How to pay" section (`track.$token.tsx`) iterates the methods (bank cards + QR images) with a **one-tap `CopyButton`** on each account number (`src/components/ui/copy-button.tsx` — reusable, check-mark + toast, degrades when the Clipboard API is unavailable). Backed by the public `orders.getPaymentMethods({ token })` query (capability = tracking token; legacy-aware, resolves QR URLs, `null` when none). Shown while payment is still due (`paymentStatus !== "received"`) and not deferred behind a closed mockup gate.
 - **Settings** (`app.settings.tsx`) — a repeatable editor with **two groups** (Bank accounts, QR codes), each independently **drag-to-reorder**. Grouping is intentional: banks render together in the WA text block while each QR is a *separate image message*, so cross-type order has no visible effect in WhatsApp — sorting "my banks" / "my QRs" is what actually renders. On save the array is flattened banks-then-QRs with sequential `sortOrder`. The reorder uses the shared **`SortableList`** (`src/components/ui/sortable-list.tsx`) — a reusable @dnd-kit primitive: mobile-safe sensors (`useSortableSensors`: 250 ms touch long-press + `touch-none` grip so the page still scrolls); rows **collapse to a compact one-line form while dragging** (via the `state.isSorting` flag) so a tall list stays easy to rearrange; and the moving card renders in a **`DragOverlay`** so it tracks the cursor independently of the list reflow. Use it for all future drag-to-reorder surfaces.
 
 > One-tap copy is scoped to the **bank account number** (the value shoppers paste into their banking app, where an exact copy matters). Source: Sukhjeet / Metalpix beta + prospect call.
