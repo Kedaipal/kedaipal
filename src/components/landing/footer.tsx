@@ -10,7 +10,21 @@ export function Footer() {
 				</div>
 				<div className="mt-8 flex flex-col gap-2 border-t border-white/10 pt-6 text-xs text-primary-foreground/60 md:flex-row md:items-center md:justify-between">
 					<p>{m.footer_copyright({ year: new Date().getFullYear() })}</p>
-					<div className="flex items-center gap-4">
+					<div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+						<a
+							href="mailto:hello@kedaipal.com"
+							className="transition-colors hover:text-primary-foreground"
+						>
+							hello@kedaipal.com
+						</a>
+						<a
+							href="https://www.instagram.com/kedaipal_my/"
+							target="_blank"
+							rel="noopener noreferrer"
+							className="transition-colors hover:text-primary-foreground"
+						>
+							{m.footer_instagram()}
+						</a>
 						<Link
 							to="/privacy"
 							className="transition-colors hover:text-primary-foreground"
