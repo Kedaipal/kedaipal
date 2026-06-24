@@ -11,6 +11,12 @@ export default defineSchema({
 		userId: v.string(), // Clerk subject (sub claim)
 		slug: v.string(),
 		storeName: v.string(),
+		// Public one-liner shown on the storefront header beneath the store name
+		// ("Home-based frozen food, Semenyih — DM for bulk orders"). Free text,
+		// trimmed + length-capped server-side (≤280 chars), rendered as escaped
+		// plain text with newlines preserved. Empty/unset → nothing renders. No
+		// index — only read alongside the retailer row.
+		storeDescription: v.optional(v.string()),
 		waPhone: v.optional(v.string()),
 		// Email address for retailer-facing operational notifications
 		// (new orders, payment claims, etc.). Independent of the Clerk auth

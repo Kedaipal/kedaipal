@@ -13,6 +13,8 @@ interface StorefrontLoaderData {
 	slug: string;
 	checkoutPhone: string | undefined;
 	locale: "en" | "ms";
+	// SEO meta/OG/JSON-LD description. Prefers the seller's own store description
+	// (single-lined) and falls back to a generated blurb.
 	description: string;
 	canonicalUrl: string;
 	ogImageUrl: string | undefined;
@@ -51,12 +53,22 @@ export const Route = createFileRoute("/$slug")({
 			}
 		}
 
+		// The seller's own description is the stronger trust/SEO signal — prefer it
+		// for meta tags, collapsing newlines to a single line. Fall back to the
+		// generated blurb when unset.
+		const sellerDescription = retailer.storeDescription
+			?.replace(/\s+/g, " ")
+			.trim();
+		const description =
+			sellerDescription ||
+			`Shop ${retailer.storeName} on Kedaipal — browse the catalog and place your order on WhatsApp.`;
+
 		return {
 			storeName: retailer.storeName,
 			slug: retailer.slug,
 			checkoutPhone: retailer.checkoutPhone,
 			locale: retailer.locale ?? "en",
-			description: `Shop ${retailer.storeName} on Kedaipal — browse the catalog and place your order on WhatsApp.`,
+			description,
 			canonicalUrl: `${SITE_URL}/${retailer.slug}`,
 			ogImageUrl,
 		};
@@ -208,9 +220,18 @@ function StorefrontRoute() {
 						{retailer.isFoundingMember ? (
 							<FoundingMemberBadge rank={retailer.foundingMemberRank} />
 						) : null}
-						<p className="text-sm text-muted-foreground">
-							Browse &amp; order on WhatsApp
-						</p>
+						{retailer.storeDescription ? (
+							// Seller's own blurb wins over the generic tagline. Plain text
+							// (escaped by React), newlines preserved, clamped to keep the
+							// header tidy. No empty block when unset.
+							<p className="line-clamp-4 whitespace-pre-line text-sm text-muted-foreground">
+								{retailer.storeDescription}
+							</p>
+						) : (
+							<p className="text-sm text-muted-foreground">
+								Browse &amp; order on WhatsApp
+							</p>
+						)}
 					</div>
 				</div>
 			</header>
