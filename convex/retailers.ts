@@ -216,6 +216,25 @@ function sanitizeAcceptanceIp(ip: string | undefined): string | undefined {
 
 const SLUG_HISTORY_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
 
+// Public storefront store description. Short by design — a one-to-three-line
+// trust signal under the store name, not a full About page. Enforced
+// server-side (never trust the client's maxLength).
+const STORE_DESCRIPTION_MAX = 280;
+
+// Trim outer whitespace (newlines INSIDE are preserved for multi-line blurbs),
+// treat blank as "clear", and reject over-cap input. Returns undefined when the
+// field should be unset so an empty description never renders an empty block.
+function sanitizeStoreDescription(input: string): string | undefined {
+	const trimmed = input.trim();
+	if (trimmed.length === 0) return undefined; // empty → clear
+	if (trimmed.length > STORE_DESCRIPTION_MAX) {
+		throw new ConvexError(
+			`Store description exceeds ${STORE_DESCRIPTION_MAX} characters`,
+		);
+	}
+	return trimmed;
+}
+
 export type Locale = "en" | "ms";
 export const DEFAULT_LOCALE: Locale = "en";
 
@@ -309,6 +328,9 @@ type RetailerPublic = {
 	_id: Id<"retailers">;
 	slug: string;
 	storeName: string;
+	// Public storefront blurb under the store name. Public-safe — surfaced on
+	// both the owner read and the by-slug storefront payload.
+	storeDescription?: string;
 	waPhone?: string;
 	notifyEmail?: string;
 	checkoutPhone?: string;
@@ -394,6 +416,7 @@ async function loadRetailerForUser(
 		_id: row._id,
 		slug: row.slug,
 		storeName: row.storeName,
+		storeDescription: row.storeDescription,
 		waPhone: row.waPhone,
 		notifyEmail: row.notifyEmail,
 		logoStorageId: row.logoStorageId,
@@ -469,6 +492,7 @@ export const getRetailerBySlug = query({
 					_id: active._id,
 					slug: active.slug,
 					storeName: active.storeName,
+					storeDescription: active.storeDescription,
 					waPhone: active.waPhone,
 					checkoutPhone: process.env.WHATSAPP_CHECKOUT_PHONE ?? active.waPhone,
 					logoStorageId: active.logoStorageId,
@@ -781,6 +805,8 @@ export const createRetailer = mutation({
 export const updateSettings = mutation({
 	args: {
 		storeName: v.optional(v.string()),
+		// Empty/blank clears the description. Undefined means "no change".
+		storeDescription: v.optional(v.string()),
 		waPhone: v.optional(v.string()),
 		notifyEmail: v.optional(v.string()),
 		currency: v.optional(v.string()),
@@ -809,6 +835,7 @@ export const updateSettings = mutation({
 
 		const patch: Partial<{
 			storeName: string;
+			storeDescription: string | undefined;
 			waPhone: string | undefined;
 			notifyEmail: string | undefined;
 			logoStorageId: string | undefined;
@@ -826,6 +853,9 @@ export const updateSettings = mutation({
 
 		if (args.storeName !== undefined) {
 			try { patch.storeName = assertValidStoreName(args.storeName); } catch (err) { throw new ConvexError((err as Error).message); }
+		}
+		if (args.storeDescription !== undefined) {
+			patch.storeDescription = sanitizeStoreDescription(args.storeDescription);
 		}
 		if (args.waPhone !== undefined) {
 			if (args.waPhone.trim().length > 0) {
