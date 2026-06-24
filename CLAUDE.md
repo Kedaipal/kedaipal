@@ -82,6 +82,7 @@ Tracked in [ClickUp Product Roadmap](https://app.clickup.com/90182681518/v/li/90
 - **Inbound `POST /webhook/whatsapp` verifies Meta's `X-Hub-Signature-256`** (HMAC-SHA256 with `WHATSAPP_APP_SECRET`) and **fails closed** — set the env var before deploying or webhooks 500
 - **Customers are keyed by `(retailerId, waPhone)`; aggregates are denormalized** (refreshed on order create/cancel via `linkOrderToCustomer`/`decrementAggregatesForCancel`, counted once per order). Display name resolves `name → waProfileName → phone` via `getDisplayName`, mirrored in `convex/lib/customer.ts` + `src/lib/customer.ts`. A retailer-edited `name` is never overwritten by an inbound pushname.
 - Customer payment gateway is **retailer-owned** (HitPay Connect / Billplz / Stripe Connect) — Kedaipal is never the merchant of record for shopper transactions
+- **The buyer's no-auth tracking page (`/track/<token>`) is capability-secured by `orders.trackingToken`** (high-entropy, crypto-random), NOT the human `shortId` (which is short + enumerable, so never a secret). Public buyer endpoints key on the token; endpoints shared with the seller dashboard (`orders.get`/`getMockupUrls`/`getCustomerImageUrl`) accept the token (buyer, unauth) **or** an authenticated + ownership-checked `shortId` (seller) via `resolveSharedOrder`. New order data/mutations exposed to buyers must key on the token. See [`docs/infra-cost-scaling.md` §6](./docs/infra-cost-scaling.md).
 
 Competitive positioning vs Orderla: see [`PROJECT_CONTEXT.md`](./PROJECT_CONTEXT.md#competitive-landscape).
 

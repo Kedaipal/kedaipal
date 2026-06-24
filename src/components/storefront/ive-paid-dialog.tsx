@@ -10,6 +10,9 @@ import { Input } from "../ui/input";
 interface IvePaidDialogProps {
 	open: boolean;
 	onClose: () => void;
+	// Capability for the public payment mutations (unguessable). NOT the shortId.
+	token: string;
+	// Human-readable order ref, display only (e.g. "Paid ORD-A7K9?").
 	shortId: string;
 	hasExistingClaim: boolean;
 }
@@ -19,6 +22,7 @@ const MAX_PROOF_BYTES = 5 * 1024 * 1024; // 5 MB — receipts are screenshots, t
 export function IvePaidDialog({
 	open,
 	onClose,
+	token,
 	shortId,
 	hasExistingClaim,
 }: IvePaidDialogProps) {
@@ -50,7 +54,7 @@ export function IvePaidDialog({
 					setSubmitting(false);
 					return;
 				}
-				const uploadUrl = await generateUploadUrl({ shortId });
+				const uploadUrl = await generateUploadUrl({ token });
 				const uploadRes = await fetch(uploadUrl, {
 					method: "POST",
 					headers: { "Content-Type": proofFile.type },
@@ -64,7 +68,7 @@ export function IvePaidDialog({
 			}
 			const trimmedRef = reference.trim();
 			await claimPayment({
-				shortId,
+				token,
 				reference: trimmedRef.length > 0 ? trimmedRef : undefined,
 				proofStorageId,
 			});

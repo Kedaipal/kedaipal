@@ -10,7 +10,7 @@ There are three classes of mutation, each with a different trust model:
 |---|---|---|---|
 | **Authenticated retailer** | Clerk identity, ownership-checked (`retailer.userId === identity.subject`) | — | `updateStatus`, `markPaymentReceived`, product writes |
 | **Public storefront** | none | retailer is named in args | `orders.create` |
-| **Public tracking** | none | knowing the `shortId` *is* the capability | `updateDeliveryAddress`, `claimPayment`, `generateOrderProofUploadUrl` |
+| **Public tracking** | none | knowing the high-entropy `trackingToken` *is* the capability (`shortId` is not a secret) | `updateDeliveryAddress`, `claimPayment`, `generateOrderProofUploadUrl` |
 
 Because the public classes are unauthenticated, **rate limiting is the first line of defence** and validation must assume hostile input.
 

@@ -14,6 +14,24 @@ function setup() {
 	return t;
 }
 
+/** Resolve an order's buyer tracking token from its shortId (see orders.test.ts). */
+async function tk(
+	t: ReturnType<typeof setup>,
+	shortId: string,
+): Promise<string> {
+	return await t.run(async (ctx) => {
+		const o = await ctx.db
+			.query("orders")
+			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+			.first();
+		if (!o) return "__no_such_order__";
+		if (o.trackingToken) return o.trackingToken;
+		const token = `tok_${shortId}`;
+		await ctx.db.patch(o._id, { trackingToken: token });
+		return token;
+	});
+}
+
 const USER_A = "user_test_a";
 const USER_B = "user_test_b";
 
@@ -98,7 +116,7 @@ describe("customers — order linking", () => {
 		});
 
 		const asUser = t.withIdentity({ subject: USER_A });
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(order?.customerId).toBeDefined();
 
 		const list = await asUser.query(api.customers.list, {
@@ -150,7 +168,7 @@ describe("customers — order linking", () => {
 			name: "Walk-in",
 		});
 
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(order?.customerId).toBeUndefined();
 
 		const asUser = t.withIdentity({ subject: USER_A });
@@ -392,7 +410,7 @@ describe("customers — WhatsApp late-bind & pushname", () => {
 			profileName: "Aisha WA",
 		});
 
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(order?.customerId).toBeDefined();
 
 		const asUser = t.withIdentity({ subject: USER_A });
@@ -535,9 +553,9 @@ describe("customers — backfill", () => {
 		expect(aisha?.name).toBe("Aisha");
 
 		// Legacy orders are now linked.
-		const linked = await t.query(api.orders.get, { shortId: "ORD-LEG1" });
+		const linked = await t.query(api.orders.get, { token: await tk(t, "ORD-LEG1") });
 		expect(linked?.customerId).toBe(aisha?._id);
-		const skipped = await t.query(api.orders.get, { shortId: "ORD-LEG4" });
+		const skipped = await t.query(api.orders.get, { token: await tk(t, "ORD-LEG4") });
 		expect(skipped?.customerId).toBeUndefined();
 	});
 
@@ -578,7 +596,7 @@ describe("customers — cancellation", () => {
 		});
 
 		const asUser = t.withIdentity({ subject: USER_A });
-		const order2 = await t.query(api.orders.get, { shortId: shortId2 });
+		const order2 = await t.query(api.orders.get, { token: await tk(t, shortId2) });
 		if (!order2) throw new Error("order missing");
 		await asUser.mutation(api.orders.updateStatus, {
 			orderId: order2._id,

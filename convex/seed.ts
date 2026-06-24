@@ -9,7 +9,7 @@
  * Idempotent — skips if the seed retailer slug already exists.
  * Never run against a production deployment.
  */
-import { mutation } from "./_generated/server";
+import { internalMutation } from "./_generated/server";
 import { cartesian, variantLabel } from "./lib/variant";
 
 const SEED_SLUG = "trailgear";
@@ -47,7 +47,7 @@ const PRODUCTS: SeedProduct[] = [
 		} },
 ] as const;
 
-export const run = mutation({
+export const run = internalMutation({
 	args: {},
 	handler: async (ctx) => {
 		// Idempotency check
