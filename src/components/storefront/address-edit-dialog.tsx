@@ -64,7 +64,8 @@ export function AddressEditDialog({
 			const line2 = value.line2.trim();
 			const notes = value.notes.trim();
 			const mapsUrl = value.mapsUrl.trim();
-			const latNum = value.latitude.trim().length > 0 ? Number(value.latitude) : NaN;
+			const latNum =
+				value.latitude.trim().length > 0 ? Number(value.latitude) : NaN;
 			const lngNum =
 				value.longitude.trim().length > 0 ? Number(value.longitude) : NaN;
 			const validCoords =

@@ -222,14 +222,21 @@ collision risk past ~50–100k orders.
   `token` (buyer, unauth) **or** `shortId` (seller, **authenticated + ownership-
   checked** via `resolveSharedOrder`) — which also closed a latent hole where any
   signed-in user could read any order by shortId.
+- **Lazy self-heal (correctness guarantee):** every WhatsApp notify path resolves
+  the token via `internal.orders.ensureTrackingToken(orderId)` when the order's
+  `trackingToken` is missing — generating + persisting one on the spot. So an
+  outbound link is **never** built from an empty token (which would ship a dead
+  `${appUrl}/track/` URL). Correctness does **not** depend on the bulk backfill
+  having run; the migration below is now just a one-time optimization, not a
+  timing-sensitive requirement.
 - Backfill: `migrations.backfillTrackingTokens` (idempotent, batched). Run on dev
-  ✅ (39 orders). **Must run after each future deploy** so pre-existing orders get
-  tokens. Note: tracking links sent over WhatsApp *before* deploy point at
-  `/track/ORD-XXXX` and 404 after cutover; the next status message carries the
-  fresh token link.
-- Tests: all buyer-view test calls go through the token; 5 new tests assert the
-  capability model (token works, unknown token → null, anonymous shortId read
-  rejected, non-owner forbidden, owner allowed).
+  ✅ (39 orders). Optional to run post-deploy (self-heal covers any stragglers as
+  they're next touched). Note: tracking links sent over WhatsApp *before* deploy
+  point at `/track/ORD-XXXX` and 404 after cutover; the next status message
+  carries the fresh token link (the already-acknowledged stale-link tradeoff).
+- Tests: all buyer-view test calls go through the token; 5 capability-model tests
+  + 2 self-heal tests (confirm reply + status notify on a token-less order assert
+  a real 24-char token is sent and persisted, never the dead `/track/` form).
 - 🟠 **MEDIUM — status updates fail silently past 24h** (free-form text outside
   the service window; errors swallowed). UX dead-end + the reason out-of-window
   utility templates are needed.

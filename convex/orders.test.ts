@@ -969,7 +969,8 @@ describe("orders", () => {
 			postcode: "40000",
 		};
 		await t.mutation(api.orders.updateDeliveryAddress, {
-			token: await tk(t, shortId),			deliveryAddress: newAddress,
+			token: await tk(t, shortId),
+			deliveryAddress: newAddress,
 		});
 		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(order?.deliveryAddress?.line1).toBe("99 Jln Cempaka");
@@ -996,7 +997,8 @@ describe("orders", () => {
 		});
 		await expect(
 			t.mutation(api.orders.updateDeliveryAddress, {
-				token: await tk(t, shortId),				deliveryAddress: validAddress,
+				token: await tk(t, shortId),
+				deliveryAddress: validAddress,
 			}),
 		).rejects.toThrow(/while the order is pending/);
 	});
@@ -1015,7 +1017,8 @@ describe("orders", () => {
 		});
 		await expect(
 			t.mutation(api.orders.updateDeliveryAddress, {
-				token: await tk(t, shortId),				deliveryAddress: validAddress,
+				token: await tk(t, shortId),
+				deliveryAddress: validAddress,
 			}),
 		).rejects.toThrow(/Self-collect orders/);
 	});
@@ -1034,7 +1037,8 @@ describe("orders", () => {
 		});
 		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		await t.mutation(api.orders.updateDeliveryAddress, {
-			token: await tk(t, shortId),			deliveryAddress: { ...validAddress, line1: "new address line" },
+			token: await tk(t, shortId),
+			deliveryAddress: { ...validAddress, line1: "new address line" },
 		});
 		const events = await t.run(async (ctx) =>
 			ctx.db
@@ -1062,7 +1066,8 @@ describe("orders", () => {
 			});
 
 			await t.mutation(api.orders.claimPayment, {
-				token: await tk(t, shortId),				reference: "TXN-12345",
+				token: await tk(t, shortId),
+				reference: "TXN-12345",
 			});
 
 			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
@@ -1114,10 +1119,12 @@ describe("orders", () => {
 			});
 
 			await t.mutation(api.orders.claimPayment, {
-				token: await tk(t, shortId),				reference: "first",
+				token: await tk(t, shortId),
+				reference: "first",
 			});
 			await t.mutation(api.orders.claimPayment, {
-				token: await tk(t, shortId),				reference: "second",
+				token: await tk(t, shortId),
+				reference: "second",
 			});
 			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 			expect(order?.paymentStatus).toBe("claimed");
@@ -1166,7 +1173,8 @@ describe("orders", () => {
 			});
 			await expect(
 				t.mutation(api.orders.claimPayment, {
-					token: await tk(t, shortId),					reference: "x".repeat(81),
+					token: await tk(t, shortId),
+					reference: "x".repeat(81),
 				}),
 			).rejects.toThrow(/characters or fewer/);
 		});
@@ -1316,7 +1324,8 @@ describe("orders", () => {
 				deliveryAddress: validAddress,
 			});
 			const url = await t.mutation(api.orders.generateOrderProofUploadUrl, {
-				token: await tk(t, shortId),			});
+				token: await tk(t, shortId),
+			});
 			expect(url).toMatch(/^https?:\/\//);
 		});
 
@@ -1559,7 +1568,8 @@ describe("orders — self-collect pickup invariants", () => {
 		});
 
 		await t.mutation(api.orders.updatePickupLocation, {
-			token: await tk(t, shortId),			pickupLocationId: secondId,
+			token: await tk(t, shortId),
+			pickupLocationId: secondId,
 		});
 
 		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
@@ -1597,7 +1607,8 @@ describe("orders — self-collect pickup invariants", () => {
 		});
 		await expect(
 			t.mutation(api.orders.updatePickupLocation, {
-				token: await tk(t, shortId),				pickupLocationId: secondId,
+				token: await tk(t, shortId),
+				pickupLocationId: secondId,
 			}),
 		).rejects.toThrow(/no longer available/);
 	});
@@ -1624,7 +1635,8 @@ describe("orders — self-collect pickup invariants", () => {
 		});
 		await expect(
 			t.mutation(api.orders.updatePickupLocation, {
-				token: await tk(t, shortId),				pickupLocationId: firstId,
+				token: await tk(t, shortId),
+				pickupLocationId: firstId,
 			}),
 		).rejects.toThrow(/while the order is pending/);
 	});
@@ -1646,7 +1658,8 @@ describe("orders — self-collect pickup invariants", () => {
 		});
 		await expect(
 			t.mutation(api.orders.updatePickupLocation, {
-				token: await tk(t, shortId),				pickupLocationId,
+				token: await tk(t, shortId),
+				pickupLocationId,
 			}),
 		).rejects.toThrow(/Delivery orders/);
 	});
@@ -1885,7 +1898,8 @@ describe("orders — mockup approval", () => {
 			storageId: "mock-1",
 		});
 		await t.mutation(api.orders.requestMockupChanges, {
-			token: await tk(t, shortId),			note: "make it bigger",
+			token: await tk(t, shortId),
+			note: "make it bigger",
 		});
 		let o = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(o?.mockupStatus).toBe("changes_requested");

@@ -963,3 +963,90 @@ describe("whatsapp confirm — single message (no follow-up location pin)", () =
 		fetchMock.restore();
 	});
 });
+
+describe("whatsapp tracking-link token self-heal", () => {
+	// A pre-migration order (no trackingToken yet) must NOT ship a dead
+	// `/track/` link — the notify path lazily generates + persists a token via
+	// internal.orders.ensureTrackingToken. Guards the regression where the URL
+	// silently degraded to `${appUrl}/track/` (empty token).
+	async function stripToken(
+		t: ReturnType<typeof setup>,
+		shortId: string,
+	): Promise<void> {
+		await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			if (o) await ctx.db.patch(o._id, { trackingToken: undefined });
+		});
+	}
+
+	async function tokenOf(
+		t: ReturnType<typeof setup>,
+		shortId: string,
+	): Promise<string | undefined> {
+		return await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			return o?.trackingToken;
+		});
+	}
+
+	test("confirm reply self-heals a missing token instead of a dead /track/ link", async () => {
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		await stripToken(t, shortId);
+
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: shortId,
+		});
+
+		const body = fetchMock.calls[0].body as {
+			interactive: { action: { parameters: { url: string } } };
+		};
+		const url = body.interactive.action.parameters.url;
+		// Never the tokenless dead form (`.../track/` or `.../track`).
+		expect(url).not.toMatch(/\/track\/?$/);
+		expect(url).toMatch(/\/track\/[A-Za-z0-9]{24}$/);
+		// Token was persisted on the order (self-heal, not just a one-off URL).
+		expect(await tokenOf(t, shortId)).toMatch(/^[A-Za-z0-9]{24}$/);
+		fetchMock.restore();
+	});
+
+	test("status-update notification self-heals a missing token", async () => {
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		// Move to a status that notifies (packed), then strip the token and fire
+		// the notify directly.
+		const orderId = await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			if (!o) throw new Error("order missing");
+			await ctx.db.patch(o._id, {
+				status: "packed",
+				customer: { ...o.customer, waPhone: "60123456789" },
+				trackingToken: undefined,
+			});
+			return o._id;
+		});
+
+		await t.action(internal.whatsapp.notifyStatusChange, { orderId });
+
+		const url = (
+			fetchMock.calls[0].body as { text?: { body: string } }
+		).text?.body;
+		expect(url).toMatch(/\/track\/[A-Za-z0-9]{24}/);
+		expect(await tokenOf(t, shortId)).toMatch(/^[A-Za-z0-9]{24}$/);
+		fetchMock.restore();
+	});
+});

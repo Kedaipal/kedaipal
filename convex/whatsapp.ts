@@ -391,7 +391,16 @@ export const handleInbound = internalAction({
 		const storeName = meta?.storeName ?? "Kedaipal";
 		const contactPhone = meta?.retailerWaPhone;
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
-		const trackingUrl = `${appUrl}/track/${meta?.trackingToken ?? ""}`;
+		// Never build a tokenless `/track/` link (a dead URL): self-heal a missing
+		// token for pre-migration orders. result.orderId is set whenever matched.
+		const trackingToken =
+			meta?.trackingToken ??
+			(result.orderId
+				? await ctx.runMutation(internal.orders.ensureTrackingToken, {
+						orderId: result.orderId,
+					})
+				: null);
+		const trackingUrl = `${appUrl}/track/${trackingToken ?? ""}`;
 
 		if (meta?.mockupPending) {
 			// Order still has a custom item awaiting buyer mockup approval — defer
@@ -491,7 +500,11 @@ export const notifyStatusChange = internalAction({
 		if (meta.status === "pending" || meta.status === "confirmed") return;
 
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
-		const trackingUrl = `${appUrl}/track/${meta.trackingToken ?? ""}`;
+		const trackingToken =
+			meta.trackingToken ??
+			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
+		if (!trackingToken) return; // order vanished — don't ship a dead link
+		const trackingUrl = `${appUrl}/track/${trackingToken}`;
 		const locale = pickLocale(meta.locale);
 		const body = renderMessage(meta.messageTemplates, locale, meta.status, {
 			shortId: meta.shortId,
@@ -544,11 +557,15 @@ export const notifyStageEntry = internalAction({
 		if (!stage) return; // stage was deleted between schedule + run — drop silently
 
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
+		const trackingToken =
+			meta.trackingToken ??
+			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
+		if (!trackingToken) return; // order vanished — don't ship a dead link
 		const body = renderStageUpdate(locale, {
 			shortId: meta.shortId,
 			stageLabel: stageLabel(stage, locale),
 			stageDescription: stageDescription(stage, locale),
-			trackingUrl: `${appUrl}/track/${meta.trackingToken ?? ""}`,
+			trackingUrl: `${appUrl}/track/${trackingToken}`,
 			contactPhone: meta.retailerWaPhone,
 		});
 		try {
@@ -598,7 +615,11 @@ export const notifyPaymentReceived = internalAction({
 		if (!meta.customerWaPhone) return;
 
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
-		const trackingUrl = `${appUrl}/track/${meta.trackingToken ?? ""}`;
+		const trackingToken =
+			meta.trackingToken ??
+			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
+		if (!trackingToken) return; // order vanished — don't ship a dead link
+		const trackingUrl = `${appUrl}/track/${trackingToken}`;
 		const locale = pickLocale(meta.locale);
 		const body = renderSystemMessage(locale, "paymentReceived", {
 			shortId: meta.shortId,
@@ -682,7 +703,11 @@ export const notifyMockupSubmitted = internalAction({
 		if (!meta || !meta.customerWaPhone) return;
 
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
-		const trackingUrl = `${appUrl}/track/${meta.trackingToken ?? ""}`;
+		const trackingToken =
+			meta.trackingToken ??
+			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
+		if (!trackingToken) return; // order vanished — don't ship a dead link
+		const trackingUrl = `${appUrl}/track/${trackingToken}`;
 		const greeting = meta.customerName ? ` ${meta.customerName}` : "";
 		const body =
 			meta.locale === "ms"
@@ -789,7 +814,11 @@ export const notifyPaymentDue = internalAction({
 		if (!meta || !meta.customerWaPhone) return;
 
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
-		const trackingUrl = `${appUrl}/track/${meta.trackingToken ?? ""}`;
+		const trackingToken =
+			meta.trackingToken ??
+			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
+		if (!trackingToken) return; // order vanished — don't ship a dead link
+		const trackingUrl = `${appUrl}/track/${trackingToken}`;
 		const introKey =
 			reason === "approved"
 				? "paymentDueApproved"

@@ -3,6 +3,7 @@ import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
+	internalMutation,
 	mutation,
 	type MutationCtx,
 	query,
@@ -144,6 +145,26 @@ async function resolveSharedOrder(
 	}
 	throw new ConvexError("Provide a tracking token or order ref");
 }
+
+/**
+ * Return an order's tracking token, generating + persisting one if it's missing
+ * (a pre-migration order that never went through `create`). Idempotent. Called by
+ * the WhatsApp notify actions so an outbound tracking link is NEVER built from a
+ * missing token (which would ship a dead `/track/` URL) — correctness no longer
+ * depends on the bulk `backfillTrackingTokens` migration having run first; that's
+ * now just an optimization. Returns null only if the order vanished.
+ */
+export const ensureTrackingToken = internalMutation({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<string | null> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) return null;
+		if (order.trackingToken) return order.trackingToken;
+		const token = generateTrackingToken();
+		await ctx.db.patch(orderId, { trackingToken: token, updatedAt: Date.now() });
+		return token;
+	},
+});
 
 export const create = mutation({
 	args: {

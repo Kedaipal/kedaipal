@@ -61,19 +61,19 @@ function getPaymentConfig(status: PaymentStatus): PaymentCfg {
 				label: "Payment Confirmed",
 				icon: <BadgeCheck className="size-5" />,
 				tone: "border-emerald-200 bg-emerald-50 text-emerald-700",
-			}
+			};
 		case "claimed":
 			return {
 				label: "Payment Submitted",
 				icon: <Hourglass className="size-5" />,
 				tone: "border-blue-200 bg-blue-50 text-blue-700",
-			}
+			};
 		default:
 			return {
 				label: "Payment Unpaid",
 				icon: <HandCoins className="size-5" />,
 				tone: "border-amber-200 bg-amber-50 text-amber-800",
-			}
+			};
 	}
 }
 
@@ -162,7 +162,7 @@ function getStatusConfig(
 			icon: <XCircle className="size-5" />,
 			color: "text-destructive",
 		},
-	}
+	};
 }
 
 function OrderNotFound() {
@@ -172,11 +172,11 @@ function OrderNotFound() {
 		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-3 px-5 text-center">
 			<h1 className="text-2xl font-bold">Order not found</h1>
 			<p className="text-sm text-muted-foreground">
-				This tracking link is invalid or has expired. Please use the latest
-				link from your WhatsApp chat with the store.
+				This tracking link is invalid or has expired. Please use the latest link
+				from your WhatsApp chat with the store.
 			</p>
 		</main>
-	)
+	);
 }
 
 function TrackingSkeleton() {
@@ -230,7 +230,7 @@ function TrackingSkeleton() {
 				<Skeleton className="h-10 w-full rounded-xl" />
 			</section>
 		</main>
-	)
+	);
 }
 
 function TrackingRoute() {
@@ -249,7 +249,7 @@ function TrackingRoute() {
 	const paymentMethods = useQuery(
 		api.orders.getPaymentMethods,
 		showPaymentSection ? { token } : "skip",
-	)
+	);
 	const [editingAddress, setEditingAddress] = useState(false);
 	const [claimingPayment, setClaimingPayment] = useState(false);
 
@@ -266,7 +266,7 @@ function TrackingRoute() {
 		deliveryMethod,
 		order.statusLabels,
 		order.retailerLocale,
-	)
+	);
 	const config = statusConfig[order.status];
 	const isCancelled = order.status === "cancelled";
 	const canEditAddress = order.status === "pending" && !isSelfCollect;
@@ -296,7 +296,7 @@ function TrackingRoute() {
 	const quoteLineIdx =
 		customQuote > 0 && mockupGateOpen && zeroPricedLineIdx.length === 1
 			? zeroPricedLineIdx[0]
-			: null
+			: null;
 	const showCustomWorkLine = customQuote > 0 && quoteLineIdx === null;
 
 	// Phase 2: the timeline IS the seller's full ordered stage list (their config,
@@ -309,14 +309,14 @@ function TrackingRoute() {
 		orderStages: order.orderStages,
 		labels: order.statusLabels,
 		deliveryMethod,
-	})
+	});
 	const currentStage = resolveCurrentStage(
 		{ status: order.status, currentStageId: order.currentStageId },
 		stages,
-	)
+	);
 	const stageIdx = currentStage
 		? stages.findIndex((s) => s.id === currentStage.id)
-		: -1
+		: -1;
 	// Combined position into the rendered list: 0 = pending node, 1..N = stages.
 	const currentPos =
 		order.status === "pending" ? 0 : stageIdx >= 0 ? stageIdx + 1 : 0;
@@ -336,7 +336,7 @@ function TrackingRoute() {
 			isDone: true, // any order on this page has at least been received
 			isCurrent: currentPos === 0,
 		},
-	]
+	];
 	for (const [i, stage] of stages.entries()) {
 		const pos = i + 1;
 		timelineNodes.push({
@@ -347,7 +347,7 @@ function TrackingRoute() {
 				pos === currentPos ? stageDescription(stage, stageLocale) : undefined,
 			isDone: pos <= currentPos,
 			isCurrent: pos === currentPos,
-		})
+		});
 	}
 	if (order.mockupStatus !== undefined) {
 		// While the gate is closed the mockup is the active step, not the stage.
@@ -356,7 +356,7 @@ function TrackingRoute() {
 		}
 		const firstProd = stages.findIndex(
 			(s) => anchorOrdinal(s.anchor) >= anchorOrdinal("packed"),
-		)
+		);
 		const insertAt = firstProd >= 0 ? firstProd + 1 : timelineNodes.length;
 		timelineNodes.splice(insertAt, 0, {
 			key: "mockup",
@@ -370,7 +370,7 @@ function TrackingRoute() {
 			icon: <ImageIcon className="size-5" />,
 			isDone: mockupGateOpen,
 			isCurrent: mockupGateClosed && currentPos >= 1,
-		})
+		});
 	}
 
 	return (
@@ -483,6 +483,7 @@ function TrackingRoute() {
 					</p>
 					{paymentMethods.map((m, i) => (
 						<div
+							// biome-ignore lint/suspicious/noArrayIndexKey: payment methods are a render-stable embedded array with no stable id; label+index is fine and stable within a render
 							key={`${m.label}-${i}`}
 							className="flex flex-col gap-2 border-border [&:not(:first-of-type)]:border-t [&:not(:first-of-type)]:pt-4"
 						>
@@ -525,7 +526,7 @@ function TrackingRoute() {
 								<div className="flex flex-col items-center gap-1.5">
 									<ZoomableImage
 										src={m.qrImageUrl}
-										alt={"${m.label} QR code"}
+										alt={`${m.label} QR code`}
 										caption={m.label}
 										className="max-h-56 w-auto rounded-lg border border-border bg-white"
 									/>
@@ -666,7 +667,7 @@ function TrackingRoute() {
 								<MapPin className="size-3.5" />
 								Open pinned location
 							</a>
-						) : null
+						) : null;
 					})()}
 					{!canEditAddress ? (
 						<p className="text-xs text-muted-foreground">
@@ -717,7 +718,7 @@ function TrackingRoute() {
 							: item.price * item.quantity;
 						const unitPrice = isQuoteLine
 							? customQuote / item.quantity
-							: item.price
+							: item.price;
 						return (
 							<li
 								key={item.variantId ?? `${item.productId}-${i}`}
@@ -740,7 +741,7 @@ function TrackingRoute() {
 									{formatPrice(lineTotal, order.currency)}
 								</p>
 							</li>
-						)
+						);
 					})}
 				</ul>
 				{showCustomWorkLine ? (
@@ -775,7 +776,7 @@ function TrackingRoute() {
 				</section>
 			) : null}
 		</main>
-	)
+	);
 }
 
 /**
@@ -825,7 +826,7 @@ function PickupNavButtons({
 					Open in Google Maps
 				</a>
 			</div>
-		)
+		);
 	}
 	// PlaceId without coords → Google only (Waze can't navigate without lat/lng).
 	if (googleUrl) {
@@ -839,7 +840,7 @@ function PickupNavButtons({
 				<ExternalLink className="size-3.5" />
 				Open in Google Maps
 			</a>
-		)
+		);
 	}
 	// Legacy snapshot with only a retailer-pasted maps link.
 	if (snapshot.mapsUrl) {
@@ -853,7 +854,7 @@ function PickupNavButtons({
 				<ExternalLink className="size-3.5" />
 				Open in maps
 			</a>
-		)
+		);
 	}
 	return null;
 }
@@ -1091,5 +1092,5 @@ function MockupReview({
 				)
 			) : null}
 		</section>
-	)
+	);
 }
