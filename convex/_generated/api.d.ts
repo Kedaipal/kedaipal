@@ -36,6 +36,7 @@ import type * as lib_payment from "../lib/payment.js";
 import type * as lib_plans from "../lib/plans.js";
 import type * as lib_rateLimiter from "../lib/rateLimiter.js";
 import type * as lib_slug from "../lib/slug.js";
+import type * as lib_storeProfile from "../lib/storeProfile.js";
 import type * as lib_variant from "../lib/variant.js";
 import type * as lib_whatsapp from "../lib/whatsapp.js";
 import type * as lib_whatsappCopy from "../lib/whatsappCopy.js";
@@ -86,6 +87,7 @@ declare const fullApi: ApiFromModules<{
   "lib/plans": typeof lib_plans;
   "lib/rateLimiter": typeof lib_rateLimiter;
   "lib/slug": typeof lib_slug;
+  "lib/storeProfile": typeof lib_storeProfile;
   "lib/variant": typeof lib_variant;
   "lib/whatsapp": typeof lib_whatsapp;
   "lib/whatsappCopy": typeof lib_whatsappCopy;

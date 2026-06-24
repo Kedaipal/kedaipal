@@ -21,6 +21,7 @@ import { type FormEvent, type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { SUPPORTED_CURRENCIES } from "../../convex/lib/currency";
+import { STORE_DESCRIPTION_MAX } from "../../convex/lib/storeProfile";
 import {
 	defaultTemplate,
 	type Locale,
@@ -618,8 +619,6 @@ function StoreNameForm({
 		</form>
 	);
 }
-
-const STORE_DESCRIPTION_MAX = 280;
 
 function StoreDescriptionForm({
 	current,

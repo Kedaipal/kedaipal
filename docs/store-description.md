@@ -48,4 +48,8 @@ seller stuffs the full 280 chars. No `dangerouslySetInnerHTML`.
 
 ## Tier
 
-Starter (RM79) — table-stakes storefront polish, ungated.
+**Ungated — available on every plan.** A one-line "what I sell" blurb is basic
+trust-signal table stakes; paywalling it would leave storefronts looking empty
+and hurt conversion for exactly the sellers we want to land. (The roadmap ticket
+labels it "Starter (RM79)" under *Tier impact* — that's the tier it landed in,
+not a gate. There is no entitlement check on `storeDescription`.)

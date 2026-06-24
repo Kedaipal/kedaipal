@@ -60,9 +60,8 @@ export const Route = createFileRoute("/$slug")({
 			?.replace(/\s+/g, " ")
 			.trim();
 		const description =
-			sellerDescription && sellerDescription.length > 0
-				? sellerDescription
-				: `Shop ${retailer.storeName} on Kedaipal — browse the catalog and place your order on WhatsApp.`;
+			sellerDescription ||
+			`Shop ${retailer.storeName} on Kedaipal — browse the catalog and place your order on WhatsApp.`;
 
 		return {
 			storeName: retailer.storeName,

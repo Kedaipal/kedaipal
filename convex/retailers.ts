@@ -178,6 +178,7 @@ import {
 	type SupportedCurrency,
 } from "./lib/currency";
 import { requireAdmin } from "./lib/auth";
+import { STORE_DESCRIPTION_MAX } from "./lib/storeProfile";
 import {
 	assertValidEmail,
 	assertValidSlug,
@@ -215,11 +216,6 @@ function sanitizeAcceptanceIp(ip: string | undefined): string | undefined {
 }
 
 const SLUG_HISTORY_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
-
-// Public storefront store description. Short by design — a one-to-three-line
-// trust signal under the store name, not a full About page. Enforced
-// server-side (never trust the client's maxLength).
-const STORE_DESCRIPTION_MAX = 280;
 
 // Trim outer whitespace (newlines INSIDE are preserved for multi-line blurbs),
 // treat blank as "clear", and reject over-cap input. Returns undefined when the
