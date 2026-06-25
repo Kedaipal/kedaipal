@@ -10,6 +10,7 @@
 
 import type * as billing from "../billing.js";
 import type * as billingEmail from "../billingEmail.js";
+import type * as counterCheckout from "../counterCheckout.js";
 import type * as crons from "../crons.js";
 import type * as customers from "../customers.js";
 import type * as email from "../email.js";
@@ -27,6 +28,7 @@ import type * as lib_currency from "../lib/currency.js";
 import type * as lib_customer from "../lib/customer.js";
 import type * as lib_email from "../lib/email.js";
 import type * as lib_emailCopy from "../lib/emailCopy.js";
+import type * as lib_inboundIntent from "../lib/inboundIntent.js";
 import type * as lib_legal from "../lib/legal.js";
 import type * as lib_mapsUrl from "../lib/mapsUrl.js";
 import type * as lib_order from "../lib/order.js";
@@ -61,6 +63,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   billing: typeof billing;
   billingEmail: typeof billingEmail;
+  counterCheckout: typeof counterCheckout;
   crons: typeof crons;
   customers: typeof customers;
   email: typeof email;
@@ -78,6 +81,7 @@ declare const fullApi: ApiFromModules<{
   "lib/customer": typeof lib_customer;
   "lib/email": typeof lib_email;
   "lib/emailCopy": typeof lib_emailCopy;
+  "lib/inboundIntent": typeof lib_inboundIntent;
   "lib/legal": typeof lib_legal;
   "lib/mapsUrl": typeof lib_mapsUrl;
   "lib/order": typeof lib_order;

@@ -1050,3 +1050,58 @@ describe("whatsapp tracking-link token self-heal", () => {
 		fetchMock.restore();
 	});
 });
+
+describe("whatsapp inbound — Counter Checkout intent routing", () => {
+	test("KP-<token> binds the session and replies to the buyer", async () => {
+		const t = setup();
+		const { retailerId } = await seedRetailerWithLocale(t, "en");
+		const { sessionId, token } = await t
+			.withIdentity({ subject: USER })
+			.mutation(api.counterCheckout.createCheckoutSession, {});
+		const fetchMock = installFetchMock();
+
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: `KP-${token}`,
+			profileName: "Aiman",
+		});
+
+		// Session bound live.
+		const read = await t
+			.withIdentity({ subject: USER })
+			.query(api.counterCheckout.getCheckoutSession, { sessionId });
+		expect(read?.status).toBe("buyer_identified");
+		expect(read?.waPhone).toBe("60123456789");
+
+		// Buyer got a confirmation (not the generic fallback).
+		const reply = (
+			fetchMock.waCalls()[0].body as { text?: { body: string } }
+		).text?.body;
+		expect(reply).toContain("connected to");
+		void retailerId;
+		fetchMock.restore();
+	});
+
+	test("an expired KP-<token> tells the buyer the link expired (no bind)", async () => {
+		const t = setup();
+		await seedRetailerWithLocale(t, "en");
+		const { sessionId, token } = await t
+			.withIdentity({ subject: USER })
+			.mutation(api.counterCheckout.createCheckoutSession, {});
+		await t.run((ctx) => ctx.db.patch(sessionId, { expiresAt: Date.now() - 1 }));
+		const fetchMock = installFetchMock();
+
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: `KP-${token}`,
+		});
+
+		const reply = (
+			fetchMock.waCalls()[0].body as { text?: { body: string } }
+		).text?.body;
+		expect(reply).toMatch(/expired/i);
+		const row = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(row?.status).toBe("expired");
+		fetchMock.restore();
+	});
+});

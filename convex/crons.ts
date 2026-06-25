@@ -18,4 +18,14 @@ crons.daily(
 	internal.subscriptions.internalDailyBillingStatus,
 );
 
+// Counter Checkout housekeeping: flip unscanned sessions past their ~10min TTL
+// to `expired`. Reads already compute effective expiry, so this just keeps stale
+// rows out of active-session listings. See docs/counter-checkout.md.
+crons.interval(
+	"expire stale counter checkout sessions",
+	{ minutes: 5 },
+	internal.counterCheckout.expireStaleSessions,
+	{},
+);
+
 export default crons;

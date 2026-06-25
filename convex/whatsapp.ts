@@ -31,12 +31,12 @@ import {
 	renderPickupBlock,
 	renderStageUpdate,
 	renderSystemMessage,
-	SHORT_ID_REGEX,
 	type DeliveryMethod,
 	type Locale,
 	type MessageTemplates,
 	type PickupSnapshot,
 } from "./lib/whatsappCopy";
+import { classifyInbound } from "./lib/inboundIntent";
 
 // A payment method with its QR storage id resolved to a viewable URL (qr only).
 type ResolvedPaymentMethod = PaymentMethod & { qrImageUrl?: string };
@@ -354,9 +354,33 @@ export const handleInbound = internalAction({
 
 		const wa = getAdapter("whatsapp");
 
-		const match = text.match(SHORT_ID_REGEX);
-		if (!match) {
-			console.log("WA inbound no shortId match → fallback", { fromPhone });
+		const intent = classifyInbound(text);
+
+		// Counter Checkout: the buyer scanned the seller's `KP-<token>` QR. Bind
+		// their WhatsApp identity to the session (the seller's dashboard flips live)
+		// and reply so the buyer knows it worked. See docs/counter-checkout.md.
+		if (intent.kind === "checkout_bind") {
+			const bind = await ctx.runMutation(
+				internal.counterCheckout.bindCheckoutSession,
+				{ token: intent.token, waPhone: fromPhone, profileName },
+			);
+			console.log("WA checkout bind", { fromPhone, result: bind.result });
+			const body =
+				bind.result === "bound"
+					? `✅ You're connected to ${bind.storeName}. The cashier will confirm your order shortly.`
+					: bind.result === "expired"
+						? "This checkout link has expired — please ask the cashier to show a fresh QR."
+						: fallback();
+			try {
+				await wa.send(fromPhone, { kind: "text", body });
+			} catch (err) {
+				console.error("WA checkout-bind reply failed", err);
+			}
+			return;
+		}
+
+		if (intent.kind === "unknown") {
+			console.log("WA inbound unknown intent → fallback", { fromPhone });
 			try {
 				await wa.send(fromPhone, { kind: "text", body: fallback() });
 			} catch (err) {
@@ -365,7 +389,7 @@ export const handleInbound = internalAction({
 			return;
 		}
 
-		const shortId = match[0];
+		const shortId = intent.shortId;
 		console.log("WA inbound parsed shortId", { fromPhone, shortId });
 		const result = await ctx.runMutation(
 			internal.whatsapp.confirmOrderFromWhatsApp,
