@@ -1003,3 +1003,87 @@ export const notifyFoundingWelcome = internalAction({
 		}
 	},
 });
+
+// --- Counter Checkout (docs/counter-checkout.md) ----------------------------
+
+/** Load the data needed to send a buyer their counter-order confirmation. */
+export const getCounterOrderMeta = internalQuery({
+	args: { orderId: v.id("orders") },
+	handler: async (
+		ctx,
+		{ orderId },
+	): Promise<{
+		customerWaPhone: string | undefined;
+		storeName: string;
+		locale: Locale;
+		shortId: string;
+		trackingToken: string | undefined;
+		total: number;
+		currency: string;
+		paymentStatus: "unpaid" | "claimed" | "received";
+	} | null> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) return null;
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) return null;
+		return {
+			customerWaPhone: order.customer.waPhone,
+			storeName: retailer.storeName,
+			locale: (retailer.locale as Locale | undefined) ?? "en",
+			shortId: order.shortId,
+			trackingToken: order.trackingToken,
+			total: order.total,
+			currency: order.currency,
+			paymentStatus: (order.paymentStatus ?? "unpaid") as
+				| "unpaid"
+				| "claimed"
+				| "received",
+		};
+	},
+});
+
+/**
+ * Scheduled by counterCheckout.createOrderFromSession. Sends the buyer a free-form
+ * order confirmation + tracking link (their KP scan opened the 24h CS window).
+ * Branches on payment: "received" when settled in-person, otherwise a pay-&-track
+ * nudge. Errors swallowed (logged) so the originating mutation never fails on an
+ * outbound issue.
+ */
+export const notifyCounterOrderCreated = internalAction({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<void> => {
+		const meta = await ctx
+			.runQuery(internal.whatsapp.getCounterOrderMeta, { orderId })
+			.catch((err) => {
+				console.error("WA counter-order lookup failed", err);
+				return null;
+			});
+		if (!meta || !meta.customerWaPhone) return;
+
+		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
+		const trackingToken =
+			meta.trackingToken ??
+			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
+		if (!trackingToken) return;
+		const trackingUrl = `${appUrl}/track/${trackingToken}`;
+		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
+		const paid = meta.paymentStatus === "received";
+
+		const body =
+			meta.locale === "ms"
+				? paid
+					? `🧾 Pesanan ${meta.shortId} disahkan di ${meta.storeName}. Jumlah ${money}. ✅ Pembayaran diterima — terima kasih! Jejak pesanan: ${trackingUrl}`
+					: `🧾 Pesanan ${meta.shortId} disahkan di ${meta.storeName}. Jumlah ${money}. Bayar & jejak pesanan di sini: ${trackingUrl}`
+				: paid
+					? `🧾 Order ${meta.shortId} confirmed at ${meta.storeName}. Total ${money}. ✅ Payment received — thank you! Track your order: ${trackingUrl}`
+					: `🧾 Order ${meta.shortId} confirmed at ${meta.storeName}. Total ${money}. Pay & track your order here: ${trackingUrl}`;
+		try {
+			await getAdapter("whatsapp").send(meta.customerWaPhone, {
+				kind: "text",
+				body,
+			});
+		} catch (err) {
+			console.error("WA counter-order notify failed", err);
+		}
+	},
+});

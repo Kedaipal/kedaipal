@@ -24,6 +24,7 @@ import { Route as TrackTokenRouteImport } from './routes/track.$token'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as AppSettingsRouteImport } from './routes/app.settings'
+import { Route as AppCheckoutRouteImport } from './routes/app.checkout'
 import { Route as AppProductsIndexRouteImport } from './routes/app.products.index'
 import { Route as AppOrdersIndexRouteImport } from './routes/app.orders.index'
 import { Route as AppCustomersIndexRouteImport } from './routes/app.customers.index'
@@ -109,6 +110,11 @@ const AppSettingsRoute = AppSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => AppRoute,
 } as any)
+const AppCheckoutRoute = AppCheckoutRouteImport.update({
+  id: '/checkout',
+  path: '/checkout',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppProductsIndexRoute = AppProductsIndexRouteImport.update({
   id: '/products/',
   path: '/products/',
@@ -166,6 +172,7 @@ export interface FileRoutesByFullPath {
   '/privacy': typeof PrivacyRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/terms': typeof TermsRoute
+  '/app/checkout': typeof AppCheckoutRoute
   '/app/settings': typeof AppSettingsRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -191,6 +198,7 @@ export interface FileRoutesByTo {
   '/privacy': typeof PrivacyRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/terms': typeof TermsRoute
+  '/app/checkout': typeof AppCheckoutRoute
   '/app/settings': typeof AppSettingsRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -218,6 +226,7 @@ export interface FileRoutesById {
   '/privacy': typeof PrivacyRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/terms': typeof TermsRoute
+  '/app/checkout': typeof AppCheckoutRoute
   '/app/settings': typeof AppSettingsRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -246,6 +255,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sitemap.xml'
     | '/terms'
+    | '/app/checkout'
     | '/app/settings'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -271,6 +281,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sitemap.xml'
     | '/terms'
+    | '/app/checkout'
     | '/app/settings'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -297,6 +308,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sitemap.xml'
     | '/terms'
+    | '/app/checkout'
     | '/app/settings'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -436,6 +448,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/app/checkout': {
+      id: '/app/checkout'
+      path: '/checkout'
+      fullPath: '/app/checkout'
+      preLoaderRoute: typeof AppCheckoutRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/app/products/': {
       id: '/app/products/'
       path: '/products'
@@ -503,6 +522,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface AppRouteChildren {
+  AppCheckoutRoute: typeof AppCheckoutRoute
   AppSettingsRoute: typeof AppSettingsRoute
   AppIndexRoute: typeof AppIndexRoute
   AppAdminBillingRoute: typeof AppAdminBillingRoute
@@ -517,6 +537,7 @@ interface AppRouteChildren {
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppCheckoutRoute: AppCheckoutRoute,
   AppSettingsRoute: AppSettingsRoute,
   AppIndexRoute: AppIndexRoute,
   AppAdminBillingRoute: AppAdminBillingRoute,

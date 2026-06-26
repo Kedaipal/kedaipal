@@ -6,10 +6,12 @@
 > stays WhatsApp-linked, so confirmation / payment / tracking flow through the
 > shared WABA like any storefront order.
 >
-> **Status: backend spine shipped** (schema, session/token lifecycle, inbound
-> `KP-<token>` intent routing, live bind, expiry cron, tests). **Pending:** the
-> iPad-first seller UI, order-from-session completion, pay-in-person, and the
-> manual-phone / anonymous identity paths — see [§Pending](#pending).
+> **Status: V1 shipped** — backend spine (schema, session/token lifecycle,
+> inbound `KP-<token>` intent routing, live bind, expiry cron) **+** the
+> iPad-first seller UI, order-from-session, and pay-in-person. **Deferred to
+> V1.1:** the manual-phone and anonymous walk-in identity paths — see
+> [§Pending](#pending). The V1 cut = Bearcamp's happy-path counter (buyer scans →
+> seller keys order → paid now or pay-later).
 
 ---
 
@@ -69,7 +71,7 @@ Indexes: `by_token` (bind lookup), `by_retailer_status` (seller's active list),
 
 ---
 
-## What's built (this slice)
+## What's built (V1)
 
 | Piece | Where |
 |---|---|
@@ -77,24 +79,28 @@ Indexes: `by_token` (bind lookup), `by_retailer_status` (seller's active list),
 | Session table + indexes | `convex/schema.ts` |
 | `createCheckoutSession` / `getCheckoutSession` / `cancelCheckoutSession` | `convex/counterCheckout.ts` |
 | `bindCheckoutSession` (internal, called by webhook) | `convex/counterCheckout.ts` |
+| `createOrderFromSession` (server-priced, pay-in-person, completes session) | `convex/counterCheckout.ts` |
 | Inbound routing → bind + buyer reply | `convex/whatsapp.ts` (`handleInbound`) |
+| Buyer order confirmation + tracking link | `convex/whatsapp.ts` (`notifyCounterOrderCreated`) |
 | Expiry cron (every 5 min) | `convex/crons.ts` → `expireStaleSessions` |
 | Webhook observability (phone + pushname + text) | `convex/http.ts` |
+| **iPad-first seller UI** (start → QR → live bind → catalog/cart → pay → done) | `src/routes/app.checkout.tsx` |
+| Nav entry ("Counter") | `sidebar.tsx`, `bottom-nav.tsx` |
 | Tests | `counterCheckout.test.ts`, `inboundIntent.test.ts`, `whatsapp.test.ts` |
 
-The reactive `getCheckoutSession` already returns the live `status`, bound
-`displayName`, `isNewCustomer`, and a returning customer's lifetime `{ orderCount,
-totalSpent, lastOrderAt }` — everything the seller screen needs to flip on scan.
+**Order shape:** a counter order is created `confirmed`, `deliveryMethod:
+self_collect` (collected at the counter), customer linked from the bound session.
+**Pay-in-person** → `paymentStatus: received` immediately (`paymentReference:
+"In-person (cash|duitnow)"`); **pay-later** → left `unpaid` and the buyer's
+WhatsApp confirmation carries a pay-&-track link (the normal handshake). Either
+way the buyer gets a WhatsApp confirmation with their tracking link, so the order
+is WhatsApp-linked and status updates flow through the shared WABA.
 
-## Pending
+## Pending (V1.1)
 
-- **iPad-first seller UI** — `src/routes/app.checkout.*` +
-  `src/components/dashboard/counter-checkout/*`: QR render (we have `react-qr-code`),
-  fast catalog search → tap → qty, live waiting/identified/expired/new-vs-returning
-  states. **Its own surface — NOT bolted onto the shopper storefront.**
-- **Order-from-session completion** — seller confirms → reuse `orders.create` +
-  `linkOrderToCustomer`, set `session.orderId`, `status: completed`.
-- **Pay-in-person** — a settled-offline "mark paid in-person" path (cash /
-  DuitNow-now) alongside the existing two-button handshake.
-- **Manual-phone + anonymous paths** — bind a session without a webhook (seller
-  types the phone) and a cash walk-in with no contact.
+- **Manual-phone path** — seller types the buyer's number to bind a session
+  without a scan (e.g. buyer's camera won't cooperate). Binds the session
+  directly, no webhook.
+- **Anonymous walk-in** — a cash sale with no contact: create the order off the
+  session with no buyer identity (no WhatsApp confirmation).
+- *(later, ticket 3.2)* richer Desktop / iPad Console affordances.

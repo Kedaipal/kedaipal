@@ -236,3 +236,156 @@ describe("counterCheckout — cancel + expiry cron", () => {
 		expect(row?.status).toBe("expired");
 	});
 });
+
+async function seedVariant(
+	t: ReturnType<typeof setup>,
+	userId: string,
+	retailerId: Id<"retailers">,
+	opts: { price?: number; onHand?: number; block?: boolean } = {},
+): Promise<Id<"productVariants">> {
+	const asUser = t.withIdentity({ subject: userId });
+	const productId = await asUser.mutation(api.products.create, {
+		retailerId,
+		name: "Latte",
+		currency: "MYR",
+		imageStorageIds: [],
+		sortOrder: 0,
+		blockWhenOutOfStock: opts.block ?? false,
+		variants: [
+			{ optionValues: [], price: opts.price ?? 1200, onHand: opts.onHand ?? 50 },
+		],
+	});
+	const variant = await t.run((ctx) =>
+		ctx.db
+			.query("productVariants")
+			.withIndex("by_product", (q) => q.eq("productId", productId))
+			.first(),
+	);
+	if (!variant) throw new Error("variant seed failed");
+	return variant._id;
+}
+
+async function boundSession(t: ReturnType<typeof setup>, retailerId: Id<"retailers">) {
+	const { sessionId, token } = await openSession(t, USER_A);
+	await t.mutation(internal.counterCheckout.bindCheckoutSession, {
+		token,
+		waPhone: "60123456789",
+		profileName: "Aiman",
+	});
+	void retailerId;
+	return sessionId;
+}
+
+describe("counterCheckout — createOrderFromSession", () => {
+	test("creates a confirmed self-collect order, paid in person, and completes the session", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, { price: 1500 });
+		const sessionId = await boundSession(t, retailer._id);
+
+		const { shortId, orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 2 }],
+				paidInPerson: true,
+				paymentMethod: "cash",
+			});
+		expect(shortId).toMatch(/^ORD-/);
+
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.status).toBe("confirmed");
+		expect(order?.deliveryMethod).toBe("self_collect");
+		expect(order?.paymentStatus).toBe("received");
+		expect(order?.total).toBe(3000);
+		expect(order?.customer.waPhone).toBe("60123456789");
+		expect(order?.trackingToken).toMatch(/^[A-Za-z0-9]{24}$/);
+
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.status).toBe("completed");
+		expect(session?.orderId).toBe(orderId);
+
+		// Customer linked + aggregates updated.
+		const asUser = t.withIdentity({ subject: USER_A });
+		const customers = await asUser.query(api.customers.list, {
+			retailerId: retailer._id,
+			sort: "recency",
+			paginationOpts: { numItems: 10, cursor: null },
+		});
+		expect(customers.page).toHaveLength(1);
+		expect(customers.page[0].orderCount).toBe(1);
+		expect(customers.page[0].totalSpent).toBe(3000);
+	});
+
+	test("pay-later leaves the order unpaid", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id);
+		const sessionId = await boundSession(t, retailer._id);
+
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				paidInPerson: false,
+			});
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.paymentStatus).toBe("unpaid");
+	});
+
+	test("decrements stock for hard-block variants", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, {
+			block: true,
+			onHand: 5,
+		});
+		const sessionId = await boundSession(t, retailer._id);
+
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 2 }],
+				paidInPerson: true,
+			});
+		const variant = await t.run((ctx) => ctx.db.get(variantId));
+		expect(variant?.onHand).toBe(3);
+	});
+
+	test("rejects creating an order before a buyer is bound", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id);
+		const { sessionId } = await openSession(t, USER_A); // still awaiting_buyer
+
+		await expect(
+			t
+				.withIdentity({ subject: USER_A })
+				.mutation(api.counterCheckout.createOrderFromSession, {
+					sessionId,
+					items: [{ variantId, quantity: 1 }],
+					paidInPerson: true,
+				}),
+		).rejects.toThrow(/Bind a buyer/);
+	});
+
+	test("a non-owner cannot create an order off someone else's session", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await seedRetailer(t, USER_B);
+		const variantId = await seedVariant(t, USER_A, retailer._id);
+		const sessionId = await boundSession(t, retailer._id);
+
+		await expect(
+			t
+				.withIdentity({ subject: USER_B })
+				.mutation(api.counterCheckout.createOrderFromSession, {
+					sessionId,
+					items: [{ variantId, quantity: 1 }],
+					paidInPerson: true,
+				}),
+		).rejects.toThrow(/Forbidden/);
+	});
+});

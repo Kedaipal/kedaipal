@@ -27,14 +27,34 @@ import {
 	type QueryCtx,
 	query,
 } from "./_generated/server";
-import { refreshWaProfileName } from "./customers";
+import { linkOrderToCustomer, refreshWaProfileName } from "./customers";
 import { getDisplayName } from "./lib/customer";
-import { generateTrackingToken } from "./lib/order";
+import {
+	computeOrderTotals,
+	generateShortId,
+	generateTrackingToken,
+} from "./lib/order";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidWaPhone } from "./lib/slug";
+import { variantLabel } from "./lib/variant";
 
 /** A counter session lives this long before it expires unscanned. */
 export const SESSION_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+const MAX_COUNTER_ITEMS = 100;
+const SHORT_ID_RETRIES = 3;
+
+/**
+ * The `wa.me` deep link the buyer scans. Built server-side from the shared WABA
+ * number (`WHATSAPP_CHECKOUT_PHONE`) so the dashboard only has to render the QR —
+ * the number never has to round-trip through the client. Undefined if the env
+ * var is unset (the UI then shows a "messaging not configured" state).
+ */
+function buildCheckoutWaUrl(token: string): string | undefined {
+	const phone = process.env.WHATSAPP_CHECKOUT_PHONE;
+	if (!phone) return undefined;
+	return `https://wa.me/${phone.replace(/\D/g, "")}?text=KP-${token}`;
+}
 
 /** Resolve the authenticated seller's own retailer (strict 1:1 user↔retailer). */
 async function requireOwnRetailer(
@@ -72,7 +92,12 @@ export const createCheckoutSession = mutation({
 	args: {},
 	handler: async (
 		ctx,
-	): Promise<{ sessionId: Id<"counterCheckoutSessions">; token: string; expiresAt: number }> => {
+	): Promise<{
+		sessionId: Id<"counterCheckoutSessions">;
+		token: string;
+		waUrl: string | undefined;
+		expiresAt: number;
+	}> => {
 		const retailer = await requireOwnRetailer(ctx);
 		await rateLimiter.limit(ctx, "checkoutSessionCreate", {
 			key: retailer.userId,
@@ -91,7 +116,7 @@ export const createCheckoutSession = mutation({
 			createdAt: now,
 			updatedAt: now,
 		});
-		return { sessionId, token, expiresAt };
+		return { sessionId, token, waUrl: buildCheckoutWaUrl(token), expiresAt };
 	},
 });
 
@@ -108,6 +133,8 @@ export const getCheckoutSession = query({
 	): Promise<{
 		status: Doc<"counterCheckoutSessions">["status"];
 		expiresAt: number;
+		token: string;
+		waUrl: string | undefined;
 		waPhone: string | undefined;
 		displayName: string | undefined;
 		isNewCustomer: boolean | undefined;
@@ -147,12 +174,193 @@ export const getCheckoutSession = query({
 		return {
 			status: effectiveStatus(session, Date.now()),
 			expiresAt: session.expiresAt,
+			token: session.token,
+			waUrl: buildCheckoutWaUrl(session.token),
 			waPhone: session.waPhone,
 			displayName,
 			isNewCustomer: session.isNewCustomer,
 			orderId: session.orderId,
 			customer,
 		};
+	},
+});
+
+/**
+ * Seller confirms the order keyed off a bound session. Resolves catalog variants
+ * server-side (price + stock are NEVER trusted from the client), creates a
+ * confirmed self-collect order linked to the bound buyer, optionally marks it
+ * paid-in-person (cash / DuitNow-now), refreshes the customer aggregates, and
+ * completes the session. Then sends the buyer a WhatsApp confirmation with their
+ * tracking link — their KP scan opened the 24h CS window, so free-form is allowed.
+ */
+export const createOrderFromSession = mutation({
+	args: {
+		sessionId: v.id("counterCheckoutSessions"),
+		items: v.array(
+			v.object({
+				variantId: v.id("productVariants"),
+				quantity: v.number(),
+			}),
+		),
+		// Settled at the counter (cash / DuitNow-now). When false the order is left
+		// unpaid and the buyer can still pay later via their tracking link.
+		paidInPerson: v.boolean(),
+		paymentMethod: v.optional(v.string()), // "cash" | "duitnow" — freeform v1
+	},
+	handler: async (
+		ctx,
+		args,
+	): Promise<{ shortId: string; orderId: Id<"orders"> }> => {
+		const retailer = await requireOwnRetailer(ctx);
+		const session = await ctx.db.get(args.sessionId);
+		if (!session) throw new ConvexError("Session not found");
+		if (session.retailerId !== retailer._id) throw new ConvexError("Forbidden");
+		if (session.status !== "buyer_identified")
+			throw new ConvexError(
+				"Bind a buyer to this checkout before creating the order",
+			);
+		if (!session.waPhone) throw new ConvexError("This session has no buyer phone");
+		if (args.items.length === 0) throw new ConvexError("Add at least one item");
+		if (args.items.length > MAX_COUNTER_ITEMS)
+			throw new ConvexError(`Maximum ${MAX_COUNTER_ITEMS} items per order`);
+
+		const currency = retailer.currency ?? "MYR";
+		const now = Date.now();
+
+		// Resolve variants server-side — price + stock are authoritative here.
+		const snapshotItems: {
+			productId: Id<"products">;
+			variantId: Id<"productVariants">;
+			name: string;
+			variantLabel?: string;
+			price: number;
+			quantity: number;
+		}[] = [];
+		const requestedByVariant = new Map<
+			Id<"productVariants">,
+			{ qty: number; block: boolean; onHand: number }
+		>();
+		for (const item of args.items) {
+			if (!Number.isInteger(item.quantity) || item.quantity < 1)
+				throw new ConvexError("Quantity must be a positive integer");
+			const variant = await ctx.db.get(item.variantId);
+			if (!variant || variant.retailerId !== retailer._id)
+				throw new ConvexError("Item not found");
+			const product = await ctx.db.get(variant.productId);
+			if (!product) throw new ConvexError("Product not found");
+			const label = variant.isCustom
+				? (variant.customLabel ?? "Custom")
+				: variantLabel(variant.optionValues);
+			const displayName = label ? `${product.name} (${label})` : product.name;
+			if (!product.active || !variant.active)
+				throw new ConvexError(`"${displayName}" is not available`);
+			const block =
+				(variant.blockWhenOutOfStock ?? product.blockWhenOutOfStock) === true;
+			const prior = requestedByVariant.get(item.variantId);
+			const newQty = (prior?.qty ?? 0) + item.quantity;
+			if (block && variant.onHand < newQty)
+				throw new ConvexError(`Only ${variant.onHand} of "${displayName}" in stock`);
+			requestedByVariant.set(item.variantId, {
+				qty: newQty,
+				block,
+				onHand: variant.onHand,
+			});
+			snapshotItems.push({
+				productId: variant.productId,
+				variantId: item.variantId,
+				name: product.name,
+				variantLabel: label || undefined,
+				price: variant.price,
+				quantity: item.quantity,
+			});
+		}
+
+		const { subtotal, total } = computeOrderTotals(snapshotItems);
+
+		// Reserve stock for hard-block variants (same OCC transaction).
+		for (const [variantId, { qty, block, onHand }] of requestedByVariant) {
+			if (!block) continue;
+			await ctx.db.patch(variantId, { onHand: onHand - qty, updatedAt: now });
+		}
+
+		// Collision-safe shortId.
+		let shortId: string | null = null;
+		for (let i = 0; i < SHORT_ID_RETRIES; i++) {
+			const candidate = generateShortId();
+			const clash = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", candidate))
+				.first();
+			if (!clash) {
+				shortId = candidate;
+				break;
+			}
+		}
+		if (!shortId)
+			throw new ConvexError("Failed to generate order ID, please retry");
+
+		const customerName = session.waProfileName;
+		const orderId = await ctx.db.insert("orders", {
+			retailerId: retailer._id,
+			shortId,
+			trackingToken: generateTrackingToken(),
+			items: snapshotItems,
+			subtotal,
+			total,
+			currency,
+			status: "confirmed", // seller-created with the buyer present
+			channel: "whatsapp",
+			customer: { name: customerName, waPhone: session.waPhone },
+			deliveryMethod: "self_collect", // collected at the counter
+			paymentStatus: args.paidInPerson ? "received" : "unpaid",
+			paymentReceivedAt: args.paidInPerson ? now : undefined,
+			paymentReference: args.paidInPerson
+				? `In-person (${args.paymentMethod ?? "cash"})`
+				: undefined,
+			statusChangedAt: now,
+			createdAt: now,
+			updatedAt: now,
+		});
+
+		await ctx.db.insert("orderEvents", {
+			orderId,
+			status: "confirmed",
+			note: "counter_checkout",
+			createdAt: now,
+		});
+		if (args.paidInPerson) {
+			await ctx.db.insert("orderEvents", {
+				orderId,
+				status: "confirmed",
+				note: `payment_received: in-person (${args.paymentMethod ?? "cash"})`,
+				createdAt: now,
+			});
+		}
+
+		// Link customer aggregates (creates the row for a brand-new buyer).
+		await linkOrderToCustomer(ctx, {
+			retailerId: retailer._id,
+			waPhone: session.waPhone,
+			orderId,
+			orderTotal: total,
+			orderCreatedAt: now,
+			customerName,
+		});
+
+		await ctx.db.patch(session._id, {
+			status: "completed",
+			orderId,
+			updatedAt: now,
+		});
+
+		// Buyer confirmation + tracking link over WhatsApp.
+		await ctx.scheduler.runAfter(
+			0,
+			internal.whatsapp.notifyCounterOrderCreated,
+			{ orderId },
+		);
+
+		return { shortId, orderId };
 	},
 });
 

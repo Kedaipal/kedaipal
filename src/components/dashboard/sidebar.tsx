@@ -7,6 +7,7 @@ import {
 	Home,
 	type LucideIcon,
 	Package,
+	QrCode,
 	Settings,
 	ShieldCheck,
 	ShoppingBag,
@@ -98,6 +99,12 @@ export function Sidebar({ retailer, actionableCount, isAdmin }: SidebarProps) {
 					label="Orders"
 					collapsed={collapsed}
 					badge={actionableCount}
+				/>
+				<SidebarLink
+					to="/app/checkout"
+					icon={QrCode}
+					label="Counter"
+					collapsed={collapsed}
 				/>
 				<SidebarLink
 					to="/app/customers"

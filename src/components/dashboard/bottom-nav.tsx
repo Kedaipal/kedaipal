@@ -1,5 +1,12 @@
 import { Link } from "@tanstack/react-router";
-import { Home, Package, Settings, ShoppingBag, Users } from "lucide-react";
+import {
+	Home,
+	Package,
+	QrCode,
+	Settings,
+	ShoppingBag,
+	Users,
+} from "lucide-react";
 import { cn } from "../../lib/utils";
 
 interface BottomNavProps {
@@ -22,9 +29,7 @@ export function BottomNav({ actionableCount }: BottomNavProps) {
 							<Home
 								className={cn(
 									"size-5",
-									isActive
-										? "stroke-accent"
-										: "stroke-muted-foreground",
+									isActive ? "stroke-accent" : "stroke-muted-foreground",
 								)}
 								strokeWidth={isActive ? 2.5 : 1.75}
 							/>
@@ -50,9 +55,7 @@ export function BottomNav({ actionableCount }: BottomNavProps) {
 							<Package
 								className={cn(
 									"size-5",
-									isActive
-										? "stroke-accent"
-										: "stroke-muted-foreground",
+									isActive ? "stroke-accent" : "stroke-muted-foreground",
 								)}
 								strokeWidth={isActive ? 2.5 : 1.75}
 							/>
@@ -79,9 +82,7 @@ export function BottomNav({ actionableCount }: BottomNavProps) {
 								<ShoppingBag
 									className={cn(
 										"size-5",
-										isActive
-											? "stroke-accent"
-											: "stroke-muted-foreground",
+										isActive ? "stroke-accent" : "stroke-muted-foreground",
 									)}
 									strokeWidth={isActive ? 2.5 : 1.75}
 								/>
@@ -103,6 +104,32 @@ export function BottomNav({ actionableCount }: BottomNavProps) {
 					)}
 				</Link>
 				<Link
+					to="/app/checkout"
+					activeProps={{ className: "text-foreground" }}
+					inactiveProps={{ className: "text-muted-foreground" }}
+					className="flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 text-[10px]"
+				>
+					{({ isActive }) => (
+						<>
+							<QrCode
+								className={cn(
+									"size-5",
+									isActive ? "stroke-accent" : "stroke-muted-foreground",
+								)}
+								strokeWidth={isActive ? 2.5 : 1.75}
+							/>
+							<span
+								className={cn(
+									"font-medium",
+									isActive ? "text-foreground" : "text-muted-foreground",
+								)}
+							>
+								Counter
+							</span>
+						</>
+					)}
+				</Link>
+				<Link
 					to="/app/customers"
 					activeProps={{ className: "text-foreground" }}
 					inactiveProps={{ className: "text-muted-foreground" }}
@@ -113,9 +140,7 @@ export function BottomNav({ actionableCount }: BottomNavProps) {
 							<Users
 								className={cn(
 									"size-5",
-									isActive
-										? "stroke-accent"
-										: "stroke-muted-foreground",
+									isActive ? "stroke-accent" : "stroke-muted-foreground",
 								)}
 								strokeWidth={isActive ? 2.5 : 1.75}
 							/>
@@ -142,9 +167,7 @@ export function BottomNav({ actionableCount }: BottomNavProps) {
 							<Settings
 								className={cn(
 									"size-5",
-									isActive
-										? "stroke-accent"
-										: "stroke-muted-foreground",
+									isActive ? "stroke-accent" : "stroke-muted-foreground",
 								)}
 								strokeWidth={isActive ? 2.5 : 1.75}
 							/>
