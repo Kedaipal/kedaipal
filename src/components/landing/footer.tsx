@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { Instagram, Mail, Music2 } from "lucide-react";
+import { LEGAL_CONTACT_EMAIL } from "../../lib/legal";
 import { m } from "../../paraglide/messages";
 
 export function Footer() {
@@ -26,11 +27,11 @@ export function Footer() {
 							</h2>
 							<div className="mt-4 flex flex-wrap gap-2.5">
 								<a
-									href="mailto:hello@kedaipal.com"
+									href={`mailto:${LEGAL_CONTACT_EMAIL}`}
 									className={contactLinkClass}
 								>
 									<Mail className="size-4 transition-transform group-hover:-rotate-6" />
-									<span>hello@kedaipal.com</span>
+									<span>{LEGAL_CONTACT_EMAIL}</span>
 								</a>
 								<a
 									href="https://www.instagram.com/kedaipal_my/"
