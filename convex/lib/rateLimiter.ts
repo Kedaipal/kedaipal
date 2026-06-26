@@ -105,4 +105,14 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		period: MINUTE,
 		capacity: 3,
 	},
+	// Authenticated seller opening a Counter Checkout session (keyed by Clerk
+	// subject). A busy counter mints one per buyer, so allow a healthy burst, but
+	// cap runaway creation (each session is a row + a QR render). See
+	// convex/counterCheckout.ts.
+	checkoutSessionCreate: {
+		kind: "token bucket",
+		rate: 30,
+		period: MINUTE,
+		capacity: 10,
+	},
 });

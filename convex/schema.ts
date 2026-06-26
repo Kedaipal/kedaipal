@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 
 /**
  * Multi-tenant core. Every order/inventory entity that lands later MUST carry
@@ -484,6 +485,11 @@ export default defineSchema({
 			),
 		),
 		paymentReference: v.optional(v.string()),
+		// How the order was settled (cash / duitnow / tng / bank_transfer / card /
+		// other). Captured only where reliably known — Counter Checkout "Paid now"
+		// and the seller's "mark received" action. Undefined = online/unknown (the
+		// buyer's self-claim never sets it). See convex/lib/paymentMethod.ts.
+		paymentMethod: v.optional(orderPaymentMethodValidator),
 		paymentClaimedAt: v.optional(v.number()),
 		paymentReceivedAt: v.optional(v.number()),
 		paymentProofStorageId: v.optional(v.string()),
@@ -591,6 +597,50 @@ export default defineSchema({
 		note: v.optional(v.string()),
 		createdAt: v.number(),
 	}).index("by_order", ["orderId"]),
+
+	// --- Counter Checkout (in-person order spine, docs/counter-checkout.md) ----
+	// A seller-initiated, in-person checkout session. The seller opens Counter
+	// Checkout → a session is created with an unguessable single-use `token`; the
+	// dashboard renders a QR of `wa.me/<shared_WABA>?text=KP-<token>`. The buyer
+	// scans + sends, the inbound webhook (intent router → checkout handler) binds
+	// their WhatsApp identity to the session, and the dashboard flips live. The
+	// session is short-lived and consumed once — see security note in
+	// convex/counterCheckout.ts. Identity is OPTIONAL: token-scan (happy path),
+	// manual phone entry, or anonymous walk-in all converge on this one record.
+	counterCheckoutSessions: defineTable({
+		retailerId: v.id("retailers"),
+		sellerUserId: v.string(), // Clerk subject who opened the counter
+		// Unguessable, single-use capability the buyer sends back as `KP-<token>`.
+		// Same generator as orders.trackingToken (generateTrackingToken).
+		token: v.string(),
+		status: v.union(
+			v.literal("awaiting_buyer"), // QR shown; no scan yet
+			v.literal("buyer_identified"), // buyer bound (token / manual phone)
+			v.literal("completed"), // order created from the session
+			v.literal("expired"), // TTL elapsed before a scan
+			v.literal("cancelled"), // seller dismissed it
+		),
+		// Bound buyer identity. `customerId` is set only when an EXISTING customer
+		// matched (retailerId, waPhone) — a brand-new buyer has waPhone/pushname
+		// but no customer row until the order is created (linkOrderToCustomer).
+		customerId: v.optional(v.id("customers")),
+		waPhone: v.optional(v.string()),
+		waProfileName: v.optional(v.string()),
+		// True when no existing customer matched the bound phone — drives the
+		// "new vs returning" dashboard state. Undefined until bound.
+		isNewCustomer: v.optional(v.boolean()),
+		// Set when the seller confirms the order off this session (status →
+		// completed). The order then flows through the normal WhatsApp pipeline.
+		orderId: v.optional(v.id("orders")),
+		boundAt: v.optional(v.number()),
+		expiresAt: v.number(),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_token", ["token"])
+		.index("by_retailer_status", ["retailerId", "status"])
+		// Drives the expiry cron: range-scan awaiting_buyer sessions past their TTL.
+		.index("by_status_expiry", ["status", "expiresAt"]),
 
 	// --- Manual subscription billing (docs/manual-subscription.md) -----------
 	// Per-retailer subscription. One row per retailer (created in-transaction by
