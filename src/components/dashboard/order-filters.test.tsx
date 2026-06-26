@@ -1,44 +1,49 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { activeFilterCount, OrderFilters } from "./order-filters";
+import {
+	activeFilterCount,
+	OrderFilters,
+	type OrderFilterValue,
+} from "./order-filters";
 
 afterEach(cleanup);
 
+const EMPTY: Pick<
+	OrderFilterValue,
+	"payment" | "method" | "methodUnspecified"
+> = {
+	payment: [],
+	method: [],
+	methodUnspecified: false,
+};
+
 describe("OrderFilters", () => {
-	it("counts payment + method + date range + mockup", () => {
-		expect(activeFilterCount({ payment: [], method: [], mockup: false })).toBe(
-			0,
-		);
-		// 2 payment + 1 method + 1 date range (both bounds) + 1 mockup = 5.
+	it("counts payment + method + unspecified + date range + mockup", () => {
+		expect(activeFilterCount({ ...EMPTY, mockup: false })).toBe(0);
+		// 2 payment + 1 method + 1 unspecified + 1 date range + 1 mockup = 6.
 		expect(
 			activeFilterCount({
 				payment: ["unpaid", "received"],
 				method: ["cash"],
+				methodUnspecified: true,
 				from: 1,
 				to: 2,
 				mockup: true,
 			}),
-		).toBe(5);
-		// A single date bound still counts as one.
-		expect(
-			activeFilterCount({ payment: [], method: [], from: 1, mockup: false }),
-		).toBe(1);
+		).toBe(6);
+		expect(activeFilterCount({ ...EMPTY, from: 1, mockup: false })).toBe(1);
 	});
 
 	it("toggling a payment chip reports the new selection", () => {
 		const onChange = vi.fn();
 		render(
-			<OrderFilters
-				value={{ payment: [], method: [], mockup: false }}
-				onChange={onChange}
-			/>,
+			<OrderFilters value={{ ...EMPTY, mockup: false }} onChange={onChange} />,
 		);
-		// The mobile sheet is closed, so only the desktop controls render the chip.
 		fireEvent.click(screen.getByRole("button", { name: "Unpaid" }));
 		expect(onChange).toHaveBeenCalledWith({
+			...EMPTY,
 			payment: ["unpaid"],
-			method: [],
 			mockup: false,
 		});
 	});
@@ -46,15 +51,25 @@ describe("OrderFilters", () => {
 	it("toggling a method chip reports the new selection", () => {
 		const onChange = vi.fn();
 		render(
-			<OrderFilters
-				value={{ payment: [], method: [], mockup: false }}
-				onChange={onChange}
-			/>,
+			<OrderFilters value={{ ...EMPTY, mockup: false }} onChange={onChange} />,
 		);
 		fireEvent.click(screen.getByRole("button", { name: "DuitNow" }));
 		expect(onChange).toHaveBeenCalledWith({
-			payment: [],
+			...EMPTY,
 			method: ["duitnow"],
+			mockup: false,
+		});
+	});
+
+	it("toggling the Unspecified chip reports it (for online/legacy orders)", () => {
+		const onChange = vi.fn();
+		render(
+			<OrderFilters value={{ ...EMPTY, mockup: false }} onChange={onChange} />,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Unspecified" }));
+		expect(onChange).toHaveBeenCalledWith({
+			...EMPTY,
+			methodUnspecified: true,
 			mockup: false,
 		});
 	});
@@ -63,17 +78,16 @@ describe("OrderFilters", () => {
 		const onChange = vi.fn();
 		const { rerender } = render(
 			<OrderFilters
-				value={{ payment: [], method: [], mockup: false }}
+				value={{ ...EMPTY, mockup: false }}
 				onChange={onChange}
 				mockupCount={0}
 			/>,
 		);
-		// No mockup-pending orders + not active → toggle hidden.
 		expect(screen.queryByRole("button", { name: /needs mockup/i })).toBeNull();
 
 		rerender(
 			<OrderFilters
-				value={{ payment: [], method: [], mockup: false }}
+				value={{ ...EMPTY, mockup: false }}
 				onChange={onChange}
 				mockupCount={3}
 			/>,
@@ -81,10 +95,6 @@ describe("OrderFilters", () => {
 		const toggle = screen.getByRole("button", { name: /needs mockup/i });
 		expect(toggle.textContent).toContain("3");
 		fireEvent.click(toggle);
-		expect(onChange).toHaveBeenCalledWith({
-			payment: [],
-			method: [],
-			mockup: true,
-		});
+		expect(onChange).toHaveBeenCalledWith({ ...EMPTY, mockup: true });
 	});
 });

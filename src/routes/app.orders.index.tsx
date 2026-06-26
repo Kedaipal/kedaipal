@@ -59,6 +59,8 @@ type InboxSearch = {
 	q?: string;
 	pay?: PaymentStatus[];
 	method?: OrderPaymentMethod[];
+	/** Match orders with no recorded payment method. */
+	munspec?: boolean;
 	from?: number;
 	to?: number;
 	/** Cross-cutting "needs mockup" toggle. */
@@ -100,6 +102,8 @@ export const Route = createFileRoute("/app/orders/")({
 			q,
 			pay: pay.length > 0 ? pay : undefined,
 			method: method.length > 0 ? method : undefined,
+			munspec:
+				search.munspec === true || search.munspec === "true" ? true : undefined,
 			from: typeof search.from === "number" ? search.from : undefined,
 			to: typeof search.to === "number" ? search.to : undefined,
 			mockup:
@@ -125,6 +129,7 @@ function OrdersRoute() {
 		q = "",
 		pay = [],
 		method = [],
+		munspec = false,
 		from,
 		to,
 		mockup = false,
@@ -159,7 +164,7 @@ function OrdersRoute() {
 	useEffect(() => {
 		setLimit(PAGE_SIZE);
 		setSelected(new Set());
-	}, [bucket, debounced, payKey, methodKey, from, to, mockup]);
+	}, [bucket, debounced, payKey, methodKey, munspec, from, to, mockup]);
 
 	const result = useQuery(
 		api.orders.searchOrders,
@@ -169,6 +174,7 @@ function OrdersRoute() {
 					bucket,
 					paymentStatuses: pay.length > 0 ? pay : undefined,
 					paymentMethods: method.length > 0 ? method : undefined,
+					methodUnspecified: munspec || undefined,
 					dateFrom: from,
 					dateTo: to,
 					mockupPending: mockup || undefined,
@@ -205,7 +211,12 @@ function OrdersRoute() {
 	const now = Date.now();
 	const searching = debounced.length > 0;
 	const filtersActive =
-		pay.length > 0 || method.length > 0 || from != null || to != null || mockup;
+		pay.length > 0 ||
+		method.length > 0 ||
+		munspec ||
+		from != null ||
+		to != null ||
+		mockup;
 
 	function setBucket(next: InboxBucket) {
 		navigate({
@@ -222,6 +233,7 @@ function OrdersRoute() {
 				...prev,
 				pay: next.payment.length > 0 ? next.payment : undefined,
 				method: next.method.length > 0 ? next.method : undefined,
+				munspec: next.methodUnspecified ? true : undefined,
 				from: next.from,
 				to: next.to,
 				mockup: next.mockup ? true : undefined,
@@ -381,7 +393,14 @@ function OrdersRoute() {
 				</div>
 
 				<OrderFilters
-					value={{ payment: pay, method, from, to, mockup }}
+					value={{
+						payment: pay,
+						method,
+						methodUnspecified: munspec,
+						from,
+						to,
+						mockup,
+					}}
 					onChange={setFilters}
 					mockupCount={counts?.mockupPending}
 				/>

@@ -567,6 +567,11 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 	// timeline + the seller's dynamic advance buttons.
 	orderStages?: OrderStage[];
 	retailerLocale: Locale;
+	// Store name + the vendor's own WhatsApp number, for the buyer "Message the
+	// store" CTA on the tracking page (buyers otherwise only ever hear from the
+	// shared Kedaipal WABA). `retailerWaPhone` undefined => the CTA is hidden.
+	storeName: string;
+	retailerWaPhone?: string;
 };
 
 export const get = query({
@@ -591,6 +596,8 @@ export const get = query({
 			statusLabels: retailer?.statusLabels as StatusLabels | undefined,
 			orderStages: retailer?.orderStages as OrderStage[] | undefined,
 			retailerLocale: (retailer?.locale ?? "en") as Locale,
+			storeName: retailer?.storeName ?? "",
+			retailerWaPhone: retailer?.waPhone,
 		};
 	},
 });
@@ -739,8 +746,12 @@ export const searchOrders = query({
 			),
 		),
 		// Filter by how the order was settled (see lib/paymentMethod.ts). ANDs with
-		// the other filters. An order with no method (online/unknown) matches none.
+		// the other filters. `paymentMethods` matches concrete methods;
+		// `methodUnspecified` matches orders with NO recorded method (online /
+		// WA-self-claim / legacy). Supplying both ORs them (e.g. "DuitNow OR
+		// unspecified"). Neither supplied = no method filtering.
 		paymentMethods: v.optional(v.array(orderPaymentMethodValidator)),
+		methodUnspecified: v.optional(v.boolean()),
 		dateFrom: v.optional(v.number()),
 		dateTo: v.optional(v.number()),
 		// Cross-cutting: only orders awaiting the seller's mockup action
@@ -756,6 +767,7 @@ export const searchOrders = query({
 			bucket,
 			paymentStatuses,
 			paymentMethods,
+			methodUnspecified,
 			dateFrom,
 			dateTo,
 			mockupPending,
@@ -802,6 +814,7 @@ export const searchOrders = query({
 			paymentMethods && paymentMethods.length > 0
 				? new Set(paymentMethods)
 				: null;
+		const wantUnspecified = methodUnspecified === true;
 		const bucketStatuses =
 			bucket === "all" ? null : new Set(BUCKET_STATUSES[bucket]);
 
@@ -810,9 +823,14 @@ export const searchOrders = query({
 			if (mockupPending && !needsMockup(o.mockupStatus)) return false;
 			// Undefined paymentStatus reads as "unpaid".
 			if (payset && !payset.has(o.paymentStatus ?? "unpaid")) return false;
-			// Method filter: an order with no recorded method matches nothing.
-			if (methodSet && !(o.paymentMethod && methodSet.has(o.paymentMethod)))
-				return false;
+			// Method filter (concrete methods OR "unspecified" for no recorded method).
+			if (methodSet || wantUnspecified) {
+				const byMethod = o.paymentMethod
+					? (methodSet?.has(o.paymentMethod) ?? false)
+					: false;
+				const byUnspecified = !o.paymentMethod && wantUnspecified;
+				if (!byMethod && !byUnspecified) return false;
+			}
 			if (dateFrom !== undefined && o.createdAt < dateFrom) return false;
 			if (dateTo !== undefined && o.createdAt > dateTo) return false;
 			if (term.length > 0) {

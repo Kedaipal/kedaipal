@@ -19,8 +19,10 @@ const PAYMENT_OPTIONS: { value: PaymentStatus; label: string }[] = [
 
 export interface OrderFilterValue {
 	payment: PaymentStatus[];
-	/** How the order was settled (see lib/paymentMethod.ts). */
+	/** Concrete settlement methods (see lib/paymentMethod.ts). */
 	method: OrderPaymentMethod[];
+	/** Match orders with NO recorded method (online / WA self-claim / legacy). */
+	methodUnspecified: boolean;
 	/** Epoch ms, start-of-day. */
 	from?: number;
 	/** Epoch ms, end-of-day. */
@@ -31,10 +33,12 @@ export interface OrderFilterValue {
 
 export function activeFilterCount(v: OrderFilterValue): number {
 	// A date range is one filter (not two), even with both bounds set; each
-	// payment + method selection and the mockup toggle each increment.
+	// payment + method selection (incl. "unspecified") and the mockup toggle
+	// each increment.
 	return (
 		v.payment.length +
 		v.method.length +
+		(v.methodUnspecified ? 1 : 0) +
 		(v.from != null || v.to != null ? 1 : 0) +
 		(v.mockup ? 1 : 0)
 	);
@@ -212,6 +216,26 @@ export function OrderFilters({
 							</button>
 						);
 					})}
+					{/* Orders with no recorded method — online / WhatsApp self-claim /
+					    legacy. The only way to filter those. */}
+					<button
+						type="button"
+						onClick={() =>
+							onChange({
+								...value,
+								methodUnspecified: !value.methodUnspecified,
+							})
+						}
+						aria-pressed={value.methodUnspecified}
+						className={cn(
+							"h-9 rounded-full border px-3.5 text-sm transition-colors",
+							value.methodUnspecified
+								? "border-foreground bg-foreground text-background"
+								: "border-border bg-background text-muted-foreground hover:border-foreground/30 hover:text-foreground",
+						)}
+					>
+						Unspecified
+					</button>
 				</div>
 			</div>
 
@@ -273,6 +297,7 @@ export function OrderFilters({
 						onChange({
 							payment: [],
 							method: [],
+							methodUnspecified: false,
 							from: undefined,
 							to: undefined,
 							mockup: false,

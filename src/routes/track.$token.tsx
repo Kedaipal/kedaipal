@@ -9,6 +9,7 @@ import {
 	Hourglass,
 	ImageIcon,
 	MapPin,
+	MessageCircle,
 	Package,
 	Pencil,
 	StickyNote,
@@ -774,6 +775,27 @@ function TrackingRoute() {
 						</p>
 					</div>
 				</section>
+			) : null}
+
+			{/* Contact the store directly. Buyers otherwise only ever hear from the
+			    shared Kedaipal WABA — this opens a chat to the vendor's own number
+			    with the order ref pre-filled. Hidden when the store has no number. */}
+			{order.retailerWaPhone ? (
+				<a
+					href={`https://wa.me/${order.retailerWaPhone.replace(/\D/g, "")}?text=${encodeURIComponent(
+						order.retailerLocale === "ms"
+							? `Hai ${order.storeName}, saya ada pertanyaan tentang pesanan ${order.shortId}.`
+							: `Hi ${order.storeName}, I have a question about my order ${order.shortId}.`,
+					)}`}
+					target="_blank"
+					rel="noreferrer"
+					className="mt-6 flex items-center justify-center gap-2 rounded-2xl border border-accent/40 bg-accent/5 px-4 py-3 text-sm font-semibold text-accent transition-colors hover:bg-accent/10"
+				>
+					<MessageCircle className="size-4" />
+					{order.retailerLocale === "ms"
+						? `Hubungi ${order.storeName || "kedai"}`
+						: `Message ${order.storeName || "the store"}`}
+				</a>
 			) : null}
 		</main>
 	);

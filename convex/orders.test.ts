@@ -2937,6 +2937,41 @@ describe("orders — inbox search", () => {
 		expect(received.orders.map((x) => x._id)).toContain(o._id);
 	});
 
+	test("method filter: concrete method, unspecified, and OR of both", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const asA = t.withIdentity({ subject: USER_A });
+		const tagged = await mkOrder(t, retailer._id, productId, { name: "Tag" });
+		const untagged = await mkOrder(t, retailer._id, productId, { name: "Un" });
+		await t.run((ctx) => ctx.db.patch(tagged._id, { paymentMethod: "duitnow" }));
+
+		const byMethod = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			paymentMethods: ["duitnow"],
+		});
+		expect(byMethod.orders.map((x) => x._id)).toEqual([tagged._id]);
+
+		const unspec = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			methodUnspecified: true,
+		});
+		expect(unspec.orders.map((x) => x._id)).toContain(untagged._id);
+		expect(unspec.orders.map((x) => x._id)).not.toContain(tagged._id);
+
+		const both = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			paymentMethods: ["duitnow"],
+			methodUnspecified: true,
+		});
+		const ids = both.orders.map((x) => x._id);
+		expect(ids).toContain(tagged._id);
+		expect(ids).toContain(untagged._id);
+	});
+
 	test("search matches item name (e.g. 'vanilla')", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
