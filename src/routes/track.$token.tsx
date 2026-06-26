@@ -788,7 +788,7 @@ function TrackingRoute() {
 							: `Hi ${order.storeName}, I have a question about my order ${order.shortId}.`,
 					)}`}
 					target="_blank"
-					rel="noreferrer"
+					rel="noopener noreferrer"
 					className="mt-6 flex items-center justify-center gap-2 rounded-2xl border border-accent/40 bg-accent/5 px-4 py-3 text-sm font-semibold text-accent transition-colors hover:bg-accent/10"
 				>
 					<MessageCircle className="size-4" />

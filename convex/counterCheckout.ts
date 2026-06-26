@@ -256,6 +256,15 @@ export const createOrderFromSession = mutation({
 			const displayName = label ? `${product.name} (${label})` : product.name;
 			if (!product.active || !variant.active)
 				throw new ConvexError(`"${displayName}" is not available`);
+			// Counter Checkout (V1) can't sell mockup-gated items: their flow defers
+			// payment until the buyer approves a design on the tracking page, which
+			// contradicts the at-the-counter "pay now / confirmed" model and would
+			// otherwise create an order with no mockup gate at all. Reject
+			// server-side (the catalog also filters these out). See proof-approval.md.
+			if ((variant.requiresProof ?? product.requiresProof) === true)
+				throw new ConvexError(
+					`"${displayName}" needs design approval, so it can't be sold at the counter yet`,
+				);
 			const block =
 				(variant.blockWhenOutOfStock ?? product.blockWhenOutOfStock) === true;
 			const prior = requestedByVariant.get(item.variantId);
@@ -414,15 +423,24 @@ export const bindCheckoutSession = internalMutation({
 		const retailer = await ctx.db.get(session.retailerId);
 		const storeName = retailer?.storeName ?? "the store";
 
-		// Single-use: only an awaiting session binds. A second scan (already bound,
-		// completed, cancelled) is ignored — replay-safe.
-		if (session.status !== "awaiting_buyer") return { result: "already_used" };
-
 		const now = Date.now();
-		if (now > session.expiresAt) {
-			await ctx.db.patch(session._id, { status: "expired", updatedAt: now });
+		// Expiry takes precedence over the generic status check so a buyer always
+		// gets the "expired" message for a stale QR — whether they scan before the
+		// cron sweeps it (status still awaiting_buyer, past TTL) or after (status
+		// already flipped to "expired"). Otherwise the timing of the 5-min cron
+		// would flip the buyer-facing message between "expired" and a generic reply.
+		const isExpired =
+			session.status === "expired" ||
+			(session.status === "awaiting_buyer" && now > session.expiresAt);
+		if (isExpired) {
+			if (session.status === "awaiting_buyer")
+				await ctx.db.patch(session._id, { status: "expired", updatedAt: now });
 			return { result: "expired", storeName };
 		}
+
+		// Single-use: any other non-awaiting status (buyer_identified / completed /
+		// cancelled) is a replay of a used session — ignored.
+		if (session.status !== "awaiting_buyer") return { result: "already_used" };
 
 		// Normalize the inbound phone the same way the order flow does.
 		let normalizedPhone: string;

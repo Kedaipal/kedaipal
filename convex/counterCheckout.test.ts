@@ -196,6 +196,31 @@ describe("counterCheckout — bind (inbound KP-<token>)", () => {
 		expect(row?.status).toBe("expired");
 	});
 
+	test("a cron-swept expired session still returns expired (not already_used)", async () => {
+		const t = setup();
+		await seedRetailer(t, USER_A);
+		const { sessionId, token } = await openSession(t, USER_A);
+		// Simulate the housekeeping cron already flipping the row to "expired".
+		await t.run((ctx) => ctx.db.patch(sessionId, { status: "expired" }));
+		const result = await t.mutation(
+			internal.counterCheckout.bindCheckoutSession,
+			{ token, waPhone: "60123456789" },
+		);
+		expect(result.result).toBe("expired");
+	});
+
+	test("a completed session returns already_used", async () => {
+		const t = setup();
+		await seedRetailer(t, USER_A);
+		const { sessionId, token } = await openSession(t, USER_A);
+		await t.run((ctx) => ctx.db.patch(sessionId, { status: "completed" }));
+		const result = await t.mutation(
+			internal.counterCheckout.bindCheckoutSession,
+			{ token, waPhone: "60123456789" },
+		);
+		expect(result.result).toBe("already_used");
+	});
+
 	test("an unknown token returns not_found", async () => {
 		const t = setup();
 		await seedRetailer(t, USER_A);
@@ -241,7 +266,12 @@ async function seedVariant(
 	t: ReturnType<typeof setup>,
 	userId: string,
 	retailerId: Id<"retailers">,
-	opts: { price?: number; onHand?: number; block?: boolean } = {},
+	opts: {
+		price?: number;
+		onHand?: number;
+		block?: boolean;
+		requiresProof?: boolean;
+	} = {},
 ): Promise<Id<"productVariants">> {
 	const asUser = t.withIdentity({ subject: userId });
 	const productId = await asUser.mutation(api.products.create, {
@@ -251,6 +281,7 @@ async function seedVariant(
 		imageStorageIds: [],
 		sortOrder: 0,
 		blockWhenOutOfStock: opts.block ?? false,
+		requiresProof: opts.requiresProof ?? false,
 		variants: [
 			{ optionValues: [], price: opts.price ?? 1200, onHand: opts.onHand ?? 50 },
 		],
@@ -388,5 +419,28 @@ describe("counterCheckout — createOrderFromSession", () => {
 					paidInPerson: true,
 				}),
 		).rejects.toThrow(/Forbidden/);
+	});
+
+	test("rejects a mockup-gated (requiresProof) item — can't be sold at the counter", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, {
+			requiresProof: true,
+		});
+		const sessionId = await boundSession(t, retailer._id);
+
+		await expect(
+			t
+				.withIdentity({ subject: USER_A })
+				.mutation(api.counterCheckout.createOrderFromSession, {
+					sessionId,
+					items: [{ variantId, quantity: 1 }],
+					paidInPerson: true,
+				}),
+		).rejects.toThrow(/design approval/);
+
+		// And the session is NOT consumed — the seller can fix the cart and retry.
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.status).toBe("buyer_identified");
 	});
 });

@@ -68,6 +68,29 @@ Indexes: `by_token` (bind lookup), `by_retailer_status` (seller's active list),
 - **Rate-limited** creation (`checkoutSessionCreate`, per Clerk subject).
 - **Ownership-checked** reads/cancel (the session's retailer must belong to the
   caller).
+- **Expiry beats status on bind** — `bindCheckoutSession` checks the TTL before
+  the generic status check, so a stale QR always tells the buyer "expired"
+  regardless of whether the 5-min cron has swept it yet (otherwise the cron's
+  timing would flip the buyer message between "expired" and a generic reply).
+
+## Constraints
+
+- **Mockup-gated items can't be sold at the counter (V1).** Any variant where
+  `requiresProof` resolves true is **excluded from the catalog** (`app.checkout.tsx`)
+  **and rejected server-side** (`createOrderFromSession`). Their flow defers
+  payment until the buyer approves a design on the tracking page, which is
+  incompatible with the at-the-counter pay-now/confirmed model — and would
+  otherwise produce an order with no mockup gate. See
+  [`proof-approval.md`](./proof-approval.md). (A counter + mockup flow is a
+  deliberate later feature, not V1.)
+
+## Observability / PII note
+
+The inbound webhook (`convex/http.ts`) logs the buyer's phone, WhatsApp pushname,
+and a 60-char message preview on every call — added to debug the `KP-<token>`
+intent routing. That's **PII in Convex logs** with no retention/redaction policy
+yet; revisit (trim or gate it) alongside the WABA-protection / compliance work
+([`86expmgep`](https://app.clickup.com/t/86expmgep)).
 
 ---
 

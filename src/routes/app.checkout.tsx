@@ -336,7 +336,13 @@ function BuildOrderScreen({
 		return products
 			.map((p) => ({
 				...p,
-				variants: p.variants.filter((vr) => !vr.isCustom && vr.active),
+				// Exclude mockup-gated (requiresProof) + custom variants — Counter
+				// Checkout V1 can't sell items that need buyer design approval (the
+				// server rejects them too). `requiresProof` is resolved per-variant
+				// by products.list (vr.requiresProof ?? product.requiresProof).
+				variants: p.variants.filter(
+					(vr) => !vr.isCustom && !vr.requiresProof && vr.active,
+				),
 			}))
 			.filter((p) => p.variants.length > 0)
 			.filter((p) => {
@@ -501,7 +507,7 @@ function BuildOrderScreen({
 																		1,
 																	)
 																}
-																className="h-9 px-3"
+																className="h-11 px-3"
 															>
 																<Plus className="size-4" />
 																Add
@@ -677,7 +683,7 @@ function Stepper({
 				type="button"
 				onClick={() => onChange(qty - 1)}
 				aria-label="Decrease"
-				className="flex size-9 items-center justify-center rounded-lg border border-border hover:bg-muted"
+				className="flex size-11 items-center justify-center rounded-lg border border-border hover:bg-muted"
 			>
 				<Minus className="size-4" />
 			</button>
@@ -688,7 +694,7 @@ function Stepper({
 				type="button"
 				onClick={() => onChange(qty + 1)}
 				aria-label="Increase"
-				className="flex size-9 items-center justify-center rounded-lg border border-border hover:bg-muted"
+				className="flex size-11 items-center justify-center rounded-lg border border-border hover:bg-muted"
 			>
 				<Plus className="size-4" />
 			</button>
@@ -736,7 +742,7 @@ function MethodToggle({
 		<button
 			type="button"
 			onClick={onClick}
-			className={`h-10 rounded-xl border text-sm font-medium transition-colors ${
+			className={`h-11 rounded-xl border text-sm font-medium transition-colors ${
 				active
 					? "border-accent bg-accent/10 text-foreground"
 					: "border-border text-muted-foreground hover:bg-muted"

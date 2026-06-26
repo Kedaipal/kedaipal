@@ -370,7 +370,9 @@ export const handleInbound = internalAction({
 					? `✅ You're connected to ${bind.storeName}. The cashier will confirm your order shortly.`
 					: bind.result === "expired"
 						? "This checkout link has expired — please ask the cashier to show a fresh QR."
-						: fallback();
+						: bind.result === "already_used"
+							? "This checkout link has already been used. Please ask the cashier for a new QR if you'd like to order again."
+							: fallback();
 			try {
 				await wa.send(fromPhone, { kind: "text", body });
 			} catch (err) {
