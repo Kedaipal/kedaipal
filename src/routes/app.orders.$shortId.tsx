@@ -22,6 +22,12 @@ import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 import { isMockupGateClosed } from "../../convex/lib/order";
+import {
+	ORDER_PAYMENT_METHODS,
+	type OrderPaymentMethod,
+	PAYMENT_METHOD_LABELS,
+	paymentMethodLabel,
+} from "../../convex/lib/paymentMethod";
 import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
 import {
 	PageHeader,
@@ -247,6 +253,11 @@ function OrderDetailRoute() {
 	const [savingCarrier, setSavingCarrier] = useState(false);
 	const [confirmingPayment, setConfirmingPayment] = useState(false);
 	const [confirmPaymentOpen, setConfirmPaymentOpen] = useState(false);
+	// Optional method tag captured at confirm time (the seller has just verified
+	// the channel). Undefined = leave online/unknown. See lib/paymentMethod.ts.
+	const [paymentMethodChoice, setPaymentMethodChoice] = useState<
+		OrderPaymentMethod | undefined
+	>(undefined);
 
 	if (order === undefined) {
 		return <OrderDetailSkeleton />;
@@ -340,9 +351,13 @@ function OrderDetailRoute() {
 			// Marking payment on a pending order auto-confirms it too, which
 			// would otherwise also fire the generic "Order confirmed" toast.
 			if (order.status === "pending") suppressNextOrderConfirmedToast();
-			await markPaymentReceived({ orderId: order._id });
+			await markPaymentReceived({
+				orderId: order._id,
+				paymentMethod: paymentMethodChoice,
+			});
 			toast.success("Payment confirmed — customer notified on WhatsApp");
 			setConfirmPaymentOpen(false);
+			setPaymentMethodChoice(undefined);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -581,6 +596,9 @@ function OrderDetailRoute() {
 							{order.paymentReceivedAt
 								? `Confirmed ${formatRelative(order.paymentReceivedAt)}`
 								: "Confirmed by you"}
+							{order.paymentMethod
+								? ` · ${paymentMethodLabel(order.paymentMethod)}`
+								: ""}
 						</p>
 					</div>
 				</section>
@@ -980,6 +998,32 @@ function OrderDetailRoute() {
 							first — this can't be undone here.
 						</DialogDescription>
 					</DialogHeader>
+					<div className="flex flex-col gap-2">
+						<p className="text-xs font-medium text-muted-foreground">
+							How did they pay? <span className="font-normal">(optional)</span>
+						</p>
+						<div className="flex flex-wrap gap-2">
+							{ORDER_PAYMENT_METHODS.map((m) => {
+								const active = paymentMethodChoice === m;
+								return (
+									<button
+										key={m}
+										type="button"
+										onClick={() =>
+											setPaymentMethodChoice(active ? undefined : m)
+										}
+										className={`rounded-full border px-3 py-1.5 text-sm font-medium transition-colors ${
+											active
+												? "border-accent bg-accent/10 text-foreground"
+												: "border-border text-muted-foreground hover:bg-muted"
+										}`}
+									>
+										{PAYMENT_METHOD_LABELS[m]}
+									</button>
+								);
+							})}
+						</div>
+					</div>
 					<DialogFooter>
 						<Button
 							variant="outline"

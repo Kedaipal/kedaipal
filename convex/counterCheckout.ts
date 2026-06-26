@@ -34,6 +34,7 @@ import {
 	generateShortId,
 	generateTrackingToken,
 } from "./lib/order";
+import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidWaPhone } from "./lib/slug";
 import { variantLabel } from "./lib/variant";
@@ -202,10 +203,11 @@ export const createOrderFromSession = mutation({
 				quantity: v.number(),
 			}),
 		),
-		// Settled at the counter (cash / DuitNow-now). When false the order is left
-		// unpaid and the buyer can still pay later via their tracking link.
+		// Settled at the counter. When false the order is left unpaid and the buyer
+		// can still pay later via their tracking link.
 		paidInPerson: v.boolean(),
-		paymentMethod: v.optional(v.string()), // "cash" | "duitnow" — freeform v1
+		// How it was settled — only meaningful when paidInPerson. Defaults to cash.
+		paymentMethod: v.optional(orderPaymentMethodValidator),
 	},
 	handler: async (
 		ctx,
@@ -314,8 +316,8 @@ export const createOrderFromSession = mutation({
 			deliveryMethod: "self_collect", // collected at the counter
 			paymentStatus: args.paidInPerson ? "received" : "unpaid",
 			paymentReceivedAt: args.paidInPerson ? now : undefined,
-			paymentReference: args.paidInPerson
-				? `In-person (${args.paymentMethod ?? "cash"})`
+			paymentMethod: args.paidInPerson
+				? (args.paymentMethod ?? "cash")
 				: undefined,
 			statusChangedAt: now,
 			createdAt: now,

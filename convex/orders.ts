@@ -32,6 +32,7 @@ import {
 	type StatusLabels,
 } from "./lib/orderStatus";
 import { type PaymentMethod, resolvePaymentMethods } from "./lib/payment";
+import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidWaPhone } from "./lib/slug";
 import { variantLabel } from "./lib/variant";
@@ -737,6 +738,9 @@ export const searchOrders = query({
 				),
 			),
 		),
+		// Filter by how the order was settled (see lib/paymentMethod.ts). ANDs with
+		// the other filters. An order with no method (online/unknown) matches none.
+		paymentMethods: v.optional(v.array(orderPaymentMethodValidator)),
 		dateFrom: v.optional(v.number()),
 		dateTo: v.optional(v.number()),
 		// Cross-cutting: only orders awaiting the seller's mockup action
@@ -751,6 +755,7 @@ export const searchOrders = query({
 			retailerId,
 			bucket,
 			paymentStatuses,
+			paymentMethods,
 			dateFrom,
 			dateTo,
 			mockupPending,
@@ -793,6 +798,10 @@ export const searchOrders = query({
 			paymentStatuses && paymentStatuses.length > 0
 				? new Set(paymentStatuses)
 				: null;
+		const methodSet =
+			paymentMethods && paymentMethods.length > 0
+				? new Set(paymentMethods)
+				: null;
 		const bucketStatuses =
 			bucket === "all" ? null : new Set(BUCKET_STATUSES[bucket]);
 
@@ -801,6 +810,9 @@ export const searchOrders = query({
 			if (mockupPending && !needsMockup(o.mockupStatus)) return false;
 			// Undefined paymentStatus reads as "unpaid".
 			if (payset && !payset.has(o.paymentStatus ?? "unpaid")) return false;
+			// Method filter: an order with no recorded method matches nothing.
+			if (methodSet && !(o.paymentMethod && methodSet.has(o.paymentMethod)))
+				return false;
 			if (dateFrom !== undefined && o.createdAt < dateFrom) return false;
 			if (dateTo !== undefined && o.createdAt > dateTo) return false;
 			if (term.length > 0) {
@@ -1339,8 +1351,12 @@ export const markPaymentReceived = mutation({
 	args: {
 		orderId: v.id("orders"),
 		note: v.optional(v.string()),
+		// Optional: the seller has just verified the money landed, so this is the
+		// one point an online order's method is reliably known. See
+		// convex/lib/paymentMethod.ts.
+		paymentMethod: v.optional(orderPaymentMethodValidator),
 	},
-	handler: async (ctx, { orderId, note }): Promise<void> => {
+	handler: async (ctx, { orderId, note, paymentMethod }): Promise<void> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error("Not authenticated");
 
@@ -1373,6 +1389,7 @@ export const markPaymentReceived = mutation({
 			paymentReceivedAt: now,
 			updatedAt: now,
 		};
+		if (paymentMethod) patch.paymentMethod = paymentMethod;
 		if (shouldAutoConfirm) {
 			patch.status = "confirmed";
 		}

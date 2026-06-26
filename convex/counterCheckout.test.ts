@@ -297,6 +297,7 @@ describe("counterCheckout — createOrderFromSession", () => {
 		expect(order?.status).toBe("confirmed");
 		expect(order?.deliveryMethod).toBe("self_collect");
 		expect(order?.paymentStatus).toBe("received");
+		expect(order?.paymentMethod).toBe("cash");
 		expect(order?.total).toBe(3000);
 		expect(order?.customer.waPhone).toBe("60123456789");
 		expect(order?.trackingToken).toMatch(/^[A-Za-z0-9]{24}$/);

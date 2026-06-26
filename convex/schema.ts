@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 
 /**
  * Multi-tenant core. Every order/inventory entity that lands later MUST carry
@@ -484,6 +485,11 @@ export default defineSchema({
 			),
 		),
 		paymentReference: v.optional(v.string()),
+		// How the order was settled (cash / duitnow / tng / bank_transfer / card /
+		// other). Captured only where reliably known — Counter Checkout "Paid now"
+		// and the seller's "mark received" action. Undefined = online/unknown (the
+		// buyer's self-claim never sets it). See convex/lib/paymentMethod.ts.
+		paymentMethod: v.optional(orderPaymentMethodValidator),
 		paymentClaimedAt: v.optional(v.number()),
 		paymentReceivedAt: v.optional(v.number()),
 		paymentProofStorageId: v.optional(v.string()),

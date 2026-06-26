@@ -19,6 +19,11 @@ import QRCode from "react-qr-code";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import {
+	ORDER_PAYMENT_METHODS,
+	type OrderPaymentMethod,
+	PAYMENT_METHOD_LABELS,
+} from "../../convex/lib/paymentMethod";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { convexErrorMessage, formatPrice } from "../lib/format";
@@ -321,7 +326,7 @@ function BuildOrderScreen({
 	const [cart, setCart] = useState<Map<string, CartLine>>(new Map());
 	const [expanded, setExpanded] = useState<Set<string>>(new Set());
 	const [paidInPerson, setPaidInPerson] = useState(true);
-	const [method, setMethod] = useState<"cash" | "duitnow">("cash");
+	const [method, setMethod] = useState<OrderPaymentMethod>("cash");
 	const [submitting, setSubmitting] = useState(false);
 
 	const isSearching = query.trim().length > 0;
@@ -587,17 +592,15 @@ function BuildOrderScreen({
 						/>
 					</div>
 					{paidInPerson ? (
-						<div className="mt-2 grid grid-cols-2 gap-2">
-							<MethodToggle
-								active={method === "cash"}
-								onClick={() => setMethod("cash")}
-								label="Cash"
-							/>
-							<MethodToggle
-								active={method === "duitnow"}
-								onClick={() => setMethod("duitnow")}
-								label="DuitNow"
-							/>
+						<div className="mt-2 grid grid-cols-3 gap-2">
+							{ORDER_PAYMENT_METHODS.map((m) => (
+								<MethodToggle
+									key={m}
+									active={method === m}
+									onClick={() => setMethod(m)}
+									label={PAYMENT_METHOD_LABELS[m]}
+								/>
+							))}
 						</div>
 					) : (
 						<p className="mt-2 text-xs text-muted-foreground">

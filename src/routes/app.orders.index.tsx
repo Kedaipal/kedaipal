@@ -16,6 +16,10 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { INBOX_BUCKETS, type OrderBucket } from "../../convex/lib/orderBuckets";
 import {
+	isOrderPaymentMethod,
+	type OrderPaymentMethod,
+} from "../../convex/lib/paymentMethod";
+import {
 	type BulkAction,
 	OrderBulkBar,
 } from "../components/dashboard/order-bulk-bar";
@@ -54,6 +58,7 @@ type InboxSearch = {
 	bucket?: InboxBucket;
 	q?: string;
 	pay?: PaymentStatus[];
+	method?: OrderPaymentMethod[];
 	from?: number;
 	to?: number;
 	/** Cross-cutting "needs mockup" toggle. */
@@ -76,6 +81,16 @@ export const Route = createFileRoute("/app/orders/")({
 				? [payRaw]
 				: [];
 		const pay = payArr.filter(isPaymentStatus);
+		const methodRaw = search.method;
+		const methodArr = Array.isArray(methodRaw)
+			? methodRaw
+			: methodRaw != null
+				? [methodRaw]
+				: [];
+		const method = methodArr.filter(
+			(x): x is OrderPaymentMethod =>
+				typeof x === "string" && isOrderPaymentMethod(x),
+		);
 		const q =
 			typeof search.q === "string" && search.q.length > 0
 				? search.q
@@ -84,6 +99,7 @@ export const Route = createFileRoute("/app/orders/")({
 			bucket,
 			q,
 			pay: pay.length > 0 ? pay : undefined,
+			method: method.length > 0 ? method : undefined,
 			from: typeof search.from === "number" ? search.from : undefined,
 			to: typeof search.to === "number" ? search.to : undefined,
 			mockup:
@@ -108,6 +124,7 @@ function OrdersRoute() {
 		bucket = "all",
 		q = "",
 		pay = [],
+		method = [],
 		from,
 		to,
 		mockup = false,
@@ -128,6 +145,7 @@ function OrdersRoute() {
 	const [bulkBusy, setBulkBusy] = useState(false);
 
 	const payKey = pay.join(",");
+	const methodKey = method.join(",");
 	// Mirror the debounced search into the URL (shareable / survives refresh).
 	useEffect(() => {
 		navigate({
@@ -141,7 +159,7 @@ function OrdersRoute() {
 	useEffect(() => {
 		setLimit(PAGE_SIZE);
 		setSelected(new Set());
-	}, [bucket, debounced, payKey, from, to, mockup]);
+	}, [bucket, debounced, payKey, methodKey, from, to, mockup]);
 
 	const result = useQuery(
 		api.orders.searchOrders,
@@ -150,6 +168,7 @@ function OrdersRoute() {
 					retailerId: retailer._id,
 					bucket,
 					paymentStatuses: pay.length > 0 ? pay : undefined,
+					paymentMethods: method.length > 0 ? method : undefined,
 					dateFrom: from,
 					dateTo: to,
 					mockupPending: mockup || undefined,
@@ -185,7 +204,8 @@ function OrdersRoute() {
 		: undefined;
 	const now = Date.now();
 	const searching = debounced.length > 0;
-	const filtersActive = pay.length > 0 || from != null || to != null || mockup;
+	const filtersActive =
+		pay.length > 0 || method.length > 0 || from != null || to != null || mockup;
 
 	function setBucket(next: InboxBucket) {
 		navigate({
@@ -201,6 +221,7 @@ function OrdersRoute() {
 			search: (prev) => ({
 				...prev,
 				pay: next.payment.length > 0 ? next.payment : undefined,
+				method: next.method.length > 0 ? next.method : undefined,
 				from: next.from,
 				to: next.to,
 				mockup: next.mockup ? true : undefined,
@@ -360,7 +381,7 @@ function OrdersRoute() {
 				</div>
 
 				<OrderFilters
-					value={{ payment: pay, from, to, mockup }}
+					value={{ payment: pay, method, from, to, mockup }}
 					onChange={setFilters}
 					mockupCount={counts?.mockupPending}
 				/>

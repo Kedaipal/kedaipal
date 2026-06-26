@@ -6,26 +6,31 @@ import { activeFilterCount, OrderFilters } from "./order-filters";
 afterEach(cleanup);
 
 describe("OrderFilters", () => {
-	it("counts payment + date range + mockup", () => {
-		expect(activeFilterCount({ payment: [], mockup: false })).toBe(0);
-		// 2 payment + 1 date range (both bounds) + 1 mockup = 4.
+	it("counts payment + method + date range + mockup", () => {
+		expect(activeFilterCount({ payment: [], method: [], mockup: false })).toBe(
+			0,
+		);
+		// 2 payment + 1 method + 1 date range (both bounds) + 1 mockup = 5.
 		expect(
 			activeFilterCount({
 				payment: ["unpaid", "received"],
+				method: ["cash"],
 				from: 1,
 				to: 2,
 				mockup: true,
 			}),
-		).toBe(4);
+		).toBe(5);
 		// A single date bound still counts as one.
-		expect(activeFilterCount({ payment: [], from: 1, mockup: false })).toBe(1);
+		expect(
+			activeFilterCount({ payment: [], method: [], from: 1, mockup: false }),
+		).toBe(1);
 	});
 
 	it("toggling a payment chip reports the new selection", () => {
 		const onChange = vi.fn();
 		render(
 			<OrderFilters
-				value={{ payment: [], mockup: false }}
+				value={{ payment: [], method: [], mockup: false }}
 				onChange={onChange}
 			/>,
 		);
@@ -33,6 +38,23 @@ describe("OrderFilters", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Unpaid" }));
 		expect(onChange).toHaveBeenCalledWith({
 			payment: ["unpaid"],
+			method: [],
+			mockup: false,
+		});
+	});
+
+	it("toggling a method chip reports the new selection", () => {
+		const onChange = vi.fn();
+		render(
+			<OrderFilters
+				value={{ payment: [], method: [], mockup: false }}
+				onChange={onChange}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "DuitNow" }));
+		expect(onChange).toHaveBeenCalledWith({
+			payment: [],
+			method: ["duitnow"],
 			mockup: false,
 		});
 	});
@@ -41,7 +63,7 @@ describe("OrderFilters", () => {
 		const onChange = vi.fn();
 		const { rerender } = render(
 			<OrderFilters
-				value={{ payment: [], mockup: false }}
+				value={{ payment: [], method: [], mockup: false }}
 				onChange={onChange}
 				mockupCount={0}
 			/>,
@@ -51,7 +73,7 @@ describe("OrderFilters", () => {
 
 		rerender(
 			<OrderFilters
-				value={{ payment: [], mockup: false }}
+				value={{ payment: [], method: [], mockup: false }}
 				onChange={onChange}
 				mockupCount={3}
 			/>,
@@ -59,6 +81,10 @@ describe("OrderFilters", () => {
 		const toggle = screen.getByRole("button", { name: /needs mockup/i });
 		expect(toggle.textContent).toContain("3");
 		fireEvent.click(toggle);
-		expect(onChange).toHaveBeenCalledWith({ payment: [], mockup: true });
+		expect(onChange).toHaveBeenCalledWith({
+			payment: [],
+			method: [],
+			mockup: true,
+		});
 	});
 });

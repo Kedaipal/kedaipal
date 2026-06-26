@@ -91,6 +91,19 @@ paymentMethods?: Array<{
 | Payment claimed | `claimPayment` | Email | Retailer ("verify in your bank") |
 | Payment received | `markPaymentReceived` | WhatsApp | Shopper ("✅ Payment received…") |
 
+## Payment method (`order.paymentMethod`)
+
+Separate from `paymentStatus` (the handshake state) and from the retailer's payout
+config (`lib/payment.ts`): a structured tag of **how the buyer settled** —
+`cash | duitnow | tng | bank_transfer | card | other` (`convex/lib/paymentMethod.ts`).
+Captured **only where reliably known** — Counter Checkout "Paid now," and an
+optional chip on the seller's "mark payment received" dialog (they've just verified
+the channel). The buyer's "I've paid" self-claim never sets it, so online orders
+stay `undefined` = online/unknown. **Filterable on the orders inbox** (the
+"Method" chips, wired through `searchOrders`'s `paymentMethods` arg); an order with
+no method matches no method filter. Drives future analytics on reliable data
+without adding buyer friction. See [`counter-checkout.md`](./counter-checkout.md).
+
 ## Future: PSP swap-in
 
 The schema and notification slots are shaped for a gateway integration (HitPay Connect / Billplz / Stripe Connect). Adding it means flipping `paymentStatus` to `received` from a PSP webhook instead of the manual button — the end state and downstream messaging are identical. See [`payment-handshake-roadmap.md`](./payment-handshake-roadmap.md) and the customer-payment-gateway roadmap item in [`CLAUDE.md`](../CLAUDE.md).

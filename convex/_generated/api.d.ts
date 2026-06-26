@@ -35,6 +35,7 @@ import type * as lib_order from "../lib/order.js";
 import type * as lib_orderBuckets from "../lib/orderBuckets.js";
 import type * as lib_orderStatus from "../lib/orderStatus.js";
 import type * as lib_payment from "../lib/payment.js";
+import type * as lib_paymentMethod from "../lib/paymentMethod.js";
 import type * as lib_plans from "../lib/plans.js";
 import type * as lib_rateLimiter from "../lib/rateLimiter.js";
 import type * as lib_slug from "../lib/slug.js";
@@ -88,6 +89,7 @@ declare const fullApi: ApiFromModules<{
   "lib/orderBuckets": typeof lib_orderBuckets;
   "lib/orderStatus": typeof lib_orderStatus;
   "lib/payment": typeof lib_payment;
+  "lib/paymentMethod": typeof lib_paymentMethod;
   "lib/plans": typeof lib_plans;
   "lib/rateLimiter": typeof lib_rateLimiter;
   "lib/slug": typeof lib_slug;

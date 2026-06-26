@@ -90,11 +90,24 @@ Indexes: `by_token` (bind lookup), `by_retailer_status` (seller's active list),
 
 **Order shape:** a counter order is created `confirmed`, `deliveryMethod:
 self_collect` (collected at the counter), customer linked from the bound session.
-**Pay-in-person** → `paymentStatus: received` immediately (`paymentReference:
-"In-person (cash|duitnow)"`); **pay-later** → left `unpaid` and the buyer's
+**Pay-in-person** → `paymentStatus: received` immediately + a structured
+`order.paymentMethod` (see below); **pay-later** → left `unpaid` and the buyer's
 WhatsApp confirmation carries a pay-&-track link (the normal handshake). Either
 way the buyer gets a WhatsApp confirmation with their tracking link, so the order
 is WhatsApp-linked and status updates flow through the shared WABA.
+
+**Payment method (`order.paymentMethod`, `convex/lib/paymentMethod.ts`):** a
+structured enum — `cash | duitnow | tng | bank_transfer | card | other` — captured
+**only where it's reliably known**: the Counter Checkout "Paid now" picker (the
+seller witnesses the payment) and the seller's "mark payment received" action (the
+seller has just verified the channel — an optional chip row on that dialog). The
+buyer's online "I've paid" self-claim **never** sets it, so an online order stays
+`undefined` = "online / unknown" (we don't fake a value). Surfaced on the seller
+order detail's "Payment received" line **and filterable on the orders inbox**
+("Method" chips → `searchOrders.paymentMethods`). Enables later analytics on the
+reliable in-person data without adding buyer-side friction. Legacy counter orders
+that stored the method as a `"In-person (…)"` reference string are migrated by
+`migrations:backfillCounterPaymentMethod`.
 
 ## Pending (V1.1)
 
