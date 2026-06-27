@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import {
 	ArrowLeft,
@@ -6,15 +6,17 @@ import {
 	Banknote,
 	CheckCircle2,
 	ChevronDown,
+	ChevronRight,
 	Clock,
 	Minus,
 	Plus,
 	QrCode,
 	Search,
+	Trash2,
 	UserCheck,
 	X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "react-qr-code";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
@@ -31,45 +33,62 @@ import {
 } from "../../convex/lib/paymentMethod";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { useDebounce } from "../hooks/useDebounce";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import { cn } from "../lib/utils";
 
 export const Route = createFileRoute("/app/checkout")({
 	head: () => ({ meta: [{ title: "Counter Checkout — Kedaipal" }] }),
+	// The active checkout lives in the URL so a refresh / reconnect lands the
+	// vendor right back on it instead of losing the order.
+	validateSearch: (search: Record<string, unknown>): { session?: string } => ({
+		session: typeof search.session === "string" ? search.session : undefined,
+	}),
 	component: CounterCheckoutRoute,
 });
 
 type SessionId = Id<"counterCheckoutSessions">;
 
+type CreatedOrder = {
+	shortId: string;
+	orderId: Id<"orders">;
+	paidInPerson: boolean;
+};
+
 function CounterCheckoutRoute() {
 	const retailer = useQuery(api.retailers.getMyRetailer);
-	const [sessionId, setSessionId] = useState<SessionId | null>(null);
-	const [created, setCreated] = useState<{
-		shortId: string;
-		orderId: Id<"orders">;
-		paidInPerson: boolean;
-	} | null>(null);
+	const { session: activeSessionId } = Route.useSearch();
+	const navigate = useNavigate({ from: Route.fullPath });
+	const [created, setCreated] = useState<CreatedOrder | null>(null);
 
 	const createSession = useMutation(api.counterCheckout.createCheckoutSession);
 	const cancelSession = useMutation(api.counterCheckout.cancelCheckoutSession);
-	const session = useQuery(
-		api.counterCheckout.getCheckoutSession,
-		sessionId ? { sessionId } : "skip",
-	);
+
+	const openSession = (id: string) => navigate({ search: { session: id } });
+	const backToList = () => navigate({ search: {} });
+
+	// Drop a finished order's done-screen state whenever the active checkout
+	// changes (resumed another, or went back to the list).
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reset trigger only.
+	useEffect(() => {
+		setCreated(null);
+	}, [activeSessionId]);
 
 	async function start() {
-		setCreated(null);
 		try {
 			const r = await createSession({});
-			setSessionId(r.sessionId);
+			openSession(r.sessionId);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		}
 	}
 
-	function reset() {
-		setSessionId(null);
-		setCreated(null);
+	async function cancel(id: string) {
+		try {
+			await cancelSession({ sessionId: id as SessionId });
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		}
 	}
 
 	return (
@@ -88,81 +107,276 @@ function CounterCheckoutRoute() {
 						</p>
 					</div>
 				</div>
-				{sessionId ? (
+				{activeSessionId ? (
 					<button
 						type="button"
-						onClick={reset}
+						onClick={backToList}
 						className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground"
 					>
 						<ArrowLeft className="size-4" />
-						Close
+						All checkouts
 					</button>
 				) : null}
 			</header>
 
-			{!sessionId ? (
-				<StartScreen onStart={start} />
-			) : session === undefined ? (
-				<p className="text-sm text-muted-foreground">Loading…</p>
-			) : session === null ? (
-				<StartScreen onStart={start} />
-			) : created || session.status === "completed" ? (
-				<DoneScreen
-					shortId={created?.shortId}
-					orderId={created?.orderId ?? session.orderId}
-					paidInPerson={created?.paidInPerson ?? false}
-					onNew={start}
-				/>
-			) : session.status === "awaiting_buyer" ? (
-				<AwaitingScreen
-					waUrl={session.waUrl}
-					token={session.token}
-					expiresAt={session.expiresAt}
-					onCancel={async () => {
-						if (sessionId) await cancelSession({ sessionId });
-						reset();
+			{activeSessionId ? (
+				<ActiveSession
+					key={activeSessionId}
+					sessionId={activeSessionId as SessionId}
+					retailer={retailer}
+					created={created}
+					onCreated={setCreated}
+					onStartNew={start}
+					onBackToList={backToList}
+					onCancelActive={async () => {
+						await cancel(activeSessionId);
+						backToList();
 					}}
 				/>
-			) : session.status === "buyer_identified" ? (
-				retailer ? (
-					<BuildOrderScreen
-						retailerId={retailer._id}
-						sessionId={sessionId as SessionId}
-						buyer={{
-							displayName: session.displayName,
-							waPhone: session.waPhone,
-							isNewCustomer: session.isNewCustomer,
-							customer: session.customer,
-						}}
-						currency={retailer.currency ?? "MYR"}
-						onCreated={setCreated}
-					/>
-				) : null
 			) : (
-				<ExpiredScreen onRestart={start} />
+				<OpenCheckoutsList
+					onStart={start}
+					onResume={openSession}
+					onCancel={cancel}
+				/>
 			)}
 		</div>
 	);
 }
 
-function StartScreen({ onStart }: { onStart: () => void }) {
+/** Renders the screen for the one checkout the vendor is currently on. */
+function ActiveSession({
+	sessionId,
+	retailer,
+	created,
+	onCreated,
+	onStartNew,
+	onBackToList,
+	onCancelActive,
+}: {
+	sessionId: SessionId;
+	retailer: ReturnType<typeof useQuery<typeof api.retailers.getMyRetailer>>;
+	created: CreatedOrder | null;
+	onCreated: (c: CreatedOrder) => void;
+	onStartNew: () => void;
+	onBackToList: () => void;
+	onCancelActive: () => void;
+}) {
+	const session = useQuery(api.counterCheckout.getCheckoutSession, {
+		sessionId,
+	});
+
+	if (session === undefined)
+		return <p className="text-sm text-muted-foreground">Loading…</p>;
+	// The session was cancelled / swept away while we were off the page.
+	if (session === null) return <MissingSession onBack={onBackToList} />;
+
+	if (created || session.status === "completed")
+		return (
+			<DoneScreen
+				shortId={created?.shortId}
+				orderId={created?.orderId ?? session.orderId}
+				paidInPerson={created?.paidInPerson ?? false}
+				onNew={onStartNew}
+				onBackToList={onBackToList}
+			/>
+		);
+
+	if (session.status === "awaiting_buyer")
+		return (
+			<AwaitingScreen
+				waUrl={session.waUrl}
+				token={session.token}
+				expiresAt={session.expiresAt}
+				onCancel={onCancelActive}
+			/>
+		);
+
+	if (session.status === "buyer_identified")
+		return retailer ? (
+			<BuildOrderScreen
+				retailerId={retailer._id}
+				sessionId={sessionId}
+				buyer={{
+					displayName: session.displayName,
+					waPhone: session.waPhone,
+					isNewCustomer: session.isNewCustomer,
+					customer: session.customer,
+				}}
+				currency={retailer.currency ?? "MYR"}
+				draft={session.draft}
+				onCreated={onCreated}
+			/>
+		) : null;
+
+	// expired / cancelled
+	return <ExpiredScreen onRestart={onStartNew} onBackToList={onBackToList} />;
+}
+
+function MissingSession({ onBack }: { onBack: () => void }) {
 	return (
-		<div className="flex flex-col items-center gap-5 rounded-2xl border border-border bg-card px-6 py-12 text-center">
-			<span className="flex size-16 items-center justify-center rounded-2xl bg-accent/12 text-accent">
-				<QrCode className="size-8" />
-			</span>
-			<div className="max-w-sm">
-				<h2 className="text-lg font-semibold">Start a counter checkout</h2>
+		<div className="mx-auto flex w-full max-w-md flex-col items-center gap-4 rounded-2xl border border-border bg-card px-6 py-10 text-center">
+			<Clock className="size-10 text-muted-foreground" />
+			<div>
+				<h2 className="text-lg font-semibold">Checkout not found</h2>
 				<p className="mt-1 text-sm text-muted-foreground">
-					We'll show a QR for the buyer to scan with WhatsApp. Once they scan,
-					you'll see who they are and can key in their order.
+					It may have been completed, cancelled, or expired.
 				</p>
 			</div>
-			<Button onClick={onStart} className="h-12 px-8 text-base">
-				Start checkout
+			<Button onClick={onBack} className="h-11 px-6">
+				Back to all checkouts
 			</Button>
 		</div>
 	);
+}
+
+// ---------------------------------------------------------------------------
+// Open checkouts list — the home view; lets a vendor juggle several customers
+// ---------------------------------------------------------------------------
+
+function OpenCheckoutsList({
+	onStart,
+	onResume,
+	onCancel,
+}: {
+	onStart: () => void;
+	onResume: (id: string) => void;
+	onCancel: (id: string) => void;
+}) {
+	const sessions = useQuery(api.counterCheckout.listOpenSessions, {});
+
+	return (
+		<div className="flex flex-col gap-4">
+			<Button onClick={onStart} className="h-12 gap-2 text-base">
+				<Plus className="size-5" />
+				Start checkout
+			</Button>
+
+			{sessions === undefined ? (
+				<p className="text-sm text-muted-foreground">Loading…</p>
+			) : sessions.length === 0 ? (
+				<EmptyCheckouts />
+			) : (
+				<div className="flex flex-col gap-2">
+					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+						Open checkouts ({sessions.length})
+					</p>
+					<ul className="flex flex-col gap-2">
+						{sessions.map((s) => (
+							<SessionRow
+								key={s.sessionId}
+								session={s}
+								onResume={() => onResume(s.sessionId)}
+								onCancel={() => onCancel(s.sessionId)}
+							/>
+						))}
+					</ul>
+				</div>
+			)}
+		</div>
+	);
+}
+
+function EmptyCheckouts() {
+	return (
+		<div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-border px-6 py-10 text-center">
+			<span className="flex size-14 items-center justify-center rounded-2xl bg-accent/12 text-accent">
+				<QrCode className="size-7" />
+			</span>
+			<div className="max-w-sm">
+				<h2 className="text-base font-semibold">No open checkouts</h2>
+				<p className="mt-1 text-sm text-muted-foreground">
+					Start one to show a QR for the buyer to scan with WhatsApp. You can
+					run several at once and come back to any of them.
+				</p>
+			</div>
+		</div>
+	);
+}
+
+function SessionRow({
+	session,
+	onResume,
+	onCancel,
+}: {
+	session: {
+		sessionId: string;
+		status: "awaiting_buyer" | "buyer_identified";
+		displayName: string | undefined;
+		isNewCustomer: boolean | undefined;
+		itemCount: number;
+		createdAt: number;
+		boundAt: number | undefined;
+		expiresAt: number;
+	};
+	onResume: () => void;
+	onCancel: () => void;
+}) {
+	const awaiting = session.status === "awaiting_buyer";
+	const since = session.boundAt ?? session.createdAt;
+	return (
+		<li className="flex items-center gap-3 rounded-2xl border border-border bg-card p-3">
+			<button
+				type="button"
+				onClick={onResume}
+				className="flex min-w-0 flex-1 items-center gap-3 text-left"
+			>
+				<span
+					className={cn(
+						"flex size-10 shrink-0 items-center justify-center rounded-full",
+						awaiting
+							? "bg-muted text-muted-foreground"
+							: "bg-accent/15 text-accent",
+					)}
+				>
+					{awaiting ? (
+						<QrCode className="size-5" />
+					) : (
+						<UserCheck className="size-5" />
+					)}
+				</span>
+				<div className="min-w-0 flex-1">
+					<p className="truncate text-sm font-semibold">
+						{awaiting
+							? "Waiting for buyer to scan"
+							: (session.displayName ?? "Buyer connected")}
+					</p>
+					<p className="text-xs text-muted-foreground">
+						{awaiting ? (
+							"QR open — tap to show it"
+						) : (
+							<>
+								{session.itemCount > 0
+									? `${session.itemCount} item${session.itemCount === 1 ? "" : "s"}`
+									: "No items yet"}
+								{session.isNewCustomer ? " · New" : ""} · {timeAgo(since)}
+							</>
+						)}
+					</p>
+				</div>
+				<ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+			</button>
+			<button
+				type="button"
+				onClick={onCancel}
+				aria-label="Cancel checkout"
+				className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-destructive"
+			>
+				<Trash2 className="size-4" />
+			</button>
+		</li>
+	);
+}
+
+/** Compact "x ago" for the open-checkouts list. */
+function timeAgo(epoch: number): string {
+	const diff = Date.now() - epoch;
+	const mins = Math.floor(diff / 60000);
+	if (mins < 1) return "just now";
+	if (mins < 60) return `${mins}m ago`;
+	const hrs = Math.floor(mins / 60);
+	if (hrs < 24) return `${hrs}h ago`;
+	return `${Math.floor(hrs / 24)}d ago`;
 }
 
 function ExpiryCountdown({ expiresAt }: { expiresAt: number }) {
@@ -233,19 +447,34 @@ function AwaitingScreen({
 	);
 }
 
-function ExpiredScreen({ onRestart }: { onRestart: () => void }) {
+function ExpiredScreen({
+	onRestart,
+	onBackToList,
+}: {
+	onRestart: () => void;
+	onBackToList: () => void;
+}) {
 	return (
 		<div className="mx-auto flex w-full max-w-md flex-col items-center gap-4 rounded-2xl border border-border bg-card px-6 py-10 text-center">
 			<Clock className="size-10 text-muted-foreground" />
 			<div>
 				<h2 className="text-lg font-semibold">Checkout expired</h2>
 				<p className="mt-1 text-sm text-muted-foreground">
-					No one scanned in time. Start a fresh one to show a new QR.
+					This checkout timed out. Start a fresh one to show a new QR.
 				</p>
 			</div>
-			<Button onClick={onRestart} className="h-11 px-6">
-				Start new checkout
-			</Button>
+			<div className="flex w-full flex-col gap-2">
+				<Button onClick={onRestart} className="h-11 px-6">
+					Start new checkout
+				</Button>
+				<button
+					type="button"
+					onClick={onBackToList}
+					className="text-sm font-medium text-muted-foreground underline-offset-2 hover:underline"
+				>
+					Back to all checkouts
+				</button>
+			</div>
 		</div>
 	);
 }
@@ -255,11 +484,13 @@ function DoneScreen({
 	orderId,
 	paidInPerson,
 	onNew,
+	onBackToList,
 }: {
 	shortId: string | undefined;
 	orderId: Id<"orders"> | undefined;
 	paidInPerson: boolean;
 	onNew: () => void;
+	onBackToList: () => void;
 }) {
 	const updateStatus = useMutation(api.orders.updateStatus);
 	const [completed, setCompleted] = useState(false);
@@ -347,6 +578,13 @@ function DoneScreen({
 						Go to orders
 					</Link>
 				) : null}
+				<button
+					type="button"
+					onClick={onBackToList}
+					className="text-sm font-medium text-emerald-800/80 underline-offset-2 hover:underline"
+				>
+					Back to all checkouts
+				</button>
 			</div>
 		</div>
 	);
@@ -358,11 +596,19 @@ function DoneScreen({
 
 type CartLine = { name: string; label: string; price: number; qty: number };
 
+type SessionDraft = {
+	items: Array<{ variantId: Id<"productVariants">; quantity: number }>;
+	fulfilmentDate?: number;
+	paidInPerson?: boolean;
+	paymentMethod?: OrderPaymentMethod;
+};
+
 function BuildOrderScreen({
 	retailerId,
 	sessionId,
 	buyer,
 	currency,
+	draft,
 	onCreated,
 }: {
 	retailerId: Id<"retailers">;
@@ -378,6 +624,7 @@ function BuildOrderScreen({
 		} | null;
 	};
 	currency: string;
+	draft: SessionDraft | undefined;
 	onCreated: (created: {
 		shortId: string;
 		orderId: Id<"orders">;
@@ -386,11 +633,17 @@ function BuildOrderScreen({
 }) {
 	const products = useQuery(api.products.list, { retailerId });
 	const createOrder = useMutation(api.counterCheckout.createOrderFromSession);
+	const saveDraft = useMutation(api.counterCheckout.saveSessionDraft);
 	const [query, setQuery] = useState("");
+	// Cart + selections seed from the autosaved draft so a refresh / resume
+	// restores exactly where the vendor left off. Items hydrate once the catalog
+	// loads (we need names/prices); the rest seed synchronously.
 	const [cart, setCart] = useState<Map<string, CartLine>>(new Map());
 	const [expanded, setExpanded] = useState<Set<string>>(new Set());
-	const [paidInPerson, setPaidInPerson] = useState(true);
-	const [method, setMethod] = useState<OrderPaymentMethod>("cash");
+	const [paidInPerson, setPaidInPerson] = useState(draft?.paidInPerson ?? true);
+	const [method, setMethod] = useState<OrderPaymentMethod>(
+		draft?.paymentMethod ?? "cash",
+	);
 	const [submitting, setSubmitting] = useState(false);
 
 	// Collection date — counter orders are self-collect, so this is "when will
@@ -401,7 +654,38 @@ function BuildOrderScreen({
 		const b = fulfilmentDateBounds(0);
 		return { minYmd: ymdFromEpoch(b.min), maxYmd: ymdFromEpoch(b.max) };
 	}, []);
-	const [fulfilmentDate, setFulfilmentDate] = useState(minYmd);
+	const [fulfilmentDate, setFulfilmentDate] = useState(
+		draft?.fulfilmentDate != null ? ymdFromEpoch(draft.fulfilmentDate) : minYmd,
+	);
+
+	// One-time cart hydration from the draft, once the catalog is available to
+	// resolve each saved variant's name/label/price. Guarded so subsequent draft
+	// updates (our own autosaves echoing back) never clobber live edits.
+	const hydratedRef = useRef(false);
+	useEffect(() => {
+		if (hydratedRef.current || !products) return;
+		hydratedRef.current = true;
+		const items = draft?.items ?? [];
+		if (items.length === 0) return;
+		const lookup = new Map<
+			string,
+			{ name: string; label: string; price: number }
+		>();
+		for (const p of products) {
+			for (const vr of p.variants) {
+				const label = vr.isCustom
+					? (vr.customLabel ?? "Custom")
+					: vr.optionValues.join(" / ");
+				lookup.set(vr._id, { name: p.name, label, price: vr.price });
+			}
+		}
+		const next = new Map<string, CartLine>();
+		for (const it of items) {
+			const v = lookup.get(it.variantId);
+			if (v) next.set(it.variantId, { ...v, qty: it.quantity });
+		}
+		if (next.size > 0) setCart(next);
+	}, [products, draft]);
 
 	const isSearching = query.trim().length > 0;
 	const filtered = useMemo(() => {
@@ -449,6 +733,35 @@ function BuildOrderScreen({
 
 	const cartEntries = [...cart.entries()];
 	const total = cartEntries.reduce((s, [, l]) => s + l.price * l.qty, 0);
+
+	// Autosave the in-progress order to the session (debounced) so a refresh,
+	// reconnect, or jumping to another customer never loses it. We only start
+	// saving once the initial draft has hydrated, so an empty cart never
+	// overwrites a saved one on first paint.
+	const draftPayload = useMemo<SessionDraft>(() => {
+		const epoch = mytMidnightFromYmd(fulfilmentDate);
+		return {
+			items: [...cart.entries()].map(([variantId, l]) => ({
+				variantId: variantId as Id<"productVariants">,
+				quantity: l.qty,
+			})),
+			fulfilmentDate: Number.isNaN(epoch) ? undefined : epoch,
+			paidInPerson,
+			paymentMethod: paidInPerson ? method : undefined,
+		};
+	}, [cart, fulfilmentDate, paidInPerson, method]);
+	const latestDraft = useRef(draftPayload);
+	latestDraft.current = draftPayload;
+	const debouncedDraftKey = useDebounce(JSON.stringify(draftPayload), 700);
+	// Fire when the debounced key settles; we save the latest draft via a ref, so
+	// debouncedDraftKey is intentionally a trigger-only dependency.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: debouncedDraftKey is the trigger
+	useEffect(() => {
+		if (!hydratedRef.current) return;
+		saveDraft({ sessionId, draft: latestDraft.current }).catch(() => {
+			// Best-effort autosave — a transient failure just retries on the next edit.
+		});
+	}, [debouncedDraftKey, sessionId, saveDraft]);
 
 	async function submit() {
 		if (cartEntries.length === 0) return;

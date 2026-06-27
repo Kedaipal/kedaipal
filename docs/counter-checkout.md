@@ -40,14 +40,49 @@ template).
 
 ---
 
+## Multiple concurrent checkouts + draft persistence (2026-06-27)
+
+Real counters serve several customers at once, and a vendor will refresh / lose
+connection / step away mid-order. So the flow is **multi-session and resumable**,
+not a single ephemeral in-memory session:
+
+- **The active checkout lives in the URL** (`/app/checkout?session=<id>`), so a
+  refresh or reconnect lands the vendor right back on it.
+- **The home view is a list of open checkouts** (`listOpenSessions` → all the
+  retailer's `awaiting_buyer` + `buyer_identified` sessions) with buyer name,
+  draft item count, and age. Each can be **resumed** or **cancelled**; "Start
+  checkout" opens a new one. A vendor can juggle several customers freely.
+- **The in-progress cart is autosaved to the session** (`draft` field:
+  items + fulfilment date + paid/method), debounced (~700ms) via
+  `saveSessionDraft`. On resume, `BuildOrderScreen` hydrates the cart from the
+  draft once the catalog loads (to resolve names/prices), guarded so our own
+  autosaves echoing back never clobber live edits. Price/stock stay
+  authoritative at `createOrderFromSession` — the draft is a scratchpad.
+- **Two TTLs.** The unscanned QR keeps the short **10-min** window
+  (`SESSION_TTL_MS`) — the token is live then. Once bound, the session becomes a
+  seller-owned in-progress order and gets a **3-day idle window**
+  (`OPEN_SESSION_TTL_MS`) that **slides on every draft edit**; `bindCheckoutSession`
+  promotes the expiry, `saveSessionDraft` bumps it. Abandoned ones are swept by
+  the cron so the open-checkouts list stays clean. `effectiveStatus` treats a
+  past-window bound session as `expired` even before the cron flips the row.
+
 ## Schema (`convex/schema.ts`)
 
 `counterCheckoutSessions`: `retailerId`, `sellerUserId` (Clerk), `token`,
 `status` (`awaiting_buyer | buyer_identified | completed | expired | cancelled`),
 `customerId?`, `waPhone?`, `waProfileName?`, `isNewCustomer?`, `orderId?`,
-`boundAt?`, `expiresAt`, timestamps.
-Indexes: `by_token` (bind lookup), `by_retailer_status` (seller's active list),
-`by_status_expiry` (expiry cron range-scan).
+`draft?` (`{ items[], fulfilmentDate?, paidInPerson?, paymentMethod? }` — autosaved
+in-progress order), `boundAt?`, `expiresAt`, timestamps.
+Indexes: `by_token` (bind lookup), `by_retailer_status` (seller's open list),
+`by_status_expiry` (expiry cron range-scan — now sweeps `awaiting_buyer` then
+chains to `buyer_identified`).
+
+**Fulfilment date:** counter orders capture an optional collection date
+(defaults to **today**, the walk-in case) validated against a 0-day notice — the
+seller is keying it in person, so today is always valid regardless of the
+storefront `minFulfilmentNoticeDays`. See [`fulfilment-date.md`](./fulfilment-date.md).
+After a **paid-in-person** order is created, the success screen offers an
+optional **"Mark as completed"** button (one tap → `delivered`).
 
 **Identity = optional, three converging paths, one record:** token-scan (happy,
 **built**), manual phone entry (**pending**), anonymous walk-in / cash

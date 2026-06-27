@@ -647,6 +647,23 @@ export default defineSchema({
 		// Set when the seller confirms the order off this session (status →
 		// completed). The order then flows through the normal WhatsApp pipeline.
 		orderId: v.optional(v.id("orders")),
+		// In-progress order the seller is keying for the bound buyer — autosaved
+		// (debounced) so a refresh / reconnect / switching between concurrent
+		// customers never loses the cart. Only present on buyer_identified sessions;
+		// authoritative price/stock are still resolved at createOrderFromSession.
+		draft: v.optional(
+			v.object({
+				items: v.array(
+					v.object({
+						variantId: v.id("productVariants"),
+						quantity: v.number(),
+					}),
+				),
+				fulfilmentDate: v.optional(v.number()),
+				paidInPerson: v.optional(v.boolean()),
+				paymentMethod: v.optional(orderPaymentMethodValidator),
+			}),
+		),
 		boundAt: v.optional(v.number()),
 		expiresAt: v.number(),
 		createdAt: v.number(),

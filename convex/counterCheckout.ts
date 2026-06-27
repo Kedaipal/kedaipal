@@ -40,8 +40,15 @@ import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidWaPhone } from "./lib/slug";
 import { variantLabel } from "./lib/variant";
 
-/** A counter session lives this long before it expires unscanned. */
+/** A counter session lives this long before it expires unscanned (QR window). */
 export const SESSION_TTL_MS = 10 * 60 * 1000; // 10 minutes
+/**
+ * Once a buyer is bound, the session is a seller-owned in-progress order, so it
+ * lives much longer — the vendor can juggle several customers and come back. The
+ * window slides on every draft edit; abandoned ones are swept by the cron so the
+ * "open checkouts" list stays clean.
+ */
+export const OPEN_SESSION_TTL_MS = 3 * 24 * 60 * 60 * 1000; // 3 days idle
 
 const MAX_COUNTER_ITEMS = 100;
 const SHORT_ID_RETRIES = 3;
@@ -81,7 +88,14 @@ function effectiveStatus(
 	session: Doc<"counterCheckoutSessions">,
 	now: number,
 ): Doc<"counterCheckoutSessions">["status"] {
-	if (session.status === "awaiting_buyer" && now > session.expiresAt)
+	// Both the unscanned QR window (awaiting_buyer) and the idle window of a
+	// bound, in-progress order (buyer_identified) read as expired once past their
+	// expiry, even if the cleanup cron hasn't flipped the row yet.
+	if (
+		(session.status === "awaiting_buyer" ||
+			session.status === "buyer_identified") &&
+		now > session.expiresAt
+	)
 		return "expired";
 	return session.status;
 }
@@ -143,6 +157,8 @@ export const getCheckoutSession = query({
 		orderId: Id<"orders"> | undefined;
 		// Lifetime history for a returning customer (null for new/anonymous).
 		customer: { orderCount: number; totalSpent: number; lastOrderAt: number } | null;
+		// Autosaved in-progress order, so a resume restores the cart + selections.
+		draft: Doc<"counterCheckoutSessions">["draft"];
 	} | null> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new ConvexError("Not authenticated");
@@ -183,7 +199,131 @@ export const getCheckoutSession = query({
 			isNewCustomer: session.isNewCustomer,
 			orderId: session.orderId,
 			customer,
+			draft: session.draft,
 		};
+	},
+});
+
+const draftValidator = v.object({
+	items: v.array(
+		v.object({
+			variantId: v.id("productVariants"),
+			quantity: v.number(),
+		}),
+	),
+	fulfilmentDate: v.optional(v.number()),
+	paidInPerson: v.optional(v.boolean()),
+	paymentMethod: v.optional(orderPaymentMethodValidator),
+});
+
+/**
+ * Autosave the seller's in-progress order onto a bound session (debounced from
+ * the client). Owner-only; only valid while the session is buyer_identified.
+ * Slides the idle expiry so an actively-edited checkout never expires under the
+ * vendor. Price/stock are NOT validated here — that happens authoritatively at
+ * createOrderFromSession; this is a best-effort scratchpad.
+ */
+export const saveSessionDraft = mutation({
+	args: {
+		sessionId: v.id("counterCheckoutSessions"),
+		draft: draftValidator,
+	},
+	handler: async (ctx, { sessionId, draft }): Promise<void> => {
+		const retailer = await requireOwnRetailer(ctx);
+		const session = await ctx.db.get(sessionId);
+		if (!session) throw new ConvexError("Session not found");
+		if (session.retailerId !== retailer._id) throw new ConvexError("Forbidden");
+		if (session.status !== "buyer_identified")
+			throw new ConvexError("This checkout isn't open for editing");
+
+		// Drop junk lines (non-positive / non-integer qty) and cap the count so a
+		// rogue client can't bloat the row. Authoritative validation is at create.
+		const items = draft.items
+			.filter((i) => Number.isInteger(i.quantity) && i.quantity >= 1)
+			.slice(0, MAX_COUNTER_ITEMS);
+
+		const now = Date.now();
+		await ctx.db.patch(sessionId, {
+			draft: { ...draft, items },
+			expiresAt: now + OPEN_SESSION_TTL_MS, // slide the idle window
+			updatedAt: now,
+		});
+	},
+});
+
+/**
+ * All of the retailer's OPEN counter checkouts — the unscanned QRs
+ * (awaiting_buyer) plus the in-progress, buyer-bound orders (buyer_identified) —
+ * so the seller can juggle several customers at once and resume any of them.
+ * Effectively-expired rows are filtered out even before the cron sweeps them.
+ * Owner-only. Item count comes straight off the draft (no per-variant lookups).
+ */
+export const listOpenSessions = query({
+	args: {},
+	handler: async (
+		ctx,
+	): Promise<
+		Array<{
+			sessionId: Id<"counterCheckoutSessions">;
+			status: "awaiting_buyer" | "buyer_identified";
+			displayName: string | undefined;
+			isNewCustomer: boolean | undefined;
+			itemCount: number;
+			createdAt: number;
+			boundAt: number | undefined;
+			expiresAt: number;
+		}>
+	> => {
+		const retailer = await requireOwnRetailer(ctx);
+		const now = Date.now();
+		const out: Array<{
+			sessionId: Id<"counterCheckoutSessions">;
+			status: "awaiting_buyer" | "buyer_identified";
+			displayName: string | undefined;
+			isNewCustomer: boolean | undefined;
+			itemCount: number;
+			createdAt: number;
+			boundAt: number | undefined;
+			expiresAt: number;
+		}> = [];
+
+		for (const status of ["awaiting_buyer", "buyer_identified"] as const) {
+			const rows = await ctx.db
+				.query("counterCheckoutSessions")
+				.withIndex("by_retailer_status", (q) =>
+					q.eq("retailerId", retailer._id).eq("status", status),
+				)
+				.collect();
+			for (const s of rows) {
+				if (effectiveStatus(s, now) === "expired") continue;
+
+				let displayName: string | undefined;
+				if (s.customerId) {
+					const c = await ctx.db.get(s.customerId);
+					if (c) displayName = getDisplayName(c);
+				} else if (s.waPhone || s.waProfileName) {
+					displayName = getDisplayName({
+						waProfileName: s.waProfileName,
+						waPhone: s.waPhone ?? "",
+					});
+				}
+
+				out.push({
+					sessionId: s._id,
+					status,
+					displayName,
+					isNewCustomer: s.isNewCustomer,
+					itemCount: (s.draft?.items ?? []).reduce((n, i) => n + i.quantity, 0),
+					createdAt: s.createdAt,
+					boundAt: s.boundAt,
+					expiresAt: s.expiresAt,
+				});
+			}
+		}
+
+		// Most recently active first: bound orders by boundAt, unscanned by createdAt.
+		out.sort((a, b) => (b.boundAt ?? b.createdAt) - (a.boundAt ?? a.createdAt));
+		return out;
 	},
 });
 
@@ -494,6 +634,8 @@ export const bindCheckoutSession = internalMutation({
 			waProfileName: trimmedPushname,
 			isNewCustomer: existing === null,
 			boundAt: now,
+			// Promote to the long idle window now that it's a real in-progress order.
+			expiresAt: now + OPEN_SESSION_TTL_MS,
 			updatedAt: now,
 		});
 
@@ -510,13 +652,25 @@ export const bindCheckoutSession = internalMutation({
  * stale rows out of "active session" listings. Batched + self-scheduling.
  */
 export const expireStaleSessions = internalMutation({
-	args: { cursor: v.optional(v.union(v.string(), v.null())) },
-	handler: async (ctx, { cursor }) => {
+	args: {
+		// Which open status to sweep this pass. The cron kicks off with the default
+		// (awaiting_buyer = unscanned QR window); when that's done it chains to
+		// buyer_identified (the 3-day idle window for in-progress orders).
+		status: v.optional(
+			v.union(
+				v.literal("awaiting_buyer"),
+				v.literal("buyer_identified"),
+			),
+		),
+		cursor: v.optional(v.union(v.string(), v.null())),
+	},
+	handler: async (ctx, { status, cursor }) => {
+		const sweepStatus = status ?? "awaiting_buyer";
 		const now = Date.now();
 		const page = await ctx.db
 			.query("counterCheckoutSessions")
 			.withIndex("by_status_expiry", (q) =>
-				q.eq("status", "awaiting_buyer").lt("expiresAt", now),
+				q.eq("status", sweepStatus).lt("expiresAt", now),
 			)
 			.paginate({ numItems: 100, cursor: cursor ?? null });
 
@@ -528,9 +682,16 @@ export const expireStaleSessions = internalMutation({
 			await ctx.scheduler.runAfter(
 				0,
 				internal.counterCheckout.expireStaleSessions,
-				{ cursor: page.continueCursor },
+				{ status: sweepStatus, cursor: page.continueCursor },
+			);
+		} else if (sweepStatus === "awaiting_buyer") {
+			// Chain to the bound-session idle sweep once the QR window is cleared.
+			await ctx.scheduler.runAfter(
+				0,
+				internal.counterCheckout.expireStaleSessions,
+				{ status: "buyer_identified", cursor: null },
 			);
 		}
-		return { expired: page.page.length, isDone: page.isDone };
+		return { status: sweepStatus, expired: page.page.length, isDone: page.isDone };
 	},
 });

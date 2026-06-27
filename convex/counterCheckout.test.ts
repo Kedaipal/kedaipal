@@ -5,7 +5,7 @@ import { describe, expect, test } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
-import { SESSION_TTL_MS } from "./counterCheckout";
+import { OPEN_SESSION_TTL_MS, SESSION_TTL_MS } from "./counterCheckout";
 
 const modules = import.meta.glob("./**/*.ts");
 
@@ -442,5 +442,143 @@ describe("counterCheckout — createOrderFromSession", () => {
 		// And the session is NOT consumed — the seller can fix the cart and retry.
 		const session = await t.run((ctx) => ctx.db.get(sessionId));
 		expect(session?.status).toBe("buyer_identified");
+	});
+});
+
+describe("counterCheckout — open sessions + draft", () => {
+	test("binding promotes the session to the long idle window", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const sessionId = await boundSession(t, retailer._id);
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		// Far beyond the 10-min scan window — into the multi-day idle window.
+		expect(session?.expiresAt).toBeGreaterThan(Date.now() + SESSION_TTL_MS * 10);
+		expect(session?.expiresAt).toBeLessThanOrEqual(
+			Date.now() + OPEN_SESSION_TTL_MS + 1000,
+		);
+	});
+
+	test("saveSessionDraft persists the cart + getCheckoutSession returns it", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id);
+		const sessionId = await boundSession(t, retailer._id);
+		const asA = t.withIdentity({ subject: USER_A });
+
+		await asA.mutation(api.counterCheckout.saveSessionDraft, {
+			sessionId,
+			draft: {
+				items: [{ variantId, quantity: 3 }],
+				paidInPerson: false,
+				paymentMethod: "duitnow",
+			},
+		});
+
+		const read = await asA.query(api.counterCheckout.getCheckoutSession, {
+			sessionId,
+		});
+		expect(read?.draft?.items).toEqual([{ variantId, quantity: 3 }]);
+		expect(read?.draft?.paidInPerson).toBe(false);
+		expect(read?.draft?.paymentMethod).toBe("duitnow");
+	});
+
+	test("saveSessionDraft drops junk lines and slides the idle window", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id);
+		const sessionId = await boundSession(t, retailer._id);
+		const asA = t.withIdentity({ subject: USER_A });
+
+		// Backdate the expiry so we can prove the save slides it forward.
+		await t.run((ctx) =>
+			ctx.db.patch(sessionId, { expiresAt: Date.now() - 1000 }),
+		);
+		await asA.mutation(api.counterCheckout.saveSessionDraft, {
+			sessionId,
+			draft: {
+				items: [
+					{ variantId, quantity: 2 },
+					{ variantId, quantity: 0 }, // dropped (non-positive)
+				],
+			},
+		});
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.draft?.items).toEqual([{ variantId, quantity: 2 }]);
+		expect(session?.expiresAt).toBeGreaterThan(Date.now());
+	});
+
+	test("saveSessionDraft is rejected on a non-identified session", async () => {
+		const t = setup();
+		await seedRetailer(t, USER_A);
+		const { sessionId } = await openSession(t, USER_A); // awaiting_buyer
+		const asA = t.withIdentity({ subject: USER_A });
+		await expect(
+			asA.mutation(api.counterCheckout.saveSessionDraft, {
+				sessionId,
+				draft: { items: [] },
+			}),
+		).rejects.toThrow(/isn't open for editing/);
+	});
+
+	test("listOpenSessions returns awaiting + bound, with draft item counts", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id);
+		const asA = t.withIdentity({ subject: USER_A });
+
+		// One unscanned QR + one bound order with two items in its draft.
+		await openSession(t, USER_A);
+		const bound = await boundSession(t, retailer._id);
+		await asA.mutation(api.counterCheckout.saveSessionDraft, {
+			sessionId: bound,
+			draft: { items: [{ variantId, quantity: 2 }] },
+		});
+
+		const open = await asA.query(api.counterCheckout.listOpenSessions, {});
+		expect(open).toHaveLength(2);
+		const boundRow = open.find((s) => s.status === "buyer_identified");
+		const awaitingRow = open.find((s) => s.status === "awaiting_buyer");
+		expect(boundRow?.itemCount).toBe(2);
+		expect(boundRow?.displayName).toBeDefined();
+		expect(awaitingRow?.itemCount).toBe(0);
+	});
+
+	test("listOpenSessions excludes completed / cancelled sessions", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id);
+		const asA = t.withIdentity({ subject: USER_A });
+
+		const sessionId = await boundSession(t, retailer._id);
+		await asA.mutation(api.counterCheckout.createOrderFromSession, {
+			sessionId,
+			items: [{ variantId, quantity: 1 }],
+			paidInPerson: true,
+			paymentMethod: "cash",
+		}); // → completed
+
+		const open = await asA.query(api.counterCheckout.listOpenSessions, {});
+		expect(open).toHaveLength(0);
+	});
+
+	test("an idle bound session past its window is swept + drops off the list", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const sessionId = await boundSession(t, retailer._id);
+		const asA = t.withIdentity({ subject: USER_A });
+
+		// Force the idle window into the past, then run the bound-session sweep.
+		await t.run((ctx) =>
+			ctx.db.patch(sessionId, { expiresAt: Date.now() - 1000 }),
+		);
+		// Effectively-expired even before the cron runs.
+		const open1 = await asA.query(api.counterCheckout.listOpenSessions, {});
+		expect(open1).toHaveLength(0);
+
+		await t.mutation(internal.counterCheckout.expireStaleSessions, {
+			status: "buyer_identified",
+		});
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.status).toBe("expired");
 	});
 });
