@@ -29,6 +29,7 @@ import {
 } from "./_generated/server";
 import { linkOrderToCustomer, refreshWaProfileName } from "./customers";
 import { getDisplayName } from "./lib/customer";
+import { assertValidFulfilmentDate } from "./lib/fulfilmentDate";
 import {
 	computeOrderTotals,
 	generateShortId,
@@ -208,6 +209,10 @@ export const createOrderFromSession = mutation({
 		paidInPerson: v.boolean(),
 		// How it was settled — only meaningful when paidInPerson. Defaults to cash.
 		paymentMethod: v.optional(orderPaymentMethodValidator),
+		// When the buyer collects — epoch-ms of a MYT-midnight day. Optional (a
+		// walk-in collecting now leaves it unset); validated against the retailer's
+		// notice window when present. See convex/lib/fulfilmentDate.ts.
+		fulfilmentDate: v.optional(v.number()),
 	},
 	handler: async (
 		ctx,
@@ -225,6 +230,18 @@ export const createOrderFromSession = mutation({
 		if (args.items.length === 0) throw new ConvexError("Add at least one item");
 		if (args.items.length > MAX_COUNTER_ITEMS)
 			throw new ConvexError(`Maximum ${MAX_COUNTER_ITEMS} items per order`);
+
+		let sanitizedFulfilmentDate: number | undefined;
+		if (args.fulfilmentDate !== undefined) {
+			try {
+				sanitizedFulfilmentDate = assertValidFulfilmentDate(
+					args.fulfilmentDate,
+					retailer.minFulfilmentNoticeDays,
+				);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
 
 		const currency = retailer.currency ?? "MYR";
 		const now = Date.now();
@@ -323,6 +340,7 @@ export const createOrderFromSession = mutation({
 			channel: "whatsapp",
 			customer: { name: customerName, waPhone: session.waPhone },
 			deliveryMethod: "self_collect", // collected at the counter
+			fulfilmentDate: sanitizedFulfilmentDate,
 			paymentStatus: args.paidInPerson ? "received" : "unpaid",
 			paymentReceivedAt: args.paidInPerson ? now : undefined,
 			paymentMethod: args.paidInPerson

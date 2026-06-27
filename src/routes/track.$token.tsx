@@ -2,6 +2,7 @@ import { createFileRoute, notFound } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import {
 	BadgeCheck,
+	CalendarDays,
 	CheckCircle,
 	Clock,
 	ExternalLink,
@@ -20,6 +21,7 @@ import {
 import { type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
+import { formatFulfilmentDate } from "../../convex/lib/fulfilmentDate";
 import { isMockupGateClosed } from "../../convex/lib/order";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
@@ -687,6 +689,17 @@ function TrackingRoute() {
 				)}
 				{isSelfCollect ? "Self Collect" : "Delivery"}
 			</div>
+
+			{/* Fulfilment date the buyer chose — reassures them the seller has it. */}
+			{order.fulfilmentDate !== undefined ? (
+				<div className="mt-2 flex items-center gap-2 rounded-xl bg-accent/5 px-3 py-2 text-sm font-medium text-foreground">
+					<CalendarDays className="size-4 text-accent" />
+					{isSelfCollect ? "Collect on " : "Delivery on "}
+					<span className="font-semibold">
+						{formatFulfilmentDate(order.fulfilmentDate)}
+					</span>
+				</div>
+			) : null}
 
 			<AddressEditDialog
 				open={editingAddress}

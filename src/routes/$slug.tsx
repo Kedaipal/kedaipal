@@ -247,6 +247,7 @@ function StorefrontRoute() {
 				checkoutPhone={retailer.checkoutPhone}
 				offerSelfCollect={retailer.offerSelfCollect ?? false}
 				offerDelivery={retailer.offerDelivery ?? true}
+				minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
 				pickupLocations={pickupLocations ?? []}
 			/>
 		</div>

@@ -11,6 +11,10 @@ always keeps at least one _working_ method.**
 > **delivery optional** (ClickUp `86exu4grm`) and the cross-method invariant that ties the
 > two together.
 
+> **Related:** the **fulfilment date** captured at checkout (the buyer's "when do you need
+> this?", applies to both methods) has its own reference: [`fulfilment-date.md`](./fulfilment-date.md).
+> The `retailers.minFulfilmentNoticeDays` setting lives in the same Fulfilment settings tab.
+
 ## Optional delivery + the working-method invariant (2026-06-23)
 
 Originally delivery was implicitly always-on and self-collect was the only opt-in method

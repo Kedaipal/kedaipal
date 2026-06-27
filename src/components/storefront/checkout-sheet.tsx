@@ -1,9 +1,16 @@
 import { useMutation } from "convex/react";
 import { ExternalLink, MapPin, Package, Trash2, Truck, X } from "lucide-react";
 import { Dialog } from "radix-ui";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useMemo, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import {
+	assertValidFulfilmentDate,
+	formatFulfilmentDate,
+	fulfilmentDateBounds,
+	mytMidnightFromYmd,
+	ymdFromEpoch,
+} from "../../../convex/lib/fulfilmentDate";
 import type { UseCart } from "../../hooks/useCart";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { deriveMapsUrl } from "../../lib/google-address";
@@ -41,6 +48,7 @@ interface CheckoutSheetProps {
 	checkoutPhone: string | undefined;
 	offerSelfCollect: boolean;
 	offerDelivery: boolean;
+	minFulfilmentNoticeDays: number | undefined;
 	pickupLocations: ReadonlyArray<PublicPickupLocation>;
 }
 
@@ -135,6 +143,7 @@ function buildWaMessage(
 	deliveryAddress: SanitizedDeliveryAddress | undefined,
 	pickupLocation: PublicPickupLocation | undefined,
 	note: string | undefined,
+	fulfilmentDate: number | undefined,
 ): string {
 	const lines: string[] = [];
 	lines.push(`Hi ${storeName}, I'd like to place this order:`);
@@ -170,6 +179,12 @@ function buildWaMessage(
 	} else {
 		lines.push("🚚 Delivery");
 	}
+	// Fulfilment date — the buyer's answer to "bila nak?". Sits with the
+	// delivery/pickup block (it's the "when" to that "where"), above the note.
+	if (fulfilmentDate !== undefined) {
+		const verb = deliveryMethod === "self_collect" ? "Collect" : "Deliver";
+		lines.push(`🗓️ ${verb} on: ${formatFulfilmentDate(fulfilmentDate)}`);
+	}
 	// Order note last, in a clearly delimited section. It sits AFTER the
 	// "Order: ORD-XXXX" line, so even if the note text contains something that
 	// looks like an order token, the inbound parser still matches the real ID
@@ -191,10 +206,23 @@ export function CheckoutSheet({
 	checkoutPhone,
 	offerSelfCollect,
 	offerDelivery,
+	minFulfilmentNoticeDays,
 	pickupLocations,
 }: CheckoutSheetProps) {
 	const createOrder = useMutation(api.orders.create);
 	const [serverError, setServerError] = useState<string | null>(null);
+
+	// Selectable date range for the picker: today + the retailer's notice (the
+	// earliest day) through today + 30. Memoised on the retailer setting so the
+	// "today" anchor is computed once per open, not on every keystroke. The
+	// server re-validates against the live window — see convex/lib/fulfilmentDate.
+	const { minYmd, maxYmd } = useMemo(() => {
+		const bounds = fulfilmentDateBounds(minFulfilmentNoticeDays);
+		return {
+			minYmd: ymdFromEpoch(bounds.min),
+			maxYmd: ymdFromEpoch(bounds.max),
+		};
+	}, [minFulfilmentNoticeDays]);
 
 	const noCheckoutPhone = !checkoutPhone;
 	// Self-collect surfaces on the storefront only when the retailer opted in
@@ -229,6 +257,8 @@ export function CheckoutSheet({
 			// Empty when delivery, the chosen id when self-collect with 2+ options,
 			// unused when self-collect with exactly 1 option (auto-resolved at submit).
 			pickupLocationId: "",
+			// "YYYY-MM-DD" the buyer picks for delivery/pickup. Required at submit.
+			fulfilmentDate: "",
 			// Optional free-text instruction for the seller (local form state — the
 			// note is order-level, not a cart item, so it doesn't belong in useCart).
 			note: "",
@@ -269,6 +299,22 @@ export function CheckoutSheet({
 				}
 			}
 
+			// Resolve + range-check the fulfilment date. The schema guarantees a
+			// non-empty string; here we convert to a MYT-midnight epoch and confirm
+			// it's inside the live [min, max] window before sending. Mirrors the
+			// server (which re-validates) so the buyer sees the error inline.
+			const fulfilmentEpoch = mytMidnightFromYmd(value.fulfilmentDate);
+			if (Number.isNaN(fulfilmentEpoch)) {
+				setServerError("That date isn't valid — pick a day from the picker.");
+				return;
+			}
+			try {
+				assertValidFulfilmentDate(fulfilmentEpoch, minFulfilmentNoticeDays);
+			} catch (err) {
+				setServerError((err as Error).message);
+				return;
+			}
+
 			const trimmedNote = value.note?.trim();
 			const generalNote =
 				trimmedNote && trimmedNote.length > 0 ? trimmedNote : undefined;
@@ -297,6 +343,7 @@ export function CheckoutSheet({
 					deliveryMethod: value.deliveryMethod,
 					deliveryAddress: sanitizedAddress,
 					pickupLocationId: resolvedPickupLocationId,
+					fulfilmentDate: fulfilmentEpoch,
 					customerNote,
 					customerImageStorageId,
 				});
@@ -308,6 +355,7 @@ export function CheckoutSheet({
 					sanitizedAddress,
 					resolvedPickupLocation,
 					customerNote,
+					fulfilmentEpoch,
 				);
 				const url = `https://wa.me/${checkoutPhone}?text=${encodeURIComponent(message)}`;
 				if (value.deliveryMethod === "delivery") saveAddress(value.address);
@@ -505,6 +553,33 @@ export function CheckoutSheet({
 												)
 											) : null
 										}
+									</form.Subscribe>
+								)}
+
+								{/* When do you need it — required for both delivery and
+								    pickup. Sits below the where (address/pickup), above the
+								    optional note: a required structured field outranks the
+								    free-text note. Hidden only when the store can't take
+								    orders at all. */}
+								{neitherAvailable ? null : (
+									<form.Subscribe selector={(s) => s.values.deliveryMethod}>
+										{(deliveryMethod) => (
+											<form.AppField name="fulfilmentDate">
+												{(field) => (
+													<field.DateField
+														label={
+															deliveryMethod === "self_collect"
+																? "When will you collect?"
+																: "When do you need it delivered?"
+														}
+														min={minYmd}
+														max={maxYmd}
+														required
+														description="Pick the date you need this order."
+													/>
+												)}
+											</form.AppField>
+										)}
 									</form.Subscribe>
 								)}
 

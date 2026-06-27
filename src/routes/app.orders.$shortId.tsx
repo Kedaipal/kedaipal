@@ -29,6 +29,7 @@ import {
 	paymentMethodLabel,
 } from "../../convex/lib/paymentMethod";
 import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
+import { FulfilmentDateBadge } from "../components/dashboard/fulfilment-date-badge";
 import {
 	PageHeader,
 	PageHeaderSkeleton,
@@ -679,13 +680,21 @@ function OrderDetailRoute() {
 						<Truck className="size-4 text-muted-foreground" />
 					)}
 				</div>
-				<div>
+				<div className="flex flex-col gap-1">
 					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 						Fulfillment
 					</p>
 					<p className="text-sm font-medium">
 						{isSelfCollect ? "Self Collect" : "Delivery"}
 					</p>
+					{order.fulfilmentDate !== undefined ? (
+						<div className="flex items-center gap-1.5">
+							<span className="text-xs text-muted-foreground">
+								{isSelfCollect ? "Collect on" : "Deliver on"}
+							</span>
+							<FulfilmentDateBadge epoch={order.fulfilmentDate} size="md" />
+						</div>
+					) : null}
 				</div>
 			</section>
 

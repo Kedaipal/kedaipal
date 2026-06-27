@@ -4,10 +4,15 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
+import {
+	DEFAULT_MIN_NOTICE_DAYS,
+	MAX_NOTICE_DAYS,
+} from "../../../convex/lib/fulfilmentDate";
 import { formatPhone } from "../../lib/customer";
 import { convexErrorMessage } from "../../lib/format";
 import { deriveMapsUrl } from "../../lib/google-address";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { Skeleton } from "../ui/skeleton";
 import { SortableList } from "../ui/sortable-list";
 import { PickupLocationEditDialog } from "./pickup-location-edit-dialog";
@@ -16,6 +21,7 @@ interface FulfilmentTabProps {
 	retailerId: Id<"retailers">;
 	offerSelfCollect: boolean;
 	offerDelivery: boolean;
+	minFulfilmentNoticeDays: number | undefined;
 }
 
 function Card({ children }: { children: ReactNode }) {
@@ -86,6 +92,7 @@ export function FulfilmentTab({
 	retailerId,
 	offerSelfCollect,
 	offerDelivery,
+	minFulfilmentNoticeDays,
 }: FulfilmentTabProps) {
 	const locations = useQuery(api.pickupLocations.listForRetailer, {
 		retailerId,
@@ -219,6 +226,8 @@ export function FulfilmentTab({
 
 	return (
 		<div className="flex flex-col gap-6 pt-2">
+			<MinNoticeCard initial={minFulfilmentNoticeDays} />
+
 			<Card>
 				<div className="flex items-start justify-between gap-4">
 					<SectionHeading
@@ -366,6 +375,86 @@ export function FulfilmentTab({
 				retailerId={retailerId}
 			/>
 		</div>
+	);
+}
+
+/**
+ * Order-date notice setting — how many days ahead a buyer's chosen fulfilment
+ * date must be. Governs the storefront date picker's earliest selectable day
+ * (and counter checkout's default). Sits first in the tab: it's a checkout-wide
+ * timing rule that applies to BOTH delivery and pickup, above the per-method
+ * toggles. 0 = same-day allowed (ready-stock sellers).
+ */
+function MinNoticeCard({ initial }: { initial: number | undefined }) {
+	const updateSettings = useMutation(api.retailers.updateSettings);
+	const effective = initial ?? DEFAULT_MIN_NOTICE_DAYS;
+	const [value, setValue] = useState(String(effective));
+	const [saving, setSaving] = useState(false);
+
+	const parsed = Number(value);
+	const valid =
+		value.trim().length > 0 &&
+		Number.isInteger(parsed) &&
+		parsed >= 0 &&
+		parsed <= MAX_NOTICE_DAYS;
+	const dirty = valid && parsed !== effective;
+
+	async function save() {
+		if (!dirty) return;
+		setSaving(true);
+		try {
+			await updateSettings({ minFulfilmentNoticeDays: parsed });
+			toast.success("Minimum notice updated.");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	return (
+		<Card>
+			<SectionHeading
+				title="Order date notice"
+				description="How much notice you need before a buyer's chosen delivery or pickup date. Buyers can't pick a date sooner than this. Set 0 to take same-day orders."
+			/>
+			<div className="flex items-end gap-3">
+				<div className="flex flex-col gap-1.5">
+					<label
+						htmlFor="min-notice"
+						className="text-xs font-medium text-muted-foreground"
+					>
+						Minimum days&apos; notice
+					</label>
+					<Input
+						id="min-notice"
+						type="number"
+						inputMode="numeric"
+						min={0}
+						max={MAX_NOTICE_DAYS}
+						value={value}
+						onChange={(e) => setValue(e.target.value)}
+						variant="field"
+						isError={value.trim().length > 0 && !valid}
+						className="w-28"
+					/>
+				</div>
+				<Button
+					type="button"
+					onClick={save}
+					disabled={!dirty || saving}
+					isLoading={saving}
+					className="h-11"
+				>
+					Save
+				</Button>
+			</div>
+			{value.trim().length > 0 && !valid ? (
+				<p className="text-xs text-destructive">
+					Enter a whole number between 0 and {MAX_NOTICE_DAYS}.
+				</p>
+			) : null}
+		</Card>
 	);
 }
 

@@ -20,6 +20,11 @@ import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import {
+	fulfilmentDateBounds,
+	mytMidnightFromYmd,
+	ymdFromEpoch,
+} from "../../convex/lib/fulfilmentDate";
+import {
 	ORDER_PAYMENT_METHODS,
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
@@ -125,6 +130,7 @@ function CounterCheckoutRoute() {
 							customer: session.customer,
 						}}
 						currency={retailer.currency ?? "MYR"}
+						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
 						onCreated={(shortId) => setCreated({ shortId })}
 					/>
 				) : null
@@ -303,6 +309,7 @@ function BuildOrderScreen({
 	sessionId,
 	buyer,
 	currency,
+	minFulfilmentNoticeDays,
 	onCreated,
 }: {
 	retailerId: Id<"retailers">;
@@ -318,6 +325,7 @@ function BuildOrderScreen({
 		} | null;
 	};
 	currency: string;
+	minFulfilmentNoticeDays: number | undefined;
 	onCreated: (shortId: string) => void;
 }) {
 	const products = useQuery(api.products.list, { retailerId });
@@ -328,6 +336,15 @@ function BuildOrderScreen({
 	const [paidInPerson, setPaidInPerson] = useState(true);
 	const [method, setMethod] = useState<OrderPaymentMethod>("cash");
 	const [submitting, setSubmitting] = useState(false);
+
+	// Collection date — counter orders are self-collect, so this is "when will
+	// they pick up?". Defaults to the earliest allowed day (today + notice) and
+	// the seller adjusts it for pre-orders.
+	const { minYmd, maxYmd } = useMemo(() => {
+		const b = fulfilmentDateBounds(minFulfilmentNoticeDays);
+		return { minYmd: ymdFromEpoch(b.min), maxYmd: ymdFromEpoch(b.max) };
+	}, [minFulfilmentNoticeDays]);
+	const [fulfilmentDate, setFulfilmentDate] = useState(minYmd);
 
 	const isSearching = query.trim().length > 0;
 	const filtered = useMemo(() => {
@@ -380,6 +397,7 @@ function BuildOrderScreen({
 		if (cartEntries.length === 0) return;
 		setSubmitting(true);
 		try {
+			const fulfilmentEpoch = mytMidnightFromYmd(fulfilmentDate);
 			const { shortId } = await createOrder({
 				sessionId,
 				items: cartEntries.map(([variantId, l]) => ({
@@ -388,6 +406,9 @@ function BuildOrderScreen({
 				})),
 				paidInPerson,
 				paymentMethod: paidInPerson ? method : undefined,
+				fulfilmentDate: Number.isNaN(fulfilmentEpoch)
+					? undefined
+					: fulfilmentEpoch,
 			});
 			onCreated(shortId);
 		} catch (err) {
@@ -576,6 +597,28 @@ function BuildOrderScreen({
 						<span>Total</span>
 						<span className="tabular-nums">{formatPrice(total, currency)}</span>
 					</div>
+				</div>
+
+				{/* Collection date */}
+				<div className="rounded-2xl border border-border bg-card p-4">
+					<label
+						htmlFor="counter-fulfilment-date"
+						className="text-xs font-semibold uppercase tracking-widest text-muted-foreground"
+					>
+						Collection date
+					</label>
+					<input
+						id="counter-fulfilment-date"
+						type="date"
+						value={fulfilmentDate}
+						min={minYmd}
+						max={maxYmd}
+						onChange={(e) => setFulfilmentDate(e.target.value)}
+						className="mt-3 h-11 w-full rounded-xl border border-input bg-transparent px-4 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+					/>
+					<p className="mt-2 text-xs text-muted-foreground">
+						When the buyer will pick up. Defaults to the soonest day you allow.
+					</p>
 				</div>
 
 				{/* Payment */}

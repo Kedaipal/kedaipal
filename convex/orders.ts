@@ -15,6 +15,10 @@ import {
 	linkOrderToCustomer,
 } from "./customers";
 import { assertValidAddress } from "./lib/address";
+import {
+	assertValidFulfilmentDate,
+	matchesFulfilmentWindow,
+} from "./lib/fulfilmentDate";
 import { BUCKET_STATUSES, statusToBucket } from "./lib/orderBuckets";
 import {
 	computeOrderTotals,
@@ -194,6 +198,11 @@ export const create = mutation({
 		),
 		deliveryAddress: v.optional(addressValidator),
 		pickupLocationId: v.optional(v.id("pickupLocations")),
+		// When the buyer needs the order — epoch-ms of a MYT-midnight calendar day.
+		// Optional at the protocol level so legacy/other callers + tests don't all
+		// need to pass it; the storefront UI requires it. Validated against the
+		// retailer's notice window when present. See convex/lib/fulfilmentDate.ts.
+		fulfilmentDate: v.optional(v.number()),
 		// Optional free-text instruction the shopper typed at checkout.
 		customerNote: v.optional(v.string()),
 		// Optional reference image the buyer attached for a custom line, uploaded
@@ -271,6 +280,21 @@ export const create = mutation({
 
 		const retailer = await ctx.db.get(args.retailerId);
 		if (!retailer) throw new ConvexError("Retailer not found");
+
+		// Fulfilment date: validate against the retailer's notice window when the
+		// buyer supplied one. Applies to BOTH delivery and self-collect — a cake
+		// delivered on the wrong day is as bad as one collected late.
+		let sanitizedFulfilmentDate: number | undefined;
+		if (args.fulfilmentDate !== undefined) {
+			try {
+				sanitizedFulfilmentDate = assertValidFulfilmentDate(
+					args.fulfilmentDate,
+					retailer.minFulfilmentNoticeDays,
+				);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
 
 		// Delivery must be on offer. Mirrors the storefront gate (which hides the
 		// delivery option when offerDelivery is off) and closes the gap where a
@@ -461,6 +485,7 @@ export const create = mutation({
 			deliveryAddress: sanitizedAddress,
 			pickupLocationId: resolvedPickupLocationId,
 			pickupSnapshot: sanitizedPickupSnapshot,
+			fulfilmentDate: sanitizedFulfilmentDate,
 			customerNote: sanitizedCustomerNote,
 			// Only keep the buyer image when the order actually has a custom line —
 			// guards a stray id on a non-custom order.
@@ -754,6 +779,17 @@ export const searchOrders = query({
 		methodUnspecified: v.optional(v.boolean()),
 		dateFrom: v.optional(v.number()),
 		dateTo: v.optional(v.number()),
+		// Fulfilment-date chip filter (Today / Tomorrow / This week). Matches on the
+		// order's fulfilmentDate (MYT calendar day); dateless orders never match.
+		// ANDs with the other filters. Distinct from dateFrom/dateTo, which filter
+		// on createdAt. See convex/lib/fulfilmentDate.ts.
+		fulfilmentWindow: v.optional(
+			v.union(
+				v.literal("today"),
+				v.literal("tomorrow"),
+				v.literal("this_week"),
+			),
+		),
 		// Cross-cutting: only orders awaiting the seller's mockup action
 		// (mockupStatus pending / changes_requested). ANDs with the other filters.
 		mockupPending: v.optional(v.boolean()),
@@ -770,6 +806,7 @@ export const searchOrders = query({
 			methodUnspecified,
 			dateFrom,
 			dateTo,
+			fulfilmentWindow,
 			mockupPending,
 			searchText,
 			limit,
@@ -833,6 +870,11 @@ export const searchOrders = query({
 			}
 			if (dateFrom !== undefined && o.createdAt < dateFrom) return false;
 			if (dateTo !== undefined && o.createdAt > dateTo) return false;
+			if (fulfilmentWindow !== undefined) {
+				if (o.fulfilmentDate === undefined) return false;
+				if (!matchesFulfilmentWindow(o.fulfilmentDate, fulfilmentWindow))
+					return false;
+			}
 			if (term.length > 0) {
 				const name = (o.customer.name ?? "").toLowerCase();
 				const phone = (o.customer.waPhone ?? "").replace(/\D/g, "");
@@ -851,10 +893,24 @@ export const searchOrders = query({
 			return true;
 		});
 
+		// Default inbox sort: by fulfilment date ascending (soonest first) so the
+		// seller works the most urgent orders top-down. Orders without a date
+		// (legacy, or any path that didn't capture one) sink to the bottom, then
+		// fall back to newest-created-first within that group. `all` arrives
+		// createdAt-desc, so the stable sort preserves that as the tiebreaker.
+		const sorted = [...filtered].sort((a, b) => {
+			const ad = a.fulfilmentDate;
+			const bd = b.fulfilmentDate;
+			if (ad === undefined && bd === undefined) return 0; // keep createdAt-desc
+			if (ad === undefined) return 1; // a (dateless) after b
+			if (bd === undefined) return -1; // b (dateless) after a
+			return ad - bd; // both dated → soonest first
+		});
+
 		const take = Math.max(1, Math.min(limit ?? 50, 200));
 		return {
-			orders: filtered.slice(0, take),
-			total: filtered.length,
+			orders: sorted.slice(0, take),
+			total: sorted.length,
 			counts,
 			capped: all.length >= MAX_INBOX_SCAN,
 		};

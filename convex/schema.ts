@@ -178,6 +178,12 @@ export default defineSchema({
 		// settings invariant guarantee a store always keeps ≥1 WORKING fulfilment
 		// method (delivery, or self-collect with ≥1 active pickup location).
 		offerDelivery: v.optional(v.boolean()),
+		// Minimum days' notice the retailer needs before a fulfilment date. Drives
+		// the lower bound of the checkout date picker (earliest selectable day =
+		// today + this). Undefined → 1 (see DEFAULT_MIN_NOTICE_DAYS); 0 is allowed
+		// so ready-stock sellers can offer same-day. Capped at 30 (the max-notice
+		// ceiling) server-side. See convex/lib/fulfilmentDate.ts.
+		minFulfilmentNoticeDays: v.optional(v.number()),
 		// Set to true the first time the retailer opens the Pickup settings tab.
 		// Used by the dashboard checklist to mark step 4 done after a single
 		// visit, even if the retailer chose to skip self-collect — keeps the
@@ -456,6 +462,14 @@ export default defineSchema({
 				placeId: v.optional(v.string()),
 			}),
 		),
+		// When the buyer needs the order — their answer to "When do you need this?
+		// (delivery or pickup date)" at checkout. Stored as the epoch-ms of that
+		// calendar day's MIDNIGHT in Malaysia time (UTC+8, no DST) — see
+		// convex/lib/fulfilmentDate.ts. Optional: absent on orders created before
+		// this field and on any path that doesn't capture it (a dateless order
+		// sorts to the bottom of the date-ascending inbox). Validated server-side
+		// to a whole MYT day within [today + retailer notice, today + 30 days].
+		fulfilmentDate: v.optional(v.number()),
 		// Free-text instruction the shopper attached at checkout ("no onions",
 		// "deliver after 5pm"). Optional; absent on orders created before this
 		// field. Distinct from deliveryAddress.notes (address/gate detail, delivery
