@@ -53,6 +53,11 @@ type SessionId = Id<"counterCheckoutSessions">;
 // sync with OPEN_SESSION_TTL_MS in convex/counterCheckout.ts (3 days).
 const OPEN_CHECKOUT_TTL_DAYS = 3;
 
+// Client ceiling on a custom price (cents). Keep in sync with MAX_CUSTOM_PRICE in
+// convex/counterCheckout.ts — surfaced here so the vendor sees the limit while
+// typing instead of only hitting the server rejection at submit.
+const MAX_CUSTOM_PRICE_CENTS = 100_000_00;
+
 type CreatedOrder = {
 	shortId: string;
 	orderId: Id<"orders">;
@@ -947,20 +952,35 @@ function BuildOrderScreen({
 														customPriceInput[vr._id] ??
 														(inCart ? centsToRm(inCart.price) : "");
 													const cents = rmToCents(priceText);
-													const validPrice = !Number.isNaN(cents);
+													const overMax =
+														!Number.isNaN(cents) &&
+														cents > MAX_CUSTOM_PRICE_CENTS;
+													const validPrice = !Number.isNaN(cents) && !overMax;
 													const onPriceChange = (val: string) => {
 														setCustomPriceInput((prev) => ({
 															...prev,
 															[vr._id]: val,
 														}));
 														const c = rmToCents(val);
-														if (inCart && !Number.isNaN(c))
+														// Only push a valid, in-range price to the cart line.
+														if (
+															inCart &&
+															!Number.isNaN(c) &&
+															c <= MAX_CUSTOM_PRICE_CENTS
+														)
 															setQty(
 																vr._id,
 																{ ...inCart, price: c },
 																inCart.qty,
 															);
 													};
+													// When the field is blank/invalid but the line is already
+													// in the cart, the last good price is still what'll be
+													// charged — say so instead of showing a silent empty box.
+													const heldHint =
+														inCart && !validPrice
+															? `Using ${formatPrice(inCart.price, currency)} — type a new price to change`
+															: null;
 													return (
 														<div
 															key={vr._id}
@@ -1023,6 +1043,20 @@ function BuildOrderScreen({
 																	</Button>
 																) : null}
 															</div>
+															{overMax ? (
+																<p className="text-xs text-destructive">
+																	Max{" "}
+																	{formatPrice(
+																		MAX_CUSTOM_PRICE_CENTS,
+																		currency,
+																	)}
+																	.
+																</p>
+															) : heldHint ? (
+																<p className="text-xs text-amber-600 dark:text-amber-500">
+																	{heldHint}
+																</p>
+															) : null}
 														</div>
 													);
 												}
