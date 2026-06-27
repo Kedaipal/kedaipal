@@ -13,6 +13,7 @@ import {
 import { buildWaContactLink } from "#/lib/contact";
 import { formatPrice } from "#/lib/format";
 import { cn } from "#/lib/utils";
+import { m } from "#/paraglide/messages";
 
 /** Render an RM major-unit amount via the shared minor-unit formatter. */
 function rm(major: number): string {
@@ -20,9 +21,10 @@ function rm(major: number): string {
 }
 
 function buildWaLink(monthlyCost: number): string {
-	const message = `Hi Kedaipal! I worked out WhatsApp-only ordering is costing me about ${rm(
-		monthlyCost,
-	)}/mo. I'd like to join as a Founding Member (RM${FOUNDING_PRICE_RM}/mo).`;
+	const message = m.cost_wa_message({
+		cost: rm(monthlyCost),
+		price: FOUNDING_PRICE_RM,
+	});
 	return buildWaContactLink(message);
 }
 
@@ -97,18 +99,19 @@ export function CostCalculator({
 						style={{ transform: "rotate(-1.5deg)" }}
 					>
 						<TrendingDown className="size-3" />
-						The real cost of WhatsApp-only orders
+						{m.cost_badge()}
 					</span>
 					<h1
 						className="mt-5 text-3xl font-bold tracking-tight md:text-5xl"
 						style={{ letterSpacing: "-0.03em" }}
 					>
-						What is WhatsApp-only ordering{" "}
-						<span className="kp-highlight text-destructive">costing you?</span>
+						{m.cost_heading_1()}{" "}
+						<span className="kp-highlight text-destructive">
+							{m.cost_heading_2()}
+						</span>
 					</h1>
 					<p className="mx-auto mt-4 max-w-md text-muted-foreground md:text-lg">
-						Three quick guesses. We'll show you the monthly leak — honestly,
-						even if it means you don't need us yet.
+						{m.cost_sub()}
 					</p>
 				</header>
 
@@ -116,10 +119,10 @@ export function CostCalculator({
 					{/* Inputs */}
 					<div className="space-y-7 rounded-3xl border border-border bg-card p-6 shadow-md md:p-8">
 						<p className="text-xs font-bold uppercase tracking-[0.2em] text-accent">
-							Your numbers
+							{m.cost_your_numbers()}
 						</p>
 						<SliderRow
-							label="Orders a week"
+							label={m.cost_orders_week()}
 							value={inputs.ordersPerWeek}
 							display={`${inputs.ordersPerWeek}`}
 							min={BOUNDS.ordersPerWeek.min}
@@ -128,7 +131,7 @@ export function CostCalculator({
 							onChange={(v) => update({ ordersPerWeek: v })}
 						/>
 						<SliderRow
-							label="Average order value"
+							label={m.cost_aov()}
 							value={inputs.aov}
 							display={rm(inputs.aov)}
 							min={BOUNDS.aov.min}
@@ -137,7 +140,7 @@ export function CostCalculator({
 							onChange={(v) => update({ aov: v })}
 						/>
 						<SliderRow
-							label="Orders you miss a week (your guess)"
+							label={m.cost_missed_week()}
 							value={inputs.missedPerWeek}
 							display={`${inputs.missedPerWeek}`}
 							min={BOUNDS.missedPerWeek.min}
@@ -147,9 +150,9 @@ export function CostCalculator({
 						/>
 						<div className="border-t border-border/60 pt-6">
 							<SliderRow
-								label="Minutes chasing each payment"
+								label={m.cost_chase_min()}
 								value={inputs.chaseMin}
-								display={`${inputs.chaseMin} min`}
+								display={m.cost_min_suffix({ minutes: inputs.chaseMin })}
 								min={BOUNDS.chaseMin.min}
 								max={BOUNDS.chaseMin.max}
 								step={BOUNDS.chaseMin.step}
@@ -170,7 +173,7 @@ export function CostCalculator({
 						{result.disqualified ? (
 							<div className="flex flex-col items-center gap-1 text-center">
 								<p className="text-sm text-muted-foreground">
-									No pressure — we'll be here when it's worth it.
+									{m.cost_disq_reassure()}
 								</p>
 								<Button
 									asChild
@@ -182,7 +185,7 @@ export function CostCalculator({
 										target="_blank"
 										rel="noopener noreferrer"
 									>
-										Keep my number for later
+										{m.cost_keep_number()}
 									</a>
 								</Button>
 							</div>
@@ -196,7 +199,7 @@ export function CostCalculator({
 									target="_blank"
 									rel="noopener noreferrer"
 								>
-									Become a Founding Member — RM{FOUNDING_PRICE_RM}/mo
+									{m.cost_cta_join({ price: FOUNDING_PRICE_RM })}
 									<ArrowRight />
 								</a>
 							</Button>
@@ -253,25 +256,27 @@ function QualifiedBody({ result, ratioLabel }: ResultCardProps) {
 	return (
 		<div className="p-6 md:p-8">
 			<p className="text-sm font-medium text-primary-foreground/65">
-				WhatsApp-only ordering is costing you about
+				{m.cost_result_lead()}
 			</p>
 			<p className="mt-2 text-5xl font-bold tracking-tight md:text-6xl">
 				{rm(result.total)}
 				<span className="text-xl font-semibold text-primary-foreground/50">
 					{" "}
-					/mo
+					{m.pricing_per_month()}
 				</span>
 			</p>
 
 			<dl className="mt-7 space-y-3 text-sm">
 				<div className="flex items-center justify-between gap-4 rounded-xl bg-white/[0.06] px-4 py-3">
-					<dt className="text-primary-foreground/70">Missed-order revenue</dt>
+					<dt className="text-primary-foreground/70">
+						{m.cost_missed_revenue()}
+					</dt>
 					<dd className="font-bold tabular-nums text-red-300">
 						{rm(result.missedRevenue)}
 					</dd>
 				</div>
 				<div className="flex items-center justify-between gap-4 rounded-xl bg-white/[0.06] px-4 py-3">
-					<dt className="text-primary-foreground/70">Time chasing payments</dt>
+					<dt className="text-primary-foreground/70">{m.cost_chase_cost()}</dt>
 					<dd className="font-bold tabular-nums text-red-300">
 						{rm(result.chaseCost)}
 					</dd>
@@ -280,14 +285,13 @@ function QualifiedBody({ result, ratioLabel }: ResultCardProps) {
 
 			<div className="mt-6 rounded-2xl border border-accent/30 bg-accent/15 p-5">
 				<p className="text-sm leading-relaxed text-primary-foreground/90">
-					Kedaipal costs{" "}
-					<span className="font-bold">RM{FOUNDING_PRICE_RM}/mo</span> to plug
-					that leak — putting{" "}
-					<span className="font-bold text-accent">{rm(result.savings)}</span>{" "}
-					back in your pocket every month.
+					{m.cost_plug({
+						price: FOUNDING_PRICE_RM,
+						savings: rm(result.savings),
+					})}
 				</p>
 				<p className="mt-2 inline-flex rotate-[-1deg] rounded-md bg-accent px-2 py-0.5 text-xs font-bold uppercase tracking-wider text-accent-foreground">
-					{ratioLabel} your subscription
+					{m.cost_ratio({ ratio: ratioLabel })}
 				</p>
 			</div>
 		</div>
@@ -299,23 +303,15 @@ function DisqualifiedBody({ result }: { result: ResultCardProps["result"] }) {
 	return (
 		<div className="p-6 md:p-8">
 			<p className="text-lg font-semibold">
-				{isNoMissed ? "Nothing's leaking 👍" : "Not worth it yet — honestly"}
+				{isNoMissed ? m.cost_disq_nomiss_title() : m.cost_disq_notyet_title()}
 			</p>
 			<p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-				{isNoMissed ? (
-					<>
-						You told us you're not missing any orders. Then there's nothing for
-						Kedaipal to plug right now — and we won't pretend otherwise. If
-						orders ever start slipping through WhatsApp chat, come back and run
-						this again.
-					</>
-				) : (
-					<>
-						Right now your status-quo cost ({rm(result.total)}/mo) is smaller
-						than Kedaipal's RM{FOUNDING_PRICE_RM}/mo. It wouldn't pay for itself
-						yet. Come back when your order volume grows.
-					</>
-				)}
+				{isNoMissed
+					? m.cost_disq_nomiss_body()
+					: m.cost_disq_notyet_body({
+							total: rm(result.total),
+							price: FOUNDING_PRICE_RM,
+						})}
 			</p>
 		</div>
 	);
