@@ -52,7 +52,7 @@ export function WhiteGloveCard({ slug }: { slug: string }) {
 					<a
 						href={waUrl}
 						target="_blank"
-						rel="noreferrer"
+						rel="noopener noreferrer"
 						onClick={() => markScheduled({})}
 						className="inline-flex h-9 w-fit items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
 					>

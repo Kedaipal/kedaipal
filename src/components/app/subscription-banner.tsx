@@ -79,7 +79,7 @@ export function SubscriptionBanner({
 						<a
 							href={waUrl}
 							target="_blank"
-							rel="noreferrer"
+							rel="noopener noreferrer"
 							className="inline-flex h-9 items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
 						>
 							Message us to pay

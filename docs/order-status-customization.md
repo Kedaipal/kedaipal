@@ -130,7 +130,7 @@ are **untouched**.
 | `src/routes/app.orders.index.tsx`    | Tab labels (`STATUSES`, ~15) + `StatusBadge` text via resolver. Styles unchanged.                                                                                                                                                             |
 | `src/routes/app.orders.$shortId.tsx` | Status display + transition buttons (`getTransitionLabels`, ~138) via `resolveTransitionLabel`.                                                                                                                                               |
 | `src/routes/app.index.tsx`           | Dashboard hero count labels.                                                                                                                                                                                                                  |
-| `src/routes/track.$shortId.tsx`      | Fold retailer override into `getStatusConfig` (~104) + `STATUS_ORDER` timeline (~144). Retailer label wins over the method preset. **Requires the public order query to return the retailer's `statusLabels` + `locale` + `deliveryMethod`.** |
+| `src/routes/track.$token.tsx`      | Fold retailer override into `getStatusConfig` (~104) + `STATUS_ORDER` timeline (~144). Retailer label wins over the method preset. **Requires the public order query to return the retailer's `statusLabels` + `locale` + `deliveryMethod`.** |
 | Settings UI                          | New "Status labels" section on the settings screen that already edits `messageTemplates`; two-column EN/MS, six rows, placeholder = current default.                                                                                          |
 
 ### Out of scope for Phase 1 (corrections to the original spec)

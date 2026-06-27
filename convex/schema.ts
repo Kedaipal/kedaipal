@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 
 /**
  * Multi-tenant core. Every order/inventory entity that lands later MUST carry
@@ -11,6 +12,12 @@ export default defineSchema({
 		userId: v.string(), // Clerk subject (sub claim)
 		slug: v.string(),
 		storeName: v.string(),
+		// Public one-liner shown on the storefront header beneath the store name
+		// ("Home-based frozen food, Semenyih — DM for bulk orders"). Free text,
+		// trimmed + length-capped server-side (≤280 chars), rendered as escaped
+		// plain text with newlines preserved. Empty/unset → nothing renders. No
+		// index — only read alongside the retailer row.
+		storeDescription: v.optional(v.string()),
 		waPhone: v.optional(v.string()),
 		// Email address for retailer-facing operational notifications
 		// (new orders, payment claims, etc.). Independent of the Clerk auth
@@ -171,6 +178,13 @@ export default defineSchema({
 		// settings invariant guarantee a store always keeps ≥1 WORKING fulfilment
 		// method (delivery, or self-collect with ≥1 active pickup location).
 		offerDelivery: v.optional(v.boolean()),
+		// Minimum days' notice the retailer needs before a fulfilment date. Drives
+		// the lower bound of the storefront date picker (earliest selectable day =
+		// today + this). Undefined → 0 (see DEFAULT_MIN_NOTICE_DAYS) so same-day is
+		// allowed by default; a seller who needs lead time raises it. Capped at 30
+		// (the max-notice ceiling) server-side. NOTE: counter checkout (seller, in
+		// person) ignores this and always allows today. See convex/lib/fulfilmentDate.ts.
+		minFulfilmentNoticeDays: v.optional(v.number()),
 		// Set to true the first time the retailer opens the Pickup settings tab.
 		// Used by the dashboard checklist to mark step 4 done after a single
 		// visit, even if the retailer chose to skip self-collect — keeps the
@@ -341,7 +355,17 @@ export default defineSchema({
 
 	orders: defineTable({
 		retailerId: v.id("retailers"),
+		// Short, human-readable order ref (ORD-XXXX). Shown to humans everywhere
+		// (WhatsApp, receipts, dashboard) but is NOT a secret — it's only ~1M
+		// combinations, so it must never be the capability for the no-auth tracking
+		// page. That role belongs to `trackingToken` below.
 		shortId: v.string(),
+		// High-entropy capability token for the buyer's no-auth tracking page
+		// (`/track/<token>`) and the public buyer mutations (payment claim, address
+		// edit, mockup approve…). Unguessable by design so the page can't be
+		// enumerated. Optional only during the backfill window — every new order
+		// gets one at create. See docs/infra-cost-scaling.md §6.
+		trackingToken: v.optional(v.string()),
 		// Link to the aggregated customer record. Optional during backfill and
 		// for orders that arrive without a phone (link-in-bio checkout); stamped
 		// once the (retailerId, waPhone) pair is known.
@@ -439,6 +463,14 @@ export default defineSchema({
 				placeId: v.optional(v.string()),
 			}),
 		),
+		// When the buyer needs the order — their answer to "When do you need this?
+		// (delivery or pickup date)" at checkout. Stored as the epoch-ms of that
+		// calendar day's MIDNIGHT in Malaysia time (UTC+8, no DST) — see
+		// convex/lib/fulfilmentDate.ts. Optional: absent on orders created before
+		// this field and on any path that doesn't capture it (a dateless order
+		// sorts to the bottom of the date-ascending inbox). Validated server-side
+		// to a whole MYT day within [today + retailer notice, today + 30 days].
+		fulfilmentDate: v.optional(v.number()),
 		// Free-text instruction the shopper attached at checkout ("no onions",
 		// "deliver after 5pm"). Optional; absent on orders created before this
 		// field. Distinct from deliveryAddress.notes (address/gate detail, delivery
@@ -468,6 +500,11 @@ export default defineSchema({
 			),
 		),
 		paymentReference: v.optional(v.string()),
+		// How the order was settled (cash / duitnow / tng / bank_transfer / card /
+		// other). Captured only where reliably known — Counter Checkout "Paid now"
+		// and the seller's "mark received" action. Undefined = online/unknown (the
+		// buyer's self-claim never sets it). See convex/lib/paymentMethod.ts.
+		paymentMethod: v.optional(orderPaymentMethodValidator),
 		paymentClaimedAt: v.optional(v.number()),
 		paymentReceivedAt: v.optional(v.number()),
 		paymentProofStorageId: v.optional(v.string()),
@@ -514,6 +551,7 @@ export default defineSchema({
 		.index("by_retailer_payment", ["retailerId", "paymentStatus"])
 		.index("by_retailer_mockup", ["retailerId", "mockupStatus"])
 		.index("by_shortId", ["shortId"])
+		.index("by_tracking_token", ["trackingToken"])
 		.index("by_customer", ["customerId"]),
 
 	/**
@@ -574,6 +612,71 @@ export default defineSchema({
 		note: v.optional(v.string()),
 		createdAt: v.number(),
 	}).index("by_order", ["orderId"]),
+
+	// --- Counter Checkout (in-person order spine, docs/counter-checkout.md) ----
+	// A seller-initiated, in-person checkout session. The seller opens Counter
+	// Checkout → a session is created with an unguessable single-use `token`; the
+	// dashboard renders a QR of `wa.me/<shared_WABA>?text=KP-<token>`. The buyer
+	// scans + sends, the inbound webhook (intent router → checkout handler) binds
+	// their WhatsApp identity to the session, and the dashboard flips live. The
+	// session is short-lived and consumed once — see security note in
+	// convex/counterCheckout.ts. Identity is OPTIONAL: token-scan (happy path),
+	// manual phone entry, or anonymous walk-in all converge on this one record.
+	counterCheckoutSessions: defineTable({
+		retailerId: v.id("retailers"),
+		sellerUserId: v.string(), // Clerk subject who opened the counter
+		// Unguessable, single-use capability the buyer sends back as `KP-<token>`.
+		// Same generator as orders.trackingToken (generateTrackingToken).
+		token: v.string(),
+		status: v.union(
+			v.literal("awaiting_buyer"), // QR shown; no scan yet
+			v.literal("buyer_identified"), // buyer bound (token / manual phone)
+			v.literal("completed"), // order created from the session
+			v.literal("expired"), // TTL elapsed before a scan
+			v.literal("cancelled"), // seller dismissed it
+		),
+		// Bound buyer identity. `customerId` is set only when an EXISTING customer
+		// matched (retailerId, waPhone) — a brand-new buyer has waPhone/pushname
+		// but no customer row until the order is created (linkOrderToCustomer).
+		customerId: v.optional(v.id("customers")),
+		waPhone: v.optional(v.string()),
+		waProfileName: v.optional(v.string()),
+		// True when no existing customer matched the bound phone — drives the
+		// "new vs returning" dashboard state. Undefined until bound.
+		isNewCustomer: v.optional(v.boolean()),
+		// Set when the seller confirms the order off this session (status →
+		// completed). The order then flows through the normal WhatsApp pipeline.
+		orderId: v.optional(v.id("orders")),
+		// In-progress order the seller is keying for the bound buyer — autosaved
+		// (debounced) so a refresh / reconnect / switching between concurrent
+		// customers never loses the cart. Only present on buyer_identified sessions;
+		// authoritative price/stock are still resolved at createOrderFromSession.
+		draft: v.optional(
+			v.object({
+				items: v.array(
+					v.object({
+						variantId: v.id("productVariants"),
+						quantity: v.number(),
+						// Vendor-set unit price (cents) for a custom/quote line whose
+						// catalog price is 0 — the agreed-in-person price. Absent for
+						// normal lines (those resolve to the variant's price at create).
+						unitPrice: v.optional(v.number()),
+					}),
+				),
+				fulfilmentDate: v.optional(v.number()),
+				paidInPerson: v.optional(v.boolean()),
+				paymentMethod: v.optional(orderPaymentMethodValidator),
+			}),
+		),
+		boundAt: v.optional(v.number()),
+		expiresAt: v.number(),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_token", ["token"])
+		.index("by_retailer_status", ["retailerId", "status"])
+		// Drives the expiry cron: range-scan awaiting_buyer sessions past their TTL.
+		.index("by_status_expiry", ["status", "expiresAt"]),
 
 	// --- Manual subscription billing (docs/manual-subscription.md) -----------
 	// Per-retailer subscription. One row per retailer (created in-transaction by

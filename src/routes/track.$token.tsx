@@ -2,6 +2,7 @@ import { createFileRoute, notFound } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import {
 	BadgeCheck,
+	CalendarDays,
 	CheckCircle,
 	Clock,
 	ExternalLink,
@@ -9,6 +10,7 @@ import {
 	Hourglass,
 	ImageIcon,
 	MapPin,
+	MessageCircle,
 	Package,
 	Pencil,
 	StickyNote,
@@ -19,6 +21,7 @@ import {
 import { type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
+import { formatFulfilmentDate } from "../../convex/lib/fulfilmentDate";
 import { isMockupGateClosed } from "../../convex/lib/order";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
@@ -27,7 +30,7 @@ import { Button } from "../components/ui/button";
 import { CopyButton } from "../components/ui/copy-button";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
-import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
+import { getConvexHttpClient } from "../lib/convex-server";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import {
 	deriveMapsUrl,
@@ -89,21 +92,24 @@ function formatRelativeTime(epochMs: number | undefined): string {
 	return `${Math.floor(diff / day)}d ago`;
 }
 
-export const Route = createFileRoute("/track/$shortId")({
+export const Route = createFileRoute("/track/$token")({
 	loader: async ({ params }) => {
 		const client = getConvexHttpClient();
 		const order = await client.query(api.orders.get, {
-			shortId: params.shortId,
+			token: params.token,
 		});
 		if (!order) throw notFound();
-		return { shortId: params.shortId };
+		// Surface only the human-readable shortId to the page head — never echo the
+		// secret token into a title/canonical that could leak via referrer/history.
+		return { shortId: order.shortId };
 	},
-	head: ({ params }) => ({
+	head: ({ loaderData }) => ({
 		meta: [
-			{ title: `Order ${params.shortId} — Kedaipal` },
+			{ title: `Order ${loaderData?.shortId ?? ""} — Kedaipal` },
+			// noindex + no canonical: the URL carries a capability token, so it must
+			// never be indexed or advertised.
 			{ name: "robots", content: "noindex" },
 		],
-		links: [{ rel: "canonical", href: `${SITE_URL}/track/${params.shortId}` }],
 	}),
 	notFoundComponent: OrderNotFound,
 	component: TrackingRoute,
@@ -163,13 +169,14 @@ function getStatusConfig(
 }
 
 function OrderNotFound() {
-	const { shortId } = Route.useParams();
+	// Intentionally does NOT echo the URL token — it's a capability, and the link
+	// may simply be stale. Keep the message generic.
 	return (
 		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-3 px-5 text-center">
 			<h1 className="text-2xl font-bold">Order not found</h1>
 			<p className="text-sm text-muted-foreground">
-				No order with ID{" "}
-				<span className="font-mono font-semibold">{shortId}</span>.
+				This tracking link is invalid or has expired. Please use the latest link
+				from your WhatsApp chat with the store.
 			</p>
 		</main>
 	);
@@ -230,8 +237,8 @@ function TrackingSkeleton() {
 }
 
 function TrackingRoute() {
-	const { shortId } = Route.useParams();
-	const order = useQuery(api.orders.get, { shortId });
+	const { token } = Route.useParams();
+	const order = useQuery(api.orders.get, { token });
 	// Only subscribe to payment methods when the "How to pay" section can actually
 	// render. Skipping for cancelled / already-paid / mockup-gated orders avoids a
 	// second order+retailer read+subscription on this hot public path. (Kept a
@@ -244,7 +251,7 @@ function TrackingRoute() {
 		!isMockupGateClosed(order);
 	const paymentMethods = useQuery(
 		api.orders.getPaymentMethods,
-		showPaymentSection ? { shortId } : "skip",
+		showPaymentSection ? { token } : "skip",
 	);
 	const [editingAddress, setEditingAddress] = useState(false);
 	const [claimingPayment, setClaimingPayment] = useState(false);
@@ -479,6 +486,7 @@ function TrackingRoute() {
 					</p>
 					{paymentMethods.map((m, i) => (
 						<div
+							// biome-ignore lint/suspicious/noArrayIndexKey: payment methods are a render-stable embedded array with no stable id; label+index is fine and stable within a render
 							key={`${m.label}-${i}`}
 							className="flex flex-col gap-2 border-border [&:not(:first-of-type)]:border-t [&:not(:first-of-type)]:pt-4"
 						>
@@ -542,7 +550,7 @@ function TrackingRoute() {
 
 			{/* Mockup approval — buyer reviews the seller's proof before production. */}
 			{!isCancelled && order.mockupStatus !== undefined ? (
-				<MockupReview shortId={order.shortId} order={order} />
+				<MockupReview token={token} order={order} />
 			) : null}
 
 			{/* Progress timeline — not shown for cancelled orders */}
@@ -591,7 +599,7 @@ function TrackingRoute() {
 				<a
 					href={order.carrierTrackingUrl}
 					target="_blank"
-					rel="noreferrer"
+					rel="noopener noreferrer"
 					className="mt-6 flex items-center justify-center gap-2 rounded-2xl border border-accent/40 bg-accent/5 px-4 py-3 text-sm font-semibold text-accent transition-colors hover:bg-accent/10"
 				>
 					<Truck className="size-4" />
@@ -656,7 +664,7 @@ function TrackingRoute() {
 							<a
 								href={mapsUrl}
 								target="_blank"
-								rel="noreferrer"
+								rel="noopener noreferrer"
 								className="flex items-center gap-1.5 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
 							>
 								<MapPin className="size-3.5" />
@@ -682,10 +690,21 @@ function TrackingRoute() {
 				{isSelfCollect ? "Self Collect" : "Delivery"}
 			</div>
 
+			{/* Fulfilment date the buyer chose — reassures them the seller has it. */}
+			{order.fulfilmentDate !== undefined ? (
+				<div className="mt-2 flex items-center gap-2 rounded-xl bg-accent/5 px-3 py-2 text-sm font-medium text-foreground">
+					<CalendarDays className="size-4 text-accent" />
+					{isSelfCollect ? "Collect on " : "Delivery on "}
+					<span className="font-semibold">
+						{formatFulfilmentDate(order.fulfilmentDate)}
+					</span>
+				</div>
+			) : null}
+
 			<AddressEditDialog
 				open={editingAddress}
 				onClose={() => setEditingAddress(false)}
-				shortId={order.shortId}
+				token={token}
 				currentAddress={order.deliveryAddress}
 				retailerId={order.retailerId}
 			/>
@@ -693,6 +712,7 @@ function TrackingRoute() {
 			<IvePaidDialog
 				open={claimingPayment}
 				onClose={() => setClaimingPayment(false)}
+				token={token}
 				shortId={order.shortId}
 				hasExistingClaim={paymentStatus === "claimed"}
 			/>
@@ -769,6 +789,27 @@ function TrackingRoute() {
 					</div>
 				</section>
 			) : null}
+
+			{/* Contact the store directly. Buyers otherwise only ever hear from the
+			    shared Kedaipal WABA — this opens a chat to the vendor's own number
+			    with the order ref pre-filled. Hidden when the store has no number. */}
+			{order.retailerWaPhone ? (
+				<a
+					href={`https://wa.me/${order.retailerWaPhone.replace(/\D/g, "")}?text=${encodeURIComponent(
+						order.retailerLocale === "ms"
+							? `Hai ${order.storeName}, saya ada pertanyaan tentang pesanan ${order.shortId}.`
+							: `Hi ${order.storeName}, I have a question about my order ${order.shortId}.`,
+					)}`}
+					target="_blank"
+					rel="noopener noreferrer"
+					className="mt-6 flex items-center justify-center gap-2 rounded-2xl border border-accent/40 bg-accent/5 px-4 py-3 text-sm font-semibold text-accent transition-colors hover:bg-accent/10"
+				>
+					<MessageCircle className="size-4" />
+					{order.retailerLocale === "ms"
+						? `Hubungi ${order.storeName || "kedai"}`
+						: `Message ${order.storeName || "the store"}`}
+				</a>
+			) : null}
 		</main>
 	);
 }
@@ -804,7 +845,7 @@ function PickupNavButtons({
 				<a
 					href={wazeUrl}
 					target="_blank"
-					rel="noreferrer"
+					rel="noopener noreferrer"
 					className="flex items-center justify-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2.5 text-xs font-semibold text-foreground transition-colors hover:bg-accent/5"
 				>
 					<MapPin className="size-3.5 text-accent" aria-hidden="true" />
@@ -813,7 +854,7 @@ function PickupNavButtons({
 				<a
 					href={googleUrl}
 					target="_blank"
-					rel="noreferrer"
+					rel="noopener noreferrer"
 					className="flex items-center justify-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2.5 text-xs font-semibold text-foreground transition-colors hover:bg-accent/5"
 				>
 					<MapPin className="size-3.5 text-accent" aria-hidden="true" />
@@ -828,7 +869,7 @@ function PickupNavButtons({
 			<a
 				href={googleUrl}
 				target="_blank"
-				rel="noreferrer"
+				rel="noopener noreferrer"
 				className="flex items-center gap-1.5 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
 			>
 				<ExternalLink className="size-3.5" />
@@ -842,7 +883,7 @@ function PickupNavButtons({
 			<a
 				href={snapshot.mapsUrl}
 				target="_blank"
-				rel="noreferrer"
+				rel="noopener noreferrer"
 				className="flex items-center gap-1.5 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
 			>
 				<ExternalLink className="size-3.5" />
@@ -859,16 +900,16 @@ type TrackedOrder = NonNullable<
 
 /** Buyer-facing mockup review: approve or request changes on the seller's proof. */
 function MockupReview({
-	shortId,
+	token,
 	order,
 }: {
-	shortId: string;
+	token: string;
 	order: TrackedOrder;
 }) {
 	const approve = useMutation(api.orders.approveMockup);
 	const requestChanges = useMutation(api.orders.requestMockupChanges);
 	const declineItem = useMutation(api.orders.declineMockupItem);
-	const mockupUrls = useQuery(api.orders.getMockupUrls, { shortId });
+	const mockupUrls = useQuery(api.orders.getMockupUrls, { token });
 	const [note, setNote] = useState("");
 	const [showNote, setShowNote] = useState(false);
 	const [confirmDecline, setConfirmDecline] = useState(false);
@@ -880,7 +921,7 @@ function MockupReview({
 	async function handleApprove() {
 		setBusy(true);
 		try {
-			await approve({ shortId });
+			await approve({ token });
 			toast.success("Mockup approved — thank you!");
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -892,7 +933,7 @@ function MockupReview({
 	async function handleDecline() {
 		setBusy(true);
 		try {
-			await declineItem({ shortId });
+			await declineItem({ token });
 			toast.success("Custom item removed from your order");
 			setConfirmDecline(false);
 		} catch (err) {
@@ -905,7 +946,7 @@ function MockupReview({
 	async function handleRequestChanges() {
 		setBusy(true);
 		try {
-			await requestChanges({ shortId, note: note.trim() || undefined });
+			await requestChanges({ token, note: note.trim() || undefined });
 			toast.success("Sent — the seller will update your mockup");
 			setShowNote(false);
 			setNote("");

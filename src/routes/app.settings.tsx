@@ -21,6 +21,7 @@ import { type FormEvent, type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { SUPPORTED_CURRENCIES } from "../../convex/lib/currency";
+import { STORE_DESCRIPTION_MAX } from "../../convex/lib/storeProfile";
 import {
 	defaultTemplate,
 	type Locale,
@@ -373,6 +374,14 @@ function SettingsRoute() {
 							onSave={(storeName) => updateSettings({ storeName })}
 						/>
 					</Card>
+					<Card>
+						<StoreDescriptionForm
+							current={retailer.storeDescription ?? ""}
+							onSave={(storeDescription) =>
+								updateSettings({ storeDescription })
+							}
+						/>
+					</Card>
 					{slugRenameForm}
 					<Card>
 						<LogoForm
@@ -454,6 +463,7 @@ function SettingsRoute() {
 					retailerId={retailer._id}
 					offerSelfCollect={retailer.offerSelfCollect ?? false}
 					offerDelivery={retailer.offerDelivery ?? true}
+					minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
 				/>
 			) : null}
 
@@ -606,6 +616,67 @@ function StoreNameForm({
 				className={SAVE_BTN_CLASS}
 			>
 				{saving ? "Saving…" : "Save name"}
+			</Button>
+		</form>
+	);
+}
+
+function StoreDescriptionForm({
+	current,
+	onSave,
+}: {
+	current: string;
+	onSave: (storeDescription: string) => Promise<unknown>;
+}) {
+	const [value, setValue] = useState(current);
+	const [saving, setSaving] = useState(false);
+	// Trim for comparison so whitespace-only edits aren't "dirty", but allow
+	// clearing a previously-set description (going to empty).
+	const dirty = value.trim() !== current.trim();
+
+	async function handleSubmit(e: FormEvent) {
+		e.preventDefault();
+		if (!dirty) return;
+		setSaving(true);
+		try {
+			await onSave(value.trim());
+			toast.success(
+				value.trim().length > 0
+					? "Store description updated."
+					: "Store description cleared.",
+			);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	return (
+		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
+			<SectionHeading
+				title="Store description"
+				description="A short line shown on your storefront under your store name — say what you sell, your lead time, or area. Leave blank to hide it."
+			/>
+			<div className="flex flex-col gap-1.5">
+				<textarea
+					value={value}
+					onChange={(e) => setValue(e.target.value)}
+					placeholder="e.g. Home-based frozen food, Semenyih — DM for bulk orders"
+					rows={3}
+					maxLength={STORE_DESCRIPTION_MAX}
+					className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+				/>
+				<span className="self-end text-xs text-muted-foreground tabular-nums">
+					{value.length}/{STORE_DESCRIPTION_MAX}
+				</span>
+			</div>
+			<Button
+				type="submit"
+				disabled={!dirty || saving}
+				className={SAVE_BTN_CLASS}
+			>
+				{saving ? "Saving…" : "Save description"}
 			</Button>
 		</form>
 	);

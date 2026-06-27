@@ -20,10 +20,11 @@ import { Route as AcceptableUseRouteImport } from './routes/acceptable-use'
 import { Route as SlugRouteImport } from './routes/$slug'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppIndexRouteImport } from './routes/app.index'
-import { Route as TrackShortIdRouteImport } from './routes/track.$shortId'
+import { Route as TrackTokenRouteImport } from './routes/track.$token'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as AppSettingsRouteImport } from './routes/app.settings'
+import { Route as AppCheckoutRouteImport } from './routes/app.checkout'
 import { Route as AppProductsIndexRouteImport } from './routes/app.products.index'
 import { Route as AppOrdersIndexRouteImport } from './routes/app.orders.index'
 import { Route as AppCustomersIndexRouteImport } from './routes/app.customers.index'
@@ -89,9 +90,9 @@ const AppIndexRoute = AppIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppRoute,
 } as any)
-const TrackShortIdRoute = TrackShortIdRouteImport.update({
-  id: '/track/$shortId',
-  path: '/track/$shortId',
+const TrackTokenRoute = TrackTokenRouteImport.update({
+  id: '/track/$token',
+  path: '/track/$token',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SignUpSplatRoute = SignUpSplatRouteImport.update({
@@ -107,6 +108,11 @@ const SignInSplatRoute = SignInSplatRouteImport.update({
 const AppSettingsRoute = AppSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppCheckoutRoute = AppCheckoutRouteImport.update({
+  id: '/checkout',
+  path: '/checkout',
   getParentRoute: () => AppRoute,
 } as any)
 const AppProductsIndexRoute = AppProductsIndexRouteImport.update({
@@ -166,10 +172,11 @@ export interface FileRoutesByFullPath {
   '/privacy': typeof PrivacyRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/terms': typeof TermsRoute
+  '/app/checkout': typeof AppCheckoutRoute
   '/app/settings': typeof AppSettingsRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
-  '/track/$shortId': typeof TrackShortIdRoute
+  '/track/$token': typeof TrackTokenRoute
   '/app/': typeof AppIndexRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
   '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
@@ -191,10 +198,11 @@ export interface FileRoutesByTo {
   '/privacy': typeof PrivacyRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/terms': typeof TermsRoute
+  '/app/checkout': typeof AppCheckoutRoute
   '/app/settings': typeof AppSettingsRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
-  '/track/$shortId': typeof TrackShortIdRoute
+  '/track/$token': typeof TrackTokenRoute
   '/app': typeof AppIndexRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
   '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
@@ -218,10 +226,11 @@ export interface FileRoutesById {
   '/privacy': typeof PrivacyRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/terms': typeof TermsRoute
+  '/app/checkout': typeof AppCheckoutRoute
   '/app/settings': typeof AppSettingsRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
-  '/track/$shortId': typeof TrackShortIdRoute
+  '/track/$token': typeof TrackTokenRoute
   '/app/': typeof AppIndexRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
   '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
@@ -246,10 +255,11 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sitemap.xml'
     | '/terms'
+    | '/app/checkout'
     | '/app/settings'
     | '/sign-in/$'
     | '/sign-up/$'
-    | '/track/$shortId'
+    | '/track/$token'
     | '/app/'
     | '/app/admin/billing'
     | '/app/customers/$customerId'
@@ -271,10 +281,11 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sitemap.xml'
     | '/terms'
+    | '/app/checkout'
     | '/app/settings'
     | '/sign-in/$'
     | '/sign-up/$'
-    | '/track/$shortId'
+    | '/track/$token'
     | '/app'
     | '/app/admin/billing'
     | '/app/customers/$customerId'
@@ -297,10 +308,11 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sitemap.xml'
     | '/terms'
+    | '/app/checkout'
     | '/app/settings'
     | '/sign-in/$'
     | '/sign-up/$'
-    | '/track/$shortId'
+    | '/track/$token'
     | '/app/'
     | '/app/admin/billing'
     | '/app/customers/$customerId'
@@ -326,7 +338,7 @@ export interface RootRouteChildren {
   TermsRoute: typeof TermsRoute
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
-  TrackShortIdRoute: typeof TrackShortIdRoute
+  TrackTokenRoute: typeof TrackTokenRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -408,11 +420,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppIndexRouteImport
       parentRoute: typeof AppRoute
     }
-    '/track/$shortId': {
-      id: '/track/$shortId'
-      path: '/track/$shortId'
-      fullPath: '/track/$shortId'
-      preLoaderRoute: typeof TrackShortIdRouteImport
+    '/track/$token': {
+      id: '/track/$token'
+      path: '/track/$token'
+      fullPath: '/track/$token'
+      preLoaderRoute: typeof TrackTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/sign-up/$': {
@@ -434,6 +446,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/app/settings'
       preLoaderRoute: typeof AppSettingsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/checkout': {
+      id: '/app/checkout'
+      path: '/checkout'
+      fullPath: '/app/checkout'
+      preLoaderRoute: typeof AppCheckoutRouteImport
       parentRoute: typeof AppRoute
     }
     '/app/products/': {
@@ -503,6 +522,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface AppRouteChildren {
+  AppCheckoutRoute: typeof AppCheckoutRoute
   AppSettingsRoute: typeof AppSettingsRoute
   AppIndexRoute: typeof AppIndexRoute
   AppAdminBillingRoute: typeof AppAdminBillingRoute
@@ -517,6 +537,7 @@ interface AppRouteChildren {
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppCheckoutRoute: AppCheckoutRoute,
   AppSettingsRoute: AppSettingsRoute,
   AppIndexRoute: AppIndexRoute,
   AppAdminBillingRoute: AppAdminBillingRoute,
@@ -545,7 +566,7 @@ const rootRouteChildren: RootRouteChildren = {
   TermsRoute: TermsRoute,
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,
-  TrackShortIdRoute: TrackShortIdRoute,
+  TrackTokenRoute: TrackTokenRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

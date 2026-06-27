@@ -17,7 +17,8 @@ import { AddressFieldset } from "./address-fieldset";
 interface AddressEditDialogProps {
 	open: boolean;
 	onClose: () => void;
-	shortId: string;
+	// Capability for the public address mutation (unguessable). NOT the shortId.
+	token: string;
 	currentAddress: Doc<"orders">["deliveryAddress"];
 	/**
 	 * Used by the Google autocomplete inside the field group to scope rate
@@ -48,7 +49,7 @@ function toFormValues(
 export function AddressEditDialog({
 	open,
 	onClose,
-	shortId,
+	token,
 	currentAddress,
 	retailerId,
 }: AddressEditDialogProps) {
@@ -63,7 +64,8 @@ export function AddressEditDialog({
 			const line2 = value.line2.trim();
 			const notes = value.notes.trim();
 			const mapsUrl = value.mapsUrl.trim();
-			const latNum = value.latitude.trim().length > 0 ? Number(value.latitude) : NaN;
+			const latNum =
+				value.latitude.trim().length > 0 ? Number(value.latitude) : NaN;
 			const lngNum =
 				value.longitude.trim().length > 0 ? Number(value.longitude) : NaN;
 			const validCoords =
@@ -76,7 +78,7 @@ export function AddressEditDialog({
 			const placeId = value.placeId.trim();
 			try {
 				await updateAddress({
-					shortId,
+					token,
 					deliveryAddress: {
 						line1: value.line1.trim(),
 						line2: line2.length > 0 ? line2 : undefined,

@@ -164,6 +164,7 @@ import type { Id } from "./_generated/dataModel";
 import { internalMutation, mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
 import { ConvexError } from "convex/values";
 import { reserveFoundingRank } from "./foundingMembers";
+import { MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
 import { rateLimiter } from "./lib/rateLimiter";
 import { capsForPlan, DAY_MS, TRIAL_DAYS } from "./lib/plans";
 import {
@@ -178,6 +179,7 @@ import {
 	type SupportedCurrency,
 } from "./lib/currency";
 import { requireAdmin } from "./lib/auth";
+import { STORE_DESCRIPTION_MAX } from "./lib/storeProfile";
 import {
 	assertValidEmail,
 	assertValidSlug,
@@ -215,6 +217,20 @@ function sanitizeAcceptanceIp(ip: string | undefined): string | undefined {
 }
 
 const SLUG_HISTORY_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
+
+// Trim outer whitespace (newlines INSIDE are preserved for multi-line blurbs),
+// treat blank as "clear", and reject over-cap input. Returns undefined when the
+// field should be unset so an empty description never renders an empty block.
+function sanitizeStoreDescription(input: string): string | undefined {
+	const trimmed = input.trim();
+	if (trimmed.length === 0) return undefined; // empty → clear
+	if (trimmed.length > STORE_DESCRIPTION_MAX) {
+		throw new ConvexError(
+			`Store description exceeds ${STORE_DESCRIPTION_MAX} characters`,
+		);
+	}
+	return trimmed;
+}
 
 export type Locale = "en" | "ms";
 export const DEFAULT_LOCALE: Locale = "en";
@@ -309,6 +325,9 @@ type RetailerPublic = {
 	_id: Id<"retailers">;
 	slug: string;
 	storeName: string;
+	// Public storefront blurb under the store name. Public-safe — surfaced on
+	// both the owner read and the by-slug storefront payload.
+	storeDescription?: string;
 	waPhone?: string;
 	notifyEmail?: string;
 	checkoutPhone?: string;
@@ -336,6 +355,9 @@ type RetailerPublic = {
 	// had delivery). Storefront and settings invariant guarantee ≥1 working
 	// method, so the buyer always sees a way to receive their order.
 	offerDelivery?: boolean;
+	// Minimum days' notice before a fulfilment date — drives the storefront date
+	// picker's earliest selectable day. Undefined → 0 (same-day allowed).
+	minFulfilmentNoticeDays?: number;
 	// Whether the retailer has opened the Pickup settings tab at least once.
 	// Drives checklist step-4 dismissal — set to true on first tab visit by
 	// `markPickupSetupSeen`.
@@ -394,6 +416,7 @@ async function loadRetailerForUser(
 		_id: row._id,
 		slug: row.slug,
 		storeName: row.storeName,
+		storeDescription: row.storeDescription,
 		waPhone: row.waPhone,
 		notifyEmail: row.notifyEmail,
 		logoStorageId: row.logoStorageId,
@@ -406,6 +429,7 @@ async function loadRetailerForUser(
 		paymentMethods,
 		offerSelfCollect: row.offerSelfCollect,
 		offerDelivery: row.offerDelivery,
+		minFulfilmentNoticeDays: row.minFulfilmentNoticeDays,
 		pickupSetupSeen: row.pickupSetupSeen,
 		termsVersion: row.termsVersion,
 		privacyVersion: row.privacyVersion,
@@ -469,6 +493,7 @@ export const getRetailerBySlug = query({
 					_id: active._id,
 					slug: active.slug,
 					storeName: active.storeName,
+					storeDescription: active.storeDescription,
 					waPhone: active.waPhone,
 					checkoutPhone: process.env.WHATSAPP_CHECKOUT_PHONE ?? active.waPhone,
 					logoStorageId: active.logoStorageId,
@@ -481,6 +506,7 @@ export const getRetailerBySlug = query({
 						| undefined,
 					offerSelfCollect: active.offerSelfCollect,
 					offerDelivery: active.offerDelivery,
+					minFulfilmentNoticeDays: active.minFulfilmentNoticeDays,
 					// Founding badge is public-safe; subscription state is NOT included.
 					isFoundingMember: active.isFoundingMember,
 					foundingMemberRank: active.foundingMemberRank,
@@ -781,6 +807,8 @@ export const createRetailer = mutation({
 export const updateSettings = mutation({
 	args: {
 		storeName: v.optional(v.string()),
+		// Empty/blank clears the description. Undefined means "no change".
+		storeDescription: v.optional(v.string()),
 		waPhone: v.optional(v.string()),
 		notifyEmail: v.optional(v.string()),
 		currency: v.optional(v.string()),
@@ -796,6 +824,8 @@ export const updateSettings = mutation({
 		logoStorageId: v.optional(v.string()),
 		offerSelfCollect: v.optional(v.boolean()),
 		offerDelivery: v.optional(v.boolean()),
+		// Minimum days' notice before a fulfilment date. Clamped to [0, 30].
+		minFulfilmentNoticeDays: v.optional(v.number()),
 	},
 	handler: async (ctx, args): Promise<{ ok: true }> => {
 		const userId = await requireUserId(ctx);
@@ -809,6 +839,7 @@ export const updateSettings = mutation({
 
 		const patch: Partial<{
 			storeName: string;
+			storeDescription: string | undefined;
 			waPhone: string | undefined;
 			notifyEmail: string | undefined;
 			logoStorageId: string | undefined;
@@ -821,11 +852,15 @@ export const updateSettings = mutation({
 			paymentMethods: PaymentMethod[] | undefined;
 			offerSelfCollect: boolean;
 			offerDelivery: boolean;
+			minFulfilmentNoticeDays: number;
 			updatedAt: number;
 		}> = { updatedAt: Date.now() };
 
 		if (args.storeName !== undefined) {
 			try { patch.storeName = assertValidStoreName(args.storeName); } catch (err) { throw new ConvexError((err as Error).message); }
+		}
+		if (args.storeDescription !== undefined) {
+			patch.storeDescription = sanitizeStoreDescription(args.storeDescription);
 		}
 		if (args.waPhone !== undefined) {
 			if (args.waPhone.trim().length > 0) {
@@ -901,6 +936,15 @@ export const updateSettings = mutation({
 		}
 		if (args.offerDelivery !== undefined) {
 			patch.offerDelivery = args.offerDelivery;
+		}
+		if (args.minFulfilmentNoticeDays !== undefined) {
+			const n = args.minFulfilmentNoticeDays;
+			if (!Number.isInteger(n) || n < 0 || n > MAX_NOTICE_DAYS) {
+				throw new ConvexError(
+					`Minimum notice must be a whole number between 0 and ${MAX_NOTICE_DAYS} days`,
+				);
+			}
+			patch.minFulfilmentNoticeDays = n;
 		}
 
 		// Fulfilment invariant: a storefront must always keep at least one WORKING

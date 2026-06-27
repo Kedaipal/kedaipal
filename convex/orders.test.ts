@@ -4,7 +4,10 @@ import { convexTest } from "convex-test";
 import { describe, expect, test } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { todayMytMidnight } from "./lib/fulfilmentDate";
 import schema from "./schema";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 const modules = import.meta.glob("./**/*.ts");
 
@@ -12,6 +15,31 @@ function setup() {
 	const t = convexTest(schema, modules);
 	registerRateLimiter(t);
 	return t;
+}
+
+/**
+ * Resolve an order's high-entropy tracking token (the buyer capability) from its
+ * human shortId, for buyer-facing endpoint calls. Returns a guaranteed-
+ * non-matching sentinel when no order exists, so negative-path tests (unknown
+ * order) still exercise the "not found" branch.
+ */
+async function tk(
+	t: ReturnType<typeof setup>,
+	shortId: string,
+): Promise<string> {
+	return await t.run(async (ctx) => {
+		const o = await ctx.db
+			.query("orders")
+			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+			.first();
+		if (!o) return "__no_such_order__";
+		if (o.trackingToken) return o.trackingToken;
+		// Order hand-inserted by a test without a token — backfill a deterministic
+		// one so the buyer-capability path is exercisable.
+		const token = `tok_${shortId}`;
+		await ctx.db.patch(o._id, { trackingToken: token });
+		return token;
+	});
 }
 
 const USER_A = "user_test_a";
@@ -180,7 +208,7 @@ describe("orders", () => {
 		});
 
 		// Nothing configured → null (track page hides the section).
-		expect(await t.query(api.orders.getPaymentMethods, { shortId })).toBeNull();
+		expect(await t.query(api.orders.getPaymentMethods, { token: await tk(t, shortId) })).toBeNull();
 
 		await t.run(async (ctx) => {
 			await ctx.db.patch(retailer._id, {
@@ -202,7 +230,7 @@ describe("orders", () => {
 				],
 			});
 		});
-		const methods = await t.query(api.orders.getPaymentMethods, { shortId });
+		const methods = await t.query(api.orders.getPaymentMethods, { token: await tk(t, shortId) });
 		expect(methods).toHaveLength(2);
 		expect(methods?.[0].label).toBe("Maybank");
 		expect(methods?.[1].bankAccountNumber).toBe("8001-2233");
@@ -217,14 +245,14 @@ describe("orders", () => {
 				},
 			});
 		});
-		const legacy = await t.query(api.orders.getPaymentMethods, { shortId });
+		const legacy = await t.query(api.orders.getPaymentMethods, { token: await tk(t, shortId) });
 		expect(legacy).toHaveLength(1);
 		expect(legacy?.[0].label).toBe("Hong Leong");
 		expect(legacy?.[0].bankAccountNumber).toBe("9000-1111"); // trimmed
 
 		// Unknown order → null.
 		expect(
-			await t.query(api.orders.getPaymentMethods, { shortId: "ORD-ZZZZ" }),
+			await t.query(api.orders.getPaymentMethods, { token: await tk(t, "ORD-ZZZZ") }),
 		).toBeNull();
 	});
 	
@@ -243,7 +271,7 @@ describe("orders", () => {
 			customerNote: "  no onions, deliver after 5pm  ",
 		});
 		expect(
-			(await t.query(api.orders.get, { shortId: withNote.shortId }))
+			(await t.query(api.orders.get, { token: await tk(t, withNote.shortId) }))
 				?.customerNote,
 		).toBe("no onions, deliver after 5pm");
 
@@ -257,7 +285,7 @@ describe("orders", () => {
 			customerNote: "   \n  ",
 		});
 		expect(
-			(await t.query(api.orders.get, { shortId: blankNote.shortId }))
+			(await t.query(api.orders.get, { token: await tk(t, blankNote.shortId) }))
 				?.customerNote,
 		).toBeUndefined();
 
@@ -272,7 +300,7 @@ describe("orders", () => {
 		});
 		
 		expect(
-			(await t.query(api.orders.get, { shortId: noNote.shortId }))?.customerNote,
+			(await t.query(api.orders.get, { token: await tk(t, noNote.shortId) }))?.customerNote,
 		).toBeUndefined();
 	});
 
@@ -312,7 +340,7 @@ describe("orders", () => {
 			customer,
 			deliveryAddress: validAddress,
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(order?.subtotal).toBe(35000);
 		expect(order?.total).toBe(35000);
 	});
@@ -335,7 +363,7 @@ describe("orders", () => {
 		const asA = t.withIdentity({ subject: USER_A });
 		const variantId = await defaultVariantId(t, productId);
 		await asA.mutation(api.products.updateVariant, { variantId, price: 99999 });
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(order?.items[0].price).toBe(10000);
 	});
 
@@ -388,7 +416,7 @@ describe("orders", () => {
 			customer,
 			deliveryAddress: validAddress,
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		const events = await t.run(async (ctx) =>
 			ctx.db
 				.query("orderEvents")
@@ -411,14 +439,14 @@ describe("orders", () => {
 			customer,
 			deliveryAddress: validAddress,
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		const asA = t.withIdentity({ subject: USER_A });
 		await asA.mutation(api.orders.updateStatus, {
 			orderId: order!._id,
 			status: "confirmed",
 		});
 
-		const updated = await t.query(api.orders.get, { shortId });
+		const updated = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(updated?.status).toBe("confirmed");
 
 		const events = await t.run(async (ctx) =>
@@ -442,7 +470,7 @@ describe("orders", () => {
 			customer,
 			deliveryAddress: validAddress,
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		const asB = t.withIdentity({ subject: USER_B });
 		await expect(
 			asB.mutation(api.orders.updateStatus, {
@@ -483,8 +511,8 @@ describe("orders", () => {
 			deliveryAddress: validAddress,
 		});
 
-		const o1 = await t.query(api.orders.get, { shortId: r1.shortId });
-		const o2 = await t.query(api.orders.get, { shortId: r2.shortId });
+		const o1 = await t.query(api.orders.get, { token: await tk(t, r1.shortId) });
+		const o2 = await t.query(api.orders.get, { token: await tk(t, r2.shortId) });
 		await asA.mutation(api.orders.updateStatus, {
 			orderId: o1!._id,
 			status: "confirmed",
@@ -620,7 +648,7 @@ describe("orders", () => {
 			customer,
 			deliveryAddress: validAddress,
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(order?.items[0].variantLabel).toBe("1kg");
 		expect(order?.items[0].price).toBe(8500);
 		expect(order?.total).toBe(17000);
@@ -742,7 +770,7 @@ describe("orders", () => {
 			deliveryAddress: validAddress,
 		});
 		expect(await getProductStock(t, productId)).toBe(6);
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		const asA = t.withIdentity({ subject: USER_A });
 		await asA.mutation(api.orders.updateStatus, {
 			orderId: order!._id,
@@ -767,7 +795,7 @@ describe("orders", () => {
 			deliveryAddress: validAddress,
 		});
 		expect(await getProductStock(t, productId)).toBe(0); // not decremented
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		const asA = t.withIdentity({ subject: USER_A });
 		await asA.mutation(api.orders.updateStatus, {
 			orderId: order!._id,
@@ -791,7 +819,7 @@ describe("orders", () => {
 			customer,
 			deliveryAddress: validAddress,
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		const asA = t.withIdentity({ subject: USER_A });
 		await asA.mutation(api.orders.updateStatus, {
 			orderId: order!._id,
@@ -819,7 +847,7 @@ describe("orders", () => {
 			customer,
 			deliveryAddress: validAddress,
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		const asA = t.withIdentity({ subject: USER_A });
 		for (const status of [
 			"confirmed",
@@ -887,7 +915,7 @@ describe("orders", () => {
 				notes: "  Pintu pagar biru  ",
 			},
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(order?.deliveryAddress?.line1).toBe("12 Jln Mawar 3");
 		expect(order?.deliveryAddress?.line2).toBeUndefined();
 		expect(order?.deliveryAddress?.notes).toBe("Pintu pagar biru");
@@ -944,10 +972,10 @@ describe("orders", () => {
 			postcode: "40000",
 		};
 		await t.mutation(api.orders.updateDeliveryAddress, {
-			shortId,
+			token: await tk(t, shortId),
 			deliveryAddress: newAddress,
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(order?.deliveryAddress?.line1).toBe("99 Jln Cempaka");
 		expect(order?.deliveryAddress?.postcode).toBe("40000");
 	});
@@ -964,7 +992,7 @@ describe("orders", () => {
 			customer,
 			deliveryAddress: validAddress,
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		const asA = t.withIdentity({ subject: USER_A });
 		await asA.mutation(api.orders.updateStatus, {
 			orderId: order!._id,
@@ -972,7 +1000,7 @@ describe("orders", () => {
 		});
 		await expect(
 			t.mutation(api.orders.updateDeliveryAddress, {
-				shortId,
+				token: await tk(t, shortId),
 				deliveryAddress: validAddress,
 			}),
 		).rejects.toThrow(/while the order is pending/);
@@ -992,7 +1020,7 @@ describe("orders", () => {
 		});
 		await expect(
 			t.mutation(api.orders.updateDeliveryAddress, {
-				shortId,
+				token: await tk(t, shortId),
 				deliveryAddress: validAddress,
 			}),
 		).rejects.toThrow(/Self-collect orders/);
@@ -1010,9 +1038,9 @@ describe("orders", () => {
 			customer,
 			deliveryAddress: validAddress,
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		await t.mutation(api.orders.updateDeliveryAddress, {
-			shortId,
+			token: await tk(t, shortId),
 			deliveryAddress: { ...validAddress, line1: "new address line" },
 		});
 		const events = await t.run(async (ctx) =>
@@ -1041,11 +1069,11 @@ describe("orders", () => {
 			});
 
 			await t.mutation(api.orders.claimPayment, {
-				shortId,
+				token: await tk(t, shortId),
 				reference: "TXN-12345",
 			});
 
-			const order = await t.query(api.orders.get, { shortId });
+			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 			expect(order?.paymentStatus).toBe("claimed");
 			expect(order?.paymentReference).toBe("TXN-12345");
 			expect(order?.paymentClaimedAt).toBeTypeOf("number");
@@ -1074,8 +1102,8 @@ describe("orders", () => {
 				customer,
 				deliveryAddress: validAddress,
 			});
-			await t.mutation(api.orders.claimPayment, { shortId });
-			const order = await t.query(api.orders.get, { shortId });
+			await t.mutation(api.orders.claimPayment, { token: await tk(t, shortId) });
+			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 			expect(order?.paymentStatus).toBe("claimed");
 			expect(order?.paymentReference).toBeUndefined();
 		});
@@ -1094,14 +1122,14 @@ describe("orders", () => {
 			});
 
 			await t.mutation(api.orders.claimPayment, {
-				shortId,
+				token: await tk(t, shortId),
 				reference: "first",
 			});
 			await t.mutation(api.orders.claimPayment, {
-				shortId,
+				token: await tk(t, shortId),
 				reference: "second",
 			});
-			const order = await t.query(api.orders.get, { shortId });
+			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 			expect(order?.paymentStatus).toBe("claimed");
 			expect(order?.paymentReference).toBe("second");
 		});
@@ -1109,7 +1137,7 @@ describe("orders", () => {
 		test("claimPayment rejects unknown shortId", async () => {
 			const t = setup();
 			await expect(
-				t.mutation(api.orders.claimPayment, { shortId: "ORD-NOPE" }),
+				t.mutation(api.orders.claimPayment, { token: await tk(t, "ORD-NOPE") }),
 			).rejects.toThrow(/Order not found/);
 		});
 
@@ -1125,12 +1153,12 @@ describe("orders", () => {
 				customer,
 				deliveryAddress: validAddress,
 			});
-			const order = await t.query(api.orders.get, { shortId });
+			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 			await t.run(async (ctx) => {
 				await ctx.db.patch(order!._id, { paymentStatus: "received" });
 			});
 			await expect(
-				t.mutation(api.orders.claimPayment, { shortId }),
+				t.mutation(api.orders.claimPayment, { token: await tk(t, shortId) }),
 			).rejects.toThrow(/already confirmed/);
 		});
 
@@ -1148,7 +1176,7 @@ describe("orders", () => {
 			});
 			await expect(
 				t.mutation(api.orders.claimPayment, {
-					shortId,
+					token: await tk(t, shortId),
 					reference: "x".repeat(81),
 				}),
 			).rejects.toThrow(/characters or fewer/);
@@ -1166,12 +1194,12 @@ describe("orders", () => {
 				customer,
 				deliveryAddress: validAddress,
 			});
-			const order = await t.query(api.orders.get, { shortId });
+			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 			const asA = t.withIdentity({ subject: USER_A });
 			await asA.mutation(api.orders.markPaymentReceived, {
 				orderId: order!._id,
 			});
-			const updated = await t.query(api.orders.get, { shortId });
+			const updated = await t.query(api.orders.get, { token: await tk(t, shortId) });
 			expect(updated?.paymentStatus).toBe("received");
 			expect(updated?.paymentReceivedAt).toBeTypeOf("number");
 			expect(updated?.status).toBe("confirmed");
@@ -1188,6 +1216,53 @@ describe("orders", () => {
 			expect(autoConfirmEvent?.status).toBe("confirmed");
 		});
 
+		test("markPaymentReceived records an optional payment method", async () => {
+			const t = setup();
+			const retailer = await seedRetailer(t, USER_A);
+			const productId = await seedProduct(t, USER_A, retailer._id);
+			const { shortId } = await t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+			});
+			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+			const asA = t.withIdentity({ subject: USER_A });
+			await asA.mutation(api.orders.markPaymentReceived, {
+				orderId: order!._id,
+				paymentMethod: "duitnow",
+			});
+			const updated = await t.query(api.orders.get, {
+				token: await tk(t, shortId),
+			});
+			expect(updated?.paymentMethod).toBe("duitnow");
+		});
+
+		test("markPaymentReceived leaves method undefined when not provided", async () => {
+			const t = setup();
+			const retailer = await seedRetailer(t, USER_A);
+			const productId = await seedProduct(t, USER_A, retailer._id);
+			const { shortId } = await t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+			});
+			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+			await t.withIdentity({ subject: USER_A }).mutation(
+				api.orders.markPaymentReceived,
+				{ orderId: order!._id },
+			);
+			const updated = await t.query(api.orders.get, {
+				token: await tk(t, shortId),
+			});
+			expect(updated?.paymentMethod).toBeUndefined();
+		});
+
 		test("markPaymentReceived does not auto-confirm if already past pending", async () => {
 			const t = setup();
 			const retailer = await seedRetailer(t, USER_A);
@@ -1200,7 +1275,7 @@ describe("orders", () => {
 				customer,
 				deliveryAddress: validAddress,
 			});
-			const order = await t.query(api.orders.get, { shortId });
+			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 			const asA = t.withIdentity({ subject: USER_A });
 			await asA.mutation(api.orders.updateStatus, {
 				orderId: order!._id,
@@ -1214,7 +1289,7 @@ describe("orders", () => {
 			await asA.mutation(api.orders.markPaymentReceived, {
 				orderId: order!._id,
 			});
-			const updated = await t.query(api.orders.get, { shortId });
+			const updated = await t.query(api.orders.get, { token: await tk(t, shortId) });
 			expect(updated?.paymentStatus).toBe("received");
 			// Status preserved at packed — payment-received did not bump it back
 			// or further along the pipeline.
@@ -1233,7 +1308,7 @@ describe("orders", () => {
 				customer,
 				deliveryAddress: validAddress,
 			});
-			const order = await t.query(api.orders.get, { shortId });
+			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 			await expect(
 				t.mutation(api.orders.markPaymentReceived, { orderId: order!._id }),
 			).rejects.toThrow(/Not authenticated/);
@@ -1252,7 +1327,7 @@ describe("orders", () => {
 				customer,
 				deliveryAddress: validAddress,
 			});
-			const order = await t.query(api.orders.get, { shortId });
+			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 			const asB = t.withIdentity({ subject: USER_B });
 			await expect(
 				asB.mutation(api.orders.markPaymentReceived, { orderId: order!._id }),
@@ -1271,17 +1346,17 @@ describe("orders", () => {
 				customer,
 				deliveryAddress: validAddress,
 			});
-			const order = await t.query(api.orders.get, { shortId });
+			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 			const asA = t.withIdentity({ subject: USER_A });
 			await asA.mutation(api.orders.markPaymentReceived, {
 				orderId: order!._id,
 			});
-			const firstReceivedAt = (await t.query(api.orders.get, { shortId }))
+			const firstReceivedAt = (await t.query(api.orders.get, { token: await tk(t, shortId) }))
 				?.paymentReceivedAt;
 			await asA.mutation(api.orders.markPaymentReceived, {
 				orderId: order!._id,
 			});
-			const secondReceivedAt = (await t.query(api.orders.get, { shortId }))
+			const secondReceivedAt = (await t.query(api.orders.get, { token: await tk(t, shortId) }))
 				?.paymentReceivedAt;
 			expect(secondReceivedAt).toBe(firstReceivedAt);
 		});
@@ -1299,7 +1374,7 @@ describe("orders", () => {
 				deliveryAddress: validAddress,
 			});
 			const url = await t.mutation(api.orders.generateOrderProofUploadUrl, {
-				shortId,
+				token: await tk(t, shortId),
 			});
 			expect(url).toMatch(/^https?:\/\//);
 		});
@@ -1308,7 +1383,7 @@ describe("orders", () => {
 			const t = setup();
 			await expect(
 				t.mutation(api.orders.generateOrderProofUploadUrl, {
-					shortId: "ORD-NOPE",
+					token: "__no_such_order__",
 				}),
 			).rejects.toThrow(/Order not found/);
 		});
@@ -1325,12 +1400,12 @@ describe("orders", () => {
 				customer,
 				deliveryAddress: validAddress,
 			});
-			const order = await t.query(api.orders.get, { shortId });
+			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 			await t.run(async (ctx) => {
 				await ctx.db.patch(order!._id, { paymentStatus: "received" });
 			});
 			await expect(
-				t.mutation(api.orders.generateOrderProofUploadUrl, { shortId }),
+				t.mutation(api.orders.generateOrderProofUploadUrl, { token: await tk(t, shortId) }),
 			).rejects.toThrow(/already confirmed/);
 		});
 	});
@@ -1399,7 +1474,7 @@ describe("orders — self-collect pickup invariants", () => {
 			deliveryMethod: "self_collect",
 			pickupLocationId,
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(order?.pickupLocationId).toBe(pickupLocationId);
 		expect(order?.pickupSnapshot).toEqual({
 			label: "Main",
@@ -1415,7 +1490,7 @@ describe("orders — self-collect pickup invariants", () => {
 			label: "Renamed",
 			address: "New address",
 		});
-		const reread = await t.query(api.orders.get, { shortId });
+		const reread = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(reread?.pickupSnapshot?.label).toBe("Main");
 		expect(reread?.pickupSnapshot?.address).toBe("12 Jln Tun Razak, 50400 KL");
 	});
@@ -1512,7 +1587,7 @@ describe("orders — self-collect pickup invariants", () => {
 			customer,
 			deliveryMethod: "self_collect",
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(order?.pickupLocationId).toBeUndefined();
 		expect(order?.pickupSnapshot).toBeUndefined();
 	});
@@ -1543,11 +1618,11 @@ describe("orders — self-collect pickup invariants", () => {
 		});
 
 		await t.mutation(api.orders.updatePickupLocation, {
-			shortId,
+			token: await tk(t, shortId),
 			pickupLocationId: secondId,
 		});
 
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(order?.pickupLocationId).toBe(secondId);
 		expect(order?.pickupSnapshot?.label).toBe("Second");
 		expect(order?.pickupSnapshot?.address).toBe("20 Jln Ampang, KL");
@@ -1582,7 +1657,7 @@ describe("orders — self-collect pickup invariants", () => {
 		});
 		await expect(
 			t.mutation(api.orders.updatePickupLocation, {
-				shortId,
+				token: await tk(t, shortId),
 				pickupLocationId: secondId,
 			}),
 		).rejects.toThrow(/no longer available/);
@@ -1603,14 +1678,14 @@ describe("orders — self-collect pickup invariants", () => {
 			deliveryMethod: "self_collect",
 			pickupLocationId: firstId,
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		await asUser.mutation(api.orders.updateStatus, {
 			orderId: order!._id,
 			status: "confirmed",
 		});
 		await expect(
 			t.mutation(api.orders.updatePickupLocation, {
-				shortId,
+				token: await tk(t, shortId),
 				pickupLocationId: firstId,
 			}),
 		).rejects.toThrow(/while the order is pending/);
@@ -1633,7 +1708,7 @@ describe("orders — self-collect pickup invariants", () => {
 		});
 		await expect(
 			t.mutation(api.orders.updatePickupLocation, {
-				shortId,
+				token: await tk(t, shortId),
 				pickupLocationId,
 			}),
 		).rejects.toThrow(/Delivery orders/);
@@ -1655,7 +1730,7 @@ describe("orders — mockup approval", () => {
 			customer,
 			deliveryAddress: validAddress,
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		return { retailer, shortId, order: order! };
 	}
 
@@ -1762,7 +1837,7 @@ describe("orders — mockup approval", () => {
 			customer,
 			deliveryAddress: validAddress,
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(order?.mockupStatus).toBeUndefined();
 	});
 
@@ -1786,8 +1861,8 @@ describe("orders — mockup approval", () => {
 			orderId: order._id,
 			storageId: "mock-1",
 		});
-		await t.mutation(api.orders.approveMockup, { shortId });
-		const approved = await t.query(api.orders.get, { shortId });
+		await t.mutation(api.orders.approveMockup, { token: await tk(t, shortId) });
+		const approved = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(approved?.mockupStatus).toBe("approved");
 
 		// Now packing succeeds.
@@ -1795,7 +1870,7 @@ describe("orders — mockup approval", () => {
 			orderId: order._id,
 			status: "packed",
 		});
-		expect((await t.query(api.orders.get, { shortId }))?.status).toBe("packed");
+		expect((await t.query(api.orders.get, { token: await tk(t, shortId) }))?.status).toBe("packed");
 	});
 
 	test("the gate blocks seller markPaymentReceived until approved", async () => {
@@ -1811,13 +1886,13 @@ describe("orders — mockup approval", () => {
 			orderId: order._id,
 			storageId: "mock-1",
 		});
-		await t.mutation(api.orders.approveMockup, { shortId });
+		await t.mutation(api.orders.approveMockup, { token: await tk(t, shortId) });
 
 		// Gate open → marking payment received now succeeds.
 		await asA(t).mutation(api.orders.markPaymentReceived, {
 			orderId: order._id,
 		});
-		expect((await t.query(api.orders.get, { shortId }))?.paymentStatus).toBe(
+		expect((await t.query(api.orders.get, { token: await tk(t, shortId) }))?.paymentStatus).toBe(
 			"received",
 		);
 	});
@@ -1827,17 +1902,17 @@ describe("orders — mockup approval", () => {
 		const { shortId, order } = await gatedOrder(t);
 
 		await expect(
-			t.mutation(api.orders.claimPayment, { shortId }),
+			t.mutation(api.orders.claimPayment, { token: await tk(t, shortId) }),
 		).rejects.toThrow(/approve the mockup before paying/i);
 
 		await asA(t).mutation(api.orders.submitMockup, {
 			orderId: order._id,
 			storageId: "mock-1",
 		});
-		await t.mutation(api.orders.approveMockup, { shortId });
+		await t.mutation(api.orders.approveMockup, { token: await tk(t, shortId) });
 
-		await t.mutation(api.orders.claimPayment, { shortId });
-		expect((await t.query(api.orders.get, { shortId }))?.paymentStatus).toBe(
+		await t.mutation(api.orders.claimPayment, { token: await tk(t, shortId) });
+		expect((await t.query(api.orders.get, { token: await tk(t, shortId) }))?.paymentStatus).toBe(
 			"claimed",
 		);
 	});
@@ -1860,7 +1935,7 @@ describe("orders — mockup approval", () => {
 		await asA(t).mutation(api.orders.markPaymentReceived, {
 			orderId: order._id,
 		});
-		expect((await t.query(api.orders.get, { shortId }))?.paymentStatus).toBe(
+		expect((await t.query(api.orders.get, { token: await tk(t, shortId) }))?.paymentStatus).toBe(
 			"received",
 		);
 	});
@@ -1873,10 +1948,10 @@ describe("orders — mockup approval", () => {
 			storageId: "mock-1",
 		});
 		await t.mutation(api.orders.requestMockupChanges, {
-			shortId,
+			token: await tk(t, shortId),
 			note: "make it bigger",
 		});
-		let o = await t.query(api.orders.get, { shortId });
+		let o = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(o?.mockupStatus).toBe("changes_requested");
 		expect(o?.mockupChangeNote).toBe("make it bigger");
 
@@ -1884,7 +1959,7 @@ describe("orders — mockup approval", () => {
 			orderId: order._id,
 			storageId: "mock-2",
 		});
-		o = await t.query(api.orders.get, { shortId });
+		o = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(o?.mockupStatus).toBe("submitted");
 		expect(o?.mockupChangeNote).toBeUndefined(); // cleared on resubmit
 	});
@@ -1893,7 +1968,7 @@ describe("orders — mockup approval", () => {
 		const t = setup();
 		const { shortId } = await gatedOrder(t); // still 'pending', no mockup sent
 		await expect(
-			t.mutation(api.orders.approveMockup, { shortId }),
+			t.mutation(api.orders.approveMockup, { token: await tk(t, shortId) }),
 		).rejects.toThrow(/awaiting your approval/i);
 	});
 
@@ -1916,7 +1991,7 @@ describe("orders — mockup approval", () => {
 			});
 		});
 		await asA(t).mutation(api.orders.waiveMockup, { orderId: order._id });
-		const waived = await t.query(api.orders.get, { shortId });
+		const waived = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(waived?.mockupWaivedAt).toBeTypeOf("number");
 
 		// Waiver opens the gate.
@@ -1928,7 +2003,7 @@ describe("orders — mockup approval", () => {
 			orderId: order._id,
 			status: "packed",
 		});
-		expect((await t.query(api.orders.get, { shortId }))?.status).toBe("packed");
+		expect((await t.query(api.orders.get, { token: await tk(t, shortId) }))?.status).toBe("packed");
 	});
 
 	test("a gated order can still be cancelled (the gate only blocks production)", async () => {
@@ -2010,7 +2085,7 @@ describe("orders — per-variant flags", () => {
 			customer,
 			deliveryAddress: validAddress,
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(order?.mockupStatus).toBeUndefined();
 		// Hard-block variant was decremented.
 		expect((await t.run(async (ctx) => ctx.db.get(fixed._id)))?.onHand).toBe(2);
@@ -2027,7 +2102,7 @@ describe("orders — per-variant flags", () => {
 			customer,
 			deliveryAddress: validAddress,
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(order?.mockupStatus).toBe("pending");
 	});
 
@@ -2078,7 +2153,7 @@ describe("orders — per-variant flags", () => {
 		});
 		// Fixed decremented 3 → 1; custom untouched at 0.
 		expect((await t.run(async (ctx) => ctx.db.get(fixed._id)))?.onHand).toBe(1);
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		await t
 			.withIdentity({ subject: USER_A })
 			.mutation(api.orders.updateStatus, {
@@ -2156,7 +2231,7 @@ describe("orders — custom quote + decline", () => {
 			customer,
 			deliveryAddress: validAddress,
 		});
-		const order = (await t.query(api.orders.get, { shortId }))!;
+		const order = (await t.query(api.orders.get, { token: await tk(t, shortId) }))!;
 		return { retailer, productId, fixed, custom, shortId, order };
 	}
 
@@ -2183,7 +2258,7 @@ describe("orders — custom quote + decline", () => {
 			storageId: "mock-1",
 			quotedAmount: 12000,
 		});
-		const after = await t.query(api.orders.get, { shortId });
+		const after = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(after?.mockupQuotedAmount).toBe(12000);
 		expect(after?.subtotal).toBe(5000);
 		expect(after?.total).toBe(17000);
@@ -2197,13 +2272,13 @@ describe("orders — custom quote + decline", () => {
 			storageId: "m1",
 			quotedAmount: 12000,
 		});
-		await t.mutation(api.orders.requestMockupChanges, { shortId, note: "bigger" });
+		await t.mutation(api.orders.requestMockupChanges, { token: await tk(t, shortId), note: "bigger" });
 		await asA(t).mutation(api.orders.submitMockup, {
 			orderId: order._id,
 			storageId: "m2",
 			quotedAmount: 15000,
 		});
-		const after = await t.query(api.orders.get, { shortId });
+		const after = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(after?.mockupQuotedAmount).toBe(15000);
 		expect(after?.total).toBe(20000);
 	});
@@ -2216,7 +2291,7 @@ describe("orders — custom quote + decline", () => {
 			storageId: "m1",
 			quotedAmount: 12000,
 		});
-		const submitted = await t.query(api.orders.get, { shortId });
+		const submitted = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		const submittedAt = submitted?.mockupSubmittedAt;
 		expect(submittedAt).toBeDefined();
 
@@ -2233,7 +2308,7 @@ describe("orders — custom quote + decline", () => {
 			quotedAmount: 18000,
 		});
 
-		const after = await t.query(api.orders.get, { shortId });
+		const after = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(after?.mockupQuotedAmount).toBe(18000);
 		expect(after?.total).toBe(23000); // 5000 fixed + 18000 quote
 		// Status + waiver clock untouched — the buyer sees the price live.
@@ -2281,7 +2356,7 @@ describe("orders — custom quote + decline", () => {
 			storageId: "m1",
 			quotedAmount: 12000,
 		});
-		await t.mutation(api.orders.approveMockup, { shortId });
+		await t.mutation(api.orders.approveMockup, { token: await tk(t, shortId) });
 		// Approved → locked, can't re-price.
 		await expect(
 			asA(t).mutation(api.orders.updateMockupQuote, {
@@ -2299,8 +2374,8 @@ describe("orders — custom quote + decline", () => {
 			storageId: "m1",
 			quotedAmount: 12000,
 		});
-		await t.mutation(api.orders.approveMockup, { shortId });
-		const after = await t.query(api.orders.get, { shortId });
+		await t.mutation(api.orders.approveMockup, { token: await tk(t, shortId) });
+		const after = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(after?.mockupStatus).toBe("approved");
 		expect(after?.total).toBe(17000);
 	});
@@ -2331,8 +2406,8 @@ describe("orders — custom quote + decline", () => {
 		// total = 2*5000 + 12000 = 22000; totalSpent tracks it.
 		expect(await totalSpent(t, retailer._id)).toBe(22000);
 
-		await t.mutation(api.orders.declineMockupItem, { shortId });
-		const after = await t.query(api.orders.get, { shortId });
+		await t.mutation(api.orders.declineMockupItem, { token: await tk(t, shortId) });
+		const after = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		// Custom line gone, quote cleared, total back to the fixed items.
 		expect(after?.items).toHaveLength(1);
 		expect(after?.items[0].variantId).toBe(fixed._id);
@@ -2364,7 +2439,7 @@ describe("orders — custom quote + decline", () => {
 			orderId: order._id,
 			status: "packed",
 		});
-		expect((await t.query(api.orders.get, { shortId }))?.status).toBe("packed");
+		expect((await t.query(api.orders.get, { token: await tk(t, shortId) }))?.status).toBe("packed");
 	});
 
 	test("decline on a custom-only order cancels it", async () => {
@@ -2375,8 +2450,8 @@ describe("orders — custom quote + decline", () => {
 			storageId: "m1",
 			quotedAmount: 12000,
 		});
-		await t.mutation(api.orders.declineMockupItem, { shortId });
-		const after = await t.query(api.orders.get, { shortId });
+		await t.mutation(api.orders.declineMockupItem, { token: await tk(t, shortId) });
+		const after = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(after?.status).toBe("cancelled");
 		expect(after?.mockupStatus).toBeUndefined();
 		// Aggregates fully reversed for the cancelled order.
@@ -2397,9 +2472,9 @@ describe("orders — custom quote + decline", () => {
 			storageId: "m1",
 			quotedAmount: 12000,
 		});
-		await t.mutation(api.orders.approveMockup, { shortId });
+		await t.mutation(api.orders.approveMockup, { token: await tk(t, shortId) });
 		await expect(
-			t.mutation(api.orders.declineMockupItem, { shortId }),
+			t.mutation(api.orders.declineMockupItem, { token: await tk(t, shortId) }),
 		).rejects.toThrow(/already been approved/i);
 	});
 
@@ -2443,7 +2518,7 @@ describe("orders — mockup-pending filter", () => {
 			customer,
 			deliveryAddress: validAddress,
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		if (!order) throw new Error("order not created");
 		if (target !== "pending") {
 			await asA(t).mutation(api.orders.submitMockup, {
@@ -2452,10 +2527,10 @@ describe("orders — mockup-pending filter", () => {
 			});
 		}
 		if (target === "changes_requested") {
-			await t.mutation(api.orders.requestMockupChanges, { shortId });
+			await t.mutation(api.orders.requestMockupChanges, { token: await tk(t, shortId) });
 		}
 		if (target === "approved") {
-			await t.mutation(api.orders.approveMockup, { shortId });
+			await t.mutation(api.orders.approveMockup, { token: await tk(t, shortId) });
 		}
 		return { orderId: order._id, shortId };
 	}
@@ -2574,7 +2649,7 @@ describe("orders — Phase 2 stage advance (advanceToStage)", () => {
 			customer,
 			deliveryAddress: validAddress,
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		if (!order) throw new Error("no order");
 		return { retailer, order, shortId };
 	}
@@ -2596,7 +2671,7 @@ describe("orders — Phase 2 stage advance (advanceToStage)", () => {
 			orderId: order._id,
 			stageId: "default:confirmed",
 		});
-		let o = await t.query(api.orders.get, { shortId });
+		let o = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(o?.status).toBe("confirmed");
 		expect(o?.currentStageId).toBe("default:confirmed");
 
@@ -2604,7 +2679,7 @@ describe("orders — Phase 2 stage advance (advanceToStage)", () => {
 			orderId: order._id,
 			stageId: "default:packed",
 		});
-		o = await t.query(api.orders.get, { shortId });
+		o = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(o?.status).toBe("packed");
 		expect(o?.currentStageId).toBe("default:packed");
 
@@ -2655,7 +2730,7 @@ describe("orders — Phase 2 stage advance (advanceToStage)", () => {
 			customer,
 			deliveryAddress: validAddress,
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		if (!order) throw new Error("no order");
 
 		await asA(t).mutation(api.orders.advanceToStage, {
@@ -2681,13 +2756,13 @@ describe("orders — Phase 2 stage advance (advanceToStage)", () => {
 			orderId: order._id,
 			storageId: "m1",
 		});
-		await t.mutation(api.orders.approveMockup, { shortId });
+		await t.mutation(api.orders.approveMockup, { token: await tk(t, shortId) });
 
 		await asA(t).mutation(api.orders.advanceToStage, {
 			orderId: order._id,
 			stageId: "default:packed",
 		});
-		expect((await t.query(api.orders.get, { shortId }))?.status).toBe("packed");
+		expect((await t.query(api.orders.get, { token: await tk(t, shortId) }))?.status).toBe("packed");
 	});
 
 	test("configured intra-anchor stages keep canonical status but move currentStageId", async () => {
@@ -2715,14 +2790,14 @@ describe("orders — Phase 2 stage advance (advanceToStage)", () => {
 			customer,
 			deliveryAddress: validAddress,
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		if (!order) throw new Error("no order");
 
 		await asA(t).mutation(api.orders.advanceToStage, {
 			orderId: order._id,
 			stageId: cleaning.id,
 		});
-		let o = await t.query(api.orders.get, { shortId });
+		let o = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(o?.status).toBe("packed");
 		expect(o?.currentStageId).toBe(cleaning.id);
 
@@ -2730,7 +2805,7 @@ describe("orders — Phase 2 stage advance (advanceToStage)", () => {
 			orderId: order._id,
 			stageId: drying.id,
 		});
-		o = await t.query(api.orders.get, { shortId });
+		o = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(o?.status).toBe("packed"); // unchanged within the anchor
 		expect(o?.currentStageId).toBe(drying.id);
 		expect(o?.orderStages?.length).toBe(4); // surfaced for the timeline
@@ -2752,7 +2827,7 @@ describe("orders — inbox search", () => {
 			customer: who,
 			deliveryAddress: validAddress,
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		return order!;
 	}
 
@@ -2865,6 +2940,41 @@ describe("orders — inbox search", () => {
 		expect(received.orders.map((x) => x._id)).toContain(o._id);
 	});
 
+	test("method filter: concrete method, unspecified, and OR of both", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const asA = t.withIdentity({ subject: USER_A });
+		const tagged = await mkOrder(t, retailer._id, productId, { name: "Tag" });
+		const untagged = await mkOrder(t, retailer._id, productId, { name: "Un" });
+		await t.run((ctx) => ctx.db.patch(tagged._id, { paymentMethod: "duitnow" }));
+
+		const byMethod = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			paymentMethods: ["duitnow"],
+		});
+		expect(byMethod.orders.map((x) => x._id)).toEqual([tagged._id]);
+
+		const unspec = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			methodUnspecified: true,
+		});
+		expect(unspec.orders.map((x) => x._id)).toContain(untagged._id);
+		expect(unspec.orders.map((x) => x._id)).not.toContain(tagged._id);
+
+		const both = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			paymentMethods: ["duitnow"],
+			methodUnspecified: true,
+		});
+		const ids = both.orders.map((x) => x._id);
+		expect(ids).toContain(tagged._id);
+		expect(ids).toContain(untagged._id);
+	});
+
 	test("search matches item name (e.g. 'vanilla')", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
@@ -2937,7 +3047,7 @@ describe("orders — bulk status", () => {
 			customer,
 			deliveryAddress: validAddress,
 		});
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		return order!;
 	}
 
@@ -3072,7 +3182,7 @@ describe("orders — buyer custom image", () => {
 				.first(),
 		);
 		expect(order?.customerImageStorageId).toBe(imageId);
-		const url = await t.query(api.orders.getCustomerImageUrl, { shortId });
+		const url = await t.query(api.orders.getCustomerImageUrl, { token: await tk(t, shortId) });
 		expect(url).not.toBeNull();
 	});
 
@@ -3109,6 +3219,75 @@ describe("orders — buyer custom image", () => {
 			retailerId: retailer._id,
 		});
 		expect(typeof url).toBe("string");
+	});
+});
+
+describe("tracking-link capability (shortId hardening)", () => {
+	async function makeOrder(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Aisha", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		return { ...created, retailer };
+	}
+
+	test("create mints a high-entropy tracking token distinct from the shortId", async () => {
+		const t = setup();
+		const { shortId, trackingToken } = await makeOrder(t);
+		expect(trackingToken).toMatch(/^[A-Za-z0-9]{24}$/);
+		expect(trackingToken).not.toBe(shortId);
+	});
+
+	test("buyer reads an order by its token; an unknown token resolves to null", async () => {
+		const t = setup();
+		const { shortId, trackingToken } = await makeOrder(t);
+		const byToken = await t.query(api.orders.get, { token: trackingToken });
+		expect(byToken?.shortId).toBe(shortId);
+		expect(
+			await t.query(api.orders.get, { token: "definitely-not-a-real-token" }),
+		).toBeNull();
+	});
+
+	test("shortId path rejects anonymous reads (closes the enumeration hole)", async () => {
+		const t = setup();
+		const { shortId } = await makeOrder(t);
+		await expect(t.query(api.orders.get, { shortId })).rejects.toThrow(
+			/Not authenticated/,
+		);
+	});
+
+	test("shortId path is owner-scoped: non-owner forbidden, owner allowed", async () => {
+		const t = setup();
+		const { shortId } = await makeOrder(t);
+		await seedRetailer(t, USER_B);
+		await expect(
+			t.withIdentity({ subject: USER_B }).query(api.orders.get, { shortId }),
+		).rejects.toThrow(/Forbidden/);
+		const owned = await t
+			.withIdentity({ subject: USER_A })
+			.query(api.orders.get, { shortId });
+		expect(owned?.shortId).toBe(shortId);
+	});
+
+	test("a buyer mutation (claimPayment) is gated by the token, not the shortId", async () => {
+		const t = setup();
+		const { shortId, trackingToken } = await makeOrder(t);
+		// The shortId is no longer a valid arg for the buyer mutation — only the
+		// token is accepted, and confirming via the token works.
+		await t.mutation(api.orders.claimPayment, { token: trackingToken });
+		const order = await t.query(api.orders.get, { token: trackingToken });
+		expect(order?.paymentStatus).toBe("claimed");
+		// A guessed shortId-shaped token doesn't resolve to the order.
+		await expect(
+			t.mutation(api.orders.claimPayment, { token: shortId }),
+		).rejects.toThrow(/Order not found/);
+
 	});
 });
 
@@ -3178,5 +3357,219 @@ describe("orders — delivery offered gating", () => {
 			pickupLocationId,
 		});
 		expect(shortId).toMatch(/^ORD-[A-Z2-9]{4}$/);
+	});
+});
+
+describe("fulfilment date", () => {
+	async function orderByShortId(t: ReturnType<typeof setup>, shortId: string) {
+		return t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+	}
+
+	test("stores a valid fulfilment date on the order", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const date = todayMytMidnight() + 3 * DAY_MS;
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+			fulfilmentDate: date,
+		});
+		const order = await orderByShortId(t, shortId);
+		expect(order?.fulfilmentDate).toBe(date);
+	});
+
+	test("rejects a date sooner than a configured notice", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.retailers.updateSettings, {
+			minFulfilmentNoticeDays: 2,
+		});
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+				fulfilmentDate: todayMytMidnight() + DAY_MS, // tomorrow — too soon with notice 2
+			}),
+		).rejects.toThrow(/too soon/);
+	});
+
+	test("default (unset) notice allows same-day", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+			fulfilmentDate: todayMytMidnight(), // today OK — default notice is now 0
+		});
+		const order = await orderByShortId(t, shortId);
+		expect(order?.fulfilmentDate).toBe(todayMytMidnight());
+	});
+
+	test("rejects a non-midnight value and a date beyond 30 days", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const base = {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR" as const,
+			channel: "whatsapp" as const,
+			customer,
+			deliveryAddress: validAddress,
+		};
+		await expect(
+			t.mutation(api.orders.create, {
+				...base,
+				fulfilmentDate: todayMytMidnight() + 3 * DAY_MS + 1,
+			}),
+		).rejects.toThrow(/whole calendar day/);
+		await expect(
+			t.mutation(api.orders.create, {
+				...base,
+				fulfilmentDate: todayMytMidnight() + 31 * DAY_MS,
+			}),
+		).rejects.toThrow(/30 days/);
+	});
+
+	test("notice 0 allows same-day fulfilment", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.retailers.updateSettings, {
+			minFulfilmentNoticeDays: 0,
+		});
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+			fulfilmentDate: todayMytMidnight(), // same-day now allowed
+		});
+		const order = await orderByShortId(t, shortId);
+		expect(order?.fulfilmentDate).toBe(todayMytMidnight());
+	});
+
+	test("updateSettings rejects an out-of-range notice", async () => {
+		const t = setup();
+		await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await expect(
+			asA.mutation(api.retailers.updateSettings, {
+				minFulfilmentNoticeDays: 99,
+			}),
+		).rejects.toThrow(/between 0 and 30/);
+		await expect(
+			asA.mutation(api.retailers.updateSettings, {
+				minFulfilmentNoticeDays: -1,
+			}),
+		).rejects.toThrow(/between 0 and 30/);
+	});
+
+	test("inbox sorts by fulfilment date ascending, dateless orders last", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const mk = (fulfilmentDate?: number) =>
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+				fulfilmentDate,
+			});
+		// Insert out of date order: far, then dateless, then soon.
+		await mk(todayMytMidnight() + 5 * DAY_MS);
+		await mk(undefined);
+		await mk(todayMytMidnight() + 2 * DAY_MS);
+
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		const dates = res.orders.map((o) => o.fulfilmentDate);
+		expect(dates).toEqual([
+			todayMytMidnight() + 2 * DAY_MS,
+			todayMytMidnight() + 5 * DAY_MS,
+			undefined,
+		]);
+	});
+
+	test("fulfilmentWindow filter matches today / tomorrow / this_week", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.retailers.updateSettings, {
+			minFulfilmentNoticeDays: 0,
+		});
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const mk = (fulfilmentDate: number) =>
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+				fulfilmentDate,
+			});
+		const today = todayMytMidnight();
+		await mk(today);
+		await mk(today + 1 * DAY_MS);
+		await mk(today + 5 * DAY_MS);
+
+		const todayRes = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			fulfilmentWindow: "today",
+		});
+		expect(todayRes.orders.map((o) => o.fulfilmentDate)).toEqual([today]);
+
+		const tomorrowRes = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			fulfilmentWindow: "tomorrow",
+		});
+		expect(tomorrowRes.orders.map((o) => o.fulfilmentDate)).toEqual([
+			today + 1 * DAY_MS,
+		]);
+
+		const weekRes = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			fulfilmentWindow: "this_week",
+		});
+		// All three are within the next 7 days, returned soonest-first.
+		expect(weekRes.orders.map((o) => o.fulfilmentDate)).toEqual([
+			today,
+			today + 1 * DAY_MS,
+			today + 5 * DAY_MS,
+		]);
 	});
 });

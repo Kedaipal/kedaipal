@@ -62,9 +62,15 @@ http.route({
 		// Signature OK — the adapter parses the raw body we already verified into
 		// channel-agnostic envelopes.
 		const messages = adapter.parseInbound(rawBody, req.headers);
+		// Log the inbound identity triplet (phone + pushname + a short text preview)
+		// so the WhatsApp identity-binding flow used by order confirmation — and the
+		// Counter Checkout `KP-<token>` flipped flow (ClickUp 86ey0e80x) — is
+		// observable end-to-end without decoding raw payloads.
 		console.log("WA webhook POST", {
 			messageCount: messages.length,
 			firstFrom: messages[0]?.channelUserId,
+			firstProfileName: messages[0]?.profileName,
+			firstText: messages[0]?.text?.slice(0, 60),
 		});
 		for (const msg of messages) {
 			await ctx.runAction(internal.whatsapp.handleInbound, {

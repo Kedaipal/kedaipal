@@ -10,6 +10,7 @@
 
 import type * as billing from "../billing.js";
 import type * as billingEmail from "../billingEmail.js";
+import type * as counterCheckout from "../counterCheckout.js";
 import type * as crons from "../crons.js";
 import type * as customers from "../customers.js";
 import type * as email from "../email.js";
@@ -27,15 +28,19 @@ import type * as lib_currency from "../lib/currency.js";
 import type * as lib_customer from "../lib/customer.js";
 import type * as lib_email from "../lib/email.js";
 import type * as lib_emailCopy from "../lib/emailCopy.js";
+import type * as lib_fulfilmentDate from "../lib/fulfilmentDate.js";
+import type * as lib_inboundIntent from "../lib/inboundIntent.js";
 import type * as lib_legal from "../lib/legal.js";
 import type * as lib_mapsUrl from "../lib/mapsUrl.js";
 import type * as lib_order from "../lib/order.js";
 import type * as lib_orderBuckets from "../lib/orderBuckets.js";
 import type * as lib_orderStatus from "../lib/orderStatus.js";
 import type * as lib_payment from "../lib/payment.js";
+import type * as lib_paymentMethod from "../lib/paymentMethod.js";
 import type * as lib_plans from "../lib/plans.js";
 import type * as lib_rateLimiter from "../lib/rateLimiter.js";
 import type * as lib_slug from "../lib/slug.js";
+import type * as lib_storeProfile from "../lib/storeProfile.js";
 import type * as lib_variant from "../lib/variant.js";
 import type * as lib_whatsapp from "../lib/whatsapp.js";
 import type * as lib_whatsappCopy from "../lib/whatsappCopy.js";
@@ -60,6 +65,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   billing: typeof billing;
   billingEmail: typeof billingEmail;
+  counterCheckout: typeof counterCheckout;
   crons: typeof crons;
   customers: typeof customers;
   email: typeof email;
@@ -77,15 +83,19 @@ declare const fullApi: ApiFromModules<{
   "lib/customer": typeof lib_customer;
   "lib/email": typeof lib_email;
   "lib/emailCopy": typeof lib_emailCopy;
+  "lib/fulfilmentDate": typeof lib_fulfilmentDate;
+  "lib/inboundIntent": typeof lib_inboundIntent;
   "lib/legal": typeof lib_legal;
   "lib/mapsUrl": typeof lib_mapsUrl;
   "lib/order": typeof lib_order;
   "lib/orderBuckets": typeof lib_orderBuckets;
   "lib/orderStatus": typeof lib_orderStatus;
   "lib/payment": typeof lib_payment;
+  "lib/paymentMethod": typeof lib_paymentMethod;
   "lib/plans": typeof lib_plans;
   "lib/rateLimiter": typeof lib_rateLimiter;
   "lib/slug": typeof lib_slug;
+  "lib/storeProfile": typeof lib_storeProfile;
   "lib/variant": typeof lib_variant;
   "lib/whatsapp": typeof lib_whatsapp;
   "lib/whatsappCopy": typeof lib_whatsappCopy;

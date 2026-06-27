@@ -31,12 +31,12 @@ import {
 	renderPickupBlock,
 	renderStageUpdate,
 	renderSystemMessage,
-	SHORT_ID_REGEX,
 	type DeliveryMethod,
 	type Locale,
 	type MessageTemplates,
 	type PickupSnapshot,
 } from "./lib/whatsappCopy";
+import { classifyInbound } from "./lib/inboundIntent";
 
 // A payment method with its QR storage id resolved to a viewable URL (qr only).
 type ResolvedPaymentMethod = PaymentMethod & { qrImageUrl?: string };
@@ -174,6 +174,7 @@ export const getOrderWithRetailer = internalQuery({
 		{ orderId },
 	): Promise<{
 		shortId: string;
+		trackingToken: string | undefined;
 		status: Doc<"orders">["status"];
 		customerWaPhone: string | undefined;
 		storeName: string;
@@ -195,6 +196,7 @@ export const getOrderWithRetailer = internalQuery({
 		if (!retailer) return null;
 		return {
 			shortId: order.shortId,
+			trackingToken: order.trackingToken,
 			status: order.status,
 			customerWaPhone: order.customer.waPhone,
 			storeName: retailer.storeName,
@@ -221,6 +223,7 @@ export const getRetailerLocaleForOrder = internalQuery({
 	): Promise<{
 		locale: Locale;
 		storeName: string;
+		trackingToken: string | undefined;
 		retailerWaPhone: string | undefined;
 		messageTemplates: MessageTemplates | undefined;
 		deliveryMethod: DeliveryMethod;
@@ -240,6 +243,7 @@ export const getRetailerLocaleForOrder = internalQuery({
 		return {
 			locale: (retailer.locale as Locale | undefined) ?? "en",
 			storeName: retailer.storeName,
+			trackingToken: order.trackingToken,
 			retailerWaPhone: retailer.waPhone,
 			messageTemplates: retailer.messageTemplates as
 				| MessageTemplates
@@ -350,9 +354,35 @@ export const handleInbound = internalAction({
 
 		const wa = getAdapter("whatsapp");
 
-		const match = text.match(SHORT_ID_REGEX);
-		if (!match) {
-			console.log("WA inbound no shortId match → fallback", { fromPhone });
+		const intent = classifyInbound(text);
+
+		// Counter Checkout: the buyer scanned the seller's `KP-<token>` QR. Bind
+		// their WhatsApp identity to the session (the seller's dashboard flips live)
+		// and reply so the buyer knows it worked. See docs/counter-checkout.md.
+		if (intent.kind === "checkout_bind") {
+			const bind = await ctx.runMutation(
+				internal.counterCheckout.bindCheckoutSession,
+				{ token: intent.token, waPhone: fromPhone, profileName },
+			);
+			console.log("WA checkout bind", { fromPhone, result: bind.result });
+			const body =
+				bind.result === "bound"
+					? `✅ You're connected to ${bind.storeName}. The cashier will confirm your order shortly.`
+					: bind.result === "expired"
+						? "This checkout link has expired — please ask the cashier to show a fresh QR."
+						: bind.result === "already_used"
+							? "This checkout link has already been used. Please ask the cashier for a new QR if you'd like to order again."
+							: fallback();
+			try {
+				await wa.send(fromPhone, { kind: "text", body });
+			} catch (err) {
+				console.error("WA checkout-bind reply failed", err);
+			}
+			return;
+		}
+
+		if (intent.kind === "unknown") {
+			console.log("WA inbound unknown intent → fallback", { fromPhone });
 			try {
 				await wa.send(fromPhone, { kind: "text", body: fallback() });
 			} catch (err) {
@@ -361,7 +391,7 @@ export const handleInbound = internalAction({
 			return;
 		}
 
-		const shortId = match[0];
+		const shortId = intent.shortId;
 		console.log("WA inbound parsed shortId", { fromPhone, shortId });
 		const result = await ctx.runMutation(
 			internal.whatsapp.confirmOrderFromWhatsApp,
@@ -387,7 +417,16 @@ export const handleInbound = internalAction({
 		const storeName = meta?.storeName ?? "Kedaipal";
 		const contactPhone = meta?.retailerWaPhone;
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
-		const trackingUrl = `${appUrl}/track/${shortId}`;
+		// Never build a tokenless `/track/` link (a dead URL): self-heal a missing
+		// token for pre-migration orders. result.orderId is set whenever matched.
+		const trackingToken =
+			meta?.trackingToken ??
+			(result.orderId
+				? await ctx.runMutation(internal.orders.ensureTrackingToken, {
+						orderId: result.orderId,
+					})
+				: null);
+		const trackingUrl = `${appUrl}/track/${trackingToken ?? ""}`;
 
 		if (meta?.mockupPending) {
 			// Order still has a custom item awaiting buyer mockup approval — defer
@@ -462,6 +501,7 @@ export const notifyStatusChange = internalAction({
 	handler: async (ctx, { orderId }): Promise<void> => {
 		type Meta = {
 			shortId: string;
+			trackingToken: string | undefined;
 			status: Doc<"orders">["status"];
 			customerWaPhone: string | undefined;
 			storeName: string;
@@ -486,7 +526,11 @@ export const notifyStatusChange = internalAction({
 		if (meta.status === "pending" || meta.status === "confirmed") return;
 
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
-		const trackingUrl = `${appUrl}/track/${meta.shortId}`;
+		const trackingToken =
+			meta.trackingToken ??
+			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
+		if (!trackingToken) return; // order vanished — don't ship a dead link
+		const trackingUrl = `${appUrl}/track/${trackingToken}`;
 		const locale = pickLocale(meta.locale);
 		const body = renderMessage(meta.messageTemplates, locale, meta.status, {
 			shortId: meta.shortId,
@@ -539,11 +583,15 @@ export const notifyStageEntry = internalAction({
 		if (!stage) return; // stage was deleted between schedule + run — drop silently
 
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
+		const trackingToken =
+			meta.trackingToken ??
+			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
+		if (!trackingToken) return; // order vanished — don't ship a dead link
 		const body = renderStageUpdate(locale, {
 			shortId: meta.shortId,
 			stageLabel: stageLabel(stage, locale),
 			stageDescription: stageDescription(stage, locale),
-			trackingUrl: `${appUrl}/track/${meta.shortId}`,
+			trackingUrl: `${appUrl}/track/${trackingToken}`,
 			contactPhone: meta.retailerWaPhone,
 		});
 		try {
@@ -569,6 +617,7 @@ export const notifyPaymentReceived = internalAction({
 	handler: async (ctx, { orderId }): Promise<void> => {
 		type Meta = {
 			shortId: string;
+			trackingToken: string | undefined;
 			status: Doc<"orders">["status"];
 			customerWaPhone: string | undefined;
 			storeName: string;
@@ -592,7 +641,11 @@ export const notifyPaymentReceived = internalAction({
 		if (!meta.customerWaPhone) return;
 
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
-		const trackingUrl = `${appUrl}/track/${meta.shortId}`;
+		const trackingToken =
+			meta.trackingToken ??
+			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
+		if (!trackingToken) return; // order vanished — don't ship a dead link
+		const trackingUrl = `${appUrl}/track/${trackingToken}`;
 		const locale = pickLocale(meta.locale);
 		const body = renderSystemMessage(locale, "paymentReceived", {
 			shortId: meta.shortId,
@@ -620,6 +673,7 @@ export const getMockupNotifyMeta = internalQuery({
 		{ orderId },
 	): Promise<{
 		shortId: string;
+		trackingToken: string | undefined;
 		customerWaPhone: string | undefined;
 		customerName: string | undefined;
 		storeName: string;
@@ -637,6 +691,7 @@ export const getMockupNotifyMeta = internalQuery({
 		}
 		return {
 			shortId: order.shortId,
+			trackingToken: order.trackingToken,
 			customerWaPhone: order.customer.waPhone,
 			customerName: order.customer.name,
 			storeName: retailer.storeName,
@@ -656,6 +711,7 @@ export const notifyMockupSubmitted = internalAction({
 	handler: async (ctx, { orderId }): Promise<void> => {
 		let meta: {
 			shortId: string;
+			trackingToken: string | undefined;
 			customerWaPhone: string | undefined;
 			customerName: string | undefined;
 			storeName: string;
@@ -673,7 +729,11 @@ export const notifyMockupSubmitted = internalAction({
 		if (!meta || !meta.customerWaPhone) return;
 
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
-		const trackingUrl = `${appUrl}/track/${meta.shortId}`;
+		const trackingToken =
+			meta.trackingToken ??
+			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
+		if (!trackingToken) return; // order vanished — don't ship a dead link
+		const trackingUrl = `${appUrl}/track/${trackingToken}`;
 		const greeting = meta.customerName ? ` ${meta.customerName}` : "";
 		const body =
 			meta.locale === "ms"
@@ -719,6 +779,7 @@ export const getPaymentPromptMeta = internalQuery({
 		{ orderId },
 	): Promise<{
 		shortId: string;
+		trackingToken: string | undefined;
 		customerWaPhone: string | undefined;
 		locale: Locale;
 		storeName: string;
@@ -731,6 +792,7 @@ export const getPaymentPromptMeta = internalQuery({
 		if (!retailer) return null;
 		return {
 			shortId: order.shortId,
+			trackingToken: order.trackingToken,
 			customerWaPhone: order.customer.waPhone,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
 			storeName: retailer.storeName,
@@ -760,6 +822,7 @@ export const notifyPaymentDue = internalAction({
 	handler: async (ctx, { orderId, reason }): Promise<void> => {
 		let meta: {
 			shortId: string;
+			trackingToken: string | undefined;
 			customerWaPhone: string | undefined;
 			locale: Locale;
 			storeName: string;
@@ -777,7 +840,11 @@ export const notifyPaymentDue = internalAction({
 		if (!meta || !meta.customerWaPhone) return;
 
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
-		const trackingUrl = `${appUrl}/track/${meta.shortId}`;
+		const trackingToken =
+			meta.trackingToken ??
+			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
+		if (!trackingToken) return; // order vanished — don't ship a dead link
+		const trackingUrl = `${appUrl}/track/${trackingToken}`;
 		const introKey =
 			reason === "approved"
 				? "paymentDueApproved"
@@ -935,6 +1002,90 @@ export const notifyFoundingWelcome = internalAction({
 			});
 		} catch (err) {
 			console.error("WA founding-welcome send failed", err);
+		}
+	},
+});
+
+// --- Counter Checkout (docs/counter-checkout.md) ----------------------------
+
+/** Load the data needed to send a buyer their counter-order confirmation. */
+export const getCounterOrderMeta = internalQuery({
+	args: { orderId: v.id("orders") },
+	handler: async (
+		ctx,
+		{ orderId },
+	): Promise<{
+		customerWaPhone: string | undefined;
+		storeName: string;
+		locale: Locale;
+		shortId: string;
+		trackingToken: string | undefined;
+		total: number;
+		currency: string;
+		paymentStatus: "unpaid" | "claimed" | "received";
+	} | null> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) return null;
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) return null;
+		return {
+			customerWaPhone: order.customer.waPhone,
+			storeName: retailer.storeName,
+			locale: (retailer.locale as Locale | undefined) ?? "en",
+			shortId: order.shortId,
+			trackingToken: order.trackingToken,
+			total: order.total,
+			currency: order.currency,
+			paymentStatus: (order.paymentStatus ?? "unpaid") as
+				| "unpaid"
+				| "claimed"
+				| "received",
+		};
+	},
+});
+
+/**
+ * Scheduled by counterCheckout.createOrderFromSession. Sends the buyer a free-form
+ * order confirmation + tracking link (their KP scan opened the 24h CS window).
+ * Branches on payment: "received" when settled in-person, otherwise a pay-&-track
+ * nudge. Errors swallowed (logged) so the originating mutation never fails on an
+ * outbound issue.
+ */
+export const notifyCounterOrderCreated = internalAction({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<void> => {
+		const meta = await ctx
+			.runQuery(internal.whatsapp.getCounterOrderMeta, { orderId })
+			.catch((err) => {
+				console.error("WA counter-order lookup failed", err);
+				return null;
+			});
+		if (!meta || !meta.customerWaPhone) return;
+
+		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
+		const trackingToken =
+			meta.trackingToken ??
+			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
+		if (!trackingToken) return;
+		const trackingUrl = `${appUrl}/track/${trackingToken}`;
+		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
+		const paid = meta.paymentStatus === "received";
+
+		const body =
+			meta.locale === "ms"
+				? paid
+					? `🧾 Pesanan ${meta.shortId} disahkan di ${meta.storeName}. Jumlah ${money}. ✅ Pembayaran diterima — terima kasih! Jejak pesanan: ${trackingUrl}`
+					: `🧾 Pesanan ${meta.shortId} disahkan di ${meta.storeName}. Jumlah ${money}. Bayar & jejak pesanan di sini: ${trackingUrl}`
+				: paid
+					? `🧾 Order ${meta.shortId} confirmed at ${meta.storeName}. Total ${money}. ✅ Payment received — thank you! Track your order: ${trackingUrl}`
+					: `🧾 Order ${meta.shortId} confirmed at ${meta.storeName}. Total ${money}. Pay & track your order here: ${trackingUrl}`;
+		try {
+			await getAdapter("whatsapp").send(meta.customerWaPhone, {
+				kind: "text",
+				body,
+			});
+		} catch (err) {
+			console.error("WA counter-order notify failed", err);
 		}
 	},
 });

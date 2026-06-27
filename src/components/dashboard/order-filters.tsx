@@ -1,6 +1,11 @@
 import { Palette, SlidersHorizontal, X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useState } from "react";
+import {
+	ORDER_PAYMENT_METHODS,
+	type OrderPaymentMethod,
+	PAYMENT_METHOD_LABELS,
+} from "../../../convex/lib/paymentMethod";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 
@@ -14,6 +19,10 @@ const PAYMENT_OPTIONS: { value: PaymentStatus; label: string }[] = [
 
 export interface OrderFilterValue {
 	payment: PaymentStatus[];
+	/** Concrete settlement methods (see lib/paymentMethod.ts). */
+	method: OrderPaymentMethod[];
+	/** Match orders with NO recorded method (online / WA self-claim / legacy). */
+	methodUnspecified: boolean;
 	/** Epoch ms, start-of-day. */
 	from?: number;
 	/** Epoch ms, end-of-day. */
@@ -24,9 +33,12 @@ export interface OrderFilterValue {
 
 export function activeFilterCount(v: OrderFilterValue): number {
 	// A date range is one filter (not two), even with both bounds set; each
-	// payment selection + the mockup toggle each increment.
+	// payment + method selection (incl. "unspecified") and the mockup toggle
+	// each increment.
 	return (
 		v.payment.length +
+		v.method.length +
+		(v.methodUnspecified ? 1 : 0) +
 		(v.from != null || v.to != null ? 1 : 0) +
 		(v.mockup ? 1 : 0)
 	);
@@ -113,6 +125,15 @@ export function OrderFilters({
 		});
 	}
 
+	function toggleMethod(m: OrderPaymentMethod) {
+		onChange({
+			...value,
+			method: value.method.includes(m)
+				? value.method.filter((x) => x !== m)
+				: [...value.method, m],
+		});
+	}
+
 	const controls = (
 		<div className="flex flex-col gap-4 lg:flex-row lg:flex-wrap lg:items-center lg:gap-x-5 lg:gap-y-3">
 			{showMockup ? (
@@ -173,6 +194,53 @@ export function OrderFilters({
 
 			<div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:gap-2.5">
 				<span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80 lg:shrink-0">
+					Method
+				</span>
+				<div className="flex flex-wrap gap-2">
+					{ORDER_PAYMENT_METHODS.map((m) => {
+						const on = value.method.includes(m);
+						return (
+							<button
+								key={m}
+								type="button"
+								onClick={() => toggleMethod(m)}
+								aria-pressed={on}
+								className={cn(
+									"h-9 rounded-full border px-3.5 text-sm transition-colors",
+									on
+										? "border-foreground bg-foreground text-background"
+										: "border-border bg-background text-muted-foreground hover:border-foreground/30 hover:text-foreground",
+								)}
+							>
+								{PAYMENT_METHOD_LABELS[m]}
+							</button>
+						);
+					})}
+					{/* Orders with no recorded method — online / WhatsApp self-claim /
+					    legacy. The only way to filter those. */}
+					<button
+						type="button"
+						onClick={() =>
+							onChange({
+								...value,
+								methodUnspecified: !value.methodUnspecified,
+							})
+						}
+						aria-pressed={value.methodUnspecified}
+						className={cn(
+							"h-9 rounded-full border px-3.5 text-sm transition-colors",
+							value.methodUnspecified
+								? "border-foreground bg-foreground text-background"
+								: "border-border bg-background text-muted-foreground hover:border-foreground/30 hover:text-foreground",
+						)}
+					>
+						Unspecified
+					</button>
+				</div>
+			</div>
+
+			<div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:gap-2.5">
+				<span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80 lg:shrink-0">
 					Date placed
 				</span>
 				<div className="flex flex-wrap items-center gap-1.5">
@@ -228,6 +296,8 @@ export function OrderFilters({
 					onClick={() =>
 						onChange({
 							payment: [],
+							method: [],
+							methodUnspecified: false,
 							from: undefined,
 							to: undefined,
 							mockup: false,

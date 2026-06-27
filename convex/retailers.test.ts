@@ -15,6 +15,24 @@ function setup() {
 	return t;
 }
 
+/** Resolve an order's buyer tracking token from its shortId (see orders.test.ts). */
+async function tk(
+	t: ReturnType<typeof setup>,
+	shortId: string,
+): Promise<string> {
+	return await t.run(async (ctx) => {
+		const o = await ctx.db
+			.query("orders")
+			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+			.first();
+		if (!o) return "__no_such_order__";
+		if (o.trackingToken) return o.trackingToken;
+		const token = `tok_${shortId}`;
+		await ctx.db.patch(o._id, { trackingToken: token });
+		return token;
+	});
+}
+
 const USER_A = "user_test_a";
 const USER_B = "user_test_b";
 
@@ -96,6 +114,72 @@ describe("retailers logo", () => {
 		expect(result.status).toBe("ok");
 		if (result.status !== "ok") return;
 		expect(result.retailer.logoUrl).toBeUndefined();
+	});
+});
+
+describe("retailers store description", () => {
+	test("updateSettings saves a trimmed description; both reads surface it", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "desc-store");
+		await asA.mutation(api.retailers.updateSettings, {
+			storeDescription: "  Home-based frozen food, Semenyih  ",
+		});
+
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.storeDescription).toBe("Home-based frozen food, Semenyih");
+
+		const result = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "desc-store",
+		});
+		expect(result.status).toBe("ok");
+		if (result.status !== "ok") return;
+		expect(result.retailer.storeDescription).toBe(
+			"Home-based frozen food, Semenyih",
+		);
+	});
+
+	test("preserves internal newlines", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "desc-newline");
+		await asA.mutation(api.retailers.updateSettings, {
+			storeDescription: "Line one\nLine two",
+		});
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.storeDescription).toBe("Line one\nLine two");
+	});
+
+	test("empty / whitespace-only clears the description", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "desc-clear");
+		await asA.mutation(api.retailers.updateSettings, {
+			storeDescription: "Temporary blurb",
+		});
+		await asA.mutation(api.retailers.updateSettings, {
+			storeDescription: "   ",
+		});
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.storeDescription).toBeUndefined();
+	});
+
+	test("rejects an over-cap description (server-side, don't trust client)", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "desc-toolong");
+		await expect(
+			asA.mutation(api.retailers.updateSettings, {
+				storeDescription: "x".repeat(281),
+			}),
+		).rejects.toThrow(/280 characters/);
+	});
+
+	test("unset by default", async () => {
+		const t = setup();
+		await seed(t, USER_A, "desc-default");
+		const result = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "desc-default",
+		});
+		expect(result.status).toBe("ok");
+		if (result.status !== "ok") return;
+		expect(result.retailer.storeDescription).toBeUndefined();
 	});
 });
 
@@ -820,7 +904,7 @@ describe("statusLabels (Phase 1 order status customization)", () => {
 			});
 		});
 
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(order?.retailerLocale).toBe("ms");
 		expect(order?.statusLabels).toEqual({ ms: { shipped: "Sedia diambil" } });
 	});

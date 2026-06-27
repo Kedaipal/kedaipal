@@ -15,6 +15,8 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalMutation } from "./_generated/server";
+import { generateTrackingToken } from "./lib/order";
+import { isOrderPaymentMethod } from "./lib/paymentMethod";
 
 const BATCH_SIZE = 50;
 
@@ -135,6 +137,89 @@ export const backfillVariantFlags = internalMutation({
 			await ctx.scheduler.runAfter(
 				0,
 				internal.migrations.backfillVariantFlags,
+				{ cursor: page.continueCursor },
+			);
+		}
+		return { patched, isDone: page.isDone };
+	},
+});
+
+/**
+ * Backfill the `trackingToken` capability on orders created before the
+ * shortId→token hardening (docs/infra-cost-scaling.md §6). Every order needs an
+ * unguessable token so its no-auth tracking page can't be enumerated. New orders
+ * get one at create; this fills the gap for existing rows.
+ *
+ * Idempotent: only generates a token for orders that lack one. Batched +
+ * self-scheduling to stay within mutation transaction limits.
+ *
+ * Run: `npx convex run migrations:backfillTrackingTokens`
+ */
+export const backfillTrackingTokens = internalMutation({
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (ctx, { cursor }) => {
+		const page = await ctx.db
+			.query("orders")
+			.paginate({ numItems: BATCH_SIZE, cursor: cursor ?? null });
+
+		const now = Date.now();
+		let patched = 0;
+		for (const order of page.page) {
+			if (order.trackingToken) continue; // already has one — idempotent skip
+			await ctx.db.patch(order._id, {
+				trackingToken: generateTrackingToken(),
+				updatedAt: now,
+			});
+			patched++;
+		}
+
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.migrations.backfillTrackingTokens,
+				{ cursor: page.continueCursor },
+			);
+		}
+		return { patched, isDone: page.isDone };
+	},
+});
+
+/**
+ * Migrate early Counter Checkout orders that recorded the in-person method as a
+ * synthetic `paymentReference` string ("In-person (cash)") to the structured
+ * `paymentMethod` enum, clearing the synthetic reference. Idempotent: only
+ * touches rows whose reference still matches that pattern. Batched +
+ * self-scheduling.
+ *
+ * Run: `npx convex run migrations:backfillCounterPaymentMethod`
+ */
+export const backfillCounterPaymentMethod = internalMutation({
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (ctx, { cursor }) => {
+		const page = await ctx.db
+			.query("orders")
+			.paginate({ numItems: BATCH_SIZE, cursor: cursor ?? null });
+
+		const now = Date.now();
+		let patched = 0;
+		for (const order of page.page) {
+			if (order.paymentMethod) continue; // already structured
+			const match = order.paymentReference?.match(/^In-person \((.+)\)$/i);
+			if (!match) continue;
+			const method = match[1].toLowerCase();
+			if (!isOrderPaymentMethod(method)) continue;
+			await ctx.db.patch(order._id, {
+				paymentMethod: method,
+				paymentReference: undefined, // drop the synthetic label
+				updatedAt: now,
+			});
+			patched++;
+		}
+
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.migrations.backfillCounterPaymentMethod,
 				{ cursor: page.continueCursor },
 			);
 		}

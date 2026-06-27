@@ -1,8 +1,17 @@
 import { useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
-import { Award, Banknote, ExternalLink, QrCode } from "lucide-react";
+import {
+	Award,
+	Banknote,
+	ExternalLink,
+	LifeBuoy,
+	Mail,
+	MessageCircle,
+	QrCode,
+} from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import { formatPrice } from "../../lib/format";
+import { LEGAL_CONTACT_EMAIL } from "../../lib/legal";
 import { trialDaysLeft } from "../../lib/subscription";
 import { ZoomableImage } from "../ui/zoomable-image";
 
@@ -116,7 +125,7 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 								`Hi, I'd like to upgrade from Starter to Pro for my Kedaipal store (/${retailer.slug}).`,
 							)}`}
 							target="_blank"
-							rel="noreferrer"
+							rel="noopener noreferrer"
 							className="inline-flex h-9 w-fit shrink-0 items-center gap-1.5 rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
 						>
 							<ExternalLink className="size-4" />
@@ -205,7 +214,7 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 									`Hi, I've paid invoice ${pending.invoiceNumber} for my Kedaipal store (/${retailer.slug}).`,
 								)}`}
 								target="_blank"
-								rel="noreferrer"
+								rel="noopener noreferrer"
 								className="mt-4 inline-flex h-10 w-fit items-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
 							>
 								<ExternalLink className="size-4" />
@@ -242,7 +251,7 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 								: `Hi, I'd like to choose a plan for my Kedaipal store (/${retailer.slug}).`,
 						)}`}
 						target="_blank"
-						rel="noreferrer"
+						rel="noopener noreferrer"
 						className="inline-flex h-10 w-fit items-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
 					>
 						<ExternalLink className="size-4" />
@@ -298,6 +307,46 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 					</ul>
 				</section>
 			) : null}
+
+			{/* Always-on billing support — shown to every retailer regardless of plan,
+			    tier, or subscription status, so they can always reach us about
+			    anything billing-related. */}
+			<section className="flex flex-col gap-3 rounded-2xl border border-input bg-background p-5 lg:p-6">
+				<div className="flex items-start gap-3">
+					<LifeBuoy className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
+					<div>
+						<p className="text-sm font-medium">Questions about billing?</p>
+						<p className="mt-1 text-xs text-muted-foreground">
+							We're here to help with invoices, plans, payments, or anything
+							else on your account.
+						</p>
+					</div>
+				</div>
+				<div className="flex flex-col gap-2 sm:flex-row">
+					{instructions?.whatsappPhone ? (
+						<a
+							href={`https://wa.me/${instructions.whatsappPhone.replace(/\D/g, "")}?text=${encodeURIComponent(
+								`Hi, I have a billing question about my Kedaipal store (/${retailer.slug}).`,
+							)}`}
+							target="_blank"
+							rel="noopener noreferrer"
+							className="inline-flex h-11 w-fit items-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
+						>
+							<MessageCircle className="size-4" />
+							Contact support on WhatsApp
+						</a>
+					) : null}
+					<a
+						href={`mailto:${LEGAL_CONTACT_EMAIL}?subject=${encodeURIComponent(
+							`Billing question — /${retailer.slug}`,
+						)}`}
+						className="inline-flex h-11 w-fit items-center gap-1.5 rounded-lg border border-border px-4 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+					>
+						<Mail className="size-4" />
+						Email us
+					</a>
+				</div>
+			</section>
 		</div>
 	);
 }

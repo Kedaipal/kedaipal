@@ -2,6 +2,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import {
 	AlertCircle,
+	CalendarDays,
 	Check,
 	ChevronRight,
 	Package,
@@ -14,7 +15,13 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import type { FulfilmentWindow } from "../../convex/lib/fulfilmentDate";
 import { INBOX_BUCKETS, type OrderBucket } from "../../convex/lib/orderBuckets";
+import {
+	isOrderPaymentMethod,
+	type OrderPaymentMethod,
+} from "../../convex/lib/paymentMethod";
+import { FulfilmentDateBadge } from "../components/dashboard/fulfilment-date-badge";
 import {
 	type BulkAction,
 	OrderBulkBar,
@@ -54,11 +61,25 @@ type InboxSearch = {
 	bucket?: InboxBucket;
 	q?: string;
 	pay?: PaymentStatus[];
+	method?: OrderPaymentMethod[];
+	/** Match orders with no recorded payment method. */
+	munspec?: boolean;
 	from?: number;
 	to?: number;
 	/** Cross-cutting "needs mockup" toggle. */
 	mockup?: boolean;
+	/** Fulfilment-date urgency chip (Today / Tomorrow / This week). */
+	fwin?: FulfilmentWindow;
 };
+
+const FULFILMENT_WINDOWS: { value: FulfilmentWindow; label: string }[] = [
+	{ value: "today", label: "Today" },
+	{ value: "tomorrow", label: "Tomorrow" },
+	{ value: "this_week", label: "This week" },
+];
+function isFulfilmentWindow(x: unknown): x is FulfilmentWindow {
+	return x === "today" || x === "tomorrow" || x === "this_week";
+}
 
 export const Route = createFileRoute("/app/orders/")({
 	// URL is the source of truth for the view (refresh + share preserve it).
@@ -76,6 +97,16 @@ export const Route = createFileRoute("/app/orders/")({
 				? [payRaw]
 				: [];
 		const pay = payArr.filter(isPaymentStatus);
+		const methodRaw = search.method;
+		const methodArr = Array.isArray(methodRaw)
+			? methodRaw
+			: methodRaw != null
+				? [methodRaw]
+				: [];
+		const method = methodArr.filter(
+			(x): x is OrderPaymentMethod =>
+				typeof x === "string" && isOrderPaymentMethod(x),
+		);
 		const q =
 			typeof search.q === "string" && search.q.length > 0
 				? search.q
@@ -84,10 +115,14 @@ export const Route = createFileRoute("/app/orders/")({
 			bucket,
 			q,
 			pay: pay.length > 0 ? pay : undefined,
+			method: method.length > 0 ? method : undefined,
+			munspec:
+				search.munspec === true || search.munspec === "true" ? true : undefined,
 			from: typeof search.from === "number" ? search.from : undefined,
 			to: typeof search.to === "number" ? search.to : undefined,
 			mockup:
 				search.mockup === true || search.mockup === "true" ? true : undefined,
+			fwin: isFulfilmentWindow(search.fwin) ? search.fwin : undefined,
 		};
 	},
 	component: OrdersRoute,
@@ -108,9 +143,12 @@ function OrdersRoute() {
 		bucket = "all",
 		q = "",
 		pay = [],
+		method = [],
+		munspec = false,
 		from,
 		to,
 		mockup = false,
+		fwin,
 	} = Route.useSearch();
 	const navigate = useNavigate({ from: Route.fullPath });
 	const retailer = useQuery(api.retailers.getMyRetailer);
@@ -128,6 +166,7 @@ function OrdersRoute() {
 	const [bulkBusy, setBulkBusy] = useState(false);
 
 	const payKey = pay.join(",");
+	const methodKey = method.join(",");
 	// Mirror the debounced search into the URL (shareable / survives refresh).
 	useEffect(() => {
 		navigate({
@@ -141,7 +180,7 @@ function OrdersRoute() {
 	useEffect(() => {
 		setLimit(PAGE_SIZE);
 		setSelected(new Set());
-	}, [bucket, debounced, payKey, from, to, mockup]);
+	}, [bucket, debounced, payKey, methodKey, munspec, from, to, mockup, fwin]);
 
 	const result = useQuery(
 		api.orders.searchOrders,
@@ -150,9 +189,12 @@ function OrdersRoute() {
 					retailerId: retailer._id,
 					bucket,
 					paymentStatuses: pay.length > 0 ? pay : undefined,
+					paymentMethods: method.length > 0 ? method : undefined,
+					methodUnspecified: munspec || undefined,
 					dateFrom: from,
 					dateTo: to,
 					mockupPending: mockup || undefined,
+					fulfilmentWindow: fwin,
 					searchText: debounced || undefined,
 					limit,
 				}
@@ -185,7 +227,14 @@ function OrdersRoute() {
 		: undefined;
 	const now = Date.now();
 	const searching = debounced.length > 0;
-	const filtersActive = pay.length > 0 || from != null || to != null || mockup;
+	const filtersActive =
+		pay.length > 0 ||
+		method.length > 0 ||
+		munspec ||
+		from != null ||
+		to != null ||
+		mockup ||
+		fwin != null;
 
 	function setBucket(next: InboxBucket) {
 		navigate({
@@ -196,11 +245,20 @@ function OrdersRoute() {
 		});
 	}
 
+	function setFwin(next: FulfilmentWindow) {
+		// Toggle: tapping the active chip clears it.
+		navigate({
+			search: (prev) => ({ ...prev, fwin: fwin === next ? undefined : next }),
+		});
+	}
+
 	function setFilters(next: OrderFilterValue) {
 		navigate({
 			search: (prev) => ({
 				...prev,
 				pay: next.payment.length > 0 ? next.payment : undefined,
+				method: next.method.length > 0 ? next.method : undefined,
+				munspec: next.methodUnspecified ? true : undefined,
 				from: next.from,
 				to: next.to,
 				mockup: next.mockup ? true : undefined,
@@ -359,8 +417,44 @@ function OrdersRoute() {
 					})}
 				</div>
 
+				{/* Fulfilment-date urgency chips — a primary axis for F&B sellers
+				    ("what's due today?"), so they sit inline above the advanced
+				    filters, not buried in the filter sheet. */}
+				<div className="flex flex-wrap items-center gap-2">
+					<span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+						Due
+					</span>
+					{FULFILMENT_WINDOWS.map((w) => {
+						const active = fwin === w.value;
+						return (
+							<button
+								key={w.value}
+								type="button"
+								aria-pressed={active}
+								onClick={() => setFwin(w.value)}
+								className={cn(
+									"inline-flex h-11 items-center gap-1.5 rounded-full border px-4 text-sm font-medium transition-colors",
+									active
+										? "border-accent bg-accent text-accent-foreground"
+										: "border-border bg-background text-muted-foreground hover:border-accent/40 hover:text-foreground",
+								)}
+							>
+								<CalendarDays className="size-3.5" aria-hidden="true" />
+								{w.label}
+							</button>
+						);
+					})}
+				</div>
+
 				<OrderFilters
-					value={{ payment: pay, from, to, mockup }}
+					value={{
+						payment: pay,
+						method,
+						methodUnspecified: munspec,
+						from,
+						to,
+						mockup,
+					}}
 					onChange={setFilters}
 					mockupCount={counts?.mockupPending}
 				/>
@@ -433,6 +527,9 @@ function OrdersRoute() {
 										<DeliveryMethodBadge
 											method={o.deliveryMethod ?? "delivery"}
 										/>
+										{o.fulfilmentDate !== undefined ? (
+											<FulfilmentDateBadge epoch={o.fulfilmentDate} now={now} />
+										) : null}
 										{o.mockupStatus === "pending" ||
 										o.mockupStatus === "changes_requested" ? (
 											<span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">

@@ -22,7 +22,14 @@ import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 import { isMockupGateClosed } from "../../convex/lib/order";
+import {
+	ORDER_PAYMENT_METHODS,
+	type OrderPaymentMethod,
+	PAYMENT_METHOD_LABELS,
+	paymentMethodLabel,
+} from "../../convex/lib/paymentMethod";
 import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
+import { FulfilmentDateBadge } from "../components/dashboard/fulfilment-date-badge";
 import {
 	PageHeader,
 	PageHeaderSkeleton,
@@ -32,6 +39,14 @@ import {
 	formatAddressInline,
 } from "../components/storefront/delivery-address-display";
 import { Button } from "../components/ui/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
@@ -45,6 +60,7 @@ import {
 	resolveStatusLabel,
 	stageLabel,
 } from "../lib/orderStatus";
+import { suppressNextOrderConfirmedToast } from "../lib/orderToastSuppression";
 import { StatusBadge } from "./app.orders.index";
 
 export const Route = createFileRoute("/app/orders/$shortId")({
@@ -237,6 +253,12 @@ function OrderDetailRoute() {
 	const [carrierInput, setCarrierInput] = useState<string | null>(null);
 	const [savingCarrier, setSavingCarrier] = useState(false);
 	const [confirmingPayment, setConfirmingPayment] = useState(false);
+	const [confirmPaymentOpen, setConfirmPaymentOpen] = useState(false);
+	// Optional method tag captured at confirm time (the seller has just verified
+	// the channel). Undefined = leave online/unknown. See lib/paymentMethod.ts.
+	const [paymentMethodChoice, setPaymentMethodChoice] = useState<
+		OrderPaymentMethod | undefined
+	>(undefined);
 
 	if (order === undefined) {
 		return <OrderDetailSkeleton />;
@@ -327,8 +349,16 @@ function OrderDetailRoute() {
 		if (!order) return;
 		setConfirmingPayment(true);
 		try {
-			await markPaymentReceived({ orderId: order._id });
+			// Marking payment on a pending order auto-confirms it too, which
+			// would otherwise also fire the generic "Order confirmed" toast.
+			if (order.status === "pending") suppressNextOrderConfirmedToast();
+			await markPaymentReceived({
+				orderId: order._id,
+				paymentMethod: paymentMethodChoice,
+			});
 			toast.success("Payment confirmed — customer notified on WhatsApp");
+			setConfirmPaymentOpen(false);
+			setPaymentMethodChoice(undefined);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -479,7 +509,7 @@ function OrderDetailRoute() {
 							<a
 								href={proofUrl}
 								target="_blank"
-								rel="noreferrer"
+								rel="noopener noreferrer"
 								className="block overflow-hidden rounded-xl border border-blue-200 bg-white"
 							>
 								<img
@@ -502,7 +532,7 @@ function OrderDetailRoute() {
 
 					<div className="flex flex-col gap-2">
 						<Button
-							onClick={handleMarkPaymentReceived}
+							onClick={() => setConfirmPaymentOpen(true)}
 							isLoading={confirmingPayment}
 							disabled={confirmingPayment}
 							className="h-11 w-full"
@@ -511,7 +541,7 @@ function OrderDetailRoute() {
 						</Button>
 						{askForProofUrl ? (
 							<Button asChild variant="secondary" className="h-11 w-full">
-								<a href={askForProofUrl} target="_blank" rel="noreferrer">
+								<a href={askForProofUrl} target="_blank" rel="noopener noreferrer">
 									<MessageCircle className="size-4" />
 									Ask for proof on WhatsApp
 								</a>
@@ -543,7 +573,7 @@ function OrderDetailRoute() {
 					    and the price may not be final, so the seller can't mark payment
 					    received yet. Opens on approve / waive / removing the custom item. */}
 					<Button
-						onClick={handleMarkPaymentReceived}
+						onClick={() => setConfirmPaymentOpen(true)}
 						isLoading={confirmingPayment}
 						disabled={confirmingPayment || mockupGated}
 						variant="secondary"
@@ -567,6 +597,9 @@ function OrderDetailRoute() {
 							{order.paymentReceivedAt
 								? `Confirmed ${formatRelative(order.paymentReceivedAt)}`
 								: "Confirmed by you"}
+							{order.paymentMethod
+								? ` · ${paymentMethodLabel(order.paymentMethod)}`
+								: ""}
 						</p>
 					</div>
 				</section>
@@ -611,7 +644,7 @@ function OrderDetailRoute() {
 					<a
 						href={`https://wa.me/${order.customer.waPhone}`}
 						target="_blank"
-						rel="noreferrer"
+						rel="noopener noreferrer"
 						className="flex h-11 items-center justify-center gap-2 rounded-xl bg-green-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-green-700"
 					>
 						<MessageCircle className="size-4" />
@@ -647,13 +680,21 @@ function OrderDetailRoute() {
 						<Truck className="size-4 text-muted-foreground" />
 					)}
 				</div>
-				<div>
+				<div className="flex flex-col gap-1">
 					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 						Fulfillment
 					</p>
 					<p className="text-sm font-medium">
 						{isSelfCollect ? "Self Collect" : "Delivery"}
 					</p>
+					{order.fulfilmentDate !== undefined ? (
+						<div className="flex items-center gap-1.5">
+							<span className="text-xs text-muted-foreground">
+								{isSelfCollect ? "Collect on" : "Deliver on"}
+							</span>
+							<FulfilmentDateBadge epoch={order.fulfilmentDate} size="md" />
+						</div>
+					) : null}
 				</div>
 			</section>
 
@@ -739,7 +780,7 @@ function OrderDetailRoute() {
 									<a
 										href={mapsUrl}
 										target="_blank"
-										rel="noreferrer"
+										rel="noopener noreferrer"
 										className="flex h-9 items-center gap-1 rounded-full px-3 text-xs font-medium text-accent hover:bg-accent/10"
 										aria-label="Open in Maps"
 									>
@@ -816,7 +857,7 @@ function OrderDetailRoute() {
 									)}`
 								}
 								target="_blank"
-								rel="noreferrer"
+								rel="noopener noreferrer"
 								className="flex h-9 items-center gap-1 rounded-full px-3 text-xs font-medium text-accent hover:bg-accent/10"
 								aria-label="Open in Maps"
 							>
@@ -883,7 +924,7 @@ function OrderDetailRoute() {
 						<a
 							href={order.carrierTrackingUrl}
 							target="_blank"
-							rel="noreferrer"
+							rel="noopener noreferrer"
 							className="flex items-center gap-2 text-sm text-accent underline underline-offset-2"
 						>
 							<Truck className="size-4 shrink-0" />
@@ -950,6 +991,65 @@ function OrderDetailRoute() {
 					</div>
 				</section>
 			) : null}
+
+			<Dialog
+				open={confirmPaymentOpen}
+				onOpenChange={(o) => {
+					if (!o) setConfirmPaymentOpen(false);
+				}}
+			>
+				<DialogContent showCloseButton={false} className="sm:max-w-sm">
+					<DialogHeader>
+						<DialogTitle>Mark #{order.shortId} as paid?</DialogTitle>
+						<DialogDescription>
+							This confirms payment was received and notifies the customer on
+							WhatsApp. Make sure you've checked the amount in your bank app
+							first — this can't be undone here.
+						</DialogDescription>
+					</DialogHeader>
+					<div className="flex flex-col gap-2">
+						<p className="text-xs font-medium text-muted-foreground">
+							How did they pay? <span className="font-normal">(optional)</span>
+						</p>
+						<div className="flex flex-wrap gap-2">
+							{ORDER_PAYMENT_METHODS.map((m) => {
+								const active = paymentMethodChoice === m;
+								return (
+									<button
+										key={m}
+										type="button"
+										onClick={() =>
+											setPaymentMethodChoice(active ? undefined : m)
+										}
+										className={`rounded-full border px-3 py-1.5 text-sm font-medium transition-colors ${
+											active
+												? "border-accent bg-accent/10 text-foreground"
+												: "border-border text-muted-foreground hover:bg-muted"
+										}`}
+									>
+										{PAYMENT_METHOD_LABELS[m]}
+									</button>
+								);
+							})}
+						</div>
+					</div>
+					<DialogFooter>
+						<Button
+							variant="outline"
+							onClick={() => setConfirmPaymentOpen(false)}
+						>
+							Cancel
+						</Button>
+						<Button
+							isLoading={confirmingPayment}
+							disabled={confirmingPayment}
+							onClick={handleMarkPaymentReceived}
+						>
+							Mark payment received
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</div>
 	);
 }
@@ -1133,7 +1233,7 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 							key={url}
 							href={url}
 							target="_blank"
-							rel="noreferrer"
+							rel="noopener noreferrer"
 							className="block overflow-hidden rounded-xl border border-border bg-white"
 						>
 							<img
@@ -1418,7 +1518,7 @@ function NotifyManagerCard({
 				<a
 					href={notifyHref}
 					target="_blank"
-					rel="noreferrer"
+					rel="noopener noreferrer"
 					className="flex h-11 items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
 				>
 					<MessageCircle className="size-4" />

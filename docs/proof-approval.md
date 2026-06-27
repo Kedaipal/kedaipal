@@ -142,7 +142,7 @@ the design + price — otherwise they'd pay against an unknown (RM0) total. So t
 - **Gate opens → payment prompt fires.** `approveMockup` (buyer), `waiveMockup` (seller deadlock escape), and `declineMockupItem` on a *mixed* order (buyer removed the custom line, leaving a payable remainder) all schedule `internal.whatsapp.notifyPaymentDue({ orderId, reason })`, which sends the deferred "I've paid" prompt (intro = `paymentDueApproved` / `paymentDueWaived` / `paymentDueDeclined`, then the standard pickup + transfer-reference + payment block, shared with the confirm reply via `sendPaymentMessage`). The decline nudge is skipped if payment was already taken.
 - **Re-confirm after the gate opens** (buyer re-sends `ORD-XXXX`) takes the normal branch, so the pay button shows again — idempotent.
 
-**Tracking page (`track.$shortId.tsx`) while the gate is closed:**
+**Tracking page (`track.$token.tsx`) while the gate is closed:**
 - The **"I've paid" button is disabled** and relabelled — "Awaiting mockup" (pre-submission) / "Awaiting your mockup approval" (`submitted`), with a one-line hint — so the buyer can't claim payment before the price is final. It reverts to the live "I've paid" once approved/waived.
 - The **Mockup card** uses status-style labels: `pending → "Pending mockup design"`, `submitted → "Pending mockup approval"`, `changes_requested → "Pending mockup update"`, `approved → "Mockup approved"`.
 - The **progress timeline** splices a virtual **mockup node** right after "Confirmed" for custom orders (same labels as the card), so the buyer sees the approval step that gates Packed. It's the *current* step while the gate is closed and `done` once approved/waived. Non-custom orders render the plain fulfilment list.
@@ -163,7 +163,7 @@ All three share the one helper, alongside the timeline / payment-button reads, s
 
 **Non-custom orders are entirely unaffected** — no `mockupStatus`, so every branch above falls through to the original behavior.
 
-**Remove the custom item (`declineMockupItem`, capability = `shortId`):** the
+**Remove the custom item (`declineMockupItem`, capability = the tracking token):** the
 buyer's "Remove this custom item" action — distinct from "Request changes" (the
 mockup-revision loop). Drops every `requiresProof` line, recomputes `total`
 (quote cleared), and **re-evaluates the gate** — with no proof-required line
@@ -191,7 +191,7 @@ absent. Revisit as its own feature if real demand appears.
   - `create`: if any line's variant resolves `requiresProof` (override ?? product), set `mockupStatus: "pending"`.
   - `updateStatus`: **gate** `→ packed` on `proofStatus === "approved" || proofWaivedAt`.
   - `submitProof(orderId, storageId)` (owner): set `submitted`, store image, event, schedule WhatsApp send.
-  - `approveProof(shortId)` / `requestProofChanges(shortId, note)` (public, capability = `shortId`, rate-limited like `claimPayment`): transition + event + notify seller.
+  - `approveMockup(token)` / `requestMockupChanges(token, note)` (public, capability = the tracking token, rate-limited like `claimPayment`): transition + event + notify seller. (`shortId` is not a secret — see [`infra-cost-scaling.md` §6](./infra-cost-scaling.md).)
   - `waiveProof(orderId)` (owner): set `proofWaivedAt`, event; server-guards the grace window (§8).
   - `generateProofUploadUrl(orderId)` (owner) — mockup upload URL.
 - **Channel adapter (`convex/lib/channels/`)** — outbound: send the mockup **image** + a "review your mockup" message with the tracking link; seller notifications on approve/changes. Render-only; no order-flow change.
@@ -199,7 +199,7 @@ absent. Revisit as its own feature if real demand appears.
 - **`convex/crons.ts`** — reminder sweeps (§8): nudge the buyer while `submitted`, nudge the seller while `pending`/`changes_requested`, and unlock the waiver after the grace window.
 - **Dashboard order detail (`src/routes/app.orders.$shortId.tsx`)** — "Mockup needed" badge, upload+send control, current proof state, the post-grace **"Proceed without approval"** waiver (with warning), and the `→ packed` button disabled with reason while gated.
 - **Dashboard orders list / index (`src/routes/app.orders.index.tsx`)** — a per-row "Mockup pending" badge **and** a "Mockup pending" filter pill (with a count badge from `countActionable.mockupPending`) so a high-volume seller sees them at a glance (the core anti-forgetting surface). The filter is backed by `listByRetailer({ mockupPending: true })`, which scans the seller-actionable range of the `by_retailer_mockup` index (`changes_requested`–`pending`, which are adjacent so the range is exactly those two states; `submitted`/`approved`/none fall outside). When set, it overrides the fulfilment-`status` arg.
-- **Tracking page (`src/routes/track.$shortId.tsx`)** — render the mockup + **Approve / Request changes** (note box) while `submitted`; show approved/awaiting states otherwise.
+- **Tracking page (`src/routes/track.$token.tsx`)** — render the mockup + **Approve / Request changes** (note box) while `submitted`; show approved/awaiting states otherwise.
 
 ## 8. Deadlock escape — reminders, then a deliberate waiver
 
@@ -230,7 +230,7 @@ The escape must keep a human in the loop and **never silently auto-produce**:
 - **Re-submission loop** — `changes_requested → submitted → …` any number of rounds; each is an `orderEvents` entry. Latest `proofImageStorageId` wins.
 - **Cancellation** — a gated order can still be cancelled at any time (proof gate only blocks *forward* production, not cancel).
 - **Toggle changed after order exists** — `mockupStatus` is stamped at order-create time from the then-current per-variant `requiresProof`; flipping a variant's toggle later doesn't retro-gate existing orders (frozen-intent, like other snapshots).
-- **No tracking phone / link-in-bio** — the buyer still reviews via the tracking page (capability = `shortId`); WhatsApp delivery of the mockup is best-effort, same as other notifications.
+- **No tracking phone / link-in-bio** — the buyer still reviews via the tracking page (capability = the tracking token); WhatsApp delivery of the mockup is best-effort, same as other notifications.
 - **Proof timing** — this seller's flow is **pay → mockup → produce**, so the gate sits post-confirm. (Some businesses approve *before* payment; configurable timing is a possible later extension, out of scope.)
 
 ## 10. Dependencies / relationships

@@ -64,7 +64,7 @@ Marking `received` should auto-bump `pending → confirmed` if not already past 
 
 ### `convex/orders.ts` (new)
 
-**`claimPayment`** — public mutation, **shortId-as-capability** trust model. Same pattern as the existing `updateDeliveryAddress` at `orders.ts:390`.
+**`claimPayment`** — public mutation, capability-token trust model. Same pattern as `updateDeliveryAddress`. (Originally shipped as shortId-as-capability; hardened to the high-entropy `orders.trackingToken` — see [`infra-cost-scaling.md` §6](./infra-cost-scaling.md).)
 
 ```ts
 export const claimPayment = mutation({
@@ -160,7 +160,7 @@ Implemented as either (a) a hard-coded line appended after the customizable conf
 
 ## UI changes
 
-### Tracking page (`src/routes/track.$shortId.tsx`)
+### Tracking page (`src/routes/track.$token.tsx`)
 
 - New status section near the top showing payment badge:
   - `unpaid` → yellow `Payment Unpaid` + primary `I've paid` button
