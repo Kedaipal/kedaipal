@@ -133,13 +133,31 @@ price are agreed face-to-face — so the block is lifted:
   `mockupStatus` — there's nothing to approve, the buyer has it (or will collect).
   No image is required either.
 - **Price trust boundary.** `createOrderFromSession` takes a per-item
-  `unitPrice`, but trusts it **only for `isCustom` lines** (validated integer,
-  `> 0`, ≤ RM 100k); every normal line always uses the authoritative
-  `variant.price`, so a tampered client can't reprice a fixed product. The
-  vendor-set price is autosaved on the draft (`unitPrice`) so a resume restores it.
+  `unitPrice`, but trusts it **only for `isCustom` lines** (validated as a
+  positive integer in sen — the **same rule as any product price**, no upper cap,
+  since the vendor's business could be high-value: watches, renovations, B2B
+  services); every normal line always uses the authoritative `variant.price`, so a
+  tampered client can't reprice a fixed product. That custom-only trust — not any
+  ceiling — is the actual security control. The vendor-set price is autosaved on
+  the draft (`unitPrice`) so a resume restores it.
 
 See [`custom-option.md`](./custom-option.md) and
 [`proof-approval.md`](./proof-approval.md).
+
+## Review-before-create (no price ceiling)
+
+Counter prices have **no upper cap** — same rule as any product price (positive
+integer in sen); the vendor's business could legitimately be high-value (watches,
+renovations, B2B services). The guard against a fat-fingered amount (an extra
+zero: RM 5M instead of RM 500k) is **not** an arbitrary limit but a **mandatory
+review step**: tapping **"Review order"** opens a confirm modal
+(`ConfirmCheckoutDialog`) that lays out every line (qty × unit price → line
+total), the collection date, the payment method, and the grand total before the
+order is created — the same "look before you pay" beat a normal storefront gives.
+The small cart panel is easy to skim past on a busy day, so the full breakdown is
+forced into view. **Counter-only:** the storefront buyer already reviews their own
+cart before sending the order, so the standard order flow (incl. marking complete)
+is unchanged.
 
 ## Observability / PII note
 

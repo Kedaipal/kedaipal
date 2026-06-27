@@ -22,6 +22,7 @@ import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import {
+	formatFulfilmentDate,
 	fulfilmentDateBounds,
 	mytMidnightFromYmd,
 	ymdFromEpoch,
@@ -32,6 +33,14 @@ import {
 	PAYMENT_METHOD_LABELS,
 } from "../../convex/lib/paymentMethod";
 import { Button } from "../components/ui/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { useDebounce } from "../hooks/useDebounce";
 import { convexErrorMessage, formatPrice } from "../lib/format";
@@ -52,11 +61,6 @@ type SessionId = Id<"counterCheckoutSessions">;
 // Surfaced to the vendor so they know where abandoned open checkouts go. Keep in
 // sync with OPEN_SESSION_TTL_MS in convex/counterCheckout.ts (3 days).
 const OPEN_CHECKOUT_TTL_DAYS = 3;
-
-// Client ceiling on a custom price (cents). Keep in sync with MAX_CUSTOM_PRICE in
-// convex/counterCheckout.ts — surfaced here so the vendor sees the limit while
-// typing instead of only hitting the server rejection at submit.
-const MAX_CUSTOM_PRICE_CENTS = 100_000_00;
 
 type CreatedOrder = {
 	shortId: string;
@@ -683,6 +687,11 @@ function BuildOrderScreen({
 		draft?.paymentMethod ?? "cash",
 	);
 	const [submitting, setSubmitting] = useState(false);
+	// Final review modal — a deliberate last look at items/prices/total before the
+	// order is created, so a busy vendor can't fat-finger a price or quantity and
+	// only notice after the buyer has paid. (Counter-only: the storefront buyer
+	// already reviews their own cart before sending the order.)
+	const [confirmOpen, setConfirmOpen] = useState(false);
 	// Per-variant price text for custom/quote lines (keyed by variantId). The cart
 	// line holds the parsed cents; this holds the in-progress input string.
 	const [customPriceInput, setCustomPriceInput] = useState<
@@ -952,22 +961,15 @@ function BuildOrderScreen({
 														customPriceInput[vr._id] ??
 														(inCart ? centsToRm(inCart.price) : "");
 													const cents = rmToCents(priceText);
-													const overMax =
-														!Number.isNaN(cents) &&
-														cents > MAX_CUSTOM_PRICE_CENTS;
-													const validPrice = !Number.isNaN(cents) && !overMax;
+													const validPrice = !Number.isNaN(cents);
 													const onPriceChange = (val: string) => {
 														setCustomPriceInput((prev) => ({
 															...prev,
 															[vr._id]: val,
 														}));
 														const c = rmToCents(val);
-														// Only push a valid, in-range price to the cart line.
-														if (
-															inCart &&
-															!Number.isNaN(c) &&
-															c <= MAX_CUSTOM_PRICE_CENTS
-														)
+														// Only push a valid price to the cart line.
+														if (inCart && !Number.isNaN(c))
 															setQty(
 																vr._id,
 																{ ...inCart, price: c },
@@ -1043,16 +1045,7 @@ function BuildOrderScreen({
 																	</Button>
 																) : null}
 															</div>
-															{overMax ? (
-																<p className="text-xs text-destructive">
-																	Max{" "}
-																	{formatPrice(
-																		MAX_CUSTOM_PRICE_CENTS,
-																		currency,
-																	)}
-																	.
-																</p>
-															) : heldHint ? (
+															{heldHint ? (
 																<p className="text-xs text-amber-600 dark:text-amber-500">
 																	{heldHint}
 																</p>
@@ -1229,17 +1222,147 @@ function BuildOrderScreen({
 				</div>
 
 				<Button
-					onClick={submit}
-					disabled={cartEntries.length === 0 || submitting}
-					isLoading={submitting}
+					onClick={() => setConfirmOpen(true)}
+					disabled={cartEntries.length === 0}
 					className="h-12 w-full text-base"
 				>
-					{submitting
-						? "Creating…"
-						: `Create order · ${formatPrice(total, currency)}`}
+					{`Review order · ${formatPrice(total, currency)}`}
 				</Button>
 			</div>
+
+			<ConfirmCheckoutDialog
+				open={confirmOpen}
+				onOpenChange={(o) => {
+					if (!submitting) setConfirmOpen(o);
+				}}
+				buyerName={buyer.displayName}
+				lines={cartEntries.map(([variantId, l]) => ({ variantId, line: l }))}
+				total={total}
+				currency={currency}
+				fulfilmentLabel={(() => {
+					const e = mytMidnightFromYmd(fulfilmentDate);
+					return Number.isNaN(e) ? "—" : formatFulfilmentDate(e);
+				})()}
+				paymentLabel={
+					paidInPerson
+						? `Paid now · ${PAYMENT_METHOD_LABELS[method]}`
+						: "Pay later — buyer pays via WhatsApp link"
+				}
+				submitting={submitting}
+				onConfirm={submit}
+			/>
 		</div>
+	);
+}
+
+/**
+ * Last-look review before a counter order is created. Lays out items, line
+ * prices, fulfilment date, payment, and the total — the "are you sure?" beat a
+ * normal checkout gives you before paying, so a fat-fingered price/qty is caught
+ * here, not after the buyer has handed over money.
+ */
+function ConfirmCheckoutDialog({
+	open,
+	onOpenChange,
+	buyerName,
+	lines,
+	total,
+	currency,
+	fulfilmentLabel,
+	paymentLabel,
+	submitting,
+	onConfirm,
+}: {
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	buyerName: string | undefined;
+	lines: Array<{ variantId: string; line: CartLine }>;
+	total: number;
+	currency: string;
+	fulfilmentLabel: string;
+	paymentLabel: string;
+	submitting: boolean;
+	onConfirm: () => void;
+}) {
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent className="max-w-md">
+				<DialogHeader>
+					<DialogTitle>Confirm order</DialogTitle>
+					<DialogDescription>
+						Go through it with {buyerName ?? "the buyer"} before creating it.
+					</DialogDescription>
+				</DialogHeader>
+
+				<div className="flex flex-col gap-3">
+					<ul className="flex max-h-64 flex-col divide-y divide-border overflow-y-auto rounded-xl border border-border">
+						{lines.map(({ variantId, line: l }) => (
+							<li
+								key={variantId}
+								className="flex items-start justify-between gap-3 p-3"
+							>
+								<div className="min-w-0">
+									<p className="text-sm font-medium">
+										{l.name}
+										{l.label ? (
+											<span className="font-normal text-muted-foreground">
+												{" "}
+												· {l.label}
+											</span>
+										) : null}
+									</p>
+									<p className="text-xs text-muted-foreground">
+										{l.qty} × {formatPrice(l.price, currency)}
+										{l.isCustom ? " · custom" : ""}
+									</p>
+								</div>
+								<span className="shrink-0 text-sm font-semibold tabular-nums">
+									{formatPrice(l.price * l.qty, currency)}
+								</span>
+							</li>
+						))}
+					</ul>
+
+					<div className="flex flex-col gap-1.5 rounded-xl bg-muted/50 p-3 text-sm">
+						<div className="flex items-center justify-between gap-3">
+							<span className="text-muted-foreground">Collection</span>
+							<span className="font-medium">{fulfilmentLabel}</span>
+						</div>
+						<div className="flex items-center justify-between gap-3">
+							<span className="text-muted-foreground">Payment</span>
+							<span className="text-right font-medium">{paymentLabel}</span>
+						</div>
+						<div className="mt-1 flex items-center justify-between border-t border-border pt-2 text-base font-bold">
+							<span>Total</span>
+							<span className="tabular-nums">
+								{formatPrice(total, currency)}
+							</span>
+						</div>
+					</div>
+				</div>
+
+				<DialogFooter>
+					<Button
+						variant="outline"
+						onClick={() => onOpenChange(false)}
+						disabled={submitting}
+						className="h-11"
+					>
+						Back
+					</Button>
+					<Button
+						onClick={onConfirm}
+						isLoading={submitting}
+						disabled={submitting}
+						className="h-11"
+					>
+						{submitting
+							? "Creating…"
+							: `Create order · ${formatPrice(total, currency)}`}
+					</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
 	);
 }
 

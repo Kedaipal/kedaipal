@@ -220,9 +220,6 @@ const draftValidator = v.object({
 	paymentMethod: v.optional(orderPaymentMethodValidator),
 });
 
-/** Upper bound on a vendor-entered custom price (cents) — RM 100,000. */
-const MAX_CUSTOM_PRICE = 100_000_00;
-
 /**
  * Autosave the seller's in-progress order onto a bound session (debounced from
  * the client). Owner-only; only valid while the session is buyer_identified.
@@ -349,10 +346,11 @@ export const createOrderFromSession = mutation({
 			v.object({
 				variantId: v.id("productVariants"),
 				quantity: v.number(),
-				// Vendor-entered unit price (cents) — REQUIRED for a custom/quote line
+				// Vendor-entered unit price (sen) — REQUIRED for a custom/quote line
 				// (whose catalog price is 0; price is agreed in person), IGNORED for a
 				// normal line (which always uses the authoritative variant price, so a
-				// tampered client can't reprice a fixed product).
+				// tampered client can't reprice a fixed product). Validated as a
+				// positive integer, no upper cap (same rule as any product price).
 				unitPrice: v.optional(v.number()),
 			}),
 		),
@@ -436,12 +434,15 @@ export const createOrderFromSession = mutation({
 			// the authoritative variant price. See docs/custom-option.md.
 			let unitPrice: number;
 			if (variant.isCustom === true) {
+				// A positive integer in sen — the SAME rule as any other price
+				// (products.ts). No artificial ceiling: we can't know the vendor's
+				// business (watches, renovations, B2B services can run six figures+),
+				// and the price is the vendor's own call with the buyer present.
 				const entered = item.unitPrice;
 				if (
 					entered === undefined ||
 					!Number.isInteger(entered) ||
-					entered <= 0 ||
-					entered > MAX_CUSTOM_PRICE
+					entered <= 0
 				)
 					throw new ConvexError(`Set a price for "${displayName}"`);
 				unitPrice = entered;
