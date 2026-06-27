@@ -178,6 +178,13 @@ export default defineSchema({
 		// settings invariant guarantee a store always keeps ≥1 WORKING fulfilment
 		// method (delivery, or self-collect with ≥1 active pickup location).
 		offerDelivery: v.optional(v.boolean()),
+		// Minimum days' notice the retailer needs before a fulfilment date. Drives
+		// the lower bound of the storefront date picker (earliest selectable day =
+		// today + this). Undefined → 0 (see DEFAULT_MIN_NOTICE_DAYS) so same-day is
+		// allowed by default; a seller who needs lead time raises it. Capped at 30
+		// (the max-notice ceiling) server-side. NOTE: counter checkout (seller, in
+		// person) ignores this and always allows today. See convex/lib/fulfilmentDate.ts.
+		minFulfilmentNoticeDays: v.optional(v.number()),
 		// Set to true the first time the retailer opens the Pickup settings tab.
 		// Used by the dashboard checklist to mark step 4 done after a single
 		// visit, even if the retailer chose to skip self-collect — keeps the
@@ -456,6 +463,14 @@ export default defineSchema({
 				placeId: v.optional(v.string()),
 			}),
 		),
+		// When the buyer needs the order — their answer to "When do you need this?
+		// (delivery or pickup date)" at checkout. Stored as the epoch-ms of that
+		// calendar day's MIDNIGHT in Malaysia time (UTC+8, no DST) — see
+		// convex/lib/fulfilmentDate.ts. Optional: absent on orders created before
+		// this field and on any path that doesn't capture it (a dateless order
+		// sorts to the bottom of the date-ascending inbox). Validated server-side
+		// to a whole MYT day within [today + retailer notice, today + 30 days].
+		fulfilmentDate: v.optional(v.number()),
 		// Free-text instruction the shopper attached at checkout ("no onions",
 		// "deliver after 5pm"). Optional; absent on orders created before this
 		// field. Distinct from deliveryAddress.notes (address/gate detail, delivery
@@ -632,6 +647,27 @@ export default defineSchema({
 		// Set when the seller confirms the order off this session (status →
 		// completed). The order then flows through the normal WhatsApp pipeline.
 		orderId: v.optional(v.id("orders")),
+		// In-progress order the seller is keying for the bound buyer — autosaved
+		// (debounced) so a refresh / reconnect / switching between concurrent
+		// customers never loses the cart. Only present on buyer_identified sessions;
+		// authoritative price/stock are still resolved at createOrderFromSession.
+		draft: v.optional(
+			v.object({
+				items: v.array(
+					v.object({
+						variantId: v.id("productVariants"),
+						quantity: v.number(),
+						// Vendor-set unit price (cents) for a custom/quote line whose
+						// catalog price is 0 — the agreed-in-person price. Absent for
+						// normal lines (those resolve to the variant's price at create).
+						unitPrice: v.optional(v.number()),
+					}),
+				),
+				fulfilmentDate: v.optional(v.number()),
+				paidInPerson: v.optional(v.boolean()),
+				paymentMethod: v.optional(orderPaymentMethodValidator),
+			}),
+		),
 		boundAt: v.optional(v.number()),
 		expiresAt: v.number(),
 		createdAt: v.number(),

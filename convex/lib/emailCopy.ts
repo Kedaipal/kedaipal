@@ -42,6 +42,10 @@ export type RetailerEmailVars = {
 	// approved before it can be packed (and before the buyer is asked to pay).
 	// Surfaced on the newOrder / orderConfirmed alerts so the seller knows to act.
 	requiresMockup?: boolean;
+	// Pre-formatted fulfilment date ("Sat, 28 Jun 2026"), set on the newOrder /
+	// orderConfirmed alerts when the buyer picked one. Lets the seller see "when
+	// they need it" without opening the dashboard.
+	fulfilmentDateLabel?: string;
 };
 
 const deliveryLabel: Record<Locale, Record<DeliveryMethod, string>> = {
@@ -89,11 +93,15 @@ const en = {
 			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} item(s) · ${escapeHtml(v.totalFormatted)}`,
 			`Customer: ${escapeHtml(v.customerName)}`,
 			`Method: ${deliveryLabel.en[v.deliveryMethod]}`,
+			...(v.fulfilmentDateLabel
+				? [`📅 Needed by: <strong>${escapeHtml(v.fulfilmentDateLabel)}</strong>`]
+				: []),
 			...(v.requiresMockup ? [mockupHtml] : []),
 			`Open your dashboard to manage this order.`,
 		];
 		const html = wrapHtml("🔔", `New order ${v.shortId}`, lines, v.dashboardUrl, "Open dashboard");
-		const text = `🔔 New order ${v.shortId}\n${v.itemCount} item(s) · ${v.totalFormatted}\nCustomer: ${v.customerName}\nMethod: ${deliveryLabel.en[v.deliveryMethod]}\n${v.requiresMockup ? `\n${mockupText}\n` : ""}\nOpen your dashboard to manage this order.\n${v.dashboardUrl}`;
+		const dateText = v.fulfilmentDateLabel ? `\nNeeded by: ${v.fulfilmentDateLabel}` : "";
+		const text = `🔔 New order ${v.shortId}\n${v.itemCount} item(s) · ${v.totalFormatted}\nCustomer: ${v.customerName}\nMethod: ${deliveryLabel.en[v.deliveryMethod]}${dateText}\n${v.requiresMockup ? `\n${mockupText}\n` : ""}\nOpen your dashboard to manage this order.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	orderConfirmed: (v: RetailerEmailVars): RenderedEmail => {
@@ -108,10 +116,14 @@ const en = {
 			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} item(s) · ${escapeHtml(v.totalFormatted)}`,
 			`Customer: ${escapeHtml(v.customerName)}`,
 			`Method: ${deliveryLabel.en[v.deliveryMethod]}`,
+			...(v.fulfilmentDateLabel
+				? [`📅 Needed by: <strong>${escapeHtml(v.fulfilmentDateLabel)}</strong>`]
+				: []),
 			nextStepsHtml,
 		];
 		const html = wrapHtml("✅", `Order ${v.shortId} confirmed`, lines, v.dashboardUrl, "Open dashboard");
-		const text = `✅ Order ${v.shortId} confirmed\n${v.itemCount} item(s) · ${v.totalFormatted}\nCustomer: ${v.customerName}\nMethod: ${deliveryLabel.en[v.deliveryMethod]}\n\n${nextStepsText}\n${v.dashboardUrl}`;
+		const dateText = v.fulfilmentDateLabel ? `\nNeeded by: ${v.fulfilmentDateLabel}` : "";
+		const text = `✅ Order ${v.shortId} confirmed\n${v.itemCount} item(s) · ${v.totalFormatted}\nCustomer: ${v.customerName}\nMethod: ${deliveryLabel.en[v.deliveryMethod]}${dateText}\n\n${nextStepsText}\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	paymentClaimed: (v: RetailerEmailVars): RenderedEmail => {
@@ -194,11 +206,15 @@ const ms = {
 			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} item · ${escapeHtml(v.totalFormatted)}`,
 			`Pelanggan: ${escapeHtml(v.customerName)}`,
 			`Kaedah: ${deliveryLabel.ms[v.deliveryMethod]}`,
+			...(v.fulfilmentDateLabel
+				? [`📅 Diperlukan menjelang: <strong>${escapeHtml(v.fulfilmentDateLabel)}</strong>`]
+				: []),
 			...(v.requiresMockup ? [mockupHtml] : []),
 			`Buka dashboard anda untuk menguruskan pesanan ini.`,
 		];
 		const html = wrapHtml("🔔", `Pesanan baru ${v.shortId}`, lines, v.dashboardUrl, "Buka dashboard");
-		const text = `🔔 Pesanan baru ${v.shortId}\n${v.itemCount} item · ${v.totalFormatted}\nPelanggan: ${v.customerName}\nKaedah: ${deliveryLabel.ms[v.deliveryMethod]}\n${v.requiresMockup ? `\n${mockupText}\n` : ""}\nBuka dashboard anda untuk menguruskan pesanan ini.\n${v.dashboardUrl}`;
+		const dateText = v.fulfilmentDateLabel ? `\nDiperlukan menjelang: ${v.fulfilmentDateLabel}` : "";
+		const text = `🔔 Pesanan baru ${v.shortId}\n${v.itemCount} item · ${v.totalFormatted}\nPelanggan: ${v.customerName}\nKaedah: ${deliveryLabel.ms[v.deliveryMethod]}${dateText}\n${v.requiresMockup ? `\n${mockupText}\n` : ""}\nBuka dashboard anda untuk menguruskan pesanan ini.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	orderConfirmed: (v: RetailerEmailVars): RenderedEmail => {
@@ -213,10 +229,14 @@ const ms = {
 			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} item · ${escapeHtml(v.totalFormatted)}`,
 			`Pelanggan: ${escapeHtml(v.customerName)}`,
 			`Kaedah: ${deliveryLabel.ms[v.deliveryMethod]}`,
+			...(v.fulfilmentDateLabel
+				? [`📅 Diperlukan menjelang: <strong>${escapeHtml(v.fulfilmentDateLabel)}</strong>`]
+				: []),
 			nextStepsHtml,
 		];
 		const html = wrapHtml("✅", `Pesanan ${v.shortId} disahkan`, lines, v.dashboardUrl, "Buka dashboard");
-		const text = `✅ Pesanan ${v.shortId} telah disahkan\n${v.itemCount} item · ${v.totalFormatted}\nPelanggan: ${v.customerName}\nKaedah: ${deliveryLabel.ms[v.deliveryMethod]}\n\n${nextStepsText}\n${v.dashboardUrl}`;
+		const dateText = v.fulfilmentDateLabel ? `\nDiperlukan menjelang: ${v.fulfilmentDateLabel}` : "";
+		const text = `✅ Pesanan ${v.shortId} telah disahkan\n${v.itemCount} item · ${v.totalFormatted}\nPelanggan: ${v.customerName}\nKaedah: ${deliveryLabel.ms[v.deliveryMethod]}${dateText}\n\n${nextStepsText}\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	paymentClaimed: (v: RetailerEmailVars): RenderedEmail => {

@@ -45,19 +45,27 @@ Everything else maps directly; bulk actions (the remaining AC) shipped in Phase 
 ## Backend — `searchOrders` (one query, in-memory)
 
 `convex/orders.ts` → `searchOrders({ retailerId, bucket, paymentStatuses?,
-dateFrom?, dateTo?, searchText?, limit? })` (owner-only). It scans the retailer's
+paymentMethods?, methodUnspecified?, dateFrom?, dateTo?, fulfilmentWindow?,
+mockupPending?, searchText?, limit? })` (owner-only). It scans the retailer's
 orders once (`by_retailer`, newest-first, capped at `MAX_INBOX_SCAN = 1000`) and
 returns **the filtered page plus the per-bucket counts in a single subscription**:
 `{ orders, total, counts, capped }`.
 
+- **Default sort = fulfilment date ascending** (soonest-first), so the seller
+  works the most urgent orders top-down. Orders without a `fulfilmentDate`
+  (legacy / any path that didn't capture one) sink to the bottom, then fall back
+  to newest-created. The scan is newest-first; the result is re-sorted in-memory.
+  See [`fulfilment-date.md`](./fulfilment-date.md).
 - **Counts** are over the full set, independent of the active filters/search, so
   the chips always show true totals.
-- **Filtering** (bucket statuses, payment — `undefined` reads as `unpaid` —, date
-  on `createdAt`, and a cross-cutting **`mockupPending`** toggle = mockupStatus
-  pending/changes_requested) and **search** (order #, customer name partial/CI,
-  phone by trailing digits ≥4, **and item name/variant** — cheap since the orders
-  are already in memory) are in-memory. `counts` also carries `mockupPending` (the
-  count behind the "Needs mockup" chip).
+- **Filtering** (bucket statuses, payment — `undefined` reads as `unpaid` —,
+  payment method, date on `createdAt`, a **`fulfilmentWindow`** chip — today /
+  tomorrow / this-week on the order's `fulfilmentDate` — and a cross-cutting
+  **`mockupPending`** toggle = mockupStatus pending/changes_requested) and
+  **search** (order #, customer name partial/CI, phone by trailing digits ≥4,
+  **and item name/variant** — cheap since the orders are already in memory) are
+  in-memory. `counts` also carries `mockupPending` (the count behind the "Needs
+  mockup" chip).
 - **Why in-memory, not indexed pagination + Aggregate:** at the Phase-1 target
   (≤500 orders/retailer) a single bounded scan is simpler and correct, and it
   unifies browse + search + counts. `capped` flags when a retailer exceeds the
@@ -74,10 +82,15 @@ helpers (`statusAgeMs`, `formatStatusAge`, `statusAgeSeverity`).
 ## Frontend
 
 - **`src/routes/app.orders.index.tsx`** — URL is the source of truth (TanStack
-  `validateSearch`: `bucket`, `q`, `pay[]`, `from`, `to`; all optional, defaults
-  kept out of the URL). Debounced search drives the query and mirrors into `?q`.
-  Bucket chips show counts (New highlighted). "Load more" raises an in-query
-  `limit`. Per-bucket empty states ("No new orders — you're all caught up 🎉").
+  `validateSearch`: `bucket`, `q`, `pay[]`, `method[]`, `munspec`, `from`, `to`,
+  `mockup`, `fwin`; all optional, defaults kept out of the URL). Debounced search
+  drives the query and mirrors into `?q`. Bucket chips show counts (New
+  highlighted). A **"Due" chip row** (Today / Tomorrow / This week, driving
+  `fwin`) sits inline above the advanced filters — fulfilment urgency is a
+  primary axis for F&B sellers, not a buried filter. Each order row carries a
+  **fulfilment-date badge** (`fulfilment-date-badge.tsx`) that leads with urgency
+  (Overdue / Today / Tomorrow coloured). "Load more" raises an in-query `limit`.
+  Per-bucket empty states ("No new orders — you're all caught up 🎉").
 - **`order-time-badge.tsx`** — "time in status" pill (e.g. "2h"). Only **pending**
   escalates: amber >4h, red >24h (the missed-order risk window); other statuses
   are neutral.

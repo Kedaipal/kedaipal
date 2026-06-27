@@ -463,6 +463,7 @@ function SettingsRoute() {
 					retailerId={retailer._id}
 					offerSelfCollect={retailer.offerSelfCollect ?? false}
 					offerDelivery={retailer.offerDelivery ?? true}
+					minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
 				/>
 			) : null}
 

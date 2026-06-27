@@ -13,6 +13,7 @@ import {
 	renderRetailerEmail,
 	type RetailerEmailKey,
 } from "./lib/emailCopy";
+import { formatFulfilmentDate } from "./lib/fulfilmentDate";
 
 /**
  * Internal query for the email action to load order + retailer email + locale.
@@ -35,6 +36,7 @@ export const getOrderForRetailerEmail = internalQuery({
 		currency: string;
 		customerName: string;
 		deliveryMethod: DeliveryMethod;
+		fulfilmentDate: number | undefined;
 		notifyEmail: string | undefined;
 		storeName: string;
 		locale: Locale;
@@ -55,6 +57,7 @@ export const getOrderForRetailerEmail = internalQuery({
 			currency: order.currency,
 			customerName: order.customer.name ?? "Anonymous",
 			deliveryMethod: (order.deliveryMethod as DeliveryMethod | undefined) ?? "delivery",
+			fulfilmentDate: order.fulfilmentDate,
 			notifyEmail: retailer.notifyEmail,
 			storeName: retailer.storeName,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
@@ -158,6 +161,7 @@ export const notifyRetailerOrderAlert = internalAction({
 			currency: string;
 			customerName: string;
 			deliveryMethod: DeliveryMethod;
+			fulfilmentDate: number | undefined;
 			notifyEmail: string | undefined;
 			storeName: string;
 			locale: Locale;
@@ -198,6 +202,10 @@ export const notifyRetailerOrderAlert = internalAction({
 			storeName: meta.storeName,
 			dashboardUrl,
 			requiresMockup: meta.requiresMockup,
+			fulfilmentDateLabel:
+				meta.fulfilmentDate !== undefined
+					? formatFulfilmentDate(meta.fulfilmentDate)
+					: undefined,
 		});
 
 		try {

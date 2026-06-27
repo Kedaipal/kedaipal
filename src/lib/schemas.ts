@@ -147,6 +147,12 @@ export const checkoutFormSchema = z
 		// "required" check lives in the submit handler because it depends on
 		// runtime data (the live location count) not knowable to the schema.
 		pickupLocationId: z.string(),
+		// When the buyer needs the order, as a native-date "YYYY-MM-DD" string.
+		// Required at checkout (the lean Date Picker spec). The actual [min, max]
+		// range depends on runtime data (today + the retailer's notice setting), so
+		// the precise range check lives in the submit handler — here we only require
+		// that a day was picked. Empty string = nothing chosen yet.
+		fulfilmentDate: z.string().min(1, "Pick when you need this order"),
 		// Optional free-text instruction for the seller. Always a string in form
 		// state (empty allowed); trimmed to undefined at submit. Cap mirrors the
 		// server (MAX_CUSTOMER_NOTE in convex/orders.ts).

@@ -4,7 +4,10 @@ import { convexTest } from "convex-test";
 import { describe, expect, test } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { todayMytMidnight } from "./lib/fulfilmentDate";
 import schema from "./schema";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 const modules = import.meta.glob("./**/*.ts");
 
@@ -3354,5 +3357,219 @@ describe("orders — delivery offered gating", () => {
 			pickupLocationId,
 		});
 		expect(shortId).toMatch(/^ORD-[A-Z2-9]{4}$/);
+	});
+});
+
+describe("fulfilment date", () => {
+	async function orderByShortId(t: ReturnType<typeof setup>, shortId: string) {
+		return t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+	}
+
+	test("stores a valid fulfilment date on the order", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const date = todayMytMidnight() + 3 * DAY_MS;
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+			fulfilmentDate: date,
+		});
+		const order = await orderByShortId(t, shortId);
+		expect(order?.fulfilmentDate).toBe(date);
+	});
+
+	test("rejects a date sooner than a configured notice", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.retailers.updateSettings, {
+			minFulfilmentNoticeDays: 2,
+		});
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+				fulfilmentDate: todayMytMidnight() + DAY_MS, // tomorrow — too soon with notice 2
+			}),
+		).rejects.toThrow(/too soon/);
+	});
+
+	test("default (unset) notice allows same-day", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+			fulfilmentDate: todayMytMidnight(), // today OK — default notice is now 0
+		});
+		const order = await orderByShortId(t, shortId);
+		expect(order?.fulfilmentDate).toBe(todayMytMidnight());
+	});
+
+	test("rejects a non-midnight value and a date beyond 30 days", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const base = {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR" as const,
+			channel: "whatsapp" as const,
+			customer,
+			deliveryAddress: validAddress,
+		};
+		await expect(
+			t.mutation(api.orders.create, {
+				...base,
+				fulfilmentDate: todayMytMidnight() + 3 * DAY_MS + 1,
+			}),
+		).rejects.toThrow(/whole calendar day/);
+		await expect(
+			t.mutation(api.orders.create, {
+				...base,
+				fulfilmentDate: todayMytMidnight() + 31 * DAY_MS,
+			}),
+		).rejects.toThrow(/30 days/);
+	});
+
+	test("notice 0 allows same-day fulfilment", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.retailers.updateSettings, {
+			minFulfilmentNoticeDays: 0,
+		});
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+			fulfilmentDate: todayMytMidnight(), // same-day now allowed
+		});
+		const order = await orderByShortId(t, shortId);
+		expect(order?.fulfilmentDate).toBe(todayMytMidnight());
+	});
+
+	test("updateSettings rejects an out-of-range notice", async () => {
+		const t = setup();
+		await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await expect(
+			asA.mutation(api.retailers.updateSettings, {
+				minFulfilmentNoticeDays: 99,
+			}),
+		).rejects.toThrow(/between 0 and 30/);
+		await expect(
+			asA.mutation(api.retailers.updateSettings, {
+				minFulfilmentNoticeDays: -1,
+			}),
+		).rejects.toThrow(/between 0 and 30/);
+	});
+
+	test("inbox sorts by fulfilment date ascending, dateless orders last", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const mk = (fulfilmentDate?: number) =>
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+				fulfilmentDate,
+			});
+		// Insert out of date order: far, then dateless, then soon.
+		await mk(todayMytMidnight() + 5 * DAY_MS);
+		await mk(undefined);
+		await mk(todayMytMidnight() + 2 * DAY_MS);
+
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		const dates = res.orders.map((o) => o.fulfilmentDate);
+		expect(dates).toEqual([
+			todayMytMidnight() + 2 * DAY_MS,
+			todayMytMidnight() + 5 * DAY_MS,
+			undefined,
+		]);
+	});
+
+	test("fulfilmentWindow filter matches today / tomorrow / this_week", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.retailers.updateSettings, {
+			minFulfilmentNoticeDays: 0,
+		});
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const mk = (fulfilmentDate: number) =>
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+				fulfilmentDate,
+			});
+		const today = todayMytMidnight();
+		await mk(today);
+		await mk(today + 1 * DAY_MS);
+		await mk(today + 5 * DAY_MS);
+
+		const todayRes = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			fulfilmentWindow: "today",
+		});
+		expect(todayRes.orders.map((o) => o.fulfilmentDate)).toEqual([today]);
+
+		const tomorrowRes = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			fulfilmentWindow: "tomorrow",
+		});
+		expect(tomorrowRes.orders.map((o) => o.fulfilmentDate)).toEqual([
+			today + 1 * DAY_MS,
+		]);
+
+		const weekRes = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			fulfilmentWindow: "this_week",
+		});
+		// All three are within the next 7 days, returned soonest-first.
+		expect(weekRes.orders.map((o) => o.fulfilmentDate)).toEqual([
+			today,
+			today + 1 * DAY_MS,
+			today + 5 * DAY_MS,
+		]);
 	});
 });

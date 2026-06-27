@@ -28,6 +28,7 @@ import type * as lib_currency from "../lib/currency.js";
 import type * as lib_customer from "../lib/customer.js";
 import type * as lib_email from "../lib/email.js";
 import type * as lib_emailCopy from "../lib/emailCopy.js";
+import type * as lib_fulfilmentDate from "../lib/fulfilmentDate.js";
 import type * as lib_inboundIntent from "../lib/inboundIntent.js";
 import type * as lib_legal from "../lib/legal.js";
 import type * as lib_mapsUrl from "../lib/mapsUrl.js";
@@ -82,6 +83,7 @@ declare const fullApi: ApiFromModules<{
   "lib/customer": typeof lib_customer;
   "lib/email": typeof lib_email;
   "lib/emailCopy": typeof lib_emailCopy;
+  "lib/fulfilmentDate": typeof lib_fulfilmentDate;
   "lib/inboundIntent": typeof lib_inboundIntent;
   "lib/legal": typeof lib_legal;
   "lib/mapsUrl": typeof lib_mapsUrl;

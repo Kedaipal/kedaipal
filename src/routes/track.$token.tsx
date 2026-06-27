@@ -2,6 +2,7 @@ import { createFileRoute, notFound } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import {
 	BadgeCheck,
+	CalendarDays,
 	CheckCircle,
 	Clock,
 	ExternalLink,
@@ -20,6 +21,7 @@ import {
 import { type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
+import { formatFulfilmentDate } from "../../convex/lib/fulfilmentDate";
 import { isMockupGateClosed } from "../../convex/lib/order";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
@@ -597,7 +599,7 @@ function TrackingRoute() {
 				<a
 					href={order.carrierTrackingUrl}
 					target="_blank"
-					rel="noreferrer"
+					rel="noopener noreferrer"
 					className="mt-6 flex items-center justify-center gap-2 rounded-2xl border border-accent/40 bg-accent/5 px-4 py-3 text-sm font-semibold text-accent transition-colors hover:bg-accent/10"
 				>
 					<Truck className="size-4" />
@@ -662,7 +664,7 @@ function TrackingRoute() {
 							<a
 								href={mapsUrl}
 								target="_blank"
-								rel="noreferrer"
+								rel="noopener noreferrer"
 								className="flex items-center gap-1.5 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
 							>
 								<MapPin className="size-3.5" />
@@ -687,6 +689,17 @@ function TrackingRoute() {
 				)}
 				{isSelfCollect ? "Self Collect" : "Delivery"}
 			</div>
+
+			{/* Fulfilment date the buyer chose — reassures them the seller has it. */}
+			{order.fulfilmentDate !== undefined ? (
+				<div className="mt-2 flex items-center gap-2 rounded-xl bg-accent/5 px-3 py-2 text-sm font-medium text-foreground">
+					<CalendarDays className="size-4 text-accent" />
+					{isSelfCollect ? "Collect on " : "Delivery on "}
+					<span className="font-semibold">
+						{formatFulfilmentDate(order.fulfilmentDate)}
+					</span>
+				</div>
+			) : null}
 
 			<AddressEditDialog
 				open={editingAddress}
@@ -832,7 +845,7 @@ function PickupNavButtons({
 				<a
 					href={wazeUrl}
 					target="_blank"
-					rel="noreferrer"
+					rel="noopener noreferrer"
 					className="flex items-center justify-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2.5 text-xs font-semibold text-foreground transition-colors hover:bg-accent/5"
 				>
 					<MapPin className="size-3.5 text-accent" aria-hidden="true" />
@@ -841,7 +854,7 @@ function PickupNavButtons({
 				<a
 					href={googleUrl}
 					target="_blank"
-					rel="noreferrer"
+					rel="noopener noreferrer"
 					className="flex items-center justify-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2.5 text-xs font-semibold text-foreground transition-colors hover:bg-accent/5"
 				>
 					<MapPin className="size-3.5 text-accent" aria-hidden="true" />
@@ -856,7 +869,7 @@ function PickupNavButtons({
 			<a
 				href={googleUrl}
 				target="_blank"
-				rel="noreferrer"
+				rel="noopener noreferrer"
 				className="flex items-center gap-1.5 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
 			>
 				<ExternalLink className="size-3.5" />
@@ -870,7 +883,7 @@ function PickupNavButtons({
 			<a
 				href={snapshot.mapsUrl}
 				target="_blank"
-				rel="noreferrer"
+				rel="noopener noreferrer"
 				className="flex items-center gap-1.5 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
 			>
 				<ExternalLink className="size-3.5" />

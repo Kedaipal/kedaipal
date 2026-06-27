@@ -40,14 +40,57 @@ template).
 
 ---
 
+## Multiple concurrent checkouts + draft persistence (2026-06-27)
+
+Real counters serve several customers at once, and a vendor will refresh / lose
+connection / step away mid-order. So the flow is **multi-session and resumable**,
+not a single ephemeral in-memory session:
+
+- **The active checkout lives in the URL** (`/app/checkout?session=<id>`), so a
+  refresh or reconnect lands the vendor right back on it.
+- **The home view is a list of open checkouts** (`listOpenSessions` → all the
+  retailer's `awaiting_buyer` + `buyer_identified` sessions) with buyer name,
+  draft item count, and age. Each can be **resumed** or **cancelled**; "Start
+  checkout" opens a new one. A vendor can juggle several customers freely. The
+  **3-day TTL is surfaced in the list copy** so the vendor knows where abandoned
+  checkouts go (CLAUDE.md: make every feature discoverable). On resume, a saved
+  cart line whose variant was since deactivated/deleted is dropped **with a toast**
+  ("N item(s) no longer available"), never silently.
+- **`getCheckoutSession` returns `null` for a not-found OR not-owned id** (not a
+  thrown `Forbidden`). The active session is URL-addressable now, so a stale or
+  foreign id degrades to the friendly "checkout not found" screen instead of an
+  unhandled crash — and never reveals whether another store's session exists.
+- **The in-progress cart is autosaved to the session** (`draft` field:
+  items + fulfilment date + paid/method), debounced (~700ms) via
+  `saveSessionDraft`. On resume, `BuildOrderScreen` hydrates the cart from the
+  draft once the catalog loads (to resolve names/prices), guarded so our own
+  autosaves echoing back never clobber live edits. Price/stock stay
+  authoritative at `createOrderFromSession` — the draft is a scratchpad.
+- **Two TTLs.** The unscanned QR keeps the short **10-min** window
+  (`SESSION_TTL_MS`) — the token is live then. Once bound, the session becomes a
+  seller-owned in-progress order and gets a **3-day idle window**
+  (`OPEN_SESSION_TTL_MS`) that **slides on every draft edit**; `bindCheckoutSession`
+  promotes the expiry, `saveSessionDraft` bumps it. Abandoned ones are swept by
+  the cron so the open-checkouts list stays clean. `effectiveStatus` treats a
+  past-window bound session as `expired` even before the cron flips the row.
+
 ## Schema (`convex/schema.ts`)
 
 `counterCheckoutSessions`: `retailerId`, `sellerUserId` (Clerk), `token`,
 `status` (`awaiting_buyer | buyer_identified | completed | expired | cancelled`),
 `customerId?`, `waPhone?`, `waProfileName?`, `isNewCustomer?`, `orderId?`,
-`boundAt?`, `expiresAt`, timestamps.
-Indexes: `by_token` (bind lookup), `by_retailer_status` (seller's active list),
-`by_status_expiry` (expiry cron range-scan).
+`draft?` (`{ items[], fulfilmentDate?, paidInPerson?, paymentMethod? }` — autosaved
+in-progress order), `boundAt?`, `expiresAt`, timestamps.
+Indexes: `by_token` (bind lookup), `by_retailer_status` (seller's open list),
+`by_status_expiry` (expiry cron range-scan — now sweeps `awaiting_buyer` then
+chains to `buyer_identified`).
+
+**Fulfilment date:** counter orders capture an optional collection date
+(defaults to **today**, the walk-in case) validated against a 0-day notice — the
+seller is keying it in person, so today is always valid regardless of the
+storefront `minFulfilmentNoticeDays`. See [`fulfilment-date.md`](./fulfilment-date.md).
+After a **paid-in-person** order is created, the success screen offers an
+optional **"Mark as completed"** button (one tap → `delivered`).
 
 **Identity = optional, three converging paths, one record:** token-scan (happy,
 **built**), manual phone entry (**pending**), anonymous walk-in / cash
@@ -73,16 +116,48 @@ Indexes: `by_token` (bind lookup), `by_retailer_status` (seller's active list),
   regardless of whether the 5-min cron has swept it yet (otherwise the cron's
   timing would flip the buyer message between "expired" and a generic reply).
 
-## Constraints
+## Made-to-order / custom items at the counter (2026-06-27)
 
-- **Mockup-gated items can't be sold at the counter (V1).** Any variant where
-  `requiresProof` resolves true is **excluded from the catalog** (`app.checkout.tsx`)
-  **and rejected server-side** (`createOrderFromSession`). Their flow defers
-  payment until the buyer approves a design on the tracking page, which is
-  incompatible with the at-the-counter pay-now/confirmed model — and would
-  otherwise produce an order with no mockup gate. See
-  [`proof-approval.md`](./proof-approval.md). (A counter + mockup flow is a
-  deliberate later feature, not V1.)
+Counter Checkout **sells made-to-order items** — both `isCustom` (quote) lines
+and fixed-price `requiresProof` ("needs design approval") variants. They were
+originally blocked (the storefront mockup-approval round-trip defers payment
+until the buyer signs off a design on their tracking page, which fights the
+at-the-counter pay-now model). **In person that round-trip is moot** — design +
+price are agreed face-to-face — so the block is lifted:
+
+- **Catalog** shows all active variants (`app.checkout.tsx`). A **custom (quote)
+  line has no catalog price**, so its row exposes an inline **RM price input**;
+  the vendor types the agreed price, then adds. Fixed-price `requiresProof`
+  variants use their normal price (no entry).
+- **No mockup gate.** Counter orders are created `confirmed` with no
+  `mockupStatus` — there's nothing to approve, the buyer has it (or will collect).
+  No image is required either.
+- **Price trust boundary.** `createOrderFromSession` takes a per-item
+  `unitPrice`, but trusts it **only for `isCustom` lines** (validated as a
+  positive integer in sen — the **same rule as any product price**, no upper cap,
+  since the vendor's business could be high-value: watches, renovations, B2B
+  services); every normal line always uses the authoritative `variant.price`, so a
+  tampered client can't reprice a fixed product. That custom-only trust — not any
+  ceiling — is the actual security control. The vendor-set price is autosaved on
+  the draft (`unitPrice`) so a resume restores it.
+
+See [`custom-option.md`](./custom-option.md) and
+[`proof-approval.md`](./proof-approval.md).
+
+## Review-before-create (no price ceiling)
+
+Counter prices have **no upper cap** — same rule as any product price (positive
+integer in sen); the vendor's business could legitimately be high-value (watches,
+renovations, B2B services). The guard against a fat-fingered amount (an extra
+zero: RM 5M instead of RM 500k) is **not** an arbitrary limit but a **mandatory
+review step**: tapping **"Review order"** opens a confirm modal
+(`ConfirmCheckoutDialog`) that lays out every line (qty × unit price → line
+total), the collection date, the payment method, and the grand total before the
+order is created — the same "look before you pay" beat a normal storefront gives.
+The small cart panel is easy to skim past on a busy day, so the full breakdown is
+forced into view. **Counter-only:** the storefront buyer already reviews their own
+cart before sending the order, so the standard order flow (incl. marking complete)
+is unchanged.
 
 ## Observability / PII note
 

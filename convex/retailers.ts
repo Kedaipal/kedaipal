@@ -164,6 +164,7 @@ import type { Id } from "./_generated/dataModel";
 import { internalMutation, mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
 import { ConvexError } from "convex/values";
 import { reserveFoundingRank } from "./foundingMembers";
+import { MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
 import { rateLimiter } from "./lib/rateLimiter";
 import { capsForPlan, DAY_MS, TRIAL_DAYS } from "./lib/plans";
 import {
@@ -354,6 +355,9 @@ type RetailerPublic = {
 	// had delivery). Storefront and settings invariant guarantee ≥1 working
 	// method, so the buyer always sees a way to receive their order.
 	offerDelivery?: boolean;
+	// Minimum days' notice before a fulfilment date — drives the storefront date
+	// picker's earliest selectable day. Undefined → 0 (same-day allowed).
+	minFulfilmentNoticeDays?: number;
 	// Whether the retailer has opened the Pickup settings tab at least once.
 	// Drives checklist step-4 dismissal — set to true on first tab visit by
 	// `markPickupSetupSeen`.
@@ -425,6 +429,7 @@ async function loadRetailerForUser(
 		paymentMethods,
 		offerSelfCollect: row.offerSelfCollect,
 		offerDelivery: row.offerDelivery,
+		minFulfilmentNoticeDays: row.minFulfilmentNoticeDays,
 		pickupSetupSeen: row.pickupSetupSeen,
 		termsVersion: row.termsVersion,
 		privacyVersion: row.privacyVersion,
@@ -501,6 +506,7 @@ export const getRetailerBySlug = query({
 						| undefined,
 					offerSelfCollect: active.offerSelfCollect,
 					offerDelivery: active.offerDelivery,
+					minFulfilmentNoticeDays: active.minFulfilmentNoticeDays,
 					// Founding badge is public-safe; subscription state is NOT included.
 					isFoundingMember: active.isFoundingMember,
 					foundingMemberRank: active.foundingMemberRank,
@@ -818,6 +824,8 @@ export const updateSettings = mutation({
 		logoStorageId: v.optional(v.string()),
 		offerSelfCollect: v.optional(v.boolean()),
 		offerDelivery: v.optional(v.boolean()),
+		// Minimum days' notice before a fulfilment date. Clamped to [0, 30].
+		minFulfilmentNoticeDays: v.optional(v.number()),
 	},
 	handler: async (ctx, args): Promise<{ ok: true }> => {
 		const userId = await requireUserId(ctx);
@@ -844,6 +852,7 @@ export const updateSettings = mutation({
 			paymentMethods: PaymentMethod[] | undefined;
 			offerSelfCollect: boolean;
 			offerDelivery: boolean;
+			minFulfilmentNoticeDays: number;
 			updatedAt: number;
 		}> = { updatedAt: Date.now() };
 
@@ -927,6 +936,15 @@ export const updateSettings = mutation({
 		}
 		if (args.offerDelivery !== undefined) {
 			patch.offerDelivery = args.offerDelivery;
+		}
+		if (args.minFulfilmentNoticeDays !== undefined) {
+			const n = args.minFulfilmentNoticeDays;
+			if (!Number.isInteger(n) || n < 0 || n > MAX_NOTICE_DAYS) {
+				throw new ConvexError(
+					`Minimum notice must be a whole number between 0 and ${MAX_NOTICE_DAYS} days`,
+				);
+			}
+			patch.minFulfilmentNoticeDays = n;
 		}
 
 		// Fulfilment invariant: a storefront must always keep at least one WORKING

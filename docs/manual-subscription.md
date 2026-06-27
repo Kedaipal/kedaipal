@@ -291,7 +291,10 @@ backfill no longer mints comped subscriptions.
   **dismissable** for the session; red non-dismissable **past_due** CTA with
   `wa.me`. Pure decision in `resolveBannerState`), Billing settings tab
   (`billing-tab.tsx` — plan/status, pending invoice + how-to-pay, founding ribbon,
-  history). Pure helpers + tests in `src/lib/subscription.ts`. **Remaining (light):**
+  history, **+ an always-on "Questions about billing?" support card** — WhatsApp
+  (`billing.paymentInstructions.whatsappPhone`) + email (`hello@kedaipal.com`) —
+  rendered for **every** retailer regardless of plan/tier/status so they can
+  always reach us). Pure helpers + tests in `src/lib/subscription.ts`. **Remaining (light):**
   the dashboard's one-time "Schedule your white-glove call" CTA on rank assignment
   (the day-14 pay nudge is already covered by the banner).
   **Payment details are admin-editable in the UI** (not env) — see Phase 4.
