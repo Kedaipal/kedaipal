@@ -504,6 +504,28 @@ describe("counterCheckout — createOrderFromSession", () => {
 		expect(order?.mockupStatus).toBeUndefined();
 	});
 
+	test("a high-value custom price is accepted — no upper cap", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedCustomVariant(t, USER_A, retailer._id);
+		const sessionId = await boundSession(t, retailer._id);
+
+		// RM 500,000 — above the old RM 100k ceiling. A vendor's business can be
+		// high-value (watches, renovations, B2B); the guard is the review modal,
+		// not a hardcoded cap. Locks the "no cap" behaviour against regression.
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1, unitPrice: 500_000_00 }],
+				paidInPerson: true,
+				paymentMethod: "bank_transfer",
+			});
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.items[0]?.price).toBe(500_000_00);
+		expect(order?.total).toBe(500_000_00);
+	});
+
 	test("a custom line without a valid price is rejected", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
