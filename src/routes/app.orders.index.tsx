@@ -433,7 +433,7 @@ function OrdersRoute() {
 								aria-pressed={active}
 								onClick={() => setFwin(w.value)}
 								className={cn(
-									"inline-flex h-8 items-center gap-1.5 rounded-full border px-3.5 text-sm font-medium transition-colors",
+									"inline-flex h-11 items-center gap-1.5 rounded-full border px-4 text-sm font-medium transition-colors",
 									active
 										? "border-accent bg-accent text-accent-foreground"
 										: "border-border bg-background text-muted-foreground hover:border-accent/40 hover:text-foreground",

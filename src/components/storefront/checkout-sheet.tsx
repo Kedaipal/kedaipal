@@ -684,7 +684,7 @@ function PickupSummaryCard({ location }: { location: PublicPickupLocation }) {
 							<a
 								href={mapsUrl}
 								target="_blank"
-								rel="noreferrer"
+								rel="noopener noreferrer"
 								className="flex items-center gap-1 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
 							>
 								<ExternalLink className="size-3" />
@@ -752,7 +752,7 @@ function PickupLocationRadioList({
 									<a
 										href={mapsUrl}
 										target="_blank"
-										rel="noreferrer"
+										rel="noopener noreferrer"
 										onClick={(e) => e.stopPropagation()}
 										className="flex items-center gap-1 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
 									>

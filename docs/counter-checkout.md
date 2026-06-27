@@ -51,7 +51,15 @@ not a single ephemeral in-memory session:
 - **The home view is a list of open checkouts** (`listOpenSessions` → all the
   retailer's `awaiting_buyer` + `buyer_identified` sessions) with buyer name,
   draft item count, and age. Each can be **resumed** or **cancelled**; "Start
-  checkout" opens a new one. A vendor can juggle several customers freely.
+  checkout" opens a new one. A vendor can juggle several customers freely. The
+  **3-day TTL is surfaced in the list copy** so the vendor knows where abandoned
+  checkouts go (CLAUDE.md: make every feature discoverable). On resume, a saved
+  cart line whose variant was since deactivated/deleted is dropped **with a toast**
+  ("N item(s) no longer available"), never silently.
+- **`getCheckoutSession` returns `null` for a not-found OR not-owned id** (not a
+  thrown `Forbidden`). The active session is URL-addressable now, so a stale or
+  foreign id degrades to the friendly "checkout not found" screen instead of an
+  unhandled crash — and never reveals whether another store's session exists.
 - **The in-progress cart is autosaved to the session** (`draft` field:
   items + fulfilment date + paid/method), debounced (~700ms) via
   `saveSessionDraft`. On resume, `BuildOrderScreen` hydrates the cart from the

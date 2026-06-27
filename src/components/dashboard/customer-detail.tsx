@@ -69,7 +69,7 @@ export function CustomerDetail({
 					<a
 						href={`https://wa.me/${customer.waPhone}`}
 						target="_blank"
-						rel="noreferrer"
+						rel="noopener noreferrer"
 						className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-green-500/10 text-green-600 transition-colors hover:bg-green-500/20"
 						aria-label="Message on WhatsApp"
 					>

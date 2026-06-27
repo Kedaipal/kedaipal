@@ -337,7 +337,7 @@ function DashboardHome() {
 						</p>
 						<div className="mt-2 flex gap-2">
 							<Button asChild className="h-11 flex-1">
-								<a href={`/${retailer.slug}`} target="_blank" rel="noreferrer">
+								<a href={`/${retailer.slug}`} target="_blank" rel="noopener noreferrer">
 									Open store
 								</a>
 							</Button>

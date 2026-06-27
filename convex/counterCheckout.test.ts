@@ -82,7 +82,7 @@ describe("counterCheckout — create", () => {
 });
 
 describe("counterCheckout — read + ownership", () => {
-	test("owner reads the session; a non-owner is forbidden", async () => {
+	test("owner reads the session; a non-owner gets null (graceful, no leak)", async () => {
 		const t = setup();
 		await seedRetailer(t, USER_A);
 		await seedRetailer(t, USER_B);
@@ -93,11 +93,13 @@ describe("counterCheckout — read + ownership", () => {
 			.query(api.counterCheckout.getCheckoutSession, { sessionId });
 		expect(own?.status).toBe("awaiting_buyer");
 
-		await expect(
-			t
-				.withIdentity({ subject: USER_B })
-				.query(api.counterCheckout.getCheckoutSession, { sessionId }),
-		).rejects.toThrow(/Forbidden/);
+		// Not-owned resolves to null (→ friendly "not found" UI), not a thrown
+		// Forbidden — the session id is URL-addressable, so a foreign id must
+		// degrade gracefully and not reveal whether the session exists.
+		const foreign = await t
+			.withIdentity({ subject: USER_B })
+			.query(api.counterCheckout.getCheckoutSession, { sessionId });
+		expect(foreign).toBeNull();
 	});
 
 	test("a session past its TTL reads as expired even before the cron flips it", async () => {
@@ -580,5 +582,41 @@ describe("counterCheckout — open sessions + draft", () => {
 		});
 		const session = await t.run((ctx) => ctx.db.get(sessionId));
 		expect(session?.status).toBe("expired");
+	});
+
+	test("saveSessionDraft is forbidden across tenants", async () => {
+		const t = setup();
+		const retailerA = await seedRetailer(t, USER_A);
+		await seedRetailer(t, USER_B);
+		const variantId = await seedVariant(t, USER_A, retailerA._id);
+		const sessionId = await boundSession(t, retailerA._id);
+
+		// USER_B owns a different store and must not write to USER_A's session.
+		await expect(
+			t
+				.withIdentity({ subject: USER_B })
+				.mutation(api.counterCheckout.saveSessionDraft, {
+					sessionId,
+					draft: { items: [{ variantId, quantity: 1 }] },
+				}),
+		).rejects.toThrow(/Forbidden/);
+	});
+
+	test("listOpenSessions is scoped to the caller's own store", async () => {
+		const t = setup();
+		const retailerA = await seedRetailer(t, USER_A);
+		await seedRetailer(t, USER_B);
+		await boundSession(t, retailerA._id); // an open session for A only
+
+		const aSees = await t
+			.withIdentity({ subject: USER_A })
+			.query(api.counterCheckout.listOpenSessions, {});
+		expect(aSees).toHaveLength(1);
+
+		// USER_B sees none of A's open checkouts.
+		const bSees = await t
+			.withIdentity({ subject: USER_B })
+			.query(api.counterCheckout.listOpenSessions, {});
+		expect(bSees).toHaveLength(0);
 	});
 });

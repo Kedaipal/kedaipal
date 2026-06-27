@@ -509,7 +509,7 @@ function OrderDetailRoute() {
 							<a
 								href={proofUrl}
 								target="_blank"
-								rel="noreferrer"
+								rel="noopener noreferrer"
 								className="block overflow-hidden rounded-xl border border-blue-200 bg-white"
 							>
 								<img
@@ -541,7 +541,7 @@ function OrderDetailRoute() {
 						</Button>
 						{askForProofUrl ? (
 							<Button asChild variant="secondary" className="h-11 w-full">
-								<a href={askForProofUrl} target="_blank" rel="noreferrer">
+								<a href={askForProofUrl} target="_blank" rel="noopener noreferrer">
 									<MessageCircle className="size-4" />
 									Ask for proof on WhatsApp
 								</a>
@@ -644,7 +644,7 @@ function OrderDetailRoute() {
 					<a
 						href={`https://wa.me/${order.customer.waPhone}`}
 						target="_blank"
-						rel="noreferrer"
+						rel="noopener noreferrer"
 						className="flex h-11 items-center justify-center gap-2 rounded-xl bg-green-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-green-700"
 					>
 						<MessageCircle className="size-4" />
@@ -780,7 +780,7 @@ function OrderDetailRoute() {
 									<a
 										href={mapsUrl}
 										target="_blank"
-										rel="noreferrer"
+										rel="noopener noreferrer"
 										className="flex h-9 items-center gap-1 rounded-full px-3 text-xs font-medium text-accent hover:bg-accent/10"
 										aria-label="Open in Maps"
 									>
@@ -857,7 +857,7 @@ function OrderDetailRoute() {
 									)}`
 								}
 								target="_blank"
-								rel="noreferrer"
+								rel="noopener noreferrer"
 								className="flex h-9 items-center gap-1 rounded-full px-3 text-xs font-medium text-accent hover:bg-accent/10"
 								aria-label="Open in Maps"
 							>
@@ -924,7 +924,7 @@ function OrderDetailRoute() {
 						<a
 							href={order.carrierTrackingUrl}
 							target="_blank"
-							rel="noreferrer"
+							rel="noopener noreferrer"
 							className="flex items-center gap-2 text-sm text-accent underline underline-offset-2"
 						>
 							<Truck className="size-4 shrink-0" />
@@ -1233,7 +1233,7 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 							key={url}
 							href={url}
 							target="_blank"
-							rel="noreferrer"
+							rel="noopener noreferrer"
 							className="block overflow-hidden rounded-xl border border-border bg-white"
 						>
 							<img
@@ -1518,7 +1518,7 @@ function NotifyManagerCard({
 				<a
 					href={notifyHref}
 					target="_blank"
-					rel="noreferrer"
+					rel="noopener noreferrer"
 					className="flex h-11 items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
 				>
 					<MessageCircle className="size-4" />

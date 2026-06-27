@@ -49,6 +49,10 @@ export const Route = createFileRoute("/app/checkout")({
 
 type SessionId = Id<"counterCheckoutSessions">;
 
+// Surfaced to the vendor so they know where abandoned open checkouts go. Keep in
+// sync with OPEN_SESSION_TTL_MS in convex/counterCheckout.ts (3 days).
+const OPEN_CHECKOUT_TTL_DAYS = 3;
+
 type CreatedOrder = {
 	shortId: string;
 	orderId: Id<"orders">;
@@ -252,6 +256,12 @@ function OpenCheckoutsList({
 				Start checkout
 			</Button>
 
+			<p className="text-xs text-muted-foreground">
+				Run several customers at once and come back to any of them. Unfinished
+				checkouts stay here for {OPEN_CHECKOUT_TTL_DAYS} days, then clear on
+				their own — or cancel one anytime.
+			</p>
+
 			{sessions === undefined ? (
 				<p className="text-sm text-muted-foreground">Loading…</p>
 			) : sessions.length === 0 ? (
@@ -360,7 +370,7 @@ function SessionRow({
 				type="button"
 				onClick={onCancel}
 				aria-label="Cancel checkout"
-				className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-destructive"
+				className="flex size-11 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-destructive"
 			>
 				<Trash2 className="size-4" />
 			</button>
@@ -685,6 +695,17 @@ function BuildOrderScreen({
 			if (v) next.set(it.variantId, { ...v, qty: it.quantity });
 		}
 		if (next.size > 0) setCart(next);
+		// Don't silently shrink the cart: if a saved item was deactivated/deleted
+		// since the autosave, tell the vendor so they're not left thinking they
+		// have items that quietly vanished. (CLAUDE.md: no states that silently confuse.)
+		const dropped = items.length - next.size;
+		if (dropped > 0) {
+			toast.warning(
+				`${dropped} saved item${dropped === 1 ? "" : "s"} ${
+					dropped === 1 ? "is" : "are"
+				} no longer available and ${dropped === 1 ? "was" : "were"} removed.`,
+			);
+		}
 	}, [products, draft]);
 
 	const isSearching = query.trim().length > 0;

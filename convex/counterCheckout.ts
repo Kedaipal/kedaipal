@@ -165,8 +165,11 @@ export const getCheckoutSession = query({
 		const session = await ctx.db.get(sessionId);
 		if (!session) return null;
 		const retailer = await ctx.db.get(session.retailerId);
-		if (!retailer || retailer.userId !== identity.subject)
-			throw new ConvexError("Forbidden");
+		// Not-found and not-owned both resolve to null (not a throw): the active
+		// session id is now URL-addressable, so a stale/foreign id must degrade to
+		// the friendly "checkout not found" screen, never an unhandled crash. null
+		// also avoids leaking whether another store's session exists.
+		if (!retailer || retailer.userId !== identity.subject) return null;
 
 		let displayName: string | undefined;
 		let customer: { orderCount: number; totalSpent: number; lastOrderAt: number } | null =
