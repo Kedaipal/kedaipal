@@ -36,8 +36,11 @@ A submitted date must be a whole MYT day within
 **`[today + minNotice, today + 30]`**:
 
 - **Min** = `today + retailers.minFulfilmentNoticeDays` (the retailer setting,
-  default **1**, **0 allowed** for same-day-capable sellers).
+  default **0 = same-day allowed**; a seller who needs lead time raises it).
 - **Max** = today + 30 days (hardcoded for v1).
+- **Counter Checkout bypasses the notice** — the seller is keying the order in
+  person, so it always validates against a 0-day notice (today is always valid),
+  regardless of the storefront setting.
 
 The mutation arg `fulfilmentDate` is **optional at the protocol level** (so the
 ~90 existing `orders.create` test/call sites and the link-in-bio path don't all
@@ -52,7 +55,7 @@ as `assertValidAddress`).
 | Surface | What shows |
 | --- | --- |
 | Storefront checkout (`checkout-sheet.tsx`) | Required native date picker below the address/pickup block, above the optional note. Bounds from the retailer's notice setting. |
-| Counter Checkout (`app.checkout.tsx`) | "Collection date" input, defaulted to the earliest allowed day; seller adjusts for pre-orders. |
+| Counter Checkout (`app.checkout.tsx`) | "Collection date" input **defaulted to today** (the walk-in case); seller adjusts for pre-orders. The order is always created `confirmed`; when it was **paid in person**, the success screen offers an **optional "Mark as completed"** button (one tap → `delivered` via `orders.updateStatus`) so the seller can close out a hand-over sale without clicking through the status pipeline — a choice, not automatic (a paid deposit on an unready item stays confirmed). |
 | Buyer's WhatsApp order message | `🗓️ Collect/Deliver on: Sat, 28 Jun 2026` line, so the seller sees it in-chat immediately. |
 | New-order / order-confirmed email | "📅 Needed by: …" line (en + ms). |
 | Order inbox (`searchOrders`) | **Default sort = fulfilment date ascending** (soonest first; dateless orders sink to the bottom, then newest-created). **Due: Today / Tomorrow / This week** chip filters. Per-card urgency badge. |
@@ -71,7 +74,7 @@ today?" is a primary axis for an F&B seller, not a secondary filter.
 top card ("Order date notice"). A checkout-wide timing rule that governs both
 delivery and pickup, so it lives above the per-method toggles, not in a separate
 "Checkout" tab. Clamped to `[0, 30]`; `updateSettings` rejects out-of-range
-values. Undefined reads as the default (1).
+values. Undefined reads as the default (**0**, same-day allowed).
 
 ## Deliberate non-goals (this PR)
 

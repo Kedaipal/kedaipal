@@ -3388,9 +3388,13 @@ describe("fulfilment date", () => {
 		expect(order?.fulfilmentDate).toBe(date);
 	});
 
-	test("rejects a date sooner than the default 1-day notice", async () => {
+	test("rejects a date sooner than a configured notice", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.retailers.updateSettings, {
+			minFulfilmentNoticeDays: 2,
+		});
 		const productId = await seedProduct(t, USER_A, retailer._id);
 		await expect(
 			t.mutation(api.orders.create, {
@@ -3400,9 +3404,26 @@ describe("fulfilment date", () => {
 				channel: "whatsapp",
 				customer,
 				deliveryAddress: validAddress,
-				fulfilmentDate: todayMytMidnight(), // today — too soon with notice 1
+				fulfilmentDate: todayMytMidnight() + DAY_MS, // tomorrow — too soon with notice 2
 			}),
 		).rejects.toThrow(/too soon/);
+	});
+
+	test("default (unset) notice allows same-day", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+			fulfilmentDate: todayMytMidnight(), // today OK — default notice is now 0
+		});
+		const order = await orderByShortId(t, shortId);
+		expect(order?.fulfilmentDate).toBe(todayMytMidnight());
 	});
 
 	test("rejects a non-midnight value and a date beyond 30 days", async () => {

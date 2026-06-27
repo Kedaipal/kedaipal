@@ -179,10 +179,11 @@ export default defineSchema({
 		// method (delivery, or self-collect with ≥1 active pickup location).
 		offerDelivery: v.optional(v.boolean()),
 		// Minimum days' notice the retailer needs before a fulfilment date. Drives
-		// the lower bound of the checkout date picker (earliest selectable day =
-		// today + this). Undefined → 1 (see DEFAULT_MIN_NOTICE_DAYS); 0 is allowed
-		// so ready-stock sellers can offer same-day. Capped at 30 (the max-notice
-		// ceiling) server-side. See convex/lib/fulfilmentDate.ts.
+		// the lower bound of the storefront date picker (earliest selectable day =
+		// today + this). Undefined → 0 (see DEFAULT_MIN_NOTICE_DAYS) so same-day is
+		// allowed by default; a seller who needs lead time raises it. Capped at 30
+		// (the max-notice ceiling) server-side. NOTE: counter checkout (seller, in
+		// person) ignores this and always allows today. See convex/lib/fulfilmentDate.ts.
 		minFulfilmentNoticeDays: v.optional(v.number()),
 		// Set to true the first time the retailer opens the Pickup settings tab.
 		// Used by the dashboard checklist to mark step 4 done after a single

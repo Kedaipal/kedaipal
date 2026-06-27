@@ -21,8 +21,12 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Hard ceiling on how far ahead a buyer can schedule (v1, hardcoded). */
 export const MAX_NOTICE_DAYS = 30;
-/** Minimum days' notice when a retailer hasn't configured one. */
-export const DEFAULT_MIN_NOTICE_DAYS = 1;
+/**
+ * Minimum days' notice when a retailer hasn't configured one. Defaults to 0
+ * (same-day allowed) — most F&B sellers also take walk-in / same-day orders, and
+ * a seller who needs lead time sets it explicitly in Settings → Fulfilment.
+ */
+export const DEFAULT_MIN_NOTICE_DAYS = 0;
 
 /**
  * Epoch-ms of MYT midnight for a "YYYY-MM-DD" string. Returns NaN when the

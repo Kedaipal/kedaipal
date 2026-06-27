@@ -356,7 +356,7 @@ type RetailerPublic = {
 	// method, so the buyer always sees a way to receive their order.
 	offerDelivery?: boolean;
 	// Minimum days' notice before a fulfilment date — drives the storefront date
-	// picker's earliest selectable day. Undefined → 1 (the effective default).
+	// picker's earliest selectable day. Undefined → 0 (same-day allowed).
 	minFulfilmentNoticeDays?: number;
 	// Whether the retailer has opened the Pickup settings tab at least once.
 	// Drives checklist step-4 dismissal — set to true on first tab visit by

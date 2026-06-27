@@ -210,8 +210,9 @@ export const createOrderFromSession = mutation({
 		// How it was settled — only meaningful when paidInPerson. Defaults to cash.
 		paymentMethod: v.optional(orderPaymentMethodValidator),
 		// When the buyer collects — epoch-ms of a MYT-midnight day. Optional (a
-		// walk-in collecting now leaves it unset); validated against the retailer's
-		// notice window when present. See convex/lib/fulfilmentDate.ts.
+		// walk-in collecting now leaves it unset). The seller is keying this in
+		// person, so it's validated against a 0-day notice (today always allowed),
+		// ignoring the storefront buyer-notice setting. See convex/lib/fulfilmentDate.ts.
 		fulfilmentDate: v.optional(v.number()),
 	},
 	handler: async (
@@ -234,9 +235,11 @@ export const createOrderFromSession = mutation({
 		let sanitizedFulfilmentDate: number | undefined;
 		if (args.fulfilmentDate !== undefined) {
 			try {
+				// Notice 0: the seller is at the counter, so today is always valid
+				// regardless of the storefront buyer-notice setting.
 				sanitizedFulfilmentDate = assertValidFulfilmentDate(
 					args.fulfilmentDate,
-					retailer.minFulfilmentNoticeDays,
+					0,
 				);
 			} catch (err) {
 				throw new ConvexError((err as Error).message);

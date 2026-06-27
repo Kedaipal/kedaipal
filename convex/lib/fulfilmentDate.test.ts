@@ -61,8 +61,8 @@ describe("todayMytMidnight", () => {
 });
 
 describe("clampMinNoticeDays", () => {
-	test("undefined → default 1", () => {
-		expect(clampMinNoticeDays(undefined)).toBe(1);
+	test("undefined → default 0 (same-day allowed)", () => {
+		expect(clampMinNoticeDays(undefined)).toBe(0);
 	});
 	test("allows 0 (same-day sellers)", () => {
 		expect(clampMinNoticeDays(0)).toBe(0);

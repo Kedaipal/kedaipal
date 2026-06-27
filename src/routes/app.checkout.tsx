@@ -44,7 +44,11 @@ type SessionId = Id<"counterCheckoutSessions">;
 function CounterCheckoutRoute() {
 	const retailer = useQuery(api.retailers.getMyRetailer);
 	const [sessionId, setSessionId] = useState<SessionId | null>(null);
-	const [created, setCreated] = useState<{ shortId: string } | null>(null);
+	const [created, setCreated] = useState<{
+		shortId: string;
+		orderId: Id<"orders">;
+		paidInPerson: boolean;
+	} | null>(null);
 
 	const createSession = useMutation(api.counterCheckout.createCheckoutSession);
 	const cancelSession = useMutation(api.counterCheckout.cancelCheckoutSession);
@@ -105,7 +109,8 @@ function CounterCheckoutRoute() {
 			) : created || session.status === "completed" ? (
 				<DoneScreen
 					shortId={created?.shortId}
-					orderId={session.orderId}
+					orderId={created?.orderId ?? session.orderId}
+					paidInPerson={created?.paidInPerson ?? false}
 					onNew={start}
 				/>
 			) : session.status === "awaiting_buyer" ? (
@@ -130,8 +135,7 @@ function CounterCheckoutRoute() {
 							customer: session.customer,
 						}}
 						currency={retailer.currency ?? "MYR"}
-						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
-						onCreated={(shortId) => setCreated({ shortId })}
+						onCreated={setCreated}
 					/>
 				) : null
 			) : (
@@ -249,32 +253,82 @@ function ExpiredScreen({ onRestart }: { onRestart: () => void }) {
 function DoneScreen({
 	shortId,
 	orderId,
+	paidInPerson,
 	onNew,
 }: {
 	shortId: string | undefined;
 	orderId: Id<"orders"> | undefined;
+	paidInPerson: boolean;
 	onNew: () => void;
 }) {
+	const updateStatus = useMutation(api.orders.updateStatus);
+	const [completed, setCompleted] = useState(false);
+	const [completing, setCompleting] = useState(false);
+
+	// Offer one-tap completion only for a paid-in-person sale — they've paid and
+	// taken the item, so the seller can close it out here instead of clicking
+	// through the status pipeline. Optional, not automatic: a paid deposit on an
+	// item that isn't ready yet is left as a normal confirmed order.
+	const canComplete = paidInPerson && !!orderId && !completed;
+
+	async function markCompleted() {
+		if (!orderId) return;
+		setCompleting(true);
+		try {
+			await updateStatus({ orderId, status: "delivered" });
+			setCompleted(true);
+			toast.success("Order marked as completed.");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setCompleting(false);
+		}
+	}
+
 	return (
 		<div className="mx-auto flex w-full max-w-md flex-col items-center gap-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-6 py-10 text-center">
 			<CheckCircle2 className="size-12 text-emerald-600" />
 			<div>
 				<h2 className="text-lg font-semibold text-emerald-900">
-					Order created
+					{completed ? "Order completed" : "Order created"}
 				</h2>
 				<p className="mt-1 text-sm text-emerald-800">
 					{shortId ? (
 						<>
 							Order <span className="font-mono font-semibold">{shortId}</span>{" "}
-							is confirmed and a WhatsApp confirmation was sent to the buyer.
+							{completed
+								? "is marked completed."
+								: "is confirmed and a WhatsApp confirmation was sent to the buyer."}
 						</>
+					) : completed ? (
+						"The order is marked completed."
 					) : (
 						"The order is confirmed and the buyer has been notified on WhatsApp."
 					)}
 				</p>
 			</div>
 			<div className="flex w-full flex-col gap-2">
-				<Button onClick={onNew} className="h-11">
+				{canComplete ? (
+					<Button
+						onClick={markCompleted}
+						isLoading={completing}
+						disabled={completing}
+						className="h-11 bg-emerald-600 text-white hover:bg-emerald-700"
+					>
+						{completing ? "Completing…" : "Mark as completed"}
+					</Button>
+				) : null}
+				{completed ? (
+					<p className="inline-flex items-center justify-center gap-1.5 text-sm font-medium text-emerald-700">
+						<CheckCircle2 className="size-4" />
+						Marked completed
+					</p>
+				) : null}
+				<Button
+					onClick={onNew}
+					variant={canComplete ? "outline" : "default"}
+					className="h-11"
+				>
 					New checkout
 				</Button>
 				{shortId ? (
@@ -309,7 +363,6 @@ function BuildOrderScreen({
 	sessionId,
 	buyer,
 	currency,
-	minFulfilmentNoticeDays,
 	onCreated,
 }: {
 	retailerId: Id<"retailers">;
@@ -325,8 +378,11 @@ function BuildOrderScreen({
 		} | null;
 	};
 	currency: string;
-	minFulfilmentNoticeDays: number | undefined;
-	onCreated: (shortId: string) => void;
+	onCreated: (created: {
+		shortId: string;
+		orderId: Id<"orders">;
+		paidInPerson: boolean;
+	}) => void;
 }) {
 	const products = useQuery(api.products.list, { retailerId });
 	const createOrder = useMutation(api.counterCheckout.createOrderFromSession);
@@ -338,12 +394,13 @@ function BuildOrderScreen({
 	const [submitting, setSubmitting] = useState(false);
 
 	// Collection date — counter orders are self-collect, so this is "when will
-	// they pick up?". Defaults to the earliest allowed day (today + notice) and
-	// the seller adjusts it for pre-orders.
+	// they pick up?". Defaults to TODAY (the standard walk-in case) and always
+	// allows today regardless of the storefront notice setting, since the seller
+	// is keying the order in person.
 	const { minYmd, maxYmd } = useMemo(() => {
-		const b = fulfilmentDateBounds(minFulfilmentNoticeDays);
+		const b = fulfilmentDateBounds(0);
 		return { minYmd: ymdFromEpoch(b.min), maxYmd: ymdFromEpoch(b.max) };
-	}, [minFulfilmentNoticeDays]);
+	}, []);
 	const [fulfilmentDate, setFulfilmentDate] = useState(minYmd);
 
 	const isSearching = query.trim().length > 0;
@@ -398,7 +455,7 @@ function BuildOrderScreen({
 		setSubmitting(true);
 		try {
 			const fulfilmentEpoch = mytMidnightFromYmd(fulfilmentDate);
-			const { shortId } = await createOrder({
+			const { shortId, orderId } = await createOrder({
 				sessionId,
 				items: cartEntries.map(([variantId, l]) => ({
 					variantId: variantId as Id<"productVariants">,
@@ -410,7 +467,7 @@ function BuildOrderScreen({
 					? undefined
 					: fulfilmentEpoch,
 			});
-			onCreated(shortId);
+			onCreated({ shortId, orderId, paidInPerson });
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -617,7 +674,8 @@ function BuildOrderScreen({
 						className="mt-3 h-11 w-full rounded-xl border border-input bg-transparent px-4 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
 					/>
 					<p className="mt-2 text-xs text-muted-foreground">
-						When the buyer will pick up. Defaults to the soonest day you allow.
+						When the buyer collects. Defaults to today — change it for a
+						pre-order.
 					</p>
 				</div>
 
