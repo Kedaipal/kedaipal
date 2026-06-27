@@ -116,16 +116,30 @@ optional **"Mark as completed"** button (one tap → `delivered`).
   regardless of whether the 5-min cron has swept it yet (otherwise the cron's
   timing would flip the buyer message between "expired" and a generic reply).
 
-## Constraints
+## Made-to-order / custom items at the counter (2026-06-27)
 
-- **Mockup-gated items can't be sold at the counter (V1).** Any variant where
-  `requiresProof` resolves true is **excluded from the catalog** (`app.checkout.tsx`)
-  **and rejected server-side** (`createOrderFromSession`). Their flow defers
-  payment until the buyer approves a design on the tracking page, which is
-  incompatible with the at-the-counter pay-now/confirmed model — and would
-  otherwise produce an order with no mockup gate. See
-  [`proof-approval.md`](./proof-approval.md). (A counter + mockup flow is a
-  deliberate later feature, not V1.)
+Counter Checkout **sells made-to-order items** — both `isCustom` (quote) lines
+and fixed-price `requiresProof` ("needs design approval") variants. They were
+originally blocked (the storefront mockup-approval round-trip defers payment
+until the buyer signs off a design on their tracking page, which fights the
+at-the-counter pay-now model). **In person that round-trip is moot** — design +
+price are agreed face-to-face — so the block is lifted:
+
+- **Catalog** shows all active variants (`app.checkout.tsx`). A **custom (quote)
+  line has no catalog price**, so its row exposes an inline **RM price input**;
+  the vendor types the agreed price, then adds. Fixed-price `requiresProof`
+  variants use their normal price (no entry).
+- **No mockup gate.** Counter orders are created `confirmed` with no
+  `mockupStatus` — there's nothing to approve, the buyer has it (or will collect).
+  No image is required either.
+- **Price trust boundary.** `createOrderFromSession` takes a per-item
+  `unitPrice`, but trusts it **only for `isCustom` lines** (validated integer,
+  `> 0`, ≤ RM 100k); every normal line always uses the authoritative
+  `variant.price`, so a tampered client can't reprice a fixed product. The
+  vendor-set price is autosaved on the draft (`unitPrice`) so a resume restores it.
+
+See [`custom-option.md`](./custom-option.md) and
+[`proof-approval.md`](./proof-approval.md).
 
 ## Observability / PII note
 

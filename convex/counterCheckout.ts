@@ -212,12 +212,16 @@ const draftValidator = v.object({
 		v.object({
 			variantId: v.id("productVariants"),
 			quantity: v.number(),
+			unitPrice: v.optional(v.number()),
 		}),
 	),
 	fulfilmentDate: v.optional(v.number()),
 	paidInPerson: v.optional(v.boolean()),
 	paymentMethod: v.optional(orderPaymentMethodValidator),
 });
+
+/** Upper bound on a vendor-entered custom price (cents) — RM 100,000. */
+const MAX_CUSTOM_PRICE = 100_000_00;
 
 /**
  * Autosave the seller's in-progress order onto a bound session (debounced from
@@ -345,6 +349,11 @@ export const createOrderFromSession = mutation({
 			v.object({
 				variantId: v.id("productVariants"),
 				quantity: v.number(),
+				// Vendor-entered unit price (cents) — REQUIRED for a custom/quote line
+				// (whose catalog price is 0; price is agreed in person), IGNORED for a
+				// normal line (which always uses the authoritative variant price, so a
+				// tampered client can't reprice a fixed product).
+				unitPrice: v.optional(v.number()),
 			}),
 		),
 		// Settled at the counter. When false the order is left unpaid and the buyer
@@ -419,15 +428,26 @@ export const createOrderFromSession = mutation({
 			const displayName = label ? `${product.name} (${label})` : product.name;
 			if (!product.active || !variant.active)
 				throw new ConvexError(`"${displayName}" is not available`);
-			// Counter Checkout (V1) can't sell mockup-gated items: their flow defers
-			// payment until the buyer approves a design on the tracking page, which
-			// contradicts the at-the-counter "pay now / confirmed" model and would
-			// otherwise create an order with no mockup gate at all. Reject
-			// server-side (the catalog also filters these out). See proof-approval.md.
-			if ((variant.requiresProof ?? product.requiresProof) === true)
-				throw new ConvexError(
-					`"${displayName}" needs design approval, so it can't be sold at the counter yet`,
-				);
+			// Made-to-order items (custom / mockup-gated) ARE sellable at the counter:
+			// the buyer is present, so design + price are agreed in person and the
+			// storefront's mockup-approval round-trip is moot. Counter orders are
+			// created `confirmed` with no mockup gate. A CUSTOM (quote) line carries
+			// no catalog price, so the vendor supplies it; everything else stays on
+			// the authoritative variant price. See docs/custom-option.md.
+			let unitPrice: number;
+			if (variant.isCustom === true) {
+				const entered = item.unitPrice;
+				if (
+					entered === undefined ||
+					!Number.isInteger(entered) ||
+					entered <= 0 ||
+					entered > MAX_CUSTOM_PRICE
+				)
+					throw new ConvexError(`Set a price for "${displayName}"`);
+				unitPrice = entered;
+			} else {
+				unitPrice = variant.price;
+			}
 			const block =
 				(variant.blockWhenOutOfStock ?? product.blockWhenOutOfStock) === true;
 			const prior = requestedByVariant.get(item.variantId);
@@ -444,7 +464,7 @@ export const createOrderFromSession = mutation({
 				variantId: item.variantId,
 				name: product.name,
 				variantLabel: label || undefined,
-				price: variant.price,
+				price: unitPrice,
 				quantity: item.quantity,
 			});
 		}

@@ -604,14 +604,37 @@ function DoneScreen({
 // Build order (buyer bound) — catalog search → cart → pay → create
 // ---------------------------------------------------------------------------
 
-type CartLine = { name: string; label: string; price: number; qty: number };
+type CartLine = {
+	name: string;
+	label: string;
+	price: number;
+	qty: number;
+	// True for an isCustom/quote line — `price` is the vendor-entered amount, sent
+	// as `unitPrice` to the server (which trusts it only for custom lines).
+	isCustom?: boolean;
+};
 
 type SessionDraft = {
-	items: Array<{ variantId: Id<"productVariants">; quantity: number }>;
+	items: Array<{
+		variantId: Id<"productVariants">;
+		quantity: number;
+		unitPrice?: number;
+	}>;
 	fulfilmentDate?: number;
 	paidInPerson?: boolean;
 	paymentMethod?: OrderPaymentMethod;
 };
+
+/** "2500" cents → "25.00" for the custom-price input. */
+function centsToRm(cents: number): string {
+	return (cents / 100).toFixed(2);
+}
+/** "25" / "25.50" → cents (integer). NaN when blank or not a positive amount. */
+function rmToCents(rm: string): number {
+	const n = Number(rm);
+	if (!Number.isFinite(n) || n <= 0) return Number.NaN;
+	return Math.round(n * 100);
+}
 
 function BuildOrderScreen({
 	retailerId,
@@ -655,6 +678,11 @@ function BuildOrderScreen({
 		draft?.paymentMethod ?? "cash",
 	);
 	const [submitting, setSubmitting] = useState(false);
+	// Per-variant price text for custom/quote lines (keyed by variantId). The cart
+	// line holds the parsed cents; this holds the in-progress input string.
+	const [customPriceInput, setCustomPriceInput] = useState<
+		Record<string, string>
+	>({});
 
 	// Collection date — counter orders are self-collect, so this is "when will
 	// they pick up?". Defaults to TODAY (the standard walk-in case) and always
@@ -679,20 +707,34 @@ function BuildOrderScreen({
 		if (items.length === 0) return;
 		const lookup = new Map<
 			string,
-			{ name: string; label: string; price: number }
+			{ name: string; label: string; price: number; isCustom: boolean }
 		>();
 		for (const p of products) {
 			for (const vr of p.variants) {
 				const label = vr.isCustom
 					? (vr.customLabel ?? "Custom")
 					: vr.optionValues.join(" / ");
-				lookup.set(vr._id, { name: p.name, label, price: vr.price });
+				lookup.set(vr._id, {
+					name: p.name,
+					label,
+					price: vr.price,
+					isCustom: vr.isCustom === true,
+				});
 			}
 		}
 		const next = new Map<string, CartLine>();
 		for (const it of items) {
 			const v = lookup.get(it.variantId);
-			if (v) next.set(it.variantId, { ...v, qty: it.quantity });
+			if (!v) continue;
+			// Custom lines restore the vendor's saved price; normal lines the catalog price.
+			const price = v.isCustom ? (it.unitPrice ?? v.price) : v.price;
+			next.set(it.variantId, {
+				name: v.name,
+				label: v.label,
+				price,
+				qty: it.quantity,
+				isCustom: v.isCustom,
+			});
 		}
 		if (next.size > 0) setCart(next);
 		// Don't silently shrink the cart: if a saved item was deactivated/deleted
@@ -715,13 +757,11 @@ function BuildOrderScreen({
 		return products
 			.map((p) => ({
 				...p,
-				// Exclude mockup-gated (requiresProof) + custom variants — Counter
-				// Checkout V1 can't sell items that need buyer design approval (the
-				// server rejects them too). `requiresProof` is resolved per-variant
-				// by products.list (vr.requiresProof ?? product.requiresProof).
-				variants: p.variants.filter(
-					(vr) => !vr.isCustom && !vr.requiresProof && vr.active,
-				),
+				// Sell anything active — including made-to-order/custom + mockup-gated
+				// variants. The buyer is in person, so design + price are agreed
+				// face-to-face and the storefront mockup round-trip is moot; a custom
+				// (quote) line just needs the vendor to type the agreed price below.
+				variants: p.variants.filter((vr) => vr.active),
 			}))
 			.filter((p) => p.variants.length > 0)
 			.filter((p) => {
@@ -765,6 +805,7 @@ function BuildOrderScreen({
 			items: [...cart.entries()].map(([variantId, l]) => ({
 				variantId: variantId as Id<"productVariants">,
 				quantity: l.qty,
+				unitPrice: l.isCustom ? l.price : undefined,
 			})),
 			fulfilmentDate: Number.isNaN(epoch) ? undefined : epoch,
 			paidInPerson,
@@ -794,6 +835,7 @@ function BuildOrderScreen({
 				items: cartEntries.map(([variantId, l]) => ({
 					variantId: variantId as Id<"productVariants">,
 					quantity: l.qty,
+					unitPrice: l.isCustom ? l.price : undefined,
 				})),
 				paidInPerson,
 				paymentMethod: paidInPerson ? method : undefined,
@@ -840,10 +882,22 @@ function BuildOrderScreen({
 								(s, vr) => s + (cart.get(vr._id)?.qty ?? 0),
 								0,
 							);
+							// Price label ignores custom (quote) variants — they have no
+							// catalog price — and notes "+ custom" when the product mixes both.
+							const nonCustom = p.variants.filter((vr) => !vr.isCustom);
+							const hasCustom = p.variants.some((vr) => vr.isCustom);
 							const priceLabel =
-								p.priceFrom === p.priceTo
-									? formatPrice(p.priceFrom, currency)
-									: `from ${formatPrice(p.priceFrom, currency)}`;
+								nonCustom.length === 0
+									? "Custom price"
+									: (() => {
+											const lo = Math.min(...nonCustom.map((v) => v.price));
+											const hi = Math.max(...nonCustom.map((v) => v.price));
+											const base =
+												lo === hi
+													? formatPrice(lo, currency)
+													: `from ${formatPrice(lo, currency)}`;
+											return hasCustom ? `${base} · custom` : base;
+										})();
 							return (
 								<div
 									key={p._id}
@@ -878,11 +932,101 @@ function BuildOrderScreen({
 									{open ? (
 										<div className="flex flex-col divide-y divide-border border-t border-border px-3 pb-1">
 											{p.variants.map((vr) => {
-												const label =
-													vr.optionValues.length > 0
+												const isCustom = vr.isCustom === true;
+												const label = isCustom
+													? (vr.customLabel ?? "Custom")
+													: vr.optionValues.length > 0
 														? vr.optionValues.join(" / ")
 														: "";
 												const inCart = cart.get(vr._id);
+
+												// Custom/quote line: no catalog price — the vendor types
+												// the agreed-in-person price, then adds.
+												if (isCustom) {
+													const priceText =
+														customPriceInput[vr._id] ??
+														(inCart ? centsToRm(inCart.price) : "");
+													const cents = rmToCents(priceText);
+													const validPrice = !Number.isNaN(cents);
+													const onPriceChange = (val: string) => {
+														setCustomPriceInput((prev) => ({
+															...prev,
+															[vr._id]: val,
+														}));
+														const c = rmToCents(val);
+														if (inCart && !Number.isNaN(c))
+															setQty(
+																vr._id,
+																{ ...inCart, price: c },
+																inCart.qty,
+															);
+													};
+													return (
+														<div
+															key={vr._id}
+															className="flex flex-col gap-2 py-2"
+														>
+															<div className="flex items-center justify-between gap-3">
+																<div className="min-w-0">
+																	<p className="truncate text-sm">{label}</p>
+																	<p className="text-xs text-muted-foreground">
+																		Custom — set the agreed price
+																	</p>
+																</div>
+																{inCart ? (
+																	<Stepper
+																		qty={inCart.qty}
+																		onChange={(q) => setQty(vr._id, inCart, q)}
+																	/>
+																) : null}
+															</div>
+															<div className="flex items-center gap-2">
+																<div className="relative flex-1">
+																	<span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+																		RM
+																	</span>
+																	<Input
+																		type="number"
+																		inputMode="decimal"
+																		step="0.01"
+																		min="0"
+																		value={priceText}
+																		onChange={(e) =>
+																			onPriceChange(e.target.value)
+																		}
+																		placeholder="0.00"
+																		variant="field"
+																		className="h-11 pl-10"
+																	/>
+																</div>
+																{!inCart ? (
+																	<Button
+																		variant="secondary"
+																		disabled={!validPrice}
+																		onClick={() =>
+																			setQty(
+																				vr._id,
+																				{
+																					name: p.name,
+																					label,
+																					price: cents,
+																					qty: 0,
+																					isCustom: true,
+																				},
+																				1,
+																			)
+																		}
+																		className="h-11 px-3"
+																	>
+																		<Plus className="size-4" />
+																		Add
+																	</Button>
+																) : null}
+															</div>
+														</div>
+													);
+												}
+
 												return (
 													<div
 														key={vr._id}

@@ -657,6 +657,10 @@ export default defineSchema({
 					v.object({
 						variantId: v.id("productVariants"),
 						quantity: v.number(),
+						// Vendor-set unit price (cents) for a custom/quote line whose
+						// catalog price is 0 — the agreed-in-person price. Absent for
+						// normal lines (those resolve to the variant's price at create).
+						unitPrice: v.optional(v.number()),
 					}),
 				),
 				fulfilmentDate: v.optional(v.number()),

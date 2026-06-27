@@ -298,6 +298,42 @@ async function seedVariant(
 	return variant._id;
 }
 
+/** Seed an isCustom (quote, price-0) variant — the made-to-order line. */
+async function seedCustomVariant(
+	t: ReturnType<typeof setup>,
+	userId: string,
+	retailerId: Id<"retailers">,
+): Promise<Id<"productVariants">> {
+	const asUser = t.withIdentity({ subject: userId });
+	const productId = await asUser.mutation(api.products.create, {
+		retailerId,
+		name: "Bespoke Cake",
+		currency: "MYR",
+		imageStorageIds: [],
+		sortOrder: 0,
+		variants: [
+			// A product can't be custom-only — it needs a base variant alongside.
+			{ optionValues: [], price: 2000, onHand: 5 },
+			{
+				optionValues: [],
+				price: 0,
+				onHand: 0,
+				isCustom: true,
+				customLabel: "Bespoke",
+			},
+		],
+	});
+	const v = await t.run((ctx) =>
+		ctx.db
+			.query("productVariants")
+			.withIndex("by_product", (q) => q.eq("productId", productId))
+			.filter((q) => q.eq(q.field("isCustom"), true))
+			.first(),
+	);
+	if (!v) throw new Error("custom variant seed failed");
+	return v._id;
+}
+
 async function boundSession(t: ReturnType<typeof setup>, retailerId: Id<"retailers">) {
 	const { sessionId, token } = await openSession(t, USER_A);
 	await t.mutation(internal.counterCheckout.bindCheckoutSession, {
@@ -423,27 +459,95 @@ describe("counterCheckout — createOrderFromSession", () => {
 		).rejects.toThrow(/Forbidden/);
 	});
 
-	test("rejects a mockup-gated (requiresProof) item — can't be sold at the counter", async () => {
+	test("a fixed-price design-approval (requiresProof) item now sells at the counter, no mockup gate", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
+		// requiresProof but NOT custom → has a real price; design is agreed in person.
 		const variantId = await seedVariant(t, USER_A, retailer._id, {
 			requiresProof: true,
+			price: 3000,
 		});
 		const sessionId = await boundSession(t, retailer._id);
 
-		await expect(
-			t
-				.withIdentity({ subject: USER_A })
-				.mutation(api.counterCheckout.createOrderFromSession, {
-					sessionId,
-					items: [{ variantId, quantity: 1 }],
-					paidInPerson: true,
-				}),
-		).rejects.toThrow(/design approval/);
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				paidInPerson: true,
+				paymentMethod: "cash",
+			});
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.status).toBe("confirmed");
+		expect(order?.items[0]?.price).toBe(3000);
+		expect(order?.mockupStatus).toBeUndefined(); // no gate — sold in person
+	});
 
-		// And the session is NOT consumed — the seller can fix the cart and retry.
+	test("a custom line sells with the vendor-set price and no mockup gate", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedCustomVariant(t, USER_A, retailer._id);
+		const sessionId = await boundSession(t, retailer._id);
+
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 2, unitPrice: 4500 }],
+				paidInPerson: true,
+				paymentMethod: "cash",
+			});
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.items[0]?.price).toBe(4500);
+		expect(order?.items[0]?.variantLabel).toBe("Bespoke");
+		expect(order?.total).toBe(9000);
+		expect(order?.mockupStatus).toBeUndefined();
+	});
+
+	test("a custom line without a valid price is rejected", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedCustomVariant(t, USER_A, retailer._id);
+		const sessionId = await boundSession(t, retailer._id);
+		const asA = t.withIdentity({ subject: USER_A });
+
+		await expect(
+			asA.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }], // no price
+				paidInPerson: true,
+			}),
+		).rejects.toThrow(/Set a price/);
+		await expect(
+			asA.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1, unitPrice: 0 }], // zero
+				paidInPerson: true,
+			}),
+		).rejects.toThrow(/Set a price/);
+		// Session survives the rejections — the vendor can fix and retry.
 		const session = await t.run((ctx) => ctx.db.get(sessionId));
 		expect(session?.status).toBe("buyer_identified");
+	});
+
+	test("a client price on a NON-custom line is ignored (server price wins)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, {
+			price: 1200,
+		});
+		const sessionId = await boundSession(t, retailer._id);
+
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1, unitPrice: 1 }], // tampered → ignored
+				paidInPerson: true,
+				paymentMethod: "cash",
+			});
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.items[0]?.price).toBe(1200);
 	});
 });
 
