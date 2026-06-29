@@ -327,6 +327,9 @@ function OrdersRoute() {
 			clearSelection();
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
+			// Rethrow so the destructive confirm dialog stays open for a retry; the
+			// toast above is the user-facing message (ConfirmDialog swallows this).
+			throw err;
 		} finally {
 			setBulkBusy(false);
 		}
@@ -355,26 +358,41 @@ function OrdersRoute() {
 				loading={loading}
 			/>
 
-			<section className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-3 shadow-sm lg:p-4">
-				<div className="relative">
-					<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-					<Input
-						value={searchInput}
-						onChange={(e) => setSearchInput(e.target.value)}
-						placeholder="Search order #, name, phone or item"
-						className="h-11 rounded-xl pl-9 pr-9"
-						inputMode="search"
+			<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-3 shadow-sm lg:p-4">
+				<div className="grid gap-3 lg:grid-cols-[minmax(18rem,1fr)_auto] lg:items-center">
+					<div className="relative">
+						<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+						<Input
+							value={searchInput}
+							onChange={(e) => setSearchInput(e.target.value)}
+							placeholder="Search order #, name, phone or item"
+							className="h-11 rounded-xl pl-9 pr-9"
+							inputMode="search"
+						/>
+						{searchInput ? (
+							<button
+								type="button"
+								onClick={() => setSearchInput("")}
+								className="absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+								aria-label="Clear search"
+							>
+								<X className="size-4" />
+							</button>
+						) : null}
+					</div>
+
+					<OrderFilters
+						value={{
+							payment: pay,
+							method,
+							methodUnspecified: munspec,
+							from,
+							to,
+							mockup,
+						}}
+						onChange={setFilters}
+						mockupCount={counts?.mockupPending}
 					/>
-					{searchInput ? (
-						<button
-							type="button"
-							onClick={() => setSearchInput("")}
-							className="absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
-							aria-label="Clear search"
-						>
-							<X className="size-4" />
-						</button>
-					) : null}
 				</div>
 
 				<div className="-mx-3 flex gap-2 overflow-x-auto px-3 pb-1 [scrollbar-width:none] lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0 [&::-webkit-scrollbar]:hidden">
@@ -391,10 +409,10 @@ function OrdersRoute() {
 								type="button"
 								onClick={() => setBucket(key)}
 								className={cn(
-									"flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-sm transition-colors",
+									"flex h-10 shrink-0 items-center gap-1.5 rounded-xl border px-3.5 text-sm font-medium transition-colors",
 									active
-										? "border-foreground bg-foreground text-background"
-										: "border-border bg-background text-muted-foreground hover:border-foreground/30 hover:text-foreground",
+										? "border-accent bg-accent text-accent-foreground"
+										: "border-border bg-background text-muted-foreground hover:border-accent/40 hover:text-foreground",
 								)}
 							>
 								{label}
@@ -403,7 +421,7 @@ function OrdersRoute() {
 										className={cn(
 											"flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none",
 											active
-												? "bg-background text-foreground"
+												? "bg-white/25 text-accent-foreground"
 												: key === "new"
 													? "bg-orange-500 text-white"
 													: "bg-muted text-muted-foreground",
@@ -420,7 +438,7 @@ function OrdersRoute() {
 				{/* Fulfilment-date urgency chips — a primary axis for F&B sellers
 				    ("what's due today?"), so they sit inline above the advanced
 				    filters, not buried in the filter sheet. */}
-				<div className="flex flex-wrap items-center gap-2">
+				<div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
 					<span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
 						Due
 					</span>
@@ -433,7 +451,7 @@ function OrdersRoute() {
 								aria-pressed={active}
 								onClick={() => setFwin(w.value)}
 								className={cn(
-									"inline-flex h-11 items-center gap-1.5 rounded-full border px-4 text-sm font-medium transition-colors",
+									"inline-flex h-10 items-center gap-1.5 rounded-xl border px-3.5 text-sm font-medium transition-colors",
 									active
 										? "border-accent bg-accent text-accent-foreground"
 										: "border-border bg-background text-muted-foreground hover:border-accent/40 hover:text-foreground",
@@ -445,19 +463,6 @@ function OrdersRoute() {
 						);
 					})}
 				</div>
-
-				<OrderFilters
-					value={{
-						payment: pay,
-						method,
-						methodUnspecified: munspec,
-						from,
-						to,
-						mockup,
-					}}
-					onChange={setFilters}
-					mockupCount={counts?.mockupPending}
-				/>
 			</section>
 
 			{/* Selection toolbar — appears once at least one order is ticked. */}
