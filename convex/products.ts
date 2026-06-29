@@ -18,7 +18,7 @@ import {
 const MAX_IMAGES_PER_PRODUCT = 5;
 const MAX_IMAGES_PER_VARIANT = 3;
 const MAX_BULK_IMPORT_BATCH = 50;
-const MAX_PRODUCTS_PER_RETAILER = 50; // beta cap
+const MAX_PRODUCTS_PER_RETAILER = 50;
 const MAX_SKU_LENGTH = 60;
 
 /**
@@ -448,7 +448,7 @@ export const create = mutation({
 			.then((r) => r.length);
 		if (existingCount >= MAX_PRODUCTS_PER_RETAILER)
 			throw new ConvexError(
-				`Beta limit: maximum ${MAX_PRODUCTS_PER_RETAILER} products per retailer`,
+				`Maximum ${MAX_PRODUCTS_PER_RETAILER} products per retailer`,
 			);
 
 		if (args.name.trim().length === 0) throw new ConvexError("Name is required");
@@ -908,7 +908,7 @@ export const bulkUpsert = mutation({
 			.then((r) => r.length);
 		if (existingCount + insertCount > MAX_PRODUCTS_PER_RETAILER)
 			throw new ConvexError(
-				`Beta limit: would exceed ${MAX_PRODUCTS_PER_RETAILER} products per retailer (currently ${existingCount}, +${insertCount} new)`,
+				`Would exceed the ${MAX_PRODUCTS_PER_RETAILER}-product limit per retailer (currently ${existingCount}, +${insertCount} new)`,
 			);
 
 		const now = Date.now();

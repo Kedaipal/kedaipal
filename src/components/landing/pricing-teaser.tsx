@@ -1,11 +1,15 @@
 import { useAuth } from "@clerk/tanstack-react-start";
 import { Link } from "@tanstack/react-router";
+import { useQuery } from "convex/react";
 import { ArrowRight, Check, Sparkles, Star } from "lucide-react";
+import { api } from "../../../convex/_generated/api";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { Button } from "../ui/button";
 import { FadeIn } from "./fade-in";
 import { Sticker } from "./landing-ui";
+
+const TOTAL_FOUNDING_SPOTS = 10;
 
 interface TeaserTier {
 	id: string;
@@ -71,6 +75,10 @@ function getTiers(): TeaserTier[] {
 export function PricingTeaser() {
 	const { isSignedIn } = useAuth();
 	const tiers = getTiers();
+	// Live founding-spot count, same public query the Founding 10 section uses.
+	// Defaults to all-open while loading / on SSR — the honest fallback.
+	const remaining =
+		useQuery(api.foundingMembers.getSpotsRemaining) ?? TOTAL_FOUNDING_SPOTS;
 
 	return (
 		<section
@@ -119,6 +127,11 @@ export function PricingTeaser() {
 								{tier.popular && (
 									<span className="absolute -top-3.5 left-1/2 -translate-x-1/2 rotate-2 rounded-lg bg-accent px-3 py-1 text-xs font-bold uppercase tracking-wider text-accent-foreground shadow-md">
 										{m.pricing_most_popular()}
+									</span>
+								)}
+								{tier.id === "scale" && (
+									<span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-muted px-3 py-0.5 text-xs font-bold uppercase tracking-wider text-muted-foreground">
+										{m.pricing_coming_soon()}
 									</span>
 								)}
 
@@ -177,7 +190,7 @@ export function PricingTeaser() {
 								<div className="mt-7">
 									{tier.comingSoon ? (
 										<div className="flex h-11 w-full items-center justify-center rounded-full border border-dashed border-border bg-muted/40 text-sm font-semibold text-muted-foreground">
-											Coming soon
+											{m.pricing_coming_soon()}
 										</div>
 									) : (
 										<Button
@@ -212,7 +225,7 @@ export function PricingTeaser() {
 				<FadeIn delay={0.15}>
 					<div className="mt-10 flex flex-col items-center gap-3">
 						<p className="text-center text-xs text-muted-foreground">
-							{m.pricing_future()}
+							{m.pricing_future({ remaining })}
 						</p>
 						<Link
 							to="/pricing"
