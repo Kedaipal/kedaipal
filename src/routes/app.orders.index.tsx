@@ -327,6 +327,9 @@ function OrdersRoute() {
 			clearSelection();
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
+			// Rethrow so the destructive confirm dialog stays open for a retry; the
+			// toast above is the user-facing message (ConfirmDialog swallows this).
+			throw err;
 		} finally {
 			setBulkBusy(false);
 		}

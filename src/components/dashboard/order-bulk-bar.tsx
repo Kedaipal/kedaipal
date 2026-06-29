@@ -30,7 +30,9 @@ export function OrderBulkBar({
 }: {
 	count: number;
 	actions: BulkAction[];
-	onApply: (status: BulkAction["status"]) => void;
+	// May return a promise — the destructive confirm awaits it so the confirm
+	// button shows its in-flight spinner and stays open if the apply rejects.
+	onApply: (status: BulkAction["status"]) => void | Promise<void>;
 	onClear: () => void;
 	busy?: boolean;
 }) {
@@ -42,7 +44,9 @@ export function OrderBulkBar({
 	function handleAction(a: BulkAction) {
 		setOpen(false);
 		if (a.destructive) setPendingDestructive(a);
-		else onApply(a.status);
+		// Non-destructive actions apply immediately and fire-and-forget — the apply
+		// surfaces its own error toast, so swallow the rejection here.
+		else void Promise.resolve(onApply(a.status)).catch(() => {});
 	}
 
 	return (
@@ -103,7 +107,9 @@ export function OrderBulkBar({
 				destructive
 				onConfirm={() => {
 					const action = pendingDestructive;
-					if (action) onApply(action.status);
+					// Return the promise so ConfirmDialog can show its spinner while the
+					// bulk op runs and keep itself open if it rejects.
+					if (action) return onApply(action.status);
 				}}
 			/>
 		</div>

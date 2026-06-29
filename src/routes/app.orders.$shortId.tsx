@@ -326,6 +326,9 @@ function OrderDetailRoute() {
 			await updateStatus({ orderId: order._id, status: "cancelled" });
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
+			// Rethrow so the confirm dialog stays open for a retry; the toast above
+			// is the user-facing message (ConfirmDialog swallows this).
+			throw err;
 		} finally {
 			setPending(null);
 		}

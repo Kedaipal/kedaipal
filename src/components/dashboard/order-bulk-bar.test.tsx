@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type BulkAction, OrderBulkBar } from "./order-bulk-bar";
 
@@ -59,6 +65,25 @@ describe("OrderBulkBar", () => {
 		// Confirming applies; the confirm button is labelled with the count.
 		fireEvent.click(screen.getByRole("button", { name: /cancel 2 orders/i }));
 		expect(onApply).toHaveBeenCalledWith("cancelled");
+	});
+
+	it("awaits a rejecting destructive apply and keeps the confirm open for retry", async () => {
+		const onApply = vi.fn().mockRejectedValue(new Error("boom"));
+		render(
+			<OrderBulkBar
+				count={2}
+				actions={actions}
+				onApply={onApply}
+				onClear={vi.fn()}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: /mark as/i }));
+		fireEvent.click(screen.getByRole("button", { name: "Cancel orders" }));
+		fireEvent.click(screen.getByRole("button", { name: /cancel 2 orders/i }));
+
+		await waitFor(() => expect(onApply).toHaveBeenCalledWith("cancelled"));
+		// The apply rejected, so the dialog must stay open (not auto-close).
+		expect(screen.getByRole("dialog")).toBeTruthy();
 	});
 
 	it("does not apply when the destructive confirm is dismissed", () => {
