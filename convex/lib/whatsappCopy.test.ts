@@ -1,79 +1,92 @@
 /// <reference types="vite/client" />
 import { describe, expect, test } from "vitest";
+import type { PaymentMethod } from "./payment";
 import {
 	paymentQrCaption,
-	renderPaymentInstructions,
+	renderPaymentMethods,
+	renderPickupBlock,
 	renderSystemMessage,
 } from "./whatsappCopy";
 
-describe("renderPaymentInstructions", () => {
-	test("returns empty string when instructions undefined", () => {
-		expect(renderPaymentInstructions("en", undefined)).toBe("");
+function bank(over: Partial<PaymentMethod> = {}): PaymentMethod {
+	return {
+		type: "bank",
+		label: "Maybank",
+		bankName: "Maybank",
+		bankAccountName: "Acme Outdoor Sdn Bhd",
+		bankAccountNumber: "5123 4567 8901",
+		sortOrder: 0,
+		...over,
+	};
+}
+
+describe("renderPaymentMethods", () => {
+	test("returns empty string when there are no methods", () => {
+		expect(renderPaymentMethods("en", [])).toBe("");
 	});
 
-	test("returns empty string when all fields blank or whitespace", () => {
-		expect(
-			renderPaymentInstructions("en", {
-				bankName: "  ",
-				bankAccountName: "",
-				bankAccountNumber: undefined,
-				note: "   ",
-			}),
-		).toBe("");
-	});
-
-	test("renders English bank block with all fields", () => {
-		const out = renderPaymentInstructions("en", {
-			bankName: "Maybank",
-			bankAccountName: "Acme Outdoor Sdn Bhd",
-			bankAccountNumber: "5123 4567 8901",
-		});
+	test("renders a bank method with the label as a bold heading", () => {
+		const out = renderPaymentMethods("en", [bank()]);
 		expect(out).toContain("💳 Payment details");
-		expect(out).toContain("Bank: Maybank");
+		expect(out).toContain("*Maybank*");
+		// label === bankName → no redundant "Bank: Maybank" line.
+		expect(out).not.toContain("Bank: Maybank");
 		expect(out).toContain("Name: Acme Outdoor Sdn Bhd");
-		expect(out).toContain("Account: 5123 4567 8901");
+		// Account number on its OWN line so a long-press selects just the number.
+		expect(out).toContain("Account:");
+		expect(out.split("\n")).toContain("5123 4567 8901");
 	});
 
-	test("renders Bahasa Malaysia labels", () => {
-		const out = renderPaymentInstructions("ms", {
-			bankName: "Maybank",
-			bankAccountNumber: "5123",
-		});
+	test("shows the bank name line when it differs from the label", () => {
+		const out = renderPaymentMethods("en", [
+			bank({ label: "Main account", bankName: "Maybank" }),
+		]);
+		expect(out).toContain("*Main account*");
+		expect(out).toContain("Bank: Maybank");
+	});
+
+	test("lists multiple methods, each as its own labelled block", () => {
+		const out = renderPaymentMethods("en", [
+			bank({ label: "Maybank", bankAccountNumber: "111" }),
+			bank({
+				label: "CIMB",
+				bankName: "CIMB",
+				bankAccountNumber: "222",
+				sortOrder: 1,
+			}),
+		]);
+		expect(out).toContain("*Maybank*");
+		expect(out).toContain("*CIMB*");
+		expect(out.split("\n")).toContain("111");
+		expect(out.split("\n")).toContain("222");
+	});
+
+	test("a QR method points to the image (sent separately), with its note", () => {
+		const out = renderPaymentMethods("en", [
+			{
+				type: "qr",
+				label: "DuitNow QR",
+				qrImageStorageId: "kg:abc",
+				note: "Scan to pay via DuitNow.",
+				sortOrder: 0,
+			},
+		]);
+		expect(out).toContain("*DuitNow QR*");
+		expect(out).toContain("Scan the QR below 👇");
+		expect(out).toContain("Scan to pay via DuitNow.");
+	});
+
+	test("Bahasa Malaysia labels", () => {
+		const out = renderPaymentMethods("ms", [bank({ bankAccountNumber: "5123" })]);
 		expect(out).toContain("💳 Maklumat pembayaran");
-		expect(out).toContain("Bank: Maybank");
-		expect(out).toContain("Akaun: 5123");
+		expect(out).toContain("Akaun:");
+		expect(out.split("\n")).toContain("5123");
 	});
 
-	test("renders note even without bank fields (QR-only retailer)", () => {
-		const out = renderPaymentInstructions("en", {
-			qrImageStorageId: "kg:abc",
-			note: "Scan the QR above to pay via DuitNow.",
-		});
-		expect(out).toContain("💳 Payment details");
-		expect(out).toContain("Scan the QR above to pay via DuitNow.");
-	});
-
-	test("omits missing fields cleanly", () => {
-		const out = renderPaymentInstructions("en", {
-			bankName: "Maybank",
-		});
-		expect(out).toContain("Bank: Maybank");
-		expect(out).not.toContain("Name:");
-		expect(out).not.toContain("Account:");
-	});
-
-	test("trims whitespace inside fields", () => {
-		const out = renderPaymentInstructions("en", {
-			bankName: "  Maybank  ",
-			bankAccountNumber: "\t5123\n",
-		});
-		expect(out).toContain("Bank: Maybank");
-		expect(out).toContain("Account: 5123");
-	});
-
-	test("paymentQrCaption is locale-aware", () => {
+	test("paymentQrCaption — generic, and prefixed with a label when given", () => {
 		expect(paymentQrCaption("en")).toBe("Scan to pay");
 		expect(paymentQrCaption("ms")).toBe("Imbas untuk bayar");
+		expect(paymentQrCaption("en", "DuitNow")).toBe("DuitNow — Scan to pay");
 	});
 });
 
@@ -123,5 +136,116 @@ describe("renderSystemMessage", () => {
 		).toBe(
 			"Gunakan ORD-AB23 sebagai rujukan pemindahan supaya kami boleh padankan.",
 		);
+	});
+});
+
+describe("renderPickupBlock", () => {
+	test("returns empty string when snapshot is undefined", () => {
+		expect(renderPickupBlock("en", undefined)).toBe("");
+	});
+
+	test("renders English header with label and address", () => {
+		const out = renderPickupBlock("en", {
+			label: "Main Store",
+			address: "12 Jalan Tun Razak, 50400 Kuala Lumpur",
+		});
+		expect(out).toBe(
+			"\n📍 Pickup details\nMain Store\n12 Jalan Tun Razak, 50400 Kuala Lumpur",
+		);
+	});
+
+	test("renders Bahasa Malaysia header", () => {
+		const out = renderPickupBlock("ms", {
+			label: "Kedai Utama",
+			address: "12 Jalan Tun Razak, 50400 KL",
+		});
+		expect(out.split("\n")[1]).toBe("📍 Maklumat pengambilan");
+	});
+
+	test("includes mapsUrl on its own line when present", () => {
+		const out = renderPickupBlock("en", {
+			label: "Main Store",
+			address: "12 Jln Tun Razak, KL",
+			mapsUrl: "https://maps.app.goo.gl/abc",
+		});
+		expect(out).toContain("\nhttps://maps.app.goo.gl/abc");
+	});
+
+	test("appends notes with a blank-line separator", () => {
+		const out = renderPickupBlock("en", {
+			label: "Main Store",
+			address: "12 Jln Tun Razak, KL",
+			notes: "Pickup hours: 10am – 6pm Mon–Sat.",
+		});
+		// Address then blank line then notes
+		expect(out).toContain(
+			"\n12 Jln Tun Razak, KL\n\nPickup hours: 10am – 6pm Mon–Sat.",
+		);
+	});
+
+	test("omits mapsUrl and notes when both absent", () => {
+		const out = renderPickupBlock("en", {
+			label: "Main Store",
+			address: "12 Jln Tun Razak, KL",
+		});
+		expect(out.split("\n")).toEqual([
+			"",
+			"📍 Pickup details",
+			"Main Store",
+			"12 Jln Tun Razak, KL",
+		]);
+	});
+
+	test("includes the seller-pasted mapsUrl when set (legacy precedence)", () => {
+		const out = renderPickupBlock("en", {
+			label: "Main Store",
+			address: "12 Jln Tun Razak, KL",
+			mapsUrl: "https://maps.app.goo.gl/abc",
+			latitude: 3.158,
+			longitude: 101.712,
+			placeId: "ChIJxxx",
+		});
+		// mapsUrl wins the deriveMapsUrl priority chain.
+		expect(out).toContain("https://maps.app.goo.gl/abc");
+		expect(out).not.toContain("place_id:");
+	});
+
+	test("falls back to a placeId-based URL when no mapsUrl", () => {
+		const out = renderPickupBlock("en", {
+			label: "Main Store",
+			address: "12 Jln Tun Razak, KL",
+			placeId: "ChIJ_pickup",
+			latitude: 3.158,
+			longitude: 101.712,
+		});
+		expect(out).toContain(
+			"https://www.google.com/maps/place/?q=place_id:ChIJ_pickup",
+		);
+	});
+
+	test("falls back to a lat/lng search URL when no mapsUrl and no placeId", () => {
+		const out = renderPickupBlock("en", {
+			label: "Main Store",
+			address: "12 Jln Tun Razak, KL",
+			latitude: 3.158,
+			longitude: 101.712,
+		});
+		expect(out).toContain(
+			"https://www.google.com/maps/search/?api=1&query=3.158,101.712",
+		);
+	});
+
+	test("omits the URL line entirely when nothing usable is set", () => {
+		const out = renderPickupBlock("en", {
+			label: "Main Store",
+			address: "12 Jln Tun Razak, KL",
+		});
+		expect(out).not.toContain("https://");
+		expect(out.split("\n")).toEqual([
+			"",
+			"📍 Pickup details",
+			"Main Store",
+			"12 Jln Tun Razak, KL",
+		]);
 	});
 });

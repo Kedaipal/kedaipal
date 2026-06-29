@@ -19,7 +19,8 @@ erDiagram
     retailers ||--o{ slugHistory : "renamed from"
     customers ||--o{ orders : "places (nullable)"
     orders ||--o{ orderEvents : "audited by"
-    products ||--o{ orders : "snapshotted into items[]"
+    products ||--o{ productVariants : "varies into"
+    productVariants ||--o{ orders : "snapshotted into items[]"
 
     retailers {
         string userId "Clerk sub"
@@ -46,13 +47,32 @@ erDiagram
     }
     products {
         id retailerId
-        string sku "optional, upsert key"
         string name
-        number price
+        string description "markdown, storefront"
         string currency
-        number stock
+        array options "0-2 option axes (name+values)"
+        boolean blockWhenOutOfStock "DEPRECATED — moved to variant"
+        boolean requiresProof "DEPRECATED — moved to variant"
         array imageStorageIds
         boolean active "soft delete"
+        number sortOrder
+        number price "DEPRECATED — moved to variant"
+        number stock "DEPRECATED — moved to variant"
+        string sku "DEPRECATED — moved to variant"
+    }
+    productVariants {
+        id productId
+        id retailerId "denormalized for sku index"
+        array optionValues "aligned to products.options"
+        string sku "optional, per-retailer unique"
+        number price
+        number onHand
+        boolean blockWhenOutOfStock "optional, per-variant"
+        boolean requiresProof "optional, per-variant"
+        number reserved "0 until HitPay"
+        number parcelWeightG "feeds weight-band delivery"
+        array imageStorageIds
+        boolean active
         number sortOrder
     }
     orders {
@@ -110,17 +130,43 @@ Audit trail of old slugs so renamed storefronts keep resolving for a grace windo
 
 ### `products`
 
-Catalog items, scoped to a retailer. **Soft-deleted** via `active: boolean` — never hard-deleted, so historical order line items stay resolvable.
+Catalog items, scoped to a retailer. **Soft-deleted** via `active: boolean` — never hard-deleted, so historical order line items stay resolvable. A product is the *listing*; the sellable units are its [`productVariants`](#productvariants). Every product resolves to **≥1 variant** — a no-option product has exactly one implicit variant (`optionValues: []`); there is no separate "simple product" code path. Full design: [`product-variants.md`](./product-variants.md).
 
 | Field | Type | Notes |
 |---|---|---|
-| `sku` | string? | Stable retailer ID. When present, drives bulk-import upsert via `by_retailer_sku`. |
-| `name`, `description`, `price`, `currency`, `stock` | — | `currency` must match the order currency at checkout. |
-| `imageStorageIds` | string[] | Convex storage references (up to 5). |
+| `name` | string | Listing title. |
+| `description` | string? | Rendered as **sanitized markdown** on the storefront (specs, "what's included"). |
+| `currency` | string | Must match the order currency at checkout. |
+| `options` | object[]? | 0–2 **option axes** `{name, values[]}`, ordered (drives picker order). Empty/undefined = no axes. Capped at 2 axes / 50 variants. |
+| `imageStorageIds` | string[] | Product-level hero gallery (up to 5). **Order is meaningful** — index 0 is the storefront cover. The listing editor lets the seller drag-to-reorder the gallery (same `SortableList` primitive as elsewhere); the array is persisted in display order, no separate "primary" flag. |
 | `active` | boolean | Soft-delete flag. |
-| `sortOrder` | number | Custom storefront ranking. |
+| `sortOrder` | number | Custom storefront ranking. **Storefront** `list` (active-only) orders ascending `sortOrder`, then `createdAt`. **Dashboard** `listAll` orders **active-first, then `sortOrder`, then `createdAt`** — so archived products sink to the end (archiving moves a product down with no renumber). `create` sets `sortOrder: Date.now()` so new products append. Inline drag-and-drop in the dashboard "All" view reorders the **active** products and calls `products.reorder({ retailerId, orderedIds })` (full set: reordered active + archived kept last), which assigns `sortOrder = index`. |
+| `blockWhenOutOfStock`, `requiresProof` | **DEPRECATED** | Moved to `productVariants` (now **per-variant**). Reads fall back to these product-level values when a variant's own flag is unset (`variant.X ?? product.X`), so they're kept optional until the narrow step. **Set the variant flags, not these.** |
+| `price`, `stock`, `sku` | **DEPRECATED** | Moved to `productVariants`. Kept optional during the flat→variant migration (widen-migrate-narrow); dropped in the narrow step. **Do not read.** |
 
-**Indexes:** `by_retailer`, `by_retailer_active` (storefront shows active only), `by_retailer_sku` (upsert collision check).
+**Indexes:** `by_retailer`, `by_retailer_active` (storefront shows active only), `by_retailer_sku` (legacy; SKU uniqueness now enforced on the variant).
+
+### `productVariants`
+
+The first-class **sellable unit**. `optionValues` is positionally aligned with the parent `products.options`. SKU uniqueness moved here (SKUs identify sellable units). Frozen onto orders via `orders.items[].variantId`/`variantLabel`.
+
+| Field | Type | Notes |
+|---|---|---|
+| `productId` | id | Parent listing. |
+| `retailerId` | id | Denormalized so the per-retailer SKU index can live here. |
+| `optionValues` | string[] | Positionally aligned with `products.options`; `[]` for the implicit default. |
+| `sku` | string? | Optional, **unique per retailer** (`by_retailer_sku`). |
+| `price` | number | Minor units. Server-authoritative at order time. |
+| `onHand` | number | Stock. Decremented on order create / restored on cancel **only when** this variant hard-blocks (`blockWhenOutOfStock` resolves true). |
+| `blockWhenOutOfStock` | boolean? | **Per-variant.** `true` = this variant with `onHand ≤ 0` is unsellable. Undefined/false = **made-to-order** (sells at zero, never reserved). Falls back to the deprecated product-level flag when unset. Lets a mixed listing pair fixed sizes (hard-block) with a "Custom" made-to-order variant. |
+| `requiresProof` | boolean? | **Per-variant.** `true` = any order containing this variant is **mockup-gated** (can't be packed until the buyer approves a mockup). Falls back to the product-level flag when unset. See [`proof-approval.md`](./proof-approval.md). |
+| `reserved` | number | Forward-wired for HitPay holds; stays `0` until payments go live. |
+| `parcelWeightG` | number | Parcel weight (grams). Feeds weight-band delivery (separate task); `0` = unset. |
+| `imageStorageIds` | string[] | Per-variant images (up to 3); storefront falls back to the product hero when empty. |
+| `active` | boolean | Per-variant deactivate — inactive variants are hidden from the storefront. |
+| `sortOrder` | number | Row order within the product. |
+
+**Indexes:** `by_product` (load a listing's variants), `by_retailer_sku` (SKU uniqueness check).
 
 ### `customers`
 
@@ -150,16 +196,18 @@ The core transactional entity. Two independent dimensions:
 |---|---|---|
 | `shortId` | string | `ORD-XXXX`. Alphabet excludes `O/0/I/1` (visual clarity in WhatsApp). Acts as a capability token for public mutations. |
 | `customerId` | id? | Link to aggregated customer. Optional — null for phone-less link-in-bio checkouts until the phone is known. |
-| `items` | object[] | Price/name **snapshots** `{productId, name, price, quantity}` — immune to later product edits. |
+| `items` | object[] | Line **snapshots** `{productId, variantId?, name, variantLabel?, price, quantity}` — immune to later product/variant edits. `variantId`/`variantLabel` absent only on legacy (pre-variant) orders. |
 | `subtotal`, `total`, `currency` | — | Computed by `computeOrderTotals` ([`convex/lib/order.ts`](../convex/lib/order.ts)); currently `total === subtotal`. |
 | `status` | union | Fulfilment pipeline (see above). |
 | `customer` | object | Denormalized `{name?, waPhone?}` snapshot — channel-agnostic checkout capture. |
 | `deliveryMethod` | `"delivery"\|"self_collect"`? | Defaults to `"delivery"`. |
 | `deliveryAddress` | object? | **Invariant:** required when `delivery`, forbidden when `self_collect`. Validated by [`convex/lib/address.ts`](../convex/lib/address.ts). |
+| `fulfilmentDate` | number? | When the buyer needs it (delivery **or** pickup) — epoch-ms of a MYT-midnight day. Drives the inbox default sort + "Due" chips. Validated to `[today + retailer notice, today + 30]`. See [`fulfilment-date.md`](./fulfilment-date.md). |
 | `carrierTrackingUrl` | string? | Set by retailer on `shipped`; surfaced in tracking + WhatsApp. |
 | `paymentStatus`, `paymentReference`, `paymentClaimedAt`, `paymentReceivedAt`, `paymentProofStorageId` | — | Payment handshake (independent of `status`). |
+| `mockupStatus`, `mockupImageStorageId`, `mockupChangeNote`, `mockupSubmittedAt`, `mockupApprovedAt`, `mockupWaivedAt` | — | **Mockup/proof approval** — a *third* independent dimension (like payment), gating `confirmed→packed`. `mockupStatus`: `pending → submitted → approved` (+ `changes_requested` loop). Undefined = order has no proof-required item. ⚠️ "mockup" ≠ payment "proof". See [`proof-approval.md`](./proof-approval.md). |
 
-**Indexes:** `by_retailer`, `by_retailer_status`, `by_retailer_payment`, `by_shortId` (public tracking + confirmation lookup), `by_customer`.
+**Indexes:** `by_retailer`, `by_retailer_status`, `by_retailer_payment`, `by_retailer_mockup`, `by_shortId` (public tracking + confirmation lookup), `by_customer`.
 
 ### `orderEvents`
 
@@ -175,6 +223,7 @@ Validation helpers that must run on **both** the Convex backend and the React fr
 |---|---|---|
 | Slug / phone / email | [`convex/lib/slug.ts`](../convex/lib/slug.ts) | [`src/lib/slug.ts`](../src/lib/slug.ts) |
 | Customer display name | [`convex/lib/customer.ts`](../convex/lib/customer.ts) | [`src/lib/customer.ts`](../src/lib/customer.ts) |
+| Variant helpers (label, cartesian, caps) | [`convex/lib/variant.ts`](../convex/lib/variant.ts) | [`src/lib/variant.ts`](../src/lib/variant.ts) |
 | Legal versions | [`convex/lib/legal.ts`](../convex/lib/legal.ts) | [`src/lib/legal.ts`](../src/lib/legal.ts) |
 | Address (backend) / form schema (frontend) | [`convex/lib/address.ts`](../convex/lib/address.ts) | [`src/lib/schemas.ts`](../src/lib/schemas.ts) |
 

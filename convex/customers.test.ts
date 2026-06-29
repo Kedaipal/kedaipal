@@ -14,6 +14,24 @@ function setup() {
 	return t;
 }
 
+/** Resolve an order's buyer tracking token from its shortId (see orders.test.ts). */
+async function tk(
+	t: ReturnType<typeof setup>,
+	shortId: string,
+): Promise<string> {
+	return await t.run(async (ctx) => {
+		const o = await ctx.db
+			.query("orders")
+			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+			.first();
+		if (!o) return "__no_such_order__";
+		if (o.trackingToken) return o.trackingToken;
+		const token = `tok_${shortId}`;
+		await ctx.db.patch(o._id, { trackingToken: token });
+		return token;
+	});
+}
+
 const USER_A = "user_test_a";
 const USER_B = "user_test_b";
 
@@ -49,11 +67,10 @@ async function seedProduct(
 	return asUser.mutation(api.products.create, {
 		retailerId,
 		name: "Rendang 1kg",
-		price,
 		currency: "MYR",
-		stock: 1000,
 		imageStorageIds: [],
 		sortOrder: 0,
+		variants: [{ optionValues: [], price, onHand: 1000 }],
 	});
 }
 
@@ -99,7 +116,7 @@ describe("customers — order linking", () => {
 		});
 
 		const asUser = t.withIdentity({ subject: USER_A });
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(order?.customerId).toBeDefined();
 
 		const list = await asUser.query(api.customers.list, {
@@ -151,7 +168,7 @@ describe("customers — order linking", () => {
 			name: "Walk-in",
 		});
 
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(order?.customerId).toBeUndefined();
 
 		const asUser = t.withIdentity({ subject: USER_A });
@@ -393,7 +410,7 @@ describe("customers — WhatsApp late-bind & pushname", () => {
 			profileName: "Aisha WA",
 		});
 
-		const order = await t.query(api.orders.get, { shortId });
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(order?.customerId).toBeDefined();
 
 		const asUser = t.withIdentity({ subject: USER_A });
@@ -536,9 +553,9 @@ describe("customers — backfill", () => {
 		expect(aisha?.name).toBe("Aisha");
 
 		// Legacy orders are now linked.
-		const linked = await t.query(api.orders.get, { shortId: "ORD-LEG1" });
+		const linked = await t.query(api.orders.get, { token: await tk(t, "ORD-LEG1") });
 		expect(linked?.customerId).toBe(aisha?._id);
-		const skipped = await t.query(api.orders.get, { shortId: "ORD-LEG4" });
+		const skipped = await t.query(api.orders.get, { token: await tk(t, "ORD-LEG4") });
 		expect(skipped?.customerId).toBeUndefined();
 	});
 
@@ -579,7 +596,7 @@ describe("customers — cancellation", () => {
 		});
 
 		const asUser = t.withIdentity({ subject: USER_A });
-		const order2 = await t.query(api.orders.get, { shortId: shortId2 });
+		const order2 = await t.query(api.orders.get, { token: await tk(t, shortId2) });
 		if (!order2) throw new Error("order missing");
 		await asUser.mutation(api.orders.updateStatus, {
 			orderId: order2._id,
@@ -593,5 +610,42 @@ describe("customers — cancellation", () => {
 		});
 		expect(list.page[0].orderCount).toBe(1);
 		expect(list.page[0].totalSpent).toBe(10000);
+	});
+});
+
+describe("customers — count", () => {
+	test("counts distinct customers for the retailer; owner-only", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const asA = t.withIdentity({ subject: USER_A });
+
+		expect(
+			await asA.query(api.customers.count, { retailerId: retailer._id }),
+		).toBe(0);
+
+		await placeOrder(t, retailer._id, productId, {
+			name: "Ali",
+			waPhone: "60123456789",
+		});
+		await placeOrder(t, retailer._id, productId, {
+			name: "Bob",
+			waPhone: "60198887777",
+		});
+		// Same phone → same customer (keyed by (retailerId, waPhone)).
+		await placeOrder(t, retailer._id, productId, {
+			name: "Ali again",
+			waPhone: "60123456789",
+		});
+
+		expect(
+			await asA.query(api.customers.count, { retailerId: retailer._id }),
+		).toBe(2);
+
+		await expect(
+			t
+				.withIdentity({ subject: USER_B })
+				.query(api.customers.count, { retailerId: retailer._id }),
+		).rejects.toThrow(/forbidden/i);
 	});
 });

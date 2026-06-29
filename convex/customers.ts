@@ -84,6 +84,19 @@ export const list = query({
 	},
 });
 
+/** Total customer count for the retailer — drives the dashboard stat tile. */
+export const count = query({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<number> => {
+		await requireRetailerOwner(ctx, retailerId);
+		const rows = await ctx.db
+			.query("customers")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.collect();
+		return rows.length;
+	},
+});
+
 export const get = query({
 	args: { customerId: v.id("customers") },
 	handler: async (
@@ -298,6 +311,25 @@ export async function decrementAggregatesForCancel(
 	await ctx.db.patch(customerId, {
 		orderCount: Math.max(0, customer.orderCount - 1),
 		totalSpent: Math.max(0, customer.totalSpent - orderTotal),
+		updatedAt: Date.now(),
+	});
+}
+
+/**
+ * Adjust a customer's `totalSpent` by a signed delta (minor units) when an
+ * order's total changes *without* changing the order count — e.g. a made-to-order
+ * quote is added/revised on the mockup, or the buyer declines the custom item.
+ * `orderCount` is intentionally left alone (still one order). Floors at zero.
+ */
+export async function adjustAggregatesForTotalChange(
+	ctx: MutationCtx,
+	{ customerId, delta }: { customerId: Id<"customers">; delta: number },
+): Promise<void> {
+	if (delta === 0) return;
+	const customer = await ctx.db.get(customerId);
+	if (!customer) return;
+	await ctx.db.patch(customerId, {
+		totalSpent: Math.max(0, customer.totalSpent + delta),
 		updatedAt: Date.now(),
 	});
 }

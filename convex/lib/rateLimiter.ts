@@ -21,6 +21,13 @@ import { components } from "../_generated/api";
  *   URL for a payment screenshot. Keyed by shortId so a single order can't
  *   exhaust the system. Slightly tighter than paymentClaim — one upload URL
  *   per claim attempt is the realistic ceiling.
+ * - `googleAutocomplete`: public (storefront) + authenticated (settings)
+ *   Convex action that proxies Google Places autocomplete. Keyed by retailerId
+ *   for storefront callers and Clerk subject for settings callers. Bucket sized
+ *   for typing bursts (debounced ~300ms client-side, so ~3 reqs/sec ceiling).
+ * - `googlePlaceDetails`: paired action that fetches structured place details
+ *   after the user picks an autocomplete suggestion. Tighter — one details
+ *   fetch per "session" is the realistic ceiling.
  */
 export const rateLimiter = new RateLimiter(components.rateLimiter, {
 	orderCreate: {
@@ -60,4 +67,58 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		period: MINUTE,
 		capacity: 2,
 	},
+	// Public mutation that mints an upload URL for a buyer's reference image on a
+	// custom/made-to-order line — BEFORE the order exists, so keyed by retailerId
+	// (no shortId yet). Sized like proofUpload — one image per checkout.
+	customImageUpload: {
+		kind: "token bucket",
+		rate: 3,
+		period: MINUTE,
+		capacity: 2,
+	},
+	// Public buyer mockup approve / request-changes actions (keyed by retailerId).
+	mockupReview: {
+		kind: "token bucket",
+		rate: 5,
+		period: MINUTE,
+		capacity: 3,
+	},
+	// Authenticated seller mockup actions (upload URL, submit, quote update),
+	// keyed by Clerk subject. Separate from `productWrite` so a bulk product edit
+	// can't starve a seller out of sending a time-sensitive mockup for a waiting
+	// order (and vice versa).
+	mockupSubmit: {
+		kind: "token bucket",
+		rate: 10,
+		period: MINUTE,
+		capacity: 5,
+	},
+	googleAutocomplete: {
+		kind: "token bucket",
+		rate: 30,
+		period: MINUTE,
+		capacity: 10,
+	},
+	googlePlaceDetails: {
+		kind: "token bucket",
+		rate: 10,
+		period: MINUTE,
+		capacity: 3,
+	},
+	// Authenticated seller opening a Counter Checkout session (keyed by Clerk
+	// subject). A busy counter mints one per buyer, so allow a healthy burst, but
+	// cap runaway creation (each session is a row + a QR render). See
+	// convex/counterCheckout.ts.
+	checkoutSessionCreate: {
+		kind: "token bucket",
+		rate: 30,
+		period: MINUTE,
+		capacity: 10,
+	},
+	// NOTE: the per-seller outbound WhatsApp guardrails (whatsappSendPerMinute /
+	// whatsappSendDaily) are intentionally NOT registered here. They're enforced
+	// by the guarded send gateway (convex/wabaProtection.ts) with an INLINE config
+	// per call so a retailer's custom cap (retailers.sendRatePerMinute /
+	// sendDailyCap, defaults in lib/wabaLimits.ts) takes effect — the rate-limiter
+	// only allows inline config overrides for names that aren't pre-registered.
 });

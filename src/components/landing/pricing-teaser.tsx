@@ -1,72 +1,93 @@
 import { useAuth } from "@clerk/tanstack-react-start";
 import { Link } from "@tanstack/react-router";
 import { ArrowRight, Check, Sparkles, Star } from "lucide-react";
+import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { Button } from "../ui/button";
 import { FadeIn } from "./fade-in";
+import { Sticker } from "./landing-ui";
 
-const TIERS = [
-	{
-		id: "starter",
-		name: "Starter",
-		price: 79,
-		tagline: "<50 orders/week",
-		features: ["Storefront", "Order pipeline", "WhatsApp automation", "1 user"],
-		popular: false,
-		founding: false,
-	},
-	{
-		id: "pro",
-		name: "Pro",
-		price: 149,
-		foundingPrice: 104,
-		tagline: "50–300 orders/week",
-		features: [
-			"Everything in Starter",
-			"Customer database",
-			"Order inbox",
-			"Reminders + broadcasts",
-			"2 users",
-		],
-		popular: true,
-		founding: true,
-	},
-	{
-		id: "scale",
-		name: "Scale",
-		price: 299,
-		tagline: "300+ orders/week",
-		features: [
-			"Everything in Pro",
-			"Reseller portal",
-			"Tiered pricing",
-			"Sales reports",
-			"5 users",
-		],
-		popular: false,
-		founding: false,
-	},
-] as const;
+interface TeaserTier {
+	id: string;
+	name: string;
+	price: number;
+	foundingPrice?: number;
+	tagline: string;
+	features: string[];
+	popular: boolean;
+	// Scale is disabled for v1 launch — "Coming soon" pill replaces the CTA. Schema
+	// keeps it so re-enabling needs no migration. See docs/manual-subscription.md.
+	comingSoon?: boolean;
+}
+
+function getTiers(): TeaserTier[] {
+	return [
+		{
+			id: "starter",
+			name: "Starter",
+			price: 79,
+			tagline: m.pricing_tier_starter_tagline(),
+			features: [
+				m.pricing_feat_storefront(),
+				m.pricing_feat_pipeline(),
+				m.pricing_feat_wa_automation(),
+				m.pricing_feat_1_user(),
+			],
+			popular: false,
+		},
+		{
+			id: "pro",
+			name: "Pro",
+			price: 149,
+			foundingPrice: 104,
+			tagline: m.pricing_tier_pro_tagline(),
+			features: [
+				m.pricing_feat_everything_starter(),
+				m.pricing_feat_crm(),
+				m.pricing_feat_inbox(),
+				m.pricing_feat_reminders(),
+				m.pricing_feat_2_users(),
+			],
+			popular: true,
+		},
+		{
+			id: "scale",
+			name: "Scale",
+			price: 299,
+			tagline: m.pricing_tier_scale_tagline(),
+			features: [
+				m.pricing_feat_everything_pro(),
+				m.pricing_feat_reseller(),
+				m.pricing_feat_tiered(),
+				m.pricing_feat_reports(),
+				m.pricing_feat_5_users(),
+			],
+			popular: false,
+			comingSoon: true,
+		},
+	];
+}
 
 export function PricingTeaser() {
 	const { isSignedIn } = useAuth();
+	const tiers = getTiers();
 
 	return (
 		<section
 			id="pricing"
 			aria-labelledby="pricing-heading"
-			className="border-b border-border/60 bg-muted/30"
+			className="bg-muted/30"
 		>
 			<div className="mx-auto max-w-6xl px-5 py-24 md:px-8 md:py-32">
 				<FadeIn>
 					<div className="text-center">
-						<span className="inline-flex items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-accent">
+						<Sticker tone="outline" rotate={-1.5}>
 							<Sparkles className="size-3" />
 							{m.pricing_badge()}
-						</span>
+						</Sticker>
 						<h2
 							id="pricing-heading"
-							className="mt-4 text-3xl font-bold md:text-5xl"
+							className="mt-5 text-3xl font-bold md:text-5xl"
 							style={{ letterSpacing: "-0.02em" }}
 						>
 							{m.pricing_heading()}
@@ -74,35 +95,30 @@ export function PricingTeaser() {
 						<p className="mx-auto mt-4 max-w-lg text-base text-muted-foreground">
 							{m.pricing_sub()}
 						</p>
-						<div className="mx-auto mt-5 max-w-xl rounded-xl border-l-4 border-accent/40 bg-accent/5 px-5 py-3 text-left text-sm text-muted-foreground">
+						<div className="mx-auto mt-5 max-w-xl rounded-2xl border-l-4 border-accent/40 bg-accent/5 px-5 py-3 text-left text-sm text-muted-foreground">
 							{m.pricing_anchor()}
 						</div>
 					</div>
 				</FadeIn>
 
 				<FadeIn delay={0.1}>
-					<div className="mt-10 grid gap-4 md:grid-cols-3">
-						{TIERS.map((tier) => (
+					<div className="mt-12 grid items-stretch gap-4 md:grid-cols-3 lg:gap-0">
+						{tiers.map((tier) => (
 							<div
 								key={tier.id}
-								className={`relative flex flex-col rounded-2xl p-6 ${
+								className={cn(
+									"relative flex flex-col rounded-3xl p-7",
 									tier.popular
-										? "shadow-[0_8px_40px_hsl(160_84%_39%_/_0.16)]"
-										: "border border-border bg-card shadow-sm"
-								}`}
-								style={
-									tier.popular
-										? {
-												background:
-													"linear-gradient(white, white) padding-box, linear-gradient(135deg, hsl(160 84% 39%), hsl(160 84% 68%), hsl(160 84% 39%)) border-box",
-												border: "2px solid transparent",
-											}
-										: undefined
-								}
+										? "z-10 bg-primary text-primary-foreground shadow-2xl lg:-my-5 lg:scale-[1.02]"
+										: "border border-border bg-card shadow-sm lg:my-0",
+									tier.id === "starter" && "lg:rounded-r-none lg:border-r-0",
+									tier.id === "scale" && "lg:rounded-l-none lg:border-l-0",
+									tier.comingSoon && "opacity-80",
+								)}
 							>
 								{tier.popular && (
-									<span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-accent px-3 py-0.5 text-xs font-bold uppercase tracking-wider text-accent-foreground">
-										Most popular
+									<span className="absolute -top-3.5 left-1/2 -translate-x-1/2 rotate-2 rounded-lg bg-accent px-3 py-1 text-xs font-bold uppercase tracking-wider text-accent-foreground shadow-md">
+										{m.pricing_most_popular()}
 									</span>
 								)}
 								{tier.id === "scale" && (
@@ -112,7 +128,10 @@ export function PricingTeaser() {
 								)}
 
 								<p
-									className={`text-sm font-semibold uppercase tracking-wider ${tier.popular ? "text-accent" : "text-muted-foreground"}`}
+									className={cn(
+										"text-sm font-semibold uppercase tracking-wider",
+										tier.popular ? "text-accent" : "text-muted-foreground",
+									)}
 								>
 									{tier.name}
 								</p>
@@ -120,23 +139,38 @@ export function PricingTeaser() {
 									<span className="text-4xl font-bold tracking-tight">
 										RM {tier.price}
 									</span>
-									<span className="mb-1 text-sm text-muted-foreground">/mo</span>
+									<span
+										className={cn(
+											"mb-1 text-sm",
+											tier.popular
+												? "text-primary-foreground/60"
+												: "text-muted-foreground",
+										)}
+									>
+										{m.pricing_per_month()}
+									</span>
 								</div>
-								<p className="mt-1 text-xs text-muted-foreground">
+								<p
+									className={cn(
+										"mt-1 text-xs",
+										tier.popular
+											? "text-primary-foreground/60"
+											: "text-muted-foreground",
+									)}
+								>
 									{tier.tagline}
 								</p>
 
-								{"founding" in tier && tier.founding && "foundingPrice" in tier && (
-									<div className="mt-3 flex items-center gap-2 rounded-lg border border-accent/30 bg-accent/5 px-3 py-2">
+								{tier.foundingPrice !== undefined && (
+									<div className="mt-3 flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2">
 										<Star className="size-3.5 shrink-0 fill-accent text-accent" />
 										<p className="text-xs font-semibold text-accent">
-											Founding 10 price: RM {tier.foundingPrice}/mo forever (10
-											spots)
+											{m.pricing_founding_line({ price: tier.foundingPrice })}
 										</p>
 									</div>
 								)}
 
-								<ul className="mt-5 flex-1 space-y-2">
+								<ul className="mt-6 flex-1 space-y-2.5">
 									{tier.features.map((f) => (
 										<li key={f} className="flex items-center gap-2 text-sm">
 											<Check className="size-4 shrink-0 text-accent" />
@@ -145,39 +179,33 @@ export function PricingTeaser() {
 									))}
 								</ul>
 
-								<div className="mt-6">
-									{tier.id === "scale" ? (
-										// Scale tier is visible-but-disabled — keeps the layout
-										// rhythm of three cards while signalling "not yet". No
-										// link wrap because there's nowhere meaningful to go.
-										<Button
-											className="w-full"
-											variant="outline"
-											disabled
-										>
+								<div className="mt-7">
+									{tier.comingSoon ? (
+										<div className="flex h-11 w-full items-center justify-center rounded-full border border-dashed border-border bg-muted/40 text-sm font-semibold text-muted-foreground">
 											Coming soon
-										</Button>
-									) : isSignedIn ? (
-										<Button
-											asChild
-											className="w-full"
-											variant={tier.popular ? "default" : "outline"}
-										>
-											<Link to="/app">
-												{m.nav_go_to_dashboard()}
-												<ArrowRight />
-											</Link>
-										</Button>
+										</div>
 									) : (
 										<Button
 											asChild
-											className="w-full"
+											size="lg"
+											className={cn(
+												"h-11 w-full rounded-full",
+												!tier.popular &&
+													"border-border bg-background text-foreground hover:bg-muted",
+											)}
 											variant={tier.popular ? "default" : "outline"}
 										>
-											<Link to="/sign-up/$" params={{ _splat: "" }}>
-												{m.pricing_cta()}
-												<ArrowRight />
-											</Link>
+											{isSignedIn ? (
+												<Link to="/app">
+													{m.nav_go_to_dashboard()}
+													<ArrowRight />
+												</Link>
+											) : (
+												<Link to="/sign-up/$" params={{ _splat: "" }}>
+													{m.pricing_cta()}
+													<ArrowRight />
+												</Link>
+											)}
 										</Button>
 									)}
 								</div>
@@ -187,7 +215,7 @@ export function PricingTeaser() {
 				</FadeIn>
 
 				<FadeIn delay={0.15}>
-					<div className="mt-6 flex flex-col items-center gap-3">
+					<div className="mt-10 flex flex-col items-center gap-3">
 						<p className="text-center text-xs text-muted-foreground">
 							{m.pricing_future()}
 						</p>
@@ -195,12 +223,12 @@ export function PricingTeaser() {
 							to="/pricing"
 							className="text-sm font-medium text-accent underline-offset-4 hover:underline"
 						>
-							See full feature breakdown →
+							{m.pricing_full_breakdown()}
 						</Link>
+						<p className="text-center text-xs text-muted-foreground">
+							{m.pricing_no_lockin()}
+						</p>
 					</div>
-					<p className="mt-4 text-center text-xs text-muted-foreground">
-						{m.pricing_no_lockin()}
-					</p>
 				</FadeIn>
 			</div>
 		</section>

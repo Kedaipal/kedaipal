@@ -1,11 +1,20 @@
 import { useMutation } from "convex/react";
-import { Package, Trash2, Truck, X } from "lucide-react";
+import { ExternalLink, MapPin, Package, Trash2, Truck, X } from "lucide-react";
 import { Dialog } from "radix-ui";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useMemo, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import {
+	assertValidFulfilmentDate,
+	formatFulfilmentDate,
+	fulfilmentDateBounds,
+	mytMidnightFromYmd,
+	ymdFromEpoch,
+} from "../../../convex/lib/fulfilmentDate";
 import type { UseCart } from "../../hooks/useCart";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
+import { deriveMapsUrl } from "../../lib/google-address";
+import { composeCustomerNote } from "../../lib/order-note";
 import {
 	type CheckoutAddressValues,
 	checkoutFormSchema,
@@ -17,6 +26,19 @@ import { AddressFieldset } from "./address-fieldset";
 
 const ADDRESS_STORAGE_KEY = "kedaipal:lastAddress";
 
+/** Public-safe pickup location shape returned by `listActivePublicBySlug`. */
+export interface PublicPickupLocation {
+	_id: Id<"pickupLocations">;
+	label: string;
+	address: string;
+	mapsUrl?: string;
+	notes?: string;
+	latitude?: number;
+	longitude?: number;
+	placeId?: string;
+	sortOrder: number;
+}
+
 interface CheckoutSheetProps {
 	open: boolean;
 	onClose: () => void;
@@ -24,6 +46,10 @@ interface CheckoutSheetProps {
 	retailerId: Id<"retailers">;
 	storeName: string;
 	checkoutPhone: string | undefined;
+	offerSelfCollect: boolean;
+	offerDelivery: boolean;
+	minFulfilmentNoticeDays: number | undefined;
+	pickupLocations: ReadonlyArray<PublicPickupLocation>;
 }
 
 interface SanitizedDeliveryAddress {
@@ -34,6 +60,9 @@ interface SanitizedDeliveryAddress {
 	postcode: string;
 	notes?: string;
 	mapsUrl?: string;
+	latitude?: number;
+	longitude?: number;
+	placeId?: string;
 }
 
 function loadSavedAddress(): CheckoutAddressValues {
@@ -50,6 +79,9 @@ function loadSavedAddress(): CheckoutAddressValues {
 			postcode: typeof parsed.postcode === "string" ? parsed.postcode : "",
 			notes: typeof parsed.notes === "string" ? parsed.notes : "",
 			mapsUrl: typeof parsed.mapsUrl === "string" ? parsed.mapsUrl : "",
+			latitude: typeof parsed.latitude === "string" ? parsed.latitude : "",
+			longitude: typeof parsed.longitude === "string" ? parsed.longitude : "",
+			placeId: typeof parsed.placeId === "string" ? parsed.placeId : "",
 		};
 	} catch {
 		return emptyAddress;
@@ -69,6 +101,18 @@ function sanitizeAddress(raw: CheckoutAddressValues): SanitizedDeliveryAddress {
 	const line2 = raw.line2.trim();
 	const notes = raw.notes.trim();
 	const mapsUrl = raw.mapsUrl.trim();
+	// lat/lng come in as strings from form state. Parse to numbers; drop on
+	// any parse failure or invalid range — the order is still valid without.
+	const latNum = raw.latitude.trim().length > 0 ? Number(raw.latitude) : NaN;
+	const lngNum = raw.longitude.trim().length > 0 ? Number(raw.longitude) : NaN;
+	const validCoords =
+		Number.isFinite(latNum) &&
+		Number.isFinite(lngNum) &&
+		latNum >= -90 &&
+		latNum <= 90 &&
+		lngNum >= -180 &&
+		lngNum <= 180;
+	const placeId = raw.placeId.trim();
 	return {
 		line1: raw.line1.trim(),
 		line2: line2.length > 0 ? line2 : undefined,
@@ -77,6 +121,9 @@ function sanitizeAddress(raw: CheckoutAddressValues): SanitizedDeliveryAddress {
 		postcode: raw.postcode.trim(),
 		notes: notes.length > 0 ? notes : undefined,
 		mapsUrl: mapsUrl.length > 0 ? mapsUrl : undefined,
+		latitude: validCoords ? latNum : undefined,
+		longitude: validCoords ? lngNum : undefined,
+		placeId: placeId.length > 0 ? placeId : undefined,
 	};
 }
 
@@ -94,24 +141,58 @@ function buildWaMessage(
 	cart: UseCart,
 	deliveryMethod: "delivery" | "self_collect",
 	deliveryAddress: SanitizedDeliveryAddress | undefined,
+	pickupLocation: PublicPickupLocation | undefined,
+	note: string | undefined,
+	fulfilmentDate: number | undefined,
 ): string {
 	const lines: string[] = [];
 	lines.push(`Hi ${storeName}, I'd like to place this order:`);
 	lines.push("");
 	lines.push(`Order: ${shortId}`);
+	let hasQuoteItem = false;
 	for (const item of cart.items) {
-		lines.push(`• ${item.quantity}x ${item.name}`);
+		const name = item.optionLabel
+			? `${item.name} (${item.optionLabel})`
+			: item.name;
+		const suffix = item.quoteOnRequest ? " — price on quote" : "";
+		if (item.quoteOnRequest) hasQuoteItem = true;
+		lines.push(`• ${item.quantity}x ${name}${suffix}`);
 	}
 	lines.push("");
 	lines.push(`Total: ${formatPrice(cart.total, cart.currency)}`);
+	if (hasQuoteItem) lines.push("(Custom item price to be confirmed by seller)");
 	if (deliveryMethod === "self_collect") {
-		lines.push("📍 Self Collect");
+		if (pickupLocation) {
+			lines.push(`📍 Self Collect at: ${pickupLocation.label}`);
+			lines.push(pickupLocation.address);
+			const mapsUrl = deriveMapsUrl(pickupLocation);
+			if (mapsUrl) lines.push(mapsUrl);
+			if (pickupLocation.notes) lines.push(pickupLocation.notes);
+		} else {
+			lines.push("📍 Self Collect");
+		}
 	} else if (deliveryAddress) {
 		lines.push(`🚚 Deliver to: ${formatAddressOneLine(deliveryAddress)}`);
-		if (deliveryAddress.mapsUrl) lines.push(`📍 ${deliveryAddress.mapsUrl}`);
+		const mapsUrl = deriveMapsUrl(deliveryAddress);
+		if (mapsUrl) lines.push(`📍 ${mapsUrl}`);
 		if (deliveryAddress.notes) lines.push(`📝 ${deliveryAddress.notes}`);
 	} else {
 		lines.push("🚚 Delivery");
+	}
+	// Fulfilment date — the buyer's answer to "bila nak?". Sits with the
+	// delivery/pickup block (it's the "when" to that "where"), above the note.
+	if (fulfilmentDate !== undefined) {
+		const verb = deliveryMethod === "self_collect" ? "Collect" : "Deliver";
+		lines.push(`🗓️ ${verb} on: ${formatFulfilmentDate(fulfilmentDate)}`);
+	}
+	// Order note last, in a clearly delimited section. It sits AFTER the
+	// "Order: ORD-XXXX" line, so even if the note text contains something that
+	// looks like an order token, the inbound parser still matches the real ID
+	// (first match) — see SHORT_ID_REGEX in whatsappCopy.
+	if (note) {
+		lines.push("");
+		lines.push("📝 Note for seller:");
+		lines.push(note);
 	}
 	return lines.join("\n");
 }
@@ -123,17 +204,64 @@ export function CheckoutSheet({
 	retailerId,
 	storeName,
 	checkoutPhone,
+	offerSelfCollect,
+	offerDelivery,
+	minFulfilmentNoticeDays,
+	pickupLocations,
 }: CheckoutSheetProps) {
 	const createOrder = useMutation(api.orders.create);
 	const [serverError, setServerError] = useState<string | null>(null);
 
+	// Selectable date range for the picker: today + the retailer's notice (the
+	// earliest day) through today + 30. Memoised on the retailer setting so the
+	// "today" anchor is computed once per open, not on every keystroke. The
+	// server re-validates against the live window — see convex/lib/fulfilmentDate.
+	const { minYmd, maxYmd } = useMemo(() => {
+		const bounds = fulfilmentDateBounds(minFulfilmentNoticeDays);
+		return {
+			minYmd: ymdFromEpoch(bounds.min),
+			maxYmd: ymdFromEpoch(bounds.max),
+		};
+	}, [minFulfilmentNoticeDays]);
+
 	const noCheckoutPhone = !checkoutPhone;
+	// Self-collect surfaces on the storefront only when the retailer opted in
+	// AND has at least one active pickup location. Both gates must be open or
+	// the buyer never sees a non-functional option.
+	const selfCollectAvailable = offerSelfCollect && pickupLocations.length > 0;
+	// Delivery is zero-config (buyer types an address) so it only depends on the
+	// retailer's opt-in. The settings invariant guarantees at least one of these
+	// is true, so `neitherAvailable` is a defensive fallback, not a normal state.
+	const deliveryAvailable = offerDelivery;
+	const bothAvailable = deliveryAvailable && selfCollectAvailable;
+	const neitherAvailable = !deliveryAvailable && !selfCollectAvailable;
+	// Default to delivery when offered, otherwise self-collect — so a pickup-only
+	// store opens straight on the pickup picker with no dead delivery branch.
+	const defaultMethod: "delivery" | "self_collect" = deliveryAvailable
+		? "delivery"
+		: "self_collect";
+	// Stable sort so the auto-select / radio list match the retailer's
+	// configured order — the query already returns sorted, but defending against
+	// upstream reordering is cheap and removes a class of subtle bugs.
+	const sortedPickups = [...pickupLocations].sort(
+		(a, b) => a.sortOrder - b.sortOrder,
+	);
+	const singlePickup =
+		sortedPickups.length === 1 ? sortedPickups[0] : undefined;
 
 	const form = useAppForm({
 		defaultValues: {
 			name: "",
-			deliveryMethod: "delivery" as "delivery" | "self_collect",
+			deliveryMethod: defaultMethod,
 			address: loadSavedAddress(),
+			// Empty when delivery, the chosen id when self-collect with 2+ options,
+			// unused when self-collect with exactly 1 option (auto-resolved at submit).
+			pickupLocationId: "",
+			// "YYYY-MM-DD" the buyer picks for delivery/pickup. Required at submit.
+			fulfilmentDate: "",
+			// Optional free-text instruction for the seller (local form state — the
+			// note is order-level, not a cart item, so it doesn't belong in useCart).
+			note: "",
 		},
 		validators: { onChange: checkoutFormSchema },
 		onSubmit: async ({ value }) => {
@@ -149,11 +277,62 @@ export function CheckoutSheet({
 				value.deliveryMethod === "delivery"
 					? sanitizeAddress(value.address)
 					: undefined;
+
+			// Resolve the chosen pickup location id. For the single-location case
+			// we never asked the buyer to pick — auto-fill from the (only) option.
+			let resolvedPickupLocationId: Id<"pickupLocations"> | undefined;
+			let resolvedPickupLocation: PublicPickupLocation | undefined;
+			if (value.deliveryMethod === "self_collect" && selfCollectAvailable) {
+				if (singlePickup) {
+					resolvedPickupLocationId = singlePickup._id;
+					resolvedPickupLocation = singlePickup;
+				} else {
+					const chosen = sortedPickups.find(
+						(p) => p._id === value.pickupLocationId,
+					);
+					if (!chosen) {
+						setServerError("Please choose a pickup location to continue.");
+						return;
+					}
+					resolvedPickupLocationId = chosen._id;
+					resolvedPickupLocation = chosen;
+				}
+			}
+
+			// Resolve + range-check the fulfilment date. The schema guarantees a
+			// non-empty string; here we convert to a MYT-midnight epoch and confirm
+			// it's inside the live [min, max] window before sending. Mirrors the
+			// server (which re-validates) so the buyer sees the error inline.
+			const fulfilmentEpoch = mytMidnightFromYmd(value.fulfilmentDate);
+			if (Number.isNaN(fulfilmentEpoch)) {
+				setServerError("That date isn't valid — pick a day from the picker.");
+				return;
+			}
+			try {
+				assertValidFulfilmentDate(fulfilmentEpoch, minFulfilmentNoticeDays);
+			} catch (err) {
+				setServerError((err as Error).message);
+				return;
+			}
+
+			const trimmedNote = value.note?.trim();
+			const generalNote =
+				trimmedNote && trimmedNote.length > 0 ? trimmedNote : undefined;
+			// Fold any per-line custom requests into the single order note so they
+			// reach the seller via the existing customerNote channel (WhatsApp + the
+			// dashboard + email) — no per-item schema needed. See docs/custom-option.md.
+			const customerNote = composeCustomerNote(cart.items, generalNote);
+			// Order is one custom negotiation → one reference image. Take the first
+			// custom line's image (rare to have 2+ custom items in one order).
+			const customerImageStorageId = cart.items.find(
+				(i) => i.customImageStorageId,
+			)?.customImageStorageId;
+
 			try {
 				const { shortId } = await createOrder({
 					retailerId,
 					items: cart.items.map((i) => ({
-						productId: i.productId,
+						variantId: i.variantId,
 						quantity: i.quantity,
 					})),
 					currency: cart.currency,
@@ -163,6 +342,10 @@ export function CheckoutSheet({
 					},
 					deliveryMethod: value.deliveryMethod,
 					deliveryAddress: sanitizedAddress,
+					pickupLocationId: resolvedPickupLocationId,
+					fulfilmentDate: fulfilmentEpoch,
+					customerNote,
+					customerImageStorageId,
 				});
 				const message = buildWaMessage(
 					storeName,
@@ -170,6 +353,9 @@ export function CheckoutSheet({
 					cart,
 					value.deliveryMethod,
 					sanitizedAddress,
+					resolvedPickupLocation,
+					customerNote,
+					fulfilmentEpoch,
 				);
 				const url = `https://wa.me/${checkoutPhone}?text=${encodeURIComponent(message)}`;
 				if (value.deliveryMethod === "delivery") saveAddress(value.address);
@@ -225,7 +411,7 @@ export function CheckoutSheet({
 								<ul className="flex flex-col gap-3">
 									{cart.items.map((item) => (
 										<li
-											key={item.productId}
+											key={item.variantId}
 											className="flex items-center gap-3 rounded-xl border border-border p-3"
 										>
 											{item.imageUrl ? (
@@ -241,21 +427,39 @@ export function CheckoutSheet({
 												<span className="text-sm font-medium leading-tight">
 													{item.name}
 												</span>
+												{item.optionLabel ? (
+													<span className="text-xs font-medium text-muted-foreground">
+														{item.optionLabel}
+													</span>
+												) : null}
 												<span className="text-xs text-muted-foreground">
-													{item.quantity} ×{" "}
-													{formatPrice(item.price, item.currency)}
+													{item.quoteOnRequest
+														? `${item.quantity} × Price on quote`
+														: `${item.quantity} × ${formatPrice(item.price, item.currency)}`}
 												</span>
+												{item.note ? (
+													<span className="mt-1 rounded-md bg-muted/60 px-2 py-1 text-[11px] leading-snug text-muted-foreground">
+														📝 {item.note}
+													</span>
+												) : null}
+												{item.customImageStorageId ? (
+													<span className="mt-1 w-fit rounded-md bg-muted/60 px-2 py-1 text-[11px] leading-snug text-muted-foreground">
+														📎 Reference photo attached
+													</span>
+												) : null}
 											</div>
 											<div className="flex items-center gap-2">
 												<span className="text-sm font-semibold">
-													{formatPrice(
-														item.price * item.quantity,
-														item.currency,
-													)}
+													{item.quoteOnRequest
+														? "On quote"
+														: formatPrice(
+																item.price * item.quantity,
+																item.currency,
+															)}
 												</span>
 												<button
 													type="button"
-													onClick={() => cart.removeItem(item.productId)}
+													onClick={() => cart.removeItem(item.variantId)}
 													className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-muted"
 													aria-label={`Remove ${item.name}`}
 												>
@@ -277,50 +481,118 @@ export function CheckoutSheet({
 										/>
 									)}
 								</form.AppField>
-								{/* Delivery method */}
-								<form.AppField name="deliveryMethod">
+								{/* Method picker only when BOTH methods are offered. With a
+								    single method there's nothing to choose, so we drop straight
+								    to that method's form below (delivery → address, self-collect
+								    → pickup picker). The settings invariant keeps ≥1 on offer. */}
+								{bothAvailable ? (
+									<form.AppField name="deliveryMethod">
+										{(field) => (
+											<fieldset className="flex flex-col gap-2">
+												<legend className="text-sm font-medium">
+													How would you like to receive your order?
+												</legend>
+												<div className="grid grid-cols-2 gap-2">
+													<button
+														type="button"
+														onClick={() => field.handleChange("delivery")}
+														className={`flex flex-col items-center gap-1.5 rounded-xl border-2 px-3 py-3 text-sm font-medium transition-colors ${
+															field.state.value === "delivery"
+																? "border-accent bg-accent/5 text-accent"
+																: "border-border bg-card text-muted-foreground hover:border-accent/40"
+														}`}
+													>
+														<Truck className="size-5" />
+														Delivery
+													</button>
+													<button
+														type="button"
+														onClick={() => field.handleChange("self_collect")}
+														className={`flex flex-col items-center gap-1.5 rounded-xl border-2 px-3 py-3 text-sm font-medium transition-colors ${
+															field.state.value === "self_collect"
+																? "border-accent bg-accent/5 text-accent"
+																: "border-border bg-card text-muted-foreground hover:border-accent/40"
+														}`}
+													>
+														<Package className="size-5" />
+														Self Collect
+													</button>
+												</div>
+											</fieldset>
+										)}
+									</form.AppField>
+								) : null}
+
+								{neitherAvailable ? (
+									<p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+										This store isn&apos;t accepting orders right now. Please
+										check back soon or message the store owner.
+									</p>
+								) : (
+									<form.Subscribe selector={(s) => s.values.deliveryMethod}>
+										{(deliveryMethod) =>
+											deliveryMethod === "delivery" ? (
+												<AddressFieldset
+													form={form}
+													fields="address"
+													retailerId={retailerId}
+												/>
+											) : selfCollectAvailable ? (
+												singlePickup ? (
+													<PickupSummaryCard location={singlePickup} />
+												) : (
+													<form.AppField name="pickupLocationId">
+														{(field) => (
+															<PickupLocationRadioList
+																locations={sortedPickups}
+																value={field.state.value}
+																onChange={(id) => field.handleChange(id)}
+															/>
+														)}
+													</form.AppField>
+												)
+											) : null
+										}
+									</form.Subscribe>
+								)}
+
+								{/* When do you need it — required for both delivery and
+								    pickup. Sits below the where (address/pickup), above the
+								    optional note: a required structured field outranks the
+								    free-text note. Hidden only when the store can't take
+								    orders at all. */}
+								{neitherAvailable ? null : (
+									<form.Subscribe selector={(s) => s.values.deliveryMethod}>
+										{(deliveryMethod) => (
+											<form.AppField name="fulfilmentDate">
+												{(field) => (
+													<field.DateField
+														label={
+															deliveryMethod === "self_collect"
+																? "When will you collect?"
+																: "When do you need it delivered?"
+														}
+														min={minYmd}
+														max={maxYmd}
+														required
+														description="Pick the date you need this order."
+													/>
+												)}
+											</form.AppField>
+										)}
+									</form.Subscribe>
+								)}
+
+								<form.AppField name="note">
 									{(field) => (
-										<fieldset className="flex flex-col gap-2">
-											<legend className="text-sm font-medium">
-												How would you like to receive your order?
-											</legend>
-											<div className="grid grid-cols-2 gap-2">
-												<button
-													type="button"
-													onClick={() => field.handleChange("delivery")}
-													className={`flex flex-col items-center gap-1.5 rounded-xl border-2 px-3 py-3 text-sm font-medium transition-colors ${
-														field.state.value === "delivery"
-															? "border-accent bg-accent/5 text-accent"
-															: "border-border bg-card text-muted-foreground hover:border-accent/40"
-													}`}
-												>
-													<Truck className="size-5" />
-													Delivery
-												</button>
-												<button
-													type="button"
-													onClick={() => field.handleChange("self_collect")}
-													className={`flex flex-col items-center gap-1.5 rounded-xl border-2 px-3 py-3 text-sm font-medium transition-colors ${
-														field.state.value === "self_collect"
-															? "border-accent bg-accent/5 text-accent"
-															: "border-border bg-card text-muted-foreground hover:border-accent/40"
-													}`}
-												>
-													<Package className="size-5" />
-													Self Collect
-												</button>
-											</div>
-										</fieldset>
+										<field.TextareaField
+											label="Note for seller (optional)"
+											placeholder="Any special instructions? e.g. no onions, deliver after 5pm"
+											rows={3}
+											maxLength={500}
+										/>
 									)}
 								</form.AppField>
-
-								<form.Subscribe selector={(s) => s.values.deliveryMethod}>
-									{(deliveryMethod) =>
-										deliveryMethod === "delivery" ? (
-											<AddressFieldset form={form} fields="address" />
-										) : null
-									}
-								</form.Subscribe>
 							</div>
 
 							{noCheckoutPhone ? (
@@ -357,7 +629,8 @@ export function CheckoutSheet({
 											!canSubmit ||
 											isSubmitting ||
 											cart.items.length === 0 ||
-											noCheckoutPhone
+											noCheckoutPhone ||
+											neitherAvailable
 										}
 										className="h-12 w-full text-base"
 									>
@@ -382,5 +655,116 @@ export function CheckoutSheet({
 				</Dialog.Content>
 			</Dialog.Portal>
 		</Dialog.Root>
+	);
+}
+
+/**
+ * Auto-selected confirmation card when the retailer has exactly one active
+ * pickup location. No interaction needed — the location is resolved at submit
+ * time.
+ */
+function PickupSummaryCard({ location }: { location: PublicPickupLocation }) {
+	return (
+		<section className="flex flex-col gap-2 rounded-xl border-2 border-accent/30 bg-accent/5 p-4">
+			<div className="flex items-start gap-2">
+				<MapPin
+					className="size-4 shrink-0 text-accent mt-0.5"
+					aria-hidden="true"
+				/>
+				<div className="flex min-w-0 flex-col gap-1">
+					<p className="text-sm font-semibold leading-tight">
+						{location.label}
+					</p>
+					<p className="text-xs text-muted-foreground whitespace-pre-line">
+						{location.address}
+					</p>
+					{(() => {
+						const mapsUrl = deriveMapsUrl(location);
+						return mapsUrl ? (
+							<a
+								href={mapsUrl}
+								target="_blank"
+								rel="noopener noreferrer"
+								className="flex items-center gap-1 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
+							>
+								<ExternalLink className="size-3" />
+								Open in maps
+							</a>
+						) : null;
+					})()}
+					{location.notes ? (
+						<p className="text-xs text-muted-foreground whitespace-pre-line">
+							{location.notes}
+						</p>
+					) : null}
+				</div>
+			</div>
+		</section>
+	);
+}
+
+/**
+ * Required radio list when 2+ active pickup locations exist. Buyer must pick
+ * one before submission — the submit handler refuses to proceed without a
+ * matching id.
+ */
+function PickupLocationRadioList({
+	locations,
+	value,
+	onChange,
+}: {
+	locations: ReadonlyArray<PublicPickupLocation>;
+	value: string;
+	onChange: (id: string) => void;
+}) {
+	return (
+		<fieldset className="flex flex-col gap-2">
+			<legend className="text-sm font-medium">Choose a pickup location</legend>
+			<div className="flex flex-col gap-2">
+				{locations.map((loc) => {
+					const selected = value === loc._id;
+					const mapsUrl = deriveMapsUrl(loc);
+					return (
+						<label
+							key={loc._id}
+							className={`flex cursor-pointer items-start gap-3 rounded-xl border-2 p-3 transition-colors ${
+								selected
+									? "border-accent bg-accent/5"
+									: "border-border bg-card hover:border-accent/40"
+							}`}
+						>
+							<input
+								type="radio"
+								name="pickupLocationId"
+								value={loc._id}
+								checked={selected}
+								onChange={() => onChange(loc._id)}
+								className="mt-1 size-4 shrink-0 accent-accent"
+							/>
+							<div className="flex min-w-0 flex-1 flex-col gap-1">
+								<span className="text-sm font-semibold leading-tight">
+									{loc.label}
+								</span>
+								<span className="text-xs text-muted-foreground whitespace-pre-line">
+									{loc.address}
+								</span>
+								{mapsUrl ? (
+									<a
+										href={mapsUrl}
+										target="_blank"
+										rel="noopener noreferrer"
+										onClick={(e) => e.stopPropagation()}
+										className="flex items-center gap-1 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
+									>
+										<ExternalLink className="size-3" />
+										Open in maps
+									</a>
+								) : null}
+							</div>
+						</label>
+					);
+				})}
+			</div>
+		</fieldset>
 	);
 }

@@ -8,11 +8,19 @@
  * @module
  */
 
+import type * as billing from "../billing.js";
+import type * as billingEmail from "../billingEmail.js";
+import type * as counterCheckout from "../counterCheckout.js";
 import type * as crons from "../crons.js";
 import type * as customers from "../customers.js";
 import type * as email from "../email.js";
+import type * as foundingMembers from "../foundingMembers.js";
+import type * as google from "../google.js";
 import type * as http from "../http.js";
+import type * as invoices from "../invoices.js";
 import type * as lib_address from "../lib/address.js";
+import type * as lib_auth from "../lib/auth.js";
+import type * as lib_billingEmailCopy from "../lib/billingEmailCopy.js";
 import type * as lib_channels_registry from "../lib/channels/registry.js";
 import type * as lib_channels_types from "../lib/channels/types.js";
 import type * as lib_channels_whatsapp_adapter from "../lib/channels/whatsapp/adapter.js";
@@ -20,18 +28,35 @@ import type * as lib_currency from "../lib/currency.js";
 import type * as lib_customer from "../lib/customer.js";
 import type * as lib_email from "../lib/email.js";
 import type * as lib_emailCopy from "../lib/emailCopy.js";
+import type * as lib_fulfilmentDate from "../lib/fulfilmentDate.js";
+import type * as lib_inboundIntent from "../lib/inboundIntent.js";
 import type * as lib_legal from "../lib/legal.js";
+import type * as lib_mapsUrl from "../lib/mapsUrl.js";
 import type * as lib_order from "../lib/order.js";
+import type * as lib_orderBuckets from "../lib/orderBuckets.js";
+import type * as lib_orderStatus from "../lib/orderStatus.js";
+import type * as lib_payment from "../lib/payment.js";
+import type * as lib_paymentMethod from "../lib/paymentMethod.js";
+import type * as lib_plans from "../lib/plans.js";
 import type * as lib_rateLimiter from "../lib/rateLimiter.js";
 import type * as lib_slug from "../lib/slug.js";
+import type * as lib_storeProfile from "../lib/storeProfile.js";
+import type * as lib_variant from "../lib/variant.js";
+import type * as lib_wabaLimits from "../lib/wabaLimits.js";
+import type * as lib_wabaWebhook from "../lib/wabaWebhook.js";
 import type * as lib_whatsapp from "../lib/whatsapp.js";
 import type * as lib_whatsappCopy from "../lib/whatsappCopy.js";
 import type * as lib_whatsappSignature from "../lib/whatsappSignature.js";
 import type * as lib_whatsappWebhook from "../lib/whatsappWebhook.js";
+import type * as migrations from "../migrations.js";
 import type * as orders from "../orders.js";
+import type * as payments_provider from "../payments/provider.js";
+import type * as pickupLocations from "../pickupLocations.js";
 import type * as products from "../products.js";
 import type * as retailers from "../retailers.js";
 import type * as seed from "../seed.js";
+import type * as subscriptions from "../subscriptions.js";
+import type * as wabaProtection from "../wabaProtection.js";
 import type * as whatsapp from "../whatsapp.js";
 
 import type {
@@ -41,11 +66,19 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  billing: typeof billing;
+  billingEmail: typeof billingEmail;
+  counterCheckout: typeof counterCheckout;
   crons: typeof crons;
   customers: typeof customers;
   email: typeof email;
+  foundingMembers: typeof foundingMembers;
+  google: typeof google;
   http: typeof http;
+  invoices: typeof invoices;
   "lib/address": typeof lib_address;
+  "lib/auth": typeof lib_auth;
+  "lib/billingEmailCopy": typeof lib_billingEmailCopy;
   "lib/channels/registry": typeof lib_channels_registry;
   "lib/channels/types": typeof lib_channels_types;
   "lib/channels/whatsapp/adapter": typeof lib_channels_whatsapp_adapter;
@@ -53,18 +86,35 @@ declare const fullApi: ApiFromModules<{
   "lib/customer": typeof lib_customer;
   "lib/email": typeof lib_email;
   "lib/emailCopy": typeof lib_emailCopy;
+  "lib/fulfilmentDate": typeof lib_fulfilmentDate;
+  "lib/inboundIntent": typeof lib_inboundIntent;
   "lib/legal": typeof lib_legal;
+  "lib/mapsUrl": typeof lib_mapsUrl;
   "lib/order": typeof lib_order;
+  "lib/orderBuckets": typeof lib_orderBuckets;
+  "lib/orderStatus": typeof lib_orderStatus;
+  "lib/payment": typeof lib_payment;
+  "lib/paymentMethod": typeof lib_paymentMethod;
+  "lib/plans": typeof lib_plans;
   "lib/rateLimiter": typeof lib_rateLimiter;
   "lib/slug": typeof lib_slug;
+  "lib/storeProfile": typeof lib_storeProfile;
+  "lib/variant": typeof lib_variant;
+  "lib/wabaLimits": typeof lib_wabaLimits;
+  "lib/wabaWebhook": typeof lib_wabaWebhook;
   "lib/whatsapp": typeof lib_whatsapp;
   "lib/whatsappCopy": typeof lib_whatsappCopy;
   "lib/whatsappSignature": typeof lib_whatsappSignature;
   "lib/whatsappWebhook": typeof lib_whatsappWebhook;
+  migrations: typeof migrations;
   orders: typeof orders;
+  "payments/provider": typeof payments_provider;
+  pickupLocations: typeof pickupLocations;
   products: typeof products;
   retailers: typeof retailers;
   seed: typeof seed;
+  subscriptions: typeof subscriptions;
+  wabaProtection: typeof wabaProtection;
   whatsapp: typeof whatsapp;
 }>;
 

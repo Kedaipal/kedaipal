@@ -1,5 +1,8 @@
 // WhatsApp message copy catalog. Pure — no Convex imports — to keep testable.
 
+import { deriveMapsUrl } from "./mapsUrl";
+import type { PaymentMethod } from "./payment";
+
 export type Locale = "en" | "ms";
 
 export type DeliveryMethod = "delivery" | "self_collect";
@@ -109,11 +112,26 @@ export function pickLocale(input: string | undefined | null): Locale {
 // can't break payment matching by editing a template.
 // ---------------------------------------------------------------------------
 
-export type SystemMessageKey = "paymentReceived" | "transferReferenceLine";
+export type SystemMessageKey =
+	| "paymentReceived"
+	| "transferReferenceLine"
+	| "mockupPendingConfirm"
+	| "paymentDueApproved"
+	| "paymentDueWaived"
+	| "paymentDueDeclined";
 
 type SystemCopy = {
 	paymentReceived: (v: CopyVars) => string;
 	transferReferenceLine: (v: CopyVars) => string;
+	// Confirm reply for an order that still has a custom item awaiting buyer
+	// mockup approval — payment is intentionally deferred (no "I've paid" yet).
+	mockupPendingConfirm: (v: CopyVars) => string;
+	// Intro lines that lead the payment prompt once the mockup gate opens, either
+	// by buyer approval, seller waiver, or the buyer removing the custom item from
+	// a mixed order (the ready-made remainder is now payable). Payment block follows.
+	paymentDueApproved: (v: CopyVars) => string;
+	paymentDueWaived: (v: CopyVars) => string;
+	paymentDueDeclined: (v: CopyVars) => string;
 };
 
 export const systemMessages: Record<Locale, SystemCopy> = {
@@ -124,6 +142,16 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			}`,
 		transferReferenceLine: ({ shortId }) =>
 			`Use ${shortId} as your transfer reference so we can match it.`,
+		mockupPendingConfirm: ({ shortId, storeName, contactPhone, trackingUrl }) =>
+			`✅ Order ${shortId} received! It includes a custom item, so ${storeName} will send you a design to approve first — no payment needed yet. We'll share payment details right after you approve.${
+				trackingUrl ? `\n\nTrack your order: ${trackingUrl}` : ""
+			}${contactLine(contactPhone, "en")}`,
+		paymentDueApproved: ({ shortId, storeName }) =>
+			`✅ Design approved for ${shortId}! Here's how to pay so ${storeName} can start making it:`,
+		paymentDueWaived: ({ shortId, storeName }) =>
+			`Here are the payment details for your order ${shortId} from ${storeName}:`,
+		paymentDueDeclined: ({ shortId, storeName }) =>
+			`No problem — the custom item was removed from ${shortId}. Here's how to pay for the rest of your order from ${storeName}:`,
 	},
 	ms: {
 		paymentReceived: ({ shortId, storeName, trackingUrl }) =>
@@ -132,6 +160,16 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			}`,
 		transferReferenceLine: ({ shortId }) =>
 			`Gunakan ${shortId} sebagai rujukan pemindahan supaya kami boleh padankan.`,
+		mockupPendingConfirm: ({ shortId, storeName, contactPhone, trackingUrl }) =>
+			`✅ Pesanan ${shortId} diterima! Ia termasuk item custom, jadi ${storeName} akan menghantar reka bentuk untuk kelulusan anda dahulu — belum perlu bayar lagi. Kami akan kongsi maklumat pembayaran sebaik anda luluskan.${
+				trackingUrl ? `\n\nJejak pesanan anda: ${trackingUrl}` : ""
+			}${contactLine(contactPhone, "ms")}`,
+		paymentDueApproved: ({ shortId, storeName }) =>
+			`✅ Reka bentuk untuk ${shortId} telah diluluskan! Berikut cara membayar supaya ${storeName} boleh mula membuatnya:`,
+		paymentDueWaived: ({ shortId, storeName }) =>
+			`Berikut maklumat pembayaran untuk pesanan ${shortId} dari ${storeName}:`,
+		paymentDueDeclined: ({ shortId, storeName }) =>
+			`Tiada masalah — item custom telah dibuang dari ${shortId}. Berikut cara membayar untuk baki pesanan anda dari ${storeName}:`,
 	},
 };
 
@@ -141,6 +179,40 @@ export function renderSystemMessage(
 	vars: CopyVars,
 ): string {
 	return systemMessages[locale][key](vars);
+}
+
+/**
+ * Phase 2 — generic "your order moved to <stage>" update, sent when a seller
+ * advances an order INTO a custom stage that shares its canonical anchor with
+ * the previous one (i.e. no canonical status change, so the rich status
+ * templates above don't fire) and the stage has `notify: true`. Anchor-CROSSING
+ * moves keep using the existing `renderMessage` status copy (+ messageTemplates
+ * overrides), so this never duplicates or replaces those. Not retailer-
+ * overridable — the seller controls the wording via the stage label/description.
+ */
+export function renderStageUpdate(
+	locale: Locale,
+	args: {
+		shortId: string;
+		stageLabel: string;
+		stageDescription?: string;
+		trackingUrl?: string;
+		contactPhone?: string;
+	},
+): string {
+	const desc = args.stageDescription?.trim()
+		? `\n${args.stageDescription.trim()}`
+		: "";
+	const track = args.trackingUrl
+		? locale === "ms"
+			? `\n\nJejak pesanan anda: ${args.trackingUrl}`
+			: `\n\nTrack your order: ${args.trackingUrl}`
+		: "";
+	const head =
+		locale === "ms"
+			? `📦 Kemaskini pesanan ${args.shortId}: ${args.stageLabel}.`
+			: `📦 Order ${args.shortId} update: ${args.stageLabel}.`;
+	return `${head}${desc}${track}${contactLine(args.contactPhone, locale)}`;
 }
 
 // Matches ORD-XXXX where X is from the alphabet in lib/order.ts
@@ -213,14 +285,6 @@ export function defaultTemplate(locale: Locale, key: TemplateKey): string {
 // Payment instructions
 // ---------------------------------------------------------------------------
 
-export type PaymentInstructions = {
-	bankName?: string;
-	bankAccountName?: string;
-	bankAccountNumber?: string;
-	qrImageStorageId?: string;
-	note?: string;
-};
-
 const paymentLabels: Record<
 	Locale,
 	{
@@ -228,6 +292,7 @@ const paymentLabels: Record<
 		bank: string;
 		accountName: string;
 		accountNumber: string;
+		qrFollows: string;
 		qrCaption: string;
 	}
 > = {
@@ -236,6 +301,7 @@ const paymentLabels: Record<
 		bank: "Bank",
 		accountName: "Name",
 		accountNumber: "Account",
+		qrFollows: "Scan the QR below 👇",
 		qrCaption: "Scan to pay",
 	},
 	ms: {
@@ -243,47 +309,122 @@ const paymentLabels: Record<
 		bank: "Bank",
 		accountName: "Nama",
 		accountNumber: "Akaun",
+		qrFollows: "Imbas QR di bawah 👇",
 		qrCaption: "Imbas untuk bayar",
 	},
 };
 
 /**
- * Render the payment instructions block as plain text. Returns empty string if
- * no bank fields and no note are present (QR-only retailers get a header line
- * only when bank/note are absent — the QR image carries its own caption).
- *
- * Pure: no Convex / no storage. Caller resolves the QR storage URL separately.
+ * Render the payment block listing ALL configured methods as plain text. Each
+ * method is a labelled sub-block (`*label*` — WhatsApp renders this bold):
+ *  - `bank` → Bank / Name / Account-number-on-its-own-line (so a long-press
+ *    selects just the number; the web track page has a one-tap copy too);
+ *  - `qr` → a "scan the QR below" line — the image itself is sent as a separate
+ *    follow-up message by the caller (one per QR, captioned with the label).
+ * Returns "" when there are no methods. Pure: no Convex / no storage; the caller
+ * resolves QR storage URLs and sends the images.
  */
-export function renderPaymentInstructions(
+export function renderPaymentMethods(
 	locale: Locale,
-	instructions: PaymentInstructions | undefined,
+	methods: ReadonlyArray<PaymentMethod>,
 ): string {
-	if (!instructions) return "";
+	if (methods.length === 0) return "";
 	const labels = paymentLabels[locale];
-	const lines: string[] = [];
+	const lines: string[] = ["", labels.header];
 
-	const bank = instructions.bankName?.trim();
-	const accName = instructions.bankAccountName?.trim();
-	const accNum = instructions.bankAccountNumber?.trim();
-	const note = instructions.note?.trim();
-
-	const hasBankBlock = Boolean(bank || accName || accNum);
-	const hasAny = hasBankBlock || Boolean(note);
-	if (!hasAny) return "";
-
-	lines.push("");
-	lines.push(labels.header);
-	if (bank) lines.push(`${labels.bank}: ${bank}`);
-	if (accName) lines.push(`${labels.accountName}: ${accName}`);
-	if (accNum) lines.push(`${labels.accountNumber}: ${accNum}`);
-	if (note) {
-		if (hasBankBlock) lines.push("");
-		lines.push(note);
+	for (const m of methods) {
+		const label = m.label.trim();
+		lines.push("");
+		lines.push(`*${label}*`);
+		if (m.type === "bank") {
+			const bank = m.bankName?.trim();
+			const accName = m.bankAccountName?.trim();
+			const accNum = m.bankAccountNumber?.trim();
+			// Skip a redundant "Bank: X" line when the label already IS the bank name.
+			if (bank && bank.toLowerCase() !== label.toLowerCase())
+				lines.push(`${labels.bank}: ${bank}`);
+			if (accName) lines.push(`${labels.accountName}: ${accName}`);
+			if (accNum) {
+				lines.push(`${labels.accountNumber}:`);
+				lines.push(accNum);
+			}
+		} else {
+			lines.push(labels.qrFollows);
+		}
+		const note = m.note?.trim();
+		if (note) lines.push(note);
 	}
 	return lines.join("\n");
 }
 
-export function paymentQrCaption(locale: Locale): string {
-	return paymentLabels[locale].qrCaption;
+/**
+ * Caption for a QR follow-up image. Includes the method's label when given (so a
+ * buyer with several QRs knows which is which), else the generic "scan to pay".
+ */
+export function paymentQrCaption(locale: Locale, label?: string): string {
+	const base = paymentLabels[locale].qrCaption;
+	const trimmed = label?.trim();
+	return trimmed ? `${trimmed} — ${base}` : base;
+}
+
+// ---------------------------------------------------------------------------
+// Self-collect pickup snapshot
+// ---------------------------------------------------------------------------
+
+export type PickupSnapshot = {
+	label: string;
+	address: string;
+	mapsUrl?: string;
+	notes?: string;
+	latitude?: number;
+	longitude?: number;
+	placeId?: string;
+};
+
+const pickupLabels: Record<Locale, { header: string }> = {
+	en: { header: "📍 Pickup details" },
+	ms: { header: "📍 Maklumat pengambilan" },
+};
+
+/**
+ * Render the pickup-location block appended to the confirm message for
+ * self-collect orders. Returns "" when the snapshot is missing so the caller
+ * can string-concat unconditionally — mirrors `renderPaymentMethods`.
+ *
+ * Output (note leading blank line so consecutive blocks separate visually):
+ *   ""
+ *   "📍 Pickup details"
+ *   "<label>"
+ *   "<address>"
+ *   "<mapsUrl>"   (optional)
+ *   ""
+ *   "<notes>"     (optional)
+ */
+export function renderPickupBlock(
+	locale: Locale,
+	snapshot: PickupSnapshot | undefined,
+): string {
+	if (!snapshot) return "";
+	const labels = pickupLabels[locale];
+	const lines: string[] = [""];
+	lines.push(labels.header);
+	lines.push(snapshot.label);
+	lines.push(snapshot.address);
+	// Embed a clickable maps URL inline so the buyer gets one-tap navigation
+	// without us having to send a separate WhatsApp location-pin message.
+	// Priority: mapsUrl → placeId-derived → lat/lng-derived (see deriveMapsUrl).
+	// Skipped when none are available (free-text legacy rows).
+	const mapsUrl = deriveMapsUrl({
+		mapsUrl: snapshot.mapsUrl,
+		latitude: snapshot.latitude,
+		longitude: snapshot.longitude,
+		placeId: snapshot.placeId,
+	});
+	if (mapsUrl) lines.push(mapsUrl);
+	if (snapshot.notes) {
+		lines.push("");
+		lines.push(snapshot.notes);
+	}
+	return lines.join("\n");
 }
 

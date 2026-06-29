@@ -1,5 +1,6 @@
 import { cn } from "../../lib/utils";
 import { Field, FieldDescription, FieldError, FieldLabel } from "../ui/field";
+import { Input } from "../ui/input";
 import { useFieldContext } from "./form";
 
 interface TextFieldProps {
@@ -34,7 +35,7 @@ export function TextField({
 				{label}
 				{required ? <span className="ml-0.5 text-destructive">*</span> : null}
 			</FieldLabel>
-			<input
+			<Input
 				id={field.name}
 				name={field.name}
 				type={type}
@@ -45,15 +46,9 @@ export function TextField({
 				value={field.state.value ?? ""}
 				onChange={(e) => field.handleChange(e.target.value)}
 				onBlur={() => field.handleBlur()}
-				aria-invalid={isInvalid}
-				className={cn(
-					"min-h-11 rounded-xl border border-input bg-background px-4 text-base outline-none transition-colors",
-					"focus:border-ring focus:ring-2 focus:ring-ring/50",
-					"disabled:cursor-not-allowed disabled:opacity-60",
-					mono && "font-mono",
-					isInvalid &&
-						"border-destructive focus:border-destructive focus:ring-destructive/30",
-				)}
+				variant="field"
+				isError={isInvalid}
+				className={cn(mono && "font-mono")}
 			/>
 			{description ? <FieldDescription>{description}</FieldDescription> : null}
 			{isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}

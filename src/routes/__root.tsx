@@ -4,9 +4,10 @@ import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 import { ConvexProviderWithClerk } from "convex/react-clerk";
 import { Toaster } from "sonner";
+import { useGoogleAnalytics } from "../hooks/useGoogleAnalytics";
 import { getConvexClient } from "../lib/convex";
 import { clientEnv } from "../lib/env";
-import { useGoogleAnalytics } from "../hooks/useGoogleAnalytics";
+import { getLocale } from "../paraglide/runtime";
 import appCss from "../styles.css?url";
 
 export const Route = createRootRoute({
@@ -15,8 +16,7 @@ export const Route = createRootRoute({
 			{ charSet: "utf-8" },
 			{
 				name: "viewport",
-				content:
-					"width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover",
+				content: "width=device-width, initial-scale=1, viewport-fit=cover",
 			},
 			{ name: "theme-color", content: "#0F172A" },
 			{ name: "robots", content: "index, follow" },
@@ -99,7 +99,7 @@ function SetupNotice() {
 function RootDocument({ children }: { children: React.ReactNode }) {
 	useGoogleAnalytics();
 	return (
-		<html lang="en" suppressHydrationWarning>
+		<html lang={getLocale()} suppressHydrationWarning>
 			<head>
 				<HeadContent />
 			</head>

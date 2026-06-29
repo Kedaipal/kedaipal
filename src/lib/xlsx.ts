@@ -1,8 +1,8 @@
 import ExcelJS from "exceljs";
 import {
-	type ParsedProductImport,
+	type GroupedImportResult,
+	parseVariantImport,
 	type RawImportRow,
-	validateProductRows,
 } from "./product-import";
 
 /**
@@ -53,21 +53,17 @@ function cellValueToString(
  */
 export async function parseProductsXlsx(
 	buffer: ArrayBuffer,
-): Promise<ParsedProductImport> {
+): Promise<GroupedImportResult> {
 	const wb = new ExcelJS.Workbook();
 	await wb.xlsx.load(buffer);
 	const ws = wb.worksheets[0];
 	if (!ws) {
 		return {
-			validRows: [],
+			products: [],
 			errorRows: [
-				{
-					rowNumber: 0,
-					raw: {},
-					errors: ["Workbook has no worksheets"],
-				},
+				{ rowNumber: 0, raw: {}, errors: ["Workbook has no worksheets"] },
 			],
-			totalRows: 0,
+			summary: { productCount: 0, variantCount: 0, autoFilledCount: 0 },
 		};
 	}
 
@@ -98,7 +94,7 @@ export async function parseProductsXlsx(
 
 	// Same offset as CSV — header is row 1, data starts row 2 — so validation
 	// row numbers match what the user sees in Excel.
-	return validateProductRows(
+	return parseVariantImport(
 		rows,
 		headers.filter((h) => h.length > 0),
 		2,

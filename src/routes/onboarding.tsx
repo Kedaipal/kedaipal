@@ -1,24 +1,67 @@
-import { RedirectToSignIn, Show } from "@clerk/tanstack-react-start";
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import {
+	RedirectToSignIn,
+	RedirectToSignUp,
+	Show,
+} from "@clerk/tanstack-react-start";
+import {
+	createFileRoute,
+	Link,
+	useLocation,
+	useNavigate,
+} from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
+import { Sparkles } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage } from "../lib/format";
+import {
+	decodeOnboardingPrefill,
+	type OnboardingPrefill,
+} from "../lib/onboarding-link";
 import { slugify } from "../lib/slug";
 
+/**
+ * Optional prefill, carried as a single URL-safe token (`?p=…`). Set when Kedaipal
+ * staff generate an "onboard a client" link from the admin billing page — the
+ * store name / slug / WhatsApp number are seeded so the client just reviews +
+ * confirms. The store is still created under the **client's own** Clerk login (they
+ * sign up first), so ownership is never ambiguous. A single token (vs separate
+ * query params) survives the Clerk auth redirect intact. See onboarding-link.ts.
+ */
+type OnboardingSearch = {
+	prefill?: OnboardingPrefill;
+};
+
 export const Route = createFileRoute("/onboarding")({
+	validateSearch: (search: Record<string, unknown>): OnboardingSearch => {
+		const token = typeof search.p === "string" ? search.p : undefined;
+		return { prefill: decodeOnboardingPrefill(token) };
+	},
 	component: OnboardingRoute,
 });
 
 function OnboardingRoute() {
+	// Preserve the prefill token across the auth round-trip — otherwise Clerk would
+	// bounce the client back to a bare /onboarding and drop the prefill.
+	const location = useLocation();
+	const search = Route.useSearch();
+	// An admin-invited client (has a prefill token) is brand-new — send them to
+	// SIGN-UP, not sign-in (sign-in would dead-end with "couldn't find account").
+	// Everyone else reaching /onboarding signed-out already has an account → sign-in.
+	const fallback = search.prefill ? (
+		<RedirectToSignUp
+			signUpForceRedirectUrl={location.href}
+			signUpFallbackRedirectUrl={location.href}
+		/>
+	) : (
+		<RedirectToSignIn signInForceRedirectUrl={location.href} />
+	);
 	return (
-		<Show
-			when="signed-in"
-			fallback={<RedirectToSignIn signInForceRedirectUrl="/onboarding" />}
-		>
+		<Show when="signed-in" fallback={fallback}>
 			<OnboardingForm />
 		</Show>
 	);
@@ -26,12 +69,20 @@ function OnboardingRoute() {
 
 function OnboardingForm() {
 	const navigate = useNavigate();
+	const search = Route.useSearch();
 	const retailer = useQuery(api.retailers.getMyRetailer);
 	const createRetailer = useMutation(api.retailers.createRetailer);
 
-	const [storeName, setStoreName] = useState("");
-	const [slug, setSlug] = useState("");
-	const [slugEdited, setSlugEdited] = useState(false);
+	// Assisted = an admin-generated prefill link. Seed the fields, surface the WA
+	// number for review, and tell the client what's going on.
+	const prefill = search.prefill;
+	const assisted = Boolean(prefill);
+
+	const [storeName, setStoreName] = useState(prefill?.store ?? "");
+	const [slug, setSlug] = useState(prefill?.slug ?? "");
+	// If a slug came in the link, treat it as hand-set so it's not re-derived.
+	const [slugEdited, setSlugEdited] = useState(Boolean(prefill?.slug));
+	const [waPhone, setWaPhone] = useState(prefill?.wa ?? "");
 	const [submitting, setSubmitting] = useState(false);
 	const [agreed, setAgreed] = useState(false);
 
@@ -66,7 +117,15 @@ function OnboardingForm() {
 		}
 		setSubmitting(true);
 		try {
-			await createRetailer({ storeName: storeName.trim(), slug });
+			const trimmedWa = waPhone.trim();
+			await createRetailer({
+				storeName: storeName.trim(),
+				slug,
+				...(trimmedWa.length > 0 ? { waPhone: trimmedWa } : {}),
+				// Founding-10: starts on the normal 14-day trial; the discounted Pro
+				// plan begins once Arif marks their founding invoice paid.
+				...(prefill?.founding ? { intent: "founding" as const } : {}),
+			});
 			navigate({ to: "/app" });
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -86,7 +145,9 @@ function OnboardingForm() {
 				<p className="text-xs font-semibold uppercase tracking-widest text-accent">
 					Step 1 of 1
 				</p>
-				<h1 className="text-3xl font-bold leading-tight">Name your store</h1>
+				<h1 className="text-3xl font-bold leading-tight">
+					{assisted ? "Confirm your store" : "Name your store"}
+				</h1>
 				<p className="text-sm text-muted-foreground">
 					This becomes your public link:{" "}
 					<span className="font-mono text-foreground">
@@ -95,14 +156,44 @@ function OnboardingForm() {
 				</p>
 			</header>
 
+			{assisted ? (
+				<div className="flex items-start gap-3 rounded-xl border border-accent/30 bg-accent/5 px-4 py-3 text-sm">
+					<Sparkles className="mt-0.5 size-4 shrink-0 text-accent" />
+					<p className="text-muted-foreground">
+						{prefill?.founding ? (
+							<>
+								You're being set up as a{" "}
+								<span className="font-medium text-foreground">
+									Founding Member
+								</span>{" "}
+								— your discounted Pro plan starts once you settle the first
+								invoice. Review the details and tap{" "}
+								<span className="font-medium text-foreground">
+									Create store
+								</span>
+								.
+							</>
+						) : (
+							<>
+								Kedaipal set this up for you. Review the details below and tap{" "}
+								<span className="font-medium text-foreground">
+									Create store
+								</span>{" "}
+								— you can change anything later in Settings.
+							</>
+						)}
+					</p>
+				</div>
+			) : null}
+
 			<form onSubmit={handleSubmit} className="flex flex-col gap-5">
 				<Field label="Store name">
-					<input
+					<Input
 						type="text"
 						value={storeName}
 						onChange={(e) => setStoreName(e.target.value)}
-						placeholder="Arif Outdoor"
-						className="min-h-11 rounded-xl border border-input bg-background px-4 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+						placeholder="e.g. Your store name"
+						variant="field"
 					/>
 				</Field>
 
@@ -111,7 +202,7 @@ function OnboardingForm() {
 						<span className="select-none text-muted-foreground">
 							kedaipal.com/
 						</span>
-						<input
+						<Input
 							type="text"
 							value={slug}
 							onChange={(e) => {
@@ -119,11 +210,28 @@ function OnboardingForm() {
 								setSlugEdited(true);
 							}}
 							placeholder="your-slug"
-							className="min-h-11 flex-1 bg-transparent pl-0 pr-4 font-mono text-base outline-none"
+							variant="bare"
+							className="min-h-11 flex-1 pr-4 font-mono text-base"
 						/>
 					</div>
 					<AvailabilityHint state={availability} />
 				</Field>
+
+				{assisted ? (
+					<Field label="WhatsApp number">
+						<Input
+							type="tel"
+							inputMode="tel"
+							value={waPhone}
+							onChange={(e) => setWaPhone(e.target.value)}
+							placeholder="e.g. 60123456789"
+							variant="field"
+						/>
+						<span className="text-xs text-muted-foreground">
+							The number buyers reach you on. Leave blank to add it later.
+						</span>
+					</Field>
+				) : null}
 
 				<label className="flex items-start gap-3 text-sm text-muted-foreground">
 					<input

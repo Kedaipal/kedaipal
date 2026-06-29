@@ -9,6 +9,9 @@ interface TextareaFieldProps {
 	description?: string;
 	rows?: number;
 	disabled?: boolean;
+	// When set, hard-caps input (browser `maxLength`) and shows a live counter
+	// that warns as it nears the cap.
+	maxLength?: number;
 }
 
 export function TextareaField({
@@ -18,9 +21,11 @@ export function TextareaField({
 	description,
 	rows = 4,
 	disabled = false,
+	maxLength,
 }: TextareaFieldProps) {
 	const field = useFieldContext<string>();
 	const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid;
+	const length = (field.state.value ?? "").length;
 
 	return (
 		<Field data-invalid={isInvalid}>
@@ -33,6 +38,7 @@ export function TextareaField({
 				name={field.name}
 				rows={rows}
 				disabled={disabled}
+				maxLength={maxLength}
 				placeholder={placeholder}
 				value={field.state.value ?? ""}
 				onChange={(e) => field.handleChange(e.target.value)}
@@ -46,7 +52,27 @@ export function TextareaField({
 						"border-destructive focus:border-destructive focus:ring-destructive/30",
 				)}
 			/>
-			{description ? <FieldDescription>{description}</FieldDescription> : null}
+			<div className="flex items-center justify-between gap-2">
+				{description ? (
+					<FieldDescription>{description}</FieldDescription>
+				) : (
+					<span />
+				)}
+				{maxLength ? (
+					<span
+						className={cn(
+							"shrink-0 text-xs tabular-nums",
+							length >= maxLength
+								? "text-destructive"
+								: length >= maxLength * 0.9
+									? "text-amber-600"
+									: "text-muted-foreground",
+						)}
+					>
+						{length}/{maxLength}
+					</span>
+				) : null}
+			</div>
 			{isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
 		</Field>
 	);

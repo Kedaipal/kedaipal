@@ -29,7 +29,7 @@ The five things to internalize:
 flowchart TB
     subgraph Shopper["Shopper (no auth)"]
         SF["Storefront /&lt;slug&gt;"]
-        TRK["Tracking /track/&lt;shortId&gt;"]
+        TRK["Tracking /track/&lt;token&gt;"]
     end
     subgraph Retailer["Retailer (Clerk auth)"]
         DASH["Dashboard /app/*"]
@@ -139,7 +139,7 @@ kedaipal/
 |---|---|---|
 | `/` | Landing | public |
 | `/$slug` | **Storefront** (browse, cart) | public |
-| `/track/$shortId` | Order tracking + "I've paid" | public (shortId = capability) |
+| `/track/$token` | Order tracking + "I've paid" | public (high-entropy `trackingToken` = capability) |
 | `/pricing`, `/cost` | Pricing + cost calculator | public |
 | `/terms`, `/privacy`, `/acceptable-use` | Legal | public |
 | `/onboarding` | Retailer setup (redirect target when retailer is null) | Clerk |

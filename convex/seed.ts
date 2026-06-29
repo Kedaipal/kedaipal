@@ -1,5 +1,6 @@
 /**
- * Dev seed script. Inserts 1 retailer + 6 outdoor-gear products.
+ * Dev seed script. Inserts 1 retailer + a mix of single- and multi-variant
+ * products (so the storefront pickers + variant grid have something to render).
  *
  * Usage:
  *   npx convex run seed:run
@@ -8,20 +9,45 @@
  * Idempotent — skips if the seed retailer slug already exists.
  * Never run against a production deployment.
  */
-import { mutation } from "./_generated/server";
+import { internalMutation } from "./_generated/server";
+import { cartesian, variantLabel } from "./lib/variant";
 
 const SEED_SLUG = "trailgear";
 
-const PRODUCTS = [
-	{ name: "Basecamp 2-Person Tent", description: "Lightweight 3-season tent, easy setup, 1.8 kg.", price: 39900, stock: 10 },
-	{ name: "Trailblazer Backpack 45L", description: "Ergonomic hiking pack with hip-belt pockets.", price: 24900, stock: 15 },
-	{ name: "Merino Wool Base Layer", description: "Temperature-regulating, odour-resistant top.", price: 8900, stock: 30 },
-	{ name: "Trekking Pole Set (pair)", description: "Aluminium, collapsible, cork grip handles.", price: 14900, stock: 20 },
-	{ name: "Headlamp 350lm", description: "USB rechargeable, red-light mode, IPX4 rated.", price: 4900, stock: 50 },
-	{ name: "Sleeping Bag -5°C", description: "Mummy-cut, 800g fill, stuff-sack included.", price: 18900, stock: 8 },
+type SeedProduct = {
+	name: string;
+	description: string;
+	// When present, drives the variant grid; otherwise a single default variant
+	// is created from `price`/`stock`.
+	options?: { name: string; values: string[] }[];
+	blockWhenOutOfStock?: boolean;
+	price?: number;
+	stock?: number;
+	// Per-combination price/stock overrides keyed by label ("1kg / Fillet").
+	// Any combo not listed falls back to `price`/`stock`.
+	variantOverrides?: Record<string, { price: number; stock: number }>;
+};
+
+const PRODUCTS: SeedProduct[] = [
+	{ name: "Basecamp 2-Person Tent", description: "Lightweight 3-season tent, easy setup, 1.8 kg.", price: 39900, stock: 10, blockWhenOutOfStock: true },
+	{ name: "Trailblazer Backpack 45L", description: "Ergonomic hiking pack with hip-belt pockets.", price: 24900, stock: 15, blockWhenOutOfStock: true },
+	{ name: "Merino Wool Base Layer", description: "Temperature-regulating, odour-resistant top.\n\n**Sizes:** S–XL.", price: 8900, stock: 30, blockWhenOutOfStock: true,
+		options: [{ name: "Size", values: ["S", "M", "L", "XL"] }] },
+	{ name: "Trekking Pole Set (pair)", description: "Aluminium, collapsible, cork grip handles.", price: 14900, stock: 20, blockWhenOutOfStock: true },
+	{ name: "Headlamp 350lm", description: "USB rechargeable, red-light mode, IPX4 rated.", price: 4900, stock: 50, blockWhenOutOfStock: true },
+	// F&B-style made-to-order product with a Weight axis + per-variant pricing.
+	{ name: "Frozen Salmon", description: "Norwegian salmon, vacuum-packed.\n\n**What's included:** ice-pack insulated box.", blockWhenOutOfStock: false,
+		options: [{ name: "Weight", values: ["500g", "1kg"] }, { name: "Cut", values: ["Fillet", "Whole"] }],
+		price: 4500, stock: 0,
+		variantOverrides: {
+			"500g / Fillet": { price: 4500, stock: 0 },
+			"500g / Whole": { price: 4000, stock: 0 },
+			"1kg / Fillet": { price: 8500, stock: 0 },
+			"1kg / Whole": { price: 7800, stock: 0 },
+		} },
 ] as const;
 
-export const run = mutation({
+export const run = internalMutation({
 	args: {},
 	handler: async (ctx) => {
 		// Idempotency check
@@ -50,20 +76,41 @@ export const run = mutation({
 
 		for (let i = 0; i < PRODUCTS.length; i++) {
 			const p = PRODUCTS[i];
-			await ctx.db.insert("products", {
+			const options = p.options ?? [];
+			const productId = await ctx.db.insert("products", {
 				retailerId,
 				name: p.name,
 				description: p.description,
-				price: p.price,
 				currency: "MYR",
-				stock: p.stock,
 				imageStorageIds: [],
+				options,
+				blockWhenOutOfStock: p.blockWhenOutOfStock,
 				active: true,
 				channel: "whatsapp",
 				sortOrder: i,
 				createdAt: now,
 				updatedAt: now,
 			});
+
+			const combos = cartesian(options); // [[]] when no options
+			for (let j = 0; j < combos.length; j++) {
+				const optionValues = combos[j];
+				const override = p.variantOverrides?.[variantLabel(optionValues)];
+				await ctx.db.insert("productVariants", {
+					productId,
+					retailerId,
+					optionValues,
+					price: override?.price ?? p.price ?? 0,
+					onHand: override?.stock ?? p.stock ?? 0,
+					reserved: 0,
+					parcelWeightG: 0,
+					imageStorageIds: [],
+					active: true,
+					sortOrder: j,
+					createdAt: now,
+					updatedAt: now,
+				});
+			}
 		}
 
 		console.log(`Seed complete — retailer "${SEED_SLUG}" with ${PRODUCTS.length} products inserted.`);

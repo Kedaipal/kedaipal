@@ -79,6 +79,20 @@ export function assertValidWaPhone(raw: string): string {
 	return s;
 }
 
+/**
+ * Non-throwing canonicalization of a WhatsApp number to bare digits — the form
+ * Meta delivers inbound (`from`) and the form `assertValidWaPhone` produces on
+ * write. Use for MATCHING two numbers that may differ only in formatting (leading
+ * '+', spaces, dashes) without rejecting an odd input. Strips every non-digit;
+ * returns "" for a non-numeric string. The global opt-out keys on this so a
+ * buyer's STOP suppresses later sends regardless of how the stored number is
+ * formatted — opt-out compliance must not silently depend on every write path
+ * having normalized first.
+ */
+export function normalizeWaPhone(raw: string): string {
+	return raw.replace(/\D/g, "");
+}
+
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const EMAIL_MAX = 254;
 

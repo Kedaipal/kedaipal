@@ -1,18 +1,26 @@
 import { useAuth } from "@clerk/tanstack-react-start";
-import { Link, createFileRoute } from "@tanstack/react-router";
-import { ArrowRight, Check, Minus, Quote, Star } from "lucide-react";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { ArrowRight, Check, Minus, Quote, Sparkles, Star } from "lucide-react";
 import { useState } from "react";
 import { FadeIn } from "../components/landing/fade-in";
 import { Footer } from "../components/landing/footer";
+import {
+	ctaPillClass,
+	Eyebrow,
+	Sticker,
+} from "../components/landing/landing-ui";
 import { Nav } from "../components/landing/nav";
 import { Button } from "../components/ui/button";
+import { buildWaContactLink } from "../lib/contact";
+import { cn } from "../lib/utils";
+import { m } from "../paraglide/messages";
 
-const SEO_TITLE = "Pricing — Kedaipal WhatsApp Order Hub for F&B Sellers";
+const SEO_TITLE = "Pricing — Kedaipal WhatsApp Order Hub";
 const SEO_DESC =
-	"Simple, transparent pricing for F&B home sellers. Start with a 14-day free trial. Starter from RM79/mo, Pro RM149/mo, Scale RM299/mo. Founding 10 spots available.";
+	"Simple, transparent pricing for WhatsApp sellers. Start with a 14-day free trial. Starter from RM79/mo, Pro RM149/mo, Scale RM299/mo. Founding 10 spots available.";
 const SITE_URL = "https://kedaipal.com";
 const PAGE_URL = `${SITE_URL}/pricing`;
-const OG_IMAGE = `${SITE_URL}/android-chrome-512x512.png`;
+const OG_IMAGE = `${SITE_URL}/og-image.png`;
 
 export const Route = createFileRoute("/pricing")({
 	head: () => ({
@@ -50,50 +58,63 @@ interface Tier {
 	cta: string;
 }
 
-const TIERS: Tier[] = [
+/**
+ * Static tier facts (ids, prices, seat counts) live at module scope; all
+ * translatable copy (taglines, order caps, CTA) is resolved per-render inside
+ * the component so paraglide reads the request's locale, not the locale that
+ * happened to be active when this module was first imported on the server.
+ */
+const TIER_FACTS = [
 	{
 		id: "starter",
 		name: "Starter",
-		tagline:
-			"For frozen sellers just starting out — less than 50 orders/week. Covers the basics, nudges you to grow.",
 		monthly: 79,
 		annual: 65,
-		orderCap: "100 orders/mo",
 		users: 1,
 		popular: false,
 		founding: false,
 		foundingPrice: 0,
-		cta: "Start 14-day free trial",
 	},
 	{
 		id: "pro",
 		name: "Pro",
-		tagline:
-			"For frozen sellers running weekly batch cooks with resellers — 50–300 orders/week. The tier most F&B home sellers grow into.",
 		monthly: 149,
 		annual: 124,
-		orderCap: "500 orders/mo",
 		users: 2,
 		popular: true,
 		founding: true,
 		foundingPrice: 104,
-		cta: "Start 14-day free trial",
 	},
 	{
 		id: "scale",
 		name: "Scale",
-		tagline:
-			"For frozen brands managing reseller teams + multi-pickup-point — 300+ orders/week. When you're running a proper operation.",
 		monthly: 299,
 		annual: 249,
-		orderCap: "Unlimited orders",
 		users: 5,
 		popular: false,
 		founding: false,
 		foundingPrice: 0,
-		cta: "Start 14-day free trial",
 	},
-];
+] as const;
+
+function useTiers(): Tier[] {
+	const tagline: Record<string, string> = {
+		starter: m.pricingpage_tier_starter_tagline(),
+		pro: m.pricingpage_tier_pro_tagline(),
+		scale: m.pricingpage_tier_scale_tagline(),
+	};
+	const orderCap: Record<string, string> = {
+		starter: m.pricingpage_ordercap_starter(),
+		pro: m.pricingpage_ordercap_pro(),
+		scale: m.pricingpage_ordercap_scale(),
+	};
+	return TIER_FACTS.map((t) => ({
+		...t,
+		tagline: tagline[t.id],
+		orderCap: orderCap[t.id],
+		cta: m.pricingpage_cta_trial(),
+	}));
+}
 
 type FeatureValue = boolean | string;
 
@@ -102,82 +123,161 @@ interface Feature {
 	starter: FeatureValue;
 	pro: FeatureValue;
 	scale: FeatureValue;
+	// True = the capability isn't built yet. Shown with a "Coming soon" badge so the
+	// pricing table doesn't over-promise during beta. Keep in sync with what's
+	// actually shipped (see ClickUp 86exrhpfn + the entitlement tickets).
+	comingSoon?: boolean;
 }
 
-const FEATURES: Feature[] = [
-	{
-		label: "Orders per month",
-		starter: "100",
-		pro: "500",
-		scale: "Unlimited",
-	},
-	{ label: "Team members", starter: "1", pro: "2", scale: "5" },
-	{ label: "Hosted storefront", starter: true, pro: true, scale: true },
-	{ label: "Order pipeline", starter: true, pro: true, scale: true },
-	{
-		label: "WhatsApp order automation",
-		starter: true,
-		pro: true,
-		scale: true,
-	},
-	{ label: "Manual payment claim", starter: true, pro: true, scale: true },
-	{ label: "Inventory tracking", starter: true, pro: true, scale: true },
-	{ label: "Customer database (CRM)", starter: false, pro: true, scale: true },
-	{
-		label: "Order inbox",
-		starter: false,
-		pro: true,
-		scale: true,
-	},
-	{ label: "Date picker / pre-orders", starter: false, pro: true, scale: true },
-	{ label: "Automated reminders", starter: false, pro: true, scale: true },
-	{
-		label: "WhatsApp broadcasts",
-		starter: false,
-		pro: "100/mo",
-		scale: "Unlimited",
-	},
-	{ label: "Tiered pricing", starter: false, pro: false, scale: true },
-	{ label: "Reseller portal", starter: false, pro: false, scale: true },
-	{ label: "Sales reports", starter: false, pro: false, scale: true },
-	{ label: "Custom domain", starter: false, pro: false, scale: true },
-];
+function useFeatures(): Feature[] {
+	const unlimited = m.pricingpage_val_unlimited();
+	return [
+		{
+			label: m.pricingpage_feat_orders_per_month(),
+			starter: "100",
+			pro: "500",
+			scale: unlimited,
+		},
+		{
+			label: m.pricingpage_feat_team_members(),
+			starter: "1",
+			pro: "2",
+			scale: "5",
+			comingSoon: true,
+		},
+		{
+			label: m.pricingpage_feat_storefront(),
+			starter: true,
+			pro: true,
+			scale: true,
+		},
+		{
+			label: m.pricingpage_feat_pipeline(),
+			starter: true,
+			pro: true,
+			scale: true,
+		},
+		{
+			label: m.pricingpage_feat_wa_automation(),
+			starter: true,
+			pro: true,
+			scale: true,
+		},
+		{
+			label: m.pricingpage_feat_payment_claim(),
+			starter: true,
+			pro: true,
+			scale: true,
+		},
+		{
+			label: m.pricingpage_feat_inventory(),
+			starter: true,
+			pro: true,
+			scale: true,
+		},
+		{
+			label: m.pricingpage_feat_variants(),
+			starter: true,
+			pro: true,
+			scale: true,
+		},
+		{
+			label: m.pricingpage_feat_mockup(),
+			starter: true,
+			pro: true,
+			scale: true,
+		},
+		{
+			label: m.pricingpage_feat_crm(),
+			starter: false,
+			pro: true,
+			scale: true,
+		},
+		{
+			label: m.pricingpage_feat_inbox(),
+			starter: false,
+			pro: true,
+			scale: true,
+		},
+		{
+			label: m.pricingpage_feat_datepicker(),
+			starter: false,
+			pro: true,
+			scale: true,
+			comingSoon: true,
+		},
+		{
+			label: m.pricingpage_feat_reminders(),
+			starter: false,
+			pro: true,
+			scale: true,
+			comingSoon: true,
+		},
+		{
+			label: m.pricingpage_feat_broadcasts(),
+			starter: false,
+			pro: m.pricingpage_val_broadcast_pro(),
+			scale: unlimited,
+			comingSoon: true,
+		},
+		{
+			label: m.pricingpage_feat_tiered(),
+			starter: false,
+			pro: false,
+			scale: true,
+			comingSoon: true,
+		},
+		{
+			label: m.pricingpage_feat_reseller(),
+			starter: false,
+			pro: false,
+			scale: true,
+			comingSoon: true,
+		},
+		{
+			label: m.pricingpage_feat_reports(),
+			starter: false,
+			pro: false,
+			scale: true,
+			comingSoon: true,
+		},
+		{
+			label: m.pricingpage_feat_custom_domain(),
+			starter: false,
+			pro: false,
+			scale: true,
+			comingSoon: true,
+		},
+	];
+}
 
-const FAQS = [
-	{
-		q: "Can I switch tiers as my orders grow?",
-		a: "Yes — upgrade in one tap from your dashboard, takes effect immediately with prorated billing. Downgrade takes effect at the end of your current billing period. You can also cancel anytime; your data is kept for 90 days.",
-	},
-	{
-		q: "Does Pro support multi-pickup-point orders?",
-		a: "Pro supports up to 2 team members and a single pickup/delivery address per order. Multi-pickup-point routing — where a single order can have different pickup locations (e.g. multiple collection points for a frozen batch run) — ships with Scale. It's on the S5 roadmap.",
-	},
-	{
-		q: "How does cold-chain Lalamove integration work?",
-		a: "Cold-chain Lalamove integration is on the roadmap for Scale-tier sellers. The integration will let you book a Lalamove van directly from a packed order in the dashboard — vehicle type, pickup time, and cold-chain flag — without switching tabs. ETA: Q4 2026. If this is critical for your operation, join as a Founding 10 member to influence the timeline.",
-	},
-	{
-		q: "What payment methods can my customers use?",
-		a: "Bank transfer, DuitNow QR, and e-wallet screenshot — all supported from day one. Online payment gateway (FPX, GrabPay, TNG) for shopper-to-retailer payments is on the S5 roadmap. Kedaipal never touches your order money — your gateway, your settlement.",
-	},
-	{
-		q: "What happens at the end of the 14-day trial?",
-		a: "You'll be prompted to pick a plan and add a payment method. If you don't, your storefront stays accessible but new orders pause until you do. You can cancel anytime during the trial and pay nothing. Existing orders, customers, and product data are kept for 90 days if you cancel.",
-	},
-	{
-		q: "Does Kedaipal work if my customers are already chatting me on personal WhatsApp?",
-		a: "Yes. Your customers keep messaging whatever number they have for you. Kedaipal is a storefront + order system that connects via the CTA URL button in your WhatsApp Business profile — customers tap it, browse, cart, and the order comes back to you in WhatsApp. No app download, no new number.",
-	},
-];
+function useFaqs(): { q: string; a: string }[] {
+	return [
+		{ q: m.pricingpage_faq_q1(), a: m.pricingpage_faq_a1() },
+		{ q: m.pricingpage_faq_q2(), a: m.pricingpage_faq_a2() },
+		{ q: m.pricingpage_faq_q3(), a: m.pricingpage_faq_a3() },
+		{ q: m.pricingpage_faq_q4(), a: m.pricingpage_faq_a4() },
+		{ q: m.pricingpage_faq_q5(), a: m.pricingpage_faq_a5() },
+		{ q: m.pricingpage_faq_q6(), a: m.pricingpage_faq_a6() },
+	];
+}
 
 function FeatureCell({ value }: { value: FeatureValue }) {
 	if (value === true)
-		return <Check className="mx-auto size-5 text-accent" aria-label="Yes" />;
+		return (
+			<Check
+				className="mx-auto size-5 text-accent"
+				aria-label={m.pricingpage_yes()}
+			/>
+		);
 	if (value === false)
-		return <Minus className="mx-auto size-4 text-muted-foreground/40" aria-label="No" />;
-	return (
-		<span className="text-sm font-medium text-foreground">{value}</span>
-	);
+		return (
+			<Minus
+				className="mx-auto size-4 text-muted-foreground/40"
+				aria-label={m.pricingpage_no()}
+			/>
+		);
+	return <span className="text-sm font-medium text-foreground">{value}</span>;
 }
 
 function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
@@ -186,24 +286,16 @@ function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 
 	return (
 		<div
-			className={`relative flex flex-col rounded-2xl p-6 ${
+			className={cn(
+				"relative flex flex-col rounded-3xl p-7",
 				tier.popular
-					? "shadow-[0_8px_40px_hsl(160_84%_39%_/_0.18)]"
-					: "border border-border bg-card shadow-sm"
-			}`}
-			style={
-				tier.popular
-					? {
-							background:
-								"linear-gradient(white, white) padding-box, linear-gradient(135deg, hsl(160 84% 39%), hsl(160 84% 68%), hsl(160 84% 39%)) border-box",
-							border: "2px solid transparent",
-						}
-					: undefined
-			}
+					? "z-10 bg-primary text-primary-foreground shadow-2xl lg:-my-4 lg:scale-[1.02]"
+					: "border border-border bg-card shadow-sm",
+			)}
 		>
 			{tier.popular && (
-				<span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-accent px-3 py-0.5 text-xs font-bold uppercase tracking-wider text-accent-foreground">
-					Most popular
+				<span className="absolute -top-3.5 left-1/2 -translate-x-1/2 rotate-2 whitespace-nowrap rounded-lg bg-accent px-3 py-1 text-xs font-bold uppercase tracking-wider text-accent-foreground shadow-md">
+					{m.pricing_most_popular()}
 				</span>
 			)}
 			{tier.id === "scale" && (
@@ -213,38 +305,59 @@ function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 			)}
 
 			<p
-				className={`text-sm font-semibold uppercase tracking-wider ${tier.popular ? "text-accent" : "text-muted-foreground"}`}
+				className={cn(
+					"text-sm font-semibold uppercase tracking-wider",
+					tier.popular ? "text-accent" : "text-muted-foreground",
+				)}
 			>
 				{tier.name}
 			</p>
 
 			<div className="mt-3 flex items-end gap-1">
-				<span className="text-4xl font-bold tracking-tight">
-					RM {price}
+				<span className="text-4xl font-bold tracking-tight">RM {price}</span>
+				<span
+					className={cn(
+						"mb-1 text-sm",
+						tier.popular
+							? "text-primary-foreground/60"
+							: "text-muted-foreground",
+					)}
+				>
+					{m.pricing_per_month()}
 				</span>
-				<span className="mb-1 text-sm text-muted-foreground">/mo</span>
 			</div>
 			{cycle === "annual" && (
 				<p className="mt-0.5 text-xs text-accent">
-					Billed RM {tier.annual * 10}/yr · 2 months free
+					{m.pricingpage_billed_annual({ total: tier.annual * 10 })}
 				</p>
 			)}
 
-			<p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+			<p
+				className={cn(
+					"mt-3 text-sm leading-relaxed",
+					tier.popular ? "text-primary-foreground/65" : "text-muted-foreground",
+				)}
+			>
 				{tier.tagline}
 			</p>
 
 			{tier.founding && (
-				<div className="mt-4 rounded-xl border border-accent/30 bg-accent/5 px-4 py-3">
+				<div className="mt-4 rounded-xl border border-accent/40 bg-accent/10 px-4 py-3">
 					<div className="flex items-center gap-2">
 						<Star className="size-4 shrink-0 fill-accent text-accent" />
 						<p className="text-xs font-bold text-accent">
-							Founding 10 — RM {tier.foundingPrice}/mo forever
+							{m.pricingpage_founding_forever({ price: tier.foundingPrice })}
 						</p>
 					</div>
-					<p className="mt-1 text-xs text-muted-foreground">
-						30% off for life · {10 - 0} spots remaining · locks in today's
-						price permanently
+					<p
+						className={cn(
+							"mt-1 text-xs",
+							tier.popular
+								? "text-primary-foreground/60"
+								: "text-muted-foreground",
+						)}
+					>
+						{m.pricingpage_founding_detail({ spots: 10 })}
 					</p>
 				</div>
 			)}
@@ -254,41 +367,38 @@ function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 					<Check className="size-4 shrink-0 text-accent" />
 					{tier.orderCap}
 				</li>
-				<li className="flex items-center gap-2 text-sm">
-					<Check className="size-4 shrink-0 text-accent" />
-					{tier.users} team member{tier.users > 1 ? "s" : ""}
+				<li className="flex items-center gap-2 text-sm text-muted-foreground">
+					<Check className="size-4 shrink-0 text-muted-foreground/50" />
+					{tier.users === 1
+						? m.pricingpage_team_member_one({ count: tier.users })
+						: m.pricingpage_team_member_other({ count: tier.users })}
+					<span className="rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-400">
+						{m.pricingpage_soon()}
+					</span>
 				</li>
 			</ul>
 
 			<div className="mt-6">
-				{tier.id === "scale" ? (
-					// Scale tier is visible-but-disabled — keeps the three-card
-					// layout rhythm while signalling "not yet". No Link wrap —
-					// there's nowhere meaningful to send the click.
-					<Button className="w-full" variant="outline" disabled>
-						Coming soon
-					</Button>
-				) : isSignedIn ? (
-					<Button
-						asChild
-						className="w-full"
-						variant={tier.popular ? "default" : "outline"}
-					>
+				<Button
+					asChild
+					size="lg"
+					className={cn(
+						"h-11 w-full rounded-full",
+						!tier.popular &&
+							"border-border bg-background text-foreground hover:bg-muted",
+					)}
+					variant={tier.popular ? "default" : "outline"}
+				>
+					{isSignedIn ? (
 						<Link to="/app">
-							Go to dashboard <ArrowRight className="size-4" />
+							{m.nav_go_to_dashboard()} <ArrowRight className="size-4" />
 						</Link>
-					</Button>
-				) : (
-					<Button
-						asChild
-						className="w-full"
-						variant={tier.popular ? "default" : "outline"}
-					>
+					) : (
 						<Link to="/sign-up/$" params={{ _splat: "" }}>
 							{tier.cta} <ArrowRight className="size-4" />
 						</Link>
-					</Button>
-				)}
+					)}
+				</Button>
 			</div>
 		</div>
 	);
@@ -296,56 +406,63 @@ function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 
 function PricingPage() {
 	const [cycle, setCycle] = useState<Cycle>("monthly");
+	const tiers = useTiers();
+	const features = useFeatures();
+	const faqs = useFaqs();
 
 	return (
 		<main className="min-h-dvh bg-background text-foreground">
 			<Nav />
 
 			{/* Hero */}
-			<section className="border-b border-border/60 bg-hero-mesh">
-				<div className="mx-auto max-w-4xl px-5 py-20 text-center md:px-8 md:py-28">
+			<section className="bg-hero-mesh">
+				<div className="mx-auto max-w-4xl px-5 pb-16 pt-28 text-center md:px-8 md:pb-24 md:pt-40">
 					<FadeIn>
-						<p className="text-xs font-semibold uppercase tracking-widest text-accent">
-							Pricing
-						</p>
+						<Sticker tone="outline" rotate={-1.5}>
+							<Sparkles className="size-3" />
+							{m.pricing_badge()}
+						</Sticker>
 						<h1
-							className="mt-3 text-4xl font-bold tracking-tight md:text-6xl"
+							className="mt-5 text-4xl font-bold tracking-tight md:text-6xl"
 							style={{ letterSpacing: "-0.03em" }}
 						>
-							Simple pricing. 14-day free trial.
+							<span className="kp-highlight text-accent">
+								{m.pricingpage_hero_highlight()}
+							</span>{" "}
+							{m.pricingpage_hero_rest()}
 						</h1>
 						<p className="mx-auto mt-5 max-w-xl text-lg leading-relaxed text-muted-foreground">
-							Start free for 14 days on any plan — no credit card. Pick the
-							tier that matches your order volume. Founding 10 retailers lock
-							in 30% off Pro for life.
+							{m.pricingpage_hero_sub()}
 						</p>
 					</FadeIn>
 
 					{/* Billing toggle */}
 					<FadeIn delay={0.1}>
-						<div className="mt-8 inline-flex items-center rounded-xl border border-border bg-card p-1 shadow-sm">
+						<div className="mt-8 inline-flex items-center rounded-full border border-border bg-card p-1.5 shadow-sm">
 							<button
 								type="button"
 								onClick={() => setCycle("monthly")}
-								className={`rounded-lg px-5 py-2 text-sm font-medium transition-colors ${
+								className={cn(
+									"rounded-full px-5 py-2 text-sm font-semibold transition-colors",
 									cycle === "monthly"
-										? "bg-foreground text-background"
-										: "text-muted-foreground hover:text-foreground"
-								}`}
+										? "bg-primary text-primary-foreground"
+										: "text-muted-foreground hover:text-foreground",
+								)}
 							>
-								Monthly
+								{m.pricingpage_toggle_monthly()}
 							</button>
 							<button
 								type="button"
 								onClick={() => setCycle("annual")}
-								className={`relative rounded-lg px-5 py-2 text-sm font-medium transition-colors ${
+								className={cn(
+									"relative rounded-full px-5 py-2 text-sm font-semibold transition-colors",
 									cycle === "annual"
-										? "bg-foreground text-background"
-										: "text-muted-foreground hover:text-foreground"
-								}`}
+										? "bg-primary text-primary-foreground"
+										: "text-muted-foreground hover:text-foreground",
+								)}
 							>
-								Annual
-								<span className="absolute -right-1 -top-2 rounded-full bg-accent px-1.5 py-0.5 text-[9px] font-bold uppercase leading-none text-accent-foreground">
+								{m.pricingpage_toggle_annual()}
+								<span className="absolute -right-1 -top-2 rotate-3 rounded-full bg-accent px-1.5 py-0.5 text-[9px] font-bold uppercase leading-none text-accent-foreground">
 									-17%
 								</span>
 							</button>
@@ -355,53 +472,57 @@ function PricingPage() {
 			</section>
 
 			{/* Tier cards */}
-			<section className="border-b border-border/60">
+			<section>
 				<div className="mx-auto max-w-6xl px-5 py-16 md:px-8">
 					<FadeIn>
-						<div className="grid gap-6 md:grid-cols-3">
-							{TIERS.map((tier) => (
+						<div className="grid items-stretch gap-6 md:grid-cols-3 lg:gap-5">
+							{tiers.map((tier) => (
 								<TierCard key={tier.id} tier={tier} cycle={cycle} />
 							))}
 						</div>
 					</FadeIn>
-					<p className="mt-6 text-center text-xs text-muted-foreground">
-						Annual billing = 10 months paid, 12 received. Cancel anytime. Export
-						your data anytime.
+					<p className="mt-8 text-center text-xs text-muted-foreground">
+						{m.pricingpage_no_lockin_note()}
 					</p>
 				</div>
 			</section>
 
 			{/* Founding 10 banner */}
-			<section className="border-b border-border/60 bg-accent/[0.04]">
+			<section>
 				<div className="mx-auto max-w-4xl px-5 py-14 md:px-8">
 					<FadeIn>
-						<div className="flex flex-col items-center gap-6 rounded-2xl border border-accent/30 bg-background p-8 text-center shadow-sm sm:flex-row sm:text-left md:p-10">
-							<div className="flex size-16 shrink-0 items-center justify-center rounded-2xl bg-accent/10">
+						<div className="relative flex flex-col items-center gap-6 overflow-hidden rounded-[2rem] bg-cta-mesh p-8 text-center text-primary-foreground shadow-xl sm:flex-row sm:text-left md:p-10">
+							<div
+								aria-hidden
+								className="pointer-events-none absolute -right-16 -top-16 size-[220px] rounded-full border border-white/[0.06]"
+							/>
+							<div className="flex size-16 shrink-0 items-center justify-center rounded-2xl bg-accent/15">
 								<Star className="size-8 fill-accent text-accent" />
 							</div>
-							<div className="flex-1">
+							<div className="relative flex-1">
 								<p className="text-xs font-semibold uppercase tracking-widest text-accent">
-									Founding 10
+									{m.founding_label()}
 								</p>
 								<h2 className="mt-1 text-xl font-bold md:text-2xl">
-									Founding 10 · RM 104/mo Pro forever · 30% off for life
+									{m.pricingpage_banner_heading()}
 								</h2>
-								<p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-									The first 10 F&B home sellers who go Pro lock in RM 104/mo
-									permanently — no renewals, no price hikes — plus a Founding
-									Member badge and direct input on the roadmap.{" "}
-									<span className="font-semibold text-foreground">
-										10 of 10 spots still open.
+								<p className="mt-2 text-sm leading-relaxed text-primary-foreground/65">
+									{m.pricingpage_banner_body()}{" "}
+									<span className="font-semibold text-primary-foreground">
+										{m.pricingpage_banner_spots()}
 									</span>
 								</p>
 							</div>
-							<div className="shrink-0">
-								<Button asChild size="lg" className="h-12 px-6">
-									<Link to="/sign-up/$" params={{ _splat: "" }}>
-										Claim a Founding 10 spot{" "}
-										<ArrowRight className="size-4" />
-									</Link>
-								</Button>
+							<div className="relative shrink-0">
+								<a
+									href={buildWaContactLink(m.founding_wa_message())}
+									target="_blank"
+									rel="noopener noreferrer"
+									className={ctaPillClass("accent")}
+								>
+									{m.pricingpage_banner_cta()}{" "}
+									<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
+								</a>
 							</div>
 						</div>
 					</FadeIn>
@@ -409,28 +530,36 @@ function PricingPage() {
 			</section>
 
 			{/* Feature comparison table */}
-			<section className="border-b border-border/60">
+			<section>
 				<div className="mx-auto max-w-6xl px-5 py-16 md:px-8">
 					<FadeIn>
-						<h2
-							className="text-center text-2xl font-bold md:text-3xl"
-							style={{ letterSpacing: "-0.02em" }}
-						>
-							Full feature breakdown
-						</h2>
+						<div className="text-center">
+							<Eyebrow className="justify-center">
+								{m.pricingpage_compare_eyebrow()}
+							</Eyebrow>
+							<h2
+								className="mt-4 text-2xl font-bold md:text-4xl"
+								style={{ letterSpacing: "-0.02em" }}
+							>
+								{m.pricingpage_compare_heading()}
+							</h2>
+						</div>
 					</FadeIn>
 					<FadeIn delay={0.1}>
-						<div className="mt-8 overflow-x-auto rounded-2xl border border-border bg-card shadow-sm">
+						<div className="mt-8 overflow-x-auto rounded-3xl border border-border bg-card shadow-sm">
 							<table className="w-full min-w-[540px]">
 								<thead>
 									<tr className="border-b border-border/60">
 										<th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">
-											Feature
+											{m.pricingpage_table_feature()}
 										</th>
-										{TIERS.map((t) => (
+										{TIER_FACTS.map((t) => (
 											<th
 												key={t.id}
-												className={`px-4 py-4 text-center text-sm font-bold ${t.popular ? "text-accent" : "text-foreground"}`}
+												className={cn(
+													"px-4 py-4 text-center text-sm font-bold",
+													t.popular ? "text-accent" : "text-foreground",
+												)}
 											>
 												{t.name}
 											</th>
@@ -438,15 +567,26 @@ function PricingPage() {
 									</tr>
 								</thead>
 								<tbody>
-									{FEATURES.map((f, i) => (
+									{features.map((f, i) => (
 										<tr
 											key={f.label}
-											className={
-												i % 2 === 0 ? "bg-muted/20" : "bg-transparent"
-											}
+											className={i % 2 === 0 ? "bg-muted/20" : "bg-transparent"}
 										>
 											<td className="px-6 py-3 text-sm text-foreground">
-												{f.label}
+												<span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+													<span
+														className={
+															f.comingSoon ? "text-muted-foreground" : ""
+														}
+													>
+														{f.label}
+													</span>
+													{f.comingSoon ? (
+														<span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-400">
+															{m.pricingpage_coming_soon()}
+														</span>
+													) : null}
+												</span>
 											</td>
 											<td className="px-4 py-3 text-center">
 												<FeatureCell value={f.starter} />
@@ -467,38 +607,41 @@ function PricingPage() {
 			</section>
 
 			{/* Testimonial placeholder */}
-			<section className="border-b border-border/60 bg-muted/20">
+			<section className="bg-muted/30">
 				<div className="mx-auto max-w-3xl px-5 py-16 text-center md:px-8">
 					<FadeIn>
 						<Quote className="mx-auto size-8 text-accent/30" />
 						<blockquote className="mt-4 text-xl font-medium leading-relaxed text-foreground md:text-2xl">
-							"[First Founding 10 testimonial lands here — reserved for the
-							first seller who ships with us.]"
+							{m.pricingpage_testimonial_quote()}
 						</blockquote>
 						<p className="mt-4 text-sm text-muted-foreground">
-							Founding Member · F&amp;B home seller, Malaysia
+							{m.pricingpage_testimonial_attrib()}
 						</p>
 						<p className="mt-2 text-xs italic text-muted-foreground/60">
-							Testimonial placeholder — will be replaced with a real quote from
-							our first Founding 10 member.
+							{m.pricingpage_testimonial_note()}
 						</p>
 					</FadeIn>
 				</div>
 			</section>
 
 			{/* FAQ */}
-			<section className="border-b border-border/60">
+			<section>
 				<div className="mx-auto max-w-3xl px-5 py-16 md:px-8">
 					<FadeIn>
-						<h2
-							className="text-center text-2xl font-bold md:text-3xl"
-							style={{ letterSpacing: "-0.02em" }}
-						>
-							Pricing questions, answered.
-						</h2>
+						<div className="text-center">
+							<Eyebrow className="justify-center">
+								{m.pricingpage_faq_eyebrow()}
+							</Eyebrow>
+							<h2
+								className="mt-4 text-2xl font-bold md:text-4xl"
+								style={{ letterSpacing: "-0.02em" }}
+							>
+								{m.pricingpage_faq_heading()}
+							</h2>
+						</div>
 					</FadeIn>
 					<div className="mt-10 space-y-8">
-						{FAQS.map((faq, i) => (
+						{faqs.map((faq, i) => (
 							<FadeIn key={faq.q} delay={i * 0.05}>
 								<div>
 									<h3 className="text-base font-bold">{faq.q}</h3>
@@ -513,31 +656,30 @@ function PricingPage() {
 			</section>
 
 			{/* Bottom CTA */}
-			<section className="border-b border-border/60">
+			<section>
 				<div className="mx-auto max-w-4xl px-5 py-20 text-center md:px-8">
 					<FadeIn>
 						<h2
 							className="text-3xl font-bold md:text-4xl"
 							style={{ letterSpacing: "-0.02em" }}
 						>
-							Start your 14-day free trial.
+							{m.pricingpage_cta_heading()}
 						</h2>
 						<p className="mx-auto mt-4 max-w-lg text-base text-muted-foreground">
-							No credit card. No Meta setup. Apply for a Founding 10 spot
-							during signup to lock in RM 104/mo Pro forever.
+							{m.pricingpage_cta_sub()}
 						</p>
 						<div className="mt-8 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
-							<Button asChild size="lg" className="h-12 px-8 text-base">
-								<Link to="/sign-up/$" params={{ _splat: "" }}>
-									Start 14-day free trial{" "}
-									<ArrowRight className="size-4" />
-								</Link>
-							</Button>
-							<Button asChild variant="ghost" size="lg" className="h-12 px-8 text-base">
-								<Link to="/" hash="how">
-									See how it works
-								</Link>
-							</Button>
+							<Link
+								to="/sign-up/$"
+								params={{ _splat: "" }}
+								className={ctaPillClass("accent")}
+							>
+								{m.pricingpage_cta_trial_btn()}{" "}
+								<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
+							</Link>
+							<Link to="/" hash="how" className={ctaPillClass("outline")}>
+								{m.pricingpage_cta_how()}
+							</Link>
 						</div>
 					</FadeIn>
 				</div>

@@ -7,14 +7,18 @@ import {
 	Home,
 	type LucideIcon,
 	Package,
+	QrCode,
 	Settings,
+	ShieldCheck,
 	ShoppingBag,
+	Siren,
 	Users,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { api } from "../../../convex/_generated/api";
 import { useSidebarCollapsed } from "../../hooks/useSidebarCollapsed";
 import { cn } from "../../lib/utils";
+import { TierPill } from "./tier-pill";
 
 type Retailer = NonNullable<
 	FunctionReturnType<typeof api.retailers.getMyRetailer>
@@ -23,9 +27,10 @@ type Retailer = NonNullable<
 interface SidebarProps {
 	retailer: Retailer;
 	actionableCount: number;
+	isAdmin?: boolean;
 }
 
-export function Sidebar({ retailer, actionableCount }: SidebarProps) {
+export function Sidebar({ retailer, actionableCount, isAdmin }: SidebarProps) {
 	const [collapsed, setCollapsed] = useSidebarCollapsed();
 	const { user } = useUser();
 	const userEmail = user?.primaryEmailAddress?.emailAddress ?? null;
@@ -65,6 +70,16 @@ export function Sidebar({ retailer, actionableCount }: SidebarProps) {
 				</Link>
 			</div>
 
+			{/* Subscription tier pill — always-visible chrome (links to billing). */}
+			{!collapsed ? (
+				<div className="border-b border-border px-4 py-2">
+					<TierPill
+						subscription={retailer.subscription}
+						foundingRank={retailer.foundingMemberRank}
+					/>
+				</div>
+			) : null}
+
 			<nav className="flex flex-1 flex-col gap-1 p-2">
 				<SidebarLink
 					to="/app"
@@ -87,6 +102,12 @@ export function Sidebar({ retailer, actionableCount }: SidebarProps) {
 					badge={actionableCount}
 				/>
 				<SidebarLink
+					to="/app/checkout"
+					icon={QrCode}
+					label="Counter"
+					collapsed={collapsed}
+				/>
+				<SidebarLink
 					to="/app/customers"
 					icon={Users}
 					label="Customers"
@@ -99,6 +120,24 @@ export function Sidebar({ retailer, actionableCount }: SidebarProps) {
 					label="Settings"
 					collapsed={collapsed}
 				/>
+				{/* Admin-only — server `requireAdmin` is the real gate; this link is
+				    just convenience so admins don't type the URL. */}
+				{isAdmin ? (
+					<>
+						<SidebarLink
+							to="/app/admin/billing"
+							icon={ShieldCheck}
+							label="Admin"
+							collapsed={collapsed}
+						/>
+						<SidebarLink
+							to="/app/admin/waba"
+							icon={Siren}
+							label="WABA Safety"
+							collapsed={collapsed}
+						/>
+					</>
+				) : null}
 			</nav>
 
 			<div className="flex flex-col gap-1 border-t border-border p-2">
@@ -197,11 +236,9 @@ function SidebarLink({
 						<Icon
 							className={cn(
 								"size-5",
-								isActive
-									? "fill-foreground stroke-background"
-									: "stroke-current",
+								isActive ? "stroke-accent" : "stroke-current",
 							)}
-							strokeWidth={isActive ? 2 : 1.75}
+							strokeWidth={isActive ? 2.5 : 1.75}
 						/>
 						{showBadge && collapsed ? (
 							<span className="absolute -right-1 -top-1 flex h-2 w-2 rounded-full bg-orange-500 ring-2 ring-card" />

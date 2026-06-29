@@ -1,5 +1,5 @@
 import type { FunctionReturnType } from "convex/server";
-import { Plus } from "lucide-react";
+import { ImagePlus, Plus, SlidersHorizontal } from "lucide-react";
 import type { api } from "../../../convex/_generated/api";
 import { formatPrice } from "../../lib/format";
 import { Button } from "../ui/button";
@@ -15,8 +15,29 @@ interface ProductCardProps {
 }
 
 export function ProductCard({ product, onOpen, onQuickAdd }: ProductCardProps) {
-	const outOfStock = product.stock <= 0;
-	const lowStock = !outOfStock && product.stock <= 5;
+	// Multi-variant products can't be quick-added — the buyer must pick options
+	// in the detail sheet first. A custom line also forces the detail sheet so the
+	// buyer can see (and choose) the made-to-order option. See docs/custom-option.md.
+	const hasOptions = (product.options?.length ?? 0) > 0;
+	const hasCustom = product.variants.some((v) => v.isCustom);
+	const needsDetail = hasOptions || hasCustom;
+	// A product "can run out" if any of its variants hard-blocks (flags are now
+	// resolved per-variant server-side). Only then does the low-stock badge apply.
+	const canRunOut = product.variants.some(
+		(v) => v.blockWhenOutOfStock === true,
+	);
+	// "In stock" rolls up across variants; only hard-block variants can be out.
+	const outOfStock = !product.inStock;
+	const lowStock =
+		!outOfStock &&
+		canRunOut &&
+		product.totalOnHand > 0 &&
+		product.totalOnHand <= 5;
+	const priceVaries = product.priceTo > product.priceFrom;
+	// "Price on quote": made-to-order variants at RM0 (seller quotes on the mockup).
+	// allQuote = no priced variants at all; showFrom = a cheaper/quote option exists.
+	const allQuote = product.hasQuotePricing && product.priceTo === 0;
+	const showFrom = priceVaries || product.hasQuotePricing;
 	const firstImage = product.imageUrls[0];
 
 	return (
@@ -34,8 +55,13 @@ export function ProductCard({ product, onOpen, onQuickAdd }: ProductCardProps) {
 						loading="lazy"
 					/>
 				) : (
-					<div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
-						No image
+					<div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-muted/60 text-muted-foreground">
+						<span className="flex size-11 items-center justify-center rounded-xl bg-background/80 shadow-sm">
+							<ImagePlus className="size-5" />
+						</span>
+						<span className="max-w-24 text-center text-xs font-medium leading-tight">
+							{product.name}
+						</span>
 					</div>
 				)}
 				{firstImage && (
@@ -61,18 +87,48 @@ export function ProductCard({ product, onOpen, onQuickAdd }: ProductCardProps) {
 					{product.name}
 				</button>
 				<p className="text-base font-bold tabular-nums">
-					{formatPrice(product.price, product.currency)}
+					{allQuote ? (
+						<span className="text-sm font-semibold">Price on quote</span>
+					) : (
+						<>
+							{showFrom ? (
+								<span className="text-xs font-medium text-muted-foreground">
+									from{" "}
+								</span>
+							) : null}
+							{formatPrice(product.priceFrom, product.currency)}
+						</>
+					)}
 				</p>
-				<Button
-					type="button"
-					onClick={() => onQuickAdd(product)}
-					disabled={outOfStock}
-					size="sm"
-					className="mt-auto h-11 w-full rounded-xl"
-				>
-					<Plus className="size-4" />
-					Add
-				</Button>
+				{hasCustom ? (
+					<span className="w-fit rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+						Custom available
+					</span>
+				) : null}
+				{needsDetail ? (
+					<Button
+						type="button"
+						onClick={() => onOpen(product)}
+						disabled={outOfStock}
+						size="sm"
+						variant="outline"
+						className="mt-auto h-11 w-full rounded-xl"
+					>
+						<SlidersHorizontal className="size-4" />
+						Choose
+					</Button>
+				) : (
+					<Button
+						type="button"
+						onClick={() => onQuickAdd(product)}
+						disabled={outOfStock}
+						size="sm"
+						className="mt-auto h-11 w-full rounded-xl"
+					>
+						<Plus className="size-4" />
+						Add
+					</Button>
+				)}
 			</div>
 		</div>
 	);

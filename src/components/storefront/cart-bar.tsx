@@ -4,13 +4,17 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
 import { formatPrice } from "../../lib/format";
 import { Button } from "../ui/button";
-import { CheckoutSheet } from "./checkout-sheet";
+import { CheckoutSheet, type PublicPickupLocation } from "./checkout-sheet";
 
 interface CartBarProps {
 	cart: UseCart;
 	retailerId: Id<"retailers">;
 	storeName: string;
 	checkoutPhone: string | undefined;
+	offerSelfCollect: boolean;
+	offerDelivery: boolean;
+	minFulfilmentNoticeDays: number | undefined;
+	pickupLocations: ReadonlyArray<PublicPickupLocation>;
 }
 
 export function CartBar({
@@ -18,14 +22,18 @@ export function CartBar({
 	retailerId,
 	storeName,
 	checkoutPhone,
+	offerSelfCollect,
+	offerDelivery,
+	minFulfilmentNoticeDays,
+	pickupLocations,
 }: CartBarProps) {
 	const [checkoutOpen, setCheckoutOpen] = useState(false);
 	const empty = cart.itemCount === 0;
 
 	return (
 		<>
-			<div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background px-5 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-				<div className="mx-auto flex max-w-md items-center gap-3">
+			<div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 px-5 py-3 shadow-[0_-12px_30px_rgba(15,23,42,0.08)] backdrop-blur pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+				<div className="mx-auto flex max-w-6xl items-center gap-3">
 					<div className="flex flex-1 items-center gap-3">
 						<div className="relative flex size-11 items-center justify-center rounded-full bg-muted">
 							<ShoppingBag className="size-5" />
@@ -62,6 +70,10 @@ export function CartBar({
 				retailerId={retailerId}
 				storeName={storeName}
 				checkoutPhone={checkoutPhone}
+				offerSelfCollect={offerSelfCollect}
+				offerDelivery={offerDelivery}
+				minFulfilmentNoticeDays={minFulfilmentNoticeDays}
+				pickupLocations={pickupLocations}
 			/>
 		</>
 	);

@@ -66,9 +66,9 @@ Public mutation (no auth — the storefront is anonymous). Steps, in order ([`co
 2. **Delivery-method invariant** — `delivery` requires `deliveryAddress`; `self_collect` forbids it. Default method is `delivery`.
 3. **Address validation** — `assertValidAddress` (Malaysia-only) sanitizes and trims.
 4. **Phone validation** — `assertValidWaPhone` if a phone was provided (optional at checkout).
-5. **Item validation** — 1–100 items; each product must exist, belong to the retailer, be `active`, match the order currency, and have sufficient `stock`. Quantities for the same product across multiple line items are summed before the stock check.
+5. **Item validation** — 1–100 items. Each item names a **variant** by `variantId` (preferred) or a single-variant product's `productId` (resolved to its sole variant; ambiguous for multi-variant products → rejected). The variant + its parent product must belong to the retailer, both be `active`, and match the order currency. **Stock is enforced only when the variant hard-blocks** — `variant.blockWhenOutOfStock ?? product.blockWhenOutOfStock` resolves true. Made-to-order variants (frozen pack-to-order, metal prints, a "Custom" size) never block, even when a sibling variant in the same listing does. Quantities for the same variant across multiple line items are summed before the (conditional) `onHand` check. Each line snapshots `{productId, variantId, name, variantLabel, price, quantity}`.
 6. **Compute totals** — `computeOrderTotals` (currently `total === subtotal`).
-7. **Reserve stock** — patch each product's `stock` down within the same transaction (atomic; rolls back on any failure). Products are re-fetched fresh to avoid stale values.
+7. **Reserve stock** — for **hard-block variants only** (resolved per-variant), patch each variant's `onHand` down within the same transaction (atomic; rolls back on any failure). Variants are re-fetched fresh to avoid stale values. Made-to-order variants are never decremented.
 8. **Collision-safe `shortId`** — up to 3 attempts via `generateShortId`; throws if all collide.
 9. **Insert order** (`status: "pending"`) + a `pending` `orderEvents` row.
 10. **Early customer link** — if a phone is known, `linkOrderToCustomer` creates/updates the customer and stamps `customerId`. Phone-less orders are linked later (see confirmation).
@@ -94,18 +94,21 @@ Inbound flow lives in [`convex/whatsapp.ts`](../convex/whatsapp.ts), entered fro
 
 Auth-gated (Clerk); ownership checked (`retailer.userId === identity.subject`). Behaviour:
 
-- **Stock restoration on cancel** — only on the *first* transition into `cancelled` (idempotent). Quantities are re-summed per product and added back; deleted products are skipped.
+- **Mockup gate** — a `→ packed` transition is **rejected** for a mockup-required order (`mockupStatus !== undefined`) unless `mockupStatus === "approved"` or the seller has waived it (`mockupWaivedAt` set). An order is mockup-required when **≥1 line's variant** resolves `requiresProof` true (per-variant override ?? product default), stamped at create time. Production can't start before the buyer signs off (or the seller deliberately proceeds). Cancellation is never gated. See [`proof-approval.md`](./proof-approval.md).
+- **Stock restoration on cancel** — only on the *first* transition into `cancelled` (idempotent). Quantities are re-summed per **variant** and added back to `onHand`, but **only for variants that hard-block** (resolved per-variant; made-to-order variants were never decremented, so nothing to restore). Deleted variants and legacy items without a `variantId` are skipped.
 - **Customer aggregate decrement on cancel** — same first-transition guard; reverses this order's contribution via `decrementAggregatesForCancel` (floors at zero).
 - **Carrier tracking URL** — accepted only when `status === "shipped"` (trimmed, non-empty). `setCarrierTrackingUrl` is a separate mutation for setting/clearing it later, intentionally not status-restricted.
 - **Audit** — every transition writes an `orderEvents` row.
 - **Notification** — schedules `notifyStatusChange` (fire-and-forget). It no-ops for `pending`/`confirmed` (those are covered by the confirmation flow) and when the order has no `customerWaPhone`. Messages are localized; `shipped` includes the carrier URL when set.
 
-## Public shopper mutations (capability = `shortId`)
+## Public shopper mutations (capability = `trackingToken`)
 
-Trust model: knowing the `shortId` is the capability — anyone with the tracking link can act. Each is rate-limited per `shortId`.
+Trust model: knowing the high-entropy `orders.trackingToken` is the capability — anyone with the tracking link (`/track/<token>`) can act. The human `shortId` is NOT a secret. Each is rate-limited per `token`. See [`infra-cost-scaling.md` §6](./infra-cost-scaling.md).
 
 - **`updateDeliveryAddress`** — only while `pending` (locked after confirmation); rejected for `self_collect`. Writes an `"address_updated"` event.
 - **Payment mutations** (`claimPayment`, `generateOrderProofUploadUrl`) — see [`payment-handshake.md`](./payment-handshake.md).
+
+**Contact the store:** the tracking page shows a "Message {store}" CTA that opens a `wa.me` chat to the **vendor's own** number (`retailers.waPhone`) with the order ref pre-filled — buyers otherwise only ever hear from the shared Kedaipal WABA. Surfaced via `orders.get` (`retailerWaPhone` + `storeName`); hidden when the vendor has no number set.
 
 ## `shortId` design
 

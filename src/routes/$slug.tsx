@@ -2,6 +2,7 @@ import { createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { CartBar } from "../components/storefront/cart-bar";
+import { FoundingMemberBadge } from "../components/storefront/founding-member-badge";
 import { ProductGrid } from "../components/storefront/product-grid";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
@@ -12,6 +13,8 @@ interface StorefrontLoaderData {
 	slug: string;
 	checkoutPhone: string | undefined;
 	locale: "en" | "ms";
+	// SEO meta/OG/JSON-LD description. Prefers the seller's own store description
+	// (single-lined) and falls back to a generated blurb.
 	description: string;
 	canonicalUrl: string;
 	ogImageUrl: string | undefined;
@@ -50,12 +53,22 @@ export const Route = createFileRoute("/$slug")({
 			}
 		}
 
+		// The seller's own description is the stronger trust/SEO signal — prefer it
+		// for meta tags, collapsing newlines to a single line. Fall back to the
+		// generated blurb when unset.
+		const sellerDescription = retailer.storeDescription
+			?.replace(/\s+/g, " ")
+			.trim();
+		const description =
+			sellerDescription ||
+			`Shop ${retailer.storeName} on Kedaipal — browse the catalog and place your order on WhatsApp.`;
+
 		return {
 			storeName: retailer.storeName,
 			slug: retailer.slug,
 			checkoutPhone: retailer.checkoutPhone,
 			locale: retailer.locale ?? "en",
-			description: `Shop ${retailer.storeName} on Kedaipal — browse the catalog and place your order on WhatsApp.`,
+			description,
 			canonicalUrl: `${SITE_URL}/${retailer.slug}`,
 			ogImageUrl,
 		};
@@ -138,8 +151,8 @@ function StoreNotFound() {
 
 function StorefrontSkeleton() {
 	return (
-		<div className="mx-auto flex min-h-dvh w-full max-w-md flex-col pb-32">
-			<header className="flex flex-col gap-4 bg-gradient-to-b from-accent/10 to-background px-5 pb-6 pt-10">
+		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-32">
+			<header className="flex flex-col gap-4 bg-gradient-to-b from-accent/10 to-background px-5 pb-6 pt-10 lg:rounded-b-3xl lg:px-8">
 				<Skeleton className="h-5 w-24" />
 				<div className="flex items-center gap-4">
 					<Skeleton className="h-16 w-16 shrink-0 rounded-2xl" />
@@ -149,9 +162,9 @@ function StorefrontSkeleton() {
 					</div>
 				</div>
 			</header>
-			<section className="mt-4 flex flex-col gap-4 px-5">
-				<div className="grid grid-cols-2 gap-3">
-					{[0, 1, 2, 3].map((n) => (
+			<section className="mt-4 flex flex-col gap-4 px-5 lg:px-8">
+				<div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+					{[0, 1, 2, 3, 4, 5, 6, 7].map((n) => (
 						<div
 							key={n}
 							className="flex flex-col gap-2 rounded-2xl border border-border bg-card p-3"
@@ -174,6 +187,13 @@ function StorefrontRoute() {
 	const cart = useCart(
 		result && result.status === "ok" ? result.retailer._id : undefined,
 	);
+	// Active pickup locations — public, unauthed. Only consulted by the checkout
+	// sheet when the retailer has self-collect on. Loading state (undefined) is
+	// folded into "no locations" at the call site to avoid blocking storefront
+	// render on a sidecar query.
+	const pickupLocations = useQuery(api.pickupLocations.listActivePublicBySlug, {
+		slug,
+	});
 
 	if (result === undefined || result.status !== "ok") {
 		return <StorefrontSkeleton />;
@@ -182,8 +202,8 @@ function StorefrontRoute() {
 	const retailer = result.retailer;
 
 	return (
-		<div className="mx-auto flex min-h-dvh w-full max-w-md flex-col pb-32">
-			<header className="flex flex-col gap-4 bg-gradient-to-b from-accent/10 to-background px-5 pb-6 pt-10">
+		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-32">
+			<header className="flex flex-col gap-4 bg-gradient-to-b from-accent/10 to-background px-5 pb-6 pt-10 lg:rounded-b-3xl lg:px-8 lg:pb-8">
 				<img src="/logo-3.svg" alt="Kedaipal" className="h-5 w-auto" />
 				<div className="flex items-center gap-4">
 					{retailer.logoUrl ? (
@@ -193,18 +213,30 @@ function StorefrontRoute() {
 							className="h-16 w-16 shrink-0 rounded-2xl border-2 border-accent/20 bg-background object-contain shadow-sm"
 						/>
 					) : null}
-					<div>
+					<div className="flex flex-col gap-1">
 						<h1 className="text-2xl font-bold leading-tight tracking-tight">
 							{retailer.storeName}
 						</h1>
-						<p className="mt-0.5 text-sm text-muted-foreground">
-							Browse &amp; order on WhatsApp
-						</p>
+						{retailer.isFoundingMember ? (
+							<FoundingMemberBadge rank={retailer.foundingMemberRank} />
+						) : null}
+						{retailer.storeDescription ? (
+							// Seller's own blurb wins over the generic tagline. Plain text
+							// (escaped by React), newlines preserved, clamped to keep the
+							// header tidy. No empty block when unset.
+							<p className="line-clamp-4 whitespace-pre-line text-sm text-muted-foreground">
+								{retailer.storeDescription}
+							</p>
+						) : (
+							<p className="text-sm text-muted-foreground">
+								Browse &amp; order on WhatsApp
+							</p>
+						)}
 					</div>
 				</div>
 			</header>
 
-			<section className="mt-4 px-5">
+			<section className="mt-4 px-5 lg:px-8">
 				<ProductGrid retailerId={retailer._id} cart={cart} />
 			</section>
 
@@ -213,6 +245,10 @@ function StorefrontRoute() {
 				retailerId={retailer._id}
 				storeName={retailer.storeName}
 				checkoutPhone={retailer.checkoutPhone}
+				offerSelfCollect={retailer.offerSelfCollect ?? false}
+				offerDelivery={retailer.offerDelivery ?? true}
+				minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
+				pickupLocations={pickupLocations ?? []}
 			/>
 		</div>
 	);

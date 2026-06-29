@@ -14,6 +14,24 @@ function setup() {
 	return t;
 }
 
+/** Resolve an order's buyer tracking token from its shortId (see orders.test.ts). */
+async function tk(
+	t: ReturnType<typeof setup>,
+	shortId: string,
+): Promise<string> {
+	return await t.run(async (ctx) => {
+		const o = await ctx.db
+			.query("orders")
+			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+			.first();
+		if (!o) return "__no_such_order__";
+		if (o.trackingToken) return o.trackingToken;
+		const token = `tok_${shortId}`;
+		await ctx.db.patch(o._id, { trackingToken: token });
+		return token;
+	});
+}
+
 const USER = "user_email_test";
 
 type FetchCall = { url: string; body: unknown };
@@ -65,11 +83,10 @@ async function seedRetailerWithEmail(
 	const productId = await asUser.mutation(api.products.create, {
 		retailerId: retailer._id,
 		name: "Tent 2P",
-		price: 12000,
 		currency: "MYR",
-		stock: 100,
 		imageStorageIds: [],
 		sortOrder: 0,
+		variants: [{ optionValues: [], price: 12000, onHand: 100 }],
 	});
 	return { retailerId: retailer._id, productId };
 }
@@ -92,7 +109,9 @@ async function createPendingOrder(
 			postcode: "47301",
 		},
 	});
-	const order = await t.query(api.orders.get, { shortId });
+	const order = await t.query(api.orders.get, {
+		token: await tk(t, shortId),
+	});
 	if (!order) throw new Error("order not found after create");
 	return { shortId, orderId: order._id };
 }
@@ -164,6 +183,42 @@ describe("email retailer order alert", () => {
 		fetchMock.restore();
 	});
 
+	test("flags a custom-item order so the seller knows to send a mockup first", async () => {
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const asUser = t.withIdentity({ subject: USER });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: "Cake Studio",
+			slug: "email-custom",
+		});
+		await asUser.mutation(api.retailers.updateSettings, {
+			notifyEmail: "ops@store.test",
+		});
+		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		const productId = await asUser.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Custom Cake",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			requiresProof: true,
+			variants: [{ optionValues: [], price: 0, onHand: 0 }],
+		});
+		const { orderId } = await createPendingOrder(t, retailer._id, productId);
+
+		await t.action(internal.email.notifyRetailerOrderAlert, { orderId });
+
+		const body = fetchMock.resendCalls()[0].body as {
+			html: string;
+			text: string;
+		};
+		expect(body.html).toContain("Custom item");
+		expect(body.text).toContain("Custom item");
+		expect(body.text).toContain("Payment is held");
+		fetchMock.restore();
+	});
+
 	test("skips silently when notifyEmail is not set", async () => {
 		const t = setup();
 		const fetchMock = installFetchMock();
@@ -231,7 +286,7 @@ describe("email payment claimed alert", () => {
 			productId,
 		);
 		await t.mutation(api.orders.claimPayment, {
-			shortId,
+			token: await tk(t, shortId),
 			reference: "TXN-9988",
 		});
 
@@ -265,7 +320,7 @@ describe("email payment claimed alert", () => {
 			retailerId,
 			productId,
 		);
-		await t.mutation(api.orders.claimPayment, { shortId });
+		await t.mutation(api.orders.claimPayment, { token: await tk(t, shortId) });
 
 		await t.action(internal.email.notifyPaymentClaimed, { orderId });
 
@@ -290,7 +345,7 @@ describe("email payment claimed alert", () => {
 			retailerId,
 			productId,
 		);
-		await t.mutation(api.orders.claimPayment, { shortId });
+		await t.mutation(api.orders.claimPayment, { token: await tk(t, shortId) });
 
 		await t.action(internal.email.notifyPaymentClaimed, { orderId });
 
@@ -311,7 +366,7 @@ describe("email payment claimed alert", () => {
 			productId,
 		);
 		await t.mutation(api.orders.claimPayment, {
-			shortId,
+			token: await tk(t, shortId),
 			reference: "TXN-9988",
 		});
 
