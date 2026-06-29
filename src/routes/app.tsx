@@ -78,6 +78,7 @@ function AppShell() {
 				<SendingPausedBanner
 					paused={retailer.sendingPaused}
 					reason={retailer.sendingPauseReason}
+					slug={retailer.slug}
 				/>
 				<ConsentBanner
 					versions={{
