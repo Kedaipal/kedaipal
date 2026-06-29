@@ -95,7 +95,7 @@ const jsonLd = [
 				name: "Is there a free trial?",
 				acceptedAnswer: {
 					"@type": "Answer",
-					text: "No — Kedaipal runs on paid tiers starting at RM 79/mo after your 14-day free trial. Founding 10 members lock in Pro at RM 104/mo forever.",
+					text: "Yes — every plan starts with 14 days free, no credit card. You'll only be asked to pick a plan and add payment at the end of the trial. Cancel anytime in between and pay nothing.",
 				},
 			},
 		],
