@@ -173,6 +173,23 @@ describe("opt-out lifecycle", () => {
 		await t.mutation(internal.wabaProtection.reactivateOptIn, { waPhone: BUYER });
 		expect((await session()).allowed).toBe(true);
 	});
+
+	test("opt-out matches across phone-number formatting (compliance)", async () => {
+		const t = setup();
+		const retailerId = await seedRetailer(t);
+		// STOP comes in as Meta's bare digits…
+		await t.mutation(internal.wabaProtection.registerOptOut, {
+			waPhone: "60111222333",
+			source: "stop_keyword",
+		});
+		// …a later send targets the same person stored with '+', spaces, dashes.
+		const decision = await t.mutation(internal.wabaProtection.canSend, {
+			retailerId,
+			toPhone: "+60 111-222 333",
+			category: "session_message",
+		});
+		expect(decision).toEqual({ allowed: false, status: "blocked_optout" });
+	});
 });
 
 describe("recordWabaHealth", () => {

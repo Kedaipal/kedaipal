@@ -37,6 +37,7 @@ import { getAdapter } from "./lib/channels/registry";
 import type { OutboundMessage } from "./lib/channels/types";
 import { sendEmail } from "./lib/email";
 import { rateLimiter } from "./lib/rateLimiter";
+import { normalizeWaPhone } from "./lib/slug";
 import { resolveAccess, loadSubscription } from "./subscriptions";
 import {
 	BURST_WINDOW_MS,
@@ -139,11 +140,14 @@ async function latestQuality(ctx: MutationCtx): Promise<QualityRating> {
 	return (row?.qualityRating ?? "HIGH") as QualityRating;
 }
 
-/** Whether a phone currently holds an active (non-reactivated) global opt-out. */
+/** Whether a phone currently holds an active (non-reactivated) global opt-out.
+ * Matches on the canonical (digits-only) form so formatting differences between
+ * Meta's inbound `from` and a stored `customer.waPhone`/`retailer.waPhone` can't
+ * let a STOP silently fail to suppress. */
 async function isOptedOut(ctx: MutationCtx, waPhone: string): Promise<boolean> {
 	const latest = await ctx.db
 		.query("optOuts")
-		.withIndex("by_phone", (q) => q.eq("waPhone", waPhone))
+		.withIndex("by_phone", (q) => q.eq("waPhone", normalizeWaPhone(waPhone)))
 		.order("desc")
 		.first();
 	return !!latest && latest.reactivatedAt === undefined;
@@ -477,28 +481,30 @@ export const registerOptOut = internalMutation({
 		triggeredByRetailerId: v.optional(v.id("retailers")),
 	},
 	handler: async (ctx, { waPhone, source, triggeredByRetailerId }): Promise<void> => {
-		if (await isOptedOut(ctx, waPhone)) return; // idempotent — already opted out
+		const phone = normalizeWaPhone(waPhone);
+		if (await isOptedOut(ctx, phone)) return; // idempotent — already opted out
 		await ctx.db.insert("optOuts", {
-			waPhone,
+			waPhone: phone,
 			source,
 			triggeredByRetailerId,
 			createdAt: Date.now(),
 		});
-		console.warn("WABA: global opt-out registered", { waPhone, source });
+		console.warn("WABA: global opt-out registered", { waPhone: phone, source });
 	},
 });
 
 export const reactivateOptIn = internalMutation({
 	args: { waPhone: v.string() },
 	handler: async (ctx, { waPhone }): Promise<void> => {
+		const phone = normalizeWaPhone(waPhone);
 		const latest = await ctx.db
 			.query("optOuts")
-			.withIndex("by_phone", (q) => q.eq("waPhone", waPhone))
+			.withIndex("by_phone", (q) => q.eq("waPhone", phone))
 			.order("desc")
 			.first();
 		if (latest && latest.reactivatedAt === undefined) {
 			await ctx.db.patch(latest._id, { reactivatedAt: Date.now() });
-			console.warn("WABA: global opt-in (re-activated)", { waPhone });
+			console.warn("WABA: global opt-in (re-activated)", { waPhone: phone });
 		}
 	},
 });

@@ -90,6 +90,13 @@ number. **START / MULA** re-opts-in (`reactivateOptIn` stamps `reactivatedAt`).
 Handled in `handleInbound` before any other intent; the ack reply is
 `transactional` so it isn't suppressed by the opt-out it's confirming.
 
+Opt-out rows are keyed on the **canonical (digits-only) phone** via
+`normalizeWaPhone`, on both write (`registerOptOut`/`reactivateOptIn`) and read
+(`isOptedOut`). Stored numbers already normalize through `assertValidWaPhone`, but
+keying the opt-out itself on the canonical form means a STOP suppresses later
+sends even if some future write path stores a `+`/spaced number — opt-out
+compliance never silently depends on every caller having normalized first.
+
 ## WABA health webhooks (auto-throttle)
 
 Meta posts health changes to the **same** webhook URL as inbound messages, keyed
