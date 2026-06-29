@@ -11,6 +11,7 @@ import {
 	Settings,
 	ShieldCheck,
 	ShoppingBag,
+	Siren,
 	Users,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -122,12 +123,20 @@ export function Sidebar({ retailer, actionableCount, isAdmin }: SidebarProps) {
 				{/* Admin-only — server `requireAdmin` is the real gate; this link is
 				    just convenience so admins don't type the URL. */}
 				{isAdmin ? (
-					<SidebarLink
-						to="/app/admin/billing"
-						icon={ShieldCheck}
-						label="Admin"
-						collapsed={collapsed}
-					/>
+					<>
+						<SidebarLink
+							to="/app/admin/billing"
+							icon={ShieldCheck}
+							label="Admin"
+							collapsed={collapsed}
+						/>
+						<SidebarLink
+							to="/app/admin/waba"
+							icon={Siren}
+							label="WABA Safety"
+							collapsed={collapsed}
+						/>
+					</>
 				) : null}
 			</nav>
 

@@ -29,7 +29,10 @@ import {
 	internalAction,
 	internalMutation,
 	internalQuery,
+	mutation,
+	query,
 } from "./_generated/server";
+import { requireAdmin } from "./lib/auth";
 import { getAdapter } from "./lib/channels/registry";
 import type { OutboundMessage } from "./lib/channels/types";
 import { sendEmail } from "./lib/email";
@@ -268,6 +271,51 @@ async function upsertLimits(
 	}
 }
 
+/** Pause core — shared by the CLI internal mutation and the admin UI mutation. */
+async function doPause(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	reason: string | undefined,
+	pausedByUserId: string | undefined,
+): Promise<void> {
+	const retailer = await ctx.db.get(retailerId);
+	if (!retailer) throw new Error(`Retailer not found: ${retailerId}`);
+	await upsertLimits(ctx, retailerId, {
+		pausedAt: Date.now(),
+		pauseReason: reason,
+		pausedByUserId,
+	});
+	console.warn("WABA: retailer outbound PAUSED", {
+		retailerId,
+		storeName: retailer.storeName,
+		reason,
+	});
+	// Tell the retailer their non-transactional sends are paused (order
+	// confirmations still flow). Fire-and-forget.
+	await ctx.scheduler.runAfter(0, internal.wabaProtection.notifyRetailerPaused, {
+		retailerId,
+		reason,
+	});
+}
+
+/** Resume core — shared by the CLI internal mutation and the admin UI mutation. */
+async function doResume(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+): Promise<void> {
+	const retailer = await ctx.db.get(retailerId);
+	if (!retailer) throw new Error(`Retailer not found: ${retailerId}`);
+	await upsertLimits(ctx, retailerId, {
+		pausedAt: undefined,
+		pauseReason: undefined,
+		pausedByUserId: undefined,
+	});
+	console.warn("WABA: retailer outbound RESUMED", {
+		retailerId,
+		storeName: retailer.storeName,
+	});
+}
+
 export const pauseRetailer = internalMutation({
 	args: {
 		retailerId: v.id("retailers"),
@@ -275,41 +323,139 @@ export const pauseRetailer = internalMutation({
 		pausedByUserId: v.optional(v.string()),
 	},
 	handler: async (ctx, { retailerId, reason, pausedByUserId }): Promise<void> => {
-		const retailer = await ctx.db.get(retailerId);
-		if (!retailer) throw new Error(`Retailer not found: ${retailerId}`);
-		await upsertLimits(ctx, retailerId, {
-			pausedAt: Date.now(),
-			pauseReason: reason,
-			pausedByUserId,
-		});
-		console.warn("WABA: retailer outbound PAUSED", {
-			retailerId,
-			storeName: retailer.storeName,
-			reason,
-		});
-		// Tell the retailer their non-transactional sends are paused (order
-		// confirmations still flow). Fire-and-forget.
-		await ctx.scheduler.runAfter(0, internal.wabaProtection.notifyRetailerPaused, {
-			retailerId,
-			reason,
-		});
+		await doPause(ctx, retailerId, reason, pausedByUserId);
 	},
 });
 
 export const resumeRetailer = internalMutation({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }): Promise<void> => {
-		const retailer = await ctx.db.get(retailerId);
-		if (!retailer) throw new Error(`Retailer not found: ${retailerId}`);
-		await upsertLimits(ctx, retailerId, {
-			pausedAt: undefined,
-			pauseReason: undefined,
-			pausedByUserId: undefined,
-		});
-		console.warn("WABA: retailer outbound RESUMED", {
-			retailerId,
-			storeName: retailer.storeName,
-		});
+		await doResume(ctx, retailerId);
+	},
+});
+
+// --- Admin UI (Clerk-allowlisted) — backs /app/admin/waba -------------------
+
+/** Cap on per-vendor log rows scanned for the at-a-glance stats. */
+const VENDOR_STATS_SCAN_CAP = 300;
+
+/**
+ * List/search vendors with current pause status + at-a-glance 30-day stats
+ * (sent / blocked / opt-outs-triggered) so an admin can eyeball who's misbehaving
+ * without drilling in. All derived from data we already log — no Meta needed.
+ *
+ * PERF: stats are computed on demand — one global `optOuts` scan + a capped,
+ * indexed per-vendor scan of `outboundMessageLog` (only for the ≤200 shown). Fine
+ * at current vendor counts; before scaling to hundreds of high-volume vendors,
+ * move to denormalized rolling counters (see docs/waba-protection.md). Counts max
+ * out at the scan cap (shown as "N+").
+ */
+export const adminListVendors = query({
+	args: { search: v.optional(v.string()) },
+	handler: async (ctx, { search }) => {
+		await requireAdmin(ctx);
+		const [retailers, limits] = await Promise.all([
+			ctx.db.query("retailers").collect(),
+			ctx.db.query("retailerSendingLimits").collect(),
+		]);
+		const byRetailer = new Map(limits.map((l) => [l.retailerId, l]));
+		const term = (search ?? "").trim().toLowerCase();
+		const shown = retailers
+			.filter(
+				(r) =>
+					!term ||
+					r.storeName.toLowerCase().includes(term) ||
+					r.slug.toLowerCase().includes(term),
+			)
+			.map((r) => {
+				const l = byRetailer.get(r._id);
+				return {
+					_id: r._id,
+					storeName: r.storeName,
+					slug: r.slug,
+					paused: !!l?.pausedAt,
+					pausedAt: l?.pausedAt,
+					pauseReason: l?.pauseReason,
+				};
+			})
+			.sort(
+				(a, b) =>
+					Number(b.paused) - Number(a.paused) ||
+					a.storeName.localeCompare(b.storeName),
+			)
+			.slice(0, 200);
+
+		const cutoff = Date.now() - 30 * DAY_MS;
+
+		// Opt-outs this vendor triggered in the last 30d — one scan of the global
+		// (small) opt-out list, bucketed by the triggering retailer.
+		const optOuts = await ctx.db.query("optOuts").collect();
+		const optOutsByVendor = new Map<string, number>();
+		for (const o of optOuts) {
+			if (o.createdAt >= cutoff && o.triggeredByRetailerId) {
+				const k = o.triggeredByRetailerId;
+				optOutsByVendor.set(k, (optOutsByVendor.get(k) ?? 0) + 1);
+			}
+		}
+
+		// Per-vendor sent/blocked counts (30d, capped), via the by_retailer_sent index.
+		return Promise.all(
+			shown.map(async (v) => {
+				const logs = await ctx.db
+					.query("outboundMessageLog")
+					.withIndex("by_retailer_sent", (q) =>
+						q.eq("retailerId", v._id).gte("sentAt", cutoff),
+					)
+					.order("desc")
+					.take(VENDOR_STATS_SCAN_CAP);
+				let sent = 0;
+				let blocked = 0;
+				for (const l of logs) {
+					if (l.status === "sent" || l.status === "delivered" || l.status === "read")
+						sent++;
+					else if (l.status.startsWith("blocked_")) blocked++;
+				}
+				return {
+					...v,
+					sent30d: sent,
+					blocked30d: blocked,
+					optOuts30d: optOutsByVendor.get(v._id) ?? 0,
+					statsCapped: logs.length === VENDOR_STATS_SCAN_CAP,
+				};
+			}),
+		);
+	},
+});
+
+/** Latest WABA health snapshot for the admin banner — null until Meta health
+ * webhooks are subscribed (graceful: the UI then shows "not receiving updates"). */
+export const adminGetWabaHealth = query({
+	args: {},
+	handler: async (ctx) => {
+		await requireAdmin(ctx);
+		return ctx.db
+			.query("wabaHealth")
+			.withIndex("by_observed")
+			.order("desc")
+			.first();
+	},
+});
+
+export const adminPauseRetailer = mutation({
+	args: { retailerId: v.id("retailers"), reason: v.string() },
+	handler: async (ctx, { retailerId, reason }): Promise<void> => {
+		const adminId = await requireAdmin(ctx);
+		const trimmed = reason.trim();
+		if (!trimmed) throw new Error("A reason is required to pause a vendor");
+		await doPause(ctx, retailerId, trimmed, adminId);
+	},
+});
+
+export const adminResumeRetailer = mutation({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<void> => {
+		await requireAdmin(ctx);
+		await doResume(ctx, retailerId);
 	},
 });
 

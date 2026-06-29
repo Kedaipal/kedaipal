@@ -25,6 +25,7 @@ beforeEach(() => {
 afterEach(() => {
 	delete process.env.WHATSAPP_PHONE_NUMBER_ID;
 	delete process.env.WHATSAPP_ACCESS_TOKEN;
+	delete process.env.ADMIN_USER_IDS;
 	vi.restoreAllMocks();
 });
 
@@ -190,6 +191,57 @@ describe("recordWabaHealth", () => {
 		// Latest row governs.
 		const latest = await t.query(internal.wabaProtection.getWabaHealth, {});
 		expect(latest?.qualityRating).toBe("HIGH");
+	});
+});
+
+describe("admin vendor list + at-a-glance stats", () => {
+	test("gated to admins; returns pause status + 30d sent/blocked/opt-out counts", async () => {
+		const t = setup();
+		const retailerId = await seedRetailer(t);
+		await t.run(async (ctx) => {
+			const now = Date.now();
+			await ctx.db.insert("outboundMessageLog", {
+				retailerId,
+				toWaPhone: BUYER,
+				category: "transactional",
+				status: "sent",
+				sentAt: now,
+			});
+			await ctx.db.insert("outboundMessageLog", {
+				retailerId,
+				toWaPhone: BUYER,
+				category: "session_message",
+				status: "blocked_optout",
+				sentAt: now,
+			});
+			await ctx.db.insert("optOuts", {
+				waPhone: BUYER,
+				source: "stop_keyword",
+				triggeredByRetailerId: retailerId,
+				createdAt: now,
+			});
+		});
+
+		// Non-admin is rejected (ADMIN_USER_IDS unset → no one is admin).
+		await expect(
+			t
+				.withIdentity({ subject: "not_admin" })
+				.query(api.wabaProtection.adminListVendors, {}),
+		).rejects.toThrow();
+
+		// Admin sees the vendor with its 30d stats.
+		process.env.ADMIN_USER_IDS = USER;
+		const rows = await t
+			.withIdentity({ subject: USER })
+			.query(api.wabaProtection.adminListVendors, {});
+		const row = rows.find((r) => r._id === retailerId);
+		expect(row).toMatchObject({
+			paused: false,
+			sent30d: 1,
+			blocked30d: 1,
+			optOuts30d: 1,
+			statsCapped: false,
+		});
 	});
 });
 

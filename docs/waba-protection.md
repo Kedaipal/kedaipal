@@ -1,5 +1,9 @@
 # WABA protection — kill switch, send guardrails, opt-out & health auto-throttle
 
+> **Plain-English overview + the decisions we made** (for non-engineers /
+> recall): [`docs/waba-protection-overview.md`](./waba-protection-overview.md).
+> This file is the engineering reference.
+
 ClickUp: [`86expmgep`](https://app.clickup.com/t/86expmgep). Kedaipal sends every
 seller's WhatsApp notifications through **one shared, Meta-verified WhatsApp
 Business number** (the "no Meta setup" moat — see [`CLAUDE.md`](../CLAUDE.md)).
@@ -114,8 +118,17 @@ required). A paused retailer is emailed via `notifyRetailerPaused`, and sees a
 that makes clear order messaging is *not* affected — discoverability for an
 otherwise invisible flag.
 
-## Operating it (CLI, until the Admin Console ships)
+## Operating it
 
+**Admin UI (non-dev operators):** `/app/admin/waba` ("WABA Safety" in the admin
+nav, Clerk-allowlist gated via `ADMIN_USER_IDS`). Search a vendor → Pause/Resume
+with a **reason-required confirmation modal**; a WABA-health banner up top
+(degrades gracefully to "no Meta health updates yet" until the webhook fields are
+subscribed). Backed by `adminListVendors` / `adminPauseRetailer` /
+`adminResumeRetailer` / `adminGetWabaHealth`. This is the first slice of the Admin
+Console ticket `86ey25er1`; cap-editing + full send-log live there.
+
+**CLI (dev / scripts):**
 ```bash
 npx convex run wabaProtection:pauseRetailer  '{"retailerId":"<id>","reason":"spam"}'
 npx convex run wabaProtection:resumeRetailer '{"retailerId":"<id>"}'

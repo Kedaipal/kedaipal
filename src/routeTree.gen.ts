@@ -33,6 +33,7 @@ import { Route as AppProductsImportRouteImport } from './routes/app.products.imp
 import { Route as AppProductsProductIdRouteImport } from './routes/app.products.$productId'
 import { Route as AppOrdersShortIdRouteImport } from './routes/app.orders.$shortId'
 import { Route as AppCustomersCustomerIdRouteImport } from './routes/app.customers.$customerId'
+import { Route as AppAdminWabaRouteImport } from './routes/app.admin.waba'
 import { Route as AppAdminBillingRouteImport } from './routes/app.admin.billing'
 
 const TermsRoute = TermsRouteImport.update({
@@ -155,6 +156,11 @@ const AppCustomersCustomerIdRoute = AppCustomersCustomerIdRouteImport.update({
   path: '/customers/$customerId',
   getParentRoute: () => AppRoute,
 } as any)
+const AppAdminWabaRoute = AppAdminWabaRouteImport.update({
+  id: '/admin/waba',
+  path: '/admin/waba',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppAdminBillingRoute = AppAdminBillingRouteImport.update({
   id: '/admin/billing',
   path: '/admin/billing',
@@ -179,6 +185,7 @@ export interface FileRoutesByFullPath {
   '/track/$token': typeof TrackTokenRoute
   '/app/': typeof AppIndexRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
+  '/app/admin/waba': typeof AppAdminWabaRoute
   '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
   '/app/orders/$shortId': typeof AppOrdersShortIdRoute
   '/app/products/$productId': typeof AppProductsProductIdRoute
@@ -205,6 +212,7 @@ export interface FileRoutesByTo {
   '/track/$token': typeof TrackTokenRoute
   '/app': typeof AppIndexRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
+  '/app/admin/waba': typeof AppAdminWabaRoute
   '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
   '/app/orders/$shortId': typeof AppOrdersShortIdRoute
   '/app/products/$productId': typeof AppProductsProductIdRoute
@@ -233,6 +241,7 @@ export interface FileRoutesById {
   '/track/$token': typeof TrackTokenRoute
   '/app/': typeof AppIndexRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
+  '/app/admin/waba': typeof AppAdminWabaRoute
   '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
   '/app/orders/$shortId': typeof AppOrdersShortIdRoute
   '/app/products/$productId': typeof AppProductsProductIdRoute
@@ -262,6 +271,7 @@ export interface FileRouteTypes {
     | '/track/$token'
     | '/app/'
     | '/app/admin/billing'
+    | '/app/admin/waba'
     | '/app/customers/$customerId'
     | '/app/orders/$shortId'
     | '/app/products/$productId'
@@ -288,6 +298,7 @@ export interface FileRouteTypes {
     | '/track/$token'
     | '/app'
     | '/app/admin/billing'
+    | '/app/admin/waba'
     | '/app/customers/$customerId'
     | '/app/orders/$shortId'
     | '/app/products/$productId'
@@ -315,6 +326,7 @@ export interface FileRouteTypes {
     | '/track/$token'
     | '/app/'
     | '/app/admin/billing'
+    | '/app/admin/waba'
     | '/app/customers/$customerId'
     | '/app/orders/$shortId'
     | '/app/products/$productId'
@@ -511,6 +523,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppCustomersCustomerIdRouteImport
       parentRoute: typeof AppRoute
     }
+    '/app/admin/waba': {
+      id: '/app/admin/waba'
+      path: '/admin/waba'
+      fullPath: '/app/admin/waba'
+      preLoaderRoute: typeof AppAdminWabaRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/app/admin/billing': {
       id: '/app/admin/billing'
       path: '/admin/billing'
@@ -526,6 +545,7 @@ interface AppRouteChildren {
   AppSettingsRoute: typeof AppSettingsRoute
   AppIndexRoute: typeof AppIndexRoute
   AppAdminBillingRoute: typeof AppAdminBillingRoute
+  AppAdminWabaRoute: typeof AppAdminWabaRoute
   AppCustomersCustomerIdRoute: typeof AppCustomersCustomerIdRoute
   AppOrdersShortIdRoute: typeof AppOrdersShortIdRoute
   AppProductsProductIdRoute: typeof AppProductsProductIdRoute
@@ -541,6 +561,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppSettingsRoute: AppSettingsRoute,
   AppIndexRoute: AppIndexRoute,
   AppAdminBillingRoute: AppAdminBillingRoute,
+  AppAdminWabaRoute: AppAdminWabaRoute,
   AppCustomersCustomerIdRoute: AppCustomersCustomerIdRoute,
   AppOrdersShortIdRoute: AppOrdersShortIdRoute,
   AppProductsProductIdRoute: AppProductsProductIdRoute,
