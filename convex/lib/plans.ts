@@ -23,7 +23,9 @@ export function planQualifiesForFounding(plan: Plan): boolean {
 
 export type PlanCaps = {
 	/** Monthly order cap. SOFT in v1 — drives a dashboard nudge, never blocks the
-	 * public storefront. `Infinity` = unlimited (Scale). */
+	 * public storefront. All tiers are finite (Arif's 2026-06-28 decision dropped
+	 * Scale's "unlimited" — keeps an upsell ceiling for a future Enterprise tier and
+	 * stops contradicting Scale's own ~1,300/mo tagline). */
 	orderCap: number;
 	/** Hard cap on dashboard users. */
 	userCap: number;
@@ -35,11 +37,7 @@ export type PlanCaps = {
 export const PLAN_CAPS: Record<Plan, PlanCaps> = {
 	starter: { orderCap: 100, userCap: 1, broadcastQuota: 0 },
 	pro: { orderCap: 500, userCap: 2, broadcastQuota: 100 },
-	scale: {
-		orderCap: Number.POSITIVE_INFINITY,
-		userCap: 5,
-		broadcastQuota: Number.POSITIVE_INFINITY,
-	},
+	scale: { orderCap: 2000, userCap: 5, broadcastQuota: 500 },
 };
 
 // Standard monthly price (minor units / sen).

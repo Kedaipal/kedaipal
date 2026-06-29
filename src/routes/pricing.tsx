@@ -124,19 +124,18 @@ interface Feature {
 	pro: FeatureValue;
 	scale: FeatureValue;
 	// True = the capability isn't built yet. Shown with a "Coming soon" badge so the
-	// pricing table doesn't over-promise during beta. Keep in sync with what's
-	// actually shipped (see ClickUp 86exrhpfn + the entitlement tickets).
+	// pricing table doesn't over-promise before those features ship. Keep in sync
+	// with what's actually shipped (see ClickUp 86exrhpfn + the entitlement tickets).
 	comingSoon?: boolean;
 }
 
 function useFeatures(): Feature[] {
-	const unlimited = m.pricingpage_val_unlimited();
 	return [
 		{
 			label: m.pricingpage_feat_orders_per_month(),
 			starter: "100",
 			pro: "500",
-			scale: unlimited,
+			scale: "2,000",
 		},
 		{
 			label: m.pricingpage_feat_team_members(),
@@ -217,7 +216,7 @@ function useFeatures(): Feature[] {
 			label: m.pricingpage_feat_broadcasts(),
 			starter: false,
 			pro: m.pricingpage_val_broadcast_pro(),
-			scale: unlimited,
+			scale: m.pricingpage_val_broadcast_scale(),
 			comingSoon: true,
 		},
 		{
@@ -300,7 +299,7 @@ function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 			)}
 			{tier.id === "scale" && (
 				<span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-muted px-3 py-0.5 text-xs font-bold uppercase tracking-wider text-muted-foreground">
-					Coming soon
+					{m.pricingpage_coming_soon()}
 				</span>
 			)}
 

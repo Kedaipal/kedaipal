@@ -9,6 +9,12 @@
 > analysis + schema design aren't lost. All money figures are **interim
 > placeholders** to re-tune with real usage data once we have live orders.
 
+> **Update (28 Jun 2026):** the "unlimited Scale" margin trap flagged below was
+> resolved — Scale now carries **finite soft caps (2,000 orders/mo, 500
+> broadcasts/mo)**, exactly the fair-use direction this doc recommended. Canonical
+> caps live in `convex/lib/plans.ts` + [`manual-subscription.md`](./manual-subscription.md);
+> the "unlimited" rows below are kept as the original analysis only.
+
 ---
 
 ## 0. Why this doc

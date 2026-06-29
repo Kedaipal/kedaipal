@@ -229,10 +229,12 @@ Fails closed when unset. Server check mandatory; client hiding cosmetic.
 
 `convex/lib/plans.ts`. Starter RM79 / Pro RM149 / Scale RM299; founding Pro RM104
 (Scale RM209, unreachable at launch). Annual = 10 months charged. Caps per
-CLAUDE.md: Starter 100/1/0, Pro 500/2/100, Scale ∞/5/∞ (unlimited stored as the
-`UNLIMITED` sentinel — Convex can't store `Infinity`). Scale is **not selectable**
-at v1 (`isPlanSelectable`) and grants **no** Founding badge (`planQualifiesForFounding`,
-Arif's 2026-05-28 decision).
+CLAUDE.md: Starter 100/1/0, Pro 500/2/100, Scale 2000/5/500 — all finite since
+Arif's 2026-06-28 decision dropped Scale's "unlimited" (kept an upsell ceiling for
+a future Enterprise tier and stopped contradicting Scale's ~1,300/mo tagline). The
+`UNLIMITED`/`isUnlimited` sentinel stays exported for that future tier but no v1
+plan uses it. Scale is **not selectable** at v1 (`isPlanSelectable`) and grants
+**no** Founding badge (`planQualifiesForFounding`, Arif's 2026-05-28 decision).
 
 ## `PaymentProvider` seam
 
