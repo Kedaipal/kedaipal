@@ -115,4 +115,10 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		period: MINUTE,
 		capacity: 10,
 	},
+	// NOTE: the per-seller outbound WhatsApp guardrails (whatsappSendPerMinute /
+	// whatsappSendDaily) are intentionally NOT registered here. They're enforced
+	// by the guarded send gateway (convex/wabaProtection.ts) with an INLINE config
+	// per call so a retailer's custom cap (retailers.sendRatePerMinute /
+	// sendDailyCap, defaults in lib/wabaLimits.ts) takes effect — the rate-limiter
+	// only allows inline config overrides for names that aren't pre-registered.
 });

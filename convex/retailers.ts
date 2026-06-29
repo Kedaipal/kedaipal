@@ -380,6 +380,13 @@ type RetailerPublic = {
 	// Denormalized Founding Member flags (badge / ribbon) — public-safe.
 	isFoundingMember?: boolean;
 	foundingMemberRank?: number;
+	// Outbound WhatsApp kill-switch state (OWNER-only, like `subscription`), read
+	// from `retailerSendingLimits`. When paused, the gateway blocks this seller's
+	// NON-transactional WhatsApp sends (order confirmations/status still flow); the
+	// dashboard surfaces a banner so the seller isn't left wondering. See
+	// docs/waba-protection.md.
+	sendingPaused?: boolean;
+	sendingPauseReason?: string;
 };
 
 async function loadRetailerForUser(
@@ -412,6 +419,10 @@ async function loadRetailerForUser(
 			`[retailers] no subscription row for retailer ${row._id} — failing open (comped full access)`,
 		);
 	}
+	const sendingLimits = await ctx.db
+		.query("retailerSendingLimits")
+		.withIndex("by_retailer", (q) => q.eq("retailerId", row._id))
+		.first();
 	return {
 		_id: row._id,
 		slug: row.slug,
@@ -438,6 +449,8 @@ async function loadRetailerForUser(
 		subscription: resolveAccess(sub),
 		isFoundingMember: row.isFoundingMember,
 		foundingMemberRank: row.foundingMemberRank,
+		sendingPaused: !!sendingLimits?.pausedAt,
+		sendingPauseReason: sendingLimits?.pauseReason,
 	};
 }
 

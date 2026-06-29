@@ -42,6 +42,8 @@ import type * as lib_rateLimiter from "../lib/rateLimiter.js";
 import type * as lib_slug from "../lib/slug.js";
 import type * as lib_storeProfile from "../lib/storeProfile.js";
 import type * as lib_variant from "../lib/variant.js";
+import type * as lib_wabaLimits from "../lib/wabaLimits.js";
+import type * as lib_wabaWebhook from "../lib/wabaWebhook.js";
 import type * as lib_whatsapp from "../lib/whatsapp.js";
 import type * as lib_whatsappCopy from "../lib/whatsappCopy.js";
 import type * as lib_whatsappSignature from "../lib/whatsappSignature.js";
@@ -54,6 +56,7 @@ import type * as products from "../products.js";
 import type * as retailers from "../retailers.js";
 import type * as seed from "../seed.js";
 import type * as subscriptions from "../subscriptions.js";
+import type * as wabaProtection from "../wabaProtection.js";
 import type * as whatsapp from "../whatsapp.js";
 
 import type {
@@ -97,6 +100,8 @@ declare const fullApi: ApiFromModules<{
   "lib/slug": typeof lib_slug;
   "lib/storeProfile": typeof lib_storeProfile;
   "lib/variant": typeof lib_variant;
+  "lib/wabaLimits": typeof lib_wabaLimits;
+  "lib/wabaWebhook": typeof lib_wabaWebhook;
   "lib/whatsapp": typeof lib_whatsapp;
   "lib/whatsappCopy": typeof lib_whatsappCopy;
   "lib/whatsappSignature": typeof lib_whatsappSignature;
@@ -109,6 +114,7 @@ declare const fullApi: ApiFromModules<{
   retailers: typeof retailers;
   seed: typeof seed;
   subscriptions: typeof subscriptions;
+  wabaProtection: typeof wabaProtection;
   whatsapp: typeof whatsapp;
 }>;
 
