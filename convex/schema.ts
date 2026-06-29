@@ -200,6 +200,8 @@ export default defineSchema({
 		// ledger. See docs/manual-subscription.md.
 		isFoundingMember: v.optional(v.boolean()),
 		foundingMemberRank: v.optional(v.number()),
+		// WABA send guardrails (kill switch, per-seller caps) live in their own
+		// `retailerSendingLimits` table — see docs/waba-protection.md.
 		channel: v.literal("whatsapp"),
 		createdAt: v.number(),
 		updatedAt: v.number(),
@@ -793,4 +795,92 @@ export default defineSchema({
 	})
 		.index("by_rank", ["rank"])
 		.index("by_retailer", ["retailerId"]),
+
+	// --- WABA protection (ClickUp 86expmgep, docs/waba-protection.md) --------
+	// Kedaipal runs ONE shared Meta-verified WhatsApp number for all retailers, so
+	// one bad actor can degrade deliverability for everyone. These four tables back
+	// the gateway (convex/wabaProtection.ts) that every outbound message passes
+	// through.
+
+	// GLOBAL opt-out list, keyed by buyer phone across ALL retailers on the shared
+	// number — a STOP to one retailer suppresses non-transactional sends from every
+	// retailer. An active opt-out is a row with `reactivatedAt` unset; START/MULA
+	// stamps `reactivatedAt` to re-opt-in. Transactional order messages are NOT
+	// suppressed (a buyer mid-order must still get order updates) — see canSend.
+	optOuts: defineTable({
+		waPhone: v.string(),
+		source: v.union(
+			v.literal("stop_keyword"),
+			v.literal("berhenti_keyword"),
+			v.literal("unsub_keyword"),
+			v.literal("manual_admin"),
+			v.literal("meta_complaint"),
+		),
+		triggeredByRetailerId: v.optional(v.id("retailers")),
+		reactivatedAt: v.optional(v.number()),
+		createdAt: v.number(),
+	}).index("by_phone", ["waPhone"]),
+
+	// WABA quality-rating history, one row per Meta health webhook
+	// (phone_number_quality_update / account_update). The gateway reads the LATEST
+	// row (by_observed desc) to auto-throttle: LOW → pause all but transactional;
+	// MEDIUM/UNKNOWN → pause marketing only. History (not a singleton) so we can
+	// see trend + implement sustained-recovery later.
+	wabaHealth: defineTable({
+		qualityRating: v.union(
+			v.literal("HIGH"),
+			v.literal("MEDIUM"),
+			v.literal("LOW"),
+			v.literal("UNKNOWN"),
+		),
+		messagingTier: v.number(), // 250, 1000, 10000, 100000 (0 = unknown)
+		observedAt: v.number(),
+		notes: v.optional(v.string()),
+	}).index("by_observed", ["observedAt"]),
+
+	// Per-retailer kill switch + cap overrides. Lazily created — absent row means
+	// "tier/age defaults, not paused" (see lib/wabaLimits.ts resolveSendingLimits).
+	// `pausedAt` set = the kill switch is on (blocks non-transactional sends).
+	retailerSendingLimits: defineTable({
+		retailerId: v.id("retailers"),
+		// Optional overrides; when 0/unset the effective cap is derived from tier+age.
+		dailyCap: v.optional(v.number()),
+		burstCap5min: v.optional(v.number()),
+		pausedAt: v.optional(v.number()),
+		pauseReason: v.optional(v.string()),
+		pausedByUserId: v.optional(v.string()),
+		notes: v.optional(v.string()),
+		updatedAt: v.number(),
+	}).index("by_retailer", ["retailerId"]),
+
+	// Per-send audit log — every outbound attempt through the gateway, for
+	// cost/abuse attribution ("who sent what, when, blocked why"). `retailerId`
+	// optional for system replies to an unknown inbound sender. delivered/read are
+	// reserved for a future Meta message-status webhook; today we log sent/failed/
+	// blocked_* at send time.
+	outboundMessageLog: defineTable({
+		retailerId: v.optional(v.id("retailers")),
+		toWaPhone: v.string(),
+		category: v.union(
+			v.literal("transactional"),
+			v.literal("utility_template"),
+			v.literal("marketing_template"),
+			v.literal("session_message"),
+		),
+		templateName: v.optional(v.string()),
+		status: v.union(
+			v.literal("sent"),
+			v.literal("delivered"),
+			v.literal("read"),
+			v.literal("failed"),
+			v.literal("blocked_optout"),
+			v.literal("blocked_capreached"),
+			v.literal("blocked_quality"),
+			v.literal("blocked_retailer_paused"),
+		),
+		errorCode: v.optional(v.string()),
+		sentAt: v.number(),
+	})
+		.index("by_retailer_sent", ["retailerId", "sentAt"])
+		.index("by_phone_sent", ["toWaPhone", "sentAt"]),
 });

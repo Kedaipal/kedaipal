@@ -4,6 +4,7 @@ import { useMutation, useQuery } from "convex/react";
 import { useEffect, useRef } from "react";
 import { api } from "../../convex/_generated/api";
 import { ConsentBanner } from "../components/app/consent-banner";
+import { SendingPausedBanner } from "../components/app/sending-paused-banner";
 import { SubscriptionBanner } from "../components/app/subscription-banner";
 import { BottomNav } from "../components/dashboard/bottom-nav";
 import { MobileHeader } from "../components/dashboard/mobile-header";
@@ -74,6 +75,10 @@ function AppShell() {
 			/>
 			<div className="mx-auto flex w-full max-w-md flex-1 flex-col lg:mx-0 lg:max-w-none">
 				<MobileHeader retailer={retailer} />
+				<SendingPausedBanner
+					paused={retailer.sendingPaused}
+					reason={retailer.sendingPauseReason}
+				/>
 				<ConsentBanner
 					versions={{
 						termsVersion: retailer.termsVersion,
