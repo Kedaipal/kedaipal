@@ -34,6 +34,7 @@ import {
 	PageHeader,
 	PageHeaderSkeleton,
 } from "../components/dashboard/page-header";
+import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import {
 	DeliveryAddressDisplay,
 	formatAddressInline,
@@ -388,6 +389,12 @@ function OrderDetailRoute() {
 					timeStyle: "short",
 				})}
 				back={{ to: "/app/orders", label: "Orders" }}
+				actions={
+					<ReceiptDownloadButton
+						shortId={order.shortId}
+						label="Download receipt"
+					/>
+				}
 			/>
 			{/* Back nav (mobile only) */}
 			<Link
@@ -426,6 +433,12 @@ function OrderDetailRoute() {
 						{paymentBadgeCfg.icon}
 						{paymentBadgeCfg.label}
 					</span>
+					{/* Receipt on mobile (desktop has it in the PageHeader actions). */}
+					<ReceiptDownloadButton
+						shortId={order.shortId}
+						label="Receipt"
+						className="mt-1 lg:hidden"
+					/>
 				</div>
 			</div>
 

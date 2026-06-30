@@ -23,6 +23,7 @@ import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { formatFulfilmentDate } from "../../convex/lib/fulfilmentDate";
 import { isMockupGateClosed } from "../../convex/lib/order";
+import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
 import { IvePaidDialog } from "../components/storefront/ive-paid-dialog";
@@ -772,6 +773,14 @@ function TrackingRoute() {
 						{formatPrice(order.total, order.currency)}
 					</span>
 				</div>
+				{/* Buyer self-serves a PDF receipt — generated on demand from this
+				    order, no delivery/email needed. */}
+				<ReceiptDownloadButton
+					token={token}
+					label="Download receipt (PDF)"
+					variant="outline"
+					className="w-full"
+				/>
 			</section>
 
 			{/* Echo the shopper's note so they can confirm it was received. Plain

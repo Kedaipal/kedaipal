@@ -1,0 +1,106 @@
+import { describe, expect, test } from "vitest";
+import { todayMytMidnight } from "./fulfilmentDate";
+import {
+	buildInboxPredicate,
+	compareInboxOrder,
+	type FilterableOrder,
+} from "./orderInboxFilter";
+
+function order(overrides: Partial<FilterableOrder> = {}): FilterableOrder {
+	return {
+		status: "pending",
+		createdAt: 1_000,
+		shortId: "ORD-0001",
+		customer: { name: "Aisha", waPhone: "+60123456789" },
+		items: [{ name: "Vanilla Cake", variantLabel: "1kg" }],
+		...overrides,
+	};
+}
+
+describe("buildInboxPredicate — bucket", () => {
+	test("'new' matches only pending", () => {
+		const p = buildInboxPredicate({ bucket: "new" });
+		expect(p(order({ status: "pending" }))).toBe(true);
+		expect(p(order({ status: "confirmed" }))).toBe(false);
+	});
+	test("'in_progress' spans confirmed/packed/shipped", () => {
+		const p = buildInboxPredicate({ bucket: "in_progress" });
+		expect(p(order({ status: "packed" }))).toBe(true);
+		expect(p(order({ status: "delivered" }))).toBe(false);
+	});
+	test("'all' matches every status", () => {
+		const p = buildInboxPredicate({ bucket: "all" });
+		expect(p(order({ status: "cancelled" }))).toBe(true);
+	});
+});
+
+describe("buildInboxPredicate — payment", () => {
+	test("undefined paymentStatus reads as unpaid", () => {
+		const p = buildInboxPredicate({ bucket: "all", paymentStatuses: ["unpaid"] });
+		expect(p(order({ paymentStatus: undefined }))).toBe(true);
+		expect(p(order({ paymentStatus: "received" }))).toBe(false);
+	});
+	test("method filter and 'unspecified' OR together", () => {
+		const p = buildInboxPredicate({
+			bucket: "all",
+			paymentMethods: ["duitnow"],
+			methodUnspecified: true,
+		});
+		expect(p(order({ paymentMethod: "duitnow" }))).toBe(true);
+		expect(p(order({ paymentMethod: undefined }))).toBe(true);
+		expect(p(order({ paymentMethod: "cash" }))).toBe(false);
+	});
+});
+
+describe("buildInboxPredicate — dates", () => {
+	test("createdAt range is inclusive", () => {
+		const p = buildInboxPredicate({ bucket: "all", dateFrom: 100, dateTo: 200 });
+		expect(p(order({ createdAt: 100 }))).toBe(true);
+		expect(p(order({ createdAt: 200 }))).toBe(true);
+		expect(p(order({ createdAt: 99 }))).toBe(false);
+		expect(p(order({ createdAt: 201 }))).toBe(false);
+	});
+	test("fulfilmentWindow 'today' matches a today-dated order, not a far-future one", () => {
+		const p = buildInboxPredicate({ bucket: "all", fulfilmentWindow: "today" });
+		expect(p(order({ fulfilmentDate: todayMytMidnight() }))).toBe(true);
+		expect(
+			p(order({ fulfilmentDate: todayMytMidnight() + 40 * 86_400_000 })),
+		).toBe(false);
+		// Dateless orders never match a fulfilment window.
+		expect(p(order({ fulfilmentDate: undefined }))).toBe(false);
+	});
+});
+
+describe("buildInboxPredicate — search", () => {
+	test("matches order id, name, item, and trailing phone digits", () => {
+		const byId = buildInboxPredicate({ bucket: "all", searchText: "ORD-0001" });
+		expect(byId(order())).toBe(true);
+		const byName = buildInboxPredicate({ bucket: "all", searchText: "aish" });
+		expect(byName(order())).toBe(true);
+		const byItem = buildInboxPredicate({ bucket: "all", searchText: "vanilla" });
+		expect(byItem(order())).toBe(true);
+		const byPhone = buildInboxPredicate({ bucket: "all", searchText: "6789" });
+		expect(byPhone(order())).toBe(true);
+		const miss = buildInboxPredicate({ bucket: "all", searchText: "zzzz" });
+		expect(miss(order())).toBe(false);
+	});
+});
+
+describe("buildInboxPredicate — mockupPending", () => {
+	test("matches only orders awaiting the seller's mockup action", () => {
+		const p = buildInboxPredicate({ bucket: "all", mockupPending: true });
+		expect(p(order({ mockupStatus: "pending" }))).toBe(true);
+		expect(p(order({ mockupStatus: "changes_requested" }))).toBe(true);
+		expect(p(order({ mockupStatus: "approved" }))).toBe(false);
+		expect(p(order({ mockupStatus: undefined }))).toBe(false);
+	});
+});
+
+describe("compareInboxOrder", () => {
+	test("soonest fulfilment date first; dateless sinks to the bottom", () => {
+		expect(compareInboxOrder({ fulfilmentDate: 10 }, { fulfilmentDate: 20 })).toBeLessThan(0);
+		expect(compareInboxOrder({ fulfilmentDate: undefined }, { fulfilmentDate: 20 })).toBe(1);
+		expect(compareInboxOrder({ fulfilmentDate: 10 }, { fulfilmentDate: undefined })).toBe(-1);
+		expect(compareInboxOrder({ fulfilmentDate: undefined }, { fulfilmentDate: undefined })).toBe(0);
+	});
+});
