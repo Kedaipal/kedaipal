@@ -46,12 +46,70 @@ export type RetailerEmailVars = {
 	// orderConfirmed alerts when the buyer picked one. Lets the seller see "when
 	// they need it" without opening the dashboard.
 	fulfilmentDateLabel?: string;
+	// Chosen pickup point, set on newOrder / orderConfirmed when the order is a
+	// pickup (deliveryMethod === "self_collect") and a point was captured. Drives
+	// the kind-aware "Method:" label + a pickup detail block so the seller knows
+	// which spot — and, for a drop-off, which recurring slot — without opening the
+	// dashboard. `pickupKind` undefined → self-collect (legacy orders).
+	pickupKind?: "self_collect" | "drop_off";
+	pickupLabel?: string;
+	pickupAddress?: string;
+	pickupScheduleNote?: string;
+	pickupMapsUrl?: string;
 };
 
 const deliveryLabel: Record<Locale, Record<DeliveryMethod, string>> = {
 	en: { delivery: "Delivery", self_collect: "Self-collect" },
 	ms: { delivery: "Penghantaran", self_collect: "Ambil sendiri" },
 };
+
+// Kind-aware pickup label. A drop-off meetup reads very differently from
+// collecting at the seller's place, so the seller alert distinguishes them.
+const pickupKindLabel: Record<
+	Locale,
+	Record<"self_collect" | "drop_off", string>
+> = {
+	en: { self_collect: "Self-collect", drop_off: "Drop-off" },
+	ms: { self_collect: "Ambil sendiri", drop_off: "Penyerahan" },
+};
+
+/**
+ * Effective "Method:" label. Delivery is delivery; a pickup order resolves to
+ * the kind-specific label ("Self-collect" / "Drop-off") so the seller sees the
+ * real arrangement, not a generic "Self-collect" for every pickup.
+ */
+function methodLabel(locale: Locale, v: RetailerEmailVars): string {
+	if (v.deliveryMethod === "delivery") return deliveryLabel[locale].delivery;
+	return pickupKindLabel[locale][v.pickupKind ?? "self_collect"];
+}
+
+/**
+ * Extra lines describing the chosen pickup point (label · address, schedule
+ * note, maps link). Empty for delivery orders or when no point was captured.
+ * `asHtml` toggles anchor vs raw-URL for the maps link and escaping.
+ */
+function pickupDetailLines(
+	locale: Locale,
+	v: RetailerEmailVars,
+	asHtml: boolean,
+): string[] {
+	if (v.deliveryMethod !== "self_collect" || !v.pickupLabel) return [];
+	const esc = asHtml ? escapeHtml : (s: string) => s;
+	const lines: string[] = [];
+	const point = v.pickupAddress
+		? `📍 ${esc(v.pickupLabel)} — ${esc(v.pickupAddress)}`
+		: `📍 ${esc(v.pickupLabel)}`;
+	lines.push(asHtml ? `<strong>${point}</strong>` : point);
+	if (v.pickupScheduleNote) lines.push(`🗓️ ${esc(v.pickupScheduleNote)}`);
+	if (v.pickupMapsUrl) {
+		lines.push(
+			asHtml
+				? `<a href="${escapeHtml(v.pickupMapsUrl)}" style="color:#2563eb;text-decoration:underline;">${locale === "ms" ? "Buka peta" : "Open in maps"}</a>`
+				: v.pickupMapsUrl,
+		);
+	}
+	return lines;
+}
 
 type RenderedEmail = {
 	subject: string;
@@ -92,7 +150,8 @@ const en = {
 		const lines = [
 			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} item(s) · ${escapeHtml(v.totalFormatted)}`,
 			`Customer: ${escapeHtml(v.customerName)}`,
-			`Method: ${deliveryLabel.en[v.deliveryMethod]}`,
+			`Method: ${methodLabel("en", v)}`,
+			...pickupDetailLines("en", v, true),
 			...(v.fulfilmentDateLabel
 				? [`📅 Needed by: <strong>${escapeHtml(v.fulfilmentDateLabel)}</strong>`]
 				: []),
@@ -101,7 +160,9 @@ const en = {
 		];
 		const html = wrapHtml("🔔", `New order ${v.shortId}`, lines, v.dashboardUrl, "Open dashboard");
 		const dateText = v.fulfilmentDateLabel ? `\nNeeded by: ${v.fulfilmentDateLabel}` : "";
-		const text = `🔔 New order ${v.shortId}\n${v.itemCount} item(s) · ${v.totalFormatted}\nCustomer: ${v.customerName}\nMethod: ${deliveryLabel.en[v.deliveryMethod]}${dateText}\n${v.requiresMockup ? `\n${mockupText}\n` : ""}\nOpen your dashboard to manage this order.\n${v.dashboardUrl}`;
+		const text = `🔔 New order ${v.shortId}\n${v.itemCount} item(s) · ${v.totalFormatted}\nCustomer: ${v.customerName}\nMethod: ${methodLabel("en", v)}${pickupDetailLines("en", v, false)
+			.map((l) => `\n${l}`)
+			.join("")}${dateText}\n${v.requiresMockup ? `\n${mockupText}\n` : ""}\nOpen your dashboard to manage this order.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	orderConfirmed: (v: RetailerEmailVars): RenderedEmail => {
@@ -115,7 +176,8 @@ const en = {
 		const lines = [
 			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} item(s) · ${escapeHtml(v.totalFormatted)}`,
 			`Customer: ${escapeHtml(v.customerName)}`,
-			`Method: ${deliveryLabel.en[v.deliveryMethod]}`,
+			`Method: ${methodLabel("en", v)}`,
+			...pickupDetailLines("en", v, true),
 			...(v.fulfilmentDateLabel
 				? [`📅 Needed by: <strong>${escapeHtml(v.fulfilmentDateLabel)}</strong>`]
 				: []),
@@ -123,7 +185,9 @@ const en = {
 		];
 		const html = wrapHtml("✅", `Order ${v.shortId} confirmed`, lines, v.dashboardUrl, "Open dashboard");
 		const dateText = v.fulfilmentDateLabel ? `\nNeeded by: ${v.fulfilmentDateLabel}` : "";
-		const text = `✅ Order ${v.shortId} confirmed\n${v.itemCount} item(s) · ${v.totalFormatted}\nCustomer: ${v.customerName}\nMethod: ${deliveryLabel.en[v.deliveryMethod]}${dateText}\n\n${nextStepsText}\n${v.dashboardUrl}`;
+		const text = `✅ Order ${v.shortId} confirmed\n${v.itemCount} item(s) · ${v.totalFormatted}\nCustomer: ${v.customerName}\nMethod: ${methodLabel("en", v)}${pickupDetailLines("en", v, false)
+			.map((l) => `\n${l}`)
+			.join("")}${dateText}\n\n${nextStepsText}\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	paymentClaimed: (v: RetailerEmailVars): RenderedEmail => {
@@ -205,7 +269,8 @@ const ms = {
 		const lines = [
 			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} item · ${escapeHtml(v.totalFormatted)}`,
 			`Pelanggan: ${escapeHtml(v.customerName)}`,
-			`Kaedah: ${deliveryLabel.ms[v.deliveryMethod]}`,
+			`Kaedah: ${methodLabel("ms", v)}`,
+			...pickupDetailLines("ms", v, true),
 			...(v.fulfilmentDateLabel
 				? [`📅 Diperlukan menjelang: <strong>${escapeHtml(v.fulfilmentDateLabel)}</strong>`]
 				: []),
@@ -214,7 +279,9 @@ const ms = {
 		];
 		const html = wrapHtml("🔔", `Pesanan baru ${v.shortId}`, lines, v.dashboardUrl, "Buka dashboard");
 		const dateText = v.fulfilmentDateLabel ? `\nDiperlukan menjelang: ${v.fulfilmentDateLabel}` : "";
-		const text = `🔔 Pesanan baru ${v.shortId}\n${v.itemCount} item · ${v.totalFormatted}\nPelanggan: ${v.customerName}\nKaedah: ${deliveryLabel.ms[v.deliveryMethod]}${dateText}\n${v.requiresMockup ? `\n${mockupText}\n` : ""}\nBuka dashboard anda untuk menguruskan pesanan ini.\n${v.dashboardUrl}`;
+		const text = `🔔 Pesanan baru ${v.shortId}\n${v.itemCount} item · ${v.totalFormatted}\nPelanggan: ${v.customerName}\nKaedah: ${methodLabel("ms", v)}${pickupDetailLines("ms", v, false)
+			.map((l) => `\n${l}`)
+			.join("")}${dateText}\n${v.requiresMockup ? `\n${mockupText}\n` : ""}\nBuka dashboard anda untuk menguruskan pesanan ini.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	orderConfirmed: (v: RetailerEmailVars): RenderedEmail => {
@@ -228,7 +295,8 @@ const ms = {
 		const lines = [
 			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} item · ${escapeHtml(v.totalFormatted)}`,
 			`Pelanggan: ${escapeHtml(v.customerName)}`,
-			`Kaedah: ${deliveryLabel.ms[v.deliveryMethod]}`,
+			`Kaedah: ${methodLabel("ms", v)}`,
+			...pickupDetailLines("ms", v, true),
 			...(v.fulfilmentDateLabel
 				? [`📅 Diperlukan menjelang: <strong>${escapeHtml(v.fulfilmentDateLabel)}</strong>`]
 				: []),
@@ -236,7 +304,9 @@ const ms = {
 		];
 		const html = wrapHtml("✅", `Pesanan ${v.shortId} disahkan`, lines, v.dashboardUrl, "Buka dashboard");
 		const dateText = v.fulfilmentDateLabel ? `\nDiperlukan menjelang: ${v.fulfilmentDateLabel}` : "";
-		const text = `✅ Pesanan ${v.shortId} telah disahkan\n${v.itemCount} item · ${v.totalFormatted}\nPelanggan: ${v.customerName}\nKaedah: ${deliveryLabel.ms[v.deliveryMethod]}${dateText}\n\n${nextStepsText}\n${v.dashboardUrl}`;
+		const text = `✅ Pesanan ${v.shortId} telah disahkan\n${v.itemCount} item · ${v.totalFormatted}\nPelanggan: ${v.customerName}\nKaedah: ${methodLabel("ms", v)}${pickupDetailLines("ms", v, false)
+			.map((l) => `\n${l}`)
+			.join("")}${dateText}\n\n${nextStepsText}\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	paymentClaimed: (v: RetailerEmailVars): RenderedEmail => {

@@ -87,6 +87,27 @@ function resolveMockupImageIds(order: Doc<"orders">): string[] {
 	return order.mockupImageStorageId ? [order.mockupImageStorageId] : [];
 }
 
+/**
+ * Freeze a pickup location into the immutable `pickupSnapshot` shape stored on
+ * an order. Used at the two write sites (orders.create + updatePickupLocation)
+ * so the frozen shape — including the drop-off kind + schedule note — can never
+ * drift between them. `locationType` defaults to "self_collect" so a row created
+ * before drop-off existed freezes as self-collect (no blank kind downstream).
+ */
+function buildPickupSnapshot(location: Doc<"pickupLocations">): PickupSnapshot {
+	return {
+		label: location.label,
+		address: location.address,
+		locationType: location.locationType ?? "self_collect",
+		scheduleNote: location.scheduleNote,
+		mapsUrl: location.mapsUrl,
+		notes: location.notes,
+		latitude: location.latitude,
+		longitude: location.longitude,
+		placeId: location.placeId,
+	};
+}
+
 const statusValidator = v.union(
 	v.literal("pending"),
 	v.literal("confirmed"),
@@ -346,15 +367,7 @@ export const create = mutation({
 					throw new ConvexError("That pickup location is no longer available");
 				}
 				resolvedPickupLocationId = location._id;
-				sanitizedPickupSnapshot = {
-					label: location.label,
-					address: location.address,
-					mapsUrl: location.mapsUrl,
-					notes: location.notes,
-					latitude: location.latitude,
-					longitude: location.longitude,
-					placeId: location.placeId,
-				};
+				sanitizedPickupSnapshot = buildPickupSnapshot(location);
 			}
 		}
 
@@ -1531,15 +1544,7 @@ export const updatePickupLocation = mutation({
 		const now = Date.now();
 		await ctx.db.patch(order._id, {
 			pickupLocationId: location._id,
-			pickupSnapshot: {
-				label: location.label,
-				address: location.address,
-				mapsUrl: location.mapsUrl,
-				notes: location.notes,
-				latitude: location.latitude,
-				longitude: location.longitude,
-				placeId: location.placeId,
-			},
+			pickupSnapshot: buildPickupSnapshot(location),
 			updatedAt: now,
 		});
 		await ctx.db.insert("orderEvents", {

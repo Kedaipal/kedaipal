@@ -371,9 +371,13 @@ export function paymentQrCaption(locale: Locale, label?: string): string {
 // Self-collect pickup snapshot
 // ---------------------------------------------------------------------------
 
+export type PickupKind = "self_collect" | "drop_off";
+
 export type PickupSnapshot = {
 	label: string;
 	address: string;
+	locationType?: PickupKind;
+	scheduleNote?: string;
 	mapsUrl?: string;
 	notes?: string;
 	latitude?: number;
@@ -381,9 +385,19 @@ export type PickupSnapshot = {
 	placeId?: string;
 };
 
-const pickupLabels: Record<Locale, { header: string }> = {
-	en: { header: "📍 Pickup details" },
-	ms: { header: "📍 Maklumat pengambilan" },
+// Kind-aware header so the buyer sees WHERE they're going at a glance —
+// self-collect (the seller's place) vs a drop-off meetup point read very
+// differently on the day. `undefined` legacy snapshots fall through to
+// self-collect via `pickupHeaderKey`.
+const pickupLabels: Record<Locale, Record<PickupKind, string>> = {
+	en: {
+		self_collect: "📍 Self-collect details",
+		drop_off: "📍 Drop-off point",
+	},
+	ms: {
+		self_collect: "📍 Maklumat ambil sendiri",
+		drop_off: "📍 Lokasi penyerahan",
+	},
 };
 
 /**
@@ -393,9 +407,10 @@ const pickupLabels: Record<Locale, { header: string }> = {
  *
  * Output (note leading blank line so consecutive blocks separate visually):
  *   ""
- *   "📍 Pickup details"
+ *   "📍 Drop-off point"   (kind-aware header)
  *   "<label>"
  *   "<address>"
+ *   "🗓️ <scheduleNote>"  (optional — meetup time)
  *   "<mapsUrl>"   (optional)
  *   ""
  *   "<notes>"     (optional)
@@ -405,11 +420,16 @@ export function renderPickupBlock(
 	snapshot: PickupSnapshot | undefined,
 ): string {
 	if (!snapshot) return "";
-	const labels = pickupLabels[locale];
+	// Legacy snapshots (frozen before drop-off existed) have no locationType →
+	// read as self-collect so the buyer never sees a blank/wrong kind.
+	const kind: PickupKind = snapshot.locationType ?? "self_collect";
 	const lines: string[] = [""];
-	lines.push(labels.header);
+	lines.push(pickupLabels[locale][kind]);
 	lines.push(snapshot.label);
 	lines.push(snapshot.address);
+	// Recurring availability ("Every Sat 3-5pm") — surfaced right under the
+	// address so a drop-off buyer knows WHEN the meetup happens, not just where.
+	if (snapshot.scheduleNote) lines.push(`🗓️ ${snapshot.scheduleNote}`);
 	// Embed a clickable maps URL inline so the buyer gets one-tap navigation
 	// without us having to send a separate WhatsApp location-pin message.
 	// Priority: mapsUrl → placeId-derived → lat/lng-derived (see deriveMapsUrl).

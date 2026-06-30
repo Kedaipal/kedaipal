@@ -454,6 +454,19 @@ export default defineSchema({
 				address: v.string(),
 				mapsUrl: v.optional(v.string()),
 				notes: v.optional(v.string()),
+				// Which kind of pickup point this was — "self_collect" (the
+				// seller's own place) or "drop_off" (an agreed meetup point like
+				// a pasar/surau/LRT). Frozen at create so the buyer/seller see
+				// the right wording on the tracking page + messages even if the
+				// source location's kind is edited later. Undefined on orders
+				// created before drop-off existed → read as "self_collect".
+				locationType: v.optional(
+					v.union(v.literal("self_collect"), v.literal("drop_off")),
+				),
+				// Recurring availability note ("Every Sat 3-5pm"), mainly for
+				// drop-off meetups. Frozen so a later edit to the source
+				// location's schedule doesn't rewrite a placed order's history.
+				scheduleNote: v.optional(v.string()),
 				// Frozen at order create. Drives the WhatsApp location pin
 				// sent after confirm + the Waze/Google buttons on the
 				// tracking page. Optional so orders against legacy pickup
@@ -565,6 +578,21 @@ export default defineSchema({
 		retailerId: v.id("retailers"),
 		label: v.string(),
 		address: v.string(),
+		// Kind of pickup point. "self_collect" = the seller's own place (shop,
+		// home, warehouse); "drop_off" = an agreed meetup/common point (pasar,
+		// surau, LRT station). Both are "Pickup" to the buyer and share this
+		// whole subsystem (library, invariant, picker) — only the badge,
+		// grouping heading and schedule emphasis differ. Optional with an
+		// `undefined → "self_collect"` read so every legacy row stays a
+		// self-collect point without a backfill.
+		locationType: v.optional(
+			v.union(v.literal("self_collect"), v.literal("drop_off")),
+		),
+		// Optional recurring availability note ("Every Sat 3-5pm"). Mainly for
+		// drop-off meetups (a meetup happens at set times); self-collect points
+		// may use it for opening hours but it isn't emphasised there. ≤120 chars,
+		// free text — escaped + line-clamped on render.
+		scheduleNote: v.optional(v.string()),
 		mapsUrl: v.optional(v.string()),
 		notes: v.optional(v.string()),
 		// Coordinates + Google place identifier captured via Places

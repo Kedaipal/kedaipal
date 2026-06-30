@@ -920,7 +920,7 @@ describe("whatsapp confirm — single message (no follow-up location pin)", () =
 				interactive: { body: { text: string } };
 			}
 		).interactive.body.text;
-		expect(body).toContain("Pickup details");
+		expect(body).toContain("Self-collect details");
 		expect(body).toContain("Main Store");
 		expect(body).toContain(
 			"https://www.google.com/maps/place/?q=place_id:ChIJ_pickup",

@@ -14,6 +14,8 @@ import {
 	type RetailerEmailKey,
 } from "./lib/emailCopy";
 import { formatFulfilmentDate } from "./lib/fulfilmentDate";
+import { deriveMapsUrl } from "./lib/mapsUrl";
+import type { PickupSnapshot } from "./lib/whatsappCopy";
 
 /**
  * Internal query for the email action to load order + retailer email + locale.
@@ -36,6 +38,7 @@ export const getOrderForRetailerEmail = internalQuery({
 		currency: string;
 		customerName: string;
 		deliveryMethod: DeliveryMethod;
+		pickupSnapshot: PickupSnapshot | undefined;
 		fulfilmentDate: number | undefined;
 		notifyEmail: string | undefined;
 		storeName: string;
@@ -57,6 +60,7 @@ export const getOrderForRetailerEmail = internalQuery({
 			currency: order.currency,
 			customerName: order.customer.name ?? "Anonymous",
 			deliveryMethod: (order.deliveryMethod as DeliveryMethod | undefined) ?? "delivery",
+			pickupSnapshot: order.pickupSnapshot,
 			fulfilmentDate: order.fulfilmentDate,
 			notifyEmail: retailer.notifyEmail,
 			storeName: retailer.storeName,
@@ -161,6 +165,7 @@ export const notifyRetailerOrderAlert = internalAction({
 			currency: string;
 			customerName: string;
 			deliveryMethod: DeliveryMethod;
+			pickupSnapshot: PickupSnapshot | undefined;
 			fulfilmentDate: number | undefined;
 			notifyEmail: string | undefined;
 			storeName: string;
@@ -206,6 +211,22 @@ export const notifyRetailerOrderAlert = internalAction({
 				meta.fulfilmentDate !== undefined
 					? formatFulfilmentDate(meta.fulfilmentDate)
 					: undefined,
+			// Pickup point detail for the kind-aware "Method:" label + the
+			// where/when block. Only meaningful for pickup orders; emailCopy
+			// ignores these on delivery. mapsUrl derived from the frozen snapshot
+			// (mapsUrl → placeId → lat/lng) so the seller gets a one-tap link.
+			pickupKind: meta.pickupSnapshot?.locationType,
+			pickupLabel: meta.pickupSnapshot?.label,
+			pickupAddress: meta.pickupSnapshot?.address,
+			pickupScheduleNote: meta.pickupSnapshot?.scheduleNote,
+			pickupMapsUrl: meta.pickupSnapshot
+				? deriveMapsUrl({
+						mapsUrl: meta.pickupSnapshot.mapsUrl,
+						latitude: meta.pickupSnapshot.latitude,
+						longitude: meta.pickupSnapshot.longitude,
+						placeId: meta.pickupSnapshot.placeId,
+					})
+				: undefined,
 		});
 
 		try {

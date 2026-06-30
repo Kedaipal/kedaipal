@@ -5,11 +5,11 @@ import { type FormEvent, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import { convexErrorMessage } from "../../lib/format";
+import { useAppForm } from "../forms/form";
 import {
 	GoogleAddressAutocomplete,
 	type GoogleSelectedAddress,
 } from "../forms/google-address-autocomplete";
-import { useAppForm } from "../forms/form";
 import { Button } from "../ui/button";
 
 interface PickupLocationEditDialogProps {
@@ -43,6 +43,39 @@ function initialGeo(loc: Doc<"pickupLocations"> | undefined): GeoState {
 	};
 }
 
+/** Segmented kind selector button at the top of the dialog. */
+function KindButton({
+	active,
+	onClick,
+	title,
+	subtitle,
+}: {
+	active: boolean;
+	onClick: () => void;
+	title: string;
+	subtitle: string;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			aria-pressed={active}
+			className={`flex flex-col items-start gap-0.5 rounded-xl border-2 px-3 py-2.5 text-left transition-colors ${
+				active
+					? "border-accent bg-accent/5"
+					: "border-border bg-card hover:border-accent/40"
+			}`}
+		>
+			<span
+				className={`text-sm font-semibold ${active ? "text-accent" : "text-foreground"}`}
+			>
+				{title}
+			</span>
+			<span className="text-xs text-muted-foreground">{subtitle}</span>
+		</button>
+	);
+}
+
 export function PickupLocationEditDialog({
 	open,
 	onClose,
@@ -53,15 +86,21 @@ export function PickupLocationEditDialog({
 	const updateLocation = useMutation(api.pickupLocations.update);
 	const [serverError, setServerError] = useState<string | null>(null);
 	const [geo, setGeo] = useState<GeoState>(() => initialGeo(location));
+	// Pickup kind lives in local state (segmented control), not the form — it's
+	// a discrete choice, not a text field. Legacy rows default to self-collect.
+	const [kind, setKind] = useState<"self_collect" | "drop_off">(
+		location?.locationType ?? "self_collect",
+	);
 
 	const isEditing = location !== undefined;
-	const title = isEditing ? "Edit pickup location" : "Add pickup location";
-	const submitLabel = isEditing ? "Save changes" : "Add location";
+	const title = isEditing ? "Edit pickup point" : "Add pickup point";
+	const submitLabel = isEditing ? "Save changes" : "Add point";
 
 	const form = useAppForm({
 		defaultValues: {
 			label: location?.label ?? "",
 			address: location?.address ?? "",
+			scheduleNote: location?.scheduleNote ?? "",
 			notes: location?.notes ?? "",
 			managerName: location?.managerName ?? "",
 			managerWaPhone: location?.managerWaPhone ?? "",
@@ -70,6 +109,7 @@ export function PickupLocationEditDialog({
 			setServerError(null);
 			const label = value.label.trim();
 			const address = value.address.trim();
+			const scheduleNote = value.scheduleNote.trim();
 			const notes = value.notes.trim();
 			const managerName = value.managerName.trim();
 			const managerWaPhone = value.managerWaPhone.trim();
@@ -87,6 +127,9 @@ export function PickupLocationEditDialog({
 						pickupLocationId: location._id,
 						label,
 						address,
+						locationType: kind,
+						// Empty string clears the note server-side; a value re-sets it.
+						scheduleNote,
 						notes,
 						// Pass coordinates through whether they changed or not.
 						// `undefined` means "no change" server-side — we never
@@ -104,6 +147,8 @@ export function PickupLocationEditDialog({
 						retailerId,
 						label,
 						address,
+						locationType: kind,
+						scheduleNote: scheduleNote.length > 0 ? scheduleNote : undefined,
 						notes: notes.length > 0 ? notes : undefined,
 						latitude: geo.latitude,
 						longitude: geo.longitude,
@@ -176,12 +221,38 @@ export function PickupLocationEditDialog({
 						className="flex min-h-0 flex-1 flex-col"
 					>
 						<div className="flex flex-1 flex-col gap-4 overflow-y-auto px-5 py-4">
+							{/* Kind first — it frames everything below (a drop-off leans on
+							    the schedule note; self-collect doesn't). */}
+							<fieldset className="flex flex-col gap-2">
+								<legend className="text-sm font-medium">
+									What kind of point is this?
+								</legend>
+								<div className="grid grid-cols-2 gap-2">
+									<KindButton
+										active={kind === "self_collect"}
+										onClick={() => setKind("self_collect")}
+										title="Self-collect"
+										subtitle="Your own place"
+									/>
+									<KindButton
+										active={kind === "drop_off"}
+										onClick={() => setKind("drop_off")}
+										title="Drop-off"
+										subtitle="Agreed meetup point"
+									/>
+								</div>
+							</fieldset>
+
 							<form.AppField name="label">
 								{(field) => (
 									<field.TextField
 										label="Label"
 										required
-										placeholder="Main store, KL warehouse, Sunday market…"
+										placeholder={
+											kind === "drop_off"
+												? "Pasar Tani Seksyen 7, Surau Al-Hidayah…"
+												: "Main store, KL warehouse…"
+										}
 										autoComplete="off"
 									/>
 								)}
@@ -201,11 +272,30 @@ export function PickupLocationEditDialog({
 								onTextChange={handleManualAddressEdit}
 							/>
 
+							<form.AppField name="scheduleNote">
+								{(field) => (
+									<field.TextField
+										label={
+											kind === "drop_off"
+												? "When are you there?"
+												: "Availability (optional)"
+										}
+										placeholder="e.g. Every Sat 3–5pm"
+										autoComplete="off"
+										description={
+											kind === "drop_off"
+												? "Buyers see this next to the date picker so they pick a day the meetup happens. Max 120 characters."
+												: "Optional opening hours for this point. Max 120 characters."
+										}
+									/>
+								)}
+							</form.AppField>
+
 							<form.AppField name="notes">
 								{(field) => (
 									<field.TextareaField
 										label="Notes for buyers (optional)"
-										placeholder="Pickup hours, parking instructions, etc."
+										placeholder="Parking instructions, what to bring, etc."
 										rows={3}
 									/>
 								)}
@@ -217,15 +307,15 @@ export function PickupLocationEditDialog({
 										Store manager
 									</h4>
 									<p className="text-xs text-muted-foreground leading-relaxed">
-										Optional. When you set a WhatsApp number, every pickup
-										order at this location gets a one-tap{" "}
+										Optional. When you set a WhatsApp number, every pickup order
+										at this location gets a one-tap{" "}
 										<span className="font-medium text-foreground">
 											Notify {"<name>"}
 										</span>{" "}
-										button on the order page so you can forward order details
-										on WhatsApp without copy-pasting. The name field is just
-										used to label the button — leave it blank for a generic
-										"Notify on WhatsApp" button.
+										button on the order page so you can forward order details on
+										WhatsApp without copy-pasting. The name field is just used
+										to label the button — leave it blank for a generic "Notify
+										on WhatsApp" button.
 									</p>
 								</div>
 								<form.AppField name="managerName">

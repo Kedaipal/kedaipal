@@ -9,6 +9,10 @@ const LABEL_MAX = 60;
 const ADDRESS_MIN = 3;
 const ADDRESS_MAX = 500;
 const NOTES_MAX = 200;
+// Schedule note is a short recurring-availability line ("Every Sat 3-5pm"), not
+// a paragraph — keep it tight so it line-clamps cleanly on the storefront +
+// tracking page. Mirrors the cap documented on the schema field.
+const SCHEDULE_NOTE_MAX = 120;
 const MANAGER_NAME_MAX = 60;
 // Google Place IDs are typically 27–100 chars; cap generously at 300 to reject
 // arbitrarily long strings while leaving headroom for any future Google ID
@@ -113,6 +117,18 @@ function sanitizeNotes(raw: string | undefined): string | undefined {
 	return trimmed;
 }
 
+function sanitizeScheduleNote(raw: string | undefined): string | undefined {
+	if (raw === undefined) return undefined;
+	const trimmed = raw.trim();
+	if (trimmed.length === 0) return undefined;
+	if (trimmed.length > SCHEDULE_NOTE_MAX) {
+		throw new ConvexError(
+			`Availability note must be at most ${SCHEDULE_NOTE_MAX} characters`,
+		);
+	}
+	return trimmed;
+}
+
 function sanitizeManagerName(raw: string | undefined): string | undefined {
 	if (raw === undefined) return undefined;
 	const trimmed = raw.trim();
@@ -193,6 +209,8 @@ export const listActivePublicBySlug = query({
 			_id: Id<"pickupLocations">;
 			label: string;
 			address: string;
+			locationType: "self_collect" | "drop_off";
+			scheduleNote?: string;
 			mapsUrl?: string;
 			notes?: string;
 			latitude?: number;
@@ -221,6 +239,10 @@ export const listActivePublicBySlug = query({
 				_id: r._id,
 				label: r.label,
 				address: r.address,
+				// Legacy rows (created before drop-off) read as self-collect so
+				// the storefront never groups them under a blank/wrong heading.
+				locationType: r.locationType ?? "self_collect",
+				scheduleNote: r.scheduleNote,
 				mapsUrl: r.mapsUrl,
 				notes: r.notes,
 				latitude: r.latitude,
@@ -284,6 +306,12 @@ export const create = mutation({
 		retailerId: v.id("retailers"),
 		label: v.string(),
 		address: v.string(),
+		// Pickup kind. Omitted → "self_collect" (the legacy default + the
+		// common case), so older clients that don't send it keep working.
+		locationType: v.optional(
+			v.union(v.literal("self_collect"), v.literal("drop_off")),
+		),
+		scheduleNote: v.optional(v.string()),
 		mapsUrl: v.optional(v.string()),
 		notes: v.optional(v.string()),
 		// Captured from Google Places autocomplete. All three flow together —
@@ -303,6 +331,8 @@ export const create = mutation({
 			retailerId,
 			label,
 			address,
+			locationType,
+			scheduleNote,
 			mapsUrl,
 			notes,
 			latitude,
@@ -316,6 +346,8 @@ export const create = mutation({
 
 		const cleanLabel = sanitizeLabel(label);
 		const cleanAddress = sanitizeAddress(address);
+		const cleanLocationType = locationType ?? "self_collect";
+		const cleanScheduleNote = sanitizeScheduleNote(scheduleNote);
 		const cleanMapsUrl = sanitizeMapsUrl(mapsUrl);
 		const cleanNotes = sanitizeNotes(notes);
 		const cleanCoords = sanitizeCoords(latitude, longitude);
@@ -343,6 +375,8 @@ export const create = mutation({
 			retailerId,
 			label: cleanLabel,
 			address: cleanAddress,
+			locationType: cleanLocationType,
+			scheduleNote: cleanScheduleNote,
 			mapsUrl: cleanMapsUrl,
 			notes: cleanNotes,
 			latitude: cleanCoords?.latitude,
@@ -364,7 +398,12 @@ export const update = mutation({
 		pickupLocationId: v.id("pickupLocations"),
 		label: v.optional(v.string()),
 		address: v.optional(v.string()),
+		// Pickup kind. Undefined = "no change"; a value re-tags the point.
+		locationType: v.optional(
+			v.union(v.literal("self_collect"), v.literal("drop_off")),
+		),
 		// Empty string clears the field. Undefined means "no change".
+		scheduleNote: v.optional(v.string()),
 		mapsUrl: v.optional(v.string()),
 		notes: v.optional(v.string()),
 		// Google autocomplete fields. Pass all three together when the user
@@ -384,6 +423,8 @@ export const update = mutation({
 			pickupLocationId,
 			label,
 			address,
+			locationType,
+			scheduleNote,
 			mapsUrl,
 			notes,
 			latitude,
@@ -398,6 +439,8 @@ export const update = mutation({
 		const patch: Partial<{
 			label: string;
 			address: string;
+			locationType: "self_collect" | "drop_off";
+			scheduleNote: string | undefined;
 			mapsUrl: string | undefined;
 			notes: string | undefined;
 			latitude: number | undefined;
@@ -410,6 +453,10 @@ export const update = mutation({
 
 		if (label !== undefined) patch.label = sanitizeLabel(label);
 		if (address !== undefined) patch.address = sanitizeAddress(address);
+		if (locationType !== undefined) patch.locationType = locationType;
+		// Empty string clears the note; a value re-sanitizes it.
+		if (scheduleNote !== undefined)
+			patch.scheduleNote = sanitizeScheduleNote(scheduleNote);
 		if (mapsUrl !== undefined) patch.mapsUrl = sanitizeMapsUrl(mapsUrl);
 		if (notes !== undefined) patch.notes = sanitizeNotes(notes);
 		if (managerName !== undefined)
