@@ -28,6 +28,7 @@ import {
 	query,
 } from "./_generated/server";
 import { linkOrderToCustomer, refreshWaProfileName } from "./customers";
+import { stampRetailerActivation } from "./lib/activation";
 import { getDisplayName } from "./lib/customer";
 import { assertValidFulfilmentDate } from "./lib/fulfilmentDate";
 import {
@@ -532,6 +533,10 @@ export const createOrderFromSession = mutation({
 				createdAt: now,
 			});
 		}
+
+		// Counter orders are born confirmed (seller + buyer present), so this is a
+		// real first order — activate the store (one-time stamp).
+		await stampRetailerActivation(ctx, retailer._id, now);
 
 		// Link customer aggregates (creates the row for a brand-new buyer).
 		await linkOrderToCustomer(ctx, {

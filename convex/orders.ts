@@ -16,6 +16,7 @@ import {
 	decrementAggregatesForCancel,
 	linkOrderToCustomer,
 } from "./customers";
+import { stampRetailerActivation } from "./lib/activation";
 import { assertValidAddress } from "./lib/address";
 import { assertValidFulfilmentDate } from "./lib/fulfilmentDate";
 import { statusToBucket } from "./lib/orderBuckets";
@@ -1218,6 +1219,14 @@ async function applyStatusTransition(
 		createdAt: now,
 	});
 
+	// Any forward (non-cancel) transition means this order is live — activate the
+	// store on the first one. One-time set-if-unset, so a seller manually
+	// confirming (or skipping straight to packed/shipped) counts, and a later
+	// cancellation never un-sets it.
+	if (status !== "cancelled") {
+		await stampRetailerActivation(ctx, order.retailerId, now);
+	}
+
 	// Fire-and-forget WhatsApp notification. Scheduled (not awaited) so the
 	// mutation stays a pure transaction and the action runs with network access.
 	await ctx.scheduler.runAfter(0, internal.whatsapp.notifyStatusChange, {
@@ -1691,6 +1700,8 @@ export const markPaymentReceived = mutation({
 				note: "payment_received_auto_confirm",
 				createdAt: now,
 			});
+			// First order reaching confirmed activates the store (one-time stamp).
+			await stampRetailerActivation(ctx, order.retailerId, now);
 		} else {
 			await ctx.db.insert("orderEvents", {
 				orderId,

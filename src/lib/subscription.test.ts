@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+	hasSubscribed,
 	resolveBannerState,
 	type SubscriptionView,
 	shouldNudgePayment,
@@ -20,6 +21,26 @@ describe("trialDaysLeft", () => {
 		expect(trialDaysLeft(NOW + 4.2 * DAY, NOW)).toBe(5);
 		expect(trialDaysLeft(NOW - DAY, NOW)).toBe(0);
 		expect(trialDaysLeft(undefined, NOW)).toBe(0);
+	});
+});
+
+describe("hasSubscribed (onboarding-complete gate)", () => {
+	test("trialing is NOT subscribed", () => {
+		expect(hasSubscribed(sub({ status: "trialing" }))).toBe(false);
+	});
+
+	test("a paid/active or lapsed plan counts as subscribed", () => {
+		expect(hasSubscribed(sub({ status: "active" }))).toBe(true);
+		expect(hasSubscribed(sub({ status: "past_due" }))).toBe(true);
+		expect(hasSubscribed(sub({ status: "cancelled" }))).toBe(true);
+	});
+
+	test("comped pilots are subscribed even while trialing (never nagged)", () => {
+		expect(hasSubscribed(sub({ status: "trialing", comped: true }))).toBe(true);
+	});
+
+	test("missing subscription fails open to subscribed", () => {
+		expect(hasSubscribed(undefined)).toBe(true);
 	});
 });
 
