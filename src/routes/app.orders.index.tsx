@@ -348,26 +348,37 @@ function OrdersRoute() {
 		const selectedIds = [...selected] as Id<"orders">[];
 		setExporting(true);
 		try {
-			const { csv, count } = await convex.query(api.orders.exportOrders, {
-				retailerId: retailer._id,
-				bucket,
-				paymentStatuses: pay.length > 0 ? pay : undefined,
-				paymentMethods: method.length > 0 ? method : undefined,
-				methodUnspecified: munspec || undefined,
-				dateFrom: from,
-				dateTo: to,
-				mockupPending: mockup || undefined,
-				fulfilmentWindow: fwin,
-				searchText: debounced || undefined,
-				orderIds: selectedIds.length > 0 ? selectedIds : undefined,
-			});
+			const { csv, count, capped } = await convex.action(
+				api.orders.exportOrders,
+				{
+					retailerId: retailer._id,
+					bucket,
+					paymentStatuses: pay.length > 0 ? pay : undefined,
+					paymentMethods: method.length > 0 ? method : undefined,
+					methodUnspecified: munspec || undefined,
+					dateFrom: from,
+					dateTo: to,
+					mockupPending: mockup || undefined,
+					fulfilmentWindow: fwin,
+					searchText: debounced || undefined,
+					orderIds: selectedIds.length > 0 ? selectedIds : undefined,
+				},
+			);
 			if (count === 0) {
 				toast.message("No orders to export for the current view.");
 				return;
 			}
 			const stamp = new Date().toISOString().slice(0, 10);
 			downloadCsv(`orders-${stamp}.csv`, csv);
-			toast.success(`Exported ${count} order${count === 1 ? "" : "s"}`);
+			if (capped) {
+				// The scan hit its safety cap before exhausting matches — the export
+				// is the newest slice, not the complete set.
+				toast.warning(
+					`Exported the latest ${count} orders. Some older orders may be missing — narrow the date range for a complete export.`,
+				);
+			} else {
+				toast.success(`Exported ${count} order${count === 1 ? "" : "s"}`);
+			}
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {

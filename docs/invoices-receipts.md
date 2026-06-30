@@ -77,9 +77,16 @@ Backend:
   `issueInvoice`) renders + stores the blob; idempotent (skips if one exists).
   `invoices.getInvoicePdfUrl` returns an ownership-checked signed URL (owning
   retailer **or** admin; `null` while still rendering).
-- **CSV:** `orders.exportOrders` (query) — same filter args as `searchOrders`
-  (via the shared predicate), or an explicit `orderIds` selection. Returns the
-  CSV text + a row count.
+- **CSV:** `orders.exportOrders` (**action**) — same filter args as
+  `searchOrders` (via the shared predicate), or an explicit `orderIds` selection.
+  Unlike the reactive inbox (capped at a 1000-doc scan), the export **paginates
+  the full result set** in 500-row pages via the internal `exportPage` query, so
+  a bookkeeping export is never silently truncated to the latest 1000 orders. A
+  hard `EXPORT_SCAN_CAP` (20,000 docs ≈ 10 months at the Scale tier) bounds the
+  worst case and is surfaced as a `capped` flag — the inbox warns the seller
+  ("Exported the latest N … narrow the date range") rather than returning
+  silently-incomplete books. Returns `{ csv, count, capped }`. An action (not a
+  query) because it's a one-shot file generation, not a subscription.
 
 Frontend:
 - `src/components/order/receipt-download-button.tsx` — used by the seller order

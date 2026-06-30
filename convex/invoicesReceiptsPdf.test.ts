@@ -144,13 +144,15 @@ describe("orders.exportOrders (CSV)", () => {
 			if (o) await ctx.db.patch(o._id, { status: "confirmed" });
 		});
 
-		const all = await asA.query(api.orders.exportOrders, {
+		const all = await asA.action(api.orders.exportOrders, {
 			retailerId: r._id,
 			bucket: "all",
 		});
 		expect(all.count).toBe(2);
+		// A small set is fully exported — never flagged as truncated.
+		expect(all.capped).toBe(false);
 
-		const news = await asA.query(api.orders.exportOrders, {
+		const news = await asA.action(api.orders.exportOrders, {
 			retailerId: r._id,
 			bucket: "new",
 		});
@@ -173,13 +175,58 @@ describe("orders.exportOrders (CSV)", () => {
 			return o?._id as Id<"orders">;
 		});
 
-		const res = await asA.query(api.orders.exportOrders, {
+		const res = await asA.action(api.orders.exportOrders, {
 			retailerId: r._id,
 			bucket: "all",
 			orderIds: [keepId],
 		});
 		expect(res.count).toBe(1);
 		expect(res.csv).toContain(keep);
+	});
+
+	test("filter mode paginates across pages (does not truncate at one page)", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(api.products.create, {
+			retailerId: r._id,
+			name: "Item",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			blockWhenOutOfStock: false,
+			variants: [{ optionValues: [], price: 100, onHand: 1000 }],
+		});
+		// 600 orders > one 500-row scan page — proves the export aggregates pages
+		// rather than silently stopping at the first (the MEDIUM review finding).
+		const N = 600;
+		await t.run(async (ctx) => {
+			const now = Date.now();
+			for (let i = 0; i < N; i++) {
+				await ctx.db.insert("orders", {
+					retailerId: r._id,
+					shortId: `ORD-B${i}`,
+					items: [{ productId, name: "Item", price: 100, quantity: 1 }],
+					subtotal: 100,
+					total: 100,
+					currency: "MYR",
+					status: "pending",
+					channel: "whatsapp",
+					customer: { name: "Bulk" },
+					createdAt: now - i,
+					updatedAt: now - i,
+				});
+			}
+		});
+
+		const res = await asA.action(api.orders.exportOrders, {
+			retailerId: r._id,
+			bucket: "all",
+		});
+		expect(res.count).toBe(N);
+		expect(res.capped).toBe(false);
+		// Header + N data rows.
+		expect(res.csv.split("\r\n")).toHaveLength(N + 1);
 	});
 
 	test("a non-owner cannot export another retailer's orders", async () => {
@@ -189,7 +236,7 @@ describe("orders.exportOrders (CSV)", () => {
 		await expect(
 			t
 				.withIdentity({ subject: USER_B })
-				.query(api.orders.exportOrders, { retailerId: r._id, bucket: "all" }),
+				.action(api.orders.exportOrders, { retailerId: r._id, bucket: "all" }),
 		).rejects.toThrow(/forbidden/i);
 	});
 });

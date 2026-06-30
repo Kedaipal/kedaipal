@@ -19,7 +19,7 @@ import {
 import { assertValidAddress } from "./lib/address";
 import { assertValidFulfilmentDate } from "./lib/fulfilmentDate";
 import { statusToBucket } from "./lib/orderBuckets";
-import { ordersToCsv } from "./lib/orderCsv";
+import { type CsvOrder, ordersToCsv } from "./lib/orderCsv";
 import {
 	buildInboxPredicate,
 	compareInboxOrder,
@@ -943,90 +943,187 @@ export const searchOrders = query({
  * Returns the CSV text + a row count; the client turns it into a download. See
  * docs/invoices-receipts.md.
  */
-export const exportOrders = query({
+// Reusable validators for the inbox-filter args, shared by the export action and
+// its internal page query so the two can't drift.
+const exportFilterValidators = {
+	bucket: v.union(
+		v.literal("all"),
+		v.literal("new"),
+		v.literal("in_progress"),
+		v.literal("completed"),
+		v.literal("cancelled"),
+	),
+	paymentStatuses: v.optional(
+		v.array(
+			v.union(
+				v.literal("unpaid"),
+				v.literal("claimed"),
+				v.literal("received"),
+			),
+		),
+	),
+	paymentMethods: v.optional(v.array(orderPaymentMethodValidator)),
+	methodUnspecified: v.optional(v.boolean()),
+	dateFrom: v.optional(v.number()),
+	dateTo: v.optional(v.number()),
+	fulfilmentWindow: v.optional(
+		v.union(
+			v.literal("today"),
+			v.literal("tomorrow"),
+			v.literal("this_week"),
+		),
+	),
+	mockupPending: v.optional(v.boolean()),
+	searchText: v.optional(v.string()),
+} as const;
+
+// Bookkeeping exports paginate the FULL result set in bounded pages — they must
+// not be limited to the inbox's reactive 1000-doc scan (that silently truncates
+// financial records). EXPORT_SCAN_CAP bounds the worst case (a matching range
+// that sits beyond this many of the newest orders), surfaced as a `capped` flag
+// so the UI can warn rather than return silently-incomplete books. ~10 months at
+// the Scale tier's 2,000 orders/month.
+const EXPORT_PAGE_SIZE = 500;
+const EXPORT_SCAN_CAP = 20_000;
+
+/** Project an order to the lean shape the CSV needs (drops heavy fields). */
+function orderToCsvSource(o: Doc<"orders">): CsvOrder {
+	return {
+		shortId: o.shortId,
+		createdAt: o.createdAt,
+		fulfilmentDate: o.fulfilmentDate,
+		status: o.status,
+		paymentStatus: o.paymentStatus,
+		paymentMethod: o.paymentMethod,
+		deliveryMethod: o.deliveryMethod,
+		customer: o.customer,
+		items: o.items,
+		subtotal: o.subtotal,
+		total: o.total,
+		currency: o.currency,
+		customerNote: o.customerNote,
+	};
+}
+
+async function assertOwnsRetailer(
+	ctx: QueryCtx,
+	retailerId: Id<"retailers">,
+): Promise<void> {
+	const identity = await ctx.auth.getUserIdentity();
+	if (!identity) throw new Error("Not authenticated");
+	const retailer = await ctx.db.get(retailerId);
+	if (!retailer) throw new Error("Retailer not found");
+	if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+}
+
+// Explicit alias so the action's `runQuery(exportPage)` result has a type that
+// doesn't depend (circularly) on inferring this same file's exports.
+type ExportPageResult = {
+	rows: CsvOrder[];
+	scanned: number;
+	isDone: boolean;
+	cursor: string | null;
+};
+
+/** One page of export rows: applies the inbox filter to a paginated slice of the
+ * retailer's orders (newest first) and projects matches to CSV rows. Ownership-
+ * checked on every page. Internal — driven by the `exportOrders` action. */
+export const exportPage = internalQuery({
 	args: {
 		retailerId: v.id("retailers"),
-		bucket: v.union(
-			v.literal("all"),
-			v.literal("new"),
-			v.literal("in_progress"),
-			v.literal("completed"),
-			v.literal("cancelled"),
-		),
-		paymentStatuses: v.optional(
-			v.array(
-				v.union(
-					v.literal("unpaid"),
-					v.literal("claimed"),
-					v.literal("received"),
-				),
-			),
-		),
-		paymentMethods: v.optional(v.array(orderPaymentMethodValidator)),
-		methodUnspecified: v.optional(v.boolean()),
-		dateFrom: v.optional(v.number()),
-		dateTo: v.optional(v.number()),
-		fulfilmentWindow: v.optional(
-			v.union(
-				v.literal("today"),
-				v.literal("tomorrow"),
-				v.literal("this_week"),
-			),
-		),
-		mockupPending: v.optional(v.boolean()),
-		searchText: v.optional(v.string()),
+		...exportFilterValidators,
+		paginationOpts: paginationOptsValidator,
+	},
+	handler: async (
+		ctx,
+		{ retailerId, paginationOpts, ...filters },
+	): Promise<ExportPageResult> => {
+		await assertOwnsRetailer(ctx, retailerId);
+		const page = await ctx.db
+			.query("orders")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.order("desc")
+			.paginate(paginationOpts);
+		const predicate = buildInboxPredicate(filters as InboxFilterArgs);
+		return {
+			rows: page.page.filter(predicate).map(orderToCsvSource),
+			scanned: page.page.length,
+			isDone: page.isDone,
+			cursor: page.continueCursor,
+		};
+	},
+});
+
+/** Export rows for an explicit selection of order ids (the ticked rows). Drops
+ * anything not owned by this retailer (defends against a tampered id list). */
+export const exportByIds = internalQuery({
+	args: { retailerId: v.id("retailers"), orderIds: v.array(v.id("orders")) },
+	handler: async (ctx, { retailerId, orderIds }): Promise<CsvOrder[]> => {
+		await assertOwnsRetailer(ctx, retailerId);
+		const fetched = await Promise.all(orderIds.map((id) => ctx.db.get(id)));
+		return fetched
+			.filter((o): o is Doc<"orders"> => o?.retailerId === retailerId)
+			.map(orderToCsvSource);
+	},
+});
+
+/**
+ * Bulk export to CSV (bookkeeping). Two modes:
+ *   - `orderIds` given → export exactly those owned orders (the seller's ticked
+ *     selection), regardless of the active filter.
+ *   - otherwise → export everything matching the same inbox filter as
+ *     `searchOrders` (shared predicate), paginating the FULL result set so the
+ *     export isn't capped at the inbox's reactive 1000-doc window.
+ * Returns the CSV text, a row count, and `capped` (true iff the scan hit
+ * EXPORT_SCAN_CAP before exhausting the matches — the UI warns the seller their
+ * export may be incomplete). An action (not a query): a one-shot file generation,
+ * not a reactive subscription. See docs/invoices-receipts.md.
+ */
+export const exportOrders = action({
+	args: {
+		retailerId: v.id("retailers"),
+		...exportFilterValidators,
 		// When set, export exactly these orders (the seller's ticked selection).
 		orderIds: v.optional(v.array(v.id("orders"))),
 	},
 	handler: async (
 		ctx,
 		{ retailerId, orderIds, ...filters },
-	): Promise<{ csv: string; count: number }> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) throw new Error("Not authenticated");
-		const retailer = await ctx.db.get(retailerId);
-		if (!retailer) throw new Error("Retailer not found");
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+	): Promise<{ csv: string; count: number; capped: boolean }> => {
+		let rows: CsvOrder[];
+		let capped = false;
 
-		let toExport: Doc<"orders">[];
 		if (orderIds && orderIds.length > 0) {
-			// Explicit selection: fetch each, drop anything not owned by this
-			// retailer (defends against a tampered id list), keep inbox sort order.
-			const fetched = await Promise.all(orderIds.map((id) => ctx.db.get(id)));
-			toExport = fetched
-				.filter((o): o is Doc<"orders"> => o?.retailerId === retailerId)
-				.sort(compareInboxOrder);
+			rows = await ctx.runQuery(internal.orders.exportByIds, {
+				retailerId,
+				orderIds,
+			});
 		} else {
-			const all = await ctx.db
-				.query("orders")
-				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-				.order("desc")
-				.take(MAX_INBOX_SCAN);
-			toExport = all
-				.filter(buildInboxPredicate(filters as InboxFilterArgs))
-				.sort(compareInboxOrder);
+			rows = [];
+			let scanned = 0;
+			let cursor: string | null = null;
+			for (;;) {
+				const page: ExportPageResult = await ctx.runQuery(
+					internal.orders.exportPage,
+					{
+						retailerId,
+						...filters,
+						paginationOpts: { numItems: EXPORT_PAGE_SIZE, cursor },
+					},
+				);
+				rows.push(...page.rows);
+				scanned += page.scanned;
+				cursor = page.cursor;
+				if (page.isDone) break;
+				if (scanned >= EXPORT_SCAN_CAP) {
+					capped = true;
+					break;
+				}
+			}
 		}
 
-		return {
-			csv: ordersToCsv(
-				toExport.map((o) => ({
-					shortId: o.shortId,
-					createdAt: o.createdAt,
-					fulfilmentDate: o.fulfilmentDate,
-					status: o.status,
-					paymentStatus: o.paymentStatus,
-					paymentMethod: o.paymentMethod,
-					deliveryMethod: o.deliveryMethod,
-					customer: o.customer,
-					items: o.items,
-					subtotal: o.subtotal,
-					total: o.total,
-					currency: o.currency,
-					customerNote: o.customerNote,
-				})),
-			),
-			count: toExport.length,
-		};
+		rows.sort(compareInboxOrder);
+		return { csv: ordersToCsv(rows), count: rows.length, capped };
 	},
 });
 
