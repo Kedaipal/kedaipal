@@ -1479,6 +1479,7 @@ describe("orders — self-collect pickup invariants", () => {
 		expect(order?.pickupSnapshot).toEqual({
 			label: "Main",
 			address: "12 Jln Tun Razak, 50400 KL",
+			locationType: "self_collect",
 			mapsUrl: "https://maps.app.goo.gl/abc",
 			notes: "Bring your order ID.",
 		});

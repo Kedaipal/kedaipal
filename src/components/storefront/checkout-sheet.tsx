@@ -1,7 +1,15 @@
 import { useMutation } from "convex/react";
-import { ExternalLink, MapPin, Package, Trash2, Truck, X } from "lucide-react";
+import {
+	Clock,
+	ExternalLink,
+	MapPin,
+	Package,
+	Trash2,
+	Truck,
+	X,
+} from "lucide-react";
 import { Dialog } from "radix-ui";
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, type ReactNode, useMemo, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import {
@@ -26,11 +34,16 @@ import { AddressFieldset } from "./address-fieldset";
 
 const ADDRESS_STORAGE_KEY = "kedaipal:lastAddress";
 
+/** Pickup kind — "self_collect" (seller's place) or "drop_off" (meetup point). */
+export type PickupKind = "self_collect" | "drop_off";
+
 /** Public-safe pickup location shape returned by `listActivePublicBySlug`. */
 export interface PublicPickupLocation {
 	_id: Id<"pickupLocations">;
 	label: string;
 	address: string;
+	locationType: PickupKind;
+	scheduleNote?: string;
 	mapsUrl?: string;
 	notes?: string;
 	latitude?: number;
@@ -38,6 +51,12 @@ export interface PublicPickupLocation {
 	placeId?: string;
 	sortOrder: number;
 }
+
+/** Buyer-facing sub-heading per pickup kind (one vocabulary, both sides). */
+const PICKUP_KIND_HEADING: Record<PickupKind, string> = {
+	self_collect: "Self-collect",
+	drop_off: "Drop-off",
+};
 
 interface CheckoutSheetProps {
 	open: boolean;
@@ -163,13 +182,19 @@ function buildWaMessage(
 	if (hasQuoteItem) lines.push("(Custom item price to be confirmed by seller)");
 	if (deliveryMethod === "self_collect") {
 		if (pickupLocation) {
-			lines.push(`📍 Self Collect at: ${pickupLocation.label}`);
+			const verb =
+				pickupLocation.locationType === "drop_off"
+					? "Drop-off at"
+					: "Self Collect at";
+			lines.push(`📍 ${verb}: ${pickupLocation.label}`);
 			lines.push(pickupLocation.address);
+			if (pickupLocation.scheduleNote)
+				lines.push(`🗓️ ${pickupLocation.scheduleNote}`);
 			const mapsUrl = deriveMapsUrl(pickupLocation);
 			if (mapsUrl) lines.push(mapsUrl);
 			if (pickupLocation.notes) lines.push(pickupLocation.notes);
 		} else {
-			lines.push("📍 Self Collect");
+			lines.push("📍 Pickup");
 		}
 	} else if (deliveryAddress) {
 		lines.push(`🚚 Deliver to: ${formatAddressOneLine(deliveryAddress)}`);
@@ -515,7 +540,7 @@ export function CheckoutSheet({
 														}`}
 													>
 														<Package className="size-5" />
-														Self Collect
+														Pickup
 													</button>
 												</div>
 											</fieldset>
@@ -562,24 +587,62 @@ export function CheckoutSheet({
 								    free-text note. Hidden only when the store can't take
 								    orders at all. */}
 								{neitherAvailable ? null : (
-									<form.Subscribe selector={(s) => s.values.deliveryMethod}>
-										{(deliveryMethod) => (
-											<form.AppField name="fulfilmentDate">
-												{(field) => (
-													<field.DateField
-														label={
-															deliveryMethod === "self_collect"
-																? "When will you collect?"
-																: "When do you need it delivered?"
-														}
-														min={minYmd}
-														max={maxYmd}
-														required
-														description="Pick the date you need this order."
-													/>
-												)}
-											</form.AppField>
-										)}
+									<form.Subscribe
+										selector={(s) => ({
+											deliveryMethod: s.values.deliveryMethod,
+											pickupLocationId: s.values.pickupLocationId,
+										})}
+									>
+										{({ deliveryMethod, pickupLocationId }) => {
+											// Resolve the point the buyer is collecting from so we
+											// can surface its recurring schedule right here, at the
+											// date step — a "Every Sat 3-5pm" drop-off shouldn't be
+											// learned only after ordering. Single-pickup auto-resolves.
+											const selectedPickup =
+												deliveryMethod === "self_collect"
+													? (singlePickup ??
+														sortedPickups.find(
+															(p) => p._id === pickupLocationId,
+														))
+													: undefined;
+											return (
+												<div className="flex flex-col gap-2">
+													{selectedPickup?.scheduleNote ? (
+														<p className="flex items-start gap-1.5 rounded-lg bg-accent/5 px-3 py-2 text-xs text-foreground">
+															<Clock
+																className="mt-0.5 size-3.5 shrink-0 text-accent"
+																aria-hidden="true"
+															/>
+															<span>
+																<span className="font-medium">
+																	{selectedPickup.label}
+																</span>{" "}
+																is available{" "}
+																<span className="font-medium">
+																	{selectedPickup.scheduleNote}
+																</span>{" "}
+																— pick a matching date.
+															</span>
+														</p>
+													) : null}
+													<form.AppField name="fulfilmentDate">
+														{(field) => (
+															<field.DateField
+																label={
+																	deliveryMethod === "self_collect"
+																		? "When will you collect?"
+																		: "When do you need it delivered?"
+																}
+																min={minYmd}
+																max={maxYmd}
+																required
+																description="Pick the date you need this order."
+															/>
+														)}
+													</form.AppField>
+												</div>
+											);
+										}}
 									</form.Subscribe>
 								)}
 
@@ -672,12 +735,21 @@ function PickupSummaryCard({ location }: { location: PublicPickupLocation }) {
 					aria-hidden="true"
 				/>
 				<div className="flex min-w-0 flex-col gap-1">
-					<p className="text-sm font-semibold leading-tight">
-						{location.label}
-					</p>
+					<div className="flex items-center gap-2">
+						<p className="text-sm font-semibold leading-tight">
+							{location.label}
+						</p>
+						<PickupKindBadge kind={location.locationType} />
+					</div>
 					<p className="text-xs text-muted-foreground whitespace-pre-line">
 						{location.address}
 					</p>
+					{location.scheduleNote ? (
+						<p className="flex items-center gap-1 text-xs font-medium text-accent">
+							<Clock className="size-3 shrink-0" aria-hidden="true" />
+							<span className="line-clamp-2">{location.scheduleNote}</span>
+						</p>
+					) : null}
 					{(() => {
 						const mapsUrl = deriveMapsUrl(location);
 						return mapsUrl ? (
@@ -703,6 +775,16 @@ function PickupSummaryCard({ location }: { location: PublicPickupLocation }) {
 	);
 }
 
+/** Small kind chip so the buyer knows whether they're going to the seller's
+ *  place or an agreed meetup point. */
+function PickupKindBadge({ kind }: { kind: PickupKind }) {
+	return (
+		<span className="shrink-0 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
+			{PICKUP_KIND_HEADING[kind]}
+		</span>
+	);
+}
+
 /**
  * Required radio list when 2+ active pickup locations exist. Buyer must pick
  * one before submission — the submit handler refuses to proceed without a
@@ -717,54 +799,109 @@ function PickupLocationRadioList({
 	value: string;
 	onChange: (id: string) => void;
 }) {
-	return (
-		<fieldset className="flex flex-col gap-2">
-			<legend className="text-sm font-medium">Choose a pickup location</legend>
-			<div className="flex flex-col gap-2">
-				{locations.map((loc) => {
-					const selected = value === loc._id;
-					const mapsUrl = deriveMapsUrl(loc);
-					return (
-						<label
-							key={loc._id}
-							className={`flex cursor-pointer items-start gap-3 rounded-xl border-2 p-3 transition-colors ${
-								selected
-									? "border-accent bg-accent/5"
-									: "border-border bg-card hover:border-accent/40"
-							}`}
+	// Group by kind, preserving the retailer's sort order within each group.
+	// Sub-headings only appear when BOTH kinds exist — a single-kind seller
+	// (the legacy 100%-self-collect case) sees a flat list, exactly as before.
+	const selfCollect = locations.filter(
+		(l) => l.locationType === "self_collect",
+	);
+	const dropOff = locations.filter((l) => l.locationType === "drop_off");
+	const showHeadings = selfCollect.length > 0 && dropOff.length > 0;
+
+	const renderOption = (loc: PublicPickupLocation) => {
+		const selected = value === loc._id;
+		const mapsUrl = deriveMapsUrl(loc);
+		return (
+			<label
+				key={loc._id}
+				className={`flex cursor-pointer items-start gap-3 rounded-xl border-2 p-3 transition-colors ${
+					selected
+						? "border-accent bg-accent/5"
+						: "border-border bg-card hover:border-accent/40"
+				}`}
+			>
+				<input
+					type="radio"
+					name="pickupLocationId"
+					value={loc._id}
+					checked={selected}
+					onChange={() => onChange(loc._id)}
+					className="mt-1 size-4 shrink-0 accent-accent"
+				/>
+				<div className="flex min-w-0 flex-1 flex-col gap-1">
+					<span className="flex items-center gap-2">
+						<span className="text-sm font-semibold leading-tight">
+							{loc.label}
+						</span>
+						{/* Badge only when headings are off — otherwise the group
+						    heading already names the kind. */}
+						{showHeadings ? null : <PickupKindBadge kind={loc.locationType} />}
+					</span>
+					<span className="text-xs text-muted-foreground whitespace-pre-line">
+						{loc.address}
+					</span>
+					{loc.scheduleNote ? (
+						<span className="flex items-center gap-1 text-xs font-medium text-accent">
+							<Clock className="size-3 shrink-0" aria-hidden="true" />
+							<span className="line-clamp-2">{loc.scheduleNote}</span>
+						</span>
+					) : null}
+					{mapsUrl ? (
+						<a
+							href={mapsUrl}
+							target="_blank"
+							rel="noopener noreferrer"
+							onClick={(e) => e.stopPropagation()}
+							className="flex items-center gap-1 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
 						>
-							<input
-								type="radio"
-								name="pickupLocationId"
-								value={loc._id}
-								checked={selected}
-								onChange={() => onChange(loc._id)}
-								className="mt-1 size-4 shrink-0 accent-accent"
-							/>
-							<div className="flex min-w-0 flex-1 flex-col gap-1">
-								<span className="text-sm font-semibold leading-tight">
-									{loc.label}
-								</span>
-								<span className="text-xs text-muted-foreground whitespace-pre-line">
-									{loc.address}
-								</span>
-								{mapsUrl ? (
-									<a
-										href={mapsUrl}
-										target="_blank"
-										rel="noopener noreferrer"
-										onClick={(e) => e.stopPropagation()}
-										className="flex items-center gap-1 self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
-									>
-										<ExternalLink className="size-3" />
-										Open in maps
-									</a>
-								) : null}
-							</div>
-						</label>
-					);
-				})}
-			</div>
+							<ExternalLink className="size-3" />
+							Open in maps
+						</a>
+					) : null}
+				</div>
+			</label>
+		);
+	};
+
+	return (
+		<fieldset className="flex flex-col gap-3">
+			<legend className="text-sm font-medium">Choose a pickup point</legend>
+			{showHeadings ? (
+				<>
+					<PickupGroup
+						heading={PICKUP_KIND_HEADING.self_collect}
+						locations={selfCollect}
+						renderOption={renderOption}
+					/>
+					<PickupGroup
+						heading={PICKUP_KIND_HEADING.drop_off}
+						locations={dropOff}
+						renderOption={renderOption}
+					/>
+				</>
+			) : (
+				<div className="flex flex-col gap-2">{locations.map(renderOption)}</div>
+			)}
 		</fieldset>
+	);
+}
+
+function PickupGroup({
+	heading,
+	locations,
+	renderOption,
+}: {
+	heading: string;
+	locations: ReadonlyArray<PublicPickupLocation>;
+	renderOption: (loc: PublicPickupLocation) => ReactNode;
+}) {
+	if (locations.length === 0) return null;
+	return (
+		<div className="flex flex-col gap-2">
+			<p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+				{heading}
+			</p>
+			{locations.map(renderOption)}
+		</div>
 	);
 }

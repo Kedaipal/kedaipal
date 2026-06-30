@@ -153,6 +153,122 @@ describe("pickupLocations — CRUD", () => {
 	});
 });
 
+describe("pickupLocations — drop-off kind & schedule note", () => {
+	test("create defaults locationType to self_collect when omitted", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.pickupLocations.create, {
+			retailerId: retailer._id,
+			label: "Main Store",
+			address: "12 Jln Tun Razak, KL",
+		});
+		const rows = await asUser.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		expect(rows[0].locationType).toBe("self_collect");
+		expect(rows[0].scheduleNote).toBeUndefined();
+	});
+
+	test("create persists a drop_off point with a trimmed schedule note", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.pickupLocations.create, {
+			retailerId: retailer._id,
+			label: "Pasar Tani Seksyen 7",
+			address: "Seksyen 7, Shah Alam",
+			locationType: "drop_off",
+			scheduleNote: "  Every Sat 3-5pm  ",
+		});
+		const rows = await asUser.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		expect(rows[0].locationType).toBe("drop_off");
+		expect(rows[0].scheduleNote).toBe("Every Sat 3-5pm");
+	});
+
+	test("create rejects a schedule note over 120 chars", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		await expect(
+			asUser.mutation(api.pickupLocations.create, {
+				retailerId: retailer._id,
+				label: "X",
+				address: "12 Jln Tun Razak, KL",
+				locationType: "drop_off",
+				scheduleNote: "a".repeat(121),
+			}),
+		).rejects.toThrow(/at most 120/i);
+	});
+
+	test("update re-tags the kind and clears the schedule note with empty string", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const { pickupLocationId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Meetup",
+				address: "Seksyen 7",
+				locationType: "drop_off",
+				scheduleNote: "Every Sat 3-5pm",
+			},
+		);
+		await asUser.mutation(api.pickupLocations.update, {
+			pickupLocationId,
+			locationType: "self_collect",
+			scheduleNote: "",
+		});
+		const rows = await asUser.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		expect(rows[0].locationType).toBe("self_collect");
+		expect(rows[0].scheduleNote).toBeUndefined();
+	});
+
+	test("listActivePublicBySlug surfaces locationType + scheduleNote for the picker", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.pickupLocations.create, {
+			retailerId: retailer._id,
+			label: "Pasar Tani",
+			address: "Seksyen 7",
+			locationType: "drop_off",
+			scheduleNote: "Every Sat 3-5pm",
+		});
+		const rows = await t.query(api.pickupLocations.listActivePublicBySlug, {
+			slug: retailer.slug,
+		});
+		expect(rows[0].locationType).toBe("drop_off");
+		expect(rows[0].scheduleNote).toBe("Every Sat 3-5pm");
+	});
+
+	test("listActivePublicBySlug maps a legacy undefined locationType to self_collect", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		// Simulate a row written before drop-off existed (no locationType field).
+		await t.run(async (ctx) => {
+			await ctx.db.insert("pickupLocations", {
+				retailerId: retailer._id,
+				label: "Legacy",
+				address: "Old Town",
+				isActive: true,
+				sortOrder: 0,
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			});
+		});
+		const rows = await t.query(api.pickupLocations.listActivePublicBySlug, {
+			slug: retailer.slug,
+		});
+		expect(rows[0].locationType).toBe("self_collect");
+	});
+});
+
 describe("pickupLocations — soft-delete & restore", () => {
 	test("setActive(false) hides from public listing but keeps the row", async () => {
 		const t = setup();
@@ -625,6 +741,77 @@ describe("pickupLocations — Google autocomplete fields", () => {
 		});
 		const reread = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(reread?.pickupSnapshot?.latitude).toBeCloseTo(3.158);
+	});
+
+	test("orders.create + updatePickupLocation freeze the drop-off kind + schedule note", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.retailers.updateSettings, {
+			offerSelfCollect: true,
+		});
+		const { pickupLocationId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Pasar Tani",
+				address: "Seksyen 7, Shah Alam",
+				locationType: "drop_off",
+				scheduleNote: "Every Sat 3-5pm",
+			},
+		);
+		const productId = await asUser.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Kuih Tepung",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			variants: [{ optionValues: [], price: 1000, onHand: 50 }],
+		});
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryMethod: "self_collect",
+			pickupLocationId,
+		});
+
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(order?.pickupSnapshot?.locationType).toBe("drop_off");
+		expect(order?.pickupSnapshot?.scheduleNote).toBe("Every Sat 3-5pm");
+
+		// Re-tagging the source location later does NOT rewrite the frozen order.
+		await asUser.mutation(api.pickupLocations.update, {
+			pickupLocationId,
+			locationType: "self_collect",
+			scheduleNote: "",
+		});
+		const reread = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(reread?.pickupSnapshot?.locationType).toBe("drop_off");
+		expect(reread?.pickupSnapshot?.scheduleNote).toBe("Every Sat 3-5pm");
+
+		// The buyer's updatePickupLocation path also freezes the kind (second
+		// snapshot build site). Add a self-collect point and switch to it.
+		const { pickupLocationId: scId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "My Place",
+				address: "Home",
+				locationType: "self_collect",
+			},
+		);
+		await t.mutation(api.orders.updatePickupLocation, {
+			token: await tk(t, shortId),
+			pickupLocationId: scId,
+		});
+		const afterSwitch = await t.query(api.orders.get, {
+			token: await tk(t, shortId),
+		});
+		expect(afterSwitch?.pickupSnapshot?.locationType).toBe("self_collect");
+		expect(afterSwitch?.pickupSnapshot?.scheduleNote).toBeUndefined();
 	});
 });
 

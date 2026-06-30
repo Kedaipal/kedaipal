@@ -1,10 +1,12 @@
 # Fulfilment (Delivery + Self-Collect) — Implementation Reference
 
 Reference doc for how buyers receive their orders. Kedaipal has **two symmetric, optional
-fulfilment methods**: **delivery** (zero-config — the buyer types an address) and
-**self-collect** (a retailer-managed library of pickup locations). A seller can offer
-delivery only, self-collect only, or both — with one hard guarantee: **the storefront
-always keeps at least one _working_ method.**
+fulfilment methods**: **delivery** (zero-config — the buyer types an address) and **pickup**
+(a retailer-managed library of points the buyer collects from). Pickup points come in two
+kinds — **self-collect** (the seller's place) and **drop-off** (an agreed meetup point); see
+[Pickup grouping + drop-off points](#pickup-grouping--drop-off-points-2026-06-30-clickup-86ey30yhr).
+A seller can offer delivery only, pickup only, or both — with one hard guarantee: **the
+storefront always keeps at least one _working_ method.**
 
 > The bulk of this doc (everything from "Self-collect pickup locations" onward) covers the
 > self-collect subsystem, which shipped first. The section immediately below covers making
@@ -14,6 +16,64 @@ always keeps at least one _working_ method.**
 > **Related:** the **fulfilment date** captured at checkout (the buyer's "when do you need
 > this?", applies to both methods) has its own reference: [`fulfilment-date.md`](./fulfilment-date.md).
 > The `retailers.minFulfilmentNoticeDays` setting lives in the same Fulfilment settings tab.
+
+## Pickup grouping + drop-off points (2026-06-30, ClickUp `86ey30yhr`)
+
+Buyers receive an order one of two ways: **Delivery** (we come to you) or **Pickup** (you
+collect at a point). **Pickup is an umbrella** over two *location kinds*:
+
+- **Self-collect** — the seller's own place (shop, home, warehouse).
+- **Drop-off** — an agreed meetup/common point (pasar, surau, LRT station), usually at a
+  recurring time.
+
+The key information-architecture call: **drop-off is a _kind of pickup location_, not a
+third `deliveryMethod`.** From the buyer's POV self-collect and drop-off are the same action
+(go to a labelled point at a set time and collect), so they share the *entire* pickup
+subsystem — the location library, the [working-method invariant](#the-invariant), the buyer
+picker, the snapshot. Only a badge, a grouping heading and a schedule field differ.
+
+### What this added
+
+- **Schema (additive, no migration):** `pickupLocations.locationType`
+  (`"self_collect" | "drop_off"`, `undefined → "self_collect"`) + `pickupLocations.scheduleNote`
+  (≤120 char free text). Both also **frozen onto `orders.pickupSnapshot`** so a re-tag or
+  schedule edit never rewrites a placed order. `orders.deliveryMethod` is **unchanged**
+  (`"delivery" | "self_collect"`) — `"self_collect"` is the internal name for "pickup"; the
+  kind distinction rides on the snapshot. `retailers.offerSelfCollect` likewise keeps its
+  data name but the settings card is labelled **"Pickup"**.
+- **Snapshot freeze** happens at **both** write sites via `buildPickupSnapshot()` in
+  `convex/orders.ts`: `orders.create` *and* the buyer's `orders.updatePickupLocation`.
+- **Settings → Fulfilment:** the old Self-collect toggle card + Pickup-locations card are
+  merged into **one "Pickup" card** (toggle over the locations list); each row shows a kind
+  badge ("Self-collect" / "Drop-off") + its schedule note. The edit dialog leads with a kind
+  selector and reveals a "When are you there?" field for drop-off.
+- **Storefront:** the top-level picker shows **Delivery / Pickup**. Inside the Pickup form,
+  points are grouped under **Self-collect** / **Drop-off** sub-headings — but **only when
+  both kinds exist**; a single-kind seller (the legacy 100%-self-collect case) sees a flat
+  list, identical to before. The chosen point's `scheduleNote` is surfaced **at the date
+  picker step** (advisory, no hard date constraint — decision locked with the CTO) so the
+  buyer picks a sensible day for a recurring meetup.
+- **Render surfaces:** the WhatsApp confirm (`renderPickupBlock`, kind-aware header +
+  `🗓️ scheduleNote`), the seller new-order/confirmed email (kind-aware `Method:` label +
+  point/schedule/maps block), and `/track/<token>` ("Meet at" vs "Pick up at" + kind badge +
+  schedule note) all carry the kind + note.
+
+### Vocabulary (one language, both sides)
+
+"Self-collect" / "Drop-off" everywhere — seller settings badge **and** buyer sub-headings.
+(The ticket's "My place" / "Meetup point" wording was dropped to avoid two vocabularies for
+the same two kinds.) `minFulfilmentNoticeDays` stays its **own** settings card (it governs
+both methods), not folded into the Delivery card.
+
+### Edge cases covered
+
+- Legacy rows / snapshots with `locationType` undefined render as **Self-collect** (no blank
+  badge) — `?? "self_collect"` at every read.
+- A seller with **only drop-off** points is still "working" — the invariant counts *any*
+  active pickup location regardless of kind (no special-casing of self-collect).
+- The snapshot is frozen at create, so a stale storefront tab whose point's kind changed
+  after load is safe.
+- `scheduleNote` is free text → escaped on render, line-clamped on storefront + tracking.
 
 ## Optional delivery + the working-method invariant (2026-06-23)
 
