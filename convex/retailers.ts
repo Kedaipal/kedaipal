@@ -371,6 +371,12 @@ type RetailerPublic = {
 	// Whether the optional "WhatsApp Business greeting message" onboarding step
 	// has been marked done/skipped. Drives the setup checklist on the dashboard.
 	onboardingGreetingSetup?: boolean;
+	// Activation funnel timestamps (epoch-ms), OWNER-only. Drive the dashboard
+	// checklist's activation states: `linkSharedAt` flips the "Share your link"
+	// step to done; `activatedAt` (first confirmed order) collapses the checklist
+	// and shows the first-order celebration. See docs/activation-checklist.md.
+	activatedAt?: number;
+	linkSharedAt?: number;
 	// Subscription/entitlement summary — drives the nav tier pill + soft-lock UI.
 	// Populated only by the OWNER read (`getMyRetailer`); deliberately omitted from
 	// the public storefront payload (`getRetailerBySlug`) so subscription state
@@ -446,6 +452,8 @@ async function loadRetailerForUser(
 		privacyVersion: row.privacyVersion,
 		aupVersion: row.aupVersion,
 		onboardingGreetingSetup: row.onboardingGreetingSetup,
+		activatedAt: row.activatedAt,
+		linkSharedAt: row.linkSharedAt,
 		subscription: resolveAccess(sub),
 		isFoundingMember: row.isFoundingMember,
 		foundingMemberRank: row.foundingMemberRank,
@@ -1080,6 +1088,32 @@ export const markGreetingSetupDone = mutation({
 			updatedAt: Date.now(),
 		});
 		return { ok: true };
+	},
+});
+
+/**
+ * Stamp `linkSharedAt` the first time the seller shares their storefront link
+ * from the dashboard checklist (copy link or open QR). A soft activation proxy —
+ * we can't detect a real share, so this never blocks anything; it only flips the
+ * checklist's "Share your store link" step to done and advances the activation
+ * funnel. One-time set-if-unset, mirroring markPickupSetupSeen.
+ */
+export const markLinkShared = mutation({
+	args: {},
+	handler: async (ctx): Promise<{ updated: boolean }> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) return { updated: false };
+		const retailer = await ctx.db
+			.query("retailers")
+			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+			.first();
+		if (!retailer) return { updated: false };
+		if (retailer.linkSharedAt !== undefined) return { updated: false };
+		await ctx.db.patch(retailer._id, {
+			linkSharedAt: Date.now(),
+			updatedAt: Date.now(),
+		});
+		return { updated: true };
 	},
 });
 

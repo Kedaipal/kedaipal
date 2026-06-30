@@ -194,6 +194,21 @@ export default defineSchema({
 		// message" setup step as done (or skipped). Persisted so the step stays
 		// collapsed across sessions and the setup checklist can reach all-done.
 		onboardingGreetingSetup: v.optional(v.boolean()),
+		// Activation funnel (epoch-ms). Both are one-time stamps that NEVER un-set,
+		// so the setup checklist measures activation, not just config:
+		//  - `activatedAt`: when the retailer's FIRST order reached confirmed (or
+		//    beyond) — the milestone that predicts retention. Stamped set-if-unset
+		//    from every confirm site (WhatsApp confirm, payment auto-confirm, seller
+		//    status transition, counter checkout) via stampRetailerActivation. A
+		//    created-then-cancelled order never stamps; once set it stays even if
+		//    products are archived or the order is later cancelled.
+		//  - `linkSharedAt`: soft proxy for "shared their storefront link" — set the
+		//    first time the seller copies the link or opens the QR from the checklist
+		//    share step. Can't detect a real share, so it never blocks anything.
+		// Both surfaced by getMyRetailer (owner read) to drive the dashboard
+		// checklist's activation states. See docs/activation-checklist.md.
+		activatedAt: v.optional(v.number()),
+		linkSharedAt: v.optional(v.number()),
 		// Founding Member denormalized flags (fast storefront reads). Set once when
 		// the retailer's first Pro invoice is marked paid (rank ≤ 10); never revert,
 		// even on cancellation/refund. Source of truth is the `foundingMembers`

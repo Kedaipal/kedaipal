@@ -8,6 +8,7 @@ import {
 } from "./_generated/server";
 import { linkOrderToCustomer, refreshWaProfileName } from "./customers";
 import { type GuardedSender, makeGuardedSender } from "./wabaProtection";
+import { stampRetailerActivation } from "./lib/activation";
 import { classifyOptOutKeyword } from "./lib/wabaLimits";
 import { isMockupGateClosed } from "./lib/order";
 import {
@@ -126,6 +127,8 @@ export const confirmOrderFromWhatsApp = internalMutation({
 				note: "Confirmed via WhatsApp",
 				createdAt: now,
 			});
+			// First order reaching confirmed activates the store (one-time stamp).
+			await stampRetailerActivation(ctx, order.retailerId, now);
 		}
 
 		// Customer linking + pushname capture. Orders that arrived with a phone
