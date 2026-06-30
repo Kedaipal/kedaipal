@@ -761,6 +761,13 @@ export default defineSchema({
 		// Stamped when the pre-due-date reminder email is sent, so the daily cron
 		// sends it at most once. See convex/billingEmail.ts.
 		reminderSentAt: v.optional(v.number()),
+		// Rendered PDF of this invoice, frozen at issue time. An invoice is a
+		// financial document, so we store the bytes (rather than regenerate on
+		// demand) — `billingConfig` bank details are a mutable singleton and could
+		// otherwise drift from what the seller actually received. Optional: filled
+		// asynchronously just after issue by invoices.generateInvoicePdf (and absent
+		// on rows issued before this field). See docs/invoices-receipts.md.
+		pdfStorageId: v.optional(v.id("_storage")),
 		createdAt: v.number(),
 	})
 		.index("by_retailer", ["retailerId"])

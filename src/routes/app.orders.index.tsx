@@ -1,10 +1,12 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useConvex, useMutation, useQuery } from "convex/react";
 import {
 	AlertCircle,
 	CalendarDays,
 	Check,
 	ChevronRight,
+	Download,
+	Loader2,
 	Package,
 	Search,
 	ShoppingBag,
@@ -37,6 +39,7 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDebounce } from "../hooks/useDebounce";
+import { downloadCsv } from "../lib/download";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import {
 	type DeliveryMethod,
@@ -152,8 +155,10 @@ function OrdersRoute() {
 	} = Route.useSearch();
 	const navigate = useNavigate({ from: Route.fullPath });
 	const retailer = useQuery(api.retailers.getMyRetailer);
+	const convex = useConvex();
 
 	const bulkUpdateStatus = useMutation(api.orders.bulkUpdateStatus);
+	const [exporting, setExporting] = useState(false);
 
 	const [searchInput, setSearchInput] = useState(q);
 	const debounced = useDebounce(searchInput.trim(), 250);
@@ -335,12 +340,74 @@ function OrdersRoute() {
 		}
 	}
 
+	// Export to CSV for bookkeeping. Exports the ticked selection when any rows
+	// are selected; otherwise everything matching the active filter (NOT just the
+	// loaded page) — the server applies the same predicate as the inbox.
+	async function handleExport() {
+		if (!retailer) return;
+		const selectedIds = [...selected] as Id<"orders">[];
+		setExporting(true);
+		try {
+			const { csv, count, capped } = await convex.action(
+				api.orders.exportOrders,
+				{
+					retailerId: retailer._id,
+					bucket,
+					paymentStatuses: pay.length > 0 ? pay : undefined,
+					paymentMethods: method.length > 0 ? method : undefined,
+					methodUnspecified: munspec || undefined,
+					dateFrom: from,
+					dateTo: to,
+					mockupPending: mockup || undefined,
+					fulfilmentWindow: fwin,
+					searchText: debounced || undefined,
+					orderIds: selectedIds.length > 0 ? selectedIds : undefined,
+				},
+			);
+			if (count === 0) {
+				toast.message("No orders to export for the current view.");
+				return;
+			}
+			const stamp = new Date().toISOString().slice(0, 10);
+			downloadCsv(`orders-${stamp}.csv`, csv);
+			if (capped) {
+				// The scan hit its safety cap before exhausting matches — the export
+				// is the newest slice, not the complete set.
+				toast.warning(
+					`Exported the latest ${count} orders. Some older orders may be missing — narrow the date range for a complete export.`,
+				);
+			} else {
+				toast.success(`Exported ${count} order${count === 1 ? "" : "s"}`);
+			}
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setExporting(false);
+		}
+	}
+
 	return (
 		<div className="flex flex-col gap-4 lg:gap-5">
 			<PageHeader
 				title="Orders"
 				subtitle={
 					loading ? "Loading…" : `${total} order${total === 1 ? "" : "s"}`
+				}
+				actions={
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						onClick={handleExport}
+						disabled={exporting}
+					>
+						{exporting ? (
+							<Loader2 className="size-4 animate-spin" />
+						) : (
+							<Download className="size-4" />
+						)}
+						{selected.size > 0 ? `Export ${selected.size}` : "Export CSV"}
+					</Button>
 				}
 			/>
 			<div className="flex items-center justify-between lg:hidden">
@@ -350,6 +417,20 @@ function OrdersRoute() {
 						{loading ? "Loading…" : `${total} total`}
 					</p>
 				</div>
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					onClick={handleExport}
+					disabled={exporting}
+				>
+					{exporting ? (
+						<Loader2 className="size-4 animate-spin" />
+					) : (
+						<Download className="size-4" />
+					)}
+					{selected.size > 0 ? `Export ${selected.size}` : "Export CSV"}
+				</Button>
 			</div>
 
 			<OrderInboxOverview

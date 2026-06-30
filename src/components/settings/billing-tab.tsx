@@ -14,6 +14,7 @@ import { formatPrice } from "../../lib/format";
 import { LEGAL_CONTACT_EMAIL } from "../../lib/legal";
 import { trialDaysLeft } from "../../lib/subscription";
 import { ZoomableImage } from "../ui/zoomable-image";
+import { InvoiceDownloadButton } from "./invoice-download-button";
 
 type Retailer = NonNullable<
 	FunctionReturnType<typeof api.retailers.getMyRetailer>
@@ -153,6 +154,11 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 							<p className="mt-1 text-xs text-muted-foreground">
 								Due {formatDate(pending.dueDate)}
 							</p>
+							<InvoiceDownloadButton
+								invoiceId={pending._id}
+								label="Download PDF"
+								className="mt-2"
+							/>
 						</div>
 					</div>
 					{pending.foundingDiscount ? (
@@ -301,6 +307,16 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 												? "Cancelled"
 												: inv.status}
 									</span>
+									{/* No receipt for a voided (cancelled-in-error) invoice. */}
+									{inv.status !== "void" ? (
+										<InvoiceDownloadButton
+											invoiceId={inv._id}
+											label=""
+											size="icon"
+											variant="ghost"
+											className="size-8"
+										/>
+									) : null}
 								</div>
 							</li>
 						))}

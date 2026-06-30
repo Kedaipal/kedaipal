@@ -21,6 +21,7 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { planPrice } from "../../convex/lib/plans";
 import { PageHeader } from "../components/dashboard/page-header";
+import { InvoiceDownloadButton } from "../components/settings/invoice-download-button";
 import { Button } from "../components/ui/button";
 import {
 	Dialog,
@@ -773,6 +774,13 @@ function PendingInvoices() {
 									{formatPrice(inv.total, inv.currency)}
 								</span>
 								<div className="flex items-center gap-2">
+									<InvoiceDownloadButton
+										invoiceId={inv._id}
+										label=""
+										size="icon"
+										variant="ghost"
+										className="size-9"
+									/>
 									<Button
 										type="button"
 										size="sm"
