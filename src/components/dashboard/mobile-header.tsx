@@ -9,7 +9,8 @@ type Retailer = NonNullable<
 >;
 
 interface MobileHeaderProps {
-	retailer: Retailer;
+	// Null when a Kedaipal admin has no store of their own — show admin chrome.
+	retailer: Retailer | null;
 }
 
 export function MobileHeader({ retailer }: MobileHeaderProps) {
@@ -17,25 +18,39 @@ export function MobileHeader({ retailer }: MobileHeaderProps) {
 		<header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-border bg-background/95 px-5 py-3 backdrop-blur lg:hidden">
 			<div className="flex min-w-0 flex-1 items-center gap-2.5">
 				<img src="/logo.svg" alt="Kedaipal" className="h-8 w-auto shrink-0" />
-				<div className="flex min-w-0 flex-col gap-0.5">
-					<Link
-						to="/app"
-						className="truncate font-semibold leading-tight text-sm"
-					>
-						{retailer.storeName}
-					</Link>
-					<div className="flex min-w-0 flex-col items-start gap-1">
-						<span className="max-w-full truncate font-mono text-xs text-muted-foreground">
-							kedaipal.com/{retailer.slug}
-						</span>
-						<TierPill
-							subscription={retailer.subscription}
-							foundingRank={retailer.foundingMemberRank}
-							compact
-							className="py-0 text-[9px]"
-						/>
+				{retailer ? (
+					<div className="flex min-w-0 flex-col gap-0.5">
+						<Link
+							to="/app"
+							className="truncate font-semibold leading-tight text-sm"
+						>
+							{retailer.storeName}
+						</Link>
+						<div className="flex min-w-0 flex-col items-start gap-1">
+							<span className="max-w-full truncate font-mono text-xs text-muted-foreground">
+								kedaipal.com/{retailer.slug}
+							</span>
+							<TierPill
+								subscription={retailer.subscription}
+								foundingRank={retailer.foundingMemberRank}
+								compact
+								className="py-0 text-[9px]"
+							/>
+						</div>
 					</div>
-				</div>
+				) : (
+					<Link
+						to="/app/admin/sellers"
+						className="flex min-w-0 flex-col gap-0.5"
+					>
+						<span className="truncate font-semibold leading-tight text-sm">
+							Kedaipal
+						</span>
+						<span className="truncate font-mono text-xs text-muted-foreground">
+							Admin console
+						</span>
+					</Link>
+				)}
 			</div>
 			<div className="shrink-0">
 				<UserButton />

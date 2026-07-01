@@ -2,6 +2,7 @@ import { httpRouter } from "convex/server";
 import { internal } from "./_generated/api";
 import { httpAction } from "./_generated/server";
 import { getAdapter } from "./lib/channels/registry";
+import { extractWabaHealthEvents } from "./lib/wabaWebhook";
 
 const http = httpRouter();
 
@@ -78,6 +79,36 @@ http.route({
 				text: msg.text,
 				profileName: msg.profileName,
 			});
+		}
+
+		// WABA health events ride the SAME webhook (different `field`):
+		// phone_number_quality_update / account_update. Capture them so the send
+		// gateway can auto-throttle on degradation and ops gets paged. These
+		// fields must be subscribed in the Meta App dashboard — see
+		// docs/waba-protection.md. We key health on OUR configured number; the
+		// payload echoes a display number, not the phone_number_id.
+		let parsedBody: unknown;
+		try {
+			parsedBody = JSON.parse(rawBody);
+		} catch {
+			parsedBody = null; // already handled/logged by parseInbound above
+		}
+		const healthEvents = extractWabaHealthEvents(parsedBody);
+		for (const ev of healthEvents) {
+			console.warn("WABA health webhook", ev);
+			const result = await ctx.runMutation(
+				internal.wabaProtection.recordWabaHealth,
+				{
+					qualityRating: ev.qualityRating,
+					messagingTier: ev.messagingTier,
+					notes: ev.notes,
+				},
+			);
+			if (result.shouldAlert) {
+				await ctx.scheduler.runAfter(0, internal.wabaProtection.sendWabaAlert, {
+					summary: result.summary,
+				});
+			}
 		}
 
 		return new Response("ok", { status: 200 });

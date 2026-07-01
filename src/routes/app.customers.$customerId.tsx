@@ -9,6 +9,7 @@ import {
 	PageHeaderSkeleton,
 } from "../components/dashboard/page-header";
 import { Skeleton } from "../components/ui/skeleton";
+import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { getDisplayName } from "../lib/customer";
 
 export const Route = createFileRoute("/app/customers/$customerId")({
@@ -18,7 +19,7 @@ export const Route = createFileRoute("/app/customers/$customerId")({
 function CustomerDetailRoute() {
 	const { customerId } = Route.useParams();
 	const id = customerId as Id<"customers">;
-	const retailer = useQuery(api.retailers.getMyRetailer);
+	const retailer = useDashboardRetailer();
 	const customer = useQuery(api.customers.get, { customerId: id });
 	const orders = useQuery(api.customers.ordersByCustomer, {
 		customerId: id,

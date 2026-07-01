@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
-import { ChevronDown, Download, Upload } from "lucide-react";
+import { ChevronDown, Download, EyeOff, Upload } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
@@ -16,6 +16,7 @@ import {
 } from "../components/ui/popover";
 import { Skeleton } from "../components/ui/skeleton";
 import { SortableList } from "../components/ui/sortable-list";
+import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { BULK_IO_ENABLED } from "../lib/feature-flags";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import {
@@ -118,7 +119,7 @@ function BulkIoMenu({
 }
 
 function ProductsRoute() {
-	const retailer = useQuery(api.retailers.getMyRetailer);
+	const retailer = useDashboardRetailer();
 	const products = useQuery(
 		api.products.listAll,
 		retailer ? { retailerId: retailer._id } : "skip",
@@ -436,6 +437,13 @@ function ProductCard({
 					<span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
 						Archived
 					</span>
+				) : p.hidden ? (
+					// Off the public storefront, still sellable at the counter — flagged
+					// so hidden state is never silent. See docs/hidden-products.md.
+					<span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+						<EyeOff className="size-3" aria-hidden />
+						Hidden
+					</span>
 				) : null}
 				<svg
 					viewBox="0 0 24 24"
@@ -480,8 +488,8 @@ function SortableProductGrid({
 	// Optimistic order so a drop updates instantly; the reactive query re-syncs
 	// after the mutation. Reconcile only when the active set/order changes.
 	const [localOrder, setLocalOrder] = useState<Id<"products">[]>(activeIds);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: reconcile on
-	// activeKey only, not on the per-render activeIds array.
+	// Reconcile on activeKey only, not on the per-render activeIds array.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: keyed on activeKey, activeIds read via closure.
 	useEffect(() => {
 		setLocalOrder(activeIds);
 	}, [activeKey]);

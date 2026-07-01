@@ -18,6 +18,10 @@ const EMPTY: Pick<
 	methodUnspecified: false,
 };
 
+function openFilters() {
+	fireEvent.click(screen.getByRole("button", { name: /^filters/i }));
+}
+
 describe("OrderFilters", () => {
 	it("counts payment + method + unspecified + date range + mockup", () => {
 		expect(activeFilterCount({ ...EMPTY, mockup: false })).toBe(0);
@@ -40,6 +44,7 @@ describe("OrderFilters", () => {
 		render(
 			<OrderFilters value={{ ...EMPTY, mockup: false }} onChange={onChange} />,
 		);
+		openFilters();
 		fireEvent.click(screen.getByRole("button", { name: "Unpaid" }));
 		expect(onChange).toHaveBeenCalledWith({
 			...EMPTY,
@@ -53,6 +58,7 @@ describe("OrderFilters", () => {
 		render(
 			<OrderFilters value={{ ...EMPTY, mockup: false }} onChange={onChange} />,
 		);
+		openFilters();
 		fireEvent.click(screen.getByRole("button", { name: "DuitNow" }));
 		expect(onChange).toHaveBeenCalledWith({
 			...EMPTY,
@@ -66,6 +72,7 @@ describe("OrderFilters", () => {
 		render(
 			<OrderFilters value={{ ...EMPTY, mockup: false }} onChange={onChange} />,
 		);
+		openFilters();
 		fireEvent.click(screen.getByRole("button", { name: "Unspecified" }));
 		expect(onChange).toHaveBeenCalledWith({
 			...EMPTY,
@@ -92,6 +99,7 @@ describe("OrderFilters", () => {
 				mockupCount={3}
 			/>,
 		);
+		openFilters();
 		const toggle = screen.getByRole("button", { name: /needs mockup/i });
 		expect(toggle.textContent).toContain("3");
 		fireEvent.click(toggle);

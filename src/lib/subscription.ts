@@ -31,6 +31,19 @@ export function trialDaysLeft(
 	return daysUntil(trialEndsAt, now);
 }
 
+/**
+ * Whether the retailer has converted from the free trial to a paid plan — the
+ * gate for "onboarding complete" in the dashboard setup checklist. True once
+ * they leave `trialing` (active / past_due / cancelled all imply a first payment
+ * was made, or they're no longer a trial prospect to nudge) or are `comped`
+ * (pilots never pay, so they're never asked to subscribe). A missing
+ * subscription fails open to subscribed — same fail-safe as `resolveAccess`.
+ */
+export function hasSubscribed(sub: SubscriptionView | undefined): boolean {
+	if (!sub) return true;
+	return sub.comped === true || sub.status !== "trialing";
+}
+
 export const PAYMENT_WARN_DAYS = 5;
 
 /**

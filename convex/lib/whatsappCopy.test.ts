@@ -150,16 +150,49 @@ describe("renderPickupBlock", () => {
 			address: "12 Jalan Tun Razak, 50400 Kuala Lumpur",
 		});
 		expect(out).toBe(
-			"\n📍 Pickup details\nMain Store\n12 Jalan Tun Razak, 50400 Kuala Lumpur",
+			"\n📍 Self-collect details\nMain Store\n12 Jalan Tun Razak, 50400 Kuala Lumpur",
 		);
 	});
 
-	test("renders Bahasa Malaysia header", () => {
+	test("renders Bahasa Malaysia header (defaults to self-collect)", () => {
 		const out = renderPickupBlock("ms", {
 			label: "Kedai Utama",
 			address: "12 Jalan Tun Razak, 50400 KL",
 		});
-		expect(out.split("\n")[1]).toBe("📍 Maklumat pengambilan");
+		expect(out.split("\n")[1]).toBe("📍 Maklumat ambil sendiri");
+	});
+
+	test("renders a drop-off header + schedule note when kind is drop_off", () => {
+		const out = renderPickupBlock("en", {
+			label: "Pasar Tani Seksyen 7",
+			address: "Seksyen 7, Shah Alam",
+			locationType: "drop_off",
+			scheduleNote: "Every Sat 3-5pm",
+		});
+		expect(out.split("\n")).toEqual([
+			"",
+			"📍 Drop-off point",
+			"Pasar Tani Seksyen 7",
+			"Seksyen 7, Shah Alam",
+			"🗓️ Every Sat 3-5pm",
+		]);
+	});
+
+	test("drop-off header localises to BM", () => {
+		const out = renderPickupBlock("ms", {
+			label: "Surau Al-Hidayah",
+			address: "Seksyen 7",
+			locationType: "drop_off",
+		});
+		expect(out.split("\n")[1]).toBe("📍 Lokasi penyerahan");
+	});
+
+	test("undefined locationType renders as self-collect (legacy snapshot)", () => {
+		const out = renderPickupBlock("en", {
+			label: "Main Store",
+			address: "KL",
+		});
+		expect(out.split("\n")[1]).toBe("📍 Self-collect details");
 	});
 
 	test("includes mapsUrl on its own line when present", () => {
@@ -190,7 +223,7 @@ describe("renderPickupBlock", () => {
 		});
 		expect(out.split("\n")).toEqual([
 			"",
-			"📍 Pickup details",
+			"📍 Self-collect details",
 			"Main Store",
 			"12 Jln Tun Razak, KL",
 		]);
@@ -243,7 +276,7 @@ describe("renderPickupBlock", () => {
 		expect(out).not.toContain("https://");
 		expect(out.split("\n")).toEqual([
 			"",
-			"📍 Pickup details",
+			"📍 Self-collect details",
 			"Main Store",
 			"12 Jln Tun Razak, KL",
 		]);

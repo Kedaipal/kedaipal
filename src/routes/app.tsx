@@ -1,13 +1,22 @@
 import { RedirectToSignIn, Show } from "@clerk/tanstack-react-start";
-import { createFileRoute, Outlet, useNavigate } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	Outlet,
+	useLocation,
+	useNavigate,
+} from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import { useEffect, useRef } from "react";
 import { api } from "../../convex/_generated/api";
+import { ActingAsBanner } from "../components/admin/acting-as-banner";
 import { ConsentBanner } from "../components/app/consent-banner";
+import { SendingPausedBanner } from "../components/app/sending-paused-banner";
 import { SubscriptionBanner } from "../components/app/subscription-banner";
 import { BottomNav } from "../components/dashboard/bottom-nav";
 import { MobileHeader } from "../components/dashboard/mobile-header";
 import { Sidebar } from "../components/dashboard/sidebar";
+import { ActAsProvider, useActAs } from "../hooks/useActAs";
+import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useOrderToastNotifications } from "../hooks/useOrderToastNotifications";
 
 export const Route = createFileRoute("/app")({
@@ -23,25 +32,69 @@ function AppLayout() {
 			when="signed-in"
 			fallback={<RedirectToSignIn signInForceRedirectUrl="/app" />}
 		>
-			<AppShell />
+			{/* The act-as session wraps the whole dashboard so it holds across every
+			    navigation + CRUD until the admin Exits. See docs/admin-console.md. */}
+			<ActAsProvider>
+				<AppShell />
+			</ActAsProvider>
 		</Show>
 	);
 }
 
 function AppShell() {
 	const navigate = useNavigate();
-	const retailer = useQuery(api.retailers.getMyRetailer);
+	const location = useLocation();
+	const { actAsRetailerId, setActAs } = useActAs();
+	const retailer = useDashboardRetailer();
+	const actingAsAdmin = retailer?.actingAsAdmin === true;
 	const counts = useQuery(
 		api.orders.countActionable,
 		retailer ? { retailerId: retailer._id } : "skip",
 	);
 	const actionableCount = (counts?.pending ?? 0) + (counts?.confirmed ?? 0);
-	const isAdmin = useQuery(api.billing.amIAdmin) ?? false;
-	useOrderToastNotifications(counts);
+	const isAdminResult = useQuery(api.billing.amIAdmin);
+	const isAdmin = isAdminResult ?? false;
+	// Pass the store id so a store switch (admin act-as enter/exit) re-baselines the
+	// toast instead of announcing the other store's orders as "new".
+	useOrderToastNotifications(counts, retailer?._id);
+
+	// An admin doesn't need a store of their own — they can run the console and
+	// operate other vendors' stores. When they have no store (and aren't acting-as),
+	// the dashboard renders in admin-only mode instead of forcing onboarding.
+	const onAdminRoute = location.pathname.startsWith("/app/admin");
+	const storelessAdmin =
+		retailer === null &&
+		!actAsRetailerId &&
+		isAdminResult === true &&
+		onAdminRoute;
 
 	useEffect(() => {
-		if (retailer === null) navigate({ to: "/onboarding" });
-	}, [retailer, navigate]);
+		if (retailer !== null) return;
+		// Acting-as but the store resolved null → the id is stale/foreign; clear the
+		// session and return to the directory.
+		if (actAsRetailerId) {
+			setActAs(undefined);
+			navigate({ to: "/app/admin/sellers" });
+			return;
+		}
+		// Wait for the admin check before deciding where a storeless user goes.
+		if (isAdminResult === undefined) return;
+		// A non-admin with no store still has to onboard.
+		if (!isAdminResult) {
+			navigate({ to: "/onboarding" });
+			return;
+		}
+		// Storeless admin: keep them within the admin area (seller screens need a
+		// store). Landing on `/app` or any seller route bounces to the directory.
+		if (!onAdminRoute) navigate({ to: "/app/admin/sellers" });
+	}, [
+		retailer,
+		actAsRetailerId,
+		isAdminResult,
+		onAdminRoute,
+		navigate,
+		setActAs,
+	]);
 
 	// One-shot backfill: if the retailer has no notifyEmail yet, copy it from
 	// their Clerk identity email so existing accounts get auto-populated
@@ -54,16 +107,22 @@ function AppShell() {
 	useEffect(() => {
 		if (triedNotifyEmailBackfill.current) return;
 		if (!retailer) return;
+		// Skip in act-as: this backfill resolves by the CALLER's identity, so an
+		// admin firing it would touch their own store, never the seller's — pointless
+		// and confusing. The seller's own session will run it.
+		if (actingAsAdmin) return;
 		if (retailer.notifyEmail && retailer.notifyEmail.trim().length > 0) return;
 		triedNotifyEmailBackfill.current = true;
 		ensureNotifyEmail({}).catch(() => {
 			// Non-fatal — retailer can still set the email manually in settings.
 		});
-	}, [retailer, ensureNotifyEmail]);
+	}, [retailer, actingAsAdmin, ensureNotifyEmail]);
 
-	if (retailer === undefined || retailer === null) {
-		return <ShellSkeleton />;
-	}
+	// Render the shell once we have a store (own or act-as) OR the caller is a
+	// storeless admin on an admin route. Everything else (loading, or redirecting
+	// a non-admin to onboarding) shows the skeleton.
+	if (retailer === undefined) return <ShellSkeleton />;
+	if (retailer === null && !storelessAdmin) return <ShellSkeleton />;
 
 	return (
 		<div className="flex min-h-dvh">
@@ -73,22 +132,35 @@ function AppShell() {
 				isAdmin={isAdmin}
 			/>
 			<div className="mx-auto flex w-full max-w-md flex-1 flex-col lg:mx-0 lg:max-w-none">
+				{retailer?.actingAsAdmin ? (
+					<ActingAsBanner storeName={retailer.storeName} />
+				) : null}
 				<MobileHeader retailer={retailer} />
-				<ConsentBanner
-					versions={{
-						termsVersion: retailer.termsVersion,
-						privacyVersion: retailer.privacyVersion,
-						aupVersion: retailer.aupVersion,
-					}}
-				/>
-				<SubscriptionBanner
-					subscription={retailer.subscription}
-					slug={retailer.slug}
-				/>
+				{/* Store-specific banners only when operating a store. */}
+				{retailer ? (
+					<>
+						<SendingPausedBanner
+							paused={retailer.sendingPaused}
+							reason={retailer.sendingPauseReason}
+							slug={retailer.slug}
+						/>
+						<ConsentBanner
+							versions={{
+								termsVersion: retailer.termsVersion,
+								privacyVersion: retailer.privacyVersion,
+								aupVersion: retailer.aupVersion,
+							}}
+						/>
+						<SubscriptionBanner
+							subscription={retailer.subscription}
+							slug={retailer.slug}
+						/>
+					</>
+				) : null}
 				<main className="flex-1 px-5 py-6 lg:mx-auto lg:w-full lg:max-w-6xl lg:px-8 lg:py-8">
 					<Outlet />
 				</main>
-				<BottomNav actionableCount={actionableCount} />
+				<BottomNav actionableCount={actionableCount} adminOnly={!retailer} />
 			</div>
 		</div>
 	);

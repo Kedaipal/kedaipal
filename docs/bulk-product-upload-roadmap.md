@@ -41,7 +41,7 @@ The importer + exporter were reworked for the variant schema (subtask of
   imported (avoids a dual storage-id/URL model) — added per product in the editor.
 - **Caps:** `MAX_BULK_IMPORT_BATCH = 50` now counts **variant rows** (the client
   chunks products to stay under it); `MAX_VARIANTS_PER_PRODUCT = 50`;
-  `MAX_PRODUCTS_PER_RETAILER = 50` (beta).
+  `MAX_PRODUCTS_PER_RETAILER = 50` (current cap).
 
 **Files:** parser/grouping `src/lib/product-import.ts`; CSV `src/lib/csv.ts`; XLSX
 `src/lib/xlsx.ts`; export `src/lib/product-export.ts`; UI
@@ -64,7 +64,7 @@ ideas (column mapping UI, "clean up my sheet" AI, photo→product) not yet built
 - CSV-only, 4 columns: `name,description,price,stock`
 - Client-side parse + per-row validation (Papaparse)
 - Downloadable template, preview table, all-or-nothing import per chunk
-- 100-row UI hint, 50-row Convex batch cap, 50-product beta cap per retailer
+- 100-row UI hint, 50-row Convex batch cap, 50-product cap per retailer
 - No export, no update, no images in bulk, no AI assist
 
 **Gaps:**
@@ -257,5 +257,5 @@ If only 2 days available this week: ship **#1 (Export) + #14 (Vertical Templates
 
 - **Mobile-first** — most retailers will import from their phone; drop-zone and preview table must survive narrow viewports.
 - **Multi-tenant from day one** — every feature must respect `retailerId` ownership checks already in `convex/products.ts`.
-- **Beta caps** — `MAX_PRODUCTS_PER_RETAILER = 50` and `MAX_BULK_IMPORT_BATCH = 50` in `convex/products.ts` will need to lift before this roadmap is worth fully executing.
+- **Caps** — `MAX_PRODUCTS_PER_RETAILER = 50` and `MAX_BULK_IMPORT_BATCH = 50` in `convex/products.ts` will need to lift before this roadmap is worth fully executing.
 - **Channel field** — bulk-created rows currently hardcode `channel: "whatsapp"`. Leave room for marketplace channels as that schema evolves.

@@ -160,7 +160,7 @@ function sanitizePaymentInstructions(
 	return Object.keys(out).length > 0 ? out : undefined;
 }
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
 import { ConvexError } from "convex/values";
 import { reserveFoundingRank } from "./foundingMembers";
@@ -178,7 +178,12 @@ import {
 	DEFAULT_CURRENCY,
 	type SupportedCurrency,
 } from "./lib/currency";
-import { requireAdmin } from "./lib/auth";
+import {
+	logAdminAction,
+	type RetailerAccess,
+	requireAdmin,
+	requireRetailerAccess,
+} from "./lib/auth";
 import { STORE_DESCRIPTION_MAX } from "./lib/storeProfile";
 import {
 	assertValidEmail,
@@ -371,6 +376,12 @@ type RetailerPublic = {
 	// Whether the optional "WhatsApp Business greeting message" onboarding step
 	// has been marked done/skipped. Drives the setup checklist on the dashboard.
 	onboardingGreetingSetup?: boolean;
+	// Activation funnel timestamps (epoch-ms), OWNER-only. Drive the dashboard
+	// checklist's activation states: `linkSharedAt` flips the "Share your link"
+	// step to done; `activatedAt` (first confirmed order) collapses the checklist
+	// and shows the first-order celebration. See docs/activation-checklist.md.
+	activatedAt?: number;
+	linkSharedAt?: number;
 	// Subscription/entitlement summary — drives the nav tier pill + soft-lock UI.
 	// Populated only by the OWNER read (`getMyRetailer`); deliberately omitted from
 	// the public storefront payload (`getRetailerBySlug`) so subscription state
@@ -380,6 +391,17 @@ type RetailerPublic = {
 	// Denormalized Founding Member flags (badge / ribbon) — public-safe.
 	isFoundingMember?: boolean;
 	foundingMemberRank?: number;
+	// Outbound WhatsApp kill-switch state (OWNER-only, like `subscription`), read
+	// from `retailerSendingLimits`. When paused, the gateway blocks this seller's
+	// NON-transactional WhatsApp sends (order confirmations/status still flow); the
+	// dashboard surfaces a banner so the seller isn't left wondering. See
+	// docs/waba-protection.md.
+	sendingPaused?: boolean;
+	sendingPauseReason?: string;
+	// True when the caller is a Kedaipal admin operating this store via act-as
+	// (not the owner). Drives the persistent "Acting as {store}" dashboard banner.
+	// Only ever set by the admin act-as read path. See docs/admin-console.md.
+	actingAsAdmin?: boolean;
 };
 
 async function loadRetailerForUser(
@@ -391,6 +413,16 @@ async function loadRetailerForUser(
 		.withIndex("by_user", (q) => q.eq("userId", userId))
 		.first();
 	if (!row) return null;
+	return buildRetailerPublic(ctx, row);
+}
+
+/** Map a retailer row to the OWNER/admin dashboard payload (payment methods with
+ * QR urls, logo url, subscription + sending state). Shared by the by-identity
+ * read (`getMyRetailer`) and the admin act-as read path. */
+async function buildRetailerPublic(
+	ctx: QueryCtx,
+	row: Doc<"retailers">,
+): Promise<RetailerPublic> {
 	const resolvedMethods = resolvePaymentMethods(row);
 	const paymentMethods: Array<PaymentMethod & { qrImageUrl?: string }> = [];
 	for (const m of resolvedMethods) {
@@ -412,6 +444,10 @@ async function loadRetailerForUser(
 			`[retailers] no subscription row for retailer ${row._id} — failing open (comped full access)`,
 		);
 	}
+	const sendingLimits = await ctx.db
+		.query("retailerSendingLimits")
+		.withIndex("by_retailer", (q) => q.eq("retailerId", row._id))
+		.first();
 	return {
 		_id: row._id,
 		slug: row.slug,
@@ -435,9 +471,13 @@ async function loadRetailerForUser(
 		privacyVersion: row.privacyVersion,
 		aupVersion: row.aupVersion,
 		onboardingGreetingSetup: row.onboardingGreetingSetup,
+		activatedAt: row.activatedAt,
+		linkSharedAt: row.linkSharedAt,
 		subscription: resolveAccess(sub),
 		isFoundingMember: row.isFoundingMember,
 		foundingMemberRank: row.foundingMemberRank,
+		sendingPaused: !!sendingLimits?.pausedAt,
+		sendingPauseReason: sendingLimits?.pauseReason,
 	};
 }
 
@@ -457,6 +497,25 @@ export const getMyRetailer = query({
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) return null;
 		return loadRetailerForUser(ctx, identity.subject);
+	},
+});
+
+/**
+ * Admin act-as read: returns THAT store's dashboard payload (with
+ * `actingAsAdmin: true` so the "Acting as {store}" banner renders) instead of the
+ * caller's own — the single read powering white-glove onboarding. Admin-only and
+ * server-enforced (`requireAdmin` throws for a normal seller). Kept separate from
+ * `getMyRetailer` so the owner path stays a zero-arg, unchanged query; the
+ * dashboard's `useDashboardRetailer` hook picks this one when `?actAs=` is set.
+ * See docs/admin-console.md.
+ */
+export const getRetailerForAdmin = query({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<RetailerPublic | null> => {
+		await requireAdmin(ctx);
+		const row = await ctx.db.get(retailerId);
+		if (!row) return null;
+		return { ...(await buildRetailerPublic(ctx, row)), actingAsAdmin: true };
 	},
 });
 
@@ -806,6 +865,10 @@ export const createRetailer = mutation({
  */
 export const updateSettings = mutation({
 	args: {
+		// Admin act-as: when set, an allow-listed admin edits THIS store's settings
+		// (white-glove onboarding). Omitted → the caller edits their own store. See
+		// docs/admin-console.md.
+		retailerId: v.optional(v.id("retailers")),
 		storeName: v.optional(v.string()),
 		// Empty/blank clears the description. Undefined means "no change".
 		storeDescription: v.optional(v.string()),
@@ -828,14 +891,28 @@ export const updateSettings = mutation({
 		minFulfilmentNoticeDays: v.optional(v.number()),
 	},
 	handler: async (ctx, args): Promise<{ ok: true }> => {
-		const userId = await requireUserId(ctx);
-		const retailer = await ctx.db
-			.query("retailers")
-			.withIndex("by_user", (q) => q.eq("userId", userId))
-			.first();
-		if (!retailer) throw new ConvexError("No store to update");
+		// Resolve the target store: an explicit `retailerId` is the admin act-as
+		// path (owner-or-admin); otherwise it's the caller's own store.
+		let retailer: Doc<"retailers">;
+		let access: RetailerAccess;
+		if (args.retailerId) {
+			access = await requireRetailerAccess(ctx, args.retailerId);
+			retailer = access.retailer;
+		} else {
+			const userId = await requireUserId(ctx);
+			const own = await ctx.db
+				.query("retailers")
+				.withIndex("by_user", (q) => q.eq("userId", userId))
+				.first();
+			if (!own) throw new ConvexError("No store to update");
+			retailer = own;
+			access = { retailer: own, actingAsAdmin: false, userId };
+		}
 		// Soft-lock: a past_due seller can't edit store settings (growth-write).
-		await assertSubscriptionActive(ctx, retailer._id);
+		// An admin onboarding the store (act-as) bypasses it — white-glove happens
+		// before the seller has paid. See docs/manual-subscription.md.
+		if (!access.actingAsAdmin)
+			await assertSubscriptionActive(ctx, retailer._id);
 
 		const patch: Partial<{
 			storeName: string;
@@ -984,6 +1061,7 @@ export const updateSettings = mutation({
 		}
 
 		await ctx.db.patch(retailer._id, patch);
+		await logAdminAction(ctx, access, "retailers.updateSettings", retailer._id);
 		return { ok: true };
 	},
 });
@@ -1071,6 +1149,32 @@ export const markGreetingSetupDone = mutation({
 });
 
 /**
+ * Stamp `linkSharedAt` the first time the seller shares their storefront link
+ * from the dashboard checklist (copy link or open QR). A soft activation proxy —
+ * we can't detect a real share, so this never blocks anything; it only flips the
+ * checklist's "Share your store link" step to done and advances the activation
+ * funnel. One-time set-if-unset, mirroring markPickupSetupSeen.
+ */
+export const markLinkShared = mutation({
+	args: {},
+	handler: async (ctx): Promise<{ updated: boolean }> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) return { updated: false };
+		const retailer = await ctx.db
+			.query("retailers")
+			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+			.first();
+		if (!retailer) return { updated: false };
+		if (retailer.linkSharedAt !== undefined) return { updated: false };
+		await ctx.db.patch(retailer._id, {
+			linkSharedAt: Date.now(),
+			updatedAt: Date.now(),
+		});
+		return { updated: true };
+	},
+});
+
+/**
  * Idempotent self-heal: if the signed-in user's retailer has no notifyEmail
  * yet, copy it from the Clerk identity email. Called once from the dashboard
  * on first load so retailers created before notifyEmail existed get
@@ -1117,17 +1221,28 @@ export const ensureNotifyEmailFromIdentity = mutation({
  * slugs, the history row is deleted so the link chain terminates cleanly.
  */
 export const renameSlug = mutation({
-	args: { newSlug: v.string() },
-	handler: async (ctx, { newSlug }): Promise<{ slug: string }> => {
-		const userId = await requireUserId(ctx);
+	// Admin act-as: `retailerId` set → an admin renames THAT store's public URL
+	// during white-glove; omitted → the caller renames their own. See docs/admin-console.md.
+	args: { newSlug: v.string(), retailerId: v.optional(v.id("retailers")) },
+	handler: async (ctx, { newSlug, retailerId }): Promise<{ slug: string }> => {
 		let slug: string;
 		try { slug = assertValidSlug(newSlug); } catch (err) { throw new ConvexError((err as Error).message); }
 
-		const retailer = await ctx.db
-			.query("retailers")
-			.withIndex("by_user", (q) => q.eq("userId", userId))
-			.first();
-		if (!retailer) throw new ConvexError("No store to rename");
+		let retailer: Doc<"retailers">;
+		let access: RetailerAccess;
+		if (retailerId) {
+			access = await requireRetailerAccess(ctx, retailerId);
+			retailer = access.retailer;
+		} else {
+			const userId = await requireUserId(ctx);
+			const own = await ctx.db
+				.query("retailers")
+				.withIndex("by_user", (q) => q.eq("userId", userId))
+				.first();
+			if (!own) throw new ConvexError("No store to rename");
+			retailer = own;
+			access = { retailer: own, actingAsAdmin: false, userId };
+		}
 
 		if (retailer.slug === slug) return { slug }; // no-op
 
@@ -1164,6 +1279,7 @@ export const renameSlug = mutation({
 		});
 		await ctx.db.patch(retailer._id, { slug, updatedAt: now });
 
+		await logAdminAction(ctx, access, "retailers.renameSlug", retailer._id);
 		return { slug };
 	},
 });

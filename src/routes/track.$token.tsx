@@ -23,6 +23,7 @@ import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { formatFulfilmentDate } from "../../convex/lib/fulfilmentDate";
 import { isMockupGateClosed } from "../../convex/lib/order";
+import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
 import { IvePaidDialog } from "../components/storefront/ive-paid-dialog";
@@ -614,7 +615,9 @@ function TrackingRoute() {
 			{isSelfCollect && order.pickupSnapshot ? (
 				<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-						Pick up at
+						{order.pickupSnapshot.locationType === "drop_off"
+							? "Meet at"
+							: "Pick up at"}
 					</p>
 					<div className="flex items-start gap-2">
 						<MapPin
@@ -622,12 +625,27 @@ function TrackingRoute() {
 							aria-hidden="true"
 						/>
 						<div className="flex min-w-0 flex-1 flex-col gap-1">
-							<p className="text-sm font-semibold leading-tight">
-								{order.pickupSnapshot.label}
-							</p>
+							<div className="flex flex-wrap items-center gap-2">
+								<p className="text-sm font-semibold leading-tight">
+									{order.pickupSnapshot.label}
+								</p>
+								<span className="shrink-0 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
+									{order.pickupSnapshot.locationType === "drop_off"
+										? "Drop-off"
+										: "Self-collect"}
+								</span>
+							</div>
 							<p className="text-xs text-muted-foreground whitespace-pre-line">
 								{order.pickupSnapshot.address}
 							</p>
+							{order.pickupSnapshot.scheduleNote ? (
+								<p className="flex items-center gap-1 text-xs font-medium text-accent">
+									<Clock className="size-3 shrink-0" aria-hidden="true" />
+									<span className="line-clamp-2">
+										{order.pickupSnapshot.scheduleNote}
+									</span>
+								</p>
+							) : null}
 						</div>
 					</div>
 					<PickupNavButtons snapshot={order.pickupSnapshot} />
@@ -772,6 +790,14 @@ function TrackingRoute() {
 						{formatPrice(order.total, order.currency)}
 					</span>
 				</div>
+				{/* Buyer self-serves a PDF receipt — generated on demand from this
+				    order, no delivery/email needed. */}
+				<ReceiptDownloadButton
+					token={token}
+					label="Download receipt (PDF)"
+					variant="outline"
+					className="w-full"
+				/>
 			</section>
 
 			{/* Echo the shopper's note so they can confirm it was received. Plain

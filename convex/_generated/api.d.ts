@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as admin from "../admin.js";
 import type * as billing from "../billing.js";
 import type * as billingEmail from "../billingEmail.js";
 import type * as counterCheckout from "../counterCheckout.js";
@@ -18,6 +19,7 @@ import type * as foundingMembers from "../foundingMembers.js";
 import type * as google from "../google.js";
 import type * as http from "../http.js";
 import type * as invoices from "../invoices.js";
+import type * as lib_activation from "../lib/activation.js";
 import type * as lib_address from "../lib/address.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_billingEmailCopy from "../lib/billingEmailCopy.js";
@@ -34,14 +36,21 @@ import type * as lib_legal from "../lib/legal.js";
 import type * as lib_mapsUrl from "../lib/mapsUrl.js";
 import type * as lib_order from "../lib/order.js";
 import type * as lib_orderBuckets from "../lib/orderBuckets.js";
+import type * as lib_orderCsv from "../lib/orderCsv.js";
+import type * as lib_orderInboxFilter from "../lib/orderInboxFilter.js";
 import type * as lib_orderStatus from "../lib/orderStatus.js";
 import type * as lib_payment from "../lib/payment.js";
 import type * as lib_paymentMethod from "../lib/paymentMethod.js";
+import type * as lib_pdf_document from "../lib/pdf/document.js";
+import type * as lib_pdf_logo from "../lib/pdf/logo.js";
+import type * as lib_pdf_render from "../lib/pdf/render.js";
 import type * as lib_plans from "../lib/plans.js";
 import type * as lib_rateLimiter from "../lib/rateLimiter.js";
 import type * as lib_slug from "../lib/slug.js";
 import type * as lib_storeProfile from "../lib/storeProfile.js";
 import type * as lib_variant from "../lib/variant.js";
+import type * as lib_wabaLimits from "../lib/wabaLimits.js";
+import type * as lib_wabaWebhook from "../lib/wabaWebhook.js";
 import type * as lib_whatsapp from "../lib/whatsapp.js";
 import type * as lib_whatsappCopy from "../lib/whatsappCopy.js";
 import type * as lib_whatsappSignature from "../lib/whatsappSignature.js";
@@ -54,6 +63,7 @@ import type * as products from "../products.js";
 import type * as retailers from "../retailers.js";
 import type * as seed from "../seed.js";
 import type * as subscriptions from "../subscriptions.js";
+import type * as wabaProtection from "../wabaProtection.js";
 import type * as whatsapp from "../whatsapp.js";
 
 import type {
@@ -63,6 +73,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  admin: typeof admin;
   billing: typeof billing;
   billingEmail: typeof billingEmail;
   counterCheckout: typeof counterCheckout;
@@ -73,6 +84,7 @@ declare const fullApi: ApiFromModules<{
   google: typeof google;
   http: typeof http;
   invoices: typeof invoices;
+  "lib/activation": typeof lib_activation;
   "lib/address": typeof lib_address;
   "lib/auth": typeof lib_auth;
   "lib/billingEmailCopy": typeof lib_billingEmailCopy;
@@ -89,14 +101,21 @@ declare const fullApi: ApiFromModules<{
   "lib/mapsUrl": typeof lib_mapsUrl;
   "lib/order": typeof lib_order;
   "lib/orderBuckets": typeof lib_orderBuckets;
+  "lib/orderCsv": typeof lib_orderCsv;
+  "lib/orderInboxFilter": typeof lib_orderInboxFilter;
   "lib/orderStatus": typeof lib_orderStatus;
   "lib/payment": typeof lib_payment;
   "lib/paymentMethod": typeof lib_paymentMethod;
+  "lib/pdf/document": typeof lib_pdf_document;
+  "lib/pdf/logo": typeof lib_pdf_logo;
+  "lib/pdf/render": typeof lib_pdf_render;
   "lib/plans": typeof lib_plans;
   "lib/rateLimiter": typeof lib_rateLimiter;
   "lib/slug": typeof lib_slug;
   "lib/storeProfile": typeof lib_storeProfile;
   "lib/variant": typeof lib_variant;
+  "lib/wabaLimits": typeof lib_wabaLimits;
+  "lib/wabaWebhook": typeof lib_wabaWebhook;
   "lib/whatsapp": typeof lib_whatsapp;
   "lib/whatsappCopy": typeof lib_whatsappCopy;
   "lib/whatsappSignature": typeof lib_whatsappSignature;
@@ -109,6 +128,7 @@ declare const fullApi: ApiFromModules<{
   retailers: typeof retailers;
   seed: typeof seed;
   subscriptions: typeof subscriptions;
+  wabaProtection: typeof wabaProtection;
   whatsapp: typeof whatsapp;
 }>;
 

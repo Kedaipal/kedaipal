@@ -3,7 +3,9 @@ import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
+	action,
 	internalMutation,
+	internalQuery,
 	mutation,
 	type MutationCtx,
 	query,
@@ -14,12 +16,23 @@ import {
 	decrementAggregatesForCancel,
 	linkOrderToCustomer,
 } from "./customers";
+import { stampRetailerActivation } from "./lib/activation";
 import { assertValidAddress } from "./lib/address";
 import {
-	assertValidFulfilmentDate,
-	matchesFulfilmentWindow,
-} from "./lib/fulfilmentDate";
-import { BUCKET_STATUSES, statusToBucket } from "./lib/orderBuckets";
+	adminUserIds,
+	logAdminAction,
+	type RetailerAccess,
+	requireRetailerAccess,
+} from "./lib/auth";
+import { assertValidFulfilmentDate } from "./lib/fulfilmentDate";
+import { statusToBucket } from "./lib/orderBuckets";
+import { type CsvOrder, ordersToCsv } from "./lib/orderCsv";
+import {
+	buildInboxPredicate,
+	compareInboxOrder,
+	type InboxFilterArgs,
+	needsMockup,
+} from "./lib/orderInboxFilter";
 import {
 	computeOrderTotals,
 	generateShortId,
@@ -36,6 +49,11 @@ import {
 	type StatusLabels,
 } from "./lib/orderStatus";
 import { type PaymentMethod, resolvePaymentMethods } from "./lib/payment";
+import {
+	type OrderReceiptData,
+	orderToReceiptData,
+} from "./lib/pdf/document";
+import { buildOrderReceiptPdf } from "./lib/pdf/render";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidWaPhone } from "./lib/slug";
@@ -74,6 +92,27 @@ function resolveMockupImageIds(order: Doc<"orders">): string[] {
 	if (order.mockupImageStorageIds && order.mockupImageStorageIds.length > 0)
 		return order.mockupImageStorageIds;
 	return order.mockupImageStorageId ? [order.mockupImageStorageId] : [];
+}
+
+/**
+ * Freeze a pickup location into the immutable `pickupSnapshot` shape stored on
+ * an order. Used at the two write sites (orders.create + updatePickupLocation)
+ * so the frozen shape — including the drop-off kind + schedule note — can never
+ * drift between them. `locationType` defaults to "self_collect" so a row created
+ * before drop-off existed freezes as self-collect (no blank kind downstream).
+ */
+function buildPickupSnapshot(location: Doc<"pickupLocations">): PickupSnapshot {
+	return {
+		label: location.label,
+		address: location.address,
+		locationType: location.locationType ?? "self_collect",
+		scheduleNote: location.scheduleNote,
+		mapsUrl: location.mapsUrl,
+		notes: location.notes,
+		latitude: location.latitude,
+		longitude: location.longitude,
+		placeId: location.placeId,
+	};
 }
 
 const statusValidator = v.union(
@@ -144,7 +183,13 @@ async function resolveSharedOrder(
 			.first();
 		if (!order) return null;
 		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer || retailer.userId !== identity.subject)
+		// Owner OR a Kedaipal admin operating this store (act-as). Same rule the
+		// dashboard queries/mutations use — see convex/lib/auth.ts.
+		if (
+			!retailer ||
+			(retailer.userId !== identity.subject &&
+				!adminUserIds().includes(identity.subject))
+		)
 			throw new ConvexError("Forbidden");
 		return order;
 	}
@@ -335,15 +380,7 @@ export const create = mutation({
 					throw new ConvexError("That pickup location is no longer available");
 				}
 				resolvedPickupLocationId = location._id;
-				sanitizedPickupSnapshot = {
-					label: location.label,
-					address: location.address,
-					mapsUrl: location.mapsUrl,
-					notes: location.notes,
-					latitude: location.latitude,
-					longitude: location.longitude,
-					placeId: location.placeId,
-				};
+				sanitizedPickupSnapshot = buildPickupSnapshot(location);
 			}
 		}
 
@@ -538,11 +575,7 @@ export const countActionable = query({
 		ctx,
 		{ retailerId },
 	): Promise<{ pending: number; confirmed: number; mockupPending: number }> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) throw new Error("Not authenticated");
-		const retailer = await ctx.db.get(retailerId);
-		if (!retailer) throw new Error("Retailer not found");
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		await requireRetailerAccess(ctx, retailerId);
 
 		const [pendingRows, confirmedRows, mockupRows] = await Promise.all([
 			ctx.db
@@ -627,6 +660,62 @@ export const get = query({
 	},
 });
 
+// --- Order receipt PDF (UC A) ----------------------------------------------
+// Buyer-facing receipt, generated ON DEMAND (not stored): it's deterministic
+// from the order, so there's no value in persisting a blob that may never be
+// downloaded. Authorized through the same resolveSharedOrder seam as `get` —
+// the buyer reaches it with the tracking token, the seller with an owned
+// shortId. See docs/invoices-receipts.md.
+
+/** Assemble the receipt view-model inside the transaction (auth runs here via
+ * resolveSharedOrder, so the action stays a thin render wrapper). */
+export const receiptPdfInputs = internalQuery({
+	args: { shortId: v.optional(v.string()), token: v.optional(v.string()) },
+	handler: async (
+		ctx,
+		{ shortId, token },
+	): Promise<{ data: OrderReceiptData; shortId: string } | null> => {
+		const order = await resolveSharedOrder(ctx, { token, shortId });
+		if (!order) return null;
+		const retailer = await ctx.db.get(order.retailerId);
+		return {
+			shortId: order.shortId,
+			data: orderToReceiptData({
+				order,
+				storeName: retailer?.storeName ?? "",
+				paymentMethods: retailer ? resolvePaymentMethods(retailer) : [],
+			}),
+		};
+	},
+});
+
+/**
+ * Render an order receipt and return the PDF bytes (+ filename) for a client
+ * download. Public action: the buyer passes `token`, the seller passes `shortId`
+ * — authorization is enforced by receiptPdfInputs (resolveSharedOrder). Returns
+ * null only when the order can't be found.
+ */
+export const generateReceiptPdf = action({
+	args: { shortId: v.optional(v.string()), token: v.optional(v.string()) },
+	handler: async (
+		ctx,
+		{ shortId, token },
+	): Promise<{ pdf: ArrayBuffer; filename: string } | null> => {
+		const inputs = await ctx.runQuery(internal.orders.receiptPdfInputs, {
+			shortId,
+			token,
+		});
+		if (!inputs) return null;
+		const bytes = await buildOrderReceiptPdf(inputs.data);
+		// Copy into a standalone ArrayBuffer so Convex serializes the exact bytes.
+		const pdf = bytes.buffer.slice(
+			bytes.byteOffset,
+			bytes.byteOffset + bytes.byteLength,
+		) as ArrayBuffer;
+		return { pdf, filename: `Receipt-${inputs.shortId}.pdf` };
+	},
+});
+
 /**
  * Public: resolve the seller's payment methods for the buyer's tracking page,
  * keyed by the tracking token (the capability — same details already go to the
@@ -669,14 +758,10 @@ export const getPaymentMethods = query({
 export const getPaymentProofUrl = query({
 	args: { orderId: v.id("orders") },
 	handler: async (ctx, { orderId }): Promise<string | null> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) throw new Error("Not authenticated");
-
 		const order = await ctx.db.get(orderId);
 		if (!order) return null;
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer) return null;
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		// Owner OR Kedaipal admin acting-as; throws Forbidden for anyone else.
+		await requireRetailerAccess(ctx, order.retailerId);
 
 		if (!order.paymentProofStorageId) return null;
 		return (await ctx.storage.getUrl(order.paymentProofStorageId)) ?? null;
@@ -697,11 +782,7 @@ export const listByRetailer = query({
 		ctx,
 		{ retailerId, status, mockupPending, paginationOpts },
 	) => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) throw new Error("Not authenticated");
-		const retailer = await ctx.db.get(retailerId);
-		if (!retailer) throw new Error("Retailer not found");
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		await requireRetailerAccess(ctx, retailerId);
 
 		if (mockupPending) {
 			// "changes_requested" and "pending" are adjacent on the index (nothing
@@ -812,11 +893,7 @@ export const searchOrders = query({
 			limit,
 		},
 	) => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) throw new Error("Not authenticated");
-		const retailer = await ctx.db.get(retailerId);
-		if (!retailer) throw new Error("Retailer not found");
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		await requireRetailerAccess(ctx, retailerId);
 
 		const all = await ctx.db
 			.query("orders")
@@ -834,78 +911,27 @@ export const searchOrders = query({
 			cancelled: 0,
 			mockupPending: 0,
 		};
-		const needsMockup = (s: string | undefined) =>
-			s === "pending" || s === "changes_requested";
 		for (const o of all) {
 			counts[statusToBucket(o.status)]++;
 			if (needsMockup(o.mockupStatus)) counts.mockupPending++;
 		}
 
-		const term = (searchText ?? "").trim().toLowerCase();
-		const digits = term.replace(/\D/g, "");
-		const payset =
-			paymentStatuses && paymentStatuses.length > 0
-				? new Set(paymentStatuses)
-				: null;
-		const methodSet =
-			paymentMethods && paymentMethods.length > 0
-				? new Set(paymentMethods)
-				: null;
-		const wantUnspecified = methodUnspecified === true;
-		const bucketStatuses =
-			bucket === "all" ? null : new Set(BUCKET_STATUSES[bucket]);
-
-		const filtered = all.filter((o) => {
-			if (bucketStatuses && !bucketStatuses.has(o.status)) return false;
-			if (mockupPending && !needsMockup(o.mockupStatus)) return false;
-			// Undefined paymentStatus reads as "unpaid".
-			if (payset && !payset.has(o.paymentStatus ?? "unpaid")) return false;
-			// Method filter (concrete methods OR "unspecified" for no recorded method).
-			if (methodSet || wantUnspecified) {
-				const byMethod = o.paymentMethod
-					? (methodSet?.has(o.paymentMethod) ?? false)
-					: false;
-				const byUnspecified = !o.paymentMethod && wantUnspecified;
-				if (!byMethod && !byUnspecified) return false;
-			}
-			if (dateFrom !== undefined && o.createdAt < dateFrom) return false;
-			if (dateTo !== undefined && o.createdAt > dateTo) return false;
-			if (fulfilmentWindow !== undefined) {
-				if (o.fulfilmentDate === undefined) return false;
-				if (!matchesFulfilmentWindow(o.fulfilmentDate, fulfilmentWindow))
-					return false;
-			}
-			if (term.length > 0) {
-				const name = (o.customer.name ?? "").toLowerCase();
-				const phone = (o.customer.waPhone ?? "").replace(/\D/g, "");
-				const idHit = o.shortId.toLowerCase().includes(term);
-				const nameHit = name.length > 0 && name.includes(term);
-				// Phone: match on trailing digits (handles +60 / 0 / local-part typing).
-				const phoneHit = digits.length >= 4 && phone.endsWith(digits);
-				// Item name / variant ("vanilla cake") — already in memory, so cheap.
-				const itemHit = o.items.some(
-					(it) =>
-						it.name.toLowerCase().includes(term) ||
-						(it.variantLabel ?? "").toLowerCase().includes(term),
-				);
-				if (!idHit && !nameHit && !phoneHit && !itemHit) return false;
-			}
-			return true;
-		});
-
-		// Default inbox sort: by fulfilment date ascending (soonest first) so the
-		// seller works the most urgent orders top-down. Orders without a date
-		// (legacy, or any path that didn't capture one) sink to the bottom, then
-		// fall back to newest-created-first within that group. `all` arrives
-		// createdAt-desc, so the stable sort preserves that as the tiebreaker.
-		const sorted = [...filtered].sort((a, b) => {
-			const ad = a.fulfilmentDate;
-			const bd = b.fulfilmentDate;
-			if (ad === undefined && bd === undefined) return 0; // keep createdAt-desc
-			if (ad === undefined) return 1; // a (dateless) after b
-			if (bd === undefined) return -1; // b (dateless) after a
-			return ad - bd; // both dated → soonest first
-		});
+		// Filter + sort via the shared inbox predicate, so the export honours the
+		// exact same rules (see lib/orderInboxFilter.ts).
+		const filtered = all.filter(
+			buildInboxPredicate({
+				bucket,
+				paymentStatuses,
+				paymentMethods,
+				methodUnspecified,
+				dateFrom,
+				dateTo,
+				fulfilmentWindow,
+				mockupPending,
+				searchText,
+			}),
+		);
+		const sorted = [...filtered].sort(compareInboxOrder);
 
 		const take = Math.max(1, Math.min(limit ?? 50, 200));
 		return {
@@ -914,6 +940,213 @@ export const searchOrders = query({
 			counts,
 			capped: all.length >= MAX_INBOX_SCAN,
 		};
+	},
+});
+
+/**
+ * Bulk export to CSV (bookkeeping). Two modes:
+ *   - `orderIds` given → export exactly those owned orders (the seller's
+ *     multi-selection), regardless of the active filter.
+ *   - otherwise → export everything matching the same inbox filter as
+ *     `searchOrders`, via the shared predicate so the export can't diverge from
+ *     what's on screen.
+ * Returns the CSV text + a row count; the client turns it into a download. See
+ * docs/invoices-receipts.md.
+ */
+// Reusable validators for the inbox-filter args, shared by the export action and
+// its internal page query so the two can't drift.
+const exportFilterValidators = {
+	bucket: v.union(
+		v.literal("all"),
+		v.literal("new"),
+		v.literal("in_progress"),
+		v.literal("completed"),
+		v.literal("cancelled"),
+	),
+	paymentStatuses: v.optional(
+		v.array(
+			v.union(
+				v.literal("unpaid"),
+				v.literal("claimed"),
+				v.literal("received"),
+			),
+		),
+	),
+	paymentMethods: v.optional(v.array(orderPaymentMethodValidator)),
+	methodUnspecified: v.optional(v.boolean()),
+	dateFrom: v.optional(v.number()),
+	dateTo: v.optional(v.number()),
+	fulfilmentWindow: v.optional(
+		v.union(
+			v.literal("today"),
+			v.literal("tomorrow"),
+			v.literal("this_week"),
+		),
+	),
+	mockupPending: v.optional(v.boolean()),
+	searchText: v.optional(v.string()),
+} as const;
+
+// Bookkeeping exports paginate the FULL result set in bounded pages — they must
+// not be limited to the inbox's reactive 1000-doc scan (that silently truncates
+// financial records). EXPORT_SCAN_CAP bounds the worst case (a matching range
+// that sits beyond this many of the newest orders), surfaced as a `capped` flag
+// so the UI can warn rather than return silently-incomplete books. ~10 months at
+// the Scale tier's 2,000 orders/month.
+const EXPORT_PAGE_SIZE = 500;
+const EXPORT_SCAN_CAP = 20_000;
+
+/** Project an order to the lean shape the CSV needs (drops heavy fields). */
+function orderToCsvSource(o: Doc<"orders">): CsvOrder {
+	return {
+		shortId: o.shortId,
+		createdAt: o.createdAt,
+		fulfilmentDate: o.fulfilmentDate,
+		status: o.status,
+		paymentStatus: o.paymentStatus,
+		paymentMethod: o.paymentMethod,
+		deliveryMethod: o.deliveryMethod,
+		customer: o.customer,
+		items: o.items,
+		subtotal: o.subtotal,
+		total: o.total,
+		currency: o.currency,
+		customerNote: o.customerNote,
+	};
+}
+
+async function assertOwnsRetailer(
+	ctx: QueryCtx,
+	retailerId: Id<"retailers">,
+): Promise<void> {
+	// Owner OR Kedaipal admin acting-as (see convex/lib/auth.ts).
+	await requireRetailerAccess(ctx, retailerId);
+}
+
+/**
+ * Seller-side access to a single order: the caller must own the order's retailer
+ * OR be a Kedaipal admin operating that store (act-as). Returns the order + the
+ * access descriptor so mutations can attribute admin-on-behalf writes. Throws
+ * "Order not found" / "Forbidden" to match the pre-existing inline checks.
+ */
+async function requireOrderAccess(
+	ctx: QueryCtx | MutationCtx,
+	orderId: Id<"orders">,
+): Promise<{ order: Doc<"orders">; access: RetailerAccess }> {
+	const order = await ctx.db.get(orderId);
+	if (!order) throw new Error("Order not found");
+	const access = await requireRetailerAccess(ctx, order.retailerId);
+	return { order, access };
+}
+
+// Explicit alias so the action's `runQuery(exportPage)` result has a type that
+// doesn't depend (circularly) on inferring this same file's exports.
+type ExportPageResult = {
+	rows: CsvOrder[];
+	scanned: number;
+	isDone: boolean;
+	cursor: string | null;
+};
+
+/** One page of export rows: applies the inbox filter to a paginated slice of the
+ * retailer's orders (newest first) and projects matches to CSV rows. Ownership-
+ * checked on every page. Internal — driven by the `exportOrders` action. */
+export const exportPage = internalQuery({
+	args: {
+		retailerId: v.id("retailers"),
+		...exportFilterValidators,
+		paginationOpts: paginationOptsValidator,
+	},
+	handler: async (
+		ctx,
+		{ retailerId, paginationOpts, ...filters },
+	): Promise<ExportPageResult> => {
+		await assertOwnsRetailer(ctx, retailerId);
+		const page = await ctx.db
+			.query("orders")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.order("desc")
+			.paginate(paginationOpts);
+		const predicate = buildInboxPredicate(filters as InboxFilterArgs);
+		return {
+			rows: page.page.filter(predicate).map(orderToCsvSource),
+			scanned: page.page.length,
+			isDone: page.isDone,
+			cursor: page.continueCursor,
+		};
+	},
+});
+
+/** Export rows for an explicit selection of order ids (the ticked rows). Drops
+ * anything not owned by this retailer (defends against a tampered id list). */
+export const exportByIds = internalQuery({
+	args: { retailerId: v.id("retailers"), orderIds: v.array(v.id("orders")) },
+	handler: async (ctx, { retailerId, orderIds }): Promise<CsvOrder[]> => {
+		await assertOwnsRetailer(ctx, retailerId);
+		const fetched = await Promise.all(orderIds.map((id) => ctx.db.get(id)));
+		return fetched
+			.filter((o): o is Doc<"orders"> => o?.retailerId === retailerId)
+			.map(orderToCsvSource);
+	},
+});
+
+/**
+ * Bulk export to CSV (bookkeeping). Two modes:
+ *   - `orderIds` given → export exactly those owned orders (the seller's ticked
+ *     selection), regardless of the active filter.
+ *   - otherwise → export everything matching the same inbox filter as
+ *     `searchOrders` (shared predicate), paginating the FULL result set so the
+ *     export isn't capped at the inbox's reactive 1000-doc window.
+ * Returns the CSV text, a row count, and `capped` (true iff the scan hit
+ * EXPORT_SCAN_CAP before exhausting the matches — the UI warns the seller their
+ * export may be incomplete). An action (not a query): a one-shot file generation,
+ * not a reactive subscription. See docs/invoices-receipts.md.
+ */
+export const exportOrders = action({
+	args: {
+		retailerId: v.id("retailers"),
+		...exportFilterValidators,
+		// When set, export exactly these orders (the seller's ticked selection).
+		orderIds: v.optional(v.array(v.id("orders"))),
+	},
+	handler: async (
+		ctx,
+		{ retailerId, orderIds, ...filters },
+	): Promise<{ csv: string; count: number; capped: boolean }> => {
+		let rows: CsvOrder[];
+		let capped = false;
+
+		if (orderIds && orderIds.length > 0) {
+			rows = await ctx.runQuery(internal.orders.exportByIds, {
+				retailerId,
+				orderIds,
+			});
+		} else {
+			rows = [];
+			let scanned = 0;
+			let cursor: string | null = null;
+			for (;;) {
+				const page: ExportPageResult = await ctx.runQuery(
+					internal.orders.exportPage,
+					{
+						retailerId,
+						...filters,
+						paginationOpts: { numItems: EXPORT_PAGE_SIZE, cursor },
+					},
+				);
+				rows.push(...page.rows);
+				scanned += page.scanned;
+				cursor = page.cursor;
+				if (page.isDone) break;
+				if (scanned >= EXPORT_SCAN_CAP) {
+					capped = true;
+					break;
+				}
+			}
+		}
+
+		rows.sort(compareInboxOrder);
+		return { csv: ordersToCsv(rows), count: rows.length, capped };
 	},
 });
 
@@ -995,6 +1228,14 @@ async function applyStatusTransition(
 		createdAt: now,
 	});
 
+	// Any forward (non-cancel) transition means this order is live — activate the
+	// store on the first one. One-time set-if-unset, so a seller manually
+	// confirming (or skipping straight to packed/shipped) counts, and a later
+	// cancellation never un-sets it.
+	if (status !== "cancelled") {
+		await stampRetailerActivation(ctx, order.retailerId, now);
+	}
+
 	// Fire-and-forget WhatsApp notification. Scheduled (not awaited) so the
 	// mutation stays a pure transaction and the action runs with network access.
 	await ctx.scheduler.runAfter(0, internal.whatsapp.notifyStatusChange, {
@@ -1012,15 +1253,7 @@ export const updateStatus = mutation({
 		carrierTrackingUrl: v.optional(v.string()),
 	},
 	handler: async (ctx, { orderId, status, note, carrierTrackingUrl }): Promise<void> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) throw new Error("Not authenticated");
-
-		const order = await ctx.db.get(orderId);
-		if (!order) throw new Error("Order not found");
-
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer) throw new Error("Retailer not found");
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		const { order, access } = await requireOrderAccess(ctx, orderId);
 
 		// Mockup gate: a proof-required order can't move into production (packed)
 		// until the buyer has approved the mockup or the seller has waived it.
@@ -1032,6 +1265,7 @@ export const updateStatus = mutation({
 		}
 
 		await applyStatusTransition(ctx, order, status, { note, carrierTrackingUrl });
+		await logAdminAction(ctx, access, "orders.updateStatus", orderId);
 	},
 });
 
@@ -1051,21 +1285,21 @@ export const bulkUpdateStatus = mutation({
 		ctx,
 		{ orderIds, status },
 	): Promise<{ updated: number; skipped: number }> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) throw new Error("Not authenticated");
 		if (orderIds.length === 0) return { updated: 0, skipped: 0 };
 		if (orderIds.length > 100)
 			throw new ConvexError("Too many orders selected (max 100)");
 
 		let updated = 0;
 		let skipped = 0;
+		// The inbox multi-select is single-retailer, so every id resolves to the
+		// same access descriptor; keep the last one for a single batch audit row.
+		let batchAccess: RetailerAccess | undefined;
 		for (const orderId of orderIds) {
 			const order = await ctx.db.get(orderId);
 			if (!order) throw new ConvexError("Order not found");
-			const retailer = await ctx.db.get(order.retailerId);
-			if (!retailer) throw new Error("Retailer not found");
-			// Ownership is enforced for every order — a foreign id fails the batch.
-			if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+			// Owner OR admin acting-as is enforced for every order — a foreign id
+			// fails the batch (requireRetailerAccess throws Forbidden).
+			batchAccess = await requireRetailerAccess(ctx, order.retailerId);
 
 			// Skip no-ops + transitions blocked by the mockup gate (don't fail the
 			// whole batch on one ineligible order).
@@ -1080,6 +1314,8 @@ export const bulkUpdateStatus = mutation({
 			await applyStatusTransition(ctx, order, status);
 			updated++;
 		}
+		if (batchAccess)
+			await logAdminAction(ctx, batchAccess, "orders.bulkUpdateStatus");
 		return { updated, skipped };
 	},
 });
@@ -1114,14 +1350,8 @@ export const advanceToStage = mutation({
 		ctx,
 		{ orderId, stageId, note, carrierTrackingUrl },
 	): Promise<void> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) throw new Error("Not authenticated");
-
-		const order = await ctx.db.get(orderId);
-		if (!order) throw new Error("Order not found");
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer) throw new Error("Retailer not found");
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		const { order, access } = await requireOrderAccess(ctx, orderId);
+		const retailer = access.retailer;
 
 		if (order.status === "cancelled") {
 			throw new ConvexError("A cancelled order can't be advanced.");
@@ -1198,6 +1428,7 @@ export const advanceToStage = mutation({
 				stageId: stage.id,
 			});
 		}
+		await logAdminAction(ctx, access, "orders.advanceStage", orderId);
 	},
 });
 
@@ -1212,21 +1443,14 @@ export const setCarrierTrackingUrl = mutation({
 		carrierTrackingUrl: v.optional(v.string()),
 	},
 	handler: async (ctx, { orderId, carrierTrackingUrl }): Promise<void> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) throw new Error("Not authenticated");
-
-		const order = await ctx.db.get(orderId);
-		if (!order) throw new Error("Order not found");
-
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer) throw new Error("Retailer not found");
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		const { access } = await requireOrderAccess(ctx, orderId);
 
 		const trimmed = carrierTrackingUrl?.trim() ?? "";
 		await ctx.db.patch(orderId, {
 			carrierTrackingUrl: trimmed.length > 0 ? trimmed : undefined,
 			updatedAt: Date.now(),
 		});
+		await logAdminAction(ctx, access, "orders.setCarrierTrackingUrl", orderId);
 	},
 });
 
@@ -1321,15 +1545,7 @@ export const updatePickupLocation = mutation({
 		const now = Date.now();
 		await ctx.db.patch(order._id, {
 			pickupLocationId: location._id,
-			pickupSnapshot: {
-				label: location.label,
-				address: location.address,
-				mapsUrl: location.mapsUrl,
-				notes: location.notes,
-				latitude: location.latitude,
-				longitude: location.longitude,
-				placeId: location.placeId,
-			},
+			pickupSnapshot: buildPickupSnapshot(location),
 			updatedAt: now,
 		});
 		await ctx.db.insert("orderEvents", {
@@ -1431,15 +1647,7 @@ export const markPaymentReceived = mutation({
 		paymentMethod: v.optional(orderPaymentMethodValidator),
 	},
 	handler: async (ctx, { orderId, note, paymentMethod }): Promise<void> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) throw new Error("Not authenticated");
-
-		const order = await ctx.db.get(orderId);
-		if (!order) throw new Error("Order not found");
-
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer) throw new Error("Retailer not found");
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		const { order, access } = await requireOrderAccess(ctx, orderId);
 
 		if (order.paymentStatus === "received") {
 			// Idempotent — second click is a no-op.
@@ -1476,6 +1684,8 @@ export const markPaymentReceived = mutation({
 				note: "payment_received_auto_confirm",
 				createdAt: now,
 			});
+			// First order reaching confirmed activates the store (one-time stamp).
+			await stampRetailerActivation(ctx, order.retailerId, now);
 		} else {
 			await ctx.db.insert("orderEvents", {
 				orderId,
@@ -1492,6 +1702,7 @@ export const markPaymentReceived = mutation({
 			internal.whatsapp.notifyPaymentReceived,
 			{ orderId },
 		);
+		await logAdminAction(ctx, access, "orders.confirmPayment", orderId);
 	},
 });
 
@@ -1600,9 +1811,8 @@ export const generateMockupUploadUrl = mutation({
 		await rateLimiter.limit(ctx, "mockupSubmit", { key: identity.subject, throws: true });
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer) throw new Error("Retailer not found");
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		// Owner OR admin acting-as (see convex/lib/auth.ts).
+		await requireRetailerAccess(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		return ctx.storage.generateUploadUrl();
@@ -1619,13 +1829,10 @@ export const generateMockupUploadUrl = mutation({
 export const discardMockupUploads = mutation({
 	args: { orderId: v.id("orders"), storageIds: v.array(v.string()) },
 	handler: async (ctx, { orderId, storageIds }): Promise<void> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) throw new Error("Not authenticated");
 		const order = await ctx.db.get(orderId);
 		if (!order) return; // order gone → nothing to protect; let the blobs GC
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer) throw new Error("Retailer not found");
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		// Owner OR admin acting-as (see convex/lib/auth.ts).
+		await requireRetailerAccess(ctx, order.retailerId);
 		const referenced = new Set(resolveMockupImageIds(order));
 		for (const id of storageIds) {
 			const trimmed = id.trim();
@@ -1660,9 +1867,8 @@ export const submitMockup = mutation({
 		await rateLimiter.limit(ctx, "mockupSubmit", { key: identity.subject, throws: true });
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer) throw new Error("Retailer not found");
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		// Owner OR admin acting-as (see convex/lib/auth.ts).
+		const access = await requireRetailerAccess(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		if (order.mockupStatus === "approved")
@@ -1713,6 +1919,7 @@ export const submitMockup = mutation({
 		await ctx.scheduler.runAfter(0, internal.whatsapp.notifyMockupSubmitted, {
 			orderId,
 		});
+		await logAdminAction(ctx, access, "orders.submitMockup", orderId);
 	},
 });
 
@@ -1732,9 +1939,8 @@ export const updateMockupQuote = mutation({
 		await rateLimiter.limit(ctx, "mockupSubmit", { key: identity.subject, throws: true });
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer) throw new Error("Retailer not found");
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		// Owner OR admin acting-as (see convex/lib/auth.ts).
+		const access = await requireRetailerAccess(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		if (order.mockupStatus === "approved")
@@ -1769,6 +1975,7 @@ export const updateMockupQuote = mutation({
 					: "mockup_quote_updated",
 			createdAt: now,
 		});
+		await logAdminAction(ctx, access, "orders.updateMockupQuote", orderId);
 	},
 });
 
@@ -1854,9 +2061,8 @@ export const waiveMockup = mutation({
 		await rateLimiter.limit(ctx, "mockupSubmit", { key: identity.subject, throws: true });
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer) throw new Error("Retailer not found");
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		// Owner OR admin acting-as (see convex/lib/auth.ts).
+		const access = await requireRetailerAccess(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		if (order.mockupStatus === "approved" || order.mockupWaivedAt !== undefined)
@@ -1882,6 +2088,7 @@ export const waiveMockup = mutation({
 			orderId,
 			reason: "waived",
 		});
+		await logAdminAction(ctx, access, "orders.waiveMockup", orderId);
 	},
 });
 

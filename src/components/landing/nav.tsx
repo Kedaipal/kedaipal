@@ -17,7 +17,7 @@ function LanguageSwitcher() {
 			size="lg"
 			onClick={() => setLocale(next)}
 			aria-label={m.lang_switcher_label()}
-			className="rounded-full"
+			className="tap-target rounded-full"
 		>
 			<Globe />
 			<span>{current === "ms" ? "EN" : "BM"}</span>
@@ -171,8 +171,8 @@ export function Nav() {
 						<Button
 							type="button"
 							variant="ghost"
-							size="lg"
-							className="rounded-full md:hidden"
+							size="icon"
+							className="tap-target rounded-full md:hidden"
 							onClick={() => setMenuOpen((prev) => !prev)}
 							aria-label={menuOpen ? m.nav_menu_close() : m.nav_menu_open()}
 							aria-expanded={menuOpen}

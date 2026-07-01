@@ -7,8 +7,9 @@ import {
 	internalQuery,
 } from "./_generated/server";
 import { linkOrderToCustomer, refreshWaProfileName } from "./customers";
-import { getAdapter } from "./lib/channels/registry";
-import type { ChannelAdapter } from "./lib/channels/types";
+import { type GuardedSender, makeGuardedSender } from "./wabaProtection";
+import { stampRetailerActivation } from "./lib/activation";
+import { classifyOptOutKeyword } from "./lib/wabaLimits";
 import { isMockupGateClosed } from "./lib/order";
 import {
 	type LegacyPaymentInstructions,
@@ -126,6 +127,8 @@ export const confirmOrderFromWhatsApp = internalMutation({
 				note: "Confirmed via WhatsApp",
 				createdAt: now,
 			});
+			// First order reaching confirmed activates the store (one-time stamp).
+			await stampRetailerActivation(ctx, order.retailerId, now);
 		}
 
 		// Customer linking + pushname capture. Orders that arrived with a phone
@@ -173,6 +176,7 @@ export const getOrderWithRetailer = internalQuery({
 		ctx,
 		{ orderId },
 	): Promise<{
+		retailerId: Id<"retailers">;
 		shortId: string;
 		trackingToken: string | undefined;
 		status: Doc<"orders">["status"];
@@ -195,6 +199,7 @@ export const getOrderWithRetailer = internalQuery({
 		const retailer = await ctx.db.get(order.retailerId);
 		if (!retailer) return null;
 		return {
+			retailerId: order.retailerId,
 			shortId: order.shortId,
 			trackingToken: order.trackingToken,
 			status: order.status,
@@ -221,6 +226,7 @@ export const getRetailerLocaleForOrder = internalQuery({
 		ctx,
 		{ shortId },
 	): Promise<{
+		retailerId: Id<"retailers">;
 		locale: Locale;
 		storeName: string;
 		trackingToken: string | undefined;
@@ -241,6 +247,7 @@ export const getRetailerLocaleForOrder = internalQuery({
 		const retailer = await ctx.db.get(order.retailerId);
 		if (!retailer) return null;
 		return {
+			retailerId: order.retailerId,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
 			storeName: retailer.storeName,
 			trackingToken: order.trackingToken,
@@ -264,7 +271,7 @@ export const getRetailerLocaleForOrder = internalQuery({
  * post-mockup payment prompt so both stay byte-for-byte consistent.
  */
 async function sendPaymentMessage(
-	wa: ChannelAdapter,
+	wa: GuardedSender,
 	toPhone: string,
 	args: {
 		introBody: string;
@@ -352,7 +359,48 @@ export const handleInbound = internalAction({
 				storeName: "",
 			});
 
-		const wa = getAdapter("whatsapp");
+		// Pre-confirm replies below (checkout bind, unknown/no-match fallbacks) have
+		// no attributable seller yet, so they use a system-scoped, session-category
+		// guarded sender: per-seller caps are skipped but the global WABA-health
+		// halt, opt-out, and audit log still apply. Once an order is matched we
+		// switch to a seller-bound transactional sender.
+		const wa = makeGuardedSender(ctx, null, "session_message");
+
+		// Global opt-out / opt-in keywords (STOP/BERHENTI/UNSUB, START/MULA) —
+		// checked before any other intent so a STOP is never treated as an order.
+		// The opt-out list is global across the shared WABA. The ack reply is
+		// transactional so it isn't suppressed by the opt-out we just registered.
+		const optKeyword = classifyOptOutKeyword(text);
+		if (optKeyword) {
+			const ack = makeGuardedSender(ctx, null, "transactional");
+			if (optKeyword.kind === "out") {
+				await ctx.runMutation(internal.wabaProtection.registerOptOut, {
+					waPhone: fromPhone,
+					source: optKeyword.source,
+				});
+				try {
+					await ack.send(fromPhone, {
+						kind: "text",
+						body: "You've been unsubscribed from Kedaipal store marketing messages. Order updates for active orders still apply. Reply START to resubscribe.\n\nAnda telah berhenti melanggan mesej pemasaran kedai Kedaipal. Balas MULA untuk melanggan semula.",
+					});
+				} catch (err) {
+					console.error("WA opt-out ack failed", err);
+				}
+			} else {
+				await ctx.runMutation(internal.wabaProtection.reactivateOptIn, {
+					waPhone: fromPhone,
+				});
+				try {
+					await ack.send(fromPhone, {
+						kind: "text",
+						body: "You're resubscribed and will receive updates again. Reply STOP to unsubscribe anytime.\n\nAnda telah melanggan semula. Balas STOP untuk berhenti.",
+					});
+				} catch (err) {
+					console.error("WA opt-in ack failed", err);
+				}
+			}
+			return;
+		}
 
 		const intent = classifyInbound(text);
 
@@ -413,6 +461,12 @@ export const handleInbound = internalAction({
 			internal.whatsapp.getRetailerLocaleForOrder,
 			{ shortId },
 		);
+		// Order matched → attribute the confirm/payment sends to the seller so the
+		// per-seller guardrails + audit apply. These are transactional (order
+		// confirmation), so they bypass opt-out/pause/caps — the core promise.
+		const sellerWa = meta?.retailerId
+			? makeGuardedSender(ctx, meta.retailerId, "transactional")
+			: makeGuardedSender(ctx, null, "transactional");
 		const locale = pickLocale(meta?.locale);
 		const storeName = meta?.storeName ?? "Kedaipal";
 		const contactPhone = meta?.retailerWaPhone;
@@ -448,7 +502,7 @@ export const handleInbound = internalAction({
 			try {
 				// Image message carries the brand logo as the header without needing
 				// an interactive button (which would force a CTA we don't want here).
-				await wa.send(fromPhone, {
+				await sellerWa.send(fromPhone, {
 					kind: "image",
 					imageUrl: brandImageUrl,
 					caption: gatedBody,
@@ -456,7 +510,7 @@ export const handleInbound = internalAction({
 			} catch (err) {
 				console.error("WA gated-confirm send failed, falling back to text", err);
 				try {
-					await wa.send(fromPhone, { kind: "text", body: gatedBody });
+					await sellerWa.send(fromPhone, { kind: "text", body: gatedBody });
 				} catch (textErr) {
 					console.error("WA gated-confirm send failed", textErr);
 				}
@@ -468,7 +522,7 @@ export const handleInbound = internalAction({
 				"confirm",
 				{ shortId, storeName, contactPhone, trackingUrl, deliveryMethod: meta?.deliveryMethod ?? "delivery" },
 			);
-			await sendPaymentMessage(wa, fromPhone, {
+			await sendPaymentMessage(sellerWa, fromPhone, {
 				introBody: confirmBody,
 				locale,
 				shortId,
@@ -500,6 +554,7 @@ export const notifyStatusChange = internalAction({
 	args: { orderId: v.id("orders") },
 	handler: async (ctx, { orderId }): Promise<void> => {
 		type Meta = {
+			retailerId: Id<"retailers">;
 			shortId: string;
 			trackingToken: string | undefined;
 			status: Doc<"orders">["status"];
@@ -541,7 +596,7 @@ export const notifyStatusChange = internalAction({
 			deliveryMethod: meta.deliveryMethod,
 		});
 		try {
-			await getAdapter("whatsapp").send(meta.customerWaPhone, {
+			await makeGuardedSender(ctx, meta.retailerId, "transactional").send(meta.customerWaPhone, {
 				kind: "text",
 				body,
 			});
@@ -595,7 +650,7 @@ export const notifyStageEntry = internalAction({
 			contactPhone: meta.retailerWaPhone,
 		});
 		try {
-			await getAdapter("whatsapp").send(meta.customerWaPhone, {
+			await makeGuardedSender(ctx, meta.retailerId, "transactional").send(meta.customerWaPhone, {
 				kind: "text",
 				body,
 			});
@@ -616,6 +671,7 @@ export const notifyPaymentReceived = internalAction({
 	args: { orderId: v.id("orders") },
 	handler: async (ctx, { orderId }): Promise<void> => {
 		type Meta = {
+			retailerId: Id<"retailers">;
 			shortId: string;
 			trackingToken: string | undefined;
 			status: Doc<"orders">["status"];
@@ -653,7 +709,7 @@ export const notifyPaymentReceived = internalAction({
 			trackingUrl,
 		});
 		try {
-			await getAdapter("whatsapp").send(meta.customerWaPhone, {
+			await makeGuardedSender(ctx, meta.retailerId, "transactional").send(meta.customerWaPhone, {
 				kind: "text",
 				body,
 			});
@@ -672,6 +728,7 @@ export const getMockupNotifyMeta = internalQuery({
 		ctx,
 		{ orderId },
 	): Promise<{
+		retailerId: Id<"retailers">;
 		shortId: string;
 		trackingToken: string | undefined;
 		customerWaPhone: string | undefined;
@@ -690,6 +747,7 @@ export const getMockupNotifyMeta = internalQuery({
 			mockupImageUrl = url ?? undefined;
 		}
 		return {
+			retailerId: order.retailerId,
 			shortId: order.shortId,
 			trackingToken: order.trackingToken,
 			customerWaPhone: order.customer.waPhone,
@@ -710,6 +768,7 @@ export const notifyMockupSubmitted = internalAction({
 	args: { orderId: v.id("orders") },
 	handler: async (ctx, { orderId }): Promise<void> => {
 		let meta: {
+			retailerId: Id<"retailers">;
 			shortId: string;
 			trackingToken: string | undefined;
 			customerWaPhone: string | undefined;
@@ -741,7 +800,7 @@ export const notifyMockupSubmitted = internalAction({
 				: `Hi${greeting}! The mockup for your ${meta.storeName} order ${meta.shortId} is ready. Please review and approve it before we start making it: ${trackingUrl}`;
 		const buttonText = meta.locale === "ms" ? "Semak mockup" : "Review mockup";
 
-		const wa = getAdapter("whatsapp");
+		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");
 		try {
 			await wa.send(
 				meta.customerWaPhone,
@@ -778,6 +837,7 @@ export const getPaymentPromptMeta = internalQuery({
 		ctx,
 		{ orderId },
 	): Promise<{
+		retailerId: Id<"retailers">;
 		shortId: string;
 		trackingToken: string | undefined;
 		customerWaPhone: string | undefined;
@@ -791,6 +851,7 @@ export const getPaymentPromptMeta = internalQuery({
 		const retailer = await ctx.db.get(order.retailerId);
 		if (!retailer) return null;
 		return {
+			retailerId: order.retailerId,
 			shortId: order.shortId,
 			trackingToken: order.trackingToken,
 			customerWaPhone: order.customer.waPhone,
@@ -821,6 +882,7 @@ export const notifyPaymentDue = internalAction({
 	},
 	handler: async (ctx, { orderId, reason }): Promise<void> => {
 		let meta: {
+			retailerId: Id<"retailers">;
 			shortId: string;
 			trackingToken: string | undefined;
 			customerWaPhone: string | undefined;
@@ -855,7 +917,7 @@ export const notifyPaymentDue = internalAction({
 			shortId: meta.shortId,
 			storeName: meta.storeName,
 		});
-		const wa = getAdapter("whatsapp");
+		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");
 		await sendPaymentMessage(wa, meta.customerWaPhone, {
 			introBody,
 			locale: meta.locale,
@@ -899,7 +961,7 @@ export const sendTestRetailerAlert = internalAction({
 			return;
 		}
 		try {
-			await getAdapter("whatsapp").send(retailer.waPhone, {
+			await makeGuardedSender(ctx, retailerId, "transactional").send(retailer.waPhone, {
 				kind: "text",
 				body: `Kedaipal test alert for ${retailer.storeName}. If you see this, WhatsApp delivery is working.`,
 			});
@@ -996,7 +1058,10 @@ export const notifyFoundingWelcome = internalAction({
 				? `🎉 Tahniah! Anda kini Founding Member #${rank} dari 10 di Kedaipal. Terima kasih kerana mempercayai kami awal — diskaun 30% seumur hidup anda kekal selamanya. Pasukan kami akan hubungi anda untuk sesi white-glove. Butiran: ${billingUrl}`
 				: `🎉 Welcome, Founding Member #${rank} of 10! Thank you for backing Kedaipal early — your 30% lifetime discount is locked in for good. We'll reach out to set up your white-glove onboarding call. Details: ${billingUrl}`;
 		try {
-			await getAdapter("whatsapp").send(meta.waPhone, { kind: "text", body });
+			await makeGuardedSender(ctx, retailerId, "transactional").send(meta.waPhone, {
+				kind: "text",
+				body,
+			});
 			await ctx.runMutation(internal.whatsapp.markFoundingWelcomed, {
 				retailerId,
 			});
@@ -1015,6 +1080,7 @@ export const getCounterOrderMeta = internalQuery({
 		ctx,
 		{ orderId },
 	): Promise<{
+		retailerId: Id<"retailers">;
 		customerWaPhone: string | undefined;
 		storeName: string;
 		locale: Locale;
@@ -1029,6 +1095,7 @@ export const getCounterOrderMeta = internalQuery({
 		const retailer = await ctx.db.get(order.retailerId);
 		if (!retailer) return null;
 		return {
+			retailerId: order.retailerId,
 			customerWaPhone: order.customer.waPhone,
 			storeName: retailer.storeName,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
@@ -1080,7 +1147,7 @@ export const notifyCounterOrderCreated = internalAction({
 					? `🧾 Order ${meta.shortId} confirmed at ${meta.storeName}. Total ${money}. ✅ Payment received — thank you! Track your order: ${trackingUrl}`
 					: `🧾 Order ${meta.shortId} confirmed at ${meta.storeName}. Total ${money}. Pay & track your order here: ${trackingUrl}`;
 		try {
-			await getAdapter("whatsapp").send(meta.customerWaPhone, {
+			await makeGuardedSender(ctx, meta.retailerId, "transactional").send(meta.customerWaPhone, {
 				kind: "text",
 				body,
 			});

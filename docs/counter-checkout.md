@@ -159,6 +159,32 @@ forced into view. **Counter-only:** the storefront buyer already reviews their o
 cart before sending the order, so the standard order flow (incl. marking complete)
 is unchanged.
 
+## Cancelling a checkout (destructive — confirm required)
+
+Cancelling drops the open checkout **and any items drafted onto it** — it's a
+hard delete, not a reversible archive — so both entry points are gated behind a
+confirm step (`ConfirmDialog`, see below):
+
+- **Open-checkouts list** — the trash button on each `SessionRow` opens one
+  shared confirm at the list level (`OpenCheckoutsList`), naming the buyer /
+  waiting checkout being dropped.
+- **Active "Waiting for buyer" screen** — the **"Cancel checkout"** link
+  (`AwaitingScreen`) confirms before tearing down the QR so the buyer can no
+  longer connect.
+
+`ConfirmDialog` (`src/components/ui/confirm-dialog.tsx`) is the **shared
+confirmation step for every destructive action** in the app (counter cancel,
+single-order cancel, bulk cancel). Reach for it instead of hand-rolling another
+`Dialog` — it standardises the copy/layout, renders the confirm button in the
+destructive (red) style, awaits an async `onConfirm` (spinner + un-dismissable
+while in flight), and keeps itself open if the action throws so the caller's
+error toast stays visible. Reversible archives (e.g. deactivating a product or
+pickup location) deliberately do **not** use it.
+
+The pay-in-person **payment-method `<select>`** uses the same 16px (`text-base`)
+sizing as every other native select in the app — sub-16px controls trigger an
+iOS focus-zoom and render cramped option lists on mobile.
+
 ## Observability / PII note
 
 The inbound webhook (`convex/http.ts`) logs the buyer's phone, WhatsApp pushname,

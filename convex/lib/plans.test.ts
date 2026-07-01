@@ -41,7 +41,7 @@ describe("plans — gating helpers", () => {
 		expect(planQualifiesForFounding("starter")).toBe(false);
 	});
 
-	test("capsForPlan denormalizes unlimited to a finite sentinel", () => {
+	test("capsForPlan returns the finite caps for every v1 tier", () => {
 		expect(capsForPlan("starter")).toEqual({
 			orderCap: 100,
 			userCap: 1,
@@ -52,10 +52,20 @@ describe("plans — gating helpers", () => {
 			userCap: 2,
 			broadcastQuota: 100,
 		});
-		const scale = capsForPlan("scale");
-		expect(scale.userCap).toBe(5);
-		expect(isUnlimited(scale.orderCap)).toBe(true);
-		expect(isUnlimited(scale.broadcastQuota)).toBe(true);
-		expect(scale.orderCap).toBe(UNLIMITED);
+		// Scale's "unlimited" was dropped for finite soft caps (Arif 2026-06-28):
+		// orders 2,000/mo (~4× Pro), broadcasts 500/mo (~5× Pro). All finite now.
+		expect(capsForPlan("scale")).toEqual({
+			orderCap: 2000,
+			userCap: 5,
+			broadcastQuota: 500,
+		});
+	});
+
+	// The UNLIMITED/isUnlimited sentinel is retained for a future Enterprise tier
+	// even though no v1 plan uses it.
+	test("isUnlimited recognises the unlimited sentinel", () => {
+		expect(isUnlimited(UNLIMITED)).toBe(true);
+		expect(isUnlimited(2000)).toBe(false);
+		expect(isUnlimited(500)).toBe(false);
 	});
 });

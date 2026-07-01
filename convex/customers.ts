@@ -4,6 +4,11 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
+import {
+	logAdminAction,
+	type RetailerAccess,
+	requireRetailerAccess,
+} from "./lib/auth";
 import { buildSearchText } from "./lib/customer";
 import { assertValidWaPhone } from "./lib/slug";
 
@@ -23,37 +28,28 @@ const sortValidator = v.union(
 // ---------------------------------------------------------------------------
 
 /**
- * Assert the caller owns `retailerId`, returning the retailer doc. Mirrors the
- * Clerk-subject ownership check used across orders.ts / retailers.ts.
+ * Assert the caller may operate `retailerId` (owner OR Kedaipal admin acting-as),
+ * returning the access descriptor. See convex/lib/auth.ts.
  */
 async function requireRetailerOwner(
-	ctx: QueryCtx,
+	ctx: QueryCtx | MutationCtx,
 	retailerId: Id<"retailers">,
-): Promise<Doc<"retailers">> {
-	const identity = await ctx.auth.getUserIdentity();
-	if (!identity) throw new Error("Not authenticated");
-	const retailer = await ctx.db.get(retailerId);
-	if (!retailer) throw new Error("Retailer not found");
-	if (retailer.userId !== identity.subject) throw new Error("Forbidden");
-	return retailer;
+): Promise<RetailerAccess> {
+	return requireRetailerAccess(ctx, retailerId);
 }
 
 /**
- * Load a customer and assert the caller owns its retailer. Used by the
- * detail-view queries and mutations that take a `customerId`.
+ * Load a customer and assert the caller may operate its retailer (owner OR
+ * admin). Used by the detail-view queries and mutations that take a `customerId`.
  */
 async function requireOwnedCustomer(
-	ctx: QueryCtx,
+	ctx: QueryCtx | MutationCtx,
 	customerId: Id<"customers">,
-): Promise<Doc<"customers">> {
-	const identity = await ctx.auth.getUserIdentity();
-	if (!identity) throw new Error("Not authenticated");
+): Promise<{ customer: Doc<"customers">; access: RetailerAccess }> {
 	const customer = await ctx.db.get(customerId);
 	if (!customer) throw new Error("Customer not found");
-	const retailer = await ctx.db.get(customer.retailerId);
-	if (!retailer) throw new Error("Retailer not found");
-	if (retailer.userId !== identity.subject) throw new Error("Forbidden");
-	return customer;
+	const access = await requireRetailerAccess(ctx, customer.retailerId);
+	return { customer, access };
 }
 
 // ---------------------------------------------------------------------------
@@ -103,7 +99,7 @@ export const get = query({
 		ctx,
 		{ customerId },
 	): Promise<(Doc<"customers"> & { averageOrderValue: number }) | null> => {
-		const customer = await requireOwnedCustomer(ctx, customerId);
+		const { customer } = await requireOwnedCustomer(ctx, customerId);
 		const averageOrderValue =
 			customer.orderCount > 0
 				? Math.round(customer.totalSpent / customer.orderCount)
@@ -162,7 +158,7 @@ export const search = query({
 export const updateNotes = mutation({
 	args: { customerId: v.id("customers"), notes: v.string() },
 	handler: async (ctx, { customerId, notes }): Promise<void> => {
-		await requireOwnedCustomer(ctx, customerId);
+		const { access } = await requireOwnedCustomer(ctx, customerId);
 		const trimmed = notes.trim();
 		if (trimmed.length > NOTES_MAX) {
 			throw new Error(`Notes must be ${NOTES_MAX} characters or fewer`);
@@ -171,13 +167,14 @@ export const updateNotes = mutation({
 			notes: trimmed.length > 0 ? trimmed : undefined,
 			updatedAt: Date.now(),
 		});
+		await logAdminAction(ctx, access, "customers.updateNotes", customerId);
 	},
 });
 
 export const updateName = mutation({
 	args: { customerId: v.id("customers"), name: v.string() },
 	handler: async (ctx, { customerId, name }): Promise<void> => {
-		const customer = await requireOwnedCustomer(ctx, customerId);
+		const { customer, access } = await requireOwnedCustomer(ctx, customerId);
 		const trimmed = name.trim();
 		if (trimmed.length > NAME_MAX) {
 			throw new Error(`Name must be ${NAME_MAX} characters or fewer`);
@@ -192,6 +189,7 @@ export const updateName = mutation({
 			}),
 			updatedAt: Date.now(),
 		});
+		await logAdminAction(ctx, access, "customers.updateName", customerId);
 	},
 });
 

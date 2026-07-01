@@ -229,10 +229,12 @@ Fails closed when unset. Server check mandatory; client hiding cosmetic.
 
 `convex/lib/plans.ts`. Starter RM79 / Pro RM149 / Scale RM299; founding Pro RM104
 (Scale RM209, unreachable at launch). Annual = 10 months charged. Caps per
-CLAUDE.md: Starter 100/1/0, Pro 500/2/100, Scale ∞/5/∞ (unlimited stored as the
-`UNLIMITED` sentinel — Convex can't store `Infinity`). Scale is **not selectable**
-at v1 (`isPlanSelectable`) and grants **no** Founding badge (`planQualifiesForFounding`,
-Arif's 2026-05-28 decision).
+CLAUDE.md: Starter 100/1/0, Pro 500/2/100, Scale 2000/5/500 — all finite since
+Arif's 2026-06-28 decision dropped Scale's "unlimited" (kept an upsell ceiling for
+a future Enterprise tier and stopped contradicting Scale's ~1,300/mo tagline). The
+`UNLIMITED`/`isUnlimited` sentinel stays exported for that future tier but no v1
+plan uses it. Scale is **not selectable** at v1 (`isPlanSelectable`) and grants
+**no** Founding badge (`planQualifiesForFounding`, Arif's 2026-05-28 decision).
 
 ## `PaymentProvider` seam
 
@@ -314,7 +316,14 @@ backfill no longer mints comped subscriptions.
   dashboard CTA.
   **Phase 4 completed:** conditional **Admin nav link** (sidebar, gated on `amIAdmin`).
   **Storefront founding badge** (`founding-member-badge.tsx` on `/<slug>` header,
-  reads the public denormalized flag). **Live landing counter** — `FoundingTen` now
+  reads the public denormalized flag). Ships Kris's "Plain" badge artwork
+  (`public/img/badges/founding-badge-{navy,mint}.png`, speech-bubble emblem with
+  a mint star) — the navy variant on light backgrounds, the mint variant swapped
+  in under `.dark`, so the emblem always contrasts with the mint-tinted header.
+  A "Founding Member #N" text label rides alongside the emblem (the artwork alone
+  isn't self-explanatory to a shopper, and a hover tooltip wouldn't work on
+  mobile); the label carries the meaning for screen readers, so the images are
+  decorative. **Live landing counter** — `FoundingTen` now
   reads `getSpotsRemaining` (defaults to all-open while loading; never shows a fake
   "taken"). **Scale "Coming soon"** — pricing-teaser Scale card shows a disabled
   "Coming soon" pill instead of a CTA + dimmed. **White-glove CTA** — one-time

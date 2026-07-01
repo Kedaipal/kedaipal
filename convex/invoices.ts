@@ -5,10 +5,22 @@
 // settle path (the PaymentProvider seam). See docs/manual-subscription.md.
 
 import { ConvexError, v } from "convex/values";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { mutation, query } from "./_generated/server";
-import { requireAdmin } from "./lib/auth";
+import {
+	action,
+	internalAction,
+	internalMutation,
+	internalQuery,
+	mutation,
+	query,
+} from "./_generated/server";
+import { isAdmin, requireAdmin } from "./lib/auth";
+import {
+	invoiceToSubscriptionData,
+	type SubscriptionInvoiceData,
+} from "./lib/pdf/document";
+import { buildSubscriptionInvoicePdf } from "./lib/pdf/render";
 import { type BillingCycle, type Plan, planPrice } from "./lib/plans";
 import { getPaymentProvider } from "./payments/provider";
 import { reserveFoundingRank, stampFoundingPaid } from "./foundingMembers";
@@ -218,6 +230,11 @@ export const issueInvoice = mutation({
 		await ctx.scheduler.runAfter(0, internal.billingEmail.notifyInvoiceIssued, {
 			invoiceId,
 		});
+		// Render + store the invoice PDF (frozen at issue). Async so a render hiccup
+		// never fails issuance; the download surfaces "preparing" until it lands.
+		await ctx.scheduler.runAfter(0, internal.invoices.generateInvoicePdf, {
+			invoiceId,
+		});
 		return { invoiceId };
 	},
 });
@@ -390,5 +407,115 @@ export const myInvoices = query({
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
 			.order("desc")
 			.collect();
+	},
+});
+
+// --- Invoice PDF (UC B) ----------------------------------------------------
+// An invoice is a financial document, so its PDF is rendered + stored ONCE at
+// issue time (not regenerated on download): `billingConfig` bank details are a
+// mutable singleton and could otherwise drift from what the seller received.
+// generateInvoicePdf (internal action) does the render; the data prep + the
+// money/label mapping are the pure helpers in lib/pdf. See docs/invoices-receipts.md.
+
+/** Read-only inputs the PDF action needs, assembled inside the transaction. */
+export const pdfInputs = internalQuery({
+	args: { invoiceId: v.id("invoices") },
+	handler: async (
+		ctx,
+		{ invoiceId },
+	): Promise<{
+		alreadyRendered: boolean;
+		data: SubscriptionInvoiceData;
+	} | null> => {
+		const invoice = await ctx.db.get(invoiceId);
+		if (!invoice) return null;
+		const retailer = await ctx.db.get(invoice.retailerId);
+		if (!retailer) return null;
+		const billingConfig = await ctx.db.query("billingConfig").first();
+		return {
+			alreadyRendered: invoice.pdfStorageId !== undefined,
+			data: invoiceToSubscriptionData({
+				invoice,
+				retailer: {
+					storeName: retailer.storeName,
+					waPhone: retailer.waPhone,
+					slug: retailer.slug,
+				},
+				billingConfig,
+			}),
+		};
+	},
+});
+
+/** Stamp the rendered blob onto the invoice. Idempotency is enforced upstream
+ * (the action skips when one already exists), so this is a plain patch. */
+export const attachPdf = internalMutation({
+	args: { invoiceId: v.id("invoices"), storageId: v.id("_storage") },
+	handler: async (ctx, { invoiceId, storageId }): Promise<void> => {
+		await ctx.db.patch(invoiceId, { pdfStorageId: storageId });
+	},
+});
+
+/** Render + store an invoice's PDF. Scheduled from issueInvoice; safe to re-run
+ * (skips if a PDF already exists). Kept internal — callers reach the bytes via
+ * the ownership-checked getInvoicePdfUrl query. */
+export const generateInvoicePdf = internalAction({
+	args: { invoiceId: v.id("invoices") },
+	handler: async (ctx, { invoiceId }): Promise<void> => {
+		const inputs = await ctx.runQuery(internal.invoices.pdfInputs, { invoiceId });
+		if (!inputs || inputs.alreadyRendered) return;
+		const bytes = await buildSubscriptionInvoicePdf(inputs.data);
+		// Copy into a standalone ArrayBuffer so the Blob types line up across runtimes.
+		const buffer = bytes.buffer.slice(
+			bytes.byteOffset,
+			bytes.byteOffset + bytes.byteLength,
+		) as ArrayBuffer;
+		const storageId = await ctx.storage.store(
+			new Blob([buffer], { type: "application/pdf" }),
+		);
+		await ctx.runMutation(internal.invoices.attachPdf, { invoiceId, storageId });
+	},
+});
+
+/**
+ * Signed download URL for an invoice PDF. Authorized for the OWNING retailer or
+ * an admin (Kedaipal issues these). Returns null when the PDF hasn't been
+ * rendered yet (just-issued, or a legacy invoice from before this feature). New
+ * financial data exposed here stays behind this ownership gate.
+ */
+export const getInvoicePdfUrl = query({
+	args: { invoiceId: v.id("invoices") },
+	handler: async (ctx, { invoiceId }): Promise<string | null> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new ConvexError("Not authenticated");
+		const invoice = await ctx.db.get(invoiceId);
+		if (!invoice) return null;
+		const retailer = await ctx.db.get(invoice.retailerId);
+		const ownsIt = retailer?.userId === identity.subject;
+		if (!ownsIt && !(await isAdmin(ctx))) throw new ConvexError("Forbidden");
+		if (!invoice.pdfStorageId) return null;
+		return ctx.storage.getUrl(invoice.pdfStorageId);
+	},
+});
+
+/**
+ * Download entry point used by the UI: returns a signed PDF URL, **rendering the
+ * PDF on demand if it's missing** (legacy invoices issued before this feature,
+ * or a just-issued one whose async render hasn't landed). Ownership is enforced
+ * by `getInvoicePdfUrl` BEFORE any generation, so a non-owner can't trigger a
+ * render for an invoice they don't own. Idempotent.
+ */
+export const getOrCreateInvoicePdfUrl = action({
+	args: { invoiceId: v.id("invoices") },
+	handler: async (ctx, { invoiceId }): Promise<string | null> => {
+		// Authorize + fast-path: throws Forbidden for non-owners; returns the URL
+		// when already rendered.
+		const existing = await ctx.runQuery(api.invoices.getInvoicePdfUrl, {
+			invoiceId,
+		});
+		if (existing) return existing;
+		// Authorized but not yet rendered → generate, then resolve the URL.
+		await ctx.runAction(internal.invoices.generateInvoicePdf, { invoiceId });
+		return ctx.runQuery(api.invoices.getInvoicePdfUrl, { invoiceId });
 	},
 });

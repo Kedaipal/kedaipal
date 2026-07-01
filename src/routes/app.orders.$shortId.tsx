@@ -34,11 +34,13 @@ import {
 	PageHeader,
 	PageHeaderSkeleton,
 } from "../components/dashboard/page-header";
+import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import {
 	DeliveryAddressDisplay,
 	formatAddressInline,
 } from "../components/storefront/delivery-address-display";
 import { Button } from "../components/ui/button";
+import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import {
 	Dialog,
 	DialogContent,
@@ -254,6 +256,7 @@ function OrderDetailRoute() {
 	const [savingCarrier, setSavingCarrier] = useState(false);
 	const [confirmingPayment, setConfirmingPayment] = useState(false);
 	const [confirmPaymentOpen, setConfirmPaymentOpen] = useState(false);
+	const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
 	// Optional method tag captured at confirm time (the seller has just verified
 	// the channel). Undefined = leave online/unknown. See lib/paymentMethod.ts.
 	const [paymentMethodChoice, setPaymentMethodChoice] = useState<
@@ -324,6 +327,9 @@ function OrderDetailRoute() {
 			await updateStatus({ orderId: order._id, status: "cancelled" });
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
+			// Rethrow so the confirm dialog stays open for a retry; the toast above
+			// is the user-facing message (ConfirmDialog swallows this).
+			throw err;
 		} finally {
 			setPending(null);
 		}
@@ -383,6 +389,12 @@ function OrderDetailRoute() {
 					timeStyle: "short",
 				})}
 				back={{ to: "/app/orders", label: "Orders" }}
+				actions={
+					<ReceiptDownloadButton
+						shortId={order.shortId}
+						label="Download receipt"
+					/>
+				}
 			/>
 			{/* Back nav (mobile only) */}
 			<Link
@@ -421,6 +433,12 @@ function OrderDetailRoute() {
 						{paymentBadgeCfg.icon}
 						{paymentBadgeCfg.label}
 					</span>
+					{/* Receipt on mobile (desktop has it in the PageHeader actions). */}
+					<ReceiptDownloadButton
+						shortId={order.shortId}
+						label="Receipt"
+						className="mt-1 lg:hidden"
+					/>
 				</div>
 			</div>
 
@@ -541,7 +559,11 @@ function OrderDetailRoute() {
 						</Button>
 						{askForProofUrl ? (
 							<Button asChild variant="secondary" className="h-11 w-full">
-								<a href={askForProofUrl} target="_blank" rel="noopener noreferrer">
+								<a
+									href={askForProofUrl}
+									target="_blank"
+									rel="noopener noreferrer"
+								>
 									<MessageCircle className="size-4" />
 									Ask for proof on WhatsApp
 								</a>
@@ -981,7 +1003,7 @@ function OrderDetailRoute() {
 								})()
 							: null}
 						<Button
-							onClick={handleCancel}
+							onClick={() => setConfirmCancelOpen(true)}
 							disabled={pending !== null}
 							variant="secondary"
 							className="h-11 w-full"
@@ -991,6 +1013,17 @@ function OrderDetailRoute() {
 					</div>
 				</section>
 			) : null}
+
+			<ConfirmDialog
+				open={confirmCancelOpen}
+				onOpenChange={setConfirmCancelOpen}
+				title={`Cancel order #${order.shortId}?`}
+				description="The customer is notified over WhatsApp, stock is restored, and this can't be undone."
+				confirmLabel="Cancel order"
+				cancelLabel="Keep order"
+				destructive
+				onConfirm={handleCancel}
+			/>
 
 			<Dialog
 				open={confirmPaymentOpen}

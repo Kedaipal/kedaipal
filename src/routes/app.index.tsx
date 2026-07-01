@@ -1,9 +1,10 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import {
 	ArrowRight,
 	Building2,
 	CheckCircle2,
+	ChevronDown,
 	Clock,
 	CreditCard,
 	type LucideIcon,
@@ -14,21 +15,25 @@ import {
 	Phone,
 	QrCode,
 	Share2,
+	Sparkles,
 	Store,
 	Users,
 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { api } from "../../convex/_generated/api";
+import { FirstOrderCelebration } from "../components/dashboard/first-order-celebration";
 import { GreetingChecklistRow } from "../components/dashboard/greeting-checklist-row";
 import {
 	PageHeader,
 	PageHeaderSkeleton,
 } from "../components/dashboard/page-header";
+import { ShareLinkChecklistRow } from "../components/dashboard/share-link-checklist-row";
 import { StorefrontQrDialog } from "../components/dashboard/storefront-qr-dialog";
 import { WhiteGloveCard } from "../components/dashboard/white-glove-card";
 import { ShopeeIcon } from "../components/icons/shopee-icon";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
+import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { formatPrice } from "../lib/format";
 import {
 	type DeliveryMethod,
@@ -39,10 +44,18 @@ import {
 	type StatusLabels,
 	stageLabel,
 } from "../lib/orderStatus";
+import { hasSubscribed, trialDaysLeft } from "../lib/subscription";
 
 export const Route = createFileRoute("/app/")({
 	component: DashboardHome,
 });
+
+/**
+ * How long the first-order celebration stays on the dashboard after activation.
+ * A transient "you're live!" moment that self-clears — no stored dismissal state
+ * needed (we just compare against `retailer.activatedAt`).
+ */
+const ACTIVATION_CELEBRATION_MS = 7 * 24 * 60 * 60 * 1000;
 
 function DashboardSkeleton() {
 	return (
@@ -109,7 +122,7 @@ function DashboardSkeleton() {
 }
 
 function DashboardHome() {
-	const retailer = useQuery(api.retailers.getMyRetailer);
+	const retailer = useDashboardRetailer();
 	const products = useQuery(
 		api.products.listAll,
 		retailer ? { retailerId: retailer._id } : "skip",
@@ -137,6 +150,10 @@ function DashboardHome() {
 	);
 	const [copied, setCopied] = useState(false);
 	const [qrOpen, setQrOpen] = useState(false);
+	// Which "Optional extras" row is expanded (accordion — one at a time, all
+	// collapsed by default so the optional group stays compact).
+	const [openOptional, setOpenOptional] = useState<string | null>(null);
+	const markLinkShared = useMutation(api.retailers.markLinkShared);
 
 	if (!retailer) return <DashboardSkeleton />;
 
@@ -144,21 +161,37 @@ function DashboardHome() {
 	const countsLoading = orderCounts === undefined;
 	const recentOrdersLoading = recentOrdersPage === undefined;
 
-	// `products` determines `isNew` / `allDone`, which switches the entire layout
-	// (welcome banner vs. hero vs. checklist visibility). Hold the skeleton until
+	// `products` determines `isNew` / `requiredDone`, which switches the entire
+	// layout (welcome banner vs. hero vs. checklist phase). Hold the skeleton until
 	// it resolves to avoid a jarring flip after first paint.
 	if (productsLoading) return <DashboardSkeleton />;
 
 	const storefrontUrl = `${typeof window !== "undefined" ? window.location.origin : "https://kedaipal.com"}/${retailer.slug}`;
+
+	// Copying the link or opening the QR — from anywhere on the dashboard (hero,
+	// activation banner, or the checklist share step) — is the soft "shared" proxy
+	// that stamps `linkSharedAt` and completes the share step. Fire-and-forget so a
+	// failed stamp never blocks the action; idempotent server-side.
+	function stampShare() {
+		void markLinkShared({}).catch(() => {
+			// ignore — the seller still copied / saw the QR
+		});
+	}
 
 	async function copy() {
 		try {
 			await navigator.clipboard.writeText(storefrontUrl);
 			setCopied(true);
 			setTimeout(() => setCopied(false), 1800);
+			stampShare();
 		} catch {
 			// ignore
 		}
+	}
+
+	function openQr() {
+		stampShare();
+		setQrOpen(true);
 	}
 
 	const hasWaPhone = Boolean(retailer.waPhone?.trim());
@@ -166,6 +199,22 @@ function DashboardHome() {
 	const activeProductCount = products?.filter((p) => p.active).length ?? 0;
 	const hasProduct = productCount > 0;
 	const hasPayment = (retailer.paymentMethods?.length ?? 0) > 0;
+	// Activation funnel. `activated` (first confirmed order) is the real finish
+	// line; `linkShared` is the soft "shared their link" proxy. Once activated, the
+	// share step counts as done regardless of the proxy.
+	const activatedAt = retailer.activatedAt;
+	const activated = Boolean(activatedAt);
+	const linkShared = Boolean(retailer.linkSharedAt);
+
+	// Onboarding "complete" gate: the vendor has converted from the 14-day trial
+	// to a paid plan (subscribe step). Derived from the embedded subscription —
+	// no separate stamp needed. Trial vendors stay `trialing` until first payment.
+	const subscription = retailer.subscription;
+	const subscribed = hasSubscribed(subscription);
+	const trialLeft =
+		subscription?.status === "trialing"
+			? trialDaysLeft(subscription.trialEndsAt, Date.now())
+			: null;
 
 	// Hero stat tiles share the seller's status vocabulary. Dashboard chrome is
 	// EN-only, so resolve in EN; pending/confirmed don't vary by fulfilment mode
@@ -216,11 +265,13 @@ function DashboardHome() {
 			key: "product",
 			done: hasProduct,
 			icon: Package,
-			title: "Add your first product",
-			why: "Your storefront is empty until you add at least one item. Add a name, price, and photo — it goes live instantly.",
-			time: "~3 min",
-			cta: "Add a product",
-			to: "/app/products/new",
+			title: "Add your products",
+			why: "Selling 20+ items? Import your whole catalogue from a spreadsheet in one go — no typing them in one by one. Or add a single product to start.",
+			time: "~5 min",
+			cta: "Import products",
+			to: "/app/products/import",
+			secondaryCta: "Add one product",
+			secondaryTo: "/app/products/new",
 		},
 		{
 			key: "payment",
@@ -232,6 +283,17 @@ function DashboardHome() {
 			cta: "Go to Settings",
 			to: "/app/settings",
 			tab: "payments",
+		},
+		{
+			key: "share",
+			done: linkShared || activated,
+			icon: Share2,
+			title: "Share your store link",
+			why: "Setup is only half the job — orders start when customers can reach your store. Copy your link (or grab the QR) and put it where buyers already see you.",
+			time: "~1 min",
+			// Interactive row (copy / QR) — handled by ShareLinkChecklistRow, not a link.
+			cta: "",
+			to: "",
 		},
 		{
 			key: "greeting",
@@ -256,20 +318,97 @@ function DashboardHome() {
 			tab: "fulfilment" as const,
 			optional: true,
 		},
+		{
+			// The capstone: onboarding isn't "complete" until the trial vendor
+			// converts to a paid plan. `subscribed` reads off the embedded
+			// subscription (trialing → not yet; comped pilots already count).
+			key: "subscribe",
+			done: subscribed,
+			icon: Sparkles,
+			title: "Subscribe to a plan",
+			why:
+				trialLeft !== null
+					? `You're on a free 14-day trial — ${trialLeft} day${trialLeft === 1 ? "" : "s"} left. Subscribe to a plan to keep your store live and accepting orders after the trial ends.`
+					: "Subscribe to a plan to keep your store live and accepting orders — pick Starter, Pro, or Scale.",
+			time: "~2 min",
+			cta: "Choose your plan",
+			to: "/app/settings",
+			tab: "billing",
+		},
 	];
 
-	const checklist: ChecklistItem[] = checklistItems.map((item, i) => ({
-		...item,
-		step: i + 1,
-	}));
+	// Required steps drive the must-do path + progress; they're numbered 1..N.
+	// Optional steps (greeting, fulfilment) sit in a lighter "Optional extras"
+	// group below — never numbered, never block completion.
+	const requiredSteps: ChecklistItem[] = checklistItems
+		.filter((item) => !item.optional)
+		.map((item, i) => ({ ...item, step: i + 1 }));
+	const optionalSteps: ChecklistItem[] = checklistItems
+		.filter((item) => item.optional)
+		.map((item) => ({ ...item, step: 0 }));
 
-	const completedCount = checklist.filter((c) => c.done).length;
-	const allDone = completedCount === checklist.length;
+	const completedCount = requiredSteps.filter((c) => c.done).length;
 	const isNew = completedCount === 0;
+
+	// Onboarding is "complete" only when every REQUIRED step is done — and the
+	// final required step is "Subscribe to a plan", so the checklist stays up
+	// (even after setup + first order) until the trial vendor converts to paid.
+	const requiredDone = requiredSteps.every((c) => c.done);
+	// First-order milestone (`activatedAt`) is a SEPARATE, transient overlay — it
+	// celebrates activation for a window regardless of subscription state, so a
+	// vendor who lands order #1 mid-trial gets the moment while still being nudged
+	// to subscribe below.
+	const showCelebration =
+		activatedAt !== undefined &&
+		Date.now() - activatedAt < ACTIVATION_CELEBRATION_MS;
 
 	const pendingCount = orderCounts?.pending ?? 0;
 	const confirmedCount = orderCounts?.confirmed ?? 0;
 	const recentOrders = recentOrdersPage?.page ?? [];
+
+	// Map a checklist item to its row variant — the "share" and "greeting" steps
+	// are interactive self-contained cards, the rest are links. `onToggle` (only
+	// passed for the optional group) makes a collapsed row expand on tap instead
+	// of auto-expanding the active one.
+	const renderChecklistRow = (
+		item: ChecklistItem,
+		expanded: boolean,
+		onToggle?: () => void,
+	) => {
+		if (item.key === "greeting") {
+			return (
+				<GreetingChecklistRow
+					key={item.key}
+					item={item}
+					expanded={expanded}
+					onToggle={onToggle}
+					storeName={retailer.storeName}
+					slug={retailer.slug}
+					locale={retailer.locale}
+				/>
+			);
+		}
+		if (item.key === "share") {
+			return (
+				<ShareLinkChecklistRow
+					key={item.key}
+					item={item}
+					expanded={expanded}
+					storefrontUrl={storefrontUrl}
+					slug={retailer.slug}
+					onOpenQr={() => setQrOpen(true)}
+				/>
+			);
+		}
+		return (
+			<ChecklistRow
+				key={item.key}
+				item={item}
+				expanded={expanded}
+				onToggle={onToggle}
+			/>
+		);
+	};
 
 	return (
 		<div className="flex flex-col gap-6 lg:gap-8">
@@ -297,7 +436,7 @@ function DashboardHome() {
 							Welcome to Kedaipal 👋
 						</p>
 						<h2 className="text-2xl font-bold leading-snug">
-							Let's get your store ready in 3 steps
+							Let's get your store ready
 						</h2>
 						<p className="text-sm text-muted-foreground">
 							Your storefront is live at{" "}
@@ -337,7 +476,11 @@ function DashboardHome() {
 						</p>
 						<div className="mt-2 flex gap-2">
 							<Button asChild className="h-11 flex-1">
-								<a href={`/${retailer.slug}`} target="_blank" rel="noopener noreferrer">
+								<a
+									href={`/${retailer.slug}`}
+									target="_blank"
+									rel="noopener noreferrer"
+								>
 									Open store
 								</a>
 							</Button>
@@ -347,7 +490,7 @@ function DashboardHome() {
 							<Button
 								variant="outline"
 								className="h-11 w-11 shrink-0 p-0"
-								onClick={() => setQrOpen(true)}
+								onClick={openQr}
 								aria-label="Show QR code"
 							>
 								<QrCode className="size-5" />
@@ -392,15 +535,25 @@ function DashboardHome() {
 				</section>
 			) : null}
 
-			{/* Setup checklist */}
-			{!allDone ? (
+			{/* First-order milestone — a transient overlay, independent of the
+			    checklist (a vendor can land order #1 while still mid-trial). */}
+			{showCelebration ? (
+				<FirstOrderCelebration
+					slug={retailer.slug}
+					storeName={retailer.storeName}
+				/>
+			) : null}
+
+			{/* Setup checklist — stays until every required step (incl. "Subscribe
+			    to a plan") is done, i.e. onboarding is complete. */}
+			{!requiredDone ? (
 				<section className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-5">
 					<div className="flex items-center justify-between">
 						<h3 className="font-semibold">
 							{isNew ? "Complete your setup" : "Finish setting up"}
 						</h3>
 						<span className="text-xs text-muted-foreground">
-							{completedCount}/{checklist.length} done
+							{completedCount}/{requiredSteps.length} done
 						</span>
 					</div>
 					<div
@@ -409,27 +562,43 @@ function DashboardHome() {
 					>
 						<div
 							className="h-full bg-accent transition-all duration-500"
-							style={{ width: `${(completedCount / checklist.length) * 100}%` }}
+							style={{
+								width: `${(completedCount / requiredSteps.length) * 100}%`,
+							}}
 						/>
 					</div>
+					{/* Required path — numbered, with the active step auto-expanded. */}
 					<ul className="flex flex-col gap-3">
-						{checklist.map((item, i) => {
-							const isNext =
-								!item.done && checklist.slice(0, i).every((c) => c.done);
-							return item.key === "greeting" ? (
-								<GreetingChecklistRow
-									key={item.key}
-									item={item}
-									expanded={isNext}
-									storeName={retailer.storeName}
-									slug={retailer.slug}
-									locale={retailer.locale}
-								/>
-							) : (
-								<ChecklistRow key={item.key} item={item} expanded={isNext} />
-							);
-						})}
+						{requiredSteps.map((item, i) =>
+							renderChecklistRow(
+								item,
+								!item.done && requiredSteps.slice(0, i).every((c) => c.done),
+							),
+						)}
 					</ul>
+
+					{/* Optional extras — lighter group, collapsed, tap-to-expand. */}
+					{optionalSteps.length > 0 ? (
+						<div className="flex flex-col gap-3 border-t border-border pt-4">
+							<div className="flex items-center justify-between">
+								<h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+									Optional extras
+								</h4>
+								<span className="text-[11px] text-muted-foreground">
+									Set up anytime
+								</span>
+							</div>
+							<ul className="flex flex-col gap-2">
+								{optionalSteps.map((item) =>
+									renderChecklistRow(item, openOptional === item.key, () =>
+										setOpenOptional((prev) =>
+											prev === item.key ? null : item.key,
+										),
+									),
+								)}
+							</ul>
+						</div>
+					) : null}
 				</section>
 			) : null}
 
@@ -591,6 +760,7 @@ type SettingsTab =
 	| "whatsapp"
 	| "payments"
 	| "fulfilment"
+	| "billing"
 	| "integrations";
 
 export type ChecklistItem = {
@@ -604,6 +774,12 @@ export type ChecklistItem = {
 	cta: string;
 	to: string;
 	tab?: SettingsTab;
+	/**
+	 * Optional secondary action shown beneath the primary CTA (e.g. "add one"
+	 * alongside the recommended bulk import). Only rendered in the expanded row.
+	 */
+	secondaryCta?: string;
+	secondaryTo?: string;
 	/** Renders an "Optional" pill so the seller knows they can skip. */
 	optional?: boolean;
 };
@@ -611,9 +787,13 @@ export type ChecklistItem = {
 function ChecklistRow({
 	item,
 	expanded,
+	onToggle,
 }: {
 	item: ChecklistItem;
 	expanded: boolean;
+	/** When provided (optional group), a collapsed row expands on tap instead of
+	 * navigating; the leading badge becomes a dot + a chevron is shown. */
+	onToggle?: () => void;
 }) {
 	const Icon = item.icon;
 
@@ -640,14 +820,15 @@ function ChecklistRow({
 					</div>
 					<div className="flex-1">
 						<div className="flex items-center gap-2">
-							<span className="text-[10px] font-bold uppercase tracking-wider text-accent">
-								Step {item.step}
-							</span>
 							{item.optional ? (
 								<span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
 									Optional
 								</span>
-							) : null}
+							) : (
+								<span className="text-[10px] font-bold uppercase tracking-wider text-accent">
+									Step {item.step}
+								</span>
+							)}
 							<span className="text-[10px] text-muted-foreground">
 								{item.time}
 							</span>
@@ -659,15 +840,45 @@ function ChecklistRow({
 					</div>
 				</div>
 				<Link to={item.to} search={item.tab ? { tab: item.tab } : undefined}>
-					<Button size="sm" className="h-10 w-full gap-2">
+					<Button size="sm" className="h-11 w-full gap-2">
 						{item.cta}
 						<ArrowRight className="size-3.5" />
 					</Button>
 				</Link>
+				{item.secondaryCta && item.secondaryTo ? (
+					<Link to={item.secondaryTo}>
+						<Button size="sm" variant="outline" className="h-11 w-full">
+							{item.secondaryCta}
+						</Button>
+					</Link>
+				) : null}
 			</li>
 		);
 	}
 
+	// Optional group: collapsed row is a tap-to-expand toggle (no number, chevron).
+	if (onToggle) {
+		return (
+			<li>
+				<button
+					type="button"
+					onClick={onToggle}
+					className="flex w-full items-center gap-3 rounded-xl border border-border bg-background px-4 py-3 text-left transition-colors hover:bg-accent/5"
+				>
+					<div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+						<Icon className="size-3" />
+					</div>
+					<div className="flex-1">
+						<p className="text-sm font-medium">{item.title}</p>
+						<p className="text-xs text-muted-foreground">{item.time}</p>
+					</div>
+					<ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+				</button>
+			</li>
+		);
+	}
+
+	// Required group: collapsed row navigates straight to its destination.
 	return (
 		<li>
 			<Link
@@ -680,14 +891,7 @@ function ChecklistRow({
 						{item.step}
 					</div>
 					<div className="flex-1">
-						<div className="flex items-center gap-2">
-							<p className="text-sm font-medium">{item.title}</p>
-							{item.optional ? (
-								<span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
-									Optional
-								</span>
-							) : null}
-						</div>
+						<p className="text-sm font-medium">{item.title}</p>
 						<p className="text-xs text-muted-foreground">{item.time}</p>
 					</div>
 					<ArrowRight className="size-4 shrink-0 text-muted-foreground" />

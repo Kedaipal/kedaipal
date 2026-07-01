@@ -192,7 +192,7 @@ export function ProductDetailSheet({
 			<Dialog.Portal>
 				<Dialog.Overlay className="fixed inset-0 z-40 bg-black/50 data-[state=open]:animate-in data-[state=open]:fade-in" />
 				<Dialog.Content
-					className="fixed inset-x-0 bottom-0 z-50 flex max-h-[90dvh] flex-col rounded-t-3xl border-t border-border bg-background shadow-xl data-[state=open]:animate-in data-[state=open]:slide-in-from-bottom"
+					className="fixed inset-x-0 bottom-0 z-50 flex max-h-[90dvh] flex-col rounded-t-3xl border-t border-border bg-background shadow-xl data-[state=open]:animate-in data-[state=open]:slide-in-from-bottom sm:bottom-auto sm:left-1/2 sm:right-auto sm:top-1/2 sm:w-[min(92vw,760px)] sm:max-h-[86dvh] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl sm:border"
 					aria-describedby={undefined}
 				>
 					<div className="flex items-center justify-between border-b border-border px-5 py-3">
@@ -210,28 +210,37 @@ export function ProductDetailSheet({
 						</Dialog.Close>
 					</div>
 
-					<div className="flex-1 overflow-y-auto px-5 py-4">
+					<div className="flex-1 overflow-y-auto px-5 py-4 sm:px-6">
 						{images.length > 0 ? (
-							<div className="-mx-5 mb-4 flex snap-x snap-mandatory gap-2 overflow-x-auto px-5">
+							<div className="-mx-5 mb-4 flex snap-x snap-mandatory gap-2 overflow-x-auto px-5 sm:mx-0 sm:grid sm:grid-cols-2 sm:gap-3 sm:overflow-visible sm:px-0">
 								{images.map((url) => (
 									<ZoomableImage
 										key={url}
 										src={url}
 										alt={product.name}
 										caption={product.name}
-										wrapperClassName="w-64 shrink-0 snap-start"
+										wrapperClassName="w-64 shrink-0 snap-start sm:w-full"
 										className="aspect-square w-full rounded-2xl object-cover"
 									/>
 								))}
 							</div>
 						) : (
-							<div className="mb-4 flex aspect-square w-full items-center justify-center rounded-2xl bg-muted text-sm text-muted-foreground">
-								No image
+							<div className="mb-4 flex aspect-[16/10] w-full flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-border bg-muted/50 px-6 text-center text-muted-foreground sm:aspect-[2.4/1]">
+								<span className="flex size-14 items-center justify-center rounded-2xl bg-background shadow-sm">
+									<ImagePlus className="size-6" />
+								</span>
+								<span className="text-sm font-medium">{product.name}</span>
 							</div>
 						)}
 
-						<h2 className="text-xl font-bold leading-tight">{product.name}</h2>
-						<p className="mt-1 text-2xl font-bold">{priceLabel}</p>
+						<div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+							<h2 className="text-xl font-bold leading-tight">
+								{product.name}
+							</h2>
+							<p className="shrink-0 text-2xl font-bold tabular-nums">
+								{priceLabel}
+							</p>
+						</div>
 
 						{/* Option pickers — one pill row per axis, in options order. */}
 						{hasOptions ? (
@@ -289,7 +298,7 @@ export function ProductDetailSheet({
 						    (its own button), not mutually exclusive with the variant pills.
 						    Shows once regardless of how many sizes/flavours exist. */}
 						{customLine ? (
-							<div className="mt-5 rounded-xl border border-border p-3">
+							<div className="mt-5 rounded-2xl border border-border bg-muted/30 p-3">
 								{hasOptions ? (
 									<p className="mb-2 text-xs font-medium text-muted-foreground">
 										Or order a custom one
@@ -305,8 +314,8 @@ export function ProductDetailSheet({
 											className="size-12 rounded-lg object-cover"
 										/>
 									) : (
-										<span className="flex size-12 shrink-0 items-center justify-center rounded-lg bg-muted text-lg">
-											🧑‍🍳
+										<span className="flex size-12 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground">
+											<ImagePlus className="size-5" />
 										</span>
 									)}
 									<span className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -421,46 +430,48 @@ export function ProductDetailSheet({
 						) : null}
 					</div>
 
-					<div className="border-t border-border bg-background px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
-						<div className="mb-3 flex items-center justify-center gap-3">
-							<button
+					<div className="border-t border-border bg-background px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-6">
+						<div className="grid gap-3 sm:grid-cols-[auto_1fr] sm:items-center">
+							<div className="flex items-center justify-center gap-3 sm:justify-start">
+								<button
+									type="button"
+									onClick={() => setQuantity((q) => Math.max(1, q - 1))}
+									disabled={quantity <= 1 || !sellable}
+									className="flex size-11 items-center justify-center rounded-full border border-border disabled:opacity-40"
+									aria-label="Decrease quantity"
+								>
+									<Minus className="size-4" />
+								</button>
+								<span className="min-w-10 text-center text-lg font-semibold">
+									{quantity}
+								</span>
+								<button
+									type="button"
+									onClick={() => setQuantity((q) => Math.min(maxQty, q + 1))}
+									disabled={quantity >= maxQty || !sellable}
+									className="flex size-11 items-center justify-center rounded-full border border-border disabled:opacity-40"
+									aria-label="Increase quantity"
+								>
+									<Plus className="size-4" />
+								</button>
+							</div>
+							<Button
 								type="button"
-								onClick={() => setQuantity((q) => Math.max(1, q - 1))}
-								disabled={quantity <= 1 || !sellable}
-								className="flex size-11 items-center justify-center rounded-full border border-border disabled:opacity-40"
-								aria-label="Decrease quantity"
+								disabled={!sellable}
+								onClick={() =>
+									selectedVariant && onAdd(product, selectedVariant, quantity)
+								}
+								className="h-12 w-full text-base"
 							>
-								<Minus className="size-4" />
-							</button>
-							<span className="min-w-10 text-center text-lg font-semibold">
-								{quantity}
-							</span>
-							<button
-								type="button"
-								onClick={() => setQuantity((q) => Math.min(maxQty, q + 1))}
-								disabled={quantity >= maxQty || !sellable}
-								className="flex size-11 items-center justify-center rounded-full border border-border disabled:opacity-40"
-								aria-label="Increase quantity"
-							>
-								<Plus className="size-4" />
-							</button>
+								{!selectedVariant
+									? hasOptions
+										? "Select options"
+										: "Unavailable"
+									: !sellable
+										? "Out of stock"
+										: "Add to cart"}
+							</Button>
 						</div>
-						<Button
-							type="button"
-							disabled={!sellable}
-							onClick={() =>
-								selectedVariant && onAdd(product, selectedVariant, quantity)
-							}
-							className="h-12 w-full text-base"
-						>
-							{!selectedVariant
-								? hasOptions
-									? "Select options"
-									: "Unavailable"
-								: !sellable
-									? "Out of stock"
-									: "Add to cart"}
-						</Button>
 					</div>
 				</Dialog.Content>
 			</Dialog.Portal>

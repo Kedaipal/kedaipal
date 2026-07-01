@@ -4,10 +4,12 @@ import {
 	Camera,
 	CheckCircle2,
 	Eye,
+	EyeOff,
 	Info,
 	Layers3,
 	PackageCheck,
 	Save,
+	Store,
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useState } from "react";
 import { api } from "../../../convex/_generated/api";
@@ -31,6 +33,9 @@ const MAX_IMAGES = 5;
 export interface ProductFormSubmitValues {
 	name: string;
 	description?: string;
+	// Storefront visibility. true = hidden from the public store (still sellable
+	// at the counter). See docs/hidden-products.md.
+	hidden: boolean;
 	imageStorageIds: string[];
 	options: { name: string; values: string[] }[];
 	variants: {
@@ -54,6 +59,7 @@ interface ProductFormProps {
 	initialValues?: {
 		name?: string;
 		description?: string;
+		hidden?: boolean;
 		// Deprecated product-level defaults — used only to seed per-variant flags
 		// for legacy products whose variants predate the per-variant columns.
 		blockWhenOutOfStock?: boolean;
@@ -225,6 +231,69 @@ function ProductReadiness({
 	);
 }
 
+/**
+ * Product-level storefront visibility. A first-class status (not a buried
+ * toggle) because it changes where the product appears. Hidden products stay
+ * fully sellable in counter checkout — surfaced in the helper so the behaviour
+ * is never a surprise. See docs/hidden-products.md.
+ */
+function VisibilityControl({
+	hidden,
+	onChange,
+}: {
+	hidden: boolean;
+	onChange: (hidden: boolean) => void;
+}) {
+	const options = [
+		{
+			value: false,
+			label: "Visible",
+			icon: <Store className="size-4" aria-hidden />,
+		},
+		{
+			value: true,
+			label: "Hidden",
+			icon: <EyeOff className="size-4" aria-hidden />,
+		},
+	];
+	return (
+		<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between lg:p-5">
+			<div className="min-w-0">
+				<p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+					Storefront
+				</p>
+				<h3 className="text-base font-semibold leading-tight">Visibility</h3>
+				<p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+					{hidden
+						? "Hidden from your public store. Still sellable in counter checkout."
+						: "Shown on your public store and sellable everywhere."}
+				</p>
+			</div>
+			<div className="flex shrink-0 gap-1 rounded-xl bg-muted p-1">
+				{options.map((opt) => {
+					const selected = opt.value === hidden;
+					return (
+						<button
+							key={opt.label}
+							type="button"
+							aria-pressed={selected}
+							onClick={() => onChange(opt.value)}
+							className={`flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm font-medium transition-colors ${
+								selected
+									? "bg-background text-foreground shadow-sm"
+									: "text-muted-foreground hover:text-foreground"
+							}`}
+						>
+							{opt.icon}
+							{opt.label}
+						</button>
+					);
+				})}
+			</div>
+		</section>
+	);
+}
+
 export function ProductForm({
 	initialValues,
 	currency,
@@ -242,6 +311,7 @@ export function ProductForm({
 	const [uploading, setUploading] = useState(false);
 	const [serverError, setServerError] = useState<string | null>(null);
 	const [showPreview, setShowPreview] = useState(false);
+	const [hidden, setHidden] = useState(initialValues?.hidden ?? false);
 	const [editor, setEditor] = useState<VariantEditorState>(() =>
 		initialEditorState(initialValues),
 	);
@@ -343,6 +413,7 @@ export function ProductForm({
 				await onSubmit({
 					name: parsed.name,
 					description: parsed.description,
+					hidden,
 					imageStorageIds: images.map((i) => i.id),
 					options: hasOptions
 						? editor.options.map((a) => ({
@@ -413,6 +484,8 @@ export function ProductForm({
 					/>
 				)}
 			</form.Subscribe>
+
+			<VisibilityControl hidden={hidden} onChange={setHidden} />
 
 			<ProductStepCard
 				icon={<PackageCheck className="size-5" />}

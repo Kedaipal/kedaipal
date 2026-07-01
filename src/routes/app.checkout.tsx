@@ -8,6 +8,8 @@ import {
 	ChevronDown,
 	ChevronRight,
 	Clock,
+	Download,
+	EyeOff,
 	Minus,
 	Plus,
 	QrCode,
@@ -33,6 +35,7 @@ import {
 	PAYMENT_METHOD_LABELS,
 } from "../../convex/lib/paymentMethod";
 import { Button } from "../components/ui/button";
+import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import {
 	Dialog,
 	DialogContent,
@@ -42,6 +45,10 @@ import {
 	DialogTitle,
 } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
+import {
+	useActAsRetailerId,
+	useDashboardRetailer,
+} from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import { cn } from "../lib/utils";
@@ -69,7 +76,8 @@ type CreatedOrder = {
 };
 
 function CounterCheckoutRoute() {
-	const retailer = useQuery(api.retailers.getMyRetailer);
+	const actAsRetailerId = useActAsRetailerId();
+	const retailer = useDashboardRetailer();
 	const { session: activeSessionId } = Route.useSearch();
 	const navigate = useNavigate({ from: Route.fullPath });
 	const [created, setCreated] = useState<CreatedOrder | null>(null);
@@ -89,7 +97,7 @@ function CounterCheckoutRoute() {
 
 	async function start() {
 		try {
-			const r = await createSession({});
+			const r = await createSession({ retailerId: actAsRetailerId });
 			openSession(r.sessionId);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -106,7 +114,7 @@ function CounterCheckoutRoute() {
 
 	return (
 		<div className="flex flex-col gap-6">
-			<header className="flex items-center justify-between gap-3 border-b border-border pb-4">
+			<header className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-card p-4 shadow-sm">
 				<div className="flex items-center gap-3">
 					<span className="flex size-10 items-center justify-center rounded-xl bg-accent/12 text-accent">
 						<QrCode className="size-5" />
@@ -124,10 +132,10 @@ function CounterCheckoutRoute() {
 					<button
 						type="button"
 						onClick={backToList}
-						className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground"
+						className="flex h-10 items-center gap-1.5 rounded-xl border border-border px-3 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
 					>
 						<ArrowLeft className="size-4" />
-						All checkouts
+						<span className="hidden sm:inline">All checkouts</span>
 					</button>
 				) : null}
 			</header>
@@ -256,20 +264,32 @@ function OpenCheckoutsList({
 	onResume: (id: string) => void;
 	onCancel: (id: string) => void;
 }) {
-	const sessions = useQuery(api.counterCheckout.listOpenSessions, {});
+	const actAsRetailerId = useActAsRetailerId();
+	const sessions = useQuery(api.counterCheckout.listOpenSessions, {
+		retailerId: actAsRetailerId,
+	});
+	// Hold the row pending cancellation so a single shared confirm covers the
+	// whole list — cancelling drops the open checkout and any items added to it.
+	const [pendingCancel, setPendingCancel] = useState<{
+		id: string;
+		label: string;
+	} | null>(null);
 
 	return (
 		<div className="flex flex-col gap-4">
-			<Button onClick={onStart} className="h-12 gap-2 text-base">
-				<Plus className="size-5" />
-				Start checkout
-			</Button>
-
-			<p className="text-xs text-muted-foreground">
-				Run several customers at once and come back to any of them. Unfinished
-				checkouts stay here for {OPEN_CHECKOUT_TTL_DAYS} days, then clear on
-				their own — or cancel one anytime.
-			</p>
+			<div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-center">
+				<div className="rounded-2xl border border-border bg-card p-4">
+					<p className="text-sm font-semibold">Walk-in order desk</p>
+					<p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+						Start a QR checkout for each customer, then resume any open checkout
+						when they reach the counter.
+					</p>
+				</div>
+				<Button onClick={onStart} className="h-12 gap-2 px-5 text-base">
+					<Plus className="size-5" />
+					Start checkout
+				</Button>
+			</div>
 
 			{sessions === undefined ? (
 				<p className="text-sm text-muted-foreground">Loading…</p>
@@ -277,21 +297,56 @@ function OpenCheckoutsList({
 				<EmptyCheckouts />
 			) : (
 				<div className="flex flex-col gap-2">
-					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-						Open checkouts ({sessions.length})
-					</p>
+					<div className="flex items-end justify-between gap-3">
+						<div>
+							<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+								Open checkouts
+							</p>
+							<p className="text-sm text-muted-foreground">
+								{sessions.length} active · clears after {OPEN_CHECKOUT_TTL_DAYS}{" "}
+								days
+							</p>
+						</div>
+					</div>
 					<ul className="flex flex-col gap-2">
 						{sessions.map((s) => (
 							<SessionRow
 								key={s.sessionId}
 								session={s}
 								onResume={() => onResume(s.sessionId)}
-								onCancel={() => onCancel(s.sessionId)}
+								onCancel={() =>
+									setPendingCancel({
+										id: s.sessionId,
+										label:
+											s.status === "awaiting_buyer"
+												? "this waiting checkout"
+												: (s.displayName ?? "this buyer's checkout"),
+									})
+								}
 							/>
 						))}
 					</ul>
 				</div>
 			)}
+
+			<ConfirmDialog
+				open={pendingCancel !== null}
+				onOpenChange={(o) => {
+					if (!o) setPendingCancel(null);
+				}}
+				title="Cancel this checkout?"
+				description={
+					pendingCancel
+						? `${pendingCancel.label} and any items added to it will be removed. This can't be undone.`
+						: undefined
+				}
+				confirmLabel="Cancel checkout"
+				cancelLabel="Keep it open"
+				destructive
+				onConfirm={() => {
+					if (pendingCancel) onCancel(pendingCancel.id);
+				}}
+			/>
 		</div>
 	);
 }
@@ -334,7 +389,7 @@ function SessionRow({
 	const awaiting = session.status === "awaiting_buyer";
 	const since = session.boundAt ?? session.createdAt;
 	return (
-		<li className="flex items-center gap-3 rounded-2xl border border-border bg-card p-3">
+		<li className="flex items-center gap-3 rounded-2xl border border-border bg-card p-3 shadow-sm transition-shadow hover:shadow-md">
 			<button
 				type="button"
 				onClick={onResume}
@@ -355,23 +410,40 @@ function SessionRow({
 					)}
 				</span>
 				<div className="min-w-0 flex-1">
-					<p className="truncate text-sm font-semibold">
-						{awaiting
-							? "Waiting for buyer to scan"
-							: (session.displayName ?? "Buyer connected")}
-					</p>
-					<p className="text-xs text-muted-foreground">
-						{awaiting ? (
-							"QR open — tap to show it"
-						) : (
-							<>
-								{session.itemCount > 0
+					<div className="flex min-w-0 flex-wrap items-center gap-2">
+						<p className="truncate text-sm font-semibold">
+							{awaiting
+								? "Waiting for buyer to scan"
+								: (session.displayName ?? "Buyer connected")}
+						</p>
+						<span
+							className={cn(
+								"rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+								awaiting
+									? "bg-muted text-muted-foreground"
+									: "bg-accent/12 text-accent",
+							)}
+						>
+							{awaiting ? "QR" : "Connected"}
+						</span>
+					</div>
+					<div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+						<span>
+							{awaiting
+								? "Tap to show QR"
+								: session.itemCount > 0
 									? `${session.itemCount} item${session.itemCount === 1 ? "" : "s"}`
 									: "No items yet"}
-								{session.isNewCustomer ? " · New" : ""} · {timeAgo(since)}
+						</span>
+						<span aria-hidden="true">·</span>
+						<span>{timeAgo(since)}</span>
+						{!awaiting && session.isNewCustomer ? (
+							<>
+								<span aria-hidden="true">·</span>
+								<span>New customer</span>
 							</>
-						)}
-					</p>
+						) : null}
+					</div>
 				</div>
 				<ChevronRight className="size-4 shrink-0 text-muted-foreground" />
 			</button>
@@ -426,19 +498,70 @@ function AwaitingScreen({
 	expiresAt: number;
 	onCancel: () => void;
 }) {
+	const qrRef = useRef<HTMLDivElement | null>(null);
+	const [confirmCancel, setConfirmCancel] = useState(false);
+
+	function downloadQr() {
+		const svg = qrRef.current?.querySelector("svg");
+		if (!svg) return;
+		const clone = svg.cloneNode(true) as SVGElement;
+		clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+		const blob = new Blob([new XMLSerializer().serializeToString(clone)], {
+			type: "image/svg+xml;charset=utf-8",
+		});
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement("a");
+		a.href = url;
+		a.download = `kedaipal-counter-qr-${token}.svg`;
+		a.click();
+		URL.revokeObjectURL(url);
+	}
+
 	return (
-		<div className="mx-auto flex w-full max-w-md flex-col items-center gap-5 rounded-2xl border border-border bg-card px-6 py-8 text-center">
-			<div className="flex flex-col items-center gap-1">
-				<h2 className="text-lg font-semibold">Ask the buyer to scan</h2>
-				<p className="text-sm text-muted-foreground">
-					They open WhatsApp's camera, scan, and hit send. This screen updates
-					the moment they do.
-				</p>
+		<div className="mx-auto grid w-full max-w-4xl gap-5 rounded-2xl border border-border bg-card p-5 shadow-sm lg:grid-cols-[1fr_auto] lg:items-center lg:p-6">
+			<div className="flex flex-col gap-4 text-center lg:text-left">
+				<div>
+					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+						Step 1
+					</p>
+					<h2 className="mt-1 text-2xl font-bold tracking-tight">
+						Ask the buyer to scan
+					</h2>
+					<p className="mt-2 text-sm text-muted-foreground">
+						They open WhatsApp's camera, scan, and hit send. This screen updates
+						the moment they do.
+					</p>
+				</div>
+
+				<div className="flex flex-col items-center gap-2 lg:items-start">
+					<div className="inline-flex items-center gap-2 rounded-full bg-accent/10 px-3 py-1.5 text-sm font-medium text-accent">
+						<span className="inline-flex size-2 animate-pulse rounded-full bg-accent" />
+						Waiting for buyer
+					</div>
+					<ExpiryCountdown expiresAt={expiresAt} />
+					<p className="font-mono text-[11px] text-muted-foreground">
+						KP-{token}
+					</p>
+				</div>
 			</div>
 
 			{waUrl ? (
-				<div className="rounded-2xl border border-border bg-white p-4">
-					<QRCode value={waUrl} size={220} />
+				<div className="mx-auto flex flex-col items-center gap-3">
+					<div
+						ref={qrRef}
+						className="rounded-2xl border border-border bg-white p-4 shadow-sm"
+					>
+						<QRCode value={waUrl} size={220} />
+					</div>
+					<Button
+						type="button"
+						variant="outline"
+						onClick={downloadQr}
+						className="h-10 gap-2"
+					>
+						<Download className="size-4" />
+						Download QR
+					</Button>
 				</div>
 			) : (
 				<div className="rounded-xl bg-destructive/10 px-4 py-3 text-sm text-destructive">
@@ -447,21 +570,24 @@ function AwaitingScreen({
 				</div>
 			)}
 
-			<div className="flex items-center gap-2">
-				<span className="inline-flex size-2 animate-pulse rounded-full bg-accent" />
-				<span className="text-sm font-medium">Waiting for buyer…</span>
-			</div>
-			<ExpiryCountdown expiresAt={expiresAt} />
-
-			<p className="font-mono text-[11px] text-muted-foreground">KP-{token}</p>
-
 			<button
 				type="button"
-				onClick={onCancel}
-				className="text-sm font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+				onClick={() => setConfirmCancel(true)}
+				className="text-sm font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline lg:col-span-2 lg:justify-self-start"
 			>
-				Cancel
+				Cancel checkout
 			</button>
+
+			<ConfirmDialog
+				open={confirmCancel}
+				onOpenChange={setConfirmCancel}
+				title="Cancel this checkout?"
+				description="The QR stops working and this checkout is removed. The buyer won't be able to connect to it anymore. This can't be undone."
+				confirmLabel="Cancel checkout"
+				cancelLabel="Keep it open"
+				destructive
+				onConfirm={onCancel}
+			/>
 		</div>
 	);
 }
@@ -536,40 +662,47 @@ function DoneScreen({
 	}
 
 	return (
-		<div className="mx-auto flex w-full max-w-md flex-col items-center gap-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-6 py-10 text-center">
-			<CheckCircle2 className="size-12 text-emerald-600" />
-			<div>
-				<h2 className="text-lg font-semibold text-emerald-900">
-					{completed ? "Order completed" : "Order created"}
-				</h2>
-				<p className="mt-1 text-sm text-emerald-800">
-					{shortId ? (
-						<>
-							Order <span className="font-mono font-semibold">{shortId}</span>{" "}
-							{completed
-								? "is marked completed."
-								: "is confirmed and a WhatsApp confirmation was sent to the buyer."}
-						</>
-					) : completed ? (
-						"The order is marked completed."
-					) : (
-						"The order is confirmed and the buyer has been notified on WhatsApp."
-					)}
-				</p>
+		<div className="mx-auto flex w-full max-w-2xl flex-col gap-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-5 shadow-sm sm:p-6">
+			<div className="flex items-start gap-4">
+				<span className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-600 text-white">
+					<CheckCircle2 className="size-7" />
+				</span>
+				<div className="min-w-0">
+					<p className="text-xs font-semibold uppercase tracking-widest text-emerald-700">
+						Checkout saved
+					</p>
+					<h2 className="mt-1 text-2xl font-bold text-emerald-950">
+						{completed ? "Order completed" : "Order created"}
+					</h2>
+					<p className="mt-1 text-sm text-emerald-800">
+						{shortId ? (
+							<>
+								Order <span className="font-mono font-semibold">{shortId}</span>{" "}
+								{completed
+									? "is marked completed."
+									: "is confirmed and a WhatsApp confirmation was sent to the buyer."}
+							</>
+						) : completed ? (
+							"The order is marked completed."
+						) : (
+							"The order is confirmed and the buyer has been notified on WhatsApp."
+						)}
+					</p>
+				</div>
 			</div>
-			<div className="flex w-full flex-col gap-2">
+			<div className="grid gap-2 sm:grid-cols-2">
 				{canComplete ? (
 					<Button
 						onClick={markCompleted}
 						isLoading={completing}
 						disabled={completing}
-						className="h-11 bg-emerald-600 text-white hover:bg-emerald-700"
+						className="h-11 bg-emerald-600 text-white hover:bg-emerald-700 sm:col-span-2"
 					>
 						{completing ? "Completing…" : "Mark as completed"}
 					</Button>
 				) : null}
 				{completed ? (
-					<p className="inline-flex items-center justify-center gap-1.5 text-sm font-medium text-emerald-700">
+					<p className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-white/70 px-3 py-2 text-sm font-medium text-emerald-700 sm:col-span-2">
 						<CheckCircle2 className="size-4" />
 						Marked completed
 					</p>
@@ -582,25 +715,20 @@ function DoneScreen({
 					New checkout
 				</Button>
 				{shortId ? (
-					<Link
-						to="/app/orders/$shortId"
-						params={{ shortId }}
-						className="text-sm font-medium text-emerald-800 underline-offset-2 hover:underline"
-					>
-						View order
-					</Link>
+					<Button asChild variant="outline" className="h-11">
+						<Link to="/app/orders/$shortId" params={{ shortId }}>
+							View order
+						</Link>
+					</Button>
 				) : orderId ? (
-					<Link
-						to="/app/orders"
-						className="text-sm font-medium text-emerald-800 underline-offset-2 hover:underline"
-					>
-						Go to orders
-					</Link>
+					<Button asChild variant="outline" className="h-11">
+						<Link to="/app/orders">Go to orders</Link>
+					</Button>
 				) : null}
 				<button
 					type="button"
 					onClick={onBackToList}
-					className="text-sm font-medium text-emerald-800/80 underline-offset-2 hover:underline"
+					className="text-sm font-medium text-emerald-800/80 underline-offset-2 hover:underline sm:col-span-2"
 				>
 					Back to all checkouts
 				</button>
@@ -673,7 +801,10 @@ function BuildOrderScreen({
 		paidInPerson: boolean;
 	}) => void;
 }) {
-	const products = useQuery(api.products.list, { retailerId });
+	// Counter uses listForCounter (not the public list) so hidden, counter-only
+	// SKUs — e.g. a pre-priced event product — are ringable in person while
+	// staying off the storefront. See docs/hidden-products.md.
+	const products = useQuery(api.products.listForCounter, { retailerId });
 	const createOrder = useMutation(api.counterCheckout.createOrderFromSession);
 	const saveDraft = useMutation(api.counterCheckout.saveSessionDraft);
 	const [query, setQuery] = useState("");
@@ -708,6 +839,10 @@ function BuildOrderScreen({
 	}, []);
 	const [fulfilmentDate, setFulfilmentDate] = useState(
 		draft?.fulfilmentDate != null ? ymdFromEpoch(draft.fulfilmentDate) : minYmd,
+	);
+	const [dateOpen, setDateOpen] = useState(
+		draft?.fulfilmentDate != null &&
+			ymdFromEpoch(draft.fulfilmentDate) !== minYmd,
 	);
 
 	// One-time cart hydration from the draft, once the catalog is available to
@@ -865,21 +1000,40 @@ function BuildOrderScreen({
 		}
 	}
 
+	const totalItems = cartEntries.reduce((s, [, l]) => s + l.qty, 0);
+	const collectionEpoch = mytMidnightFromYmd(fulfilmentDate);
+	const collectionLabel =
+		Number.isNaN(collectionEpoch) || fulfilmentDate === minYmd
+			? "Today / now"
+			: formatFulfilmentDate(collectionEpoch);
+
 	return (
-		<div className="grid gap-6 lg:grid-cols-[1fr_360px]">
+		<div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px]">
 			{/* Catalog */}
 			<div className="flex flex-col gap-4">
 				<BuyerCard buyer={buyer} currency={currency} />
 
-				<div className="relative">
-					<Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-					<Input
-						value={query}
-						onChange={(e) => setQuery(e.target.value)}
-						placeholder="Search products or variants…"
-						variant="field"
-						className="h-12 pl-9"
-					/>
+				<div className="rounded-2xl border border-border bg-card p-3 shadow-sm">
+					<div className="mb-3 flex items-center justify-between gap-3 px-1">
+						<div>
+							<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+								Catalog
+							</p>
+							<p className="text-sm text-muted-foreground">
+								Add products to this counter order.
+							</p>
+						</div>
+					</div>
+					<div className="relative">
+						<Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+						<Input
+							value={query}
+							onChange={(e) => setQuery(e.target.value)}
+							placeholder="Search products or variants…"
+							variant="field"
+							className="h-12 pl-9"
+						/>
+					</div>
 				</div>
 
 				<div className="flex flex-col gap-3">
@@ -915,15 +1069,25 @@ function BuildOrderScreen({
 							return (
 								<div
 									key={p._id}
-									className="rounded-2xl border border-border bg-card"
+									className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm"
 								>
 									<button
 										type="button"
 										onClick={() => toggleExpanded(p._id)}
-										className="flex w-full items-center justify-between gap-3 p-3 text-left"
+										className="flex w-full items-center justify-between gap-3 p-3 text-left hover:bg-muted/40"
 									>
 										<div className="min-w-0">
-											<p className="truncate text-sm font-semibold">{p.name}</p>
+											<p className="flex items-center gap-1.5 text-sm font-semibold">
+												<span className="truncate">{p.name}</span>
+												{/* Counter-only SKU — confirms at a glance this item is
+												    off the storefront. See docs/hidden-products.md. */}
+												{p.hidden ? (
+													<span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+														<EyeOff className="size-3" aria-hidden />
+														Hidden
+													</span>
+												) : null}
+											</p>
 											<p className="text-xs text-muted-foreground">
 												{p.variants.length} option
 												{p.variants.length === 1 ? "" : "s"} · {priceLabel}
@@ -944,7 +1108,7 @@ function BuildOrderScreen({
 										</div>
 									</button>
 									{open ? (
-										<div className="flex flex-col divide-y divide-border border-t border-border px-3 pb-1">
+										<div className="flex flex-col divide-y divide-border border-t border-border bg-muted/20 px-3 pb-1">
 											{p.variants.map((vr) => {
 												const isCustom = vr.isCustom === true;
 												const label = isCustom
@@ -986,7 +1150,7 @@ function BuildOrderScreen({
 													return (
 														<div
 															key={vr._id}
-															className="flex flex-col gap-2 py-2"
+															className="flex flex-col gap-2 py-3"
 														>
 															<div className="flex items-center justify-between gap-3">
 																<div className="min-w-0">
@@ -1057,7 +1221,7 @@ function BuildOrderScreen({
 												return (
 													<div
 														key={vr._id}
-														className="flex items-center justify-between gap-3 py-2"
+														className="flex items-center justify-between gap-3 py-3"
 													>
 														<div className="min-w-0">
 															<p className="truncate text-sm">
@@ -1109,125 +1273,202 @@ function BuildOrderScreen({
 			</div>
 
 			{/* Cart / checkout */}
-			<div className="flex flex-col gap-4 lg:sticky lg:top-6 lg:self-start">
-				<div className="rounded-2xl border border-border bg-card p-4">
-					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-						Order
-					</p>
-					{cartEntries.length === 0 ? (
-						<p className="mt-3 text-sm text-muted-foreground">
-							Tap products to add them.
-						</p>
-					) : (
-						<ul className="mt-3 flex flex-col divide-y divide-border">
-							{cartEntries.map(([variantId, l]) => (
-								<li
-									key={variantId}
-									className="flex items-center justify-between gap-3 py-2.5"
-								>
-									<div className="min-w-0">
-										<p className="truncate text-sm font-medium">
-											{l.name}
-											{l.label ? (
-												<span className="ml-1 font-normal text-muted-foreground">
-													{l.label}
-												</span>
-											) : null}
-										</p>
-										<p className="text-xs text-muted-foreground">
-											{l.qty} × {formatPrice(l.price, currency)}
-										</p>
-									</div>
-									<div className="flex items-center gap-2">
-										<span className="text-sm font-semibold tabular-nums">
-											{formatPrice(l.price * l.qty, currency)}
-										</span>
-										<button
-											type="button"
-											onClick={() => setQty(variantId, l, 0)}
-											aria-label="Remove"
-											className="text-muted-foreground hover:text-destructive"
-										>
-											<X className="size-4" />
-										</button>
-									</div>
-								</li>
-							))}
-						</ul>
-					)}
-					<div className="mt-3 flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2.5 text-sm font-bold">
-						<span>Total</span>
-						<span className="tabular-nums">{formatPrice(total, currency)}</span>
-					</div>
-				</div>
-
-				{/* Collection date */}
-				<div className="rounded-2xl border border-border bg-card p-4">
-					<label
-						htmlFor="counter-fulfilment-date"
-						className="text-xs font-semibold uppercase tracking-widest text-muted-foreground"
-					>
-						Collection date
-					</label>
-					<input
-						id="counter-fulfilment-date"
-						type="date"
-						value={fulfilmentDate}
-						min={minYmd}
-						max={maxYmd}
-						onChange={(e) => setFulfilmentDate(e.target.value)}
-						className="mt-3 h-11 w-full rounded-xl border border-input bg-transparent px-4 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-					/>
-					<p className="mt-2 text-xs text-muted-foreground">
-						When the buyer collects. Defaults to today — change it for a
-						pre-order.
-					</p>
-				</div>
-
-				{/* Payment */}
-				<div className="rounded-2xl border border-border bg-card p-4">
-					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-						Payment
-					</p>
-					<div className="mt-3 grid grid-cols-2 gap-2">
-						<PayToggle
-							active={paidInPerson}
-							onClick={() => setPaidInPerson(true)}
-							icon={<Banknote className="size-4" />}
-							label="Paid now"
-						/>
-						<PayToggle
-							active={!paidInPerson}
-							onClick={() => setPaidInPerson(false)}
-							icon={<Clock className="size-4" />}
-							label="Pay later"
-						/>
-					</div>
-					{paidInPerson ? (
-						<div className="mt-2 grid grid-cols-3 gap-2">
-							{ORDER_PAYMENT_METHODS.map((m) => (
-								<MethodToggle
-									key={m}
-									active={method === m}
-									onClick={() => setMethod(m)}
-									label={PAYMENT_METHOD_LABELS[m]}
-								/>
-							))}
+			<div className="lg:sticky lg:top-6 lg:self-start">
+				<div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+					<div className="border-b border-border p-4">
+						<div className="flex items-start justify-between gap-3">
+							<div>
+								<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+									Checkout
+								</p>
+								<p className="text-sm text-muted-foreground">
+									{cartEntries.length === 0
+										? "Add products from the catalog"
+										: `${cartEntries.length} line${cartEntries.length === 1 ? "" : "s"} · ${totalItems} item${totalItems === 1 ? "" : "s"}`}
+								</p>
+							</div>
+							<span className="rounded-full bg-accent/10 px-2.5 py-1 text-xs font-semibold tabular-nums text-accent">
+								{totalItems} items
+							</span>
 						</div>
-					) : (
-						<p className="mt-2 text-xs text-muted-foreground">
-							The buyer gets a WhatsApp link to pay & track their order.
-						</p>
-					)}
-				</div>
 
-				<Button
-					onClick={() => setConfirmOpen(true)}
-					disabled={cartEntries.length === 0}
-					className="h-12 w-full text-base"
-				>
-					{`Review order · ${formatPrice(total, currency)}`}
-				</Button>
+						{cartEntries.length === 0 ? (
+							<div className="mt-3 rounded-xl border border-dashed border-border bg-muted/30 px-4 py-6 text-center text-sm text-muted-foreground">
+								Tap products to add them.
+							</div>
+						) : (
+							<ul className="mt-3 flex max-h-72 flex-col divide-y divide-border overflow-y-auto">
+								{cartEntries.map(([variantId, l]) => (
+									<li
+										key={variantId}
+										className="flex items-center justify-between gap-3 py-2.5"
+									>
+										<div className="min-w-0">
+											<p className="truncate text-sm font-medium">
+												{l.name}
+												{l.label ? (
+													<span className="ml-1 font-normal text-muted-foreground">
+														{l.label}
+													</span>
+												) : null}
+											</p>
+											<p className="text-xs text-muted-foreground">
+												{l.qty} × {formatPrice(l.price, currency)}
+											</p>
+										</div>
+										<div className="flex items-center gap-2">
+											<span className="text-sm font-semibold tabular-nums">
+												{formatPrice(l.price * l.qty, currency)}
+											</span>
+											<button
+												type="button"
+												onClick={() => setQty(variantId, l, 0)}
+												aria-label="Remove"
+												className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-destructive"
+											>
+												<X className="size-4" />
+											</button>
+										</div>
+									</li>
+								))}
+							</ul>
+						)}
+					</div>
+
+					<div className="space-y-4 p-4">
+						<div className="rounded-xl border border-border bg-muted/20 p-3">
+							<button
+								type="button"
+								onClick={() => setDateOpen((open) => !open)}
+								className="flex w-full items-center justify-between gap-3 text-left"
+							>
+								<span>
+									<span className="block text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+										Collection
+									</span>
+									<span className="block text-sm font-medium">
+										{collectionLabel}
+									</span>
+									<span className="block text-xs text-muted-foreground">
+										Optional: open this only for preorder or later collection.
+									</span>
+								</span>
+								<ChevronDown
+									className={cn(
+										"size-4 shrink-0 text-muted-foreground transition-transform",
+										dateOpen && "rotate-180",
+									)}
+								/>
+							</button>
+							{dateOpen ? (
+								<div className="mt-3 border-t border-border pt-3">
+									<label
+										htmlFor="counter-fulfilment-date"
+										className="text-xs font-medium text-muted-foreground"
+									>
+										Change collection date
+									</label>
+									<input
+										id="counter-fulfilment-date"
+										type="date"
+										value={fulfilmentDate}
+										min={minYmd}
+										max={maxYmd}
+										onChange={(e) => setFulfilmentDate(e.target.value)}
+										className="mt-1 h-11 w-full rounded-xl border border-input bg-background px-4 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+									/>
+								</div>
+							) : null}
+						</div>
+
+						<div className="rounded-xl border border-border bg-muted/20 p-3">
+							<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+								Payment
+							</p>
+							<div className="mt-3 grid rounded-xl border border-border bg-background p-1 sm:grid-cols-2">
+								<button
+									type="button"
+									onClick={() => setPaidInPerson(true)}
+									aria-pressed={paidInPerson}
+									className={cn(
+										"flex min-h-12 items-center gap-2 rounded-lg px-3 text-left text-sm font-medium transition-colors",
+										paidInPerson
+											? "bg-accent text-accent-foreground shadow-sm"
+											: "text-muted-foreground hover:bg-muted",
+									)}
+								>
+									<Banknote className="size-4" />
+									<span>
+										<span className="block">Paid now</span>
+										<span className="block text-[11px] font-normal opacity-80">
+											Settled at counter
+										</span>
+									</span>
+								</button>
+								<button
+									type="button"
+									onClick={() => setPaidInPerson(false)}
+									aria-pressed={!paidInPerson}
+									className={cn(
+										"flex min-h-12 items-center gap-2 rounded-lg px-3 text-left text-sm font-medium transition-colors",
+										!paidInPerson
+											? "bg-accent text-accent-foreground shadow-sm"
+											: "text-muted-foreground hover:bg-muted",
+									)}
+								>
+									<Clock className="size-4" />
+									<span>
+										<span className="block">Pay later</span>
+										<span className="block text-[11px] font-normal opacity-80">
+											Send payment link
+										</span>
+									</span>
+								</button>
+							</div>
+
+							{paidInPerson ? (
+								<label className="mt-3 block">
+									<span className="text-xs font-medium text-muted-foreground">
+										Payment method
+									</span>
+									<select
+										value={method}
+										onChange={(e) =>
+											setMethod(e.target.value as OrderPaymentMethod)
+										}
+										className="mt-1 min-h-11 w-full rounded-xl border border-input bg-background px-4 text-base font-medium outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+									>
+										{ORDER_PAYMENT_METHODS.map((m) => (
+											<option key={m} value={m}>
+												{PAYMENT_METHOD_LABELS[m]}
+											</option>
+										))}
+									</select>
+								</label>
+							) : (
+								<p className="mt-3 rounded-xl bg-background px-3 py-2 text-xs text-muted-foreground">
+									The buyer gets a WhatsApp link to pay and track their order.
+								</p>
+							)}
+						</div>
+					</div>
+
+					<div className="border-t border-border bg-muted/20 p-4">
+						<div className="mb-3 flex items-center justify-between text-sm">
+							<span className="font-medium text-muted-foreground">Total</span>
+							<span className="text-xl font-bold tabular-nums">
+								{formatPrice(total, currency)}
+							</span>
+						</div>
+						<Button
+							onClick={() => setConfirmOpen(true)}
+							disabled={cartEntries.length === 0}
+							className="h-12 w-full text-base shadow-sm"
+						>
+							{`Review order · ${formatPrice(total, currency)}`}
+						</Button>
+					</div>
+				</div>
 			</div>
 
 			<ConfirmCheckoutDialog
@@ -1382,12 +1623,15 @@ function BuyerCard({
 	currency: string;
 }) {
 	return (
-		<div className="flex items-center gap-3 rounded-2xl border border-accent/30 bg-accent/5 p-4">
-			<span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-accent/15 text-accent">
+		<div className="flex flex-wrap items-center gap-3 rounded-2xl border border-accent/30 bg-accent/5 p-4 shadow-sm">
+			<span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-accent/15 text-accent">
 				<UserCheck className="size-5" />
 			</span>
 			<div className="min-w-0 flex-1">
-				<p className="truncate font-semibold">
+				<p className="text-xs font-semibold uppercase tracking-widest text-accent">
+					Buyer connected
+				</p>
+				<p className="truncate text-lg font-semibold">
 					{buyer.displayName ?? "Buyer connected"}
 				</p>
 				{buyer.isNewCustomer ? (
@@ -1435,56 +1679,5 @@ function Stepper({
 				<Plus className="size-4" />
 			</button>
 		</div>
-	);
-}
-
-function PayToggle({
-	active,
-	onClick,
-	icon,
-	label,
-}: {
-	active: boolean;
-	onClick: () => void;
-	icon: React.ReactNode;
-	label: string;
-}) {
-	return (
-		<button
-			type="button"
-			onClick={onClick}
-			className={`flex h-11 items-center justify-center gap-2 rounded-xl border text-sm font-medium transition-colors ${
-				active
-					? "border-accent bg-accent/10 text-foreground"
-					: "border-border text-muted-foreground hover:bg-muted"
-			}`}
-		>
-			{icon}
-			{label}
-		</button>
-	);
-}
-
-function MethodToggle({
-	active,
-	onClick,
-	label,
-}: {
-	active: boolean;
-	onClick: () => void;
-	label: string;
-}) {
-	return (
-		<button
-			type="button"
-			onClick={onClick}
-			className={`h-11 rounded-xl border text-sm font-medium transition-colors ${
-				active
-					? "border-accent bg-accent/10 text-foreground"
-					: "border-border text-muted-foreground hover:bg-muted"
-			}`}
-		>
-			{label}
-		</button>
 	);
 }

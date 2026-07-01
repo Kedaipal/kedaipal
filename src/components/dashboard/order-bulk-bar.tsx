@@ -2,14 +2,7 @@ import { ChevronUp, X } from "lucide-react";
 import { useState } from "react";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
-import {
-	Dialog,
-	DialogContent,
-	DialogDescription,
-	DialogFooter,
-	DialogHeader,
-	DialogTitle,
-} from "../ui/dialog";
+import { ConfirmDialog } from "../ui/confirm-dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 
 export type BulkAction = {
@@ -37,7 +30,9 @@ export function OrderBulkBar({
 }: {
 	count: number;
 	actions: BulkAction[];
-	onApply: (status: BulkAction["status"]) => void;
+	// May return a promise — the destructive confirm awaits it so the confirm
+	// button shows its in-flight spinner and stays open if the apply rejects.
+	onApply: (status: BulkAction["status"]) => void | Promise<void>;
 	onClear: () => void;
 	busy?: boolean;
 }) {
@@ -49,7 +44,9 @@ export function OrderBulkBar({
 	function handleAction(a: BulkAction) {
 		setOpen(false);
 		if (a.destructive) setPendingDestructive(a);
-		else onApply(a.status);
+		// Non-destructive actions apply immediately and fire-and-forget — the apply
+		// surfaces its own error toast, so swallow the rejection here.
+		else void Promise.resolve(onApply(a.status)).catch(() => {});
 	}
 
 	return (
@@ -98,42 +95,23 @@ export function OrderBulkBar({
 			</div>
 
 			{/* Confirm step for destructive bulk actions (e.g. Cancel). */}
-			<Dialog
+			<ConfirmDialog
 				open={pendingDestructive !== null}
 				onOpenChange={(o) => {
 					if (!o) setPendingDestructive(null);
 				}}
-			>
-				<DialogContent showCloseButton={false} className="sm:max-w-sm">
-					<DialogHeader>
-						<DialogTitle>
-							Cancel {count} {orderWord}?
-						</DialogTitle>
-						<DialogDescription>
-							{count === 1 ? "The customer" : "Customers"} will be notified over
-							WhatsApp, and this can't be undone.
-						</DialogDescription>
-					</DialogHeader>
-					<DialogFooter>
-						<Button
-							variant="outline"
-							onClick={() => setPendingDestructive(null)}
-						>
-							Keep {orderWord}
-						</Button>
-						<Button
-							variant="destructive"
-							onClick={() => {
-								const action = pendingDestructive;
-								setPendingDestructive(null);
-								if (action) onApply(action.status);
-							}}
-						>
-							Cancel {count} {orderWord}
-						</Button>
-					</DialogFooter>
-				</DialogContent>
-			</Dialog>
+				title={`Cancel ${count} ${orderWord}?`}
+				description={`${count === 1 ? "The customer" : "Customers"} will be notified over WhatsApp, and this can't be undone.`}
+				confirmLabel={`Cancel ${count} ${orderWord}`}
+				cancelLabel={`Keep ${orderWord}`}
+				destructive
+				onConfirm={() => {
+					const action = pendingDestructive;
+					// Return the promise so ConfirmDialog can show its spinner while the
+					// bulk op runs and keep itself open if it rejects.
+					if (action) return onApply(action.status);
+				}}
+			/>
 		</div>
 	);
 }

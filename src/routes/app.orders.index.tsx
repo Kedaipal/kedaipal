@@ -1,10 +1,12 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useConvex, useMutation, useQuery } from "convex/react";
 import {
 	AlertCircle,
 	CalendarDays,
 	Check,
 	ChevronRight,
+	Download,
+	Loader2,
 	Package,
 	Search,
 	ShoppingBag,
@@ -36,7 +38,9 @@ import { PageHeader } from "../components/dashboard/page-header";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
+import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
+import { downloadCsv } from "../lib/download";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import {
 	type DeliveryMethod,
@@ -151,9 +155,11 @@ function OrdersRoute() {
 		fwin,
 	} = Route.useSearch();
 	const navigate = useNavigate({ from: Route.fullPath });
-	const retailer = useQuery(api.retailers.getMyRetailer);
+	const retailer = useDashboardRetailer();
+	const convex = useConvex();
 
 	const bulkUpdateStatus = useMutation(api.orders.bulkUpdateStatus);
+	const [exporting, setExporting] = useState(false);
 
 	const [searchInput, setSearchInput] = useState(q);
 	const debounced = useDebounce(searchInput.trim(), 250);
@@ -327,8 +333,57 @@ function OrdersRoute() {
 			clearSelection();
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
+			// Rethrow so the destructive confirm dialog stays open for a retry; the
+			// toast above is the user-facing message (ConfirmDialog swallows this).
+			throw err;
 		} finally {
 			setBulkBusy(false);
+		}
+	}
+
+	// Export to CSV for bookkeeping. Exports the ticked selection when any rows
+	// are selected; otherwise everything matching the active filter (NOT just the
+	// loaded page) — the server applies the same predicate as the inbox.
+	async function handleExport() {
+		if (!retailer) return;
+		const selectedIds = [...selected] as Id<"orders">[];
+		setExporting(true);
+		try {
+			const { csv, count, capped } = await convex.action(
+				api.orders.exportOrders,
+				{
+					retailerId: retailer._id,
+					bucket,
+					paymentStatuses: pay.length > 0 ? pay : undefined,
+					paymentMethods: method.length > 0 ? method : undefined,
+					methodUnspecified: munspec || undefined,
+					dateFrom: from,
+					dateTo: to,
+					mockupPending: mockup || undefined,
+					fulfilmentWindow: fwin,
+					searchText: debounced || undefined,
+					orderIds: selectedIds.length > 0 ? selectedIds : undefined,
+				},
+			);
+			if (count === 0) {
+				toast.message("No orders to export for the current view.");
+				return;
+			}
+			const stamp = new Date().toISOString().slice(0, 10);
+			downloadCsv(`orders-${stamp}.csv`, csv);
+			if (capped) {
+				// The scan hit its safety cap before exhausting matches — the export
+				// is the newest slice, not the complete set.
+				toast.warning(
+					`Exported the latest ${count} orders. Some older orders may be missing — narrow the date range for a complete export.`,
+				);
+			} else {
+				toast.success(`Exported ${count} order${count === 1 ? "" : "s"}`);
+			}
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setExporting(false);
 		}
 	}
 
@@ -339,6 +394,22 @@ function OrdersRoute() {
 				subtitle={
 					loading ? "Loading…" : `${total} order${total === 1 ? "" : "s"}`
 				}
+				actions={
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						onClick={handleExport}
+						disabled={exporting}
+					>
+						{exporting ? (
+							<Loader2 className="size-4 animate-spin" />
+						) : (
+							<Download className="size-4" />
+						)}
+						{selected.size > 0 ? `Export ${selected.size}` : "Export CSV"}
+					</Button>
+				}
 			/>
 			<div className="flex items-center justify-between lg:hidden">
 				<div>
@@ -347,6 +418,20 @@ function OrdersRoute() {
 						{loading ? "Loading…" : `${total} total`}
 					</p>
 				</div>
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					onClick={handleExport}
+					disabled={exporting}
+				>
+					{exporting ? (
+						<Loader2 className="size-4 animate-spin" />
+					) : (
+						<Download className="size-4" />
+					)}
+					{selected.size > 0 ? `Export ${selected.size}` : "Export CSV"}
+				</Button>
 			</div>
 
 			<OrderInboxOverview
@@ -355,26 +440,41 @@ function OrdersRoute() {
 				loading={loading}
 			/>
 
-			<section className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-3 shadow-sm lg:p-4">
-				<div className="relative">
-					<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-					<Input
-						value={searchInput}
-						onChange={(e) => setSearchInput(e.target.value)}
-						placeholder="Search order #, name, phone or item"
-						className="h-11 rounded-xl pl-9 pr-9"
-						inputMode="search"
+			<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-3 shadow-sm lg:p-4">
+				<div className="grid gap-3 lg:grid-cols-[minmax(18rem,1fr)_auto] lg:items-center">
+					<div className="relative">
+						<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+						<Input
+							value={searchInput}
+							onChange={(e) => setSearchInput(e.target.value)}
+							placeholder="Search order #, name, phone or item"
+							className="h-11 rounded-xl pl-9 pr-9"
+							inputMode="search"
+						/>
+						{searchInput ? (
+							<button
+								type="button"
+								onClick={() => setSearchInput("")}
+								className="absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+								aria-label="Clear search"
+							>
+								<X className="size-4" />
+							</button>
+						) : null}
+					</div>
+
+					<OrderFilters
+						value={{
+							payment: pay,
+							method,
+							methodUnspecified: munspec,
+							from,
+							to,
+							mockup,
+						}}
+						onChange={setFilters}
+						mockupCount={counts?.mockupPending}
 					/>
-					{searchInput ? (
-						<button
-							type="button"
-							onClick={() => setSearchInput("")}
-							className="absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
-							aria-label="Clear search"
-						>
-							<X className="size-4" />
-						</button>
-					) : null}
 				</div>
 
 				<div className="-mx-3 flex gap-2 overflow-x-auto px-3 pb-1 [scrollbar-width:none] lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0 [&::-webkit-scrollbar]:hidden">
@@ -391,10 +491,10 @@ function OrdersRoute() {
 								type="button"
 								onClick={() => setBucket(key)}
 								className={cn(
-									"flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-sm transition-colors",
+									"flex h-10 shrink-0 items-center gap-1.5 rounded-xl border px-3.5 text-sm font-medium transition-colors",
 									active
-										? "border-foreground bg-foreground text-background"
-										: "border-border bg-background text-muted-foreground hover:border-foreground/30 hover:text-foreground",
+										? "border-accent bg-accent text-accent-foreground"
+										: "border-border bg-background text-muted-foreground hover:border-accent/40 hover:text-foreground",
 								)}
 							>
 								{label}
@@ -403,7 +503,7 @@ function OrdersRoute() {
 										className={cn(
 											"flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none",
 											active
-												? "bg-background text-foreground"
+												? "bg-white/25 text-accent-foreground"
 												: key === "new"
 													? "bg-orange-500 text-white"
 													: "bg-muted text-muted-foreground",
@@ -420,7 +520,7 @@ function OrdersRoute() {
 				{/* Fulfilment-date urgency chips — a primary axis for F&B sellers
 				    ("what's due today?"), so they sit inline above the advanced
 				    filters, not buried in the filter sheet. */}
-				<div className="flex flex-wrap items-center gap-2">
+				<div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
 					<span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
 						Due
 					</span>
@@ -433,7 +533,7 @@ function OrdersRoute() {
 								aria-pressed={active}
 								onClick={() => setFwin(w.value)}
 								className={cn(
-									"inline-flex h-11 items-center gap-1.5 rounded-full border px-4 text-sm font-medium transition-colors",
+									"inline-flex h-10 items-center gap-1.5 rounded-xl border px-3.5 text-sm font-medium transition-colors",
 									active
 										? "border-accent bg-accent text-accent-foreground"
 										: "border-border bg-background text-muted-foreground hover:border-accent/40 hover:text-foreground",
@@ -445,19 +545,6 @@ function OrdersRoute() {
 						);
 					})}
 				</div>
-
-				<OrderFilters
-					value={{
-						payment: pay,
-						method,
-						methodUnspecified: munspec,
-						from,
-						to,
-						mockup,
-					}}
-					onChange={setFilters}
-					mockupCount={counts?.mockupPending}
-				/>
 			</section>
 
 			{/* Selection toolbar — appears once at least one order is ticked. */}

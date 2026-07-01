@@ -1,5 +1,5 @@
 import type { FunctionReturnType } from "convex/server";
-import { Plus, SlidersHorizontal } from "lucide-react";
+import { ImagePlus, Plus, SlidersHorizontal } from "lucide-react";
 import type { api } from "../../../convex/_generated/api";
 import { formatPrice } from "../../lib/format";
 import { Button } from "../ui/button";
@@ -55,8 +55,13 @@ export function ProductCard({ product, onOpen, onQuickAdd }: ProductCardProps) {
 						loading="lazy"
 					/>
 				) : (
-					<div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
-						No image
+					<div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-muted/60 text-muted-foreground">
+						<span className="flex size-11 items-center justify-center rounded-xl bg-background/80 shadow-sm">
+							<ImagePlus className="size-5" />
+						</span>
+						<span className="max-w-24 text-center text-xs font-medium leading-tight">
+							{product.name}
+						</span>
 					</div>
 				)}
 				{firstImage && (

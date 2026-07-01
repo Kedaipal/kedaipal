@@ -194,12 +194,29 @@ export default defineSchema({
 		// message" setup step as done (or skipped). Persisted so the step stays
 		// collapsed across sessions and the setup checklist can reach all-done.
 		onboardingGreetingSetup: v.optional(v.boolean()),
+		// Activation funnel (epoch-ms). Both are one-time stamps that NEVER un-set,
+		// so the setup checklist measures activation, not just config:
+		//  - `activatedAt`: when the retailer's FIRST order reached confirmed (or
+		//    beyond) — the milestone that predicts retention. Stamped set-if-unset
+		//    from every confirm site (WhatsApp confirm, payment auto-confirm, seller
+		//    status transition, counter checkout) via stampRetailerActivation. A
+		//    created-then-cancelled order never stamps; once set it stays even if
+		//    products are archived or the order is later cancelled.
+		//  - `linkSharedAt`: soft proxy for "shared their storefront link" — set the
+		//    first time the seller copies the link or opens the QR from the checklist
+		//    share step. Can't detect a real share, so it never blocks anything.
+		// Both surfaced by getMyRetailer (owner read) to drive the dashboard
+		// checklist's activation states. See docs/activation-checklist.md.
+		activatedAt: v.optional(v.number()),
+		linkSharedAt: v.optional(v.number()),
 		// Founding Member denormalized flags (fast storefront reads). Set once when
 		// the retailer's first Pro invoice is marked paid (rank ≤ 10); never revert,
 		// even on cancellation/refund. Source of truth is the `foundingMembers`
 		// ledger. See docs/manual-subscription.md.
 		isFoundingMember: v.optional(v.boolean()),
 		foundingMemberRank: v.optional(v.number()),
+		// WABA send guardrails (kill switch, per-seller caps) live in their own
+		// `retailerSendingLimits` table — see docs/waba-protection.md.
 		channel: v.literal("whatsapp"),
 		createdAt: v.number(),
 		updatedAt: v.number(),
@@ -236,6 +253,13 @@ export default defineSchema({
 		stock: v.optional(v.number()),
 		imageStorageIds: v.array(v.string()),
 		active: v.boolean(),
+		// Storefront visibility, ORTHOGONAL to `active` (which is the archive flag).
+		// hidden === true → excluded from the public storefront listing, but still
+		// fully sellable in counter checkout, inventory and the dashboard. Used for
+		// pre-priced event/walk-up SKUs the seller rings up in person but never
+		// lists online. undefined/false = visible (legacy default; no backfill).
+		// See docs/hidden-products.md.
+		hidden: v.optional(v.boolean()),
 		// Option axes this product varies along, ordered (drives picker order).
 		// Empty array (or undefined on pre-migration rows) = no axes → exactly
 		// one implicit variant with optionValues:[]. Capped at 2 axes. Bounded,
@@ -452,6 +476,19 @@ export default defineSchema({
 				address: v.string(),
 				mapsUrl: v.optional(v.string()),
 				notes: v.optional(v.string()),
+				// Which kind of pickup point this was — "self_collect" (the
+				// seller's own place) or "drop_off" (an agreed meetup point like
+				// a pasar/surau/LRT). Frozen at create so the buyer/seller see
+				// the right wording on the tracking page + messages even if the
+				// source location's kind is edited later. Undefined on orders
+				// created before drop-off existed → read as "self_collect".
+				locationType: v.optional(
+					v.union(v.literal("self_collect"), v.literal("drop_off")),
+				),
+				// Recurring availability note ("Every Sat 3-5pm"), mainly for
+				// drop-off meetups. Frozen so a later edit to the source
+				// location's schedule doesn't rewrite a placed order's history.
+				scheduleNote: v.optional(v.string()),
 				// Frozen at order create. Drives the WhatsApp location pin
 				// sent after confirm + the Waze/Google buttons on the
 				// tracking page. Optional so orders against legacy pickup
@@ -563,6 +600,21 @@ export default defineSchema({
 		retailerId: v.id("retailers"),
 		label: v.string(),
 		address: v.string(),
+		// Kind of pickup point. "self_collect" = the seller's own place (shop,
+		// home, warehouse); "drop_off" = an agreed meetup/common point (pasar,
+		// surau, LRT station). Both are "Pickup" to the buyer and share this
+		// whole subsystem (library, invariant, picker) — only the badge,
+		// grouping heading and schedule emphasis differ. Optional with an
+		// `undefined → "self_collect"` read so every legacy row stays a
+		// self-collect point without a backfill.
+		locationType: v.optional(
+			v.union(v.literal("self_collect"), v.literal("drop_off")),
+		),
+		// Optional recurring availability note ("Every Sat 3-5pm"). Mainly for
+		// drop-off meetups (a meetup happens at set times); self-collect points
+		// may use it for opening hours but it isn't emphasised there. ≤120 chars,
+		// free text — escaped + line-clamped on render.
+		scheduleNote: v.optional(v.string()),
 		mapsUrl: v.optional(v.string()),
 		notes: v.optional(v.string()),
 		// Coordinates + Google place identifier captured via Places
@@ -759,6 +811,13 @@ export default defineSchema({
 		// Stamped when the pre-due-date reminder email is sent, so the daily cron
 		// sends it at most once. See convex/billingEmail.ts.
 		reminderSentAt: v.optional(v.number()),
+		// Rendered PDF of this invoice, frozen at issue time. An invoice is a
+		// financial document, so we store the bytes (rather than regenerate on
+		// demand) — `billingConfig` bank details are a mutable singleton and could
+		// otherwise drift from what the seller actually received. Optional: filled
+		// asynchronously just after issue by invoices.generateInvoicePdf (and absent
+		// on rows issued before this field). See docs/invoices-receipts.md.
+		pdfStorageId: v.optional(v.id("_storage")),
 		createdAt: v.number(),
 	})
 		.index("by_retailer", ["retailerId"])
@@ -793,4 +852,109 @@ export default defineSchema({
 	})
 		.index("by_rank", ["rank"])
 		.index("by_retailer", ["retailerId"]),
+
+	// --- WABA protection (ClickUp 86expmgep, docs/waba-protection.md) --------
+	// Kedaipal runs ONE shared Meta-verified WhatsApp number for all retailers, so
+	// one bad actor can degrade deliverability for everyone. These four tables back
+	// the gateway (convex/wabaProtection.ts) that every outbound message passes
+	// through.
+
+	// GLOBAL opt-out list, keyed by buyer phone across ALL retailers on the shared
+	// number — a STOP to one retailer suppresses non-transactional sends from every
+	// retailer. An active opt-out is a row with `reactivatedAt` unset; START/MULA
+	// stamps `reactivatedAt` to re-opt-in. Transactional order messages are NOT
+	// suppressed (a buyer mid-order must still get order updates) — see canSend.
+	optOuts: defineTable({
+		waPhone: v.string(),
+		source: v.union(
+			v.literal("stop_keyword"),
+			v.literal("berhenti_keyword"),
+			v.literal("unsub_keyword"),
+			v.literal("manual_admin"),
+			v.literal("meta_complaint"),
+		),
+		triggeredByRetailerId: v.optional(v.id("retailers")),
+		reactivatedAt: v.optional(v.number()),
+		createdAt: v.number(),
+	}).index("by_phone", ["waPhone"]),
+
+	// WABA quality-rating history, one row per Meta health webhook
+	// (phone_number_quality_update / account_update). The gateway reads the LATEST
+	// row (by_observed desc) to auto-throttle: LOW → pause all but transactional;
+	// MEDIUM/UNKNOWN → pause marketing only. History (not a singleton) so we can
+	// see trend + implement sustained-recovery later.
+	wabaHealth: defineTable({
+		qualityRating: v.union(
+			v.literal("HIGH"),
+			v.literal("MEDIUM"),
+			v.literal("LOW"),
+			v.literal("UNKNOWN"),
+		),
+		messagingTier: v.number(), // 250, 1000, 10000, 100000 (0 = unknown)
+		observedAt: v.number(),
+		notes: v.optional(v.string()),
+	}).index("by_observed", ["observedAt"]),
+
+	// Per-retailer kill switch + cap overrides. Lazily created — absent row means
+	// "tier/age defaults, not paused" (see lib/wabaLimits.ts resolveSendingLimits).
+	// `pausedAt` set = the kill switch is on (blocks non-transactional sends).
+	retailerSendingLimits: defineTable({
+		retailerId: v.id("retailers"),
+		// Optional overrides; when 0/unset the effective cap is derived from tier+age.
+		dailyCap: v.optional(v.number()),
+		burstCap5min: v.optional(v.number()),
+		pausedAt: v.optional(v.number()),
+		pauseReason: v.optional(v.string()),
+		pausedByUserId: v.optional(v.string()),
+		notes: v.optional(v.string()),
+		updatedAt: v.number(),
+	}).index("by_retailer", ["retailerId"]),
+
+	// Per-send audit log — every outbound attempt through the gateway, for
+	// cost/abuse attribution ("who sent what, when, blocked why"). `retailerId`
+	// optional for system replies to an unknown inbound sender. delivered/read are
+	// reserved for a future Meta message-status webhook; today we log sent/failed/
+	// blocked_* at send time.
+	outboundMessageLog: defineTable({
+		retailerId: v.optional(v.id("retailers")),
+		toWaPhone: v.string(),
+		category: v.union(
+			v.literal("transactional"),
+			v.literal("utility_template"),
+			v.literal("marketing_template"),
+			v.literal("session_message"),
+		),
+		templateName: v.optional(v.string()),
+		status: v.union(
+			v.literal("sent"),
+			v.literal("delivered"),
+			v.literal("read"),
+			v.literal("failed"),
+			v.literal("blocked_optout"),
+			v.literal("blocked_capreached"),
+			v.literal("blocked_quality"),
+			v.literal("blocked_retailer_paused"),
+		),
+		errorCode: v.optional(v.string()),
+		sentAt: v.number(),
+	})
+		.index("by_retailer_sent", ["retailerId", "sentAt"])
+		.index("by_phone_sent", ["toWaPhone", "sentAt"]),
+
+	// --- Admin console audit trail (ClickUp 86ey25er1, docs/admin-console.md) --
+	// One row per admin-on-behalf ("act-as") write during white-glove onboarding.
+	// Kedaipal admins can operate any seller's dashboard (see requireRetailerAccess
+	// in convex/lib/auth.ts); every write they make on a store they don't own is
+	// stamped here so edits are attributable to a person. Owner writes are NOT
+	// logged — only the admin exception. `targetId` is the affected doc id when
+	// known at write time (updates/deletes); omitted for creates.
+	adminAuditLog: defineTable({
+		adminUserId: v.string(), // Clerk subject of the acting admin
+		retailerId: v.id("retailers"), // store acted upon
+		action: v.string(), // e.g. "products.create", "retailers.updateSettings"
+		targetId: v.optional(v.string()),
+		ts: v.number(),
+	})
+		.index("by_retailer", ["retailerId"])
+		.index("by_admin", ["adminUserId"]),
 });

@@ -38,14 +38,14 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 	},
 	productWrite: {
 		kind: "fixed window",
-		rate: 20, // beta: tightened from 60
+		rate: 20, // tightened from 60 at launch
 		period: MINUTE,
 	},
 	// Bulk import is heavier per call (writes many products in one transaction)
 	// but called in small bursts during a single import session.
 	productBulkImport: {
 		kind: "token bucket",
-		rate: 5, // beta: tightened from 20
+		rate: 5, // tightened from 20 at launch
 		period: MINUTE,
 		capacity: 2,
 	},
@@ -115,4 +115,10 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		period: MINUTE,
 		capacity: 10,
 	},
+	// NOTE: the per-seller outbound WhatsApp guardrails (whatsappSendPerMinute /
+	// whatsappSendDaily) are intentionally NOT registered here. They're enforced
+	// by the guarded send gateway (convex/wabaProtection.ts) with an INLINE config
+	// per call so a retailer's custom cap (retailers.sendRatePerMinute /
+	// sendDailyCap, defaults in lib/wabaLimits.ts) takes effect — the rate-limiter
+	// only allows inline config overrides for names that aren't pre-registered.
 });

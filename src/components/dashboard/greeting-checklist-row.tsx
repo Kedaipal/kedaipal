@@ -1,5 +1,5 @@
 import { useMutation } from "convex/react";
-import { Check, Copy } from "lucide-react";
+import { Check, ChevronDown, Copy } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import { cn } from "../../lib/utils";
@@ -57,12 +57,15 @@ const SETUP_STEPS = [
 export function GreetingChecklistRow({
 	item,
 	expanded,
+	onToggle,
 	storeName,
 	slug,
 	locale,
 }: {
 	item: ChecklistItem;
 	expanded: boolean;
+	/** Tap-to-expand toggle for the optional group (collapsed → chevron). */
+	onToggle?: () => void;
 	storeName: string;
 	slug: string;
 	locale: GreetingLang;
@@ -90,15 +93,20 @@ export function GreetingChecklistRow({
 	if (!expanded) {
 		return (
 			<li>
-				<div className="flex items-center gap-3 rounded-xl border border-border bg-background px-4 py-3">
-					<div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 border-border bg-background text-[10px] font-bold text-muted-foreground">
-						{item.step}
+				<button
+					type="button"
+					onClick={onToggle}
+					className="flex w-full items-center gap-3 rounded-xl border border-border bg-background px-4 py-3 text-left transition-colors hover:bg-accent/5"
+				>
+					<div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+						<Icon className="size-3" />
 					</div>
 					<div className="flex-1">
 						<p className="text-sm font-medium">{item.title}</p>
 						<p className="text-xs text-muted-foreground">{item.time}</p>
 					</div>
-				</div>
+					<ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+				</button>
 			</li>
 		);
 	}
@@ -133,9 +141,6 @@ export function GreetingChecklistRow({
 				</div>
 				<div className="flex-1">
 					<div className="flex items-center gap-2">
-						<span className="text-[10px] font-bold uppercase tracking-wider text-accent">
-							Step {item.step}
-						</span>
 						<span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
 							Optional
 						</span>

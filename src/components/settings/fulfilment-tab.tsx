@@ -1,5 +1,13 @@
 import { useMutation, useQuery } from "convex/react";
-import { ExternalLink, MapPin, Pencil, Phone, Plus, Truck } from "lucide-react";
+import {
+	Clock,
+	ExternalLink,
+	MapPin,
+	Pencil,
+	Phone,
+	Plus,
+	Truck,
+} from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
@@ -48,6 +56,17 @@ function SectionHeading({
 				</p>
 			) : null}
 		</div>
+	);
+}
+
+/** Seller-facing kind chip on each pickup-point row. Same vocabulary as the
+ *  buyer storefront ("Self-collect" / "Drop-off") so there's one language for
+ *  the two kinds across the whole product. */
+function PickupKindBadge({ kind }: { kind: "self_collect" | "drop_off" }) {
+	return (
+		<span className="shrink-0 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
+			{kind === "drop_off" ? "Drop-off" : "Self-collect"}
+		</span>
 	);
 }
 
@@ -152,9 +171,7 @@ export function FulfilmentTab({
 		setToggling(true);
 		try {
 			await updateSettings({ offerSelfCollect: next });
-			toast.success(
-				next ? "Self-collect enabled." : "Self-collect turned off.",
-			);
+			toast.success(next ? "Pickup enabled." : "Pickup turned off.");
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -197,10 +214,10 @@ export function FulfilmentTab({
 	const activeIdsKey = activeIds.join("|");
 	const [localOrder, setLocalOrder] =
 		useState<Array<Id<"pickupLocations">>>(activeIds);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional —
-	// see the comment above. activeIds is read via closure on the render where
-	// activeIdsKey actually changes, so we get the latest server order without
-	// the per-render reset.
+	// Reconcile only on activeIdsKey (see the comment block above): activeIds is
+	// read via closure on the render where the key actually changes, so we get
+	// the latest server order without the per-render reset.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: keyed on activeIdsKey, activeIds read via closure — see above.
 	useEffect(() => {
 		setLocalOrder(activeIds);
 	}, [activeIdsKey]);
@@ -257,35 +274,33 @@ export function FulfilmentTab({
 			<Card>
 				<div className="flex items-start justify-between gap-4">
 					<SectionHeading
-						title="Self-collect"
-						description="When on, buyers see a self-collect option at checkout — but only when you also have at least one active pickup location below."
+						title="Pickup"
+						description="When on, buyers can collect their order from a point you set below — your own place (self-collect) or an agreed meetup spot (drop-off). Needs at least one active point to show at checkout."
 					/>
 					<ToggleSwitch
 						on={offerSelfCollect}
 						onChange={handleToggleSelfCollect}
 						disabled={selfCollectToggleDisabled}
-						label="Offer self-collect on the storefront"
+						label="Offer pickup on the storefront"
 					/>
 				</div>
 				{selfCollectIsLastMethod ? (
 					<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-						Self-collect is your storefront&apos;s only working way to receive
-						orders right now (delivery is off). Turn delivery back on before
-						turning this off.
+						Pickup is your storefront&apos;s only working way to receive orders
+						right now (delivery is off). Turn delivery back on before turning
+						this off.
 					</p>
 				) : offerSelfCollect && active.length === 0 ? (
 					<p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
-						Self-collect is on but you have no active pickup locations yet —
-						buyers won&apos;t see the option until you add one.
+						Pickup is on but you have no active points yet — buyers won&apos;t
+						see the option until you add one.
 					</p>
 				) : null}
-			</Card>
 
-			<Card>
-				<div className="flex items-center justify-between gap-3">
+				<div className="flex items-center justify-between gap-3 border-t border-border pt-4">
 					<SectionHeading
-						title="Pickup locations"
-						description="Where buyers can collect their orders. Frozen onto each order so deactivating or editing later never rewrites past pickup details."
+						title="Pickup points"
+						description="Where buyers collect. Frozen onto each order, so editing or deactivating a point later never rewrites past orders."
 					/>
 					<Button
 						type="button"
@@ -484,12 +499,21 @@ function LocationRowBody({
 					aria-hidden="true"
 				/>
 				<div className="flex min-w-0 flex-1 flex-col gap-1">
-					<p className="text-sm font-semibold leading-tight">
-						{location.label}
-					</p>
+					<div className="flex flex-wrap items-center gap-2">
+						<p className="text-sm font-semibold leading-tight">
+							{location.label}
+						</p>
+						<PickupKindBadge kind={location.locationType ?? "self_collect"} />
+					</div>
 					<p className="text-xs text-muted-foreground whitespace-pre-line">
 						{location.address}
 					</p>
+					{location.scheduleNote ? (
+						<p className="flex items-center gap-1 text-xs font-medium text-accent">
+							<Clock className="size-3 shrink-0" aria-hidden="true" />
+							<span>{location.scheduleNote}</span>
+						</p>
+					) : null}
 					{(() => {
 						const mapsUrl = deriveMapsUrl(location);
 						return mapsUrl ? (
