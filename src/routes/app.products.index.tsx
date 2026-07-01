@@ -488,8 +488,8 @@ function SortableProductGrid({
 	// Optimistic order so a drop updates instantly; the reactive query re-syncs
 	// after the mutation. Reconcile only when the active set/order changes.
 	const [localOrder, setLocalOrder] = useState<Id<"products">[]>(activeIds);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: reconcile on
-	// activeKey only, not on the per-render activeIds array.
+	// Reconcile on activeKey only, not on the per-render activeIds array.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: keyed on activeKey, activeIds read via closure.
 	useEffect(() => {
 		setLocalOrder(activeIds);
 	}, [activeKey]);
