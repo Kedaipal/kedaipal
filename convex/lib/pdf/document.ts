@@ -149,6 +149,15 @@ export function paymentMethodsToBlocks(
 	methods: PaymentMethodForReceipt[],
 ): PaymentBlock[] {
 	const blocks: PaymentBlock[] = [];
+	// A QR image can't be embedded in the text PDF, so every QR method would print
+	// the identical "scan it on WhatsApp / your tracking page" pointer — a seller
+	// with two QRs got that line twice, which reads as broken. Banks stay one block
+	// each (each is actionable on paper); ALL QR methods collapse into a SINGLE
+	// pointer block, emitted at the first QR's position so the seller's ordering is
+	// preserved. Its heading keeps the specific label when there's just one QR, and
+	// falls back to a generic "Pay by QR" when there are several.
+	const qrCount = methods.filter((m) => m.type === "qr").length;
+	let qrEmitted = false;
 	for (const m of methods) {
 		if (m.type === "bank") {
 			const lines = [
@@ -158,11 +167,10 @@ export function paymentMethodsToBlocks(
 				m.note,
 			].filter((l): l is string => Boolean(l && l.trim()));
 			blocks.push({ label: m.label, lines });
-		} else {
-			// QR images can't be embedded in the text receipt — point the buyer at
-			// the live surfaces that do show it.
+		} else if (!qrEmitted) {
+			qrEmitted = true;
 			blocks.push({
-				label: m.label,
+				label: qrCount === 1 ? m.label : "Pay by QR",
 				lines: ["Scan the QR shown on WhatsApp or your tracking page."],
 			});
 		}

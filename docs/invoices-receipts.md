@@ -69,6 +69,13 @@ Rendering (pdf-lib, runs in the default Convex runtime — no `"use node"`):
   To eyeball the rendered output on macOS: build a PDF to `/tmp/x.pdf`, then
   `qlmanage -t -s 1000 -o /tmp /tmp/x.pdf` produces `/tmp/x.pdf.png`.
 
+**"How to pay" block:** bank methods print in full (one block each — actionable on
+paper); QR methods can't embed the image in a text PDF, so **all** QR methods
+collapse into a **single** "scan it on WhatsApp / your tracking page" pointer
+(`paymentMethodsToBlocks`) — keeping the specific label for a lone QR, falling back
+to a generic "Pay by QR" for several. (Previously each QR repeated the identical
+pointer, which read as broken for a seller with 2+ QRs.)
+
 **Receipt vs Invoice — one document, two faces (`86ey4fz3w`):** `buildOrderReceiptPdf`
 titles itself off `OrderReceiptData.paid` (`= paymentStatus === "received"`): a
 settled order prints **"Receipt"** (green "Paid" badge, "How you paid"), an unpaid
