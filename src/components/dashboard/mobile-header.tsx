@@ -1,6 +1,7 @@
 import { UserButton } from "@clerk/tanstack-react-start";
 import { Link } from "@tanstack/react-router";
 import type { FunctionReturnType } from "convex/server";
+import { useEffect, useRef } from "react";
 import type { api } from "../../../convex/_generated/api";
 import { TierPill } from "./tier-pill";
 
@@ -14,8 +15,31 @@ interface MobileHeaderProps {
 }
 
 export function MobileHeader({ retailer }: MobileHeaderProps) {
+	// This header is `sticky top-0`, and its height varies (tier pill, store name
+	// wrapping). Publish the measured height as `--app-header-h` so any other
+	// sticky element on the page (e.g. the counter catalog's product header) can
+	// pin itself just BELOW it instead of hardcoding a fragile pixel offset.
+	// display:none at `lg` reports 0 — fine, those consumers go static on desktop.
+	const headerRef = useRef<HTMLElement>(null);
+	useEffect(() => {
+		const el = headerRef.current;
+		if (!el) return;
+		const publish = () =>
+			document.documentElement.style.setProperty(
+				"--app-header-h",
+				`${el.offsetHeight}px`,
+			);
+		publish();
+		const ro = new ResizeObserver(publish);
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, []);
+
 	return (
-		<header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-border bg-background/95 px-5 py-3 backdrop-blur lg:hidden">
+		<header
+			ref={headerRef}
+			className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-border bg-background/95 px-5 py-3 backdrop-blur lg:hidden"
+		>
 			<div className="flex min-w-0 flex-1 items-center gap-2.5">
 				<img src="/logo.svg" alt="Kedaipal" className="h-8 w-auto shrink-0" />
 				{retailer ? (

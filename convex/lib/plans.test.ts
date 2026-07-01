@@ -6,6 +6,7 @@ import {
 	isPlanSelectable,
 	isUnlimited,
 	PLAN_MONTHLY_PRICE,
+	PLANS,
 	planPrice,
 	planQualifiesForFounding,
 	UNLIMITED,
@@ -28,6 +29,16 @@ describe("plans — pricing", () => {
 		expect(planPrice("pro", "monthly", true)).toBe(10400);
 		// Starter has no founding price → falls back to its standard price.
 		expect(planPrice("starter", "monthly", true)).toBe(PLAN_MONTHLY_PRICE.starter);
+	});
+});
+
+describe("plans — public tier set", () => {
+	// Enterprise is drafted in strategy but must not appear on any pricing surface
+	// yet (ClickUp 86ey4gaju). The exposed plan set is exactly the three public
+	// tiers — a guard against an Enterprise enum sneaking back into rendering.
+	test("exactly Starter, Pro, Scale — no Enterprise", () => {
+		expect(PLANS).toEqual(["starter", "pro", "scale"]);
+		expect(PLANS).not.toContain("enterprise");
 	});
 });
 
