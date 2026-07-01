@@ -1224,6 +1224,10 @@ function BuildOrderScreen({
 		if (!p) return null;
 		return { ...p, variants: p.variants.filter((vr) => vr.active) };
 	}, [products, modalProductId]);
+	// Price label + this product's cart count, for the modal header/footer.
+	const modalMeta = modalProduct
+		? counterProductMeta(modalProduct, cart, currency)
+		: null;
 
 	function toggleExpanded(productId: string) {
 		setExpanded((prev) => {
@@ -1433,12 +1437,24 @@ function BuildOrderScreen({
 							return (
 								<div
 									key={p._id}
-									className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm"
+									// No `overflow-hidden`: it would trap the sticky header inside the
+									// card. Corners are rounded on the header + variant list instead.
+									className="rounded-2xl border border-border bg-card shadow-sm"
 								>
 									<button
 										type="button"
 										onClick={() => toggleExpanded(p._id)}
-										className="flex w-full items-center gap-3 p-3 text-left hover:bg-muted/40"
+										// While expanded, the product name row sticks as the buyer scrolls
+										// its (possibly long) variant list, then hands off to the next
+										// product — mobile/tablet only (desktop is static). It pins just
+										// BELOW the sticky MobileHeader using the height that header
+										// publishes (`--app-header-h`), so it never covers the store nav;
+										// z-[9] keeps it under the header (z-10) as it scrolls back off.
+										className={cn(
+											"flex w-full items-center gap-3 rounded-2xl bg-card p-3 text-left hover:bg-muted/40",
+											open &&
+												"sticky top-[var(--app-header-h,0px)] z-[9] rounded-b-none lg:static lg:z-auto",
+										)}
 									>
 										<ProductThumb
 											url={p.imageUrls[0]}
@@ -1484,7 +1500,7 @@ function BuildOrderScreen({
 											customPriceInput={customPriceInput}
 											setCustomPriceInput={setCustomPriceInput}
 											setQty={setQty}
-											className="border-t border-border bg-muted/20 px-3 pb-1"
+											className="rounded-b-2xl border-t border-border bg-muted/20 px-3 pb-1"
 										/>
 									) : null}
 								</div>
@@ -1747,38 +1763,50 @@ function BuildOrderScreen({
 					if (!o) setModalProductId(null);
 				}}
 			>
-				<DialogContent className="max-w-md">
-					{modalProduct ? (
+				{/* Fixed-height flex column: header + footer pinned, only the variant
+				    list scrolls — so a product with many variants never grows the modal
+				    past the viewport (the earlier version overflowed off-screen). */}
+				<DialogContent className="flex max-h-[85dvh] flex-col gap-0 p-0 sm:max-w-md">
+					{modalProduct && modalMeta ? (
 						<>
-							<DialogHeader>
+							<DialogHeader className="shrink-0 gap-0 border-b border-border p-4 pr-12">
 								<DialogTitle className="flex items-center gap-3">
 									<ProductThumb
 										url={modalProduct.imageUrls[0]}
 										name={modalProduct.name}
 										className="size-11 shrink-0 rounded-xl"
 									/>
-									<span className="min-w-0 truncate">{modalProduct.name}</span>
+									<span className="flex min-w-0 flex-col">
+										<span className="truncate">{modalProduct.name}</span>
+										<span className="truncate text-xs font-normal text-muted-foreground">
+											{modalMeta.priceLabel}
+										</span>
+									</span>
 								</DialogTitle>
-								<DialogDescription>
+								<DialogDescription className="sr-only">
 									Add options to this counter order.
 								</DialogDescription>
 							</DialogHeader>
-							<ProductVariantRows
-								product={modalProduct}
-								currency={currency}
-								cart={cart}
-								customPriceInput={customPriceInput}
-								setCustomPriceInput={setCustomPriceInput}
-								setQty={setQty}
-							/>
-							<DialogFooter>
+							<div className="min-h-0 flex-1 overflow-y-auto px-4">
+								<ProductVariantRows
+									product={modalProduct}
+									currency={currency}
+									cart={cart}
+									customPriceInput={customPriceInput}
+									setCustomPriceInput={setCustomPriceInput}
+									setQty={setQty}
+								/>
+							</div>
+							<div className="shrink-0 border-t border-border p-3">
 								<Button
-									variant="outline"
 									onClick={() => setModalProductId(null)}
+									className="h-11 w-full"
 								>
-									Done
+									{modalMeta.cartQty > 0
+										? `Done · ${modalMeta.cartQty} added`
+										: "Done"}
 								</Button>
-							</DialogFooter>
+							</div>
 						</>
 					) : null}
 				</DialogContent>
