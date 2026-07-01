@@ -10,6 +10,7 @@ import {
 	Sticker,
 } from "../components/landing/landing-ui";
 import { Nav } from "../components/landing/nav";
+import { ResellerBandTable } from "../components/landing/reseller-band-table";
 import { Button } from "../components/ui/button";
 import { buildWaContactLink } from "../lib/contact";
 import { cn } from "../lib/utils";
@@ -17,7 +18,7 @@ import { m } from "../paraglide/messages";
 
 const SEO_TITLE = "Pricing — Kedaipal WhatsApp Order Hub";
 const SEO_DESC =
-	"Simple, transparent pricing for WhatsApp sellers. Start with a 14-day free trial. Starter from RM79/mo, Pro RM149/mo, Scale RM299/mo. Founding 10 spots available.";
+	"Simple, transparent pricing for WhatsApp sellers. Start with a 14-day free trial. Starter from RM79/mo, Pro RM149/mo, Scale from RM299/mo. Founding 10 spots available.";
 const SITE_URL = "https://kedaipal.com";
 const PAGE_URL = `${SITE_URL}/pricing`;
 const OG_IMAGE = `${SITE_URL}/og-image.png`;
@@ -135,7 +136,7 @@ function useFeatures(): Feature[] {
 			label: m.pricingpage_feat_orders_per_month(),
 			starter: "100",
 			pro: "500",
-			scale: "2,000",
+			scale: m.pricingpage_unlimited(),
 		},
 		{
 			label: m.pricingpage_feat_team_members(),
@@ -247,6 +248,20 @@ function useFeatures(): Feature[] {
 			scale: true,
 			comingSoon: true,
 		},
+		{
+			label: m.pricingpage_feat_production_calendar(),
+			starter: false,
+			pro: false,
+			scale: true,
+			comingSoon: true,
+		},
+		{
+			label: m.pricingpage_feat_priority_support(),
+			starter: false,
+			pro: false,
+			scale: true,
+			comingSoon: true,
+		},
 	];
 }
 
@@ -281,6 +296,10 @@ function FeatureCell({ value }: { value: FeatureValue }) {
 
 function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 	const { isSignedIn } = useAuth();
+	// Scale is banded on active resellers (Coming soon), so it always anchors on
+	// "from RM299" and ignores the monthly/annual toggle — an annual number would
+	// be misleading before banded billing ships. See docs/pricing.md.
+	const isScale = tier.id === "scale";
 	const price = cycle === "annual" ? tier.annual : tier.monthly;
 
 	return (
@@ -313,7 +332,14 @@ function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 			</p>
 
 			<div className="mt-3 flex items-end gap-1">
-				<span className="text-4xl font-bold tracking-tight">RM {price}</span>
+				{isScale && (
+					<span className="mb-1 text-sm text-muted-foreground">
+						{m.pricingpage_price_from()}
+					</span>
+				)}
+				<span className="text-4xl font-bold tracking-tight">
+					RM {isScale ? tier.monthly : price}
+				</span>
 				<span
 					className={cn(
 						"mb-1 text-sm",
@@ -325,7 +351,7 @@ function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 					{m.pricing_per_month()}
 				</span>
 			</div>
-			{cycle === "annual" && (
+			{cycle === "annual" && !isScale && (
 				<p className="mt-0.5 text-xs text-accent">
 					{m.pricingpage_billed_annual({ total: tier.annual * 10 })}
 				</p>
@@ -339,6 +365,8 @@ function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 			>
 				{tier.tagline}
 			</p>
+
+			{isScale && <ResellerBandTable className="mt-4" />}
 
 			{tier.founding && (
 				<div className="mt-4 rounded-xl border border-accent/40 bg-accent/10 px-4 py-3">
@@ -378,26 +406,35 @@ function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 			</ul>
 
 			<div className="mt-6">
-				<Button
-					asChild
-					size="lg"
-					className={cn(
-						"h-11 w-full rounded-full",
-						!tier.popular &&
-							"border-border bg-background text-foreground hover:bg-muted",
-					)}
-					variant={tier.popular ? "default" : "outline"}
-				>
-					{isSignedIn ? (
-						<Link to="/app">
-							{m.nav_go_to_dashboard()} <ArrowRight className="size-4" />
-						</Link>
-					) : (
-						<Link to="/sign-up/$" params={{ _splat: "" }}>
-							{tier.cta} <ArrowRight className="size-4" />
-						</Link>
-					)}
-				</Button>
+				{isScale ? (
+					// Scale is banded + not yet purchasable — a disabled "Coming soon"
+					// panel replaces the CTA (mirrors the landing teaser). Trials are
+					// Pro-only, so a trial link here would be wrong.
+					<div className="flex h-11 w-full items-center justify-center rounded-full border border-dashed border-border bg-muted/40 text-sm font-semibold text-muted-foreground">
+						{m.pricingpage_coming_soon()}
+					</div>
+				) : (
+					<Button
+						asChild
+						size="lg"
+						className={cn(
+							"h-11 w-full rounded-full",
+							!tier.popular &&
+								"border-border bg-background text-foreground hover:bg-muted",
+						)}
+						variant={tier.popular ? "default" : "outline"}
+					>
+						{isSignedIn ? (
+							<Link to="/app">
+								{m.nav_go_to_dashboard()} <ArrowRight className="size-4" />
+							</Link>
+						) : (
+							<Link to="/sign-up/$" params={{ _splat: "" }}>
+								{tier.cta} <ArrowRight className="size-4" />
+							</Link>
+						)}
+					</Button>
+				)}
 			</div>
 		</div>
 	);
