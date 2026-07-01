@@ -132,9 +132,21 @@ describe("orderToReceiptData", () => {
 		expect(data.customerName).toBe("Aisha");
 		expect(data.paymentStatusLabel).toBe("Awaiting payment");
 		expect(data.paidDate).toBeUndefined();
+		// Unpaid → an invoice (the document title keys off this flag).
+		expect(data.paid).toBe(false);
 		expect(data.items).toEqual([
 			{ name: "Cake", variantLabel: "1kg", quantity: 2, unitPrice: 5000 },
 		]);
+	});
+
+	test("a claimed-but-unconfirmed payment is still an invoice (not paid)", () => {
+		const data = orderToReceiptData({
+			order: { ...baseOrder, paymentStatus: "claimed" },
+			storeName: "Sweet Co",
+			paymentMethods: [],
+		});
+		expect(data.paid).toBe(false);
+		expect(data.paymentStatusLabel).toBe("Payment claimed");
 	});
 
 	test("a received payment surfaces the paid date + label", () => {
@@ -149,6 +161,8 @@ describe("orderToReceiptData", () => {
 		});
 		expect(data.paymentStatusLabel).toBe("Paid");
 		expect(data.paidDate).toBe(JUN_30_MYT);
+		// Received → a receipt.
+		expect(data.paid).toBe(true);
 	});
 });
 

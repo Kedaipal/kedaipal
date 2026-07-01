@@ -357,8 +357,12 @@ export async function buildOrderReceiptPdf(
 	const d = await newDoc();
 	const { page, font, bold } = d;
 
-	const paid = data.paymentStatusLabel.toLowerCase() === "paid";
-	let y = header(d, "Receipt", `Order ${data.orderShortId}`, {
+	const paid = data.paid;
+	// Same builder prints two documents: a settled order is a "Receipt" (proof of
+	// payment), an unpaid/claimed order is an "Invoice" (a bill the buyer still
+	// has to pay). The "How to pay" block + amber status badge below already carry
+	// the pay-me intent; the title makes it unambiguous.
+	let y = header(d, paid ? "Receipt" : "Invoice", `Order ${data.orderShortId}`, {
 		label: data.paymentStatusLabel,
 		fill: paid ? GREEN : AMBER,
 	});
@@ -443,9 +447,14 @@ export async function buildOrderReceiptPdf(
 		y -= 12;
 	}
 
-	paymentCard(d, "How to pay", data.paymentBlocks, y);
+	paymentCard(d, paid ? "How you paid" : "How to pay", data.paymentBlocks, y);
 
-	footer(d, `Thank you for your purchase at ${data.storeName} via Kedaipal.`);
+	footer(
+		d,
+		paid
+			? `Thank you for your purchase at ${data.storeName} via Kedaipal.`
+			: `Please use ${data.orderShortId} as your payment reference. Thank you for ordering from ${data.storeName} via Kedaipal.`,
+	);
 	return d.doc.save();
 }
 

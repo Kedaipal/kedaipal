@@ -69,10 +69,24 @@ Rendering (pdf-lib, runs in the default Convex runtime — no `"use node"`):
   To eyeball the rendered output on macOS: build a PDF to `/tmp/x.pdf`, then
   `qlmanage -t -s 1000 -o /tmp /tmp/x.pdf` produces `/tmp/x.pdf.png`.
 
+**Receipt vs Invoice — one document, two faces (`86ey4fz3w`):** `buildOrderReceiptPdf`
+titles itself off `OrderReceiptData.paid` (`= paymentStatus === "received"`): a
+settled order prints **"Receipt"** (green "Paid" badge, "How you paid"), an unpaid
+/claimed order prints **"Invoice"** (amber "Awaiting payment" badge, "How to pay",
+and a footer nudging the `ORD-XXXX` payment reference). The download filename
+matches (`Receipt-…` / `Invoice-…`). No separate invoice builder or table — the
+pay-later counter case reuses this.
+
 Backend:
 - **A:** `orders.generateReceiptPdf` (public action) → returns PDF bytes +
   filename. Authorized through the same `resolveSharedOrder` seam as `orders.get`:
   buyer passes `token`, seller passes an owned `shortId`.
+- **A (send):** `orders.sendOrderDocumentToBuyer` (seller-auth action, `shortId`
+  only) — renders the same PDF, stores it **transiently** (Convex storage → a URL
+  Meta fetches), sends it to the buyer's WhatsApp as a **`document`** attachment
+  (`transactional`), then a scheduled `deleteTransientStorage` reclaims the blob.
+  Used by the counter Done screen so the buyer — who scanned once — gets the
+  receipt/invoice in-chat without rescanning. See `docs/counter-checkout.md`.
 - **B:** `invoices.generateInvoicePdf` (internal action, scheduled from
   `issueInvoice`) renders + stores the blob; idempotent (skips if one exists).
   `invoices.getInvoicePdfUrl` returns an ownership-checked signed URL (owning
@@ -91,6 +105,9 @@ Backend:
 Frontend:
 - `src/components/order/receipt-download-button.tsx` — used by the seller order
   detail (`shortId`) and the buyer tracking page (`token`).
+- `src/components/order/send-order-document.tsx` — the counter Done-screen
+  Send-to-WhatsApp / Download / Share block (`sharePdfBytes` + `canSharePdf` in
+  `src/lib/download.ts` drive the OS share sheet, falling back to download).
 - `src/components/settings/invoice-download-button.tsx` — used by the billing tab
   and admin billing console.
 - `src/lib/download.ts` — `downloadPdfBytes` / `downloadCsv` (CSV gets a UTF-8 BOM

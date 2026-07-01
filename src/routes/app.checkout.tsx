@@ -34,6 +34,7 @@ import {
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 } from "../../convex/lib/paymentMethod";
+import { SendOrderDocument } from "../components/order/send-order-document";
 import { Button } from "../components/ui/button";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import {
@@ -198,6 +199,7 @@ function ActiveSession({
 				shortId={created?.shortId}
 				orderId={created?.orderId ?? session.orderId}
 				paidInPerson={created?.paidInPerson ?? false}
+				buyerName={session.displayName}
 				onNew={onStartNew}
 				onBackToList={onBackToList}
 			/>
@@ -628,12 +630,14 @@ function DoneScreen({
 	shortId,
 	orderId,
 	paidInPerson,
+	buyerName,
 	onNew,
 	onBackToList,
 }: {
 	shortId: string | undefined;
 	orderId: Id<"orders"> | undefined;
 	paidInPerson: boolean;
+	buyerName: string | undefined;
 	onNew: () => void;
 	onBackToList: () => void;
 }) {
@@ -690,6 +694,19 @@ function DoneScreen({
 					</p>
 				</div>
 			</div>
+			{shortId ? (
+				<div className="rounded-xl border border-emerald-200 bg-white/70 p-4">
+					<p className="text-sm font-semibold text-emerald-950">
+						{paidInPerson ? "Send the receipt" : "Send the invoice"}
+					</p>
+					<SendOrderDocument
+						shortId={shortId}
+						paid={paidInPerson}
+						buyerName={buyerName}
+						className="mt-3"
+					/>
+				</div>
+			) : null}
 			<div className="grid gap-2 sm:grid-cols-2">
 				{canComplete ? (
 					<Button

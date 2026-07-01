@@ -209,6 +209,7 @@ yet; revisit (trim or gate it) alongside the WABA-protection / compliance work
 | Expiry cron (every 5 min) | `convex/crons.ts` → `expireStaleSessions` |
 | Webhook observability (phone + pushname + text) | `convex/http.ts` |
 | **iPad-first seller UI** (start → QR → live bind → catalog/cart → pay → done) | `src/routes/app.checkout.tsx` |
+| Receipt/invoice **send to buyer's WhatsApp** + download/share (Done screen) | `src/components/order/send-order-document.tsx`, `orders.sendOrderDocumentToBuyer` |
 | Nav entry ("Counter") | `sidebar.tsx`, `bottom-nav.tsx` |
 | Tests | `counterCheckout.test.ts`, `inboundIntent.test.ts`, `whatsapp.test.ts` |
 
@@ -233,8 +234,44 @@ reliable in-person data without adding buyer-side friction. Legacy counter order
 that stored the method as a `"In-person (…)"` reference string are migrated by
 `migrations:backfillCounterPaymentMethod`.
 
+## Receipt / invoice to the buyer — scan once, no rescan ([`86ey4fz3w`](https://app.clickup.com/t/86ey4fz3w))
+
+The whole point of the QR is that the buyer scans it **once** to bind their
+WhatsApp number. Everything after — confirmation, receipt, invoice, pay-later —
+rides that same chat, so they never scan again. This ticket made that promise
+explicit and gave the seller the tools on the Done screen.
+
+- **Humanized, localized copy.** The inline English bind reply + counter
+  confirmation strings were moved into the `whatsappCopy` catalog as system
+  messages (`counterCheckoutBound` / `Expired` / `Used`, `counterOrderConfirmed{Paid,Unpaid}`),
+  warmed up, and **localized to the store's locale** (`bindCheckoutSession` now
+  returns `locale`; `not_found`, which has no store, stays English). Same
+  transactional category — order messages bypass WABA gating.
+- **Send the document to the buyer's WhatsApp.** The Done screen (the "next
+  page" after `createOrderFromSession`) carries a **Send / Download / Share**
+  block (`src/components/order/send-order-document.tsx`):
+  - **Paid now → a Receipt**, **Pay later → an Invoice** — the *same* PDF with an
+    adaptive title (`buildOrderReceiptPdf` keys off `OrderReceiptData.paid`; an
+    unpaid order prints "Invoice" + the "How to pay" block, a settled one prints
+    "Receipt"). No separate invoice builder or table.
+  - **Send** → `orders.sendOrderDocumentToBuyer` (seller-auth via
+    `resolveSharedOrder(shortId)`) renders the PDF, stores it transiently to hand
+    Meta a fetch URL, sends it as a WhatsApp **`document`** (new outbound kind in
+    the channel adapter), then a scheduled `deleteTransientStorage` reclaims the
+    blob (the doc is deterministic — never persisted). Sent `transactional`.
+  - **Download / Share** → `orders.generateReceiptPdf` bytes → browser download or
+    the OS share sheet (`navigator.share` with the file; falls back to download
+    where unsupported, e.g. desktop).
+- **Discoverability:** a one-line helper under the actions — *"{buyer} scanned
+  once to connect, so their {receipt/invoice} goes straight to that WhatsApp
+  chat — no need to scan again."* The Done-screen actions only render for the
+  fresh-create path (we have the `shortId` + accurate paid state there); a
+  resend from order detail is a noted follow-up.
+
 ## Pending (V1.1)
 
+- **Resend from order detail** — the "Send receipt/invoice to buyer" action is
+  currently only on the counter Done screen; order detail has Download only.
 - **Manual-phone path** — seller types the buyer's number to bind a session
   without a scan (e.g. buyer's camera won't cooperate). Binds the session
   directly, no webhook.

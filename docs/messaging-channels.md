@@ -29,10 +29,13 @@ A normalized messaging contract plus a delegating WhatsApp adapter. The orchestr
 type OutboundMessage =
   | { kind: "text"; body: string }
   | { kind: "image"; imageUrl: string; caption?: string }
+  | { kind: "document"; documentUrl: string; filename?: string; caption?: string }
   | { kind: "cta"; body: string; buttonText: string; url: string; imageUrl?: string };
 ```
 
 The adapter's `send(to, msg)` maps these to provider payloads. Provider quirks live *inside* the adapter, never in the orchestrator.
+
+`document` (added `86ey4fz3w`) sends a file attachment hosted at a public URL the provider fetches — used to push a receipt/invoice PDF to the buyer's WhatsApp from the counter Done screen. The WhatsApp adapter maps it to a `type: "document"` message with `{ link, filename?, caption? }` (`sendDocument` in `convex/lib/whatsapp.ts`). The caller (`orders.sendOrderDocumentToBuyer`) is responsible for hosting the file (Convex storage → `getUrl`) and reclaiming it after.
 
 ### CTA degrade (formerly inline `canUseButton`)
 

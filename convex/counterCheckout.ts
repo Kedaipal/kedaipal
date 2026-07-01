@@ -46,6 +46,7 @@ import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidWaPhone } from "./lib/slug";
 import { variantLabel } from "./lib/variant";
+import { type Locale, pickLocale } from "./lib/whatsappCopy";
 
 /** A counter session lives this long before it expires unscanned (QR window). */
 export const SESSION_TTL_MS = 10 * 60 * 1000; // 10 minutes
@@ -638,12 +639,14 @@ export const cancelCheckoutSession = mutation({
 	},
 });
 
-/** Outcome of an inbound `KP-<token>` bind attempt (drives the buyer reply). */
+/** Outcome of an inbound `KP-<token>` bind attempt (drives the buyer reply).
+ * `locale` (the store's, for a localized reply) rides along on every outcome that
+ * resolved a retailer; `not_found` has no retailer, so the caller defaults to en. */
 export type BindResult =
-	| { result: "bound"; storeName: string; displayName: string }
-	| { result: "expired"; storeName: string }
-	| { result: "not_found" }
-	| { result: "already_used" };
+	| { result: "bound"; storeName: string; displayName: string; locale: Locale }
+	| { result: "expired"; storeName: string; locale: Locale }
+	| { result: "already_used"; storeName: string; locale: Locale }
+	| { result: "not_found" };
 
 /**
  * Internal: bind an inbound buyer (phone + pushname) to the session named by a
@@ -667,6 +670,7 @@ export const bindCheckoutSession = internalMutation({
 
 		const retailer = await ctx.db.get(session.retailerId);
 		const storeName = retailer?.storeName ?? "the store";
+		const locale = pickLocale(retailer?.locale);
 
 		const now = Date.now();
 		// Expiry takes precedence over the generic status check so a buyer always
@@ -680,12 +684,13 @@ export const bindCheckoutSession = internalMutation({
 		if (isExpired) {
 			if (session.status === "awaiting_buyer")
 				await ctx.db.patch(session._id, { status: "expired", updatedAt: now });
-			return { result: "expired", storeName };
+			return { result: "expired", storeName, locale };
 		}
 
 		// Single-use: any other non-awaiting status (buyer_identified / completed /
 		// cancelled) is a replay of a used session — ignored.
-		if (session.status !== "awaiting_buyer") return { result: "already_used" };
+		if (session.status !== "awaiting_buyer")
+			return { result: "already_used", storeName, locale };
 
 		// Normalize the inbound phone the same way the order flow does.
 		let normalizedPhone: string;
@@ -726,7 +731,7 @@ export const bindCheckoutSession = internalMutation({
 		const displayName = existing
 			? getDisplayName(existing)
 			: getDisplayName({ waProfileName: trimmedPushname, waPhone: normalizedPhone });
-		return { result: "bound", storeName, displayName };
+		return { result: "bound", storeName, displayName, locale };
 	},
 });
 

@@ -85,14 +85,36 @@ async function tokenFor(t: ReturnType<typeof setup>, shortId: string) {
 }
 
 describe("orders.generateReceiptPdf (UC A)", () => {
-	test("buyer (token) gets a PDF named after the order", async () => {
+	test("an unpaid order downloads as an Invoice-named PDF", async () => {
 		const t = setup();
 		const r = await seedRetailer(t, USER_A);
 		const shortId = await seedOrder(t, USER_A, r._id);
 		const token = await tokenFor(t, shortId);
 
+		// Seeded orders are unpaid → the document is an invoice (a bill), not a receipt.
 		const res = await t.action(api.orders.generateReceiptPdf, { token });
 		expect(res).not.toBeNull();
+		expect(res?.filename).toBe(`Invoice-${shortId}.pdf`);
+		expect(res && isPdf(res.pdf)).toBe(true);
+	});
+
+	test("a settled order downloads as a Receipt-named PDF", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const shortId = await seedOrder(t, USER_A, r._id);
+		await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			await ctx.db.patch(o!._id, {
+				paymentStatus: "received",
+				paymentReceivedAt: Date.now(),
+			});
+		});
+		const token = await tokenFor(t, shortId);
+
+		const res = await t.action(api.orders.generateReceiptPdf, { token });
 		expect(res?.filename).toBe(`Receipt-${shortId}.pdf`);
 		expect(res && isPdf(res.pdf)).toBe(true);
 	});

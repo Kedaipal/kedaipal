@@ -59,6 +59,35 @@ describe("whatsappAdapter.send — union → Meta payload mapping", () => {
 		expect(body.image).toEqual({ link: "https://x.test/qr.png", caption: "Scan to pay" });
 		fetchMock.restore();
 	});
+
+	test("document → document message with filename + caption", async () => {
+		const fetchMock = installFetchMock();
+		await whatsappAdapter.send("60123456789", {
+			kind: "document",
+			documentUrl: "https://x.test/receipt.pdf",
+			filename: "Receipt-ORD-ABCD.pdf",
+			caption: "Here's your receipt",
+		});
+		const body = fetchMock.calls[0].body;
+		expect(body.type).toBe("document");
+		expect(body.document).toEqual({
+			link: "https://x.test/receipt.pdf",
+			filename: "Receipt-ORD-ABCD.pdf",
+			caption: "Here's your receipt",
+		});
+		fetchMock.restore();
+	});
+
+	test("document → omits optional filename/caption when absent", async () => {
+		const fetchMock = installFetchMock();
+		await whatsappAdapter.send("60123456789", {
+			kind: "document",
+			documentUrl: "https://x.test/invoice.pdf",
+		});
+		const body = fetchMock.calls[0].body;
+		expect(body.document).toEqual({ link: "https://x.test/invoice.pdf" });
+		fetchMock.restore();
+	});
 });
 
 describe("whatsappAdapter.send — CTA degrade matrix", () => {

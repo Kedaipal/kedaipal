@@ -413,13 +413,19 @@ export const handleInbound = internalAction({
 				{ token: intent.token, waPhone: fromPhone, profileName },
 			);
 			console.log("WA checkout bind", { fromPhone, result: bind.result });
+			// Localized to the store's locale (the bind resolved the retailer). Only
+			// `not_found` has no store/locale — fall back to the generic English hint.
+			const bindVars = {
+				shortId: "",
+				storeName: "storeName" in bind ? bind.storeName : "",
+			};
 			const body =
 				bind.result === "bound"
-					? `✅ You're connected to ${bind.storeName}. The cashier will confirm your order shortly.`
+					? renderSystemMessage(bind.locale, "counterCheckoutBound", bindVars)
 					: bind.result === "expired"
-						? "This checkout link has expired — please ask the cashier to show a fresh QR."
+						? renderSystemMessage(bind.locale, "counterCheckoutExpired", bindVars)
 						: bind.result === "already_used"
-							? "This checkout link has already been used. Please ask the cashier for a new QR if you'd like to order again."
+							? renderSystemMessage(bind.locale, "counterCheckoutUsed", bindVars)
 							: fallback();
 			try {
 				await wa.send(fromPhone, { kind: "text", body });
@@ -1137,15 +1143,18 @@ export const notifyCounterOrderCreated = internalAction({
 		const trackingUrl = `${appUrl}/track/${trackingToken}`;
 		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
 		const paid = meta.paymentStatus === "received";
+		const locale = pickLocale(meta.locale);
 
-		const body =
-			meta.locale === "ms"
-				? paid
-					? `🧾 Pesanan ${meta.shortId} disahkan di ${meta.storeName}. Jumlah ${money}. ✅ Pembayaran diterima — terima kasih! Jejak pesanan: ${trackingUrl}`
-					: `🧾 Pesanan ${meta.shortId} disahkan di ${meta.storeName}. Jumlah ${money}. Bayar & jejak pesanan di sini: ${trackingUrl}`
-				: paid
-					? `🧾 Order ${meta.shortId} confirmed at ${meta.storeName}. Total ${money}. ✅ Payment received — thank you! Track your order: ${trackingUrl}`
-					: `🧾 Order ${meta.shortId} confirmed at ${meta.storeName}. Total ${money}. Pay & track your order here: ${trackingUrl}`;
+		const body = renderSystemMessage(
+			locale,
+			paid ? "counterOrderConfirmedPaid" : "counterOrderConfirmedUnpaid",
+			{
+				shortId: meta.shortId,
+				storeName: meta.storeName,
+				amount: money,
+				trackingUrl,
+			},
+		);
 		try {
 			await makeGuardedSender(ctx, meta.retailerId, "transactional").send(meta.customerWaPhone, {
 				kind: "text",

@@ -63,6 +63,25 @@ export async function sendImage(
 	});
 }
 
+export async function sendDocument(
+	toPhone: string,
+	documentLink: string,
+	filename?: string,
+	caption?: string,
+): Promise<void> {
+	await postMessage({
+		messaging_product: "whatsapp",
+		recipient_type: "individual",
+		to: toPhone,
+		type: "document",
+		document: {
+			link: documentLink,
+			...(filename ? { filename } : {}),
+			...(caption ? { caption } : {}),
+		},
+	});
+}
+
 export async function sendCtaUrlButton(
 	toPhone: string,
 	body: string,

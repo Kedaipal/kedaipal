@@ -75,6 +75,11 @@ export type OrderReceiptData = {
 	orderShortId: string;
 	orderDate: number; // createdAt
 	paidDate?: number; // paymentReceivedAt, when settled
+	// True only once payment is confirmed received. Drives the document's identity:
+	// a settled order prints as a "Receipt" (proof of payment), an unpaid/claimed
+	// order prints as an "Invoice" (a bill, with the "How to pay" block). Same
+	// builder, two faces — see buildOrderReceiptPdf.
+	paid: boolean;
 	paymentStatusLabel: string;
 	customerName?: string;
 	customerPhone?: string;
@@ -177,6 +182,7 @@ export function orderToReceiptData(args: {
 		orderShortId: order.shortId,
 		orderDate: order.createdAt,
 		paidDate: status === "received" ? order.paymentReceivedAt : undefined,
+		paid: status === "received",
 		paymentStatusLabel: PAYMENT_STATUS_LABEL[status] ?? "Awaiting payment",
 		customerName: order.customer.name?.trim() || undefined,
 		customerPhone: order.customer.waPhone?.trim() || undefined,
