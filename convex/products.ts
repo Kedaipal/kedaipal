@@ -926,7 +926,7 @@ export const bulkUpsert = mutation({
 			});
 		}
 
-		// Beta product cap — only creates count.
+		// Product cap — only creates count.
 		const insertCount = classified.filter((x) => x.c.mode === "create").length;
 		const existingCount = await ctx.db
 			.query("products")

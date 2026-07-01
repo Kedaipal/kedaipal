@@ -47,8 +47,7 @@ function PrivacyPage() {
 					This Privacy Policy explains how Kedaipal ("Kedaipal", "we", "our", or
 					"us") collects, uses, and shares information when you use our
 					services, including the retailer dashboard, hosted storefronts, and
-					WhatsApp ordering flow (collectively, the "Service"). Kedaipal is
-					currently in beta.
+					WhatsApp ordering flow (collectively, the "Service").
 				</p>
 			</section>
 
@@ -103,7 +102,7 @@ function PrivacyPage() {
 						To debug issues, monitor performance, and improve the Service.
 					</li>
 					<li>
-						To communicate with retailers about the Service and beta changes.
+						To communicate with retailers about the Service and changes to it.
 					</li>
 					<li>To comply with legal obligations.</li>
 				</ul>
