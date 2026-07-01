@@ -933,4 +933,21 @@ export default defineSchema({
 	})
 		.index("by_retailer_sent", ["retailerId", "sentAt"])
 		.index("by_phone_sent", ["toWaPhone", "sentAt"]),
+
+	// --- Admin console audit trail (ClickUp 86ey25er1, docs/admin-console.md) --
+	// One row per admin-on-behalf ("act-as") write during white-glove onboarding.
+	// Kedaipal admins can operate any seller's dashboard (see requireRetailerAccess
+	// in convex/lib/auth.ts); every write they make on a store they don't own is
+	// stamped here so edits are attributable to a person. Owner writes are NOT
+	// logged — only the admin exception. `targetId` is the affected doc id when
+	// known at write time (updates/deletes); omitted for creates.
+	adminAuditLog: defineTable({
+		adminUserId: v.string(), // Clerk subject of the acting admin
+		retailerId: v.id("retailers"), // store acted upon
+		action: v.string(), // e.g. "products.create", "retailers.updateSettings"
+		targetId: v.optional(v.string()),
+		ts: v.number(),
+	})
+		.index("by_retailer", ["retailerId"])
+		.index("by_admin", ["adminUserId"]),
 });

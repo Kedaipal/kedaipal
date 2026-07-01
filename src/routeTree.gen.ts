@@ -34,6 +34,7 @@ import { Route as AppProductsProductIdRouteImport } from './routes/app.products.
 import { Route as AppOrdersShortIdRouteImport } from './routes/app.orders.$shortId'
 import { Route as AppCustomersCustomerIdRouteImport } from './routes/app.customers.$customerId'
 import { Route as AppAdminWabaRouteImport } from './routes/app.admin.waba'
+import { Route as AppAdminSellersRouteImport } from './routes/app.admin.sellers'
 import { Route as AppAdminBillingRouteImport } from './routes/app.admin.billing'
 
 const TermsRoute = TermsRouteImport.update({
@@ -161,6 +162,11 @@ const AppAdminWabaRoute = AppAdminWabaRouteImport.update({
   path: '/admin/waba',
   getParentRoute: () => AppRoute,
 } as any)
+const AppAdminSellersRoute = AppAdminSellersRouteImport.update({
+  id: '/admin/sellers',
+  path: '/admin/sellers',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppAdminBillingRoute = AppAdminBillingRouteImport.update({
   id: '/admin/billing',
   path: '/admin/billing',
@@ -185,6 +191,7 @@ export interface FileRoutesByFullPath {
   '/track/$token': typeof TrackTokenRoute
   '/app/': typeof AppIndexRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
+  '/app/admin/sellers': typeof AppAdminSellersRoute
   '/app/admin/waba': typeof AppAdminWabaRoute
   '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
   '/app/orders/$shortId': typeof AppOrdersShortIdRoute
@@ -212,6 +219,7 @@ export interface FileRoutesByTo {
   '/track/$token': typeof TrackTokenRoute
   '/app': typeof AppIndexRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
+  '/app/admin/sellers': typeof AppAdminSellersRoute
   '/app/admin/waba': typeof AppAdminWabaRoute
   '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
   '/app/orders/$shortId': typeof AppOrdersShortIdRoute
@@ -241,6 +249,7 @@ export interface FileRoutesById {
   '/track/$token': typeof TrackTokenRoute
   '/app/': typeof AppIndexRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
+  '/app/admin/sellers': typeof AppAdminSellersRoute
   '/app/admin/waba': typeof AppAdminWabaRoute
   '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
   '/app/orders/$shortId': typeof AppOrdersShortIdRoute
@@ -271,6 +280,7 @@ export interface FileRouteTypes {
     | '/track/$token'
     | '/app/'
     | '/app/admin/billing'
+    | '/app/admin/sellers'
     | '/app/admin/waba'
     | '/app/customers/$customerId'
     | '/app/orders/$shortId'
@@ -298,6 +308,7 @@ export interface FileRouteTypes {
     | '/track/$token'
     | '/app'
     | '/app/admin/billing'
+    | '/app/admin/sellers'
     | '/app/admin/waba'
     | '/app/customers/$customerId'
     | '/app/orders/$shortId'
@@ -326,6 +337,7 @@ export interface FileRouteTypes {
     | '/track/$token'
     | '/app/'
     | '/app/admin/billing'
+    | '/app/admin/sellers'
     | '/app/admin/waba'
     | '/app/customers/$customerId'
     | '/app/orders/$shortId'
@@ -530,6 +542,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAdminWabaRouteImport
       parentRoute: typeof AppRoute
     }
+    '/app/admin/sellers': {
+      id: '/app/admin/sellers'
+      path: '/admin/sellers'
+      fullPath: '/app/admin/sellers'
+      preLoaderRoute: typeof AppAdminSellersRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/app/admin/billing': {
       id: '/app/admin/billing'
       path: '/admin/billing'
@@ -545,6 +564,7 @@ interface AppRouteChildren {
   AppSettingsRoute: typeof AppSettingsRoute
   AppIndexRoute: typeof AppIndexRoute
   AppAdminBillingRoute: typeof AppAdminBillingRoute
+  AppAdminSellersRoute: typeof AppAdminSellersRoute
   AppAdminWabaRoute: typeof AppAdminWabaRoute
   AppCustomersCustomerIdRoute: typeof AppCustomersCustomerIdRoute
   AppOrdersShortIdRoute: typeof AppOrdersShortIdRoute
@@ -561,6 +581,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppSettingsRoute: AppSettingsRoute,
   AppIndexRoute: AppIndexRoute,
   AppAdminBillingRoute: AppAdminBillingRoute,
+  AppAdminSellersRoute: AppAdminSellersRoute,
   AppAdminWabaRoute: AppAdminWabaRoute,
   AppCustomersCustomerIdRoute: AppCustomersCustomerIdRoute,
   AppOrdersShortIdRoute: AppOrdersShortIdRoute,

@@ -9,16 +9,23 @@ interface ActionableCounts {
 
 export function useOrderToastNotifications(
 	counts: ActionableCounts | undefined,
+	// The store the counts belong to (retailer id). When it changes — e.g. an admin
+	// entering/leaving act-as — the counts jump to a DIFFERENT store's numbers, which
+	// must not be mistaken for newly placed/confirmed orders. We re-baseline silently.
+	storeKey?: string,
 ): void {
 	const prevRef = useRef<ActionableCounts | null>(null);
+	const storeKeyRef = useRef<string | undefined>(undefined);
 	const initializedRef = useRef(false);
 
 	useEffect(() => {
 		if (counts === undefined) return;
 
-		// Skip the first load — don't toast for orders that already exist.
-		if (!initializedRef.current) {
+		// Skip the first load, and re-baseline (no toast) whenever the operated store
+		// changes — a different store's existing orders aren't "new".
+		if (!initializedRef.current || storeKeyRef.current !== storeKey) {
 			initializedRef.current = true;
+			storeKeyRef.current = storeKey;
 			prevRef.current = { ...counts };
 			return;
 		}
@@ -51,5 +58,5 @@ export function useOrderToastNotifications(
 		}
 
 		prevRef.current = { ...counts };
-	}, [counts]);
+	}, [counts, storeKey]);
 }

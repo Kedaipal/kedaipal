@@ -4,7 +4,7 @@ import {
 	redirect,
 	useNavigate,
 } from "@tanstack/react-router";
-import { useConvex, useMutation, useQuery } from "convex/react";
+import { useConvex, useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { Download, FileSpreadsheet, Info, Upload } from "lucide-react";
 import { type ChangeEvent, useState } from "react";
@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { PageHeader } from "../components/dashboard/page-header";
 import { Button } from "../components/ui/button";
+import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import {
 	downloadProductCsvTemplate,
 	downloadSampleProductsCsv,
@@ -123,7 +124,7 @@ function chunkByVariants(
 function ImportProductsRoute() {
 	const navigate = useNavigate();
 	const convex = useConvex();
-	const retailer = useQuery(api.retailers.getMyRetailer);
+	const retailer = useDashboardRetailer();
 	const bulkUpsert = useMutation(api.products.bulkUpsert);
 
 	const [parsed, setParsed] = useState<GroupedImportResult | null>(null);

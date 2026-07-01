@@ -12,10 +12,12 @@ import {
 	ShieldCheck,
 	ShoppingBag,
 	Siren,
+	Store,
 	Users,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import type { MouseEventHandler, ReactNode } from "react";
 import type { api } from "../../../convex/_generated/api";
+import { useActAs } from "../../hooks/useActAs";
 import { useSidebarCollapsed } from "../../hooks/useSidebarCollapsed";
 import { cn } from "../../lib/utils";
 import { TierPill } from "./tier-pill";
@@ -25,7 +27,9 @@ type Retailer = NonNullable<
 >;
 
 interface SidebarProps {
-	retailer: Retailer;
+	// Null when a Kedaipal admin has no store of their own — the dashboard chrome
+	// still renders (admin links + user menu), just without the seller sections.
+	retailer: Retailer | null;
 	actionableCount: number;
 	isAdmin?: boolean;
 }
@@ -41,6 +45,12 @@ export function Sidebar({ retailer, actionableCount, isAdmin }: SidebarProps) {
 		userEmail?.split("@")[0] ||
 		null;
 
+	// The act-as session is held globally (see useActAs), so seller nav links need
+	// no special handling — they stay in the vendor store automatically. The ADMIN
+	// group links end the session (leaving the vendor-operation view).
+	const { setActAs } = useActAs();
+	const exitActAs = () => setActAs(undefined);
+
 	return (
 		<aside
 			className={cn(
@@ -55,23 +65,28 @@ export function Sidebar({ retailer, actionableCount, isAdmin }: SidebarProps) {
 					collapsed ? "justify-center" : "gap-2.5 px-4",
 				)}
 			>
-				<Link to="/app" className="flex items-center gap-2.5 min-w-0">
+				<Link
+					to={retailer ? "/app" : "/app/admin/sellers"}
+					onClick={retailer ? undefined : exitActAs}
+					className="flex items-center gap-2.5 min-w-0"
+				>
 					<img src="/logo.svg" alt="Kedaipal" className="h-8 w-auto shrink-0" />
 					{!collapsed ? (
 						<div className="flex min-w-0 flex-col">
 							<span className="truncate text-sm font-semibold leading-tight">
-								{retailer.storeName}
+								{retailer ? retailer.storeName : "Kedaipal"}
 							</span>
 							<span className="truncate font-mono text-[11px] text-muted-foreground">
-								/{retailer.slug}
+								{retailer ? `/${retailer.slug}` : "Admin console"}
 							</span>
 						</div>
 					) : null}
 				</Link>
 			</div>
 
-			{/* Subscription tier pill — always-visible chrome (links to billing). */}
-			{!collapsed ? (
+			{/* Subscription tier pill — always-visible chrome (links to billing).
+			    Hidden for a storeless admin (no subscription to show). */}
+			{retailer && !collapsed ? (
 				<div className="border-b border-border px-4 py-2">
 					<TierPill
 						subscription={retailer.subscription}
@@ -81,62 +96,89 @@ export function Sidebar({ retailer, actionableCount, isAdmin }: SidebarProps) {
 			) : null}
 
 			<nav className="flex flex-1 flex-col gap-1 p-2">
-				<SidebarLink
-					to="/app"
-					exact
-					icon={Home}
-					label="Home"
-					collapsed={collapsed}
-				/>
-				<SidebarLink
-					to="/app/products"
-					icon={Package}
-					label="Products"
-					collapsed={collapsed}
-				/>
-				<SidebarLink
-					to="/app/orders"
-					icon={ShoppingBag}
-					label="Orders"
-					collapsed={collapsed}
-					badge={actionableCount}
-				/>
-				<SidebarLink
-					to="/app/checkout"
-					icon={QrCode}
-					label="Counter"
-					collapsed={collapsed}
-				/>
-				<SidebarLink
-					to="/app/customers"
-					icon={Users}
-					label="Customers"
-					collapsed={collapsed}
-				/>
-				<SidebarLink
-					to="/app/settings"
-					search={{ tab: "store" }}
-					icon={Settings}
-					label="Settings"
-					collapsed={collapsed}
-				/>
-				{/* Admin-only — server `requireAdmin` is the real gate; this link is
-				    just convenience so admins don't type the URL. */}
-				{isAdmin ? (
+				{/* Seller nav — only when there's a store to operate (own or act-as).
+				    The act-as session holds globally, so these need no per-link handling. */}
+				{retailer ? (
 					<>
 						<SidebarLink
+							to="/app"
+							exact
+							icon={Home}
+							label="Home"
+							collapsed={collapsed}
+						/>
+						<SidebarLink
+							to="/app/products"
+							icon={Package}
+							label="Products"
+							collapsed={collapsed}
+						/>
+						<SidebarLink
+							to="/app/orders"
+							icon={ShoppingBag}
+							label="Orders"
+							collapsed={collapsed}
+							badge={actionableCount}
+						/>
+						<SidebarLink
+							to="/app/checkout"
+							icon={QrCode}
+							label="Counter"
+							collapsed={collapsed}
+						/>
+						<SidebarLink
+							to="/app/customers"
+							icon={Users}
+							label="Customers"
+							collapsed={collapsed}
+						/>
+						<SidebarLink
+							to="/app/settings"
+							search={{ tab: "store" }}
+							icon={Settings}
+							label="Settings"
+							collapsed={collapsed}
+						/>
+					</>
+				) : null}
+				{/* Admin group — visually separated + labelled so it's unmistakable from
+				    the vendor nav while acting-as. Server `requireAdmin` is the real gate;
+				    these links just save typing the URL. They END the act-as session
+				    (leaving the vendor-operation view). */}
+				{isAdmin ? (
+					<div
+						className={cn(
+							"mt-2 flex flex-col gap-1 border-t border-border pt-3",
+							retailer ? "" : "border-t-0 pt-0",
+						)}
+					>
+						{!collapsed ? (
+							<span className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+								Admin
+							</span>
+						) : null}
+						<SidebarLink
+							to="/app/admin/sellers"
+							onClick={exitActAs}
+							icon={Store}
+							label="All sellers"
+							collapsed={collapsed}
+						/>
+						<SidebarLink
 							to="/app/admin/billing"
+							onClick={exitActAs}
 							icon={ShieldCheck}
-							label="Admin"
+							label="Billing"
 							collapsed={collapsed}
 						/>
 						<SidebarLink
 							to="/app/admin/waba"
+							onClick={exitActAs}
 							icon={Siren}
 							label="WABA Safety"
 							collapsed={collapsed}
 						/>
-					</>
+					</div>
 				) : null}
 			</nav>
 
@@ -193,6 +235,7 @@ interface SidebarLinkProps {
 	exact?: boolean;
 	badge?: number;
 	search?: LinkProps["search"];
+	onClick?: MouseEventHandler<HTMLAnchorElement>;
 }
 
 function SidebarLink({
@@ -203,6 +246,7 @@ function SidebarLink({
 	exact,
 	badge,
 	search,
+	onClick,
 }: SidebarLinkProps) {
 	const showBadge = typeof badge === "number" && badge > 0;
 
@@ -210,6 +254,7 @@ function SidebarLink({
 		<Link
 			to={to}
 			search={search}
+			onClick={onClick}
 			activeOptions={exact ? { exact: true } : undefined}
 			title={collapsed ? label : undefined}
 			className={cn(

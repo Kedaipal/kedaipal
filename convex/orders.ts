@@ -18,6 +18,12 @@ import {
 } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
 import { assertValidAddress } from "./lib/address";
+import {
+	adminUserIds,
+	logAdminAction,
+	type RetailerAccess,
+	requireRetailerAccess,
+} from "./lib/auth";
 import { assertValidFulfilmentDate } from "./lib/fulfilmentDate";
 import { statusToBucket } from "./lib/orderBuckets";
 import { type CsvOrder, ordersToCsv } from "./lib/orderCsv";
@@ -177,7 +183,13 @@ async function resolveSharedOrder(
 			.first();
 		if (!order) return null;
 		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer || retailer.userId !== identity.subject)
+		// Owner OR a Kedaipal admin operating this store (act-as). Same rule the
+		// dashboard queries/mutations use — see convex/lib/auth.ts.
+		if (
+			!retailer ||
+			(retailer.userId !== identity.subject &&
+				!adminUserIds().includes(identity.subject))
+		)
 			throw new ConvexError("Forbidden");
 		return order;
 	}
@@ -563,11 +575,7 @@ export const countActionable = query({
 		ctx,
 		{ retailerId },
 	): Promise<{ pending: number; confirmed: number; mockupPending: number }> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) throw new Error("Not authenticated");
-		const retailer = await ctx.db.get(retailerId);
-		if (!retailer) throw new Error("Retailer not found");
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		await requireRetailerAccess(ctx, retailerId);
 
 		const [pendingRows, confirmedRows, mockupRows] = await Promise.all([
 			ctx.db
@@ -750,14 +758,10 @@ export const getPaymentMethods = query({
 export const getPaymentProofUrl = query({
 	args: { orderId: v.id("orders") },
 	handler: async (ctx, { orderId }): Promise<string | null> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) throw new Error("Not authenticated");
-
 		const order = await ctx.db.get(orderId);
 		if (!order) return null;
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer) return null;
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		// Owner OR Kedaipal admin acting-as; throws Forbidden for anyone else.
+		await requireRetailerAccess(ctx, order.retailerId);
 
 		if (!order.paymentProofStorageId) return null;
 		return (await ctx.storage.getUrl(order.paymentProofStorageId)) ?? null;
@@ -778,11 +782,7 @@ export const listByRetailer = query({
 		ctx,
 		{ retailerId, status, mockupPending, paginationOpts },
 	) => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) throw new Error("Not authenticated");
-		const retailer = await ctx.db.get(retailerId);
-		if (!retailer) throw new Error("Retailer not found");
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		await requireRetailerAccess(ctx, retailerId);
 
 		if (mockupPending) {
 			// "changes_requested" and "pending" are adjacent on the index (nothing
@@ -893,11 +893,7 @@ export const searchOrders = query({
 			limit,
 		},
 	) => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) throw new Error("Not authenticated");
-		const retailer = await ctx.db.get(retailerId);
-		if (!retailer) throw new Error("Retailer not found");
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		await requireRetailerAccess(ctx, retailerId);
 
 		const all = await ctx.db
 			.query("orders")
@@ -1023,11 +1019,24 @@ async function assertOwnsRetailer(
 	ctx: QueryCtx,
 	retailerId: Id<"retailers">,
 ): Promise<void> {
-	const identity = await ctx.auth.getUserIdentity();
-	if (!identity) throw new Error("Not authenticated");
-	const retailer = await ctx.db.get(retailerId);
-	if (!retailer) throw new Error("Retailer not found");
-	if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+	// Owner OR Kedaipal admin acting-as (see convex/lib/auth.ts).
+	await requireRetailerAccess(ctx, retailerId);
+}
+
+/**
+ * Seller-side access to a single order: the caller must own the order's retailer
+ * OR be a Kedaipal admin operating that store (act-as). Returns the order + the
+ * access descriptor so mutations can attribute admin-on-behalf writes. Throws
+ * "Order not found" / "Forbidden" to match the pre-existing inline checks.
+ */
+async function requireOrderAccess(
+	ctx: QueryCtx | MutationCtx,
+	orderId: Id<"orders">,
+): Promise<{ order: Doc<"orders">; access: RetailerAccess }> {
+	const order = await ctx.db.get(orderId);
+	if (!order) throw new Error("Order not found");
+	const access = await requireRetailerAccess(ctx, order.retailerId);
+	return { order, access };
 }
 
 // Explicit alias so the action's `runQuery(exportPage)` result has a type that
@@ -1244,15 +1253,7 @@ export const updateStatus = mutation({
 		carrierTrackingUrl: v.optional(v.string()),
 	},
 	handler: async (ctx, { orderId, status, note, carrierTrackingUrl }): Promise<void> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) throw new Error("Not authenticated");
-
-		const order = await ctx.db.get(orderId);
-		if (!order) throw new Error("Order not found");
-
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer) throw new Error("Retailer not found");
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		const { order, access } = await requireOrderAccess(ctx, orderId);
 
 		// Mockup gate: a proof-required order can't move into production (packed)
 		// until the buyer has approved the mockup or the seller has waived it.
@@ -1264,6 +1265,7 @@ export const updateStatus = mutation({
 		}
 
 		await applyStatusTransition(ctx, order, status, { note, carrierTrackingUrl });
+		await logAdminAction(ctx, access, "orders.updateStatus", orderId);
 	},
 });
 
@@ -1283,21 +1285,21 @@ export const bulkUpdateStatus = mutation({
 		ctx,
 		{ orderIds, status },
 	): Promise<{ updated: number; skipped: number }> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) throw new Error("Not authenticated");
 		if (orderIds.length === 0) return { updated: 0, skipped: 0 };
 		if (orderIds.length > 100)
 			throw new ConvexError("Too many orders selected (max 100)");
 
 		let updated = 0;
 		let skipped = 0;
+		// The inbox multi-select is single-retailer, so every id resolves to the
+		// same access descriptor; keep the last one for a single batch audit row.
+		let batchAccess: RetailerAccess | undefined;
 		for (const orderId of orderIds) {
 			const order = await ctx.db.get(orderId);
 			if (!order) throw new ConvexError("Order not found");
-			const retailer = await ctx.db.get(order.retailerId);
-			if (!retailer) throw new Error("Retailer not found");
-			// Ownership is enforced for every order — a foreign id fails the batch.
-			if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+			// Owner OR admin acting-as is enforced for every order — a foreign id
+			// fails the batch (requireRetailerAccess throws Forbidden).
+			batchAccess = await requireRetailerAccess(ctx, order.retailerId);
 
 			// Skip no-ops + transitions blocked by the mockup gate (don't fail the
 			// whole batch on one ineligible order).
@@ -1312,6 +1314,8 @@ export const bulkUpdateStatus = mutation({
 			await applyStatusTransition(ctx, order, status);
 			updated++;
 		}
+		if (batchAccess)
+			await logAdminAction(ctx, batchAccess, "orders.bulkUpdateStatus");
 		return { updated, skipped };
 	},
 });
@@ -1346,14 +1350,8 @@ export const advanceToStage = mutation({
 		ctx,
 		{ orderId, stageId, note, carrierTrackingUrl },
 	): Promise<void> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) throw new Error("Not authenticated");
-
-		const order = await ctx.db.get(orderId);
-		if (!order) throw new Error("Order not found");
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer) throw new Error("Retailer not found");
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		const { order, access } = await requireOrderAccess(ctx, orderId);
+		const retailer = access.retailer;
 
 		if (order.status === "cancelled") {
 			throw new ConvexError("A cancelled order can't be advanced.");
@@ -1430,6 +1428,7 @@ export const advanceToStage = mutation({
 				stageId: stage.id,
 			});
 		}
+		await logAdminAction(ctx, access, "orders.advanceStage", orderId);
 	},
 });
 
@@ -1444,21 +1443,14 @@ export const setCarrierTrackingUrl = mutation({
 		carrierTrackingUrl: v.optional(v.string()),
 	},
 	handler: async (ctx, { orderId, carrierTrackingUrl }): Promise<void> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) throw new Error("Not authenticated");
-
-		const order = await ctx.db.get(orderId);
-		if (!order) throw new Error("Order not found");
-
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer) throw new Error("Retailer not found");
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		const { access } = await requireOrderAccess(ctx, orderId);
 
 		const trimmed = carrierTrackingUrl?.trim() ?? "";
 		await ctx.db.patch(orderId, {
 			carrierTrackingUrl: trimmed.length > 0 ? trimmed : undefined,
 			updatedAt: Date.now(),
 		});
+		await logAdminAction(ctx, access, "orders.setCarrierTrackingUrl", orderId);
 	},
 });
 
@@ -1655,15 +1647,7 @@ export const markPaymentReceived = mutation({
 		paymentMethod: v.optional(orderPaymentMethodValidator),
 	},
 	handler: async (ctx, { orderId, note, paymentMethod }): Promise<void> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) throw new Error("Not authenticated");
-
-		const order = await ctx.db.get(orderId);
-		if (!order) throw new Error("Order not found");
-
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer) throw new Error("Retailer not found");
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		const { order, access } = await requireOrderAccess(ctx, orderId);
 
 		if (order.paymentStatus === "received") {
 			// Idempotent — second click is a no-op.
@@ -1718,6 +1702,7 @@ export const markPaymentReceived = mutation({
 			internal.whatsapp.notifyPaymentReceived,
 			{ orderId },
 		);
+		await logAdminAction(ctx, access, "orders.confirmPayment", orderId);
 	},
 });
 
@@ -1826,9 +1811,8 @@ export const generateMockupUploadUrl = mutation({
 		await rateLimiter.limit(ctx, "mockupSubmit", { key: identity.subject, throws: true });
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer) throw new Error("Retailer not found");
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		// Owner OR admin acting-as (see convex/lib/auth.ts).
+		await requireRetailerAccess(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		return ctx.storage.generateUploadUrl();
@@ -1845,13 +1829,10 @@ export const generateMockupUploadUrl = mutation({
 export const discardMockupUploads = mutation({
 	args: { orderId: v.id("orders"), storageIds: v.array(v.string()) },
 	handler: async (ctx, { orderId, storageIds }): Promise<void> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) throw new Error("Not authenticated");
 		const order = await ctx.db.get(orderId);
 		if (!order) return; // order gone → nothing to protect; let the blobs GC
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer) throw new Error("Retailer not found");
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		// Owner OR admin acting-as (see convex/lib/auth.ts).
+		await requireRetailerAccess(ctx, order.retailerId);
 		const referenced = new Set(resolveMockupImageIds(order));
 		for (const id of storageIds) {
 			const trimmed = id.trim();
@@ -1886,9 +1867,8 @@ export const submitMockup = mutation({
 		await rateLimiter.limit(ctx, "mockupSubmit", { key: identity.subject, throws: true });
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer) throw new Error("Retailer not found");
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		// Owner OR admin acting-as (see convex/lib/auth.ts).
+		const access = await requireRetailerAccess(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		if (order.mockupStatus === "approved")
@@ -1939,6 +1919,7 @@ export const submitMockup = mutation({
 		await ctx.scheduler.runAfter(0, internal.whatsapp.notifyMockupSubmitted, {
 			orderId,
 		});
+		await logAdminAction(ctx, access, "orders.submitMockup", orderId);
 	},
 });
 
@@ -1958,9 +1939,8 @@ export const updateMockupQuote = mutation({
 		await rateLimiter.limit(ctx, "mockupSubmit", { key: identity.subject, throws: true });
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer) throw new Error("Retailer not found");
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		// Owner OR admin acting-as (see convex/lib/auth.ts).
+		const access = await requireRetailerAccess(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		if (order.mockupStatus === "approved")
@@ -1995,6 +1975,7 @@ export const updateMockupQuote = mutation({
 					: "mockup_quote_updated",
 			createdAt: now,
 		});
+		await logAdminAction(ctx, access, "orders.updateMockupQuote", orderId);
 	},
 });
 
@@ -2080,9 +2061,8 @@ export const waiveMockup = mutation({
 		await rateLimiter.limit(ctx, "mockupSubmit", { key: identity.subject, throws: true });
 		const order = await ctx.db.get(orderId);
 		if (!order) throw new ConvexError("Order not found");
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer) throw new Error("Retailer not found");
-		if (retailer.userId !== identity.subject) throw new Error("Forbidden");
+		// Owner OR admin acting-as (see convex/lib/auth.ts).
+		const access = await requireRetailerAccess(ctx, order.retailerId);
 		if (order.mockupStatus === undefined)
 			throw new ConvexError("This order doesn't require a mockup");
 		if (order.mockupStatus === "approved" || order.mockupWaivedAt !== undefined)
@@ -2108,6 +2088,7 @@ export const waiveMockup = mutation({
 			orderId,
 			reason: "waived",
 		});
+		await logAdminAction(ctx, access, "orders.waiveMockup", orderId);
 	},
 });
 

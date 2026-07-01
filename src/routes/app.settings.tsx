@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import {
 	Building2,
 	ChevronDown,
@@ -17,7 +17,7 @@ import {
 	Store,
 	Trash2,
 } from "lucide-react";
-import { type FormEvent, type ReactNode, useState } from "react";
+import { type FormEvent, type ReactNode, useCallback, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { SUPPORTED_CURRENCIES } from "../../convex/lib/currency";
@@ -41,6 +41,10 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { SortableList } from "../components/ui/sortable-list";
+import {
+	useActAsRetailerId,
+	useDashboardRetailer,
+} from "../hooks/useDashboardRetailer";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage } from "../lib/format";
 import {
@@ -248,9 +252,23 @@ function SettingsSkeleton() {
 }
 
 function SettingsRoute() {
-	const retailer = useQuery(api.retailers.getMyRetailer);
-	const renameSlug = useMutation(api.retailers.renameSlug);
-	const updateSettings = useMutation(api.retailers.updateSettings);
+	const actAsRetailerId = useActAsRetailerId();
+	const retailer = useDashboardRetailer();
+	const renameSlugMutation = useMutation(api.retailers.renameSlug);
+	const updateSettingsMutation = useMutation(api.retailers.updateSettings);
+	// In admin act-as, inject the seller's `retailerId` so edits land on THEIR
+	// store, not the admin's own (both mutations resolve by identity when it's
+	// omitted). Wrapping here keeps every call site below unchanged.
+	const renameSlug = useCallback(
+		(args: { newSlug: string }) =>
+			renameSlugMutation({ ...args, retailerId: actAsRetailerId }),
+		[renameSlugMutation, actAsRetailerId],
+	);
+	const updateSettings = useCallback(
+		(args: Parameters<typeof updateSettingsMutation>[0]) =>
+			updateSettingsMutation({ ...args, retailerId: actAsRetailerId }),
+		[updateSettingsMutation, actAsRetailerId],
+	);
 
 	// URL is the source of truth for the active tab, so deep links (e.g. the
 	// "View billing" banner → ?tab=billing) actually switch the tab even when the

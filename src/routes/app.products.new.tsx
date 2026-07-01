@@ -1,8 +1,9 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { PageHeader } from "../components/dashboard/page-header";
 import { ProductForm } from "../components/forms/product-form";
+import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 
 export const Route = createFileRoute("/app/products/new")({
 	component: NewProductRoute,
@@ -10,7 +11,7 @@ export const Route = createFileRoute("/app/products/new")({
 
 function NewProductRoute() {
 	const navigate = useNavigate();
-	const retailer = useQuery(api.retailers.getMyRetailer);
+	const retailer = useDashboardRetailer();
 	const create = useMutation(api.products.create);
 
 	if (!retailer) return null;

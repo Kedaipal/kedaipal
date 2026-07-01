@@ -29,6 +29,12 @@ import {
 } from "./_generated/server";
 import { linkOrderToCustomer, refreshWaProfileName } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
+import {
+	adminUserIds,
+	logAdminAction,
+	type RetailerAccess,
+	requireRetailerAccess,
+} from "./lib/auth";
 import { getDisplayName } from "./lib/customer";
 import { assertValidFulfilmentDate } from "./lib/fulfilmentDate";
 import {
@@ -66,10 +72,18 @@ function buildCheckoutWaUrl(token: string): string | undefined {
 	return `https://wa.me/${phone.replace(/\D/g, "")}?text=KP-${token}`;
 }
 
-/** Resolve the authenticated seller's own retailer (strict 1:1 user↔retailer). */
-async function requireOwnRetailer(
+/**
+ * Resolve the target retailer for a counter-checkout op. With an explicit
+ * `retailerId` it's the admin act-as path (owner-or-admin, so a Kedaipal admin
+ * can run Counter Checkout for a seller during white-glove); otherwise it's the
+ * caller's own store (strict 1:1 user↔retailer). Returns the access descriptor
+ * so admin-on-behalf writes are attributable. See docs/admin-console.md.
+ */
+async function requireCounterRetailer(
 	ctx: QueryCtx | MutationCtx,
-): Promise<Doc<"retailers">> {
+	retailerId?: Id<"retailers">,
+): Promise<RetailerAccess> {
+	if (retailerId) return requireRetailerAccess(ctx, retailerId);
 	const identity = await ctx.auth.getUserIdentity();
 	if (!identity) throw new ConvexError("Not authenticated");
 	const retailer = await ctx.db
@@ -77,7 +91,22 @@ async function requireOwnRetailer(
 		.withIndex("by_user", (q) => q.eq("userId", identity.subject))
 		.unique();
 	if (!retailer) throw new ConvexError("No store found for this account");
-	return retailer;
+	return { retailer, actingAsAdmin: false, userId: identity.subject };
+}
+
+/**
+ * Access to an existing session by id: the caller must own the session's retailer
+ * OR be a Kedaipal admin acting-as. Returns the session + access. Returns null
+ * when the session is gone (callers decide throw-vs-null per their contract).
+ */
+async function requireSessionAccess(
+	ctx: QueryCtx | MutationCtx,
+	sessionId: Id<"counterCheckoutSessions">,
+): Promise<{ session: Doc<"counterCheckoutSessions">; access: RetailerAccess } | null> {
+	const session = await ctx.db.get(sessionId);
+	if (!session) return null;
+	const access = await requireRetailerAccess(ctx, session.retailerId);
+	return { session, access };
 }
 
 /**
@@ -106,16 +135,18 @@ function effectiveStatus(
  * `wa.me?text=KP-<token>` QR from it) + the session id to subscribe to.
  */
 export const createCheckoutSession = mutation({
-	args: {},
+	args: { retailerId: v.optional(v.id("retailers")) },
 	handler: async (
 		ctx,
+		{ retailerId },
 	): Promise<{
 		sessionId: Id<"counterCheckoutSessions">;
 		token: string;
 		waUrl: string | undefined;
 		expiresAt: number;
 	}> => {
-		const retailer = await requireOwnRetailer(ctx);
+		const access = await requireCounterRetailer(ctx, retailerId);
+		const retailer = access.retailer;
 		await rateLimiter.limit(ctx, "checkoutSessionCreate", {
 			key: retailer.userId,
 			throws: true,
@@ -126,6 +157,8 @@ export const createCheckoutSession = mutation({
 		const token = generateTrackingToken();
 		const sessionId = await ctx.db.insert("counterCheckoutSessions", {
 			retailerId: retailer._id,
+			// The SELLER's userId (never the acting admin's) so the inbound-webhook
+			// buyer binding + buyer confirmation still resolve to the right store.
 			sellerUserId: retailer.userId,
 			token,
 			status: "awaiting_buyer",
@@ -133,6 +166,12 @@ export const createCheckoutSession = mutation({
 			createdAt: now,
 			updatedAt: now,
 		});
+		await logAdminAction(
+			ctx,
+			access,
+			"counterCheckout.createCheckoutSession",
+			sessionId,
+		);
 		return { sessionId, token, waUrl: buildCheckoutWaUrl(token), expiresAt };
 	},
 });
@@ -169,8 +208,14 @@ export const getCheckoutSession = query({
 		// Not-found and not-owned both resolve to null (not a throw): the active
 		// session id is now URL-addressable, so a stale/foreign id must degrade to
 		// the friendly "checkout not found" screen, never an unhandled crash. null
-		// also avoids leaking whether another store's session exists.
-		if (!retailer || retailer.userId !== identity.subject) return null;
+		// also avoids leaking whether another store's session exists. Owner OR a
+		// Kedaipal admin acting-as may read it.
+		if (
+			!retailer ||
+			(retailer.userId !== identity.subject &&
+				!adminUserIds().includes(identity.subject))
+		)
+			return null;
 
 		let displayName: string | undefined;
 		let customer: { orderCount: number; totalSpent: number; lastOrderAt: number } | null =
@@ -234,10 +279,9 @@ export const saveSessionDraft = mutation({
 		draft: draftValidator,
 	},
 	handler: async (ctx, { sessionId, draft }): Promise<void> => {
-		const retailer = await requireOwnRetailer(ctx);
-		const session = await ctx.db.get(sessionId);
-		if (!session) throw new ConvexError("Session not found");
-		if (session.retailerId !== retailer._id) throw new ConvexError("Forbidden");
+		const resolved = await requireSessionAccess(ctx, sessionId);
+		if (!resolved) throw new ConvexError("Session not found");
+		const { session } = resolved;
 		if (session.status !== "buyer_identified")
 			throw new ConvexError("This checkout isn't open for editing");
 
@@ -264,9 +308,10 @@ export const saveSessionDraft = mutation({
  * Owner-only. Item count comes straight off the draft (no per-variant lookups).
  */
 export const listOpenSessions = query({
-	args: {},
+	args: { retailerId: v.optional(v.id("retailers")) },
 	handler: async (
 		ctx,
+		{ retailerId },
 	): Promise<
 		Array<{
 			sessionId: Id<"counterCheckoutSessions">;
@@ -279,7 +324,7 @@ export const listOpenSessions = query({
 			expiresAt: number;
 		}>
 	> => {
-		const retailer = await requireOwnRetailer(ctx);
+		const { retailer } = await requireCounterRetailer(ctx, retailerId);
 		const now = Date.now();
 		const out: Array<{
 			sessionId: Id<"counterCheckoutSessions">;
@@ -370,10 +415,10 @@ export const createOrderFromSession = mutation({
 		ctx,
 		args,
 	): Promise<{ shortId: string; orderId: Id<"orders"> }> => {
-		const retailer = await requireOwnRetailer(ctx);
-		const session = await ctx.db.get(args.sessionId);
-		if (!session) throw new ConvexError("Session not found");
-		if (session.retailerId !== retailer._id) throw new ConvexError("Forbidden");
+		const resolved = await requireSessionAccess(ctx, args.sessionId);
+		if (!resolved) throw new ConvexError("Session not found");
+		const { session, access } = resolved;
+		const retailer = access.retailer;
 		if (session.status !== "buyer_identified")
 			throw new ConvexError(
 				"Bind a buyer to this checkout before creating the order",
@@ -561,6 +606,12 @@ export const createOrderFromSession = mutation({
 			{ orderId },
 		);
 
+		await logAdminAction(
+			ctx,
+			access,
+			"counterCheckout.createOrderFromSession",
+			orderId,
+		);
 		return { shortId, orderId };
 	},
 });
@@ -569,16 +620,20 @@ export const createOrderFromSession = mutation({
 export const cancelCheckoutSession = mutation({
 	args: { sessionId: v.id("counterCheckoutSessions") },
 	handler: async (ctx, { sessionId }): Promise<void> => {
-		const retailer = await requireOwnRetailer(ctx);
-		const session = await ctx.db.get(sessionId);
-		if (!session) throw new ConvexError("Session not found");
-		if (session.retailerId !== retailer._id)
-			throw new ConvexError("Forbidden");
+		const resolved = await requireSessionAccess(ctx, sessionId);
+		if (!resolved) throw new ConvexError("Session not found");
+		const { session, access } = resolved;
 		if (session.status === "awaiting_buyer" || session.status === "buyer_identified") {
 			await ctx.db.patch(sessionId, {
 				status: "cancelled",
 				updatedAt: Date.now(),
 			});
+			await logAdminAction(
+				ctx,
+				access,
+				"counterCheckout.cancelCheckoutSession",
+				sessionId,
+			);
 		}
 	},
 });

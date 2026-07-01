@@ -1,7 +1,13 @@
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import type { QueryCtx } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation, query } from "./_generated/server";
+import {
+	adminUserIds,
+	logAdminAction,
+	type RetailerAccess,
+	requireRetailerAccess,
+} from "./lib/auth";
 import { assertValidMapsUrl } from "./lib/mapsUrl";
 import { assertValidWaPhone } from "./lib/slug";
 
@@ -27,30 +33,23 @@ const PLACE_ID_MAX = 300;
 // search-and-replace.
 // ---------------------------------------------------------------------------
 
+// Owner-OR-admin access (see convex/lib/auth.ts) so a Kedaipal admin can set up
+// a seller's pickup points during white-glove onboarding.
 async function requireRetailerOwner(
-	ctx: QueryCtx,
+	ctx: QueryCtx | MutationCtx,
 	retailerId: Id<"retailers">,
-): Promise<Doc<"retailers">> {
-	const identity = await ctx.auth.getUserIdentity();
-	if (!identity) throw new Error("Not authenticated");
-	const retailer = await ctx.db.get(retailerId);
-	if (!retailer) throw new Error("Retailer not found");
-	if (retailer.userId !== identity.subject) throw new Error("Forbidden");
-	return retailer;
+): Promise<RetailerAccess> {
+	return requireRetailerAccess(ctx, retailerId);
 }
 
 async function requireOwnedLocation(
-	ctx: QueryCtx,
+	ctx: QueryCtx | MutationCtx,
 	pickupLocationId: Id<"pickupLocations">,
-): Promise<Doc<"pickupLocations">> {
-	const identity = await ctx.auth.getUserIdentity();
-	if (!identity) throw new Error("Not authenticated");
+): Promise<{ location: Doc<"pickupLocations">; access: RetailerAccess }> {
 	const location = await ctx.db.get(pickupLocationId);
 	if (!location) throw new Error("Pickup location not found");
-	const retailer = await ctx.db.get(location.retailerId);
-	if (!retailer) throw new Error("Retailer not found");
-	if (retailer.userId !== identity.subject) throw new Error("Forbidden");
-	return location;
+	const access = await requireRetailerAccess(ctx, location.retailerId);
+	return { location, access };
 }
 
 // ---------------------------------------------------------------------------
@@ -274,7 +273,13 @@ export const getOwnedById = query({
 		const location = await ctx.db.get(pickupLocationId);
 		if (!location) return null;
 		const retailer = await ctx.db.get(location.retailerId);
-		if (!retailer || retailer.userId !== identity.subject) return null;
+		// Owner OR a Kedaipal admin operating this store (act-as).
+		if (
+			!retailer ||
+			(retailer.userId !== identity.subject &&
+				!adminUserIds().includes(identity.subject))
+		)
+			return null;
 		return location;
 	},
 });
@@ -342,7 +347,7 @@ export const create = mutation({
 			managerWaPhone,
 		},
 	): Promise<{ pickupLocationId: Id<"pickupLocations"> }> => {
-		await requireRetailerOwner(ctx, retailerId);
+		const access = await requireRetailerOwner(ctx, retailerId);
 
 		const cleanLabel = sanitizeLabel(label);
 		const cleanAddress = sanitizeAddress(address);
@@ -389,6 +394,12 @@ export const create = mutation({
 			createdAt: now,
 			updatedAt: now,
 		});
+		await logAdminAction(
+			ctx,
+			access,
+			"pickupLocations.create",
+			pickupLocationId,
+		);
 		return { pickupLocationId };
 	},
 });
@@ -434,7 +445,7 @@ export const update = mutation({
 			managerWaPhone,
 		},
 	): Promise<void> => {
-		await requireOwnedLocation(ctx, pickupLocationId);
+		const { access } = await requireOwnedLocation(ctx, pickupLocationId);
 
 		const patch: Partial<{
 			label: string;
@@ -486,6 +497,12 @@ export const update = mutation({
 		}
 
 		await ctx.db.patch(pickupLocationId, patch);
+		await logAdminAction(
+			ctx,
+			access,
+			"pickupLocations.update",
+			pickupLocationId,
+		);
 	},
 });
 
@@ -500,7 +517,10 @@ export const setActive = mutation({
 		isActive: v.boolean(),
 	},
 	handler: async (ctx, { pickupLocationId, isActive }): Promise<void> => {
-		const location = await requireOwnedLocation(ctx, pickupLocationId);
+		const { location, access } = await requireOwnedLocation(
+			ctx,
+			pickupLocationId,
+		);
 		if (location.isActive === isActive) return; // idempotent
 
 		// Fulfilment invariant: don't let the seller hide the LAST active pickup
@@ -546,6 +566,12 @@ export const setActive = mutation({
 		}
 
 		await ctx.db.patch(pickupLocationId, patch);
+		await logAdminAction(
+			ctx,
+			access,
+			"pickupLocations.setActive",
+			pickupLocationId,
+		);
 	},
 });
 
@@ -569,7 +595,7 @@ export const reorder = mutation({
 		orderedIds: v.array(v.id("pickupLocations")),
 	},
 	handler: async (ctx, { retailerId, orderedIds }): Promise<void> => {
-		await requireRetailerOwner(ctx, retailerId);
+		const access = await requireRetailerOwner(ctx, retailerId);
 
 		const activeRows = await ctx.db
 			.query("pickupLocations")
@@ -604,5 +630,6 @@ export const reorder = mutation({
 				updatedAt: now,
 			});
 		}
+		await logAdminAction(ctx, access, "pickupLocations.reorder", retailerId);
 	},
 });

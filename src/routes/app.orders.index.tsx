@@ -38,6 +38,7 @@ import { PageHeader } from "../components/dashboard/page-header";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
+import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
 import { downloadCsv } from "../lib/download";
 import { convexErrorMessage, formatPrice } from "../lib/format";
@@ -154,7 +155,7 @@ function OrdersRoute() {
 		fwin,
 	} = Route.useSearch();
 	const navigate = useNavigate({ from: Route.fullPath });
-	const retailer = useQuery(api.retailers.getMyRetailer);
+	const retailer = useDashboardRetailer();
 	const convex = useConvex();
 
 	const bulkUpdateStatus = useMutation(api.orders.bulkUpdateStatus);
