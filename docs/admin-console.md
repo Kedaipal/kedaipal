@@ -130,14 +130,24 @@ confirmation resolve to the right store.
 ## Audit trail
 
 `adminAuditLog` (schema): `{ adminUserId, retailerId, action, targetId?, ts }` with
-`by_retailer` + `by_admin` indexes. One row per admin-on-behalf write; owner writes are never
-logged. `admin.recentAuditForRetailer({ retailerId })` surfaces the recent rows (admin-only)
-so white-glove edits are inspectable per store. Actions logged include `products.create/
-update/saveVariantGrid/updateVariant/archive/bulkUpsert/reorder`, `customers.updateNotes/
-updateName`, `pickupLocations.create/update/setActive/reorder`, `retailers.updateSettings/
-renameSlug`, `orders.updateStatus/bulkUpdateStatus/advanceStage/setCarrierTrackingUrl/
-confirmPayment/submitMockup/updateMockupQuote/waiveMockup`, and
+`by_retailer` + `by_admin` indexes. `admin.recentAuditForRetailer({ retailerId })` surfaces the
+recent rows (admin-only) so white-glove activity is inspectable per store.
+
+**Write trail** — one row per admin-on-behalf write (owner writes are never logged). Actions
+include `products.create/update/saveVariantGrid/updateVariant/archive/bulkUpsert/reorder`,
+`customers.updateNotes/updateName`, `pickupLocations.create/update/setActive/reorder`,
+`retailers.updateSettings/renameSlug`, `orders.updateStatus/bulkUpdateStatus/advanceStage/
+setCarrierTrackingUrl/confirmPayment/submitMockup/updateMockupQuote/waiveMockup`, and
 `counterCheckout.createCheckoutSession/createOrderFromSession/cancelCheckoutSession`.
+
+**Read/entry trail** — individual act-as *reads* (order history, customer PII, payment proofs,
+bank/subscription details) are intentionally not logged per-read, but **tenant ENTRY is**:
+`admin.startActAsSession({ retailerId })` writes an `actAs.sessionStart` row, fired by the
+directory's "Manage" action (Convex queries can't write, so entry is logged on the mutation at
+session start, not inside `getRetailerForAdmin`). This answers "who at Kedaipal opened my store,
+and when?" — the governance gap a pure write-only trail would leave for a platform holding
+customer PII + seller financials. A capture of *why* (reason/consent on entry, like the WABA
+pause flow) is a sensible next step but not yet implemented.
 
 ## Files
 
@@ -162,4 +172,9 @@ confirmPayment/submitMockup/updateMockupQuote/waiveMockup`, and
   billing).
 - No seller-facing "changes made by Kedaipal" view yet — the audit log is admin-only. The
   `recentAuditForRetailer` read is the seam for that when we want it.
+- **Reason/consent on session start** — `startActAsSession` logs the entry but not *why*.
+  Capturing a short reason (mirroring the WABA pause flow) would strengthen the audit story;
+  deferred as it adds entry friction.
+- Individual act-as reads aren't logged per-read (only tenant entry is) — a per-read trail is
+  possible later if compliance requires it, but is high-volume/low-signal for now.
 - PostHog funnel for act-as usage deferred.

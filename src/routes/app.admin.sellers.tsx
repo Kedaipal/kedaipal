@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { Award, ChevronRight, ShieldCheck, ShieldX, Store } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
@@ -123,11 +123,15 @@ function SellerCard({ seller }: { seller: AdminSellerRow }) {
 	const status = seller.subscriptionStatus;
 	const navigate = useNavigate();
 	const { setActAs } = useActAs();
+	const startActAsSession = useMutation(api.admin.startActAsSession);
 
 	function manage() {
 		// Start the act-as session, then open the vendor's dashboard. From here the
 		// session holds across all navigation + CRUD until the admin Exits.
 		setActAs(seller._id);
+		// Audit the tenant ENTRY (read-side attributability). Fire-and-forget — a
+		// failed log must never block onboarding.
+		void startActAsSession({ retailerId: seller._id }).catch(() => {});
 		navigate({ to: "/app" });
 	}
 

@@ -11,7 +11,7 @@
 
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { query } from "./_generated/server";
+import { mutation, query } from "./_generated/server";
 import { requireAdmin } from "./lib/auth";
 import { loadSubscription } from "./subscriptions";
 
@@ -106,5 +106,28 @@ export const recentAuditForRetailer = query({
 			targetId: r.targetId,
 			ts: r.ts,
 		}));
+	},
+});
+
+/**
+ * Record that an admin ENTERED a seller's store (act-as session start). Fired by
+ * the directory's "Manage" action. This is the read-side attributability trail:
+ * individual act-as reads (order history, customer PII, payment proofs, bank
+ * details) aren't logged, but the ENTRY into a tenant is — so "who at Kedaipal
+ * opened my store, and when?" is always answerable, not just "who edited it".
+ * Admin-gated; a no-op for a bogus/missing retailer id. See docs/admin-console.md.
+ */
+export const startActAsSession = mutation({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<void> => {
+		const adminUserId = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) return; // stale id — the client redirect handles it
+		await ctx.db.insert("adminAuditLog", {
+			adminUserId,
+			retailerId,
+			action: "actAs.sessionStart",
+			ts: Date.now(),
+		});
 	},
 });

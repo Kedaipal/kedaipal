@@ -196,6 +196,32 @@ describe("admin console reads", () => {
 				.query(api.admin.recentAuditForRetailer, { retailerId: retailer._id }),
 		).rejects.toThrow(/Not authorized/);
 	});
+
+	test("startActAsSession audits tenant entry (read-side trail); admin-only", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, OWNER);
+
+		// Non-admin can't open a session-start row on another store.
+		await expect(
+			t
+				.withIdentity({ subject: STRANGER })
+				.mutation(api.admin.startActAsSession, { retailerId: retailer._id }),
+		).rejects.toThrow(/Not authorized/);
+		expect(await auditCount(t, retailer._id)).toBe(0);
+
+		// Admin entry is logged even with no subsequent write.
+		await t
+			.withIdentity({ subject: ADMIN })
+			.mutation(api.admin.startActAsSession, { retailerId: retailer._id });
+		const rows = await t
+			.withIdentity({ subject: ADMIN })
+			.query(api.admin.recentAuditForRetailer, { retailerId: retailer._id });
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatchObject({
+			adminUserId: ADMIN,
+			action: "actAs.sessionStart",
+		});
+	});
 });
 
 describe("counter checkout act-as", () => {
