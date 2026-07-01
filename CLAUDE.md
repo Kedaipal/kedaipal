@@ -93,7 +93,7 @@ Tracked in [ClickUp Product Roadmap](https://app.clickup.com/90182681518/v/li/90
 ## Architectural Constraints
 - Schema must treat WhatsApp as one `channel` — leave room for marketplace connectors post-MVP
 - **Messaging goes through the `ChannelAdapter` seam** (`convex/lib/channels/`): orchestration emits normalized `OutboundMessage`/`InboundEnvelope` via `getAdapter(channel)`; provider-specific wire logic (Meta payloads, signature scheme) lives inside the adapter. Add a channel = new adapter + registry entry + webhook route, no order-flow changes. See [`docs/messaging-channels.md`](./docs/messaging-channels.md).
-- Mobile-first: ≥44px tap targets, single-column, sticky CTAs, bottom-anchored actions
+- Mobile-first: ≥44px tap targets, single-column, sticky CTAs, bottom-anchored actions. **The house visual language (tokens, primitives, mobile rules, render→look→iterate loop) lives in [`docs/design-system.md`](./docs/design-system.md) — read it before building or changing UI.**
 - Multi-tenant via slugs from day one
 - **All outbound messages flow through the `wabaProtection.canSend()` gateway** (via `makeGuardedSender(ctx, retailerId, category)`) — enforces the kill switch, per-seller caps, global opt-outs, and Meta quality status. **`transactional` order messages bypass all gating** (core promise); only `session_message`/templates are gated. See [`docs/waba-protection.md`](./docs/waba-protection.md)
 - **Inbound `POST /webhook/whatsapp` verifies Meta's `X-Hub-Signature-256`** (HMAC-SHA256 with `WHATSAPP_APP_SECRET`) and **fails closed** — set the env var before deploying or webhooks 500
