@@ -28,6 +28,12 @@ export default defineSchema({
 		// Convex storage ID for the store's logo. Public — surfaced on the
 		// storefront header, dashboard hero, and as the OG image fallback.
 		logoStorageId: v.optional(v.string()),
+		// Convex storage ID for the store's wide cover/banner image. Public —
+		// rendered full-bleed at the top of the storefront header and used as the
+		// PRIMARY OG/social-share + JSON-LD image (logo → first product image are
+		// the fallbacks). No index — only read alongside the retailer row, same as
+		// logoStorageId. See docs/store-cover-banner.md.
+		coverImageStorageId: v.optional(v.string()),
 		currency: v.optional(v.string()),
 		locale: v.optional(v.union(v.literal("en"), v.literal("ms"))),
 		// Per-retailer overrides for WhatsApp message copy. Any key omitted falls

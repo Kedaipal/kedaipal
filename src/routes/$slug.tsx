@@ -40,8 +40,10 @@ export const Route = createFileRoute("/$slug")({
 
 		const retailer = result.retailer;
 
-		// Logo wins for OG image; fall back to first product image.
-		let ogImageUrl: string | undefined = retailer.logoUrl;
+		// OG/social-share image precedence: cover banner (wide, ideal for a
+		// summary_large_image card) → logo → first product image.
+		let ogImageUrl: string | undefined =
+			retailer.coverImageUrl ?? retailer.logoUrl;
 		if (!ogImageUrl) {
 			try {
 				const products = await client.query(api.products.list, {
@@ -203,6 +205,18 @@ function StorefrontRoute() {
 
 	return (
 		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-32">
+			{retailer.coverImageUrl ? (
+				// Full-bleed shopfront banner. Fixed 3:1 box + object-cover so any
+				// source aspect is cropped, never distorted. Sits above the store
+				// logo + name; when unset nothing renders (header keeps its layout).
+				<div className="aspect-[3/1] w-full overflow-hidden bg-muted lg:rounded-t-3xl">
+					<img
+						src={retailer.coverImageUrl}
+						alt={`${retailer.storeName} cover`}
+						className="h-full w-full object-cover"
+					/>
+				</div>
+			) : null}
 			<header className="flex flex-col gap-4 bg-gradient-to-b from-accent/10 to-background px-5 pb-6 pt-10 lg:rounded-b-3xl lg:px-8 lg:pb-8">
 				<img src="/logo-3.svg" alt="Kedaipal" className="h-5 w-auto" />
 				<div className="flex items-center gap-4">
