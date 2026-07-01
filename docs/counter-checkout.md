@@ -268,6 +268,34 @@ explicit and gave the seller the tools on the Done screen.
   fresh-create path (we have the `shortId` + accurate paid state there); a
   resend from order detail is a noted follow-up.
 
+### Build-screen UX polish (same ticket)
+
+Shipped alongside the receipt/invoice work, all in `src/routes/app.checkout.tsx`:
+
+- **Product images in the catalog** — each product shows its first product-level
+  image (`imageUrls[0]`, resolved by `products.listForCounter`) via a shared
+  `ProductThumb` (placeholder tile when there's no image). Variant rows stay
+  image-free — one glance-able thumbnail per product is enough at the counter.
+- **List ↔ grid view, remembered** — a toggle in the catalog header switches
+  between the accordion list and an image-forward grid; the choice is persisted
+  in `localStorage` (`useCatalogView`) so the next checkout opens in the same
+  view. Grid tiles open the product's variants in a modal — both views render the
+  **same** `ProductVariantRows` (the custom-price + stepper logic lives in one
+  place, not duplicated).
+- **Cancel from the build screen** — a "Cancel checkout" button (confirm-gated,
+  reuses `cancelCheckoutSession` + the existing `onCancelActive` flow) so a vendor
+  can drop the whole order in place when the customer changes their mind, without
+  going back to the list first.
+- **Humanized QR prefill** — `buildCheckoutWaUrl` now prefills a warm first-person
+  message (*"Hi! 👋 I'd like to check out at the counter. My order ref: KP-…"*)
+  instead of a bare token. Only the `KP-<token>` ref is load-bearing (the intent
+  router scans for it anywhere in the text); URL-encoded for the emoji/newlines.
+  There's no order number yet at scan time (the order is created *after* binding),
+  so the ref is the token.
+- **Uniform list header** — the "Start checkout" CTA moved *inside* the walk-in
+  desk card so it spans full width and lines up with the open-checkout cards on
+  desktop (no ragged button column).
+
 ## Pending (V1.1)
 
 - **Resend from order detail** — the "Send receipt/invoice to buyer" action is

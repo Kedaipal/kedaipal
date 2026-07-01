@@ -1,5 +1,6 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import {
 	ArrowLeft,
 	BadgeCheck,
@@ -10,6 +11,9 @@ import {
 	Clock,
 	Download,
 	EyeOff,
+	Image as ImageIcon,
+	LayoutGrid,
+	List,
 	Minus,
 	Plus,
 	QrCode,
@@ -18,7 +22,7 @@ import {
 	UserCheck,
 	X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "react-qr-code";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
@@ -229,6 +233,7 @@ function ActiveSession({
 				currency={retailer.currency ?? "MYR"}
 				draft={session.draft}
 				onCreated={onCreated}
+				onCancel={onCancelActive}
 			/>
 		) : null;
 
@@ -279,15 +284,21 @@ function OpenCheckoutsList({
 
 	return (
 		<div className="flex flex-col gap-4">
-			<div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-center">
-				<div className="rounded-2xl border border-border bg-card p-4">
+			{/* Full-width card with the CTA inside it, so this header lines up with the
+			    open-checkout cards below (uniform width on desktop) instead of leaving a
+			    ragged button column beside it. */}
+			<div className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
+				<div>
 					<p className="text-sm font-semibold">Walk-in order desk</p>
 					<p className="mt-1 max-w-2xl text-sm text-muted-foreground">
 						Start a QR checkout for each customer, then resume any open checkout
 						when they reach the counter.
 					</p>
 				</div>
-				<Button onClick={onStart} className="h-12 gap-2 px-5 text-base">
+				<Button
+					onClick={onStart}
+					className="h-12 shrink-0 gap-2 px-5 text-base max-sm:w-full"
+				>
 					<Plus className="size-5" />
 					Start checkout
 				</Button>
@@ -790,6 +801,259 @@ function rmToCents(rm: string): number {
 	return Math.round(n * 100);
 }
 
+type CounterProduct = FunctionReturnType<
+	typeof api.products.listForCounter
+>[number];
+
+const CATALOG_VIEW_KEY = "kp.counterCatalogView";
+type CatalogView = "list" | "grid";
+
+/**
+ * The seller's last-chosen catalog layout (list vs grid), persisted so the next
+ * checkout opens in the same view. Hydrated after mount — the server + first
+ * client render both use "list", then the client swaps in the saved choice, so
+ * there's no SSR hydration mismatch.
+ */
+function useCatalogView(): [CatalogView, (v: CatalogView) => void] {
+	const [view, setView] = useState<CatalogView>("list");
+	useEffect(() => {
+		const saved =
+			typeof window !== "undefined"
+				? window.localStorage.getItem(CATALOG_VIEW_KEY)
+				: null;
+		if (saved === "grid" || saved === "list") setView(saved);
+	}, []);
+	const set = useCallback((v: CatalogView) => {
+		setView(v);
+		try {
+			window.localStorage.setItem(CATALOG_VIEW_KEY, v);
+		} catch {
+			// Private mode / storage disabled — the toggle still works for this session.
+		}
+	}, []);
+	return [view, set];
+}
+
+/** First product image (product-level, not per-variant) or a placeholder tile. */
+function ProductThumb({
+	url,
+	name,
+	className,
+}: {
+	url: string | undefined;
+	name: string;
+	className?: string;
+}) {
+	return url ? (
+		<img
+			src={url}
+			alt={name}
+			loading="lazy"
+			className={cn("object-cover", className)}
+		/>
+	) : (
+		<div
+			className={cn(
+				"flex items-center justify-center bg-muted text-muted-foreground",
+				className,
+			)}
+		>
+			<ImageIcon className="size-5" aria-hidden />
+		</div>
+	);
+}
+
+/** Cart quantity + a price label for a product, shared by the list + grid cards. */
+function counterProductMeta(
+	p: CounterProduct,
+	cart: Map<string, CartLine>,
+	currency: string,
+): { cartQty: number; priceLabel: string } {
+	const cartQty = p.variants.reduce(
+		(s, vr) => s + (cart.get(vr._id)?.qty ?? 0),
+		0,
+	);
+	// Ignore custom (quote) variants — they carry no catalog price — and note
+	// "· custom" when a product mixes fixed + custom variants.
+	const nonCustom = p.variants.filter((vr) => !vr.isCustom);
+	const hasCustom = p.variants.some((vr) => vr.isCustom);
+	const priceLabel =
+		nonCustom.length === 0
+			? "Custom price"
+			: (() => {
+					const lo = Math.min(...nonCustom.map((v) => v.price));
+					const hi = Math.max(...nonCustom.map((v) => v.price));
+					const base =
+						lo === hi
+							? formatPrice(lo, currency)
+							: `from ${formatPrice(lo, currency)}`;
+					return hasCustom ? `${base} · custom` : base;
+				})();
+	return { cartQty, priceLabel };
+}
+
+/**
+ * The per-variant add/quantity rows for one product — shared by the list view's
+ * inline accordion and the grid view's tap-to-open modal, so the (fiddly)
+ * custom-price + stepper logic lives in exactly one place.
+ */
+function ProductVariantRows({
+	product,
+	currency,
+	cart,
+	customPriceInput,
+	setCustomPriceInput,
+	setQty,
+	className,
+}: {
+	product: CounterProduct;
+	currency: string;
+	cart: Map<string, CartLine>;
+	customPriceInput: Record<string, string>;
+	setCustomPriceInput: React.Dispatch<
+		React.SetStateAction<Record<string, string>>
+	>;
+	setQty: (variantId: string, line: CartLine, qty: number) => void;
+	className?: string;
+}) {
+	return (
+		<div className={cn("flex flex-col divide-y divide-border", className)}>
+			{product.variants.map((vr) => {
+				const isCustom = vr.isCustom === true;
+				const label = isCustom
+					? (vr.customLabel ?? "Custom")
+					: vr.optionValues.length > 0
+						? vr.optionValues.join(" / ")
+						: "";
+				const inCart = cart.get(vr._id);
+
+				// Custom/quote line: no catalog price — the vendor types the
+				// agreed-in-person price, then adds.
+				if (isCustom) {
+					const priceText =
+						customPriceInput[vr._id] ?? (inCart ? centsToRm(inCart.price) : "");
+					const cents = rmToCents(priceText);
+					const validPrice = !Number.isNaN(cents);
+					const onPriceChange = (val: string) => {
+						setCustomPriceInput((prev) => ({ ...prev, [vr._id]: val }));
+						const c = rmToCents(val);
+						// Only push a valid price to the cart line.
+						if (inCart && !Number.isNaN(c))
+							setQty(vr._id, { ...inCart, price: c }, inCart.qty);
+					};
+					// When the field is blank/invalid but the line is already in the
+					// cart, the last good price is still what'll be charged — say so
+					// instead of showing a silent empty box.
+					const heldHint =
+						inCart && !validPrice
+							? `Using ${formatPrice(inCart.price, currency)} — type a new price to change`
+							: null;
+					return (
+						<div key={vr._id} className="flex flex-col gap-2 py-3">
+							<div className="flex items-center justify-between gap-3">
+								<div className="min-w-0">
+									<p className="truncate text-sm">{label}</p>
+									<p className="text-xs text-muted-foreground">
+										Custom — set the agreed price
+									</p>
+								</div>
+								{inCart ? (
+									<Stepper
+										qty={inCart.qty}
+										onChange={(q) => setQty(vr._id, inCart, q)}
+									/>
+								) : null}
+							</div>
+							<div className="flex items-center gap-2">
+								<div className="relative flex-1">
+									<span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+										RM
+									</span>
+									<Input
+										type="number"
+										inputMode="decimal"
+										step="0.01"
+										min="0"
+										value={priceText}
+										onChange={(e) => onPriceChange(e.target.value)}
+										placeholder="0.00"
+										variant="field"
+										className="h-11 pl-10"
+									/>
+								</div>
+								{!inCart ? (
+									<Button
+										variant="secondary"
+										disabled={!validPrice}
+										onClick={() =>
+											setQty(
+												vr._id,
+												{
+													name: product.name,
+													label,
+													price: cents,
+													qty: 0,
+													isCustom: true,
+												},
+												1,
+											)
+										}
+										className="h-11 px-3"
+									>
+										<Plus className="size-4" />
+										Add
+									</Button>
+								) : null}
+							</div>
+							{heldHint ? (
+								<p className="text-xs text-amber-600 dark:text-amber-500">
+									{heldHint}
+								</p>
+							) : null}
+						</div>
+					);
+				}
+
+				return (
+					<div
+						key={vr._id}
+						className="flex items-center justify-between gap-3 py-3"
+					>
+						<div className="min-w-0">
+							<p className="truncate text-sm">{label || "Default"}</p>
+							<p className="text-xs text-muted-foreground">
+								{formatPrice(vr.price, currency)}
+								{vr.blockWhenOutOfStock ? ` · ${vr.onHand} left` : ""}
+							</p>
+						</div>
+						{inCart ? (
+							<Stepper
+								qty={inCart.qty}
+								onChange={(q) => setQty(vr._id, inCart, q)}
+							/>
+						) : (
+							<Button
+								variant="secondary"
+								onClick={() =>
+									setQty(
+										vr._id,
+										{ name: product.name, label, price: vr.price, qty: 0 },
+										1,
+									)
+								}
+								className="h-11 px-3"
+							>
+								<Plus className="size-4" />
+								Add
+							</Button>
+						)}
+					</div>
+				);
+			})}
+		</div>
+	);
+}
+
 function BuildOrderScreen({
 	retailerId,
 	sessionId,
@@ -797,6 +1061,7 @@ function BuildOrderScreen({
 	currency,
 	draft,
 	onCreated,
+	onCancel,
 }: {
 	retailerId: Id<"retailers">;
 	sessionId: SessionId;
@@ -817,6 +1082,9 @@ function BuildOrderScreen({
 		orderId: Id<"orders">;
 		paidInPerson: boolean;
 	}) => void;
+	// Cancel the whole checkout (customer walked / changed their mind). Drops the
+	// session + any items and returns to the open-checkouts list.
+	onCancel: () => void;
 }) {
 	// Counter uses listForCounter (not the public list) so hidden, counter-only
 	// SKUs — e.g. a pre-priced event product — are ringable in person while
@@ -825,6 +1093,12 @@ function BuildOrderScreen({
 	const createOrder = useMutation(api.counterCheckout.createOrderFromSession);
 	const saveDraft = useMutation(api.counterCheckout.saveSessionDraft);
 	const [query, setQuery] = useState("");
+	// List vs grid catalog layout — remembered across checkouts (localStorage).
+	const [view, setView] = useCatalogView();
+	// Grid view opens a product's variants in a modal (the grid card has no room
+	// for the inline accordion). Held by id + resolved live so a catalog refresh
+	// keeps it fresh (and it closes if the product goes away).
+	const [modalProductId, setModalProductId] = useState<string | null>(null);
 	// Cart + selections seed from the autosaved draft so a refresh / resume
 	// restores exactly where the vendor left off. Items hydrate once the catalog
 	// loads (we need names/prices); the rest seed synchronously.
@@ -840,6 +1114,8 @@ function BuildOrderScreen({
 	// only notice after the buyer has paid. (Counter-only: the storefront buyer
 	// already reviews their own cart before sending the order.)
 	const [confirmOpen, setConfirmOpen] = useState(false);
+	// Cancel-the-whole-checkout confirm (customer changed their mind at the counter).
+	const [cancelOpen, setCancelOpen] = useState(false);
 	// Per-variant price text for custom/quote lines (keyed by variantId). The cart
 	// line holds the parsed cents; this holds the in-progress input string.
 	const [customPriceInput, setCustomPriceInput] = useState<
@@ -939,6 +1215,15 @@ function BuildOrderScreen({
 				);
 			});
 	}, [products, query]);
+
+	// The product whose variant modal is open (grid view). Resolved from the live
+	// catalog with active variants only — mirrors what the cards show.
+	const modalProduct = useMemo<CounterProduct | null>(() => {
+		if (!modalProductId || !products) return null;
+		const p = products.find((x) => x._id === modalProductId);
+		if (!p) return null;
+		return { ...p, variants: p.variants.filter((vr) => vr.active) };
+	}, [products, modalProductId]);
 
 	function toggleExpanded(productId: string) {
 		setExpanded((prev) => {
@@ -1040,6 +1325,40 @@ function BuildOrderScreen({
 								Add products to this counter order.
 							</p>
 						</div>
+						{/* List ↔ grid layout — remembered for the next checkout. Each
+						    button carries its own aria-label + aria-pressed, so the wrapper
+						    needs no role. */}
+						<div className="flex shrink-0 items-center gap-1 rounded-xl border border-border bg-muted/40 p-1">
+							<span className="sr-only">Catalog layout</span>
+							<button
+								type="button"
+								onClick={() => setView("list")}
+								aria-pressed={view === "list"}
+								aria-label="List view"
+								className={cn(
+									"flex size-9 items-center justify-center rounded-lg transition-colors",
+									view === "list"
+										? "bg-card text-foreground shadow-sm"
+										: "text-muted-foreground hover:text-foreground",
+								)}
+							>
+								<List className="size-4" />
+							</button>
+							<button
+								type="button"
+								onClick={() => setView("grid")}
+								aria-pressed={view === "grid"}
+								aria-label="Grid view"
+								className={cn(
+									"flex size-9 items-center justify-center rounded-lg transition-colors",
+									view === "grid"
+										? "bg-card text-foreground shadow-sm"
+										: "text-muted-foreground hover:text-foreground",
+								)}
+							>
+								<LayoutGrid className="size-4" />
+							</button>
+						</div>
 					</div>
 					<div className="relative">
 						<Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -1060,29 +1379,57 @@ function BuildOrderScreen({
 						<p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
 							No matching products.
 						</p>
+					) : view === "grid" ? (
+						<div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+							{filtered.map((p) => {
+								const { cartQty, priceLabel } = counterProductMeta(
+									p,
+									cart,
+									currency,
+								);
+								return (
+									<button
+										key={p._id}
+										type="button"
+										onClick={() => setModalProductId(p._id)}
+										className="group flex flex-col overflow-hidden rounded-2xl border border-border bg-card text-left shadow-sm transition-shadow hover:border-accent/40 hover:shadow-md"
+									>
+										<div className="relative aspect-square w-full overflow-hidden bg-muted">
+											<ProductThumb
+												url={p.imageUrls[0]}
+												name={p.name}
+												className="size-full"
+											/>
+											{cartQty > 0 ? (
+												<span className="absolute right-2 top-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-accent px-1.5 text-[10px] font-bold leading-none text-accent-foreground shadow">
+													{cartQty}
+												</span>
+											) : null}
+											{p.hidden ? (
+												<span className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-background/90 px-2 py-0.5 text-[10px] font-medium text-muted-foreground shadow-sm">
+													<EyeOff className="size-3" aria-hidden />
+													Hidden
+												</span>
+											) : null}
+										</div>
+										<div className="min-w-0 p-2.5">
+											<p className="truncate text-sm font-semibold">{p.name}</p>
+											<p className="truncate text-xs text-muted-foreground">
+												{priceLabel}
+											</p>
+										</div>
+									</button>
+								);
+							})}
+						</div>
 					) : (
 						filtered.map((p) => {
 							const open = isSearching || expanded.has(p._id);
-							const cartQty = p.variants.reduce(
-								(s, vr) => s + (cart.get(vr._id)?.qty ?? 0),
-								0,
+							const { cartQty, priceLabel } = counterProductMeta(
+								p,
+								cart,
+								currency,
 							);
-							// Price label ignores custom (quote) variants — they have no
-							// catalog price — and notes "+ custom" when the product mixes both.
-							const nonCustom = p.variants.filter((vr) => !vr.isCustom);
-							const hasCustom = p.variants.some((vr) => vr.isCustom);
-							const priceLabel =
-								nonCustom.length === 0
-									? "Custom price"
-									: (() => {
-											const lo = Math.min(...nonCustom.map((v) => v.price));
-											const hi = Math.max(...nonCustom.map((v) => v.price));
-											const base =
-												lo === hi
-													? formatPrice(lo, currency)
-													: `from ${formatPrice(lo, currency)}`;
-											return hasCustom ? `${base} · custom` : base;
-										})();
 							return (
 								<div
 									key={p._id}
@@ -1091,9 +1438,14 @@ function BuildOrderScreen({
 									<button
 										type="button"
 										onClick={() => toggleExpanded(p._id)}
-										className="flex w-full items-center justify-between gap-3 p-3 text-left hover:bg-muted/40"
+										className="flex w-full items-center gap-3 p-3 text-left hover:bg-muted/40"
 									>
-										<div className="min-w-0">
+										<ProductThumb
+											url={p.imageUrls[0]}
+											name={p.name}
+											className="size-12 shrink-0 rounded-xl"
+										/>
+										<div className="min-w-0 flex-1">
 											<p className="flex items-center gap-1.5 text-sm font-semibold">
 												<span className="truncate">{p.name}</span>
 												{/* Counter-only SKU — confirms at a glance this item is
@@ -1125,162 +1477,15 @@ function BuildOrderScreen({
 										</div>
 									</button>
 									{open ? (
-										<div className="flex flex-col divide-y divide-border border-t border-border bg-muted/20 px-3 pb-1">
-											{p.variants.map((vr) => {
-												const isCustom = vr.isCustom === true;
-												const label = isCustom
-													? (vr.customLabel ?? "Custom")
-													: vr.optionValues.length > 0
-														? vr.optionValues.join(" / ")
-														: "";
-												const inCart = cart.get(vr._id);
-
-												// Custom/quote line: no catalog price — the vendor types
-												// the agreed-in-person price, then adds.
-												if (isCustom) {
-													const priceText =
-														customPriceInput[vr._id] ??
-														(inCart ? centsToRm(inCart.price) : "");
-													const cents = rmToCents(priceText);
-													const validPrice = !Number.isNaN(cents);
-													const onPriceChange = (val: string) => {
-														setCustomPriceInput((prev) => ({
-															...prev,
-															[vr._id]: val,
-														}));
-														const c = rmToCents(val);
-														// Only push a valid price to the cart line.
-														if (inCart && !Number.isNaN(c))
-															setQty(
-																vr._id,
-																{ ...inCart, price: c },
-																inCart.qty,
-															);
-													};
-													// When the field is blank/invalid but the line is already
-													// in the cart, the last good price is still what'll be
-													// charged — say so instead of showing a silent empty box.
-													const heldHint =
-														inCart && !validPrice
-															? `Using ${formatPrice(inCart.price, currency)} — type a new price to change`
-															: null;
-													return (
-														<div
-															key={vr._id}
-															className="flex flex-col gap-2 py-3"
-														>
-															<div className="flex items-center justify-between gap-3">
-																<div className="min-w-0">
-																	<p className="truncate text-sm">{label}</p>
-																	<p className="text-xs text-muted-foreground">
-																		Custom — set the agreed price
-																	</p>
-																</div>
-																{inCart ? (
-																	<Stepper
-																		qty={inCart.qty}
-																		onChange={(q) => setQty(vr._id, inCart, q)}
-																	/>
-																) : null}
-															</div>
-															<div className="flex items-center gap-2">
-																<div className="relative flex-1">
-																	<span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-																		RM
-																	</span>
-																	<Input
-																		type="number"
-																		inputMode="decimal"
-																		step="0.01"
-																		min="0"
-																		value={priceText}
-																		onChange={(e) =>
-																			onPriceChange(e.target.value)
-																		}
-																		placeholder="0.00"
-																		variant="field"
-																		className="h-11 pl-10"
-																	/>
-																</div>
-																{!inCart ? (
-																	<Button
-																		variant="secondary"
-																		disabled={!validPrice}
-																		onClick={() =>
-																			setQty(
-																				vr._id,
-																				{
-																					name: p.name,
-																					label,
-																					price: cents,
-																					qty: 0,
-																					isCustom: true,
-																				},
-																				1,
-																			)
-																		}
-																		className="h-11 px-3"
-																	>
-																		<Plus className="size-4" />
-																		Add
-																	</Button>
-																) : null}
-															</div>
-															{heldHint ? (
-																<p className="text-xs text-amber-600 dark:text-amber-500">
-																	{heldHint}
-																</p>
-															) : null}
-														</div>
-													);
-												}
-
-												return (
-													<div
-														key={vr._id}
-														className="flex items-center justify-between gap-3 py-3"
-													>
-														<div className="min-w-0">
-															<p className="truncate text-sm">
-																{label || "Default"}
-															</p>
-															<p className="text-xs text-muted-foreground">
-																{formatPrice(vr.price, currency)}
-																{vr.blockWhenOutOfStock
-																	? ` · ${vr.onHand} left`
-																	: ""}
-															</p>
-														</div>
-														{inCart ? (
-															<Stepper
-																qty={inCart.qty}
-																onChange={(q) => setQty(vr._id, inCart, q)}
-															/>
-														) : (
-															<Button
-																variant="secondary"
-																onClick={() =>
-																	setQty(
-																		vr._id,
-																		{
-																			name: p.name,
-																			label,
-																			price: vr.price,
-																			qty: 0,
-																		},
-																		1,
-																	)
-																}
-																className="h-11 px-3"
-															>
-																<Plus className="size-4" />
-																Add
-															</Button>
-														)}
-													</div>
-												);
-											})}
-										</div>
+										<ProductVariantRows
+											product={p}
+											currency={currency}
+											cart={cart}
+											customPriceInput={customPriceInput}
+											setCustomPriceInput={setCustomPriceInput}
+											setQty={setQty}
+											className="border-t border-border bg-muted/20 px-3 pb-1"
+										/>
 									) : null}
 								</div>
 							);
@@ -1484,9 +1689,33 @@ function BuildOrderScreen({
 						>
 							{`Review order · ${formatPrice(total, currency)}`}
 						</Button>
+						{/* Escape hatch: the customer walked or changed their mind. Cancels
+						    the whole checkout (session + items) — confirmed first since it's
+						    destructive. */}
+						<button
+							type="button"
+							onClick={() => setCancelOpen(true)}
+							className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-xl py-2 text-sm font-medium text-muted-foreground hover:text-destructive"
+						>
+							<Trash2 className="size-4" />
+							Cancel checkout
+						</button>
 					</div>
 				</div>
 			</div>
+
+			<ConfirmDialog
+				open={cancelOpen}
+				onOpenChange={setCancelOpen}
+				title="Cancel this checkout?"
+				description={`${
+					buyer.displayName ?? "This buyer"
+				}'s checkout and any items added to it will be removed. This can't be undone.`}
+				confirmLabel="Cancel checkout"
+				cancelLabel="Keep it open"
+				destructive
+				onConfirm={onCancel}
+			/>
 
 			<ConfirmCheckoutDialog
 				open={confirmOpen}
@@ -1509,6 +1738,51 @@ function BuildOrderScreen({
 				submitting={submitting}
 				onConfirm={submit}
 			/>
+
+			{/* Grid view: a product's variants open here (the tile has no room for the
+			    inline accordion). Same ProductVariantRows the list view uses. */}
+			<Dialog
+				open={modalProduct !== null}
+				onOpenChange={(o) => {
+					if (!o) setModalProductId(null);
+				}}
+			>
+				<DialogContent className="max-w-md">
+					{modalProduct ? (
+						<>
+							<DialogHeader>
+								<DialogTitle className="flex items-center gap-3">
+									<ProductThumb
+										url={modalProduct.imageUrls[0]}
+										name={modalProduct.name}
+										className="size-11 shrink-0 rounded-xl"
+									/>
+									<span className="min-w-0 truncate">{modalProduct.name}</span>
+								</DialogTitle>
+								<DialogDescription>
+									Add options to this counter order.
+								</DialogDescription>
+							</DialogHeader>
+							<ProductVariantRows
+								product={modalProduct}
+								currency={currency}
+								cart={cart}
+								customPriceInput={customPriceInput}
+								setCustomPriceInput={setCustomPriceInput}
+								setQty={setQty}
+							/>
+							<DialogFooter>
+								<Button
+									variant="outline"
+									onClick={() => setModalProductId(null)}
+								>
+									Done
+								</Button>
+							</DialogFooter>
+						</>
+					) : null}
+				</DialogContent>
+			</Dialog>
 		</div>
 	);
 }

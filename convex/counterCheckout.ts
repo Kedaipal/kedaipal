@@ -70,7 +70,14 @@ const SHORT_ID_RETRIES = 3;
 function buildCheckoutWaUrl(token: string): string | undefined {
 	const phone = process.env.WHATSAPP_CHECKOUT_PHONE;
 	if (!phone) return undefined;
-	return `https://wa.me/${phone.replace(/\D/g, "")}?text=KP-${token}`;
+	// A warm, first-person message the buyer sends by tapping the QR — nicer than a
+	// bare token. The `KP-<token>` ref is the only load-bearing part (the inbound
+	// intent router scans for it anywhere in the text, so the surrounding prose is
+	// harmless); everything else is just human framing. There's no order number
+	// yet — the order is created after the buyer binds — so the ref *is* the token.
+	// URL-encoded because the message now carries spaces + emoji.
+	const text = `Hi! 👋 I'd like to check out at the counter.\n\nMy order ref: KP-${token}`;
+	return `https://wa.me/${phone.replace(/\D/g, "")}?text=${encodeURIComponent(text)}`;
 }
 
 /**
