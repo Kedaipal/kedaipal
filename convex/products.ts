@@ -383,6 +383,32 @@ export const list = query({
 			.withIndex("by_retailer_active", (q) =>
 				q.eq("retailerId", retailerId).eq("active", true),
 			)
+			// Hidden products are counter-only — never surfaced on the public
+			// storefront. Filtered here (not indexed): the set is already scoped to
+			// one retailer's active products (capped small), so an in-memory filter
+			// is cheaper than a compound index. See docs/hidden-products.md.
+			.filter((q) => q.neq(q.field("hidden"), true))
+			.collect();
+		rows.sort(bySortOrder);
+		return Promise.all(
+			rows.map((row) => productWithVariants(ctx, row, { activeOnly: true })),
+		);
+	},
+});
+
+// Counter checkout catalog: like `list` (active products, active variants) but
+// INCLUDES hidden products, so a seller can ring up an in-person-only event SKU
+// that shoppers never see online. Owner-OR-admin gated — hidden products must
+// not leak through the public, unauthenticated `list`. See docs/hidden-products.md.
+export const listForCounter = query({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }) => {
+		await requireRetailerOwnership(ctx, retailerId);
+		const rows = await ctx.db
+			.query("products")
+			.withIndex("by_retailer_active", (q) =>
+				q.eq("retailerId", retailerId).eq("active", true),
+			)
 			.collect();
 		rows.sort(bySortOrder);
 		return Promise.all(
@@ -440,6 +466,7 @@ export const create = mutation({
 		options: v.optional(v.array(optionAxisValidator)),
 		blockWhenOutOfStock: v.optional(v.boolean()),
 		requiresProof: v.optional(v.boolean()),
+		hidden: v.optional(v.boolean()),
 		variants: v.array(variantInputValidator),
 	},
 	handler: async (ctx, args): Promise<Id<"products">> => {
@@ -485,6 +512,7 @@ export const create = mutation({
 			options,
 			blockWhenOutOfStock: args.blockWhenOutOfStock,
 			requiresProof: args.requiresProof,
+			hidden: args.hidden,
 			sortOrder: args.sortOrder,
 			active: true,
 			channel: "whatsapp",
@@ -544,6 +572,7 @@ export const update = mutation({
 		active: v.optional(v.boolean()),
 		blockWhenOutOfStock: v.optional(v.boolean()),
 		requiresProof: v.optional(v.boolean()),
+		hidden: v.optional(v.boolean()),
 	},
 	handler: async (ctx, { productId, ...fields }): Promise<void> => {
 		const userId = await requireUserId(ctx);
@@ -576,6 +605,7 @@ export const update = mutation({
 			updates.blockWhenOutOfStock = fields.blockWhenOutOfStock;
 		if (fields.requiresProof !== undefined)
 			updates.requiresProof = fields.requiresProof;
+		if (fields.hidden !== undefined) updates.hidden = fields.hidden;
 
 		await ctx.db.patch(productId, updates);
 		await logAdminAction(ctx, access, "products.update", productId);

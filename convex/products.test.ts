@@ -382,6 +382,89 @@ describe("products", () => {
 		expect(list[0]?._id).toBe(activeId);
 	});
 
+	// --- Hidden (counter-only) products --------------------------------------
+
+	test("create + update persist the hidden flag", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		// Defaults to visible (undefined) when the arg is omitted.
+		const id = await asA.mutation(api.products.create, baseProduct(retailer._id));
+		const created = await t.run((ctx) => ctx.db.get(id));
+		expect(created?.hidden).toBeUndefined();
+
+		await asA.mutation(api.products.update, { productId: id, hidden: true });
+		expect((await t.run((ctx) => ctx.db.get(id)))?.hidden).toBe(true);
+
+		// And can be flipped back to visible.
+		await asA.mutation(api.products.update, { productId: id, hidden: false });
+		expect((await t.run((ctx) => ctx.db.get(id)))?.hidden).toBe(false);
+	});
+
+	test("create can set hidden at creation time", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const id = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Lekor Event" }),
+			hidden: true,
+		});
+		expect((await t.run((ctx) => ctx.db.get(id)))?.hidden).toBe(true);
+	});
+
+	test("storefront list excludes hidden products", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const visibleId = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Regular Lekor" }),
+		);
+		await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Lekor Event" }),
+			hidden: true,
+		});
+
+		const store = await t.query(api.products.list, { retailerId: retailer._id });
+		expect(store).toHaveLength(1);
+		expect(store[0]?._id).toBe(visibleId);
+	});
+
+	test("listForCounter includes hidden products but still excludes archived", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const visibleId = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Regular Lekor" }),
+		);
+		const hiddenId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Lekor Event" }),
+			hidden: true,
+		});
+		const archivedId = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Old SKU" }),
+		);
+		await asA.mutation(api.products.archive, { productId: archivedId });
+
+		const counter = await asA.query(api.products.listForCounter, {
+			retailerId: retailer._id,
+		});
+		const ids = counter.map((p) => p._id).sort();
+		expect(ids).toEqual([visibleId, hiddenId].sort());
+	});
+
+	test("listForCounter is owner-OR-admin gated (rejects a stranger)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await seedRetailer(t, USER_B);
+		const asB = t.withIdentity({ subject: USER_B });
+		await expect(
+			asB.query(api.products.listForCounter, { retailerId: retailer._id }),
+		).rejects.toThrow();
+	});
+
 	test("storefront list returns only active variants", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);

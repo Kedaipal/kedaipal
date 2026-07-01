@@ -44,6 +44,7 @@ function NewProductRoute() {
 						imageStorageIds: values.imageStorageIds,
 						sortOrder: Date.now(),
 						options: values.options,
+						hidden: values.hidden,
 						variants: values.variants,
 					});
 					navigate({ to: "/app/products" });

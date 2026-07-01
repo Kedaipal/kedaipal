@@ -253,6 +253,13 @@ export default defineSchema({
 		stock: v.optional(v.number()),
 		imageStorageIds: v.array(v.string()),
 		active: v.boolean(),
+		// Storefront visibility, ORTHOGONAL to `active` (which is the archive flag).
+		// hidden === true → excluded from the public storefront listing, but still
+		// fully sellable in counter checkout, inventory and the dashboard. Used for
+		// pre-priced event/walk-up SKUs the seller rings up in person but never
+		// lists online. undefined/false = visible (legacy default; no backfill).
+		// See docs/hidden-products.md.
+		hidden: v.optional(v.boolean()),
 		// Option axes this product varies along, ordered (drives picker order).
 		// Empty array (or undefined on pre-migration rows) = no axes → exactly
 		// one implicit variant with optionValues:[]. Capped at 2 axes. Bounded,

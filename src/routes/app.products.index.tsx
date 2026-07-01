@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
-import { ChevronDown, Download, Upload } from "lucide-react";
+import { ChevronDown, Download, EyeOff, Upload } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
@@ -436,6 +436,13 @@ function ProductCard({
 				{!p.active ? (
 					<span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
 						Archived
+					</span>
+				) : p.hidden ? (
+					// Off the public storefront, still sellable at the counter — flagged
+					// so hidden state is never silent. See docs/hidden-products.md.
+					<span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+						<EyeOff className="size-3" aria-hidden />
+						Hidden
 					</span>
 				) : null}
 				<svg

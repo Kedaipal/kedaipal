@@ -9,6 +9,7 @@ import {
 	ChevronRight,
 	Clock,
 	Download,
+	EyeOff,
 	Minus,
 	Plus,
 	QrCode,
@@ -800,7 +801,10 @@ function BuildOrderScreen({
 		paidInPerson: boolean;
 	}) => void;
 }) {
-	const products = useQuery(api.products.list, { retailerId });
+	// Counter uses listForCounter (not the public list) so hidden, counter-only
+	// SKUs — e.g. a pre-priced event product — are ringable in person while
+	// staying off the storefront. See docs/hidden-products.md.
+	const products = useQuery(api.products.listForCounter, { retailerId });
 	const createOrder = useMutation(api.counterCheckout.createOrderFromSession);
 	const saveDraft = useMutation(api.counterCheckout.saveSessionDraft);
 	const [query, setQuery] = useState("");
@@ -1073,7 +1077,17 @@ function BuildOrderScreen({
 										className="flex w-full items-center justify-between gap-3 p-3 text-left hover:bg-muted/40"
 									>
 										<div className="min-w-0">
-											<p className="truncate text-sm font-semibold">{p.name}</p>
+											<p className="flex items-center gap-1.5 text-sm font-semibold">
+												<span className="truncate">{p.name}</span>
+												{/* Counter-only SKU — confirms at a glance this item is
+												    off the storefront. See docs/hidden-products.md. */}
+												{p.hidden ? (
+													<span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+														<EyeOff className="size-3" aria-hidden />
+														Hidden
+													</span>
+												) : null}
+											</p>
 											<p className="text-xs text-muted-foreground">
 												{p.variants.length} option
 												{p.variants.length === 1 ? "" : "s"} · {priceLabel}
