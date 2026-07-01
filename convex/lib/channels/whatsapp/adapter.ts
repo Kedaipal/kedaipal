@@ -16,6 +16,7 @@ import type {
 import {
 	sendCtaUrlButton,
 	sendCtaUrlWithImage,
+	sendDocument,
 	sendImage,
 	sendText,
 } from "../../whatsapp";
@@ -42,6 +43,9 @@ async function send(to: string, msg: OutboundMessage): Promise<void> {
 			return;
 		case "image":
 			await sendImage(to, msg.imageUrl, msg.caption);
+			return;
+		case "document":
+			await sendDocument(to, msg.documentUrl, msg.filename, msg.caption);
 			return;
 		case "cta": {
 			if (canUseCtaButton(msg.url)) {

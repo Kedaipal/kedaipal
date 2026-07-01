@@ -13,6 +13,13 @@ describe("classifyInbound", () => {
 		expect(
 			classifyInbound(`Hi! I'm at the counter KP-${token}`),
 		).toEqual({ kind: "checkout_bind", token });
+		// The actual humanized QR prefill (emoji + newlines around the ref) still
+		// extracts the token — see buildCheckoutWaUrl in counterCheckout.ts.
+		expect(
+			classifyInbound(
+				`Hi! 👋 I'd like to check out at the counter.\n\nMy order ref: KP-${token}`,
+			),
+		).toEqual({ kind: "checkout_bind", token });
 	});
 
 	test("classifies an order confirmation (ORD-XXXX)", () => {

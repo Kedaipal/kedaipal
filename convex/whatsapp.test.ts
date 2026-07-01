@@ -1104,4 +1104,25 @@ describe("whatsapp inbound — Counter Checkout intent routing", () => {
 		expect(row?.status).toBe("expired");
 		fetchMock.restore();
 	});
+
+	test("the bind reply is localized to the store's locale (ms)", async () => {
+		const t = setup();
+		await seedRetailerWithLocale(t, "ms");
+		const { token } = await t
+			.withIdentity({ subject: USER })
+			.mutation(api.counterCheckout.createCheckoutSession, {});
+		const fetchMock = installFetchMock();
+
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: `KP-${token}`,
+			profileName: "Aiman",
+		});
+
+		const reply = (
+			fetchMock.waCalls()[0].body as { text?: { body: string } }
+		).text?.body;
+		expect(reply).toContain("disambungkan"); // "connected" in Malay
+		fetchMock.restore();
+	});
 });

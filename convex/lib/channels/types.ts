@@ -21,6 +21,14 @@ export type OutboundMessage =
 	| { kind: "text"; body: string }
 	| { kind: "image"; imageUrl: string; caption?: string }
 	| {
+			/** A file attachment (PDF receipt/invoice today) hosted at a public URL
+			 * the provider fetches. `filename` is what the recipient sees + saves. */
+			kind: "document";
+			documentUrl: string;
+			filename?: string;
+			caption?: string;
+	  }
+	| {
 			kind: "cta";
 			body: string;
 			buttonText: string;

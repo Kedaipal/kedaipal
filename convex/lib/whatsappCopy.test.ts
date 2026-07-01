@@ -137,6 +137,59 @@ describe("renderSystemMessage", () => {
 			"Gunakan ORD-AB23 sebagai rujukan pemindahan supaya kami boleh padankan.",
 		);
 	});
+
+	test("counterCheckoutBound names the store, in both locales", () => {
+		const en = renderSystemMessage("en", "counterCheckoutBound", {
+			shortId: "",
+			storeName: "Acme Outdoor",
+		});
+		expect(en).toContain("connected to Acme Outdoor");
+		const ms = renderSystemMessage("ms", "counterCheckoutBound", {
+			shortId: "",
+			storeName: "Acme Outdoor",
+		});
+		expect(ms).toContain("disambungkan dengan Acme Outdoor");
+	});
+
+	test("counterOrderConfirmedPaid quotes the amount + tracking link", () => {
+		const out = renderSystemMessage("en", "counterOrderConfirmedPaid", {
+			shortId: "ORD-AB23",
+			storeName: "Acme",
+			amount: "MYR 25.00",
+			trackingUrl: "https://kedaipal.test/track/tok",
+		});
+		expect(out).toContain("ORD-AB23");
+		expect(out).toContain("confirmed and paid");
+		expect(out).toContain("MYR 25.00");
+		expect(out).toContain("https://kedaipal.test/track/tok");
+	});
+
+	test("counterOrderConfirmedUnpaid frames the total as still-to-pay (no rush)", () => {
+		const out = renderSystemMessage("ms", "counterOrderConfirmedUnpaid", {
+			shortId: "ORD-AB23",
+			storeName: "Acme",
+			amount: "MYR 25.00",
+			trackingUrl: "https://kedaipal.test/track/tok",
+		});
+		expect(out).toContain("untuk dibayar");
+		expect(out).toContain("MYR 25.00");
+		expect(out).toContain("https://kedaipal.test/track/tok");
+	});
+
+	test("order document captions name the doc type + order id", () => {
+		expect(
+			renderSystemMessage("en", "orderReceiptCaption", {
+				shortId: "ORD-AB23",
+				storeName: "Acme",
+			}),
+		).toContain("receipt for order ORD-AB23");
+		expect(
+			renderSystemMessage("en", "orderInvoiceCaption", {
+				shortId: "ORD-AB23",
+				storeName: "Acme",
+			}),
+		).toContain("invoice for order ORD-AB23");
+	});
 });
 
 describe("renderPickupBlock", () => {

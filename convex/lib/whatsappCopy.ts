@@ -14,6 +14,8 @@ export type CopyVars = {
 	trackingUrl?: string;
 	carrierTrackingUrl?: string;
 	deliveryMethod?: DeliveryMethod;
+	/** Pre-formatted money string (e.g. "MYR 25.00") for messages that quote a total. */
+	amount?: string;
 };
 
 export type StatusKey = "packed" | "shipped" | "delivered" | "cancelled";
@@ -118,7 +120,14 @@ export type SystemMessageKey =
 	| "mockupPendingConfirm"
 	| "paymentDueApproved"
 	| "paymentDueWaived"
-	| "paymentDueDeclined";
+	| "paymentDueDeclined"
+	| "counterCheckoutBound"
+	| "counterCheckoutExpired"
+	| "counterCheckoutUsed"
+	| "counterOrderConfirmedPaid"
+	| "counterOrderConfirmedUnpaid"
+	| "orderReceiptCaption"
+	| "orderInvoiceCaption";
 
 type SystemCopy = {
 	paymentReceived: (v: CopyVars) => string;
@@ -132,6 +141,19 @@ type SystemCopy = {
 	paymentDueApproved: (v: CopyVars) => string;
 	paymentDueWaived: (v: CopyVars) => string;
 	paymentDueDeclined: (v: CopyVars) => string;
+	// Counter Checkout (docs/counter-checkout.md): the buyer scans the seller's
+	// `KP-<token>` QR ONCE. `counterCheckoutBound` acks the scan; the two
+	// `counterOrderConfirmed*` messages carry the confirmed order + tracking link
+	// (paid vs pay-later branch) so the buyer never has to scan again to pay.
+	counterCheckoutBound: (v: CopyVars) => string;
+	counterCheckoutExpired: (v: CopyVars) => string;
+	counterCheckoutUsed: (v: CopyVars) => string;
+	counterOrderConfirmedPaid: (v: CopyVars) => string;
+	counterOrderConfirmedUnpaid: (v: CopyVars) => string;
+	// Captions for the receipt / invoice PDF the seller sends to the buyer's
+	// WhatsApp from the counter Done screen (ticket 86ey4fz3w).
+	orderReceiptCaption: (v: CopyVars) => string;
+	orderInvoiceCaption: (v: CopyVars) => string;
 };
 
 export const systemMessages: Record<Locale, SystemCopy> = {
@@ -152,6 +174,24 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`Here are the payment details for your order ${shortId} from ${storeName}:`,
 		paymentDueDeclined: ({ shortId, storeName }) =>
 			`No problem — the custom item was removed from ${shortId}. Here's how to pay for the rest of your order from ${storeName}:`,
+		counterCheckoutBound: ({ storeName }) =>
+			`You're connected to ${storeName} 🎉 The cashier is ringing up your order now — sit tight, your confirmation lands here in a moment.`,
+		counterCheckoutExpired: () =>
+			`Oops — this checkout QR has expired. Just ask the cashier to show a fresh one and scan again 🙂`,
+		counterCheckoutUsed: () =>
+			`This checkout QR has already been used. If you'd like to order again, ask the cashier for a new one 🙂`,
+		counterOrderConfirmedPaid: ({ shortId, storeName, amount, trackingUrl }) =>
+			`🧾 All done! Order ${shortId} at ${storeName} is confirmed and paid${
+				amount ? ` — total ${amount}` : ""
+			}. Thank you! Keep your receipt & track your order here anytime: ${trackingUrl}`,
+		counterOrderConfirmedUnpaid: ({ shortId, storeName, amount, trackingUrl }) =>
+			`🧾 Thanks for your order at ${storeName}! Order ${shortId} is confirmed${
+				amount ? ` — total ${amount} to pay whenever you're ready` : ""
+			}. Pay and track everything here, no rush: ${trackingUrl}`,
+		orderReceiptCaption: ({ shortId }) =>
+			`Here's your receipt for order ${shortId} 🧾 Thanks for shopping with us!`,
+		orderInvoiceCaption: ({ shortId }) =>
+			`Here's your invoice for order ${shortId} 🧾 The payment details are inside.`,
 	},
 	ms: {
 		paymentReceived: ({ shortId, storeName, trackingUrl }) =>
@@ -170,6 +210,24 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`Berikut maklumat pembayaran untuk pesanan ${shortId} dari ${storeName}:`,
 		paymentDueDeclined: ({ shortId, storeName }) =>
 			`Tiada masalah — item custom telah dibuang dari ${shortId}. Berikut cara membayar untuk baki pesanan anda dari ${storeName}:`,
+		counterCheckoutBound: ({ storeName }) =>
+			`Anda telah disambungkan dengan ${storeName} 🎉 Juruwang sedang memproses pesanan anda — tunggu sekejap, pengesahan akan sampai di sini sebentar lagi.`,
+		counterCheckoutExpired: () =>
+			`Alamak — QR checkout ini telah tamat tempoh. Minta juruwang tunjukkan QR baharu dan imbas semula ya 🙂`,
+		counterCheckoutUsed: () =>
+			`QR checkout ini telah digunakan. Jika ingin membuat pesanan lagi, minta juruwang untuk QR baharu ya 🙂`,
+		counterOrderConfirmedPaid: ({ shortId, storeName, amount, trackingUrl }) =>
+			`🧾 Selesai! Pesanan ${shortId} di ${storeName} telah disahkan dan dibayar${
+				amount ? ` — jumlah ${amount}` : ""
+			}. Terima kasih! Simpan resit & jejak pesanan anda di sini bila-bila masa: ${trackingUrl}`,
+		counterOrderConfirmedUnpaid: ({ shortId, storeName, amount, trackingUrl }) =>
+			`🧾 Terima kasih atas pesanan anda di ${storeName}! Pesanan ${shortId} telah disahkan${
+				amount ? ` — jumlah ${amount} untuk dibayar bila-bila anda sedia` : ""
+			}. Bayar & jejak pesanan di sini, tak perlu tergesa-gesa: ${trackingUrl}`,
+		orderReceiptCaption: ({ shortId }) =>
+			`Ini resit untuk pesanan ${shortId} 🧾 Terima kasih kerana membeli-belah dengan kami!`,
+		orderInvoiceCaption: ({ shortId }) =>
+			`Ini invois untuk pesanan ${shortId} 🧾 Maklumat pembayaran ada di dalam.`,
 	},
 };
 
