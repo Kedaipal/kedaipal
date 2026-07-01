@@ -316,7 +316,11 @@ backfill no longer mints comped subscriptions.
   dashboard CTA.
   **Phase 4 completed:** conditional **Admin nav link** (sidebar, gated on `amIAdmin`).
   **Storefront founding badge** (`founding-member-badge.tsx` on `/<slug>` header,
-  reads the public denormalized flag). **Live landing counter** — `FoundingTen` now
+  reads the public denormalized flag). Styled with the Midnight Mint theme via
+  semantic `accent` tokens (mint default; the token flips to a navy-on-mint
+  variant in dark mode), matching the landing founding banner. Typographic v1 —
+  swap in Kris's artwork (`10_Assets/kedaipal-assets/Badges/`) when the files
+  land in the repo; see the component's TODO. **Live landing counter** — `FoundingTen` now
   reads `getSpotsRemaining` (defaults to all-open while loading; never shows a fake
   "taken"). **Scale "Coming soon"** — pricing-teaser Scale card shows a disabled
   "Coming soon" pill instead of a CTA + dimmed. **White-glove CTA** — one-time
