@@ -447,6 +447,11 @@ export const get = query({
 			identity !== null &&
 			(owner?.userId === identity.subject ||
 				adminUserIds().includes(identity.subject));
+		// Hidden products are counter-only — a non-owner caller (incl. an
+		// unauthenticated direct query) must not read one, matching the promise
+		// that hidden SKUs never leak through a public query. Owner/admin still
+		// see it to edit. See docs/hidden-products.md.
+		if (row.hidden && !canEdit) return null;
 		return productWithVariants(ctx, row, { activeOnly: !canEdit });
 	},
 });

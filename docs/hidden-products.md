@@ -45,6 +45,11 @@ backfill**. Archived (`active:false`) already sits off the storefront, so the
   It is **authenticated on purpose**: hidden products must never leak through the
   public, unauthenticated `list`, so we did **not** add an `includeHidden` param
   to `list`.
+- **`products.get`** (public, by-id) returns **`null`** for a hidden product when
+  the caller isn't the owner/admin — closing the same leak as `list` for the
+  single-product read (Convex ids are opaque, but the promise is "no hidden SKU
+  through a public query", so we don't rely on that). Owner/admin still get the
+  full product to edit.
 - **`create`** / **`update`** accept an optional `hidden` and persist it. Both go
   through the existing owner-OR-admin gate; no change to the soft-lock or audit
   behaviour.
@@ -66,7 +71,8 @@ backfill**. Archived (`active:false`) already sits off the storefront, so the
 
 `convex/products.test.ts`: create/update persistence, create-time hidden,
 storefront `list` exclusion, `listForCounter` inclusion (and archived exclusion),
-and the owner-OR-admin gate on `listForCounter`.
+the owner-OR-admin gate on `listForCounter`, and `get` returning `null` for a
+hidden product to a non-owner (full to the owner).
 
 ## Deliberately out of scope
 

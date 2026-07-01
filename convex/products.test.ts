@@ -465,6 +465,24 @@ describe("products", () => {
 		).rejects.toThrow();
 	});
 
+	test("get returns null for a hidden product to a non-owner, full to the owner", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const id = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Lekor Event" }),
+			hidden: true,
+		});
+
+		// Owner (dashboard) still reads it to edit.
+		const asOwner = await asA.query(api.products.get, { productId: id });
+		expect(asOwner?._id).toBe(id);
+		// Unauthenticated / non-owner caller gets nothing — no leak.
+		expect(await t.query(api.products.get, { productId: id })).toBeNull();
+		const asB = t.withIdentity({ subject: USER_B });
+		expect(await asB.query(api.products.get, { productId: id })).toBeNull();
+	});
+
 	test("storefront list returns only active variants", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
