@@ -2,7 +2,6 @@ import { RedirectToSignIn, Show } from "@clerk/tanstack-react-start";
 import {
 	createFileRoute,
 	Outlet,
-	retainSearchParams,
 	useLocation,
 	useNavigate,
 } from "@tanstack/react-router";
@@ -16,17 +15,11 @@ import { SubscriptionBanner } from "../components/app/subscription-banner";
 import { BottomNav } from "../components/dashboard/bottom-nav";
 import { MobileHeader } from "../components/dashboard/mobile-header";
 import { Sidebar } from "../components/dashboard/sidebar";
+import { ActAsProvider, useActAs } from "../hooks/useActAs";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useOrderToastNotifications } from "../hooks/useOrderToastNotifications";
 
 export const Route = createFileRoute("/app")({
-	// `actAs` is the admin act-as retailer id; retained across every /app/*
-	// navigation so an admin doesn't drop out of a seller's store on each click,
-	// and it survives refresh (URL-encoded). See docs/admin-console.md.
-	validateSearch: (search: Record<string, unknown>): { actAs?: string } => ({
-		actAs: typeof search.actAs === "string" ? search.actAs : undefined,
-	}),
-	search: { middlewares: [retainSearchParams(["actAs"])] },
 	head: () => ({
 		meta: [{ name: "robots", content: "noindex, nofollow" }],
 	}),
@@ -39,7 +32,11 @@ function AppLayout() {
 			when="signed-in"
 			fallback={<RedirectToSignIn signInForceRedirectUrl="/app" />}
 		>
-			<AppShell />
+			{/* The act-as session wraps the whole dashboard so it holds across every
+			    navigation + CRUD until the admin Exits. See docs/admin-console.md. */}
+			<ActAsProvider>
+				<AppShell />
+			</ActAsProvider>
 		</Show>
 	);
 }
@@ -47,7 +44,7 @@ function AppLayout() {
 function AppShell() {
 	const navigate = useNavigate();
 	const location = useLocation();
-	const { actAs } = Route.useSearch();
+	const { actAsRetailerId, setActAs } = useActAs();
 	const retailer = useDashboardRetailer();
 	const actingAsAdmin = retailer?.actingAsAdmin === true;
 	const counts = useQuery(
@@ -57,20 +54,27 @@ function AppShell() {
 	const actionableCount = (counts?.pending ?? 0) + (counts?.confirmed ?? 0);
 	const isAdminResult = useQuery(api.billing.amIAdmin);
 	const isAdmin = isAdminResult ?? false;
-	useOrderToastNotifications(counts);
+	// Pass the store id so a store switch (admin act-as enter/exit) re-baselines the
+	// toast instead of announcing the other store's orders as "new".
+	useOrderToastNotifications(counts, retailer?._id);
 
 	// An admin doesn't need a store of their own — they can run the console and
 	// operate other vendors' stores. When they have no store (and aren't acting-as),
 	// the dashboard renders in admin-only mode instead of forcing onboarding.
 	const onAdminRoute = location.pathname.startsWith("/app/admin");
 	const storelessAdmin =
-		retailer === null && !actAs && isAdminResult === true && onAdminRoute;
+		retailer === null &&
+		!actAsRetailerId &&
+		isAdminResult === true &&
+		onAdminRoute;
 
 	useEffect(() => {
 		if (retailer !== null) return;
-		// Stale/foreign act-as id → back to the directory.
-		if (actAs) {
-			navigate({ to: "/app/admin/sellers", search: { actAs: undefined } });
+		// Acting-as but the store resolved null → the id is stale/foreign; clear the
+		// session and return to the directory.
+		if (actAsRetailerId) {
+			setActAs(undefined);
+			navigate({ to: "/app/admin/sellers" });
 			return;
 		}
 		// Wait for the admin check before deciding where a storeless user goes.
@@ -83,7 +87,14 @@ function AppShell() {
 		// Storeless admin: keep them within the admin area (seller screens need a
 		// store). Landing on `/app` or any seller route bounces to the directory.
 		if (!onAdminRoute) navigate({ to: "/app/admin/sellers" });
-	}, [retailer, actAs, isAdminResult, onAdminRoute, navigate]);
+	}, [
+		retailer,
+		actAsRetailerId,
+		isAdminResult,
+		onAdminRoute,
+		navigate,
+		setActAs,
+	]);
 
 	// One-shot backfill: if the retailer has no notifyEmail yet, copy it from
 	// their Clerk identity email so existing accounts get auto-populated

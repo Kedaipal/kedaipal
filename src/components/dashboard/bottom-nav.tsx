@@ -30,6 +30,8 @@ type Tab = {
 };
 
 export function BottomNav({ actionableCount, adminOnly }: BottomNavProps) {
+	// The act-as session is held globally (see useActAs), so seller tabs keep the
+	// admin inside the vendor store automatically — no per-tab handling needed.
 	const tabs: Tab[] = adminOnly
 		? [
 				{ to: "/app/admin/sellers", label: "Sellers", icon: Store },
@@ -51,7 +53,7 @@ export function BottomNav({ actionableCount, adminOnly }: BottomNavProps) {
 					to: "/app/settings",
 					label: "Settings",
 					icon: Settings,
-					search: { tab: "store" },
+					search: { tab: "store" as const },
 				},
 			];
 

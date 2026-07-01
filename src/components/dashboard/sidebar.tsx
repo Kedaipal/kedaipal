@@ -15,8 +15,9 @@ import {
 	Store,
 	Users,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import type { MouseEventHandler, ReactNode } from "react";
 import type { api } from "../../../convex/_generated/api";
+import { useActAs } from "../../hooks/useActAs";
 import { useSidebarCollapsed } from "../../hooks/useSidebarCollapsed";
 import { cn } from "../../lib/utils";
 import { TierPill } from "./tier-pill";
@@ -44,6 +45,12 @@ export function Sidebar({ retailer, actionableCount, isAdmin }: SidebarProps) {
 		userEmail?.split("@")[0] ||
 		null;
 
+	// The act-as session is held globally (see useActAs), so seller nav links need
+	// no special handling — they stay in the vendor store automatically. The ADMIN
+	// group links end the session (leaving the vendor-operation view).
+	const { setActAs } = useActAs();
+	const exitActAs = () => setActAs(undefined);
+
 	return (
 		<aside
 			className={cn(
@@ -60,6 +67,7 @@ export function Sidebar({ retailer, actionableCount, isAdmin }: SidebarProps) {
 			>
 				<Link
 					to={retailer ? "/app" : "/app/admin/sellers"}
+					onClick={retailer ? undefined : exitActAs}
 					className="flex items-center gap-2.5 min-w-0"
 				>
 					<img src="/logo.svg" alt="Kedaipal" className="h-8 w-auto shrink-0" />
@@ -88,7 +96,8 @@ export function Sidebar({ retailer, actionableCount, isAdmin }: SidebarProps) {
 			) : null}
 
 			<nav className="flex flex-1 flex-col gap-1 p-2">
-				{/* Seller nav — only when there's a store to operate (own or act-as). */}
+				{/* Seller nav — only when there's a store to operate (own or act-as).
+				    The act-as session holds globally, so these need no per-link handling. */}
 				{retailer ? (
 					<>
 						<SidebarLink
@@ -132,29 +141,44 @@ export function Sidebar({ retailer, actionableCount, isAdmin }: SidebarProps) {
 						/>
 					</>
 				) : null}
-				{/* Admin-only — server `requireAdmin` is the real gate; this link is
-				    just convenience so admins don't type the URL. */}
+				{/* Admin group — visually separated + labelled so it's unmistakable from
+				    the vendor nav while acting-as. Server `requireAdmin` is the real gate;
+				    these links just save typing the URL. They END the act-as session
+				    (leaving the vendor-operation view). */}
 				{isAdmin ? (
-					<>
+					<div
+						className={cn(
+							"mt-2 flex flex-col gap-1 border-t border-border pt-3",
+							retailer ? "" : "border-t-0 pt-0",
+						)}
+					>
+						{!collapsed ? (
+							<span className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+								Admin
+							</span>
+						) : null}
 						<SidebarLink
 							to="/app/admin/sellers"
+							onClick={exitActAs}
 							icon={Store}
-							label="Sellers"
+							label="All sellers"
 							collapsed={collapsed}
 						/>
 						<SidebarLink
 							to="/app/admin/billing"
+							onClick={exitActAs}
 							icon={ShieldCheck}
-							label="Admin"
+							label="Billing"
 							collapsed={collapsed}
 						/>
 						<SidebarLink
 							to="/app/admin/waba"
+							onClick={exitActAs}
 							icon={Siren}
 							label="WABA Safety"
 							collapsed={collapsed}
 						/>
-					</>
+					</div>
 				) : null}
 			</nav>
 
@@ -211,6 +235,7 @@ interface SidebarLinkProps {
 	exact?: boolean;
 	badge?: number;
 	search?: LinkProps["search"];
+	onClick?: MouseEventHandler<HTMLAnchorElement>;
 }
 
 function SidebarLink({
@@ -221,6 +246,7 @@ function SidebarLink({
 	exact,
 	badge,
 	search,
+	onClick,
 }: SidebarLinkProps) {
 	const showBadge = typeof badge === "number" && badge > 0;
 
@@ -228,6 +254,7 @@ function SidebarLink({
 		<Link
 			to={to}
 			search={search}
+			onClick={onClick}
 			activeOptions={exact ? { exact: true } : undefined}
 			title={collapsed ? label : undefined}
 			className={cn(

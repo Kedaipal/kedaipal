@@ -8,16 +8,24 @@ write attributed to the admin. This is the tool the white-glove onboarding sessi
 login or screen-share, neither of which scales.
 
 > **TL;DR of the design:** we did **not** fork a parallel admin UI. The normal `/app/*`
-> dashboard is reused; an admin threads a `?actAs=<retailerId>` URL param that every screen
-> reads via one hook, and the scattered owner-only access checks were centralised into a
-> single **owner-OR-admin** gate. Every admin-on-behalf write drops an `adminAuditLog` row.
+> dashboard is reused; the "act-as" target is held in a **persistent client session**
+> (`useActAs` context, mirrored to `sessionStorage`) that every screen reads via one hook, and
+> the scattered owner-only access checks were centralised into a single **owner-OR-admin**
+> gate. Every admin-on-behalf write drops an `adminAuditLog` row.
+>
+> **Why a session, not a URL param:** the first cut threaded `?actAs=<id>` through the URL.
+> That's fragile — every `<Link>` and every programmatic `navigate()` / post-CRUD redirect has
+> to remember to carry the param, and any one that forgets silently drops the admin back into
+> their own store. A session held in context holds across **all** navigation, every CRUD
+> action, and a refresh, until the admin explicitly Exits — nothing has to thread anything.
 
 ## The two halves
 
 1. **Seller directory** — `/app/admin/sellers` (`src/routes/app.admin.sellers.tsx`). Lists
    every store (name, slug, owner, founding rank, subscription status), admin-gated
    server-side by `requireAdmin` and hidden client-side behind `billing.amIAdmin`. Sorted
-   Founding Members first (by rank), then newest. "Manage" links to `/app?actAs=<retailerId>`.
+   Founding Members first (by rank), then newest. "Manage" starts the act-as session
+   (`setActAs(id)`) and opens `/app`.
 2. **Act-as context** — selecting a seller renders the ordinary dashboard against that
    `retailerId`. All reads/writes target it; the admin identity is the actor on every write;
    a persistent **"Acting as {store} — admin"** banner shows across every screen with a
@@ -87,31 +95,37 @@ A session opened by an admin still stamps `sellerUserId = retailer.userId` (the 
 Clerk subject, never the admin's), so the inbound-webhook buyer binding and the buyer
 confirmation resolve to the right store.
 
-## Frontend threading
+## Frontend: the act-as session
 
+- **`useActAs()`** (`src/hooks/useActAs.tsx`) — the `ActAsProvider` (wrapping the whole `/app`
+  subtree) holds `actAsRetailerId` in React state mirrored to `sessionStorage`. `setActAs(id)`
+  enters a store; `setActAs(undefined)` exits. Because it's a session (not a URL param), it
+  holds across **every** navigation, CRUD redirect, and refresh with zero per-link threading —
+  the class of bug that plagued the URL-param approach can't happen. Per-tab, so two tabs can
+  operate two different stores. `useActAsRetailerId()` is the raw reader for the few mutations
+  that must pass an explicit `retailerId` (`updateSettings`, `renameSlug`, counter-checkout
+  create/list).
 - **`useDashboardRetailer()`** (`src/hooks/useDashboardRetailer.ts`) — the single hook every
-  `/app/*` screen calls instead of `useQuery(api.retailers.getMyRetailer)`. It reads
-  `?actAs` from the URL and calls `getRetailerForAdmin` when set, `getMyRetailer` otherwise.
-  `useActAsRetailerId()` exposes the raw id for the few mutations that need it threaded
-  (`updateSettings`, `renameSlug`, counter checkout create/list).
-- **`?actAs` persistence** — the `/app` route declares `retainSearchParams(["actAs"])`, so
-  the param survives every in-dashboard navigation and a page refresh (it's URL-encoded, not
-  in-memory) — an admin can't silently fall out of a store or edit the wrong one.
+  `/app/*` screen calls instead of `useQuery(api.retailers.getMyRetailer)`. When a session is
+  active it calls `getRetailerForAdmin`, otherwise `getMyRetailer`.
 - **`ActingAsBanner`** (`src/components/admin/acting-as-banner.tsx`) — sticky, high-contrast
-  amber bar rendered by the `/app` shell whenever `retailer.actingAsAdmin`. "Exit" drops
-  `?actAs` and returns to the directory.
-- **Sidebar** — an admin-only **"Sellers"** link (first in the admin group) points at the
-  directory.
-- **Redirect safety** — a stale/foreign `actAs` id (payload `null`) bounces back to the
-  directory instead of onboarding.
+  amber bar rendered by the `/app` shell whenever `retailer.actingAsAdmin`. "Exit" calls
+  `setActAs(undefined)` and returns to the directory.
+- **Nav grouping** — the sidebar shows the **seller nav** (operating the vendor) and a
+  separate, labelled **"Admin"** group (All sellers / Billing / WABA Safety), so the boundary
+  is unmistakable while acting-as. Seller nav needs no special handling (the session holds
+  globally); the admin-group links **end the session** (`setActAs(undefined)`), since they
+  leave the vendor-operation view.
+- **Redirect safety** — an active session whose store resolves `null` (stale/foreign id)
+  clears the session and returns to the directory.
 - **Storeless admin mode** — an admin does **not** need a store of their own. When the
-  signed-in admin has no store and isn't acting-as, the `/app` shell renders in **admin-only
+  signed-in admin has no store and no active session, the `/app` shell renders in **admin-only
   mode**: `Sidebar` / `MobileHeader` / `BottomNav` accept a `null` retailer and show just the
-  admin nav (Sellers / Billing / WABA) + user menu — no seller nav, tier pill, or store
-  banners. The shell redirects a storeless admin away from seller routes (`/app`, `/app/products`,
-  …) to the directory, since those screens need a store; opening a seller via "Manage" (`?actAs`)
-  brings the full seller shell back. Only a **non-admin** with no store is still sent to
-  `/onboarding`. So an admin can choose never to set up a store and still run the console.
+  admin nav + user menu — no seller nav, tier pill, or store banners. The shell redirects a
+  storeless admin away from seller routes (`/app`, `/app/products`, …) to the directory, since
+  those screens need a store; "Manage" starts a session and brings the full seller shell back.
+  Only a **non-admin** with no store is still sent to `/onboarding`. So an admin can choose
+  never to set up a store and still run the console.
 
 ## Audit trail
 
@@ -133,12 +147,13 @@ confirmPayment/submitMockup/updateMockupQuote/waiveMockup`, and
 - `convex/schema.ts` — `adminAuditLog` table (dev-only widen; no migration).
 - `convex/{products,customers,pickupLocations,orders,retailers,counterCheckout}.ts` —
   access-check swaps + audit stamps + explicit-`retailerId` admin paths.
-- `src/routes/app.admin.sellers.tsx` — directory.
-- `src/routes/app.tsx` — `?actAs` search param + `retainSearchParams` + banner + redirect
-  guard + act-as-aware retailer resolution.
+- `src/routes/app.admin.sellers.tsx` — directory ("Manage" starts the session).
+- `src/routes/app.tsx` — `ActAsProvider` wrap + banner + redirect guard + storeless-admin mode
+  + act-as-aware retailer resolution.
+- `src/hooks/useActAs.tsx` — the session (context + `sessionStorage`).
 - `src/hooks/useDashboardRetailer.ts`, `src/components/admin/acting-as-banner.tsx`.
 - `src/components/dashboard/{sidebar,mobile-header,bottom-nav}.tsx` — accept a `null` retailer
-  for storeless-admin mode.
+  for storeless-admin mode; sidebar's Admin group ends the session.
 - `convex/admin.test.ts` — access, subscription bypass, audit, directory, counter-checkout.
 
 ## Deliberate scope / follow-ups

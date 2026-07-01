@@ -1,27 +1,24 @@
-import { useSearch } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
-import type { Id } from "../../convex/_generated/dataModel";
+import { useActAsRetailerId } from "./useActAs";
 
 /**
  * The store the dashboard is currently operating on.
  *
  * Normally that's the signed-in seller's own store (`getMyRetailer`). But when a
- * Kedaipal admin is running white-glove onboarding, the URL carries `?actAs=<id>`
- * and every `/app/*` screen instead operates on THAT store (`getRetailerForAdmin`,
- * which returns `actingAsAdmin: true` so the banner shows). Centralising the
- * resolution here means each route calls one hook instead of hard-wiring
- * `getMyRetailer`, and the act-as context is threaded from the URL — so it
- * survives refresh and is never confused with the admin's own store.
+ * Kedaipal admin is running white-glove onboarding, an act-as session is active
+ * (see `useActAs`) and every `/app/*` screen instead operates on THAT store
+ * (`getRetailerForAdmin`, which returns `actingAsAdmin: true` so the banner shows).
  *
- * See docs/admin-console.md.
+ * Centralising the resolution here means each route calls one hook instead of
+ * hard-wiring `getMyRetailer`, and the act-as context is read from a persistent
+ * session — so it holds across every navigation, refresh, and CRUD action until
+ * the admin Exits. See docs/admin-console.md.
  */
 
-/** The acting-as retailer id from `?actAs=`, or undefined for the normal path. */
-export function useActAsRetailerId(): Id<"retailers"> | undefined {
-	const search = useSearch({ strict: false }) as { actAs?: string };
-	return search.actAs ? (search.actAs as Id<"retailers">) : undefined;
-}
+// Re-exported for callers that only need the raw id (mutation wrappers that must
+// pass an explicit `retailerId`, e.g. settings + counter checkout).
+export { useActAsRetailerId } from "./useActAs";
 
 /**
  * Resolve the dashboard's current retailer. Returns `undefined` while loading,

@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import { Award, ChevronRight, ShieldCheck, ShieldX, Store } from "lucide-react";
 import { useState } from "react";
@@ -7,6 +7,7 @@ import type { AdminSellerRow } from "../../convex/admin";
 import { PageHeader } from "../components/dashboard/page-header";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
+import { useActAs } from "../hooks/useActAs";
 
 export const Route = createFileRoute("/app/admin/sellers")({
 	component: AdminSellersRoute,
@@ -120,12 +121,22 @@ const STATUS_STYLES: Record<string, string> = {
 
 function SellerCard({ seller }: { seller: AdminSellerRow }) {
 	const status = seller.subscriptionStatus;
+	const navigate = useNavigate();
+	const { setActAs } = useActAs();
+
+	function manage() {
+		// Start the act-as session, then open the vendor's dashboard. From here the
+		// session holds across all navigation + CRUD until the admin Exits.
+		setActAs(seller._id);
+		navigate({ to: "/app" });
+	}
+
 	return (
 		<li>
-			<Link
-				to="/app"
-				search={{ actAs: seller._id }}
-				className="flex items-center gap-3 rounded-2xl border border-border bg-card p-4 text-left transition-all hover:border-accent hover:shadow-sm"
+			<button
+				type="button"
+				onClick={manage}
+				className="flex w-full items-center gap-3 rounded-2xl border border-border bg-card p-4 text-left transition-all hover:border-accent hover:shadow-sm"
 			>
 				<div className="flex min-w-0 flex-1 flex-col gap-1">
 					<div className="flex items-center gap-2">
@@ -164,7 +175,7 @@ function SellerCard({ seller }: { seller: AdminSellerRow }) {
 					Manage
 					<ChevronRight className="size-4" />
 				</span>
-			</Link>
+			</button>
 		</li>
 	);
 }
