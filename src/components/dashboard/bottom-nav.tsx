@@ -1,188 +1,109 @@
-import { Link } from "@tanstack/react-router";
+import { Link, type LinkProps } from "@tanstack/react-router";
 import {
 	Home,
+	type LucideIcon,
 	Package,
 	QrCode,
 	Settings,
+	ShieldCheck,
 	ShoppingBag,
+	Siren,
+	Store,
 	Users,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 
 interface BottomNavProps {
 	actionableCount: number;
+	// A storeless admin has no seller store to manage — show the admin tabs
+	// (Sellers / Billing / WABA) instead of the seller nav.
+	adminOnly?: boolean;
 }
 
-export function BottomNav({ actionableCount }: BottomNavProps) {
+type Tab = {
+	to: LinkProps["to"];
+	label: string;
+	icon: LucideIcon;
+	exact?: boolean;
+	badge?: number;
+	search?: LinkProps["search"];
+};
+
+export function BottomNav({ actionableCount, adminOnly }: BottomNavProps) {
+	const tabs: Tab[] = adminOnly
+		? [
+				{ to: "/app/admin/sellers", label: "Sellers", icon: Store },
+				{ to: "/app/admin/billing", label: "Billing", icon: ShieldCheck },
+				{ to: "/app/admin/waba", label: "WABA", icon: Siren },
+			]
+		: [
+				{ to: "/app", label: "Home", icon: Home, exact: true },
+				{ to: "/app/products", label: "Products", icon: Package },
+				{
+					to: "/app/orders",
+					label: "Orders",
+					icon: ShoppingBag,
+					badge: actionableCount,
+				},
+				{ to: "/app/checkout", label: "Counter", icon: QrCode },
+				{ to: "/app/customers", label: "Customers", icon: Users },
+				{
+					to: "/app/settings",
+					label: "Settings",
+					icon: Settings,
+					search: { tab: "store" },
+				},
+			];
+
 	return (
 		<nav className="sticky bottom-0 border-t border-border bg-background pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:hidden">
 			<div className="flex items-center justify-around">
-				<Link
-					to="/app"
-					activeOptions={{ exact: true }}
-					activeProps={{ className: "text-foreground" }}
-					inactiveProps={{ className: "text-muted-foreground" }}
-					className="flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 text-[10px]"
-				>
-					{({ isActive }) => (
-						<>
-							<Home
-								className={cn(
-									"size-5",
-									isActive ? "stroke-accent" : "stroke-muted-foreground",
-								)}
-								strokeWidth={isActive ? 2.5 : 1.75}
-							/>
-							<span
-								className={cn(
-									"font-medium",
-									isActive ? "text-foreground" : "text-muted-foreground",
-								)}
-							>
-								Home
-							</span>
-						</>
-					)}
-				</Link>
-				<Link
-					to="/app/products"
-					activeProps={{ className: "text-foreground" }}
-					inactiveProps={{ className: "text-muted-foreground" }}
-					className="flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 text-[10px]"
-				>
-					{({ isActive }) => (
-						<>
-							<Package
-								className={cn(
-									"size-5",
-									isActive ? "stroke-accent" : "stroke-muted-foreground",
-								)}
-								strokeWidth={isActive ? 2.5 : 1.75}
-							/>
-							<span
-								className={cn(
-									"font-medium",
-									isActive ? "text-foreground" : "text-muted-foreground",
-								)}
-							>
-								Products
-							</span>
-						</>
-					)}
-				</Link>
-				<Link
-					to="/app/orders"
-					activeProps={{ className: "text-foreground" }}
-					inactiveProps={{ className: "text-muted-foreground" }}
-					className="relative flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 text-[10px]"
-				>
-					{({ isActive }) => (
-						<>
-							<span className="relative">
-								<ShoppingBag
-									className={cn(
-										"size-5",
-										isActive ? "stroke-accent" : "stroke-muted-foreground",
-									)}
-									strokeWidth={isActive ? 2.5 : 1.75}
-								/>
-								{actionableCount > 0 ? (
-									<span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-orange-500 px-1 text-[9px] font-bold leading-none text-white">
-										{actionableCount > 99 ? "99+" : actionableCount}
-									</span>
-								) : null}
-							</span>
-							<span
-								className={cn(
-									"font-medium",
-									isActive ? "text-foreground" : "text-muted-foreground",
-								)}
-							>
-								Orders
-							</span>
-						</>
-					)}
-				</Link>
-				<Link
-					to="/app/checkout"
-					activeProps={{ className: "text-foreground" }}
-					inactiveProps={{ className: "text-muted-foreground" }}
-					className="flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 text-[10px]"
-				>
-					{({ isActive }) => (
-						<>
-							<QrCode
-								className={cn(
-									"size-5",
-									isActive ? "stroke-accent" : "stroke-muted-foreground",
-								)}
-								strokeWidth={isActive ? 2.5 : 1.75}
-							/>
-							<span
-								className={cn(
-									"font-medium",
-									isActive ? "text-foreground" : "text-muted-foreground",
-								)}
-							>
-								Counter
-							</span>
-						</>
-					)}
-				</Link>
-				<Link
-					to="/app/customers"
-					activeProps={{ className: "text-foreground" }}
-					inactiveProps={{ className: "text-muted-foreground" }}
-					className="flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 text-[10px]"
-				>
-					{({ isActive }) => (
-						<>
-							<Users
-								className={cn(
-									"size-5",
-									isActive ? "stroke-accent" : "stroke-muted-foreground",
-								)}
-								strokeWidth={isActive ? 2.5 : 1.75}
-							/>
-							<span
-								className={cn(
-									"font-medium",
-									isActive ? "text-foreground" : "text-muted-foreground",
-								)}
-							>
-								Customers
-							</span>
-						</>
-					)}
-				</Link>
-				<Link
-					to="/app/settings"
-					search={{ tab: "store" }}
-					activeProps={{ className: "text-foreground" }}
-					inactiveProps={{ className: "text-muted-foreground" }}
-					className="flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 text-[10px]"
-				>
-					{({ isActive }) => (
-						<>
-							<Settings
-								className={cn(
-									"size-5",
-									isActive ? "stroke-accent" : "stroke-muted-foreground",
-								)}
-								strokeWidth={isActive ? 2.5 : 1.75}
-							/>
-							<span
-								className={cn(
-									"font-medium",
-									isActive ? "text-foreground" : "text-muted-foreground",
-								)}
-							>
-								Settings
-							</span>
-						</>
-					)}
-				</Link>
+				{tabs.map((tab) => (
+					<NavTab key={tab.label} tab={tab} />
+				))}
 			</div>
 		</nav>
+	);
+}
+
+function NavTab({ tab }: { tab: Tab }) {
+	const { to, label, icon: Icon, exact, badge, search } = tab;
+	const showBadge = typeof badge === "number" && badge > 0;
+	return (
+		<Link
+			to={to}
+			search={search}
+			activeOptions={exact ? { exact: true } : undefined}
+			activeProps={{ className: "text-foreground" }}
+			inactiveProps={{ className: "text-muted-foreground" }}
+			className="relative flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 text-[10px]"
+		>
+			{({ isActive }) => (
+				<>
+					<span className="relative">
+						<Icon
+							className={cn(
+								"size-5",
+								isActive ? "stroke-accent" : "stroke-muted-foreground",
+							)}
+							strokeWidth={isActive ? 2.5 : 1.75}
+						/>
+						{showBadge ? (
+							<span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-orange-500 px-1 text-[9px] font-bold leading-none text-white">
+								{badge > 99 ? "99+" : badge}
+							</span>
+						) : null}
+					</span>
+					<span
+						className={cn(
+							"font-medium",
+							isActive ? "text-foreground" : "text-muted-foreground",
+						)}
+					>
+						{label}
+					</span>
+				</>
+			)}
+		</Link>
 	);
 }

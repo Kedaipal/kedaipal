@@ -12,6 +12,7 @@ import {
 	ShieldCheck,
 	ShoppingBag,
 	Siren,
+	Store,
 	Users,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -25,7 +26,9 @@ type Retailer = NonNullable<
 >;
 
 interface SidebarProps {
-	retailer: Retailer;
+	// Null when a Kedaipal admin has no store of their own — the dashboard chrome
+	// still renders (admin links + user menu), just without the seller sections.
+	retailer: Retailer | null;
 	actionableCount: number;
 	isAdmin?: boolean;
 }
@@ -55,23 +58,27 @@ export function Sidebar({ retailer, actionableCount, isAdmin }: SidebarProps) {
 					collapsed ? "justify-center" : "gap-2.5 px-4",
 				)}
 			>
-				<Link to="/app" className="flex items-center gap-2.5 min-w-0">
+				<Link
+					to={retailer ? "/app" : "/app/admin/sellers"}
+					className="flex items-center gap-2.5 min-w-0"
+				>
 					<img src="/logo.svg" alt="Kedaipal" className="h-8 w-auto shrink-0" />
 					{!collapsed ? (
 						<div className="flex min-w-0 flex-col">
 							<span className="truncate text-sm font-semibold leading-tight">
-								{retailer.storeName}
+								{retailer ? retailer.storeName : "Kedaipal"}
 							</span>
 							<span className="truncate font-mono text-[11px] text-muted-foreground">
-								/{retailer.slug}
+								{retailer ? `/${retailer.slug}` : "Admin console"}
 							</span>
 						</div>
 					) : null}
 				</Link>
 			</div>
 
-			{/* Subscription tier pill — always-visible chrome (links to billing). */}
-			{!collapsed ? (
+			{/* Subscription tier pill — always-visible chrome (links to billing).
+			    Hidden for a storeless admin (no subscription to show). */}
+			{retailer && !collapsed ? (
 				<div className="border-b border-border px-4 py-2">
 					<TierPill
 						subscription={retailer.subscription}
@@ -81,49 +88,60 @@ export function Sidebar({ retailer, actionableCount, isAdmin }: SidebarProps) {
 			) : null}
 
 			<nav className="flex flex-1 flex-col gap-1 p-2">
-				<SidebarLink
-					to="/app"
-					exact
-					icon={Home}
-					label="Home"
-					collapsed={collapsed}
-				/>
-				<SidebarLink
-					to="/app/products"
-					icon={Package}
-					label="Products"
-					collapsed={collapsed}
-				/>
-				<SidebarLink
-					to="/app/orders"
-					icon={ShoppingBag}
-					label="Orders"
-					collapsed={collapsed}
-					badge={actionableCount}
-				/>
-				<SidebarLink
-					to="/app/checkout"
-					icon={QrCode}
-					label="Counter"
-					collapsed={collapsed}
-				/>
-				<SidebarLink
-					to="/app/customers"
-					icon={Users}
-					label="Customers"
-					collapsed={collapsed}
-				/>
-				<SidebarLink
-					to="/app/settings"
-					search={{ tab: "store" }}
-					icon={Settings}
-					label="Settings"
-					collapsed={collapsed}
-				/>
+				{/* Seller nav — only when there's a store to operate (own or act-as). */}
+				{retailer ? (
+					<>
+						<SidebarLink
+							to="/app"
+							exact
+							icon={Home}
+							label="Home"
+							collapsed={collapsed}
+						/>
+						<SidebarLink
+							to="/app/products"
+							icon={Package}
+							label="Products"
+							collapsed={collapsed}
+						/>
+						<SidebarLink
+							to="/app/orders"
+							icon={ShoppingBag}
+							label="Orders"
+							collapsed={collapsed}
+							badge={actionableCount}
+						/>
+						<SidebarLink
+							to="/app/checkout"
+							icon={QrCode}
+							label="Counter"
+							collapsed={collapsed}
+						/>
+						<SidebarLink
+							to="/app/customers"
+							icon={Users}
+							label="Customers"
+							collapsed={collapsed}
+						/>
+						<SidebarLink
+							to="/app/settings"
+							search={{ tab: "store" }}
+							icon={Settings}
+							label="Settings"
+							collapsed={collapsed}
+						/>
+					</>
+				) : null}
 				{/* Admin-only — server `requireAdmin` is the real gate; this link is
 				    just convenience so admins don't type the URL. */}
 				{isAdmin ? (
 					<>
+						<SidebarLink
+							to="/app/admin/sellers"
+							icon={Store}
+							label="Sellers"
+							collapsed={collapsed}
+						/>
 						<SidebarLink
 							to="/app/admin/billing"
 							icon={ShieldCheck}

@@ -33,6 +33,7 @@ import { WhiteGloveCard } from "../components/dashboard/white-glove-card";
 import { ShopeeIcon } from "../components/icons/shopee-icon";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
+import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { formatPrice } from "../lib/format";
 import {
 	type DeliveryMethod,
@@ -121,7 +122,7 @@ function DashboardSkeleton() {
 }
 
 function DashboardHome() {
-	const retailer = useQuery(api.retailers.getMyRetailer);
+	const retailer = useDashboardRetailer();
 	const products = useQuery(
 		api.products.listAll,
 		retailer ? { retailerId: retailer._id } : "skip",

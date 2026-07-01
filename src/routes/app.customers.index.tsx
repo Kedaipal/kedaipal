@@ -10,6 +10,7 @@ import {
 import { PageHeader } from "../components/dashboard/page-header";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
+import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
 import { cn } from "../lib/utils";
 
@@ -28,7 +29,7 @@ const SORTS: { key: CustomerSort; label: string }[] = [
 ];
 
 function CustomersRoute() {
-	const retailer = useQuery(api.retailers.getMyRetailer);
+	const retailer = useDashboardRetailer();
 	const [sort, setSort] = useState<CustomerSort>("recency");
 	const [term, setTerm] = useState("");
 	const debouncedTerm = useDebounce(term, 250);

@@ -16,6 +16,7 @@ import {
 } from "../components/ui/popover";
 import { Skeleton } from "../components/ui/skeleton";
 import { SortableList } from "../components/ui/sortable-list";
+import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { BULK_IO_ENABLED } from "../lib/feature-flags";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import {
@@ -118,7 +119,7 @@ function BulkIoMenu({
 }
 
 function ProductsRoute() {
-	const retailer = useQuery(api.retailers.getMyRetailer);
+	const retailer = useDashboardRetailer();
 	const products = useQuery(
 		api.products.listAll,
 		retailer ? { retailerId: retailer._id } : "skip",

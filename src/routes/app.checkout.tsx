@@ -44,6 +44,10 @@ import {
 	DialogTitle,
 } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
+import {
+	useActAsRetailerId,
+	useDashboardRetailer,
+} from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import { cn } from "../lib/utils";
@@ -71,7 +75,8 @@ type CreatedOrder = {
 };
 
 function CounterCheckoutRoute() {
-	const retailer = useQuery(api.retailers.getMyRetailer);
+	const actAsRetailerId = useActAsRetailerId();
+	const retailer = useDashboardRetailer();
 	const { session: activeSessionId } = Route.useSearch();
 	const navigate = useNavigate({ from: Route.fullPath });
 	const [created, setCreated] = useState<CreatedOrder | null>(null);
@@ -91,7 +96,7 @@ function CounterCheckoutRoute() {
 
 	async function start() {
 		try {
-			const r = await createSession({});
+			const r = await createSession({ retailerId: actAsRetailerId });
 			openSession(r.sessionId);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -258,7 +263,10 @@ function OpenCheckoutsList({
 	onResume: (id: string) => void;
 	onCancel: (id: string) => void;
 }) {
-	const sessions = useQuery(api.counterCheckout.listOpenSessions, {});
+	const actAsRetailerId = useActAsRetailerId();
+	const sessions = useQuery(api.counterCheckout.listOpenSessions, {
+		retailerId: actAsRetailerId,
+	});
 	// Hold the row pending cancellation so a single shared confirm covers the
 	// whole list — cancelling drops the open checkout and any items added to it.
 	const [pendingCancel, setPendingCancel] = useState<{
