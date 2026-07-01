@@ -17,11 +17,22 @@ describe("FoundingMemberBadge", () => {
 		expect(el.textContent).toBe("Founding Member");
 	});
 
-	it("uses the mint accent tokens (Midnight Mint theme, not amber)", () => {
-		render(<FoundingMemberBadge rank={1} />);
-		const el = screen.getByText("Founding Member #1");
-		expect(el.className).toMatch(/bg-accent/);
-		expect(el.className).toMatch(/text-accent-foreground/);
-		expect(el.className).not.toMatch(/amber/);
+	it("renders both badge artwork variants (navy for light, mint for dark)", () => {
+		const { container } = render(<FoundingMemberBadge rank={1} />);
+		const srcs = Array.from(container.querySelectorAll("img")).map((img) =>
+			img.getAttribute("src"),
+		);
+		expect(srcs).toContain("/img/badges/founding-badge-navy.png");
+		expect(srcs).toContain("/img/badges/founding-badge-mint.png");
+	});
+
+	it("marks the artwork decorative so the visible label carries meaning", () => {
+		const { container } = render(<FoundingMemberBadge rank={1} />);
+		for (const img of container.querySelectorAll("img")) {
+			expect(img.getAttribute("alt")).toBe("");
+			expect(img.getAttribute("aria-hidden")).toBe("true");
+		}
+		// Screen readers still get "Founding Member #1" from the text node.
+		expect(screen.getByText("Founding Member #1")).toBeTruthy();
 	});
 });
