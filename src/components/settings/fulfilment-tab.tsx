@@ -214,10 +214,10 @@ export function FulfilmentTab({
 	const activeIdsKey = activeIds.join("|");
 	const [localOrder, setLocalOrder] =
 		useState<Array<Id<"pickupLocations">>>(activeIds);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional —
-	// see the comment above. activeIds is read via closure on the render where
-	// activeIdsKey actually changes, so we get the latest server order without
-	// the per-render reset.
+	// Reconcile only on activeIdsKey (see the comment block above): activeIds is
+	// read via closure on the render where the key actually changes, so we get
+	// the latest server order without the per-render reset.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: keyed on activeIdsKey, activeIds read via closure — see above.
 	useEffect(() => {
 		setLocalOrder(activeIds);
 	}, [activeIdsKey]);
