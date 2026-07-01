@@ -35,7 +35,7 @@ function TermsPage() {
 			title="Terms & Conditions"
 			lastUpdated={TERMS_VERSION}
 			summary={[
-				"Kedaipal is a tool that helps retailers take WhatsApp orders — it's currently in beta and provided “as is”.",
+				"Kedaipal is a tool that helps retailers take WhatsApp orders — it's provided “as is”.",
 				"You're responsible for what you sell, your prices, and treating your customers fairly and lawfully.",
 				"Orders and payments are between you and your shoppers; Kedaipal is not a party to the sale.",
 				<>
@@ -67,13 +67,13 @@ function TermsPage() {
 
 			<section className="space-y-3">
 				<h2 className="text-2xl font-semibold tracking-tight">
-					1. Beta Service
+					1. Service Availability
 				</h2>
 				<p>
-					The Service is currently provided in beta. It is offered "as is" and
-					may change, become unavailable, or be discontinued at any time without
-					notice. Features, pricing, and functionality are subject to change. No
-					service level agreement applies during beta.
+					The Service is offered "as is" and may change, become unavailable, or
+					be discontinued at any time without notice. Features, pricing, and
+					functionality are subject to change. No service level agreement
+					applies.
 				</p>
 			</section>
 
