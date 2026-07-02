@@ -708,7 +708,9 @@ function DoneScreen({
 			{shortId ? (
 				<div className="rounded-xl border border-emerald-200 bg-white/70 p-4">
 					<p className="text-sm font-semibold text-emerald-950">
-						{paidInPerson ? "Send the receipt" : "Send the invoice"}
+						{paidInPerson
+							? "Receipt sent to buyer"
+							: "Invoice & payment details sent"}
 					</p>
 					<SendOrderDocument
 						shortId={shortId}

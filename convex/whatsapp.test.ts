@@ -1126,3 +1126,95 @@ describe("whatsapp inbound — Counter Checkout intent routing", () => {
 		fetchMock.restore();
 	});
 });
+
+describe("counter order auto-send (notifyCounterOrderCreated)", () => {
+	// Pull any human-readable text out of a WA payload (plain text OR the body of
+	// an interactive CTA), so assertions don't care which shape the adapter used.
+	function waText(body: unknown): string {
+		const b = body as {
+			text?: { body?: string };
+			interactive?: { body?: { text?: string } };
+		};
+		return b?.text?.body ?? b?.interactive?.body?.text ?? "";
+	}
+	async function orderIdOf(t: ReturnType<typeof setup>, shortId: string) {
+		return t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			if (!o) throw new Error("order missing");
+			return o._id;
+		});
+	}
+
+	test("paid-in-person → confirmation text + the RECEIPT pdf", async () => {
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		// Settle it (as counter 'paid now' does) so the document is a receipt.
+		const orderId = await orderIdOf(t, shortId);
+		await t.run((ctx) =>
+			ctx.db.patch(orderId, {
+				paymentStatus: "received",
+				paymentReceivedAt: Date.now(),
+			}),
+		);
+
+		const fetchMock = installFetchMock();
+		await t.action(internal.whatsapp.notifyCounterOrderCreated, { orderId });
+		const wa = fetchMock.waCalls();
+
+		const doc = wa.find(
+			(c) => (c.body as { type?: string })?.type === "document",
+		);
+		expect(doc).toBeTruthy();
+		expect(
+			(doc?.body as { document?: { filename?: string } }).document?.filename,
+		).toBe(`Receipt-${shortId}.pdf`);
+		// The buyer was told it's paid — no payment ask.
+		const combined = wa.map((c) => waText(c.body)).join("\n");
+		expect(combined).toMatch(/paid/i);
+		fetchMock.restore();
+	});
+
+	test("pay-later → payment methods (bank details) + the INVOICE pdf", async () => {
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		// Give the store a bank method so the payment ask has details to send.
+		await t.run((ctx) =>
+			ctx.db.patch(retailerId, {
+				paymentMethods: [
+					{
+						type: "bank" as const,
+						label: "Maybank",
+						bankName: "Maybank",
+						bankAccountName: "Test Outdoor",
+						bankAccountNumber: "1234567890",
+						sortOrder: 0,
+					},
+				],
+			}),
+		);
+		// Left unpaid (counter 'pay later').
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+
+		const fetchMock = installFetchMock();
+		await t.action(internal.whatsapp.notifyCounterOrderCreated, { orderId });
+		const wa = fetchMock.waCalls();
+
+		// Invoice (not receipt) document.
+		const doc = wa.find(
+			(c) => (c.body as { type?: string })?.type === "document",
+		);
+		expect(
+			(doc?.body as { document?: { filename?: string } }).document?.filename,
+		).toBe(`Invoice-${shortId}.pdf`);
+		// Payment methods pushed to the buyer: the bank number + transfer reference.
+		const combined = wa.map((c) => waText(c.body)).join("\n");
+		expect(combined).toContain("1234567890");
+		expect(combined).toContain(shortId); // "Use ORD-XXXX as your transfer reference"
+		fetchMock.restore();
+	});
+});
