@@ -55,7 +55,7 @@ export function SendOrderDocument({
 			const res = await send({ shortId });
 			if (res.ok) {
 				setSent(true);
-				toast.success(`${Noun} sent to ${who} on WhatsApp.`);
+				toast.success(`${Noun} resent to ${who} on WhatsApp.`);
 			} else {
 				toast.error(
 					SEND_ERROR[res.reason ?? ""] ?? `Couldn't send the ${noun}.`,
@@ -122,11 +122,11 @@ export function SendOrderDocument({
 				>
 					{sent ? (
 						<>
-							<Check className="size-4" /> {Noun} sent on WhatsApp
+							<Check className="size-4" /> {Noun} resent
 						</>
 					) : (
 						<>
-							<Send className="size-4" /> Send {noun} to {who}
+							<Send className="size-4" /> Resend {noun} to {who}
 						</>
 					)}
 				</Button>
@@ -156,8 +156,9 @@ export function SendOrderDocument({
 				) : null}
 			</div>
 			<p className="mt-2 text-xs text-muted-foreground">
-				{who} scanned once to connect, so their {noun} goes straight to that
-				WhatsApp chat — no need to scan again.
+				{paid
+					? `We've already sent ${who} their receipt on WhatsApp. Resend or download it here if you need to.`
+					: `We've already sent ${who} their invoice and payment details on WhatsApp. Resend or download here if you need to.`}
 			</p>
 		</div>
 	);

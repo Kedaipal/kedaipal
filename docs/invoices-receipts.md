@@ -88,12 +88,15 @@ Backend:
 - **A:** `orders.generateReceiptPdf` (public action) → returns PDF bytes +
   filename. Authorized through the same `resolveSharedOrder` seam as `orders.get`:
   buyer passes `token`, seller passes an owned `shortId`.
-- **A (send):** `orders.sendOrderDocumentToBuyer` (seller-auth action, `shortId`
-  only) — renders the same PDF, stores it **transiently** (Convex storage → a URL
-  Meta fetches), sends it to the buyer's WhatsApp as a **`document`** attachment
-  (`transactional`), then a scheduled `deleteTransientStorage` reclaims the blob.
-  Used by the counter Done screen so the buyer — who scanned once — gets the
-  receipt/invoice in-chat without rescanning. See `docs/counter-checkout.md`.
+- **A (send):** the receipt/invoice is sent to the buyer's WhatsApp as a
+  **`document`** attachment via the shared `deliverOrderDocument` (render → store
+  **transiently** to a URL Meta fetches → send `transactional` → scheduled
+  `deleteTransientStorage` reclaims the blob). Two entry points:
+  `orders.sendOrderDocument` (internal, `orderId` — the **automatic** send fired
+  after counter checkout by `whatsapp.notifyCounterOrderCreated`) and
+  `orders.sendOrderDocumentToBuyer` (seller-auth action, `shortId` — the **manual
+  resend** on the Done screen). Pay-later also pushes the payment methods
+  (`sendPaymentMessage`) alongside the invoice. See `docs/counter-checkout.md`.
 - **B:** `invoices.generateInvoicePdf` (internal action, scheduled from
   `issueInvoice`) renders + stores the blob; idempotent (skips if one exists).
   `invoices.getInvoicePdfUrl` returns an ownership-checked signed URL (owning
