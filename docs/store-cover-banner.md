@@ -26,8 +26,9 @@ index — only ever read alongside the retailer row, same as `logoStorageId`.
 1. **Settings** (`app.settings.tsx`, Store tab) — a "Cover image" card
    (`CoverImageForm`) placed **directly after** the logo card (both are
    store-identity visuals). Wide ~3:1 `object-cover` preview, upload / Replace /
-   Remove, helper copy: *"Wide images work best, shown at the top of your
-   storefront and when you share your link. Max ~2MB."* Mirrors `LogoForm`.
+   Remove, helper copy names the recommended size: *"Best size 1200 × 400 px
+   (wide 3:1). Fills your storefront header and shows as the preview when you
+   share your link. Max ~2MB."* Mirrors `LogoForm`.
 2. **Upload** (`retailers.generateCoverImageUploadUrl`) — one-shot upload URL,
    rate-limited on the shared `productWrite` bucket (same as the logo/QR uploads).
    The client POSTs the file, then saves the returned `storageId` via
@@ -40,12 +41,15 @@ index — only ever read alongside the retailer row, same as `logoStorageId`.
 4. **Reads** — resolved to `coverImageUrl` on both the owner read
    (`getMyRetailer` → `buildRetailerPublic`) and the public storefront payload
    (`getRetailerBySlug`). Public-safe.
-5. **Storefront** (`$slug.tsx`) — rendered full-bleed at the top of the header,
-   above the Kedaipal wordmark + store logo + name. Fixed **3:1** aspect box +
-   `object-cover` (any source aspect is cropped, never distorted), spanning the
-   full `max-w-6xl` storefront column (edge-to-edge; `lg:rounded-t-3xl` to pair
-   with the header's `lg:rounded-b-3xl` on desktop). When unset, nothing renders —
-   the header keeps its current layout with no empty gap.
+5. **Storefront** (`$slug.tsx`) — when set, the cover becomes the **header
+   background** (`object-cover` filling a `min-h-[14rem]`/`lg:min-h-[19rem]`
+   header). The Kedaipal mark (light `logo-dark.svg` variant), store logo, name +
+   blurb **overlay** on top over a bottom-weighted scrim
+   (`bg-gradient-to-t from-black/80 …`) so text stays legible on any image —
+   identity is bottom-anchored (`justify-between`), name/blurb switch to white with
+   a drop-shadow. When **unset**, the header falls back to the original light
+   gradient layout (top-anchored, dark text) — no empty gap. `hasCover` gates the
+   two layouts in one `<header>`.
 6. **OG / SEO** (`$slug.tsx` loader/head) — image precedence is
    **cover → logo → first product image**. `twitter:card` stays
    `summary_large_image` whenever any image resolves; the same resolved URL feeds

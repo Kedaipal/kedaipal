@@ -202,33 +202,63 @@ function StorefrontRoute() {
 	}
 
 	const retailer = result.retailer;
+	const hasCover = !!retailer.coverImageUrl;
 
 	return (
 		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-32">
-			{retailer.coverImageUrl ? (
-				// Full-bleed shopfront banner. Fixed 3:1 box + object-cover so any
-				// source aspect is cropped, never distorted. Sits above the store
-				// logo + name; when unset nothing renders (header keeps its layout).
-				<div className="aspect-[3/1] w-full overflow-hidden bg-muted lg:rounded-t-3xl">
-					<img
-						src={retailer.coverImageUrl}
-						alt={`${retailer.storeName} cover`}
-						className="h-full w-full object-cover"
-					/>
-				</div>
-			) : null}
-			<header className="flex flex-col gap-4 bg-gradient-to-b from-accent/10 to-background px-5 pb-6 pt-10 lg:rounded-b-3xl lg:px-8 lg:pb-8">
-				<img src="/logo-3.svg" alt="Kedaipal" className="h-5 w-auto" />
-				<div className="flex items-center gap-4">
+			{/* When a cover is set it becomes the header BACKGROUND: the Kedaipal
+			    mark, store logo, name + blurb overlay on top over a bottom-weighted
+			    scrim (legible on any image). No cover → the current light gradient
+			    header, unchanged. */}
+			<header
+				className={
+					hasCover
+						? "relative flex min-h-[11rem] flex-col justify-between overflow-hidden px-5 pb-5 pt-6 lg:min-h-[15rem] lg:rounded-b-3xl lg:px-8 lg:pb-7 lg:pt-8"
+						: "flex flex-col gap-4 bg-gradient-to-b from-accent/10 to-background px-5 pb-6 pt-10 lg:rounded-b-3xl lg:px-8 lg:pb-8"
+				}
+			>
+				{hasCover ? (
+					<>
+						<img
+							src={retailer.coverImageUrl}
+							alt={`${retailer.storeName} cover`}
+							className="absolute inset-0 h-full w-full object-cover"
+						/>
+						<div
+							aria-hidden
+							className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/35 to-black/20"
+						/>
+					</>
+				) : null}
+				<img
+					src={hasCover ? "/logo-dark.svg" : "/logo-3.svg"}
+					alt="Kedaipal"
+					className={
+						hasCover
+							? "relative h-5 w-auto opacity-95 drop-shadow"
+							: "h-5 w-auto"
+					}
+				/>
+				<div
+					className={`flex gap-4 ${hasCover ? "relative items-end" : "items-center"}`}
+				>
 					{retailer.logoUrl ? (
 						<img
 							src={retailer.logoUrl}
 							alt={`${retailer.storeName} logo`}
-							className="h-16 w-16 shrink-0 rounded-2xl border-2 border-accent/20 bg-background object-contain shadow-sm"
+							className={`h-16 w-16 shrink-0 rounded-2xl border-2 bg-background object-contain ${
+								hasCover
+									? "border-white/80 shadow-lg"
+									: "border-accent/20 shadow-sm"
+							}`}
 						/>
 					) : null}
 					<div className="flex flex-col gap-1">
-						<h1 className="text-2xl font-bold leading-tight tracking-tight">
+						<h1
+							className={`text-2xl font-bold leading-tight tracking-tight ${
+								hasCover ? "text-white drop-shadow-md" : ""
+							}`}
+						>
 							{retailer.storeName}
 						</h1>
 						{retailer.isFoundingMember ? (
@@ -238,11 +268,19 @@ function StorefrontRoute() {
 							// Seller's own blurb wins over the generic tagline. Plain text
 							// (escaped by React), newlines preserved, clamped to keep the
 							// header tidy. No empty block when unset.
-							<p className="line-clamp-4 whitespace-pre-line text-sm text-muted-foreground">
+							<p
+								className={`line-clamp-3 whitespace-pre-line text-sm ${
+									hasCover
+										? "text-white/90 drop-shadow"
+										: "text-muted-foreground"
+								}`}
+							>
 								{retailer.storeDescription}
 							</p>
 						) : (
-							<p className="text-sm text-muted-foreground">
+							<p
+								className={`text-sm ${hasCover ? "text-white/90 drop-shadow" : "text-muted-foreground"}`}
+							>
 								Browse &amp; order on WhatsApp
 							</p>
 						)}

@@ -857,7 +857,7 @@ function CoverImageForm({
 		<div className="flex flex-col gap-4">
 			<SectionHeading
 				title="Cover image"
-				description="Wide images work best, shown at the top of your storefront and when you share your link. Max ~2MB."
+				description="Best size 1200 × 400 px (wide 3:1). Fills your storefront header and shows as the preview when you share your link. Max ~2MB."
 			/>
 
 			{previewUrl ? (
