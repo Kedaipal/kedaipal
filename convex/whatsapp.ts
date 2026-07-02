@@ -1095,6 +1095,10 @@ export const getCounterOrderMeta = internalQuery({
 		total: number;
 		currency: string;
 		paymentStatus: "unpaid" | "claimed" | "received";
+		// The seller's payment config, so a pay-later confirmation can push the
+		// payment methods (bank details + QR images) to the buyer over WhatsApp.
+		paymentMethods: PaymentMethod[] | undefined;
+		paymentInstructions: LegacyPaymentInstructions | undefined;
 	} | null> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) return null;
@@ -1113,16 +1117,23 @@ export const getCounterOrderMeta = internalQuery({
 				| "unpaid"
 				| "claimed"
 				| "received",
+			paymentMethods: retailer.paymentMethods,
+			paymentInstructions: retailer.paymentInstructions,
 		};
 	},
 });
 
 /**
- * Scheduled by counterCheckout.createOrderFromSession. Sends the buyer a free-form
- * order confirmation + tracking link (their KP scan opened the 24h CS window).
- * Branches on payment: "received" when settled in-person, otherwise a pay-&-track
- * nudge. Errors swallowed (logged) so the originating mutation never fails on an
- * outbound issue.
+ * Scheduled by counterCheckout.createOrderFromSession. The buyer scanned once, so
+ * everything they need lands in that chat automatically — no rescan, no manual
+ * seller step:
+ *   - paid-in-person → a "confirmed & paid" text, then the RECEIPT PDF;
+ *   - pay-later → the payment ask (transfer reference + payment methods + an
+ *     "I've paid" CTA + any QR images, via the shared sendPaymentMessage), then
+ *     the INVOICE PDF (whose "How to pay" block mirrors the same details).
+ * All sends are best-effort (errors logged) so the originating mutation never
+ * fails on an outbound issue; the seller can resend the document from the Done
+ * screen if needed.
  */
 export const notifyCounterOrderCreated = internalAction({
 	args: { orderId: v.id("orders") },
@@ -1144,24 +1155,54 @@ export const notifyCounterOrderCreated = internalAction({
 		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
 		const paid = meta.paymentStatus === "received";
 		const locale = pickLocale(meta.locale);
+		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");
 
-		const body = renderSystemMessage(
-			locale,
-			paid ? "counterOrderConfirmedPaid" : "counterOrderConfirmedUnpaid",
-			{
+		if (paid) {
+			const body = renderSystemMessage(locale, "counterOrderConfirmedPaid", {
 				shortId: meta.shortId,
 				storeName: meta.storeName,
 				amount: money,
 				trackingUrl,
-			},
-		);
-		try {
-			await makeGuardedSender(ctx, meta.retailerId, "transactional").send(meta.customerWaPhone, {
-				kind: "text",
-				body,
 			});
-		} catch (err) {
-			console.error("WA counter-order notify failed", err);
+			try {
+				await wa.send(meta.customerWaPhone, { kind: "text", body });
+			} catch (err) {
+				console.error("WA counter-order notify failed", err);
+			}
+		} else {
+			// Pay-later: push the payment ask so the buyer can pay from that chat
+			// without ever scanning again (boss ask). The invoice PDF follows below.
+			const intro = renderSystemMessage(locale, "counterOrderConfirmedUnpaid", {
+				shortId: meta.shortId,
+				storeName: meta.storeName,
+				amount: money,
+				trackingUrl,
+			});
+			const payment = await resolvePaymentForMessage(ctx, {
+				paymentMethods: meta.paymentMethods,
+				paymentInstructions: meta.paymentInstructions,
+			});
+			try {
+				await sendPaymentMessage(wa, meta.customerWaPhone, {
+					introBody: intro,
+					locale,
+					shortId: meta.shortId,
+					storeName: meta.storeName,
+					trackingUrl,
+					// Counter orders are collected at the counter — no pickup snapshot.
+					pickupSnapshot: undefined,
+					payment,
+				});
+			} catch (err) {
+				console.error("WA counter-order payment ask failed", err);
+			}
 		}
+
+		// Auto-send the receipt (paid) / invoice (pay-later) PDF to the buyer's chat.
+		await ctx
+			.runAction(internal.orders.sendOrderDocument, { orderId })
+			.catch((err) => {
+				console.error("WA counter-order document send failed", err);
+			});
 	},
 });
