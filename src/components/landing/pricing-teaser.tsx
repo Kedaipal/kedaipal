@@ -8,6 +8,7 @@ import { m } from "../../paraglide/messages";
 import { Button } from "../ui/button";
 import { FadeIn } from "./fade-in";
 import { Sticker } from "./landing-ui";
+import { ResellerBandTable } from "./reseller-band-table";
 
 const TOTAL_FOUNDING_SPOTS = 10;
 
@@ -144,6 +145,11 @@ export function PricingTeaser() {
 									{tier.name}
 								</p>
 								<div className="mt-3 flex items-end gap-1">
+									{tier.id === "scale" && (
+										<span className="mb-1 text-sm text-muted-foreground">
+											{m.pricing_price_from()}
+										</span>
+									)}
 									<span className="text-4xl font-bold tracking-tight">
 										RM {tier.price}
 									</span>
@@ -168,6 +174,8 @@ export function PricingTeaser() {
 								>
 									{tier.tagline}
 								</p>
+
+								{tier.id === "scale" && <ResellerBandTable className="mt-4" />}
 
 								{tier.foundingPrice !== undefined && (
 									<div className="mt-3 flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2">

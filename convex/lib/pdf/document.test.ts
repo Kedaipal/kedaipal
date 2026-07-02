@@ -105,10 +105,33 @@ describe("paymentMethodsToBlocks", () => {
 			]),
 		).toEqual([{ label: "Maybank", lines: ["Maybank", "111"] }]);
 	});
-	test("qr method points the buyer at the live surfaces", () => {
+	test("a single qr method keeps its own label + scan pointer", () => {
 		const blocks = paymentMethodsToBlocks([{ type: "qr", label: "DuitNow QR" }]);
+		expect(blocks).toHaveLength(1);
 		expect(blocks[0].label).toBe("DuitNow QR");
 		expect(blocks[0].lines[0]).toMatch(/scan/i);
+	});
+
+	test("multiple qr methods collapse into ONE generic pointer block", () => {
+		const blocks = paymentMethodsToBlocks([
+			{ type: "qr", label: "DuitNow QR" },
+			{ type: "qr", label: "Touch 'n Go" },
+		]);
+		// Not one-per-QR — a single "Pay by QR" line, no repeated pointer.
+		expect(blocks).toHaveLength(1);
+		expect(blocks[0].label).toBe("Pay by QR");
+		expect(blocks[0].lines).toHaveLength(1);
+	});
+
+	test("banks stay per-method; the single QR block keeps the seller's order", () => {
+		const blocks = paymentMethodsToBlocks([
+			{ type: "bank", label: "Maybank", bankAccountNumber: "111" },
+			{ type: "qr", label: "DuitNow QR" },
+			{ type: "qr", label: "Touch 'n Go" },
+			{ type: "bank", label: "CIMB", bankAccountNumber: "222" },
+		]);
+		// Two bank blocks + exactly one QR block, at the first QR's position.
+		expect(blocks.map((b) => b.label)).toEqual(["Maybank", "Pay by QR", "CIMB"]);
 	});
 });
 
@@ -132,9 +155,21 @@ describe("orderToReceiptData", () => {
 		expect(data.customerName).toBe("Aisha");
 		expect(data.paymentStatusLabel).toBe("Awaiting payment");
 		expect(data.paidDate).toBeUndefined();
+		// Unpaid → an invoice (the document title keys off this flag).
+		expect(data.paid).toBe(false);
 		expect(data.items).toEqual([
 			{ name: "Cake", variantLabel: "1kg", quantity: 2, unitPrice: 5000 },
 		]);
+	});
+
+	test("a claimed-but-unconfirmed payment is still an invoice (not paid)", () => {
+		const data = orderToReceiptData({
+			order: { ...baseOrder, paymentStatus: "claimed" },
+			storeName: "Sweet Co",
+			paymentMethods: [],
+		});
+		expect(data.paid).toBe(false);
+		expect(data.paymentStatusLabel).toBe("Payment claimed");
 	});
 
 	test("a received payment surfaces the paid date + label", () => {
@@ -149,6 +184,8 @@ describe("orderToReceiptData", () => {
 		});
 		expect(data.paymentStatusLabel).toBe("Paid");
 		expect(data.paidDate).toBe(JUN_30_MYT);
+		// Received → a receipt.
+		expect(data.paid).toBe(true);
 	});
 });
 

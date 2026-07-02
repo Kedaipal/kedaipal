@@ -14,6 +14,7 @@ const receipt: OrderReceiptData = {
 	storeName: "Sweet Co",
 	orderShortId: "ORD-1234",
 	orderDate: Date.UTC(2026, 5, 29, 16, 0, 0),
+	paid: true,
 	paymentStatusLabel: "Paid",
 	paidDate: Date.UTC(2026, 5, 29, 16, 0, 0),
 	customerName: "Aisha",
@@ -64,6 +65,16 @@ describe("buildOrderReceiptPdf", () => {
 			fulfilmentDate: undefined,
 			customerNote: undefined,
 			paymentBlocks: [],
+		});
+		expect(isPdf(bytes)).toBe(true);
+	});
+
+	test("renders an unpaid order (invoice) with the how-to-pay block", async () => {
+		const bytes = await buildOrderReceiptPdf({
+			...receipt,
+			paid: false,
+			paidDate: undefined,
+			paymentStatusLabel: "Awaiting payment",
 		});
 		expect(isPdf(bytes)).toBe(true);
 	});

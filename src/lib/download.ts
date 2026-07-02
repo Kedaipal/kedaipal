@@ -31,3 +31,48 @@ export function downloadCsv(filename: string, csv: string): void {
 		new Blob([UTF8_BOM + csv], { type: "text/csv;charset=utf-8" }),
 	);
 }
+
+/**
+ * Whether this device can share files via the OS share sheet (Web Share API
+ * level 2). True on most phones/tablets (incl. the counter iPad — the sheet
+ * lists WhatsApp, AirDrop, etc.), typically false on desktop browsers, where
+ * the caller should fall back to a plain download.
+ */
+export function canSharePdf(): boolean {
+	if (typeof navigator === "undefined" || !navigator.canShare) return false;
+	try {
+		const probe = new File([new Uint8Array()], "probe.pdf", {
+			type: "application/pdf",
+		});
+		return navigator.canShare({ files: [probe] });
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Share raw PDF bytes through the OS share sheet. Returns:
+ *  - "shared"    the sheet completed (or the browser doesn't report the target);
+ *  - "cancelled" the user dismissed the sheet (not an error — stay quiet);
+ *  - "unsupported" no file-share capability, so the caller should download instead.
+ */
+export async function sharePdfBytes(
+	filename: string,
+	bytes: ArrayBuffer,
+	opts?: { title?: string; text?: string },
+): Promise<"shared" | "cancelled" | "unsupported"> {
+	if (!canSharePdf()) return "unsupported";
+	const file = new File([bytes], filename, { type: "application/pdf" });
+	try {
+		await navigator.share({
+			files: [file],
+			title: opts?.title,
+			text: opts?.text,
+		});
+		return "shared";
+	} catch (err) {
+		if (err instanceof DOMException && err.name === "AbortError")
+			return "cancelled";
+		return "unsupported";
+	}
+}
