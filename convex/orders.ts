@@ -4,6 +4,8 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
 	action,
+	type ActionCtx,
+	internalAction,
 	internalMutation,
 	internalQuery,
 	mutation,
@@ -720,64 +722,114 @@ export const generateReceiptPdf = action({
 	},
 });
 
+/** The resolved inputs needed to render + send an order's receipt/invoice PDF. */
+type OrderDocumentInputs = {
+	data: OrderReceiptData;
+	shortId: string;
+	paid: boolean;
+	waPhone: string;
+	retailerId: Id<"retailers">;
+	locale: Locale;
+};
+
+type OrderDocumentInputsResult =
+	| ({ ok: true } & OrderDocumentInputs)
+	| { ok: false; reason: "not_found" | "no_phone" };
+
 /**
- * Assemble everything the send action needs (view-model + buyer phone + locale)
- * inside the transaction so auth runs here via resolveSharedOrder — only the
- * owning seller (or an admin acting-as) with a valid `shortId` gets through. A
- * buyer's tracking token is intentionally NOT accepted: sending on the seller's
- * behalf is a dashboard action, and the buyer already self-serves the receipt on
- * their tracking page. Returns a tagged failure for the two states the UI must
- * explain (order gone / no buyer phone on file).
+ * Build the render+send inputs from an already-resolved order. Shared by the
+ * auth'd (shortId) and trusted (orderId) input queries so the view-model shaping
+ * lives in one place. `no_phone` is the one state that can't be sent.
+ */
+async function buildOrderDocumentInputs(
+	ctx: QueryCtx,
+	order: Doc<"orders">,
+): Promise<({ ok: true } & OrderDocumentInputs) | { ok: false; reason: "no_phone" }> {
+	const waPhone = order.customer.waPhone?.trim();
+	if (!waPhone) return { ok: false, reason: "no_phone" };
+	const retailer = await ctx.db.get(order.retailerId);
+	return {
+		ok: true,
+		data: orderToReceiptData({
+			order,
+			storeName: retailer?.storeName ?? "",
+			paymentMethods: retailer ? resolvePaymentMethods(retailer) : [],
+		}),
+		shortId: order.shortId,
+		paid: (order.paymentStatus ?? "unpaid") === "received",
+		waPhone,
+		retailerId: order.retailerId,
+		locale: (retailer?.locale as Locale | undefined) ?? "en",
+	};
+}
+
+/**
+ * Render the order's receipt (paid) / invoice (unpaid) PDF, host it transiently
+ * (Convex storage → a URL Meta fetches), send it to the buyer's WhatsApp as a
+ * `document` (transactional — bypasses per-seller caps like the order confirm),
+ * then schedule the blob's cleanup (the PDF is deterministic, never persisted).
+ * Shared by the manual "resend" button and the automatic post-checkout send.
+ */
+async function deliverOrderDocument(
+	ctx: ActionCtx,
+	inputs: OrderDocumentInputs,
+): Promise<{ ok: boolean; reason?: string }> {
+	const bytes = await buildOrderReceiptPdf(inputs.data);
+	const storageId = await ctx.storage.store(
+		new Blob([bytes as BlobPart], { type: "application/pdf" }),
+	);
+	const url = await ctx.storage.getUrl(storageId);
+	if (!url) {
+		await ctx.storage.delete(storageId).catch(() => {});
+		return { ok: false, reason: "storage" };
+	}
+	const filename = `${inputs.paid ? "Receipt" : "Invoice"}-${inputs.shortId}.pdf`;
+	const caption = renderSystemMessage(
+		inputs.locale,
+		inputs.paid ? "orderReceiptCaption" : "orderInvoiceCaption",
+		{ shortId: inputs.shortId, storeName: inputs.data.storeName },
+	);
+	let sent = false;
+	try {
+		await makeGuardedSender(ctx, inputs.retailerId, "transactional").send(
+			inputs.waPhone,
+			{ kind: "document", documentUrl: url, filename, caption },
+		);
+		sent = true;
+	} catch (err) {
+		console.error("WA order-document send failed", err);
+	}
+	// Meta fetches the link within seconds; hold the blob briefly so that fetch
+	// (and any transient retry) succeeds, then reclaim the storage. Runs whether or
+	// not the send succeeded (a failed send already left it unreferenced).
+	await ctx.scheduler.runAfter(
+		10 * 60 * 1000,
+		internal.orders.deleteTransientStorage,
+		{ storageId },
+	);
+	return sent ? { ok: true } : { ok: false, reason: "send_failed" };
+}
+
+/**
+ * Assemble the send inputs behind the auth seam — only the owning seller (or an
+ * admin acting-as) with a valid `shortId` gets through (resolveSharedOrder). A
+ * buyer's tracking token is intentionally NOT accepted: the manual send is a
+ * dashboard action, and the buyer self-serves the receipt on their tracking page.
  */
 export const sendDocumentInputs = internalQuery({
 	args: { shortId: v.string() },
-	handler: async (
-		ctx,
-		{ shortId },
-	): Promise<
-		| {
-				ok: true;
-				data: OrderReceiptData;
-				shortId: string;
-				paid: boolean;
-				waPhone: string;
-				retailerId: Id<"retailers">;
-				locale: Locale;
-		  }
-		| { ok: false; reason: "not_found" | "no_phone" }
-	> => {
+	handler: async (ctx, { shortId }): Promise<OrderDocumentInputsResult> => {
 		const order = await resolveSharedOrder(ctx, { shortId });
 		if (!order) return { ok: false, reason: "not_found" };
-		const waPhone = order.customer.waPhone?.trim();
-		if (!waPhone) return { ok: false, reason: "no_phone" };
-		const retailer = await ctx.db.get(order.retailerId);
-		return {
-			ok: true,
-			data: orderToReceiptData({
-				order,
-				storeName: retailer?.storeName ?? "",
-				paymentMethods: retailer ? resolvePaymentMethods(retailer) : [],
-			}),
-			shortId: order.shortId,
-			paid: (order.paymentStatus ?? "unpaid") === "received",
-			waPhone,
-			retailerId: order.retailerId,
-			locale: (retailer?.locale as Locale | undefined) ?? "en",
-		};
+		return buildOrderDocumentInputs(ctx, order);
 	},
 });
 
 /**
- * Seller-only: render the order's receipt (paid) / invoice (unpaid) PDF and send
- * it to the buyer's WhatsApp as a document attachment. Counter Checkout's whole
- * promise is that the buyer scans ONCE to bind their number — this pushes the
- * document straight to that chat so they never scan again. Sent as
- * `transactional` (order-scoped), so it bypasses per-seller caps exactly like
- * the order confirmation.
- *
- * The PDF is deterministic from the order, so it isn't persisted: it's stored
- * only transiently to hand Meta a URL to fetch, then reclaimed by a scheduled
- * cleanup. Errors are returned (not thrown) so the button can explain them.
+ * Seller-only manual "resend": render + send the order's receipt/invoice to the
+ * buyer's WhatsApp. Auth via resolveSharedOrder (owned shortId). The document is
+ * also sent AUTOMATICALLY right after counter checkout (see orders.sendOrderDocument
+ * + whatsapp.notifyCounterOrderCreated); this is the re-send / recovery path.
  */
 export const sendOrderDocumentToBuyer = action({
 	args: { shortId: v.string() },
@@ -789,50 +841,45 @@ export const sendOrderDocumentToBuyer = action({
 			shortId,
 		});
 		if (!inputs.ok) return { ok: false, reason: inputs.reason };
-
-		const bytes = await buildOrderReceiptPdf(inputs.data);
-		const storageId = await ctx.storage.store(
-			new Blob([bytes as BlobPart], { type: "application/pdf" }),
-		);
-		const url = await ctx.storage.getUrl(storageId);
-		if (!url) {
-			await ctx.storage.delete(storageId).catch(() => {});
-			return { ok: false, reason: "storage" };
-		}
-
-		const filename = `${inputs.paid ? "Receipt" : "Invoice"}-${inputs.shortId}.pdf`;
-		const caption = renderSystemMessage(
-			inputs.locale,
-			inputs.paid ? "orderReceiptCaption" : "orderInvoiceCaption",
-			{ shortId: inputs.shortId, storeName: inputs.data.storeName },
-		);
-
-		let sent = false;
-		try {
-			await makeGuardedSender(ctx, inputs.retailerId, "transactional").send(
-				inputs.waPhone,
-				{ kind: "document", documentUrl: url, filename, caption },
-			);
-			sent = true;
-		} catch (err) {
-			console.error("WA order-document send failed", err);
-		}
-
-		// Meta fetches the link within seconds of the send; hold the blob briefly so
-		// that fetch (and any transient retry) succeeds, then reclaim the storage —
-		// the document never needs to persist. Runs regardless of send outcome; a
-		// failed send already leaves the blob unreferenced.
-		await ctx.scheduler.runAfter(
-			10 * 60 * 1000,
-			internal.orders.deleteTransientStorage,
-			{ storageId },
-		);
-
-		return sent ? { ok: true } : { ok: false, reason: "send_failed" };
+		return deliverOrderDocument(ctx, inputs);
 	},
 });
 
-/** Reclaim a transiently-stored document blob (see sendOrderDocumentToBuyer). */
+/**
+ * Inputs for the AUTOMATIC send — keyed by orderId, no auth: this runs from the
+ * trusted post-checkout scheduler, not a client. Mirrors sendDocumentInputs but
+ * skips the ownership check.
+ */
+export const orderDocumentInputsById = internalQuery({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<OrderDocumentInputsResult> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) return { ok: false, reason: "not_found" };
+		return buildOrderDocumentInputs(ctx, order);
+	},
+});
+
+/**
+ * Automatic post-checkout send of the receipt/invoice PDF, scheduled by the
+ * counter-order confirmation flow (whatsapp.notifyCounterOrderCreated). Internal
+ * + orderId-keyed; delegates to the shared deliverOrderDocument. Best-effort —
+ * the seller can resend from the Done screen if it fails.
+ */
+export const sendOrderDocument = internalAction({
+	args: { orderId: v.id("orders") },
+	handler: async (
+		ctx,
+		{ orderId },
+	): Promise<{ ok: boolean; reason?: string }> => {
+		const inputs = await ctx.runQuery(internal.orders.orderDocumentInputsById, {
+			orderId,
+		});
+		if (!inputs.ok) return { ok: false, reason: inputs.reason };
+		return deliverOrderDocument(ctx, inputs);
+	},
+});
+
+/** Reclaim a transiently-stored document blob (see deliverOrderDocument). */
 export const deleteTransientStorage = internalMutation({
 	args: { storageId: v.id("_storage") },
 	handler: async (ctx, { storageId }): Promise<void> => {
