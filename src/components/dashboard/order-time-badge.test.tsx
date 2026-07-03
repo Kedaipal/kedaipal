@@ -11,7 +11,11 @@ describe("OrderTimeBadge", () => {
 	it("escalates a long-pending order (amber after 4h)", () => {
 		render(
 			<OrderTimeBadge
-				order={{ status: "pending", statusChangedAt: NOW - 5 * H, createdAt: 0 }}
+				order={{
+					status: "pending",
+					statusChangedAt: NOW - 5 * H,
+					createdAt: 0,
+				}}
 				now={NOW}
 			/>,
 		);

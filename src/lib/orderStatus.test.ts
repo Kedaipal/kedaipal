@@ -2,8 +2,8 @@ import { describe, expect, test } from "vitest";
 import {
 	defaultStatusLabel,
 	type OrderStatus,
-	resolveStatusLabel,
 	type ResolveOpts,
+	resolveStatusLabel,
 	resolveTransitionLabel,
 	type StatusLabels,
 	type TransitionTarget,
@@ -199,7 +199,9 @@ import {
 	synthesizeDefaultStages,
 } from "./orderStatus";
 
-function stage(over: Partial<OrderStage> & Pick<OrderStage, "id" | "anchor" | "sortOrder">): OrderStage {
+function stage(
+	over: Partial<OrderStage> & Pick<OrderStage, "id" | "anchor" | "sortOrder">,
+): OrderStage {
 	return { label: { en: "X" }, notify: false, ...over };
 }
 
@@ -267,9 +269,9 @@ describe("resolveCurrentStage", () => {
 	});
 
 	test("derives from canonical status when no/!found stage id", () => {
-		expect(
-			resolveCurrentStage({ status: "packed" }, stages)?.anchor,
-		).toBe("packed");
+		expect(resolveCurrentStage({ status: "packed" }, stages)?.anchor).toBe(
+			"packed",
+		);
 		// stale id → derive from status
 		expect(
 			resolveCurrentStage(
@@ -281,15 +283,27 @@ describe("resolveCurrentStage", () => {
 
 	test("derive picks the FIRST stage of a shared anchor", () => {
 		const custom = [
-			stage({ id: "clean", anchor: "packed", sortOrder: 0, label: { en: "Cleaning" } }),
-			stage({ id: "dry", anchor: "packed", sortOrder: 1, label: { en: "Drying" } }),
+			stage({
+				id: "clean",
+				anchor: "packed",
+				sortOrder: 0,
+				label: { en: "Cleaning" },
+			}),
+			stage({
+				id: "dry",
+				anchor: "packed",
+				sortOrder: 1,
+				label: { en: "Drying" },
+			}),
 		];
 		expect(resolveCurrentStage({ status: "packed" }, custom)?.id).toBe("clean");
 	});
 
 	test("pending and cancelled resolve to no stage", () => {
 		expect(resolveCurrentStage({ status: "pending" }, stages)).toBeUndefined();
-		expect(resolveCurrentStage({ status: "cancelled" }, stages)).toBeUndefined();
+		expect(
+			resolveCurrentStage({ status: "cancelled" }, stages),
+		).toBeUndefined();
 	});
 });
 
@@ -306,7 +320,12 @@ describe("stageLabel / stageDescription", () => {
 		expect(stageDescription(s, "ms")).toBe("Usually 2 days");
 	});
 	test("MS used when present", () => {
-		const t = stage({ id: "y", anchor: "packed", sortOrder: 0, label: { en: "Sewing", ms: "Menjahit" } });
+		const t = stage({
+			id: "y",
+			anchor: "packed",
+			sortOrder: 0,
+			label: { en: "Sewing", ms: "Menjahit" },
+		});
 		expect(stageLabel(t, "ms")).toBe("Menjahit");
 	});
 	test("no description → undefined", () => {
@@ -318,10 +337,30 @@ describe("stageLabel / stageDescription", () => {
 describe("collectStageConfigErrors", () => {
 	test("valid multi-stage-per-anchor config has no errors", () => {
 		const ok = [
-			stage({ id: "a", anchor: "confirmed", sortOrder: 0, label: { en: "Accepted" } }),
-			stage({ id: "b", anchor: "packed", sortOrder: 1, label: { en: "Cleaning" } }),
-			stage({ id: "c", anchor: "packed", sortOrder: 2, label: { en: "Drying" } }),
-			stage({ id: "d", anchor: "delivered", sortOrder: 3, label: { en: "Collected" } }),
+			stage({
+				id: "a",
+				anchor: "confirmed",
+				sortOrder: 0,
+				label: { en: "Accepted" },
+			}),
+			stage({
+				id: "b",
+				anchor: "packed",
+				sortOrder: 1,
+				label: { en: "Cleaning" },
+			}),
+			stage({
+				id: "c",
+				anchor: "packed",
+				sortOrder: 2,
+				label: { en: "Drying" },
+			}),
+			stage({
+				id: "d",
+				anchor: "delivered",
+				sortOrder: 3,
+				label: { en: "Collected" },
+			}),
 		];
 		expect(collectStageConfigErrors(ok)).toEqual([]);
 	});
@@ -345,7 +384,12 @@ describe("collectStageConfigErrors", () => {
 
 	test("flags a missing English label and a duplicate id", () => {
 		const bad = [
-			stage({ id: "dup", anchor: "confirmed", sortOrder: 0, label: { en: "" } }),
+			stage({
+				id: "dup",
+				anchor: "confirmed",
+				sortOrder: 0,
+				label: { en: "" },
+			}),
 			stage({ id: "dup", anchor: "packed", sortOrder: 1 }),
 		];
 		const msg = collectStageConfigErrors(bad).join(" ");
@@ -371,17 +415,47 @@ describe("anchorOrdinal", () => {
 
 describe("stageNotifyPlan", () => {
 	test("notify=false → none", () => {
-		expect(stageNotifyPlan({ notify: false, targetAnchor: "packed", statusChanged: true })).toBe("none");
+		expect(
+			stageNotifyPlan({
+				notify: false,
+				targetAnchor: "packed",
+				statusChanged: true,
+			}),
+		).toBe("none");
 	});
 	test("confirmed anchor → none (confirm flow owns it)", () => {
-		expect(stageNotifyPlan({ notify: true, targetAnchor: "confirmed", statusChanged: true })).toBe("none");
+		expect(
+			stageNotifyPlan({
+				notify: true,
+				targetAnchor: "confirmed",
+				statusChanged: true,
+			}),
+		).toBe("none");
 	});
 	test("anchor crossing → canonical (rich copy)", () => {
-		expect(stageNotifyPlan({ notify: true, targetAnchor: "packed", statusChanged: true })).toBe("canonical");
-		expect(stageNotifyPlan({ notify: true, targetAnchor: "delivered", statusChanged: true })).toBe("canonical");
+		expect(
+			stageNotifyPlan({
+				notify: true,
+				targetAnchor: "packed",
+				statusChanged: true,
+			}),
+		).toBe("canonical");
+		expect(
+			stageNotifyPlan({
+				notify: true,
+				targetAnchor: "delivered",
+				statusChanged: true,
+			}),
+		).toBe("canonical");
 	});
 	test("within an anchor → stage (generic update)", () => {
-		expect(stageNotifyPlan({ notify: true, targetAnchor: "packed", statusChanged: false })).toBe("stage");
+		expect(
+			stageNotifyPlan({
+				notify: true,
+				targetAnchor: "packed",
+				statusChanged: false,
+			}),
+		).toBe("stage");
 	});
 });
 
@@ -389,19 +463,43 @@ import { stageNotifyPlan } from "./orderStatus";
 
 describe("resolveAnchorLabel", () => {
 	const custom = [
-		{ id: "a", anchor: "confirmed" as const, label: { en: "Accepted" }, notify: true, sortOrder: 0 },
-		{ id: "b", anchor: "packed" as const, label: { en: "Sewing" }, notify: false, sortOrder: 1 },
-		{ id: "c", anchor: "packed" as const, label: { en: "Pressing" }, notify: false, sortOrder: 2 },
+		{
+			id: "a",
+			anchor: "confirmed" as const,
+			label: { en: "Accepted" },
+			notify: true,
+			sortOrder: 0,
+		},
+		{
+			id: "b",
+			anchor: "packed" as const,
+			label: { en: "Sewing" },
+			notify: false,
+			sortOrder: 1,
+		},
+		{
+			id: "c",
+			anchor: "packed" as const,
+			label: { en: "Pressing" },
+			notify: false,
+			sortOrder: 2,
+		},
 	];
 	test("uses the first stage of the anchor", () => {
 		expect(resolveAnchorLabel("packed", { stages: custom })).toBe("Sewing");
 	});
 	test("pending/cancelled fall back to status label", () => {
-		expect(resolveAnchorLabel("pending", { stages: custom })).toBe("Order Received");
-		expect(resolveAnchorLabel("cancelled", { stages: custom })).toBe("Cancelled");
+		expect(resolveAnchorLabel("pending", { stages: custom })).toBe(
+			"Order Received",
+		);
+		expect(resolveAnchorLabel("cancelled", { stages: custom })).toBe(
+			"Cancelled",
+		);
 	});
 	test("anchor with no matching stage falls back to default", () => {
-		expect(resolveAnchorLabel("shipped", { stages: custom })).toBe("On the Way");
+		expect(resolveAnchorLabel("shipped", { stages: custom })).toBe(
+			"On the Way",
+		);
 	});
 	test("no stages → Phase-1 default", () => {
 		expect(resolveAnchorLabel("delivered", {})).toBe("Delivered");
@@ -416,7 +514,9 @@ describe("collectStageConfigErrors — boundary + notify caps", () => {
 			stage({ id: "a", anchor: "confirmed", sortOrder: 0 }),
 			stage({ id: "b", anchor: "confirmed", sortOrder: 1 }),
 		];
-		expect(collectStageConfigErrors(bad).join(" ")).toMatch(/Only one "Accepted"/);
+		expect(collectStageConfigErrors(bad).join(" ")).toMatch(
+			/Only one "Accepted"/,
+		);
 	});
 	test("rejects two Done (delivered) stages", () => {
 		const bad = [
@@ -429,22 +529,33 @@ describe("collectStageConfigErrors — boundary + notify caps", () => {
 		const many = Array.from({ length: MAX_NOTIFY_STAGES + 1 }, (_, i) =>
 			stage({ id: `p${i}`, anchor: "packed", sortOrder: i, notify: true }),
 		);
-		expect(collectStageConfigErrors(many).join(" ")).toMatch(/can notify the buyer/);
+		expect(collectStageConfigErrors(many).join(" ")).toMatch(
+			/can notify the buyer/,
+		);
 	});
 	test("exactly MAX_NOTIFY_STAGES notifying is fine", () => {
 		const ok = Array.from({ length: MAX_NOTIFY_STAGES }, (_, i) =>
 			stage({ id: `p${i}`, anchor: "packed", sortOrder: i, notify: true }),
 		);
-		expect(collectStageConfigErrors(ok).filter((e) => /can notify/.test(e))).toEqual([]);
+		expect(
+			collectStageConfigErrors(ok).filter((e) => /can notify/.test(e)),
+		).toEqual([]);
 	});
 	test("confirmed notify is not counted toward the cap", () => {
 		const stages = [
 			stage({ id: "c", anchor: "confirmed", sortOrder: 0, notify: true }),
 			...Array.from({ length: MAX_NOTIFY_STAGES }, (_, i) =>
-				stage({ id: `p${i}`, anchor: "packed", sortOrder: i + 1, notify: true }),
+				stage({
+					id: `p${i}`,
+					anchor: "packed",
+					sortOrder: i + 1,
+					notify: true,
+				}),
 			),
 		];
-		expect(collectStageConfigErrors(stages).filter((e) => /can notify/.test(e))).toEqual([]);
+		expect(
+			collectStageConfigErrors(stages).filter((e) => /can notify/.test(e)),
+		).toEqual([]);
 	});
 });
 
