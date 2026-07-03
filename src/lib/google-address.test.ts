@@ -84,7 +84,11 @@ describe("parseGoogleAddress", () => {
 	test("uses route alone when street_number missing", () => {
 		const result = parseGoogleAddress(
 			[
-				{ types: ["route"], longText: "Jalan Ampang", shortText: "Jalan Ampang" },
+				{
+					types: ["route"],
+					longText: "Jalan Ampang",
+					shortText: "Jalan Ampang",
+				},
 				{
 					types: ["locality"],
 					longText: "Kuala Lumpur",
@@ -218,8 +222,11 @@ describe("googleMapsNavUrl", () => {
 	});
 
 	test("ignores a pasted mapsUrl — this is specifically the Google target", () => {
-		// @ts-expect-error mapsUrl isn't part of the nav-helper input by design.
-		const url = googleMapsNavUrl({ mapsUrl: "https://waze.com/ul?ll=1,2", placeId: "ChIJ_abc" });
+		const url = googleMapsNavUrl({
+			// @ts-expect-error mapsUrl isn't part of the nav-helper input by design.
+			mapsUrl: "https://waze.com/ul?ll=1,2",
+			placeId: "ChIJ_abc",
+		});
 		expect(url).toBe("https://www.google.com/maps/place/?q=place_id:ChIJ_abc");
 	});
 
