@@ -82,17 +82,22 @@ export function resolveBannerState(
 	return { kind: "none" };
 }
 
-export type TierTone = "neutral" | "trial" | "warn" | "founding";
+export type TierTone = "neutral" | "trial" | "warn" | "founding" | "admin";
 
 export type TierPill = { label: string; tone: TierTone };
 
 /** Compact tier label for the nav pill. With a `foundingRank`, founding members
- * read "Founding #N · 28 days left" / "Founding #N" instead of a plain "Trial". */
+ * read "Founding #N · 28 days left" / "Founding #N" instead of a plain "Trial".
+ * When `isAdmin` is set (a Kedaipal admin viewing their OWN store), the pill reads
+ * "Admin" instead of any trial/plan/past-due state — admins run the app for free
+ * and are never soft-locked, so a "days left" countdown would be a lie. */
 export function tierPill(
 	sub: SubscriptionView,
 	now: number,
 	foundingRank?: number,
+	isAdmin = false,
 ): TierPill {
+	if (isAdmin) return { label: "Admin", tone: "admin" };
 	const fm = foundingRank ? `Founding #${foundingRank}` : null;
 	switch (sub.status) {
 		case "trialing": {

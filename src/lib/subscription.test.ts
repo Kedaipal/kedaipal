@@ -71,6 +71,22 @@ describe("tierPill", () => {
 		expect(tierPill(sub({ status: "past_due" }), NOW).tone).toBe("warn");
 		expect(tierPill(sub({ status: "cancelled" }), NOW).label).toBe("Cancelled");
 	});
+
+	test("admin → 'Admin', overrides every subscription state", () => {
+		// A Kedaipal admin runs the app for free, so no trial/past-due countdown is
+		// ever shown — even a past_due or founding store reads "Admin".
+		expect(tierPill(sub({ status: "past_due" }), NOW, undefined, true)).toEqual(
+			{ label: "Admin", tone: "admin" },
+		);
+		expect(
+			tierPill(
+				sub({ status: "trialing", trialEndsAt: NOW - DAY }),
+				NOW,
+				3,
+				true,
+			),
+		).toEqual({ label: "Admin", tone: "admin" });
+	});
 });
 
 describe("shouldNudgePayment", () => {

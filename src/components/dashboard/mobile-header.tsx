@@ -12,9 +12,11 @@ type Retailer = NonNullable<
 interface MobileHeaderProps {
 	// Null when a Kedaipal admin has no store of their own — show admin chrome.
 	retailer: Retailer | null;
+	// True when an admin is viewing their OWN store — the tier pill reads "Admin".
+	adminBadge?: boolean;
 }
 
-export function MobileHeader({ retailer }: MobileHeaderProps) {
+export function MobileHeader({ retailer, adminBadge }: MobileHeaderProps) {
 	// This header is `sticky top-0`, and its height varies (tier pill, store name
 	// wrapping). Publish the measured height as `--app-header-h` so any other
 	// sticky element on the page (e.g. the counter catalog's product header) can
@@ -57,6 +59,7 @@ export function MobileHeader({ retailer }: MobileHeaderProps) {
 							<TierPill
 								subscription={retailer.subscription}
 								foundingRank={retailer.foundingMemberRank}
+								admin={adminBadge}
 								compact
 								className="py-0 text-[9px]"
 							/>
