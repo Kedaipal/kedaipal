@@ -473,6 +473,14 @@ function SettingsRoute() {
 							onSave={(paymentMethods) => updateSettings({ paymentMethods })}
 						/>
 					</Card>
+					{/* Surfaces the automatic nudge so the behaviour is never a
+					    surprise — see docs/payment-reminder.md. */}
+					<p className="px-1 text-xs text-muted-foreground">
+						Unpaid orders get one automatic WhatsApp reminder 11 days after
+						ordering — 3 days before the 14-day payment window closes. Buyers
+						who tapped “I've paid” (or whose payment you've confirmed) are never
+						reminded.
+					</p>
 				</div>
 			) : null}
 

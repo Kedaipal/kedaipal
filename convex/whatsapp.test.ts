@@ -1218,3 +1218,142 @@ describe("counter order auto-send (notifyCounterOrderCreated)", () => {
 		fetchMock.restore();
 	});
 });
+
+describe("drop-off + custom-stage status copy (86ey570am)", () => {
+	test("notifyStatusChange uses drop-off wording when the pickup snapshot is drop_off", async () => {
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: shortId,
+		});
+		fetchMock.calls.length = 0;
+
+		const order = await t.query(api.orders.get, {
+			token: await tk(t, shortId),
+		});
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order!._id, {
+				status: "packed",
+				deliveryMethod: "self_collect",
+				pickupSnapshot: {
+					label: "Bearcamp HQ",
+					address: "LOT D, 2, JALAN MP54, Sungai Buloh",
+					locationType: "drop_off",
+				},
+			});
+		});
+		await t.action(internal.whatsapp.notifyStatusChange, {
+			orderId: order!._id,
+		});
+		const body = (fetchMock.waCalls()[0].body as { text: { body: string } })
+			.text.body;
+		expect(body).toContain("ready for the drop-off point");
+		expect(body).not.toContain("ready for pickup");
+		fetchMock.restore();
+	});
+
+	test("notifyStatusChange uses the custom stage label + description on anchor crossings", async () => {
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const asUser = t.withIdentity({ subject: USER });
+		await asUser.mutation(api.retailers.updateSettings, {
+			orderStages: [
+				{ anchor: "confirmed", label: { en: "Accepted" }, notify: true },
+				{ anchor: "packed", label: { en: "Cleaning" }, notify: true },
+				{
+					anchor: "shipped",
+					label: { en: "Ready for Collection" },
+					description: { en: "Please collect within 14 days." },
+					notify: true,
+				},
+				{ anchor: "delivered", label: { en: "Collected" }, notify: true },
+			],
+		});
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: shortId,
+		});
+		fetchMock.calls.length = 0;
+
+		const order = await t.query(api.orders.get, {
+			token: await tk(t, shortId),
+		});
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order!._id, { status: "shipped" });
+		});
+		await t.action(internal.whatsapp.notifyStatusChange, {
+			orderId: order!._id,
+		});
+		const body = (fetchMock.waCalls()[0].body as { text: { body: string } })
+			.text.body;
+		expect(body).toContain(`Order ${shortId} update: Ready for Collection.`);
+		expect(body).toContain("Please collect within 14 days.");
+		expect(body).not.toContain("on the way");
+		fetchMock.restore();
+	});
+
+	test("an authored template override still beats the custom stage copy", async () => {
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const asUser = t.withIdentity({ subject: USER });
+		await asUser.mutation(api.retailers.updateSettings, {
+			orderStages: [
+				{ anchor: "confirmed", label: { en: "Accepted" }, notify: true },
+				{ anchor: "packed", label: { en: "Cleaning" }, notify: true },
+			],
+			messageTemplates: { en: { packed: "Custom packed {shortId}" } },
+		});
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: shortId,
+		});
+		fetchMock.calls.length = 0;
+
+		const order = await t.query(api.orders.get, {
+			token: await tk(t, shortId),
+		});
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order!._id, { status: "packed" });
+		});
+		await t.action(internal.whatsapp.notifyStatusChange, {
+			orderId: order!._id,
+		});
+		const body = (fetchMock.waCalls()[0].body as { text: { body: string } })
+			.text.body;
+		expect(body).toBe(`Custom packed ${shortId}`);
+		fetchMock.restore();
+	});
+
+	test("default stages keep the rich canonical copy (zero regression)", async () => {
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: shortId,
+		});
+		fetchMock.calls.length = 0;
+
+		const order = await t.query(api.orders.get, {
+			token: await tk(t, shortId),
+		});
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order!._id, { status: "shipped" });
+		});
+		await t.action(internal.whatsapp.notifyStatusChange, {
+			orderId: order!._id,
+		});
+		const body = (fetchMock.waCalls()[0].body as { text: { body: string } })
+			.text.body;
+		expect(body).toContain("on the way");
+		fetchMock.restore();
+	});
+});
