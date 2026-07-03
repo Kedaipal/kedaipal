@@ -24,8 +24,12 @@ finger.
 ## When is an order "due"? (`convex/lib/paymentReminder.ts`, pure + unit-tested)
 
 All of:
-- `status` is `confirmed` / `packed` / `shipped` — a `pending` order was never
-  confirmed in chat so payment isn't owed yet; `delivered`/`cancelled` are closed;
+- `status` is `confirmed` / `packed` / `shipped` / **`delivered`** — a `pending`
+  order was never confirmed in chat so payment isn't owed yet; `cancelled` is
+  closed. **`delivered` counts** (PR feedback, 2026-07-03): F&B sellers
+  routinely deliver stock on credit and settle at the end of the week/month —
+  "goods arrived" does not imply "goods paid for", so a delivered-but-unpaid
+  order still gets nudged;
 - `paymentStatus` is neither `claimed` nor `received` — a buyer who tapped
   **"I've paid"** is waiting on the *seller*, so nudging them would be wrong;
 - the **mockup gate isn't closed** (`isMockupGateClosed`) — custom orders defer

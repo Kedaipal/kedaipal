@@ -145,6 +145,22 @@ describe("sendDuePaymentReminders (cron)", () => {
 		);
 		expect(paid.scheduled).toBe(0);
 	});
+
+	test("still sweeps a delivered-but-unpaid order — F&B pay-on-credit case", async () => {
+		// A seller delivered the stock but settles payment at week's end — the
+		// order is `delivered`, not `pending`/`cancelled`, so it must still be
+		// nudged (PR feedback, 86ey570am).
+		const t = setup();
+		const order = await seedConfirmedOrder(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order._id, { status: "delivered" });
+		});
+		const swept = await t.mutation(
+			internal.paymentReminders.sendDuePaymentReminders,
+			{ now: order._creationTime + PAYMENT_REMINDER_AFTER_MS + 1000 },
+		);
+		expect(swept.scheduled).toBe(1);
+	});
 });
 
 describe("notifyPaymentReminder (send action)", () => {
@@ -164,6 +180,22 @@ describe("notifyPaymentReminder (send action)", () => {
 		expect(body).toContain(order.shortId);
 		expect(body).toContain("MYR 120.00");
 		expect(body).toContain("/track/");
+		fetchMock.restore();
+	});
+
+	test("sends even when the order has been delivered but stays unpaid", async () => {
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const order = await seedConfirmedOrder(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order._id, { status: "delivered" });
+		});
+		await t.action(internal.whatsapp.notifyPaymentReminder, {
+			orderId: order._id as Id<"orders">,
+		});
+		expect(
+			fetchMock.calls.filter((c) => c.url.includes("graph.facebook.com")),
+		).toHaveLength(1);
 		fetchMock.restore();
 	});
 

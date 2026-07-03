@@ -43,8 +43,11 @@ export type PaymentReminderOrderFields = MockupGateFields & {
 
 /**
  * Whether this order should receive the payment nudge now. Due when ALL hold:
- *  - confirmed/packed/shipped (a `pending` order was never confirmed in chat —
- *    payment isn't owed yet; delivered/cancelled orders are closed);
+ *  - confirmed/packed/shipped/**delivered** (a `pending` order was never
+ *    confirmed in chat — payment isn't owed yet; `cancelled` is closed).
+ *    **`delivered` counts** — F&B sellers routinely deliver stock on credit
+ *    and settle at the end of the week/month, so "goods arrived" does NOT
+ *    imply "goods paid for" (PR feedback, `86ey570am`);
  *  - payment neither claimed nor received (a buyer who tapped "I've paid" is
  *    waiting on the SELLER, not the other way round);
  *  - the mockup gate isn't closed (custom orders defer payment until the buyer
@@ -57,11 +60,7 @@ export function isPaymentReminderDue(
 	order: PaymentReminderOrderFields,
 	now: number,
 ): boolean {
-	if (
-		order.status !== "confirmed" &&
-		order.status !== "packed" &&
-		order.status !== "shipped"
-	) {
+	if (order.status === "pending" || order.status === "cancelled") {
 		return false;
 	}
 	if (order.paymentStatus === "claimed" || order.paymentStatus === "received") {

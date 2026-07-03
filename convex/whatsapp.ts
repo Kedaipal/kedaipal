@@ -755,7 +755,9 @@ export const notifyPaymentReminder = internalAction({
 		if (!meta) return;
 		if (!meta.customerWaPhone) return;
 		// Order left the "open + unpaid" state between the cron stamp and this run.
-		if (meta.status === "cancelled" || meta.status === "delivered") return;
+		// `delivered` does NOT close this out — F&B sellers routinely deliver on
+		// credit and settle at week's end, so goods-arrived ≠ goods-paid-for.
+		if (meta.status === "cancelled") return;
 		if (meta.paymentStatus === "claimed" || meta.paymentStatus === "received")
 			return;
 

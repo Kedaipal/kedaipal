@@ -29,6 +29,15 @@ describe("isPaymentReminderDue", () => {
 		).toBe(true);
 	});
 
+	test("delivered-but-unpaid is due — F&B credit/pay-later delivery", () => {
+		// A seller who delivers stock on credit and settles at week's end: the
+		// order is `delivered` yet payment was never claimed/received. Goods
+		// arrived does NOT mean goods paid for (PR feedback, 86ey570am).
+		expect(isPaymentReminderDue(order({ status: "delivered" }), NOW)).toBe(
+			true,
+		);
+	});
+
 	test("not due before day 11", () => {
 		expect(
 			isPaymentReminderDue(
@@ -38,11 +47,8 @@ describe("isPaymentReminderDue", () => {
 		).toBe(false);
 	});
 
-	test("closed orders are never nudged", () => {
+	test("pending (not yet confirmed) and cancelled orders are never nudged", () => {
 		expect(isPaymentReminderDue(order({ status: "pending" }), NOW)).toBe(false);
-		expect(isPaymentReminderDue(order({ status: "delivered" }), NOW)).toBe(
-			false,
-		);
 		expect(isPaymentReminderDue(order({ status: "cancelled" }), NOW)).toBe(
 			false,
 		);
