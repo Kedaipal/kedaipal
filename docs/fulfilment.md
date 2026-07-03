@@ -58,6 +58,25 @@ picker, the snapshot. Only a badge, a grouping heading and a schedule field diff
   point/schedule/maps block), and `/track/<token>` ("Meet at" vs "Pick up at" + kind badge +
   schedule note) all carry the kind + note.
 
+### Kind-aware copy sweep (2026-07-03, ClickUp `86ey570am` — bug fix)
+
+The first live drop-off test (Bearcamp) surfaced surfaces that still said
+"collect"/"pickup" for drop-off orders. All copy now branches on the frozen
+`pickupSnapshot.locationType` (legacy `undefined` → self-collect, as everywhere):
+
+- **Checkout date step** (`checkout-sheet.tsx`): label "When should we meet?" +
+  helper "Pick the date you'll meet at the drop-off point." (was "When will you
+  collect?" for both kinds).
+- **WhatsApp status copy** (`convex/lib/whatsappCopy.ts`, EN + MS): `CopyVars`
+  gained `pickupKind`; `packed` → "ready for the drop-off point", `shipped` →
+  "see you at the drop-off point!" / "jumpa di lokasi penyerahan!"; `confirm` →
+  "ready at the drop-off point". `delivered` ("collected") already fit both
+  kinds. `getOrderWithRetailer` now returns the snapshot's kind so
+  `notifyStatusChange` + the confirm compose can pass it.
+- **Tracking page + seller order detail**: fulfilment chip "Drop-off" (was
+  "Self Collect"), date label "Meet on" (was "Collect on"), and the seller
+  card's "Pick up at" heading → "Meet at" (matching the buyer page).
+
 ### Vocabulary (one language, both sides)
 
 "Self-collect" / "Drop-off" everywhere — seller settings badge **and** buyer sub-headings.

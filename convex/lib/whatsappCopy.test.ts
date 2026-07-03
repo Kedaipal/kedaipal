@@ -2,10 +2,13 @@
 import { describe, expect, test } from "vitest";
 import type { PaymentMethod } from "./payment";
 import {
+	hasTemplateOverride,
 	paymentQrCaption,
 	renderPaymentMethods,
 	renderPickupBlock,
+	renderStageUpdate,
 	renderSystemMessage,
+	waCopy,
 } from "./whatsappCopy";
 
 function bank(over: Partial<PaymentMethod> = {}): PaymentMethod {
@@ -333,5 +336,144 @@ describe("renderPickupBlock", () => {
 			"Main Store",
 			"12 Jln Tun Razak, KL",
 		]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Drop-off-aware status copy (86ey570am) — pickupKind branches the "pickup"
+// wording only for self-collect orders at a drop-off point.
+// ---------------------------------------------------------------------------
+
+describe("drop-off-aware status copy", () => {
+	const base = { shortId: "ORD-TEST", storeName: "Bearcamp" };
+
+	test("packed EN: drop-off wording only when kind is drop_off", () => {
+		expect(
+			waCopy.en.status.packed({
+				...base,
+				deliveryMethod: "self_collect",
+				pickupKind: "drop_off",
+			}),
+		).toContain("ready for the drop-off point");
+		expect(
+			waCopy.en.status.packed({ ...base, deliveryMethod: "self_collect" }),
+		).toContain("ready for pickup");
+		// pickupKind on a delivery order is stale data — never changes wording.
+		expect(
+			waCopy.en.status.packed({
+				...base,
+				deliveryMethod: "delivery",
+				pickupKind: "drop_off",
+			}),
+		).toContain("ready to ship");
+	});
+
+	test("shipped EN: drop-off meetup wording", () => {
+		expect(
+			waCopy.en.status.shipped({
+				...base,
+				deliveryMethod: "self_collect",
+				pickupKind: "drop_off",
+			}),
+		).toContain("see you at the drop-off point");
+		expect(
+			waCopy.en.status.shipped({ ...base, deliveryMethod: "self_collect" }),
+		).toContain("ready for pickup");
+	});
+
+	test("confirm EN: drop-off orders promise the drop-off point, not pickup", () => {
+		expect(
+			waCopy.en.confirm({
+				...base,
+				deliveryMethod: "self_collect",
+				pickupKind: "drop_off",
+			}),
+		).toContain("ready at the drop-off point");
+	});
+
+	test("packed/shipped MS: penyerahan wording for drop-off", () => {
+		expect(
+			waCopy.ms.status.packed({
+				...base,
+				deliveryMethod: "self_collect",
+				pickupKind: "drop_off",
+			}),
+		).toContain("lokasi penyerahan");
+		expect(
+			waCopy.ms.status.shipped({
+				...base,
+				deliveryMethod: "self_collect",
+				pickupKind: "drop_off",
+			}),
+		).toContain("jumpa di lokasi penyerahan");
+		// Default self-collect MS copy unchanged.
+		expect(
+			waCopy.ms.status.packed({ ...base, deliveryMethod: "self_collect" }),
+		).toContain("sedia untuk diambil");
+	});
+});
+
+describe("renderStageUpdate carrier link", () => {
+	test("includes the carrier tracking line when provided", () => {
+		const out = renderStageUpdate("en", {
+			shortId: "ORD-TEST",
+			stageLabel: "On the lorry",
+			trackingUrl: "https://kedaipal.com/track/tok",
+			carrierTrackingUrl: "https://track.example/123",
+		});
+		expect(out).toContain("Track shipment: https://track.example/123");
+		expect(out).toContain("Track your order: https://kedaipal.com/track/tok");
+	});
+
+	test("omits the carrier line when absent (existing shape unchanged)", () => {
+		const out = renderStageUpdate("ms", {
+			shortId: "ORD-TEST",
+			stageLabel: "Siap",
+		});
+		expect(out).not.toContain("Jejak penghantaran");
+		expect(out).toContain("Kemaskini pesanan ORD-TEST: Siap.");
+	});
+});
+
+describe("hasTemplateOverride", () => {
+	test("true only for a non-empty authored override", () => {
+		expect(
+			hasTemplateOverride({ en: { packed: "Custom" } }, "en", "packed"),
+		).toBe(true);
+		expect(
+			hasTemplateOverride({ en: { packed: "   " } }, "en", "packed"),
+		).toBe(false);
+		expect(hasTemplateOverride({ en: {} }, "en", "packed")).toBe(false);
+		expect(hasTemplateOverride(undefined, "en", "packed")).toBe(false);
+		// Locale-scoped: an EN override is not an MS override.
+		expect(
+			hasTemplateOverride({ en: { packed: "Custom" } }, "ms", "packed"),
+		).toBe(false);
+	});
+});
+
+describe("paymentReminder system message", () => {
+	test("EN includes store, amount, and the I've-paid CTA link", () => {
+		const out = renderSystemMessage("en", "paymentReminder", {
+			shortId: "ORD-TEST",
+			storeName: "Bearcamp",
+			amount: "MYR 120.00",
+			trackingUrl: "https://kedaipal.com/track/tok",
+			contactPhone: "60166210242",
+		});
+		expect(out).toContain("Friendly reminder from Bearcamp");
+		expect(out).toContain("ORD-TEST (MYR 120.00)");
+		expect(out).toContain("still awaiting payment");
+		expect(out).toContain("https://kedaipal.com/track/tok");
+		expect(out).toContain("wa.me/60166210242");
+	});
+
+	test("MS renders the localized nudge", () => {
+		const out = renderSystemMessage("ms", "paymentReminder", {
+			shortId: "ORD-TEST",
+			storeName: "Bearcamp",
+		});
+		expect(out).toContain("Peringatan mesra daripada Bearcamp");
+		expect(out).toContain("masih menunggu pembayaran");
 	});
 });

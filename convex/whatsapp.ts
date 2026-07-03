@@ -25,6 +25,7 @@ import {
 } from "./lib/orderStatus";
 import { assertValidWaPhone } from "./lib/slug";
 import {
+	hasTemplateOverride,
 	paymentQrCaption,
 	pickLocale,
 	renderMessage,
@@ -35,6 +36,7 @@ import {
 	type DeliveryMethod,
 	type Locale,
 	type MessageTemplates,
+	type PickupKind,
 	type PickupSnapshot,
 } from "./lib/whatsappCopy";
 import { classifyInbound } from "./lib/inboundIntent";
@@ -186,6 +188,12 @@ export const getOrderWithRetailer = internalQuery({
 		retailerSlug: string;
 		carrierTrackingUrl: string | undefined;
 		deliveryMethod: DeliveryMethod;
+		// The order's frozen pickup kind — drives "pickup" vs "drop-off point"
+		// wording in status copy. Undefined for delivery orders + legacy snapshots.
+		pickupKind: PickupKind | undefined;
+		paymentStatus: Doc<"orders">["paymentStatus"];
+		total: number;
+		currency: string;
 		locale: Locale;
 		messageTemplates: MessageTemplates | undefined;
 		// Phase 2: stage config + this order's current stage, for stage-update
@@ -209,6 +217,11 @@ export const getOrderWithRetailer = internalQuery({
 			retailerSlug: retailer.slug,
 			carrierTrackingUrl: order.carrierTrackingUrl,
 			deliveryMethod: (order.deliveryMethod as DeliveryMethod | undefined) ?? "delivery",
+			pickupKind: (order.pickupSnapshot as PickupSnapshot | undefined)
+				?.locationType,
+			paymentStatus: order.paymentStatus,
+			total: order.total,
+			currency: order.currency,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
 			messageTemplates: retailer.messageTemplates as
 				| MessageTemplates
@@ -526,7 +539,14 @@ export const handleInbound = internalAction({
 				meta?.messageTemplates,
 				locale,
 				"confirm",
-				{ shortId, storeName, contactPhone, trackingUrl, deliveryMethod: meta?.deliveryMethod ?? "delivery" },
+				{
+					shortId,
+					storeName,
+					contactPhone,
+					trackingUrl,
+					deliveryMethod: meta?.deliveryMethod ?? "delivery",
+					pickupKind: meta?.pickupSnapshot?.locationType,
+				},
 			);
 			await sendPaymentMessage(sellerWa, fromPhone, {
 				introBody: confirmBody,
@@ -570,8 +590,12 @@ export const notifyStatusChange = internalAction({
 			retailerSlug: string;
 			carrierTrackingUrl: string | undefined;
 			deliveryMethod: DeliveryMethod;
+			pickupKind: PickupKind | undefined;
 			locale: Locale;
 			messageTemplates: MessageTemplates | undefined;
+			orderStages: OrderStage[] | undefined;
+			statusLabels: StatusLabels | undefined;
+			currentStageId: string | undefined;
 		};
 		let meta: Meta | null = null;
 		try {
@@ -584,7 +608,8 @@ export const notifyStatusChange = internalAction({
 		}
 		if (!meta) return;
 		if (!meta.customerWaPhone) return;
-		if (meta.status === "pending" || meta.status === "confirmed") return;
+		const status = meta.status;
+		if (status === "pending" || status === "confirmed") return;
 
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
 		const trackingToken =
@@ -593,14 +618,55 @@ export const notifyStatusChange = internalAction({
 		if (!trackingToken) return; // order vanished — don't ship a dead link
 		const trackingUrl = `${appUrl}/track/${trackingToken}`;
 		const locale = pickLocale(meta.locale);
-		const body = renderMessage(meta.messageTemplates, locale, meta.status, {
-			shortId: meta.shortId,
-			storeName: meta.storeName,
-			contactPhone: meta.retailerWaPhone,
-			trackingUrl,
-			carrierTrackingUrl: meta.carrierTrackingUrl,
-			deliveryMethod: meta.deliveryMethod,
-		});
+
+		// A seller who configured custom stages expects THEIR vocabulary in the
+		// buyer message — "Ready for Collection" + its description, not the generic
+		// "packed and ready for pickup" (86ey570am). Precedence: an explicitly
+		// authored messageTemplates override still wins, then the custom stage's
+		// label/description, then the default catalog. Cancellation is never a
+		// stage (system-managed) and sellers on default stages keep the rich copy.
+		let stageBody: string | null = null;
+		if (
+			status !== "cancelled" &&
+			meta.orderStages &&
+			meta.orderStages.length > 0 &&
+			!hasTemplateOverride(meta.messageTemplates, locale, status)
+		) {
+			const stages = resolveStages({
+				orderStages: meta.orderStages,
+				labels: meta.statusLabels,
+				deliveryMethod: meta.deliveryMethod,
+			});
+			// Prefer the order's actual stage (advanceToStage sets it); fall back to
+			// the first stage on this anchor for plain updateStatus transitions.
+			const stage =
+				stages.find(
+					(s) => s.id === meta?.currentStageId && s.anchor === status,
+				) ?? stages.find((s) => s.anchor === status);
+			if (stage) {
+				stageBody = renderStageUpdate(locale, {
+					shortId: meta.shortId,
+					stageLabel: stageLabel(stage, locale),
+					stageDescription: stageDescription(stage, locale),
+					trackingUrl,
+					carrierTrackingUrl:
+						status === "shipped" ? meta.carrierTrackingUrl : undefined,
+					contactPhone: meta.retailerWaPhone,
+				});
+			}
+		}
+
+		const body =
+			stageBody ??
+			renderMessage(meta.messageTemplates, locale, status, {
+				shortId: meta.shortId,
+				storeName: meta.storeName,
+				contactPhone: meta.retailerWaPhone,
+				trackingUrl,
+				carrierTrackingUrl: meta.carrierTrackingUrl,
+				deliveryMethod: meta.deliveryMethod,
+				pickupKind: meta.pickupKind,
+			});
 		try {
 			await makeGuardedSender(ctx, meta.retailerId, "transactional").send(meta.customerWaPhone, {
 				kind: "text",
@@ -653,6 +719,8 @@ export const notifyStageEntry = internalAction({
 			stageLabel: stageLabel(stage, locale),
 			stageDescription: stageDescription(stage, locale),
 			trackingUrl: `${appUrl}/track/${trackingToken}`,
+			carrierTrackingUrl:
+				stage.anchor === "shipped" ? meta.carrierTrackingUrl : undefined,
 			contactPhone: meta.retailerWaPhone,
 		});
 		try {
@@ -662,6 +730,57 @@ export const notifyStageEntry = internalAction({
 			});
 		} catch (err) {
 			console.error("WA stage-update notify failed", err);
+		}
+	},
+});
+
+/**
+ * Scheduled by paymentReminders.sendDuePaymentReminders (daily cron). Sends the
+ * one-time "still awaiting payment" nudge 3 days before the 14-day open-payment
+ * window closes — see docs/payment-reminder.md. Re-checks payment/status at
+ * send time (the stamp is written at schedule time, so a buyer who paid in the
+ * gap is never nagged). Sent as a gated `session_message` — the kill switch,
+ * per-seller caps, and opt-outs all apply (a nudge is exactly what WABA
+ * protection exists to govern, unlike transactional status updates).
+ */
+export const notifyPaymentReminder = internalAction({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<void> => {
+		const meta = await ctx
+			.runQuery(internal.whatsapp.getOrderWithRetailer, { orderId })
+			.catch((err) => {
+				console.error("WA payment-reminder lookup failed", err);
+				return null;
+			});
+		if (!meta) return;
+		if (!meta.customerWaPhone) return;
+		// Order left the "open + unpaid" state between the cron stamp and this run.
+		// `delivered` does NOT close this out — F&B sellers routinely deliver on
+		// credit and settle at week's end, so goods-arrived ≠ goods-paid-for.
+		if (meta.status === "cancelled") return;
+		if (meta.paymentStatus === "claimed" || meta.paymentStatus === "received")
+			return;
+
+		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
+		const trackingToken =
+			meta.trackingToken ??
+			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
+		if (!trackingToken) return; // order vanished — don't ship a dead link
+		const locale = pickLocale(meta.locale);
+		const body = renderSystemMessage(locale, "paymentReminder", {
+			shortId: meta.shortId,
+			storeName: meta.storeName,
+			amount: `${meta.currency} ${(meta.total / 100).toFixed(2)}`,
+			trackingUrl: `${appUrl}/track/${trackingToken}`,
+			contactPhone: meta.retailerWaPhone,
+		});
+		try {
+			await makeGuardedSender(ctx, meta.retailerId, "session_message").send(
+				meta.customerWaPhone,
+				{ kind: "text", body },
+			);
+		} catch (err) {
+			console.error("WA payment-reminder send failed", err);
 		}
 	},
 });
