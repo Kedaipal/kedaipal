@@ -5,6 +5,15 @@ View (`86expm4xx`). Turns `/app/orders` from a flat list into a working inbox so
 no order sits forgotten. Phase 1 = buckets/search/filters/time-badge/URL state;
 **Phase 2 = bulk multi-select + `bulkUpdateStatus`** (now done).
 
+**Plan gating (Jul 2026):** the inbox is a **Pro+** feature per the pricing
+table. Starter keeps the plain order list (default fulfilment-date sort),
+order detail and single status transitions — the all-tier "Order pipeline" —
+while buckets, search, filters, due-chips, bulk actions and CSV export are
+rejected server-side (`assertPlanFeature` in `searchOrders`/`bulkUpdateStatus`/
+`exportOrders`) and replaced in the UI by an upgrade tease. Admin act-as sees
+the full inbox. See [`manual-subscription.md`](./manual-subscription.md)
+§Plan-feature gating.
+
 ## Decisions (locked with the CTO)
 
 - **Buckets are fulfilment-based**, not a mix of axes: **All / New (pending) /

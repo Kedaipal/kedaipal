@@ -22,7 +22,15 @@ import {
 	query,
 	type QueryCtx,
 } from "./_generated/server";
-import { capsForPlan, type Plan, PLAN_CAPS, TRIAL_DAYS } from "./lib/plans";
+import {
+	capsForPlan,
+	featuresForPlan,
+	type Plan,
+	PLAN_CAPS,
+	type PlanFeature,
+	type PlanFeatures,
+	TRIAL_DAYS,
+} from "./lib/plans";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -41,6 +49,9 @@ export type AccessState = {
 	trialEndsAt?: number;
 	currentPeriodEnd?: number;
 	caps: { orderCap: number; userCap: number; broadcastQuota: number };
+	/** Boolean feature entitlements (CRM, Order Inbox, …) resolved from the plan
+	 * — the only place `plan` is read for gating. See lib/plans.ts. */
+	features: PlanFeatures;
 	/** True when the seller has full dashboard access (not soft-locked). */
 	active: boolean;
 	/** Soft-lock engaged — dashboard growth-writes must be blocked. */
@@ -59,6 +70,7 @@ export function resolveAccess(sub: Doc<"subscriptions"> | null): AccessState {
 			status: "active",
 			comped: true,
 			caps,
+			features: featuresForPlan("pro"),
 			active: true,
 			frozen: false,
 		};
@@ -77,6 +89,7 @@ export function resolveAccess(sub: Doc<"subscriptions"> | null): AccessState {
 			userCap: sub.userCap,
 			broadcastQuota: sub.broadcastQuota,
 		},
+		features: featuresForPlan(sub.plan),
 		active: !frozen,
 		frozen,
 	};
@@ -122,6 +135,34 @@ export async function assertSubscriptionActive(
 	if (access.frozen) {
 		throw new ConvexError(
 			"Your subscription is past due. Pay your invoice to keep editing your store — your storefront and existing orders stay live in the meantime.",
+		);
+	}
+}
+
+/** Human label for the gate error — kept here (not in the pure module) since
+ * it's copy, not catalog. */
+const FEATURE_LABEL: Record<PlanFeature, string> = {
+	crm: "The customer database",
+	orderInbox: "Order Inbox search, filters and bulk actions",
+};
+
+/**
+ * Plan-feature gate for Pro-and-above surfaces (CRM, Order Inbox). Throws a
+ * `ConvexError` when the retailer's plan doesn't include the feature. Callers
+ * that support admin act-as must skip this for `actingAsAdmin` (white-glove
+ * support work on a Starter store), mirroring `assertSubscriptionActive`.
+ * Fail-safe: a missing subscription row resolves to Pro features (see
+ * `resolveAccess`), so a backfill miss can never lock a paying seller out.
+ */
+export async function assertPlanFeature(
+	ctx: AnyCtx,
+	retailerId: Id<"retailers">,
+	feature: PlanFeature,
+): Promise<void> {
+	const access = await getAccess(ctx, retailerId);
+	if (!access.features[feature]) {
+		throw new ConvexError(
+			`${FEATURE_LABEL[feature]} is available on the Pro plan. Upgrade in Settings → Billing to unlock it.`,
 		);
 	}
 }

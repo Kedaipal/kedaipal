@@ -1,6 +1,9 @@
 import { describe, expect, test } from "vitest";
+import { UNLIMITED } from "../../convex/lib/plans";
 import {
+	hasFeature,
 	hasSubscribed,
+	orderCapState,
 	resolveBannerState,
 	type SubscriptionView,
 	shouldNudgePayment,
@@ -142,5 +145,66 @@ describe("resolveBannerState", () => {
 				NOW,
 			),
 		).toEqual({ kind: "trialWarn", daysLeft: 0, ended: true });
+	});
+
+	test("soft order-cap nudge: over/near, ranked below payment deadlines", () => {
+		const caps = { orderCap: 100, userCap: 1, broadcastQuota: 0 };
+		const s = sub({ plan: "starter", status: "active", caps });
+		expect(resolveBannerState(s, undefined, NOW, undefined, 100)).toEqual({
+			kind: "orderCapOver",
+			used: 100,
+			cap: 100,
+		});
+		expect(resolveBannerState(s, undefined, NOW, undefined, 85)).toEqual({
+			kind: "orderCapNear",
+			used: 85,
+			cap: 100,
+		});
+		expect(resolveBannerState(s, undefined, NOW, undefined, 42).kind).toBe(
+			"none",
+		);
+		// A payment deadline outranks the upsell.
+		expect(resolveBannerState(s, NOW + 2 * DAY, NOW, undefined, 200).kind).toBe(
+			"invoiceWarn",
+		);
+	});
+});
+
+describe("orderCapState (soft cap meter)", () => {
+	const caps = { orderCap: 100, userCap: 1, broadcastQuota: 0 };
+
+	test("thresholds: near at 80%, over at 100%", () => {
+		const s = sub({ caps });
+		expect(orderCapState(s, 79).kind).toBe("none");
+		expect(orderCapState(s, 80).kind).toBe("near");
+		expect(orderCapState(s, 99).kind).toBe("near");
+		expect(orderCapState(s, 100).kind).toBe("over");
+	});
+
+	test("comped, unlimited-cap, or unknown usage never nudge", () => {
+		expect(orderCapState(sub({ caps, comped: true }), 500).kind).toBe("none");
+		expect(
+			orderCapState(sub({ caps: { ...caps, orderCap: UNLIMITED } }), 5000).kind,
+		).toBe("none");
+		expect(orderCapState(sub({ caps }), undefined).kind).toBe("none");
+		expect(orderCapState(undefined, 500).kind).toBe("none");
+	});
+});
+
+describe("hasFeature (client plan gate)", () => {
+	test("reads the resolved features off the subscription", () => {
+		const starter = sub({
+			plan: "starter",
+			features: { crm: false, orderInbox: false },
+		});
+		expect(hasFeature(starter, "crm")).toBe(false);
+		expect(hasFeature(starter, "orderInbox")).toBe(false);
+		const pro = sub({ features: { crm: true, orderInbox: true } });
+		expect(hasFeature(pro, "crm")).toBe(true);
+	});
+
+	test("fails open when the subscription/features are missing (loading, comped)", () => {
+		expect(hasFeature(undefined, "crm")).toBe(true);
+		expect(hasFeature(sub({}), "crm")).toBe(true);
 	});
 });

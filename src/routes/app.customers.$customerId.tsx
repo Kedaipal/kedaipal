@@ -1,8 +1,9 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, Users } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { ProFeatureWall } from "../components/app/pro-gate";
 import { CustomerDetail } from "../components/dashboard/customer-detail";
 import {
 	PageHeader,
@@ -11,6 +12,7 @@ import {
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { getDisplayName } from "../lib/customer";
+import { hasFeature } from "../lib/subscription";
 
 export const Route = createFileRoute("/app/customers/$customerId")({
 	component: CustomerDetailRoute,
@@ -20,11 +22,38 @@ function CustomerDetailRoute() {
 	const { customerId } = Route.useParams();
 	const id = customerId as Id<"customers">;
 	const retailer = useDashboardRetailer();
-	const customer = useQuery(api.customers.get, { customerId: id });
-	const orders = useQuery(api.customers.ordersByCustomer, {
-		customerId: id,
-		paginationOpts: { numItems: 50, cursor: null },
-	});
+	// Plan gate (Pro+) — mirrors the list route; queries skipped while locked so
+	// the server gate (assertPlanFeature) is never tripped in normal use.
+	const crmLocked =
+		!!retailer &&
+		!retailer.actingAsAdmin &&
+		!hasFeature(retailer.subscription, "crm");
+	// Held while the retailer payload is loading too — the plan isn't known yet,
+	// and firing the query for a Starter seller would hit the server gate.
+	const customer = useQuery(
+		api.customers.get,
+		!retailer || crmLocked ? "skip" : { customerId: id },
+	);
+	const orders = useQuery(
+		api.customers.ordersByCustomer,
+		!retailer || crmLocked
+			? "skip"
+			: { customerId: id, paginationOpts: { numItems: 50, cursor: null } },
+	);
+
+	if (crmLocked && retailer) {
+		return (
+			<div className="flex flex-col gap-5 lg:gap-6">
+				<PageHeader title="Customers" subtitle="Available on Pro" />
+				<ProFeatureWall
+					slug={retailer.slug}
+					icon={<Users className="size-5 text-muted-foreground" />}
+					title="Customer profiles are a Pro feature"
+					blurb="Upgrade to see this customer's order history, lifetime value and your private notes."
+				/>
+			</div>
+		);
+	}
 
 	if (customer === undefined) {
 		return <CustomerDetailSkeleton />;

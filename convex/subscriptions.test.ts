@@ -67,6 +67,22 @@ describe("resolveAccess (pure)", () => {
 		const a = resolveAccess(sub({ orderCap: 100, userCap: 1, broadcastQuota: 0 }));
 		expect(a.caps).toEqual({ orderCap: 100, userCap: 1, broadcastQuota: 0 });
 	});
+
+	test("resolves plan features — Starter locked out of CRM + Order Inbox", () => {
+		expect(resolveAccess(sub({ plan: "starter" })).features).toEqual({
+			crm: false,
+			orderInbox: false,
+		});
+		expect(resolveAccess(sub({ plan: "pro" })).features).toEqual({
+			crm: true,
+			orderInbox: true,
+		});
+		// Fail safe: a missing row gets Pro features, never a lockout.
+		expect(resolveAccess(null).features).toEqual({
+			crm: true,
+			orderInbox: true,
+		});
+	});
 });
 
 describe("subscriptions — signup wiring", () => {

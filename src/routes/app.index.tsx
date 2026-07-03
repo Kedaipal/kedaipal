@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { api } from "../../convex/_generated/api";
+import { ProBadge } from "../components/app/pro-gate";
 import { FirstOrderCelebration } from "../components/dashboard/first-order-celebration";
 import { GreetingChecklistRow } from "../components/dashboard/greeting-checklist-row";
 import {
@@ -44,7 +45,7 @@ import {
 	type StatusLabels,
 	stageLabel,
 } from "../lib/orderStatus";
-import { hasSubscribed, trialDaysLeft } from "../lib/subscription";
+import { hasFeature, hasSubscribed, trialDaysLeft } from "../lib/subscription";
 
 export const Route = createFileRoute("/app/")({
 	component: DashboardHome,
@@ -135,9 +136,15 @@ function DashboardHome() {
 		api.pickupLocations.hasAnyActive,
 		retailer ? { retailerId: retailer._id } : "skip",
 	);
+	// CRM is plan-gated (Pro+) — skip the count for Starter (the server would
+	// reject it) and render the tile in its locked state instead.
+	const crmEnabled =
+		!retailer ||
+		retailer.actingAsAdmin === true ||
+		hasFeature(retailer.subscription, "crm");
 	const customerCount = useQuery(
 		api.customers.count,
-		retailer ? { retailerId: retailer._id } : "skip",
+		retailer && crmEnabled ? { retailerId: retailer._id } : "skip",
 	);
 	const recentOrdersPage = useQuery(
 		api.orders.listByRetailer,
@@ -634,14 +641,40 @@ function DashboardHome() {
 						}
 						loading={productsLoading}
 					/>
-					<StatTile
-						to="/app/customers"
-						icon={Users}
-						label="Customers"
-						value={customerCount ?? 0}
-						sub="Total"
-						loading={customerCount === undefined}
-					/>
+					{crmEnabled ? (
+						<StatTile
+							to="/app/customers"
+							icon={Users}
+							label="Customers"
+							value={customerCount ?? 0}
+							sub="Total"
+							loading={customerCount === undefined}
+						/>
+					) : (
+						// Locked tile (CRM is Pro+) — keeps the feature discoverable;
+						// tapping lands on the upgrade wall, which explains + links to
+						// billing. Mirrors StatTile's layout so the grid stays coherent.
+						<Link
+							to="/app/customers"
+							className="flex flex-col gap-3 rounded-2xl border border-dashed border-border bg-card p-4 transition-colors hover:border-accent/40 lg:flex-row lg:items-center lg:gap-4 lg:p-5"
+						>
+							<div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground lg:h-11 lg:w-11">
+								<Users className="size-4 lg:size-5" />
+							</div>
+							<div className="min-w-0 lg:flex lg:flex-col-reverse lg:gap-0.5">
+								<p className="text-2xl font-bold leading-none text-muted-foreground/40 lg:text-4xl">
+									—
+								</p>
+								<p className="mt-1 flex items-center gap-1.5 text-xs font-medium text-foreground lg:mt-0">
+									Customers
+									<ProBadge />
+								</p>
+								<p className="truncate text-[11px] text-muted-foreground lg:hidden">
+									Upgrade to unlock
+								</p>
+							</div>
+						</Link>
+					)}
 				</section>
 			) : null}
 

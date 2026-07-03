@@ -23,6 +23,7 @@ import {
 	isOrderPaymentMethod,
 	type OrderPaymentMethod,
 } from "../../convex/lib/paymentMethod";
+import { ProFeatureTease } from "../components/app/pro-gate";
 import { FulfilmentDateBadge } from "../components/dashboard/fulfilment-date-badge";
 import {
 	type BulkAction,
@@ -50,6 +51,7 @@ import {
 	type StatusLabels,
 	stageLabel,
 } from "../lib/orderStatus";
+import { hasFeature } from "../lib/subscription";
 import { cn } from "../lib/utils";
 
 type InboxBucket = OrderBucket | "all";
@@ -188,22 +190,34 @@ function OrdersRoute() {
 		setSelected(new Set());
 	}, [bucket, debounced, payKey, methodKey, munspec, from, to, mockup, fwin]);
 
+	// Order Inbox plan gate (Pro+). Starter keeps the plain list + order detail
+	// + status updates (the all-tier "Order pipeline"); buckets/search/filters/
+	// bulk/export are the gated inbox surfaces — hidden below, and any stale URL
+	// filters are ignored so the query only ever sends default args (the server
+	// enforces the same line in searchOrders). Admin act-as sees through it.
+	const inboxEnabled =
+		!retailer ||
+		retailer.actingAsAdmin === true ||
+		hasFeature(retailer.subscription, "orderInbox");
+
 	const result = useQuery(
 		api.orders.searchOrders,
 		retailer
-			? {
-					retailerId: retailer._id,
-					bucket,
-					paymentStatuses: pay.length > 0 ? pay : undefined,
-					paymentMethods: method.length > 0 ? method : undefined,
-					methodUnspecified: munspec || undefined,
-					dateFrom: from,
-					dateTo: to,
-					mockupPending: mockup || undefined,
-					fulfilmentWindow: fwin,
-					searchText: debounced || undefined,
-					limit,
-				}
+			? inboxEnabled
+				? {
+						retailerId: retailer._id,
+						bucket,
+						paymentStatuses: pay.length > 0 ? pay : undefined,
+						paymentMethods: method.length > 0 ? method : undefined,
+						methodUnspecified: munspec || undefined,
+						dateFrom: from,
+						dateTo: to,
+						mockupPending: mockup || undefined,
+						fulfilmentWindow: fwin,
+						searchText: debounced || undefined,
+						limit,
+					}
+				: { retailerId: retailer._id, bucket: "all", limit }
 			: "skip",
 	);
 	const countsRef = useRef<NonNullable<typeof result>["counts"] | null>(null);
@@ -232,15 +246,16 @@ function OrdersRoute() {
 		? counts.new + counts.in_progress + counts.completed + counts.cancelled
 		: undefined;
 	const now = Date.now();
-	const searching = debounced.length > 0;
+	const searching = inboxEnabled && debounced.length > 0;
 	const filtersActive =
-		pay.length > 0 ||
-		method.length > 0 ||
-		munspec ||
-		from != null ||
-		to != null ||
-		mockup ||
-		fwin != null;
+		inboxEnabled &&
+		(pay.length > 0 ||
+			method.length > 0 ||
+			munspec ||
+			from != null ||
+			to != null ||
+			mockup ||
+			fwin != null);
 
 	function setBucket(next: InboxBucket) {
 		navigate({
@@ -395,6 +410,32 @@ function OrdersRoute() {
 					loading ? "Loading…" : `${total} order${total === 1 ? "" : "s"}`
 				}
 				actions={
+					inboxEnabled ? (
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							onClick={handleExport}
+							disabled={exporting}
+						>
+							{exporting ? (
+								<Loader2 className="size-4 animate-spin" />
+							) : (
+								<Download className="size-4" />
+							)}
+							{selected.size > 0 ? `Export ${selected.size}` : "Export CSV"}
+						</Button>
+					) : undefined
+				}
+			/>
+			<div className="flex items-center justify-between lg:hidden">
+				<div>
+					<h2 className="text-xl font-bold">Orders</h2>
+					<p className="text-sm text-muted-foreground">
+						{loading ? "Loading…" : `${total} total`}
+					</p>
+				</div>
+				{inboxEnabled ? (
 					<Button
 						type="button"
 						variant="outline"
@@ -409,143 +450,131 @@ function OrdersRoute() {
 						)}
 						{selected.size > 0 ? `Export ${selected.size}` : "Export CSV"}
 					</Button>
-				}
-			/>
-			<div className="flex items-center justify-between lg:hidden">
-				<div>
-					<h2 className="text-xl font-bold">Orders</h2>
-					<p className="text-sm text-muted-foreground">
-						{loading ? "Loading…" : `${total} total`}
-					</p>
-				</div>
-				<Button
-					type="button"
-					variant="outline"
-					size="sm"
-					onClick={handleExport}
-					disabled={exporting}
-				>
-					{exporting ? (
-						<Loader2 className="size-4 animate-spin" />
-					) : (
-						<Download className="size-4" />
-					)}
-					{selected.size > 0 ? `Export ${selected.size}` : "Export CSV"}
-				</Button>
+				) : null}
 			</div>
 
-			<OrderInboxOverview
-				counts={counts}
-				allCount={allCount}
-				loading={loading}
-			/>
+			{/* Starter: the inbox controls are a Pro feature — say so where they'd
+			    be, instead of leaving a silent gap. The order list below still works. */}
+			{!inboxEnabled ? (
+				<ProFeatureTease message="Buckets, search, filters, bulk actions and CSV export are on Pro — find any order in seconds." />
+			) : null}
 
-			<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-3 shadow-sm lg:p-4">
-				<div className="grid gap-3 lg:grid-cols-[minmax(18rem,1fr)_auto] lg:items-center">
-					<div className="relative">
-						<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-						<Input
-							value={searchInput}
-							onChange={(e) => setSearchInput(e.target.value)}
-							placeholder="Search order #, name, phone or item"
-							className="h-11 rounded-xl pl-9 pr-9"
-							inputMode="search"
+			{inboxEnabled ? (
+				<OrderInboxOverview
+					counts={counts}
+					allCount={allCount}
+					loading={loading}
+				/>
+			) : null}
+
+			{inboxEnabled ? (
+				<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-3 shadow-sm lg:p-4">
+					<div className="grid gap-3 lg:grid-cols-[minmax(18rem,1fr)_auto] lg:items-center">
+						<div className="relative">
+							<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+							<Input
+								value={searchInput}
+								onChange={(e) => setSearchInput(e.target.value)}
+								placeholder="Search order #, name, phone or item"
+								className="h-11 rounded-xl pl-9 pr-9"
+								inputMode="search"
+							/>
+							{searchInput ? (
+								<button
+									type="button"
+									onClick={() => setSearchInput("")}
+									className="absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+									aria-label="Clear search"
+								>
+									<X className="size-4" />
+								</button>
+							) : null}
+						</div>
+
+						<OrderFilters
+							value={{
+								payment: pay,
+								method,
+								methodUnspecified: munspec,
+								from,
+								to,
+								mockup,
+							}}
+							onChange={setFilters}
+							mockupCount={counts?.mockupPending}
 						/>
-						{searchInput ? (
-							<button
-								type="button"
-								onClick={() => setSearchInput("")}
-								className="absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
-								aria-label="Clear search"
-							>
-								<X className="size-4" />
-							</button>
-						) : null}
 					</div>
 
-					<OrderFilters
-						value={{
-							payment: pay,
-							method,
-							methodUnspecified: munspec,
-							from,
-							to,
-							mockup,
-						}}
-						onChange={setFilters}
-						mockupCount={counts?.mockupPending}
-					/>
-				</div>
+					<div className="-mx-3 flex gap-2 overflow-x-auto px-3 pb-1 [scrollbar-width:none] lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0 [&::-webkit-scrollbar]:hidden">
+						{BUCKET_KEYS.map((key) => {
+							const label =
+								key === "all"
+									? "All"
+									: (INBOX_BUCKETS.find((b) => b.key === key)?.label ?? key);
+							const count = bucketCount(key);
+							const active = bucket === key;
+							return (
+								<button
+									key={key}
+									type="button"
+									onClick={() => setBucket(key)}
+									className={cn(
+										"flex h-10 shrink-0 items-center gap-1.5 rounded-xl border px-3.5 text-sm font-medium transition-colors",
+										active
+											? "border-accent bg-accent text-accent-foreground"
+											: "border-border bg-background text-muted-foreground hover:border-accent/40 hover:text-foreground",
+									)}
+								>
+									{label}
+									{count ? (
+										<span
+											className={cn(
+												"flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none",
+												active
+													? "bg-white/25 text-accent-foreground"
+													: key === "new"
+														? "bg-orange-500 text-white"
+														: "bg-muted text-muted-foreground",
+											)}
+										>
+											{count > 99 ? "99+" : count}
+										</span>
+									) : null}
+								</button>
+							);
+						})}
+					</div>
 
-				<div className="-mx-3 flex gap-2 overflow-x-auto px-3 pb-1 [scrollbar-width:none] lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0 [&::-webkit-scrollbar]:hidden">
-					{BUCKET_KEYS.map((key) => {
-						const label =
-							key === "all"
-								? "All"
-								: (INBOX_BUCKETS.find((b) => b.key === key)?.label ?? key);
-						const count = bucketCount(key);
-						const active = bucket === key;
-						return (
-							<button
-								key={key}
-								type="button"
-								onClick={() => setBucket(key)}
-								className={cn(
-									"flex h-10 shrink-0 items-center gap-1.5 rounded-xl border px-3.5 text-sm font-medium transition-colors",
-									active
-										? "border-accent bg-accent text-accent-foreground"
-										: "border-border bg-background text-muted-foreground hover:border-accent/40 hover:text-foreground",
-								)}
-							>
-								{label}
-								{count ? (
-									<span
-										className={cn(
-											"flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none",
-											active
-												? "bg-white/25 text-accent-foreground"
-												: key === "new"
-													? "bg-orange-500 text-white"
-													: "bg-muted text-muted-foreground",
-										)}
-									>
-										{count > 99 ? "99+" : count}
-									</span>
-								) : null}
-							</button>
-						);
-					})}
-				</div>
-
-				{/* Fulfilment-date urgency chips — a primary axis for F&B sellers
+					{/* Fulfilment-date urgency chips — a primary axis for F&B sellers
 				    ("what's due today?"), so they sit inline above the advanced
 				    filters, not buried in the filter sheet. */}
-				<div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
-					<span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
-						Due
-					</span>
-					{FULFILMENT_WINDOWS.map((w) => {
-						const active = fwin === w.value;
-						return (
-							<button
-								key={w.value}
-								type="button"
-								aria-pressed={active}
-								onClick={() => setFwin(w.value)}
-								className={cn(
-									"inline-flex h-10 items-center gap-1.5 rounded-xl border px-3.5 text-sm font-medium transition-colors",
-									active
-										? "border-accent bg-accent text-accent-foreground"
-										: "border-border bg-background text-muted-foreground hover:border-accent/40 hover:text-foreground",
-								)}
-							>
-								<CalendarDays className="size-3.5" aria-hidden="true" />
-								{w.label}
-							</button>
-						);
-					})}
-				</div>
-			</section>
+					<div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
+						<span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+							Due
+						</span>
+						{FULFILMENT_WINDOWS.map((w) => {
+							const active = fwin === w.value;
+							return (
+								<button
+									key={w.value}
+									type="button"
+									aria-pressed={active}
+									onClick={() => setFwin(w.value)}
+									className={cn(
+										"inline-flex h-10 items-center gap-1.5 rounded-xl border px-3.5 text-sm font-medium transition-colors",
+										active
+											? "border-accent bg-accent text-accent-foreground"
+											: "border-border bg-background text-muted-foreground hover:border-accent/40 hover:text-foreground",
+									)}
+								>
+									<CalendarDays className="size-3.5" aria-hidden="true" />
+									{w.label}
+								</button>
+							);
+						})}
+					</div>
+				</section>
+			) : null}
 
 			{/* Selection toolbar — appears once at least one order is ticked. */}
 			{selected.size > 0 ? (
@@ -648,20 +677,23 @@ function OrdersRoute() {
 												: "border-border hover:border-ring hover:shadow-sm",
 										)}
 									>
-										<button
-											type="button"
-											aria-pressed={isSel}
-											aria-label={`Select order ${o.shortId}`}
-											onClick={() => toggleSelect(o._id)}
-											className={cn(
-												"flex size-5 shrink-0 items-center justify-center rounded-md border transition-colors",
-												isSel
-													? "border-accent bg-accent text-accent-foreground"
-													: "border-border bg-background hover:border-accent",
-											)}
-										>
-											{isSel ? <Check className="size-3.5" /> : null}
-										</button>
+										{/* Multi-select is a bulk-action (inbox) surface — Pro+. */}
+										{inboxEnabled ? (
+											<button
+												type="button"
+												aria-pressed={isSel}
+												aria-label={`Select order ${o.shortId}`}
+												onClick={() => toggleSelect(o._id)}
+												className={cn(
+													"flex size-5 shrink-0 items-center justify-center rounded-md border transition-colors",
+													isSel
+														? "border-accent bg-accent text-accent-foreground"
+														: "border-border bg-background hover:border-accent",
+												)}
+											>
+												{isSel ? <Check className="size-3.5" /> : null}
+											</button>
+										) : null}
 										<Link
 											to="/app/orders/$shortId"
 											params={{ shortId: o.shortId }}

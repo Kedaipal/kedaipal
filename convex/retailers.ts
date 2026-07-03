@@ -173,6 +173,7 @@ import {
 	loadSubscription,
 	resolveAccess,
 } from "./subscriptions";
+import { ordersThisMonth } from "./subscriptionUsage";
 import {
 	assertSupportedCurrency,
 	DEFAULT_CURRENCY,
@@ -388,6 +389,10 @@ type RetailerPublic = {
 	// never leaks to shoppers. Fail-safe: a retailer missing a subscription row
 	// resolves to comped full access (see resolveAccess). See docs/manual-subscription.md.
 	subscription?: AccessState;
+	// Orders counted this MYT calendar month — the meter behind the SOFT
+	// orderCap nudge ("X of 100 plan orders used"). OWNER-only, like
+	// `subscription`. See convex/subscriptionUsage.ts.
+	ordersThisMonth?: number;
 	// Denormalized Founding Member flags (badge / ribbon) — public-safe.
 	isFoundingMember?: boolean;
 	foundingMemberRank?: number;
@@ -448,6 +453,7 @@ async function buildRetailerPublic(
 		.query("retailerSendingLimits")
 		.withIndex("by_retailer", (q) => q.eq("retailerId", row._id))
 		.first();
+	const usedOrders = await ordersThisMonth(ctx, row._id);
 	return {
 		_id: row._id,
 		slug: row.slug,
@@ -474,6 +480,7 @@ async function buildRetailerPublic(
 		activatedAt: row.activatedAt,
 		linkSharedAt: row.linkSharedAt,
 		subscription: resolveAccess(sub),
+		ordersThisMonth: usedOrders,
 		isFoundingMember: row.isFoundingMember,
 		foundingMemberRank: row.foundingMemberRank,
 		sendingPaused: !!sendingLimits?.pausedAt,
@@ -1243,6 +1250,11 @@ export const renameSlug = mutation({
 			retailer = own;
 			access = { retailer: own, actingAsAdmin: false, userId };
 		}
+		// Soft-lock: a past_due seller can't rename their public URL (growth-write,
+		// same class as updateSettings). Admin act-as bypasses — white-glove
+		// happens before the seller has paid. See docs/manual-subscription.md.
+		if (!access.actingAsAdmin)
+			await assertSubscriptionActive(ctx, retailer._id);
 
 		if (retailer.slug === slug) return { slug }; // no-op
 

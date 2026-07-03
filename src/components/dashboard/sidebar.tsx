@@ -19,7 +19,9 @@ import type { MouseEventHandler, ReactNode } from "react";
 import type { api } from "../../../convex/_generated/api";
 import { useActAs } from "../../hooks/useActAs";
 import { useSidebarCollapsed } from "../../hooks/useSidebarCollapsed";
+import { hasFeature } from "../../lib/subscription";
 import { cn } from "../../lib/utils";
+import { ProBadge } from "../app/pro-gate";
 import { TierPill } from "./tier-pill";
 
 type Retailer = NonNullable<
@@ -131,6 +133,12 @@ export function Sidebar({ retailer, actionableCount, isAdmin }: SidebarProps) {
 							icon={Users}
 							label="Customers"
 							collapsed={collapsed}
+							// CRM is Pro+ — mark it in nav so the gate is never a surprise
+							// (the route shows the upgrade wall). Act-as admins see through.
+							pro={
+								!retailer.actingAsAdmin &&
+								!hasFeature(retailer.subscription, "crm")
+							}
 						/>
 						<SidebarLink
 							to="/app/settings"
@@ -236,6 +244,8 @@ interface SidebarLinkProps {
 	badge?: number;
 	search?: LinkProps["search"];
 	onClick?: MouseEventHandler<HTMLAnchorElement>;
+	/** Feature is plan-locked for this seller — show the "Pro" chip. */
+	pro?: boolean;
 }
 
 function SidebarLink({
@@ -247,6 +257,7 @@ function SidebarLink({
 	badge,
 	search,
 	onClick,
+	pro,
 }: SidebarLinkProps) {
 	const showBadge = typeof badge === "number" && badge > 0;
 
@@ -292,6 +303,7 @@ function SidebarLink({
 					{!collapsed ? (
 						<>
 							<span className="flex-1">{label}</span>
+							{pro ? <ProBadge /> : null}
 							{showBadge ? <BadgePill count={badge} /> : null}
 						</>
 					) : null}

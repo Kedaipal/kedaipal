@@ -387,6 +387,32 @@ describe("counterCheckout — createOrderFromSession", () => {
 		expect(customers.page[0].totalSpent).toBe(3000);
 	});
 
+	test("counter orders meter the monthly subscriptionUsage counter (soft cap)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id);
+		const sessionId = await boundSession(t, retailer._id);
+
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				paidInPerson: true,
+			});
+
+		const total = await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("subscriptionUsage")
+				.withIndex("by_retailer_month", (q) =>
+					q.eq("retailerId", retailer._id),
+				)
+				.collect();
+			return rows.reduce((sum, r) => sum + r.orders, 0);
+		});
+		expect(total).toBe(1);
+	});
+
 	test("pay-later leaves the order unpaid", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);

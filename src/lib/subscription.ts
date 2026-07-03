@@ -1,6 +1,8 @@
 // Pure helpers for rendering subscription state in the dashboard chrome (tier
-// pill, banner). Mirrors the server `AccessState` shape carried on
-// `getMyRetailer().subscription`. See docs/manual-subscription.md.
+// pill, banner, plan-feature gates). Mirrors the server `AccessState` shape
+// carried on `getMyRetailer().subscription`. See docs/manual-subscription.md.
+
+import { isUnlimited, type PlanFeature } from "../../convex/lib/plans";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -9,7 +11,23 @@ export type SubscriptionView = {
 	status: "trialing" | "active" | "past_due" | "cancelled";
 	comped?: boolean;
 	trialEndsAt?: number;
+	caps?: { orderCap: number; userCap: number; broadcastQuota: number };
+	features?: Record<PlanFeature, boolean>;
 };
+
+/**
+ * Client-side mirror of the server plan-feature gate (`assertPlanFeature`) —
+ * drives the upgrade walls + hidden inbox controls. Fail-open on a missing
+ * subscription/features (same fail-safe as `resolveAccess`): the server gate
+ * is the real lock, this only decides what to render.
+ */
+export function hasFeature(
+	sub: SubscriptionView | undefined,
+	feature: PlanFeature,
+): boolean {
+	if (!sub?.features) return true;
+	return sub.features[feature];
+}
 
 const PLAN_LABEL: Record<SubscriptionView["plan"], string> = {
 	starter: "Starter",
@@ -46,24 +64,63 @@ export function hasSubscribed(sub: SubscriptionView | undefined): boolean {
 
 export const PAYMENT_WARN_DAYS = 5;
 
+/** Fraction of the monthly order cap at which the soft nudge starts. */
+export const ORDER_CAP_WARN_RATIO = 0.8;
+
+/**
+ * Where this month's order count sits against the plan's SOFT cap. Pure — the
+ * meter (`ordersThisMonth`) comes from the retailer payload. Orders are never
+ * blocked; "over" only escalates the upgrade nudge. Comped subs and
+ * unlimited/missing caps never nudge.
+ */
+export type OrderCapState =
+	| { kind: "none" }
+	| { kind: "near"; used: number; cap: number }
+	| { kind: "over"; used: number; cap: number };
+
+export function orderCapState(
+	sub: SubscriptionView | undefined,
+	ordersThisMonth: number | undefined,
+): OrderCapState {
+	if (!sub || sub.comped) return { kind: "none" };
+	const cap = sub.caps?.orderCap;
+	if (
+		cap === undefined ||
+		cap <= 0 ||
+		isUnlimited(cap) ||
+		ordersThisMonth === undefined
+	)
+		return { kind: "none" };
+	if (ordersThisMonth >= cap)
+		return { kind: "over", used: ordersThisMonth, cap };
+	if (ordersThisMonth >= Math.ceil(cap * ORDER_CAP_WARN_RATIO))
+		return { kind: "near", used: ordersThisMonth, cap };
+	return { kind: "none" };
+}
+
 /**
  * What the dashboard subscription banner should show. Pure so it's unit-tested.
  * Precedence: a real `past_due` lock → a soon-due **pending invoice** (the most
- * concrete "pay me" — applies whether trialing or active) → a trial ending soon.
- * Comped/paid-with-nothing-due → nothing. `pendingDueAt` is the soonest pending
- * invoice's due date (undefined when none).
+ * concrete "pay me" — applies whether trialing or active) → a trial ending soon
+ * → the soft order-cap nudge (over, then near — upsell ranks below any payment
+ * deadline). Comped/paid-with-nothing-due → nothing. `pendingDueAt` is the
+ * soonest pending invoice's due date (undefined when none); `ordersThisMonth`
+ * is the usage meter (undefined → no cap nudge).
  */
 export type BannerState =
 	| { kind: "none" }
 	| { kind: "pastDue" }
 	| { kind: "invoiceWarn"; daysLeft: number }
-	| { kind: "trialWarn"; daysLeft: number; ended: boolean };
+	| { kind: "trialWarn"; daysLeft: number; ended: boolean }
+	| { kind: "orderCapOver"; used: number; cap: number }
+	| { kind: "orderCapNear"; used: number; cap: number };
 
 export function resolveBannerState(
 	sub: SubscriptionView | undefined,
 	pendingDueAt: number | undefined,
 	now: number,
 	warnDays = PAYMENT_WARN_DAYS,
+	ordersThisMonth?: number,
 ): BannerState {
 	if (!sub || sub.comped) return { kind: "none" };
 	if (sub.status === "past_due") return { kind: "pastDue" };
@@ -78,6 +135,12 @@ export function resolveBannerState(
 		if (daysLeft <= warnDays)
 			return { kind: "trialWarn", daysLeft, ended: daysLeft <= 0 };
 	}
+
+	const cap = orderCapState(sub, ordersThisMonth);
+	if (cap.kind === "over")
+		return { kind: "orderCapOver", used: cap.used, cap: cap.cap };
+	if (cap.kind === "near")
+		return { kind: "orderCapNear", used: cap.used, cap: cap.cap };
 
 	return { kind: "none" };
 }

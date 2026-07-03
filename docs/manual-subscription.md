@@ -194,12 +194,76 @@ auto-get their lifetime discount: the issue form detects `isFoundingMember` and 
 ## Soft-lock (`past_due`)
 
 `assertSubscriptionActive(ctx, retailerId)` throws `ConvexError` when the
-subscription is `past_due` **and not comped**. Wired (Phase 2) onto seller
-**growth-writes** only: product create/update, `updateSettings`, future
-broadcast/reminder. Explicitly **NOT** wired onto: `orders.create` (public),
-order pipeline (confirm/pack/ship/deliver/payment-claim/mockup), customer views,
-storefront. **Order cap is SOFT** — a nudge in the dashboard, never a block on
-`orders.create`; `userCap`/`broadcastQuota` are hard (seller-side surfaces).
+subscription is `past_due` **and not comped**. Wired onto seller
+**growth-writes** only: product create/update/`saveVariantGrid`,
+`updateSettings`, `renameSlug`, `pickupLocations`
+create/update/setActive/reorder (the last two added Jul 2026 — they'd escaped
+the original sweep), future broadcast/reminder. Admin act-as bypasses every
+site (white-glove precedes payment). Explicitly **NOT** wired onto:
+`orders.create` (public), order pipeline (confirm/pack/ship/deliver/
+payment-claim/mockup), customer views, storefront. **Order cap is SOFT** — a
+nudge in the dashboard, never a block on `orders.create`;
+`userCap`/`broadcastQuota` are hard (seller-side surfaces).
+
+## Plan-feature gating (Pro+) — CRM + Order Inbox (Jul 2026)
+
+The pricing table's **live** ✓/– feature rows are now enforced, not just
+advertised. Catalog: `PLAN_FEATURES`/`featuresForPlan` in `convex/lib/plans.ts`
+(Starter: no `crm`, no `orderInbox`; Pro/Scale: both). `resolveAccess` resolves
+them onto `AccessState.features` — **the only place `plan` is read for
+gating**; every check reads the resolved descriptor, so per-retailer overrides
+stay possible later. Fail-safe: a missing subscription row resolves to Pro
+features (never a lockout). Trial = Pro plan = full features (the trial
+showcases Pro).
+
+- **Server gate:** `assertPlanFeature(ctx, retailerId, feature)` in
+  `convex/subscriptions.ts`. **Admin act-as bypasses** (support work on a
+  Starter store), mirroring the soft-lock.
+- **CRM (`crm`):** every public surface in `convex/customers.ts` (list/count/
+  get/ordersByCustomer/search/updateNotes/updateName) — gated in the shared
+  auth helpers. The **internal linking helpers are NOT gated**: orders keep
+  aggregating for Starter sellers so the data is complete the day they upgrade.
+- **Order Inbox (`orderInbox`):** `searchOrders` rejects **inbox-only args**
+  (bucket ≠ `all`, search text, payment/method/date/fulfilment-window/mockup
+  filters) but the **plain list with default args stays all-tier** — that's the
+  "Order pipeline" row. Also gated: `bulkUpdateStatus` and CSV export
+  (`exportOrders` via `assertExportAccess`). Single `updateStatus` + order
+  detail stay open to every tier.
+- **UI (client mirror, `hasFeature` in `src/lib/subscription.ts` — fail-open;
+  the server is the real lock):** `/app/customers` (+ detail) render a
+  `ProFeatureWall` (what it does + WhatsApp "Upgrade to Pro" + billing link);
+  the orders page hides search/chips/filters/bulk/export behind a
+  `ProFeatureTease` strip while the list keeps working; nav (sidebar +
+  bottom-nav) marks Customers with a **Pro chip** so the wall is never a
+  surprise; the dashboard Customers stat tile renders a locked variant.
+  Components in `src/components/app/pro-gate.tsx`.
+
+## Order-usage meter + soft-cap nudge (Jul 2026)
+
+The promised "X/100 orders used" surface behind the SOFT `orderCap`:
+
+- **`subscriptionUsage` table** — per-retailer × **MYT calendar month**
+  (`monthStart` via `convex/lib/usagePeriod.ts`) denormalized counter. Calendar
+  month, not the billing period: caps are "orders/mo" while billing cycles can
+  be annual (and trials have no period). Incremented at both order-create
+  sites (`orders.create`, counter checkout); decremented on the **first**
+  transition into `cancelled` (keyed to the order's creation month, floored at
+  zero, same idempotency guard as the stock restore). Helpers in
+  `convex/subscriptionUsage.ts`. **Never read to block an order.**
+- **Read path:** `buildRetailerPublic` embeds `ordersThisMonth` (owner/admin
+  payload only). Pre-meter orders were never counted — the meter starts at 0
+  on deploy, which is fine for a monthly counter.
+- **Nudge:** `SubscriptionBanner` gains two amber states (below every payment
+  state in precedence): **≥80%** of cap → dismissable-for-the-month warning;
+  **≥100%** → persistent "you've passed your plan's orders — upgrade" (still
+  never blocks). Billing tab shows an "Orders this month X/cap" progress
+  meter. Pure logic `orderCapState` in `src/lib/subscription.ts`. Comped subs
+  and `UNLIMITED` caps never nudge.
+
+Tests: `convex/planGating.test.ts` (gates, bypasses, meter, soft-lock),
+`convex/lib/usagePeriod.test.ts`, plus additions to `plans.test.ts`,
+`subscriptions.test.ts`, `counterCheckout.test.ts`,
+`src/lib/subscription.test.ts`.
 
 ## Signup paths (`createRetailer`)
 
