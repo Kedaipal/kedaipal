@@ -167,6 +167,8 @@
 		var(--accent-foreground);
 	--color-accent:
 		var(--accent);
+	--color-accent-emphasis:
+		var(--accent-emphasis);
 	--color-muted-foreground:
 		var(--muted-foreground);
 	--color-muted:
@@ -235,6 +237,9 @@
 	/* Accent — mint */
 	--accent: hsl(160 84% 39%);
 	--accent-foreground: hsl(0 0% 100%);
+	/* Readable mint for text/icons on mint-tinted surfaces (bg-accent/10 etc.) —
+	   the raw accent fails contrast as a text colour on light backgrounds. */
+	--accent-emphasis: hsl(161 91% 24%);
 
 	/* Destructive */
 	--destructive: hsl(0 84% 60%);
@@ -287,6 +292,7 @@
 
 	--accent: hsl(158 64% 52%);
 	--accent-foreground: hsl(222 47% 11%);
+	--accent-emphasis: hsl(158 64% 60%);
 
 	--destructive: hsl(0 63% 45%);
 	--destructive-foreground: hsl(210 40% 98%);

@@ -2,11 +2,15 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import {
 	ArrowRight,
+	Banknote,
+	Bell,
 	Building2,
+	CalendarCheck,
 	CheckCircle2,
 	ChevronDown,
-	Clock,
+	ChevronRight,
 	CreditCard,
+	Eye,
 	type LucideIcon,
 	MapPin,
 	MessageCircle,
@@ -17,7 +21,6 @@ import {
 	Share2,
 	Sparkles,
 	Store,
-	Users,
 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { api } from "../../convex/_generated/api";
@@ -28,13 +31,17 @@ import {
 	PageHeaderSkeleton,
 } from "../components/dashboard/page-header";
 import { ShareLinkChecklistRow } from "../components/dashboard/share-link-checklist-row";
+import {
+	type OrderStatus as AnchorStatus,
+	StatusBadge,
+} from "../components/dashboard/status-badge";
 import { StorefrontQrDialog } from "../components/dashboard/storefront-qr-dialog";
 import { WhiteGloveCard } from "../components/dashboard/white-glove-card";
 import { ShopeeIcon } from "../components/icons/shopee-icon";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
-import { formatPrice } from "../lib/format";
+import { formatPrice, formatRelativeTime } from "../lib/format";
 import {
 	type DeliveryMethod,
 	type OrderStatus,
@@ -127,16 +134,16 @@ function DashboardHome() {
 		api.products.listAll,
 		retailer ? { retailerId: retailer._id } : "skip",
 	);
-	const orderCounts = useQuery(
-		api.orders.countActionable,
-		retailer ? { retailerId: retailer._id } : "skip",
+	// One inbox snapshot powers the whole "today strip" + attention list — the
+	// same counts seam the orders inbox subscribes to (see orders.searchOrders).
+	const inboxSnapshot = useQuery(
+		api.orders.searchOrders,
+		retailer
+			? { retailerId: retailer._id, bucket: "all" as const, limit: 1 }
+			: "skip",
 	);
 	const pickupStatus = useQuery(
 		api.pickupLocations.hasAnyActive,
-		retailer ? { retailerId: retailer._id } : "skip",
-	);
-	const customerCount = useQuery(
-		api.customers.count,
 		retailer ? { retailerId: retailer._id } : "skip",
 	);
 	const recentOrdersPage = useQuery(
@@ -158,7 +165,7 @@ function DashboardHome() {
 	if (!retailer) return <DashboardSkeleton />;
 
 	const productsLoading = products === undefined;
-	const countsLoading = orderCounts === undefined;
+	const countsLoading = inboxSnapshot === undefined;
 	const recentOrdersLoading = recentOrdersPage === undefined;
 
 	// `products` determines `isNew` / `requiredDone`, which switches the entire
@@ -196,7 +203,6 @@ function DashboardHome() {
 
 	const hasWaPhone = Boolean(retailer.waPhone?.trim());
 	const productCount = products?.length ?? 0;
-	const activeProductCount = products?.filter((p) => p.active).length ?? 0;
 	const hasProduct = productCount > 0;
 	const hasPayment = (retailer.paymentMethods?.length ?? 0) > 0;
 	// Activation funnel. `activated` (first confirmed order) is the real finish
@@ -216,10 +222,8 @@ function DashboardHome() {
 			? trialDaysLeft(subscription.trialEndsAt, Date.now())
 			: null;
 
-	// Hero stat tiles share the seller's status vocabulary. Dashboard chrome is
-	// EN-only, so resolve in EN; pending/confirmed don't vary by fulfilment mode
-	// but we pass the retailer's primary method for consistency with the rest of
-	// the dashboard.
+	// Recent-order badges share the seller's status vocabulary. Dashboard chrome
+	// is EN-only, so resolve in EN with the retailer's primary fulfilment method.
 	const statusLabels = retailer.statusLabels as StatusLabels | undefined;
 	const retailerMethod: DeliveryMethod = retailer.offerSelfCollect
 		? "self_collect"
@@ -229,13 +233,6 @@ function DashboardHome() {
 		labels: statusLabels,
 		deliveryMethod: retailerMethod,
 	});
-	const heroLabel = (status: OrderStatus) =>
-		resolveAnchorLabel(status, {
-			stages,
-			labels: statusLabels,
-			deliveryMethod: retailerMethod,
-			locale: "en",
-		});
 
 	// The Fulfilment step is shown to EVERY retailer — delivery is universal, and
 	// this is where a delivery-only seller learns pickup-only is even an option.
@@ -362,9 +359,15 @@ function DashboardHome() {
 		activatedAt !== undefined &&
 		Date.now() - activatedAt < ACTIVATION_CELEBRATION_MS;
 
-	const pendingCount = orderCounts?.pending ?? 0;
-	const confirmedCount = orderCounts?.confirmed ?? 0;
+	const counts = inboxSnapshot?.counts;
+	const newCount = counts?.new ?? 0;
+	const dueTodayCount = counts?.dueToday ?? 0;
+	const unpaidCount = counts?.unpaid ?? 0;
+	const unpaidAmount = counts?.unpaidAmount ?? 0;
+	const currency = retailer.currency ?? "MYR";
 	const recentOrders = recentOrdersPage?.page ?? [];
+	const anythingNeedsAttention =
+		newCount > 0 || dueTodayCount > 0 || unpaidCount > 0;
 
 	// Map a checklist item to its row variant — the "share" and "greeting" steps
 	// are interactive self-contained cards, the rest are links. `onToggle` (only
@@ -423,6 +426,33 @@ function DashboardHome() {
 					</span>
 				}
 			/>
+			{/* Greeting header — mobile only (desktop has the PageHeader). */}
+			<div className="flex items-center justify-between gap-3 lg:hidden">
+				<div className="flex min-w-0 flex-col">
+					<h2 className="truncate font-heading text-[22px] font-extrabold leading-tight tracking-tight">
+						{timeGreeting()}, {retailer.storeName}
+					</h2>
+					<span className="text-[13px] text-muted-foreground">
+						{formatTodayLong()}
+					</span>
+				</div>
+				<Link
+					to="/app/settings"
+					search={{ tab: "store" as const }}
+					aria-label="Store settings"
+					className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-foreground font-heading text-[15px] font-extrabold text-background"
+				>
+					{retailer.logoUrl ? (
+						<img
+							src={retailer.logoUrl}
+							alt=""
+							className="size-full object-cover"
+						/>
+					) : (
+						retailer.storeName.charAt(0).toUpperCase()
+					)}
+				</Link>
+			</div>
 			<WhiteGloveCard slug={retailer.slug} />
 			{/* Welcome banner — only for brand-new users */}
 			{isNew ? (
@@ -449,56 +479,104 @@ function DashboardHome() {
 					</div>
 				</section>
 			) : (
-				/* Hero — for returning users */
-				<section className="relative overflow-hidden rounded-3xl border border-border bg-gradient-to-br from-accent/15 via-card to-card p-6 lg:max-w-2xl lg:p-7">
-					<div
-						className="pointer-events-none absolute -right-16 -top-16 h-48 w-48 rounded-full bg-accent/20 blur-3xl"
-						aria-hidden="true"
-					/>
-					<div className="relative flex min-w-0 flex-col gap-3">
-						<p className="text-xs font-semibold uppercase tracking-widest text-accent">
-							Your storefront
-						</p>
-						<div className="flex items-center gap-3">
-							{retailer.logoUrl ? (
-								<img
-									src={retailer.logoUrl}
-									alt={`${retailer.storeName} logo`}
-									className="h-14 w-14 shrink-0 rounded-2xl border border-border bg-background object-contain"
-								/>
-							) : null}
-							<h2 className="font-heading text-2xl font-bold leading-tight lg:text-3xl">
-								{retailer.storeName}
-							</h2>
-						</div>
-						<p className="break-all font-mono text-sm text-muted-foreground">
-							{storefrontUrl}
-						</p>
-						<div className="mt-2 flex gap-2">
-							<Button asChild className="h-11 flex-1">
-								<a
-									href={`/${retailer.slug}`}
-									target="_blank"
-									rel="noopener noreferrer"
-								>
-									Open store
-								</a>
-							</Button>
-							<Button onClick={copy} variant="outline" className="h-11 flex-1">
-								{copied ? "Copied!" : "Copy link"}
-							</Button>
-							<Button
-								variant="outline"
-								className="h-11 w-11 shrink-0 p-0"
-								onClick={openQr}
-								aria-label="Show QR code"
+				/* Today strip — three tappable counts that answer the morning
+				   questions (what's due, what's new, who hasn't paid) and deep-link
+				   into the pre-filtered inbox. Due-today gets the hero cell. */
+				<section className="grid grid-cols-3 gap-2 lg:max-w-2xl">
+					<Link
+						to="/app/orders"
+						search={{ fwin: "today" as const }}
+						className="flex flex-col gap-0.5 rounded-2xl bg-foreground px-3.5 py-3 text-background transition-opacity hover:opacity-95"
+					>
+						{countsLoading ? (
+							<Skeleton className="h-7 w-8 bg-background/20" />
+						) : (
+							<span className="font-heading text-[22px] font-extrabold leading-tight text-accent">
+								{dueTodayCount}
+							</span>
+						)}
+						<span className="text-[11px] font-semibold text-background/75">
+							Due today
+						</span>
+					</Link>
+					<Link
+						to="/app/orders"
+						search={{ bucket: "new" as const }}
+						className="flex flex-col gap-0.5 rounded-2xl border border-border bg-card px-3.5 py-3 transition-colors hover:bg-accent/5"
+					>
+						{countsLoading ? (
+							<Skeleton className="h-7 w-8" />
+						) : (
+							<span
+								className={`font-heading text-[22px] font-extrabold leading-tight ${newCount > 0 ? "text-amber-700 dark:text-amber-400" : ""}`}
 							>
-								<QrCode className="size-5" />
-							</Button>
-						</div>
-					</div>
+								{newCount}
+							</span>
+						)}
+						<span className="text-[11px] font-semibold text-muted-foreground">
+							New orders
+						</span>
+					</Link>
+					<Link
+						to="/app/orders"
+						search={{ pay: ["unpaid", "claimed"] as ("unpaid" | "claimed")[] }}
+						className="flex flex-col gap-0.5 rounded-2xl border border-border bg-card px-3.5 py-3 transition-colors hover:bg-accent/5"
+					>
+						{countsLoading ? (
+							<Skeleton className="h-7 w-8" />
+						) : (
+							<span className="font-heading text-[22px] font-extrabold leading-tight">
+								{unpaidCount}
+							</span>
+						)}
+						<span className="text-[11px] font-semibold text-muted-foreground">
+							Unpaid
+						</span>
+					</Link>
 				</section>
 			)}
+
+			{/* Share card — the dashed "ticket" from the landing page. Always the
+			    top verb for a live store: put the link where buyers already are. */}
+			{!isNew ? (
+				<section className="flex flex-col gap-3 rounded-2xl border-2 border-dashed border-foreground/20 bg-card p-4 lg:max-w-2xl">
+					<div className="flex items-center justify-between gap-3">
+						<div className="flex min-w-0 flex-col gap-0.5">
+							<span className="text-[11px] font-bold uppercase tracking-[0.08em] text-muted-foreground">
+								Your store link
+							</span>
+							<span className="truncate font-mono text-sm font-medium">
+								kedaipal.com/
+								<span className="kp-highlight">{retailer.slug}</span>
+							</span>
+						</div>
+						<Button
+							variant="secondary"
+							size="icon"
+							className="size-11 shrink-0 rounded-xl"
+							onClick={openQr}
+							aria-label="Show QR code"
+						>
+							<QrCode className="size-5" />
+						</Button>
+					</div>
+					<div className="flex gap-2">
+						<Button onClick={copy} className="h-11 flex-1">
+							{copied ? "Copied!" : "Copy link"}
+						</Button>
+						<Button asChild variant="outline" className="h-11 flex-1">
+							<a
+								href={`/${retailer.slug}`}
+								target="_blank"
+								rel="noopener noreferrer"
+							>
+								<Eye className="size-4" />
+								Preview
+							</a>
+						</Button>
+					</div>
+				</section>
+			) : null}
 
 			<StorefrontQrDialog
 				open={qrOpen}
@@ -602,46 +680,54 @@ function DashboardHome() {
 				</section>
 			) : null}
 
-			{/* Stats grid — hidden for brand-new users */}
-			{!isNew ? (
-				<section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-					<StatTile
-						to="/app/orders"
-						icon={Clock}
-						label={heroLabel("pending")}
-						value={pendingCount}
-						accent={pendingCount > 0}
-						sub="Awaiting confirm"
-						loading={countsLoading}
-					/>
-					<StatTile
-						to="/app/orders"
-						icon={CheckCircle2}
-						label={heroLabel("confirmed")}
-						value={confirmedCount}
-						sub="In progress"
-						loading={countsLoading}
-					/>
-					<StatTile
-						to="/app/products"
-						icon={Package}
-						label="Products"
-						value={activeProductCount}
-						sub={
-							productCount > activeProductCount
-								? `${productCount - activeProductCount} archived`
-								: "Active"
-						}
-						loading={productsLoading}
-					/>
-					<StatTile
-						to="/app/customers"
-						icon={Users}
-						label="Customers"
-						value={customerCount ?? 0}
-						sub="Total"
-						loading={customerCount === undefined}
-					/>
+			{/* Needs attention — actionable rows, each with a destination. Rows only
+			    render when there's something to act on; the whole section hides
+			    when the seller is caught up. */}
+			{!isNew && !countsLoading && anythingNeedsAttention ? (
+				<section className="flex flex-col gap-2 lg:max-w-2xl">
+					<div className="flex items-center justify-between">
+						<h3 className="font-heading text-base font-extrabold">
+							Needs attention
+						</h3>
+						<Link
+							to="/app/orders"
+							className="text-[13px] font-semibold text-accent-emphasis hover:underline"
+						>
+							Orders →
+						</Link>
+					</div>
+					{newCount > 0 ? (
+						<AttentionRow
+							to="/app/orders"
+							search={{ bucket: "new" as const }}
+							icon={Bell}
+							tint="bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-400"
+							title={`${newCount} new order${newCount === 1 ? "" : "s"} to confirm`}
+							sub="From your WhatsApp storefront"
+						/>
+					) : null}
+					{dueTodayCount > 0 ? (
+						<AttentionRow
+							to="/app/orders"
+							search={{ fwin: "today" as const }}
+							icon={CalendarCheck}
+							tint="bg-accent/15 text-accent-emphasis"
+							title={`${dueTodayCount} order${dueTodayCount === 1 ? "" : "s"} due today`}
+							sub="See what to prepare first"
+						/>
+					) : null}
+					{unpaidCount > 0 ? (
+						<AttentionRow
+							to="/app/orders"
+							search={{
+								pay: ["unpaid", "claimed"] as ("unpaid" | "claimed")[],
+							}}
+							icon={Banknote}
+							tint="bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400"
+							title={`${unpaidCount} unpaid order${unpaidCount === 1 ? "" : "s"}`}
+							sub={`${formatPrice(unpaidAmount, currency)} outstanding`}
+						/>
+					) : null}
 				</section>
 			) : null}
 
@@ -650,10 +736,12 @@ function DashboardHome() {
 				<div className="flex flex-col gap-6 lg:grid lg:grid-cols-3 lg:items-start lg:gap-6">
 					<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-5 lg:col-span-2">
 						<div className="flex items-center justify-between">
-							<h3 className="text-sm font-semibold">Recent orders</h3>
+							<h3 className="font-heading text-base font-extrabold">
+								Recent orders
+							</h3>
 							<Link
 								to="/app/orders"
-								className="text-xs font-medium text-accent hover:underline"
+								className="text-[13px] font-semibold text-accent-emphasis hover:underline"
 							>
 								View all →
 							</Link>
@@ -672,13 +760,13 @@ function DashboardHome() {
 											className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-3 transition-colors hover:bg-accent/5"
 										>
 											<div className="flex min-w-0 flex-col gap-0.5">
-												<p className="truncate font-mono text-sm font-medium">
-													{order.shortId}
+												<p className="truncate text-sm font-semibold">
+													{order.customer?.name ?? "Anonymous"}
 												</p>
 												<p className="truncate text-xs text-muted-foreground">
-													{order.customer?.name ?? "Anonymous"} ·{" "}
-													{order.items.length} item
-													{order.items.length === 1 ? "" : "s"}
+													<span className="font-mono">#{order.shortId}</span>
+													{" · "}
+													{formatRelativeTime(order.createdAt)}
 												</p>
 											</div>
 											<div className="flex shrink-0 flex-col items-end gap-1 lg:flex-row lg:items-center lg:gap-3">
@@ -686,7 +774,7 @@ function DashboardHome() {
 													{formatPrice(order.total, order.currency)}
 												</p>
 												<StatusBadge
-													status={order.status}
+													status={order.status as AnchorStatus}
 													label={(() => {
 														const cs = resolveCurrentStage(
 															{
@@ -901,58 +989,57 @@ function ChecklistRow({
 	);
 }
 
-function StatTile({
+/** Greeting keyed to the seller's local clock (MYT in practice). */
+function timeGreeting(now: Date = new Date()): string {
+	const h = now.getHours();
+	if (h < 12) return "Good morning";
+	if (h < 18) return "Good afternoon";
+	return "Good evening";
+}
+
+function formatTodayLong(now: Date = new Date()): string {
+	return new Intl.DateTimeFormat("en-MY", {
+		weekday: "long",
+		day: "numeric",
+		month: "long",
+	}).format(now);
+}
+
+/** One actionable "needs attention" row: icon, what, where it takes you. */
+function AttentionRow({
 	to,
+	search,
 	icon: Icon,
-	label,
-	value,
+	tint,
+	title,
 	sub,
-	accent,
-	loading,
 }: {
 	to: string;
+	search?: Record<string, unknown>;
 	icon: LucideIcon;
-	label: string;
-	value: string | number;
+	tint: string;
+	title: string;
 	sub: string;
-	accent?: boolean;
-	loading?: boolean;
 }) {
 	return (
 		<Link
 			to={to}
-			className={`flex flex-col gap-3 rounded-2xl border p-4 transition-colors lg:flex-row lg:items-center lg:gap-4 lg:p-5 ${
-				accent
-					? "border-accent/40 bg-accent/10 hover:bg-accent/15"
-					: "border-border bg-card hover:bg-accent/5"
-			}`}
+			search={search}
+			className="flex items-center gap-3 rounded-2xl border border-border bg-card px-3.5 py-3 transition-colors hover:bg-accent/5"
 		>
-			<div
-				className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg lg:h-11 lg:w-11 ${
-					accent ? "bg-accent/20 text-accent" : "bg-muted text-muted-foreground"
-				}`}
+			<span
+				className={`flex size-10 shrink-0 items-center justify-center rounded-xl ${tint}`}
 			>
-				<Icon className="size-4 lg:size-5" />
-			</div>
-			<div className="min-w-0 lg:flex lg:flex-col-reverse lg:gap-0.5">
-				{loading ? (
-					<Skeleton className="h-7 w-10 lg:h-9 lg:w-14" />
-				) : (
-					<p
-						className={`text-2xl font-bold leading-none tabular-nums lg:text-4xl ${
-							accent ? "text-accent" : "text-foreground"
-						}`}
-					>
-						{value}
-					</p>
-				)}
-				<p className="mt-1 text-xs font-medium text-foreground lg:mt-0">
-					{label}
-				</p>
-				<p className="truncate text-[11px] text-muted-foreground lg:hidden">
-					{sub}
-				</p>
-			</div>
+				<Icon className="size-5" aria-hidden="true" />
+			</span>
+			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+				<span className="truncate text-sm font-semibold">{title}</span>
+				<span className="truncate text-xs text-muted-foreground">{sub}</span>
+			</span>
+			<ChevronRight
+				className="size-4.5 shrink-0 text-muted-foreground/50"
+				aria-hidden="true"
+			/>
 		</Link>
 	);
 }
@@ -1014,25 +1101,6 @@ function SalesChannelTeaser({
 			</div>
 			<ArrowRight className="size-4 shrink-0 text-muted-foreground" />
 		</Link>
-	);
-}
-
-function StatusBadge({ status, label }: { status: string; label?: string }) {
-	const styles: Record<string, string> = {
-		pending: "bg-amber-500/15 text-amber-700 dark:text-amber-400",
-		confirmed: "bg-blue-500/15 text-blue-700 dark:text-blue-400",
-		packed: "bg-purple-500/15 text-purple-700 dark:text-purple-400",
-		shipped: "bg-indigo-500/15 text-indigo-700 dark:text-indigo-400",
-		delivered: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
-		cancelled: "bg-muted text-muted-foreground",
-	};
-	const cls = styles[status] ?? "bg-muted text-muted-foreground";
-	return (
-		<span
-			className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${cls}`}
-		>
-			{label ?? status}
-		</span>
 	);
 }
 

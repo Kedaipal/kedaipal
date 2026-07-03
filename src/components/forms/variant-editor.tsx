@@ -1,5 +1,5 @@
 import { useMutation } from "convex/react";
-import { ChefHat, ImagePlus, PackageCheck, Plus, X } from "lucide-react";
+import { ChefHat, ImagePlus, Minus, PackageCheck, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
@@ -140,24 +140,70 @@ function PriceInput({
 	);
 }
 
-/** Integer stock input — strips non-digits as you type. */
+/**
+ * Integer stock input — strips non-digits as you type. `stepper` wraps it in
+ * ±1 buttons (44px targets): after each sale a seller adjusts by one, not by
+ * typing. The compact desktop grid keeps the plain input (mouse + narrow cell).
+ */
 function StockInput({
 	value,
 	onChange,
 	className,
+	stepper = false,
 }: {
 	value: string;
 	onChange: (next: string) => void;
 	className?: string;
+	stepper?: boolean;
 }) {
+	if (!stepper) {
+		return (
+			<Input
+				inputMode="numeric"
+				placeholder="0"
+				value={value}
+				onChange={(e) => onChange(sanitizeIntInput(e.target.value))}
+				className={className}
+			/>
+		);
+	}
+	const num = /^\d+$/.test(value.trim())
+		? Number.parseInt(value.trim(), 10)
+		: 0;
+	const step = (delta: number) => onChange(String(Math.max(0, num + delta)));
 	return (
-		<Input
-			inputMode="numeric"
-			placeholder="0"
-			value={value}
-			onChange={(e) => onChange(sanitizeIntInput(e.target.value))}
-			className={className}
-		/>
+		<div
+			className={cn(
+				"flex h-11 items-center overflow-hidden rounded-lg border border-input bg-background focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/50",
+				className,
+			)}
+		>
+			<button
+				type="button"
+				onClick={() => step(-1)}
+				disabled={num <= 0}
+				aria-label="Decrease stock"
+				className="flex h-full w-11 shrink-0 items-center justify-center border-r border-border/60 text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+			>
+				<Minus className="size-4" aria-hidden="true" />
+			</button>
+			<input
+				inputMode="numeric"
+				placeholder="0"
+				value={value}
+				onChange={(e) => onChange(sanitizeIntInput(e.target.value))}
+				className="h-full w-full min-w-0 flex-1 bg-transparent text-center text-[15px] font-semibold tabular-nums outline-none"
+				aria-label="Stock on hand"
+			/>
+			<button
+				type="button"
+				onClick={() => step(1)}
+				aria-label="Increase stock"
+				className="flex h-full w-11 shrink-0 items-center justify-center border-l border-border/60 text-muted-foreground transition-colors hover:text-foreground"
+			>
+				<Plus className="size-4" aria-hidden="true" />
+			</button>
+		</div>
 	);
 }
 
@@ -504,6 +550,7 @@ export function VariantEditor({
 						<StockInput
 							value={rows[0]?.stock ?? ""}
 							onChange={(v) => setRow(0, { stock: v })}
+							stepper
 						/>
 					</label>
 					<label className="col-span-2 flex flex-col gap-1 text-sm font-medium">
@@ -780,7 +827,8 @@ export function VariantEditor({
 										<StockInput
 											value={row.stock}
 											onChange={(v) => setRow(i, { stock: v })}
-											className="h-10"
+											className="h-11"
+											stepper
 										/>
 									</label>
 									<label className="col-span-2 flex flex-col gap-1 text-xs font-medium text-muted-foreground">

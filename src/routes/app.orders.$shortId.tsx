@@ -1,9 +1,12 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import {
+	ArrowLeft,
+	ArrowRight,
 	BadgeCheck,
+	Check,
 	CheckCircle2,
-	ChevronLeft,
+	ChevronDown,
 	ChevronRight,
 	Copy,
 	ExternalLink,
@@ -13,6 +16,7 @@ import {
 	MapPin,
 	MessageCircle,
 	Package,
+	Phone,
 	StickyNote,
 	Truck,
 	User,
@@ -34,6 +38,7 @@ import {
 	PageHeader,
 	PageHeaderSkeleton,
 } from "../components/dashboard/page-header";
+import { StatusBadge } from "../components/dashboard/status-badge";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import {
 	DeliveryAddressDisplay,
@@ -63,7 +68,6 @@ import {
 	stageLabel,
 } from "../lib/orderStatus";
 import { suppressNextOrderConfirmedToast } from "../lib/orderToastSuppression";
-import { StatusBadge } from "./app.orders.index";
 
 export const Route = createFileRoute("/app/orders/$shortId")({
 	component: OrderDetailRoute,
@@ -132,31 +136,12 @@ type DeliveryMethod = "delivery" | "self_collect";
 
 type PaymentStatus = "unpaid" | "claimed" | "received";
 
-function paymentBadge(status: PaymentStatus): {
-	label: string;
-	icon: ReactNode;
-	className: string;
-} {
-	switch (status) {
-		case "received":
-			return {
-				label: "Paid",
-				icon: <BadgeCheck className="size-3.5" />,
-				className: "bg-emerald-50 text-emerald-700 ring-emerald-200",
-			};
-		case "claimed":
-			return {
-				label: "Payment claimed",
-				icon: <Hourglass className="size-3.5" />,
-				className: "bg-blue-50 text-blue-700 ring-blue-200",
-			};
-		default:
-			return {
-				label: "Unpaid",
-				icon: <HandCoins className="size-3.5" />,
-				className: "bg-amber-50 text-amber-800 ring-amber-200",
-			};
-	}
+/** "Aina Jasmin" → "AJ"; single word → first two letters. */
+function initials(name: string | undefined): string {
+	if (!name?.trim()) return "?";
+	const parts = name.trim().split(/\s+/);
+	if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+	return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
 function formatRelative(epochMs: number | undefined): string {
@@ -171,66 +156,76 @@ function formatRelative(epochMs: number | undefined): string {
 	return `${Math.floor(diff / day)}d ago`;
 }
 
-function OrderProgressTimeline({
+/**
+ * Stepper + next action, always on top: dots for reached stages, an outlined
+ * dot for the next one, and the single most likely transition as a big button
+ * right underneath — the seller never hunts for the right status move.
+ * `currentIndex` is the stage the order has REACHED (-1 while pending).
+ */
+function OrderProgressStepper({
 	stages,
 	currentIndex,
 	cancelled,
+	action,
 }: {
 	stages: ReturnType<typeof resolveStages>;
 	currentIndex: number;
 	cancelled: boolean;
+	action?: ReactNode;
 }) {
 	return (
-		<section className="rounded-2xl border border-border bg-card p-4 shadow-sm">
-			<div className="flex items-center justify-between gap-3">
-				<div>
-					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-						Order progress
-					</p>
-					<p className="mt-1 text-sm text-muted-foreground">
-						{cancelled
-							? "This order was cancelled."
-							: currentIndex < 0
-								? "Waiting for seller confirmation."
-								: `${currentIndex + 1} of ${stages.length} steps completed or active.`}
-					</p>
-				</div>
-			</div>
-			<ol className="mt-4 grid gap-2 sm:grid-cols-4">
-				{stages.map((stage, index) => {
-					const active = !cancelled && index === currentIndex;
-					const done = !cancelled && currentIndex >= 0 && index < currentIndex;
-					return (
-						<li
-							key={stage.id}
-							className={`rounded-xl border px-3 py-2 ${
-								active
-									? "border-accent bg-accent/10 text-foreground"
-									: done
-										? "border-emerald-200 bg-emerald-50 text-emerald-800"
-										: "border-border bg-background text-muted-foreground"
-							}`}
-						>
-							<div className="flex items-center gap-2">
-								<span
-									className={`flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
-										active
-											? "bg-accent text-accent-foreground"
-											: done
-												? "bg-emerald-600 text-white"
-												: "bg-muted text-muted-foreground"
-									}`}
-								>
-									{done ? <CheckCircle2 className="size-3.5" /> : index + 1}
-								</span>
-								<span className="min-w-0 truncate text-xs font-semibold">
-									{stageLabel(stage, "en")}
-								</span>
-							</div>
-						</li>
-					);
-				})}
-			</ol>
+		<section className="flex flex-col gap-3.5 rounded-2xl border border-border bg-card p-4 shadow-sm">
+			{cancelled ? (
+				<p className="text-sm font-medium text-destructive">
+					This order was cancelled.
+				</p>
+			) : (
+				<>
+					<div className="flex items-center" aria-hidden="true">
+						{stages.map((stage, index) => {
+							const done = index <= currentIndex;
+							const next = index === currentIndex + 1;
+							return (
+								<div key={stage.id} className="contents">
+									{index > 0 ? (
+										<span
+											className={`h-[3px] flex-1 ${index <= currentIndex ? "bg-accent" : "bg-border"}`}
+										/>
+									) : null}
+									<span
+										className={`flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+											done
+												? "bg-accent text-accent-foreground"
+												: next
+													? "border-[2.5px] border-accent bg-card text-accent-emphasis"
+													: "bg-muted text-muted-foreground"
+										}`}
+									>
+										{done ? <Check className="size-4" /> : index + 1}
+									</span>
+								</div>
+							);
+						})}
+					</div>
+					<div className="-mt-1 flex justify-between gap-1">
+						{stages.map((stage, index) => (
+							<span
+								key={stage.id}
+								className={`min-w-0 truncate text-[10.5px] font-semibold ${
+									index <= currentIndex
+										? "text-accent-emphasis"
+										: index === currentIndex + 1
+											? "text-foreground"
+											: "text-muted-foreground/70"
+								} ${index === 0 ? "text-left" : index === stages.length - 1 ? "text-right" : "text-center"}`}
+							>
+								{stageLabel(stage, "en")}
+							</span>
+						))}
+					</div>
+				</>
+			)}
+			{action}
 		</section>
 	);
 }
@@ -250,6 +245,12 @@ function OrderDetailRoute() {
 		api.orders.getCustomerImageUrl,
 		order?.customerImageStorageId ? { shortId } : "skip",
 	);
+	// CRM context for the customer card ("8 orders · RM 1,240") — answers "who is
+	// this?" without leaving the order.
+	const crmCustomer = useQuery(
+		api.customers.get,
+		order?.customerId ? { customerId: order.customerId } : "skip",
+	);
 	// Holds the id of the in-flight advance target ("cancel" for cancellation).
 	const [pending, setPending] = useState<string | null>(null);
 	const [carrierInput, setCarrierInput] = useState<string | null>(null);
@@ -257,6 +258,8 @@ function OrderDetailRoute() {
 	const [confirmingPayment, setConfirmingPayment] = useState(false);
 	const [confirmPaymentOpen, setConfirmPaymentOpen] = useState(false);
 	const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
+	// Rare actions (cancel, receipt) collapse behind one link at the bottom.
+	const [moreOpen, setMoreOpen] = useState(false);
 	// Optional method tag captured at confirm time (the seller has just verified
 	// the channel). Undefined = leave online/unknown. See lib/paymentMethod.ts.
 	const [paymentMethodChoice, setPaymentMethodChoice] = useState<
@@ -303,7 +306,6 @@ function OrderDetailRoute() {
 		!isSelfCollect && !["pending", "cancelled"].includes(order.status);
 	const editingCarrier = carrierInput !== null;
 	const paymentStatus = (order.paymentStatus ?? "unpaid") as PaymentStatus;
-	const paymentBadgeCfg = paymentBadge(paymentStatus);
 	// Production (any packed-or-later stage) is blocked while a mockup is required
 	// but not yet approved/waived. Shared gate — same source as the server.
 	const mockupGated = isMockupGateClosed(order);
@@ -396,56 +398,86 @@ function OrderDetailRoute() {
 					/>
 				}
 			/>
-			{/* Back nav (mobile only) */}
-			<Link
-				to="/app/orders"
-				className="flex w-fit items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground lg:hidden"
-			>
-				<ChevronLeft className="size-4" />
-				Orders
-			</Link>
-
-			{/* Order header */}
-			<div className="flex items-start justify-between gap-3">
-				<div className="lg:hidden">
-					<h2 className="font-mono text-2xl font-bold tracking-tight">
-						#{order.shortId}
+			{/* Order header (mobile) — back button, title, status at a glance. The
+			    payment situation gets its own state card below, not a header pill. */}
+			<div className="flex items-center gap-3 lg:hidden">
+				<Link
+					to="/app/orders"
+					aria-label="Back to orders"
+					className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted"
+				>
+					<ArrowLeft className="size-5" />
+				</Link>
+				<div className="min-w-0 flex-1">
+					<h2 className="truncate font-heading text-lg font-extrabold leading-tight">
+						Order{" "}
+						<span className="font-mono text-base font-medium">
+							#{order.shortId}
+						</span>
 					</h2>
-					<p className="mt-0.5 text-xs text-muted-foreground">
+					<p className="text-xs text-muted-foreground">
 						{new Date(order._creationTime).toLocaleString(undefined, {
 							dateStyle: "medium",
 							timeStyle: "short",
 						})}
+						{order.channel === "whatsapp" ? " · via WhatsApp" : ""}
 					</p>
 				</div>
-				<div className="flex flex-col items-start gap-1.5">
-					<StatusBadge
-						status={order.status}
-						label={
-							currentStage
-								? stageLabel(currentStage, "en")
-								: resolveStatusLabel(order.status, statusLabelOpts)
-						}
-					/>
-					<span
-						className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${paymentBadgeCfg.className}`}
-					>
-						{paymentBadgeCfg.icon}
-						{paymentBadgeCfg.label}
-					</span>
-					{/* Receipt on mobile (desktop has it in the PageHeader actions). */}
-					<ReceiptDownloadButton
-						shortId={order.shortId}
-						label="Receipt"
-						className="mt-1 lg:hidden"
-					/>
-				</div>
+				<StatusBadge
+					status={order.status}
+					label={
+						currentStage
+							? stageLabel(currentStage, "en")
+							: resolveStatusLabel(order.status, statusLabelOpts)
+					}
+				/>
 			</div>
 
-			<OrderProgressTimeline
+			<OrderProgressStepper
 				stages={stages}
 				currentIndex={currentIdx}
 				cancelled={order.status === "cancelled"}
+				action={
+					nextStage ? (
+						(() => {
+							// Advancing into production (packed or later) is blocked while
+							// the mockup gate is closed — mirrors the server.
+							const blocked =
+								anchorOrdinal(nextStage.anchor) >= anchorOrdinal("packed") &&
+								mockupGated;
+							// First move out of pending into a confirmed-anchored stage
+							// keeps the familiar "Confirm Order" verb; everything else
+							// reads "Mark as {stage}".
+							const advanceLabel =
+								order.status === "pending" && nextStage.anchor === "confirmed"
+									? "Confirm Order"
+									: `Mark as ${stageLabel(nextStage, "en")}`;
+							return (
+								<button
+									type="button"
+									onClick={() => handleAdvance(nextStage.id)}
+									disabled={pending !== null || blocked}
+									className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-foreground text-[15px] font-bold text-background transition-opacity hover:opacity-95 disabled:opacity-55"
+								>
+									{pending === nextStage.id ? (
+										"Updating…"
+									) : blocked ? (
+										`${advanceLabel} — awaiting mockup`
+									) : (
+										<>
+											{advanceLabel}
+											<ArrowRight className="size-4.5" />
+										</>
+									)}
+								</button>
+							);
+						})()
+					) : order.status === "delivered" ? (
+						<p className="text-sm font-medium text-accent-emphasis">
+							Completed — nothing left to do 🎉
+						</p>
+					) : undefined
+				}
 			/>
 
 			{/* Shopper's note + optional custom-line reference photo — front-and-centre
@@ -479,25 +511,23 @@ function OrderDetailRoute() {
 				</section>
 			) : null}
 
-			{/* Payment claim — actionable when shopper has tapped "I've paid". */}
+			{/* Payment claim — the amber "needs your eyes" state card, actionable
+			    when the shopper has tapped "I've paid". */}
 			{paymentStatus === "claimed" ? (
-				<section className="flex flex-col gap-3 rounded-2xl border border-blue-200 bg-blue-50/60 p-4">
-					<div className="flex items-center gap-2 text-blue-800">
-						<Hourglass className="size-4" />
-						<p className="text-xs font-semibold uppercase tracking-widest">
-							Payment claim
-						</p>
+				<section className="flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-800 dark:bg-amber-950/50">
+					<div className="flex items-center justify-between gap-3">
+						<div className="flex items-center gap-2 text-amber-800 dark:text-amber-300">
+							<Hourglass className="size-4" />
+							<p className="text-xs font-semibold uppercase tracking-widest">
+								Payment claimed
+							</p>
+						</div>
+						<span className="font-mono text-[15px] font-bold tabular-nums">
+							{formatPrice(order.total, order.currency)}
+						</span>
 					</div>
 
-					<div className="flex flex-col gap-2 rounded-xl bg-white/70 p-3">
-						<div className="flex items-center justify-between gap-3">
-							<span className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
-								Amount expected
-							</span>
-							<span className="font-mono text-lg font-bold tabular-nums text-foreground">
-								{formatPrice(order.total, order.currency)}
-							</span>
-						</div>
+					<div className="flex flex-col gap-2 rounded-xl bg-background/80 p-3">
 						<div className="flex items-start justify-between gap-3">
 							<span className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
 								Reference
@@ -528,7 +558,7 @@ function OrderDetailRoute() {
 								href={proofUrl}
 								target="_blank"
 								rel="noopener noreferrer"
-								className="block overflow-hidden rounded-xl border border-blue-200 bg-white"
+								className="block overflow-hidden rounded-xl border border-amber-200 bg-background dark:border-amber-800"
 							>
 								<img
 									src={proofUrl}
@@ -537,12 +567,12 @@ function OrderDetailRoute() {
 								/>
 							</a>
 						) : (
-							<div className="flex items-center justify-center rounded-xl border border-blue-200 bg-white p-4 text-xs text-muted-foreground">
+							<div className="flex items-center justify-center rounded-xl border border-amber-200 bg-background p-4 text-xs text-muted-foreground dark:border-amber-800">
 								Loading screenshot…
 							</div>
 						)
 					) : (
-						<p className="text-sm text-blue-900/80">
+						<p className="text-sm text-amber-900/90 dark:text-amber-200/90">
 							No screenshot attached. Cross-check the amount and reference in
 							your bank app.
 						</p>
@@ -627,69 +657,68 @@ function OrderDetailRoute() {
 				</section>
 			) : null}
 
-			{/* Customer — WhatsApp-branded card. Buyer with a waPhone gets the
-			    chat-app treatment (green avatar, prominent "Open chat" CTA) so
-			    the seller never misses the action. Anonymous buyers (no phone
-			    captured) fall back to a neutral row with just the name. */}
-			<section
-				className={
-					order.customer.waPhone
-						? "flex flex-col gap-3 rounded-2xl border border-green-600/30 bg-linear-to-br from-green-500/5 to-green-500/10 p-4"
-						: "flex flex-col gap-3 rounded-2xl border border-border bg-card p-4"
-				}
-			>
-				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-					Customer
-				</p>
-				<div className="flex items-center gap-3">
-					{order.customer.waPhone ? (
-						<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-green-600 text-white">
-							<MessageCircle className="size-5" />
-						</div>
+			{/* Customer — CRM context inline (order count, lifetime spend) with
+			    WhatsApp as the hero contact action. The avatar row deep-links to
+			    the full profile when one exists. */}
+			<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+				{(() => {
+					const avatarRow = (
+						<>
+							<span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-foreground font-heading text-[15px] font-extrabold text-background">
+								{order.customer.name ? (
+									initials(order.customer.name)
+								) : (
+									<User className="size-5" />
+								)}
+							</span>
+							<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+								<span className="truncate text-[15px] font-semibold">
+									{order.customer.name ?? "Anonymous"}
+								</span>
+								<span className="truncate text-[12.5px] text-muted-foreground">
+									{order.customer.waPhone
+										? formatPhone(order.customer.waPhone)
+										: "No phone captured"}
+									{crmCustomer
+										? ` · ${crmCustomer.orderCount} order${crmCustomer.orderCount === 1 ? "" : "s"} · ${formatPrice(crmCustomer.totalSpent, order.currency)}`
+										: ""}
+								</span>
+							</span>
+						</>
+					);
+					return order.customerId ? (
+						<Link
+							to="/app/customers/$customerId"
+							params={{ customerId: order.customerId }}
+							className="-m-1 flex items-center gap-3 rounded-xl p-1 transition-colors hover:bg-muted/60"
+							aria-label="View customer profile"
+						>
+							{avatarRow}
+							<ChevronRight className="size-4.5 shrink-0 text-muted-foreground/60" />
+						</Link>
 					) : (
-						<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-muted">
-							<User className="size-5 text-muted-foreground" />
-						</div>
-					)}
-					<div className="min-w-0 flex-1">
-						<p className="font-semibold">
-							{order.customer.name ?? "Anonymous"}
-						</p>
-						{order.customer.waPhone ? (
-							<p className="font-mono text-xs text-muted-foreground">
-								{formatPhone(order.customer.waPhone)} · via WhatsApp
-							</p>
-						) : null}
-					</div>
-				</div>
+						<div className="flex items-center gap-3">{avatarRow}</div>
+					);
+				})()}
 				{order.customer.waPhone ? (
-					<a
-						href={`https://wa.me/${order.customer.waPhone}`}
-						target="_blank"
-						rel="noopener noreferrer"
-						className="flex h-11 items-center justify-center gap-2 rounded-xl bg-green-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-green-700"
-					>
-						<MessageCircle className="size-4" />
-						Open chat in WhatsApp
-					</a>
-				) : null}
-				{order.customerId ? (
-					// View profile sits inside the same section so the two
-					// related actions read as one customer block. Uses a card
-					// background (vs the section's green tint) so it visually
-					// separates from the WhatsApp action above without
-					// breaking the cohesion.
-					<Link
-						to="/app/customers/$customerId"
-						params={{ customerId: order.customerId }}
-						className="flex items-center justify-between rounded-xl border border-border bg-background px-3 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted"
-					>
-						<span className="flex items-center gap-2">
-							<User className="size-4 text-muted-foreground" />
-							View customer profile
-						</span>
-						<ChevronRight className="size-4 text-muted-foreground" />
-					</Link>
+					<div className="flex gap-2">
+						<a
+							href={`https://wa.me/${order.customer.waPhone}`}
+							target="_blank"
+							rel="noopener noreferrer"
+							className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl border border-accent/40 bg-accent/10 text-sm font-bold text-accent-emphasis transition-colors hover:bg-accent/20"
+						>
+							<MessageCircle className="size-4.5" />
+							WhatsApp
+						</a>
+						<a
+							href={`tel:+${order.customer.waPhone}`}
+							aria-label={`Call ${order.customer.name ?? "customer"}`}
+							className="flex size-11 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted"
+						>
+							<Phone className="size-4.5" />
+						</a>
+					</div>
 				) : null}
 			</section>
 
@@ -963,56 +992,42 @@ function OrderDetailRoute() {
 
 			{order.mockupStatus !== undefined ? <MockupCard order={order} /> : null}
 
-			{/* Stage actions — advance through the seller's stage list one step at a
-			    time (synthesized defaults when unconfigured). Cancel stays available
-			    until the order is terminal. */}
-			{!isTerminal ? (
-				<section className="flex flex-col gap-3">
-					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-						Update Status
-					</p>
+			{/* Rare actions (receipt, cancel) collapse behind one quiet link — the
+			    stepper above already carries the main transition. */}
+			<section className="flex flex-col gap-2">
+				<button
+					type="button"
+					onClick={() => setMoreOpen((x) => !x)}
+					aria-expanded={moreOpen}
+					className="flex h-11 w-full items-center justify-center gap-1.5 rounded-xl border border-border bg-card text-[13px] font-semibold text-muted-foreground transition-colors hover:text-foreground"
+				>
+					More actions
+					<ChevronDown
+						className={`size-4 transition-transform ${moreOpen ? "rotate-180" : ""}`}
+						aria-hidden="true"
+					/>
+				</button>
+				{moreOpen ? (
 					<div className="flex flex-col gap-2">
-						{nextStage
-							? (() => {
-									// Advancing into production (packed or later) is blocked
-									// while the mockup gate is closed — mirrors the server.
-									const blocked =
-										anchorOrdinal(nextStage.anchor) >=
-											anchorOrdinal("packed") && mockupGated;
-									// First move out of pending into a confirmed-anchored stage
-									// keeps the familiar "Confirm Order" verb; everything else
-									// reads "Mark as {stage}".
-									const advanceLabel =
-										order.status === "pending" &&
-										nextStage.anchor === "confirmed"
-											? "Confirm Order"
-											: `Mark as ${stageLabel(nextStage, "en")}`;
-									return (
-										<Button
-											onClick={() => handleAdvance(nextStage.id)}
-											disabled={pending !== null || blocked}
-											className="h-11 w-full"
-										>
-											{pending === nextStage.id
-												? "Updating…"
-												: blocked
-													? `${advanceLabel} — awaiting mockup`
-													: advanceLabel}
-										</Button>
-									);
-								})()
-							: null}
-						<Button
-							onClick={() => setConfirmCancelOpen(true)}
-							disabled={pending !== null}
-							variant="secondary"
-							className="h-11 w-full"
-						>
-							{pending === "cancel" ? "Updating…" : "Cancel Order"}
-						</Button>
+						{/* Receipt on mobile (desktop has it in the PageHeader actions). */}
+						<ReceiptDownloadButton
+							shortId={order.shortId}
+							label="Download receipt"
+							className="w-full lg:hidden"
+						/>
+						{!isTerminal ? (
+							<Button
+								onClick={() => setConfirmCancelOpen(true)}
+								disabled={pending !== null}
+								variant="outline"
+								className="h-11 w-full text-destructive hover:bg-destructive/10 hover:text-destructive"
+							>
+								{pending === "cancel" ? "Updating…" : "Cancel Order"}
+							</Button>
+						) : null}
 					</div>
-				</section>
-			) : null}
+				) : null}
+			</section>
 
 			<ConfirmDialog
 				open={confirmCancelOpen}

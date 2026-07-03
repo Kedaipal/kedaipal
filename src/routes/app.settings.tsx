@@ -1,8 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import {
+	ArrowLeft,
 	Building2,
 	ChevronDown,
+	ChevronRight,
 	ClipboardList,
 	CreditCard,
 	Info,
@@ -33,6 +35,7 @@ import {
 	PageHeader,
 	PageHeaderSkeleton,
 } from "../components/dashboard/page-header";
+import { TierPill } from "../components/dashboard/tier-pill";
 import { useAppForm } from "../components/forms/form";
 import { ShopeeIcon } from "../components/icons/shopee-icon";
 import { BillingTab } from "../components/settings/billing-tab";
@@ -59,6 +62,7 @@ import {
 	type StageAnchor,
 } from "../lib/orderStatus";
 import { reorderByIds } from "../lib/reorder";
+import { tierPill } from "../lib/subscription";
 import {
 	settingsNotifyEmailFormSchema,
 	settingsWaPhoneFormSchema,
@@ -146,6 +150,19 @@ const SETTINGS_TAB_IDS: ReadonlyArray<SettingsTab> = SETTINGS_TABS.map(
 	(t) => t.id,
 );
 
+// The mobile index groups sections by meaning: your store's identity/account
+// vs how you sell. Desktop keeps the flat tab grid (all destinations visible).
+const SETTINGS_GROUPS: ReadonlyArray<{
+	label: string;
+	tabs: SettingsTab[];
+}> = [
+	{ label: "Store", tabs: ["store", "billing"] },
+	{
+		label: "Selling",
+		tabs: ["whatsapp", "payments", "fulfilment", "order-status", "integrations"],
+	},
+];
+
 function Card({ children }: { children: ReactNode }) {
 	return (
 		<section className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-5 lg:p-6">
@@ -194,15 +211,17 @@ function InfoBanner({
 }
 
 export const Route = createFileRoute("/app/settings")({
+	// `tab` stays optional: no tab = the grouped index on mobile (desktop falls
+	// back to Store). Deep links (?tab=billing etc.) keep working everywhere.
 	validateSearch: (search: Record<string, unknown>) => {
 		const raw =
 			typeof search.tab === "string"
 				? (LEGACY_TAB_ALIASES[search.tab] ?? search.tab)
 				: search.tab;
 		return {
-			tab: (SETTINGS_TAB_IDS.includes(raw as SettingsTab)
-				? raw
-				: "store") as SettingsTab,
+			tab: SETTINGS_TAB_IDS.includes(raw as SettingsTab)
+				? (raw as SettingsTab)
+				: undefined,
 		};
 	},
 	component: SettingsRoute,
@@ -272,10 +291,13 @@ function SettingsRoute() {
 
 	// URL is the source of truth for the active tab, so deep links (e.g. the
 	// "View billing" banner → ?tab=billing) actually switch the tab even when the
-	// settings page is already mounted.
-	const { tab: activeTab } = Route.useSearch();
+	// settings page is already mounted. No tab at all = the grouped index on
+	// mobile; desktop always shows a section (defaulting to Store).
+	const { tab } = Route.useSearch();
+	const activeTab: SettingsTab = tab ?? "store";
 	const navigate = Route.useNavigate();
 	const setActiveTab = (t: SettingsTab) => navigate({ search: { tab: t } });
+	const backToIndex = () => navigate({ search: {} });
 	const [newSlug, setNewSlug] = useState("");
 	const [saving, setSaving] = useState(false);
 
@@ -344,20 +366,128 @@ function SettingsRoute() {
 					</span>
 				}
 			/>
-			<section className="flex flex-col gap-2 lg:hidden">
-				<h2 className="text-xl font-bold">Settings</h2>
-				<p className="text-sm text-muted-foreground">
-					Current slug: <span className="font-mono">{retailer.slug}</span>
-				</p>
-			</section>
+			{/* ---- Mobile: grouped list index (no tab in the URL) ---------------
+			     A 7-tab horizontal scroller hides most destinations on a phone; a
+			     grouped list shows all of them with descriptions + status glances.
+			     Every row keeps the same ?tab= deep link the rest of the app uses. */}
+			{tab === undefined ? (
+				<div className="flex flex-col gap-4 lg:hidden">
+					<h2 className="font-heading text-[22px] font-extrabold leading-tight tracking-tight">
+						Settings
+					</h2>
 
-			<div className="-mx-4 flex gap-2 overflow-x-auto overflow-y-hidden px-4 pb-1 lg:mx-0 lg:grid lg:grid-cols-3 lg:px-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+					{/* Store identity card — doubles as the deep link + tier badge. */}
+					<div className="flex items-center gap-3 rounded-2xl bg-foreground p-3.5 text-background">
+						<span className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-accent font-heading text-base font-extrabold text-accent-foreground">
+							{retailer.logoUrl ? (
+								<img
+									src={retailer.logoUrl}
+									alt=""
+									className="size-full object-cover"
+								/>
+							) : (
+								retailer.storeName.charAt(0).toUpperCase()
+							)}
+						</span>
+						<div className="flex min-w-0 flex-1 flex-col gap-0.5">
+							<span className="truncate text-[15px] font-bold">
+								{retailer.storeName}
+							</span>
+							<span className="truncate font-mono text-xs text-accent">
+								kedaipal.com/{retailer.slug}
+							</span>
+						</div>
+						<TierPill
+							subscription={retailer.subscription}
+							foundingRank={retailer.foundingMemberRank}
+							compact
+							className="shrink-0"
+						/>
+					</div>
+
+					{SETTINGS_GROUPS.map((group) => (
+						<div key={group.label} className="flex flex-col gap-1.5">
+							<span className="pl-1 text-[11px] font-bold uppercase tracking-[0.08em] text-muted-foreground/80">
+								{group.label}
+							</span>
+							<div className="overflow-hidden rounded-2xl border border-border bg-card">
+								{group.tabs.map((id, i) => {
+									const t = SETTINGS_TABS.find((x) => x.id === id);
+									if (!t) return null;
+									// Status at a glance where we have live state — no tap
+									// needed to check health.
+									const subtitle =
+										t.id === "billing" && retailer.subscription
+											? tierPill(retailer.subscription, Date.now()).label
+											: t.description;
+									const waConnected =
+										t.id === "whatsapp" && Boolean(retailer.waPhone?.trim());
+									return (
+										<button
+											key={t.id}
+											type="button"
+											onClick={() => setActiveTab(t.id)}
+											className={`flex min-h-[60px] w-full items-center gap-3 px-3.5 py-3 text-left transition-colors hover:bg-muted/50 ${
+												i > 0 ? "border-t border-border/60" : ""
+											}`}
+										>
+											<span
+												className={`flex size-9 shrink-0 items-center justify-center rounded-[10px] ${
+													waConnected
+														? "bg-accent/15 text-accent-emphasis"
+														: "bg-muted text-foreground"
+												}`}
+											>
+												{t.icon}
+											</span>
+											<span className="flex min-w-0 flex-1 flex-col">
+												<span className="text-sm font-semibold">{t.label}</span>
+												<span className="truncate text-xs text-muted-foreground">
+													{subtitle}
+												</span>
+											</span>
+											{waConnected ? (
+												<span className="shrink-0 rounded-full bg-accent/15 px-2 py-0.5 text-[11px] font-bold text-accent-emphasis">
+													Connected
+												</span>
+											) : (
+												<ChevronRight
+													className="size-4 shrink-0 text-muted-foreground/50"
+													aria-hidden="true"
+												/>
+											)}
+										</button>
+									);
+								})}
+							</div>
+						</div>
+					))}
+				</div>
+			) : (
+				/* ---- Mobile: section view (tab set) — back to the index. */
+				<div className="flex items-center gap-3 lg:hidden">
+					<button
+						type="button"
+						onClick={backToIndex}
+						aria-label="Back to settings"
+						className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted"
+					>
+						<ArrowLeft className="size-5" />
+					</button>
+					<h2 className="min-w-0 flex-1 truncate font-heading text-lg font-extrabold leading-tight">
+						{SETTINGS_TABS.find((t) => t.id === activeTab)?.label}
+					</h2>
+				</div>
+			)}
+
+			{/* ---- Desktop: flat tab grid (all destinations visible at once). */}
+			<div className="hidden gap-2 lg:grid lg:grid-cols-3">
 				{SETTINGS_TABS.map((t) => (
 					<button
 						key={t.id}
 						type="button"
 						onClick={() => setActiveTab(t.id)}
-						className={`flex min-w-[10rem] items-center gap-3 rounded-2xl border p-3 text-left transition-all lg:min-w-0 ${
+						className={`flex items-center gap-3 rounded-2xl border p-3 text-left transition-all ${
 							activeTab === t.id
 								? "border-accent bg-accent/10 text-foreground shadow-sm"
 								: "border-border bg-card text-muted-foreground hover:border-foreground/20 hover:text-foreground"
@@ -384,6 +514,13 @@ function SettingsRoute() {
 				))}
 			</div>
 
+			{/* Section content — hidden on mobile while the index is showing
+			    (desktop always renders the active section, defaulting to Store). */}
+			<div
+				className={
+					tab === undefined ? "hidden lg:flex lg:flex-col lg:gap-6" : "contents"
+				}
+			>
 			{activeTab === "store" ? (
 				<div className="flex flex-col gap-6 pt-2">
 					<Card>
@@ -563,6 +700,7 @@ function SettingsRoute() {
 					/>
 				</div>
 			) : null}
+			</div>
 		</div>
 	);
 }
