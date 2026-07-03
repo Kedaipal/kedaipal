@@ -705,14 +705,22 @@ function TrackingRoute() {
 				) : (
 					<Truck className="size-4" />
 				)}
-				{isSelfCollect ? "Self Collect" : "Delivery"}
+				{isSelfCollect
+					? order.pickupSnapshot?.locationType === "drop_off"
+						? "Drop-off"
+						: "Self Collect"
+					: "Delivery"}
 			</div>
 
 			{/* Fulfilment date the buyer chose — reassures them the seller has it. */}
 			{order.fulfilmentDate !== undefined ? (
 				<div className="mt-2 flex items-center gap-2 rounded-xl bg-accent/5 px-3 py-2 text-sm font-medium text-foreground">
 					<CalendarDays className="size-4 text-accent" />
-					{isSelfCollect ? "Collect on " : "Delivery on "}
+					{isSelfCollect
+						? order.pickupSnapshot?.locationType === "drop_off"
+							? "Meet on "
+							: "Collect on "
+						: "Delivery on "}
 					<span className="font-semibold">
 						{formatFulfilmentDate(order.fulfilmentDate)}
 					</span>

@@ -605,6 +605,11 @@ export function CheckoutSheet({
 															(p) => p._id === pickupLocationId,
 														))
 													: undefined;
+											// Drop-off points are meetups, not the seller's place —
+											// the date question reads "meet", matching the DROP-OFF
+											// badge and the tracking page's "Meet at".
+											const isDropOff =
+												selectedPickup?.locationType === "drop_off";
 											return (
 												<div className="flex flex-col gap-2">
 													{selectedPickup?.scheduleNote ? (
@@ -630,13 +635,19 @@ export function CheckoutSheet({
 															<field.DateField
 																label={
 																	deliveryMethod === "self_collect"
-																		? "When will you collect?"
+																		? isDropOff
+																			? "When should we meet?"
+																			: "When will you collect?"
 																		: "When do you need it delivered?"
 																}
 																min={minYmd}
 																max={maxYmd}
 																required
-																description="Pick the date you need this order."
+																description={
+																	isDropOff
+																		? "Pick the date you'll meet at the drop-off point."
+																		: "Pick the date you need this order."
+																}
 															/>
 														)}
 													</form.AppField>

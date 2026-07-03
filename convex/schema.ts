@@ -545,6 +545,11 @@ export default defineSchema({
 		paymentClaimedAt: v.optional(v.number()),
 		paymentReceivedAt: v.optional(v.number()),
 		paymentProofStorageId: v.optional(v.string()),
+		// When the one-time "still awaiting payment" WhatsApp nudge was sent
+		// (3 days before the 14-day open-payment window closes). Stamped by the
+		// daily cron at schedule time so it never double-sends. Undefined = not
+		// sent (yet, or never became due). See docs/payment-reminder.md.
+		paymentReminderSentAt: v.optional(v.number()),
 		// Mockup/proof approval — a third independent dimension (like payment),
 		// gating the confirmed→packed transition for made-to-order orders.
 		// Undefined = order has no proof-required item (no gate). See

@@ -74,17 +74,19 @@ const BASE_DEFAULTS: Record<Locale, Record<OrderStatus, string>> = {
 
 // Self-collect preset — only the two stages whose wording differs from delivery.
 // Everything else falls through to BASE_DEFAULTS.
-const SELF_COLLECT_DEFAULTS: Record<Locale, Partial<Record<OrderStatus, string>>> =
-	{
-		en: {
-			shipped: "Ready for Pickup",
-			delivered: "Collected",
-		},
-		ms: {
-			shipped: "Sedia Diambil",
-			delivered: "Telah Diambil",
-		},
-	};
+const SELF_COLLECT_DEFAULTS: Record<
+	Locale,
+	Partial<Record<OrderStatus, string>>
+> = {
+	en: {
+		shipped: "Ready for Pickup",
+		delivered: "Collected",
+	},
+	ms: {
+		shipped: "Sedia Diambil",
+		delivered: "Telah Diambil",
+	},
+};
 
 // Buttons are imperative; labels are nouns. Most transitions render as
 // "Mark as {label}"; confirm/cancel keep dedicated system verbs so we never put
@@ -341,13 +343,20 @@ export function collectStageConfigErrors(stages: OrderStage[]): string[] {
 		if (!en) {
 			errors.push("Every stage needs an English label.");
 		} else if (en.length > STAGE_LABEL_MAX_LENGTH) {
-			errors.push(`Label "${en}" exceeds ${STAGE_LABEL_MAX_LENGTH} characters.`);
+			errors.push(
+				`Label "${en}" exceeds ${STAGE_LABEL_MAX_LENGTH} characters.`,
+			);
 		}
 		if ((s.label.ms?.trim().length ?? 0) > STAGE_LABEL_MAX_LENGTH) {
-			errors.push(`A Bahasa Malaysia label exceeds ${STAGE_LABEL_MAX_LENGTH} characters.`);
+			errors.push(
+				`A Bahasa Malaysia label exceeds ${STAGE_LABEL_MAX_LENGTH} characters.`,
+			);
 		}
 		for (const key of ["en", "ms"] as const) {
-			if ((s.description?.[key]?.trim().length ?? 0) > STAGE_DESCRIPTION_MAX_LENGTH) {
+			if (
+				(s.description?.[key]?.trim().length ?? 0) >
+				STAGE_DESCRIPTION_MAX_LENGTH
+			) {
 				errors.push(
 					`A stage description exceeds ${STAGE_DESCRIPTION_MAX_LENGTH} characters.`,
 				);

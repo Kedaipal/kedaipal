@@ -14,9 +14,19 @@ export type CopyVars = {
 	trackingUrl?: string;
 	carrierTrackingUrl?: string;
 	deliveryMethod?: DeliveryMethod;
+	// The order's frozen pickup kind (pickupSnapshot.locationType). Only
+	// meaningful when deliveryMethod is self_collect; undefined (legacy
+	// snapshots / delivery orders) reads as self-collect, matching
+	// renderPickupBlock. Drives "pickup" vs "drop-off point" wording.
+	pickupKind?: PickupKind;
 	/** Pre-formatted money string (e.g. "MYR 25.00") for messages that quote a total. */
 	amount?: string;
 };
+
+/** True when the order is fulfilled at a drop-off point (meetup), not the seller's place. */
+function isDropOff(v: Pick<CopyVars, "deliveryMethod" | "pickupKind">): boolean {
+	return v.deliveryMethod === "self_collect" && v.pickupKind === "drop_off";
+}
 
 export type StatusKey = "packed" | "shipped" | "delivered" | "cancelled";
 
@@ -35,20 +45,27 @@ function contactLine(contactPhone: string | undefined, locale: Locale): string {
 
 export const waCopy: Record<Locale, LocaleCopy> = {
 	en: {
-		confirm: ({ shortId, storeName, contactPhone, trackingUrl, deliveryMethod }) => {
-			const method = deliveryMethod === "self_collect"
-				? "We'll let you know when it's ready for pickup."
-				: "We'll update you when it ships.";
+		confirm: ({ shortId, storeName, contactPhone, trackingUrl, deliveryMethod, pickupKind }) => {
+			const method = isDropOff({ deliveryMethod, pickupKind })
+				? "We'll let you know when it's ready at the drop-off point."
+				: deliveryMethod === "self_collect"
+					? "We'll let you know when it's ready for pickup."
+					: "We'll update you when it ships.";
 			return `✅ Order ${shortId} confirmed. ${method} — ${storeName}${trackingUrl ? `\n\nTrack order & tap 'I've paid' to send receipt: ${trackingUrl}` : ""}${contactLine(contactPhone, "en")}`;
 		},
 		status: {
-			packed: ({ shortId, trackingUrl, deliveryMethod }) => {
-				const msg = deliveryMethod === "self_collect"
-					? `📦 Order ${shortId} is packed and ready for pickup.`
-					: `📦 Order ${shortId} is packed and ready to ship.`;
+			packed: ({ shortId, trackingUrl, deliveryMethod, pickupKind }) => {
+				const msg = isDropOff({ deliveryMethod, pickupKind })
+					? `📦 Order ${shortId} is packed and ready for the drop-off point.`
+					: deliveryMethod === "self_collect"
+						? `📦 Order ${shortId} is packed and ready for pickup.`
+						: `📦 Order ${shortId} is packed and ready to ship.`;
 				return `${msg}${trackingUrl ? `\n\nTrack your order: ${trackingUrl}` : ""}`;
 			},
-			shipped: ({ shortId, carrierTrackingUrl, trackingUrl, deliveryMethod }) => {
+			shipped: ({ shortId, carrierTrackingUrl, trackingUrl, deliveryMethod, pickupKind }) => {
+				if (isDropOff({ deliveryMethod, pickupKind })) {
+					return `📍 Order ${shortId} is ready — see you at the drop-off point!${trackingUrl ? `\n\nOrder status: ${trackingUrl}` : ""}`;
+				}
 				if (deliveryMethod === "self_collect") {
 					return `🏪 Order ${shortId} is ready for pickup!${trackingUrl ? `\n\nOrder status: ${trackingUrl}` : ""}`;
 				}
@@ -67,20 +84,27 @@ export const waCopy: Record<Locale, LocaleCopy> = {
 			"Hi! To place an order, browse our catalog and tap Checkout — you'll be sent back here with an order ID.",
 	},
 	ms: {
-		confirm: ({ shortId, storeName, contactPhone, trackingUrl, deliveryMethod }) => {
-			const method = deliveryMethod === "self_collect"
-				? "Kami akan maklumkan apabila sedia untuk diambil."
-				: "Kami akan maklumkan apabila dihantar.";
+		confirm: ({ shortId, storeName, contactPhone, trackingUrl, deliveryMethod, pickupKind }) => {
+			const method = isDropOff({ deliveryMethod, pickupKind })
+				? "Kami akan maklumkan apabila sedia di lokasi penyerahan."
+				: deliveryMethod === "self_collect"
+					? "Kami akan maklumkan apabila sedia untuk diambil."
+					: "Kami akan maklumkan apabila dihantar.";
 			return `✅ Pesanan ${shortId} telah disahkan. ${method} — ${storeName}${trackingUrl ? `\n\nJejak pesanan & tekan 'I've paid' untuk hantar resit: ${trackingUrl}` : ""}${contactLine(contactPhone, "ms")}`;
 		},
 		status: {
-			packed: ({ shortId, trackingUrl, deliveryMethod }) => {
-				const msg = deliveryMethod === "self_collect"
-					? `📦 Pesanan ${shortId} sudah dibungkus dan sedia untuk diambil.`
-					: `📦 Pesanan ${shortId} sudah dibungkus dan sedia untuk dihantar.`;
+			packed: ({ shortId, trackingUrl, deliveryMethod, pickupKind }) => {
+				const msg = isDropOff({ deliveryMethod, pickupKind })
+					? `📦 Pesanan ${shortId} sudah dibungkus dan sedia untuk ke lokasi penyerahan.`
+					: deliveryMethod === "self_collect"
+						? `📦 Pesanan ${shortId} sudah dibungkus dan sedia untuk diambil.`
+						: `📦 Pesanan ${shortId} sudah dibungkus dan sedia untuk dihantar.`;
 				return `${msg}${trackingUrl ? `\n\nJejak pesanan anda: ${trackingUrl}` : ""}`;
 			},
-			shipped: ({ shortId, carrierTrackingUrl, trackingUrl, deliveryMethod }) => {
+			shipped: ({ shortId, carrierTrackingUrl, trackingUrl, deliveryMethod, pickupKind }) => {
+				if (isDropOff({ deliveryMethod, pickupKind })) {
+					return `📍 Pesanan ${shortId} sedia — jumpa di lokasi penyerahan!${trackingUrl ? `\n\nStatus pesanan: ${trackingUrl}` : ""}`;
+				}
 				if (deliveryMethod === "self_collect") {
 					return `🏪 Pesanan ${shortId} sedia untuk diambil!${trackingUrl ? `\n\nStatus pesanan: ${trackingUrl}` : ""}`;
 				}
@@ -127,7 +151,8 @@ export type SystemMessageKey =
 	| "counterOrderConfirmedPaid"
 	| "counterOrderConfirmedUnpaid"
 	| "orderReceiptCaption"
-	| "orderInvoiceCaption";
+	| "orderInvoiceCaption"
+	| "paymentReminder";
 
 type SystemCopy = {
 	paymentReceived: (v: CopyVars) => string;
@@ -154,6 +179,10 @@ type SystemCopy = {
 	// WhatsApp from the counter Done screen (ticket 86ey4fz3w).
 	orderReceiptCaption: (v: CopyVars) => string;
 	orderInvoiceCaption: (v: CopyVars) => string;
+	// One-time nudge sent 3 days before the 14-day open-payment window closes
+	// on an order whose payment was never claimed/received. See
+	// docs/payment-reminder.md. Not retailer-overridable (system copy).
+	paymentReminder: (v: CopyVars) => string;
 };
 
 export const systemMessages: Record<Locale, SystemCopy> = {
@@ -192,6 +221,12 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`Here's your receipt for order ${shortId} 🧾 Thanks for shopping with us!`,
 		orderInvoiceCaption: ({ shortId }) =>
 			`Here's your invoice for order ${shortId} 🧾 The payment details are inside.`,
+		paymentReminder: ({ shortId, storeName, amount, trackingUrl, contactPhone }) =>
+			`👋 Friendly reminder from ${storeName}: order ${shortId}${
+				amount ? ` (${amount})` : ""
+			} is still awaiting payment. Once you've paid, tap 'I've paid' so we can get it moving${
+				trackingUrl ? `: ${trackingUrl}` : "."
+			}${contactLine(contactPhone, "en")}`,
 	},
 	ms: {
 		paymentReceived: ({ shortId, storeName, trackingUrl }) =>
@@ -228,6 +263,12 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`Ini resit untuk pesanan ${shortId} 🧾 Terima kasih kerana membeli-belah dengan kami!`,
 		orderInvoiceCaption: ({ shortId }) =>
 			`Ini invois untuk pesanan ${shortId} 🧾 Maklumat pembayaran ada di dalam.`,
+		paymentReminder: ({ shortId, storeName, amount, trackingUrl, contactPhone }) =>
+			`👋 Peringatan mesra daripada ${storeName}: pesanan ${shortId}${
+				amount ? ` (${amount})` : ""
+			} masih menunggu pembayaran. Selepas membayar, tekan 'I've paid' supaya kami boleh teruskan${
+				trackingUrl ? `: ${trackingUrl}` : "."
+			}${contactLine(contactPhone, "ms")}`,
 	},
 };
 
@@ -255,11 +296,21 @@ export function renderStageUpdate(
 		stageLabel: string;
 		stageDescription?: string;
 		trackingUrl?: string;
+		// Courier link — present when the stage move carried one (shipped-anchored
+		// crossings). Rendered as its own line so the buyer keeps the carrier
+		// tracking even when the seller's stage copy replaces the canonical
+		// "on the way" template.
+		carrierTrackingUrl?: string;
 		contactPhone?: string;
 	},
 ): string {
 	const desc = args.stageDescription?.trim()
 		? `\n${args.stageDescription.trim()}`
+		: "";
+	const carrier = args.carrierTrackingUrl
+		? locale === "ms"
+			? `\n\nJejak penghantaran: ${args.carrierTrackingUrl}`
+			: `\n\nTrack shipment: ${args.carrierTrackingUrl}`
 		: "";
 	const track = args.trackingUrl
 		? locale === "ms"
@@ -270,7 +321,7 @@ export function renderStageUpdate(
 		locale === "ms"
 			? `📦 Kemaskini pesanan ${args.shortId}: ${args.stageLabel}.`
 			: `📦 Order ${args.shortId} update: ${args.stageLabel}.`;
-	return `${head}${desc}${track}${contactLine(args.contactPhone, locale)}`;
+	return `${head}${desc}${carrier}${track}${contactLine(args.contactPhone, locale)}`;
 }
 
 // Matches ORD-XXXX where X is from the alphabet in lib/order.ts
@@ -318,6 +369,20 @@ function getDefault(locale: Locale, key: TemplateKey, vars: CopyVars): string {
  * and non-empty, otherwise the default catalog. Variables `{shortId}` and
  * `{storeName}` are interpolated in both branches.
  */
+/**
+ * Whether the retailer explicitly authored an override for this locale+key.
+ * Used by notifyStatusChange to keep an authored template winning over the
+ * custom-stage wording (override > stage label/description > default catalog).
+ */
+export function hasTemplateOverride(
+	overrides: MessageTemplates | undefined,
+	locale: Locale,
+	key: TemplateKey,
+): boolean {
+	const override = overrides?.[locale]?.[key];
+	return Boolean(override && override.trim().length > 0);
+}
+
 export function renderMessage(
 	overrides: MessageTemplates | undefined,
 	locale: Locale,
