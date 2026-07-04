@@ -324,6 +324,8 @@ export const listOpenSessions = query({
 		Array<{
 			sessionId: Id<"counterCheckoutSessions">;
 			status: "awaiting_buyer" | "buyer_identified";
+			// Drives the "Walk-in scan" badge — see the store QR poster (86ey5m35w).
+			origin: "cashier" | "store_qr";
 			displayName: string | undefined;
 			isNewCustomer: boolean | undefined;
 			itemCount: number;
@@ -337,6 +339,7 @@ export const listOpenSessions = query({
 		const out: Array<{
 			sessionId: Id<"counterCheckoutSessions">;
 			status: "awaiting_buyer" | "buyer_identified";
+			origin: "cashier" | "store_qr";
 			displayName: string | undefined;
 			isNewCustomer: boolean | undefined;
 			itemCount: number;
@@ -369,6 +372,7 @@ export const listOpenSessions = query({
 				out.push({
 					sessionId: s._id,
 					status,
+					origin: s.origin ?? "cashier",
 					displayName,
 					isNewCustomer: s.isNewCustomer,
 					itemCount: (s.draft?.items ?? []).reduce((n, i) => n + i.quantity, 0),
@@ -801,5 +805,294 @@ export const expireStaleSessions = internalMutation({
 			);
 		}
 		return { status: sweepStatus, expired: page.page.length, isDone: page.isDone };
+	},
+});
+
+// ---------------------------------------------------------------------------
+// Store QR poster — the PERMANENT printed QR (86ey5m35w, docs/counter-checkout.md)
+//
+// The poster QR encodes `wa.me/<shared_WABA>?text=…KPS-<retailers.counterQrToken>…`.
+// The token is public by design (it's printed on a wall), so security is
+// behavioural limits, never secrecy: per-phone-per-store rate limit
+// (`storeQrScan`), a per-store cap on concurrent open walk-in sessions,
+// the existing TTL sweep, and one-tap rotation (which kills old posters).
+// A buyer's scan CREATES (or re-claims) a `buyer_identified` session with
+// `origin: "store_qr"`; the cashier picks it up from the open-checkouts list.
+// ---------------------------------------------------------------------------
+
+/**
+ * Max concurrent open walk-in (`store_qr`) sessions per store — bounds the
+ * blast radius of poster spam. Cashier-started sessions are NOT counted (a
+ * busy counter must never be blocked by scan noise).
+ */
+export const MAX_OPEN_STORE_QR_SESSIONS = 10;
+
+/**
+ * How long dead sessions (expired / cancelled) are retained before the purge
+ * cron deletes the rows. They hold buyer PII (phone + pushname), and the
+ * poster increases junk-scan volume, so they must not live forever (PDPA
+ * retention principle). Completed sessions are exempt — they link to an
+ * order, whose retention is the PDPA Compliance Pack's job (86ey5m3hx).
+ */
+export const STALE_SESSION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // ~30 days
+
+/** The poster's `wa.me` deep link. Same shape as the per-session prefill —
+ * only the `KPS-` ref is load-bearing; the prose is human framing. */
+function buildStoreQrWaUrl(token: string): string | undefined {
+	const phone = process.env.WHATSAPP_CHECKOUT_PHONE;
+	if (!phone) return undefined;
+	const text = `Hi! 👋 I'd like to order at the counter.\n\nStore ref: KPS-${token}`;
+	return `https://wa.me/${phone.replace(/\D/g, "")}?text=${encodeURIComponent(text)}`;
+}
+
+/**
+ * The seller's Store QR card read: the permanent token + poster wa.me link,
+ * or nulls when no token has been generated yet. Owner-or-admin.
+ */
+export const getStoreQr = query({
+	args: { retailerId: v.optional(v.id("retailers")) },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{ token: string | null; waUrl: string | undefined }> => {
+		const { retailer } = await requireCounterRetailer(ctx, retailerId);
+		const token = retailer.counterQrToken ?? null;
+		return { token, waUrl: token ? buildStoreQrWaUrl(token) : undefined };
+	},
+});
+
+/**
+ * Generate the store's permanent QR token if it doesn't exist yet (idempotent —
+ * an existing token is returned unchanged, so the card's "Generate" button can
+ * never rotate by accident). Owner-or-admin, admin-audited.
+ */
+export const ensureCounterQrToken = mutation({
+	args: { retailerId: v.optional(v.id("retailers")) },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{ token: string; waUrl: string | undefined }> => {
+		const access = await requireCounterRetailer(ctx, retailerId);
+		const retailer = access.retailer;
+		let token = retailer.counterQrToken;
+		if (!token) {
+			token = generateTrackingToken();
+			await ctx.db.patch(retailer._id, {
+				counterQrToken: token,
+				updatedAt: Date.now(),
+			});
+			await logAdminAction(
+				ctx,
+				access,
+				"counterCheckout.ensureCounterQrToken",
+				retailer._id,
+			);
+		}
+		return { token, waUrl: buildStoreQrWaUrl(token) };
+	},
+});
+
+/**
+ * Replace the store's permanent QR token. Old printed posters STOP WORKING —
+ * the UI confirms this explicitly before calling. Owner-or-admin, admin-audited.
+ */
+export const rotateCounterQrToken = mutation({
+	args: { retailerId: v.optional(v.id("retailers")) },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{ token: string; waUrl: string | undefined }> => {
+		const access = await requireCounterRetailer(ctx, retailerId);
+		const token = generateTrackingToken();
+		await ctx.db.patch(access.retailer._id, {
+			counterQrToken: token,
+			updatedAt: Date.now(),
+		});
+		await logAdminAction(
+			ctx,
+			access,
+			"counterCheckout.rotateCounterQrToken",
+			access.retailer._id,
+		);
+		return { token, waUrl: buildStoreQrWaUrl(token) };
+	},
+});
+
+/** Outcome of an inbound `KPS-<token>` poster scan (drives the buyer reply). */
+export type StoreQrStartResult =
+	| {
+			result: "started";
+			retailerId: Id<"retailers">;
+			storeName: string;
+			locale: Locale;
+			// True when the buyer already had an open walk-in session at this store
+			// (a rescan) — the caller skips the payment-details push to avoid
+			// repeating what they got on the first scan.
+			reclaimed: boolean;
+	  }
+	| { result: "busy"; storeName: string; locale: Locale }
+	| { result: "not_found" };
+
+/**
+ * Internal: start (or re-claim) a walk-in counter session from an inbound
+ * `KPS-<token>` poster scan. Called from the WhatsApp webhook handler.
+ *
+ * Order of guards matters:
+ *  1. token → retailer (unknown/rotated token leaks nothing — generic reply);
+ *  2. re-claim an existing open walk-in session for this buyer (a rescan is
+ *     free: no rate-limit charge, no duplicate row);
+ *  3. rate limit per (store, phone) + per-store open-session cap — the actual
+ *     security model for a public token;
+ *  4. create the session already `buyer_identified` (the buyer IS identified —
+ *     they messaged us), with the long idle TTL so the cashier has time.
+ */
+export const startSessionFromStoreQr = internalMutation({
+	args: {
+		token: v.string(),
+		waPhone: v.string(),
+		profileName: v.optional(v.string()),
+	},
+	handler: async (
+		ctx,
+		{ token, waPhone, profileName },
+	): Promise<StoreQrStartResult> => {
+		const retailer = await ctx.db
+			.query("retailers")
+			.withIndex("by_counterQrToken", (q) => q.eq("counterQrToken", token))
+			.unique();
+		if (!retailer) return { result: "not_found" };
+
+		const storeName = retailer.storeName;
+		const locale = pickLocale(retailer.locale);
+		const now = Date.now();
+
+		// Normalize the inbound phone the same way the bind flow does.
+		let normalizedPhone: string;
+		try {
+			normalizedPhone = assertValidWaPhone(waPhone);
+		} catch {
+			normalizedPhone = waPhone; // best-effort, mirrors bindCheckoutSession
+		}
+
+		// Open walk-in sessions at this store (bounded by the cap, so collect()
+		// stays small). Also used for the re-claim lookup below.
+		const openBound = await ctx.db
+			.query("counterCheckoutSessions")
+			.withIndex("by_retailer_status", (q) =>
+				q.eq("retailerId", retailer._id).eq("status", "buyer_identified"),
+			)
+			.collect();
+		const openWalkIns = openBound.filter(
+			(s) => (s.origin ?? "cashier") === "store_qr" && now <= s.expiresAt,
+		);
+
+		// Re-claim: the buyer rescanned while already connected → same session,
+		// slid idle window, no new row, no rate-limit charge.
+		const existing = openWalkIns.find((s) => s.waPhone === normalizedPhone);
+		if (existing) {
+			await ctx.db.patch(existing._id, {
+				expiresAt: now + OPEN_SESSION_TTL_MS,
+				updatedAt: now,
+			});
+			return {
+				result: "started",
+				retailerId: retailer._id,
+				storeName,
+				locale,
+				reclaimed: true,
+			};
+		}
+
+		// The behavioural limits — the poster token is public, so these ARE the
+		// security model (see the section comment).
+		const limit = await rateLimiter.limit(ctx, "storeQrScan", {
+			key: `${retailer._id}:${normalizedPhone}`,
+		});
+		if (!limit.ok) return { result: "busy", storeName, locale };
+		if (openWalkIns.length >= MAX_OPEN_STORE_QR_SESSIONS) {
+			return { result: "busy", storeName, locale };
+		}
+
+		// Resolve an existing customer (returning-buyer history panel) and refresh
+		// their pushname — same as bindCheckoutSession.
+		const customer = await ctx.db
+			.query("customers")
+			.withIndex("by_retailer_phone", (q) =>
+				q.eq("retailerId", retailer._id).eq("waPhone", normalizedPhone),
+			)
+			.unique();
+		const trimmedPushname = profileName?.trim() || undefined;
+		if (customer && trimmedPushname) {
+			await refreshWaProfileName(ctx, {
+				customerId: customer._id,
+				profileName: trimmedPushname,
+			});
+		}
+
+		await ctx.db.insert("counterCheckoutSessions", {
+			retailerId: retailer._id,
+			sellerUserId: retailer.userId,
+			// Fresh internal session token — keeps the by_token capability unique.
+			// The buyer never sees it (they're already bound).
+			token: generateTrackingToken(),
+			status: "buyer_identified",
+			origin: "store_qr",
+			customerId: customer?._id,
+			waPhone: normalizedPhone,
+			waProfileName: trimmedPushname,
+			isNewCustomer: customer === null,
+			boundAt: now,
+			expiresAt: now + OPEN_SESSION_TTL_MS,
+			createdAt: now,
+			updatedAt: now,
+		});
+
+		return {
+			result: "started",
+			retailerId: retailer._id,
+			storeName,
+			locale,
+			reclaimed: false,
+		};
+	},
+});
+
+/**
+ * Daily purge (crons.ts): DELETE dead sessions (expired / cancelled) once
+ * they're past the retention window — they hold buyer PII and serve no
+ * further purpose (`expireStaleSessions` above only flips status, it never
+ * deletes). Sweeps `expired` first, then chains to `cancelled`, paginated —
+ * same self-chaining shape as expireStaleSessions. Completed sessions are
+ * kept (they link to orders; order retention is 86ey5m3hx's job).
+ */
+export const purgeStaleSessions = internalMutation({
+	args: {
+		status: v.optional(v.union(v.literal("expired"), v.literal("cancelled"))),
+		cursor: v.optional(v.union(v.string(), v.null())),
+	},
+	handler: async (ctx, { status, cursor }) => {
+		const sweepStatus = status ?? "expired";
+		const cutoff = Date.now() - STALE_SESSION_RETENTION_MS;
+		const page = await ctx.db
+			.query("counterCheckoutSessions")
+			.withIndex("by_status_expiry", (q) =>
+				q.eq("status", sweepStatus).lt("expiresAt", cutoff),
+			)
+			.paginate({ numItems: 100, cursor: cursor ?? null });
+
+		for (const session of page.page) {
+			await ctx.db.delete(session._id);
+		}
+
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(0, internal.counterCheckout.purgeStaleSessions, {
+				status: sweepStatus,
+				cursor: page.continueCursor,
+			});
+		} else if (sweepStatus === "expired") {
+			await ctx.scheduler.runAfter(0, internal.counterCheckout.purgeStaleSessions, {
+				status: "cancelled",
+			});
+		}
 	},
 });
