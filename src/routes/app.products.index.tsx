@@ -1,13 +1,22 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
-import { ChevronDown, Download, EyeOff, Upload } from "lucide-react";
+import {
+	ChevronRight,
+	Download,
+	EyeOff,
+	FileSpreadsheet,
+	Search,
+	Upload,
+	X,
+} from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { PageHeader } from "../components/dashboard/page-header";
 import { Button } from "../components/ui/button";
+import { FilterChip, FilterChipRow } from "../components/ui/filter-chip";
 import { Input } from "../components/ui/input";
 import {
 	Popover,
@@ -25,7 +34,6 @@ import {
 	type ExportableProduct,
 } from "../lib/product-export";
 import { reorderByIds } from "../lib/reorder";
-import { cn } from "../lib/utils";
 
 type StatusFilter = "all" | "active" | "archived";
 
@@ -37,21 +45,19 @@ export const Route = createFileRoute("/app/products/")({
 
 /**
  * Import / Export menu — an occasional bulk action (first-time import; periodic
- * export), so it lives in the page header next to "+ New", not on the filter row.
- * Self-contained (owns its popover state) so it can render in both the desktop
- * header and the mobile header without sharing state. `iconOnly` shrinks it to an
- * icon button for the tight mobile header.
+ * export), so it collapses to ONE icon button in the header (a labelled
+ * "Import / Export ▾" competed with "+ New" for attention). Self-contained
+ * (owns its popover state) so it can render in both the desktop header and the
+ * mobile header without sharing state.
  */
 function BulkIoMenu({
 	canExport,
 	exporting,
 	onExport,
-	iconOnly = false,
 }: {
 	canExport: boolean;
 	exporting: "csv" | "xlsx" | null;
 	onExport: (kind: "csv" | "xlsx") => void;
-	iconOnly?: boolean;
 }) {
 	const [open, setOpen] = useState(false);
 	return (
@@ -60,18 +66,15 @@ function BulkIoMenu({
 				<Button
 					type="button"
 					variant="outline"
-					className={
-						iconOnly ? "size-11 shrink-0 p-0" : "h-10 shrink-0 gap-1.5"
+					size="icon"
+					className="size-11 shrink-0 rounded-xl"
+					aria-label={
+						exporting ? "Exporting products…" : "Import or export products"
 					}
-					aria-label="Import or export products"
 				>
-					<Upload className="size-4" />
-					{iconOnly ? null : (
-						<>
-							<span>{exporting ? "Exporting…" : "Import / Export"}</span>
-							<ChevronDown className="size-4" />
-						</>
-					)}
+					{/* Spreadsheet glyph, not arrows — an up/down icon reads as "sort"
+					    right above a sortable product list. */}
+					<FileSpreadsheet className="size-5" />
 				</Button>
 			</PopoverTrigger>
 			<PopoverContent align="end" className="w-52 p-1">
@@ -235,12 +238,14 @@ function ProductsRoute() {
 				}
 			/>
 			<div className="flex items-center justify-between gap-3 lg:hidden">
-				<div className="flex min-w-0 flex-col gap-1">
-					<h2 className="text-xl font-bold">Products</h2>
+				<div className="flex min-w-0 flex-col">
+					<h2 className="font-heading text-[22px] font-extrabold leading-tight tracking-tight">
+						Products
+					</h2>
 					{products === undefined ? (
 						<Skeleton className="h-3 w-32 rounded" />
 					) : (
-						<p className="text-xs text-muted-foreground">
+						<p className="text-[13px] text-muted-foreground">
 							{counts.active} active · {counts.archived} archived
 						</p>
 					)}
@@ -251,7 +256,6 @@ function ProductsRoute() {
 							canExport={counts.all > 0}
 							exporting={exporting}
 							onExport={handleExport}
-							iconOnly
 						/>
 					) : null}
 					<Button asChild className="h-11">
@@ -261,81 +265,43 @@ function ProductsRoute() {
 			</div>
 
 			<div className="relative lg:max-w-md">
-				<svg
-					className="pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					strokeWidth="2"
-					strokeLinecap="round"
-					strokeLinejoin="round"
+				<Search
+					className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
 					aria-hidden="true"
-				>
-					<circle cx="11" cy="11" r="7" />
-					<path d="m20 20-3.5-3.5" />
-				</svg>
+				/>
 				<Input
 					type="search"
 					value={rawQuery}
 					onChange={(e) => setRawQuery(e.target.value)}
-					placeholder="Search products…"
-					className="h-11 w-full rounded-2xl border-border bg-card pl-11 pr-10 text-sm"
+					placeholder="Search products"
+					className="h-11 w-full rounded-xl border-border bg-card pl-9 pr-10 text-sm"
 				/>
 				{rawQuery ? (
 					<button
 						type="button"
 						onClick={() => setRawQuery("")}
-						className="absolute right-3 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+						className="absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
 						aria-label="Clear search"
 					>
-						<svg
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							strokeWidth="2"
-							strokeLinecap="round"
-							strokeLinejoin="round"
-							aria-hidden="true"
-							className="size-4"
-						>
-							<path d="M18 6 6 18" />
-							<path d="m6 6 12 12" />
-						</svg>
+						<X className="size-4" aria-hidden="true" />
 					</button>
 				) : null}
 			</div>
 
-			{/* Status filters — chips only; the page scrolls them edge-to-edge on
-			    mobile. Import/Export lives in the header (next to New), not here. */}
-			<div className="-mx-5 flex gap-2 overflow-x-auto px-5 pb-1 [scrollbar-width:none] lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0 [&::-webkit-scrollbar]:hidden">
+			{/* Status filters — the shared FilterChip; the row scrolls edge-to-edge
+			    on mobile. Import/Export lives in the header (next to New), not here. */}
+			<FilterChipRow>
 				{filterOptions.map((opt) => (
-					<button
+					<FilterChip
 						key={opt.key}
-						type="button"
+						selected={status === opt.key}
 						onClick={() => setStatus(opt.key)}
-						className={cn(
-							"flex min-h-9 shrink-0 items-center gap-1.5 rounded-full border px-3 text-sm",
-							status === opt.key
-								? "border-foreground bg-foreground text-background"
-								: "border-border bg-background text-muted-foreground",
-						)}
+						count={products !== undefined ? counts[opt.key] : undefined}
 					>
 						{opt.label}
-						{products !== undefined ? (
-							<span
-								className={cn(
-									"flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none",
-									status === opt.key
-										? "bg-background text-foreground"
-										: "bg-muted text-muted-foreground",
-								)}
-							>
-								{counts[opt.key]}
-							</span>
-						) : null}
-					</button>
+					</FilterChip>
 				))}
-			</div>
+			</FilterChipRow>
 
 			{filtered === undefined ? (
 				<ProductListSkeleton />
@@ -410,34 +376,39 @@ function ProductCard({
 				) : null}
 			</div>
 			<div className="flex min-w-0 flex-1 flex-col gap-1">
-				<span className="truncate font-medium">{p.name}</span>
-				<div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-					<span className="font-semibold text-foreground">
+				<span className="truncate text-[14.5px] font-semibold">{p.name}</span>
+				<div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[13px] text-muted-foreground">
+					<span className="font-medium text-foreground">
 						{priceVaries ? "from " : ""}
 						{formatPrice(p.priceFrom, p.currency)}
 					</span>
-					<span className="text-muted-foreground">
-						{variantCount > 1
-							? `· ${variantCount} variants`
-							: `· stock ${p.totalOnHand}`}
-					</span>
-					{outOfStock ? (
-						<span className="rounded-full bg-red-500/10 px-2 py-0.5 text-[11px] font-medium text-red-600 dark:text-red-400">
-							Out of stock
-						</span>
-					) : lowStock ? (
-						<span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-400">
-							Low stock
-						</span>
+					{variantCount > 1 ? <span>· {variantCount} variants</span> : null}
+					{/* Stock state as a colour word — the number a home seller
+					    actually protects. Only meaningful for active products. */}
+					{p.active ? (
+						<span aria-hidden="true">·</span>
+					) : (
+						<span>· Archived</span>
+					)}
+					{p.active ? (
+						outOfStock ? (
+							<span className="font-semibold text-red-600 dark:text-red-400">
+								Sold out
+							</span>
+						) : lowStock ? (
+							<span className="font-semibold text-amber-700 dark:text-amber-400">
+								{p.totalOnHand} left
+							</span>
+						) : (
+							<span className="font-semibold text-accent-emphasis">
+								In stock
+							</span>
+						)
 					) : null}
 				</div>
 			</div>
 			<div className="flex shrink-0 flex-col items-end gap-1">
-				{!p.active ? (
-					<span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-						Archived
-					</span>
-				) : p.hidden ? (
+				{p.active && p.hidden ? (
 					// Off the public storefront, still sellable at the counter — flagged
 					// so hidden state is never silent. See docs/hidden-products.md.
 					<span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
@@ -445,18 +416,14 @@ function ProductCard({
 						Hidden
 					</span>
 				) : null}
-				<svg
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					strokeWidth="2"
-					strokeLinecap="round"
-					strokeLinejoin="round"
-					className="size-4 text-muted-foreground"
-					aria-hidden="true"
-				>
-					<path d="m9 18 6-6-6-6" />
-				</svg>
+				{p.active ? (
+					<ChevronRight
+						className="size-4 text-muted-foreground/60"
+						aria-hidden="true"
+					/>
+				) : (
+					<EyeOff className="size-4 text-muted-foreground/60" aria-hidden />
+				)}
 			</div>
 		</Link>
 	);

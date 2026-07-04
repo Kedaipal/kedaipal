@@ -8,11 +8,11 @@ import {
 	type CustomerSort,
 } from "../components/dashboard/customer-list";
 import { PageHeader } from "../components/dashboard/page-header";
+import { FilterChip, FilterChipRow } from "../components/ui/filter-chip";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
-import { cn } from "../lib/utils";
 
 // NOTE: This feature is Pro-tier (RM149) and above per the pricing plan. Tier
 // gating (hide from Starter + upgrade banner) is deferred until subscription
@@ -68,8 +68,17 @@ function CustomersRoute() {
 							} customer${customers.length === 1 ? "" : "s"}`
 				}
 			/>
-			<div className="flex items-center justify-between lg:hidden">
-				<h2 className="text-xl font-bold">Customers</h2>
+			<div className="flex min-w-0 flex-col lg:hidden">
+				<h2 className="font-heading text-[22px] font-extrabold leading-tight tracking-tight">
+					Customers
+				</h2>
+				<p className="text-[13px] text-muted-foreground">
+					{loading
+						? "Loading…"
+						: `${customers.length}${
+								!searching && listed.status === "CanLoadMore" ? "+" : ""
+							} customer${customers.length === 1 ? "" : "s"}`}
+				</p>
 			</div>
 
 			{/* Search */}
@@ -79,7 +88,7 @@ function CustomersRoute() {
 					value={term}
 					onChange={(e) => setTerm(e.target.value)}
 					placeholder="Search by name or phone"
-					className="h-11 pl-9 pr-9"
+					className="h-11 rounded-xl border-border bg-card pl-9 pr-9"
 					inputMode="search"
 				/>
 				{term ? (
@@ -96,23 +105,17 @@ function CustomersRoute() {
 
 			{/* Sort (mobile — desktop sorts via table headers) */}
 			{!searching ? (
-				<div className="-mx-5 flex gap-2 overflow-x-auto px-5 pb-1 [scrollbar-width:none] lg:hidden [&::-webkit-scrollbar]:hidden">
+				<FilterChipRow className="lg:hidden">
 					{SORTS.map((s) => (
-						<button
+						<FilterChip
 							key={s.key}
-							type="button"
+							selected={sort === s.key}
 							onClick={() => setSort(s.key)}
-							className={cn(
-								"flex h-9 shrink-0 items-center rounded-full border px-3.5 text-sm transition-colors",
-								sort === s.key
-									? "border-foreground bg-foreground text-background"
-									: "border-border bg-background text-muted-foreground hover:border-foreground/30 hover:text-foreground",
-							)}
 						>
 							{s.label}
-						</button>
+						</FilterChip>
 					))}
-				</div>
+				</FilterChipRow>
 			) : null}
 
 			{loading ? (
