@@ -146,6 +146,7 @@ export type SystemMessageKey =
 	| "paymentDueWaived"
 	| "paymentDueDeclined"
 	| "counterCheckoutBound"
+	| "counterCheckoutPaymentIntro"
 	| "counterCheckoutExpired"
 	| "counterCheckoutUsed"
 	| "counterOrderConfirmedPaid"
@@ -171,6 +172,12 @@ type SystemCopy = {
 	// `counterOrderConfirmed*` messages carry the confirmed order + tracking link
 	// (paid vs pay-later branch) so the buyer never has to scan again to pay.
 	counterCheckoutBound: (v: CopyVars) => string;
+	// Sent right after the bind ack: leads the retailer's payment methods block so
+	// a counter buyer can pay ahead (even before the cashier finishes) instead of
+	// waiting for the details at the end. The `renderPaymentMethods` block (with
+	// its own "💳 Payment details" header + QR images) follows. See
+	// docs/counter-checkout.md.
+	counterCheckoutPaymentIntro: (v: CopyVars) => string;
 	counterCheckoutExpired: (v: CopyVars) => string;
 	counterCheckoutUsed: (v: CopyVars) => string;
 	counterOrderConfirmedPaid: (v: CopyVars) => string;
@@ -205,6 +212,8 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`No problem — the custom item was removed from ${shortId}. Here's how to pay for the rest of your order from ${storeName}:`,
 		counterCheckoutBound: ({ storeName }) =>
 			`You're connected to ${storeName} 🎉 The cashier is ringing up your order now — sit tight, your confirmation lands here in a moment.`,
+		counterCheckoutPaymentIntro: ({ storeName }) =>
+			`💡 No need to wait for the cashier — you can pay ${storeName} whenever you're ready, even now.`,
 		counterCheckoutExpired: () =>
 			`Oops — this checkout QR has expired. Just ask the cashier to show a fresh one and scan again 🙂`,
 		counterCheckoutUsed: () =>
@@ -247,6 +256,8 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`Tiada masalah — item custom telah dibuang dari ${shortId}. Berikut cara membayar untuk baki pesanan anda dari ${storeName}:`,
 		counterCheckoutBound: ({ storeName }) =>
 			`Anda telah disambungkan dengan ${storeName} 🎉 Juruwang sedang memproses pesanan anda — tunggu sekejap, pengesahan akan sampai di sini sebentar lagi.`,
+		counterCheckoutPaymentIntro: ({ storeName }) =>
+			`💡 Tak perlu tunggu juruwang — anda boleh bayar ${storeName} bila-bila masa, walaupun sekarang.`,
 		counterCheckoutExpired: () =>
 			`Alamak — QR checkout ini telah tamat tempoh. Minta juruwang tunjukkan QR baharu dan imbas semula ya 🙂`,
 		counterCheckoutUsed: () =>

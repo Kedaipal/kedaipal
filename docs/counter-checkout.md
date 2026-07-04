@@ -250,10 +250,12 @@ the seller doesn't have to remember a manual step.
 - **Automatic send on checkout** (`whatsapp.notifyCounterOrderCreated`, scheduled
   by `createOrderFromSession`) — the buyer's chat gets, with no seller action:
   - **Paid now** → a "confirmed & paid" text, then the **Receipt** PDF.
-  - **Pay later** → the **payment ask** (transfer-reference line + the seller's
-    payment methods as text + an "I've paid" CTA + any QR images, via the shared
-    `sendPaymentMessage`), then the **Invoice** PDF. So the buyer can pay from the
-    chat immediately — the payment details arrive *and* are baked into the invoice.
+  - **Pay later** → a lean payment ask — the amount + transfer-reference line +
+    an "I've paid" CTA + tracking link (via `sendPaymentMessage` with
+    `includePaymentDetails: false`), then the **Invoice** PDF. The seller's
+    bank/QR **methods block is intentionally omitted here** — the buyer already
+    received it at scan-bind (see below), and the invoice PDF carries it too, so
+    re-sending would repeat the same details.
 - **One PDF, two faces:** `buildOrderReceiptPdf` keys off `OrderReceiptData.paid` —
   an unpaid order prints **"Invoice"** + the "How to pay" block, a settled one
   prints **"Receipt"**. No separate invoice builder or table.
@@ -271,6 +273,33 @@ the seller doesn't have to remember a manual step.
   sheet, falling back to download on desktop). Only renders on the fresh-create
   path (has the `shortId` + accurate paid state); a resend from **order detail**
   is a noted follow-up.
+
+### Pay-at-bind — payment info right after the scan ([`86ey5kq7p`](https://app.clickup.com/t/86ey5kq7p))
+
+So the buyer can pay **whenever they're ready** — often while the cashier is
+still ringing items up — the seller's payment details are pushed **immediately
+after the bind ack**, not held until the order is created.
+
+- `handleInbound`'s `checkout_bind` branch schedules
+  `whatsapp.notifyCounterCheckoutPayment` (`runAfter(0)`) right after sending the
+  `counterCheckoutBound` ack — scheduled, not inline, so the ack always lands
+  first and a payment-send hiccup can't fail the bind reply.
+- The action loads the retailer's resolved methods via the retailerId-keyed
+  `getRetailerPaymentContext` query (no order exists yet at scan time), then
+  sends a friendly intro (`counterCheckoutPaymentIntro`, EN + MS) + the
+  `renderPaymentMethods` block + one image per QR method. **No-ops** when the
+  seller has no methods configured (nothing to send — no empty header).
+- Sent as a gated **`session_message`** (the retailer is now known, so per-seller
+  caps + kill switch + opt-outs apply) — unlike the transactional order docs.
+- **No double-send:** the pay-later order-create message drops the methods block
+  (above), so the buyer sees the bank/QR **once** per session, at scan.
+- No tracking URL / "I've paid" CTA here — there's no order yet; those arrive
+  with the order-create confirmation once the cashier finalizes.
+- **Seller-side discoverability:** the "Ask the buyer to scan" screen
+  (`AwaitingScreen`, `app.checkout.tsx`) shows a one-line helper — *"They'll also
+  get your payment details right away, so they can pay while you ring up"* —
+  gated on the retailer having ≥1 payment method configured, so it's never shown
+  when nothing would actually be sent.
 
 ### Build-screen UX polish (same ticket)
 

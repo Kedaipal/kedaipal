@@ -215,6 +215,7 @@ function ActiveSession({
 				waUrl={session.waUrl}
 				token={session.token}
 				expiresAt={session.expiresAt}
+				hasPaymentMethods={(retailer?.paymentMethods?.length ?? 0) > 0}
 				onCancel={onCancelActive}
 			/>
 		);
@@ -504,11 +505,13 @@ function AwaitingScreen({
 	waUrl,
 	token,
 	expiresAt,
+	hasPaymentMethods,
 	onCancel,
 }: {
 	waUrl: string | undefined;
 	token: string;
 	expiresAt: number;
+	hasPaymentMethods: boolean;
 	onCancel: () => void;
 }) {
 	const qrRef = useRef<HTMLDivElement | null>(null);
@@ -544,6 +547,12 @@ function AwaitingScreen({
 						They open WhatsApp's camera, scan, and hit send. This screen updates
 						the moment they do.
 					</p>
+					{hasPaymentMethods ? (
+						<p className="mt-2 text-xs text-muted-foreground">
+							💡 They'll also get your payment details right away, so they can
+							pay while you ring up.
+						</p>
+					) : null}
 				</div>
 
 				<div className="flex flex-col items-center gap-2 lg:items-start">
