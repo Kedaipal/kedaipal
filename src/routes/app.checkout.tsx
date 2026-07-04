@@ -556,7 +556,9 @@ function StoreQrCard() {
 		setBusy(true);
 		try {
 			await rotateToken({ retailerId: actAsRetailerId });
-			toast.success("New store QR generated — old printed posters no longer work.");
+			toast.success(
+				"New store QR generated — old printed posters no longer work.",
+			);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -671,8 +673,8 @@ function StoreQrCard() {
 							Rotate QR…
 						</Button>
 						<p className="max-w-xs text-xs text-muted-foreground">
-							This QR never expires. If a poster leaks or gets misused,
-							rotate it — old printed copies stop working immediately.
+							This QR never expires. If a poster leaks or gets misused, rotate
+							it — old printed copies stop working immediately.
 						</p>
 					</div>
 				</div>
