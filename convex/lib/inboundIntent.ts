@@ -17,12 +17,23 @@ import { SHORT_ID_REGEX } from "./whatsappCopy";
 // stray "KP-" prose can't trigger a session lookup.
 export const CHECKOUT_TOKEN_REGEX = /KP-([A-Za-z0-9]{24})/;
 
+// KPS-<token>: a scan of the seller's PERMANENT printed store QR (poster) —
+// starts a buyer-initiated counter session (86ey5m35w). Same token shape.
+// Checked BEFORE `KP-` so the more specific literal wins; the two can't
+// shadow each other ("KPS-…" contains no "KP-" substring and vice versa),
+// and a test pins that.
+export const STORE_QR_TOKEN_REGEX = /KPS-([A-Za-z0-9]{24})/;
+
 export type InboundIntent =
+	| { kind: "store_checkout_start"; token: string }
 	| { kind: "checkout_bind"; token: string }
 	| { kind: "order_confirm"; shortId: string }
 	| { kind: "unknown" };
 
 export function classifyInbound(text: string): InboundIntent {
+	const storeQr = text.match(STORE_QR_TOKEN_REGEX);
+	if (storeQr) return { kind: "store_checkout_start", token: storeQr[1] };
+
 	const checkout = text.match(CHECKOUT_TOKEN_REGEX);
 	if (checkout) return { kind: "checkout_bind", token: checkout[1] };
 

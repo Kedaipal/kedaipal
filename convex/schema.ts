@@ -224,11 +224,19 @@ export default defineSchema({
 		// WABA send guardrails (kill switch, per-seller caps) live in their own
 		// `retailerSendingLimits` table — see docs/waba-protection.md.
 		channel: v.literal("whatsapp"),
+		// Permanent store QR token for the printable counter poster (`KPS-<token>`
+		// inbound prefill). Public by design (it's printed on a wall) — security is
+		// behavioural limits + rotation, never secrecy. Random (generateTrackingToken
+		// alphabet), NEVER the slug; rotating replaces it and kills old posters.
+		// See docs/counter-checkout.md (store QR poster, 86ey5m35w).
+		counterQrToken: v.optional(v.string()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
 		.index("by_user", ["userId"])
 		.index("by_slug", ["slug"])
+		// Inbound `KPS-<token>` poster scans resolve the store by token.
+		.index("by_counterQrToken", ["counterQrToken"])
 		// Admin "onboard a client" pre-check: is a store already registered to this
 		// email? notifyEmail is stored normalized (trim + lowercase via
 		// assertValidEmail), so an equality lookup is exact. See docs/vendor-identity.md.
@@ -697,6 +705,13 @@ export default defineSchema({
 			v.literal("completed"), // order created from the session
 			v.literal("expired"), // TTL elapsed before a scan
 			v.literal("cancelled"), // seller dismissed it
+		),
+		// Who initiated the session: the cashier (per-session `KP-` QR, the
+		// original flow) or a buyer scanning the printed store poster (`KPS-`,
+		// 86ey5m35w). Undefined → "cashier" (legacy-safe, same posture as
+		// pickupSnapshot.locationType). Drives the "Walk-in scan" badge.
+		origin: v.optional(
+			v.union(v.literal("cashier"), v.literal("store_qr")),
 		),
 		// Bound buyer identity. `customerId` is set only when an EXISTING customer
 		// matched (retailerId, waPhone) — a brand-new buyer has waPhone/pushname

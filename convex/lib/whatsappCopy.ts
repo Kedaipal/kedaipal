@@ -147,6 +147,8 @@ export type SystemMessageKey =
 	| "paymentDueDeclined"
 	| "counterCheckoutBound"
 	| "counterCheckoutPaymentIntro"
+	| "storeQrConnected"
+	| "storeQrBusy"
 	| "counterCheckoutExpired"
 	| "counterCheckoutUsed"
 	| "counterOrderConfirmedPaid"
@@ -178,6 +180,13 @@ type SystemCopy = {
 	// its own "💳 Payment details" header + QR images) follows. See
 	// docs/counter-checkout.md.
 	counterCheckoutPaymentIntro: (v: CopyVars) => string;
+	// Store QR poster (86ey5m35w): a buyer scanned the seller's PERMANENT
+	// printed QR — `storeQrConnected` acks the walk-in session (and carries the
+	// PDPA notice-at-collection privacy link, since a poster buyer never touches
+	// the website before their number is stored); `storeQrBusy` is the polite
+	// over-cap / rate-limited reply.
+	storeQrConnected: (v: CopyVars) => string;
+	storeQrBusy: (v: CopyVars) => string;
 	counterCheckoutExpired: (v: CopyVars) => string;
 	counterCheckoutUsed: (v: CopyVars) => string;
 	counterOrderConfirmedPaid: (v: CopyVars) => string;
@@ -214,6 +223,10 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`You're connected to ${storeName} 🎉 The cashier is ringing up your order now — sit tight, your confirmation lands here in a moment.`,
 		counterCheckoutPaymentIntro: ({ storeName }) =>
 			`💡 No need to wait for the cashier — you can pay ${storeName} whenever you're ready, even now.`,
+		storeQrConnected: ({ storeName }) =>
+			`You're connected to ${storeName} 🎉 Show this chat to the cashier and they'll ring up your order — your confirmation will land right here.\n\nBy continuing you agree to our Privacy Policy: https://kedaipal.com/privacy`,
+		storeQrBusy: ({ storeName }) =>
+			`${storeName} can't take new scans right now — please ask the cashier for help and they'll sort you out 🙂`,
 		counterCheckoutExpired: () =>
 			`Oops — this checkout QR has expired. Just ask the cashier to show a fresh one and scan again 🙂`,
 		counterCheckoutUsed: () =>
@@ -258,6 +271,10 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`Anda telah disambungkan dengan ${storeName} 🎉 Juruwang sedang memproses pesanan anda — tunggu sekejap, pengesahan akan sampai di sini sebentar lagi.`,
 		counterCheckoutPaymentIntro: ({ storeName }) =>
 			`💡 Tak perlu tunggu juruwang — anda boleh bayar ${storeName} bila-bila masa, walaupun sekarang.`,
+		storeQrConnected: ({ storeName }) =>
+			`Anda telah disambungkan dengan ${storeName} 🎉 Tunjukkan chat ini kepada juruwang dan mereka akan proses pesanan anda — pengesahan akan sampai di sini.\n\nDengan meneruskan, anda bersetuju dengan Dasar Privasi kami: https://kedaipal.com/privacy`,
+		storeQrBusy: ({ storeName }) =>
+			`${storeName} tidak dapat menerima imbasan baharu buat masa ini — sila minta bantuan juruwang ya 🙂`,
 		counterCheckoutExpired: () =>
 			`Alamak — QR checkout ini telah tamat tempoh. Minta juruwang tunjukkan QR baharu dan imbas semula ya 🙂`,
 		counterCheckoutUsed: () =>

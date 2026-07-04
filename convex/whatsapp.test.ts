@@ -1306,6 +1306,60 @@ describe("counter checkout — pay-at-bind payment info (86ey5kq7p)", () => {
 		expect(bodies.join("\n")).toContain("1234567890");
 		fetchMock.restore();
 	});
+
+	test("a KPS-<token> poster scan starts a walk-in session, acks, and pushes payment", async () => {
+		const t = setup();
+		const { retailerId } = await seedRetailerWithLocale(t, "en");
+		await t.run((ctx) =>
+			ctx.db.patch(retailerId, { paymentMethods: [bankMethod()] }),
+		);
+		const { token } = await t
+			.withIdentity({ subject: USER })
+			.mutation(api.counterCheckout.ensureCounterQrToken, {});
+		const fetchMock = installFetchMock();
+
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: `Hi! I'd like to order.\n\nStore ref: KPS-${token}`,
+			profileName: "Aiman",
+		});
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+		// A bound walk-in session now exists on the seller's list.
+		const rows = await t.run(async (ctx) =>
+			ctx.db
+				.query("counterCheckoutSessions")
+				.withIndex("by_retailer_status", (q) =>
+					q.eq("retailerId", retailerId).eq("status", "buyer_identified"),
+				)
+				.collect(),
+		);
+		expect(rows).toHaveLength(1);
+		expect(rows[0].origin).toBe("store_qr");
+
+		const bodies = fetchMock.waCalls().map((c) => waText(c.body));
+		expect(bodies[0]).toContain("connected to"); // storeQrConnected ack
+		expect(bodies[0]).toContain("kedaipal.com/privacy"); // PDPA notice at collection
+		expect(bodies.join("\n")).toContain("1234567890"); // pay-at-scan details
+		fetchMock.restore();
+	});
+
+	test("an unknown/rotated KPS token gets a generic reply, no session, no store leak", async () => {
+		const t = setup();
+		await seedRetailerWithLocale(t, "en");
+		const fetchMock = installFetchMock();
+
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: "KPS-Zz99Yy88Xx77Ww66Vv55Uu44",
+		});
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+		const body = waText(fetchMock.waCalls()[0]?.body);
+		expect(body).not.toContain("connected to");
+		expect(body).not.toContain("Test Outdoor");
+		fetchMock.restore();
+	});
 });
 
 describe("drop-off + custom-stage status copy (86ey570am)", () => {
