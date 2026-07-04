@@ -17,6 +17,7 @@ import {
 	Music2,
 	Package,
 	Phone,
+	Printer,
 	QrCode,
 	Share2,
 	Sparkles,
@@ -55,6 +56,7 @@ import {
 	type StatusLabels,
 	stageLabel,
 } from "../lib/orderStatus";
+import { storefrontUrl as buildStorefrontUrl } from "../lib/storefront-url";
 import { hasSubscribed, trialDaysLeft } from "../lib/subscription";
 
 export const Route = createFileRoute("/app/")({
@@ -177,7 +179,7 @@ function DashboardHome() {
 	// it resolves to avoid a jarring flip after first paint.
 	if (productsLoading) return <DashboardSkeleton />;
 
-	const storefrontUrl = `${typeof window !== "undefined" ? window.location.origin : "https://kedaipal.com"}/${retailer.slug}`;
+	const storefrontUrl = buildStorefrontUrl(retailer.slug);
 
 	// Copying the link or opening the QR — from anywhere on the dashboard (hero,
 	// activation banner, or the checklist share step) — is the soft "shared" proxy
@@ -588,6 +590,24 @@ function DashboardHome() {
 				storeName={retailer.storeName}
 				storefrontUrl={storefrontUrl}
 			/>
+
+			{/* Promote your store — self-serve A4 QR poster. Sits with the other
+			    share actions in both the new-user and returning-user layouts. */}
+			<Link
+				to="/app/poster"
+				className="flex items-center gap-3 rounded-2xl border border-border bg-card px-3.5 py-3 transition-colors hover:bg-accent/5 lg:max-w-2xl"
+			>
+				<span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent">
+					<Printer className="size-5" aria-hidden="true" />
+				</span>
+				<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+					<span className="text-sm font-semibold">Promote your store</span>
+					<span className="text-xs text-muted-foreground">
+						Print a free A4 poster with QR codes for counter and online orders
+					</span>
+				</span>
+				<ArrowRight className="size-4 shrink-0 text-muted-foreground" />
+			</Link>
 
 			{/* How it works — only for brand-new users */}
 			{isNew ? (
