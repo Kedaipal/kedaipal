@@ -61,6 +61,10 @@ New token: **`--accent-emphasis`** (readable mint for text/icons on mint-tinted 
 
 `orders.searchOrders` counts gained three fields, computed in the same single scan: `dueToday` (open orders whose fulfilment date is today MYT), `unpaid` (open orders not `received` — includes `claimed`), `unpaidAmount` (sum of their totals). Powers the inbox banner and the Home today strip/attention list — Home now subscribes to the same counts seam instead of `countActionable`. Covered in `convex/orders.test.ts`.
 
+## Reveal-on-add (post-review polish)
+
+Inline list editors append a new row to the **bottom** of a list that, on a phone, is usually below the fold — so tapping "Add …" appeared to do nothing. A shared [`useRevealOnAdd`](../src/hooks/useRevealOnAdd.ts) hook (ref-based, self-clearing, no re-render, no-op for every non-matching card) scrolls the new card into view and focuses its first field. Wired into the three places with this pattern: **payment methods** (Add bank / Add QR) and **order stages** (Add stage) in `app.settings.tsx`, and **variant option axes** (Add option / preset) in `variant-editor.tsx`. Standalone-saved entities like **pickup locations** keep their own bottom-sheet dialog — the right pattern when the item saves independently rather than inline within one form's Save — so no change there. Covered in `src/hooks/useRevealOnAdd.test.tsx`.
+
 ## Deliberate deviations from the design doc
 
 - **Mockup hexes → house tokens**: navy = `foreground` on inverted surfaces (not `primary`, which becomes mint in dark mode — see the bulk bar comment), mint = `accent`/`accent-emphasis`. Primary buttons stay the house mint except where the doc's hierarchy needs navy (advance CTA, due banner, bulk bar shell).

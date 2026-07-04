@@ -3,6 +3,7 @@ import { ChefHat, ImagePlus, Minus, PackageCheck, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
+import { useRevealOnAdd } from "../../hooks/useRevealOnAdd";
 import {
 	convexErrorMessage,
 	normalizePriceInput,
@@ -313,6 +314,10 @@ export function VariantEditor({
 	const generateUploadUrl = useMutation(api.products.generateUploadUrl);
 	const [uploadingRow, setUploadingRow] = useState<number | null>(null);
 	const [uploadingCustom, setUploadingCustom] = useState(false);
+	// A new option axis appends to the bottom of a long form — reveal + focus it.
+	// Keyed by axis index (stable across the single add→mount transition; append
+	// never shifts existing indexes).
+	const { markAdded, revealRef } = useRevealOnAdd();
 
 	// Merge a partial into the full editor state — preserves sibling fields
 	// (notably `customLine`) that a given setter doesn't touch.
@@ -352,6 +357,7 @@ export function VariantEditor({
 
 	function addAxis() {
 		if (options.length >= MAX_AXES) return;
+		markAdded(String(options.length));
 		setOptions([...options, { name: "", values: [] }]);
 		setValueDrafts((d) => [...d, ""]);
 	}
@@ -360,6 +366,7 @@ export function VariantEditor({
 		if (options.length >= MAX_AXES) return;
 		if (options.some((a) => a.name.toLowerCase() === preset.name.toLowerCase()))
 			return;
+		markAdded(String(options.length));
 		setOptions([...options, { name: preset.name, values: [...preset.values] }]);
 		setValueDrafts((d) => [...d, ""]);
 	}
@@ -592,6 +599,7 @@ export function VariantEditor({
 					<div
 						// biome-ignore lint/suspicious/noArrayIndexKey: axis identity is positional (no id; renaming must not remount)
 						key={axisIndex}
+						ref={revealRef(String(axisIndex))}
 						className="flex flex-col gap-2 rounded-lg bg-muted/40 p-2.5"
 					>
 						<div className="flex items-center gap-2">

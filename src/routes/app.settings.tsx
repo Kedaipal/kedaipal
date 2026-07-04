@@ -48,6 +48,7 @@ import {
 	useActAsRetailerId,
 	useDashboardRetailer,
 } from "../hooks/useDashboardRetailer";
+import { useRevealOnAdd } from "../hooks/useRevealOnAdd";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage } from "../lib/format";
 import {
@@ -62,11 +63,11 @@ import {
 	type StageAnchor,
 } from "../lib/orderStatus";
 import { reorderByIds } from "../lib/reorder";
-import { tierPill } from "../lib/subscription";
 import {
 	settingsNotifyEmailFormSchema,
 	settingsWaPhoneFormSchema,
 } from "../lib/schemas";
+import { tierPill } from "../lib/subscription";
 
 const CURRENCY_OPTIONS = SUPPORTED_CURRENCIES.map((c) => ({
 	value: c,
@@ -159,7 +160,13 @@ const SETTINGS_GROUPS: ReadonlyArray<{
 	{ label: "Store", tabs: ["store", "billing"] },
 	{
 		label: "Selling",
-		tabs: ["whatsapp", "payments", "fulfilment", "order-status", "integrations"],
+		tabs: [
+			"whatsapp",
+			"payments",
+			"fulfilment",
+			"order-status",
+			"integrations",
+		],
 	},
 ];
 
@@ -297,7 +304,7 @@ function SettingsRoute() {
 	const activeTab: SettingsTab = tab ?? "store";
 	const navigate = Route.useNavigate();
 	const setActiveTab = (t: SettingsTab) => navigate({ search: { tab: t } });
-	const backToIndex = () => navigate({ search: {} });
+	const backToIndex = () => navigate({ search: { tab: undefined } });
 	const [newSlug, setNewSlug] = useState("");
 	const [saving, setSaving] = useState(false);
 
@@ -521,185 +528,188 @@ function SettingsRoute() {
 					tab === undefined ? "hidden lg:flex lg:flex-col lg:gap-6" : "contents"
 				}
 			>
-			{activeTab === "store" ? (
-				<div className="flex flex-col gap-6 pt-2">
-					<Card>
-						<StoreNameForm
-							current={retailer.storeName}
-							onSave={(storeName) => updateSettings({ storeName })}
-						/>
-					</Card>
-					<Card>
-						<StoreDescriptionForm
-							current={retailer.storeDescription ?? ""}
-							onSave={(storeDescription) =>
-								updateSettings({ storeDescription })
-							}
-						/>
-					</Card>
-					{slugRenameForm}
-					<Card>
-						<LogoForm
-							currentLogoUrl={retailer.logoUrl}
-							onSave={(logoStorageId) => updateSettings({ logoStorageId })}
-						/>
-					</Card>
-					<Card>
-						<NotifyEmailForm
-							current={retailer.notifyEmail ?? ""}
-							onSave={(notifyEmail) => updateSettings({ notifyEmail })}
-						/>
-					</Card>
-					<Card>
-						<CurrencyForm
-							current={retailer.currency}
-							onSave={(currency) => updateSettings({ currency })}
-						/>
-					</Card>
-				</div>
-			) : null}
+				{activeTab === "store" ? (
+					<div className="flex flex-col gap-6 pt-2">
+						<Card>
+							<StoreNameForm
+								current={retailer.storeName}
+								onSave={(storeName) => updateSettings({ storeName })}
+							/>
+						</Card>
+						<Card>
+							<StoreDescriptionForm
+								current={retailer.storeDescription ?? ""}
+								onSave={(storeDescription) =>
+									updateSettings({ storeDescription })
+								}
+							/>
+						</Card>
+						{slugRenameForm}
+						<Card>
+							<LogoForm
+								currentLogoUrl={retailer.logoUrl}
+								onSave={(logoStorageId) => updateSettings({ logoStorageId })}
+							/>
+						</Card>
+						<Card>
+							<NotifyEmailForm
+								current={retailer.notifyEmail ?? ""}
+								onSave={(notifyEmail) => updateSettings({ notifyEmail })}
+							/>
+						</Card>
+						<Card>
+							<CurrencyForm
+								current={retailer.currency}
+								onSave={(currency) => updateSettings({ currency })}
+							/>
+						</Card>
+					</div>
+				) : null}
 
-			{activeTab === "billing" ? <BillingTab retailer={retailer} /> : null}
+				{activeTab === "billing" ? <BillingTab retailer={retailer} /> : null}
 
-			{activeTab === "whatsapp" ? (
-				<div className="flex flex-col gap-6 pt-2">
-					<InfoBanner title="How WhatsApp works on Kedaipal">
-						<p>
-							All automated order messages (confirmations, packed, shipped,
-							delivered) are sent from{" "}
-							<span className="font-medium text-foreground">
-								Kedaipal's shared WhatsApp Business number
-							</span>{" "}
-							on your behalf — no Meta account needed.
-						</p>
-						<p>
-							Add your personal WhatsApp number below so buyers can reach you
-							directly. It appears as a tappable contact link in automated
-							messages.
-						</p>
-					</InfoBanner>
+				{activeTab === "whatsapp" ? (
+					<div className="flex flex-col gap-6 pt-2">
+						<InfoBanner title="How WhatsApp works on Kedaipal">
+							<p>
+								All automated order messages (confirmations, packed, shipped,
+								delivered) are sent from{" "}
+								<span className="font-medium text-foreground">
+									Kedaipal's shared WhatsApp Business number
+								</span>{" "}
+								on your behalf — no Meta account needed.
+							</p>
+							<p>
+								Add your personal WhatsApp number below so buyers can reach you
+								directly. It appears as a tappable contact link in automated
+								messages.
+							</p>
+						</InfoBanner>
 
-					<Card>
-						<WaPhoneForm
-							current={retailer.waPhone ?? ""}
-							onSave={(waPhone) => updateSettings({ waPhone })}
-						/>
-					</Card>
-					<Card>
-						<LocaleForm
-							current={retailer.locale}
-							onSave={(locale) => updateSettings({ locale })}
-						/>
-					</Card>
-					<Card>
-						<MessageTemplatesForm
-							current={retailer.messageTemplates}
-							onSave={(messageTemplates) =>
-								updateSettings({ messageTemplates })
-							}
-						/>
-					</Card>
-				</div>
-			) : null}
+						<Card>
+							<WaPhoneForm
+								current={retailer.waPhone ?? ""}
+								onSave={(waPhone) => updateSettings({ waPhone })}
+							/>
+						</Card>
+						<Card>
+							<LocaleForm
+								current={retailer.locale}
+								onSave={(locale) => updateSettings({ locale })}
+							/>
+						</Card>
+						<Card>
+							<MessageTemplatesForm
+								current={retailer.messageTemplates}
+								onSave={(messageTemplates) =>
+									updateSettings({ messageTemplates })
+								}
+							/>
+						</Card>
+					</div>
+				) : null}
 
-			{activeTab === "payments" ? (
-				<div className="flex flex-col gap-6 pt-2">
-					<Card>
-						<PaymentMethodsForm
-							current={retailer.paymentMethods ?? []}
-							onSave={(paymentMethods) => updateSettings({ paymentMethods })}
-						/>
-					</Card>
-				</div>
-			) : null}
+				{activeTab === "payments" ? (
+					<div className="flex flex-col gap-6 pt-2">
+						<Card>
+							<PaymentMethodsForm
+								current={retailer.paymentMethods ?? []}
+								onSave={(paymentMethods) => updateSettings({ paymentMethods })}
+							/>
+						</Card>
+					</div>
+				) : null}
 
-			{activeTab === "fulfilment" ? (
-				<FulfilmentTab
-					retailerId={retailer._id}
-					offerSelfCollect={retailer.offerSelfCollect ?? false}
-					offerDelivery={retailer.offerDelivery ?? true}
-					minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
-				/>
-			) : null}
-
-			{activeTab === "order-status" ? (
-				<div className="flex flex-col gap-6 pt-2">
-					<InfoBanner title="How order stages work">
-						<p>
-							Build the steps your orders move through — name them however you
-							work. Buyers see them as a live timeline; you advance orders
-							step-by-step from the dashboard.
-						</p>
-						<p>
-							Every step maps to one of four built-in milestones via{" "}
-							<span className="font-medium text-foreground">“Counts as”</span>,
-							so payments, packing and tracking keep working:{" "}
-							<span className="font-medium text-foreground">Accepted</span> →{" "}
-							<span className="font-medium text-foreground">In production</span>{" "}
-							→ <span className="font-medium text-foreground">Ready</span> →{" "}
-							<span className="font-medium text-foreground">Done</span>.
-						</p>
-						<p>
-							<span className="font-medium text-foreground">
-								Your first step should count as “Accepted”, your last as “Done”
-							</span>{" "}
-							— map the steps in between to whichever milestone fits. E.g. a
-							cake shop: “Order received” (Accepted) → “Baking” (In production)
-							→ “Ready for pickup” (Ready) → “Collected” (Done).
-						</p>
-					</InfoBanner>
-
-					<Card>
-						<StageEditor
-							seed={resolveStages({
-								orderStages: retailer.orderStages,
-								labels: retailer.statusLabels,
-								deliveryMethod: retailer.offerSelfCollect
-									? "self_collect"
-									: "delivery",
-							})}
-							isCustomized={Boolean(retailer.orderStages?.length)}
-							onSave={(orderStages) => updateSettings({ orderStages })}
-						/>
-					</Card>
-				</div>
-			) : null}
-
-			{activeTab === "integrations" ? (
-				<div className="flex flex-col gap-6 pt-2">
-					<InfoBanner title="Sales channels">
-						<p>
-							Connect your marketplace accounts to sync products and orders
-							automatically. More channels are on the way.
-						</p>
-					</InfoBanner>
-
-					<IntegrationCard
-						name="Shopee"
-						description="Sync your Shopee products and orders into Kedaipal. Manage everything from one dashboard."
-						tint="bg-[#EE4D2D]/10 text-[#EE4D2D]"
-						icon={<ShopeeIcon className="size-6" />}
+				{activeTab === "fulfilment" ? (
+					<FulfilmentTab
+						retailerId={retailer._id}
+						offerSelfCollect={retailer.offerSelfCollect ?? false}
+						offerDelivery={retailer.offerDelivery ?? true}
+						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
 					/>
-					<IntegrationCard
-						name="Lazada"
-						description="Sync your Lazada products and orders into Kedaipal. Manage everything from one dashboard."
-						tint="bg-[#0F146D]/10 text-[#0F146D] dark:bg-[#0F146D]/30 dark:text-[#9aa6ff]"
-						icon={<Store className="size-6" />}
-					/>
-					<IntegrationCard
-						name="TikTok Shop"
-						description="Sync your TikTok Shop orders into Kedaipal so you never miss a sale."
-						tint="bg-foreground/10 text-foreground"
-						icon={<Music2 className="size-6" />}
-					/>
-					<IntegrationCard
-						name="StoreHub"
-						description="Reconcile your in-store StoreHub sales alongside online orders."
-						tint="bg-[#FF7A00]/10 text-[#FF7A00]"
-						icon={<Building2 className="size-6" />}
-					/>
-				</div>
-			) : null}
+				) : null}
+
+				{activeTab === "order-status" ? (
+					<div className="flex flex-col gap-6 pt-2">
+						<InfoBanner title="How order stages work">
+							<p>
+								Build the steps your orders move through — name them however you
+								work. Buyers see them as a live timeline; you advance orders
+								step-by-step from the dashboard.
+							</p>
+							<p>
+								Every step maps to one of four built-in milestones via{" "}
+								<span className="font-medium text-foreground">“Counts as”</span>
+								, so payments, packing and tracking keep working:{" "}
+								<span className="font-medium text-foreground">Accepted</span> →{" "}
+								<span className="font-medium text-foreground">
+									In production
+								</span>{" "}
+								→ <span className="font-medium text-foreground">Ready</span> →{" "}
+								<span className="font-medium text-foreground">Done</span>.
+							</p>
+							<p>
+								<span className="font-medium text-foreground">
+									Your first step should count as “Accepted”, your last as
+									“Done”
+								</span>{" "}
+								— map the steps in between to whichever milestone fits. E.g. a
+								cake shop: “Order received” (Accepted) → “Baking” (In
+								production) → “Ready for pickup” (Ready) → “Collected” (Done).
+							</p>
+						</InfoBanner>
+
+						<Card>
+							<StageEditor
+								seed={resolveStages({
+									orderStages: retailer.orderStages,
+									labels: retailer.statusLabels,
+									deliveryMethod: retailer.offerSelfCollect
+										? "self_collect"
+										: "delivery",
+								})}
+								isCustomized={Boolean(retailer.orderStages?.length)}
+								onSave={(orderStages) => updateSettings({ orderStages })}
+							/>
+						</Card>
+					</div>
+				) : null}
+
+				{activeTab === "integrations" ? (
+					<div className="flex flex-col gap-6 pt-2">
+						<InfoBanner title="Sales channels">
+							<p>
+								Connect your marketplace accounts to sync products and orders
+								automatically. More channels are on the way.
+							</p>
+						</InfoBanner>
+
+						<IntegrationCard
+							name="Shopee"
+							description="Sync your Shopee products and orders into Kedaipal. Manage everything from one dashboard."
+							tint="bg-[#EE4D2D]/10 text-[#EE4D2D]"
+							icon={<ShopeeIcon className="size-6" />}
+						/>
+						<IntegrationCard
+							name="Lazada"
+							description="Sync your Lazada products and orders into Kedaipal. Manage everything from one dashboard."
+							tint="bg-[#0F146D]/10 text-[#0F146D] dark:bg-[#0F146D]/30 dark:text-[#9aa6ff]"
+							icon={<Store className="size-6" />}
+						/>
+						<IntegrationCard
+							name="TikTok Shop"
+							description="Sync your TikTok Shop orders into Kedaipal so you never miss a sale."
+							tint="bg-foreground/10 text-foreground"
+							icon={<Music2 className="size-6" />}
+						/>
+						<IntegrationCard
+							name="StoreHub"
+							description="Reconcile your in-store StoreHub sales alongside online orders."
+							tint="bg-[#FF7A00]/10 text-[#FF7A00]"
+							icon={<Building2 className="size-6" />}
+						/>
+					</div>
+				) : null}
 			</div>
 		</div>
 	);
@@ -1004,6 +1014,7 @@ function PaymentMethodsForm({
 	const [uploadingKey, setUploadingKey] = useState<string | null>(null);
 	const [saving, setSaving] = useState(false);
 	const [expanded, setExpanded] = useState<Set<string>>(new Set());
+	const { markAdded, revealRef } = useRevealOnAdd();
 
 	const banks = methods.filter((m) => m.type === "bank");
 	const qrs = methods.filter((m) => m.type === "qr");
@@ -1036,6 +1047,7 @@ function PaymentMethodsForm({
 		}
 		const draft = newDraft(type);
 		setExpanded((prev) => new Set(prev).add(draft._key));
+		markAdded(draft._key);
 		setMethods((prev) => {
 			const b = prev.filter((m) => m.type === "bank");
 			const q = prev.filter((m) => m.type === "qr");
@@ -1164,7 +1176,10 @@ function PaymentMethodsForm({
 			);
 		}
 		return (
-			<div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
+			<div
+				ref={revealRef(m._key)}
+				className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4"
+			>
 				<div className="flex items-center gap-2">
 					{handle}
 					<button
@@ -1579,6 +1594,7 @@ function StageEditor({
 	// During a drag the row always renders compact (state.isSorting), and the
 	// expanded set is preserved so cards re-open exactly as they were afterwards.
 	const [expanded, setExpanded] = useState<Set<string>>(new Set());
+	const { markAdded, revealRef } = useRevealOnAdd();
 	function toggleExpand(key: string) {
 		setExpanded((prev) => {
 			const next = new Set(prev);
@@ -1602,8 +1618,10 @@ function StageEditor({
 			return;
 		}
 		const key = crypto.randomUUID();
-		// Open the new (empty) stage so the seller can fill it in immediately.
+		// Open the new (empty) stage so the seller can fill it in immediately, and
+		// reveal it (scroll + focus) — it appends below the fold on a phone.
 		setExpanded((prev) => new Set(prev).add(key));
+		markAdded(key);
 		setDrafts((prev) => [
 			...prev,
 			{
@@ -1694,7 +1712,10 @@ function StageEditor({
 		}
 
 		return (
-			<div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
+			<div
+				ref={revealRef(d._key)}
+				className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4"
+			>
 				{/* Header mirrors the collapsed row exactly (handle + label + chevron
 				    far-right) so the toggle target doesn't jump when expanding. */}
 				<div className="flex items-center gap-2">
