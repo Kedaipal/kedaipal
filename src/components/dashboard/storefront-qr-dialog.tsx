@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { Download, X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useRef } from "react";
@@ -134,9 +135,16 @@ export function StorefrontQrDialog({
 							Download PNG
 						</Button>
 
-						<p className="px-4 pb-2 text-center text-xs text-muted-foreground">
+						<p className="px-4 text-center text-xs text-muted-foreground">
 							Print this QR code at your counter or share it digitally.
 						</p>
+						<Link
+							to="/app/poster"
+							onClick={onClose}
+							className="pb-2 text-center text-xs font-semibold text-accent-emphasis hover:underline"
+						>
+							Want a printable A4 poster for your counter? →
+						</Link>
 					</div>
 				</Dialog.Content>
 			</Dialog.Portal>

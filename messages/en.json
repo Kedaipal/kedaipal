@@ -386,5 +386,18 @@
 	"pricingpage_cta_sub": "No credit card. No Meta setup. Full access for 14 days — claim a Founding 10 spot to lock in the best price for life.",
 	"pricingpage_cta_trial_btn": "Start 14-day free trial",
 	"pricingpage_cta_how": "See how it works",
-	"pricingpage_no_lockin_note": "Annual billing = 10 months paid, 12 received. Cancel anytime. Export your data anytime."
+	"pricingpage_no_lockin_note": "Annual billing = 10 months paid, 12 received. Cancel anytime. Export your data anytime.",
+
+	"poster_headline": "JUST SCAN & ORDER!",
+	"poster_counter_badge": "AT THE COUNTER",
+	"poster_counter_title": "Order & Collect Here",
+	"poster_counter_step1": "Scan the QR & pick your items",
+	"poster_counter_step2": "Order straight from your phone — no queuing",
+	"poster_counter_step3": "Show your order number, pay & collect",
+	"poster_online_badge": "ORDER ONLINE",
+	"poster_online_title": "Order From Home",
+	"poster_online_step1": "Scan the QR & browse the full menu",
+	"poster_online_step2": "Place your order anytime",
+	"poster_online_step3": "We confirm instantly on WhatsApp",
+	"poster_powered_by": "POWERED BY"
 }

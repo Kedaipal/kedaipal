@@ -54,7 +54,7 @@ export function BottomNav({ actionableCount, adminOnly }: BottomNavProps) {
 			];
 
 	return (
-		<nav className="sticky bottom-0 border-t border-border bg-background pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:hidden">
+		<nav className="sticky bottom-0 border-t border-border bg-background pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:hidden print:hidden">
 			<div className="flex items-center justify-around">
 				{tabs.map((tab) => (
 					<NavTab key={tab.label} tab={tab} />

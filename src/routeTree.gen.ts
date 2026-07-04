@@ -24,6 +24,7 @@ import { Route as TrackTokenRouteImport } from './routes/track.$token'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as AppSettingsRouteImport } from './routes/app.settings'
+import { Route as AppPosterRouteImport } from './routes/app.poster'
 import { Route as AppCheckoutRouteImport } from './routes/app.checkout'
 import { Route as AppProductsIndexRouteImport } from './routes/app.products.index'
 import { Route as AppOrdersIndexRouteImport } from './routes/app.orders.index'
@@ -112,6 +113,11 @@ const AppSettingsRoute = AppSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => AppRoute,
 } as any)
+const AppPosterRoute = AppPosterRouteImport.update({
+  id: '/poster',
+  path: '/poster',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppCheckoutRoute = AppCheckoutRouteImport.update({
   id: '/checkout',
   path: '/checkout',
@@ -185,6 +191,7 @@ export interface FileRoutesByFullPath {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/terms': typeof TermsRoute
   '/app/checkout': typeof AppCheckoutRoute
+  '/app/poster': typeof AppPosterRoute
   '/app/settings': typeof AppSettingsRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -213,6 +220,7 @@ export interface FileRoutesByTo {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/terms': typeof TermsRoute
   '/app/checkout': typeof AppCheckoutRoute
+  '/app/poster': typeof AppPosterRoute
   '/app/settings': typeof AppSettingsRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -243,6 +251,7 @@ export interface FileRoutesById {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/terms': typeof TermsRoute
   '/app/checkout': typeof AppCheckoutRoute
+  '/app/poster': typeof AppPosterRoute
   '/app/settings': typeof AppSettingsRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -274,6 +283,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/terms'
     | '/app/checkout'
+    | '/app/poster'
     | '/app/settings'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -302,6 +312,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/terms'
     | '/app/checkout'
+    | '/app/poster'
     | '/app/settings'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -331,6 +342,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/terms'
     | '/app/checkout'
+    | '/app/poster'
     | '/app/settings'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -472,6 +484,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/app/poster': {
+      id: '/app/poster'
+      path: '/poster'
+      fullPath: '/app/poster'
+      preLoaderRoute: typeof AppPosterRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/app/checkout': {
       id: '/app/checkout'
       path: '/checkout'
@@ -561,6 +580,7 @@ declare module '@tanstack/react-router' {
 
 interface AppRouteChildren {
   AppCheckoutRoute: typeof AppCheckoutRoute
+  AppPosterRoute: typeof AppPosterRoute
   AppSettingsRoute: typeof AppSettingsRoute
   AppIndexRoute: typeof AppIndexRoute
   AppAdminBillingRoute: typeof AppAdminBillingRoute
@@ -578,6 +598,7 @@ interface AppRouteChildren {
 
 const AppRouteChildren: AppRouteChildren = {
   AppCheckoutRoute: AppCheckoutRoute,
+  AppPosterRoute: AppPosterRoute,
   AppSettingsRoute: AppSettingsRoute,
   AppIndexRoute: AppIndexRoute,
   AppAdminBillingRoute: AppAdminBillingRoute,
