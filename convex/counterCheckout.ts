@@ -652,12 +652,10 @@ export const cancelCheckoutSession = mutation({
 export type BindResult =
 	| {
 			result: "bound";
+			retailerId: Id<"retailers">;
 			storeName: string;
 			displayName: string;
 			locale: Locale;
-			// Lets the webhook handler follow the ack with the seller's payment
-			// details (bank/QR) so the buyer can pay while the cart is being built.
-			retailerId: Id<"retailers">;
 	  }
 	| { result: "expired"; storeName: string; locale: Locale }
 	| { result: "already_used"; storeName: string; locale: Locale }
@@ -748,10 +746,10 @@ export const bindCheckoutSession = internalMutation({
 			: getDisplayName({ waProfileName: trimmedPushname, waPhone: normalizedPhone });
 		return {
 			result: "bound",
+			retailerId: session.retailerId,
 			storeName,
 			displayName,
 			locale,
-			retailerId: session.retailerId,
 		};
 	},
 });

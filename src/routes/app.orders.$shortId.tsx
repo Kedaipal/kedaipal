@@ -740,12 +740,20 @@ function OrderDetailRoute() {
 						Fulfillment
 					</p>
 					<p className="text-sm font-medium">
-						{isSelfCollect ? "Self Collect" : "Delivery"}
+						{isSelfCollect
+							? order.pickupSnapshot?.locationType === "drop_off"
+								? "Drop-off"
+								: "Self Collect"
+							: "Delivery"}
 					</p>
 					{order.fulfilmentDate !== undefined ? (
 						<div className="flex items-center gap-1.5">
 							<span className="text-xs text-muted-foreground">
-								{isSelfCollect ? "Collect on" : "Deliver on"}
+								{isSelfCollect
+									? order.pickupSnapshot?.locationType === "drop_off"
+										? "Meet on"
+										: "Collect on"
+									: "Deliver on"}
 							</span>
 							<FulfilmentDateBadge epoch={order.fulfilmentDate} size="md" />
 						</div>
@@ -808,7 +816,9 @@ function OrderDetailRoute() {
 				<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 					<div className="flex items-center justify-between">
 						<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-							Pick up at
+							{order.pickupSnapshot.locationType === "drop_off"
+								? "Meet at"
+								: "Pick up at"}
 						</p>
 						<div className="flex items-center gap-1">
 							<button

@@ -211,7 +211,6 @@ function EditProductRoute() {
 					navigate({ to: "/app/products" });
 				}}
 			/>
-
 		</div>
 	);
 }

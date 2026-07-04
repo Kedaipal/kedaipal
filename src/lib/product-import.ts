@@ -462,7 +462,9 @@ function canonicalizeValues(
 export function dedupeProvidedVariants(
 	groupRows: VariantImportRow[],
 	options: AxisOption[],
-): { provided: Map<string, VariantImportRow> } | { error: ProductImportRowError } {
+):
+	| { provided: Map<string, VariantImportRow> }
+	| { error: ProductImportRowError } {
 	const provided = new Map<string, VariantImportRow>();
 	for (const r of groupRows) {
 		const label = variantLabel(canonicalizeValues(r.optionValues, options));

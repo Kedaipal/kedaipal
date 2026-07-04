@@ -28,6 +28,12 @@ export default defineSchema({
 		// Convex storage ID for the store's logo. Public — surfaced on the
 		// storefront header, dashboard hero, and as the OG image fallback.
 		logoStorageId: v.optional(v.string()),
+		// Convex storage ID for the store's wide cover/banner image. Public —
+		// rendered full-bleed at the top of the storefront header and used as the
+		// PRIMARY OG/social-share + JSON-LD image (logo → first product image are
+		// the fallbacks). No index — only read alongside the retailer row, same as
+		// logoStorageId. See docs/store-cover-banner.md.
+		coverImageStorageId: v.optional(v.string()),
 		currency: v.optional(v.string()),
 		locale: v.optional(v.union(v.literal("en"), v.literal("ms"))),
 		// Per-retailer overrides for WhatsApp message copy. Any key omitted falls
@@ -545,6 +551,11 @@ export default defineSchema({
 		paymentClaimedAt: v.optional(v.number()),
 		paymentReceivedAt: v.optional(v.number()),
 		paymentProofStorageId: v.optional(v.string()),
+		// When the one-time "still awaiting payment" WhatsApp nudge was sent
+		// (3 days before the 14-day open-payment window closes). Stamped by the
+		// daily cron at schedule time so it never double-sends. Undefined = not
+		// sent (yet, or never became due). See docs/payment-reminder.md.
+		paymentReminderSentAt: v.optional(v.number()),
 		// Mockup/proof approval — a third independent dimension (like payment),
 		// gating the confirmed→packed transition for made-to-order orders.
 		// Undefined = order has no proof-required item (no gate). See

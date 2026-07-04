@@ -25,6 +25,7 @@ import {
 } from "./lib/orderStatus";
 import { assertValidWaPhone } from "./lib/slug";
 import {
+	hasTemplateOverride,
 	paymentQrCaption,
 	pickLocale,
 	renderMessage,
@@ -35,6 +36,7 @@ import {
 	type DeliveryMethod,
 	type Locale,
 	type MessageTemplates,
+	type PickupKind,
 	type PickupSnapshot,
 } from "./lib/whatsappCopy";
 import { classifyInbound } from "./lib/inboundIntent";
@@ -68,32 +70,6 @@ async function resolvePaymentForMessage(
 		resolved.push({ ...m, qrImageUrl });
 	}
 	return { methods: resolved };
-}
-
-/**
- * Each configured QR method as its own image (captioned with the method label,
- * so a buyer with several QRs knows which is which) so they can long-press to
- * save it. Failures are isolated per image. Shared by the payment ask and the
- * counter-bind payment info.
- */
-async function sendPaymentQrImages(
-	wa: GuardedSender,
-	toPhone: string,
-	locale: Locale,
-	methods: ResolvedPaymentMethod[],
-): Promise<void> {
-	for (const m of methods) {
-		if (m.type !== "qr" || !m.qrImageUrl) continue;
-		try {
-			await wa.send(toPhone, {
-				kind: "image",
-				imageUrl: m.qrImageUrl,
-				caption: paymentQrCaption(locale, m.label),
-			});
-		} catch (err) {
-			console.error("WA payment QR send failed", err);
-		}
-	}
 }
 
 const statusValidator = v.union(
@@ -212,6 +188,12 @@ export const getOrderWithRetailer = internalQuery({
 		retailerSlug: string;
 		carrierTrackingUrl: string | undefined;
 		deliveryMethod: DeliveryMethod;
+		// The order's frozen pickup kind — drives "pickup" vs "drop-off point"
+		// wording in status copy. Undefined for delivery orders + legacy snapshots.
+		pickupKind: PickupKind | undefined;
+		paymentStatus: Doc<"orders">["paymentStatus"];
+		total: number;
+		currency: string;
 		locale: Locale;
 		messageTemplates: MessageTemplates | undefined;
 		// Phase 2: stage config + this order's current stage, for stage-update
@@ -235,6 +217,11 @@ export const getOrderWithRetailer = internalQuery({
 			retailerSlug: retailer.slug,
 			carrierTrackingUrl: order.carrierTrackingUrl,
 			deliveryMethod: (order.deliveryMethod as DeliveryMethod | undefined) ?? "delivery",
+			pickupKind: (order.pickupSnapshot as PickupSnapshot | undefined)
+				?.locationType,
+			paymentStatus: order.paymentStatus,
+			total: order.total,
+			currency: order.currency,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
 			messageTemplates: retailer.messageTemplates as
 				| MessageTemplates
@@ -289,18 +276,6 @@ export const getRetailerLocaleForOrder = internalQuery({
 	},
 });
 
-// The bind ack's follow-up needs the seller's payment methods but no order
-// exists yet (the cashier is still building the cart), so it can't ride
-// getRetailerLocaleForOrder — this resolves straight off the retailer.
-export const getRetailerPaymentInfo = internalQuery({
-	args: { retailerId: v.id("retailers") },
-	handler: async (ctx, { retailerId }): Promise<ResolvedPayment | null> => {
-		const retailer = await ctx.db.get(retailerId);
-		if (!retailer) return null;
-		return resolvePaymentForMessage(ctx, retailer);
-	},
-});
-
 /**
  * Send the buyer the payment ask: `introBody` (the confirm template, or a
  * mockup-approved/waived intro) → [pickup block] → transfer-reference line →
@@ -319,9 +294,23 @@ async function sendPaymentMessage(
 		trackingUrl: string;
 		pickupSnapshot: PickupSnapshot | undefined;
 		payment: ResolvedPayment;
+		// When false, omit the bank/QR methods block AND the QR follow-up images —
+		// the buyer already received them earlier (e.g. at counter-checkout scan),
+		// so re-sending would repeat the same details. The intro, transfer
+		// reference, and "I've paid" CTA still send. Defaults to true.
+		includePaymentDetails?: boolean;
 	},
 ): Promise<void> {
-	const { introBody, locale, shortId, storeName, trackingUrl, pickupSnapshot, payment } = args;
+	const {
+		introBody,
+		locale,
+		shortId,
+		storeName,
+		trackingUrl,
+		pickupSnapshot,
+		payment,
+		includePaymentDetails = true,
+	} = args;
 	// Hard-coded, non-overridable: tells the shopper to use the order ID as the
 	// transfer reference — the only deterministic way to match a bank
 	// notification to an order, so it's always present.
@@ -329,7 +318,9 @@ async function sendPaymentMessage(
 		shortId,
 		storeName,
 	});
-	const paymentBlock = renderPaymentMethods(locale, payment.methods);
+	const paymentBlock = includePaymentDetails
+		? renderPaymentMethods(locale, payment.methods)
+		: "";
 	const pickupBlock = renderPickupBlock(locale, pickupSnapshot);
 	// Layout: intro → [pickup] → blank line → transfer reference → [payment].
 	// Pickup first so the buyer sees the WHERE before the WHEN/HOW of paying.
@@ -356,8 +347,22 @@ async function sendPaymentMessage(
 			console.error("WA payment send failed", textErr);
 		}
 	}
-	// QR images follow the message above; failures are isolated from it.
-	await sendPaymentQrImages(wa, toPhone, locale, payment.methods);
+	// Each configured QR method follows as its own image (captioned with the
+	// method label, so a buyer with several QRs knows which is which) so they can
+	// long-press to save it. Failures are isolated from the message above.
+	if (!includePaymentDetails) return;
+	for (const m of payment.methods) {
+		if (m.type !== "qr" || !m.qrImageUrl) continue;
+		try {
+			await wa.send(toPhone, {
+				kind: "image",
+				imageUrl: m.qrImageUrl,
+				caption: paymentQrCaption(locale, m.label),
+			});
+		} catch (err) {
+			console.error("WA payment QR send failed", err);
+		}
+	}
 }
 
 /**
@@ -457,48 +462,23 @@ export const handleInbound = internalAction({
 			} catch (err) {
 				console.error("WA checkout-bind reply failed", err);
 			}
-			// On a successful bind, follow up with the seller's payment details
-			// (bank block + QR images) so the buyer can start a transfer while the
-			// cashier is still ringing up — no waiting to ask "how do I pay?" at
-			// the end. No ORD reference or "I've paid" CTA yet (no order exists);
-			// the order confirmation that follows carries both. Skipped when the
-			// seller has no payment methods configured. Seller-bound transactional,
-			// like the payment ask it previews.
+			// Right after the ack, push the seller's payment details so the buyer can
+			// pay ahead (even before the cashier finishes) instead of waiting for them
+			// at the end of the sale. Scheduled (not inline) so the ack lands first and
+			// a payment-send hiccup can't fail the bind reply. No-ops when the seller
+			// has no payment methods configured. The pay-later order-create message
+			// deliberately omits the methods block to avoid re-sending them.
 			if (bind.result === "bound") {
-				const payment = await ctx.runQuery(
-					internal.whatsapp.getRetailerPaymentInfo,
-					{ retailerId: bind.retailerId },
+				await ctx.scheduler.runAfter(
+					0,
+					internal.whatsapp.notifyCounterCheckoutPayment,
+					{
+						retailerId: bind.retailerId,
+						toPhone: fromPhone,
+						storeName: bind.storeName,
+						locale: bind.locale,
+					},
 				);
-				if (payment && payment.methods.length > 0) {
-					const sellerWa = makeGuardedSender(
-						ctx,
-						bind.retailerId,
-						"transactional",
-					);
-					const infoIntro = renderSystemMessage(
-						bind.locale,
-						"counterPaymentInfo",
-						bindVars,
-					);
-					const paymentBlock = renderPaymentMethods(
-						bind.locale,
-						payment.methods,
-					);
-					try {
-						await sellerWa.send(fromPhone, {
-							kind: "text",
-							body: paymentBlock ? `${infoIntro}\n${paymentBlock}` : infoIntro,
-						});
-						await sendPaymentQrImages(
-							sellerWa,
-							fromPhone,
-							bind.locale,
-							payment.methods,
-						);
-					} catch (err) {
-						console.error("WA counter payment info send failed", err);
-					}
-				}
 			}
 			return;
 		}
@@ -594,7 +574,14 @@ export const handleInbound = internalAction({
 				meta?.messageTemplates,
 				locale,
 				"confirm",
-				{ shortId, storeName, contactPhone, trackingUrl, deliveryMethod: meta?.deliveryMethod ?? "delivery" },
+				{
+					shortId,
+					storeName,
+					contactPhone,
+					trackingUrl,
+					deliveryMethod: meta?.deliveryMethod ?? "delivery",
+					pickupKind: meta?.pickupSnapshot?.locationType,
+				},
 			);
 			await sendPaymentMessage(sellerWa, fromPhone, {
 				introBody: confirmBody,
@@ -638,8 +625,12 @@ export const notifyStatusChange = internalAction({
 			retailerSlug: string;
 			carrierTrackingUrl: string | undefined;
 			deliveryMethod: DeliveryMethod;
+			pickupKind: PickupKind | undefined;
 			locale: Locale;
 			messageTemplates: MessageTemplates | undefined;
+			orderStages: OrderStage[] | undefined;
+			statusLabels: StatusLabels | undefined;
+			currentStageId: string | undefined;
 		};
 		let meta: Meta | null = null;
 		try {
@@ -652,7 +643,8 @@ export const notifyStatusChange = internalAction({
 		}
 		if (!meta) return;
 		if (!meta.customerWaPhone) return;
-		if (meta.status === "pending" || meta.status === "confirmed") return;
+		const status = meta.status;
+		if (status === "pending" || status === "confirmed") return;
 
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
 		const trackingToken =
@@ -661,14 +653,55 @@ export const notifyStatusChange = internalAction({
 		if (!trackingToken) return; // order vanished — don't ship a dead link
 		const trackingUrl = `${appUrl}/track/${trackingToken}`;
 		const locale = pickLocale(meta.locale);
-		const body = renderMessage(meta.messageTemplates, locale, meta.status, {
-			shortId: meta.shortId,
-			storeName: meta.storeName,
-			contactPhone: meta.retailerWaPhone,
-			trackingUrl,
-			carrierTrackingUrl: meta.carrierTrackingUrl,
-			deliveryMethod: meta.deliveryMethod,
-		});
+
+		// A seller who configured custom stages expects THEIR vocabulary in the
+		// buyer message — "Ready for Collection" + its description, not the generic
+		// "packed and ready for pickup" (86ey570am). Precedence: an explicitly
+		// authored messageTemplates override still wins, then the custom stage's
+		// label/description, then the default catalog. Cancellation is never a
+		// stage (system-managed) and sellers on default stages keep the rich copy.
+		let stageBody: string | null = null;
+		if (
+			status !== "cancelled" &&
+			meta.orderStages &&
+			meta.orderStages.length > 0 &&
+			!hasTemplateOverride(meta.messageTemplates, locale, status)
+		) {
+			const stages = resolveStages({
+				orderStages: meta.orderStages,
+				labels: meta.statusLabels,
+				deliveryMethod: meta.deliveryMethod,
+			});
+			// Prefer the order's actual stage (advanceToStage sets it); fall back to
+			// the first stage on this anchor for plain updateStatus transitions.
+			const stage =
+				stages.find(
+					(s) => s.id === meta?.currentStageId && s.anchor === status,
+				) ?? stages.find((s) => s.anchor === status);
+			if (stage) {
+				stageBody = renderStageUpdate(locale, {
+					shortId: meta.shortId,
+					stageLabel: stageLabel(stage, locale),
+					stageDescription: stageDescription(stage, locale),
+					trackingUrl,
+					carrierTrackingUrl:
+						status === "shipped" ? meta.carrierTrackingUrl : undefined,
+					contactPhone: meta.retailerWaPhone,
+				});
+			}
+		}
+
+		const body =
+			stageBody ??
+			renderMessage(meta.messageTemplates, locale, status, {
+				shortId: meta.shortId,
+				storeName: meta.storeName,
+				contactPhone: meta.retailerWaPhone,
+				trackingUrl,
+				carrierTrackingUrl: meta.carrierTrackingUrl,
+				deliveryMethod: meta.deliveryMethod,
+				pickupKind: meta.pickupKind,
+			});
 		try {
 			await makeGuardedSender(ctx, meta.retailerId, "transactional").send(meta.customerWaPhone, {
 				kind: "text",
@@ -721,6 +754,8 @@ export const notifyStageEntry = internalAction({
 			stageLabel: stageLabel(stage, locale),
 			stageDescription: stageDescription(stage, locale),
 			trackingUrl: `${appUrl}/track/${trackingToken}`,
+			carrierTrackingUrl:
+				stage.anchor === "shipped" ? meta.carrierTrackingUrl : undefined,
 			contactPhone: meta.retailerWaPhone,
 		});
 		try {
@@ -730,6 +765,57 @@ export const notifyStageEntry = internalAction({
 			});
 		} catch (err) {
 			console.error("WA stage-update notify failed", err);
+		}
+	},
+});
+
+/**
+ * Scheduled by paymentReminders.sendDuePaymentReminders (daily cron). Sends the
+ * one-time "still awaiting payment" nudge 3 days before the 14-day open-payment
+ * window closes — see docs/payment-reminder.md. Re-checks payment/status at
+ * send time (the stamp is written at schedule time, so a buyer who paid in the
+ * gap is never nagged). Sent as a gated `session_message` — the kill switch,
+ * per-seller caps, and opt-outs all apply (a nudge is exactly what WABA
+ * protection exists to govern, unlike transactional status updates).
+ */
+export const notifyPaymentReminder = internalAction({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<void> => {
+		const meta = await ctx
+			.runQuery(internal.whatsapp.getOrderWithRetailer, { orderId })
+			.catch((err) => {
+				console.error("WA payment-reminder lookup failed", err);
+				return null;
+			});
+		if (!meta) return;
+		if (!meta.customerWaPhone) return;
+		// Order left the "open + unpaid" state between the cron stamp and this run.
+		// `delivered` does NOT close this out — F&B sellers routinely deliver on
+		// credit and settle at week's end, so goods-arrived ≠ goods-paid-for.
+		if (meta.status === "cancelled") return;
+		if (meta.paymentStatus === "claimed" || meta.paymentStatus === "received")
+			return;
+
+		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
+		const trackingToken =
+			meta.trackingToken ??
+			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
+		if (!trackingToken) return; // order vanished — don't ship a dead link
+		const locale = pickLocale(meta.locale);
+		const body = renderSystemMessage(locale, "paymentReminder", {
+			shortId: meta.shortId,
+			storeName: meta.storeName,
+			amount: `${meta.currency} ${(meta.total / 100).toFixed(2)}`,
+			trackingUrl: `${appUrl}/track/${trackingToken}`,
+			contactPhone: meta.retailerWaPhone,
+		});
+		try {
+			await makeGuardedSender(ctx, meta.retailerId, "session_message").send(
+				meta.customerWaPhone,
+				{ kind: "text", body },
+			);
+		} catch (err) {
+			console.error("WA payment-reminder send failed", err);
 		}
 	},
 });
@@ -1163,10 +1249,6 @@ export const getCounterOrderMeta = internalQuery({
 		total: number;
 		currency: string;
 		paymentStatus: "unpaid" | "claimed" | "received";
-		// The seller's payment config, so a pay-later confirmation can push the
-		// payment methods (bank details + QR images) to the buyer over WhatsApp.
-		paymentMethods: PaymentMethod[] | undefined;
-		paymentInstructions: LegacyPaymentInstructions | undefined;
 	} | null> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) return null;
@@ -1185,9 +1267,80 @@ export const getCounterOrderMeta = internalQuery({
 				| "unpaid"
 				| "claimed"
 				| "received",
-			paymentMethods: retailer.paymentMethods,
-			paymentInstructions: retailer.paymentInstructions,
 		};
+	},
+});
+
+/**
+ * Resolve a retailer's payment methods (QR storage ids → viewable URLs) for the
+ * pay-at-bind message. Keyed by retailerId (not an order — no order exists yet
+ * at scan time). Returns null when the retailer vanished.
+ */
+export const getRetailerPaymentContext = internalQuery({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{ payment: ResolvedPayment } | null> => {
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) return null;
+		return { payment: await resolvePaymentForMessage(ctx, retailer) };
+	},
+});
+
+/**
+ * Scheduled from the checkout-bind reply (handleInbound). Right after the buyer
+ * scans the seller's `KP-<token>` QR and gets the bind ack, push the seller's
+ * payment details so they can pay ahead — even before the cashier finishes —
+ * instead of waiting for them at the end of the sale. No-ops when the seller has
+ * no payment methods configured (nothing to send). Sent as a gated
+ * `session_message` (now that the retailer is known, per-seller caps apply); the
+ * pay-later order-create message omits the methods block so this never repeats.
+ */
+export const notifyCounterCheckoutPayment = internalAction({
+	args: {
+		retailerId: v.id("retailers"),
+		toPhone: v.string(),
+		storeName: v.string(),
+		locale: v.union(v.literal("en"), v.literal("ms")),
+	},
+	handler: async (
+		ctx,
+		{ retailerId, toPhone, storeName, locale },
+	): Promise<void> => {
+		const meta = await ctx
+			.runQuery(internal.whatsapp.getRetailerPaymentContext, { retailerId })
+			.catch((err) => {
+				console.error("WA counter pay-at-bind lookup failed", err);
+				return null;
+			});
+		if (!meta || meta.payment.methods.length === 0) return; // nothing to send
+
+		const intro = renderSystemMessage(locale, "counterCheckoutPaymentIntro", {
+			shortId: "",
+			storeName,
+		});
+		const body = `${intro}\n${renderPaymentMethods(locale, meta.payment.methods)}`;
+		const wa = makeGuardedSender(ctx, retailerId, "session_message");
+		try {
+			await wa.send(toPhone, { kind: "text", body });
+		} catch (err) {
+			console.error("WA counter pay-at-bind send failed", err);
+		}
+		// Each configured QR follows as its own captioned image (mirrors
+		// sendPaymentMessage) so the buyer can long-press to save it.
+		for (const m of meta.payment.methods) {
+			if (m.type !== "qr" || !m.qrImageUrl) continue;
+			try {
+				await wa.send(toPhone, {
+					kind: "image",
+					imageUrl: m.qrImageUrl,
+					caption: paymentQrCaption(locale, m.label),
+				});
+			} catch (err) {
+				console.error("WA counter pay-at-bind QR send failed", err);
+			}
+		}
 	},
 });
 
@@ -1238,17 +1391,16 @@ export const notifyCounterOrderCreated = internalAction({
 				console.error("WA counter-order notify failed", err);
 			}
 		} else {
-			// Pay-later: push the payment ask so the buyer can pay from that chat
-			// without ever scanning again (boss ask). The invoice PDF follows below.
+			// Pay-later: send the amount + transfer reference + "I've paid" CTA so the
+			// buyer can settle from that chat without ever scanning again (boss ask).
+			// The bank/QR methods block is intentionally OMITTED here — the buyer
+			// already received it at scan-bind (notifyCounterCheckoutPayment), and the
+			// invoice PDF below carries the details too, so re-sending would repeat it.
 			const intro = renderSystemMessage(locale, "counterOrderConfirmedUnpaid", {
 				shortId: meta.shortId,
 				storeName: meta.storeName,
 				amount: money,
 				trackingUrl,
-			});
-			const payment = await resolvePaymentForMessage(ctx, {
-				paymentMethods: meta.paymentMethods,
-				paymentInstructions: meta.paymentInstructions,
 			});
 			try {
 				await sendPaymentMessage(wa, meta.customerWaPhone, {
@@ -1259,7 +1411,8 @@ export const notifyCounterOrderCreated = internalAction({
 					trackingUrl,
 					// Counter orders are collected at the counter — no pickup snapshot.
 					pickupSnapshot: undefined,
-					payment,
+					payment: { methods: [] },
+					includePaymentDetails: false,
 				});
 			} catch (err) {
 				console.error("WA counter-order payment ask failed", err);

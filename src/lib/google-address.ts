@@ -1,4 +1,5 @@
 import type { GoogleAddressComponent } from "../../convex/google";
+
 // Re-export the shared maps-URL helper so existing client callsites don't
 // have to update their import path. The canonical home is `convex/lib/mapsUrl.ts`
 // because the same logic is needed inside Convex functions (rendering the
@@ -8,11 +9,8 @@ export {
 	googleMapsNavUrl,
 	wazeNavUrl,
 } from "../../convex/lib/mapsUrl";
-import {
-	type CheckoutAddressValues,
-	type MyState,
-	MY_STATES,
-} from "./schemas";
+
+import { type CheckoutAddressValues, MY_STATES, type MyState } from "./schemas";
 
 /**
  * Map Google Places `addressComponents` into the storefront's structured
@@ -58,9 +56,15 @@ export function normalizeMyState(raw: string): MyState | undefined {
 
 	// Federal Territories — strip the territory prefix and route to the WP form.
 	const wpAliases: ReadonlyArray<[RegExp, MyState]> = [
-		[/^(wilayah persekutuan |federal territory of |wp )?kuala lumpur$/, "WP Kuala Lumpur"],
+		[
+			/^(wilayah persekutuan |federal territory of |wp )?kuala lumpur$/,
+			"WP Kuala Lumpur",
+		],
 		[/^(wilayah persekutuan |federal territory of |wp )?labuan$/, "WP Labuan"],
-		[/^(wilayah persekutuan |federal territory of |wp )?putrajaya$/, "WP Putrajaya"],
+		[
+			/^(wilayah persekutuan |federal territory of |wp )?putrajaya$/,
+			"WP Putrajaya",
+		],
 	];
 	for (const [pattern, mapped] of wpAliases) {
 		if (pattern.test(lc)) return mapped;
