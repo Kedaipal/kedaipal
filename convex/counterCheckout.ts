@@ -650,7 +650,13 @@ export const cancelCheckoutSession = mutation({
  * `locale` (the store's, for a localized reply) rides along on every outcome that
  * resolved a retailer; `not_found` has no retailer, so the caller defaults to en. */
 export type BindResult =
-	| { result: "bound"; storeName: string; displayName: string; locale: Locale }
+	| {
+			result: "bound";
+			retailerId: Id<"retailers">;
+			storeName: string;
+			displayName: string;
+			locale: Locale;
+	  }
 	| { result: "expired"; storeName: string; locale: Locale }
 	| { result: "already_used"; storeName: string; locale: Locale }
 	| { result: "not_found" };
@@ -738,7 +744,13 @@ export const bindCheckoutSession = internalMutation({
 		const displayName = existing
 			? getDisplayName(existing)
 			: getDisplayName({ waProfileName: trimmedPushname, waPhone: normalizedPhone });
-		return { result: "bound", storeName, displayName, locale };
+		return {
+			result: "bound",
+			retailerId: session.retailerId,
+			storeName,
+			displayName,
+			locale,
+		};
 	},
 });
 
