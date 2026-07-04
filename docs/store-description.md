@@ -53,3 +53,9 @@ trust-signal table stakes; paywalling it would leave storefronts looking empty
 and hurt conversion for exactly the sellers we want to land. (The roadmap ticket
 labels it "Starter (RM79)" under *Tier impact* — that's the tier it landed in,
 not a gate. There is no entitlement check on `storeDescription`.)
+
+## See also
+
+- [`store-cover-banner.md`](./store-cover-banner.md) — the wide cover/banner
+  image (storefront hero + primary OG image), the other public storefront-header
+  presentation add.

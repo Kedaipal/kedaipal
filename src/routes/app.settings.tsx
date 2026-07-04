@@ -408,6 +408,14 @@ function SettingsRoute() {
 						/>
 					</Card>
 					<Card>
+						<CoverImageForm
+							currentCoverUrl={retailer.coverImageUrl}
+							onSave={(coverImageStorageId) =>
+								updateSettings({ coverImageStorageId })
+							}
+						/>
+					</Card>
+					<Card>
 						<NotifyEmailForm
 							current={retailer.notifyEmail ?? ""}
 							onSave={(notifyEmail) => updateSettings({ notifyEmail })}
@@ -473,6 +481,14 @@ function SettingsRoute() {
 							onSave={(paymentMethods) => updateSettings({ paymentMethods })}
 						/>
 					</Card>
+					{/* Surfaces the automatic nudge so the behaviour is never a
+					    surprise — see docs/payment-reminder.md. */}
+					<p className="px-1 text-xs text-muted-foreground">
+						Unpaid orders get one automatic WhatsApp reminder 11 days after
+						ordering — 3 days before the 14-day payment window closes. Buyers
+						who tapped “I've paid” (or whose payment you've confirmed) are never
+						reminded.
+					</p>
 				</div>
 			) : null}
 
@@ -785,6 +801,104 @@ function LogoForm({
 			) : (
 				<label className="flex h-32 cursor-pointer items-center justify-center rounded-2xl border border-dashed border-input bg-background text-sm text-muted-foreground hover:bg-accent/5">
 					{uploading ? "Uploading…" : "Tap to upload your logo"}
+					<input
+						type="file"
+						accept="image/*"
+						className="hidden"
+						disabled={uploading}
+						onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
+					/>
+				</label>
+			)}
+		</div>
+	);
+}
+
+function CoverImageForm({
+	currentCoverUrl,
+	onSave,
+}: {
+	currentCoverUrl: string | undefined;
+	onSave: (coverImageStorageId: string) => Promise<unknown>;
+}) {
+	const generateCoverImageUploadUrl = useMutation(
+		api.retailers.generateCoverImageUploadUrl,
+	);
+	const [localPreview, setLocalPreview] = useState<string | null>(null);
+	const [uploading, setUploading] = useState(false);
+
+	const previewUrl = localPreview ?? currentCoverUrl ?? null;
+
+	async function handleFile(file: File | null) {
+		if (!file) return;
+		setUploading(true);
+		try {
+			const url = await generateCoverImageUploadUrl();
+			const res = await fetch(url, {
+				method: "POST",
+				headers: { "Content-Type": file.type },
+				body: file,
+			});
+			if (!res.ok) throw new Error("Upload failed");
+			const { storageId } = (await res.json()) as { storageId: string };
+			setLocalPreview(URL.createObjectURL(file));
+			await onSave(storageId);
+			toast.success("Cover image saved.");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setUploading(false);
+		}
+	}
+
+	async function handleRemove() {
+		try {
+			await onSave("");
+			setLocalPreview(null);
+			toast.success("Cover image removed.");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		}
+	}
+
+	return (
+		<div className="flex flex-col gap-4">
+			<SectionHeading
+				title="Cover image"
+				description="Best size 1200 × 400 px (wide 3:1). Fills your storefront header and shows as the preview when you share your link. Max ~2MB."
+			/>
+
+			{previewUrl ? (
+				<div className="flex flex-col gap-3">
+					<img
+						src={previewUrl}
+						alt="Store cover"
+						className="aspect-[3/1] w-full rounded-2xl border border-input bg-muted object-cover"
+					/>
+					<div className="flex items-center gap-3">
+						<label className="inline-flex h-11 cursor-pointer items-center justify-center rounded-xl border border-input bg-background px-4 text-sm font-medium hover:bg-accent/5">
+							{uploading ? "Uploading…" : "Replace"}
+							<input
+								type="file"
+								accept="image/*"
+								className="hidden"
+								disabled={uploading}
+								onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
+							/>
+						</label>
+						<button
+							type="button"
+							onClick={handleRemove}
+							disabled={uploading}
+							className="text-xs text-destructive underline disabled:opacity-50"
+						>
+							Remove cover
+						</button>
+					</div>
+				</div>
+			) : (
+				<label className="flex aspect-[3/1] w-full cursor-pointer items-center justify-center rounded-2xl border border-dashed border-input bg-background text-sm text-muted-foreground hover:bg-accent/5">
+					{uploading ? "Uploading…" : "Tap to upload a cover image"}
 					<input
 						type="file"
 						accept="image/*"

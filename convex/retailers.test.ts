@@ -115,6 +115,162 @@ describe("retailers logo", () => {
 		if (result.status !== "ok") return;
 		expect(result.retailer.logoUrl).toBeUndefined();
 	});
+
+	test("garbage-collects the previous logo blob on replace / clear", async () => {
+		const t = setup();
+		const asA = await seed(t, "user_logo_gc", "logo-gc");
+		const storeBlob = () =>
+			t.run(async (ctx) =>
+				ctx.storage.store(
+					new Blob([new Uint8Array([1, 2, 3, 4])], { type: "image/png" }),
+				),
+			);
+		const exists = async (id: string) =>
+			(await t.run(async (ctx) => ctx.storage.getUrl(id))) !== null;
+
+		const logo1 = await storeBlob();
+		await asA.mutation(api.retailers.updateSettings, { logoStorageId: logo1 });
+		expect(await exists(logo1)).toBe(true);
+
+		// Replace → old blob GC'd, new one kept.
+		const logo2 = await storeBlob();
+		await asA.mutation(api.retailers.updateSettings, { logoStorageId: logo2 });
+		expect(await exists(logo1)).toBe(false);
+		expect(await exists(logo2)).toBe(true);
+
+		// Clear → the current blob GC'd too.
+		await asA.mutation(api.retailers.updateSettings, { logoStorageId: "" });
+		expect(await exists(logo2)).toBe(false);
+	});
+});
+
+describe("retailers cover image", () => {
+	test("getRetailerBySlug returns resolved coverImageUrl when set", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "cover-store");
+		const storageId = await t.run(async (ctx) => {
+			const blob = new Blob([new Uint8Array([1, 2, 3, 4])], {
+				type: "image/png",
+			});
+			return ctx.storage.store(blob);
+		});
+		await asA.mutation(api.retailers.updateSettings, {
+			coverImageStorageId: storageId,
+		});
+
+		const result = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "cover-store",
+		});
+		expect(result.status).toBe("ok");
+		if (result.status !== "ok") return;
+		expect(result.retailer.coverImageStorageId).toBe(storageId);
+		expect(result.retailer.coverImageUrl).toMatch(/^https?:\/\//);
+	});
+
+	test("getMyRetailer returns resolved coverImageUrl", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "my-cover");
+		const storageId = await t.run(async (ctx) => {
+			const blob = new Blob([new Uint8Array([1, 2, 3, 4])], {
+				type: "image/png",
+			});
+			return ctx.storage.store(blob);
+		});
+		await asA.mutation(api.retailers.updateSettings, {
+			coverImageStorageId: storageId,
+		});
+
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.coverImageStorageId).toBe(storageId);
+		expect(me?.coverImageUrl).toMatch(/^https?:\/\//);
+	});
+
+	test("empty string clears the cover image", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "clear-cover");
+		const storageId = await t.run(async (ctx) => {
+			const blob = new Blob([new Uint8Array([1, 2, 3, 4])], {
+				type: "image/png",
+			});
+			return ctx.storage.store(blob);
+		});
+		await asA.mutation(api.retailers.updateSettings, {
+			coverImageStorageId: storageId,
+		});
+		await asA.mutation(api.retailers.updateSettings, {
+			coverImageStorageId: "",
+		});
+
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.coverImageStorageId).toBeUndefined();
+		expect(me?.coverImageUrl).toBeUndefined();
+	});
+
+	test("getRetailerBySlug returns no coverImageUrl when none configured", async () => {
+		const t = setup();
+		await seed(t, USER_A, "no-cover");
+		const result = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "no-cover",
+		});
+		expect(result.status).toBe("ok");
+		if (result.status !== "ok") return;
+		expect(result.retailer.coverImageUrl).toBeUndefined();
+	});
+
+	test("garbage-collects the previous cover blob on replace / clear", async () => {
+		const t = setup();
+		const asA = await seed(t, "user_cover_gc", "cover-gc");
+		const storeBlob = () =>
+			t.run(async (ctx) =>
+				ctx.storage.store(
+					new Blob([new Uint8Array([1, 2, 3, 4])], { type: "image/png" }),
+				),
+			);
+		const exists = async (id: string) =>
+			(await t.run(async (ctx) => ctx.storage.getUrl(id))) !== null;
+
+		const cover1 = await storeBlob();
+		await asA.mutation(api.retailers.updateSettings, {
+			coverImageStorageId: cover1,
+		});
+		expect(await exists(cover1)).toBe(true);
+
+		// Replace → old blob GC'd, new one kept.
+		const cover2 = await storeBlob();
+		await asA.mutation(api.retailers.updateSettings, {
+			coverImageStorageId: cover2,
+		});
+		expect(await exists(cover1)).toBe(false);
+		expect(await exists(cover2)).toBe(true);
+
+		// Clear → the current blob GC'd too.
+		await asA.mutation(api.retailers.updateSettings, {
+			coverImageStorageId: "",
+		});
+		expect(await exists(cover2)).toBe(false);
+	});
+
+	test("cover and logo are independent — setting one leaves the other", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "cover-logo-indep");
+		const [logoId, coverId] = await t.run(async (ctx) => {
+			const blob = () =>
+				ctx.storage.store(
+					new Blob([new Uint8Array([1, 2, 3, 4])], { type: "image/png" }),
+				);
+			return Promise.all([blob(), blob()]);
+		});
+		await asA.mutation(api.retailers.updateSettings, { logoStorageId: logoId });
+		await asA.mutation(api.retailers.updateSettings, {
+			coverImageStorageId: coverId,
+		});
+
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.logoStorageId).toBe(logoId);
+		expect(me?.coverImageStorageId).toBe(coverId);
+		expect(me?.logoUrl).toMatch(/^https?:\/\//);
+		expect(me?.coverImageUrl).toMatch(/^https?:\/\//);
+	});
 });
 
 describe("retailers store description", () => {
@@ -527,12 +683,14 @@ describe("retailers deleteUser (internal cascade)", () => {
 					new Blob([new Uint8Array([1, 2, 3, 4])], { type: "image/png" }),
 				);
 			const logoId = await store();
+			const coverId = await store();
 			const qrId = await store();
 			const productImgId = await store();
 			const proofId = await store();
 
 			await ctx.db.patch(retailer._id, {
 				logoStorageId: logoId,
+				coverImageStorageId: coverId,
 				paymentInstructions: { qrImageStorageId: qrId },
 			});
 
@@ -590,6 +748,7 @@ describe("retailers deleteUser (internal cascade)", () => {
 			return {
 				retailerId: retailer._id,
 				logoId,
+				coverId,
 				qrId,
 				productImgId,
 				proofId,
@@ -620,6 +779,7 @@ describe("retailers deleteUser (internal cascade)", () => {
 			expect(await ctx.db.get(ids.historyId)).toBeNull();
 
 			expect(await ctx.storage.getUrl(ids.logoId)).toBeNull();
+			expect(await ctx.storage.getUrl(ids.coverId)).toBeNull();
 			expect(await ctx.storage.getUrl(ids.qrId)).toBeNull();
 			expect(await ctx.storage.getUrl(ids.productImgId)).toBeNull();
 			expect(await ctx.storage.getUrl(ids.proofId)).toBeNull();
