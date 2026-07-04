@@ -458,15 +458,24 @@ export const handleInbound = internalAction({
 			const body = renderSystemMessage(
 				start.locale,
 				start.result === "started" ? "storeQrConnected" : "storeQrBusy",
-				{ shortId: "", storeName: start.storeName },
+				{
+					shortId: "",
+					storeName: start.storeName,
+					// The pairing code the buyer shows the cashier (started only).
+					code: start.result === "started" ? start.code : undefined,
+				},
 			);
 			try {
 				await wa.send(fromPhone, { kind: "text", body });
 			} catch (err) {
 				console.error("WA store-qr reply failed", err);
 			}
-			// First scan only — a rescan re-claims the session and the buyer already
-			// got the payment details then (mirrors the bind flow's no-repeat rule).
+			// Right after the ack, push the seller's payment details so the buyer can
+			// pay ahead (even before the cashier finishes) instead of waiting for them
+			// at the end of the sale. Scheduled (not inline) so the ack lands first and
+			// a send hiccup can't fail the reply. No-ops when the seller has no payment
+			// methods. First scan only — a rescan re-claims the session and the buyer
+			// already got the details then (the order-create message omits them too).
 			if (start.result === "started" && !start.reclaimed) {
 				await ctx.scheduler.runAfter(
 					0,
@@ -476,55 +485,6 @@ export const handleInbound = internalAction({
 						toPhone: fromPhone,
 						storeName: start.storeName,
 						locale: start.locale,
-					},
-				);
-			}
-			return;
-		}
-
-		// Counter Checkout: the buyer scanned the seller's `KP-<token>` QR. Bind
-		// their WhatsApp identity to the session (the seller's dashboard flips live)
-		// and reply so the buyer knows it worked. See docs/counter-checkout.md.
-		if (intent.kind === "checkout_bind") {
-			const bind = await ctx.runMutation(
-				internal.counterCheckout.bindCheckoutSession,
-				{ token: intent.token, waPhone: fromPhone, profileName },
-			);
-			console.log("WA checkout bind", { fromPhone, result: bind.result });
-			// Localized to the store's locale (the bind resolved the retailer). Only
-			// `not_found` has no store/locale — fall back to the generic English hint.
-			const bindVars = {
-				shortId: "",
-				storeName: "storeName" in bind ? bind.storeName : "",
-			};
-			const body =
-				bind.result === "bound"
-					? renderSystemMessage(bind.locale, "counterCheckoutBound", bindVars)
-					: bind.result === "expired"
-						? renderSystemMessage(bind.locale, "counterCheckoutExpired", bindVars)
-						: bind.result === "already_used"
-							? renderSystemMessage(bind.locale, "counterCheckoutUsed", bindVars)
-							: fallback();
-			try {
-				await wa.send(fromPhone, { kind: "text", body });
-			} catch (err) {
-				console.error("WA checkout-bind reply failed", err);
-			}
-			// Right after the ack, push the seller's payment details so the buyer can
-			// pay ahead (even before the cashier finishes) instead of waiting for them
-			// at the end of the sale. Scheduled (not inline) so the ack lands first and
-			// a payment-send hiccup can't fail the bind reply. No-ops when the seller
-			// has no payment methods configured. The pay-later order-create message
-			// deliberately omits the methods block to avoid re-sending them.
-			if (bind.result === "bound") {
-				await ctx.scheduler.runAfter(
-					0,
-					internal.whatsapp.notifyCounterCheckoutPayment,
-					{
-						retailerId: bind.retailerId,
-						toPhone: fromPhone,
-						storeName: bind.storeName,
-						locale: bind.locale,
 					},
 				);
 			}

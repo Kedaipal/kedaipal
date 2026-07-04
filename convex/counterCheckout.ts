@@ -1,20 +1,18 @@
 /**
  * Counter Checkout — the in-person order spine (ClickUp 86ey0e82j, docs/counter-checkout.md).
  *
- * A seller opens Counter Checkout → `createCheckoutSession` mints an unguessable,
- * single-use, short-TTL `token`; the dashboard renders a QR of
- * `wa.me/<shared_WABA>?text=KP-<token>`. The buyer scans + sends, the inbound
- * webhook's intent router (convex/lib/inboundIntent.ts) spots `KP-<token>` and
- * calls `bindCheckoutSession`, which ties the buyer's WhatsApp identity to the
- * session. The seller's dashboard `useQuery(getCheckoutSession)` flips live
- * (Convex reactive — no polling).
+ * ONE QR (86ey5neg6): the seller prints/shows their PERMANENT store QR
+ * (`wa.me/<shared_WABA>?text=…KPS-<retailers.counterQrToken>…`). A walk-in buyer
+ * scans + sends; the inbound webhook's intent router (convex/lib/inboundIntent.ts)
+ * spots `KPS-<token>` and calls `startSessionFromStoreQr`, which creates a
+ * `buyer_identified` session bound to the buyer + mints a short **pairing code**
+ * (e.g. "K7") the buyer shows the cashier. The seller's dashboard
+ * `useQuery(listOpenSessions)` flips live (Convex reactive — no polling); the
+ * cashier picks the session by its pairing code and rings up the order.
  *
- * Security (mirrors the order tracking-token hardening, ticket 86ey1fggw):
- *   - token is high-entropy (`generateTrackingToken`, ~142 bits) — unguessable.
- *   - single-use: a bind only succeeds while `awaiting_buyer`; a second scan of
- *     the same token is ignored (replay-safe).
- *   - short TTL: a session expires ~10 min after creation if no scan arrives.
- *   - session creation is rate-limited per seller.
+ * The older per-session `KP-<token>` flow (cashier-minted `createCheckoutSession`
+ * → buyer-bound `bindCheckoutSession`) was removed — the static store QR fully
+ * replaces it. See docs/counter-checkout.md + the "Store QR poster" section below.
  */
 
 import { ConvexError, v } from "convex/values";
@@ -48,36 +46,41 @@ import { assertValidWaPhone } from "./lib/slug";
 import { variantLabel } from "./lib/variant";
 import { type Locale, pickLocale } from "./lib/whatsappCopy";
 
-/** A counter session lives this long before it expires unscanned (QR window). */
-export const SESSION_TTL_MS = 10 * 60 * 1000; // 10 minutes
 /**
- * Once a buyer is bound, the session is a seller-owned in-progress order, so it
- * lives much longer — the vendor can juggle several customers and come back. The
- * window slides on every draft edit; abandoned ones are swept by the cron so the
- * "open checkouts" list stays clean.
+ * A walk-in session is a seller-owned in-progress order, so it lives a while —
+ * the vendor can juggle several customers and come back. The window slides on
+ * every draft edit; abandoned ones are swept by the cron so the "open checkouts"
+ * list stays clean.
  */
 export const OPEN_SESSION_TTL_MS = 3 * 24 * 60 * 60 * 1000; // 3 days idle
 
 const MAX_COUNTER_ITEMS = 100;
 const SHORT_ID_RETRIES = 3;
 
-/**
- * The `wa.me` deep link the buyer scans. Built server-side from the shared WABA
- * number (`WHATSAPP_CHECKOUT_PHONE`) so the dashboard only has to render the QR —
- * the number never has to round-trip through the client. Undefined if the env
- * var is unset (the UI then shows a "messaging not configured" state).
- */
-function buildCheckoutWaUrl(token: string): string | undefined {
-	const phone = process.env.WHATSAPP_CHECKOUT_PHONE;
-	if (!phone) return undefined;
-	// A warm, first-person message the buyer sends by tapping the QR — nicer than a
-	// bare token. The `KP-<token>` ref is the only load-bearing part (the inbound
-	// intent router scans for it anywhere in the text, so the surrounding prose is
-	// harmless); everything else is just human framing. There's no order number
-	// yet — the order is created after the buyer binds — so the ref *is* the token.
-	// URL-encoded because the message now carries spaces + emoji.
-	const text = `Hi! 👋 I'd like to check out at the counter.\n\nMy order ref: KP-${token}`;
-	return `https://wa.me/${phone.replace(/\D/g, "")}?text=${encodeURIComponent(text)}`;
+// Short buyer pairing code (e.g. "K7"): 1 letter + 1 digit, both from
+// unambiguous alphabets (no I/O/0/1) so it reads cleanly off a phone at a
+// counter. ~192 combos — plenty vs the ≤10 concurrent open sessions per store,
+// and collisions are regenerated against the live set (generatePairingCode).
+const PAIRING_LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+const PAIRING_DIGITS = "23456789";
+
+function pairingCodeCandidate(): string {
+	const bytes = new Uint8Array(2);
+	crypto.getRandomValues(bytes);
+	return (
+		PAIRING_LETTERS[bytes[0] % PAIRING_LETTERS.length] +
+		PAIRING_DIGITS[bytes[1] % PAIRING_DIGITS.length]
+	);
+}
+
+/** A pairing code not currently in use by the store's open walk-in sessions. */
+function generatePairingCode(taken: ReadonlySet<string>): string {
+	for (let i = 0; i < 30; i++) {
+		const code = pairingCodeCandidate();
+		if (!taken.has(code)) return code;
+	}
+	// Astronomically unlikely (≤10 taken of 192); a rare duplicate is harmless.
+	return pairingCodeCandidate();
 }
 
 /**
@@ -139,55 +142,9 @@ function effectiveStatus(
 }
 
 /**
- * Seller opens a counter session. Returns the token (the dashboard builds the
- * `wa.me?text=KP-<token>` QR from it) + the session id to subscribe to.
- */
-export const createCheckoutSession = mutation({
-	args: { retailerId: v.optional(v.id("retailers")) },
-	handler: async (
-		ctx,
-		{ retailerId },
-	): Promise<{
-		sessionId: Id<"counterCheckoutSessions">;
-		token: string;
-		waUrl: string | undefined;
-		expiresAt: number;
-	}> => {
-		const access = await requireCounterRetailer(ctx, retailerId);
-		const retailer = access.retailer;
-		await rateLimiter.limit(ctx, "checkoutSessionCreate", {
-			key: retailer.userId,
-			throws: true,
-		});
-
-		const now = Date.now();
-		const expiresAt = now + SESSION_TTL_MS;
-		const token = generateTrackingToken();
-		const sessionId = await ctx.db.insert("counterCheckoutSessions", {
-			retailerId: retailer._id,
-			// The SELLER's userId (never the acting admin's) so the inbound-webhook
-			// buyer binding + buyer confirmation still resolve to the right store.
-			sellerUserId: retailer.userId,
-			token,
-			status: "awaiting_buyer",
-			expiresAt,
-			createdAt: now,
-			updatedAt: now,
-		});
-		await logAdminAction(
-			ctx,
-			access,
-			"counterCheckout.createCheckoutSession",
-			sessionId,
-		);
-		return { sessionId, token, waUrl: buildCheckoutWaUrl(token), expiresAt };
-	},
-});
-
-/**
- * Reactive read for the seller's Counter Checkout screen. Flips live from
- * `awaiting_buyer` → `buyer_identified` (with the buyer's name + history) the
- * instant the webhook binds the scan. Ownership-checked.
+ * Reactive read for the one checkout the cashier is currently building. A
+ * walk-in session starts life `buyer_identified` (created by the store-QR scan),
+ * so this drives the build screen + done screen. Ownership-checked.
  */
 export const getCheckoutSession = query({
 	args: { sessionId: v.id("counterCheckoutSessions") },
@@ -197,8 +154,6 @@ export const getCheckoutSession = query({
 	): Promise<{
 		status: Doc<"counterCheckoutSessions">["status"];
 		expiresAt: number;
-		token: string;
-		waUrl: string | undefined;
 		waPhone: string | undefined;
 		displayName: string | undefined;
 		isNewCustomer: boolean | undefined;
@@ -249,8 +204,6 @@ export const getCheckoutSession = query({
 		return {
 			status: effectiveStatus(session, Date.now()),
 			expiresAt: session.expiresAt,
-			token: session.token,
-			waUrl: buildCheckoutWaUrl(session.token),
 			waPhone: session.waPhone,
 			displayName,
 			isNewCustomer: session.isNewCustomer,
@@ -309,11 +262,11 @@ export const saveSessionDraft = mutation({
 });
 
 /**
- * All of the retailer's OPEN counter checkouts — the unscanned QRs
- * (awaiting_buyer) plus the in-progress, buyer-bound orders (buyer_identified) —
- * so the seller can juggle several customers at once and resume any of them.
+ * All of the retailer's OPEN counter checkouts — the in-progress, buyer-bound
+ * walk-in sessions (`buyer_identified`) — so the cashier can juggle several
+ * customers at once and resume any of them by matching the buyer's pairing code.
  * Effectively-expired rows are filtered out even before the cron sweeps them.
- * Owner-only. Item count comes straight off the draft (no per-variant lookups).
+ * Owner-or-admin. Item count comes straight off the draft (no per-variant lookups).
  */
 export const listOpenSessions = query({
 	args: { retailerId: v.optional(v.id("retailers")) },
@@ -323,7 +276,8 @@ export const listOpenSessions = query({
 	): Promise<
 		Array<{
 			sessionId: Id<"counterCheckoutSessions">;
-			status: "awaiting_buyer" | "buyer_identified";
+			// Short code the buyer shows the cashier to be matched here (86ey5neg6).
+			pairingCode: string | undefined;
 			// Drives the "Walk-in scan" badge — see the store QR poster (86ey5m35w).
 			origin: "cashier" | "store_qr";
 			displayName: string | undefined;
@@ -336,9 +290,15 @@ export const listOpenSessions = query({
 	> => {
 		const { retailer } = await requireCounterRetailer(ctx, retailerId);
 		const now = Date.now();
+		const rows = await ctx.db
+			.query("counterCheckoutSessions")
+			.withIndex("by_retailer_status", (q) =>
+				q.eq("retailerId", retailer._id).eq("status", "buyer_identified"),
+			)
+			.collect();
 		const out: Array<{
 			sessionId: Id<"counterCheckoutSessions">;
-			status: "awaiting_buyer" | "buyer_identified";
+			pairingCode: string | undefined;
 			origin: "cashier" | "store_qr";
 			displayName: string | undefined;
 			isNewCustomer: boolean | undefined;
@@ -348,42 +308,34 @@ export const listOpenSessions = query({
 			expiresAt: number;
 		}> = [];
 
-		for (const status of ["awaiting_buyer", "buyer_identified"] as const) {
-			const rows = await ctx.db
-				.query("counterCheckoutSessions")
-				.withIndex("by_retailer_status", (q) =>
-					q.eq("retailerId", retailer._id).eq("status", status),
-				)
-				.collect();
-			for (const s of rows) {
-				if (effectiveStatus(s, now) === "expired") continue;
+		for (const s of rows) {
+			if (effectiveStatus(s, now) === "expired") continue;
 
-				let displayName: string | undefined;
-				if (s.customerId) {
-					const c = await ctx.db.get(s.customerId);
-					if (c) displayName = getDisplayName(c);
-				} else if (s.waPhone || s.waProfileName) {
-					displayName = getDisplayName({
-						waProfileName: s.waProfileName,
-						waPhone: s.waPhone ?? "",
-					});
-				}
-
-				out.push({
-					sessionId: s._id,
-					status,
-					origin: s.origin ?? "cashier",
-					displayName,
-					isNewCustomer: s.isNewCustomer,
-					itemCount: (s.draft?.items ?? []).reduce((n, i) => n + i.quantity, 0),
-					createdAt: s.createdAt,
-					boundAt: s.boundAt,
-					expiresAt: s.expiresAt,
+			let displayName: string | undefined;
+			if (s.customerId) {
+				const c = await ctx.db.get(s.customerId);
+				if (c) displayName = getDisplayName(c);
+			} else if (s.waPhone || s.waProfileName) {
+				displayName = getDisplayName({
+					waProfileName: s.waProfileName,
+					waPhone: s.waPhone ?? "",
 				});
 			}
+
+			out.push({
+				sessionId: s._id,
+				pairingCode: s.pairingCode,
+				origin: s.origin ?? "cashier",
+				displayName,
+				isNewCustomer: s.isNewCustomer,
+				itemCount: (s.draft?.items ?? []).reduce((n, i) => n + i.quantity, 0),
+				createdAt: s.createdAt,
+				boundAt: s.boundAt,
+				expiresAt: s.expiresAt,
+			});
 		}
 
-		// Most recently active first: bound orders by boundAt, unscanned by createdAt.
+		// Most recently active first.
 		out.sort((a, b) => (b.boundAt ?? b.createdAt) - (a.boundAt ?? a.createdAt));
 		return out;
 	},
@@ -650,114 +602,6 @@ export const cancelCheckoutSession = mutation({
 	},
 });
 
-/** Outcome of an inbound `KP-<token>` bind attempt (drives the buyer reply).
- * `locale` (the store's, for a localized reply) rides along on every outcome that
- * resolved a retailer; `not_found` has no retailer, so the caller defaults to en. */
-export type BindResult =
-	| {
-			result: "bound";
-			retailerId: Id<"retailers">;
-			storeName: string;
-			displayName: string;
-			locale: Locale;
-	  }
-	| { result: "expired"; storeName: string; locale: Locale }
-	| { result: "already_used"; storeName: string; locale: Locale }
-	| { result: "not_found" };
-
-/**
- * Internal: bind an inbound buyer (phone + pushname) to the session named by a
- * `KP-<token>` message. Called from the WhatsApp webhook handler. Single-use +
- * TTL-guarded + replay-safe. Resolves an EXISTING customer for the live history
- * panel; a brand-new buyer is bound by phone/pushname only (the customer row is
- * created later by the order-creation path).
- */
-export const bindCheckoutSession = internalMutation({
-	args: {
-		token: v.string(),
-		waPhone: v.string(),
-		profileName: v.optional(v.string()),
-	},
-	handler: async (ctx, { token, waPhone, profileName }): Promise<BindResult> => {
-		const session = await ctx.db
-			.query("counterCheckoutSessions")
-			.withIndex("by_token", (q) => q.eq("token", token))
-			.unique();
-		if (!session) return { result: "not_found" };
-
-		const retailer = await ctx.db.get(session.retailerId);
-		const storeName = retailer?.storeName ?? "the store";
-		const locale = pickLocale(retailer?.locale);
-
-		const now = Date.now();
-		// Expiry takes precedence over the generic status check so a buyer always
-		// gets the "expired" message for a stale QR — whether they scan before the
-		// cron sweeps it (status still awaiting_buyer, past TTL) or after (status
-		// already flipped to "expired"). Otherwise the timing of the 5-min cron
-		// would flip the buyer-facing message between "expired" and a generic reply.
-		const isExpired =
-			session.status === "expired" ||
-			(session.status === "awaiting_buyer" && now > session.expiresAt);
-		if (isExpired) {
-			if (session.status === "awaiting_buyer")
-				await ctx.db.patch(session._id, { status: "expired", updatedAt: now });
-			return { result: "expired", storeName, locale };
-		}
-
-		// Single-use: any other non-awaiting status (buyer_identified / completed /
-		// cancelled) is a replay of a used session — ignored.
-		if (session.status !== "awaiting_buyer")
-			return { result: "already_used", storeName, locale };
-
-		// Normalize the inbound phone the same way the order flow does.
-		let normalizedPhone: string;
-		try {
-			normalizedPhone = assertValidWaPhone(waPhone);
-		} catch {
-			normalizedPhone = waPhone; // fall back to raw; binding is best-effort
-		}
-
-		// Resolve an existing customer (for the returning-customer history panel).
-		const existing = await ctx.db
-			.query("customers")
-			.withIndex("by_retailer_phone", (q) =>
-				q.eq("retailerId", session.retailerId).eq("waPhone", normalizedPhone),
-			)
-			.unique();
-
-		const trimmedPushname = profileName?.trim() || undefined;
-		if (existing && trimmedPushname) {
-			await refreshWaProfileName(ctx, {
-				customerId: existing._id,
-				profileName: trimmedPushname,
-			});
-		}
-
-		await ctx.db.patch(session._id, {
-			status: "buyer_identified",
-			customerId: existing?._id,
-			waPhone: normalizedPhone,
-			waProfileName: trimmedPushname,
-			isNewCustomer: existing === null,
-			boundAt: now,
-			// Promote to the long idle window now that it's a real in-progress order.
-			expiresAt: now + OPEN_SESSION_TTL_MS,
-			updatedAt: now,
-		});
-
-		const displayName = existing
-			? getDisplayName(existing)
-			: getDisplayName({ waProfileName: trimmedPushname, waPhone: normalizedPhone });
-		return {
-			result: "bound",
-			retailerId: session.retailerId,
-			storeName,
-			displayName,
-			locale,
-		};
-	},
-});
-
 /**
  * Cron: flip `awaiting_buyer` sessions past their TTL to `expired`. Reads compute
  * effective expiry already (effectiveStatus), so this is housekeeping — it keeps
@@ -925,6 +769,8 @@ export type StoreQrStartResult =
 			retailerId: Id<"retailers">;
 			storeName: string;
 			locale: Locale;
+			// Short pairing code the buyer shows the cashier (same code on re-claim).
+			code: string;
 			// True when the buyer already had an open walk-in session at this store
 			// (a rescan) — the caller skips the payment-details push to avoid
 			// repeating what they got on the first scan.
@@ -987,10 +833,21 @@ export const startSessionFromStoreQr = internalMutation({
 		);
 
 		// Re-claim: the buyer rescanned while already connected → same session,
-		// slid idle window, no new row, no rate-limit charge.
+		// slid idle window, no new row, no rate-limit charge. Backfill a pairing
+		// code if the row predates the feature so the ack still carries one.
 		const existing = openWalkIns.find((s) => s.waPhone === normalizedPhone);
 		if (existing) {
+			const code =
+				existing.pairingCode ??
+				generatePairingCode(
+					new Set(
+						openWalkIns
+							.map((s) => s.pairingCode)
+							.filter((c): c is string => Boolean(c)),
+					),
+				);
 			await ctx.db.patch(existing._id, {
+				pairingCode: code,
 				expiresAt: now + OPEN_SESSION_TTL_MS,
 				updatedAt: now,
 			});
@@ -999,6 +856,7 @@ export const startSessionFromStoreQr = internalMutation({
 				retailerId: retailer._id,
 				storeName,
 				locale,
+				code,
 				reclaimed: true,
 			};
 		}
@@ -1029,6 +887,16 @@ export const startSessionFromStoreQr = internalMutation({
 			});
 		}
 
+		// Unique among the store's currently-open walk-in codes so the cashier
+		// never sees two of the same at once.
+		const code = generatePairingCode(
+			new Set(
+				openWalkIns
+					.map((s) => s.pairingCode)
+					.filter((c): c is string => Boolean(c)),
+			),
+		);
+
 		await ctx.db.insert("counterCheckoutSessions", {
 			retailerId: retailer._id,
 			sellerUserId: retailer.userId,
@@ -1037,6 +905,7 @@ export const startSessionFromStoreQr = internalMutation({
 			token: generateTrackingToken(),
 			status: "buyer_identified",
 			origin: "store_qr",
+			pairingCode: code,
 			customerId: customer?._id,
 			waPhone: normalizedPhone,
 			waProfileName: trimmedPushname,
@@ -1052,6 +921,7 @@ export const startSessionFromStoreQr = internalMutation({
 			retailerId: retailer._id,
 			storeName,
 			locale,
+			code,
 			reclaimed: false,
 		};
 	},

@@ -2,7 +2,7 @@
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 
@@ -225,34 +225,32 @@ describe("admin console reads", () => {
 });
 
 describe("counter checkout act-as", () => {
-	test("admin opens a session for the seller (bound to the SELLER, audited)", async () => {
+	test("admin generates the seller's store QR (bound to the SELLER, audited)", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, OWNER);
-		const { sessionId } = await t
+		const { token } = await t
 			.withIdentity({ subject: ADMIN })
-			.mutation(api.counterCheckout.createCheckoutSession, {
+			.mutation(api.counterCheckout.ensureCounterQrToken, {
 				retailerId: retailer._id,
 			});
-		const session = await t.run(async (ctx) => ctx.db.get(sessionId));
-		// The session belongs to the seller and binds the SELLER's userId, never the
-		// acting admin's — so the inbound webhook still resolves the buyer correctly.
-		expect(session?.retailerId).toBe(retailer._id);
-		expect(session?.sellerUserId).toBe(OWNER);
+		// The token lands on the seller's store, not the admin's.
+		const seller = await t.run(async (ctx) => ctx.db.get(retailer._id));
+		expect(seller?.counterQrToken).toBe(token);
 		const rows = await t
 			.withIdentity({ subject: ADMIN })
 			.query(api.admin.recentAuditForRetailer, { retailerId: retailer._id });
 		expect(
-			rows.some((r) => r.action === "counterCheckout.createCheckoutSession"),
+			rows.some((r) => r.action === "counterCheckout.ensureCounterQrToken"),
 		).toBe(true);
 	});
 
-	test("a stranger cannot open a session for another store", async () => {
+	test("a stranger cannot generate a store QR for another store", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, OWNER);
 		await expect(
 			t
 				.withIdentity({ subject: STRANGER })
-				.mutation(api.counterCheckout.createCheckoutSession, {
+				.mutation(api.counterCheckout.ensureCounterQrToken, {
 					retailerId: retailer._id,
 				}),
 		).rejects.toThrow(/Forbidden/);
@@ -261,15 +259,20 @@ describe("counter checkout act-as", () => {
 	test("admin can list the seller's open sessions", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, OWNER);
-		await t
+		const { token } = await t
 			.withIdentity({ subject: ADMIN })
-			.mutation(api.counterCheckout.createCheckoutSession, {
+			.mutation(api.counterCheckout.ensureCounterQrToken, {
 				retailerId: retailer._id,
 			});
+		// A walk-in scan opens a session bound to the SELLER's store.
+		await t.mutation(internal.counterCheckout.startSessionFromStoreQr, {
+			token,
+			waPhone: "60123456789",
+		});
 		const open = await t
 			.withIdentity({ subject: ADMIN })
 			.query(api.counterCheckout.listOpenSessions, { retailerId: retailer._id });
 		expect(open.length).toBe(1);
-		expect(open[0]?.status).toBe("awaiting_buyer");
+		expect(open[0]?.origin).toBe("store_qr");
 	});
 });

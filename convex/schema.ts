@@ -696,23 +696,34 @@ export default defineSchema({
 	counterCheckoutSessions: defineTable({
 		retailerId: v.id("retailers"),
 		sellerUserId: v.string(), // Clerk subject who opened the counter
-		// Unguessable, single-use capability the buyer sends back as `KP-<token>`.
-		// Same generator as orders.trackingToken (generateTrackingToken).
+		// Unguessable internal capability. Same generator as orders.trackingToken
+		// (generateTrackingToken); kept unique per session even though buyers no
+		// longer send it back (the per-session `KP-` bind flow was removed —
+		// 86ey5neg6; walk-ins now bind via the permanent store `KPS-` QR).
 		token: v.string(),
 		status: v.union(
-			v.literal("awaiting_buyer"), // QR shown; no scan yet
-			v.literal("buyer_identified"), // buyer bound (token / manual phone)
+			// `awaiting_buyer` is retained for migration-safety (prod rows may exist
+			// from the old per-session flow) but is no longer created — walk-ins
+			// land straight in `buyer_identified`. The idle-expiry sweep still runs.
+			v.literal("awaiting_buyer"),
+			v.literal("buyer_identified"), // buyer bound via store-QR scan
 			v.literal("completed"), // order created from the session
-			v.literal("expired"), // TTL elapsed before a scan
+			v.literal("expired"), // TTL elapsed
 			v.literal("cancelled"), // seller dismissed it
 		),
-		// Who initiated the session: the cashier (per-session `KP-` QR, the
-		// original flow) or a buyer scanning the printed store poster (`KPS-`,
-		// 86ey5m35w). Undefined → "cashier" (legacy-safe, same posture as
-		// pickupSnapshot.locationType). Drives the "Walk-in scan" badge.
+		// Who initiated the session. Now always the buyer scanning the printed
+		// store poster (`KPS-`, 86ey5m35w). Undefined → "cashier" (legacy-safe,
+		// same posture as pickupSnapshot.locationType). Drives the "Walk-in scan"
+		// badge; `cashier` only appears on legacy rows from the removed flow.
 		origin: v.optional(
 			v.union(v.literal("cashier"), v.literal("store_qr")),
 		),
+		// Short human pairing code (e.g. "K7") shown to the buyer on connect AND on
+		// the cashier's open-checkouts list, so the cashier matches "who's this?"
+		// at a glance (there's no order number yet — the order is created later).
+		// Unique among the store's currently-open walk-in sessions; reused across
+		// the store once a session closes. See docs/counter-checkout.md (86ey5neg6).
+		pairingCode: v.optional(v.string()),
 		// Bound buyer identity. `customerId` is set only when an EXISTING customer
 		// matched (retailerId, waPhone) — a brand-new buyer has waPhone/pushname
 		// but no customer row until the order is created (linkOrderToCustomer).
