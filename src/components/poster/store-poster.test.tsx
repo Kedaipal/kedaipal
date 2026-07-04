@@ -8,13 +8,15 @@ const BASE = {
 	storeName: "Lekor Mr Ganu",
 	slug: "lekor-mr-ganu",
 	logoUrl: null,
-	origin: "https://kedaipal.com",
+	// Left QR = the walk-in KPS WhatsApp deep link (86ey5m35w); right = storefront.
+	counterUrl: "https://wa.me/60123456789?text=Store%20ref%3A%20KPS-abc",
+	onlineUrl: "https://kedaipal.com/lekor-mr-ganu?src=online",
 } as const;
 
 afterEach(cleanup);
 
 describe("posterQrUrls", () => {
-	it("tags each QR target with its src channel", () => {
+	it("builds the storefront fallback + online src-tagged URLs", () => {
 		expect(posterQrUrls("https://kedaipal.com", "kek-lapis")).toEqual({
 			counter: "https://kedaipal.com/kek-lapis?src=counter",
 			online: "https://kedaipal.com/kek-lapis?src=online",
@@ -46,11 +48,28 @@ describe("StorePoster", () => {
 		).toBeTruthy();
 	});
 
-	it("renders exactly two QR codes pointing at the tagged storefront URLs", () => {
+	it("renders exactly two QR codes — the counter (walk-in) and online targets", () => {
 		const { container } = render(<StorePoster {...BASE} locale="ms" />);
 		const svgs = container.querySelectorAll("svg");
 		// react-qr-code renders one <svg> per QR; the poster has no other SVGs.
 		expect(svgs.length).toBe(2);
+	});
+
+	it("encodes distinct counter (walk-in) and online targets in the two QRs", () => {
+		// react-qr-code encodes the value into the SVG module geometry, so two
+		// different targets must yield two different SVGs — a swapped or blank
+		// counterUrl (e.g. reusing the online URL) would collapse them to equal.
+		const { container } = render(
+			<StorePoster
+				{...BASE}
+				counterUrl="https://wa.me/60111?text=KPS-xyz"
+				onlineUrl="https://kedaipal.com/store?src=online"
+				locale="ms"
+			/>,
+		);
+		const svgs = container.querySelectorAll("svg");
+		expect(svgs.length).toBe(2);
+		expect(svgs[0]?.innerHTML).not.toBe(svgs[1]?.innerHTML);
 	});
 
 	it("shows the human URL pill without the ?src tag", () => {

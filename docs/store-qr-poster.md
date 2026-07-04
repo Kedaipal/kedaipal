@@ -1,15 +1,32 @@
 # Store QR Poster (printable A4, EN/BM)
 
-ClickUp: `86ey5m4m9` · Route: `/app/poster` · Shipped: Jul 2026
+ClickUp: `86ey5m4m9` (poster UI) · pairs with `86ey5m35w` (static QR backend) ·
+Route: `/app/poster` · Shipped: Jul 2026
 
 ## What / why
 
 A self-serve, print-ready A4 poster a seller downloads from the dashboard: their
-logo + store name on a navy header, two QR codes pointing at their storefront
-("At the counter" / "Order online"), a store URL pill, and a powered-by-Kedaipal
-footer. It replaces the hand-built Mr Ganu counter poster — every ICP seller
-with a physical point (counter, stall, pickup) gets a day-one activation asset
-that converts walk-up buyers into storefront orders (and into the Customer DB).
+logo + store name on a navy header, two QR codes ("At the counter" /
+"Order online"), a store URL pill, and a powered-by-Kedaipal footer. It replaces
+the hand-built Mr Ganu counter poster — every ICP seller with a physical point
+(counter, stall, pickup) gets a day-one activation asset that converts walk-up
+buyers into orders (and into the Customer DB).
+
+**Two QRs, two flows:**
+- **Left — "At the counter" (walk-in):** encodes the permanent
+  `wa.me?text=…KPS-<token>` deep link from the static-QR feature (`86ey5m35w`).
+  A buyer scans → WhatsApp opens → they're connected → **the cashier rings up
+  the order** (it appears as a "Walk-in scan" on the counter-checkout desk).
+- **Right — "Order online":** the storefront `?src=online` link — browse the
+  full catalog and order from home.
+
+**Relationship to the Counter-Checkout Store QR card (`86ey5m35w`).** That
+feature also ships a simpler single-QR PNG poster inside `/app/checkout`
+(`StoreQrCard`: Generate / Download PNG / Rotate). Both are kept **by design**:
+the counter card is the quick in-flow grab + token management (Generate/Rotate);
+`/app/poster` is the deluxe branded A4 print page (logo, two QRs, EN/BM). They
+share the **same** `retailers.counterQrToken`, so rotating it in either place
+updates both.
 
 - **Entry points:** a "Promote your store" card on the `/app` home (sits with
   the share actions in both new-user and returning-user layouts) and a
@@ -25,8 +42,9 @@ that converts walk-up buyers into storefront orders (and into the Customer DB).
 
 | File | Role |
 |---|---|
-| `src/routes/app.poster.tsx` | Page: locale toggle, print button, scaled preview, route-scoped print CSS |
-| `src/components/poster/store-poster.tsx` | Pure presentational A4 sheet + `posterQrUrls()` |
+| `src/routes/app.poster.tsx` | Page: locale toggle, print button, scaled preview, route-scoped print CSS, resolves the walk-in `waUrl` + ensures the token |
+| `src/components/poster/store-poster.tsx` | Pure presentational A4 sheet (`counterUrl`/`onlineUrl` props) + `posterQrUrls()` storefront fallback helper |
+| `convex/counterCheckout.ts` | `getStoreQr` / `ensureCounterQrToken` (from `86ey5m35w`) — the counter QR's `KPS-` deep link |
 | `src/lib/storefront-url.ts` | Canonical storefront origin/URL construction (also used by `/app` home) |
 | `messages/en.json` / `messages/ms.json` | `poster_*` copy keys (guarded by `src/lib/i18n.test.ts` parity tests) |
 
@@ -58,13 +76,23 @@ the Mr Ganu reference poster; EN is a translation of it.
   ≥4mm white quiet zone (the lib renders none itself). 56mm — not the 45mm
   acceptance floor — because iOS Safari ignores `@page` and scale-to-fits
   (~10% shrink): 56 × 0.9 ≈ 50mm, still ≥45mm.
-- Targets from `posterQrUrls(origin, slug)`:
-  `…/<slug>?src=counter` and `…/<slug>?src=online`. **`?src=` is reserved
-  attribution** — the storefront ignores it today; PostHog wiring comes with S3.
-- **Counter QR is interim-static:** real counter checkout still runs on
-  per-session single-use `KP-<token>` QRs, so the poster's counter QR points at
-  the plain storefront for now. When static counter-checkout tokenisation
-  ships (Zaki), swap the `counter` target inside `posterQrUrls` — single seam.
+- **Counter QR (left)** = `getStoreQr().waUrl`, the permanent walk-in
+  `wa.me?text=…KPS-<retailers.counterQrToken>…` deep link (`86ey5m35w`). The
+  route **auto-provisions** the token on first visit — a one-shot
+  `ensureCounterQrToken` (idempotent, owner-or-admin, so act-as mints it for the
+  seller's store) — so the poster is self-serve with no "generate first" step.
+  While the token resolves, and on deployments where `WHATSAPP_CHECKOUT_PHONE`
+  is unset (so `waUrl` is `undefined`), the counter QR **falls back** to the
+  storefront `?src=counter` link, so the poster always prints.
+- **Online QR (right)** = storefront `?src=online` from `posterQrUrls()`.
+  **`?src=` is reserved attribution** — the storefront ignores it today; PostHog
+  wiring comes with S3.
+- `StorePoster` is fully presentational: the route resolves both URLs and passes
+  `counterUrl` / `onlineUrl` in. `posterQrUrls(origin, slug)` now only builds the
+  storefront pair used for the online QR + the counter fallback.
+- **Rotation:** rotating the token (Counter Checkout → Store QR card, `86ey5m35w`)
+  kills old printed posters — including any downloaded from `/app/poster`, since
+  both encode the same token. Re-print after a rotate.
 
 ## Activation stamping
 

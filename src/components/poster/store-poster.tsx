@@ -8,17 +8,25 @@ interface StorePosterProps {
 	slug: string;
 	logoUrl?: string | null;
 	locale: PosterLocale;
-	origin: string;
+	/**
+	 * Left "At the counter" QR. The real target is the permanent walk-in
+	 * `wa.me?text=…KPS-<counterQrToken>…` deep link (`getStoreQr().waUrl`,
+	 * 86ey5m35w): the buyer scans → WhatsApp opens → they're connected → the
+	 * cashier rings up the order. The route falls back to the storefront
+	 * `?src=counter` link when the WABA number isn't configured, so the poster
+	 * is always printable.
+	 */
+	counterUrl: string;
+	/** Right "Order online" QR — the storefront `?src=online` link. */
+	onlineUrl: string;
 }
 
 /**
- * Poster QR targets. Both point at the public storefront; `?src=` is a
- * reserved attribution tag (PostHog later) that the storefront ignores today.
- *
- * NOTE: the counter QR is interim-static — real counter checkout still runs on
- * per-session single-use `KP-<token>` QRs, so a printed poster can't launch it
- * yet. When static counter-checkout tokenisation ships, swap the `counter`
- * target here (single seam). See docs/store-qr-poster.md.
+ * Storefront QR fallbacks. `?src=` is a reserved attribution tag (PostHog
+ * later) that the storefront ignores today. `online` is the poster's right QR;
+ * `counter` is only the fallback the route uses when the walk-in `waUrl` isn't
+ * available (WABA number unset) — the primary counter target is the KPS deep
+ * link. See docs/store-qr-poster.md.
  */
 export function posterQrUrls(
 	origin: string,
@@ -47,9 +55,9 @@ export function StorePoster({
 	slug,
 	logoUrl,
 	locale,
-	origin,
+	counterUrl,
+	onlineUrl,
 }: StorePosterProps) {
-	const qr = posterQrUrls(origin, slug);
 	const longName = storeName.length > 24;
 	const longSlug = slug.length > 24;
 
@@ -95,7 +103,7 @@ export function StorePoster({
 							m.poster_counter_step2({}, { locale }),
 							m.poster_counter_step3({}, { locale }),
 						]}
-						url={qr.counter}
+						url={counterUrl}
 					/>
 					<QrCard
 						badge={m.poster_online_badge({}, { locale })}
@@ -105,7 +113,7 @@ export function StorePoster({
 							m.poster_online_step2({}, { locale }),
 							m.poster_online_step3({}, { locale }),
 						]}
-						url={qr.online}
+						url={onlineUrl}
 					/>
 				</div>
 
