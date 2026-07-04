@@ -501,6 +501,12 @@ function ExpiryCountdown({ expiresAt }: { expiresAt: number }) {
 	);
 }
 
+// Download-QR is hidden (not removed) while the printable static store QR is
+// scoped — the per-session QR is single-use, so printing it is a footgun.
+// Typed as boolean (not the literal `false`) so the JSX branch isn't dead code
+// to the compiler/linter.
+const SHOW_QR_DOWNLOAD: boolean = false;
+
 function AwaitingScreen({
 	waUrl,
 	token,
@@ -575,15 +581,21 @@ function AwaitingScreen({
 					>
 						<QRCode value={waUrl} size={220} />
 					</div>
-					<Button
-						type="button"
-						variant="outline"
-						onClick={downloadQr}
-						className="h-10 gap-2"
-					>
-						<Download className="size-4" />
-						Download QR
-					</Button>
+					{/* Hidden for now (not removed): this QR embeds a single-use
+					    per-session token, so a downloaded/printed copy dies after one
+					    scan — misleading as a "print me" artifact. A proper printable
+					    static store QR is being scoped; re-enable or replace then. */}
+					{SHOW_QR_DOWNLOAD ? (
+						<Button
+							type="button"
+							variant="outline"
+							onClick={downloadQr}
+							className="h-10 gap-2"
+						>
+							<Download className="size-4" />
+							Download QR
+						</Button>
+					) : null}
 				</div>
 			) : (
 				<div className="rounded-xl bg-destructive/10 px-4 py-3 text-sm text-destructive">
