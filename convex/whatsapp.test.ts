@@ -1178,10 +1178,12 @@ describe("counter order auto-send (notifyCounterOrderCreated)", () => {
 		fetchMock.restore();
 	});
 
-	test("pay-later → payment methods (bank details) + the INVOICE pdf", async () => {
+	test("pay-later → amount + transfer reference + INVOICE pdf, but NOT the repeated bank/QR block", async () => {
 		const t = setup();
 		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
-		// Give the store a bank method so the payment ask has details to send.
+		// Give the store a bank method. The buyer already received these details at
+		// scan-bind (notifyCounterCheckoutPayment), so the order-create message must
+		// NOT repeat them (86ey5kq7p) — it carries the amount + transfer ref instead.
 		await t.run((ctx) =>
 			ctx.db.patch(retailerId, {
 				paymentMethods: [
@@ -1204,17 +1206,104 @@ describe("counter order auto-send (notifyCounterOrderCreated)", () => {
 		await t.action(internal.whatsapp.notifyCounterOrderCreated, { orderId });
 		const wa = fetchMock.waCalls();
 
-		// Invoice (not receipt) document.
+		// Invoice (not receipt) document still sent.
 		const doc = wa.find(
 			(c) => (c.body as { type?: string })?.type === "document",
 		);
 		expect(
 			(doc?.body as { document?: { filename?: string } }).document?.filename,
 		).toBe(`Invoice-${shortId}.pdf`);
-		// Payment methods pushed to the buyer: the bank number + transfer reference.
 		const combined = wa.map((c) => waText(c.body)).join("\n");
-		expect(combined).toContain("1234567890");
+		// Transfer reference kept (now we have the shortId), bank block dropped.
 		expect(combined).toContain(shortId); // "Use ORD-XXXX as your transfer reference"
+		expect(combined).not.toContain("1234567890");
+		expect(combined).not.toContain("Payment details");
+		fetchMock.restore();
+	});
+});
+
+describe("counter checkout — pay-at-bind payment info (86ey5kq7p)", () => {
+	function waText(body: unknown): string {
+		const b = body as {
+			text?: { body?: string };
+			interactive?: { body?: { text?: string } };
+		};
+		return b?.text?.body ?? b?.interactive?.body?.text ?? "";
+	}
+	function bankMethod() {
+		return {
+			type: "bank" as const,
+			label: "Maybank",
+			bankName: "Maybank",
+			bankAccountName: "Test Outdoor",
+			bankAccountNumber: "1234567890",
+			sortOrder: 0,
+		};
+	}
+
+	test("notifyCounterCheckoutPayment sends the intro + payment methods block", async () => {
+		const t = setup();
+		const { retailerId } = await seedRetailerWithLocale(t, "en");
+		await t.run((ctx) =>
+			ctx.db.patch(retailerId, { paymentMethods: [bankMethod()] }),
+		);
+		const fetchMock = installFetchMock();
+
+		await t.action(internal.whatsapp.notifyCounterCheckoutPayment, {
+			retailerId,
+			toPhone: "60123456789",
+			storeName: "Test Outdoor",
+			locale: "en",
+		});
+
+		const combined = fetchMock
+			.waCalls()
+			.map((c) => waText(c.body))
+			.join("\n");
+		expect(combined).toContain("whenever you're ready"); // intro copy
+		expect(combined).toContain("1234567890"); // bank details pushed early
+		fetchMock.restore();
+	});
+
+	test("notifyCounterCheckoutPayment no-ops when the seller has no payment methods", async () => {
+		const t = setup();
+		const { retailerId } = await seedRetailerWithLocale(t, "en");
+		const fetchMock = installFetchMock();
+
+		await t.action(internal.whatsapp.notifyCounterCheckoutPayment, {
+			retailerId,
+			toPhone: "60123456789",
+			storeName: "Test Outdoor",
+			locale: "en",
+		});
+
+		expect(fetchMock.waCalls()).toHaveLength(0);
+		fetchMock.restore();
+	});
+
+	test("the KP-<token> bind schedules the payment info after the ack", async () => {
+		const t = setup();
+		const { retailerId } = await seedRetailerWithLocale(t, "en");
+		await t.run((ctx) =>
+			ctx.db.patch(retailerId, { paymentMethods: [bankMethod()] }),
+		);
+		const { token } = await t
+			.withIdentity({ subject: USER })
+			.mutation(api.counterCheckout.createCheckoutSession, {});
+		const fetchMock = installFetchMock();
+
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: `KP-${token}`,
+			profileName: "Aiman",
+		});
+		// The payment send is scheduled (runAfter 0) so the ack lands first — flush it.
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+		const bodies = fetchMock.waCalls().map((c) => waText(c.body));
+		// Ack first, payment details second.
+		expect(bodies[0]).toContain("connected to");
+		expect(bodies.join("\n")).toContain("1234567890");
 		fetchMock.restore();
 	});
 });

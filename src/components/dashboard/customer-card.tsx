@@ -1,16 +1,36 @@
 import { Link } from "@tanstack/react-router";
-import { ChevronRight } from "lucide-react";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { formatPhone, getDisplayName } from "../../lib/customer";
-import { formatPrice, formatRelativeTime } from "../../lib/format";
+import {
+	formatPrice,
+	formatPriceCompact,
+	formatRelativeTime,
+} from "../../lib/format";
 import { cn } from "../../lib/utils";
 
-/** First letter of the display name, or null when we only have a phone number. */
-function nameInitial(customer: Doc<"customers">): string | null {
+/** Two-letter initials from the display name, or null when phone-only. */
+function nameInitials(customer: Doc<"customers">): string | null {
 	const source = customer.name?.trim() || customer.waProfileName?.trim();
-	if (!source) return null;
-	const ch = source[0];
-	return /[a-z0-9]/i.test(ch) ? ch.toUpperCase() : null;
+	if (!source || !/[a-z0-9]/i.test(source[0])) return null;
+	const parts = source.split(/\s+/);
+	if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+	return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+// Rotating avatar tints (deterministic by name hash) so a list of customers
+// scans faster than uniform grey circles. Dark-mode pairs included.
+const AVATAR_TINTS = [
+	"bg-foreground text-background",
+	"bg-accent/15 text-accent-emphasis",
+	"bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
+	"bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+	"bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300",
+];
+
+function avatarTint(seed: string): string {
+	let h = 0;
+	for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+	return AVATAR_TINTS[h % AVATAR_TINTS.length];
 }
 
 export function CustomerCard({
@@ -21,7 +41,7 @@ export function CustomerCard({
 	currency: string;
 }) {
 	const displayName = getDisplayName(customer);
-	const initial = nameInitial(customer);
+	const initials = nameInitials(customer);
 	const hasName = Boolean(
 		customer.name?.trim() || customer.waProfileName?.trim(),
 	);
@@ -30,37 +50,37 @@ export function CustomerCard({
 		<Link
 			to="/app/customers/$customerId"
 			params={{ customerId: customer._id }}
-			className="group flex items-center gap-3 rounded-2xl border border-border bg-card p-4 transition-all hover:border-ring hover:shadow-sm"
+			className="group flex items-center gap-3 rounded-2xl border border-border bg-card px-3.5 py-3 transition-all hover:border-ring hover:shadow-sm"
 		>
 			<div
 				className={cn(
-					"flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-semibold text-muted-foreground",
+					"flex size-11 shrink-0 items-center justify-center rounded-full font-heading text-sm font-extrabold",
+					initials ? avatarTint(displayName) : "bg-muted text-muted-foreground",
 				)}
 				aria-hidden
 			>
-				{initial ?? "#"}
+				{initials ?? "#"}
 			</div>
-			<div className="flex min-w-0 flex-1 flex-col gap-1">
-				<span className="truncate font-medium">{displayName}</span>
-				{hasName ? (
-					<span className="truncate font-mono text-xs text-muted-foreground">
-						{formatPhone(customer.waPhone)}
-					</span>
-				) : null}
-				<div className="mt-0.5 flex items-center justify-between gap-2">
-					<span className="text-xs text-muted-foreground">
-						{customer.orderCount} order{customer.orderCount === 1 ? "" : "s"}
-						{" · "}
-						<span className="font-semibold text-foreground tabular-nums">
-							{formatPrice(customer.totalSpent, currency)}
-						</span>
-					</span>
-					<span className="shrink-0 text-[11px] text-muted-foreground">
-						{formatRelativeTime(customer.lastOrderAt)}
-					</span>
-				</div>
+			<div className="flex min-w-0 flex-1 flex-col gap-0.5">
+				<span className="truncate text-[14.5px] font-semibold">
+					{displayName}
+				</span>
+				<span className="truncate text-[12.5px] text-muted-foreground">
+					{customer.orderCount} order{customer.orderCount === 1 ? "" : "s"}
+					{" · last "}
+					{formatRelativeTime(customer.lastOrderAt)}
+					{hasName ? ` · ${formatPhone(customer.waPhone)}` : ""}
+				</span>
 			</div>
-			<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+			{/* Lifetime value on the right edge — "who is this returning customer?"
+			    answered in the list, no tap needed. Compact so a whale's lifetime
+			    figure never crushes the name column. */}
+			<span
+				title={formatPrice(customer.totalSpent, currency)}
+				className="shrink-0 text-sm font-bold tabular-nums text-accent-emphasis"
+			>
+				{formatPriceCompact(customer.totalSpent, currency)}
+			</span>
 		</Link>
 	);
 }

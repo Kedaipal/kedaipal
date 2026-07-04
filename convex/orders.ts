@@ -26,7 +26,10 @@ import {
 	type RetailerAccess,
 	requireRetailerAccess,
 } from "./lib/auth";
-import { assertValidFulfilmentDate } from "./lib/fulfilmentDate";
+import {
+	assertValidFulfilmentDate,
+	matchesFulfilmentWindow,
+} from "./lib/fulfilmentDate";
 import { statusToBucket } from "./lib/orderBuckets";
 import { type CsvOrder, ordersToCsv } from "./lib/orderCsv";
 import {
@@ -1072,19 +1075,39 @@ export const searchOrders = query({
 			.order("desc")
 			.take(MAX_INBOX_SCAN);
 
-		// Bucket counts (+ the cross-cutting mockup-pending count) over the full
-		// set — independent of the active filters/search so the chips always show
-		// true totals.
+		// Bucket counts (+ cross-cutting counts: mockup-pending, due-today, unpaid)
+		// over the full set — independent of the active filters/search so the chips,
+		// the due-today banner, and the Home "today strip" always show true totals.
+		const now = Date.now();
 		const counts = {
 			new: 0,
 			in_progress: 0,
 			completed: 0,
 			cancelled: 0,
 			mockupPending: 0,
+			/** Open (new / in-progress) orders whose fulfilment date is today (MYT). */
+			dueToday: 0,
+			/** Open orders not yet paid or awaiting payment review. */
+			unpaid: 0,
+			/** Sum of `total` across those unpaid open orders (RM outstanding). */
+			unpaidAmount: 0,
 		};
 		for (const o of all) {
-			counts[statusToBucket(o.status)]++;
+			const b = statusToBucket(o.status);
+			counts[b]++;
 			if (needsMockup(o.mockupStatus)) counts.mockupPending++;
+			const open = b === "new" || b === "in_progress";
+			if (
+				open &&
+				o.fulfilmentDate !== undefined &&
+				matchesFulfilmentWindow(o.fulfilmentDate, "today", now)
+			) {
+				counts.dueToday++;
+			}
+			if (open && (o.paymentStatus ?? "unpaid") !== "received") {
+				counts.unpaid++;
+				counts.unpaidAmount += o.total;
+			}
 		}
 
 		// Filter + sort via the shared inbox predicate, so the export honours the

@@ -11,6 +11,7 @@ import { type BulkAction, OrderBulkBar } from "./order-bulk-bar";
 
 afterEach(cleanup);
 
+const primary: BulkAction = { status: "confirmed", label: "Confirm" };
 const actions: BulkAction[] = [
 	{ status: "packed", label: "Packed" },
 	{ status: "cancelled", label: "Cancel orders", destructive: true },
@@ -22,6 +23,7 @@ describe("OrderBulkBar", () => {
 		render(
 			<OrderBulkBar
 				count={3}
+				primary={primary}
 				actions={actions}
 				onApply={vi.fn()}
 				onClear={onClear}
@@ -32,17 +34,33 @@ describe("OrderBulkBar", () => {
 		expect(onClear).toHaveBeenCalled();
 	});
 
-	it("applies a non-destructive status immediately (no confirm)", () => {
+	it("applies the lead action in one tap (no menu, no confirm)", () => {
 		const onApply = vi.fn();
 		render(
 			<OrderBulkBar
 				count={2}
+				primary={primary}
 				actions={actions}
 				onApply={onApply}
 				onClear={vi.fn()}
 			/>,
 		);
-		fireEvent.click(screen.getByRole("button", { name: /mark as/i }));
+		fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+		expect(onApply).toHaveBeenCalledWith("confirmed");
+	});
+
+	it("applies a non-destructive overflow status immediately (no confirm)", () => {
+		const onApply = vi.fn();
+		render(
+			<OrderBulkBar
+				count={2}
+				primary={primary}
+				actions={actions}
+				onApply={onApply}
+				onClear={vi.fn()}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: /more actions/i }));
 		fireEvent.click(screen.getByRole("button", { name: "Packed" }));
 		expect(onApply).toHaveBeenCalledWith("packed");
 	});
@@ -52,12 +70,13 @@ describe("OrderBulkBar", () => {
 		render(
 			<OrderBulkBar
 				count={2}
+				primary={primary}
 				actions={actions}
 				onApply={onApply}
 				onClear={vi.fn()}
 			/>,
 		);
-		fireEvent.click(screen.getByRole("button", { name: /mark as/i }));
+		fireEvent.click(screen.getByRole("button", { name: /more actions/i }));
 		fireEvent.click(screen.getByRole("button", { name: "Cancel orders" }));
 		// Does NOT apply yet — a confirm dialog opens.
 		expect(onApply).not.toHaveBeenCalled();
@@ -72,12 +91,13 @@ describe("OrderBulkBar", () => {
 		render(
 			<OrderBulkBar
 				count={2}
+				primary={primary}
 				actions={actions}
 				onApply={onApply}
 				onClear={vi.fn()}
 			/>,
 		);
-		fireEvent.click(screen.getByRole("button", { name: /mark as/i }));
+		fireEvent.click(screen.getByRole("button", { name: /more actions/i }));
 		fireEvent.click(screen.getByRole("button", { name: "Cancel orders" }));
 		fireEvent.click(screen.getByRole("button", { name: /cancel 2 orders/i }));
 
@@ -91,12 +111,13 @@ describe("OrderBulkBar", () => {
 		render(
 			<OrderBulkBar
 				count={2}
+				primary={primary}
 				actions={actions}
 				onApply={onApply}
 				onClear={vi.fn()}
 			/>,
 		);
-		fireEvent.click(screen.getByRole("button", { name: /mark as/i }));
+		fireEvent.click(screen.getByRole("button", { name: /more actions/i }));
 		fireEvent.click(screen.getByRole("button", { name: "Cancel orders" }));
 		fireEvent.click(screen.getByRole("button", { name: /keep orders/i }));
 		expect(onApply).not.toHaveBeenCalled();
