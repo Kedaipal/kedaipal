@@ -46,3 +46,35 @@ describe("classifyInbound", () => {
 		});
 	});
 });
+
+describe("classifyInbound — store QR poster (KPS-<token>, 86ey5m35w)", () => {
+	const token = "Ab12Cd34Ef56Gh78Ij90Kl12";
+
+	test("classifies a poster scan, including the humanized prefill", () => {
+		expect(classifyInbound(`KPS-${token}`)).toEqual({
+			kind: "store_checkout_start",
+			token,
+		});
+		expect(
+			classifyInbound(
+				`Hi! 👋 I'd like to order at the counter.\n\nStore ref: KPS-${token}`,
+			),
+		).toEqual({ kind: "store_checkout_start", token });
+	});
+
+	test("KPS- and KP- never shadow each other", () => {
+		// A KPS message must NOT read as a session bind: the KP- regex can't match
+		// inside "KPS-" (no "KP-" substring), and KPS is checked first anyway.
+		expect(classifyInbound(`KPS-${token}`).kind).toBe("store_checkout_start");
+		// A plain KP- message must NOT read as a poster scan.
+		expect(classifyInbound(`KP-${token}`).kind).toBe("checkout_bind");
+		// Both in one message → the more specific poster intent wins (precedence).
+		expect(classifyInbound(`KP-${token} KPS-${token}`).kind).toBe(
+			"store_checkout_start",
+		);
+	});
+
+	test("a short/garbled KPS fragment does not match", () => {
+		expect(classifyInbound("KPS-tooshort")).toEqual({ kind: "unknown" });
+	});
+});

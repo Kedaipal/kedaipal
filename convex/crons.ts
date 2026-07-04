@@ -38,4 +38,16 @@ crons.interval(
 	{},
 );
 
+// PDPA retention: DELETE dead counter sessions (expired/cancelled) ~30 days
+// after they died — they hold buyer phone numbers, and the store QR poster
+// (86ey5m35w) increases junk-scan volume, so they must not live forever.
+// Completed sessions are kept (order retention is the Compliance Pack's job,
+// 86ey5m3hx). See docs/counter-checkout.md.
+crons.daily(
+	"purge stale counter checkout sessions",
+	{ hourUTC: 3, minuteUTC: 45 },
+	internal.counterCheckout.purgeStaleSessions,
+	{},
+);
+
 export default crons;

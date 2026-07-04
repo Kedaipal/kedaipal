@@ -434,6 +434,54 @@ export const handleInbound = internalAction({
 
 		const intent = classifyInbound(text);
 
+		// Store QR poster: the buyer scanned the seller's PERMANENT printed QR
+		// (`KPS-<token>`, 86ey5m35w). Start (or re-claim) a walk-in counter session
+		// — it pops up on the cashier's open-checkouts list — then ack + push the
+		// payment details so the buyer can pay while they queue. The ack carries
+		// the privacy-policy link (PDPA notice at collection — a poster buyer never
+		// touches the website before their number is stored).
+		if (intent.kind === "store_checkout_start") {
+			const start = await ctx.runMutation(
+				internal.counterCheckout.startSessionFromStoreQr,
+				{ token: intent.token, waPhone: fromPhone, profileName },
+			);
+			console.log("WA store-qr scan", { fromPhone, result: start.result });
+			if (start.result === "not_found") {
+				// Unknown/rotated poster token — generic hint, no store leaked.
+				try {
+					await wa.send(fromPhone, { kind: "text", body: fallback() });
+				} catch (err) {
+					console.error("WA store-qr fallback send failed", err);
+				}
+				return;
+			}
+			const body = renderSystemMessage(
+				start.locale,
+				start.result === "started" ? "storeQrConnected" : "storeQrBusy",
+				{ shortId: "", storeName: start.storeName },
+			);
+			try {
+				await wa.send(fromPhone, { kind: "text", body });
+			} catch (err) {
+				console.error("WA store-qr reply failed", err);
+			}
+			// First scan only — a rescan re-claims the session and the buyer already
+			// got the payment details then (mirrors the bind flow's no-repeat rule).
+			if (start.result === "started" && !start.reclaimed) {
+				await ctx.scheduler.runAfter(
+					0,
+					internal.whatsapp.notifyCounterCheckoutPayment,
+					{
+						retailerId: start.retailerId,
+						toPhone: fromPhone,
+						storeName: start.storeName,
+						locale: start.locale,
+					},
+				);
+			}
+			return;
+		}
+
 		// Counter Checkout: the buyer scanned the seller's `KP-<token>` QR. Bind
 		// their WhatsApp identity to the session (the seller's dashboard flips live)
 		// and reply so the buyer knows it worked. See docs/counter-checkout.md.
