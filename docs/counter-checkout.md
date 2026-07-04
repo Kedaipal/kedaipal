@@ -301,6 +301,54 @@ after the bind ack**, not held until the order is created.
   gated on the retailer having ≥1 payment method configured, so it's never shown
   when nothing would actually be sent.
 
+### Printable static store QR poster ([`86ey5m35w`](https://app.clickup.com/t/86ey5m35w))
+
+One QR the seller **prints and puts up at the counter** — any walk-in buyer scans
+it to start checkout themselves, instead of the cashier minting a per-session QR
+for each customer. The per-session `KP-` QR embeds a single-use token so a
+printed copy dies after one scan; this poster QR is the durable answer.
+
+**The model — security is behavioural limits, not token secrecy.** A poster token
+is printed on a wall, so it was never going to be secret. Security comes from:
+rotation (kills leaked posters), per-`(store, phone)` rate limits, a per-store cap
+on concurrent open walk-in sessions, and the retention purge — NOT from hiding the
+token. The residual risk (someone photographs the poster and scans from home) is a
+single dismissible junk session that auto-expires; **no order or payment can
+result, because only the cashier builds orders.** (Option B — a web redirect that
+mints a fresh single-use token per scan — was rejected for v1: worse counter UX,
+and the mint URL is exactly as public, so it needs the same limits anyway.)
+
+- **Token:** `retailers.counterQrToken` — permanent, random (`generateTrackingToken`
+  alphabet), **never** the slug; indexed `by_counterQrToken`. `ensureCounterQrToken`
+  is idempotent (the card's Generate button can't rotate by accident);
+  `rotateCounterQrToken` replaces it (confirm-gated in the UI — old posters die).
+- **Flow:** poster encodes `wa.me/<WABA>?text=…KPS-<token>…`. The inbound router
+  (`inboundIntent.ts`) classifies `KPS-<token>` → `store_checkout_start` (checked
+  **before** `KP-`; the literals can't shadow each other, pinned by a test) →
+  `startSessionFromStoreQr` **creates or re-claims** a `buyer_identified` session
+  flagged `origin: "store_qr"`. A rescan by the same buyer re-claims the open
+  session (no duplicate row, no rate-limit charge). `handleInbound` acks with
+  `storeQrConnected` (localized) then schedules the shared `notifyCounterCheckoutPayment`
+  (same pay-at-scan push — skipped on a re-claim so details never repeat).
+- **Guards, in order:** unknown/rotated token → `not_found` (generic reply, no
+  store leaked); re-claim; then the `storeQrScan` rate limit (`3/hr` per
+  `(store, phone)`) + `MAX_OPEN_STORE_QR_SESSIONS` (10) cap → `busy` reply.
+- **Seller UI:** a **Store QR card** on the walk-in desk screen (`StoreQrCard`,
+  `app.checkout.tsx`) — Generate, **Download poster** (a print-ready PNG rendered
+  client-side: store name + "Scan to order & pay" + QR + how-to + the PDPA notice
+  line, no server render), **Rotate** (confirm dialog warning old posters stop
+  working). Walk-in sessions carry a **"Walk-in scan"** badge in the open-checkouts
+  list (`origin` on `listOpenSessions`). This card **supersedes** the interim
+  hidden per-session Download-QR button (removed here).
+- **PDPA notice at collection** (see `86ey5m3hx`): a poster buyer never touches the
+  website before their number is stored, so the `storeQrConnected` ack **and** the
+  printed poster both carry the `kedaipal.com/privacy` line (EN + BM).
+- **Retention purge:** `purgeStaleSessions` (daily cron) **deletes** dead sessions
+  (`expired`/`cancelled`) ~30 days after they die — they hold buyer phone numbers
+  and the poster raises junk-scan volume, so they must not live forever.
+  `expireStaleSessions` only *flips* status; this is the row-deleting sweep.
+  Completed sessions are kept (they link to orders; order retention is `86ey5m3hx`).
+
 ### Build-screen UX polish (same ticket)
 
 Shipped alongside the receipt/invoice work, all in `src/routes/app.checkout.tsx`:

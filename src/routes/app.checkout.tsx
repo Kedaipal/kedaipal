@@ -9,14 +9,15 @@ import {
 	ChevronDown,
 	ChevronRight,
 	Clock,
-	Download,
 	EyeOff,
 	Image as ImageIcon,
 	LayoutGrid,
 	List,
 	Minus,
 	Plus,
+	Printer,
 	QrCode,
+	RefreshCw,
 	Search,
 	Trash2,
 	UserCheck,
@@ -361,6 +362,8 @@ function OpenCheckoutsList({
 					if (pendingCancel) onCancel(pendingCancel.id);
 				}}
 			/>
+
+			<StoreQrCard />
 		</div>
 	);
 }
@@ -390,6 +393,7 @@ function SessionRow({
 	session: {
 		sessionId: string;
 		status: "awaiting_buyer" | "buyer_identified";
+		origin: "cashier" | "store_qr";
 		displayName: string | undefined;
 		isNewCustomer: boolean | undefined;
 		itemCount: number;
@@ -440,6 +444,13 @@ function SessionRow({
 						>
 							{awaiting ? "QR" : "Connected"}
 						</span>
+						{/* Buyer arrived via the printed store poster, not a cashier-started
+						    QR — so the cashier knows this one walked up on their own. */}
+						{session.origin === "store_qr" ? (
+							<span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-600">
+								Walk-in scan
+							</span>
+						) : null}
 					</div>
 					<div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
 						<span>
@@ -501,11 +512,192 @@ function ExpiryCountdown({ expiresAt }: { expiresAt: number }) {
 	);
 }
 
-// Download-QR is hidden (not removed) while the printable static store QR is
-// scoped — the per-session QR is single-use, so printing it is a footgun.
-// Typed as boolean (not the literal `false`) so the JSX branch isn't dead code
-// to the compiler/linter.
-const SHOW_QR_DOWNLOAD: boolean = false;
+/** Escape a store name for embedding in the poster SVG. */
+function escapeXml(text: string): string {
+	return text
+		.replaceAll("&", "&amp;")
+		.replaceAll("<", "&lt;")
+		.replaceAll(">", "&gt;")
+		.replaceAll('"', "&quot;")
+		.replaceAll("'", "&apos;");
+}
+
+/**
+ * The permanent printable store QR (86ey5m35w, docs/counter-checkout.md).
+ * One poster on the wall — any buyer scans it to open a walk-in checkout that
+ * pops up in the open-checkouts list above. The token is public by design;
+ * Rotate kills old posters (confirm-gated). Poster downloads as a print-ready
+ * PNG with the store name + instructions + the PDPA notice line.
+ */
+function StoreQrCard() {
+	const actAsRetailerId = useActAsRetailerId();
+	const retailer = useDashboardRetailer();
+	const storeQr = useQuery(api.counterCheckout.getStoreQr, {
+		retailerId: actAsRetailerId,
+	});
+	const ensureToken = useMutation(api.counterCheckout.ensureCounterQrToken);
+	const rotateToken = useMutation(api.counterCheckout.rotateCounterQrToken);
+	const [confirmRotate, setConfirmRotate] = useState(false);
+	const [busy, setBusy] = useState(false);
+	const qrRef = useRef<HTMLDivElement | null>(null);
+
+	async function generate() {
+		setBusy(true);
+		try {
+			await ensureToken({ retailerId: actAsRetailerId });
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	async function rotate() {
+		setBusy(true);
+		try {
+			await rotateToken({ retailerId: actAsRetailerId });
+			toast.success("New store QR generated — old printed posters no longer work.");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	async function downloadPoster() {
+		const svgEl = qrRef.current?.querySelector("svg");
+		if (!svgEl || !retailer) return;
+		const clone = svgEl.cloneNode(true) as SVGElement;
+		clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+		const qrDataUri = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(
+			new XMLSerializer().serializeToString(clone),
+		)}`;
+		const W = 1000;
+		const H = 1400;
+		const name = escapeXml(retailer.storeName);
+		const font = "Helvetica, Arial, sans-serif";
+		// A self-contained print poster: store name → CTA → QR → how-to → the
+		// PDPA notice-at-collection line (EN + BM) → brand line.
+		const poster = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><rect width="${W}" height="${H}" fill="#ffffff"/><text x="${W / 2}" y="140" text-anchor="middle" font-family="${font}" font-size="58" font-weight="bold" fill="#111111">${name}</text><text x="${W / 2}" y="215" text-anchor="middle" font-family="${font}" font-size="34" fill="#333333">Scan to order &amp; pay on WhatsApp</text><rect x="${(W - 700) / 2}" y="280" width="700" height="700" rx="24" fill="#ffffff" stroke="#e5e5e5" stroke-width="2"/><image href="${qrDataUri}" x="${(W - 640) / 2}" y="310" width="640" height="640"/><text x="${W / 2}" y="1070" text-anchor="middle" font-family="${font}" font-size="28" fill="#555555">Open your phone camera or WhatsApp, scan, and send the message.</text><text x="${W / 2}" y="1115" text-anchor="middle" font-family="${font}" font-size="28" fill="#555555">Imbas dengan kamera telefon atau WhatsApp dan hantar mesej.</text><text x="${W / 2}" y="1290" text-anchor="middle" font-family="${font}" font-size="22" fill="#999999">By scanning you agree · Dengan mengimbas, anda bersetuju — kedaipal.com/privacy</text><text x="${W / 2}" y="1340" text-anchor="middle" font-family="${font}" font-size="24" fill="#777777">Powered by Kedaipal</text></svg>`;
+		try {
+			const svgUrl = URL.createObjectURL(
+				new Blob([poster], { type: "image/svg+xml;charset=utf-8" }),
+			);
+			const img = new Image();
+			await new Promise<void>((resolve, reject) => {
+				img.onload = () => resolve();
+				img.onerror = () => reject(new Error("poster render failed"));
+				img.src = svgUrl;
+			});
+			// 2× raster so the print stays crisp at A5/A4.
+			const canvas = document.createElement("canvas");
+			canvas.width = W * 2;
+			canvas.height = H * 2;
+			const ctx = canvas.getContext("2d");
+			if (!ctx) throw new Error("canvas unavailable");
+			ctx.scale(2, 2);
+			ctx.drawImage(img, 0, 0);
+			URL.revokeObjectURL(svgUrl);
+			canvas.toBlob((png) => {
+				if (!png) {
+					toast.error("Couldn't render the poster — please try again.");
+					return;
+				}
+				const url = URL.createObjectURL(png);
+				const a = document.createElement("a");
+				a.href = url;
+				a.download = `kedaipal-store-qr-${retailer.slug}.png`;
+				a.click();
+				URL.revokeObjectURL(url);
+			}, "image/png");
+		} catch (err) {
+			console.error("store QR poster download failed", err);
+			toast.error("Couldn't render the poster — please try again.");
+		}
+	}
+
+	return (
+		<section className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-4 sm:p-5">
+			<div>
+				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+					Store QR poster
+				</p>
+				<p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+					Print one QR and put it up at your counter — buyers scan it to
+					connect, get your payment details, and appear above as a{" "}
+					<span className="font-medium text-foreground">Walk-in scan</span>,
+					ready for you to ring up. No need to start a checkout per customer.
+				</p>
+			</div>
+
+			{storeQr === undefined ? (
+				<p className="text-sm text-muted-foreground">Loading…</p>
+			) : storeQr.token === null ? (
+				<Button
+					type="button"
+					onClick={generate}
+					disabled={busy}
+					className="h-11 w-fit gap-2 max-sm:w-full"
+				>
+					<QrCode className="size-4" />
+					Generate store QR
+				</Button>
+			) : storeQr.waUrl ? (
+				<div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
+					<div
+						ref={qrRef}
+						className="rounded-2xl border border-border bg-white p-3 shadow-sm"
+					>
+						<QRCode value={storeQr.waUrl} size={144} />
+					</div>
+					<div className="flex flex-col gap-2">
+						<Button
+							type="button"
+							variant="outline"
+							onClick={downloadPoster}
+							className="h-10 justify-start gap-2"
+						>
+							<Printer className="size-4" />
+							Download poster (PNG)
+						</Button>
+						<Button
+							type="button"
+							variant="outline"
+							onClick={() => setConfirmRotate(true)}
+							disabled={busy}
+							className="h-10 justify-start gap-2 text-muted-foreground"
+						>
+							<RefreshCw className="size-4" />
+							Rotate QR…
+						</Button>
+						<p className="max-w-xs text-xs text-muted-foreground">
+							This QR never expires. If a poster leaks or gets misused,
+							rotate it — old printed copies stop working immediately.
+						</p>
+					</div>
+				</div>
+			) : (
+				<div className="rounded-xl bg-destructive/10 px-4 py-3 text-sm text-destructive">
+					WhatsApp checkout number isn't configured for this deployment. Contact
+					support to enable Counter Checkout.
+				</div>
+			)}
+
+			<ConfirmDialog
+				open={confirmRotate}
+				onOpenChange={setConfirmRotate}
+				title="Rotate the store QR?"
+				description="A new QR is generated and every printed copy of the old one stops working immediately. You'll need to print and put up the new poster."
+				confirmLabel="Rotate QR"
+				cancelLabel="Keep current QR"
+				destructive
+				onConfirm={() => {
+					void rotate();
+				}}
+			/>
+		</section>
+	);
+}
 
 function AwaitingScreen({
 	waUrl,
@@ -520,24 +712,7 @@ function AwaitingScreen({
 	hasPaymentMethods: boolean;
 	onCancel: () => void;
 }) {
-	const qrRef = useRef<HTMLDivElement | null>(null);
 	const [confirmCancel, setConfirmCancel] = useState(false);
-
-	function downloadQr() {
-		const svg = qrRef.current?.querySelector("svg");
-		if (!svg) return;
-		const clone = svg.cloneNode(true) as SVGElement;
-		clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-		const blob = new Blob([new XMLSerializer().serializeToString(clone)], {
-			type: "image/svg+xml;charset=utf-8",
-		});
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement("a");
-		a.href = url;
-		a.download = `kedaipal-counter-qr-${token}.svg`;
-		a.click();
-		URL.revokeObjectURL(url);
-	}
 
 	return (
 		<div className="mx-auto grid w-full max-w-4xl gap-5 rounded-2xl border border-border bg-card p-5 shadow-sm lg:grid-cols-[1fr_auto] lg:items-center lg:p-6">
@@ -575,27 +750,12 @@ function AwaitingScreen({
 
 			{waUrl ? (
 				<div className="mx-auto flex flex-col items-center gap-3">
-					<div
-						ref={qrRef}
-						className="rounded-2xl border border-border bg-white p-4 shadow-sm"
-					>
+					{/* No download here on purpose: this QR embeds a single-use
+					    per-session token, so a printed copy dies after one scan. The
+					    printable poster lives in the Store QR card on the desk screen. */}
+					<div className="rounded-2xl border border-border bg-white p-4 shadow-sm">
 						<QRCode value={waUrl} size={220} />
 					</div>
-					{/* Hidden for now (not removed): this QR embeds a single-use
-					    per-session token, so a downloaded/printed copy dies after one
-					    scan — misleading as a "print me" artifact. A proper printable
-					    static store QR is being scoped; re-enable or replace then. */}
-					{SHOW_QR_DOWNLOAD ? (
-						<Button
-							type="button"
-							variant="outline"
-							onClick={downloadQr}
-							className="h-10 gap-2"
-						>
-							<Download className="size-4" />
-							Download QR
-						</Button>
-					) : null}
 				</div>
 			) : (
 				<div className="rounded-xl bg-destructive/10 px-4 py-3 text-sm text-destructive">
