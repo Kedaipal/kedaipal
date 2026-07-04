@@ -31,7 +31,16 @@ off-device), so identity binding is *flipped*: the buyer scans the **seller's** 
    and flips the session to `buyer_identified`.
 6. The seller's `useQuery(getCheckoutSession)` updates **live** (Convex reactive —
    no polling) to the buyer's name + history.
-7. *(pending)* Seller keys products → confirm → existing order-creation path →
+7. **Payment details follow the bind ack** — when the seller has payment methods
+   configured, a second message (`counterPaymentInfo` + the shared
+   `renderPaymentMethods` block, then each QR as its own image) lands right after
+   the "you're connected" reply, so the buyer can start a transfer while the
+   cashier is still ringing up instead of waiting to ask "how do I pay?" at the
+   end. Deliberately **no** transfer-reference line and no "I've paid" CTA — no
+   order exists yet; the confirmation that follows carries the `ORD-XXXX`
+   reference + amount as usual. Skipped silently when no methods are configured.
+   Seller-bound `transactional` (same category as the payment ask it previews).
+8. Seller keys products → confirm → existing order-creation path →
    session `completed`.
 
 **Compliance:** the buyer's inbound hello opens WhatsApp's 24h customer-service

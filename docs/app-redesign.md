@@ -61,6 +61,23 @@ New token: **`--accent-emphasis`** (readable mint for text/icons on mint-tinted 
 
 `orders.searchOrders` counts gained three fields, computed in the same single scan: `dueToday` (open orders whose fulfilment date is today MYT), `unpaid` (open orders not `received` — includes `claimed`), `unpaidAmount` (sum of their totals). Powers the inbox banner and the Home today strip/attention list — Home now subscribes to the same counts seam instead of `countActionable`. Covered in `convex/orders.test.ts`.
 
+## Post-review polish (round 2)
+
+- **Counter checkout: static product headers.** The expanded product's name row
+  used to pin below the mobile header (`sticky` + `--app-header-h`) while its
+  variant list scrolled; the pin fought the variable-height header/banner stack
+  and visibly glitched when scrolling with a panel open. Now static — the
+  counter is seller-operated, so losing the pinned name is a non-issue.
+- **Compact money for tight slots.** `formatPriceCompact` (`src/lib/format.ts`)
+  degrades precision only with magnitude (full sen < RM 10k → whole ringgit <
+  RM 1M → "RM 2.23M" above). Used where a whale's lifetime figure physically
+  overflowed: customer-detail stat trio (+ `max-w-full` truncation backstop and
+  a full-value `title` tooltip), customer-list LTV edge, order-detail CRM line,
+  Home unpaid-outstanding row. Exact amounts (order totals, payment asks) keep
+  `formatPrice`.
+- **Products import/export icon**: `ArrowUpDown` → `FileSpreadsheet` — an
+  up/down-arrows glyph read as "sort" right above a sortable list.
+
 ## Reveal-on-add (post-review polish)
 
 Inline list editors append a new row to the **bottom** of a list that, on a phone, is usually below the fold — so tapping "Add …" appeared to do nothing. A shared [`useRevealOnAdd`](../src/hooks/useRevealOnAdd.ts) hook (ref-based, self-clearing, no re-render, no-op for every non-matching card) scrolls the new card into view and focuses its first field. Wired into the three places with this pattern: **payment methods** (Add bank / Add QR) and **order stages** (Add stage) in `app.settings.tsx`, and **variant option axes** (Add option / preset) in `variant-editor.tsx`. Standalone-saved entities like **pickup locations** keep their own bottom-sheet dialog — the right pattern when the item saves independently rather than inline within one form's Save — so no change there. Covered in `src/hooks/useRevealOnAdd.test.tsx`.

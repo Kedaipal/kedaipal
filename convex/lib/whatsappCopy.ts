@@ -124,6 +124,7 @@ export type SystemMessageKey =
 	| "counterCheckoutBound"
 	| "counterCheckoutExpired"
 	| "counterCheckoutUsed"
+	| "counterPaymentInfo"
 	| "counterOrderConfirmedPaid"
 	| "counterOrderConfirmedUnpaid"
 	| "orderReceiptCaption"
@@ -148,6 +149,12 @@ type SystemCopy = {
 	counterCheckoutBound: (v: CopyVars) => string;
 	counterCheckoutExpired: (v: CopyVars) => string;
 	counterCheckoutUsed: (v: CopyVars) => string;
+	// Follows the bind ack when the seller has payment methods configured: the
+	// buyer gets the bank/QR details up front so they can transfer while the
+	// cashier is still ringing up, instead of waiting for the total to ask "how
+	// do I pay?". The payment block is appended by the caller; the confirmed
+	// order (with the ORD reference + amount) still follows as usual.
+	counterPaymentInfo: (v: CopyVars) => string;
 	counterOrderConfirmedPaid: (v: CopyVars) => string;
 	counterOrderConfirmedUnpaid: (v: CopyVars) => string;
 	// Captions for the receipt / invoice PDF the seller sends to the buyer's
@@ -180,6 +187,8 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`Oops — this checkout QR has expired. Just ask the cashier to show a fresh one and scan again 🙂`,
 		counterCheckoutUsed: () =>
 			`This checkout QR has already been used. If you'd like to order again, ask the cashier for a new one 🙂`,
+		counterPaymentInfo: ({ storeName }) =>
+			`💳 Paying by transfer? Here are ${storeName}'s payment details so you can pay whenever you're ready — your total follows with the order confirmation:`,
 		counterOrderConfirmedPaid: ({ shortId, storeName, amount, trackingUrl }) =>
 			`🧾 All done! Order ${shortId} at ${storeName} is confirmed and paid${
 				amount ? ` — total ${amount}` : ""
@@ -216,6 +225,8 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`Alamak — QR checkout ini telah tamat tempoh. Minta juruwang tunjukkan QR baharu dan imbas semula ya 🙂`,
 		counterCheckoutUsed: () =>
 			`QR checkout ini telah digunakan. Jika ingin membuat pesanan lagi, minta juruwang untuk QR baharu ya 🙂`,
+		counterPaymentInfo: ({ storeName }) =>
+			`💳 Bayar melalui pemindahan? Ini maklumat pembayaran ${storeName} supaya anda boleh bayar bila-bila sedia — jumlah akan menyusul bersama pengesahan pesanan:`,
 		counterOrderConfirmedPaid: ({ shortId, storeName, amount, trackingUrl }) =>
 			`🧾 Selesai! Pesanan ${shortId} di ${storeName} telah disahkan dan dibayar${
 				amount ? ` — jumlah ${amount}` : ""

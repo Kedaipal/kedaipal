@@ -650,7 +650,15 @@ export const cancelCheckoutSession = mutation({
  * `locale` (the store's, for a localized reply) rides along on every outcome that
  * resolved a retailer; `not_found` has no retailer, so the caller defaults to en. */
 export type BindResult =
-	| { result: "bound"; storeName: string; displayName: string; locale: Locale }
+	| {
+			result: "bound";
+			storeName: string;
+			displayName: string;
+			locale: Locale;
+			// Lets the webhook handler follow the ack with the seller's payment
+			// details (bank/QR) so the buyer can pay while the cart is being built.
+			retailerId: Id<"retailers">;
+	  }
 	| { result: "expired"; storeName: string; locale: Locale }
 	| { result: "already_used"; storeName: string; locale: Locale }
 	| { result: "not_found" };
@@ -738,7 +746,13 @@ export const bindCheckoutSession = internalMutation({
 		const displayName = existing
 			? getDisplayName(existing)
 			: getDisplayName({ waProfileName: trimmedPushname, waPhone: normalizedPhone });
-		return { result: "bound", storeName, displayName, locale };
+		return {
+			result: "bound",
+			storeName,
+			displayName,
+			locale,
+			retailerId: session.retailerId,
+		};
 	},
 });
 

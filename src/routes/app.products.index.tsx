@@ -2,10 +2,10 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import {
-	ArrowUpDown,
 	ChevronRight,
 	Download,
 	EyeOff,
+	FileSpreadsheet,
 	Search,
 	Upload,
 	X,
@@ -72,7 +72,9 @@ function BulkIoMenu({
 						exporting ? "Exporting products…" : "Import or export products"
 					}
 				>
-					<ArrowUpDown className="size-5" />
+					{/* Spreadsheet glyph, not arrows — an up/down icon reads as "sort"
+					    right above a sortable product list. */}
+					<FileSpreadsheet className="size-5" />
 				</Button>
 			</PopoverTrigger>
 			<PopoverContent align="end" className="w-52 p-1">

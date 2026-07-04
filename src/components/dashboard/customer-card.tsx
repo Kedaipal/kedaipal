@@ -1,7 +1,11 @@
 import { Link } from "@tanstack/react-router";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { formatPhone, getDisplayName } from "../../lib/customer";
-import { formatPrice, formatRelativeTime } from "../../lib/format";
+import {
+	formatPrice,
+	formatPriceCompact,
+	formatRelativeTime,
+} from "../../lib/format";
 import { cn } from "../../lib/utils";
 
 /** Two-letter initials from the display name, or null when phone-only. */
@@ -51,9 +55,7 @@ export function CustomerCard({
 			<div
 				className={cn(
 					"flex size-11 shrink-0 items-center justify-center rounded-full font-heading text-sm font-extrabold",
-					initials
-						? avatarTint(displayName)
-						: "bg-muted text-muted-foreground",
+					initials ? avatarTint(displayName) : "bg-muted text-muted-foreground",
 				)}
 				aria-hidden
 			>
@@ -71,9 +73,13 @@ export function CustomerCard({
 				</span>
 			</div>
 			{/* Lifetime value on the right edge — "who is this returning customer?"
-			    answered in the list, no tap needed. */}
-			<span className="shrink-0 text-sm font-bold tabular-nums text-accent-emphasis">
-				{formatPrice(customer.totalSpent, currency)}
+			    answered in the list, no tap needed. Compact so a whale's lifetime
+			    figure never crushes the name column. */}
+			<span
+				title={formatPrice(customer.totalSpent, currency)}
+				className="shrink-0 text-sm font-bold tabular-nums text-accent-emphasis"
+			>
+				{formatPriceCompact(customer.totalSpent, currency)}
 			</span>
 		</Link>
 	);

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+	formatPriceCompact,
 	normalizePriceInput,
 	parsePriceInput,
 	sanitizeIntInput,
@@ -73,5 +74,30 @@ describe("parsePriceInput", () => {
 		expect(parsePriceInput("1 200")).toBeNull(); // space-separated → reject
 		expect(parsePriceInput("1.2.3")).toBeNull();
 		expect(parsePriceInput("-5")).toBeNull();
+	});
+});
+
+describe("formatPriceCompact", () => {
+	// Intl separates "RM" from the number with a non-breaking space (U+00A0).
+	const NB = " ";
+
+	test("small amounts keep full precision (sen matter on an order)", () => {
+		expect(formatPriceCompact(124_050, "MYR")).toBe(`RM${NB}1,240.50`);
+		expect(formatPriceCompact(999_999, "MYR")).toBe(`RM${NB}9,999.99`);
+	});
+
+	test("RM 10k–1M drops sen (whole ringgit)", () => {
+		expect(formatPriceCompact(3_772_003, "MYR")).toBe(`RM${NB}37,720`);
+		expect(formatPriceCompact(1_000_000, "MYR")).toBe(`RM${NB}10,000`);
+	});
+
+	test("≥ RM 1M compacts (the customer-detail overflow case)", () => {
+		// The exact figure from the report: RM 2,225,481.50 lifetime.
+		expect(formatPriceCompact(222_548_150, "MYR")).toBe(`RM${NB}2.23M`);
+		expect(formatPriceCompact(100_000_000, "MYR")).toBe(`RM${NB}1M`);
+	});
+
+	test("unknown currency falls back to a plain rounded number", () => {
+		expect(formatPriceCompact(3_772_003, "NOPE")).toBe("NOPE 37,720");
 	});
 });

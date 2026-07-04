@@ -70,6 +70,32 @@ async function resolvePaymentForMessage(
 	return { methods: resolved };
 }
 
+/**
+ * Each configured QR method as its own image (captioned with the method label,
+ * so a buyer with several QRs knows which is which) so they can long-press to
+ * save it. Failures are isolated per image. Shared by the payment ask and the
+ * counter-bind payment info.
+ */
+async function sendPaymentQrImages(
+	wa: GuardedSender,
+	toPhone: string,
+	locale: Locale,
+	methods: ResolvedPaymentMethod[],
+): Promise<void> {
+	for (const m of methods) {
+		if (m.type !== "qr" || !m.qrImageUrl) continue;
+		try {
+			await wa.send(toPhone, {
+				kind: "image",
+				imageUrl: m.qrImageUrl,
+				caption: paymentQrCaption(locale, m.label),
+			});
+		} catch (err) {
+			console.error("WA payment QR send failed", err);
+		}
+	}
+}
+
 const statusValidator = v.union(
 	v.literal("pending"),
 	v.literal("confirmed"),
@@ -263,6 +289,18 @@ export const getRetailerLocaleForOrder = internalQuery({
 	},
 });
 
+// The bind ack's follow-up needs the seller's payment methods but no order
+// exists yet (the cashier is still building the cart), so it can't ride
+// getRetailerLocaleForOrder — this resolves straight off the retailer.
+export const getRetailerPaymentInfo = internalQuery({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<ResolvedPayment | null> => {
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) return null;
+		return resolvePaymentForMessage(ctx, retailer);
+	},
+});
+
 /**
  * Send the buyer the payment ask: `introBody` (the confirm template, or a
  * mockup-approved/waived intro) → [pickup block] → transfer-reference line →
@@ -318,21 +356,8 @@ async function sendPaymentMessage(
 			console.error("WA payment send failed", textErr);
 		}
 	}
-	// Each configured QR method follows as its own image (captioned with the
-	// method label, so a buyer with several QRs knows which is which) so they can
-	// long-press to save it. Failures are isolated from the message above.
-	for (const m of payment.methods) {
-		if (m.type !== "qr" || !m.qrImageUrl) continue;
-		try {
-			await wa.send(toPhone, {
-				kind: "image",
-				imageUrl: m.qrImageUrl,
-				caption: paymentQrCaption(locale, m.label),
-			});
-		} catch (err) {
-			console.error("WA payment QR send failed", err);
-		}
-	}
+	// QR images follow the message above; failures are isolated from it.
+	await sendPaymentQrImages(wa, toPhone, locale, payment.methods);
 }
 
 /**
@@ -431,6 +456,49 @@ export const handleInbound = internalAction({
 				await wa.send(fromPhone, { kind: "text", body });
 			} catch (err) {
 				console.error("WA checkout-bind reply failed", err);
+			}
+			// On a successful bind, follow up with the seller's payment details
+			// (bank block + QR images) so the buyer can start a transfer while the
+			// cashier is still ringing up — no waiting to ask "how do I pay?" at
+			// the end. No ORD reference or "I've paid" CTA yet (no order exists);
+			// the order confirmation that follows carries both. Skipped when the
+			// seller has no payment methods configured. Seller-bound transactional,
+			// like the payment ask it previews.
+			if (bind.result === "bound") {
+				const payment = await ctx.runQuery(
+					internal.whatsapp.getRetailerPaymentInfo,
+					{ retailerId: bind.retailerId },
+				);
+				if (payment && payment.methods.length > 0) {
+					const sellerWa = makeGuardedSender(
+						ctx,
+						bind.retailerId,
+						"transactional",
+					);
+					const infoIntro = renderSystemMessage(
+						bind.locale,
+						"counterPaymentInfo",
+						bindVars,
+					);
+					const paymentBlock = renderPaymentMethods(
+						bind.locale,
+						payment.methods,
+					);
+					try {
+						await sellerWa.send(fromPhone, {
+							kind: "text",
+							body: paymentBlock ? `${infoIntro}\n${paymentBlock}` : infoIntro,
+						});
+						await sendPaymentQrImages(
+							sellerWa,
+							fromPhone,
+							bind.locale,
+							payment.methods,
+						);
+					} catch (err) {
+						console.error("WA counter payment info send failed", err);
+					}
+				}
 			}
 			return;
 		}

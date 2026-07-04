@@ -1078,7 +1078,86 @@ describe("whatsapp inbound — Counter Checkout intent routing", () => {
 			fetchMock.waCalls()[0].body as { text?: { body: string } }
 		).text?.body;
 		expect(reply).toContain("connected to");
+		// No payment methods configured → the bind ack is the ONLY message (the
+		// payment-info follow-up is skipped, not sent empty).
+		expect(fetchMock.waCalls().length).toBe(1);
 		void retailerId;
+		fetchMock.restore();
+	});
+
+	test("successful bind follows up with the seller's payment details", async () => {
+		const t = setup();
+		const { retailerId } = await seedRetailerWithLocale(t, "en");
+		await t.run((ctx) =>
+			ctx.db.patch(retailerId, {
+				paymentMethods: [
+					{
+						type: "bank" as const,
+						label: "Maybank",
+						bankName: "Maybank",
+						bankAccountName: "Test Outdoor",
+						bankAccountNumber: "1234567890",
+						sortOrder: 0,
+					},
+				],
+			}),
+		);
+		const { token } = await t
+			.withIdentity({ subject: USER })
+			.mutation(api.counterCheckout.createCheckoutSession, {});
+		const fetchMock = installFetchMock();
+
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: `KP-${token}`,
+			profileName: "Aiman",
+		});
+
+		// Message 1: the bind ack. Message 2: payment details, so the buyer can
+		// transfer while the cashier is still ringing up.
+		const calls = fetchMock.waCalls();
+		expect(calls.length).toBe(2);
+		const info = (calls[1].body as { text?: { body: string } }).text?.body;
+		expect(info).toContain("pay whenever you're ready");
+		expect(info).toContain("Maybank");
+		expect(info).toContain("1234567890");
+		// No order exists yet — never a transfer reference in the preview.
+		expect(info).not.toContain("ORD-");
+		fetchMock.restore();
+	});
+
+	test("the bind payment follow-up is localized to the store's locale (ms)", async () => {
+		const t = setup();
+		const { retailerId } = await seedRetailerWithLocale(t, "ms");
+		await t.run((ctx) =>
+			ctx.db.patch(retailerId, {
+				paymentMethods: [
+					{
+						type: "bank" as const,
+						label: "Maybank",
+						bankName: "Maybank",
+						bankAccountName: "Test Outdoor",
+						bankAccountNumber: "1234567890",
+						sortOrder: 0,
+					},
+				],
+			}),
+		);
+		const { token } = await t
+			.withIdentity({ subject: USER })
+			.mutation(api.counterCheckout.createCheckoutSession, {});
+		const fetchMock = installFetchMock();
+
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: `KP-${token}`,
+		});
+
+		const info = (
+			fetchMock.waCalls()[1].body as { text?: { body: string } }
+		).text?.body;
+		expect(info).toContain("bila-bila sedia"); // "whenever you're ready"
+		expect(info).toContain("Maybank");
 		fetchMock.restore();
 	});
 

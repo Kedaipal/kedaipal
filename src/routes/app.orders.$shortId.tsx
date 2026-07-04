@@ -58,7 +58,11 @@ import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { formatPhone } from "../lib/customer";
-import { convexErrorMessage, formatPrice } from "../lib/format";
+import {
+	convexErrorMessage,
+	formatPrice,
+	formatPriceCompact,
+} from "../lib/format";
 import { deriveMapsUrl } from "../lib/google-address";
 import {
 	anchorOrdinal,
@@ -680,7 +684,7 @@ function OrderDetailRoute() {
 										? formatPhone(order.customer.waPhone)
 										: "No phone captured"}
 									{crmCustomer
-										? ` · ${crmCustomer.orderCount} order${crmCustomer.orderCount === 1 ? "" : "s"} · ${formatPrice(crmCustomer.totalSpent, order.currency)}`
+										? ` · ${crmCustomer.orderCount} order${crmCustomer.orderCount === 1 ? "" : "s"} · ${formatPriceCompact(crmCustomer.totalSpent, order.currency)}`
 										: ""}
 								</span>
 							</span>

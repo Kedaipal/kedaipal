@@ -17,6 +17,7 @@ import { formatPhone, getDisplayName } from "../../lib/customer";
 import {
 	convexErrorMessage,
 	formatPrice,
+	formatPriceCompact,
 	formatRelativeTime,
 	formatShortDate,
 } from "../../lib/format";
@@ -87,17 +88,21 @@ export function CustomerDetail({
 				<NameEditor customer={customer} />
 			</section>
 
-			{/* Lifetime metrics — the stat trio ("since" lives in the header). */}
+			{/* Lifetime metrics — the stat trio ("since" lives in the header).
+			    Compact money so a big-spender's lifetime figure fits its third of a
+			    phone screen; the full amount rides on the title tooltip. */}
 			<section className="grid grid-cols-3 gap-2">
 				<Metric label="Orders" value={String(customer.orderCount)} />
 				<Metric
 					label="Total spent"
-					value={formatPrice(customer.totalSpent, currency)}
+					value={formatPriceCompact(customer.totalSpent, currency)}
+					full={formatPrice(customer.totalSpent, currency)}
 					emphasis
 				/>
 				<Metric
 					label="Avg order"
-					value={formatPrice(customer.averageOrderValue, currency)}
+					value={formatPriceCompact(customer.averageOrderValue, currency)}
+					full={formatPrice(customer.averageOrderValue, currency)}
 				/>
 			</section>
 
@@ -160,16 +165,22 @@ function initialsOf(name: string): string {
 function Metric({
 	label,
 	value,
+	full,
 	emphasis = false,
 }: {
 	label: string;
 	value: string;
+	/** Untruncated value for the hover tooltip when `value` is compacted. */
+	full?: string;
 	emphasis?: boolean;
 }) {
 	return (
 		<div className="flex flex-col items-center gap-0.5 rounded-2xl border border-border bg-card px-2 py-3 text-center">
+			{/* max-w-full: truncate has no effect on a centred flex child without a
+			    width bound — the text would overflow the card edge instead. */}
 			<span
-				className={`truncate font-heading text-[17px] font-extrabold tabular-nums ${emphasis ? "text-accent-emphasis" : ""}`}
+				title={full}
+				className={`max-w-full truncate font-heading text-[17px] font-extrabold tabular-nums ${emphasis ? "text-accent-emphasis" : ""}`}
 			>
 				{value}
 			</span>

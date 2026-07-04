@@ -41,7 +41,11 @@ import { ShopeeIcon } from "../components/icons/shopee-icon";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
-import { formatPrice, formatRelativeTime } from "../lib/format";
+import {
+	formatPrice,
+	formatPriceCompact,
+	formatRelativeTime,
+} from "../lib/format";
 import {
 	type DeliveryMethod,
 	type OrderStatus,
@@ -725,7 +729,7 @@ function DashboardHome() {
 							icon={Banknote}
 							tint="bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400"
 							title={`${unpaidCount} unpaid order${unpaidCount === 1 ? "" : "s"}`}
-							sub={`${formatPrice(unpaidAmount, currency)} outstanding`}
+							sub={`${formatPriceCompact(unpaidAmount, currency)} outstanding`}
 						/>
 					) : null}
 				</section>
