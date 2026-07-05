@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm typecheck *)",
+      "Bash(npx tsc *)",
+      "Bash(npx vitest *)",
+      "Bash(pnpm vitest *)",
+      "mcp__claude_ai_ClickUp__clickup_get_task"
+    ]
+  }
+}
