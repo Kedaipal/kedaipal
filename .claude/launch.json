@@ -1,0 +1,27 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["dev"],
+      "port": 3000,
+      "autoPort": false
+    },
+    {
+      "name": "web-redesign-wt",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "-C",
+        "../kedaipal-wt-86ey52f55",
+        "exec",
+        "vite",
+        "dev",
+        "--port",
+        "3101"
+      ],
+      "port": 3101,
+      "autoPort": false
+    }
+  ]
+}
