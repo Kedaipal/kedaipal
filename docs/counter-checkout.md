@@ -15,6 +15,14 @@
 
 ---
 
+> **⚠️ Superseded in part by [§One QR](#one-qr--the-store-poster-replaces-the-per-session-qr-86ey5neg6) (`86ey5neg6`).**
+> The per-session `KP-<token>` flow described in the historical sections below
+> (`createCheckoutSession` / `bindCheckoutSession` / `AwaitingScreen` / the
+> `checkout_bind` intent) has been **removed**. Counter checkout now uses a single
+> permanent store QR (`KPS-`); "Start checkout" just presents it, and the walk-in
+> session is created when the buyer scans. Read the historical sections for
+> lineage, but the One-QR section is the current behaviour.
+
 ## The flow (flipped — confirmed by spike [`86ey0e80x`](https://app.clickup.com/t/86ey0e80x))
 
 A buyer's personal WhatsApp QR is **opaque** (`wa.me/qr/<token>`, no phone number
@@ -334,12 +342,9 @@ and the mint URL is exactly as public, so it needs the same limits anyway.)
   store leaked); re-claim; then the `storeQrScan` rate limit (`3/hr` per
   `(store, phone)`) + `MAX_OPEN_STORE_QR_SESSIONS` (10) cap → `busy` reply.
 - **Seller UI:** a **Store QR card** on the walk-in desk screen (`StoreQrCard`,
-  `app.checkout.tsx`) — Generate, **Download poster** (a print-ready PNG rendered
-  client-side: store name + "Scan to order & pay" + QR + how-to + the PDPA notice
-  line, no server render), **Rotate** (confirm dialog warning old posters stop
-  working). Walk-in sessions carry a **"Walk-in scan"** badge in the open-checkouts
-  list (`origin` on `listOpenSessions`). This card **supersedes** the interim
-  hidden per-session Download-QR button (removed here).
+  `app.checkout.tsx`) — Generate + Rotate + a quick on-screen QR (printing moved to
+  the deluxe A4 at `/app/poster`, see One-QR below). Walk-in sessions carry a
+  **"Walk-in scan"** badge in the open-checkouts list (`origin` on `listOpenSessions`).
 - **PDPA notice at collection** (see `86ey5m3hx`): a poster buyer never touches the
   website before their number is stored, so the `storeQrConnected` ack **and** the
   printed poster both carry the `kedaipal.com/privacy` line (EN + BM).
@@ -348,6 +353,44 @@ and the mint URL is exactly as public, so it needs the same limits anyway.)
   and the poster raises junk-scan volume, so they must not live forever.
   `expireStaleSessions` only *flips* status; this is the row-deleting sweep.
   Completed sessions are kept (they link to orders; order retention is `86ey5m3hx`).
+
+### One QR — the store poster replaces the per-session QR ([`86ey5neg6`](https://app.clickup.com/t/86ey5neg6))
+
+Counter checkout had **two** QRs (the per-session `KP-` on `AwaitingScreen` +
+this permanent `KPS-` store QR), which confused sellers. Decision (CTO): **one
+QR** — the static store QR is now the *only* counter QR.
+
+- **Per-session flow removed.** Deleted `createCheckoutSession`,
+  `bindCheckoutSession`, the `checkout_bind` intent + `CHECKOUT_TOKEN_REGEX`, the
+  `counterCheckoutBound/Expired/Used` copy, `AwaitingScreen`/`ExpiryCountdown`, and
+  the `checkoutSessionCreate` rate limit. The `awaiting_buyer` status literal is
+  **kept** in the schema union (migration-safe — prod rows may exist), just never
+  created; `expireStaleSessions` still sweeps it harmlessly.
+- **No "Start checkout" button.** The QR is static, so there's no per-buyer
+  ceremony. The Counter page shows the **one** store QR **compactly in the header**
+  (`StoreQrChip`) — tap to enlarge for a buyer to scan; the walk-in session is
+  created when they scan. Token auto-provisions silently. **All QR management
+  (rotate) moved off this page to `/app/poster`** (its natural home — it already
+  ensures the token + prints the A4). The redundant on-page "Store QR card" was
+  removed.
+- **Buyer pairing code — made actionable.** `startSessionFromStoreQr` mints a short
+  `counterCheckoutSessions.pairingCode` (e.g. `K7` — 1 unambiguous letter + digit,
+  unique among the store's open walk-ins), returned to the ack copy
+  (`storeQrConnected` shows *"Your order code is `*K7*`"*) **and** surfaced as the
+  open-checkouts list row's avatar. The list has a **search box** (filter by code
+  or name) with **Enter-to-open** on a single match — so the cashier acts on the
+  code the buyer shows them instead of eyeballing the list. A re-claim returns the
+  **same** code.
+- **Download → `/app/poster`.** The counter card's print button links to the deluxe
+  A4 poster (`86ey5m4m9`) — one poster renderer (the old client-side PNG builder +
+  `escapeXml` were removed). Rotate now lives on `/app/poster` too.
+- **Dashboard QR dialog (`StorefrontQrDialog`)** now shows **both** QRs ("Order
+  online" + "At the counter") each with its own Download-PNG, centered/width-capped
+  on desktop, keeping the "printable A4 poster →" link. (This is the quick
+  standalone-PNG grab; `/app/poster` remains the branded print.)
+- **Payment-at-scan unchanged** (`86ey5kq7p`): first scan schedules
+  `notifyCounterCheckoutPayment`; a re-claim skips it (buyer already has the
+  details); no-ops when the seller has no payment methods.
 
 ### Build-screen UX polish (same ticket)
 

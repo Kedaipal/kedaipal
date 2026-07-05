@@ -20,13 +20,12 @@ buyers into orders (and into the Customer DB).
 - **Right — "Order online":** the storefront `?src=online` link — browse the
   full catalog and order from home.
 
-**Relationship to the Counter-Checkout Store QR card (`86ey5m35w`).** That
-feature also ships a simpler single-QR PNG poster inside `/app/checkout`
-(`StoreQrCard`: Generate / Download PNG / Rotate). Both are kept **by design**:
-the counter card is the quick in-flow grab + token management (Generate/Rotate);
-`/app/poster` is the deluxe branded A4 print page (logo, two QRs, EN/BM). They
-share the **same** `retailers.counterQrToken`, so rotating it in either place
-updates both.
+**Relationship to the Counter-Checkout Store QR card (`86ey5m35w` / `86ey5neg6`).**
+The `/app/checkout` `StoreQrCard` owns the counter QR's **token lifecycle**
+(Generate / Rotate) + a quick on-screen QR; its **print button links here** — this
+`/app/poster` A4 is the single poster renderer (the card's old client-side PNG was
+removed in `86ey5neg6`). Both surfaces share the **same** `retailers.counterQrToken`,
+so rotating it in either place updates both.
 
 - **Entry points:** a "Promote your store" card on the `/app` home (sits with
   the share actions in both new-user and returning-user layouts) and a

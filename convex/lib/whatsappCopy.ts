@@ -21,6 +21,8 @@ export type CopyVars = {
 	pickupKind?: PickupKind;
 	/** Pre-formatted money string (e.g. "MYR 25.00") for messages that quote a total. */
 	amount?: string;
+	/** Short human pairing code (e.g. "K7") the walk-in buyer shows the cashier. */
+	code?: string;
 };
 
 /** True when the order is fulfilled at a drop-off point (meetup), not the seller's place. */
@@ -145,12 +147,9 @@ export type SystemMessageKey =
 	| "paymentDueApproved"
 	| "paymentDueWaived"
 	| "paymentDueDeclined"
-	| "counterCheckoutBound"
 	| "counterCheckoutPaymentIntro"
 	| "storeQrConnected"
 	| "storeQrBusy"
-	| "counterCheckoutExpired"
-	| "counterCheckoutUsed"
 	| "counterOrderConfirmedPaid"
 	| "counterOrderConfirmedUnpaid"
 	| "orderReceiptCaption"
@@ -169,26 +168,24 @@ type SystemCopy = {
 	paymentDueApproved: (v: CopyVars) => string;
 	paymentDueWaived: (v: CopyVars) => string;
 	paymentDueDeclined: (v: CopyVars) => string;
-	// Counter Checkout (docs/counter-checkout.md): the buyer scans the seller's
-	// `KP-<token>` QR ONCE. `counterCheckoutBound` acks the scan; the two
-	// `counterOrderConfirmed*` messages carry the confirmed order + tracking link
-	// (paid vs pay-later branch) so the buyer never has to scan again to pay.
-	counterCheckoutBound: (v: CopyVars) => string;
-	// Sent right after the bind ack: leads the retailer's payment methods block so
-	// a counter buyer can pay ahead (even before the cashier finishes) instead of
-	// waiting for the details at the end. The `renderPaymentMethods` block (with
-	// its own "💳 Payment details" header + QR images) follows. See
-	// docs/counter-checkout.md.
+	// Counter Checkout (docs/counter-checkout.md): the two `counterOrderConfirmed*`
+	// messages carry the confirmed order + tracking link (paid vs pay-later branch)
+	// so the buyer never has to scan again to pay.
+	// Sent right after the store-QR connect ack: leads the retailer's payment
+	// methods block so a counter buyer can pay ahead (even before the cashier
+	// finishes) instead of waiting for the details at the end. The
+	// `renderPaymentMethods` block (with its own "💳 Payment details" header + QR
+	// images) follows. See docs/counter-checkout.md.
 	counterCheckoutPaymentIntro: (v: CopyVars) => string;
-	// Store QR poster (86ey5m35w): a buyer scanned the seller's PERMANENT
-	// printed QR — `storeQrConnected` acks the walk-in session (and carries the
-	// PDPA notice-at-collection privacy link, since a poster buyer never touches
-	// the website before their number is stored); `storeQrBusy` is the polite
-	// over-cap / rate-limited reply.
+	// Store QR poster (86ey5m35w / 86ey5neg6 — the ONLY counter QR): a buyer
+	// scanned the seller's PERMANENT printed QR. `storeQrConnected` acks the
+	// walk-in session, gives the buyer their `code` (a short pairing code they
+	// show the cashier so it's matched in the open-checkouts list), and carries
+	// the PDPA notice-at-collection privacy link (a poster buyer never touches the
+	// website before their number is stored). `storeQrBusy` is the polite over-cap
+	// / rate-limited reply.
 	storeQrConnected: (v: CopyVars) => string;
 	storeQrBusy: (v: CopyVars) => string;
-	counterCheckoutExpired: (v: CopyVars) => string;
-	counterCheckoutUsed: (v: CopyVars) => string;
 	counterOrderConfirmedPaid: (v: CopyVars) => string;
 	counterOrderConfirmedUnpaid: (v: CopyVars) => string;
 	// Captions for the receipt / invoice PDF the seller sends to the buyer's
@@ -219,18 +216,14 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`Here are the payment details for your order ${shortId} from ${storeName}:`,
 		paymentDueDeclined: ({ shortId, storeName }) =>
 			`No problem — the custom item was removed from ${shortId}. Here's how to pay for the rest of your order from ${storeName}:`,
-		counterCheckoutBound: ({ storeName }) =>
-			`You're connected to ${storeName} 🎉 The cashier is ringing up your order now — sit tight, your confirmation lands here in a moment.`,
 		counterCheckoutPaymentIntro: ({ storeName }) =>
 			`💡 No need to wait for the cashier — you can pay ${storeName} whenever you're ready, even now.`,
-		storeQrConnected: ({ storeName }) =>
-			`You're connected to ${storeName} 🎉 Show this chat to the cashier and they'll ring up your order — your confirmation will land right here.\n\nBy continuing you agree to our Privacy Policy: https://kedaipal.com/privacy`,
+		storeQrConnected: ({ storeName, code }) =>
+			`You're connected to ${storeName} 🎉${
+				code ? ` Your order code is *${code}* — show it to the cashier so they can find you.` : ""
+			} They'll ring up your order and your confirmation will land right here.\n\nBy continuing you agree to our Privacy Policy: https://kedaipal.com/privacy`,
 		storeQrBusy: ({ storeName }) =>
 			`${storeName} can't take new scans right now — please ask the cashier for help and they'll sort you out 🙂`,
-		counterCheckoutExpired: () =>
-			`Oops — this checkout QR has expired. Just ask the cashier to show a fresh one and scan again 🙂`,
-		counterCheckoutUsed: () =>
-			`This checkout QR has already been used. If you'd like to order again, ask the cashier for a new one 🙂`,
 		counterOrderConfirmedPaid: ({ shortId, storeName, amount, trackingUrl }) =>
 			`🧾 All done! Order ${shortId} at ${storeName} is confirmed and paid${
 				amount ? ` — total ${amount}` : ""
@@ -267,18 +260,14 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`Berikut maklumat pembayaran untuk pesanan ${shortId} dari ${storeName}:`,
 		paymentDueDeclined: ({ shortId, storeName }) =>
 			`Tiada masalah — item custom telah dibuang dari ${shortId}. Berikut cara membayar untuk baki pesanan anda dari ${storeName}:`,
-		counterCheckoutBound: ({ storeName }) =>
-			`Anda telah disambungkan dengan ${storeName} 🎉 Juruwang sedang memproses pesanan anda — tunggu sekejap, pengesahan akan sampai di sini sebentar lagi.`,
 		counterCheckoutPaymentIntro: ({ storeName }) =>
 			`💡 Tak perlu tunggu juruwang — anda boleh bayar ${storeName} bila-bila masa, walaupun sekarang.`,
-		storeQrConnected: ({ storeName }) =>
-			`Anda telah disambungkan dengan ${storeName} 🎉 Tunjukkan chat ini kepada juruwang dan mereka akan proses pesanan anda — pengesahan akan sampai di sini.\n\nDengan meneruskan, anda bersetuju dengan Dasar Privasi kami: https://kedaipal.com/privacy`,
+		storeQrConnected: ({ storeName, code }) =>
+			`Anda telah disambungkan dengan ${storeName} 🎉${
+				code ? ` Kod pesanan anda ialah *${code}* — tunjukkan kepada juruwang supaya mereka boleh cari anda.` : ""
+			} Mereka akan proses pesanan anda dan pengesahan akan sampai di sini.\n\nDengan meneruskan, anda bersetuju dengan Dasar Privasi kami: https://kedaipal.com/privacy`,
 		storeQrBusy: ({ storeName }) =>
 			`${storeName} tidak dapat menerima imbasan baharu buat masa ini — sila minta bantuan juruwang ya 🙂`,
-		counterCheckoutExpired: () =>
-			`Alamak — QR checkout ini telah tamat tempoh. Minta juruwang tunjukkan QR baharu dan imbas semula ya 🙂`,
-		counterCheckoutUsed: () =>
-			`QR checkout ini telah digunakan. Jika ingin membuat pesanan lagi, minta juruwang untuk QR baharu ya 🙂`,
 		counterOrderConfirmedPaid: ({ shortId, storeName, amount, trackingUrl }) =>
 			`🧾 Selesai! Pesanan ${shortId} di ${storeName} telah disahkan dan dibayar${
 				amount ? ` — jumlah ${amount}` : ""
