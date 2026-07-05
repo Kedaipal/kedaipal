@@ -27,10 +27,7 @@ import { type ReactNode, useState } from "react";
 import { api } from "../../convex/_generated/api";
 import { FirstOrderCelebration } from "../components/dashboard/first-order-celebration";
 import { GreetingChecklistRow } from "../components/dashboard/greeting-checklist-row";
-import {
-	PageHeader,
-	PageHeaderSkeleton,
-} from "../components/dashboard/page-header";
+import { PageHeaderSkeleton } from "../components/dashboard/page-header";
 import { ShareLinkChecklistRow } from "../components/dashboard/share-link-checklist-row";
 import {
 	type OrderStatus as AnchorStatus,
@@ -58,6 +55,7 @@ import {
 } from "../lib/orderStatus";
 import { storefrontUrl as buildStorefrontUrl } from "../lib/storefront-url";
 import { hasSubscribed, trialDaysLeft } from "../lib/subscription";
+import { cn } from "../lib/utils";
 
 export const Route = createFileRoute("/app/")({
 	component: DashboardHome,
@@ -421,18 +419,21 @@ function DashboardHome() {
 
 	return (
 		<div className="flex flex-col gap-6 lg:gap-8">
-			<PageHeader
-				title="Dashboard"
-				subtitle={
-					<span>
-						Welcome back to{" "}
-						<span className="font-medium text-foreground">
-							{retailer.storeName}
-						</span>
-					</span>
-				}
-			/>
-			{/* Greeting header — mobile only (desktop has the PageHeader). */}
+			{/* Desktop greeting header — leads with the store's own logo so the
+			    dashboard feels like the vendor's, not generic chrome. */}
+			<div className="hidden items-center gap-4 border-b border-border pb-5 lg:flex">
+				<StoreAvatar
+					retailer={retailer}
+					className="size-14 rounded-2xl text-xl"
+				/>
+				<div className="flex min-w-0 flex-col gap-0.5">
+					<h1 className="truncate font-heading text-2xl font-extrabold leading-tight tracking-tight">
+						{timeGreeting()}, {retailer.storeName}
+					</h1>
+					<p className="text-sm text-muted-foreground">{formatTodayLong()}</p>
+				</div>
+			</div>
+			{/* Greeting header — mobile. */}
 			<div className="flex items-center justify-between gap-3 lg:hidden">
 				<div className="flex min-w-0 flex-col">
 					<h2 className="truncate font-heading text-[22px] font-extrabold leading-tight tracking-tight">
@@ -446,23 +447,14 @@ function DashboardHome() {
 					to="/app/settings"
 					search={{ tab: "store" as const }}
 					aria-label="Store settings"
-					className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-foreground font-heading text-[15px] font-extrabold text-background"
 				>
-					{retailer.logoUrl ? (
-						<img
-							src={retailer.logoUrl}
-							alt=""
-							className="size-full object-cover"
-						/>
-					) : (
-						retailer.storeName.charAt(0).toUpperCase()
-					)}
+					<StoreAvatar retailer={retailer} className="size-10 rounded-2xl" />
 				</Link>
 			</div>
 			<WhiteGloveCard slug={retailer.slug} />
 			{/* Welcome banner — only for brand-new users */}
 			{isNew ? (
-				<section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-accent/20 via-accent/10 to-background p-6">
+				<section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-accent/20 via-accent/10 to-background p-6 lg:max-w-2xl">
 					<div
 						className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-accent/20 blur-3xl"
 						aria-hidden="true"
@@ -611,7 +603,7 @@ function DashboardHome() {
 
 			{/* How it works — only for brand-new users */}
 			{isNew ? (
-				<section className="flex flex-col gap-3">
+				<section className="flex flex-col gap-3 lg:max-w-2xl">
 					<h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
 						How Kedaipal works
 					</h3>
@@ -638,18 +630,22 @@ function DashboardHome() {
 			) : null}
 
 			{/* First-order milestone — a transient overlay, independent of the
-			    checklist (a vendor can land order #1 while still mid-trial). */}
+			    checklist (a vendor can land order #1 while still mid-trial).
+			    Constrained to match the primary column above (today strip / share /
+			    needs-attention are all lg:max-w-2xl). */}
 			{showCelebration ? (
-				<FirstOrderCelebration
-					slug={retailer.slug}
-					storeName={retailer.storeName}
-				/>
+				<div className="lg:max-w-2xl">
+					<FirstOrderCelebration
+						slug={retailer.slug}
+						storeName={retailer.storeName}
+					/>
+				</div>
 			) : null}
 
 			{/* Setup checklist — stays until every required step (incl. "Subscribe
 			    to a plan") is done, i.e. onboarding is complete. */}
 			{!requiredDone ? (
-				<section className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-5">
+				<section className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-5 lg:max-w-2xl">
 					<div className="flex items-center justify-between">
 						<h3 className="font-semibold">
 							{isNew ? "Complete your setup" : "Finish setting up"}
@@ -1014,6 +1010,31 @@ function ChecklistRow({
 }
 
 /** Greeting keyed to the seller's local clock (MYT in practice). */
+/** Store logo when set, else the store initial on the brand navy tile. */
+function StoreAvatar({
+	retailer,
+	className,
+}: {
+	retailer: { logoUrl?: string; storeName: string };
+	className?: string;
+}) {
+	return (
+		<span
+			className={cn(
+				"flex shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-foreground font-heading text-[15px] font-extrabold text-background",
+				className,
+			)}
+			aria-hidden="true"
+		>
+			{retailer.logoUrl ? (
+				<img src={retailer.logoUrl} alt="" className="size-full object-cover" />
+			) : (
+				retailer.storeName.charAt(0).toUpperCase()
+			)}
+		</span>
+	);
+}
+
 function timeGreeting(now: Date = new Date()): string {
 	const h = now.getHours();
 	if (h < 12) return "Good morning";
