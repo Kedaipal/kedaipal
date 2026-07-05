@@ -6,7 +6,7 @@ See full project context: [`./PROJECT_CONTEXT.md`](./PROJECT_CONTEXT.md)
 
 **Kedaipal** ("kedai" + "pal") — B2B SaaS order hub for serious WhatsApp sellers in Malaysia. WhatsApp is the wedge; long-term vision is omnichannel (Shopee, Lazada, TikTok Shop, StoreHub).
 
-**Target cohort (current):** Established **F&B home sellers** doing 20+ orders/week — cake decorators, frozen food sellers (with reseller networks), kuih and pastry sellers. The outdoor-gear vertical was the original beachhead but real-world adoption shifted to F&B; positioning is now anchored on universal F&B pain.
+**Target cohort (feature-grounded, updated Jul 2026):** Made-to-order or multi-outlet sellers doing 20+ orders/week who **close + collect payment by hand in WhatsApp** and sell **online + at physical points** (counter/stalls/pickup). F&B is the richest instance — cake decorators, kuih/pastry pre-order, frozen **direct multi-outlet** sellers — but both paying customers matched the *pattern*, not the food category (Bearcamp = tent-wash service, Lekor Mr Ganu = multi-stall keropok-lekor SME). Frozen **reseller/wholesale networks** are NOT the ICP: the tiered-pricing/reseller-portal features that thesis needs are unbuilt and no payer has needed them. Outdoor gear was the original beachhead. See `PROJECT_CONTEXT.md` + `01_Strategy/ICP_Feature_Grounded_20260701.md` (Documents workspace).
 
 **Universal pain × universal TAM:**
 
