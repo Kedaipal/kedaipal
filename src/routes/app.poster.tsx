@@ -1,7 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
-import { Printer } from "lucide-react";
+import { Printer, RefreshCw } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import {
 	PageHeader,
@@ -13,11 +14,13 @@ import {
 	StorePoster,
 } from "../components/poster/store-poster";
 import { Button } from "../components/ui/button";
+import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import { Skeleton } from "../components/ui/skeleton";
 import {
 	useActAsRetailerId,
 	useDashboardRetailer,
 } from "../hooks/useDashboardRetailer";
+import { convexErrorMessage } from "../lib/format";
 import { storefrontOrigin } from "../lib/storefront-url";
 
 export const Route = createFileRoute("/app/poster")({
@@ -55,9 +58,28 @@ function PosterRoute() {
 	const ensureCounterQrToken = useMutation(
 		api.counterCheckout.ensureCounterQrToken,
 	);
+	const rotateCounterQrToken = useMutation(
+		api.counterCheckout.rotateCounterQrToken,
+	);
+	const [confirmRotate, setConfirmRotate] = useState(false);
+	const [rotating, setRotating] = useState(false);
 	// Poster copy is buyer-facing, so the seller picks its language here —
 	// default BM (Malaysian buyers) — independent of the dashboard locale.
 	const [posterLocale, setPosterLocale] = useState<PosterLocale>("ms");
+
+	async function rotate() {
+		setRotating(true);
+		try {
+			await rotateCounterQrToken({ retailerId: actAsRetailerId });
+			toast.success(
+				"New store QR generated — reprint the poster; old printed copies no longer work.",
+			);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setRotating(false);
+		}
+	}
 
 	// Self-serve provisioning: the printable poster needs the permanent token to
 	// exist, so mint it on first visit if the seller never opened Counter
@@ -172,7 +194,44 @@ function PosterRoute() {
 						home.
 					</p>
 				</div>
+
+				{/* Counter QR management — the one home for rotating the permanent QR
+				    (86ey5neg6). Rotating replaces the token, so every printed poster
+				    stops working; confirm-gated. */}
+				<div className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4 lg:max-w-2xl">
+					<div>
+						<p className="text-sm font-semibold">Counter QR</p>
+						<p className="mt-1 text-sm text-muted-foreground">
+							Your permanent counter QR never expires. If a poster leaks or gets
+							misused, rotate it — old printed copies stop working immediately,
+							so reprint and put up the new poster.
+						</p>
+					</div>
+					<Button
+						type="button"
+						variant="outline"
+						onClick={() => setConfirmRotate(true)}
+						disabled={rotating || !storeQr?.token}
+						className="h-11 w-full gap-2 sm:w-fit"
+					>
+						<RefreshCw className="size-4" />
+						Rotate QR…
+					</Button>
+				</div>
 			</div>
+
+			<ConfirmDialog
+				open={confirmRotate}
+				onOpenChange={setConfirmRotate}
+				title="Rotate the store QR?"
+				description="A new QR is generated and every printed copy of the old one stops working immediately. You'll need to print and put up the new poster."
+				confirmLabel="Rotate QR"
+				cancelLabel="Keep current QR"
+				destructive
+				onConfirm={() => {
+					void rotate();
+				}}
+			/>
 
 			{/* Scaled live preview — becomes the actual print artifact. The inner
 			    div keeps its natural 794px layout width (transform doesn't affect

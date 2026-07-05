@@ -363,22 +363,31 @@ QR** — the static store QR is now the *only* counter QR.
 - **Per-session flow removed.** Deleted `createCheckoutSession`,
   `bindCheckoutSession`, the `checkout_bind` intent + `CHECKOUT_TOKEN_REGEX`, the
   `counterCheckoutBound/Expired/Used` copy, `AwaitingScreen`/`ExpiryCountdown`, and
-  the `checkoutSessionCreate` rate limit. "Start checkout" / "New order" now opens
-  a **Show-QR screen** presenting the static `KPS-` QR (no token minted); the
-  walk-in session is created when the buyer scans. The `awaiting_buyer` status
-  literal is **kept** in the schema union (migration-safe — prod rows may exist),
-  just never created; `expireStaleSessions` still sweeps it harmlessly.
-- **Buyer pairing code.** `startSessionFromStoreQr` mints a short
+  the `checkoutSessionCreate` rate limit. The `awaiting_buyer` status literal is
+  **kept** in the schema union (migration-safe — prod rows may exist), just never
+  created; `expireStaleSessions` still sweeps it harmlessly.
+- **No "Start checkout" button.** The QR is static, so there's no per-buyer
+  ceremony. The Counter page shows the **one** store QR **compactly in the header**
+  (`StoreQrChip`) — tap to enlarge for a buyer to scan; the walk-in session is
+  created when they scan. Token auto-provisions silently. **All QR management
+  (rotate) moved off this page to `/app/poster`** (its natural home — it already
+  ensures the token + prints the A4). The redundant on-page "Store QR card" was
+  removed.
+- **Buyer pairing code — made actionable.** `startSessionFromStoreQr` mints a short
   `counterCheckoutSessions.pairingCode` (e.g. `K7` — 1 unambiguous letter + digit,
   unique among the store's open walk-ins), returned to the ack copy
-  (`storeQrConnected` now shows *"Your order code is `*K7*`"*) **and** surfaced on
-  the open-checkouts list row (`listOpenSessions.pairingCode`, shown as the row's
-  avatar). There's no order number yet (the order is created later), so this code
-  is how the cashier matches "who's this?" to the right open checkout. A re-claim
-  returns the **same** code.
-- **Download → `/app/poster`.** The Store QR card's print button now links to the
-  deluxe A4 poster (`86ey5m4m9`) instead of rendering its own PNG — one poster
-  renderer. (The old client-side PNG builder + `escapeXml` were removed.)
+  (`storeQrConnected` shows *"Your order code is `*K7*`"*) **and** surfaced as the
+  open-checkouts list row's avatar. The list has a **search box** (filter by code
+  or name) with **Enter-to-open** on a single match — so the cashier acts on the
+  code the buyer shows them instead of eyeballing the list. A re-claim returns the
+  **same** code.
+- **Download → `/app/poster`.** The counter card's print button links to the deluxe
+  A4 poster (`86ey5m4m9`) — one poster renderer (the old client-side PNG builder +
+  `escapeXml` were removed). Rotate now lives on `/app/poster` too.
+- **Dashboard QR dialog (`StorefrontQrDialog`)** now shows **both** QRs ("Order
+  online" + "At the counter") each with its own Download-PNG, centered/width-capped
+  on desktop, keeping the "printable A4 poster →" link. (This is the quick
+  standalone-PNG grab; `/app/poster` remains the branded print.)
 - **Payment-at-scan unchanged** (`86ey5kq7p`): first scan schedules
   `notifyCounterCheckoutPayment`; a re-claim skips it (buyer already has the
   details); no-ops when the seller has no payment methods.

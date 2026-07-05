@@ -15,9 +15,7 @@ import {
 	List,
 	Minus,
 	Plus,
-	Printer,
 	QrCode,
-	RefreshCw,
 	Search,
 	Trash2,
 	UserCheck,
@@ -86,10 +84,6 @@ function CounterCheckoutRoute() {
 	const { session: activeSessionId } = Route.useSearch();
 	const navigate = useNavigate({ from: Route.fullPath });
 	const [created, setCreated] = useState<CreatedOrder | null>(null);
-	// "Start checkout" now just presents the permanent store QR for the buyer to
-	// scan (no per-session token is minted — the walk-in session is created when
-	// the buyer scans). Ephemeral, so local state is enough.
-	const [showQr, setShowQr] = useState(false);
 
 	const cancelSession = useMutation(api.counterCheckout.cancelCheckoutSession);
 
@@ -103,10 +97,6 @@ function CounterCheckoutRoute() {
 		setCreated(null);
 	}, [activeSessionId]);
 
-	function start() {
-		setShowQr(true);
-	}
-
 	async function cancel(id: string) {
 		try {
 			await cancelSession({ sessionId: id as SessionId });
@@ -115,34 +105,36 @@ function CounterCheckoutRoute() {
 		}
 	}
 
-	const showingSub = Boolean(activeSessionId) || showQr;
-
 	return (
 		<div className="flex flex-col gap-6">
 			<header className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-card p-4 shadow-sm">
-				<div className="flex items-center gap-3">
-					<span className="flex size-10 items-center justify-center rounded-xl bg-accent/12 text-accent">
+				<div className="flex min-w-0 items-center gap-3">
+					<span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent/12 text-accent">
 						<QrCode className="size-5" />
 					</span>
-					<div>
+					<div className="min-w-0">
 						<h1 className="text-xl font-bold tracking-tight">
 							Counter Checkout
 						</h1>
-						<p className="text-sm text-muted-foreground">
+						<p className="truncate text-sm text-muted-foreground">
 							Take an in-person order — connected to WhatsApp.
 						</p>
 					</div>
 				</div>
-				{showingSub ? (
+				{activeSessionId ? (
 					<button
 						type="button"
-						onClick={() => (activeSessionId ? backToList() : setShowQr(false))}
-						className="flex h-10 items-center gap-1.5 rounded-xl border border-border px-3 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+						onClick={backToList}
+						className="flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-border px-3 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
 					>
 						<ArrowLeft className="size-4" />
 						<span className="hidden sm:inline">All checkouts</span>
 					</button>
-				) : null}
+				) : (
+					// The one permanent store QR — compact here, tap to enlarge for a
+					// buyer to scan. Management (rotate/print) lives on /app/poster.
+					<StoreQrChip />
+				)}
 			</header>
 
 			{activeSessionId ? (
@@ -152,24 +144,14 @@ function CounterCheckoutRoute() {
 					retailer={retailer}
 					created={created}
 					onCreated={setCreated}
-					onStartNew={start}
 					onBackToList={backToList}
 					onCancelActive={async () => {
 						await cancel(activeSessionId);
 						backToList();
 					}}
 				/>
-			) : showQr ? (
-				<ShowStoreQrScreen
-					hasPaymentMethods={(retailer?.paymentMethods?.length ?? 0) > 0}
-					onDone={() => setShowQr(false)}
-				/>
 			) : (
-				<OpenCheckoutsList
-					onStart={start}
-					onResume={openSession}
-					onCancel={cancel}
-				/>
+				<OpenCheckoutsList onResume={openSession} onCancel={cancel} />
 			)}
 		</div>
 	);
@@ -181,7 +163,6 @@ function ActiveSession({
 	retailer,
 	created,
 	onCreated,
-	onStartNew,
 	onBackToList,
 	onCancelActive,
 }: {
@@ -189,7 +170,6 @@ function ActiveSession({
 	retailer: ReturnType<typeof useQuery<typeof api.retailers.getMyRetailer>>;
 	created: CreatedOrder | null;
 	onCreated: (c: CreatedOrder) => void;
-	onStartNew: () => void;
 	onBackToList: () => void;
 	onCancelActive: () => void;
 }) {
@@ -209,7 +189,6 @@ function ActiveSession({
 				orderId={created?.orderId ?? session.orderId}
 				paidInPerson={created?.paidInPerson ?? false}
 				buyerName={session.displayName}
-				onNew={onStartNew}
 				onBackToList={onBackToList}
 			/>
 		);
@@ -233,7 +212,7 @@ function ActiveSession({
 		) : null;
 
 	// expired / cancelled
-	return <ExpiredScreen onRestart={onStartNew} onBackToList={onBackToList} />;
+	return <ExpiredScreen onBackToList={onBackToList} />;
 }
 
 function MissingSession({ onBack }: { onBack: () => void }) {
@@ -258,11 +237,9 @@ function MissingSession({ onBack }: { onBack: () => void }) {
 // ---------------------------------------------------------------------------
 
 function OpenCheckoutsList({
-	onStart,
 	onResume,
 	onCancel,
 }: {
-	onStart: () => void;
 	onResume: (id: string) => void;
 	onCancel: (id: string) => void;
 }) {
@@ -276,36 +253,32 @@ function OpenCheckoutsList({
 		id: string;
 		label: string;
 	} | null>(null);
+	// Cashier types the buyer's code (e.g. "K7") or name to find their checkout.
+	const [query, setQuery] = useState("");
+
+	const q = query.trim().toLowerCase();
+	const filtered = (sessions ?? []).filter((s) => {
+		if (!q) return true;
+		return (
+			(s.pairingCode?.toLowerCase().includes(q) ?? false) ||
+			(s.displayName?.toLowerCase().includes(q) ?? false)
+		);
+	});
+
+	function onSearchEnter() {
+		// One match → jump straight into it (the buyer just told you their code).
+		if (q && filtered.length === 1) onResume(filtered[0].sessionId);
+	}
 
 	return (
 		<div className="flex flex-col gap-4">
-			{/* Full-width card with the CTA inside it, so this header lines up with the
-			    open-checkout cards below (uniform width on desktop) instead of leaving a
-			    ragged button column beside it. */}
-			<div className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
-				<div>
-					<p className="text-sm font-semibold">Walk-in order desk</p>
-					<p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-						Start a QR checkout for each customer, then resume any open checkout
-						when they reach the counter.
-					</p>
-				</div>
-				<Button
-					onClick={onStart}
-					className="h-12 shrink-0 gap-2 px-5 text-base max-sm:w-full"
-				>
-					<Plus className="size-5" />
-					Start checkout
-				</Button>
-			</div>
-
 			{sessions === undefined ? (
 				<p className="text-sm text-muted-foreground">Loading…</p>
 			) : sessions.length === 0 ? (
 				<EmptyCheckouts />
 			) : (
-				<div className="flex flex-col gap-2">
-					<div className="flex items-end justify-between gap-3">
+				<div className="flex flex-col gap-3">
+					<div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
 						<div>
 							<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 								Open checkouts
@@ -315,22 +288,44 @@ function OpenCheckoutsList({
 								days
 							</p>
 						</div>
-					</div>
-					<ul className="flex flex-col gap-2">
-						{sessions.map((s) => (
-							<SessionRow
-								key={s.sessionId}
-								session={s}
-								onResume={() => onResume(s.sessionId)}
-								onCancel={() =>
-									setPendingCancel({
-										id: s.sessionId,
-										label: s.displayName ?? "this buyer's checkout",
-									})
-								}
+						{/* Type the code the buyer shows you (or their name) to find them. */}
+						<div className="relative sm:w-64">
+							<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+							<Input
+								value={query}
+								onChange={(e) => setQuery(e.target.value)}
+								onKeyDown={(e) => {
+									if (e.key === "Enter") onSearchEnter();
+								}}
+								placeholder="Find by code or name…"
+								className="h-11 pl-9"
+								inputMode="text"
+								autoComplete="off"
 							/>
-						))}
-					</ul>
+						</div>
+					</div>
+					{filtered.length === 0 ? (
+						<p className="rounded-2xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
+							No checkout matches “{query}”.
+						</p>
+					) : (
+						<ul className="flex flex-col gap-2">
+							{filtered.map((s) => (
+								<SessionRow
+									key={s.sessionId}
+									session={s}
+									highlight={q.length > 0}
+									onResume={() => onResume(s.sessionId)}
+									onCancel={() =>
+										setPendingCancel({
+											id: s.sessionId,
+											label: s.displayName ?? "this buyer's checkout",
+										})
+									}
+								/>
+							))}
+						</ul>
+					)}
 				</div>
 			)}
 
@@ -352,8 +347,6 @@ function OpenCheckoutsList({
 					if (pendingCancel) onCancel(pendingCancel.id);
 				}}
 			/>
-
-			<StoreQrCard />
 		</div>
 	);
 }
@@ -367,16 +360,83 @@ function EmptyCheckouts() {
 			<div className="max-w-sm">
 				<h2 className="text-base font-semibold">No open checkouts</h2>
 				<p className="mt-1 text-sm text-muted-foreground">
-					When a buyer scans your store QR, their checkout appears here with a
-					code to match. Tap Show QR, or put up your printed poster.
+					Put up your store QR (top-right) or your printed poster. When a buyer
+					scans it, their checkout appears here with a code to match.
 				</p>
 			</div>
 		</div>
 	);
 }
 
+/**
+ * The one permanent store QR, compact in the page header. Tap to enlarge into a
+ * scannable view for a buyer standing at the counter. Token auto-provisions
+ * silently; rotating / printing the poster live on /app/poster.
+ */
+function StoreQrChip() {
+	const actAsRetailerId = useActAsRetailerId();
+	const storeQr = useQuery(api.counterCheckout.getStoreQr, {
+		retailerId: actAsRetailerId,
+	});
+	const ensureToken = useMutation(api.counterCheckout.ensureCounterQrToken);
+	const ensured = useRef(false);
+	const [open, setOpen] = useState(false);
+
+	useEffect(() => {
+		if (ensured.current) return;
+		if (storeQr === undefined || storeQr.token !== null) return;
+		ensured.current = true;
+		void ensureToken({ retailerId: actAsRetailerId }).catch(() => {
+			// non-fatal — the chip just stays hidden until it resolves
+		});
+	}, [storeQr, ensureToken, actAsRetailerId]);
+
+	if (!storeQr?.waUrl) return null;
+
+	return (
+		<>
+			<button
+				type="button"
+				onClick={() => setOpen(true)}
+				className="flex shrink-0 items-center gap-2 rounded-xl border border-border p-1.5 pr-3 transition-colors hover:bg-muted"
+				aria-label="Show store QR"
+			>
+				<span className="rounded-lg bg-white p-1">
+					<QRCode value={storeQr.waUrl} size={40} />
+				</span>
+				<span className="hidden text-sm font-medium text-muted-foreground sm:inline">
+					Show QR
+				</span>
+			</button>
+
+			<Dialog open={open} onOpenChange={setOpen}>
+				<DialogContent className="sm:max-w-sm">
+					<DialogHeader>
+						<DialogTitle>Ask the buyer to scan</DialogTitle>
+						<DialogDescription>
+							They scan, hit send, and appear in your checkouts list with a
+							short code to match.
+						</DialogDescription>
+					</DialogHeader>
+					<div className="mx-auto rounded-2xl border border-border bg-white p-4">
+						<QRCode value={storeQr.waUrl} size={220} />
+					</div>
+					<Link
+						to="/app/poster"
+						onClick={() => setOpen(false)}
+						className="text-center text-xs font-semibold text-accent-emphasis hover:underline"
+					>
+						Print an A4 poster or rotate this QR →
+					</Link>
+				</DialogContent>
+			</Dialog>
+		</>
+	);
+}
+
 function SessionRow({
 	session,
+	highlight,
 	onResume,
 	onCancel,
 }: {
@@ -391,12 +451,19 @@ function SessionRow({
 		boundAt: number | undefined;
 		expiresAt: number;
 	};
+	// When a search is active, ring the row so the match is obvious at a glance.
+	highlight?: boolean;
 	onResume: () => void;
 	onCancel: () => void;
 }) {
 	const since = session.boundAt ?? session.createdAt;
 	return (
-		<li className="flex items-center gap-3 rounded-2xl border border-border bg-card p-3 shadow-sm transition-shadow hover:shadow-md">
+		<li
+			className={cn(
+				"flex items-center gap-3 rounded-2xl border bg-card p-3 shadow-sm transition-shadow hover:shadow-md",
+				highlight ? "border-accent ring-1 ring-accent" : "border-border",
+			)}
+		>
 			<button
 				type="button"
 				onClick={onResume}
@@ -460,229 +527,20 @@ function timeAgo(epoch: number): string {
 	return `${Math.floor(hrs / 24)}d ago`;
 }
 
-/**
- * The permanent store QR card on the walk-in desk (86ey5m35w / 86ey5neg6).
- * Owns the counter QR's token lifecycle — Generate (idempotent) + Rotate (kills
- * old posters, confirm-gated) + a quick on-screen QR. Printing is deferred to
- * the deluxe A4 at /app/poster (one poster renderer, branded + EN/BM).
- */
-function StoreQrCard() {
-	const actAsRetailerId = useActAsRetailerId();
-	const storeQr = useQuery(api.counterCheckout.getStoreQr, {
-		retailerId: actAsRetailerId,
-	});
-	const ensureToken = useMutation(api.counterCheckout.ensureCounterQrToken);
-	const rotateToken = useMutation(api.counterCheckout.rotateCounterQrToken);
-	const [confirmRotate, setConfirmRotate] = useState(false);
-	const [busy, setBusy] = useState(false);
-
-	async function generate() {
-		setBusy(true);
-		try {
-			await ensureToken({ retailerId: actAsRetailerId });
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setBusy(false);
-		}
-	}
-
-	async function rotate() {
-		setBusy(true);
-		try {
-			await rotateToken({ retailerId: actAsRetailerId });
-			toast.success(
-				"New store QR generated — old printed posters no longer work.",
-			);
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setBusy(false);
-		}
-	}
-
-	return (
-		<section className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-4 sm:p-5">
-			<div>
-				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-					Your store QR
-				</p>
-				<p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-					One QR for the counter — show it here or print the poster. Buyers scan
-					it to connect, get your payment details, and appear above as a{" "}
-					<span className="font-medium text-foreground">Walk-in scan</span> with
-					a code to match.
-				</p>
-			</div>
-
-			{storeQr === undefined ? (
-				<p className="text-sm text-muted-foreground">Loading…</p>
-			) : storeQr.token === null ? (
-				<Button
-					type="button"
-					onClick={generate}
-					disabled={busy}
-					className="h-11 w-fit gap-2 max-sm:w-full"
-				>
-					<QrCode className="size-4" />
-					Generate store QR
-				</Button>
-			) : storeQr.waUrl ? (
-				<div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
-					<div className="rounded-2xl border border-border bg-white p-3 shadow-sm">
-						<QRCode value={storeQr.waUrl} size={144} />
-					</div>
-					<div className="flex flex-col gap-2">
-						<Button
-							asChild
-							variant="outline"
-							className="h-10 justify-start gap-2"
-						>
-							<Link to="/app/poster">
-								<Printer className="size-4" />
-								Print poster (A4)
-							</Link>
-						</Button>
-						<Button
-							type="button"
-							variant="outline"
-							onClick={() => setConfirmRotate(true)}
-							disabled={busy}
-							className="h-10 justify-start gap-2 text-muted-foreground"
-						>
-							<RefreshCw className="size-4" />
-							Rotate QR…
-						</Button>
-						<p className="max-w-xs text-xs text-muted-foreground">
-							This QR never expires. If a poster leaks or gets misused, rotate
-							it — old printed copies stop working immediately.
-						</p>
-					</div>
-				</div>
-			) : (
-				<div className="rounded-xl bg-destructive/10 px-4 py-3 text-sm text-destructive">
-					WhatsApp checkout number isn't configured for this deployment. Contact
-					support to enable Counter Checkout.
-				</div>
-			)}
-
-			<ConfirmDialog
-				open={confirmRotate}
-				onOpenChange={setConfirmRotate}
-				title="Rotate the store QR?"
-				description="A new QR is generated and every printed copy of the old one stops working immediately. You'll need to print and put up the new poster."
-				confirmLabel="Rotate QR"
-				cancelLabel="Keep current QR"
-				destructive
-				onConfirm={() => {
-					void rotate();
-				}}
-			/>
-		</section>
-	);
-}
-
-/**
- * Shown when the cashier taps "Start checkout": present the permanent store QR
- * big for the buyer to scan. No per-session token — when the buyer scans, a
- * walk-in session (with a pairing code) appears in the open-checkouts list.
- * Mints the token on first use so it's never blocked (mirrors /app/poster).
- */
-function ShowStoreQrScreen({
-	hasPaymentMethods,
-	onDone,
-}: {
-	hasPaymentMethods: boolean;
-	onDone: () => void;
-}) {
-	const actAsRetailerId = useActAsRetailerId();
-	const storeQr = useQuery(api.counterCheckout.getStoreQr, {
-		retailerId: actAsRetailerId,
-	});
-	const ensureToken = useMutation(api.counterCheckout.ensureCounterQrToken);
-	const ensured = useRef(false);
-
-	// Self-provision the token on first visit (idempotent) so the QR always shows.
-	useEffect(() => {
-		if (ensured.current) return;
-		if (storeQr === undefined || storeQr.token !== null) return;
-		ensured.current = true;
-		void ensureToken({ retailerId: actAsRetailerId }).catch(() => {
-			// non-fatal — the card below shows a retry state
-		});
-	}, [storeQr, ensureToken, actAsRetailerId]);
-
-	return (
-		<div className="mx-auto grid w-full max-w-4xl gap-5 rounded-2xl border border-border bg-card p-5 shadow-sm lg:grid-cols-[1fr_auto] lg:items-center lg:p-6">
-			<div className="flex flex-col gap-4 text-center lg:text-left">
-				<div>
-					<h2 className="text-2xl font-bold tracking-tight">
-						Ask the buyer to scan
-					</h2>
-					<p className="mt-2 text-sm text-muted-foreground">
-						They open WhatsApp's camera, scan, and hit send. They'll get a short
-						code — it also pops up in your checkouts list, so you know who's
-						who.
-					</p>
-					{hasPaymentMethods ? (
-						<p className="mt-2 text-xs text-muted-foreground">
-							💡 They'll also get your payment details right away, so they can
-							pay while you ring up.
-						</p>
-					) : null}
-				</div>
-				<div>
-					<Button onClick={onDone} variant="outline" className="h-11 gap-2">
-						<ArrowLeft className="size-4" />
-						Back to checkouts
-					</Button>
-				</div>
-			</div>
-
-			{storeQr?.waUrl ? (
-				<div className="mx-auto rounded-2xl border border-border bg-white p-4 shadow-sm">
-					<QRCode value={storeQr.waUrl} size={220} />
-				</div>
-			) : storeQr === undefined || storeQr.token === null ? (
-				<p className="text-sm text-muted-foreground">Loading…</p>
-			) : (
-				<div className="rounded-xl bg-destructive/10 px-4 py-3 text-sm text-destructive">
-					WhatsApp checkout number isn't configured for this deployment. Contact
-					support to enable Counter Checkout.
-				</div>
-			)}
-		</div>
-	);
-}
-
-function ExpiredScreen({
-	onRestart,
-	onBackToList,
-}: {
-	onRestart: () => void;
-	onBackToList: () => void;
-}) {
+function ExpiredScreen({ onBackToList }: { onBackToList: () => void }) {
 	return (
 		<div className="mx-auto flex w-full max-w-md flex-col items-center gap-4 rounded-2xl border border-border bg-card px-6 py-10 text-center">
 			<Clock className="size-10 text-muted-foreground" />
 			<div>
 				<h2 className="text-lg font-semibold">Checkout expired</h2>
 				<p className="mt-1 text-sm text-muted-foreground">
-					This checkout timed out. Start a fresh one to show a new QR.
+					This checkout timed out. The buyer can scan your store QR again to
+					start a new one.
 				</p>
 			</div>
-			<div className="flex w-full flex-col gap-2">
-				<Button onClick={onRestart} className="h-11 px-6">
-					Start new checkout
-				</Button>
-				<button
-					type="button"
-					onClick={onBackToList}
-					className="text-sm font-medium text-muted-foreground underline-offset-2 hover:underline"
-				>
-					Back to all checkouts
-				</button>
-			</div>
+			<Button onClick={onBackToList} className="h-11 px-6">
+				Back to all checkouts
+			</Button>
 		</div>
 	);
 }
@@ -692,14 +550,12 @@ function DoneScreen({
 	orderId,
 	paidInPerson,
 	buyerName,
-	onNew,
 	onBackToList,
 }: {
 	shortId: string | undefined;
 	orderId: Id<"orders"> | undefined;
 	paidInPerson: boolean;
 	buyerName: string | undefined;
-	onNew: () => void;
 	onBackToList: () => void;
 }) {
 	const updateStatus = useMutation(api.orders.updateStatus);
@@ -788,11 +644,11 @@ function DoneScreen({
 					</p>
 				) : null}
 				<Button
-					onClick={onNew}
+					onClick={onBackToList}
 					variant={canComplete ? "outline" : "default"}
 					className="h-11"
 				>
-					New checkout
+					Back to checkouts
 				</Button>
 				{shortId ? (
 					<Button asChild variant="outline" className="h-11">
@@ -805,13 +661,6 @@ function DoneScreen({
 						<Link to="/app/orders">Go to orders</Link>
 					</Button>
 				) : null}
-				<button
-					type="button"
-					onClick={onBackToList}
-					className="text-sm font-medium text-emerald-800/80 underline-offset-2 hover:underline sm:col-span-2"
-				>
-					Back to all checkouts
-				</button>
 			</div>
 		</div>
 	);
