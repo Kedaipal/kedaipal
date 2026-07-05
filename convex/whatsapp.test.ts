@@ -1051,71 +1051,52 @@ describe("whatsapp tracking-link token self-heal", () => {
 	});
 });
 
-describe("whatsapp inbound — Counter Checkout intent routing", () => {
-	test("KP-<token> binds the session and replies to the buyer", async () => {
+describe("whatsapp inbound — Counter Checkout store QR routing", () => {
+	test("KPS-<token> starts a walk-in session + replies with the pairing code", async () => {
 		const t = setup();
 		const { retailerId } = await seedRetailerWithLocale(t, "en");
-		const { sessionId, token } = await t
+		const { token } = await t
 			.withIdentity({ subject: USER })
-			.mutation(api.counterCheckout.createCheckoutSession, {});
+			.mutation(api.counterCheckout.ensureCounterQrToken, {});
 		const fetchMock = installFetchMock();
 
 		await t.action(internal.whatsapp.handleInbound, {
 			fromPhone: "60123456789",
-			text: `KP-${token}`,
+			text: `KPS-${token}`,
 			profileName: "Aiman",
 		});
 
-		// Session bound live.
-		const read = await t
-			.withIdentity({ subject: USER })
-			.query(api.counterCheckout.getCheckoutSession, { sessionId });
-		expect(read?.status).toBe("buyer_identified");
-		expect(read?.waPhone).toBe("60123456789");
+		const rows = await t.run(async (ctx) =>
+			ctx.db
+				.query("counterCheckoutSessions")
+				.withIndex("by_retailer_status", (q) =>
+					q.eq("retailerId", retailerId).eq("status", "buyer_identified"),
+				)
+				.collect(),
+		);
+		expect(rows).toHaveLength(1);
+		expect(rows[0].waPhone).toBe("60123456789");
 
-		// Buyer got a confirmation (not the generic fallback).
-		const reply = (
-			fetchMock.waCalls()[0].body as { text?: { body: string } }
-		).text?.body;
+		const reply =
+			(fetchMock.waCalls()[0].body as { text?: { body: string } }).text?.body ??
+			"";
 		expect(reply).toContain("connected to");
-		void retailerId;
+		// The buyer's pairing code is in the reply (bolded), so they can show it.
+		expect(reply).toContain(`*${rows[0].pairingCode}*`);
 		fetchMock.restore();
 	});
 
-	test("an expired KP-<token> tells the buyer the link expired (no bind)", async () => {
-		const t = setup();
-		await seedRetailerWithLocale(t, "en");
-		const { sessionId, token } = await t
-			.withIdentity({ subject: USER })
-			.mutation(api.counterCheckout.createCheckoutSession, {});
-		await t.run((ctx) => ctx.db.patch(sessionId, { expiresAt: Date.now() - 1 }));
-		const fetchMock = installFetchMock();
-
-		await t.action(internal.whatsapp.handleInbound, {
-			fromPhone: "60123456789",
-			text: `KP-${token}`,
-		});
-
-		const reply = (
-			fetchMock.waCalls()[0].body as { text?: { body: string } }
-		).text?.body;
-		expect(reply).toMatch(/expired/i);
-		const row = await t.run((ctx) => ctx.db.get(sessionId));
-		expect(row?.status).toBe("expired");
-		fetchMock.restore();
-	});
-
-	test("the bind reply is localized to the store's locale (ms)", async () => {
+	test("the reply is localized to the store's locale (ms)", async () => {
 		const t = setup();
 		await seedRetailerWithLocale(t, "ms");
 		const { token } = await t
 			.withIdentity({ subject: USER })
-			.mutation(api.counterCheckout.createCheckoutSession, {});
+			.mutation(api.counterCheckout.ensureCounterQrToken, {});
 		const fetchMock = installFetchMock();
 
 		await t.action(internal.whatsapp.handleInbound, {
 			fromPhone: "60123456789",
-			text: `KP-${token}`,
+			text: `KPS-${token}`,
 			profileName: "Aiman",
 		});
 
@@ -1178,10 +1159,12 @@ describe("counter order auto-send (notifyCounterOrderCreated)", () => {
 		fetchMock.restore();
 	});
 
-	test("pay-later → payment methods (bank details) + the INVOICE pdf", async () => {
+	test("pay-later → amount + transfer reference + INVOICE pdf, but NOT the repeated bank/QR block", async () => {
 		const t = setup();
 		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
-		// Give the store a bank method so the payment ask has details to send.
+		// Give the store a bank method. The buyer already received these details at
+		// scan-bind (notifyCounterCheckoutPayment), so the order-create message must
+		// NOT repeat them (86ey5kq7p) — it carries the amount + transfer ref instead.
 		await t.run((ctx) =>
 			ctx.db.patch(retailerId, {
 				paymentMethods: [
@@ -1204,17 +1187,271 @@ describe("counter order auto-send (notifyCounterOrderCreated)", () => {
 		await t.action(internal.whatsapp.notifyCounterOrderCreated, { orderId });
 		const wa = fetchMock.waCalls();
 
-		// Invoice (not receipt) document.
+		// Invoice (not receipt) document still sent.
 		const doc = wa.find(
 			(c) => (c.body as { type?: string })?.type === "document",
 		);
 		expect(
 			(doc?.body as { document?: { filename?: string } }).document?.filename,
 		).toBe(`Invoice-${shortId}.pdf`);
-		// Payment methods pushed to the buyer: the bank number + transfer reference.
 		const combined = wa.map((c) => waText(c.body)).join("\n");
-		expect(combined).toContain("1234567890");
+		// Transfer reference kept (now we have the shortId), bank block dropped.
 		expect(combined).toContain(shortId); // "Use ORD-XXXX as your transfer reference"
+		expect(combined).not.toContain("1234567890");
+		expect(combined).not.toContain("Payment details");
+		fetchMock.restore();
+	});
+});
+
+describe("counter checkout — pay-at-bind payment info (86ey5kq7p)", () => {
+	function waText(body: unknown): string {
+		const b = body as {
+			text?: { body?: string };
+			interactive?: { body?: { text?: string } };
+		};
+		return b?.text?.body ?? b?.interactive?.body?.text ?? "";
+	}
+	function bankMethod() {
+		return {
+			type: "bank" as const,
+			label: "Maybank",
+			bankName: "Maybank",
+			bankAccountName: "Test Outdoor",
+			bankAccountNumber: "1234567890",
+			sortOrder: 0,
+		};
+	}
+
+	test("notifyCounterCheckoutPayment sends the intro + payment methods block", async () => {
+		const t = setup();
+		const { retailerId } = await seedRetailerWithLocale(t, "en");
+		await t.run((ctx) =>
+			ctx.db.patch(retailerId, { paymentMethods: [bankMethod()] }),
+		);
+		const fetchMock = installFetchMock();
+
+		await t.action(internal.whatsapp.notifyCounterCheckoutPayment, {
+			retailerId,
+			toPhone: "60123456789",
+			storeName: "Test Outdoor",
+			locale: "en",
+		});
+
+		const combined = fetchMock
+			.waCalls()
+			.map((c) => waText(c.body))
+			.join("\n");
+		expect(combined).toContain("whenever you're ready"); // intro copy
+		expect(combined).toContain("1234567890"); // bank details pushed early
+		fetchMock.restore();
+	});
+
+	test("notifyCounterCheckoutPayment no-ops when the seller has no payment methods", async () => {
+		const t = setup();
+		const { retailerId } = await seedRetailerWithLocale(t, "en");
+		const fetchMock = installFetchMock();
+
+		await t.action(internal.whatsapp.notifyCounterCheckoutPayment, {
+			retailerId,
+			toPhone: "60123456789",
+			storeName: "Test Outdoor",
+			locale: "en",
+		});
+
+		expect(fetchMock.waCalls()).toHaveLength(0);
+		fetchMock.restore();
+	});
+
+	test("a KPS-<token> poster scan starts a walk-in session, acks, and pushes payment", async () => {
+		const t = setup();
+		const { retailerId } = await seedRetailerWithLocale(t, "en");
+		await t.run((ctx) =>
+			ctx.db.patch(retailerId, { paymentMethods: [bankMethod()] }),
+		);
+		const { token } = await t
+			.withIdentity({ subject: USER })
+			.mutation(api.counterCheckout.ensureCounterQrToken, {});
+		const fetchMock = installFetchMock();
+
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: `Hi! I'd like to order.\n\nStore ref: KPS-${token}`,
+			profileName: "Aiman",
+		});
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+		// A bound walk-in session now exists on the seller's list.
+		const rows = await t.run(async (ctx) =>
+			ctx.db
+				.query("counterCheckoutSessions")
+				.withIndex("by_retailer_status", (q) =>
+					q.eq("retailerId", retailerId).eq("status", "buyer_identified"),
+				)
+				.collect(),
+		);
+		expect(rows).toHaveLength(1);
+		expect(rows[0].origin).toBe("store_qr");
+
+		const bodies = fetchMock.waCalls().map((c) => waText(c.body));
+		expect(bodies[0]).toContain("connected to"); // storeQrConnected ack
+		expect(bodies[0]).toContain("kedaipal.com/privacy"); // PDPA notice at collection
+		expect(bodies.join("\n")).toContain("1234567890"); // pay-at-scan details
+		fetchMock.restore();
+	});
+
+	test("an unknown/rotated KPS token gets a generic reply, no session, no store leak", async () => {
+		const t = setup();
+		await seedRetailerWithLocale(t, "en");
+		const fetchMock = installFetchMock();
+
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: "KPS-Zz99Yy88Xx77Ww66Vv55Uu44",
+		});
+		await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+		const body = waText(fetchMock.waCalls()[0]?.body);
+		expect(body).not.toContain("connected to");
+		expect(body).not.toContain("Test Outdoor");
+		fetchMock.restore();
+	});
+});
+
+describe("drop-off + custom-stage status copy (86ey570am)", () => {
+	test("notifyStatusChange uses drop-off wording when the pickup snapshot is drop_off", async () => {
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: shortId,
+		});
+		fetchMock.calls.length = 0;
+
+		const order = await t.query(api.orders.get, {
+			token: await tk(t, shortId),
+		});
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order!._id, {
+				status: "packed",
+				deliveryMethod: "self_collect",
+				pickupSnapshot: {
+					label: "Bearcamp HQ",
+					address: "LOT D, 2, JALAN MP54, Sungai Buloh",
+					locationType: "drop_off",
+				},
+			});
+		});
+		await t.action(internal.whatsapp.notifyStatusChange, {
+			orderId: order!._id,
+		});
+		const body = (fetchMock.waCalls()[0].body as { text: { body: string } })
+			.text.body;
+		expect(body).toContain("ready for the drop-off point");
+		expect(body).not.toContain("ready for pickup");
+		fetchMock.restore();
+	});
+
+	test("notifyStatusChange uses the custom stage label + description on anchor crossings", async () => {
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const asUser = t.withIdentity({ subject: USER });
+		await asUser.mutation(api.retailers.updateSettings, {
+			orderStages: [
+				{ anchor: "confirmed", label: { en: "Accepted" }, notify: true },
+				{ anchor: "packed", label: { en: "Cleaning" }, notify: true },
+				{
+					anchor: "shipped",
+					label: { en: "Ready for Collection" },
+					description: { en: "Please collect within 14 days." },
+					notify: true,
+				},
+				{ anchor: "delivered", label: { en: "Collected" }, notify: true },
+			],
+		});
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: shortId,
+		});
+		fetchMock.calls.length = 0;
+
+		const order = await t.query(api.orders.get, {
+			token: await tk(t, shortId),
+		});
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order!._id, { status: "shipped" });
+		});
+		await t.action(internal.whatsapp.notifyStatusChange, {
+			orderId: order!._id,
+		});
+		const body = (fetchMock.waCalls()[0].body as { text: { body: string } })
+			.text.body;
+		expect(body).toContain(`Order ${shortId} update: Ready for Collection.`);
+		expect(body).toContain("Please collect within 14 days.");
+		expect(body).not.toContain("on the way");
+		fetchMock.restore();
+	});
+
+	test("an authored template override still beats the custom stage copy", async () => {
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const asUser = t.withIdentity({ subject: USER });
+		await asUser.mutation(api.retailers.updateSettings, {
+			orderStages: [
+				{ anchor: "confirmed", label: { en: "Accepted" }, notify: true },
+				{ anchor: "packed", label: { en: "Cleaning" }, notify: true },
+			],
+			messageTemplates: { en: { packed: "Custom packed {shortId}" } },
+		});
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: shortId,
+		});
+		fetchMock.calls.length = 0;
+
+		const order = await t.query(api.orders.get, {
+			token: await tk(t, shortId),
+		});
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order!._id, { status: "packed" });
+		});
+		await t.action(internal.whatsapp.notifyStatusChange, {
+			orderId: order!._id,
+		});
+		const body = (fetchMock.waCalls()[0].body as { text: { body: string } })
+			.text.body;
+		expect(body).toBe(`Custom packed ${shortId}`);
+		fetchMock.restore();
+	});
+
+	test("default stages keep the rich canonical copy (zero regression)", async () => {
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: shortId,
+		});
+		fetchMock.calls.length = 0;
+
+		const order = await t.query(api.orders.get, {
+			token: await tk(t, shortId),
+		});
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order!._id, { status: "shipped" });
+		});
+		await t.action(internal.whatsapp.notifyStatusChange, {
+			orderId: order!._id,
+		});
+		const body = (fetchMock.waCalls()[0].body as { text: { body: string } })
+			.text.body;
+		expect(body).toContain("on the way");
 		fetchMock.restore();
 	});
 });

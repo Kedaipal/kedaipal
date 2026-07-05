@@ -295,7 +295,9 @@ describe("groupVariantRows helpers (independently testable)", () => {
 
 	test("inferAxes errors on a no-option product spanning >1 row", () => {
 		const out = inferAxes([row({}), row({ rowNumber: 3 })]);
-		expect("error" in out && out.error.errors[0]).toMatch(/spans multiple rows/);
+		expect("error" in out && out.error.errors[0]).toMatch(
+			/spans multiple rows/,
+		);
 	});
 
 	test("dedupeProvidedVariants keys by canonical casing", () => {

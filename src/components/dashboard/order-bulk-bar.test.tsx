@@ -12,52 +12,61 @@ import { type BulkAction, OrderBulkBar } from "./order-bulk-bar";
 afterEach(cleanup);
 
 const actions: BulkAction[] = [
+	{ status: "confirmed", label: "Confirm" },
 	{ status: "packed", label: "Packed" },
 	{ status: "cancelled", label: "Cancel orders", destructive: true },
 ];
 
+function renderBar(
+	overrides: Partial<Parameters<typeof OrderBulkBar>[0]> = {},
+) {
+	const props = {
+		count: 2,
+		actions,
+		allSelected: false,
+		onApply: vi.fn(),
+		onToggleSelectAll: vi.fn(),
+		onExit: vi.fn(),
+		...overrides,
+	};
+	render(<OrderBulkBar {...props} />);
+	return props;
+}
+
 describe("OrderBulkBar", () => {
-	it("shows the selected count and clears on the X", () => {
-		const onClear = vi.fn();
-		render(
-			<OrderBulkBar
-				count={3}
-				actions={actions}
-				onApply={vi.fn()}
-				onClear={onClear}
-			/>,
-		);
+	it("shows the selected count and exits on the X", () => {
+		const { onExit } = renderBar({ count: 3 });
 		expect(screen.getByText("3 selected")).toBeTruthy();
-		fireEvent.click(screen.getByRole("button", { name: /clear selection/i }));
-		expect(onClear).toHaveBeenCalled();
+		fireEvent.click(screen.getByRole("button", { name: /exit select mode/i }));
+		expect(onExit).toHaveBeenCalled();
 	});
 
-	it("applies a non-destructive status immediately (no confirm)", () => {
+	it("shows a hint and disables the status dropdown with nothing selected", () => {
+		renderBar({ count: 0 });
+		expect(screen.getByText("Select orders")).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /update status/i }),
+		).toHaveProperty("disabled", true);
+	});
+
+	it("toggles select-all", () => {
+		const { onToggleSelectAll } = renderBar({ allSelected: false });
+		fireEvent.click(screen.getByRole("button", { name: /select all/i }));
+		expect(onToggleSelectAll).toHaveBeenCalled();
+	});
+
+	it("applies a forward status from the dropdown (no confirm)", () => {
 		const onApply = vi.fn();
-		render(
-			<OrderBulkBar
-				count={2}
-				actions={actions}
-				onApply={onApply}
-				onClear={vi.fn()}
-			/>,
-		);
-		fireEvent.click(screen.getByRole("button", { name: /mark as/i }));
+		renderBar({ onApply });
+		fireEvent.click(screen.getByRole("button", { name: /update status/i }));
 		fireEvent.click(screen.getByRole("button", { name: "Packed" }));
 		expect(onApply).toHaveBeenCalledWith("packed");
 	});
 
 	it("gates the destructive action behind a confirm dialog", () => {
 		const onApply = vi.fn();
-		render(
-			<OrderBulkBar
-				count={2}
-				actions={actions}
-				onApply={onApply}
-				onClear={vi.fn()}
-			/>,
-		);
-		fireEvent.click(screen.getByRole("button", { name: /mark as/i }));
+		renderBar({ onApply });
+		fireEvent.click(screen.getByRole("button", { name: /update status/i }));
 		fireEvent.click(screen.getByRole("button", { name: "Cancel orders" }));
 		// Does NOT apply yet — a confirm dialog opens.
 		expect(onApply).not.toHaveBeenCalled();
@@ -69,15 +78,8 @@ describe("OrderBulkBar", () => {
 
 	it("awaits a rejecting destructive apply and keeps the confirm open for retry", async () => {
 		const onApply = vi.fn().mockRejectedValue(new Error("boom"));
-		render(
-			<OrderBulkBar
-				count={2}
-				actions={actions}
-				onApply={onApply}
-				onClear={vi.fn()}
-			/>,
-		);
-		fireEvent.click(screen.getByRole("button", { name: /mark as/i }));
+		renderBar({ onApply });
+		fireEvent.click(screen.getByRole("button", { name: /update status/i }));
 		fireEvent.click(screen.getByRole("button", { name: "Cancel orders" }));
 		fireEvent.click(screen.getByRole("button", { name: /cancel 2 orders/i }));
 
@@ -88,15 +90,8 @@ describe("OrderBulkBar", () => {
 
 	it("does not apply when the destructive confirm is dismissed", () => {
 		const onApply = vi.fn();
-		render(
-			<OrderBulkBar
-				count={2}
-				actions={actions}
-				onApply={onApply}
-				onClear={vi.fn()}
-			/>,
-		);
-		fireEvent.click(screen.getByRole("button", { name: /mark as/i }));
+		renderBar({ onApply });
+		fireEvent.click(screen.getByRole("button", { name: /update status/i }));
 		fireEvent.click(screen.getByRole("button", { name: "Cancel orders" }));
 		fireEvent.click(screen.getByRole("button", { name: /keep orders/i }));
 		expect(onApply).not.toHaveBeenCalled();

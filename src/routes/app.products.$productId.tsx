@@ -1,5 +1,6 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
+import { Archive, ArchiveRestore, ArrowLeft } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import {
@@ -106,15 +107,33 @@ function EditProductRoute() {
 					)
 				}
 			/>
-			<div className="flex items-center gap-2 lg:hidden">
+			{/* Mobile header — back button, title, live/archived indicator (mirrors
+			    the archive state so it's visible from the top of a long form). */}
+			<div className="flex items-center gap-3 lg:hidden">
 				<Link
 					to="/app/products"
-					className="text-sm text-muted-foreground hover:text-foreground"
+					aria-label="Back to products"
+					className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted"
 				>
-					← Products
+					<ArrowLeft className="size-5" />
 				</Link>
+				<h2 className="min-w-0 flex-1 truncate font-heading text-lg font-extrabold leading-tight">
+					Edit product
+				</h2>
+				{product.active ? (
+					<span className="flex shrink-0 items-center gap-1.5 text-[13px] font-semibold text-accent-emphasis">
+						<span
+							className="inline-block size-2 rounded-full bg-accent"
+							aria-hidden="true"
+						/>
+						Live
+					</span>
+				) : (
+					<span className="shrink-0 text-[13px] font-semibold text-muted-foreground">
+						Archived
+					</span>
+				)}
 			</div>
-			<h2 className="text-xl font-bold lg:hidden">Edit product</h2>
 
 			<ProductForm
 				key={product._id}
@@ -143,6 +162,36 @@ function EditProductRoute() {
 					})),
 				}}
 				submitLabel="Save changes"
+				stickyAction={
+					product.active ? (
+						<Button
+							type="button"
+							variant="outline"
+							size="icon"
+							className="size-12 shrink-0 rounded-xl bg-background text-destructive hover:bg-destructive/10 hover:text-destructive"
+							aria-label="Archive product"
+							onClick={async () => {
+								await archive({ productId: product._id });
+								navigate({ to: "/app/products" });
+							}}
+						>
+							<Archive className="size-5" />
+						</Button>
+					) : (
+						<Button
+							type="button"
+							variant="outline"
+							size="icon"
+							className="size-12 shrink-0 rounded-xl bg-background"
+							aria-label="Restore product"
+							onClick={async () => {
+								await update({ productId: product._id, active: true });
+							}}
+						>
+							<ArchiveRestore className="size-5" />
+						</Button>
+					)
+				}
 				onSubmit={async (values) => {
 					// Product-level scalar fields, then the option axes + variant grid.
 					// The hard-block + mockup flags now live per-variant on the grid
@@ -162,29 +211,6 @@ function EditProductRoute() {
 					navigate({ to: "/app/products" });
 				}}
 			/>
-
-			{product.active ? (
-				<Button
-					variant="secondary"
-					className="h-11 lg:hidden"
-					onClick={async () => {
-						await archive({ productId: product._id });
-						navigate({ to: "/app/products" });
-					}}
-				>
-					Archive product
-				</Button>
-			) : (
-				<Button
-					variant="secondary"
-					className="h-11 lg:hidden"
-					onClick={async () => {
-						await update({ productId: product._id, active: true });
-					}}
-				>
-					Restore product
-				</Button>
-			)}
 		</div>
 	);
 }

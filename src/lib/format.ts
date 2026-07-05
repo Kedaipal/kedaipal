@@ -117,3 +117,38 @@ export function formatPrice(minorUnits: number, currency: string): string {
 		return `${currency} ${major.toFixed(2)}`;
 	}
 }
+
+/**
+ * Price for tight display slots (stat tiles, list edges) where a lifetime
+ * figure like "RM 2,225,481.50" physically doesn't fit. Precision degrades
+ * only as magnitude grows — sen matter on an order, not on a lifetime total:
+ *   < RM 10,000    → full, with sen ("RM 1,240.50")
+ *   < RM 1,000,000 → whole ringgit ("RM 37,720")
+ *   ≥ RM 1,000,000 → compact ("RM 2.23M")
+ * Pair with a `title` attr carrying the full formatPrice value where hover
+ * exists. Exact amounts (order totals, amounts to pay) keep formatPrice.
+ */
+export function formatPriceCompact(
+	minorUnits: number,
+	currency: string,
+): string {
+	const major = minorUnits / 100;
+	if (major < 10_000) return formatPrice(minorUnits, currency);
+	try {
+		return new Intl.NumberFormat("en-MY", {
+			style: "currency",
+			currency,
+			...(major < 1_000_000
+				? { maximumFractionDigits: 0 }
+				: {
+						notation: "compact" as const,
+						// min 0 so round millions read "RM 1M", not "RM 1.00M" (the
+						// currency default minimum of 2 leaks into compact notation).
+						minimumFractionDigits: 0,
+						maximumFractionDigits: 2,
+					}),
+		}).format(major);
+	} catch {
+		return `${currency} ${Math.round(major).toLocaleString("en-MY")}`;
+	}
+}

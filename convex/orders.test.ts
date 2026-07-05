@@ -2872,6 +2872,11 @@ describe("orders — inbox search", () => {
 			completed: 1,
 			cancelled: 1,
 			mockupPending: 0,
+			// No fulfilment dates set → nothing due today. The two OPEN orders
+			// (o1 pending, o2 confirmed) are unpaid; completed/cancelled never count.
+			dueToday: 0,
+			unpaid: 2,
+			unpaidAmount: o1.total + o2.total,
 		});
 		expect(all.total).toBe(4);
 
@@ -2910,6 +2915,59 @@ describe("orders — inbox search", () => {
 			searchText: o1.shortId,
 		});
 		expect(byId.orders.map((o) => o._id)).toContain(o1._id);
+	});
+
+	test("counts.dueToday tracks open orders due today; unpaid excludes received", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 100 });
+		const asA = t.withIdentity({ subject: USER_A });
+
+		// Due today (open) — counts toward dueToday.
+		const { shortId: s1 } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Aina" },
+			deliveryAddress: validAddress,
+			fulfilmentDate: todayMytMidnight(),
+		});
+		// Due tomorrow — open, but not today.
+		const { shortId: s2 } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Tan" },
+			deliveryAddress: validAddress,
+			fulfilmentDate: todayMytMidnight() + DAY_MS,
+		});
+		const o1 = await t.query(api.orders.get, { token: await tk(t, s1) });
+		const o2 = await t.query(api.orders.get, { token: await tk(t, s2) });
+		if (!o1 || !o2) throw new Error("no order");
+
+		// Paying o1 removes it from unpaid (it stays open + due today).
+		await asA.mutation(api.orders.markPaymentReceived, { orderId: o1._id });
+
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		expect(res.counts.dueToday).toBe(1);
+		expect(res.counts.unpaid).toBe(1);
+		expect(res.counts.unpaidAmount).toBe(o2.total);
+
+		// A delivered order due today is no longer "due" work.
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: o1._id,
+			status: "delivered",
+		});
+		const after = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		expect(after.counts.dueToday).toBe(0);
 	});
 
 	test("payment filter treats undefined as unpaid", async () => {

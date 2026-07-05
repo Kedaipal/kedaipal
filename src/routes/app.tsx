@@ -137,14 +137,16 @@ function AppShell() {
 				isAdmin={isAdmin}
 				adminBadge={adminOwnStore}
 			/>
-			<div className="mx-auto flex w-full max-w-md flex-1 flex-col lg:mx-0 lg:max-w-none">
+			<div className="mx-auto flex w-full max-w-md flex-1 flex-col lg:mx-0 lg:max-w-none print:max-w-none">
 				{retailer?.actingAsAdmin ? (
-					<ActingAsBanner storeName={retailer.storeName} />
+					<div className="print:hidden">
+						<ActingAsBanner storeName={retailer.storeName} />
+					</div>
 				) : null}
 				<MobileHeader retailer={retailer} adminBadge={adminOwnStore} />
 				{/* Store-specific banners only when operating a store. */}
 				{retailer ? (
-					<>
+					<div className="print:hidden">
 						<SendingPausedBanner
 							paused={retailer.sendingPaused}
 							reason={retailer.sendingPauseReason}
@@ -164,9 +166,9 @@ function AppShell() {
 								slug={retailer.slug}
 							/>
 						)}
-					</>
+					</div>
 				) : null}
-				<main className="flex-1 px-5 py-6 lg:mx-auto lg:w-full lg:max-w-6xl lg:px-8 lg:py-8">
+				<main className="flex-1 px-5 py-6 lg:mx-auto lg:w-full lg:max-w-6xl lg:px-8 lg:py-8 print:max-w-none print:p-0">
 					<Outlet />
 				</main>
 				<BottomNav actionableCount={actionableCount} adminOnly={!retailer} />

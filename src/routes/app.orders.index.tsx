@@ -1,16 +1,14 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useConvex, useMutation, useQuery } from "convex/react";
 import {
-	AlertCircle,
 	CalendarDays,
 	Check,
 	ChevronRight,
 	Download,
+	ListChecks,
 	Loader2,
-	Package,
 	Search,
 	ShoppingBag,
-	Truck,
 	X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -18,12 +16,19 @@ import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import type { FulfilmentWindow } from "../../convex/lib/fulfilmentDate";
-import { INBOX_BUCKETS, type OrderBucket } from "../../convex/lib/orderBuckets";
+import {
+	formatStatusAge,
+	INBOX_BUCKETS,
+	type OrderBucket,
+} from "../../convex/lib/orderBuckets";
 import {
 	isOrderPaymentMethod,
 	type OrderPaymentMethod,
 } from "../../convex/lib/paymentMethod";
-import { FulfilmentDateBadge } from "../components/dashboard/fulfilment-date-badge";
+import {
+	DeliveryMethodIcon,
+	OrderContextBadge,
+} from "../components/dashboard/order-badges";
 import {
 	type BulkAction,
 	OrderBulkBar,
@@ -33,9 +38,13 @@ import {
 	type OrderFilterValue,
 	type PaymentStatus,
 } from "../components/dashboard/order-filters";
-import { OrderTimeBadge } from "../components/dashboard/order-time-badge";
 import { PageHeader } from "../components/dashboard/page-header";
+import {
+	type OrderStatus,
+	StatusBadge,
+} from "../components/dashboard/status-badge";
 import { Button } from "../components/ui/button";
+import { FilterChip, FilterChipRow } from "../components/ui/filter-chip";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
@@ -72,15 +81,10 @@ type InboxSearch = {
 	to?: number;
 	/** Cross-cutting "needs mockup" toggle. */
 	mockup?: boolean;
-	/** Fulfilment-date urgency chip (Today / Tomorrow / This week). */
+	/** Fulfilment-date urgency window (Today / Tomorrow / This week). */
 	fwin?: FulfilmentWindow;
 };
 
-const FULFILMENT_WINDOWS: { value: FulfilmentWindow; label: string }[] = [
-	{ value: "today", label: "Today" },
-	{ value: "tomorrow", label: "Tomorrow" },
-	{ value: "this_week", label: "This week" },
-];
 function isFulfilmentWindow(x: unknown): x is FulfilmentWindow {
 	return x === "today" || x === "tomorrow" || x === "this_week";
 }
@@ -132,14 +136,6 @@ export const Route = createFileRoute("/app/orders/")({
 	component: OrdersRoute,
 });
 
-type OrderStatus =
-	| "pending"
-	| "confirmed"
-	| "packed"
-	| "shipped"
-	| "delivered"
-	| "cancelled";
-
 const PAGE_SIZE = 50;
 
 function OrdersRoute() {
@@ -165,9 +161,11 @@ function OrdersRoute() {
 	const debounced = useDebounce(searchInput.trim(), 250);
 	const [limit, setLimit] = useState(PAGE_SIZE);
 
-	// Multi-select (bulk actions). Checkboxes are always shown; tapping the card
-	// still opens the order. Selection clears whenever the view changes (different
-	// result set) — see the reset effect below.
+	// Multi-select (bulk actions). Checkboxes stay hidden until the seller taps the
+	// header "Select" button, so the default card keeps its full width for what
+	// sellers scan for (name, money). Selection clears whenever the view changes
+	// (different result set).
+	const [selectMode, setSelectMode] = useState(false);
 	const [selected, setSelected] = useState<Set<string>>(new Set());
 	const [bulkBusy, setBulkBusy] = useState(false);
 
@@ -223,8 +221,8 @@ function OrdersRoute() {
 	const loading = result === undefined;
 	const orders = result?.orders ?? [];
 	// Bucket counts are independent of the active filters, so retain the last
-	// known set across refetches — otherwise the chips + "Needs mockup" toggle
-	// would flicker out every time a filter changes (the query reloads).
+	// known set across refetches — otherwise the chips + due-today banner would
+	// flicker out every time a filter changes (the query reloads).
 	if (result?.counts) countsRef.current = result.counts;
 	const counts = result?.counts ?? countsRef.current ?? undefined;
 	const total = result?.total ?? 0;
@@ -251,13 +249,6 @@ function OrdersRoute() {
 		});
 	}
 
-	function setFwin(next: FulfilmentWindow) {
-		// Toggle: tapping the active chip clears it.
-		navigate({
-			search: (prev) => ({ ...prev, fwin: fwin === next ? undefined : next }),
-		});
-	}
-
 	function setFilters(next: OrderFilterValue) {
 		navigate({
 			search: (prev) => ({
@@ -268,6 +259,7 @@ function OrdersRoute() {
 				from: next.from,
 				to: next.to,
 				mockup: next.mockup ? true : undefined,
+				fwin: next.fwin,
 			}),
 		});
 	}
@@ -291,21 +283,20 @@ function OrdersRoute() {
 			return next;
 		});
 	}
-	function selectAllOnPage() {
-		setSelected(allSelected ? new Set() : new Set(visibleIds));
-	}
-	function clearSelection() {
+	function exitSelectMode() {
+		setSelectMode(false);
 		setSelected(new Set());
 	}
+	function toggleSelectAll() {
+		setSelected(allSelected ? new Set() : new Set(visibleIds));
+	}
 
-	// Bulk targets — the canonical forward transitions, resolved to the retailer's
-	// labels (matching the row badges). "Cancel" is destructive.
-	const bulkActions: BulkAction[] = [
-		"confirmed",
-		"packed",
-		"shipped",
-		"delivered",
-	]
+	// Bulk targets — the canonical forward transitions (resolved to the retailer's
+	// labels, matching the row badges) then the destructive Cancel, all in one
+	// "Update status" dropdown. No primary/overflow split.
+	const bulkActions: BulkAction[] = (
+		["confirmed", "packed", "shipped", "delivered"] as const
+	)
 		.map((s) => ({
 			status: s as BulkAction["status"],
 			label: resolveAnchorLabel(s as OrderStatus, {
@@ -330,7 +321,11 @@ function OrdersRoute() {
 					? `Updated ${res.updated} · skipped ${res.skipped}`
 					: `Updated ${res.updated} order${res.updated === 1 ? "" : "s"}`,
 			);
-			clearSelection();
+			// Clear the selection but STAY in select mode — the bulk bar (and the
+			// Radix layers it owns) must not unmount while a popover/confirm dialog
+			// may still be closing, or `pointer-events:none` leaks onto the body and
+			// freezes the page. The seller can keep selecting or tap X to exit.
+			setSelected(new Set());
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 			// Rethrow so the destructive confirm dialog stays open for a retry; the
@@ -387,6 +382,41 @@ function OrdersRoute() {
 		}
 	}
 
+	const headerActions = (
+		<>
+			<Button
+				type="button"
+				variant={selectMode ? "secondary" : "outline"}
+				size="icon"
+				className="size-11 rounded-xl"
+				aria-pressed={selectMode}
+				aria-label={selectMode ? "Exit select mode" : "Select orders"}
+				onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+			>
+				<ListChecks className="size-5" />
+			</Button>
+			<Button
+				type="button"
+				variant="outline"
+				size="icon"
+				className="size-11 rounded-xl"
+				onClick={handleExport}
+				disabled={exporting}
+				aria-label={
+					selected.size > 0
+						? `Export ${selected.size} selected orders`
+						: "Export CSV"
+				}
+			>
+				{exporting ? (
+					<Loader2 className="size-5 animate-spin" />
+				) : (
+					<Download className="size-5" />
+				)}
+			</Button>
+		</>
+	);
+
 	return (
 		<div className="flex flex-col gap-4 lg:gap-5">
 			<PageHeader
@@ -394,61 +424,32 @@ function OrdersRoute() {
 				subtitle={
 					loading ? "Loading…" : `${total} order${total === 1 ? "" : "s"}`
 				}
-				actions={
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						onClick={handleExport}
-						disabled={exporting}
-					>
-						{exporting ? (
-							<Loader2 className="size-4 animate-spin" />
-						) : (
-							<Download className="size-4" />
-						)}
-						{selected.size > 0 ? `Export ${selected.size}` : "Export CSV"}
-					</Button>
-				}
+				actions={headerActions}
 			/>
-			<div className="flex items-center justify-between lg:hidden">
-				<div>
-					<h2 className="text-xl font-bold">Orders</h2>
-					<p className="text-sm text-muted-foreground">
-						{loading ? "Loading…" : `${total} total`}
+			<div className="flex items-center justify-between gap-3 lg:hidden">
+				<div className="min-w-0">
+					<h2 className="font-heading text-[22px] font-extrabold leading-tight tracking-tight">
+						Orders
+					</h2>
+					<p className="text-[13px] text-muted-foreground">
+						{loading ? "Loading…" : `${total} order${total === 1 ? "" : "s"}`}
 					</p>
 				</div>
-				<Button
-					type="button"
-					variant="outline"
-					size="sm"
-					onClick={handleExport}
-					disabled={exporting}
-				>
-					{exporting ? (
-						<Loader2 className="size-4 animate-spin" />
-					) : (
-						<Download className="size-4" />
-					)}
-					{selected.size > 0 ? `Export ${selected.size}` : "Export CSV"}
-				</Button>
+				<div className="flex shrink-0 items-center gap-2">{headerActions}</div>
 			</div>
 
-			<OrderInboxOverview
-				counts={counts}
-				allCount={allCount}
-				loading={loading}
-			/>
-
-			<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-3 shadow-sm lg:p-4">
-				<div className="grid gap-3 lg:grid-cols-[minmax(18rem,1fr)_auto] lg:items-center">
-					<div className="relative">
+			{/* One control surface: search + filter trigger on a row, bucket chips
+			    below, applied-filter tokens wrap underneath. Everything else lives
+			    in the filter sheet or the contextual banner. */}
+			<section className="flex flex-col gap-3">
+				<div className="flex flex-wrap items-center gap-2">
+					<div className="relative min-w-0 flex-1">
 						<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
 						<Input
 							value={searchInput}
 							onChange={(e) => setSearchInput(e.target.value)}
-							placeholder="Search order #, name, phone or item"
-							className="h-11 rounded-xl pl-9 pr-9"
+							placeholder="Order #, name, phone, item"
+							className="h-11 rounded-xl border-border bg-card pl-9 pr-9"
 							inputMode="search"
 						/>
 						{searchInput ? (
@@ -471,102 +472,63 @@ function OrdersRoute() {
 							from,
 							to,
 							mockup,
+							fwin,
 						}}
 						onChange={setFilters}
 						mockupCount={counts?.mockupPending}
+						resultCount={loading ? undefined : total}
 					/>
 				</div>
 
-				<div className="-mx-3 flex gap-2 overflow-x-auto px-3 pb-1 [scrollbar-width:none] lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0 [&::-webkit-scrollbar]:hidden">
+				<FilterChipRow>
 					{BUCKET_KEYS.map((key) => {
 						const label =
 							key === "all"
 								? "All"
 								: (INBOX_BUCKETS.find((b) => b.key === key)?.label ?? key);
-						const count = bucketCount(key);
-						const active = bucket === key;
 						return (
-							<button
+							<FilterChip
 								key={key}
-								type="button"
+								selected={bucket === key}
 								onClick={() => setBucket(key)}
-								className={cn(
-									"flex h-10 shrink-0 items-center gap-1.5 rounded-xl border px-3.5 text-sm font-medium transition-colors",
-									active
-										? "border-accent bg-accent text-accent-foreground"
-										: "border-border bg-background text-muted-foreground hover:border-accent/40 hover:text-foreground",
-								)}
+								count={bucketCount(key)}
+								countTone={key === "new" ? "attention" : "muted"}
 							>
 								{label}
-								{count ? (
-									<span
-										className={cn(
-											"flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none",
-											active
-												? "bg-white/25 text-accent-foreground"
-												: key === "new"
-													? "bg-orange-500 text-white"
-													: "bg-muted text-muted-foreground",
-										)}
-									>
-										{count > 99 ? "99+" : count}
-									</span>
-								) : null}
-							</button>
+							</FilterChip>
 						);
 					})}
-				</div>
-
-				{/* Fulfilment-date urgency chips — a primary axis for F&B sellers
-				    ("what's due today?"), so they sit inline above the advanced
-				    filters, not buried in the filter sheet. */}
-				<div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
-					<span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
-						Due
-					</span>
-					{FULFILMENT_WINDOWS.map((w) => {
-						const active = fwin === w.value;
-						return (
-							<button
-								key={w.value}
-								type="button"
-								aria-pressed={active}
-								onClick={() => setFwin(w.value)}
-								className={cn(
-									"inline-flex h-10 items-center gap-1.5 rounded-xl border px-3.5 text-sm font-medium transition-colors",
-									active
-										? "border-accent bg-accent text-accent-foreground"
-										: "border-border bg-background text-muted-foreground hover:border-accent/40 hover:text-foreground",
-								)}
-							>
-								<CalendarDays className="size-3.5" aria-hidden="true" />
-								{w.label}
-							</button>
-						);
-					})}
-				</div>
+				</FilterChipRow>
 			</section>
 
-			{/* Selection toolbar — appears once at least one order is ticked. */}
-			{selected.size > 0 ? (
-				<div className="flex items-center justify-end gap-2">
-					<Button
-						variant="outline"
-						size="sm"
-						className="h-8"
-						onClick={selectAllOnPage}
-					>
-						{allSelected ? "Clear all" : "Select all"}
-					</Button>
-					<Button
-						variant="ghost"
-						size="sm"
-						className="h-8"
-						onClick={clearSelection}
-					>
-						Done
-					</Button>
-				</div>
+			{/* Contextual due-today banner — only appears when something is due and
+			    the seller isn't already looking at it. Tapping filters the list. */}
+			{!loading && (counts?.dueToday ?? 0) > 0 && fwin !== "today" ? (
+				<button
+					type="button"
+					onClick={() =>
+						navigate({ search: (prev) => ({ ...prev, fwin: "today" }) })
+					}
+					className="flex items-center gap-2.5 rounded-2xl bg-foreground px-4 py-3 text-left text-background transition-opacity hover:opacity-95"
+				>
+					<CalendarDays
+						className="size-5 shrink-0 text-accent"
+						aria-hidden="true"
+					/>
+					<span className="min-w-0 flex-1 text-sm font-semibold">
+						{counts?.dueToday} order{(counts?.dueToday ?? 0) === 1 ? "" : "s"}{" "}
+						due <span className="kp-highlight">today</span>
+					</span>
+					<span className="shrink-0 text-sm font-bold text-accent">Show →</span>
+				</button>
+			) : null}
+
+			{/* Select-mode hint — the persistent bottom bar carries the actions
+			    (count, Select all, Update status, exit). */}
+			{selectMode ? (
+				<p className="text-sm font-medium text-muted-foreground">
+					Tap orders to select, then choose a status below.
+				</p>
 			) : null}
 
 			{loading ? (
@@ -583,94 +545,103 @@ function OrdersRoute() {
 					<ul className="flex flex-col gap-2 lg:grid lg:grid-cols-2 lg:gap-3">
 						{orders.map((o) => {
 							const isSel = selected.has(o._id);
-							const rowInner = (
-								<div className="flex min-w-0 flex-1 flex-col gap-1.5">
-									<div className="flex flex-wrap items-center gap-2">
-										<span className="font-mono text-sm font-semibold">
-											#{o.shortId}
-										</span>
-										<StatusBadge
-											status={o.status as OrderStatus}
-											label={(() => {
-												const cs = resolveCurrentStage(
-													{
-														status: o.status,
-														currentStageId: o.currentStageId,
-													},
-													stages,
-												);
-												return cs
-													? stageLabel(cs, "en")
-													: resolveAnchorLabel(o.status as OrderStatus, {
-															stages,
-															labels,
-															deliveryMethod: (o.deliveryMethod ??
-																"delivery") as DeliveryMethod,
-															locale: "en",
-														});
-											})()}
-										/>
-										<OrderTimeBadge order={o} now={now} />
-										<DeliveryMethodBadge
-											method={o.deliveryMethod ?? "delivery"}
-										/>
-										{o.fulfilmentDate !== undefined ? (
-											<FulfilmentDateBadge epoch={o.fulfilmentDate} now={now} />
-										) : null}
-										{o.mockupStatus === "pending" ||
-										o.mockupStatus === "changes_requested" ? (
-											<span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
-												Mockup pending
-											</span>
-										) : null}
-									</div>
-									<div className="flex items-center justify-between gap-2">
-										<span className="min-w-0 truncate text-sm text-muted-foreground">
+							const statusLabel = (() => {
+								const cs = resolveCurrentStage(
+									{
+										status: o.status,
+										currentStageId: o.currentStageId,
+									},
+									stages,
+								);
+								return cs
+									? stageLabel(cs, "en")
+									: resolveAnchorLabel(o.status as OrderStatus, {
+											stages,
+											labels,
+											deliveryMethod: (o.deliveryMethod ??
+												"delivery") as DeliveryMethod,
+											locale: "en",
+										});
+							})();
+							const age = formatStatusAge(now - o.createdAt);
+							const cardInner = (
+								<div className="min-w-0 flex-1">
+									{/* Name + money get the hierarchy. */}
+									<div className="flex items-center justify-between gap-2.5">
+										<span className="min-w-0 truncate text-[15px] font-semibold">
 											{o.customer.name ?? "Anonymous"}
-											{" · "}
+										</span>
+										<span className="shrink-0 text-[15px] font-bold tabular-nums">
+											{formatPrice(o.total, o.currency)}
+										</span>
+									</div>
+									<div className="mt-0.5 flex items-center gap-1.5 text-[12.5px] text-muted-foreground">
+										<span className="font-mono">#{o.shortId}</span>
+										<span aria-hidden="true">·</span>
+										<span>
 											{o.items.length} item{o.items.length === 1 ? "" : "s"}
 										</span>
-										<span className="shrink-0 text-sm font-semibold tabular-nums">
-											{formatPrice(o.total, o.currency)}
+										<span aria-hidden="true">·</span>
+										<span>{age === "just now" ? age : `${age} ago`}</span>
+									</div>
+									<div className="mt-2.5 flex items-center gap-1.5">
+										<StatusBadge
+											status={o.status as OrderStatus}
+											label={statusLabel}
+										/>
+										<OrderContextBadge order={o} now={now} />
+										<span className="ml-auto flex items-center gap-1.5">
+											<DeliveryMethodIcon
+												method={o.deliveryMethod ?? "delivery"}
+											/>
+											{!selectMode ? (
+												<ChevronRight
+													className="size-4.5 text-muted-foreground/50 transition-transform group-hover:translate-x-0.5"
+													aria-hidden="true"
+												/>
+											) : null}
 										</span>
 									</div>
 								</div>
 							);
+							const cardClass = cn(
+								"group flex w-full items-start gap-3 rounded-2xl border bg-card p-3.5 text-left transition-all",
+								isSel
+									? "border-accent shadow-[0_0_0_3px_hsl(160_84%_39%/0.12)]"
+									: "border-border hover:border-ring hover:shadow-sm",
+							);
 							return (
 								<li key={o._id}>
-									{/* Always-visible checkbox (its own click target) sits beside
-									    the card, which stays a normal link to the order. */}
-									<div
-										className={cn(
-											"group flex items-center gap-3 rounded-2xl border bg-card p-4 transition-all",
-											isSel
-												? "border-accent ring-1 ring-accent"
-												: "border-border hover:border-ring hover:shadow-sm",
-										)}
-									>
+									{selectMode ? (
 										<button
 											type="button"
 											aria-pressed={isSel}
 											aria-label={`Select order ${o.shortId}`}
 											onClick={() => toggleSelect(o._id)}
-											className={cn(
-												"flex size-5 shrink-0 items-center justify-center rounded-md border transition-colors",
-												isSel
-													? "border-accent bg-accent text-accent-foreground"
-													: "border-border bg-background hover:border-accent",
-											)}
+											className={cardClass}
 										>
-											{isSel ? <Check className="size-3.5" /> : null}
+											<span
+												aria-hidden="true"
+												className={cn(
+													"mt-0.5 flex size-[22px] shrink-0 items-center justify-center rounded-lg border transition-colors",
+													isSel
+														? "border-accent bg-accent text-accent-foreground"
+														: "border-border bg-background",
+												)}
+											>
+												{isSel ? <Check className="size-3.5" /> : null}
+											</span>
+											{cardInner}
 										</button>
+									) : (
 										<Link
 											to="/app/orders/$shortId"
 											params={{ shortId: o.shortId }}
-											className="flex min-w-0 flex-1 items-center gap-3"
+											className={cardClass}
 										>
-											{rowInner}
-											<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+											{cardInner}
 										</Link>
-									</div>
+									)}
 								</li>
 							);
 						})}
@@ -680,131 +651,31 @@ function OrdersRoute() {
 						<button
 							type="button"
 							onClick={() => setLimit((n) => n + PAGE_SIZE)}
-							className="mx-auto flex h-10 items-center rounded-full border border-border px-5 text-sm font-medium text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
+							className="mx-auto flex h-11 items-center rounded-full border border-border px-5 text-sm font-medium text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
 						>
 							Load more ({total - orders.length} more)
 						</button>
 					) : null}
-					{selected.size > 0 ? (
-						<div className="h-20" aria-hidden="true" />
-					) : null}
+					{selectMode ? <div className="h-24" aria-hidden="true" /> : null}
 				</>
 			)}
 
-			{selected.size > 0 ? (
+			{/* Mounted for the whole of select mode (not gated on a selection) so
+			    the Radix layers it owns close cleanly — see OrderBulkBar. */}
+			{selectMode ? (
 				<OrderBulkBar
 					count={selected.size}
 					actions={bulkActions}
+					allSelected={allSelected}
 					onApply={applyBulk}
-					onClear={clearSelection}
+					onToggleSelectAll={toggleSelectAll}
+					onExit={exitSelectMode}
 					busy={bulkBusy}
 				/>
 			) : null}
 		</div>
 	);
 }
-
-/**
- * At-a-glance indicator of how the customer is receiving the order. Sits next
- * to the status badge in each order row so the seller can spot pickup orders
- * (which need a different ops flow — notify store manager, prepare for
- * collection) without opening the detail page.
- */
-function DeliveryMethodBadge({
-	method,
-}: {
-	method: "delivery" | "self_collect";
-}) {
-	const isPickup = method === "self_collect";
-	const Icon = isPickup ? Package : Truck;
-	return (
-		<span className="inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-			<Icon className="size-3" aria-hidden="true" />
-			{isPickup ? "Pickup" : "Delivery"}
-		</span>
-	);
-}
-
-function OrderInboxOverview({
-	counts,
-	allCount,
-	loading,
-}: {
-	counts:
-		| {
-				new: number;
-				in_progress: number;
-				completed: number;
-				cancelled: number;
-				mockupPending: number;
-		  }
-		| undefined;
-	allCount: number | undefined;
-	loading: boolean;
-}) {
-	const stats = [
-		{
-			label: "New",
-			value: counts?.new,
-			icon: <AlertCircle className="size-4" />,
-			className: "text-orange-700 bg-orange-50 border-orange-200",
-		},
-		{
-			label: "In progress",
-			value: counts?.in_progress,
-			icon: <Package className="size-4" />,
-			className: "text-blue-700 bg-blue-50 border-blue-200",
-		},
-		{
-			label: "Done",
-			value: counts?.completed,
-			icon: <Check className="size-4" />,
-			className: "text-emerald-700 bg-emerald-50 border-emerald-200",
-		},
-		{
-			label: "All orders",
-			value: allCount,
-			icon: <ShoppingBag className="size-4" />,
-			className: "text-foreground bg-muted/50 border-border",
-		},
-	];
-
-	return (
-		<div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-			{stats.map((stat) => (
-				<div
-					key={stat.label}
-					className={cn(
-						"flex items-center gap-3 rounded-2xl border px-3 py-3",
-						stat.className,
-					)}
-				>
-					<div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-white/70">
-						{stat.icon}
-					</div>
-					<div className="min-w-0">
-						<p className="text-xs font-medium opacity-75">{stat.label}</p>
-						<p className="font-mono text-lg font-bold leading-tight">
-							{loading || stat.value == null ? "..." : stat.value}
-						</p>
-					</div>
-				</div>
-			))}
-		</div>
-	);
-}
-
-const STATUS_STYLES: Record<OrderStatus, string> = {
-	pending:
-		"bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-300",
-	confirmed: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200",
-	packed: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200",
-	shipped:
-		"bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-200",
-	delivered:
-		"bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-200",
-	cancelled: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200",
-};
 
 const OrderList = {
 	Skeleton() {
@@ -813,19 +684,17 @@ const OrderList = {
 				{[0, 1, 2, 3, 4].map((n) => (
 					<li
 						key={n}
-						className="flex items-center gap-3 rounded-2xl border border-border bg-card p-4"
+						className="flex flex-col gap-2 rounded-2xl border border-border bg-card p-3.5"
 					>
-						<div className="flex min-w-0 flex-1 flex-col gap-1.5">
-							<div className="flex items-center gap-2">
-								<Skeleton className="h-4 w-16 rounded" />
-								<Skeleton className="h-4 w-16 rounded-full" />
-							</div>
-							<div className="flex items-center justify-between">
-								<Skeleton className="h-3.5 w-40 rounded" />
-								<Skeleton className="h-4 w-16 rounded" />
-							</div>
+						<div className="flex items-center justify-between">
+							<Skeleton className="h-4 w-32 rounded" />
+							<Skeleton className="h-4 w-16 rounded" />
 						</div>
-						<Skeleton className="size-4 shrink-0 rounded" />
+						<Skeleton className="h-3.5 w-40 rounded" />
+						<div className="flex items-center gap-1.5">
+							<Skeleton className="h-6 w-20 rounded-full" />
+							<Skeleton className="h-6 w-24 rounded-full" />
+						</div>
 					</li>
 				))}
 			</ul>
@@ -840,37 +709,15 @@ function OrdersInboxSkeleton() {
 			<Skeleton className="h-11 w-full rounded-xl" />
 			<div className="flex gap-2">
 				{[64, 88, 96, 80].map((w) => (
-					<Skeleton key={w} className="h-9 rounded-full" style={{ width: w }} />
+					<Skeleton
+						key={w}
+						className="h-10 rounded-full"
+						style={{ width: w }}
+					/>
 				))}
 			</div>
 			<OrderList.Skeleton />
 		</div>
-	);
-}
-
-export function StatusBadge({
-	status,
-	label,
-}: {
-	status: OrderStatus;
-	/**
-	 * Resolved display text. Defaults to the raw status (capitalized) when
-	 * omitted; pass a resolved label from `resolveStatusLabel` to honour a
-	 * retailer's custom stage names. Custom labels keep their own casing, so the
-	 * `capitalize` class is only applied to the raw-status fallback.
-	 */
-	label?: string;
-}) {
-	return (
-		<span
-			className={cn(
-				"rounded-full px-2 py-0.5 text-[11px] font-semibold",
-				label ? "" : "capitalize",
-				STATUS_STYLES[status],
-			)}
-		>
-			{label ?? status}
-		</span>
 	);
 }
 
@@ -918,7 +765,7 @@ function emptyCopy(
 	if (filtersActive)
 		return {
 			title: "No orders match your filters",
-			body: "Adjust or clear the payment / date filters to see more.",
+			body: "Adjust or clear the filters to see more.",
 		};
 	switch (bucket) {
 		case "new":

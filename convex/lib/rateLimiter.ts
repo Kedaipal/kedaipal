@@ -105,15 +105,17 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		period: MINUTE,
 		capacity: 3,
 	},
-	// Authenticated seller opening a Counter Checkout session (keyed by Clerk
-	// subject). A busy counter mints one per buyer, so allow a healthy burst, but
-	// cap runaway creation (each session is a row + a QR render). See
-	// convex/counterCheckout.ts.
-	checkoutSessionCreate: {
+	// Public poster scan (`KPS-<token>`) starting a buyer-initiated counter
+	// session. The token is printed on a wall, so this limit IS the security
+	// model (with the per-store open-session cap): keyed by
+	// `<retailerId>:<buyerPhone>` so one prankster can't spam a store while
+	// legit walk-ins stay unaffected. Rescans re-claim the open session without
+	// consuming the limit. See docs/counter-checkout.md (86ey5m35w).
+	storeQrScan: {
 		kind: "token bucket",
-		rate: 30,
-		period: MINUTE,
-		capacity: 10,
+		rate: 3,
+		period: 60 * MINUTE,
+		capacity: 3,
 	},
 	// NOTE: the per-seller outbound WhatsApp guardrails (whatsappSendPerMinute /
 	// whatsappSendDaily) are intentionally NOT registered here. They're enforced

@@ -5,6 +5,7 @@ import {
 	MessageCircle,
 	NotebookPen,
 	Pencil,
+	Phone,
 	ShoppingBag,
 	User,
 } from "lucide-react";
@@ -16,13 +17,14 @@ import { formatPhone, getDisplayName } from "../../lib/customer";
 import {
 	convexErrorMessage,
 	formatPrice,
+	formatPriceCompact,
 	formatRelativeTime,
 	formatShortDate,
 } from "../../lib/format";
-import { StatusBadge } from "../../routes/app.orders.index";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
+import { StatusBadge } from "./status-badge";
 
 type CustomerWithMetrics = Doc<"customers"> & { averageOrderValue: number };
 
@@ -50,49 +52,57 @@ export function CustomerDetail({
 
 	return (
 		<div className="flex flex-col gap-5 lg:max-w-3xl">
-			{/* Contact */}
-			<section className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-4">
-				<div className="flex items-center gap-3">
-					<div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-muted text-base font-semibold text-muted-foreground">
-						{hasName ? (
-							displayName[0]?.toUpperCase()
-						) : (
-							<User className="size-5" />
-						)}
-					</div>
-					<div className="min-w-0 flex-1">
-						<p className="truncate text-lg font-semibold">{displayName}</p>
-						<p className="truncate font-mono text-xs text-muted-foreground">
-							{formatPhone(customer.waPhone)}
-						</p>
-					</div>
+			{/* Profile header — this page exists so the seller can recognise and
+			    reply: identity centred, WhatsApp as the hero action. */}
+			<section className="flex flex-col items-center gap-2.5 rounded-2xl border border-border bg-card p-5">
+				<div className="flex size-16 shrink-0 items-center justify-center rounded-full bg-foreground font-heading text-xl font-extrabold text-background">
+					{hasName ? initialsOf(displayName) : <User className="size-6" />}
+				</div>
+				<div className="flex min-w-0 flex-col items-center gap-0.5 text-center">
+					<p className="max-w-full truncate font-heading text-xl font-extrabold">
+						{displayName}
+					</p>
+					<p className="max-w-full truncate text-[13px] text-muted-foreground">
+						{formatPhone(customer.waPhone)} · customer since{" "}
+						{formatShortDate(customer.firstOrderAt)}
+					</p>
+				</div>
+				<div className="mt-1 flex w-full gap-2">
 					<a
 						href={`https://wa.me/${customer.waPhone}`}
 						target="_blank"
 						rel="noopener noreferrer"
-						className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-green-500/10 text-green-600 transition-colors hover:bg-green-500/20"
-						aria-label="Message on WhatsApp"
+						className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl border border-accent/40 bg-accent/10 text-sm font-bold text-accent-emphasis transition-colors hover:bg-accent/20"
 					>
-						<MessageCircle className="size-5" />
+						<MessageCircle className="size-4.5" />
+						WhatsApp
+					</a>
+					<a
+						href={`tel:+${customer.waPhone}`}
+						aria-label={`Call ${displayName}`}
+						className="flex size-11 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted"
+					>
+						<Phone className="size-4.5" />
 					</a>
 				</div>
 				<NameEditor customer={customer} />
 			</section>
 
-			{/* Lifetime metrics */}
-			<section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+			{/* Lifetime metrics — the stat trio ("since" lives in the header).
+			    Compact money so a big-spender's lifetime figure fits its third of a
+			    phone screen; the full amount rides on the title tooltip. */}
+			<section className="grid grid-cols-3 gap-2">
 				<Metric label="Orders" value={String(customer.orderCount)} />
 				<Metric
-					label="Lifetime"
-					value={formatPrice(customer.totalSpent, currency)}
+					label="Total spent"
+					value={formatPriceCompact(customer.totalSpent, currency)}
+					full={formatPrice(customer.totalSpent, currency)}
+					emphasis
 				/>
 				<Metric
 					label="Avg order"
-					value={formatPrice(customer.averageOrderValue, currency)}
-				/>
-				<Metric
-					label="Customer since"
-					value={formatShortDate(customer.firstOrderAt)}
+					value={formatPriceCompact(customer.averageOrderValue, currency)}
+					full={formatPrice(customer.averageOrderValue, currency)}
 				/>
 			</section>
 
@@ -100,9 +110,7 @@ export function CustomerDetail({
 
 			{/* Order history */}
 			<section className="flex flex-col gap-3">
-				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-					Order history
-				</p>
+				<p className="font-heading text-base font-extrabold">Order history</p>
 				{ordersLoading ? (
 					<p className="text-sm text-muted-foreground">Loading orders…</p>
 				) : orders.length === 0 ? (
@@ -119,21 +127,24 @@ export function CustomerDetail({
 									params={{ shortId: o.shortId }}
 									className="group flex items-center gap-3 rounded-2xl border border-border bg-card p-3.5 transition-all hover:border-ring hover:shadow-sm"
 								>
-									<div className="flex min-w-0 flex-1 flex-col gap-1">
-										<div className="flex items-center gap-2">
-											<span className="font-mono text-sm font-semibold">
-												#{o.shortId}
-											</span>
-											<StatusBadge status={o.status as OrderStatus} />
-										</div>
-										<span className="text-[11px] text-muted-foreground">
+									<div className="flex min-w-0 flex-1 flex-col gap-0.5">
+										<span className="truncate text-sm font-semibold">
+											{o.items[0]?.name ?? `Order #${o.shortId}`}
+											{o.items.length > 1 ? ` +${o.items.length - 1}` : ""}
+										</span>
+										<span className="text-xs text-muted-foreground">
+											<span className="font-mono">#{o.shortId}</span>
+											{" · "}
 											{formatRelativeTime(o._creationTime)}
 										</span>
 									</div>
-									<span className="shrink-0 text-sm font-semibold tabular-nums">
-										{formatPrice(o.total, o.currency)}
-									</span>
-									<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+									<div className="flex shrink-0 items-center gap-2">
+										<span className="text-sm font-semibold tabular-nums">
+											{formatPrice(o.total, o.currency)}
+										</span>
+										<StatusBadge status={o.status as OrderStatus} />
+									</div>
+									<ChevronRight className="size-4 shrink-0 text-muted-foreground/60 transition-transform group-hover:translate-x-0.5" />
 								</Link>
 							</li>
 						))}
@@ -144,13 +155,38 @@ export function CustomerDetail({
 	);
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+/** "Aina Jasmin" → "AJ"; single word → first two letters. */
+function initialsOf(name: string): string {
+	const parts = name.trim().split(/\s+/);
+	if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+	return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function Metric({
+	label,
+	value,
+	full,
+	emphasis = false,
+}: {
+	label: string;
+	value: string;
+	/** Untruncated value for the hover tooltip when `value` is compacted. */
+	full?: string;
+	emphasis?: boolean;
+}) {
 	return (
-		<div className="flex flex-col gap-1 rounded-2xl border border-border bg-card p-3">
-			<span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+		<div className="flex flex-col items-center gap-0.5 rounded-2xl border border-border bg-card px-2 py-3 text-center">
+			{/* max-w-full: truncate has no effect on a centred flex child without a
+			    width bound — the text would overflow the card edge instead. */}
+			<span
+				title={full}
+				className={`max-w-full truncate font-heading text-[17px] font-extrabold tabular-nums ${emphasis ? "text-accent-emphasis" : ""}`}
+			>
+				{value}
+			</span>
+			<span className="text-[11px] font-semibold text-muted-foreground">
 				{label}
 			</span>
-			<span className="text-base font-semibold tabular-nums">{value}</span>
 		</div>
 	);
 }
@@ -239,11 +275,13 @@ function NotesEditor({ customer }: { customer: Doc<"customers"> }) {
 	}
 
 	return (
-		<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+		/* Styled as a "sticky note" (dashed amber ticket) — visually distinct
+		   from system data, and it invites editing. */
+		<section className="flex flex-col gap-2 rounded-2xl border-2 border-dashed border-amber-600/25 bg-amber-50/60 p-4 dark:border-amber-500/30 dark:bg-amber-950/30">
 			<div className="flex items-center justify-between">
-				<div className="flex items-center gap-2">
-					<NotebookPen className="size-4 text-muted-foreground" />
-					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+				<div className="flex items-center gap-2 text-amber-700 dark:text-amber-400">
+					<NotebookPen className="size-4" />
+					<p className="text-[11px] font-bold uppercase tracking-[0.08em]">
 						Private notes
 					</p>
 				</div>
@@ -254,9 +292,10 @@ function NotesEditor({ customer }: { customer: Doc<"customers"> }) {
 							setValue(customer.notes ?? "");
 							setEditing(true);
 						}}
-						className="text-xs font-medium text-accent hover:underline"
+						aria-label={customer.notes?.trim() ? "Edit notes" : "Add notes"}
+						className="flex size-9 items-center justify-center rounded-full text-amber-700 transition-colors hover:bg-amber-100 dark:text-amber-400 dark:hover:bg-amber-900/40"
 					>
-						{customer.notes?.trim() ? "Edit" : "Add"}
+						<Pencil className="size-4" />
 					</button>
 				) : null}
 			</div>

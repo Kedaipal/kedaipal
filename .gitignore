@@ -18,5 +18,3 @@ graphify-out/
 
 # only for individual dev usage
 .dev.vars
-.mcp.json
-.claude/*

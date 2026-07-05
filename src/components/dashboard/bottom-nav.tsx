@@ -49,16 +49,12 @@ export function BottomNav({ actionableCount, adminOnly }: BottomNavProps) {
 				},
 				{ to: "/app/checkout", label: "Counter", icon: QrCode },
 				{ to: "/app/customers", label: "Customers", icon: Users },
-				{
-					to: "/app/settings",
-					label: "Settings",
-					icon: Settings,
-					search: { tab: "store" as const },
-				},
+				// No tab param — mobile lands on the grouped settings index.
+				{ to: "/app/settings", label: "Settings", icon: Settings },
 			];
 
 	return (
-		<nav className="sticky bottom-0 border-t border-border bg-background pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:hidden">
+		<nav className="sticky bottom-0 border-t border-border bg-background pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:hidden print:hidden">
 			<div className="flex items-center justify-around">
 				{tabs.map((tab) => (
 					<NavTab key={tab.label} tab={tab} />
@@ -82,24 +78,32 @@ function NavTab({ tab }: { tab: Tab }) {
 		>
 			{({ isActive }) => (
 				<>
-					<span className="relative">
+					{/* Active tab gets a mint pill behind the icon — a text-colour-only
+					    active state is easy to miss on a 6-tab bar. */}
+					<span
+						className={cn(
+							"relative rounded-full px-3.5 py-0.5 transition-colors",
+							isActive && "bg-accent/15",
+						)}
+					>
 						<Icon
 							className={cn(
 								"size-5",
-								isActive ? "stroke-accent" : "stroke-muted-foreground",
+								isActive ? "stroke-accent-emphasis" : "stroke-muted-foreground",
 							)}
 							strokeWidth={isActive ? 2.5 : 1.75}
 						/>
 						{showBadge ? (
-							<span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-orange-500 px-1 text-[9px] font-bold leading-none text-white">
+							<span className="absolute -right-0.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-orange-500 px-1 text-[9px] font-bold leading-none text-white">
 								{badge > 99 ? "99+" : badge}
 							</span>
 						) : null}
 					</span>
 					<span
 						className={cn(
-							"font-medium",
-							isActive ? "text-foreground" : "text-muted-foreground",
+							isActive
+								? "font-bold text-foreground"
+								: "font-medium text-muted-foreground",
 						)}
 					>
 						{label}

@@ -166,13 +166,24 @@ describe("activation — activatedAt stamping", () => {
 			return v._id;
 		});
 
-		const { sessionId, token } = await t
+		// A walk-in scans the store QR → a buyer_identified session appears.
+		const { token } = await t
 			.withIdentity({ subject: USER_A })
-			.mutation(api.counterCheckout.createCheckoutSession, {});
-		await t.mutation(internal.counterCheckout.bindCheckoutSession, {
+			.mutation(api.counterCheckout.ensureCounterQrToken, {});
+		await t.mutation(internal.counterCheckout.startSessionFromStoreQr, {
 			token,
 			waPhone: "60123456789",
 			profileName: "Aiman",
+		});
+		const sessionId = await t.run(async (ctx) => {
+			const s = await ctx.db
+				.query("counterCheckoutSessions")
+				.withIndex("by_retailer_status", (q) =>
+					q.eq("retailerId", retailer._id).eq("status", "buyer_identified"),
+				)
+				.unique();
+			if (!s) throw new Error("session not found");
+			return s._id;
 		});
 		await t
 			.withIdentity({ subject: USER_A })
