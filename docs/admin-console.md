@@ -52,10 +52,24 @@ in `convex/lib/auth.ts`) — **not** a DB field, **not** a Clerk role (yet). The
 
 ### Subscription soft-lock bypass
 
-White-glove happens **before** the seller has paid, so a store being onboarded is usually
-`trialing` or `past_due`. Admin act-as writes therefore **bypass `assertSubscriptionActive`**
-(gated on `!actingAsAdmin` at each call site). A seller's **own** writes are still blocked
-when `past_due` — the bypass only ever applies to an admin acting on a store they don't own.
+`assertSubscriptionActive(ctx, retailerId)` **short-circuits for any admin** (`isAdmin(ctx)`,
+the `ADMIN_USER_IDS` allowlist) before it ever checks `frozen`. So a Kedaipal admin is never
+soft-locked, on **either** path:
+
+- **Act-as** — white-glove happens before the seller has paid, so a store being onboarded is
+  usually `trialing` or `past_due`. (Call sites also still guard on `!actingAsAdmin`, now
+  belt-and-suspenders with the central admin check.)
+- **Own store** — an admin dogfooding their own store runs the app **for free, forever**; past
+  the 14-day trial the cron still flips their sub to `past_due` in the data (it's identity-blind),
+  but the gate ignores it. Identity-based, so it self-heals from the allowlist — no `comped`
+  data to backfill or drift.
+
+A **plain seller's own** `past_due` writes stay blocked — the bypass only ever applies to admins.
+
+**Chrome:** on an admin's **own** store (`isAdmin && !actingAsAdmin`), the nav tier pill reads a
+distinct **"Admin"** badge (linking to the console, not billing) instead of a trial/past-due
+countdown, and the `SubscriptionBanner` pay-nag is suppressed. While **acting-as** a seller the
+chrome shows that seller's **real** subscription state — white-glove needs to see where they stand.
 
 ## Reads that had to learn "admin"
 

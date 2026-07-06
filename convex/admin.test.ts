@@ -134,6 +134,26 @@ describe("admin act-as access", () => {
 		expect(await auditCount(t, retailer._id)).toBe(1);
 	});
 
+	test("admin's OWN past_due store is never soft-locked (free forever, no audit)", async () => {
+		const t = setup();
+		// Store owned by the admin themselves — not an act-as target.
+		const retailer = await seedRetailer(t, ADMIN);
+		await makePastDue(t, retailer._id);
+
+		// Past the trial, an admin keeps full growth-write access to their own store
+		// (a plain owner would be blocked here — see the test above).
+		await t
+			.withIdentity({ subject: ADMIN })
+			.mutation(api.products.create, baseProduct(retailer._id));
+		await t.withIdentity({ subject: ADMIN }).mutation(api.retailers.updateSettings, {
+			retailerId: retailer._id,
+			storeName: "Admin's Own Store",
+		});
+
+		// It's their own store (not act-as), so nothing is audited.
+		expect(await auditCount(t, retailer._id)).toBe(0);
+	});
+
 	test("updateSettings act-as edits the seller store, audited + bypasses lock", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, OWNER);
