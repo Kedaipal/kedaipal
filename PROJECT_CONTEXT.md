@@ -16,9 +16,10 @@ Name is finalized. Earlier working names (KedaiSync, GearChat) are retired.
 
 ## Target Customer
 
-- **Who:** Established WhatsApp-first sellers doing **20–500 orders/month**, solo or 1–3 helpers, ~10–200 SKUs.
+- **Who (feature-grounded ICP, updated Jul 2026):** A home-based or small-SME seller in Malaysia doing **20+ orders/week** who takes **made-to-order or multi-outlet orders**, **closes them and collects payment by hand in WhatsApp DM**, and sells **online plus at physical points** (counter, market stalls, pickup spots). ~10–200 SKUs, solo or 1–3 helpers. This is the pattern the *shipped* product actually serves (proof approval, fulfilment-date picker, Counter Checkout, manual payment handshake, multi-location pickup) and that **both paying customers matched**. Full derivation: `01_Strategy/ICP_Feature_Grounded_20260701.md` (Documents workspace).
 - **Where:** Malaysia first (locale support shipped for `en` and `ms`). Singapore is an adjacent market. Product is not locked to the region long-term.
-- **Current cohort focus:** **F&B home sellers** — cake decorators (booking 30–80 cakes/month at RM180–500 AOV), frozen food sellers with reseller networks (RM15–80k/month, 10–80 resellers), kuih and pastry sellers running pre-order businesses. *Outdoor gear was the original beachhead but real-world adoption skewed F&B; product is positioned broadly enough to serve any pre-order WhatsApp business.*
+- **Best-fit cohorts:** F&B is the richest instance — cake decorators (made-to-order, dated), kuih/pastry pre-order, frozen sellers running **direct multi-outlet** operations (own stalls/kiosks/pickup points). But the boundary is the *pattern above*, not the food category: made-to-order/booking service businesses hit the same features. The first two paying customers were **Bearcamp** (tent-wash/repair service) and **Lekor Mr Ganu** (keropok-lekor multi-stall SME) — neither is a frozen-reseller-network account. *Outdoor gear was the original beachhead; adoption skewed to made-to-order + multi-outlet sellers regardless of vertical.*
+- **NOT the ICP (yet):** frozen-food **reseller / wholesale networks**. This was the Jun 2026 "spearhead" thesis (`ICP_Refinement_20260606.md`, now superseded), but the wholesale/tiered-pricing + reseller-portal features it needs **do not exist in the product**, and **zero paying customers have needed them** — both current payers are direct multi-outlet, not reseller principals. Do not pitch frozen+reseller as the wedge, and do not build for it, until a paying customer actually requires it.
 - **How they sell today:** WhatsApp (primary) + Instagram / Facebook Status for promotion + sometimes Shopee Food / TikTok for awareness.
 - **Universal core pains:**
   - **"I'm missing orders buried in WhatsApp chat history."** Every seller above ~20 orders/week feels this.
@@ -26,7 +27,7 @@ Name is finalized. Earlier working names (KedaiSync, GearChat) are retired.
   - **"I can't remember who this returning customer is."** No recall of past orders, preferences, dietary notes.
 - **Cohort-specific pains:**
   - **Cakes:** double-booked delivery dates, design briefs scattered across chat, deposit chasing.
-  - **Frozen + reseller:** "stock ada lagi tak?" chaos, accidental oversells, no wholesale pricing tier.
+  - **Frozen (direct / multi-outlet):** "stock ada lagi tak?" chaos, accidental oversells, juggling several own stalls/pickup points. *(True wholesale/reseller-tier pain exists for reseller-network sellers, but that segment is out of ICP until the features are built — see Target Customer above.)*
   - **Kuih/pastry:** route management, weekend rush, repeat-order shortcut.
 - **What unlocks them:** the universal pains are the wedge; cohort pains are the depth.
 
@@ -219,7 +220,7 @@ This is a deliberate strategic choice, not a stopgap:
 - **Interakt (India, ~RM55–190)** — messaging-first, doesn't solve order management at home-seller scale.
 - **Free tools (Google Sheets + WhatsApp Business)** — works until ~20 orders/week, then collapses. Kedaipal's wedge upgrade.
 
-**Kedaipal's opening:** the gap between Orderla's free-form simplicity and EasyStore's expensive e-commerce overkill. The bullseye is *established WhatsApp pre-order sellers doing 20–500 orders/month*, mainly F&B for now.
+**Kedaipal's opening:** the gap between Orderla's free-form simplicity and EasyStore's expensive e-commerce overkill. The bullseye is *made-to-order or multi-outlet sellers doing 20+ orders/week who close + collect payment by hand in WhatsApp and sell online + at physical points* — richest in F&B, but not bounded by it (see Target Customer).
 
 ### Moat drivers
 
@@ -227,7 +228,7 @@ This is a deliberate strategic choice, not a stopgap:
 - **No-Meta-setup acquisition advantage** — every competitor in WhatsApp commerce requires retailers to set up their own WABA. Kedaipal's shared-WABA model eliminates the #1 onboarding friction.
 - **Switching costs via accumulated order, customer, and broadcast data** — once a retailer has 6 months of customer history and a working broadcast list, leaving is painful.
 - **MY/SG localization depth** — Ringgit pricing, FPX/HitPay payment integration, bilingual (en/ms) WhatsApp templates, planned Shopee/Lazada/TikTok Shop integrations.
-- **F&B-specific workflow features** (Sprint 2+) — date picker, capacity caps, custom design briefs, tiered pricing — features Orderla's form model can't bolt on cleanly.
+- **Made-to-order / multi-outlet workflow depth** — fulfilment-date picker, proof/mockup approval, Counter Checkout, multi-location pickup (all shipped); capacity caps + custom design briefs planned — features Orderla's form model can't bolt on cleanly. (Reseller/wholesale tiering is *not* built and is parked until a paying customer needs it — do not list it as a live moat.)
 
 **Weak moats (don't over-index on):**
 - Tech stack choices.

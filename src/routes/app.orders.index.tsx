@@ -137,7 +137,6 @@ export const Route = createFileRoute("/app/orders/")({
 });
 
 const PAGE_SIZE = 50;
-const LONG_PRESS_MS = 450;
 
 function OrdersRoute() {
 	const {
@@ -162,16 +161,13 @@ function OrdersRoute() {
 	const debounced = useDebounce(searchInput.trim(), 250);
 	const [limit, setLimit] = useState(PAGE_SIZE);
 
-	// Multi-select (bulk actions). Checkboxes stay hidden until the seller enters
-	// select mode — via the header "Select" button or a long-press on any card —
-	// so the default card keeps its full width for what sellers scan for (name,
-	// money). Selection clears whenever the view changes (different result set).
+	// Multi-select (bulk actions). Checkboxes stay hidden until the seller taps the
+	// header "Select" button, so the default card keeps its full width for what
+	// sellers scan for (name, money). Selection clears whenever the view changes
+	// (different result set).
 	const [selectMode, setSelectMode] = useState(false);
 	const [selected, setSelected] = useState<Set<string>>(new Set());
 	const [bulkBusy, setBulkBusy] = useState(false);
-	// Long-press bookkeeping: suppress the click that follows a fired press.
-	const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-	const pressFired = useRef(false);
 
 	const payKey = pay.join(",");
 	const methodKey = method.join(",");
@@ -291,49 +287,25 @@ function OrdersRoute() {
 		setSelectMode(false);
 		setSelected(new Set());
 	}
-
-	function pressStart(id: string) {
-		pressFired.current = false;
-		pressTimer.current = setTimeout(() => {
-			pressFired.current = true;
-			setSelectMode(true);
-			toggleSelect(id);
-			if (typeof navigator !== "undefined" && "vibrate" in navigator) {
-				navigator.vibrate?.(10);
-			}
-		}, LONG_PRESS_MS);
-	}
-	function pressEnd() {
-		if (pressTimer.current) {
-			clearTimeout(pressTimer.current);
-			pressTimer.current = null;
-		}
+	function toggleSelectAll() {
+		setSelected(allSelected ? new Set() : new Set(visibleIds));
 	}
 
-	// Bulk targets — the canonical forward transitions, resolved to the retailer's
-	// labels (matching the row badges). The lead action is the most likely
-	// transition for the current view (confirm in New, pack otherwise); the rest
-	// live in the overflow. "Cancel" is destructive.
-	const forwardActions: BulkAction[] = [
-		"confirmed",
-		"packed",
-		"shipped",
-		"delivered",
-	].map((s) => ({
-		status: s as BulkAction["status"],
-		label: resolveAnchorLabel(s as OrderStatus, {
-			stages,
-			labels,
-			deliveryMethod: retailerMethod,
-			locale: "en",
-		}),
-	}));
-	const primaryBulk =
-		bucket === "new"
-			? forwardActions[0] // → confirmed
-			: forwardActions[1]; // → packed
-	const overflowBulk: BulkAction[] = forwardActions
-		.filter((a) => a.status !== primaryBulk.status)
+	// Bulk targets — the canonical forward transitions (resolved to the retailer's
+	// labels, matching the row badges) then the destructive Cancel, all in one
+	// "Update status" dropdown. No primary/overflow split.
+	const bulkActions: BulkAction[] = (
+		["confirmed", "packed", "shipped", "delivered"] as const
+	)
+		.map((s) => ({
+			status: s as BulkAction["status"],
+			label: resolveAnchorLabel(s as OrderStatus, {
+				stages,
+				labels,
+				deliveryMethod: retailerMethod,
+				locale: "en",
+			}),
+		}))
 		.concat([
 			{ status: "cancelled", label: "Cancel orders", destructive: true },
 		] as BulkAction[]);
@@ -349,7 +321,11 @@ function OrdersRoute() {
 					? `Updated ${res.updated} · skipped ${res.skipped}`
 					: `Updated ${res.updated} order${res.updated === 1 ? "" : "s"}`,
 			);
-			exitSelectMode();
+			// Clear the selection but STAY in select mode — the bulk bar (and the
+			// Radix layers it owns) must not unmount while a popover/confirm dialog
+			// may still be closing, or `pointer-events:none` leaks onto the body and
+			// freezes the page. The seller can keep selecting or tap X to exit.
+			setSelected(new Set());
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 			// Rethrow so the destructive confirm dialog stays open for a retry; the
@@ -547,33 +523,12 @@ function OrdersRoute() {
 				</button>
 			) : null}
 
-			{/* Select-mode toolbar. */}
+			{/* Select-mode hint — the persistent bottom bar carries the actions
+			    (count, Select all, Update status, exit). */}
 			{selectMode ? (
-				<div className="flex items-center justify-between gap-2">
-					<span className="text-sm font-medium text-muted-foreground">
-						Tap orders to select
-					</span>
-					<div className="flex items-center gap-2">
-						<Button
-							variant="outline"
-							size="sm"
-							className="h-9"
-							onClick={() =>
-								setSelected(allSelected ? new Set() : new Set(visibleIds))
-							}
-						>
-							{allSelected ? "Clear all" : "Select all"}
-						</Button>
-						<Button
-							variant="ghost"
-							size="sm"
-							className="h-9"
-							onClick={exitSelectMode}
-						>
-							Done
-						</Button>
-					</div>
-				</div>
+				<p className="text-sm font-medium text-muted-foreground">
+					Tap orders to select, then choose a status below.
+				</p>
 			) : null}
 
 			{loading ? (
@@ -683,17 +638,6 @@ function OrdersRoute() {
 											to="/app/orders/$shortId"
 											params={{ shortId: o.shortId }}
 											className={cardClass}
-											onPointerDown={() => pressStart(o._id)}
-											onPointerUp={pressEnd}
-											onPointerLeave={pressEnd}
-											onPointerCancel={pressEnd}
-											onContextMenu={(e) => {
-												// Long-press on mobile fires contextmenu — we own it.
-												if (pressFired.current) e.preventDefault();
-											}}
-											onClick={(e) => {
-												if (pressFired.current) e.preventDefault();
-											}}
 										>
 											{cardInner}
 										</Link>
@@ -716,13 +660,16 @@ function OrdersRoute() {
 				</>
 			)}
 
-			{selectMode && selected.size > 0 ? (
+			{/* Mounted for the whole of select mode (not gated on a selection) so
+			    the Radix layers it owns close cleanly — see OrderBulkBar. */}
+			{selectMode ? (
 				<OrderBulkBar
 					count={selected.size}
-					primary={primaryBulk}
-					actions={overflowBulk}
+					actions={bulkActions}
+					allSelected={allSelected}
 					onApply={applyBulk}
-					onClear={exitSelectMode}
+					onToggleSelectAll={toggleSelectAll}
+					onExit={exitSelectMode}
 					busy={bulkBusy}
 				/>
 			) : null}

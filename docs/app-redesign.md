@@ -82,6 +82,38 @@ New token: **`--accent-emphasis`** (readable mint for text/icons on mint-tinted 
 
 Inline list editors append a new row to the **bottom** of a list that, on a phone, is usually below the fold — so tapping "Add …" appeared to do nothing. A shared [`useRevealOnAdd`](../src/hooks/useRevealOnAdd.ts) hook (ref-based, self-clearing, no re-render, no-op for every non-matching card) scrolls the new card into view and focuses its first field. Wired into the three places with this pattern: **payment methods** (Add bank / Add QR) and **order stages** (Add stage) in `app.settings.tsx`, and **variant option axes** (Add option / preset) in `variant-editor.tsx`. Standalone-saved entities like **pickup locations** keep their own bottom-sheet dialog — the right pattern when the item saves independently rather than inline within one form's Save — so no change there. Covered in `src/hooks/useRevealOnAdd.test.tsx`.
 
+## Post-merge tweaks (round 3)
+
+- **Bulk bar → single "Update status" dropdown.** The old bar led with a primary
+  status button *plus* a 3-dots overflow, which read as two competing controls.
+  Now one **Update status ▾** dropdown lists every forward transition (Confirm →
+  Packed → Shipped → Delivered) with the destructive **Cancel orders** separated
+  at the bottom behind its confirm dialog. Select-all + exit live on the same
+  bar. `OrderBulkBar` props changed: `primary`/`onClear` → `actions` (full
+  list) / `allSelected` / `onToggleSelectAll` / `onExit`.
+- **Selection freeze bug (fixed).** After a bulk apply cleared the selection, the
+  route unmounted the bulk bar *while the Radix popover / confirm dialog it owns
+  could still be closing* — leaking `pointer-events:none` onto `document.body`,
+  which froze the whole page (couldn't select or click anything) until a hard
+  reload. Fix: the bar now stays mounted for the lifetime of **select mode** (not
+  gated on a non-empty selection), and a successful apply **clears the selection
+  but stays in select mode** rather than exiting. The Radix layers close cleanly.
+- **Long-press-to-select removed.** The touch long-press used a `pressFired` ref
+  + `onClick`/`onContextMenu` `preventDefault` guard on each order `Link` — fragile
+  (the ref only reset on the next press) and a second bug surface. Select mode is
+  now entered only via the always-visible header **Select** button, which is
+  discoverable on both platforms.
+- **Store logo on the dashboard** (`StoreAvatar`): the desktop dashboard header
+  now leads with the vendor's own logo (falls back to the store initial on the
+  navy tile) beside the greeting, so it reads as *their* store, not generic
+  chrome. Mobile already carried a small logo avatar.
+- **Desktop card-width alignment.** The first-order celebration card and the
+  setup checklist (and the new-user welcome / how-it-works sections) spanned full
+  width while the today strip / share / needs-attention cards above them were
+  `lg:max-w-2xl` — so the celebration card looked "longer than the others". All
+  primary-column cards now share `lg:max-w-2xl`; the recent-orders + sales-channels
+  grid stays full-width by design.
+
 ## Deliberate deviations from the design doc
 
 - **Mockup hexes → house tokens**: navy = `foreground` on inverted surfaces (not `primary`, which becomes mint in dark mode — see the bulk bar comment), mint = `accent`/`accent-emphasis`. Primary buttons stay the house mint except where the doc's hierarchy needs navy (advance CTA, due banner, bulk bar shell).

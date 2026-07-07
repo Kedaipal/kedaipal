@@ -1051,71 +1051,52 @@ describe("whatsapp tracking-link token self-heal", () => {
 	});
 });
 
-describe("whatsapp inbound — Counter Checkout intent routing", () => {
-	test("KP-<token> binds the session and replies to the buyer", async () => {
+describe("whatsapp inbound — Counter Checkout store QR routing", () => {
+	test("KPS-<token> starts a walk-in session + replies with the pairing code", async () => {
 		const t = setup();
 		const { retailerId } = await seedRetailerWithLocale(t, "en");
-		const { sessionId, token } = await t
+		const { token } = await t
 			.withIdentity({ subject: USER })
-			.mutation(api.counterCheckout.createCheckoutSession, {});
+			.mutation(api.counterCheckout.ensureCounterQrToken, {});
 		const fetchMock = installFetchMock();
 
 		await t.action(internal.whatsapp.handleInbound, {
 			fromPhone: "60123456789",
-			text: `KP-${token}`,
+			text: `KPS-${token}`,
 			profileName: "Aiman",
 		});
 
-		// Session bound live.
-		const read = await t
-			.withIdentity({ subject: USER })
-			.query(api.counterCheckout.getCheckoutSession, { sessionId });
-		expect(read?.status).toBe("buyer_identified");
-		expect(read?.waPhone).toBe("60123456789");
+		const rows = await t.run(async (ctx) =>
+			ctx.db
+				.query("counterCheckoutSessions")
+				.withIndex("by_retailer_status", (q) =>
+					q.eq("retailerId", retailerId).eq("status", "buyer_identified"),
+				)
+				.collect(),
+		);
+		expect(rows).toHaveLength(1);
+		expect(rows[0].waPhone).toBe("60123456789");
 
-		// Buyer got a confirmation (not the generic fallback).
-		const reply = (
-			fetchMock.waCalls()[0].body as { text?: { body: string } }
-		).text?.body;
+		const reply =
+			(fetchMock.waCalls()[0].body as { text?: { body: string } }).text?.body ??
+			"";
 		expect(reply).toContain("connected to");
-		void retailerId;
+		// The buyer's pairing code is in the reply (bolded), so they can show it.
+		expect(reply).toContain(`*${rows[0].pairingCode}*`);
 		fetchMock.restore();
 	});
 
-	test("an expired KP-<token> tells the buyer the link expired (no bind)", async () => {
-		const t = setup();
-		await seedRetailerWithLocale(t, "en");
-		const { sessionId, token } = await t
-			.withIdentity({ subject: USER })
-			.mutation(api.counterCheckout.createCheckoutSession, {});
-		await t.run((ctx) => ctx.db.patch(sessionId, { expiresAt: Date.now() - 1 }));
-		const fetchMock = installFetchMock();
-
-		await t.action(internal.whatsapp.handleInbound, {
-			fromPhone: "60123456789",
-			text: `KP-${token}`,
-		});
-
-		const reply = (
-			fetchMock.waCalls()[0].body as { text?: { body: string } }
-		).text?.body;
-		expect(reply).toMatch(/expired/i);
-		const row = await t.run((ctx) => ctx.db.get(sessionId));
-		expect(row?.status).toBe("expired");
-		fetchMock.restore();
-	});
-
-	test("the bind reply is localized to the store's locale (ms)", async () => {
+	test("the reply is localized to the store's locale (ms)", async () => {
 		const t = setup();
 		await seedRetailerWithLocale(t, "ms");
 		const { token } = await t
 			.withIdentity({ subject: USER })
-			.mutation(api.counterCheckout.createCheckoutSession, {});
+			.mutation(api.counterCheckout.ensureCounterQrToken, {});
 		const fetchMock = installFetchMock();
 
 		await t.action(internal.whatsapp.handleInbound, {
 			fromPhone: "60123456789",
-			text: `KP-${token}`,
+			text: `KPS-${token}`,
 			profileName: "Aiman",
 		});
 
@@ -1278,32 +1259,6 @@ describe("counter checkout — pay-at-bind payment info (86ey5kq7p)", () => {
 		});
 
 		expect(fetchMock.waCalls()).toHaveLength(0);
-		fetchMock.restore();
-	});
-
-	test("the KP-<token> bind schedules the payment info after the ack", async () => {
-		const t = setup();
-		const { retailerId } = await seedRetailerWithLocale(t, "en");
-		await t.run((ctx) =>
-			ctx.db.patch(retailerId, { paymentMethods: [bankMethod()] }),
-		);
-		const { token } = await t
-			.withIdentity({ subject: USER })
-			.mutation(api.counterCheckout.createCheckoutSession, {});
-		const fetchMock = installFetchMock();
-
-		await t.action(internal.whatsapp.handleInbound, {
-			fromPhone: "60123456789",
-			text: `KP-${token}`,
-			profileName: "Aiman",
-		});
-		// The payment send is scheduled (runAfter 0) so the ack lands first — flush it.
-		await t.finishAllScheduledFunctions(vi.runAllTimers);
-
-		const bodies = fetchMock.waCalls().map((c) => waText(c.body));
-		// Ack first, payment details second.
-		expect(bodies[0]).toContain("connected to");
-		expect(bodies.join("\n")).toContain("1234567890");
 		fetchMock.restore();
 	});
 

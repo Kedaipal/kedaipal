@@ -141,17 +141,22 @@ describe("renderSystemMessage", () => {
 		);
 	});
 
-	test("counterCheckoutBound names the store, in both locales", () => {
-		const en = renderSystemMessage("en", "counterCheckoutBound", {
+	test("storeQrConnected names the store + the pairing code, in both locales", () => {
+		const en = renderSystemMessage("en", "storeQrConnected", {
 			shortId: "",
 			storeName: "Acme Outdoor",
+			code: "K7",
 		});
 		expect(en).toContain("connected to Acme Outdoor");
-		const ms = renderSystemMessage("ms", "counterCheckoutBound", {
+		expect(en).toContain("*K7*");
+		expect(en).toContain("kedaipal.com/privacy");
+		const ms = renderSystemMessage("ms", "storeQrConnected", {
 			shortId: "",
 			storeName: "Acme Outdoor",
+			code: "K7",
 		});
 		expect(ms).toContain("disambungkan dengan Acme Outdoor");
+		expect(ms).toContain("*K7*");
 	});
 
 	test("counterOrderConfirmedPaid quotes the amount + tracking link", () => {
