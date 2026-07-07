@@ -642,6 +642,7 @@ function SettingsRoute() {
 						offerSelfCollect={retailer.offerSelfCollect ?? false}
 						offerDelivery={retailer.offerDelivery ?? true}
 						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
+						subscription={retailer.subscription}
 					/>
 				) : null}
 

@@ -52,14 +52,19 @@ export type PlanFeatures = {
 	 * export. The plain order list + status pipeline stays un-gated — that's
 	 * the all-tier "Order pipeline" row. */
 	orderInbox: boolean;
+	/** Chargeable pickup locations (86ey5tywf): setting a flat per-location
+	 * fee is a Pro fulfilment-configuration feature. Gates only the seller
+	 * SETTING a fee — an order that already carries a frozen fee displays it
+	 * on every tier (the fee is inherent to the order). */
+	chargeablePickup: boolean;
 };
 
 export type PlanFeature = keyof PlanFeatures;
 
 export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
-	starter: { crm: false, orderInbox: false },
-	pro: { crm: true, orderInbox: true },
-	scale: { crm: true, orderInbox: true },
+	starter: { crm: false, orderInbox: false, chargeablePickup: false },
+	pro: { crm: true, orderInbox: true, chargeablePickup: true },
+	scale: { crm: true, orderInbox: true, chargeablePickup: true },
 };
 
 export function featuresForPlan(plan: Plan): PlanFeatures {

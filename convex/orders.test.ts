@@ -3739,3 +3739,178 @@ describe("sendOrderDocumentToBuyer", () => {
 		).rejects.toThrow(/Forbidden/);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Per-location pickup fee (86ey5tywf) — frozen onto the order, folded into
+// the total via the computeOrderTotals extras seam. See docs/fulfilment.md.
+// ---------------------------------------------------------------------------
+
+describe("orders — pickup fee", () => {
+	/** Retailer with self-collect on + one PAID and one FREE pickup point. */
+	async function seedFeeRetailer(t: ReturnType<typeof convexTest>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.retailers.updateSettings, {
+			offerSelfCollect: true,
+		});
+		const { pickupLocationId: paidId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Paid drop-off",
+				address: "Seksyen 7, Shah Alam",
+				locationType: "drop_off",
+				fee: 500,
+			},
+		);
+		const { pickupLocationId: freeId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Free point",
+				address: "12 Jln Tun Razak, KL",
+			},
+		);
+		return { retailer, paidId, freeId };
+	}
+
+	test("choosing a paid point freezes the fee and folds it into the total", async () => {
+		const t = setup();
+		const { retailer, paidId } = await seedFeeRetailer(t);
+		const productId = await seedProduct(t, USER_A, retailer._id); // RM120
+
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			pickupLocationId: paidId,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(order?.subtotal).toBe(12000);
+		expect(order?.pickupFee).toBe(500);
+		expect(order?.pickupSnapshot?.fee).toBe(500);
+		expect(order?.total).toBe(12500);
+
+		// Editing (or clearing) the source fee never rewrites the placed order.
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.pickupLocations.update, {
+			pickupLocationId: paidId,
+			fee: 900,
+		});
+		const reread = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(reread?.pickupFee).toBe(500);
+		expect(reread?.total).toBe(12500);
+	});
+
+	test("a free point (and delivery) keeps subtotal == total — zero behaviour change", async () => {
+		const t = setup();
+		const { retailer, freeId } = await seedFeeRetailer(t);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			pickupLocationId: freeId,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(order?.pickupFee).toBeUndefined();
+		expect(order?.pickupSnapshot?.fee).toBeUndefined();
+		expect(order?.total).toBe(order?.subtotal);
+
+		const { shortId: deliveryShortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: validAddress,
+		});
+		const deliveryOrder = await t.query(api.orders.get, {
+			token: await tk(t, deliveryShortId),
+		});
+		expect(deliveryOrder?.pickupFee).toBeUndefined();
+		expect(deliveryOrder?.total).toBe(deliveryOrder?.subtotal);
+	});
+
+	test("switching pickup point while pending re-prices: paid → free drops the fee, free → paid adds it", async () => {
+		const t = setup();
+		const { retailer, paidId, freeId } = await seedFeeRetailer(t);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			pickupLocationId: paidId,
+		});
+		const token = await tk(t, shortId);
+
+		await t.mutation(api.orders.updatePickupLocation, {
+			token,
+			pickupLocationId: freeId,
+		});
+		let order = await t.query(api.orders.get, { token });
+		expect(order?.pickupFee).toBeUndefined();
+		expect(order?.total).toBe(12000);
+
+		await t.mutation(api.orders.updatePickupLocation, {
+			token,
+			pickupLocationId: paidId,
+		});
+		order = await t.query(api.orders.get, { token });
+		expect(order?.pickupFee).toBe(500);
+		expect(order?.total).toBe(12500);
+	});
+
+	test("mockup quote and pickup fee ADD — re-pricing the custom work keeps the fee", async () => {
+		const t = setup();
+		const { retailer, paidId } = await seedFeeRetailer(t);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			price: 5000,
+			requiresProof: true,
+			blockWhenOutOfStock: false,
+		});
+
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			pickupLocationId: paidId,
+		});
+		const orderId = (await t.query(api.orders.get, {
+			token: await tk(t, shortId),
+		}))!._id;
+
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.orders.submitMockup, {
+			orderId,
+			storageId: "mock-fee-1",
+			quotedAmount: 12000,
+		});
+		let order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(order?.subtotal).toBe(5000);
+		// subtotal + quote + fee — the two extras add, never overwrite.
+		expect(order?.total).toBe(5000 + 12000 + 500);
+
+		await asUser.mutation(api.orders.updateMockupQuote, {
+			orderId,
+			quotedAmount: 15000,
+		});
+		order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(order?.total).toBe(5000 + 15000 + 500);
+	});
+});

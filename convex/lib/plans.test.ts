@@ -14,17 +14,27 @@ import {
 } from "./plans";
 
 describe("plans — feature entitlements", () => {
-	// Mirrors the pricing table's LIVE ✓/– rows: CRM + Order Inbox are Pro+.
-	test("Starter has neither CRM nor the Order Inbox", () => {
+	// Mirrors the pricing table's LIVE ✓/– rows: CRM, Order Inbox and
+	// chargeable pickup are Pro+.
+	test("Starter has no Pro features", () => {
 		expect(featuresForPlan("starter")).toEqual({
 			crm: false,
 			orderInbox: false,
+			chargeablePickup: false,
 		});
 	});
 
-	test("Pro and Scale have both", () => {
-		expect(featuresForPlan("pro")).toEqual({ crm: true, orderInbox: true });
-		expect(featuresForPlan("scale")).toEqual({ crm: true, orderInbox: true });
+	test("Pro and Scale have all", () => {
+		expect(featuresForPlan("pro")).toEqual({
+			crm: true,
+			orderInbox: true,
+			chargeablePickup: true,
+		});
+		expect(featuresForPlan("scale")).toEqual({
+			crm: true,
+			orderInbox: true,
+			chargeablePickup: true,
+		});
 	});
 
 	test("returns a copy — mutating the result can't poison the catalog", () => {

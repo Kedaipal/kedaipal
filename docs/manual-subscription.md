@@ -211,7 +211,7 @@ nudge in the dashboard, never a block on `orders.create`;
 
 The pricing table's **live** ✓/– feature rows are now enforced, not just
 advertised. Catalog: `PLAN_FEATURES`/`featuresForPlan` in `convex/lib/plans.ts`
-(Starter: no `crm`, no `orderInbox`; Pro/Scale: both). `resolveAccess` resolves
+(Starter: no `crm`, `orderInbox` or `chargeablePickup`; Pro/Scale: all). `resolveAccess` resolves
 them onto `AccessState.features` — **the only place `plan` is read for
 gating**; every check reads the resolved descriptor, so per-retailer overrides
 stay possible later. Fail-safe: a missing subscription row resolves to Pro
@@ -231,6 +231,11 @@ showcases Pro).
   "Order pipeline" row. Also gated: `bulkUpdateStatus` and CSV export
   (`exportOrders` via `assertExportAccess`). Single `updateStatus` + order
   detail stay open to every tier.
+- **Chargeable pickup (`chargeablePickup`):** *setting* a non-zero fee on a
+  pickup location (`pickupLocations.create`/`update`) is Pro+; **clearing a fee
+  is un-gated** (a downgraded seller can always make a point free again), and a
+  fee already frozen on an order displays on every tier. See
+  [`fulfilment.md`](./fulfilment.md#chargeable-pickup-location--flat-per-location-fee-2026-07-07-clickup-86ey5tywf).
 - **UI (client mirror, `hasFeature` in `src/lib/subscription.ts` — fail-open;
   the server is the real lock):** `/app/customers` (+ detail) render a
   `ProFeatureWall` (what it does + WhatsApp "Upgrade to Pro" + billing link);

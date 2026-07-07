@@ -211,12 +211,16 @@ describe("hasFeature (client plan gate)", () => {
 	test("reads the resolved features off the subscription", () => {
 		const starter = sub({
 			plan: "starter",
-			features: { crm: false, orderInbox: false },
+			features: { crm: false, orderInbox: false, chargeablePickup: false },
 		});
 		expect(hasFeature(starter, "crm")).toBe(false);
 		expect(hasFeature(starter, "orderInbox")).toBe(false);
-		const pro = sub({ features: { crm: true, orderInbox: true } });
+		expect(hasFeature(starter, "chargeablePickup")).toBe(false);
+		const pro = sub({
+			features: { crm: true, orderInbox: true, chargeablePickup: true },
+		});
 		expect(hasFeature(pro, "crm")).toBe(true);
+		expect(hasFeature(pro, "chargeablePickup")).toBe(true);
 	});
 
 	test("fails open when the subscription/features are missing (loading, comped)", () => {

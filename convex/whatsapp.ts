@@ -247,6 +247,8 @@ export const getRetailerLocaleForOrder = internalQuery({
 		messageTemplates: MessageTemplates | undefined;
 		deliveryMethod: DeliveryMethod;
 		pickupSnapshot: PickupSnapshot | undefined;
+		// Order currency — needed to render the pickup-fee line in the block.
+		currency: string;
 		payment: ResolvedPayment;
 		// True while a custom item still awaits buyer mockup approval — the
 		// payment prompt is deferred until the gate opens (approve or waive).
@@ -270,6 +272,7 @@ export const getRetailerLocaleForOrder = internalQuery({
 				| undefined,
 			deliveryMethod: (order.deliveryMethod as DeliveryMethod | undefined) ?? "delivery",
 			pickupSnapshot: order.pickupSnapshot,
+			currency: order.currency,
 			payment: await resolvePaymentForMessage(ctx, retailer),
 			mockupPending: isMockupGateClosed(order),
 		};
@@ -293,6 +296,9 @@ async function sendPaymentMessage(
 		storeName: string;
 		trackingUrl: string;
 		pickupSnapshot: PickupSnapshot | undefined;
+		// Order currency for the pickup-fee line. Optional — callers whose
+		// snapshot can't carry a fee (counter orders pass no snapshot) omit it.
+		currency?: string;
 		payment: ResolvedPayment;
 		// When false, omit the bank/QR methods block AND the QR follow-up images —
 		// the buyer already received them earlier (e.g. at counter-checkout scan),
@@ -308,6 +314,7 @@ async function sendPaymentMessage(
 		storeName,
 		trackingUrl,
 		pickupSnapshot,
+		currency,
 		payment,
 		includePaymentDetails = true,
 	} = args;
@@ -321,7 +328,7 @@ async function sendPaymentMessage(
 	const paymentBlock = includePaymentDetails
 		? renderPaymentMethods(locale, payment.methods)
 		: "";
-	const pickupBlock = renderPickupBlock(locale, pickupSnapshot);
+	const pickupBlock = renderPickupBlock(locale, pickupSnapshot, currency);
 	// Layout: intro → [pickup] → blank line → transfer reference → [payment].
 	// Pickup first so the buyer sees the WHERE before the WHEN/HOW of paying.
 	const withPickup = pickupBlock ? `${introBody}\n${pickupBlock}` : introBody;
@@ -556,7 +563,11 @@ export const handleInbound = internalAction({
 				contactPhone,
 				trackingUrl,
 			});
-			const pickupBlock = renderPickupBlock(locale, meta?.pickupSnapshot);
+			const pickupBlock = renderPickupBlock(
+				locale,
+				meta?.pickupSnapshot,
+				meta?.currency,
+			);
 			const gatedBody = pickupBlock
 				? `${gatedConfirm}\n${pickupBlock}`
 				: gatedConfirm;
@@ -598,6 +609,7 @@ export const handleInbound = internalAction({
 				storeName,
 				trackingUrl,
 				pickupSnapshot: meta?.pickupSnapshot,
+				currency: meta?.currency,
 				payment: meta?.payment ?? { methods: [] },
 			});
 		}
@@ -1012,6 +1024,8 @@ export const getPaymentPromptMeta = internalQuery({
 		locale: Locale;
 		storeName: string;
 		pickupSnapshot: PickupSnapshot | undefined;
+		// Order currency — needed to render the pickup-fee line in the block.
+		currency: string;
 		payment: ResolvedPayment;
 	} | null> => {
 		const order = await ctx.db.get(orderId);
@@ -1026,6 +1040,7 @@ export const getPaymentPromptMeta = internalQuery({
 			locale: (retailer.locale as Locale | undefined) ?? "en",
 			storeName: retailer.storeName,
 			pickupSnapshot: order.pickupSnapshot,
+			currency: order.currency,
 			payment: await resolvePaymentForMessage(ctx, retailer),
 		};
 	},
@@ -1057,6 +1072,7 @@ export const notifyPaymentDue = internalAction({
 			locale: Locale;
 			storeName: string;
 			pickupSnapshot: PickupSnapshot | undefined;
+			currency: string;
 			payment: ResolvedPayment;
 		} | null = null;
 		try {
@@ -1093,6 +1109,7 @@ export const notifyPaymentDue = internalAction({
 			storeName: meta.storeName,
 			trackingUrl,
 			pickupSnapshot: meta.pickupSnapshot,
+			currency: meta.currency,
 			payment: meta.payment,
 		});
 	},

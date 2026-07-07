@@ -1202,3 +1202,187 @@ describe("pickupLocations — fulfilment invariant on setActive", () => {
 		expect(rows.find((r) => r._id === loc1)?.isActive).toBe(false);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Per-location pickup fee (86ey5tywf) — validation + Pro gate + public read.
+// ---------------------------------------------------------------------------
+
+/** Re-point the seeded retailer's subscription (signup seeds a Pro trial). */
+async function setPlan(
+	t: ReturnType<typeof setup>,
+	retailerId: Id<"retailers">,
+	plan: "starter" | "pro" | "scale",
+) {
+	await t.run(async (ctx) => {
+		const sub = await ctx.db
+			.query("subscriptions")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.first();
+		if (!sub) throw new Error("no subscription row");
+		await ctx.db.patch(sub._id, {
+			plan,
+			status: "active",
+			updatedAt: Date.now(),
+		});
+	});
+}
+
+describe("pickupLocations — fee", () => {
+	test("create persists a valid fee; 0 normalizes to unset (free)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A, "fee1");
+		const asA = t.withIdentity({ subject: USER_A });
+
+		const { pickupLocationId: paid } = await asA.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Paid drop-off",
+				address: "Seksyen 7, Shah Alam",
+				fee: 500,
+			},
+		);
+		const { pickupLocationId: zero } = await asA.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Free point",
+				address: "Seksyen 8, Shah Alam",
+				fee: 0,
+			},
+		);
+		const rows = await asA.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		expect(rows.find((r) => r._id === paid)?.fee).toBe(500);
+		// 0 is stored as "no fee" so every read treats undefined as the one
+		// spelling of free.
+		expect(rows.find((r) => r._id === zero)?.fee).toBeUndefined();
+	});
+
+	test("rejects negative, non-integer and absurd fees", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A, "fee2");
+		const asA = t.withIdentity({ subject: USER_A });
+		const base = {
+			retailerId: retailer._id,
+			label: "Point",
+			address: "12 Jln Tun Razak, KL",
+		};
+		await expect(
+			asA.mutation(api.pickupLocations.create, { ...base, fee: -100 }),
+		).rejects.toThrow(/whole, non-negative/);
+		await expect(
+			asA.mutation(api.pickupLocations.create, { ...base, fee: 5.5 }),
+		).rejects.toThrow(/whole, non-negative/);
+		await expect(
+			asA.mutation(api.pickupLocations.create, { ...base, fee: 1_000_001 }),
+		).rejects.toThrow(/unrealistically large/);
+	});
+
+	test("update sets, changes and clears the fee (null and 0 both clear)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A, "fee3");
+		const asA = t.withIdentity({ subject: USER_A });
+		const locId = await seedLocation(t, USER_A, retailer._id, "Point");
+
+		await asA.mutation(api.pickupLocations.update, {
+			pickupLocationId: locId,
+			fee: 700,
+		});
+		let rows = await asA.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		expect(rows[0].fee).toBe(700);
+
+		// Undefined = untouched by an unrelated edit.
+		await asA.mutation(api.pickupLocations.update, {
+			pickupLocationId: locId,
+			label: "Renamed",
+		});
+		rows = await asA.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		expect(rows[0].fee).toBe(700);
+
+		await asA.mutation(api.pickupLocations.update, {
+			pickupLocationId: locId,
+			fee: null,
+		});
+		rows = await asA.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		expect(rows[0].fee).toBeUndefined();
+
+		await asA.mutation(api.pickupLocations.update, {
+			pickupLocationId: locId,
+			fee: 300,
+		});
+		await asA.mutation(api.pickupLocations.update, {
+			pickupLocationId: locId,
+			fee: 0,
+		});
+		rows = await asA.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		expect(rows[0].fee).toBeUndefined();
+	});
+
+	test("setting a fee is Pro-gated; clearing stays open on Starter", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A, "fee4");
+		const asA = t.withIdentity({ subject: USER_A });
+		// Fee set while Pro (trial = Pro features).
+		const locId = await seedLocation(t, USER_A, retailer._id, "Point");
+		await asA.mutation(api.pickupLocations.update, {
+			pickupLocationId: locId,
+			fee: 500,
+		});
+
+		await setPlan(t, retailer._id, "starter");
+
+		// Starter can't set a fee — create or update.
+		await expect(
+			asA.mutation(api.pickupLocations.create, {
+				retailerId: retailer._id,
+				label: "New paid point",
+				address: "Seksyen 7, Shah Alam",
+				fee: 400,
+			}),
+		).rejects.toThrow(/Pro/);
+		await expect(
+			asA.mutation(api.pickupLocations.update, {
+				pickupLocationId: locId,
+				fee: 900,
+			}),
+		).rejects.toThrow(/Pro/);
+
+		// …but clearing back to free is always allowed (never trap a
+		// downgraded seller with a fee they can't remove).
+		await asA.mutation(api.pickupLocations.update, {
+			pickupLocationId: locId,
+			fee: null,
+		});
+		const rows = await asA.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		expect(rows.find((r) => r._id === locId)?.fee).toBeUndefined();
+	});
+
+	test("listActivePublicBySlug exposes the fee to the storefront picker", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A, "fee5");
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.pickupLocations.create, {
+			retailerId: retailer._id,
+			label: "Paid point",
+			address: "Seksyen 7, Shah Alam",
+			fee: 500,
+		});
+		const rows = await t.query(api.pickupLocations.listActivePublicBySlug, {
+			slug: retailer.slug,
+		});
+		expect(rows).toHaveLength(1);
+		expect(rows[0].fee).toBe(500);
+	});
+});

@@ -4,6 +4,7 @@ import { convexTest } from "convex-test";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { orderToReceiptData } from "./lib/pdf/document";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -374,5 +375,53 @@ describe("invoices PDF (UC B)", () => {
 			async (ctx) => (await ctx.db.get(invoiceId))?.pdfStorageId,
 		);
 		expect(stored == null).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Pickup fee on the receipt/invoice view-model (86ey5tywf) — pure mapper test;
+// the byte-level render is covered by the isPdf smoke tests above.
+// ---------------------------------------------------------------------------
+
+describe("orderToReceiptData — pickup fee", () => {
+	const baseOrder = {
+		shortId: "ORD-FEE1",
+		createdAt: Date.UTC(2026, 6, 1),
+		paymentStatus: "unpaid" as const,
+		customer: { name: "Ali" },
+		items: [{ name: "Tent wash", quantity: 1, price: 12000 }],
+		subtotal: 12000,
+		total: 12500,
+		currency: "MYR",
+	};
+
+	test("maps the frozen fee + point label onto the document", () => {
+		const data = orderToReceiptData({
+			order: {
+				...baseOrder,
+				pickupFee: 500,
+				pickupSnapshot: { label: "Paid drop-off" },
+			},
+			storeName: "Bearcamp",
+			paymentMethods: [],
+		});
+		expect(data.pickupFee).toBe(500);
+		expect(data.pickupLabel).toBe("Paid drop-off");
+	});
+
+	test("free order maps no fee row (0 and unset both free)", () => {
+		const free = orderToReceiptData({
+			order: { ...baseOrder, total: 12000 },
+			storeName: "Bearcamp",
+			paymentMethods: [],
+		});
+		expect(free.pickupFee).toBeUndefined();
+		expect(free.pickupLabel).toBeUndefined();
+		const zero = orderToReceiptData({
+			order: { ...baseOrder, total: 12000, pickupFee: 0 },
+			storeName: "Bearcamp",
+			paymentMethods: [],
+		});
+		expect(zero.pickupFee).toBeUndefined();
 	});
 });

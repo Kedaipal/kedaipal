@@ -433,6 +433,17 @@ export async function buildOrderReceiptPdf(
 		totalsRow(d, "Subtotal", formatMoney(data.subtotal, data.currency), y);
 		y -= 18;
 	}
+	// Pickup fee gets a labelled row so the subtotal→total gap is explained on
+	// paper too (mirrors the tracking page + order detail breakdown).
+	if (data.pickupFee && data.pickupFee > 0) {
+		totalsRow(
+			d,
+			data.pickupLabel ? `Pickup fee — ${data.pickupLabel}` : "Pickup fee",
+			formatMoney(data.pickupFee, data.currency),
+			y,
+		);
+		y -= 18;
+	}
 	y = totalBar(d, "Total", formatMoney(data.total, data.currency), y);
 
 	if (data.customerNote) {

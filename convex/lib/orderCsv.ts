@@ -32,6 +32,10 @@ export type CsvOrder = {
 	customer: { name?: string; waPhone?: string };
 	items: Array<{ name: string; variantLabel?: string; quantity: number }>;
 	subtotal: number;
+	/** Frozen per-location pickup fee (minor units). Undefined/0 = free — the
+	 * column prints "0.00" so the Subtotal + Pickup fee = Total identity always
+	 * sums in a spreadsheet. */
+	pickupFee?: number;
 	total: number;
 	currency: string;
 	customerNote?: string;
@@ -50,6 +54,7 @@ export const CSV_COLUMNS = [
 	"Payment method",
 	"Items",
 	"Subtotal",
+	"Pickup fee",
 	"Total",
 	"Currency",
 	"Note",
@@ -77,6 +82,7 @@ export function orderToCsvRow(o: CsvOrder): string[] {
 		o.paymentMethod ?? "",
 		items,
 		csvAmount(o.subtotal),
+		csvAmount(o.pickupFee ?? 0),
 		csvAmount(o.total),
 		o.currency,
 		o.customerNote ?? "",

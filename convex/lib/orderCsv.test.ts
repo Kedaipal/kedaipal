@@ -68,6 +68,22 @@ describe("orderToCsvRow", () => {
 		);
 	});
 
+	test("pickup fee column prints the fee, and 0.00 when free — Subtotal + Pickup fee = Total always sums", () => {
+		const withFee = orderToCsvRow({
+			...base,
+			deliveryMethod: "self_collect",
+			pickupFee: 500,
+			total: 13000,
+		});
+		expect(withFee[CSV_COLUMNS.indexOf("Pickup fee")]).toBe("5.00");
+		expect(withFee[CSV_COLUMNS.indexOf("Subtotal")]).toBe("125.00");
+		expect(withFee[CSV_COLUMNS.indexOf("Total")]).toBe("130.00");
+		// Free order (fee unset) → explicit 0.00, not blank.
+		expect(orderToCsvRow(base)[CSV_COLUMNS.indexOf("Pickup fee")]).toBe(
+			"0.00",
+		);
+	});
+
 	test("fills sensible defaults for missing fields", () => {
 		const row = orderToCsvRow({
 			shortId: "ORD-9",
