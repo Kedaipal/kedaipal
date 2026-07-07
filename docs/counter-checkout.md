@@ -15,6 +15,14 @@
 
 ---
 
+> **⚠️ Superseded in part by [§One QR](#one-qr--the-store-poster-replaces-the-per-session-qr-86ey5neg6) (`86ey5neg6`).**
+> The per-session `KP-<token>` flow described in the historical sections below
+> (`createCheckoutSession` / `bindCheckoutSession` / `AwaitingScreen` / the
+> `checkout_bind` intent) has been **removed**. Counter checkout now uses a single
+> permanent store QR (`KPS-`); "Start checkout" just presents it, and the walk-in
+> session is created when the buyer scans. Read the historical sections for
+> lineage, but the One-QR section is the current behaviour.
+
 ## The flow (flipped — confirmed by spike [`86ey0e80x`](https://app.clickup.com/t/86ey0e80x))
 
 A buyer's personal WhatsApp QR is **opaque** (`wa.me/qr/<token>`, no phone number
@@ -250,10 +258,12 @@ the seller doesn't have to remember a manual step.
 - **Automatic send on checkout** (`whatsapp.notifyCounterOrderCreated`, scheduled
   by `createOrderFromSession`) — the buyer's chat gets, with no seller action:
   - **Paid now** → a "confirmed & paid" text, then the **Receipt** PDF.
-  - **Pay later** → the **payment ask** (transfer-reference line + the seller's
-    payment methods as text + an "I've paid" CTA + any QR images, via the shared
-    `sendPaymentMessage`), then the **Invoice** PDF. So the buyer can pay from the
-    chat immediately — the payment details arrive *and* are baked into the invoice.
+  - **Pay later** → a lean payment ask — the amount + transfer-reference line +
+    an "I've paid" CTA + tracking link (via `sendPaymentMessage` with
+    `includePaymentDetails: false`), then the **Invoice** PDF. The seller's
+    bank/QR **methods block is intentionally omitted here** — the buyer already
+    received it at scan-bind (see below), and the invoice PDF carries it too, so
+    re-sending would repeat the same details.
 - **One PDF, two faces:** `buildOrderReceiptPdf` keys off `OrderReceiptData.paid` —
   an unpaid order prints **"Invoice"** + the "How to pay" block, a settled one
   prints **"Receipt"**. No separate invoice builder or table.
@@ -271,6 +281,116 @@ the seller doesn't have to remember a manual step.
   sheet, falling back to download on desktop). Only renders on the fresh-create
   path (has the `shortId` + accurate paid state); a resend from **order detail**
   is a noted follow-up.
+
+### Pay-at-bind — payment info right after the scan ([`86ey5kq7p`](https://app.clickup.com/t/86ey5kq7p))
+
+So the buyer can pay **whenever they're ready** — often while the cashier is
+still ringing items up — the seller's payment details are pushed **immediately
+after the bind ack**, not held until the order is created.
+
+- `handleInbound`'s `checkout_bind` branch schedules
+  `whatsapp.notifyCounterCheckoutPayment` (`runAfter(0)`) right after sending the
+  `counterCheckoutBound` ack — scheduled, not inline, so the ack always lands
+  first and a payment-send hiccup can't fail the bind reply.
+- The action loads the retailer's resolved methods via the retailerId-keyed
+  `getRetailerPaymentContext` query (no order exists yet at scan time), then
+  sends a friendly intro (`counterCheckoutPaymentIntro`, EN + MS) + the
+  `renderPaymentMethods` block + one image per QR method. **No-ops** when the
+  seller has no methods configured (nothing to send — no empty header).
+- Sent as a gated **`session_message`** (the retailer is now known, so per-seller
+  caps + kill switch + opt-outs apply) — unlike the transactional order docs.
+- **No double-send:** the pay-later order-create message drops the methods block
+  (above), so the buyer sees the bank/QR **once** per session, at scan.
+- No tracking URL / "I've paid" CTA here — there's no order yet; those arrive
+  with the order-create confirmation once the cashier finalizes.
+- **Seller-side discoverability:** the "Ask the buyer to scan" screen
+  (`AwaitingScreen`, `app.checkout.tsx`) shows a one-line helper — *"They'll also
+  get your payment details right away, so they can pay while you ring up"* —
+  gated on the retailer having ≥1 payment method configured, so it's never shown
+  when nothing would actually be sent.
+
+### Printable static store QR poster ([`86ey5m35w`](https://app.clickup.com/t/86ey5m35w))
+
+One QR the seller **prints and puts up at the counter** — any walk-in buyer scans
+it to start checkout themselves, instead of the cashier minting a per-session QR
+for each customer. The per-session `KP-` QR embeds a single-use token so a
+printed copy dies after one scan; this poster QR is the durable answer.
+
+**The model — security is behavioural limits, not token secrecy.** A poster token
+is printed on a wall, so it was never going to be secret. Security comes from:
+rotation (kills leaked posters), per-`(store, phone)` rate limits, a per-store cap
+on concurrent open walk-in sessions, and the retention purge — NOT from hiding the
+token. The residual risk (someone photographs the poster and scans from home) is a
+single dismissible junk session that auto-expires; **no order or payment can
+result, because only the cashier builds orders.** (Option B — a web redirect that
+mints a fresh single-use token per scan — was rejected for v1: worse counter UX,
+and the mint URL is exactly as public, so it needs the same limits anyway.)
+
+- **Token:** `retailers.counterQrToken` — permanent, random (`generateTrackingToken`
+  alphabet), **never** the slug; indexed `by_counterQrToken`. `ensureCounterQrToken`
+  is idempotent (the card's Generate button can't rotate by accident);
+  `rotateCounterQrToken` replaces it (confirm-gated in the UI — old posters die).
+- **Flow:** poster encodes `wa.me/<WABA>?text=…KPS-<token>…`. The inbound router
+  (`inboundIntent.ts`) classifies `KPS-<token>` → `store_checkout_start` (checked
+  **before** `KP-`; the literals can't shadow each other, pinned by a test) →
+  `startSessionFromStoreQr` **creates or re-claims** a `buyer_identified` session
+  flagged `origin: "store_qr"`. A rescan by the same buyer re-claims the open
+  session (no duplicate row, no rate-limit charge). `handleInbound` acks with
+  `storeQrConnected` (localized) then schedules the shared `notifyCounterCheckoutPayment`
+  (same pay-at-scan push — skipped on a re-claim so details never repeat).
+- **Guards, in order:** unknown/rotated token → `not_found` (generic reply, no
+  store leaked); re-claim; then the `storeQrScan` rate limit (`3/hr` per
+  `(store, phone)`) + `MAX_OPEN_STORE_QR_SESSIONS` (10) cap → `busy` reply.
+- **Seller UI:** a **Store QR card** on the walk-in desk screen (`StoreQrCard`,
+  `app.checkout.tsx`) — Generate + Rotate + a quick on-screen QR (printing moved to
+  the deluxe A4 at `/app/poster`, see One-QR below). Walk-in sessions carry a
+  **"Walk-in scan"** badge in the open-checkouts list (`origin` on `listOpenSessions`).
+- **PDPA notice at collection** (see `86ey5m3hx`): a poster buyer never touches the
+  website before their number is stored, so the `storeQrConnected` ack **and** the
+  printed poster both carry the `kedaipal.com/privacy` line (EN + BM).
+- **Retention purge:** `purgeStaleSessions` (daily cron) **deletes** dead sessions
+  (`expired`/`cancelled`) ~30 days after they die — they hold buyer phone numbers
+  and the poster raises junk-scan volume, so they must not live forever.
+  `expireStaleSessions` only *flips* status; this is the row-deleting sweep.
+  Completed sessions are kept (they link to orders; order retention is `86ey5m3hx`).
+
+### One QR — the store poster replaces the per-session QR ([`86ey5neg6`](https://app.clickup.com/t/86ey5neg6))
+
+Counter checkout had **two** QRs (the per-session `KP-` on `AwaitingScreen` +
+this permanent `KPS-` store QR), which confused sellers. Decision (CTO): **one
+QR** — the static store QR is now the *only* counter QR.
+
+- **Per-session flow removed.** Deleted `createCheckoutSession`,
+  `bindCheckoutSession`, the `checkout_bind` intent + `CHECKOUT_TOKEN_REGEX`, the
+  `counterCheckoutBound/Expired/Used` copy, `AwaitingScreen`/`ExpiryCountdown`, and
+  the `checkoutSessionCreate` rate limit. The `awaiting_buyer` status literal is
+  **kept** in the schema union (migration-safe — prod rows may exist), just never
+  created; `expireStaleSessions` still sweeps it harmlessly.
+- **No "Start checkout" button.** The QR is static, so there's no per-buyer
+  ceremony. The Counter page shows the **one** store QR **compactly in the header**
+  (`StoreQrChip`) — tap to enlarge for a buyer to scan; the walk-in session is
+  created when they scan. Token auto-provisions silently. **All QR management
+  (rotate) moved off this page to `/app/poster`** (its natural home — it already
+  ensures the token + prints the A4). The redundant on-page "Store QR card" was
+  removed.
+- **Buyer pairing code — made actionable.** `startSessionFromStoreQr` mints a short
+  `counterCheckoutSessions.pairingCode` (e.g. `K7` — 1 unambiguous letter + digit,
+  unique among the store's open walk-ins), returned to the ack copy
+  (`storeQrConnected` shows *"Your order code is `*K7*`"*) **and** surfaced as the
+  open-checkouts list row's avatar. The list has a **search box** (filter by code
+  or name) with **Enter-to-open** on a single match — so the cashier acts on the
+  code the buyer shows them instead of eyeballing the list. A re-claim returns the
+  **same** code.
+- **Download → `/app/poster`.** The counter card's print button links to the deluxe
+  A4 poster (`86ey5m4m9`) — one poster renderer (the old client-side PNG builder +
+  `escapeXml` were removed). Rotate now lives on `/app/poster` too.
+- **Dashboard QR dialog (`StorefrontQrDialog`)** now shows **both** QRs ("Order
+  online" + "At the counter") each with its own Download-PNG, centered/width-capped
+  on desktop, keeping the "printable A4 poster →" link. (This is the quick
+  standalone-PNG grab; `/app/poster` remains the branded print.)
+- **Payment-at-scan unchanged** (`86ey5kq7p`): first scan schedules
+  `notifyCounterCheckoutPayment`; a re-claim skips it (buyer already has the
+  details); no-ops when the seller has no payment methods.
 
 ### Build-screen UX polish (same ticket)
 

@@ -2,7 +2,7 @@
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 
@@ -134,6 +134,26 @@ describe("admin act-as access", () => {
 		expect(await auditCount(t, retailer._id)).toBe(1);
 	});
 
+	test("admin's OWN past_due store is never soft-locked (free forever, no audit)", async () => {
+		const t = setup();
+		// Store owned by the admin themselves — not an act-as target.
+		const retailer = await seedRetailer(t, ADMIN);
+		await makePastDue(t, retailer._id);
+
+		// Past the trial, an admin keeps full growth-write access to their own store
+		// (a plain owner would be blocked here — see the test above).
+		await t
+			.withIdentity({ subject: ADMIN })
+			.mutation(api.products.create, baseProduct(retailer._id));
+		await t.withIdentity({ subject: ADMIN }).mutation(api.retailers.updateSettings, {
+			retailerId: retailer._id,
+			storeName: "Admin's Own Store",
+		});
+
+		// It's their own store (not act-as), so nothing is audited.
+		expect(await auditCount(t, retailer._id)).toBe(0);
+	});
+
 	test("updateSettings act-as edits the seller store, audited + bypasses lock", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, OWNER);
@@ -225,34 +245,32 @@ describe("admin console reads", () => {
 });
 
 describe("counter checkout act-as", () => {
-	test("admin opens a session for the seller (bound to the SELLER, audited)", async () => {
+	test("admin generates the seller's store QR (bound to the SELLER, audited)", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, OWNER);
-		const { sessionId } = await t
+		const { token } = await t
 			.withIdentity({ subject: ADMIN })
-			.mutation(api.counterCheckout.createCheckoutSession, {
+			.mutation(api.counterCheckout.ensureCounterQrToken, {
 				retailerId: retailer._id,
 			});
-		const session = await t.run(async (ctx) => ctx.db.get(sessionId));
-		// The session belongs to the seller and binds the SELLER's userId, never the
-		// acting admin's — so the inbound webhook still resolves the buyer correctly.
-		expect(session?.retailerId).toBe(retailer._id);
-		expect(session?.sellerUserId).toBe(OWNER);
+		// The token lands on the seller's store, not the admin's.
+		const seller = await t.run(async (ctx) => ctx.db.get(retailer._id));
+		expect(seller?.counterQrToken).toBe(token);
 		const rows = await t
 			.withIdentity({ subject: ADMIN })
 			.query(api.admin.recentAuditForRetailer, { retailerId: retailer._id });
 		expect(
-			rows.some((r) => r.action === "counterCheckout.createCheckoutSession"),
+			rows.some((r) => r.action === "counterCheckout.ensureCounterQrToken"),
 		).toBe(true);
 	});
 
-	test("a stranger cannot open a session for another store", async () => {
+	test("a stranger cannot generate a store QR for another store", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, OWNER);
 		await expect(
 			t
 				.withIdentity({ subject: STRANGER })
-				.mutation(api.counterCheckout.createCheckoutSession, {
+				.mutation(api.counterCheckout.ensureCounterQrToken, {
 					retailerId: retailer._id,
 				}),
 		).rejects.toThrow(/Forbidden/);
@@ -261,15 +279,20 @@ describe("counter checkout act-as", () => {
 	test("admin can list the seller's open sessions", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, OWNER);
-		await t
+		const { token } = await t
 			.withIdentity({ subject: ADMIN })
-			.mutation(api.counterCheckout.createCheckoutSession, {
+			.mutation(api.counterCheckout.ensureCounterQrToken, {
 				retailerId: retailer._id,
 			});
+		// A walk-in scan opens a session bound to the SELLER's store.
+		await t.mutation(internal.counterCheckout.startSessionFromStoreQr, {
+			token,
+			waPhone: "60123456789",
+		});
 		const open = await t
 			.withIdentity({ subject: ADMIN })
 			.query(api.counterCheckout.listOpenSessions, { retailerId: retailer._id });
 		expect(open.length).toBe(1);
-		expect(open[0]?.status).toBe("awaiting_buyer");
+		expect(open[0]?.origin).toBe("store_qr");
 	});
 });

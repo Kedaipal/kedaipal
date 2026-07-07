@@ -339,6 +339,11 @@ type RetailerPublic = {
 	checkoutPhone?: string;
 	logoStorageId?: string;
 	logoUrl?: string;
+	// Wide cover/banner. Public-safe — the storefront header hero and the PRIMARY
+	// OG/JSON-LD image (logo → first product image fall back). Surfaced on both the
+	// owner read and the by-slug storefront payload. See docs/store-cover-banner.md.
+	coverImageStorageId?: string;
+	coverImageUrl?: string;
 	currency: SupportedCurrency;
 	locale: Locale;
 	messageTemplates?: MessageTemplatesShape;
@@ -443,6 +448,11 @@ async function buildRetailerPublic(
 		const url = await ctx.storage.getUrl(row.logoStorageId);
 		logoUrl = url ?? undefined;
 	}
+	let coverImageUrl: string | undefined;
+	if (row.coverImageStorageId) {
+		const url = await ctx.storage.getUrl(row.coverImageStorageId);
+		coverImageUrl = url ?? undefined;
+	}
 	const sub = await loadSubscription(ctx, row._id);
 	if (!sub) {
 		console.warn(
@@ -463,6 +473,8 @@ async function buildRetailerPublic(
 		notifyEmail: row.notifyEmail,
 		logoStorageId: row.logoStorageId,
 		logoUrl,
+		coverImageStorageId: row.coverImageStorageId,
+		coverImageUrl,
 		currency: (row.currency as SupportedCurrency) ?? DEFAULT_CURRENCY,
 		locale: row.locale ?? DEFAULT_LOCALE,
 		messageTemplates: row.messageTemplates as MessageTemplatesShape | undefined,
@@ -553,6 +565,11 @@ export const getRetailerBySlug = query({
 				const url = await ctx.storage.getUrl(active.logoStorageId);
 				logoUrl = url ?? undefined;
 			}
+			let coverImageUrl: string | undefined;
+			if (active.coverImageStorageId) {
+				const url = await ctx.storage.getUrl(active.coverImageStorageId);
+				coverImageUrl = url ?? undefined;
+			}
 			return {
 				status: "ok",
 				retailer: {
@@ -564,6 +581,8 @@ export const getRetailerBySlug = query({
 					checkoutPhone: process.env.WHATSAPP_CHECKOUT_PHONE ?? active.waPhone,
 					logoStorageId: active.logoStorageId,
 					logoUrl,
+					coverImageStorageId: active.coverImageStorageId,
+					coverImageUrl,
 					currency:
 						(active.currency as SupportedCurrency) ?? DEFAULT_CURRENCY,
 					locale: active.locale ?? DEFAULT_LOCALE,
@@ -892,6 +911,9 @@ export const updateSettings = mutation({
 		paymentMethods: v.optional(paymentMethodsValidator),
 		// Empty string clears the logo. Undefined means "no change".
 		logoStorageId: v.optional(v.string()),
+		// Wide cover/banner. Empty string clears; undefined = no change. Replaced/
+		// cleared blobs are garbage-collected in the handler.
+		coverImageStorageId: v.optional(v.string()),
 		offerSelfCollect: v.optional(v.boolean()),
 		offerDelivery: v.optional(v.boolean()),
 		// Minimum days' notice before a fulfilment date. Clamped to [0, 30].
@@ -927,6 +949,7 @@ export const updateSettings = mutation({
 			waPhone: string | undefined;
 			notifyEmail: string | undefined;
 			logoStorageId: string | undefined;
+			coverImageStorageId: string | undefined;
 			currency: SupportedCurrency;
 			locale: Locale;
 			messageTemplates: MessageTemplatesShape | undefined;
@@ -1011,9 +1034,35 @@ export const updateSettings = mutation({
 			// single object — clear it so reads don't double-count.
 			patch.paymentInstructions = undefined;
 		}
+		// Logo / cover image share one rule: empty string clears, undefined = no
+		// change. On replace OR clear, garbage-collect the previous blob so swaps
+		// don't leak storage (mirrors the QR GC above). Best-effort — a missing/
+		// already-deleted blob must not abort the save.
 		if (args.logoStorageId !== undefined) {
 			const trimmed = args.logoStorageId.trim();
-			patch.logoStorageId = trimmed.length > 0 ? trimmed : undefined;
+			const next = trimmed.length > 0 ? trimmed : undefined;
+			if (retailer.logoStorageId && retailer.logoStorageId !== next) {
+				try {
+					await ctx.storage.delete(retailer.logoStorageId as Id<"_storage">);
+				} catch {
+					// already gone — ignore
+				}
+			}
+			patch.logoStorageId = next;
+		}
+		if (args.coverImageStorageId !== undefined) {
+			const trimmed = args.coverImageStorageId.trim();
+			const next = trimmed.length > 0 ? trimmed : undefined;
+			if (retailer.coverImageStorageId && retailer.coverImageStorageId !== next) {
+				try {
+					await ctx.storage.delete(
+						retailer.coverImageStorageId as Id<"_storage">,
+					);
+				} catch {
+					// already gone — ignore
+				}
+			}
+			patch.coverImageStorageId = next;
 		}
 		if (args.offerSelfCollect !== undefined) {
 			patch.offerSelfCollect = args.offerSelfCollect;
@@ -1311,6 +1360,20 @@ export const generateLogoUploadUrl = mutation({
 });
 
 /**
+ * Generate a one-shot upload URL for the retailer's store cover/banner image.
+ * The frontend POSTs the file here, then stores the returned `storageId`
+ * via `updateSettings({ coverImageStorageId })`.
+ */
+export const generateCoverImageUploadUrl = mutation({
+	args: {},
+	handler: async (ctx): Promise<string> => {
+		const userId = await requireUserId(ctx);
+		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
+		return ctx.storage.generateUploadUrl();
+	},
+});
+
+/**
  * Generate a one-shot upload URL for a payment-method QR image. The frontend
  * POSTs the file here, then stores the returned `storageId` on a `qr` method and
  * saves the array via `updateSettings({ paymentMethods })`.
@@ -1477,6 +1540,7 @@ export const deleteUser = internalMutation({
 		// Retailer-level storage, then the retailer row. Delete every QR image —
 		// across the methods array AND the legacy single object.
 		await deleteFile(retailer.logoStorageId);
+		await deleteFile(retailer.coverImageStorageId);
 		for (const qrId of collectQrStorageIds(retailer)) await deleteFile(qrId);
 		await ctx.db.delete(retailerId);
 

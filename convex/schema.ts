@@ -28,6 +28,12 @@ export default defineSchema({
 		// Convex storage ID for the store's logo. Public — surfaced on the
 		// storefront header, dashboard hero, and as the OG image fallback.
 		logoStorageId: v.optional(v.string()),
+		// Convex storage ID for the store's wide cover/banner image. Public —
+		// rendered full-bleed at the top of the storefront header and used as the
+		// PRIMARY OG/social-share + JSON-LD image (logo → first product image are
+		// the fallbacks). No index — only read alongside the retailer row, same as
+		// logoStorageId. See docs/store-cover-banner.md.
+		coverImageStorageId: v.optional(v.string()),
 		currency: v.optional(v.string()),
 		locale: v.optional(v.union(v.literal("en"), v.literal("ms"))),
 		// Per-retailer overrides for WhatsApp message copy. Any key omitted falls
@@ -218,11 +224,19 @@ export default defineSchema({
 		// WABA send guardrails (kill switch, per-seller caps) live in their own
 		// `retailerSendingLimits` table — see docs/waba-protection.md.
 		channel: v.literal("whatsapp"),
+		// Permanent store QR token for the printable counter poster (`KPS-<token>`
+		// inbound prefill). Public by design (it's printed on a wall) — security is
+		// behavioural limits + rotation, never secrecy. Random (generateTrackingToken
+		// alphabet), NEVER the slug; rotating replaces it and kills old posters.
+		// See docs/counter-checkout.md (store QR poster, 86ey5m35w).
+		counterQrToken: v.optional(v.string()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
 		.index("by_user", ["userId"])
 		.index("by_slug", ["slug"])
+		// Inbound `KPS-<token>` poster scans resolve the store by token.
+		.index("by_counterQrToken", ["counterQrToken"])
 		// Admin "onboard a client" pre-check: is a store already registered to this
 		// email? notifyEmail is stored normalized (trim + lowercase via
 		// assertValidEmail), so an equality lookup is exact. See docs/vendor-identity.md.
@@ -545,6 +559,11 @@ export default defineSchema({
 		paymentClaimedAt: v.optional(v.number()),
 		paymentReceivedAt: v.optional(v.number()),
 		paymentProofStorageId: v.optional(v.string()),
+		// When the one-time "still awaiting payment" WhatsApp nudge was sent
+		// (3 days before the 14-day open-payment window closes). Stamped by the
+		// daily cron at schedule time so it never double-sends. Undefined = not
+		// sent (yet, or never became due). See docs/payment-reminder.md.
+		paymentReminderSentAt: v.optional(v.number()),
 		// Mockup/proof approval — a third independent dimension (like payment),
 		// gating the confirmed→packed transition for made-to-order orders.
 		// Undefined = order has no proof-required item (no gate). See
@@ -677,16 +696,34 @@ export default defineSchema({
 	counterCheckoutSessions: defineTable({
 		retailerId: v.id("retailers"),
 		sellerUserId: v.string(), // Clerk subject who opened the counter
-		// Unguessable, single-use capability the buyer sends back as `KP-<token>`.
-		// Same generator as orders.trackingToken (generateTrackingToken).
+		// Unguessable internal capability. Same generator as orders.trackingToken
+		// (generateTrackingToken); kept unique per session even though buyers no
+		// longer send it back (the per-session `KP-` bind flow was removed —
+		// 86ey5neg6; walk-ins now bind via the permanent store `KPS-` QR).
 		token: v.string(),
 		status: v.union(
-			v.literal("awaiting_buyer"), // QR shown; no scan yet
-			v.literal("buyer_identified"), // buyer bound (token / manual phone)
+			// `awaiting_buyer` is retained for migration-safety (prod rows may exist
+			// from the old per-session flow) but is no longer created — walk-ins
+			// land straight in `buyer_identified`. The idle-expiry sweep still runs.
+			v.literal("awaiting_buyer"),
+			v.literal("buyer_identified"), // buyer bound via store-QR scan
 			v.literal("completed"), // order created from the session
-			v.literal("expired"), // TTL elapsed before a scan
+			v.literal("expired"), // TTL elapsed
 			v.literal("cancelled"), // seller dismissed it
 		),
+		// Who initiated the session. Now always the buyer scanning the printed
+		// store poster (`KPS-`, 86ey5m35w). Undefined → "cashier" (legacy-safe,
+		// same posture as pickupSnapshot.locationType). Drives the "Walk-in scan"
+		// badge; `cashier` only appears on legacy rows from the removed flow.
+		origin: v.optional(
+			v.union(v.literal("cashier"), v.literal("store_qr")),
+		),
+		// Short human pairing code (e.g. "K7") shown to the buyer on connect AND on
+		// the cashier's open-checkouts list, so the cashier matches "who's this?"
+		// at a glance (there's no order number yet — the order is created later).
+		// Unique among the store's currently-open walk-in sessions; reused across
+		// the store once a session closes. See docs/counter-checkout.md (86ey5neg6).
+		pairingCode: v.optional(v.string()),
 		// Bound buyer identity. `customerId` is set only when an EXISTING customer
 		// matched (retailerId, waPhone) — a brand-new buyer has waPhone/pushname
 		// but no customer row until the order is created (linkOrderToCustomer).

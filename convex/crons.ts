@@ -18,6 +18,16 @@ crons.daily(
 	internal.subscriptions.internalDailyBillingStatus,
 );
 
+// Unpaid-order payment reminders: one WhatsApp nudge at day 11 of the 14-day
+// open-payment window (3 days before it closes). 02:00 UTC = 10:00 MYT, a
+// humane hour for a buyer-facing message. See docs/payment-reminder.md.
+crons.daily(
+	"unpaid payment reminders",
+	{ hourUTC: 2, minuteUTC: 0 },
+	internal.paymentReminders.sendDuePaymentReminders,
+	{},
+);
+
 // Counter Checkout housekeeping: flip unscanned sessions past their ~10min TTL
 // to `expired`. Reads already compute effective expiry, so this just keeps stale
 // rows out of active-session listings. See docs/counter-checkout.md.
@@ -25,6 +35,18 @@ crons.interval(
 	"expire stale counter checkout sessions",
 	{ minutes: 5 },
 	internal.counterCheckout.expireStaleSessions,
+	{},
+);
+
+// PDPA retention: DELETE dead counter sessions (expired/cancelled) ~30 days
+// after they died — they hold buyer phone numbers, and the store QR poster
+// (86ey5m35w) increases junk-scan volume, so they must not live forever.
+// Completed sessions are kept (order retention is the Compliance Pack's job,
+// 86ey5m3hx). See docs/counter-checkout.md.
+crons.daily(
+	"purge stale counter checkout sessions",
+	{ hourUTC: 3, minuteUTC: 45 },
+	internal.counterCheckout.purgeStaleSessions,
 	{},
 );
 

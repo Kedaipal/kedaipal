@@ -22,6 +22,7 @@ import {
 	query,
 	type QueryCtx,
 } from "./_generated/server";
+import { isAdmin } from "./lib/auth";
 import {
 	capsForPlan,
 	featuresForPlan,
@@ -131,6 +132,11 @@ export async function assertSubscriptionActive(
 	ctx: AnyCtx,
 	retailerId: Id<"retailers">,
 ): Promise<void> {
+	// Kedaipal admins are never soft-locked — they run the app for free, whether
+	// on their own store (dogfooding, past the trial) or on a seller's store during
+	// act-as white-glove. Identity-based (ADMIN_USER_IDS) so it self-heals from the
+	// allowlist with no `comped` data to backfill or drift. See docs/admin-console.md.
+	if (await isAdmin(ctx)) return;
 	const access = await getAccess(ctx, retailerId);
 	if (access.frozen) {
 		throw new ConvexError(

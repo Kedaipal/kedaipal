@@ -34,9 +34,17 @@ interface SidebarProps {
 	retailer: Retailer | null;
 	actionableCount: number;
 	isAdmin?: boolean;
+	// True when an admin is viewing their OWN store — the tier pill reads "Admin"
+	// instead of the store's trial/plan state. False while acting-as a seller.
+	adminBadge?: boolean;
 }
 
-export function Sidebar({ retailer, actionableCount, isAdmin }: SidebarProps) {
+export function Sidebar({
+	retailer,
+	actionableCount,
+	isAdmin,
+	adminBadge,
+}: SidebarProps) {
 	const [collapsed, setCollapsed] = useSidebarCollapsed();
 	const { user } = useUser();
 	const userEmail = user?.primaryEmailAddress?.emailAddress ?? null;
@@ -56,7 +64,7 @@ export function Sidebar({ retailer, actionableCount, isAdmin }: SidebarProps) {
 	return (
 		<aside
 			className={cn(
-				"sticky top-0 hidden h-dvh shrink-0 flex-col border-r border-border bg-card lg:flex",
+				"sticky top-0 hidden h-dvh shrink-0 flex-col border-r border-border bg-card lg:flex print:hidden",
 				collapsed ? "w-[68px]" : "w-60",
 			)}
 			aria-label="Dashboard navigation"
@@ -87,12 +95,14 @@ export function Sidebar({ retailer, actionableCount, isAdmin }: SidebarProps) {
 			</div>
 
 			{/* Subscription tier pill — always-visible chrome (links to billing).
-			    Hidden for a storeless admin (no subscription to show). */}
+			    Hidden for a storeless admin (no subscription to show). Reads "Admin"
+			    on an admin's own store. */}
 			{retailer && !collapsed ? (
 				<div className="border-b border-border px-4 py-2">
 					<TierPill
 						subscription={retailer.subscription}
 						foundingRank={retailer.foundingMemberRank}
+						admin={adminBadge}
 					/>
 				</div>
 			) : null}

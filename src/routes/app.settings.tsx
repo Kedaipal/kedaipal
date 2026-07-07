@@ -1,8 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import {
+	ArrowLeft,
 	Building2,
 	ChevronDown,
+	ChevronRight,
 	ClipboardList,
 	CreditCard,
 	Info,
@@ -33,6 +35,7 @@ import {
 	PageHeader,
 	PageHeaderSkeleton,
 } from "../components/dashboard/page-header";
+import { TierPill } from "../components/dashboard/tier-pill";
 import { useAppForm } from "../components/forms/form";
 import { ShopeeIcon } from "../components/icons/shopee-icon";
 import { BillingTab } from "../components/settings/billing-tab";
@@ -45,6 +48,7 @@ import {
 	useActAsRetailerId,
 	useDashboardRetailer,
 } from "../hooks/useDashboardRetailer";
+import { useRevealOnAdd } from "../hooks/useRevealOnAdd";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage } from "../lib/format";
 import {
@@ -63,6 +67,7 @@ import {
 	settingsNotifyEmailFormSchema,
 	settingsWaPhoneFormSchema,
 } from "../lib/schemas";
+import { tierPill } from "../lib/subscription";
 
 const CURRENCY_OPTIONS = SUPPORTED_CURRENCIES.map((c) => ({
 	value: c,
@@ -146,6 +151,25 @@ const SETTINGS_TAB_IDS: ReadonlyArray<SettingsTab> = SETTINGS_TABS.map(
 	(t) => t.id,
 );
 
+// The mobile index groups sections by meaning: your store's identity/account
+// vs how you sell. Desktop keeps the flat tab grid (all destinations visible).
+const SETTINGS_GROUPS: ReadonlyArray<{
+	label: string;
+	tabs: SettingsTab[];
+}> = [
+	{ label: "Store", tabs: ["store", "billing"] },
+	{
+		label: "Selling",
+		tabs: [
+			"whatsapp",
+			"payments",
+			"fulfilment",
+			"order-status",
+			"integrations",
+		],
+	},
+];
+
 function Card({ children }: { children: ReactNode }) {
 	return (
 		<section className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-5 lg:p-6">
@@ -194,15 +218,17 @@ function InfoBanner({
 }
 
 export const Route = createFileRoute("/app/settings")({
+	// `tab` stays optional: no tab = the grouped index on mobile (desktop falls
+	// back to Store). Deep links (?tab=billing etc.) keep working everywhere.
 	validateSearch: (search: Record<string, unknown>) => {
 		const raw =
 			typeof search.tab === "string"
 				? (LEGACY_TAB_ALIASES[search.tab] ?? search.tab)
 				: search.tab;
 		return {
-			tab: (SETTINGS_TAB_IDS.includes(raw as SettingsTab)
-				? raw
-				: "store") as SettingsTab,
+			tab: SETTINGS_TAB_IDS.includes(raw as SettingsTab)
+				? (raw as SettingsTab)
+				: undefined,
 		};
 	},
 	component: SettingsRoute,
@@ -272,10 +298,13 @@ function SettingsRoute() {
 
 	// URL is the source of truth for the active tab, so deep links (e.g. the
 	// "View billing" banner → ?tab=billing) actually switch the tab even when the
-	// settings page is already mounted.
-	const { tab: activeTab } = Route.useSearch();
+	// settings page is already mounted. No tab at all = the grouped index on
+	// mobile; desktop always shows a section (defaulting to Store).
+	const { tab } = Route.useSearch();
+	const activeTab: SettingsTab = tab ?? "store";
 	const navigate = Route.useNavigate();
 	const setActiveTab = (t: SettingsTab) => navigate({ search: { tab: t } });
+	const backToIndex = () => navigate({ search: { tab: undefined } });
 	const [newSlug, setNewSlug] = useState("");
 	const [saving, setSaving] = useState(false);
 
@@ -344,20 +373,128 @@ function SettingsRoute() {
 					</span>
 				}
 			/>
-			<section className="flex flex-col gap-2 lg:hidden">
-				<h2 className="text-xl font-bold">Settings</h2>
-				<p className="text-sm text-muted-foreground">
-					Current slug: <span className="font-mono">{retailer.slug}</span>
-				</p>
-			</section>
+			{/* ---- Mobile: grouped list index (no tab in the URL) ---------------
+			     A 7-tab horizontal scroller hides most destinations on a phone; a
+			     grouped list shows all of them with descriptions + status glances.
+			     Every row keeps the same ?tab= deep link the rest of the app uses. */}
+			{tab === undefined ? (
+				<div className="flex flex-col gap-4 lg:hidden">
+					<h2 className="font-heading text-[22px] font-extrabold leading-tight tracking-tight">
+						Settings
+					</h2>
 
-			<div className="-mx-4 flex gap-2 overflow-x-auto overflow-y-hidden px-4 pb-1 lg:mx-0 lg:grid lg:grid-cols-3 lg:px-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+					{/* Store identity card — doubles as the deep link + tier badge. */}
+					<div className="flex items-center gap-3 rounded-2xl bg-foreground p-3.5 text-background">
+						<span className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-accent font-heading text-base font-extrabold text-accent-foreground">
+							{retailer.logoUrl ? (
+								<img
+									src={retailer.logoUrl}
+									alt=""
+									className="size-full object-cover"
+								/>
+							) : (
+								retailer.storeName.charAt(0).toUpperCase()
+							)}
+						</span>
+						<div className="flex min-w-0 flex-1 flex-col gap-0.5">
+							<span className="truncate text-[15px] font-bold">
+								{retailer.storeName}
+							</span>
+							<span className="truncate font-mono text-xs text-accent">
+								kedaipal.com/{retailer.slug}
+							</span>
+						</div>
+						<TierPill
+							subscription={retailer.subscription}
+							foundingRank={retailer.foundingMemberRank}
+							compact
+							className="shrink-0"
+						/>
+					</div>
+
+					{SETTINGS_GROUPS.map((group) => (
+						<div key={group.label} className="flex flex-col gap-1.5">
+							<span className="pl-1 text-[11px] font-bold uppercase tracking-[0.08em] text-muted-foreground/80">
+								{group.label}
+							</span>
+							<div className="overflow-hidden rounded-2xl border border-border bg-card">
+								{group.tabs.map((id, i) => {
+									const t = SETTINGS_TABS.find((x) => x.id === id);
+									if (!t) return null;
+									// Status at a glance where we have live state — no tap
+									// needed to check health.
+									const subtitle =
+										t.id === "billing" && retailer.subscription
+											? tierPill(retailer.subscription, Date.now()).label
+											: t.description;
+									const waConnected =
+										t.id === "whatsapp" && Boolean(retailer.waPhone?.trim());
+									return (
+										<button
+											key={t.id}
+											type="button"
+											onClick={() => setActiveTab(t.id)}
+											className={`flex min-h-[60px] w-full items-center gap-3 px-3.5 py-3 text-left transition-colors hover:bg-muted/50 ${
+												i > 0 ? "border-t border-border/60" : ""
+											}`}
+										>
+											<span
+												className={`flex size-9 shrink-0 items-center justify-center rounded-[10px] ${
+													waConnected
+														? "bg-accent/15 text-accent-emphasis"
+														: "bg-muted text-foreground"
+												}`}
+											>
+												{t.icon}
+											</span>
+											<span className="flex min-w-0 flex-1 flex-col">
+												<span className="text-sm font-semibold">{t.label}</span>
+												<span className="truncate text-xs text-muted-foreground">
+													{subtitle}
+												</span>
+											</span>
+											{waConnected ? (
+												<span className="shrink-0 rounded-full bg-accent/15 px-2 py-0.5 text-[11px] font-bold text-accent-emphasis">
+													Connected
+												</span>
+											) : (
+												<ChevronRight
+													className="size-4 shrink-0 text-muted-foreground/50"
+													aria-hidden="true"
+												/>
+											)}
+										</button>
+									);
+								})}
+							</div>
+						</div>
+					))}
+				</div>
+			) : (
+				/* ---- Mobile: section view (tab set) — back to the index. */
+				<div className="flex items-center gap-3 lg:hidden">
+					<button
+						type="button"
+						onClick={backToIndex}
+						aria-label="Back to settings"
+						className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted"
+					>
+						<ArrowLeft className="size-5" />
+					</button>
+					<h2 className="min-w-0 flex-1 truncate font-heading text-lg font-extrabold leading-tight">
+						{SETTINGS_TABS.find((t) => t.id === activeTab)?.label}
+					</h2>
+				</div>
+			)}
+
+			{/* ---- Desktop: flat tab grid (all destinations visible at once). */}
+			<div className="hidden gap-2 lg:grid lg:grid-cols-3">
 				{SETTINGS_TABS.map((t) => (
 					<button
 						key={t.id}
 						type="button"
 						onClick={() => setActiveTab(t.id)}
-						className={`flex min-w-[10rem] items-center gap-3 rounded-2xl border p-3 text-left transition-all lg:min-w-0 ${
+						className={`flex items-center gap-3 rounded-2xl border p-3 text-left transition-all ${
 							activeTab === t.id
 								? "border-accent bg-accent/10 text-foreground shadow-sm"
 								: "border-border bg-card text-muted-foreground hover:border-foreground/20 hover:text-foreground"
@@ -384,185 +521,212 @@ function SettingsRoute() {
 				))}
 			</div>
 
-			{activeTab === "store" ? (
-				<div className="flex flex-col gap-6 pt-2">
-					<Card>
-						<StoreNameForm
-							current={retailer.storeName}
-							onSave={(storeName) => updateSettings({ storeName })}
-						/>
-					</Card>
-					<Card>
-						<StoreDescriptionForm
-							current={retailer.storeDescription ?? ""}
-							onSave={(storeDescription) =>
-								updateSettings({ storeDescription })
-							}
-						/>
-					</Card>
-					{slugRenameForm}
-					<Card>
-						<LogoForm
-							currentLogoUrl={retailer.logoUrl}
-							onSave={(logoStorageId) => updateSettings({ logoStorageId })}
-						/>
-					</Card>
-					<Card>
-						<NotifyEmailForm
-							current={retailer.notifyEmail ?? ""}
-							onSave={(notifyEmail) => updateSettings({ notifyEmail })}
-						/>
-					</Card>
-					<Card>
-						<CurrencyForm
-							current={retailer.currency}
-							onSave={(currency) => updateSettings({ currency })}
-						/>
-					</Card>
-				</div>
-			) : null}
+			{/* Section content — hidden on mobile while the index is showing
+			    (desktop always renders the active section, defaulting to Store). */}
+			<div
+				className={
+					tab === undefined ? "hidden lg:flex lg:flex-col lg:gap-6" : "contents"
+				}
+			>
+				{activeTab === "store" ? (
+					<div className="flex flex-col gap-6 pt-2">
+						<Card>
+							<StoreNameForm
+								current={retailer.storeName}
+								onSave={(storeName) => updateSettings({ storeName })}
+							/>
+						</Card>
+						<Card>
+							<StoreDescriptionForm
+								current={retailer.storeDescription ?? ""}
+								onSave={(storeDescription) =>
+									updateSettings({ storeDescription })
+								}
+							/>
+						</Card>
+						{slugRenameForm}
+						<Card>
+							<LogoForm
+								currentLogoUrl={retailer.logoUrl}
+								onSave={(logoStorageId) => updateSettings({ logoStorageId })}
+							/>
+						</Card>
+						<Card>
+							<CoverImageForm
+								currentCoverUrl={retailer.coverImageUrl}
+								onSave={(coverImageStorageId) =>
+									updateSettings({ coverImageStorageId })
+								}
+							/>
+						</Card>
+						<Card>
+							<NotifyEmailForm
+								current={retailer.notifyEmail ?? ""}
+								onSave={(notifyEmail) => updateSettings({ notifyEmail })}
+							/>
+						</Card>
+						<Card>
+							<CurrencyForm
+								current={retailer.currency}
+								onSave={(currency) => updateSettings({ currency })}
+							/>
+						</Card>
+					</div>
+				) : null}
 
-			{activeTab === "billing" ? <BillingTab retailer={retailer} /> : null}
+				{activeTab === "billing" ? <BillingTab retailer={retailer} /> : null}
 
-			{activeTab === "whatsapp" ? (
-				<div className="flex flex-col gap-6 pt-2">
-					<InfoBanner title="How WhatsApp works on Kedaipal">
-						<p>
-							All automated order messages (confirmations, packed, shipped,
-							delivered) are sent from{" "}
-							<span className="font-medium text-foreground">
-								Kedaipal's shared WhatsApp Business number
-							</span>{" "}
-							on your behalf — no Meta account needed.
+				{activeTab === "whatsapp" ? (
+					<div className="flex flex-col gap-6 pt-2">
+						<InfoBanner title="How WhatsApp works on Kedaipal">
+							<p>
+								All automated order messages (confirmations, packed, shipped,
+								delivered) are sent from{" "}
+								<span className="font-medium text-foreground">
+									Kedaipal's shared WhatsApp Business number
+								</span>{" "}
+								on your behalf — no Meta account needed.
+							</p>
+							<p>
+								Add your personal WhatsApp number below so buyers can reach you
+								directly. It appears as a tappable contact link in automated
+								messages.
+							</p>
+						</InfoBanner>
+
+						<Card>
+							<WaPhoneForm
+								current={retailer.waPhone ?? ""}
+								onSave={(waPhone) => updateSettings({ waPhone })}
+							/>
+						</Card>
+						<Card>
+							<LocaleForm
+								current={retailer.locale}
+								onSave={(locale) => updateSettings({ locale })}
+							/>
+						</Card>
+						<Card>
+							<MessageTemplatesForm
+								current={retailer.messageTemplates}
+								onSave={(messageTemplates) =>
+									updateSettings({ messageTemplates })
+								}
+							/>
+						</Card>
+					</div>
+				) : null}
+
+				{activeTab === "payments" ? (
+					<div className="flex flex-col gap-6 pt-2">
+						<Card>
+							<PaymentMethodsForm
+								current={retailer.paymentMethods ?? []}
+								onSave={(paymentMethods) => updateSettings({ paymentMethods })}
+							/>
+						</Card>
+						{/* Surfaces the automatic nudge so the behaviour is never a
+						    surprise — see docs/payment-reminder.md. */}
+						<p className="px-1 text-xs text-muted-foreground">
+							Unpaid orders get one automatic WhatsApp reminder 11 days after
+							ordering — 3 days before the 14-day payment window closes. Buyers
+							who tapped “I've paid” (or whose payment you've confirmed) are
+							never reminded.
 						</p>
-						<p>
-							Add your personal WhatsApp number below so buyers can reach you
-							directly. It appears as a tappable contact link in automated
-							messages.
-						</p>
-					</InfoBanner>
+					</div>
+				) : null}
 
-					<Card>
-						<WaPhoneForm
-							current={retailer.waPhone ?? ""}
-							onSave={(waPhone) => updateSettings({ waPhone })}
-						/>
-					</Card>
-					<Card>
-						<LocaleForm
-							current={retailer.locale}
-							onSave={(locale) => updateSettings({ locale })}
-						/>
-					</Card>
-					<Card>
-						<MessageTemplatesForm
-							current={retailer.messageTemplates}
-							onSave={(messageTemplates) =>
-								updateSettings({ messageTemplates })
-							}
-						/>
-					</Card>
-				</div>
-			) : null}
-
-			{activeTab === "payments" ? (
-				<div className="flex flex-col gap-6 pt-2">
-					<Card>
-						<PaymentMethodsForm
-							current={retailer.paymentMethods ?? []}
-							onSave={(paymentMethods) => updateSettings({ paymentMethods })}
-						/>
-					</Card>
-				</div>
-			) : null}
-
-			{activeTab === "fulfilment" ? (
-				<FulfilmentTab
-					retailerId={retailer._id}
-					offerSelfCollect={retailer.offerSelfCollect ?? false}
-					offerDelivery={retailer.offerDelivery ?? true}
-					minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
-				/>
-			) : null}
-
-			{activeTab === "order-status" ? (
-				<div className="flex flex-col gap-6 pt-2">
-					<InfoBanner title="How order stages work">
-						<p>
-							Build the steps your orders move through — name them however you
-							work. Buyers see them as a live timeline; you advance orders
-							step-by-step from the dashboard.
-						</p>
-						<p>
-							Every step maps to one of four built-in milestones via{" "}
-							<span className="font-medium text-foreground">“Counts as”</span>,
-							so payments, packing and tracking keep working:{" "}
-							<span className="font-medium text-foreground">Accepted</span> →{" "}
-							<span className="font-medium text-foreground">In production</span>{" "}
-							→ <span className="font-medium text-foreground">Ready</span> →{" "}
-							<span className="font-medium text-foreground">Done</span>.
-						</p>
-						<p>
-							<span className="font-medium text-foreground">
-								Your first step should count as “Accepted”, your last as “Done”
-							</span>{" "}
-							— map the steps in between to whichever milestone fits. E.g. a
-							cake shop: “Order received” (Accepted) → “Baking” (In production)
-							→ “Ready for pickup” (Ready) → “Collected” (Done).
-						</p>
-					</InfoBanner>
-
-					<Card>
-						<StageEditor
-							seed={resolveStages({
-								orderStages: retailer.orderStages,
-								labels: retailer.statusLabels,
-								deliveryMethod: retailer.offerSelfCollect
-									? "self_collect"
-									: "delivery",
-							})}
-							isCustomized={Boolean(retailer.orderStages?.length)}
-							onSave={(orderStages) => updateSettings({ orderStages })}
-						/>
-					</Card>
-				</div>
-			) : null}
-
-			{activeTab === "integrations" ? (
-				<div className="flex flex-col gap-6 pt-2">
-					<InfoBanner title="Sales channels">
-						<p>
-							Connect your marketplace accounts to sync products and orders
-							automatically. More channels are on the way.
-						</p>
-					</InfoBanner>
-
-					<IntegrationCard
-						name="Shopee"
-						description="Sync your Shopee products and orders into Kedaipal. Manage everything from one dashboard."
-						tint="bg-[#EE4D2D]/10 text-[#EE4D2D]"
-						icon={<ShopeeIcon className="size-6" />}
+				{activeTab === "fulfilment" ? (
+					<FulfilmentTab
+						retailerId={retailer._id}
+						offerSelfCollect={retailer.offerSelfCollect ?? false}
+						offerDelivery={retailer.offerDelivery ?? true}
+						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
 					/>
-					<IntegrationCard
-						name="Lazada"
-						description="Sync your Lazada products and orders into Kedaipal. Manage everything from one dashboard."
-						tint="bg-[#0F146D]/10 text-[#0F146D] dark:bg-[#0F146D]/30 dark:text-[#9aa6ff]"
-						icon={<Store className="size-6" />}
-					/>
-					<IntegrationCard
-						name="TikTok Shop"
-						description="Sync your TikTok Shop orders into Kedaipal so you never miss a sale."
-						tint="bg-foreground/10 text-foreground"
-						icon={<Music2 className="size-6" />}
-					/>
-					<IntegrationCard
-						name="StoreHub"
-						description="Reconcile your in-store StoreHub sales alongside online orders."
-						tint="bg-[#FF7A00]/10 text-[#FF7A00]"
-						icon={<Building2 className="size-6" />}
-					/>
-				</div>
-			) : null}
+				) : null}
+
+				{activeTab === "order-status" ? (
+					<div className="flex flex-col gap-6 pt-2">
+						<InfoBanner title="How order stages work">
+							<p>
+								Build the steps your orders move through — name them however you
+								work. Buyers see them as a live timeline; you advance orders
+								step-by-step from the dashboard.
+							</p>
+							<p>
+								Every step maps to one of four built-in milestones via{" "}
+								<span className="font-medium text-foreground">“Counts as”</span>
+								, so payments, packing and tracking keep working:{" "}
+								<span className="font-medium text-foreground">Accepted</span> →{" "}
+								<span className="font-medium text-foreground">
+									In production
+								</span>{" "}
+								→ <span className="font-medium text-foreground">Ready</span> →{" "}
+								<span className="font-medium text-foreground">Done</span>.
+							</p>
+							<p>
+								<span className="font-medium text-foreground">
+									Your first step should count as “Accepted”, your last as
+									“Done”
+								</span>{" "}
+								— map the steps in between to whichever milestone fits. E.g. a
+								cake shop: “Order received” (Accepted) → “Baking” (In
+								production) → “Ready for pickup” (Ready) → “Collected” (Done).
+							</p>
+						</InfoBanner>
+
+						<Card>
+							<StageEditor
+								seed={resolveStages({
+									orderStages: retailer.orderStages,
+									labels: retailer.statusLabels,
+									deliveryMethod: retailer.offerSelfCollect
+										? "self_collect"
+										: "delivery",
+								})}
+								isCustomized={Boolean(retailer.orderStages?.length)}
+								onSave={(orderStages) => updateSettings({ orderStages })}
+							/>
+						</Card>
+					</div>
+				) : null}
+
+				{activeTab === "integrations" ? (
+					<div className="flex flex-col gap-6 pt-2">
+						<InfoBanner title="Sales channels">
+							<p>
+								Connect your marketplace accounts to sync products and orders
+								automatically. More channels are on the way.
+							</p>
+						</InfoBanner>
+
+						<IntegrationCard
+							name="Shopee"
+							description="Sync your Shopee products and orders into Kedaipal. Manage everything from one dashboard."
+							tint="bg-[#EE4D2D]/10 text-[#EE4D2D]"
+							icon={<ShopeeIcon className="size-6" />}
+						/>
+						<IntegrationCard
+							name="Lazada"
+							description="Sync your Lazada products and orders into Kedaipal. Manage everything from one dashboard."
+							tint="bg-[#0F146D]/10 text-[#0F146D] dark:bg-[#0F146D]/30 dark:text-[#9aa6ff]"
+							icon={<Store className="size-6" />}
+						/>
+						<IntegrationCard
+							name="TikTok Shop"
+							description="Sync your TikTok Shop orders into Kedaipal so you never miss a sale."
+							tint="bg-foreground/10 text-foreground"
+							icon={<Music2 className="size-6" />}
+						/>
+						<IntegrationCard
+							name="StoreHub"
+							description="Reconcile your in-store StoreHub sales alongside online orders."
+							tint="bg-[#FF7A00]/10 text-[#FF7A00]"
+							icon={<Building2 className="size-6" />}
+						/>
+					</div>
+				) : null}
+			</div>
 		</div>
 	);
 }
@@ -798,6 +962,104 @@ function LogoForm({
 	);
 }
 
+function CoverImageForm({
+	currentCoverUrl,
+	onSave,
+}: {
+	currentCoverUrl: string | undefined;
+	onSave: (coverImageStorageId: string) => Promise<unknown>;
+}) {
+	const generateCoverImageUploadUrl = useMutation(
+		api.retailers.generateCoverImageUploadUrl,
+	);
+	const [localPreview, setLocalPreview] = useState<string | null>(null);
+	const [uploading, setUploading] = useState(false);
+
+	const previewUrl = localPreview ?? currentCoverUrl ?? null;
+
+	async function handleFile(file: File | null) {
+		if (!file) return;
+		setUploading(true);
+		try {
+			const url = await generateCoverImageUploadUrl();
+			const res = await fetch(url, {
+				method: "POST",
+				headers: { "Content-Type": file.type },
+				body: file,
+			});
+			if (!res.ok) throw new Error("Upload failed");
+			const { storageId } = (await res.json()) as { storageId: string };
+			setLocalPreview(URL.createObjectURL(file));
+			await onSave(storageId);
+			toast.success("Cover image saved.");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setUploading(false);
+		}
+	}
+
+	async function handleRemove() {
+		try {
+			await onSave("");
+			setLocalPreview(null);
+			toast.success("Cover image removed.");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		}
+	}
+
+	return (
+		<div className="flex flex-col gap-4">
+			<SectionHeading
+				title="Cover image"
+				description="Best size 1200 × 400 px (wide 3:1). Fills your storefront header and shows as the preview when you share your link. Max ~2MB."
+			/>
+
+			{previewUrl ? (
+				<div className="flex flex-col gap-3">
+					<img
+						src={previewUrl}
+						alt="Store cover"
+						className="aspect-[3/1] w-full rounded-2xl border border-input bg-muted object-cover"
+					/>
+					<div className="flex items-center gap-3">
+						<label className="inline-flex h-11 cursor-pointer items-center justify-center rounded-xl border border-input bg-background px-4 text-sm font-medium hover:bg-accent/5">
+							{uploading ? "Uploading…" : "Replace"}
+							<input
+								type="file"
+								accept="image/*"
+								className="hidden"
+								disabled={uploading}
+								onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
+							/>
+						</label>
+						<button
+							type="button"
+							onClick={handleRemove}
+							disabled={uploading}
+							className="text-xs text-destructive underline disabled:opacity-50"
+						>
+							Remove cover
+						</button>
+					</div>
+				</div>
+			) : (
+				<label className="flex aspect-[3/1] w-full cursor-pointer items-center justify-center rounded-2xl border border-dashed border-input bg-background text-sm text-muted-foreground hover:bg-accent/5">
+					{uploading ? "Uploading…" : "Tap to upload a cover image"}
+					<input
+						type="file"
+						accept="image/*"
+						className="hidden"
+						disabled={uploading}
+						onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
+					/>
+				</label>
+			)}
+		</div>
+	);
+}
+
 type PaymentMethodWire = {
 	type: "bank" | "qr";
 	label: string;
@@ -866,6 +1128,7 @@ function PaymentMethodsForm({
 	const [uploadingKey, setUploadingKey] = useState<string | null>(null);
 	const [saving, setSaving] = useState(false);
 	const [expanded, setExpanded] = useState<Set<string>>(new Set());
+	const { markAdded, revealRef } = useRevealOnAdd();
 
 	const banks = methods.filter((m) => m.type === "bank");
 	const qrs = methods.filter((m) => m.type === "qr");
@@ -898,6 +1161,7 @@ function PaymentMethodsForm({
 		}
 		const draft = newDraft(type);
 		setExpanded((prev) => new Set(prev).add(draft._key));
+		markAdded(draft._key);
 		setMethods((prev) => {
 			const b = prev.filter((m) => m.type === "bank");
 			const q = prev.filter((m) => m.type === "qr");
@@ -1026,7 +1290,10 @@ function PaymentMethodsForm({
 			);
 		}
 		return (
-			<div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
+			<div
+				ref={revealRef(m._key)}
+				className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4"
+			>
 				<div className="flex items-center gap-2">
 					{handle}
 					<button
@@ -1441,6 +1708,7 @@ function StageEditor({
 	// During a drag the row always renders compact (state.isSorting), and the
 	// expanded set is preserved so cards re-open exactly as they were afterwards.
 	const [expanded, setExpanded] = useState<Set<string>>(new Set());
+	const { markAdded, revealRef } = useRevealOnAdd();
 	function toggleExpand(key: string) {
 		setExpanded((prev) => {
 			const next = new Set(prev);
@@ -1464,8 +1732,10 @@ function StageEditor({
 			return;
 		}
 		const key = crypto.randomUUID();
-		// Open the new (empty) stage so the seller can fill it in immediately.
+		// Open the new (empty) stage so the seller can fill it in immediately, and
+		// reveal it (scroll + focus) — it appends below the fold on a phone.
 		setExpanded((prev) => new Set(prev).add(key));
+		markAdded(key);
 		setDrafts((prev) => [
 			...prev,
 			{
@@ -1556,7 +1826,10 @@ function StageEditor({
 		}
 
 		return (
-			<div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
+			<div
+				ref={revealRef(d._key)}
+				className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4"
+			>
 				{/* Header mirrors the collapsed row exactly (handle + label + chevron
 				    far-right) so the toggle target doesn't jump when expanding. */}
 				<div className="flex items-center gap-2">

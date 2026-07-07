@@ -194,12 +194,14 @@ auto-get their lifetime discount: the issue form detects `isFoundingMember` and 
 ## Soft-lock (`past_due`)
 
 `assertSubscriptionActive(ctx, retailerId)` throws `ConvexError` when the
-subscription is `past_due` **and not comped**. Wired onto seller
+subscription is `past_due` **and not comped** — **unless the caller is a
+Kedaipal admin** (`isAdmin(ctx)`, the `ADMIN_USER_IDS` allowlist), who is never
+soft-locked on any store (their own, dogfooded free forever, or a seller's
+during act-as; see [`admin-console.md`](./admin-console.md)). Wired onto seller
 **growth-writes** only: product create/update/`saveVariantGrid`,
 `updateSettings`, `renameSlug`, `pickupLocations`
 create/update/setActive/reorder (the last two added Jul 2026 — they'd escaped
-the original sweep), future broadcast/reminder. Admin act-as bypasses every
-site (white-glove precedes payment). Explicitly **NOT** wired onto:
+the original sweep), future broadcast/reminder. Explicitly **NOT** wired onto:
 `orders.create` (public), order pipeline (confirm/pack/ship/deliver/
 payment-claim/mockup), customer views, storefront. **Order cap is SOFT** — a
 nudge in the dashboard, never a block on `orders.create`;

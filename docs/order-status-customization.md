@@ -316,6 +316,18 @@ decisions/deviations recorded:
   **and `messageTemplates` overrides** — zero regression); **within** an anchor →
   the new generic `notifyStageEntry` (`renderStageUpdate`); `confirmed` → nothing
   (the confirm/payment flow owns buyer comms then, as today).
+- **Anchor crossings speak the seller's stage vocabulary (2026-07-03, `86ey570am`).**
+  The original crossing path sent only the generic canonical copy ("packed and
+  ready for pickup") even when the seller renamed the stage ("Ready for
+  Collection") and wrote a buyer-visible description — so WhatsApp contradicted
+  the tracking timeline. `notifyStatusChange` now renders the entered stage's
+  **label + description** via `renderStageUpdate` (keeping the carrier link on
+  shipped crossings) whenever the retailer has configured `orderStages`.
+  Precedence: authored `messageTemplates` override → custom stage copy → default
+  catalog. Sellers on default (synthesized) stages and `cancelled` keep the rich
+  canonical copy — zero regression. Stage resolution prefers the order's
+  `currentStageId`, falling back to the first stage on the anchor for plain
+  `updateStatus` transitions.
 - **Migration: none.** Intentionally read-time + additive — synthesis covers
   retailers without `orderStages`, derivation covers orders without
   `currentStageId`, and every new field is optional. A no-op migration would be

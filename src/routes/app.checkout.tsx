@@ -9,7 +9,6 @@ import {
 	ChevronDown,
 	ChevronRight,
 	Clock,
-	Download,
 	EyeOff,
 	Image as ImageIcon,
 	LayoutGrid,
@@ -81,13 +80,11 @@ type CreatedOrder = {
 };
 
 function CounterCheckoutRoute() {
-	const actAsRetailerId = useActAsRetailerId();
 	const retailer = useDashboardRetailer();
 	const { session: activeSessionId } = Route.useSearch();
 	const navigate = useNavigate({ from: Route.fullPath });
 	const [created, setCreated] = useState<CreatedOrder | null>(null);
 
-	const createSession = useMutation(api.counterCheckout.createCheckoutSession);
 	const cancelSession = useMutation(api.counterCheckout.cancelCheckoutSession);
 
 	const openSession = (id: string) => navigate({ search: { session: id } });
@@ -100,15 +97,6 @@ function CounterCheckoutRoute() {
 		setCreated(null);
 	}, [activeSessionId]);
 
-	async function start() {
-		try {
-			const r = await createSession({ retailerId: actAsRetailerId });
-			openSession(r.sessionId);
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		}
-	}
-
 	async function cancel(id: string) {
 		try {
 			await cancelSession({ sessionId: id as SessionId });
@@ -120,15 +108,15 @@ function CounterCheckoutRoute() {
 	return (
 		<div className="flex flex-col gap-6">
 			<header className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-card p-4 shadow-sm">
-				<div className="flex items-center gap-3">
-					<span className="flex size-10 items-center justify-center rounded-xl bg-accent/12 text-accent">
+				<div className="flex min-w-0 items-center gap-3">
+					<span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent/12 text-accent">
 						<QrCode className="size-5" />
 					</span>
-					<div>
+					<div className="min-w-0">
 						<h1 className="text-xl font-bold tracking-tight">
 							Counter Checkout
 						</h1>
-						<p className="text-sm text-muted-foreground">
+						<p className="truncate text-sm text-muted-foreground">
 							Take an in-person order — connected to WhatsApp.
 						</p>
 					</div>
@@ -137,12 +125,16 @@ function CounterCheckoutRoute() {
 					<button
 						type="button"
 						onClick={backToList}
-						className="flex h-10 items-center gap-1.5 rounded-xl border border-border px-3 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+						className="flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-border px-3 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
 					>
 						<ArrowLeft className="size-4" />
 						<span className="hidden sm:inline">All checkouts</span>
 					</button>
-				) : null}
+				) : (
+					// The one permanent store QR — compact here, tap to enlarge for a
+					// buyer to scan. Management (rotate/print) lives on /app/poster.
+					<StoreQrChip />
+				)}
 			</header>
 
 			{activeSessionId ? (
@@ -152,7 +144,6 @@ function CounterCheckoutRoute() {
 					retailer={retailer}
 					created={created}
 					onCreated={setCreated}
-					onStartNew={start}
 					onBackToList={backToList}
 					onCancelActive={async () => {
 						await cancel(activeSessionId);
@@ -160,11 +151,7 @@ function CounterCheckoutRoute() {
 					}}
 				/>
 			) : (
-				<OpenCheckoutsList
-					onStart={start}
-					onResume={openSession}
-					onCancel={cancel}
-				/>
+				<OpenCheckoutsList onResume={openSession} onCancel={cancel} />
 			)}
 		</div>
 	);
@@ -176,7 +163,6 @@ function ActiveSession({
 	retailer,
 	created,
 	onCreated,
-	onStartNew,
 	onBackToList,
 	onCancelActive,
 }: {
@@ -184,7 +170,6 @@ function ActiveSession({
 	retailer: ReturnType<typeof useQuery<typeof api.retailers.getMyRetailer>>;
 	created: CreatedOrder | null;
 	onCreated: (c: CreatedOrder) => void;
-	onStartNew: () => void;
 	onBackToList: () => void;
 	onCancelActive: () => void;
 }) {
@@ -204,18 +189,7 @@ function ActiveSession({
 				orderId={created?.orderId ?? session.orderId}
 				paidInPerson={created?.paidInPerson ?? false}
 				buyerName={session.displayName}
-				onNew={onStartNew}
 				onBackToList={onBackToList}
-			/>
-		);
-
-	if (session.status === "awaiting_buyer")
-		return (
-			<AwaitingScreen
-				waUrl={session.waUrl}
-				token={session.token}
-				expiresAt={session.expiresAt}
-				onCancel={onCancelActive}
 			/>
 		);
 
@@ -238,7 +212,7 @@ function ActiveSession({
 		) : null;
 
 	// expired / cancelled
-	return <ExpiredScreen onRestart={onStartNew} onBackToList={onBackToList} />;
+	return <ExpiredScreen onBackToList={onBackToList} />;
 }
 
 function MissingSession({ onBack }: { onBack: () => void }) {
@@ -263,11 +237,9 @@ function MissingSession({ onBack }: { onBack: () => void }) {
 // ---------------------------------------------------------------------------
 
 function OpenCheckoutsList({
-	onStart,
 	onResume,
 	onCancel,
 }: {
-	onStart: () => void;
 	onResume: (id: string) => void;
 	onCancel: (id: string) => void;
 }) {
@@ -281,36 +253,32 @@ function OpenCheckoutsList({
 		id: string;
 		label: string;
 	} | null>(null);
+	// Cashier types the buyer's code (e.g. "K7") or name to find their checkout.
+	const [query, setQuery] = useState("");
+
+	const q = query.trim().toLowerCase();
+	const filtered = (sessions ?? []).filter((s) => {
+		if (!q) return true;
+		return (
+			(s.pairingCode?.toLowerCase().includes(q) ?? false) ||
+			(s.displayName?.toLowerCase().includes(q) ?? false)
+		);
+	});
+
+	function onSearchEnter() {
+		// One match → jump straight into it (the buyer just told you their code).
+		if (q && filtered.length === 1) onResume(filtered[0].sessionId);
+	}
 
 	return (
 		<div className="flex flex-col gap-4">
-			{/* Full-width card with the CTA inside it, so this header lines up with the
-			    open-checkout cards below (uniform width on desktop) instead of leaving a
-			    ragged button column beside it. */}
-			<div className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
-				<div>
-					<p className="text-sm font-semibold">Walk-in order desk</p>
-					<p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-						Start a QR checkout for each customer, then resume any open checkout
-						when they reach the counter.
-					</p>
-				</div>
-				<Button
-					onClick={onStart}
-					className="h-12 shrink-0 gap-2 px-5 text-base max-sm:w-full"
-				>
-					<Plus className="size-5" />
-					Start checkout
-				</Button>
-			</div>
-
 			{sessions === undefined ? (
 				<p className="text-sm text-muted-foreground">Loading…</p>
 			) : sessions.length === 0 ? (
 				<EmptyCheckouts />
 			) : (
-				<div className="flex flex-col gap-2">
-					<div className="flex items-end justify-between gap-3">
+				<div className="flex flex-col gap-3">
+					<div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
 						<div>
 							<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 								Open checkouts
@@ -320,25 +288,44 @@ function OpenCheckoutsList({
 								days
 							</p>
 						</div>
-					</div>
-					<ul className="flex flex-col gap-2">
-						{sessions.map((s) => (
-							<SessionRow
-								key={s.sessionId}
-								session={s}
-								onResume={() => onResume(s.sessionId)}
-								onCancel={() =>
-									setPendingCancel({
-										id: s.sessionId,
-										label:
-											s.status === "awaiting_buyer"
-												? "this waiting checkout"
-												: (s.displayName ?? "this buyer's checkout"),
-									})
-								}
+						{/* Type the code the buyer shows you (or their name) to find them. */}
+						<div className="relative sm:w-64">
+							<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+							<Input
+								value={query}
+								onChange={(e) => setQuery(e.target.value)}
+								onKeyDown={(e) => {
+									if (e.key === "Enter") onSearchEnter();
+								}}
+								placeholder="Find by code or name…"
+								className="h-11 pl-9"
+								inputMode="text"
+								autoComplete="off"
 							/>
-						))}
-					</ul>
+						</div>
+					</div>
+					{filtered.length === 0 ? (
+						<p className="rounded-2xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
+							No checkout matches “{query}”.
+						</p>
+					) : (
+						<ul className="flex flex-col gap-2">
+							{filtered.map((s) => (
+								<SessionRow
+									key={s.sessionId}
+									session={s}
+									highlight={q.length > 0}
+									onResume={() => onResume(s.sessionId)}
+									onCancel={() =>
+										setPendingCancel({
+											id: s.sessionId,
+											label: s.displayName ?? "this buyer's checkout",
+										})
+									}
+								/>
+							))}
+						</ul>
+					)}
 				</div>
 			)}
 
@@ -373,22 +360,90 @@ function EmptyCheckouts() {
 			<div className="max-w-sm">
 				<h2 className="text-base font-semibold">No open checkouts</h2>
 				<p className="mt-1 text-sm text-muted-foreground">
-					Start one to show a QR for the buyer to scan with WhatsApp. You can
-					run several at once and come back to any of them.
+					Put up your store QR (top-right) or your printed poster. When a buyer
+					scans it, their checkout appears here with a code to match.
 				</p>
 			</div>
 		</div>
 	);
 }
 
+/**
+ * The one permanent store QR, compact in the page header. Tap to enlarge into a
+ * scannable view for a buyer standing at the counter. Token auto-provisions
+ * silently; rotating / printing the poster live on /app/poster.
+ */
+function StoreQrChip() {
+	const actAsRetailerId = useActAsRetailerId();
+	const storeQr = useQuery(api.counterCheckout.getStoreQr, {
+		retailerId: actAsRetailerId,
+	});
+	const ensureToken = useMutation(api.counterCheckout.ensureCounterQrToken);
+	const ensured = useRef(false);
+	const [open, setOpen] = useState(false);
+
+	useEffect(() => {
+		if (ensured.current) return;
+		if (storeQr === undefined || storeQr.token !== null) return;
+		ensured.current = true;
+		void ensureToken({ retailerId: actAsRetailerId }).catch(() => {
+			// non-fatal — the chip just stays hidden until it resolves
+		});
+	}, [storeQr, ensureToken, actAsRetailerId]);
+
+	if (!storeQr?.waUrl) return null;
+
+	return (
+		<>
+			<button
+				type="button"
+				onClick={() => setOpen(true)}
+				className="flex shrink-0 items-center gap-2 rounded-xl border border-border p-1.5 pr-3 transition-colors hover:bg-muted"
+				aria-label="Show store QR"
+			>
+				<span className="rounded-lg bg-white p-1">
+					<QRCode value={storeQr.waUrl} size={40} />
+				</span>
+				<span className="hidden text-sm font-medium text-muted-foreground sm:inline">
+					Show QR
+				</span>
+			</button>
+
+			<Dialog open={open} onOpenChange={setOpen}>
+				<DialogContent className="sm:max-w-sm">
+					<DialogHeader>
+						<DialogTitle>Ask the buyer to scan</DialogTitle>
+						<DialogDescription>
+							They scan, hit send, and appear in your checkouts list with a
+							short code to match.
+						</DialogDescription>
+					</DialogHeader>
+					<div className="mx-auto rounded-2xl border border-border bg-white p-4">
+						<QRCode value={storeQr.waUrl} size={220} />
+					</div>
+					<Link
+						to="/app/poster"
+						onClick={() => setOpen(false)}
+						className="text-center text-xs font-semibold text-accent-emphasis hover:underline"
+					>
+						Print an A4 poster or rotate this QR →
+					</Link>
+				</DialogContent>
+			</Dialog>
+		</>
+	);
+}
+
 function SessionRow({
 	session,
+	highlight,
 	onResume,
 	onCancel,
 }: {
 	session: {
 		sessionId: string;
-		status: "awaiting_buyer" | "buyer_identified";
+		pairingCode: string | undefined;
+		origin: "cashier" | "store_qr";
 		displayName: string | undefined;
 		isNewCustomer: boolean | undefined;
 		itemCount: number;
@@ -396,61 +451,50 @@ function SessionRow({
 		boundAt: number | undefined;
 		expiresAt: number;
 	};
+	// When a search is active, ring the row so the match is obvious at a glance.
+	highlight?: boolean;
 	onResume: () => void;
 	onCancel: () => void;
 }) {
-	const awaiting = session.status === "awaiting_buyer";
 	const since = session.boundAt ?? session.createdAt;
 	return (
-		<li className="flex items-center gap-3 rounded-2xl border border-border bg-card p-3 shadow-sm transition-shadow hover:shadow-md">
+		<li
+			className={cn(
+				"flex items-center gap-3 rounded-2xl border bg-card p-3 shadow-sm transition-shadow hover:shadow-md",
+				highlight ? "border-accent ring-1 ring-accent" : "border-border",
+			)}
+		>
 			<button
 				type="button"
 				onClick={onResume}
 				className="flex min-w-0 flex-1 items-center gap-3 text-left"
 			>
-				<span
-					className={cn(
-						"flex size-10 shrink-0 items-center justify-center rounded-full",
-						awaiting
-							? "bg-muted text-muted-foreground"
-							: "bg-accent/15 text-accent",
-					)}
-				>
-					{awaiting ? (
-						<QrCode className="size-5" />
-					) : (
-						<UserCheck className="size-5" />
-					)}
+				{/* The pairing code the buyer shows the cashier — the fastest way to
+				    match "who's this?" to the right open checkout. */}
+				<span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-accent/15 font-mono text-sm font-bold text-accent">
+					{session.pairingCode ?? <UserCheck className="size-5" />}
 				</span>
 				<div className="min-w-0 flex-1">
 					<div className="flex min-w-0 flex-wrap items-center gap-2">
 						<p className="truncate text-sm font-semibold">
-							{awaiting
-								? "Waiting for buyer to scan"
-								: (session.displayName ?? "Buyer connected")}
+							{session.displayName ?? "Buyer connected"}
 						</p>
-						<span
-							className={cn(
-								"rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-								awaiting
-									? "bg-muted text-muted-foreground"
-									: "bg-accent/12 text-accent",
-							)}
-						>
-							{awaiting ? "QR" : "Connected"}
-						</span>
+						{/* Buyer arrived via the printed store poster (walk-in scan). */}
+						{session.origin === "store_qr" ? (
+							<span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-600">
+								Walk-in scan
+							</span>
+						) : null}
 					</div>
 					<div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
 						<span>
-							{awaiting
-								? "Tap to show QR"
-								: session.itemCount > 0
-									? `${session.itemCount} item${session.itemCount === 1 ? "" : "s"}`
-									: "No items yet"}
+							{session.itemCount > 0
+								? `${session.itemCount} item${session.itemCount === 1 ? "" : "s"}`
+								: "No items yet"}
 						</span>
 						<span aria-hidden="true">·</span>
 						<span>{timeAgo(since)}</span>
-						{!awaiting && session.isNewCustomer ? (
+						{session.isNewCustomer ? (
 							<>
 								<span aria-hidden="true">·</span>
 								<span>New customer</span>
@@ -483,156 +527,20 @@ function timeAgo(epoch: number): string {
 	return `${Math.floor(hrs / 24)}d ago`;
 }
 
-function ExpiryCountdown({ expiresAt }: { expiresAt: number }) {
-	const [now, setNow] = useState(Date.now());
-	useEffect(() => {
-		const id = setInterval(() => setNow(Date.now()), 1000);
-		return () => clearInterval(id);
-	}, []);
-	const remaining = Math.max(0, expiresAt - now);
-	const mins = Math.floor(remaining / 60000);
-	const secs = Math.floor((remaining % 60000) / 1000);
-	return (
-		<span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-			<Clock className="size-3.5" />
-			Expires in {mins}:{secs.toString().padStart(2, "0")}
-		</span>
-	);
-}
-
-function AwaitingScreen({
-	waUrl,
-	token,
-	expiresAt,
-	onCancel,
-}: {
-	waUrl: string | undefined;
-	token: string;
-	expiresAt: number;
-	onCancel: () => void;
-}) {
-	const qrRef = useRef<HTMLDivElement | null>(null);
-	const [confirmCancel, setConfirmCancel] = useState(false);
-
-	function downloadQr() {
-		const svg = qrRef.current?.querySelector("svg");
-		if (!svg) return;
-		const clone = svg.cloneNode(true) as SVGElement;
-		clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-		const blob = new Blob([new XMLSerializer().serializeToString(clone)], {
-			type: "image/svg+xml;charset=utf-8",
-		});
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement("a");
-		a.href = url;
-		a.download = `kedaipal-counter-qr-${token}.svg`;
-		a.click();
-		URL.revokeObjectURL(url);
-	}
-
-	return (
-		<div className="mx-auto grid w-full max-w-4xl gap-5 rounded-2xl border border-border bg-card p-5 shadow-sm lg:grid-cols-[1fr_auto] lg:items-center lg:p-6">
-			<div className="flex flex-col gap-4 text-center lg:text-left">
-				<div>
-					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-						Step 1
-					</p>
-					<h2 className="mt-1 text-2xl font-bold tracking-tight">
-						Ask the buyer to scan
-					</h2>
-					<p className="mt-2 text-sm text-muted-foreground">
-						They open WhatsApp's camera, scan, and hit send. This screen updates
-						the moment they do.
-					</p>
-				</div>
-
-				<div className="flex flex-col items-center gap-2 lg:items-start">
-					<div className="inline-flex items-center gap-2 rounded-full bg-accent/10 px-3 py-1.5 text-sm font-medium text-accent">
-						<span className="inline-flex size-2 animate-pulse rounded-full bg-accent" />
-						Waiting for buyer
-					</div>
-					<ExpiryCountdown expiresAt={expiresAt} />
-					<p className="font-mono text-[11px] text-muted-foreground">
-						KP-{token}
-					</p>
-				</div>
-			</div>
-
-			{waUrl ? (
-				<div className="mx-auto flex flex-col items-center gap-3">
-					<div
-						ref={qrRef}
-						className="rounded-2xl border border-border bg-white p-4 shadow-sm"
-					>
-						<QRCode value={waUrl} size={220} />
-					</div>
-					<Button
-						type="button"
-						variant="outline"
-						onClick={downloadQr}
-						className="h-10 gap-2"
-					>
-						<Download className="size-4" />
-						Download QR
-					</Button>
-				</div>
-			) : (
-				<div className="rounded-xl bg-destructive/10 px-4 py-3 text-sm text-destructive">
-					WhatsApp checkout number isn't configured for this deployment. Contact
-					support to enable Counter Checkout.
-				</div>
-			)}
-
-			<button
-				type="button"
-				onClick={() => setConfirmCancel(true)}
-				className="text-sm font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline lg:col-span-2 lg:justify-self-start"
-			>
-				Cancel checkout
-			</button>
-
-			<ConfirmDialog
-				open={confirmCancel}
-				onOpenChange={setConfirmCancel}
-				title="Cancel this checkout?"
-				description="The QR stops working and this checkout is removed. The buyer won't be able to connect to it anymore. This can't be undone."
-				confirmLabel="Cancel checkout"
-				cancelLabel="Keep it open"
-				destructive
-				onConfirm={onCancel}
-			/>
-		</div>
-	);
-}
-
-function ExpiredScreen({
-	onRestart,
-	onBackToList,
-}: {
-	onRestart: () => void;
-	onBackToList: () => void;
-}) {
+function ExpiredScreen({ onBackToList }: { onBackToList: () => void }) {
 	return (
 		<div className="mx-auto flex w-full max-w-md flex-col items-center gap-4 rounded-2xl border border-border bg-card px-6 py-10 text-center">
 			<Clock className="size-10 text-muted-foreground" />
 			<div>
 				<h2 className="text-lg font-semibold">Checkout expired</h2>
 				<p className="mt-1 text-sm text-muted-foreground">
-					This checkout timed out. Start a fresh one to show a new QR.
+					This checkout timed out. The buyer can scan your store QR again to
+					start a new one.
 				</p>
 			</div>
-			<div className="flex w-full flex-col gap-2">
-				<Button onClick={onRestart} className="h-11 px-6">
-					Start new checkout
-				</Button>
-				<button
-					type="button"
-					onClick={onBackToList}
-					className="text-sm font-medium text-muted-foreground underline-offset-2 hover:underline"
-				>
-					Back to all checkouts
-				</button>
-			</div>
+			<Button onClick={onBackToList} className="h-11 px-6">
+				Back to all checkouts
+			</Button>
 		</div>
 	);
 }
@@ -642,14 +550,12 @@ function DoneScreen({
 	orderId,
 	paidInPerson,
 	buyerName,
-	onNew,
 	onBackToList,
 }: {
 	shortId: string | undefined;
 	orderId: Id<"orders"> | undefined;
 	paidInPerson: boolean;
 	buyerName: string | undefined;
-	onNew: () => void;
 	onBackToList: () => void;
 }) {
 	const updateStatus = useMutation(api.orders.updateStatus);
@@ -738,11 +644,11 @@ function DoneScreen({
 					</p>
 				) : null}
 				<Button
-					onClick={onNew}
+					onClick={onBackToList}
 					variant={canComplete ? "outline" : "default"}
 					className="h-11"
 				>
-					New checkout
+					Back to checkouts
 				</Button>
 				{shortId ? (
 					<Button asChild variant="outline" className="h-11">
@@ -755,13 +661,6 @@ function DoneScreen({
 						<Link to="/app/orders">Go to orders</Link>
 					</Button>
 				) : null}
-				<button
-					type="button"
-					onClick={onBackToList}
-					className="text-sm font-medium text-emerald-800/80 underline-offset-2 hover:underline sm:col-span-2"
-				>
-					Back to all checkouts
-				</button>
 			</div>
 		</div>
 	);
@@ -1439,24 +1338,19 @@ function BuildOrderScreen({
 							return (
 								<div
 									key={p._id}
-									// No `overflow-hidden`: it would trap the sticky header inside the
-									// card. Corners are rounded on the header + variant list instead.
-									className="rounded-2xl border border-border bg-card shadow-sm"
+									className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm"
 								>
 									<button
 										type="button"
 										onClick={() => toggleExpanded(p._id)}
-										// While expanded, the product name row sticks as the buyer scrolls
-										// its (possibly long) variant list, then hands off to the next
-										// product — mobile/tablet only (desktop is static). It pins just
-										// BELOW the sticky MobileHeader using the height that header
-										// publishes (`--app-header-h`), so it never covers the store nav;
-										// z-[9] keeps it under the header (z-10) as it scrolls back off.
-										className={cn(
-											"flex w-full items-center gap-3 rounded-2xl bg-card p-3 text-left hover:bg-muted/40",
-											open &&
-												"sticky top-[var(--app-header-h,0px)] z-[9] rounded-b-none lg:static lg:z-auto",
-										)}
+										// Static, even while expanded. This row used to pin below the
+										// mobile header (sticky + --app-header-h) so long variant lists
+										// kept their product name in view, but the pin fought the
+										// variable-height header/banner stack and visibly glitched while
+										// scrolling with a panel open. The counter is seller-operated —
+										// they know which product they just tapped — so context loss is
+										// minor and static is the robust choice.
+										className="flex w-full items-center gap-3 bg-card p-3 text-left hover:bg-muted/40"
 									>
 										<ProductThumb
 											url={p.imageUrls[0]}

@@ -55,6 +55,11 @@ function AppShell() {
 	const actionableCount = (counts?.pending ?? 0) + (counts?.confirmed ?? 0);
 	const isAdminResult = useQuery(api.billing.amIAdmin);
 	const isAdmin = isAdminResult ?? false;
+	// A Kedaipal admin on their OWN store runs the app for free (never soft-locked
+	// server-side), so the chrome swaps the trial/past-due nag for an "Admin" badge
+	// and suppresses the subscription banner. While acting-as a seller we keep the
+	// seller's real subscription state visible — white-glove needs to see it.
+	const adminOwnStore = isAdmin && !actingAsAdmin;
 	// Pass the store id so a store switch (admin act-as enter/exit) re-baselines the
 	// toast instead of announcing the other store's orders as "new".
 	useOrderToastNotifications(counts, retailer?._id);
@@ -131,15 +136,18 @@ function AppShell() {
 				retailer={retailer}
 				actionableCount={actionableCount}
 				isAdmin={isAdmin}
+				adminBadge={adminOwnStore}
 			/>
-			<div className="mx-auto flex w-full max-w-md flex-1 flex-col lg:mx-0 lg:max-w-none">
+			<div className="mx-auto flex w-full max-w-md flex-1 flex-col lg:mx-0 lg:max-w-none print:max-w-none">
 				{retailer?.actingAsAdmin ? (
-					<ActingAsBanner storeName={retailer.storeName} />
+					<div className="print:hidden">
+						<ActingAsBanner storeName={retailer.storeName} />
+					</div>
 				) : null}
-				<MobileHeader retailer={retailer} />
+				<MobileHeader retailer={retailer} adminBadge={adminOwnStore} />
 				{/* Store-specific banners only when operating a store. */}
 				{retailer ? (
-					<>
+					<div className="print:hidden">
 						<SendingPausedBanner
 							paused={retailer.sendingPaused}
 							reason={retailer.sendingPauseReason}
@@ -152,14 +160,17 @@ function AppShell() {
 								aupVersion: retailer.aupVersion,
 							}}
 						/>
-						<SubscriptionBanner
-							subscription={retailer.subscription}
-							ordersThisMonth={retailer.ordersThisMonth}
-							slug={retailer.slug}
-						/>
-					</>
+						{/* Admins run free on their own store — no trial/past-due nag. */}
+						{adminOwnStore ? null : (
+							<SubscriptionBanner
+								subscription={retailer.subscription}
+								ordersThisMonth={retailer.ordersThisMonth}
+								slug={retailer.slug}
+							/>
+						)}
+					</div>
 				) : null}
-				<main className="flex-1 px-5 py-6 lg:mx-auto lg:w-full lg:max-w-6xl lg:px-8 lg:py-8">
+				<main className="flex-1 px-5 py-6 lg:mx-auto lg:w-full lg:max-w-6xl lg:px-8 lg:py-8 print:max-w-none print:p-0">
 					<Outlet />
 				</main>
 				<BottomNav

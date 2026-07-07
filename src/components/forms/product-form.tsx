@@ -85,6 +85,12 @@ interface ProductFormProps {
 	currency: string;
 	submitLabel: string;
 	onSubmit: (values: ProductFormSubmitValues) => Promise<void>;
+	/**
+	 * Optional secondary control rendered beside Save in the sticky action bar
+	 * (e.g. the edit page's archive icon) — rare actions ride along without
+	 * competing with the primary save.
+	 */
+	stickyAction?: ReactNode;
 }
 
 /** Seed the editor state from existing variants, or a single empty default row. */
@@ -299,6 +305,7 @@ export function ProductForm({
 	currency,
 	submitLabel,
 	onSubmit,
+	stickyAction,
 }: ProductFormProps) {
 	const generateUploadUrl = useMutation(api.products.generateUploadUrl);
 
@@ -647,6 +654,8 @@ export function ProductForm({
 				</p>
 			) : null}
 
+			{/* Sticky action bar — on a long form, save must never scroll away.
+			    Rare actions (archive) sit beside it as a quiet icon. */}
 			<form.Subscribe
 				selector={(s) => ({
 					canSubmit: s.canSubmit,
@@ -654,14 +663,17 @@ export function ProductForm({
 				})}
 			>
 				{({ canSubmit, isSubmitting }) => (
-					<Button
-						type="submit"
-						disabled={!canSubmit || isSubmitting || uploading}
-						className="sticky bottom-20 z-10 h-12 shadow-lg shadow-accent/20 lg:static lg:shadow-none"
-					>
-						<Save className="size-4" />
-						{isSubmitting ? "Saving…" : submitLabel}
-					</Button>
+					<div className="sticky bottom-20 z-10 flex gap-2 lg:static">
+						{stickyAction}
+						<Button
+							type="submit"
+							disabled={!canSubmit || isSubmitting || uploading}
+							className="h-12 flex-1 shadow-lg shadow-accent/20 lg:shadow-none"
+						>
+							<Save className="size-4" />
+							{isSubmitting ? "Saving…" : submitLabel}
+						</Button>
+					</div>
 				)}
 			</form.Subscribe>
 		</form>
