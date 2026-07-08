@@ -41,7 +41,10 @@ collection-run cost. Unset (or 0) = free; every legacy row reads as free, no bac
   create/update requires Pro+ (`assertPlanFeature`; admin act-as bypasses). **Clearing is
   always allowed** — a downgraded seller is never trapped with a fee they can't remove — and
   a frozen fee on an existing order displays on every tier (it's inherent to the order).
-  Starter sellers see the fee input disabled-with-reason + Pro chip in the edit dialog.
+  Starter sellers see the fee input disabled-with-reason + Pro chip in the edit dialog; when
+  the locked point *already carries* a fee, the dialog surfaces a self-serve **"Remove fee"**
+  control (stages `fee: null`, applied on Save, reversible via "Keep fee") so the un-gated
+  server clear is actually reachable — no "contact us" dead-end.
 - **Surfaces (fee line everywhere the total appears, hidden when free):** storefront picker
   chip ("+ RM5.00 fee") + checkout footer breakdown (Subtotal / Pickup fee / Total) + the
   `wa.me` order message; tracking page + seller order detail ("Pickup fee — <label>");

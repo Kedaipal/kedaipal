@@ -33,8 +33,10 @@ export type CsvOrder = {
 	items: Array<{ name: string; variantLabel?: string; quantity: number }>;
 	subtotal: number;
 	/** Frozen per-location pickup fee (minor units). Undefined/0 = free — the
-	 * column prints "0.00" so the Subtotal + Pickup fee = Total identity always
-	 * sums in a spreadsheet. */
+	 * column prints "0.00" (never blank) so `Subtotal + Pickup fee = Total`
+	 * sums in a spreadsheet for a standard order. (A made-to-order/custom order
+	 * also folds a mockup quote into `total`, and there's no quote column, so
+	 * that identity doesn't hold there — the quote never was in the export.) */
 	pickupFee?: number;
 	total: number;
 	currency: string;

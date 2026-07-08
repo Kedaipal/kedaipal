@@ -68,7 +68,7 @@ describe("orderToCsvRow", () => {
 		);
 	});
 
-	test("pickup fee column prints the fee, and 0.00 when free — Subtotal + Pickup fee = Total always sums", () => {
+	test("pickup fee column prints the fee, and 0.00 when free — Subtotal + Pickup fee = Total sums for a standard order", () => {
 		const withFee = orderToCsvRow({
 			...base,
 			deliveryMethod: "self_collect",
