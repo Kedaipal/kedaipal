@@ -10,9 +10,10 @@ import {
 	QrCode,
 } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
+import { isUnlimited } from "../../../convex/lib/plans";
 import { formatPrice } from "../../lib/format";
 import { LEGAL_CONTACT_EMAIL } from "../../lib/legal";
-import { trialDaysLeft } from "../../lib/subscription";
+import { ORDER_CAP_WARN_RATIO, trialDaysLeft } from "../../lib/subscription";
 import { ZoomableImage } from "../ui/zoomable-image";
 import { InvoiceDownloadButton } from "./invoice-download-button";
 
@@ -67,6 +68,25 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 			instructions.duitnowId ||
 			instructions.qrUrl);
 
+	// Monthly order meter vs the plan's SOFT cap (hidden for comped accounts and
+	// unlimited caps). `ordersThisMonth` rides on the retailer payload.
+	const orderCap = sub?.caps?.orderCap;
+	const capMeter =
+		!sub?.comped &&
+		orderCap !== undefined &&
+		orderCap > 0 &&
+		!isUnlimited(orderCap) &&
+		retailer.ordersThisMonth !== undefined
+			? {
+					used: retailer.ordersThisMonth,
+					cap: orderCap,
+					near:
+						retailer.ordersThisMonth >=
+						Math.ceil(orderCap * ORDER_CAP_WARN_RATIO),
+					over: retailer.ordersThisMonth >= orderCap,
+				}
+			: null;
+
 	return (
 		<div className="flex flex-col gap-6 pt-2">
 			{retailer.isFoundingMember ? (
@@ -113,13 +133,56 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 					</p>
 				) : null}
 
+				{/* Monthly order usage vs the plan's SOFT cap. The cap never blocks
+				    orders — passing it just escalates the upgrade nudge. */}
+				{capMeter ? (
+					<div className="flex flex-col gap-1.5 border-t border-border pt-4">
+						<div className="flex items-baseline justify-between text-xs">
+							<span className="font-semibold uppercase tracking-wide text-muted-foreground">
+								Orders this month
+							</span>
+							<span
+								className={`font-medium tabular-nums ${
+									capMeter.over
+										? "text-red-600 dark:text-red-400"
+										: capMeter.near
+											? "text-amber-700 dark:text-amber-400"
+											: "text-muted-foreground"
+								}`}
+							>
+								{capMeter.used} / {capMeter.cap}
+							</span>
+						</div>
+						<div className="h-1.5 overflow-hidden rounded-full bg-muted">
+							<div
+								className={`h-full rounded-full transition-all ${
+									capMeter.over
+										? "bg-red-500"
+										: capMeter.near
+											? "bg-amber-500"
+											: "bg-accent"
+								}`}
+								style={{
+									width: `${Math.min(100, Math.round((capMeter.used / capMeter.cap) * 100))}%`,
+								}}
+							/>
+						</div>
+						<p className="text-[11px] text-muted-foreground">
+							{capMeter.over
+								? "You're past your plan's included orders — everything keeps working, but this is the sign to upgrade."
+								: "Included orders on your plan. Going over never blocks an order."}
+						</p>
+					</div>
+				) : null}
+
 				{/* Starter → Pro upgrade (manual sub: routes the request to Arif on WA). */}
 				{sub?.plan === "starter" &&
 				sub.status === "active" &&
 				instructions?.whatsappPhone ? (
 					<div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
 						<p className="text-xs text-muted-foreground">
-							Want more orders, team seats and broadcasts? Move up to Pro.
+							Want 500 orders/month, the customer database and the order inbox?
+							Move up to Pro.
 						</p>
 						<a
 							href={`https://wa.me/${instructions.whatsappPhone.replace(/\D/g, "")}?text=${encodeURIComponent(

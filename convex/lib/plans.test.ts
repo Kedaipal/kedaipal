@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
 	ANNUAL_MONTHS_CHARGED,
 	capsForPlan,
+	featuresForPlan,
 	FOUNDING_MONTHLY_PRICE,
 	isPlanSelectable,
 	isUnlimited,
@@ -11,6 +12,37 @@ import {
 	planQualifiesForFounding,
 	UNLIMITED,
 } from "./plans";
+
+describe("plans — feature entitlements", () => {
+	// Mirrors the pricing table's LIVE ✓/– rows: CRM, Order Inbox and
+	// chargeable pickup are Pro+.
+	test("Starter has no Pro features", () => {
+		expect(featuresForPlan("starter")).toEqual({
+			crm: false,
+			orderInbox: false,
+			chargeablePickup: false,
+		});
+	});
+
+	test("Pro and Scale have all", () => {
+		expect(featuresForPlan("pro")).toEqual({
+			crm: true,
+			orderInbox: true,
+			chargeablePickup: true,
+		});
+		expect(featuresForPlan("scale")).toEqual({
+			crm: true,
+			orderInbox: true,
+			chargeablePickup: true,
+		});
+	});
+
+	test("returns a copy — mutating the result can't poison the catalog", () => {
+		const f = featuresForPlan("pro");
+		f.crm = false;
+		expect(featuresForPlan("pro").crm).toBe(true);
+	});
+});
 
 describe("plans — pricing", () => {
 	test("monthly price is the table price", () => {

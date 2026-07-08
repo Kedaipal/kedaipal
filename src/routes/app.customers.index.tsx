@@ -3,6 +3,7 @@ import { usePaginatedQuery, useQuery } from "convex/react";
 import { Search, Users, X } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
+import { ProFeatureWall } from "../components/app/pro-gate";
 import {
 	CustomerList,
 	type CustomerSort,
@@ -13,10 +14,11 @@ import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
+import { hasFeature } from "../lib/subscription";
 
-// NOTE: This feature is Pro-tier (RM149) and above per the pricing plan. Tier
-// gating (hide from Starter + upgrade banner) is deferred until subscription
-// billing lands — there's no plan field on the retailer yet. See Sprint 1–3.
+// Pro-tier feature: the whole route is plan-gated (server lock in
+// convex/customers.ts via assertPlanFeature; this renders the upgrade wall for
+// Starter). Admin act-as sees through the gate, same as the server bypass.
 
 export const Route = createFileRoute("/app/customers/")({
 	component: CustomersRoute,
@@ -36,20 +38,51 @@ function CustomersRoute() {
 	const searching = debouncedTerm.trim().length > 0;
 	const currency = retailer?.currency ?? "MYR";
 
+	// Plan gate (Pro+). Queries are skipped while locked so the server gate is
+	// never tripped in normal use; admin act-as sees through it.
+	const crmLocked =
+		!!retailer &&
+		!retailer.actingAsAdmin &&
+		!hasFeature(retailer.subscription, "crm");
+
 	const listed = usePaginatedQuery(
 		api.customers.list,
-		retailer && !searching ? { retailerId: retailer._id, sort } : "skip",
+		retailer && !crmLocked && !searching
+			? { retailerId: retailer._id, sort }
+			: "skip",
 		{ initialNumItems: 30 },
 	);
 
 	const searchResults = useQuery(
 		api.customers.search,
-		retailer && searching
+		retailer && !crmLocked && searching
 			? { retailerId: retailer._id, term: debouncedTerm }
 			: "skip",
 	);
 
 	if (!retailer) return null;
+
+	if (crmLocked) {
+		return (
+			<div className="flex flex-col gap-5 lg:gap-6">
+				<PageHeader title="Customers" subtitle="Available on Pro" />
+				<div className="flex items-center justify-between lg:hidden">
+					<h2 className="text-xl font-bold">Customers</h2>
+				</div>
+				<ProFeatureWall
+					slug={retailer.slug}
+					icon={<Users className="size-5 text-muted-foreground" />}
+					title="Know every customer at a glance"
+					blurb="The customer database is part of the Pro plan. Every order already builds it in the background — upgrade and it's ready on day one."
+					bullets={[
+						"See lifetime orders, total spent and last order for every buyer",
+						"Search by name or phone the moment someone messages you",
+						"Keep private notes (allergies, preferences, regulars)",
+					]}
+				/>
+			</div>
+		);
+	}
 
 	const customers = searching ? (searchResults ?? []) : listed.results;
 	const loading = searching

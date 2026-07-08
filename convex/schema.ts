@@ -512,8 +512,19 @@ export default defineSchema({
 				// Google Place ID — frozen so the Maps URL can deep-link
 				// to the named place page (not just lat/lng search).
 				placeId: v.optional(v.string()),
+				// Flat pickup fee (minor units) frozen at order create — the
+				// location's fee at the moment the buyer chose it. A later fee
+				// edit or deactivate never rewrites a placed order's total.
+				// Unset → the location was free (0 is never stored). Mirrored
+				// onto the order-level `pickupFee` for cheap CSV/inbox reads.
+				fee: v.optional(v.number()),
 			}),
 		),
+		// Order-level mirror of `pickupSnapshot.fee` (minor units) so exports and
+		// list surfaces can read the fee without unpacking the snapshot. Always
+		// equals the snapshot fee; folded into `total` via computeOrderTotals
+		// (total = subtotal + mockup quote + pickupFee). Unset → no fee.
+		pickupFee: v.optional(v.number()),
 		// When the buyer needs the order — their answer to "When do you need this?
 		// (delivery or pickup date)" at checkout. Stored as the epoch-ms of that
 		// calendar day's MIDNIGHT in Malaysia time (UTC+8, no DST) — see
@@ -619,6 +630,13 @@ export default defineSchema({
 		retailerId: v.id("retailers"),
 		label: v.string(),
 		address: v.string(),
+		// Optional flat fee (minor units / sen) a buyer pays for choosing this
+		// point — passes on a real collection cost (paid drop-off host, meetup
+		// run, host-stall charge). Unset or 0 → free; legacy rows read as free
+		// with no backfill. Setting a non-zero fee is Pro-gated. Validated
+		// (integer, ≥ 0, sanity ceiling) in pickupLocations.create/update and
+		// frozen onto orders.pickupSnapshot.fee at order create.
+		fee: v.optional(v.number()),
 		// Kind of pickup point. "self_collect" = the seller's own place (shop,
 		// home, warehouse); "drop_off" = an agreed meetup/common point (pasar,
 		// surau, LRT station). Both are "Pickup" to the buyer and share this
@@ -808,6 +826,24 @@ export default defineSchema({
 	})
 		.index("by_retailer", ["retailerId"])
 		.index("by_status", ["status"]), // drives the cron status scans
+
+	// Per-retailer × MYT-calendar-month order counter — the meter behind the SOFT
+	// orderCap nudge ("X of 100 plan orders used this month"). Keyed by calendar
+	// month (not the billing period) because caps are "orders/mo" while billing
+	// cycles can be annual. High-churn counter split out per the Convex guideline
+	// (never `.collect().length`). Incremented on order create (storefront +
+	// counter checkout), decremented on the first transition into cancelled
+	// (keyed to the order's CREATION month, floored at zero). NEVER read to block
+	// `orders.create` — the order pipeline stays public. See
+	// convex/subscriptionUsage.ts + docs/manual-subscription.md.
+	subscriptionUsage: defineTable({
+		retailerId: v.id("retailers"),
+		// Epoch-ms of MYT midnight on the 1st of the month (see lib/usagePeriod.ts).
+		monthStart: v.number(),
+		orders: v.number(),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	}).index("by_retailer_month", ["retailerId", "monthStart"]),
 
 	// Per-period invoice. Admin marks it paid out-of-band (DuitNow / bank). The
 	// founding pending invoice carries a `dueDate` that drives the active→past_due

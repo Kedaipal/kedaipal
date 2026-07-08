@@ -792,6 +792,21 @@ function TrackingRoute() {
 						</span>
 					</div>
 				) : null}
+				{/* Frozen per-location pickup fee — its own line so the buyer can
+				    reconcile the total against the item prices. Hidden when free. */}
+				{order.pickupFee && order.pickupFee > 0 ? (
+					<div className="flex items-center justify-between px-3 text-sm text-muted-foreground">
+						<span>
+							Pickup fee
+							{order.pickupSnapshot?.label
+								? ` — ${order.pickupSnapshot.label}`
+								: ""}
+						</span>
+						<span className="tabular-nums">
+							{formatPrice(order.pickupFee, order.currency)}
+						</span>
+					</div>
+				) : null}
 				<div className="flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2.5 text-sm font-bold">
 					<span>Total</span>
 					<span className="tabular-nums">

@@ -18,6 +18,9 @@ interface BottomNavProps {
 	// A storeless admin has no seller store to manage — show the admin tabs
 	// (Sellers / Billing / WABA) instead of the seller nav.
 	adminOnly?: boolean;
+	// CRM is plan-locked for this seller (Starter) — mark the Customers tab with
+	// a "Pro" chip so the upgrade wall behind it is never a surprise.
+	crmLocked?: boolean;
 }
 
 type Tab = {
@@ -27,9 +30,14 @@ type Tab = {
 	exact?: boolean;
 	badge?: number;
 	search?: LinkProps["search"];
+	pro?: boolean;
 };
 
-export function BottomNav({ actionableCount, adminOnly }: BottomNavProps) {
+export function BottomNav({
+	actionableCount,
+	adminOnly,
+	crmLocked,
+}: BottomNavProps) {
 	// The act-as session is held globally (see useActAs), so seller tabs keep the
 	// admin inside the vendor store automatically — no per-tab handling needed.
 	const tabs: Tab[] = adminOnly
@@ -48,7 +56,12 @@ export function BottomNav({ actionableCount, adminOnly }: BottomNavProps) {
 					badge: actionableCount,
 				},
 				{ to: "/app/checkout", label: "Counter", icon: QrCode },
-				{ to: "/app/customers", label: "Customers", icon: Users },
+				{
+					to: "/app/customers",
+					label: "Customers",
+					icon: Users,
+					pro: crmLocked,
+				},
 				// No tab param — mobile lands on the grouped settings index.
 				{ to: "/app/settings", label: "Settings", icon: Settings },
 			];
@@ -65,7 +78,7 @@ export function BottomNav({ actionableCount, adminOnly }: BottomNavProps) {
 }
 
 function NavTab({ tab }: { tab: Tab }) {
-	const { to, label, icon: Icon, exact, badge, search } = tab;
+	const { to, label, icon: Icon, exact, badge, search, pro } = tab;
 	const showBadge = typeof badge === "number" && badge > 0;
 	return (
 		<Link
@@ -96,6 +109,11 @@ function NavTab({ tab }: { tab: Tab }) {
 						{showBadge ? (
 							<span className="absolute -right-0.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-orange-500 px-1 text-[9px] font-bold leading-none text-white">
 								{badge > 99 ? "99+" : badge}
+							</span>
+						) : null}
+						{pro ? (
+							<span className="absolute -right-3.5 -top-1.5 rounded-full bg-accent/15 px-1 py-px text-[8px] font-bold uppercase leading-none text-accent">
+								Pro
 							</span>
 						) : null}
 					</span>

@@ -200,11 +200,13 @@ function useFeatures(): Feature[] {
 			scale: true,
 		},
 		{
+			// Shipped (fulfilment date at checkout, 86expm524) — and it's part of
+			// the core order flow on EVERY storefront, so it's honestly all-tier:
+			// the buyer-facing checkout doesn't vary by the seller's plan.
 			label: m.pricingpage_feat_datepicker(),
-			starter: false,
+			starter: true,
 			pro: true,
 			scale: true,
-			comingSoon: true,
 		},
 		{
 			label: m.pricingpage_feat_reminders(),

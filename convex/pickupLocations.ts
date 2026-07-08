@@ -10,6 +10,7 @@ import {
 } from "./lib/auth";
 import { assertValidMapsUrl } from "./lib/mapsUrl";
 import { assertValidWaPhone } from "./lib/slug";
+import { assertPlanFeature, assertSubscriptionActive } from "./subscriptions";
 
 const LABEL_MAX = 60;
 const ADDRESS_MIN = 3;
@@ -26,6 +27,12 @@ const MANAGER_NAME_MAX = 60;
 // keep `PLACE_ID_MAX` in lockstep with the delivery-address validator in
 // convex/lib/address.ts.
 const PLACE_ID_MAX = 300;
+// Sanity ceiling on a per-location pickup fee (minor units) — RM10,000. Real
+// fees are RM2–RM50 (a paid drop-off host, a meetup run); the cap only guards
+// fat-fingered zeros, mirroring the MOCKUP_QUOTE_MAX pattern in orders.ts but
+// an order of magnitude tighter since a "pickup fee" should never approach a
+// custom-work quote.
+export const PICKUP_FEE_MAX = 1_000_000;
 
 // ---------------------------------------------------------------------------
 // Auth helpers — mirror the pattern in convex/customers.ts so each module is
@@ -140,6 +147,25 @@ function sanitizeManagerName(raw: string | undefined): string | undefined {
 	return trimmed;
 }
 
+/**
+ * Validate a pickup fee (minor units). Whole non-negative sen with the
+ * {@link PICKUP_FEE_MAX} ceiling. Normalizes 0 → undefined so "free" is stored
+ * one way only — no row ever carries `fee: 0`, and every read can treat
+ * `fee === undefined` as free without a `> 0` check.
+ */
+function sanitizeFee(raw: number | undefined): number | undefined {
+	if (raw === undefined) return undefined;
+	if (!Number.isInteger(raw) || raw < 0) {
+		throw new ConvexError("Pickup fee must be a whole, non-negative amount");
+	}
+	if (raw > PICKUP_FEE_MAX) {
+		throw new ConvexError(
+			"Pickup fee is unrealistically large — check the amount",
+		);
+	}
+	return raw === 0 ? undefined : raw;
+}
+
 function sanitizeManagerWaPhone(raw: string | undefined): string | undefined {
 	if (raw === undefined) return undefined;
 	const trimmed = raw.trim();
@@ -215,6 +241,10 @@ export const listActivePublicBySlug = query({
 			latitude?: number;
 			longitude?: number;
 			placeId?: string;
+			/** Flat fee (minor units) added to the order total when the buyer
+			 * picks this point. Undefined = free. Public by design — the buyer
+			 * must see the charge in the picker before choosing. */
+			fee?: number;
 			sortOrder: number;
 		}>
 	> => {
@@ -247,6 +277,7 @@ export const listActivePublicBySlug = query({
 				latitude: r.latitude,
 				longitude: r.longitude,
 				placeId: r.placeId,
+				fee: r.fee,
 				sortOrder: r.sortOrder,
 			}));
 	},
@@ -329,6 +360,9 @@ export const create = mutation({
 		// page surfaces a one-tap "Notify <name>" wa.me button.
 		managerName: v.optional(v.string()),
 		managerWaPhone: v.optional(v.string()),
+		// Optional flat fee (minor units) buyers pay for this point. Omitted or
+		// 0 → free. Setting a non-zero fee is Pro-gated (chargeablePickup).
+		fee: v.optional(v.number()),
 	},
 	handler: async (
 		ctx,
@@ -345,9 +379,22 @@ export const create = mutation({
 			placeId,
 			managerName,
 			managerWaPhone,
+			fee,
 		},
 	): Promise<{ pickupLocationId: Id<"pickupLocations"> }> => {
 		const access = await requireRetailerOwner(ctx, retailerId);
+		// Soft-lock: a past_due seller can't edit fulfilment setup (growth-write,
+		// same class as updateSettings). Admin act-as bypasses (white-glove).
+		if (!access.actingAsAdmin)
+			await assertSubscriptionActive(ctx, retailerId);
+
+		const cleanFee = sanitizeFee(fee);
+		// Charging for a pickup point is a Pro fulfilment feature. Gate only an
+		// actual charge — a free location (fee omitted/0) stays all-tier, so
+		// Starter sellers see zero behaviour change. Admin act-as bypasses
+		// (white-glove onboarding), mirroring the soft-lock above.
+		if (cleanFee !== undefined && !access.actingAsAdmin)
+			await assertPlanFeature(ctx, retailerId, "chargeablePickup");
 
 		const cleanLabel = sanitizeLabel(label);
 		const cleanAddress = sanitizeAddress(address);
@@ -389,6 +436,7 @@ export const create = mutation({
 			placeId: cleanPlaceId,
 			managerName: cleanManagerName,
 			managerWaPhone: cleanManagerWaPhone,
+			fee: cleanFee,
 			isActive: true,
 			sortOrder: nextSortOrder,
 			createdAt: now,
@@ -427,6 +475,10 @@ export const update = mutation({
 		// Store manager contact. Empty string clears.
 		managerName: v.optional(v.string()),
 		managerWaPhone: v.optional(v.string()),
+		// Pickup fee (minor units). `null` or 0 clears back to free; a positive
+		// number sets it (Pro-gated). Undefined = no change — matches the
+		// lat/lng null-clear convention above.
+		fee: v.optional(v.union(v.number(), v.null())),
 	},
 	handler: async (
 		ctx,
@@ -443,9 +495,27 @@ export const update = mutation({
 			placeId,
 			managerName,
 			managerWaPhone,
+			fee,
 		},
 	): Promise<void> => {
-		const { access } = await requireOwnedLocation(ctx, pickupLocationId);
+		const { location, access } = await requireOwnedLocation(
+			ctx,
+			pickupLocationId,
+		);
+		// Soft-lock (growth-write); admin act-as bypasses.
+		if (!access.actingAsAdmin)
+			await assertSubscriptionActive(ctx, location.retailerId);
+
+		// Pro gate (chargeablePickup) only when SETTING a charge — clearing a
+		// fee (null/0) stays all-tier so a downgraded seller can always make a
+		// location free again. Admin act-as bypasses (white-glove).
+		const cleanFee = fee === null ? undefined : sanitizeFee(fee);
+		if (
+			fee !== undefined &&
+			cleanFee !== undefined &&
+			!access.actingAsAdmin
+		)
+			await assertPlanFeature(ctx, location.retailerId, "chargeablePickup");
 
 		const patch: Partial<{
 			label: string;
@@ -459,8 +529,12 @@ export const update = mutation({
 			placeId: string | undefined;
 			managerName: string | undefined;
 			managerWaPhone: string | undefined;
+			fee: number | undefined;
 			updatedAt: number;
 		}> = { updatedAt: Date.now() };
+
+		// Undefined = untouched; null/0 → clears (stored as undefined = free).
+		if (fee !== undefined) patch.fee = cleanFee;
 
 		if (label !== undefined) patch.label = sanitizeLabel(label);
 		if (address !== undefined) patch.address = sanitizeAddress(address);
@@ -521,6 +595,9 @@ export const setActive = mutation({
 			ctx,
 			pickupLocationId,
 		);
+		// Soft-lock (growth-write); admin act-as bypasses.
+		if (!access.actingAsAdmin)
+			await assertSubscriptionActive(ctx, location.retailerId);
 		if (location.isActive === isActive) return; // idempotent
 
 		// Fulfilment invariant: don't let the seller hide the LAST active pickup
@@ -596,6 +673,9 @@ export const reorder = mutation({
 	},
 	handler: async (ctx, { retailerId, orderedIds }): Promise<void> => {
 		const access = await requireRetailerOwner(ctx, retailerId);
+		// Soft-lock (growth-write); admin act-as bypasses.
+		if (!access.actingAsAdmin)
+			await assertSubscriptionActive(ctx, retailerId);
 
 		const activeRows = await ctx.db
 			.query("pickupLocations")

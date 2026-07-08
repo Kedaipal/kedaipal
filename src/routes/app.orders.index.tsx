@@ -25,6 +25,7 @@ import {
 	isOrderPaymentMethod,
 	type OrderPaymentMethod,
 } from "../../convex/lib/paymentMethod";
+import { ProFeatureTease } from "../components/app/pro-gate";
 import {
 	DeliveryMethodIcon,
 	OrderContextBadge,
@@ -59,6 +60,7 @@ import {
 	type StatusLabels,
 	stageLabel,
 } from "../lib/orderStatus";
+import { hasFeature } from "../lib/subscription";
 import { cn } from "../lib/utils";
 
 type InboxBucket = OrderBucket | "all";
@@ -186,22 +188,34 @@ function OrdersRoute() {
 		setSelected(new Set());
 	}, [bucket, debounced, payKey, methodKey, munspec, from, to, mockup, fwin]);
 
+	// Order Inbox plan gate (Pro+). Starter keeps the plain list + order detail +
+	// status updates (the all-tier "Order pipeline"); buckets/search/filters/bulk/
+	// export are the gated inbox surfaces — hidden below, and any stale URL filters
+	// are ignored so the query only ever sends default args (the server enforces
+	// the same line in searchOrders). Admin act-as sees through it.
+	const inboxEnabled =
+		!retailer ||
+		retailer.actingAsAdmin === true ||
+		hasFeature(retailer.subscription, "orderInbox");
+
 	const result = useQuery(
 		api.orders.searchOrders,
 		retailer
-			? {
-					retailerId: retailer._id,
-					bucket,
-					paymentStatuses: pay.length > 0 ? pay : undefined,
-					paymentMethods: method.length > 0 ? method : undefined,
-					methodUnspecified: munspec || undefined,
-					dateFrom: from,
-					dateTo: to,
-					mockupPending: mockup || undefined,
-					fulfilmentWindow: fwin,
-					searchText: debounced || undefined,
-					limit,
-				}
+			? inboxEnabled
+				? {
+						retailerId: retailer._id,
+						bucket,
+						paymentStatuses: pay.length > 0 ? pay : undefined,
+						paymentMethods: method.length > 0 ? method : undefined,
+						methodUnspecified: munspec || undefined,
+						dateFrom: from,
+						dateTo: to,
+						mockupPending: mockup || undefined,
+						fulfilmentWindow: fwin,
+						searchText: debounced || undefined,
+						limit,
+					}
+				: { retailerId: retailer._id, bucket: "all", limit }
 			: "skip",
 	);
 	const countsRef = useRef<NonNullable<typeof result>["counts"] | null>(null);
@@ -424,7 +438,7 @@ function OrdersRoute() {
 				subtitle={
 					loading ? "Loading…" : `${total} order${total === 1 ? "" : "s"}`
 				}
-				actions={headerActions}
+				actions={inboxEnabled ? headerActions : undefined}
 			/>
 			<div className="flex items-center justify-between gap-3 lg:hidden">
 				<div className="min-w-0">
@@ -435,75 +449,89 @@ function OrdersRoute() {
 						{loading ? "Loading…" : `${total} order${total === 1 ? "" : "s"}`}
 					</p>
 				</div>
-				<div className="flex shrink-0 items-center gap-2">{headerActions}</div>
+				<div className="flex shrink-0 items-center gap-2">
+					{inboxEnabled ? headerActions : null}
+				</div>
 			</div>
+
+			{/* Starter: the inbox controls are a Pro feature — say so where they'd
+			    be, instead of leaving a silent gap. The order list below still works. */}
+			{!inboxEnabled ? (
+				<ProFeatureTease message="Buckets, search, filters, bulk actions and CSV export are on Pro — find any order in seconds." />
+			) : null}
 
 			{/* One control surface: search + filter trigger on a row, bucket chips
 			    below, applied-filter tokens wrap underneath. Everything else lives
 			    in the filter sheet or the contextual banner. */}
-			<section className="flex flex-col gap-3">
-				<div className="flex flex-wrap items-center gap-2">
-					<div className="relative min-w-0 flex-1">
-						<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-						<Input
-							value={searchInput}
-							onChange={(e) => setSearchInput(e.target.value)}
-							placeholder="Order #, name, phone, item"
-							className="h-11 rounded-xl border-border bg-card pl-9 pr-9"
-							inputMode="search"
+			{inboxEnabled ? (
+				<section className="flex flex-col gap-3">
+					<div className="flex flex-wrap items-center gap-2">
+						<div className="relative min-w-0 flex-1">
+							<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+							<Input
+								value={searchInput}
+								onChange={(e) => setSearchInput(e.target.value)}
+								placeholder="Order #, name, phone, item"
+								className="h-11 rounded-xl border-border bg-card pl-9 pr-9"
+								inputMode="search"
+							/>
+							{searchInput ? (
+								<button
+									type="button"
+									onClick={() => setSearchInput("")}
+									className="absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+									aria-label="Clear search"
+								>
+									<X className="size-4" />
+								</button>
+							) : null}
+						</div>
+
+						<OrderFilters
+							value={{
+								payment: pay,
+								method,
+								methodUnspecified: munspec,
+								from,
+								to,
+								mockup,
+								fwin,
+							}}
+							onChange={setFilters}
+							mockupCount={counts?.mockupPending}
+							resultCount={loading ? undefined : total}
 						/>
-						{searchInput ? (
-							<button
-								type="button"
-								onClick={() => setSearchInput("")}
-								className="absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
-								aria-label="Clear search"
-							>
-								<X className="size-4" />
-							</button>
-						) : null}
 					</div>
 
-					<OrderFilters
-						value={{
-							payment: pay,
-							method,
-							methodUnspecified: munspec,
-							from,
-							to,
-							mockup,
-							fwin,
-						}}
-						onChange={setFilters}
-						mockupCount={counts?.mockupPending}
-						resultCount={loading ? undefined : total}
-					/>
-				</div>
-
-				<FilterChipRow>
-					{BUCKET_KEYS.map((key) => {
-						const label =
-							key === "all"
-								? "All"
-								: (INBOX_BUCKETS.find((b) => b.key === key)?.label ?? key);
-						return (
-							<FilterChip
-								key={key}
-								selected={bucket === key}
-								onClick={() => setBucket(key)}
-								count={bucketCount(key)}
-								countTone={key === "new" ? "attention" : "muted"}
-							>
-								{label}
-							</FilterChip>
-						);
-					})}
-				</FilterChipRow>
-			</section>
+					<FilterChipRow>
+						{BUCKET_KEYS.map((key) => {
+							const label =
+								key === "all"
+									? "All"
+									: (INBOX_BUCKETS.find((b) => b.key === key)?.label ?? key);
+							return (
+								<FilterChip
+									key={key}
+									selected={bucket === key}
+									onClick={() => setBucket(key)}
+									count={bucketCount(key)}
+									countTone={key === "new" ? "attention" : "muted"}
+								>
+									{label}
+								</FilterChip>
+							);
+						})}
+					</FilterChipRow>
+				</section>
+			) : null}
 
 			{/* Contextual due-today banner — only appears when something is due and
-			    the seller isn't already looking at it. Tapping filters the list. */}
-			{!loading && (counts?.dueToday ?? 0) > 0 && fwin !== "today" ? (
+			    the seller isn't already looking at it. Tapping filters the list.
+			    Gated with the inbox (a filter shortcut Starter can't act on). */}
+			{inboxEnabled &&
+			!loading &&
+			(counts?.dueToday ?? 0) > 0 &&
+			fwin !== "today" ? (
 				<button
 					type="button"
 					onClick={() =>

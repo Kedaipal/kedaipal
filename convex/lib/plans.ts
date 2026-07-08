@@ -40,6 +40,37 @@ export const PLAN_CAPS: Record<Plan, PlanCaps> = {
 	scale: { orderCap: 2000, userCap: 5, broadcastQuota: 500 },
 };
 
+/** Boolean feature entitlements per plan — the pricing table's ✓/– rows for
+ * features that are LIVE (coming-soon rows don't belong here until they ship).
+ * Resolved onto `AccessState.features` by `resolveAccess`, which is the single
+ * place allowed to read `plan` for gating — feature checks everywhere else read
+ * the resolved descriptor, keeping room for per-retailer overrides later. */
+export type PlanFeatures = {
+	/** Customer database (CRM-lite): /app/customers list + detail + notes. */
+	crm: boolean;
+	/** Order Inbox (86expm4xx): buckets, search, filters, bulk actions, CSV
+	 * export. The plain order list + status pipeline stays un-gated — that's
+	 * the all-tier "Order pipeline" row. */
+	orderInbox: boolean;
+	/** Chargeable pickup locations (86ey5tywf): setting a flat per-location
+	 * fee is a Pro fulfilment-configuration feature. Gates only the seller
+	 * SETTING a fee — an order that already carries a frozen fee displays it
+	 * on every tier (the fee is inherent to the order). */
+	chargeablePickup: boolean;
+};
+
+export type PlanFeature = keyof PlanFeatures;
+
+export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
+	starter: { crm: false, orderInbox: false, chargeablePickup: false },
+	pro: { crm: true, orderInbox: true, chargeablePickup: true },
+	scale: { crm: true, orderInbox: true, chargeablePickup: true },
+};
+
+export function featuresForPlan(plan: Plan): PlanFeatures {
+	return { ...PLAN_FEATURES[plan] };
+}
+
 // Standard monthly price (minor units / sen).
 export const PLAN_MONTHLY_PRICE: Record<Plan, number> = {
 	starter: 7900,

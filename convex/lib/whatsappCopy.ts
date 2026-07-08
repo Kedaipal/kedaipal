@@ -523,6 +523,10 @@ export type PickupSnapshot = {
 	latitude?: number;
 	longitude?: number;
 	placeId?: string;
+	/** Flat fee (minor units) frozen at order create. Undefined = free. Already
+	 * folded into the order total — rendered as its own line in the pickup
+	 * block so the buyer sees WHY the total is higher than the item sum. */
+	fee?: number;
 };
 
 // Kind-aware header so the buyer sees WHERE they're going at a glance —
@@ -540,6 +544,14 @@ const pickupLabels: Record<Locale, Record<PickupKind, string>> = {
 	},
 };
 
+// Fee line under the pickup address — tells the buyer the charge is already
+// inside the total they're being asked to pay, so the amount never reads as a
+// surprise markup.
+const pickupFeeLabels: Record<Locale, string> = {
+	en: "Pickup fee (included in total)",
+	ms: "Caj ambilan (termasuk dalam jumlah)",
+};
+
 /**
  * Render the pickup-location block appended to the confirm message for
  * self-collect orders. Returns "" when the snapshot is missing so the caller
@@ -551,13 +563,18 @@ const pickupLabels: Record<Locale, Record<PickupKind, string>> = {
  *   "<label>"
  *   "<address>"
  *   "🗓️ <scheduleNote>"  (optional — meetup time)
+ *   "💵 Pickup fee (included in total): MYR 2.00"  (optional — paid point)
  *   "<mapsUrl>"   (optional)
  *   ""
  *   "<notes>"     (optional)
+ *
+ * `currency` is only needed for the fee line — callers without a fee-carrying
+ * snapshot can omit it (the line is skipped when either is missing).
  */
 export function renderPickupBlock(
 	locale: Locale,
 	snapshot: PickupSnapshot | undefined,
+	currency?: string,
 ): string {
 	if (!snapshot) return "";
 	// Legacy snapshots (frozen before drop-off existed) have no locationType →
@@ -570,6 +587,14 @@ export function renderPickupBlock(
 	// Recurring availability ("Every Sat 3-5pm") — surfaced right under the
 	// address so a drop-off buyer knows WHEN the meetup happens, not just where.
 	if (snapshot.scheduleNote) lines.push(`🗓️ ${snapshot.scheduleNote}`);
+	// The point's frozen fee — already folded into the order total, surfaced so
+	// the buyer can reconcile total vs item prices. Same amount format as the
+	// payment ask ("MYR 2.00").
+	if (snapshot.fee && snapshot.fee > 0 && currency) {
+		lines.push(
+			`💵 ${pickupFeeLabels[locale]}: ${currency} ${(snapshot.fee / 100).toFixed(2)}`,
+		);
+	}
 	// Embed a clickable maps URL inline so the buyer gets one-tap navigation
 	// without us having to send a separate WhatsApp location-pin message.
 	// Priority: mapsUrl → placeId-derived → lat/lng-derived (see deriveMapsUrl).

@@ -27,6 +27,7 @@ import {
 } from "./_generated/server";
 import { linkOrderToCustomer, refreshWaProfileName } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
+import { recordOrderCreated } from "./subscriptionUsage";
 import {
 	adminUserIds,
 	logAdminAction,
@@ -546,6 +547,10 @@ export const createOrderFromSession = mutation({
 		// Counter orders are born confirmed (seller + buyer present), so this is a
 		// real first order — activate the store (one-time stamp).
 		await stampRetailerActivation(ctx, retailer._id, now);
+
+		// Meter against the monthly usage nudge (SOFT cap, never a block) —
+		// counter orders count like storefront ones.
+		await recordOrderCreated(ctx, retailer._id, now);
 
 		// Link customer aggregates (creates the row for a brand-new buyer).
 		await linkOrderToCustomer(ctx, {

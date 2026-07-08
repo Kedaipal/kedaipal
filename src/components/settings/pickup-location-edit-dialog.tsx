@@ -4,7 +4,12 @@ import { Dialog } from "radix-ui";
 import { type FormEvent, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
-import { convexErrorMessage } from "../../lib/format";
+import {
+	convexErrorMessage,
+	normalizePriceInput,
+	parsePriceInput,
+} from "../../lib/format";
+import { ProBadge } from "../app/pro-gate";
 import { useAppForm } from "../forms/form";
 import {
 	GoogleAddressAutocomplete,
@@ -21,6 +26,9 @@ interface PickupLocationEditDialogProps {
 	 */
 	location: Doc<"pickupLocations"> | undefined;
 	retailerId: Id<"retailers">;
+	/** Whether the plan allows charging a pickup fee (Pro+). When false the fee
+	 * input renders disabled-with-reason; the server gate is the real lock. */
+	canChargeFee: boolean;
 }
 
 /**
@@ -81,6 +89,7 @@ export function PickupLocationEditDialog({
 	onClose,
 	location,
 	retailerId,
+	canChargeFee,
 }: PickupLocationEditDialogProps) {
 	const createLocation = useMutation(api.pickupLocations.create);
 	const updateLocation = useMutation(api.pickupLocations.update);
@@ -91,10 +100,24 @@ export function PickupLocationEditDialog({
 	const [kind, setKind] = useState<"self_collect" | "drop_off">(
 		location?.locationType ?? "self_collect",
 	);
+	// Fee as a display string (RM) — same local-state pattern as `kind`. Stored
+	// in minor units server-side; converted at submit.
+	const [feeInput, setFeeInput] = useState<string>(
+		location?.fee && location.fee > 0 ? (location.fee / 100).toFixed(2) : "",
+	);
+	// A downgraded (locked) seller can't set/change a fee, but MUST be able to
+	// clear an existing one — the server keeps clearing un-gated precisely so a
+	// downgrade never traps a seller charging buyers a fee they can't turn off.
+	// This stages that clear (applied on Save, reversible via "Keep fee").
+	const [feePendingRemoval, setFeePendingRemoval] = useState(false);
 
 	const isEditing = location !== undefined;
 	const title = isEditing ? "Edit pickup point" : "Add pickup point";
 	const submitLabel = isEditing ? "Save changes" : "Add point";
+	// Locked plan sitting on an existing charge — the only fee action allowed is
+	// removal, surfaced as a dedicated "Remove fee" control below.
+	const lockedWithExistingFee =
+		!canChargeFee && Boolean(location?.fee && location.fee > 0);
 
 	const form = useAppForm({
 		defaultValues: {
@@ -121,6 +144,17 @@ export function PickupLocationEditDialog({
 				setServerError("Address is required.");
 				return;
 			}
+			// Fee: display RM string → integer sen. Blank = free. Parse errors
+			// surface inline (server re-validates the amount + the Pro gate).
+			let feeSen: number | undefined;
+			if (canChargeFee && feeInput.trim().length > 0) {
+				const rm = parsePriceInput(feeInput);
+				if (rm === null) {
+					setServerError("Pickup fee must be a valid amount, e.g. 5.00");
+					return;
+				}
+				feeSen = Math.round(rm * 100);
+			}
 			try {
 				if (isEditing && location) {
 					await updateLocation({
@@ -141,6 +175,18 @@ export function PickupLocationEditDialog({
 						// becomes "clear". Server treats empty string as undefined.
 						managerName,
 						managerWaPhone,
+						// On Pro: blank/0 clears back to free (null), a value re-sets it.
+						// On a locked plan we send nothing by default — an existing fee
+						// is never silently rewritten by an unrelated edit — UNLESS the
+						// seller explicitly staged a removal, which is always allowed
+						// (the server keeps clearing un-gated so a downgrade can't trap).
+						fee: canChargeFee
+							? feeSen && feeSen > 0
+								? feeSen
+								: null
+							: feePendingRemoval
+								? null
+								: undefined,
 					});
 				} else {
 					await createLocation({
@@ -156,6 +202,7 @@ export function PickupLocationEditDialog({
 						managerName: managerName.length > 0 ? managerName : undefined,
 						managerWaPhone:
 							managerWaPhone.length > 0 ? managerWaPhone : undefined,
+						fee: feeSen,
 					});
 				}
 				onClose();
@@ -290,6 +337,81 @@ export function PickupLocationEditDialog({
 									/>
 								)}
 							</form.AppField>
+
+							{/* Fee sits between the point's logistics (where/when) and the
+							    buyer notes — it's pricing for the point itself. */}
+							<div className="flex flex-col gap-1.5">
+								<label
+									htmlFor="pickup-fee-input"
+									className="flex items-center gap-2 text-sm font-medium"
+								>
+									Pickup fee (optional)
+									{canChargeFee ? null : <ProBadge />}
+								</label>
+								<div className="relative">
+									<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
+										RM
+									</span>
+									<input
+										id="pickup-fee-input"
+										type="text"
+										inputMode="decimal"
+										// Blank the shown amount once removal is staged so the
+										// input matches what Save will write (free).
+										value={feePendingRemoval ? "" : feeInput}
+										disabled={!canChargeFee}
+										onChange={(e) => setFeeInput(e.target.value)}
+										onBlur={() => setFeeInput(normalizePriceInput(feeInput))}
+										placeholder="0.00"
+										className="h-11 w-full rounded-lg border border-input bg-background pl-11 pr-3 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+									/>
+								</div>
+								{canChargeFee ? (
+									<p className="text-xs text-muted-foreground leading-relaxed">
+										Leave blank for free pickup. Buyers who choose this point see
+										the fee added to their order total at checkout — use it to
+										pass on a real cost, like a host who charges or a collection
+										run.
+									</p>
+								) : lockedWithExistingFee ? (
+									feePendingRemoval ? (
+										<div className="flex items-center justify-between gap-2">
+											<p className="text-xs font-medium text-amber-700 leading-relaxed">
+												Pickup fee will be removed when you save.
+											</p>
+											<button
+												type="button"
+												onClick={() => setFeePendingRemoval(false)}
+												className="shrink-0 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
+											>
+												Keep fee
+											</button>
+										</div>
+									) : (
+										<div className="flex flex-col gap-2">
+											<p className="text-xs text-muted-foreground leading-relaxed">
+												Charging a pickup fee is a Pro feature. This point's
+												existing fee still applies to new orders — upgrade in
+												Settings → Billing to change it, or remove it now to make
+												this point free.
+											</p>
+											<button
+												type="button"
+												onClick={() => setFeePendingRemoval(true)}
+												className="h-9 self-start rounded-lg border border-input px-3 text-xs font-medium text-foreground hover:bg-muted"
+											>
+												Remove fee
+											</button>
+										</div>
+									)
+								) : (
+									<p className="text-xs text-muted-foreground leading-relaxed">
+										Charging a pickup fee is a Pro feature — upgrade in Settings →
+										Billing to pass on a collection cost (like a paid drop-off
+										host) to buyers who choose this point.
+									</p>
+								)}
+							</div>
 
 							<form.AppField name="notes">
 								{(field) => (
