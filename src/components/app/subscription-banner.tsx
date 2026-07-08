@@ -15,15 +15,20 @@ import {
  *  - a pending invoice due within 5 days → amber warning, dismissable.
  *  - trial ending within 5 days → amber warning, dismissable (red + persistent
  *    once it's actually ended, before the cron flips it to past_due).
+ *  - the SOFT monthly order cap → amber upgrade nudge: dismissable at ≥80%
+ *    (keyed by month, so it returns next month), persistent once the cap is
+ *    passed. Orders are NEVER blocked — this is the upsell lever, not a lock.
  * Nothing for active/comped with nothing due. Warnings are dismissable for the
  * session only (sessionStorage, keyed by the deadline) so they return next login
  * and a new deadline re-shows. See docs/manual-subscription.md.
  */
 export function SubscriptionBanner({
 	subscription,
+	ordersThisMonth,
 	slug,
 }: {
 	subscription?: SubscriptionView;
+	ordersThisMonth?: number;
 	slug: string;
 }) {
 	const skipInvoice =
@@ -39,19 +44,63 @@ export function SubscriptionBanner({
 	);
 
 	const now = Date.now();
-	const state = resolveBannerState(subscription, pending?.dueDate, now);
+	const state = resolveBannerState(
+		subscription,
+		pending?.dueDate,
+		now,
+		undefined,
+		ordersThisMonth,
+	);
 
 	// Dismiss key: only the soft (amber) warnings are dismissable, keyed by their
-	// deadline so a new invoice / new trial end re-surfaces.
+	// deadline (or month, for the cap nudge) so the next deadline re-surfaces.
 	const dismissKey =
 		state.kind === "invoiceWarn"
 			? `subwarn:inv:${pending?.dueDate}`
 			: state.kind === "trialWarn" && !state.ended
 				? `subwarn:trial:${subscription?.trialEndsAt}`
-				: null;
+				: state.kind === "orderCapNear"
+					? `subwarn:cap:${new Date(now).toISOString().slice(0, 7)}`
+					: null;
 	const [dismissed, dismiss] = useDismissed(dismissKey);
 
 	if (state.kind === "none") return null;
+
+	// Soft order-cap nudge (amber) — upsell, not a lock. "Near" is dismissable
+	// for the month; "over" stays until the month rolls or they upgrade.
+	if (state.kind === "orderCapNear" || state.kind === "orderCapOver") {
+		if (dismissed && state.kind === "orderCapNear") return null;
+		const over = state.kind === "orderCapOver";
+		return (
+			<div className="flex items-center gap-3 border-b border-amber-200 bg-amber-50 px-5 py-3 dark:border-amber-900 dark:bg-amber-950/40 lg:px-8">
+				<p className="flex-1 text-sm text-foreground/90">
+					<span className="font-medium">
+						{over
+							? `You've passed your plan's ${state.cap} orders this month (${state.used} so far).`
+							: `${state.used} of ${state.cap} plan orders used this month.`}
+					</span>{" "}
+					Orders keep flowing as normal — upgrade for more headroom.
+				</p>
+				<Link
+					to="/app/settings"
+					search={{ tab: "billing" }}
+					className="inline-flex h-9 w-fit shrink-0 items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
+				>
+					Upgrade
+				</Link>
+				{!over && dismissKey ? (
+					<button
+						type="button"
+						onClick={dismiss}
+						aria-label="Dismiss"
+						className="-mr-1 shrink-0 rounded-md p-1.5 text-foreground/50 hover:bg-foreground/5 hover:text-foreground"
+					>
+						<X className="size-4" />
+					</button>
+				) : null}
+			</div>
+		);
+	}
 
 	if (state.kind === "pastDue") {
 		const phone = instructions?.whatsappPhone;

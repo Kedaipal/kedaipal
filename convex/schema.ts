@@ -809,6 +809,24 @@ export default defineSchema({
 		.index("by_retailer", ["retailerId"])
 		.index("by_status", ["status"]), // drives the cron status scans
 
+	// Per-retailer × MYT-calendar-month order counter — the meter behind the SOFT
+	// orderCap nudge ("X of 100 plan orders used this month"). Keyed by calendar
+	// month (not the billing period) because caps are "orders/mo" while billing
+	// cycles can be annual. High-churn counter split out per the Convex guideline
+	// (never `.collect().length`). Incremented on order create (storefront +
+	// counter checkout), decremented on the first transition into cancelled
+	// (keyed to the order's CREATION month, floored at zero). NEVER read to block
+	// `orders.create` — the order pipeline stays public. See
+	// convex/subscriptionUsage.ts + docs/manual-subscription.md.
+	subscriptionUsage: defineTable({
+		retailerId: v.id("retailers"),
+		// Epoch-ms of MYT midnight on the 1st of the month (see lib/usagePeriod.ts).
+		monthStart: v.number(),
+		orders: v.number(),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	}).index("by_retailer_month", ["retailerId", "monthStart"]),
+
 	// Per-period invoice. Admin marks it paid out-of-band (DuitNow / bank). The
 	// founding pending invoice carries a `dueDate` that drives the active→past_due
 	// overdue cron flip.

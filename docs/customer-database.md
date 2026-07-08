@@ -89,9 +89,17 @@ npx convex run customers:backfillCustomers '{"cursor": null}'
 
 None beyond what already exists. (The inbound webhook now also requires `WHATSAPP_APP_SECRET` for signature verification — see [`whatsapp-webhook-security.md`](./whatsapp-webhook-security.md) — but that's a separate concern.)
 
-## Tier gating (deferred)
+## Tier gating (implemented Jul 2026)
 
-The pricing plan scopes this to **Pro (RM149) and above**, hidden from Starter with an upgrade tease. Gating is **not implemented** — there's no plan/tier field on `retailers` yet (subscription billing is Sprint 1–3). The feature is currently accessible to all retailers; a `NOTE` marker sits at the top of `src/routes/app.customers.index.tsx` where the gate goes.
+**Pro (RM149) and above**, enforced end-to-end (see
+[`manual-subscription.md`](./manual-subscription.md) §Plan-feature gating):
+every public surface in `convex/customers.ts` calls `assertPlanFeature(ctx,
+retailerId, "crm")` (admin act-as bypasses); `/app/customers` + the detail
+route render an upgrade wall for Starter (`ProFeatureWall`), the nav carries a
+"Pro" chip, and the dashboard stat tile shows a locked variant. **The internal
+order-linking helpers are deliberately NOT gated** — a Starter store's customer
+data keeps aggregating in the background, so the CRM is fully populated the
+day they upgrade (and the upgrade wall says exactly that).
 
 ## Known limitations
 

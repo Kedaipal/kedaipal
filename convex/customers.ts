@@ -11,6 +11,7 @@ import {
 } from "./lib/auth";
 import { buildSearchText } from "./lib/customer";
 import { assertValidWaPhone } from "./lib/slug";
+import { assertPlanFeature } from "./subscriptions";
 
 const SEARCH_DEFAULT_LIMIT = 20;
 const SEARCH_MAX_LIMIT = 50;
@@ -28,19 +29,27 @@ const sortValidator = v.union(
 // ---------------------------------------------------------------------------
 
 /**
- * Assert the caller may operate `retailerId` (owner OR Kedaipal admin acting-as),
- * returning the access descriptor. See convex/lib/auth.ts.
+ * Assert the caller may operate `retailerId` (owner OR Kedaipal admin acting-as)
+ * AND that their plan includes the CRM (Pro-and-above per the pricing table).
+ * Every public surface in this file is the customer database, so the plan gate
+ * lives in the shared helpers rather than per-endpoint. Admin act-as bypasses
+ * the plan gate (support work on a Starter store), same as the soft-lock.
+ * Internal linking helpers below are NOT gated — orders keep aggregating for
+ * Starter sellers so the data is complete the day they upgrade.
  */
 async function requireRetailerOwner(
 	ctx: QueryCtx | MutationCtx,
 	retailerId: Id<"retailers">,
 ): Promise<RetailerAccess> {
-	return requireRetailerAccess(ctx, retailerId);
+	const access = await requireRetailerAccess(ctx, retailerId);
+	if (!access.actingAsAdmin) await assertPlanFeature(ctx, retailerId, "crm");
+	return access;
 }
 
 /**
  * Load a customer and assert the caller may operate its retailer (owner OR
- * admin). Used by the detail-view queries and mutations that take a `customerId`.
+ * admin) + the CRM plan gate. Used by the detail-view queries and mutations
+ * that take a `customerId`.
  */
 async function requireOwnedCustomer(
 	ctx: QueryCtx | MutationCtx,
@@ -48,7 +57,7 @@ async function requireOwnedCustomer(
 ): Promise<{ customer: Doc<"customers">; access: RetailerAccess }> {
 	const customer = await ctx.db.get(customerId);
 	if (!customer) throw new Error("Customer not found");
-	const access = await requireRetailerAccess(ctx, customer.retailerId);
+	const access = await requireRetailerOwner(ctx, customer.retailerId);
 	return { customer, access };
 }
 

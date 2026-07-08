@@ -10,6 +10,7 @@ import {
 } from "./lib/auth";
 import { assertValidMapsUrl } from "./lib/mapsUrl";
 import { assertValidWaPhone } from "./lib/slug";
+import { assertSubscriptionActive } from "./subscriptions";
 
 const LABEL_MAX = 60;
 const ADDRESS_MIN = 3;
@@ -348,6 +349,10 @@ export const create = mutation({
 		},
 	): Promise<{ pickupLocationId: Id<"pickupLocations"> }> => {
 		const access = await requireRetailerOwner(ctx, retailerId);
+		// Soft-lock: a past_due seller can't edit fulfilment setup (growth-write,
+		// same class as updateSettings). Admin act-as bypasses (white-glove).
+		if (!access.actingAsAdmin)
+			await assertSubscriptionActive(ctx, retailerId);
 
 		const cleanLabel = sanitizeLabel(label);
 		const cleanAddress = sanitizeAddress(address);
@@ -445,7 +450,13 @@ export const update = mutation({
 			managerWaPhone,
 		},
 	): Promise<void> => {
-		const { access } = await requireOwnedLocation(ctx, pickupLocationId);
+		const { location, access } = await requireOwnedLocation(
+			ctx,
+			pickupLocationId,
+		);
+		// Soft-lock (growth-write); admin act-as bypasses.
+		if (!access.actingAsAdmin)
+			await assertSubscriptionActive(ctx, location.retailerId);
 
 		const patch: Partial<{
 			label: string;
@@ -521,6 +532,9 @@ export const setActive = mutation({
 			ctx,
 			pickupLocationId,
 		);
+		// Soft-lock (growth-write); admin act-as bypasses.
+		if (!access.actingAsAdmin)
+			await assertSubscriptionActive(ctx, location.retailerId);
 		if (location.isActive === isActive) return; // idempotent
 
 		// Fulfilment invariant: don't let the seller hide the LAST active pickup
@@ -596,6 +610,9 @@ export const reorder = mutation({
 	},
 	handler: async (ctx, { retailerId, orderedIds }): Promise<void> => {
 		const access = await requireRetailerOwner(ctx, retailerId);
+		// Soft-lock (growth-write); admin act-as bypasses.
+		if (!access.actingAsAdmin)
+			await assertSubscriptionActive(ctx, retailerId);
 
 		const activeRows = await ctx.db
 			.query("pickupLocations")

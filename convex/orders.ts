@@ -20,6 +20,11 @@ import {
 } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
 import { assertValidAddress } from "./lib/address";
+import { assertPlanFeature } from "./subscriptions";
+import {
+	recordOrderCancelled,
+	recordOrderCreated,
+} from "./subscriptionUsage";
 import {
 	adminUserIds,
 	logAdminAction,
@@ -548,6 +553,10 @@ export const create = mutation({
 			createdAt: now,
 		});
 
+		// Meter the order against the retailer's monthly usage (SOFT cap — the
+		// nudge banner, never a block on this public mutation).
+		await recordOrderCreated(ctx, args.retailerId, now);
+
 		// Link to the aggregated customer record when we already know the phone.
 		// Phone-less orders (link-in-bio checkout) are linked later when the
 		// shopper messages the WhatsApp number — see confirmOrderFromWhatsApp.
@@ -1067,7 +1076,26 @@ export const searchOrders = query({
 			limit,
 		},
 	) => {
-		await requireRetailerAccess(ctx, retailerId);
+		const access = await requireRetailerAccess(ctx, retailerId);
+
+		// Order Inbox plan gate (Pro+). The PLAIN list — default bucket, no
+		// filters, no search — stays available to every tier (that's the all-tier
+		// "Order pipeline" pricing row); only the inbox surfaces (buckets,
+		// filters, search) require the feature. Admin act-as bypasses, same as
+		// the soft-lock. The Starter UI hides these controls; this is the
+		// defense-in-depth backstop.
+		const usesInboxFeatures =
+			bucket !== "all" ||
+			paymentStatuses !== undefined ||
+			paymentMethods !== undefined ||
+			methodUnspecified !== undefined ||
+			dateFrom !== undefined ||
+			dateTo !== undefined ||
+			fulfilmentWindow !== undefined ||
+			mockupPending !== undefined ||
+			(searchText !== undefined && searchText.trim().length > 0);
+		if (usesInboxFeatures && !access.actingAsAdmin)
+			await assertPlanFeature(ctx, retailerId, "orderInbox");
 
 		const all = await ctx.db
 			.query("orders")
@@ -1209,12 +1237,15 @@ function orderToCsvSource(o: Doc<"orders">): CsvOrder {
 	};
 }
 
-async function assertOwnsRetailer(
+async function assertExportAccess(
 	ctx: QueryCtx,
 	retailerId: Id<"retailers">,
 ): Promise<void> {
 	// Owner OR Kedaipal admin acting-as (see convex/lib/auth.ts).
-	await requireRetailerAccess(ctx, retailerId);
+	const access = await requireRetailerAccess(ctx, retailerId);
+	// CSV export is part of the Order Inbox surface (Pro+); admin act-as bypasses.
+	if (!access.actingAsAdmin)
+		await assertPlanFeature(ctx, retailerId, "orderInbox");
 }
 
 /**
@@ -1255,7 +1286,7 @@ export const exportPage = internalQuery({
 		ctx,
 		{ retailerId, paginationOpts, ...filters },
 	): Promise<ExportPageResult> => {
-		await assertOwnsRetailer(ctx, retailerId);
+		await assertExportAccess(ctx, retailerId);
 		const page = await ctx.db
 			.query("orders")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
@@ -1276,7 +1307,7 @@ export const exportPage = internalQuery({
 export const exportByIds = internalQuery({
 	args: { retailerId: v.id("retailers"), orderIds: v.array(v.id("orders")) },
 	handler: async (ctx, { retailerId, orderIds }): Promise<CsvOrder[]> => {
-		await assertOwnsRetailer(ctx, retailerId);
+		await assertExportAccess(ctx, retailerId);
 		const fetched = await Promise.all(orderIds.map((id) => ctx.db.get(id)));
 		return fetched
 			.filter((o): o is Doc<"orders"> => o?.retailerId === retailerId)
@@ -1402,6 +1433,11 @@ async function applyStatusTransition(
 				orderTotal: order.total,
 			});
 		}
+
+		// Un-meter the order from its creation month (same first-transition
+		// guard; runs regardless of customer linkage — every created order was
+		// counted). See convex/subscriptionUsage.ts.
+		await recordOrderCancelled(ctx, order.retailerId, order.createdAt);
 	}
 
 	const patch: Partial<{
@@ -1493,7 +1529,12 @@ export const bulkUpdateStatus = mutation({
 			if (!order) throw new ConvexError("Order not found");
 			// Owner OR admin acting-as is enforced for every order — a foreign id
 			// fails the batch (requireRetailerAccess throws Forbidden).
+			const firstResolve = batchAccess === undefined;
 			batchAccess = await requireRetailerAccess(ctx, order.retailerId);
+			// Bulk actions are an Order Inbox surface (Pro+) — gate once on the
+			// first order (the selection is single-retailer); admin act-as bypasses.
+			if (firstResolve && !batchAccess.actingAsAdmin)
+				await assertPlanFeature(ctx, order.retailerId, "orderInbox");
 
 			// Skip no-ops + transitions blocked by the mockup gate (don't fail the
 			// whole batch on one ineligible order).
@@ -2359,6 +2400,10 @@ export const declineMockupItem = mutation({
 					customerId: order.customerId,
 					orderTotal: order.total,
 				});
+			// Un-meter on the first transition into cancelled (mirrors
+			// applyStatusTransition — this cancel path bypasses that helper).
+			if (order.status !== "cancelled")
+				await recordOrderCancelled(ctx, order.retailerId, order.createdAt);
 			await ctx.db.patch(order._id, {
 				status: "cancelled",
 				mockupStatus: undefined,

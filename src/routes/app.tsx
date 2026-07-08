@@ -18,6 +18,7 @@ import { Sidebar } from "../components/dashboard/sidebar";
 import { ActAsProvider, useActAs } from "../hooks/useActAs";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useOrderToastNotifications } from "../hooks/useOrderToastNotifications";
+import { hasFeature } from "../lib/subscription";
 
 export const Route = createFileRoute("/app")({
 	head: () => ({
@@ -163,6 +164,7 @@ function AppShell() {
 						{adminOwnStore ? null : (
 							<SubscriptionBanner
 								subscription={retailer.subscription}
+								ordersThisMonth={retailer.ordersThisMonth}
 								slug={retailer.slug}
 							/>
 						)}
@@ -171,7 +173,15 @@ function AppShell() {
 				<main className="flex-1 px-5 py-6 lg:mx-auto lg:w-full lg:max-w-6xl lg:px-8 lg:py-8 print:max-w-none print:p-0">
 					<Outlet />
 				</main>
-				<BottomNav actionableCount={actionableCount} adminOnly={!retailer} />
+				<BottomNav
+					actionableCount={actionableCount}
+					adminOnly={!retailer}
+					crmLocked={
+						!!retailer &&
+						!retailer.actingAsAdmin &&
+						!hasFeature(retailer.subscription, "crm")
+					}
+				/>
 			</div>
 		</div>
 	);

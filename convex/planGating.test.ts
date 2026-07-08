@@ -1,0 +1,506 @@
+/// <reference types="vite/client" />
+// Plan-tier gating — the enforcement behind the pricing table's ✓/– rows:
+//  - CRM (customers.*) and the Order Inbox surfaces (searchOrders filters,
+//    bulkUpdateStatus, CSV export) are Pro+; Starter is rejected server-side.
+//  - Admin act-as sees through the plan gates (white-glove support).
+//  - The soft order-cap meter (subscriptionUsage) counts creates + reverses
+//    cancels, and NEVER blocks order creation.
+//  - The past_due soft-lock covers renameSlug + pickupLocations growth-writes.
+// See docs/manual-subscription.md.
+import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
+import { convexTest } from "convex-test";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { api } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
+import { capsForPlan, type Plan } from "./lib/plans";
+import schema from "./schema";
+
+const modules = import.meta.glob("./**/*.ts");
+
+function setup() {
+	const t = convexTest(schema, modules);
+	registerRateLimiter(t);
+	return t;
+}
+
+const USER_A = "user_gating_a";
+const ADMIN = "user_gating_admin";
+
+let prevAdminEnv: string | undefined;
+beforeEach(() => {
+	prevAdminEnv = process.env.ADMIN_USER_IDS;
+	process.env.ADMIN_USER_IDS = ADMIN;
+});
+afterEach(() => {
+	process.env.ADMIN_USER_IDS = prevAdminEnv;
+});
+
+const customer = { name: "Aisha", waPhone: "60123456789" };
+const validAddress = {
+	line1: "12 Jln Mawar 3",
+	city: "Petaling Jaya",
+	state: "Selangor",
+	postcode: "47301",
+};
+
+async function seedRetailer(t: ReturnType<typeof setup>, userId: string) {
+	const asUser = t.withIdentity({ subject: userId });
+	const safeSuffix = userId.replace(/[^a-z0-9]/g, "");
+	await asUser.mutation(api.retailers.createRetailer, {
+		storeName: "Gating Store",
+		slug: `gating-store-${safeSuffix}`,
+	});
+	const retailer = await asUser.query(api.retailers.getMyRetailer);
+	if (!retailer) throw new Error("seed failed");
+	return retailer;
+}
+
+/** Flip the seeded retailer's subscription to a given plan/status (signup
+ * always creates a Pro trial; tests re-point it to exercise each tier). */
+async function setPlan(
+	t: ReturnType<typeof setup>,
+	retailerId: Id<"retailers">,
+	plan: Plan,
+	status: "trialing" | "active" | "past_due" = "active",
+) {
+	await t.run(async (ctx) => {
+		const sub = await ctx.db
+			.query("subscriptions")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.first();
+		if (!sub) throw new Error("no subscription row");
+		const caps = capsForPlan(plan);
+		await ctx.db.patch(sub._id, {
+			plan,
+			status,
+			orderCap: caps.orderCap,
+			userCap: caps.userCap,
+			broadcastQuota: caps.broadcastQuota,
+			updatedAt: Date.now(),
+		});
+	});
+}
+
+async function seedProduct(
+	t: ReturnType<typeof setup>,
+	userId: string,
+	retailerId: Id<"retailers">,
+): Promise<Id<"products">> {
+	const asUser = t.withIdentity({ subject: userId });
+	return asUser.mutation(api.products.create, {
+		retailerId,
+		name: "Kuih Box",
+		currency: "MYR",
+		imageStorageIds: [],
+		sortOrder: 0,
+		blockWhenOutOfStock: false,
+		requiresProof: false,
+		variants: [{ optionValues: [], price: 2500, onHand: 100 }],
+	});
+}
+
+async function placeOrder(
+	t: ReturnType<typeof setup>,
+	retailerId: Id<"retailers">,
+	productId: Id<"products">,
+): Promise<Id<"orders">> {
+	const { shortId } = await t.mutation(api.orders.create, {
+		retailerId,
+		items: [{ productId, quantity: 1 }],
+		currency: "MYR",
+		channel: "whatsapp",
+		customer,
+		deliveryAddress: validAddress,
+	});
+	return t.run(async (ctx) => {
+		const o = await ctx.db
+			.query("orders")
+			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+			.first();
+		if (!o) throw new Error("order missing");
+		return o._id;
+	});
+}
+
+async function usageOrders(
+	t: ReturnType<typeof setup>,
+	retailerId: Id<"retailers">,
+): Promise<number> {
+	return t.run(async (ctx) => {
+		const rows = await ctx.db
+			.query("subscriptionUsage")
+			.withIndex("by_retailer_month", (q) => q.eq("retailerId", retailerId))
+			.collect();
+		return rows.reduce((sum, r) => sum + r.orders, 0);
+	});
+}
+
+// ---------------------------------------------------------------------------
+// CRM (customers.*) — Pro+
+// ---------------------------------------------------------------------------
+
+describe("plan gating — CRM (Pro+)", () => {
+	test("Starter is rejected on every customers surface", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await placeOrder(t, retailer._id, productId); // creates the customer row
+		await setPlan(t, retailer._id, "starter");
+		const asA = t.withIdentity({ subject: USER_A });
+
+		const paginationOpts = { numItems: 10, cursor: null };
+		await expect(
+			asA.query(api.customers.list, {
+				retailerId: retailer._id,
+				sort: "recency",
+				paginationOpts,
+			}),
+		).rejects.toThrow(/Pro plan/);
+		await expect(
+			asA.query(api.customers.count, { retailerId: retailer._id }),
+		).rejects.toThrow(/Pro plan/);
+		await expect(
+			asA.query(api.customers.search, {
+				retailerId: retailer._id,
+				term: "aisha",
+			}),
+		).rejects.toThrow(/Pro plan/);
+
+		const customerId = await t.run(async (ctx) => {
+			const c = await ctx.db
+				.query("customers")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.first();
+			if (!c) throw new Error("customer missing");
+			return c._id;
+		});
+		await expect(
+			asA.query(api.customers.get, { customerId }),
+		).rejects.toThrow(/Pro plan/);
+		await expect(
+			asA.mutation(api.customers.updateNotes, { customerId, notes: "vip" }),
+		).rejects.toThrow(/Pro plan/);
+	});
+
+	test("Pro (and trial = Pro) passes; orders still auto-link for Starter", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const asA = t.withIdentity({ subject: USER_A });
+
+		// Starter: the CRM keeps aggregating in the background even while locked.
+		await setPlan(t, retailer._id, "starter");
+		await placeOrder(t, retailer._id, productId);
+
+		// Upgrade → data is all there on day one.
+		await setPlan(t, retailer._id, "pro");
+		const listed = await asA.query(api.customers.list, {
+			retailerId: retailer._id,
+			sort: "recency",
+			paginationOpts: { numItems: 10, cursor: null },
+		});
+		expect(listed.page).toHaveLength(1);
+		expect(listed.page[0].orderCount).toBe(1);
+	});
+
+	test("admin act-as sees through the CRM gate on a Starter store", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await placeOrder(t, retailer._id, productId);
+		await setPlan(t, retailer._id, "starter");
+
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+		const count = await asAdmin.query(api.customers.count, {
+			retailerId: retailer._id,
+		});
+		expect(count).toBe(1);
+	});
+
+	test("resolveAccess features ride on getMyRetailer for the client gate", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+
+		// Trial = Pro features.
+		let me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.subscription?.features).toEqual({ crm: true, orderInbox: true });
+
+		await setPlan(t, retailer._id, "starter");
+		me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.subscription?.features).toEqual({
+			crm: false,
+			orderInbox: false,
+		});
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Order Inbox surfaces — Pro+
+// ---------------------------------------------------------------------------
+
+describe("plan gating — Order Inbox (Pro+)", () => {
+	test("Starter keeps the PLAIN order list (default args)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await placeOrder(t, retailer._id, productId);
+		await setPlan(t, retailer._id, "starter");
+		const asA = t.withIdentity({ subject: USER_A });
+
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		expect(res.orders).toHaveLength(1);
+	});
+
+	test("Starter is rejected on buckets, search and every filter arg", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await setPlan(t, retailer._id, "starter");
+		const asA = t.withIdentity({ subject: USER_A });
+		const base = { retailerId: retailer._id, bucket: "all" as const };
+
+		await expect(
+			asA.query(api.orders.searchOrders, { ...base, bucket: "new" }),
+		).rejects.toThrow(/Pro plan/);
+		await expect(
+			asA.query(api.orders.searchOrders, { ...base, searchText: "ORD" }),
+		).rejects.toThrow(/Pro plan/);
+		await expect(
+			asA.query(api.orders.searchOrders, {
+				...base,
+				paymentStatuses: ["unpaid"],
+			}),
+		).rejects.toThrow(/Pro plan/);
+		await expect(
+			asA.query(api.orders.searchOrders, { ...base, fulfilmentWindow: "today" }),
+		).rejects.toThrow(/Pro plan/);
+		await expect(
+			asA.query(api.orders.searchOrders, { ...base, mockupPending: true }),
+		).rejects.toThrow(/Pro plan/);
+		await expect(
+			asA.query(api.orders.searchOrders, { ...base, dateFrom: 0 }),
+		).rejects.toThrow(/Pro plan/);
+	});
+
+	test("bulkUpdateStatus is Pro+ (single updateStatus stays open)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const orderId = await placeOrder(t, retailer._id, productId);
+		await setPlan(t, retailer._id, "starter");
+		const asA = t.withIdentity({ subject: USER_A });
+
+		await expect(
+			asA.mutation(api.orders.bulkUpdateStatus, {
+				orderIds: [orderId],
+				status: "confirmed",
+			}),
+		).rejects.toThrow(/Pro plan/);
+
+		// The pipeline itself is all-tier: one-at-a-time transitions still work.
+		await asA.mutation(api.orders.updateStatus, {
+			orderId,
+			status: "confirmed",
+		});
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.status).toBe("confirmed");
+	});
+
+	test("CSV export is Pro+ (filter mode and ticked-selection mode)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const orderId = await placeOrder(t, retailer._id, productId);
+		await setPlan(t, retailer._id, "starter");
+		const asA = t.withIdentity({ subject: USER_A });
+
+		await expect(
+			asA.action(api.orders.exportOrders, {
+				retailerId: retailer._id,
+				bucket: "all",
+			}),
+		).rejects.toThrow(/Pro plan/);
+		await expect(
+			asA.action(api.orders.exportOrders, {
+				retailerId: retailer._id,
+				bucket: "all",
+				orderIds: [orderId],
+			}),
+		).rejects.toThrow(/Pro plan/);
+
+		// Pro exports fine.
+		await setPlan(t, retailer._id, "pro");
+		const res = await asA.action(api.orders.exportOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		expect(res.count).toBe(1);
+	});
+
+	test("admin act-as uses the full inbox on a Starter store", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await placeOrder(t, retailer._id, productId);
+		await setPlan(t, retailer._id, "starter");
+
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+		const res = await asAdmin.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "new",
+			searchText: "ORD",
+		});
+		expect(res.total).toBe(1);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Order-usage meter (SOFT cap — counts, never blocks)
+// ---------------------------------------------------------------------------
+
+describe("subscription usage meter", () => {
+	test("order create increments; cancel reverses once (idempotent)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const asA = t.withIdentity({ subject: USER_A });
+
+		const first = await placeOrder(t, retailer._id, productId);
+		await placeOrder(t, retailer._id, productId);
+		expect(await usageOrders(t, retailer._id)).toBe(2);
+
+		// getMyRetailer carries the meter for the dashboard nudge + billing tab.
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.ordersThisMonth).toBe(2);
+
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: first,
+			status: "cancelled",
+		});
+		expect(await usageOrders(t, retailer._id)).toBe(1);
+
+		// Re-cancelling must not double-decrement (same first-transition guard
+		// as the stock restore / customer aggregates).
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: first,
+			status: "cancelled",
+		});
+		expect(await usageOrders(t, retailer._id)).toBe(1);
+	});
+
+	test("orders NEVER block on the cap — a Starter store sails past 100", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await setPlan(t, retailer._id, "starter");
+
+		// Force the meter over the Starter cap, then place one more order — the
+		// public pipeline must not care.
+		await t.run(async (ctx) => {
+			await ctx.db.insert("subscriptionUsage", {
+				retailerId: retailer._id,
+				monthStart: 0, // any prior month; the new order lands in its own row
+				orders: 150,
+				createdAt: 0,
+				updatedAt: 0,
+			});
+		});
+		await expect(
+			placeOrder(t, retailer._id, productId),
+		).resolves.toBeDefined();
+	});
+
+	test("cancelling a pre-meter order (no usage row) is a safe no-op", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const orderId = await placeOrder(t, retailer._id, productId);
+		// Simulate a pre-meter order: wipe the usage rows the create just wrote.
+		await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("subscriptionUsage")
+				.withIndex("by_retailer_month", (q) =>
+					q.eq("retailerId", retailer._id),
+				)
+				.collect();
+			for (const r of rows) await ctx.db.delete(r._id);
+		});
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.orders.updateStatus, {
+			orderId,
+			status: "cancelled",
+		});
+		expect(await usageOrders(t, retailer._id)).toBe(0); // floored, no negative
+	});
+});
+
+// ---------------------------------------------------------------------------
+// past_due soft-lock — renameSlug + pickupLocations growth-writes
+// ---------------------------------------------------------------------------
+
+describe("soft-lock — renameSlug + pickup locations", () => {
+	test("past_due blocks renameSlug and every pickupLocations write", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const { pickupLocationId } = await asA.mutation(api.pickupLocations.create, {
+			retailerId: retailer._id,
+			label: "HQ",
+			address: "12 Jln Mawar 3, PJ",
+		});
+
+		await setPlan(t, retailer._id, "pro", "past_due");
+
+		await expect(
+			asA.mutation(api.retailers.renameSlug, { newSlug: "new-slug-x" }),
+		).rejects.toThrow(/past due/);
+		await expect(
+			asA.mutation(api.pickupLocations.create, {
+				retailerId: retailer._id,
+				label: "Branch",
+				address: "34 Jln Melur 1, Shah Alam",
+			}),
+		).rejects.toThrow(/past due/);
+		await expect(
+			asA.mutation(api.pickupLocations.update, {
+				pickupLocationId,
+				label: "HQ renamed",
+			}),
+		).rejects.toThrow(/past due/);
+		await expect(
+			asA.mutation(api.pickupLocations.setActive, {
+				pickupLocationId,
+				isActive: false,
+			}),
+		).rejects.toThrow(/past due/);
+		await expect(
+			asA.mutation(api.pickupLocations.reorder, {
+				retailerId: retailer._id,
+				orderedIds: [pickupLocationId],
+			}),
+		).rejects.toThrow(/past due/);
+	});
+
+	test("admin act-as bypasses the soft-lock (white-glove on an unpaid store)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await setPlan(t, retailer._id, "pro", "past_due");
+
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+		const { slug } = await asAdmin.mutation(api.retailers.renameSlug, {
+			retailerId: retailer._id,
+			newSlug: "admin-renamed",
+		});
+		expect(slug).toBe("admin-renamed");
+		await expect(
+			asAdmin.mutation(api.pickupLocations.create, {
+				retailerId: retailer._id,
+				label: "Admin-added",
+				address: "12 Jln Mawar 3, PJ",
+			}),
+		).resolves.toBeDefined();
+	});
+});
