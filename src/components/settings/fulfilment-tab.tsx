@@ -17,8 +17,9 @@ import {
 	MAX_NOTICE_DAYS,
 } from "../../../convex/lib/fulfilmentDate";
 import { formatPhone } from "../../lib/customer";
-import { convexErrorMessage } from "../../lib/format";
+import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { deriveMapsUrl } from "../../lib/google-address";
+import { hasFeature, type SubscriptionView } from "../../lib/subscription";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Skeleton } from "../ui/skeleton";
@@ -30,6 +31,9 @@ interface FulfilmentTabProps {
 	offerSelfCollect: boolean;
 	offerDelivery: boolean;
 	minFulfilmentNoticeDays: number | undefined;
+	/** Resolved subscription — drives the Pro-gated pickup-fee input in the
+	 * edit dialog (client mirror only; the server gate is the real lock). */
+	subscription: SubscriptionView | undefined;
 }
 
 function Card({ children }: { children: ReactNode }) {
@@ -112,6 +116,7 @@ export function FulfilmentTab({
 	offerSelfCollect,
 	offerDelivery,
 	minFulfilmentNoticeDays,
+	subscription,
 }: FulfilmentTabProps) {
 	const locations = useQuery(api.pickupLocations.listForRetailer, {
 		retailerId,
@@ -384,10 +389,15 @@ export function FulfilmentTab({
 			</Card>
 
 			<PickupLocationEditDialog
+				// Remount per edit target so the dialog's local state (kind, geo,
+				// fee, form defaults — all captured in initializers) can't leak
+				// from one location into the next.
+				key={editing === "new" ? "new" : (editing?._id ?? "closed")}
 				open={editing !== null}
 				onClose={() => setEditing(null)}
 				location={editing === "new" ? undefined : (editing ?? undefined)}
 				retailerId={retailerId}
+				canChargeFee={hasFeature(subscription, "chargeablePickup")}
 			/>
 		</div>
 	);
@@ -504,6 +514,11 @@ function LocationRowBody({
 							{location.label}
 						</p>
 						<PickupKindBadge kind={location.locationType ?? "self_collect"} />
+						{location.fee && location.fee > 0 ? (
+							<span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+								+ {formatPrice(location.fee, "MYR")} fee
+							</span>
+						) : null}
 					</div>
 					<p className="text-xs text-muted-foreground whitespace-pre-line">
 						{location.address}

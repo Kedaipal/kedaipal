@@ -224,13 +224,18 @@ describe("plan gating — CRM (Pro+)", () => {
 
 		// Trial = Pro features.
 		let me = await asA.query(api.retailers.getMyRetailer);
-		expect(me?.subscription?.features).toEqual({ crm: true, orderInbox: true });
+		expect(me?.subscription?.features).toEqual({
+			crm: true,
+			orderInbox: true,
+			chargeablePickup: true,
+		});
 
 		await setPlan(t, retailer._id, "starter");
 		me = await asA.query(api.retailers.getMyRetailer);
 		expect(me?.subscription?.features).toEqual({
 			crm: false,
 			orderInbox: false,
+			chargeablePickup: false,
 		});
 	});
 });

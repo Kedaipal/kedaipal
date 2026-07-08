@@ -47,22 +47,34 @@ export type OrderTotals = {
 	total: number;
 };
 
+/** Additive charges folded into `total` on top of the line-item subtotal. */
+export type OrderExtras = {
+	/** Seller's quote for made-to-order/custom work (minor units), set on the
+	 * mockup. Re-priceable across mockup rounds. */
+	quotedAmount?: number;
+	/** Flat fee of the chosen pickup location (minor units), frozen onto the
+	 * order at create — see orders.pickupFee / pickupSnapshot.fee. */
+	pickupFee?: number;
+};
+
 /**
- * `subtotal` is the sum of line snapshots. `total` adds the optional
- * `quotedAmount` (minor units) — the seller's quote for made-to-order/custom
- * work, set on the mockup and folded in here so there's a single source of
- * truth for the order total. Negative quotes are floored to 0.
+ * `subtotal` is the sum of line snapshots. `total` adds the optional extras
+ * (minor units) — the mockup quote and the pickup-location fee are independent
+ * charges and always ADD, never overwrite. Single source of truth for the
+ * order total; every recompute site (mockup re-price, custom-decline, pickup
+ * switch) must pass the extras it wants to keep. Negative extras floor to 0.
  */
 export function computeOrderTotals(
 	items: ReadonlyArray<OrderItemPricing>,
-	quotedAmount?: number,
+	extras?: OrderExtras,
 ): OrderTotals {
 	const subtotal = items.reduce(
 		(sum, item) => sum + item.price * item.quantity,
 		0,
 	);
-	const quote = Math.max(0, quotedAmount ?? 0);
-	return { subtotal, total: subtotal + quote };
+	const quote = Math.max(0, extras?.quotedAmount ?? 0);
+	const pickupFee = Math.max(0, extras?.pickupFee ?? 0);
+	return { subtotal, total: subtotal + quote + pickupFee };
 }
 
 /** The mockup fields needed to evaluate the gate — a subset of the orders doc. */

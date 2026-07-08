@@ -124,6 +124,10 @@ function buildPickupSnapshot(location: Doc<"pickupLocations">): PickupSnapshot {
 		latitude: location.latitude,
 		longitude: location.longitude,
 		placeId: location.placeId,
+		// Freeze the fee the buyer agreed to. Writes normalize 0 → undefined
+		// (see pickupLocations.sanitizeFee); the guard here keeps any stray 0
+		// from freezing so "free" is always `undefined` downstream.
+		fee: location.fee && location.fee > 0 ? location.fee : undefined,
 	};
 }
 
@@ -483,7 +487,11 @@ export const create = mutation({
 			});
 		}
 
-		const { subtotal, total } = computeOrderTotals(snapshotItems);
+		// The chosen pickup point's frozen fee rides the same extras seam as the
+		// mockup quote — total = subtotal + fee from the very first insert.
+		const { subtotal, total } = computeOrderTotals(snapshotItems, {
+			pickupFee: sanitizedPickupSnapshot?.fee,
+		});
 		const now = Date.now();
 
 		// Reserve stock for hard-block variants, in the same transaction (atomic;
@@ -534,6 +542,7 @@ export const create = mutation({
 			deliveryAddress: sanitizedAddress,
 			pickupLocationId: resolvedPickupLocationId,
 			pickupSnapshot: sanitizedPickupSnapshot,
+			pickupFee: sanitizedPickupSnapshot?.fee,
 			fulfilmentDate: sanitizedFulfilmentDate,
 			customerNote: sanitizedCustomerNote,
 			// Only keep the buyer image when the order actually has a custom line —
@@ -1231,6 +1240,7 @@ function orderToCsvSource(o: Doc<"orders">): CsvOrder {
 		customer: o.customer,
 		items: o.items,
 		subtotal: o.subtotal,
+		pickupFee: o.pickupFee,
 		total: o.total,
 		currency: o.currency,
 		customerNote: o.customerNote,
@@ -1778,9 +1788,28 @@ export const updatePickupLocation = mutation({
 		}
 
 		const now = Date.now();
+		// The fee follows the point: switching to a paid location re-applies its
+		// fee, switching to a free one drops it — the buyer sees the new total
+		// on the tracking page before anyone asks for payment (pending-only
+		// gate above means no payment has been taken yet). The mockup quote, an
+		// independent extra, is preserved.
+		const snapshot = buildPickupSnapshot(location);
+		const { subtotal, total } = computeOrderTotals(order.items, {
+			quotedAmount: order.mockupQuotedAmount,
+			pickupFee: snapshot.fee,
+		});
+		// Keep the customer's denormalized totalSpent in step with the new total.
+		if (order.customerId && total !== order.total)
+			await adjustAggregatesForTotalChange(ctx, {
+				customerId: order.customerId,
+				delta: total - order.total,
+			});
 		await ctx.db.patch(order._id, {
 			pickupLocationId: location._id,
-			pickupSnapshot: buildPickupSnapshot(location),
+			pickupSnapshot: snapshot,
+			pickupFee: snapshot.fee,
+			subtotal,
+			total,
 			updatedAt: now,
 		});
 		await ctx.db.insert("orderEvents", {
@@ -2121,7 +2150,12 @@ export const submitMockup = mutation({
 		);
 
 		const now = Date.now();
-		const { subtotal, total } = computeOrderTotals(order.items, effectiveQuote);
+		// Quote and pickup fee are independent extras — carry the frozen fee
+		// so re-pricing the custom work never drops the pickup charge.
+		const { subtotal, total } = computeOrderTotals(order.items, {
+			quotedAmount: effectiveQuote,
+			pickupFee: order.pickupFee,
+		});
 		// Keep the customer's denormalized totalSpent in step with the new total.
 		if (order.customerId)
 			await adjustAggregatesForTotalChange(ctx, {
@@ -2188,7 +2222,11 @@ export const updateMockupQuote = mutation({
 			order.mockupQuotedAmount,
 		);
 		const now = Date.now();
-		const { subtotal, total } = computeOrderTotals(order.items, effectiveQuote);
+		// Same extras rule as submitMockup — keep the frozen pickup fee.
+		const { subtotal, total } = computeOrderTotals(order.items, {
+			quotedAmount: effectiveQuote,
+			pickupFee: order.pickupFee,
+		});
 		// Keep the customer's denormalized totalSpent in step with the new total.
 		if (order.customerId)
 			await adjustAggregatesForTotalChange(ctx, {
@@ -2423,8 +2461,11 @@ export const declineMockupItem = mutation({
 		}
 
 		// Mixed order → keep the ready-made items, drop the custom one, clear the
-		// quote + gate, recompute the total.
-		const { subtotal, total } = computeOrderTotals(kept);
+		// quote + gate, recompute the total. The pickup fee survives — the buyer
+		// still collects the remaining items at the same paid point.
+		const { subtotal, total } = computeOrderTotals(kept, {
+			pickupFee: order.pickupFee,
+		});
 		if (order.customerId)
 			await adjustAggregatesForTotalChange(ctx, {
 				customerId: order.customerId,

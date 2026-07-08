@@ -17,6 +17,47 @@ storefront always keeps at least one _working_ method.**
 > this?", applies to both methods) has its own reference: [`fulfilment-date.md`](./fulfilment-date.md).
 > The `retailers.minFulfilmentNoticeDays` setting lives in the same Fulfilment settings tab.
 
+## Chargeable pickup location — flat per-location fee (2026-07-07, ClickUp `86ey5tywf`)
+
+A seller can attach an **optional flat fee** (minor units / sen) to any pickup location —
+Bearcamp's paid tent drop-off point was the driver; generalises to any host-stall charge or
+collection-run cost. Unset (or 0) = free; every legacy row reads as free, no backfill.
+
+- **Schema (additive, dev-only widen):** `pickupLocations.fee`, `orders.pickupSnapshot.fee`
+  (frozen at create — a later fee edit/deactivate never rewrites a placed order's total), and
+  the order-level mirror `orders.pickupFee` (same frozen number, cheap CSV/inbox reads
+  without unpacking the snapshot). `0` is normalized to *unset* at every write so "free" has
+  exactly one spelling.
+- **Totals seam:** `computeOrderTotals(items, extras)` in `convex/lib/order.ts` now takes
+  `{ quotedAmount, pickupFee }` — the mockup quote and the pickup fee are independent
+  additive extras (`total = subtotal + quote + fee`). Every recompute site passes the extras
+  it must keep: `submitMockup`, `updateMockupQuote`, `declineMockupItem` (fee survives — the
+  buyer still collects the remainder at the paid point) and **`updatePickupLocation`** (the
+  ticket-missed surface: switching point while pending re-prices — paid→free drops the fee,
+  free→paid adds it, customer `totalSpent` aggregates adjusted).
+- **Validation:** `sanitizeFee` in `convex/pickupLocations.ts` — integer sen, ≥ 0, ceiling
+  `PICKUP_FEE_MAX` (RM10,000; mirrors the mockup-quote guard, an order of magnitude tighter).
+- **Pro gate (`chargeablePickup` in `PLAN_FEATURES`):** *setting* a non-zero fee on
+  create/update requires Pro+ (`assertPlanFeature`; admin act-as bypasses). **Clearing is
+  always allowed** — a downgraded seller is never trapped with a fee they can't remove — and
+  a frozen fee on an existing order displays on every tier (it's inherent to the order).
+  Starter sellers see the fee input disabled-with-reason + Pro chip in the edit dialog; when
+  the locked point *already carries* a fee, the dialog surfaces a self-serve **"Remove fee"**
+  control (stages `fee: null`, applied on Save, reversible via "Keep fee") so the un-gated
+  server clear is actually reachable — no "contact us" dead-end.
+- **Surfaces (fee line everywhere the total appears, hidden when free):** storefront picker
+  chip ("+ RM5.00 fee") + checkout footer breakdown (Subtotal / Pickup fee / Total) + the
+  `wa.me` order message; tracking page + seller order detail ("Pickup fee — <label>");
+  WhatsApp pickup block (`renderPickupBlock` fee line, EN+BM, needs `currency` threaded);
+  receipt/invoice PDF labelled totals row; CSV export "Pickup fee" column (prints `0.00`
+  when free so Subtotal + Pickup fee = Total always sums). Payment reminder + all payment
+  asks read `order.total`, so they're fee-inclusive automatically.
+- **Counter checkout: intentionally NO fee.** Counter orders have no pickup location at all
+  (hardcoded `self_collect`, no snapshot) — a walk-in at the counter incurs no collection
+  cost. Confirmed with Arif 2026-07-07 (the ticket's AC #8 assumed a counter location picker
+  that doesn't exist). "Counter order fulfilled at a paid drop-off later" would be its own
+  feature.
+
 ## Pickup grouping + drop-off points (2026-06-30, ClickUp `86ey30yhr`)
 
 Buyers receive an order one of two ways: **Delivery** (we come to you) or **Pickup** (you

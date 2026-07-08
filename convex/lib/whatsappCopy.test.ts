@@ -248,6 +248,43 @@ describe("renderPickupBlock", () => {
 		expect(out.split("\n")[1]).toBe("📍 Lokasi penyerahan");
 	});
 
+	test("renders the fee line (EN + BM) when the snapshot carries a fee and currency is given", () => {
+		const en = renderPickupBlock(
+			"en",
+			{
+				label: "Pasar Tani Seksyen 7",
+				address: "Seksyen 7, Shah Alam",
+				locationType: "drop_off",
+				fee: 500,
+			},
+			"MYR",
+		);
+		expect(en).toContain("💵 Pickup fee (included in total): MYR 5.00");
+		const ms = renderPickupBlock(
+			"ms",
+			{ label: "Kedai", address: "KL", fee: 250 },
+			"MYR",
+		);
+		expect(ms).toContain("💵 Caj ambilan (termasuk dalam jumlah): MYR 2.50");
+	});
+
+	test("skips the fee line when the snapshot is free or currency is missing", () => {
+		const free = renderPickupBlock(
+			"en",
+			{ label: "Kedai", address: "KL" },
+			"MYR",
+		);
+		expect(free).not.toContain("Pickup fee");
+		// Fee present but no currency (a caller that can't carry a fee) → no
+		// half-rendered amount.
+		const noCurrency = renderPickupBlock("en", {
+			label: "Kedai",
+			address: "KL",
+			fee: 500,
+		});
+		expect(noCurrency).not.toContain("Pickup fee");
+	});
+
 	test("undefined locationType renders as self-collect (legacy snapshot)", () => {
 		const out = renderPickupBlock("en", {
 			label: "Main Store",

@@ -85,6 +85,11 @@ export type OrderReceiptData = {
 	customerPhone?: string;
 	items: ReceiptLineItem[];
 	subtotal: number; // sen
+	// Frozen per-location pickup fee (sen) — printed as its own totals row so
+	// the subtotal→total gap is always explained. Undefined = free.
+	pickupFee?: number;
+	// Label of the pickup point the fee belongs to ("Pasar Tani Seksyen 7").
+	pickupLabel?: string;
 	total: number; // sen
 	currency: string;
 	fulfilmentDate?: number;
@@ -123,6 +128,8 @@ type OrderForReceipt = {
 		price: number;
 	}>;
 	subtotal: number;
+	pickupFee?: number;
+	pickupSnapshot?: { label: string };
 	total: number;
 	currency: string;
 	fulfilmentDate?: number;
@@ -201,6 +208,12 @@ export function orderToReceiptData(args: {
 			unitPrice: it.price,
 		})),
 		subtotal: order.subtotal,
+		pickupFee:
+			order.pickupFee && order.pickupFee > 0 ? order.pickupFee : undefined,
+		pickupLabel:
+			order.pickupFee && order.pickupFee > 0
+				? order.pickupSnapshot?.label
+				: undefined,
 		total: order.total,
 		currency: order.currency,
 		fulfilmentDate: order.fulfilmentDate,

@@ -512,8 +512,19 @@ export default defineSchema({
 				// Google Place ID — frozen so the Maps URL can deep-link
 				// to the named place page (not just lat/lng search).
 				placeId: v.optional(v.string()),
+				// Flat pickup fee (minor units) frozen at order create — the
+				// location's fee at the moment the buyer chose it. A later fee
+				// edit or deactivate never rewrites a placed order's total.
+				// Unset → the location was free (0 is never stored). Mirrored
+				// onto the order-level `pickupFee` for cheap CSV/inbox reads.
+				fee: v.optional(v.number()),
 			}),
 		),
+		// Order-level mirror of `pickupSnapshot.fee` (minor units) so exports and
+		// list surfaces can read the fee without unpacking the snapshot. Always
+		// equals the snapshot fee; folded into `total` via computeOrderTotals
+		// (total = subtotal + mockup quote + pickupFee). Unset → no fee.
+		pickupFee: v.optional(v.number()),
 		// When the buyer needs the order — their answer to "When do you need this?
 		// (delivery or pickup date)" at checkout. Stored as the epoch-ms of that
 		// calendar day's MIDNIGHT in Malaysia time (UTC+8, no DST) — see
@@ -619,6 +630,13 @@ export default defineSchema({
 		retailerId: v.id("retailers"),
 		label: v.string(),
 		address: v.string(),
+		// Optional flat fee (minor units / sen) a buyer pays for choosing this
+		// point — passes on a real collection cost (paid drop-off host, meetup
+		// run, host-stall charge). Unset or 0 → free; legacy rows read as free
+		// with no backfill. Setting a non-zero fee is Pro-gated. Validated
+		// (integer, ≥ 0, sanity ceiling) in pickupLocations.create/update and
+		// frozen onto orders.pickupSnapshot.fee at order create.
+		fee: v.optional(v.number()),
 		// Kind of pickup point. "self_collect" = the seller's own place (shop,
 		// home, warehouse); "drop_off" = an agreed meetup/common point (pasar,
 		// surau, LRT station). Both are "Pickup" to the buyer and share this

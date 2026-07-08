@@ -49,7 +49,15 @@ export interface PublicPickupLocation {
 	latitude?: number;
 	longitude?: number;
 	placeId?: string;
+	/** Flat fee (minor units) added to the order total when this point is
+	 * chosen. Undefined = free. */
+	fee?: number;
 	sortOrder: number;
+}
+
+/** The fee a location adds to the total — 0 when free/unset. */
+function pickupFeeOf(location: PublicPickupLocation | undefined): number {
+	return location?.fee && location.fee > 0 ? location.fee : 0;
 }
 
 /** Buyer-facing sub-heading per pickup kind (one vocabulary, both sides). */
@@ -178,7 +186,13 @@ function buildWaMessage(
 		lines.push(`• ${item.quantity}x ${name}${suffix}`);
 	}
 	lines.push("");
-	lines.push(`Total: ${formatPrice(cart.total, cart.currency)}`);
+	// The chosen point's fee is part of what the buyer pays — the message total
+	// must match the order total the server computed (subtotal + fee).
+	const pickupFee =
+		deliveryMethod === "self_collect" ? pickupFeeOf(pickupLocation) : 0;
+	if (pickupFee > 0)
+		lines.push(`Pickup fee: ${formatPrice(pickupFee, cart.currency)}`);
+	lines.push(`Total: ${formatPrice(cart.total + pickupFee, cart.currency)}`);
 	if (hasQuoteItem) lines.push("(Custom item price to be confirmed by seller)");
 	if (deliveryMethod === "self_collect") {
 		if (pickupLocation) {
@@ -564,12 +578,16 @@ export function CheckoutSheet({
 												/>
 											) : selfCollectAvailable ? (
 												singlePickup ? (
-													<PickupSummaryCard location={singlePickup} />
+													<PickupSummaryCard
+														location={singlePickup}
+														currency={cart.currency}
+													/>
 												) : (
 													<form.AppField name="pickupLocationId">
 														{(field) => (
 															<PickupLocationRadioList
 																locations={sortedPickups}
+																currency={cart.currency}
 																value={field.state.value}
 																onChange={(id) => field.handleChange(id)}
 															/>
@@ -684,12 +702,48 @@ export function CheckoutSheet({
 						</div>
 
 						<div className="border-t border-border bg-background px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
-							<div className="mb-3 flex items-center justify-between">
-								<span className="text-sm text-muted-foreground">Total</span>
-								<span className="text-xl font-bold">
-									{formatPrice(cart.total, cart.currency)}
-								</span>
-							</div>
+							<form.Subscribe
+								selector={(s) => ({
+									deliveryMethod: s.values.deliveryMethod,
+									pickupLocationId: s.values.pickupLocationId,
+								})}
+							>
+								{({ deliveryMethod, pickupLocationId }) => {
+									// Selected point (single-location auto-resolves) → its fee
+									// joins the total the buyer is about to send. Free orders
+									// keep the original single Total row — no breakdown noise.
+									const selectedPickup =
+										deliveryMethod === "self_collect"
+											? (singlePickup ??
+												sortedPickups.find((p) => p._id === pickupLocationId))
+											: undefined;
+									const pickupFee = pickupFeeOf(selectedPickup);
+									return (
+										<div className="mb-3 flex flex-col gap-1">
+											{pickupFee > 0 ? (
+												<>
+													<div className="flex items-center justify-between text-sm text-muted-foreground">
+														<span>Subtotal</span>
+														<span>{formatPrice(cart.total, cart.currency)}</span>
+													</div>
+													<div className="flex items-center justify-between text-sm text-muted-foreground">
+														<span>Pickup fee — {selectedPickup?.label}</span>
+														<span>{formatPrice(pickupFee, cart.currency)}</span>
+													</div>
+												</>
+											) : null}
+											<div className="flex items-center justify-between">
+												<span className="text-sm text-muted-foreground">
+													Total
+												</span>
+												<span className="text-xl font-bold">
+													{formatPrice(cart.total + pickupFee, cart.currency)}
+												</span>
+											</div>
+										</div>
+									);
+								}}
+							</form.Subscribe>
 							<form.Subscribe
 								selector={(s) => ({
 									canSubmit: s.canSubmit,
@@ -737,7 +791,13 @@ export function CheckoutSheet({
  * pickup location. No interaction needed — the location is resolved at submit
  * time.
  */
-function PickupSummaryCard({ location }: { location: PublicPickupLocation }) {
+function PickupSummaryCard({
+	location,
+	currency,
+}: {
+	location: PublicPickupLocation;
+	currency: string;
+}) {
 	return (
 		<section className="flex flex-col gap-2 rounded-xl border-2 border-accent/30 bg-accent/5 p-4">
 			<div className="flex items-start gap-2">
@@ -751,6 +811,7 @@ function PickupSummaryCard({ location }: { location: PublicPickupLocation }) {
 							{location.label}
 						</p>
 						<PickupKindBadge kind={location.locationType} />
+						<PickupFeeChip fee={location.fee} currency={currency} />
 					</div>
 					<p className="text-xs text-muted-foreground whitespace-pre-line">
 						{location.address}
@@ -786,6 +847,23 @@ function PickupSummaryCard({ location }: { location: PublicPickupLocation }) {
 	);
 }
 
+/** "+ RM2.00 fee" chip on a paid pickup point — the charge must be visible on
+ *  the option itself, before the buyer picks it, not only in the totals. */
+function PickupFeeChip({
+	fee,
+	currency,
+}: {
+	fee: number | undefined;
+	currency: string;
+}) {
+	if (!fee || fee <= 0) return null;
+	return (
+		<span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+			+ {formatPrice(fee, currency)} fee
+		</span>
+	);
+}
+
 /** Small kind chip so the buyer knows whether they're going to the seller's
  *  place or an agreed meetup point. */
 function PickupKindBadge({ kind }: { kind: PickupKind }) {
@@ -803,10 +881,12 @@ function PickupKindBadge({ kind }: { kind: PickupKind }) {
  */
 function PickupLocationRadioList({
 	locations,
+	currency,
 	value,
 	onChange,
 }: {
 	locations: ReadonlyArray<PublicPickupLocation>;
+	currency: string;
 	value: string;
 	onChange: (id: string) => void;
 }) {
@@ -847,6 +927,7 @@ function PickupLocationRadioList({
 						{/* Badge only when headings are off — otherwise the group
 						    heading already names the kind. */}
 						{showHeadings ? null : <PickupKindBadge kind={loc.locationType} />}
+						<PickupFeeChip fee={loc.fee} currency={currency} />
 					</span>
 					<span className="text-xs text-muted-foreground whitespace-pre-line">
 						{loc.address}
