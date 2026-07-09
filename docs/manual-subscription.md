@@ -46,6 +46,15 @@ A **plain Pro invoice never claims a rank** — founding must be deliberate. The
 for `isFoundingMember || foundingIntent`. `paidAt`/`firstInvoiceId` on the
 `foundingMembers` row fill in when the first founding invoice is paid.
 
+**Nav pill (`TierPill`, sidebar + mobile header + settings card).** A founding
+member's status chip reads **"Founding #N"** (± trial/past-due state), which on
+its own hides their actual tier — so the pill renders a **second neutral tier
+chip** (Starter/Pro/Scale) beside it, both wrapped in one link to Settings →
+Billing. Non-founding sellers keep the single tier chip (their status pill *is*
+the tier); an admin's own store still shows only the "Admin" chip (→ console).
+The pair wraps as a unit and inherits the header's smaller text so it stays neat
+on mobile. Chip labels come from the exported `PLAN_LABEL`.
+
 ### Email notifications (capped, escalating — no spam)
 
 Sellers won't always be in the dashboard, so deadlines don't sit silent. The hard
