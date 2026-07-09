@@ -14,19 +14,17 @@ import { api } from "../../../convex/_generated/api";
 import { isUnlimited } from "../../../convex/lib/plans";
 import { formatPrice } from "../../lib/format";
 import { LEGAL_CONTACT_EMAIL } from "../../lib/legal";
-import { ORDER_CAP_WARN_RATIO, trialDaysLeft } from "../../lib/subscription";
+import {
+	ORDER_CAP_WARN_RATIO,
+	PLAN_LABEL,
+	trialDaysLeft,
+} from "../../lib/subscription";
 import { ZoomableImage } from "../ui/zoomable-image";
 import { InvoiceDownloadButton } from "./invoice-download-button";
 
 type Retailer = NonNullable<
 	FunctionReturnType<typeof api.retailers.getMyRetailer>
 >;
-
-const PLAN_LABEL: Record<string, string> = {
-	starter: "Starter",
-	pro: "Pro",
-	scale: "Scale",
-};
 
 function formatDate(ms: number): string {
 	return new Date(ms).toLocaleDateString(undefined, {

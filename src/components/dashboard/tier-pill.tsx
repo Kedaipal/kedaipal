@@ -7,10 +7,13 @@ import {
 } from "../../lib/subscription";
 import { cn } from "../../lib/utils";
 
-// Shared chip shape. Font size lives here (text-[10px]) but a passed `className`
-// can override it (the mobile header shrinks to text-[9px]).
-const PILL_BASE =
-	"inline-flex w-fit max-w-full items-center whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide";
+// Shared chip shape without a font size — so chips can either set their own size
+// (single-pill paths, via PILL_BASE) or inherit it from a wrapper (founding pair).
+const PILL_SHAPE =
+	"inline-flex w-fit max-w-full items-center whitespace-nowrap rounded-full px-2 py-0.5 font-semibold uppercase tracking-wide";
+// Default chip: shape + text-[10px]. A passed `className` can override the size
+// (the mobile header shrinks to text-[9px]); `cn`/tailwind-merge keeps the last.
+const PILL_BASE = `${PILL_SHAPE} text-[10px]`;
 
 function toneClass(tone: TierTone): string {
 	switch (tone) {
@@ -84,22 +87,21 @@ export function TierPill({
 
 	// Founding members: pair the "Founding #N" status chip with their tier chip so
 	// the plan stays visible (the status chip alone would hide it). One link, two
-	// chips; `className` (e.g. the mobile header's smaller text) reaches both, and
-	// the pair wraps together rather than overflowing on a narrow screen.
+	// chips that wrap together rather than overflow on a narrow screen. `className`
+	// (e.g. the mobile header's smaller text) sits on the wrapper only — the chips
+	// carry no font size, so they inherit the wrapper's down to both.
 	if (foundingRank) {
 		return (
 			<Link
 				to="/app/settings"
 				search={{ tab: "billing" }}
 				className={cn(
-					"inline-flex max-w-full flex-wrap items-center gap-1 transition-opacity hover:opacity-80",
+					"inline-flex max-w-full flex-wrap items-center gap-1 text-[10px] transition-opacity hover:opacity-80",
 					className,
 				)}
 			>
-				<span className={cn(PILL_BASE, toneClass(tone), className)}>
-					{displayLabel}
-				</span>
-				<span className={cn(PILL_BASE, toneClass("neutral"), className)}>
+				<span className={cn(PILL_SHAPE, toneClass(tone))}>{displayLabel}</span>
+				<span className={cn(PILL_SHAPE, toneClass("neutral"))}>
 					{PLAN_LABEL[subscription.plan]}
 				</span>
 			</Link>
