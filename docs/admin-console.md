@@ -68,8 +68,11 @@ A **plain seller's own** `past_due` writes stay blocked — the bypass only ever
 
 **Chrome:** on an admin's **own** store (`isAdmin && !actingAsAdmin`), the nav tier pill reads a
 distinct **"Admin"** badge (linking to the console, not billing) instead of a trial/past-due
-countdown, and the `SubscriptionBanner` pay-nag is suppressed. While **acting-as** a seller the
-chrome shows that seller's **real** subscription state — white-glove needs to see where they stand.
+countdown, and the `SubscriptionBanner` pay-nag is suppressed. **Settings → Billing** follows the
+same rule: the `BillingTab` swaps the Current-plan / status / order-usage / renew apparatus for a
+plain **"Admin account"** note (admins have no trial, tier or invoices) — so the tab never presents
+the admin as a Starter/Pro/Scale seller. While **acting-as** a seller the chrome (banner + billing
+tab) shows that seller's **real** subscription state — white-glove needs to see where they stand.
 
 ## Reads that had to learn "admin"
 

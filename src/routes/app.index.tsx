@@ -10,7 +10,7 @@ import {
 	ChevronDown,
 	ChevronRight,
 	CreditCard,
-	Eye,
+	ExternalLink,
 	type LucideIcon,
 	MapPin,
 	MessageCircle,
@@ -568,8 +568,8 @@ function DashboardHome() {
 								target="_blank"
 								rel="noopener noreferrer"
 							>
-								<Eye className="size-4" />
-								Preview
+								<ExternalLink className="size-4" />
+								Open live
 							</a>
 						</Button>
 					</div>
