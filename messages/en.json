@@ -388,16 +388,19 @@
 	"pricingpage_cta_how": "See how it works",
 	"pricingpage_no_lockin_note": "Annual billing = 10 months paid, 12 received. Cancel anytime. Export your data anytime.",
 
-	"poster_headline": "JUST SCAN & ORDER!",
-	"poster_counter_badge": "AT THE COUNTER",
+	"poster_headline": "Just Scan & Order",
+	"poster_counter_badge": "At the Counter",
 	"poster_counter_title": "Order & Collect Here",
 	"poster_counter_step1": "Scan the QR to connect on WhatsApp",
 	"poster_counter_step2": "Show the chat to the cashier — they ring up your order",
 	"poster_counter_step3": "Pay & collect — your receipt arrives on WhatsApp",
-	"poster_online_badge": "ORDER ONLINE",
+	"poster_online_badge": "Order Online",
 	"poster_online_title": "Order From Home",
 	"poster_online_step1": "Scan the QR & browse the full menu",
 	"poster_online_step2": "Place your order anytime",
 	"poster_online_step3": "We confirm instantly on WhatsApp",
-	"poster_powered_by": "POWERED BY"
+	"poster_powered_by": "POWERED BY",
+	"poster_chat_online": "Online",
+	"poster_chat_bubble1": "Can I place an order? 😋",
+	"poster_chat_bubble2": "Paid — that was easy! 👍"
 }

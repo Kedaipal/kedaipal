@@ -29,7 +29,8 @@ export function hasFeature(
 	return sub.features[feature];
 }
 
-const PLAN_LABEL: Record<SubscriptionView["plan"], string> = {
+/** Canonical short tier labels (Starter/Pro/Scale) for the nav pill + billing UI. */
+export const PLAN_LABEL: Record<SubscriptionView["plan"], string> = {
 	starter: "Starter",
 	pro: "Pro",
 	scale: "Scale",
