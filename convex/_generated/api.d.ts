@@ -11,6 +11,7 @@
 import type * as admin from "../admin.js";
 import type * as billing from "../billing.js";
 import type * as billingEmail from "../billingEmail.js";
+import type * as categories from "../categories.js";
 import type * as counterCheckout from "../counterCheckout.js";
 import type * as crons from "../crons.js";
 import type * as customers from "../customers.js";
@@ -80,6 +81,7 @@ declare const fullApi: ApiFromModules<{
   admin: typeof admin;
   billing: typeof billing;
   billingEmail: typeof billingEmail;
+  categories: typeof categories;
   counterCheckout: typeof counterCheckout;
   crons: typeof crons;
   customers: typeof customers;

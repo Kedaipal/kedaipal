@@ -125,9 +125,11 @@ async function loadVariants(ctx: QueryCtx, productId: Id<"products">) {
 /**
  * Resolve a product to its storefront/dashboard shape: product images +
  * variants + rollups (price range, total on-hand, in-stock). `activeOnly`
- * filters to active variants for the public storefront.
+ * filters to active variants for the public storefront. Exported for
+ * convex/categories.ts — the public category page enriches its product rows
+ * through the exact same shape so the storefront grid can't diverge.
  */
-async function productWithVariants(
+export async function productWithVariants(
 	ctx: QueryCtx,
 	product: Doc<"products">,
 	opts: { activeOnly: boolean },

@@ -31,12 +31,14 @@ import { Route as AppOrdersIndexRouteImport } from './routes/app.orders.index'
 import { Route as AppCustomersIndexRouteImport } from './routes/app.customers.index'
 import { Route as AppProductsNewRouteImport } from './routes/app.products.new'
 import { Route as AppProductsImportRouteImport } from './routes/app.products.import'
+import { Route as AppProductsCategoriesRouteImport } from './routes/app.products.categories'
 import { Route as AppProductsProductIdRouteImport } from './routes/app.products.$productId'
 import { Route as AppOrdersShortIdRouteImport } from './routes/app.orders.$shortId'
 import { Route as AppCustomersCustomerIdRouteImport } from './routes/app.customers.$customerId'
 import { Route as AppAdminWabaRouteImport } from './routes/app.admin.waba'
 import { Route as AppAdminSellersRouteImport } from './routes/app.admin.sellers'
 import { Route as AppAdminBillingRouteImport } from './routes/app.admin.billing'
+import { Route as SlugCCategorySlugRouteImport } from './routes/$slug_.c.$categorySlug'
 
 const TermsRoute = TermsRouteImport.update({
   id: '/terms',
@@ -148,6 +150,11 @@ const AppProductsImportRoute = AppProductsImportRouteImport.update({
   path: '/products/import',
   getParentRoute: () => AppRoute,
 } as any)
+const AppProductsCategoriesRoute = AppProductsCategoriesRouteImport.update({
+  id: '/products/categories',
+  path: '/products/categories',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppProductsProductIdRoute = AppProductsProductIdRouteImport.update({
   id: '/products/$productId',
   path: '/products/$productId',
@@ -178,6 +185,11 @@ const AppAdminBillingRoute = AppAdminBillingRouteImport.update({
   path: '/admin/billing',
   getParentRoute: () => AppRoute,
 } as any)
+const SlugCCategorySlugRoute = SlugCCategorySlugRouteImport.update({
+  id: '/$slug_/c/$categorySlug',
+  path: '/$slug/c/$categorySlug',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -197,12 +209,14 @@ export interface FileRoutesByFullPath {
   '/sign-up/$': typeof SignUpSplatRoute
   '/track/$token': typeof TrackTokenRoute
   '/app/': typeof AppIndexRoute
+  '/$slug/c/$categorySlug': typeof SlugCCategorySlugRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
   '/app/admin/sellers': typeof AppAdminSellersRoute
   '/app/admin/waba': typeof AppAdminWabaRoute
   '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
   '/app/orders/$shortId': typeof AppOrdersShortIdRoute
   '/app/products/$productId': typeof AppProductsProductIdRoute
+  '/app/products/categories': typeof AppProductsCategoriesRoute
   '/app/products/import': typeof AppProductsImportRoute
   '/app/products/new': typeof AppProductsNewRoute
   '/app/customers/': typeof AppCustomersIndexRoute
@@ -226,12 +240,14 @@ export interface FileRoutesByTo {
   '/sign-up/$': typeof SignUpSplatRoute
   '/track/$token': typeof TrackTokenRoute
   '/app': typeof AppIndexRoute
+  '/$slug/c/$categorySlug': typeof SlugCCategorySlugRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
   '/app/admin/sellers': typeof AppAdminSellersRoute
   '/app/admin/waba': typeof AppAdminWabaRoute
   '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
   '/app/orders/$shortId': typeof AppOrdersShortIdRoute
   '/app/products/$productId': typeof AppProductsProductIdRoute
+  '/app/products/categories': typeof AppProductsCategoriesRoute
   '/app/products/import': typeof AppProductsImportRoute
   '/app/products/new': typeof AppProductsNewRoute
   '/app/customers': typeof AppCustomersIndexRoute
@@ -257,12 +273,14 @@ export interface FileRoutesById {
   '/sign-up/$': typeof SignUpSplatRoute
   '/track/$token': typeof TrackTokenRoute
   '/app/': typeof AppIndexRoute
+  '/$slug_/c/$categorySlug': typeof SlugCCategorySlugRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
   '/app/admin/sellers': typeof AppAdminSellersRoute
   '/app/admin/waba': typeof AppAdminWabaRoute
   '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
   '/app/orders/$shortId': typeof AppOrdersShortIdRoute
   '/app/products/$productId': typeof AppProductsProductIdRoute
+  '/app/products/categories': typeof AppProductsCategoriesRoute
   '/app/products/import': typeof AppProductsImportRoute
   '/app/products/new': typeof AppProductsNewRoute
   '/app/customers/': typeof AppCustomersIndexRoute
@@ -289,12 +307,14 @@ export interface FileRouteTypes {
     | '/sign-up/$'
     | '/track/$token'
     | '/app/'
+    | '/$slug/c/$categorySlug'
     | '/app/admin/billing'
     | '/app/admin/sellers'
     | '/app/admin/waba'
     | '/app/customers/$customerId'
     | '/app/orders/$shortId'
     | '/app/products/$productId'
+    | '/app/products/categories'
     | '/app/products/import'
     | '/app/products/new'
     | '/app/customers/'
@@ -318,12 +338,14 @@ export interface FileRouteTypes {
     | '/sign-up/$'
     | '/track/$token'
     | '/app'
+    | '/$slug/c/$categorySlug'
     | '/app/admin/billing'
     | '/app/admin/sellers'
     | '/app/admin/waba'
     | '/app/customers/$customerId'
     | '/app/orders/$shortId'
     | '/app/products/$productId'
+    | '/app/products/categories'
     | '/app/products/import'
     | '/app/products/new'
     | '/app/customers'
@@ -348,12 +370,14 @@ export interface FileRouteTypes {
     | '/sign-up/$'
     | '/track/$token'
     | '/app/'
+    | '/$slug_/c/$categorySlug'
     | '/app/admin/billing'
     | '/app/admin/sellers'
     | '/app/admin/waba'
     | '/app/customers/$customerId'
     | '/app/orders/$shortId'
     | '/app/products/$productId'
+    | '/app/products/categories'
     | '/app/products/import'
     | '/app/products/new'
     | '/app/customers/'
@@ -375,6 +399,7 @@ export interface RootRouteChildren {
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
   TrackTokenRoute: typeof TrackTokenRoute
+  SlugCCategorySlugRoute: typeof SlugCCategorySlugRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -533,6 +558,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppProductsImportRouteImport
       parentRoute: typeof AppRoute
     }
+    '/app/products/categories': {
+      id: '/app/products/categories'
+      path: '/products/categories'
+      fullPath: '/app/products/categories'
+      preLoaderRoute: typeof AppProductsCategoriesRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/app/products/$productId': {
       id: '/app/products/$productId'
       path: '/products/$productId'
@@ -575,6 +607,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAdminBillingRouteImport
       parentRoute: typeof AppRoute
     }
+    '/$slug_/c/$categorySlug': {
+      id: '/$slug_/c/$categorySlug'
+      path: '/$slug/c/$categorySlug'
+      fullPath: '/$slug/c/$categorySlug'
+      preLoaderRoute: typeof SlugCCategorySlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -589,6 +628,7 @@ interface AppRouteChildren {
   AppCustomersCustomerIdRoute: typeof AppCustomersCustomerIdRoute
   AppOrdersShortIdRoute: typeof AppOrdersShortIdRoute
   AppProductsProductIdRoute: typeof AppProductsProductIdRoute
+  AppProductsCategoriesRoute: typeof AppProductsCategoriesRoute
   AppProductsImportRoute: typeof AppProductsImportRoute
   AppProductsNewRoute: typeof AppProductsNewRoute
   AppCustomersIndexRoute: typeof AppCustomersIndexRoute
@@ -607,6 +647,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppCustomersCustomerIdRoute: AppCustomersCustomerIdRoute,
   AppOrdersShortIdRoute: AppOrdersShortIdRoute,
   AppProductsProductIdRoute: AppProductsProductIdRoute,
+  AppProductsCategoriesRoute: AppProductsCategoriesRoute,
   AppProductsImportRoute: AppProductsImportRoute,
   AppProductsNewRoute: AppProductsNewRoute,
   AppCustomersIndexRoute: AppCustomersIndexRoute,
@@ -630,6 +671,7 @@ const rootRouteChildren: RootRouteChildren = {
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,
   TrackTokenRoute: TrackTokenRoute,
+  SlugCCategorySlugRoute: SlugCCategorySlugRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

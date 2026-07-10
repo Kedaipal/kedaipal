@@ -6,6 +6,7 @@ import {
 	Download,
 	EyeOff,
 	FileSpreadsheet,
+	FolderOpen,
 	Search,
 	Upload,
 	X,
@@ -14,6 +15,7 @@ import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { ProBadge } from "../components/app/pro-gate";
 import { PageHeader } from "../components/dashboard/page-header";
 import { Button } from "../components/ui/button";
 import { FilterChip, FilterChipRow } from "../components/ui/filter-chip";
@@ -34,6 +36,7 @@ import {
 	type ExportableProduct,
 } from "../lib/product-export";
 import { reorderByIds } from "../lib/reorder";
+import { hasFeature } from "../lib/subscription";
 
 type StatusFilter = "all" | "active" | "archived";
 
@@ -121,8 +124,38 @@ function BulkIoMenu({
 	);
 }
 
+/**
+ * Header link to category management — the discoverability surface for the
+ * feature (categories live UNDER Products; there's no nav tab). The link works
+ * on every tier: a locked (Starter) seller lands on the explain-and-upgrade
+ * wall, so the ProBadge marks the tier boundary without hiding the door.
+ */
+function CategoriesLink({
+	locked,
+	mobile = false,
+}: {
+	locked: boolean;
+	mobile?: boolean;
+}) {
+	return (
+		<Button asChild variant="outline" className={mobile ? "h-11 px-3" : "h-10"}>
+			<Link to="/app/products/categories">
+				<FolderOpen className="size-4" aria-hidden />
+				Categories
+				{locked ? <ProBadge /> : null}
+			</Link>
+		</Button>
+	);
+}
+
 function ProductsRoute() {
 	const retailer = useDashboardRetailer();
+	// Client mirror of the `categories` plan gate (server is the lock) — only
+	// used to badge the Categories link; admin act-as sees through it.
+	const categoriesLocked =
+		!!retailer &&
+		!retailer.actingAsAdmin &&
+		!hasFeature(retailer.subscription, "categories");
 	const products = useQuery(
 		api.products.listAll,
 		retailer ? { retailerId: retailer._id } : "skip",
@@ -231,6 +264,7 @@ function ProductsRoute() {
 								onExport={handleExport}
 							/>
 						) : null}
+						<CategoriesLink locked={categoriesLocked} />
 						<Button asChild className="h-10">
 							<Link to="/app/products/new">+ New product</Link>
 						</Button>
@@ -258,6 +292,7 @@ function ProductsRoute() {
 							onExport={handleExport}
 						/>
 					) : null}
+					<CategoriesLink locked={categoriesLocked} mobile />
 					<Button asChild className="h-11">
 						<Link to="/app/products/new">+ New</Link>
 					</Button>

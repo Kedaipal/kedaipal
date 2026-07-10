@@ -356,6 +356,55 @@ export default defineSchema({
 		.index("by_retailer_sku", ["retailerId", "sku"]),
 
 	/**
+	 * Retailer-defined product category — a pure storefront BROWSE structure
+	 * (86ey81n63), never a sellability gate and never frozen onto orders, so
+	 * re-categorizing later can't rewrite order history. Products join through
+	 * `productCategories` (many-to-many). `active` is the archive flag (soft
+	 * delete, mirrors pickupLocations.isActive); an archived category's junction
+	 * rows are KEPT so restore revives its assignments. `slug` powers the public
+	 * `/$slug/c/$categorySlug` page — unique per retailer (by_retailer_slug), no
+	 * reserved-word list needed (nested under the store path). See
+	 * docs/product-categories.md.
+	 */
+	categories: defineTable({
+		retailerId: v.id("retailers"),
+		name: v.string(),
+		slug: v.string(),
+		// Optional buyer-facing blurb shown on the category page header.
+		description: v.optional(v.string()),
+		// Optional tile image (public-safe). Replaced/cleared blobs are GC'd by
+		// the update mutation, same pattern as retailers.logoStorageId.
+		imageStorageId: v.optional(v.string()),
+		active: v.boolean(),
+		sortOrder: v.number(),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_retailer", ["retailerId"])
+		.index("by_retailer_active", ["retailerId", "active"])
+		.index("by_retailer_slug", ["retailerId", "slug"]),
+
+	/**
+	 * Product ↔ category junction (many-to-many; a product sits in ≤10
+	 * categories). `retailerId` is denormalized for the retailer-wide cascade
+	 * on account deletion (same pattern as productVariants.retailerId).
+	 * `sortOrder` is the product's position WITHIN the category, independent of
+	 * the product's own global sortOrder. One row per (product, category) pair,
+	 * enforced via by_product_category.
+	 */
+	productCategories: defineTable({
+		productId: v.id("products"),
+		categoryId: v.id("categories"),
+		retailerId: v.id("retailers"),
+		sortOrder: v.number(),
+		createdAt: v.number(),
+	})
+		.index("by_product", ["productId"])
+		.index("by_category_sort", ["categoryId", "sortOrder"])
+		.index("by_product_category", ["productId", "categoryId"])
+		.index("by_retailer", ["retailerId"]),
+
+	/**
 	 * First-class customer entity, keyed by (retailerId, waPhone). Aggregates
 	 * are denormalized and refreshed on order create/cancel so the dashboard
 	 * list/detail views never scan the orders table to compute lifetime value.
