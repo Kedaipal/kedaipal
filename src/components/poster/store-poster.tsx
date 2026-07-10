@@ -52,6 +52,8 @@ const NAVY = "#0F172A";
 const MINT = "#10B981";
 /** Badge/step-number green — the spec uses this second green, not brand mint. */
 const BADGE_GREEN = "#00BC7C";
+/** Seller-logo ring — a hair darker than the mint header, per the v2 spec. */
+const LOGO_RING = "#109B6D";
 /** WhatsApp chat bubble green from the spec's phone mockup. */
 const BUBBLE_GREEN = "#D1F498";
 
@@ -167,10 +169,13 @@ export function StorePoster({
 					</p>
 				</div>
 				{logoUrl ? (
-					/* Always on a white circle panel — seller logos can be dark/navy and
-					   there is no reliable way to detect that at print time. */
+					/* White circle panel (seller logos can be dark/navy — no luminance
+					   detection at print time) with the spec's thin green ring, a hair
+					   darker than the mint header. The logo fills the inner circle with
+					   a hairline white gutter so non-circular logos don't touch the ring. */
 					<div
-						className="absolute right-[12mm] top-[11mm] flex h-[41mm] w-[41mm] items-center justify-center overflow-hidden rounded-full bg-white p-[3mm]"
+						className="absolute right-[13mm] top-[12mm] flex h-[40mm] w-[40mm] items-center justify-center overflow-hidden rounded-full border-[1mm] bg-white p-[1mm]"
+						style={{ borderColor: LOGO_RING }}
 						data-testid="poster-logo"
 					>
 						<img
@@ -186,10 +191,10 @@ export function StorePoster({
 			    invariant): iOS Safari ignores `@page` and scale-to-fits (~10%
 			    shrink), so 56mm lands ≥50mm — above the 45mm scan floor. The v2
 			    mockup drew them smaller; the ticket AC overrides it. Fixed height:
-			    the 56mm boxes outgrow the mockup's flex budget, so the body ends at
-			    200mm and the footer/phone below sit at pinned sheet coordinates —
-			    flex flow would push the footer under the phone. */}
-			<div className="relative flex h-[136mm] flex-col justify-evenly gap-[4mm] px-[17mm] py-[2mm]">
+			    the 56mm boxes outgrow the mockup's flex budget, so the rows stack on
+			    explicit gaps and the footer/phone below sit at pinned sheet
+			    coordinates — flex flow would push the footer under the phone. */}
+			<div className="relative flex flex-col gap-[3mm] px-[17mm] pt-[6mm]">
 				<QrRow
 					url={counterUrl}
 					badge={m.poster_counter_badge({}, { locale })}
@@ -214,7 +219,7 @@ export function StorePoster({
 
 			{/* Footer — powered by Kedaipal, pinned above the phone (the phone
 			    paints later/on top, so the lockup must never flow under it). */}
-			<div className="absolute inset-x-0 top-[200mm] flex flex-col items-center gap-[2.5mm]">
+			<div className="absolute inset-x-0 top-[204mm] flex flex-col items-center gap-[2.5mm]">
 				<p
 					className="rounded-full border-[0.4mm] border-[#B9D9CC] px-[5mm] py-[1.4mm] text-[10.5pt] font-semibold uppercase tracking-[0.2em] text-[#7BA394]"
 					data-testid="poster-powered-by"
@@ -275,9 +280,7 @@ function QrRow({
 				<ol className="flex flex-col gap-[2mm] text-[13pt] leading-snug">
 					{steps.map((step, i) => (
 						<li key={step} className="flex gap-[2.5mm]">
-							<span className="font-bold" style={{ color: BADGE_GREEN }}>
-								{i + 1}.
-							</span>
+							<span className="font-bold">{i + 1}.</span>
 							<span>{step}</span>
 						</li>
 					))}
@@ -305,18 +308,20 @@ function PhoneMockup({
 }) {
 	return (
 		<div
-			className="absolute left-[49mm] top-[221mm] w-[112mm]"
+			className="absolute left-[49mm] top-[223.5mm] w-[112mm]"
 			aria-hidden="true"
 			data-testid="poster-phone"
 		>
 			<img src="/poster/phone-shell.png" alt="" className="w-full" />
 			{/* Status bar — the shell raster ships with an empty green band, so
 			    the clock + indicators are drawn here (tiny, purely decorative). */}
-			<div className="absolute left-[14mm] right-[14mm] top-[6.2mm] flex items-center justify-between">
-				<span className="text-[8pt] font-semibold text-white">9:30</span>
+			<div className="absolute left-[19.5mm] right-[19.5mm] top-[13.2mm] flex items-center justify-between">
+				<span className="text-[11pt] font-semibold leading-none text-white">
+					9:30
+				</span>
 				<svg
 					viewBox="0 0 46 12"
-					className="h-[2.6mm] w-auto"
+					className="h-[3mm] w-auto"
 					fill="#FFFFFF"
 					role="presentation"
 				>

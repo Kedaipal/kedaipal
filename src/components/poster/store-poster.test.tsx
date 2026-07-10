@@ -116,6 +116,8 @@ describe("StorePoster", () => {
 		const panel = container.querySelector('[data-testid="poster-logo"]');
 		expect(panel).toBeTruthy();
 		expect(panel?.className).toContain("bg-white");
+		// Thin green ring (#109B6D), a hair darker than the mint header.
+		expect((panel as HTMLElement)?.style.borderColor).toBe("rgb(16, 155, 109)");
 		// The same logo doubles as the chat avatar in the phone mockup.
 		const logoImgs = container.querySelectorAll(
 			'img[src="https://files.example/logo.png"]',

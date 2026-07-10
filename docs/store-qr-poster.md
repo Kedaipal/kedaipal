@@ -130,10 +130,12 @@ spec); EN is a translation of it. v2 adds `poster_chat_*` — the phone mockup's
 ## Design tokens (v2, from Kris's Figma `86ey65cm6`)
 
 Fixed print values, deliberately not semantic theme tokens: navy `#0F172A`,
-mint `#10B981` (header), badge/step green `#00BC7C` (the spec's second green,
-kept exactly), chat bubble `#D1F498`, doodle stroke `#C7F0E2`, band gradient
-white → `#D9F4EA`. Type: Red Hat Display (headings) / Geist (body); store name
-35pt (24pt past 24 chars), tagline 21pt, badges 15pt, steps 13pt.
+mint `#10B981` (header), badge green `#00BC7C` (the spec's second green, kept
+exactly; step numbering stays navy per review), logo ring `#109B6D` (thin, a
+hair darker than the header), chat bubble `#D1F498`, doodle stroke `#C7F0E2`,
+band gradient white → `#D9F4EA`. Type: Red Hat Display (headings) / Geist
+(body); store name 35pt (24pt past 24 chars), tagline 21pt, badges 15pt,
+steps 13pt.
 
 ## Activation stamping
 
