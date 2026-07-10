@@ -157,12 +157,13 @@ export function StorePoster({
 					</p>
 					{/* Human-readable storefront address, no ?src */}
 					<p
-						className={`w-fit max-w-full break-all rounded-full px-[7mm] py-[2.2mm] font-heading font-medium text-white ${
+						className={`w-fit max-w-full break-all rounded-full px-[7mm] py-[2.2mm] font-heading font-medium ${
 							longSlug ? "text-[11pt]" : "text-[13pt]"
 						}`}
-						style={{ backgroundColor: NAVY }}
+						style={{ backgroundColor: NAVY, color: MINT }}
 					>
-						kedaipal.com/<span className="font-extrabold">{slug}</span>
+						kedaipal.com/
+						<span className="font-extrabold text-white">{slug}</span>
 					</p>
 				</div>
 				{logoUrl ? (
@@ -184,8 +185,11 @@ export function StorePoster({
 			{/* Body — QR column left, step lists right. QR boxes stay ≥56mm (v1
 			    invariant): iOS Safari ignores `@page` and scale-to-fits (~10%
 			    shrink), so 56mm lands ≥50mm — above the 45mm scan floor. The v2
-			    mockup drew them smaller; the ticket AC overrides it. */}
-			<div className="relative flex flex-1 flex-col justify-evenly gap-[6mm] px-[17mm] py-[8mm]">
+			    mockup drew them smaller; the ticket AC overrides it. Fixed height:
+			    the 56mm boxes outgrow the mockup's flex budget, so the body ends at
+			    200mm and the footer/phone below sit at pinned sheet coordinates —
+			    flex flow would push the footer under the phone. */}
+			<div className="relative flex h-[136mm] flex-col justify-evenly gap-[4mm] px-[17mm] py-[2mm]">
 				<QrRow
 					url={counterUrl}
 					badge={m.poster_counter_badge({}, { locale })}
@@ -208,9 +212,9 @@ export function StorePoster({
 				/>
 			</div>
 
-			{/* Footer — powered by Kedaipal + the WhatsApp phone mockup bleeding
-			    off the bottom edge. */}
-			<div className="relative flex shrink-0 flex-col items-center gap-[2.5mm] pb-[86mm]">
+			{/* Footer — powered by Kedaipal, pinned above the phone (the phone
+			    paints later/on top, so the lockup must never flow under it). */}
+			<div className="absolute inset-x-0 top-[200mm] flex flex-col items-center gap-[2.5mm]">
 				<p
 					className="rounded-full border-[0.4mm] border-[#B9D9CC] px-[5mm] py-[1.4mm] text-[10.5pt] font-semibold uppercase tracking-[0.2em] text-[#7BA394]"
 					data-testid="poster-powered-by"
@@ -247,7 +251,7 @@ function QrRow({
 	return (
 		<div className="flex items-center gap-[10mm]">
 			<div
-				className="shrink-0 rounded-[4mm] border-[1mm] bg-white p-[3mm]"
+				className="shrink-0 rounded-[4mm] border-[0.8mm] bg-white p-[3mm]"
 				style={{ borderColor: MINT }}
 				data-testid="poster-qr"
 			>
@@ -306,6 +310,40 @@ function PhoneMockup({
 			data-testid="poster-phone"
 		>
 			<img src="/poster/phone-shell.png" alt="" className="w-full" />
+			{/* Status bar — the shell raster ships with an empty green band, so
+			    the clock + indicators are drawn here (tiny, purely decorative). */}
+			<div className="absolute left-[14mm] right-[14mm] top-[6.2mm] flex items-center justify-between">
+				<span className="text-[8pt] font-semibold text-white">9:30</span>
+				<svg
+					viewBox="0 0 46 12"
+					className="h-[2.6mm] w-auto"
+					fill="#FFFFFF"
+					role="presentation"
+				>
+					{/* signal bars */}
+					<rect x="0" y="7" width="2.5" height="5" rx="0.8" />
+					<rect x="4" y="5" width="2.5" height="7" rx="0.8" />
+					<rect x="8" y="3" width="2.5" height="9" rx="0.8" />
+					<rect x="12" y="1" width="2.5" height="11" rx="0.8" />
+					{/* wifi */}
+					<path d="M25 3.2a9.4 9.4 0 0 0-6.4 2.5l1.4 1.5A7.4 7.4 0 0 1 25 5.2c1.9 0 3.7.7 5 2l1.4-1.5A9.4 9.4 0 0 0 25 3.2Z" />
+					<path d="M25 7.1c-1.2 0-2.3.4-3.1 1.2l1.5 1.6a2.3 2.3 0 0 1 3.2 0l1.5-1.6A4.5 4.5 0 0 0 25 7.1Z" />
+					<circle cx="25" cy="11" r="1.2" />
+					{/* battery */}
+					<rect
+						x="34"
+						y="1.5"
+						width="10"
+						height="9"
+						rx="2"
+						fill="none"
+						stroke="#FFFFFF"
+						strokeWidth="1"
+					/>
+					<rect x="35.5" y="3" width="7" height="6" rx="1" />
+					<rect x="44.8" y="4.5" width="1.2" height="3" rx="0.6" />
+				</svg>
+			</div>
 			{/* Chat header row — inside the shell's green band */}
 			<div className="absolute left-[13mm] right-[13mm] top-[15.5mm] flex items-center gap-[2.5mm]">
 				<div className="flex h-[8mm] w-[8mm] shrink-0 items-center justify-center overflow-hidden rounded-full bg-white/90">

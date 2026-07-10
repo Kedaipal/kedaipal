@@ -78,7 +78,13 @@ describe("StorePoster", () => {
 
 	it("shows the human URL pill without the ?src tag", () => {
 		render(<StorePoster {...BASE} locale="ms" />);
-		expect(screen.getByText(BASE.slug)).toBeTruthy();
+		const slug = screen.getByText(BASE.slug);
+		expect(slug).toBeTruthy();
+		// Mint "kedaipal.com/" prefix (pill color), white slug on top of it.
+		expect(slug.className).toContain("text-white");
+		expect((slug.parentElement as HTMLElement)?.style.color).toBe(
+			"rgb(16, 185, 129)",
+		);
 		expect(screen.queryByText(/src=/)).toBeNull();
 	});
 
