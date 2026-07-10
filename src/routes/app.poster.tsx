@@ -1,6 +1,6 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
-import { Printer, RefreshCw } from "lucide-react";
+import { ImagePlus, Loader2, Printer, RefreshCw } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
@@ -44,6 +44,8 @@ const POSTER_PRINT_CSS = `
 }
 `;
 
+type HeaderStyle = "brand" | "cover";
+
 function PosterRoute() {
 	const retailer = useDashboardRetailer();
 	const actAsRetailerId = useActAsRetailerId();
@@ -66,6 +68,27 @@ function PosterRoute() {
 	// Poster copy is buyer-facing, so the seller picks its language here —
 	// default BM (Malaysian buyers) — independent of the dashboard locale.
 	const [posterLocale, setPosterLocale] = useState<PosterLocale>("ms");
+	// Header background: brand mint (Kris's approved default) or the seller's
+	// storefront cover photo. Session-only, like the language toggle.
+	const [headerStyle, setHeaderStyle] = useState<HeaderStyle>("brand");
+	// Don't let a print fire while the cover photo is still streaming — it
+	// would print as an empty box. Tracked only for the cover variant.
+	const [coverLoaded, setCoverLoaded] = useState(false);
+
+	const coverImageUrl = retailer?.coverImageUrl ?? null;
+	const useCover = headerStyle === "cover" && Boolean(coverImageUrl);
+
+	// Preload the cover photo the moment the seller flips to it, and gate the
+	// print button until the browser has it (StorePoster stays presentational).
+	useEffect(() => {
+		if (!useCover || !coverImageUrl) return;
+		setCoverLoaded(false);
+		const img = new Image();
+		img.onload = () => setCoverLoaded(true);
+		img.onerror = () => setCoverLoaded(true); // don't wedge the button on a bad blob
+		img.src = coverImageUrl;
+		if (img.complete) setCoverLoaded(true);
+	}, [useCover, coverImageUrl]);
 
 	async function rotate() {
 		setRotating(true);
@@ -118,6 +141,7 @@ function PosterRoute() {
 		retailer.slug,
 	);
 	const counterUrl = storeQr?.waUrl ?? counterFallback;
+	const printWaiting = useCover && !coverLoaded;
 
 	function handlePrint() {
 		// Printing the poster is a "shared their link" signal for the activation
@@ -153,45 +177,66 @@ function PosterRoute() {
 					</p>
 				</div>
 
-				<div className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4 lg:max-w-2xl">
-					<div className="flex items-center justify-between gap-3">
-						<span className="text-sm font-semibold">Poster language</span>
-						{/* Buyer-facing copy toggle — BM first (default) */}
-						<fieldset
-							className="flex rounded-xl border border-border p-1"
-							aria-label="Poster language"
-						>
-							{(
-								[
-									{ value: "ms", label: "BM" },
-									{ value: "en", label: "EN" },
-								] as const
-							).map((opt) => (
-								<button
-									key={opt.value}
-									type="button"
-									onClick={() => setPosterLocale(opt.value)}
-									aria-pressed={posterLocale === opt.value}
-									className={`min-h-11 rounded-lg px-5 text-sm font-semibold transition-colors ${
-										posterLocale === opt.value
-											? "bg-foreground text-background"
-											: "text-muted-foreground hover:bg-muted"
-									}`}
-								>
-									{opt.label}
-								</button>
-							))}
-						</fieldset>
+				{/* One control surface: style the poster, then print it. */}
+				<div className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-4 lg:max-w-2xl">
+					<PosterToggle
+						label="Poster language"
+						options={[
+							{ value: "ms", label: "BM" },
+							{ value: "en", label: "EN" },
+						]}
+						value={posterLocale}
+						onChange={(v) => setPosterLocale(v as PosterLocale)}
+					/>
+					<div className="flex flex-col gap-1.5">
+						<PosterToggle
+							label="Header background"
+							options={[
+								{ value: "brand", label: "Kedaipal green" },
+								{
+									value: "cover",
+									label: "Cover photo",
+									disabled: !coverImageUrl,
+								},
+							]}
+							value={headerStyle}
+							onChange={(v) => setHeaderStyle(v as HeaderStyle)}
+						/>
+						{!coverImageUrl ? (
+							// Disabled-with-reason, always visible (no hover on mobile):
+							// the option doubles as a nudge to upload a cover photo.
+							<Link
+								to="/app/settings"
+								search={{ tab: "store" }}
+								className="inline-flex items-center gap-1.5 self-end text-xs text-muted-foreground underline-offset-2 hover:underline"
+							>
+								<ImagePlus className="size-3.5" aria-hidden />
+								Upload a cover photo in Settings to use it here
+							</Link>
+						) : null}
 					</div>
-					<Button onClick={handlePrint} className="h-11 w-full gap-2">
-						<Printer className="size-4" />
-						Print / Save as PDF
+					<Button
+						onClick={handlePrint}
+						disabled={printWaiting}
+						className="h-11 w-full gap-2"
+					>
+						{printWaiting ? (
+							<>
+								<Loader2 className="size-4 animate-spin" />
+								Loading your cover photo…
+							</>
+						) : (
+							<>
+								<Printer className="size-4" />
+								Print / Save as PDF
+							</>
+						)}
 					</Button>
 					<p className="text-xs text-muted-foreground">
-						In the print dialog, choose "Save as PDF" to download. The left QR
+						In the print dialog, choose "Save as PDF" to download. The top QR
 						connects walk-up buyers to you on WhatsApp so you can ring them up
-						at the counter; the right QR opens your storefront for ordering from
-						home.
+						at the counter; the bottom QR opens your storefront for ordering
+						from home.
 					</p>
 				</div>
 
@@ -218,6 +263,10 @@ function PosterRoute() {
 						Rotate QR…
 					</Button>
 				</div>
+
+				<p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground lg:max-w-2xl">
+					Preview — exactly what prints
+				</p>
 			</div>
 
 			<ConfirmDialog
@@ -252,12 +301,57 @@ function PosterRoute() {
 						storeName={retailer.storeName}
 						slug={retailer.slug}
 						logoUrl={retailer.logoUrl}
+						headerImageUrl={useCover ? coverImageUrl : null}
 						locale={posterLocale}
 						counterUrl={counterUrl}
 						onlineUrl={onlineUrl}
 					/>
 				</div>
 			</div>
+		</div>
+	);
+}
+
+/**
+ * Segmented control shared by the language + header-background pickers.
+ * Options can be disabled-with-reason (the caller renders the reason inline —
+ * hover tooltips don't exist on mobile).
+ */
+function PosterToggle({
+	label,
+	options,
+	value,
+	onChange,
+}: {
+	label: string;
+	options: { value: string; label: string; disabled?: boolean }[];
+	value: string;
+	onChange: (value: string) => void;
+}) {
+	return (
+		<div className="flex items-center justify-between gap-3">
+			<span className="text-sm font-semibold">{label}</span>
+			<fieldset
+				className="flex rounded-xl border border-border p-1"
+				aria-label={label}
+			>
+				{options.map((opt) => (
+					<button
+						key={opt.value}
+						type="button"
+						onClick={() => onChange(opt.value)}
+						disabled={opt.disabled}
+						aria-pressed={value === opt.value}
+						className={`min-h-11 rounded-lg px-4 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+							value === opt.value
+								? "bg-foreground text-background"
+								: "text-muted-foreground hover:bg-muted"
+						}`}
+					>
+						{opt.label}
+					</button>
+				))}
+			</fieldset>
 		</div>
 	);
 }
@@ -270,7 +364,8 @@ function PosterSkeleton() {
 				<Skeleton className="h-6 w-32" />
 				<Skeleton className="h-3 w-52" />
 			</div>
-			<Skeleton className="h-36 w-full rounded-2xl lg:max-w-2xl" />
+			<Skeleton className="h-52 w-full rounded-2xl lg:max-w-2xl" />
+			<Skeleton className="h-32 w-full rounded-2xl lg:max-w-2xl" />
 			<Skeleton className="aspect-[210/297] w-full max-w-md" />
 		</div>
 	);
