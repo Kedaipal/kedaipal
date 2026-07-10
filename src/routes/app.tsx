@@ -181,6 +181,11 @@ function AppShell() {
 						!retailer.actingAsAdmin &&
 						!hasFeature(retailer.subscription, "crm")
 					}
+					insightsLocked={
+						!!retailer &&
+						!retailer.actingAsAdmin &&
+						!hasFeature(retailer.subscription, "insights")
+					}
 				/>
 			</div>
 		</div>
