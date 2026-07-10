@@ -349,9 +349,9 @@ function PhoneMockup({
 					<rect x="44.8" y="4.5" width="1.2" height="3" rx="0.6" />
 				</svg>
 			</div>
-			{/* Chat header row — inside the shell's green band */}
-			<div className="absolute left-[13mm] right-[13mm] top-[15.5mm] flex items-center gap-[2.5mm]">
-				<div className="flex h-[8mm] w-[8mm] shrink-0 items-center justify-center overflow-hidden rounded-full bg-white/90">
+			{/* Chat header row — below the island, per the spec's vector coords */}
+			<div className="absolute left-[16mm] right-[13mm] top-[20.6mm] flex items-center gap-[3.5mm]">
+				<div className="flex h-[13.3mm] w-[13.3mm] shrink-0 items-center justify-center overflow-hidden rounded-full bg-white/90">
 					{logoUrl ? (
 						<img
 							src={logoUrl}
@@ -359,16 +359,16 @@ function PhoneMockup({
 							className="h-full w-full rounded-full object-cover"
 						/>
 					) : (
-						<span className="text-[8pt] font-bold" style={{ color: MINT }}>
+						<span className="text-[12pt] font-bold" style={{ color: MINT }}>
 							{storeName.charAt(0).toUpperCase()}
 						</span>
 					)}
 				</div>
-				<div className="flex min-w-0 flex-col">
-					<span className="truncate text-[11pt] font-semibold leading-tight text-white">
+				<div className="flex min-w-0 flex-col gap-[0.8mm]">
+					<span className="truncate text-[13pt] font-semibold leading-none text-white">
 						{storeName}
 					</span>
-					<span className="text-[7pt] leading-tight text-white/75">
+					<span className="text-[8pt] leading-none text-white/75">
 						{m.poster_chat_online({}, { locale })}
 					</span>
 				</div>
