@@ -388,16 +388,19 @@
 	"pricingpage_cta_how": "Lihat cara ia berfungsi",
 	"pricingpage_no_lockin_note": "Billing tahunan = 10 bulan dibayar, 12 diterima. Batal pada bila-bila masa. Eksport data anda pada bila-bila masa.",
 
-	"poster_headline": "SCAN JE, ORDER TERUS!",
-	"poster_counter_badge": "KAT KAUNTER",
+	"poster_headline": "Scan Je, Order Terus",
+	"poster_counter_badge": "Kat Kaunter",
 	"poster_counter_title": "Order & Ambil Sini",
 	"poster_counter_step1": "Scan QR untuk sambung di WhatsApp",
 	"poster_counter_step2": "Tunjuk chat kepada juruwang — mereka proses pesanan anda",
 	"poster_counter_step3": "Bayar & ambil — resit sampai di WhatsApp",
-	"poster_online_badge": "ORDER ONLINE",
+	"poster_online_badge": "Order Online",
 	"poster_online_title": "Order Dari Rumah",
 	"poster_online_step1": "Scan QR & tengok menu penuh",
 	"poster_online_step2": "Buat pesanan bila-bila masa",
 	"poster_online_step3": "Kami confirm terus di WhatsApp",
-	"poster_powered_by": "POWERED BY"
+	"poster_powered_by": "POWERED BY",
+	"poster_chat_online": "dalam talian",
+	"poster_chat_bubble1": "Nak order, boleh? 😋",
+	"poster_chat_bubble2": "Dah bayar — senang je! 👍"
 }
