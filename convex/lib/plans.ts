@@ -57,14 +57,22 @@ export type PlanFeatures = {
 	 * SETTING a fee — an order that already carries a frozen fee displays it
 	 * on every tier (the fee is inherent to the order). */
 	chargeablePickup: boolean;
+	/** Seller Insights (86ey5tfrz): the /app/insights analytics page. Starter
+	 * gets a locked teaser; the query returns `{ gated: true }` server-side. */
+	insights: boolean;
 };
 
 export type PlanFeature = keyof PlanFeatures;
 
 export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
-	starter: { crm: false, orderInbox: false, chargeablePickup: false },
-	pro: { crm: true, orderInbox: true, chargeablePickup: true },
-	scale: { crm: true, orderInbox: true, chargeablePickup: true },
+	starter: {
+		crm: false,
+		orderInbox: false,
+		chargeablePickup: false,
+		insights: false,
+	},
+	pro: { crm: true, orderInbox: true, chargeablePickup: true, insights: true },
+	scale: { crm: true, orderInbox: true, chargeablePickup: true, insights: true },
 };
 
 export function featuresForPlan(plan: Plan): PlanFeatures {

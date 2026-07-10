@@ -5,6 +5,7 @@ import {
 	ChevronLeft,
 	ChevronRight,
 	Home,
+	LineChart,
 	type LucideIcon,
 	Package,
 	QrCode,
@@ -149,6 +150,12 @@ export function Sidebar({
 								!retailer.actingAsAdmin &&
 								!hasFeature(retailer.subscription, "crm")
 							}
+						/>
+						<SidebarLink
+							to="/app/insights"
+							icon={LineChart}
+							label="Insights"
+							collapsed={collapsed}
 						/>
 						<SidebarLink
 							to="/app/settings"
