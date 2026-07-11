@@ -553,7 +553,12 @@ export function VariantEditor({
 						/>
 					</label>
 					<label className="flex flex-col gap-1 text-sm font-medium">
-						Stock
+						Stock{" "}
+						{rows[0]?.blockWhenOutOfStock === false ? (
+							<span className="font-normal text-muted-foreground">
+								(optional)
+							</span>
+						) : null}
 						<StockInput
 							value={rows[0]?.stock ?? ""}
 							onChange={(v) => setRow(0, { stock: v })}

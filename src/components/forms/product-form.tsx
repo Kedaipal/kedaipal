@@ -159,6 +159,87 @@ function initialEditorState(
 
 const INT_RE = /^\d+$/;
 
+type SubmitVariant = ProductFormSubmitValues["variants"][number];
+
+/**
+ * Turn the editor's grid rows + optional custom line into the submit payload,
+ * validating active variants. Pure (no React/state) so the validation is unit
+ * testable. Returns the first validation error, or the built variant list.
+ *
+ * Stock rule: it only gates the save when the variant is tracking stock
+ * (`blockWhenOutOfStock`). Made-to-order variants never run out — stock is just
+ * a guide — so a blank/omitted value is fine and falls back to 0. Inactive
+ * (deactivated) variants are hidden from buyers, so their price/stock never
+ * block the save either (blank falls back to 0).
+ */
+export function buildSubmitVariants(
+	rows: VariantRow[],
+	customLine: CustomLineDraft | null,
+): { error: string } | { variants: SubmitVariant[] } {
+	const variants: SubmitVariant[] = [];
+	for (const row of rows) {
+		const label = variantLabel(row.optionValues) || "this product";
+		// Price: any non-negative number; rounded to integer sen (2 dp).
+		// parsePriceInput handles comma separators and rejects (rather than
+		// silently truncating) anything non-numeric — see src/lib/format.ts.
+		const priceNum = parsePriceInput(row.price.trim());
+		const priceOk = priceNum !== null;
+		const stockOk = INT_RE.test(row.stock.trim());
+		if (row.active) {
+			if (!priceOk) {
+				return {
+					error: `Enter a valid price for ${label} (e.g. 120 or 120.50).`,
+				};
+			}
+			if (row.blockWhenOutOfStock && !stockOk) {
+				return { error: `Enter a whole-number stock for ${label}.` };
+			}
+		}
+		variants.push({
+			optionValues: row.optionValues,
+			sku: row.sku.trim() || undefined,
+			price: priceOk ? Math.round(priceNum * 100) : 0,
+			onHand: stockOk ? Number.parseInt(row.stock, 10) : 0,
+			active: row.active,
+			blockWhenOutOfStock: row.blockWhenOutOfStock,
+			requiresProof: row.requiresProof,
+			imageStorageIds: row.imageStorageIds,
+		});
+	}
+
+	// Custom line (if enabled) — a flagged entry in the same array. Price is
+	// optional: blank = "Price on quote" (0). The server coerces the made-to-
+	// order + mockup flags and the default label.
+	if (customLine) {
+		const priceStr = customLine.price.trim();
+		let customPrice = 0;
+		if (priceStr.length > 0) {
+			const n = parsePriceInput(priceStr);
+			if (n === null) {
+				return {
+					error:
+						"Enter a valid starting price for the custom option, or leave it blank for price on quote.",
+				};
+			}
+			customPrice = Math.round(n * 100);
+		}
+		variants.push({
+			optionValues: [],
+			price: customPrice,
+			onHand: 0,
+			active: true,
+			blockWhenOutOfStock: false,
+			requiresProof: true,
+			imageStorageIds: customLine.imageStorageIds,
+			isCustom: true,
+			customLabel: customLine.label.trim() || undefined,
+			customPrompt: customLine.prompt.trim() || undefined,
+		});
+	}
+
+	return { variants };
+}
+
 function ProductStepCard({
 	icon,
 	kicker,
@@ -348,73 +429,12 @@ export function ProductForm({
 				}
 			}
 
-			const variants: ProductFormSubmitValues["variants"] = [];
-			for (const row of editor.rows) {
-				const label = variantLabel(row.optionValues) || "this product";
-				// Price: any non-negative number; rounded to integer sen (2 dp).
-				// parsePriceInput handles comma separators and rejects (rather than
-				// silently truncating) anything non-numeric — see src/lib/format.ts.
-				const priceStr = row.price.trim();
-				const priceNum = parsePriceInput(priceStr);
-				const priceOk = priceNum !== null;
-				const stockOk = INT_RE.test(row.stock.trim());
-				// Inactive (deactivated) variants are hidden from buyers, so don't
-				// block the whole save on their price/stock — just fall back to 0 for
-				// any blank/invalid field. Active variants must be fully valid.
-				if (row.active) {
-					if (!priceOk) {
-						setServerError(
-							`Enter a valid price for ${label} (e.g. 120 or 120.50).`,
-						);
-						return;
-					}
-					if (!stockOk) {
-						setServerError(`Enter a whole-number stock for ${label}.`);
-						return;
-					}
-				}
-				variants.push({
-					optionValues: row.optionValues,
-					sku: row.sku.trim() || undefined,
-					price: priceNum !== null ? Math.round(priceNum * 100) : 0,
-					onHand: stockOk ? Number.parseInt(row.stock, 10) : 0,
-					active: row.active,
-					blockWhenOutOfStock: row.blockWhenOutOfStock,
-					requiresProof: row.requiresProof,
-					imageStorageIds: row.imageStorageIds,
-				});
+			const built = buildSubmitVariants(editor.rows, editor.customLine);
+			if ("error" in built) {
+				setServerError(built.error);
+				return;
 			}
-
-			// Custom line (if enabled) — a flagged entry in the same array. Price is
-			// optional: blank = "Price on quote" (0). The server coerces the made-to-
-			// order + mockup flags and the default label.
-			if (editor.customLine) {
-				const cl = editor.customLine;
-				const priceStr = cl.price.trim();
-				let customPrice = 0;
-				if (priceStr.length > 0) {
-					const n = parsePriceInput(priceStr);
-					if (n === null) {
-						setServerError(
-							"Enter a valid starting price for the custom option, or leave it blank for price on quote.",
-						);
-						return;
-					}
-					customPrice = Math.round(n * 100);
-				}
-				variants.push({
-					optionValues: [],
-					price: customPrice,
-					onHand: 0,
-					active: true,
-					blockWhenOutOfStock: false,
-					requiresProof: true,
-					imageStorageIds: cl.imageStorageIds,
-					isCustom: true,
-					customLabel: cl.label.trim() || undefined,
-					customPrompt: cl.prompt.trim() || undefined,
-				});
-			}
+			const variants = built.variants;
 
 			try {
 				await onSubmit({
