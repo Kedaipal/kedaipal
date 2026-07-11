@@ -36,7 +36,7 @@ export function PaymentDonut({
 }) {
 	if (collected <= 0 || payments.length === 0) {
 		return (
-			<div className="flex flex-col gap-1 rounded-2xl border border-border bg-card p-5">
+			<div className="flex min-w-0 flex-col gap-1 rounded-2xl border border-border bg-card p-5">
 				<h3 className="font-heading text-base font-extrabold">
 					How buyers pay
 				</h3>
@@ -66,7 +66,7 @@ export function PaymentDonut({
 	});
 
 	return (
-		<div className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-5">
+		<div className="flex min-w-0 flex-col gap-4 rounded-2xl border border-border bg-card p-5">
 			<h3 className="font-heading text-base font-extrabold">How buyers pay</h3>
 			<div className="flex flex-col items-center gap-5 sm:flex-row sm:gap-6">
 				<div className="relative size-40 shrink-0">

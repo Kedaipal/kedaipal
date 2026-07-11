@@ -2,7 +2,7 @@ import { Package } from "lucide-react";
 import type { ProductMetric, ProductStat } from "../../../convex/lib/insights";
 import { topProducts } from "../../../convex/lib/insights";
 import { formatPrice, formatPriceCompact } from "../../lib/format";
-import { FilterChip, FilterChipRow } from "../ui/filter-chip";
+import { FilterChip } from "../ui/filter-chip";
 
 // Horizontal-bar ranking of best sellers, grouped by product+variant. Toggle
 // ranks by revenue or by units. Names come from the ORDER-ITEM snapshot, so a
@@ -31,10 +31,13 @@ export function TopProducts({
 			: 0;
 
 	return (
-		<div className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-5">
-			<div className="flex flex-wrap items-center justify-between gap-3">
+		<div className="flex min-w-0 flex-col gap-4 rounded-2xl border border-border bg-card p-5">
+			{/* Title + toggle wrap to their own lines on a narrow card — the toggle
+			    is a plain (non-bleeding) chip pair, NOT the page-level FilterChipRow
+			    whose -mx-5 would break out of the card padding. */}
+			<div className="flex flex-wrap items-center justify-between gap-2">
 				<h3 className="font-heading text-base font-extrabold">Top products</h3>
-				<FilterChipRow>
+				<div className="flex shrink-0 gap-2">
 					<FilterChip
 						selected={metric === "revenue"}
 						onClick={() => onMetricChange("revenue")}
@@ -47,7 +50,7 @@ export function TopProducts({
 					>
 						By quantity
 					</FilterChip>
-				</FilterChipRow>
+				</div>
 			</div>
 
 			{ranked.length === 0 ? (

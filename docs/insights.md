@@ -101,11 +101,21 @@ a bespoke gate — `insights` is one key in `PlanFeatures`:
 ## Frontend
 
 - Route: `src/routes/app.insights.tsx` (Pro: full page; Starter/non-Pro: teaser).
-- Components in `src/components/insights/`: `kpi-row`, `revenue-trend` (SVG-free
-  bars), `top-products` (bar list + revenue/quantity toggle + thumbnails),
+- Components in `src/components/insights/`: `kpi-row`, `revenue-trend`,
+  `top-products` (bar list + revenue/quantity toggle + thumbnails),
   `payment-donut` (hand-rolled SVG, **no chart library** — monochrome mint by
   opacity, on-brand), `date-range-control` (preset chips + custom range) and
   `locked-teaser`.
+- **Trend interaction is a scrubber, not hover** (mobile-first): a hover `title`
+  is mute on a phone and a 30-day range gives ~11px bars (below the 44px tap
+  rule), so the whole chart is tap/drag-scrubbable — the nearest bar selects
+  (Apple-Health style), lights up solid mint while the rest dim, and a readout
+  row above the chart shows the bucket's date, earned revenue and order count
+  plus a **"View orders" deep link** into the inbox filtered to that bucket
+  (`/app/orders?from&to` on `createdAt`). No selection → the readout shows the
+  peak day/week + a "tap or drag" hint. Keyboard: focus + ←/→/Home/End move the
+  selection, Esc clears (`role="slider"` with `aria-valuetext`). `touch-action:
+  pan-y` keeps vertical page scroll working while horizontal drags scrub.
 - New primitives: `src/components/ui/calendar.tsx` (themed `react-day-picker`,
   range mode) and `src/components/ui/sheet.tsx` (mobile bottom-sheet on radix
   Dialog).
@@ -138,6 +148,9 @@ a bespoke gate — `insights` is one key in `PlanFeatures`:
   paid, pending-but-paid, product grouping, deleted-product snapshot, MYT 00:30
   boundary, day/week bucketing, donut = collected invariant, merge helpers).
 - `src/lib/insights-view.test.ts` — presets + range/today merge onto the grid.
+- `src/components/insights/revenue-trend.test.tsx` — the scrubber (pure
+  `scrubIndex`/`bucketRange`, tap/drag selection, zero-order bucket hides the
+  link, arrow-key navigation, Esc/✕ clear) on a real memory router.
 - Gate: `PLAN_FEATURES.insights` (`convex/lib/plans.test.ts` +
   `convex/subscriptions.test.ts`) + `hasFeature(sub, "insights")`
   (`src/lib/subscription.test.ts`).
