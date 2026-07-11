@@ -262,6 +262,14 @@ Lives in `src/components/forms/variant-editor.tsx` + `product-form.tsx`.
   out of stock — off = made-to-order") was a confusing double-negative. Replaced with a
   two-segment toggle — **📦 Track stock** vs **🧑‍🍳 Made to order** (`FulfilmentToggle`,
   `aria-pressed`). Field semantics unchanged: pressed "Track stock" = `blockWhenOutOfStock:true`.
+- **Stock is optional for made-to-order.** A made-to-order variant never runs out — stock is
+  just a guide — so the save must not demand a stock value for it. The submit validation only
+  requires a whole-number stock when the variant **tracks** stock (`blockWhenOutOfStock`); a
+  made-to-order (or deactivated) variant with a blank/omitted stock falls back to `0`. In
+  single-variant mode the Stock label picks up a **"(optional)"** hint the moment the seller
+  flips to Made to order, so the relaxed requirement is discoverable. The build+validation is
+  extracted into the pure, unit-tested `buildSubmitVariants(rows, customLine)` in
+  `product-form.tsx` (returns `{ variants }` or the first `{ error }`).
 - **Mockup approval, legibly.** `requiresProof` copy rewritten so a cake decorator recognises
   it ("…e.g. a cake decorator gets the design approved before baking"). `MockupApprovalToggle`.
 - **One-time legend for the grid.** Per-variant toggles render `compact` (no inline helper —
@@ -281,7 +289,10 @@ Lives in `src/components/forms/variant-editor.tsx` + `product-form.tsx`.
   "Pricing & stock" section heading that signposts variants up-front.
 - **Tests:** `src/components/forms/variant-editor.test.tsx` — the repo's first component test
   (per-file `@vitest-environment jsdom`, `convex/react` stubbed); covers the fulfilment
-  reframe, approval copy, and the responsive card+table render.
+  reframe, approval copy, the responsive card+table render, and the made-to-order
+  "(optional)" Stock hint. `src/components/forms/product-form.test.ts` unit-tests
+  `buildSubmitVariants` — made-to-order/deactivated blank stock → `0`, track-stock blank stock
+  → error, `0` accepted either way, and the custom-line append.
 
 ### Considered & deferred — buyer geolocation button
 A browser-Geolocation "use my current location" button (reverse-geocode to prefill the
