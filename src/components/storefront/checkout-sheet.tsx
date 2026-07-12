@@ -724,7 +724,9 @@ export function CheckoutSheet({
 												<>
 													<div className="flex items-center justify-between text-sm text-muted-foreground">
 														<span>Subtotal</span>
-														<span>{formatPrice(cart.total, cart.currency)}</span>
+														<span>
+															{formatPrice(cart.total, cart.currency)}
+														</span>
 													</div>
 													<div className="flex items-center justify-between text-sm text-muted-foreground">
 														<span>Pickup fee — {selectedPickup?.label}</span>

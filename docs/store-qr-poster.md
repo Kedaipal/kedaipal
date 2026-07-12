@@ -2,7 +2,8 @@
 
 ClickUp: `86ey5m4m9` (poster v1) · `86ey65cx8` (v2 redesign, paired with Kris's
 design task `86ey65cm6`) · pairs with `86ey5m35w` (static QR backend) ·
-Route: `/app/poster` · v1 shipped Jul 2026, v2 re-skin Jul 2026
+Route: `/app/poster` · v1 shipped Jul 2026, v2 re-skin Jul 2026, v3 single-QR
+templates Jul 2026
 
 ## What / why
 
@@ -60,13 +61,54 @@ is always the default.
 - The photo renders as an `<img>` + rgba overlay div, **not** CSS backgrounds,
   so it prints regardless of the "Background graphics" checkbox.
 
+## Poster templates (v3)
+
+A third segmented control — **"Poster type": Both QRs | Counter only | Online
+only** — sits **first** in the control card (it's the structural choice; the
+language and header-background toggles style whichever template is picked).
+Session-only state, **default "Both QRs"**. v3 also touches the two-QR sheet
+itself (owner call, deliberately departing from the strict v2 spec): both
+56mm QRs get the **Kedaipal centre mark** (12.5mm panel) and the gap between
+the counter and online sections widens 3mm → **6mm** (rows end ~200mm, ~4mm
+clear of the 204mm footer — ~9mm is the gap's ceiling).
+
+The two single-QR templates are for sellers who need one context per surface —
+a stall counter that only rings up walk-ins, or an online flyer/story image —
+and emphasize the QR the way DuitNow/TNG payment posters do:
+
+- **Anatomy:** shared header (mint/cover, store lockup + URL pill) → hero
+  badge (reuses `poster_counter_badge` / `poster_online_badge`, upsized to
+  16pt) → one **giant 80mm QR** in a mint-bordered white card → the same
+  numbered steps as the two-QR template (13pt, centered as a block) → the
+  shared band + POWERED BY footer + phone mockup. No new copy keys — badge
+  and steps are the existing `poster_counter_*` / `poster_online_*` strings.
+- **Kedaipal mark in the QR centre** (`QrCenterMark`: `public/logo.svg` on a
+  white rounded panel — 18mm panel/11.5mm mark on the 80mm hero QR, 12.5mm
+  panel/8mm mark on the 56mm two-QR boxes; both ≈ 22% of the QR's side →
+  **~5% of its area**). Safe by construction: level-H tolerates ~30% covered
+  codewords; decode verified empirically against the real `wa.me` KPS payload
+  at both sizes. The panel is centered with auto margins (no transforms —
+  print-safe) and is an element `<img>`/div, so it prints without
+  "Background graphics".
+- **80mm is the QR's ceiling with the step list present:** the body region
+  runs 63mm (header) → 204mm (footer pill); badge + gaps + card chrome +
+  three step lines total ~138mm, ending ~3mm clear of the pinned
+  footer/phone anchors. Enlarging the QR collides with the footer.
+- The **helper text under the Print button adapts per template**
+  (`TEMPLATE_HELP` in the route) so each poster names what its QR(s) do —
+  no hidden behavior.
+- Counter-only has no disabled state: while the walk-in token resolves (or if
+  `WHATSAPP_CHECKOUT_PHONE` is unset) the giant QR uses the same storefront
+  `?src=counter` fallback as the two-QR template, so it always prints.
+
 ## Files
 
 | File | Role |
 |---|---|
-| `src/routes/app.poster.tsx` | Page: language + header-background toggles, print button (cover-load gated), rotate card, scaled preview, route-scoped print CSS, resolves the walk-in `waUrl` + ensures the token |
-| `src/components/poster/store-poster.tsx` | Pure presentational A4 sheet (`counterUrl`/`onlineUrl`/`headerImageUrl` props) + `posterQrUrls()` storefront fallback helper |
+| `src/routes/app.poster.tsx` | Page: template + language + header-background toggles, print button (cover-load gated) with per-template helper text, rotate card, scaled preview, route-scoped print CSS, resolves the walk-in `waUrl` + ensures the token |
+| `src/components/poster/store-poster.tsx` | Pure presentational A4 sheet (`counterUrl`/`onlineUrl`/`headerImageUrl`/`variant` props, `SingleQrHero` for the single-QR templates) + `posterQrUrls()` storefront fallback helper |
 | `public/poster/*` | v2 static assets exported from Kris's Figma: `doodles-left/right.svg` (band line art), `phone-shell.png` (empty phone frame, live content overlaid), `kedaipal-lockup.svg` (footer wordmark) |
+| `public/logo.svg` | The standalone Kedaipal mark, reused as the giant QR's centre overlay |
 | `convex/counterCheckout.ts` | `getStoreQr` / `ensureCounterQrToken` (from `86ey5m35w`) — the counter QR's `KPS-` deep link |
 | `src/lib/storefront-url.ts` | Canonical storefront origin/URL construction (also used by `/app` home) |
 | `messages/en.json` / `messages/ms.json` | `poster_*` copy keys incl. the phone-mockup chat bubbles (guarded by `src/lib/i18n.test.ts` parity tests) |
@@ -99,7 +141,10 @@ explicit locale — `m.poster_headline({}, { locale })` — so the seller's togg
 not the `PARAGLIDE_LOCALE` cookie, decides the language. BM copy is locked from
 the Mr Ganu reference poster (v2 kept the same strings, casing per Kris's
 spec); EN is a translation of it. v2 adds `poster_chat_*` — the phone mockup's
-"online" status and two buyer-side sample bubbles.
+"online" status and two buyer-side sample bubbles. v3 adds **no new keys** —
+the single-QR templates reuse the existing badge + step strings. **Keep step
+copy ≤ ~60 chars**: the single-QR layout budgets one 13pt line per step, and
+a wrap pushes the stack toward the pinned footer (~3mm clearance).
 
 ## QR codes
 
@@ -109,6 +154,10 @@ spec); EN is a translation of it. v2 adds `poster_chat_*` — the phone mockup's
   (~10% shrink): 56 × 0.9 ≈ 50mm, still ≥45mm. **Deliberate deviation from the
   v2 mockup**, which drew the QR boxes at ~47mm (≈36mm after the iOS shrink);
   the ticket AC overrides the mockup here.
+- The single-QR templates render one **80mm** module area (72mm after the
+  iOS shrink) with 5mm white padding ≈ 3 modules of quiet zone — parity
+  with the 56mm boxes' 3mm. Same `level="H"`; the centre mark overlay math is
+  in "Poster templates (v3)" above.
 - **Counter QR (top)** = `getStoreQr().waUrl`, the permanent walk-in
   `wa.me?text=…KPS-<retailers.counterQrToken>…` deep link (`86ey5m35w`). The
   route **auto-provisions** the token on first visit — a one-shot
@@ -161,8 +210,13 @@ identity and would stamp the admin's own store.
 
 - Chrome desktop: single full-bleed A4 page, colors without "Background
   graphics", no blank page 2 (the band + phone bleed is clipped by the sheet).
+  Repeat for **each of the three templates**.
 - iOS Safari: Share → Print → pinch preview; QR visually ≥45mm, nothing
   clipped (the sheet's 17mm internal padding absorbs printer margins).
+- Single-QR templates: **scan the printed giant QR with a real phone**
+  (Android camera + iPhone) — the centre-mark tolerance is theoretical until
+  scanned. Counter → WhatsApp opens with the `KPS-` text; online →
+  storefront. Confirm the hint line sits clear of the POWERED BY pill.
 - Cover-photo variant: header prints the photo + scrim, not a white box.
 - Print any *other* dashboard page: chrome hidden, normal margins (proves the
   `@page` rule didn't leak).

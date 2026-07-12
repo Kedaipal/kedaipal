@@ -10,6 +10,7 @@ import {
 } from "../components/dashboard/page-header";
 import {
 	type PosterLocale,
+	type PosterVariant,
 	posterQrUrls,
 	StorePoster,
 } from "../components/poster/store-poster";
@@ -46,6 +47,18 @@ const POSTER_PRINT_CSS = `
 
 type HeaderStyle = "brand" | "cover";
 
+/**
+ * Print-button helper text per template — the poster's behavior must never be
+ * guessed from the preview alone, so each template names what its QR(s) do.
+ */
+const TEMPLATE_HELP: Record<PosterVariant, string> = {
+	both: 'In the print dialog, choose "Save as PDF" to download. The top QR connects walk-up buyers to you on WhatsApp so you can ring them up at the counter; the bottom QR opens your storefront for ordering from home.',
+	counter:
+		'In the print dialog, choose "Save as PDF" to download. This poster has one big counter QR — walk-up buyers scan it to connect with you on WhatsApp, and you ring up their order at the counter.',
+	online:
+		'In the print dialog, choose "Save as PDF" to download. This poster has one big online QR — buyers scan it to open your storefront and order from home.',
+};
+
 function PosterRoute() {
 	const retailer = useDashboardRetailer();
 	const actAsRetailerId = useActAsRetailerId();
@@ -68,6 +81,9 @@ function PosterRoute() {
 	// Poster copy is buyer-facing, so the seller picks its language here —
 	// default BM (Malaysian buyers) — independent of the dashboard locale.
 	const [posterLocale, setPosterLocale] = useState<PosterLocale>("ms");
+	// Poster template: the approved two-QR sheet (default) or a single giant
+	// DuitNow-style QR for one context. Session-only, like the other toggles.
+	const [template, setTemplate] = useState<PosterVariant>("both");
 	// Header background: brand mint (Kris's approved default) or the seller's
 	// storefront cover photo. Session-only, like the language toggle.
 	const [headerStyle, setHeaderStyle] = useState<HeaderStyle>("brand");
@@ -177,8 +193,20 @@ function PosterRoute() {
 					</p>
 				</div>
 
-				{/* One control surface: style the poster, then print it. */}
+				{/* One control surface: pick the template, style it, print it. The
+				    template comes first — it's the structural choice; language and
+				    header background style whichever template is picked. */}
 				<div className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-4 lg:max-w-2xl">
+					<PosterToggle
+						label="Poster type"
+						options={[
+							{ value: "both", label: "Both QRs" },
+							{ value: "counter", label: "Counter only" },
+							{ value: "online", label: "Online only" },
+						]}
+						value={template}
+						onChange={(v) => setTemplate(v as PosterVariant)}
+					/>
 					<PosterToggle
 						label="Poster language"
 						options={[
@@ -233,10 +261,7 @@ function PosterRoute() {
 						)}
 					</Button>
 					<p className="text-xs text-muted-foreground">
-						In the print dialog, choose "Save as PDF" to download. The top QR
-						connects walk-up buyers to you on WhatsApp so you can ring them up
-						at the counter; the bottom QR opens your storefront for ordering
-						from home.
+						{TEMPLATE_HELP[template]}
 					</p>
 				</div>
 
@@ -305,6 +330,7 @@ function PosterRoute() {
 						locale={posterLocale}
 						counterUrl={counterUrl}
 						onlineUrl={onlineUrl}
+						variant={template}
 					/>
 				</div>
 			</div>
@@ -329,7 +355,9 @@ function PosterToggle({
 	onChange: (value: string) => void;
 }) {
 	return (
-		<div className="flex items-center justify-between gap-3">
+		// flex-wrap: a 3-option toggle (Poster type) outgrows a 390px row, so
+		// the pill group drops to its own line instead of overflowing the card.
+		<div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
 			<span className="text-sm font-semibold">{label}</span>
 			<fieldset
 				className="flex rounded-xl border border-border p-1"
@@ -342,7 +370,7 @@ function PosterToggle({
 						onClick={() => onChange(opt.value)}
 						disabled={opt.disabled}
 						aria-pressed={value === opt.value}
-						className={`min-h-11 rounded-lg px-4 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+						className={`min-h-11 rounded-lg px-3 text-sm font-semibold whitespace-nowrap transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-40 sm:px-4 ${
 							value === opt.value
 								? "bg-foreground text-background"
 								: "text-muted-foreground hover:bg-muted"
