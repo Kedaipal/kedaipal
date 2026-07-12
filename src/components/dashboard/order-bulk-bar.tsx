@@ -1,4 +1,4 @@
-import { Check, ChevronDown, X } from "lucide-react";
+import { Check, ChevronDown, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import { cn } from "../../lib/utils";
 import { ConfirmDialog } from "../ui/confirm-dialog";
@@ -27,12 +27,17 @@ export type BulkAction = {
  * stock, reverses customer aggregates, AND sends an unrecallable WhatsApp
  * cancellation to every selected customer, so a misclick is costly. Forward
  * transitions apply immediately.
+ *
+ * `onDelete` (optional) adds a **permanent hard delete** below Cancel — its own
+ * confirm dialog with harsher copy, since it erases the orders and their records
+ * outright (no WhatsApp is sent).
  */
 export function OrderBulkBar({
 	count,
 	actions,
 	allSelected,
 	onApply,
+	onDelete,
 	onToggleSelectAll,
 	onExit,
 	busy = false,
@@ -45,6 +50,8 @@ export function OrderBulkBar({
 	// May return a promise — the destructive confirm awaits it so the confirm
 	// button shows its in-flight spinner and stays open if the apply rejects.
 	onApply: (status: BulkAction["status"]) => void | Promise<void>;
+	// Permanent hard delete of the selection. Omit to hide the delete item.
+	onDelete?: () => void | Promise<void>;
 	onToggleSelectAll: () => void;
 	onExit: () => void;
 	busy?: boolean;
@@ -52,6 +59,7 @@ export function OrderBulkBar({
 	const [open, setOpen] = useState(false);
 	const [pendingDestructive, setPendingDestructive] =
 		useState<BulkAction | null>(null);
+	const [pendingDelete, setPendingDelete] = useState(false);
 	const orderWord = count === 1 ? "order" : "orders";
 	const hasSelection = count > 0;
 
@@ -61,6 +69,11 @@ export function OrderBulkBar({
 		// Forward transitions apply immediately and fire-and-forget — the apply
 		// surfaces its own error toast, so swallow the rejection here.
 		else void Promise.resolve(onApply(a.status)).catch(() => {});
+	}
+
+	function handleDelete() {
+		setOpen(false);
+		setPendingDelete(true);
 	}
 
 	return (
@@ -126,6 +139,18 @@ export function OrderBulkBar({
 									</button>
 								);
 							})}
+							{onDelete ? (
+								<button
+									type="button"
+									onClick={handleDelete}
+									className={cn(
+										"mt-1 flex h-11 items-center gap-2 rounded-md border-t border-border px-3 pt-2 text-left text-sm text-destructive transition-colors hover:bg-destructive/10",
+									)}
+								>
+									<Trash2 className="size-4 shrink-0" aria-hidden="true" />
+									Delete permanently
+								</button>
+							) : null}
 						</div>
 					</PopoverContent>
 				</Popover>
@@ -148,6 +173,21 @@ export function OrderBulkBar({
 					// bulk op runs and keep itself open if it rejects.
 					if (action) return onApply(action.status);
 				}}
+			/>
+
+			{/* Permanent hard delete — harsher confirm; erases the orders + records
+			    with no WhatsApp to the buyers. */}
+			<ConfirmDialog
+				open={pendingDelete}
+				onOpenChange={(o) => {
+					if (!o) setPendingDelete(false);
+				}}
+				title={`Delete ${count} ${orderWord} permanently?`}
+				description={`This erases ${count === 1 ? "the order" : "these orders"}, ${count === 1 ? "its" : "their"} timeline and any uploaded images for good. Reserved stock is returned and your totals are adjusted; ${count === 1 ? "the customer is" : "customers are"} NOT notified. This can't be undone.`}
+				confirmLabel={`Delete ${count} ${orderWord}`}
+				cancelLabel={`Keep ${orderWord}`}
+				destructive
+				onConfirm={() => onDelete?.()}
 			/>
 		</div>
 	);

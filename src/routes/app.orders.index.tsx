@@ -157,6 +157,7 @@ function OrdersRoute() {
 	const convex = useConvex();
 
 	const bulkUpdateStatus = useMutation(api.orders.bulkUpdateStatus);
+	const bulkDeleteOrders = useMutation(api.orders.bulkDeleteOrders);
 	const [exporting, setExporting] = useState(false);
 
 	const [searchInput, setSearchInput] = useState(q);
@@ -344,6 +345,26 @@ function OrdersRoute() {
 			toast.error(convexErrorMessage(err));
 			// Rethrow so the destructive confirm dialog stays open for a retry; the
 			// toast above is the user-facing message (ConfirmDialog swallows this).
+			throw err;
+		} finally {
+			setBulkBusy(false);
+		}
+	}
+
+	async function applyBulkDelete() {
+		const ids = [...selected] as Id<"orders">[];
+		if (ids.length === 0) return;
+		setBulkBusy(true);
+		try {
+			const res = await bulkDeleteOrders({ orderIds: ids });
+			toast.success(
+				`Deleted ${res.deleted} order${res.deleted === 1 ? "" : "s"}`,
+			);
+			// Stay in select mode (see applyBulk) — clear the selection only.
+			setSelected(new Set());
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+			// Rethrow so the confirm dialog stays open for a retry.
 			throw err;
 		} finally {
 			setBulkBusy(false);
@@ -696,6 +717,7 @@ function OrdersRoute() {
 					actions={bulkActions}
 					allSelected={allSelected}
 					onApply={applyBulk}
+					onDelete={applyBulkDelete}
 					onToggleSelectAll={toggleSelectAll}
 					onExit={exitSelectMode}
 					busy={bulkBusy}

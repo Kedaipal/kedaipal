@@ -96,4 +96,25 @@ describe("OrderBulkBar", () => {
 		fireEvent.click(screen.getByRole("button", { name: /keep orders/i }));
 		expect(onApply).not.toHaveBeenCalled();
 	});
+
+	it("hides the delete action unless onDelete is provided", () => {
+		renderBar();
+		fireEvent.click(screen.getByRole("button", { name: /update status/i }));
+		expect(screen.queryByRole("button", { name: /delete permanently/i })).toBeNull();
+	});
+
+	it("gates delete behind its own confirm and calls onDelete", () => {
+		const onDelete = vi.fn();
+		const onApply = vi.fn();
+		renderBar({ onDelete, onApply });
+		fireEvent.click(screen.getByRole("button", { name: /update status/i }));
+		fireEvent.click(screen.getByRole("button", { name: /delete permanently/i }));
+		// Opens a confirm — nothing fired yet, and it's NOT the status apply.
+		expect(onDelete).not.toHaveBeenCalled();
+		expect(onApply).not.toHaveBeenCalled();
+		expect(screen.getByRole("dialog")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: /delete 2 orders/i }));
+		expect(onDelete).toHaveBeenCalledTimes(1);
+		expect(onApply).not.toHaveBeenCalled();
+	});
 });

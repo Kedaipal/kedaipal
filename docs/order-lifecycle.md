@@ -101,6 +101,58 @@ Auth-gated (Clerk); ownership checked (`retailer.userId === identity.subject`). 
 - **Audit** — every transition writes an `orderEvents` row.
 - **Notification** — schedules `notifyStatusChange` (fire-and-forget). It no-ops for `pending`/`confirmed` (those are covered by the confirmation flow) and when the order has no `customerWaPhone`. Messages are localized; `shipped` includes the carrier URL when set.
 
+## Hard delete — permanent erase (`deleteOrder` / `bulkDeleteOrders`)
+
+Separate from cancellation. **Cancel** keeps the row (a terminal `cancelled`
+status, buyer notified). **Hard delete** erases the order and everything derived
+from it, leaving no tombstone — for test / spam / duplicate orders a seller just
+wants gone. Store owners and an admin acting-as can do it (`requireOrderAccess`
+→ owner OR admin; admin writes drop an `adminAuditLog` row, action
+`orders.hardDelete` / `orders.bulkDeleteOrders`). ClickUp `86ey8fr8t`.
+
+**It is silent** — unlike cancel, NO WhatsApp/email is sent. (That's the reason
+delete isn't "cancel-then-remove": you don't want to ping the buyer of a junk
+order.)
+
+The cascade lives in `deleteOrderCascade` (shared by both mutations so single and
+bulk can't drift):
+
+1. **Reverse the create-time effects — but only if the order isn't already
+   `cancelled`.** A live order still counts toward stock reservations, the
+   customer's lifetime aggregates, and the monthly usage meter, so deleting it
+   runs `reverseCancellationEffects` (restore hard-block stock, decrement
+   customer `orderCount`/`totalSpent`, un-meter usage from its **creation**
+   month). A `cancelled` order **already** had this applied on the way into
+   `cancelled` — re-running would double-count, so it's skipped. This guard is
+   the one real correctness trap; `reverseCancellationEffects` is the same helper
+   `applyStatusTransition` uses, extracted so the two paths share it.
+2. **Delete owned storage blobs** — buyer reference image, payment proof, and
+   mockup image(s) (`mockupImageStorageIds ?? [mockupImageStorageId]`, deduped;
+   per-blob errors swallowed — a missing blob mustn't abort). Order
+   receipt/invoice PDFs are generated on demand and never persisted, so there's
+   nothing to reclaim there. Subscription invoices are billing artefacts tied to
+   `subscriptions`, **not** orders — untouched.
+3. **Delete the `orderEvents` timeline** (`by_order` index).
+4. **Unlink any counter-checkout session** that spawned the order (new
+   `counterCheckoutSessions.by_order` index → set `orderId: undefined`; the
+   session is ephemeral and purged on its own cron, so we just drop the dangling
+   ref rather than delete it).
+5. **Delete the order row.**
+
+Scheduled jobs that reference orders (e.g. the payment-reminder cron) already
+no-op on a missing order, so a delete between schedule and fire is safe.
+
+**Gating:** single `deleteOrder` is all-tier (cleaning up your own orders isn't a
+Pro feature, mirroring `updateStatus`). Bulk `bulkDeleteOrders` is an Order Inbox
+surface → **Pro+** (admin act-as bypasses), capped at 100/batch, and fails the
+whole batch on any foreign id — identical posture to `bulkUpdateStatus`.
+
+**UI:** a "Delete permanently" danger action in the order-detail More-actions
+section (confirm dialog with an extra warning when the order is paid/delivered —
+it'll vanish from CSV/revenue records), and a "Delete permanently" item in the
+inbox bulk bar behind its own confirm. Both make clear the buyer is NOT notified
+and it can't be undone.
+
 ## Public shopper mutations (capability = `trackingToken`)
 
 Trust model: knowing the high-entropy `orders.trackingToken` is the capability — anyone with the tracking link (`/track/<token>`) can act. The human `shortId` is NOT a secret. Each is rate-limited per `token`. See [`infra-cost-scaling.md` §6](./infra-cost-scaling.md).
