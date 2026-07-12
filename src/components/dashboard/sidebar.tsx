@@ -5,6 +5,7 @@ import {
 	ChevronLeft,
 	ChevronRight,
 	Home,
+	LineChart,
 	type LucideIcon,
 	Package,
 	QrCode,
@@ -148,6 +149,18 @@ export function Sidebar({
 							pro={
 								!retailer.actingAsAdmin &&
 								!hasFeature(retailer.subscription, "crm")
+							}
+						/>
+						<SidebarLink
+							to="/app/insights"
+							icon={LineChart}
+							label="Insights"
+							collapsed={collapsed}
+							// Insights is Pro+ — mark it in nav so the gate is never a
+							// surprise (the route shows the teaser). Act-as admins see through.
+							pro={
+								!retailer.actingAsAdmin &&
+								!hasFeature(retailer.subscription, "insights")
 							}
 						/>
 						<SidebarLink

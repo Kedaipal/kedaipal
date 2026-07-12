@@ -228,6 +228,7 @@ describe("plan gating — CRM (Pro+)", () => {
 			crm: true,
 			orderInbox: true,
 			chargeablePickup: true,
+			insights: true,
 		});
 
 		await setPlan(t, retailer._id, "starter");
@@ -236,6 +237,7 @@ describe("plan gating — CRM (Pro+)", () => {
 			crm: false,
 			orderInbox: false,
 			chargeablePickup: false,
+			insights: false,
 		});
 	});
 });
