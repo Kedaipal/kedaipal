@@ -1402,6 +1402,56 @@ type TransitionStatus =
  * The caller owns auth AND the mockup gate (single throws; bulk skips), so this
  * helper assumes the transition is permitted.
  */
+/**
+ * Undo an order's live-side effects: restore reserved stock, reverse the
+ * customer's lifetime aggregates, and un-meter the order from its creation
+ * month. This is the exact inverse of what `create` did, and is applied on the
+ * FIRST move into "cancelled" AND on a hard delete of a still-live order.
+ *
+ * The caller owns the guard: this MUST run at most once per order (a cancelled
+ * order has already had it applied, so re-running would double-count). Only
+ * variants whose parent product hard-blocks were ever decremented at create, so
+ * only those are restored; items without a variantId are legacy (pre-variant),
+ * skipped.
+ */
+async function reverseCancellationEffects(
+	ctx: MutationCtx,
+	order: Doc<"orders">,
+	now: number,
+): Promise<void> {
+	const restoreByVariant = new Map<Id<"productVariants">, number>();
+	for (const item of order.items) {
+		if (!item.variantId) continue;
+		restoreByVariant.set(
+			item.variantId,
+			(restoreByVariant.get(item.variantId) ?? 0) + item.quantity,
+		);
+	}
+	for (const [variantId, qty] of restoreByVariant) {
+		const fresh = await ctx.db.get(variantId);
+		if (!fresh) continue; // variant was deleted; nothing to restore
+		const product = await ctx.db.get(fresh.productId);
+		if (!product) continue;
+		// Mirror the create-time decrement: a variant was only reserved when
+		// its resolved flag hard-blocks (per-variant override ?? product default).
+		const block = fresh.blockWhenOutOfStock ?? product.blockWhenOutOfStock;
+		if (block !== true) continue; // made-to-order — never decremented
+		await ctx.db.patch(variantId, { onHand: fresh.onHand + qty, updatedAt: now });
+	}
+
+	// Reverse this order's contribution to the customer's lifetime aggregates.
+	if (order.customerId) {
+		await decrementAggregatesForCancel(ctx, {
+			customerId: order.customerId,
+			orderTotal: order.total,
+		});
+	}
+
+	// Un-meter the order from its creation month (runs regardless of customer
+	// linkage — every created order was counted). See convex/subscriptionUsage.ts.
+	await recordOrderCancelled(ctx, order.retailerId, order.createdAt);
+}
+
 async function applyStatusTransition(
 	ctx: MutationCtx,
 	order: Doc<"orders">,
@@ -1410,44 +1460,10 @@ async function applyStatusTransition(
 ): Promise<void> {
 	const now = Date.now();
 
-	// Restore stock on the FIRST transition into cancelled. Idempotent —
-	// re-cancelling a cancelled order is a no-op for stock. Only variants whose
-	// parent product hard-blocks were ever decremented, so only those are
-	// restored. Items without a variantId are legacy (pre-variant) orders, skipped.
+	// Restore stock + reverse aggregates/usage on the FIRST transition into
+	// cancelled. Idempotent — re-cancelling a cancelled order is a no-op.
 	if (status === "cancelled" && order.status !== "cancelled") {
-		const restoreByVariant = new Map<Id<"productVariants">, number>();
-		for (const item of order.items) {
-			if (!item.variantId) continue;
-			restoreByVariant.set(
-				item.variantId,
-				(restoreByVariant.get(item.variantId) ?? 0) + item.quantity,
-			);
-		}
-		for (const [variantId, qty] of restoreByVariant) {
-			const fresh = await ctx.db.get(variantId);
-			if (!fresh) continue; // variant was deleted; nothing to restore
-			const product = await ctx.db.get(fresh.productId);
-			if (!product) continue;
-			// Mirror the create-time decrement: a variant was only reserved when
-			// its resolved flag hard-blocks (per-variant override ?? product default).
-			const block = fresh.blockWhenOutOfStock ?? product.blockWhenOutOfStock;
-			if (block !== true) continue; // made-to-order — never decremented
-			await ctx.db.patch(variantId, { onHand: fresh.onHand + qty, updatedAt: now });
-		}
-
-		// Reverse this order's contribution to the customer's lifetime aggregates.
-		// Same first-transition guard keeps it idempotent.
-		if (order.customerId) {
-			await decrementAggregatesForCancel(ctx, {
-				customerId: order.customerId,
-				orderTotal: order.total,
-			});
-		}
-
-		// Un-meter the order from its creation month (same first-transition
-		// guard; runs regardless of customer linkage — every created order was
-		// counted). See convex/subscriptionUsage.ts.
-		await recordOrderCancelled(ctx, order.retailerId, order.createdAt);
+		await reverseCancellationEffects(ctx, order, now);
 	}
 
 	const patch: Partial<{
@@ -1562,6 +1578,123 @@ export const bulkUpdateStatus = mutation({
 		if (batchAccess)
 			await logAdminAction(ctx, batchAccess, "orders.bulkUpdateStatus");
 		return { updated, skipped };
+	},
+});
+
+/**
+ * Permanently erase an ALREADY-AUTHORIZED order and everything derived from it.
+ * Irreversible — there is no soft-delete tombstone. Shared by `deleteOrder`
+ * (single) and `bulkDeleteOrders` so the cascade can't drift.
+ *
+ * Unlike cancellation this is SILENT: no WhatsApp/email is sent (a hard delete
+ * is for test/spam/duplicate orders you want gone, not for telling the buyer).
+ *
+ * Cascade:
+ *  1. If the order is still live (not already cancelled), reverse its create-time
+ *     effects — restore stock, reverse customer aggregates, un-meter usage. A
+ *     cancelled order already had this applied on cancel, so we must NOT repeat it.
+ *  2. Delete every storage blob the order owns (buyer reference image, payment
+ *     proof, mockup image(s)). Order receipt/invoice PDFs are generated on demand
+ *     and never persisted, so there's nothing to clean up there.
+ *  3. Delete the order's `orderEvents` timeline.
+ *  4. Unlink any counter-checkout session that produced this order (the session
+ *     is ephemeral and purged on its own cron; we just drop the dangling ref).
+ *  5. Delete the order row itself.
+ */
+async function deleteOrderCascade(
+	ctx: MutationCtx,
+	order: Doc<"orders">,
+): Promise<void> {
+	const now = Date.now();
+
+	// 1. Reverse live-side effects only for an order that hasn't already been
+	//    cancelled (a cancelled order reversed them on the way into cancelled).
+	if (order.status !== "cancelled") {
+		await reverseCancellationEffects(ctx, order, now);
+	}
+
+	// 2. Delete owned storage blobs. Dedupe (the legacy singular mockup field is
+	//    kept in sync as `mockupImageStorageIds[0]`) and swallow per-blob errors —
+	//    a blob may already be gone; a missing blob must not abort the cascade.
+	const blobIds = new Set<string>();
+	if (order.customerImageStorageId) blobIds.add(order.customerImageStorageId);
+	if (order.paymentProofStorageId) blobIds.add(order.paymentProofStorageId);
+	for (const id of order.mockupImageStorageIds ??
+		(order.mockupImageStorageId ? [order.mockupImageStorageId] : [])) {
+		blobIds.add(id);
+	}
+	for (const id of blobIds) {
+		try {
+			await ctx.storage.delete(id);
+		} catch {
+			// already deleted / never existed — nothing to reclaim
+		}
+	}
+
+	// 3. Delete the order's event timeline.
+	const events = await ctx.db
+		.query("orderEvents")
+		.withIndex("by_order", (q) => q.eq("orderId", order._id))
+		.collect();
+	for (const event of events) {
+		await ctx.db.delete(event._id);
+	}
+
+	// 4. Unlink the counter-checkout session that spawned this order, if any.
+	const sessions = await ctx.db
+		.query("counterCheckoutSessions")
+		.withIndex("by_order", (q) => q.eq("orderId", order._id))
+		.collect();
+	for (const session of sessions) {
+		await ctx.db.patch(session._id, { orderId: undefined, updatedAt: now });
+	}
+
+	// 5. Delete the order.
+	await ctx.db.delete(order._id);
+}
+
+/**
+ * Hard-delete a single order (owner or admin acting-as). Permanent and
+ * irreversible — the UI gates it behind an explicit confirm. Not plan-gated
+ * (cleaning up your own orders is all-tier, mirroring `updateStatus`); admin
+ * act-as writes are audited.
+ */
+export const deleteOrder = mutation({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<void> => {
+		const { order, access } = await requireOrderAccess(ctx, orderId);
+		await deleteOrderCascade(ctx, order);
+		await logAdminAction(ctx, access, "orders.hardDelete", orderId);
+	},
+});
+
+/**
+ * Bulk hard-delete (the inbox multi-select). Mirrors `bulkUpdateStatus`: an
+ * Order Inbox surface (Pro+, admin act-as bypasses), owner-checked per order (a
+ * foreign id fails the whole batch), capped at 100, one batch audit row.
+ */
+export const bulkDeleteOrders = mutation({
+	args: { orderIds: v.array(v.id("orders")) },
+	handler: async (ctx, { orderIds }): Promise<{ deleted: number }> => {
+		if (orderIds.length === 0) return { deleted: 0 };
+		if (orderIds.length > 100)
+			throw new ConvexError("Too many orders selected (max 100)");
+
+		let deleted = 0;
+		let batchAccess: RetailerAccess | undefined;
+		for (const orderId of orderIds) {
+			const order = await ctx.db.get(orderId);
+			if (!order) throw new ConvexError("Order not found");
+			const firstResolve = batchAccess === undefined;
+			batchAccess = await requireRetailerAccess(ctx, order.retailerId);
+			if (firstResolve && !batchAccess.actingAsAdmin)
+				await assertPlanFeature(ctx, order.retailerId, "orderInbox");
+			await deleteOrderCascade(ctx, order);
+			deleted++;
+		}
+		if (batchAccess)
+			await logAdminAction(ctx, batchAccess, "orders.bulkDeleteOrders");
+		return { deleted };
 	},
 });
 

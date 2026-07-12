@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { todayMytMidnight } from "./lib/fulfilmentDate";
@@ -3191,6 +3191,338 @@ describe("orders — bulk status", () => {
 				status: "confirmed",
 			}),
 		).rejects.toThrow(/forbidden/i);
+	});
+});
+
+describe("orders — hard delete", () => {
+	/** Sum the retailer's monthly usage counter (orders across all months). */
+	async function usageOrders(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+	): Promise<number> {
+		return t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("subscriptionUsage")
+				.withIndex("by_retailer_month", (q) => q.eq("retailerId", retailerId))
+				.collect();
+			return rows.reduce((sum, r) => sum + r.orders, 0);
+		});
+	}
+
+	/** The first customer's (orderCount, totalSpent) for the retailer. */
+	async function customerAgg(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+	): Promise<{ orderCount: number; totalSpent: number }> {
+		return t.run(async (ctx) => {
+			const c = await ctx.db
+				.query("customers")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			return {
+				orderCount: c?.orderCount ?? 0,
+				totalSpent: c?.totalSpent ?? 0,
+			};
+		});
+	}
+
+	async function eventCount(
+		t: ReturnType<typeof setup>,
+		orderId: Id<"orders">,
+	): Promise<number> {
+		return t.run(async (ctx) =>
+			(
+				await ctx.db
+					.query("orderEvents")
+					.withIndex("by_order", (q) => q.eq("orderId", orderId))
+					.collect()
+			).length,
+		);
+	}
+
+	async function storageCount(t: ReturnType<typeof setup>): Promise<number> {
+		return t.run(
+			async (ctx) => (await ctx.db.system.query("_storage").collect()).length,
+		);
+	}
+
+	test("permanently removes a live order and reverses its effects", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 10 });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 4 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		// Baseline: stock reserved, customer + usage counted, one pending event.
+		expect(await getProductStock(t, productId)).toBe(6);
+		expect(await customerAgg(t, retailer._id)).toEqual({
+			orderCount: 1,
+			totalSpent: 48000,
+		});
+		expect(await usageOrders(t, retailer._id)).toBe(1);
+		expect(await eventCount(t, order!._id)).toBe(1);
+
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orders.deleteOrder, { orderId: order!._id });
+
+		// Order + timeline gone; stock, customer aggregates and usage all reversed.
+		expect(await t.run((ctx) => ctx.db.get(order!._id))).toBeNull();
+		expect(await eventCount(t, order!._id)).toBe(0);
+		expect(await getProductStock(t, productId)).toBe(10);
+		expect(await customerAgg(t, retailer._id)).toEqual({
+			orderCount: 0,
+			totalSpent: 0,
+		});
+		expect(await usageOrders(t, retailer._id)).toBe(0);
+	});
+
+	test("deleting an already-cancelled order does NOT double-reverse", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 10 });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 4 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		const asA = t.withIdentity({ subject: USER_A });
+		// Cancel first → effects already reversed once.
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: order!._id,
+			status: "cancelled",
+		});
+		expect(await getProductStock(t, productId)).toBe(10);
+		expect(await customerAgg(t, retailer._id)).toEqual({
+			orderCount: 0,
+			totalSpent: 0,
+		});
+		expect(await usageOrders(t, retailer._id)).toBe(0);
+
+		await asA.mutation(api.orders.deleteOrder, { orderId: order!._id });
+
+		// No second reversal — stock stays at 10 (not 14), counters stay floored.
+		expect(await t.run((ctx) => ctx.db.get(order!._id))).toBeNull();
+		expect(await getProductStock(t, productId)).toBe(10);
+		expect(await customerAgg(t, retailer._id)).toEqual({
+			orderCount: 0,
+			totalSpent: 0,
+		});
+		expect(await usageOrders(t, retailer._id)).toBe(0);
+	});
+
+	test("deletes the order's owned storage blobs", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 10 });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		const before = await storageCount(t);
+		// Attach a payment proof + two mockups (array is the source of truth; the
+		// singular field mirrors [0], so the cascade must dedupe them).
+		await t.run(async (ctx) => {
+			const proof = await ctx.storage.store(new Blob(["proof"]));
+			const m0 = await ctx.storage.store(new Blob(["mock0"]));
+			const m1 = await ctx.storage.store(new Blob(["mock1"]));
+			await ctx.db.patch(order!._id, {
+				paymentProofStorageId: proof,
+				mockupImageStorageId: m0,
+				mockupImageStorageIds: [m0, m1],
+			});
+		});
+		expect(await storageCount(t)).toBe(before + 3);
+
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orders.deleteOrder, { orderId: order!._id });
+
+		// All three blobs reclaimed (m0 deleted once despite living in both fields).
+		expect(await storageCount(t)).toBe(before);
+	});
+
+	test("unlinks (does not delete) the counter session that spawned the order", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 10 });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		const now = Date.now();
+		const sessionId = await t.run((ctx) =>
+			ctx.db.insert("counterCheckoutSessions", {
+				retailerId: retailer._id,
+				sellerUserId: USER_A,
+				token: "KPS-x",
+				status: "completed",
+				orderId: order!._id,
+				expiresAt: now + 1000,
+				createdAt: now,
+				updatedAt: now,
+			}),
+		);
+
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orders.deleteOrder, { orderId: order!._id });
+
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session).not.toBeNull();
+		expect(session?.orderId).toBeUndefined();
+	});
+
+	test("is owner-only — a foreign store can't delete the order", async () => {
+		const t = setup();
+		const retailerA = await seedRetailer(t, USER_A);
+		await seedRetailer(t, USER_B);
+		const productId = await seedProduct(t, USER_A, retailerA._id, { stock: 10 });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailerA._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		await expect(
+			t
+				.withIdentity({ subject: USER_B })
+				.mutation(api.orders.deleteOrder, { orderId: order!._id }),
+		).rejects.toThrow(/forbidden/i);
+		// Untouched.
+		expect(await t.run((ctx) => ctx.db.get(order!._id))).not.toBeNull();
+	});
+});
+
+describe("orders — hard delete (admin act-as)", () => {
+	const ADMIN = "user_admin_del";
+	let prev: string | undefined;
+	beforeAll(() => {
+		prev = process.env.ADMIN_USER_IDS;
+		process.env.ADMIN_USER_IDS = ADMIN;
+	});
+	afterAll(() => {
+		process.env.ADMIN_USER_IDS = prev;
+	});
+
+	test("an admin can delete on the seller's behalf and it is audited", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 10 });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+
+		await t
+			.withIdentity({ subject: ADMIN })
+			.mutation(api.orders.deleteOrder, { orderId: order!._id });
+
+		expect(await t.run((ctx) => ctx.db.get(order!._id))).toBeNull();
+		const audit = await t.run(async (ctx) =>
+			ctx.db
+				.query("adminAuditLog")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.collect(),
+		);
+		expect(audit).toHaveLength(1);
+		expect(audit[0]).toMatchObject({
+			adminUserId: ADMIN,
+			action: "orders.hardDelete",
+			targetId: order!._id,
+		});
+	});
+});
+
+describe("orders — bulk hard delete", () => {
+	async function mk(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+	): Promise<Id<"orders">> {
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		return order!._id;
+	}
+
+	test("deletes every owned order in the batch", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 100 });
+		const ids = [
+			await mk(t, retailer._id, productId),
+			await mk(t, retailer._id, productId),
+			await mk(t, retailer._id, productId),
+		];
+		const res = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orders.bulkDeleteOrders, { orderIds: ids });
+		expect(res).toEqual({ deleted: 3 });
+		for (const id of ids) {
+			expect(await t.run((ctx) => ctx.db.get(id))).toBeNull();
+		}
+	});
+
+	test("rejects the whole batch if any order isn't the caller's", async () => {
+		const t = setup();
+		const retailerA = await seedRetailer(t, USER_A);
+		const retailerB = await seedRetailer(t, USER_B);
+		const productA = await seedProduct(t, USER_A, retailerA._id, { stock: 100 });
+		const productB = await seedProduct(t, USER_B, retailerB._id, { stock: 100 });
+		const mine = await mk(t, retailerA._id, productA);
+		const theirs = await mk(t, retailerB._id, productB);
+		await expect(
+			t
+				.withIdentity({ subject: USER_A })
+				.mutation(api.orders.bulkDeleteOrders, { orderIds: [mine, theirs] }),
+		).rejects.toThrow(/forbidden/i);
+	});
+
+	test("rejects a batch over the 100 cap", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 100 });
+		const id = await mk(t, retailer._id, productId);
+		await expect(
+			t.withIdentity({ subject: USER_A }).mutation(api.orders.bulkDeleteOrders, {
+				orderIds: Array.from({ length: 101 }, () => id),
+			}),
+		).rejects.toThrow(/max 100/i);
 	});
 });
 

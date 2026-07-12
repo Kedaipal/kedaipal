@@ -154,7 +154,8 @@ recent rows (admin-only) so white-glove activity is inspectable per store.
 include `products.create/update/saveVariantGrid/updateVariant/archive/bulkUpsert/reorder`,
 `customers.updateNotes/updateName`, `pickupLocations.create/update/setActive/reorder`,
 `retailers.updateSettings/renameSlug`, `orders.updateStatus/bulkUpdateStatus/advanceStage/
-setCarrierTrackingUrl/confirmPayment/submitMockup/updateMockupQuote/waiveMockup`, and
+setCarrierTrackingUrl/confirmPayment/submitMockup/updateMockupQuote/waiveMockup/hardDelete/
+bulkDeleteOrders`, and
 `counterCheckout.createCheckoutSession/createOrderFromSession/cancelCheckoutSession`.
 
 **Read/entry trail** — individual act-as *reads* (order history, customer PII, payment proofs,

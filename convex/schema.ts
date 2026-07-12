@@ -783,7 +783,10 @@ export default defineSchema({
 		.index("by_token", ["token"])
 		.index("by_retailer_status", ["retailerId", "status"])
 		// Drives the expiry cron: range-scan awaiting_buyer sessions past their TTL.
-		.index("by_status_expiry", ["status", "expiresAt"]),
+		.index("by_status_expiry", ["status", "expiresAt"])
+		// Lets a hard-deleted order unlink the session that spawned it without a
+		// full-table scan (orderId is set only on completed sessions).
+		.index("by_order", ["orderId"]),
 
 	// --- Manual subscription billing (docs/manual-subscription.md) -----------
 	// Per-retailer subscription. One row per retailer (created in-transaction by

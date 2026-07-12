@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import {
 	ArrowLeft,
@@ -18,6 +18,7 @@ import {
 	Package,
 	Phone,
 	StickyNote,
+	Trash2,
 	Truck,
 	User,
 } from "lucide-react";
@@ -236,11 +237,13 @@ function OrderProgressStepper({
 
 function OrderDetailRoute() {
 	const { shortId } = Route.useParams();
+	const navigate = useNavigate();
 	const order = useQuery(api.orders.get, { shortId });
 	const updateStatus = useMutation(api.orders.updateStatus);
 	const advanceToStage = useMutation(api.orders.advanceToStage);
 	const setCarrierUrl = useMutation(api.orders.setCarrierTrackingUrl);
 	const markPaymentReceived = useMutation(api.orders.markPaymentReceived);
+	const deleteOrder = useMutation(api.orders.deleteOrder);
 	const proofUrl = useQuery(
 		api.orders.getPaymentProofUrl,
 		order?.paymentProofStorageId ? { orderId: order._id } : "skip",
@@ -262,7 +265,8 @@ function OrderDetailRoute() {
 	const [confirmingPayment, setConfirmingPayment] = useState(false);
 	const [confirmPaymentOpen, setConfirmPaymentOpen] = useState(false);
 	const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
-	// Rare actions (cancel, receipt) collapse behind one link at the bottom.
+	const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+	// Rare actions (cancel, delete, receipt) collapse behind one link at the bottom.
 	const [moreOpen, setMoreOpen] = useState(false);
 	// Optional method tag captured at confirm time (the seller has just verified
 	// the channel). Undefined = leave online/unknown. See lib/paymentMethod.ts.
@@ -335,6 +339,24 @@ function OrderDetailRoute() {
 			toast.error(convexErrorMessage(err));
 			// Rethrow so the confirm dialog stays open for a retry; the toast above
 			// is the user-facing message (ConfirmDialog swallows this).
+			throw err;
+		} finally {
+			setPending(null);
+		}
+	}
+
+	async function handleDelete() {
+		if (!order) return;
+		setPending("delete");
+		try {
+			await deleteOrder({ orderId: order._id });
+			// The order no longer exists — leave the detail page before its query
+			// resolves to null. Toast confirms the irreversible action landed.
+			toast.success(`Order #${order.shortId} deleted permanently`);
+			await navigate({ to: "/app/orders" });
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+			// Rethrow so the confirm dialog stays open for a retry.
 			throw err;
 		} finally {
 			setPending(null);
@@ -1054,6 +1076,21 @@ function OrderDetailRoute() {
 								{pending === "cancel" ? "Updating…" : "Cancel Order"}
 							</Button>
 						) : null}
+						{/* Permanent hard delete — the last resort for test / spam /
+						    duplicate orders. Works in any status; irreversible. */}
+						<Button
+							onClick={() => setConfirmDeleteOpen(true)}
+							disabled={pending !== null}
+							variant="outline"
+							className="h-11 w-full gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+						>
+							<Trash2 className="size-4" aria-hidden="true" />
+							{pending === "delete" ? "Deleting…" : "Delete permanently"}
+						</Button>
+						<p className="px-1 text-center text-[11px] leading-snug text-muted-foreground">
+							Deleting removes this order and its records for good — this can't
+							be undone.
+						</p>
 					</div>
 				) : null}
 			</section>
@@ -1067,6 +1104,25 @@ function OrderDetailRoute() {
 				cancelLabel="Keep order"
 				destructive
 				onConfirm={handleCancel}
+			/>
+
+			<ConfirmDialog
+				open={confirmDeleteOpen}
+				onOpenChange={setConfirmDeleteOpen}
+				title={`Delete order #${order.shortId} permanently?`}
+				description={
+					paymentStatus === "received" || order.status === "delivered"
+						? "This order is paid/completed — deleting erases it from your sales records, receipts and CSV exports. Stock isn't affected and the customer is NOT notified. This can't be undone."
+						: `This erases the order, its timeline and any uploaded images for good.${
+								order.status === "cancelled"
+									? ""
+									: " Reserved stock is returned and your totals are adjusted."
+							} The customer is NOT notified. This can't be undone.`
+				}
+				confirmLabel="Delete permanently"
+				cancelLabel="Keep order"
+				destructive
+				onConfirm={handleDelete}
 			/>
 
 			<Dialog
