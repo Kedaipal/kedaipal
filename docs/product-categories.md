@@ -46,12 +46,18 @@ Gating matrix (the escape-hatch rule — a downgraded seller is never trapped, m
 | Read the management list / picker data | ✓ | ✓ |
 | Buyer-side rendering (rail, category pages) | always | always |
 
-UI locked states: `/app/products/categories` shows a `ProFeatureWall` when locked with zero categories, a `ProFeatureTease` + disabled actions (archive stays live) when locked with existing ones; the picker's unselected chips disable (selected stay deselectable).
+UI locked states: `/app/products/categories` shows a `ProFeatureWall` when locked with zero categories, a `ProFeatureTease` + disabled actions (archive stays live) when locked with existing ones; the picker's unselected rows disable (selected stay deselectable).
+
+## Archived memberships (editor scope)
+
+The product editor manages a product's memberships in **active** categories only. `getProductCategoryIds` seeds the picker with active memberships; `setProductCategories` reconciles **only** active-category junctions and leaves archived-category junctions untouched. Consequences:
+- Archiving a category preserves its product links, so **restore revives the assignments** — a later product edit can't silently drop them.
+- Archived memberships **don't consume the 10-category cap** (the cap counts active only), so a product near the cap is never invisibly blocked by a link it can't see or remove. To drop an archived membership, restore the category (then deselect) or delete it.
 
 ## Surfaces
 
-- **Dashboard** — [`/app/products/categories`](../src/routes/app.products.categories.tsx) (categories are catalog structure, so they live **under Products** — the mobile bottom nav is full at 6 tabs, no new tab). SortableList drag-reorder, live counts ("tile hidden until one is added" when 0), archive/restore, per-row **Copy link** for the shareable `/$slug/c/<slug>` deep link. [`CategoryEditDialog`](../src/components/dashboard/category-edit-dialog.tsx): name, auto-slugified editable link (server re-validates), description (≤280), optional tile image, drag-to-arrange the category's products. Entry point: **"Categories" header action on the Products index** (Pro chip when locked).
-- **Product editor** — [`CategoryPicker`](../src/components/forms/category-picker.tsx) chip multi-select in `ProductForm` (Storefront section, after Visibility). Empty state links to the management page. Both save paths call `setProductCategories` **last** so a gate error can never block the core product save (new-product path keys on the id `products.create` returns).
+- **Dashboard** — [`/app/products/categories`](../src/routes/app.products.categories.tsx) (categories are catalog structure, so they live **under Products**; entry via a "Categories" header action, icon-only on mobile, with a page back arrow). SortableList drag-reorder, per-row **description** line + product count ("tile hidden until one is added" when 0), archive/restore, per-row **Copy link** for the shareable `/$slug/c/<slug>` deep link. [`CategoryEditDialog`](../src/components/dashboard/category-edit-dialog.tsx): name, auto-slugified editable link (server re-validates), description (≤280), optional tile image, drag-to-arrange the category's products. Entry point: **"Categories" header action on the Products index** (Pro chip when locked).
+- **Product editor** — [`CategoryPicker`](../src/components/forms/category-picker.tsx) in `ProductForm` (Storefront section, after Visibility): a scrollable **checkbox list** (not chips) so each category shows its **description**, and a long catalog scrolls (`max-h-72`) instead of wrapping into a wall. Seeded active-only. Empty state links to the management page. Both save paths call `setProductCategories` **last** so a gate error can never block the core product save (new-product path keys on the id `products.create` returns).
 - **Storefront home** — [`CategoryRail`](../src/components/storefront/category-rail.tsx) above the grid: horizontally-scrolling tiles (image w/ scrim, name, item count), sidecar `useQuery` (same pattern as the pickup-locations query), renders nothing when empty.
 - **Category page** — [`$slug_.c.$categorySlug.tsx`](../src/routes/$slug_.c.$categorySlug.tsx). The `$slug_` underscore is load-bearing: `$slug.tsx` is a leaf with no `<Outlet/>`, so plain dot-nesting would never render. SSR loader mirrors the home page (301 slug-rename redirect **preserving the category suffix**; `notFound()` for unknown/archived → "Category not found" + a Browse-all CTA, incl. live-archive while open). Own SEO head (`{category} — {store} | Kedaipal`; OG image: category image → cover → logo). Renders "← All products" back link, rail with the current tile highlighted + an **All products** tile, and the shared `ProductGrid`/`CartBar` — the cart is localStorage-keyed per retailer, so it carries across pages.
 - `ProductGrid` gained an optional `products` override prop (skips its internal query) — the category page reuses cards/search/detail-sheet/cart-add, no fork.
@@ -63,10 +69,15 @@ UI locked states: `/app/products/categories` shows a `ProFeatureWall` when locke
 - **`retailers.deleteUser` cascade gaps** — now also deletes `productVariants` (+ their image blobs; previously orphaned), `categories` (+ tile blobs), and `productCategories`.
 - Dev seed (`convex/seed.ts`) now creates 3 overlapping categories for `trailgear`, topping up idempotently on already-seeded deployments.
 
-## Costs / limits
+## Read model / costs (PR-review resolution)
 
-- Live counts are query-derived, never cached (a tile disappears the moment its last visible product is archived/hidden). Reads are O(categories × assignments) per rail/dashboard render — fine at the 50-product catalog cap; revisit with denormalized counters if catalogs grow 10×.
-- Caps: ≤10 categories per product (`MAX_CATEGORIES_PER_PRODUCT`); category name ≤60, description ≤280; slug 3–32, same charset as store slugs but **no reserved-word list** (nested under `/$slug/c/`, no route-collision surface).
+The hot public reads must not fan out over every junction's product on each load (CLAUDE.md: "no full scans on hot paths"). So the visible-product count is **denormalized** onto `categories.productCount` (mirrors the customers-aggregate pattern):
+
+- **`categories.productCount`** = number of storefront-visible (`active && !hidden`) products assigned. Maintained in [`convex/lib/categoryCounts.ts`](../convex/lib/categoryCounts.ts): membership add/remove adjusts the affected category (`setProductCategories`); a product visibility flip (archive/restore, hide/unhide) adjusts every linked category (`products.archive` + `products.update` call `bumpCategoryCountsForProduct`); restore recomputes from scratch (`recomputeCategoryCount`). `internal.categories.recomputeAllCounts` is a re-runnable backfill/repair.
+- **`listActivePublic`** (rail) reads only category rows + the stored count — no product reads, no double-read of the grid's product set.
+- **`getPublicPage`** (category page) must load its products to render them; bounded by `CATEGORY_PAGE_PRODUCT_LIMIT` (100 > the 50 per-retailer product cap, so it never truncates today — defensive against a future cap raise). Per-product enrichment matches `products.list`'s cost.
+
+Caps: ≤10 **active** categories per product (`MAX_CATEGORIES_PER_PRODUCT`; archived memberships don't count — see above); category name ≤60, description ≤280; slug 3–32, same charset as store slugs but **no reserved-word list** (nested under `/$slug/c/`, no route-collision surface).
 
 ## Tests
 

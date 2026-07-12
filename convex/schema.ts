@@ -376,6 +376,14 @@ export default defineSchema({
 		// the update mutation, same pattern as retailers.logoStorageId.
 		imageStorageId: v.optional(v.string()),
 		active: v.boolean(),
+		// Denormalized count of storefront-VISIBLE (active && !hidden) products
+		// assigned to this category. The hot public rail + management list read
+		// this directly instead of scanning every junction's product per load.
+		// Maintained on membership + product-visibility changes (see
+		// convex/lib/categoryCounts.ts). Optional during the additive widen —
+		// reads fall back to 0; `internal.categories.recomputeAllCounts` backfills
+		// pre-existing rows.
+		productCount: v.optional(v.number()),
 		sortOrder: v.number(),
 		createdAt: v.number(),
 		updatedAt: v.number(),

@@ -1,12 +1,16 @@
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import { mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 import {
 	logAdminAction,
 	type RetailerAccess,
 	requireRetailerAccess,
 } from "./lib/auth";
+import {
+	isProductVisible,
+	recomputeCategoryCount,
+} from "./lib/categoryCounts";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidCategorySlug } from "./lib/slug";
 import { productWithVariants } from "./products";
@@ -14,9 +18,15 @@ import { assertPlanFeature, assertSubscriptionActive } from "./subscriptions";
 
 const NAME_MAX = 60;
 const DESCRIPTION_MAX = 280;
-/** Max categories a single product can belong to — a browse-structure sanity
- * cap in the same family as the 2-axis/50-variant product caps. */
+/** Max ACTIVE categories a single product can belong to — a browse-structure
+ * sanity cap in the same family as the 2-axis/50-variant product caps.
+ * Archived memberships are preserved beyond this (they don't count). */
 export const MAX_CATEGORIES_PER_PRODUCT = 10;
+/** Hard ceiling on products enriched for one public category page. A category
+ * can't hold more than the per-retailer product cap (50), so this never
+ * truncates today — it's a defensive bound so the buyer page can't fan out
+ * unboundedly if that cap ever rises. */
+const CATEGORY_PAGE_PRODUCT_LIMIT = 100;
 
 // ---------------------------------------------------------------------------
 // Auth helpers — mirror the pattern in convex/pickupLocations.ts so each
@@ -105,27 +115,6 @@ async function assertCategorySlugUnique(
 	}
 }
 
-/**
- * Count the storefront-visible products in a category: junction rows whose
- * product is active AND not hidden. Query-derived (never cached) so a tile
- * disappears the moment its last visible product is archived or hidden.
- */
-async function visibleProductCount(
-	ctx: QueryCtx,
-	categoryId: Id<"categories">,
-): Promise<number> {
-	const rows = await ctx.db
-		.query("productCategories")
-		.withIndex("by_category_sort", (q) => q.eq("categoryId", categoryId))
-		.collect();
-	let count = 0;
-	for (const row of rows) {
-		const product = await ctx.db.get(row.productId);
-		if (product && product.active && product.hidden !== true) count++;
-	}
-	return count;
-}
-
 // ---------------------------------------------------------------------------
 // Queries
 // ---------------------------------------------------------------------------
@@ -134,8 +123,8 @@ async function visibleProductCount(
  * Retailer-scoped list of every category (active + archived) for the
  * management page + the product-form picker. Active first (in their
  * sortOrder), archived sunk to the end — same "All" ordering as products.
- * Each row carries a live `productCount` (visible products only) + resolved
- * `imageUrl`.
+ * Each row carries the denormalized `productCount` (visible products only) +
+ * resolved `imageUrl` — no per-product scan.
  */
 export const listForRetailer = query({
 	args: { retailerId: v.id("retailers") },
@@ -156,7 +145,7 @@ export const listForRetailer = query({
 		return Promise.all(
 			rows.map(async (row) => ({
 				...row,
-				productCount: await visibleProductCount(ctx, row._id),
+				productCount: row.productCount ?? 0,
 				imageUrl: row.imageStorageId
 					? await ctx.storage.getUrl(row.imageStorageId)
 					: null,
@@ -192,9 +181,12 @@ export const listActivePublic = query({
 				q.eq("retailerId", retailerId).eq("active", true),
 			)
 			.collect();
-		rows.sort((a, b) => a.sortOrder - b.sortOrder);
-		const withCounts = await Promise.all(
-			rows.map(async (row) => ({
+		// Denormalized count read — no per-product fan-out on this hot public path.
+		const visible = rows
+			.filter((row) => (row.productCount ?? 0) > 0)
+			.sort((a, b) => a.sortOrder - b.sortOrder);
+		return Promise.all(
+			visible.map(async (row) => ({
 				_id: row._id,
 				name: row.name,
 				slug: row.slug,
@@ -202,10 +194,9 @@ export const listActivePublic = query({
 				imageUrl: row.imageStorageId
 					? await ctx.storage.getUrl(row.imageStorageId)
 					: null,
-				productCount: await visibleProductCount(ctx, row._id),
+				productCount: row.productCount ?? 0,
 			})),
 		);
-		return withCounts.filter((row) => row.productCount > 0);
 	},
 });
 
@@ -229,10 +220,12 @@ export const getPublicPage = query({
 			.first();
 		if (!category || !category.active) return null;
 
+		// Bounded read — a category can't hold more than the per-retailer product
+		// cap, so this never truncates today (see CATEGORY_PAGE_PRODUCT_LIMIT).
 		const junctions = await ctx.db
 			.query("productCategories")
 			.withIndex("by_category_sort", (q) => q.eq("categoryId", category._id))
-			.collect();
+			.take(CATEGORY_PAGE_PRODUCT_LIMIT);
 		const products = [];
 		for (const junction of junctions) {
 			const product = await ctx.db.get(junction.productId);
@@ -301,8 +294,11 @@ export const listProductsForCategory = query({
 });
 
 /**
- * The category ids a product currently belongs to (junction order, which is
- * creation order — the picker doesn't care). Seeds the product editor.
+ * The ACTIVE category ids a product currently belongs to — seeds the product
+ * editor's picker. Archived memberships are deliberately excluded: the editor
+ * only manages active categories, and `setProductCategories` preserves archived
+ * links untouched, so they must not surface here (surfacing them would let an
+ * archived membership invisibly consume the picker's cap).
  */
 export const getProductCategoryIds = query({
 	args: { productId: v.id("products") },
@@ -314,7 +310,12 @@ export const getProductCategoryIds = query({
 			.query("productCategories")
 			.withIndex("by_product", (q) => q.eq("productId", productId))
 			.collect();
-		return rows.map((row) => row.categoryId);
+		const activeIds: Id<"categories">[] = [];
+		for (const row of rows) {
+			const category = await ctx.db.get(row.categoryId);
+			if (category && category.active) activeIds.push(row.categoryId);
+		}
+		return activeIds;
 	},
 });
 
@@ -367,6 +368,9 @@ export const create = mutation({
 			description: cleanDescription,
 			imageStorageId: imageStorageId?.trim() || undefined,
 			active: true,
+			// New category has no memberships yet — assignment (which bumps this)
+			// happens after create via setProductCategories.
+			productCount: 0,
 			sortOrder: nextSortOrder,
 			createdAt: now,
 			updatedAt: now,
@@ -477,6 +481,10 @@ export const setActive = mutation({
 				siblings.reduce((max, r) => Math.max(max, r.sortOrder), -1) + 1;
 		}
 		await ctx.db.patch(categoryId, patch);
+		// On restore, recompute the count from scratch — products may have been
+		// archived/hidden while the category was off the storefront. Cheap
+		// (bounded by this category's membership), rare.
+		if (active) await recomputeCategoryCount(ctx, categoryId);
 		await logAdminAction(ctx, access, "categories.setActive", categoryId);
 	},
 });
@@ -583,15 +591,18 @@ export const reorderProducts = mutation({
 });
 
 /**
- * Set the FULL category membership for one product (the editor's chip picker
- * submits the complete selection). Diffs the junction rows: inserts added
- * categories (appended to the end of each category's product order), deletes
- * removed ones, leaves kept rows untouched so their within-category position
- * survives an unrelated edit.
+ * Set a product's membership in its ACTIVE categories (the editor's picker
+ * submits the full active selection). Diffs only active-category junctions:
+ * inserts added (appended to each category's product order), deletes removed,
+ * keeps unchanged rows in place. Memberships in ARCHIVED categories are left
+ * untouched — restoring a category revives them, and they never invisibly
+ * consume the picker's cap.
  *
  * Plan gate fires ONLY when the diff ADDS rows — removing/clearing stays
  * un-gated so a downgraded seller can always untangle their catalog
- * (chargeablePickup's set-gated/clear-ungated precedent).
+ * (chargeablePickup's set-gated/clear-ungated precedent). The denormalized
+ * `categories.productCount` is adjusted for each add/remove when the product is
+ * storefront-visible.
  */
 export const setProductCategories = mutation({
 	args: {
@@ -612,6 +623,8 @@ export const setProductCategories = mutation({
 		if (requested.size !== categoryIds.length) {
 			throw new ConvexError("Duplicate category in list");
 		}
+		// Cap is on ACTIVE memberships only (the picker submits active ids);
+		// preserved archived links are separate and don't count.
 		if (requested.size > MAX_CATEGORIES_PER_PRODUCT) {
 			throw new ConvexError(
 				`A product can be in at most ${MAX_CATEGORIES_PER_PRODUCT} categories`,
@@ -624,8 +637,17 @@ export const setProductCategories = mutation({
 			.collect();
 		const existingByCategory = new Map(existing.map((j) => [j.categoryId, j]));
 
+		// Added = requested ids with no existing junction (truly new).
 		const added = categoryIds.filter((id) => !existingByCategory.has(id));
-		const removed = existing.filter((j) => !requested.has(j.categoryId));
+		// Removed = existing junctions to an ACTIVE category, no longer requested.
+		// Archived-category junctions are preserved (never removed here), so a
+		// product edit can't drop an archived membership.
+		const removed: Doc<"productCategories">[] = [];
+		for (const junction of existing) {
+			if (requested.has(junction.categoryId)) continue; // kept
+			const category = await ctx.db.get(junction.categoryId);
+			if (category && category.active) removed.push(junction);
+		}
 
 		// Pro gate only on ADDING structure; pure removal/clear stays un-gated.
 		if (added.length > 0 && !access.actingAsAdmin)
@@ -643,9 +665,18 @@ export const setProductCategories = mutation({
 			}
 		}
 
+		const productVisible = isProductVisible(product);
 		const now = Date.now();
 		for (const junction of removed) {
 			await ctx.db.delete(junction._id);
+			if (productVisible) {
+				const category = await ctx.db.get(junction.categoryId);
+				if (category) {
+					await ctx.db.patch(junction.categoryId, {
+						productCount: Math.max(0, (category.productCount ?? 0) - 1),
+					});
+				}
+			}
 		}
 		for (const categoryId of added) {
 			// Append to the end of the category's product order.
@@ -662,6 +693,14 @@ export const setProductCategories = mutation({
 				sortOrder: nextSortOrder,
 				createdAt: now,
 			});
+			if (productVisible) {
+				const category = await ctx.db.get(categoryId);
+				if (category) {
+					await ctx.db.patch(categoryId, {
+						productCount: (category.productCount ?? 0) + 1,
+					});
+				}
+			}
 		}
 		if (added.length > 0 || removed.length > 0) {
 			await logAdminAction(
@@ -671,5 +710,20 @@ export const setProductCategories = mutation({
 				productId,
 			);
 		}
+	},
+});
+
+/**
+ * One-off backfill / drift-repair: recompute `productCount` for every category.
+ * Safe to re-run. Invoke via `npx convex run categories:recomputeAllCounts`.
+ */
+export const recomputeAllCounts = internalMutation({
+	args: {},
+	handler: async (ctx): Promise<{ recomputed: number }> => {
+		const categories = await ctx.db.query("categories").collect();
+		for (const category of categories) {
+			await recomputeCategoryCount(ctx, category._id);
+		}
+		return { recomputed: categories.length };
 	},
 });

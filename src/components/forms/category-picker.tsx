@@ -1,20 +1,26 @@
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
-import { FolderOpen } from "lucide-react";
+import { Check, FolderOpen } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { ProBadge } from "../app/pro-gate";
-import { FilterChip } from "../ui/filter-chip";
 
 /** Mirrors MAX_CATEGORIES_PER_PRODUCT in convex/categories.ts. */
 const MAX_CATEGORIES = 10;
 
 /**
- * Multi-select chip picker for a product's category membership, rendered as a
- * card section inside ProductForm. Selection is staged locally by the parent
- * (submitted with the form). Adding is Pro-gated — when `locked`, unselected
- * chips disable (ProBadge marks why) while selected chips stay deselectable,
- * mirroring the server's add-gated/clear-ungated rule.
+ * Multi-select list of a product's category membership, rendered as a card
+ * section inside ProductForm. A scrollable checkbox list (not chips) so each
+ * category can show its description, and a long catalog scrolls instead of
+ * wrapping into an unreadable wall. Selection is staged locally by the parent
+ * (submitted with the form).
+ *
+ * Only ACTIVE categories are shown/managed here — the seed
+ * (`getProductCategoryIds`) is active-only and the server preserves archived
+ * memberships untouched, so nothing invisible consumes the cap. Adding is
+ * Pro-gated: when `locked`, unselected rows disable (ProBadge marks why) while
+ * selected rows stay deselectable, mirroring the server's add-gated/clear-ungated
+ * rule.
  */
 export function CategoryPicker({
 	retailerId,
@@ -73,23 +79,48 @@ export function CategoryPicker({
 				</div>
 			) : (
 				<>
-					<div className="flex flex-wrap gap-2">
+					{/* Scrolls once the list is long so it never becomes a wall. */}
+					<div className="flex max-h-72 flex-col gap-2 overflow-y-auto pr-0.5">
 						{active.map((category) => {
 							const isSelected = selected.has(category._id);
 							// Deselecting is always allowed; ADDING is blocked by the plan
 							// lock or the 10-category cap.
 							const disabled = !isSelected && (locked || atCap);
 							return (
-								<FilterChip
+								<button
 									key={category._id}
-									tone="accent"
-									selected={isSelected}
+									type="button"
 									onClick={() => toggle(category._id)}
 									disabled={disabled}
-									className="disabled:cursor-not-allowed disabled:opacity-50"
+									aria-pressed={isSelected}
+									className={`flex w-full items-start gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+										isSelected
+											? "border-accent bg-accent/10"
+											: "border-border bg-card hover:border-accent/40"
+									}`}
 								>
-									{category.name}
-								</FilterChip>
+									<span
+										className={`mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-md border transition-colors ${
+											isSelected
+												? "border-accent bg-accent text-white"
+												: "border-input bg-background"
+										}`}
+									>
+										{isSelected ? (
+											<Check className="size-3.5" aria-hidden />
+										) : null}
+									</span>
+									<span className="flex min-w-0 flex-col">
+										<span className="text-sm font-medium leading-snug">
+											{category.name}
+										</span>
+										{category.description ? (
+											<span className="line-clamp-2 text-xs leading-snug text-muted-foreground">
+												{category.description}
+											</span>
+										) : null}
+									</span>
+								</button>
 							);
 						})}
 					</div>

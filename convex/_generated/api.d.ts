@@ -25,6 +25,7 @@ import type * as lib_activation from "../lib/activation.js";
 import type * as lib_address from "../lib/address.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_billingEmailCopy from "../lib/billingEmailCopy.js";
+import type * as lib_categoryCounts from "../lib/categoryCounts.js";
 import type * as lib_channels_registry from "../lib/channels/registry.js";
 import type * as lib_channels_types from "../lib/channels/types.js";
 import type * as lib_channels_whatsapp_adapter from "../lib/channels/whatsapp/adapter.js";
@@ -97,6 +98,7 @@ declare const fullApi: ApiFromModules<{
   "lib/address": typeof lib_address;
   "lib/auth": typeof lib_auth;
   "lib/billingEmailCopy": typeof lib_billingEmailCopy;
+  "lib/categoryCounts": typeof lib_categoryCounts;
   "lib/channels/registry": typeof lib_channels_registry;
   "lib/channels/types": typeof lib_channels_types;
   "lib/channels/whatsapp/adapter": typeof lib_channels_whatsapp_adapter;

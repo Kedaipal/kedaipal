@@ -295,13 +295,13 @@ describe("categories.setActive", () => {
 		});
 		expect(page).toBeNull(); // archived deep link → notFound
 
-		// Junction rows survived the archive…
+		// The editor seed is ACTIVE-only, so an archived membership no longer
+		// surfaces there (it must not invisibly consume the picker's cap)…
 		const editorIds = await asA.query(api.categories.getProductCategoryIds, {
 			productId,
 		});
-		expect(editorIds).toEqual([mealsId]);
-
-		// …and restore revives the tile, appended after Events.
+		expect(editorIds).toEqual([]);
+		// …but the junction row itself survived the archive (verified via restore).
 		await asA.mutation(api.categories.setActive, {
 			categoryId: mealsId,
 			active: true,
@@ -310,10 +310,15 @@ describe("categories.setActive", () => {
 			retailerId: retailer._id,
 		});
 		expect(rows.map((r) => r.name)).toEqual(["Events", "Meals"]);
+		// Restore revives the tile (count recomputed) AND the membership.
 		const revived = await t.query(api.categories.listActivePublic, {
 			retailerId: retailer._id,
 		});
 		expect(revived.map((r) => r.name)).toEqual(["Meals"]);
+		const seededAgain = await asA.query(api.categories.getProductCategoryIds, {
+			productId,
+		});
+		expect(seededAgain).toEqual([mealsId]);
 	});
 });
 
@@ -595,5 +600,164 @@ describe("categories public reads", () => {
 				categorySlug: "no-such-category",
 			}),
 		).toBeNull();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Denormalized productCount — maintained on membership + product visibility
+// changes (no per-load fan-out). See convex/lib/categoryCounts.ts.
+// ---------------------------------------------------------------------------
+
+describe("categories denormalized productCount", () => {
+	async function countOf(
+		t: ReturnType<typeof setup>,
+		userId: string,
+		retailerId: Id<"retailers">,
+		name: string,
+	): Promise<number> {
+		const asUser = t.withIdentity({ subject: userId });
+		const rows = await asUser.query(api.categories.listForRetailer, {
+			retailerId,
+		});
+		return rows.find((r) => r.name === name)?.productCount ?? -1;
+	}
+
+	test("tracks assignment, then product archive/restore and hide/unhide", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const mealsId = await createCategory(t, USER_A, retailer._id, "Meals");
+		const productId = await seedProduct(t, USER_A, retailer._id);
+
+		// New category starts at 0.
+		expect(await countOf(t, USER_A, retailer._id, "Meals")).toBe(0);
+
+		// Assigning a visible product → 1.
+		await asA.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: [mealsId],
+		});
+		expect(await countOf(t, USER_A, retailer._id, "Meals")).toBe(1);
+
+		// Archiving the product → 0 (cross-module, via products.archive).
+		await asA.mutation(api.products.archive, { productId });
+		expect(await countOf(t, USER_A, retailer._id, "Meals")).toBe(0);
+
+		// Restoring → 1 (via products.update active:true).
+		await asA.mutation(api.products.update, { productId, active: true });
+		expect(await countOf(t, USER_A, retailer._id, "Meals")).toBe(1);
+
+		// Hiding → 0; unhiding → 1 (via products.update hidden).
+		await asA.mutation(api.products.update, { productId, hidden: true });
+		expect(await countOf(t, USER_A, retailer._id, "Meals")).toBe(0);
+		await asA.mutation(api.products.update, { productId, hidden: false });
+		expect(await countOf(t, USER_A, retailer._id, "Meals")).toBe(1);
+
+		// Removing the membership → 0.
+		await asA.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: [],
+		});
+		expect(await countOf(t, USER_A, retailer._id, "Meals")).toBe(0);
+	});
+
+	test("assigning an already-hidden product does not inflate the count", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const mealsId = await createCategory(t, USER_A, retailer._id, "Meals");
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await asA.mutation(api.products.update, { productId, hidden: true });
+		await asA.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: [mealsId],
+		});
+		expect(await countOf(t, USER_A, retailer._id, "Meals")).toBe(0);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Archived-category memberships are preserved and never consume the editor's
+// active cap (86ey81n63 PR review finding 3).
+// ---------------------------------------------------------------------------
+
+describe("categories archived-membership preservation", () => {
+	test("a product edit preserves an archived membership without dropping it", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const oldId = await createCategory(t, USER_A, retailer._id, "Old", "old");
+		const newId = await createCategory(t, USER_A, retailer._id, "New", "new");
+		const productId = await seedProduct(t, USER_A, retailer._id);
+
+		// Product in "Old", then "Old" is archived.
+		await asA.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: [oldId],
+		});
+		await asA.mutation(api.categories.setActive, {
+			categoryId: oldId,
+			active: false,
+		});
+
+		// The editor now only sees ACTIVE memberships (none) — so a normal product
+		// save that assigns "New" must NOT drop the archived "Old" membership.
+		await asA.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: [newId],
+		});
+		expect(
+			await asA.query(api.categories.getProductCategoryIds, { productId }),
+		).toEqual([newId]);
+
+		// Restoring "Old" revives its membership — proof the junction survived.
+		await asA.mutation(api.categories.setActive, {
+			categoryId: oldId,
+			active: true,
+		});
+		const seeded = await asA.query(api.categories.getProductCategoryIds, {
+			productId,
+		});
+		expect(new Set(seeded)).toEqual(new Set([oldId, newId]));
+	});
+
+	test("the 10-cap counts only ACTIVE memberships, so archived links never block", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await seedProduct(t, USER_A, retailer._id);
+
+		// Fill an archived membership first.
+		const archivedId = await createCategory(
+			t,
+			USER_A,
+			retailer._id,
+			"Archived",
+			"arch",
+		);
+		await asA.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: [archivedId],
+		});
+		await asA.mutation(api.categories.setActive, {
+			categoryId: archivedId,
+			active: false,
+		});
+
+		// Now the product can still take a FULL set of 10 active categories — the
+		// archived membership doesn't count against the cap.
+		const activeIds: Id<"categories">[] = [];
+		for (let i = 0; i < 10; i++) {
+			activeIds.push(
+				await createCategory(t, USER_A, retailer._id, `Cat ${i}`, `cat-${i}00`),
+			);
+		}
+		await asA.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: activeIds,
+		});
+		expect(
+			await asA.query(api.categories.getProductCategoryIds, { productId }),
+		).toHaveLength(10);
 	});
 });

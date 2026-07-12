@@ -348,7 +348,12 @@ function CategoryCard({
 				<span className="truncate text-[14.5px] font-semibold">
 					{category.name}
 				</span>
-				<span className="truncate text-[13px] text-muted-foreground">
+				{category.description ? (
+					<span className="line-clamp-1 text-[13px] text-muted-foreground">
+						{category.description}
+					</span>
+				) : null}
+				<span className="truncate text-[12.5px] text-muted-foreground/80">
 					{category.productCount === 0
 						? category.active
 							? "No products yet — tile hidden until one is added"
