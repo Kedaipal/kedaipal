@@ -74,12 +74,14 @@ describe("resolveAccess (pure)", () => {
 			orderInbox: false,
 			chargeablePickup: false,
 			categories: false,
+			insights: false,
 		});
 		expect(resolveAccess(sub({ plan: "pro" })).features).toEqual({
 			crm: true,
 			orderInbox: true,
 			chargeablePickup: true,
 			categories: true,
+			insights: true,
 		});
 		// Fail safe: a missing row gets Pro features, never a lockout.
 		expect(resolveAccess(null).features).toEqual({
@@ -87,6 +89,7 @@ describe("resolveAccess (pure)", () => {
 			orderInbox: true,
 			chargeablePickup: true,
 			categories: true,
+			insights: true,
 		});
 	});
 });

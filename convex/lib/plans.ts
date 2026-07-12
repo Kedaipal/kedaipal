@@ -64,6 +64,9 @@ export type PlanFeatures = {
 	 * never trapped, and the buyer-facing storefront always renders whatever
 	 * categories exist. */
 	categories: boolean;
+	/** Seller Insights (86ey5tfrz): the /app/insights analytics page. Starter
+	 * gets a locked teaser; the query returns `{ gated: true }` server-side. */
+	insights: boolean;
 };
 
 export type PlanFeature = keyof PlanFeatures;
@@ -74,13 +77,21 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		orderInbox: false,
 		chargeablePickup: false,
 		categories: false,
+		insights: false,
 	},
-	pro: { crm: true, orderInbox: true, chargeablePickup: true, categories: true },
+	pro: {
+		crm: true,
+		orderInbox: true,
+		chargeablePickup: true,
+		categories: true,
+		insights: true,
+	},
 	scale: {
 		crm: true,
 		orderInbox: true,
 		chargeablePickup: true,
 		categories: true,
+		insights: true,
 	},
 };
 

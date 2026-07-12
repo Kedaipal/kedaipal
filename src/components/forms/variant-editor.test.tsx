@@ -84,6 +84,15 @@ describe("VariantEditor — fulfilment + approval UX", () => {
 		expect(screen.getByText(/never runs out/i)).toBeTruthy();
 	});
 
+	it("marks Stock optional once a single variant is made to order", () => {
+		render(<Harness initial={singleVariant} />);
+		// Only SKU carries "(optional)" while tracking stock; Stock is required.
+		expect(screen.getAllByText(/\(optional\)/i)).toHaveLength(1);
+		fireEvent.click(screen.getByRole("button", { name: /made to order/i }));
+		// Made to order → stock is just a guide, so Stock is now flagged optional too.
+		expect(screen.getAllByText(/\(optional\)/i)).toHaveLength(2);
+	});
+
 	it("describes mockup approval in seller-recognisable terms", () => {
 		render(<Harness initial={singleVariant} />);
 		expect(

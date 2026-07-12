@@ -57,6 +57,31 @@ New token: **`--accent-emphasis`** (readable mint for text/icons on mint-tinted 
 ### Chrome
 - **Bottom nav**: the active tab gets a mint pill behind the icon (text-colour-only active state was easy to miss on a 6-tab bar) + bold label.
 
+### Mobile bottom nav — 5 tabs + More
+
+Restructured when Seller Insights (`86ey5tfrz`) needed a mobile home and the
+6-tab bar had no room (and Broadcast/S6 would have hit the same wall next).
+The bar is now reserved for the seller's **daily loop**; everything else is one
+predictable tap away under **More**:
+
+- **Primary tabs:** Home · Orders (badge) · Counter · **Insights** (Pro chip via
+  `insightsLocked`, mirroring `crmLocked`) · More.
+- **More** opens a floating panel just above the bar (radix Dialog — focus trap,
+  Esc, scrim tap-close; anchored via a published `--app-bottomnav-h`, the same
+  pattern as `--app-header-h`). Rows: Products, Customers (Pro chip when
+  locked), Store poster (first time the poster has a nav home), Settings. Each
+  row = icon + one-line subtitle so nothing is a mystery link.
+- **Active state:** the More tab reads active while the panel is open OR while
+  the current route is one of its children (`/app/products|customers|settings|
+  poster`) — landing on Products never leaves the bar unlit.
+- **Placement rule going forward:** a surface earns a primary tab only if it's
+  part of the daily loop; management/occasional surfaces (e.g. future
+  Broadcast) join the More panel instead of fighting for a 7th slot.
+- Desktop sidebar unchanged (it has room; all links stay one click).
+- Covered in `src/components/dashboard/bottom-nav.test.tsx` (memory-router
+  harness — tabs, sheet rows, navigate-closes, More active on child routes,
+  admin-only mode).
+
 ## Backend delta (additive only)
 
 `orders.searchOrders` counts gained three fields, computed in the same single scan: `dueToday` (open orders whose fulfilment date is today MYT), `unpaid` (open orders not `received` — includes `claimed`), `unpaidAmount` (sum of their totals). Powers the inbox banner and the Home today strip/attention list — Home now subscribes to the same counts seam instead of `countActionable`. Covered in `convex/orders.test.ts`.

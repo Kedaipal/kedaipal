@@ -152,6 +152,7 @@ const FEATURE_LABEL: Record<PlanFeature, string> = {
 	orderInbox: "Order Inbox search, filters and bulk actions",
 	chargeablePickup: "Charging a fee on a pickup location",
 	categories: "Organizing products into categories",
+	insights: "Seller Insights",
 };
 
 /**
