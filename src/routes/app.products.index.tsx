@@ -128,7 +128,12 @@ function BulkIoMenu({
  * Header link to category management — the discoverability surface for the
  * feature (categories live UNDER Products; there's no nav tab). The link works
  * on every tier: a locked (Starter) seller lands on the explain-and-upgrade
- * wall, so the ProBadge marks the tier boundary without hiding the door.
+ * wall, so the tier boundary is marked without hiding the door.
+ *
+ * Desktop shows the labelled button; on mobile it collapses to an icon button
+ * (matching the Import/Export icon beside it) so the title + three header
+ * actions fit a 360px row without the heading overlapping. A locked seller
+ * gets an accent dot on the icon in lieu of the full "Pro" chip.
  */
 function CategoriesLink({
 	locked,
@@ -137,8 +142,31 @@ function CategoriesLink({
 	locked: boolean;
 	mobile?: boolean;
 }) {
+	if (mobile) {
+		return (
+			<Button
+				asChild
+				variant="outline"
+				size="icon"
+				className="relative size-11 shrink-0 rounded-xl"
+			>
+				<Link
+					to="/app/products/categories"
+					aria-label={locked ? "Categories (Pro feature)" : "Categories"}
+				>
+					<FolderOpen className="size-5" aria-hidden />
+					{locked ? (
+						<span
+							aria-hidden
+							className="absolute right-1 top-1 size-2 rounded-full bg-accent ring-2 ring-card"
+						/>
+					) : null}
+				</Link>
+			</Button>
+		);
+	}
 	return (
-		<Button asChild variant="outline" className={mobile ? "h-11 px-3" : "h-10"}>
+		<Button asChild variant="outline" className="h-10">
 			<Link to="/app/products/categories">
 				<FolderOpen className="size-4" aria-hidden />
 				Categories

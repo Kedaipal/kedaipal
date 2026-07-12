@@ -1,7 +1,7 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
-import { ArchiveRestore, FolderOpen, Pencil } from "lucide-react";
+import { ArchiveRestore, ArrowLeft, FolderOpen, Pencil } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
@@ -30,6 +30,24 @@ type CategoryRow = FunctionReturnType<
 export const Route = createFileRoute("/app/products/categories")({
 	component: CategoriesRoute,
 });
+
+/**
+ * Mobile back arrow → Products. Desktop uses the PageHeader `back` prop; the
+ * mobile header is separate (PageHeader is desktop-only), so it needs its own
+ * back affordance to match every other nested `/app` screen. Mirrors the
+ * product-editor back button.
+ */
+function MobileBackLink() {
+	return (
+		<Link
+			to="/app/products"
+			aria-label="Back to products"
+			className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted lg:hidden"
+		>
+			<ArrowLeft className="size-5" />
+		</Link>
+	);
+}
 
 /**
  * Category management — lives under Products (categories are catalog
@@ -68,7 +86,8 @@ function CategoriesRoute() {
 					subtitle="Available on Pro"
 					back={{ to: "/app/products", label: "Products" }}
 				/>
-				<div className="flex items-center justify-between lg:hidden">
+				<div className="flex items-center gap-3 lg:hidden">
+					<MobileBackLink />
 					<h2 className="text-xl font-bold">Categories</h2>
 				</div>
 				<ProFeatureWall
@@ -110,17 +129,20 @@ function CategoriesRoute() {
 				actions={newButton}
 			/>
 			<div className="flex items-center justify-between gap-3 lg:hidden">
-				<div className="flex min-w-0 flex-col">
-					<h2 className="font-heading text-[22px] font-extrabold leading-tight tracking-tight">
-						Categories
-					</h2>
-					{categories === undefined ? (
-						<Skeleton className="h-3 w-32 rounded" />
-					) : (
-						<p className="text-[13px] text-muted-foreground">
-							{active?.length ?? 0} active · {archived?.length ?? 0} archived
-						</p>
-					)}
+				<div className="flex min-w-0 items-center gap-3">
+					<MobileBackLink />
+					<div className="flex min-w-0 flex-col">
+						<h2 className="font-heading text-[22px] font-extrabold leading-tight tracking-tight">
+							Categories
+						</h2>
+						{categories === undefined ? (
+							<Skeleton className="h-3 w-32 rounded" />
+						) : (
+							<p className="text-[13px] text-muted-foreground">
+								{active?.length ?? 0} active · {archived?.length ?? 0} archived
+							</p>
+						)}
+					</div>
 				</div>
 				<div className="shrink-0">{newButton}</div>
 			</div>
@@ -338,6 +360,9 @@ function CategoryCard({
 					</span>
 				</span>
 			</div>
+			{/* Actions collapse to icon-only on mobile (labels shown ≥lg) so a
+			    category name isn't crushed to "Dail…" on a 360px row. Every action
+			    keeps an aria-label, so the icon-only state stays accessible. */}
 			<div className="flex shrink-0 items-center gap-0.5">
 				{category.active ? (
 					<CopyButton
@@ -345,6 +370,7 @@ function CategoryCard({
 						ariaLabel={`Copy link to ${category.name}`}
 						successMessage="Category link copied — share it on WhatsApp"
 						className="h-10 px-2.5"
+						labelClassName="hidden lg:inline"
 					/>
 				) : null}
 				{!locked ? (
@@ -369,7 +395,9 @@ function CategoryCard({
 					className="flex h-10 items-center justify-center gap-1 rounded-full px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
 				>
 					<ArchiveRestore className="size-4" aria-hidden />
-					{category.active ? "Archive" : "Restore"}
+					<span className="hidden lg:inline">
+						{category.active ? "Archive" : "Restore"}
+					</span>
 				</button>
 			</div>
 		</div>
