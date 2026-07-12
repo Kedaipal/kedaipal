@@ -318,12 +318,15 @@ describe("plan gating — Categories (Pro+)", () => {
 			await asA.query(api.categories.getProductCategoryIds, { productId }),
 		).toEqual([]);
 
-		// …and neither is archive/restore.
+		// …and neither is archive/restore or hide/show (storefront visibility is
+		// always the seller's to manage, even downgraded).
 		await asA.mutation(api.categories.setActive, {
 			categoryId,
 			active: false,
 		});
 		await asA.mutation(api.categories.setActive, { categoryId, active: true });
+		await asA.mutation(api.categories.setHidden, { categoryId, hidden: true });
+		await asA.mutation(api.categories.setHidden, { categoryId, hidden: false });
 
 		// The management list stays readable on Starter (archive must be
 		// reachable), as does the picker's data source.

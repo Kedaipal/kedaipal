@@ -8,12 +8,23 @@ Naming decision: **"categories" everywhere** — tables, files, routes, UI (no S
 
 ## Schema
 
-Two tables (additive, dev-only widen — no migration):
+Two tables (additive, dev-only widen — no migration) + one derived field on `products`:
 
-- **`categories`** — `retailerId, name, slug, description?, imageStorageId?, active, sortOrder, createdAt, updatedAt`. Indexes `by_retailer`, `by_retailer_active`, `by_retailer_slug` (powers the public page + per-retailer slug uniqueness).
+- **`categories`** — `retailerId, name, slug, description?, imageStorageId?, active, hidden?, productCount?, sortOrder, createdAt, updatedAt`. Indexes `by_retailer`, `by_retailer_active`, `by_retailer_slug` (powers the public page + per-retailer slug uniqueness). `active` = archive; `hidden` = storefront off-switch (see [Hidden categories](#hidden-categories)); `productCount` = denormalized visible count (see [Read model](#read-model--costs-pr-review-resolution)).
 - **`productCategories`** (junction) — `productId, categoryId, retailerId` (denormalized for the account-deletion cascade), `sortOrder` (position **within** the category, independent of the product's global sortOrder), `createdAt`. Indexes `by_product`, `by_category_sort`, `by_product_category`, `by_retailer`.
+- **`products.hiddenByCategory?`** (new) — denormalized: true when every category the product is in is hidden, so it drops off the storefront (see [Hidden categories](#hidden-categories)). No change to `orders`.
 
-**No changes to `products` or `orders`.** Categories are a pure browse layer — never frozen onto an order line (unlike `pickupSnapshot`), so re-categorizing never rewrites order history. They are also **never a sellability gate**: counter checkout, order create, and admin flows are untouched.
+Categories are a pure browse layer — never frozen onto an order line (unlike `pickupSnapshot`), so re-categorizing never rewrites order history. They are also **never a sellability gate**: counter checkout, order create, and admin flows are untouched (a category-hidden product is still counter-sellable).
+
+## Hidden categories
+
+A category has a `hidden` toggle **orthogonal to archive** (mirrors `products.hidden`). Hiding a category:
+- pulls its tile off the storefront rail (`listActivePublic` excludes `hidden`) and 404s its page (`getPublicPage` returns null);
+- **suppresses a product only when _every_ category it belongs to is hidden** — a product also in a visible category stays on the storefront (and on that category's page). Suppressed products are still **sellable at the counter** (`listForCounter` doesn't filter them).
+
+The suppression is denormalized onto `products.hiddenByCategory` (recomputed in [`convex/lib/categoryCounts.ts`](../convex/lib/categoryCounts.ts) on membership changes + category hide/show), so the hot `products.list` read just excludes `hidden || hiddenByCategory` — no per-load category fan-out. `products.get` also hides suppressed products from non-owners.
+
+Hide/show (`categories.setHidden`) is **un-gated by plan** (only the soft-lock applies) — storefront visibility is always the seller's to manage, even after a downgrade. Archive vs hide: **archive** retires the grouping but leaves products listed (in All / other categories); **hide** pulls the group *and its exclusive products* off the store.
 
 ## API — `convex/categories.ts`
 
@@ -28,6 +39,7 @@ CRUD mirrors `pickupLocations.ts` (owner-OR-admin `requireRetailerAccess`, `prod
 | `getProductCategoryIds` (q) | Seeds the product editor's picker. |
 | `create` / `update` (m) | **Pro-gated.** Slug via `assertValidCategorySlug` + per-retailer uniqueness (`by_retailer_slug`); archived categories keep their slug (restore keeps its URL, and blocks reuse). `update` GCs a replaced/cleared image blob (logo-GC pattern). |
 | `setActive` (m) | **Un-gated** archive/restore (only the soft-lock applies). Junction rows kept — restore revives assignments. Reactivate appends to end. |
+| `setHidden` (m) | **Un-gated** storefront hide/show (soft-lock only). Recomputes `hiddenByCategory` for every product in the category — see [Hidden categories](#hidden-categories). |
 | `reorder` / `reorderProducts` (m) | **Pro-gated** full-permutation rewrites (pickupLocations contract: exact set, no dupes). |
 | `setProductCategories` (m) | Diffs the product's full membership: adds appended to each category's end, removals deleted, kept rows keep their position. Cap 10; additions must be same-retailer + active. **Gate fires only when the diff ADDS rows** — pure removal/clear is un-gated. |
 
@@ -43,6 +55,7 @@ Gating matrix (the escape-hatch rule — a downgraded seller is never trapped, m
 | **Add** a product to a category | ✗ | ✓ |
 | **Remove/clear** a product's categories | ✓ | ✓ |
 | **Archive / restore** a category | ✓ | ✓ |
+| **Hide / show** a category (storefront visibility) | ✓ | ✓ |
 | Read the management list / picker data | ✓ | ✓ |
 | Buyer-side rendering (rail, category pages) | always | always |
 
@@ -56,8 +69,8 @@ The product editor manages a product's memberships in **active** categories only
 
 ## Surfaces
 
-- **Dashboard** — [`/app/products/categories`](../src/routes/app.products.categories.tsx) (categories are catalog structure, so they live **under Products**; entry via a "Categories" header action, icon-only on mobile, with a page back arrow). SortableList drag-reorder, per-row **description** line + product count ("tile hidden until one is added" when 0), archive/restore, per-row **Copy link** for the shareable `/$slug/c/<slug>` deep link. [`CategoryEditDialog`](../src/components/dashboard/category-edit-dialog.tsx): name, auto-slugified editable link (server re-validates), description (≤280), optional tile image, drag-to-arrange the category's products. Entry point: **"Categories" header action on the Products index** (Pro chip when locked).
-- **Product editor** — [`CategoryPicker`](../src/components/forms/category-picker.tsx) in `ProductForm` (Storefront section, after Visibility): a scrollable **checkbox list** (not chips) so each category shows its **description**, and a long catalog scrolls (`max-h-72`) instead of wrapping into a wall. Seeded active-only. Empty state links to the management page. Both save paths call `setProductCategories` **last** so a gate error can never block the core product save (new-product path keys on the id `products.create` returns).
+- **Dashboard** — [`/app/products/categories`](../src/routes/app.products.categories.tsx) (categories are catalog structure, so they live **under Products**; entry via a "Categories" header action, icon-only on mobile, with a page back arrow). SortableList drag-reorder, per-row **description** line + product count ("tile hidden until one is added" when 0), a **"Hidden" badge** when a category is hidden, per-row **Copy link** for the shareable `/$slug/c/<slug>` deep link, and a **⋯ menu** (Edit / Hide-Show / Archive-Restore — one menu keeps a 4th action off the crowded mobile row). [`CategoryEditDialog`](../src/components/dashboard/category-edit-dialog.tsx): name, auto-slugified editable link (server re-validates), description (≤280), optional tile image, drag-to-arrange the category's products. Entry point: **"Categories" header action on the Products index** (Pro chip when locked).
+- **Product editor** — [`CategoryPicker`](../src/components/forms/category-picker.tsx) in `ProductForm` (Storefront section, after Visibility): a scrollable **checkbox list** (not chips) so each category shows its **description**, a **"Hidden" pill** on hidden categories, and an **amber note** when every picked category is hidden (the product won't show on the storefront). Long catalogs scroll (`max-h-72`). Seeded active-only. Empty state links to the management page. Both save paths call `setProductCategories` **last** so a gate error can never block the core product save (new-product path keys on the id `products.create` returns). The Products dashboard card also flags a suppressed product with a **"Hidden · category"** badge.
 - **Storefront home** — [`CategoryRail`](../src/components/storefront/category-rail.tsx) above the grid: horizontally-scrolling tiles (image w/ scrim, name, item count), sidecar `useQuery` (same pattern as the pickup-locations query), renders nothing when empty.
 - **Category page** — [`$slug_.c.$categorySlug.tsx`](../src/routes/$slug_.c.$categorySlug.tsx). The `$slug_` underscore is load-bearing: `$slug.tsx` is a leaf with no `<Outlet/>`, so plain dot-nesting would never render. SSR loader mirrors the home page (301 slug-rename redirect **preserving the category suffix**; `notFound()` for unknown/archived → "Category not found" + a Browse-all CTA, incl. live-archive while open). Own SEO head (`{category} — {store} | Kedaipal`; OG image: category image → cover → logo). Renders "← All products" back link, rail with the current tile highlighted + an **All products** tile, and the shared `ProductGrid`/`CartBar` — the cart is localStorage-keyed per retailer, so it carries across pages.
 - `ProductGrid` gained an optional `products` override prop (skips its internal query) — the category page reuses cards/search/detail-sheet/cart-add, no fork.
@@ -74,6 +87,7 @@ The product editor manages a product's memberships in **active** categories only
 The hot public reads must not fan out over every junction's product on each load (CLAUDE.md: "no full scans on hot paths"). So the visible-product count is **denormalized** onto `categories.productCount` (mirrors the customers-aggregate pattern):
 
 - **`categories.productCount`** = number of storefront-visible (`active && !hidden`) products assigned. Maintained in [`convex/lib/categoryCounts.ts`](../convex/lib/categoryCounts.ts): membership add/remove adjusts the affected category (`setProductCategories`); a product visibility flip (archive/restore, hide/unhide) adjusts every linked category (`products.archive` + `products.update` call `bumpCategoryCountsForProduct`); restore recomputes from scratch (`recomputeCategoryCount`). `internal.categories.recomputeAllCounts` is a re-runnable backfill/repair.
+- **`products.hiddenByCategory`** = true when every category the product is in is hidden. Same module: `recomputeProductHiddenByCategory` (one product, on membership change) + `recomputeHiddenByCategoryForCategory` (all a category's products, on hide/show). So `products.list` filters `hidden || hiddenByCategory` with no category fan-out. New (dev-only) feature → no prod backfill: every product starts un-suppressed and the flag is set forward the first time a category is hidden.
 - **`listActivePublic`** (rail) reads only category rows + the stored count — no product reads, no double-read of the grid's product set.
 - **`getPublicPage`** (category page) must load its products to render them; bounded by `CATEGORY_PAGE_PRODUCT_LIMIT` (100 > the 50 per-retailer product cap, so it never truncates today — defensive against a future cap raise). Per-product enrichment matches `products.list`'s cost.
 

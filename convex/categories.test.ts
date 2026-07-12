@@ -761,3 +761,144 @@ describe("categories archived-membership preservation", () => {
 		).toHaveLength(10);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Hidden categories — storefront suppression. A product drops off the store
+// only when EVERY category it's in is hidden; a visible category keeps it.
+// Still sellable at the counter. See docs/product-categories.md.
+// ---------------------------------------------------------------------------
+
+describe("categories hidden (storefront suppression)", () => {
+	test("hiding pulls the tile + page; suppresses products only in hidden categories; counter keeps them", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const dailyId = await createCategory(t, USER_A, retailer._id, "Daily", "daily");
+		const eventsId = await createCategory(
+			t,
+			USER_A,
+			retailer._id,
+			"Events",
+			"events",
+		);
+		const solo = await seedProduct(t, USER_A, retailer._id, "Nasi Lemak"); // Daily only
+		const shared = await seedProduct(t, USER_A, retailer._id, "Laksa"); // Daily + Events
+		await asA.mutation(api.categories.setProductCategories, {
+			productId: solo,
+			categoryIds: [dailyId],
+		});
+		await asA.mutation(api.categories.setProductCategories, {
+			productId: shared,
+			categoryIds: [dailyId, eventsId],
+		});
+
+		// Baseline: both categories on the rail, both products on the storefront.
+		let rail = await t.query(api.categories.listActivePublic, {
+			retailerId: retailer._id,
+		});
+		expect(rail.map((r) => r.name).sort()).toEqual(["Daily", "Events"]);
+		let list = await t.query(api.products.list, { retailerId: retailer._id });
+		expect(list.map((p) => p.name).sort()).toEqual(["Laksa", "Nasi Lemak"]);
+
+		// Hide Daily → its tile + page vanish; Events stays.
+		await asA.mutation(api.categories.setHidden, {
+			categoryId: dailyId,
+			hidden: true,
+		});
+		rail = await t.query(api.categories.listActivePublic, {
+			retailerId: retailer._id,
+		});
+		expect(rail.map((r) => r.name)).toEqual(["Events"]);
+		expect(
+			await t.query(api.categories.getPublicPage, {
+				retailerId: retailer._id,
+				categorySlug: "daily",
+			}),
+		).toBeNull();
+
+		// solo (Daily only) suppressed; shared (also in Events) stays visible.
+		list = await t.query(api.products.list, { retailerId: retailer._id });
+		expect(list.map((p) => p.name)).toEqual(["Laksa"]);
+
+		// Both still show in the counter catalog — hiding is storefront-only.
+		const counter = await asA.query(api.products.listForCounter, {
+			retailerId: retailer._id,
+		});
+		expect(counter.map((p) => p.name).sort()).toEqual(["Laksa", "Nasi Lemak"]);
+
+		// Hide Events too → shared now has all-hidden categories → suppressed.
+		await asA.mutation(api.categories.setHidden, {
+			categoryId: eventsId,
+			hidden: true,
+		});
+		list = await t.query(api.products.list, { retailerId: retailer._id });
+		expect(list.map((p) => p.name)).toEqual([]);
+
+		// Show Daily again → both reappear (they have a visible category once more).
+		await asA.mutation(api.categories.setHidden, {
+			categoryId: dailyId,
+			hidden: false,
+		});
+		list = await t.query(api.products.list, { retailerId: retailer._id });
+		expect(list.map((p) => p.name).sort()).toEqual(["Laksa", "Nasi Lemak"]);
+	});
+
+	test("a product with no categories is never suppressed", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const hiddenCat = await createCategory(t, USER_A, retailer._id, "Hidden", "hid");
+		const orphan = await seedProduct(t, USER_A, retailer._id, "Orphan");
+		const inHidden = await seedProduct(t, USER_A, retailer._id, "In Hidden");
+		void orphan;
+		await asA.mutation(api.categories.setProductCategories, {
+			productId: inHidden,
+			categoryIds: [hiddenCat],
+		});
+		await asA.mutation(api.categories.setHidden, {
+			categoryId: hiddenCat,
+			hidden: true,
+		});
+		const list = await t.query(api.products.list, { retailerId: retailer._id });
+		expect(list.map((p) => p.name)).toEqual(["Orphan"]);
+	});
+
+	test("re-assigning a product to a visible category restores it (setProductCategories recompute)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const hiddenCat = await createCategory(t, USER_A, retailer._id, "Hidden", "hid");
+		const visibleCat = await createCategory(
+			t,
+			USER_A,
+			retailer._id,
+			"Visible",
+			"vis",
+		);
+		const productId = await seedProduct(t, USER_A, retailer._id, "Nasi Lemak");
+
+		await asA.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: [hiddenCat],
+		});
+		await asA.mutation(api.categories.setHidden, {
+			categoryId: hiddenCat,
+			hidden: true,
+		});
+		expect(
+			(await t.query(api.products.list, { retailerId: retailer._id })).map(
+				(p) => p.name,
+			),
+		).toEqual([]);
+
+		await asA.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: [hiddenCat, visibleCat],
+		});
+		expect(
+			(await t.query(api.products.list, { retailerId: retailer._id })).map(
+				(p) => p.name,
+			),
+		).toEqual(["Nasi Lemak"]);
+	});
+});

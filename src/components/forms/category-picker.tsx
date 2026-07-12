@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
-import { Check, FolderOpen } from "lucide-react";
+import { Check, EyeOff, FolderOpen } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { ProBadge } from "../app/pro-gate";
@@ -37,6 +37,11 @@ export function CategoryPicker({
 	const active = categories?.filter((c) => c.active);
 	const selected = new Set(selectedIds);
 	const atCap = selectedIds.length >= MAX_CATEGORIES;
+	// A product whose EVERY selected category is hidden drops off the storefront.
+	// Warn live so the seller isn't surprised (server keeps `hiddenByCategory`).
+	const selectedCats = active?.filter((c) => selected.has(c._id)) ?? [];
+	const allSelectedHidden =
+		selectedCats.length > 0 && selectedCats.every((c) => c.hidden === true);
 
 	function toggle(id: Id<"categories">) {
 		onChange(
@@ -111,8 +116,16 @@ export function CategoryPicker({
 										) : null}
 									</span>
 									<span className="flex min-w-0 flex-col">
-										<span className="text-sm font-medium leading-snug">
-											{category.name}
+										<span className="flex items-center gap-1.5">
+											<span className="text-sm font-medium leading-snug">
+												{category.name}
+											</span>
+											{category.hidden ? (
+												<span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+													<EyeOff className="size-2.5" aria-hidden />
+													Hidden
+												</span>
+											) : null}
 										</span>
 										{category.description ? (
 											<span className="line-clamp-2 text-xs leading-snug text-muted-foreground">
@@ -124,6 +137,13 @@ export function CategoryPicker({
 							);
 						})}
 					</div>
+					{allSelectedHidden ? (
+						<p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700 dark:bg-amber-950/40 dark:text-amber-400">
+							Every category you picked is hidden, so this product won&apos;t
+							show on your storefront (it&apos;s still sellable at the counter).
+							Add a visible category to list it online.
+						</p>
+					) : null}
 					{!locked && atCap ? (
 						<p className="text-xs text-muted-foreground">
 							A product can be in at most {MAX_CATEGORIES} categories — remove

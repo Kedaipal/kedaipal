@@ -1,7 +1,15 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
-import { ArchiveRestore, ArrowLeft, FolderOpen, Pencil } from "lucide-react";
+import {
+	Archive,
+	ArchiveRestore,
+	ArrowLeft,
+	Eye,
+	EyeOff,
+	FolderOpen,
+	MoreVertical,
+} from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
@@ -15,6 +23,11 @@ import { CategoryEditDialog } from "../components/dashboard/category-edit-dialog
 import { PageHeader } from "../components/dashboard/page-header";
 import { Button } from "../components/ui/button";
 import { CopyButton } from "../components/ui/copy-button";
+import {
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "../components/ui/popover";
 import { Skeleton } from "../components/ui/skeleton";
 import { SortableList } from "../components/ui/sortable-list";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
@@ -309,30 +322,43 @@ function CategoryCard({
 	dragHandle?: ReactNode;
 }) {
 	const setActive = useMutation(api.categories.setActive);
-	const [toggling, setToggling] = useState(false);
+	const setHidden = useMutation(api.categories.setHidden);
+	const [busy, setBusy] = useState(false);
+	const [menuOpen, setMenuOpen] = useState(false);
 	const deepLink = `${storefrontUrl(storeSlug)}/c/${category.slug}`;
+	// A hidden (but still active) category is on the storefront off-switch.
+	const isHidden = category.active && category.hidden === true;
 
-	async function handleToggle() {
-		setToggling(true);
+	async function run(fn: () => Promise<unknown>, done: string) {
+		setBusy(true);
+		setMenuOpen(false);
 		try {
-			await setActive({ categoryId: category._id, active: !category.active });
-			toast.success(
-				category.active
-					? "Category archived — its tile is off your storefront."
-					: "Category restored.",
-			);
+			await fn();
+			toast.success(done);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
-			setToggling(false);
+			setBusy(false);
 		}
 	}
 
-	return (
-		<div
-			className={`flex min-h-[84px] items-center gap-2 rounded-2xl border border-border bg-card p-2.5 ${category.active ? "" : "opacity-60"}`}
-		>
-			{dragHandle}
+	const toggleArchive = () =>
+		run(
+			() => setActive({ categoryId: category._id, active: !category.active }),
+			category.active
+				? "Category archived — its tile is off your storefront."
+				: "Category restored.",
+		);
+	const toggleHidden = () =>
+		run(
+			() => setHidden({ categoryId: category._id, hidden: !category.hidden }),
+			category.hidden
+				? "Category shown on your storefront again."
+				: "Category hidden — it and its exclusive products are off your storefront (still sellable at the counter).",
+		);
+
+	const rowBody = (
+		<>
 			<div className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-muted ring-1 ring-border/60">
 				{category.imageUrl ? (
 					<img
@@ -345,8 +371,18 @@ function CategoryCard({
 				)}
 			</div>
 			<div className="flex min-w-0 flex-1 flex-col">
-				<span className="truncate text-[14.5px] font-semibold">
-					{category.name}
+				<span className="flex items-center gap-1.5">
+					<span className="truncate text-[14.5px] font-semibold">
+						{category.name}
+					</span>
+					{isHidden ? (
+						// Off the storefront but still active — flagged so the state is
+						// never silent (mirrors the product "Hidden" badge).
+						<span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+							<EyeOff className="size-3" aria-hidden />
+							Hidden
+						</span>
+					) : null}
 				</span>
 				{category.description ? (
 					<span className="line-clamp-1 text-[13px] text-muted-foreground">
@@ -365,11 +401,33 @@ function CategoryCard({
 					</span>
 				</span>
 			</div>
-			{/* Actions collapse to icon-only on mobile (labels shown ≥lg) so a
-			    category name isn't crushed to "Dail…" on a 360px row. Every action
-			    keeps an aria-label, so the icon-only state stays accessible. */}
+		</>
+	);
+
+	return (
+		<div
+			className={`flex min-h-[84px] items-center gap-2 rounded-2xl border border-border bg-card p-2.5 ${category.active ? "" : "opacity-60"}`}
+		>
+			{dragHandle}
+			{/* Tapping the card body opens the editor (mirrors the product card) —
+			    a settings menu shouldn't be the only way in. Editing is Pro-gated,
+			    so a locked seller gets a plain, non-clickable row instead. */}
+			{locked ? (
+				<div className="flex min-w-0 flex-1 items-center gap-2">{rowBody}</div>
+			) : (
+				<button
+					type="button"
+					onClick={onEdit}
+					aria-label={`Edit ${category.name}`}
+					className="flex min-w-0 flex-1 items-center gap-2 rounded-xl text-left transition-colors hover:bg-accent/5"
+				>
+					{rowBody}
+				</button>
+			)}
 			<div className="flex shrink-0 items-center gap-0.5">
-				{category.active ? (
+				{/* Copy the shareable link — only meaningful for a showing category
+				    (a hidden/archived tile 404s). Kept inline as the one quick action. */}
+				{category.active && !category.hidden ? (
 					<CopyButton
 						value={deepLink}
 						ariaLabel={`Copy link to ${category.name}`}
@@ -378,32 +436,65 @@ function CategoryCard({
 						labelClassName="hidden lg:inline"
 					/>
 				) : null}
-				{!locked ? (
-					<button
-						type="button"
-						onClick={onEdit}
-						aria-label={`Edit ${category.name}`}
-						className="flex size-10 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-					>
-						<Pencil className="size-4" aria-hidden />
-					</button>
-				) : null}
-				<button
-					type="button"
-					onClick={handleToggle}
-					disabled={toggling}
-					aria-label={
-						category.active
-							? `Archive ${category.name}`
-							: `Restore ${category.name}`
-					}
-					className="flex h-10 items-center justify-center gap-1 rounded-full px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
-				>
-					<ArchiveRestore className="size-4" aria-hidden />
-					<span className="hidden lg:inline">
-						{category.active ? "Archive" : "Restore"}
-					</span>
-				</button>
+				{/* Hide / Archive live in a ⋯ menu (editing is the card tap itself). */}
+				<Popover open={menuOpen} onOpenChange={setMenuOpen}>
+					<PopoverTrigger asChild>
+						<button
+							type="button"
+							disabled={busy}
+							aria-label={`More actions for ${category.name}`}
+							className="flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+						>
+							<MoreVertical className="size-4" aria-hidden />
+						</button>
+					</PopoverTrigger>
+					<PopoverContent align="end" className="w-52 p-1">
+						<div className="flex flex-col">
+							{/* Hiding only makes sense for an active (on-storefront) category;
+							    an archived tile is already off. Un-gated by plan. */}
+							{category.active ? (
+								<button
+									type="button"
+									onClick={toggleHidden}
+									className="flex h-10 items-center gap-2 rounded-md px-3 text-left text-sm transition-colors hover:bg-muted"
+								>
+									{category.hidden ? (
+										<Eye
+											className="size-4 text-muted-foreground"
+											aria-hidden
+										/>
+									) : (
+										<EyeOff
+											className="size-4 text-muted-foreground"
+											aria-hidden
+										/>
+									)}
+									{category.hidden
+										? "Show on storefront"
+										: "Hide from storefront"}
+								</button>
+							) : null}
+							<button
+								type="button"
+								onClick={toggleArchive}
+								className="flex h-10 items-center gap-2 rounded-md px-3 text-left text-sm transition-colors hover:bg-muted"
+							>
+								{category.active ? (
+									<Archive
+										className="size-4 text-muted-foreground"
+										aria-hidden
+									/>
+								) : (
+									<ArchiveRestore
+										className="size-4 text-muted-foreground"
+										aria-hidden
+									/>
+								)}
+								{category.active ? "Archive" : "Restore"}
+							</button>
+						</div>
+					</PopoverContent>
+				</Popover>
 			</div>
 		</div>
 	);
