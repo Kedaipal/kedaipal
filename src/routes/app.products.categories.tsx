@@ -9,7 +9,6 @@ import {
 	EyeOff,
 	FolderOpen,
 	MoreVertical,
-	Pencil,
 } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -358,11 +357,8 @@ function CategoryCard({
 				: "Category hidden — it and its exclusive products are off your storefront (still sellable at the counter).",
 		);
 
-	return (
-		<div
-			className={`flex min-h-[84px] items-center gap-2 rounded-2xl border border-border bg-card p-2.5 ${category.active ? "" : "opacity-60"}`}
-		>
-			{dragHandle}
+	const rowBody = (
+		<>
 			<div className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-muted ring-1 ring-border/60">
 				{category.imageUrl ? (
 					<img
@@ -405,6 +401,29 @@ function CategoryCard({
 					</span>
 				</span>
 			</div>
+		</>
+	);
+
+	return (
+		<div
+			className={`flex min-h-[84px] items-center gap-2 rounded-2xl border border-border bg-card p-2.5 ${category.active ? "" : "opacity-60"}`}
+		>
+			{dragHandle}
+			{/* Tapping the card body opens the editor (mirrors the product card) —
+			    a settings menu shouldn't be the only way in. Editing is Pro-gated,
+			    so a locked seller gets a plain, non-clickable row instead. */}
+			{locked ? (
+				<div className="flex min-w-0 flex-1 items-center gap-2">{rowBody}</div>
+			) : (
+				<button
+					type="button"
+					onClick={onEdit}
+					aria-label={`Edit ${category.name}`}
+					className="flex min-w-0 flex-1 items-center gap-2 rounded-xl text-left transition-colors hover:bg-accent/5"
+				>
+					{rowBody}
+				</button>
+			)}
 			<div className="flex shrink-0 items-center gap-0.5">
 				{/* Copy the shareable link — only meaningful for a showing category
 				    (a hidden/archived tile 404s). Kept inline as the one quick action. */}
@@ -417,8 +436,7 @@ function CategoryCard({
 						labelClassName="hidden lg:inline"
 					/>
 				) : null}
-				{/* Edit / Hide / Archive live in a ⋯ menu so a 4th action doesn't
-				    crowd the row; each keeps a clear label. */}
+				{/* Hide / Archive live in a ⋯ menu (editing is the card tap itself). */}
 				<Popover open={menuOpen} onOpenChange={setMenuOpen}>
 					<PopoverTrigger asChild>
 						<button
@@ -432,22 +450,6 @@ function CategoryCard({
 					</PopoverTrigger>
 					<PopoverContent align="end" className="w-52 p-1">
 						<div className="flex flex-col">
-							{!locked ? (
-								<button
-									type="button"
-									onClick={() => {
-										setMenuOpen(false);
-										onEdit();
-									}}
-									className="flex h-10 items-center gap-2 rounded-md px-3 text-left text-sm transition-colors hover:bg-muted"
-								>
-									<Pencil
-										className="size-4 text-muted-foreground"
-										aria-hidden
-									/>
-									Edit
-								</button>
-							) : null}
 							{/* Hiding only makes sense for an active (on-storefront) category;
 							    an archived tile is already off. Un-gated by plan. */}
 							{category.active ? (
