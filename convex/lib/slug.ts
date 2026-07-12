@@ -58,6 +58,26 @@ export function assertValidSlug(raw: string): string {
 	return s;
 }
 
+/**
+ * Validate a CATEGORY slug — same shape/length rules as store slugs, but no
+ * reserved-word list: category slugs live under `/$slug/c/…`, so they can never
+ * collide with app routes the way a store slug could. Per-retailer uniqueness
+ * is enforced separately at the mutation layer (categories.by_retailer_slug).
+ */
+export function assertValidCategorySlug(raw: string): string {
+	const s = raw.trim().toLowerCase();
+	if (s.length < SLUG_MIN) {
+		throw new Error(`Slug must be at least ${SLUG_MIN} characters`);
+	}
+	if (s.length > SLUG_MAX) {
+		throw new Error(`Slug must be at most ${SLUG_MAX} characters`);
+	}
+	if (!SLUG_PATTERN.test(s)) {
+		throw new Error("Slug must use lowercase letters, numbers and single dashes");
+	}
+	return s;
+}
+
 export function assertValidStoreName(raw: string): string {
 	const s = raw.trim();
 	if (s.length < 2) throw new Error("Store name must be at least 2 characters");

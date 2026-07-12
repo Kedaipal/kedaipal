@@ -57,14 +57,42 @@ export type PlanFeatures = {
 	 * SETTING a fee — an order that already carries a frozen fee displays it
 	 * on every tier (the fee is inherent to the order). */
 	chargeablePickup: boolean;
+	/** Product categories (86ey81n63): grouping products into storefront
+	 * browse categories. Gates only the seller BUILDING the structure (create/
+	 * edit/reorder categories + ADDING product assignments) — archiving a
+	 * category and clearing assignments stay all-tier so a downgraded seller is
+	 * never trapped, and the buyer-facing storefront always renders whatever
+	 * categories exist. */
+	categories: boolean;
+	/** Seller Insights (86ey5tfrz): the /app/insights analytics page. Starter
+	 * gets a locked teaser; the query returns `{ gated: true }` server-side. */
+	insights: boolean;
 };
 
 export type PlanFeature = keyof PlanFeatures;
 
 export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
-	starter: { crm: false, orderInbox: false, chargeablePickup: false },
-	pro: { crm: true, orderInbox: true, chargeablePickup: true },
-	scale: { crm: true, orderInbox: true, chargeablePickup: true },
+	starter: {
+		crm: false,
+		orderInbox: false,
+		chargeablePickup: false,
+		categories: false,
+		insights: false,
+	},
+	pro: {
+		crm: true,
+		orderInbox: true,
+		chargeablePickup: true,
+		categories: true,
+		insights: true,
+	},
+	scale: {
+		crm: true,
+		orderInbox: true,
+		chargeablePickup: true,
+		categories: true,
+		insights: true,
+	},
 };
 
 export function featuresForPlan(plan: Plan): PlanFeatures {

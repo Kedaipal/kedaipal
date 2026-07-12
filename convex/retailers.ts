@@ -1514,14 +1514,37 @@ export const deleteUser = internalMutation({
 			await ctx.db.delete(order._id);
 		}
 
-		// Products → their image files.
+		// Products → their variants (+ variant images) and image files.
 		const products = await ctx.db
 			.query("products")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 			.collect();
 		for (const product of products) {
+			const variants = await ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", product._id))
+				.collect();
+			for (const variant of variants) {
+				for (const imageId of variant.imageStorageIds) await deleteFile(imageId);
+				await ctx.db.delete(variant._id);
+			}
 			for (const imageId of product.imageStorageIds) await deleteFile(imageId);
 			await ctx.db.delete(product._id);
+		}
+
+		// Categories + product↔category junction rows (+ tile images).
+		const junctionRows = await ctx.db
+			.query("productCategories")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.collect();
+		for (const junction of junctionRows) await ctx.db.delete(junction._id);
+		const categories = await ctx.db
+			.query("categories")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.collect();
+		for (const category of categories) {
+			await deleteFile(category.imageStorageId);
+			await ctx.db.delete(category._id);
 		}
 
 		// Customers.

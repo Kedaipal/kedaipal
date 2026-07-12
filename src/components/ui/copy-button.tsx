@@ -11,6 +11,10 @@ interface CopyButtonProps {
 	/** Toast shown on a successful copy. */
 	successMessage?: string;
 	className?: string;
+	/** Extra classes on the visible "Copy"/"Copied" label — e.g.
+	 * `"hidden lg:inline"` to collapse to an icon-only button on mobile where a
+	 * row is tight. The `ariaLabel` keeps it accessible when the text is hidden. */
+	labelClassName?: string;
 }
 
 /**
@@ -23,6 +27,7 @@ export function CopyButton({
 	ariaLabel = "Copy",
 	successMessage = "Copied",
 	className,
+	labelClassName,
 }: CopyButtonProps) {
 	const [copied, setCopied] = useState(false);
 
@@ -55,7 +60,7 @@ export function CopyButton({
 			)}
 		>
 			{copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-			{copied ? "Copied" : "Copy"}
+			<span className={labelClassName}>{copied ? "Copied" : "Copy"}</span>
 		</button>
 	);
 }

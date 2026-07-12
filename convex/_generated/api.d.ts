@@ -9,8 +9,10 @@
  */
 
 import type * as admin from "../admin.js";
+import type * as analytics from "../analytics.js";
 import type * as billing from "../billing.js";
 import type * as billingEmail from "../billingEmail.js";
+import type * as categories from "../categories.js";
 import type * as counterCheckout from "../counterCheckout.js";
 import type * as crons from "../crons.js";
 import type * as customers from "../customers.js";
@@ -23,6 +25,7 @@ import type * as lib_activation from "../lib/activation.js";
 import type * as lib_address from "../lib/address.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_billingEmailCopy from "../lib/billingEmailCopy.js";
+import type * as lib_categoryCounts from "../lib/categoryCounts.js";
 import type * as lib_channels_registry from "../lib/channels/registry.js";
 import type * as lib_channels_types from "../lib/channels/types.js";
 import type * as lib_channels_whatsapp_adapter from "../lib/channels/whatsapp/adapter.js";
@@ -32,6 +35,7 @@ import type * as lib_email from "../lib/email.js";
 import type * as lib_emailCopy from "../lib/emailCopy.js";
 import type * as lib_fulfilmentDate from "../lib/fulfilmentDate.js";
 import type * as lib_inboundIntent from "../lib/inboundIntent.js";
+import type * as lib_insights from "../lib/insights.js";
 import type * as lib_legal from "../lib/legal.js";
 import type * as lib_mapsUrl from "../lib/mapsUrl.js";
 import type * as lib_order from "../lib/order.js";
@@ -78,8 +82,10 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   admin: typeof admin;
+  analytics: typeof analytics;
   billing: typeof billing;
   billingEmail: typeof billingEmail;
+  categories: typeof categories;
   counterCheckout: typeof counterCheckout;
   crons: typeof crons;
   customers: typeof customers;
@@ -92,6 +98,7 @@ declare const fullApi: ApiFromModules<{
   "lib/address": typeof lib_address;
   "lib/auth": typeof lib_auth;
   "lib/billingEmailCopy": typeof lib_billingEmailCopy;
+  "lib/categoryCounts": typeof lib_categoryCounts;
   "lib/channels/registry": typeof lib_channels_registry;
   "lib/channels/types": typeof lib_channels_types;
   "lib/channels/whatsapp/adapter": typeof lib_channels_whatsapp_adapter;
@@ -101,6 +108,7 @@ declare const fullApi: ApiFromModules<{
   "lib/emailCopy": typeof lib_emailCopy;
   "lib/fulfilmentDate": typeof lib_fulfilmentDate;
   "lib/inboundIntent": typeof lib_inboundIntent;
+  "lib/insights": typeof lib_insights;
   "lib/legal": typeof lib_legal;
   "lib/mapsUrl": typeof lib_mapsUrl;
   "lib/order": typeof lib_order;

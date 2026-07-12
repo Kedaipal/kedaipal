@@ -6,6 +6,7 @@ import {
 	Download,
 	EyeOff,
 	FileSpreadsheet,
+	FolderOpen,
 	Search,
 	Upload,
 	X,
@@ -14,6 +15,7 @@ import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { ProBadge } from "../components/app/pro-gate";
 import { PageHeader } from "../components/dashboard/page-header";
 import { Button } from "../components/ui/button";
 import { FilterChip, FilterChipRow } from "../components/ui/filter-chip";
@@ -34,6 +36,7 @@ import {
 	type ExportableProduct,
 } from "../lib/product-export";
 import { reorderByIds } from "../lib/reorder";
+import { hasFeature } from "../lib/subscription";
 
 type StatusFilter = "all" | "active" | "archived";
 
@@ -121,8 +124,66 @@ function BulkIoMenu({
 	);
 }
 
+/**
+ * Header link to category management — the discoverability surface for the
+ * feature (categories live UNDER Products; there's no nav tab). The link works
+ * on every tier: a locked (Starter) seller lands on the explain-and-upgrade
+ * wall, so the tier boundary is marked without hiding the door.
+ *
+ * Desktop shows the labelled button; on mobile it collapses to an icon button
+ * (matching the Import/Export icon beside it) so the title + three header
+ * actions fit a 360px row without the heading overlapping. A locked seller
+ * gets an accent dot on the icon in lieu of the full "Pro" chip.
+ */
+function CategoriesLink({
+	locked,
+	mobile = false,
+}: {
+	locked: boolean;
+	mobile?: boolean;
+}) {
+	if (mobile) {
+		return (
+			<Button
+				asChild
+				variant="outline"
+				size="icon"
+				className="relative size-11 shrink-0 rounded-xl"
+			>
+				<Link
+					to="/app/products/categories"
+					aria-label={locked ? "Categories (Pro feature)" : "Categories"}
+				>
+					<FolderOpen className="size-5" aria-hidden />
+					{locked ? (
+						<span
+							aria-hidden
+							className="absolute right-1 top-1 size-2 rounded-full bg-accent ring-2 ring-card"
+						/>
+					) : null}
+				</Link>
+			</Button>
+		);
+	}
+	return (
+		<Button asChild variant="outline" className="h-10">
+			<Link to="/app/products/categories">
+				<FolderOpen className="size-4" aria-hidden />
+				Categories
+				{locked ? <ProBadge /> : null}
+			</Link>
+		</Button>
+	);
+}
+
 function ProductsRoute() {
 	const retailer = useDashboardRetailer();
+	// Client mirror of the `categories` plan gate (server is the lock) — only
+	// used to badge the Categories link; admin act-as sees through it.
+	const categoriesLocked =
+		!!retailer &&
+		!retailer.actingAsAdmin &&
+		!hasFeature(retailer.subscription, "categories");
 	const products = useQuery(
 		api.products.listAll,
 		retailer ? { retailerId: retailer._id } : "skip",
@@ -231,6 +292,7 @@ function ProductsRoute() {
 								onExport={handleExport}
 							/>
 						) : null}
+						<CategoriesLink locked={categoriesLocked} />
 						<Button asChild className="h-10">
 							<Link to="/app/products/new">+ New product</Link>
 						</Button>
@@ -258,6 +320,7 @@ function ProductsRoute() {
 							onExport={handleExport}
 						/>
 					) : null}
+					<CategoriesLink locked={categoriesLocked} mobile />
 					<Button asChild className="h-11">
 						<Link to="/app/products/new">+ New</Link>
 					</Button>
@@ -408,12 +471,15 @@ function ProductCard({
 				</div>
 			</div>
 			<div className="flex shrink-0 flex-col items-end gap-1">
-				{p.active && p.hidden ? (
+				{p.active && (p.hidden || p.hiddenByCategory) ? (
 					// Off the public storefront, still sellable at the counter — flagged
-					// so hidden state is never silent. See docs/hidden-products.md.
+					// so the state is never silent. Either the seller's own toggle
+					// (`hidden`) or category suppression (`hiddenByCategory`, every one
+					// of its categories is hidden). See docs/hidden-products.md +
+					// docs/product-categories.md.
 					<span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
 						<EyeOff className="size-3" aria-hidden />
-						Hidden
+						{p.hidden ? "Hidden" : "Hidden · category"}
 					</span>
 				) : null}
 				{p.active ? (

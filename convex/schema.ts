@@ -274,6 +274,15 @@ export default defineSchema({
 		// lists online. undefined/false = visible (legacy default; no backfill).
 		// See docs/hidden-products.md.
 		hidden: v.optional(v.boolean()),
+		// Denormalized storefront suppression: true when this product belongs to
+		// ≥1 category AND every one of them is hidden — so it drops off the public
+		// storefront (still counter-sellable), while a product also in a non-hidden
+		// category stays visible. Derived from category `hidden` flags + this
+		// product's memberships; maintained in convex/lib/categoryCounts.ts on
+		// membership changes + category hide/show. Orthogonal to `hidden` (the
+		// seller's own toggle). undefined/false = not suppressed. See
+		// docs/product-categories.md.
+		hiddenByCategory: v.optional(v.boolean()),
 		// Option axes this product varies along, ordered (drives picker order).
 		// Empty array (or undefined on pre-migration rows) = no axes → exactly
 		// one implicit variant with optionValues:[]. Capped at 2 axes. Bounded,
@@ -354,6 +363,70 @@ export default defineSchema({
 	})
 		.index("by_product", ["productId"])
 		.index("by_retailer_sku", ["retailerId", "sku"]),
+
+	/**
+	 * Retailer-defined product category — a pure storefront BROWSE structure
+	 * (86ey81n63), never a sellability gate and never frozen onto orders, so
+	 * re-categorizing later can't rewrite order history. Products join through
+	 * `productCategories` (many-to-many). `active` is the archive flag (soft
+	 * delete, mirrors pickupLocations.isActive); an archived category's junction
+	 * rows are KEPT so restore revives its assignments. `slug` powers the public
+	 * `/$slug/c/$categorySlug` page — unique per retailer (by_retailer_slug), no
+	 * reserved-word list needed (nested under the store path). See
+	 * docs/product-categories.md.
+	 */
+	categories: defineTable({
+		retailerId: v.id("retailers"),
+		name: v.string(),
+		slug: v.string(),
+		// Optional buyer-facing blurb shown on the category page header.
+		description: v.optional(v.string()),
+		// Optional tile image (public-safe). Replaced/cleared blobs are GC'd by
+		// the update mutation, same pattern as retailers.logoStorageId.
+		imageStorageId: v.optional(v.string()),
+		active: v.boolean(),
+		// Storefront visibility, ORTHOGONAL to `active` (the archive flag) — mirrors
+		// products.hidden. hidden === true → the category tile is off the rail, its
+		// page 404s, and products whose EVERY category is hidden drop off the
+		// storefront (still sellable at the counter). A product also in a
+		// non-hidden category stays visible. undefined/false = shown. See
+		// docs/product-categories.md.
+		hidden: v.optional(v.boolean()),
+		// Denormalized count of storefront-VISIBLE (active && !hidden) products
+		// assigned to this category. The hot public rail + management list read
+		// this directly instead of scanning every junction's product per load.
+		// Maintained on membership + product-visibility changes (see
+		// convex/lib/categoryCounts.ts). Optional during the additive widen —
+		// reads fall back to 0; `internal.categories.recomputeAllCounts` backfills
+		// pre-existing rows.
+		productCount: v.optional(v.number()),
+		sortOrder: v.number(),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_retailer", ["retailerId"])
+		.index("by_retailer_active", ["retailerId", "active"])
+		.index("by_retailer_slug", ["retailerId", "slug"]),
+
+	/**
+	 * Product ↔ category junction (many-to-many; a product sits in ≤10
+	 * categories). `retailerId` is denormalized for the retailer-wide cascade
+	 * on account deletion (same pattern as productVariants.retailerId).
+	 * `sortOrder` is the product's position WITHIN the category, independent of
+	 * the product's own global sortOrder. One row per (product, category) pair,
+	 * enforced via by_product_category.
+	 */
+	productCategories: defineTable({
+		productId: v.id("products"),
+		categoryId: v.id("categories"),
+		retailerId: v.id("retailers"),
+		sortOrder: v.number(),
+		createdAt: v.number(),
+	})
+		.index("by_product", ["productId"])
+		.index("by_category_sort", ["categoryId", "sortOrder"])
+		.index("by_product_category", ["productId", "categoryId"])
+		.index("by_retailer", ["retailerId"]),
 
 	/**
 	 * First-class customer entity, keyed by (retailerId, waPhone). Aggregates
@@ -783,7 +856,10 @@ export default defineSchema({
 		.index("by_token", ["token"])
 		.index("by_retailer_status", ["retailerId", "status"])
 		// Drives the expiry cron: range-scan awaiting_buyer sessions past their TTL.
-		.index("by_status_expiry", ["status", "expiresAt"]),
+		.index("by_status_expiry", ["status", "expiresAt"])
+		// Lets a hard-deleted order unlink the session that spawned it without a
+		// full-table scan (orderId is set only on completed sessions).
+		.index("by_order", ["orderId"]),
 
 	// --- Manual subscription billing (docs/manual-subscription.md) -----------
 	// Per-retailer subscription. One row per retailer (created in-transaction by

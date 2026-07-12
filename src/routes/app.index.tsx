@@ -11,6 +11,8 @@ import {
 	ChevronRight,
 	CreditCard,
 	ExternalLink,
+	LineChart,
+	Lock,
 	type LucideIcon,
 	MapPin,
 	MessageCircle,
@@ -54,7 +56,7 @@ import {
 	stageLabel,
 } from "../lib/orderStatus";
 import { storefrontUrl as buildStorefrontUrl } from "../lib/storefront-url";
-import { hasSubscribed, trialDaysLeft } from "../lib/subscription";
+import { hasFeature, hasSubscribed, trialDaysLeft } from "../lib/subscription";
 import { cn } from "../lib/utils";
 
 export const Route = createFileRoute("/app/")({
@@ -596,6 +598,32 @@ function DashboardHome() {
 					<span className="text-sm font-semibold">Promote your store</span>
 					<span className="text-xs text-muted-foreground">
 						Print a free A4 poster with QR codes for counter and online orders
+					</span>
+				</span>
+				<ArrowRight className="size-4 shrink-0 text-muted-foreground" />
+			</Link>
+
+			{/* Insights — the "what actually sells / how much did I make" surface.
+			    Pro feature; Starter still sees the card (lock-badged) as the upsell. */}
+			<Link
+				to="/app/insights"
+				className="flex items-center gap-3 rounded-2xl border border-border bg-card px-3.5 py-3 transition-colors hover:bg-accent/5 lg:max-w-2xl"
+			>
+				<span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent">
+					<LineChart className="size-5" aria-hidden="true" />
+				</span>
+				<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+					<span className="flex items-center gap-2">
+						<span className="text-sm font-semibold">Insights</span>
+						{hasFeature(retailer.subscription, "insights") ? null : (
+							<span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
+								<Lock className="size-2.5" />
+								Pro
+							</span>
+						)}
+					</span>
+					<span className="text-xs text-muted-foreground">
+						Revenue, best sellers and trends at a glance
 					</span>
 				</span>
 				<ArrowRight className="size-4 shrink-0 text-muted-foreground" />

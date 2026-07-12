@@ -73,6 +73,22 @@ export const slugSchema = z
 		message: "This slug is reserved",
 	});
 
+/**
+ * Category slugs share the store-slug shape/length rules but skip the
+ * reserved-word list — they live under `/$slug/c/…`, so they can never collide
+ * with app routes. Mirrors `assertValidCategorySlug` in convex/lib/slug.ts.
+ * Per-retailer uniqueness is enforced server-side.
+ */
+export const categorySlugSchema = z
+	.string()
+	.trim()
+	.min(SLUG_MIN, `Slug must be at least ${SLUG_MIN} characters`)
+	.max(SLUG_MAX, `Slug must be at most ${SLUG_MAX} characters`)
+	.transform((s) => s.toLowerCase())
+	.refine((s) => SLUG_PATTERN.test(s), {
+		message: "Use lowercase letters, numbers and single dashes",
+	});
+
 export const storeNameSchema = z
 	.string()
 	.trim()
