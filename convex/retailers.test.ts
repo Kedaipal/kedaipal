@@ -686,6 +686,8 @@ describe("retailers deleteUser (internal cascade)", () => {
 			const coverId = await store();
 			const qrId = await store();
 			const productImgId = await store();
+			const variantImgId = await store();
+			const categoryImgId = await store();
 			const proofId = await store();
 
 			await ctx.db.patch(retailer._id, {
@@ -707,6 +709,37 @@ describe("retailers deleteUser (internal cascade)", () => {
 				sortOrder: 0,
 				createdAt: now,
 				updatedAt: now,
+			});
+			const variantId = await ctx.db.insert("productVariants", {
+				productId,
+				retailerId: retailer._id,
+				optionValues: [],
+				price: 500,
+				onHand: 10,
+				reserved: 0,
+				parcelWeightG: 0,
+				imageStorageIds: [variantImgId],
+				active: true,
+				sortOrder: 0,
+				createdAt: now,
+				updatedAt: now,
+			});
+			const categoryId = await ctx.db.insert("categories", {
+				retailerId: retailer._id,
+				name: "Kuih-muih",
+				slug: "kuih-muih",
+				imageStorageId: categoryImgId,
+				active: true,
+				sortOrder: 0,
+				createdAt: now,
+				updatedAt: now,
+			});
+			const junctionId = await ctx.db.insert("productCategories", {
+				productId,
+				categoryId,
+				retailerId: retailer._id,
+				sortOrder: 0,
+				createdAt: now,
 			});
 			const customerId = await ctx.db.insert("customers", {
 				retailerId: retailer._id,
@@ -751,8 +784,13 @@ describe("retailers deleteUser (internal cascade)", () => {
 				coverId,
 				qrId,
 				productImgId,
+				variantImgId,
+				categoryImgId,
 				proofId,
 				productId,
+				variantId,
+				categoryId,
+				junctionId,
 				customerId,
 				orderId,
 				eventId,
@@ -773,6 +811,9 @@ describe("retailers deleteUser (internal cascade)", () => {
 		await t.run(async (ctx) => {
 			expect(await ctx.db.get(ids.retailerId)).toBeNull();
 			expect(await ctx.db.get(ids.productId)).toBeNull();
+			expect(await ctx.db.get(ids.variantId)).toBeNull();
+			expect(await ctx.db.get(ids.categoryId)).toBeNull();
+			expect(await ctx.db.get(ids.junctionId)).toBeNull();
 			expect(await ctx.db.get(ids.customerId)).toBeNull();
 			expect(await ctx.db.get(ids.orderId)).toBeNull();
 			expect(await ctx.db.get(ids.eventId)).toBeNull();
@@ -782,6 +823,8 @@ describe("retailers deleteUser (internal cascade)", () => {
 			expect(await ctx.storage.getUrl(ids.coverId)).toBeNull();
 			expect(await ctx.storage.getUrl(ids.qrId)).toBeNull();
 			expect(await ctx.storage.getUrl(ids.productImgId)).toBeNull();
+			expect(await ctx.storage.getUrl(ids.variantImgId)).toBeNull();
+			expect(await ctx.storage.getUrl(ids.categoryImgId)).toBeNull();
 			expect(await ctx.storage.getUrl(ids.proofId)).toBeNull();
 		});
 	});

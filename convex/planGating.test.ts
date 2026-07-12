@@ -228,6 +228,7 @@ describe("plan gating — CRM (Pro+)", () => {
 			crm: true,
 			orderInbox: true,
 			chargeablePickup: true,
+			categories: true,
 			insights: true,
 		});
 
@@ -237,8 +238,124 @@ describe("plan gating — CRM (Pro+)", () => {
 			crm: false,
 			orderInbox: false,
 			chargeablePickup: false,
+			categories: false,
 			insights: false,
 		});
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Product categories — Pro+ builds the structure; the escape hatches
+// (archive/restore + clearing assignments) stay all-tier. See 86ey81n63.
+// ---------------------------------------------------------------------------
+
+describe("plan gating — Categories (Pro+)", () => {
+	/** Seed a Pro-built category setup, then downgrade to Starter. */
+	async function seedThenDowngrade(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const { categoryId } = await asA.mutation(api.categories.create, {
+			retailerId: retailer._id,
+			name: "Meals",
+			slug: "meals",
+		});
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await asA.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: [categoryId],
+		});
+		await setPlan(t, retailer._id, "starter");
+		return { retailer, asA, categoryId, productId };
+	}
+
+	test("Starter is rejected on every structure-building write", async () => {
+		const t = setup();
+		const { retailer, asA, categoryId, productId } = await seedThenDowngrade(t);
+
+		await expect(
+			asA.mutation(api.categories.create, {
+				retailerId: retailer._id,
+				name: "Events",
+				slug: "events",
+			}),
+		).rejects.toThrow(/Pro plan/);
+		await expect(
+			asA.mutation(api.categories.update, { categoryId, name: "Renamed" }),
+		).rejects.toThrow(/Pro plan/);
+		await expect(
+			asA.mutation(api.categories.reorder, {
+				retailerId: retailer._id,
+				orderedIds: [categoryId],
+			}),
+		).rejects.toThrow(/Pro plan/);
+		await expect(
+			asA.mutation(api.categories.reorderProducts, {
+				categoryId,
+				orderedProductIds: [productId],
+			}),
+		).rejects.toThrow(/Pro plan/);
+	});
+
+	test("Starter keeps the escape hatches: archive/restore + clearing assignments", async () => {
+		const t = setup();
+		const { retailer, asA, categoryId, productId } = await seedThenDowngrade(t);
+
+		// Adding an assignment is gated…
+		const second = await seedProduct(t, USER_A, retailer._id);
+		await expect(
+			asA.mutation(api.categories.setProductCategories, {
+				productId: second,
+				categoryIds: [categoryId],
+			}),
+		).rejects.toThrow(/Pro plan/);
+
+		// …but clearing is not (a downgraded seller is never trapped)…
+		await asA.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: [],
+		});
+		expect(
+			await asA.query(api.categories.getProductCategoryIds, { productId }),
+		).toEqual([]);
+
+		// …and neither is archive/restore or hide/show (storefront visibility is
+		// always the seller's to manage, even downgraded).
+		await asA.mutation(api.categories.setActive, {
+			categoryId,
+			active: false,
+		});
+		await asA.mutation(api.categories.setActive, { categoryId, active: true });
+		await asA.mutation(api.categories.setHidden, { categoryId, hidden: true });
+		await asA.mutation(api.categories.setHidden, { categoryId, hidden: false });
+
+		// The management list stays readable on Starter (archive must be
+		// reachable), as does the picker's data source.
+		const rows = await asA.query(api.categories.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		expect(rows.map((r) => r.name)).toEqual(["Meals"]);
+	});
+
+	test("admin act-as builds category structure on a Starter store", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedThenDowngrade(t);
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+
+		const { categoryId } = await asAdmin.mutation(api.categories.create, {
+			retailerId: retailer._id,
+			name: "Events",
+			slug: "events",
+		});
+		await asAdmin.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: [categoryId],
+		});
+		// Admin-on-behalf writes are audited.
+		const audit = await t.run(async (ctx) =>
+			(await ctx.db.query("adminAuditLog").collect()).map((r) => r.action),
+		);
+		expect(audit).toContain("categories.create");
+		expect(audit).toContain("categories.setProductCategories");
 	});
 });
 
