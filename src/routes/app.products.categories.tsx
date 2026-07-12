@@ -330,7 +330,7 @@ function CategoryCard({
 
 	return (
 		<div
-			className={`flex items-center gap-2 rounded-2xl border border-border bg-card p-2.5 ${category.active ? "" : "opacity-60"}`}
+			className={`flex min-h-[84px] items-center gap-2 rounded-2xl border border-border bg-card p-2.5 ${category.active ? "" : "opacity-60"}`}
 		>
 			{dragHandle}
 			<div className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-muted ring-1 ring-border/60">
