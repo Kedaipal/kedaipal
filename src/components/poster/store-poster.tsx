@@ -3,10 +3,25 @@ import { m } from "../../paraglide/messages";
 
 export type PosterLocale = "en" | "ms";
 
+/**
+ * Poster template: "both" = the approved two-QR v2 sheet (default);
+ * "counter" / "online" = a single giant DuitNow-style QR of that target with
+ * the Kedaipal mark overlaid in the centre. Header, bottom band, footer and
+ * phone mockup are shared — only the body block varies.
+ */
+export type PosterVariant = "both" | "counter" | "online";
+
 interface StorePosterProps {
 	storeName: string;
 	slug: string;
 	logoUrl?: string | null;
+	/**
+	 * Optional header background photo (the seller's storefront cover image).
+	 * When set, the mint header is replaced by the photo under a dark scrim so
+	 * the white text stays legible — the same treatment the storefront header
+	 * uses. Null/undefined keeps the brand mint header (the default).
+	 */
+	headerImageUrl?: string | null;
 	locale: PosterLocale;
 	/**
 	 * Left "At the counter" QR. The real target is the permanent walk-in
@@ -19,14 +34,19 @@ interface StorePosterProps {
 	counterUrl: string;
 	/** Right "Order online" QR — the storefront `?src=online` link. */
 	onlineUrl: string;
+	/**
+	 * Both URLs stay required for the single-QR variants — the route always
+	 * has both, and a stable prop shape beats a conditional one.
+	 */
+	variant?: PosterVariant;
 }
 
 /**
  * Storefront QR fallbacks. `?src=` is a reserved attribution tag (PostHog
- * later) that the storefront ignores today. `online` is the poster's right QR;
- * `counter` is only the fallback the route uses when the walk-in `waUrl` isn't
- * available (WABA number unset) — the primary counter target is the KPS deep
- * link. See docs/store-qr-poster.md.
+ * later) that the storefront ignores today. `online` is the poster's online
+ * QR; `counter` is only the fallback the route uses when the walk-in `waUrl`
+ * isn't available (WABA number unset) — the primary counter target is the KPS
+ * deep link. See docs/store-qr-poster.md.
  */
 export function posterQrUrls(
 	origin: string,
@@ -38,14 +58,25 @@ export function posterQrUrls(
 	};
 }
 
-/** Poster copy is buyer-facing; colors are fixed print values (light-theme
- * navy/mint), deliberately NOT semantic tokens — the sheet must print the same
- * regardless of the seller's dashboard theme. */
+/** Poster copy is buyer-facing; colors are fixed print values from Kris's v2
+ * Figma spec (86ey65cm6), deliberately NOT semantic tokens — the sheet must
+ * print the same regardless of the seller's dashboard theme. */
 const NAVY = "#0F172A";
 const MINT = "#10B981";
+/** Badge/step-number green — the spec uses this second green, not brand mint. */
+const BADGE_GREEN = "#00BC7C";
+/** Seller-logo ring — a hair darker than the mint header, per the v2 spec. */
+const LOGO_RING = "#109B6D";
+/** WhatsApp chat bubble green from the spec's phone mockup. */
+const BUBBLE_GREEN = "#D1F498";
 
 /**
- * The print-ready A4 sheet. Pure presentational — no hooks, no data fetching —
+ * The print-ready A4 sheet, re-skinned to Kris's v2 spec (86ey65cx8): mint
+ * header with the store lockup + URL pill, QR column left / step lists right,
+ * and a decorative bottom band (gradient + doodles + WhatsApp phone mockup)
+ * that bleeds off the page. The `variant` prop swaps the body for a single
+ * giant QR (counter-only / online-only templates) — everything else is
+ * shared. Pure presentational — no hooks, no data fetching —
  * so it renders identically on screen (scaled preview) and in print, and is
  * trivially testable. Sized in mm; the parent handles screen scaling and the
  * `@page` print rule.
@@ -54,48 +85,137 @@ export function StorePoster({
 	storeName,
 	slug,
 	logoUrl,
+	headerImageUrl,
 	locale,
 	counterUrl,
 	onlineUrl,
+	variant = "both",
 }: StorePosterProps) {
 	const longName = storeName.length > 24;
 	const longSlug = slug.length > 24;
+	const coverHeader = Boolean(headerImageUrl);
 
 	return (
 		<div
-			className="poster-sheet flex w-[210mm] min-h-[296mm] flex-col bg-white text-[#0F172A] [print-color-adjust:exact] [-webkit-print-color-adjust:exact]"
+			className="poster-sheet relative flex h-[296mm] w-[210mm] flex-col overflow-hidden bg-white text-[#0F172A] [print-color-adjust:exact] [-webkit-print-color-adjust:exact]"
 			data-testid="poster-sheet"
 		>
-			{/* Header — full-bleed navy, logo + store name + headline */}
-			<div className="flex flex-col items-center gap-[7mm] bg-[#0F172A] px-[12mm] pb-[11mm] pt-[13mm]">
+			{/* Bottom band — white→mint gradient as an inline SVG rect (NOT a CSS
+			    background gradient: element content always prints, so the band
+			    survives even without "Background graphics"). Doodles + phone sit
+			    on top of it; everything here is decorative. */}
+			<div
+				className="absolute inset-x-0 bottom-0 h-[119mm]"
+				aria-hidden="true"
+				data-testid="poster-band"
+			>
+				<svg
+					className="absolute inset-0 h-full w-full"
+					preserveAspectRatio="none"
+					viewBox="0 0 10 10"
+					role="presentation"
+				>
+					<defs>
+						<linearGradient id="poster-band-fade" x1="0" y1="0" x2="0" y2="1">
+							<stop offset="0" stopColor="#FFFFFF" />
+							<stop offset="1" stopColor="#D9F4EA" />
+						</linearGradient>
+					</defs>
+					<rect width="10" height="10" fill="url(#poster-band-fade)" />
+				</svg>
+				<img
+					src="/poster/doodles-left.svg"
+					alt=""
+					className="absolute bottom-0 left-[-3mm] w-[63mm]"
+				/>
+				<img
+					src="/poster/doodles-right.svg"
+					alt=""
+					className="absolute bottom-0 right-[-2mm] w-[63mm]"
+				/>
+			</div>
+
+			{/* Header — mint (default) or the seller's cover photo under a dark
+			    scrim; white text either way. */}
+			<div
+				className="relative h-[63mm] shrink-0"
+				style={coverHeader ? undefined : { backgroundColor: MINT }}
+				data-testid="poster-header"
+			>
+				{coverHeader ? (
+					<>
+						{/* <img>, not a CSS background — backgrounds can be stripped in
+						    print; element images always print. */}
+						<img
+							src={headerImageUrl ?? undefined}
+							alt=""
+							className="absolute inset-0 h-full w-full object-cover"
+						/>
+						<div
+							className="absolute inset-0"
+							style={{ backgroundColor: "rgba(15, 23, 42, 0.55)" }}
+							data-testid="poster-header-scrim"
+						/>
+					</>
+				) : null}
+				<div
+					className={`relative flex h-full flex-col justify-center gap-[3mm] pl-[17mm] ${
+						logoUrl ? "pr-[54mm]" : "pr-[17mm]"
+					}`}
+				>
+					<p
+						className={`text-balance break-words font-heading font-extrabold leading-tight text-white ${
+							longName ? "text-[24pt]" : "text-[35pt]"
+						}`}
+					>
+						{storeName}
+					</p>
+					<p className="font-heading text-[21pt] font-medium leading-none text-white/80">
+						{m.poster_headline({}, { locale })}
+					</p>
+					{/* Human-readable storefront address, no ?src */}
+					<p
+						className={`w-fit max-w-full break-all rounded-full px-[7mm] py-[2.2mm] font-heading font-medium ${
+							longSlug ? "text-[11pt]" : "text-[13pt]"
+						}`}
+						style={{ backgroundColor: NAVY, color: MINT }}
+					>
+						kedaipal.com/
+						<span className="font-extrabold text-white">{slug}</span>
+					</p>
+				</div>
 				{logoUrl ? (
-					/* Always on a white panel — seller logos can be dark/navy and there
-					   is no reliable way to detect that at print time. */
-					<div className="flex h-[26mm] w-[26mm] items-center justify-center rounded-2xl bg-white p-[2mm]">
+					/* White circle panel (seller logos can be dark/navy — no luminance
+					   detection at print time) with the spec's thin green ring, a hair
+					   darker than the mint header. The logo fills the inner circle with
+					   a hairline white gutter so non-circular logos don't touch the ring. */
+					<div
+						className="absolute right-[13mm] top-[12mm] flex h-[40mm] w-[40mm] items-center justify-center overflow-hidden rounded-full border-[1mm] bg-white p-[1mm]"
+						style={{ borderColor: LOGO_RING }}
+						data-testid="poster-logo"
+					>
 						<img
 							src={logoUrl}
 							alt=""
-							className="h-full w-full object-contain"
+							className="h-full w-full rounded-full object-contain"
 						/>
 					</div>
 				) : null}
-				<p
-					className={`max-w-full text-balance break-words text-center font-heading font-extrabold text-white ${
-						logoUrl ? "text-[20pt]" : longName ? "text-[26pt]" : "text-[34pt]"
-					}`}
-				>
-					{storeName}
-				</p>
-				<h1 className="max-w-full text-balance text-center font-heading text-[22pt] font-extrabold uppercase tracking-[0.06em] text-white">
-					{m.poster_headline({}, { locale })}
-				</h1>
 			</div>
-			<div className="h-[3mm] shrink-0 bg-[#10B981]" aria-hidden="true" />
 
-			{/* Body — two QR cards + URL pill */}
-			<div className="flex flex-1 flex-col justify-evenly gap-[8mm] px-[12mm] py-[9mm]">
-				<div className="grid grid-cols-2 gap-[6mm]">
-					<QrCard
+			{/* Body — varies by template; the footer/phone below sit at pinned
+			    sheet coordinates either way (flex flow would push the footer under
+			    the phone). Both-template: QR column left, step lists right; QR
+			    boxes stay ≥56mm (v1 invariant): iOS Safari ignores `@page` and
+			    scale-to-fits (~10% shrink), so 56mm lands ≥50mm — above the 45mm
+			    scan floor. The v2 mockup drew them smaller; the ticket AC overrides
+			    it. Single-QR templates: see SingleQrHero. */}
+			{variant === "both" ? (
+				/* 6mm section gap: the two 62.6mm QR rows + 6mm pt end at ~200mm,
+				   ~4mm clear of the 204mm footer pill — the gap's ceiling is ~9mm. */
+				<div className="relative flex flex-col gap-[6mm] px-[17mm] pt-[6mm]">
+					<QrRow
+						url={counterUrl}
 						badge={m.poster_counter_badge({}, { locale })}
 						title={m.poster_counter_title({}, { locale })}
 						steps={[
@@ -103,9 +223,9 @@ export function StorePoster({
 							m.poster_counter_step2({}, { locale }),
 							m.poster_counter_step3({}, { locale }),
 						]}
-						url={counterUrl}
 					/>
-					<QrCard
+					<QrRow
+						url={onlineUrl}
 						badge={m.poster_online_badge({}, { locale })}
 						title={m.poster_online_title({}, { locale })}
 						steps={[
@@ -113,64 +233,74 @@ export function StorePoster({
 							m.poster_online_step2({}, { locale }),
 							m.poster_online_step3({}, { locale }),
 						]}
-						url={onlineUrl}
 					/>
 				</div>
+			) : (
+				<SingleQrHero
+					url={variant === "counter" ? counterUrl : onlineUrl}
+					badge={
+						variant === "counter"
+							? m.poster_counter_badge({}, { locale })
+							: m.poster_online_badge({}, { locale })
+					}
+					steps={
+						variant === "counter"
+							? [
+									m.poster_counter_step1({}, { locale }),
+									m.poster_counter_step2({}, { locale }),
+									m.poster_counter_step3({}, { locale }),
+								]
+							: [
+									m.poster_online_step1({}, { locale }),
+									m.poster_online_step2({}, { locale }),
+									m.poster_online_step3({}, { locale }),
+								]
+					}
+				/>
+			)}
 
-				{/* URL pill — human-readable storefront address, no ?src */}
-				<div className="flex justify-center">
-					<p
-						className={`max-w-full break-all rounded-full bg-[#0F172A] px-[10mm] py-[4mm] text-center font-mono font-semibold text-white ${
-							longSlug ? "text-[11pt]" : "text-[14pt]"
-						}`}
-					>
-						kedaipal.com/<span className="text-[#10B981]">{slug}</span>
-					</p>
-				</div>
-			</div>
-
-			{/* Footer — powered by Kedaipal, mint base bar */}
-			<div className="flex flex-col items-center gap-[3mm] pb-[8mm]">
-				<p className="text-[9pt] font-semibold uppercase tracking-[0.35em] text-[#64748B]">
+			{/* Footer — powered by Kedaipal, pinned above the phone (the phone
+			    paints later/on top, so the lockup must never flow under it). */}
+			<div className="absolute inset-x-0 top-[204mm] flex flex-col items-center gap-[2.5mm]">
+				<p
+					className="rounded-full border-[0.4mm] border-[#B9D9CC] px-[5mm] py-[1.4mm] text-[10.5pt] font-semibold uppercase tracking-[0.2em] text-[#7BA394]"
+					data-testid="poster-powered-by"
+				>
 					{m.poster_powered_by({}, { locale })}
 				</p>
-				<img src="/logo-2.svg" alt="Kedaipal" className="h-[10mm] w-auto" />
+				<img
+					src="/poster/kedaipal-lockup.svg"
+					alt="Kedaipal"
+					className="h-[7.5mm] w-auto"
+				/>
 			</div>
-			<div className="h-[3mm] shrink-0 bg-[#10B981]" aria-hidden="true" />
+			<PhoneMockup storeName={storeName} logoUrl={logoUrl} locale={locale} />
 		</div>
 	);
 }
 
 /**
- * One QR card. The QR box is a fixed 56mm so it stays ≥45mm even when iOS
- * Safari ignores `@page` and scale-to-fits the sheet (~10% shrink); the white
- * padding around the SVG is the quiet zone (react-qr-code renders none).
+ * One QR row: the bordered QR box on the left, badge + title + numbered steps
+ * on the right. The QR module area is a fixed 56mm with a ≥3mm white quiet
+ * zone (react-qr-code renders none itself).
  */
-function QrCard({
+function QrRow({
+	url,
 	badge,
 	title,
 	steps,
-	url,
 }: {
+	url: string;
 	badge: string;
 	title: string;
 	steps: string[];
-	url: string;
 }) {
 	return (
-		<div className="flex flex-col items-center gap-[4mm] rounded-[5mm] border border-[#CBD5E1] bg-[#F8FAFC] px-[7mm] py-[8mm]">
-			<span
-				className="rounded-full px-[5mm] py-[1.6mm] text-[10pt] font-bold uppercase tracking-[0.08em] text-white"
-				style={{ backgroundColor: MINT }}
-			>
-				{badge}
-			</span>
-			<h2 className="text-center font-heading text-[15pt] font-extrabold">
-				{title}
-			</h2>
+		<div className="flex items-center gap-[10mm]">
 			<div
-				className="rounded-[3mm] border-[0.7mm] bg-white p-[3.5mm]"
-				style={{ borderColor: NAVY }}
+				className="relative shrink-0 rounded-[4mm] border-[0.8mm] bg-white p-[3mm]"
+				style={{ borderColor: MINT }}
+				data-testid="poster-qr"
 			>
 				<div className="h-[56mm] w-[56mm]">
 					<QRCode
@@ -180,17 +310,216 @@ function QrCard({
 						style={{ width: "100%", height: "100%" }}
 					/>
 				</div>
+				<QrCenterMark panelMm={12.5} logoMm={8} />
 			</div>
-			<ol className="flex w-full flex-col gap-[2.5mm] text-[10.5pt] leading-snug">
+			<div className="flex min-w-0 flex-col items-start gap-[3mm]">
+				<span
+					className="rounded-full px-[7mm] py-[2mm] font-heading text-[15pt] font-extrabold leading-none text-white"
+					style={{ backgroundColor: BADGE_GREEN }}
+				>
+					{badge}
+				</span>
+				<h2 className="font-heading text-[13.5pt] font-extrabold">{title}</h2>
+				<ol className="flex flex-col gap-[2mm] text-[13pt] leading-snug">
+					{steps.map((step, i) => (
+						<li key={step} className="flex gap-[2.5mm]">
+							<span className="font-bold">{i + 1}.</span>
+							<span>{step}</span>
+						</li>
+					))}
+				</ol>
+			</div>
+		</div>
+	);
+}
+
+/**
+ * The Kedaipal mark on a white panel in a QR's centre, DuitNow-style. Level H
+ * tolerates ~30% covered codewords; both usages keep the panel at ~22% of the
+ * QR's side → ~5% of its area. Centered with auto margins, NOT transforms —
+ * print engines are the whole point of this sheet. The white panel is the
+ * mark's quiet zone. Sizes are inline styles because Tailwind can't compile
+ * dynamic arbitrary values.
+ */
+function QrCenterMark({
+	panelMm,
+	logoMm,
+}: {
+	panelMm: number;
+	logoMm: number;
+}) {
+	return (
+		<div
+			className="absolute inset-0 m-auto flex items-center justify-center rounded-[3mm] bg-white"
+			style={{ height: `${panelMm}mm`, width: `${panelMm}mm` }}
+			data-testid="poster-qr-overlay"
+			aria-hidden="true"
+		>
+			<img
+				src="/logo.svg"
+				alt=""
+				style={{ height: `${logoMm}mm`, width: "auto" }}
+			/>
+		</div>
+	);
+}
+
+/**
+ * The single-QR hero for the counter-only / online-only templates: one giant
+ * DuitNow/TNG-style QR with the Kedaipal mark on a white panel in its centre,
+ * a hero badge above and the template's numbered steps below.
+ *
+ * Sizing: the body region runs 63mm (header) → 204mm (footer pill), and the
+ * stack below totals ~138mm, ending ~3mm clear of the footer. 80mm is the
+ * QR's CEILING with the step list present — enlarging it collides with the
+ * pinned footer/phone anchors. iOS Safari's ~10% print shrink leaves 72mm,
+ * far above the 45mm scan floor. The 5mm white padding ≈ 3 modules of quiet
+ * zone, matching the two-QR template's boxes.
+ */
+function SingleQrHero({
+	url,
+	badge,
+	steps,
+}: {
+	url: string;
+	badge: string;
+	steps: string[];
+}) {
+	return (
+		<div className="relative flex flex-col items-center gap-[4mm] px-[17mm] pt-[5mm]">
+			<span
+				className="rounded-full px-[8mm] py-[2.2mm] font-heading text-[16pt] font-extrabold leading-none text-white"
+				style={{ backgroundColor: BADGE_GREEN }}
+			>
+				{badge}
+			</span>
+			<div
+				className="relative rounded-[5mm] border-[0.8mm] bg-white p-[5mm]"
+				style={{ borderColor: MINT }}
+				data-testid="poster-qr"
+			>
+				<div className="h-[80mm] w-[80mm]">
+					<QRCode
+						value={url}
+						level="H"
+						size={256}
+						style={{ width: "100%", height: "100%" }}
+					/>
+				</div>
+				<QrCenterMark panelMm={18} logoMm={11.5} />
+			</div>
+			{/* Same numbered steps as the two-QR template, centered as a block —
+			    left-aligned lines so the numbers gutter reads as a list. */}
+			<ol className="flex w-fit flex-col gap-[2mm] text-[13pt] leading-snug">
 				{steps.map((step, i) => (
-					<li key={step} className="flex gap-[2mm]">
-						<span className="font-bold" style={{ color: MINT }}>
-							{i + 1}.
-						</span>
+					<li key={step} className="flex gap-[2.5mm]">
+						<span className="font-bold">{i + 1}.</span>
 						<span>{step}</span>
 					</li>
 				))}
 			</ol>
+		</div>
+	);
+}
+
+/**
+ * The decorative WhatsApp phone at the foot of the sheet — Kris's phone-shell
+ * raster (empty frame + green header + beige chat wallpaper) with the store's
+ * real avatar/name and localized sample bubbles overlaid live, so the mockup
+ * always shows the seller's own store. Bleeds off the page bottom by design
+ * (the sheet clips it).
+ */
+function PhoneMockup({
+	storeName,
+	logoUrl,
+	locale,
+}: {
+	storeName: string;
+	logoUrl?: string | null;
+	locale: PosterLocale;
+}) {
+	return (
+		<div
+			className="absolute left-[49mm] top-[223.5mm] w-[112mm]"
+			aria-hidden="true"
+			data-testid="poster-phone"
+		>
+			<img src="/poster/phone-shell.png" alt="" className="w-full" />
+			{/* Status bar — the shell raster ships with an empty green band, so
+			    the clock + indicators are drawn here (tiny, purely decorative). */}
+			<div className="absolute left-[19.5mm] right-[19.5mm] top-[13.2mm] flex items-center justify-between">
+				<span className="text-[11pt] font-semibold leading-none text-white">
+					9:30
+				</span>
+				<svg
+					viewBox="0 0 46 12"
+					className="h-[3mm] w-auto"
+					fill="#FFFFFF"
+					role="presentation"
+				>
+					{/* signal bars */}
+					<rect x="0" y="7" width="2.5" height="5" rx="0.8" />
+					<rect x="4" y="5" width="2.5" height="7" rx="0.8" />
+					<rect x="8" y="3" width="2.5" height="9" rx="0.8" />
+					<rect x="12" y="1" width="2.5" height="11" rx="0.8" />
+					{/* wifi */}
+					<path d="M25 3.2a9.4 9.4 0 0 0-6.4 2.5l1.4 1.5A7.4 7.4 0 0 1 25 5.2c1.9 0 3.7.7 5 2l1.4-1.5A9.4 9.4 0 0 0 25 3.2Z" />
+					<path d="M25 7.1c-1.2 0-2.3.4-3.1 1.2l1.5 1.6a2.3 2.3 0 0 1 3.2 0l1.5-1.6A4.5 4.5 0 0 0 25 7.1Z" />
+					<circle cx="25" cy="11" r="1.2" />
+					{/* battery */}
+					<rect
+						x="34"
+						y="1.5"
+						width="10"
+						height="9"
+						rx="2"
+						fill="none"
+						stroke="#FFFFFF"
+						strokeWidth="1"
+					/>
+					<rect x="35.5" y="3" width="7" height="6" rx="1" />
+					<rect x="44.8" y="4.5" width="1.2" height="3" rx="0.6" />
+				</svg>
+			</div>
+			{/* Chat header row — below the island, per the spec's vector coords */}
+			<div className="absolute left-[16mm] right-[13mm] top-[20.6mm] flex items-center gap-[3.5mm]">
+				<div className="flex h-[13.3mm] w-[13.3mm] shrink-0 items-center justify-center overflow-hidden rounded-full bg-white/90">
+					{logoUrl ? (
+						<img
+							src={logoUrl}
+							alt=""
+							className="h-full w-full rounded-full object-cover"
+						/>
+					) : (
+						<span className="text-[12pt] font-bold" style={{ color: MINT }}>
+							{storeName.charAt(0).toUpperCase()}
+						</span>
+					)}
+				</div>
+				<div className="flex min-w-0 flex-col gap-[0.8mm]">
+					<span className="truncate text-[13pt] font-semibold leading-none text-white">
+						{storeName}
+					</span>
+					<span className="text-[8pt] leading-none text-white/75">
+						{m.poster_chat_online({}, { locale })}
+					</span>
+				</div>
+			</div>
+			{/* Buyer-side sample bubbles */}
+			<div className="absolute right-[8mm] top-[42mm] flex w-[70mm] flex-col items-end gap-[4mm]">
+				{[
+					m.poster_chat_bubble1({}, { locale }),
+					m.poster_chat_bubble2({}, { locale }),
+				].map((text) => (
+					<p
+						key={text}
+						className="max-w-full rounded-[2.5mm] rounded-br-[0.8mm] px-[3.5mm] py-[2mm] text-[10pt] leading-snug"
+						style={{ backgroundColor: BUBBLE_GREEN, color: NAVY }}
+					>
+						{text}
+					</p>
+				))}
+			</div>
 		</div>
 	);
 }

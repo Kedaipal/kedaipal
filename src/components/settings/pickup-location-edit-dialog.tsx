@@ -368,10 +368,10 @@ export function PickupLocationEditDialog({
 								</div>
 								{canChargeFee ? (
 									<p className="text-xs text-muted-foreground leading-relaxed">
-										Leave blank for free pickup. Buyers who choose this point see
-										the fee added to their order total at checkout — use it to
-										pass on a real cost, like a host who charges or a collection
-										run.
+										Leave blank for free pickup. Buyers who choose this point
+										see the fee added to their order total at checkout — use it
+										to pass on a real cost, like a host who charges or a
+										collection run.
 									</p>
 								) : lockedWithExistingFee ? (
 									feePendingRemoval ? (
@@ -392,8 +392,8 @@ export function PickupLocationEditDialog({
 											<p className="text-xs text-muted-foreground leading-relaxed">
 												Charging a pickup fee is a Pro feature. This point's
 												existing fee still applies to new orders — upgrade in
-												Settings → Billing to change it, or remove it now to make
-												this point free.
+												Settings → Billing to change it, or remove it now to
+												make this point free.
 											</p>
 											<button
 												type="button"
@@ -406,8 +406,8 @@ export function PickupLocationEditDialog({
 									)
 								) : (
 									<p className="text-xs text-muted-foreground leading-relaxed">
-										Charging a pickup fee is a Pro feature — upgrade in Settings →
-										Billing to pass on a collection cost (like a paid drop-off
+										Charging a pickup fee is a Pro feature — upgrade in Settings
+										→ Billing to pass on a collection cost (like a paid drop-off
 										host) to buyers who choose this point.
 									</p>
 								)}
