@@ -3,6 +3,14 @@ import { m } from "../../paraglide/messages";
 
 export type PosterLocale = "en" | "ms";
 
+/**
+ * Poster template: "both" = the approved two-QR v2 sheet (default);
+ * "counter" / "online" = a single giant DuitNow-style QR of that target with
+ * the Kedaipal mark overlaid in the centre. Header, bottom band, footer and
+ * phone mockup are shared — only the body block varies.
+ */
+export type PosterVariant = "both" | "counter" | "online";
+
 interface StorePosterProps {
 	storeName: string;
 	slug: string;
@@ -26,6 +34,11 @@ interface StorePosterProps {
 	counterUrl: string;
 	/** Right "Order online" QR — the storefront `?src=online` link. */
 	onlineUrl: string;
+	/**
+	 * Both URLs stay required for the single-QR variants — the route always
+	 * has both, and a stable prop shape beats a conditional one.
+	 */
+	variant?: PosterVariant;
 }
 
 /**
@@ -61,7 +74,9 @@ const BUBBLE_GREEN = "#D1F498";
  * The print-ready A4 sheet, re-skinned to Kris's v2 spec (86ey65cx8): mint
  * header with the store lockup + URL pill, QR column left / step lists right,
  * and a decorative bottom band (gradient + doodles + WhatsApp phone mockup)
- * that bleeds off the page. Pure presentational — no hooks, no data fetching —
+ * that bleeds off the page. The `variant` prop swaps the body for a single
+ * giant QR (counter-only / online-only templates) — everything else is
+ * shared. Pure presentational — no hooks, no data fetching —
  * so it renders identically on screen (scaled preview) and in print, and is
  * trivially testable. Sized in mm; the parent handles screen scaling and the
  * `@page` print rule.
@@ -74,6 +89,7 @@ export function StorePoster({
 	locale,
 	counterUrl,
 	onlineUrl,
+	variant = "both",
 }: StorePosterProps) {
 	const longName = storeName.length > 24;
 	const longSlug = slug.length > 24;
@@ -187,35 +203,61 @@ export function StorePoster({
 				) : null}
 			</div>
 
-			{/* Body — QR column left, step lists right. QR boxes stay ≥56mm (v1
-			    invariant): iOS Safari ignores `@page` and scale-to-fits (~10%
-			    shrink), so 56mm lands ≥50mm — above the 45mm scan floor. The v2
-			    mockup drew them smaller; the ticket AC overrides it. Fixed height:
-			    the 56mm boxes outgrow the mockup's flex budget, so the rows stack on
-			    explicit gaps and the footer/phone below sit at pinned sheet
-			    coordinates — flex flow would push the footer under the phone. */}
-			<div className="relative flex flex-col gap-[3mm] px-[17mm] pt-[6mm]">
-				<QrRow
-					url={counterUrl}
-					badge={m.poster_counter_badge({}, { locale })}
-					title={m.poster_counter_title({}, { locale })}
-					steps={[
-						m.poster_counter_step1({}, { locale }),
-						m.poster_counter_step2({}, { locale }),
-						m.poster_counter_step3({}, { locale }),
-					]}
+			{/* Body — varies by template; the footer/phone below sit at pinned
+			    sheet coordinates either way (flex flow would push the footer under
+			    the phone). Both-template: QR column left, step lists right; QR
+			    boxes stay ≥56mm (v1 invariant): iOS Safari ignores `@page` and
+			    scale-to-fits (~10% shrink), so 56mm lands ≥50mm — above the 45mm
+			    scan floor. The v2 mockup drew them smaller; the ticket AC overrides
+			    it. Single-QR templates: see SingleQrHero. */}
+			{variant === "both" ? (
+				/* 6mm section gap: the two 62.6mm QR rows + 6mm pt end at ~200mm,
+				   ~4mm clear of the 204mm footer pill — the gap's ceiling is ~9mm. */
+				<div className="relative flex flex-col gap-[6mm] px-[17mm] pt-[6mm]">
+					<QrRow
+						url={counterUrl}
+						badge={m.poster_counter_badge({}, { locale })}
+						title={m.poster_counter_title({}, { locale })}
+						steps={[
+							m.poster_counter_step1({}, { locale }),
+							m.poster_counter_step2({}, { locale }),
+							m.poster_counter_step3({}, { locale }),
+						]}
+					/>
+					<QrRow
+						url={onlineUrl}
+						badge={m.poster_online_badge({}, { locale })}
+						title={m.poster_online_title({}, { locale })}
+						steps={[
+							m.poster_online_step1({}, { locale }),
+							m.poster_online_step2({}, { locale }),
+							m.poster_online_step3({}, { locale }),
+						]}
+					/>
+				</div>
+			) : (
+				<SingleQrHero
+					url={variant === "counter" ? counterUrl : onlineUrl}
+					badge={
+						variant === "counter"
+							? m.poster_counter_badge({}, { locale })
+							: m.poster_online_badge({}, { locale })
+					}
+					steps={
+						variant === "counter"
+							? [
+									m.poster_counter_step1({}, { locale }),
+									m.poster_counter_step2({}, { locale }),
+									m.poster_counter_step3({}, { locale }),
+								]
+							: [
+									m.poster_online_step1({}, { locale }),
+									m.poster_online_step2({}, { locale }),
+									m.poster_online_step3({}, { locale }),
+								]
+					}
 				/>
-				<QrRow
-					url={onlineUrl}
-					badge={m.poster_online_badge({}, { locale })}
-					title={m.poster_online_title({}, { locale })}
-					steps={[
-						m.poster_online_step1({}, { locale }),
-						m.poster_online_step2({}, { locale }),
-						m.poster_online_step3({}, { locale }),
-					]}
-				/>
-			</div>
+			)}
 
 			{/* Footer — powered by Kedaipal, pinned above the phone (the phone
 			    paints later/on top, so the lockup must never flow under it). */}
@@ -256,7 +298,7 @@ function QrRow({
 	return (
 		<div className="flex items-center gap-[10mm]">
 			<div
-				className="shrink-0 rounded-[4mm] border-[0.8mm] bg-white p-[3mm]"
+				className="relative shrink-0 rounded-[4mm] border-[0.8mm] bg-white p-[3mm]"
 				style={{ borderColor: MINT }}
 				data-testid="poster-qr"
 			>
@@ -268,6 +310,7 @@ function QrRow({
 						style={{ width: "100%", height: "100%" }}
 					/>
 				</div>
+				<QrCenterMark panelMm={12.5} logoMm={8} />
 			</div>
 			<div className="flex min-w-0 flex-col items-start gap-[3mm]">
 				<span
@@ -286,6 +329,95 @@ function QrRow({
 					))}
 				</ol>
 			</div>
+		</div>
+	);
+}
+
+/**
+ * The Kedaipal mark on a white panel in a QR's centre, DuitNow-style. Level H
+ * tolerates ~30% covered codewords; both usages keep the panel at ~22% of the
+ * QR's side → ~5% of its area. Centered with auto margins, NOT transforms —
+ * print engines are the whole point of this sheet. The white panel is the
+ * mark's quiet zone. Sizes are inline styles because Tailwind can't compile
+ * dynamic arbitrary values.
+ */
+function QrCenterMark({
+	panelMm,
+	logoMm,
+}: {
+	panelMm: number;
+	logoMm: number;
+}) {
+	return (
+		<div
+			className="absolute inset-0 m-auto flex items-center justify-center rounded-[3mm] bg-white"
+			style={{ height: `${panelMm}mm`, width: `${panelMm}mm` }}
+			data-testid="poster-qr-overlay"
+			aria-hidden="true"
+		>
+			<img
+				src="/logo.svg"
+				alt=""
+				style={{ height: `${logoMm}mm`, width: "auto" }}
+			/>
+		</div>
+	);
+}
+
+/**
+ * The single-QR hero for the counter-only / online-only templates: one giant
+ * DuitNow/TNG-style QR with the Kedaipal mark on a white panel in its centre,
+ * a hero badge above and the template's numbered steps below.
+ *
+ * Sizing: the body region runs 63mm (header) → 204mm (footer pill), and the
+ * stack below totals ~138mm, ending ~3mm clear of the footer. 80mm is the
+ * QR's CEILING with the step list present — enlarging it collides with the
+ * pinned footer/phone anchors. iOS Safari's ~10% print shrink leaves 72mm,
+ * far above the 45mm scan floor. The 5mm white padding ≈ 3 modules of quiet
+ * zone, matching the two-QR template's boxes.
+ */
+function SingleQrHero({
+	url,
+	badge,
+	steps,
+}: {
+	url: string;
+	badge: string;
+	steps: string[];
+}) {
+	return (
+		<div className="relative flex flex-col items-center gap-[4mm] px-[17mm] pt-[5mm]">
+			<span
+				className="rounded-full px-[8mm] py-[2.2mm] font-heading text-[16pt] font-extrabold leading-none text-white"
+				style={{ backgroundColor: BADGE_GREEN }}
+			>
+				{badge}
+			</span>
+			<div
+				className="relative rounded-[5mm] border-[0.8mm] bg-white p-[5mm]"
+				style={{ borderColor: MINT }}
+				data-testid="poster-qr"
+			>
+				<div className="h-[80mm] w-[80mm]">
+					<QRCode
+						value={url}
+						level="H"
+						size={256}
+						style={{ width: "100%", height: "100%" }}
+					/>
+				</div>
+				<QrCenterMark panelMm={18} logoMm={11.5} />
+			</div>
+			{/* Same numbered steps as the two-QR template, centered as a block —
+			    left-aligned lines so the numbers gutter reads as a list. */}
+			<ol className="flex w-fit flex-col gap-[2mm] text-[13pt] leading-snug">
+				{steps.map((step, i) => (
+					<li key={step} className="flex gap-[2.5mm]">
+						<span className="font-bold">{i + 1}.</span>
+						<span>{step}</span>
+					</li>
+				))}
+			</ol>
 		</div>
 	);
 }

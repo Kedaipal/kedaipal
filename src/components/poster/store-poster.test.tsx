@@ -100,6 +100,8 @@ describe("StorePoster", () => {
 		expect(srcs).toEqual([
 			"/poster/doodles-left.svg",
 			"/poster/doodles-right.svg",
+			"/logo.svg", // counter QR centre mark
+			"/logo.svg", // online QR centre mark
 			"/poster/kedaipal-lockup.svg",
 			"/poster/phone-shell.png",
 		]);
@@ -167,6 +169,18 @@ describe("StorePoster", () => {
 		).toBeTruthy();
 	});
 
+	it("overlays the Kedaipal mark on both QRs", () => {
+		const { container } = render(<StorePoster {...BASE} locale="ms" />);
+		const overlays = container.querySelectorAll(
+			'[data-testid="poster-qr-overlay"]',
+		);
+		expect(overlays.length).toBe(2);
+		for (const overlay of overlays) {
+			expect(overlay.closest('[data-testid="poster-qr"]')).toBeTruthy();
+			expect(overlay.querySelector('img[src="/logo.svg"]')).toBeTruthy();
+		}
+	});
+
 	it("steps the store name and slug down for long values", () => {
 		const longName = "Kek Lapis Sarawak Warisan Mak Long Enterprise"; // 45 chars
 		const longSlug = "kek-lapis-sarawak-warisan-mak-long-enterprise";
@@ -185,5 +199,108 @@ describe("StorePoster", () => {
 		expect(screen.getByText(longSlug).parentElement?.className).toContain(
 			"text-[11pt]",
 		);
+	});
+});
+
+describe("StorePoster single-QR variants", () => {
+	it("counter variant renders exactly one QR encoding the counter target", () => {
+		const counter = render(
+			<StorePoster {...BASE} variant="counter" locale="ms" />,
+		);
+		const counterSvgs = qrSvgs(counter.container);
+		expect(counterSvgs.length).toBe(1);
+
+		// The same props rendered as the online variant must yield different QR
+		// geometry — proves each variant encodes ITS url, not the other's.
+		const online = render(
+			<StorePoster {...BASE} variant="online" locale="ms" />,
+		);
+		const onlineSvgs = qrSvgs(online.container);
+		expect(onlineSvgs.length).toBe(1);
+		expect(counterSvgs[0]?.innerHTML).not.toBe(onlineSvgs[0]?.innerHTML);
+	});
+
+	it("counter variant shows the counter badge + steps and none of the online copy", () => {
+		render(<StorePoster {...BASE} variant="counter" locale="ms" />);
+		expect(
+			screen.getByText(m.poster_counter_badge({}, { locale: "ms" })),
+		).toBeTruthy();
+		for (const step of [
+			m.poster_counter_step1({}, { locale: "ms" }),
+			m.poster_counter_step2({}, { locale: "ms" }),
+			m.poster_counter_step3({}, { locale: "ms" }),
+		]) {
+			expect(screen.getByText(step)).toBeTruthy();
+		}
+		expect(
+			screen.queryByText(m.poster_online_badge({}, { locale: "ms" })),
+		).toBeNull();
+		expect(
+			screen.queryByText(m.poster_online_step1({}, { locale: "ms" })),
+		).toBeNull();
+	});
+
+	it("online variant shows the online badge + steps and none of the counter copy", () => {
+		render(<StorePoster {...BASE} variant="online" locale="ms" />);
+		expect(
+			screen.getByText(m.poster_online_badge({}, { locale: "ms" })),
+		).toBeTruthy();
+		for (const step of [
+			m.poster_online_step1({}, { locale: "ms" }),
+			m.poster_online_step2({}, { locale: "ms" }),
+			m.poster_online_step3({}, { locale: "ms" }),
+		]) {
+			expect(screen.getByText(step)).toBeTruthy();
+		}
+		expect(
+			screen.queryByText(m.poster_counter_badge({}, { locale: "ms" })),
+		).toBeNull();
+		expect(
+			screen.queryByText(m.poster_counter_step1({}, { locale: "ms" })),
+		).toBeNull();
+	});
+
+	it("overlays the Kedaipal mark on the giant QR", () => {
+		const { container } = render(
+			<StorePoster {...BASE} variant="online" locale="ms" />,
+		);
+		const overlay = container.querySelector(
+			'[data-testid="poster-qr-overlay"]',
+		);
+		expect(overlay).toBeTruthy();
+		// White panel = the mark's quiet zone; sits inside the QR box.
+		expect(overlay?.className).toContain("bg-white");
+		expect(overlay?.closest('[data-testid="poster-qr"]')).toBeTruthy();
+		expect(overlay?.querySelector('img[src="/logo.svg"]')).toBeTruthy();
+	});
+
+	it("keeps the decorative band, footer and phone mockup", () => {
+		const { container } = render(
+			<StorePoster {...BASE} variant="online" locale="ms" />,
+		);
+		for (const id of ["poster-band", "poster-powered-by", "poster-phone"]) {
+			expect(container.querySelector(`[data-testid="${id}"]`)).toBeTruthy();
+		}
+		// Full decorative img inventory, in DOM order (body precedes footer).
+		const srcs = [...container.querySelectorAll("img")].map((img) =>
+			img.getAttribute("src"),
+		);
+		expect(srcs).toEqual([
+			"/poster/doodles-left.svg",
+			"/poster/doodles-right.svg",
+			"/logo.svg",
+			"/poster/kedaipal-lockup.svg",
+			"/poster/phone-shell.png",
+		]);
+	});
+
+	it("honours the explicit locale override on the step copy", () => {
+		render(<StorePoster {...BASE} variant="counter" locale="en" />);
+		expect(
+			screen.getByText(m.poster_counter_step1({}, { locale: "en" })),
+		).toBeTruthy();
+		expect(
+			screen.queryByText(m.poster_counter_step1({}, { locale: "ms" })),
+		).toBeNull();
 	});
 });
