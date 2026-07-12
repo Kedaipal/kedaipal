@@ -471,12 +471,15 @@ function ProductCard({
 				</div>
 			</div>
 			<div className="flex shrink-0 flex-col items-end gap-1">
-				{p.active && p.hidden ? (
+				{p.active && (p.hidden || p.hiddenByCategory) ? (
 					// Off the public storefront, still sellable at the counter — flagged
-					// so hidden state is never silent. See docs/hidden-products.md.
+					// so the state is never silent. Either the seller's own toggle
+					// (`hidden`) or category suppression (`hiddenByCategory`, every one
+					// of its categories is hidden). See docs/hidden-products.md +
+					// docs/product-categories.md.
 					<span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
 						<EyeOff className="size-3" aria-hidden />
-						Hidden
+						{p.hidden ? "Hidden" : "Hidden · category"}
 					</span>
 				) : null}
 				{p.active ? (

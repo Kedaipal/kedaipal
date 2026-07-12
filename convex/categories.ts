@@ -10,6 +10,8 @@ import {
 import {
 	isProductVisible,
 	recomputeCategoryCount,
+	recomputeHiddenByCategoryForCategory,
+	recomputeProductHiddenByCategory,
 } from "./lib/categoryCounts";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidCategorySlug } from "./lib/slug";
@@ -182,8 +184,9 @@ export const listActivePublic = query({
 			)
 			.collect();
 		// Denormalized count read — no per-product fan-out on this hot public path.
+		// Exclude HIDDEN categories (tile pulled off the storefront) and empty ones.
 		const visible = rows
-			.filter((row) => (row.productCount ?? 0) > 0)
+			.filter((row) => row.hidden !== true && (row.productCount ?? 0) > 0)
 			.sort((a, b) => a.sortOrder - b.sortOrder);
 		return Promise.all(
 			visible.map(async (row) => ({
@@ -218,7 +221,8 @@ export const getPublicPage = query({
 				q.eq("retailerId", retailerId).eq("slug", normalized),
 			)
 			.first();
-		if (!category || !category.active) return null;
+		// Unknown, archived, OR hidden → no public page (the tile is off the store).
+		if (!category || !category.active || category.hidden === true) return null;
 
 		// Bounded read — a category can't hold more than the per-retailer product
 		// cap, so this never truncates today (see CATEGORY_PAGE_PRODUCT_LIMIT).
@@ -703,6 +707,10 @@ export const setProductCategories = mutation({
 			}
 		}
 		if (added.length > 0 || removed.length > 0) {
+			// Membership changed → the product's all-categories-hidden suppression
+			// may have flipped (e.g. it was only in hidden categories and gained a
+			// visible one, or vice versa).
+			await recomputeProductHiddenByCategory(ctx, productId);
 			await logAdminAction(
 				ctx,
 				access,
@@ -710,6 +718,31 @@ export const setProductCategories = mutation({
 				productId,
 			);
 		}
+	},
+});
+
+/**
+ * Hide / show a category on the storefront — orthogonal to archive (setActive),
+ * mirrors products' `hidden`. Hiding pulls the tile off the rail, 404s the
+ * category page, and drops any product whose EVERY category is hidden off the
+ * storefront (still counter-sellable); a product also in a visible category
+ * stays visible. Deliberately UN-gated by plan (only the soft-lock applies), so
+ * a downgraded seller can always manage storefront visibility.
+ */
+export const setHidden = mutation({
+	args: { categoryId: v.id("categories"), hidden: v.boolean() },
+	handler: async (ctx, { categoryId, hidden }): Promise<void> => {
+		const { category, access } = await requireOwnedCategory(ctx, categoryId);
+		const userId = await requireUserId(ctx);
+		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
+		if (!access.actingAsAdmin)
+			await assertSubscriptionActive(ctx, category.retailerId);
+		if ((category.hidden ?? false) === hidden) return; // idempotent
+
+		await ctx.db.patch(categoryId, { hidden, updatedAt: Date.now() });
+		// Suppression changed for every product in this category — recompute.
+		await recomputeHiddenByCategoryForCategory(ctx, categoryId);
+		await logAdminAction(ctx, access, "categories.setHidden", categoryId);
 	},
 });
 

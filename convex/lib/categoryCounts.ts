@@ -68,3 +68,54 @@ export async function recomputeCategoryCount(
 	}
 	await ctx.db.patch(categoryId, { productCount: count });
 }
+
+/**
+ * Recompute `products.hiddenByCategory` for one product: true iff the product
+ * belongs to ≥1 category AND every one of them is hidden (a missing or visible
+ * category means NOT suppressed — the product stays visible via that category
+ * or the "All products" view). Fail-open. Patches only on a real change. Called
+ * on membership changes and category hide/show. Bounded by the product's
+ * membership.
+ */
+export async function recomputeProductHiddenByCategory(
+	ctx: MutationCtx,
+	productId: Id<"products">,
+): Promise<void> {
+	const junctions = await ctx.db
+		.query("productCategories")
+		.withIndex("by_product", (q) => q.eq("productId", productId))
+		.collect();
+	let hiddenByCategory = false;
+	if (junctions.length > 0) {
+		hiddenByCategory = true;
+		for (const junction of junctions) {
+			const category = await ctx.db.get(junction.categoryId);
+			if (!category || category.hidden !== true) {
+				hiddenByCategory = false;
+				break;
+			}
+		}
+	}
+	const product = await ctx.db.get(productId);
+	if (product && (product.hiddenByCategory ?? false) !== hiddenByCategory) {
+		await ctx.db.patch(productId, { hiddenByCategory });
+	}
+}
+
+/**
+ * Recompute `hiddenByCategory` for every product in a category — call after a
+ * category's `hidden` flag flips, since that changes suppression for all its
+ * members. Bounded by the category's membership.
+ */
+export async function recomputeHiddenByCategoryForCategory(
+	ctx: MutationCtx,
+	categoryId: Id<"categories">,
+): Promise<void> {
+	const junctions = await ctx.db
+		.query("productCategories")
+		.withIndex("by_category_sort", (q) => q.eq("categoryId", categoryId))
+		.collect();
+	for (const junction of junctions) {
+		await recomputeProductHiddenByCategory(ctx, junction.productId);
+	}
+}

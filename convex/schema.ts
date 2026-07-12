@@ -274,6 +274,15 @@ export default defineSchema({
 		// lists online. undefined/false = visible (legacy default; no backfill).
 		// See docs/hidden-products.md.
 		hidden: v.optional(v.boolean()),
+		// Denormalized storefront suppression: true when this product belongs to
+		// ≥1 category AND every one of them is hidden — so it drops off the public
+		// storefront (still counter-sellable), while a product also in a non-hidden
+		// category stays visible. Derived from category `hidden` flags + this
+		// product's memberships; maintained in convex/lib/categoryCounts.ts on
+		// membership changes + category hide/show. Orthogonal to `hidden` (the
+		// seller's own toggle). undefined/false = not suppressed. See
+		// docs/product-categories.md.
+		hiddenByCategory: v.optional(v.boolean()),
 		// Option axes this product varies along, ordered (drives picker order).
 		// Empty array (or undefined on pre-migration rows) = no axes → exactly
 		// one implicit variant with optionValues:[]. Capped at 2 axes. Bounded,
@@ -376,6 +385,13 @@ export default defineSchema({
 		// the update mutation, same pattern as retailers.logoStorageId.
 		imageStorageId: v.optional(v.string()),
 		active: v.boolean(),
+		// Storefront visibility, ORTHOGONAL to `active` (the archive flag) — mirrors
+		// products.hidden. hidden === true → the category tile is off the rail, its
+		// page 404s, and products whose EVERY category is hidden drop off the
+		// storefront (still sellable at the counter). A product also in a
+		// non-hidden category stays visible. undefined/false = shown. See
+		// docs/product-categories.md.
+		hidden: v.optional(v.boolean()),
 		// Denormalized count of storefront-VISIBLE (active && !hidden) products
 		// assigned to this category. The hot public rail + management list read
 		// this directly instead of scanning every junction's product per load.
