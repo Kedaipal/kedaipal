@@ -156,6 +156,12 @@ export function Sidebar({
 							icon={LineChart}
 							label="Insights"
 							collapsed={collapsed}
+							// Insights is Pro+ — mark it in nav so the gate is never a
+							// surprise (the route shows the teaser). Act-as admins see through.
+							pro={
+								!retailer.actingAsAdmin &&
+								!hasFeature(retailer.subscription, "insights")
+							}
 						/>
 						<SidebarLink
 							to="/app/settings"
