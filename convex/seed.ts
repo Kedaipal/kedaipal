@@ -9,7 +9,8 @@
  * Idempotent — skips if the seed retailer slug already exists.
  * Never run against a production deployment.
  */
-import { internalMutation } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
+import { internalMutation, type MutationCtx } from "./_generated/server";
 import { cartesian, variantLabel } from "./lib/variant";
 
 const SEED_SLUG = "trailgear";
@@ -57,6 +58,18 @@ export const run = internalMutation({
 			.first();
 
 		if (existing) {
+			// Products already seeded — top up the categories layer if it's missing
+			// (added later than the original seed), so older dev deployments get a
+			// browsable category rail without a re-seed.
+			const seededCategories = await ctx.db
+				.query("categories")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", existing._id))
+				.first();
+			if (!seededCategories) {
+				await seedCategories(ctx, existing._id);
+				console.log(`Seed topped up — categories added to "${SEED_SLUG}".`);
+				return { skipped: false, retailerId: existing._id };
+			}
 			console.log(`Seed already applied — retailer "${SEED_SLUG}" exists. Skipping.`);
 			return { skipped: true };
 		}
@@ -113,7 +126,71 @@ export const run = internalMutation({
 			}
 		}
 
+		await seedCategories(ctx, retailerId);
+
 		console.log(`Seed complete — retailer "${SEED_SLUG}" with ${PRODUCTS.length} products inserted.`);
 		return { skipped: false, retailerId };
 	},
 });
+
+/** Categories keyed by product-name match — gives the storefront rail + nested
+ * category pages something to render. "Camp Setup" and "On the Trail" overlap
+ * on purpose (a product can sit in multiple categories). */
+const CATEGORIES: { name: string; slug: string; productNames: string[] }[] = [
+	{
+		name: "Camp Setup",
+		slug: "camp-setup",
+		productNames: ["Basecamp 2-Person Tent", "Headlamp 350lm"],
+	},
+	{
+		name: "On the Trail",
+		slug: "on-the-trail",
+		productNames: [
+			"Trailblazer Backpack 45L",
+			"Trekking Pole Set (pair)",
+			"Merino Wool Base Layer",
+			"Headlamp 350lm",
+		],
+	},
+	{
+		name: "Frozen Food",
+		slug: "frozen-food",
+		productNames: ["Frozen Salmon"],
+	},
+];
+
+async function seedCategories(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+) {
+	const now = Date.now();
+	const products = await ctx.db
+		.query("products")
+		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+		.collect();
+	const byName = new Map(products.map((p) => [p.name, p._id]));
+	for (let i = 0; i < CATEGORIES.length; i++) {
+		const c = CATEGORIES[i];
+		const categoryId = await ctx.db.insert("categories", {
+			retailerId,
+			name: c.name,
+			slug: c.slug,
+			active: true,
+			sortOrder: i,
+			createdAt: now,
+			updatedAt: now,
+		});
+		let sortOrder = 0;
+		for (const name of c.productNames) {
+			const productId = byName.get(name);
+			if (!productId) continue;
+			await ctx.db.insert("productCategories", {
+				productId,
+				categoryId,
+				retailerId,
+				sortOrder: sortOrder++,
+				createdAt: now,
+			});
+		}
+	}
+}

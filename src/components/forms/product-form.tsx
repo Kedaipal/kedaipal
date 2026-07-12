@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useState } from "react";
 import { api } from "../../../convex/_generated/api";
+import type { Id } from "../../../convex/_generated/dataModel";
 import { convexErrorMessage, parsePriceInput } from "../../lib/format";
 import { reorderByIds } from "../../lib/reorder";
 import { productDetailsSchema } from "../../lib/schemas";
@@ -20,6 +21,7 @@ import { variantLabel } from "../../lib/variant";
 import { Button } from "../ui/button";
 import { Markdown } from "../ui/markdown";
 import { SortableList } from "../ui/sortable-list";
+import { CategoryPicker } from "./category-picker";
 import { useAppForm } from "./form";
 import {
 	type CustomLineDraft,
@@ -36,6 +38,9 @@ export interface ProductFormSubmitValues {
 	// Storefront visibility. true = hidden from the public store (still sellable
 	// at the counter). See docs/hidden-products.md.
 	hidden: boolean;
+	// FULL category membership (the picker's staged selection) — the caller
+	// diffs it via categories.setProductCategories. See docs/product-categories.md.
+	categoryIds: Id<"categories">[];
 	imageStorageIds: string[];
 	options: { name: string; values: string[] }[];
 	variants: {
@@ -56,10 +61,16 @@ export interface ProductFormSubmitValues {
 }
 
 interface ProductFormProps {
+	/** Owning retailer — feeds the category picker's list query. */
+	retailerId: Id<"retailers">;
+	/** Client mirror of the `categories` plan gate: when true, the picker only
+	 * allows deselection (server enforces the same add-gated rule). */
+	categoriesLocked: boolean;
 	initialValues?: {
 		name?: string;
 		description?: string;
 		hidden?: boolean;
+		categoryIds?: Id<"categories">[];
 		// Deprecated product-level defaults — used only to seed per-variant flags
 		// for legacy products whose variants predate the per-variant columns.
 		blockWhenOutOfStock?: boolean;
@@ -382,6 +393,8 @@ function VisibilityControl({
 }
 
 export function ProductForm({
+	retailerId,
+	categoriesLocked,
 	initialValues,
 	currency,
 	submitLabel,
@@ -400,6 +413,9 @@ export function ProductForm({
 	const [serverError, setServerError] = useState<string | null>(null);
 	const [showPreview, setShowPreview] = useState(false);
 	const [hidden, setHidden] = useState(initialValues?.hidden ?? false);
+	const [categoryIds, setCategoryIds] = useState<Id<"categories">[]>(
+		initialValues?.categoryIds ?? [],
+	);
 	const [editor, setEditor] = useState<VariantEditorState>(() =>
 		initialEditorState(initialValues),
 	);
@@ -441,6 +457,7 @@ export function ProductForm({
 					name: parsed.name,
 					description: parsed.description,
 					hidden,
+					categoryIds,
 					imageStorageIds: images.map((i) => i.id),
 					options: hasOptions
 						? editor.options.map((a) => ({
@@ -513,6 +530,13 @@ export function ProductForm({
 			</form.Subscribe>
 
 			<VisibilityControl hidden={hidden} onChange={setHidden} />
+
+			<CategoryPicker
+				retailerId={retailerId}
+				selectedIds={categoryIds}
+				onChange={setCategoryIds}
+				locked={categoriesLocked}
+			/>
 
 			<ProductStepCard
 				icon={<PackageCheck className="size-5" />}

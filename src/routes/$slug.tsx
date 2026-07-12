@@ -2,6 +2,7 @@ import { createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { CartBar } from "../components/storefront/cart-bar";
+import { CategoryRail } from "../components/storefront/category-rail";
 import { FoundingMemberBadge } from "../components/storefront/founding-member-badge";
 import { ProductGrid } from "../components/storefront/product-grid";
 import { Skeleton } from "../components/ui/skeleton";
@@ -289,6 +290,10 @@ function StorefrontRoute() {
 			</header>
 
 			<section className="mt-4 px-5 lg:px-8">
+				{/* Browse-by-category tiles — render nothing for zero-category stores,
+				    keeping this page pixel-identical to the pre-categories storefront.
+				    The grid below stays the permanent "All products" view. */}
+				<CategoryRail retailerId={retailer._id} storeSlug={retailer.slug} />
 				<ProductGrid retailerId={retailer._id} cart={cart} />
 			</section>
 

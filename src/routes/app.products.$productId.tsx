@@ -10,6 +10,8 @@ import {
 import { ProductForm } from "../components/forms/product-form";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
+import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { hasFeature } from "../lib/subscription";
 
 export const Route = createFileRoute("/app/products/$productId")({
 	component: EditProductRoute,
@@ -64,14 +66,21 @@ function ProductDetailSkeleton() {
 function EditProductRoute() {
 	const { productId } = Route.useParams();
 	const navigate = useNavigate();
+	const retailer = useDashboardRetailer();
 	const product = useQuery(api.products.get, {
+		productId: productId as Id<"products">,
+	});
+	// Current category membership seeds the form's picker — awaited alongside
+	// the product so the form mounts once with complete initial values.
+	const categoryIds = useQuery(api.categories.getProductCategoryIds, {
 		productId: productId as Id<"products">,
 	});
 	const update = useMutation(api.products.update);
 	const saveVariantGrid = useMutation(api.products.saveVariantGrid);
+	const setProductCategories = useMutation(api.categories.setProductCategories);
 	const archive = useMutation(api.products.archive);
 
-	if (product === undefined) {
+	if (product === undefined || categoryIds === undefined || !retailer) {
 		return <ProductDetailSkeleton />;
 	}
 	if (product === null) {
@@ -137,11 +146,17 @@ function EditProductRoute() {
 
 			<ProductForm
 				key={product._id}
+				retailerId={product.retailerId}
+				categoriesLocked={
+					!retailer.actingAsAdmin &&
+					!hasFeature(retailer.subscription, "categories")
+				}
 				currency={product.currency}
 				initialValues={{
 					name: product.name,
 					description: product.description,
 					hidden: product.hidden,
+					categoryIds,
 					imageStorageIds: product.imageStorageIds,
 					imageUrls: product.imageUrls,
 					options: product.options ?? [],
@@ -207,6 +222,12 @@ function EditProductRoute() {
 						productId: product._id,
 						options: values.options,
 						variants: values.variants,
+					});
+					// Category membership last — a plan-gate error here can't block
+					// the core save above. Server diffs, so unchanged = no-op.
+					await setProductCategories({
+						productId: product._id,
+						categoryIds: values.categoryIds,
 					});
 					navigate({ to: "/app/products" });
 				}}

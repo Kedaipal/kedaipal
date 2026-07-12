@@ -16,14 +16,29 @@ import {
 interface ProductGridProps {
 	retailerId: Id<"retailers">;
 	cart: UseCart;
+	/**
+	 * Pre-filtered product set (the nested category page passes the category's
+	 * own products in within-category order). When set, the grid skips its own
+	 * `products.list` query and renders these — same cards, search, detail
+	 * sheet and cart-add, no forked component.
+	 */
+	products?: StorefrontProduct[];
 }
 
-export function ProductGrid({ retailerId, cart }: ProductGridProps) {
+export function ProductGrid({
+	retailerId,
+	cart,
+	products: productsOverride,
+}: ProductGridProps) {
 	// `products.list` returns active products already sorted by the retailer's
 	// `sortOrder` (set via the dashboard reorder). We render in that order — the
 	// search filter below preserves it — so the storefront reflects the seller's
 	// chosen sequence.
-	const products = useQuery(api.products.list, { retailerId });
+	const listed = useQuery(
+		api.products.list,
+		productsOverride ? "skip" : { retailerId },
+	);
+	const products = productsOverride ?? listed;
 	const [openProduct, setOpenProduct] = useState<StorefrontProduct | null>(
 		null,
 	);

@@ -15,12 +15,13 @@ import {
 
 describe("plans — feature entitlements", () => {
 	// Mirrors the pricing table's LIVE ✓/– rows: CRM, Order Inbox, chargeable
-	// pickup and Insights are Pro+.
+	// pickup, product categories and Insights are Pro+.
 	test("Starter has no Pro features", () => {
 		expect(featuresForPlan("starter")).toEqual({
 			crm: false,
 			orderInbox: false,
 			chargeablePickup: false,
+			categories: false,
 			insights: false,
 		});
 	});
@@ -30,12 +31,14 @@ describe("plans — feature entitlements", () => {
 			crm: true,
 			orderInbox: true,
 			chargeablePickup: true,
+			categories: true,
 			insights: true,
 		});
 		expect(featuresForPlan("scale")).toEqual({
 			crm: true,
 			orderInbox: true,
 			chargeablePickup: true,
+			categories: true,
 			insights: true,
 		});
 	});

@@ -7,6 +7,10 @@ import {
 	type RetailerAccess,
 	requireRetailerAccess,
 } from "./lib/auth";
+import {
+	bumpCategoryCountsForProduct,
+	isProductVisible,
+} from "./lib/categoryCounts";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertSubscriptionActive } from "./subscriptions";
 import {
@@ -125,9 +129,11 @@ async function loadVariants(ctx: QueryCtx, productId: Id<"products">) {
 /**
  * Resolve a product to its storefront/dashboard shape: product images +
  * variants + rollups (price range, total on-hand, in-stock). `activeOnly`
- * filters to active variants for the public storefront.
+ * filters to active variants for the public storefront. Exported for
+ * convex/categories.ts — the public category page enriches its product rows
+ * through the exact same shape so the storefront grid can't diverge.
  */
-async function productWithVariants(
+export async function productWithVariants(
 	ctx: QueryCtx,
 	product: Doc<"products">,
 	opts: { activeOnly: boolean },
@@ -612,7 +618,18 @@ export const update = mutation({
 			updates.requiresProof = fields.requiresProof;
 		if (fields.hidden !== undefined) updates.hidden = fields.hidden;
 
+		// Keep the denormalized category counts accurate when this edit flips the
+		// product's storefront visibility (active and/or hidden). Compute the
+		// transition before patching; only bump when it actually changes.
+		const wasVisible = isProductVisible(ownedProduct);
+		const willVisible = isProductVisible({
+			active: fields.active ?? ownedProduct.active,
+			hidden: fields.hidden ?? ownedProduct.hidden,
+		});
+
 		await ctx.db.patch(productId, updates);
+		if (wasVisible !== willVisible)
+			await bumpCategoryCountsForProduct(ctx, productId, willVisible ? 1 : -1);
 		await logAdminAction(ctx, access, "products.update", productId);
 	},
 });
@@ -824,11 +841,14 @@ export const archive = mutation({
 	handler: async (ctx, { productId }): Promise<void> => {
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
-		const { access } = await requireProductOwnership(ctx, productId);
+		const { product, access } = await requireProductOwnership(ctx, productId);
+		const wasVisible = isProductVisible(product);
 		await ctx.db.patch(productId, {
 			active: false,
 			updatedAt: Date.now(),
 		});
+		// A newly-archived product drops off every category tile it was on.
+		if (wasVisible) await bumpCategoryCountsForProduct(ctx, productId, -1);
 		await logAdminAction(ctx, access, "products.archive", productId);
 	},
 });

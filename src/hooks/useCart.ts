@@ -41,6 +41,12 @@ export type CartItem = {
 
 type CartState = {
 	items: CartItem[];
+	// The retailerId whose persisted cart has been APPLIED to `items`. The
+	// persist effect only writes once this matches — otherwise a fresh mount's
+	// initial empty state races the async HYDRATE dispatch and wipes the stored
+	// cart (surfaced by SPA navigation between the store home and a category
+	// page, where the remount happens with the retailer already cached).
+	hydratedFor: string | null;
 };
 
 type CartAction =
@@ -48,20 +54,21 @@ type CartAction =
 	| { type: "SET_QTY"; variantId: Id<"productVariants">; quantity: number }
 	| { type: "REMOVE"; variantId: Id<"productVariants"> }
 	| { type: "CLEAR" }
-	| { type: "HYDRATE"; items: CartItem[] };
+	| { type: "HYDRATE"; items: CartItem[]; retailerId: string };
 
-const EMPTY_STATE: CartState = { items: [] };
+const EMPTY_STATE: CartState = { items: [], hydratedFor: null };
 
 function reducer(state: CartState, action: CartAction): CartState {
 	switch (action.type) {
 		case "HYDRATE":
-			return { items: action.items };
+			return { items: action.items, hydratedFor: action.retailerId };
 		case "ADD": {
 			const existing = state.items.find(
 				(i) => i.variantId === action.item.variantId,
 			);
 			if (existing) {
 				return {
+					...state,
 					items: state.items.map((i) =>
 						i.variantId === action.item.variantId
 							? {
@@ -82,16 +89,19 @@ function reducer(state: CartState, action: CartAction): CartState {
 				};
 			}
 			return {
+				...state,
 				items: [...state.items, { ...action.item, quantity: action.quantity }],
 			};
 		}
 		case "SET_QTY": {
 			if (action.quantity <= 0) {
 				return {
+					...state,
 					items: state.items.filter((i) => i.variantId !== action.variantId),
 				};
 			}
 			return {
+				...state,
 				items: state.items.map((i) =>
 					i.variantId === action.variantId
 						? { ...i, quantity: action.quantity }
@@ -101,10 +111,13 @@ function reducer(state: CartState, action: CartAction): CartState {
 		}
 		case "REMOVE":
 			return {
+				...state,
 				items: state.items.filter((i) => i.variantId !== action.variantId),
 			};
 		case "CLEAR":
-			return EMPTY_STATE;
+			// Keep `hydratedFor` — a deliberate clear must still persist (it IS a
+			// cart write), unlike the pre-hydration empty state.
+			return { ...state, items: [] };
 	}
 }
 
@@ -142,12 +155,14 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 	// Hydrate from localStorage when retailerId becomes available or changes.
 	useEffect(() => {
 		if (!retailerId) return;
-		dispatch({ type: "HYDRATE", items: readPersisted(retailerId) });
+		dispatch({ type: "HYDRATE", items: readPersisted(retailerId), retailerId });
 	}, [retailerId]);
 
-	// Persist on change.
+	// Persist on change — but never before this retailer's hydration has been
+	// APPLIED to state, or a fresh mount's empty initial state would overwrite
+	// the stored cart (see CartState.hydratedFor).
 	useEffect(() => {
-		if (!retailerId) return;
+		if (!retailerId || state.hydratedFor !== retailerId) return;
 		if (typeof window === "undefined") return;
 		try {
 			window.localStorage.setItem(
@@ -157,7 +172,7 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 		} catch {
 			// Quota exceeded or storage disabled — ignore silently for MVP.
 		}
-	}, [retailerId, state.items]);
+	}, [retailerId, state.items, state.hydratedFor]);
 
 	const addItem = useCallback(
 		(item: Omit<CartItem, "quantity">, quantity = 1) =>
