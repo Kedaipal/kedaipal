@@ -289,12 +289,22 @@ function StorefrontRoute() {
 				</div>
 			</header>
 
-			<section className="mt-4 px-5 lg:px-8">
-				{/* Browse-by-category tiles — render nothing for zero-category stores,
-				    keeping this page pixel-identical to the pre-categories storefront.
-				    The grid below stays the permanent "All products" view. */}
-				<CategoryRail retailerId={retailer._id} storeSlug={retailer.slug} />
-				<ProductGrid retailerId={retailer._id} cart={cart} />
+			<section className="mt-2 px-5 lg:px-8">
+				{/* Search first (sticky inside the grid), then the category hero
+				    carousel as the page's main highlight, then the full grid under an
+				    "All products" divider. Zero-category stores render no hero — the
+				    page stays search + grid, same as pre-categories. */}
+				<ProductGrid
+					retailerId={retailer._id}
+					cart={cart}
+					beforeGrid={
+						<CategoryRail
+							retailerId={retailer._id}
+							storeSlug={retailer.slug}
+							variant="hero"
+						/>
+					}
+				/>
 			</section>
 
 			<CartBar

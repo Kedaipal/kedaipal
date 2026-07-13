@@ -1,6 +1,6 @@
 import { useQuery } from "convex/react";
 import { Search, X } from "lucide-react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
@@ -23,12 +23,20 @@ interface ProductGridProps {
 	 * sheet and cart-add, no forked component.
 	 */
 	products?: StorefrontProduct[];
+	/**
+	 * Rendered between the sticky search bar and the grid — the home page slots
+	 * the category hero carousel here so search stays the first control while
+	 * categories stay the first CONTENT. Hidden while a search query is active
+	 * (results take the whole surface, categories would be noise).
+	 */
+	beforeGrid?: ReactNode;
 }
 
 export function ProductGrid({
 	retailerId,
 	cart,
 	products: productsOverride,
+	beforeGrid,
 }: ProductGridProps) {
 	// `products.list` returns active products already sorted by the retailer's
 	// `sortOrder` (set via the dashboard reorder). We render in that order — the
@@ -119,27 +127,35 @@ export function ProductGrid({
 
 	return (
 		<>
-			{/* Search bar */}
-			<div className="relative mb-4">
-				<Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-				<Input
-					type="search"
-					value={searchQuery}
-					onChange={(e) => setSearchQuery(e.target.value)}
-					placeholder="Search products…"
-					className="h-11 w-full rounded-xl border-border bg-muted/50 pl-10 pr-10 text-sm focus:bg-background"
-				/>
-				{searchQuery && (
-					<button
-						type="button"
-						onClick={() => setSearchQuery("")}
-						className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-						aria-label="Clear search"
-					>
-						<X className="size-4" />
-					</button>
-				)}
+			{/* Search bar — the first control, sticky so it's always within reach
+			    mid-scroll. Full-bleed on mobile via negative margins (the parent
+			    section pads px-5 / lg:px-8). */}
+			<div className="sticky top-0 z-30 -mx-5 mb-4 bg-background/92 px-5 py-2 backdrop-blur-md lg:-mx-8 lg:px-8">
+				<div className="relative">
+					<Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+					<Input
+						type="search"
+						value={searchQuery}
+						onChange={(e) => setSearchQuery(e.target.value)}
+						placeholder="Search products…"
+						className="h-11 w-full rounded-xl border-border bg-muted/50 pl-10 pr-10 text-sm focus:bg-background"
+					/>
+					{searchQuery && (
+						<button
+							type="button"
+							onClick={() => setSearchQuery("")}
+							className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+							aria-label="Clear search"
+						>
+							<X className="size-4" />
+						</button>
+					)}
+				</div>
 			</div>
+
+			{/* Home page slots the category hero here; hidden while searching so
+			    results take the whole surface. */}
+			{searchQuery ? null : beforeGrid}
 
 			{/* Result count */}
 			{searchQuery && (

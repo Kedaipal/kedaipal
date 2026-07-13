@@ -212,17 +212,22 @@ function CategoryRoute() {
 				</div>
 			</header>
 
-			<section className="mt-4 px-5 lg:px-8">
-				{/* Sibling categories stay one tap away (current one highlighted). */}
-				<CategoryRail
-					retailerId={retailer._id}
-					storeSlug={retailer.slug}
-					activeSlug={page.category.slug}
-				/>
+			<section className="mt-2 px-5 lg:px-8">
+				{/* Compact switcher (not the hero) — sibling categories stay one tap
+				    away without pushing this category's products below the fold.
+				    Slotted after the sticky search; hidden while searching. */}
 				<ProductGrid
 					retailerId={retailer._id}
 					cart={cart}
 					products={page.products}
+					beforeGrid={
+						<CategoryRail
+							retailerId={retailer._id}
+							storeSlug={retailer.slug}
+							activeSlug={page.category.slug}
+							variant="switcher"
+						/>
+					}
 				/>
 			</section>
 
