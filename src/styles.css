@@ -34,6 +34,14 @@
 	[role="button"] {
 		touch-action: manipulation;
 	}
+
+	/* Every search field ships its own styled clear button — suppress the
+	   browser's native cancel "×" (WebKit/Blink) so there's never two. */
+	input[type="search"]::-webkit-search-cancel-button,
+	input[type="search"]::-webkit-search-decoration {
+		-webkit-appearance: none;
+		appearance: none;
+	}
   * {
     @apply border-border outline-ring/50;
 	}

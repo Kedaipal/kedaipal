@@ -156,7 +156,7 @@ function CategorySkeleton() {
 				<Skeleton className="h-8 w-48" />
 			</header>
 			<section className="mt-2 px-5 lg:px-8">
-				<div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+				<div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
 					{[0, 1, 2, 3].map((n) => (
 						<Skeleton key={n} className="aspect-square w-full rounded-2xl" />
 					))}
@@ -220,6 +220,7 @@ function CategoryRoute() {
 					retailerId={retailer._id}
 					cart={cart}
 					products={page.products}
+					storeSlug={retailer.slug}
 					beforeGrid={
 						<CategoryRail
 							retailerId={retailer._id}

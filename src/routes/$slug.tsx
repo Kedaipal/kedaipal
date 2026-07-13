@@ -166,7 +166,7 @@ function StorefrontSkeleton() {
 				</div>
 			</header>
 			<section className="mt-4 flex flex-col gap-4 px-5 lg:px-8">
-				<div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+				<div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
 					{[0, 1, 2, 3, 4, 5, 6, 7].map((n) => (
 						<div
 							key={n}
@@ -297,6 +297,7 @@ function StorefrontRoute() {
 				<ProductGrid
 					retailerId={retailer._id}
 					cart={cart}
+					storeSlug={retailer.slug}
 					beforeGrid={
 						<CategoryRail
 							retailerId={retailer._id}

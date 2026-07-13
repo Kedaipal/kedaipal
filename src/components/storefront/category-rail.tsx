@@ -132,7 +132,7 @@ export function CategoryRail({
 						key={category._id}
 						to="/$slug/c/$categorySlug"
 						params={{ slug: storeSlug, categorySlug: category.slug }}
-						className="relative flex h-[9.5rem] w-[15rem] shrink-0 snap-start flex-col justify-end overflow-hidden rounded-2xl transition-transform active:scale-[0.98] sm:w-[17rem]"
+						className="relative flex h-[9.5rem] w-[15rem] shrink-0 snap-start flex-col justify-end overflow-hidden rounded-2xl transition-transform active:scale-[0.98] sm:w-[17rem] lg:h-[11rem] lg:w-[19rem]"
 					>
 						{category.imageUrl ? (
 							<img

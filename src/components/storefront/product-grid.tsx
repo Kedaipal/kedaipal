@@ -1,5 +1,6 @@
+import { Link } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
-import { Search, X } from "lucide-react";
+import { ChevronRight, Search, X } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
@@ -12,6 +13,11 @@ import {
 	ProductDetailSheet,
 	type StorefrontVariant,
 } from "./product-detail-sheet";
+
+/** Product-card grid — denser on desktop so a product card never outweighs a
+ * category hero card (categories are the highlight, products the inventory). */
+const GRID_CLASS =
+	"grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6";
 
 interface ProductGridProps {
 	retailerId: Id<"retailers">;
@@ -30,6 +36,13 @@ interface ProductGridProps {
 	 * (results take the whole surface, categories would be noise).
 	 */
 	beforeGrid?: ReactNode;
+	/**
+	 * Store slug for category deep links. When set, the search also matches
+	 * CATEGORY names — matching categories render as tappable tiles above the
+	 * product results. (Shares the rail's `listActivePublic` subscription, so
+	 * no extra read cost.)
+	 */
+	storeSlug?: string;
 }
 
 export function ProductGrid({
@@ -37,6 +50,7 @@ export function ProductGrid({
 	cart,
 	products: productsOverride,
 	beforeGrid,
+	storeSlug,
 }: ProductGridProps) {
 	// `products.list` returns active products already sorted by the retailer's
 	// `sortOrder` (set via the dashboard reorder). We render in that order — the
@@ -47,6 +61,12 @@ export function ProductGrid({
 		productsOverride ? "skip" : { retailerId },
 	);
 	const products = productsOverride ?? listed;
+	// Same query the CategoryRail subscribes to — Convex dedupes identical
+	// (query, args) subscriptions, so this costs nothing extra.
+	const categories = useQuery(
+		api.categories.listActivePublic,
+		storeSlug ? { retailerId } : "skip",
+	);
 	const [openProduct, setOpenProduct] = useState<StorefrontProduct | null>(
 		null,
 	);
@@ -54,7 +74,7 @@ export function ProductGrid({
 
 	if (products === undefined) {
 		return (
-			<div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+			<div className={GRID_CLASS}>
 				{Array.from({ length: 4 }).map((_, i) => (
 					<div
 						// biome-ignore lint/suspicious/noArrayIndexKey: skeleton placeholders are stable
@@ -79,6 +99,13 @@ export function ProductGrid({
 				p.name.toLowerCase().includes(searchQuery.toLowerCase()),
 			)
 		: products;
+	// Category-name matches surface as tappable tiles above product results.
+	const matchedCategories =
+		searchQuery && storeSlug && categories
+			? categories.filter((c) =>
+					c.name.toLowerCase().includes(searchQuery.toLowerCase()),
+				)
+			: [];
 
 	const addVariant = (
 		p: StorefrontProduct,
@@ -137,7 +164,11 @@ export function ProductGrid({
 						type="search"
 						value={searchQuery}
 						onChange={(e) => setSearchQuery(e.target.value)}
-						placeholder="Search products…"
+						placeholder={
+							storeSlug && categories && categories.length > 0
+								? "Search products & categories…"
+								: "Search products…"
+						}
 						className="h-11 w-full rounded-xl border-border bg-muted/50 pl-10 pr-10 text-sm focus:bg-background"
 					/>
 					{searchQuery && (
@@ -157,6 +188,38 @@ export function ProductGrid({
 			    results take the whole surface. */}
 			{searchQuery ? null : beforeGrid}
 
+			{/* Matching categories — tappable doors above the product results. */}
+			{matchedCategories.length > 0 ? (
+				<div className="mb-4 flex flex-col gap-2">
+					<p className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">
+						Categories
+					</p>
+					<div className="flex flex-wrap gap-2">
+						{matchedCategories.map((category) => (
+							<Link
+								key={category._id}
+								to="/$slug/c/$categorySlug"
+								// biome-ignore lint/style/noNonNullAssertion: matchedCategories is only non-empty when storeSlug is set
+								params={{ slug: storeSlug!, categorySlug: category.slug }}
+								className="flex h-11 items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 transition-colors hover:border-accent/50"
+							>
+								<span className="text-[13.5px] font-semibold">
+									{category.name}
+								</span>
+								<span className="text-[11.5px] text-muted-foreground">
+									{category.productCount} item
+									{category.productCount === 1 ? "" : "s"}
+								</span>
+								<ChevronRight
+									className="size-3.5 text-muted-foreground/70"
+									aria-hidden
+								/>
+							</Link>
+						))}
+					</div>
+				</div>
+			) : null}
+
 			{/* Result count */}
 			{searchQuery && (
 				<p className="mb-3 text-xs text-muted-foreground">
@@ -170,6 +233,9 @@ export function ProductGrid({
 				<div className="rounded-2xl border border-dashed border-border p-8 text-center">
 					<p className="text-sm text-muted-foreground">
 						No products match &ldquo;{searchQuery}&rdquo;
+						{matchedCategories.length > 0
+							? " — but the categories above do."
+							: ""}
 					</p>
 					<button
 						type="button"
@@ -180,7 +246,7 @@ export function ProductGrid({
 					</button>
 				</div>
 			) : (
-				<div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+				<div className={GRID_CLASS}>
 					{filtered.map((product) => (
 						<ProductCard
 							key={product._id}
