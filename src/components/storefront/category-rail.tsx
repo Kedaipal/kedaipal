@@ -25,102 +25,24 @@ function gradientFor(slug: string): string {
 }
 
 /**
- * Storefront category cards. Renders NOTHING until categories resolve
- * non-empty (the server already excludes archived/hidden categories and any
- * with zero visible products), so zero-category stores are pixel-identical to
- * the pre-categories storefront.
+ * The store home's category hero — the categories ARE the menu: big tappable
+ * image cards in a snap carousel under a "Browse by category" heading, closed
+ * by an "All products" divider that labels the full grid below.
  *
- * Two variants for two jobs:
- * - `hero` (store home) — the categories ARE the menu: big image cards in a
- *   snap carousel under a "Browse by category" heading, closed by an
- *   "All products" divider that labels the full grid below.
- * - `switcher` (category pages) — compact tiles for hopping between sibling
- *   categories (`activeSlug` highlighted, plus an "All products" tile back to
- *   the flat view) without pushing the category's own products below the fold.
+ * Renders NOTHING until categories resolve non-empty (the server already
+ * excludes archived/hidden categories and any with zero visible products), so
+ * zero-category stores are pixel-identical to the pre-categories storefront.
  */
 export function CategoryRail({
 	retailerId,
 	storeSlug,
-	activeSlug,
-	variant = "hero",
 }: {
 	retailerId: Id<"retailers">;
 	storeSlug: string;
-	/** Slug of the category page being viewed; undefined on the store home. */
-	activeSlug?: string;
-	variant?: "hero" | "switcher";
 }) {
 	const categories = useQuery(api.categories.listActivePublic, { retailerId });
 	if (!categories || categories.length === 0) return null;
 
-	if (variant === "switcher") {
-		return (
-			<nav aria-label="Product categories" className="mb-4">
-				<div className="-mx-5 flex gap-2.5 overflow-x-auto px-5 pb-1 [scrollbar-width:none] lg:-mx-8 lg:px-8 [&::-webkit-scrollbar]:hidden">
-					{/* "All" tile only where it's a way BACK — the home page IS the all view. */}
-					{activeSlug ? (
-						<Link
-							to="/$slug"
-							params={{ slug: storeSlug }}
-							className="flex h-[4.5rem] w-28 shrink-0 flex-col items-start justify-end gap-0.5 rounded-2xl border border-border bg-card p-2.5 transition-colors hover:border-accent/50"
-						>
-							<span className="text-[13px] font-semibold leading-tight">
-								All products
-							</span>
-						</Link>
-					) : null}
-					{categories.map((category) => {
-						const active = category.slug === activeSlug;
-						return (
-							<Link
-								key={category._id}
-								to="/$slug/c/$categorySlug"
-								params={{ slug: storeSlug, categorySlug: category.slug }}
-								aria-current={active ? "page" : undefined}
-								className={`relative flex h-[4.5rem] w-28 shrink-0 flex-col items-start justify-end gap-0.5 overflow-hidden rounded-2xl border p-2.5 transition-colors ${
-									active
-										? "border-accent bg-accent/10"
-										: "border-border bg-card hover:border-accent/50"
-								}`}
-							>
-								{category.imageUrl ? (
-									<>
-										<img
-											src={category.imageUrl}
-											alt=""
-											className="absolute inset-0 h-full w-full object-cover"
-										/>
-										{/* Bottom scrim keeps the name legible on any image. */}
-										<div
-											aria-hidden
-											className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/25 to-transparent"
-										/>
-									</>
-								) : null}
-								<span
-									className={`relative line-clamp-2 text-[13px] font-semibold leading-tight ${
-										category.imageUrl ? "text-white drop-shadow" : ""
-									}`}
-								>
-									{category.name}
-								</span>
-								<span
-									className={`relative text-[11px] leading-none ${
-										category.imageUrl ? "text-white/85" : "text-muted-foreground"
-									}`}
-								>
-									{category.productCount} item
-									{category.productCount === 1 ? "" : "s"}
-								</span>
-							</Link>
-						);
-					})}
-				</div>
-			</nav>
-		);
-	}
-
-	// Hero — the store home's main highlight: big tappable category cards.
 	return (
 		<nav aria-label="Product categories" className="flex flex-col">
 			<h2 className="font-heading text-lg font-extrabold leading-tight tracking-tight">
