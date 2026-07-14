@@ -4,6 +4,7 @@ import type { PaymentMethod } from "./payment";
 import {
 	hasTemplateOverride,
 	paymentQrCaption,
+	poweredByLine,
 	renderPaymentMethods,
 	renderPickupBlock,
 	renderStageUpdate,
@@ -517,5 +518,33 @@ describe("paymentReminder system message", () => {
 		});
 		expect(out).toContain("Peringatan mesra daripada Bearcamp");
 		expect(out).toContain("masih menunggu pembayaran");
+	});
+});
+
+describe("poweredByLine growth footer", () => {
+	test("EN renders the branded line with the marketing domain", () => {
+		const out = poweredByLine("en");
+		expect(out).toBe("\n\nThis shop runs on Kedaipal 🛒 kedaipal.com");
+	});
+
+	test("MS renders the exact locked BM copy", () => {
+		const out = poweredByLine("ms");
+		expect(out).toBe("\n\nKedai ini guna Kedaipal 🛒 kedaipal.com");
+	});
+
+	test("leads with a blank line so it reads as a quiet footer under any body", () => {
+		expect(poweredByLine("en").startsWith("\n\n")).toBe(true);
+		expect(poweredByLine("ms").startsWith("\n\n")).toBe(true);
+	});
+
+	test("is a system suffix, independent of retailer confirm-template overrides", () => {
+		// The line is appended by the send site, so a retailer override of the
+		// `confirm` template (which renderMessage handles) can never strip it.
+		const overridden = waCopy.en.confirm({
+			shortId: "ORD-TEST",
+			storeName: "Bearcamp",
+		});
+		expect(overridden).not.toContain("Powered by");
+		expect(poweredByLine("en")).toContain("Kedaipal");
 	});
 });

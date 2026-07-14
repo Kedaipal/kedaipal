@@ -28,6 +28,7 @@ import {
 	hasTemplateOverride,
 	paymentQrCaption,
 	pickLocale,
+	poweredByLine,
 	renderMessage,
 	renderPaymentMethods,
 	renderPickupBlock,
@@ -305,6 +306,10 @@ async function sendPaymentMessage(
 		// so re-sending would repeat the same details. The intro, transfer
 		// reference, and "I've paid" CTA still send. Defaults to true.
 		includePaymentDetails?: boolean;
+		// Optional trailing block appended to the very END of the message body
+		// (after the payment block), e.g. the always-on "Powered by Kedaipal"
+		// growth line on order confirmations. Include its own leading newlines.
+		footerLine?: string;
 	},
 ): Promise<void> {
 	const {
@@ -317,6 +322,7 @@ async function sendPaymentMessage(
 		currency,
 		payment,
 		includePaymentDetails = true,
+		footerLine = "",
 	} = args;
 	// Hard-coded, non-overridable: tells the shopper to use the order ID as the
 	// transfer reference — the only deterministic way to match a bank
@@ -333,7 +339,10 @@ async function sendPaymentMessage(
 	// Pickup first so the buyer sees the WHERE before the WHEN/HOW of paying.
 	const withPickup = pickupBlock ? `${introBody}\n${pickupBlock}` : introBody;
 	const withRef = `${withPickup}\n\n${transferReferenceLine}`;
-	const body = paymentBlock ? `${withRef}\n${paymentBlock}` : withRef;
+	const withPayment = paymentBlock ? `${withRef}\n${paymentBlock}` : withRef;
+	// Growth footer (e.g. "Powered by Kedaipal") sits last, under the payment
+	// details — quiet and out of the way of the actionable content.
+	const body = `${withPayment}${footerLine}`;
 	const brandImageUrl = "https://kedaipal.com/logo-2.png";
 	// CTA intent — the adapter renders a tappable "I've paid" button in prod and
 	// degrades to a plain image with caption when buttons can't be honoured
@@ -568,9 +577,11 @@ export const handleInbound = internalAction({
 				meta?.pickupSnapshot,
 				meta?.currency,
 			);
-			const gatedBody = pickupBlock
-				? `${gatedConfirm}\n${pickupBlock}`
-				: gatedConfirm;
+			const gatedBody =
+				(pickupBlock ? `${gatedConfirm}\n${pickupBlock}` : gatedConfirm) +
+				// Same always-on growth line as the normal confirm — a custom-order
+				// buyer still sees it on their "order received" message.
+				poweredByLine(locale);
 			const brandImageUrl = "https://kedaipal.com/logo-2.png";
 			try {
 				// Image message carries the brand logo as the header without needing
@@ -611,6 +622,9 @@ export const handleInbound = internalAction({
 				pickupSnapshot: meta?.pickupSnapshot,
 				currency: meta?.currency,
 				payment: meta?.payment ?? { methods: [] },
+				// Always-on growth line — appended here (not in the confirm template)
+				// so a retailer's template override can't strip it. See poweredByLine.
+				footerLine: poweredByLine(locale),
 			});
 		}
 

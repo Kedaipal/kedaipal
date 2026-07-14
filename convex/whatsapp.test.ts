@@ -656,7 +656,9 @@ describe("whatsapp outbound on status change", () => {
 		
 
 		// Confirm via inbound — should use custom confirm template, with the
-		// non-overridable transfer-reference line appended below it.
+		// non-overridable transfer-reference line appended below it, and the
+		// always-on "Powered by Kedaipal" growth line last (appended at the send
+		// site so a retailer's template override can never strip it — 86ey8zh3r).
 		await t.action(internal.whatsapp.handleInbound, {
 			fromPhone: "60123456789",
 			text: shortId,
@@ -667,7 +669,7 @@ describe("whatsapp outbound on status change", () => {
 		};
 		expect(confirmBody.type).toBe("interactive");
 		expect(confirmBody.interactive.body.text).toBe(
-			`Yo ${shortId}! Thanks from Test Outdoor 🙌\n\nUse ${shortId} as your transfer reference so we can match it.`,
+			`Yo ${shortId}! Thanks from Test Outdoor 🙌\n\nUse ${shortId} as your transfer reference so we can match it.\n\nThis shop runs on Kedaipal 🛒 kedaipal.com`,
 		);
 		fetchMock.calls.length = 0;
 

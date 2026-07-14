@@ -297,6 +297,32 @@ export function renderSystemMessage(
 	return systemMessages[locale][key](vars);
 }
 
+// ---------------------------------------------------------------------------
+// "Powered by Kedaipal" growth line (ticket 86ey8zh3r)
+//
+// Appended to every buyer-facing STOREFRONT order-confirmation message so each
+// order becomes a Kedaipal impression with a click path — the digital twin of
+// the storefront footer badge. Always-on and deliberately NOT retailer-
+// overridable (locked decision, Arif 13 Jul 2026: universal or the loop doesn't
+// compound), which is why it lives here as a system suffix appended at the send
+// site rather than inside the override-able `confirm` template — a seller
+// editing their template can't strip it out.
+// ---------------------------------------------------------------------------
+
+const poweredByCopy: Record<Locale, string> = {
+	en: "This shop runs on Kedaipal 🛒 kedaipal.com",
+	ms: "Kedai ini guna Kedaipal 🛒 kedaipal.com",
+};
+
+/**
+ * The growth line as its own trailing block, with a leading blank line so it
+ * reads as a quiet footer under whatever confirmation message it follows.
+ * Callers append it verbatim: `body + poweredByLine(locale)`.
+ */
+export function poweredByLine(locale: Locale): string {
+	return `\n\n${poweredByCopy[locale]}`;
+}
+
 /**
  * Phase 2 — generic "your order moved to <stage>" update, sent when a seller
  * advances an order INTO a custom stage that shares its canonical anchor with
