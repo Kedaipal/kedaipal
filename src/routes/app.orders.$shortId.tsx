@@ -4,6 +4,7 @@ import {
 	ArrowLeft,
 	ArrowRight,
 	BadgeCheck,
+	Ban,
 	Check,
 	CheckCircle2,
 	ChevronDown,
@@ -1066,20 +1067,29 @@ function OrderDetailRoute() {
 					/>
 				</button>
 				{moreOpen ? (
-					<div className="flex flex-col gap-2">
+					// One grouped menu panel: equal-height, left-aligned rows sharing a
+					// single border; the destructive actions (Cancel / Delete) sit below
+					// a divider, set apart from the neutral receipt row.
+					<div className="flex flex-col overflow-hidden rounded-xl border border-border bg-card">
 						{/* Receipt on mobile (desktop has it in the PageHeader actions). */}
 						<ReceiptDownloadButton
 							shortId={order.shortId}
 							label="Download receipt"
-							className="w-full lg:hidden"
+							variant="ghost"
+							size="default"
+							className="h-12 w-full justify-start gap-2.5 rounded-none px-4 text-sm font-medium lg:hidden"
 						/>
+						{/* Divider between the neutral row and the destructive group. Only
+						    present when the receipt row is (mobile), so no leading rule. */}
+						<hr className="border-border lg:hidden" aria-hidden="true" />
 						{!isTerminal ? (
 							<Button
 								onClick={() => setConfirmCancelOpen(true)}
 								disabled={pending !== null}
-								variant="outline"
-								className="h-11 w-full text-destructive hover:bg-destructive/10 hover:text-destructive"
+								variant="ghost"
+								className="h-12 w-full justify-start gap-2.5 rounded-none px-4 text-sm font-medium text-destructive hover:bg-destructive/10 hover:text-destructive"
 							>
+								<Ban className="size-4" aria-hidden="true" />
 								{pending === "cancel" ? "Updating…" : "Cancel Order"}
 							</Button>
 						) : null}
@@ -1088,13 +1098,13 @@ function OrderDetailRoute() {
 						<Button
 							onClick={() => setConfirmDeleteOpen(true)}
 							disabled={pending !== null}
-							variant="outline"
-							className="h-11 w-full gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+							variant="ghost"
+							className="h-12 w-full justify-start gap-2.5 rounded-none px-4 text-sm font-medium text-destructive hover:bg-destructive/10 hover:text-destructive"
 						>
 							<Trash2 className="size-4" aria-hidden="true" />
 							{pending === "delete" ? "Deleting…" : "Delete permanently"}
 						</Button>
-						<p className="px-1 text-center text-[11px] leading-snug text-muted-foreground">
+						<p className="border-t border-border bg-muted/30 px-4 py-2.5 text-[11px] leading-snug text-muted-foreground">
 							Deleting removes this order and its records for good — this can't
 							be undone.
 						</p>
