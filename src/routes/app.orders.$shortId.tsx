@@ -1050,15 +1050,17 @@ function OrderDetailRoute() {
 
 			{order.mockupStatus !== undefined ? <MockupCard order={order} /> : null}
 
-			{/* Rare actions (receipt, cancel, delete) collapse behind one quiet link
-			    — the stepper above already carries the main transition. A terminal
-			    order still has Delete here, so the expander is never empty. */}
-			<section className="flex flex-col gap-2">
+			{/* Rare actions (receipt, cancel, delete) collapse behind one quiet
+			    trigger — the stepper above already carries the main transition. The
+			    trigger + its menu share ONE bordered container so the panel reads as
+			    the trigger's own dropdown, not a detached card. A terminal order still
+			    has Delete here, so the expander is never empty. */}
+			<section className="overflow-hidden rounded-xl border border-border bg-card">
 				<button
 					type="button"
 					onClick={() => setMoreOpen((x) => !x)}
 					aria-expanded={moreOpen}
-					className="flex h-11 w-full items-center justify-center gap-1.5 rounded-xl border border-border bg-card text-[13px] font-semibold text-muted-foreground transition-colors hover:text-foreground"
+					className="flex h-12 w-full items-center justify-center gap-1.5 px-4 text-[13px] font-semibold text-muted-foreground transition-colors hover:text-foreground"
 				>
 					More actions
 					<ChevronDown
@@ -1067,10 +1069,12 @@ function OrderDetailRoute() {
 					/>
 				</button>
 				{moreOpen ? (
-					// One grouped menu panel: equal-height, left-aligned rows sharing a
-					// single border; the destructive actions (Cancel / Delete) sit below
-					// a divider, set apart from the neutral receipt row.
-					<div className="flex flex-col overflow-hidden rounded-xl border border-border bg-card">
+					// Menu items flow directly below the trigger, inside the same border:
+					// equal-height, left-aligned ghost rows; the destructive actions
+					// (Cancel / Delete) sit below a divider, set apart from the receipt.
+					<>
+						{/* Separates the trigger header from its menu items. */}
+						<hr className="border-border" aria-hidden="true" />
 						{/* Receipt on mobile (desktop has it in the PageHeader actions). */}
 						<ReceiptDownloadButton
 							shortId={order.shortId}
@@ -1079,8 +1083,8 @@ function OrderDetailRoute() {
 							size="default"
 							className="h-12 w-full justify-start gap-2.5 rounded-none px-4 text-sm font-medium lg:hidden"
 						/>
-						{/* Divider between the neutral row and the destructive group. Only
-						    present when the receipt row is (mobile), so no leading rule. */}
+						{/* Neutral → destructive divider. Only present when the receipt row
+						    is (mobile) — on desktop the header rule above already leads in. */}
 						<hr className="border-border lg:hidden" aria-hidden="true" />
 						{!isTerminal ? (
 							<Button
@@ -1108,7 +1112,7 @@ function OrderDetailRoute() {
 							Deleting removes this order and its records for good — this can't
 							be undone.
 						</p>
-					</div>
+					</>
 				) : null}
 			</section>
 
