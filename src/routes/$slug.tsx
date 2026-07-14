@@ -3,8 +3,8 @@ import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { CartBar } from "../components/storefront/cart-bar";
 import { CategoryRail } from "../components/storefront/category-rail";
-import { FoundingMemberBadge } from "../components/storefront/founding-member-badge";
 import { ProductGrid } from "../components/storefront/product-grid";
+import { StorefrontHeader } from "../components/storefront/storefront-header";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
@@ -166,7 +166,7 @@ function StorefrontSkeleton() {
 				</div>
 			</header>
 			<section className="mt-4 flex flex-col gap-4 px-5 lg:px-8">
-				<div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+				<div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
 					{[0, 1, 2, 3, 4, 5, 6, 7].map((n) => (
 						<div
 							key={n}
@@ -203,98 +203,29 @@ function StorefrontRoute() {
 	}
 
 	const retailer = result.retailer;
-	const hasCover = !!retailer.coverImageUrl;
 
 	return (
 		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-32">
-			{/* When a cover is set it becomes the header BACKGROUND: the Kedaipal
-			    mark, store logo, name + blurb overlay on top over a bottom-weighted
-			    scrim (legible on any image). No cover → the current light gradient
-			    header, unchanged. */}
-			<header
-				className={
-					hasCover
-						? "relative flex min-h-[11rem] flex-col justify-between overflow-hidden px-5 pb-5 pt-6 lg:min-h-[15rem] lg:rounded-b-3xl lg:px-8 lg:pb-7 lg:pt-8"
-						: "flex flex-col gap-4 bg-gradient-to-b from-accent/10 to-background px-5 pb-6 pt-10 lg:rounded-b-3xl lg:px-8 lg:pb-8"
-				}
-			>
-				{hasCover ? (
-					<>
-						<img
-							src={retailer.coverImageUrl}
-							alt={`${retailer.storeName} cover`}
-							className="absolute inset-0 h-full w-full object-cover"
+			{/* Shared brand header (cover/logo/name) — identical on the category
+			    pages so buyers always know whose store they're in. */}
+			<StorefrontHeader retailer={retailer} />
+
+			<section className="mt-2 px-5 lg:px-8">
+				{/* Search first (sticky inside the grid), then the category hero
+				    carousel as the page's main highlight, then the full grid under an
+				    "All products" divider. Zero-category stores render no hero — the
+				    page stays search + grid, same as pre-categories. */}
+				<ProductGrid
+					retailerId={retailer._id}
+					cart={cart}
+					storeSlug={retailer.slug}
+					beforeGrid={
+						<CategoryRail
+							retailerId={retailer._id}
+							storeSlug={retailer.slug}
 						/>
-						<div
-							aria-hidden
-							className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/35 to-black/20"
-						/>
-					</>
-				) : null}
-				<img
-					src={hasCover ? "/logo-dark.svg" : "/logo-3.svg"}
-					alt="Kedaipal"
-					className={
-						hasCover
-							? "relative h-5 w-auto opacity-95 drop-shadow"
-							: "h-5 w-auto"
 					}
 				/>
-				<div
-					className={`flex gap-4 ${hasCover ? "relative items-end" : "items-center"}`}
-				>
-					{retailer.logoUrl ? (
-						<img
-							src={retailer.logoUrl}
-							alt={`${retailer.storeName} logo`}
-							className={`h-16 w-16 shrink-0 rounded-2xl border-2 bg-background object-contain ${
-								hasCover
-									? "border-white/80 shadow-lg"
-									: "border-accent/20 shadow-sm"
-							}`}
-						/>
-					) : null}
-					<div className="flex flex-col gap-1">
-						<h1
-							className={`text-2xl font-bold leading-tight tracking-tight ${
-								hasCover ? "text-white drop-shadow-md" : ""
-							}`}
-						>
-							{retailer.storeName}
-						</h1>
-						{retailer.isFoundingMember ? (
-							<FoundingMemberBadge rank={retailer.foundingMemberRank} />
-						) : null}
-						{retailer.storeDescription ? (
-							// Seller's own blurb wins over the generic tagline. Plain text
-							// (escaped by React), newlines preserved, clamped to keep the
-							// header tidy. No empty block when unset.
-							<p
-								className={`line-clamp-3 whitespace-pre-line text-sm ${
-									hasCover
-										? "text-white/90 drop-shadow"
-										: "text-muted-foreground"
-								}`}
-							>
-								{retailer.storeDescription}
-							</p>
-						) : (
-							<p
-								className={`text-sm ${hasCover ? "text-white/90 drop-shadow" : "text-muted-foreground"}`}
-							>
-								Browse &amp; order on WhatsApp
-							</p>
-						)}
-					</div>
-				</div>
-			</header>
-
-			<section className="mt-4 px-5 lg:px-8">
-				{/* Browse-by-category tiles — render nothing for zero-category stores,
-				    keeping this page pixel-identical to the pre-categories storefront.
-				    The grid below stays the permanent "All products" view. */}
-				<CategoryRail retailerId={retailer._id} storeSlug={retailer.slug} />
-				<ProductGrid retailerId={retailer._id} cart={cart} />
 			</section>
 
 			<CartBar

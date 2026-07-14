@@ -98,14 +98,17 @@ export function CategoryPicker({
 									onClick={() => toggle(category._id)}
 									disabled={disabled}
 									aria-pressed={isSelected}
-									className={`flex w-full items-start gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+									// Fixed row height (uniform-cards rule, docs/design-system.md):
+									// a category without a description centers in the same box as
+									// one with a (single, truncated) description line.
+									className={`flex min-h-[3.75rem] w-full items-center gap-3 rounded-xl border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
 										isSelected
 											? "border-accent bg-accent/10"
 											: "border-border bg-card hover:border-accent/40"
 									}`}
 								>
 									<span
-										className={`mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-md border transition-colors ${
+										className={`flex size-5 shrink-0 items-center justify-center rounded-md border transition-colors ${
 											isSelected
 												? "border-accent bg-accent text-white"
 												: "border-input bg-background"
@@ -117,7 +120,7 @@ export function CategoryPicker({
 									</span>
 									<span className="flex min-w-0 flex-col">
 										<span className="flex items-center gap-1.5">
-											<span className="text-sm font-medium leading-snug">
+											<span className="truncate text-sm font-medium leading-snug">
 												{category.name}
 											</span>
 											{category.hidden ? (
@@ -128,7 +131,7 @@ export function CategoryPicker({
 											) : null}
 										</span>
 										{category.description ? (
-											<span className="line-clamp-2 text-xs leading-snug text-muted-foreground">
+											<span className="truncate text-xs leading-snug text-muted-foreground">
 												{category.description}
 											</span>
 										) : null}

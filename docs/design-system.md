@@ -65,6 +65,7 @@ If a primitive is missing, **add it to `src/components/ui/`** — don't inline a
 - **Badges/urgency:** small pill, semantic color; count badges cap at `99+` (see bottom-nav).
 - **Empty states** get a one-line hint pointing at the next action, never a blank panel (discoverability rule in `CLAUDE.md`).
 - **Don't** introduce new raw colors, arbitrary radii, or a second modal/toast implementation. Extend the token/primitive instead.
+- **Uniform cards (2026-07-13):** sibling cards on one page must be the SAME height with rows aligned across neighbours — variable content must never grow a card. The recipe: fixed zones, not free flow. (1) Reserve multi-line text zones (`line-clamp-2` + matching `min-h`) so a 1-line name doesn't lift the price row. (2) Meta lines **truncate, never wrap** (`truncate`, no `flex-wrap`) — give each fact its own fixed line (name / price·variants / stock word) instead of one wrapping row. (3) Pin actions with `mt-auto` in a `flex flex-col h-full` card so buttons align across a grid row. (4) Conditional badges overlay the image (`absolute` + scrim/backdrop) or sit in a fixed side column — never as an extra stacked row some cards have and others don't. (5) List rows get a `min-h` (e.g. `min-h-[84px]` category/product rows) so short content centers instead of shrinking. Live examples: `storefront/product-card.tsx`, `app.products.index.tsx` rows, `dashboard/customer-card.tsx`.
 
 ## Verifying UI changes (render → look → iterate)
 Tailwind written blind is a guess. Use the preview MCP to *see* it:
