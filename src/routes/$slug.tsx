@@ -4,6 +4,7 @@ import { api } from "../../convex/_generated/api";
 import { CartBar } from "../components/storefront/cart-bar";
 import { CategoryRail } from "../components/storefront/category-rail";
 import { ProductGrid } from "../components/storefront/product-grid";
+import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { StorefrontHeader } from "../components/storefront/storefront-header";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
@@ -205,7 +206,7 @@ function StorefrontRoute() {
 	const retailer = result.retailer;
 
 	return (
-		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-32">
+		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-20">
 			{/* Shared brand header (cover/logo/name) — identical on the category
 			    pages so buyers always know whose store they're in. */}
 			<StorefrontHeader retailer={retailer} />
@@ -224,6 +225,8 @@ function StorefrontRoute() {
 					}
 				/>
 			</section>
+
+			<StorefrontFooter />
 
 			<CartBar
 				cart={cart}
