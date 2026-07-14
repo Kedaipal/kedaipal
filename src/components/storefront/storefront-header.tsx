@@ -83,7 +83,7 @@ export function StorefrontHeader({
 						// (escaped by React), newlines preserved, clamped to keep the
 						// header tidy. No empty block when unset.
 						<p
-							className={`line-clamp-3 whitespace-pre-line text-sm ${
+							className={`line-clamp-2 whitespace-pre-line text-sm ${
 								hasCover ? "text-white/90 drop-shadow" : "text-muted-foreground"
 							}`}
 						>

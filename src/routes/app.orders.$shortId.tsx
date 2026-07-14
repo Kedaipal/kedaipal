@@ -4,6 +4,7 @@ import {
 	ArrowLeft,
 	ArrowRight,
 	BadgeCheck,
+	Ban,
 	Check,
 	CheckCircle2,
 	ChevronDown,
@@ -67,6 +68,7 @@ import {
 import { deriveMapsUrl } from "../lib/google-address";
 import {
 	anchorOrdinal,
+	displayStatusLabel,
 	resolveCurrentStage,
 	resolveStages,
 	resolveStatusLabel,
@@ -451,11 +453,12 @@ function OrderDetailRoute() {
 				</div>
 				<StatusBadge
 					status={order.status}
-					label={
+					label={displayStatusLabel(
+						order,
 						currentStage
 							? stageLabel(currentStage, "en")
-							: resolveStatusLabel(order.status, statusLabelOpts)
-					}
+							: resolveStatusLabel(order.status, statusLabelOpts),
+					)}
 				/>
 			</div>
 
@@ -768,7 +771,7 @@ function OrderDetailRoute() {
 								: "Self Collect"
 							: "Delivery"}
 					</p>
-					{order.fulfilmentDate !== undefined ? (
+					{order.fulfilmentDate !== undefined && order.source !== "counter" ? (
 						<div className="flex items-center gap-1.5">
 							<span className="text-xs text-muted-foreground">
 								{isSelfCollect
@@ -777,7 +780,11 @@ function OrderDetailRoute() {
 										: "Collect on"
 									: "Deliver on"}
 							</span>
-							<FulfilmentDateBadge epoch={order.fulfilmentDate} size="md" />
+							<FulfilmentDateBadge
+								epoch={order.fulfilmentDate}
+								size="md"
+								muted={isTerminal}
+							/>
 						</div>
 					) : null}
 				</div>
@@ -1043,14 +1050,17 @@ function OrderDetailRoute() {
 
 			{order.mockupStatus !== undefined ? <MockupCard order={order} /> : null}
 
-			{/* Rare actions (receipt, cancel) collapse behind one quiet link — the
-			    stepper above already carries the main transition. */}
-			<section className="flex flex-col gap-2">
+			{/* Rare actions (receipt, cancel, delete) collapse behind one quiet
+			    trigger — the stepper above already carries the main transition. The
+			    trigger + its menu share ONE bordered container so the panel reads as
+			    the trigger's own dropdown, not a detached card. A terminal order still
+			    has Delete here, so the expander is never empty. */}
+			<section className="overflow-hidden rounded-xl border border-border bg-card">
 				<button
 					type="button"
 					onClick={() => setMoreOpen((x) => !x)}
 					aria-expanded={moreOpen}
-					className="flex h-11 w-full items-center justify-center gap-1.5 rounded-xl border border-border bg-card text-[13px] font-semibold text-muted-foreground transition-colors hover:text-foreground"
+					className="flex h-12 w-full items-center justify-center gap-1.5 px-4 text-[13px] font-semibold text-muted-foreground transition-colors hover:text-foreground"
 				>
 					More actions
 					<ChevronDown
@@ -1059,20 +1069,31 @@ function OrderDetailRoute() {
 					/>
 				</button>
 				{moreOpen ? (
-					<div className="flex flex-col gap-2">
+					// Menu items flow directly below the trigger, inside the same border:
+					// equal-height, left-aligned ghost rows; the destructive actions
+					// (Cancel / Delete) sit below a divider, set apart from the receipt.
+					<>
+						{/* Separates the trigger header from its menu items. */}
+						<hr className="border-border" aria-hidden="true" />
 						{/* Receipt on mobile (desktop has it in the PageHeader actions). */}
 						<ReceiptDownloadButton
 							shortId={order.shortId}
 							label="Download receipt"
-							className="w-full lg:hidden"
+							variant="ghost"
+							size="default"
+							className="h-12 w-full justify-start gap-2.5 rounded-none px-4 text-sm font-medium lg:hidden"
 						/>
+						{/* Neutral → destructive divider. Only present when the receipt row
+						    is (mobile) — on desktop the header rule above already leads in. */}
+						<hr className="border-border lg:hidden" aria-hidden="true" />
 						{!isTerminal ? (
 							<Button
 								onClick={() => setConfirmCancelOpen(true)}
 								disabled={pending !== null}
-								variant="outline"
-								className="h-11 w-full text-destructive hover:bg-destructive/10 hover:text-destructive"
+								variant="ghost"
+								className="h-12 w-full justify-start gap-2.5 rounded-none px-4 text-sm font-medium text-destructive hover:bg-destructive/10 hover:text-destructive"
 							>
+								<Ban className="size-4" aria-hidden="true" />
 								{pending === "cancel" ? "Updating…" : "Cancel Order"}
 							</Button>
 						) : null}
@@ -1081,17 +1102,17 @@ function OrderDetailRoute() {
 						<Button
 							onClick={() => setConfirmDeleteOpen(true)}
 							disabled={pending !== null}
-							variant="outline"
-							className="h-11 w-full gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+							variant="ghost"
+							className="h-12 w-full justify-start gap-2.5 rounded-none px-4 text-sm font-medium text-destructive hover:bg-destructive/10 hover:text-destructive"
 						>
 							<Trash2 className="size-4" aria-hidden="true" />
 							{pending === "delete" ? "Deleting…" : "Delete permanently"}
 						</Button>
-						<p className="px-1 text-center text-[11px] leading-snug text-muted-foreground">
+						<p className="border-t border-border bg-muted/30 px-4 py-2.5 text-[11px] leading-snug text-muted-foreground">
 							Deleting removes this order and its records for good — this can't
 							be undone.
 						</p>
-					</div>
+					</>
 				) : null}
 			</section>
 

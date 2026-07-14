@@ -100,6 +100,26 @@ storefront `minFulfilmentNoticeDays`. See [`fulfilment-date.md`](./fulfilment-da
 After a **paid-in-person** order is created, the success screen offers an
 optional **"Mark as completed"** button (one tap → `delivered`).
 
+**`orders.source` — the checkout surface** ([`86ey8r734`](https://app.clickup.com/t/86ey8r734)):
+a first-class field on `orders`, `v.union("storefront","counter")`, distinct from
+`channel` (the messaging transport, always WhatsApp). `createOrderFromSession`
+stamps `"counter"`; the storefront `orders.create` stamps `"storefront"`.
+Optional/dev-only widen, no backfill — **undefined reads as `"storefront"`** (same
+posture as `pickupSnapshot.locationType`). It drives per-surface UI:
+
+- **No fulfilment-date urgency badge** and **excluded from the `dueToday` count**
+  — a counter date is defaulted, not promised (see `fulfilment-date.md`).
+- **"Completed", not "Delivered".** A counter sale finishes at the counter — there
+  was no delivery/collection leg — so its terminal `delivered` status reads
+  **"Completed"** (MS: "Selesai") on the inbox card + order detail, via
+  `displayStatusLabel(order, resolved)` (mirrored in `src/lib/orderStatus.ts` ↔
+  `convex/lib/orderStatus.ts`). Presentation only — the canonical `delivered`
+  status is unchanged.
+- **Inbox filter.** The order inbox filter sheet gains an **Order type** section
+  (Online / Counter) — an in-memory predicate in `convex/lib/orderInboxFilter.ts`
+  (no index), threaded through `searchOrders` + `exportOrders`. See
+  [`order-inbox.md`](./order-inbox.md).
+
 **Identity = optional, three converging paths, one record:** token-scan (happy,
 **built**), manual phone entry (**pending**), anonymous walk-in / cash
 (**pending**).

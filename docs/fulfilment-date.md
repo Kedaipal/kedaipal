@@ -68,6 +68,24 @@ The inbox chips and the per-order badge lead with **urgency** —
 above** the advanced filter sheet, not buried inside it, because "what's due
 today?" is a primary axis for an F&B seller, not a secondary filter.
 
+### Urgency is gated by status + source ([`86ey8r734`](https://app.clickup.com/t/86ey8r734))
+
+Two rules keep "red = act now" honest — a delivered order screaming "Overdue"
+made the inbox useless at counter-heavy stores (every completed counter sale
+went red the morning after, since counter defaults `fulfilmentDate = today`):
+
+1. **Terminal orders never show urgency.** `delivered`/`cancelled` orders render
+   the date in **neutral** chrome with no "Overdue/Today/Tomorrow" prefix
+   (`FulfilmentDateBadge muted`). The gate lives at the badge **call sites**
+   (`OrderContextBadge`, order-detail header) — `relativeFulfilmentLabel` stays a
+   pure date→label function, status-unaware.
+2. **Counter orders show no date badge at all.** A counter order's date is
+   defaulted-to-today, not buyer-chosen, so it carries no "promised by" signal —
+   `OrderContextBadge` and the detail header hide it entirely for
+   `source === "counter"`. They are also excluded from the `dueToday` count in
+   `searchOrders` (which the Home "due today" strip reads), so completed walk-in
+   sales never inflate the nudge. See `docs/counter-checkout.md` for `orders.source`.
+
 ## Retailer setting
 
 `retailers.minFulfilmentNoticeDays?: number` — Settings → **Fulfilment** tab,

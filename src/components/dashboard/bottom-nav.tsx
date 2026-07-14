@@ -21,9 +21,14 @@ import { cn } from "../../lib/utils";
 
 export interface BottomNavProps {
 	actionableCount: number;
-	// A storeless admin has no seller store to manage — show the admin tabs
-	// (Sellers / Billing / WABA) instead of the seller nav.
-	adminOnly?: boolean;
+	// Show the admin tabs (Sellers / Billing / WABA) instead of the seller nav.
+	// True for a storeless admin (no seller store to manage) AND for any admin
+	// while they're on an /app/admin route — so an admin can move between ALL
+	// admin pages on mobile, not just land on Sellers. See ClickUp 86ey8r734.
+	adminNav?: boolean;
+	// The admin has a seller app to return to (own store or act-as) — the admin
+	// tab row leads with an "App" tab so the console is never a dead end.
+	hasStore?: boolean;
 	// CRM is plan-locked for this seller (Starter) — mark the Customers row with
 	// a "Pro" chip so the upgrade wall behind it is never a surprise.
 	crmLocked?: boolean;
@@ -57,7 +62,8 @@ const MORE_ROUTES = [
 
 export function BottomNav({
 	actionableCount,
-	adminOnly,
+	adminNav,
+	hasStore,
 	crmLocked,
 	insightsLocked,
 }: BottomNavProps) {
@@ -88,8 +94,14 @@ export function BottomNav({
 
 	// The act-as session is held globally (see useActAs), so seller tabs keep the
 	// admin inside the vendor store automatically — no per-tab handling needed.
-	const tabs: Tab[] = adminOnly
+	const tabs: Tab[] = adminNav
 		? [
+				// Way back to the seller app — the console must never trap an admin
+				// who has a store to run. Storeless admins have no app to return to
+				// (seller routes bounce them back here), so no tab for them.
+				...(hasStore
+					? [{ to: "/app", label: "App", icon: Home, exact: true } as Tab]
+					: []),
 				{ to: "/app/admin/sellers", label: "Sellers", icon: Store },
 				{ to: "/app/admin/billing", label: "Billing", icon: ShieldCheck },
 				{ to: "/app/admin/waba", label: "WABA", icon: Siren },
@@ -120,7 +132,7 @@ export function BottomNav({
 				{tabs.map((tab) => (
 					<NavTab key={tab.label} tab={tab} />
 				))}
-				{!adminOnly ? (
+				{!adminNav ? (
 					<MoreTab
 						open={moreOpen}
 						onOpenChange={setMoreOpen}

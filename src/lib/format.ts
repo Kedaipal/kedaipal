@@ -38,6 +38,31 @@ export function formatRelativeTime(epochMs: number): string {
 	return formatShortDate(epochMs);
 }
 
+/**
+ * Compact absolute stamp for an order's placed-at time, so a seller reads WHEN an
+ * order arrived at a glance (not just "3h ago"). Shows the date + 12-hour time,
+ * dropping the year when it's the current year: "12 Jul, 3:45 PM" (or
+ * "12 Jul 2025, 3:45 PM"). Malaysia locale/timezone via the runtime default.
+ */
+export function formatOrderTimestamp(
+	epochMs: number,
+	now = Date.now(),
+): string {
+	const d = new Date(epochMs);
+	const sameYear = d.getFullYear() === new Date(now).getFullYear();
+	const date = d.toLocaleDateString("en-MY", {
+		day: "numeric",
+		month: "short",
+		...(sameYear ? {} : { year: "numeric" }),
+	});
+	const time = d.toLocaleTimeString("en-MY", {
+		hour: "numeric",
+		minute: "2-digit",
+		hour12: true,
+	});
+	return `${date}, ${time}`;
+}
+
 /** Absolute date like "2 May 2026". */
 export function formatShortDate(epochMs: number): string {
 	return new Date(epochMs).toLocaleDateString(undefined, {

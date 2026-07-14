@@ -37,6 +37,7 @@ import {
 import {
 	OrderFilters,
 	type OrderFilterValue,
+	type OrderSource,
 	type PaymentStatus,
 } from "../components/dashboard/order-filters";
 import { PageHeader } from "../components/dashboard/page-header";
@@ -51,9 +52,14 @@ import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
 import { downloadCsv } from "../lib/download";
-import { convexErrorMessage, formatPrice } from "../lib/format";
+import {
+	convexErrorMessage,
+	formatOrderTimestamp,
+	formatPrice,
+} from "../lib/format";
 import {
 	type DeliveryMethod,
+	displayStatusLabel,
 	resolveAnchorLabel,
 	resolveCurrentStage,
 	resolveStages,
@@ -85,10 +91,16 @@ type InboxSearch = {
 	mockup?: boolean;
 	/** Fulfilment-date urgency window (Today / Tomorrow / This week). */
 	fwin?: FulfilmentWindow;
+	/** Checkout surface (online vs counter). */
+	source?: OrderSource;
 };
 
 function isFulfilmentWindow(x: unknown): x is FulfilmentWindow {
 	return x === "today" || x === "tomorrow" || x === "this_week";
+}
+
+function isOrderSource(x: unknown): x is OrderSource {
+	return x === "storefront" || x === "counter";
 }
 
 export const Route = createFileRoute("/app/orders/")({
@@ -133,6 +145,7 @@ export const Route = createFileRoute("/app/orders/")({
 			mockup:
 				search.mockup === true || search.mockup === "true" ? true : undefined,
 			fwin: isFulfilmentWindow(search.fwin) ? search.fwin : undefined,
+			source: isOrderSource(search.source) ? search.source : undefined,
 		};
 	},
 	component: OrdersRoute,
@@ -151,6 +164,7 @@ function OrdersRoute() {
 		to,
 		mockup = false,
 		fwin,
+		source,
 	} = Route.useSearch();
 	const navigate = useNavigate({ from: Route.fullPath });
 	const retailer = useDashboardRetailer();
@@ -187,7 +201,18 @@ function OrdersRoute() {
 	useEffect(() => {
 		setLimit(PAGE_SIZE);
 		setSelected(new Set());
-	}, [bucket, debounced, payKey, methodKey, munspec, from, to, mockup, fwin]);
+	}, [
+		bucket,
+		debounced,
+		payKey,
+		methodKey,
+		munspec,
+		from,
+		to,
+		mockup,
+		fwin,
+		source,
+	]);
 
 	// Order Inbox plan gate (Pro+). Starter keeps the plain list + order detail +
 	// status updates (the all-tier "Order pipeline"); buckets/search/filters/bulk/
@@ -213,6 +238,7 @@ function OrdersRoute() {
 						dateTo: to,
 						mockupPending: mockup || undefined,
 						fulfilmentWindow: fwin,
+						source,
 						searchText: debounced || undefined,
 						limit,
 					}
@@ -253,7 +279,8 @@ function OrdersRoute() {
 		from != null ||
 		to != null ||
 		mockup ||
-		fwin != null;
+		fwin != null ||
+		source != null;
 
 	function setBucket(next: InboxBucket) {
 		navigate({
@@ -275,6 +302,7 @@ function OrdersRoute() {
 				to: next.to,
 				mockup: next.mockup ? true : undefined,
 				fwin: next.fwin,
+				source: next.source,
 			}),
 		});
 	}
@@ -391,6 +419,7 @@ function OrdersRoute() {
 					dateTo: to,
 					mockupPending: mockup || undefined,
 					fulfilmentWindow: fwin,
+					source,
 					searchText: debounced || undefined,
 					orderIds: selectedIds.length > 0 ? selectedIds : undefined,
 				},
@@ -517,6 +546,7 @@ function OrdersRoute() {
 								to,
 								mockup,
 								fwin,
+								source,
 							}}
 							onChange={setFilters}
 							mockupCount={counts?.mockupPending}
@@ -602,7 +632,7 @@ function OrdersRoute() {
 									},
 									stages,
 								);
-								return cs
+								const resolved = cs
 									? stageLabel(cs, "en")
 									: resolveAnchorLabel(o.status as OrderStatus, {
 											stages,
@@ -611,7 +641,14 @@ function OrdersRoute() {
 												"delivery") as DeliveryMethod,
 											locale: "en",
 										});
+								// Counter sales complete "at the counter", not via delivery —
+								// their done state reads "Completed", never "Delivered".
+								return displayStatusLabel(
+									{ status: o.status as OrderStatus, source: o.source },
+									resolved,
+								);
 							})();
+							const placedAt = formatOrderTimestamp(o.createdAt, now);
 							const age = formatStatusAge(now - o.createdAt);
 							const cardInner = (
 								<div className="min-w-0 flex-1">
@@ -624,14 +661,14 @@ function OrdersRoute() {
 											{formatPrice(o.total, o.currency)}
 										</span>
 									</div>
-									<div className="mt-0.5 flex items-center gap-1.5 text-[12.5px] text-muted-foreground">
+									<div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[12.5px] text-muted-foreground">
 										<span className="font-mono">#{o.shortId}</span>
 										<span aria-hidden="true">·</span>
-										<span>
-											{o.items.length} item{o.items.length === 1 ? "" : "s"}
-										</span>
-										<span aria-hidden="true">·</span>
-										<span>{age === "just now" ? age : `${age} ago`}</span>
+										{/* Absolute placed-at datetime + relative age, so the seller
+										    reads "when" AND "how long ago" without opening the
+										    detail. Item count moved off the card (it's on detail). */}
+										<span className="tabular-nums">{placedAt}</span>
+										<span>({age === "just now" ? age : `${age} ago`})</span>
 									</div>
 									<div className="mt-2.5 flex items-center gap-1.5">
 										<StatusBadge

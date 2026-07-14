@@ -13,6 +13,14 @@ import { FilterChip } from "../ui/filter-chip";
 
 export type PaymentStatus = "unpaid" | "claimed" | "received";
 
+/** Checkout surface the order came through (mirrors orders.source). */
+export type OrderSource = "storefront" | "counter";
+
+const SOURCE_OPTIONS: { value: OrderSource; label: string }[] = [
+	{ value: "storefront", label: "Online" },
+	{ value: "counter", label: "Counter" },
+];
+
 const PAYMENT_OPTIONS: { value: PaymentStatus; label: string }[] = [
 	{ value: "unpaid", label: "Unpaid" },
 	{ value: "claimed", label: "Claimed" },
@@ -39,19 +47,22 @@ export interface OrderFilterValue {
 	mockup: boolean;
 	/** Fulfilment-date urgency window (Today / Tomorrow / This week). */
 	fwin?: FulfilmentWindow;
+	/** Checkout surface (online vs counter). Unset = both. */
+	source?: OrderSource;
 }
 
 export function activeFilterCount(v: OrderFilterValue): number {
 	// A date range is one filter (not two), even with both bounds set; each
-	// payment + method selection (incl. "unspecified"), the due window, and the
-	// mockup toggle each increment.
+	// payment + method selection (incl. "unspecified"), the due window, the
+	// order-type choice, and the mockup toggle each increment.
 	return (
 		v.payment.length +
 		v.method.length +
 		(v.methodUnspecified ? 1 : 0) +
 		(v.from != null || v.to != null ? 1 : 0) +
 		(v.mockup ? 1 : 0) +
-		(v.fwin != null ? 1 : 0)
+		(v.fwin != null ? 1 : 0) +
+		(v.source != null ? 1 : 0)
 	);
 }
 
@@ -124,6 +135,14 @@ function activeFilterTokens(
 	mockupCount?: number,
 ): FilterToken[] {
 	const tokens: FilterToken[] = [];
+	if (v.source) {
+		tokens.push({
+			key: `source-${v.source}`,
+			label:
+				SOURCE_OPTIONS.find((o) => o.value === v.source)?.label ?? v.source,
+			clear: (x) => ({ ...x, source: undefined }),
+		});
+	}
 	if (v.fwin) {
 		const label = DUE_WINDOWS.find((w) => w.value === v.fwin)?.label ?? v.fwin;
 		tokens.push({
@@ -181,6 +200,7 @@ export function clearedFilters(): OrderFilterValue {
 		to: undefined,
 		mockup: false,
 		fwin: undefined,
+		source: undefined,
 	};
 }
 
@@ -341,6 +361,30 @@ export function OrderFilters({
 									>
 										<CalendarDays className="size-3.5" aria-hidden="true" />
 										{w.label}
+									</FilterChip>
+								))}
+							</div>
+						</div>
+
+						<div className="flex flex-col gap-2">
+							<span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+								Order type
+							</span>
+							<div className="flex flex-wrap gap-2">
+								{SOURCE_OPTIONS.map((opt) => (
+									<FilterChip
+										key={opt.value}
+										tone="accent"
+										selected={value.source === opt.value}
+										onClick={() =>
+											onChange({
+												...value,
+												source:
+													value.source === opt.value ? undefined : opt.value,
+											})
+										}
+									>
+										{opt.label}
 									</FilterChip>
 								))}
 							</div>

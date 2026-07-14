@@ -165,3 +165,128 @@ describe("VariantEditor — custom / made-to-order line", () => {
 		expect(within(list as HTMLElement).queryByText("Bespoke cake")).toBeNull();
 	});
 });
+
+describe("VariantEditor — inline submit issues", () => {
+	it("marks the exact row inputs aria-invalid with the message beneath (single-variant)", () => {
+		render(
+			<VariantEditor
+				value={{
+					...singleVariant,
+					rows: [{ ...singleVariant.rows[0], price: "", stock: "" }],
+				}}
+				onChange={() => {}}
+				currency="RM"
+				issues={[
+					{
+						where: "row",
+						index: 0,
+						field: "price",
+						message: "Enter a price (e.g. 120 or 120.50).",
+					},
+					{
+						where: "row",
+						index: 0,
+						field: "stock",
+						message: "Enter a whole-number stock (0 is fine).",
+					},
+				]}
+			/>,
+		);
+		expect(
+			screen.getAllByText("Enter a price (e.g. 120 or 120.50).").length,
+		).toBeGreaterThan(0);
+		expect(
+			screen.getAllByText("Enter a whole-number stock (0 is fine).").length,
+		).toBeGreaterThan(0);
+		// The inputs themselves are marked, so focusFirstInvalidField finds them.
+		const invalid = document.querySelectorAll('[aria-invalid="true"]');
+		expect(invalid.length).toBeGreaterThanOrEqual(2);
+	});
+
+	it("marks only the addressed row in a multi-variant grid", () => {
+		render(
+			<VariantEditor
+				value={withOptions}
+				onChange={() => {}}
+				currency="RM"
+				issues={[
+					{
+						where: "row",
+						index: 1,
+						field: "price",
+						message: "Enter a price (e.g. 120 or 120.50).",
+					},
+				]}
+			/>,
+		);
+		// Mobile card + desktop table both render — the message appears per
+		// surface for row 1 only (2 renders), not for row 0.
+		expect(
+			screen.getAllByText("Enter a price (e.g. 120 or 120.50)."),
+		).toHaveLength(2);
+	});
+
+	it("marks the option-axis name input for an option issue", () => {
+		render(
+			<VariantEditor
+				value={{ ...withOptions, options: [{ name: "", values: [] }] }}
+				onChange={() => {}}
+				currency="RM"
+				issues={[
+					{
+						where: "option",
+						index: 0,
+						field: "name",
+						message: "Give this option a name (e.g. Size).",
+					},
+					{
+						where: "option",
+						index: 0,
+						field: "values",
+						message: "Add at least one value (e.g. Small).",
+					},
+				]}
+			/>,
+		);
+		expect(
+			screen.getByText("Give this option a name (e.g. Size)."),
+		).toBeTruthy();
+		expect(
+			screen.getByText("Add at least one value (e.g. Small)."),
+		).toBeTruthy();
+		const nameInput = screen.getByPlaceholderText("Option name (e.g. Size)");
+		expect(nameInput.getAttribute("aria-invalid")).toBe("true");
+	});
+
+	it("marks the custom-line price input", () => {
+		render(
+			<VariantEditor
+				value={{
+					...singleVariant,
+					customLine: {
+						label: "Bespoke",
+						price: "abc",
+						prompt: "",
+						imageStorageIds: [],
+					},
+				}}
+				onChange={() => {}}
+				currency="RM"
+				issues={[
+					{
+						where: "custom",
+						index: 0,
+						field: "price",
+						message:
+							"Not a valid price — enter a number, or leave blank for price on quote.",
+					},
+				]}
+			/>,
+		);
+		expect(
+			screen.getByText(
+				"Not a valid price — enter a number, or leave blank for price on quote.",
+			),
+		).toBeTruthy();
+	});
+});

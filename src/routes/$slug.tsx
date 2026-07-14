@@ -220,10 +220,7 @@ function StorefrontRoute() {
 					cart={cart}
 					storeSlug={retailer.slug}
 					beforeGrid={
-						<CategoryRail
-							retailerId={retailer._id}
-							storeSlug={retailer.slug}
-						/>
+						<CategoryRail retailerId={retailer._id} storeSlug={retailer.slug} />
 					}
 				/>
 			</section>

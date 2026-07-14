@@ -123,11 +123,24 @@ describe("BottomNav — 5-tab bar + More sheet", () => {
 		expect(screen.getByText("Home").className).not.toContain("font-bold");
 	});
 
-	it("admin-only mode keeps the 3 admin tabs and no More", async () => {
-		renderNav({ adminOnly: true }, "/app/admin/sellers");
+	it("admin nav keeps the 3 admin tabs and no More (storeless admin)", async () => {
+		renderNav({ adminNav: true }, "/app/admin/sellers");
 		await waitFor(() => expect(screen.getByText("Sellers")).toBeTruthy());
 		expect(screen.getByText("Billing")).toBeTruthy();
 		expect(screen.getByText("WABA")).toBeTruthy();
 		expect(screen.queryByText("More")).toBeNull();
+		// Storeless admin has no seller app to return to → no "App" tab.
+		expect(screen.queryByText("App")).toBeNull();
+	});
+
+	it("admin nav with a store leads with an 'App' tab back to the seller app", async () => {
+		const router = renderNav(
+			{ adminNav: true, hasStore: true },
+			"/app/admin/sellers",
+		);
+		await waitFor(() => expect(screen.getByText("App")).toBeTruthy());
+		expect(screen.getByText("Sellers")).toBeTruthy();
+		fireEvent.click(screen.getByText("App"));
+		await waitFor(() => expect(router.state.location.pathname).toBe("/app"));
 	});
 });

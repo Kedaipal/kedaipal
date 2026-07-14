@@ -14,6 +14,13 @@ interface BadgeOrder {
 	createdAt: number;
 	fulfilmentDate?: number;
 	mockupStatus?: string;
+	/** Checkout surface — counter orders get a defaulted date, so no date badge. */
+	source?: string;
+}
+
+/** A terminal order is finished — its due date can no longer be "late". */
+function isTerminalStatus(status: string): boolean {
+	return status === "delivered" || status === "cancelled";
 }
 
 /**
@@ -21,7 +28,9 @@ interface BadgeOrder {
  * contextual badge, so names and money keep the visual hierarchy. Priority:
  *
  * 1. Mockup pending — blocks production, the seller must act.
- * 2. Fulfilment date — when the order is due (urgency-coloured).
+ * 2. Fulfilment date — when the order is due (urgency-coloured, but neutral once
+ *    the order is terminal; hidden entirely for counter orders, whose date is
+ *    defaulted-to-today, not buyer-chosen — see ClickUp 86ey8r734).
  * 3. Time-in-status — only when it has escalated (amber/red); a quiet age
  *    belongs in the card's meta line, not a badge.
  */
@@ -42,8 +51,16 @@ export function OrderContextBadge({
 			</span>
 		);
 	}
-	if (order.fulfilmentDate !== undefined) {
-		return <FulfilmentDateBadge epoch={order.fulfilmentDate} now={now} />;
+	// Counter orders carry a date only because checkout defaults it to today — it's
+	// not a promised-by date, so it would only add noise (and false "Overdue").
+	if (order.fulfilmentDate !== undefined && order.source !== "counter") {
+		return (
+			<FulfilmentDateBadge
+				epoch={order.fulfilmentDate}
+				now={now}
+				muted={isTerminalStatus(order.status)}
+			/>
+		);
 	}
 	const severity = statusAgeSeverity(
 		order.status as OrderStatus,

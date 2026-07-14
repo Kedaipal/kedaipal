@@ -39,7 +39,8 @@ New token: **`--accent-emphasis`** (readable mint for text/icons on mint-tinted 
 - **Next action always on top**: `OrderProgressStepper` (mint check dots → outlined next stage → grey future, resolved stage labels) + one big navy button ("Confirm Order" / "Mark as {stage}"), mockup-gate aware.
 - **Payment is a state card**: amber "Payment claimed" card with amount in the header, receipt inline, one mint confirm button (was blue); unpaid + received states as before (received stays the quiet green row).
 - **Customer card shows CRM context** (order count · lifetime spend via `customers.get`) with WhatsApp as the hero contact action + a call button; the avatar row deep-links to the profile.
-- **Rare actions collapse**: receipt download (mobile) + Cancel Order behind one "More actions" disclosure at the bottom.
+- **Rare actions collapse**: receipt download (mobile) + Cancel Order behind one "More actions" disclosure at the bottom. On a **terminal order** (`delivered`/`cancelled`) there's no state action left, so the disclosure is dropped — the receipt shows directly, not behind a misleading "More actions" that hides nothing ([`86ey8r734`](https://app.clickup.com/t/86ey8r734)).
+- **Counter completion reads "Completed"**: a `delivered` **counter** order's status badge (and the inbox card) show "Completed", not "Delivered"/"Collected", via `displayStatusLabel` — see [`counter-checkout.md`](./counter-checkout.md). Its defaulted fulfilment date renders neutral (no urgency badge).
 
 ### Products (`app.products.index.tsx`, `$productId`, `product-form.tsx`, `variant-editor.tsx`)
 - List: **stock state as a colour word** ("In stock" mint / "{n} left" amber / "Sold out" red — the number a home seller protects); Import/Export collapses to one icon button; status chips → FilterChip; archived rows dim, drop the chevron for an eye-off glyph.
