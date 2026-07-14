@@ -18,6 +18,10 @@ export type InboxFilterArgs = {
 	dateTo?: number;
 	fulfilmentWindow?: "today" | "tomorrow" | "this_week";
 	mockupPending?: boolean;
+	// Checkout surface: "storefront" (public web / wa.me) vs "counter" (walk-in).
+	// Legacy orders with no stamped source read as "storefront". Undefined = no
+	// source filtering. See orders.source in convex/schema.ts.
+	source?: "storefront" | "counter";
 	searchText?: string;
 };
 
@@ -27,6 +31,7 @@ export type FilterableOrder = {
 	mockupStatus?: string;
 	paymentStatus?: "unpaid" | "claimed" | "received";
 	paymentMethod?: string;
+	source?: "storefront" | "counter";
 	createdAt: number;
 	fulfilmentDate?: number;
 	shortId: string;
@@ -64,6 +69,9 @@ export function buildInboxPredicate(
 	return (o) => {
 		if (bucketStatuses && !bucketStatuses.has(o.status)) return false;
 		if (args.mockupPending && !needsMockup(o.mockupStatus)) return false;
+		// Source filter — legacy/undefined source reads as "storefront".
+		if (args.source !== undefined && (o.source ?? "storefront") !== args.source)
+			return false;
 		// Undefined paymentStatus reads as "unpaid".
 		if (payset && !payset.has(o.paymentStatus ?? "unpaid")) return false;
 		// Method filter (concrete methods OR "unspecified" for no recorded method).

@@ -459,10 +459,7 @@ function CategoryCard({
 									className="flex h-10 items-center gap-2 rounded-md px-3 text-left text-sm transition-colors hover:bg-muted"
 								>
 									{category.hidden ? (
-										<Eye
-											className="size-4 text-muted-foreground"
-											aria-hidden
-										/>
+										<Eye className="size-4 text-muted-foreground" aria-hidden />
 									) : (
 										<EyeOff
 											className="size-4 text-muted-foreground"

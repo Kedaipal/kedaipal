@@ -254,6 +254,7 @@ describe("counterCheckout — createOrderFromSession", () => {
 
 		const order = await t.run((ctx) => ctx.db.get(orderId));
 		expect(order?.status).toBe("confirmed");
+		expect(order?.source).toBe("counter"); // stamped as a walk-in sale
 		expect(order?.deliveryMethod).toBe("self_collect");
 		expect(order?.paymentStatus).toBe("received");
 		expect(order?.paymentMethod).toBe("cash");

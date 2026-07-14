@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
 	defaultStatusLabel,
+	displayStatusLabel,
 	type OrderStatus,
 	type ResolveOpts,
 	resolveStatusLabel,
@@ -560,3 +561,50 @@ describe("collectStageConfigErrors — boundary + notify caps", () => {
 });
 
 import { MAX_NOTIFY_STAGES } from "./orderStatus";
+
+// Counter-checkout "Completed" override — kept identical in
+// convex/lib/orderStatus.test.ts so the mirrored resolvers can't drift.
+describe("displayStatusLabel — counter completion", () => {
+	test("counter + delivered reads 'Completed', never 'Delivered'", () => {
+		expect(
+			displayStatusLabel(
+				{ status: "delivered", source: "counter" },
+				"Delivered",
+			),
+		).toBe("Completed");
+		expect(
+			displayStatusLabel(
+				{ status: "delivered", source: "counter" },
+				"Collected",
+			),
+		).toBe("Completed");
+	});
+	test("counter + delivered is localized to MS", () => {
+		expect(
+			displayStatusLabel(
+				{ status: "delivered", source: "counter" },
+				"Telah Dihantar",
+				"ms",
+			),
+		).toBe("Selesai");
+	});
+	test("storefront / legacy delivered keeps the resolved label", () => {
+		expect(
+			displayStatusLabel(
+				{ status: "delivered", source: "storefront" },
+				"Delivered",
+			),
+		).toBe("Delivered");
+		expect(displayStatusLabel({ status: "delivered" }, "Collected")).toBe(
+			"Collected",
+		);
+	});
+	test("counter but not delivered keeps the resolved label", () => {
+		expect(
+			displayStatusLabel(
+				{ status: "confirmed", source: "counter" },
+				"Confirmed",
+			),
+		).toBe("Confirmed");
+	});
+});

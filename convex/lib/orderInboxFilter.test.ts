@@ -96,6 +96,28 @@ describe("buildInboxPredicate — mockupPending", () => {
 	});
 });
 
+describe("buildInboxPredicate — source", () => {
+	test("no source filter matches every checkout surface", () => {
+		const p = buildInboxPredicate({ bucket: "all" });
+		expect(p(order({ source: "storefront" }))).toBe(true);
+		expect(p(order({ source: "counter" }))).toBe(true);
+		expect(p(order({ source: undefined }))).toBe(true);
+	});
+	test("counter matches only counter orders", () => {
+		const p = buildInboxPredicate({ bucket: "all", source: "counter" });
+		expect(p(order({ source: "counter" }))).toBe(true);
+		expect(p(order({ source: "storefront" }))).toBe(false);
+		// Legacy orders have no stamped source — they are NOT counter sales.
+		expect(p(order({ source: undefined }))).toBe(false);
+	});
+	test("storefront matches storefront AND legacy (undefined ⇒ storefront)", () => {
+		const p = buildInboxPredicate({ bucket: "all", source: "storefront" });
+		expect(p(order({ source: "storefront" }))).toBe(true);
+		expect(p(order({ source: undefined }))).toBe(true);
+		expect(p(order({ source: "counter" }))).toBe(false);
+	});
+});
+
 describe("compareInboxOrder", () => {
 	test("soonest fulfilment date first; dateless sinks to the bottom", () => {
 		expect(compareInboxOrder({ fulfilmentDate: 10 }, { fulfilmentDate: 20 })).toBeLessThan(0);

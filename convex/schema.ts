@@ -514,6 +514,19 @@ export default defineSchema({
 		// read time — no backfill required. See docs/order-status-customization.md.
 		currentStageId: v.optional(v.string()),
 		channel: v.union(v.literal("whatsapp")),
+		// Which checkout surface the order was placed through — distinct from
+		// `channel` (the messaging transport, always WhatsApp today). "storefront" =
+		// the public web storefront / wa.me handoff; "counter" = seller-run Counter
+		// Checkout (walk-in, seller + buyer present). Optional: orders created before
+		// this field read as "storefront" (same undefined→legacy posture as
+		// pickupSnapshot.locationType). Drives per-surface UI: counter orders get a
+		// defaulted (not buyer-chosen) fulfilment date, so their date badge is hidden
+		// and their "delivered" completion reads "Completed" (never "Delivered").
+		// Per-row read only — no index; the inbox source filter is an in-memory
+		// predicate in convex/lib/orderInboxFilter.ts.
+		source: v.optional(
+			v.union(v.literal("storefront"), v.literal("counter")),
+		),
 		customer: v.object({
 			name: v.optional(v.string()),
 			waPhone: v.optional(v.string()),

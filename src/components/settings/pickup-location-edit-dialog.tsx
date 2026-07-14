@@ -2,6 +2,7 @@ import { useMutation } from "convex/react";
 import { MapPin, X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { type FormEvent, useState } from "react";
+import { z } from "zod";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import {
@@ -10,6 +11,7 @@ import {
 	parsePriceInput,
 } from "../../lib/format";
 import { ProBadge } from "../app/pro-gate";
+import { submitThenFocusError } from "../forms/focus-error";
 import { useAppForm } from "../forms/form";
 import {
 	GoogleAddressAutocomplete,
@@ -94,6 +96,11 @@ export function PickupLocationEditDialog({
 	const createLocation = useMutation(api.pickupLocations.create);
 	const updateLocation = useMutation(api.pickupLocations.update);
 	const [serverError, setServerError] = useState<string | null>(null);
+	// Submit-time errors for the two inputs that aren't shared form fields — the
+	// Google-autocomplete address and the local fee input. Inline on the input
+	// (marked aria-invalid so the focus helper lands there), never a banner.
+	const [addressError, setAddressError] = useState<string | null>(null);
+	const [feeError, setFeeError] = useState<string | null>(null);
 	const [geo, setGeo] = useState<GeoState>(() => initialGeo(location));
 	// Pickup kind lives in local state (segmented control), not the form — it's
 	// a discrete choice, not a text field. Legacy rows default to self-collect.
@@ -128,20 +135,31 @@ export function PickupLocationEditDialog({
 			managerName: location?.managerName ?? "",
 			managerWaPhone: location?.managerWaPhone ?? "",
 		},
+		// Label errors render on the field itself (aria-invalid + message beneath);
+		// the address + fee inputs aren't shared fields, so they carry their own
+		// inline error state below. Other fields are optional — plain strings.
+		validators: {
+			onChange: z.object({
+				label: z.string().trim().min(1, "Give this pickup point a name."),
+				address: z.string(),
+				scheduleNote: z.string(),
+				notes: z.string(),
+				managerName: z.string(),
+				managerWaPhone: z.string(),
+			}),
+		},
 		onSubmit: async ({ value }) => {
 			setServerError(null);
+			setAddressError(null);
+			setFeeError(null);
 			const label = value.label.trim();
 			const address = value.address.trim();
 			const scheduleNote = value.scheduleNote.trim();
 			const notes = value.notes.trim();
 			const managerName = value.managerName.trim();
 			const managerWaPhone = value.managerWaPhone.trim();
-			if (label.length === 0) {
-				setServerError("Label is required.");
-				return;
-			}
 			if (address.length < 3) {
-				setServerError("Address is required.");
+				setAddressError("Enter the address (at least 3 characters).");
 				return;
 			}
 			// Fee: display RM string → integer sen. Blank = free. Parse errors
@@ -150,7 +168,7 @@ export function PickupLocationEditDialog({
 			if (canChargeFee && feeInput.trim().length > 0) {
 				const rm = parsePriceInput(feeInput);
 				if (rm === null) {
-					setServerError("Pickup fee must be a valid amount, e.g. 5.00");
+					setFeeError("Not a valid amount — numbers only, e.g. 5.00");
 					return;
 				}
 				feeSen = Math.round(rm * 100);
@@ -216,6 +234,7 @@ export function PickupLocationEditDialog({
 		// Mirror Google's formatted address into the form's address field so the
 		// user sees the canonical version.
 		form.setFieldValue("address", payload.formattedAddress);
+		setAddressError(null);
 		setGeo({
 			latitude: payload.latitude,
 			longitude: payload.longitude,
@@ -225,6 +244,7 @@ export function PickupLocationEditDialog({
 
 	function handleManualAddressEdit(text: string) {
 		form.setFieldValue("address", text);
+		setAddressError(null);
 		// If the user clears or edits away from the Google-picked address, drop
 		// the stale coordinates — they no longer correspond to what's on file.
 		if (geo.placeId !== undefined && text !== location?.address) {
@@ -233,9 +253,7 @@ export function PickupLocationEditDialog({
 	}
 
 	function handleSubmit(e: FormEvent) {
-		e.preventDefault();
-		e.stopPropagation();
-		form.handleSubmit();
+		submitThenFocusError(form, e);
 	}
 
 	const hasCoords = geo.latitude !== undefined && geo.longitude !== undefined;
@@ -317,6 +335,7 @@ export function PickupLocationEditDialog({
 								}
 								onSelect={handleAutocompleteSelect}
 								onTextChange={handleManualAddressEdit}
+								errorText={addressError ?? undefined}
 							/>
 
 							<form.AppField name="scheduleNote">
@@ -360,12 +379,25 @@ export function PickupLocationEditDialog({
 										// input matches what Save will write (free).
 										value={feePendingRemoval ? "" : feeInput}
 										disabled={!canChargeFee}
-										onChange={(e) => setFeeInput(e.target.value)}
+										onChange={(e) => {
+											setFeeInput(e.target.value);
+											setFeeError(null);
+										}}
 										onBlur={() => setFeeInput(normalizePriceInput(feeInput))}
 										placeholder="0.00"
-										className="h-11 w-full rounded-lg border border-input bg-background pl-11 pr-3 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+										aria-invalid={feeError ? true : undefined}
+										className={`h-11 w-full rounded-lg border bg-background pl-11 pr-3 text-sm disabled:cursor-not-allowed disabled:opacity-50 ${
+											feeError
+												? "border-destructive ring-2 ring-destructive/20"
+												: "border-input"
+										}`}
 									/>
 								</div>
+								{feeError ? (
+									<p role="alert" className="text-sm text-destructive">
+										{feeError}
+									</p>
+								) : null}
 								{canChargeFee ? (
 									<p className="text-xs text-muted-foreground leading-relaxed">
 										Leave blank for free pickup. Buyers who choose this point
@@ -460,7 +492,11 @@ export function PickupLocationEditDialog({
 							</div>
 
 							{serverError ? (
-								<p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+								<p
+									data-form-error
+									role="alert"
+									className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
+								>
 									{serverError}
 								</p>
 							) : null}

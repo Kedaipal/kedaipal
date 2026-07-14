@@ -51,6 +51,10 @@ interface GoogleAddressAutocompleteProps {
 	 * mirror the current text into a manual-entry fallback field. */
 	onTextChange?: (text: string) => void;
 	disabled?: boolean;
+	/** Submit-time validation error from the parent (e.g. "Address is
+	 * required.") — marks the input aria-invalid (so the shared
+	 * focus-first-error helper lands on it) and renders beneath. */
+	errorText?: string;
 }
 
 const DEBOUNCE_MS = 300;
@@ -86,6 +90,7 @@ export function GoogleAddressAutocomplete({
 	onSelect,
 	onTextChange,
 	disabled = false,
+	errorText,
 }: GoogleAddressAutocompleteProps) {
 	const autocomplete = useAction(api.google.autocompleteAddress);
 	const getDetails = useAction(api.google.getPlaceDetails);
@@ -224,7 +229,13 @@ export function GoogleAddressAutocomplete({
 				</label>
 			) : null}
 			<div className="relative">
-				<div className="flex items-center gap-2 rounded-xl border border-input bg-background px-3 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/50">
+				<div
+					className={`flex items-center gap-2 rounded-xl border bg-background px-3 focus-within:ring-2 ${
+						errorText
+							? "border-destructive ring-2 ring-destructive/20 focus-within:border-destructive focus-within:ring-destructive/30"
+							: "border-input focus-within:border-ring focus-within:ring-ring/50"
+					}`}
+				>
 					<Search
 						className="size-4 shrink-0 text-muted-foreground"
 						aria-hidden="true"
@@ -247,6 +258,7 @@ export function GoogleAddressAutocomplete({
 						role="combobox"
 						aria-expanded={showDropdown}
 						aria-autocomplete="list"
+						aria-invalid={errorText ? true : undefined}
 					/>
 					{resolving ? (
 						<Loader2
@@ -327,6 +339,11 @@ export function GoogleAddressAutocomplete({
 					</div>
 				) : null}
 			</div>
+			{errorText ? (
+				<p role="alert" className="text-sm text-destructive">
+					{errorText}
+				</p>
+			) : null}
 			{description ? (
 				<p className="text-xs text-muted-foreground">{description}</p>
 			) : null}

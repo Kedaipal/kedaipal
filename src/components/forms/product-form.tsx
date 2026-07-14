@@ -17,16 +17,17 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import { convexErrorMessage, parsePriceInput } from "../../lib/format";
 import { reorderByIds } from "../../lib/reorder";
 import { productDetailsSchema } from "../../lib/schemas";
-import { variantLabel } from "../../lib/variant";
 import { Button } from "../ui/button";
 import { Markdown } from "../ui/markdown";
 import { SortableList } from "../ui/sortable-list";
 import { CategoryPicker } from "./category-picker";
+import { submitThenFocusError } from "./focus-error";
 import { useAppForm } from "./form";
 import {
 	type CustomLineDraft,
 	VariantEditor,
 	type VariantEditorState,
+	type VariantIssue,
 	type VariantRow,
 } from "./variant-editor";
 
@@ -173,9 +174,41 @@ const INT_RE = /^\d+$/;
 type SubmitVariant = ProductFormSubmitValues["variants"][number];
 
 /**
+ * Validate the option axes: every axis needs a name and at least one value.
+ * Pure + exported for tests; issues are addressed to the exact axis input so
+ * the editor marks it inline (no generic banner).
+ */
+export function collectOptionIssues(
+	options: { name: string; values: string[] }[],
+): VariantIssue[] {
+	const issues: VariantIssue[] = [];
+	options.forEach((axis, index) => {
+		if (axis.name.trim().length === 0) {
+			issues.push({
+				where: "option",
+				index,
+				field: "name",
+				message: "Give this option a name (e.g. Size).",
+			});
+		}
+		if (axis.values.length === 0) {
+			issues.push({
+				where: "option",
+				index,
+				field: "values",
+				message: "Add at least one value (e.g. Small).",
+			});
+		}
+	});
+	return issues;
+}
+
+/**
  * Turn the editor's grid rows + optional custom line into the submit payload,
  * validating active variants. Pure (no React/state) so the validation is unit
- * testable. Returns the first validation error, or the built variant list.
+ * testable. Returns ALL validation issues — each addressed to the exact
+ * row/field so the editor can mark that input inline and the shared
+ * focus-first-error helper lands on it — or the built variant list.
  *
  * Stock rule: it only gates the save when the variant is tracking stock
  * (`blockWhenOutOfStock`). Made-to-order variants never run out — stock is just
@@ -186,10 +219,10 @@ type SubmitVariant = ProductFormSubmitValues["variants"][number];
 export function buildSubmitVariants(
 	rows: VariantRow[],
 	customLine: CustomLineDraft | null,
-): { error: string } | { variants: SubmitVariant[] } {
+): { issues: VariantIssue[] } | { variants: SubmitVariant[] } {
+	const issues: VariantIssue[] = [];
 	const variants: SubmitVariant[] = [];
-	for (const row of rows) {
-		const label = variantLabel(row.optionValues) || "this product";
+	rows.forEach((row, index) => {
 		// Price: any non-negative number; rounded to integer sen (2 dp).
 		// parsePriceInput handles comma separators and rejects (rather than
 		// silently truncating) anything non-numeric — see src/lib/format.ts.
@@ -198,12 +231,23 @@ export function buildSubmitVariants(
 		const stockOk = INT_RE.test(row.stock.trim());
 		if (row.active) {
 			if (!priceOk) {
-				return {
-					error: `Enter a valid price for ${label} (e.g. 120 or 120.50).`,
-				};
+				issues.push({
+					where: "row",
+					index,
+					field: "price",
+					message:
+						row.price.trim().length === 0
+							? "Enter a price (e.g. 120 or 120.50)."
+							: "Not a valid price — numbers only (e.g. 120 or 120.50).",
+				});
 			}
 			if (row.blockWhenOutOfStock && !stockOk) {
-				return { error: `Enter a whole-number stock for ${label}.` };
+				issues.push({
+					where: "row",
+					index,
+					field: "stock",
+					message: "Enter a whole-number stock (0 is fine).",
+				});
 			}
 		}
 		variants.push({
@@ -216,7 +260,7 @@ export function buildSubmitVariants(
 			requiresProof: row.requiresProof,
 			imageStorageIds: row.imageStorageIds,
 		});
-	}
+	});
 
 	// Custom line (if enabled) — a flagged entry in the same array. Price is
 	// optional: blank = "Price on quote" (0). The server coerces the made-to-
@@ -227,12 +271,16 @@ export function buildSubmitVariants(
 		if (priceStr.length > 0) {
 			const n = parsePriceInput(priceStr);
 			if (n === null) {
-				return {
-					error:
-						"Enter a valid starting price for the custom option, or leave it blank for price on quote.",
-				};
+				issues.push({
+					where: "custom",
+					index: 0,
+					field: "price",
+					message:
+						"Not a valid price — enter a number, or leave blank for price on quote.",
+				});
+			} else {
+				customPrice = Math.round(n * 100);
 			}
-			customPrice = Math.round(n * 100);
 		}
 		variants.push({
 			optionValues: [],
@@ -248,6 +296,7 @@ export function buildSubmitVariants(
 		});
 	}
 
+	if (issues.length > 0) return { issues };
 	return { variants };
 }
 
@@ -416,9 +465,16 @@ export function ProductForm({
 	const [categoryIds, setCategoryIds] = useState<Id<"categories">[]>(
 		initialValues?.categoryIds ?? [],
 	);
-	const [editor, setEditor] = useState<VariantEditorState>(() =>
+	const [editor, setEditorState] = useState<VariantEditorState>(() =>
 		initialEditorState(initialValues),
 	);
+	// Submit-time validation issues, addressed to the exact editor input (see
+	// VariantIssue). Any edit clears them — they re-validate on the next save.
+	const [editorIssues, setEditorIssues] = useState<VariantIssue[]>([]);
+	function setEditor(next: VariantEditorState) {
+		setEditorState(next);
+		setEditorIssues([]);
+	}
 
 	const form = useAppForm({
 		defaultValues: {
@@ -431,26 +487,21 @@ export function ProductForm({
 			const parsed = productDetailsSchema.parse(value);
 
 			// --- Client-side validation of options + the variant grid ----------
+			// Issues are addressed to the exact input (marked aria-invalid, message
+			// beneath), so the shared focus helper lands on the offending field —
+			// never a generic banner the seller has to decode.
 			const hasOptions = editor.options.length > 0;
-			if (hasOptions) {
-				for (const axis of editor.options) {
-					if (axis.name.trim().length === 0) {
-						setServerError("Every option needs a name.");
-						return;
-					}
-					if (axis.values.length === 0) {
-						setServerError(`Option "${axis.name}" needs at least one value.`);
-						return;
-					}
-				}
-			}
-
 			const built = buildSubmitVariants(editor.rows, editor.customLine);
-			if ("error" in built) {
-				setServerError(built.error);
+			const issues = [
+				...collectOptionIssues(editor.options),
+				...("issues" in built ? built.issues : []),
+			];
+			if (issues.length > 0) {
+				setEditorIssues(issues);
 				return;
 			}
-			const variants = built.variants;
+			// `issues` empty ⇒ built carries the variants.
+			const variants = "variants" in built ? built.variants : [];
 
 			try {
 				await onSubmit({
@@ -510,9 +561,7 @@ export function ProductForm({
 	}
 
 	function handleSubmit(e: FormEvent) {
-		e.preventDefault();
-		e.stopPropagation();
-		form.handleSubmit();
+		submitThenFocusError(form, e);
 	}
 
 	const hasAnyPrice = editor.rows.some((row) => row.price.trim().length > 0);
@@ -681,6 +730,7 @@ export function ProductForm({
 					value={editor}
 					onChange={setEditor}
 					currency={currency}
+					issues={editorIssues}
 				/>
 				<Link
 					to="/app/settings"
@@ -693,7 +743,11 @@ export function ProductForm({
 			</ProductStepCard>
 
 			{serverError ? (
-				<p className="rounded-xl border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+				<p
+					data-form-error
+					role="alert"
+					className="rounded-xl border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+				>
 					{serverError}
 				</p>
 			) : null}

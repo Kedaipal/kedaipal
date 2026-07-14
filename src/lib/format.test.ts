@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+	formatOrderTimestamp,
 	formatPriceCompact,
 	normalizePriceInput,
 	parsePriceInput,
@@ -99,5 +100,23 @@ describe("formatPriceCompact", () => {
 
 	test("unknown currency falls back to a plain rounded number", () => {
 		expect(formatPriceCompact(3_772_003, "NOPE")).toBe("NOPE 37,720");
+	});
+});
+
+describe("formatOrderTimestamp", () => {
+	// 12 Jul 2026, 3:45pm (local runtime TZ — assertions stay TZ-agnostic).
+	const placedAt = new Date(2026, 6, 12, 15, 45).getTime();
+
+	test("same-year stamp shows date + time, omits the year", () => {
+		const s = formatOrderTimestamp(placedAt, new Date(2026, 0, 1).getTime());
+		expect(s).toMatch(/Jul/);
+		expect(s).toMatch(/12/);
+		expect(s).toMatch(/(AM|PM|am|pm)/); // 12-hour time
+		expect(s).not.toMatch(/2026/); // year dropped in the current year
+	});
+
+	test("different-year stamp includes the year", () => {
+		const s = formatOrderTimestamp(placedAt, new Date(2027, 0, 1).getTime());
+		expect(s).toMatch(/2026/);
 	});
 });

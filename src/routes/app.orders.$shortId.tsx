@@ -67,6 +67,7 @@ import {
 import { deriveMapsUrl } from "../lib/google-address";
 import {
 	anchorOrdinal,
+	displayStatusLabel,
 	resolveCurrentStage,
 	resolveStages,
 	resolveStatusLabel,
@@ -451,11 +452,12 @@ function OrderDetailRoute() {
 				</div>
 				<StatusBadge
 					status={order.status}
-					label={
+					label={displayStatusLabel(
+						order,
 						currentStage
 							? stageLabel(currentStage, "en")
-							: resolveStatusLabel(order.status, statusLabelOpts)
-					}
+							: resolveStatusLabel(order.status, statusLabelOpts),
+					)}
 				/>
 			</div>
 
@@ -768,7 +770,7 @@ function OrderDetailRoute() {
 								: "Self Collect"
 							: "Delivery"}
 					</p>
-					{order.fulfilmentDate !== undefined ? (
+					{order.fulfilmentDate !== undefined && order.source !== "counter" ? (
 						<div className="flex items-center gap-1.5">
 							<span className="text-xs text-muted-foreground">
 								{isSelfCollect
@@ -777,7 +779,11 @@ function OrderDetailRoute() {
 										: "Collect on"
 									: "Deliver on"}
 							</span>
-							<FulfilmentDateBadge epoch={order.fulfilmentDate} size="md" />
+							<FulfilmentDateBadge
+								epoch={order.fulfilmentDate}
+								size="md"
+								muted={isTerminal}
+							/>
 						</div>
 					) : null}
 				</div>
@@ -1043,8 +1049,9 @@ function OrderDetailRoute() {
 
 			{order.mockupStatus !== undefined ? <MockupCard order={order} /> : null}
 
-			{/* Rare actions (receipt, cancel) collapse behind one quiet link — the
-			    stepper above already carries the main transition. */}
+			{/* Rare actions (receipt, cancel, delete) collapse behind one quiet link
+			    — the stepper above already carries the main transition. A terminal
+			    order still has Delete here, so the expander is never empty. */}
 			<section className="flex flex-col gap-2">
 				<button
 					type="button"

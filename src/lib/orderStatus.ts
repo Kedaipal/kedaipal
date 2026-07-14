@@ -458,3 +458,23 @@ export function resolveAnchorLabel(
 		locale: opts.locale,
 	});
 }
+
+/**
+ * Seller-facing display override for a resolved status label. A Counter Checkout
+ * sale (`source === "counter"`) completes at the counter — there was no delivery
+ * or collection step — so its terminal `delivered` status reads "Completed",
+ * never "Delivered"/"Collected" (which imply a fulfilment leg that never
+ * happened, and confuse a walk-in seller). Presentation only: the canonical
+ * `delivered` status is unchanged. Returns `resolved` untouched for every other
+ * order. See ClickUp 86ey8r734. NOTE: keep in sync with convex/lib/orderStatus.ts.
+ */
+export function displayStatusLabel(
+	order: { status: OrderStatus; source?: string },
+	resolved: string,
+	locale: Locale = "en",
+): string {
+	if (order.source === "counter" && order.status === "delivered") {
+		return locale === "ms" ? "Selesai" : "Completed";
+	}
+	return resolved;
+}

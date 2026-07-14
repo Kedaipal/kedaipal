@@ -516,6 +516,7 @@ export const createOrderFromSession = mutation({
 			currency,
 			status: "confirmed", // seller-created with the buyer present
 			channel: "whatsapp",
+			source: "counter",
 			customer: { name: customerName, waPhone: session.waPhone },
 			deliveryMethod: "self_collect", // collected at the counter
 			fulfilmentDate: sanitizedFulfilmentDate,

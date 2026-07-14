@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { AUP_VERSION, PRIVACY_VERSION, TERMS_VERSION } from "./lib/legal";
+import { STORE_DESCRIPTION_MAX } from "./lib/storeProfile";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -322,9 +323,9 @@ describe("retailers store description", () => {
 		const asA = await seed(t, USER_A, "desc-toolong");
 		await expect(
 			asA.mutation(api.retailers.updateSettings, {
-				storeDescription: "x".repeat(281),
+				storeDescription: "x".repeat(STORE_DESCRIPTION_MAX + 1),
 			}),
-		).rejects.toThrow(/280 characters/);
+		).rejects.toThrow(new RegExp(`${STORE_DESCRIPTION_MAX} characters`));
 	});
 
 	test("unset by default", async () => {
