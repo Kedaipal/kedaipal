@@ -76,17 +76,26 @@ export function ProductCard({ product, onOpen, onQuickAdd }: ProductCardProps) {
 						Low stock
 					</span>
 				) : null}
+				{hasCustom ? (
+					// Overlaid on the image (not a text-zone row) so cards with a
+					// custom line stay exactly the same height as their neighbours.
+					<span className="absolute bottom-2 left-2 rounded-full bg-background/85 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur-sm">
+						Custom available
+					</span>
+				) : null}
 			</button>
 
 			<div className="flex flex-1 flex-col gap-2 p-3">
+				{/* Fixed 2-line name zone: 1-line names reserve the second line so the
+				    price row sits at the same height on every card in a grid row. */}
 				<button
 					type="button"
 					onClick={() => onOpen(product)}
-					className="line-clamp-2 text-left text-[13px] font-medium leading-tight"
+					className="line-clamp-2 min-h-[2.05rem] text-left text-[13px] font-medium leading-tight"
 				>
 					{product.name}
 				</button>
-				<p className="text-base font-bold tabular-nums">
+				<p className="text-base font-bold leading-tight tabular-nums">
 					{allQuote ? (
 						<span className="text-sm font-semibold">Price on quote</span>
 					) : (
@@ -100,11 +109,6 @@ export function ProductCard({ product, onOpen, onQuickAdd }: ProductCardProps) {
 						</>
 					)}
 				</p>
-				{hasCustom ? (
-					<span className="w-fit rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-						Custom available
-					</span>
-				) : null}
 				{needsDetail ? (
 					<Button
 						type="button"

@@ -39,7 +39,8 @@ export function ShareLinkChecklistRow({
 
 	if (item.done) {
 		return (
-			<li className="flex items-center gap-3 rounded-xl border border-border bg-muted/30 px-4 py-3">
+			// min-h matches the two-line pending rows (uniform-cards rule).
+			<li className="flex min-h-[4.125rem] items-center gap-3 rounded-xl border border-border bg-muted/30 px-4 py-3">
 				<div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent text-accent-foreground">
 					<Check className="size-3" />
 				</div>
