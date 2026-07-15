@@ -13,25 +13,31 @@ or the loop doesn't compound. There is deliberately no setting for it.
 ### 1. Storefront footer
 
 [`src/components/storefront/storefront-footer.tsx`](../src/components/storefront/storefront-footer.tsx) —
-a quiet, centered footer (small navy logomark `logo.svg` + "Powered by
-**Kedaipal**") rendered on **every** `kedaipal.com/<slug>` page. Mounted on both
-storefront routes:
+a quiet, centered footer rendered on **every** `kedaipal.com/<slug>` page. Mounted
+on both storefront routes:
 
 - [`src/routes/$slug.tsx`](../src/routes/$slug.tsx) — the store home
 - [`src/routes/$slug_.c.$categorySlug.tsx`](../src/routes/$slug_.c.$categorySlug.tsx) — a category page
 
+**The lockup mirrors the Store QR Poster** (`store-poster.tsx`) so the printed
+poster and the web storefront carry one uniform brand mark: a mint **"POWERED
+BY"** pill (border `#B9D9CC`, text `#7BA394`, uppercase, wide tracking) stacked
+above the Kedaipal wordmark (`/poster/kedaipal-lockup.svg`). Colours + shape are
+copied verbatim from the poster; the poster's `mm`/`pt` print units are
+translated to responsive web units. Quiet enough that it never competes with the
+retailer's brand.
+
 Placed after the product `<section>` and before the fixed `<CartBar>`, with
 `mt-auto` so it sinks to the bottom of the `min-h-dvh` column (bottom of the
-page on short catalogs, after the content on long ones). Muted text + small mark
-so it never competes with the retailer's brand.
+page on short catalogs, after the content on long ones).
 
 - Links to `https://kedaipal.com?src=storefront_badge`. The `?src=` tag is the
   repo's reserved PostHog attribution convention (same as the poster QR links in
   `store-poster.tsx`), so the click path is measurable.
 - Opens in a new tab (`target="_blank" rel="noopener noreferrer"`) so the buyer
   never loses the store they were browsing.
-- The logomark is `aria-hidden`/`alt=""`; the visible "Powered by Kedaipal" text
-  carries the meaning for screen readers.
+- The wordmark image carries `alt="Kedaipal"` and the link an explicit
+  `aria-label="Powered by Kedaipal"` for screen readers.
 
 ### 2. WhatsApp order-confirmation line
 
