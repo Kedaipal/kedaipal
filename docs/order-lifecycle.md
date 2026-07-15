@@ -153,6 +153,16 @@ it'll vanish from CSV/revenue records), and a "Delete permanently" item in the
 inbox bulk bar behind its own confirm. Both make clear the buyer is NOT notified
 and it can't be undone.
 
+**Type-to-confirm safety gate:** because this is the one irreversible action in
+the dashboard, both delete confirm dialogs pass `confirmPhrase="DELETE"` to the
+shared `ConfirmDialog` — the destructive button stays disabled until the user
+*types* `DELETE`. Input is auto-uppercased (type `delete`, box reads `DELETE`)
+and paste / drag-drop / autofill are blocked, so confirming is a deliberate
+keystroke action, not a reflex click or a paste. The phrase box resets on every
+open; a failed mutation keeps the dialog open with the phrase intact so the user
+can simply re-click. This gate is scoped to permanent delete only — cancel,
+mark-paid, and every other `ConfirmDialog` stay one-click. (ClickUp `86ey9xje6`.)
+
 ## Public shopper mutations (capability = `trackingToken`)
 
 Trust model: knowing the high-entropy `orders.trackingToken` is the capability — anyone with the tracking link (`/track/<token>`) can act. The human `shortId` is NOT a secret. Each is rate-limited per `token`. See [`infra-cost-scaling.md` §6](./infra-cost-scaling.md).
