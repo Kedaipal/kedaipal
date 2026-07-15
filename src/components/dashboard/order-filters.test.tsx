@@ -23,9 +23,9 @@ function openFilters() {
 }
 
 describe("OrderFilters", () => {
-	it("counts payment + method + unspecified + date range + mockup", () => {
+	it("counts payment + method + unspecified + date range + mockup + source", () => {
 		expect(activeFilterCount({ ...EMPTY, mockup: false })).toBe(0);
-		// 2 payment + 1 method + 1 unspecified + 1 date range + 1 mockup = 6.
+		// 2 payment + 1 method + 1 unspecified + 1 date range + 1 mockup + 1 source = 7.
 		expect(
 			activeFilterCount({
 				payment: ["unpaid", "received"],
@@ -34,9 +34,27 @@ describe("OrderFilters", () => {
 				from: 1,
 				to: 2,
 				mockup: true,
+				source: "counter",
 			}),
-		).toBe(6);
+		).toBe(7);
 		expect(activeFilterCount({ ...EMPTY, from: 1, mockup: false })).toBe(1);
+		expect(
+			activeFilterCount({ ...EMPTY, mockup: false, source: "storefront" }),
+		).toBe(1);
+	});
+
+	it("toggling an order-type chip reports the source", () => {
+		const onChange = vi.fn();
+		render(
+			<OrderFilters value={{ ...EMPTY, mockup: false }} onChange={onChange} />,
+		);
+		openFilters();
+		fireEvent.click(screen.getByRole("button", { name: "Counter" }));
+		expect(onChange).toHaveBeenCalledWith({
+			...EMPTY,
+			mockup: false,
+			source: "counter",
+		});
 	});
 
 	it("toggling a payment chip reports the new selection", () => {

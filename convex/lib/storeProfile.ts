@@ -9,6 +9,8 @@
  * directly so the cap can never drift between client and server.
  */
 
-// Public storefront store description cap. Short by design — a one-to-three-line
-// trust signal under the store name, not a full About page.
-export const STORE_DESCRIPTION_MAX = 280;
+// Public storefront store description cap. Short by design — a two-line trust
+// signal under the store name (the storefront header clamps it to 2 rows), not a
+// full About page. Kept tight so it never crowds out the products, especially
+// over a cover image where it sits on a scrim.
+export const STORE_DESCRIPTION_MAX = 150;

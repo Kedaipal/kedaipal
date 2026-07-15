@@ -2825,7 +2825,9 @@ describe("orders — inbox search", () => {
 			items: [{ productId, quantity: 1 }],
 			currency: "MYR",
 			channel: "whatsapp",
-			customer: who,
+			// Name is required at checkout (≥3 chars); default a valid one for the
+			// phone-only / filter-focused cases.
+			customer: { name: who.name ?? "Test Buyer", waPhone: who.waPhone },
 			deliveryAddress: validAddress,
 		});
 		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
@@ -2970,6 +2972,65 @@ describe("orders — inbox search", () => {
 		expect(after.counts.dueToday).toBe(0);
 	});
 
+	test("counter orders are excluded from dueToday and filterable by source", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 100 });
+		const asA = t.withIdentity({ subject: USER_A });
+
+		// A storefront order due today counts toward dueToday.
+		const { shortId: sOnline } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Online Aina" },
+			deliveryAddress: validAddress,
+			fulfilmentDate: todayMytMidnight(),
+		});
+		// A counter order due today (born confirmed) must NOT — its date is defaulted.
+		const { shortId: sCounter } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Walk-in" },
+			deliveryAddress: validAddress,
+			fulfilmentDate: todayMytMidnight(),
+		});
+		const online = await t.query(api.orders.get, { token: await tk(t, sOnline) });
+		const counter = await t.query(api.orders.get, {
+			token: await tk(t, sCounter),
+		});
+		if (!online || !counter) throw new Error("no order");
+		await t.run((ctx) =>
+			ctx.db.patch(counter._id, { source: "counter", status: "confirmed" }),
+		);
+
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		// Only the storefront order counts as "due today".
+		expect(res.counts.dueToday).toBe(1);
+
+		// Source filter isolates each surface; the storefront order has source
+		// stamped by orders.create.
+		const onlineOnly = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			source: "storefront",
+		});
+		expect(onlineOnly.orders.map((x) => x._id)).toEqual([online._id]);
+
+		const counterOnly = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			source: "counter",
+		});
+		expect(counterOnly.orders.map((x) => x._id)).toEqual([counter._id]);
+	});
+
 	test("payment filter treats undefined as unpaid", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
@@ -3004,8 +3065,10 @@ describe("orders — inbox search", () => {
 		const retailer = await seedRetailer(t, USER_A);
 		const productId = await seedProduct(t, USER_A, retailer._id);
 		const asA = t.withIdentity({ subject: USER_A });
-		const tagged = await mkOrder(t, retailer._id, productId, { name: "Tag" });
-		const untagged = await mkOrder(t, retailer._id, productId, { name: "Un" });
+		const tagged = await mkOrder(t, retailer._id, productId, { name: "Tagged" });
+		const untagged = await mkOrder(t, retailer._id, productId, {
+			name: "Untagged",
+		});
 		await t.run((ctx) => ctx.db.patch(tagged._id, { paymentMethod: "duitnow" }));
 
 		const byMethod = await asA.query(api.orders.searchOrders, {
@@ -3059,8 +3122,8 @@ describe("orders — inbox search", () => {
 			requiresProof: true,
 			blockWhenOutOfStock: false,
 		});
-		const plain = await mkOrder(t, retailer._id, plainId, { name: "A" });
-		const needs = await mkOrder(t, retailer._id, customId, { name: "B" });
+		const plain = await mkOrder(t, retailer._id, plainId, { name: "Plain" });
+		const needs = await mkOrder(t, retailer._id, customId, { name: "Needs" });
 		const asA = t.withIdentity({ subject: USER_A });
 
 		const all = await asA.query(api.orders.searchOrders, {

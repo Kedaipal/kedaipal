@@ -8,8 +8,9 @@ import { useQuery } from "convex/react";
 import { ArrowLeft } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import { CartBar } from "../components/storefront/cart-bar";
-import { CategoryRail } from "../components/storefront/category-rail";
 import { ProductGrid } from "../components/storefront/product-grid";
+import { StorefrontFooter } from "../components/storefront/storefront-footer";
+import { StorefrontHeader } from "../components/storefront/storefront-header";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
@@ -151,12 +152,23 @@ function CategoryNotFound() {
 function CategorySkeleton() {
 	return (
 		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-32">
-			<header className="flex flex-col gap-3 px-5 pb-4 pt-8 lg:px-8">
+			{/* Mirrors the shared StorefrontHeader shape so the swap-in is seamless. */}
+			<header className="flex flex-col gap-4 bg-gradient-to-b from-accent/10 to-background px-5 pb-6 pt-10 lg:rounded-b-3xl lg:px-8">
+				<Skeleton className="h-5 w-24" />
+				<div className="flex items-center gap-4">
+					<Skeleton className="h-16 w-16 shrink-0 rounded-2xl" />
+					<div className="flex flex-col gap-2">
+						<Skeleton className="h-7 w-40" />
+						<Skeleton className="h-4 w-48" />
+					</div>
+				</div>
+			</header>
+			<div className="flex flex-col gap-3 px-5 pt-4 lg:px-8">
 				<Skeleton className="h-4 w-28" />
 				<Skeleton className="h-8 w-48" />
-			</header>
+			</div>
 			<section className="mt-2 px-5 lg:px-8">
-				<div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+				<div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
 					{[0, 1, 2, 3].map((n) => (
 						<Skeleton key={n} className="aspect-square w-full rounded-2xl" />
 					))}
@@ -190,41 +202,43 @@ function CategoryRoute() {
 	}
 
 	return (
-		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-32">
-			<header className="flex flex-col gap-3 bg-gradient-to-b from-accent/10 to-background px-5 pb-5 pt-8 lg:rounded-b-3xl lg:px-8">
+		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-20">
+			{/* Same brand header as the store home (cover/logo/name) — the buyer
+			    never loses the sense of whose store they're in. */}
+			<StorefrontHeader retailer={retailer} />
+
+			{/* Category identity: a way back, then the category's own name + blurb. */}
+			<div className="flex flex-col gap-2 px-5 pt-4 lg:px-8">
 				<Link
 					to="/$slug"
 					params={{ slug: retailer.slug }}
 					className="inline-flex w-fit items-center gap-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
 				>
 					<ArrowLeft className="size-4" aria-hidden />
-					All products · {retailer.storeName}
+					All products
 				</Link>
 				<div className="flex flex-col gap-1">
-					<h1 className="text-2xl font-bold leading-tight tracking-tight">
+					<h2 className="font-heading text-2xl font-extrabold leading-tight tracking-tight">
 						{page.category.name}
-					</h1>
+					</h2>
 					{page.category.description ? (
 						<p className="line-clamp-3 whitespace-pre-line text-sm text-muted-foreground">
 							{page.category.description}
 						</p>
 					) : null}
 				</div>
-			</header>
+			</div>
 
-			<section className="mt-4 px-5 lg:px-8">
-				{/* Sibling categories stay one tap away (current one highlighted). */}
-				<CategoryRail
-					retailerId={retailer._id}
-					storeSlug={retailer.slug}
-					activeSlug={page.category.slug}
-				/>
+			<section className="mt-2 px-5 lg:px-8">
 				<ProductGrid
 					retailerId={retailer._id}
 					cart={cart}
 					products={page.products}
+					storeSlug={retailer.slug}
 				/>
 			</section>
+
+			<StorefrontFooter />
 
 			<CartBar
 				cart={cart}

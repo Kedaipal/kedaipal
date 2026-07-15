@@ -133,6 +133,15 @@ confirmation resolve to the right store.
   is unmistakable while acting-as. Seller nav needs no special handling (the session holds
   globally); the admin-group links **end the session** (`setActAs(undefined)`), since they
   leave the vendor-operation view.
+- **Mobile admin nav** ([`86ey8r734`](https://app.clickup.com/t/86ey8r734)) — desktop has the
+  always-visible Admin sidebar group, but on mobile an admin operating a store previously could
+  only reach **one** admin page (via the "Admin" tier pill). Now: (1) the **mobile settings
+  index** gains an "Admin" group with an **Admin console** row (the natural home for the entry),
+  (2) the `BottomNav` swaps to the **admin tabs** whenever the admin is on an `/app/admin/*`
+  route (`adminNav = !retailer || (isAdmin && onAdminRoute)`) so every admin page is reachable,
+  and (3) that admin tab row **leads with an "App" tab back to `/app`** (only when the admin has
+  a store) — the console is never a dead end. A storeless admin keeps the plain 3-tab admin nav
+  (there's no seller app to go back to).
 - **Redirect safety** — an active session whose store resolves `null` (stale/foreign id)
   clears the session and returns to the directory.
 - **Storeless admin mode** — an admin does **not** need a store of their own. When the

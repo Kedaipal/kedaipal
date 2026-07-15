@@ -34,7 +34,11 @@ import {
 	type RetailerAccess,
 	requireRetailerAccess,
 } from "./lib/auth";
-import { getDisplayName } from "./lib/customer";
+import {
+	getDisplayName,
+	normalizeOptionalCustomerName,
+	requireCustomerName,
+} from "./lib/customer";
 import { assertValidFulfilmentDate } from "./lib/fulfilmentDate";
 import {
 	computeOrderTotals,
@@ -43,7 +47,7 @@ import {
 } from "./lib/order";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 import { rateLimiter } from "./lib/rateLimiter";
-import { assertValidWaPhone } from "./lib/slug";
+import { assertValidMyWaPhone, assertValidWaPhone } from "./lib/slug";
 import { variantLabel } from "./lib/variant";
 import { type Locale, pickLocale } from "./lib/whatsappCopy";
 
@@ -143,6 +147,39 @@ function effectiveStatus(
 }
 
 /**
+ * The store's currently-open, non-expired bound sessions (`buyer_identified`).
+ * Small by construction (bounded by the per-store open-session cap), so a
+ * `collect()` is fine. Shared by every path that mints a session so a new
+ * pairing code stays unique across origins and a buyer's number is re-claimed
+ * (never forked into a duplicate session), regardless of whether they arrived
+ * by scan or manual entry.
+ */
+async function openBoundSessions(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	now: number,
+): Promise<Doc<"counterCheckoutSessions">[]> {
+	const rows = await ctx.db
+		.query("counterCheckoutSessions")
+		.withIndex("by_retailer_status", (q) =>
+			q.eq("retailerId", retailerId).eq("status", "buyer_identified"),
+		)
+		.collect();
+	return rows.filter((s) => now <= s.expiresAt);
+}
+
+/** Pairing codes currently in use across a set of open sessions. */
+function takenPairingCodes(
+	sessions: readonly Doc<"counterCheckoutSessions">[],
+): Set<string> {
+	return new Set(
+		sessions
+			.map((s) => s.pairingCode)
+			.filter((c): c is string => Boolean(c)),
+	);
+}
+
+/**
  * Reactive read for the one checkout the cashier is currently building. A
  * walk-in session starts life `buyer_identified` (created by the store-QR scan),
  * so this drives the build screen + done screen. Ownership-checked.
@@ -212,6 +249,202 @@ export const getCheckoutSession = query({
 			customer,
 			draft: session.draft,
 		};
+	},
+});
+
+// ---------------------------------------------------------------------------
+// Identity escape hatches (86ey8vqp6) — the cashier-initiated bind paths that
+// don't need the buyer to scan. Same "three converging paths, one record" model
+// as the store-QR scan: all three land a `buyer_identified` session the rest of
+// the flow (draft → createOrderFromSession) treats identically.
+//   - MANUAL PHONE: cashier types the number → session bound to that buyer →
+//     buyer still gets a WhatsApp confirmation + a CRM row.
+//   - ANONYMOUS: no contact at all (cash sale) → session with NO identity →
+//     no WhatsApp, no customer aggregate; forced paid-in-person at create.
+// See docs/counter-checkout.md §Manual entry & anonymous walk-in.
+// ---------------------------------------------------------------------------
+
+/**
+ * Bind a walk-in session to a manually-keyed buyer phone — the "buyer won't/can't
+ * scan" path. Normalizes to the SAME E.164 digits an inbound scan produces
+ * (assertValidMyWaPhone), so it resolves-or-creates the exact same
+ * `(retailerId, waPhone)` customer as a scan would — a returning buyer is
+ * recognised, never duplicated. Re-claims an already-open session for that phone
+ * (whether from an earlier manual bind or a scan) instead of forking a second
+ * one. Owner-or-admin, admin-audited. Cashier-authenticated, so no public
+ * rate-limit/cap applies (those guard the public poster token, not a logged-in
+ * seller).
+ */
+export const bindSessionManualPhone = mutation({
+	args: {
+		retailerId: v.optional(v.id("retailers")),
+		waPhone: v.string(),
+		// The buyer's name — required for a manual bind (the cashier is keying the
+		// order for a named person; it seeds the CRM row + the order/receipt).
+		name: v.string(),
+	},
+	handler: async (
+		ctx,
+		{ retailerId, waPhone, name },
+	): Promise<{ sessionId: Id<"counterCheckoutSessions">; reclaimed: boolean }> => {
+		const access = await requireCounterRetailer(ctx, retailerId);
+		const retailer = access.retailer;
+
+		let normalizedPhone: string;
+		try {
+			normalizedPhone = assertValidMyWaPhone(waPhone);
+		} catch (err) {
+			throw new ConvexError((err as Error).message);
+		}
+		const buyerName = requireCustomerName(name);
+
+		const now = Date.now();
+		const openBound = await openBoundSessions(ctx, retailer._id, now);
+
+		// Re-claim: this buyer already has an open checkout (they scanned earlier, or
+		// the cashier double-tapped) → resume it, don't fork a duplicate. Slides the
+		// idle window, and refreshes the entered name in case the cashier corrected
+		// it. Backfills a pairing code for a legacy row without one.
+		const existing = openBound.find((s) => s.waPhone === normalizedPhone);
+		if (existing) {
+			const code =
+				existing.pairingCode ?? generatePairingCode(takenPairingCodes(openBound));
+			await ctx.db.patch(existing._id, {
+				pairingCode: code,
+				waProfileName: buyerName,
+				expiresAt: now + OPEN_SESSION_TTL_MS,
+				updatedAt: now,
+			});
+			await logAdminAction(
+				ctx,
+				access,
+				"counterCheckout.bindSessionManualPhone",
+				existing._id,
+			);
+			return { sessionId: existing._id, reclaimed: true };
+		}
+
+		// Resolve an existing customer so the build screen shows returning-buyer
+		// history and the "new vs returning" badge is right — mirrors a scan bind.
+		const customer = await ctx.db
+			.query("customers")
+			.withIndex("by_retailer_phone", (q) =>
+				q.eq("retailerId", retailer._id).eq("waPhone", normalizedPhone),
+			)
+			.unique();
+
+		const code = generatePairingCode(takenPairingCodes(openBound));
+		const sessionId = await ctx.db.insert("counterCheckoutSessions", {
+			retailerId: retailer._id,
+			sellerUserId: retailer.userId,
+			// Internal capability token — keeps by_token unique; buyer never sees it.
+			token: generateTrackingToken(),
+			status: "buyer_identified",
+			origin: "cashier",
+			pairingCode: code,
+			customerId: customer?._id,
+			waPhone: normalizedPhone,
+			// The cashier-typed name (no inbound WhatsApp pushname exists). Shared
+			// slot with the scan flow's pushname — both are "a name for this buyer".
+			waProfileName: buyerName,
+			isNewCustomer: customer === null,
+			boundAt: now,
+			expiresAt: now + OPEN_SESSION_TTL_MS,
+			createdAt: now,
+			updatedAt: now,
+		});
+		await logAdminAction(
+			ctx,
+			access,
+			"counterCheckout.bindSessionManualPhone",
+			sessionId,
+		);
+		return { sessionId, reclaimed: false };
+	},
+});
+
+/**
+ * Open an ANONYMOUS walk-in session — a cash sale with no buyer contact at all.
+ * The session carries no identity; the order created from it has no
+ * customer/phone and triggers NO WhatsApp send. Forced paid-in-person at create
+ * (there's nobody to chase for a pay-later link). Owner-or-admin, admin-audited.
+ */
+export const startAnonymousSession = mutation({
+	args: {
+		retailerId: v.optional(v.id("retailers")),
+		// Optional name for the walk-in (no phone). The cashier can add/edit it on
+		// the build screen too (setSessionCustomerName); it lands on the order +
+		// receipt so a cash sale isn't a nameless row.
+		name: v.optional(v.string()),
+	},
+	handler: async (
+		ctx,
+		{ retailerId, name },
+	): Promise<{ sessionId: Id<"counterCheckoutSessions"> }> => {
+		const access = await requireCounterRetailer(ctx, retailerId);
+		const retailer = access.retailer;
+		const now = Date.now();
+		const openBound = await openBoundSessions(ctx, retailer._id, now);
+
+		// A pairing code still helps the cashier tell two concurrent anonymous
+		// checkouts apart in the open-checkouts list.
+		const code = generatePairingCode(takenPairingCodes(openBound));
+		const sessionId = await ctx.db.insert("counterCheckoutSessions", {
+			retailerId: retailer._id,
+			sellerUserId: retailer.userId,
+			token: generateTrackingToken(),
+			status: "buyer_identified",
+			origin: "cashier",
+			pairingCode: code,
+			// No phone/customer — the defining trait of an anonymous session. An
+			// optional name is the one identity crumb we allow (for the receipt).
+			waProfileName: normalizeOptionalCustomerName(name),
+			boundAt: now,
+			expiresAt: now + OPEN_SESSION_TTL_MS,
+			createdAt: now,
+			updatedAt: now,
+		});
+		await logAdminAction(
+			ctx,
+			access,
+			"counterCheckout.startAnonymousSession",
+			sessionId,
+		);
+		return { sessionId };
+	},
+});
+
+/**
+ * Set (or clear) the buyer's name on an open session — drives the inline "add a
+ * name" edit on the build screen for a walk-in/anonymous checkout. Owner-or-admin
+ * (via requireSessionAccess), only while the session is open for editing. Stored
+ * in `waProfileName` (the session's buyer-name slot); it flows onto the order at
+ * create. A blank name clears it.
+ */
+export const setSessionCustomerName = mutation({
+	args: {
+		sessionId: v.id("counterCheckoutSessions"),
+		name: v.string(),
+	},
+	handler: async (ctx, { sessionId, name }): Promise<void> => {
+		const resolved = await requireSessionAccess(ctx, sessionId);
+		if (!resolved) throw new ConvexError("Session not found");
+		const { session, access } = resolved;
+		if (session.status !== "buyer_identified")
+			throw new ConvexError("This checkout isn't open for editing");
+		await ctx.db.patch(sessionId, {
+			// Optional: a blank name clears it; a 1–2 char name is rejected. The
+			// client only saves an empty or ≥3-char value, so this won't fire on a
+			// partial mid-type — it's the server-side backstop.
+			waProfileName: normalizeOptionalCustomerName(name),
+			updatedAt: Date.now(),
+		});
+		await logAdminAction(
+			ctx,
+			access,
+			"counterCheckout.setSessionCustomerName",
+			sessionId,
+		);
 	},
 });
 
@@ -388,7 +621,15 @@ export const createOrderFromSession = mutation({
 			throw new ConvexError(
 				"Bind a buyer to this checkout before creating the order",
 			);
-		if (!session.waPhone) throw new ConvexError("This session has no buyer phone");
+		// A session with no phone is an ANONYMOUS walk-in (86ey8vqp6) — a cash sale
+		// with no buyer to message. That's a valid order, but a pay-later link would
+		// have no recipient, so it must be settled in person (the UI disables
+		// pay-later with this same reason).
+		const anonymous = !session.waPhone;
+		if (anonymous && !args.paidInPerson)
+			throw new ConvexError(
+				"An anonymous sale must be paid in person — there's no buyer to send a payment link to.",
+			);
 		if (args.items.length === 0) throw new ConvexError("Add at least one item");
 		if (args.items.length > MAX_COUNTER_ITEMS)
 			throw new ConvexError(`Maximum ${MAX_COUNTER_ITEMS} items per order`);
@@ -516,6 +757,7 @@ export const createOrderFromSession = mutation({
 			currency,
 			status: "confirmed", // seller-created with the buyer present
 			channel: "whatsapp",
+			source: "counter",
 			customer: { name: customerName, waPhone: session.waPhone },
 			deliveryMethod: "self_collect", // collected at the counter
 			fulfilmentDate: sanitizedFulfilmentDate,
@@ -552,15 +794,19 @@ export const createOrderFromSession = mutation({
 		// counter orders count like storefront ones.
 		await recordOrderCreated(ctx, retailer._id, now);
 
-		// Link customer aggregates (creates the row for a brand-new buyer).
-		await linkOrderToCustomer(ctx, {
-			retailerId: retailer._id,
-			waPhone: session.waPhone,
-			orderId,
-			orderTotal: total,
-			orderCreatedAt: now,
-			customerName,
-		});
+		// Link customer aggregates (creates the row for a brand-new buyer). Skipped
+		// for an anonymous sale — no identity means no customer row to touch, so the
+		// CRM aggregates stay clean.
+		if (session.waPhone) {
+			await linkOrderToCustomer(ctx, {
+				retailerId: retailer._id,
+				waPhone: session.waPhone,
+				orderId,
+				orderTotal: total,
+				orderCreatedAt: now,
+				customerName,
+			});
+		}
 
 		await ctx.db.patch(session._id, {
 			status: "completed",
@@ -568,12 +814,21 @@ export const createOrderFromSession = mutation({
 			updatedAt: now,
 		});
 
-		// Buyer confirmation + tracking link over WhatsApp.
-		await ctx.scheduler.runAfter(
-			0,
-			internal.whatsapp.notifyCounterOrderCreated,
-			{ orderId },
-		);
+		// Buyer confirmation + tracking link over WhatsApp — only when there's a
+		// buyer to reach. An anonymous sale sends nothing.
+		if (session.waPhone) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.whatsapp.notifyCounterOrderCreated,
+				{
+					orderId,
+					// Manual-phone buyers never scanned, so this confirmation is our
+					// FIRST message to them → carry the PDPA notice-at-collection line.
+					// Scan (store_qr) buyers already received it in the connect ack.
+					includePrivacyNotice: session.origin === "cashier",
+				},
+			);
+		}
 
 		await logAdminAction(
 			ctx,
@@ -825,32 +1080,23 @@ export const startSessionFromStoreQr = internalMutation({
 			normalizedPhone = waPhone; // best-effort, mirrors bindCheckoutSession
 		}
 
-		// Open walk-in sessions at this store (bounded by the cap, so collect()
-		// stays small). Also used for the re-claim lookup below.
-		const openBound = await ctx.db
-			.query("counterCheckoutSessions")
-			.withIndex("by_retailer_status", (q) =>
-				q.eq("retailerId", retailer._id).eq("status", "buyer_identified"),
-			)
-			.collect();
+		// All open bound sessions at this store (bounded by the cap, so collect()
+		// stays small). `openWalkIns` is the store_qr subset the per-store cap
+		// governs (poster-scan spam); the re-claim scans ALL of them.
+		const openBound = await openBoundSessions(ctx, retailer._id, now);
 		const openWalkIns = openBound.filter(
-			(s) => (s.origin ?? "cashier") === "store_qr" && now <= s.expiresAt,
+			(s) => (s.origin ?? "cashier") === "store_qr",
 		);
 
-		// Re-claim: the buyer rescanned while already connected → same session,
-		// slid idle window, no new row, no rate-limit charge. Backfill a pairing
-		// code if the row predates the feature so the ack still carries one.
-		const existing = openWalkIns.find((s) => s.waPhone === normalizedPhone);
+		// Re-claim: the buyer already has an open checkout at this store → same
+		// session, slid idle window, no new row, no rate-limit charge. Spans every
+		// origin, so a scan AFTER a manual-phone bind (86ey8vqp6) resumes that
+		// session instead of forking a duplicate. Backfill a pairing code if the row
+		// predates the feature so the ack still carries one.
+		const existing = openBound.find((s) => s.waPhone === normalizedPhone);
 		if (existing) {
 			const code =
-				existing.pairingCode ??
-				generatePairingCode(
-					new Set(
-						openWalkIns
-							.map((s) => s.pairingCode)
-							.filter((c): c is string => Boolean(c)),
-					),
-				);
+				existing.pairingCode ?? generatePairingCode(takenPairingCodes(openBound));
 			await ctx.db.patch(existing._id, {
 				pairingCode: code,
 				expiresAt: now + OPEN_SESSION_TTL_MS,
@@ -892,15 +1138,9 @@ export const startSessionFromStoreQr = internalMutation({
 			});
 		}
 
-		// Unique among the store's currently-open walk-in codes so the cashier
-		// never sees two of the same at once.
-		const code = generatePairingCode(
-			new Set(
-				openWalkIns
-					.map((s) => s.pairingCode)
-					.filter((c): c is string => Boolean(c)),
-			),
-		);
+		// Unique among the store's currently-open sessions (every origin) so the
+		// cashier never sees two of the same code at once.
+		const code = generatePairingCode(takenPairingCodes(openBound));
 
 		await ctx.db.insert("counterCheckoutSessions", {
 			retailerId: retailer._id,

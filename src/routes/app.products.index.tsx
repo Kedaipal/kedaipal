@@ -438,37 +438,33 @@ function ProductCard({
 					<img src={p.imageUrls[0]} alt="" className="size-full object-cover" />
 				) : null}
 			</div>
-			<div className="flex min-w-0 flex-1 flex-col gap-1">
+			{/* Fixed three-line shape (name / price · variants / stock word) so
+			    every row is the same height — a wrapping meta line was making some
+			    cards taller than their neighbours. Lines truncate, never wrap. */}
+			<div className="flex min-w-0 flex-1 flex-col gap-0.5">
 				<span className="truncate text-[14.5px] font-semibold">{p.name}</span>
-				<div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[13px] text-muted-foreground">
+				<span className="truncate text-[13px] text-muted-foreground">
 					<span className="font-medium text-foreground">
 						{priceVaries ? "from " : ""}
 						{formatPrice(p.priceFrom, p.currency)}
 					</span>
-					{variantCount > 1 ? <span>· {variantCount} variants</span> : null}
-					{/* Stock state as a colour word — the number a home seller
-					    actually protects. Only meaningful for active products. */}
-					{p.active ? (
-						<span aria-hidden="true">·</span>
+					{variantCount > 1 ? ` · ${variantCount} variants` : ""}
+				</span>
+				{/* Stock state as a colour word — the number a home seller actually
+				    protects. Archived rows use the slot for their status instead. */}
+				<span className="truncate text-[12.5px] font-semibold">
+					{!p.active ? (
+						<span className="font-normal text-muted-foreground">Archived</span>
+					) : outOfStock ? (
+						<span className="text-red-600 dark:text-red-400">Sold out</span>
+					) : lowStock ? (
+						<span className="text-amber-700 dark:text-amber-400">
+							{p.totalOnHand} left
+						</span>
 					) : (
-						<span>· Archived</span>
+						<span className="text-accent-emphasis">In stock</span>
 					)}
-					{p.active ? (
-						outOfStock ? (
-							<span className="font-semibold text-red-600 dark:text-red-400">
-								Sold out
-							</span>
-						) : lowStock ? (
-							<span className="font-semibold text-amber-700 dark:text-amber-400">
-								{p.totalOnHand} left
-							</span>
-						) : (
-							<span className="font-semibold text-accent-emphasis">
-								In stock
-							</span>
-						)
-					) : null}
-				</div>
+				</span>
 			</div>
 			<div className="flex shrink-0 flex-col items-end gap-1">
 				{p.active && (p.hidden || p.hiddenByCategory) ? (

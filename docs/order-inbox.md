@@ -55,7 +55,7 @@ Everything else maps directly; bulk actions (the remaining AC) shipped in Phase 
 
 `convex/orders.ts` → `searchOrders({ retailerId, bucket, paymentStatuses?,
 paymentMethods?, methodUnspecified?, dateFrom?, dateTo?, fulfilmentWindow?,
-mockupPending?, searchText?, limit? })` (owner-only). It scans the retailer's
+mockupPending?, source?, searchText?, limit? })` (owner-only). It scans the retailer's
 orders once (`by_retailer`, newest-first, capped at `MAX_INBOX_SCAN = 1000`) and
 returns **the filtered page plus the per-bucket counts in a single subscription**:
 `{ orders, total, counts, capped }`.
@@ -69,8 +69,10 @@ returns **the filtered page plus the per-bucket counts in a single subscription*
   the chips always show true totals.
 - **Filtering** (bucket statuses, payment — `undefined` reads as `unpaid` —,
   payment method, date on `createdAt`, a **`fulfilmentWindow`** chip — today /
-  tomorrow / this-week on the order's `fulfilmentDate` — and a cross-cutting
-  **`mockupPending`** toggle = mockupStatus pending/changes_requested) and
+  tomorrow / this-week on the order's `fulfilmentDate` —, a **`source`** chip —
+  online (`storefront`) vs walk-in (`counter`), `undefined` reads as
+  `storefront` — and a cross-cutting **`mockupPending`** toggle = mockupStatus
+  pending/changes_requested) and
   **search** (order #, customer name partial/CI, phone by trailing digits ≥4,
   **and item name/variant** — cheap since the orders are already in memory) are
   in-memory. `counts` also carries `mockupPending` (the count behind the "Needs
@@ -98,12 +100,20 @@ helpers (`statusAgeMs`, `formatStatusAge`, `statusAgeSeverity`).
   `fwin`) sits inline above the advanced filters — fulfilment urgency is a
   primary axis for F&B sellers, not a buried filter. Each order row carries a
   **fulfilment-date badge** (`fulfilment-date-badge.tsx`) that leads with urgency
-  (Overdue / Today / Tomorrow coloured). "Load more" raises an in-query `limit`.
-  Per-bucket empty states ("No new orders — you're all caught up 🎉").
+  (Overdue / Today / Tomorrow coloured) — **suppressed to neutral on terminal
+  orders and hidden entirely on counter orders** ([`86ey8r734`](https://app.clickup.com/t/86ey8r734),
+  see [`fulfilment-date.md`](./fulfilment-date.md)). Each card's meta line shows
+  the **absolute placed-at datetime + relative age** (`formatOrderTimestamp` +
+  `formatStatusAge`, e.g. "12 Jul, 3:45 PM (3h ago)") so the seller reads both
+  "when" and "how long ago" without opening the detail page — the item count
+  moved off the card to make room (it lives on the detail).
+  "Load more" raises an in-query `limit`. Per-bucket empty states ("No new orders
+  — you're all caught up 🎉").
 - **`order-time-badge.tsx`** — "time in status" pill (e.g. "2h"). Only **pending**
   escalates: amber >4h, red >24h (the missed-order risk window); other statuses
   are neutral.
-- **`order-filters.tsx`** — one coherent filter set: a **"Needs mockup"** toggle
+- **`order-filters.tsx`** — one coherent filter set: an **"Order type"** pair
+  (Online / Counter → `source`), a **"Needs mockup"** toggle
   (amber, with count; cross-cutting — ANDs with the bucket; shown only when ≥1
   order needs one or it's on), **payment** multi-select, and a **date range**
   (quick presets Today / 7 days / 30 days / This month + custom inputs). Inline on

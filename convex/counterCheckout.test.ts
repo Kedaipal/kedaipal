@@ -254,6 +254,7 @@ describe("counterCheckout — createOrderFromSession", () => {
 
 		const order = await t.run((ctx) => ctx.db.get(orderId));
 		expect(order?.status).toBe("confirmed");
+		expect(order?.source).toBe("counter"); // stamped as a walk-in sale
 		expect(order?.deliveryMethod).toBe("self_collect");
 		expect(order?.paymentStatus).toBe("received");
 		expect(order?.paymentMethod).toBe("cash");
@@ -870,5 +871,357 @@ describe("store QR poster (86ey5m35w)", () => {
 		expect(await t.run((ctx) => ctx.db.get(oldCancelled))).toBeNull();
 		expect(await t.run((ctx) => ctx.db.get(oldCompleted))).not.toBeNull();
 		expect(await t.run((ctx) => ctx.db.get(freshExpired))).not.toBeNull();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Identity escape hatches — manual phone entry + anonymous walk-in (86ey8vqp6)
+// ---------------------------------------------------------------------------
+
+/** Count the store's open (buyer_identified) sessions for a phone. */
+async function openSessionsForPhone(
+	t: ReturnType<typeof setup>,
+	retailerId: Id<"retailers">,
+	waPhone: string,
+): Promise<number> {
+	return t.run(async (ctx) => {
+		const rows = await ctx.db
+			.query("counterCheckoutSessions")
+			.withIndex("by_retailer_status", (q) =>
+				q.eq("retailerId", retailerId).eq("status", "buyer_identified"),
+			)
+			.collect();
+		return rows.filter((s) => s.waPhone === waPhone).length;
+	});
+}
+
+/** The pending `notifyCounterOrderCreated` scheduled jobs (with their args). */
+async function counterNotifyJobs(
+	t: ReturnType<typeof setup>,
+): Promise<Array<{ orderId: unknown; includePrivacyNotice?: boolean }>> {
+	const jobs = await t.run((ctx) =>
+		ctx.db.system.query("_scheduled_functions").collect(),
+	);
+	return jobs
+		.filter((j) => j.name.includes("notifyCounterOrderCreated"))
+		.map((j) => j.args[0] as { orderId: unknown; includePrivacyNotice?: boolean });
+}
+
+describe("counterCheckout — manual phone entry (86ey8vqp6)", () => {
+	test("normalizes a local MY number and re-links an existing customer", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		// Existing customer stored in E.164 form (as an inbound scan would).
+		await seedCustomer(t, retailer._id, "60123456789", "Aiman");
+
+		// Cashier types the LOCAL form with separators.
+		const { sessionId, reclaimed } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.bindSessionManualPhone, {
+				waPhone: "012-345 6789",
+				name: "Aiman",
+			});
+		expect(reclaimed).toBe(false);
+
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.status).toBe("buyer_identified");
+		expect(session?.origin).toBe("cashier");
+		// Keyed identically to the scan bind → existing customer matched.
+		expect(session?.waPhone).toBe("60123456789");
+		expect(session?.waProfileName).toBe("Aiman");
+		expect(session?.isNewCustomer).toBe(false);
+		expect(session?.customerId).toBeDefined();
+		expect(session?.pairingCode).toBeDefined();
+	});
+
+	test("a brand-new buyer binds as new, then the order links the customer once", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, { price: 1500 });
+
+		const { sessionId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.bindSessionManualPhone, {
+				waPhone: "0123456789",
+				name: "Aiman",
+			});
+		const preBind = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(preBind?.isNewCustomer).toBe(true);
+		expect(preBind?.customerId).toBeUndefined();
+
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				paidInPerson: true,
+				paymentMethod: "cash",
+			});
+
+		// Name flows onto the order snapshot.
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.customer.name).toBe("Aiman");
+
+		// Exactly one customer, aggregated once, seeded with the typed name.
+		const customers = await t
+			.withIdentity({ subject: USER_A })
+			.query(api.customers.list, {
+				retailerId: retailer._id,
+				sort: "recency",
+				paginationOpts: { numItems: 10, cursor: null },
+			});
+		expect(customers.page).toHaveLength(1);
+		expect(customers.page[0].orderCount).toBe(1);
+		expect(customers.page[0].waPhone).toBe("60123456789");
+		expect(customers.page[0].name).toBe("Aiman");
+	});
+
+	test("requires a buyer name", async () => {
+		const t = setup();
+		await seedRetailer(t, USER_A);
+		await expect(
+			t
+				.withIdentity({ subject: USER_A })
+				.mutation(api.counterCheckout.bindSessionManualPhone, {
+					waPhone: "0123456789",
+					name: "   ",
+				}),
+		).rejects.toThrow(/name/i);
+	});
+
+	test("rejects a name shorter than 3 characters", async () => {
+		const t = setup();
+		await seedRetailer(t, USER_A);
+		await expect(
+			t
+				.withIdentity({ subject: USER_A })
+				.mutation(api.counterCheckout.bindSessionManualPhone, {
+					waPhone: "0123456789",
+					name: "Jo",
+				}),
+		).rejects.toThrow(/at least 3/i);
+	});
+
+	test("rejects an invalid phone", async () => {
+		const t = setup();
+		await seedRetailer(t, USER_A);
+		await expect(
+			t
+				.withIdentity({ subject: USER_A })
+				.mutation(api.counterCheckout.bindSessionManualPhone, {
+					waPhone: "abc",
+					name: "Aiman",
+				}),
+		).rejects.toThrow();
+	});
+
+	test("the order confirmation carries the PDPA notice (manual-phone first contact)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, { price: 1500 });
+		const { sessionId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.bindSessionManualPhone, {
+				waPhone: "0123456789",
+				name: "Aiman",
+			});
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				paidInPerson: true,
+				paymentMethod: "cash",
+			});
+
+		const jobs = await counterNotifyJobs(t);
+		const mine = jobs.find((j) => j.orderId === orderId);
+		expect(mine).toBeDefined();
+		// Manual phone = buyer never scanned → notice rides the confirmation.
+		expect(mine?.includePrivacyNotice).toBe(true);
+	});
+
+	test("a scan after a manual bind re-claims — no duplicate session", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const { token } = await asUser.mutation(
+			api.counterCheckout.ensureCounterQrToken,
+			{},
+		);
+
+		const { sessionId } = await asUser.mutation(
+			api.counterCheckout.bindSessionManualPhone,
+			{ waPhone: "0123456789", name: "Aiman" },
+		);
+
+		// Same buyer now scans the poster with their E.164 number.
+		const res = await t.mutation(
+			internal.counterCheckout.startSessionFromStoreQr,
+			{ token, waPhone: "60123456789", profileName: "Aiman" },
+		);
+		expect(res.result === "started" && res.reclaimed).toBe(true);
+
+		// Still exactly one open session for that buyer — the manual one, resumed.
+		expect(await openSessionsForPhone(t, retailer._id, "60123456789")).toBe(1);
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.status).toBe("buyer_identified");
+	});
+});
+
+describe("counterCheckout — anonymous walk-in (86ey8vqp6)", () => {
+	test("creates a no-identity order, touches no customer, sends no WhatsApp", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, { price: 2000 });
+
+		const { sessionId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.startAnonymousSession, {});
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.status).toBe("buyer_identified");
+		expect(session?.waPhone).toBeUndefined();
+		expect(session?.customerId).toBeUndefined();
+
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				paidInPerson: true,
+				paymentMethod: "cash",
+			});
+
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.status).toBe("confirmed");
+		expect(order?.source).toBe("counter");
+		expect(order?.customer.waPhone).toBeUndefined();
+		expect(order?.customer.name).toBeUndefined();
+		expect(order?.customerId).toBeUndefined();
+
+		// No CRM row created — aggregates stay clean.
+		const customers = await t
+			.withIdentity({ subject: USER_A })
+			.query(api.customers.list, {
+				retailerId: retailer._id,
+				sort: "recency",
+				paginationOpts: { numItems: 10, cursor: null },
+			});
+		expect(customers.page).toHaveLength(0);
+
+		// No buyer confirmation scheduled — nobody to reach.
+		const jobs = await counterNotifyJobs(t);
+		expect(jobs.find((j) => j.orderId === orderId)).toBeUndefined();
+	});
+
+	test("pay-later is rejected on an anonymous session", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, { price: 2000 });
+		const { sessionId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.startAnonymousSession, {});
+
+		await expect(
+			t
+				.withIdentity({ subject: USER_A })
+				.mutation(api.counterCheckout.createOrderFromSession, {
+					sessionId,
+					items: [{ variantId, quantity: 1 }],
+					paidInPerson: false,
+				}),
+		).rejects.toThrow(/paid in person/i);
+	});
+
+	test("anonymous session creation is ownership-checked", async () => {
+		const t = setup();
+		await seedRetailer(t, USER_A);
+		await expect(
+			t.mutation(api.counterCheckout.startAnonymousSession, {}),
+		).rejects.toThrow();
+	});
+
+	test("an inline-set name lands on the anonymous order (no phone, no CRM)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, { price: 2000 });
+		const asUser = t.withIdentity({ subject: USER_A });
+		const { sessionId } = await asUser.mutation(
+			api.counterCheckout.startAnonymousSession,
+			{},
+		);
+
+		// Cashier types a name on the build screen.
+		await asUser.mutation(api.counterCheckout.setSessionCustomerName, {
+			sessionId,
+			name: "John",
+		});
+		const read = await asUser.query(api.counterCheckout.getCheckoutSession, {
+			sessionId,
+		});
+		expect(read?.displayName).toBe("John");
+
+		const { orderId } = await asUser.mutation(
+			api.counterCheckout.createOrderFromSession,
+			{
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				paidInPerson: true,
+				paymentMethod: "cash",
+			},
+		);
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.customer.name).toBe("John");
+		// Still no phone + no CRM row — a named cash sale, not a contact.
+		expect(order?.customer.waPhone).toBeUndefined();
+		const customers = await asUser.query(api.customers.list, {
+			retailerId: retailer._id,
+			sort: "recency",
+			paginationOpts: { numItems: 10, cursor: null },
+		});
+		expect(customers.page).toHaveLength(0);
+	});
+
+	test("startAnonymousSession accepts an initial name", async () => {
+		const t = setup();
+		await seedRetailer(t, USER_A);
+		const { sessionId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.startAnonymousSession, { name: "Jane" });
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.waProfileName).toBe("Jane");
+		expect(session?.waPhone).toBeUndefined();
+	});
+
+	test("setSessionCustomerName clears on a blank name", async () => {
+		const t = setup();
+		await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const { sessionId } = await asUser.mutation(
+			api.counterCheckout.startAnonymousSession,
+			{ name: "Jane" },
+		);
+		await asUser.mutation(api.counterCheckout.setSessionCustomerName, {
+			sessionId,
+			name: "  ",
+		});
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.waProfileName).toBeUndefined();
+	});
+
+	test("setSessionCustomerName rejects a 1–2 char name (server backstop)", async () => {
+		const t = setup();
+		await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const { sessionId } = await asUser.mutation(
+			api.counterCheckout.startAnonymousSession,
+			{},
+		);
+		await expect(
+			asUser.mutation(api.counterCheckout.setSessionCustomerName, {
+				sessionId,
+				name: "Jo",
+			}),
+		).rejects.toThrow(/at least 3/i);
 	});
 });

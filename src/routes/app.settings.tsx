@@ -1,5 +1,5 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { useMutation } from "convex/react";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { useMutation, useQuery } from "convex/react";
 import {
 	ArrowLeft,
 	Building2,
@@ -16,6 +16,7 @@ import {
 	QrCode,
 	ReceiptText,
 	Settings2,
+	ShieldCheck,
 	Store,
 	Trash2,
 } from "lucide-react";
@@ -36,6 +37,7 @@ import {
 	PageHeaderSkeleton,
 } from "../components/dashboard/page-header";
 import { TierPill } from "../components/dashboard/tier-pill";
+import { submitThenFocusError } from "../components/forms/focus-error";
 import { useAppForm } from "../components/forms/form";
 import { ShopeeIcon } from "../components/icons/shopee-icon";
 import { BillingTab } from "../components/settings/billing-tab";
@@ -280,6 +282,9 @@ function SettingsSkeleton() {
 function SettingsRoute() {
 	const actAsRetailerId = useActAsRetailerId();
 	const retailer = useDashboardRetailer();
+	// Admins get an "Admin" group on the mobile settings index — the natural home
+	// for the console entry (the desktop sidebar already carries an Admin group).
+	const isAdmin = useQuery(api.billing.amIAdmin) ?? false;
 	const renameSlugMutation = useMutation(api.retailers.renameSlug);
 	const updateSettingsMutation = useMutation(api.retailers.updateSettings);
 	// In admin act-as, inject the seller's `retailerId` so edits land on THEIR
@@ -469,6 +474,38 @@ function SettingsRoute() {
 							</div>
 						</div>
 					))}
+
+					{/* Kedaipal admins: the console entry lives here on mobile (desktop
+					    has the sidebar Admin group). Once inside /app/admin/*, the
+					    bottom nav swaps to the admin tabs, which lead with an "App"
+					    tab back to this store. See docs/admin-console.md. */}
+					{isAdmin ? (
+						<div className="flex flex-col gap-1.5">
+							<span className="pl-1 text-[11px] font-bold uppercase tracking-[0.08em] text-muted-foreground/80">
+								Admin
+							</span>
+							<div className="overflow-hidden rounded-2xl border border-border bg-card">
+								<Link
+									to="/app/admin/sellers"
+									className="flex min-h-[60px] w-full items-center gap-3 px-3.5 py-3 text-left transition-colors hover:bg-muted/50"
+								>
+									<span className="flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
+										<ShieldCheck className="size-4.5" aria-hidden="true" />
+									</span>
+									<span className="flex min-w-0 flex-1 flex-col">
+										<span className="text-sm font-semibold">Admin console</span>
+										<span className="truncate text-xs text-muted-foreground">
+											All sellers, billing &amp; WABA safety
+										</span>
+									</span>
+									<ChevronRight
+										className="size-4 shrink-0 text-muted-foreground/50"
+										aria-hidden="true"
+									/>
+								</Link>
+							</div>
+						</div>
+					) : null}
 				</div>
 			) : (
 				/* ---- Mobile: section view (tab set) — back to the index. */
@@ -846,7 +883,7 @@ function StoreDescriptionForm({
 					value={value}
 					onChange={(e) => setValue(e.target.value)}
 					placeholder="e.g. Home-based frozen food, Semenyih — DM for bulk orders"
-					rows={3}
+					rows={2}
 					maxLength={STORE_DESCRIPTION_MAX}
 					className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 				/>
@@ -2112,9 +2149,7 @@ function CurrencyForm({
 	});
 
 	function handleSubmit(e: FormEvent) {
-		e.preventDefault();
-		e.stopPropagation();
-		form.handleSubmit();
+		submitThenFocusError(form, e);
 	}
 
 	return (
@@ -2175,9 +2210,7 @@ function NotifyEmailForm({
 	});
 
 	function handleSubmit(e: FormEvent) {
-		e.preventDefault();
-		e.stopPropagation();
-		form.handleSubmit();
+		submitThenFocusError(form, e);
 	}
 
 	return (
@@ -2239,9 +2272,7 @@ function WaPhoneForm({
 	});
 
 	function handleSubmit(e: FormEvent) {
-		e.preventDefault();
-		e.stopPropagation();
-		form.handleSubmit();
+		submitThenFocusError(form, e);
 	}
 
 	return (

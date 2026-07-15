@@ -61,10 +61,38 @@ export type VariantEditorState = {
 	customLine: CustomLineDraft | null;
 };
 
+/**
+ * One submit-time validation problem, addressed to the exact input it belongs
+ * to, so the editor can mark that input `aria-invalid` + show the message
+ * beneath it (and the shared `focusFirstInvalidField` lands right on it) —
+ * instead of a generic banner the seller has to decode. Produced by
+ * `buildSubmitVariants` / `collectOptionIssues` in product-form.tsx.
+ */
+export type VariantIssue = {
+	/** Which editor area: a grid/single row, an option axis, or the custom line. */
+	where: "row" | "option" | "custom";
+	/** Row index (rows), axis index (options); 0 for the custom line. */
+	index: number;
+	field: "price" | "stock" | "name" | "values";
+	message: string;
+};
+
 interface VariantEditorProps {
 	value: VariantEditorState;
 	onChange: (next: VariantEditorState) => void;
 	currency: string;
+	/** Submit-time issues to render inline (cleared by the parent on any edit). */
+	issues?: VariantIssue[];
+}
+
+/** Tiny inline error line under the offending input. */
+function IssueText({ message }: { message: string | undefined }) {
+	if (!message) return null;
+	return (
+		<span role="alert" className="text-xs font-normal text-destructive">
+			{message}
+		</span>
+	);
 }
 
 function emptyRow(optionValues: string[]): VariantRow {
@@ -124,10 +152,12 @@ function PriceInput({
 	value,
 	onChange,
 	className,
+	invalid = false,
 }: {
 	value: string;
 	onChange: (next: string) => void;
 	className?: string;
+	invalid?: boolean;
 }) {
 	return (
 		<Input
@@ -136,6 +166,7 @@ function PriceInput({
 			value={value}
 			onChange={(e) => onChange(e.target.value)}
 			onBlur={(e) => onChange(normalizePriceInput(e.target.value))}
+			isError={invalid}
 			className={className}
 		/>
 	);
@@ -151,11 +182,13 @@ function StockInput({
 	onChange,
 	className,
 	stepper = false,
+	invalid = false,
 }: {
 	value: string;
 	onChange: (next: string) => void;
 	className?: string;
 	stepper?: boolean;
+	invalid?: boolean;
 }) {
 	if (!stepper) {
 		return (
@@ -164,6 +197,7 @@ function StockInput({
 				placeholder="0"
 				value={value}
 				onChange={(e) => onChange(sanitizeIntInput(e.target.value))}
+				isError={invalid}
 				className={className}
 			/>
 		);
@@ -176,6 +210,8 @@ function StockInput({
 		<div
 			className={cn(
 				"flex h-11 items-center overflow-hidden rounded-lg border border-input bg-background focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/50",
+				invalid &&
+					"border-destructive ring-2 ring-destructive/20 focus-within:border-destructive",
 				className,
 			)}
 		>
@@ -195,6 +231,7 @@ function StockInput({
 				onChange={(e) => onChange(sanitizeIntInput(e.target.value))}
 				className="h-full w-full min-w-0 flex-1 bg-transparent text-center text-[15px] font-semibold tabular-nums outline-none"
 				aria-label="Stock on hand"
+				aria-invalid={invalid || undefined}
 			/>
 			<button
 				type="button"
@@ -307,9 +344,20 @@ export function VariantEditor({
 	value,
 	onChange,
 	currency,
+	issues = [],
 }: VariantEditorProps) {
 	const { options, rows, customLine } = value;
 	const hasOptions = options.length > 0;
+	// Submit-time issue lookup — the offending input renders aria-invalid with its
+	// message beneath, so the seller (and focusFirstInvalidField) land on it.
+	const issueFor = (
+		where: VariantIssue["where"],
+		index: number,
+		field: VariantIssue["field"],
+	): string | undefined =>
+		issues.find(
+			(x) => x.where === where && x.index === index && x.field === field,
+		)?.message;
 	const [valueDrafts, setValueDrafts] = useState<string[]>([]);
 	const generateUploadUrl = useMutation(api.products.generateUploadUrl);
 	const [uploadingRow, setUploadingRow] = useState<number | null>(null);
@@ -550,7 +598,9 @@ export function VariantEditor({
 						<PriceInput
 							value={rows[0]?.price ?? ""}
 							onChange={(v) => setRow(0, { price: v })}
+							invalid={!!issueFor("row", 0, "price")}
 						/>
+						<IssueText message={issueFor("row", 0, "price")} />
 					</label>
 					<label className="flex flex-col gap-1 text-sm font-medium">
 						Stock{" "}
@@ -563,7 +613,9 @@ export function VariantEditor({
 							value={rows[0]?.stock ?? ""}
 							onChange={(v) => setRow(0, { stock: v })}
 							stepper
+							invalid={!!issueFor("row", 0, "stock")}
 						/>
+						<IssueText message={issueFor("row", 0, "stock")} />
 					</label>
 					<label className="col-span-2 flex flex-col gap-1 text-sm font-medium">
 						SKU{" "}
@@ -612,6 +664,7 @@ export function VariantEditor({
 								placeholder="Option name (e.g. Size)"
 								value={axis.name}
 								onChange={(e) => renameAxis(axisIndex, e.target.value)}
+								isError={!!issueFor("option", axisIndex, "name")}
 								className="h-10"
 							/>
 							<button
@@ -623,6 +676,7 @@ export function VariantEditor({
 								<X className="size-4" />
 							</button>
 						</div>
+						<IssueText message={issueFor("option", axisIndex, "name")} />
 						<div className="flex flex-wrap items-center gap-1.5">
 							{axis.values.map((v) => (
 								<span
@@ -643,6 +697,7 @@ export function VariantEditor({
 								<Input
 									placeholder="Add value"
 									value={valueDrafts[axisIndex] ?? ""}
+									isError={!!issueFor("option", axisIndex, "values")}
 									onChange={(e) =>
 										setValueDrafts((d) =>
 											d.map((val, i) =>
@@ -674,6 +729,7 @@ export function VariantEditor({
 								</button>
 							</div>
 						</div>
+						<IssueText message={issueFor("option", axisIndex, "values")} />
 					</div>
 				))}
 
@@ -833,7 +889,9 @@ export function VariantEditor({
 											value={row.price}
 											onChange={(v) => setRow(i, { price: v })}
 											className="h-10"
+											invalid={!!issueFor("row", i, "price")}
 										/>
+										<IssueText message={issueFor("row", i, "price")} />
 									</label>
 									<label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
 										Stock
@@ -842,7 +900,9 @@ export function VariantEditor({
 											onChange={(v) => setRow(i, { stock: v })}
 											className="h-11"
 											stepper
+											invalid={!!issueFor("row", i, "stock")}
 										/>
+										<IssueText message={issueFor("row", i, "stock")} />
 									</label>
 									<label className="col-span-2 flex flex-col gap-1 text-xs font-medium text-muted-foreground">
 										SKU (optional)
@@ -916,19 +976,31 @@ export function VariantEditor({
 											{variantLabel(row.optionValues)}
 										</td>
 										<td className="p-2">{renderRowImage(i, row)}</td>
-										<td className="p-2">
+										<td className="p-2 align-top">
 											<PriceInput
 												value={row.price}
 												onChange={(v) => setRow(i, { price: v })}
 												className="h-9 w-24"
+												invalid={!!issueFor("row", i, "price")}
 											/>
+											{issueFor("row", i, "price") ? (
+												<span className="mt-1 block max-w-40 text-[11px] text-destructive">
+													{issueFor("row", i, "price")}
+												</span>
+											) : null}
 										</td>
-										<td className="p-2">
+										<td className="p-2 align-top">
 											<StockInput
 												value={row.stock}
 												onChange={(v) => setRow(i, { stock: v })}
 												className="h-9 w-20"
+												invalid={!!issueFor("row", i, "stock")}
 											/>
+											{issueFor("row", i, "stock") ? (
+												<span className="mt-1 block max-w-40 text-[11px] text-destructive">
+													{issueFor("row", i, "stock")}
+												</span>
+											) : null}
 										</td>
 										<td className="p-2">
 											<Input
@@ -1054,7 +1126,9 @@ export function VariantEditor({
 							<PriceInput
 								value={customLine.price}
 								onChange={(v) => setCustomLine({ price: v })}
+								invalid={!!issueFor("custom", 0, "price")}
 							/>
+							<IssueText message={issueFor("custom", 0, "price")} />
 							<span className="text-xs font-normal text-muted-foreground">
 								Leave blank to show “Price on quote” — you set the price on the
 								mockup after the order comes in.

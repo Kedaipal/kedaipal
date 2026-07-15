@@ -20,6 +20,7 @@ import {
 } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
 import { assertValidAddress } from "./lib/address";
+import { requireCustomerName } from "./lib/customer";
 import { assertPlanFeature } from "./subscriptions";
 import {
 	recordOrderCancelled,
@@ -323,8 +324,11 @@ export const create = mutation({
 				throw new ConvexError((err as Error).message);
 			}
 		}
+		// Name is required at checkout (≥3 chars) — enforced server-side here, not
+		// just in the storefront form, so a direct mutation call can't create a
+		// nameless/1-char order. Same rule + shared validator as the counter paths.
 		const sanitizedCustomer = {
-			name: args.customer.name?.trim() || undefined,
+			name: requireCustomerName(args.customer.name),
 			waPhone: customerWaPhone,
 		};
 
@@ -537,6 +541,7 @@ export const create = mutation({
 			currency: args.currency,
 			status: "pending",
 			channel: args.channel,
+			source: "storefront",
 			customer: sanitizedCustomer,
 			deliveryMethod: effectiveDeliveryMethod,
 			deliveryAddress: sanitizedAddress,
@@ -1017,6 +1022,14 @@ export const listByRetailer = query({
 // beats indexed pagination + an Aggregate at this scale.
 const MAX_INBOX_SCAN = 1000;
 
+// Checkout-surface filter value, shared by the live inbox (`searchOrders`) and
+// the CSV export so the two can't drift. Matches orders.source; legacy orders
+// (no stamped source) read as "storefront" in the predicate.
+const orderSourceValidator = v.union(
+	v.literal("storefront"),
+	v.literal("counter"),
+);
+
 /**
  * Order inbox: one query that returns the filtered/searched page **plus** the
  * per-bucket counts (over the full set, independent of the active filters), in a
@@ -1066,6 +1079,9 @@ export const searchOrders = query({
 		// Cross-cutting: only orders awaiting the seller's mockup action
 		// (mockupStatus pending / changes_requested). ANDs with the other filters.
 		mockupPending: v.optional(v.boolean()),
+		// Checkout surface: "storefront" (online) vs "counter" (walk-in). Legacy
+		// orders read as "storefront". ANDs with the other filters.
+		source: v.optional(orderSourceValidator),
 		searchText: v.optional(v.string()),
 		limit: v.optional(v.number()),
 	},
@@ -1081,6 +1097,7 @@ export const searchOrders = query({
 			dateTo,
 			fulfilmentWindow,
 			mockupPending,
+			source,
 			searchText,
 			limit,
 		},
@@ -1102,6 +1119,7 @@ export const searchOrders = query({
 			dateTo !== undefined ||
 			fulfilmentWindow !== undefined ||
 			mockupPending !== undefined ||
+			source !== undefined ||
 			(searchText !== undefined && searchText.trim().length > 0);
 		if (usesInboxFeatures && !access.actingAsAdmin)
 			await assertPlanFeature(ctx, retailerId, "orderInbox");
@@ -1134,8 +1152,12 @@ export const searchOrders = query({
 			counts[b]++;
 			if (needsMockup(o.mockupStatus)) counts.mockupPending++;
 			const open = b === "new" || b === "in_progress";
+			// Counter orders default their date to today at create — they're not a
+			// promised-by date, so they must never inflate the "due today" nudge
+			// (they'd swamp it at counter-heavy stores). See ClickUp 86ey8r734.
 			if (
 				open &&
+				o.source !== "counter" &&
 				o.fulfilmentDate !== undefined &&
 				matchesFulfilmentWindow(o.fulfilmentDate, "today", now)
 			) {
@@ -1159,6 +1181,7 @@ export const searchOrders = query({
 				dateTo,
 				fulfilmentWindow,
 				mockupPending,
+				source,
 				searchText,
 			}),
 		);
@@ -1215,6 +1238,7 @@ const exportFilterValidators = {
 		),
 	),
 	mockupPending: v.optional(v.boolean()),
+	source: v.optional(orderSourceValidator),
 	searchText: v.optional(v.string()),
 } as const;
 

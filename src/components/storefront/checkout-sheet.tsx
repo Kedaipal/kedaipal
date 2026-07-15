@@ -28,6 +28,7 @@ import {
 	checkoutFormSchema,
 	emptyAddress,
 } from "../../lib/schemas";
+import { submitThenFocusError } from "../forms/focus-error";
 import { useAppForm } from "../forms/form";
 import { Button } from "../ui/button";
 import { AddressFieldset } from "./address-fieldset";
@@ -250,6 +251,10 @@ export function CheckoutSheet({
 }: CheckoutSheetProps) {
 	const createOrder = useMutation(api.orders.create);
 	const [serverError, setServerError] = useState<string | null>(null);
+	// Submit-time "choose a pickup point" error — inline on the radio list (the
+	// shared focus helper lands on it), not a generic bottom banner. Cleared as
+	// soon as the buyer picks one.
+	const [pickupError, setPickupError] = useState<string | null>(null);
 
 	// Selectable date range for the picker: today + the retailer's notice (the
 	// earliest day) through today + 30. Memoised on the retailer setting so the
@@ -305,6 +310,7 @@ export function CheckoutSheet({
 		validators: { onChange: checkoutFormSchema },
 		onSubmit: async ({ value }) => {
 			setServerError(null);
+			setPickupError(null);
 			if (cart.items.length === 0) return;
 			if (noCheckoutPhone) {
 				setServerError(
@@ -330,7 +336,9 @@ export function CheckoutSheet({
 						(p) => p._id === value.pickupLocationId,
 					);
 					if (!chosen) {
-						setServerError("Please choose a pickup location to continue.");
+						// Inline on the picker itself (marks the radios aria-invalid), so
+						// the focus helper scrolls the buyer straight to the choice.
+						setPickupError("Please choose a pickup point to continue.");
 						return;
 					}
 					resolvedPickupLocationId = chosen._id;
@@ -409,9 +417,7 @@ export function CheckoutSheet({
 	});
 
 	function handleSubmit(e: FormEvent) {
-		e.preventDefault();
-		e.stopPropagation();
-		form.handleSubmit();
+		submitThenFocusError(form, e);
 	}
 
 	return (
@@ -514,9 +520,10 @@ export function CheckoutSheet({
 								<form.AppField name="name">
 									{(field) => (
 										<field.TextField
-											label="Your name (optional)"
+											label="Your name"
 											placeholder="Ali"
 											autoComplete="name"
+											required
 										/>
 									)}
 								</form.AppField>
@@ -589,7 +596,11 @@ export function CheckoutSheet({
 																locations={sortedPickups}
 																currency={cart.currency}
 																value={field.state.value}
-																onChange={(id) => field.handleChange(id)}
+																onChange={(id) => {
+																	field.handleChange(id);
+																	setPickupError(null);
+																}}
+																error={pickupError ?? undefined}
 															/>
 														)}
 													</form.AppField>
@@ -695,7 +706,11 @@ export function CheckoutSheet({
 							) : null}
 
 							{serverError ? (
-								<p className="mt-4 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+								<p
+									data-form-error
+									role="alert"
+									className="mt-4 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
+								>
 									{serverError}
 								</p>
 							) : null}
@@ -839,7 +854,7 @@ function PickupSummaryCard({
 						) : null;
 					})()}
 					{location.notes ? (
-						<p className="text-xs text-muted-foreground whitespace-pre-line">
+						<p className="line-clamp-3 text-xs text-muted-foreground whitespace-pre-line">
 							{location.notes}
 						</p>
 					) : null}
@@ -886,11 +901,15 @@ function PickupLocationRadioList({
 	currency,
 	value,
 	onChange,
+	error,
 }: {
 	locations: ReadonlyArray<PublicPickupLocation>;
 	currency: string;
 	value: string;
 	onChange: (id: string) => void;
+	/** Submit-time "pick one" error — marks the radios so the shared
+	 * focus-first-error helper lands here, with the message under the legend. */
+	error?: string;
 }) {
 	// Group by kind, preserving the retailer's sort order within each group.
 	// Sub-headings only appear when BOTH kinds exist — a single-kind seller
@@ -919,6 +938,7 @@ function PickupLocationRadioList({
 					value={loc._id}
 					checked={selected}
 					onChange={() => onChange(loc._id)}
+					aria-invalid={error ? true : undefined}
 					className="mt-1 size-4 shrink-0 accent-accent"
 				/>
 				<div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -960,6 +980,11 @@ function PickupLocationRadioList({
 	return (
 		<fieldset className="flex flex-col gap-3">
 			<legend className="text-sm font-medium">Choose a pickup point</legend>
+			{error ? (
+				<p role="alert" className="text-sm text-destructive">
+					{error}
+				</p>
+			) : null}
 			{showHeadings ? (
 				<>
 					<PickupGroup

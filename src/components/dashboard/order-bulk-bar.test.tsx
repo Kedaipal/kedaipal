@@ -100,7 +100,9 @@ describe("OrderBulkBar", () => {
 	it("hides the delete action unless onDelete is provided", () => {
 		renderBar();
 		fireEvent.click(screen.getByRole("button", { name: /update status/i }));
-		expect(screen.queryByRole("button", { name: /delete permanently/i })).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: /delete permanently/i }),
+		).toBeNull();
 	});
 
 	it("gates delete behind its own confirm and calls onDelete", () => {
@@ -108,12 +110,28 @@ describe("OrderBulkBar", () => {
 		const onApply = vi.fn();
 		renderBar({ onDelete, onApply });
 		fireEvent.click(screen.getByRole("button", { name: /update status/i }));
-		fireEvent.click(screen.getByRole("button", { name: /delete permanently/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /delete permanently/i }),
+		);
 		// Opens a confirm — nothing fired yet, and it's NOT the status apply.
 		expect(onDelete).not.toHaveBeenCalled();
 		expect(onApply).not.toHaveBeenCalled();
 		expect(screen.getByRole("dialog")).toBeTruthy();
-		fireEvent.click(screen.getByRole("button", { name: /delete 2 orders/i }));
+
+		// Permanent delete is gated behind a type-to-confirm box: the button stays
+		// disabled until the user types DELETE.
+		const confirmButton = screen.getByRole("button", {
+			name: /delete 2 orders/i,
+		}) as HTMLButtonElement;
+		expect(confirmButton.disabled).toBe(true);
+		fireEvent.click(confirmButton);
+		expect(onDelete).not.toHaveBeenCalled();
+
+		fireEvent.change(screen.getByLabelText("Type DELETE to confirm"), {
+			target: { value: "delete" },
+		});
+		expect(confirmButton.disabled).toBe(false);
+		fireEvent.click(confirmButton);
 		expect(onDelete).toHaveBeenCalledTimes(1);
 		expect(onApply).not.toHaveBeenCalled();
 	});

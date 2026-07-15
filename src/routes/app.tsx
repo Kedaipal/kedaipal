@@ -175,7 +175,11 @@ function AppShell() {
 				</main>
 				<BottomNav
 					actionableCount={actionableCount}
-					adminOnly={!retailer}
+					// Admin tabs when there's no seller store to run, OR whenever an admin
+					// is inside the admin area — so every admin page is reachable on mobile.
+					adminNav={!retailer || (isAdmin && onAdminRoute)}
+					// With a store, the admin row leads with an "App" tab back to it.
+					hasStore={!!retailer}
 					crmLocked={
 						!!retailer &&
 						!retailer.actingAsAdmin &&

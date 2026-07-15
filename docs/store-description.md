@@ -21,13 +21,18 @@ description". No index — only ever read alongside the retailer row.
 ## Flow
 
 1. **Settings** (`app.settings.tsx`, Store tab) — a "Store description" card with
-   a 3-row textarea (`maxLength` 280 + live counter), placed directly under
-   "Business name" since both are store-identity copy. Clearing it (blank) is a
-   valid edit that removes the line.
+   a 2-row textarea (`maxLength` `STORE_DESCRIPTION_MAX` + live counter), placed
+   directly under "Business name" since both are store-identity copy. Clearing it
+   (blank) is a valid edit that removes the line.
 2. **Save** (`retailers.updateSettings`) — accepts `storeDescription`, trims
    outer whitespace (internal newlines preserved), treats blank as "clear"
-   (`undefined`), and hard-caps at `STORE_DESCRIPTION_MAX = 280` (throws past it —
-   defense-in-depth behind the client cap, never trust the client).
+   (`undefined`), and hard-caps at `STORE_DESCRIPTION_MAX = 150` (throws past it —
+   defense-in-depth behind the client cap, never trust the client). **Tightened
+   from 280 → 150** ([`86ey8r734`](https://app.clickup.com/t/86ey8r734)) so the
+   blurb stays a two-line trust signal and never crowds the products, especially
+   over a cover image. Dev-only cap change, no data migration — the settings form
+   only saves on edit, so an existing longer blurb isn't force-rejected until the
+   seller next touches it (and shrinking it lands under the new cap naturally).
 3. **Reads** — surfaced on both the owner read (`getMyRetailer`) and the public
    storefront payload (`getRetailerBySlug`). Public-safe.
 4. **Storefront** (`$slug.tsx`) — rendered in the header under the store name.
@@ -43,8 +48,8 @@ description". No index — only ever read alongside the retailer row.
 
 Plain text only. The header renders `{retailer.storeDescription}` in JSX (React
 escapes by default — no markdown/HTML interpretation) with `whitespace-pre-line`
-to preserve newlines and `line-clamp-4` to keep the header tidy even if the
-seller stuffs the full 280 chars. No `dangerouslySetInnerHTML`.
+to preserve newlines and `line-clamp-2` to hard-cap the header at **2 rows** even
+if the seller stuffs the full 150 chars. No `dangerouslySetInnerHTML`.
 
 ## Tier
 

@@ -10,6 +10,7 @@ import {
 	type CheckoutAddressValues,
 	emptyAddress,
 } from "../../lib/schemas";
+import { submitThenFocusError } from "../forms/focus-error";
 import { useAppForm } from "../forms/form";
 import { Button } from "../ui/button";
 import { AddressFieldset } from "./address-fieldset";
@@ -100,9 +101,7 @@ export function AddressEditDialog({
 	});
 
 	function handleSubmit(e: FormEvent) {
-		e.preventDefault();
-		e.stopPropagation();
-		form.handleSubmit();
+		submitThenFocusError(form, e);
 	}
 
 	return (
@@ -150,7 +149,11 @@ export function AddressEditDialog({
 								retailerId={retailerId}
 							/>
 							{serverError ? (
-								<p className="mt-4 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+								<p
+									data-form-error
+									role="alert"
+									className="mt-4 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
+								>
 									{serverError}
 								</p>
 							) : null}
