@@ -63,7 +63,65 @@ checks, in order (non-transactional only):
 
 A blocked send **returns without throwing** (so a caller's catch/fallback doesn't
 re-send the blocked message) and writes a `blocked_*` row. A genuine Meta failure
-still throws (preserving each caller's fallback) and logs `failed`.
+on an inline send still throws (preserving each caller's fallback) and logs
+`failed`; on the durable path below, the failure is retried instead.
+
+## Durable retry for transactional sends (ClickUp `86ey5dz0a`)
+
+A transient Meta failure (429 / 5xx / network blip) used to silently drop the
+buyer's message — the notify actions logged `failed` and moved on. Transactional
+sends are now **durably retried** via the official
+[`@convex-dev/action-retrier`](https://www.convex.dev/components/retrier)
+component (registered in `convex.config.ts`, configured in
+`convex/lib/actionRetrier.ts`).
+
+**Policy: 5 attempts total** (1 + `maxFailures: 4` retries) with exponential
+backoff + jitter (~250ms → 500ms → 1s → 2s). Retries are scheduled through the
+database, so they survive action crashes; no always-on infra.
+
+**The retry unit is ONE Meta HTTP delivery, never the gating.** The guarded
+sender's default transactional path calls one mutation,
+`enqueueTransactionalSend`, which atomically:
+
+1. runs the same `decideSend` gate as `canSend` (once — a retry can never
+   replay a gating decision or re-consume rate-limit tokens),
+2. enqueues `deliverTransactional` (an action whose **only** throw path is the
+   Meta call itself — so a "Meta accepted it but a later step failed" replay
+   cannot double-send), and
+3. inserts the audit row as **`pending`** with the retrier `runId`.
+
+When the run settles, the `onDeliverComplete` callback patches that same row to
+its terminal `sent` / `failed` (+ last error) — **one `outboundMessageLog` row
+per message, never one per attempt**. A lingering `pending` row means a run is
+in flight (or, pathologically, that its callback never fired — visible, not
+silent).
+
+**What is deliberately NOT durably retried:**
+
+- **Gated categories** (`session_message`, templates) — single inline attempt,
+  exactly as before. Replaying them would fight the protection layer:
+  `canSend` consumes rate-limit tokens as a side effect, and a kill-switch /
+  opt-out decision must not be re-evaluated per attempt.
+- **Ordered / fallback sequences** — `sendPaymentMessage` (confirm reply,
+  payment-due, counter pay-later) and the mockup CTA→text degradation need
+  `await`-with-throw semantics the fire-and-forget component can't give
+  (message order across separate runs isn't guaranteed, and `.send()` resolving
+  at enqueue would break throw-driven fallbacks). These construct their sender
+  with `{ retry: false }` and get **bounded inline retries** instead
+  (`withInlineRetries`, `convex/lib/retry.ts`: 3 attempts, 250ms/500ms), then
+  rethrow — same caller-visible contract as before, just more resilient.
+
+Caller-visible semantics on the durable path: `.send()` resolving means
+**enqueued** (with retries behind it), not confirmed-delivered — e.g. the
+order-document "sent" state and the founding-welcome stamp now mark hand-off.
+The transient receipt/invoice blob is held 10 minutes, comfortably beyond the
+full backoff window, so a retried document send never fetches a deleted blob.
+
+Tests: `convex/wabaProtection.test.ts` ("durable transactional retry") — note
+tests asserting on durable sends must register the component
+(`@convex-dev/action-retrier/test`) and drain via
+`t.finishAllScheduledFunctions(vi.runAllTimers)` under fake timers enabled
+**before** anything schedules.
 
 ## Per-retailer caps
 
@@ -147,7 +205,9 @@ npx convex run wabaProtection:listRecentOutbound '{"retailerId":"<id>"}'
 
 `optOuts` (global, by_phone) · `wabaHealth` (history, by_observed) ·
 `retailerSendingLimits` (kill switch + cap overrides, by_retailer) ·
-`outboundMessageLog` (audit, by_retailer_sent + by_phone_sent).
+`outboundMessageLog` (audit, by_retailer_sent + by_phone_sent + by_run;
+durably-retried sends add a `pending` status + `runId`, patched terminal on
+completion — see the durable-retry section).
 
 ## Env vars
 
@@ -163,8 +223,10 @@ npx convex run wabaProtection:listRecentOutbound '{"retailerId":"<id>"}'
 - `convex/lib/wabaWebhook.test.ts` — health-event mapping.
 - `convex/wabaProtection.test.ts` — category gating (transactional always sends;
   session blocked on pause/opt-out/quality/cap), opt-out lifecycle, health history,
-  and end-to-end (paused transactional still sends; opted-out session suppressed
-  pre-Meta; STOP registers + acks).
+  end-to-end (paused transactional still sends; opted-out session suppressed
+  pre-Meta; STOP registers + acks), and durable retry (transient→retried→sent
+  with one row; permanent→5 bounded attempts→one failed row; session never
+  retried; inline-retry helper contract).
 
 ## Acceptance ↔ implementation (real-now core)
 

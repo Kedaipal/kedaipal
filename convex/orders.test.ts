@@ -1,7 +1,8 @@
 /// <reference types="vite/client" />
+import { register as registerActionRetrier } from "@convex-dev/action-retrier/test";
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { todayMytMidnight } from "./lib/fulfilmentDate";
@@ -14,7 +15,13 @@ const modules = import.meta.glob("./**/*.ts");
 function setup() {
 	const t = convexTest(schema, modules);
 	registerRateLimiter(t);
+	registerActionRetrier(t);
 	return t;
+}
+
+/** Drain the durable-retry send pipeline (86ey5dz0a) — see whatsapp.test.ts. */
+async function drainScheduled(t: ReturnType<typeof setup>) {
+	await t.finishAllScheduledFunctions(vi.runAllTimers);
 }
 
 /**
@@ -4002,6 +4009,10 @@ describe("sendOrderDocumentToBuyer", () => {
 	test("paid order → sends a Receipt PDF document to the buyer's WhatsApp", async () => {
 		process.env.WHATSAPP_ACCESS_TOKEN = "test-token";
 		process.env.WHATSAPP_PHONE_NUMBER_ID = "test-phone-id";
+		// Fake timers from the start: every scheduled job (order-create email,
+		// durable document send) stays under vi.runAllTimers control — a real-timer
+		// job leaking into the drain races convex-test's scheduler bookkeeping.
+		vi.useFakeTimers();
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const shortId = await seedOrder(t, retailer._id, customer);
@@ -4022,6 +4033,8 @@ describe("sendOrderDocumentToBuyer", () => {
 			.withIdentity({ subject: USER_A })
 			.action(api.orders.sendOrderDocumentToBuyer, { shortId });
 		expect(res.ok).toBe(true);
+		await drainScheduled(t);
+		vi.useRealTimers();
 		const doc = fetchMock.calls.find((c) => c.body.type === "document");
 		expect(doc).toBeTruthy();
 		const document = doc!.body.document as { filename: string; link: string };
@@ -4033,6 +4046,7 @@ describe("sendOrderDocumentToBuyer", () => {
 	test("unpaid order → sends an Invoice-named document", async () => {
 		process.env.WHATSAPP_ACCESS_TOKEN = "test-token";
 		process.env.WHATSAPP_PHONE_NUMBER_ID = "test-phone-id";
+		vi.useFakeTimers();
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const shortId = await seedOrder(t, retailer._id, customer);
@@ -4042,6 +4056,8 @@ describe("sendOrderDocumentToBuyer", () => {
 			.withIdentity({ subject: USER_A })
 			.action(api.orders.sendOrderDocumentToBuyer, { shortId });
 		expect(res.ok).toBe(true);
+		await drainScheduled(t);
+		vi.useRealTimers();
 		const doc = fetchMock.calls.find((c) => c.body.type === "document");
 		expect((doc!.body.document as { filename: string }).filename).toBe(
 			`Invoice-${shortId}.pdf`,

@@ -21,6 +21,7 @@ import type * as foundingMembers from "../foundingMembers.js";
 import type * as google from "../google.js";
 import type * as http from "../http.js";
 import type * as invoices from "../invoices.js";
+import type * as lib_actionRetrier from "../lib/actionRetrier.js";
 import type * as lib_activation from "../lib/activation.js";
 import type * as lib_address from "../lib/address.js";
 import type * as lib_auth from "../lib/auth.js";
@@ -28,6 +29,7 @@ import type * as lib_billingEmailCopy from "../lib/billingEmailCopy.js";
 import type * as lib_categoryCounts from "../lib/categoryCounts.js";
 import type * as lib_channels_registry from "../lib/channels/registry.js";
 import type * as lib_channels_types from "../lib/channels/types.js";
+import type * as lib_channels_validators from "../lib/channels/validators.js";
 import type * as lib_channels_whatsapp_adapter from "../lib/channels/whatsapp/adapter.js";
 import type * as lib_currency from "../lib/currency.js";
 import type * as lib_customer from "../lib/customer.js";
@@ -51,6 +53,7 @@ import type * as lib_pdf_logo from "../lib/pdf/logo.js";
 import type * as lib_pdf_render from "../lib/pdf/render.js";
 import type * as lib_plans from "../lib/plans.js";
 import type * as lib_rateLimiter from "../lib/rateLimiter.js";
+import type * as lib_retry from "../lib/retry.js";
 import type * as lib_slug from "../lib/slug.js";
 import type * as lib_storeProfile from "../lib/storeProfile.js";
 import type * as lib_usagePeriod from "../lib/usagePeriod.js";
@@ -94,6 +97,7 @@ declare const fullApi: ApiFromModules<{
   google: typeof google;
   http: typeof http;
   invoices: typeof invoices;
+  "lib/actionRetrier": typeof lib_actionRetrier;
   "lib/activation": typeof lib_activation;
   "lib/address": typeof lib_address;
   "lib/auth": typeof lib_auth;
@@ -101,6 +105,7 @@ declare const fullApi: ApiFromModules<{
   "lib/categoryCounts": typeof lib_categoryCounts;
   "lib/channels/registry": typeof lib_channels_registry;
   "lib/channels/types": typeof lib_channels_types;
+  "lib/channels/validators": typeof lib_channels_validators;
   "lib/channels/whatsapp/adapter": typeof lib_channels_whatsapp_adapter;
   "lib/currency": typeof lib_currency;
   "lib/customer": typeof lib_customer;
@@ -124,6 +129,7 @@ declare const fullApi: ApiFromModules<{
   "lib/pdf/render": typeof lib_pdf_render;
   "lib/plans": typeof lib_plans;
   "lib/rateLimiter": typeof lib_rateLimiter;
+  "lib/retry": typeof lib_retry;
   "lib/slug": typeof lib_slug;
   "lib/storeProfile": typeof lib_storeProfile;
   "lib/usagePeriod": typeof lib_usagePeriod;
@@ -307,6 +313,53 @@ export declare const components: {
     };
     time: {
       getServerTime: FunctionReference<"mutation", "internal", {}, number>;
+    };
+  };
+  actionRetrier: {
+    public: {
+      cancel: FunctionReference<
+        "mutation",
+        "internal",
+        { runId: string },
+        boolean
+      >;
+      cleanup: FunctionReference<
+        "mutation",
+        "internal",
+        { runId: string },
+        any
+      >;
+      start: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          functionArgs: any;
+          functionHandle: string;
+          options: {
+            base: number;
+            initialBackoffMs: number;
+            logLevel: "DEBUG" | "INFO" | "WARN" | "ERROR";
+            maxFailures: number;
+            onComplete?: string;
+            runAfter?: number;
+            runAt?: number;
+          };
+        },
+        string
+      >;
+      status: FunctionReference<
+        "query",
+        "internal",
+        { runId: string },
+        | { type: "inProgress" }
+        | {
+            result:
+              | { returnValue: any; type: "success" }
+              | { error: string; type: "failed" }
+              | { type: "canceled" };
+            type: "completed";
+          }
+      >;
     };
   };
 };

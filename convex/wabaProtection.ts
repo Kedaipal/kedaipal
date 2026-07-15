@@ -19,8 +19,17 @@
  * Blocked sends NEVER reach Meta. Usage: actions build a guarded sender via
  * makeGuardedSender(ctx, retailerId, category) and call .send(to, msg). See
  * docs/waba-protection.md.
+ *
+ * Transactional sends are DURABLY RETRIED on transient Meta failures (ClickUp
+ * 86ey5dz0a) via @convex-dev/action-retrier: the guarded sender enqueues one
+ * retried run (gating decided once, up front) and logs a single `pending` row
+ * that onDeliverComplete patches to the terminal sent/failed. Gated categories
+ * are never retried — replaying them would re-run canSend's side effects.
+ * Ordered/fallback transactional sequences opt out ({ retry: false }) and get
+ * bounded in-process retries instead, keeping await-with-throw semantics.
  */
 
+import { runIdValidator, runResultValidator } from "@convex-dev/action-retrier";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -32,9 +41,12 @@ import {
 	mutation,
 	query,
 } from "./_generated/server";
+import { INLINE_RETRY, retrier } from "./lib/actionRetrier";
 import { requireAdmin } from "./lib/auth";
 import { getAdapter } from "./lib/channels/registry";
 import type { OutboundMessage } from "./lib/channels/types";
+import { outboundMessageValidator } from "./lib/channels/validators";
+import { withInlineRetries } from "./lib/retry";
 import { sendEmail } from "./lib/email";
 import { rateLimiter } from "./lib/rateLimiter";
 import { normalizeWaPhone } from "./lib/slug";
@@ -75,20 +87,41 @@ export type GuardedSender = {
 /**
  * Build a guarded sender bound to a seller (or `null` for system replies to an
  * unknown inbound sender) and a message category. Every .send():
- *   - asks canSend whether this send is allowed,
+ *   - asks canSend whether this send is allowed (once — never per retry),
  *   - on block: logs the blocked_* row and RETURNS WITHOUT throwing (so a
  *     caller's catch/fallback doesn't re-send the same blocked message),
- *   - on allow: hits Meta, then logs sent / failed. A Meta failure still throws,
- *     preserving each caller's existing fallback behaviour.
+ *   - on allow, transactional (default): hands the Meta call to the durable
+ *     action-retrier and resolves as soon as the run is enqueued — a transient
+ *     Meta failure retries with backoff instead of dropping the message.
+ *     `.send()` no longer throws on delivery failure here; the terminal
+ *     outcome lands in outboundMessageLog via onDeliverComplete.
+ *   - on allow, `{ retry: false }` transactional: hits Meta inline with
+ *     bounded in-process retries, then logs sent / failed and rethrows on
+ *     exhaustion — for ordered sequences and throw-driven fallbacks that need
+ *     await semantics (sendPaymentMessage, image→text degradation).
+ *   - on allow, gated categories: single inline attempt, no retries — the
+ *     canSend decision (which consumes rate-limit tokens) must not be replayed.
  */
 export function makeGuardedSender(
 	ctx: ActionCtx,
 	retailerId: Id<"retailers"> | null,
 	category: MessageCategory,
+	opts?: { retry?: boolean },
 ): GuardedSender {
 	const adapter = getAdapter("whatsapp");
+	const durable = isTransactional(category) && (opts?.retry ?? true);
 	return {
 		async send(to: string, msg: OutboundMessage): Promise<void> {
+			if (durable) {
+				// One mutation decides gating, enqueues the retried run, and writes
+				// the pending audit row atomically.
+				await ctx.runMutation(internal.wabaProtection.enqueueTransactionalSend, {
+					retailerId: retailerId ?? undefined,
+					toWaPhone: to,
+					message: msg,
+				});
+				return;
+			}
 			const decision = await ctx.runMutation(internal.wabaProtection.canSend, {
 				retailerId: retailerId ?? undefined,
 				toPhone: to,
@@ -109,7 +142,13 @@ export function makeGuardedSender(
 				return;
 			}
 			try {
-				await adapter.send(to, msg);
+				if (isTransactional(category)) {
+					// retry:false — still ride out a transient blip, just in-process so
+					// the caller's await/throw contract holds.
+					await withInlineRetries(() => adapter.send(to, msg), INLINE_RETRY);
+				} else {
+					await adapter.send(to, msg);
+				}
 				await ctx.runMutation(internal.wabaProtection.logSend, {
 					retailerId: retailerId ?? undefined,
 					toWaPhone: to,
@@ -156,62 +195,180 @@ async function isOptedOut(ctx: MutationCtx, waPhone: string): Promise<boolean> {
 /**
  * Decide whether a single outbound message may be sent. Consumes rate-limit
  * tokens as a side effect for non-transactional sends (so calling it IS the
- * reservation).
+ * reservation). Shared by the canSend mutation (inline sends) and
+ * enqueueTransactionalSend (durably-retried sends) so both paths pass the one
+ * gateway — and gating always runs exactly once per message, never per retry.
  */
+async function decideSend(
+	ctx: MutationCtx,
+	{
+		retailerId,
+		toPhone,
+		category,
+	}: {
+		retailerId?: Id<"retailers">;
+		toPhone: string;
+		category: MessageCategory;
+	},
+): Promise<SendDecision> {
+	// Transactional order messages are the core promise — never gated here.
+	if (isTransactional(category)) return { allowed: true };
+
+	// 1. Quality halt (shared across all retailers).
+	const quality = await latestQuality(ctx);
+	if (qualityBlocks(quality, category)) {
+		return { allowed: false, status: "blocked_quality" };
+	}
+
+	// 2. Global opt-out.
+	if (await isOptedOut(ctx, toPhone)) {
+		return { allowed: false, status: "blocked_optout" };
+	}
+
+	// 3. Retailer kill switch + 4. caps (only when attributable to a retailer).
+	const retailer = retailerId ? await ctx.db.get(retailerId) : null;
+	if (retailer) {
+		const limitsRow = await ctx.db
+			.query("retailerSendingLimits")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+			.first();
+		if (limitsRow?.pausedAt) {
+			return { allowed: false, status: "blocked_retailer_paused" };
+		}
+		const sub = await loadSubscription(ctx, retailer._id);
+		const { dailyCap, burstCap5min } = resolveSendingLimits({
+			plan: resolveAccess(sub).plan,
+			accountCreatedAt: retailer.createdAt,
+			now: Date.now(),
+			dailyCapOverride: limitsRow?.dailyCap,
+			burstCapOverride: limitsRow?.burstCap5min,
+		});
+		const burst = await rateLimiter.limit(ctx, "wabaBurst", {
+			key: retailer._id,
+			throws: false,
+			config: { kind: "fixed window", rate: burstCap5min, period: BURST_WINDOW_MS },
+		});
+		if (!burst.ok) return { allowed: false, status: "blocked_capreached" };
+		const daily = await rateLimiter.limit(ctx, "wabaDaily", {
+			key: retailer._id,
+			throws: false,
+			config: { kind: "fixed window", rate: dailyCap, period: DAY_MS },
+		});
+		if (!daily.ok) return { allowed: false, status: "blocked_capreached" };
+	}
+
+	return { allowed: true };
+}
+
 export const canSend = internalMutation({
 	args: {
 		retailerId: v.optional(v.id("retailers")),
 		toPhone: v.string(),
 		category: categoryValidator,
 	},
-	handler: async (ctx, { retailerId, toPhone, category }): Promise<SendDecision> => {
-		// Transactional order messages are the core promise — never gated here.
-		if (isTransactional(category)) return { allowed: true };
+	handler: (ctx, args): Promise<SendDecision> => decideSend(ctx, args),
+});
 
-		// 1. Quality halt (shared across all retailers).
-		const quality = await latestQuality(ctx);
-		if (qualityBlocks(quality, category)) {
-			return { allowed: false, status: "blocked_quality" };
-		}
+// ---------------------------------------------------------------------------
+// Durable retry for transactional sends (ClickUp 86ey5dz0a) — see the module
+// header and docs/waba-protection.md. The retry unit is ONE Meta delivery:
+// gating and audit-logging live outside the retried action, so replaying it
+// can only ever repeat the HTTP call that just failed.
+// ---------------------------------------------------------------------------
 
-		// 2. Global opt-out.
-		if (await isOptedOut(ctx, toPhone)) {
-			return { allowed: false, status: "blocked_optout" };
-		}
-
-		// 3. Retailer kill switch + 4. caps (only when attributable to a retailer).
-		const retailer = retailerId ? await ctx.db.get(retailerId) : null;
-		if (retailer) {
-			const limitsRow = await ctx.db
-				.query("retailerSendingLimits")
-				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
-				.first();
-			if (limitsRow?.pausedAt) {
-				return { allowed: false, status: "blocked_retailer_paused" };
-			}
-			const sub = await loadSubscription(ctx, retailer._id);
-			const { dailyCap, burstCap5min } = resolveSendingLimits({
-				plan: resolveAccess(sub).plan,
-				accountCreatedAt: retailer.createdAt,
-				now: Date.now(),
-				dailyCapOverride: limitsRow?.dailyCap,
-				burstCapOverride: limitsRow?.burstCap5min,
+/**
+ * Gate → enqueue → log, in one transaction. Called by the guarded sender's
+ * durable path. The pending row and the retrier run commit together, so
+ * onDeliverComplete can never fire against a missing row, and a crash here
+ * leaves neither an orphan run nor an orphan row.
+ */
+export const enqueueTransactionalSend = internalMutation({
+	args: {
+		retailerId: v.optional(v.id("retailers")),
+		toWaPhone: v.string(),
+		message: outboundMessageValidator,
+	},
+	handler: async (ctx, { retailerId, toWaPhone, message }): Promise<void> => {
+		// decideSend always allows transactional today; kept so a future policy
+		// change (e.g. a global hard-kill) automatically covers retried sends too.
+		const decision = await decideSend(ctx, {
+			retailerId,
+			toPhone: toWaPhone,
+			category: "transactional",
+		});
+		if (!decision.allowed) {
+			await ctx.db.insert("outboundMessageLog", {
+				retailerId,
+				toWaPhone,
+				category: "transactional",
+				status: decision.status,
+				sentAt: Date.now(),
 			});
-			const burst = await rateLimiter.limit(ctx, "wabaBurst", {
-				key: retailer._id,
-				throws: false,
-				config: { kind: "fixed window", rate: burstCap5min, period: BURST_WINDOW_MS },
-			});
-			if (!burst.ok) return { allowed: false, status: "blocked_capreached" };
-			const daily = await rateLimiter.limit(ctx, "wabaDaily", {
-				key: retailer._id,
-				throws: false,
-				config: { kind: "fixed window", rate: dailyCap, period: DAY_MS },
-			});
-			if (!daily.ok) return { allowed: false, status: "blocked_capreached" };
+			return;
 		}
+		const runId = await retrier.run(
+			ctx,
+			internal.wabaProtection.deliverTransactional,
+			{ toPhone: toWaPhone, message },
+			{ onComplete: internal.wabaProtection.onDeliverComplete },
+		);
+		await ctx.db.insert("outboundMessageLog", {
+			retailerId,
+			toWaPhone,
+			category: "transactional",
+			status: "pending",
+			runId,
+			sentAt: Date.now(),
+		});
+	},
+});
 
-		return { allowed: true };
+/**
+ * The retried unit: exactly one Meta HTTP delivery, nothing else. The ONLY
+ * throw path is the provider call itself — logging happens in
+ * onDeliverComplete after the run settles — so a "Meta accepted it but a later
+ * step failed" state cannot exist here, and a retry can never double-send.
+ */
+export const deliverTransactional = internalAction({
+	args: { toPhone: v.string(), message: outboundMessageValidator },
+	handler: async (_ctx, { toPhone, message }): Promise<void> => {
+		await getAdapter("whatsapp").send(toPhone, message);
+	},
+});
+
+/**
+ * action-retrier onComplete hook: patch the run's pending audit row to its
+ * terminal status. Success → `sent`; exhausted retries → ONE `failed` row with
+ * the last error (never a row per attempt). `canceled` only happens via a
+ * manual retrier.cancel, which nothing calls today.
+ */
+export const onDeliverComplete = internalMutation({
+	args: { runId: runIdValidator, result: runResultValidator },
+	handler: async (ctx, { runId, result }): Promise<void> => {
+		const row = await ctx.db
+			.query("outboundMessageLog")
+			.withIndex("by_run", (q) => q.eq("runId", runId))
+			.first();
+		if (!row) {
+			console.warn("WA retried send completed but no pending log row", {
+				runId,
+				result: result.type,
+			});
+			return;
+		}
+		if (result.type === "success") {
+			await ctx.db.patch(row._id, { status: "sent" });
+		} else {
+			await ctx.db.patch(row._id, {
+				status: "failed",
+				errorCode: result.type === "failed" ? result.error : "canceled",
+			});
+			console.error("WA transactional send exhausted retries", {
+				runId,
+				retailerId: row.retailerId,
+				errorCode: result.type === "failed" ? result.error : "canceled",
+			});
+		}
 	},
 });
 

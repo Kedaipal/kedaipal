@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { register as registerActionRetrier } from "@convex-dev/action-retrier/test";
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -11,7 +12,20 @@ const modules = import.meta.glob("./**/*.ts");
 function setup() {
 	const t = convexTest(schema, modules);
 	registerRateLimiter(t);
+	registerActionRetrier(t);
 	return t;
+}
+
+/**
+ * Run the durable-retry pipeline to completion (86ey5dz0a). Standalone
+ * transactional notifies (status change, payment received, counter confirm,
+ * documents) only hit Meta inside component-scheduled actions now, so tests
+ * asserting on the fetch mock must vi.useFakeTimers() BEFORE the action, then
+ * drain. Ordered/fallback sequences (confirm reply, sendPaymentMessage) still
+ * send inline and need no draining.
+ */
+async function drainScheduled(t: ReturnType<typeof setup>) {
+	await t.finishAllScheduledFunctions(vi.runAllTimers);
 }
 
 /** Resolve an order's buyer tracking token from its shortId (see orders.test.ts). */
@@ -605,6 +619,7 @@ describe("whatsapp outbound on status change", () => {
 			{ locale: "ms", status: "cancelled", expect: /dibatalkan/ },
 		];
 
+		vi.useFakeTimers();
 		for (const c of cases) {
 			const t = setup();
 			const fetchMock = installFetchMock();
@@ -620,8 +635,8 @@ describe("whatsapp outbound on status change", () => {
 			});
 			fetchMock.calls.length = 0;
 
-			// Patch the order's status directly, then invoke the action.
-			// This avoids the scheduler so the test stays deterministic.
+			// Patch the order's status directly, then invoke the action + drain the
+			// durable-retry pipeline so the send reaches the fetch mock.
 			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 			await t.run(async (ctx) => {
 				await ctx.db.patch(order!._id, { status: c.status });
@@ -629,6 +644,7 @@ describe("whatsapp outbound on status change", () => {
 			await t.action(internal.whatsapp.notifyStatusChange, {
 				orderId: order!._id,
 			});
+			await drainScheduled(t);
 
 			const sent = fetchMock.calls.find((call) => {
 				const body = call.body as { text?: { body?: string } };
@@ -637,9 +653,11 @@ describe("whatsapp outbound on status change", () => {
 			expect(sent, `${c.locale}/${c.status}`).toBeDefined();
 			fetchMock.restore();
 		}
+		vi.useRealTimers();
 	});
 
 	test("uses retailer custom template override with variable interpolation", async () => {
+		vi.useFakeTimers();
 		const t = setup();
 		const fetchMock = installFetchMock();
 		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
@@ -669,6 +687,9 @@ describe("whatsapp outbound on status change", () => {
 		expect(confirmBody.interactive.body.text).toBe(
 			`Yo ${shortId}! Thanks from Test Outdoor 🙌\n\nUse ${shortId} as your transfer reference so we can match it.`,
 		);
+		// Flush the pending retailer email before clearing, so the only call after
+		// the notify + drain below is the WA send itself.
+		await drainScheduled(t);
 		fetchMock.calls.length = 0;
 
 		// Packed via direct status patch — should use custom packed template
@@ -679,6 +700,8 @@ describe("whatsapp outbound on status change", () => {
 		await t.action(internal.whatsapp.notifyStatusChange, {
 			orderId: order!._id,
 		});
+		await drainScheduled(t);
+		vi.useRealTimers();
 		const packedBody = (fetchMock.calls[0].body as { text: { body: string } })
 			.text.body;
 		expect(packedBody).toBe(`Custom packed ${shortId}`);
@@ -686,6 +709,7 @@ describe("whatsapp outbound on status change", () => {
 	});
 
 	test("missing override key falls back to default catalog", async () => {
+		vi.useFakeTimers();
 		const t = setup();
 		const fetchMock = installFetchMock();
 		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
@@ -698,6 +722,7 @@ describe("whatsapp outbound on status change", () => {
 			fromPhone: "60123456789",
 			text: shortId,
 		});
+		await drainScheduled(t);
 		fetchMock.calls.length = 0;
 
 		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
@@ -707,6 +732,8 @@ describe("whatsapp outbound on status change", () => {
 		await t.action(internal.whatsapp.notifyStatusChange, {
 			orderId: order!._id,
 		});
+		await drainScheduled(t);
+		vi.useRealTimers();
 		const body = (fetchMock.calls[0].body as { text: { body: string } }).text
 			.body;
 		// shipped not overridden → default
@@ -770,6 +797,7 @@ describe("whatsapp payment received", () => {
 	test("notifyPaymentReceived sends localized message to customer (en)", async () => {
 		const t = setup();
 		const fetchMock = installFetchMock();
+		vi.useFakeTimers();
 		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
 		const shortId = await createPendingOrder(t, retailerId, productId);
 		// Run an inbound to confirm + populate waPhone, then clear the mock.
@@ -777,12 +805,15 @@ describe("whatsapp payment received", () => {
 			fromPhone: "60123456789",
 			text: shortId,
 		});
+		await drainScheduled(t);
 		fetchMock.calls.length = 0;
 
 		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		await t.action(internal.whatsapp.notifyPaymentReceived, {
 			orderId: order!._id,
 		});
+		await drainScheduled(t);
+		vi.useRealTimers();
 
 		const sent = fetchMock.calls.find((call) => {
 			const body = call.body as { text?: { body?: string } };
@@ -798,18 +829,22 @@ describe("whatsapp payment received", () => {
 	test("notifyPaymentReceived uses Bahasa Malaysia for ms retailer", async () => {
 		const t = setup();
 		const fetchMock = installFetchMock();
+		vi.useFakeTimers();
 		const { retailerId, productId } = await seedRetailerWithLocale(t, "ms");
 		const shortId = await createPendingOrder(t, retailerId, productId);
 		await t.action(internal.whatsapp.handleInbound, {
 			fromPhone: "60123456789",
 			text: shortId,
 		});
+		await drainScheduled(t);
 		fetchMock.calls.length = 0;
 
 		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		await t.action(internal.whatsapp.notifyPaymentReceived, {
 			orderId: order!._id,
 		});
+		await drainScheduled(t);
+		vi.useRealTimers();
 
 		const sent = fetchMock.calls.find((call) => {
 			const body = call.body as { text?: { body?: string } };
@@ -1040,7 +1075,10 @@ describe("whatsapp tracking-link token self-heal", () => {
 			return o._id;
 		});
 
+		vi.useFakeTimers();
 		await t.action(internal.whatsapp.notifyStatusChange, { orderId });
+		await drainScheduled(t);
+		vi.useRealTimers();
 
 		const url = (
 			fetchMock.calls[0].body as { text?: { body: string } }
@@ -1143,7 +1181,10 @@ describe("counter order auto-send (notifyCounterOrderCreated)", () => {
 		);
 
 		const fetchMock = installFetchMock();
+		vi.useFakeTimers();
 		await t.action(internal.whatsapp.notifyCounterOrderCreated, { orderId });
+		await drainScheduled(t);
+		vi.useRealTimers();
 		const wa = fetchMock.waCalls();
 
 		const doc = wa.find(
@@ -1184,7 +1225,10 @@ describe("counter order auto-send (notifyCounterOrderCreated)", () => {
 		const orderId = await orderIdOf(t, shortId);
 
 		const fetchMock = installFetchMock();
+		vi.useFakeTimers();
 		await t.action(internal.whatsapp.notifyCounterOrderCreated, { orderId });
+		await drainScheduled(t);
+		vi.useRealTimers();
 		const wa = fetchMock.waCalls();
 
 		// Invoice (not receipt) document still sent.
@@ -1343,9 +1387,12 @@ describe("drop-off + custom-stage status copy (86ey570am)", () => {
 				},
 			});
 		});
+		vi.useFakeTimers();
 		await t.action(internal.whatsapp.notifyStatusChange, {
 			orderId: order!._id,
 		});
+		await drainScheduled(t);
+		vi.useRealTimers();
 		const body = (fetchMock.waCalls()[0].body as { text: { body: string } })
 			.text.body;
 		expect(body).toContain("ready for the drop-off point");
@@ -1384,9 +1431,12 @@ describe("drop-off + custom-stage status copy (86ey570am)", () => {
 		await t.run(async (ctx) => {
 			await ctx.db.patch(order!._id, { status: "shipped" });
 		});
+		vi.useFakeTimers();
 		await t.action(internal.whatsapp.notifyStatusChange, {
 			orderId: order!._id,
 		});
+		await drainScheduled(t);
+		vi.useRealTimers();
 		const body = (fetchMock.waCalls()[0].body as { text: { body: string } })
 			.text.body;
 		expect(body).toContain(`Order ${shortId} update: Ready for Collection.`);
@@ -1420,9 +1470,12 @@ describe("drop-off + custom-stage status copy (86ey570am)", () => {
 		await t.run(async (ctx) => {
 			await ctx.db.patch(order!._id, { status: "packed" });
 		});
+		vi.useFakeTimers();
 		await t.action(internal.whatsapp.notifyStatusChange, {
 			orderId: order!._id,
 		});
+		await drainScheduled(t);
+		vi.useRealTimers();
 		const body = (fetchMock.waCalls()[0].body as { text: { body: string } })
 			.text.body;
 		expect(body).toBe(`Custom packed ${shortId}`);
@@ -1446,9 +1499,12 @@ describe("drop-off + custom-stage status copy (86ey570am)", () => {
 		await t.run(async (ctx) => {
 			await ctx.db.patch(order!._id, { status: "shipped" });
 		});
+		vi.useFakeTimers();
 		await t.action(internal.whatsapp.notifyStatusChange, {
 			orderId: order!._id,
 		});
+		await drainScheduled(t);
+		vi.useRealTimers();
 		const body = (fetchMock.waCalls()[0].body as { text: { body: string } })
 			.text.body;
 		expect(body).toContain("on the way");

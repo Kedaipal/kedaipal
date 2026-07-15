@@ -812,6 +812,9 @@ async function deliverOrderDocument(
 	);
 	let sent = false;
 	try {
+		// Durable-retry sender: resolving means the send is enqueued with
+		// transient-failure retries behind it (not yet confirmed delivered) —
+		// `sent` is "handed off", and only an enqueue failure reports false.
 		await makeGuardedSender(ctx, inputs.retailerId, "transactional").send(
 			inputs.waPhone,
 			{ kind: "document", documentUrl: url, filename, caption },
@@ -820,9 +823,10 @@ async function deliverOrderDocument(
 	} catch (err) {
 		console.error("WA order-document send failed", err);
 	}
-	// Meta fetches the link within seconds; hold the blob briefly so that fetch
-	// (and any transient retry) succeeds, then reclaim the storage. Runs whether or
-	// not the send succeeded (a failed send already left it unreferenced).
+	// Meta fetches the link within seconds; hold the blob long enough for that
+	// fetch — and the retrier's backoff window on a transient failure — to
+	// finish, then reclaim the storage. Runs whether or not the send succeeded
+	// (a failed send already left it unreferenced).
 	await ctx.scheduler.runAfter(
 		10 * 60 * 1000,
 		internal.orders.deleteTransientStorage,

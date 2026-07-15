@@ -1063,7 +1063,10 @@ export default defineSchema({
 	// cost/abuse attribution ("who sent what, when, blocked why"). `retailerId`
 	// optional for system replies to an unknown inbound sender. delivered/read are
 	// reserved for a future Meta message-status webhook; today we log sent/failed/
-	// blocked_* at send time.
+	// blocked_* at send time. Durably-retried transactional sends (ClickUp
+	// 86ey5dz0a) write ONE row for the whole retry run: inserted as `pending` with
+	// the action-retrier `runId` at enqueue, patched to the terminal sent/failed
+	// when the run completes — never one row per attempt.
 	outboundMessageLog: defineTable({
 		retailerId: v.optional(v.id("retailers")),
 		toWaPhone: v.string(),
@@ -1075,6 +1078,7 @@ export default defineSchema({
 		),
 		templateName: v.optional(v.string()),
 		status: v.union(
+			v.literal("pending"),
 			v.literal("sent"),
 			v.literal("delivered"),
 			v.literal("read"),
@@ -1085,10 +1089,14 @@ export default defineSchema({
 			v.literal("blocked_retailer_paused"),
 		),
 		errorCode: v.optional(v.string()),
+		// Action-retrier run id — set only on durably-retried sends, so the
+		// onComplete callback can find its pending row to patch.
+		runId: v.optional(v.string()),
 		sentAt: v.number(),
 	})
 		.index("by_retailer_sent", ["retailerId", "sentAt"])
-		.index("by_phone_sent", ["toWaPhone", "sentAt"]),
+		.index("by_phone_sent", ["toWaPhone", "sentAt"])
+		.index("by_run", ["runId"]),
 
 	// --- Admin console audit trail (ClickUp 86ey25er1, docs/admin-console.md) --
 	// One row per admin-on-behalf ("act-as") write during white-glove onboarding.

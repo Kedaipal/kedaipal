@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { register as registerActionRetrier } from "@convex-dev/action-retrier/test";
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -14,7 +15,18 @@ const BUYER = "60111222333";
 function setup() {
 	const t = convexTest(schema, modules);
 	registerRateLimiter(t);
+	registerActionRetrier(t);
 	return t;
+}
+
+/**
+ * Run the durable-retry pipeline (and any other scheduled work) to completion.
+ * Durable transactional sends only hit Meta inside component-scheduled
+ * actions, so tests asserting on the fetch mock must drain first. Requires
+ * vi.useFakeTimers() BEFORE the action that enqueues.
+ */
+async function drainScheduled(t: ReturnType<typeof setup>) {
+	await t.finishAllScheduledFunctions(vi.runAllTimers);
 }
 
 beforeEach(() => {
@@ -264,12 +276,15 @@ describe("admin vendor list + at-a-glance stats", () => {
 
 describe("guarded send end-to-end", () => {
 	test("transactional diagnostic still sends while the retailer is paused", async () => {
+		vi.useFakeTimers();
 		const t = setup();
 		const retailerId = await seedRetailer(t);
 		await t.mutation(internal.wabaProtection.pauseRetailer, { retailerId });
 		const fetchMock = installFetchMock();
 
 		await t.action(internal.whatsapp.sendTestRetailerAlert, { retailerId });
+		await drainScheduled(t);
+		vi.useRealTimers();
 
 		expect(fetchMock.waCalls()).toHaveLength(1);
 		const rows = await logRows(t);
@@ -298,6 +313,7 @@ describe("guarded send end-to-end", () => {
 	});
 
 	test("STOP keyword registers opt-out and acks (transactional)", async () => {
+		vi.useFakeTimers();
 		const t = setup();
 		await seedRetailer(t);
 		const fetchMock = installFetchMock();
@@ -306,6 +322,8 @@ describe("guarded send end-to-end", () => {
 			fromPhone: BUYER,
 			text: "STOP",
 		});
+		await drainScheduled(t);
+		vi.useRealTimers();
 
 		// Ack went out (transactional bypass)...
 		expect(fetchMock.waCalls()).toHaveLength(1);
@@ -316,5 +334,111 @@ describe("guarded send end-to-end", () => {
 			category: "session_message",
 		});
 		expect(decision).toEqual({ allowed: false, status: "blocked_optout" });
+	});
+});
+
+/** Fetch mock whose first `failures` Meta calls return 500, then 200. */
+function installFlakyFetchMock(failures: number) {
+	const calls: string[] = [];
+	let failed = 0;
+	globalThis.fetch = vi.fn(async (url: unknown) => {
+		const u = String(url);
+		calls.push(u);
+		if (u.includes("graph.facebook.com") && failed < failures) {
+			failed++;
+			return new Response('{"error":"transient"}', { status: 500 });
+		}
+		return new Response("{}", { status: 200 });
+	}) as unknown as typeof fetch;
+	return { waCalls: () => calls.filter((u) => u.includes("graph.facebook.com")) };
+}
+
+describe("durable transactional retry (86ey5dz0a)", () => {
+	test("transient Meta failure → retried → sent; ONE terminal log row", async () => {
+		vi.useFakeTimers();
+		const t = setup();
+		const retailerId = await seedRetailer(t);
+		const fetchMock = installFlakyFetchMock(1);
+
+		await t.action(internal.whatsapp.sendTestRetailerAlert, { retailerId });
+
+		// Enqueued, not yet delivered: the audit row is pending with a run id.
+		const before = await logRows(t);
+		expect(before).toHaveLength(1);
+		expect(before[0]).toMatchObject({ status: "pending", category: "transactional" });
+		expect(before[0].runId).toBeDefined();
+
+		await drainScheduled(t);
+		vi.useRealTimers();
+
+		// First attempt 500, retry 200 — and still exactly one row, patched to sent.
+		expect(fetchMock.waCalls()).toHaveLength(2);
+		const after = await logRows(t);
+		expect(after).toHaveLength(1);
+		expect(after[0]).toMatchObject({ status: "sent", retailerId });
+	});
+
+	test("permanent Meta failure → bounded attempts → ONE failed row with the error", async () => {
+		vi.useFakeTimers();
+		const t = setup();
+		const retailerId = await seedRetailer(t);
+		const fetchMock = installFlakyFetchMock(Number.POSITIVE_INFINITY);
+
+		await t.action(internal.whatsapp.sendTestRetailerAlert, { retailerId });
+		await drainScheduled(t);
+		vi.useRealTimers();
+
+		// 1 attempt + maxFailures(4) retries = 5, then the run settles as failed.
+		expect(fetchMock.waCalls()).toHaveLength(5);
+		const rows = await logRows(t);
+		expect(rows).toHaveLength(1);
+		expect(rows[0].status).toBe("failed");
+		expect(rows[0].errorCode).toContain("500");
+	});
+
+	test("gated session sends are NEVER retried — single attempt, failed row", async () => {
+		const t = setup();
+		await seedRetailer(t);
+		const fetchMock = installFlakyFetchMock(Number.POSITIVE_INFINITY);
+
+		// Unknown inbound → session-category fallback reply; the send fails and
+		// must not be re-attempted (canSend consumed its decision already).
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: BUYER,
+			text: "random text with no order id",
+		});
+
+		expect(fetchMock.waCalls()).toHaveLength(1);
+		const rows = await logRows(t);
+		const failed = rows.filter((r) => r.status === "failed");
+		expect(failed).toHaveLength(1);
+		expect(failed[0].category).toBe("session_message");
+		expect(failed[0].runId).toBeUndefined();
+	});
+
+	test("retry:false transactional sends ride inline retries and keep throw semantics", async () => {
+		// Pure-helper check: one transient failure is absorbed, exhaustion rethrows.
+		const { withInlineRetries } = await import("./lib/retry");
+		const noSleep = () => Promise.resolve();
+		let calls = 0;
+		const flaky = async () => {
+			calls++;
+			if (calls < 2) throw new Error("transient");
+			return "ok";
+		};
+		await expect(
+			withInlineRetries(flaky, { attempts: 3, initialBackoffMs: 1, base: 2 }, noSleep),
+		).resolves.toBe("ok");
+		expect(calls).toBe(2);
+
+		let always = 0;
+		const dead = async () => {
+			always++;
+			throw new Error("permanent");
+		};
+		await expect(
+			withInlineRetries(dead, { attempts: 3, initialBackoffMs: 1, base: 2 }, noSleep),
+		).rejects.toThrow("permanent");
+		expect(always).toBe(3);
 	});
 });

@@ -285,6 +285,11 @@ export const getRetailerLocaleForOrder = internalQuery({
  * [payment block], rendered as an "I've paid" CTA (degrades to text), followed
  * by the QR image if configured. Shared by the confirm reply and the
  * post-mockup payment prompt so both stay byte-for-byte consistent.
+ *
+ * Callers MUST pass a `{ retry: false }` guarded sender: the messages here are
+ * an ordered sequence and the cta→text degradation relies on `.send()`
+ * throwing inline — the fire-and-forget durable retrier honours neither.
+ * Bounded inline retries still cover transient Meta failures.
  */
 async function sendPaymentMessage(
 	wa: GuardedSender,
@@ -533,9 +538,13 @@ export const handleInbound = internalAction({
 		// Order matched → attribute the confirm/payment sends to the seller so the
 		// per-seller guardrails + audit apply. These are transactional (order
 		// confirmation), so they bypass opt-out/pause/caps — the core promise.
+		// retry:false — this sender feeds an ordered sequence (confirm → QR images
+		// via sendPaymentMessage) and a throw-driven image→text fallback, both of
+		// which need await semantics; it gets bounded inline retries instead of
+		// the fire-and-forget durable retrier.
 		const sellerWa = meta?.retailerId
-			? makeGuardedSender(ctx, meta.retailerId, "transactional")
-			: makeGuardedSender(ctx, null, "transactional");
+			? makeGuardedSender(ctx, meta.retailerId, "transactional", { retry: false })
+			: makeGuardedSender(ctx, null, "transactional", { retry: false });
 		const locale = pickLocale(meta?.locale);
 		const storeName = meta?.storeName ?? "Kedaipal";
 		const contactPhone = meta?.retailerWaPhone;
@@ -629,7 +638,9 @@ export const handleInbound = internalAction({
 /**
  * Scheduled by orders.updateStatus. Sends a localized status update to the
  * shopper. Errors are swallowed (logged) so the originating mutation never
- * fails because of an outbound network issue.
+ * fails because of an outbound network issue — and since the guarded sender's
+ * default durable path retries transient Meta failures, "swallowed" no longer
+ * means "dropped": the catch below only sees enqueue failures.
  */
 export const notifyStatusChange = internalAction({
 	args: { orderId: v.id("orders") },
@@ -980,7 +991,11 @@ export const notifyMockupSubmitted = internalAction({
 				: `Hi${greeting}! The mockup for your ${meta.storeName} order ${meta.shortId} is ready. Please review and approve it before we start making it: ${trackingUrl}`;
 		const buttonText = meta.locale === "ms" ? "Semak mockup" : "Review mockup";
 
-		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");
+		// retry:false — the cta→text degradation below needs the send to throw
+		// inline; bounded in-process retries still cover transient Meta blips.
+		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional", {
+			retry: false,
+		});
 		try {
 			await wa.send(
 				meta.customerWaPhone,
@@ -1101,7 +1116,11 @@ export const notifyPaymentDue = internalAction({
 			shortId: meta.shortId,
 			storeName: meta.storeName,
 		});
-		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");
+		// retry:false — sendPaymentMessage is an ordered sequence with a
+		// throw-driven fallback; see its doc comment.
+		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional", {
+			retry: false,
+		});
 		await sendPaymentMessage(wa, meta.customerWaPhone, {
 			introBody,
 			locale: meta.locale,
@@ -1243,6 +1262,10 @@ export const notifyFoundingWelcome = internalAction({
 				? `🎉 Tahniah! Anda kini Founding Member #${rank} dari 10 di Kedaipal. Terima kasih kerana mempercayai kami awal — diskaun 30% seumur hidup anda kekal selamanya. Pasukan kami akan hubungi anda untuk sesi white-glove. Butiran: ${billingUrl}`
 				: `🎉 Welcome, Founding Member #${rank} of 10! Thank you for backing Kedaipal early — your 30% lifetime discount is locked in for good. We'll reach out to set up your white-glove onboarding call. Details: ${billingUrl}`;
 		try {
+			// Durable-retry sender: resolving means "enqueued", so the welcomed
+			// stamp below now marks enqueue rather than confirmed delivery — with
+			// retries behind it, that's a stronger delivery guarantee than the old
+			// single attempt, and the stamp's only job is preventing re-sends.
 			await makeGuardedSender(ctx, retailerId, "transactional").send(meta.waPhone, {
 				kind: "text",
 				body,
@@ -1401,7 +1424,6 @@ export const notifyCounterOrderCreated = internalAction({
 		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
 		const paid = meta.paymentStatus === "received";
 		const locale = pickLocale(meta.locale);
-		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");
 
 		if (paid) {
 			const body = renderSystemMessage(locale, "counterOrderConfirmedPaid", {
@@ -1411,7 +1433,11 @@ export const notifyCounterOrderCreated = internalAction({
 				trackingUrl,
 			});
 			try {
-				await wa.send(meta.customerWaPhone, { kind: "text", body });
+				// Single standalone text → default durable retry.
+				await makeGuardedSender(ctx, meta.retailerId, "transactional").send(
+					meta.customerWaPhone,
+					{ kind: "text", body },
+				);
 			} catch (err) {
 				console.error("WA counter-order notify failed", err);
 			}
@@ -1428,17 +1454,24 @@ export const notifyCounterOrderCreated = internalAction({
 				trackingUrl,
 			});
 			try {
-				await sendPaymentMessage(wa, meta.customerWaPhone, {
-					introBody: intro,
-					locale,
-					shortId: meta.shortId,
-					storeName: meta.storeName,
-					trackingUrl,
-					// Counter orders are collected at the counter — no pickup snapshot.
-					pickupSnapshot: undefined,
-					payment: { methods: [] },
-					includePaymentDetails: false,
-				});
+				// retry:false — sendPaymentMessage needs await-with-throw semantics.
+				await sendPaymentMessage(
+					makeGuardedSender(ctx, meta.retailerId, "transactional", {
+						retry: false,
+					}),
+					meta.customerWaPhone,
+					{
+						introBody: intro,
+						locale,
+						shortId: meta.shortId,
+						storeName: meta.storeName,
+						trackingUrl,
+						// Counter orders are collected at the counter — no pickup snapshot.
+						pickupSnapshot: undefined,
+						payment: { methods: [] },
+						includePaymentDetails: false,
+					},
+				);
 			} catch (err) {
 				console.error("WA counter-order payment ask failed", err);
 			}
