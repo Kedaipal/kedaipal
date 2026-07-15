@@ -1074,7 +1074,7 @@ function OrderDetailRoute() {
 					// (Cancel / Delete) sit below a divider, set apart from the receipt.
 					<>
 						{/* Separates the trigger header from its menu items. */}
-						<hr className="border-border" aria-hidden="true" />
+						<hr className="border-border" />
 						{/* Receipt on mobile (desktop has it in the PageHeader actions). */}
 						<ReceiptDownloadButton
 							shortId={order.shortId}
@@ -1085,7 +1085,7 @@ function OrderDetailRoute() {
 						/>
 						{/* Neutral → destructive divider. Only present when the receipt row
 						    is (mobile) — on desktop the header rule above already leads in. */}
-						<hr className="border-border lg:hidden" aria-hidden="true" />
+						<hr className="border-border lg:hidden" />
 						{!isTerminal ? (
 							<Button
 								onClick={() => setConfirmCancelOpen(true)}

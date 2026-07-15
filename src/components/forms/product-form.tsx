@@ -1,5 +1,4 @@
 import { Link } from "@tanstack/react-router";
-import { useMutation } from "convex/react";
 import {
 	Camera,
 	CheckCircle2,
@@ -12,17 +11,16 @@ import {
 	Store,
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useState } from "react";
-import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { convexErrorMessage, parsePriceInput } from "../../lib/format";
-import { reorderByIds } from "../../lib/reorder";
+import { describeProduct } from "../../lib/product-summary";
 import { productDetailsSchema } from "../../lib/schemas";
 import { Button } from "../ui/button";
 import { Markdown } from "../ui/markdown";
-import { SortableList } from "../ui/sortable-list";
 import { CategoryPicker } from "./category-picker";
 import { submitThenFocusError } from "./focus-error";
 import { useAppForm } from "./form";
+import { type ProductImage, ProductImagesField } from "./product-images-field";
 import {
 	type CustomLineDraft,
 	VariantEditor,
@@ -30,8 +28,6 @@ import {
 	type VariantIssue,
 	type VariantRow,
 } from "./variant-editor";
-
-const MAX_IMAGES = 5;
 
 export interface ProductFormSubmitValues {
 	name: string;
@@ -379,6 +375,38 @@ function ProductReadiness({
 }
 
 /**
+ * Edit-mode summary strip — the product's selling setup in plain words
+ * ("3 choices by Size · Made to order · RM 12–28"), live-derived from the
+ * draft state so the seller confirms what they have before touching anything.
+ */
+function ProductSummaryStrip({
+	name,
+	editor,
+	currency,
+}: {
+	name: string;
+	editor: VariantEditorState;
+	currency: string;
+}) {
+	const summary = describeProduct(
+		{
+			options: editor.options,
+			rows: editor.rows,
+			hasCustomLine: editor.customLine !== null,
+		},
+		currency,
+	);
+	return (
+		<div className="rounded-2xl border border-accent/20 bg-accent/5 px-4 py-3 text-sm leading-relaxed">
+			<span className="font-semibold text-accent-emphasis">
+				{name.trim() || "This product"}
+			</span>{" "}
+			— {summary}
+		</div>
+	);
+}
+
+/**
  * Product-level storefront visibility. A first-class status (not a buried
  * toggle) because it changes where the product appears. Hidden products stay
  * fully sellable in counter checkout — surfaced in the helper so the behaviour
@@ -404,13 +432,10 @@ function VisibilityControl({
 		},
 	];
 	return (
-		<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between lg:p-5">
+		<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 			<div className="min-w-0">
-				<p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-					Storefront
-				</p>
-				<h3 className="text-base font-semibold leading-tight">Visibility</h3>
-				<p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+				<h4 className="text-sm font-semibold leading-tight">Visibility</h4>
+				<p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
 					{hidden
 						? "Hidden from your public store. Still sellable in counter checkout."
 						: "Shown on your public store and sellable everywhere."}
@@ -437,7 +462,7 @@ function VisibilityControl({
 					);
 				})}
 			</div>
-		</section>
+		</div>
 	);
 }
 
@@ -450,9 +475,11 @@ export function ProductForm({
 	onSubmit,
 	stickyAction,
 }: ProductFormProps) {
-	const generateUploadUrl = useMutation(api.products.generateUploadUrl);
+	// Editing an existing product vs creating a new one — the edit page leads
+	// with the summary strip; create keeps the readiness checklist.
+	const isEdit = initialValues !== undefined;
 
-	const [images, setImages] = useState<{ id: string; url: string }[]>(
+	const [images, setImages] = useState<ProductImage[]>(
 		(initialValues?.imageStorageIds ?? []).map((id, i) => ({
 			id,
 			url: initialValues?.imageUrls?.[i] ?? "",
@@ -524,42 +551,6 @@ export function ProductForm({
 		},
 	});
 
-	async function handleFiles(files: FileList | null) {
-		if (!files || files.length === 0) return;
-		if (images.length + files.length > MAX_IMAGES) {
-			setServerError(`Maximum ${MAX_IMAGES} images per product`);
-			return;
-		}
-		setServerError(null);
-		setUploading(true);
-		try {
-			for (const file of Array.from(files)) {
-				const url = await generateUploadUrl();
-				const res = await fetch(url, {
-					method: "POST",
-					headers: { "Content-Type": file.type },
-					body: file,
-				});
-				if (!res.ok) throw new Error("Upload failed");
-				const { storageId } = (await res.json()) as { storageId: string };
-				const previewUrl = URL.createObjectURL(file);
-				setImages((prev) => [...prev, { id: storageId, url: previewUrl }]);
-			}
-		} catch (err) {
-			setServerError(convexErrorMessage(err));
-		} finally {
-			setUploading(false);
-		}
-	}
-
-	function removeImage(id: string) {
-		setImages((prev) => prev.filter((i) => i.id !== id));
-	}
-
-	function reorderImages(orderedIds: string[]) {
-		setImages((prev) => reorderByIds(prev, orderedIds, (img) => img.id));
-	}
-
 	function handleSubmit(e: FormEvent) {
 		submitThenFocusError(form, e);
 	}
@@ -568,28 +559,29 @@ export function ProductForm({
 
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-5">
-			<form.Subscribe selector={(s) => s.values.name.trim().length > 0}>
-				{(hasName) => (
-					<ProductReadiness
-						hasName={hasName}
-						hasPrice={hasAnyPrice}
-						imageCount={images.length}
-					/>
-				)}
+			{/* Lead-in: the edit page confirms what the product IS in words; the
+			    create path shows what's still needed. */}
+			<form.Subscribe selector={(s) => s.values.name}>
+				{(name) =>
+					isEdit ? (
+						<ProductSummaryStrip
+							name={name}
+							editor={editor}
+							currency={currency}
+						/>
+					) : (
+						<ProductReadiness
+							hasName={name.trim().length > 0}
+							hasPrice={hasAnyPrice}
+							imageCount={images.length}
+						/>
+					)
+				}
 			</form.Subscribe>
-
-			<VisibilityControl hidden={hidden} onChange={setHidden} />
-
-			<CategoryPicker
-				retailerId={retailerId}
-				selectedIds={categoryIds}
-				onChange={setCategoryIds}
-				locked={categoriesLocked}
-			/>
 
 			<ProductStepCard
 				icon={<PackageCheck className="size-5" />}
-				kicker="Step 1"
+				kicker="The product"
 				title="Product basics"
 				description="Start with the name shoppers will recognise, then add a short description only if it helps them decide."
 			>
@@ -641,90 +633,26 @@ export function ProductForm({
 
 			<ProductStepCard
 				icon={<Camera className="size-5" />}
-				kicker="Step 2"
+				kicker="The product"
 				title="Photos"
 				description="Use the first image as the storefront cover. Extra images help shoppers compare angles, flavours, sizes, or packaging."
 			>
-				<div className="flex items-center justify-between gap-3">
-					<span className="text-sm font-medium">
-						Product images{" "}
-						<span className="text-muted-foreground">
-							({images.length}/{MAX_IMAGES})
-						</span>
-					</span>
-					{images.length > 1 ? (
-						<p className="text-xs text-muted-foreground">Drag to reorder</p>
-					) : null}
-				</div>
-				<div className="grid grid-cols-3 gap-2">
-					{/* `className="contents"` lets the sortable <li>s join this grid
-					    directly, so the "+ Add" tile flows in the next free cell. */}
-					{images.length > 0 ? (
-						<SortableList
-							items={images}
-							getId={(img) => img.id}
-							onReorder={reorderImages}
-							strategy="grid"
-							className="contents"
-							renderItem={(img, handle) => (
-								<div className="relative aspect-square w-full overflow-hidden rounded-xl bg-muted">
-									{img.url ? (
-										<img
-											src={img.url}
-											alt=""
-											className="size-full object-cover"
-										/>
-									) : null}
-									{/* Cover badge on the first image — reordering changes
-									    which image leads on the storefront. */}
-									{img.id === images[0]?.id ? (
-										<span className="absolute bottom-1 left-1 rounded-md bg-background/90 px-1.5 py-0.5 text-[10px] font-medium shadow">
-											Cover
-										</span>
-									) : null}
-									{/* Grip handle only matters with 2+ images. */}
-									{images.length > 1 ? (
-										<span className="absolute left-1 top-1 rounded-lg bg-background/90 shadow">
-											{handle}
-										</span>
-									) : null}
-									{/* 44px tap target (mobile rule) with a lighter visible
-									    chip, so two corner controls don't crowd the cell. */}
-									<button
-										type="button"
-										onClick={() => removeImage(img.id)}
-										className="absolute right-0 top-0 flex size-11 items-center justify-center"
-										aria-label="Remove image"
-									>
-										<span className="flex size-8 items-center justify-center rounded-full bg-background/90 text-lg leading-none shadow">
-											×
-										</span>
-									</button>
-								</div>
-							)}
-						/>
-					) : null}
-					{images.length < MAX_IMAGES ? (
-						<label className="flex aspect-square cursor-pointer items-center justify-center rounded-xl border border-dashed border-border text-sm text-muted-foreground hover:border-ring">
-							{uploading ? "Uploading…" : "+ Add"}
-							<input
-								type="file"
-								accept="image/*"
-								multiple
-								disabled={uploading}
-								onChange={(e) => handleFiles(e.target.files)}
-								className="hidden"
-							/>
-						</label>
-					) : null}
-				</div>
+				<ProductImagesField
+					images={images}
+					onChange={(next) => {
+						setServerError(null);
+						setImages(next);
+					}}
+					onUploadingChange={setUploading}
+					onError={setServerError}
+				/>
 			</ProductStepCard>
 
 			<ProductStepCard
 				icon={<Layers3 className="size-5" />}
-				kicker="Step 3"
-				title="Price, stock and options"
-				description="Keep it simple for one product, or add sizes, flavours, weights, and made-to-order choices when buyers need to choose."
+				kicker="Selling"
+				title="Pricing & choices"
+				description="One price for one item — or let buyers pick a size, flavour or weight, each with its own price."
 			>
 				<VariantEditor
 					value={editor}
@@ -740,6 +668,26 @@ export function ProductForm({
 					<Info className="size-3.5" aria-hidden />
 					Currency is set in Settings
 				</Link>
+			</ProductStepCard>
+
+			{/* Publishing concerns — where the product appears — come after what
+			    the product IS. See docs/product-setup-wizard.md. */}
+			<ProductStepCard
+				icon={<Store className="size-5" />}
+				kicker="Publishing"
+				title="Where it appears"
+				description="Control storefront visibility and which categories the product shows under."
+			>
+				<VisibilityControl hidden={hidden} onChange={setHidden} />
+				<div className="border-t border-border pt-4">
+					<CategoryPicker
+						retailerId={retailerId}
+						selectedIds={categoryIds}
+						onChange={setCategoryIds}
+						locked={categoriesLocked}
+						embedded
+					/>
+				</div>
 			</ProductStepCard>
 
 			{serverError ? (
