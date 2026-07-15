@@ -6,10 +6,13 @@ import { StorefrontFooter } from "./storefront-footer";
 afterEach(cleanup);
 
 describe("StorefrontFooter", () => {
-	it("shows the 'Powered by Kedaipal' wordmark", () => {
+	it("renders the poster-style 'Powered by' lockup", () => {
 		render(<StorefrontFooter />);
-		expect(screen.getByText("Kedaipal")).toBeTruthy();
-		expect(screen.getByText(/Powered by/)).toBeTruthy();
+		// The mint "POWERED BY" pill (uppercased via CSS) + the Kedaipal wordmark
+		// image — same lockup as the Store QR Poster.
+		expect(screen.getByText(/Powered by/i)).toBeTruthy();
+		const wordmark = screen.getByAltText("Kedaipal");
+		expect(wordmark.getAttribute("src")).toBe("/poster/kedaipal-lockup.svg");
 	});
 
 	it("links to the marketing site with the attribution tag, in a new tab", () => {
@@ -21,13 +24,7 @@ describe("StorefrontFooter", () => {
 		expect(link?.getAttribute("target")).toBe("_blank");
 		// Never leak the opener when leaving the retailer's store.
 		expect(link?.getAttribute("rel")).toContain("noopener");
-	});
-
-	it("marks the logomark decorative so the visible text carries meaning", () => {
-		const { container } = render(<StorefrontFooter />);
-		const img = container.querySelector("img");
-		expect(img?.getAttribute("src")).toBe("/logo.svg");
-		expect(img?.getAttribute("alt")).toBe("");
-		expect(img?.getAttribute("aria-hidden")).toBe("true");
+		// The image alt + pill text combine, but an explicit label keeps it robust.
+		expect(link?.getAttribute("aria-label")).toBe("Powered by Kedaipal");
 	});
 });
