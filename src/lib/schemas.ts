@@ -139,7 +139,11 @@ export const addressFormFieldsSchema = z.object({
 
 export const checkoutFormSchema = z
 	.object({
-		name: z.string().max(60, "Name must be at most 60 characters"),
+		name: z
+			.string()
+			.trim()
+			.min(3, "Your name must be at least 3 characters")
+			.max(60, "Name must be at most 60 characters"),
 		deliveryMethod: deliveryMethodSchema,
 		address: addressFormFieldsSchema,
 		// Convex id of the chosen pickup location when deliveryMethod is

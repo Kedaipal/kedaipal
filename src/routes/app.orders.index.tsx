@@ -51,6 +51,7 @@ import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
+import { orderCustomerLabel } from "../lib/customer";
 import { downloadCsv } from "../lib/download";
 import {
 	convexErrorMessage,
@@ -655,7 +656,7 @@ function OrdersRoute() {
 									{/* Name + money get the hierarchy. */}
 									<div className="flex items-center justify-between gap-2.5">
 										<span className="min-w-0 truncate text-[15px] font-semibold">
-											{o.customer.name ?? "Anonymous"}
+											{orderCustomerLabel(o.customer)}
 										</span>
 										<span className="shrink-0 text-[15px] font-bold tabular-nums">
 											{formatPrice(o.total, o.currency)}

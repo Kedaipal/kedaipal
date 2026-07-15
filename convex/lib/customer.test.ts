@@ -1,6 +1,11 @@
 /// <reference types="vite/client" />
 import { describe, expect, test } from "vitest";
-import { buildSearchText, formatPhone, getDisplayName } from "./customer";
+import {
+	buildSearchText,
+	formatPhone,
+	getDisplayName,
+	orderCustomerLabel,
+} from "./customer";
 
 describe("formatPhone", () => {
 	test("formats a Malaysian number with +60 prefix", () => {
@@ -49,6 +54,30 @@ describe("getDisplayName", () => {
 				waPhone: "60123456789",
 			}),
 		).toBe("Aisha Cakes");
+	});
+});
+
+describe("orderCustomerLabel", () => {
+	test("prefers the snapshot name", () => {
+		expect(orderCustomerLabel({ name: "Aisha", waPhone: "60123456789" })).toBe(
+			"Aisha",
+		);
+	});
+
+	test("no name AND no phone = anonymous walk-in", () => {
+		expect(orderCustomerLabel({})).toBe("Walk-in customer");
+	});
+
+	test("phone but no name falls back (default 'Anonymous')", () => {
+		expect(orderCustomerLabel({ waPhone: "60123456789" })).toBe("Anonymous");
+	});
+
+	test("a custom fallback is used for a phone-only order", () => {
+		expect(orderCustomerLabel({ waPhone: "60123456789" }, "")).toBe("");
+	});
+
+	test("blank name is treated as unset", () => {
+		expect(orderCustomerLabel({ name: "   " })).toBe("Walk-in customer");
 	});
 });
 

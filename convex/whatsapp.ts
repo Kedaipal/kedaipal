@@ -29,6 +29,7 @@ import {
 	paymentQrCaption,
 	pickLocale,
 	poweredByLine,
+	privacyNoticeLine,
 	renderMessage,
 	renderPaymentMethods,
 	renderPickupBlock,
@@ -1396,14 +1397,22 @@ export const notifyCounterCheckoutPayment = internalAction({
  * screen if needed.
  */
 export const notifyCounterOrderCreated = internalAction({
-	args: { orderId: v.id("orders") },
-	handler: async (ctx, { orderId }): Promise<void> => {
+	args: {
+		orderId: v.id("orders"),
+		// Append the PDPA notice-at-collection line to the confirmation. Set for a
+		// manual-phone bind (86ey8vqp6) — the buyer never scanned, so this is our
+		// first message to them. Scan buyers already got it in the connect ack.
+		includePrivacyNotice: v.optional(v.boolean()),
+	},
+	handler: async (ctx, { orderId, includePrivacyNotice }): Promise<void> => {
 		const meta = await ctx
 			.runQuery(internal.whatsapp.getCounterOrderMeta, { orderId })
 			.catch((err) => {
 				console.error("WA counter-order lookup failed", err);
 				return null;
 			});
+		// No buyer phone → nothing to send. Belt-and-braces: an anonymous walk-in
+		// (86ey8vqp6) never schedules this action in the first place.
 		if (!meta || !meta.customerWaPhone) return;
 
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
@@ -1416,14 +1425,17 @@ export const notifyCounterOrderCreated = internalAction({
 		const paid = meta.paymentStatus === "received";
 		const locale = pickLocale(meta.locale);
 		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");
+		// First-contact PDPA line for the manual-phone path (blank otherwise).
+		const privacy = includePrivacyNotice ? privacyNoticeLine(locale) : "";
 
 		if (paid) {
-			const body = renderSystemMessage(locale, "counterOrderConfirmedPaid", {
-				shortId: meta.shortId,
-				storeName: meta.storeName,
-				amount: money,
-				trackingUrl,
-			});
+			const body =
+				renderSystemMessage(locale, "counterOrderConfirmedPaid", {
+					shortId: meta.shortId,
+					storeName: meta.storeName,
+					amount: money,
+					trackingUrl,
+				}) + privacy;
 			try {
 				await wa.send(meta.customerWaPhone, { kind: "text", body });
 			} catch (err) {
@@ -1435,12 +1447,13 @@ export const notifyCounterOrderCreated = internalAction({
 			// The bank/QR methods block is intentionally OMITTED here — the buyer
 			// already received it at scan-bind (notifyCounterCheckoutPayment), and the
 			// invoice PDF below carries the details too, so re-sending would repeat it.
-			const intro = renderSystemMessage(locale, "counterOrderConfirmedUnpaid", {
-				shortId: meta.shortId,
-				storeName: meta.storeName,
-				amount: money,
-				trackingUrl,
-			});
+			const intro =
+				renderSystemMessage(locale, "counterOrderConfirmedUnpaid", {
+					shortId: meta.shortId,
+					storeName: meta.storeName,
+					amount: money,
+					trackingUrl,
+				}) + privacy;
 			try {
 				await sendPaymentMessage(wa, meta.customerWaPhone, {
 					introBody: intro,

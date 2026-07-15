@@ -30,11 +30,15 @@ export function SendOrderDocument({
 	shortId,
 	paid,
 	buyerName,
+	hasBuyer = true,
 	className,
 }: {
 	shortId: string;
 	paid: boolean;
 	buyerName?: string;
+	// Anonymous cash sale (86ey8vqp6) — there's no buyer WhatsApp to send to, so
+	// the send action is hidden and only Download / Share are offered.
+	hasBuyer?: boolean;
 	className?: string;
 }) {
 	const send = useAction(api.orders.sendOrderDocumentToBuyer);
@@ -113,30 +117,32 @@ export function SendOrderDocument({
 	return (
 		<div className={className}>
 			<div className="grid gap-2 sm:grid-cols-2">
+				{hasBuyer ? (
+					<Button
+						type="button"
+						onClick={handleSend}
+						isLoading={sending}
+						disabled={sending || sent}
+						className="h-11 sm:col-span-2"
+					>
+						{sent ? (
+							<>
+								<Check className="size-4" /> {Noun} resent
+							</>
+						) : (
+							<>
+								<Send className="size-4" /> Resend {noun} to {who}
+							</>
+						)}
+					</Button>
+				) : null}
 				<Button
 					type="button"
-					onClick={handleSend}
-					isLoading={sending}
-					disabled={sending || sent}
-					className="h-11 sm:col-span-2"
-				>
-					{sent ? (
-						<>
-							<Check className="size-4" /> {Noun} resent
-						</>
-					) : (
-						<>
-							<Send className="size-4" /> Resend {noun} to {who}
-						</>
-					)}
-				</Button>
-				<Button
-					type="button"
-					variant="outline"
+					variant={hasBuyer ? "outline" : "default"}
 					onClick={handleDownload}
 					isLoading={downloading}
 					disabled={downloading}
-					className="h-11"
+					className={hasBuyer || canShare ? "h-11" : "h-11 sm:col-span-2"}
 				>
 					{!downloading && <Download className="size-4" />}
 					Download
@@ -156,9 +162,11 @@ export function SendOrderDocument({
 				) : null}
 			</div>
 			<p className="mt-2 text-xs text-muted-foreground">
-				{paid
-					? `We've already sent ${who} their receipt on WhatsApp. Resend or download it here if you need to.`
-					: `We've already sent ${who} their invoice and payment details on WhatsApp. Resend or download here if you need to.`}
+				{!hasBuyer
+					? `Cash sale — no WhatsApp on file. Download or share ${who === "the buyer" ? "the" : `${who}'s`} ${noun} if they'd like a copy.`
+					: paid
+						? `We've already sent ${who} their receipt on WhatsApp. Resend or download it here if you need to.`
+						: `We've already sent ${who} their invoice and payment details on WhatsApp. Resend or download here if you need to.`}
 			</p>
 		</div>
 	);

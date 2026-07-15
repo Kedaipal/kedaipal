@@ -59,7 +59,7 @@ import {
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
-import { formatPhone } from "../lib/customer";
+import { formatPhone, orderCustomerLabel } from "../lib/customer";
 import {
 	convexErrorMessage,
 	formatPrice,
@@ -702,7 +702,7 @@ function OrderDetailRoute() {
 							</span>
 							<span className="flex min-w-0 flex-1 flex-col gap-0.5">
 								<span className="truncate text-[15px] font-semibold">
-									{order.customer.name ?? "Anonymous"}
+									{orderCustomerLabel(order.customer)}
 								</span>
 								<span className="truncate text-[12.5px] text-muted-foreground">
 									{order.customer.waPhone
