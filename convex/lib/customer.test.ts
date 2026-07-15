@@ -4,7 +4,10 @@ import {
 	buildSearchText,
 	formatPhone,
 	getDisplayName,
+	normalizeOptionalCustomerName,
 	orderCustomerLabel,
+	requireCustomerName,
+	sanitizeCustomerName,
 } from "./customer";
 
 describe("formatPhone", () => {
@@ -78,6 +81,28 @@ describe("orderCustomerLabel", () => {
 
 	test("blank name is treated as unset", () => {
 		expect(orderCustomerLabel({ name: "   " })).toBe("Walk-in customer");
+	});
+});
+
+describe("customer name validation", () => {
+	test("sanitizeCustomerName trims, caps at 60, blanks → undefined", () => {
+		expect(sanitizeCustomerName("  Aiman  ")).toBe("Aiman");
+		expect(sanitizeCustomerName("   ")).toBeUndefined();
+		expect(sanitizeCustomerName(undefined)).toBeUndefined();
+		expect(sanitizeCustomerName("x".repeat(80))).toHaveLength(60);
+	});
+
+	test("normalizeOptionalCustomerName allows empty, rejects 1–2 chars", () => {
+		expect(normalizeOptionalCustomerName("  ")).toBeUndefined();
+		expect(normalizeOptionalCustomerName("Aiman")).toBe("Aiman");
+		expect(() => normalizeOptionalCustomerName("Jo")).toThrow(/at least 3/i);
+	});
+
+	test("requireCustomerName demands a ≥3-char name", () => {
+		expect(requireCustomerName("Aiman")).toBe("Aiman");
+		expect(() => requireCustomerName("")).toThrow(/at least 3/i);
+		expect(() => requireCustomerName("Jo")).toThrow(/at least 3/i);
+		expect(() => requireCustomerName(undefined)).toThrow(/at least 3/i);
 	});
 });
 

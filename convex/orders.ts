@@ -20,6 +20,7 @@ import {
 } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
 import { assertValidAddress } from "./lib/address";
+import { requireCustomerName } from "./lib/customer";
 import { assertPlanFeature } from "./subscriptions";
 import {
 	recordOrderCancelled,
@@ -323,8 +324,11 @@ export const create = mutation({
 				throw new ConvexError((err as Error).message);
 			}
 		}
+		// Name is required at checkout (≥3 chars) — enforced server-side here, not
+		// just in the storefront form, so a direct mutation call can't create a
+		// nameless/1-char order. Same rule + shared validator as the counter paths.
 		const sanitizedCustomer = {
-			name: args.customer.name?.trim() || undefined,
+			name: requireCustomerName(args.customer.name),
 			waPhone: customerWaPhone,
 		};
 

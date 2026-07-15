@@ -460,7 +460,11 @@ build screen (`setSessionCustomerName` → debounced save; trims + caps at 60, b
 clears). A provided name must be **≥3 chars** everywhere (a single letter isn't a
 name) — required on the manual-phone bind, and enforced-if-present on the optional
 anonymous name (the inline editor only saves an empty or ≥3-char value, so the
-rule never fires mid-type). The storefront checkout name is now **required** (≥3)
+rule never fires mid-type). One shared validator seam in `convex/lib/customer.ts`
+(`requireCustomerName` / `normalizeOptionalCustomerName`) backs **both** the
+counter paths **and** `orders.create`, so the rule holds server-side on every
+order-create path — a direct mutation call can't bypass the storefront form. The
+storefront checkout name is now **required** (≥3)
 too (`checkoutFormSchema`, mirroring the `fulfilmentDate` optional-at-protocol /
 required-in-UI pattern — `orders.create` keeps `customer.name` optional for
 legacy/other callers).
@@ -481,6 +485,13 @@ poster ack (`whatsappCopy.privacyNoticeLine`, threaded via `notifyCounterOrderCr
 session window, so a free-form send may be rejected by Meta. Sends are best-effort
 (errors logged) so the order/CRM are always intact; full out-of-window Utility-template
 fallback is [`86ey1fgjw`](https://app.clickup.com/t/86ey1fgjw), a follow-up.
+**Payment details:** unlike a scan buyer (who gets the pay-at-bind payment push,
+`notifyCounterCheckoutPayment`), a manual-phone **pay-later** buyer receives the
+bank/QR details via the **invoice PDF** (`How to pay` block) rather than an inline
+message — no dead-end, just one surface later. Deliberately not re-plumbed here:
+counter payment messaging is being reworked in
+[`86ey8vqk1`](https://app.clickup.com/t/86ey8vqk1), so an inline pay-ahead push for
+the manual path belongs there (a product call), not colliding with this change.
 
 **Anonymous** — `counterCheckout.startAnonymousSession`. A cash sale with **no phone
 contact**: the session has no `waPhone`/`customerId` (an optional name is allowed —

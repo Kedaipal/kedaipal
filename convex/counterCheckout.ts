@@ -34,7 +34,11 @@ import {
 	type RetailerAccess,
 	requireRetailerAccess,
 } from "./lib/auth";
-import { getDisplayName } from "./lib/customer";
+import {
+	getDisplayName,
+	normalizeOptionalCustomerName,
+	requireCustomerName,
+} from "./lib/customer";
 import { assertValidFulfilmentDate } from "./lib/fulfilmentDate";
 import {
 	computeOrderTotals,
@@ -162,45 +166,6 @@ async function openBoundSessions(
 		)
 		.collect();
 	return rows.filter((s) => now <= s.expiresAt);
-}
-
-/** Min/max length for a buyer name — mirrors the storefront checkout schema. */
-const MIN_CUSTOMER_NAME = 3;
-const MAX_CUSTOMER_NAME = 60;
-
-/**
- * Trim + cap a cashier-entered buyer name. Returns undefined for a blank name
- * (so "no name" has one spelling). Length-agnostic — the min-length rule lives
- * in the two validators below so an optional field can still be cleared.
- */
-function sanitizeCustomerName(raw: string | undefined): string | undefined {
-	const s = raw?.trim();
-	if (!s) return undefined;
-	return s.slice(0, MAX_CUSTOMER_NAME);
-}
-
-/**
- * An OPTIONAL buyer name: undefined (cleared) or a name of at least
- * MIN_CUSTOMER_NAME chars. Throws for a 1–2 char name (a single letter isn't a
- * name; matches the storefront's min). Used by the anonymous paths.
- */
-function normalizeOptionalName(raw: string | undefined): string | undefined {
-	const s = sanitizeCustomerName(raw);
-	if (s && s.length < MIN_CUSTOMER_NAME)
-		throw new ConvexError(
-			`Name must be at least ${MIN_CUSTOMER_NAME} characters`,
-		);
-	return s;
-}
-
-/** A REQUIRED buyer name (≥ MIN_CUSTOMER_NAME chars). Used by manual-phone bind. */
-function requireCustomerName(raw: string): string {
-	const s = normalizeOptionalName(raw);
-	if (!s)
-		throw new ConvexError(
-			`Name must be at least ${MIN_CUSTOMER_NAME} characters`,
-		);
-	return s;
 }
 
 /** Pairing codes currently in use across a set of open sessions. */
@@ -433,7 +398,7 @@ export const startAnonymousSession = mutation({
 			pairingCode: code,
 			// No phone/customer — the defining trait of an anonymous session. An
 			// optional name is the one identity crumb we allow (for the receipt).
-			waProfileName: normalizeOptionalName(name),
+			waProfileName: normalizeOptionalCustomerName(name),
 			boundAt: now,
 			expiresAt: now + OPEN_SESSION_TTL_MS,
 			createdAt: now,
@@ -471,7 +436,7 @@ export const setSessionCustomerName = mutation({
 			// Optional: a blank name clears it; a 1–2 char name is rejected. The
 			// client only saves an empty or ≥3-char value, so this won't fire on a
 			// partial mid-type — it's the server-side backstop.
-			waProfileName: normalizeOptionalName(name),
+			waProfileName: normalizeOptionalCustomerName(name),
 			updatedAt: Date.now(),
 		});
 		await logAdminAction(
