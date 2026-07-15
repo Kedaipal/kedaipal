@@ -833,6 +833,9 @@ export default defineSchema({
 		// but no customer row until the order is created (linkOrderToCustomer).
 		customerId: v.optional(v.id("customers")),
 		waPhone: v.optional(v.string()),
+		// The buyer's name for this session: the inbound WhatsApp pushname on a scan,
+		// or the cashier-typed name on a manual-phone / anonymous bind (86ey8vqp6).
+		// Both are "a display name for this buyer"; it flows onto the order at create.
 		waProfileName: v.optional(v.string()),
 		// True when no existing customer matched the bound phone — drives the
 		// "new vs returning" dashboard state. Undefined until bound.

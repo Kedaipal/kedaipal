@@ -3,6 +3,8 @@
 // them — so this is intentionally NOT a PDF. No Convex imports; unit-tested in
 // orders.test.ts. See docs/invoices-receipts.md.
 
+import { orderCustomerLabel } from "./customer";
+
 // Malaysia is UTC+8, no DST — render the calendar day with a fixed offset.
 const MYT_OFFSET_MS = 8 * 60 * 60 * 1000;
 
@@ -76,7 +78,10 @@ export function orderToCsvRow(o: CsvOrder): string[] {
 		o.shortId,
 		csvDate(o.createdAt),
 		csvDate(o.fulfilmentDate),
-		o.customer.name ?? "",
+		// "" (not "Anonymous") stays the default for a phone-only order with no
+		// name, so existing exports are unchanged; an anonymous walk-in (no phone)
+		// reads "Walk-in customer" instead of blank.
+		orderCustomerLabel(o.customer, ""),
 		o.customer.waPhone ?? "",
 		o.deliveryMethod ?? "",
 		o.status,

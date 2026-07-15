@@ -2825,7 +2825,9 @@ describe("orders — inbox search", () => {
 			items: [{ productId, quantity: 1 }],
 			currency: "MYR",
 			channel: "whatsapp",
-			customer: who,
+			// Name is required at checkout (≥3 chars); default a valid one for the
+			// phone-only / filter-focused cases.
+			customer: { name: who.name ?? "Test Buyer", waPhone: who.waPhone },
 			deliveryAddress: validAddress,
 		});
 		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
@@ -3063,8 +3065,10 @@ describe("orders — inbox search", () => {
 		const retailer = await seedRetailer(t, USER_A);
 		const productId = await seedProduct(t, USER_A, retailer._id);
 		const asA = t.withIdentity({ subject: USER_A });
-		const tagged = await mkOrder(t, retailer._id, productId, { name: "Tag" });
-		const untagged = await mkOrder(t, retailer._id, productId, { name: "Un" });
+		const tagged = await mkOrder(t, retailer._id, productId, { name: "Tagged" });
+		const untagged = await mkOrder(t, retailer._id, productId, {
+			name: "Untagged",
+		});
 		await t.run((ctx) => ctx.db.patch(tagged._id, { paymentMethod: "duitnow" }));
 
 		const byMethod = await asA.query(api.orders.searchOrders, {
@@ -3118,8 +3122,8 @@ describe("orders — inbox search", () => {
 			requiresProof: true,
 			blockWhenOutOfStock: false,
 		});
-		const plain = await mkOrder(t, retailer._id, plainId, { name: "A" });
-		const needs = await mkOrder(t, retailer._id, customId, { name: "B" });
+		const plain = await mkOrder(t, retailer._id, plainId, { name: "Plain" });
+		const needs = await mkOrder(t, retailer._id, customId, { name: "Needs" });
 		const asA = t.withIdentity({ subject: USER_A });
 
 		const all = await asA.query(api.orders.searchOrders, {

@@ -11,14 +11,17 @@ import {
 	Clock,
 	EyeOff,
 	Image as ImageIcon,
+	Keyboard,
 	LayoutGrid,
 	List,
 	Minus,
+	Phone,
 	Plus,
 	QrCode,
 	Search,
 	Trash2,
 	UserCheck,
+	UserX,
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -131,9 +134,13 @@ function CounterCheckoutRoute() {
 						<span className="hidden sm:inline">All checkouts</span>
 					</button>
 				) : (
-					// The one permanent store QR — compact here, tap to enlarge for a
-					// buyer to scan. Management (rotate/print) lives on /app/poster.
-					<StoreQrChip />
+					// The permanent store QR (buyer scans) plus the escape hatches for a
+					// buyer who won't/can't scan — manual phone entry or an anonymous cash
+					// sale. Management (rotate/print) lives on /app/poster.
+					<div className="flex shrink-0 items-center gap-2">
+						<NoScanControl onStarted={openSession} />
+						<StoreQrChip />
+					</div>
 				)}
 			</header>
 
@@ -189,6 +196,7 @@ function ActiveSession({
 				orderId={created?.orderId ?? session.orderId}
 				paidInPerson={created?.paidInPerson ?? false}
 				buyerName={session.displayName}
+				anonymous={!session.waPhone}
 				onBackToList={onBackToList}
 			/>
 		);
@@ -361,7 +369,9 @@ function EmptyCheckouts() {
 				<h2 className="text-base font-semibold">No open checkouts</h2>
 				<p className="mt-1 text-sm text-muted-foreground">
 					Put up your store QR (top-right) or your printed poster. When a buyer
-					scans it, their checkout appears here with a code to match.
+					scans it, their checkout appears here with a code to match. Can't
+					scan? Use <span className="font-medium">No scan?</span> to type their
+					number or ring up a cash sale.
 				</p>
 			</div>
 		</div>
@@ -428,6 +438,204 @@ function StoreQrChip() {
 					>
 						Print an A4 poster or rotate this QR →
 					</Link>
+				</DialogContent>
+			</Dialog>
+		</>
+	);
+}
+
+/**
+ * The "buyer won't/can't scan" escape hatches (86ey8vqp6), alongside the store QR
+ * chip so they're discoverable the moment a buyer can't scan. Opens a two-path
+ * chooser: type the buyer's phone (binds a session directly, buyer still gets a
+ * WhatsApp confirmation + receipt) or a fully anonymous cash sale (no contact, no
+ * WhatsApp). Either path lands a normal build screen via `onStarted`.
+ */
+function NoScanControl({
+	onStarted,
+}: {
+	onStarted: (sessionId: string) => void;
+}) {
+	const actAsRetailerId = useActAsRetailerId();
+	const bindManual = useMutation(api.counterCheckout.bindSessionManualPhone);
+	const startAnon = useMutation(api.counterCheckout.startAnonymousSession);
+
+	const [open, setOpen] = useState(false);
+	const [mode, setMode] = useState<"choose" | "phone">("choose");
+	const [name, setName] = useState("");
+	const [phone, setPhone] = useState("");
+	const [busy, setBusy] = useState(false);
+
+	// Reset to the chooser whenever the dialog closes so it never reopens mid-flow.
+	function change(next: boolean) {
+		setOpen(next);
+		if (!next) {
+			setMode("choose");
+			setName("");
+			setPhone("");
+			setBusy(false);
+		}
+	}
+
+	async function submitPhone() {
+		if (busy || !phoneReady || !nameReady) return;
+		setBusy(true);
+		try {
+			const { sessionId } = await bindManual({
+				retailerId: actAsRetailerId,
+				waPhone: phone,
+				name,
+			});
+			change(false);
+			onStarted(sessionId);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+			setBusy(false);
+		}
+	}
+
+	async function submitAnonymous() {
+		if (busy) return;
+		setBusy(true);
+		try {
+			// No name here — the cashier adds it on the build screen if they want to.
+			const { sessionId } = await startAnon({ retailerId: actAsRetailerId });
+			change(false);
+			onStarted(sessionId);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+			setBusy(false);
+		}
+	}
+
+	// A name is at least 3 chars (a single letter isn't a name) — mirrors the
+	// storefront checkout + the server validator.
+	const nameReady = name.trim().length >= 3;
+	// Enough digits to be a plausible number — the server does the authoritative
+	// MY normalization + validation.
+	const phoneReady = phone.replace(/\D/g, "").length >= 8;
+
+	return (
+		<>
+			<button
+				type="button"
+				onClick={() => setOpen(true)}
+				className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl border border-border px-3 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+			>
+				<Keyboard className="size-4" />
+				<span className="hidden sm:inline">No scan?</span>
+			</button>
+
+			<Dialog open={open} onOpenChange={change}>
+				<DialogContent className="sm:max-w-sm">
+					<DialogHeader>
+						<DialogTitle>
+							{mode === "phone" ? "Enter buyer's number" : "Buyer can't scan?"}
+						</DialogTitle>
+						<DialogDescription>
+							{mode === "phone"
+								? "We'll message their WhatsApp with the confirmation and receipt — no scan needed."
+								: "Ring them up without the QR. Pick how you'll take this order."}
+						</DialogDescription>
+					</DialogHeader>
+
+					{mode === "choose" ? (
+						<div className="flex flex-col gap-2">
+							<button
+								type="button"
+								onClick={() => setMode("phone")}
+								className="flex items-center gap-3 rounded-xl border border-border p-3 text-left hover:border-accent hover:bg-accent/5"
+							>
+								<span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-accent/12 text-accent">
+									<Phone className="size-5" />
+								</span>
+								<span className="min-w-0">
+									<span className="block text-sm font-semibold">
+										Enter phone number
+									</span>
+									<span className="block text-xs text-muted-foreground">
+										Buyer gets their confirmation & receipt on WhatsApp
+									</span>
+								</span>
+							</button>
+							<button
+								type="button"
+								onClick={submitAnonymous}
+								disabled={busy}
+								className="flex items-center gap-3 rounded-xl border border-border p-3 text-left hover:border-accent hover:bg-accent/5 disabled:opacity-60"
+							>
+								<span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+									<UserX className="size-5" />
+								</span>
+								<span className="min-w-0">
+									<span className="block text-sm font-semibold">
+										No contact — cash sale
+									</span>
+									<span className="block text-xs text-muted-foreground">
+										Anonymous, paid in person, no WhatsApp sent
+									</span>
+								</span>
+							</button>
+						</div>
+					) : (
+						<div className="flex flex-col gap-3">
+							<label className="block">
+								<span className="text-xs font-medium text-muted-foreground">
+									Buyer's name
+								</span>
+								<Input
+									type="text"
+									autoComplete="off"
+									autoFocus
+									value={name}
+									onChange={(e) => setName(e.target.value)}
+									placeholder="e.g. Aiman"
+									className="mt-1 h-12 text-base"
+								/>
+							</label>
+							<label className="block">
+								<span className="text-xs font-medium text-muted-foreground">
+									WhatsApp number
+								</span>
+								<Input
+									type="tel"
+									inputMode="tel"
+									autoComplete="off"
+									value={phone}
+									onChange={(e) => setPhone(e.target.value)}
+									onKeyDown={(e) => {
+										if (e.key === "Enter" && phoneReady && nameReady)
+											void submitPhone();
+									}}
+									placeholder="e.g. 012-345 6789"
+									className="mt-1 h-12 text-base"
+								/>
+								<span className="mt-1 block text-xs text-muted-foreground">
+									Malaysian mobile number. We'll add the country code
+									automatically.
+								</span>
+							</label>
+							<DialogFooter className="gap-2 sm:gap-2">
+								<Button
+									type="button"
+									variant="outline"
+									onClick={() => setMode("choose")}
+									className="h-11"
+								>
+									Back
+								</Button>
+								<Button
+									type="button"
+									onClick={submitPhone}
+									isLoading={busy}
+									disabled={busy || !phoneReady || !nameReady}
+									className="h-11"
+								>
+									Start checkout
+								</Button>
+							</DialogFooter>
+						</div>
+					)}
 				</DialogContent>
 			</Dialog>
 		</>
@@ -550,12 +758,16 @@ function DoneScreen({
 	orderId,
 	paidInPerson,
 	buyerName,
+	anonymous,
 	onBackToList,
 }: {
 	shortId: string | undefined;
 	orderId: Id<"orders"> | undefined;
 	paidInPerson: boolean;
 	buyerName: string | undefined;
+	// Anonymous cash sale — no buyer to notify (86ey8vqp6). The receipt is still
+	// generated; the seller downloads/shares it rather than it being "sent".
+	anonymous?: boolean;
 	onBackToList: () => void;
 }) {
 	const updateStatus = useMutation(api.orders.updateStatus);
@@ -601,10 +813,14 @@ function DoneScreen({
 								Order <span className="font-mono font-semibold">{shortId}</span>{" "}
 								{completed
 									? "is marked completed."
-									: "is confirmed and a WhatsApp confirmation was sent to the buyer."}
+									: anonymous
+										? "is confirmed. It's a cash sale with no contact, so no WhatsApp was sent."
+										: "is confirmed and a WhatsApp confirmation was sent to the buyer."}
 							</>
 						) : completed ? (
 							"The order is marked completed."
+						) : anonymous ? (
+							"The order is confirmed — a cash sale with no contact, so nothing was sent."
 						) : (
 							"The order is confirmed and the buyer has been notified on WhatsApp."
 						)}
@@ -614,14 +830,17 @@ function DoneScreen({
 			{shortId ? (
 				<div className="rounded-xl border border-emerald-200 bg-white/70 p-4">
 					<p className="text-sm font-semibold text-emerald-950">
-						{paidInPerson
-							? "Receipt sent to buyer"
-							: "Invoice & payment details sent"}
+						{anonymous
+							? "Receipt"
+							: paidInPerson
+								? "Receipt sent to buyer"
+								: "Invoice & payment details sent"}
 					</p>
 					<SendOrderDocument
 						shortId={shortId}
 						paid={paidInPerson}
 						buyerName={buyerName}
+						hasBuyer={!anonymous}
 						className="mt-3"
 					/>
 				</div>
@@ -993,6 +1212,7 @@ function BuildOrderScreen({
 	const products = useQuery(api.products.listForCounter, { retailerId });
 	const createOrder = useMutation(api.counterCheckout.createOrderFromSession);
 	const saveDraft = useMutation(api.counterCheckout.saveSessionDraft);
+	const saveName = useMutation(api.counterCheckout.setSessionCustomerName);
 	const [query, setQuery] = useState("");
 	// List vs grid catalog layout — remembered across checkouts (localStorage).
 	const [view, setView] = useCatalogView();
@@ -1009,6 +1229,12 @@ function BuildOrderScreen({
 	const [method, setMethod] = useState<OrderPaymentMethod>(
 		draft?.paymentMethod ?? "cash",
 	);
+	// An anonymous walk-in (no phone) has no one to send a pay-later link to, so
+	// it's always settled in person — the pay-later toggle is disabled with that
+	// reason and the order is created paid. `paid` is the effective value used for
+	// the order; the raw toggle only matters for an identified buyer.
+	const anonymous = !buyer.waPhone;
+	const paid = anonymous ? true : paidInPerson;
 	const [submitting, setSubmitting] = useState(false);
 	// Final review modal — a deliberate last look at items/prices/total before the
 	// order is created, so a busy vendor can't fat-finger a price or quantity and
@@ -1164,10 +1390,10 @@ function BuildOrderScreen({
 				unitPrice: l.isCustom ? l.price : undefined,
 			})),
 			fulfilmentDate: Number.isNaN(epoch) ? undefined : epoch,
-			paidInPerson,
-			paymentMethod: paidInPerson ? method : undefined,
+			paidInPerson: paid,
+			paymentMethod: paid ? method : undefined,
 		};
-	}, [cart, fulfilmentDate, paidInPerson, method]);
+	}, [cart, fulfilmentDate, paid, method]);
 	const latestDraft = useRef(draftPayload);
 	latestDraft.current = draftPayload;
 	const debouncedDraftKey = useDebounce(JSON.stringify(draftPayload), 700);
@@ -1193,13 +1419,13 @@ function BuildOrderScreen({
 					quantity: l.qty,
 					unitPrice: l.isCustom ? l.price : undefined,
 				})),
-				paidInPerson,
-				paymentMethod: paidInPerson ? method : undefined,
+				paidInPerson: paid,
+				paymentMethod: paid ? method : undefined,
 				fulfilmentDate: Number.isNaN(fulfilmentEpoch)
 					? undefined
 					: fulfilmentEpoch,
 			});
-			onCreated({ shortId, orderId, paidInPerson });
+			onCreated({ shortId, orderId, paidInPerson: paid });
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -1218,7 +1444,20 @@ function BuildOrderScreen({
 		<div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px]">
 			{/* Catalog */}
 			<div className="flex flex-col gap-4">
-				<BuyerCard buyer={buyer} currency={currency} />
+				<BuyerCard
+					buyer={buyer}
+					currency={currency}
+					anonymous={anonymous}
+					// The name is editable when there's no linked CRM record yet — an
+					// anonymous walk-in or a brand-new manual-phone buyer. For a
+					// returning customer the CRM name is the source of truth (read-only).
+					editable={!buyer.customer}
+					onSaveName={(n) => {
+						saveName({ sessionId, name: n }).catch((err) =>
+							toast.error(convexErrorMessage(err)),
+						);
+					}}
+				/>
 
 				<div className="rounded-2xl border border-border bg-card p-3 shadow-sm">
 					<div className="mb-3 flex items-center justify-between gap-3 px-1">
@@ -1523,10 +1762,10 @@ function BuildOrderScreen({
 								<button
 									type="button"
 									onClick={() => setPaidInPerson(true)}
-									aria-pressed={paidInPerson}
+									aria-pressed={paid}
 									className={cn(
 										"flex min-h-12 items-center gap-2 rounded-lg px-3 text-left text-sm font-medium transition-colors",
-										paidInPerson
+										paid
 											? "bg-accent text-accent-foreground shadow-sm"
 											: "text-muted-foreground hover:bg-muted",
 									)}
@@ -1542,12 +1781,20 @@ function BuildOrderScreen({
 								<button
 									type="button"
 									onClick={() => setPaidInPerson(false)}
-									aria-pressed={!paidInPerson}
+									disabled={anonymous}
+									aria-pressed={!paid}
+									title={
+										anonymous
+											? "A cash sale has no buyer to send a payment link to."
+											: undefined
+									}
 									className={cn(
 										"flex min-h-12 items-center gap-2 rounded-lg px-3 text-left text-sm font-medium transition-colors",
-										!paidInPerson
-											? "bg-accent text-accent-foreground shadow-sm"
-											: "text-muted-foreground hover:bg-muted",
+										anonymous
+											? "cursor-not-allowed text-muted-foreground/50"
+											: !paid
+												? "bg-accent text-accent-foreground shadow-sm"
+												: "text-muted-foreground hover:bg-muted",
 									)}
 								>
 									<Clock className="size-4" />
@@ -1560,7 +1807,14 @@ function BuildOrderScreen({
 								</button>
 							</div>
 
-							{paidInPerson ? (
+							{anonymous ? (
+								<p className="mt-3 rounded-xl bg-background px-3 py-2 text-xs text-muted-foreground">
+									Cash sale — no contact on file, so it's settled in person and
+									no WhatsApp is sent.
+								</p>
+							) : null}
+
+							{paid ? (
 								<label className="mt-3 block">
 									<span className="text-xs font-medium text-muted-foreground">
 										Payment method
@@ -1643,7 +1897,7 @@ function BuildOrderScreen({
 					return Number.isNaN(e) ? "—" : formatFulfilmentDate(e);
 				})()}
 				paymentLabel={
-					paidInPerson
+					paid
 						? `Paid now · ${PAYMENT_METHOD_LABELS[method]}`
 						: "Pay later — buyer pays via WhatsApp link"
 				}
@@ -1822,9 +2076,62 @@ function ConfirmCheckoutDialog({
 	);
 }
 
+/**
+ * Inline-editable buyer name — an underlined text input that debounce-saves onto
+ * the session (setSessionCustomerName). Seeded ONCE from the current name so live
+ * reactivity doesn't fight the cashier's typing. Used for walk-in sessions with
+ * no linked CRM record (anonymous or brand-new manual-phone buyer).
+ */
+function EditableBuyerName({
+	initial,
+	placeholder,
+	onSave,
+	className,
+}: {
+	initial: string;
+	placeholder: string;
+	onSave: (name: string) => void;
+	className?: string;
+}) {
+	const [value, setValue] = useState(initial);
+	const debounced = useDebounce(value, 500);
+	// Keep the latest onSave without retriggering the save effect on every render.
+	const saveRef = useRef(onSave);
+	saveRef.current = onSave;
+	const first = useRef(true);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: debounced is the trigger; onSave is read via ref.
+	useEffect(() => {
+		if (first.current) {
+			first.current = false;
+			return;
+		}
+		const trimmed = value.trim();
+		// Save an empty value (clears the name) or a complete ≥3-char name; skip a
+		// 1–2 char partial so the server's min-length rule never fires mid-type.
+		if (trimmed.length >= 1 && trimmed.length < 3) return;
+		saveRef.current(trimmed);
+	}, [debounced]);
+	return (
+		<input
+			type="text"
+			value={value}
+			onChange={(e) => setValue(e.target.value)}
+			placeholder={placeholder}
+			aria-label="Buyer's name"
+			className={cn(
+				"w-full truncate bg-transparent text-lg font-semibold outline-none placeholder:font-normal placeholder:text-muted-foreground",
+				className,
+			)}
+		/>
+	);
+}
+
 function BuyerCard({
 	buyer,
 	currency,
+	anonymous,
+	editable,
+	onSaveName,
 }: {
 	buyer: {
 		displayName: string | undefined;
@@ -1836,7 +2143,43 @@ function BuyerCard({
 		} | null;
 	};
 	currency: string;
+	// No buyer contact on file — an anonymous cash sale (86ey8vqp6).
+	anonymous?: boolean;
+	// The name can be typed/edited inline (no linked CRM record yet).
+	editable?: boolean;
+	onSaveName?: (name: string) => void;
 }) {
+	// Anonymous sale: no phone/CRM, so a muted "walk-in" card rather than the
+	// accent "buyer connected" one — it's a valid state, not an error. The cashier
+	// can still attach a name (for the order + receipt).
+	if (anonymous) {
+		return (
+			<div className="flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-muted/30 p-4 shadow-sm">
+				<span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+					<UserX className="size-5" />
+				</span>
+				<div className="min-w-0 flex-1">
+					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+						Walk-in customer
+					</p>
+					{editable && onSaveName ? (
+						<EditableBuyerName
+							initial={buyer.displayName ?? ""}
+							placeholder="Add a name (optional)"
+							onSave={onSaveName}
+						/>
+					) : (
+						<p className="truncate text-lg font-semibold">
+							{buyer.displayName ?? "No contact"}
+						</p>
+					)}
+					<p className="text-xs text-muted-foreground">
+						Cash sale — nothing sent to WhatsApp
+					</p>
+				</div>
+			</div>
+		);
+	}
 	return (
 		<div className="flex flex-wrap items-center gap-3 rounded-2xl border border-accent/30 bg-accent/5 p-4 shadow-sm">
 			<span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-accent/15 text-accent">
@@ -1846,9 +2189,17 @@ function BuyerCard({
 				<p className="text-xs font-semibold uppercase tracking-widest text-accent">
 					Buyer connected
 				</p>
-				<p className="truncate text-lg font-semibold">
-					{buyer.displayName ?? "Buyer connected"}
-				</p>
+				{editable && onSaveName ? (
+					<EditableBuyerName
+						initial={buyer.displayName ?? ""}
+						placeholder="Buyer's name"
+						onSave={onSaveName}
+					/>
+				) : (
+					<p className="truncate text-lg font-semibold">
+						{buyer.displayName ?? "Buyer connected"}
+					</p>
+				)}
 				{buyer.isNewCustomer ? (
 					<p className="text-xs font-medium text-accent">New customer</p>
 				) : buyer.customer ? (

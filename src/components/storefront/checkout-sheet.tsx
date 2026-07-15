@@ -520,9 +520,10 @@ export function CheckoutSheet({
 								<form.AppField name="name">
 									{(field) => (
 										<field.TextField
-											label="Your name (optional)"
+											label="Your name"
 											placeholder="Ali"
 											autoComplete="name"
+											required
 										/>
 									)}
 								</form.AppField>

@@ -96,7 +96,8 @@ describe("orderToCsvRow", () => {
 			currency: "MYR",
 		});
 		expect(row[CSV_COLUMNS.indexOf("Payment")]).toBe("unpaid");
-		expect(row[CSV_COLUMNS.indexOf("Customer")]).toBe("");
+		// No name and no phone = an anonymous walk-in (86ey8vqp6) → labelled, not blank.
+		expect(row[CSV_COLUMNS.indexOf("Customer")]).toBe("Walk-in customer");
 		expect(row[CSV_COLUMNS.indexOf("Fulfilment date")]).toBe("");
 		expect(row[CSV_COLUMNS.indexOf("Total")]).toBe("0.00");
 	});

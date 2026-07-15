@@ -45,6 +45,20 @@ function contactLine(contactPhone: string | undefined, locale: Locale): string {
 		: `\nContact us: wa.me/${contactPhone}`;
 }
 
+/**
+ * PDPA notice-at-collection line (86ey5m3hx). Shown the first time we store a
+ * counter buyer's number and message them without them having visited the
+ * website. The store-QR scan flow carries it in `storeQrConnected`; the manual-
+ * phone entry flow (cashier types the number, buyer never scanned) carries it on
+ * the order confirmation — their first message from us. One source of truth so
+ * the two paths never drift.
+ */
+export function privacyNoticeLine(locale: Locale): string {
+	return locale === "ms"
+		? "\n\nDengan meneruskan, anda bersetuju dengan Dasar Privasi kami: https://kedaipal.com/privacy"
+		: "\n\nBy continuing you agree to our Privacy Policy: https://kedaipal.com/privacy";
+}
+
 export const waCopy: Record<Locale, LocaleCopy> = {
 	en: {
 		confirm: ({ shortId, storeName, contactPhone, trackingUrl, deliveryMethod, pickupKind }) => {
@@ -221,7 +235,7 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 		storeQrConnected: ({ storeName, code }) =>
 			`You're connected to ${storeName} 🎉${
 				code ? ` Your order code is *${code}* — show it to the cashier so they can find you.` : ""
-			} They'll ring up your order and your confirmation will land right here.\n\nBy continuing you agree to our Privacy Policy: https://kedaipal.com/privacy`,
+			} They'll ring up your order and your confirmation will land right here.${privacyNoticeLine("en")}`,
 		storeQrBusy: ({ storeName }) =>
 			`${storeName} can't take new scans right now — please ask the cashier for help and they'll sort you out 🙂`,
 		counterOrderConfirmedPaid: ({ shortId, storeName, amount, trackingUrl }) =>
@@ -265,7 +279,7 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 		storeQrConnected: ({ storeName, code }) =>
 			`Anda telah disambungkan dengan ${storeName} 🎉${
 				code ? ` Kod pesanan anda ialah *${code}* — tunjukkan kepada juruwang supaya mereka boleh cari anda.` : ""
-			} Mereka akan proses pesanan anda dan pengesahan akan sampai di sini.\n\nDengan meneruskan, anda bersetuju dengan Dasar Privasi kami: https://kedaipal.com/privacy`,
+			} Mereka akan proses pesanan anda dan pengesahan akan sampai di sini.${privacyNoticeLine("ms")}`,
 		storeQrBusy: ({ storeName }) =>
 			`${storeName} tidak dapat menerima imbasan baharu buat masa ini — sila minta bantuan juruwang ya 🙂`,
 		counterOrderConfirmedPaid: ({ shortId, storeName, amount, trackingUrl }) =>

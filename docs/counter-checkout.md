@@ -8,10 +8,12 @@
 >
 > **Status: V1 shipped** — backend spine (schema, session/token lifecycle,
 > inbound `KP-<token>` intent routing, live bind, expiry cron) **+** the
-> iPad-first seller UI, order-from-session, and pay-in-person. **Deferred to
-> V1.1:** the manual-phone and anonymous walk-in identity paths — see
-> [§Pending](#pending). The V1 cut = Bearcamp's happy-path counter (buyer scans →
-> seller keys order → paid now or pay-later).
+> iPad-first seller UI, order-from-session, and pay-in-person. **V1.1 shipped**
+> ([`86ey8vqp6`](https://app.clickup.com/t/86ey8vqp6)) — the manual-phone and
+> anonymous walk-in identity escape hatches, see
+> [§Manual entry & anonymous](#manual-entry--anonymous-walk-in-86ey8vqp6). The V1
+> cut was Bearcamp's happy-path counter (buyer scans → seller keys order → paid
+> now or pay-later); V1.1 removes the "buyer must scan" precondition.
 
 ---
 
@@ -121,8 +123,9 @@ posture as `pickupSnapshot.locationType`). It drives per-surface UI:
   [`order-inbox.md`](./order-inbox.md).
 
 **Identity = optional, three converging paths, one record:** token-scan (happy,
-**built**), manual phone entry (**pending**), anonymous walk-in / cash
-(**pending**).
+**built**), manual phone entry (**built**, `86ey8vqp6`), anonymous walk-in / cash
+(**built**, `86ey8vqp6`). See
+[§Manual entry & anonymous](#manual-entry--anonymous-walk-in-86ey8vqp6).
 
 ---
 
@@ -440,13 +443,81 @@ Shipped alongside the receipt/invoice work, all in `src/routes/app.checkout.tsx`
   desk card so it spans full width and lines up with the open-checkout cards on
   desktop (no ragged button column).
 
-## Pending (V1.1)
+## Manual entry & anonymous walk-in (`86ey8vqp6`)
+
+The V1.1 identity escape hatches — the cashier can ring up **any** buyer, even one
+who won't/can't scan (no WhatsApp, dead camera, in a hurry, privacy-shy). Same
+"three converging paths, one record" model as the scan: both land a normal
+`buyer_identified` session that the rest of the flow (draft → `createOrderFromSession`
+→ receipt/invoice) treats identically. Discoverable via a **"No scan?"** control in
+the Counter page header, alongside the store-QR chip.
+
+**Buyer name** — the session's name lives in `waProfileName` (shared slot: an
+inbound pushname on a scan, the cashier-typed name on manual/anonymous). It flows
+onto the order snapshot + seeds the CRM row. Manual-phone **requires** a name (in
+the modal); an anonymous walk-in's name is **optional and editable inline** on the
+build screen (`setSessionCustomerName` → debounced save; trims + caps at 60, blank
+clears). A provided name must be **≥3 chars** everywhere (a single letter isn't a
+name) — required on the manual-phone bind, and enforced-if-present on the optional
+anonymous name (the inline editor only saves an empty or ≥3-char value, so the
+rule never fires mid-type). One shared validator seam in `convex/lib/customer.ts`
+(`requireCustomerName` / `normalizeOptionalCustomerName`) backs **both** the
+counter paths **and** `orders.create`, so the rule holds server-side on every
+order-create path — a direct mutation call can't bypass the storefront form. The
+storefront checkout name is now **required** (≥3)
+too (`checkoutFormSchema`, mirroring the `fulfilmentDate` optional-at-protocol /
+required-in-UI pattern — `orders.create` keeps `customer.name` optional for
+legacy/other callers).
+
+**Manual phone** — `counterCheckout.bindSessionManualPhone` (owner-or-admin,
+admin-audited). The cashier types the buyer's number + name; the number is
+normalized by
+`assertValidMyWaPhone` (`convex/lib/slug.ts`) to the **same E.164 digits an inbound
+scan produces** (`0xx…` → `60xx…`; `60…`/`+60…` kept) so it resolves-or-creates the
+exact same `(retailerId, waPhone)` customer — a returning buyer is recognised, never
+forked. The bind is direct (no webhook, no rate-limit/cap — those guard the public
+poster token, not a logged-in seller). The buyer still gets the WhatsApp confirmation
++ receipt/invoice and a CRM row. **PDPA:** the buyer never scanned, so the confirmation
+is our first message to them — it carries the same notice-at-collection line as the
+poster ack (`whatsappCopy.privacyNoticeLine`, threaded via `notifyCounterOrderCreated`'s
+`includePrivacyNotice`; scan buyers already got it at connect, so it's not repeated).
+**Caveat (graceful degradation):** a manual-phone buyer never opened a 24h WhatsApp
+session window, so a free-form send may be rejected by Meta. Sends are best-effort
+(errors logged) so the order/CRM are always intact; full out-of-window Utility-template
+fallback is [`86ey1fgjw`](https://app.clickup.com/t/86ey1fgjw), a follow-up.
+**Payment details:** unlike a scan buyer (who gets the pay-at-bind payment push,
+`notifyCounterCheckoutPayment`), a manual-phone **pay-later** buyer receives the
+bank/QR details via the **invoice PDF** (`How to pay` block) rather than an inline
+message — no dead-end, just one surface later. Deliberately not re-plumbed here:
+counter payment messaging is being reworked in
+[`86ey8vqk1`](https://app.clickup.com/t/86ey8vqk1), so an inline pay-ahead push for
+the manual path belongs there (a product call), not colliding with this change.
+
+**Anonymous** — `counterCheckout.startAnonymousSession`. A cash sale with **no phone
+contact**: the session has no `waPhone`/`customerId` (an optional name is allowed —
+see above), `createOrderFromSession` writes an order with no `customerId`/phone (name
+optional), **no customer aggregate is touched**, and **no WhatsApp is scheduled**
+(belt-and-braces: `notifyCounterOrderCreated` also no-ops on a missing
+phone). Anonymous **forces paid-in-person** — there's nobody to send a pay-later link
+to — enforced server-side and surfaced as a disabled-with-reason "Pay later" toggle.
+Anonymous orders render **"Walk-in customer"** everywhere a name shows (inbox card,
+order detail, CSV export) via the shared `orderCustomerLabel` (`convex/lib/customer.ts`
+↔ `src/lib/customer.ts`) — never blank/crash. The Done screen hides the "sent to buyer"
+framing and offers **Download / Share only**.
+
+**Re-claim safety** — if a manually-bound buyer later scans the store QR with the same
+number, `startSessionFromStoreQr`'s re-claim now spans **all** open sessions (every
+origin), so it resumes the existing session instead of forking a duplicate.
+
+**No schema change** — the session already had optional `waPhone`/`customerId`; an
+anonymous session is simply a `buyer_identified` row with no phone, and an anonymous
+order is `customer: {name: undefined, waPhone: undefined}` (both already optional).
+
+## Pending
 
 - **Resend from order detail** — the "Send receipt/invoice to buyer" action is
   currently only on the counter Done screen; order detail has Download only.
-- **Manual-phone path** — seller types the buyer's number to bind a session
-  without a scan (e.g. buyer's camera won't cooperate). Binds the session
-  directly, no webhook.
-- **Anonymous walk-in** — a cash sale with no contact: create the order off the
-  session with no buyer identity (no WhatsApp confirmation).
+- **Pay-at-scan message rework** ([`86ey8vqk1`](https://app.clickup.com/t/86ey8vqk1))
+  — text-first payment details for walk-in scans (out of scope here; touches only
+  `notifyCounterCheckoutPayment`).
 - *(later, ticket 3.2)* richer Desktop / iPad Console affordances.
