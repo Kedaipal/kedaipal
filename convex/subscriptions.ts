@@ -153,6 +153,7 @@ const FEATURE_LABEL: Record<PlanFeature, string> = {
 	chargeablePickup: "Charging a fee on a pickup location",
 	categories: "Organizing products into categories",
 	insights: "Seller Insights",
+	radiusDelivery: "Distance-based delivery pricing",
 };
 
 /**

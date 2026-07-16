@@ -37,6 +37,9 @@ export type PaymentReminderOrderFields = MockupGateFields & {
 		| "cancelled";
 	paymentStatus?: "unpaid" | "claimed" | "received";
 	paymentReminderSentAt?: number;
+	// Delivery charge still to be confirmed by the seller — the payment ask is
+	// held, so nudging the buyer to pay an unfinished total would contradict it.
+	deliveryFeePending?: boolean;
 	createdAt: number;
 	customer: { waPhone?: string };
 };
@@ -67,6 +70,9 @@ export function isPaymentReminderDue(
 		return false;
 	}
 	if (isMockupGateClosed(order)) return false;
+	// Same deferral as the mockup gate: while the delivery charge is pending
+	// the buyer hasn't been given a final total to pay.
+	if (order.deliveryFeePending === true) return false;
 	if (order.paymentReminderSentAt !== undefined) return false;
 	if (!order.customer.waPhone) return false;
 	return now - order.createdAt >= PAYMENT_REMINDER_AFTER_MS;

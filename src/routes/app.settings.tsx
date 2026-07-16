@@ -678,6 +678,8 @@ function SettingsRoute() {
 						retailerId={retailer._id}
 						offerSelfCollect={retailer.offerSelfCollect ?? false}
 						offerDelivery={retailer.offerDelivery ?? true}
+						deliveryConfig={retailer.deliveryConfig}
+						businessAddress={retailer.businessAddress}
 						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
 						subscription={retailer.subscription}
 					/>
