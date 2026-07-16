@@ -1190,6 +1190,11 @@ export const searchOrders = query({
 		// orders read as "storefront". ANDs with the other filters.
 		source: v.optional(orderSourceValidator),
 		searchText: v.optional(v.string()),
+		// Max rows to return. OMIT it for the inbox: the query then returns the
+		// whole filtered+sorted window (up to MAX_INBOX_SCAN) as a *stable*
+		// subscription, and the client paginates by slicing that window — so
+		// "Load more" never re-scans (see docs/order-inbox.md). Callers that only
+		// need the counts (e.g. the Home strip) pass `limit: 1` to stay cheap.
 		limit: v.optional(v.number()),
 	},
 	handler: async (
@@ -1292,13 +1297,24 @@ export const searchOrders = query({
 				searchText,
 			}),
 		);
-		const sorted = [...filtered].sort(compareInboxOrder);
+		// Returned newest-created first (the scan order) — the inbox's default
+		// "Newest first" sort. The inbox applies its "Due date" toggle client-side
+		// over this stable window (sortInboxOrders), so toggling never re-queries.
+		// See docs/order-inbox.md ("Sort"). Export sorts independently.
+		const sorted = filtered;
 
-		const take = Math.max(1, Math.min(limit ?? 50, 200));
+		// No `limit` → return the full window (the inbox slices client-side, so
+		// its subscription args stay stable across "Load more"). A supplied limit
+		// (Home's counts-only `limit: 1`) still trims the payload. Either way the
+		// hard ceiling is the scan window, never the old silent 200-row cap.
+		const take = Math.max(1, Math.min(limit ?? MAX_INBOX_SCAN, MAX_INBOX_SCAN));
 		return {
 			orders: sorted.slice(0, take),
 			total: sorted.length,
 			counts,
+			// True when the scan hit MAX_INBOX_SCAN: orders older than the newest
+			// 1,000 are outside the window, so the list AND counts under-report.
+			// The inbox surfaces this in a footer; export is the full-history path.
 			capped: all.length >= MAX_INBOX_SCAN,
 		};
 	},
