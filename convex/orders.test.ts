@@ -4309,3 +4309,369 @@ describe("orders — pickup fee", () => {
 		expect(order?.total).toBe(5000 + 15000 + 500);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Delivery charge (86extzdr8) — flat / radius-band pricing resolved
+// server-side at create, frozen onto deliverySnapshot/deliveryFee, and — for
+// out-of-range "arrange" orders — the deliveryFeePending payment hold released
+// by setDeliveryFee. See convex/lib/delivery.ts + docs/fulfilment.md.
+// ---------------------------------------------------------------------------
+
+describe("orders — delivery charge", () => {
+	// ~1 deg latitude = 111.19 km (R=6371) → build buyer points by km offset.
+	const KM_PER_DEG_LAT = (6371 * Math.PI) / 180;
+	const ORIGIN = { latitude: 3.0, longitude: 101.5 };
+	const businessAddress = { label: "12 Jln Kilang, Shah Alam", ...ORIGIN };
+	function addressAtKm(km: number) {
+		return {
+			...validAddress,
+			latitude: 3.0 + km / KM_PER_DEG_LAT,
+			longitude: 101.5,
+		};
+	}
+
+	async function seedDeliveryRetailer(
+		t: ReturnType<typeof setup>,
+		config:
+			| { mode: "flat"; fee: number; freeAbove?: number }
+			| {
+					mode: "radius";
+					bands: Array<{ maxKm: number; fee: number }>;
+					outOfRange: "block" | "arrange";
+			  },
+	) {
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.retailers.updateSettings, {
+			...(config.mode === "radius" ? { businessAddress } : {}),
+			deliveryConfig: config,
+		});
+		return retailer;
+	}
+
+	const RADIUS_ARRANGE = {
+		mode: "radius" as const,
+		bands: [
+			{ maxKm: 5, fee: 500 },
+			{ maxKm: 15, fee: 1500 },
+		],
+		outOfRange: "arrange" as const,
+	};
+
+	test("flat fee folds into the total; the create result echoes it for the wa.me message", async () => {
+		const t = setup();
+		const retailer = await seedDeliveryRetailer(t, { mode: "flat", fee: 800 });
+		const productId = await seedProduct(t, USER_A, retailer._id); // RM120
+
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: validAddress,
+		});
+		expect(created.deliveryFee).toBe(800);
+		expect(created.deliveryFeePending).toBeUndefined();
+
+		const order = await t.query(api.orders.get, {
+			token: await tk(t, created.shortId),
+		});
+		expect(order?.subtotal).toBe(12000);
+		expect(order?.deliveryFee).toBe(800);
+		expect(order?.deliverySnapshot).toEqual({ fee: 800, mode: "flat" });
+		expect(order?.total).toBe(12800);
+	});
+
+	test("flat free-above threshold: at/over the threshold ships free (boundary inclusive)", async () => {
+		const t = setup();
+		const retailer = await seedDeliveryRetailer(t, {
+			mode: "flat",
+			fee: 800,
+			freeAbove: 24000,
+		});
+		const productId = await seedProduct(t, USER_A, retailer._id); // RM120/unit
+
+		// 1 unit (RM120) < RM240 → charged.
+		const charged = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: validAddress,
+		});
+		expect(charged.deliveryFee).toBe(800);
+
+		// 2 units (RM240) == threshold → free.
+		const free = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 2 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: validAddress,
+		});
+		expect(free.deliveryFee).toBeUndefined();
+		const order = await t.query(api.orders.get, {
+			token: await tk(t, free.shortId),
+		});
+		expect(order?.deliverySnapshot).toBeUndefined();
+		expect(order?.total).toBe(order?.subtotal);
+	});
+
+	test("a config never charges pickup orders — self_collect stays fee-free", async () => {
+		const t = setup();
+		const retailer = await seedDeliveryRetailer(t, { mode: "flat", fee: 800 });
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.retailers.updateSettings, {
+			offerSelfCollect: true,
+		});
+		const { pickupLocationId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Store",
+				address: "12 Jln Tun Razak, KL",
+			},
+		);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			pickupLocationId,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(order?.deliveryFee).toBeUndefined();
+		expect(order?.total).toBe(order?.subtotal);
+	});
+
+	test("radius: the buyer's distance picks the band; snapshot audits distance + band", async () => {
+		const t = setup();
+		const retailer = await seedDeliveryRetailer(t, RADIUS_ARRANGE);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: addressAtKm(11),
+		});
+		expect(created.deliveryFee).toBe(1500);
+		const order = await t.query(api.orders.get, {
+			token: await tk(t, created.shortId),
+		});
+		expect(order?.deliverySnapshot?.mode).toBe("radius");
+		expect(order?.deliverySnapshot?.bandMaxKm).toBe(15);
+		expect(order?.deliverySnapshot?.distanceKm).toBeCloseTo(11, 0);
+		expect(order?.total).toBe(12000 + 1500);
+	});
+
+	test("radius 'block': an out-of-range (or coordinate-less) address refuses checkout", async () => {
+		const t = setup();
+		const retailer = await seedDeliveryRetailer(t, {
+			...RADIUS_ARRANGE,
+			outOfRange: "block",
+		});
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const base = {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp" as const,
+			customer,
+			deliveryMethod: "delivery" as const,
+		};
+		await expect(
+			t.mutation(api.orders.create, {
+				...base,
+				deliveryAddress: addressAtKm(50),
+			}),
+		).rejects.toThrow(/outside this store's delivery area/);
+		await expect(
+			t.mutation(api.orders.create, { ...base, deliveryAddress: validAddress }),
+		).rejects.toThrow(/Pick your address/);
+	});
+
+	test("radius 'arrange': out-of-range order lands fee-pending — payment held until setDeliveryFee", async () => {
+		const t = setup();
+		const retailer = await seedDeliveryRetailer(t, RADIUS_ARRANGE);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: addressAtKm(50),
+		});
+		expect(created.deliveryFeePending).toBe(true);
+		expect(created.deliveryFee).toBeUndefined();
+		const token = await tk(t, created.shortId);
+		let order = await t.query(api.orders.get, { token });
+		expect(order?.deliveryFeePending).toBe(true);
+		expect(order?.total).toBe(12000); // fee not yet applied
+
+		// Both payment paths are held while the total isn't final.
+		await expect(
+			t.mutation(api.orders.claimPayment, { token }),
+		).rejects.toThrow(/confirming your delivery charge/);
+		const asUser = t.withIdentity({ subject: USER_A });
+		await expect(
+			asUser.mutation(api.orders.markPaymentReceived, {
+				orderId: order!._id,
+			}),
+		).rejects.toThrow(/Set the delivery charge first/);
+
+		// Seller sets the agreed charge → snapshot manual, total final, holds open.
+		await asUser.mutation(api.orders.setDeliveryFee, {
+			orderId: order!._id,
+			fee: 2500,
+		});
+		order = await t.query(api.orders.get, { token });
+		expect(order?.deliveryFeePending).toBeUndefined();
+		expect(order?.deliverySnapshot).toEqual({ fee: 2500, mode: "manual" });
+		expect(order?.total).toBe(14500);
+		await t.mutation(api.orders.claimPayment, { token });
+		order = await t.query(api.orders.get, { token });
+		expect(order?.paymentStatus).toBe("claimed");
+	});
+
+	test("setDeliveryFee(0) resolves a pending charge as free; locked once payment is in motion", async () => {
+		const t = setup();
+		const retailer = await seedDeliveryRetailer(t, RADIUS_ARRANGE);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: addressAtKm(50),
+		});
+		const token = await tk(t, created.shortId);
+		const orderId = (await t.query(api.orders.get, { token }))!._id;
+		const asUser = t.withIdentity({ subject: USER_A });
+
+		await asUser.mutation(api.orders.setDeliveryFee, { orderId, fee: 0 });
+		let order = await t.query(api.orders.get, { token });
+		expect(order?.deliveryFeePending).toBeUndefined();
+		expect(order?.deliveryFee).toBeUndefined();
+		expect(order?.total).toBe(12000);
+
+		// Buyer claims → the charge is frozen against further edits.
+		await t.mutation(api.orders.claimPayment, { token });
+		await expect(
+			asUser.mutation(api.orders.setDeliveryFee, { orderId, fee: 900 }),
+		).rejects.toThrow(/already in motion/);
+		order = await t.query(api.orders.get, { token });
+		expect(order?.total).toBe(12000);
+	});
+
+	test("editing the address re-prices: band change moves the fee, out-of-range flips to pending", async () => {
+		const t = setup();
+		const retailer = await seedDeliveryRetailer(t, RADIUS_ARRANGE);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: addressAtKm(3),
+		});
+		expect(created.deliveryFee).toBe(500);
+		const token = await tk(t, created.shortId);
+
+		// Move to the outer band → the fee follows the address.
+		await t.mutation(api.orders.updateDeliveryAddress, {
+			token,
+			deliveryAddress: addressAtKm(11),
+		});
+		let order = await t.query(api.orders.get, { token });
+		expect(order?.deliveryFee).toBe(1500);
+		expect(order?.total).toBe(13500);
+
+		// Move out of range on an "arrange" store → back to fee-pending.
+		await t.mutation(api.orders.updateDeliveryAddress, {
+			token,
+			deliveryAddress: addressAtKm(50),
+		});
+		order = await t.query(api.orders.get, { token });
+		expect(order?.deliveryFee).toBeUndefined();
+		expect(order?.deliveryFeePending).toBe(true);
+		expect(order?.total).toBe(12000);
+	});
+
+	test("delivery fee and mockup quote are independent extras — re-pricing keeps both", async () => {
+		const t = setup();
+		const retailer = await seedDeliveryRetailer(t, { mode: "flat", fee: 800 });
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			price: 5000,
+			requiresProof: true,
+			blockWhenOutOfStock: false,
+		});
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: validAddress,
+		});
+		const token = await tk(t, created.shortId);
+		const orderId = (await t.query(api.orders.get, { token }))!._id;
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.orders.submitMockup, {
+			orderId,
+			storageId: "mock-delivery-1",
+			quotedAmount: 12000,
+		});
+		const order = await t.query(api.orders.get, { token });
+		expect(order?.total).toBe(5000 + 12000 + 800);
+	});
+
+	test("setDeliveryFee is refused for pickup orders and non-owners", async () => {
+		const t = setup();
+		const retailer = await seedDeliveryRetailer(t, RADIUS_ARRANGE);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: addressAtKm(50),
+		});
+		const orderId = (await t.query(api.orders.get, {
+			token: await tk(t, created.shortId),
+		}))!._id;
+		await expect(
+			t
+				.withIdentity({ subject: USER_B })
+				.mutation(api.orders.setDeliveryFee, { orderId, fee: 100 }),
+		).rejects.toThrow(/Forbidden/);
+		await expect(
+			t.withIdentity({ subject: USER_A }).mutation(api.orders.setDeliveryFee, {
+				orderId,
+				fee: 100.5,
+			}),
+		).rejects.toThrow(/whole/);
+	});
+});

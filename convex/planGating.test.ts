@@ -230,6 +230,7 @@ describe("plan gating — CRM (Pro+)", () => {
 			chargeablePickup: true,
 			categories: true,
 			insights: true,
+			radiusDelivery: true,
 		});
 
 		await setPlan(t, retailer._id, "starter");
@@ -240,7 +241,114 @@ describe("plan gating — CRM (Pro+)", () => {
 			chargeablePickup: false,
 			categories: false,
 			insights: false,
+			radiusDelivery: false,
 		});
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Radius delivery pricing (86extzdr8) — setting a radius config is Pro+; the
+// flat fee and CLEARING any config stay all-tier (downgrade never traps a
+// seller into charging fees they can't turn off). See docs/fulfilment.md.
+// ---------------------------------------------------------------------------
+
+describe("plan gating — radius delivery pricing (Pro+)", () => {
+	const businessAddress = {
+		label: "12 Jln Kilang, Shah Alam",
+		latitude: 3.0,
+		longitude: 101.5,
+	};
+	const radiusConfig = {
+		mode: "radius" as const,
+		bands: [{ maxKm: 5, fee: 500 }],
+		outOfRange: "arrange" as const,
+	};
+
+	test("Starter can set a FLAT fee but not radius bands; Pro can set both", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await setPlan(t, retailer._id, "starter");
+
+		// Flat is the all-tier correctness fix.
+		await asA.mutation(api.retailers.updateSettings, {
+			deliveryConfig: { mode: "flat", fee: 800 },
+		});
+		// Radius is the Pro row.
+		await expect(
+			asA.mutation(api.retailers.updateSettings, {
+				businessAddress,
+				deliveryConfig: radiusConfig,
+			}),
+		).rejects.toThrow(/Pro plan/);
+
+		await setPlan(t, retailer._id, "pro");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress,
+			deliveryConfig: radiusConfig,
+		});
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.deliveryConfig?.mode).toBe("radius");
+		expect(me?.businessAddress?.latitude).toBe(3.0);
+	});
+
+	test("downgraded Starter can still CLEAR a radius config (never trapped)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress,
+			deliveryConfig: radiusConfig,
+		});
+		await setPlan(t, retailer._id, "starter");
+
+		await asA.mutation(api.retailers.updateSettings, { deliveryConfig: null });
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.deliveryConfig).toBeUndefined();
+	});
+
+	test("admin act-as sets radius pricing on a Starter store (white-glove)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await setPlan(t, retailer._id, "starter");
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+		await asAdmin.mutation(api.retailers.updateSettings, {
+			retailerId: retailer._id,
+			businessAddress,
+			deliveryConfig: radiusConfig,
+		});
+		const asA = t.withIdentity({ subject: USER_A });
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.deliveryConfig?.mode).toBe("radius");
+	});
+
+	test("radius without a business address is refused; clearing the address under radius is refused", async () => {
+		const t = setup();
+		await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+
+		await expect(
+			asA.mutation(api.retailers.updateSettings, {
+				deliveryConfig: radiusConfig,
+			}),
+		).rejects.toThrow(/business address/i);
+
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress,
+			deliveryConfig: radiusConfig,
+		});
+		await expect(
+			asA.mutation(api.retailers.updateSettings, { businessAddress: null }),
+		).rejects.toThrow(/uses this address/i);
+
+		// Clearing address + config together is fine.
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress: null,
+			deliveryConfig: null,
+		});
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.businessAddress).toBeUndefined();
+		expect(me?.deliveryConfig).toBeUndefined();
 	});
 });
 

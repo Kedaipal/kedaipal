@@ -169,10 +169,15 @@ import { rateLimiter } from "./lib/rateLimiter";
 import { capsForPlan, DAY_MS, TRIAL_DAYS } from "./lib/plans";
 import {
 	type AccessState,
+	assertPlanFeature,
 	assertSubscriptionActive,
 	loadSubscription,
 	resolveAccess,
 } from "./subscriptions";
+import {
+	type DeliveryConfig,
+	sanitizeDeliveryConfig,
+} from "./lib/delivery";
 import { ordersThisMonth } from "./subscriptionUsage";
 import {
 	assertSupportedCurrency,
@@ -212,6 +217,68 @@ import {
 	type StatusLabelMap,
 	type StatusLabels,
 } from "./lib/orderStatus";
+
+// Delivery-charge config + business address (86extzdr8). Wire validators for
+// updateSettings; the shape is validated/normalized by sanitizeDeliveryConfig
+// and sanitizeBusinessAddress in the handler. `v.null()` = clear.
+const deliveryConfigValidator = v.union(
+	v.object({
+		mode: v.literal("flat"),
+		fee: v.number(),
+		freeAbove: v.optional(v.number()),
+	}),
+	v.object({
+		mode: v.literal("radius"),
+		bands: v.array(v.object({ maxKm: v.number(), fee: v.number() })),
+		outOfRange: v.union(v.literal("block"), v.literal("arrange")),
+	}),
+);
+
+const businessAddressValidator = v.object({
+	label: v.string(),
+	latitude: v.number(),
+	longitude: v.number(),
+	placeId: v.optional(v.string()),
+});
+
+type BusinessAddress = {
+	label: string;
+	latitude: number;
+	longitude: number;
+	placeId?: string;
+};
+
+const BUSINESS_ADDRESS_LABEL_MAX = 300;
+
+/** Validate the settings-captured business address (the radius-mode origin).
+ * Coordinates are required — the address exists to measure distance from, so
+ * a coord-less capture is meaningless (the UI only saves autocomplete picks). */
+function sanitizeBusinessAddress(raw: BusinessAddress): BusinessAddress {
+	const label = raw.label.trim();
+	if (label.length === 0) throw new ConvexError("Business address is empty");
+	if (label.length > BUSINESS_ADDRESS_LABEL_MAX) {
+		throw new ConvexError(
+			`Business address must be at most ${BUSINESS_ADDRESS_LABEL_MAX} characters`,
+		);
+	}
+	if (!Number.isFinite(raw.latitude) || raw.latitude < -90 || raw.latitude > 90) {
+		throw new ConvexError("latitude must be between -90 and 90");
+	}
+	if (
+		!Number.isFinite(raw.longitude) ||
+		raw.longitude < -180 ||
+		raw.longitude > 180
+	) {
+		throw new ConvexError("longitude must be between -180 and 180");
+	}
+	const placeId = raw.placeId?.trim();
+	return {
+		label,
+		latitude: raw.latitude,
+		longitude: raw.longitude,
+		placeId: placeId && placeId.length > 0 ? placeId : undefined,
+	};
+}
 
 /** Trim and bound a best-effort client IP before persisting. */
 function sanitizeAcceptanceIp(ip: string | undefined): string | undefined {
@@ -366,6 +433,12 @@ type RetailerPublic = {
 	// had delivery). Storefront and settings invariant guarantee ≥1 working
 	// method, so the buyer always sees a way to receive their order.
 	offerDelivery?: boolean;
+	// Delivery-charge config (86extzdr8) + the radius-mode origin address.
+	// OWNER-only (settings UI): the business address is often the seller's home,
+	// so neither field is ever in the public storefront payload — buyers get the
+	// resolved fee from the `delivery.quote` query instead.
+	deliveryConfig?: DeliveryConfig;
+	businessAddress?: BusinessAddress;
 	// Minimum days' notice before a fulfilment date — drives the storefront date
 	// picker's earliest selectable day. Undefined → 0 (same-day allowed).
 	minFulfilmentNoticeDays?: number;
@@ -483,6 +556,8 @@ async function buildRetailerPublic(
 		paymentMethods,
 		offerSelfCollect: row.offerSelfCollect,
 		offerDelivery: row.offerDelivery,
+		deliveryConfig: row.deliveryConfig as DeliveryConfig | undefined,
+		businessAddress: row.businessAddress,
 		minFulfilmentNoticeDays: row.minFulfilmentNoticeDays,
 		pickupSetupSeen: row.pickupSetupSeen,
 		termsVersion: row.termsVersion,
@@ -916,6 +991,13 @@ export const updateSettings = mutation({
 		coverImageStorageId: v.optional(v.string()),
 		offerSelfCollect: v.optional(v.boolean()),
 		offerDelivery: v.optional(v.boolean()),
+		// Delivery-charge config (86extzdr8). `null` clears (back to free
+		// delivery — always allowed, downgrade never traps); undefined = no
+		// change. Setting radius mode is Pro-gated + requires a business address.
+		deliveryConfig: v.optional(v.union(deliveryConfigValidator, v.null())),
+		// Business address (radius-mode origin). `null` clears — rejected while
+		// a radius config still depends on it; undefined = no change.
+		businessAddress: v.optional(v.union(businessAddressValidator, v.null())),
 		// Minimum days' notice before a fulfilment date. Clamped to [0, 30].
 		minFulfilmentNoticeDays: v.optional(v.number()),
 	},
@@ -959,6 +1041,8 @@ export const updateSettings = mutation({
 			paymentMethods: PaymentMethod[] | undefined;
 			offerSelfCollect: boolean;
 			offerDelivery: boolean;
+			deliveryConfig: DeliveryConfig | undefined;
+			businessAddress: BusinessAddress | undefined;
 			minFulfilmentNoticeDays: number;
 			updatedAt: number;
 		}> = { updatedAt: Date.now() };
@@ -1069,6 +1153,62 @@ export const updateSettings = mutation({
 		}
 		if (args.offerDelivery !== undefined) {
 			patch.offerDelivery = args.offerDelivery;
+		}
+		// Business address first so a same-call "address + radius config" save
+		// resolves the config's origin requirement against the incoming value.
+		if (args.businessAddress !== undefined) {
+			if (args.businessAddress === null) {
+				patch.businessAddress = undefined;
+			} else {
+				patch.businessAddress = sanitizeBusinessAddress(args.businessAddress);
+			}
+		}
+		if (args.deliveryConfig !== undefined) {
+			if (args.deliveryConfig === null) {
+				// Clearing (back to free delivery) is always allowed — a downgraded
+				// seller must be able to stop charging (chargeablePickup posture).
+				patch.deliveryConfig = undefined;
+			} else {
+				let clean: DeliveryConfig;
+				try {
+					clean = sanitizeDeliveryConfig(args.deliveryConfig);
+				} catch (err) {
+					throw new ConvexError((err as Error).message);
+				}
+				if (clean.mode === "radius") {
+					// Radius pricing measures FROM the business address — without one
+					// every order would silently ship free (the fail-open), so refuse
+					// the config instead of storing a dead one.
+					const effectiveAddress =
+						args.businessAddress !== undefined
+							? patch.businessAddress
+							: retailer.businessAddress;
+					if (!effectiveAddress) {
+						throw new ConvexError(
+							"Set your business address first — distance pricing measures from it.",
+						);
+					}
+					// Pro gate on SETTING radius pricing (flat is all-tier). Admin
+					// act-as bypasses for white-glove setup, mirroring the soft-lock.
+					if (!access.actingAsAdmin) {
+						await assertPlanFeature(ctx, retailer._id, "radiusDelivery");
+					}
+				}
+				patch.deliveryConfig = clean;
+			}
+		}
+		// Refuse clearing the business address out from under a live radius
+		// config (either the existing one or one being set in this same call).
+		if (args.businessAddress === null) {
+			const effectiveConfig =
+				args.deliveryConfig !== undefined
+					? patch.deliveryConfig
+					: (retailer.deliveryConfig as DeliveryConfig | undefined);
+			if (effectiveConfig?.mode === "radius") {
+				throw new ConvexError(
+					"Distance-based delivery pricing uses this address — switch the delivery charge off (or to a flat fee) first.",
+				);
+			}
 		}
 		if (args.minFulfilmentNoticeDays !== undefined) {
 			const n = args.minFulfilmentNoticeDays;

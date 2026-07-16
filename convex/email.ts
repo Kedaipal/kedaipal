@@ -47,6 +47,7 @@ export const getOrderForRetailerEmail = internalQuery({
 		paymentProofStorageId: string | undefined;
 		mockupChangeNote: string | undefined;
 		requiresMockup: boolean;
+		deliveryFeePending: boolean;
 	} | null> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) return null;
@@ -70,6 +71,9 @@ export const getOrderForRetailerEmail = internalQuery({
 			mockupChangeNote: order.mockupChangeNote,
 			// A set mockupStatus means the order has a made-to-order custom line.
 			requiresMockup: order.mockupStatus !== undefined,
+			// Delivery charge awaiting the seller — drives the action line on the
+			// newOrder / orderConfirmed alerts. See docs/fulfilment.md.
+			deliveryFeePending: order.deliveryFeePending === true,
 		};
 	},
 });
@@ -171,6 +175,7 @@ export const notifyRetailerOrderAlert = internalAction({
 			storeName: string;
 			locale: Locale;
 			requiresMockup: boolean;
+			deliveryFeePending: boolean;
 		} | null = null;
 		try {
 			meta = await ctx.runQuery(internal.email.getOrderForRetailerEmail, {
@@ -207,6 +212,7 @@ export const notifyRetailerOrderAlert = internalAction({
 			storeName: meta.storeName,
 			dashboardUrl,
 			requiresMockup: meta.requiresMockup,
+			deliveryFeePending: meta.deliveryFeePending,
 			fulfilmentDateLabel:
 				meta.fulfilmentDate !== undefined
 					? formatFulfilmentDate(meta.fulfilmentDate)

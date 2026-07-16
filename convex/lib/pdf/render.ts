@@ -444,7 +444,35 @@ export async function buildOrderReceiptPdf(
 		);
 		y -= 18;
 	}
+	// Delivery charge — same labelled-row rule as the pickup fee.
+	if (data.deliveryFee && data.deliveryFee > 0) {
+		totalsRow(
+			d,
+			"Delivery fee",
+			formatMoney(data.deliveryFee, data.currency),
+			y,
+		);
+		y -= 18;
+	}
+	// Fee-pending order: the invoice total is not final — say so on paper so
+	// the printed number is never mistaken for the amount owed.
+	if (data.deliveryFeePending) {
+		totalsRow(d, "Delivery charge", "To be confirmed", y);
+		y -= 18;
+	}
 	y = totalBar(d, "Total", formatMoney(data.total, data.currency), y);
+	if (data.deliveryFeePending) {
+		draw(
+			d.page,
+			d.font,
+			"Delivery charge to be confirmed by the seller — it will be added to this total.",
+			MARGIN,
+			y + 4,
+			8.5,
+			FAINT,
+		);
+		y -= 14;
+	}
 
 	if (data.customerNote) {
 		y = detailBlock(
