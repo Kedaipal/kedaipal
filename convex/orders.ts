@@ -776,8 +776,18 @@ export const get = query({
 		// One extra doc read on this hot public path so labels resolve from live
 		// retailer config (relabelling is retroactive — no per-order snapshot).
 		const retailer = await ctx.db.get(order.retailerId);
+		// Anti-trilateration: the delivery snapshot's radius audit fields
+		// (distanceKm ~10 m precision, bandMaxKm) are SELLER-ONLY — the public
+		// `delivery.quote` strips them for the same reason. The buyer reaches this
+		// query with a `token` (no auth), so on that path drop the whole snapshot:
+		// the buyer UI only reads the `deliveryFee`/`deliveryFeePending` mirrors,
+		// never the snapshot, so nothing legitimate depends on exposing it. The
+		// authenticated seller/admin (`shortId`) path keeps the full snapshot for
+		// the order-detail "— 7.4 km" audit line. See convex/delivery.ts.
+		const isBuyerRead = token !== undefined;
 		return {
 			...order,
+			deliverySnapshot: isBuyerRead ? undefined : order.deliverySnapshot,
 			statusLabels: retailer?.statusLabels as StatusLabels | undefined,
 			orderStages: retailer?.orderStages as OrderStage[] | undefined,
 			retailerLocale: (retailer?.locale ?? "en") as Locale,

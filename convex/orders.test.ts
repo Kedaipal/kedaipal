@@ -4380,8 +4380,12 @@ describe("orders — delivery charge", () => {
 		});
 		expect(order?.subtotal).toBe(12000);
 		expect(order?.deliveryFee).toBe(800);
-		expect(order?.deliverySnapshot).toEqual({ fee: 800, mode: "flat" });
 		expect(order?.total).toBe(12800);
+		// Snapshot lives on the authenticated seller read (buyer path strips it).
+		const sellerOrder = await t
+			.withIdentity({ subject: USER_A })
+			.query(api.orders.get, { shortId: created.shortId });
+		expect(sellerOrder?.deliverySnapshot).toEqual({ fee: 800, mode: "flat" });
 	});
 
 	test("flat free-above threshold: at/over the threshold ships free (boundary inclusive)", async () => {
@@ -4453,7 +4457,7 @@ describe("orders — delivery charge", () => {
 		expect(order?.total).toBe(order?.subtotal);
 	});
 
-	test("radius: the buyer's distance picks the band; snapshot audits distance + band", async () => {
+	test("radius: distance picks the band; the SELLER path audits distance + band, the BUYER path can't (anti-trilateration)", async () => {
 		const t = setup();
 		const retailer = await seedDeliveryRetailer(t, RADIUS_ARRANGE);
 		const productId = await seedProduct(t, USER_A, retailer._id);
@@ -4468,13 +4472,24 @@ describe("orders — delivery charge", () => {
 			deliveryAddress: addressAtKm(11),
 		});
 		expect(created.deliveryFee).toBe(1500);
-		const order = await t.query(api.orders.get, {
+
+		// Seller (authenticated shortId) — full snapshot incl. the km audit.
+		const sellerOrder = await t
+			.withIdentity({ subject: USER_A })
+			.query(api.orders.get, { shortId: created.shortId });
+		expect(sellerOrder?.deliverySnapshot?.mode).toBe("radius");
+		expect(sellerOrder?.deliverySnapshot?.bandMaxKm).toBe(15);
+		expect(sellerOrder?.deliverySnapshot?.distanceKm).toBeCloseTo(11, 0);
+		expect(sellerOrder?.total).toBe(12000 + 1500);
+
+		// Buyer (token) — the fee mirror is exposed, but the geo-audit snapshot is
+		// stripped so ≥3 chosen-address orders can't trilaterate the seller's home.
+		const buyerOrder = await t.query(api.orders.get, {
 			token: await tk(t, created.shortId),
 		});
-		expect(order?.deliverySnapshot?.mode).toBe("radius");
-		expect(order?.deliverySnapshot?.bandMaxKm).toBe(15);
-		expect(order?.deliverySnapshot?.distanceKm).toBeCloseTo(11, 0);
-		expect(order?.total).toBe(12000 + 1500);
+		expect(buyerOrder?.deliveryFee).toBe(1500);
+		expect(buyerOrder?.total).toBe(12000 + 1500);
+		expect(buyerOrder?.deliverySnapshot).toBeUndefined();
 	});
 
 	test("radius 'block': an out-of-range (or coordinate-less) address refuses checkout", async () => {
@@ -4542,8 +4557,13 @@ describe("orders — delivery charge", () => {
 		});
 		order = await t.query(api.orders.get, { token });
 		expect(order?.deliveryFeePending).toBeUndefined();
-		expect(order?.deliverySnapshot).toEqual({ fee: 2500, mode: "manual" });
+		expect(order?.deliveryFee).toBe(2500);
 		expect(order?.total).toBe(14500);
+		// Snapshot (mode "manual") is on the seller read; the buyer path strips it.
+		const sellerOrder = await asUser.query(api.orders.get, {
+			shortId: created.shortId,
+		});
+		expect(sellerOrder?.deliverySnapshot).toEqual({ fee: 2500, mode: "manual" });
 		await t.mutation(api.orders.claimPayment, { token });
 		order = await t.query(api.orders.get, { token });
 		expect(order?.paymentStatus).toBe("claimed");

@@ -64,7 +64,10 @@ which was **wrong** for any seller who charges postage/rider fees. A seller now 
    an address suggestion, so the fee is visible **before** "Send order" (ticket AC).
    **Privacy: the public quote strips `distanceKm`/`bandMaxKm`** — returning raw distances to
    arbitrary probe coordinates would let a caller trilaterate the seller's home; band-coarse
-   fees are the accepted exposure (any zone price list reveals as much).
+   fees are the accepted exposure (any zone price list reveals as much). The **buyer's
+   `orders.get(token)` path strips the whole `deliverySnapshot` for the same reason** (the
+   buyer UI only reads the `deliveryFee`/`deliveryFeePending` mirrors); the authenticated
+   seller/admin `shortId` path keeps the full snapshot for the order-detail km audit.
 2. **`orders.create`** — the authoritative resolve + snapshot. The create result **echoes
    `deliveryFee`/`deliveryFeePending` back** so the client builds the `wa.me` message from
    the STORED numbers, never its preview.
@@ -593,6 +596,7 @@ The pricing plan caps Starter at **1 active pickup location** and lets Pro+ have
 
 ## Known limitations
 
+- **Delivery distance trusts the buyer's chosen coordinates.** Radius pricing measures to the lat/lng from the buyer's Google-autocomplete pick — there's no server-side geocode of the typed address (the deliberate no-Distance-Matrix design). A buyer could pick a *nearer* suggestion than their real address to land a cheaper band. Mitigations: the seller sees the real address label on the order, and the frozen `deliverySnapshot.distanceKm` audits what was charged, so a mismatch is catchable at fulfilment. Acceptable for v1 given the manual-close model; a server geocode is the escape hatch if abuse shows up.
 - **No hard-delete.** Soft-delete only. A retailer cannot permanently remove a location, even one with zero orders against it. Acceptable for v1; revisit if the inactive list becomes cluttered.
 - **`channelUserId` migration not part of this feature.** Identity is still keyed by `waPhone` on `orders.customer` and `customers`. The channel-adapter Phase 4–6 migration is independent and unblocked separately.
 - **No React component tests.** Same constraint as the customer-database feature — pure helpers are unit-tested, UI components are verified via `tsc` + manual end-to-end in the browser.
