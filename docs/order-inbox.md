@@ -105,8 +105,19 @@ helpers (`statusAgeMs`, `formatStatusAge`, `statusAgeSeverity`).
   see [`fulfilment-date.md`](./fulfilment-date.md)). Each card's meta line shows
   the **absolute placed-at datetime + relative age** (`formatOrderTimestamp` +
   `formatStatusAge`, e.g. "12 Jul, 3:45 PM (3h ago)") so the seller reads both
-  "when" and "how long ago" without opening the detail page — the item count
-  moved off the card to make room (it lives on the detail).
+  "when" and "how long ago" without opening the detail page.
+  Each card shows **what was ordered** ([`86ey9uny8`](https://app.clickup.com/t/86ey9uny8),
+  Sue Chef Kitchen feedback — an order list that doesn't show the products fails
+  the core job): a tinted block of item rows (`qty× product · variant`, from the
+  frozen order-item snapshots — no extra query) with a per-line amount from `sm:`
+  up (phones keep the grouped list but drop the price column; the bold total
+  stays the money number there). Rows are capped via
+  `src/lib/order-card-items.ts` (`summarizeOrderCardItems`): 2 item lines, the
+  rest folded into one "+N more items" row carrying the folded lines' aggregated
+  amount — folding only kicks in past cap+1, so a 3-item order shows all 3
+  instead of a pointless "+1 more". Product names on cards pair with the search
+  predicate already matching item name/variant, so seeing "Pavlova" and typing
+  it both work.
   "Load more" raises an in-query `limit`. Per-bucket empty states ("No new orders
   — you're all caught up 🎉").
 - **`order-time-badge.tsx`** — "time in status" pill (e.g. "2h"). Only **pending**
@@ -130,6 +141,8 @@ helpers (`statusAgeMs`, `formatStatusAge`, `statusAgeSeverity`).
   search (id/name/phone), payment filter treating `undefined` as unpaid, owner-only.
 - `order-time-badge.test.tsx`, `order-filters.test.tsx` — severity tone + filter
   toggling / active count.
+- `src/lib/order-card-items.test.ts` — card item summary: line totals, cap,
+  fold-only-past-cap+1, folded amount reconstructs the subtotal.
 - `convex/orders.test.ts` → "orders — bulk status" — applies to all eligible +
   skips no-ops, skips mockup-gated when bulking to packed, bulk-cancel restores
   stock, foreign-order batch is rejected (owner-only).
