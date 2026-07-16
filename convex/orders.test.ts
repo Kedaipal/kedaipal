@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { todayMytMidnight } from "./lib/fulfilmentDate";
+import { sortInboxOrders } from "./lib/orderInboxFilter";
 import schema from "./schema";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -2919,6 +2920,80 @@ describe("orders — inbox search", () => {
 		expect(byId.orders.map((o) => o._id)).toContain(o1._id);
 	});
 
+	test("omitting limit returns the full window; limit trims rows but keeps total/counts (stable-window pagination)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 100 });
+		const asA = t.withIdentity({ subject: USER_A });
+
+		for (let i = 0; i < 5; i++) {
+			await mkOrder(t, retailer._id, productId, { name: `Cust ${i}` });
+		}
+
+		// No limit → the whole filtered window comes back (the inbox slices it
+		// client-side, so "Load more" never re-queries).
+		const full = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		expect(full.orders).toHaveLength(5);
+		expect(full.total).toBe(5);
+		expect(full.capped).toBe(false);
+
+		// limit trims the returned rows (the Home counts-only path) WITHOUT
+		// distorting total or the bucket counts — those stay over the full set.
+		const trimmed = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			limit: 1,
+		});
+		expect(trimmed.orders).toHaveLength(1);
+		expect(trimmed.total).toBe(5);
+		expect(trimmed.counts.new).toBe(5);
+		// Same first row as the full window — a limit is a prefix of the window,
+		// so the client's slice and the server's trim agree on ordering.
+		expect(trimmed.orders[0]?._id).toBe(full.orders[0]?._id);
+	});
+
+	test("returns newest-created first regardless of fulfilment date (recency default; sort is client-side)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 100 });
+		const asA = t.withIdentity({ subject: USER_A });
+
+		// A is due sooner but created FIRST; B is due far out but created LAST.
+		const { shortId: sA } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Sooner-but-older" },
+			deliveryAddress: validAddress,
+			fulfilmentDate: todayMytMidnight(),
+		});
+		const { shortId: sB } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Later-but-newer" },
+			deliveryAddress: validAddress,
+			fulfilmentDate: todayMytMidnight() + 20 * DAY_MS,
+		});
+		const oA = await t.query(api.orders.get, { token: await tk(t, sA) });
+		const oB = await t.query(api.orders.get, { token: await tk(t, sB) });
+		if (!oA || !oB) throw new Error("no order");
+
+		// The query returns the raw newest-first window — the "Due date" re-order
+		// happens client-side (sortInboxOrders), so the server puts B (newest) on
+		// top even though A is due sooner.
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		expect(res.orders.map((o) => o._id)).toEqual([oB._id, oA._id]);
+	});
+
 	test("counts.dueToday tracks open orders due today; unpaid excludes received", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
@@ -3943,7 +4018,7 @@ describe("fulfilment date", () => {
 		).rejects.toThrow(/between 0 and 30/);
 	});
 
-	test("inbox sorts by fulfilment date ascending, dateless orders last", async () => {
+	test("query returns newest-first; the 'Due date' client sort orders by fulfilment date ascending, dateless last", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const asA = t.withIdentity({ subject: USER_A });
@@ -3958,7 +4033,7 @@ describe("fulfilment date", () => {
 				deliveryAddress: validAddress,
 				fulfilmentDate,
 			});
-		// Insert out of date order: far, then dateless, then soon.
+		// Insert order: far, then dateless, then soon (soon is newest-created).
 		await mk(todayMytMidnight() + 5 * DAY_MS);
 		await mk(undefined);
 		await mk(todayMytMidnight() + 2 * DAY_MS);
@@ -3967,8 +4042,16 @@ describe("fulfilment date", () => {
 			retailerId: retailer._id,
 			bucket: "all",
 		});
-		const dates = res.orders.map((o) => o.fulfilmentDate);
-		expect(dates).toEqual([
+		// Server default = newest-created first (the "Newest" sort).
+		expect(res.orders.map((o) => o.fulfilmentDate)).toEqual([
+			todayMytMidnight() + 2 * DAY_MS,
+			undefined,
+			todayMytMidnight() + 5 * DAY_MS,
+		]);
+		// The inbox's "Due date" toggle re-orders that same window client-side.
+		expect(
+			sortInboxOrders(res.orders, "due").map((o) => o.fulfilmentDate),
+		).toEqual([
 			todayMytMidnight() + 2 * DAY_MS,
 			todayMytMidnight() + 5 * DAY_MS,
 			undefined,
@@ -4019,11 +4102,12 @@ describe("fulfilment date", () => {
 			bucket: "all",
 			fulfilmentWindow: "this_week",
 		});
-		// All three are within the next 7 days, returned soonest-first.
+		// All three are within the next 7 days. The query returns newest-created
+		// first (the default sort); due-date ordering is the client toggle's job.
 		expect(weekRes.orders.map((o) => o.fulfilmentDate)).toEqual([
-			today,
-			today + 1 * DAY_MS,
 			today + 5 * DAY_MS,
+			today + 1 * DAY_MS,
+			today,
 		]);
 	});
 });
