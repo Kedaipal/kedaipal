@@ -1,10 +1,11 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import {
 	ArrowLeft,
 	ArrowRight,
 	BadgeCheck,
 	Ban,
+	Bell,
 	Check,
 	CheckCircle2,
 	ChevronDown,
@@ -34,6 +35,10 @@ import {
 	PAYMENT_METHOD_LABELS,
 	paymentMethodLabel,
 } from "../../convex/lib/paymentMethod";
+import {
+	type ManualReminderBlock,
+	manualReminderEligibility,
+} from "../../convex/lib/paymentReminder";
 import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
 import { FulfilmentDateBadge } from "../components/dashboard/fulfilment-date-badge";
 import {
@@ -163,6 +168,40 @@ function formatRelative(epochMs: number | undefined): string {
 	return `${Math.floor(diff / day)}d ago`;
 }
 
+/** Human "in ~2h" / "in ~15m" for the manual-reminder cooldown countdown. */
+function formatUntil(epochMs: number): string {
+	const diff = epochMs - Date.now();
+	if (diff <= 0) return "shortly";
+	const minutes = Math.ceil(diff / 60_000);
+	if (minutes < 60) return `in ~${minutes}m`;
+	return `in ~${Math.ceil(minutes / 60)}h`;
+}
+
+/** Seller-facing reason a manual payment reminder couldn't be sent — used for
+ * the error toast when the server rejects a send the button thought was OK. */
+function manualReminderBlockMessage(
+	reason: ManualReminderBlock | "not_found",
+): string {
+	switch (reason) {
+		case "cancelled":
+			return "This order was cancelled — nothing to remind about.";
+		case "pending":
+			return "This order hasn't been confirmed yet.";
+		case "paid":
+			return "This order is already paid.";
+		case "claimed":
+			return "The buyer already tapped “I've paid” — check for their payment.";
+		case "mockup_gated":
+			return "The buyer hasn't been asked to pay yet (mockup pending).";
+		case "no_contact":
+			return "No WhatsApp number on file for this buyer.";
+		case "cooldown":
+			return "You just reminded this buyer — try again a little later.";
+		default:
+			return "Couldn't send the reminder. Try again.";
+	}
+}
+
 /**
  * Stepper + next action, always on top: dots for reached stages, an outlined
  * dot for the next one, and the single most likely transition as a big button
@@ -245,6 +284,7 @@ function OrderDetailRoute() {
 	const advanceToStage = useMutation(api.orders.advanceToStage);
 	const setCarrierUrl = useMutation(api.orders.setCarrierTrackingUrl);
 	const markPaymentReceived = useMutation(api.orders.markPaymentReceived);
+	const sendPaymentReminder = useAction(api.orders.sendPaymentReminder);
 	const deleteOrder = useMutation(api.orders.deleteOrder);
 	const proofUrl = useQuery(
 		api.orders.getPaymentProofUrl,
@@ -265,6 +305,7 @@ function OrderDetailRoute() {
 	const [carrierInput, setCarrierInput] = useState<string | null>(null);
 	const [savingCarrier, setSavingCarrier] = useState(false);
 	const [confirmingPayment, setConfirmingPayment] = useState(false);
+	const [sendingReminder, setSendingReminder] = useState(false);
 	const [confirmPaymentOpen, setConfirmPaymentOpen] = useState(false);
 	const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
 	const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
@@ -319,6 +360,22 @@ function OrderDetailRoute() {
 	// Production (any packed-or-later stage) is blocked while a mockup is required
 	// but not yet approved/waived. Shared gate — same source as the server.
 	const mockupGated = isMockupGateClosed(order);
+	// Manual "Send payment reminder" eligibility — the SAME predicate the server
+	// enforces (single source of truth), so the button's disabled-with-reason
+	// state can't disagree with what a tap would actually do. Recomputed each
+	// render; the order refetches after a send, so the 6h cooldown kicks in live.
+	const reminderEligibility = manualReminderEligibility(
+		{
+			status: order.status,
+			paymentStatus: order.paymentStatus,
+			mockupStatus: order.mockupStatus,
+			mockupWaivedAt: order.mockupWaivedAt,
+			lastManualReminderAt: order.lastManualReminderAt,
+			createdAt: order.createdAt,
+			customer: { waPhone: order.customer.waPhone },
+		},
+		Date.now(),
+	);
 
 	async function handleAdvance(stageId: string) {
 		if (!order) return;
@@ -399,6 +456,28 @@ function OrderDetailRoute() {
 			toast.error(convexErrorMessage(err));
 		} finally {
 			setConfirmingPayment(false);
+		}
+	}
+
+	async function handleSendReminder() {
+		if (!order) return;
+		setSendingReminder(true);
+		try {
+			const res = await sendPaymentReminder({ shortId });
+			if (res.ok) {
+				const who = order.customer.name ?? "The buyer";
+				toast.success("Payment reminder sent", {
+					description: `${who} will receive it on WhatsApp.`,
+				});
+			} else {
+				// The server re-checks state (the buyer may have paid in another tab,
+				// or the cooldown boundary differs) — surface why nothing was sent.
+				toast.error(manualReminderBlockMessage(res.reason ?? "not_found"));
+			}
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSendingReminder(false);
 		}
 	}
 
@@ -663,6 +742,38 @@ function OrderDetailRoute() {
 						<BadgeCheck className="size-4" />
 						{mockupGated ? "Awaiting mockup approval" : "Mark payment received"}
 					</Button>
+					{/* Manual reminder — re-send the payment details on demand. Hidden
+					    while mockup-gated (the buyer hasn't been asked to pay yet). Also
+					    recovers the case where the buyer never got the first bot reply. */}
+					{!mockupGated ? (
+						<div className="flex flex-col gap-1.5 border-t border-border pt-3">
+							<Button
+								onClick={handleSendReminder}
+								isLoading={sendingReminder}
+								disabled={sendingReminder || !reminderEligibility.ok}
+								variant="ghost"
+								className="h-11 w-full"
+							>
+								<Bell className="size-4" />
+								Send payment reminder
+							</Button>
+							<p className="text-xs text-muted-foreground">
+								{!reminderEligibility.ok
+									? reminderEligibility.reason === "no_contact"
+										? "No WhatsApp number on file for this buyer yet."
+										: reminderEligibility.reason === "cooldown"
+											? `Reminded ${formatRelative(order.lastManualReminderAt)} — you can remind again ${formatUntil(
+													reminderEligibility.retryAt ?? Date.now(),
+												)}.`
+											: "A reminder isn't available for this order right now."
+									: order.lastManualReminderAt
+										? `Last reminded ${formatRelative(
+												order.lastManualReminderAt,
+											)}. Re-sends the payment details to their WhatsApp.`
+										: `Re-sends the payment details — amount, how to pay, and an "I've paid" button — to their WhatsApp. Handy if they never got the first reply. May not reach buyers you haven't messaged in 24h.`}
+							</p>
+						</div>
+					) : null}
 				</section>
 			) : null}
 

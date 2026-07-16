@@ -168,7 +168,8 @@ export type SystemMessageKey =
 	| "counterOrderConfirmedUnpaid"
 	| "orderReceiptCaption"
 	| "orderInvoiceCaption"
-	| "paymentReminder";
+	| "paymentReminder"
+	| "paymentReminderIntro";
 
 type SystemCopy = {
 	paymentReceived: (v: CopyVars) => string;
@@ -210,6 +211,12 @@ type SystemCopy = {
 	// on an order whose payment was never claimed/received. See
 	// docs/payment-reminder.md. Not retailer-overridable (system copy).
 	paymentReminder: (v: CopyVars) => string;
+	// Intro line for the seller's MANUAL payment reminder — prefixes the full
+	// payment message (transfer ref + methods + QR + "I've paid" CTA) re-sent
+	// from the order page. Doubles as recovery when the buyer never got the
+	// first confirmation, so it re-states the order + amount and stands alone.
+	// See docs/payment-reminder.md. Not retailer-overridable (system copy).
+	paymentReminderIntro: (v: CopyVars) => string;
 };
 
 export const systemMessages: Record<Locale, SystemCopy> = {
@@ -256,6 +263,10 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			} is still awaiting payment. Once you've paid, tap 'I've paid' so we can get it moving${
 				trackingUrl ? `: ${trackingUrl}` : "."
 			}${contactLine(contactPhone, "en")}`,
+		paymentReminderIntro: ({ shortId, storeName, amount }) =>
+			`👋 A reminder from ${storeName}: order ${shortId}${
+				amount ? ` (${amount})` : ""
+			} is still awaiting payment. Here's how to pay — tap 'I've paid' once it's done:`,
 	},
 	ms: {
 		paymentReceived: ({ shortId, storeName, trackingUrl }) =>
@@ -300,6 +311,10 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			} masih menunggu pembayaran. Selepas membayar, tekan 'I've paid' supaya kami boleh teruskan${
 				trackingUrl ? `: ${trackingUrl}` : "."
 			}${contactLine(contactPhone, "ms")}`,
+		paymentReminderIntro: ({ shortId, storeName, amount }) =>
+			`👋 Peringatan daripada ${storeName}: pesanan ${shortId}${
+				amount ? ` (${amount})` : ""
+			} masih menunggu pembayaran. Berikut cara membayar — tekan 'I've paid' setelah selesai:`,
 	},
 };
 

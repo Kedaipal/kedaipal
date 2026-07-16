@@ -27,6 +27,14 @@ export const PAYMENT_REMINDER_AFTER_MS =
  */
 export const PAYMENT_REMINDER_SCAN_WINDOW_MS = OPEN_PAYMENT_WINDOW_DAYS * DAY_MS;
 
+/**
+ * Minimum gap between two MANUAL reminders on the same order. A seller can
+ * re-send payment details on demand, but not hammer one buyer — the button is
+ * disabled-with-reason for 6h after each send (WABA per-seller caps apply on
+ * top). Short enough to re-nudge within a day, long enough to not annoy.
+ */
+export const MANUAL_REMINDER_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+
 export type PaymentReminderOrderFields = MockupGateFields & {
 	status:
 		| "pending"
@@ -37,6 +45,7 @@ export type PaymentReminderOrderFields = MockupGateFields & {
 		| "cancelled";
 	paymentStatus?: "unpaid" | "claimed" | "received";
 	paymentReminderSentAt?: number;
+	lastManualReminderAt?: number;
 	createdAt: number;
 	customer: { waPhone?: string };
 };
@@ -53,6 +62,9 @@ export type PaymentReminderOrderFields = MockupGateFields & {
  *  - the mockup gate isn't closed (custom orders defer payment until the buyer
  *    approves the design — nagging before that contradicts the confirm copy);
  *  - never reminded before (one nudge, ever);
+ *  - the seller didn't already MANUALLY nudge within the lead window — a manual
+ *    re-send in the last 3 days makes the auto nudge redundant, and firing both
+ *    back-to-back would double-message the buyer;
  *  - the buyer is reachable on WhatsApp;
  *  - the order is at least 11 days old.
  */
@@ -68,6 +80,68 @@ export function isPaymentReminderDue(
 	}
 	if (isMockupGateClosed(order)) return false;
 	if (order.paymentReminderSentAt !== undefined) return false;
+	if (
+		order.lastManualReminderAt !== undefined &&
+		now - order.lastManualReminderAt < PAYMENT_REMINDER_LEAD_DAYS * DAY_MS
+	) {
+		return false;
+	}
 	if (!order.customer.waPhone) return false;
 	return now - order.createdAt >= PAYMENT_REMINDER_AFTER_MS;
+}
+
+/**
+ * Why a manual "Send payment reminder" can't fire right now — `null` means it
+ * CAN. The seller drives this button on demand, so unlike the auto nudge there's
+ * no age gate and no once-ever cap; instead the blocks mirror the states where
+ * asking the buyer to pay would be wrong or impossible:
+ *  - `cancelled` / `pending` — no live confirmed order to chase (a pending order
+ *    was never confirmed in chat, so the buyer's WhatsApp isn't even captured);
+ *  - `paid` — payment already received, nothing to chase;
+ *  - `claimed` — the buyer tapped "I've paid" and is waiting on the SELLER;
+ *  - `mockup_gated` — a custom item still needs approval; the buyer was told
+ *    "no payment needed yet", so nudging contradicts the confirm copy;
+ *  - `no_contact` — no buyer WhatsApp number on file to message;
+ *  - `cooldown` — a manual reminder went out < 6h ago (carries `retryAt`).
+ */
+export type ManualReminderBlock =
+	| "cancelled"
+	| "pending"
+	| "paid"
+	| "claimed"
+	| "mockup_gated"
+	| "no_contact"
+	| "cooldown";
+
+export type ManualReminderEligibility =
+	| { ok: true }
+	| { ok: false; reason: ManualReminderBlock; retryAt?: number };
+
+/**
+ * Pure eligibility check for the seller's manual payment reminder — the single
+ * source of truth shared by the server action (the lock) and the dashboard
+ * button (disabled-with-reason mirror). Returns the first failing reason so the
+ * UI can render a specific message. See docs/payment-reminder.md.
+ */
+export function manualReminderEligibility(
+	order: PaymentReminderOrderFields,
+	now: number,
+): ManualReminderEligibility {
+	if (order.status === "cancelled") return { ok: false, reason: "cancelled" };
+	if (order.status === "pending") return { ok: false, reason: "pending" };
+	if (order.paymentStatus === "received") return { ok: false, reason: "paid" };
+	if (order.paymentStatus === "claimed") return { ok: false, reason: "claimed" };
+	if (isMockupGateClosed(order)) return { ok: false, reason: "mockup_gated" };
+	if (!order.customer.waPhone) return { ok: false, reason: "no_contact" };
+	if (
+		order.lastManualReminderAt !== undefined &&
+		now - order.lastManualReminderAt < MANUAL_REMINDER_COOLDOWN_MS
+	) {
+		return {
+			ok: false,
+			reason: "cooldown",
+			retryAt: order.lastManualReminderAt + MANUAL_REMINDER_COOLDOWN_MS,
+		};
+	}
+	return { ok: true };
 }

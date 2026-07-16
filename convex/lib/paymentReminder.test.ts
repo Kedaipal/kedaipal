@@ -2,11 +2,15 @@
 import { describe, expect, test } from "vitest";
 import {
 	isPaymentReminderDue,
+	MANUAL_REMINDER_COOLDOWN_MS,
+	manualReminderEligibility,
 	PAYMENT_REMINDER_AFTER_MS,
+	PAYMENT_REMINDER_LEAD_DAYS,
 	type PaymentReminderOrderFields,
 } from "./paymentReminder";
 
 const NOW = 1_800_000_000_000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function order(
 	over: Partial<PaymentReminderOrderFields> = {},
@@ -84,5 +88,108 @@ describe("isPaymentReminderDue", () => {
 			isPaymentReminderDue(order({ paymentReminderSentAt: NOW - 1 }), NOW),
 		).toBe(false);
 		expect(isPaymentReminderDue(order({ customer: {} }), NOW)).toBe(false);
+	});
+
+	test("a recent MANUAL reminder suppresses the auto nudge (no back-to-back)", () => {
+		// Seller manually reminded 1 day ago → within the 3-day lead window → the
+		// cron skips so the buyer isn't double-messaged.
+		expect(
+			isPaymentReminderDue(order({ lastManualReminderAt: NOW - DAY_MS }), NOW),
+		).toBe(false);
+		// Manual reminder older than the lead window → the auto nudge fires again.
+		expect(
+			isPaymentReminderDue(
+				order({
+					lastManualReminderAt:
+						NOW - (PAYMENT_REMINDER_LEAD_DAYS + 1) * DAY_MS,
+				}),
+				NOW,
+			),
+		).toBe(true);
+	});
+});
+
+describe("manualReminderEligibility", () => {
+	// Manual reminders have no age gate and no once-ever cap — the seller drives
+	// them. `order()` defaults to a confirmed, unpaid, reachable order (eligible).
+	test("eligible: confirmed/packed/shipped/delivered, unpaid, reachable", () => {
+		for (const status of [
+			"confirmed",
+			"packed",
+			"shipped",
+			"delivered",
+		] as const) {
+			expect(manualReminderEligibility(order({ status }), NOW)).toEqual({
+				ok: true,
+			});
+		}
+	});
+
+	test("eligible regardless of order age (no day-11 gate)", () => {
+		// Freshly created — the auto nudge wouldn't be due, but the seller can
+		// manually re-send (e.g. the buyer never got the first bot reply).
+		expect(
+			manualReminderEligibility(order({ createdAt: NOW - 1000 }), NOW),
+		).toEqual({ ok: true });
+	});
+
+	test("blocked: cancelled / pending", () => {
+		expect(manualReminderEligibility(order({ status: "cancelled" }), NOW)).toEqual(
+			{ ok: false, reason: "cancelled" },
+		);
+		expect(manualReminderEligibility(order({ status: "pending" }), NOW)).toEqual({
+			ok: false,
+			reason: "pending",
+		});
+	});
+
+	test("blocked: already paid / claimed", () => {
+		expect(
+			manualReminderEligibility(order({ paymentStatus: "received" }), NOW),
+		).toEqual({ ok: false, reason: "paid" });
+		expect(
+			manualReminderEligibility(order({ paymentStatus: "claimed" }), NOW),
+		).toEqual({ ok: false, reason: "claimed" });
+	});
+
+	test("blocked: mockup gate closed (payment not owed yet)", () => {
+		expect(
+			manualReminderEligibility(order({ mockupStatus: "submitted" }), NOW),
+		).toEqual({ ok: false, reason: "mockup_gated" });
+	});
+
+	test("blocked: no buyer WhatsApp on file", () => {
+		expect(manualReminderEligibility(order({ customer: {} }), NOW)).toEqual({
+			ok: false,
+			reason: "no_contact",
+		});
+	});
+
+	test("blocked within the 6h cooldown, with retryAt; allowed after it elapses", () => {
+		const justNow = manualReminderEligibility(
+			order({ lastManualReminderAt: NOW - 60_000 }),
+			NOW,
+		);
+		expect(justNow).toEqual({
+			ok: false,
+			reason: "cooldown",
+			retryAt: NOW - 60_000 + MANUAL_REMINDER_COOLDOWN_MS,
+		});
+		// Exactly one cooldown ago → eligible again (boundary is inclusive-open).
+		expect(
+			manualReminderEligibility(
+				order({ lastManualReminderAt: NOW - MANUAL_REMINDER_COOLDOWN_MS }),
+				NOW,
+			),
+		).toEqual({ ok: true });
+	});
+
+	test("cancelled takes precedence over cooldown (most-closed reason first)", () => {
+		expect(
+			manualReminderEligibility(
+				order({ status: "cancelled", lastManualReminderAt: NOW - 60_000 }),
+				NOW,
+			),
+		).toEqual({ ok: false, reason: "cancelled" });
 	});
 });

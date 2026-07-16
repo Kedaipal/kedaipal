@@ -856,6 +856,113 @@ export const notifyPaymentReminder = internalAction({
 });
 
 /**
+ * Everything the manual payment-reminder send needs, in one read: the buyer's
+ * phone + order amount (for the intro), the resolved payment methods + pickup
+ * snapshot (the full payment message body), and the current status/payment/mockup
+ * state so the action can re-check the order didn't leave the remindable state
+ * between the seller's tap and this send. Keyed by orderId (the seller-auth +
+ * cooldown gate already ran in orders.prepareManualReminder).
+ */
+export const getManualReminderContext = internalQuery({
+	args: { orderId: v.id("orders") },
+	handler: async (
+		ctx,
+		{ orderId },
+	): Promise<{
+		retailerId: Id<"retailers">;
+		shortId: string;
+		storeName: string;
+		customerWaPhone: string | undefined;
+		total: number;
+		currency: string;
+		trackingToken: string | undefined;
+		locale: Locale;
+		pickupSnapshot: PickupSnapshot | undefined;
+		payment: ResolvedPayment;
+		status: Doc<"orders">["status"];
+		paymentStatus: Doc<"orders">["paymentStatus"];
+		mockupPending: boolean;
+	} | null> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) return null;
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) return null;
+		return {
+			retailerId: order.retailerId,
+			shortId: order.shortId,
+			storeName: retailer.storeName,
+			customerWaPhone: order.customer.waPhone,
+			total: order.total,
+			currency: order.currency,
+			trackingToken: order.trackingToken,
+			locale: (retailer.locale as Locale | undefined) ?? "en",
+			pickupSnapshot: order.pickupSnapshot,
+			payment: await resolvePaymentForMessage(ctx, retailer),
+			status: order.status,
+			paymentStatus: order.paymentStatus,
+			mockupPending: isMockupGateClosed(order),
+		};
+	},
+});
+
+/**
+ * Scheduled by orders.sendPaymentReminder (the seller's "Send payment reminder"
+ * button). Re-sends the FULL payment message — intro (paymentReminderIntro) →
+ * [pickup] → transfer ref → methods → QR, with an "I've paid" CTA — so an unpaid
+ * buyer re-sees exactly how to pay, and a buyer who missed the first bot reply
+ * gets everything at once. Best-effort, gated `session_message` (the manual nudge
+ * is exactly the traffic WABA protection governs). Re-checks that payment wasn't
+ * claimed/received and the order didn't close or re-gate in the gap since the
+ * seller tapped. No powered-by footer — this is a transactional re-send, not a
+ * fresh storefront confirm. See docs/payment-reminder.md.
+ */
+export const notifyManualPaymentReminder = internalAction({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<void> => {
+		const meta = await ctx
+			.runQuery(internal.whatsapp.getManualReminderContext, { orderId })
+			.catch((err) => {
+				console.error("WA manual-reminder lookup failed", err);
+				return null;
+			});
+		if (!meta) return;
+		if (!meta.customerWaPhone) return;
+		// Order left the "open + unpaid" state between the seller's tap and here.
+		if (meta.status === "cancelled") return;
+		if (meta.paymentStatus === "claimed" || meta.paymentStatus === "received")
+			return;
+		// Custom item re-gated (e.g. buyer requested changes) — payment isn't owed.
+		if (meta.mockupPending) return;
+
+		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
+		const trackingToken =
+			meta.trackingToken ??
+			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
+		if (!trackingToken) return; // order vanished — don't ship a dead link
+		const locale = pickLocale(meta.locale);
+		const introBody = renderSystemMessage(locale, "paymentReminderIntro", {
+			shortId: meta.shortId,
+			storeName: meta.storeName,
+			amount: `${meta.currency} ${(meta.total / 100).toFixed(2)}`,
+		});
+		await sendPaymentMessage(
+			makeGuardedSender(ctx, meta.retailerId, "session_message"),
+			meta.customerWaPhone,
+			{
+				introBody,
+				locale,
+				shortId: meta.shortId,
+				storeName: meta.storeName,
+				trackingUrl: `${appUrl}/track/${trackingToken}`,
+				pickupSnapshot: meta.pickupSnapshot,
+				currency: meta.currency,
+				payment: meta.payment,
+			},
+		);
+	},
+});
+
+/**
  * Scheduled by orders.markPaymentReceived. Sends a localized "payment received"
  * message to the shopper. Same swallow-errors / no-op-on-missing-waPhone shape
  * as `notifyStatusChange`. Bypasses the regular status pipeline because the

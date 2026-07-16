@@ -661,6 +661,13 @@ export default defineSchema({
 		// daily cron at schedule time so it never double-sends. Undefined = not
 		// sent (yet, or never became due). See docs/payment-reminder.md.
 		paymentReminderSentAt: v.optional(v.number()),
+		// When the seller last MANUALLY re-sent the payment details to the buyer
+		// from the order page (distinct from the automatic paymentReminderSentAt
+		// so the two triggers never corrupt each other's once-only logic). Drives
+		// the 6h per-order cooldown and the "Reminded Xh ago" label, and lets the
+		// auto-cron skip an order the seller already nudged. Undefined = never
+		// manually reminded. See docs/payment-reminder.md.
+		lastManualReminderAt: v.optional(v.number()),
 		// Mockup/proof approval — a third independent dimension (like payment),
 		// gating the confirmed→packed transition for made-to-order orders.
 		// Undefined = order has no proof-required item (no gate). See
