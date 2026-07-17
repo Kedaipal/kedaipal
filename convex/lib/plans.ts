@@ -67,6 +67,13 @@ export type PlanFeatures = {
 	/** Seller Insights (86ey5tfrz): the /app/insights analytics page. Starter
 	 * gets a locked teaser; the query returns `{ gated: true }` server-side. */
 	insights: boolean;
+	/** Radius-based delivery pricing (86extzdr8): distance bands from the
+	 * seller's business address. Gates only SETTING a radius config — clearing
+	 * it (or switching to the all-tier flat fee) stays un-gated so a downgraded
+	 * seller is never trapped, and an order's frozen fee displays on every
+	 * tier. The flat delivery fee is deliberately NOT a feature row — a wrong
+	 * total is a correctness bug, so flat is all-tier. */
+	radiusDelivery: boolean;
 };
 
 export type PlanFeature = keyof PlanFeatures;
@@ -78,6 +85,7 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		chargeablePickup: false,
 		categories: false,
 		insights: false,
+		radiusDelivery: false,
 	},
 	pro: {
 		crm: true,
@@ -85,6 +93,7 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		chargeablePickup: true,
 		categories: true,
 		insights: true,
+		radiusDelivery: true,
 	},
 	scale: {
 		crm: true,
@@ -92,6 +101,7 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		chargeablePickup: true,
 		categories: true,
 		insights: true,
+		radiusDelivery: true,
 	},
 };
 

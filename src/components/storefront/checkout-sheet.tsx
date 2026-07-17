@@ -1,4 +1,5 @@
-import { useMutation } from "convex/react";
+import { useStore } from "@tanstack/react-form";
+import { useMutation, useQuery } from "convex/react";
 import {
 	Clock,
 	ExternalLink,
@@ -12,6 +13,7 @@ import { Dialog } from "radix-ui";
 import { type FormEvent, type ReactNode, useMemo, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import type { PublicDeliveryQuote } from "../../../convex/delivery";
 import {
 	assertValidFulfilmentDate,
 	formatFulfilmentDate,
@@ -170,6 +172,10 @@ function buildWaMessage(
 	deliveryMethod: "delivery" | "self_collect",
 	deliveryAddress: SanitizedDeliveryAddress | undefined,
 	pickupLocation: PublicPickupLocation | undefined,
+	// The SERVER-resolved delivery charge from the create result — the message
+	// total must equal the stored order total, so it never comes from the
+	// client-side preview quote.
+	delivery: { fee: number; pending: boolean },
 	note: string | undefined,
 	fulfilmentDate: number | undefined,
 ): string {
@@ -187,13 +193,25 @@ function buildWaMessage(
 		lines.push(`• ${item.quantity}x ${name}${suffix}`);
 	}
 	lines.push("");
-	// The chosen point's fee is part of what the buyer pays — the message total
-	// must match the order total the server computed (subtotal + fee).
+	// The chosen point's fee / the resolved delivery charge are part of what
+	// the buyer pays — the message total must match the order total the server
+	// computed (subtotal + fees). The same resolveDeliveryQuote produced both
+	// numbers, so they can't diverge.
 	const pickupFee =
 		deliveryMethod === "self_collect" ? pickupFeeOf(pickupLocation) : 0;
+	const deliveryFee = deliveryMethod === "delivery" ? delivery.fee : 0;
+	const deliveryFeePending = deliveryMethod === "delivery" && delivery.pending;
 	if (pickupFee > 0)
 		lines.push(`Pickup fee: ${formatPrice(pickupFee, cart.currency)}`);
-	lines.push(`Total: ${formatPrice(cart.total + pickupFee, cart.currency)}`);
+	if (deliveryFee > 0)
+		lines.push(`Delivery fee: ${formatPrice(deliveryFee, cart.currency)}`);
+	lines.push(
+		`Total: ${formatPrice(cart.total + pickupFee + deliveryFee, cart.currency)}${
+			deliveryFeePending ? " + delivery" : ""
+		}`,
+	);
+	if (deliveryFeePending)
+		lines.push("(Delivery charge to be confirmed by seller)");
 	if (hasQuoteItem) lines.push("(Custom item price to be confirmed by seller)");
 	if (deliveryMethod === "self_collect") {
 		if (pickupLocation) {
@@ -376,7 +394,7 @@ export function CheckoutSheet({
 			)?.customImageStorageId;
 
 			try {
-				const { shortId } = await createOrder({
+				const created = await createOrder({
 					retailerId,
 					items: cart.items.map((i) => ({
 						variantId: i.variantId,
@@ -396,11 +414,15 @@ export function CheckoutSheet({
 				});
 				const message = buildWaMessage(
 					storeName,
-					shortId,
+					created.shortId,
 					cart,
 					value.deliveryMethod,
 					sanitizedAddress,
 					resolvedPickupLocation,
+					{
+						fee: created.deliveryFee ?? 0,
+						pending: created.deliveryFeePending === true,
+					},
 					customerNote,
 					fulfilmentEpoch,
 				);
@@ -419,6 +441,35 @@ export function CheckoutSheet({
 	function handleSubmit(e: FormEvent) {
 		submitThenFocusError(form, e);
 	}
+
+	// --- Live delivery-charge preview (86extzdr8) ---------------------------
+	// Watch the method + the coordinates the Google autocomplete stamped into
+	// form state (three primitive selectors so keystrokes elsewhere don't
+	// re-render the sheet), and quote the fee server-side. The server strips
+	// distances (privacy) and orders.create re-resolves authoritatively — this
+	// is display + gating only.
+	const watchedMethod = useStore(form.store, (s) => s.values.deliveryMethod);
+	const watchedLat = useStore(form.store, (s) => s.values.address.latitude);
+	const watchedLng = useStore(form.store, (s) => s.values.address.longitude);
+	const latNum = watchedLat.trim().length > 0 ? Number(watchedLat) : NaN;
+	const lngNum = watchedLng.trim().length > 0 ? Number(watchedLng) : NaN;
+	const hasCoords = Number.isFinite(latNum) && Number.isFinite(lngNum);
+	const deliveryQuote: PublicDeliveryQuote | undefined = useQuery(
+		api.delivery.quote,
+		open && deliveryAvailable && watchedMethod === "delivery"
+			? {
+					retailerId,
+					latitude: hasCoords ? latNum : undefined,
+					longitude: hasCoords ? lngNum : undefined,
+					subtotal: cart.total,
+				}
+			: "skip",
+	);
+	const quoteForDelivery =
+		watchedMethod === "delivery" ? deliveryQuote : undefined;
+	// A hard block only once the buyer has actually entered an address — while
+	// the form is still empty the note under the breakdown does the guiding.
+	const deliveryBlocked = quoteForDelivery?.kind === "blocked";
 
 	return (
 		<Dialog.Root open={open} onOpenChange={(o) => !o && onClose()}>
@@ -733,30 +784,81 @@ export function CheckoutSheet({
 												sortedPickups.find((p) => p._id === pickupLocationId))
 											: undefined;
 									const pickupFee = pickupFeeOf(selectedPickup);
+									// Live delivery-charge preview (see quoteForDelivery above):
+									// a resolved fee joins the total; an "arrange" order shows a
+									// pending line; free-above-threshold earns a FREE row.
+									const quote =
+										deliveryMethod === "delivery"
+											? quoteForDelivery
+											: undefined;
+									const deliveryFee = quote?.kind === "fee" ? quote.fee : 0;
+									const showBreakdown = pickupFee > 0 || deliveryFee > 0;
 									return (
 										<div className="mb-3 flex flex-col gap-1">
+											{showBreakdown ? (
+												<div className="flex items-center justify-between text-sm text-muted-foreground">
+													<span>Subtotal</span>
+													<span>{formatPrice(cart.total, cart.currency)}</span>
+												</div>
+											) : null}
 											{pickupFee > 0 ? (
-												<>
-													<div className="flex items-center justify-between text-sm text-muted-foreground">
-														<span>Subtotal</span>
-														<span>
-															{formatPrice(cart.total, cart.currency)}
-														</span>
-													</div>
-													<div className="flex items-center justify-between text-sm text-muted-foreground">
-														<span>Pickup fee — {selectedPickup?.label}</span>
-														<span>{formatPrice(pickupFee, cart.currency)}</span>
-													</div>
-												</>
+												<div className="flex items-center justify-between text-sm text-muted-foreground">
+													<span>Pickup fee — {selectedPickup?.label}</span>
+													<span>{formatPrice(pickupFee, cart.currency)}</span>
+												</div>
+											) : null}
+											{deliveryFee > 0 ? (
+												<div className="flex items-center justify-between text-sm text-muted-foreground">
+													<span>Delivery fee</span>
+													<span>{formatPrice(deliveryFee, cart.currency)}</span>
+												</div>
+											) : null}
+											{quote?.kind === "free" &&
+											quote.reason === "threshold" ? (
+												<div className="flex items-center justify-between text-sm font-medium text-accent">
+													<span>Delivery</span>
+													<span>FREE for this order size</span>
+												</div>
+											) : null}
+											{quote?.kind === "pending" ? (
+												<div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
+													<span>Delivery charge</span>
+													<span className="text-right">
+														Confirmed by seller after checkout
+													</span>
+												</div>
 											) : null}
 											<div className="flex items-center justify-between">
 												<span className="text-sm text-muted-foreground">
 													Total
 												</span>
 												<span className="text-xl font-bold">
-													{formatPrice(cart.total + pickupFee, cart.currency)}
+													{formatPrice(
+														cart.total + pickupFee + deliveryFee,
+														cart.currency,
+													)}
+													{quote?.kind === "pending" ? (
+														<span className="text-sm font-medium text-muted-foreground">
+															{" "}
+															+ delivery
+														</span>
+													) : null}
 												</span>
 											</div>
+											{quote?.kind === "blocked" ? (
+												<p
+													role="alert"
+													className="mt-1 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive"
+												>
+													{quote.reason === "out_of_range"
+														? `This address is outside ${storeName}'s delivery area.${
+																selfCollectAvailable
+																	? " Pickup is still available."
+																	: ""
+															}`
+														: "Pick your address from the Google suggestions so we can calculate your delivery fee."}
+												</p>
+											) : null}
 										</div>
 									);
 								}}
@@ -775,7 +877,10 @@ export function CheckoutSheet({
 											isSubmitting ||
 											cart.items.length === 0 ||
 											noCheckoutPhone ||
-											neitherAvailable
+											neitherAvailable ||
+											// Out-of-area / coord-less address on a "block" store —
+											// the breakdown explains why (server enforces it too).
+											deliveryBlocked
 										}
 										className="h-12 w-full text-base"
 									>

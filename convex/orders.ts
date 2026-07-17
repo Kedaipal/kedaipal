@@ -39,6 +39,10 @@ import {
 import { statusToBucket } from "./lib/orderBuckets";
 import { type CsvOrder, ordersToCsv } from "./lib/orderCsv";
 import {
+	type ManualReminderBlock,
+	manualReminderEligibility,
+} from "./lib/paymentReminder";
+import {
 	buildInboxPredicate,
 	compareInboxOrder,
 	type InboxFilterArgs,
@@ -50,6 +54,11 @@ import {
 	generateTrackingToken,
 	isMockupGateClosed,
 } from "./lib/order";
+import {
+	DELIVERY_FEE_MAX,
+	type DeliveryConfig,
+	resolveDeliveryQuote,
+} from "./lib/delivery";
 import {
 	anchorOrdinal,
 	type Locale,
@@ -114,6 +123,62 @@ function resolveMockupImageIds(order: Doc<"orders">): string[] {
  * drift between them. `locationType` defaults to "self_collect" so a row created
  * before drop-off existed freezes as self-collect (no blank kind downstream).
  */
+type DeliverySnapshot = NonNullable<Doc<"orders">["deliverySnapshot"]>;
+
+/**
+ * Resolve the delivery charge for a delivery order against the retailer's
+ * config and freeze it into snapshot form. Shared by `create` and the buyer's
+ * address re-price so both spell the outcome identically:
+ *  - fee → a frozen `deliverySnapshot` (mirrored to `deliveryFee`);
+ *  - free → nothing stored (0 is never stored — one spelling of free);
+ *  - "arrange" out-of-range / coord-less → `pending: true` (the seller
+ *    confirms the charge later via setDeliveryFee; payment ask is held);
+ *  - "block" → ConvexError, mirroring the storefront's disabled submit.
+ */
+function resolveDeliveryForOrder(
+	retailer: Doc<"retailers">,
+	subtotal: number,
+	address: { latitude?: number; longitude?: number } | undefined,
+): { snapshot: DeliverySnapshot | undefined; pending: boolean } {
+	const config = retailer.deliveryConfig as DeliveryConfig | undefined;
+	if (config?.mode === "radius" && !retailer.businessAddress) {
+		// Shouldn't happen (updateSettings refuses radius without an address) —
+		// fail open to free delivery rather than blocking the storefront.
+		console.warn(
+			`[orders] retailer ${retailer._id} has radius deliveryConfig but no businessAddress — treating delivery as free`,
+		);
+	}
+	const quote = resolveDeliveryQuote({
+		config,
+		subtotal,
+		origin: retailer.businessAddress,
+		destination:
+			address?.latitude !== undefined && address.longitude !== undefined
+				? { latitude: address.latitude, longitude: address.longitude }
+				: undefined,
+	});
+	if (quote.kind === "blocked") {
+		throw new ConvexError(
+			quote.reason === "no_coords"
+				? "Pick your address from the suggestions so we can calculate the delivery fee"
+				: "That address is outside this store's delivery area",
+		);
+	}
+	if (quote.kind === "pending") return { snapshot: undefined, pending: true };
+	if (quote.kind === "fee") {
+		return {
+			snapshot: {
+				fee: quote.fee,
+				mode: quote.mode,
+				distanceKm: quote.distanceKm,
+				bandMaxKm: quote.bandMaxKm,
+			},
+			pending: false,
+		};
+	}
+	return { snapshot: undefined, pending: false };
+}
+
 function buildPickupSnapshot(location: Doc<"pickupLocations">): PickupSnapshot {
 	return {
 		label: location.label,
@@ -275,7 +340,14 @@ export const create = mutation({
 	handler: async (
 		ctx,
 		args,
-	): Promise<{ shortId: string; trackingToken: string }> => {
+	): Promise<{
+		shortId: string;
+		trackingToken: string;
+		// Server-resolved delivery charge, echoed back so the client builds the
+		// wa.me message from the STORED numbers (never its preview quote).
+		deliveryFee?: number;
+		deliveryFeePending?: boolean;
+	}> => {
 		// Rate limit FIRST — public endpoint, throttle per storefront before any DB reads.
 		await rateLimiter.limit(ctx, "orderCreate", {
 			key: args.retailerId,
@@ -491,10 +563,31 @@ export const create = mutation({
 			});
 		}
 
-		// The chosen pickup point's frozen fee rides the same extras seam as the
-		// mockup quote — total = subtotal + fee from the very first insert.
+		// Delivery charge (86extzdr8): resolved server-side at create — the
+		// authoritative price, whatever the client previewed. Needs the item
+		// subtotal (flat free-above threshold), so it runs after the item loop.
+		let deliverySnapshot: DeliverySnapshot | undefined;
+		let deliveryFeePending = false;
+		if (effectiveDeliveryMethod === "delivery") {
+			const itemSubtotal = snapshotItems.reduce(
+				(sum, i) => sum + i.price * i.quantity,
+				0,
+			);
+			const resolved = resolveDeliveryForOrder(
+				retailer,
+				itemSubtotal,
+				sanitizedAddress,
+			);
+			deliverySnapshot = resolved.snapshot;
+			deliveryFeePending = resolved.pending;
+		}
+
+		// The chosen pickup point's frozen fee and the delivery charge ride the
+		// same extras seam as the mockup quote — total = subtotal + fees from the
+		// very first insert.
 		const { subtotal, total } = computeOrderTotals(snapshotItems, {
 			pickupFee: sanitizedPickupSnapshot?.fee,
+			deliveryFee: deliverySnapshot?.fee,
 		});
 		const now = Date.now();
 
@@ -548,6 +641,9 @@ export const create = mutation({
 			pickupLocationId: resolvedPickupLocationId,
 			pickupSnapshot: sanitizedPickupSnapshot,
 			pickupFee: sanitizedPickupSnapshot?.fee,
+			deliverySnapshot,
+			deliveryFee: deliverySnapshot?.fee,
+			deliveryFeePending: deliveryFeePending || undefined,
 			fulfilmentDate: sanitizedFulfilmentDate,
 			customerNote: sanitizedCustomerNote,
 			// Only keep the buyer image when the order actually has a custom line —
@@ -592,7 +688,12 @@ export const create = mutation({
 			{ orderId },
 		);
 
-		return { shortId, trackingToken };
+		return {
+			shortId,
+			trackingToken,
+			deliveryFee: deliverySnapshot?.fee,
+			deliveryFeePending: deliveryFeePending || undefined,
+		};
 	},
 });
 
@@ -679,8 +780,18 @@ export const get = query({
 		// One extra doc read on this hot public path so labels resolve from live
 		// retailer config (relabelling is retroactive — no per-order snapshot).
 		const retailer = await ctx.db.get(order.retailerId);
+		// Anti-trilateration: the delivery snapshot's radius audit fields
+		// (distanceKm ~10 m precision, bandMaxKm) are SELLER-ONLY — the public
+		// `delivery.quote` strips them for the same reason. The buyer reaches this
+		// query with a `token` (no auth), so on that path drop the whole snapshot:
+		// the buyer UI only reads the `deliveryFee`/`deliveryFeePending` mirrors,
+		// never the snapshot, so nothing legitimate depends on exposing it. The
+		// authenticated seller/admin (`shortId`) path keeps the full snapshot for
+		// the order-detail "— 7.4 km" audit line. See convex/delivery.ts.
+		const isBuyerRead = token !== undefined;
 		return {
 			...order,
+			deliverySnapshot: isBuyerRead ? undefined : order.deliverySnapshot,
 			statusLabels: retailer?.statusLabels as StatusLabels | undefined,
 			orderStages: retailer?.orderStages as OrderStage[] | undefined,
 			retailerLocale: (retailer?.locale ?? "en") as Locale,
@@ -868,6 +979,77 @@ export const sendOrderDocumentToBuyer = action({
 		});
 		if (!inputs.ok) return { ok: false, reason: inputs.reason };
 		return deliverOrderDocument(ctx, inputs);
+	},
+});
+
+/**
+ * Auth + eligibility + atomic cooldown stamp for a manual payment reminder, in
+ * one mutation so two fast taps can't both slip past the 6h gate (compare on the
+ * freshly-read `lastManualReminderAt`, then patch). Owner OR admin act-as via
+ * resolveSharedOrder — the same seam the resend-document action uses; throws
+ * ConvexError on not-authenticated / forbidden. Returns the block reason (no
+ * stamp) when the order isn't in a remindable state, else stamps and hands back
+ * the orderId for the send. See docs/payment-reminder.md.
+ */
+export const prepareManualReminder = internalMutation({
+	args: { shortId: v.string() },
+	handler: async (
+		ctx,
+		{ shortId },
+	): Promise<
+		| { ok: true; orderId: Id<"orders"> }
+		| { ok: false; reason: ManualReminderBlock | "not_found" }
+	> => {
+		const order = await resolveSharedOrder(ctx, { shortId });
+		if (!order) return { ok: false, reason: "not_found" };
+		const eligibility = manualReminderEligibility(
+			{
+				status: order.status,
+				paymentStatus: order.paymentStatus,
+				mockupStatus: order.mockupStatus,
+				mockupWaivedAt: order.mockupWaivedAt,
+				deliveryFeePending: order.deliveryFeePending,
+				lastManualReminderAt: order.lastManualReminderAt,
+				createdAt: order.createdAt,
+				customer: { waPhone: order.customer.waPhone },
+			},
+			Date.now(),
+		);
+		if (!eligibility.ok) return { ok: false, reason: eligibility.reason };
+		const now = Date.now();
+		await ctx.db.patch(order._id, {
+			lastManualReminderAt: now,
+			updatedAt: now,
+		});
+		return { ok: true, orderId: order._id };
+	},
+});
+
+/**
+ * Seller-triggered "Send payment reminder" — re-sends the buyer the full payment
+ * message (amount + transfer ref + methods + QR + "I've paid" CTA) for an unpaid
+ * order, on demand. Doubles as recovery when the buyer never received the first
+ * bot confirmation. Auth + eligibility + the 6h cooldown stamp happen atomically
+ * in prepareManualReminder; the actual send is best-effort through the WABA
+ * `session_message` gateway (kill switch / caps / opt-outs apply, and may
+ * silently not deliver outside Meta's 24h window — same caveat as every session
+ * send). A blocked reason is returned WITHOUT sending, so the button can explain
+ * why. See docs/payment-reminder.md.
+ */
+export const sendPaymentReminder = action({
+	args: { shortId: v.string() },
+	handler: async (
+		ctx,
+		{ shortId },
+	): Promise<{ ok: boolean; reason?: ManualReminderBlock | "not_found" }> => {
+		const prep = await ctx.runMutation(internal.orders.prepareManualReminder, {
+			shortId,
+		});
+		if (!prep.ok) return { ok: false, reason: prep.reason };
+		await ctx.runAction(internal.whatsapp.notifyManualPaymentReminder, {
+			orderId: prep.orderId,
+		});
+		return { ok: true };
 	},
 });
 
@@ -1083,6 +1265,11 @@ export const searchOrders = query({
 		// orders read as "storefront". ANDs with the other filters.
 		source: v.optional(orderSourceValidator),
 		searchText: v.optional(v.string()),
+		// Max rows to return. OMIT it for the inbox: the query then returns the
+		// whole filtered+sorted window (up to MAX_INBOX_SCAN) as a *stable*
+		// subscription, and the client paginates by slicing that window — so
+		// "Load more" never re-scans (see docs/order-inbox.md). Callers that only
+		// need the counts (e.g. the Home strip) pass `limit: 1` to stay cheap.
 		limit: v.optional(v.number()),
 	},
 	handler: async (
@@ -1185,13 +1372,24 @@ export const searchOrders = query({
 				searchText,
 			}),
 		);
-		const sorted = [...filtered].sort(compareInboxOrder);
+		// Returned newest-created first (the scan order) — the inbox's default
+		// "Newest first" sort. The inbox applies its "Due date" toggle client-side
+		// over this stable window (sortInboxOrders), so toggling never re-queries.
+		// See docs/order-inbox.md ("Sort"). Export sorts independently.
+		const sorted = filtered;
 
-		const take = Math.max(1, Math.min(limit ?? 50, 200));
+		// No `limit` → return the full window (the inbox slices client-side, so
+		// its subscription args stay stable across "Load more"). A supplied limit
+		// (Home's counts-only `limit: 1`) still trims the payload. Either way the
+		// hard ceiling is the scan window, never the old silent 200-row cap.
+		const take = Math.max(1, Math.min(limit ?? MAX_INBOX_SCAN, MAX_INBOX_SCAN));
 		return {
 			orders: sorted.slice(0, take),
 			total: sorted.length,
 			counts,
+			// True when the scan hit MAX_INBOX_SCAN: orders older than the newest
+			// 1,000 are outside the window, so the list AND counts under-report.
+			// The inbox surfaces this in a footer; export is the full-history path.
 			capped: all.length >= MAX_INBOX_SCAN,
 		};
 	},
@@ -1265,6 +1463,7 @@ function orderToCsvSource(o: Doc<"orders">): CsvOrder {
 		items: o.items,
 		subtotal: o.subtotal,
 		pickupFee: o.pickupFee,
+		deliveryFee: o.deliveryFee,
 		total: o.total,
 		currency: o.currency,
 		customerNote: o.customerNote,
@@ -1892,9 +2091,40 @@ export const updateDeliveryAddress = mutation({
 			throw new ConvexError((err as Error).message);
 		}
 
+		// Re-price the delivery charge against the NEW address — a distance-band
+		// fee is a function of where the order goes, so the fee follows the
+		// address exactly like the pickup fee follows the point (see
+		// updatePickupLocation). Blocked destinations throw (the old address —
+		// and its total — stay untouched); an "arrange" out-of-range edit flips
+		// the order back to fee-pending. Pending-only gate above means no payment
+		// has been asked for yet, so the total is still safe to move.
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		const resolved = resolveDeliveryForOrder(
+			retailer,
+			order.subtotal,
+			sanitized,
+		);
+		const { subtotal, total } = computeOrderTotals(order.items, {
+			quotedAmount: order.mockupQuotedAmount,
+			pickupFee: order.pickupFee,
+			deliveryFee: resolved.snapshot?.fee,
+		});
+		// Keep the customer's denormalized totalSpent in step with the new total.
+		if (order.customerId && total !== order.total)
+			await adjustAggregatesForTotalChange(ctx, {
+				customerId: order.customerId,
+				delta: total - order.total,
+			});
+
 		const now = Date.now();
 		await ctx.db.patch(order._id, {
 			deliveryAddress: sanitized,
+			deliverySnapshot: resolved.snapshot,
+			deliveryFee: resolved.snapshot?.fee,
+			deliveryFeePending: resolved.pending || undefined,
+			subtotal,
+			total,
 			updatedAt: now,
 		});
 		await ctx.db.insert("orderEvents", {
@@ -1903,6 +2133,88 @@ export const updateDeliveryAddress = mutation({
 			note: "address_updated",
 			createdAt: now,
 		});
+	},
+});
+
+/**
+ * Seller (or admin act-as): set — or adjust — the delivery charge on a
+ * delivery order. This is how a fee-pending "arrange via WhatsApp" order
+ * (radius mode, out of range / no coordinates) gets its final total: the
+ * seller agrees the charge with the buyer in chat, enters it here, and the
+ * held payment ask goes out with the updated total. Also usable to correct a
+ * charge before any payment is in motion (typo insurance) — locked once the
+ * buyer claims or the seller marks payment received, mirroring the mockup
+ * quote's "no re-pricing after commitment" posture. `fee` of 0 = deliver free
+ * (clears the charge and the pending flag).
+ */
+export const setDeliveryFee = mutation({
+	args: { orderId: v.id("orders"), fee: v.number() },
+	handler: async (ctx, { orderId, fee }): Promise<void> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) throw new ConvexError("Order not found");
+		// Owner OR admin acting-as (see convex/lib/auth.ts).
+		const access = await requireRetailerAccess(ctx, order.retailerId);
+		if ((order.deliveryMethod ?? "delivery") !== "delivery")
+			throw new ConvexError("Only delivery orders carry a delivery charge");
+		if (order.status === "cancelled")
+			throw new ConvexError("This order was cancelled");
+		if (
+			order.paymentStatus === "claimed" ||
+			order.paymentStatus === "received"
+		) {
+			throw new ConvexError(
+				"Payment is already in motion — the delivery charge can't change now",
+			);
+		}
+		if (!Number.isInteger(fee) || fee < 0)
+			throw new ConvexError("Delivery charge must be a whole, non-negative amount");
+		if (fee > DELIVERY_FEE_MAX)
+			throw new ConvexError("Delivery charge is unrealistically large — check the amount");
+
+		const wasPending = order.deliveryFeePending === true;
+		const snapshot: DeliverySnapshot | undefined =
+			fee > 0 ? { fee, mode: "manual" } : undefined;
+		const now = Date.now();
+		const { subtotal, total } = computeOrderTotals(order.items, {
+			quotedAmount: order.mockupQuotedAmount,
+			pickupFee: order.pickupFee,
+			deliveryFee: snapshot?.fee,
+		});
+		// Keep the customer's denormalized totalSpent in step with the new total.
+		if (order.customerId && total !== order.total)
+			await adjustAggregatesForTotalChange(ctx, {
+				customerId: order.customerId,
+				delta: total - order.total,
+			});
+		await ctx.db.patch(orderId, {
+			deliverySnapshot: snapshot,
+			deliveryFee: snapshot?.fee,
+			deliveryFeePending: undefined,
+			subtotal,
+			total,
+			updatedAt: now,
+		});
+		await ctx.db.insert("orderEvents", {
+			orderId,
+			status: order.status,
+			note: `delivery_fee_set (fee ${fee})`,
+			createdAt: now,
+		});
+		// Release the held payment ask — but only when this set actually resolved
+		// a pending charge, the buyer already got their confirm (status past
+		// "pending"), and the mockup gate isn't ALSO holding payment (that path
+		// sends its own prompt on approve/waive, which re-checks this flag).
+		if (
+			wasPending &&
+			order.status !== "pending" &&
+			!isMockupGateClosed(order) &&
+			order.customer.waPhone
+		) {
+			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyDeliveryFeeSet, {
+				orderId,
+			});
+		}
+		await logAdminAction(ctx, access, "orders.setDeliveryFee", orderId);
 	},
 });
 
@@ -1954,6 +2266,7 @@ export const updatePickupLocation = mutation({
 		const { subtotal, total } = computeOrderTotals(order.items, {
 			quotedAmount: order.mockupQuotedAmount,
 			pickupFee: snapshot.fee,
+			deliveryFee: order.deliveryFee,
 		});
 		// Keep the customer's denormalized totalSpent in step with the new total.
 		if (order.customerId && total !== order.total)
@@ -2013,6 +2326,13 @@ export const claimPayment = mutation({
 		if (isMockupGateClosed(order)) {
 			throw new ConvexError(
 				"Please approve the mockup before paying — your order total is confirmed once you approve the design.",
+			);
+		}
+		// Same hold while the delivery charge is unconfirmed — the total the
+		// buyer would be claiming against isn't final yet.
+		if (order.deliveryFeePending === true) {
+			throw new ConvexError(
+				"The seller is still confirming your delivery charge — you'll get the payment details right after.",
 			);
 		}
 
@@ -2080,6 +2400,14 @@ export const markPaymentReceived = mutation({
 		if (isMockupGateClosed(order)) {
 			throw new ConvexError(
 				"Approve or remove the custom item first — the buyer is asked to pay only after the mockup is approved (or you proceed without approval).",
+			);
+		}
+		// Delivery charge must be settled before money is recorded — otherwise
+		// the received amount is being reconciled against an unfinished total.
+		// Set the charge (0 = deliver free) and this unblocks.
+		if (order.deliveryFeePending === true) {
+			throw new ConvexError(
+				"Set the delivery charge first — the order total isn't final until you do.",
 			);
 		}
 
@@ -2307,11 +2635,12 @@ export const submitMockup = mutation({
 		);
 
 		const now = Date.now();
-		// Quote and pickup fee are independent extras — carry the frozen fee
-		// so re-pricing the custom work never drops the pickup charge.
+		// Quote, pickup fee and delivery fee are independent extras — carry the
+		// frozen fees so re-pricing the custom work never drops a charge.
 		const { subtotal, total } = computeOrderTotals(order.items, {
 			quotedAmount: effectiveQuote,
 			pickupFee: order.pickupFee,
+			deliveryFee: order.deliveryFee,
 		});
 		// Keep the customer's denormalized totalSpent in step with the new total.
 		if (order.customerId)
@@ -2379,10 +2708,11 @@ export const updateMockupQuote = mutation({
 			order.mockupQuotedAmount,
 		);
 		const now = Date.now();
-		// Same extras rule as submitMockup — keep the frozen pickup fee.
+		// Same extras rule as submitMockup — keep the frozen fees.
 		const { subtotal, total } = computeOrderTotals(order.items, {
 			quotedAmount: effectiveQuote,
 			pickupFee: order.pickupFee,
+			deliveryFee: order.deliveryFee,
 		});
 		// Keep the customer's denormalized totalSpent in step with the new total.
 		if (order.customerId)
@@ -2622,6 +2952,7 @@ export const declineMockupItem = mutation({
 		// still collects the remaining items at the same paid point.
 		const { subtotal, total } = computeOrderTotals(kept, {
 			pickupFee: order.pickupFee,
+			deliveryFee: order.deliveryFee,
 		});
 		if (order.customerId)
 			await adjustAggregatesForTotalChange(ctx, {

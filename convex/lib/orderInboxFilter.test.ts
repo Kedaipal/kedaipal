@@ -4,6 +4,7 @@ import {
 	buildInboxPredicate,
 	compareInboxOrder,
 	type FilterableOrder,
+	sortInboxOrders,
 } from "./orderInboxFilter";
 
 function order(overrides: Partial<FilterableOrder> = {}): FilterableOrder {
@@ -124,5 +125,39 @@ describe("compareInboxOrder", () => {
 		expect(compareInboxOrder({ fulfilmentDate: undefined }, { fulfilmentDate: 20 })).toBe(1);
 		expect(compareInboxOrder({ fulfilmentDate: 10 }, { fulfilmentDate: undefined })).toBe(-1);
 		expect(compareInboxOrder({ fulfilmentDate: undefined }, { fulfilmentDate: undefined })).toBe(0);
+	});
+});
+
+describe("sortInboxOrders", () => {
+	// Input is always newest-created first (the scan order); ids encode that.
+	const scanOrder = [
+		{ id: "d", fulfilmentDate: 30 }, // newest
+		{ id: "c", fulfilmentDate: undefined },
+		{ id: "b", fulfilmentDate: 10 },
+		{ id: "a", fulfilmentDate: 20 }, // oldest
+	];
+
+	test("'recent' keeps the newest-first scan order untouched", () => {
+		expect(sortInboxOrders(scanOrder, "recent").map((o) => o.id)).toEqual([
+			"d",
+			"c",
+			"b",
+			"a",
+		]);
+	});
+
+	test("'due' sorts by fulfilment date ascending, dateless last", () => {
+		expect(sortInboxOrders(scanOrder, "due").map((o) => o.id)).toEqual([
+			"b", // 10
+			"a", // 20
+			"d", // 30
+			"c", // dateless → bottom
+		]);
+	});
+
+	test("never mutates the input array", () => {
+		const input = [...scanOrder];
+		sortInboxOrders(input, "due");
+		expect(input.map((o) => o.id)).toEqual(["d", "c", "b", "a"]);
 	});
 });

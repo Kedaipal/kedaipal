@@ -60,11 +60,33 @@ orders once (`by_retailer`, newest-first, capped at `MAX_INBOX_SCAN = 1000`) and
 returns **the filtered page plus the per-bucket counts in a single subscription**:
 `{ orders, total, counts, capped }`.
 
-- **Default sort = fulfilment date ascending** (soonest-first), so the seller
-  works the most urgent orders top-down. Orders without a `fulfilmentDate`
-  (legacy / any path that didn't capture one) sink to the bottom, then fall back
-  to newest-created. The scan is newest-first; the result is re-sorted in-memory.
-  See [`fulfilment-date.md`](./fulfilment-date.md).
+- **`limit` is optional and defaults to the full window.** Omit it (the inbox
+  does) and the query returns the entire filtered+sorted set (up to
+  `MAX_INBOX_SCAN`); the client paginates by **slicing that window**, so "Load
+  more" reveals more rows without changing the subscription args — **no re-scan
+  per page**. Callers that only need the counts (the Home "today strip") pass
+  `limit: 1` to keep the payload tiny. This replaced the old growing-`limit`
+  model, where every "Load more" re-ran the whole scan/filter/sort just to widen
+  a server-side slice. Trade-off: a store with a large filtered set ships more
+  rows up front (bounded at 1,000); the escape hatch when that bites is indexed
+  cursor pagination + the Aggregate component (see below).
+
+- **Sort (`searchOrders` returns newest-created first; the toggle is client-side).**
+  The query returns the window in scan order — **newest-created first**, the
+  default the seller expects from WhatsApp/Shopee. The inbox then applies the
+  chosen sort **on the client** over the already-fetched window via
+  `sortInboxOrders` (`convex/lib/orderInboxFilter.ts`), so toggling **Newest ⇄
+  Due date is instant — no re-query**:
+  - **Newest first** (default) — newest-created on top. Stops a far-future order
+    from burying one that just arrived (the old due-date default did exactly that,
+    which confused sellers — see the Sort control below).
+  - **Due date** — `compareInboxOrder`: fulfilment date ascending (soonest-first,
+    the fulfilment queue), dateless orders sink to the bottom. Relies on the
+    newest-first input for its within-date tiebreaker.
+  Fulfilment urgency is *also* surfaced by the Due chips + due-today banner + Home
+  strip, so due-date is a deliberate opt-in, not the default. Export sorts
+  independently (still `compareInboxOrder`, a stable bookkeeping order). See
+  [`fulfilment-date.md`](./fulfilment-date.md).
 - **Counts** are over the full set, independent of the active filters/search, so
   the chips always show true totals.
 - **Filtering** (bucket statuses, payment — `undefined` reads as `unpaid` —,
@@ -94,9 +116,12 @@ helpers (`statusAgeMs`, `formatStatusAge`, `statusAgeSeverity`).
 
 - **`src/routes/app.orders.index.tsx`** — URL is the source of truth (TanStack
   `validateSearch`: `bucket`, `q`, `pay[]`, `method[]`, `munspec`, `from`, `to`,
-  `mockup`, `fwin`; all optional, defaults kept out of the URL). Debounced search
-  drives the query and mirrors into `?q`. Bucket chips show counts (New
-  highlighted). A **"Due" chip row** (Today / Tomorrow / This week, driving
+  `mockup`, `fwin`, `sort`; all optional, defaults kept out of the URL — `sort`
+  only stores the non-default `"due"`). Debounced search drives the query and
+  mirrors into `?q`. Bucket chips show counts (New highlighted). A **Sort control**
+  (a Popover on the search row: _Newest first_ / _Due date_) flips the list order
+  client-side — see the Sort note above for why Newest is the default. Changing
+  sort resets pagination to the first page (it's a view change). A **"Due" chip row** (Today / Tomorrow / This week, driving
   `fwin`) sits inline above the advanced filters — fulfilment urgency is a
   primary axis for F&B sellers, not a buried filter. Each order row carries a
   **fulfilment-date badge** (`fulfilment-date-badge.tsx`) that leads with urgency
@@ -107,8 +132,14 @@ helpers (`statusAgeMs`, `formatStatusAge`, `statusAgeSeverity`).
   `formatStatusAge`, e.g. "12 Jul, 3:45 PM (3h ago)") so the seller reads both
   "when" and "how long ago" without opening the detail page — the item count
   moved off the card to make room (it lives on the detail).
-  "Load more" raises an in-query `limit`. Per-bucket empty states ("No new orders
-  — you're all caught up 🎉").
+  "Load more" grows a client-side `visibleCount` that slices the fetched window
+  (no refetch — see the backend note). A **results footer** below the list keeps
+  the two invisible behaviours honest: normally `Showing X of Y orders`, and when
+  `capped` is true it swaps to _"Showing your 1,000 most recent orders — older
+  ones aren't listed here. Export to CSV for your full history."_ (the scan takes
+  the newest 1,000 by date **then** filters, so filters/search can't reach past
+  the cap — export is the full-history path). Per-bucket empty states ("No new
+  orders — you're all caught up 🎉").
 - **`order-time-badge.tsx`** — "time in status" pill (e.g. "2h"). Only **pending**
   escalates: amber >4h, red >24h (the missed-order risk window); other statuses
   are neutral.
