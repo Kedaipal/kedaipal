@@ -93,6 +93,11 @@ block → transfer-reference line → payment methods → QR images, capped by a
 is being chased or is seeing the details for the first time. **No powered-by
 footer** — this is a transactional re-send, not a fresh storefront confirm.
 
+The intro also carries an **explicit "View your order details" tracking link**
+(`trackingUrl`) as tappable text, separate from the "I've paid" CTA button: a
+buyer who just wants to *see* their order (not pay yet) has an obvious link and
+never has to scroll back through old chat messages to find it.
+
 ### When can the seller send it? (`manualReminderEligibility`, pure + tested)
 
 Unlike the auto nudge there's **no age gate and no once-ever cap** — the seller

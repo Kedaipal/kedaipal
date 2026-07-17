@@ -284,10 +284,12 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			} is still awaiting payment. Once you've paid, tap 'I've paid' so we can get it moving${
 				trackingUrl ? `: ${trackingUrl}` : "."
 			}${contactLine(contactPhone, "en")}`,
-		paymentReminderIntro: ({ shortId, storeName, amount }) =>
+		paymentReminderIntro: ({ shortId, storeName, amount, trackingUrl }) =>
 			`👋 A reminder from ${storeName}: order ${shortId}${
 				amount ? ` (${amount})` : ""
-			} is still awaiting payment. Here's how to pay — tap 'I've paid' once it's done:`,
+			} is still awaiting payment.${
+				trackingUrl ? `\n\n📋 View your order details: ${trackingUrl}` : ""
+			}\n\nHere's how to pay — tap 'I've paid' once it's done:`,
 	},
 	ms: {
 		paymentReceived: ({ shortId, storeName, trackingUrl }) =>
@@ -340,10 +342,12 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			} masih menunggu pembayaran. Selepas membayar, tekan 'I've paid' supaya kami boleh teruskan${
 				trackingUrl ? `: ${trackingUrl}` : "."
 			}${contactLine(contactPhone, "ms")}`,
-		paymentReminderIntro: ({ shortId, storeName, amount }) =>
+		paymentReminderIntro: ({ shortId, storeName, amount, trackingUrl }) =>
 			`👋 Peringatan daripada ${storeName}: pesanan ${shortId}${
 				amount ? ` (${amount})` : ""
-			} masih menunggu pembayaran. Berikut cara membayar — tekan 'I've paid' setelah selesai:`,
+			} masih menunggu pembayaran.${
+				trackingUrl ? `\n\n📋 Lihat butiran pesanan anda: ${trackingUrl}` : ""
+			}\n\nBerikut cara membayar — tekan 'I've paid' setelah selesai:`,
 	},
 };
 

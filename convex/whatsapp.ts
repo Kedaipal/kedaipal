@@ -990,10 +990,12 @@ export const notifyManualPaymentReminder = internalAction({
 			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
 		if (!trackingToken) return; // order vanished — don't ship a dead link
 		const locale = pickLocale(meta.locale);
+		const trackingUrl = `${appUrl}/track/${trackingToken}`;
 		const introBody = renderSystemMessage(locale, "paymentReminderIntro", {
 			shortId: meta.shortId,
 			storeName: meta.storeName,
 			amount: `${meta.currency} ${(meta.total / 100).toFixed(2)}`,
+			trackingUrl,
 		});
 		await sendPaymentMessage(
 			makeGuardedSender(ctx, meta.retailerId, "session_message"),
@@ -1003,7 +1005,7 @@ export const notifyManualPaymentReminder = internalAction({
 				locale,
 				shortId: meta.shortId,
 				storeName: meta.storeName,
-				trackingUrl: `${appUrl}/track/${trackingToken}`,
+				trackingUrl,
 				pickupSnapshot: meta.pickupSnapshot,
 				currency: meta.currency,
 				payment: meta.payment,

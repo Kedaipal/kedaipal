@@ -111,6 +111,9 @@ describe("orders.sendPaymentReminder (seller action)", () => {
 		const payload = JSON.stringify(wa[0].body);
 		expect(payload).toContain(order.shortId);
 		expect(payload).toContain("still awaiting payment");
+		// The buyer gets a tappable link to view their order details, so they
+		// don't have to dig through old chat messages.
+		expect(payload).toContain("/track/");
 
 		const stamped = await t.run(async (ctx) => ctx.db.get(order._id));
 		expect(stamped?.lastManualReminderAt).toBeDefined();
