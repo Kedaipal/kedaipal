@@ -69,6 +69,8 @@ import {
 	convexErrorMessage,
 	formatPrice,
 	formatPriceCompact,
+	normalizePriceInput,
+	parsePriceInput,
 } from "../lib/format";
 import { deriveMapsUrl } from "../lib/google-address";
 import {
@@ -193,6 +195,8 @@ function manualReminderBlockMessage(
 			return "The buyer already tapped “I've paid” — check for their payment.";
 		case "mockup_gated":
 			return "The buyer hasn't been asked to pay yet (mockup pending).";
+		case "fee_pending":
+			return "Set the delivery charge first — the total isn't final yet.";
 		case "no_contact":
 			return "No WhatsApp number on file for this buyer.";
 		case "cooldown":
@@ -360,6 +364,11 @@ function OrderDetailRoute() {
 	// Production (any packed-or-later stage) is blocked while a mockup is required
 	// but not yet approved/waived. Shared gate — same source as the server.
 	const mockupGated = isMockupGateClosed(order);
+	// Delivery charge still to be confirmed (out-of-range "arrange" order, or
+	// address without coordinates) — holds the buyer's payment ask + the seller's
+	// mark-received until the seller sets it below. See orders.setDeliveryFee.
+	const deliveryFeePending =
+		order.deliveryFeePending === true && order.status !== "cancelled";
 	// Manual "Send payment reminder" eligibility — the SAME predicate the server
 	// enforces (single source of truth), so the button's disabled-with-reason
 	// state can't disagree with what a tap would actually do. Recomputed each
@@ -370,6 +379,7 @@ function OrderDetailRoute() {
 			paymentStatus: order.paymentStatus,
 			mockupStatus: order.mockupStatus,
 			mockupWaivedAt: order.mockupWaivedAt,
+			deliveryFeePending: order.deliveryFeePending,
 			lastManualReminderAt: order.lastManualReminderAt,
 			createdAt: order.createdAt,
 			customer: { waPhone: order.customer.waPhone },
@@ -619,6 +629,11 @@ function OrderDetailRoute() {
 				</section>
 			) : null}
 
+			{/* Delivery charge to confirm — the out-of-range "arrange via WhatsApp"
+			    state (86extzdr8). Amber like the payment claim: it needs the
+			    seller's action before the buyer can be asked to pay. */}
+			{deliveryFeePending ? <SetDeliveryFeeCard order={order} /> : null}
+
 			{/* Payment claim — the amber "needs your eyes" state card, actionable
 			    when the shopper has tapped "I've paid". */}
 			{paymentStatus === "claimed" ? (
@@ -727,25 +742,32 @@ function OrderDetailRoute() {
 										? "the buyer is reviewing the mockup"
 										: "send the buyer a mockup to approve"
 								}. The buyer is only asked to pay once they approve (or you proceed without approval below).`
-							: `The customer hasn't tapped "I've paid" yet. If you've already seen the money in your bank app, mark it received here.`}
+							: deliveryFeePending
+								? "Payment is locked until you set the delivery charge above — the buyer is only asked to pay once the total is final."
+								: `The customer hasn't tapped "I've paid" yet. If you've already seen the money in your bank app, mark it received here.`}
 					</p>
-					{/* While the mockup gate is closed the buyer hasn't been asked to pay
-					    and the price may not be final, so the seller can't mark payment
-					    received yet. Opens on approve / waive / removing the custom item. */}
+					{/* While the mockup gate is closed (or the delivery charge is still
+					    pending) the buyer hasn't been asked to pay and the price may not
+					    be final, so the seller can't mark payment received yet. */}
 					<Button
 						onClick={() => setConfirmPaymentOpen(true)}
 						isLoading={confirmingPayment}
-						disabled={confirmingPayment || mockupGated}
+						disabled={confirmingPayment || mockupGated || deliveryFeePending}
 						variant="secondary"
 						className="h-11 w-full"
 					>
 						<BadgeCheck className="size-4" />
-						{mockupGated ? "Awaiting mockup approval" : "Mark payment received"}
+						{mockupGated
+							? "Awaiting mockup approval"
+							: deliveryFeePending
+								? "Set the delivery charge first"
+								: "Mark payment received"}
 					</Button>
 					{/* Manual reminder — re-send the payment details on demand. Hidden
-					    while mockup-gated (the buyer hasn't been asked to pay yet). Also
-					    recovers the case where the buyer never got the first bot reply. */}
-					{!mockupGated ? (
+					    while payment isn't owed yet (mockup-gated or delivery charge
+					    pending). Also recovers the case where the buyer never got the
+					    first bot reply. */}
+					{!mockupGated && !deliveryFeePending ? (
 						<div className="flex flex-col gap-1.5 border-t border-border pt-3">
 							<Button
 								onClick={handleSendReminder}
@@ -957,10 +979,42 @@ function OrderDetailRoute() {
 						</span>
 					</div>
 				) : null}
+				{/* Frozen delivery charge — annotated with how it was priced (band
+				    distance / manual) so the number is auditable at a glance. */}
+				{order.deliveryFee && order.deliveryFee > 0 ? (
+					<div className="flex items-center justify-between px-3 text-sm text-muted-foreground">
+						<span>
+							Delivery fee
+							{order.deliverySnapshot?.mode === "radius" &&
+							order.deliverySnapshot.distanceKm !== undefined
+								? ` — ${order.deliverySnapshot.distanceKm} km`
+								: order.deliverySnapshot?.mode === "manual"
+									? " — set by you"
+									: ""}
+						</span>
+						<span className="tabular-nums">
+							{formatPrice(order.deliveryFee, order.currency)}
+						</span>
+					</div>
+				) : null}
+				{deliveryFeePending ? (
+					<div className="flex items-center justify-between gap-3 px-3 text-sm text-amber-700 dark:text-amber-400">
+						<span>Delivery charge</span>
+						<span className="text-right font-medium">
+							To be set — see above
+						</span>
+					</div>
+				) : null}
 				<div className="flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2.5 text-sm font-bold">
 					<span>Total</span>
 					<span className="tabular-nums">
 						{formatPrice(order.total, order.currency)}
+						{deliveryFeePending ? (
+							<span className="font-medium text-muted-foreground">
+								{" "}
+								+ delivery
+							</span>
+						) : null}
 					</span>
 				</div>
 			</section>
@@ -1325,6 +1379,99 @@ function OrderDetailRoute() {
 const MOCKUP_WAIVE_GRACE_MS = 48 * 60 * 60 * 1000;
 // Mirror of MAX_MOCKUP_IMAGES in convex/orders.ts.
 const MAX_MOCKUP_IMAGES = 5;
+
+/**
+ * Amber action card for a fee-pending delivery order (86extzdr8): the buyer's
+ * address fell outside the seller's distance bands (or had no coordinates) on
+ * an "arrange via WhatsApp" store. The seller agrees the charge with the buyer
+ * in chat, enters it here (0 = deliver free), and the held payment ask goes
+ * out on WhatsApp with the final total.
+ */
+function SetDeliveryFeeCard({ order }: { order: Doc<"orders"> }) {
+	const setDeliveryFee = useMutation(api.orders.setDeliveryFee);
+	const [feeInput, setFeeInput] = useState("");
+	const [saving, setSaving] = useState(false);
+
+	const chatUrl = order.customer.waPhone
+		? `https://wa.me/${order.customer.waPhone}?text=${encodeURIComponent(
+				`Hi${order.customer.name ? ` ${order.customer.name}` : ""}! About the delivery charge for your order ${order.shortId} —`,
+			)}`
+		: null;
+
+	async function save(fee: number) {
+		setSaving(true);
+		try {
+			await setDeliveryFee({ orderId: order._id, fee });
+			toast.success(
+				fee > 0
+					? "Delivery charge set — the buyer gets the payment request on WhatsApp."
+					: "Set to free delivery — the buyer gets the payment request on WhatsApp.",
+			);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	function handleSet() {
+		const rm = parsePriceInput(feeInput.trim().length > 0 ? feeInput : "0");
+		if (rm === null || rm < 0) {
+			toast.error("Not a valid amount — numbers only, e.g. 15.00");
+			return;
+		}
+		void save(Math.round(rm * 100));
+	}
+
+	return (
+		<section className="flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-800 dark:bg-amber-950/50">
+			<div className="flex items-center gap-2 text-amber-800 dark:text-amber-300">
+				<Truck className="size-4" />
+				<p className="text-xs font-semibold uppercase tracking-widest">
+					Delivery charge to confirm
+				</p>
+			</div>
+			<p className="text-sm text-amber-900/90 dark:text-amber-200/90">
+				This address is outside your delivery bands, so no charge was applied
+				yet. Agree it with the buyer on WhatsApp, then set it here — the payment
+				request goes out with the final total. Enter 0 to deliver free.
+			</p>
+			<div className="flex items-end gap-2">
+				<div className="relative flex-1">
+					<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
+						RM
+					</span>
+					<input
+						type="text"
+						inputMode="decimal"
+						value={feeInput}
+						onChange={(e) => setFeeInput(e.target.value)}
+						onBlur={() => setFeeInput(normalizePriceInput(feeInput))}
+						placeholder="15.00"
+						aria-label="Delivery charge"
+						className="h-11 w-full rounded-lg border border-amber-300 bg-background pl-11 pr-3 text-sm dark:border-amber-800"
+					/>
+				</div>
+				<Button
+					onClick={handleSet}
+					isLoading={saving}
+					disabled={saving}
+					className="h-11 shrink-0"
+				>
+					Set charge
+				</Button>
+			</div>
+			{chatUrl ? (
+				<Button asChild variant="secondary" className="h-11 w-full">
+					<a href={chatUrl} target="_blank" rel="noopener noreferrer">
+						<MessageCircle className="size-4" />
+						Discuss with buyer on WhatsApp
+					</a>
+				</Button>
+			) : null}
+		</section>
+	);
+}
 
 function MockupCard({ order }: { order: Doc<"orders"> }) {
 	const generateUploadUrl = useMutation(api.orders.generateMockupUploadUrl);

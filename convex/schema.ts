@@ -184,6 +184,42 @@ export default defineSchema({
 		// settings invariant guarantee a store always keeps ≥1 WORKING fulfilment
 		// method (delivery, or self-collect with ≥1 active pickup location).
 		offerDelivery: v.optional(v.boolean()),
+		// Seller's business address — the ORIGIN for radius-based delivery
+		// pricing (straight-line distance to the buyer's address). Captured via
+		// Google autocomplete in Settings → Fulfilment; `label` is the formatted
+		// address shown back to the seller. PRIVACY: many sellers run from home —
+		// this is OWNER-only (buildRetailerPublic) and never in the public
+		// storefront payload; buyers only ever see the resolved fee (the public
+		// quote also strips distances). See docs/fulfilment.md.
+		businessAddress: v.optional(
+			v.object({
+				label: v.string(),
+				latitude: v.number(),
+				longitude: v.number(),
+				placeId: v.optional(v.string()),
+			}),
+		),
+		// Delivery-charge config (86extzdr8). Unset = free delivery (legacy
+		// behaviour, no migration). "flat" = one fee per delivery order with an
+		// optional free-above-subtotal threshold (all-tier). "radius" = distance
+		// bands from `businessAddress` priced by straight-line km (Pro-gated on
+		// SET; clearing stays un-gated — chargeablePickup posture). Validated by
+		// sanitizeDeliveryConfig; resolved per-order by resolveDeliveryQuote and
+		// FROZEN onto orders.deliverySnapshot. See convex/lib/delivery.ts.
+		deliveryConfig: v.optional(
+			v.union(
+				v.object({
+					mode: v.literal("flat"),
+					fee: v.number(),
+					freeAbove: v.optional(v.number()),
+				}),
+				v.object({
+					mode: v.literal("radius"),
+					bands: v.array(v.object({ maxKm: v.number(), fee: v.number() })),
+					outOfRange: v.union(v.literal("block"), v.literal("arrange")),
+				}),
+			),
+		),
 		// Minimum days' notice the retailer needs before a fulfilment date. Drives
 		// the lower bound of the storefront date picker (earliest selectable day =
 		// today + this). Undefined → 0 (see DEFAULT_MIN_NOTICE_DAYS) so same-day is
@@ -611,6 +647,35 @@ export default defineSchema({
 		// equals the snapshot fee; folded into `total` via computeOrderTotals
 		// (total = subtotal + mockup quote + pickupFee). Unset → no fee.
 		pickupFee: v.optional(v.number()),
+		// Frozen delivery-charge resolution at order create (delivery orders
+		// only) — mirrors the pickupSnapshot posture: a later config/address edit
+		// never rewrites a placed order. `mode` records HOW the fee was priced:
+		// "flat" / "radius" (auto-resolved from the retailer's deliveryConfig) or
+		// "manual" (seller set it on an out-of-range "arrange" order, or adjusted
+		// it pre-payment). `distanceKm`/`bandMaxKm` audit the radius math. Unset →
+		// free delivery (0 is never stored). See convex/lib/delivery.ts.
+		deliverySnapshot: v.optional(
+			v.object({
+				fee: v.number(),
+				mode: v.union(
+					v.literal("flat"),
+					v.literal("radius"),
+					v.literal("manual"),
+				),
+				distanceKm: v.optional(v.number()),
+				bandMaxKm: v.optional(v.number()),
+			}),
+		),
+		// Order-level mirror of `deliverySnapshot.fee` (minor units) for cheap
+		// CSV/inbox/tracking reads — same posture as `pickupFee`. Folded into
+		// `total` via computeOrderTotals. Unset → no fee.
+		deliveryFee: v.optional(v.number()),
+		// True while the delivery charge is still to be confirmed by the seller —
+		// a radius-mode "arrange via WhatsApp" order (out of range, or the buyer
+		// typed an address with no coordinates). While set, the payment ask is
+		// held and payment claim/receive are gated (the total is not final yet) —
+		// mirrors the mockup gate. Cleared by orders.setDeliveryFee.
+		deliveryFeePending: v.optional(v.boolean()),
 		// When the buyer needs the order — their answer to "When do you need this?
 		// (delivery or pickup date)" at checkout. Stored as the epoch-ms of that
 		// calendar day's MIDNIGHT in Malaysia time (UTC+8, no DST) — see

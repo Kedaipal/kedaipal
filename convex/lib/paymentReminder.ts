@@ -46,6 +46,9 @@ export type PaymentReminderOrderFields = MockupGateFields & {
 	paymentStatus?: "unpaid" | "claimed" | "received";
 	paymentReminderSentAt?: number;
 	lastManualReminderAt?: number;
+	// Delivery charge still to be confirmed by the seller — the payment ask is
+	// held, so nudging the buyer to pay an unfinished total would contradict it.
+	deliveryFeePending?: boolean;
 	createdAt: number;
 	customer: { waPhone?: string };
 };
@@ -79,6 +82,9 @@ export function isPaymentReminderDue(
 		return false;
 	}
 	if (isMockupGateClosed(order)) return false;
+	// Same deferral as the mockup gate: while the delivery charge is pending
+	// the buyer hasn't been given a final total to pay.
+	if (order.deliveryFeePending === true) return false;
 	if (order.paymentReminderSentAt !== undefined) return false;
 	if (
 		order.lastManualReminderAt !== undefined &&
@@ -101,6 +107,8 @@ export function isPaymentReminderDue(
  *  - `claimed` — the buyer tapped "I've paid" and is waiting on the SELLER;
  *  - `mockup_gated` — a custom item still needs approval; the buyer was told
  *    "no payment needed yet", so nudging contradicts the confirm copy;
+ *  - `fee_pending` — the delivery charge isn't set yet, so the total the buyer
+ *    would be asked to pay isn't final (mirrors the mockup-gate hold);
  *  - `no_contact` — no buyer WhatsApp number on file to message;
  *  - `cooldown` — a manual reminder went out < 6h ago (carries `retryAt`).
  */
@@ -110,6 +118,7 @@ export type ManualReminderBlock =
 	| "paid"
 	| "claimed"
 	| "mockup_gated"
+	| "fee_pending"
 	| "no_contact"
 	| "cooldown";
 
@@ -132,6 +141,9 @@ export function manualReminderEligibility(
 	if (order.paymentStatus === "received") return { ok: false, reason: "paid" };
 	if (order.paymentStatus === "claimed") return { ok: false, reason: "claimed" };
 	if (isMockupGateClosed(order)) return { ok: false, reason: "mockup_gated" };
+	if (order.deliveryFeePending === true) {
+		return { ok: false, reason: "fee_pending" };
+	}
 	if (!order.customer.waPhone) return { ok: false, reason: "no_contact" };
 	if (
 		order.lastManualReminderAt !== undefined &&

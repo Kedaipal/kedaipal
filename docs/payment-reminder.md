@@ -106,6 +106,7 @@ explain itself:
 | `paid` | `paymentStatus === "received"` — nothing to chase. |
 | `claimed` | Buyer tapped "I've paid" → waiting on the **seller**, not the reverse. |
 | `mockup_gated` | Custom item still needs approval; the buyer was told "no payment needed yet". |
+| `fee_pending` | Delivery charge not set yet — the total the buyer would pay isn't final (mirrors the mockup-gate hold; button is hidden, like mockup-gated). |
 | `no_contact` | No buyer WhatsApp number on file. |
 | `cooldown` | A manual reminder went out **< 6h ago** (`MANUAL_REMINDER_COOLDOWN_MS`); carries `retryAt`. |
 

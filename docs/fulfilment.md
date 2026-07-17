@@ -1,7 +1,8 @@
 # Fulfilment (Delivery + Self-Collect) — Implementation Reference
 
 Reference doc for how buyers receive their orders. Kedaipal has **two symmetric, optional
-fulfilment methods**: **delivery** (zero-config — the buyer types an address) and **pickup**
+fulfilment methods**: **delivery** (the buyer types an address; optionally charged — see
+[Delivery charge](#delivery-charge--flat-fee--radius-bands-2026-07-16-clickup-86extzdr8)) and **pickup**
 (a retailer-managed library of points the buyer collects from). Pickup points come in two
 kinds — **self-collect** (the seller's place) and **drop-off** (an agreed meetup point); see
 [Pickup grouping + drop-off points](#pickup-grouping--drop-off-points-2026-06-30-clickup-86ey30yhr).
@@ -16,6 +17,135 @@ storefront always keeps at least one _working_ method.**
 > **Related:** the **fulfilment date** captured at checkout (the buyer's "when do you need
 > this?", applies to both methods) has its own reference: [`fulfilment-date.md`](./fulfilment-date.md).
 > The `retailers.minFulfilmentNoticeDays` setting lives in the same Fulfilment settings tab.
+
+## Delivery charge — flat fee + radius bands (2026-07-16, ClickUp `86extzdr8`)
+
+Delivery was free by definition until this: `total === subtotal` for every delivery order,
+which was **wrong** for any seller who charges postage/rider fees. A seller now picks a
+**delivery-charge mode** in Settings → Fulfilment (inside the Delivery card):
+
+- **Free** (default — unset config, zero behaviour change, no migration),
+- **Flat** — one fee per delivery order + optional **free-above-subtotal threshold**
+  (boundary inclusive: subtotal exactly == threshold → free). **All-tier** — a wrong
+  total is a correctness bug, not an upsell.
+- **Radius bands** *(Pro)* — distance bands from the seller's **business address**
+  (e.g. 0–5 km RM5, 5–15 km RM15), priced by **straight-line (haversine) distance** to the
+  buyer's address. Spec from the 15 Jul 2026 Sue (FM #3) + Arif comment: no Distance Matrix
+  API — the buyer's coordinates already come free from the Google-autocomplete address
+  capture at checkout, and the origin is geocoded once in Settings. The settings copy says
+  "as the crow flies" so sellers pad bands for real roads. A band fee of RM0 = free inner
+  zone. Beyond the last band the seller chooses per store: **block** the order, or
+  **arrange** — accept it with the charge "to be arranged via WhatsApp" (the manual-close
+  model), which lands the order **fee-pending** (below).
+
+### Schema (additive, dev-only widen)
+
+- `retailers.businessAddress` — `{ label, latitude, longitude, placeId? }`, captured via the
+  shared `GoogleAddressAutocomplete` in Settings. **PRIVACY: owner-only** — many sellers run
+  from home, so it's never in the public storefront payload; buyers only ever see the
+  resolved fee. Can't be cleared while a radius config depends on it.
+- `retailers.deliveryConfig` — discriminated union
+  `{ mode: "flat", fee, freeAbove? } | { mode: "radius", bands: [{ maxKm, fee }], outOfRange: "block" | "arrange" }`.
+  Validated by `sanitizeDeliveryConfig` (fees integer sen with the RM10k ceiling; flat fee
+  must be > 0 — "free" has one spelling, a cleared config; bands sorted ascending, ≤10,
+  duplicate bounds rejected).
+- `orders.deliverySnapshot` — `{ fee, mode: "flat" | "radius" | "manual", distanceKm?, bandMaxKm? }`,
+  **frozen at create** (pickupSnapshot posture: later config/address edits never rewrite a
+  placed order); `distanceKm`/`bandMaxKm` audit the radius math (2dp). Order-level mirror
+  `orders.deliveryFee` for cheap CSV/inbox/tracking reads. `0` never stored.
+- `orders.deliveryFeePending` — the "arrange" hold (below).
+
+### Resolution — one pure function, three callers
+
+`resolveDeliveryQuote({ config, subtotal, origin, destination })` in **`convex/lib/delivery.ts`**
+(pure, unit-tested) returns `free | fee | pending | blocked` and is called by:
+
+1. **`delivery.quote`** (public query) — the checkout sheet quotes live once the buyer picks
+   an address suggestion, so the fee is visible **before** "Send order" (ticket AC).
+   **Privacy: the public quote strips `distanceKm`/`bandMaxKm`** — returning raw distances to
+   arbitrary probe coordinates would let a caller trilaterate the seller's home; band-coarse
+   fees are the accepted exposure (any zone price list reveals as much). The **buyer's
+   `orders.get(token)` path strips the whole `deliverySnapshot` for the same reason** (the
+   buyer UI only reads the `deliveryFee`/`deliveryFeePending` mirrors); the authenticated
+   seller/admin `shortId` path keeps the full snapshot for the order-detail km audit.
+2. **`orders.create`** — the authoritative resolve + snapshot. The create result **echoes
+   `deliveryFee`/`deliveryFeePending` back** so the client builds the `wa.me` message from
+   the STORED numbers, never its preview.
+3. **`orders.updateDeliveryAddress`** — the buyer's pending-only address edit **re-prices**
+   (the surface `updatePickupLocation` taught us tickets miss): band change moves the fee,
+   out-of-range flips to fee-pending, blocked destinations throw (old address + total stand).
+   Customer `totalSpent` aggregates adjusted on every re-price.
+
+Totals ride the `computeOrderTotals` extras seam — now `{ quotedAmount, pickupFee, deliveryFee }`,
+independent additive charges; every recompute site (mockup submit/re-price/decline, pickup
+switch) carries the delivery fee through. Fail-open rule: a radius config whose business
+address somehow vanished resolves **free** (logged), never a blocked storefront.
+`self_collect` orders never reach the resolver — pickup has its own per-location fee.
+**Counter checkout untouched** (no delivery concept there).
+
+### Fee-pending ("arrange via WhatsApp") — the second payment hold
+
+An out-of-range (or coordinate-less) order on an "arrange" store lands with
+`deliveryFeePending: true` and an **incomplete total**, so payment is held exactly like the
+mockup gate:
+
+- **WhatsApp confirm** sends `deliveryFeePendingConfirm` (EN+BM) — branded, no transfer
+  reference / payment block / "I've paid" CTA.
+- **`claimPayment` + `markPaymentReceived` reject** while pending (tracking page shows a
+  disabled "Awaiting delivery charge"; order detail disables mark-received with reason).
+  The **payment-reminder cron skips** pending orders (`isPaymentReminderDue`).
+- The seller resolves it via **`orders.setDeliveryFee(orderId, fee)`** — an amber
+  **"Delivery charge to confirm"** card on the order detail (with a one-tap "Discuss with
+  buyer on WhatsApp" deep link). `fee: 0` = deliver free. Sets snapshot `mode: "manual"`,
+  recomputes the total, clears the flag, and schedules **`notifyDeliveryFeeSet`** — the held
+  payment ask (charge + final total + payment block, EN+BM). Also usable pre-payment as typo
+  insurance; **locked once payment is claimed/received**.
+- **Double-hold ordering:** each release path re-checks the other gate —
+  `notifyPaymentDue` skips while fee-pending, `notifyDeliveryFeeSet` skips while the mockup
+  gate is closed — so a doubly-held order gets exactly ONE payment prompt when the second
+  gate opens.
+- The seller learns about a pending charge three ways: the new-order/confirmed **email**
+  gains a "Delivery charge to confirm" action line (EN+BM), the order-detail amber card, and
+  the totals row ("To be set — see above").
+
+### Pro gate (`radiusDelivery` in `PLAN_FEATURES`)
+
+Setting a **radius** config is Pro+ (`assertPlanFeature` in `retailers.updateSettings`;
+admin act-as bypasses). **Flat is all-tier** and **clearing any config is always allowed**
+(chargeablePickup posture — downgrade never traps a seller charging fees they can't turn
+off). A downgraded seller sitting on radius bands sees them read-only with a note + can
+switch to Free/Flat.
+
+### Surfaces (fee line everywhere the total appears, hidden when free)
+
+Checkout footer breakdown (Subtotal / Delivery fee / Total, plus "FREE for this order size"
+when a threshold earns it, "Confirmed by seller after checkout" + `Total … + delivery` when
+pending, and a destructive "outside the delivery area" note + disabled submit when blocked);
+the `wa.me` order message (fee line / "to be confirmed by seller", total from the create
+result); WhatsApp confirm fee line (`renderDeliveryFeeLine`, EN+BM — sits where the pickup
+block would); tracking page + seller order detail (detail annotates "— 7.4 km" or "— set by
+you" from the snapshot); receipt/invoice PDF totals row (+ "Delivery charge: To be
+confirmed" note on pending invoices); CSV export **"Delivery fee"** column (prints `0.00`
+when free so `Subtotal + Pickup fee + Delivery fee = Total` sums).
+
+### Tests
+
+`convex/lib/delivery.test.ts` (haversine, band selection incl. the inclusive bound,
+threshold boundary, fail-open, sanitizer), `orders.test.ts` ("orders — delivery charge":
+create/flat/threshold/radius/block/arrange lifecycle, setDeliveryFee incl. the
+payment-in-motion lock, address re-price, extras independence, authz),
+`planGating.test.ts` (radius Pro gate, flat all-tier, clear-when-downgraded, admin bypass,
+address↔config coupling), plus the paymentReminder + orderCsv + plans/subscriptions
+feature-matrix additions.
+
+### Parked / future
+
+- **`weight_tiers`** (the original ticket's variable mode) stays parked — the radius comment
+  superseded it; `productVariants.parcelWeightG` remains ready if demand returns.
+- **Provider-quoted shipping** (Lalamove/J&T, Scale tier) slots into the same seam later:
+  a `mode: "provider"` config arm + a new `deliverySnapshot.mode` — the create-time resolve
+  and the totals seam don't change shape.
+- Sue's routing-accurate map integration stays parked until 3+ customers ask.
 
 ## Chargeable pickup location — flat per-location fee (2026-07-07, ClickUp `86ey5tywf`)
 
@@ -466,6 +596,7 @@ The pricing plan caps Starter at **1 active pickup location** and lets Pro+ have
 
 ## Known limitations
 
+- **Delivery distance trusts the buyer's chosen coordinates.** Radius pricing measures to the lat/lng from the buyer's Google-autocomplete pick — there's no server-side geocode of the typed address (the deliberate no-Distance-Matrix design). A buyer could pick a *nearer* suggestion than their real address to land a cheaper band. Mitigations: the seller sees the real address label on the order, and the frozen `deliverySnapshot.distanceKm` audits what was charged, so a mismatch is catchable at fulfilment. Acceptable for v1 given the manual-close model; a server geocode is the escape hatch if abuse shows up.
 - **No hard-delete.** Soft-delete only. A retailer cannot permanently remove a location, even one with zero orders against it. Acceptable for v1; revisit if the inactive list becomes cluttered.
 - **`channelUserId` migration not part of this feature.** Identity is still keyed by `waPhone` on `orders.customer` and `customers`. The channel-adapter Phase 4–6 migration is independent and unblocked separately.
 - **No React component tests.** Same constraint as the customer-database feature — pure helpers are unit-tested, UI components are verified via `tsc` + manual end-to-end in the browser.

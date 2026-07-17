@@ -21,6 +21,9 @@ export type CopyVars = {
 	pickupKind?: PickupKind;
 	/** Pre-formatted money string (e.g. "MYR 25.00") for messages that quote a total. */
 	amount?: string;
+	/** Pre-formatted delivery-charge string for `deliveryFeeSet` — undefined
+	 * when the seller settled on NO extra charge (free delivery). */
+	feeAmount?: string;
 	/** Short human pairing code (e.g. "K7") the walk-in buyer shows the cashier. */
 	code?: string;
 };
@@ -158,6 +161,8 @@ export type SystemMessageKey =
 	| "paymentReceived"
 	| "transferReferenceLine"
 	| "mockupPendingConfirm"
+	| "deliveryFeePendingConfirm"
+	| "deliveryFeeSet"
 	| "paymentDueApproved"
 	| "paymentDueWaived"
 	| "paymentDueDeclined"
@@ -177,6 +182,14 @@ type SystemCopy = {
 	// Confirm reply for an order that still has a custom item awaiting buyer
 	// mockup approval — payment is intentionally deferred (no "I've paid" yet).
 	mockupPendingConfirm: (v: CopyVars) => string;
+	// Confirm reply while the delivery charge is still to be confirmed by the
+	// seller (radius "arrange" order, out of range / no coordinates) — payment
+	// is deferred exactly like the mockup hold. See orders.deliveryFeePending.
+	deliveryFeePendingConfirm: (v: CopyVars) => string;
+	// Intro leading the payment prompt once the seller sets the delivery charge
+	// (orders.setDeliveryFee) — quotes the charge (or "no extra charge") and the
+	// final total, then the standard payment block follows.
+	deliveryFeeSet: (v: CopyVars) => string;
 	// Intro lines that lead the payment prompt once the mockup gate opens, either
 	// by buyer approval, seller waiver, or the buyer removing the custom item from
 	// a mixed order (the ready-made remainder is now payable). Payment block follows.
@@ -231,6 +244,14 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`✅ Order ${shortId} received! It includes a custom item, so ${storeName} will send you a design to approve first — no payment needed yet. We'll share payment details right after you approve.${
 				trackingUrl ? `\n\nTrack your order: ${trackingUrl}` : ""
 			}${contactLine(contactPhone, "en")}`,
+		deliveryFeePendingConfirm: ({ shortId, storeName, contactPhone, trackingUrl }) =>
+			`✅ Order ${shortId} received! Your address is outside ${storeName}'s standard delivery zones, so they'll confirm the delivery charge with you right here — no payment needed yet. We'll send the payment details straight after.${
+				trackingUrl ? `\n\nTrack your order: ${trackingUrl}` : ""
+			}${contactLine(contactPhone, "en")}`,
+		deliveryFeeSet: ({ shortId, storeName, amount, feeAmount }) =>
+			`🚚 Delivery for ${shortId} is confirmed${
+				feeAmount ? ` — delivery charge ${feeAmount}` : " — no extra delivery charge"
+			}.${amount ? ` Your total is ${amount}.` : ""} Here's how to pay ${storeName}:`,
 		paymentDueApproved: ({ shortId, storeName }) =>
 			`✅ Design approved for ${shortId}! Here's how to pay so ${storeName} can start making it:`,
 		paymentDueWaived: ({ shortId, storeName }) =>
@@ -279,6 +300,14 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`✅ Pesanan ${shortId} diterima! Ia termasuk item custom, jadi ${storeName} akan menghantar reka bentuk untuk kelulusan anda dahulu — belum perlu bayar lagi. Kami akan kongsi maklumat pembayaran sebaik anda luluskan.${
 				trackingUrl ? `\n\nJejak pesanan anda: ${trackingUrl}` : ""
 			}${contactLine(contactPhone, "ms")}`,
+		deliveryFeePendingConfirm: ({ shortId, storeName, contactPhone, trackingUrl }) =>
+			`✅ Pesanan ${shortId} diterima! Alamat anda di luar zon penghantaran biasa ${storeName}, jadi mereka akan sahkan caj penghantaran dengan anda di sini — belum perlu bayar lagi. Kami akan hantar maklumat pembayaran sejurus selepas itu.${
+				trackingUrl ? `\n\nJejak pesanan anda: ${trackingUrl}` : ""
+			}${contactLine(contactPhone, "ms")}`,
+		deliveryFeeSet: ({ shortId, storeName, amount, feeAmount }) =>
+			`🚚 Penghantaran untuk ${shortId} telah disahkan${
+				feeAmount ? ` — caj penghantaran ${feeAmount}` : " — tiada caj penghantaran tambahan"
+			}.${amount ? ` Jumlah anda ialah ${amount}.` : ""} Berikut cara membayar ${storeName}:`,
 		paymentDueApproved: ({ shortId, storeName }) =>
 			`✅ Reka bentuk untuk ${shortId} telah diluluskan! Berikut cara membayar supaya ${storeName} boleh mula membuatnya:`,
 		paymentDueWaived: ({ shortId, storeName }) =>
@@ -626,6 +655,29 @@ const pickupFeeLabels: Record<Locale, string> = {
  * `currency` is only needed for the fee line — callers without a fee-carrying
  * snapshot can omit it (the line is skipped when either is missing).
  */
+// Delivery-fee line under the confirm intro (delivery orders) — same "already
+// inside the total" framing as the pickup-fee line so the charge never reads
+// as a surprise markup.
+const deliveryFeeLabels: Record<Locale, string> = {
+	en: "Delivery fee (included in total)",
+	ms: "Caj penghantaran (termasuk dalam jumlah)",
+};
+
+/**
+ * Render the delivery-charge line appended to the confirm / payment messages
+ * for delivery orders that carry a fee. Returns "" when there's no fee (or no
+ * currency to format with) so callers can string-concat unconditionally.
+ * Starts with its own "\n" — it joins an existing intro line.
+ */
+export function renderDeliveryFeeLine(
+	locale: Locale,
+	snapshot: { fee: number } | undefined,
+	currency?: string,
+): string {
+	if (!snapshot || !(snapshot.fee > 0) || !currency) return "";
+	return `\n🚚 ${deliveryFeeLabels[locale]}: ${currency} ${(snapshot.fee / 100).toFixed(2)}`;
+}
+
 export function renderPickupBlock(
 	locale: Locale,
 	snapshot: PickupSnapshot | undefined,

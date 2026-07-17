@@ -58,6 +58,16 @@ describe("isPaymentReminderDue", () => {
 		);
 	});
 
+	test("a pending delivery charge holds the nudge — the total isn't final", () => {
+		expect(
+			isPaymentReminderDue(order({ deliveryFeePending: true }), NOW),
+		).toBe(false);
+		// Resolved (flag cleared by setDeliveryFee) → back to due.
+		expect(
+			isPaymentReminderDue(order({ deliveryFeePending: false }), NOW),
+		).toBe(true);
+	});
+
 	test("claimed / received payment is never nudged", () => {
 		expect(
 			isPaymentReminderDue(order({ paymentStatus: "claimed" }), NOW),
@@ -156,6 +166,16 @@ describe("manualReminderEligibility", () => {
 		expect(
 			manualReminderEligibility(order({ mockupStatus: "submitted" }), NOW),
 		).toEqual({ ok: false, reason: "mockup_gated" });
+	});
+
+	test("blocked: delivery charge still pending (total not final)", () => {
+		expect(
+			manualReminderEligibility(order({ deliveryFeePending: true }), NOW),
+		).toEqual({ ok: false, reason: "fee_pending" });
+		// Resolved → eligible again.
+		expect(
+			manualReminderEligibility(order({ deliveryFeePending: false }), NOW),
+		).toEqual({ ok: true });
 	});
 
 	test("blocked: no buyer WhatsApp on file", () => {
