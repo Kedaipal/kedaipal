@@ -282,11 +282,11 @@ the seller doesn't have to remember a manual step.
   by `createOrderFromSession`) — the buyer's chat gets, with no seller action:
   - **Paid now** → a "confirmed & paid" text, then the **Receipt** PDF.
   - **Pay later** → a lean payment ask — the amount + transfer-reference line +
-    an "I've paid" CTA + tracking link (via `sendPaymentMessage` with
-    `includePaymentDetails: false`), then the **Invoice** PDF. The seller's
-    bank/QR **methods block is intentionally omitted here** — the buyer already
-    received it at scan-bind (see below), and the invoice PDF carries it too, so
-    re-sending would repeat the same details.
+    an "I've paid" CTA + tracking link + a **"see how to pay on your order page"**
+    block (via `sendPaymentMessage`, gated on the seller having ≥1 method), then
+    the **Invoice** PDF. Raw bank/QR details are **never sent in the chat**
+    (ticket 86ey98ju1) — the CTA points to the order page's "How to pay", and the
+    invoice PDF carries the actual details as the formal document.
 - **One PDF, two faces:** `buildOrderReceiptPdf` keys off `OrderReceiptData.paid` —
   an unpaid order prints **"Invoice"** + the "How to pay" block, a settled one
   prints **"Receipt"**. No separate invoice builder or table.
@@ -306,6 +306,17 @@ the seller doesn't have to remember a manual step.
   is a noted follow-up.
 
 ### Pay-at-bind — payment info right after the scan ([`86ey5kq7p`](https://app.clickup.com/t/86ey5kq7p))
+
+> **⚠️ Removed by [`86ey98ju1`](https://app.clickup.com/t/86ey98ju1).** Raw bank/QR
+> details are no longer sent in the WhatsApp chat, so the scan-time payment push
+> (`notifyCounterCheckoutPayment`, `getRetailerPaymentContext`, the
+> `counterCheckoutPaymentIntro` copy, and the `AwaitingScreen` "they'll get your
+> payment details right away" helper) was **deleted**. There's also no order —
+> hence no tracking page — at scan time, so there's nothing payable to point at
+> yet. The buyer now gets the payment info once the cashier rings up the order:
+> the order-create message carries the **"see how to pay on your order page"**
+> CTA (order page's "How to pay") + the invoice PDF. The original design is kept
+> below for history.
 
 So the buyer can pay **whenever they're ready** — often while the cashier is
 still ringing items up — the seller's payment details are pushed **immediately
@@ -359,8 +370,9 @@ and the mint URL is exactly as public, so it needs the same limits anyway.)
   `startSessionFromStoreQr` **creates or re-claims** a `buyer_identified` session
   flagged `origin: "store_qr"`. A rescan by the same buyer re-claims the open
   session (no duplicate row, no rate-limit charge). `handleInbound` acks with
-  `storeQrConnected` (localized) then schedules the shared `notifyCounterCheckoutPayment`
-  (same pay-at-scan push — skipped on a re-claim so details never repeat).
+  `storeQrConnected` (localized). *(The scan-time payment push was removed by
+  86ey98ju1 — see the Pay-at-bind note above; the buyer gets the payment CTA at
+  order-create instead.)*
 - **Guards, in order:** unknown/rotated token → `not_found` (generic reply, no
   store leaked); re-claim; then the `storeQrScan` rate limit (`3/hr` per
   `(store, phone)`) + `MAX_OPEN_STORE_QR_SESSIONS` (10) cap → `busy` reply.
@@ -411,9 +423,10 @@ QR** — the static store QR is now the *only* counter QR.
   online" + "At the counter") each with its own Download-PNG, centered/width-capped
   on desktop, keeping the "printable A4 poster →" link. (This is the quick
   standalone-PNG grab; `/app/poster` remains the branded print.)
-- **Payment-at-scan unchanged** (`86ey5kq7p`): first scan schedules
-  `notifyCounterCheckoutPayment`; a re-claim skips it (buyer already has the
-  details); no-ops when the seller has no payment methods.
+- **Payment-at-scan removed** (`86ey98ju1`): the scan no longer pushes payment
+  details (raw bank details out of chat + no order/tracking page exists yet at
+  scan time). The buyer gets the "see how to pay on your order page" CTA at
+  order-create instead.
 
 ### Build-screen UX polish (same ticket)
 
@@ -485,13 +498,11 @@ poster ack (`whatsappCopy.privacyNoticeLine`, threaded via `notifyCounterOrderCr
 session window, so a free-form send may be rejected by Meta. Sends are best-effort
 (errors logged) so the order/CRM are always intact; full out-of-window Utility-template
 fallback is [`86ey1fgjw`](https://app.clickup.com/t/86ey1fgjw), a follow-up.
-**Payment details:** unlike a scan buyer (who gets the pay-at-bind payment push,
-`notifyCounterCheckoutPayment`), a manual-phone **pay-later** buyer receives the
-bank/QR details via the **invoice PDF** (`How to pay` block) rather than an inline
-message — no dead-end, just one surface later. Deliberately not re-plumbed here:
-counter payment messaging is being reworked in
-[`86ey8vqk1`](https://app.clickup.com/t/86ey8vqk1), so an inline pay-ahead push for
-the manual path belongs there (a product call), not colliding with this change.
+**Payment details:** a manual-phone **pay-later** buyer (like every buyer now,
+post-86ey98ju1) gets the **"see how to pay on your order page"** CTA on the
+order-create message plus the bank/QR details inside the **invoice PDF**
+(`How to pay` block) — never raw digits in the chat. (The old scan-time pay-ahead
+push was removed for everyone by 86ey98ju1.)
 
 **Anonymous** — `counterCheckout.startAnonymousSession`. A cash sale with **no phone
 contact**: the session has no `waPhone`/`customerId` (an optional name is allowed —
@@ -517,7 +528,7 @@ order is `customer: {name: undefined, waPhone: undefined}` (both already optiona
 
 - **Resend from order detail** — the "Send receipt/invoice to buyer" action is
   currently only on the counter Done screen; order detail has Download only.
-- **Pay-at-scan message rework** ([`86ey8vqk1`](https://app.clickup.com/t/86ey8vqk1))
-  — text-first payment details for walk-in scans (out of scope here; touches only
-  `notifyCounterCheckoutPayment`).
+- ~~**Pay-at-scan message rework** ([`86ey8vqk1`](https://app.clickup.com/t/86ey8vqk1))~~
+  — moot: the scan-time payment push was removed entirely by 86ey98ju1 (payment
+  info now rides the order-create CTA + invoice PDF).
 - *(later, ticket 3.2)* richer Desktop / iPad Console affordances.

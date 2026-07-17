@@ -1,7 +1,6 @@
 // WhatsApp message copy catalog. Pure — no Convex imports — to keep testable.
 
 import { deriveMapsUrl } from "./mapsUrl";
-import type { PaymentMethod } from "./payment";
 
 export type Locale = "en" | "ms";
 
@@ -67,7 +66,7 @@ export const waCopy: Record<Locale, LocaleCopy> = {
 				: deliveryMethod === "self_collect"
 					? "We'll let you know when it's ready for pickup."
 					: "We'll update you when it ships.";
-			return `✅ Order ${shortId} confirmed. ${method} — ${storeName}${trackingUrl ? `\n\nTrack order & tap 'I've paid' to send receipt: ${trackingUrl}` : ""}${contactLine(contactPhone, "en")}`;
+			return `✅ Order ${shortId} confirmed. ${method} — ${storeName}${trackingUrl ? `\n\nTrack your order & make payment here: ${trackingUrl}` : ""}${contactLine(contactPhone, "en")}`;
 		},
 		status: {
 			packed: ({ shortId, trackingUrl, deliveryMethod, pickupKind }) => {
@@ -106,7 +105,7 @@ export const waCopy: Record<Locale, LocaleCopy> = {
 				: deliveryMethod === "self_collect"
 					? "Kami akan maklumkan apabila sedia untuk diambil."
 					: "Kami akan maklumkan apabila dihantar.";
-			return `✅ Pesanan ${shortId} telah disahkan. ${method} — ${storeName}${trackingUrl ? `\n\nJejak pesanan & tekan 'I've paid' untuk hantar resit: ${trackingUrl}` : ""}${contactLine(contactPhone, "ms")}`;
+			return `✅ Pesanan ${shortId} telah disahkan. ${method} — ${storeName}${trackingUrl ? `\n\nJejak pesanan & buat pembayaran di sini: ${trackingUrl}` : ""}${contactLine(contactPhone, "ms")}`;
 		},
 		status: {
 			packed: ({ shortId, trackingUrl, deliveryMethod, pickupKind }) => {
@@ -161,7 +160,6 @@ export type SystemMessageKey =
 	| "paymentDueApproved"
 	| "paymentDueWaived"
 	| "paymentDueDeclined"
-	| "counterCheckoutPaymentIntro"
 	| "storeQrConnected"
 	| "storeQrBusy"
 	| "counterOrderConfirmedPaid"
@@ -185,12 +183,6 @@ type SystemCopy = {
 	// Counter Checkout (docs/counter-checkout.md): the two `counterOrderConfirmed*`
 	// messages carry the confirmed order + tracking link (paid vs pay-later branch)
 	// so the buyer never has to scan again to pay.
-	// Sent right after the store-QR connect ack: leads the retailer's payment
-	// methods block so a counter buyer can pay ahead (even before the cashier
-	// finishes) instead of waiting for the details at the end. The
-	// `renderPaymentMethods` block (with its own "💳 Payment details" header + QR
-	// images) follows. See docs/counter-checkout.md.
-	counterCheckoutPaymentIntro: (v: CopyVars) => string;
 	// Store QR poster (86ey5m35w / 86ey5neg6 — the ONLY counter QR): a buyer
 	// scanned the seller's PERMANENT printed QR. `storeQrConnected` acks the
 	// walk-in session, gives the buyer their `code` (a short pairing code they
@@ -230,8 +222,6 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`Here are the payment details for your order ${shortId} from ${storeName}:`,
 		paymentDueDeclined: ({ shortId, storeName }) =>
 			`No problem — the custom item was removed from ${shortId}. Here's how to pay for the rest of your order from ${storeName}:`,
-		counterCheckoutPaymentIntro: ({ storeName }) =>
-			`💡 No need to wait for the cashier — you can pay ${storeName} whenever you're ready, even now.`,
 		storeQrConnected: ({ storeName, code }) =>
 			`You're connected to ${storeName} 🎉${
 				code ? ` Your order code is *${code}* — show it to the cashier so they can find you.` : ""
@@ -253,7 +243,7 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 		paymentReminder: ({ shortId, storeName, amount, trackingUrl, contactPhone }) =>
 			`👋 Friendly reminder from ${storeName}: order ${shortId}${
 				amount ? ` (${amount})` : ""
-			} is still awaiting payment. Once you've paid, tap 'I've paid' so we can get it moving${
+			} is still awaiting payment. Tap 'Make payment' to pay and confirm so we can get it moving${
 				trackingUrl ? `: ${trackingUrl}` : "."
 			}${contactLine(contactPhone, "en")}`,
 	},
@@ -274,8 +264,6 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`Berikut maklumat pembayaran untuk pesanan ${shortId} dari ${storeName}:`,
 		paymentDueDeclined: ({ shortId, storeName }) =>
 			`Tiada masalah — item custom telah dibuang dari ${shortId}. Berikut cara membayar untuk baki pesanan anda dari ${storeName}:`,
-		counterCheckoutPaymentIntro: ({ storeName }) =>
-			`💡 Tak perlu tunggu juruwang — anda boleh bayar ${storeName} bila-bila masa, walaupun sekarang.`,
 		storeQrConnected: ({ storeName, code }) =>
 			`Anda telah disambungkan dengan ${storeName} 🎉${
 				code ? ` Kod pesanan anda ialah *${code}* — tunjukkan kepada juruwang supaya mereka boleh cari anda.` : ""
@@ -297,7 +285,7 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 		paymentReminder: ({ shortId, storeName, amount, trackingUrl, contactPhone }) =>
 			`👋 Peringatan mesra daripada ${storeName}: pesanan ${shortId}${
 				amount ? ` (${amount})` : ""
-			} masih menunggu pembayaran. Selepas membayar, tekan 'I've paid' supaya kami boleh teruskan${
+			} masih menunggu pembayaran. Tekan 'Make payment' untuk bayar dan sahkan supaya kami boleh teruskan${
 				trackingUrl ? `: ${trackingUrl}` : "."
 			}${contactLine(contactPhone, "ms")}`,
 	},
@@ -462,89 +450,51 @@ export function defaultTemplate(locale: Locale, key: TemplateKey): string {
 }
 
 // ---------------------------------------------------------------------------
-// Payment instructions
+// Payment instructions (ticket 86ey98ju1)
+//
+// Raw bank details (account number / bank name / recipient name) and QR images
+// are NO LONGER sent in the WhatsApp chat — they created friction and a
+// security/compliance surface (a copyable account number sitting in chat
+// history). Instead every payment message points the buyer to their own order
+// page (`/track/<token>`), whose "How to pay" section lists all
+// seller-configured methods (bank with one-tap copy + QR) and carries the
+// "I've paid" confirm. The seller manages payment info from the dashboard; the
+// chat only links to it.
 // ---------------------------------------------------------------------------
 
-const paymentLabels: Record<
-	Locale,
-	{
-		header: string;
-		bank: string;
-		accountName: string;
-		accountNumber: string;
-		qrFollows: string;
-		qrCaption: string;
-	}
-> = {
+const paymentCtaCopy: Record<Locale, { header: string; body: string }> = {
 	en: {
 		header: "💳 Payment details",
-		bank: "Bank",
-		accountName: "Name",
-		accountNumber: "Account",
-		qrFollows: "Scan the QR below 👇",
-		qrCaption: "Scan to pay",
+		body: "See how to pay and confirm your payment on your order page 👇",
 	},
 	ms: {
 		header: "💳 Maklumat pembayaran",
-		bank: "Bank",
-		accountName: "Nama",
-		accountNumber: "Akaun",
-		qrFollows: "Imbas QR di bawah 👇",
-		qrCaption: "Imbas untuk bayar",
+		body: "Lihat cara membayar dan sahkan pembayaran di halaman pesanan anda 👇",
 	},
 };
 
 /**
- * Render the payment block listing ALL configured methods as plain text. Each
- * method is a labelled sub-block (`*label*` — WhatsApp renders this bold):
- *  - `bank` → Bank / Name / Account-number-on-its-own-line (so a long-press
- *    selects just the number; the web track page has a one-tap copy too);
- *  - `qr` → a "scan the QR below" line — the image itself is sent as a separate
- *    follow-up message by the caller (one per QR, captioned with the label).
- * Returns "" when there are no methods. Pure: no Convex / no storage; the caller
- * resolves QR storage URLs and sends the images.
+ * Render the payment call-to-action block appended to a buyer's WhatsApp
+ * payment message. Points the buyer to their order page for the actual
+ * bank/QR details rather than printing them in chat (see the section note).
+ *
+ * The tracking URL is embedded as text — not only as the interactive "I've
+ * paid" button — so the block still works when the CTA send degrades to plain
+ * text (e.g. non-HTTPS APP_URL in dev, or a button-send failure).
+ *
+ * Returns "" when the seller has no configured payment methods (nothing to
+ * point at — mirrors the old renderPaymentMethods empty case), so callers can
+ * string-concat unconditionally. Leading blank line separates it from the
+ * preceding block, matching the previous payment-block layout.
  */
-export function renderPaymentMethods(
+export function renderPaymentCta(
 	locale: Locale,
-	methods: ReadonlyArray<PaymentMethod>,
+	trackingUrl: string,
+	hasPaymentMethods: boolean,
 ): string {
-	if (methods.length === 0) return "";
-	const labels = paymentLabels[locale];
-	const lines: string[] = ["", labels.header];
-
-	for (const m of methods) {
-		const label = m.label.trim();
-		lines.push("");
-		lines.push(`*${label}*`);
-		if (m.type === "bank") {
-			const bank = m.bankName?.trim();
-			const accName = m.bankAccountName?.trim();
-			const accNum = m.bankAccountNumber?.trim();
-			// Skip a redundant "Bank: X" line when the label already IS the bank name.
-			if (bank && bank.toLowerCase() !== label.toLowerCase())
-				lines.push(`${labels.bank}: ${bank}`);
-			if (accName) lines.push(`${labels.accountName}: ${accName}`);
-			if (accNum) {
-				lines.push(`${labels.accountNumber}:`);
-				lines.push(accNum);
-			}
-		} else {
-			lines.push(labels.qrFollows);
-		}
-		const note = m.note?.trim();
-		if (note) lines.push(note);
-	}
-	return lines.join("\n");
-}
-
-/**
- * Caption for a QR follow-up image. Includes the method's label when given (so a
- * buyer with several QRs knows which is which), else the generic "scan to pay".
- */
-export function paymentQrCaption(locale: Locale, label?: string): string {
-	const base = paymentLabels[locale].qrCaption;
-	const trimmed = label?.trim();
-	return trimmed ? `${trimmed} — ${base}` : base;
+	if (!hasPaymentMethods) return "";
+	const c = paymentCtaCopy[locale];
+	return ["", c.header, c.body, trackingUrl].join("\n");
 }
 
 // ---------------------------------------------------------------------------

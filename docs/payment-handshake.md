@@ -61,7 +61,7 @@ A retailer configures **N payment methods** (`retailers.paymentMethods`), each a
 ```ts
 paymentMethods?: Array<{
   type: "bank" | "qr";
-  label: string;            // "Maybank", "DuitNow QR" — bold heading in the WA reply
+  label: string;            // "Maybank", "DuitNow QR" — bold heading on the order page
   bankName?, bankAccountName?, bankAccountNumber?;   // bank
   qrImageStorageId?;        // qr (Convex storage id)
   note?; sortOrder;
@@ -69,7 +69,7 @@ paymentMethods?: Array<{
 ```
 
 **Single source of truth** — `convex/lib/payment.ts` (pure, tested):
-- `resolvePaymentMethods(retailer)` — prefers the array (sorted), else synthesizes methods from the legacy single object. Used by the WA reply, the track query, and the settings read.
+- `resolvePaymentMethods(retailer)` — prefers the array (sorted), else synthesizes methods from the legacy single object. Used by the track query, the settings read, and the WA flow (only to know whether the seller has ≥1 method — see rendering below).
 - `legacyToPaymentMethods(legacy)` — legacy `{bank…, qr, note}` → up to two methods.
 - `sanitizePaymentMethods(input)` — trims, caps, drops-empty, re-numbers `sortOrder`.
 
@@ -78,11 +78,15 @@ paymentMethods?: Array<{
 **QR storage GC:** `updateSettings` diffs the retailer's previously-referenced QR storage ids (`collectQrStorageIds` — array + legacy) against the incoming set and `ctx.storage.delete`s the ones no longer referenced (best-effort). This covers replace, "Remove QR", and method deletion — so editing payment methods doesn't leak orphaned blobs. Account deletion deletes all QR blobs the same way.
 
 **Rendering:**
-- **WhatsApp confirm reply** — `renderPaymentMethods(locale, methods)` lists every bank method as a labelled (`*bold*`) sub-block with the **account number on its own line** (so a long-press selects just the number); each `qr` method is sent as a **separate follow-up image**, captioned with its label.
-- **Track page** — a "How to pay" section (`track.$token.tsx`) iterates the methods (bank cards + QR images) with a **one-tap `CopyButton`** on each account number (`src/components/ui/copy-button.tsx` — reusable, check-mark + toast, degrades when the Clipboard API is unavailable). Backed by the public `orders.getPaymentMethods({ token })` query (capability = tracking token; legacy-aware, resolves QR URLs, `null` when none). Shown while payment is still due (`paymentStatus !== "received"`) and not deferred behind a closed mockup gate.
-- **Settings** (`app.settings.tsx`) — a repeatable editor with **two groups** (Bank accounts, QR codes), each independently **drag-to-reorder**. Grouping is intentional: banks render together in the WA text block while each QR is a *separate image message*, so cross-type order has no visible effect in WhatsApp — sorting "my banks" / "my QRs" is what actually renders. On save the array is flattened banks-then-QRs with sequential `sortOrder`. The reorder uses the shared **`SortableList`** (`src/components/ui/sortable-list.tsx`) — a reusable @dnd-kit primitive: mobile-safe sensors (`useSortableSensors`: 250 ms touch long-press + `touch-none` grip so the page still scrolls); rows **collapse to a compact one-line form while dragging** (via the `state.isSorting` flag) so a tall list stays easy to rearrange; and the moving card renders in a **`DragOverlay`** so it tracks the cursor independently of the list reflow. Use it for all future drag-to-reorder surfaces.
+- **WhatsApp payment message** — raw bank details and QR images are **never sent in the chat** (ticket 86ey98ju1 — friction + a copyable account number sitting in chat history is a security/compliance surface). Instead `renderPaymentCta(locale, trackingUrl, hasPaymentMethods)` appends a short **"💳 Payment details — see how to pay and confirm your payment on your order page 👇"** block with the tracking URL (embedded as text so it survives a text-only fallback, and is also the **"Make payment"** CTA button target — the button opens the order page where "How to pay" + the "I've paid" confirm live). Rendered only when the seller has ≥1 configured method (nothing to point at otherwise). The seller manages payment info from the dashboard; the chat only links to it.
+- **Track page** — the actual details live here: a "How to pay" section (`track.$token.tsx`) iterates the methods (bank cards + QR images) with a **one-tap `CopyButton`** on each account number (`src/components/ui/copy-button.tsx` — reusable, check-mark + toast, degrades when the Clipboard API is unavailable). Backed by the public `orders.getPaymentMethods({ token })` query (capability = tracking token; legacy-aware, resolves QR URLs, `null` when none). Shown while payment is still due (`paymentStatus !== "received"`) and not deferred behind a closed mockup gate.
+- **Settings** (`app.settings.tsx`) — a repeatable editor with **two groups** (Bank accounts, QR codes), each independently **drag-to-reorder**. The array order == the order buyers see the methods in on their order page's "How to pay". On save the array is flattened banks-then-QRs with sequential `sortOrder`. The reorder uses the shared **`SortableList`** (`src/components/ui/sortable-list.tsx`) — a reusable @dnd-kit primitive: mobile-safe sensors (`useSortableSensors`: 250 ms touch long-press + `touch-none` grip so the page still scrolls); rows **collapse to a compact one-line form while dragging** (via the `state.isSorting` flag) so a tall list stays easy to rearrange; and the moving card renders in a **`DragOverlay`** so it tracks the cursor independently of the list reflow. Use it for all future drag-to-reorder surfaces.
+
+> **Why the order page, not the chat (86ey98ju1):** bank digits pasted into WhatsApp are copyable, forwardable, and linger in chat history. Moving them behind the capability-secured tracking page keeps the sensitive data on a managed surface (with one-tap copy) while the chat still gets the buyer there in one tap. A residual exposure is called out below.
 
 > One-tap copy is scoped to the **bank account number** (the value shoppers paste into their banking app, where an exact copy matters). Source: Sukhjeet / Metalpix beta + prospect call.
+
+> **Residual: the counter invoice PDF.** For a counter pay-later order, `notifyCounterOrderCreated` still sends an **invoice PDF** to the buyer's WhatsApp whose "How to pay" block carries the bank details (see [`invoices-receipts.md`](./invoices-receipts.md)). This is a **formal financial document** where payment details conventionally belong, and it's not "raw digits pasted in chat", so it's kept out of scope for 86ey98ju1. If a fully-clean-of-bank-details WhatsApp channel is required, swap the PDF's how-to-pay block for a "pay online: `<trackingUrl>`" line as a follow-up.
 
 ## Notification summary
 
