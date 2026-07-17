@@ -57,6 +57,7 @@ import {
 	useDashboardRetailer,
 } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
+import { newWalkInSince, walkInSessionIds } from "../lib/counter-scan";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import { cn } from "../lib/utils";
 
@@ -90,8 +91,11 @@ function CounterCheckoutRoute() {
 
 	const cancelSession = useMutation(api.counterCheckout.cancelCheckoutSession);
 
-	const openSession = (id: string) => navigate({ search: { session: id } });
-	const backToList = () => navigate({ search: {} });
+	const openSession = useCallback(
+		(id: string) => navigate({ search: { session: id } }),
+		[navigate],
+	);
+	const backToList = useCallback(() => navigate({ search: {} }), [navigate]);
 
 	// Drop a finished order's done-screen state whenever the active checkout
 	// changes (resumed another, or went back to the list).
@@ -139,7 +143,7 @@ function CounterCheckoutRoute() {
 					// sale. Management (rotate/print) lives on /app/poster.
 					<div className="flex shrink-0 items-center gap-2">
 						<NoScanControl onStarted={openSession} />
-						<StoreQrChip />
+						<StoreQrChip onScanned={openSession} />
 					</div>
 				)}
 			</header>
@@ -382,10 +386,25 @@ function EmptyCheckouts() {
  * The one permanent store QR, compact in the page header. Tap to enlarge into a
  * scannable view for a buyer standing at the counter. Token auto-provisions
  * silently; rotating / printing the poster live on /app/poster.
+ *
+ * While the enlarged dialog is open the cashier is actively waiting for a scan,
+ * so we watch `listOpenSessions` for the walk-in it produces and jump straight
+ * into that checkout — no closing this dialog and hunting for the new card
+ * (86ey5neg6).
  */
-function StoreQrChip() {
+function StoreQrChip({
+	onScanned,
+}: {
+	onScanned: (sessionId: string) => void;
+}) {
 	const actAsRetailerId = useActAsRetailerId();
 	const storeQr = useQuery(api.counterCheckout.getStoreQr, {
+		retailerId: actAsRetailerId,
+	});
+	// Shares the identical subscription OpenCheckoutsList already holds (Convex
+	// dedupes), so the list is warm the instant the dialog opens and the baseline
+	// snapshot below is accurate on the first frame.
+	const sessions = useQuery(api.counterCheckout.listOpenSessions, {
 		retailerId: actAsRetailerId,
 	});
 	const ensureToken = useMutation(api.counterCheckout.ensureCounterQrToken);
@@ -400,6 +419,27 @@ function StoreQrChip() {
 			// non-fatal — the chip just stays hidden until it resolves
 		});
 	}, [storeQr, ensureToken, actAsRetailerId]);
+
+	// The walk-ins already present when the dialog opened — captured once so we
+	// only react to the NEXT scan, never one that was already sitting in the list.
+	const baseline = useRef<Set<string> | null>(null);
+	useEffect(() => {
+		if (!open) {
+			// Reset so the next open re-snapshots against a fresh list.
+			baseline.current = null;
+			return;
+		}
+		if (!sessions) return; // wait for the list before we can diff
+		if (baseline.current === null) {
+			baseline.current = walkInSessionIds(sessions);
+			return;
+		}
+		const fresh = newWalkInSince(sessions, baseline.current);
+		if (fresh) {
+			setOpen(false);
+			onScanned(fresh);
+		}
+	}, [open, sessions, onScanned]);
 
 	if (!storeQr?.waUrl) return null;
 
@@ -424,8 +464,8 @@ function StoreQrChip() {
 					<DialogHeader>
 						<DialogTitle>Ask the buyer to scan</DialogTitle>
 						<DialogDescription>
-							They scan, hit send, and appear in your checkouts list with a
-							short code to match.
+							They scan and hit send — their checkout opens here
+							automatically, ready to ring up.
 						</DialogDescription>
 					</DialogHeader>
 					<div className="mx-auto rounded-2xl border border-border bg-white p-4">
