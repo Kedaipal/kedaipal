@@ -429,6 +429,42 @@ QR** — the static store QR is now the *only* counter QR.
   scan time). The buyer gets the order-page link + "Make payment" button at
   order-create instead.
 
+#### Auto-open on scan (follow-on, same ticket)
+
+The "buyer scans → cashier picks the card out of the list" step had a needless
+beat: with the enlarged store-QR dialog open (`StoreQrChip`), the cashier is
+*already* waiting on that one buyer, so making them close the dialog and hunt for
+the new card is friction. Now the dialog **jumps straight into the checkout the
+scan produces**.
+
+- When the dialog opens it snapshots the walk-in (`origin: "store_qr"`) session
+  ids currently in `listOpenSessions` (`walkInSessionIds`). The **first** id that
+  appears afterwards and isn't in that baseline (`newWalkInSince`) is *this*
+  buyer — the dialog closes and `onScanned` navigates to their build screen. The
+  list is sorted most-recently-active first, so a fresh scan sorts to the front.
+- Diff logic is a pure helper (`src/lib/counter-scan.ts`, unit-tested) so the
+  React effect is a thin wire-up.
+- **Gated on the dialog being open** on purpose: a background scan of the printed
+  poster while the cashier is mid-building another order still just lands quietly
+  in the list (never yanks them off their current work). It also only reacts to
+  `store_qr` origins — manual-phone / anonymous (`cashier`) sessions already
+  self-navigate via `onStarted`, so they're excluded from the baseline diff.
+- **Re-claim caveat:** a returning buyer who already has an open session doesn't
+  mint a new row (`startSessionFromStoreQr` reclaims it), so re-scanning the
+  on-screen QR won't auto-open — their existing checkout is still findable by
+  code. The fresh-walk-in case (the overwhelming majority) is what this covers.
+- **Shared-token caveat:** the on-screen QR and the printed poster encode the
+  **same** `KPS-<counterQrToken>` deep link, so while the dialog is open *any* new
+  `store_qr` session auto-opens — including a different buyer scanning the poster
+  across the room, not necessarily the one at the counter. Low-probability for the
+  single-counter ICP and visibly recoverable (the build screen shows the buyer's
+  name + pairing code, so a mismatch is obvious at a glance). We accept it rather
+  than mint a per-dialog token — that would resurrect the per-session-QR flow
+  `86ey5neg6` deliberately collapsed.
+- `StoreQrChip` now shares the same `listOpenSessions` subscription
+  `OpenCheckoutsList` holds (Convex dedupes), so the list is warm the instant the
+  dialog opens and the baseline snapshot is accurate on the first frame.
+
 ### Build-screen UX polish (same ticket)
 
 Shipped alongside the receipt/invoice work, all in `src/routes/app.checkout.tsx`:
