@@ -60,8 +60,31 @@ export type AccessState = {
 };
 
 /** Pure access resolution from a subscription doc (or null). Exported for tests
- * + the getMyRetailer embed. A missing row → comped full access (fail safe). */
-export function resolveAccess(sub: Doc<"subscriptions"> | null): AccessState {
+ * + the getMyRetailer embed. A missing row → comped full access (fail safe).
+ *
+ * `opts.adminFullAccess` is set only on the OWNER read when the caller is a
+ * Kedaipal admin operating their OWN store: they run the app for free with the
+ * highest tier unlocked (never soft-locked, every Pro+ feature on), so we force
+ * full `features` + `active` while KEEPING the real plan/status/trial so the
+ * billing page still tells the truth. Mirrors the server bypass in
+ * `assertSubscriptionActive`/`assertPlanFeature`; the nav pill separately reads
+ * "Admin" (client `adminOwnStore`). See docs/admin-console.md. */
+export function resolveAccess(
+	sub: Doc<"subscriptions"> | null,
+	opts?: { adminFullAccess?: boolean },
+): AccessState {
+	const base = resolveAccessBase(sub);
+	if (!opts?.adminFullAccess) return base;
+	return {
+		...base,
+		// Highest tier — an admin should have any Pro/Scale-only feature.
+		features: featuresForPlan("scale"),
+		active: true,
+		frozen: false,
+	};
+}
+
+function resolveAccessBase(sub: Doc<"subscriptions"> | null): AccessState {
 	if (!sub) {
 		// Fail safe: never lock out a retailer because their subscription row is
 		// missing (pre-backfill, or a backfill miss). Treat as comped full access.
@@ -169,6 +192,12 @@ export async function assertPlanFeature(
 	retailerId: Id<"retailers">,
 	feature: PlanFeature,
 ): Promise<void> {
+	// Kedaipal admins always have the highest tier unlocked — on their OWN store
+	// (dogfooding, even past a lapsed trial) or acting-as a seller during
+	// white-glove. Mirrors `assertSubscriptionActive`'s bypass. (Act-as callers
+	// already skip this via `actingAsAdmin`; this also covers admin-on-own-store,
+	// where `actingAsAdmin` is false.) See docs/admin-console.md.
+	if (await isAdmin(ctx)) return;
 	const access = await getAccess(ctx, retailerId);
 	if (!access.features[feature]) {
 		throw new ConvexError(
@@ -212,8 +241,11 @@ export const current = query({
 			.first();
 		if (!retailer) return null;
 		const sub = await loadSubscription(ctx, retailer._id);
+		// Admin on their own store → highest tier unlocked, matching the
+		// getMyRetailer embed (caller === owner here). See docs/admin-console.md.
+		const adminFullAccess = await isAdmin(ctx);
 		return {
-			...resolveAccess(sub),
+			...resolveAccess(sub, { adminFullAccess }),
 			billingCycle: sub?.billingCycle,
 			createdAt: sub?.createdAt,
 		};

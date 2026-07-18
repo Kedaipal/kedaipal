@@ -244,6 +244,43 @@ describe("plan gating — CRM (Pro+)", () => {
 			radiusDelivery: false,
 		});
 	});
+
+	test("an admin's OWN Starter store still resolves to the highest tier", async () => {
+		const t = setup();
+		// Store owned by the admin themselves (not an act-as target).
+		const retailer = await seedRetailer(t, ADMIN);
+		await setPlan(t, retailer._id, "starter");
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+
+		// getMyRetailer (owner read) grants full features despite the Starter plan —
+		// so no Pro wall / locked control renders in the admin's own dashboard.
+		const me = await asAdmin.query(api.retailers.getMyRetailer);
+		expect(me?.subscription?.features).toEqual({
+			crm: true,
+			orderInbox: true,
+			chargeablePickup: true,
+			categories: true,
+			insights: true,
+			radiusDelivery: true,
+		});
+		// subscriptions.current (billing nav) resolves the same way.
+		const current = await asAdmin.query(api.subscriptions.current, {});
+		expect(current?.features.crm).toBe(true);
+		// The real plan is still reported (billing page truth).
+		expect(me?.subscription?.plan).toBe("starter");
+	});
+
+	test("assertPlanFeature bypasses for an admin on their OWN Starter store", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, ADMIN);
+		await setPlan(t, retailer._id, "starter");
+		// A CRM read on their own store is Pro-gated for a plain Starter seller, but
+		// the admin sees through it (not act-as — they own the store).
+		const count = await t
+			.withIdentity({ subject: ADMIN })
+			.query(api.customers.count, { retailerId: retailer._id });
+		expect(count).toBe(0);
+	});
 });
 
 // ---------------------------------------------------------------------------
