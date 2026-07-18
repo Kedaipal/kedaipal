@@ -28,6 +28,7 @@ import {
 } from "./subscriptionUsage";
 import {
 	adminUserIds,
+	isAdmin,
 	logAdminAction,
 	type RetailerAccess,
 	requireRetailerAccess,
@@ -1877,30 +1878,37 @@ async function deleteOrderCascade(
 }
 
 /**
- * Hard-delete a single order — **admin act-as only** (Kedaipal support).
- * Permanent and irreversible. A plain seller is rejected server-side (Forbidden)
- * even though they own the store: permanently erasing order/payment records sits
- * with Kedaipal, not the seller, who uses Cancel (tombstoned + buyer notified)
- * instead. The dashboard hides the action for sellers, but this guard — not the
- * hidden UI — is the real boundary. Admin writes are audited.
+ * Hard-delete a single order — **Kedaipal admin only**. Permanent and
+ * irreversible. A plain seller is rejected server-side (Forbidden) even though
+ * they own the store: permanently erasing order/payment records sits with
+ * Kedaipal, not the seller, who uses Cancel (tombstoned + buyer notified)
+ * instead. The gate is admin membership (`isAdmin`), NOT `access.actingAsAdmin`
+ * — an admin can erase orders in ANY store, including one they personally own
+ * (which resolves via the owner branch, so `actingAsAdmin` is false there). The
+ * dashboard hides the action for sellers, but this guard — not the hidden UI —
+ * is the real boundary. Admin act-as writes (a store they don't own) are audited.
  * ClickUp `86eyaqzpd` (admin-only restriction) atop `86ey8fr8t` (the erase).
  */
 export const deleteOrder = mutation({
 	args: { orderId: v.id("orders") },
 	handler: async (ctx, { orderId }): Promise<void> => {
 		const { order, access } = await requireOrderAccess(ctx, orderId);
-		if (!access.actingAsAdmin) throw new Error("Forbidden");
+		if (!(await isAdmin(ctx))) throw new Error("Forbidden");
 		await deleteOrderCascade(ctx, order);
 		await logAdminAction(ctx, access, "orders.hardDelete", orderId);
 	},
 });
 
 /**
- * Bulk hard-delete (the inbox multi-select) — **admin act-as only**, same policy
- * as the single `deleteOrder`. Capped at 100/batch, access re-checked per order,
- * one batch audit row. No plan gate: permanent erasure is an admin ops action,
- * not a paid feature, so the previous Pro `orderInbox` gate is gone — a plain
- * owner never reaches it (rejected up front), Starter or Pro alike.
+ * Bulk hard-delete (the inbox multi-select) — **Kedaipal admin only**, same
+ * policy as the single `deleteOrder`. Capped at 100/batch, one batch audit row.
+ * No plan gate: permanent erasure is an admin ops action, not a paid feature.
+ *
+ * The admin gate is checked ONCE up front (`isAdmin` — one caller identity for
+ * the whole batch, cheaper than per-order and ownership-agnostic so an admin can
+ * bulk-erase in a store they own too). The per-order `requireRetailerAccess`
+ * stays: it confirms each order's retailer exists and supplies `batchAccess` for
+ * the audit row (an admin passes it for every store, so it never rejects here).
  */
 export const bulkDeleteOrders = mutation({
 	args: { orderIds: v.array(v.id("orders")) },
@@ -1908,6 +1916,7 @@ export const bulkDeleteOrders = mutation({
 		if (orderIds.length === 0) return { deleted: 0 };
 		if (orderIds.length > 100)
 			throw new ConvexError("Too many orders selected (max 100)");
+		if (!(await isAdmin(ctx))) throw new Error("Forbidden");
 
 		let deleted = 0;
 		let batchAccess: RetailerAccess | undefined;
@@ -1915,7 +1924,6 @@ export const bulkDeleteOrders = mutation({
 			const order = await ctx.db.get(orderId);
 			if (!order) throw new ConvexError("Order not found");
 			batchAccess = await requireRetailerAccess(ctx, order.retailerId);
-			if (!batchAccess.actingAsAdmin) throw new Error("Forbidden");
 			await deleteOrderCascade(ctx, order);
 			deleted++;
 		}
