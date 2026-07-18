@@ -1877,24 +1877,30 @@ async function deleteOrderCascade(
 }
 
 /**
- * Hard-delete a single order (owner or admin acting-as). Permanent and
- * irreversible — the UI gates it behind an explicit confirm. Not plan-gated
- * (cleaning up your own orders is all-tier, mirroring `updateStatus`); admin
- * act-as writes are audited.
+ * Hard-delete a single order — **admin act-as only** (Kedaipal support).
+ * Permanent and irreversible. A plain seller is rejected server-side (Forbidden)
+ * even though they own the store: permanently erasing order/payment records sits
+ * with Kedaipal, not the seller, who uses Cancel (tombstoned + buyer notified)
+ * instead. The dashboard hides the action for sellers, but this guard — not the
+ * hidden UI — is the real boundary. Admin writes are audited.
+ * ClickUp `86eyaqzpd` (admin-only restriction) atop `86ey8fr8t` (the erase).
  */
 export const deleteOrder = mutation({
 	args: { orderId: v.id("orders") },
 	handler: async (ctx, { orderId }): Promise<void> => {
 		const { order, access } = await requireOrderAccess(ctx, orderId);
+		if (!access.actingAsAdmin) throw new Error("Forbidden");
 		await deleteOrderCascade(ctx, order);
 		await logAdminAction(ctx, access, "orders.hardDelete", orderId);
 	},
 });
 
 /**
- * Bulk hard-delete (the inbox multi-select). Mirrors `bulkUpdateStatus`: an
- * Order Inbox surface (Pro+, admin act-as bypasses), owner-checked per order (a
- * foreign id fails the whole batch), capped at 100, one batch audit row.
+ * Bulk hard-delete (the inbox multi-select) — **admin act-as only**, same policy
+ * as the single `deleteOrder`. Capped at 100/batch, access re-checked per order,
+ * one batch audit row. No plan gate: permanent erasure is an admin ops action,
+ * not a paid feature, so the previous Pro `orderInbox` gate is gone — a plain
+ * owner never reaches it (rejected up front), Starter or Pro alike.
  */
 export const bulkDeleteOrders = mutation({
 	args: { orderIds: v.array(v.id("orders")) },
@@ -1908,10 +1914,8 @@ export const bulkDeleteOrders = mutation({
 		for (const orderId of orderIds) {
 			const order = await ctx.db.get(orderId);
 			if (!order) throw new ConvexError("Order not found");
-			const firstResolve = batchAccess === undefined;
 			batchAccess = await requireRetailerAccess(ctx, order.retailerId);
-			if (firstResolve && !batchAccess.actingAsAdmin)
-				await assertPlanFeature(ctx, order.retailerId, "orderInbox");
+			if (!batchAccess.actingAsAdmin) throw new Error("Forbidden");
 			await deleteOrderCascade(ctx, order);
 			deleted++;
 		}

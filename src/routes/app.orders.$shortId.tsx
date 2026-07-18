@@ -64,6 +64,7 @@ import {
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
+import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { formatPhone, orderCustomerLabel } from "../lib/customer";
 import {
 	convexErrorMessage,
@@ -290,6 +291,11 @@ function OrderDetailRoute() {
 	const markPaymentReceived = useMutation(api.orders.markPaymentReceived);
 	const sendPaymentReminder = useAction(api.orders.sendPaymentReminder);
 	const deleteOrder = useMutation(api.orders.deleteOrder);
+	// Permanent hard delete is admin-only (Kedaipal support); a plain seller only
+	// ever cancels. Hide the danger action unless this is an admin act-as session —
+	// the server enforces the same rule, so this is discoverability, not the guard.
+	const retailer = useDashboardRetailer();
+	const canHardDelete = retailer?.actingAsAdmin === true;
 	const proofUrl = useQuery(
 		api.orders.getPaymentProofUrl,
 		order?.paymentProofStorageId ? { orderId: order._id } : "skip",
@@ -357,6 +363,10 @@ function OrderDetailRoute() {
 		order.status === "cancelled" ? undefined : stages[currentIdx + 1];
 	const isTerminal =
 		order.status === "cancelled" || order.status === "delivered";
+	// The More-actions panel's destructive rows: Cancel (any non-terminal order)
+	// or Delete (admin act-as only). Drives whether that panel has anything on
+	// desktop, where the receipt row lives in the header instead.
+	const hasDestructiveAction = !isTerminal || canHardDelete;
 	const showCarrierSection =
 		!isSelfCollect && !["pending", "cancelled"].includes(order.status);
 	const editingCarrier = carrierInput !== null;
@@ -1218,9 +1228,15 @@ function OrderDetailRoute() {
 			{/* Rare actions (receipt, cancel, delete) collapse behind one quiet
 			    trigger — the stepper above already carries the main transition. The
 			    trigger + its menu share ONE bordered container so the panel reads as
-			    the trigger's own dropdown, not a detached card. A terminal order still
-			    has Delete here, so the expander is never empty. */}
-			<section className="overflow-hidden rounded-xl border border-border bg-card">
+			    the trigger's own dropdown, not a detached card. Delete is admin-only
+			    now, so a plain seller's desktop panel would hold only Cancel — hidden
+			    on desktop for a terminal order (receipt lives in the header there) so
+			    it never opens to an empty divider; mobile keeps its receipt row. */}
+			<section
+				className={`overflow-hidden rounded-xl border border-border bg-card${
+					hasDestructiveAction ? "" : " lg:hidden"
+				}`}
+			>
 				<button
 					type="button"
 					onClick={() => setMoreOpen((x) => !x)}
@@ -1248,9 +1264,12 @@ function OrderDetailRoute() {
 							size="default"
 							className="h-12 w-full justify-start gap-2.5 rounded-none px-4 text-sm font-medium lg:hidden"
 						/>
-						{/* Neutral → destructive divider. Only present when the receipt row
-						    is (mobile) — on desktop the header rule above already leads in. */}
-						<hr className="border-border lg:hidden" />
+						{/* Neutral → destructive divider, mobile-only (desktop's header rule
+						    above already leads in). Skipped when nothing destructive follows
+						    (terminal order + plain seller) so it never dangles below receipt. */}
+						{hasDestructiveAction ? (
+							<hr className="border-border lg:hidden" />
+						) : null}
 						{!isTerminal ? (
 							<Button
 								onClick={() => setConfirmCancelOpen(true)}
@@ -1262,21 +1281,26 @@ function OrderDetailRoute() {
 								{pending === "cancel" ? "Updating…" : "Cancel Order"}
 							</Button>
 						) : null}
-						{/* Permanent hard delete — the last resort for test / spam /
-						    duplicate orders. Works in any status; irreversible. */}
-						<Button
-							onClick={() => setConfirmDeleteOpen(true)}
-							disabled={pending !== null}
-							variant="ghost"
-							className="h-12 w-full justify-start gap-2.5 rounded-none px-4 text-sm font-medium text-destructive hover:bg-destructive/10 hover:text-destructive"
-						>
-							<Trash2 className="size-4" aria-hidden="true" />
-							{pending === "delete" ? "Deleting…" : "Delete permanently"}
-						</Button>
-						<p className="border-t border-border bg-muted/30 px-4 py-2.5 text-[11px] leading-snug text-muted-foreground">
-							Deleting removes this order and its records for good — this can't
-							be undone.
-						</p>
+						{/* Permanent hard delete — admin act-as only (Kedaipal support).
+						    Hidden for a plain seller, who cancels instead; the server
+						    enforces the same rule. Works in any status; irreversible. */}
+						{canHardDelete ? (
+							<>
+								<Button
+									onClick={() => setConfirmDeleteOpen(true)}
+									disabled={pending !== null}
+									variant="ghost"
+									className="h-12 w-full justify-start gap-2.5 rounded-none px-4 text-sm font-medium text-destructive hover:bg-destructive/10 hover:text-destructive"
+								>
+									<Trash2 className="size-4" aria-hidden="true" />
+									{pending === "delete" ? "Deleting…" : "Delete permanently"}
+								</Button>
+								<p className="border-t border-border bg-muted/30 px-4 py-2.5 text-[11px] leading-snug text-muted-foreground">
+									Deleting removes this order and its records for good — this
+									can't be undone.
+								</p>
+							</>
+						) : null}
 					</>
 				) : null}
 			</section>

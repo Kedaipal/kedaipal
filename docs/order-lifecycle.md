@@ -105,10 +105,21 @@ Auth-gated (Clerk); ownership checked (`retailer.userId === identity.subject`). 
 
 Separate from cancellation. **Cancel** keeps the row (a terminal `cancelled`
 status, buyer notified). **Hard delete** erases the order and everything derived
-from it, leaving no tombstone — for test / spam / duplicate orders a seller just
-wants gone. Store owners and an admin acting-as can do it (`requireOrderAccess`
-→ owner OR admin; admin writes drop an `adminAuditLog` row, action
-`orders.hardDelete` / `orders.bulkDeleteOrders`). ClickUp `86ey8fr8t`.
+from it, leaving no tombstone — for test / spam / duplicate orders that need to
+disappear. **Admin act-as only** (Kedaipal support): both mutations resolve
+`requireOrderAccess`/`requireRetailerAccess` and then throw `Forbidden` unless
+`access.actingAsAdmin`, so a plain store owner — Starter, Pro or Scale — is
+rejected server-side even though they own the store. Every admin erase drops an
+`adminAuditLog` row (action `orders.hardDelete` / `orders.bulkDeleteOrders`), so
+a permanent erase always leaves a trace. ClickUp `86ey8fr8t` (the erase),
+`86eyaqzpd` (admin-only restriction).
+
+**Why admin-only:** a hard delete is irreversible (no tombstone) and wipes
+invoice / receipt / revenue-driving data. Leaving it in seller hands meant a
+disputed or fat-fingered order could vanish with no oversight and no audit row
+(owner writes aren't audited). Sellers keep **Cancel** — tombstoned and buyer-
+notified — as their way to make an order go away; permanent erasure sits with
+Kedaipal.
 
 **It is silent** — unlike cancel, NO WhatsApp/email is sent. (That's the reason
 delete isn't "cancel-then-remove": you don't want to ping the buyer of a junk
@@ -142,16 +153,24 @@ bulk can't drift):
 Scheduled jobs that reference orders (e.g. the payment-reminder cron) already
 no-op on a missing order, so a delete between schedule and fire is safe.
 
-**Gating:** single `deleteOrder` is all-tier (cleaning up your own orders isn't a
-Pro feature, mirroring `updateStatus`). Bulk `bulkDeleteOrders` is an Order Inbox
-surface → **Pro+** (admin act-as bypasses), capped at 100/batch, and fails the
-whole batch on any foreign id — identical posture to `bulkUpdateStatus`.
+**Access / tiering:** both `deleteOrder` and `bulkDeleteOrders` are **admin
+act-as only**, not plan-gated — permanent erasure is an ops action, not a paid
+feature, so it applies equally to Starter / Pro / Scale. (The bulk mutation's
+earlier Pro `orderInbox` gate is gone: a plain owner never reaches it, they're
+rejected up front.) Bulk is still capped at 100/batch and re-checks access per
+order, so a stale act-as client can't sneak an erase through mid-flow.
 
-**UI:** a "Delete permanently" danger action in the order-detail More-actions
-section (confirm dialog with an extra warning when the order is paid/delivered —
-it'll vanish from CSV/revenue records), and a "Delete permanently" item in the
-inbox bulk bar behind its own confirm. Both make clear the buyer is NOT notified
-and it can't be undone.
+**UI (hidden, not just disabled):** the "Delete permanently" danger action in the
+order-detail More-actions section and the "Delete permanently" item in the inbox
+bulk bar **render only under an admin act-as session** (`retailer.actingAsAdmin`);
+a plain seller never sees either — there's no confusion about what they can undo.
+The server guard, not the hidden UI, is the real boundary. Under act-as the
+actions work as before: each behind its own confirm dialog, making clear the
+buyer is NOT notified and it can't be undone (with an extra warning when the order
+is paid/delivered — it'll vanish from CSV/revenue records). On the order-detail
+page the More-actions panel collapses on desktop for a terminal order in a plain
+seller session (Cancel gone, Delete hidden, receipt lives in the header), so it
+never opens to an empty divider.
 
 **Type-to-confirm safety gate:** because this is the one irreversible action in
 the dashboard, both delete confirm dialogs pass `confirmPhrase="DELETE"` to the
