@@ -453,6 +453,14 @@ scan produces**.
   mint a new row (`startSessionFromStoreQr` reclaims it), so re-scanning the
   on-screen QR won't auto-open — their existing checkout is still findable by
   code. The fresh-walk-in case (the overwhelming majority) is what this covers.
+- **Shared-token caveat:** the on-screen QR and the printed poster encode the
+  **same** `KPS-<counterQrToken>` deep link, so while the dialog is open *any* new
+  `store_qr` session auto-opens — including a different buyer scanning the poster
+  across the room, not necessarily the one at the counter. Low-probability for the
+  single-counter ICP and visibly recoverable (the build screen shows the buyer's
+  name + pairing code, so a mismatch is obvious at a glance). We accept it rather
+  than mint a per-dialog token — that would resurrect the per-session-QR flow
+  `86ey5neg6` deliberately collapsed.
 - `StoreQrChip` now shares the same `listOpenSessions` subscription
   `OpenCheckoutsList` holds (Convex dedupes), so the list is warm the instant the
   dialog opens and the baseline snapshot is accurate on the first frame.
