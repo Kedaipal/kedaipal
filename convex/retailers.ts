@@ -185,6 +185,7 @@ import {
 	type SupportedCurrency,
 } from "./lib/currency";
 import {
+	adminUserIds,
 	logAdminAction,
 	type RetailerAccess,
 	requireAdmin,
@@ -496,7 +497,13 @@ async function loadRetailerForUser(
 		.withIndex("by_user", (q) => q.eq("userId", userId))
 		.first();
 	if (!row) return null;
-	return buildRetailerPublic(ctx, row);
+	// A Kedaipal admin viewing their OWN store gets the highest tier unlocked in
+	// the payload (features/active), so no Pro wall or soft-lock renders. `userId`
+	// is the caller's identity AND the owner (by_user lookup), so this is strictly
+	// admin-on-own-store. The act-as read (`getRetailerForAdmin`) does NOT pass
+	// this — white-glove must see the seller's real tier. See docs/admin-console.md.
+	const adminFullAccess = adminUserIds().includes(userId);
+	return buildRetailerPublic(ctx, row, { adminFullAccess });
 }
 
 /** Map a retailer row to the OWNER/admin dashboard payload (payment methods with
@@ -505,6 +512,7 @@ async function loadRetailerForUser(
 async function buildRetailerPublic(
 	ctx: QueryCtx,
 	row: Doc<"retailers">,
+	opts?: { adminFullAccess?: boolean },
 ): Promise<RetailerPublic> {
 	const resolvedMethods = resolvePaymentMethods(row);
 	const paymentMethods: Array<PaymentMethod & { qrImageUrl?: string }> = [];
@@ -566,7 +574,9 @@ async function buildRetailerPublic(
 		onboardingGreetingSetup: row.onboardingGreetingSetup,
 		activatedAt: row.activatedAt,
 		linkSharedAt: row.linkSharedAt,
-		subscription: resolveAccess(sub),
+		subscription: resolveAccess(sub, {
+			adminFullAccess: opts?.adminFullAccess,
+		}),
 		ordersThisMonth: usedOrders,
 		isFoundingMember: row.isFoundingMember,
 		foundingMemberRank: row.foundingMemberRank,
