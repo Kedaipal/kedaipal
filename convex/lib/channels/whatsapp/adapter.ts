@@ -25,15 +25,33 @@ import { verifyMetaSignature } from "../../whatsappSignature";
 
 const capabilities: ChannelCapabilities = { ctaButtons: true };
 
+// A LOCAL http:// origin (loopback / private-LAN host). Used only by the dev
+// affordance below — such a host can never be a real public production URL, so
+// matching it is a safe "this is local dev" signal that needs no env flag.
+const LOCAL_HTTP_ORIGIN =
+	/^http:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/i;
+
 /**
- * Whether a CTA message can render as an interactive button. Two independent
- * gates, both resolved here so the orchestrator never carries provider quirks:
- *   1. the channel must support CTA buttons (capabilities.ctaButtons), and
- *   2. Meta rejects non-HTTPS CTA URLs — in dev (APP_URL=http://localhost) the
- *      button would be refused, so we degrade to a plain image/text instead.
+ * Resolve the URL an interactive CTA button should point at, or `null` when the
+ * CTA must degrade to a plain image/text (no button).
+ *
+ *   - HTTPS → passes through (production; Meta accepts it).
+ *   - LOCAL http:// (localhost / loopback / private-LAN) → **dev affordance**:
+ *     upgraded to https:// so Meta renders the button. Meta refuses non-HTTPS
+ *     CTA URLs, and in local dev APP_URL is http://localhost, so without this
+ *     the button would always degrade away and never be visible while
+ *     developing. The message *body* keeps the original http link (which loads
+ *     on the dev machine); the button's https URL won't resolve as-is, so the
+ *     developer edits the scheme by hand when tapping it. Scoped to local hosts
+ *     so a real (public) production domain can NEVER be silently rewritten — a
+ *     misconfigured public http:// URL still degrades safely.
+ *   - any other non-HTTPS URL → `null` (degrade).
  */
-function canUseCtaButton(url: string): boolean {
-	return capabilities.ctaButtons && url.startsWith("https://");
+function ctaButtonUrl(url: string): string | null {
+	if (!capabilities.ctaButtons) return null;
+	if (url.startsWith("https://")) return url;
+	if (LOCAL_HTTP_ORIGIN.test(url)) return `https://${url.slice("http://".length)}`;
+	return null;
 }
 
 async function send(to: string, msg: OutboundMessage): Promise<void> {
@@ -48,17 +66,18 @@ async function send(to: string, msg: OutboundMessage): Promise<void> {
 			await sendDocument(to, msg.documentUrl, msg.filename, msg.caption);
 			return;
 		case "cta": {
-			if (canUseCtaButton(msg.url)) {
+			const buttonUrl = ctaButtonUrl(msg.url);
+			if (buttonUrl) {
 				if (msg.imageUrl) {
 					await sendCtaUrlWithImage(
 						to,
 						msg.imageUrl,
 						msg.body,
 						msg.buttonText,
-						msg.url,
+						buttonUrl,
 					);
 				} else {
-					await sendCtaUrlButton(to, msg.body, msg.buttonText, msg.url);
+					await sendCtaUrlButton(to, msg.body, msg.buttonText, buttonUrl);
 				}
 				return;
 			}
