@@ -654,7 +654,7 @@ function OrdersRoute() {
 							const age = formatStatusAge(now - o.createdAt);
 							const itemSummary = summarizeOrderCardItems(o.items);
 							const cardInner = (
-								<div className="min-w-0 flex-1">
+								<div className="flex min-w-0 flex-1 flex-col">
 									{/* Name + money get the hierarchy. */}
 									<div className="flex items-center justify-between gap-2.5">
 										<span className="min-w-0 truncate text-[15px] font-semibold">
@@ -713,7 +713,11 @@ function OrdersRoute() {
 											</div>
 										) : null}
 									</div>
-									<div className="mt-2.5 flex items-center gap-1.5">
+									{/* mt-auto pins this row to the card bottom, so status +
+									    chevron align across a desktop grid row even when the
+									    neighbour card has more item lines (grid stretches all
+									    cells in a row to the tallest; see cardClass h-full). */}
+									<div className="mt-auto flex items-center gap-1.5 pt-2.5">
 										<StatusBadge
 											status={o.status as OrderStatus}
 											label={statusLabel}
@@ -734,7 +738,7 @@ function OrdersRoute() {
 								</div>
 							);
 							const cardClass = cn(
-								"group flex w-full items-start gap-3 rounded-2xl border bg-card p-3.5 text-left transition-all",
+								"group flex h-full w-full gap-3 rounded-2xl border bg-card p-3.5 text-left transition-all",
 								isSel
 									? "border-accent shadow-[0_0_0_3px_hsl(160_84%_39%/0.12)]"
 									: "border-border hover:border-ring hover:shadow-sm",
