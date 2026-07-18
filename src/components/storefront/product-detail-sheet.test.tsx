@@ -202,4 +202,44 @@ describe("ProductDetailSheet — minimum order quantity (86ey9unyx)", () => {
 			2,
 		);
 	});
+
+	it("goes unavailable-with-reason when stock can't reach the minimum", () => {
+		// Hard-block stock 3 < min 5 → no stepper trap: the sheet explains and
+		// the add path is disabled outright (checkout could never accept it).
+		const shortProduct = {
+			...(minProduct as unknown as Record<string, unknown>),
+			totalOnHand: 3,
+			variants: [
+				{
+					_id: "vK",
+					optionValues: [],
+					onHand: 3,
+					active: true,
+					blockWhenOutOfStock: true,
+					requiresProof: false,
+					price: 500,
+					imageUrls: [],
+				},
+			],
+		} as unknown as StorefrontProduct;
+		const onAdd = vi.fn();
+		render(
+			<ProductDetailSheet
+				product={shortProduct}
+				retailerId={RID}
+				cartQuantity={0}
+				onClose={vi.fn()}
+				onAdd={onAdd}
+			/>,
+		);
+		expect(screen.getByRole("alert").textContent).toMatch(
+			/only 3 left.*minimum of 5/i,
+		);
+		const addButton = screen.getByRole("button", {
+			name: /not enough stock/i,
+		});
+		expect((addButton as HTMLButtonElement).disabled).toBe(true);
+		fireEvent.click(addButton);
+		expect(onAdd).not.toHaveBeenCalled();
+	});
 });

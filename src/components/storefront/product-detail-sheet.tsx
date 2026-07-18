@@ -9,6 +9,7 @@ import {
 	availableValuesPerAxis,
 	getCustomLine,
 	isSellable,
+	minQuantityUnreachable,
 	resolveVariant,
 } from "../../lib/variant";
 import { Button } from "../ui/button";
@@ -179,6 +180,13 @@ export function ProductDetailSheet({
 	const minQuantity = product.minQuantity ?? 0;
 	const remainingToMin = Math.max(1, minQuantity - cartQuantity);
 	const minFloor = hasOptions ? 1 : Math.min(remainingToMin, maxQty);
+	// Stock can no longer reach the minimum → the standard line is unavailable
+	// with the reason spelled out, instead of a stepper pinned at a quantity
+	// checkout would reject. The custom card below stays live (exempt from the
+	// minimum). `totalOnHand` equals the purchasable stock here: this state only
+	// fires when every standard variant hard-blocks, and the custom line's
+	// onHand is always 0.
+	const minUnreachable = minQuantityUnreachable(minQuantity, variants);
 	// Never render/add more than the stock ceiling, even if the min default
 	// exceeds it (the buyer sees the stock hint explain the tension).
 	const displayQuantity = Math.min(quantity, maxQty);
@@ -326,17 +334,32 @@ export function ProductDetailSheet({
 						) : null}
 
 						{/* Minimum-order hint — surfaced here (not only at checkout) so the
-						    rule is never a surprise. See convex/lib/minOrderRules.ts. */}
+						    rule is never a surprise. When stock can't reach the minimum
+						    the hint becomes the unavailability reason instead of a rule
+						    the buyer can't comply with. See convex/lib/minOrderRules.ts. */}
 						{minQuantity >= 2 ? (
-							<p className="mt-3 rounded-lg bg-accent/5 px-3 py-2 text-xs text-foreground">
-								<span className="font-semibold">
-									Minimum {minQuantity} per order
-								</span>
-								{hasOptions ? " — mix options to reach it." : "."}
-								{cartQuantity > 0
-									? ` You have ${cartQuantity} in your cart.`
-									: ""}
-							</p>
+							minUnreachable ? (
+								<p
+									role="alert"
+									className="mt-3 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive"
+								>
+									<span className="font-semibold">
+										Only {product.totalOnHand} left
+									</span>{" "}
+									— not enough to meet this product&apos;s minimum of{" "}
+									{minQuantity} per order. Check back once it&apos;s restocked.
+								</p>
+							) : (
+								<p className="mt-3 rounded-lg bg-accent/5 px-3 py-2 text-xs text-foreground">
+									<span className="font-semibold">
+										Minimum {minQuantity} per order
+									</span>
+									{hasOptions ? " — mix options to reach it." : "."}
+									{cartQuantity > 0
+										? ` You have ${cartQuantity} in your cart.`
+										: ""}
+								</p>
+							)
 						) : null}
 
 						{/* Custom / made-to-order line — a self-contained, INDEPENDENT add
@@ -483,7 +506,9 @@ export function ProductDetailSheet({
 									onClick={() =>
 										setQuantity(Math.max(minFloor, displayQuantity - 1))
 									}
-									disabled={displayQuantity <= minFloor || !sellable}
+									disabled={
+										displayQuantity <= minFloor || !sellable || minUnreachable
+									}
 									className="flex size-11 items-center justify-center rounded-full border border-border disabled:opacity-40"
 									aria-label="Decrease quantity"
 								>
@@ -497,7 +522,9 @@ export function ProductDetailSheet({
 									onClick={() =>
 										setQuantity(Math.min(maxQty, displayQuantity + 1))
 									}
-									disabled={displayQuantity >= maxQty || !sellable}
+									disabled={
+										displayQuantity >= maxQty || !sellable || minUnreachable
+									}
 									className="flex size-11 items-center justify-center rounded-full border border-border disabled:opacity-40"
 									aria-label="Increase quantity"
 								>
@@ -506,20 +533,22 @@ export function ProductDetailSheet({
 							</div>
 							<Button
 								type="button"
-								disabled={!sellable}
+								disabled={!sellable || minUnreachable}
 								onClick={() =>
 									selectedVariant &&
 									onAdd(product, selectedVariant, displayQuantity)
 								}
 								className="h-12 w-full text-base"
 							>
-								{!selectedVariant
-									? hasOptions
-										? "Select options"
-										: "Unavailable"
-									: !sellable
-										? "Out of stock"
-										: "Add to cart"}
+								{minUnreachable
+									? "Not enough stock"
+									: !selectedVariant
+										? hasOptions
+											? "Select options"
+											: "Unavailable"
+										: !sellable
+											? "Out of stock"
+											: "Add to cart"}
 							</Button>
 						</div>
 					</div>

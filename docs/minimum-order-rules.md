@@ -68,7 +68,23 @@ server's authoritative gate can never disagree:
   button **floors at the minimum** (disabled-with-reason); with options the
   floor stays 1 because mixing variants toward the sum is legitimate.
 - **Quick-add** (single-variant cards) tops the cart up to the minimum in one
-  tap; once met, +1 as usual. The toast names the quantity ("Added 20 × …").
+  tap, **clamped to the variant's remaining stock** (a single tap can never put
+  more in the cart than can be bought); once met, +1 as usual. The toast names
+  the quantity ("Added 20 × …").
+- **Unreachable minimum = unavailable-with-reason, never a stepper trap**
+  (`minQuantityUnreachable` in `src/lib/variant.ts`): when every standard
+  variant hard-blocks and their combined stock sits below the minimum (min 20,
+  15 left), the card shows a "Not enough stock" badge with the add button
+  disabled, and the detail sheet swaps the min hint for "Only 15 left — not
+  enough to meet this product's minimum of 20 per order" with the stepper +
+  add disabled. Without this, the stepper would pin at stock and checkout
+  would demand units that can't be bought. Any made-to-order standard variant
+  keeps the minimum reachable (unbounded); the custom line neither rescues the
+  minimum (it's excluded from min sums) nor gets blocked by this state (its
+  own CTA stays live — cards with a custom line keep their Choose button).
+  Note the seller-form stock warning only fires while editing — this
+  storefront state is what covers stock *eroding* below the minimum through
+  normal sales.
 - **Checkout sheet:** a red inline hint on the offending product's first line
   ("Minimum 20 per order — add 8 more"), a `role="alert"` banner above the
   total listing every shortfall (same pattern as the delivery out-of-range
@@ -114,4 +130,8 @@ server's authoritative gate can never disagree:
   `updateSettings`, public payload exposure.
 - `convex/counterCheckout.test.ts` — the counter sells below both rules.
 - `src/components/storefront/product-detail-sheet.test.tsx` — stepper opens at
-  the minimum / at the remaining amount, minus floors, add passes the min.
+  the minimum / at the remaining amount, minus floors, add passes the min,
+  unreachable minimum renders unavailable-with-reason with the add disabled.
+- `src/lib/variant.test.ts` — `minQuantityUnreachable`: all-hard-block below
+  min, cross-variant summing, made-to-order rescue, custom line doesn't
+  rescue, inactive variants excluded.

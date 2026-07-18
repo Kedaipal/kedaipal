@@ -149,13 +149,19 @@ export function ProductGrid({
 	// Quick-add only fires for single-variant products (multi-variant cards open
 	// the sheet instead), so the sole variant is unambiguous. A product with a
 	// minimum order quantity tops the cart up to it in one tap (the card shows a
-	// "Min N" chip, so the bigger add is expected); once met, +1 as usual.
+	// "Min N" chip, so the bigger add is expected); once met, +1 as usual. The
+	// top-up is clamped to the variant's remaining stock (hard-block only) so a
+	// single tap can never put more in the cart than can actually be bought.
 	const quickAdd = (p: StorefrontProduct) => {
 		const variant = p.variants[0];
 		if (!variant) return;
-		const remainingToMin =
-			(p.minQuantity ?? 1) - cart.quantityForProduct(p._id);
-		addVariant(p, variant, Math.max(1, remainingToMin));
+		const inCart = cart.quantityForProduct(p._id);
+		const remainingToMin = (p.minQuantity ?? 1) - inCart;
+		const stockLeft =
+			variant.blockWhenOutOfStock === true
+				? Math.max(1, variant.onHand - inCart)
+				: Number.POSITIVE_INFINITY;
+		addVariant(p, variant, Math.max(1, Math.min(remainingToMin, stockLeft)));
 	};
 
 	return (

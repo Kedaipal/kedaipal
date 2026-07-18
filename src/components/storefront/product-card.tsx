@@ -2,6 +2,7 @@ import type { FunctionReturnType } from "convex/server";
 import { ImagePlus, Plus, SlidersHorizontal } from "lucide-react";
 import type { api } from "../../../convex/_generated/api";
 import { formatPrice } from "../../lib/format";
+import { minQuantityUnreachable } from "../../lib/variant";
 import { Button } from "../ui/button";
 
 export type StorefrontProduct = FunctionReturnType<
@@ -41,6 +42,11 @@ export function ProductCard({ product, onOpen, onQuickAdd }: ProductCardProps) {
 	const firstImage = product.imageUrls[0];
 	// Minimum order quantity (≥2 when set — sanitizer normalizes 0/1 away).
 	const minQuantity = product.minQuantity ?? 0;
+	// Stock can no longer reach the minimum (all-hard-block, combined on-hand
+	// below it) → the standard line is unavailable-with-reason, never a stepper
+	// trap the buyer discovers at checkout. The custom line (its own CTA in the
+	// sheet) is unaffected, so cards with one keep their Choose button live.
+	const minUnreachable = minQuantityUnreachable(minQuantity, product.variants);
 
 	return (
 		<div className="group flex flex-col overflow-hidden rounded-2xl border border-border bg-card transition-shadow duration-200 hover:shadow-md">
@@ -72,6 +78,12 @@ export function ProductCard({ product, onOpen, onQuickAdd }: ProductCardProps) {
 				{outOfStock ? (
 					<span className="absolute left-2 top-2 rounded-full bg-background/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur-sm">
 						Out of stock
+					</span>
+				) : minUnreachable ? (
+					// Reads with the "Min N" chip below: stock exists but can't reach
+					// the minimum, so the standard line can't be ordered right now.
+					<span className="absolute left-2 top-2 rounded-full bg-background/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur-sm">
+						Not enough stock
 					</span>
 				) : lowStock ? (
 					<span className="absolute left-2 top-2 rounded-full bg-accent/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent-foreground backdrop-blur-sm">
@@ -126,7 +138,10 @@ export function ProductCard({ product, onOpen, onQuickAdd }: ProductCardProps) {
 					<Button
 						type="button"
 						onClick={() => onOpen(product)}
-						disabled={outOfStock}
+						// A live custom line keeps Choose usable (its own CTA in the
+						// sheet is exempt from the minimum) even when the standard
+						// variants can't reach it.
+						disabled={outOfStock || (minUnreachable && !hasCustom)}
 						size="sm"
 						variant="outline"
 						className="mt-auto h-11 w-full rounded-xl"
@@ -138,7 +153,7 @@ export function ProductCard({ product, onOpen, onQuickAdd }: ProductCardProps) {
 					<Button
 						type="button"
 						onClick={() => onQuickAdd(product)}
-						disabled={outOfStock}
+						disabled={outOfStock || minUnreachable}
 						size="sm"
 						className="mt-auto h-11 w-full rounded-xl"
 					>
