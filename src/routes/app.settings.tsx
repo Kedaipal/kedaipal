@@ -1146,8 +1146,8 @@ function PaymentMethodsForm({
 	);
 
 	// Methods are kept grouped (all banks, then all QRs) so the array order ==
-	// what renders (banks in the WA text block, QRs as follow-up images). Sorting
-	// is therefore within a type only.
+	// the order buyers see them in on their order page's "How to pay" section.
+	// Sorting is therefore within a type only.
 	const [methods, setMethods] = useState<MethodDraft[]>(() => {
 		const seeded = current.map((m) => ({
 			_key: crypto.randomUUID(),
@@ -1479,10 +1479,10 @@ function PaymentMethodsForm({
 		<form onSubmit={handleSubmit} className="flex flex-col gap-6">
 			<SectionHeading
 				title="Payment methods"
-				description="Add your banks and QR codes — shoppers see all of them in the WhatsApp confirmation reply and on their order page (only after they order, never on your public storefront). Drag the handle to reorder within each group."
+				description="Add your banks and QR codes. For your buyers' security, these are no longer pasted into the WhatsApp chat — instead the order confirmation links each buyer to their own order page, where all of them show with one-tap copy. Never shown on your public storefront. Drag the handle to reorder within each group."
 			/>
 
-			{/* Bank accounts — shown together in the WhatsApp payment details. */}
+			{/* Bank accounts — shown on the buyer's order page (linked from WhatsApp). */}
 			<div className="flex flex-col gap-3">
 				<div className="flex items-center justify-between gap-2">
 					<span className="inline-flex items-center gap-1.5 text-sm font-semibold">
@@ -1515,7 +1515,7 @@ function PaymentMethodsForm({
 				)}
 			</div>
 
-			{/* QR codes — each sent as its own follow-up image on WhatsApp. */}
+			{/* QR codes — shown on the buyer's order page (linked from WhatsApp). */}
 			<div className="flex flex-col gap-3">
 				<div className="flex items-center justify-between gap-2">
 					<span className="inline-flex items-center gap-1.5 text-sm font-semibold">
