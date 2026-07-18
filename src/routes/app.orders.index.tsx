@@ -1,8 +1,10 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useConvex, useMutation, useQuery } from "convex/react";
 import {
+	ArrowUpDown,
 	CalendarDays,
 	Check,
+	ChevronDown,
 	ChevronRight,
 	Download,
 	ListChecks,
@@ -21,6 +23,10 @@ import {
 	INBOX_BUCKETS,
 	type OrderBucket,
 } from "../../convex/lib/orderBuckets";
+import {
+	type InboxSort,
+	sortInboxOrders,
+} from "../../convex/lib/orderInboxFilter";
 import {
 	isOrderPaymentMethod,
 	type OrderPaymentMethod,
@@ -48,6 +54,11 @@ import {
 import { Button } from "../components/ui/button";
 import { FilterChip, FilterChipRow } from "../components/ui/filter-chip";
 import { Input } from "../components/ui/input";
+import {
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "../components/ui/popover";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
@@ -95,6 +106,8 @@ type InboxSearch = {
 	fwin?: FulfilmentWindow;
 	/** Checkout surface (online vs counter). */
 	source?: OrderSource;
+	/** List order. Default "recent" is kept out of the URL; only "due" is stored. */
+	sort?: InboxSort;
 };
 
 function isFulfilmentWindow(x: unknown): x is FulfilmentWindow {
@@ -148,12 +161,40 @@ export const Route = createFileRoute("/app/orders/")({
 				search.mockup === true || search.mockup === "true" ? true : undefined,
 			fwin: isFulfilmentWindow(search.fwin) ? search.fwin : undefined,
 			source: isOrderSource(search.source) ? search.source : undefined,
+			// Only the non-default ("due") is stored; "recent" stays out of the URL.
+			sort: search.sort === "due" ? "due" : undefined,
 		};
 	},
 	component: OrdersRoute,
 });
 
 const PAGE_SIZE = 50;
+
+// The inbox sort options. Default is "recent" (kept out of the URL) — see the
+// InboxSort docs in convex/lib/orderInboxFilter.ts for why newest-first is the
+// default and due-date is the opt-in.
+const INBOX_SORTS: {
+	value: InboxSort;
+	/** Menu-row label. */
+	label: string;
+	/** Compact label on the trigger button. */
+	short: string;
+	/** One-line helper under the menu row. */
+	hint: string;
+}[] = [
+	{
+		value: "recent",
+		label: "Newest first",
+		short: "Newest",
+		hint: "Most recently received",
+	},
+	{
+		value: "due",
+		label: "Due date",
+		short: "Due date",
+		hint: "Soonest fulfilment first",
+	},
+];
 
 function OrdersRoute() {
 	const {
@@ -167,6 +208,7 @@ function OrdersRoute() {
 		mockup = false,
 		fwin,
 		source,
+		sort = "recent",
 	} = Route.useSearch();
 	const navigate = useNavigate({ from: Route.fullPath });
 	const retailer = useDashboardRetailer();
@@ -178,7 +220,12 @@ function OrdersRoute() {
 
 	const [searchInput, setSearchInput] = useState(q);
 	const debounced = useDebounce(searchInput.trim(), 250);
-	const [limit, setLimit] = useState(PAGE_SIZE);
+	// How many of the fetched window to render. Pagination is purely client-side:
+	// the query returns the whole filtered+sorted window as a stable subscription,
+	// so "Load more" just reveals more of it — no re-scan, no re-query. Reset to
+	// the first page whenever the view (bucket / search / filters) changes.
+	const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+	const [sortOpen, setSortOpen] = useState(false);
 
 	// Multi-select (bulk actions). Checkboxes stay hidden until the seller taps the
 	// header "Select" button, so the default card keeps its full width for what
@@ -201,7 +248,7 @@ function OrdersRoute() {
 	// clears any selection (the result set is different now).
 	// biome-ignore lint/correctness/useExhaustiveDependencies: these are intentional reset triggers, not values read in the body.
 	useEffect(() => {
-		setLimit(PAGE_SIZE);
+		setVisibleCount(PAGE_SIZE);
 		setSelected(new Set());
 	}, [
 		bucket,
@@ -214,6 +261,8 @@ function OrdersRoute() {
 		mockup,
 		fwin,
 		source,
+		// Re-sorting is a view change too — jump back to the top of the new order.
+		sort,
 	]);
 
 	// Order Inbox plan gate (Pro+). Starter keeps the plain list + order detail +
@@ -242,9 +291,10 @@ function OrdersRoute() {
 						fulfilmentWindow: fwin,
 						source,
 						searchText: debounced || undefined,
-						limit,
+						// No limit → stable full-window subscription; we paginate below
+						// by slicing to `visibleCount`, so "Load more" never re-queries.
 					}
-				: { retailerId: retailer._id, bucket: "all", limit }
+				: { retailerId: retailer._id, bucket: "all" as const }
 			: "skip",
 	);
 	const countsRef = useRef<NonNullable<typeof result>["counts"] | null>(null);
@@ -262,7 +312,16 @@ function OrdersRoute() {
 	});
 
 	const loading = result === undefined;
+	// The query returns the whole filtered window, newest-first. We apply the sort
+	// toggle here (client-side, so switching Newest ⇄ Due date is instant — no
+	// re-query), then render only the first `visibleCount` and grow that on
+	// "Load more". Sorting ≤1,000 rows per render is negligible.
 	const orders = result?.orders ?? [];
+	const orderedOrders = sortInboxOrders(orders, sort);
+	const visibleOrders = orderedOrders.slice(0, visibleCount);
+	// The scan hit its ceiling — orders older than the newest 1,000 aren't in the
+	// window, so the list and the counts under-report. Surfaced in the footer.
+	const capped = result?.capped ?? false;
 	// Bucket counts are independent of the active filters, so retain the last
 	// known set across refetches — otherwise the chips + due-today banner would
 	// flicker out every time a filter changes (the query reloads).
@@ -293,6 +352,13 @@ function OrdersRoute() {
 		});
 	}
 
+	function setSort(next: InboxSort) {
+		navigate({
+			// Default ("recent") stays out of the URL; only "due" is persisted.
+			search: (prev) => ({ ...prev, sort: next === "due" ? "due" : undefined }),
+		});
+	}
+
 	function setFilters(next: OrderFilterValue) {
 		navigate({
 			search: (prev) => ({
@@ -316,7 +382,9 @@ function OrdersRoute() {
 	};
 
 	// --- Bulk multi-select ---------------------------------------------------
-	const visibleIds = orders.map((o) => o._id);
+	// "Select all" targets the rows actually on screen (the revealed window), not
+	// the un-rendered tail — so the selection always matches what the seller sees.
+	const visibleIds = visibleOrders.map((o) => o._id);
 	const allSelected =
 		visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
 
@@ -539,6 +607,73 @@ function OrdersRoute() {
 							) : null}
 						</div>
 
+						{/* Sort — the fix for "due orders bury my new ones". Default is
+						    Newest first (matches WhatsApp/Shopee); Due date is the opt-in
+						    fulfilment-queue view. Applied client-side, so it's instant. */}
+						<Popover open={sortOpen} onOpenChange={setSortOpen}>
+							<PopoverTrigger asChild>
+								<button
+									type="button"
+									aria-label={`Sort: ${
+										INBOX_SORTS.find((s) => s.value === sort)?.label
+									}`}
+									className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:border-accent/40"
+								>
+									<ArrowUpDown
+										className="size-4 text-muted-foreground"
+										aria-hidden="true"
+									/>
+									<span className="whitespace-nowrap">
+										{INBOX_SORTS.find((s) => s.value === sort)?.short}
+									</span>
+									<ChevronDown
+										className="size-4 text-muted-foreground"
+										aria-hidden="true"
+									/>
+								</button>
+							</PopoverTrigger>
+							<PopoverContent align="end" className="w-60 p-1">
+								<p className="px-3 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+									Sort by
+								</p>
+								<div className="flex flex-col">
+									{INBOX_SORTS.map((opt) => {
+										const active = opt.value === sort;
+										return (
+											<button
+												key={opt.value}
+												type="button"
+												onClick={() => {
+													setSort(opt.value);
+													setSortOpen(false);
+												}}
+												className={cn(
+													"flex items-center gap-2.5 rounded-md px-3 py-2 text-left transition-colors hover:bg-muted",
+													active && "bg-muted",
+												)}
+											>
+												<Check
+													className={cn(
+														"size-4 shrink-0 text-accent",
+														active ? "opacity-100" : "opacity-0",
+													)}
+													aria-hidden="true"
+												/>
+												<span className="min-w-0">
+													<span className="block text-sm font-medium">
+														{opt.label}
+													</span>
+													<span className="block text-xs text-muted-foreground">
+														{opt.hint}
+													</span>
+												</span>
+											</button>
+										);
+									})}
+								</div>
+							</PopoverContent>
+						</Popover>
+
 						<OrderFilters
 							value={{
 								payment: pay,
@@ -624,7 +759,7 @@ function OrdersRoute() {
 			) : (
 				<>
 					<ul className="flex flex-col gap-2 lg:grid lg:grid-cols-2 lg:gap-3">
-						{orders.map((o) => {
+						{visibleOrders.map((o) => {
 							const isSel = selected.has(o._id);
 							const statusLabel = (() => {
 								const cs = resolveCurrentStage(
@@ -780,15 +915,35 @@ function OrdersRoute() {
 						})}
 					</ul>
 
-					{orders.length < total ? (
+					{visibleOrders.length < orders.length ? (
 						<button
 							type="button"
-							onClick={() => setLimit((n) => n + PAGE_SIZE)}
+							onClick={() =>
+								setVisibleCount((n) => Math.min(n + PAGE_SIZE, orders.length))
+							}
 							className="mx-auto flex h-11 items-center rounded-full border border-border px-5 text-sm font-medium text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
 						>
-							Load more ({total - orders.length} more)
+							Load more ({orders.length - visibleOrders.length} more)
 						</button>
 					) : null}
+
+					{/* Results footer — honest "X of Y" plus the scan-cap caveat. When
+					    capped, Y is drawn from the newest 1,000 orders only (the scan
+					    takes newest-by-date THEN filters), so filters/search can't reach
+					    past it — export is the full-history path. The "1,000" mirrors
+					    MAX_INBOX_SCAN in convex/orders.ts. */}
+					<p className="text-center text-xs text-muted-foreground">
+						{`Showing ${visibleOrders.length} of ${total} ${total === 1 ? "order" : "orders"}`}
+						{capped ? (
+							<>
+								{" "}
+								<span className="text-amber-600 dark:text-amber-500">
+									— from your most recent 1,000. Older orders aren't listed;
+									export to CSV for your full history.
+								</span>
+							</>
+						) : null}
+					</p>
 					{selectMode ? <div className="h-24" aria-hidden="true" /> : null}
 				</>
 			)}

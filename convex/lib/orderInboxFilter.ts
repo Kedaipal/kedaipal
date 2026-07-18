@@ -108,7 +108,19 @@ export function buildInboxPredicate(
 }
 
 /**
- * Default inbox order: by fulfilment date ascending (soonest first) so the most
+ * The two ways the inbox can order the list:
+ *   - `recent` — newest-created first (the default). Matches the mental model
+ *     sellers bring from WhatsApp/Shopee/email and stops far-future orders from
+ *     burying orders that just arrived.
+ *   - `due` — by fulfilment date ascending (the fulfilment queue), for planning
+ *     the day. Fulfilment urgency is also surfaced via the Due chips + today
+ *     banner + Home strip, so this is a deliberate opt-in, not the default.
+ * See docs/order-inbox.md ("Sort").
+ */
+export type InboxSort = "recent" | "due";
+
+/**
+ * `due`-sort comparator: fulfilment date ascending (soonest first) so the most
  * urgent orders sort to the top. Dateless orders sink to the bottom; the caller
  * must pass an already-createdAt-desc list so the stable sort keeps that as the
  * tiebreaker within each group.
@@ -123,4 +135,17 @@ export function compareInboxOrder(
 	if (ad === undefined) return 1; // a (dateless) after b
 	if (bd === undefined) return -1; // b (dateless) after a
 	return ad - bd; // both dated → soonest first
+}
+
+/**
+ * Order a list for the inbox by the chosen sort. The input MUST already be
+ * newest-created first (the `by_retailer` scan order) — `recent` returns that
+ * order untouched, and `due` relies on it for the within-date tiebreaker (see
+ * compareInboxOrder). Always returns a fresh array; never mutates the input.
+ */
+export function sortInboxOrders<T extends { fulfilmentDate?: number }>(
+	orders: readonly T[],
+	sort: InboxSort,
+): T[] {
+	return sort === "due" ? [...orders].sort(compareInboxOrder) : [...orders];
 }

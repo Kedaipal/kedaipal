@@ -249,7 +249,8 @@ function TrackingRoute() {
 		order != null &&
 		order.status !== "cancelled" &&
 		(order.paymentStatus ?? "unpaid") !== "received" &&
-		!isMockupGateClosed(order);
+		!isMockupGateClosed(order) &&
+		order.deliveryFeePending !== true;
 	const paymentMethods = useQuery(
 		api.orders.getPaymentMethods,
 		showPaymentSection ? { token } : "skip",
@@ -284,6 +285,10 @@ function TrackingRoute() {
 	const mockupGateClosed = isMockupGateClosed(order);
 	const mockupGateOpen =
 		order.mockupStatus === "approved" || order.mockupWaivedAt != null;
+	// Second, independent payment hold (86extzdr8): the seller still has to
+	// confirm the delivery charge (out-of-range "arrange" order), so the total
+	// isn't final and "I've paid" stays held — same posture as the mockup gate.
+	const deliveryFeeHeld = order.deliveryFeePending === true;
 
 	// Receipt reconciliation for the custom-work quote (order-level, minor units).
 	// The made-to-order line is snapshotted at price 0, so the quote would
@@ -442,6 +447,17 @@ function TrackingRoute() {
 										: "Payment opens once you approve the seller's mockup."}
 								</p>
 							</>
+						) : deliveryFeeHeld ? (
+							<>
+								<Button disabled className="h-12 w-full text-base">
+									Awaiting delivery charge
+								</Button>
+								<p className="text-xs opacity-80">
+									{order.storeName || "The seller"} is confirming your delivery
+									charge on WhatsApp — payment opens with the final total right
+									after.
+								</p>
+							</>
 						) : (
 							<Button
 								onClick={() => setClaimingPayment(true)}
@@ -478,6 +494,7 @@ function TrackingRoute() {
 			    mockup gate; hidden once received/cancelled or when none configured. */}
 			{!isCancelled &&
 			!mockupGateClosed &&
+			!deliveryFeeHeld &&
 			paymentStatus !== "received" &&
 			paymentMethods &&
 			paymentMethods.length > 0 ? (
@@ -807,12 +824,40 @@ function TrackingRoute() {
 						</span>
 					</div>
 				) : null}
+				{/* Frozen delivery charge — same reconciliation rule as the pickup fee. */}
+				{order.deliveryFee && order.deliveryFee > 0 ? (
+					<div className="flex items-center justify-between px-3 text-sm text-muted-foreground">
+						<span>Delivery fee</span>
+						<span className="tabular-nums">
+							{formatPrice(order.deliveryFee, order.currency)}
+						</span>
+					</div>
+				) : null}
+				{deliveryFeeHeld ? (
+					<div className="flex items-center justify-between gap-3 px-3 text-sm text-muted-foreground">
+						<span>Delivery charge</span>
+						<span className="text-right">To be confirmed</span>
+					</div>
+				) : null}
 				<div className="flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2.5 text-sm font-bold">
 					<span>Total</span>
 					<span className="tabular-nums">
 						{formatPrice(order.total, order.currency)}
+						{deliveryFeeHeld ? (
+							<span className="font-medium text-muted-foreground">
+								{" "}
+								+ delivery
+							</span>
+						) : null}
 					</span>
 				</div>
+				{deliveryFeeHeld ? (
+					<p className="px-3 text-xs text-muted-foreground">
+						Your address is outside the store&apos;s standard delivery zones —
+						they&apos;ll confirm the delivery charge with you on WhatsApp and
+						it&apos;ll be added to this total.
+					</p>
+				) : null}
 				{/* Buyer self-serves a PDF receipt — generated on demand from this
 				    order, no delivery/email needed. */}
 				<ReceiptDownloadButton
