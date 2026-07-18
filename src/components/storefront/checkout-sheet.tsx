@@ -21,6 +21,10 @@ import {
 	mytMidnightFromYmd,
 	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
+import {
+	collectMinQuantityShortfalls,
+	minOrderValueShortfall,
+} from "../../../convex/lib/minOrderRules";
 import type { UseCart } from "../../hooks/useCart";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { deriveMapsUrl } from "../../lib/google-address";
@@ -79,6 +83,9 @@ interface CheckoutSheetProps {
 	offerSelfCollect: boolean;
 	offerDelivery: boolean;
 	minFulfilmentNoticeDays: number | undefined;
+	/** Store-wide minimum order value (minor units) — checkout blocks below it.
+	 * See convex/lib/minOrderRules.ts. */
+	minOrderValue: number | undefined;
 	pickupLocations: ReadonlyArray<PublicPickupLocation>;
 }
 
@@ -265,9 +272,40 @@ export function CheckoutSheet({
 	offerSelfCollect,
 	offerDelivery,
 	minFulfilmentNoticeDays,
+	minOrderValue,
 	pickupLocations,
 }: CheckoutSheetProps) {
 	const createOrder = useMutation(api.orders.create);
+
+	// Minimum order rules (86ey9unyx) — same shared module the server enforces
+	// with, so this pre-submit mirror can't disagree with orders.create. Cart
+	// items snapshot each product's minQuantity at add time.
+	const minRuleItems = cart.items.map((i) => ({
+		productId: i.productId,
+		name: i.name,
+		quantity: i.quantity,
+		minQuantity: i.minQuantity,
+		isCustom: i.isCustom,
+		quoteOnRequest: i.quoteOnRequest,
+	}));
+	const qtyShortfalls = collectMinQuantityShortfalls(minRuleItems);
+	const valueShortfall = minOrderValueShortfall(
+		minOrderValue,
+		cart.total,
+		minRuleItems,
+	);
+	const minRulesBlocked = qtyShortfalls.length > 0 || valueShortfall > 0;
+	const shortfallByProduct = new Map(
+		qtyShortfalls.map((s) => [s.productId, s]),
+	);
+	// The per-product hint renders once — on the product's FIRST non-custom line
+	// (a multi-variant product can span several cart lines).
+	const firstLineForProduct = new Map<string, number>();
+	cart.items.forEach((item, index) => {
+		if (!item.isCustom && !firstLineForProduct.has(item.productId)) {
+			firstLineForProduct.set(item.productId, index);
+		}
+	});
 	const [serverError, setServerError] = useState<string | null>(null);
 	// Submit-time "choose a pickup point" error — inline on the radio list (the
 	// shared focus helper lands on it), not a generic bottom banner. Cleared as
@@ -330,6 +368,9 @@ export function CheckoutSheet({
 			setServerError(null);
 			setPickupError(null);
 			if (cart.items.length === 0) return;
+			// Minimum order rules — the submit button is already disabled with the
+			// reason on screen; this guard covers a race (e.g. Enter key mid-render).
+			if (minRulesBlocked) return;
 			if (noCheckoutPhone) {
 				setServerError(
 					"Order checkout is temporarily unavailable. Please try again shortly.",
@@ -505,7 +546,7 @@ export function CheckoutSheet({
 								</p>
 							) : (
 								<ul className="flex flex-col gap-3">
-									{cart.items.map((item) => (
+									{cart.items.map((item, itemIndex) => (
 										<li
 											key={item.variantId}
 											className="flex items-center gap-3 rounded-xl border border-border p-3"
@@ -543,6 +584,22 @@ export function CheckoutSheet({
 														📎 Reference photo attached
 													</span>
 												) : null}
+												{(() => {
+													// Min-quantity hint, once per product (its first
+													// non-custom line) so the fix is visible right where
+													// the buyer would tap back to add more.
+													const shortfall = shortfallByProduct.get(
+														item.productId,
+													);
+													return shortfall &&
+														firstLineForProduct.get(item.productId) ===
+															itemIndex ? (
+														<span className="mt-1 w-fit rounded-md bg-destructive/10 px-2 py-1 text-[11px] font-medium leading-snug text-destructive">
+															Minimum {shortfall.minQuantity} per order — add{" "}
+															{shortfall.minQuantity - shortfall.have} more
+														</span>
+													) : null;
+												})()}
 											</div>
 											<div className="flex items-center gap-2">
 												<span className="text-sm font-semibold">
@@ -859,6 +916,29 @@ export function CheckoutSheet({
 														: "Pick your address from the Google suggestions so we can calculate your delivery fee."}
 												</p>
 											) : null}
+											{/* Minimum order rules — the reason the button below is
+											    disabled, spelled out (never a silent failure). */}
+											{minRulesBlocked ? (
+												<div
+													role="alert"
+													className="mt-1 flex flex-col gap-1 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive"
+												>
+													{qtyShortfalls.map((s) => (
+														<p key={s.productId}>
+															Minimum {s.minQuantity} × {s.name} per order — you
+															have {s.have}
+														</p>
+													))}
+													{valueShortfall > 0 ? (
+														<p>
+															Minimum order{" "}
+															{formatPrice(minOrderValue ?? 0, cart.currency)} —
+															add {formatPrice(valueShortfall, cart.currency)}{" "}
+															more to check out
+														</p>
+													) : null}
+												</div>
+											) : null}
 										</div>
 									);
 								}}
@@ -880,7 +960,10 @@ export function CheckoutSheet({
 											neitherAvailable ||
 											// Out-of-area / coord-less address on a "block" store —
 											// the breakdown explains why (server enforces it too).
-											deliveryBlocked
+											deliveryBlocked ||
+											// Below a minimum order rule — the alert above the total
+											// lists exactly what's missing (server enforces it too).
+											minRulesBlocked
 										}
 										className="h-12 w-full text-base"
 									>

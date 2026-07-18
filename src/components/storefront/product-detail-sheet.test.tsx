@@ -68,6 +68,7 @@ describe("ProductDetailSheet — custom line is an independent add", () => {
 			<ProductDetailSheet
 				product={product}
 				retailerId={RID}
+				cartQuantity={0}
 				onClose={vi.fn()}
 				onAdd={onAdd}
 			/>,
@@ -100,6 +101,7 @@ describe("ProductDetailSheet — custom line is an independent add", () => {
 			<ProductDetailSheet
 				product={product}
 				retailerId={RID}
+				cartQuantity={0}
 				onClose={vi.fn()}
 				onAdd={onAdd}
 			/>,
@@ -126,5 +128,78 @@ describe("ProductDetailSheet — custom line is an independent add", () => {
 			{ note: undefined, imageStorageId: undefined },
 		);
 		expect(onAdd).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe("ProductDetailSheet — minimum order quantity (86ey9unyx)", () => {
+	// Single-variant product with a minimum of 5, plenty of stock.
+	const minProduct = {
+		_id: "p2",
+		name: "Kuih Tray",
+		currency: "MYR",
+		imageUrls: [],
+		options: [],
+		priceFrom: 500,
+		priceTo: 500,
+		hasQuotePricing: false,
+		minQuantity: 5,
+		variants: [
+			{
+				_id: "vK",
+				optionValues: [],
+				onHand: 100,
+				active: true,
+				blockWhenOutOfStock: true,
+				requiresProof: false,
+				price: 500,
+				imageUrls: [],
+			},
+		],
+	} as unknown as StorefrontProduct;
+
+	it("opens at the minimum, floors the stepper there and adds that many", () => {
+		const onAdd = vi.fn();
+		render(
+			<ProductDetailSheet
+				product={minProduct}
+				retailerId={RID}
+				cartQuantity={0}
+				onClose={vi.fn()}
+				onAdd={onAdd}
+			/>,
+		);
+		// The rule is announced up front, and the stepper starts AT the minimum.
+		expect(screen.getByText(/minimum 5 per order/i)).toBeTruthy();
+		const minus = screen.getByRole("button", { name: /decrease quantity/i });
+		// No-options product → can't step below the minimum (disabled-with-reason
+		// beats a checkout surprise).
+		expect((minus as HTMLButtonElement).disabled).toBe(true);
+		fireEvent.click(screen.getByRole("button", { name: /add to cart/i }));
+		expect(onAdd).toHaveBeenCalledWith(
+			minProduct,
+			expect.objectContaining({ optionValues: [] }),
+			5,
+		);
+	});
+
+	it("starts at the REMAINING amount when the cart already holds some", () => {
+		const onAdd = vi.fn();
+		render(
+			<ProductDetailSheet
+				product={minProduct}
+				retailerId={RID}
+				cartQuantity={3}
+				onClose={vi.fn()}
+				onAdd={onAdd}
+			/>,
+		);
+		// 3 of 5 in the cart → the stepper opens at the missing 2.
+		expect(screen.getByText(/you have 3 in your cart/i)).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: /add to cart/i }));
+		expect(onAdd).toHaveBeenCalledWith(
+			minProduct,
+			expect.objectContaining({ optionValues: [] }),
+			2,
+		);
 	});
 });

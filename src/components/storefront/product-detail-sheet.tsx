@@ -21,6 +21,10 @@ export type StorefrontVariant = StorefrontProduct["variants"][number];
 interface ProductDetailSheetProps {
 	product: StorefrontProduct | null;
 	retailerId: Id<"retailers">;
+	/** Units of this product already in the cart (custom lines excluded) — the
+	 * stepper defaults to the REMAINING amount toward the product's minimum
+	 * order quantity, so the happy path never trips the checkout block. */
+	cartQuantity: number;
 	onClose: () => void;
 	onAdd: (
 		product: StorefrontProduct,
@@ -34,6 +38,7 @@ interface ProductDetailSheetProps {
 export function ProductDetailSheet({
 	product,
 	retailerId,
+	cartQuantity,
 	onClose,
 	onAdd,
 }: ProductDetailSheetProps) {
@@ -59,12 +64,22 @@ export function ProductDetailSheet({
 	const options = product?.options ?? [];
 	const variants = product?.variants ?? [];
 
+	// Latest cart count via a ref so the reset effect below can read it without
+	// re-running (and clobbering the stepper) every time the cart changes while
+	// the sheet is open.
+	const cartQuantityRef = useRef(cartQuantity);
+	cartQuantityRef.current = cartQuantity;
+
 	// Reset selection + quantity whenever a new product opens. Axes with a single
 	// value auto-select (one less tap); the implicit default variant resolves
-	// immediately when there are no axes.
+	// immediately when there are no axes. The stepper opens at the REMAINING
+	// amount toward the product's minimum order quantity (min 20, 12 in cart →
+	// starts at 8) so the buyer lands on a quantity that will actually check out.
 	useEffect(() => {
 		if (!product) return;
-		setQuantity(1);
+		setQuantity(
+			Math.max(1, (product.minQuantity ?? 1) - cartQuantityRef.current),
+		);
 		setCustomNote("");
 		setImageError(null);
 		if (blobRef.current) {
@@ -156,6 +171,17 @@ export function ProductDetailSheet({
 			? Math.max(1, selectedVariant.onHand)
 			: 99
 		: 1;
+	// Minimum-order-quantity easement (86ey9unyx): the amount still needed to
+	// reach the product's minimum, given what's already in the cart. On a
+	// no-options product the minus button floors here (the only way to comply is
+	// this one variant); with options the floor stays 1 — the buyer may mix
+	// variants to reach the minimum, and checkout judges the SUM.
+	const minQuantity = product.minQuantity ?? 0;
+	const remainingToMin = Math.max(1, minQuantity - cartQuantity);
+	const minFloor = hasOptions ? 1 : Math.min(remainingToMin, maxQty);
+	// Never render/add more than the stock ceiling, even if the min default
+	// exceeds it (the buyer sees the stock hint explain the tension).
+	const displayQuantity = Math.min(quantity, maxQty);
 
 	function toggle(axisIndex: number, value: string) {
 		setSelection((prev) => {
@@ -163,7 +189,12 @@ export function ProductDetailSheet({
 			next[axisIndex] = prev[axisIndex] === value ? null : value;
 			return next;
 		});
-		setQuantity(1);
+		// Re-open the stepper at the remaining amount toward the minimum (10 of
+		// 20 already in the cart → the next flavour starts at 10); 1 when no rule.
+		// `product?.` because hoisting puts this function above the null guard.
+		setQuantity(
+			Math.max(1, (product?.minQuantity ?? 1) - cartQuantityRef.current),
+		);
 	}
 
 	const priceVaries = product.priceTo > product.priceFrom;
@@ -291,6 +322,20 @@ export function ProductDetailSheet({
 									: selectedVariant.onHand <= 5
 										? `Only ${selectedVariant.onHand} left`
 										: `${selectedVariant.onHand} in stock`}
+							</p>
+						) : null}
+
+						{/* Minimum-order hint — surfaced here (not only at checkout) so the
+						    rule is never a surprise. See convex/lib/minOrderRules.ts. */}
+						{minQuantity >= 2 ? (
+							<p className="mt-3 rounded-lg bg-accent/5 px-3 py-2 text-xs text-foreground">
+								<span className="font-semibold">
+									Minimum {minQuantity} per order
+								</span>
+								{hasOptions ? " — mix options to reach it." : "."}
+								{cartQuantity > 0
+									? ` You have ${cartQuantity} in your cart.`
+									: ""}
 							</p>
 						) : null}
 
@@ -435,20 +480,24 @@ export function ProductDetailSheet({
 							<div className="flex items-center justify-center gap-3 sm:justify-start">
 								<button
 									type="button"
-									onClick={() => setQuantity((q) => Math.max(1, q - 1))}
-									disabled={quantity <= 1 || !sellable}
+									onClick={() =>
+										setQuantity(Math.max(minFloor, displayQuantity - 1))
+									}
+									disabled={displayQuantity <= minFloor || !sellable}
 									className="flex size-11 items-center justify-center rounded-full border border-border disabled:opacity-40"
 									aria-label="Decrease quantity"
 								>
 									<Minus className="size-4" />
 								</button>
 								<span className="min-w-10 text-center text-lg font-semibold">
-									{quantity}
+									{displayQuantity}
 								</span>
 								<button
 									type="button"
-									onClick={() => setQuantity((q) => Math.min(maxQty, q + 1))}
-									disabled={quantity >= maxQty || !sellable}
+									onClick={() =>
+										setQuantity(Math.min(maxQty, displayQuantity + 1))
+									}
+									disabled={displayQuantity >= maxQty || !sellable}
 									className="flex size-11 items-center justify-center rounded-full border border-border disabled:opacity-40"
 									aria-label="Increase quantity"
 								>
@@ -459,7 +508,8 @@ export function ProductDetailSheet({
 								type="button"
 								disabled={!sellable}
 								onClick={() =>
-									selectedVariant && onAdd(product, selectedVariant, quantity)
+									selectedVariant &&
+									onAdd(product, selectedVariant, displayQuantity)
 								}
 								className="h-12 w-full text-base"
 							>

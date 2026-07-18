@@ -133,6 +133,7 @@ export function ProductGrid({
 				imageUrl: variant.imageUrls[0] ?? p.imageUrls[0],
 				quoteOnRequest: variant.requiresProof === true && variant.price === 0,
 				isCustom: variant.isCustom,
+				minQuantity: p.minQuantity,
 				note: custom?.note,
 				customImageStorageId: custom?.imageStorageId,
 			},
@@ -141,15 +142,20 @@ export function ProductGrid({
 		toast.success(
 			updatingCustom
 				? "Custom request updated"
-				: `Added ${label ? `${p.name} — ${label}` : p.name} to cart`,
+				: `Added ${qty > 1 ? `${qty} × ` : ""}${label ? `${p.name} — ${label}` : p.name} to cart`,
 		);
 	};
 
 	// Quick-add only fires for single-variant products (multi-variant cards open
-	// the sheet instead), so the sole variant is unambiguous.
+	// the sheet instead), so the sole variant is unambiguous. A product with a
+	// minimum order quantity tops the cart up to it in one tap (the card shows a
+	// "Min N" chip, so the bigger add is expected); once met, +1 as usual.
 	const quickAdd = (p: StorefrontProduct) => {
 		const variant = p.variants[0];
-		if (variant) addVariant(p, variant, 1);
+		if (!variant) return;
+		const remainingToMin =
+			(p.minQuantity ?? 1) - cart.quantityForProduct(p._id);
+		addVariant(p, variant, Math.max(1, remainingToMin));
 	};
 
 	return (
@@ -261,6 +267,11 @@ export function ProductGrid({
 			<ProductDetailSheet
 				product={openProduct}
 				retailerId={retailerId}
+				// Units of this product already in the cart — the sheet's stepper
+				// defaults to the REMAINING amount toward the product's minimum.
+				cartQuantity={
+					openProduct ? cart.quantityForProduct(openProduct._id) : 0
+				}
 				onClose={() => setOpenProduct(null)}
 				// Stay open after adding so a buyer can add a standard variant AND
 				// request the custom line from the same product without reopening. The

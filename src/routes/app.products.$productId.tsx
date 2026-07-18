@@ -156,6 +156,7 @@ function EditProductRoute() {
 					name: product.name,
 					description: product.description,
 					hidden: product.hidden,
+					minQuantity: product.minQuantity,
 					categoryIds,
 					imageStorageIds: product.imageStorageIds,
 					imageUrls: product.imageUrls,
@@ -216,6 +217,8 @@ function EditProductRoute() {
 						name: values.name,
 						description: values.description ?? null,
 						hidden: values.hidden,
+						// 0 clears the rule (blank input) — server normalizes to unset.
+						minQuantity: values.minQuantity ?? 0,
 						imageStorageIds: values.imageStorageIds,
 					});
 					await saveVariantGrid({

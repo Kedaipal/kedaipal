@@ -4779,3 +4779,205 @@ describe("orders — delivery charge", () => {
 		).rejects.toThrow(/whole/);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Minimum order rules (86ey9unyx) — per-product min quantity + store min value.
+// Storefront-only: orders.create enforces both; counter checkout is exempt
+// (asserted in counterCheckout.test.ts). Pure rule logic is covered in
+// convex/lib/minOrderRules.test.ts — these tests pin the create-time wiring.
+// ---------------------------------------------------------------------------
+describe("minimum order rules", () => {
+	/** Seed a two-flavour product with a product-level minimum of 20. */
+	async function seedMinProduct(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+	) {
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(api.products.create, {
+			retailerId,
+			name: "Kuih Tray",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			minQuantity: 20,
+			options: [{ name: "Flavour", values: ["Pandan", "Ondeh"] }],
+			variants: [
+				{ optionValues: ["Pandan"], price: 500, onHand: 0 },
+				{ optionValues: ["Ondeh"], price: 500, onHand: 0 },
+			],
+		});
+		const variantIds = await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", productId))
+				.collect();
+			rows.sort((a, b) => a.sortOrder - b.sortOrder);
+			return rows.map((r) => r._id);
+		});
+		return { productId, variantIds };
+	}
+
+	test("create rejects an order below a product's minimum quantity", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const { variantIds } = await seedMinProduct(t, retailer._id);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ variantId: variantIds[0], quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+			}),
+		).rejects.toThrow(/Minimum 20 × Kuih Tray per order — you have 1/);
+	});
+
+	test("variants of the same product sum toward the minimum", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const { variantIds } = await seedMinProduct(t, retailer._id);
+		// 12 + 8 across two flavours = 20 → passes.
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [
+				{ variantId: variantIds[0], quantity: 12 },
+				{ variantId: variantIds[1], quantity: 8 },
+			],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		expect(shortId).toMatch(/^ORD-/);
+		// 12 + 7 = 19 → still short.
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [
+					{ variantId: variantIds[0], quantity: 12 },
+					{ variantId: variantIds[1], quantity: 7 },
+				],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+			}),
+		).rejects.toThrow(/you have 19/);
+	});
+
+	test("products.create/update normalize a minimum of 0/1 to unset", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await asA.mutation(api.products.update, { productId, minQuantity: 1 });
+		let row = await t.run(async (ctx) => ctx.db.get(productId));
+		expect(row?.minQuantity).toBeUndefined();
+		await asA.mutation(api.products.update, { productId, minQuantity: 20 });
+		row = await t.run(async (ctx) => ctx.db.get(productId));
+		expect(row?.minQuantity).toBe(20);
+		// 0 clears the rule.
+		await asA.mutation(api.products.update, { productId, minQuantity: 0 });
+		row = await t.run(async (ctx) => ctx.db.get(productId));
+		expect(row?.minQuantity).toBeUndefined();
+		await expect(
+			asA.mutation(api.products.update, { productId, minQuantity: 2.5 }),
+		).rejects.toThrow(/whole number/);
+	});
+
+	test("create rejects below the store minimum order value, boundary inclusive", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.retailers.updateSettings, {
+			minOrderValue: 10000, // RM100
+		});
+		// RM120 product — one unit passes the RM100 bar.
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			price: 12000,
+		});
+		const ok = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		expect(ok.shortId).toMatch(/^ORD-/);
+		// RM50 product — one unit is RM50 short.
+		const cheapId = await seedProduct(t, USER_A, retailer._id, {
+			name: "Brownies",
+			price: 5000,
+		});
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId: cheapId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+			}),
+		).rejects.toThrow(/Minimum order of MYR 100\.00 — add MYR 50\.00 more/);
+		// Exactly RM100 passes (boundary inclusive — the freeAbove posture).
+		const exact = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId: cheapId, quantity: 2 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		expect(exact.shortId).toMatch(/^ORD-/);
+	});
+
+	test("a price-on-quote line exempts the order from the value minimum", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.retailers.updateSettings, { minOrderValue: 10000 });
+		// Made-to-order at RM0 (price on quote) — the seller settles the real
+		// value on the mockup, so the RM100 floor must not block it.
+		const quoteId = await seedProduct(t, USER_A, retailer._id, {
+			name: "Custom Cake",
+			price: 0,
+			blockWhenOutOfStock: false,
+			requiresProof: true,
+		});
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId: quoteId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		expect(created.shortId).toMatch(/^ORD-/);
+	});
+
+	test("updateSettings sanitizes minOrderValue (0 clears, bad values reject)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.retailers.updateSettings, { minOrderValue: 10000 });
+		let row = await t.run(async (ctx) => ctx.db.get(retailer._id));
+		expect(row?.minOrderValue).toBe(10000);
+		// Public storefront payload carries it (buyers must see the bar).
+		const pub = await t.query(api.retailers.getRetailerBySlug, {
+			slug: retailer.slug,
+		});
+		expect(pub.status).toBe("ok");
+		if (pub.status === "ok") expect(pub.retailer.minOrderValue).toBe(10000);
+		await asA.mutation(api.retailers.updateSettings, { minOrderValue: 0 });
+		row = await t.run(async (ctx) => ctx.db.get(retailer._id));
+		expect(row?.minOrderValue).toBeUndefined();
+		await expect(
+			asA.mutation(api.retailers.updateSettings, { minOrderValue: -5 }),
+		).rejects.toThrow(/non-negative/);
+		await expect(
+			asA.mutation(api.retailers.updateSettings, { minOrderValue: 100.5 }),
+		).rejects.toThrow(/whole/);
+	});
+});

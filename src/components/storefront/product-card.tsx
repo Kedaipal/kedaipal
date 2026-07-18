@@ -39,6 +39,8 @@ export function ProductCard({ product, onOpen, onQuickAdd }: ProductCardProps) {
 	const allQuote = product.hasQuotePricing && product.priceTo === 0;
 	const showFrom = priceVaries || product.hasQuotePricing;
 	const firstImage = product.imageUrls[0];
+	// Minimum order quantity (≥2 when set — sanitizer normalizes 0/1 away).
+	const minQuantity = product.minQuantity ?? 0;
 
 	return (
 		<div className="group flex flex-col overflow-hidden rounded-2xl border border-border bg-card transition-shadow duration-200 hover:shadow-md">
@@ -76,11 +78,22 @@ export function ProductCard({ product, onOpen, onQuickAdd }: ProductCardProps) {
 						Low stock
 					</span>
 				) : null}
-				{hasCustom ? (
-					// Overlaid on the image (not a text-zone row) so cards with a
-					// custom line stay exactly the same height as their neighbours.
-					<span className="absolute bottom-2 left-2 rounded-full bg-background/85 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur-sm">
-						Custom available
+				{/* Overlaid on the image (not a text-zone row) so cards with chips
+				    stay exactly the same height as their neighbours. */}
+				{hasCustom || minQuantity >= 2 ? (
+					<span className="absolute bottom-2 left-2 flex flex-wrap gap-1">
+						{minQuantity >= 2 ? (
+							// The order rule must be visible BEFORE the buyer adds — a
+							// checkout-only surprise is a silent failure. See minOrderRules.
+							<span className="rounded-full bg-background/85 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur-sm">
+								Min {minQuantity}
+							</span>
+						) : null}
+						{hasCustom ? (
+							<span className="rounded-full bg-background/85 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur-sm">
+								Custom available
+							</span>
+						) : null}
 					</span>
 				) : null}
 			</button>
