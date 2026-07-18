@@ -275,6 +275,11 @@ function OrdersRoute() {
 		retailer.actingAsAdmin === true ||
 		hasFeature(retailer.subscription, "orderInbox");
 
+	// Permanent hard delete (single + bulk) is admin-only (Kedaipal support); a
+	// plain seller only ever cancels. Gate the bulk "Delete permanently" action on
+	// an active act-as session — the server enforces the same rule.
+	const isAdminActingAs = retailer?.actingAsAdmin === true;
+
 	const result = useQuery(
 		api.orders.searchOrders,
 		retailer
@@ -956,7 +961,7 @@ function OrdersRoute() {
 					actions={bulkActions}
 					allSelected={allSelected}
 					onApply={applyBulk}
-					onDelete={applyBulkDelete}
+					onDelete={isAdminActingAs ? applyBulkDelete : undefined}
 					onToggleSelectAll={toggleSelectAll}
 					onExit={exitSelectMode}
 					busy={bulkBusy}

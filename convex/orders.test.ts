@@ -3333,6 +3333,18 @@ describe("orders — bulk status", () => {
 });
 
 describe("orders — hard delete", () => {
+	// Hard delete is admin-only now (ClickUp 86eyaqzpd): every erase below runs
+	// through an admin act-as session. A plain owner is rejected — see the
+	// dedicated Forbidden test at the end of the block.
+	const ADMIN = "user_admin_hd";
+	let prevAdmin: string | undefined;
+	beforeAll(() => {
+		prevAdmin = process.env.ADMIN_USER_IDS;
+		process.env.ADMIN_USER_IDS = ADMIN;
+	});
+	afterAll(() => {
+		process.env.ADMIN_USER_IDS = prevAdmin;
+	});
 	/** Sum the retailer's monthly usage counter (orders across all months). */
 	async function usageOrders(
 		t: ReturnType<typeof setup>,
@@ -3407,7 +3419,7 @@ describe("orders — hard delete", () => {
 		expect(await eventCount(t, order!._id)).toBe(1);
 
 		await t
-			.withIdentity({ subject: USER_A })
+			.withIdentity({ subject: ADMIN })
 			.mutation(api.orders.deleteOrder, { orderId: order!._id });
 
 		// Order + timeline gone; stock, customer aggregates and usage all reversed.
@@ -3447,7 +3459,10 @@ describe("orders — hard delete", () => {
 		});
 		expect(await usageOrders(t, retailer._id)).toBe(0);
 
-		await asA.mutation(api.orders.deleteOrder, { orderId: order!._id });
+		// The cancel above is the seller's own; the erase must be an admin act-as.
+		await t
+			.withIdentity({ subject: ADMIN })
+			.mutation(api.orders.deleteOrder, { orderId: order!._id });
 
 		// No second reversal — stock stays at 10 (not 14), counters stay floored.
 		expect(await t.run((ctx) => ctx.db.get(order!._id))).toBeNull();
@@ -3488,7 +3503,7 @@ describe("orders — hard delete", () => {
 		expect(await storageCount(t)).toBe(before + 3);
 
 		await t
-			.withIdentity({ subject: USER_A })
+			.withIdentity({ subject: ADMIN })
 			.mutation(api.orders.deleteOrder, { orderId: order!._id });
 
 		// All three blobs reclaimed (m0 deleted once despite living in both fields).
@@ -3523,7 +3538,7 @@ describe("orders — hard delete", () => {
 		);
 
 		await t
-			.withIdentity({ subject: USER_A })
+			.withIdentity({ subject: ADMIN })
 			.mutation(api.orders.deleteOrder, { orderId: order!._id });
 
 		const session = await t.run((ctx) => ctx.db.get(sessionId));
@@ -3531,7 +3546,7 @@ describe("orders — hard delete", () => {
 		expect(session?.orderId).toBeUndefined();
 	});
 
-	test("is owner-only — a foreign store can't delete the order", async () => {
+	test("is admin-only — neither the store owner nor a foreign store can delete", async () => {
 		const t = setup();
 		const retailerA = await seedRetailer(t, USER_A);
 		await seedRetailer(t, USER_B);
@@ -3545,12 +3560,20 @@ describe("orders — hard delete", () => {
 			deliveryAddress: validAddress,
 		});
 		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		// The store OWNER (USER_A) is now rejected too — permanent erasure is
+		// admin-only. This is the core restriction from ClickUp 86eyaqzpd.
+		await expect(
+			t
+				.withIdentity({ subject: USER_A })
+				.mutation(api.orders.deleteOrder, { orderId: order!._id }),
+		).rejects.toThrow(/forbidden/i);
+		// A foreign store is rejected as well (was the only guard before).
 		await expect(
 			t
 				.withIdentity({ subject: USER_B })
 				.mutation(api.orders.deleteOrder, { orderId: order!._id }),
 		).rejects.toThrow(/forbidden/i);
-		// Untouched.
+		// Untouched by either failed attempt.
 		expect(await t.run((ctx) => ctx.db.get(order!._id))).not.toBeNull();
 	});
 });
@@ -3601,6 +3624,18 @@ describe("orders — hard delete (admin act-as)", () => {
 });
 
 describe("orders — bulk hard delete", () => {
+	// Bulk erase is admin-only (ClickUp 86eyaqzpd), same as the single delete —
+	// no longer plan-gated. Batches run through an admin act-as session; a plain
+	// owner is rejected (see the Forbidden test below).
+	const ADMIN = "user_admin_bd";
+	let prevAdmin: string | undefined;
+	beforeAll(() => {
+		prevAdmin = process.env.ADMIN_USER_IDS;
+		process.env.ADMIN_USER_IDS = ADMIN;
+	});
+	afterAll(() => {
+		process.env.ADMIN_USER_IDS = prevAdmin;
+	});
 	async function mk(
 		t: ReturnType<typeof setup>,
 		retailerId: Id<"retailers">,
@@ -3618,7 +3653,7 @@ describe("orders — bulk hard delete", () => {
 		return order!._id;
 	}
 
-	test("deletes every owned order in the batch", async () => {
+	test("an admin deletes every order in the batch", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 100 });
@@ -3628,7 +3663,7 @@ describe("orders — bulk hard delete", () => {
 			await mk(t, retailer._id, productId),
 		];
 		const res = await t
-			.withIdentity({ subject: USER_A })
+			.withIdentity({ subject: ADMIN })
 			.mutation(api.orders.bulkDeleteOrders, { orderIds: ids });
 		expect(res).toEqual({ deleted: 3 });
 		for (const id of ids) {
@@ -3636,19 +3671,23 @@ describe("orders — bulk hard delete", () => {
 		}
 	});
 
-	test("rejects the whole batch if any order isn't the caller's", async () => {
+	test("a plain owner cannot bulk delete — Forbidden, orders untouched", async () => {
 		const t = setup();
-		const retailerA = await seedRetailer(t, USER_A);
-		const retailerB = await seedRetailer(t, USER_B);
-		const productA = await seedProduct(t, USER_A, retailerA._id, { stock: 100 });
-		const productB = await seedProduct(t, USER_B, retailerB._id, { stock: 100 });
-		const mine = await mk(t, retailerA._id, productA);
-		const theirs = await mk(t, retailerB._id, productB);
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 100 });
+		const ids = [
+			await mk(t, retailer._id, productId),
+			await mk(t, retailer._id, productId),
+		];
+		// The owner is rejected even on their OWN orders — erase is admin-only.
 		await expect(
 			t
 				.withIdentity({ subject: USER_A })
-				.mutation(api.orders.bulkDeleteOrders, { orderIds: [mine, theirs] }),
+				.mutation(api.orders.bulkDeleteOrders, { orderIds: ids }),
 		).rejects.toThrow(/forbidden/i);
+		for (const id of ids) {
+			expect(await t.run((ctx) => ctx.db.get(id))).not.toBeNull();
+		}
 	});
 
 	test("rejects a batch over the 100 cap", async () => {
@@ -3657,10 +3696,84 @@ describe("orders — bulk hard delete", () => {
 		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 100 });
 		const id = await mk(t, retailer._id, productId);
 		await expect(
-			t.withIdentity({ subject: USER_A }).mutation(api.orders.bulkDeleteOrders, {
+			t.withIdentity({ subject: ADMIN }).mutation(api.orders.bulkDeleteOrders, {
 				orderIds: Array.from({ length: 101 }, () => id),
 			}),
 		).rejects.toThrow(/max 100/i);
+	});
+});
+
+describe("orders — hard delete (admin owns the store)", () => {
+	// Guards on admin MEMBERSHIP (`isAdmin`), not `actingAsAdmin`, so an admin can
+	// erase orders in ANY store — including one they personally own. That path
+	// resolves via requireRetailerAccess's OWNER branch (actingAsAdmin:false), so
+	// the earlier `!access.actingAsAdmin` guard wrongly rejected it (the PR-review
+	// edge for ClickUp 86eyaqzpd). Making USER_A both the store owner AND the sole
+	// admin exercises exactly that branch.
+	let prevAdmin: string | undefined;
+	beforeAll(() => {
+		prevAdmin = process.env.ADMIN_USER_IDS;
+		process.env.ADMIN_USER_IDS = USER_A;
+	});
+	afterAll(() => {
+		process.env.ADMIN_USER_IDS = prevAdmin;
+	});
+
+	async function mk(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+	): Promise<Id<"orders">> {
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		return order!._id;
+	}
+
+	test("an admin can hard-delete an order in a store they own", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 10 });
+		const orderId = await mk(t, retailer._id, productId);
+
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orders.deleteOrder, { orderId });
+		expect(await t.run((ctx) => ctx.db.get(orderId))).toBeNull();
+
+		// NOT audited: erasing your own store's order is an owner write
+		// (actingAsAdmin:false), and the audit log traces cross-store white-glove
+		// writes only — logAdminAction no-ops here by design.
+		const audit = await t.run((ctx) =>
+			ctx.db
+				.query("adminAuditLog")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.collect(),
+		);
+		expect(audit).toHaveLength(0);
+	});
+
+	test("an admin can bulk hard-delete orders in a store they own", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 100 });
+		const ids = [
+			await mk(t, retailer._id, productId),
+			await mk(t, retailer._id, productId),
+		];
+		const res = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orders.bulkDeleteOrders, { orderIds: ids });
+		expect(res).toEqual({ deleted: 2 });
+		for (const id of ids) {
+			expect(await t.run((ctx) => ctx.db.get(id))).toBeNull();
+		}
 	});
 });
 
