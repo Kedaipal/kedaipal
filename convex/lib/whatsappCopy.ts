@@ -240,16 +240,24 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`✅ Order ${shortId} received! Your address is outside ${storeName}'s standard delivery zones, so they'll confirm the delivery charge with you right here — no payment needed yet. We'll send the payment details straight after.${
 				trackingUrl ? `\n\nTrack your order: ${trackingUrl}` : ""
 			}${contactLine(contactPhone, "en")}`,
-		deliveryFeeSet: ({ shortId, storeName, amount, feeAmount }) =>
+		deliveryFeeSet: ({ shortId, storeName, amount, feeAmount, trackingUrl }) =>
 			`🚚 Delivery for ${shortId} is confirmed${
 				feeAmount ? ` — delivery charge ${feeAmount}` : " — no extra delivery charge"
-			}.${amount ? ` Your total is ${amount}.` : ""} Here's how to pay ${storeName}:`,
-		paymentDueApproved: ({ shortId, storeName }) =>
-			`✅ Design approved for ${shortId}! Here's how to pay so ${storeName} can start making it:`,
-		paymentDueWaived: ({ shortId, storeName }) =>
-			`Here are the payment details for your order ${shortId} from ${storeName}:`,
-		paymentDueDeclined: ({ shortId, storeName }) =>
-			`No problem — the custom item was removed from ${shortId}. Here's how to pay for the rest of your order from ${storeName}:`,
+			}.${amount ? ` Your total is ${amount}.` : ""} Make payment to ${storeName} here${
+				trackingUrl ? `: ${trackingUrl}` : "."
+			}`,
+		paymentDueApproved: ({ shortId, storeName, trackingUrl }) =>
+			`✅ Design approved for ${shortId}! Make payment so ${storeName} can start making it${
+				trackingUrl ? `: ${trackingUrl}` : "."
+			}`,
+		paymentDueWaived: ({ shortId, storeName, trackingUrl }) =>
+			`Your order ${shortId} from ${storeName} is ready for payment. Make payment here${
+				trackingUrl ? `: ${trackingUrl}` : "."
+			}`,
+		paymentDueDeclined: ({ shortId, storeName, trackingUrl }) =>
+			`No problem — the custom item was removed from ${shortId}. Make payment for the rest of your order from ${storeName}${
+				trackingUrl ? `: ${trackingUrl}` : "."
+			}`,
 		storeQrConnected: ({ storeName, code }) =>
 			`You're connected to ${storeName} 🎉${
 				code ? ` Your order code is *${code}* — show it to the cashier so they can find you.` : ""
@@ -296,16 +304,24 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`✅ Pesanan ${shortId} diterima! Alamat anda di luar zon penghantaran biasa ${storeName}, jadi mereka akan sahkan caj penghantaran dengan anda di sini — belum perlu bayar lagi. Kami akan hantar maklumat pembayaran sejurus selepas itu.${
 				trackingUrl ? `\n\nJejak pesanan anda: ${trackingUrl}` : ""
 			}${contactLine(contactPhone, "ms")}`,
-		deliveryFeeSet: ({ shortId, storeName, amount, feeAmount }) =>
+		deliveryFeeSet: ({ shortId, storeName, amount, feeAmount, trackingUrl }) =>
 			`🚚 Penghantaran untuk ${shortId} telah disahkan${
 				feeAmount ? ` — caj penghantaran ${feeAmount}` : " — tiada caj penghantaran tambahan"
-			}.${amount ? ` Jumlah anda ialah ${amount}.` : ""} Berikut cara membayar ${storeName}:`,
-		paymentDueApproved: ({ shortId, storeName }) =>
-			`✅ Reka bentuk untuk ${shortId} telah diluluskan! Berikut cara membayar supaya ${storeName} boleh mula membuatnya:`,
-		paymentDueWaived: ({ shortId, storeName }) =>
-			`Berikut maklumat pembayaran untuk pesanan ${shortId} dari ${storeName}:`,
-		paymentDueDeclined: ({ shortId, storeName }) =>
-			`Tiada masalah — item custom telah dibuang dari ${shortId}. Berikut cara membayar untuk baki pesanan anda dari ${storeName}:`,
+			}.${amount ? ` Jumlah anda ialah ${amount}.` : ""} Buat pembayaran kepada ${storeName} di sini${
+				trackingUrl ? `: ${trackingUrl}` : "."
+			}`,
+		paymentDueApproved: ({ shortId, storeName, trackingUrl }) =>
+			`✅ Reka bentuk untuk ${shortId} telah diluluskan! Buat pembayaran supaya ${storeName} boleh mula membuatnya${
+				trackingUrl ? `: ${trackingUrl}` : "."
+			}`,
+		paymentDueWaived: ({ shortId, storeName, trackingUrl }) =>
+			`Pesanan ${shortId} dari ${storeName} sedia untuk pembayaran. Buat pembayaran di sini${
+				trackingUrl ? `: ${trackingUrl}` : "."
+			}`,
+		paymentDueDeclined: ({ shortId, storeName, trackingUrl }) =>
+			`Tiada masalah — item custom telah dibuang dari ${shortId}. Buat pembayaran untuk baki pesanan anda dari ${storeName}${
+				trackingUrl ? `: ${trackingUrl}` : "."
+			}`,
 		storeQrConnected: ({ storeName, code }) =>
 			`Anda telah disambungkan dengan ${storeName} 🎉${
 				code ? ` Kod pesanan anda ialah *${code}* — tunjukkan kepada juruwang supaya mereka boleh cari anda.` : ""
@@ -501,49 +517,16 @@ export function defaultTemplate(locale: Locale, key: TemplateKey): string {
 // Payment instructions (ticket 86ey98ju1)
 //
 // Raw bank details (account number / bank name / recipient name) and QR images
-// are NO LONGER sent in the WhatsApp chat — they created friction and a
+// are NOT sent in the WhatsApp chat — they created friction and a
 // security/compliance surface (a copyable account number sitting in chat
 // history). Instead every payment message points the buyer to their own order
-// page (`/track/<token>`), whose "How to pay" section lists all
+// page (`/track/<token>`) — via the intro's own "pay here: <url>" line + the
+// "Make payment" CTA button — where the "How to pay" section lists all
 // seller-configured methods (bank with one-tap copy + QR) and carries the
 // "I've paid" confirm. The seller manages payment info from the dashboard; the
-// chat only links to it.
+// chat only links to it. No separate "see how to pay" block is appended — the
+// intro already carries the link, so the buyer sees it exactly once.
 // ---------------------------------------------------------------------------
-
-const paymentCtaCopy: Record<Locale, { header: string; body: string }> = {
-	en: {
-		header: "💳 Payment details",
-		body: "See how to pay and confirm your payment on your order page 👇",
-	},
-	ms: {
-		header: "💳 Maklumat pembayaran",
-		body: "Lihat cara membayar dan sahkan pembayaran di halaman pesanan anda 👇",
-	},
-};
-
-/**
- * Render the payment call-to-action block appended to a buyer's WhatsApp
- * payment message. Points the buyer to their order page for the actual
- * bank/QR details rather than printing them in chat (see the section note).
- *
- * The tracking URL is embedded as text — not only as the interactive "I've
- * paid" button — so the block still works when the CTA send degrades to plain
- * text (e.g. non-HTTPS APP_URL in dev, or a button-send failure).
- *
- * Returns "" when the seller has no configured payment methods (nothing to
- * point at — mirrors the old renderPaymentMethods empty case), so callers can
- * string-concat unconditionally. Leading blank line separates it from the
- * preceding block, matching the previous payment-block layout.
- */
-export function renderPaymentCta(
-	locale: Locale,
-	trackingUrl: string,
-	hasPaymentMethods: boolean,
-): string {
-	if (!hasPaymentMethods) return "";
-	const c = paymentCtaCopy[locale];
-	return ["", c.header, c.body, trackingUrl].join("\n");
-}
 
 // ---------------------------------------------------------------------------
 // Self-collect pickup snapshot

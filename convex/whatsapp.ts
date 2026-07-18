@@ -11,7 +11,6 @@ import { type GuardedSender, makeGuardedSender } from "./wabaProtection";
 import { stampRetailerActivation } from "./lib/activation";
 import { classifyOptOutKeyword } from "./lib/wabaLimits";
 import { isMockupGateClosed } from "./lib/order";
-import { resolvePaymentMethods } from "./lib/payment";
 import {
 	type OrderStage,
 	resolveStages,
@@ -27,7 +26,6 @@ import {
 	privacyNoticeLine,
 	renderDeliveryFeeLine,
 	renderMessage,
-	renderPaymentCta,
 	renderPickupBlock,
 	renderStageUpdate,
 	renderSystemMessage,
@@ -38,19 +36,6 @@ import {
 	type PickupSnapshot,
 } from "./lib/whatsappCopy";
 import { classifyInbound } from "./lib/inboundIntent";
-
-/**
- * Whether the retailer has at least one configured payment method (legacy-aware).
- * Bank/QR details are no longer sent in chat (ticket 86ey98ju1) — the payment
- * message only needs to know whether to show the "see how to pay on your order
- * page" CTA at all (nothing to point at when the seller configured none).
- */
-function retailerHasPaymentMethods(retailer: {
-	paymentMethods?: Doc<"retailers">["paymentMethods"];
-	paymentInstructions?: Doc<"retailers">["paymentInstructions"];
-}): boolean {
-	return resolvePaymentMethods(retailer).length > 0;
-}
 
 const statusValidator = v.union(
 	v.literal("pending"),
@@ -231,8 +216,6 @@ export const getRetailerLocaleForOrder = internalQuery({
 		deliverySnapshot: { fee: number } | undefined;
 		// Order currency — needed to render the pickup-fee line in the block.
 		currency: string;
-		// Whether the seller has ≥1 payment method — gates the payment-page CTA.
-		hasPaymentMethods: boolean;
 		// True while a custom item still awaits buyer mockup approval — the
 		// payment prompt is deferred until the gate opens (approve or waive).
 		mockupPending: boolean;
@@ -260,7 +243,6 @@ export const getRetailerLocaleForOrder = internalQuery({
 			pickupSnapshot: order.pickupSnapshot,
 			deliverySnapshot: order.deliverySnapshot,
 			currency: order.currency,
-			hasPaymentMethods: retailerHasPaymentMethods(retailer),
 			mockupPending: isMockupGateClosed(order),
 			deliveryFeePending: order.deliveryFeePending === true,
 		};
@@ -269,14 +251,16 @@ export const getRetailerLocaleForOrder = internalQuery({
 
 /**
  * Send the buyer the payment ask: `introBody` (the confirm template, or a
- * mockup-approved/waived intro) → [pickup block] → transfer-reference line →
- * [payment CTA], rendered with a "Make payment" CTA button (degrades to text).
- * Shared by the confirm reply and the post-mockup payment prompt so both stay
- * byte-for-byte consistent.
+ * mockup-approved/waived/delivery-fee intro) → [pickup | delivery-fee block] →
+ * transfer-reference line, with a "Make payment" CTA button (degrades to text).
+ * Shared by the confirm reply and the post-mockup / delivery-fee payment
+ * prompts so they all stay byte-for-byte consistent.
  *
- * Bank/QR details are NOT sent in chat (ticket 86ey98ju1) — the payment CTA
- * block just points the buyer to their order page, where the "How to pay"
- * section lists the seller's methods. So no QR follow-up images are sent.
+ * Bank/QR details are NOT sent in chat (ticket 86ey98ju1) — the buyer is
+ * pointed to their order page ("How to pay") via the intro's own link + the
+ * "Make payment" button. The order-page link lives in the intro copy (every
+ * intro carries it), so this function appends no separate "see how to pay"
+ * block — the buyer sees the link exactly once.
  */
 async function sendPaymentMessage(
 	wa: GuardedSender,
@@ -295,12 +279,9 @@ async function sendPaymentMessage(
 		// Order currency for the pickup-fee / delivery-fee lines. Optional —
 		// callers whose snapshot can't carry a fee (counter orders) omit it.
 		currency?: string;
-		// Whether the seller has ≥1 configured payment method. Gates the "see how
-		// to pay on your order page" CTA block — nothing to point at otherwise.
-		hasPaymentMethods: boolean;
-		// Optional trailing block appended to the very END of the message body
-		// (after the payment block), e.g. the always-on "Powered by Kedaipal"
-		// growth line on order confirmations. Include its own leading newlines.
+		// Optional trailing block appended to the very END of the message body,
+		// e.g. the always-on "Powered by Kedaipal" growth line on order
+		// confirmations. Include its own leading newlines.
 		footerLine?: string;
 	},
 ): Promise<void> {
@@ -313,7 +294,6 @@ async function sendPaymentMessage(
 		pickupSnapshot,
 		deliverySnapshot,
 		currency,
-		hasPaymentMethods,
 		footerLine = "",
 	} = args;
 	// Hard-coded, non-overridable: tells the shopper to use the order ID as the
@@ -323,21 +303,19 @@ async function sendPaymentMessage(
 		shortId,
 		storeName,
 	});
-	const paymentBlock = renderPaymentCta(locale, trackingUrl, hasPaymentMethods);
 	const pickupBlock = renderPickupBlock(locale, pickupSnapshot, currency);
 	// Delivery-fee line (delivery orders) — sits where the pickup block would
 	// (an order has one or the other), explaining the total before the pay ask.
 	const deliveryFeeLine = renderDeliveryFeeLine(locale, deliverySnapshot, currency);
-	// Layout: intro → [pickup | delivery fee] → blank line → transfer reference
-	// → [payment CTA]. The WHERE/WHY before the WHEN/HOW of paying.
+	// Layout: intro (carries the order-page link) → [pickup | delivery fee] →
+	// blank line → transfer reference. The WHERE/WHY before the WHEN/HOW of paying.
 	const withPickup = pickupBlock
 		? `${introBody}\n${pickupBlock}`
 		: `${introBody}${deliveryFeeLine}`;
 	const withRef = `${withPickup}\n\n${transferReferenceLine}`;
-	const withPayment = paymentBlock ? `${withRef}\n${paymentBlock}` : withRef;
-	// Growth footer (e.g. "Powered by Kedaipal") sits last, under the payment
-	// details — quiet and out of the way of the actionable content.
-	const body = `${withPayment}${footerLine}`;
+	// Growth footer (e.g. "Powered by Kedaipal") sits last, quiet and out of the
+	// way of the actionable content.
+	const body = `${withRef}${footerLine}`;
 	const brandImageUrl = "https://kedaipal.com/logo-2.png";
 	// CTA intent — the adapter renders a tappable "Make payment" button in prod
 	// and degrades to a plain image with caption when buttons can't be honoured
@@ -615,7 +593,6 @@ export const handleInbound = internalAction({
 				pickupSnapshot: meta?.pickupSnapshot,
 				deliverySnapshot: meta?.deliverySnapshot,
 				currency: meta?.currency,
-				hasPaymentMethods: meta?.hasPaymentMethods ?? false,
 				// Always-on growth line — appended here (not in the confirm template)
 				// so a retailer's template override can't strip it. See poweredByLine.
 				footerLine: poweredByLine(locale),
@@ -871,7 +848,6 @@ export const getManualReminderContext = internalQuery({
 		trackingToken: string | undefined;
 		locale: Locale;
 		pickupSnapshot: PickupSnapshot | undefined;
-		hasPaymentMethods: boolean;
 		status: Doc<"orders">["status"];
 		paymentStatus: Doc<"orders">["paymentStatus"];
 		mockupPending: boolean;
@@ -891,7 +867,6 @@ export const getManualReminderContext = internalQuery({
 			trackingToken: order.trackingToken,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
 			pickupSnapshot: order.pickupSnapshot,
-			hasPaymentMethods: retailerHasPaymentMethods(retailer),
 			status: order.status,
 			paymentStatus: order.paymentStatus,
 			mockupPending: isMockupGateClosed(order),
@@ -955,7 +930,6 @@ export const notifyManualPaymentReminder = internalAction({
 				trackingUrl,
 				pickupSnapshot: meta.pickupSnapshot,
 				currency: meta.currency,
-				hasPaymentMethods: meta.hasPaymentMethods,
 			},
 		);
 	},
@@ -1139,9 +1113,6 @@ type PaymentPromptMeta = {
 	deliverySnapshot: { fee: number } | undefined;
 	total: number;
 	currency: string;
-	// Whether the seller has ≥1 payment method — gates the payment-page CTA
-	// (raw bank/QR details are no longer sent in chat, ticket 86ey98ju1).
-	hasPaymentMethods: boolean;
 	mockupPending: boolean;
 	deliveryFeePending: boolean;
 };
@@ -1170,7 +1141,6 @@ export const getPaymentPromptMeta = internalQuery({
 			deliverySnapshot: order.deliverySnapshot,
 			total: order.total,
 			currency: order.currency,
-			hasPaymentMethods: retailerHasPaymentMethods(retailer),
 			mockupPending: isMockupGateClosed(order),
 			deliveryFeePending: order.deliveryFeePending === true,
 		};
@@ -1229,6 +1199,8 @@ export const notifyPaymentDue = internalAction({
 		const introBody = renderSystemMessage(meta.locale, introKey, {
 			shortId: meta.shortId,
 			storeName: meta.storeName,
+			// The intro carries the order-page link (no separate CTA block).
+			trackingUrl,
 		});
 		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");
 		await sendPaymentMessage(wa, meta.customerWaPhone, {
@@ -1240,7 +1212,6 @@ export const notifyPaymentDue = internalAction({
 			pickupSnapshot: meta.pickupSnapshot,
 			deliverySnapshot: meta.deliverySnapshot,
 			currency: meta.currency,
-			hasPaymentMethods: meta.hasPaymentMethods,
 		});
 	},
 });
@@ -1289,6 +1260,8 @@ export const notifyDeliveryFeeSet = internalAction({
 			feeAmount: meta.deliverySnapshot
 				? formatAmount(meta.deliverySnapshot.fee)
 				: undefined,
+			// The intro carries the order-page link (no separate CTA block).
+			trackingUrl,
 		});
 		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");
 		await sendPaymentMessage(wa, meta.customerWaPhone, {
@@ -1300,7 +1273,6 @@ export const notifyDeliveryFeeSet = internalAction({
 			// The intro already quotes the charge — no separate fee line needed.
 			pickupSnapshot: meta.pickupSnapshot,
 			currency: meta.currency,
-			hasPaymentMethods: meta.hasPaymentMethods,
 		});
 	},
 });
@@ -1464,9 +1436,6 @@ export const getCounterOrderMeta = internalQuery({
 		total: number;
 		currency: string;
 		paymentStatus: "unpaid" | "claimed" | "received";
-		// Whether the seller has ≥1 payment method — gates the payment-page CTA on
-		// the pay-later order-create message.
-		hasPaymentMethods: boolean;
 	} | null> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) return null;
@@ -1485,7 +1454,6 @@ export const getCounterOrderMeta = internalQuery({
 				| "unpaid"
 				| "claimed"
 				| "received",
-			hasPaymentMethods: retailerHasPaymentMethods(retailer),
 		};
 	},
 });
@@ -1569,7 +1537,6 @@ export const notifyCounterOrderCreated = internalAction({
 					trackingUrl,
 					// Counter orders are collected at the counter — no pickup snapshot.
 					pickupSnapshot: undefined,
-					hasPaymentMethods: meta.hasPaymentMethods,
 				});
 			} catch (err) {
 				console.error("WA counter-order payment ask failed", err);

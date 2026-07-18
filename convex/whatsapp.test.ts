@@ -310,10 +310,13 @@ describe("whatsapp inbound", () => {
 		const text = body.interactive.body.text;
 		expect(text).toContain(shortId);
 		expect(text).toContain("confirmed");
-		// Configured methods → the payment CTA block appears, pointing to the page.
-		expect(text).toContain("💳 Payment details");
-		expect(text).toContain("See how to pay and confirm your payment on your order page");
-		expect(text).toContain("/track/");
+		// The confirm intro carries the order-page link once — no separate
+		// "💳 Payment details" block is appended (no duplicate link).
+		expect(text).toContain("make payment here");
+		expect(text).not.toContain("💳 Payment details");
+		expect(text).not.toContain("See how to pay and confirm your payment on your order page");
+		// The tracking link appears exactly once in the body.
+		expect(text.match(/\/track\//g)?.length).toBe(1);
 		// The raw bank details are NEVER in chat.
 		expect(text).not.toContain("Maybank");
 		expect(text).not.toContain("Acme Outdoor");
@@ -322,7 +325,7 @@ describe("whatsapp inbound", () => {
 		fetchMock.restore();
 	});
 
-	test("payment CTA is locale-aware (ms retailer)", async () => {
+	test("confirm reply is locale-aware (ms retailer), no bank details", async () => {
 		const t = setup();
 		const fetchMock = installFetchMock();
 		const { retailerId, productId } = await seedRetailerWithLocale(t, "ms");
@@ -344,14 +347,16 @@ describe("whatsapp inbound", () => {
 		expect(body.type).toBe("interactive");
 		const text = body.interactive.body.text;
 		expect(text).toContain("disahkan");
-		expect(text).toContain("💳 Maklumat pembayaran");
-		expect(text).toContain("Lihat cara membayar dan sahkan pembayaran di halaman pesanan anda");
+		// BM confirm intro carries the order-page link; no separate CTA block.
+		expect(text).toContain("buat pembayaran di sini");
+		expect(text).not.toContain("💳 Maklumat pembayaran");
+		expect(text.match(/\/track\//g)?.length).toBe(1);
 		expect(text).not.toContain("CIMB");
 		expect(text).not.toContain("9988");
 		fetchMock.restore();
 	});
 
-	test("a configured QR method shows the CTA but sends NO image follow-up (86ey98ju1)", async () => {
+	test("a configured QR method sends NO image follow-up, just the linked confirm (86ey98ju1)", async () => {
 		const t = setup();
 		const fetchMock = installFetchMock();
 		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
@@ -385,9 +390,11 @@ describe("whatsapp inbound", () => {
 			interactive: { body: { text: string } };
 		};
 		expect(confirmBody.type).toBe("interactive");
-		// A QR counts as a configured method, so the page CTA appears.
-		expect(confirmBody.interactive.body.text).toContain("💳 Payment details");
-		expect(confirmBody.interactive.body.text).toContain("/track/");
+		// The confirm carries the order-page link (no separate CTA block), and the
+		// QR is not re-sent as a chat image.
+		expect(confirmBody.interactive.body.text).toContain("make payment here");
+		expect(confirmBody.interactive.body.text).not.toContain("💳 Payment details");
+		expect(confirmBody.interactive.body.text.match(/\/track\//g)?.length).toBe(1);
 		// No image message sent.
 		expect(fetchMock.calls.some((c) => (c.body as { type?: string }).type === "image")).toBe(
 			false,
@@ -533,9 +540,10 @@ describe("whatsapp confirm — custom item defers the payment ask", () => {
 		expect(body.interactive.body.text).toContain(
 			`Use ${shortId} as your transfer reference`,
 		);
-		// The seller has a configured method → the payment-page CTA appears, but
-		// the raw bank name never lands in chat (86ey98ju1).
-		expect(body.interactive.body.text).toContain("💳 Payment details");
+		// The intro carries the order-page link once — no separate "💳 Payment
+		// details" block, and the raw bank name never lands in chat (86ey98ju1).
+		expect(body.interactive.body.text).not.toContain("💳 Payment details");
+		expect(body.interactive.body.text.match(/\/track\//g)?.length).toBe(1);
 		expect(body.interactive.body.text).not.toContain("Maybank");
 		fetchMock.restore();
 	});
@@ -558,8 +566,11 @@ describe("whatsapp confirm — custom item defers the payment ask", () => {
 		};
 		expect(body.interactive.action.parameters.display_text).toBe("Make payment");
 		expect(body.interactive.body.text).toContain(
-			`payment details for your order ${shortId}`,
+			`Your order ${shortId}`,
 		);
+		expect(body.interactive.body.text).toContain("ready for payment");
+		// Intro carries the order-page link once — no separate CTA block.
+		expect(body.interactive.body.text.match(/\/track\//g)?.length).toBe(1);
 		fetchMock.restore();
 	});
 
@@ -1193,12 +1204,17 @@ describe("counter order auto-send (notifyCounterOrderCreated)", () => {
 		expect(
 			(doc?.body as { document?: { filename?: string } }).document?.filename,
 		).toBe(`Invoice-${shortId}.pdf`);
-		const combined = wa.map((c) => waText(c.body)).join("\n");
-		// Transfer reference kept (now we have the shortId) + page CTA present.
-		expect(combined).toContain(shortId); // "Use ORD-XXXX as your transfer reference"
-		expect(combined).toContain("💳 Payment details");
-		expect(combined).toContain("/track/");
+		// The order-create text message: intro carries the order-page link once,
+		// with no separate "💳 Payment details" block (no duplicate link).
+		const orderMsg = waText(
+			(wa.find((c) => (c.body as { type?: string })?.type === "interactive") ??
+				wa.find((c) => (c.body as { type?: string })?.type === "text"))?.body,
+		);
+		expect(orderMsg).toContain(shortId); // "Use ORD-XXXX as your transfer reference"
+		expect(orderMsg).not.toContain("💳 Payment details");
+		expect(orderMsg.match(/\/track\//g)?.length).toBe(1);
 		// The raw account number is never sent in chat.
+		const combined = wa.map((c) => waText(c.body)).join("\n");
 		expect(combined).not.toContain("1234567890");
 		fetchMock.restore();
 	});

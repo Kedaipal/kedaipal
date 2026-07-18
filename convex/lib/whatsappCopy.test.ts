@@ -3,7 +3,6 @@ import { describe, expect, test } from "vitest";
 import {
 	hasTemplateOverride,
 	poweredByLine,
-	renderPaymentCta,
 	renderPickupBlock,
 	renderStageUpdate,
 	renderSystemMessage,
@@ -12,32 +11,33 @@ import {
 
 const TRACK = "https://kedaipal.com/track/tok_abc";
 
-describe("renderPaymentCta", () => {
-	test("returns empty string when the seller has no payment methods", () => {
-		expect(renderPaymentCta("en", TRACK, false)).toBe("");
-	});
-
-	test("points the buyer to the order page — never raw bank details", () => {
-		const out = renderPaymentCta("en", TRACK, true);
-		expect(out).toContain("💳 Payment details");
-		expect(out).toContain("See how to pay and confirm your payment on your order page");
-		// The tracking URL is embedded as text so it survives a text-only fallback.
-		expect(out.split("\n")).toContain(TRACK);
-		// No raw account number / bank labels ever leak into the chat.
-		expect(out).not.toContain("Account:");
-		expect(out).not.toContain("Bank:");
-	});
-
-	test("leads with a blank line so it separates from the preceding block", () => {
-		expect(renderPaymentCta("en", TRACK, true).startsWith("\n")).toBe(true);
-	});
-
-	test("Bahasa Malaysia copy", () => {
-		const out = renderPaymentCta("ms", TRACK, true);
-		expect(out).toContain("💳 Maklumat pembayaran");
-		expect(out).toContain("Lihat cara membayar dan sahkan pembayaran di halaman pesanan anda");
-		expect(out.split("\n")).toContain(TRACK);
-	});
+// The payment-ask intros must each carry the order-page link themselves — no
+// separate "see how to pay" block is appended (ticket 86ey98ju1), so the buyer
+// sees the link exactly once and never a raw account number.
+describe("payment-ask intros carry the order-page link (86ey98ju1)", () => {
+	for (const key of [
+		"paymentDueApproved",
+		"paymentDueWaived",
+		"paymentDueDeclined",
+		"deliveryFeeSet",
+	] as const) {
+		for (const locale of ["en", "ms"] as const) {
+			test(`${key} (${locale}) embeds the tracking URL, no dangling "how to pay:"`, () => {
+				const out = renderSystemMessage(locale, key, {
+					shortId: "ORD-AB23",
+					storeName: "Acme Outdoor",
+					amount: "MYR 25.00",
+					trackingUrl: TRACK,
+				});
+				expect(out).toContain(TRACK);
+				// The old copy dangled a colon expecting a payment block to follow.
+				expect(out).not.toMatch(/how to pay[^:]*:\s*$/i);
+				expect(out).not.toMatch(/cara membayar[^:]*:\s*$/i);
+				// Never a raw account number / bank label.
+				expect(out).not.toContain("Account:");
+			});
+		}
+	}
 });
 
 describe("renderSystemMessage", () => {
