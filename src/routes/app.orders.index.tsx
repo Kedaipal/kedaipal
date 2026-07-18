@@ -69,6 +69,7 @@ import {
 	formatOrderTimestamp,
 	formatPrice,
 } from "../lib/format";
+import { summarizeOrderCardItems } from "../lib/order-card-items";
 import {
 	type DeliveryMethod,
 	displayStatusLabel,
@@ -786,8 +787,9 @@ function OrdersRoute() {
 							})();
 							const placedAt = formatOrderTimestamp(o.createdAt, now);
 							const age = formatStatusAge(now - o.createdAt);
+							const itemSummary = summarizeOrderCardItems(o.items);
 							const cardInner = (
-								<div className="min-w-0 flex-1">
+								<div className="flex min-w-0 flex-1 flex-col">
 									{/* Name + money get the hierarchy. */}
 									<div className="flex items-center justify-between gap-2.5">
 										<span className="min-w-0 truncate text-[15px] font-semibold">
@@ -802,11 +804,55 @@ function OrdersRoute() {
 										<span aria-hidden="true">·</span>
 										{/* Absolute placed-at datetime + relative age, so the seller
 										    reads "when" AND "how long ago" without opening the
-										    detail. Item count moved off the card (it's on detail). */}
+										    detail. */}
 										<span className="tabular-nums">{placedAt}</span>
 										<span>({age === "just now" ? age : `${age} ago`})</span>
 									</div>
-									<div className="mt-2.5 flex items-center gap-1.5">
+									{/* What was ordered — qty × product · variant (ClickUp
+									    86ey9uny8). Capped rows + "+N more" so big counter orders
+									    can't stretch the card; per-line amounts appear from `sm:`
+									    up (phones keep the grouped list without the price column;
+									    the bold total above is the number that matters there). */}
+									<div className="mt-2 flex flex-col gap-1 rounded-xl bg-muted/50 px-2.5 py-2">
+										{itemSummary.lines.map((it, i) => (
+											<div
+												key={it.variantId ?? `${it.productId}-${i}`}
+												className="flex items-center justify-between gap-3 text-[13px] leading-5"
+											>
+												<span className="min-w-0 truncate">
+													<span className="tabular-nums text-muted-foreground">
+														{it.quantity}&times;
+													</span>{" "}
+													<span className="font-medium">{it.name}</span>
+													{it.variantLabel ? (
+														<span className="text-muted-foreground">
+															{" "}
+															&middot; {it.variantLabel}
+														</span>
+													) : null}
+												</span>
+												<span className="hidden shrink-0 text-[12.5px] tabular-nums text-muted-foreground sm:block">
+													{formatPrice(it.lineTotal, o.currency)}
+												</span>
+											</div>
+										))}
+										{itemSummary.moreCount > 0 ? (
+											<div className="flex items-center justify-between gap-3 text-[12px] leading-5 text-muted-foreground">
+												<span>
+													+{itemSummary.moreCount} more item
+													{itemSummary.moreCount === 1 ? "" : "s"}
+												</span>
+												<span className="hidden shrink-0 text-[12.5px] tabular-nums sm:block">
+													{formatPrice(itemSummary.moreAmount, o.currency)}
+												</span>
+											</div>
+										) : null}
+									</div>
+									{/* mt-auto pins this row to the card bottom, so status +
+									    chevron align across a desktop grid row even when the
+									    neighbour card has more item lines (grid stretches all
+									    cells in a row to the tallest; see cardClass h-full). */}
+									<div className="mt-auto flex items-center gap-1.5 pt-2.5">
 										<StatusBadge
 											status={o.status as OrderStatus}
 											label={statusLabel}
@@ -827,7 +873,7 @@ function OrdersRoute() {
 								</div>
 							);
 							const cardClass = cn(
-								"group flex w-full items-start gap-3 rounded-2xl border bg-card p-3.5 text-left transition-all",
+								"group flex h-full w-full gap-3 rounded-2xl border bg-card p-3.5 text-left transition-all",
 								isSel
 									? "border-accent shadow-[0_0_0_3px_hsl(160_84%_39%/0.12)]"
 									: "border-border hover:border-ring hover:shadow-sm",
@@ -934,6 +980,7 @@ const OrderList = {
 							<Skeleton className="h-4 w-16 rounded" />
 						</div>
 						<Skeleton className="h-3.5 w-40 rounded" />
+						<Skeleton className="h-9 w-full rounded-xl" />
 						<div className="flex items-center gap-1.5">
 							<Skeleton className="h-6 w-20 rounded-full" />
 							<Skeleton className="h-6 w-24 rounded-full" />
