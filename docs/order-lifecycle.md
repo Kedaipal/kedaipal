@@ -45,10 +45,10 @@ sequenceDiagram
     S->>SF: Browse catalog, build cart, checkout
     SF->>CX: orders.create(items, customer, deliveryMethod, address?)
     Note over CX: rate-limit → validate → reserve stock →\ngen shortId → insert order + pending event →\nlink customer (if phone) → schedule email
-    CX-->>SF: { shortId }  (ORD-XXXX)
+    CX-->>SF: { shortId, trackingToken }
     CX-->>EM: notifyRetailerOrderAlert (fire-and-forget)
-    SF->>WA: wa.me deep link, prefilled "...ORD-XXXX"
-    S->>WA: Sends the message
+    SF->>SF: same-tab navigate to /track/<token>
+    S->>WA: Taps "Send on WhatsApp" (wa.me deep link, prefilled "...ORD-XXXX")
     WA->>WH: Inbound webhook (signed)
     WH->>CX: handleInbound(fromPhone, text, profileName)
     Note over CX: match ORD-XXXX → confirmOrderFromWhatsApp:\npending→confirmed, stamp waPhone,\nlate-link customer, refresh pushname
@@ -74,7 +74,54 @@ Public mutation (no auth — the storefront is anonymous). Steps, in order ([`co
 10. **Early customer link** — if a phone is known, `linkOrderToCustomer` creates/updates the customer and stamps `customerId`. Phone-less orders are linked later (see confirmation).
 11. **Fire-and-forget email** — schedule `notifyRetailerOrderAlert`.
 
-Returns `{ shortId }`, which the storefront embeds into the `wa.me` deep link.
+Returns `{ shortId, trackingToken }`.
+
+### The WhatsApp handoff — why checkout never calls `window.open`
+
+The storefront checkout **does not** open `wa.me` itself. `window.open` after
+the awaited `orders.create` round-trip falls outside the submit tap's
+_transient user activation_, so popup blockers — iOS Safari and the
+Instagram/Facebook in-app webviews where WhatsApp-driven buyers actually
+browse — silently swallow the tab: the order exists, but the buyer is
+stranded on the storefront and their phone number is never captured (the
+`wa.me` message is how the bot learns it). This shipped as a production
+incident before the current design.
+
+Instead, checkout **same-tab navigates to the tracking page**
+(`/track/<trackingToken>` — navigation is never popup-blocked). While the
+order is `pending`, the tracking page leads with a **"Send your order on
+WhatsApp"** card ([`src/routes/track.$token.tsx`](../src/routes/track.$token.tsx)):
+
+- The CTA is a plain **anchor** to the `wa.me` deep link — tapping it is a
+  fresh user gesture, which browsers always allow.
+- A **copy-link fallback** covers webviews that refuse to open WhatsApp at
+  all (the buyer pastes it into a real browser).
+- The message is **rebuilt from the order's frozen snapshot** on every render
+  (`src/lib/wa-order-message.ts` — items, address/pickup, note, fulfilment
+  date), so the handoff survives refreshes and lost sessions, and doubles as
+  recovery for any pending order where the buyer bailed before sending.
+- `orders.get` serves `checkoutPhone` (same `WHATSAPP_CHECKOUT_PHONE` →
+  `retailers.waPhone` fallback as the storefront) **only while the order is
+  `pending`**, so the card hides itself reactively the moment the bot
+  confirms. Counter orders are created `confirmed` (buyer binds via QR scan)
+  and never see it.
+
+**Auto-fire on arrival (`?send=1`):** checkout navigates to
+`/track/<token>?send=1`, and the card **auto-triggers the handoff** so the
+buyer still reaches WhatsApp without an extra tap (desktop keeps its old
+one-click feel; mobile finally gets it). The button starts as
+"Opening WhatsApp…" (loading), and after a short paint delay the page
+**same-tab navigates** (`window.location.assign`) to the `wa.me` link —
+same-tab navigation is never popup-blocked. The timing lives in the
+framework-free [`src/lib/wa-auto-open.ts`](../src/lib/wa-auto-open.ts)
+(unit-tested): if the page is still there after a 4s watchdog (a webview
+refused to leave), loading settles back to the manual button + copy-link
+fallback. The search param is **stripped (history replace) before
+navigating away**, and returning from WhatsApp (bfcache `pageshow` /
+`visibilitychange`) also settles the button — so refresh or back never
+re-fires the redirect or leaves the button stuck loading. Only checkout
+sets `?send=1`; organic visits to a pending order get the manual card
+unchanged.
 
 ## WhatsApp confirmation
 
