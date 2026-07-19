@@ -106,6 +106,23 @@ WhatsApp"** card ([`src/routes/track.$token.tsx`](../src/routes/track.$token.tsx
   confirms. Counter orders are created `confirmed` (buyer binds via QR scan)
   and never see it.
 
+**Auto-fire on arrival (`?send=1`):** checkout navigates to
+`/track/<token>?send=1`, and the card **auto-triggers the handoff** so the
+buyer still reaches WhatsApp without an extra tap (desktop keeps its old
+one-click feel; mobile finally gets it). The button starts as
+"Opening WhatsApp…" (loading), and after a short paint delay the page
+**same-tab navigates** (`window.location.assign`) to the `wa.me` link —
+same-tab navigation is never popup-blocked. The timing lives in the
+framework-free [`src/lib/wa-auto-open.ts`](../src/lib/wa-auto-open.ts)
+(unit-tested): if the page is still there after a 4s watchdog (a webview
+refused to leave), loading settles back to the manual button + copy-link
+fallback. The search param is **stripped (history replace) before
+navigating away**, and returning from WhatsApp (bfcache `pageshow` /
+`visibilitychange`) also settles the button — so refresh or back never
+re-fires the redirect or leaves the button stuck loading. Only checkout
+sets `?send=1`; organic visits to a pending order get the manual card
+unchanged.
+
 ## WhatsApp confirmation
 
 Inbound flow lives in [`convex/whatsapp.ts`](../convex/whatsapp.ts), entered from the webhook (`POST /webhook/whatsapp`, signature-verified — see [`whatsapp-webhook-security.md`](./whatsapp-webhook-security.md)).
