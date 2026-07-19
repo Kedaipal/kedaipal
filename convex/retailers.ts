@@ -165,6 +165,7 @@ import { internalMutation, mutation, type MutationCtx, query, type QueryCtx } fr
 import { ConvexError } from "convex/values";
 import { reserveFoundingRank } from "./foundingMembers";
 import { MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
+import { sanitizeMinOrderValue } from "./lib/minOrderRules";
 import { rateLimiter } from "./lib/rateLimiter";
 import { capsForPlan, DAY_MS, TRIAL_DAYS } from "./lib/plans";
 import {
@@ -443,6 +444,10 @@ type RetailerPublic = {
 	// Minimum days' notice before a fulfilment date — drives the storefront date
 	// picker's earliest selectable day. Undefined → 0 (same-day allowed).
 	minFulfilmentNoticeDays?: number;
+	// Store-wide minimum order value (minor units, 86ey9unyx). Public-safe —
+	// buyers must see the bar to reach it (checkout blocks below it). Undefined
+	// = no minimum. See convex/lib/minOrderRules.ts.
+	minOrderValue?: number;
 	// Whether the retailer has opened the Pickup settings tab at least once.
 	// Drives checklist step-4 dismissal — set to true on first tab visit by
 	// `markPickupSetupSeen`.
@@ -567,6 +572,7 @@ async function buildRetailerPublic(
 		deliveryConfig: row.deliveryConfig as DeliveryConfig | undefined,
 		businessAddress: row.businessAddress,
 		minFulfilmentNoticeDays: row.minFulfilmentNoticeDays,
+		minOrderValue: row.minOrderValue,
 		pickupSetupSeen: row.pickupSetupSeen,
 		termsVersion: row.termsVersion,
 		privacyVersion: row.privacyVersion,
@@ -677,6 +683,7 @@ export const getRetailerBySlug = query({
 					offerSelfCollect: active.offerSelfCollect,
 					offerDelivery: active.offerDelivery,
 					minFulfilmentNoticeDays: active.minFulfilmentNoticeDays,
+					minOrderValue: active.minOrderValue,
 					// Founding badge is public-safe; subscription state is NOT included.
 					isFoundingMember: active.isFoundingMember,
 					foundingMemberRank: active.foundingMemberRank,
@@ -1010,6 +1017,9 @@ export const updateSettings = mutation({
 		businessAddress: v.optional(v.union(businessAddressValidator, v.null())),
 		// Minimum days' notice before a fulfilment date. Clamped to [0, 30].
 		minFulfilmentNoticeDays: v.optional(v.number()),
+		// Store-wide minimum order value (minor units). 0 clears (no minimum);
+		// undefined = no change. See convex/lib/minOrderRules.ts.
+		minOrderValue: v.optional(v.number()),
 	},
 	handler: async (ctx, args): Promise<{ ok: true }> => {
 		// Resolve the target store: an explicit `retailerId` is the admin act-as
@@ -1054,6 +1064,7 @@ export const updateSettings = mutation({
 			deliveryConfig: DeliveryConfig | undefined;
 			businessAddress: BusinessAddress | undefined;
 			minFulfilmentNoticeDays: number;
+			minOrderValue: number | undefined;
 			updatedAt: number;
 		}> = { updatedAt: Date.now() };
 
@@ -1228,6 +1239,10 @@ export const updateSettings = mutation({
 				);
 			}
 			patch.minFulfilmentNoticeDays = n;
+		}
+		if (args.minOrderValue !== undefined) {
+			// 0 sanitizes to undefined → the patch removes the field (rule cleared).
+			patch.minOrderValue = sanitizeMinOrderValue(args.minOrderValue);
 		}
 
 		// Fulfilment invariant: a storefront must always keep at least one WORKING

@@ -693,6 +693,7 @@ function SettingsRoute() {
 						deliveryConfig={retailer.deliveryConfig}
 						businessAddress={retailer.businessAddress}
 						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
+						minOrderValue={retailer.minOrderValue}
 						subscription={retailer.subscription}
 					/>
 				) : null}

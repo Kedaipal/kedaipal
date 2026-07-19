@@ -40,6 +40,7 @@ import type * as lib_inboundIntent from "../lib/inboundIntent.js";
 import type * as lib_insights from "../lib/insights.js";
 import type * as lib_legal from "../lib/legal.js";
 import type * as lib_mapsUrl from "../lib/mapsUrl.js";
+import type * as lib_minOrderRules from "../lib/minOrderRules.js";
 import type * as lib_order from "../lib/order.js";
 import type * as lib_orderBuckets from "../lib/orderBuckets.js";
 import type * as lib_orderCsv from "../lib/orderCsv.js";
@@ -115,6 +116,7 @@ declare const fullApi: ApiFromModules<{
   "lib/insights": typeof lib_insights;
   "lib/legal": typeof lib_legal;
   "lib/mapsUrl": typeof lib_mapsUrl;
+  "lib/minOrderRules": typeof lib_minOrderRules;
   "lib/order": typeof lib_order;
   "lib/orderBuckets": typeof lib_orderBuckets;
   "lib/orderCsv": typeof lib_orderCsv;

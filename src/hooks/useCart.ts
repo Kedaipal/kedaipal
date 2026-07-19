@@ -25,6 +25,11 @@ export type CartItem = {
 	// True for a made-to-order variant sold at RM0 — the price is quoted by the
 	// seller after the order (on the mockup). Rendered as "Price on quote".
 	quoteOnRequest?: boolean;
+	// Product-level minimum order quantity, snapshotted at add time (like price/
+	// name) so the checkout can judge shortfalls without a live product join.
+	// The server re-checks against the live value at create. Summed across the
+	// product's lines; custom lines never count. See convex/lib/minOrderRules.ts.
+	minQuantity?: number;
 	// Buyer's request for a custom / made-to-order line ("unicorn theme, size 8").
 	// Captured at add-time; composed (labelled) into the order's customerNote at
 	// checkout so the seller sees it in WhatsApp + the dashboard. See docs/custom-option.md.
@@ -191,6 +196,19 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 	);
 	const clearCart = useCallback(() => dispatch({ type: "CLEAR" }), []);
 
+	// Units of a product already in the cart, summed across its variant lines
+	// (custom lines excluded — they never count toward a minimum). Drives the
+	// min-quantity-aware stepper default + quick-add top-up.
+	const quantityForProduct = useCallback(
+		(productId: Id<"products">) =>
+			state.items.reduce(
+				(sum, i) =>
+					i.productId === productId && !i.isCustom ? sum + i.quantity : sum,
+				0,
+			),
+		[state.items],
+	);
+
 	const { itemCount, total, currency } = useMemo(() => {
 		let count = 0;
 		let sum = 0;
@@ -214,6 +232,7 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 		updateQuantity,
 		removeItem,
 		clearCart,
+		quantityForProduct,
 	};
 }
 
