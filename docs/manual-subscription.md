@@ -316,14 +316,14 @@ a future Enterprise tier and stopped contradicting Scale's ~1,300/mo tagline). T
 plan uses it. Scale is **not selectable** at v1 (`isPlanSelectable`) and grants
 **no** Founding badge (`planQualifiesForFounding`, Arif's 2026-05-28 decision).
 
-> **Display ≠ backend cap (ClickUp 86ey4gaju).** The public pricing surface was
-> repositioned so Scale reads as the **supplier/distributor** tier: it shows
-> **"from RM299"** with an active-reseller band table (299 / 499 / 799 / custom)
-> and **"Unlimited orders / broadcasts"** in the copy. This is presentation only —
-> `PLAN_CAPS.scale` stays **2000/5/500** here until the separate Scale build
-> (active-reseller counting + banded billing) ships and flips Scale from "Coming
-> soon" to purchasable. The billing amount (`PLAN_MONTHLY_PRICE.scale = 29900`)
-> equals the lowest band. See [`pricing.md`](./pricing.md).
+> **Scale = flat multi-outlet tier (ClickUp 86eyb9zwt, supersedes 86ey4gaju).**
+> The public pricing surface shows Scale as the **multi-outlet / team** tier at
+> **RM299/mo flat** (no bands, no metering; the reseller band table was removed
+> after the 1 Jul ICP audit disqualified reseller networks). Displayed numbers
+> match `PLAN_CAPS.scale` = **2000/5/500**. Scale stays "Coming soon" — not
+> purchasable — until the separate Scale build (multi-outlet management, outlet
+> counting, RM49/mo additional-outlet billing) ships. See
+> [`pricing.md`](./pricing.md).
 
 ## `PaymentProvider` seam
 

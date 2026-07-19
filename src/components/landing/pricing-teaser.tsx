@@ -8,7 +8,6 @@ import { m } from "../../paraglide/messages";
 import { Button } from "../ui/button";
 import { FadeIn } from "./fade-in";
 import { Sticker } from "./landing-ui";
-import { ResellerBandTable } from "./reseller-band-table";
 
 const TOTAL_FOUNDING_SPOTS = 10;
 
@@ -50,6 +49,7 @@ function getTiers(): TeaserTier[] {
 				m.pricing_feat_everything_starter(),
 				m.pricing_feat_crm(),
 				m.pricing_feat_inbox(),
+				m.pricing_feat_insights(),
 				m.pricing_feat_reminders(),
 				m.pricing_feat_2_users(),
 			],
@@ -62,9 +62,8 @@ function getTiers(): TeaserTier[] {
 			tagline: m.pricing_tier_scale_tagline(),
 			features: [
 				m.pricing_feat_everything_pro(),
-				m.pricing_feat_reseller(),
-				m.pricing_feat_tiered(),
-				m.pricing_feat_reports(),
+				m.pricing_feat_multi_outlet(),
+				m.pricing_feat_priority_support(),
 				m.pricing_feat_5_users(),
 			],
 			popular: false,
@@ -145,11 +144,6 @@ export function PricingTeaser() {
 									{tier.name}
 								</p>
 								<div className="mt-3 flex items-end gap-1">
-									{tier.id === "scale" && (
-										<span className="mb-1 text-sm text-muted-foreground">
-											{m.pricing_price_from()}
-										</span>
-									)}
 									<span className="text-4xl font-bold tracking-tight">
 										RM {tier.price}
 									</span>
@@ -174,8 +168,6 @@ export function PricingTeaser() {
 								>
 									{tier.tagline}
 								</p>
-
-								{tier.id === "scale" && <ResellerBandTable className="mt-4" />}
 
 								{tier.foundingPrice !== undefined && (
 									<div className="mt-3 flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2">
