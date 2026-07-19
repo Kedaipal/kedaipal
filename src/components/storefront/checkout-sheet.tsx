@@ -322,11 +322,13 @@ export function CheckoutSheet({
 				// tap's transient user activation, so popup blockers (iOS Safari,
 				// IG/FB in-app webviews) silently swallow a new tab — order created,
 				// buyer stranded. The tracking page shows the "Send order on
-				// WhatsApp" anchor instead; that tap is a fresh gesture browsers
-				// always allow. See docs/order-lifecycle.md.
+				// WhatsApp" anchor instead; ?send=1 makes it auto-fire the wa.me
+				// redirect (same-tab, never popup-blocked) so the buyer still lands
+				// in WhatsApp without an extra tap. See docs/order-lifecycle.md.
 				navigate({
 					to: "/track/$token",
 					params: { token: trackingToken },
+					search: { send: 1 },
 				});
 			} catch (err) {
 				setServerError(convexErrorMessage(err));
