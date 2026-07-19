@@ -14,6 +14,9 @@ interface CartBarProps {
 	offerSelfCollect: boolean;
 	offerDelivery: boolean;
 	minFulfilmentNoticeDays: number | undefined;
+	/** Store-wide minimum order value (minor units) — passed through to the
+	 * checkout sheet's min-order-rule gate. */
+	minOrderValue: number | undefined;
 	pickupLocations: ReadonlyArray<PublicPickupLocation>;
 }
 
@@ -25,6 +28,7 @@ export function CartBar({
 	offerSelfCollect,
 	offerDelivery,
 	minFulfilmentNoticeDays,
+	minOrderValue,
 	pickupLocations,
 }: CartBarProps) {
 	const [checkoutOpen, setCheckoutOpen] = useState(false);
@@ -73,6 +77,7 @@ export function CartBar({
 				offerSelfCollect={offerSelfCollect}
 				offerDelivery={offerDelivery}
 				minFulfilmentNoticeDays={minFulfilmentNoticeDays}
+				minOrderValue={minOrderValue}
 				pickupLocations={pickupLocations}
 			/>
 		</>

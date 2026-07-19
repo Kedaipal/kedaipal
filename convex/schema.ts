@@ -227,6 +227,14 @@ export default defineSchema({
 		// (the max-notice ceiling) server-side. NOTE: counter checkout (seller, in
 		// person) ignores this and always allows today. See convex/lib/fulfilmentDate.ts.
 		minFulfilmentNoticeDays: v.optional(v.number()),
+		// Store-wide minimum order value (minor units, 86ey9unyx) — the item
+		// subtotal a storefront order must reach before checkout. Undefined = no
+		// minimum (default; 0 normalizes to unset via sanitizeMinOrderValue).
+		// Public-safe (buyers must see the bar to reach it). Enforced in
+		// orders.create; counter checkout (seller, in person) is exempt, and orders
+		// carrying a custom/price-on-quote line are exempt (their real value is
+		// settled by the seller's quote). See convex/lib/minOrderRules.ts.
+		minOrderValue: v.optional(v.number()),
 		// Set to true the first time the retailer opens the Pickup settings tab.
 		// Used by the dashboard checklist to mark step 4 done after a single
 		// visit, even if the retailer chose to skip self-collect — keeps the
@@ -310,6 +318,16 @@ export default defineSchema({
 		// lists online. undefined/false = visible (legacy default; no backfill).
 		// See docs/hidden-products.md.
 		hidden: v.optional(v.boolean()),
+		// Minimum order quantity (86ey9unyx) — buyers must order at least this many
+		// units of this product per storefront order, SUMMED across the product's
+		// variants (10 + 10 of two flavours satisfies min 20 — deliberately
+		// product-level, not per-variant: "min 20 pax" is the seller's mental
+		// model, and per-variant would wrongly force 20 per flavour). Undefined =
+		// no minimum (default; 0/1 normalize to unset via sanitizeMinQuantity).
+		// Custom/made-to-order lines never count toward or trigger it (one bespoke
+		// negotiation, qty-locked 1). Enforced in orders.create; counter checkout
+		// is exempt. See convex/lib/minOrderRules.ts.
+		minQuantity: v.optional(v.number()),
 		// Denormalized storefront suppression: true when this product belongs to
 		// ≥1 category AND every one of them is hidden — so it drops off the public
 		// storefront (still counter-sellable), while a product also in a non-hidden

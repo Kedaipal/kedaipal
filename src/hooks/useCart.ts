@@ -25,6 +25,11 @@ export type CartItem = {
 	// True for a made-to-order variant sold at RM0 — the price is quoted by the
 	// seller after the order (on the mockup). Rendered as "Price on quote".
 	quoteOnRequest?: boolean;
+	// Product-level minimum order quantity, snapshotted at add time (like price/
+	// name) so the checkout can judge shortfalls without a live product join.
+	// The server re-checks against the live value at create. Summed across the
+	// product's lines; custom lines never count. See convex/lib/minOrderRules.ts.
+	minQuantity?: number;
 	// Buyer's request for a custom / made-to-order line ("unicorn theme, size 8").
 	// Captured at add-time; composed (labelled) into the order's customerNote at
 	// checkout so the seller sees it in WhatsApp + the dashboard. See docs/custom-option.md.
@@ -205,11 +210,13 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 		};
 	}, [state.items]);
 
-	// Per-product aggregates for the storefront grid's "N in cart · RM total"
-	// affordance. Custom / made-to-order lines are excluded: they're a separate
-	// quoted negotiation (price 0 in-cart until the seller quotes on the mockup),
-	// so folding them into a running money total would understate it. Built once
-	// per items change, then read per-card in O(1).
+	// Per-product aggregates: the quantity drives the min-quantity-aware stepper
+	// default + quick-add top-up, and both quantity + subtotal drive the grid's
+	// "N in cart · RM total" affordance. Custom / made-to-order lines are excluded
+	// — they never count toward a minimum, and they're a separate quoted
+	// negotiation (price 0 in-cart until the seller quotes on the mockup), so
+	// folding them into a running money total would understate it. Built once per
+	// items change, then read per-card in O(1).
 	const byProduct = useMemo(() => {
 		const map = new Map<string, { quantity: number; subtotal: number }>();
 		for (const i of state.items) {

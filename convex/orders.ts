@@ -37,6 +37,12 @@ import {
 	assertValidFulfilmentDate,
 	matchesFulfilmentWindow,
 } from "./lib/fulfilmentDate";
+import {
+	collectMinQuantityShortfalls,
+	type MinRuleItem,
+	minOrderValueShortfall,
+	minQuantityMessage,
+} from "./lib/minOrderRules";
 import { statusToBucket } from "./lib/orderBuckets";
 import { type CsvOrder, ordersToCsv } from "./lib/orderCsv";
 import {
@@ -493,6 +499,10 @@ export const create = mutation({
 		>();
 		// Whole-order mockup gating: set if ANY line's product requires a proof.
 		let requiresMockup = false;
+		// Minimum-order-rule inputs (86ey9unyx), collected alongside the snapshot:
+		// per-line product id/name/qty + the flags the shared rules need. Checked
+		// after the loop (the rules judge summed quantities + the subtotal).
+		const ruleItems: MinRuleItem[] = [];
 		for (const item of args.items) {
 			if (!Number.isInteger(item.quantity) || item.quantity < 1)
 				throw new ConvexError("Quantity must be a positive integer");
@@ -562,6 +572,38 @@ export const create = mutation({
 				price: variant.price,
 				quantity: item.quantity,
 			});
+			ruleItems.push({
+				productId: variant.productId,
+				name: product.name,
+				quantity: item.quantity,
+				minQuantity: product.minQuantity,
+				isCustom: variant.isCustom,
+				quoteOnRequest: variantRequiresProof === true && variant.price === 0,
+			});
+		}
+
+		const itemSubtotal = snapshotItems.reduce(
+			(sum, i) => sum + i.price * i.quantity,
+			0,
+		);
+
+		// Minimum order rules (86ey9unyx) — the authoritative gate; the storefront
+		// mirrors both checks pre-submit via the same shared module, so a buyer
+		// only ever hits these from a stale tab or a direct call. Counter checkout
+		// deliberately does NOT run them (the seller is standing there).
+		const qtyShortfalls = collectMinQuantityShortfalls(ruleItems);
+		if (qtyShortfalls.length > 0) {
+			throw new ConvexError(minQuantityMessage(qtyShortfalls[0]));
+		}
+		const valueShortfall = minOrderValueShortfall(
+			retailer.minOrderValue,
+			itemSubtotal,
+			ruleItems,
+		);
+		if (valueShortfall > 0) {
+			throw new ConvexError(
+				`Minimum order of ${args.currency} ${((retailer.minOrderValue ?? 0) / 100).toFixed(2)} — add ${args.currency} ${(valueShortfall / 100).toFixed(2)} more to check out`,
+			);
 		}
 
 		// Delivery charge (86extzdr8): resolved server-side at create — the
@@ -570,10 +612,6 @@ export const create = mutation({
 		let deliverySnapshot: DeliverySnapshot | undefined;
 		let deliveryFeePending = false;
 		if (effectiveDeliveryMethod === "delivery") {
-			const itemSubtotal = snapshotItems.reduce(
-				(sum, i) => sum + i.price * i.quantity,
-				0,
-			);
 			const resolved = resolveDeliveryForOrder(
 				retailer,
 				itemSubtotal,
