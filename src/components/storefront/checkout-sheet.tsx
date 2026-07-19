@@ -1,3 +1,4 @@
+import { useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import {
 	Clock,
@@ -14,7 +15,6 @@ import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import {
 	assertValidFulfilmentDate,
-	formatFulfilmentDate,
 	fulfilmentDateBounds,
 	mytMidnightFromYmd,
 	ymdFromEpoch,
@@ -72,7 +72,6 @@ interface CheckoutSheetProps {
 	onClose: () => void;
 	cart: UseCart;
 	retailerId: Id<"retailers">;
-	storeName: string;
 	checkoutPhone: string | undefined;
 	offerSelfCollect: boolean;
 	offerDelivery: boolean;
@@ -155,94 +154,16 @@ function sanitizeAddress(raw: CheckoutAddressValues): SanitizedDeliveryAddress {
 	};
 }
 
-function formatAddressOneLine(addr: SanitizedDeliveryAddress): string {
-	const parts = [addr.line1];
-	if (addr.line2) parts.push(addr.line2);
-	parts.push(`${addr.postcode} ${addr.city}`);
-	parts.push(addr.state);
-	return parts.join(", ");
-}
-
-function buildWaMessage(
-	storeName: string,
-	shortId: string,
-	cart: UseCart,
-	deliveryMethod: "delivery" | "self_collect",
-	deliveryAddress: SanitizedDeliveryAddress | undefined,
-	pickupLocation: PublicPickupLocation | undefined,
-	note: string | undefined,
-	fulfilmentDate: number | undefined,
-): string {
-	const lines: string[] = [];
-	lines.push(`Hi ${storeName}, I'd like to place this order:`);
-	lines.push("");
-	lines.push(`Order: ${shortId}`);
-	let hasQuoteItem = false;
-	for (const item of cart.items) {
-		const name = item.optionLabel
-			? `${item.name} (${item.optionLabel})`
-			: item.name;
-		const suffix = item.quoteOnRequest ? " — price on quote" : "";
-		if (item.quoteOnRequest) hasQuoteItem = true;
-		lines.push(`• ${item.quantity}x ${name}${suffix}`);
-	}
-	lines.push("");
-	// The chosen point's fee is part of what the buyer pays — the message total
-	// must match the order total the server computed (subtotal + fee).
-	const pickupFee =
-		deliveryMethod === "self_collect" ? pickupFeeOf(pickupLocation) : 0;
-	if (pickupFee > 0)
-		lines.push(`Pickup fee: ${formatPrice(pickupFee, cart.currency)}`);
-	lines.push(`Total: ${formatPrice(cart.total + pickupFee, cart.currency)}`);
-	if (hasQuoteItem) lines.push("(Custom item price to be confirmed by seller)");
-	if (deliveryMethod === "self_collect") {
-		if (pickupLocation) {
-			const verb =
-				pickupLocation.locationType === "drop_off"
-					? "Drop-off at"
-					: "Self Collect at";
-			lines.push(`📍 ${verb}: ${pickupLocation.label}`);
-			lines.push(pickupLocation.address);
-			if (pickupLocation.scheduleNote)
-				lines.push(`🗓️ ${pickupLocation.scheduleNote}`);
-			const mapsUrl = deriveMapsUrl(pickupLocation);
-			if (mapsUrl) lines.push(mapsUrl);
-			if (pickupLocation.notes) lines.push(pickupLocation.notes);
-		} else {
-			lines.push("📍 Pickup");
-		}
-	} else if (deliveryAddress) {
-		lines.push(`🚚 Deliver to: ${formatAddressOneLine(deliveryAddress)}`);
-		const mapsUrl = deriveMapsUrl(deliveryAddress);
-		if (mapsUrl) lines.push(`📍 ${mapsUrl}`);
-		if (deliveryAddress.notes) lines.push(`📝 ${deliveryAddress.notes}`);
-	} else {
-		lines.push("🚚 Delivery");
-	}
-	// Fulfilment date — the buyer's answer to "bila nak?". Sits with the
-	// delivery/pickup block (it's the "when" to that "where"), above the note.
-	if (fulfilmentDate !== undefined) {
-		const verb = deliveryMethod === "self_collect" ? "Collect" : "Deliver";
-		lines.push(`🗓️ ${verb} on: ${formatFulfilmentDate(fulfilmentDate)}`);
-	}
-	// Order note last, in a clearly delimited section. It sits AFTER the
-	// "Order: ORD-XXXX" line, so even if the note text contains something that
-	// looks like an order token, the inbound parser still matches the real ID
-	// (first match) — see SHORT_ID_REGEX in whatsappCopy.
-	if (note) {
-		lines.push("");
-		lines.push("📝 Note for seller:");
-		lines.push(note);
-	}
-	return lines.join("\n");
-}
+// The buyer→seller WhatsApp handoff message is NOT built here anymore. The
+// checkout submit navigates to the tracking page, which rebuilds it from the
+// order's frozen snapshot — see src/lib/wa-order-message.ts for why (popup
+// blockers kill window.open after the awaited createOrder round-trip).
 
 export function CheckoutSheet({
 	open,
 	onClose,
 	cart,
 	retailerId,
-	storeName,
 	checkoutPhone,
 	offerSelfCollect,
 	offerDelivery,
@@ -250,6 +171,7 @@ export function CheckoutSheet({
 	pickupLocations,
 }: CheckoutSheetProps) {
 	const createOrder = useMutation(api.orders.create);
+	const navigate = useNavigate();
 	const [serverError, setServerError] = useState<string | null>(null);
 	// Submit-time "choose a pickup point" error — inline on the radio list (the
 	// shared focus helper lands on it), not a generic bottom banner. Cleared as
@@ -326,11 +248,9 @@ export function CheckoutSheet({
 			// Resolve the chosen pickup location id. For the single-location case
 			// we never asked the buyer to pick — auto-fill from the (only) option.
 			let resolvedPickupLocationId: Id<"pickupLocations"> | undefined;
-			let resolvedPickupLocation: PublicPickupLocation | undefined;
 			if (value.deliveryMethod === "self_collect" && selfCollectAvailable) {
 				if (singlePickup) {
 					resolvedPickupLocationId = singlePickup._id;
-					resolvedPickupLocation = singlePickup;
 				} else {
 					const chosen = sortedPickups.find(
 						(p) => p._id === value.pickupLocationId,
@@ -342,7 +262,6 @@ export function CheckoutSheet({
 						return;
 					}
 					resolvedPickupLocationId = chosen._id;
-					resolvedPickupLocation = chosen;
 				}
 			}
 
@@ -376,7 +295,7 @@ export function CheckoutSheet({
 			)?.customImageStorageId;
 
 			try {
-				const { shortId } = await createOrder({
+				const { trackingToken } = await createOrder({
 					retailerId,
 					items: cart.items.map((i) => ({
 						variantId: i.variantId,
@@ -394,22 +313,21 @@ export function CheckoutSheet({
 					customerNote,
 					customerImageStorageId,
 				});
-				const message = buildWaMessage(
-					storeName,
-					shortId,
-					cart,
-					value.deliveryMethod,
-					sanitizedAddress,
-					resolvedPickupLocation,
-					customerNote,
-					fulfilmentEpoch,
-				);
-				const url = `https://wa.me/${checkoutPhone}?text=${encodeURIComponent(message)}`;
 				if (value.deliveryMethod === "delivery") saveAddress(value.address);
 				cart.clearCart();
 				form.reset();
 				onClose();
-				window.open(url, "_blank", "noopener,noreferrer");
+				// Same-tab navigation to the tracking page, NOT window.open(wa.me):
+				// after the awaited createOrder round-trip we're outside the submit
+				// tap's transient user activation, so popup blockers (iOS Safari,
+				// IG/FB in-app webviews) silently swallow a new tab — order created,
+				// buyer stranded. The tracking page shows the "Send order on
+				// WhatsApp" anchor instead; that tap is a fresh gesture browsers
+				// always allow. See docs/order-lifecycle.md.
+				navigate({
+					to: "/track/$token",
+					params: { token: trackingToken },
+				});
 			} catch (err) {
 				setServerError(convexErrorMessage(err));
 			}
