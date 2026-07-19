@@ -9,7 +9,6 @@ import { CheckoutSheet, type PublicPickupLocation } from "./checkout-sheet";
 interface CartBarProps {
 	cart: UseCart;
 	retailerId: Id<"retailers">;
-	storeName: string;
 	checkoutPhone: string | undefined;
 	offerSelfCollect: boolean;
 	offerDelivery: boolean;
@@ -20,7 +19,6 @@ interface CartBarProps {
 export function CartBar({
 	cart,
 	retailerId,
-	storeName,
 	checkoutPhone,
 	offerSelfCollect,
 	offerDelivery,
@@ -68,7 +66,6 @@ export function CartBar({
 				onClose={() => setCheckoutOpen(false)}
 				cart={cart}
 				retailerId={retailerId}
-				storeName={storeName}
 				checkoutPhone={checkoutPhone}
 				offerSelfCollect={offerSelfCollect}
 				offerDelivery={offerDelivery}

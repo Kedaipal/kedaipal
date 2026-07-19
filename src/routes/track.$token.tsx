@@ -13,6 +13,7 @@ import {
 	MessageCircle,
 	Package,
 	Pencil,
+	Send,
 	StickyNote,
 	Store,
 	Truck,
@@ -49,6 +50,7 @@ import {
 	stageDescription,
 	stageLabel,
 } from "../lib/orderStatus";
+import { buildOrderWaMessage, waOrderUrl } from "../lib/wa-order-message";
 
 type PaymentStatus = "unpaid" | "claimed" | "received";
 
@@ -392,6 +394,20 @@ function TrackingRoute() {
 					timeStyle: "short",
 				})}
 			</p>
+
+			{/* WhatsApp handoff — the ONE action for a fresh storefront order.
+			    Checkout can't open wa.me itself (popup blockers eat window.open
+			    after the awaited createOrder — see src/lib/wa-order-message.ts),
+			    so it lands the buyer here and THIS anchor tap — a fresh user
+			    gesture — carries the order to the seller's WhatsApp. Shown while
+			    the order is still pending (checkoutPhone is only served then), so
+			    it doubles as recovery for any buyer who bailed before sending.
+			    Counter orders bind via QR scan and never need this. */}
+			{order.status === "pending" &&
+			order.checkoutPhone &&
+			(order.source ?? "storefront") === "storefront" ? (
+				<SendOrderCard order={order} checkoutPhone={order.checkoutPhone} />
+			) : null}
 
 			{/* Current status card */}
 			<div className="mt-6 flex items-center gap-3 rounded-2xl border border-border bg-card p-4">
@@ -946,6 +962,86 @@ function PickupNavButtons({
 type TrackedOrder = NonNullable<
 	ReturnType<typeof useQuery<typeof api.orders.get>>
 >;
+
+/**
+ * "Send your order on WhatsApp" — completes the storefront checkout handoff.
+ * The wa.me message is rebuilt from the order's frozen snapshot on every
+ * render, so this survives refreshes and lost sessions (no client state to
+ * lose). The anchor is a real user gesture, so popup blockers never eat it;
+ * the copy-link row is the belt-and-braces fallback for webviews that refuse
+ * to open WhatsApp at all.
+ */
+function SendOrderCard({
+	order,
+	checkoutPhone,
+}: {
+	order: TrackedOrder;
+	checkoutPhone: string;
+}) {
+	const ms = order.retailerLocale === "ms";
+	const storeName = order.storeName || (ms ? "kedai" : "the store");
+	const message = buildOrderWaMessage({
+		shortId: order.shortId,
+		storeName: order.storeName,
+		items: order.items,
+		currency: order.currency,
+		total: order.total,
+		pickupFee: order.pickupFee,
+		deliveryMethod: order.deliveryMethod,
+		deliveryAddress: order.deliveryAddress,
+		pickupSnapshot: order.pickupSnapshot,
+		fulfilmentDate: order.fulfilmentDate,
+		customerNote: order.customerNote,
+		quotePending:
+			order.mockupStatus !== undefined &&
+			order.mockupStatus !== "approved" &&
+			order.mockupWaivedAt == null,
+	});
+	const waUrl = waOrderUrl(checkoutPhone, message);
+
+	return (
+		<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-accent/40 bg-accent/5 p-4">
+			<div className="flex items-center gap-3">
+				<Send className="size-5 shrink-0 text-accent" />
+				<div className="min-w-0 flex-1">
+					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+						{ms ? "Satu langkah lagi" : "One last step"}
+					</p>
+					<p className="font-semibold">
+						{ms
+							? "Hantar pesanan anda di WhatsApp"
+							: "Send your order on WhatsApp"}
+					</p>
+				</div>
+			</div>
+			<p className="text-sm text-muted-foreground">
+				{ms
+					? `Pesanan anda telah disimpan. Hantar di WhatsApp supaya ${storeName} boleh sahkan pesanan dan hubungi anda.`
+					: `Your order is saved. Send it on WhatsApp so ${storeName} can confirm it and reach you.`}
+			</p>
+			<Button asChild className="h-12 w-full text-base">
+				<a href={waUrl} target="_blank" rel="noopener noreferrer">
+					<MessageCircle className="size-5" />
+					{ms ? "Hantar di WhatsApp" : "Send on WhatsApp"}
+				</a>
+			</Button>
+			<div className="flex items-center justify-between gap-2 rounded-xl bg-muted/50 px-3 py-2.5">
+				<p className="text-xs text-muted-foreground">
+					{ms
+						? "WhatsApp tak terbuka? Salin pautan dan buka dalam pelayar anda."
+						: "WhatsApp didn't open? Copy the link and open it in your browser."}
+				</p>
+				<CopyButton
+					value={waUrl}
+					ariaLabel={ms ? "Salin pautan WhatsApp" : "Copy WhatsApp link"}
+					successMessage={
+						ms ? "Pautan WhatsApp disalin" : "WhatsApp link copied"
+					}
+				/>
+			</div>
+		</section>
+	);
+}
 
 /** Buyer-facing mockup review: approve or request changes on the seller's proof. */
 function MockupReview({
