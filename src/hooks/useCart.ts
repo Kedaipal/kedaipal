@@ -205,6 +205,32 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 		};
 	}, [state.items]);
 
+	// Per-product aggregates for the storefront grid's "N in cart · RM total"
+	// affordance. Custom / made-to-order lines are excluded: they're a separate
+	// quoted negotiation (price 0 in-cart until the seller quotes on the mockup),
+	// so folding them into a running money total would understate it. Built once
+	// per items change, then read per-card in O(1).
+	const byProduct = useMemo(() => {
+		const map = new Map<string, { quantity: number; subtotal: number }>();
+		for (const i of state.items) {
+			if (i.isCustom) continue;
+			const agg = map.get(i.productId) ?? { quantity: 0, subtotal: 0 };
+			agg.quantity += i.quantity;
+			agg.subtotal += i.price * i.quantity;
+			map.set(i.productId, agg);
+		}
+		return map;
+	}, [state.items]);
+
+	const quantityForProduct = useCallback(
+		(productId: Id<"products">) => byProduct.get(productId)?.quantity ?? 0,
+		[byProduct],
+	);
+	const subtotalForProduct = useCallback(
+		(productId: Id<"products">) => byProduct.get(productId)?.subtotal ?? 0,
+		[byProduct],
+	);
+
 	return {
 		items: state.items,
 		itemCount,
@@ -214,6 +240,8 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 		updateQuantity,
 		removeItem,
 		clearCart,
+		quantityForProduct,
+		subtotalForProduct,
 	};
 }
 

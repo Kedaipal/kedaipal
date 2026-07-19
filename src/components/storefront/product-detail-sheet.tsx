@@ -187,6 +187,18 @@ export function ProductDetailSheet({
 			? `from ${formatPrice(customLine.price, product.currency)}`
 			: "Price on quote";
 
+	// Live money total for the standard selection — shown by the stepper so the
+	// buyer sees what they're committing to before adding, and it updates on every
+	// tap. Only when a concrete, priced, sellable variant is resolved: quote lines
+	// have no price yet, and an unresolved multi-axis selection has no variant.
+	const totalPreview =
+		selectedVariant && sellable && !selectedIsQuote
+			? {
+					unit: selectedVariant.price,
+					total: selectedVariant.price * quantity,
+				}
+			: null;
+
 	return (
 		<Dialog.Root open={open} onOpenChange={(o) => !o && onClose()}>
 			<Dialog.Portal>
@@ -431,6 +443,22 @@ export function ProductDetailSheet({
 					</div>
 
 					<div className="border-t border-border bg-background px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-6">
+						{totalPreview ? (
+							<div className="mb-3 flex items-baseline justify-between gap-2">
+								<span className="text-sm font-medium text-muted-foreground">
+									Total
+									{quantity > 1 ? (
+										<span className="ml-1 tabular-nums">
+											· {quantity} ×{" "}
+											{formatPrice(totalPreview.unit, product.currency)}
+										</span>
+									) : null}
+								</span>
+								<span className="text-lg font-bold tabular-nums">
+									{formatPrice(totalPreview.total, product.currency)}
+								</span>
+							</div>
+						) : null}
 						<div className="grid gap-3 sm:grid-cols-[auto_1fr] sm:items-center">
 							<div className="flex items-center justify-center gap-3 sm:justify-start">
 								<button

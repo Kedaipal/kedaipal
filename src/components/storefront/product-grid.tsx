@@ -253,6 +253,8 @@ export function ProductGrid({
 							product={product}
 							onOpen={setOpenProduct}
 							onQuickAdd={quickAdd}
+							cartQuantity={cart.quantityForProduct(product._id)}
+							cartSubtotal={cart.subtotalForProduct(product._id)}
 						/>
 					))}
 				</div>

@@ -128,3 +128,76 @@ describe("ProductDetailSheet — custom line is an independent add", () => {
 		expect(onAdd).toHaveBeenCalledTimes(2);
 	});
 });
+
+describe("ProductDetailSheet — live total preview", () => {
+	it("hides the total until a concrete variant is resolved", () => {
+		render(
+			<ProductDetailSheet
+				product={product}
+				retailerId={RID}
+				onClose={vi.fn()}
+				onAdd={vi.fn()}
+			/>,
+		);
+		// Multi-axis product with no size picked yet → no committed price to total.
+		expect(screen.queryByText("Total")).toBeNull();
+	});
+
+	it("shows the running total and reflects quantity changes", () => {
+		render(
+			<ProductDetailSheet
+				product={product}
+				retailerId={RID}
+				onClose={vi.fn()}
+				onAdd={vi.fn()}
+			/>,
+		);
+		// Pick S (RM10.00) → total appears at qty 1 (label alone, no breakdown).
+		fireEvent.click(screen.getByRole("button", { name: "S" }));
+		expect(screen.getByText("Total")).toBeTruthy();
+
+		// Step up to 2 → total becomes 2 × RM10.00 = RM20.00, distinct from the
+		// RM10.00 unit price shown above. (Regex tolerates the NBSP that Intl puts
+		// between the currency symbol and the amount.)
+		fireEvent.click(screen.getByRole("button", { name: /increase quantity/i }));
+		expect(screen.getByText(/^RM\s*20\.00$/)).toBeTruthy();
+	});
+
+	it("shows no total for a quote-priced (made-to-order) selection", () => {
+		// Single implicit variant, made-to-order at RM0 → resolves immediately but
+		// has no price yet, so a money total would be misleading.
+		const quoteProduct = {
+			_id: "pq",
+			name: "Custom cake",
+			currency: "MYR",
+			imageUrls: [],
+			options: [],
+			priceFrom: 0,
+			priceTo: 0,
+			hasQuotePricing: true,
+			variants: [
+				{
+					_id: "vq",
+					optionValues: [],
+					onHand: 0,
+					active: true,
+					blockWhenOutOfStock: false,
+					requiresProof: true,
+					price: 0,
+					imageUrls: [],
+				},
+			],
+		} as unknown as StorefrontProduct;
+
+		render(
+			<ProductDetailSheet
+				product={quoteProduct}
+				retailerId={RID}
+				onClose={vi.fn()}
+				onAdd={vi.fn()}
+			/>,
+		);
+		expect(screen.getByText("Price on quote")).toBeTruthy();
+		expect(screen.queryByText("Total")).toBeNull();
+	});
+});
