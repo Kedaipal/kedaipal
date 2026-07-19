@@ -800,6 +800,13 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 	// shared Kedaipal WABA). `retailerWaPhone` undefined => the CTA is hidden.
 	storeName: string;
 	retailerWaPhone?: string;
+	// The shared Kedaipal checkout number (same resolution as the storefront's
+	// getRetailerBySlug), included ONLY while the order is still `pending`: it
+	// powers the tracking page's "Send order on WhatsApp" handoff CTA — the
+	// buyer-gesture replacement for the popup-blocked checkout `window.open`.
+	// Undefined once the order is confirmed (or when no number is configured),
+	// which also hides the CTA reactively the moment the bot confirms.
+	checkoutPhone?: string;
 };
 
 export const get = query({
@@ -836,6 +843,10 @@ export const get = query({
 			retailerLocale: (retailer?.locale ?? "en") as Locale,
 			storeName: retailer?.storeName ?? "",
 			retailerWaPhone: retailer?.waPhone,
+			checkoutPhone:
+				order.status === "pending"
+					? (process.env.WHATSAPP_CHECKOUT_PHONE ?? retailer?.waPhone)
+					: undefined,
 		};
 	},
 });

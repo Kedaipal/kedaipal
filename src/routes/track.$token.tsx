@@ -9,16 +9,18 @@ import {
 	HandCoins,
 	Hourglass,
 	ImageIcon,
+	Loader2,
 	MapPin,
 	MessageCircle,
 	Package,
 	Pencil,
+	Send,
 	StickyNote,
 	Store,
 	Truck,
 	XCircle,
 } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { formatFulfilmentDate } from "../../convex/lib/fulfilmentDate";
@@ -49,6 +51,8 @@ import {
 	stageDescription,
 	stageLabel,
 } from "../lib/orderStatus";
+import { createWaAutoOpen } from "../lib/wa-auto-open";
+import { buildOrderWaMessage, waOrderUrl } from "../lib/wa-order-message";
 
 type PaymentStatus = "unpaid" | "claimed" | "received";
 
@@ -94,6 +98,13 @@ function formatRelativeTime(epochMs: number | undefined): string {
 }
 
 export const Route = createFileRoute("/track/$token")({
+	// ?send=1 — set only by checkout's post-create navigation: auto-fire the
+	// "Send on WhatsApp" handoff once the page mounts. The component strips it
+	// (replace) before navigating away, so refresh / back-from-WhatsApp never
+	// re-triggers the redirect.
+	validateSearch: (search: Record<string, unknown>): { send?: 1 } => ({
+		send: search.send === 1 || search.send === "1" ? 1 : undefined,
+	}),
 	loader: async ({ params }) => {
 		const client = getConvexHttpClient();
 		const order = await client.query(api.orders.get, {
@@ -239,6 +250,8 @@ function TrackingSkeleton() {
 
 function TrackingRoute() {
 	const { token } = Route.useParams();
+	const { send } = Route.useSearch();
+	const navigate = Route.useNavigate();
 	const order = useQuery(api.orders.get, { token });
 	// Only subscribe to payment methods when the "How to pay" section can actually
 	// render. Skipping for cancelled / already-paid / mockup-gated orders avoids a
@@ -397,6 +410,30 @@ function TrackingRoute() {
 					timeStyle: "short",
 				})}
 			</p>
+
+			{/* WhatsApp handoff — the ONE action for a fresh storefront order.
+			    Checkout can't open wa.me itself (popup blockers eat window.open
+			    after the awaited createOrder — see src/lib/wa-order-message.ts),
+			    so it lands the buyer here and THIS anchor tap — a fresh user
+			    gesture — carries the order to the seller's WhatsApp. Shown while
+			    the order is still pending (checkoutPhone is only served then), so
+			    it doubles as recovery for any buyer who bailed before sending.
+			    Counter orders bind via QR scan and never need this. */}
+			{order.status === "pending" &&
+			order.checkoutPhone &&
+			(order.source ?? "storefront") === "storefront" ? (
+				<SendOrderCard
+					order={order}
+					checkoutPhone={order.checkoutPhone}
+					autoSend={send === 1}
+					onAutoSendConsumed={() =>
+						// Drop ?send=1 from the URL (and history, via replace) the moment
+						// the auto-attempt starts, so back/refresh lands on a plain
+						// tracking URL instead of re-firing the redirect.
+						navigate({ search: {}, replace: true })
+					}
+				/>
+			) : null}
 
 			{/* Current status card */}
 			<div className="mt-6 flex items-center gap-3 rounded-2xl border border-border bg-card p-4">
@@ -991,6 +1028,140 @@ function PickupNavButtons({
 type TrackedOrder = NonNullable<
 	ReturnType<typeof useQuery<typeof api.orders.get>>
 >;
+
+/**
+ * "Send your order on WhatsApp" — completes the storefront checkout handoff.
+ * The wa.me message is rebuilt from the order's frozen snapshot on every
+ * render, so this survives refreshes and lost sessions (no client state to
+ * lose). The anchor is a real user gesture, so popup blockers never eat it;
+ * the copy-link row is the belt-and-braces fallback for webviews that refuse
+ * to open WhatsApp at all.
+ *
+ * `autoSend` (fresh arrival from checkout, ?send=1): the button starts in a
+ * loading state and we same-tab navigate to wa.me after a short paint delay —
+ * same-tab navigation is never popup-blocked, so desktop keeps its old
+ * "one click → WhatsApp" feel and mobile finally gets it. If we're still on
+ * the page after the watchdog (webview refused) — or the buyer comes back
+ * from WhatsApp (pageshow/visibilitychange) — loading settles back to the
+ * manual button + copy-link fallback.
+ */
+function SendOrderCard({
+	order,
+	checkoutPhone,
+	autoSend,
+	onAutoSendConsumed,
+}: {
+	order: TrackedOrder;
+	checkoutPhone: string;
+	autoSend: boolean;
+	onAutoSendConsumed: () => void;
+}) {
+	const ms = order.retailerLocale === "ms";
+	const storeName = order.storeName || (ms ? "kedai" : "the store");
+	const message = buildOrderWaMessage({
+		shortId: order.shortId,
+		storeName: order.storeName,
+		items: order.items,
+		currency: order.currency,
+		total: order.total,
+		pickupFee: order.pickupFee,
+		deliveryFee: order.deliveryFee,
+		deliveryFeePending: order.deliveryFeePending,
+		deliveryMethod: order.deliveryMethod,
+		deliveryAddress: order.deliveryAddress,
+		pickupSnapshot: order.pickupSnapshot,
+		fulfilmentDate: order.fulfilmentDate,
+		customerNote: order.customerNote,
+		quotePending:
+			order.mockupStatus !== undefined &&
+			order.mockupStatus !== "approved" &&
+			order.mockupWaivedAt == null,
+	});
+	const waUrl = waOrderUrl(checkoutPhone, message);
+	const [sending, setSending] = useState(autoSend);
+
+	// Auto-fire the handoff exactly once per checkout arrival. Mount-only by
+	// design: `autoSend` is fixed at mount (the search param is stripped before
+	// we leave) and `waUrl` is built from the order's frozen snapshot.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: mount-only auto-attempt, see above
+	useEffect(() => {
+		if (!autoSend) return;
+		onAutoSendConsumed();
+		const ctrl = createWaAutoOpen({
+			openUrl: () => window.location.assign(waUrl),
+			onSettled: () => setSending(false),
+		});
+		// Returning from WhatsApp must never leave the button stuck loading:
+		// bfcache restore fires pageshow (persisted only — the initial load's
+		// pageshow can land after hydration and must not abort the attempt);
+		// the app-switch round trip (wa.me's whatsapp:// hop) fires
+		// visibilitychange back to visible.
+		const onPageShow = (e: PageTransitionEvent) => {
+			if (e.persisted) ctrl.settle();
+		};
+		const onVisibility = () => {
+			if (!document.hidden) ctrl.settle();
+		};
+		window.addEventListener("pageshow", onPageShow);
+		document.addEventListener("visibilitychange", onVisibility);
+		ctrl.start();
+		return () => {
+			ctrl.cancel();
+			window.removeEventListener("pageshow", onPageShow);
+			document.removeEventListener("visibilitychange", onVisibility);
+		};
+	}, []);
+
+	return (
+		<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-accent/40 bg-accent/5 p-4">
+			<div className="flex items-center gap-3">
+				<Send className="size-5 shrink-0 text-accent" />
+				<div className="min-w-0 flex-1">
+					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+						{ms ? "Satu langkah lagi" : "One last step"}
+					</p>
+					<p className="font-semibold">
+						{ms
+							? "Hantar pesanan anda di WhatsApp"
+							: "Send your order on WhatsApp"}
+					</p>
+				</div>
+			</div>
+			<p className="text-sm text-muted-foreground">
+				{ms
+					? `Pesanan anda telah disimpan. Hantar di WhatsApp supaya ${storeName} boleh sahkan pesanan dan hubungi anda.`
+					: `Your order is saved. Send it on WhatsApp so ${storeName} can confirm it and reach you.`}
+			</p>
+			{sending ? (
+				<Button className="h-12 w-full text-base" disabled>
+					<Loader2 className="size-5 animate-spin" />
+					{ms ? "Membuka WhatsApp…" : "Opening WhatsApp…"}
+				</Button>
+			) : (
+				<Button asChild className="h-12 w-full text-base">
+					<a href={waUrl} target="_blank" rel="noopener noreferrer">
+						<MessageCircle className="size-5" />
+						{ms ? "Hantar di WhatsApp" : "Send on WhatsApp"}
+					</a>
+				</Button>
+			)}
+			<div className="flex items-center justify-between gap-2 rounded-xl bg-muted/50 px-3 py-2.5">
+				<p className="text-xs text-muted-foreground">
+					{ms
+						? "WhatsApp tak terbuka? Salin pautan dan buka dalam pelayar anda."
+						: "WhatsApp didn't open? Copy the link and open it in your browser."}
+				</p>
+				<CopyButton
+					value={waUrl}
+					ariaLabel={ms ? "Salin pautan WhatsApp" : "Copy WhatsApp link"}
+					successMessage={
+						ms ? "Pautan WhatsApp disalin" : "WhatsApp link copied"
+					}
+				/>
+			</div>
+		</section>
+	);
+}
 
 /** Buyer-facing mockup review: approve or request changes on the seller's proof. */
 function MockupReview({
