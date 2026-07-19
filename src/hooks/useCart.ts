@@ -196,19 +196,6 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 	);
 	const clearCart = useCallback(() => dispatch({ type: "CLEAR" }), []);
 
-	// Units of a product already in the cart, summed across its variant lines
-	// (custom lines excluded — they never count toward a minimum). Drives the
-	// min-quantity-aware stepper default + quick-add top-up.
-	const quantityForProduct = useCallback(
-		(productId: Id<"products">) =>
-			state.items.reduce(
-				(sum, i) =>
-					i.productId === productId && !i.isCustom ? sum + i.quantity : sum,
-				0,
-			),
-		[state.items],
-	);
-
 	const { itemCount, total, currency } = useMemo(() => {
 		let count = 0;
 		let sum = 0;
@@ -223,6 +210,34 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 		};
 	}, [state.items]);
 
+	// Per-product aggregates: the quantity drives the min-quantity-aware stepper
+	// default + quick-add top-up, and both quantity + subtotal drive the grid's
+	// "N in cart · RM total" affordance. Custom / made-to-order lines are excluded
+	// — they never count toward a minimum, and they're a separate quoted
+	// negotiation (price 0 in-cart until the seller quotes on the mockup), so
+	// folding them into a running money total would understate it. Built once per
+	// items change, then read per-card in O(1).
+	const byProduct = useMemo(() => {
+		const map = new Map<string, { quantity: number; subtotal: number }>();
+		for (const i of state.items) {
+			if (i.isCustom) continue;
+			const agg = map.get(i.productId) ?? { quantity: 0, subtotal: 0 };
+			agg.quantity += i.quantity;
+			agg.subtotal += i.price * i.quantity;
+			map.set(i.productId, agg);
+		}
+		return map;
+	}, [state.items]);
+
+	const quantityForProduct = useCallback(
+		(productId: Id<"products">) => byProduct.get(productId)?.quantity ?? 0,
+		[byProduct],
+	);
+	const subtotalForProduct = useCallback(
+		(productId: Id<"products">) => byProduct.get(productId)?.subtotal ?? 0,
+		[byProduct],
+	);
+
 	return {
 		items: state.items,
 		itemCount,
@@ -233,6 +248,7 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 		removeItem,
 		clearCart,
 		quantityForProduct,
+		subtotalForProduct,
 	};
 }
 

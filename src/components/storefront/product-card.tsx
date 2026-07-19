@@ -13,9 +13,22 @@ interface ProductCardProps {
 	product: StorefrontProduct;
 	onOpen: (product: StorefrontProduct) => void;
 	onQuickAdd: (product: StorefrontProduct) => void;
+	/** Units of this product already in the cart (custom lines excluded). */
+	cartQuantity: number;
+	/**
+	 * Running money total (minor units) of those in-cart units. 0 when every
+	 * in-cart line is quote-priced, in which case only the count is shown.
+	 */
+	cartSubtotal: number;
 }
 
-export function ProductCard({ product, onOpen, onQuickAdd }: ProductCardProps) {
+export function ProductCard({
+	product,
+	onOpen,
+	onQuickAdd,
+	cartQuantity,
+	cartSubtotal,
+}: ProductCardProps) {
 	// Multi-variant products can't be quick-added — the buyer must pick options
 	// in the detail sheet first. A custom line also forces the detail sheet so the
 	// buyer can see (and choose) the made-to-order option. See docs/custom-option.md.
@@ -134,6 +147,18 @@ export function ProductCard({ product, onOpen, onQuickAdd }: ProductCardProps) {
 						</>
 					)}
 				</p>
+				{/* Running cart line — shows what the buyer has already committed for
+				    this product (updates as they add more). Only rendered once it's in
+				    the cart, so un-added tiles stay clean. The money total is dropped
+				    when everything in cart is quote-priced (subtotal 0). */}
+				{cartQuantity > 0 ? (
+					<p className="text-xs font-semibold text-accent tabular-nums">
+						{cartQuantity} in cart
+						{cartSubtotal > 0
+							? ` · ${formatPrice(cartSubtotal, product.currency)}`
+							: ""}
+					</p>
+				) : null}
 				{needsDetail ? (
 					<Button
 						type="button"
