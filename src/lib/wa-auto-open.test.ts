@@ -80,6 +80,26 @@ describe("createWaAutoOpen", () => {
 		expect(onSettled).not.toHaveBeenCalled();
 	});
 
+	it("watchdog still arms when openUrl throws — button never stuck loading", () => {
+		const openUrl = vi.fn(() => {
+			throw new Error("assign blocked");
+		});
+		const onSettled = vi.fn();
+		const ctrl = createWaAutoOpen({
+			openUrl,
+			onSettled,
+			delayMs: 600,
+			timeoutMs: 4000,
+		});
+		ctrl.start();
+		// The throw escapes the timer callback, but the finally must have armed
+		// the watchdog first.
+		expect(() => vi.advanceTimersByTime(600)).toThrow("assign blocked");
+		expect(onSettled).not.toHaveBeenCalled();
+		vi.advanceTimersByTime(4000);
+		expect(onSettled).toHaveBeenCalledTimes(1);
+	});
+
 	it("start() after cancel() stays dead (unmounted component)", () => {
 		const { ctrl, openUrl } = make();
 		ctrl.cancel();

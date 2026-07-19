@@ -65,8 +65,14 @@ export function createWaAutoOpen({
 			started = true;
 			delayTimer = setTimeout(() => {
 				delayTimer = undefined;
-				openUrl();
-				watchdogTimer = setTimeout(settle, timeoutMs);
+				// finally: even if openUrl throws (it shouldn't for a valid https
+				// URL), the watchdog must still arm — otherwise the button would
+				// stay stuck loading with no recovery path (PR #120 review).
+				try {
+					openUrl();
+				} finally {
+					watchdogTimer = setTimeout(settle, timeoutMs);
+				}
 			}, delayMs);
 		},
 		settle,
