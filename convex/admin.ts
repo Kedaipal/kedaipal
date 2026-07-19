@@ -12,7 +12,7 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
-import { requireAdmin } from "./lib/auth";
+import { adminUserIds, requireAdmin } from "./lib/auth";
 import { loadSubscription } from "./subscriptions";
 
 /** How many sellers the directory pulls. The Founding cohort is ~10 and the whole
@@ -27,6 +27,12 @@ export type AdminSellerRow = {
 	slug: string;
 	/** Clerk subject of the owner — shown so an admin can match a store to a person. */
 	ownerUserId: string;
+	/** True when the store's OWNER is a Kedaipal admin (in `ADMIN_USER_IDS`). The
+	 * directory renders an "Admin" pill instead of a subscription/plan status for
+	 * these — an admin runs the app for free with the highest tier unlocked, so a
+	 * trial/plan countdown would be misleading. A boolean only: the allowlist
+	 * itself never crosses to the client. See docs/admin-console.md. */
+	ownerIsAdmin: boolean;
 	isFoundingMember: boolean;
 	foundingMemberRank?: number;
 	subscriptionStatus?: Doc<"subscriptions">["status"];
@@ -45,6 +51,7 @@ export const listSellersForAdmin = query({
 	args: {},
 	handler: async (ctx): Promise<AdminSellerRow[]> => {
 		await requireAdmin(ctx);
+		const adminIds = new Set(adminUserIds());
 		const retailers = await ctx.db
 			.query("retailers")
 			.order("desc")
@@ -57,6 +64,7 @@ export const listSellersForAdmin = query({
 				storeName: r.storeName,
 				slug: r.slug,
 				ownerUserId: r.userId,
+				ownerIsAdmin: adminIds.has(r.userId),
 				isFoundingMember: r.isFoundingMember === true,
 				foundingMemberRank: r.foundingMemberRank,
 				subscriptionStatus: sub?.status,

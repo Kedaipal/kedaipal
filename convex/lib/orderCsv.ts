@@ -35,11 +35,15 @@ export type CsvOrder = {
 	items: Array<{ name: string; variantLabel?: string; quantity: number }>;
 	subtotal: number;
 	/** Frozen per-location pickup fee (minor units). Undefined/0 = free — the
-	 * column prints "0.00" (never blank) so `Subtotal + Pickup fee = Total`
-	 * sums in a spreadsheet for a standard order. (A made-to-order/custom order
-	 * also folds a mockup quote into `total`, and there's no quote column, so
-	 * that identity doesn't hold there — the quote never was in the export.) */
+	 * column prints "0.00" (never blank) so `Subtotal + Pickup fee + Delivery
+	 * fee = Total` sums in a spreadsheet for a standard order. (A made-to-order/
+	 * custom order also folds a mockup quote into `total`, and there's no quote
+	 * column, so that identity doesn't hold there — the quote never was in the
+	 * export.) */
 	pickupFee?: number;
+	/** Frozen delivery charge (minor units) — same "0.00 never blank" rule as
+	 * pickupFee so the totals identity sums. */
+	deliveryFee?: number;
 	total: number;
 	currency: string;
 	customerNote?: string;
@@ -59,6 +63,7 @@ export const CSV_COLUMNS = [
 	"Items",
 	"Subtotal",
 	"Pickup fee",
+	"Delivery fee",
 	"Total",
 	"Currency",
 	"Note",
@@ -90,6 +95,7 @@ export function orderToCsvRow(o: CsvOrder): string[] {
 		items,
 		csvAmount(o.subtotal),
 		csvAmount(o.pickupFee ?? 0),
+		csvAmount(o.deliveryFee ?? 0),
 		csvAmount(o.total),
 		o.currency,
 		o.customerNote ?? "",

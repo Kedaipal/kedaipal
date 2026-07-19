@@ -6,31 +6,61 @@ import {
 	Pencil,
 	Phone,
 	Plus,
+	Trash2,
 	Truck,
 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
+import type { DeliveryConfig } from "../../../convex/lib/delivery";
+import { DELIVERY_BANDS_MAX } from "../../../convex/lib/delivery";
 import {
 	DEFAULT_MIN_NOTICE_DAYS,
 	MAX_NOTICE_DAYS,
 } from "../../../convex/lib/fulfilmentDate";
+import { MIN_ORDER_VALUE_MAX } from "../../../convex/lib/minOrderRules";
 import { formatPhone } from "../../lib/customer";
-import { convexErrorMessage, formatPrice } from "../../lib/format";
+import {
+	convexErrorMessage,
+	formatPrice,
+	normalizePriceInput,
+	parsePriceInput,
+} from "../../lib/format";
 import { deriveMapsUrl } from "../../lib/google-address";
 import { hasFeature, type SubscriptionView } from "../../lib/subscription";
+import { ProBadge } from "../app/pro-gate";
+import {
+	GoogleAddressAutocomplete,
+	type GoogleSelectedAddress,
+} from "../forms/google-address-autocomplete";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Skeleton } from "../ui/skeleton";
 import { SortableList } from "../ui/sortable-list";
 import { PickupLocationEditDialog } from "./pickup-location-edit-dialog";
 
+/** Owner-only business address (the radius-pricing origin) — mirrors the
+ * retailers.businessAddress payload field. */
+type BusinessAddress = {
+	label: string;
+	latitude: number;
+	longitude: number;
+	placeId?: string;
+};
+
 interface FulfilmentTabProps {
 	retailerId: Id<"retailers">;
 	offerSelfCollect: boolean;
 	offerDelivery: boolean;
+	/** Current delivery-charge config (undefined = free delivery). */
+	deliveryConfig: DeliveryConfig | undefined;
+	/** Business address — origin for distance-based pricing. */
+	businessAddress: BusinessAddress | undefined;
 	minFulfilmentNoticeDays: number | undefined;
+	/** Store-wide minimum order value (minor units, 86ey9unyx) — undefined =
+	 * no minimum. See convex/lib/minOrderRules.ts. */
+	minOrderValue: number | undefined;
 	/** Resolved subscription — drives the Pro-gated pickup-fee input in the
 	 * edit dialog (client mirror only; the server gate is the real lock). */
 	subscription: SubscriptionView | undefined;
@@ -115,7 +145,10 @@ export function FulfilmentTab({
 	retailerId,
 	offerSelfCollect,
 	offerDelivery,
+	deliveryConfig,
+	businessAddress,
 	minFulfilmentNoticeDays,
+	minOrderValue,
 	subscription,
 }: FulfilmentTabProps) {
 	const locations = useQuery(api.pickupLocations.listForRetailer, {
@@ -249,6 +282,7 @@ export function FulfilmentTab({
 	return (
 		<div className="flex flex-col gap-6 pt-2">
 			<MinNoticeCard initial={minFulfilmentNoticeDays} />
+			<MinOrderValueCard initial={minOrderValue} />
 
 			<Card>
 				<div className="flex items-start justify-between gap-4">
@@ -274,6 +308,17 @@ export function FulfilmentTab({
 						self-collect on) before switching to pickup-only.
 					</p>
 				) : null}
+
+				<div className="border-t border-border pt-4">
+					<DeliveryChargeSection
+						// Remount when the saved config/address change shape so local
+						// draft state re-seeds from the server truth after a save.
+						key={`${deliveryConfig?.mode ?? "free"}:${businessAddress?.label ?? ""}`}
+						config={deliveryConfig}
+						businessAddress={businessAddress}
+						canUseRadius={hasFeature(subscription, "radiusDelivery")}
+					/>
+				</div>
 			</Card>
 
 			<Card>
@@ -403,6 +448,479 @@ export function FulfilmentTab({
 	);
 }
 
+// --- Delivery charge (86extzdr8) --------------------------------------------
+
+type ChargeMode = "free" | "flat" | "radius";
+
+type BandDraft = { maxKm: string; fee: string };
+
+function bandsFromConfig(config: DeliveryConfig | undefined): BandDraft[] {
+	if (config?.mode !== "radius") return [{ maxKm: "5", fee: "" }];
+	return config.bands.map((b) => ({
+		maxKm: String(b.maxKm),
+		fee: (b.fee / 100).toFixed(2),
+	}));
+}
+
+/** Segmented mode button — same visual language as the pickup KindButton. */
+function ModeButton({
+	active,
+	disabled,
+	onClick,
+	title,
+	subtitle,
+	badge,
+}: {
+	active: boolean;
+	disabled?: boolean;
+	onClick: () => void;
+	title: string;
+	subtitle: string;
+	badge?: ReactNode;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			disabled={disabled}
+			aria-pressed={active}
+			className={`flex flex-col items-start gap-0.5 rounded-xl border-2 px-3 py-2.5 text-left transition-colors ${
+				active
+					? "border-accent bg-accent/5"
+					: "border-border bg-card hover:border-accent/40"
+			} ${disabled ? "cursor-not-allowed opacity-60" : ""}`}
+		>
+			<span
+				className={`flex items-center gap-1.5 text-sm font-semibold ${active ? "text-accent" : "text-foreground"}`}
+			>
+				{title}
+				{badge}
+			</span>
+			<span className="text-xs text-muted-foreground">{subtitle}</span>
+		</button>
+	);
+}
+
+/**
+ * Delivery-charge configuration (86extzdr8) — lives inside the Delivery card
+ * because it's pricing for that method (mirrors the fee input inside the
+ * pickup-point dialog). Three modes: Free (default, today's behaviour), a
+ * flat fee with optional free-above threshold (all-tier — a wrong total is a
+ * correctness bug, not an upsell), and distance bands from the business
+ * address (Pro). Distances are STRAIGHT-LINE — the copy says so, because a
+ * seller who bands by road distance will undercharge.
+ */
+function DeliveryChargeSection({
+	config,
+	businessAddress,
+	canUseRadius,
+}: {
+	config: DeliveryConfig | undefined;
+	businessAddress: BusinessAddress | undefined;
+	canUseRadius: boolean;
+}) {
+	const updateSettings = useMutation(api.retailers.updateSettings);
+	const [mode, setMode] = useState<ChargeMode>(config?.mode ?? "free");
+	// Flat-mode drafts (RM display strings; sen on the wire).
+	const [flatFee, setFlatFee] = useState(
+		config?.mode === "flat" ? (config.fee / 100).toFixed(2) : "",
+	);
+	const [freeAbove, setFreeAbove] = useState(
+		config?.mode === "flat" && config.freeAbove !== undefined
+			? (config.freeAbove / 100).toFixed(2)
+			: "",
+	);
+	// Radius-mode drafts.
+	const [bands, setBands] = useState<BandDraft[]>(() =>
+		bandsFromConfig(config),
+	);
+	const [outOfRange, setOutOfRange] = useState<"block" | "arrange">(
+		config?.mode === "radius" ? config.outOfRange : "arrange",
+	);
+	// Business address: the autocomplete pick replaces the stored one on save.
+	const [pickedAddress, setPickedAddress] =
+		useState<GoogleSelectedAddress | null>(null);
+	const [saving, setSaving] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+
+	// A downgraded seller sitting on a radius config can still view it and
+	// switch away (clearing is un-gated server-side) — they just can't edit it.
+	const radiusLocked = !canUseRadius;
+	const radiusEditable = mode === "radius" && canUseRadius;
+	const effectiveAddress = pickedAddress
+		? {
+				label: pickedAddress.formattedAddress,
+				latitude: pickedAddress.latitude,
+				longitude: pickedAddress.longitude,
+				placeId: pickedAddress.placeId,
+			}
+		: businessAddress;
+
+	async function save() {
+		setError(null);
+		let nextConfig: DeliveryConfig | null;
+		if (mode === "free") {
+			nextConfig = null;
+		} else if (mode === "flat") {
+			const rm = parsePriceInput(flatFee);
+			if (rm === null || rm <= 0) {
+				setError("Enter the flat delivery fee — numbers only, e.g. 8.00");
+				return;
+			}
+			let freeAboveSen: number | undefined;
+			if (freeAbove.trim().length > 0) {
+				const threshold = parsePriceInput(freeAbove);
+				if (threshold === null || threshold <= 0) {
+					setError("Free-delivery threshold isn't a valid amount");
+					return;
+				}
+				freeAboveSen = Math.round(threshold * 100);
+			}
+			nextConfig = {
+				mode: "flat",
+				fee: Math.round(rm * 100),
+				freeAbove: freeAboveSen,
+			};
+		} else {
+			if (!effectiveAddress) {
+				setError(
+					"Set your business address first — distances are measured from it.",
+				);
+				return;
+			}
+			const parsedBands = [];
+			for (const b of bands) {
+				const km = Number(b.maxKm);
+				const rm = parsePriceInput(b.fee.trim().length > 0 ? b.fee : "0");
+				if (!Number.isFinite(km) || km <= 0) {
+					setError("Each band needs a distance greater than 0 km");
+					return;
+				}
+				if (rm === null || rm < 0) {
+					setError("A band fee isn't a valid amount — numbers only, e.g. 5.00");
+					return;
+				}
+				parsedBands.push({ maxKm: km, fee: Math.round(rm * 100) });
+			}
+			nextConfig = { mode: "radius", bands: parsedBands, outOfRange };
+		}
+		setSaving(true);
+		try {
+			await updateSettings({
+				deliveryConfig: nextConfig,
+				// Only send the address when the seller picked a new one — an
+				// unchanged save must not touch (or clear) the stored address.
+				...(pickedAddress && effectiveAddress
+					? { businessAddress: effectiveAddress }
+					: {}),
+			});
+			toast.success(
+				mode === "free"
+					? "Delivery charge turned off — delivery is free."
+					: "Delivery charge saved.",
+			);
+			setPickedAddress(null);
+		} catch (err) {
+			setError(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	return (
+		<div className="flex flex-col gap-4">
+			<SectionHeading
+				title="Delivery charge"
+				description="What buyers pay for delivery, added to their order total at checkout. Pickup orders are never charged this."
+			/>
+			<div className="grid grid-cols-3 gap-2">
+				<ModeButton
+					active={mode === "free"}
+					onClick={() => setMode("free")}
+					title="Free"
+					subtitle="No charge"
+				/>
+				<ModeButton
+					active={mode === "flat"}
+					onClick={() => setMode("flat")}
+					title="Flat fee"
+					subtitle="Same fee every order"
+				/>
+				<ModeButton
+					active={mode === "radius"}
+					// A seller already ON radius keeps access to the tab so they can
+					// switch away; a locked seller can't switch INTO it.
+					disabled={radiusLocked && config?.mode !== "radius"}
+					onClick={() => setMode("radius")}
+					title="By distance"
+					subtitle="Radius bands"
+					badge={radiusLocked ? <ProBadge /> : undefined}
+				/>
+			</div>
+
+			{mode === "flat" ? (
+				<div className="flex flex-col gap-3">
+					<div className="flex flex-wrap items-end gap-3">
+						<div className="flex flex-col gap-1.5">
+							<label
+								htmlFor="flat-delivery-fee"
+								className="text-xs font-medium text-muted-foreground"
+							>
+								Delivery fee
+							</label>
+							<div className="relative">
+								<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
+									RM
+								</span>
+								<input
+									id="flat-delivery-fee"
+									type="text"
+									inputMode="decimal"
+									value={flatFee}
+									onChange={(e) => setFlatFee(e.target.value)}
+									onBlur={() => setFlatFee(normalizePriceInput(flatFee))}
+									placeholder="8.00"
+									className="h-11 w-32 rounded-lg border border-input bg-background pl-11 pr-3 text-sm"
+								/>
+							</div>
+						</div>
+						<div className="flex flex-col gap-1.5">
+							<label
+								htmlFor="free-above"
+								className="text-xs font-medium text-muted-foreground"
+							>
+								Free for orders above (optional)
+							</label>
+							<div className="relative">
+								<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
+									RM
+								</span>
+								<input
+									id="free-above"
+									type="text"
+									inputMode="decimal"
+									value={freeAbove}
+									onChange={(e) => setFreeAbove(e.target.value)}
+									onBlur={() => setFreeAbove(normalizePriceInput(freeAbove))}
+									placeholder="100.00"
+									className="h-11 w-40 rounded-lg border border-input bg-background pl-11 pr-3 text-sm"
+								/>
+							</div>
+						</div>
+					</div>
+					<p className="text-xs text-muted-foreground leading-relaxed">
+						Buyers see the fee in their checkout total. An order that reaches
+						the threshold exactly ships free.
+					</p>
+				</div>
+			) : null}
+
+			{mode === "radius" ? (
+				<div className="flex flex-col gap-4">
+					{radiusLocked ? (
+						<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+							Distance-based pricing is a Pro feature. Your saved bands still
+							apply to new orders — upgrade in Settings → Billing to change
+							them, or switch to Free / Flat fee (always allowed).
+						</p>
+					) : null}
+					<div className="flex flex-col gap-1.5">
+						<GoogleAddressAutocomplete
+							initialValue={businessAddress?.label ?? ""}
+							label="Business address (measure from)"
+							required
+							placeholder="Start typing your business address…"
+							description={
+								effectiveAddress
+									? "✓ Pinned — distances are measured from this point."
+									: "Pick a Google suggestion so we can measure distances from your place. Buyers never see this address."
+							}
+							onSelect={(payload) => setPickedAddress(payload)}
+							onTextChange={() => {
+								// Typing away from a pick invalidates it — the stored
+								// address (if any) remains until a new pick is saved.
+								setPickedAddress(null);
+							}}
+						/>
+						{businessAddress && !pickedAddress ? (
+							<p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+								<MapPin
+									className="size-3 shrink-0 text-accent"
+									aria-hidden="true"
+								/>
+								<span className="font-mono">
+									{businessAddress.latitude.toFixed(5)},{" "}
+									{businessAddress.longitude.toFixed(5)}
+								</span>
+							</p>
+						) : null}
+					</div>
+
+					<div className="flex flex-col gap-2">
+						<p className="text-xs font-medium text-muted-foreground">
+							Distance bands
+						</p>
+						{bands.map((band, i) => (
+							<div
+								// biome-ignore lint/suspicious/noArrayIndexKey: rows are positional drafts with no stable identity
+								key={i}
+								className="flex items-center gap-2"
+							>
+								<span className="text-xs text-muted-foreground">Up to</span>
+								<Input
+									type="number"
+									inputMode="decimal"
+									min={0.1}
+									step={0.1}
+									value={band.maxKm}
+									disabled={!radiusEditable}
+									onChange={(e) =>
+										setBands((prev) =>
+											prev.map((b, j) =>
+												j === i ? { ...b, maxKm: e.target.value } : b,
+											),
+										)
+									}
+									variant="field"
+									className="w-20"
+									aria-label={`Band ${i + 1} distance in km`}
+								/>
+								<span className="text-xs text-muted-foreground">km →</span>
+								<div className="relative">
+									<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
+										RM
+									</span>
+									<input
+										type="text"
+										inputMode="decimal"
+										value={band.fee}
+										disabled={!radiusEditable}
+										onChange={(e) =>
+											setBands((prev) =>
+												prev.map((b, j) =>
+													j === i ? { ...b, fee: e.target.value } : b,
+												),
+											)
+										}
+										onBlur={() =>
+											setBands((prev) =>
+												prev.map((b, j) =>
+													j === i
+														? { ...b, fee: normalizePriceInput(b.fee) }
+														: b,
+												),
+											)
+										}
+										placeholder="5.00"
+										aria-label={`Band ${i + 1} fee`}
+										className="h-11 w-28 rounded-lg border border-input bg-background pl-11 pr-3 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+									/>
+								</div>
+								{bands.length > 1 && radiusEditable ? (
+									<button
+										type="button"
+										onClick={() =>
+											setBands((prev) => prev.filter((_, j) => j !== i))
+										}
+										aria-label={`Remove band ${i + 1}`}
+										className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-muted"
+									>
+										<Trash2 className="size-4" />
+									</button>
+								) : null}
+							</div>
+						))}
+						{radiusEditable && bands.length < DELIVERY_BANDS_MAX ? (
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								className="h-10 gap-1.5 self-start"
+								onClick={() =>
+									setBands((prev) => [...prev, { maxKm: "", fee: "" }])
+								}
+							>
+								<Plus className="size-4" />
+								Add band
+							</Button>
+						) : null}
+						<p className="text-xs text-muted-foreground leading-relaxed">
+							Distances are straight-line (&ldquo;as the crow flies&rdquo;) from
+							your business address, not driving routes — pad your bands a
+							little to cover real roads. A band fee of RM0 means free within
+							that distance.
+						</p>
+					</div>
+
+					<fieldset className="flex flex-col gap-2">
+						<legend className="text-xs font-medium text-muted-foreground">
+							Beyond your last band
+						</legend>
+						<label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-border p-3">
+							<input
+								type="radio"
+								name="out-of-range"
+								checked={outOfRange === "arrange"}
+								disabled={!radiusEditable}
+								onChange={() => setOutOfRange("arrange")}
+								className="mt-0.5 size-4 shrink-0 accent-accent"
+							/>
+							<span className="flex flex-col gap-0.5">
+								<span className="text-sm font-medium">
+									Accept the order, arrange the charge on WhatsApp
+								</span>
+								<span className="text-xs text-muted-foreground">
+									The order comes in with the delivery charge pending — you
+									agree it with the buyer in chat, set it on the order, and the
+									payment request goes out with the final total.
+								</span>
+							</span>
+						</label>
+						<label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-border p-3">
+							<input
+								type="radio"
+								name="out-of-range"
+								checked={outOfRange === "block"}
+								disabled={!radiusEditable}
+								onChange={() => setOutOfRange("block")}
+								className="mt-0.5 size-4 shrink-0 accent-accent"
+							/>
+							<span className="flex flex-col gap-0.5">
+								<span className="text-sm font-medium">
+									Don&apos;t accept the order
+								</span>
+								<span className="text-xs text-muted-foreground">
+									Buyers outside your bands see &ldquo;outside the delivery
+									area&rdquo; and can&apos;t check out with delivery.
+								</span>
+							</span>
+						</label>
+					</fieldset>
+				</div>
+			) : null}
+
+			{error ? (
+				<p role="alert" className="text-sm text-destructive">
+					{error}
+				</p>
+			) : null}
+
+			<Button
+				type="button"
+				onClick={save}
+				disabled={
+					saving ||
+					(mode === "radius" && radiusLocked && config?.mode === "radius")
+				}
+				isLoading={saving}
+				className="h-11 self-start"
+			>
+				Save delivery charge
+			</Button>
+		</div>
+	);
+}
+
 /**
  * Order-date notice setting — how many days ahead a buyer's chosen fulfilment
  * date must be. Governs the storefront date picker's earliest selectable day
@@ -477,6 +995,91 @@ function MinNoticeCard({ initial }: { initial: number | undefined }) {
 			{value.trim().length > 0 && !valid ? (
 				<p className="text-xs text-destructive">
 					Enter a whole number between 0 and {MAX_NOTICE_DAYS}.
+				</p>
+			) : null}
+		</Card>
+	);
+}
+
+/**
+ * Store-wide minimum order value (86ey9unyx) — the item subtotal a storefront
+ * order must reach before checkout. Sits with the other order rules (next to
+ * the date-notice card). Counter checkout is exempt; orders with a custom /
+ * price-on-quote line are exempt (their value is settled by the seller's
+ * quote). Blank or 0 = no minimum.
+ */
+function MinOrderValueCard({ initial }: { initial: number | undefined }) {
+	const updateSettings = useMutation(api.retailers.updateSettings);
+	const effective = initial ?? 0;
+	const [value, setValue] = useState(
+		effective > 0 ? (effective / 100).toFixed(2) : "",
+	);
+	const [saving, setSaving] = useState(false);
+
+	const trimmed = value.trim();
+	const parsed = trimmed.length === 0 ? 0 : parsePriceInput(trimmed);
+	const sen = parsed === null ? null : Math.round(parsed * 100);
+	const valid = sen !== null && sen >= 0 && sen <= MIN_ORDER_VALUE_MAX;
+	const dirty = valid && sen !== effective;
+
+	async function save() {
+		if (!dirty || sen === null) return;
+		setSaving(true);
+		try {
+			await updateSettings({ minOrderValue: sen });
+			toast.success(
+				sen === 0
+					? "Minimum order value cleared."
+					: `Minimum order value set to ${formatPrice(sen, "MYR")}.`,
+			);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	return (
+		<Card>
+			<SectionHeading
+				title="Minimum order value"
+				description="Buyers must reach this subtotal (before delivery or pickup fees) to check out — the storefront shows them exactly how much more to add. Counter checkout and custom price-on-quote orders are never blocked. Leave blank for no minimum."
+			/>
+			<div className="flex items-end gap-3">
+				<div className="flex flex-col gap-1.5">
+					<label
+						htmlFor="min-order-value"
+						className="text-xs font-medium text-muted-foreground"
+					>
+						Minimum subtotal (RM)
+					</label>
+					<Input
+						id="min-order-value"
+						type="text"
+						inputMode="decimal"
+						placeholder="e.g. 100"
+						value={value}
+						onChange={(e) => setValue(e.target.value)}
+						onBlur={() => setValue(normalizePriceInput(value))}
+						variant="field"
+						isError={trimmed.length > 0 && !valid}
+						className="w-32"
+					/>
+				</div>
+				<Button
+					type="button"
+					onClick={save}
+					disabled={!dirty || saving}
+					isLoading={saving}
+					className="h-11"
+				>
+					Save
+				</Button>
+			</div>
+			{trimmed.length > 0 && !valid ? (
+				<p className="text-xs text-destructive">
+					Enter an amount up to {formatPrice(MIN_ORDER_VALUE_MAX, "MYR")}, or
+					leave blank for no minimum.
 				</p>
 			) : null}
 		</Card>

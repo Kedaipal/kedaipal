@@ -37,14 +37,16 @@ The adapter's `send(to, msg)` maps these to provider payloads. Provider quirks l
 
 `document` (added `86ey4fz3w`) sends a file attachment hosted at a public URL the provider fetches — used to push a receipt/invoice PDF to the buyer's WhatsApp from the counter Done screen. The WhatsApp adapter maps it to a `type: "document"` message with `{ link, filename?, caption? }` (`sendDocument` in `convex/lib/whatsapp.ts`). The caller (`orders.sendOrderDocumentToBuyer`) is responsible for hosting the file (Convex storage → `getUrl`) and reclaiming it after.
 
-### CTA degrade (formerly inline `canUseButton`)
+### CTA button URL resolution + degrade (`ctaButtonUrl`)
 
-A `cta` message renders as an interactive button only when **both** gates pass:
+`ctaButtonUrl(url)` returns the URL an interactive button should point at, or `null` to degrade to a plain image/text:
 
-1. `capabilities.ctaButtons` is true (the channel supports CTA buttons), **and**
-2. the URL is HTTPS — Meta rejects non-HTTPS CTA URLs, so in dev (`APP_URL=http://localhost`) the button degrades.
+1. `capabilities.ctaButtons` must be true (the channel supports CTA buttons), **and**
+2. **HTTPS** → passes through (Meta accepts it — the production path).
+3. **LOCAL `http://`** (localhost / loopback / `10.` / `192.168.` / `172.16–31.` / `[::1]`) → **dev affordance**: upgraded to `https://` so Meta renders the button. Meta rejects non-HTTPS CTA URLs and local dev runs `APP_URL=http://localhost`, so without this the button would never be visible while developing. The message *body* keeps the original `http` link (loads on the dev machine); the button's `https` URL won't resolve as-is, so the developer edits the scheme by hand when tapping. Scoped to local origins so a real **public** production domain can never be silently rewritten.
+4. any other **non-HTTPS** URL → `null` (degrade) — a misconfigured public `http://` prod URL stays safe.
 
-Both gates resolve in `canUseCtaButton`. When degraded, a `cta` falls back to an image-with-caption (if `imageUrl` is set) or plain text. Today's only `cta` caller (the order-confirm reply) always supplies `imageUrl`, so the production paths are exactly the old two: HTTPS→`sendCtaUrlWithImage`, non-HTTPS→`sendImage`.
+When degraded, a `cta` falls back to an image-with-caption (if `imageUrl` is set) or plain text. Today's only `cta` caller (the order-confirm reply) always supplies `imageUrl`, so the paths are: HTTPS (or local-http-upgraded)→`sendCtaUrlWithImage`, public-non-HTTPS→`sendImage`.
 
 ## Behavior fidelity
 

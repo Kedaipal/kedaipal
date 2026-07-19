@@ -42,6 +42,11 @@ export type RetailerEmailVars = {
 	// approved before it can be packed (and before the buyer is asked to pay).
 	// Surfaced on the newOrder / orderConfirmed alerts so the seller knows to act.
 	requiresMockup?: boolean;
+	// Delivery charge still to be confirmed by the seller (out-of-range
+	// "arrange" order, 86extzdr8) — surfaces an action line on the newOrder /
+	// orderConfirmed alerts so the seller knows the total isn't final and the
+	// buyer's payment ask is held until they set the charge.
+	deliveryFeePending?: boolean;
 	// Pre-formatted fulfilment date ("Sat, 28 Jun 2026"), set on the newOrder /
 	// orderConfirmed alerts when the buyer picked one. Lets the seller see "when
 	// they need it" without opening the dashboard.
@@ -147,6 +152,8 @@ const en = {
 		const subject = `🔔 New order ${v.shortId} · ${v.totalFormatted}`;
 		const mockupHtml = `⚠️ <strong>Custom item</strong> — send a mockup for the buyer to approve. Payment is held until they do.`;
 		const mockupText = `⚠️ Custom item — send a mockup for the buyer to approve. Payment is held until they do.`;
+		const feePendingHtml = `🚚 <strong>Delivery charge to confirm</strong> — this address is outside your bands. Set the charge on the order page; the buyer's payment ask is held until you do.`;
+		const feePendingText = `🚚 Delivery charge to confirm — this address is outside your bands. Set the charge on the order page; the buyer's payment ask is held until you do.`;
 		const lines = [
 			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} item(s) · ${escapeHtml(v.totalFormatted)}`,
 			`Customer: ${escapeHtml(v.customerName)}`,
@@ -156,23 +163,28 @@ const en = {
 				? [`📅 Needed by: <strong>${escapeHtml(v.fulfilmentDateLabel)}</strong>`]
 				: []),
 			...(v.requiresMockup ? [mockupHtml] : []),
+			...(v.deliveryFeePending ? [feePendingHtml] : []),
 			`Open your dashboard to manage this order.`,
 		];
 		const html = wrapHtml("🔔", `New order ${v.shortId}`, lines, v.dashboardUrl, "Open dashboard");
 		const dateText = v.fulfilmentDateLabel ? `\nNeeded by: ${v.fulfilmentDateLabel}` : "";
 		const text = `🔔 New order ${v.shortId}\n${v.itemCount} item(s) · ${v.totalFormatted}\nCustomer: ${v.customerName}\nMethod: ${methodLabel("en", v)}${pickupDetailLines("en", v, false)
 			.map((l) => `\n${l}`)
-			.join("")}${dateText}\n${v.requiresMockup ? `\n${mockupText}\n` : ""}\nOpen your dashboard to manage this order.\n${v.dashboardUrl}`;
+			.join("")}${dateText}\n${v.requiresMockup ? `\n${mockupText}\n` : ""}${v.deliveryFeePending ? `\n${feePendingText}\n` : ""}\nOpen your dashboard to manage this order.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	orderConfirmed: (v: RetailerEmailVars): RenderedEmail => {
 		const subject = `✅ Order ${v.shortId} confirmed · ${v.totalFormatted}`;
 		const nextStepsHtml = v.requiresMockup
 			? `⚠️ <strong>Custom item</strong> — send a mockup for the buyer to approve before packing. Payment is held until they approve.`
-			: `Ready for next steps — pack and ship when payment lands.`;
+			: v.deliveryFeePending
+				? `🚚 <strong>Delivery charge to confirm</strong> — this address is outside your bands. Set the charge on the order page; the buyer's payment ask is held until you do.`
+				: `Ready for next steps — pack and ship when payment lands.`;
 		const nextStepsText = v.requiresMockup
 			? `⚠️ Custom item — send a mockup for the buyer to approve before packing. Payment is held until they approve.`
-			: `Ready for next steps — pack and ship when payment lands.`;
+			: v.deliveryFeePending
+				? `🚚 Delivery charge to confirm — this address is outside your bands. Set the charge on the order page; the buyer's payment ask is held until you do.`
+				: `Ready for next steps — pack and ship when payment lands.`;
 		const lines = [
 			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} item(s) · ${escapeHtml(v.totalFormatted)}`,
 			`Customer: ${escapeHtml(v.customerName)}`,
@@ -266,6 +278,8 @@ const ms = {
 		const subject = `🔔 Pesanan baru ${v.shortId} · ${v.totalFormatted}`;
 		const mockupHtml = `⚠️ <strong>Item custom</strong> — hantar mockup untuk kelulusan pembeli. Bayaran ditahan sehingga mereka luluskan.`;
 		const mockupText = `⚠️ Item custom — hantar mockup untuk kelulusan pembeli. Bayaran ditahan sehingga mereka luluskan.`;
+		const feePendingHtml = `🚚 <strong>Caj penghantaran perlu disahkan</strong> — alamat ini di luar zon anda. Tetapkan caj pada halaman pesanan; permintaan bayaran pembeli ditahan sehingga anda berbuat demikian.`;
+		const feePendingText = `🚚 Caj penghantaran perlu disahkan — alamat ini di luar zon anda. Tetapkan caj pada halaman pesanan; permintaan bayaran pembeli ditahan sehingga anda berbuat demikian.`;
 		const lines = [
 			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} item · ${escapeHtml(v.totalFormatted)}`,
 			`Pelanggan: ${escapeHtml(v.customerName)}`,
@@ -275,23 +289,28 @@ const ms = {
 				? [`📅 Diperlukan menjelang: <strong>${escapeHtml(v.fulfilmentDateLabel)}</strong>`]
 				: []),
 			...(v.requiresMockup ? [mockupHtml] : []),
+			...(v.deliveryFeePending ? [feePendingHtml] : []),
 			`Buka dashboard anda untuk menguruskan pesanan ini.`,
 		];
 		const html = wrapHtml("🔔", `Pesanan baru ${v.shortId}`, lines, v.dashboardUrl, "Buka dashboard");
 		const dateText = v.fulfilmentDateLabel ? `\nDiperlukan menjelang: ${v.fulfilmentDateLabel}` : "";
 		const text = `🔔 Pesanan baru ${v.shortId}\n${v.itemCount} item · ${v.totalFormatted}\nPelanggan: ${v.customerName}\nKaedah: ${methodLabel("ms", v)}${pickupDetailLines("ms", v, false)
 			.map((l) => `\n${l}`)
-			.join("")}${dateText}\n${v.requiresMockup ? `\n${mockupText}\n` : ""}\nBuka dashboard anda untuk menguruskan pesanan ini.\n${v.dashboardUrl}`;
+			.join("")}${dateText}\n${v.requiresMockup ? `\n${mockupText}\n` : ""}${v.deliveryFeePending ? `\n${feePendingText}\n` : ""}\nBuka dashboard anda untuk menguruskan pesanan ini.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	orderConfirmed: (v: RetailerEmailVars): RenderedEmail => {
 		const subject = `✅ Pesanan ${v.shortId} disahkan · ${v.totalFormatted}`;
 		const nextStepsHtml = v.requiresMockup
 			? `⚠️ <strong>Item custom</strong> — hantar mockup untuk kelulusan pembeli sebelum membungkus. Bayaran ditahan sehingga mereka luluskan.`
-			: `Sedia untuk langkah seterusnya.`;
+			: v.deliveryFeePending
+				? `🚚 <strong>Caj penghantaran perlu disahkan</strong> — alamat ini di luar zon anda. Tetapkan caj pada halaman pesanan; permintaan bayaran pembeli ditahan sehingga anda berbuat demikian.`
+				: `Sedia untuk langkah seterusnya.`;
 		const nextStepsText = v.requiresMockup
 			? `⚠️ Item custom — hantar mockup untuk kelulusan pembeli sebelum membungkus. Bayaran ditahan sehingga mereka luluskan.`
-			: `Sedia untuk langkah seterusnya.`;
+			: v.deliveryFeePending
+				? `🚚 Caj penghantaran perlu disahkan — alamat ini di luar zon anda. Tetapkan caj pada halaman pesanan; permintaan bayaran pembeli ditahan sehingga anda berbuat demikian.`
+				: `Sedia untuk langkah seterusnya.`;
 		const lines = [
 			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} item · ${escapeHtml(v.totalFormatted)}`,
 			`Pelanggan: ${escapeHtml(v.customerName)}`,

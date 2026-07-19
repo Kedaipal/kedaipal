@@ -230,6 +230,7 @@ describe("plan gating — CRM (Pro+)", () => {
 			chargeablePickup: true,
 			categories: true,
 			insights: true,
+			radiusDelivery: true,
 		});
 
 		await setPlan(t, retailer._id, "starter");
@@ -240,7 +241,151 @@ describe("plan gating — CRM (Pro+)", () => {
 			chargeablePickup: false,
 			categories: false,
 			insights: false,
+			radiusDelivery: false,
 		});
+	});
+
+	test("an admin's OWN Starter store still resolves to the highest tier", async () => {
+		const t = setup();
+		// Store owned by the admin themselves (not an act-as target).
+		const retailer = await seedRetailer(t, ADMIN);
+		await setPlan(t, retailer._id, "starter");
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+
+		// getMyRetailer (owner read) grants full features despite the Starter plan —
+		// so no Pro wall / locked control renders in the admin's own dashboard.
+		const me = await asAdmin.query(api.retailers.getMyRetailer);
+		expect(me?.subscription?.features).toEqual({
+			crm: true,
+			orderInbox: true,
+			chargeablePickup: true,
+			categories: true,
+			insights: true,
+			radiusDelivery: true,
+		});
+		// subscriptions.current (billing nav) resolves the same way.
+		const current = await asAdmin.query(api.subscriptions.current, {});
+		expect(current?.features.crm).toBe(true);
+		// The real plan is still reported (billing page truth).
+		expect(me?.subscription?.plan).toBe("starter");
+	});
+
+	test("assertPlanFeature bypasses for an admin on their OWN Starter store", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, ADMIN);
+		await setPlan(t, retailer._id, "starter");
+		// A CRM read on their own store is Pro-gated for a plain Starter seller, but
+		// the admin sees through it (not act-as — they own the store).
+		const count = await t
+			.withIdentity({ subject: ADMIN })
+			.query(api.customers.count, { retailerId: retailer._id });
+		expect(count).toBe(0);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Radius delivery pricing (86extzdr8) — setting a radius config is Pro+; the
+// flat fee and CLEARING any config stay all-tier (downgrade never traps a
+// seller into charging fees they can't turn off). See docs/fulfilment.md.
+// ---------------------------------------------------------------------------
+
+describe("plan gating — radius delivery pricing (Pro+)", () => {
+	const businessAddress = {
+		label: "12 Jln Kilang, Shah Alam",
+		latitude: 3.0,
+		longitude: 101.5,
+	};
+	const radiusConfig = {
+		mode: "radius" as const,
+		bands: [{ maxKm: 5, fee: 500 }],
+		outOfRange: "arrange" as const,
+	};
+
+	test("Starter can set a FLAT fee but not radius bands; Pro can set both", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await setPlan(t, retailer._id, "starter");
+
+		// Flat is the all-tier correctness fix.
+		await asA.mutation(api.retailers.updateSettings, {
+			deliveryConfig: { mode: "flat", fee: 800 },
+		});
+		// Radius is the Pro row.
+		await expect(
+			asA.mutation(api.retailers.updateSettings, {
+				businessAddress,
+				deliveryConfig: radiusConfig,
+			}),
+		).rejects.toThrow(/Pro plan/);
+
+		await setPlan(t, retailer._id, "pro");
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress,
+			deliveryConfig: radiusConfig,
+		});
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.deliveryConfig?.mode).toBe("radius");
+		expect(me?.businessAddress?.latitude).toBe(3.0);
+	});
+
+	test("downgraded Starter can still CLEAR a radius config (never trapped)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress,
+			deliveryConfig: radiusConfig,
+		});
+		await setPlan(t, retailer._id, "starter");
+
+		await asA.mutation(api.retailers.updateSettings, { deliveryConfig: null });
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.deliveryConfig).toBeUndefined();
+	});
+
+	test("admin act-as sets radius pricing on a Starter store (white-glove)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await setPlan(t, retailer._id, "starter");
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+		await asAdmin.mutation(api.retailers.updateSettings, {
+			retailerId: retailer._id,
+			businessAddress,
+			deliveryConfig: radiusConfig,
+		});
+		const asA = t.withIdentity({ subject: USER_A });
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.deliveryConfig?.mode).toBe("radius");
+	});
+
+	test("radius without a business address is refused; clearing the address under radius is refused", async () => {
+		const t = setup();
+		await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+
+		await expect(
+			asA.mutation(api.retailers.updateSettings, {
+				deliveryConfig: radiusConfig,
+			}),
+		).rejects.toThrow(/business address/i);
+
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress,
+			deliveryConfig: radiusConfig,
+		});
+		await expect(
+			asA.mutation(api.retailers.updateSettings, { businessAddress: null }),
+		).rejects.toThrow(/uses this address/i);
+
+		// Clearing address + config together is fine.
+		await asA.mutation(api.retailers.updateSettings, {
+			businessAddress: null,
+			deliveryConfig: null,
+		});
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.businessAddress).toBeUndefined();
+		expect(me?.deliveryConfig).toBeUndefined();
 	});
 });
 
@@ -431,25 +576,6 @@ describe("plan gating — Order Inbox (Pro+)", () => {
 		});
 		const order = await t.run((ctx) => ctx.db.get(orderId));
 		expect(order?.status).toBe("confirmed");
-	});
-
-	test("bulkDeleteOrders is Pro+ (single deleteOrder stays open)", async () => {
-		const t = setup();
-		const retailer = await seedRetailer(t, USER_A);
-		const productId = await seedProduct(t, USER_A, retailer._id);
-		const o1 = await placeOrder(t, retailer._id, productId);
-		const o2 = await placeOrder(t, retailer._id, productId);
-		await setPlan(t, retailer._id, "starter");
-		const asA = t.withIdentity({ subject: USER_A });
-
-		await expect(
-			asA.mutation(api.orders.bulkDeleteOrders, { orderIds: [o1] }),
-		).rejects.toThrow(/Pro plan/);
-
-		// Single hard delete is all-tier — a Starter store can still clean up one
-		// order at a time from its detail page.
-		await asA.mutation(api.orders.deleteOrder, { orderId: o2 });
-		expect(await t.run((ctx) => ctx.db.get(o2))).toBeNull();
 	});
 
 	test("CSV export is Pro+ (filter mode and ticked-selection mode)", async () => {

@@ -26,6 +26,14 @@ export interface WaOrderMessageInput {
 	currency: string;
 	total: number;
 	pickupFee?: number;
+	/** Resolved delivery charge (minor units) — already baked into `total`.
+	 * Rendered as its own line when > 0. */
+	deliveryFee?: number;
+	/** True for an "arrange later" delivery order whose charge isn't set yet:
+	 * `total` excludes it, so the message flags the total as provisional
+	 * ("+ delivery") and adds a "confirmed by seller" caveat. Mirrors the
+	 * checkout-time behaviour the delivery-charge feature shipped. */
+	deliveryFeePending?: boolean;
 	deliveryMethod?: "delivery" | "self_collect";
 	deliveryAddress?: {
 		line1: string;
@@ -85,11 +93,25 @@ export function buildOrderWaMessage(order: WaOrderMessageInput): string {
 		);
 	}
 	lines.push("");
-	// `total` is the server-computed order total (subtotal + pickup fee), so the
-	// message always matches what the tracking page and receipt show.
+	// `total` is the server-computed order total (subtotal + pickup fee + any
+	// resolved delivery charge), so the message always matches what the tracking
+	// page and receipt show. An "arrange later" delivery order has no charge
+	// baked in yet (deliveryFeePending) — flag the total as provisional so the
+	// buyer isn't misled into thinking it's final.
 	if (order.pickupFee && order.pickupFee > 0)
 		lines.push(`Pickup fee: ${formatPrice(order.pickupFee, order.currency)}`);
-	lines.push(`Total: ${formatPrice(order.total, order.currency)}`);
+	if (order.deliveryFee && order.deliveryFee > 0)
+		lines.push(
+			`Delivery fee: ${formatPrice(order.deliveryFee, order.currency)}`,
+		);
+	const deliveryFeePending = order.deliveryFeePending === true;
+	lines.push(
+		`Total: ${formatPrice(order.total, order.currency)}${
+			deliveryFeePending ? " + delivery" : ""
+		}`,
+	);
+	if (deliveryFeePending)
+		lines.push("(Delivery charge to be confirmed by seller)");
 	if (hasQuoteItem) lines.push("(Custom item price to be confirmed by seller)");
 	const method = order.deliveryMethod ?? "delivery";
 	if (method === "self_collect") {

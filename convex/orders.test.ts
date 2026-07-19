@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { todayMytMidnight } from "./lib/fulfilmentDate";
+import { sortInboxOrders } from "./lib/orderInboxFilter";
 import schema from "./schema";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -2919,6 +2920,80 @@ describe("orders — inbox search", () => {
 		expect(byId.orders.map((o) => o._id)).toContain(o1._id);
 	});
 
+	test("omitting limit returns the full window; limit trims rows but keeps total/counts (stable-window pagination)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 100 });
+		const asA = t.withIdentity({ subject: USER_A });
+
+		for (let i = 0; i < 5; i++) {
+			await mkOrder(t, retailer._id, productId, { name: `Cust ${i}` });
+		}
+
+		// No limit → the whole filtered window comes back (the inbox slices it
+		// client-side, so "Load more" never re-queries).
+		const full = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		expect(full.orders).toHaveLength(5);
+		expect(full.total).toBe(5);
+		expect(full.capped).toBe(false);
+
+		// limit trims the returned rows (the Home counts-only path) WITHOUT
+		// distorting total or the bucket counts — those stay over the full set.
+		const trimmed = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			limit: 1,
+		});
+		expect(trimmed.orders).toHaveLength(1);
+		expect(trimmed.total).toBe(5);
+		expect(trimmed.counts.new).toBe(5);
+		// Same first row as the full window — a limit is a prefix of the window,
+		// so the client's slice and the server's trim agree on ordering.
+		expect(trimmed.orders[0]?._id).toBe(full.orders[0]?._id);
+	});
+
+	test("returns newest-created first regardless of fulfilment date (recency default; sort is client-side)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 100 });
+		const asA = t.withIdentity({ subject: USER_A });
+
+		// A is due sooner but created FIRST; B is due far out but created LAST.
+		const { shortId: sA } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Sooner-but-older" },
+			deliveryAddress: validAddress,
+			fulfilmentDate: todayMytMidnight(),
+		});
+		const { shortId: sB } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Later-but-newer" },
+			deliveryAddress: validAddress,
+			fulfilmentDate: todayMytMidnight() + 20 * DAY_MS,
+		});
+		const oA = await t.query(api.orders.get, { token: await tk(t, sA) });
+		const oB = await t.query(api.orders.get, { token: await tk(t, sB) });
+		if (!oA || !oB) throw new Error("no order");
+
+		// The query returns the raw newest-first window — the "Due date" re-order
+		// happens client-side (sortInboxOrders), so the server puts B (newest) on
+		// top even though A is due sooner.
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		expect(res.orders.map((o) => o._id)).toEqual([oB._id, oA._id]);
+	});
+
 	test("counts.dueToday tracks open orders due today; unpaid excludes received", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
@@ -3258,6 +3333,18 @@ describe("orders — bulk status", () => {
 });
 
 describe("orders — hard delete", () => {
+	// Hard delete is admin-only now (ClickUp 86eyaqzpd): every erase below runs
+	// through an admin act-as session. A plain owner is rejected — see the
+	// dedicated Forbidden test at the end of the block.
+	const ADMIN = "user_admin_hd";
+	let prevAdmin: string | undefined;
+	beforeAll(() => {
+		prevAdmin = process.env.ADMIN_USER_IDS;
+		process.env.ADMIN_USER_IDS = ADMIN;
+	});
+	afterAll(() => {
+		process.env.ADMIN_USER_IDS = prevAdmin;
+	});
 	/** Sum the retailer's monthly usage counter (orders across all months). */
 	async function usageOrders(
 		t: ReturnType<typeof setup>,
@@ -3332,7 +3419,7 @@ describe("orders — hard delete", () => {
 		expect(await eventCount(t, order!._id)).toBe(1);
 
 		await t
-			.withIdentity({ subject: USER_A })
+			.withIdentity({ subject: ADMIN })
 			.mutation(api.orders.deleteOrder, { orderId: order!._id });
 
 		// Order + timeline gone; stock, customer aggregates and usage all reversed.
@@ -3372,7 +3459,10 @@ describe("orders — hard delete", () => {
 		});
 		expect(await usageOrders(t, retailer._id)).toBe(0);
 
-		await asA.mutation(api.orders.deleteOrder, { orderId: order!._id });
+		// The cancel above is the seller's own; the erase must be an admin act-as.
+		await t
+			.withIdentity({ subject: ADMIN })
+			.mutation(api.orders.deleteOrder, { orderId: order!._id });
 
 		// No second reversal — stock stays at 10 (not 14), counters stay floored.
 		expect(await t.run((ctx) => ctx.db.get(order!._id))).toBeNull();
@@ -3413,7 +3503,7 @@ describe("orders — hard delete", () => {
 		expect(await storageCount(t)).toBe(before + 3);
 
 		await t
-			.withIdentity({ subject: USER_A })
+			.withIdentity({ subject: ADMIN })
 			.mutation(api.orders.deleteOrder, { orderId: order!._id });
 
 		// All three blobs reclaimed (m0 deleted once despite living in both fields).
@@ -3448,7 +3538,7 @@ describe("orders — hard delete", () => {
 		);
 
 		await t
-			.withIdentity({ subject: USER_A })
+			.withIdentity({ subject: ADMIN })
 			.mutation(api.orders.deleteOrder, { orderId: order!._id });
 
 		const session = await t.run((ctx) => ctx.db.get(sessionId));
@@ -3456,7 +3546,7 @@ describe("orders — hard delete", () => {
 		expect(session?.orderId).toBeUndefined();
 	});
 
-	test("is owner-only — a foreign store can't delete the order", async () => {
+	test("is admin-only — neither the store owner nor a foreign store can delete", async () => {
 		const t = setup();
 		const retailerA = await seedRetailer(t, USER_A);
 		await seedRetailer(t, USER_B);
@@ -3470,12 +3560,20 @@ describe("orders — hard delete", () => {
 			deliveryAddress: validAddress,
 		});
 		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		// The store OWNER (USER_A) is now rejected too — permanent erasure is
+		// admin-only. This is the core restriction from ClickUp 86eyaqzpd.
+		await expect(
+			t
+				.withIdentity({ subject: USER_A })
+				.mutation(api.orders.deleteOrder, { orderId: order!._id }),
+		).rejects.toThrow(/forbidden/i);
+		// A foreign store is rejected as well (was the only guard before).
 		await expect(
 			t
 				.withIdentity({ subject: USER_B })
 				.mutation(api.orders.deleteOrder, { orderId: order!._id }),
 		).rejects.toThrow(/forbidden/i);
-		// Untouched.
+		// Untouched by either failed attempt.
 		expect(await t.run((ctx) => ctx.db.get(order!._id))).not.toBeNull();
 	});
 });
@@ -3526,6 +3624,18 @@ describe("orders — hard delete (admin act-as)", () => {
 });
 
 describe("orders — bulk hard delete", () => {
+	// Bulk erase is admin-only (ClickUp 86eyaqzpd), same as the single delete —
+	// no longer plan-gated. Batches run through an admin act-as session; a plain
+	// owner is rejected (see the Forbidden test below).
+	const ADMIN = "user_admin_bd";
+	let prevAdmin: string | undefined;
+	beforeAll(() => {
+		prevAdmin = process.env.ADMIN_USER_IDS;
+		process.env.ADMIN_USER_IDS = ADMIN;
+	});
+	afterAll(() => {
+		process.env.ADMIN_USER_IDS = prevAdmin;
+	});
 	async function mk(
 		t: ReturnType<typeof setup>,
 		retailerId: Id<"retailers">,
@@ -3543,7 +3653,7 @@ describe("orders — bulk hard delete", () => {
 		return order!._id;
 	}
 
-	test("deletes every owned order in the batch", async () => {
+	test("an admin deletes every order in the batch", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 100 });
@@ -3553,7 +3663,7 @@ describe("orders — bulk hard delete", () => {
 			await mk(t, retailer._id, productId),
 		];
 		const res = await t
-			.withIdentity({ subject: USER_A })
+			.withIdentity({ subject: ADMIN })
 			.mutation(api.orders.bulkDeleteOrders, { orderIds: ids });
 		expect(res).toEqual({ deleted: 3 });
 		for (const id of ids) {
@@ -3561,19 +3671,23 @@ describe("orders — bulk hard delete", () => {
 		}
 	});
 
-	test("rejects the whole batch if any order isn't the caller's", async () => {
+	test("a plain owner cannot bulk delete — Forbidden, orders untouched", async () => {
 		const t = setup();
-		const retailerA = await seedRetailer(t, USER_A);
-		const retailerB = await seedRetailer(t, USER_B);
-		const productA = await seedProduct(t, USER_A, retailerA._id, { stock: 100 });
-		const productB = await seedProduct(t, USER_B, retailerB._id, { stock: 100 });
-		const mine = await mk(t, retailerA._id, productA);
-		const theirs = await mk(t, retailerB._id, productB);
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 100 });
+		const ids = [
+			await mk(t, retailer._id, productId),
+			await mk(t, retailer._id, productId),
+		];
+		// The owner is rejected even on their OWN orders — erase is admin-only.
 		await expect(
 			t
 				.withIdentity({ subject: USER_A })
-				.mutation(api.orders.bulkDeleteOrders, { orderIds: [mine, theirs] }),
+				.mutation(api.orders.bulkDeleteOrders, { orderIds: ids }),
 		).rejects.toThrow(/forbidden/i);
+		for (const id of ids) {
+			expect(await t.run((ctx) => ctx.db.get(id))).not.toBeNull();
+		}
 	});
 
 	test("rejects a batch over the 100 cap", async () => {
@@ -3582,10 +3696,84 @@ describe("orders — bulk hard delete", () => {
 		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 100 });
 		const id = await mk(t, retailer._id, productId);
 		await expect(
-			t.withIdentity({ subject: USER_A }).mutation(api.orders.bulkDeleteOrders, {
+			t.withIdentity({ subject: ADMIN }).mutation(api.orders.bulkDeleteOrders, {
 				orderIds: Array.from({ length: 101 }, () => id),
 			}),
 		).rejects.toThrow(/max 100/i);
+	});
+});
+
+describe("orders — hard delete (admin owns the store)", () => {
+	// Guards on admin MEMBERSHIP (`isAdmin`), not `actingAsAdmin`, so an admin can
+	// erase orders in ANY store — including one they personally own. That path
+	// resolves via requireRetailerAccess's OWNER branch (actingAsAdmin:false), so
+	// the earlier `!access.actingAsAdmin` guard wrongly rejected it (the PR-review
+	// edge for ClickUp 86eyaqzpd). Making USER_A both the store owner AND the sole
+	// admin exercises exactly that branch.
+	let prevAdmin: string | undefined;
+	beforeAll(() => {
+		prevAdmin = process.env.ADMIN_USER_IDS;
+		process.env.ADMIN_USER_IDS = USER_A;
+	});
+	afterAll(() => {
+		process.env.ADMIN_USER_IDS = prevAdmin;
+	});
+
+	async function mk(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+	): Promise<Id<"orders">> {
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		return order!._id;
+	}
+
+	test("an admin can hard-delete an order in a store they own", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 10 });
+		const orderId = await mk(t, retailer._id, productId);
+
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orders.deleteOrder, { orderId });
+		expect(await t.run((ctx) => ctx.db.get(orderId))).toBeNull();
+
+		// NOT audited: erasing your own store's order is an owner write
+		// (actingAsAdmin:false), and the audit log traces cross-store white-glove
+		// writes only — logAdminAction no-ops here by design.
+		const audit = await t.run((ctx) =>
+			ctx.db
+				.query("adminAuditLog")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.collect(),
+		);
+		expect(audit).toHaveLength(0);
+	});
+
+	test("an admin can bulk hard-delete orders in a store they own", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 100 });
+		const ids = [
+			await mk(t, retailer._id, productId),
+			await mk(t, retailer._id, productId),
+		];
+		const res = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orders.bulkDeleteOrders, { orderIds: ids });
+		expect(res).toEqual({ deleted: 2 });
+		for (const id of ids) {
+			expect(await t.run((ctx) => ctx.db.get(id))).toBeNull();
+		}
 	});
 });
 
@@ -3943,7 +4131,7 @@ describe("fulfilment date", () => {
 		).rejects.toThrow(/between 0 and 30/);
 	});
 
-	test("inbox sorts by fulfilment date ascending, dateless orders last", async () => {
+	test("query returns newest-first; the 'Due date' client sort orders by fulfilment date ascending, dateless last", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const asA = t.withIdentity({ subject: USER_A });
@@ -3958,7 +4146,7 @@ describe("fulfilment date", () => {
 				deliveryAddress: validAddress,
 				fulfilmentDate,
 			});
-		// Insert out of date order: far, then dateless, then soon.
+		// Insert order: far, then dateless, then soon (soon is newest-created).
 		await mk(todayMytMidnight() + 5 * DAY_MS);
 		await mk(undefined);
 		await mk(todayMytMidnight() + 2 * DAY_MS);
@@ -3967,8 +4155,16 @@ describe("fulfilment date", () => {
 			retailerId: retailer._id,
 			bucket: "all",
 		});
-		const dates = res.orders.map((o) => o.fulfilmentDate);
-		expect(dates).toEqual([
+		// Server default = newest-created first (the "Newest" sort).
+		expect(res.orders.map((o) => o.fulfilmentDate)).toEqual([
+			todayMytMidnight() + 2 * DAY_MS,
+			undefined,
+			todayMytMidnight() + 5 * DAY_MS,
+		]);
+		// The inbox's "Due date" toggle re-orders that same window client-side.
+		expect(
+			sortInboxOrders(res.orders, "due").map((o) => o.fulfilmentDate),
+		).toEqual([
 			todayMytMidnight() + 2 * DAY_MS,
 			todayMytMidnight() + 5 * DAY_MS,
 			undefined,
@@ -4019,11 +4215,12 @@ describe("fulfilment date", () => {
 			bucket: "all",
 			fulfilmentWindow: "this_week",
 		});
-		// All three are within the next 7 days, returned soonest-first.
+		// All three are within the next 7 days. The query returns newest-created
+		// first (the default sort); due-date ordering is the client toggle's job.
 		expect(weekRes.orders.map((o) => o.fulfilmentDate)).toEqual([
-			today,
-			today + 1 * DAY_MS,
 			today + 5 * DAY_MS,
+			today + 1 * DAY_MS,
+			today,
 		]);
 	});
 });
@@ -4307,5 +4504,593 @@ describe("orders — pickup fee", () => {
 		});
 		order = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(order?.total).toBe(5000 + 15000 + 500);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Delivery charge (86extzdr8) — flat / radius-band pricing resolved
+// server-side at create, frozen onto deliverySnapshot/deliveryFee, and — for
+// out-of-range "arrange" orders — the deliveryFeePending payment hold released
+// by setDeliveryFee. See convex/lib/delivery.ts + docs/fulfilment.md.
+// ---------------------------------------------------------------------------
+
+describe("orders — delivery charge", () => {
+	// ~1 deg latitude = 111.19 km (R=6371) → build buyer points by km offset.
+	const KM_PER_DEG_LAT = (6371 * Math.PI) / 180;
+	const ORIGIN = { latitude: 3.0, longitude: 101.5 };
+	const businessAddress = { label: "12 Jln Kilang, Shah Alam", ...ORIGIN };
+	function addressAtKm(km: number) {
+		return {
+			...validAddress,
+			latitude: 3.0 + km / KM_PER_DEG_LAT,
+			longitude: 101.5,
+		};
+	}
+
+	async function seedDeliveryRetailer(
+		t: ReturnType<typeof setup>,
+		config:
+			| { mode: "flat"; fee: number; freeAbove?: number }
+			| {
+					mode: "radius";
+					bands: Array<{ maxKm: number; fee: number }>;
+					outOfRange: "block" | "arrange";
+			  },
+	) {
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.retailers.updateSettings, {
+			...(config.mode === "radius" ? { businessAddress } : {}),
+			deliveryConfig: config,
+		});
+		return retailer;
+	}
+
+	const RADIUS_ARRANGE = {
+		mode: "radius" as const,
+		bands: [
+			{ maxKm: 5, fee: 500 },
+			{ maxKm: 15, fee: 1500 },
+		],
+		outOfRange: "arrange" as const,
+	};
+
+	test("flat fee folds into the total; the create result echoes it for the wa.me message", async () => {
+		const t = setup();
+		const retailer = await seedDeliveryRetailer(t, { mode: "flat", fee: 800 });
+		const productId = await seedProduct(t, USER_A, retailer._id); // RM120
+
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: validAddress,
+		});
+		expect(created.deliveryFee).toBe(800);
+		expect(created.deliveryFeePending).toBeUndefined();
+
+		const order = await t.query(api.orders.get, {
+			token: await tk(t, created.shortId),
+		});
+		expect(order?.subtotal).toBe(12000);
+		expect(order?.deliveryFee).toBe(800);
+		expect(order?.total).toBe(12800);
+		// Snapshot lives on the authenticated seller read (buyer path strips it).
+		const sellerOrder = await t
+			.withIdentity({ subject: USER_A })
+			.query(api.orders.get, { shortId: created.shortId });
+		expect(sellerOrder?.deliverySnapshot).toEqual({ fee: 800, mode: "flat" });
+	});
+
+	test("flat free-above threshold: at/over the threshold ships free (boundary inclusive)", async () => {
+		const t = setup();
+		const retailer = await seedDeliveryRetailer(t, {
+			mode: "flat",
+			fee: 800,
+			freeAbove: 24000,
+		});
+		const productId = await seedProduct(t, USER_A, retailer._id); // RM120/unit
+
+		// 1 unit (RM120) < RM240 → charged.
+		const charged = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: validAddress,
+		});
+		expect(charged.deliveryFee).toBe(800);
+
+		// 2 units (RM240) == threshold → free.
+		const free = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 2 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: validAddress,
+		});
+		expect(free.deliveryFee).toBeUndefined();
+		const order = await t.query(api.orders.get, {
+			token: await tk(t, free.shortId),
+		});
+		expect(order?.deliverySnapshot).toBeUndefined();
+		expect(order?.total).toBe(order?.subtotal);
+	});
+
+	test("a config never charges pickup orders — self_collect stays fee-free", async () => {
+		const t = setup();
+		const retailer = await seedDeliveryRetailer(t, { mode: "flat", fee: 800 });
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.retailers.updateSettings, {
+			offerSelfCollect: true,
+		});
+		const { pickupLocationId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Store",
+				address: "12 Jln Tun Razak, KL",
+			},
+		);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			pickupLocationId,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(order?.deliveryFee).toBeUndefined();
+		expect(order?.total).toBe(order?.subtotal);
+	});
+
+	test("radius: distance picks the band; the SELLER path audits distance + band, the BUYER path can't (anti-trilateration)", async () => {
+		const t = setup();
+		const retailer = await seedDeliveryRetailer(t, RADIUS_ARRANGE);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: addressAtKm(11),
+		});
+		expect(created.deliveryFee).toBe(1500);
+
+		// Seller (authenticated shortId) — full snapshot incl. the km audit.
+		const sellerOrder = await t
+			.withIdentity({ subject: USER_A })
+			.query(api.orders.get, { shortId: created.shortId });
+		expect(sellerOrder?.deliverySnapshot?.mode).toBe("radius");
+		expect(sellerOrder?.deliverySnapshot?.bandMaxKm).toBe(15);
+		expect(sellerOrder?.deliverySnapshot?.distanceKm).toBeCloseTo(11, 0);
+		expect(sellerOrder?.total).toBe(12000 + 1500);
+
+		// Buyer (token) — the fee mirror is exposed, but the geo-audit snapshot is
+		// stripped so ≥3 chosen-address orders can't trilaterate the seller's home.
+		const buyerOrder = await t.query(api.orders.get, {
+			token: await tk(t, created.shortId),
+		});
+		expect(buyerOrder?.deliveryFee).toBe(1500);
+		expect(buyerOrder?.total).toBe(12000 + 1500);
+		expect(buyerOrder?.deliverySnapshot).toBeUndefined();
+	});
+
+	test("radius 'block': an out-of-range (or coordinate-less) address refuses checkout", async () => {
+		const t = setup();
+		const retailer = await seedDeliveryRetailer(t, {
+			...RADIUS_ARRANGE,
+			outOfRange: "block",
+		});
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const base = {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp" as const,
+			customer,
+			deliveryMethod: "delivery" as const,
+		};
+		await expect(
+			t.mutation(api.orders.create, {
+				...base,
+				deliveryAddress: addressAtKm(50),
+			}),
+		).rejects.toThrow(/outside this store's delivery area/);
+		await expect(
+			t.mutation(api.orders.create, { ...base, deliveryAddress: validAddress }),
+		).rejects.toThrow(/Pick your address/);
+	});
+
+	test("radius 'arrange': out-of-range order lands fee-pending — payment held until setDeliveryFee", async () => {
+		const t = setup();
+		const retailer = await seedDeliveryRetailer(t, RADIUS_ARRANGE);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: addressAtKm(50),
+		});
+		expect(created.deliveryFeePending).toBe(true);
+		expect(created.deliveryFee).toBeUndefined();
+		const token = await tk(t, created.shortId);
+		let order = await t.query(api.orders.get, { token });
+		expect(order?.deliveryFeePending).toBe(true);
+		expect(order?.total).toBe(12000); // fee not yet applied
+
+		// Both payment paths are held while the total isn't final.
+		await expect(
+			t.mutation(api.orders.claimPayment, { token }),
+		).rejects.toThrow(/confirming your delivery charge/);
+		const asUser = t.withIdentity({ subject: USER_A });
+		await expect(
+			asUser.mutation(api.orders.markPaymentReceived, {
+				orderId: order!._id,
+			}),
+		).rejects.toThrow(/Set the delivery charge first/);
+
+		// Seller sets the agreed charge → snapshot manual, total final, holds open.
+		await asUser.mutation(api.orders.setDeliveryFee, {
+			orderId: order!._id,
+			fee: 2500,
+		});
+		order = await t.query(api.orders.get, { token });
+		expect(order?.deliveryFeePending).toBeUndefined();
+		expect(order?.deliveryFee).toBe(2500);
+		expect(order?.total).toBe(14500);
+		// Snapshot (mode "manual") is on the seller read; the buyer path strips it.
+		const sellerOrder = await asUser.query(api.orders.get, {
+			shortId: created.shortId,
+		});
+		expect(sellerOrder?.deliverySnapshot).toEqual({ fee: 2500, mode: "manual" });
+		await t.mutation(api.orders.claimPayment, { token });
+		order = await t.query(api.orders.get, { token });
+		expect(order?.paymentStatus).toBe("claimed");
+	});
+
+	test("setDeliveryFee(0) resolves a pending charge as free; locked once payment is in motion", async () => {
+		const t = setup();
+		const retailer = await seedDeliveryRetailer(t, RADIUS_ARRANGE);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: addressAtKm(50),
+		});
+		const token = await tk(t, created.shortId);
+		const orderId = (await t.query(api.orders.get, { token }))!._id;
+		const asUser = t.withIdentity({ subject: USER_A });
+
+		await asUser.mutation(api.orders.setDeliveryFee, { orderId, fee: 0 });
+		let order = await t.query(api.orders.get, { token });
+		expect(order?.deliveryFeePending).toBeUndefined();
+		expect(order?.deliveryFee).toBeUndefined();
+		expect(order?.total).toBe(12000);
+
+		// Buyer claims → the charge is frozen against further edits.
+		await t.mutation(api.orders.claimPayment, { token });
+		await expect(
+			asUser.mutation(api.orders.setDeliveryFee, { orderId, fee: 900 }),
+		).rejects.toThrow(/already in motion/);
+		order = await t.query(api.orders.get, { token });
+		expect(order?.total).toBe(12000);
+	});
+
+	test("editing the address re-prices: band change moves the fee, out-of-range flips to pending", async () => {
+		const t = setup();
+		const retailer = await seedDeliveryRetailer(t, RADIUS_ARRANGE);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: addressAtKm(3),
+		});
+		expect(created.deliveryFee).toBe(500);
+		const token = await tk(t, created.shortId);
+
+		// Move to the outer band → the fee follows the address.
+		await t.mutation(api.orders.updateDeliveryAddress, {
+			token,
+			deliveryAddress: addressAtKm(11),
+		});
+		let order = await t.query(api.orders.get, { token });
+		expect(order?.deliveryFee).toBe(1500);
+		expect(order?.total).toBe(13500);
+
+		// Move out of range on an "arrange" store → back to fee-pending.
+		await t.mutation(api.orders.updateDeliveryAddress, {
+			token,
+			deliveryAddress: addressAtKm(50),
+		});
+		order = await t.query(api.orders.get, { token });
+		expect(order?.deliveryFee).toBeUndefined();
+		expect(order?.deliveryFeePending).toBe(true);
+		expect(order?.total).toBe(12000);
+	});
+
+	test("delivery fee and mockup quote are independent extras — re-pricing keeps both", async () => {
+		const t = setup();
+		const retailer = await seedDeliveryRetailer(t, { mode: "flat", fee: 800 });
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			price: 5000,
+			requiresProof: true,
+			blockWhenOutOfStock: false,
+		});
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: validAddress,
+		});
+		const token = await tk(t, created.shortId);
+		const orderId = (await t.query(api.orders.get, { token }))!._id;
+		const asUser = t.withIdentity({ subject: USER_A });
+		await asUser.mutation(api.orders.submitMockup, {
+			orderId,
+			storageId: "mock-delivery-1",
+			quotedAmount: 12000,
+		});
+		const order = await t.query(api.orders.get, { token });
+		expect(order?.total).toBe(5000 + 12000 + 800);
+	});
+
+	test("setDeliveryFee is refused for pickup orders and non-owners", async () => {
+		const t = setup();
+		const retailer = await seedDeliveryRetailer(t, RADIUS_ARRANGE);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: addressAtKm(50),
+		});
+		const orderId = (await t.query(api.orders.get, {
+			token: await tk(t, created.shortId),
+		}))!._id;
+		await expect(
+			t
+				.withIdentity({ subject: USER_B })
+				.mutation(api.orders.setDeliveryFee, { orderId, fee: 100 }),
+		).rejects.toThrow(/Forbidden/);
+		await expect(
+			t.withIdentity({ subject: USER_A }).mutation(api.orders.setDeliveryFee, {
+				orderId,
+				fee: 100.5,
+			}),
+		).rejects.toThrow(/whole/);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Minimum order rules (86ey9unyx) — per-product min quantity + store min value.
+// Storefront-only: orders.create enforces both; counter checkout is exempt
+// (asserted in counterCheckout.test.ts). Pure rule logic is covered in
+// convex/lib/minOrderRules.test.ts — these tests pin the create-time wiring.
+// ---------------------------------------------------------------------------
+describe("minimum order rules", () => {
+	/** Seed a two-flavour product with a product-level minimum of 20. */
+	async function seedMinProduct(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+	) {
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(api.products.create, {
+			retailerId,
+			name: "Kuih Tray",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			minQuantity: 20,
+			options: [{ name: "Flavour", values: ["Pandan", "Ondeh"] }],
+			variants: [
+				{ optionValues: ["Pandan"], price: 500, onHand: 0 },
+				{ optionValues: ["Ondeh"], price: 500, onHand: 0 },
+			],
+		});
+		const variantIds = await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", productId))
+				.collect();
+			rows.sort((a, b) => a.sortOrder - b.sortOrder);
+			return rows.map((r) => r._id);
+		});
+		return { productId, variantIds };
+	}
+
+	test("create rejects an order below a product's minimum quantity", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const { variantIds } = await seedMinProduct(t, retailer._id);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ variantId: variantIds[0], quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+			}),
+		).rejects.toThrow(/Minimum 20 × Kuih Tray per order — you have 1/);
+	});
+
+	test("variants of the same product sum toward the minimum", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const { variantIds } = await seedMinProduct(t, retailer._id);
+		// 12 + 8 across two flavours = 20 → passes.
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [
+				{ variantId: variantIds[0], quantity: 12 },
+				{ variantId: variantIds[1], quantity: 8 },
+			],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		expect(shortId).toMatch(/^ORD-/);
+		// 12 + 7 = 19 → still short.
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [
+					{ variantId: variantIds[0], quantity: 12 },
+					{ variantId: variantIds[1], quantity: 7 },
+				],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+			}),
+		).rejects.toThrow(/you have 19/);
+	});
+
+	test("products.create/update normalize a minimum of 0/1 to unset", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await asA.mutation(api.products.update, { productId, minQuantity: 1 });
+		let row = await t.run(async (ctx) => ctx.db.get(productId));
+		expect(row?.minQuantity).toBeUndefined();
+		await asA.mutation(api.products.update, { productId, minQuantity: 20 });
+		row = await t.run(async (ctx) => ctx.db.get(productId));
+		expect(row?.minQuantity).toBe(20);
+		// 0 clears the rule.
+		await asA.mutation(api.products.update, { productId, minQuantity: 0 });
+		row = await t.run(async (ctx) => ctx.db.get(productId));
+		expect(row?.minQuantity).toBeUndefined();
+		await expect(
+			asA.mutation(api.products.update, { productId, minQuantity: 2.5 }),
+		).rejects.toThrow(/whole number/);
+	});
+
+	test("create rejects below the store minimum order value, boundary inclusive", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.retailers.updateSettings, {
+			minOrderValue: 10000, // RM100
+		});
+		// RM120 product — one unit passes the RM100 bar.
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			price: 12000,
+		});
+		const ok = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		expect(ok.shortId).toMatch(/^ORD-/);
+		// RM50 product — one unit is RM50 short.
+		const cheapId = await seedProduct(t, USER_A, retailer._id, {
+			name: "Brownies",
+			price: 5000,
+		});
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId: cheapId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+			}),
+		).rejects.toThrow(/Minimum order of MYR 100\.00 — add MYR 50\.00 more/);
+		// Exactly RM100 passes (boundary inclusive — the freeAbove posture).
+		const exact = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId: cheapId, quantity: 2 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		expect(exact.shortId).toMatch(/^ORD-/);
+	});
+
+	test("a price-on-quote line exempts the order from the value minimum", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.retailers.updateSettings, { minOrderValue: 10000 });
+		// Made-to-order at RM0 (price on quote) — the seller settles the real
+		// value on the mockup, so the RM100 floor must not block it.
+		const quoteId = await seedProduct(t, USER_A, retailer._id, {
+			name: "Custom Cake",
+			price: 0,
+			blockWhenOutOfStock: false,
+			requiresProof: true,
+		});
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId: quoteId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		expect(created.shortId).toMatch(/^ORD-/);
+	});
+
+	test("updateSettings sanitizes minOrderValue (0 clears, bad values reject)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.retailers.updateSettings, { minOrderValue: 10000 });
+		let row = await t.run(async (ctx) => ctx.db.get(retailer._id));
+		expect(row?.minOrderValue).toBe(10000);
+		// Public storefront payload carries it (buyers must see the bar).
+		const pub = await t.query(api.retailers.getRetailerBySlug, {
+			slug: retailer.slug,
+		});
+		expect(pub.status).toBe("ok");
+		if (pub.status === "ok") expect(pub.retailer.minOrderValue).toBe(10000);
+		await asA.mutation(api.retailers.updateSettings, { minOrderValue: 0 });
+		row = await t.run(async (ctx) => ctx.db.get(retailer._id));
+		expect(row?.minOrderValue).toBeUndefined();
+		await expect(
+			asA.mutation(api.retailers.updateSettings, { minOrderValue: -5 }),
+		).rejects.toThrow(/non-negative/);
+		await expect(
+			asA.mutation(api.retailers.updateSettings, { minOrderValue: 100.5 }),
+		).rejects.toThrow(/whole/);
 	});
 });

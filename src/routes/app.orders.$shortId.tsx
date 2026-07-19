@@ -1,10 +1,11 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import {
 	ArrowLeft,
 	ArrowRight,
 	BadgeCheck,
 	Ban,
+	Bell,
 	Check,
 	CheckCircle2,
 	ChevronDown,
@@ -34,6 +35,10 @@ import {
 	PAYMENT_METHOD_LABELS,
 	paymentMethodLabel,
 } from "../../convex/lib/paymentMethod";
+import {
+	type ManualReminderBlock,
+	manualReminderEligibility,
+} from "../../convex/lib/paymentReminder";
 import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
 import { FulfilmentDateBadge } from "../components/dashboard/fulfilment-date-badge";
 import {
@@ -59,11 +64,14 @@ import {
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
+import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { formatPhone, orderCustomerLabel } from "../lib/customer";
 import {
 	convexErrorMessage,
 	formatPrice,
 	formatPriceCompact,
+	normalizePriceInput,
+	parsePriceInput,
 } from "../lib/format";
 import { deriveMapsUrl } from "../lib/google-address";
 import {
@@ -163,6 +171,42 @@ function formatRelative(epochMs: number | undefined): string {
 	return `${Math.floor(diff / day)}d ago`;
 }
 
+/** Human "in ~2h" / "in ~15m" for the manual-reminder cooldown countdown. */
+function formatUntil(epochMs: number): string {
+	const diff = epochMs - Date.now();
+	if (diff <= 0) return "shortly";
+	const minutes = Math.ceil(diff / 60_000);
+	if (minutes < 60) return `in ~${minutes}m`;
+	return `in ~${Math.ceil(minutes / 60)}h`;
+}
+
+/** Seller-facing reason a manual payment reminder couldn't be sent — used for
+ * the error toast when the server rejects a send the button thought was OK. */
+function manualReminderBlockMessage(
+	reason: ManualReminderBlock | "not_found",
+): string {
+	switch (reason) {
+		case "cancelled":
+			return "This order was cancelled — nothing to remind about.";
+		case "pending":
+			return "This order hasn't been confirmed yet.";
+		case "paid":
+			return "This order is already paid.";
+		case "claimed":
+			return "The buyer already tapped “I've paid” — check for their payment.";
+		case "mockup_gated":
+			return "The buyer hasn't been asked to pay yet (mockup pending).";
+		case "fee_pending":
+			return "Set the delivery charge first — the total isn't final yet.";
+		case "no_contact":
+			return "No WhatsApp number on file for this buyer.";
+		case "cooldown":
+			return "You just reminded this buyer — try again a little later.";
+		default:
+			return "Couldn't send the reminder. Try again.";
+	}
+}
+
 /**
  * Stepper + next action, always on top: dots for reached stages, an outlined
  * dot for the next one, and the single most likely transition as a big button
@@ -245,7 +289,13 @@ function OrderDetailRoute() {
 	const advanceToStage = useMutation(api.orders.advanceToStage);
 	const setCarrierUrl = useMutation(api.orders.setCarrierTrackingUrl);
 	const markPaymentReceived = useMutation(api.orders.markPaymentReceived);
+	const sendPaymentReminder = useAction(api.orders.sendPaymentReminder);
 	const deleteOrder = useMutation(api.orders.deleteOrder);
+	// Permanent hard delete is admin-only (Kedaipal support); a plain seller only
+	// ever cancels. Hide the danger action unless this is an admin act-as session —
+	// the server enforces the same rule, so this is discoverability, not the guard.
+	const retailer = useDashboardRetailer();
+	const canHardDelete = retailer?.actingAsAdmin === true;
 	const proofUrl = useQuery(
 		api.orders.getPaymentProofUrl,
 		order?.paymentProofStorageId ? { orderId: order._id } : "skip",
@@ -265,6 +315,7 @@ function OrderDetailRoute() {
 	const [carrierInput, setCarrierInput] = useState<string | null>(null);
 	const [savingCarrier, setSavingCarrier] = useState(false);
 	const [confirmingPayment, setConfirmingPayment] = useState(false);
+	const [sendingReminder, setSendingReminder] = useState(false);
 	const [confirmPaymentOpen, setConfirmPaymentOpen] = useState(false);
 	const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
 	const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
@@ -312,6 +363,10 @@ function OrderDetailRoute() {
 		order.status === "cancelled" ? undefined : stages[currentIdx + 1];
 	const isTerminal =
 		order.status === "cancelled" || order.status === "delivered";
+	// The More-actions panel's destructive rows: Cancel (any non-terminal order)
+	// or Delete (admin act-as only). Drives whether that panel has anything on
+	// desktop, where the receipt row lives in the header instead.
+	const hasDestructiveAction = !isTerminal || canHardDelete;
 	const showCarrierSection =
 		!isSelfCollect && !["pending", "cancelled"].includes(order.status);
 	const editingCarrier = carrierInput !== null;
@@ -319,6 +374,28 @@ function OrderDetailRoute() {
 	// Production (any packed-or-later stage) is blocked while a mockup is required
 	// but not yet approved/waived. Shared gate — same source as the server.
 	const mockupGated = isMockupGateClosed(order);
+	// Delivery charge still to be confirmed (out-of-range "arrange" order, or
+	// address without coordinates) — holds the buyer's payment ask + the seller's
+	// mark-received until the seller sets it below. See orders.setDeliveryFee.
+	const deliveryFeePending =
+		order.deliveryFeePending === true && order.status !== "cancelled";
+	// Manual "Send payment reminder" eligibility — the SAME predicate the server
+	// enforces (single source of truth), so the button's disabled-with-reason
+	// state can't disagree with what a tap would actually do. Recomputed each
+	// render; the order refetches after a send, so the 6h cooldown kicks in live.
+	const reminderEligibility = manualReminderEligibility(
+		{
+			status: order.status,
+			paymentStatus: order.paymentStatus,
+			mockupStatus: order.mockupStatus,
+			mockupWaivedAt: order.mockupWaivedAt,
+			deliveryFeePending: order.deliveryFeePending,
+			lastManualReminderAt: order.lastManualReminderAt,
+			createdAt: order.createdAt,
+			customer: { waPhone: order.customer.waPhone },
+		},
+		Date.now(),
+	);
 
 	async function handleAdvance(stageId: string) {
 		if (!order) return;
@@ -399,6 +476,28 @@ function OrderDetailRoute() {
 			toast.error(convexErrorMessage(err));
 		} finally {
 			setConfirmingPayment(false);
+		}
+	}
+
+	async function handleSendReminder() {
+		if (!order) return;
+		setSendingReminder(true);
+		try {
+			const res = await sendPaymentReminder({ shortId });
+			if (res.ok) {
+				const who = order.customer.name ?? "The buyer";
+				toast.success("Payment reminder sent", {
+					description: `${who} will receive it on WhatsApp.`,
+				});
+			} else {
+				// The server re-checks state (the buyer may have paid in another tab,
+				// or the cooldown boundary differs) — surface why nothing was sent.
+				toast.error(manualReminderBlockMessage(res.reason ?? "not_found"));
+			}
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSendingReminder(false);
 		}
 	}
 
@@ -540,6 +639,11 @@ function OrderDetailRoute() {
 				</section>
 			) : null}
 
+			{/* Delivery charge to confirm — the out-of-range "arrange via WhatsApp"
+			    state (86extzdr8). Amber like the payment claim: it needs the
+			    seller's action before the buyer can be asked to pay. */}
+			{deliveryFeePending ? <SetDeliveryFeeCard order={order} /> : null}
+
 			{/* Payment claim — the amber "needs your eyes" state card, actionable
 			    when the shopper has tapped "I've paid". */}
 			{paymentStatus === "claimed" ? (
@@ -648,21 +752,60 @@ function OrderDetailRoute() {
 										? "the buyer is reviewing the mockup"
 										: "send the buyer a mockup to approve"
 								}. The buyer is only asked to pay once they approve (or you proceed without approval below).`
-							: `The customer hasn't tapped "I've paid" yet. If you've already seen the money in your bank app, mark it received here.`}
+							: deliveryFeePending
+								? "Payment is locked until you set the delivery charge above — the buyer is only asked to pay once the total is final."
+								: `The customer hasn't tapped "I've paid" yet. If you've already seen the money in your bank app, mark it received here.`}
 					</p>
-					{/* While the mockup gate is closed the buyer hasn't been asked to pay
-					    and the price may not be final, so the seller can't mark payment
-					    received yet. Opens on approve / waive / removing the custom item. */}
+					{/* While the mockup gate is closed (or the delivery charge is still
+					    pending) the buyer hasn't been asked to pay and the price may not
+					    be final, so the seller can't mark payment received yet. */}
 					<Button
 						onClick={() => setConfirmPaymentOpen(true)}
 						isLoading={confirmingPayment}
-						disabled={confirmingPayment || mockupGated}
+						disabled={confirmingPayment || mockupGated || deliveryFeePending}
 						variant="secondary"
 						className="h-11 w-full"
 					>
 						<BadgeCheck className="size-4" />
-						{mockupGated ? "Awaiting mockup approval" : "Mark payment received"}
+						{mockupGated
+							? "Awaiting mockup approval"
+							: deliveryFeePending
+								? "Set the delivery charge first"
+								: "Mark payment received"}
 					</Button>
+					{/* Manual reminder — re-send the payment details on demand. Hidden
+					    while payment isn't owed yet (mockup-gated or delivery charge
+					    pending). Also recovers the case where the buyer never got the
+					    first bot reply. */}
+					{!mockupGated && !deliveryFeePending ? (
+						<div className="flex flex-col gap-1.5 border-t border-border pt-3">
+							<Button
+								onClick={handleSendReminder}
+								isLoading={sendingReminder}
+								disabled={sendingReminder || !reminderEligibility.ok}
+								variant="ghost"
+								className="h-11 w-full"
+							>
+								<Bell className="size-4" />
+								Send payment reminder
+							</Button>
+							<p className="text-xs text-muted-foreground">
+								{!reminderEligibility.ok
+									? reminderEligibility.reason === "no_contact"
+										? "No WhatsApp number on file for this buyer yet."
+										: reminderEligibility.reason === "cooldown"
+											? `Reminded ${formatRelative(order.lastManualReminderAt)} — you can remind again ${formatUntil(
+													reminderEligibility.retryAt ?? Date.now(),
+												)}.`
+											: "A reminder isn't available for this order right now."
+									: order.lastManualReminderAt
+										? `Last reminded ${formatRelative(
+												order.lastManualReminderAt,
+											)}. Re-sends the payment details to their WhatsApp.`
+										: `Re-sends the payment details — amount, how to pay, and an "I've paid" button — to their WhatsApp. Handy if they never got the first reply. May not reach buyers you haven't messaged in 24h.`}
+							</p>
+						</div>
+					) : null}
 				</section>
 			) : null}
 
@@ -846,10 +989,42 @@ function OrderDetailRoute() {
 						</span>
 					</div>
 				) : null}
+				{/* Frozen delivery charge — annotated with how it was priced (band
+				    distance / manual) so the number is auditable at a glance. */}
+				{order.deliveryFee && order.deliveryFee > 0 ? (
+					<div className="flex items-center justify-between px-3 text-sm text-muted-foreground">
+						<span>
+							Delivery fee
+							{order.deliverySnapshot?.mode === "radius" &&
+							order.deliverySnapshot.distanceKm !== undefined
+								? ` — ${order.deliverySnapshot.distanceKm} km`
+								: order.deliverySnapshot?.mode === "manual"
+									? " — set by you"
+									: ""}
+						</span>
+						<span className="tabular-nums">
+							{formatPrice(order.deliveryFee, order.currency)}
+						</span>
+					</div>
+				) : null}
+				{deliveryFeePending ? (
+					<div className="flex items-center justify-between gap-3 px-3 text-sm text-amber-700 dark:text-amber-400">
+						<span>Delivery charge</span>
+						<span className="text-right font-medium">
+							To be set — see above
+						</span>
+					</div>
+				) : null}
 				<div className="flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2.5 text-sm font-bold">
 					<span>Total</span>
 					<span className="tabular-nums">
 						{formatPrice(order.total, order.currency)}
+						{deliveryFeePending ? (
+							<span className="font-medium text-muted-foreground">
+								{" "}
+								+ delivery
+							</span>
+						) : null}
 					</span>
 				</div>
 			</section>
@@ -1053,9 +1228,15 @@ function OrderDetailRoute() {
 			{/* Rare actions (receipt, cancel, delete) collapse behind one quiet
 			    trigger — the stepper above already carries the main transition. The
 			    trigger + its menu share ONE bordered container so the panel reads as
-			    the trigger's own dropdown, not a detached card. A terminal order still
-			    has Delete here, so the expander is never empty. */}
-			<section className="overflow-hidden rounded-xl border border-border bg-card">
+			    the trigger's own dropdown, not a detached card. Delete is admin-only
+			    now, so a plain seller's desktop panel would hold only Cancel — hidden
+			    on desktop for a terminal order (receipt lives in the header there) so
+			    it never opens to an empty divider; mobile keeps its receipt row. */}
+			<section
+				className={`overflow-hidden rounded-xl border border-border bg-card${
+					hasDestructiveAction ? "" : " lg:hidden"
+				}`}
+			>
 				<button
 					type="button"
 					onClick={() => setMoreOpen((x) => !x)}
@@ -1083,9 +1264,12 @@ function OrderDetailRoute() {
 							size="default"
 							className="h-12 w-full justify-start gap-2.5 rounded-none px-4 text-sm font-medium lg:hidden"
 						/>
-						{/* Neutral → destructive divider. Only present when the receipt row
-						    is (mobile) — on desktop the header rule above already leads in. */}
-						<hr className="border-border lg:hidden" />
+						{/* Neutral → destructive divider, mobile-only (desktop's header rule
+						    above already leads in). Skipped when nothing destructive follows
+						    (terminal order + plain seller) so it never dangles below receipt. */}
+						{hasDestructiveAction ? (
+							<hr className="border-border lg:hidden" />
+						) : null}
 						{!isTerminal ? (
 							<Button
 								onClick={() => setConfirmCancelOpen(true)}
@@ -1097,21 +1281,26 @@ function OrderDetailRoute() {
 								{pending === "cancel" ? "Updating…" : "Cancel Order"}
 							</Button>
 						) : null}
-						{/* Permanent hard delete — the last resort for test / spam /
-						    duplicate orders. Works in any status; irreversible. */}
-						<Button
-							onClick={() => setConfirmDeleteOpen(true)}
-							disabled={pending !== null}
-							variant="ghost"
-							className="h-12 w-full justify-start gap-2.5 rounded-none px-4 text-sm font-medium text-destructive hover:bg-destructive/10 hover:text-destructive"
-						>
-							<Trash2 className="size-4" aria-hidden="true" />
-							{pending === "delete" ? "Deleting…" : "Delete permanently"}
-						</Button>
-						<p className="border-t border-border bg-muted/30 px-4 py-2.5 text-[11px] leading-snug text-muted-foreground">
-							Deleting removes this order and its records for good — this can't
-							be undone.
-						</p>
+						{/* Permanent hard delete — admin act-as only (Kedaipal support).
+						    Hidden for a plain seller, who cancels instead; the server
+						    enforces the same rule. Works in any status; irreversible. */}
+						{canHardDelete ? (
+							<>
+								<Button
+									onClick={() => setConfirmDeleteOpen(true)}
+									disabled={pending !== null}
+									variant="ghost"
+									className="h-12 w-full justify-start gap-2.5 rounded-none px-4 text-sm font-medium text-destructive hover:bg-destructive/10 hover:text-destructive"
+								>
+									<Trash2 className="size-4" aria-hidden="true" />
+									{pending === "delete" ? "Deleting…" : "Delete permanently"}
+								</Button>
+								<p className="border-t border-border bg-muted/30 px-4 py-2.5 text-[11px] leading-snug text-muted-foreground">
+									Deleting removes this order and its records for good — this
+									can't be undone.
+								</p>
+							</>
+						) : null}
 					</>
 				) : null}
 			</section>
@@ -1214,6 +1403,99 @@ function OrderDetailRoute() {
 const MOCKUP_WAIVE_GRACE_MS = 48 * 60 * 60 * 1000;
 // Mirror of MAX_MOCKUP_IMAGES in convex/orders.ts.
 const MAX_MOCKUP_IMAGES = 5;
+
+/**
+ * Amber action card for a fee-pending delivery order (86extzdr8): the buyer's
+ * address fell outside the seller's distance bands (or had no coordinates) on
+ * an "arrange via WhatsApp" store. The seller agrees the charge with the buyer
+ * in chat, enters it here (0 = deliver free), and the held payment ask goes
+ * out on WhatsApp with the final total.
+ */
+function SetDeliveryFeeCard({ order }: { order: Doc<"orders"> }) {
+	const setDeliveryFee = useMutation(api.orders.setDeliveryFee);
+	const [feeInput, setFeeInput] = useState("");
+	const [saving, setSaving] = useState(false);
+
+	const chatUrl = order.customer.waPhone
+		? `https://wa.me/${order.customer.waPhone}?text=${encodeURIComponent(
+				`Hi${order.customer.name ? ` ${order.customer.name}` : ""}! About the delivery charge for your order ${order.shortId} —`,
+			)}`
+		: null;
+
+	async function save(fee: number) {
+		setSaving(true);
+		try {
+			await setDeliveryFee({ orderId: order._id, fee });
+			toast.success(
+				fee > 0
+					? "Delivery charge set — the buyer gets the payment request on WhatsApp."
+					: "Set to free delivery — the buyer gets the payment request on WhatsApp.",
+			);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	function handleSet() {
+		const rm = parsePriceInput(feeInput.trim().length > 0 ? feeInput : "0");
+		if (rm === null || rm < 0) {
+			toast.error("Not a valid amount — numbers only, e.g. 15.00");
+			return;
+		}
+		void save(Math.round(rm * 100));
+	}
+
+	return (
+		<section className="flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-800 dark:bg-amber-950/50">
+			<div className="flex items-center gap-2 text-amber-800 dark:text-amber-300">
+				<Truck className="size-4" />
+				<p className="text-xs font-semibold uppercase tracking-widest">
+					Delivery charge to confirm
+				</p>
+			</div>
+			<p className="text-sm text-amber-900/90 dark:text-amber-200/90">
+				This address is outside your delivery bands, so no charge was applied
+				yet. Agree it with the buyer on WhatsApp, then set it here — the payment
+				request goes out with the final total. Enter 0 to deliver free.
+			</p>
+			<div className="flex items-end gap-2">
+				<div className="relative flex-1">
+					<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
+						RM
+					</span>
+					<input
+						type="text"
+						inputMode="decimal"
+						value={feeInput}
+						onChange={(e) => setFeeInput(e.target.value)}
+						onBlur={() => setFeeInput(normalizePriceInput(feeInput))}
+						placeholder="15.00"
+						aria-label="Delivery charge"
+						className="h-11 w-full rounded-lg border border-amber-300 bg-background pl-11 pr-3 text-sm dark:border-amber-800"
+					/>
+				</div>
+				<Button
+					onClick={handleSet}
+					isLoading={saving}
+					disabled={saving}
+					className="h-11 shrink-0"
+				>
+					Set charge
+				</Button>
+			</div>
+			{chatUrl ? (
+				<Button asChild variant="secondary" className="h-11 w-full">
+					<a href={chatUrl} target="_blank" rel="noopener noreferrer">
+						<MessageCircle className="size-4" />
+						Discuss with buyer on WhatsApp
+					</a>
+				</Button>
+			) : null}
+		</section>
+	);
+}
 
 function MockupCard({ order }: { order: Doc<"orders"> }) {
 	const generateUploadUrl = useMutation(api.orders.generateMockupUploadUrl);

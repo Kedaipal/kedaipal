@@ -217,6 +217,7 @@ describe("hasFeature (client plan gate)", () => {
 				chargeablePickup: false,
 				categories: false,
 				insights: false,
+				radiusDelivery: false,
 			},
 		});
 		expect(hasFeature(starter, "crm")).toBe(false);
@@ -224,6 +225,7 @@ describe("hasFeature (client plan gate)", () => {
 		expect(hasFeature(starter, "chargeablePickup")).toBe(false);
 		expect(hasFeature(starter, "categories")).toBe(false);
 		expect(hasFeature(starter, "insights")).toBe(false);
+		expect(hasFeature(starter, "radiusDelivery")).toBe(false);
 		const pro = sub({
 			features: {
 				crm: true,
@@ -231,12 +233,14 @@ describe("hasFeature (client plan gate)", () => {
 				chargeablePickup: true,
 				categories: true,
 				insights: true,
+				radiusDelivery: true,
 			},
 		});
 		expect(hasFeature(pro, "crm")).toBe(true);
 		expect(hasFeature(pro, "chargeablePickup")).toBe(true);
 		expect(hasFeature(pro, "categories")).toBe(true);
 		expect(hasFeature(pro, "insights")).toBe(true);
+		expect(hasFeature(pro, "radiusDelivery")).toBe(true);
 	});
 
 	test("fails open when the subscription/features are missing (loading, comped)", () => {

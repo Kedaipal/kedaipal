@@ -243,10 +243,12 @@ function CategoryRoute() {
 			<CartBar
 				cart={cart}
 				retailerId={retailer._id}
+				storeName={retailer.storeName}
 				checkoutPhone={retailer.checkoutPhone}
 				offerSelfCollect={retailer.offerSelfCollect ?? false}
 				offerDelivery={retailer.offerDelivery ?? true}
 				minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
+				minOrderValue={retailer.minOrderValue}
 				pickupLocations={pickupLocations ?? []}
 			/>
 		</div>

@@ -285,6 +285,10 @@ function SettingsRoute() {
 	// Admins get an "Admin" group on the mobile settings index — the natural home
 	// for the console entry (the desktop sidebar already carries an Admin group).
 	const isAdmin = useQuery(api.billing.amIAdmin) ?? false;
+	// A Kedaipal admin on their OWN store reads "Admin" on the tier pill + billing
+	// row (never a trial/plan countdown) — same treatment as the sidebar/header.
+	// While acting-as a seller we keep the seller's real subscription state visible.
+	const adminOwnStore = isAdmin && retailer?.actingAsAdmin !== true;
 	const renameSlugMutation = useMutation(api.retailers.renameSlug);
 	const updateSettingsMutation = useMutation(api.retailers.updateSettings);
 	// In admin act-as, inject the seller's `retailerId` so edits land on THEIR
@@ -412,6 +416,7 @@ function SettingsRoute() {
 						<TierPill
 							subscription={retailer.subscription}
 							foundingRank={retailer.foundingMemberRank}
+							admin={adminOwnStore}
 							compact
 							className="shrink-0"
 						/>
@@ -430,7 +435,14 @@ function SettingsRoute() {
 									// needed to check health.
 									const subtitle =
 										t.id === "billing" && retailer.subscription
-											? tierPill(retailer.subscription, Date.now()).label
+											? tierPill(
+													retailer.subscription,
+													Date.now(),
+													// Keep the plain tier label here (founding rank stays
+													// on the header pill only); just fold in the admin case.
+													undefined,
+													adminOwnStore,
+												).label
 											: t.description;
 									const waConnected =
 										t.id === "whatsapp" && Boolean(retailer.waPhone?.trim());
@@ -678,7 +690,10 @@ function SettingsRoute() {
 						retailerId={retailer._id}
 						offerSelfCollect={retailer.offerSelfCollect ?? false}
 						offerDelivery={retailer.offerDelivery ?? true}
+						deliveryConfig={retailer.deliveryConfig}
+						businessAddress={retailer.businessAddress}
 						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
+						minOrderValue={retailer.minOrderValue}
 						subscription={retailer.subscription}
 					/>
 				) : null}
@@ -1144,8 +1159,8 @@ function PaymentMethodsForm({
 	);
 
 	// Methods are kept grouped (all banks, then all QRs) so the array order ==
-	// what renders (banks in the WA text block, QRs as follow-up images). Sorting
-	// is therefore within a type only.
+	// the order buyers see them in on their order page's "How to pay" section.
+	// Sorting is therefore within a type only.
 	const [methods, setMethods] = useState<MethodDraft[]>(() => {
 		const seeded = current.map((m) => ({
 			_key: crypto.randomUUID(),
@@ -1477,10 +1492,10 @@ function PaymentMethodsForm({
 		<form onSubmit={handleSubmit} className="flex flex-col gap-6">
 			<SectionHeading
 				title="Payment methods"
-				description="Add your banks and QR codes — shoppers see all of them in the WhatsApp confirmation reply and on their order page (only after they order, never on your public storefront). Drag the handle to reorder within each group."
+				description="Add your banks and QR codes. For your buyers' security, these are no longer pasted into the WhatsApp chat — instead the order confirmation links each buyer to their own order page, where all of them show with one-tap copy. Never shown on your public storefront. Drag the handle to reorder within each group."
 			/>
 
-			{/* Bank accounts — shown together in the WhatsApp payment details. */}
+			{/* Bank accounts — shown on the buyer's order page (linked from WhatsApp). */}
 			<div className="flex flex-col gap-3">
 				<div className="flex items-center justify-between gap-2">
 					<span className="inline-flex items-center gap-1.5 text-sm font-semibold">
@@ -1513,7 +1528,7 @@ function PaymentMethodsForm({
 				)}
 			</div>
 
-			{/* QR codes — each sent as its own follow-up image on WhatsApp. */}
+			{/* QR codes — shown on the buyer's order page (linked from WhatsApp). */}
 			<div className="flex flex-col gap-3">
 				<div className="flex items-center justify-between gap-2">
 					<span className="inline-flex items-center gap-1.5 text-sm font-semibold">

@@ -9,20 +9,26 @@ import { CheckoutSheet, type PublicPickupLocation } from "./checkout-sheet";
 interface CartBarProps {
 	cart: UseCart;
 	retailerId: Id<"retailers">;
+	storeName: string;
 	checkoutPhone: string | undefined;
 	offerSelfCollect: boolean;
 	offerDelivery: boolean;
 	minFulfilmentNoticeDays: number | undefined;
+	/** Store-wide minimum order value (minor units) — passed through to the
+	 * checkout sheet's min-order-rule gate. */
+	minOrderValue: number | undefined;
 	pickupLocations: ReadonlyArray<PublicPickupLocation>;
 }
 
 export function CartBar({
 	cart,
 	retailerId,
+	storeName,
 	checkoutPhone,
 	offerSelfCollect,
 	offerDelivery,
 	minFulfilmentNoticeDays,
+	minOrderValue,
 	pickupLocations,
 }: CartBarProps) {
 	const [checkoutOpen, setCheckoutOpen] = useState(false);
@@ -66,10 +72,12 @@ export function CartBar({
 				onClose={() => setCheckoutOpen(false)}
 				cart={cart}
 				retailerId={retailerId}
+				storeName={storeName}
 				checkoutPhone={checkoutPhone}
 				offerSelfCollect={offerSelfCollect}
 				offerDelivery={offerDelivery}
 				minFulfilmentNoticeDays={minFulfilmentNoticeDays}
+				minOrderValue={minOrderValue}
 				pickupLocations={pickupLocations}
 			/>
 		</>

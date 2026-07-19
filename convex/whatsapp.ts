@@ -12,11 +12,6 @@ import { stampRetailerActivation } from "./lib/activation";
 import { classifyOptOutKeyword } from "./lib/wabaLimits";
 import { isMockupGateClosed } from "./lib/order";
 import {
-	type LegacyPaymentInstructions,
-	type PaymentMethod,
-	resolvePaymentMethods,
-} from "./lib/payment";
-import {
 	type OrderStage,
 	resolveStages,
 	stageDescription,
@@ -26,12 +21,11 @@ import {
 import { assertValidWaPhone } from "./lib/slug";
 import {
 	hasTemplateOverride,
-	paymentQrCaption,
 	pickLocale,
 	poweredByLine,
 	privacyNoticeLine,
+	renderDeliveryFeeLine,
 	renderMessage,
-	renderPaymentMethods,
 	renderPickupBlock,
 	renderStageUpdate,
 	renderSystemMessage,
@@ -42,37 +36,6 @@ import {
 	type PickupSnapshot,
 } from "./lib/whatsappCopy";
 import { classifyInbound } from "./lib/inboundIntent";
-
-// A payment method with its QR storage id resolved to a viewable URL (qr only).
-type ResolvedPaymentMethod = PaymentMethod & { qrImageUrl?: string };
-
-type ResolvedPayment = {
-	methods: ResolvedPaymentMethod[];
-};
-
-/**
- * Resolve a retailer's payment methods (legacy-aware) and turn each `qr`
- * method's storage id into a viewable URL for the confirm/payment messages.
- */
-async function resolvePaymentForMessage(
-	ctx: { storage: { getUrl: (id: string) => Promise<string | null> } },
-	retailer: {
-		paymentMethods?: PaymentMethod[];
-		paymentInstructions?: LegacyPaymentInstructions;
-	},
-): Promise<ResolvedPayment> {
-	const methods = resolvePaymentMethods(retailer);
-	const resolved: ResolvedPaymentMethod[] = [];
-	for (const m of methods) {
-		let qrImageUrl: string | undefined;
-		if (m.type === "qr" && m.qrImageStorageId) {
-			const url = await ctx.storage.getUrl(m.qrImageStorageId);
-			qrImageUrl = url ?? undefined;
-		}
-		resolved.push({ ...m, qrImageUrl });
-	}
-	return { methods: resolved };
-}
 
 const statusValidator = v.union(
 	v.literal("pending"),
@@ -249,12 +212,16 @@ export const getRetailerLocaleForOrder = internalQuery({
 		messageTemplates: MessageTemplates | undefined;
 		deliveryMethod: DeliveryMethod;
 		pickupSnapshot: PickupSnapshot | undefined;
+		// Frozen delivery charge — renders the fee line in the confirm reply.
+		deliverySnapshot: { fee: number } | undefined;
 		// Order currency — needed to render the pickup-fee line in the block.
 		currency: string;
-		payment: ResolvedPayment;
 		// True while a custom item still awaits buyer mockup approval — the
 		// payment prompt is deferred until the gate opens (approve or waive).
 		mockupPending: boolean;
+		// True while the delivery charge awaits seller confirmation (radius
+		// "arrange" order) — payment is deferred until orders.setDeliveryFee.
+		deliveryFeePending: boolean;
 	} | null> => {
 		const order = await ctx.db
 			.query("orders")
@@ -274,19 +241,26 @@ export const getRetailerLocaleForOrder = internalQuery({
 				| undefined,
 			deliveryMethod: (order.deliveryMethod as DeliveryMethod | undefined) ?? "delivery",
 			pickupSnapshot: order.pickupSnapshot,
+			deliverySnapshot: order.deliverySnapshot,
 			currency: order.currency,
-			payment: await resolvePaymentForMessage(ctx, retailer),
 			mockupPending: isMockupGateClosed(order),
+			deliveryFeePending: order.deliveryFeePending === true,
 		};
 	},
 });
 
 /**
  * Send the buyer the payment ask: `introBody` (the confirm template, or a
- * mockup-approved/waived intro) → [pickup block] → transfer-reference line →
- * [payment block], rendered as an "I've paid" CTA (degrades to text), followed
- * by the QR image if configured. Shared by the confirm reply and the
- * post-mockup payment prompt so both stay byte-for-byte consistent.
+ * mockup-approved/waived/delivery-fee intro) → [pickup | delivery-fee block] →
+ * transfer-reference line, with a "Make payment" CTA button (degrades to text).
+ * Shared by the confirm reply and the post-mockup / delivery-fee payment
+ * prompts so they all stay byte-for-byte consistent.
+ *
+ * Bank/QR details are NOT sent in chat (ticket 86ey98ju1) — the buyer is
+ * pointed to their order page ("How to pay") via the intro's own link + the
+ * "Make payment" button. The order-page link lives in the intro copy (every
+ * intro carries it), so this function appends no separate "see how to pay"
+ * block — the buyer sees the link exactly once.
  */
 async function sendPaymentMessage(
 	wa: GuardedSender,
@@ -298,18 +272,16 @@ async function sendPaymentMessage(
 		storeName: string;
 		trackingUrl: string;
 		pickupSnapshot: PickupSnapshot | undefined;
-		// Order currency for the pickup-fee line. Optional — callers whose
-		// snapshot can't carry a fee (counter orders pass no snapshot) omit it.
+		// Frozen delivery charge — rendered as its own line under the intro so
+		// the buyer sees why the total is higher than the item sum. Optional;
+		// callers for pickup/counter orders omit it.
+		deliverySnapshot?: { fee: number };
+		// Order currency for the pickup-fee / delivery-fee lines. Optional —
+		// callers whose snapshot can't carry a fee (counter orders) omit it.
 		currency?: string;
-		payment: ResolvedPayment;
-		// When false, omit the bank/QR methods block AND the QR follow-up images —
-		// the buyer already received them earlier (e.g. at counter-checkout scan),
-		// so re-sending would repeat the same details. The intro, transfer
-		// reference, and "I've paid" CTA still send. Defaults to true.
-		includePaymentDetails?: boolean;
-		// Optional trailing block appended to the very END of the message body
-		// (after the payment block), e.g. the always-on "Powered by Kedaipal"
-		// growth line on order confirmations. Include its own leading newlines.
+		// Optional trailing block appended to the very END of the message body,
+		// e.g. the always-on "Powered by Kedaipal" growth line on order
+		// confirmations. Include its own leading newlines.
 		footerLine?: string;
 	},
 ): Promise<void> {
@@ -320,9 +292,8 @@ async function sendPaymentMessage(
 		storeName,
 		trackingUrl,
 		pickupSnapshot,
+		deliverySnapshot,
 		currency,
-		payment,
-		includePaymentDetails = true,
 		footerLine = "",
 	} = args;
 	// Hard-coded, non-overridable: tells the shopper to use the order ID as the
@@ -332,27 +303,29 @@ async function sendPaymentMessage(
 		shortId,
 		storeName,
 	});
-	const paymentBlock = includePaymentDetails
-		? renderPaymentMethods(locale, payment.methods)
-		: "";
 	const pickupBlock = renderPickupBlock(locale, pickupSnapshot, currency);
-	// Layout: intro → [pickup] → blank line → transfer reference → [payment].
-	// Pickup first so the buyer sees the WHERE before the WHEN/HOW of paying.
-	const withPickup = pickupBlock ? `${introBody}\n${pickupBlock}` : introBody;
+	// Delivery-fee line (delivery orders) — sits where the pickup block would
+	// (an order has one or the other), explaining the total before the pay ask.
+	const deliveryFeeLine = renderDeliveryFeeLine(locale, deliverySnapshot, currency);
+	// Layout: intro (carries the order-page link) → [pickup | delivery fee] →
+	// blank line → transfer reference. The WHERE/WHY before the WHEN/HOW of paying.
+	const withPickup = pickupBlock
+		? `${introBody}\n${pickupBlock}`
+		: `${introBody}${deliveryFeeLine}`;
 	const withRef = `${withPickup}\n\n${transferReferenceLine}`;
-	const withPayment = paymentBlock ? `${withRef}\n${paymentBlock}` : withRef;
-	// Growth footer (e.g. "Powered by Kedaipal") sits last, under the payment
-	// details — quiet and out of the way of the actionable content.
-	const body = `${withPayment}${footerLine}`;
+	// Growth footer (e.g. "Powered by Kedaipal") sits last, quiet and out of the
+	// way of the actionable content.
+	const body = `${withRef}${footerLine}`;
 	const brandImageUrl = "https://kedaipal.com/logo-2.png";
-	// CTA intent — the adapter renders a tappable "I've paid" button in prod and
-	// degrades to a plain image with caption when buttons can't be honoured
-	// (e.g. non-HTTPS APP_URL in dev).
+	// CTA intent — the adapter renders a tappable "Make payment" button in prod
+	// and degrades to a plain image with caption when buttons can't be honoured
+	// (e.g. non-HTTPS APP_URL in dev). The button opens the buyer's order page,
+	// where "How to pay" + the "I've paid" confirm live.
 	try {
 		await wa.send(toPhone, {
 			kind: "cta",
 			body,
-			buttonText: "I've paid",
+			buttonText: "Make payment",
 			url: trackingUrl,
 			imageUrl: brandImageUrl,
 		});
@@ -362,22 +335,6 @@ async function sendPaymentMessage(
 			await wa.send(toPhone, { kind: "text", body });
 		} catch (textErr) {
 			console.error("WA payment send failed", textErr);
-		}
-	}
-	// Each configured QR method follows as its own image (captioned with the
-	// method label, so a buyer with several QRs knows which is which) so they can
-	// long-press to save it. Failures are isolated from the message above.
-	if (!includePaymentDetails) return;
-	for (const m of payment.methods) {
-		if (m.type !== "qr" || !m.qrImageUrl) continue;
-		try {
-			await wa.send(toPhone, {
-				kind: "image",
-				imageUrl: m.qrImageUrl,
-				caption: paymentQrCaption(locale, m.label),
-			});
-		} catch (err) {
-			console.error("WA payment QR send failed", err);
 		}
 	}
 }
@@ -487,24 +444,10 @@ export const handleInbound = internalAction({
 			} catch (err) {
 				console.error("WA store-qr reply failed", err);
 			}
-			// Right after the ack, push the seller's payment details so the buyer can
-			// pay ahead (even before the cashier finishes) instead of waiting for them
-			// at the end of the sale. Scheduled (not inline) so the ack lands first and
-			// a send hiccup can't fail the reply. No-ops when the seller has no payment
-			// methods. First scan only — a rescan re-claims the session and the buyer
-			// already got the details then (the order-create message omits them too).
-			if (start.result === "started" && !start.reclaimed) {
-				await ctx.scheduler.runAfter(
-					0,
-					internal.whatsapp.notifyCounterCheckoutPayment,
-					{
-						retailerId: start.retailerId,
-						toPhone: fromPhone,
-						storeName: start.storeName,
-						locale: start.locale,
-					},
-				);
-			}
+			// No payment details are pushed at scan any more (ticket 86ey98ju1 — raw
+			// bank details out of chat, and no order/tracking page exists yet at scan
+			// time). The buyer gets the "see how to pay on your order page" CTA once
+			// the cashier rings up the order (notifyCounterOrderCreated).
 			return;
 		}
 
@@ -600,6 +543,33 @@ export const handleInbound = internalAction({
 					console.error("WA gated-confirm send failed", textErr);
 				}
 			}
+		} else if (meta?.deliveryFeePending) {
+			// Delivery charge still to be confirmed by the seller (radius-mode
+			// "arrange" order) — same hold as the mockup branch above: branded
+			// confirm, no transfer reference / payment block / "I've paid" CTA.
+			// The payment prompt follows when the seller sets the charge
+			// (orders.setDeliveryFee → notifyDeliveryFeeSet).
+			const heldConfirm = renderSystemMessage(
+				locale,
+				"deliveryFeePendingConfirm",
+				{ shortId, storeName, contactPhone, trackingUrl },
+			);
+			const heldBody = heldConfirm + poweredByLine(locale);
+			const brandImageUrl = "https://kedaipal.com/logo-2.png";
+			try {
+				await sellerWa.send(fromPhone, {
+					kind: "image",
+					imageUrl: brandImageUrl,
+					caption: heldBody,
+				});
+			} catch (err) {
+				console.error("WA fee-held confirm send failed, falling back to text", err);
+				try {
+					await sellerWa.send(fromPhone, { kind: "text", body: heldBody });
+				} catch (textErr) {
+					console.error("WA fee-held confirm send failed", textErr);
+				}
+			}
 		} else {
 			const confirmBody = renderMessage(
 				meta?.messageTemplates,
@@ -621,8 +591,8 @@ export const handleInbound = internalAction({
 				storeName,
 				trackingUrl,
 				pickupSnapshot: meta?.pickupSnapshot,
+				deliverySnapshot: meta?.deliverySnapshot,
 				currency: meta?.currency,
-				payment: meta?.payment ?? { methods: [] },
 				// Always-on growth line — appended here (not in the confirm template)
 				// so a retailer's template override can't strip it. See poweredByLine.
 				footerLine: poweredByLine(locale),
@@ -856,6 +826,116 @@ export const notifyPaymentReminder = internalAction({
 });
 
 /**
+ * Everything the manual payment-reminder send needs, in one read: the buyer's
+ * phone + order amount (for the intro), whether the seller has payment methods
+ * (gates the order-page CTA) + pickup snapshot, and the current
+ * status/payment/mockup state so the action can re-check the order didn't leave
+ * the remindable state between the seller's tap and this send. Keyed by orderId
+ * (the seller-auth + cooldown gate already ran in orders.prepareManualReminder).
+ */
+export const getManualReminderContext = internalQuery({
+	args: { orderId: v.id("orders") },
+	handler: async (
+		ctx,
+		{ orderId },
+	): Promise<{
+		retailerId: Id<"retailers">;
+		shortId: string;
+		storeName: string;
+		customerWaPhone: string | undefined;
+		total: number;
+		currency: string;
+		trackingToken: string | undefined;
+		locale: Locale;
+		pickupSnapshot: PickupSnapshot | undefined;
+		status: Doc<"orders">["status"];
+		paymentStatus: Doc<"orders">["paymentStatus"];
+		mockupPending: boolean;
+		deliveryFeePending: boolean;
+	} | null> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) return null;
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) return null;
+		return {
+			retailerId: order.retailerId,
+			shortId: order.shortId,
+			storeName: retailer.storeName,
+			customerWaPhone: order.customer.waPhone,
+			total: order.total,
+			currency: order.currency,
+			trackingToken: order.trackingToken,
+			locale: (retailer.locale as Locale | undefined) ?? "en",
+			pickupSnapshot: order.pickupSnapshot,
+			status: order.status,
+			paymentStatus: order.paymentStatus,
+			mockupPending: isMockupGateClosed(order),
+			deliveryFeePending: order.deliveryFeePending === true,
+		};
+	},
+});
+
+/**
+ * Scheduled by orders.sendPaymentReminder (the seller's "Send payment reminder"
+ * button). Re-sends the FULL payment message — intro (paymentReminderIntro) →
+ * [pickup] → transfer ref → order-page payment CTA, with a "Make payment" button
+ * — so an unpaid buyer re-sees how to pay, and a buyer who missed the first bot
+ * reply gets everything at once. Best-effort, gated `session_message` (the manual nudge
+ * is exactly the traffic WABA protection governs). Re-checks that payment wasn't
+ * claimed/received and the order didn't close or re-gate in the gap since the
+ * seller tapped. No powered-by footer — this is a transactional re-send, not a
+ * fresh storefront confirm. See docs/payment-reminder.md.
+ */
+export const notifyManualPaymentReminder = internalAction({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<void> => {
+		const meta = await ctx
+			.runQuery(internal.whatsapp.getManualReminderContext, { orderId })
+			.catch((err) => {
+				console.error("WA manual-reminder lookup failed", err);
+				return null;
+			});
+		if (!meta) return;
+		if (!meta.customerWaPhone) return;
+		// Order left the "open + unpaid" state between the seller's tap and here.
+		if (meta.status === "cancelled") return;
+		if (meta.paymentStatus === "claimed" || meta.paymentStatus === "received")
+			return;
+		// Custom item re-gated (e.g. buyer requested changes) — payment isn't owed.
+		if (meta.mockupPending) return;
+		// Delivery charge re-flagged pending in the gap — the total isn't final.
+		if (meta.deliveryFeePending) return;
+
+		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
+		const trackingToken =
+			meta.trackingToken ??
+			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
+		if (!trackingToken) return; // order vanished — don't ship a dead link
+		const locale = pickLocale(meta.locale);
+		const trackingUrl = `${appUrl}/track/${trackingToken}`;
+		const introBody = renderSystemMessage(locale, "paymentReminderIntro", {
+			shortId: meta.shortId,
+			storeName: meta.storeName,
+			amount: `${meta.currency} ${(meta.total / 100).toFixed(2)}`,
+			trackingUrl,
+		});
+		await sendPaymentMessage(
+			makeGuardedSender(ctx, meta.retailerId, "session_message"),
+			meta.customerWaPhone,
+			{
+				introBody,
+				locale,
+				shortId: meta.shortId,
+				storeName: meta.storeName,
+				trackingUrl,
+				pickupSnapshot: meta.pickupSnapshot,
+				currency: meta.currency,
+			},
+		);
+	},
+});
+
+/**
  * Scheduled by orders.markPaymentReceived. Sends a localized "payment received"
  * message to the shopper. Same swallow-errors / no-op-on-missing-waPhone shape
  * as `notifyStatusChange`. Bypasses the regular status pipeline because the
@@ -1020,6 +1100,23 @@ export const notifyMockupSubmitted = internalAction({
 	},
 });
 
+/** Shape returned by getPaymentPromptMeta — shared by the two release paths
+ * (notifyPaymentDue / notifyDeliveryFeeSet) so their annotations can't drift. */
+type PaymentPromptMeta = {
+	retailerId: Id<"retailers">;
+	shortId: string;
+	trackingToken: string | undefined;
+	customerWaPhone: string | undefined;
+	locale: Locale;
+	storeName: string;
+	pickupSnapshot: PickupSnapshot | undefined;
+	deliverySnapshot: { fee: number } | undefined;
+	total: number;
+	currency: string;
+	mockupPending: boolean;
+	deliveryFeePending: boolean;
+};
+
 /**
  * Internal query: load everything needed to send the buyer a payment prompt
  * once the mockup gate opens. Distinct from getRetailerLocaleForOrder because
@@ -1028,21 +1125,7 @@ export const notifyMockupSubmitted = internalAction({
  */
 export const getPaymentPromptMeta = internalQuery({
 	args: { orderId: v.id("orders") },
-	handler: async (
-		ctx,
-		{ orderId },
-	): Promise<{
-		retailerId: Id<"retailers">;
-		shortId: string;
-		trackingToken: string | undefined;
-		customerWaPhone: string | undefined;
-		locale: Locale;
-		storeName: string;
-		pickupSnapshot: PickupSnapshot | undefined;
-		// Order currency — needed to render the pickup-fee line in the block.
-		currency: string;
-		payment: ResolvedPayment;
-	} | null> => {
+	handler: async (ctx, { orderId }): Promise<PaymentPromptMeta | null> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) return null;
 		const retailer = await ctx.db.get(order.retailerId);
@@ -1055,8 +1138,11 @@ export const getPaymentPromptMeta = internalQuery({
 			locale: (retailer.locale as Locale | undefined) ?? "en",
 			storeName: retailer.storeName,
 			pickupSnapshot: order.pickupSnapshot,
+			deliverySnapshot: order.deliverySnapshot,
+			total: order.total,
 			currency: order.currency,
-			payment: await resolvePaymentForMessage(ctx, retailer),
+			mockupPending: isMockupGateClosed(order),
+			deliveryFeePending: order.deliveryFeePending === true,
 		};
 	},
 });
@@ -1079,17 +1165,7 @@ export const notifyPaymentDue = internalAction({
 		),
 	},
 	handler: async (ctx, { orderId, reason }): Promise<void> => {
-		let meta: {
-			retailerId: Id<"retailers">;
-			shortId: string;
-			trackingToken: string | undefined;
-			customerWaPhone: string | undefined;
-			locale: Locale;
-			storeName: string;
-			pickupSnapshot: PickupSnapshot | undefined;
-			currency: string;
-			payment: ResolvedPayment;
-		} | null = null;
+		let meta: PaymentPromptMeta | null = null;
 		try {
 			meta = await ctx.runQuery(internal.whatsapp.getPaymentPromptMeta, {
 				orderId,
@@ -1099,6 +1175,14 @@ export const notifyPaymentDue = internalAction({
 			return;
 		}
 		if (!meta || !meta.customerWaPhone) return;
+		// The delivery charge is still unconfirmed — keep holding the payment
+		// ask; notifyDeliveryFeeSet sends it once the seller sets the charge.
+		if (meta.deliveryFeePending) {
+			console.log("WA payment-due held: delivery fee pending", {
+				shortId: meta.shortId,
+			});
+			return;
+		}
 
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
 		const trackingToken =
@@ -1115,6 +1199,8 @@ export const notifyPaymentDue = internalAction({
 		const introBody = renderSystemMessage(meta.locale, introKey, {
 			shortId: meta.shortId,
 			storeName: meta.storeName,
+			// The intro carries the order-page link (no separate CTA block).
+			trackingUrl,
 		});
 		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");
 		await sendPaymentMessage(wa, meta.customerWaPhone, {
@@ -1124,8 +1210,69 @@ export const notifyPaymentDue = internalAction({
 			storeName: meta.storeName,
 			trackingUrl,
 			pickupSnapshot: meta.pickupSnapshot,
+			deliverySnapshot: meta.deliverySnapshot,
 			currency: meta.currency,
-			payment: meta.payment,
+		});
+	},
+});
+
+/**
+ * Scheduled by orders.setDeliveryFee when the seller resolves a fee-pending
+ * ("arrange via WhatsApp") delivery charge. Sends the payment ask that was
+ * held at confirm time, leading with the confirmed charge + final total.
+ * Skips while the mockup gate is still closed — that path sends its own
+ * prompt via notifyPaymentDue (which re-checks the fee hold), so a
+ * doubly-held order prompts exactly once. Errors swallowed (logged).
+ */
+export const notifyDeliveryFeeSet = internalAction({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<void> => {
+		let meta: PaymentPromptMeta | null = null;
+		try {
+			meta = await ctx.runQuery(internal.whatsapp.getPaymentPromptMeta, {
+				orderId,
+			});
+		} catch (err) {
+			console.error("WA delivery-fee-set lookup failed", err);
+			return;
+		}
+		if (!meta || !meta.customerWaPhone) return;
+		if (meta.deliveryFeePending) return; // re-flagged in the gap — stay held
+		if (meta.mockupPending) {
+			console.log("WA delivery-fee-set held: mockup pending", {
+				shortId: meta.shortId,
+			});
+			return;
+		}
+
+		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
+		const trackingToken =
+			meta.trackingToken ??
+			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
+		if (!trackingToken) return; // order vanished — don't ship a dead link
+		const trackingUrl = `${appUrl}/track/${trackingToken}`;
+		const formatAmount = (sen: number) =>
+			`${meta.currency} ${(sen / 100).toFixed(2)}`;
+		const introBody = renderSystemMessage(meta.locale, "deliveryFeeSet", {
+			shortId: meta.shortId,
+			storeName: meta.storeName,
+			amount: formatAmount(meta.total),
+			feeAmount: meta.deliverySnapshot
+				? formatAmount(meta.deliverySnapshot.fee)
+				: undefined,
+			// The intro carries the order-page link (no separate CTA block).
+			trackingUrl,
+		});
+		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");
+		await sendPaymentMessage(wa, meta.customerWaPhone, {
+			introBody,
+			locale: meta.locale,
+			shortId: meta.shortId,
+			storeName: meta.storeName,
+			trackingUrl,
+			// The intro already quotes the charge — no separate fee line needed.
+			pickupSnapshot: meta.pickupSnapshot,
+			currency: meta.currency,
 		});
 	},
 });
@@ -1312,86 +1459,13 @@ export const getCounterOrderMeta = internalQuery({
 });
 
 /**
- * Resolve a retailer's payment methods (QR storage ids → viewable URLs) for the
- * pay-at-bind message. Keyed by retailerId (not an order — no order exists yet
- * at scan time). Returns null when the retailer vanished.
- */
-export const getRetailerPaymentContext = internalQuery({
-	args: { retailerId: v.id("retailers") },
-	handler: async (
-		ctx,
-		{ retailerId },
-	): Promise<{ payment: ResolvedPayment } | null> => {
-		const retailer = await ctx.db.get(retailerId);
-		if (!retailer) return null;
-		return { payment: await resolvePaymentForMessage(ctx, retailer) };
-	},
-});
-
-/**
- * Scheduled from the checkout-bind reply (handleInbound). Right after the buyer
- * scans the seller's `KP-<token>` QR and gets the bind ack, push the seller's
- * payment details so they can pay ahead — even before the cashier finishes —
- * instead of waiting for them at the end of the sale. No-ops when the seller has
- * no payment methods configured (nothing to send). Sent as a gated
- * `session_message` (now that the retailer is known, per-seller caps apply); the
- * pay-later order-create message omits the methods block so this never repeats.
- */
-export const notifyCounterCheckoutPayment = internalAction({
-	args: {
-		retailerId: v.id("retailers"),
-		toPhone: v.string(),
-		storeName: v.string(),
-		locale: v.union(v.literal("en"), v.literal("ms")),
-	},
-	handler: async (
-		ctx,
-		{ retailerId, toPhone, storeName, locale },
-	): Promise<void> => {
-		const meta = await ctx
-			.runQuery(internal.whatsapp.getRetailerPaymentContext, { retailerId })
-			.catch((err) => {
-				console.error("WA counter pay-at-bind lookup failed", err);
-				return null;
-			});
-		if (!meta || meta.payment.methods.length === 0) return; // nothing to send
-
-		const intro = renderSystemMessage(locale, "counterCheckoutPaymentIntro", {
-			shortId: "",
-			storeName,
-		});
-		const body = `${intro}\n${renderPaymentMethods(locale, meta.payment.methods)}`;
-		const wa = makeGuardedSender(ctx, retailerId, "session_message");
-		try {
-			await wa.send(toPhone, { kind: "text", body });
-		} catch (err) {
-			console.error("WA counter pay-at-bind send failed", err);
-		}
-		// Each configured QR follows as its own captioned image (mirrors
-		// sendPaymentMessage) so the buyer can long-press to save it.
-		for (const m of meta.payment.methods) {
-			if (m.type !== "qr" || !m.qrImageUrl) continue;
-			try {
-				await wa.send(toPhone, {
-					kind: "image",
-					imageUrl: m.qrImageUrl,
-					caption: paymentQrCaption(locale, m.label),
-				});
-			} catch (err) {
-				console.error("WA counter pay-at-bind QR send failed", err);
-			}
-		}
-	},
-});
-
-/**
  * Scheduled by counterCheckout.createOrderFromSession. The buyer scanned once, so
  * everything they need lands in that chat automatically — no rescan, no manual
  * seller step:
  *   - paid-in-person → a "confirmed & paid" text, then the RECEIPT PDF;
- *   - pay-later → the payment ask (transfer reference + payment methods + an
- *     "I've paid" CTA + any QR images, via the shared sendPaymentMessage), then
- *     the INVOICE PDF (whose "How to pay" block mirrors the same details).
+ *   - pay-later → the payment ask (transfer reference + an "I've paid" CTA that
+ *     points to the order page's "How to pay", via the shared sendPaymentMessage),
+ *     then the INVOICE PDF (whose "How to pay" block carries the actual details).
  * All sends are best-effort (errors logged) so the originating mutation never
  * fails on an outbound issue; the seller can resend the document from the Done
  * screen if needed.
@@ -1444,9 +1518,9 @@ export const notifyCounterOrderCreated = internalAction({
 		} else {
 			// Pay-later: send the amount + transfer reference + "I've paid" CTA so the
 			// buyer can settle from that chat without ever scanning again (boss ask).
-			// The bank/QR methods block is intentionally OMITTED here — the buyer
-			// already received it at scan-bind (notifyCounterCheckoutPayment), and the
-			// invoice PDF below carries the details too, so re-sending would repeat it.
+			// Raw bank/QR details are never in chat (ticket 86ey98ju1) — the payment
+			// CTA points to the order page's "How to pay", and the invoice PDF below
+			// carries the details as the formal document.
 			const intro =
 				renderSystemMessage(locale, "counterOrderConfirmedUnpaid", {
 					shortId: meta.shortId,
@@ -1463,8 +1537,6 @@ export const notifyCounterOrderCreated = internalAction({
 					trackingUrl,
 					// Counter orders are collected at the counter — no pickup snapshot.
 					pickupSnapshot: undefined,
-					payment: { methods: [] },
-					includePaymentDetails: false,
 				});
 			} catch (err) {
 				console.error("WA counter-order payment ask failed", err);

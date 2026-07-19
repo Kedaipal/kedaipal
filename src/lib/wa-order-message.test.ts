@@ -72,6 +72,46 @@ describe("buildOrderWaMessage", () => {
 		);
 	});
 
+	test("delivery order with a resolved charge shows the fee line, total is final", () => {
+		const msg = buildOrderWaMessage({
+			...baseOrder,
+			// total already includes the resolved delivery fee (server-computed).
+			total: 11500,
+			deliveryFee: 500,
+			deliveryMethod: "delivery",
+			deliveryAddress: {
+				line1: "12 Jalan Mawar",
+				city: "Kuala Lumpur",
+				state: "WP Kuala Lumpur",
+				postcode: "53100",
+			},
+		});
+		expect(msg).toContain(`Delivery fee: ${formatPrice(500, "MYR")}`);
+		expect(msg).toContain(`Total: ${formatPrice(11500, "MYR")}`);
+		// A resolved fee is final — no provisional caveat.
+		expect(msg).not.toContain("+ delivery");
+		expect(msg).not.toContain("Delivery charge to be confirmed by seller");
+	});
+
+	test("arrange-later delivery flags the total as provisional", () => {
+		const msg = buildOrderWaMessage({
+			...baseOrder,
+			// No fee baked into the total yet — the seller confirms it after checkout.
+			deliveryFeePending: true,
+			deliveryMethod: "delivery",
+			deliveryAddress: {
+				line1: "12 Jalan Mawar",
+				city: "Kuala Lumpur",
+				state: "WP Kuala Lumpur",
+				postcode: "53100",
+			},
+		});
+		expect(msg).toContain(`Total: ${formatPrice(11000, "MYR")} + delivery`);
+		expect(msg).toContain("(Delivery charge to be confirmed by seller)");
+		// Nothing to itemise while the charge is still unknown.
+		expect(msg).not.toContain("Delivery fee:");
+	});
+
 	test("self-collect without snapshot falls back to a plain pickup line", () => {
 		const msg = buildOrderWaMessage({
 			...baseOrder,

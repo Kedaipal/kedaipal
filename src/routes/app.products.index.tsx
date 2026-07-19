@@ -467,6 +467,13 @@ function ProductCard({
 				</span>
 			</div>
 			<div className="flex shrink-0 flex-col items-end gap-1">
+				{p.active && (p.minQuantity ?? 0) >= 2 ? (
+					// Minimum-order-quantity rule — flagged on the list so the seller
+					// can see at a glance which products carry it. See minOrderRules.
+					<span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+						Min {p.minQuantity}
+					</span>
+				) : null}
 				{p.active && (p.hidden || p.hiddenByCategory) ? (
 					// Off the public storefront, still sellable at the counter — flagged
 					// so the state is never silent. Either the seller's own toggle
