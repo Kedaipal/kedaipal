@@ -63,6 +63,8 @@ function NewProductRoute() {
 		return (
 			<div className="flex flex-col gap-4 lg:max-w-2xl">
 				<ProductWizard
+					retailerId={retailer._id}
+					categoriesLocked={categoriesLocked}
 					currency={retailer.currency}
 					onSubmit={handleCreate}
 					onSkipToFullForm={() =>

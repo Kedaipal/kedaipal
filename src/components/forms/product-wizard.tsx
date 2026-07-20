@@ -1,5 +1,16 @@
-import { ChefHat, ChevronLeft, PackageCheck, Plus, X } from "lucide-react";
+import { useQuery } from "convex/react";
+import {
+	ChefHat,
+	ChevronLeft,
+	EyeOff,
+	PackageCheck,
+	Plus,
+	Store,
+	X,
+} from "lucide-react";
 import { type ReactNode, useState } from "react";
+import { api } from "../../../convex/_generated/api";
+import type { Id } from "../../../convex/_generated/dataModel";
 import {
 	convexErrorMessage,
 	normalizePriceInput,
@@ -8,6 +19,7 @@ import {
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { CategoryPicker } from "./category-picker";
 import type { ProductFormSubmitValues } from "./product-form";
 import { type ProductImage, ProductImagesField } from "./product-images-field";
 import { AXIS_PRESETS, PriceInput, StockInput } from "./variant-editor";
@@ -37,6 +49,15 @@ export type WizardState = {
 	madeToOrder: boolean | null;
 	/** Integer stock strings, keyed like `prices`. Only read when From stock. */
 	stocks: Record<string, string>;
+	/** Optional seller item codes, keyed like `prices`. Revealed on the price
+	 * step behind "+ Add your own item codes (SKU)". */
+	skus: Record<string, string>;
+	/** Review step — hidden = off the public storefront, still counter-sellable
+	 * (docs/hidden-products.md). Default visible. */
+	hidden: boolean;
+	/** Review step — category membership (only offered when the store has
+	 * categories). Same submit path as the full form. */
+	categoryIds: Id<"categories">[];
 };
 
 /** Key into prices/stocks for the one-item (no choices) branch. */
@@ -53,6 +74,9 @@ export function emptyWizardState(): WizardState {
 		prices: {},
 		madeToOrder: null,
 		stocks: {},
+		skus: {},
+		hidden: false,
+		categoryIds: [],
 	};
 }
 
@@ -139,6 +163,7 @@ export function buildWizardSubmitValues(
 		const stockRaw = (state.stocks[key] ?? "").trim();
 		return {
 			optionValues: key === SINGLE_KEY ? [] : [key],
+			sku: (state.skus[key] ?? "").trim() || undefined,
 			price: price !== null ? Math.round(price * 100) : 0,
 			onHand: /^\d+$/.test(stockRaw) ? Number.parseInt(stockRaw, 10) : 0,
 			active: true,
@@ -151,8 +176,8 @@ export function buildWizardSubmitValues(
 		name: state.name.trim(),
 		description:
 			state.description.trim().length > 0 ? state.description.trim() : undefined,
-		hidden: false,
-		categoryIds: [],
+		hidden: state.hidden,
+		categoryIds: state.categoryIds,
 		imageStorageIds: state.images.map((i) => i.id),
 		options: state.hasChoices
 			? [{ name: state.axisName.trim(), values: state.axisValues }]
@@ -231,11 +256,17 @@ function AnswerCard({
 }
 
 export function ProductWizard({
+	retailerId,
+	categoriesLocked,
 	currency,
 	onSubmit,
 	onSkipToFullForm,
 	onExit,
 }: {
+	/** Owning retailer — feeds the review step's category picker. */
+	retailerId: Id<"retailers">;
+	/** Client mirror of the `categories` plan gate (same as the full form). */
+	categoriesLocked: boolean;
 	currency: string;
 	onSubmit: (values: ProductFormSubmitValues) => Promise<void>;
 	/** "Skip — use the full form" on step 1 (power users / bulk sellers). */
@@ -250,7 +281,12 @@ export function ProductWizard({
 	const [submitting, setSubmitting] = useState(false);
 	const [serverError, setServerError] = useState<string | null>(null);
 	const [showDescription, setShowDescription] = useState(false);
+	const [showSkus, setShowSkus] = useState(false);
 	const [valueDraft, setValueDraft] = useState("");
+	// Categories are only offered on review when the store actually has some —
+	// a brand-new seller shouldn't meet a whole new concept mid-wizard.
+	const categories = useQuery(api.categories.listForRetailer, { retailerId });
+	const hasCategories = (categories?.filter((c) => c.active).length ?? 0) > 0;
 
 	function patch(partial: Partial<WizardState>) {
 		setStateRaw((prev) => ({ ...prev, ...partial }));
@@ -580,10 +616,37 @@ export function ProductWizard({
 											invalid={!!issueFor(`price:${key}`)}
 										/>
 									</div>
+									{showSkus ? (
+										<div className="flex items-center justify-end gap-2">
+											<span className="text-xs text-muted-foreground">SKU</span>
+											<Input
+												placeholder="ITEM-001"
+												value={state.skus[key] ?? ""}
+												onChange={(e) =>
+													patch({
+														skus: { ...state.skus, [key]: e.target.value },
+													})
+												}
+												className="h-9 w-40"
+												aria-label={`Item code for ${key === SINGLE_KEY ? "this item" : key}`}
+											/>
+										</div>
+									) : null}
 									<IssueText message={issueFor(`price:${key}`)} />
 								</div>
 							))}
 						</div>
+						{/* Question-first SKU: zero pixels unless the seller uses item
+						    codes — no dedicated step for something most sellers skip. */}
+						{showSkus ? null : (
+							<button
+								type="button"
+								onClick={() => setShowSkus(true)}
+								className="self-start text-sm font-semibold text-accent-emphasis hover:underline"
+							>
+								+ Add your own item codes (SKU)
+							</button>
+						)}
 					</>
 				) : null}
 
@@ -732,13 +795,71 @@ export function ProductWizard({
 								</div>
 							))}
 						</div>
+						{/* Optional publish settings — where the product appears. Kept on
+						    review (not their own steps) so the wizard spine stays five
+						    questions, but a counter-only or categorised product never
+						    needs a create-then-edit round trip. */}
+						<div className="flex flex-col gap-3 rounded-2xl border border-border p-3">
+							<div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+								<div className="min-w-0">
+									<span className="text-sm font-semibold">Storefront</span>
+									<p className="text-xs leading-relaxed text-muted-foreground">
+										{state.hidden
+											? "Hidden from your public store — still sellable at the counter."
+											: "Shown on your public store and sellable everywhere."}
+									</p>
+								</div>
+								<div className="flex shrink-0 gap-1 self-start rounded-xl bg-muted p-1">
+									<button
+										type="button"
+										aria-pressed={!state.hidden}
+										onClick={() => patch({ hidden: false })}
+										className={cn(
+											"flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm font-medium transition-colors",
+											!state.hidden
+												? "bg-background text-foreground shadow-sm"
+												: "text-muted-foreground hover:text-foreground",
+										)}
+									>
+										<Store className="size-4" aria-hidden />
+										Visible
+									</button>
+									<button
+										type="button"
+										aria-pressed={state.hidden}
+										onClick={() => patch({ hidden: true })}
+										className={cn(
+											"flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm font-medium transition-colors",
+											state.hidden
+												? "bg-background text-foreground shadow-sm"
+												: "text-muted-foreground hover:text-foreground",
+										)}
+									>
+										<EyeOff className="size-4" aria-hidden />
+										Hidden
+									</button>
+								</div>
+							</div>
+							{hasCategories ? (
+								<div className="border-t border-border pt-3">
+									<CategoryPicker
+										retailerId={retailerId}
+										selectedIds={state.categoryIds}
+										onChange={(categoryIds) => patch({ categoryIds })}
+										locked={categoriesLocked}
+										embedded
+									/>
+								</div>
+							) : null}
+						</div>
 						{/* Features that left the wizard stay discoverable. */}
 						<p className="rounded-xl border border-dashed border-border px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
 							<span className="font-semibold text-foreground">
 								You can also add later:
 							</span>{" "}
-							hide from your store, categories, design approval before making, a
-							fully custom option, SKUs. Find them in Edit product → Advanced.
+							design approval before making, a fully custom option, a second
+							choice (e.g. Size × Flavour){hasCategories ? "" : ", categories"}.
+							Find them in Edit product → Advanced.
 						</p>
 					</>
 				) : null}

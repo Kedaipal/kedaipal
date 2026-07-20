@@ -30,19 +30,26 @@ steps.
 | --- | --- | --- |
 | 1 · Name it | "What are you selling?" — name + photos, description behind a link | `name`, `imageStorageIds`, `description` |
 | 2 · Choices | "Does the buyer pick anything?" — *Just one item* / *Buyer picks a choice* (preset chips: Size/Flavour/Weight/Pack, values typed as chips, **one axis max**) | `options` |
-| 3 · Price | One price field, or one per choice + "Same price for all" | per-variant `price` |
+| 3 · Price | One price field, or one per choice + "Same price for all". "+ Add your own item codes (SKU)" reveals per-choice SKU inputs — question-first, zero pixels unless used | per-variant `price` (+ `sku`) |
 | 4 · Preparing | "How do you prepare orders?" — *Made to order* (no stock inputs) / *From stock* (stock steppers) | `blockWhenOutOfStock` + `onHand` |
-| 5 · Review | Buyer-eye preview card + summary rows with per-row Edit + "You can also add later…" strip | submit |
+| 5 · Review | Buyer-eye preview card + summary rows with per-row Edit + **optional publish settings** (Visible/Hidden toggle; category picker **only when the store has categories**) + "You can also add later…" strip | submit (+ `hidden`, `categoryIds`) |
 
 Validation: the branching questions (2/4) gate Continue structurally
 (disabled + one-line reason); text inputs validate on Continue with inline
 `aria-invalid` + message (never a generic banner). Publish re-validates every
 step before submitting (review-step edits jump around).
 
-**Deliberately NOT in the wizard:** SKU, mockup approval, the custom line, a
-second option axis, per-variant images/deactivate, visibility, categories.
-The review step names them ("You can also add later: … Edit product →
-Advanced") so nothing becomes hidden behaviour, per the discoverability rule.
+**Create-time needs kept in the wizard** (so there's never a create-then-edit
+round trip): per-choice **SKUs** behind the price-step link, **visibility**
+(counter-only products are created hidden directly — the Rahman's-lekor
+pattern, docs/hidden-products.md) and **categories** on the review step. The
+category picker only renders when the store has ≥1 active category — a
+brand-new seller never meets the concept mid-wizard.
+
+**Deliberately NOT in the wizard:** mockup approval, the custom line, a
+second option axis, per-variant images/deactivate. The review step names them
+("You can also add later: … Edit product → Advanced") so nothing becomes
+hidden behaviour, per the discoverability rule.
 
 **Escape hatch:** "Skip — use the full form" on step 1 →
 `/app/products/new?form=full` renders the same restructured `ProductForm` the
@@ -108,7 +115,8 @@ surface:
   meaningless when a product never sells out.
 - The desktop dense variant table is gone; the responsive rows list +
   bulk-fill covers the 50-variant power case.
-- SKU moved under Advanced everywhere.
+- SKU moved under Advanced on the edit form; in the wizard it's behind the
+  price-step "+ Add your own item codes (SKU)" link.
 - The wizard is the only prominent create path; the full form remains one
   quiet link away (`?form=full`).
 

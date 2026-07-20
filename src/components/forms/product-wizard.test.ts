@@ -113,7 +113,7 @@ describe("buildWizardSubmitValues", () => {
 		});
 		// Prices round to integer sen.
 		expect(values.variants[2].price).toBe(2850);
-		// Wizard never sets the advanced dimensions.
+		// Untouched publish settings keep their defaults.
 		expect(values.hidden).toBe(false);
 		expect(values.categoryIds).toEqual([]);
 	});
@@ -124,6 +124,7 @@ describe("buildWizardSubmitValues", () => {
 		expect(values.variants).toEqual([
 			{
 				optionValues: [],
+				sku: undefined,
 				price: 550,
 				onHand: 20,
 				active: true,
@@ -132,6 +133,30 @@ describe("buildWizardSubmitValues", () => {
 				imageStorageIds: [],
 			},
 		]);
+	});
+
+	it("carries optional SKUs per choice, trimming and dropping blanks", () => {
+		const values = buildWizardSubmitValues({
+			...browniesState(),
+			skus: { Small: " BRN-S ", Medium: "", Large: "  " },
+		});
+		expect(values.variants.map((v) => v.sku)).toEqual([
+			"BRN-S",
+			undefined,
+			undefined,
+		]);
+	});
+
+	it("carries the review-step publish settings (hidden + categories)", () => {
+		const values = buildWizardSubmitValues({
+			...singleFromStock(),
+			hidden: true,
+			categoryIds: ["cat1", "cat2"] as never,
+		});
+		// Counter-only products are created hidden directly — no create-then-edit
+		// round trip (docs/hidden-products.md).
+		expect(values.hidden).toBe(true);
+		expect(values.categoryIds).toEqual(["cat1", "cat2"]);
 	});
 
 	it("trims the name and drops a blank description", () => {
