@@ -422,7 +422,7 @@ function VisibilityControl({
 						: "Shown on your public store and sellable everywhere."}
 				</p>
 			</div>
-			<div className="flex shrink-0 gap-1 rounded-xl bg-muted p-1">
+			<div className="flex shrink-0 self-start gap-1 rounded-xl bg-muted p-1 sm:self-auto">
 				{options.map((opt) => {
 					const selected = opt.value === hidden;
 					return (
