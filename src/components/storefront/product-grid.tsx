@@ -43,6 +43,13 @@ interface ProductGridProps {
 	 * no extra read cost.)
 	 */
 	storeSlug?: string;
+	/**
+	 * Open the checkout/review sheet. The detail sheet's "Go to checkout" CTA
+	 * calls this (after the grid closes the sheet), so a buyer can proceed
+	 * straight from a product without hunting for the cart bar. Owned by the
+	 * route so it can reach the CartBar-hosted CheckoutSheet (a sibling).
+	 */
+	onRequestCheckout?: () => void;
 }
 
 export function ProductGrid({
@@ -51,6 +58,7 @@ export function ProductGrid({
 	products: productsOverride,
 	beforeGrid,
 	storeSlug,
+	onRequestCheckout,
 }: ProductGridProps) {
 	// `products.list` returns active products already sorted by the retailer's
 	// `sortOrder` (set via the dashboard reorder). We render in that order — the
@@ -280,11 +288,28 @@ export function ProductGrid({
 				cartQuantity={
 					openProduct ? cart.quantityForProduct(openProduct._id) : 0
 				}
+				// Whole-cart summary drives the footer "Go to checkout" CTA.
+				cartItemCount={cart.itemCount}
+				cartTotal={cart.total}
 				onClose={() => setOpenProduct(null)}
 				// Stay open after adding so a buyer can add a standard variant AND
 				// request the custom line from the same product without reopening. The
 				// toast + cart bar confirm the add; they close via the X when done.
 				onAdd={(p, variant, qty, custom) => addVariant(p, variant, qty, custom)}
+				// Close the product sheet, then hand off to the CheckoutSheet (owned
+				// by the CartBar). The open is deferred a tick: mounting the checkout
+				// dialog in the SAME commit that unmounts this one makes radix's
+				// dismiss/focus layer collide, so the checkout dialog fails to stay
+				// open. Closing first, then opening on the next task, lets this
+				// dialog's teardown finish. The gap is imperceptible (no exit anim).
+				onCheckout={
+					onRequestCheckout
+						? () => {
+								setOpenProduct(null);
+								setTimeout(onRequestCheckout, 0);
+							}
+						: undefined
+				}
 			/>
 		</>
 	);

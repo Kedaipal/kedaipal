@@ -1,5 +1,6 @@
 import { createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
+import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import { CartBar } from "../components/storefront/cart-bar";
 import { CategoryRail } from "../components/storefront/category-rail";
@@ -198,6 +199,9 @@ function StorefrontRoute() {
 	const pickupLocations = useQuery(api.pickupLocations.listActivePublicBySlug, {
 		slug,
 	});
+	// Checkout sheet open-state lives here (not in CartBar) so the product detail
+	// sheet — a sibling under this route — can open checkout directly.
+	const [checkoutOpen, setCheckoutOpen] = useState(false);
 
 	if (result === undefined || result.status !== "ok") {
 		return <StorefrontSkeleton />;
@@ -220,6 +224,7 @@ function StorefrontRoute() {
 					retailerId={retailer._id}
 					cart={cart}
 					storeSlug={retailer.slug}
+					onRequestCheckout={() => setCheckoutOpen(true)}
 					beforeGrid={
 						<CategoryRail retailerId={retailer._id} storeSlug={retailer.slug} />
 					}
@@ -238,6 +243,8 @@ function StorefrontRoute() {
 				minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
 				minOrderValue={retailer.minOrderValue}
 				pickupLocations={pickupLocations ?? []}
+				checkoutOpen={checkoutOpen}
+				onCheckoutOpenChange={setCheckoutOpen}
 			/>
 		</div>
 	);

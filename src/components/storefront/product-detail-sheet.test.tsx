@@ -320,3 +320,81 @@ describe("ProductDetailSheet — minimum order quantity (86ey9unyx)", () => {
 		expect(onAdd).not.toHaveBeenCalled();
 	});
 });
+
+describe("ProductDetailSheet — direct-to-checkout CTA (86eybhqye)", () => {
+	it("hides the checkout CTA when the cart is empty", () => {
+		render(
+			<ProductDetailSheet
+				product={product}
+				retailerId={RID}
+				cartQuantity={0}
+				cartItemCount={0}
+				cartTotal={0}
+				onClose={vi.fn()}
+				onAdd={vi.fn()}
+				onCheckout={vi.fn()}
+			/>,
+		);
+		expect(
+			screen.queryByRole("button", { name: /go to checkout/i }),
+		).toBeNull();
+	});
+
+	it("shows the CTA with count + total once the cart has items and fires onCheckout", () => {
+		const onCheckout = vi.fn();
+		render(
+			<ProductDetailSheet
+				product={product}
+				retailerId={RID}
+				cartQuantity={0}
+				cartItemCount={3}
+				cartTotal={2500}
+				onClose={vi.fn()}
+				onAdd={vi.fn()}
+				onCheckout={onCheckout}
+			/>,
+		);
+		const cta = screen.getByRole("button", { name: /go to checkout/i });
+		// Count badge + money total both live on the CTA (regex tolerates the NBSP
+		// Intl inserts after the currency symbol).
+		expect(cta.textContent).toMatch(/3/);
+		expect(cta.textContent).toMatch(/RM\s*25\.00/);
+		fireEvent.click(cta);
+		expect(onCheckout).toHaveBeenCalledTimes(1);
+	});
+
+	it("omits the money amount for a quote-only cart (total 0) but keeps the CTA", () => {
+		render(
+			<ProductDetailSheet
+				product={product}
+				retailerId={RID}
+				cartQuantity={0}
+				cartItemCount={1}
+				cartTotal={0}
+				onClose={vi.fn()}
+				onAdd={vi.fn()}
+				onCheckout={vi.fn()}
+			/>,
+		);
+		const cta = screen.getByRole("button", { name: /go to checkout/i });
+		expect(cta).toBeTruthy();
+		expect(cta.textContent).not.toMatch(/RM/);
+	});
+
+	it("hides the CTA when no onCheckout handler is wired (standalone render)", () => {
+		render(
+			<ProductDetailSheet
+				product={product}
+				retailerId={RID}
+				cartQuantity={0}
+				cartItemCount={3}
+				cartTotal={3000}
+				onClose={vi.fn()}
+				onAdd={vi.fn()}
+			/>,
+		);
+		expect(
+			screen.queryByRole("button", { name: /go to checkout/i }),
+		).toBeNull();
+	});
+});
