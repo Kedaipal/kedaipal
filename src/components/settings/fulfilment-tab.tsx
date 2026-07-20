@@ -852,10 +852,8 @@ function DeliveryChargeSection({
 						</p>
 					</div>
 
-					<fieldset className="flex flex-col gap-2">
-						<legend className="text-xs font-medium text-muted-foreground">
-							Beyond your last band
-						</legend>
+					<div className="flex flex-col gap-2 border-t border-border pt-4">
+						<SectionHeading title="Beyond your last band" />
 						<label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-border p-3">
 							<input
 								type="radio"
@@ -895,7 +893,7 @@ function DeliveryChargeSection({
 								</span>
 							</span>
 						</label>
-					</fieldset>
+					</div>
 				</div>
 			) : null}
 
