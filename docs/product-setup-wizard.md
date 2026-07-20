@@ -32,12 +32,15 @@ steps.
 | 2 · Choices | "Does the buyer pick anything?" — *Just one item* / *Buyer picks a choice* (preset chips: Size/Flavour/Weight/Pack, values typed as chips, **one axis max**) | `options` |
 | 3 · Price | One price field, or one per choice + "Same price for all". "+ Add your own item codes (SKU)" reveals per-choice SKU inputs — question-first, zero pixels unless used | per-variant `price` (+ `sku`) |
 | 4 · Preparing | "How do you prepare orders?" — *Made to order* (no stock inputs) / *From stock* (stock steppers) | `blockWhenOutOfStock` + `onHand` |
-| 5 · Review | Buyer-eye preview card + summary rows with per-row Edit + **optional publish settings** (Visible/Hidden toggle; category picker **only when the store has categories**) + "You can also add later…" strip | submit (+ `hidden`, `categoryIds`) |
+| 5 · Review | Buyer-eye preview card + summary rows with per-row Edit + **optional publish settings** (Visible/Hidden toggle; category picker **only when the store has categories**) + the **"More options"** disclosure | submit (+ `hidden`, `categoryIds`, `requiresProof`, custom line) |
 
 Validation: the branching questions (2/4) gate Continue structurally
 (disabled + one-line reason); text inputs validate on Continue with inline
 `aria-invalid` + message (never a generic banner). Publish re-validates every
-step before submitting (review-step edits jump around).
+step — including the review step's custom-line price — before submitting.
+
+A **Cancel ✕** in the wizard header exits directly (confirm-if-dirty) — no
+pressing Back through every step.
 
 **Create-time needs kept in the wizard** (so there's never a create-then-edit
 round trip): per-choice **SKUs** behind the price-step link, **visibility**
@@ -46,10 +49,18 @@ pattern, docs/hidden-products.md) and **categories** on the review step. The
 category picker only renders when the store has ≥1 active category — a
 brand-new seller never meets the concept mid-wizard.
 
-**Deliberately NOT in the wizard:** mockup approval, the custom line, a
-second option axis, per-variant images/deactivate. The review step names them
-("You can also add later: … Edit product → Advanced") so nothing becomes
-hidden behaviour, per the discoverability rule.
+**"More options" on review — full create/edit parity without the wall:**
+- **Design approval (mockup)** — offered ONLY when the product is made to
+  order (Zaki's call: proof gating is a made-to-order concept); flipping back
+  to From stock at review quietly drops it (`buildWizardSubmitValues`).
+- **Custom / made-to-order option** — label, price-on-quote, buyer prompt
+  (image addable later in edit).
+- **"Open in the full editor"** — the consistency escape hatch for everything
+  else (second axis, per-choice photos): `wizardToFormInitialValues` hands the
+  whole draft to `ProductForm` prefilled (in-memory via the route's
+  `wizardDraft` state; a refresh falls back to a blank full form). This gives
+  create 100% parity with edit **by construction** instead of duplicating the
+  grid machinery inside the wizard.
 
 **Escape hatch:** "Skip — use the full form" on step 1 →
 `/app/products/new?form=full` renders the same restructured `ProductForm` the

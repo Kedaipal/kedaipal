@@ -57,6 +57,12 @@ export interface ProductFormSubmitValues {
 	}[];
 }
 
+/** Seed shape for the form — also produced by the wizard's open-in-full-editor
+ * handoff (`wizardToFormInitialValues`). */
+export type ProductFormInitialValues = NonNullable<
+	ProductFormProps["initialValues"]
+>;
+
 interface ProductFormProps {
 	/** Owning retailer — feeds the category picker's list query. */
 	retailerId: Id<"retailers">;

@@ -20,7 +20,10 @@ import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { CategoryPicker } from "./category-picker";
-import type { ProductFormSubmitValues } from "./product-form";
+import type {
+	ProductFormInitialValues,
+	ProductFormSubmitValues,
+} from "./product-form";
 import { type ProductImage, ProductImagesField } from "./product-images-field";
 import { AXIS_PRESETS, PriceInput, StockInput } from "./variant-editor";
 
@@ -58,6 +61,12 @@ export type WizardState = {
 	/** Review step — category membership (only offered when the store has
 	 * categories). Same submit path as the full form. */
 	categoryIds: Id<"categories">[];
+	/** Review "More options" — mockup approval on every choice. Only offered
+	 * (and only applied) for made-to-order products. */
+	requiresProof: boolean;
+	/** Review "More options" — the optional custom / made-to-order line
+	 * (docs/custom-option.md). Null = not offered. */
+	customLine: { label: string; price: string; prompt: string } | null;
 };
 
 /** Key into prices/stocks for the one-item (no choices) branch. */
@@ -77,6 +86,8 @@ export function emptyWizardState(): WizardState {
 		skus: {},
 		hidden: false,
 		categoryIds: [],
+		requiresProof: false,
+		customLine: null,
 	};
 }
 
@@ -146,6 +157,16 @@ export function wizardStepIssues(
 			}
 		}
 	}
+	if (step === 5 && state.customLine) {
+		const raw = state.customLine.price.trim();
+		if (raw.length > 0 && parsePriceInput(raw) === null) {
+			issues.push({
+				field: "customPrice",
+				message:
+					"Not a valid price — enter a number, or leave blank for price on quote.",
+			});
+		}
+	}
 	return issues;
 }
 
@@ -158,20 +179,43 @@ export function buildWizardSubmitValues(
 	state: WizardState,
 ): ProductFormSubmitValues {
 	const trackStock = state.madeToOrder === false;
-	const variants = priceKeys(state).map((key) => {
-		const price = parsePriceInput((state.prices[key] ?? "").trim());
-		const stockRaw = (state.stocks[key] ?? "").trim();
-		return {
-			optionValues: key === SINGLE_KEY ? [] : [key],
-			sku: (state.skus[key] ?? "").trim() || undefined,
-			price: price !== null ? Math.round(price * 100) : 0,
-			onHand: /^\d+$/.test(stockRaw) ? Number.parseInt(stockRaw, 10) : 0,
+	// Mockup approval is only offered (and only applied) for made-to-order
+	// products — flipping back to From stock at review quietly drops it.
+	const requiresProof = state.madeToOrder === true && state.requiresProof;
+	const variants: ProductFormSubmitValues["variants"] = priceKeys(state).map(
+		(key) => {
+			const price = parsePriceInput((state.prices[key] ?? "").trim());
+			const stockRaw = (state.stocks[key] ?? "").trim();
+			return {
+				optionValues: key === SINGLE_KEY ? [] : [key],
+				sku: (state.skus[key] ?? "").trim() || undefined,
+				price: price !== null ? Math.round(price * 100) : 0,
+				onHand: /^\d+$/.test(stockRaw) ? Number.parseInt(stockRaw, 10) : 0,
+				active: true,
+				blockWhenOutOfStock: trackStock,
+				requiresProof,
+				imageStorageIds: [],
+			};
+		},
+	);
+	// The custom line rides as a flagged entry, mirroring the full form's
+	// buildSubmitVariants (blank price = "Price on quote").
+	if (state.customLine) {
+		const raw = state.customLine.price.trim();
+		const parsed = raw.length > 0 ? parsePriceInput(raw) : null;
+		variants.push({
+			optionValues: [],
+			price: parsed !== null ? Math.round(parsed * 100) : 0,
+			onHand: 0,
 			active: true,
-			blockWhenOutOfStock: trackStock,
-			requiresProof: false,
+			blockWhenOutOfStock: false,
+			requiresProof: true,
 			imageStorageIds: [],
-		};
-	});
+			isCustom: true,
+			customLabel: state.customLine.label.trim() || undefined,
+			customPrompt: state.customLine.prompt.trim() || undefined,
+		});
+	}
 	return {
 		name: state.name.trim(),
 		description:
@@ -183,6 +227,28 @@ export function buildWizardSubmitValues(
 			? [{ name: state.axisName.trim(), values: state.axisValues }]
 			: [],
 		variants,
+	};
+}
+
+/**
+ * Hand the wizard draft to the full form (`?form=full`) with everything the
+ * seller entered — the consistency escape hatch: anything the wizard doesn't
+ * surface (second axis, per-choice photos…) is one tap away WITHOUT retyping.
+ * Image preview URLs ride along so the photos stay visible.
+ */
+export function wizardToFormInitialValues(
+	state: WizardState,
+): ProductFormInitialValues {
+	const values = buildWizardSubmitValues(state);
+	return {
+		name: values.name,
+		description: values.description,
+		hidden: values.hidden,
+		categoryIds: values.categoryIds,
+		imageStorageIds: values.imageStorageIds,
+		imageUrls: state.images.map((i) => i.url),
+		options: values.options,
+		variants: values.variants,
 	};
 }
 
@@ -261,6 +327,7 @@ export function ProductWizard({
 	currency,
 	onSubmit,
 	onSkipToFullForm,
+	onOpenFullForm,
 	onExit,
 }: {
 	/** Owning retailer — feeds the review step's category picker. */
@@ -271,7 +338,10 @@ export function ProductWizard({
 	onSubmit: (values: ProductFormSubmitValues) => Promise<void>;
 	/** "Skip — use the full form" on step 1 (power users / bulk sellers). */
 	onSkipToFullForm: () => void;
-	/** Back from step 1 — leave the wizard entirely. */
+	/** Review-step handoff: open the full form prefilled with the wizard draft
+	 * (second axis, per-choice photos etc. without retyping). */
+	onOpenFullForm: (initialValues: ProductFormInitialValues) => void;
+	/** Back from step 1 / Cancel — leave the wizard entirely. */
 	onExit: () => void;
 }) {
 	const [step, setStep] = useState(1);
@@ -282,6 +352,7 @@ export function ProductWizard({
 	const [serverError, setServerError] = useState<string | null>(null);
 	const [showDescription, setShowDescription] = useState(false);
 	const [showSkus, setShowSkus] = useState(false);
+	const [moreOpen, setMoreOpen] = useState(false);
 	const [valueDraft, setValueDraft] = useState("");
 	// Categories are only offered on review when the store actually has some —
 	// a brand-new seller shouldn't meet a whole new concept mid-wizard.
@@ -355,14 +426,33 @@ export function ProductWizard({
 		patch({ prices: next });
 	}
 
+	// Anything typed = worth a confirm before discarding.
+	const isDirty =
+		state.name.trim().length > 0 ||
+		state.images.length > 0 ||
+		state.axisValues.length > 0 ||
+		Object.values(state.prices).some((v) => v.trim().length > 0);
+
+	function cancelWizard() {
+		if (
+			isDirty &&
+			!window.confirm("Discard this product? Nothing has been saved.")
+		) {
+			return;
+		}
+		onExit();
+	}
+
 	async function publish() {
 		// Belt-and-braces: re-validate every step before submitting (review-step
 		// edits jump around, so a hole could otherwise slip through).
-		for (let s = 1; s <= 4; s++) {
+		for (let s = 1; s <= TOTAL_STEPS; s++) {
 			const found = wizardStepIssues(state, s);
 			if (found.length > 0) {
 				setIssues(found);
 				setStep(s);
+				// A step-5 issue lives inside the More-options disclosure.
+				if (s === TOTAL_STEPS) setMoreOpen(true);
 				return;
 			}
 		}
@@ -377,6 +467,8 @@ export function ProductWizard({
 	}
 
 	const { title, sub } = STEP_TITLES[step];
+	// Const capture so TS narrows it inside the review-step JSX closures.
+	const customLine = state.customLine;
 
 	return (
 		<div className="flex flex-col gap-4">
@@ -408,6 +500,15 @@ export function ProductWizard({
 						/>
 					))}
 				</div>
+				{/* Direct exit — no need to press Back through every step. */}
+				<button
+					type="button"
+					onClick={cancelWizard}
+					aria-label="Cancel and discard"
+					className="flex size-10 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+				>
+					<X className="size-5" />
+				</button>
 			</div>
 
 			<section className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-4 shadow-sm lg:p-5">
@@ -852,15 +953,164 @@ export function ProductWizard({
 								</div>
 							) : null}
 						</div>
-						{/* Features that left the wizard stay discoverable. */}
-						<p className="rounded-xl border border-dashed border-border px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
-							<span className="font-semibold text-foreground">
-								You can also add later:
-							</span>{" "}
-							design approval before making, a fully custom option, a second
-							choice (e.g. Size × Flavour){hasCategories ? "" : ", categories"}.
-							Find them in Edit product → Advanced.
-						</p>
+						{/* More options — full parity with the edit page's Advanced, so
+						    create never needs a create-then-edit round trip. Collapsed:
+						    zero pixels for the everyday seller. */}
+						<div className="rounded-2xl border border-dashed border-border">
+							<button
+								type="button"
+								onClick={() => setMoreOpen((v) => !v)}
+								aria-expanded={moreOpen}
+								className="flex w-full items-center justify-between gap-3 p-3 text-left"
+							>
+								<span className="flex min-w-0 flex-col">
+									<span className="text-sm font-semibold">More options</span>
+									<span className="truncate text-xs text-muted-foreground">
+										{state.madeToOrder
+											? "Design approval · custom option · full editor"
+											: "Custom option · full editor"}
+									</span>
+								</span>
+								{moreOpen ? (
+									<ChevronLeft
+										className="size-4 shrink-0 rotate-90 text-muted-foreground"
+										aria-hidden
+									/>
+								) : (
+									<ChevronLeft
+										className="size-4 shrink-0 -rotate-90 text-muted-foreground"
+										aria-hidden
+									/>
+								)}
+							</button>
+							{moreOpen ? (
+								<div className="flex flex-col gap-4 border-t border-border p-3">
+									{/* Mockup approval only makes sense for made-to-order work
+									    (and is only applied then — see buildWizardSubmitValues). */}
+									{state.madeToOrder ? (
+										<label className="flex items-start gap-2.5 text-sm">
+											<input
+												type="checkbox"
+												checked={state.requiresProof}
+												onChange={(e) =>
+													patch({ requiresProof: e.target.checked })
+												}
+												className="mt-0.5 size-4 shrink-0"
+											/>
+											<span>
+												<span className="font-medium">
+													Require mockup approval before making it
+												</span>
+												<span className="block text-xs text-muted-foreground">
+													The buyer signs off on a photo or mockup before you
+													start — e.g. a cake design approved before baking.
+												</span>
+											</span>
+										</label>
+									) : null}
+
+									<div className="flex flex-col gap-3">
+										<label className="flex items-start gap-2.5 text-sm">
+											<input
+												type="checkbox"
+												checked={state.customLine !== null}
+												onChange={(e) =>
+													patch({
+														customLine: e.target.checked
+															? { label: "", price: "", prompt: "" }
+															: null,
+													})
+												}
+												className="mt-0.5 size-4 shrink-0"
+											/>
+											<span>
+												<span className="font-medium">
+													Also offer a custom / made-to-order option
+												</span>
+												<span className="block text-xs text-muted-foreground">
+													A separate “Custom” line buyers can request — you
+													approve a mockup (and any quote) before they pay.
+												</span>
+											</span>
+										</label>
+										{customLine ? (
+											<div className="flex flex-col gap-3 rounded-lg bg-muted/40 p-3">
+												<label className="flex flex-col gap-1 text-sm font-medium">
+													Option name
+													<Input
+														value={customLine.label}
+														onChange={(e) =>
+															patch({
+																customLine: {
+																	...customLine,
+																	label: e.target.value,
+																},
+															})
+														}
+														placeholder="Custom"
+														maxLength={40}
+													/>
+												</label>
+												<label className="flex flex-col gap-1 text-sm font-medium">
+													Starting price ({currency}){" "}
+													<span className="font-normal text-muted-foreground">
+														(optional — blank shows “Price on quote”)
+													</span>
+													<PriceInput
+														value={customLine.price}
+														onChange={(v) =>
+															patch({
+																customLine: { ...customLine, price: v },
+															})
+														}
+														invalid={!!issueFor("customPrice")}
+													/>
+													<IssueText message={issueFor("customPrice")} />
+												</label>
+												<label className="flex flex-col gap-1 text-sm font-medium">
+													What should the buyer tell you?{" "}
+													<span className="font-normal text-muted-foreground">
+														(optional)
+													</span>
+													<textarea
+														value={customLine.prompt}
+														onChange={(e) =>
+															patch({
+																customLine: {
+																	...customLine,
+																	prompt: e.target.value,
+																},
+															})
+														}
+														rows={2}
+														maxLength={280}
+														placeholder="e.g. Tell us your design, flavour, size & date needed"
+														className="rounded-xl border border-input bg-background px-3 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+													/>
+												</label>
+											</div>
+										) : null}
+									</div>
+
+									{/* Everything else (second choice, per-choice photos…) —
+									    hand the draft to the full editor, nothing retyped. */}
+									<div className="flex flex-col gap-1.5 border-t border-border pt-3">
+										<Button
+											type="button"
+											variant="outline"
+											onClick={() => onOpenFullForm(wizardToFormInitialValues(state))}
+										>
+											Open in the full editor
+										</Button>
+										<p className="text-center text-xs text-muted-foreground">
+											For a second choice (e.g. Size × Flavour), per-choice
+											photos and everything else — everything you've entered
+											comes along.
+										</p>
+									</div>
+								</div>
+							) : null}
+						</div>
 					</>
 				) : null}
 

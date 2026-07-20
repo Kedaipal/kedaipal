@@ -5,6 +5,7 @@ import {
 	type WizardState,
 	wizardPriceLabel,
 	wizardStepIssues,
+	wizardToFormInitialValues,
 } from "./product-wizard";
 
 /** A fully answered "brownies, S/M/L, made to order" wizard — the ICP case. */
@@ -159,6 +160,61 @@ describe("buildWizardSubmitValues", () => {
 		expect(values.categoryIds).toEqual(["cat1", "cat2"]);
 	});
 
+	it("applies mockup approval only when the product is made to order", () => {
+		const mto = buildWizardSubmitValues({
+			...browniesState(),
+			requiresProof: true,
+		});
+		expect(mto.variants.every((v) => v.requiresProof)).toBe(true);
+		// Flipping back to From stock at review quietly drops the flag.
+		const fromStock = buildWizardSubmitValues({
+			...singleFromStock(),
+			requiresProof: true,
+		});
+		expect(fromStock.variants.every((v) => !v.requiresProof)).toBe(true);
+	});
+
+	it("appends the custom line as a flagged made-to-order variant", () => {
+		const values = buildWizardSubmitValues({
+			...browniesState(),
+			customLine: { label: " Bespoke cake ", price: "", prompt: "Theme?" },
+		});
+		expect(values.variants).toHaveLength(4);
+		const custom = values.variants[3];
+		expect(custom).toMatchObject({
+			isCustom: true,
+			customLabel: "Bespoke cake",
+			customPrompt: "Theme?",
+			price: 0, // blank = "Price on quote"
+			blockWhenOutOfStock: false,
+			requiresProof: true,
+		});
+		// A typed price rounds to sen like the full form.
+		const priced = buildWizardSubmitValues({
+			...browniesState(),
+			customLine: { label: "", price: "150.5", prompt: "" },
+		});
+		expect(priced.variants[3].price).toBe(15050);
+		expect(priced.variants[3].customLabel).toBeUndefined();
+	});
+
+	it("step 5 validates only a non-blank invalid custom price", () => {
+		const base = browniesState();
+		expect(wizardStepIssues(base, 5)).toHaveLength(0);
+		expect(
+			wizardStepIssues(
+				{ ...base, customLine: { label: "", price: "", prompt: "" } },
+				5,
+			),
+		).toHaveLength(0);
+		expect(
+			wizardStepIssues(
+				{ ...base, customLine: { label: "", price: "abc", prompt: "" } },
+				5,
+			).map((i) => i.field),
+		).toEqual(["customPrice"]);
+	});
+
 	it("trims the name and drops a blank description", () => {
 		const values = buildWizardSubmitValues({
 			...singleFromStock(),
@@ -167,6 +223,24 @@ describe("buildWizardSubmitValues", () => {
 		});
 		expect(values.name).toBe("Nasi lemak");
 		expect(values.description).toBeUndefined();
+	});
+});
+
+describe("wizardToFormInitialValues (open-in-full-editor handoff)", () => {
+	it("prefills the full form with the wizard draft, image previews included", () => {
+		const state: WizardState = {
+			...browniesState(),
+			images: [{ id: "st1", url: "blob:preview-1" }],
+		};
+		const initial = wizardToFormInitialValues(state);
+		expect(initial.name).toBe("Chocolate fudge brownies");
+		expect(initial.options).toEqual([
+			{ name: "Size", values: ["Small", "Medium", "Large"] },
+		]);
+		// Prices arrive in sen — the form's initialEditorState divides by 100.
+		expect(initial.variants?.map((v) => v.price)).toEqual([1200, 1800, 2850]);
+		expect(initial.imageStorageIds).toEqual(["st1"]);
+		expect(initial.imageUrls).toEqual(["blob:preview-1"]);
 	});
 });
 

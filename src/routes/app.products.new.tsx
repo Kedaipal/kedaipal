@@ -1,9 +1,11 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
+import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import { PageHeader } from "../components/dashboard/page-header";
 import {
 	ProductForm,
+	type ProductFormInitialValues,
 	type ProductFormSubmitValues,
 } from "../components/forms/product-form";
 import { ProductWizard } from "../components/forms/product-wizard";
@@ -28,6 +30,10 @@ function NewProductRoute() {
 	const retailer = useDashboardRetailer();
 	const create = useMutation(api.products.create);
 	const setProductCategories = useMutation(api.categories.setProductCategories);
+	// The wizard's "Open in the full editor" handoff — the draft it built rides
+	// here so the full form mounts prefilled (nothing retyped). In-memory only:
+	// a refresh falls back to a blank full form, same as the skip link.
+	const [wizardDraft, setWizardDraft] = useState<ProductFormInitialValues>();
 
 	if (!retailer) return null;
 
@@ -74,6 +80,14 @@ function NewProductRoute() {
 							replace: true,
 						})
 					}
+					onOpenFullForm={(initialValues) => {
+						setWizardDraft(initialValues);
+						navigate({
+							to: "/app/products/new",
+							search: { form: "full" },
+							replace: true,
+						});
+					}}
 					onExit={() => navigate({ to: "/app/products" })}
 				/>
 			</div>
@@ -99,6 +113,7 @@ function NewProductRoute() {
 			<ProductForm
 				retailerId={retailer._id}
 				categoriesLocked={categoriesLocked}
+				initialValues={wizardDraft}
 				currency={retailer.currency}
 				submitLabel="Create product"
 				onSubmit={handleCreate}
