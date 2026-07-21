@@ -444,7 +444,7 @@ export function FulfilmentTab({
 
 // --- Delivery charge (86extzdr8) --------------------------------------------
 
-type ChargeMode = "free" | "flat" | "radius";
+type ChargeMode = "free" | "flat" | "radius" | "lalamove";
 
 type BandDraft = { maxKm: string; fee: string };
 
@@ -575,6 +575,13 @@ function DeliveryChargeSection({
 				fee: Math.round(rm * 100),
 				freeAbove: freeAboveSen,
 			};
+		} else if (mode === "lalamove") {
+			// Live provider quote (86eyb5hrf) — nothing numeric to draft; keep the
+			// stored onUnquotable policy (default "arrange": never lose the sale).
+			nextConfig =
+				config?.mode === "lalamove"
+					? config
+					: { mode: "lalamove", onUnquotable: "arrange" };
 		} else {
 			if (!effectiveAddress) {
 				setError(
@@ -650,7 +657,27 @@ function DeliveryChargeSection({
 					subtitle="Radius bands"
 					badge={radiusLocked ? <ProBadge /> : undefined}
 				/>
+				{/* Live Lalamove pricing (86eyb5hrf) is switched ON from the Lalamove
+				    booking card; this section only lets a seller who has it keep or
+				    leave it, so the option renders only when it's the stored mode. */}
+				{config?.mode === "lalamove" || mode === "lalamove" ? (
+					<ModeButton
+						active={mode === "lalamove"}
+						onClick={() => setMode("lalamove")}
+						title="Lalamove"
+						subtitle="Live rider quote"
+					/>
+				) : null}
 			</div>
+
+			{mode === "lalamove" ? (
+				<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+					Buyers pay the live Lalamove rate for their address at checkout,
+					using your Lalamove booking setup (vehicle + business address). If a
+					quote can&apos;t be fetched, the order is accepted with the charge
+					confirmed by you afterwards.
+				</p>
+			) : null}
 
 			{mode === "flat" ? (
 				<div className="flex flex-col gap-3">

@@ -231,6 +231,7 @@ describe("plan gating — CRM (Pro+)", () => {
 			categories: true,
 			insights: true,
 			radiusDelivery: true,
+			delivery: true,
 		});
 
 		await setPlan(t, retailer._id, "starter");
@@ -242,6 +243,7 @@ describe("plan gating — CRM (Pro+)", () => {
 			categories: false,
 			insights: false,
 			radiusDelivery: false,
+			delivery: false,
 		});
 	});
 });

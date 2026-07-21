@@ -76,6 +76,7 @@ describe("resolveAccess (pure)", () => {
 			categories: false,
 			insights: false,
 			radiusDelivery: false,
+			delivery: false,
 		});
 		expect(resolveAccess(sub({ plan: "pro" })).features).toEqual({
 			crm: true,
@@ -84,6 +85,7 @@ describe("resolveAccess (pure)", () => {
 			categories: true,
 			insights: true,
 			radiusDelivery: true,
+			delivery: true,
 		});
 		// Fail safe: a missing row gets Pro features, never a lockout.
 		expect(resolveAccess(null).features).toEqual({
@@ -93,6 +95,7 @@ describe("resolveAccess (pure)", () => {
 			categories: true,
 			insights: true,
 			radiusDelivery: true,
+			delivery: true,
 		});
 	});
 });

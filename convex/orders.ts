@@ -57,8 +57,10 @@ import {
 import {
 	DELIVERY_FEE_MAX,
 	type DeliveryConfig,
+	type LiveProviderQuote,
 	resolveDeliveryQuote,
 } from "./lib/delivery";
+import { CHECKOUT_QUOTE_MAX_AGE_MS } from "./lib/lalamove";
 import {
 	anchorOrdinal,
 	type Locale,
@@ -139,6 +141,9 @@ function resolveDeliveryForOrder(
 	retailer: Doc<"retailers">,
 	subtotal: number,
 	address: { latitude?: number; longitude?: number } | undefined,
+	// Live Lalamove quote loaded from its server-side deliveryQuotes row
+	// (pricing mode "lalamove" only) — see loadCheckoutDeliveryQuote.
+	liveQuote?: LiveProviderQuote,
 ): { snapshot: DeliverySnapshot | undefined; pending: boolean } {
 	const config = retailer.deliveryConfig as DeliveryConfig | undefined;
 	if (config?.mode === "radius" && !retailer.businessAddress) {
@@ -156,12 +161,15 @@ function resolveDeliveryForOrder(
 			address?.latitude !== undefined && address.longitude !== undefined
 				? { latitude: address.latitude, longitude: address.longitude }
 				: undefined,
+		liveQuote,
 	});
 	if (quote.kind === "blocked") {
 		throw new ConvexError(
 			quote.reason === "no_coords"
 				? "Pick your address from the suggestions so we can calculate the delivery fee"
-				: "That address is outside this store's delivery area",
+				: quote.reason === "unquotable"
+					? "We couldn't price delivery to that address right now — please try again"
+					: "That address is outside this store's delivery area",
 		);
 	}
 	if (quote.kind === "pending") return { snapshot: undefined, pending: true };
@@ -172,11 +180,52 @@ function resolveDeliveryForOrder(
 				mode: quote.mode,
 				distanceKm: quote.distanceKm,
 				bandMaxKm: quote.bandMaxKm,
+				quotationId: quote.quotationId,
+				vehicleType: quote.vehicleType,
+				quotedAt: quote.quotedAt,
 			},
 			pending: false,
 		};
 	}
 	return { snapshot: undefined, pending: false };
+}
+
+/**
+ * Load + validate the checkout's live Lalamove quote (86eyb5hrf). The client
+ * only ever passes the deliveryQuotes ROW ID — the fee comes from our own
+ * record, so it can't be tampered with. Returns undefined (→ the order falls
+ * back to the store's onUnquotable policy, usually deliveryFeePending) when
+ * the row is missing/foreign/stale or was priced for different coordinates
+ * (a cheap-nearby-pin quote can't be replayed against a far delivery
+ * address; ~11 m tolerance absorbs float noise, not geography).
+ */
+async function loadCheckoutDeliveryQuote(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	quoteId: Id<"deliveryQuotes"> | undefined,
+	address: { latitude?: number; longitude?: number } | undefined,
+): Promise<LiveProviderQuote | undefined> {
+	if (!quoteId) return undefined;
+	const row = await ctx.db.get(quoteId);
+	if (!row || row.retailerId !== retailerId) return undefined;
+	if (Date.now() - row.quotedAt > CHECKOUT_QUOTE_MAX_AGE_MS) return undefined;
+	const COORD_TOLERANCE = 1e-4; // ≈11 m
+	if (
+		address?.latitude === undefined ||
+		address.longitude === undefined ||
+		Math.abs(address.latitude - row.latitude) > COORD_TOLERANCE ||
+		Math.abs(address.longitude - row.longitude) > COORD_TOLERANCE
+	) {
+		return undefined;
+	}
+	// Consume the row — a quote freezes onto at most one order.
+	await ctx.db.delete(row._id);
+	return {
+		fee: row.fee,
+		quotationId: row.quotationId,
+		vehicleType: row.vehicleType,
+		quotedAt: row.quotedAt,
+	};
 }
 
 function buildPickupSnapshot(location: Doc<"pickupLocations">): PickupSnapshot {
@@ -336,6 +385,11 @@ export const create = mutation({
 		// pre-order via generateCustomImageUploadUrl. Stored as-is (a stray/invalid
 		// id just resolves to no URL on display — same posture as proof images).
 		customerImageStorageId: v.optional(v.string()),
+		// Live Lalamove quote row minted by lalamove.quoteForCheckout (pricing
+		// mode "lalamove" only). Only the ROW ID crosses the client — the fee is
+		// read from our own record. Missing/stale/mismatched → the order falls
+		// back to the store's onUnquotable policy. See docs/delivery-lalamove.md.
+		deliveryQuoteId: v.optional(v.id("deliveryQuotes")),
 	},
 	handler: async (
 		ctx,
@@ -573,10 +627,17 @@ export const create = mutation({
 				(sum, i) => sum + i.price * i.quantity,
 				0,
 			);
+			const liveQuote = await loadCheckoutDeliveryQuote(
+				ctx,
+				retailer._id,
+				args.deliveryQuoteId,
+				sanitizedAddress,
+			);
 			const resolved = resolveDeliveryForOrder(
 				retailer,
 				itemSubtotal,
 				sanitizedAddress,
+				liveQuote,
 			);
 			deliverySnapshot = resolved.snapshot;
 			deliveryFeePending = resolved.pending;
@@ -1675,7 +1736,12 @@ async function reverseCancellationEffects(
 	await recordOrderCancelled(ctx, order.retailerId, order.createdAt);
 }
 
-async function applyStatusTransition(
+// Exported for the Lalamove webhook's auto-transitions (convex/lalamove.ts) —
+// rider picked up → shipped, completed → delivered ride the SAME path as a
+// seller tap, so WhatsApp notify, stage vocabulary, activation stamping and
+// orderEvents all come free. The webhook side guards which source statuses
+// are eligible; this helper stays transition-mechanics only.
+export async function applyStatusTransition(
 	ctx: MutationCtx,
 	order: Doc<"orders">,
 	status: TransitionStatus,

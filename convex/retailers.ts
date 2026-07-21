@@ -178,6 +178,7 @@ import {
 	type DeliveryConfig,
 	sanitizeDeliveryConfig,
 } from "./lib/delivery";
+import { resolveLalamoveCredentials } from "./lib/lalamove";
 import { ordersThisMonth } from "./subscriptionUsage";
 import {
 	assertSupportedCurrency,
@@ -232,7 +233,58 @@ const deliveryConfigValidator = v.union(
 		bands: v.array(v.object({ maxKm: v.number(), fee: v.number() })),
 		outOfRange: v.union(v.literal("block"), v.literal("arrange")),
 	}),
+	v.object({
+		mode: v.literal("lalamove"),
+		onUnquotable: v.union(v.literal("arrange"), v.literal("block")),
+	}),
 );
+
+// Lalamove booking config (86eyb5hrf). `null` clears; enabling requires a
+// pinned business address + resolvable credentials (BYO fields or platform
+// env) and is Pro-gated. Secrets never leave the server — reads expose only
+// a summary (see DeliveryBookingSummary).
+const deliveryBookingValidator = v.object({
+	enabled: v.boolean(),
+	vehicleType: v.union(v.literal("MOTORCYCLE"), v.literal("CAR")),
+	apiKey: v.optional(v.string()),
+	apiSecret: v.optional(v.string()),
+});
+
+type DeliveryBooking = {
+	enabled: boolean;
+	vehicleType: "MOTORCYCLE" | "CAR";
+	apiKey?: string;
+	apiSecret?: string;
+};
+
+/** Owner-read summary of the booking config — the API secret NEVER crosses
+ * to the client; `credentialMode` tells the seller (and admin) whose account
+ * pays: their own key, the Kedaipal master fallback, or nothing resolvable. */
+export type DeliveryBookingSummary = {
+	enabled: boolean;
+	vehicleType: "MOTORCYCLE" | "CAR";
+	credentialMode: "byo" | "master" | "none";
+	/** Last 4 chars of the seller's own key ("…a1b2") so the settings UI can
+	 * show which key is stored without exposing it. */
+	apiKeyHint?: string;
+};
+
+function summarizeDeliveryBooking(
+	booking: DeliveryBooking | undefined,
+): DeliveryBookingSummary | undefined {
+	if (!booking) return undefined;
+	const resolved = resolveLalamoveCredentials(booking, {
+		apiKey: process.env.LALAMOVE_API_KEY,
+		apiSecret: process.env.LALAMOVE_API_SECRET,
+		env: process.env.LALAMOVE_ENV,
+	});
+	return {
+		enabled: booking.enabled,
+		vehicleType: booking.vehicleType,
+		credentialMode: resolved?.mode ?? "none",
+		apiKeyHint: booking.apiKey ? booking.apiKey.slice(-4) : undefined,
+	};
+}
 
 const businessAddressValidator = v.object({
 	label: v.string(),
@@ -439,6 +491,9 @@ type RetailerPublic = {
 	// resolved fee from the `delivery.quote` query instead.
 	deliveryConfig?: DeliveryConfig;
 	businessAddress?: BusinessAddress;
+	// Lalamove booking summary (86eyb5hrf) — OWNER-only like the two fields
+	// above, and secret-free (see DeliveryBookingSummary).
+	deliveryBooking?: DeliveryBookingSummary;
 	// Minimum days' notice before a fulfilment date — drives the storefront date
 	// picker's earliest selectable day. Undefined → 0 (same-day allowed).
 	minFulfilmentNoticeDays?: number;
@@ -558,6 +613,7 @@ async function buildRetailerPublic(
 		offerDelivery: row.offerDelivery,
 		deliveryConfig: row.deliveryConfig as DeliveryConfig | undefined,
 		businessAddress: row.businessAddress,
+		deliveryBooking: summarizeDeliveryBooking(row.deliveryBooking),
 		minFulfilmentNoticeDays: row.minFulfilmentNoticeDays,
 		pickupSetupSeen: row.pickupSetupSeen,
 		termsVersion: row.termsVersion,
@@ -998,6 +1054,10 @@ export const updateSettings = mutation({
 		// Business address (radius-mode origin). `null` clears — rejected while
 		// a radius config still depends on it; undefined = no change.
 		businessAddress: v.optional(v.union(businessAddressValidator, v.null())),
+		// Lalamove booking (86eyb5hrf). `null` clears (un-gated — downgrade never
+		// traps); enabling requires business address + resolvable credentials and
+		// is Pro-gated. Undefined = no change.
+		deliveryBooking: v.optional(v.union(deliveryBookingValidator, v.null())),
 		// Minimum days' notice before a fulfilment date. Clamped to [0, 30].
 		minFulfilmentNoticeDays: v.optional(v.number()),
 	},
@@ -1043,6 +1103,7 @@ export const updateSettings = mutation({
 			offerDelivery: boolean;
 			deliveryConfig: DeliveryConfig | undefined;
 			businessAddress: BusinessAddress | undefined;
+			deliveryBooking: DeliveryBooking | undefined;
 			minFulfilmentNoticeDays: number;
 			updatedAt: number;
 		}> = { updatedAt: Date.now() };
@@ -1194,11 +1255,102 @@ export const updateSettings = mutation({
 						await assertPlanFeature(ctx, retailer._id, "radiusDelivery");
 					}
 				}
+				if (clean.mode === "lalamove") {
+					// Live-quote pricing rides the booking config (credentials +
+					// vehicle + origin) — require booking enabled in the effective
+					// state so a dead pricing mode (every order fee-pending) can't
+					// be stored. Same Pro gate as enabling booking itself.
+					const effectiveBooking =
+						args.deliveryBooking !== undefined
+							? args.deliveryBooking
+							: (retailer.deliveryBooking as DeliveryBooking | undefined);
+					if (!effectiveBooking?.enabled) {
+						throw new ConvexError(
+							"Turn on Lalamove delivery booking first — live quotes use its credentials and vehicle type.",
+						);
+					}
+					if (!access.actingAsAdmin) {
+						await assertPlanFeature(ctx, retailer._id, "delivery");
+					}
+				}
 				patch.deliveryConfig = clean;
 			}
 		}
+		if (args.deliveryBooking !== undefined) {
+			if (args.deliveryBooking === null) {
+				// Clearing is always allowed — but never leave a live-quote pricing
+				// mode pointing at a booking config that no longer exists.
+				const effectiveConfig =
+					args.deliveryConfig !== undefined
+						? patch.deliveryConfig
+						: (retailer.deliveryConfig as DeliveryConfig | undefined);
+				if (effectiveConfig?.mode === "lalamove") {
+					throw new ConvexError(
+						"Live Lalamove pricing uses this booking setup — switch the delivery charge to another mode first.",
+					);
+				}
+				patch.deliveryBooking = undefined;
+			} else {
+				const clean: DeliveryBooking = {
+					enabled: args.deliveryBooking.enabled,
+					vehicleType: args.deliveryBooking.vehicleType,
+					apiKey: args.deliveryBooking.apiKey?.trim() || undefined,
+					apiSecret: args.deliveryBooking.apiSecret?.trim() || undefined,
+				};
+				// A key without its secret (or vice versa) can never authenticate —
+				// refuse half a credential instead of silently falling back to the
+				// master account (the seller would be spending Kedaipal's wallet
+				// without knowing).
+				if (!!clean.apiKey !== !!clean.apiSecret) {
+					throw new ConvexError(
+						"Enter both the Lalamove API key and API secret (or clear both to use none).",
+					);
+				}
+				if (clean.enabled) {
+					const effectiveAddress =
+						args.businessAddress !== undefined
+							? patch.businessAddress
+							: retailer.businessAddress;
+					if (!effectiveAddress) {
+						throw new ConvexError(
+							"Add your business address first — it's the pickup point riders are sent to.",
+						);
+					}
+					const resolved = resolveLalamoveCredentials(clean, {
+						apiKey: process.env.LALAMOVE_API_KEY,
+						apiSecret: process.env.LALAMOVE_API_SECRET,
+						env: process.env.LALAMOVE_ENV,
+					});
+					if (!resolved) {
+						throw new ConvexError(
+							"Add your Lalamove API key and secret to enable delivery booking.",
+						);
+					}
+					// Pro gate on ENABLING (disabling/clearing stays un-gated; admin
+					// act-as bypasses for white-glove setup).
+					if (!access.actingAsAdmin) {
+						await assertPlanFeature(ctx, retailer._id, "delivery");
+					}
+				} else {
+					// Disabling booking while live-quote pricing is on would leave a
+					// dead pricing mode — same guard as clearing.
+					const effectiveConfig =
+						args.deliveryConfig !== undefined
+							? patch.deliveryConfig
+							: (retailer.deliveryConfig as DeliveryConfig | undefined);
+					if (effectiveConfig?.mode === "lalamove") {
+						throw new ConvexError(
+							"Live Lalamove pricing uses this booking setup — switch the delivery charge to another mode first.",
+						);
+					}
+				}
+				patch.deliveryBooking = clean;
+			}
+		}
 		// Refuse clearing the business address out from under a live radius
-		// config (either the existing one or one being set in this same call).
+		// config or an enabled Lalamove booking (either the existing state or
+		// one being set in this same call) — never an enabled-but-unquotable
+		// store.
 		if (args.businessAddress === null) {
 			const effectiveConfig =
 				args.deliveryConfig !== undefined
@@ -1207,6 +1359,15 @@ export const updateSettings = mutation({
 			if (effectiveConfig?.mode === "radius") {
 				throw new ConvexError(
 					"Distance-based delivery pricing uses this address — switch the delivery charge off (or to a flat fee) first.",
+				);
+			}
+			const effectiveBooking =
+				args.deliveryBooking !== undefined
+					? patch.deliveryBooking
+					: (retailer.deliveryBooking as DeliveryBooking | undefined);
+			if (effectiveBooking?.enabled) {
+				throw new ConvexError(
+					"Lalamove booking sends riders to this address — turn off delivery booking first.",
 				);
 			}
 		}

@@ -218,7 +218,39 @@ export default defineSchema({
 					bands: v.array(v.object({ maxKm: v.number(), fee: v.number() })),
 					outOfRange: v.union(v.literal("block"), v.literal("arrange")),
 				}),
+				// Live provider quote at checkout (86eyb5hrf): the buyer pays the
+				// REAL Lalamove price for their address, fetched via the public
+				// lalamove.quoteForCheckout action and frozen through a
+				// deliveryQuotes row (client never supplies the fee). Requires
+				// deliveryBooking credentials to resolve; when they don't, checkout
+				// falls back per `outOfRange`-style policy below ("arrange" →
+				// deliveryFeePending, the existing seller-confirms-fee state).
+				v.object({
+					mode: v.literal("lalamove"),
+					// When a live quote can't be fetched (no coords picked, provider
+					// down, creds unresolvable): "arrange" accepts the order with the
+					// fee pending (default posture — never lose the sale), "block"
+					// refuses checkout until the buyer pins a quotable address.
+					onUnquotable: v.union(v.literal("arrange"), v.literal("block")),
+				}),
 			),
+		),
+		// Lalamove delivery booking (86eyb5hrf) — dispatch capability, orthogonal
+		// to the deliveryConfig PRICING mode above (a seller can charge a flat fee
+		// yet still book Lalamove riders). `enabled` requires `businessAddress`
+		// with coordinates (enforced in updateSettings; clearing the address
+		// auto-disables booking — working-method invariant posture). BYO-first:
+		// `apiKey`/`apiSecret` are the seller's own Lalamove credentials (plain
+		// fields per current convention, accepted for v1 — see ticket); when
+		// absent, the credential resolver falls back to the platform master keys
+		// (LALAMOVE_API_KEY/SECRET env) when configured. See docs/delivery-lalamove.md.
+		deliveryBooking: v.optional(
+			v.object({
+				enabled: v.boolean(),
+				vehicleType: v.union(v.literal("MOTORCYCLE"), v.literal("CAR")),
+				apiKey: v.optional(v.string()),
+				apiSecret: v.optional(v.string()),
+			}),
 		),
 		// Minimum days' notice the retailer needs before a fulfilment date. Drives
 		// the lower bound of the storefront date picker (earliest selectable day =
@@ -661,9 +693,18 @@ export default defineSchema({
 					v.literal("flat"),
 					v.literal("radius"),
 					v.literal("manual"),
+					// Live Lalamove quote frozen at create (86eyb5hrf). The extra
+					// fields below audit the provider quote; dispatch always
+					// RE-quotes (Lalamove honours quotes 5 min), so these are a
+					// paper trail, never booking inputs.
+					v.literal("lalamove"),
 				),
 				distanceKm: v.optional(v.number()),
 				bandMaxKm: v.optional(v.number()),
+				// Provider-quote audit trail (mode "lalamove" only).
+				quotationId: v.optional(v.string()),
+				vehicleType: v.optional(v.string()),
+				quotedAt: v.optional(v.number()),
 			}),
 		),
 		// Order-level mirror of `deliverySnapshot.fee` (minor units) for cheap
@@ -859,6 +900,88 @@ export default defineSchema({
 		note: v.optional(v.string()),
 		createdAt: v.number(),
 	}).index("by_order", ["orderId"]),
+
+	// --- Lalamove delivery (docs/delivery-lalamove.md, ClickUp 86eyb5hrf) -----
+	// Server-side record of a live checkout quote. The public quoteForCheckout
+	// action writes one row and hands the CLIENT only its id + fee — orders.create
+	// then loads the row by id, so the frozen fee can never be tampered with from
+	// the browser. Rows are transient (consumed at create or abandoned); a stale
+	// row past QUOTE_MAX_AGE_MS is refused at create and the order falls back to
+	// the deliveryFeePending path. No index needed — always fetched by _id.
+	deliveryQuotes: defineTable({
+		retailerId: v.id("retailers"),
+		// Lalamove quotation id — reused at create for the snapshot audit trail.
+		quotationId: v.string(),
+		// Buyer-paid fee (sen) after RM→sen conversion.
+		fee: v.number(),
+		vehicleType: v.string(),
+		// Destination coords the quote priced — orders.create verifies the order's
+		// delivery address matches (a quote for a near/cheap pin can't be replayed
+		// against a far delivery address).
+		latitude: v.number(),
+		longitude: v.number(),
+		quotedAt: v.number(),
+	}),
+
+	// One rider booking (dispatch) against an order. The ledger row of record:
+	// actual cost paid to Lalamove, which credentials paid it (BYO seller vs
+	// Kedaipal master fallback — drives the billing-tab spend + weekly at-cost
+	// rebill for master mode), driver + live-tracking link from webhooks. One
+	// ACTIVE job per order (enforced in dispatch); failed/cancelled jobs stay as
+	// history and a rebook inserts a new row. `by_provider_order` is the webhook
+	// lookup; `by_retailer` supports the monthly-spend creation-time range read
+	// (insights precedent).
+	deliveryJobs: defineTable({
+		orderId: v.id("orders"),
+		retailerId: v.id("retailers"),
+		provider: v.literal("lalamove"),
+		providerOrderId: v.string(),
+		// Normalized provider status. Forward flow: assigning → ongoing (driver
+		// matched) → picked_up → completed. Lalamove can REGRESS ongoing/picked_up
+		// back to assigning when a matched driver bails — the job row follows the
+		// provider truth, but the ORDER status never regresses (shipped is
+		// one-way; see handleOrderStatusEvent).
+		status: v.union(
+			v.literal("assigning"),
+			v.literal("ongoing"),
+			v.literal("picked_up"),
+			v.literal("completed"),
+			v.literal("canceled"),
+			v.literal("expired"),
+			v.literal("rejected"),
+		),
+		// Actual booking cost (sen) — what the paying account is charged. Drift vs
+		// the buyer-paid orders.deliveryFee is expected (dispatch re-quotes) and
+		// lives HERE, never rewriting the order.
+		costActual: v.number(),
+		quotationId: v.string(),
+		vehicleType: v.string(),
+		// Which credentials paid: "byo" (seller's own key) or "master" (platform
+		// env fallback — the rows the admin rebill sweep reads).
+		credentialMode: v.union(v.literal("byo"), v.literal("master")),
+		driver: v.optional(
+			v.object({
+				name: v.string(),
+				phone: v.string(),
+				plateNumber: v.string(),
+			}),
+		),
+		// Buyer-facing live tracking URL (opaque — never parse). Mirrored onto
+		// orders.carrierTrackingUrl so the existing shipped copy carries it.
+		shareLink: v.optional(v.string()),
+		// Human-readable failure detail for canceled/expired/rejected jobs
+		// (e.g. Lalamove cancelReason) — surfaced on the order-detail banner.
+		failureReason: v.optional(v.string()),
+		// Timestamp of the newest webhook event APPLIED to this row — the
+		// out-of-order guard (events older than this only fill gaps, never
+		// regress fields).
+		lastEventAt: v.optional(v.number()),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_order", ["orderId"])
+		.index("by_retailer", ["retailerId"])
+		.index("by_provider_order", ["providerOrderId"]),
 
 	// --- Counter Checkout (in-person order spine, docs/counter-checkout.md) ----
 	// A seller-initiated, in-person checkout session. The seller opens Counter
