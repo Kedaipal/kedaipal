@@ -551,3 +551,156 @@ describe("orders.create — live quote consumption", () => {
 		).rejects.toThrow(/couldn't price delivery/);
 	});
 });
+
+describe("updateSettings — deliveryBooking guards", () => {
+	const asUser = (t: ReturnType<typeof setup>) =>
+		t.withIdentity({ subject: USER });
+	const ADDRESS = {
+		label: "Fruit Hut HQ",
+		latitude: 3.139,
+		longitude: 101.6869,
+	};
+
+	test("enabling requires a business address (disabled-with-reason server side)", async () => {
+		const t = setup();
+		await seedRetailer(t);
+		await expect(
+			asUser(t).mutation(api.retailers.updateSettings, {
+				deliveryBooking: { enabled: true, vehicleType: "MOTORCYCLE" },
+			}),
+		).rejects.toThrow(/business address/i);
+	});
+
+	test("half a credential is refused; both parts accepted; secret never leaves", async () => {
+		const t = setup();
+		await seedRetailer(t);
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			businessAddress: ADDRESS,
+		});
+		await expect(
+			asUser(t).mutation(api.retailers.updateSettings, {
+				deliveryBooking: {
+					enabled: false,
+					vehicleType: "MOTORCYCLE",
+					apiKey: "pk_byo_only",
+				},
+			}),
+		).rejects.toThrow(/both/i);
+
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			deliveryBooking: {
+				enabled: true,
+				vehicleType: "CAR",
+				apiKey: "pk_byo_abcd",
+				apiSecret: "sk_byo_secret",
+			},
+		});
+		const retailer = await asUser(t).query(api.retailers.getMyRetailer);
+		expect(retailer?.deliveryBooking).toEqual({
+			enabled: true,
+			vehicleType: "CAR",
+			credentialMode: "byo",
+			apiKeyHint: "abcd",
+		});
+		// The raw secret must never appear anywhere in the owner payload.
+		expect(JSON.stringify(retailer)).not.toContain("sk_byo_secret");
+	});
+
+	test("re-saving without keys keeps the stored ones; empty string clears", async () => {
+		const t = setup();
+		await seedRetailer(t);
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			businessAddress: ADDRESS,
+			deliveryBooking: {
+				enabled: true,
+				vehicleType: "MOTORCYCLE",
+				apiKey: "pk_byo_abcd",
+				apiSecret: "sk_byo_secret",
+			},
+		});
+		// Vehicle flip, keys omitted → keys survive.
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			deliveryBooking: { enabled: true, vehicleType: "CAR" },
+		});
+		let retailer = await asUser(t).query(api.retailers.getMyRetailer);
+		expect(retailer?.deliveryBooking?.credentialMode).toBe("byo");
+		// Explicit clear → falls back to the platform master keys (env is set
+		// in beforeEach), so the mode flips rather than erroring.
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			deliveryBooking: {
+				enabled: true,
+				vehicleType: "CAR",
+				apiKey: "",
+				apiSecret: "",
+			},
+		});
+		retailer = await asUser(t).query(api.retailers.getMyRetailer);
+		expect(retailer?.deliveryBooking?.credentialMode).toBe("master");
+		expect(retailer?.deliveryBooking?.apiKeyHint).toBeUndefined();
+	});
+
+	test("enabling with NO resolvable credentials at all is refused", async () => {
+		const t = setup();
+		await seedRetailer(t);
+		process.env.LALAMOVE_API_KEY = "";
+		process.env.LALAMOVE_API_SECRET = "";
+		await expect(
+			asUser(t).mutation(api.retailers.updateSettings, {
+				businessAddress: ADDRESS,
+				deliveryBooking: { enabled: true, vehicleType: "MOTORCYCLE" },
+			}),
+		).rejects.toThrow(/API key/i);
+	});
+
+	test("clearing the address under an enabled booking is refused", async () => {
+		const t = setup();
+		await seedRetailer(t);
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			businessAddress: ADDRESS,
+			deliveryBooking: { enabled: true, vehicleType: "MOTORCYCLE" },
+		});
+		await expect(
+			asUser(t).mutation(api.retailers.updateSettings, {
+				businessAddress: null,
+			}),
+		).rejects.toThrow(/turn off delivery booking/i);
+	});
+
+	test("lalamove pricing mode requires an enabled booking; un-stranding guards hold", async () => {
+		const t = setup();
+		await seedRetailer(t);
+		// Pricing before booking → refused.
+		await expect(
+			asUser(t).mutation(api.retailers.updateSettings, {
+				deliveryConfig: { mode: "lalamove", onUnquotable: "arrange" },
+			}),
+		).rejects.toThrow(/booking first/i);
+		// Booking on (trial = Pro features), then pricing → ok.
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			businessAddress: ADDRESS,
+			deliveryBooking: { enabled: true, vehicleType: "MOTORCYCLE" },
+		});
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			deliveryConfig: { mode: "lalamove", onUnquotable: "arrange" },
+		});
+		// Disabling booking (or clearing it) while priced by live quote → refused.
+		await expect(
+			asUser(t).mutation(api.retailers.updateSettings, {
+				deliveryBooking: { enabled: false, vehicleType: "MOTORCYCLE" },
+			}),
+		).rejects.toThrow(/switch the delivery charge/i);
+		await expect(
+			asUser(t).mutation(api.retailers.updateSettings, {
+				deliveryBooking: null,
+			}),
+		).rejects.toThrow(/switch the delivery charge/i);
+		// Switching pricing away un-strands, then disabling is free.
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			deliveryConfig: null,
+			deliveryBooking: { enabled: false, vehicleType: "MOTORCYCLE" },
+		});
+		const retailer = await asUser(t).query(api.retailers.getMyRetailer);
+		expect(retailer?.deliveryBooking?.enabled).toBe(false);
+		expect(retailer?.deliveryConfig).toBeUndefined();
+	});
+});

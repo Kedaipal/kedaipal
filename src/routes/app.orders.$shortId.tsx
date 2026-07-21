@@ -46,6 +46,7 @@ import {
 	PageHeaderSkeleton,
 } from "../components/dashboard/page-header";
 import { StatusBadge } from "../components/dashboard/status-badge";
+import { BookDeliveryCard } from "../components/order/book-delivery-card";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import {
 	DeliveryAddressDisplay,
@@ -1096,6 +1097,11 @@ function OrderDetailRoute() {
 					currency={order.currency}
 				/>
 			) : null}
+
+			{/* Lalamove dispatch (delivery orders): one-tap "Book delivery" with
+			    re-quote confirm, live job card (driver/plate/tracking), failed-
+			    booking rebook, and disabled-with-reason states. 86eyb5hrf. */}
+			{!isSelfCollect ? <BookDeliveryCard order={order} /> : null}
 
 			{/* Delivery address (delivery orders only) */}
 			{!isSelfCollect && order.deliveryAddress ? (

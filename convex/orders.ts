@@ -300,7 +300,9 @@ async function orderByToken(
  *     could read any order by shortId.
  * Exactly one of the two must be supplied.
  */
-async function resolveSharedOrder(
+// Exported for the Lalamove dispatch surfaces (convex/lalamove.ts), which
+// authenticate the seller by shortId through the same owner-or-admin seam.
+export async function resolveSharedOrder(
 	ctx: QueryCtx,
 	{ token, shortId }: { token?: string; shortId?: string },
 ): Promise<Doc<"orders"> | null> {

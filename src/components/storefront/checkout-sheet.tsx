@@ -1,5 +1,5 @@
 import { useStore } from "@tanstack/react-form";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import {
 	Clock,
 	ExternalLink,
@@ -10,7 +10,14 @@ import {
 	X,
 } from "lucide-react";
 import { Dialog } from "radix-ui";
-import { type FormEvent, type ReactNode, useMemo, useState } from "react";
+import {
+	type FormEvent,
+	type ReactNode,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { PublicDeliveryQuote } from "../../../convex/delivery";
@@ -411,6 +418,14 @@ export function CheckoutSheet({
 					fulfilmentDate: fulfilmentEpoch,
 					customerNote,
 					customerImageStorageId,
+					// Live Lalamove quote (86eyb5hrf): pass the server-side quote row
+					// so the fee the buyer saw freezes onto the order. Missing/stale →
+					// the server falls back to the store's onUnquotable policy.
+					deliveryQuoteId:
+						value.deliveryMethod === "delivery" &&
+						liveQuote.state === "quoted"
+							? liveQuote.quoteId
+							: undefined,
 				});
 				const message = buildWaMessage(
 					storeName,
@@ -465,11 +480,98 @@ export function CheckoutSheet({
 				}
 			: "skip",
 	);
-	const quoteForDelivery =
-		watchedMethod === "delivery" ? deliveryQuote : undefined;
+	const rawQuote = watchedMethod === "delivery" ? deliveryQuote : undefined;
+
+	// --- Live Lalamove quote (86eyb5hrf) ------------------------------------
+	// When the store prices delivery by live provider quote, the reactive query
+	// answers {kind:"live"} and the real fee comes from the quoteForCheckout
+	// ACTION, fired once per picked address (coords only change on a Google
+	// suggestion pick, debounced as a keystroke guard). The action records the
+	// fee server-side and returns a row id — orders.create loads the fee from
+	// that row, so this state is display + gating only, same trust model as the
+	// static quote.
+	const quoteLalamove = useAction(api.lalamove.quoteForCheckout);
+	const [liveQuote, setLiveQuote] = useState<
+		| { state: "idle" }
+		| { state: "loading" }
+		| { state: "quoted"; quoteId: Id<"deliveryQuotes">; fee: number }
+		| { state: "unavailable" }
+	>({ state: "idle" });
+	const liveSeq = useRef(0);
+	const isLiveMode = rawQuote?.kind === "live";
+	// biome-ignore lint/correctness/useExhaustiveDependencies: fires per picked address (coords change only on a suggestion pick); form/action/retailerId identities are stable and the address is read fresh inside the timeout.
+	useEffect(() => {
+		if (!isLiveMode || !open || !hasCoords) {
+			liveSeq.current++;
+			setLiveQuote({ state: "idle" });
+			return;
+		}
+		const seq = ++liveSeq.current;
+		setLiveQuote({ state: "loading" });
+		const timer = setTimeout(() => {
+			const a = form.store.state.values.address;
+			const addressLabel = [
+				a.line1,
+				a.line2,
+				`${a.postcode} ${a.city}`.trim(),
+				a.state,
+			]
+				.filter((part) => part && part.trim().length > 0)
+				.join(", ");
+			quoteLalamove({
+				retailerId,
+				latitude: latNum,
+				longitude: lngNum,
+				address: addressLabel,
+			})
+				.then((result) => {
+					if (liveSeq.current !== seq) return; // superseded by a newer pick
+					setLiveQuote(
+						result.status === "quoted"
+							? { state: "quoted", quoteId: result.quoteId, fee: result.fee }
+							: { state: "unavailable" },
+					);
+				})
+				.catch(() => {
+					if (liveSeq.current !== seq) return;
+					setLiveQuote({ state: "unavailable" });
+				});
+		}, 400);
+		return () => clearTimeout(timer);
+	}, [isLiveMode, open, hasCoords, latNum, lngNum]);
+
+	// Collapse the two sources into ONE shape for the breakdown + submit gate.
+	// Live mode maps onto the static kinds (plus "calculating") so the render
+	// below stays a single code path:
+	//  - no pin yet / provider unreachable → the store's onUnquotable policy
+	//    ("arrange" → seller-confirms-later, "block" → hard stop), exactly what
+	//    orders.create will decide server-side.
+	const quoteForDelivery:
+		| PublicDeliveryQuote
+		| { kind: "calculating" }
+		| undefined = (() => {
+		if (!rawQuote) return undefined;
+		if (rawQuote.kind !== "live") return rawQuote;
+		const fallbackKind =
+			rawQuote.onUnquotable === "block" ? ("blocked" as const) : ("pending" as const);
+		if (!hasCoords) return { kind: fallbackKind, reason: "no_coords" };
+		switch (liveQuote.state) {
+			case "quoted":
+				return liveQuote.fee === 0
+					? { kind: "free" }
+					: { kind: "fee", fee: liveQuote.fee };
+			case "unavailable":
+				return { kind: fallbackKind, reason: "unquotable" };
+			default:
+				return { kind: "calculating" };
+		}
+	})();
 	// A hard block only once the buyer has actually entered an address — while
 	// the form is still empty the note under the breakdown does the guiding.
-	const deliveryBlocked = quoteForDelivery?.kind === "blocked";
+	// "calculating" also holds submit so a tap can't race the quote.
+	const deliveryBlocked =
+		quoteForDelivery?.kind === "blocked" ||
+		quoteForDelivery?.kind === "calculating";
 
 	return (
 		<Dialog.Root open={open} onOpenChange={(o) => !o && onClose()}>
@@ -828,6 +930,12 @@ export function CheckoutSheet({
 													</span>
 												</div>
 											) : null}
+											{quote?.kind === "calculating" ? (
+												<div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
+													<span>Delivery fee</span>
+													<span className="animate-pulse">Calculating…</span>
+												</div>
+											) : null}
 											<div className="flex items-center justify-between">
 												<span className="text-sm text-muted-foreground">
 													Total
@@ -856,7 +964,9 @@ export function CheckoutSheet({
 																	? " Pickup is still available."
 																	: ""
 															}`
-														: "Pick your address from the Google suggestions so we can calculate your delivery fee."}
+														: quote.reason === "unquotable"
+															? "We couldn't calculate the delivery fee right now — re-pick your address to retry, or try again shortly."
+															: "Pick your address from the Google suggestions so we can calculate your delivery fee."}
 												</p>
 											) : null}
 										</div>

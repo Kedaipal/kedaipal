@@ -8,28 +8,35 @@
 // Dispatch (Book delivery) actions build on the same client. See
 // docs/delivery-lalamove.md.
 
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import {
 	action,
 	internalMutation,
 	internalQuery,
+	query,
 } from "./_generated/server";
 import {
 	buildLalamoveHeaders,
+	buildPlaceOrderBody,
 	buildQuotationBody,
+	type DeliveryJobStatus,
 	isActiveJobStatus,
 	LALAMOVE_BASE_URL,
 	type LalamoveCredentials,
 	lalamoveAmountToSen,
+	MASTER_MONTHLY_SPEND_CAP_SEN,
 	normalizeLalamoveStatus,
 	parseLalamoveEventTime,
+	parseOrderResponse,
 	parseQuotationResponse,
 	resolveLalamoveCredentials,
 } from "./lib/lalamove";
 import { rateLimiter } from "./lib/rateLimiter";
-import { applyStatusTransition } from "./orders";
+import { monthStartMyt } from "./lib/usagePeriod";
+import { applyStatusTransition, resolveSharedOrder } from "./orders";
+import { assertPlanFeature } from "./subscriptions";
 
 /** Platform master credentials + environment from the deployment env. One
  * LALAMOVE_ENV switch flips the whole deployment sandbox ⇄ production. */
@@ -473,5 +480,598 @@ export const applyWebhookEvent = internalMutation({
 					providerOrderId: job.providerOrderId,
 				});
 		}
+	},
+});
+
+// ---------------------------------------------------------------------------
+// Dispatch — "Book delivery" (seller, order detail)
+// ---------------------------------------------------------------------------
+
+/** Why the Book-delivery button is unavailable — rendered disabled-with-reason
+ * on order detail (never a dead end; each reason maps to copy + a fix path). */
+export type DispatchBlock =
+	| "not_delivery"
+	| "bad_status"
+	| "job_active"
+	| "booking_disabled"
+	| "plan_gated"
+	| "no_credentials"
+	| "no_coords"
+	| "no_buyer_phone"
+	| "no_seller_phone"
+	| "spend_capped";
+
+type BookingConfig = NonNullable<Doc<"retailers">["deliveryBooking"]>;
+
+function dispatchBlockReason(args: {
+	order: Doc<"orders">;
+	retailer: Doc<"retailers">;
+	activeJob: Doc<"deliveryJobs"> | undefined;
+	credentials: LalamoveCredentials | null;
+	planOk: boolean;
+	monthMasterSpend: number;
+}): DispatchBlock | null {
+	const { order, retailer, activeJob, credentials, planOk } = args;
+	if (order.deliveryMethod !== "delivery") return "not_delivery";
+	if (order.status !== "confirmed" && order.status !== "packed")
+		return "bad_status";
+	if (activeJob) return "job_active";
+	if (!retailer.deliveryBooking?.enabled || !retailer.businessAddress)
+		return "booking_disabled";
+	if (!planOk) return "plan_gated";
+	if (!credentials) return "no_credentials";
+	if (
+		order.deliveryAddress?.latitude === undefined ||
+		order.deliveryAddress.longitude === undefined
+	)
+		return "no_coords";
+	if (!order.customer.waPhone) return "no_buyer_phone";
+	if (!retailer.waPhone) return "no_seller_phone";
+	if (
+		credentials.mode === "master" &&
+		args.monthMasterSpend >= MASTER_MONTHLY_SPEND_CAP_SEN
+	)
+		return "spend_capped";
+	return null;
+}
+
+/** Rider-facing destination string from the frozen order address. */
+function formatDeliveryAddress(
+	address: NonNullable<Doc<"orders">["deliveryAddress"]>,
+): string {
+	return [
+		address.line1,
+		address.line2,
+		`${address.postcode} ${address.city}`.trim(),
+		address.state,
+	]
+		.filter((part): part is string => !!part && part.trim().length > 0)
+		.join(", ");
+}
+
+/** Sum of this month's (MYT) master-account booking costs for a retailer —
+ * indexed creation-time range read (insights precedent). Counts every master
+ * job placed this month regardless of outcome: a cancelled booking can still
+ * carry a fee, and a conservative meter is the point of a protective cap. */
+async function monthMasterSpend(
+	ctx: { db: { query: (t: "deliveryJobs") => any } },
+	retailerId: Id<"retailers">,
+): Promise<number> {
+	const monthStart = monthStartMyt(Date.now());
+	const rows: Doc<"deliveryJobs">[] = await ctx.db
+		.query("deliveryJobs")
+		.withIndex("by_retailer", (q: any) =>
+			q.eq("retailerId", retailerId).gte("_creationTime", monthStart),
+		)
+		.collect();
+	return rows
+		.filter((r) => r.credentialMode === "master")
+		.reduce((sum, r) => sum + r.costActual, 0);
+}
+
+type DispatchContext =
+	| { ok: false; reason: DispatchBlock | "not_found" }
+	| {
+			ok: true;
+			orderId: Id<"orders">;
+			retailerId: Id<"retailers">;
+			shortId: string;
+			buyerPaidFee: number;
+			origin: { latitude: number; longitude: number; label: string };
+			destination: { latitude: number; longitude: number; address: string };
+			sender: { name: string; phone: string };
+			recipient: { name: string; phone: string; remarks?: string };
+			vehicleType: string;
+			credentials: LalamoveCredentials;
+	  };
+
+/**
+ * Auth + full eligibility for a booking attempt, in one read. INTERNAL —
+ * the resolved credentials ride back to the calling action and must never
+ * reach a client (the public surface is getDeliveryJob below).
+ */
+export const getDispatchContext = internalQuery({
+	args: { shortId: v.string() },
+	handler: async (ctx, { shortId }): Promise<DispatchContext> => {
+		const order = await resolveSharedOrder(ctx, { shortId });
+		if (!order) return { ok: false, reason: "not_found" };
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) return { ok: false, reason: "not_found" };
+
+		const jobs = await ctx.db
+			.query("deliveryJobs")
+			.withIndex("by_order", (q) => q.eq("orderId", order._id))
+			.collect();
+		const activeJob = jobs.find((j) => isActiveJobStatus(j.status));
+
+		const credentials = resolveLalamoveCredentials(
+			retailer.deliveryBooking as BookingConfig | undefined,
+			platformLalamoveEnv(),
+		);
+
+		// Plan gate — admin act-as bypasses (white-glove), mirroring updateSettings.
+		const identity = await ctx.auth.getUserIdentity();
+		const actingAsAdmin =
+			identity !== null && retailer.userId !== identity.subject;
+		let planOk = true;
+		if (!actingAsAdmin) {
+			try {
+				await assertPlanFeature(ctx, retailer._id, "delivery");
+			} catch {
+				planOk = false;
+			}
+		}
+
+		const blocked = dispatchBlockReason({
+			order,
+			retailer,
+			activeJob,
+			credentials,
+			planOk,
+			monthMasterSpend:
+				credentials?.mode === "master"
+					? await monthMasterSpend(ctx, retailer._id)
+					: 0,
+		});
+		if (blocked) return { ok: false, reason: blocked };
+		// Non-null after dispatchBlockReason — restated for the type system.
+		if (!credentials) return { ok: false, reason: "no_credentials" };
+
+		const address = order.deliveryAddress!;
+		const businessAddress = retailer.businessAddress!;
+		const remarksParts = [
+			order.shortId,
+			order.deliveryAddress?.notes,
+			order.customerNote,
+		].filter((p): p is string => !!p && p.trim().length > 0);
+		return {
+			ok: true,
+			orderId: order._id,
+			retailerId: retailer._id,
+			shortId: order.shortId,
+			buyerPaidFee: order.deliveryFee ?? 0,
+			origin: {
+				latitude: businessAddress.latitude,
+				longitude: businessAddress.longitude,
+				label: businessAddress.label,
+			},
+			destination: {
+				latitude: address.latitude!,
+				longitude: address.longitude!,
+				address: formatDeliveryAddress(address),
+			},
+			sender: { name: retailer.storeName, phone: retailer.waPhone! },
+			recipient: {
+				name: order.customer.name ?? "Customer",
+				phone: order.customer.waPhone!,
+				remarks: remarksParts.join(" · ").slice(0, 400) || undefined,
+			},
+			vehicleType:
+				(retailer.deliveryBooking as BookingConfig).vehicleType ?? "MOTORCYCLE",
+			credentials,
+		};
+	},
+});
+
+/** Map a Lalamove API failure to seller-facing copy — the wallet case gets
+ * the explicit "top up" ask the ticket requires; everything else stays
+ * honest-but-generic (the raw body is in the logs). */
+function friendlyBookingError(err: unknown): string {
+	if (err instanceof LalamoveApiError) {
+		const body = err.body.toLowerCase();
+		if (
+			body.includes("insufficient") ||
+			body.includes("balance") ||
+			body.includes("credit")
+		) {
+			return "Your Lalamove wallet doesn't have enough balance. Top it up in the Lalamove app, then retry the booking.";
+		}
+		if (body.includes("expired") || body.includes("quotation")) {
+			return "The price quote expired — tap Book delivery again for a fresh price.";
+		}
+	}
+	return "Lalamove couldn't process the booking right now. Please try again in a moment.";
+}
+
+/**
+ * Step 1 of the two-tap dispatch: re-quote the delivery at TODAY's price
+ * (checkout quotes are long dead — Lalamove honours quotes 5 minutes) and
+ * hand back everything the confirm dialog shows: fresh price, what the buyer
+ * paid, and the opaque ids confirmBooking needs within the 5-minute window.
+ */
+export const prepareBooking = action({
+	args: { shortId: v.string() },
+	handler: async (
+		ctx,
+		{ shortId },
+	): Promise<
+		| { ok: false; reason: DispatchBlock | "not_found" | "quote_failed"; message?: string }
+		| {
+				ok: true;
+				quotationId: string;
+				senderStopId: string;
+				recipientStopId: string;
+				fee: number;
+				buyerPaidFee: number;
+				vehicleType: string;
+				credentialMode: "byo" | "master";
+		  }
+	> => {
+		const context = await ctx.runQuery(internal.lalamove.getDispatchContext, {
+			shortId,
+		});
+		if (!context.ok) return context;
+		try {
+			const response = await callLalamove(
+				context.credentials,
+				"POST",
+				"/v3/quotations",
+				buildQuotationBody({
+					serviceType: context.vehicleType,
+					stops: [
+						{
+							coordinates: context.origin,
+							address: context.origin.label,
+						},
+						{
+							coordinates: context.destination,
+							address: context.destination.address,
+						},
+					],
+				}),
+			);
+			const parsed = parseQuotationResponse(response);
+			return {
+				ok: true,
+				quotationId: parsed.quotationId,
+				senderStopId: parsed.stopIds[0],
+				recipientStopId: parsed.stopIds[1],
+				fee: parsed.priceTotal,
+				buyerPaidFee: context.buyerPaidFee,
+				vehicleType: context.vehicleType,
+				credentialMode: context.credentials.mode,
+			};
+		} catch (err) {
+			console.warn("[lalamove] dispatch quote failed", {
+				shortId,
+				message: err instanceof Error ? err.message : String(err),
+			});
+			return {
+				ok: false,
+				reason: "quote_failed",
+				message: friendlyBookingError(err),
+			};
+		}
+	},
+});
+
+/**
+ * Step 2: place the rider order against the confirmed quotation and write
+ * the ledger row. All eligibility re-checks run again (the dialog may have
+ * sat open); the one-active-job invariant is enforced ATOMICALLY inside
+ * recordBooking, so two fast taps cannot double-book.
+ */
+export const confirmBooking = action({
+	args: {
+		shortId: v.string(),
+		quotationId: v.string(),
+		senderStopId: v.string(),
+		recipientStopId: v.string(),
+	},
+	handler: async (
+		ctx,
+		args,
+	): Promise<
+		| { ok: false; reason: DispatchBlock | "not_found" | "booking_failed"; message?: string }
+		| { ok: true; providerOrderId: string; costActual: number }
+	> => {
+		const context = await ctx.runQuery(internal.lalamove.getDispatchContext, {
+			shortId: args.shortId,
+		});
+		if (!context.ok) return context;
+		try {
+			const response = await callLalamove(
+				context.credentials,
+				"POST",
+				"/v3/orders",
+				buildPlaceOrderBody({
+					quotationId: args.quotationId,
+					sender: {
+						stopId: args.senderStopId,
+						name: context.sender.name,
+						phone: context.sender.phone,
+					},
+					recipient: {
+						stopId: args.recipientStopId,
+						name: context.recipient.name,
+						phone: context.recipient.phone,
+						remarks: context.recipient.remarks,
+					},
+					orderRef: context.shortId,
+				}),
+			);
+			const parsed = parseOrderResponse(response);
+			await ctx.runMutation(internal.lalamove.recordBooking, {
+				orderId: context.orderId,
+				retailerId: context.retailerId,
+				providerOrderId: parsed.providerOrderId,
+				costActual: parsed.priceTotal,
+				quotationId: args.quotationId,
+				vehicleType: context.vehicleType,
+				credentialMode: context.credentials.mode,
+				shareLink: parsed.shareLink,
+				providerStatus: parsed.status,
+			});
+			return {
+				ok: true,
+				providerOrderId: parsed.providerOrderId,
+				costActual: parsed.priceTotal,
+			};
+		} catch (err) {
+			console.warn("[lalamove] booking failed", {
+				shortId: args.shortId,
+				message: err instanceof Error ? err.message : String(err),
+			});
+			return {
+				ok: false,
+				reason: "booking_failed",
+				message: friendlyBookingError(err),
+			};
+		}
+	},
+});
+
+export const recordBooking = internalMutation({
+	args: {
+		orderId: v.id("orders"),
+		retailerId: v.id("retailers"),
+		providerOrderId: v.string(),
+		costActual: v.number(),
+		quotationId: v.string(),
+		vehicleType: v.string(),
+		credentialMode: v.union(v.literal("byo"), v.literal("master")),
+		shareLink: v.optional(v.string()),
+		providerStatus: v.optional(v.string()),
+	},
+	handler: async (ctx, args): Promise<Id<"deliveryJobs">> => {
+		// One ACTIVE job per order, enforced where it's atomic. The action's
+		// pre-check filters the common case; this is the race-proof gate.
+		const jobs = await ctx.db
+			.query("deliveryJobs")
+			.withIndex("by_order", (q) => q.eq("orderId", args.orderId))
+			.collect();
+		if (jobs.some((j) => isActiveJobStatus(j.status))) {
+			throw new ConvexError(
+				"A rider booking is already in progress for this order",
+			);
+		}
+		const now = Date.now();
+		const status: DeliveryJobStatus =
+			normalizeLalamoveStatus(args.providerStatus) ?? "assigning";
+		const jobId = await ctx.db.insert("deliveryJobs", {
+			orderId: args.orderId,
+			retailerId: args.retailerId,
+			provider: "lalamove",
+			providerOrderId: args.providerOrderId,
+			status,
+			costActual: args.costActual,
+			quotationId: args.quotationId,
+			vehicleType: args.vehicleType,
+			credentialMode: args.credentialMode,
+			shareLink: args.shareLink,
+			createdAt: now,
+			updatedAt: now,
+		});
+		// Mirror the tracking link early (fill-if-unset) — same posture as the
+		// DRIVER_ASSIGNED webhook path.
+		if (args.shareLink) {
+			const order = await ctx.db.get(args.orderId);
+			if (order && !order.carrierTrackingUrl) {
+				await ctx.db.patch(order._id, {
+					carrierTrackingUrl: args.shareLink,
+					updatedAt: now,
+				});
+			}
+		}
+		return jobId;
+	},
+});
+
+/**
+ * Cancel the active Lalamove job for an order (seller action — used before
+ * or after cancelling the order itself). Deliberately NOT gated by the
+ * dispatch eligibility checks: cancelling must work even when booking
+ * wouldn't (e.g. order already cancelled, plan downgraded). Rider-assigned
+ * cancellations can incur Lalamove fees — the UI warns before calling.
+ */
+export const cancelBooking = action({
+	args: { shortId: v.string() },
+	handler: async (
+		ctx,
+		{ shortId },
+	): Promise<{ ok: boolean; message?: string }> => {
+		const target = await ctx.runQuery(internal.lalamove.getCancelContext, {
+			shortId,
+		});
+		if (!target) return { ok: false, message: "No active booking to cancel." };
+		try {
+			await callLalamove(
+				target.credentials,
+				"DELETE",
+				`/v3/orders/${target.providerOrderId}`,
+			);
+		} catch (err) {
+			console.warn("[lalamove] cancel failed", {
+				shortId,
+				message: err instanceof Error ? err.message : String(err),
+			});
+			return {
+				ok: false,
+				message:
+					"Lalamove couldn't cancel this booking — the rider may already be too far along. Check the Lalamove app or contact their support.",
+			};
+		}
+		await ctx.runMutation(internal.lalamove.markJobCancelled, {
+			jobId: target.jobId,
+		});
+		return { ok: true };
+	},
+});
+
+export const getCancelContext = internalQuery({
+	args: { shortId: v.string() },
+	handler: async (
+		ctx,
+		{ shortId },
+	): Promise<{
+		jobId: Id<"deliveryJobs">;
+		providerOrderId: string;
+		credentials: LalamoveCredentials;
+	} | null> => {
+		const order = await resolveSharedOrder(ctx, { shortId });
+		if (!order) return null;
+		const jobs = await ctx.db
+			.query("deliveryJobs")
+			.withIndex("by_order", (q) => q.eq("orderId", order._id))
+			.collect();
+		const active = jobs.find((j) => isActiveJobStatus(j.status));
+		if (!active) return null;
+		const retailer = await ctx.db.get(order.retailerId);
+		const credentials = resolveLalamoveCredentials(
+			retailer?.deliveryBooking as BookingConfig | undefined,
+			platformLalamoveEnv(),
+		);
+		if (!credentials) return null;
+		return {
+			jobId: active._id,
+			providerOrderId: active.providerOrderId,
+			credentials,
+		};
+	},
+});
+
+export const markJobCancelled = internalMutation({
+	args: { jobId: v.id("deliveryJobs") },
+	handler: async (ctx, { jobId }) => {
+		const job = await ctx.db.get(jobId);
+		if (!job || !isActiveJobStatus(job.status)) return;
+		await ctx.db.patch(jobId, {
+			status: "canceled",
+			failureReason: "Cancelled by seller",
+			updatedAt: Date.now(),
+		});
+	},
+});
+
+/** Public job shape for the order-detail card — no credentials, no secrets. */
+export type DeliveryJobView = {
+	status: DeliveryJobStatus;
+	providerOrderId: string;
+	costActual: number;
+	vehicleType: string;
+	credentialMode: "byo" | "master";
+	driver?: { name: string; phone: string; plateNumber: string };
+	shareLink?: string;
+	failureReason?: string;
+	createdAt: number;
+};
+
+/**
+ * Order-detail read: the latest booking (active or the most recent attempt)
+ * plus WHY booking is currently unavailable (null = the button is live).
+ * Owner-or-admin via the shortId seam.
+ */
+export const getDeliveryJob = query({
+	args: { shortId: v.string() },
+	handler: async (
+		ctx,
+		{ shortId },
+	): Promise<{
+		job: DeliveryJobView | null;
+		blockReason: DispatchBlock | null;
+		monthMasterSpend?: number;
+		masterSpendCap?: number;
+	} | null> => {
+		const order = await resolveSharedOrder(ctx, { shortId });
+		if (!order) return null;
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) return null;
+
+		const jobs = await ctx.db
+			.query("deliveryJobs")
+			.withIndex("by_order", (q) => q.eq("orderId", order._id))
+			.collect();
+		const activeJob = jobs.find((j) => isActiveJobStatus(j.status));
+		const latest =
+			activeJob ??
+			[...jobs].sort((a, b) => b.createdAt - a.createdAt)[0] ??
+			null;
+
+		const credentials = resolveLalamoveCredentials(
+			retailer.deliveryBooking as BookingConfig | undefined,
+			platformLalamoveEnv(),
+		);
+		const identity = await ctx.auth.getUserIdentity();
+		const actingAsAdmin =
+			identity !== null && retailer.userId !== identity.subject;
+		let planOk = true;
+		if (!actingAsAdmin) {
+			try {
+				await assertPlanFeature(ctx, retailer._id, "delivery");
+			} catch {
+				planOk = false;
+			}
+		}
+		const spend =
+			credentials?.mode === "master"
+				? await monthMasterSpend(ctx, retailer._id)
+				: undefined;
+		const blockReason = dispatchBlockReason({
+			order,
+			retailer,
+			activeJob,
+			credentials,
+			planOk,
+			monthMasterSpend: spend ?? 0,
+		});
+		return {
+			job: latest
+				? {
+						status: latest.status,
+						providerOrderId: latest.providerOrderId,
+						costActual: latest.costActual,
+						vehicleType: latest.vehicleType,
+						credentialMode: latest.credentialMode,
+						driver: latest.driver,
+						shareLink: latest.shareLink,
+						failureReason: latest.failureReason,
+						createdAt: latest.createdAt,
+					}
+				: null,
+			blockReason,
+			monthMasterSpend: spend,
+			masterSpendCap:
+				credentials?.mode === "master" ? MASTER_MONTHLY_SPEND_CAP_SEN : undefined,
+		};
 	},
 });

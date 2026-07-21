@@ -29,6 +29,12 @@ export const LALAMOVE_BASE_URL: Record<LalamoveEnv, string> = {
 /** All Kedaipal sellers are MY — market is a constant until a second country. */
 export const LALAMOVE_MARKET = "MY";
 
+/** Monthly booking-spend ceiling (sen) for a seller running on the Kedaipal
+ * MASTER account (launch fallback, ~RM2k per the 18 Jul decision). Blocks new
+ * BOOKINGS with a disabled-with-reason button — never order creation. BYO
+ * sellers spend their own wallet and are never capped by us. */
+export const MASTER_MONTHLY_SPEND_CAP_SEN = 200_000;
+
 /** Vehicle types we surface (the MY catalog has more; these cover the ICP). */
 export type LalamoveVehicleType = "MOTORCYCLE" | "CAR";
 

@@ -1291,11 +1291,21 @@ export const updateSettings = mutation({
 				}
 				patch.deliveryBooking = undefined;
 			} else {
+				// Key semantics mirror logoStorageId: `undefined` = keep the stored
+				// value (so toggling enable/vehicle never silently wipes keys),
+				// empty string = clear.
+				const prev = retailer.deliveryBooking as DeliveryBooking | undefined;
 				const clean: DeliveryBooking = {
 					enabled: args.deliveryBooking.enabled,
 					vehicleType: args.deliveryBooking.vehicleType,
-					apiKey: args.deliveryBooking.apiKey?.trim() || undefined,
-					apiSecret: args.deliveryBooking.apiSecret?.trim() || undefined,
+					apiKey:
+						args.deliveryBooking.apiKey === undefined
+							? prev?.apiKey
+							: args.deliveryBooking.apiKey.trim() || undefined,
+					apiSecret:
+						args.deliveryBooking.apiSecret === undefined
+							? prev?.apiSecret
+							: args.deliveryBooking.apiSecret.trim() || undefined,
 				};
 				// A key without its secret (or vice versa) can never authenticate —
 				// refuse half a credential instead of silently falling back to the
