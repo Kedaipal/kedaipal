@@ -5,6 +5,7 @@ import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { AdminSellerRow } from "../../convex/admin";
 import { PageHeader } from "../components/dashboard/page-header";
+import { formatPrice } from "../lib/format";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { useActAs } from "../hooks/useActAs";
@@ -171,6 +172,19 @@ function SellerCard({ seller }: { seller: AdminSellerRow }) {
 						{seller.plan ? (
 							<span className="text-[11px] capitalize text-muted-foreground">
 								{seller.plan}
+							</span>
+						) : null}
+						{/* Lalamove settlement flag (86eyb5hrf): "master" sellers ride the
+						    Kedaipal account — the RM figure is this month's at-cost
+						    rebill. BYO sellers pay Lalamove directly (no settlement). */}
+						{seller.deliveryCredentialMode === "master" ? (
+							<span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+								Lalamove master ·{" "}
+								{formatPrice(seller.deliveryMonthSpendSen ?? 0, "MYR")}/mo
+							</span>
+						) : seller.deliveryCredentialMode === "byo" ? (
+							<span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
+								Lalamove BYO
 							</span>
 						) : null}
 					</div>

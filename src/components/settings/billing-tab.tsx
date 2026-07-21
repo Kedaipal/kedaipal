@@ -42,6 +42,10 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 	const isAdmin = useQuery(api.billing.amIAdmin) ?? false;
 	const invoices = useQuery(api.invoices.myInvoices, {}) ?? [];
 	const instructions = useQuery(api.billing.paymentInstructions, {});
+	// Non-null only for sellers on the Kedaipal master Lalamove account.
+	const deliverySpend = useQuery(api.lalamove.getMyDeliverySpend, {
+		retailerId: retailer._id,
+	});
 
 	// A Kedaipal admin on their OWN store runs the app for free and is never on a
 	// tier — no trial, plan, cap or invoice applies. Mirror the shell chrome (which
@@ -196,6 +200,51 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 								{capMeter.over
 									? "You're past your plan's included orders — everything keeps working, but this is the sign to upgrade."
 									: "Included orders on your plan. Going over never blocks an order."}
+							</p>
+						</div>
+					) : null}
+
+					{/* Lalamove delivery spend — ONLY for sellers booking on the
+					    Kedaipal master account (rebilled at cost weekly). BYO sellers
+					    pay Lalamove directly, so the query returns null and this
+					    section vanishes. See docs/delivery-lalamove.md. */}
+					{deliverySpend ? (
+						<div className="flex flex-col gap-1.5 border-t border-border pt-4">
+							<div className="flex items-baseline justify-between text-xs">
+								<span className="font-semibold uppercase tracking-wide text-muted-foreground">
+									Lalamove deliveries this month
+								</span>
+								<span
+									className={`font-medium tabular-nums ${
+										deliverySpend.monthSpendSen >= deliverySpend.capSen
+											? "text-red-600 dark:text-red-400"
+											: deliverySpend.monthSpendSen >=
+													deliverySpend.capSen * 0.8
+												? "text-amber-700 dark:text-amber-400"
+												: "text-muted-foreground"
+									}`}
+								>
+									{formatPrice(deliverySpend.monthSpendSen, "MYR")} /{" "}
+									{formatPrice(deliverySpend.capSen, "MYR")}
+								</span>
+							</div>
+							<div className="h-1.5 overflow-hidden rounded-full bg-muted">
+								<div
+									className={`h-full rounded-full transition-all ${
+										deliverySpend.monthSpendSen >= deliverySpend.capSen
+											? "bg-red-500"
+											: "bg-accent"
+									}`}
+									style={{
+										width: `${Math.min(100, Math.round((deliverySpend.monthSpendSen / deliverySpend.capSen) * 100))}%`,
+									}}
+								/>
+							</div>
+							<p className="text-[11px] text-muted-foreground">
+								Rider bookings on the Kedaipal Lalamove account, rebilled to
+								you at cost. At the limit, new bookings pause (orders keep
+								flowing) — add your own Lalamove API key in Settings →
+								Fulfilment to lift it.
 							</p>
 						</div>
 					) : null}

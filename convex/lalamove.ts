@@ -33,6 +33,7 @@ import {
 	parseQuotationResponse,
 	resolveLalamoveCredentials,
 } from "./lib/lalamove";
+import { requireRetailerAccess } from "./lib/auth";
 import { rateLimiter } from "./lib/rateLimiter";
 import { monthStartMyt } from "./lib/usagePeriod";
 import { applyStatusTransition, resolveSharedOrder } from "./orders";
@@ -552,8 +553,9 @@ function formatDeliveryAddress(
 /** Sum of this month's (MYT) master-account booking costs for a retailer —
  * indexed creation-time range read (insights precedent). Counts every master
  * job placed this month regardless of outcome: a cancelled booking can still
- * carry a fee, and a conservative meter is the point of a protective cap. */
-async function monthMasterSpend(
+ * carry a fee, and a conservative meter is the point of a protective cap.
+ * Exported for the admin rebilling sweep (convex/admin.ts). */
+export async function monthMasterSpend(
 	ctx: { db: { query: (t: "deliveryJobs") => any } },
 	retailerId: Id<"retailers">,
 ): Promise<number> {
@@ -1072,6 +1074,33 @@ export const getDeliveryJob = query({
 			monthMasterSpend: spend,
 			masterSpendCap:
 				credentials?.mode === "master" ? MASTER_MONTHLY_SPEND_CAP_SEN : undefined,
+		};
+	},
+});
+
+/**
+ * Billing-tab read: this month's Lalamove spend for sellers running on the
+ * Kedaipal MASTER account (they're rebilled at cost weekly, so the meter is
+ * their heads-up). Returns null for BYO sellers (they pay Lalamove directly
+ * — their own wallet is the meter) and for stores without booking set up,
+ * so the billing tab shows nothing unless it applies. Owner-or-admin.
+ */
+export const getMyDeliverySpend = query({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{ monthSpendSen: number; capSen: number } | null> => {
+		const { retailer } = await requireRetailerAccess(ctx, retailerId);
+		if (!retailer.deliveryBooking) return null;
+		const credentials = resolveLalamoveCredentials(
+			retailer.deliveryBooking as BookingConfig | undefined,
+			platformLalamoveEnv(),
+		);
+		if (credentials?.mode !== "master") return null;
+		return {
+			monthSpendSen: await monthMasterSpend(ctx, retailerId),
+			capSen: MASTER_MONTHLY_SPEND_CAP_SEN,
 		};
 	},
 });

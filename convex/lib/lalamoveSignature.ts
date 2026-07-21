@@ -11,12 +11,13 @@
  * event's `data` object (the signature can't cover the full raw body — it
  * contains itself).
  *
- * The exact BODY serialization is the one under-documented spot (the official
- * tutorial shows it only in a code screenshot), so `verifyLalamoveWebhook`
- * checks the documented candidate plus one conservative alternative and
- * reports WHICH matched — the first sandbox event tells us the truth and we
- * narrow to a single candidate then. Accepting either is not a security
- * weakening: both are HMACs under the same secret.
+ * CONFIRMED against real sandbox traffic (21 Jul 2026, MY market, webhook v3):
+ * every event type verified under the "data" candidate — BODY is the compact
+ * JSON.stringify of the `data` object, matching JS serialization even for
+ * payloads with escaped characters in shareLink. The "envelope" candidate is
+ * kept as a defensive fallback only (their serializer could differ for a
+ * future event type); accepting either is not a security weakening — both
+ * are HMACs under the same secret. The route logs which variant matched.
  *
  * Web Crypto only (Convex httpAction edge runtime), no Convex imports so it
  * unit-tests in isolation.

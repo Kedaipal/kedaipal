@@ -12,7 +12,9 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
+import { monthMasterSpend, platformLalamoveEnv } from "./lalamove";
 import { requireAdmin } from "./lib/auth";
+import { resolveLalamoveCredentials } from "./lib/lalamove";
 import { loadSubscription } from "./subscriptions";
 
 /** How many sellers the directory pulls. The Founding cohort is ~10 and the whole
@@ -32,6 +34,11 @@ export type AdminSellerRow = {
 	subscriptionStatus?: Doc<"subscriptions">["status"];
 	plan?: Doc<"subscriptions">["plan"];
 	createdAt: number;
+	/** Lalamove credential mode (86eyb5hrf) — which account pays this seller's
+	 * rider bookings. Undefined = booking not set up. "master" rows are the
+	 * weekly at-cost rebill sweep, with this month's spend alongside. */
+	deliveryCredentialMode?: "byo" | "master" | "none";
+	deliveryMonthSpendSen?: number;
 };
 
 /**
@@ -52,6 +59,21 @@ export const listSellersForAdmin = query({
 		const rows: AdminSellerRow[] = [];
 		for (const r of retailers) {
 			const sub = await loadSubscription(ctx, r._id);
+			// Lalamove settlement surface: mode + this month's master-account
+			// spend (the weekly at-cost rebill number). Only computed for stores
+			// with booking configured — the loop stays cheap for everyone else.
+			let deliveryCredentialMode: AdminSellerRow["deliveryCredentialMode"];
+			let deliveryMonthSpendSen: number | undefined;
+			if (r.deliveryBooking) {
+				const credentials = resolveLalamoveCredentials(
+					r.deliveryBooking,
+					platformLalamoveEnv(),
+				);
+				deliveryCredentialMode = credentials?.mode ?? "none";
+				if (credentials?.mode === "master") {
+					deliveryMonthSpendSen = await monthMasterSpend(ctx, r._id);
+				}
+			}
 			rows.push({
 				_id: r._id,
 				storeName: r.storeName,
@@ -62,6 +84,8 @@ export const listSellersForAdmin = query({
 				subscriptionStatus: sub?.status,
 				plan: sub?.plan,
 				createdAt: r._creationTime,
+				deliveryCredentialMode,
+				deliveryMonthSpendSen,
 			});
 		}
 		rows.sort((a, b) => {
