@@ -10,7 +10,6 @@ import {
 	Sticker,
 } from "../components/landing/landing-ui";
 import { Nav } from "../components/landing/nav";
-import { ResellerBandTable } from "../components/landing/reseller-band-table";
 import { Button } from "../components/ui/button";
 import { buildWaContactLink } from "../lib/contact";
 import { cn } from "../lib/utils";
@@ -18,7 +17,7 @@ import { m } from "../paraglide/messages";
 
 const SEO_TITLE = "Pricing — Kedaipal WhatsApp Order Hub";
 const SEO_DESC =
-	"Simple, transparent pricing for WhatsApp sellers. Start with a 14-day free trial. Starter from RM79/mo, Pro RM149/mo, Scale from RM299/mo. Founding 10 spots available.";
+	"Simple, transparent pricing for WhatsApp sellers. Start with a 14-day free trial. Starter RM79/mo, Pro RM149/mo, Scale RM299/mo flat. Founding 10 spots available.";
 const SITE_URL = "https://kedaipal.com";
 const PAGE_URL = `${SITE_URL}/pricing`;
 const OG_IMAGE = `${SITE_URL}/og-image.png`;
@@ -136,13 +135,20 @@ function useFeatures(): Feature[] {
 			label: m.pricingpage_feat_orders_per_month(),
 			starter: "100",
 			pro: "500",
-			scale: m.pricingpage_unlimited(),
+			scale: "2,000",
 		},
 		{
 			label: m.pricingpage_feat_team_members(),
 			starter: "1",
 			pro: "2",
 			scale: "5",
+			comingSoon: true,
+		},
+		{
+			label: m.pricingpage_feat_outlets(),
+			starter: "1",
+			pro: "1",
+			scale: m.pricingpage_val_outlets_scale(),
 			comingSoon: true,
 		},
 		{
@@ -200,6 +206,13 @@ function useFeatures(): Feature[] {
 			scale: true,
 		},
 		{
+			// Shipped (Seller Insights v1, 86ey5tfrz) — live, so no Coming soon badge.
+			label: m.pricingpage_feat_insights(),
+			starter: false,
+			pro: true,
+			scale: true,
+		},
+		{
 			// Shipped (fulfilment date at checkout, 86expm524) — and it's part of
 			// the core order flow on EVERY storefront, so it's honestly all-tier:
 			// the buyer-facing checkout doesn't vary by the seller's plan.
@@ -220,27 +233,6 @@ function useFeatures(): Feature[] {
 			starter: false,
 			pro: m.pricingpage_val_broadcast_pro(),
 			scale: m.pricingpage_val_broadcast_scale(),
-			comingSoon: true,
-		},
-		{
-			label: m.pricingpage_feat_tiered(),
-			starter: false,
-			pro: false,
-			scale: true,
-			comingSoon: true,
-		},
-		{
-			label: m.pricingpage_feat_reseller(),
-			starter: false,
-			pro: false,
-			scale: true,
-			comingSoon: true,
-		},
-		{
-			label: m.pricingpage_feat_reports(),
-			starter: false,
-			pro: false,
-			scale: true,
 			comingSoon: true,
 		},
 		{
@@ -298,9 +290,9 @@ function FeatureCell({ value }: { value: FeatureValue }) {
 
 function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 	const { isSignedIn } = useAuth();
-	// Scale is banded on active resellers (Coming soon), so it always anchors on
-	// "from RM299" and ignores the monthly/annual toggle — an annual number would
-	// be misleading before banded billing ships. See docs/pricing.md.
+	// Scale is flat-priced like every tier (multi-outlet tier, RM299/mo — Arif,
+	// 19 Jul 2026), so it follows the monthly/annual toggle; only its CTA stays a
+	// disabled "Coming soon" panel until it's purchasable. See docs/pricing.md.
 	const isScale = tier.id === "scale";
 	const price = cycle === "annual" ? tier.annual : tier.monthly;
 
@@ -334,14 +326,7 @@ function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 			</p>
 
 			<div className="mt-3 flex items-end gap-1">
-				{isScale && (
-					<span className="mb-1 text-sm text-muted-foreground">
-						{m.pricingpage_price_from()}
-					</span>
-				)}
-				<span className="text-4xl font-bold tracking-tight">
-					RM {isScale ? tier.monthly : price}
-				</span>
+				<span className="text-4xl font-bold tracking-tight">RM {price}</span>
 				<span
 					className={cn(
 						"mb-1 text-sm",
@@ -353,7 +338,7 @@ function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 					{m.pricing_per_month()}
 				</span>
 			</div>
-			{cycle === "annual" && !isScale && (
+			{cycle === "annual" && (
 				<p className="mt-0.5 text-xs text-accent">
 					{m.pricingpage_billed_annual({ total: tier.annual * 10 })}
 				</p>
@@ -367,8 +352,6 @@ function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 			>
 				{tier.tagline}
 			</p>
-
-			{isScale && <ResellerBandTable className="mt-4" />}
 
 			{tier.founding && (
 				<div className="mt-4 rounded-xl border border-accent/40 bg-accent/10 px-4 py-3">
@@ -405,12 +388,26 @@ function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 						{m.pricingpage_soon()}
 					</span>
 				</li>
+				{isScale && (
+					<>
+						<li className="flex items-center gap-2 text-sm text-muted-foreground">
+							<Check className="size-4 shrink-0 text-muted-foreground/50" />
+							{m.pricingpage_scale_outlets()}
+							<span className="rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-400">
+								{m.pricingpage_soon()}
+							</span>
+						</li>
+						<li className="pl-6 text-xs text-muted-foreground/80">
+							{m.pricingpage_scale_outlet_addon()}
+						</li>
+					</>
+				)}
 			</ul>
 
 			<div className="mt-6">
 				{isScale ? (
-					// Scale is banded + not yet purchasable — a disabled "Coming soon"
-					// panel replaces the CTA (mirrors the landing teaser). Trials are
+					// Scale is not yet purchasable — a disabled "Coming soon" panel
+					// replaces the CTA (mirrors the landing teaser). Trials are
 					// Pro-only, so a trial link here would be wrong.
 					<div className="flex h-11 w-full items-center justify-center rounded-full border border-dashed border-border bg-muted/40 text-sm font-semibold text-muted-foreground">
 						{m.pricingpage_coming_soon()}

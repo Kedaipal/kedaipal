@@ -24,8 +24,8 @@ export function planQualifiesForFounding(plan: Plan): boolean {
 export type PlanCaps = {
 	/** Monthly order cap. SOFT in v1 — drives a dashboard nudge, never blocks the
 	 * public storefront. All tiers are finite (Arif's 2026-06-28 decision dropped
-	 * Scale's "unlimited" — keeps an upsell ceiling for a future Enterprise tier and
-	 * stops contradicting Scale's own ~1,300/mo tagline). */
+	 * Scale's "unlimited"; reaffirmed 2026-07-19 — Scale is the flat multi-outlet
+	 * tier, no metering, and the hidden quote-based Enterprise sits above it). */
 	orderCap: number;
 	/** Hard cap on dashboard users. */
 	userCap: number;

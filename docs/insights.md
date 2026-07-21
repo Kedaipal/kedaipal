@@ -157,7 +157,8 @@ a bespoke gate — `insights` is one key in `PlanFeatures`:
 
 ## Not in v1
 
-Rollup/aggregate table (deferred to v2 `86ey5tfvh` at scale), Scale "reseller
-performance reports" (network-level, unbuilt — renamed on the pricing card via
-`86ey5tkd1`), PostHog `/app/insights` funnel wiring, and the order-cap usage
-meter (`86ey31558`) that will later live on this page.
+Rollup/aggregate table (deferred to v2 `86ey5tfvh` at scale), PostHog
+`/app/insights` funnel wiring, and the order-cap usage meter (`86ey31558`) that
+will later live on this page. (The old Scale "sales reports" pricing-table row
+was deleted outright when Scale was repositioned as the multi-outlet tier,
+`86eyb9zwt` — Insights is the live row now.)
