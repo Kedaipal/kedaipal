@@ -1788,6 +1788,18 @@ export async function applyStatusTransition(
 	await ctx.scheduler.runAfter(0, internal.whatsapp.notifyStatusChange, {
 		orderId: order._id,
 	});
+
+	// Packed = "ready for pickup NOW" — the natural rider-dispatch moment.
+	// Opt-in Lalamove auto-booking (retailers.deliveryBooking.autoBookOnPacked)
+	// rides this transition; the scheduled action re-checks EVERY eligibility
+	// gate and quietly no-ops when the store hasn't opted in, so scheduling
+	// unconditionally for delivery orders costs nothing. See
+	// docs/delivery-lalamove.md ("Auto-book on packed").
+	if (status === "packed" && order.deliveryMethod === "delivery") {
+		await ctx.scheduler.runAfter(0, internal.lalamove.autoBookForOrder, {
+			orderId: order._id,
+		});
+	}
 }
 
 export const updateStatus = mutation({

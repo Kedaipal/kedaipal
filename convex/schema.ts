@@ -250,6 +250,12 @@ export default defineSchema({
 				vehicleType: v.union(v.literal("MOTORCYCLE"), v.literal("CAR")),
 				apiKey: v.optional(v.string()),
 				apiSecret: v.optional(v.string()),
+				// Opt-in automation: the moment a delivery order transitions to
+				// PACKED, a rider is booked automatically at today's price from the
+				// seller's wallet (applyStatusTransition schedules
+				// lalamove.autoBookForOrder; every eligibility gate re-checks
+				// there). Undefined = off — booking stays a manual two-tap.
+				autoBookOnPacked: v.optional(v.boolean()),
 			}),
 		),
 		// Minimum days' notice the retailer needs before a fulfilment date. Drives

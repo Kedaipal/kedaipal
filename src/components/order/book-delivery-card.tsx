@@ -54,13 +54,14 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 		fee: number;
 		buyerPaidFee: number;
 		vehicleType: string;
+		buyerContactFallback: boolean;
 	} | null>(null);
 	const [booking, setBooking] = useState(false);
 	const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
 	const [cancelling, setCancelling] = useState(false);
 
 	if (order.deliveryMethod !== "delivery" || !dispatch) return null;
-	const { job, blockReason } = dispatch;
+	const { job, blockReason, autoBookOnPacked } = dispatch;
 	const activeJob =
 		job && !["completed", "canceled", "expired", "rejected"].includes(job.status)
 			? job
@@ -260,6 +261,16 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 				)
 			) : null}
 
+			{/* Packed-trigger automation heads-up — shown BEFORE it fires so the
+			    seller is never surprised that marking Packed spent their wallet. */}
+			{autoBookOnPacked && !activeJob && order.status === "confirmed" ? (
+				<p className="text-xs text-muted-foreground">
+					⚡ Auto-book is on — marking this order as{" "}
+					<span className="font-medium">Packed</span> books the rider
+					automatically at today&apos;s price.
+				</p>
+			) : null}
+
 			{/* Confirm dialog — fresh price + variance vs what the buyer paid. */}
 			<Dialog open={quote !== null} onOpenChange={(o) => !o && setQuote(null)}>
 				<DialogContent>
@@ -284,6 +295,14 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 								<span>Buyer paid for delivery</span>
 								<span>{formatPrice(quote.buyerPaidFee, order.currency)}</span>
 							</div>
+							{quote.buyerContactFallback ? (
+								<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+									This buyer&apos;s WhatsApp isn&apos;t a Malaysian number, and
+									Lalamove only accepts +60 contacts — the rider will get{" "}
+									<span className="font-medium">your store&apos;s number</span>{" "}
+									instead, with the buyer&apos;s real number in the rider notes.
+								</p>
+							) : null}
 							{variance !== 0 ? (
 								<p
 									className={`rounded-lg px-3 py-2 text-xs ${

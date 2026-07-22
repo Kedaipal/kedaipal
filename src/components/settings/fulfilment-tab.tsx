@@ -54,6 +54,7 @@ type DeliveryBookingSummary = {
 	enabled: boolean;
 	vehicleType: "MOTORCYCLE" | "CAR";
 	hasCredentials: boolean;
+	autoBookOnPacked: boolean;
 	apiKeyHint?: string;
 };
 
@@ -563,6 +564,9 @@ function DeliveryChargeSection({
 	const [apiKey, setApiKey] = useState("");
 	const [apiSecret, setApiSecret] = useState("");
 	const [editingKeys, setEditingKeys] = useState(false);
+	const [autoBook, setAutoBook] = useState(
+		deliveryBooking?.autoBookOnPacked ?? false,
+	);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const hasStoredKey = !!deliveryBooking?.apiKeyHint;
@@ -666,6 +670,7 @@ function DeliveryChargeSection({
 							deliveryBooking: {
 								enabled: true,
 								vehicleType,
+								autoBookOnPacked: autoBook,
 								apiKey: apiKey.trim() || undefined,
 								apiSecret: apiSecret.trim() || undefined,
 							},
@@ -946,6 +951,31 @@ function DeliveryChargeSection({
 							</p>
 						</div>
 					) : null}
+
+					{/* 5 · Packed-trigger automation (opt-in) — the vendor asked for
+					    zero-tap dispatch; the copy is explicit that marking Packed
+					    SPENDS from their wallet at today's price. */}
+					<div className="flex flex-col gap-1.5 rounded-xl border border-input p-3">
+						<div className="flex items-start justify-between gap-4">
+							<div>
+								<p className="text-sm font-medium">
+									Auto-book rider when you mark an order{" "}
+									<span className="font-semibold">Packed</span>
+								</p>
+								<p className="mt-0.5 text-xs text-muted-foreground leading-relaxed">
+									{autoBook
+										? "On — the moment you mark a delivery order Packed, the rider is booked automatically at today's price from your Lalamove wallet. No extra taps. If a booking fails you get an email and a Rebook button on the order."
+										: "Off — you book each rider yourself with the Book delivery button on the order (two taps, with a price check first)."}
+								</p>
+							</div>
+							<ToggleSwitch
+								on={autoBook}
+								onChange={setAutoBook}
+								disabled={lalamoveLocked}
+								label="Auto-book rider on packed"
+							/>
+						</div>
+					</div>
 				</div>
 			) : null}
 

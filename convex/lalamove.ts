@@ -13,9 +13,11 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
 	action,
+	internalAction,
 	internalMutation,
 	internalQuery,
 	query,
+	type QueryCtx,
 } from "./_generated/server";
 import {
 	buildLalamoveHeaders,
@@ -523,7 +525,7 @@ function formatDeliveryAddress(
 }
 
 type DispatchContext =
-	| { ok: false; reason: DispatchBlock | "not_found" }
+	| { ok: false; reason: DispatchBlock | "not_found" | "auto_off" }
 	| {
 			ok: true;
 			orderId: Id<"orders">;
@@ -534,9 +536,92 @@ type DispatchContext =
 			destination: { latitude: number; longitude: number; address: string };
 			sender: { name: string; phone: string };
 			recipient: { name: string; phone: string; remarks?: string };
+			/** True when the buyer's WhatsApp isn't a Malaysian number — the
+			 * rider contact fell back to the seller (surfaced in the confirm
+			 * dialog so nobody is surprised when the rider calls the store). */
+			buyerContactFallback: boolean;
 			vehicleType: string;
 			credentials: LalamoveCredentials;
 	  };
+
+/**
+ * Shared eligibility + payload assembly for one booking attempt — the manual
+ * path (getDispatchContext) and the packed-trigger auto path
+ * (getAutoBookContext) differ ONLY in auth and how the plan gate resolves.
+ */
+async function dispatchContextForOrder(
+	ctx: QueryCtx,
+	order: Doc<"orders">,
+	retailer: Doc<"retailers">,
+	planOk: boolean,
+): Promise<DispatchContext> {
+	const jobs = await ctx.db
+		.query("deliveryJobs")
+		.withIndex("by_order", (q) => q.eq("orderId", order._id))
+		.collect();
+	const activeJob = jobs.find((j) => isActiveJobStatus(j.status));
+
+	const credentials = resolveLalamoveCredentials(
+		retailer.deliveryBooking as BookingConfig | undefined,
+	);
+
+	const blocked = dispatchBlockReason({
+		order,
+		retailer,
+		activeJob,
+		credentials,
+		planOk,
+	});
+	if (blocked) return { ok: false, reason: blocked };
+	// Non-null after dispatchBlockReason — restated for the type system.
+	if (!credentials) return { ok: false, reason: "no_credentials" };
+
+	const address = order.deliveryAddress!;
+	const businessAddress = retailer.businessAddress!;
+	// Lalamove MY rejects non-Malaysian phones (422 on +65 etc. — a real JB
+	// cross-border-buyer case). The rider contact falls back to the SELLER
+	// when the buyer's number isn't MY, with the buyer's actual number
+	// carried in remarks so the rider can still reach them via the seller.
+	const sellerPhone = toLalamoveMyPhone(retailer.waPhone);
+	if (!sellerPhone) return { ok: false, reason: "no_seller_phone" };
+	const buyerMyPhone = toLalamoveMyPhone(order.customer.waPhone);
+	const remarksParts = [
+		order.shortId,
+		buyerMyPhone
+			? undefined
+			: `Buyer WhatsApp: ${toLalamovePhone(order.customer.waPhone!)}`,
+		order.deliveryAddress?.notes,
+		order.customerNote,
+	].filter((p): p is string => !!p && p.trim().length > 0);
+	return {
+		ok: true,
+		orderId: order._id,
+		retailerId: retailer._id,
+		shortId: order.shortId,
+		buyerPaidFee: order.deliveryFee ?? 0,
+		origin: {
+			latitude: businessAddress.latitude,
+			longitude: businessAddress.longitude,
+			label: businessAddress.label,
+		},
+		destination: {
+			latitude: address.latitude!,
+			longitude: address.longitude!,
+			address: formatDeliveryAddress(address),
+		},
+		sender: { name: retailer.storeName, phone: sellerPhone },
+		recipient: {
+			name: order.customer.name ?? "Customer",
+			phone: buyerMyPhone ?? sellerPhone,
+			remarks: remarksParts.join(" · ").slice(0, 400) || undefined,
+		},
+		buyerContactFallback: buyerMyPhone === null,
+		vehicleType:
+			(retailer.deliveryBooking as BookingConfig).vehicleType ?? "MOTORCYCLE",
+		credentials,
+	};
+}
+
 
 /**
  * Auth + full eligibility for a booking attempt, in one read. INTERNAL —
@@ -551,16 +636,6 @@ export const getDispatchContext = internalQuery({
 		const retailer = await ctx.db.get(order.retailerId);
 		if (!retailer) return { ok: false, reason: "not_found" };
 
-		const jobs = await ctx.db
-			.query("deliveryJobs")
-			.withIndex("by_order", (q) => q.eq("orderId", order._id))
-			.collect();
-		const activeJob = jobs.find((j) => isActiveJobStatus(j.status));
-
-		const credentials = resolveLalamoveCredentials(
-			retailer.deliveryBooking as BookingConfig | undefined,
-		);
-
 		// Plan gate — admin act-as bypasses (white-glove), mirroring updateSettings.
 		const identity = await ctx.auth.getUserIdentity();
 		const actingAsAdmin =
@@ -573,61 +648,34 @@ export const getDispatchContext = internalQuery({
 				planOk = false;
 			}
 		}
+		return dispatchContextForOrder(ctx, order, retailer, planOk);
+	},
+});
 
-		const blocked = dispatchBlockReason({
-			order,
-			retailer,
-			activeJob,
-			credentials,
-			planOk,
-		});
-		if (blocked) return { ok: false, reason: blocked };
-		// Non-null after dispatchBlockReason — restated for the type system.
-		if (!credentials) return { ok: false, reason: "no_credentials" };
-
-		const address = order.deliveryAddress!;
-		const businessAddress = retailer.businessAddress!;
-		// Lalamove MY rejects non-Malaysian phones (422 on +65 etc. — a real JB
-		// cross-border-buyer case). The rider contact falls back to the SELLER
-		// when the buyer's number isn't MY, with the buyer's actual number
-		// carried in remarks so the rider can still reach them via the seller.
-		const sellerPhone = toLalamoveMyPhone(retailer.waPhone);
-		if (!sellerPhone) return { ok: false, reason: "no_seller_phone" };
-		const buyerMyPhone = toLalamoveMyPhone(order.customer.waPhone);
-		const remarksParts = [
-			order.shortId,
-			buyerMyPhone
-				? undefined
-				: `Buyer WhatsApp: ${toLalamovePhone(order.customer.waPhone!)}`,
-			order.deliveryAddress?.notes,
-			order.customerNote,
-		].filter((p): p is string => !!p && p.trim().length > 0);
-		return {
-			ok: true,
-			orderId: order._id,
-			retailerId: retailer._id,
-			shortId: order.shortId,
-			buyerPaidFee: order.deliveryFee ?? 0,
-			origin: {
-				latitude: businessAddress.latitude,
-				longitude: businessAddress.longitude,
-				label: businessAddress.label,
-			},
-			destination: {
-				latitude: address.latitude!,
-				longitude: address.longitude!,
-				address: formatDeliveryAddress(address),
-			},
-			sender: { name: retailer.storeName, phone: sellerPhone },
-			recipient: {
-				name: order.customer.name ?? "Customer",
-				phone: buyerMyPhone ?? sellerPhone,
-				remarks: remarksParts.join(" · ").slice(0, 400) || undefined,
-			},
-			vehicleType:
-				(retailer.deliveryBooking as BookingConfig).vehicleType ?? "MOTORCYCLE",
-			credentials,
-		};
+/**
+ * The packed-trigger twin: no user identity (runs from the scheduler), keyed
+ * by orderId, and additionally requires the seller's autoBookOnPacked opt-in.
+ * Every other eligibility rule is the same shared assembly.
+ */
+export const getAutoBookContext = internalQuery({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<DispatchContext> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) return { ok: false, reason: "not_found" };
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) return { ok: false, reason: "not_found" };
+		if (retailer.deliveryBooking?.autoBookOnPacked !== true) {
+			return { ok: false, reason: "auto_off" };
+		}
+		// No identity here — the plan gate resolves on the retailer alone (a
+		// downgraded seller's automation pauses just like their manual button).
+		let planOk = true;
+		try {
+			await assertPlanFeature(ctx, retailer._id, "delivery");
+		} catch {
+			planOk = false;
+		}
+		return dispatchContextForOrder(ctx, order, retailer, planOk);
 	},
 });
 
@@ -666,7 +714,11 @@ export const prepareBooking = action({
 		ctx,
 		{ shortId },
 	): Promise<
-		| { ok: false; reason: DispatchBlock | "not_found" | "quote_failed"; message?: string }
+		| {
+				ok: false;
+				reason: DispatchBlock | "not_found" | "auto_off" | "quote_failed";
+				message?: string;
+		  }
 		| {
 				ok: true;
 				quotationId: string;
@@ -675,6 +727,7 @@ export const prepareBooking = action({
 				fee: number;
 				buyerPaidFee: number;
 				vehicleType: string;
+				buyerContactFallback: boolean;
 		  }
 	> => {
 		const context = await ctx.runQuery(internal.lalamove.getDispatchContext, {
@@ -709,6 +762,7 @@ export const prepareBooking = action({
 				fee: parsed.priceTotal,
 				buyerPaidFee: context.buyerPaidFee,
 				vehicleType: context.vehicleType,
+				buyerContactFallback: context.buyerContactFallback,
 			};
 		} catch (err) {
 			console.warn("[lalamove] dispatch quote failed", {
@@ -741,7 +795,11 @@ export const confirmBooking = action({
 		ctx,
 		args,
 	): Promise<
-		| { ok: false; reason: DispatchBlock | "not_found" | "booking_failed"; message?: string }
+		| {
+				ok: false;
+				reason: DispatchBlock | "not_found" | "auto_off" | "booking_failed";
+				message?: string;
+		  }
 		| { ok: true; providerOrderId: string; costActual: number }
 	> => {
 		const context = await ctx.runQuery(internal.lalamove.getDispatchContext, {
@@ -938,6 +996,105 @@ export const markJobCancelled = internalMutation({
 	},
 });
 
+/**
+ * The packed-trigger automation (opt-in per store): quote at today's price
+ * and book immediately, no confirm dialog — the seller opted into exactly
+ * that trade. Scheduled by applyStatusTransition on every delivery order's
+ * transition INTO packed; ALL eligibility re-checks live in
+ * getAutoBookContext (off / no keys / no pin / plan lapse / already booked
+ * → quiet no-op, the order-detail card explains why booking didn't run).
+ * Real booking failures (wallet empty, provider down) email the seller with
+ * the same failed-job template the webhook path uses, and the card offers
+ * manual book/rebook as always.
+ */
+export const autoBookForOrder = internalAction({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<void> => {
+		const context = await ctx.runQuery(internal.lalamove.getAutoBookContext, {
+			orderId,
+		});
+		if (!context.ok) {
+			// Expected in the common case (feature off) — log-only, never an error.
+			console.log("[lalamove] auto-book skipped", {
+				orderId,
+				reason: context.reason,
+			});
+			return;
+		}
+		try {
+			const quotationJson = await callLalamove(
+				context.credentials,
+				"POST",
+				"/v3/quotations",
+				buildQuotationBody({
+					serviceType: context.vehicleType,
+					stops: [
+						{ coordinates: context.origin, address: context.origin.label },
+						{
+							coordinates: context.destination,
+							address: context.destination.address,
+						},
+					],
+				}),
+			);
+			const quotation = parseQuotationResponse(quotationJson);
+			const orderJson = await callLalamove(
+				context.credentials,
+				"POST",
+				"/v3/orders",
+				buildPlaceOrderBody({
+					quotationId: quotation.quotationId,
+					sender: {
+						stopId: quotation.stopIds[0],
+						name: context.sender.name,
+						phone: context.sender.phone,
+					},
+					recipient: {
+						stopId: quotation.stopIds[1],
+						name: context.recipient.name,
+						phone: context.recipient.phone,
+						remarks: context.recipient.remarks,
+					},
+					orderRef: context.shortId,
+				}),
+			);
+			const placed = parseOrderResponse(orderJson);
+			await ctx.runMutation(internal.lalamove.recordBooking, {
+				orderId: context.orderId,
+				retailerId: context.retailerId,
+				providerOrderId: placed.providerOrderId,
+				costActual: placed.priceTotal,
+				quotationId: quotation.quotationId,
+				vehicleType: context.vehicleType,
+				shareLink: placed.shareLink,
+				providerStatus: placed.status,
+			});
+			console.log("[lalamove] auto-booked on packed", {
+				shortId: context.shortId,
+				providerOrderId: placed.providerOrderId,
+				costActual: placed.priceTotal,
+			});
+		} catch (err) {
+			// A parallel manual booking can win the recordBooking race — that's
+			// success, not failure.
+			if (
+				err instanceof ConvexError &&
+				String(err.data).includes("already in progress")
+			) {
+				return;
+			}
+			console.warn("[lalamove] auto-book failed", {
+				shortId: context.shortId,
+				message: err instanceof Error ? err.message : String(err),
+			});
+			await ctx.runAction(internal.email.notifyDeliveryJobFailed, {
+				orderId: context.orderId,
+				reason: friendlyBookingError(err),
+			});
+		}
+	},
+});
+
 /** Public job shape for the order-detail card — no credentials, no secrets. */
 export type DeliveryJobView = {
 	status: DeliveryJobStatus;
@@ -963,6 +1120,10 @@ export const getDeliveryJob = query({
 	): Promise<{
 		job: DeliveryJobView | null;
 		blockReason: DispatchBlock | null;
+		/** Seller's packed-trigger automation — the card surfaces it on
+		 * pre-packed orders so "why did/didn't it book itself" is never a
+		 * mystery. */
+		autoBookOnPacked: boolean;
 	} | null> => {
 		const order = await resolveSharedOrder(ctx, { shortId });
 		if (!order) return null;
@@ -1000,7 +1161,10 @@ export const getDeliveryJob = query({
 			credentials,
 			planOk,
 		});
+		const autoBookOnPacked =
+			retailer.deliveryBooking?.autoBookOnPacked === true;
 		return {
+			autoBookOnPacked,
 			job: latest
 				? {
 						status: latest.status,

@@ -5,7 +5,7 @@
 // convex/lib/lalamove.test.ts; signature auth in lalamoveSignature.test.ts.
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import schema from "./schema";
@@ -573,6 +573,7 @@ describe("updateSettings — deliveryBooking guards", () => {
 			enabled: true,
 			vehicleType: "CAR",
 			hasCredentials: true,
+			autoBookOnPacked: false,
 			apiKeyHint: "abcd",
 		});
 		// The raw secret must never appear anywhere in the owner payload.
@@ -694,5 +695,169 @@ describe("updateSettings — deliveryBooking guards", () => {
 		const retailer = await asUser(t).query(api.retailers.getMyRetailer);
 		expect(retailer?.deliveryBooking?.enabled).toBe(false);
 		expect(retailer?.deliveryConfig).toBeUndefined();
+	});
+});
+
+describe("autoBookForOrder — packed-trigger automation", () => {
+	/** Route lalamove sandbox calls to canned success payloads; anything else
+	 * (e.g. the failure-email's Resend call) gets a bland 200. */
+	function stubLalamoveFetch(opts: { failOrders?: boolean } = {}) {
+		const calls: string[] = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: RequestInfo | URL) => {
+				const url = String(input);
+				calls.push(url);
+				if (url.includes("/v3/quotations")) {
+					return new Response(
+						JSON.stringify({
+							data: {
+								quotationId: "auto-quot-1",
+								priceBreakdown: { total: "13.5", currency: "MYR" },
+								stops: [{ stopId: "stop-a" }, { stopId: "stop-b" }],
+							},
+						}),
+						{ status: 201 },
+					);
+				}
+				if (url.includes("/v3/orders")) {
+					if (opts.failOrders) {
+						return new Response(
+							JSON.stringify({
+								errors: [{ id: "ERR_INSUFFICIENT_CREDIT", message: "balance" }],
+							}),
+							{ status: 422 },
+						);
+					}
+					return new Response(
+						JSON.stringify({
+							data: {
+								orderId: "LLM-AUTO-1",
+								priceBreakdown: { total: "13.5", currency: "MYR" },
+								shareLink: "https://share.sandbox.lalamove.com/?AUTO",
+								status: "ASSIGNING_DRIVER",
+							},
+						}),
+						{ status: 201 },
+					);
+				}
+				return new Response("{}", { status: 200 });
+			}),
+		);
+		return calls;
+	}
+
+	async function seedAutoBookStore(
+		t: ReturnType<typeof setup>,
+		{ autoBook = true }: { autoBook?: boolean } = {},
+	) {
+		const retailer = await seedRetailer(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				waPhone: "60123456789",
+				businessAddress: {
+					label: "Fruit Hut HQ",
+					latitude: 3.139,
+					longitude: 101.6869,
+				},
+				deliveryBooking: {
+					enabled: true,
+					vehicleType: "MOTORCYCLE" as const,
+					autoBookOnPacked: autoBook,
+					apiKey: "pk_test_auto",
+					apiSecret: "sk_test_auto",
+				},
+			});
+		});
+		const orderId = await seedOrder(t, retailer._id, {
+			deliveryAddress: {
+				line1: "1 Jalan Test",
+				city: "Petaling Jaya",
+				state: "Selangor",
+				postcode: "47301",
+				latitude: 3.1072,
+				longitude: 101.6067,
+			},
+		});
+		return { retailer, orderId };
+	}
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	test("opted in: packs → books, records the job + mirrors the tracking link", async () => {
+		const t = setup();
+		const { orderId } = await seedAutoBookStore(t);
+		const calls = stubLalamoveFetch();
+
+		await t.action(internal.lalamove.autoBookForOrder, { orderId });
+
+		const jobs = await t.run(async (ctx) =>
+			ctx.db
+				.query("deliveryJobs")
+				.withIndex("by_order", (q) => q.eq("orderId", orderId))
+				.collect(),
+		);
+		expect(jobs).toHaveLength(1);
+		expect(jobs[0].providerOrderId).toBe("LLM-AUTO-1");
+		expect(jobs[0].costActual).toBe(1350);
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.carrierTrackingUrl).toBe(
+			"https://share.sandbox.lalamove.com/?AUTO",
+		);
+		// Sandbox base URL derived from the pk_test_ prefix.
+		expect(calls[0]).toContain("rest.sandbox.lalamove.com");
+	});
+
+	test("opt-in OFF: quiet no-op, no network calls", async () => {
+		const t = setup();
+		const { orderId } = await seedAutoBookStore(t, { autoBook: false });
+		const calls = stubLalamoveFetch();
+
+		await t.action(internal.lalamove.autoBookForOrder, { orderId });
+
+		expect(calls).toHaveLength(0);
+		const jobs = await t.run(async (ctx) =>
+			ctx.db
+				.query("deliveryJobs")
+				.withIndex("by_order", (q) => q.eq("orderId", orderId))
+				.collect(),
+		);
+		expect(jobs).toHaveLength(0);
+	});
+
+	test("idempotent: an existing ACTIVE job blocks a second auto-book", async () => {
+		const t = setup();
+		const { retailer, orderId } = await seedAutoBookStore(t);
+		const calls = stubLalamoveFetch();
+		await seedJob(t, retailer._id, orderId);
+
+		await t.action(internal.lalamove.autoBookForOrder, { orderId });
+
+		expect(calls).toHaveLength(0); // blocked before any network call
+		const jobs = await t.run(async (ctx) =>
+			ctx.db
+				.query("deliveryJobs")
+				.withIndex("by_order", (q) => q.eq("orderId", orderId))
+				.collect(),
+		);
+		expect(jobs).toHaveLength(1);
+	});
+
+	test("booking failure: no job row, no crash (seller gets the failure email)", async () => {
+		const t = setup();
+		const { orderId } = await seedAutoBookStore(t);
+		stubLalamoveFetch({ failOrders: true });
+
+		await t.action(internal.lalamove.autoBookForOrder, { orderId });
+
+		const jobs = await t.run(async (ctx) =>
+			ctx.db
+				.query("deliveryJobs")
+				.withIndex("by_order", (q) => q.eq("orderId", orderId))
+				.collect(),
+		);
+		expect(jobs).toHaveLength(0);
 	});
 });
