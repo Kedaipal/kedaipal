@@ -55,7 +55,7 @@ credentials price the quote).
 | Webhook route | `convex/http.ts` `POST /webhook/lalamove` |
 | Buyer checkout wiring | `src/components/storefront/checkout-sheet.tsx` |
 | Seller dispatch card | `src/components/order/book-delivery-card.tsx` |
-| Settings card | `src/components/settings/fulfilment-tab.tsx` (`LalamoveBookingCard`) |
+| Seller setup (4th pricing mode inside Delivery charge) | `src/components/settings/fulfilment-tab.tsx` (`DeliveryChargeSection`) |
 
 Schema: `retailers.deliveryBooking { enabled, vehicleType, apiKey?, apiSecret? }`
 (plain fields, accepted for v1 — flagged in the ticket), `deliverySnapshot`
@@ -75,11 +75,20 @@ host and one store can run sandbox keys while another runs prod.
 `updateSettings` enforces: enabling requires business address + both key
 parts; half a credential is refused at save time; clearing keys while
 enabled is refused (nothing to fall back to); key fields follow the
-logoStorageId convention (`undefined` = keep stored, `""` = clear). The
-settings card links the vendor-facing setup guide
-(`public/guides/lalamove-setup.html`, served at `/guides/lalamove-setup.html`)
-and, once keys are saved, shows the deployment's **webhook URL with one-tap
-copy** — see Webhook below for why.
+logoStorageId convention (`undefined` = keep stored, `""` = clear).
+
+**IA (revised after first seller test):** Lalamove is NOT a separate card —
+it's the 4th delivery-pricing mode (Settings → Fulfilment → Delivery charge:
+Free / Flat / By distance / **Lalamove**). Picking it reveals the whole
+setup inline — pickup address, vehicle, BYO keys (with a "How to set up"
+link to the vendor guide at `/guides/lalamove-setup.html`) and, once keys
+are saved, the deployment's **webhook URL with one-tap copy** (see Webhook
+below). One save button writes `deliveryConfig` + `deliveryBooking`
+together; switching to another pricing mode disables booking in the same
+save (keys stay stored, so switching back is instant). The key inputs are
+plain text with a CSS mask on the secret — deliberately NOT
+`type="password"`, so Chrome never mistakes the form for a login and
+autofills saved credentials into it.
 
 ### Checkout quote (trust model)
 

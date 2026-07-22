@@ -79,7 +79,8 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 		return (
 			<p className="rounded-2xl border border-dashed border-border px-4 py-3 text-xs text-muted-foreground">
 				<Truck className="mr-1.5 inline size-3.5 align-[-2px]" />
-				Book Lalamove riders in one tap from here — set it up in{" "}
+				Book Lalamove riders in one tap from here — choose <b>Lalamove</b> as
+				your delivery charge in{" "}
 				<Link
 					to="/app/settings"
 					search={{ tab: "fulfilment" }}
@@ -355,9 +356,9 @@ function blockCopy(reason: DispatchBlock | "not_found" | string): string {
 		case "plan_gated":
 			return "Lalamove booking is a Pro feature. Upgrade to book riders in one tap.";
 		case "no_credentials":
-			return "Your Lalamove API key is missing — add it in Settings → Fulfilment (Lalamove card) to book riders.";
+			return "Your Lalamove API key is missing — add it under Settings → Fulfilment → Delivery charge → Lalamove.";
 		case "booking_disabled":
-			return "Lalamove booking is switched off — enable it in Settings → Fulfilment.";
+			return "Lalamove isn't your delivery method right now — choose it under Settings → Fulfilment → Delivery charge.";
 		case "bad_status":
 			return "Delivery can be booked once the order is confirmed.";
 		default:
