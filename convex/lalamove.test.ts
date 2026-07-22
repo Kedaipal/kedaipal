@@ -831,6 +831,28 @@ describe("autoBookForOrder — packed-trigger automation", () => {
 		expect(jobs).toHaveLength(0);
 	});
 
+	test("FUTURE-DATED order: no rider before the buyer's chosen day", async () => {
+		const t = setup();
+		const { orderId } = await seedAutoBookStore(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(orderId, {
+				fulfilmentDate: Date.now() + 3 * 24 * 60 * 60 * 1000,
+			});
+		});
+		const calls = stubLalamoveFetch();
+
+		await t.action(internal.lalamove.autoBookForOrder, { orderId });
+
+		expect(calls).toHaveLength(0);
+		const jobs = await t.run(async (ctx) =>
+			ctx.db
+				.query("deliveryJobs")
+				.withIndex("by_order", (q) => q.eq("orderId", orderId))
+				.collect(),
+		);
+		expect(jobs).toHaveLength(0);
+	});
+
 	test("opt-in OFF: quiet no-op, no network calls", async () => {
 		const t = setup();
 		const { orderId } = await seedAutoBookStore(t, { autoBook: false });

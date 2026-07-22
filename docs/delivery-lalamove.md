@@ -144,7 +144,10 @@ manual button, which shows an unpaid heads-up in its confirm dialog) and
 books with no confirm dialog. The trigger is symmetric: packed-then-paid is
 covered by `markPaymentReceived` re-scheduling the same action when payment
 lands on an already-packed delivery order — auto-book fires on whichever of
-(packed, paid) happens second. The order-cancel dialog also warns when a
+(packed, paid) happens second. **Future-dated orders are never auto-booked**
+(pre-orders get packed the night before; a rider a day early is a paid
+mistake) — the seller books manually on the fulfilment day and the order
+card's hint says exactly that. The order-cancel dialog also warns when a
 rider booking is still active (cancel it too or pay for a wasted trip). Failures email the seller (same `deliveryJobFailed` template) and
 land in the amber rebook state. Discoverability: pre-packed orders show
 "⚡ Auto-book is on — marking this order as Packed books the rider

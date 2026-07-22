@@ -36,6 +36,7 @@ import {
 	toLalamoveMyPhone,
 	toLalamovePhone,
 } from "./lib/lalamove";
+import { todayMytMidnight } from "./lib/fulfilmentDate";
 import { rateLimiter } from "./lib/rateLimiter";
 import { applyStatusTransition, resolveSharedOrder } from "./orders";
 import { assertPlanFeature } from "./subscriptions";
@@ -527,7 +528,12 @@ function formatDeliveryAddress(
 type DispatchContext =
 	| {
 			ok: false;
-			reason: DispatchBlock | "not_found" | "auto_off" | "auto_unpaid";
+			reason:
+				| DispatchBlock
+				| "not_found"
+				| "auto_off"
+				| "auto_unpaid"
+				| "auto_future";
 	  }
 	| {
 			ok: true;
@@ -678,6 +684,16 @@ export const getAutoBookContext = internalQuery({
 		if (order.paymentStatus !== "received") {
 			return { ok: false, reason: "auto_unpaid" };
 		}
+		// Never send a rider before the buyer's chosen date — pre-orders are
+		// often packed the night before. Same-day (or dateless) orders only;
+		// for future dates the seller books manually on the day, and the order
+		// card's hint says so.
+		if (
+			order.fulfilmentDate !== undefined &&
+			order.fulfilmentDate > todayMytMidnight()
+		) {
+			return { ok: false, reason: "auto_future" };
+		}
 		// No identity here — the plan gate resolves on the retailer alone (a
 		// downgraded seller's automation pauses just like their manual button).
 		let planOk = true;
@@ -727,7 +743,7 @@ export const prepareBooking = action({
 	): Promise<
 		| {
 				ok: false;
-				reason: DispatchBlock | "not_found" | "auto_off" | "auto_unpaid" | "quote_failed";
+				reason: DispatchBlock | "not_found" | "auto_off" | "auto_unpaid" | "auto_future" | "quote_failed";
 				message?: string;
 		  }
 		| {
@@ -808,7 +824,7 @@ export const confirmBooking = action({
 	): Promise<
 		| {
 				ok: false;
-				reason: DispatchBlock | "not_found" | "auto_off" | "auto_unpaid" | "booking_failed";
+				reason: DispatchBlock | "not_found" | "auto_off" | "auto_unpaid" | "auto_future" | "booking_failed";
 				message?: string;
 		  }
 		| { ok: true; providerOrderId: string; costActual: number }

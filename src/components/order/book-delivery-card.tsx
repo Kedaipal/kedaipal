@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import type { DispatchBlock } from "../../../convex/lalamove";
+import { todayMytMidnight } from "../../../convex/lib/fulfilmentDate";
 import { formatPrice } from "../../lib/format";
 import { ProBadge } from "../app/pro-gate";
 import { Button } from "../ui/button";
@@ -71,6 +72,11 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 			? job
 			: null;
 	const bookable = order.status === "confirmed" || order.status === "packed";
+	// Auto-book never fires before the buyer's chosen date (pre-orders get
+	// packed the night before) — the hint below says so instead of surprising.
+	const isFutureDated =
+		order.fulfilmentDate !== undefined &&
+		order.fulfilmentDate > todayMytMidnight();
 
 	// Seller never set Lalamove up: a quiet hint on bookable orders
 	// (discoverability without shouting at non-Lalamove sellers), nothing
@@ -268,12 +274,14 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 					⚡ Auto-book is on — the rider books automatically once this order
 					is <span className="font-medium">Packed</span> and{" "}
 					<span className="font-medium">paid</span>
-					{order.status === "packed" && order.paymentStatus !== "received"
-						? " (waiting on payment)"
-						: order.paymentStatus === "received" &&
-								order.status === "confirmed"
-							? " (waiting on Packed)"
-							: ""}
+					{isFutureDated
+						? " — and books on the delivery date, not before (this order is for a later day, so book manually that morning)"
+						: order.status === "packed" && order.paymentStatus !== "received"
+							? " (waiting on payment)"
+							: order.paymentStatus === "received" &&
+									order.status === "confirmed"
+								? " (waiting on Packed)"
+								: ""}
 					.
 				</p>
 			) : null}
