@@ -26,32 +26,15 @@ import {
 	LALAMOVE_BASE_URL,
 	type LalamoveCredentials,
 	lalamoveAmountToSen,
-	MASTER_MONTHLY_SPEND_CAP_SEN,
 	normalizeLalamoveStatus,
 	parseLalamoveEventTime,
 	parseOrderResponse,
 	parseQuotationResponse,
 	resolveLalamoveCredentials,
 } from "./lib/lalamove";
-import { requireRetailerAccess } from "./lib/auth";
 import { rateLimiter } from "./lib/rateLimiter";
-import { monthStartMyt } from "./lib/usagePeriod";
 import { applyStatusTransition, resolveSharedOrder } from "./orders";
 import { assertPlanFeature } from "./subscriptions";
-
-/** Platform master credentials + environment from the deployment env. One
- * LALAMOVE_ENV switch flips the whole deployment sandbox ⇄ production. */
-export function platformLalamoveEnv(): {
-	apiKey?: string;
-	apiSecret?: string;
-	env?: string;
-} {
-	return {
-		apiKey: process.env.LALAMOVE_API_KEY,
-		apiSecret: process.env.LALAMOVE_API_SECRET,
-		env: process.env.LALAMOVE_ENV,
-	};
-}
 
 /** Non-2xx Lalamove response. `body` is the raw response text — surfaced in
  * logs and mapped to seller-friendly copy at the dispatch UI boundary. */
@@ -182,10 +165,7 @@ export const quoteForCheckout = action({
 			retailerId: args.retailerId,
 		});
 		if (!context) return { status: "unavailable" };
-		const credentials = resolveLalamoveCredentials(
-			context.booking,
-			platformLalamoveEnv(),
-		);
+		const credentials = resolveLalamoveCredentials(context.booking);
 		if (!credentials) return { status: "unavailable" };
 
 		try {
@@ -244,11 +224,10 @@ export const quoteForCheckout = action({
  * Resolve which secret(s) may verify an inbound webhook event.
  *
  * Order-scoped events resolve through the JOB row (by_provider_order) → the
- * retailer whose credentials placed it. We return BOTH the retailer's BYO
- * secret and the platform secret when available: if a seller swaps/removes
- * their key mid-flight, in-flight events (signed with whichever key placed
- * the order) still verify. Trying multiple HMAC secrets is not a weakening —
- * each candidate is a full HMAC check.
+ * retailer whose credentials placed it (BYO-only: the seller's stored secret
+ * is the only verifier). If a seller removes their key mid-flight, in-flight
+ * events go unverifiable and are acked+ignored — the job then finishes via
+ * the seller's Lalamove app instead of auto-transitions, never a 401 storm.
  *
  * Events with no matching job (bookings made outside Kedaipal on the same
  * account, wallet events): verifiable only when signed by the platform key;
@@ -266,7 +245,12 @@ export const getWebhookContext = internalQuery({
 		jobId: Id<"deliveryJobs"> | null;
 		secrets: string[];
 	}> => {
-		const platform = platformLalamoveEnv();
+		// BYO-only: the verifying secret is the job retailer's own — there is no
+		// platform account. Events with no matching job are unverifiable by
+		// design (bookings the seller made outside Kedaipal, wallet events) and
+		// the route acks + ignores them. `apiKey` stays a parameter for the log
+		// line at the route (which sender key produced unmatched traffic).
+		void apiKey;
 		const secrets: string[] = [];
 		let jobId: Id<"deliveryJobs"> | null = null;
 
@@ -283,16 +267,6 @@ export const getWebhookContext = internalQuery({
 				const byoSecret = retailer?.deliveryBooking?.apiSecret?.trim();
 				if (byoSecret) secrets.push(byoSecret);
 			}
-		}
-		// Platform secret verifies master-mode jobs and (harmlessly) acts as the
-		// fallback candidate everywhere else. Only offered when the sender's
-		// apiKey matches ours OR we found a job (mid-flight key-swap tolerance).
-		const platformSecret = platform.apiSecret?.trim();
-		if (
-			platformSecret &&
-			(jobId !== null || (platform.apiKey && apiKey === platform.apiKey))
-		) {
-			secrets.push(platformSecret);
 		}
 		return { jobId, secrets };
 	},
@@ -499,8 +473,7 @@ export type DispatchBlock =
 	| "no_credentials"
 	| "no_coords"
 	| "no_buyer_phone"
-	| "no_seller_phone"
-	| "spend_capped";
+	| "no_seller_phone";
 
 type BookingConfig = NonNullable<Doc<"retailers">["deliveryBooking"]>;
 
@@ -510,7 +483,6 @@ function dispatchBlockReason(args: {
 	activeJob: Doc<"deliveryJobs"> | undefined;
 	credentials: LalamoveCredentials | null;
 	planOk: boolean;
-	monthMasterSpend: number;
 }): DispatchBlock | null {
 	const { order, retailer, activeJob, credentials, planOk } = args;
 	if (order.deliveryMethod !== "delivery") return "not_delivery";
@@ -528,11 +500,6 @@ function dispatchBlockReason(args: {
 		return "no_coords";
 	if (!order.customer.waPhone) return "no_buyer_phone";
 	if (!retailer.waPhone) return "no_seller_phone";
-	if (
-		credentials.mode === "master" &&
-		args.monthMasterSpend >= MASTER_MONTHLY_SPEND_CAP_SEN
-	)
-		return "spend_capped";
 	return null;
 }
 
@@ -548,27 +515,6 @@ function formatDeliveryAddress(
 	]
 		.filter((part): part is string => !!part && part.trim().length > 0)
 		.join(", ");
-}
-
-/** Sum of this month's (MYT) master-account booking costs for a retailer —
- * indexed creation-time range read (insights precedent). Counts every master
- * job placed this month regardless of outcome: a cancelled booking can still
- * carry a fee, and a conservative meter is the point of a protective cap.
- * Exported for the admin rebilling sweep (convex/admin.ts). */
-export async function monthMasterSpend(
-	ctx: { db: { query: (t: "deliveryJobs") => any } },
-	retailerId: Id<"retailers">,
-): Promise<number> {
-	const monthStart = monthStartMyt(Date.now());
-	const rows: Doc<"deliveryJobs">[] = await ctx.db
-		.query("deliveryJobs")
-		.withIndex("by_retailer", (q: any) =>
-			q.eq("retailerId", retailerId).gte("_creationTime", monthStart),
-		)
-		.collect();
-	return rows
-		.filter((r) => r.credentialMode === "master")
-		.reduce((sum, r) => sum + r.costActual, 0);
 }
 
 type DispatchContext =
@@ -608,7 +554,6 @@ export const getDispatchContext = internalQuery({
 
 		const credentials = resolveLalamoveCredentials(
 			retailer.deliveryBooking as BookingConfig | undefined,
-			platformLalamoveEnv(),
 		);
 
 		// Plan gate — admin act-as bypasses (white-glove), mirroring updateSettings.
@@ -630,10 +575,6 @@ export const getDispatchContext = internalQuery({
 			activeJob,
 			credentials,
 			planOk,
-			monthMasterSpend:
-				credentials?.mode === "master"
-					? await monthMasterSpend(ctx, retailer._id)
-					: 0,
 		});
 		if (blocked) return { ok: false, reason: blocked };
 		// Non-null after dispatchBlockReason — restated for the type system.
@@ -716,7 +657,6 @@ export const prepareBooking = action({
 				fee: number;
 				buyerPaidFee: number;
 				vehicleType: string;
-				credentialMode: "byo" | "master";
 		  }
 	> => {
 		const context = await ctx.runQuery(internal.lalamove.getDispatchContext, {
@@ -751,7 +691,6 @@ export const prepareBooking = action({
 				fee: parsed.priceTotal,
 				buyerPaidFee: context.buyerPaidFee,
 				vehicleType: context.vehicleType,
-				credentialMode: context.credentials.mode,
 			};
 		} catch (err) {
 			console.warn("[lalamove] dispatch quote failed", {
@@ -820,7 +759,6 @@ export const confirmBooking = action({
 				costActual: parsed.priceTotal,
 				quotationId: args.quotationId,
 				vehicleType: context.vehicleType,
-				credentialMode: context.credentials.mode,
 				shareLink: parsed.shareLink,
 				providerStatus: parsed.status,
 			});
@@ -851,7 +789,6 @@ export const recordBooking = internalMutation({
 		costActual: v.number(),
 		quotationId: v.string(),
 		vehicleType: v.string(),
-		credentialMode: v.union(v.literal("byo"), v.literal("master")),
 		shareLink: v.optional(v.string()),
 		providerStatus: v.optional(v.string()),
 	},
@@ -879,7 +816,6 @@ export const recordBooking = internalMutation({
 			costActual: args.costActual,
 			quotationId: args.quotationId,
 			vehicleType: args.vehicleType,
-			credentialMode: args.credentialMode,
 			shareLink: args.shareLink,
 			createdAt: now,
 			updatedAt: now,
@@ -961,7 +897,6 @@ export const getCancelContext = internalQuery({
 		const retailer = await ctx.db.get(order.retailerId);
 		const credentials = resolveLalamoveCredentials(
 			retailer?.deliveryBooking as BookingConfig | undefined,
-			platformLalamoveEnv(),
 		);
 		if (!credentials) return null;
 		return {
@@ -991,7 +926,6 @@ export type DeliveryJobView = {
 	providerOrderId: string;
 	costActual: number;
 	vehicleType: string;
-	credentialMode: "byo" | "master";
 	driver?: { name: string; phone: string; plateNumber: string };
 	shareLink?: string;
 	failureReason?: string;
@@ -1011,8 +945,6 @@ export const getDeliveryJob = query({
 	): Promise<{
 		job: DeliveryJobView | null;
 		blockReason: DispatchBlock | null;
-		monthMasterSpend?: number;
-		masterSpendCap?: number;
 	} | null> => {
 		const order = await resolveSharedOrder(ctx, { shortId });
 		if (!order) return null;
@@ -1031,7 +963,6 @@ export const getDeliveryJob = query({
 
 		const credentials = resolveLalamoveCredentials(
 			retailer.deliveryBooking as BookingConfig | undefined,
-			platformLalamoveEnv(),
 		);
 		const identity = await ctx.auth.getUserIdentity();
 		const actingAsAdmin =
@@ -1044,17 +975,12 @@ export const getDeliveryJob = query({
 				planOk = false;
 			}
 		}
-		const spend =
-			credentials?.mode === "master"
-				? await monthMasterSpend(ctx, retailer._id)
-				: undefined;
 		const blockReason = dispatchBlockReason({
 			order,
 			retailer,
 			activeJob,
 			credentials,
 			planOk,
-			monthMasterSpend: spend ?? 0,
 		});
 		return {
 			job: latest
@@ -1063,7 +989,6 @@ export const getDeliveryJob = query({
 						providerOrderId: latest.providerOrderId,
 						costActual: latest.costActual,
 						vehicleType: latest.vehicleType,
-						credentialMode: latest.credentialMode,
 						driver: latest.driver,
 						shareLink: latest.shareLink,
 						failureReason: latest.failureReason,
@@ -1071,36 +996,7 @@ export const getDeliveryJob = query({
 					}
 				: null,
 			blockReason,
-			monthMasterSpend: spend,
-			masterSpendCap:
-				credentials?.mode === "master" ? MASTER_MONTHLY_SPEND_CAP_SEN : undefined,
 		};
 	},
 });
 
-/**
- * Billing-tab read: this month's Lalamove spend for sellers running on the
- * Kedaipal MASTER account (they're rebilled at cost weekly, so the meter is
- * their heads-up). Returns null for BYO sellers (they pay Lalamove directly
- * — their own wallet is the meter) and for stores without booking set up,
- * so the billing tab shows nothing unless it applies. Owner-or-admin.
- */
-export const getMyDeliverySpend = query({
-	args: { retailerId: v.id("retailers") },
-	handler: async (
-		ctx,
-		{ retailerId },
-	): Promise<{ monthSpendSen: number; capSen: number } | null> => {
-		const { retailer } = await requireRetailerAccess(ctx, retailerId);
-		if (!retailer.deliveryBooking) return null;
-		const credentials = resolveLalamoveCredentials(
-			retailer.deliveryBooking as BookingConfig | undefined,
-			platformLalamoveEnv(),
-		);
-		if (credentials?.mode !== "master") return null;
-		return {
-			monthSpendSen: await monthMasterSpend(ctx, retailerId),
-			capSen: MASTER_MONTHLY_SPEND_CAP_SEN,
-		};
-	},
-});

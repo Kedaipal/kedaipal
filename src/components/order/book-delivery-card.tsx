@@ -54,7 +54,6 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 		fee: number;
 		buyerPaidFee: number;
 		vehicleType: string;
-		credentialMode: "byo" | "master";
 	} | null>(null);
 	const [booking, setBooking] = useState(false);
 	const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
@@ -199,9 +198,6 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 					<div className="flex items-center justify-between text-xs text-muted-foreground">
 						<span>
 							Booking cost {formatPrice(activeJob.costActual, order.currency)}
-							{activeJob.credentialMode === "master"
-								? " · billed via Kedaipal"
-								: ""}
 						</span>
 						{activeJob.shareLink ? (
 							<a
@@ -296,18 +292,8 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 									}`}
 								>
 									{variance > 0
-										? `Today's price is ${formatPrice(variance, order.currency)} more than the buyer paid — the difference comes out of ${
-												quote.credentialMode === "master"
-													? "the Kedaipal account (rebilled to you at cost)"
-													: "your Lalamove wallet"
-											}.`
+										? `Today's price is ${formatPrice(variance, order.currency)} more than the buyer paid — the difference comes out of your Lalamove wallet.`
 										: `Today's price is ${formatPrice(-variance, order.currency)} less than the buyer paid — the difference stays with you.`}
-								</p>
-							) : null}
-							{quote.credentialMode === "master" ? (
-								<p className="text-xs text-muted-foreground">
-									Booked via the Kedaipal Lalamove account — delivery costs are
-									rebilled to you at cost.
 								</p>
 							) : null}
 						</div>
@@ -368,10 +354,8 @@ function blockCopy(reason: DispatchBlock | "not_found" | string): string {
 			return "Add your WhatsApp number in Settings → Store first — riders need a pickup contact.";
 		case "plan_gated":
 			return "Lalamove booking is a Pro feature. Upgrade to book riders in one tap.";
-		case "spend_capped":
-			return "You've reached this month's delivery spend limit on the Kedaipal account. Contact us to raise it, or add your own Lalamove API key in Settings → Fulfilment.";
 		case "no_credentials":
-			return "No Lalamove credentials are set up — add your API key in Settings → Fulfilment.";
+			return "Your Lalamove API key is missing — add it in Settings → Fulfilment (Lalamove card) to book riders.";
 		case "booking_disabled":
 			return "Lalamove booking is switched off — enable it in Settings → Fulfilment.";
 		case "bad_status":

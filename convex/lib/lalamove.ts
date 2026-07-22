@@ -29,12 +29,6 @@ export const LALAMOVE_BASE_URL: Record<LalamoveEnv, string> = {
 /** All Kedaipal sellers are MY — market is a constant until a second country. */
 export const LALAMOVE_MARKET = "MY";
 
-/** Monthly booking-spend ceiling (sen) for a seller running on the Kedaipal
- * MASTER account (launch fallback, ~RM2k per the 18 Jul decision). Blocks new
- * BOOKINGS with a disabled-with-reason button — never order creation. BYO
- * sellers spend their own wallet and are never capped by us. */
-export const MASTER_MONTHLY_SPEND_CAP_SEN = 200_000;
-
 /** Vehicle types we surface (the MY catalog has more; these cover the ICP). */
 export type LalamoveVehicleType = "MOTORCYCLE" | "CAR";
 
@@ -42,36 +36,30 @@ export type LalamoveCredentials = {
 	apiKey: string;
 	apiSecret: string;
 	env: LalamoveEnv;
-	/** "byo" = the seller's own account pays; "master" = Kedaipal platform
-	 * account pays (launch fallback — drives the rebill/spend-cap surfaces). */
-	mode: "byo" | "master";
 };
 
 /**
- * The per-retailer credential resolver (locked decision, 18 Jul): the seller's
- * own key wins; the platform master key (env) is the fallback; neither → null
- * (feature unavailable — callers fail closed / fall back to no-fee behaviour).
- * BYO keys always run against the env named by `platformEnv` too — one
- * LALAMOVE_ENV switch flips the whole deployment between sandbox and prod, so
- * a seller can never accidentally point a prod key at sandbox or vice versa.
+ * The per-retailer credential resolver — BYO-ONLY (decision revised 21 Jul,
+ * Arif: Kedaipal never books on its own account, mirroring the retailer-owned
+ * payment-gateway posture). The seller's key pair on the retailer row is the
+ * ONLY source; absent/incomplete → null (feature unavailable — callers fail
+ * closed / checkout falls back to no-fee behaviour). The environment is
+ * derived from Lalamove's own key prefix (`pk_test_…` → sandbox, anything
+ * else → production), so a key can never be pointed at the wrong API host.
  */
 export function resolveLalamoveCredentials(
 	booking: { apiKey?: string; apiSecret?: string } | undefined,
-	platform: { apiKey?: string; apiSecret?: string; env?: string },
 ): LalamoveCredentials | null {
-	const env: LalamoveEnv =
-		platform.env === "production" ? "production" : "sandbox";
-	const byoKey = booking?.apiKey?.trim();
-	const byoSecret = booking?.apiSecret?.trim();
-	if (byoKey && byoSecret) {
-		return { apiKey: byoKey, apiSecret: byoSecret, env, mode: "byo" };
-	}
-	const masterKey = platform.apiKey?.trim();
-	const masterSecret = platform.apiSecret?.trim();
-	if (masterKey && masterSecret) {
-		return { apiKey: masterKey, apiSecret: masterSecret, env, mode: "master" };
-	}
-	return null;
+	const apiKey = booking?.apiKey?.trim();
+	const apiSecret = booking?.apiSecret?.trim();
+	if (!apiKey || !apiSecret) return null;
+	return { apiKey, apiSecret, env: inferLalamoveEnv(apiKey) };
+}
+
+/** Sandbox vs production straight from the key prefix — Lalamove issues
+ * `pk_test_…` for sandbox and `pk_prod_…` for production. */
+export function inferLalamoveEnv(apiKey: string): LalamoveEnv {
+	return apiKey.startsWith("pk_test_") ? "sandbox" : "production";
 }
 
 const encoder = new TextEncoder();

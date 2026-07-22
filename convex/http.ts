@@ -170,37 +170,16 @@ http.route({
 		}
 		const path = new URL(req.url).pathname;
 		if (jobId === null) {
-			// Not ours to act on: bookings made outside Kedaipal on the same
-			// account, wallet events, or an unknown sender. Ack so Lalamove
-			// doesn't disable the URL over traffic we deliberately ignore —
-			// but when the sender key is OURS, still run verification for
-			// observability: the logged variant is how we confirm the signing
-			// formula against real traffic (see lalamoveSignature.ts header).
-			if (secrets.length > 0) {
-				let variant: string = "NONE-MATCHED";
-				for (const apiSecret of secrets) {
-					const result = await verifyLalamoveWebhook({
-						rawBody,
-						envelope,
-						path,
-						apiSecret,
-					});
-					if (result.valid) {
-						variant = result.variant;
-						break;
-					}
-				}
-				console.log("Lalamove webhook: no matching job (verification probe)", {
-					eventType: envelope.eventType,
-					providerOrderId,
-					signatureVariant: variant,
-				});
-			} else {
-				console.log("Lalamove webhook: no matching delivery job, ignoring", {
-					eventType: envelope.eventType,
-					providerOrderId,
-				});
-			}
+			// Not ours to act on: bookings the seller made outside Kedaipal,
+			// wallet events, or an unknown sender. BYO-only means there is no
+			// platform secret to even attempt verification with — ack so
+			// Lalamove doesn't disable the seller's URL over traffic we
+			// deliberately ignore. (The signing formula was confirmed against
+			// live sandbox traffic on 21 Jul 2026 — see lalamoveSignature.ts.)
+			console.log("Lalamove webhook: no matching delivery job, ignoring", {
+				eventType: envelope.eventType,
+				providerOrderId,
+			});
 			return new Response("ok", { status: 200 });
 		}
 

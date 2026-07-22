@@ -14,6 +14,7 @@ import {
 	parseLalamoveEventTime,
 	parseOrderResponse,
 	parseQuotationResponse,
+	inferLalamoveEnv,
 	resolveLalamoveCredentials,
 	signLalamoveRequest,
 	toLalamovePhone,
@@ -63,48 +64,31 @@ describe("request signing", () => {
 });
 
 describe("resolveLalamoveCredentials", () => {
-	const platform = {
-		apiKey: "pk_master",
-		apiSecret: "sk_master",
-		env: "sandbox",
-	};
-
-	test("BYO key wins over the platform fallback", () => {
-		const creds = resolveLalamoveCredentials(
-			{ apiKey: "pk_byo", apiSecret: "sk_byo" },
-			platform,
-		);
-		expect(creds).toEqual({
-			apiKey: "pk_byo",
-			apiSecret: "sk_byo",
-			env: "sandbox",
-			mode: "byo",
-		});
+	test("the seller's key pair resolves; env comes from the key prefix", () => {
+		expect(
+			resolveLalamoveCredentials({ apiKey: "pk_test_abc", apiSecret: "sk_x" }),
+		).toEqual({ apiKey: "pk_test_abc", apiSecret: "sk_x", env: "sandbox" });
+		expect(
+			resolveLalamoveCredentials({ apiKey: "pk_prod_abc", apiSecret: "sk_x" }),
+		).toEqual({ apiKey: "pk_prod_abc", apiSecret: "sk_x", env: "production" });
 	});
 
-	test("no BYO key falls back to platform master", () => {
-		const creds = resolveLalamoveCredentials(undefined, platform);
-		expect(creds?.mode).toBe("master");
-		expect(creds?.apiKey).toBe("pk_master");
-	});
-
-	test("half a BYO credential is ignored (falls through to master)", () => {
+	test("half a credential or nothing → null (BYO-only, fail closed)", () => {
 		// updateSettings refuses storing half a credential, so this state is a
-		// defensive branch — documented behaviour: fall through, never sign with
-		// a mismatched pair.
-		const creds = resolveLalamoveCredentials({ apiKey: "pk_byo" }, platform);
-		expect(creds?.mode).toBe("master");
+		// defensive branch — documented behaviour: never sign with a mismatched
+		// pair, and there is NO platform fallback to fall through to.
+		expect(resolveLalamoveCredentials({ apiKey: "pk_test_only" })).toBeNull();
+		expect(resolveLalamoveCredentials({ apiSecret: "sk_only" })).toBeNull();
+		expect(resolveLalamoveCredentials(undefined)).toBeNull();
+		expect(resolveLalamoveCredentials({})).toBeNull();
 	});
 
-	test("nothing resolvable → null (feature unavailable, fail closed)", () => {
-		expect(resolveLalamoveCredentials(undefined, { env: "sandbox" })).toBeNull();
-		expect(resolveLalamoveCredentials({}, {})).toBeNull();
-	});
-
-	test("env resolves production only on the exact string, else sandbox", () => {
-		expect(resolveLalamoveCredentials(undefined, { ...platform, env: "production" })?.env).toBe("production");
-		expect(resolveLalamoveCredentials(undefined, { ...platform, env: undefined })?.env).toBe("sandbox");
-		expect(resolveLalamoveCredentials(undefined, { ...platform, env: "prod" })?.env).toBe("sandbox");
+	test("inferLalamoveEnv: pk_test_ → sandbox, anything else → production", () => {
+		expect(inferLalamoveEnv("pk_test_e7b0")).toBe("sandbox");
+		expect(inferLalamoveEnv("pk_prod_e7b0")).toBe("production");
+		// Unknown prefixes default to production — safer to fail a booking
+		// against prod auth than to silently run a real key against sandbox.
+		expect(inferLalamoveEnv("pk_something")).toBe("production");
 	});
 });
 

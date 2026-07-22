@@ -5,7 +5,7 @@
 // convex/lib/lalamove.test.ts; signature auth in lalamoveSignature.test.ts.
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import schema from "./schema";
@@ -19,23 +19,6 @@ function setup() {
 }
 
 const USER = "user_lalamove_tests";
-
-let prevKey: string | undefined;
-let prevSecret: string | undefined;
-let prevEnv: string | undefined;
-beforeEach(() => {
-	prevKey = process.env.LALAMOVE_API_KEY;
-	prevSecret = process.env.LALAMOVE_API_SECRET;
-	prevEnv = process.env.LALAMOVE_ENV;
-	process.env.LALAMOVE_API_KEY = "pk_master";
-	process.env.LALAMOVE_API_SECRET = "sk_master";
-	process.env.LALAMOVE_ENV = "sandbox";
-});
-afterEach(() => {
-	process.env.LALAMOVE_API_KEY = prevKey;
-	process.env.LALAMOVE_API_SECRET = prevSecret;
-	process.env.LALAMOVE_ENV = prevEnv;
-});
 
 async function seedRetailer(t: ReturnType<typeof setup>) {
 	const asUser = t.withIdentity({ subject: USER });
@@ -90,7 +73,6 @@ async function seedJob(
 			costActual: 1350,
 			quotationId: "quot-1",
 			vehicleType: "MOTORCYCLE",
-			credentialMode: "master",
 			createdAt: now,
 			updatedAt: now,
 			...overrides,
@@ -337,7 +319,7 @@ describe("applyWebhookEvent — other event types", () => {
 });
 
 describe("getWebhookContext (secret resolution)", () => {
-	test("job → BYO secret first, platform secret as fallback candidate", async () => {
+	test("job → the retailer's own secret is the only candidate", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t);
 		await t.run(async (ctx) => {
@@ -351,28 +333,19 @@ describe("getWebhookContext (secret resolution)", () => {
 			});
 		});
 		const orderId = await seedOrder(t, retailer._id);
-		const jobId = await seedJob(t, retailer._id, orderId, {
-			credentialMode: "byo",
-		});
+		const jobId = await seedJob(t, retailer._id, orderId);
 
 		const context = await t.query(internal.lalamove.getWebhookContext, {
 			providerOrderId: "LLM-1",
 			apiKey: "pk_byo",
 		});
 		expect(context.jobId).toBe(jobId);
-		expect(context.secrets).toEqual(["sk_byo", "sk_master"]);
+		expect(context.secrets).toEqual(["sk_byo"]);
 	});
 
-	test("no job: platform secret only when the sender key is ours", async () => {
+	test("no job: no secrets — unmatched traffic is unverifiable by design", async () => {
 		const t = setup();
 		await seedRetailer(t);
-		const ours = await t.query(internal.lalamove.getWebhookContext, {
-			providerOrderId: "UNKNOWN",
-			apiKey: "pk_master",
-		});
-		expect(ours.jobId).toBeNull();
-		expect(ours.secrets).toEqual(["sk_master"]);
-
 		const foreign = await t.query(internal.lalamove.getWebhookContext, {
 			providerOrderId: "UNKNOWN",
 			apiKey: "pk_somebody_else",
@@ -599,7 +572,7 @@ describe("updateSettings — deliveryBooking guards", () => {
 		expect(retailer?.deliveryBooking).toEqual({
 			enabled: true,
 			vehicleType: "CAR",
-			credentialMode: "byo",
+			hasCredentials: true,
 			apiKeyHint: "abcd",
 		});
 		// The raw secret must never appear anywhere in the owner payload.
@@ -623,27 +596,36 @@ describe("updateSettings — deliveryBooking guards", () => {
 			deliveryBooking: { enabled: true, vehicleType: "CAR" },
 		});
 		let retailer = await asUser(t).query(api.retailers.getMyRetailer);
-		expect(retailer?.deliveryBooking?.credentialMode).toBe("byo");
-		// Explicit clear → falls back to the platform master keys (env is set
-		// in beforeEach), so the mode flips rather than erroring.
+		expect(retailer?.deliveryBooking?.hasCredentials).toBe(true);
+		// BYO-only: clearing the keys while booking stays ENABLED is refused —
+		// there is no platform fallback to fall back to.
+		await expect(
+			asUser(t).mutation(api.retailers.updateSettings, {
+				deliveryBooking: {
+					enabled: true,
+					vehicleType: "CAR",
+					apiKey: "",
+					apiSecret: "",
+				},
+			}),
+		).rejects.toThrow(/API key/i);
+		// Disable + clear together → fine; nothing resolvable remains.
 		await asUser(t).mutation(api.retailers.updateSettings, {
 			deliveryBooking: {
-				enabled: true,
+				enabled: false,
 				vehicleType: "CAR",
 				apiKey: "",
 				apiSecret: "",
 			},
 		});
 		retailer = await asUser(t).query(api.retailers.getMyRetailer);
-		expect(retailer?.deliveryBooking?.credentialMode).toBe("master");
+		expect(retailer?.deliveryBooking?.hasCredentials).toBe(false);
 		expect(retailer?.deliveryBooking?.apiKeyHint).toBeUndefined();
 	});
 
-	test("enabling with NO resolvable credentials at all is refused", async () => {
+	test("enabling without the seller's own keys is refused (BYO-only)", async () => {
 		const t = setup();
 		await seedRetailer(t);
-		process.env.LALAMOVE_API_KEY = "";
-		process.env.LALAMOVE_API_SECRET = "";
 		await expect(
 			asUser(t).mutation(api.retailers.updateSettings, {
 				businessAddress: ADDRESS,
@@ -657,7 +639,12 @@ describe("updateSettings — deliveryBooking guards", () => {
 		await seedRetailer(t);
 		await asUser(t).mutation(api.retailers.updateSettings, {
 			businessAddress: ADDRESS,
-			deliveryBooking: { enabled: true, vehicleType: "MOTORCYCLE" },
+			deliveryBooking: {
+				enabled: true,
+				vehicleType: "MOTORCYCLE",
+				apiKey: "pk_byo",
+				apiSecret: "sk_byo",
+			},
 		});
 		await expect(
 			asUser(t).mutation(api.retailers.updateSettings, {
@@ -678,7 +665,12 @@ describe("updateSettings — deliveryBooking guards", () => {
 		// Booking on (trial = Pro features), then pricing → ok.
 		await asUser(t).mutation(api.retailers.updateSettings, {
 			businessAddress: ADDRESS,
-			deliveryBooking: { enabled: true, vehicleType: "MOTORCYCLE" },
+			deliveryBooking: {
+				enabled: true,
+				vehicleType: "MOTORCYCLE",
+				apiKey: "pk_byo",
+				apiSecret: "sk_byo",
+			},
 		});
 		await asUser(t).mutation(api.retailers.updateSettings, {
 			deliveryConfig: { mode: "lalamove", onUnquotable: "arrange" },

@@ -20,6 +20,7 @@ import {
 	MAX_NOTICE_DAYS,
 } from "../../../convex/lib/fulfilmentDate";
 import { formatPhone } from "../../lib/customer";
+import { clientEnv } from "../../lib/env";
 import {
 	convexErrorMessage,
 	formatPrice,
@@ -52,7 +53,7 @@ type BusinessAddress = {
 type DeliveryBookingSummary = {
 	enabled: boolean;
 	vehicleType: "MOTORCYCLE" | "CAR";
-	credentialMode: "byo" | "master" | "none";
+	hasCredentials: boolean;
 	apiKeyHint?: string;
 };
 
@@ -328,7 +329,7 @@ export function FulfilmentTab({
 			</Card>
 
 			<LalamoveBookingCard
-				key={`llm:${deliveryBooking?.enabled ?? "off"}:${deliveryBooking?.credentialMode ?? "none"}`}
+				key={`llm:${deliveryBooking?.enabled ?? "off"}:${deliveryBooking?.hasCredentials ?? false}`}
 				booking={deliveryBooking}
 				businessAddress={businessAddress}
 				pricingMode={deliveryConfig?.mode}
@@ -1234,6 +1235,14 @@ function LocationListSkeleton() {
 
 // --- Lalamove rider booking (86eyb5hrf) --------------------------------------
 
+/** The deployment's Lalamove webhook endpoint — Convex HTTP actions live on
+ * the `.convex.site` twin of the client's `.convex.cloud` URL. Surfaced in
+ * the card so BYO sellers can paste it into their own Partner Portal. */
+function lalamoveWebhookUrl(): string {
+	const convexUrl = clientEnv.VITE_CONVEX_URL ?? "";
+	return `${convexUrl.replace(".convex.cloud", ".convex.site")}/webhook/lalamove`;
+}
+
 /**
  * Lalamove booking setup — its own card because it's a CAPABILITY (dispatch
  * riders from order detail), orthogonal to the delivery-charge PRICING above
@@ -1249,14 +1258,7 @@ function LalamoveBookingCard({
 	pricingMode,
 	canUseDelivery,
 }: {
-	booking:
-		| {
-				enabled: boolean;
-				vehicleType: "MOTORCYCLE" | "CAR";
-				credentialMode: "byo" | "master" | "none";
-				apiKeyHint?: string;
-		  }
-		| undefined;
+	booking: DeliveryBookingSummary | undefined;
 	businessAddress: BusinessAddress | undefined;
 	pricingMode: DeliveryConfig["mode"] | undefined;
 	canUseDelivery: boolean;
@@ -1277,6 +1279,10 @@ function LalamoveBookingCard({
 	const hasStoredKey = !!booking?.apiKeyHint && !removeKeys;
 	const locked = !canUseDelivery && !booking?.enabled;
 	const missingAddress = !businessAddress;
+	// BYO-only: booking cannot exist without the seller's own key pair — the
+	// toggle stays off until keys are stored or typed (server is the real lock).
+	const missingKeys =
+		!hasStoredKey && !(apiKey.trim().length > 0 && apiSecret.trim().length > 0);
 	const dirty =
 		enabled !== (booking?.enabled ?? false) ||
 		vehicleType !== (booking?.vehicleType ?? "MOTORCYCLE") ||
@@ -1323,10 +1329,10 @@ function LalamoveBookingCard({
 					<ToggleSwitch
 						on={enabled}
 						onChange={(next) => {
-							if (next && (locked || missingAddress)) return;
+							if (next && (locked || missingAddress || missingKeys)) return;
 							setEnabled(next);
 						}}
-						disabled={(locked || missingAddress) && !enabled}
+						disabled={(locked || missingAddress || missingKeys) && !enabled}
 						label="Enable Lalamove booking"
 					/>
 				</div>
@@ -1342,6 +1348,12 @@ function LalamoveBookingCard({
 				<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
 					Lalamove booking is a Pro feature — upgrade to dispatch riders
 					without leaving Kedaipal.
+				</p>
+			) : null}
+			{!locked && !missingAddress && missingKeys && !enabled ? (
+				<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+					Add your Lalamove API key &amp; secret below to switch booking on —
+					delivery runs entirely on your own Lalamove account.
 				</p>
 			) : null}
 
@@ -1368,9 +1380,21 @@ function LalamoveBookingCard({
 
 			{/* Credentials */}
 			<div className="flex flex-col gap-2">
-				<span className="text-xs font-medium text-muted-foreground">
-					Your Lalamove account (API key)
-				</span>
+				<div className="flex items-center justify-between">
+					<span className="text-xs font-medium text-muted-foreground">
+						Your Lalamove account (API key)
+					</span>
+					{/* Vendor-facing setup guide (public asset, printable) — how to
+					    open a Lalamove Business account, find the keys, top up. */}
+					<a
+						href="/guides/lalamove-setup.html"
+						target="_blank"
+						rel="noopener noreferrer"
+						className="flex items-center gap-1 text-xs font-medium text-accent hover:underline"
+					>
+						How to set up <ExternalLink className="size-3" />
+					</a>
+				</div>
 				{hasStoredKey ? (
 					<div className="flex items-center justify-between rounded-lg border border-input px-3 py-2 text-sm">
 						<span>
@@ -1406,11 +1430,49 @@ function LalamoveBookingCard({
 					</div>
 				)}
 				<p className="text-xs text-muted-foreground">
-					{booking?.credentialMode === "master" && !hasStoredKey
-						? "No key yet — bookings run on the Kedaipal Lalamove account and delivery costs are rebilled to you at cost. Add your own key anytime to pay Lalamove directly."
-						: "From the Lalamove Partner Portal (partnerportal.lalamove.com) → Developers tab. You pay Lalamove directly from your own prepaid wallet — Kedaipal never touches delivery money."}
+					From the Lalamove Partner Portal (partnerportal.lalamove.com) →
+					Developers tab. You pay Lalamove directly from your own prepaid
+					wallet — Kedaipal never books or pays on your behalf.
 				</p>
 			</div>
+
+			{/* Webhook URL — BYO means EACH seller registers Kedaipal's webhook in
+			    their own Partner Portal (Developers → Webhook URL, version 3).
+			    Without it, bookings still work but shipped/delivered stop being
+			    automatic — so it's surfaced here with one-tap copy, not buried in
+			    the guide alone. */}
+			{hasStoredKey || enabled ? (
+				<div className="flex flex-col gap-1.5">
+					<span className="text-xs font-medium text-muted-foreground">
+						One more step: your Lalamove webhook
+					</span>
+					<div className="flex items-center gap-2">
+						<code className="min-w-0 flex-1 truncate rounded-lg border border-input bg-muted/40 px-3 py-2.5 font-mono text-xs">
+							{lalamoveWebhookUrl()}
+						</code>
+						<Button
+							type="button"
+							variant="outline"
+							className="h-10 shrink-0 px-3 text-xs"
+							onClick={() => {
+								navigator.clipboard
+									.writeText(lalamoveWebhookUrl())
+									.then(() => toast.success("Webhook link copied"))
+									.catch(() =>
+										toast.error("Couldn't copy — select and copy manually"),
+									);
+							}}
+						>
+							Copy
+						</Button>
+					</div>
+					<p className="text-xs text-muted-foreground">
+						Paste this link in your Lalamove Partner Portal → Developers →
+						Webhook URL (choose version 3). It's how your buyers get the
+						automatic shipped + live-tracking updates — see the guide above.
+					</p>
+				</div>
+			) : null}
 
 			{/* Pricing cross-link — the charge section owns WHAT the buyer pays. */}
 			{enabled && pricingMode !== "lalamove" ? (

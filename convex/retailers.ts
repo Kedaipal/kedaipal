@@ -258,12 +258,12 @@ type DeliveryBooking = {
 };
 
 /** Owner-read summary of the booking config — the API secret NEVER crosses
- * to the client; `credentialMode` tells the seller (and admin) whose account
- * pays: their own key, the Kedaipal master fallback, or nothing resolvable. */
+ * to the client. BYO-only: `hasCredentials` is simply "is the seller's own
+ * key pair stored" (there is no platform fallback). */
 export type DeliveryBookingSummary = {
 	enabled: boolean;
 	vehicleType: "MOTORCYCLE" | "CAR";
-	credentialMode: "byo" | "master" | "none";
+	hasCredentials: boolean;
 	/** Last 4 chars of the seller's own key ("…a1b2") so the settings UI can
 	 * show which key is stored without exposing it. */
 	apiKeyHint?: string;
@@ -273,15 +273,10 @@ function summarizeDeliveryBooking(
 	booking: DeliveryBooking | undefined,
 ): DeliveryBookingSummary | undefined {
 	if (!booking) return undefined;
-	const resolved = resolveLalamoveCredentials(booking, {
-		apiKey: process.env.LALAMOVE_API_KEY,
-		apiSecret: process.env.LALAMOVE_API_SECRET,
-		env: process.env.LALAMOVE_ENV,
-	});
 	return {
 		enabled: booking.enabled,
 		vehicleType: booking.vehicleType,
-		credentialMode: resolved?.mode ?? "none",
+		hasCredentials: resolveLalamoveCredentials(booking) !== null,
 		apiKeyHint: booking.apiKey ? booking.apiKey.slice(-4) : undefined,
 	};
 }
@@ -1308,12 +1303,11 @@ export const updateSettings = mutation({
 							: args.deliveryBooking.apiSecret.trim() || undefined,
 				};
 				// A key without its secret (or vice versa) can never authenticate —
-				// refuse half a credential instead of silently falling back to the
-				// master account (the seller would be spending Kedaipal's wallet
-				// without knowing).
+				// refuse half a credential up front so the failure is at save time
+				// with a clear message, not at the first booking attempt.
 				if (!!clean.apiKey !== !!clean.apiSecret) {
 					throw new ConvexError(
-						"Enter both the Lalamove API key and API secret (or clear both to use none).",
+						"Enter both the Lalamove API key and API secret (or clear both).",
 					);
 				}
 				if (clean.enabled) {
@@ -1326,12 +1320,9 @@ export const updateSettings = mutation({
 							"Add your business address first — it's the pickup point riders are sent to.",
 						);
 					}
-					const resolved = resolveLalamoveCredentials(clean, {
-						apiKey: process.env.LALAMOVE_API_KEY,
-						apiSecret: process.env.LALAMOVE_API_SECRET,
-						env: process.env.LALAMOVE_ENV,
-					});
-					if (!resolved) {
+					// BYO-only: the seller's own key pair is required — Kedaipal has
+					// no Lalamove account and never books on a seller's behalf.
+					if (!resolveLalamoveCredentials(clean)) {
 						throw new ConvexError(
 							"Add your Lalamove API key and secret to enable delivery booking.",
 						);

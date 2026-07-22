@@ -238,12 +238,12 @@ export default defineSchema({
 		// Lalamove delivery booking (86eyb5hrf) — dispatch capability, orthogonal
 		// to the deliveryConfig PRICING mode above (a seller can charge a flat fee
 		// yet still book Lalamove riders). `enabled` requires `businessAddress`
-		// with coordinates (enforced in updateSettings; clearing the address
-		// auto-disables booking — working-method invariant posture). BYO-first:
-		// `apiKey`/`apiSecret` are the seller's own Lalamove credentials (plain
-		// fields per current convention, accepted for v1 — see ticket); when
-		// absent, the credential resolver falls back to the platform master keys
-		// (LALAMOVE_API_KEY/SECRET env) when configured. See docs/delivery-lalamove.md.
+		// AND the seller's own key pair (enforced in updateSettings). BYO-ONLY
+		// (decision revised 21 Jul): `apiKey`/`apiSecret` are the seller's own
+		// Lalamove credentials (plain fields per current convention, accepted for
+		// v1) — there is NO platform fallback; Kedaipal never books or pays on a
+		// seller's behalf. Sandbox vs production is inferred from the key prefix.
+		// See docs/delivery-lalamove.md.
 		deliveryBooking: v.optional(
 			v.object({
 				enabled: v.boolean(),
@@ -924,13 +924,12 @@ export default defineSchema({
 	}),
 
 	// One rider booking (dispatch) against an order. The ledger row of record:
-	// actual cost paid to Lalamove, which credentials paid it (BYO seller vs
-	// Kedaipal master fallback — drives the billing-tab spend + weekly at-cost
-	// rebill for master mode), driver + live-tracking link from webhooks. One
-	// ACTIVE job per order (enforced in dispatch); failed/cancelled jobs stay as
-	// history and a rebook inserts a new row. `by_provider_order` is the webhook
-	// lookup; `by_retailer` supports the monthly-spend creation-time range read
-	// (insights precedent).
+	// actual cost the seller's own Lalamove wallet paid (BYO-only — audit +
+	// future insights, no Kedaipal settlement), driver + live-tracking link
+	// from webhooks. One ACTIVE job per order (enforced in dispatch);
+	// failed/cancelled jobs stay as history and a rebook inserts a new row.
+	// `by_provider_order` is the webhook lookup; `by_retailer` keeps per-store
+	// range reads cheap.
 	deliveryJobs: defineTable({
 		orderId: v.id("orders"),
 		retailerId: v.id("retailers"),
@@ -956,9 +955,6 @@ export default defineSchema({
 		costActual: v.number(),
 		quotationId: v.string(),
 		vehicleType: v.string(),
-		// Which credentials paid: "byo" (seller's own key) or "master" (platform
-		// env fallback — the rows the admin rebill sweep reads).
-		credentialMode: v.union(v.literal("byo"), v.literal("master")),
 		driver: v.optional(
 			v.object({
 				name: v.string(),
