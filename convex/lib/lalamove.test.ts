@@ -17,6 +17,7 @@ import {
 	inferLalamoveEnv,
 	resolveLalamoveCredentials,
 	signLalamoveRequest,
+	toLalamoveMyPhone,
 	toLalamovePhone,
 } from "./lalamove";
 
@@ -243,5 +244,28 @@ describe("status + webhook helpers", () => {
 		// No updatedAt: ms passthrough, seconds get scaled.
 		expect(parseLalamoveEventTime({}, 1784384000000)).toBe(1784384000000);
 		expect(parseLalamoveEventTime({}, 1784384000)).toBe(1784384000000);
+	});
+});
+
+describe("toLalamoveMyPhone", () => {
+	test("accepts MY numbers in stored-digit and formatted shapes", () => {
+		expect(toLalamoveMyPhone("60123456789")).toBe("+60123456789");
+		expect(toLalamoveMyPhone("+60 12-345 6789")).toBe("+60123456789");
+		expect(toLalamoveMyPhone("601112345678")).toBe("+601112345678");
+	});
+
+	test("rejects non-MY area codes (the +65 buyer that 422'd in testing)", () => {
+		expect(toLalamoveMyPhone("6581815321")).toBeNull();
+		expect(toLalamoveMyPhone("+6581815321")).toBeNull();
+		expect(toLalamoveMyPhone("14155551234")).toBeNull();
+	});
+
+	test("rejects junk: empty, undefined, too short/long", () => {
+		expect(toLalamoveMyPhone(undefined)).toBeNull();
+		expect(toLalamoveMyPhone("")).toBeNull();
+		expect(toLalamoveMyPhone("60123")).toBeNull();
+		expect(toLalamoveMyPhone("6012345678901234")).toBeNull();
+		// "60" prefix but the number is actually a landline-length stub
+		expect(toLalamoveMyPhone("603123")).toBeNull();
 	});
 });

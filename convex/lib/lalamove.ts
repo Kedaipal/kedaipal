@@ -156,6 +156,21 @@ export function toLalamovePhone(waPhone: string): string {
 	return `+${digits}`;
 }
 
+/**
+ * Normalize a stored WhatsApp number to a Lalamove-MY-acceptable E.164 phone,
+ * or null when it isn't Malaysian. Lalamove validates the AREA CODE per
+ * market — a +65 (SG) buyer on a JB store is a real case and returns null
+ * here, so dispatch can fall back to the seller's own number as the rider
+ * contact instead of a 422 at booking time. MY mobiles are 60 + 9–11 digits.
+ */
+export function toLalamoveMyPhone(waPhone: string | undefined): string | null {
+	if (!waPhone) return null;
+	const digits = waPhone.replace(/\D/g, "");
+	if (!digits.startsWith("60")) return null;
+	if (digits.length < 11 || digits.length > 13) return null;
+	return `+${digits}`;
+}
+
 export type LalamoveStop = {
 	coordinates: { latitude: number; longitude: number };
 	/** Free-text address shown to the rider. */

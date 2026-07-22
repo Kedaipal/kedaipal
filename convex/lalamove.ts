@@ -31,6 +31,8 @@ import {
 	parseOrderResponse,
 	parseQuotationResponse,
 	resolveLalamoveCredentials,
+	toLalamoveMyPhone,
+	toLalamovePhone,
 } from "./lib/lalamove";
 import { rateLimiter } from "./lib/rateLimiter";
 import { applyStatusTransition, resolveSharedOrder } from "./orders";
@@ -499,7 +501,10 @@ function dispatchBlockReason(args: {
 	)
 		return "no_coords";
 	if (!order.customer.waPhone) return "no_buyer_phone";
-	if (!retailer.waPhone) return "no_seller_phone";
+	// Lalamove MY validates the rider-contact AREA CODE: the seller's number
+	// must be Malaysian (a non-MY buyer number is tolerated — dispatch falls
+	// back to the seller as the rider contact; see getDispatchContext).
+	if (!toLalamoveMyPhone(retailer.waPhone)) return "no_seller_phone";
 	return null;
 }
 
@@ -582,8 +587,18 @@ export const getDispatchContext = internalQuery({
 
 		const address = order.deliveryAddress!;
 		const businessAddress = retailer.businessAddress!;
+		// Lalamove MY rejects non-Malaysian phones (422 on +65 etc. — a real JB
+		// cross-border-buyer case). The rider contact falls back to the SELLER
+		// when the buyer's number isn't MY, with the buyer's actual number
+		// carried in remarks so the rider can still reach them via the seller.
+		const sellerPhone = toLalamoveMyPhone(retailer.waPhone);
+		if (!sellerPhone) return { ok: false, reason: "no_seller_phone" };
+		const buyerMyPhone = toLalamoveMyPhone(order.customer.waPhone);
 		const remarksParts = [
 			order.shortId,
+			buyerMyPhone
+				? undefined
+				: `Buyer WhatsApp: ${toLalamovePhone(order.customer.waPhone!)}`,
 			order.deliveryAddress?.notes,
 			order.customerNote,
 		].filter((p): p is string => !!p && p.trim().length > 0);
@@ -603,10 +618,10 @@ export const getDispatchContext = internalQuery({
 				longitude: address.longitude!,
 				address: formatDeliveryAddress(address),
 			},
-			sender: { name: retailer.storeName, phone: retailer.waPhone! },
+			sender: { name: retailer.storeName, phone: sellerPhone },
 			recipient: {
 				name: order.customer.name ?? "Customer",
-				phone: order.customer.waPhone!,
+				phone: buyerMyPhone ?? sellerPhone,
 				remarks: remarksParts.join(" · ").slice(0, 400) || undefined,
 			},
 			vehicleType:
@@ -631,6 +646,9 @@ function friendlyBookingError(err: unknown): string {
 		}
 		if (body.includes("expired") || body.includes("quotation")) {
 			return "The price quote expired — tap Book delivery again for a fresh price.";
+		}
+		if (body.includes("phone")) {
+			return "Lalamove rejected a contact phone number — riders need a Malaysian (+60) number. Check your WhatsApp number in Settings → Store.";
 		}
 	}
 	return "Lalamove couldn't process the booking right now. Please try again in a moment.";

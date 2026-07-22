@@ -352,7 +352,7 @@ function blockCopy(reason: DispatchBlock | "not_found" | string): string {
 		case "no_buyer_phone":
 			return "This order has no buyer WhatsApp number for the rider to contact.";
 		case "no_seller_phone":
-			return "Add your WhatsApp number in Settings → Store first — riders need a pickup contact.";
+			return "Add a Malaysian (+60) WhatsApp number in Settings → Store first — Lalamove riders need a local pickup contact.";
 		case "plan_gated":
 			return "Lalamove booking is a Pro feature. Upgrade to book riders in one tap.";
 		case "no_credentials":
