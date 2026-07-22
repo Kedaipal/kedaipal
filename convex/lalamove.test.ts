@@ -770,6 +770,7 @@ describe("autoBookForOrder — packed-trigger automation", () => {
 			});
 		});
 		const orderId = await seedOrder(t, retailer._id, {
+			paymentStatus: "received",
 			deliveryAddress: {
 				line1: "1 Jalan Test",
 				city: "Petaling Jaya",
@@ -808,6 +809,26 @@ describe("autoBookForOrder — packed-trigger automation", () => {
 		);
 		// Sandbox base URL derived from the pk_test_ prefix.
 		expect(calls[0]).toContain("rest.sandbox.lalamove.com");
+	});
+
+	test("UNPAID order: quiet no-op — automation never spends on unpaid orders", async () => {
+		const t = setup();
+		const { orderId } = await seedAutoBookStore(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(orderId, { paymentStatus: "claimed" });
+		});
+		const calls = stubLalamoveFetch();
+
+		await t.action(internal.lalamove.autoBookForOrder, { orderId });
+
+		expect(calls).toHaveLength(0);
+		const jobs = await t.run(async (ctx) =>
+			ctx.db
+				.query("deliveryJobs")
+				.withIndex("by_order", (q) => q.eq("orderId", orderId))
+				.collect(),
+		);
+		expect(jobs).toHaveLength(0);
 	});
 
 	test("opt-in OFF: quiet no-op, no network calls", async () => {

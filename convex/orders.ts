@@ -2531,6 +2531,15 @@ export const markPaymentReceived = mutation({
 			internal.whatsapp.notifyPaymentReceived,
 			{ orderId },
 		);
+		// Auto-book fires on whichever lands SECOND of (packed, paid): the
+		// packed transition schedules it but the action skips unpaid orders, so
+		// payment arriving on an already-packed delivery order re-triggers here.
+		// Same action, same full eligibility re-check — quiet no-op when off.
+		if (order.deliveryMethod === "delivery" && order.status === "packed") {
+			await ctx.scheduler.runAfter(0, internal.lalamove.autoBookForOrder, {
+				orderId,
+			});
+		}
 		await logAdminAction(ctx, access, "orders.confirmPayment", orderId);
 	},
 });

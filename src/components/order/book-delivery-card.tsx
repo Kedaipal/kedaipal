@@ -263,11 +263,18 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 
 			{/* Packed-trigger automation heads-up — shown BEFORE it fires so the
 			    seller is never surprised that marking Packed spent their wallet. */}
-			{autoBookOnPacked && !activeJob && order.status === "confirmed" ? (
+			{autoBookOnPacked && !activeJob && bookable ? (
 				<p className="text-xs text-muted-foreground">
-					⚡ Auto-book is on — marking this order as{" "}
-					<span className="font-medium">Packed</span> books the rider
-					automatically at today&apos;s price.
+					⚡ Auto-book is on — the rider books automatically once this order
+					is <span className="font-medium">Packed</span> and{" "}
+					<span className="font-medium">paid</span>
+					{order.status === "packed" && order.paymentStatus !== "received"
+						? " (waiting on payment)"
+						: order.paymentStatus === "received" &&
+								order.status === "confirmed"
+							? " (waiting on Packed)"
+							: ""}
+					.
 				</p>
 			) : null}
 
@@ -295,6 +302,13 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 								<span>Buyer paid for delivery</span>
 								<span>{formatPrice(quote.buyerPaidFee, order.currency)}</span>
 							</div>
+							{order.paymentStatus !== "received" ? (
+								<p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+									Heads-up: this order isn&apos;t marked as paid yet — booking
+									now means you&apos;re fronting the delivery before the money
+									lands.
+								</p>
+							) : null}
 							{quote.buyerContactFallback ? (
 								<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
 									This buyer&apos;s WhatsApp isn&apos;t a Malaysian number, and

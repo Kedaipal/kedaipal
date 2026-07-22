@@ -525,7 +525,10 @@ function formatDeliveryAddress(
 }
 
 type DispatchContext =
-	| { ok: false; reason: DispatchBlock | "not_found" | "auto_off" }
+	| {
+			ok: false;
+			reason: DispatchBlock | "not_found" | "auto_off" | "auto_unpaid";
+	  }
 	| {
 			ok: true;
 			orderId: Id<"orders">;
@@ -667,6 +670,14 @@ export const getAutoBookContext = internalQuery({
 		if (retailer.deliveryBooking?.autoBookOnPacked !== true) {
 			return { ok: false, reason: "auto_off" };
 		}
+		// Automation only spends the vendor's wallet on PAID orders — "vendor
+		// books a rider, buyer never pays" must stay a deliberate manual choice
+		// (credit/COD sellers use the Book button). The packed-then-paid order
+		// of events is covered too: markPaymentReceived re-schedules the
+		// auto-book when payment lands on an already-packed order.
+		if (order.paymentStatus !== "received") {
+			return { ok: false, reason: "auto_unpaid" };
+		}
 		// No identity here — the plan gate resolves on the retailer alone (a
 		// downgraded seller's automation pauses just like their manual button).
 		let planOk = true;
@@ -716,7 +727,7 @@ export const prepareBooking = action({
 	): Promise<
 		| {
 				ok: false;
-				reason: DispatchBlock | "not_found" | "auto_off" | "quote_failed";
+				reason: DispatchBlock | "not_found" | "auto_off" | "auto_unpaid" | "quote_failed";
 				message?: string;
 		  }
 		| {
@@ -797,7 +808,7 @@ export const confirmBooking = action({
 	): Promise<
 		| {
 				ok: false;
-				reason: DispatchBlock | "not_found" | "auto_off" | "booking_failed";
+				reason: DispatchBlock | "not_found" | "auto_off" | "auto_unpaid" | "booking_failed";
 				message?: string;
 		  }
 		| { ok: true; providerOrderId: string; costActual: number }

@@ -301,6 +301,19 @@ function OrderDetailRoute() {
 	);
 	// CRM context for the customer card ("8 orders · RM 1,240") — answers "who is
 	// this?" without leaving the order.
+	// Active Lalamove booking awareness for the cancel dialog (same query the
+	// BookDeliveryCard subscribes to — Convex dedupes identical subscriptions).
+	const dispatchInfo = useQuery(
+		api.lalamove.getDeliveryJob,
+		order?.deliveryMethod === "delivery" && order.shortId
+			? { shortId: order.shortId }
+			: "skip",
+	);
+	const hasActiveRiderBooking =
+		!!dispatchInfo?.job &&
+		!["completed", "canceled", "expired", "rejected"].includes(
+			dispatchInfo.job.status,
+		);
 	const crmCustomer = useQuery(
 		api.customers.get,
 		order?.customerId ? { customerId: order.customerId } : "skip",
@@ -1291,7 +1304,11 @@ function OrderDetailRoute() {
 				open={confirmCancelOpen}
 				onOpenChange={setConfirmCancelOpen}
 				title={`Cancel order #${order.shortId}?`}
-				description="The customer is notified over WhatsApp, stock is restored, and this can't be undone."
+				description={
+					hasActiveRiderBooking
+						? "The customer is notified over WhatsApp, stock is restored, and this can't be undone. ⚠️ A Lalamove rider booking is still active on this order — cancel it from the Lalamove Delivery card too, or you may pay for a wasted trip."
+						: "The customer is notified over WhatsApp, stock is restored, and this can't be undone."
+				}
 				confirmLabel="Cancel order"
 				cancelLabel="Keep order"
 				destructive

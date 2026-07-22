@@ -326,8 +326,12 @@ export function CheckoutSheet({
 			// Empty when delivery, the chosen id when self-collect with 2+ options,
 			// unused when self-collect with exactly 1 option (auto-resolved at submit).
 			pickupLocationId: "",
-			// "YYYY-MM-DD" the buyer picks for delivery/pickup. Required at submit.
-			fulfilmentDate: "",
+			// "YYYY-MM-DD" the buyer wants delivery/pickup. Defaults to the
+			// EARLIEST allowed day (today, or today + the store's notice window)
+			// — most orders are for "as soon as possible", so the common case is
+			// zero taps while pre-order buyers just pick a later date. Server
+			// re-validates the live window either way.
+			fulfilmentDate: minYmd,
 			// Optional free-text instruction for the seller (local form state — the
 			// note is order-level, not a cart item, so it doesn't belong in useCart).
 			note: "",

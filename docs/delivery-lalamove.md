@@ -138,9 +138,14 @@ Lalamove setup, copy states plainly that marking Packed spends from their
 wallet at today's price). `applyStatusTransition` schedules
 `lalamove.autoBookForOrder` on every delivery order's transition into
 `packed`; the action re-checks EVERY gate via `getAutoBookContext` (opt-in,
-keys, pin, plan, no active job — quiet no-op otherwise; the order card's
-disabled-with-reason explains why nothing booked) and books with no confirm
-dialog. Failures email the seller (same `deliveryJobFailed` template) and
+keys, pin, plan, no active job, **and payment received** — automation never
+spends the vendor's wallet on an unpaid order; credit/COD sellers keep the
+manual button, which shows an unpaid heads-up in its confirm dialog) and
+books with no confirm dialog. The trigger is symmetric: packed-then-paid is
+covered by `markPaymentReceived` re-scheduling the same action when payment
+lands on an already-packed delivery order — auto-book fires on whichever of
+(packed, paid) happens second. The order-cancel dialog also warns when a
+rider booking is still active (cancel it too or pay for a wasted trip). Failures email the seller (same `deliveryJobFailed` template) and
 land in the amber rebook state. Discoverability: pre-packed orders show
 "⚡ Auto-book is on — marking this order as Packed books the rider
 automatically" right on the dispatch card.

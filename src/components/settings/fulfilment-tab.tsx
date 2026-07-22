@@ -964,7 +964,7 @@ function DeliveryChargeSection({
 								</p>
 								<p className="mt-0.5 text-xs text-muted-foreground leading-relaxed">
 									{autoBook
-										? "On — the moment you mark a delivery order Packed, the rider is booked automatically at today's price from your Lalamove wallet. No extra taps. If a booking fails you get an email and a Rebook button on the order."
+										? "On — the moment a delivery order is both Packed and paid, the rider is booked automatically at that day's price from your Lalamove wallet. No extra taps. Unpaid orders are never auto-booked (you can still book those manually), and if a booking fails you get an email plus a Rebook button on the order."
 										: "Off — you book each rider yourself with the Book delivery button on the order (two taps, with a price check first)."}
 								</p>
 							</div>

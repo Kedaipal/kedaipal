@@ -106,3 +106,11 @@ values. Undefined reads as the default (**0**, same-day allowed).
 
 The **Pickup Reminder** portion of Automated Reminders (Sprint 4) — a reminder
 can't fire without a committed date.
+
+## Update (2026-07-22, Lalamove round): date defaults to the earliest allowed day
+
+The storefront date field now DEFAULTS to the earliest selectable day
+(today + the store's notice window) instead of starting empty — most orders
+are "as soon as possible", so the common case is zero taps; pre-order
+buyers simply pick a later date. Counter checkout already defaulted to
+today; the server window validation is unchanged.
