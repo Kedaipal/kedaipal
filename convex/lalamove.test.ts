@@ -723,3 +723,48 @@ describe("updateSettings — deliveryBooking guards", () => {
 		expect(retailer?.deliveryConfig).toBeUndefined();
 	});
 });
+
+describe("applyWebhookEvent — seller-cancel copy preservation", () => {
+	test("a CANCELED webhook (cancelReason 'other') keeps the seller's 'Cancelled by you'", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		// Seller cancelled via the button → markJobCancelled copy.
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			status: "canceled",
+			failureReason: "Cancelled by you",
+		});
+
+		await t.mutation(internal.lalamove.applyWebhookEvent, {
+			jobId,
+			eventType: "ORDER_STATUS_CHANGED",
+			data: statusEvent("CANCELED", "2026-07-21T04:20:00.000Z", {
+				cancelReason: "other",
+			}),
+			eventTimestamp: Date.parse("2026-07-21T04:20:00.000Z"),
+		});
+
+		const job = await t.run(async (ctx) => ctx.db.get(jobId));
+		expect(job?.failureReason).toBe("Cancelled by you");
+	});
+
+	test("a Lalamove-initiated CANCELED with 'other' reads 'Cancelled by Lalamove'", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		const jobId = await seedJob(t, retailer._id, orderId, { status: "ongoing" });
+
+		await t.mutation(internal.lalamove.applyWebhookEvent, {
+			jobId,
+			eventType: "ORDER_STATUS_CHANGED",
+			data: statusEvent("CANCELED", "2026-07-21T04:20:00.000Z", {
+				cancelReason: "other",
+			}),
+			eventTimestamp: Date.parse("2026-07-21T04:20:00.000Z"),
+		});
+
+		const job = await t.run(async (ctx) => ctx.db.get(jobId));
+		expect(job?.status).toBe("canceled");
+		expect(job?.failureReason).toBe("Cancelled by Lalamove");
+	});
+});

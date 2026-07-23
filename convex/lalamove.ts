@@ -348,9 +348,16 @@ export const applyWebhookEvent = internalMutation({
 							status === "expired" ||
 							status === "rejected") &&
 						isActiveJobStatus(job.status);
+					// A seller cancel (via our button) already stamped a clear reason;
+					// Lalamove then echoes a CANCELED webhook whose cancelReason is
+					// "other" for API cancels — don't let that mask "Cancelled by you".
+					const sellerCancelled =
+						job.status === "canceled" &&
+						job.failureReason === "Cancelled by you";
 					const cancelReason =
 						typeof orderData.cancelReason === "string" &&
-						orderData.cancelReason
+						orderData.cancelReason &&
+						orderData.cancelReason.toLowerCase() !== "other"
 							? orderData.cancelReason
 							: undefined;
 					await ctx.db.patch(job._id, {
@@ -363,9 +370,13 @@ export const applyWebhookEvent = internalMutation({
 						...(shareLink && !job.shareLink ? { shareLink } : {}),
 						...(status === "expired"
 							? { failureReason: "No driver accepted the order" }
-							: cancelReason
-								? { failureReason: cancelReason }
-								: {}),
+							: sellerCancelled
+								? {} // keep "Cancelled by you"
+								: status === "canceled"
+									? { failureReason: cancelReason ?? "Cancelled by Lalamove" }
+									: cancelReason
+										? { failureReason: cancelReason }
+										: {}),
 					});
 					if (enteringFailure) {
 						await ctx.scheduler.runAfter(
@@ -989,7 +1000,9 @@ export const markJobCancelled = internalMutation({
 		if (!job || !isActiveJobStatus(job.status)) return;
 		await ctx.db.patch(jobId, {
 			status: "canceled",
-			failureReason: "Cancelled by seller",
+			// Seller-facing (they read it on the order card); the CANCELED webhook
+			// that follows preserves this instead of overwriting with "other".
+			failureReason: "Cancelled by you",
 			updatedAt: Date.now(),
 		});
 	},
