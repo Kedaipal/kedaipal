@@ -286,6 +286,10 @@ function SettingsRoute() {
 	// Admins get an "Admin" group on the mobile settings index — the natural home
 	// for the console entry (the desktop sidebar already carries an Admin group).
 	const isAdmin = useQuery(api.billing.amIAdmin) ?? false;
+	// A Kedaipal admin on their OWN store reads "Admin" on the tier pill + billing
+	// row (never a trial/plan countdown) — same treatment as the sidebar/header.
+	// While acting-as a seller we keep the seller's real subscription state visible.
+	const adminOwnStore = isAdmin && retailer?.actingAsAdmin !== true;
 	const renameSlugMutation = useMutation(api.retailers.renameSlug);
 	const updateSettingsMutation = useMutation(api.retailers.updateSettings);
 	// In admin act-as, inject the seller's `retailerId` so edits land on THEIR
@@ -413,6 +417,7 @@ function SettingsRoute() {
 						<TierPill
 							subscription={retailer.subscription}
 							foundingRank={retailer.foundingMemberRank}
+							admin={adminOwnStore}
 							compact
 							className="shrink-0"
 						/>
@@ -431,7 +436,14 @@ function SettingsRoute() {
 									// needed to check health.
 									const subtitle =
 										t.id === "billing" && retailer.subscription
-											? tierPill(retailer.subscription, Date.now()).label
+											? tierPill(
+													retailer.subscription,
+													Date.now(),
+													// Keep the plain tier label here (founding rank stays
+													// on the header pill only); just fold in the admin case.
+													undefined,
+													adminOwnStore,
+												).label
 											: t.description;
 									const waConnected =
 										t.id === "whatsapp" && Boolean(retailer.waPhone?.trim());
@@ -686,6 +698,7 @@ function SettingsRoute() {
 						businessAddress={retailer.businessAddress}
 						deliveryBooking={retailer.deliveryBooking}
 						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
+						minOrderValue={retailer.minOrderValue}
 						subscription={retailer.subscription}
 					/>
 				) : null}

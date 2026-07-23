@@ -19,6 +19,7 @@ import {
 	DEFAULT_MIN_NOTICE_DAYS,
 	MAX_NOTICE_DAYS,
 } from "../../../convex/lib/fulfilmentDate";
+import { MIN_ORDER_VALUE_MAX } from "../../../convex/lib/minOrderRules";
 import { formatPhone } from "../../lib/customer";
 import { clientEnv } from "../../lib/env";
 import {
@@ -69,6 +70,9 @@ interface FulfilmentTabProps {
 	/** Lalamove booking summary (86eyb5hrf) — secrets never reach the client. */
 	deliveryBooking: DeliveryBookingSummary | undefined;
 	minFulfilmentNoticeDays: number | undefined;
+	/** Store-wide minimum order value (minor units, 86ey9unyx) — undefined =
+	 * no minimum. See convex/lib/minOrderRules.ts. */
+	minOrderValue: number | undefined;
 	/** Resolved subscription — drives the Pro-gated pickup-fee input in the
 	 * edit dialog (client mirror only; the server gate is the real lock). */
 	subscription: SubscriptionView | undefined;
@@ -157,6 +161,7 @@ export function FulfilmentTab({
 	businessAddress,
 	deliveryBooking,
 	minFulfilmentNoticeDays,
+	minOrderValue,
 	subscription,
 }: FulfilmentTabProps) {
 	const locations = useQuery(api.pickupLocations.listForRetailer, {
@@ -290,6 +295,7 @@ export function FulfilmentTab({
 	return (
 		<div className="flex flex-col gap-6 pt-2">
 			<MinNoticeCard initial={minFulfilmentNoticeDays} />
+			<MinOrderValueCard initial={minOrderValue} />
 
 			<Card>
 				<div className="flex items-start justify-between gap-4">
@@ -1173,10 +1179,8 @@ function DeliveryChargeSection({
 						</p>
 					</div>
 
-					<fieldset className="flex flex-col gap-2">
-						<legend className="text-xs font-medium text-muted-foreground">
-							Beyond your last band
-						</legend>
+					<div className="flex flex-col gap-2 border-t border-border pt-4">
+						<SectionHeading title="Beyond your last band" />
 						<label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-border p-3">
 							<input
 								type="radio"
@@ -1216,7 +1220,7 @@ function DeliveryChargeSection({
 								</span>
 							</span>
 						</label>
-					</fieldset>
+					</div>
 				</div>
 			) : null}
 
@@ -1317,6 +1321,91 @@ function MinNoticeCard({ initial }: { initial: number | undefined }) {
 			{value.trim().length > 0 && !valid ? (
 				<p className="text-xs text-destructive">
 					Enter a whole number between 0 and {MAX_NOTICE_DAYS}.
+				</p>
+			) : null}
+		</Card>
+	);
+}
+
+/**
+ * Store-wide minimum order value (86ey9unyx) — the item subtotal a storefront
+ * order must reach before checkout. Sits with the other order rules (next to
+ * the date-notice card). Counter checkout is exempt; orders with a custom /
+ * price-on-quote line are exempt (their value is settled by the seller's
+ * quote). Blank or 0 = no minimum.
+ */
+function MinOrderValueCard({ initial }: { initial: number | undefined }) {
+	const updateSettings = useMutation(api.retailers.updateSettings);
+	const effective = initial ?? 0;
+	const [value, setValue] = useState(
+		effective > 0 ? (effective / 100).toFixed(2) : "",
+	);
+	const [saving, setSaving] = useState(false);
+
+	const trimmed = value.trim();
+	const parsed = trimmed.length === 0 ? 0 : parsePriceInput(trimmed);
+	const sen = parsed === null ? null : Math.round(parsed * 100);
+	const valid = sen !== null && sen >= 0 && sen <= MIN_ORDER_VALUE_MAX;
+	const dirty = valid && sen !== effective;
+
+	async function save() {
+		if (!dirty || sen === null) return;
+		setSaving(true);
+		try {
+			await updateSettings({ minOrderValue: sen });
+			toast.success(
+				sen === 0
+					? "Minimum order value cleared."
+					: `Minimum order value set to ${formatPrice(sen, "MYR")}.`,
+			);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	return (
+		<Card>
+			<SectionHeading
+				title="Minimum order value"
+				description="Buyers must reach this subtotal (before delivery or pickup fees) to check out — the storefront shows them exactly how much more to add. Counter checkout and custom price-on-quote orders are never blocked. Leave blank for no minimum."
+			/>
+			<div className="flex items-end gap-3">
+				<div className="flex flex-col gap-1.5">
+					<label
+						htmlFor="min-order-value"
+						className="text-xs font-medium text-muted-foreground"
+					>
+						Minimum subtotal (RM)
+					</label>
+					<Input
+						id="min-order-value"
+						type="text"
+						inputMode="decimal"
+						placeholder="e.g. 100"
+						value={value}
+						onChange={(e) => setValue(e.target.value)}
+						onBlur={() => setValue(normalizePriceInput(value))}
+						variant="field"
+						isError={trimmed.length > 0 && !valid}
+						className="w-32"
+					/>
+				</div>
+				<Button
+					type="button"
+					onClick={save}
+					disabled={!dirty || saving}
+					isLoading={saving}
+					className="h-11"
+				>
+					Save
+				</Button>
+			</div>
+			{trimmed.length > 0 && !valid ? (
+				<p className="text-xs text-destructive">
+					Enter an amount up to {formatPrice(MIN_ORDER_VALUE_MAX, "MYR")}, or
+					leave blank for no minimum.
 				</p>
 			) : null}
 		</Card>

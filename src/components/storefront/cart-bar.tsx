@@ -1,5 +1,4 @@
 import { ShoppingBag } from "lucide-react";
-import { useState } from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
 import { formatPrice } from "../../lib/format";
@@ -14,7 +13,15 @@ interface CartBarProps {
 	offerSelfCollect: boolean;
 	offerDelivery: boolean;
 	minFulfilmentNoticeDays: number | undefined;
+	/** Store-wide minimum order value (minor units) — passed through to the
+	 * checkout sheet's min-order-rule gate. */
+	minOrderValue: number | undefined;
 	pickupLocations: ReadonlyArray<PublicPickupLocation>;
+	/** Checkout sheet open-state, lifted to the route so the product detail
+	 * sheet (a sibling under the route) can open checkout too. Controlled here
+	 * rather than owned locally. */
+	checkoutOpen: boolean;
+	onCheckoutOpenChange: (open: boolean) => void;
 }
 
 export function CartBar({
@@ -25,9 +32,11 @@ export function CartBar({
 	offerSelfCollect,
 	offerDelivery,
 	minFulfilmentNoticeDays,
+	minOrderValue,
 	pickupLocations,
+	checkoutOpen,
+	onCheckoutOpenChange,
 }: CartBarProps) {
-	const [checkoutOpen, setCheckoutOpen] = useState(false);
 	const empty = cart.itemCount === 0;
 
 	return (
@@ -55,7 +64,7 @@ export function CartBar({
 					<Button
 						type="button"
 						disabled={empty}
-						onClick={() => setCheckoutOpen(true)}
+						onClick={() => onCheckoutOpenChange(true)}
 						className="h-12 px-5 text-sm"
 					>
 						Checkout on WhatsApp
@@ -65,7 +74,7 @@ export function CartBar({
 
 			<CheckoutSheet
 				open={checkoutOpen}
-				onClose={() => setCheckoutOpen(false)}
+				onClose={() => onCheckoutOpenChange(false)}
 				cart={cart}
 				retailerId={retailerId}
 				storeName={storeName}
@@ -73,6 +82,7 @@ export function CartBar({
 				offerSelfCollect={offerSelfCollect}
 				offerDelivery={offerDelivery}
 				minFulfilmentNoticeDays={minFulfilmentNoticeDays}
+				minOrderValue={minOrderValue}
 				pickupLocations={pickupLocations}
 			/>
 		</>

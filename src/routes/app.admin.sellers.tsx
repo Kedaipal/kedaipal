@@ -155,24 +155,36 @@ function SellerCard({ seller }: { seller: AdminSellerRow }) {
 						/{seller.slug}
 					</span>
 					<div className="mt-0.5 flex items-center gap-2">
-						{status ? (
-							<span
-								className={`rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize ${
-									STATUS_STYLES[status] ?? "bg-muted text-muted-foreground"
-								}`}
-							>
-								{status.replace("_", " ")}
+						{seller.ownerIsAdmin ? (
+							// Admin-owned store: a single "Admin" pill, not a trial/plan
+							// countdown — admins run the app for free with the highest tier
+							// unlocked. Matches the dashboard tier-pill's `admin` tone.
+							<span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
+								<ShieldCheck className="size-3" />
+								Admin
 							</span>
 						) : (
-							<span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
-								no subscription
-							</span>
+							<>
+								{status ? (
+									<span
+										className={`rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize ${
+											STATUS_STYLES[status] ?? "bg-muted text-muted-foreground"
+										}`}
+									>
+										{status.replace("_", " ")}
+									</span>
+								) : (
+									<span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
+										no subscription
+									</span>
+								)}
+								{seller.plan ? (
+									<span className="text-[11px] capitalize text-muted-foreground">
+										{seller.plan}
+									</span>
+								) : null}
+							</>
 						)}
-						{seller.plan ? (
-							<span className="text-[11px] capitalize text-muted-foreground">
-								{seller.plan}
-							</span>
-						) : null}
 					</div>
 				</div>
 				<span className="flex shrink-0 items-center gap-1 rounded-lg bg-accent/10 px-3 py-2 text-sm font-semibold text-accent">

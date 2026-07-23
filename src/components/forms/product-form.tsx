@@ -15,6 +15,7 @@ import { type FormEvent, type ReactNode, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { MAX_NOTICE_DAYS } from "../../../convex/lib/fulfilmentDate";
+import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
 import { convexErrorMessage, parsePriceInput } from "../../lib/format";
 import { reorderByIds } from "../../lib/reorder";
 import { productDetailsSchema } from "../../lib/schemas";
@@ -44,6 +45,9 @@ export interface ProductFormSubmitValues {
 	// Per-product fulfilment-notice override (days). undefined = no override —
 	// the store-level setting rules. Checkout takes the max across the cart.
 	minNoticeDays?: number;
+	// Minimum order quantity (summed across variants). undefined = no minimum;
+	// the caller sends 0 to clear on edit. See convex/lib/minOrderRules.ts.
+	minQuantity?: number;
 	// FULL category membership (the picker's staged selection) — the caller
 	// diffs it via categories.setProductCategories. See docs/product-categories.md.
 	categoryIds: Id<"categories">[];
@@ -77,6 +81,7 @@ interface ProductFormProps {
 		description?: string;
 		hidden?: boolean;
 		minNoticeDays?: number;
+		minQuantity?: number;
 		categoryIds?: Id<"categories">[];
 		// Deprecated product-level defaults — used only to seed per-variant flags
 		// for legacy products whose variants predate the per-variant columns.
@@ -422,7 +427,7 @@ function VisibilityControl({
 						: "Shown on your public store and sellable everywhere."}
 				</p>
 			</div>
-			<div className="flex shrink-0 gap-1 rounded-xl bg-muted p-1">
+			<div className="flex shrink-0 self-start gap-1 rounded-xl bg-muted p-1 sm:self-auto">
 				{options.map((opt) => {
 					const selected = opt.value === hidden;
 					return (
@@ -473,6 +478,10 @@ export function ProductForm({
 	const [minNoticeDraft, setMinNoticeDraft] = useState(
 		initialValues?.minNoticeDays ? String(initialValues.minNoticeDays) : "",
 	);
+	// Minimum order quantity — blank = no minimum (stored ≥2; see minOrderRules).
+	const [minQty, setMinQty] = useState(
+		initialValues?.minQuantity ? String(initialValues.minQuantity) : "",
+	);
 	const [categoryIds, setCategoryIds] = useState<Id<"categories">[]>(
 		initialValues?.categoryIds ?? [],
 	);
@@ -513,6 +522,8 @@ export function ProductForm({
 			}
 			// `issues` empty ⇒ built carries the variants.
 			const variants = "variants" in built ? built.variants : [];
+			// Min-quantity input invalid → its inline error is already on screen.
+			if (!minQtyValid) return;
 
 			try {
 				const minNoticeParsed = Number.parseInt(minNoticeDraft, 10);
@@ -524,6 +535,8 @@ export function ProductForm({
 						Number.isInteger(minNoticeParsed) && minNoticeParsed > 0
 							? Math.min(minNoticeParsed, MAX_NOTICE_DAYS)
 							: 0,
+					// 0 = no minimum (blank input) — the server normalizes 0/1 to unset.
+					minQuantity: minQtyParsed,
 					categoryIds,
 					imageStorageIds: images.map((i) => i.id),
 					options: hasOptions
@@ -581,6 +594,32 @@ export function ProductForm({
 	}
 
 	const hasAnyPrice = editor.rows.some((row) => row.price.trim().length > 0);
+
+	// Minimum order quantity — blank clears; whole number ≤ MIN_QUANTITY_MAX.
+	const minQtyTrimmed = minQty.trim();
+	const minQtyParsed = minQtyTrimmed.length === 0 ? 0 : Number(minQtyTrimmed);
+	const minQtyValid =
+		minQtyTrimmed.length === 0 ||
+		(Number.isInteger(minQtyParsed) &&
+			minQtyParsed >= 0 &&
+			minQtyParsed <= MIN_QUANTITY_MAX);
+	// Heads-up when the minimum can't currently be met: every active variant
+	// hard-blocks on stock and the combined stock sits below the minimum — buyers
+	// would be told "minimum N" yet be unable to reach it until a restock.
+	const activeRows = editor.rows.filter((row) => row.active);
+	const allHardBlock =
+		activeRows.length > 0 && activeRows.every((row) => row.blockWhenOutOfStock);
+	const totalStock = activeRows.reduce(
+		(sum, row) =>
+			sum +
+			(INT_RE.test(row.stock.trim()) ? Number.parseInt(row.stock, 10) : 0),
+		0,
+	);
+	const minQtyStockShort =
+		minQtyValid &&
+		minQtyParsed >= 2 &&
+		allHardBlock &&
+		totalStock < minQtyParsed;
 
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-5">
@@ -781,6 +820,53 @@ export function ProductForm({
 					currency={currency}
 					issues={editorIssues}
 				/>
+
+				{/* Minimum order quantity (86ey9unyx) — an order rule on the whole
+				    product (summed across options), so it sits here with price/stock,
+				    not per variant row. */}
+				<div className="flex flex-col gap-2 border-t border-border pt-4">
+					<div className="flex flex-col gap-1.5">
+						<label htmlFor="min-order-qty" className="text-sm font-medium">
+							Minimum order quantity{" "}
+							<span className="font-normal text-muted-foreground">
+								(optional)
+							</span>
+						</label>
+						<Input
+							id="min-order-qty"
+							type="number"
+							inputMode="numeric"
+							min={0}
+							max={MIN_QUANTITY_MAX}
+							placeholder="e.g. 20"
+							value={minQty}
+							onChange={(e) => setMinQty(e.target.value)}
+							variant="field"
+							isError={!minQtyValid}
+							className="w-32"
+						/>
+					</div>
+					<p className="text-xs leading-relaxed text-muted-foreground">
+						Buyers must order at least this many per order — options combined
+						(10 + 10 of two flavours meets a minimum of 20). Shown on your
+						storefront as &ldquo;Min {minQtyParsed >= 2 ? minQtyParsed : "N"}
+						&rdquo;. Counter checkout ignores it. Leave blank for no minimum.
+					</p>
+					{!minQtyValid ? (
+						<p className="text-xs text-destructive">
+							Enter a whole number between 2 and {MIN_QUANTITY_MAX}, or leave
+							blank.
+						</p>
+					) : null}
+					{minQtyStockShort ? (
+						<p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+							Heads up: combined stock is {totalStock}, below the minimum of{" "}
+							{minQtyParsed} — buyers can&apos;t reach the minimum until you
+							restock.
+						</p>
+					) : null}
+				</div>
+
 				<Link
 					to="/app/settings"
 					search={{ tab: "store" }}

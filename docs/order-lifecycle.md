@@ -45,10 +45,10 @@ sequenceDiagram
     S->>SF: Browse catalog, build cart, checkout
     SF->>CX: orders.create(items, customer, deliveryMethod, address?)
     Note over CX: rate-limit → validate → reserve stock →\ngen shortId → insert order + pending event →\nlink customer (if phone) → schedule email
-    CX-->>SF: { shortId }  (ORD-XXXX)
+    CX-->>SF: { shortId, trackingToken }
     CX-->>EM: notifyRetailerOrderAlert (fire-and-forget)
-    SF->>WA: wa.me deep link, prefilled "...ORD-XXXX"
-    S->>WA: Sends the message
+    SF->>SF: same-tab navigate to /track/<token>
+    S->>WA: Taps "Send on WhatsApp" (wa.me deep link, prefilled "...ORD-XXXX")
     WA->>WH: Inbound webhook (signed)
     WH->>CX: handleInbound(fromPhone, text, profileName)
     Note over CX: match ORD-XXXX → confirmOrderFromWhatsApp:\npending→confirmed, stamp waPhone,\nlate-link customer, refresh pushname
@@ -74,7 +74,54 @@ Public mutation (no auth — the storefront is anonymous). Steps, in order ([`co
 10. **Early customer link** — if a phone is known, `linkOrderToCustomer` creates/updates the customer and stamps `customerId`. Phone-less orders are linked later (see confirmation).
 11. **Fire-and-forget email** — schedule `notifyRetailerOrderAlert`.
 
-Returns `{ shortId }`, which the storefront embeds into the `wa.me` deep link.
+Returns `{ shortId, trackingToken }`.
+
+### The WhatsApp handoff — why checkout never calls `window.open`
+
+The storefront checkout **does not** open `wa.me` itself. `window.open` after
+the awaited `orders.create` round-trip falls outside the submit tap's
+_transient user activation_, so popup blockers — iOS Safari and the
+Instagram/Facebook in-app webviews where WhatsApp-driven buyers actually
+browse — silently swallow the tab: the order exists, but the buyer is
+stranded on the storefront and their phone number is never captured (the
+`wa.me` message is how the bot learns it). This shipped as a production
+incident before the current design.
+
+Instead, checkout **same-tab navigates to the tracking page**
+(`/track/<trackingToken>` — navigation is never popup-blocked). While the
+order is `pending`, the tracking page leads with a **"Send your order on
+WhatsApp"** card ([`src/routes/track.$token.tsx`](../src/routes/track.$token.tsx)):
+
+- The CTA is a plain **anchor** to the `wa.me` deep link — tapping it is a
+  fresh user gesture, which browsers always allow.
+- A **copy-link fallback** covers webviews that refuse to open WhatsApp at
+  all (the buyer pastes it into a real browser).
+- The message is **rebuilt from the order's frozen snapshot** on every render
+  (`src/lib/wa-order-message.ts` — items, address/pickup, note, fulfilment
+  date), so the handoff survives refreshes and lost sessions, and doubles as
+  recovery for any pending order where the buyer bailed before sending.
+- `orders.get` serves `checkoutPhone` (same `WHATSAPP_CHECKOUT_PHONE` →
+  `retailers.waPhone` fallback as the storefront) **only while the order is
+  `pending`**, so the card hides itself reactively the moment the bot
+  confirms. Counter orders are created `confirmed` (buyer binds via QR scan)
+  and never see it.
+
+**Auto-fire on arrival (`?send=1`):** checkout navigates to
+`/track/<token>?send=1`, and the card **auto-triggers the handoff** so the
+buyer still reaches WhatsApp without an extra tap (desktop keeps its old
+one-click feel; mobile finally gets it). The button starts as
+"Opening WhatsApp…" (loading), and after a short paint delay the page
+**same-tab navigates** (`window.location.assign`) to the `wa.me` link —
+same-tab navigation is never popup-blocked. The timing lives in the
+framework-free [`src/lib/wa-auto-open.ts`](../src/lib/wa-auto-open.ts)
+(unit-tested): if the page is still there after a 4s watchdog (a webview
+refused to leave), loading settles back to the manual button + copy-link
+fallback. The search param is **stripped (history replace) before
+navigating away**, and returning from WhatsApp (bfcache `pageshow` /
+`visibilitychange`) also settles the button — so refresh or back never
+re-fires the redirect or leaves the button stuck loading. Only checkout
+sets `?send=1`; organic visits to a pending order get the manual card
+unchanged.
 
 ## WhatsApp confirmation
 
@@ -105,10 +152,27 @@ Auth-gated (Clerk); ownership checked (`retailer.userId === identity.subject`). 
 
 Separate from cancellation. **Cancel** keeps the row (a terminal `cancelled`
 status, buyer notified). **Hard delete** erases the order and everything derived
-from it, leaving no tombstone — for test / spam / duplicate orders a seller just
-wants gone. Store owners and an admin acting-as can do it (`requireOrderAccess`
-→ owner OR admin; admin writes drop an `adminAuditLog` row, action
-`orders.hardDelete` / `orders.bulkDeleteOrders`). ClickUp `86ey8fr8t`.
+from it, leaving no tombstone — for test / spam / duplicate orders that need to
+disappear. **Kedaipal admin only** (support): both mutations resolve
+`requireOrderAccess`/`requireRetailerAccess` and then throw `Forbidden` unless
+the caller **is an admin** (`isAdmin` — allow-list membership, checked directly),
+so a plain store owner — Starter, Pro or Scale — is rejected server-side even
+though they own the store. The gate is admin membership, **not**
+`access.actingAsAdmin`: an admin can erase orders in **any** store, including one
+they personally own (which resolves via `requireRetailerAccess`'s owner branch,
+where `actingAsAdmin` is `false` — the earlier `actingAsAdmin` guard wrongly
+blocked that case). An admin erase on a store they **don't** own drops an
+`adminAuditLog` row (action `orders.hardDelete` / `orders.bulkDeleteOrders`) —
+that's the white-glove trail `logAdminAction` records; an admin erasing their own
+store's order is an owner write and isn't audited. ClickUp `86ey8fr8t` (the
+erase), `86eyaqzpd` (admin-only restriction).
+
+**Why admin-only:** a hard delete is irreversible (no tombstone) and wipes
+invoice / receipt / revenue-driving data. Leaving it in seller hands meant a
+disputed or fat-fingered order could vanish with no oversight and no audit row
+(owner writes aren't audited). Sellers keep **Cancel** — tombstoned and buyer-
+notified — as their way to make an order go away; permanent erasure sits with
+Kedaipal.
 
 **It is silent** — unlike cancel, NO WhatsApp/email is sent. (That's the reason
 delete isn't "cancel-then-remove": you don't want to ping the buyer of a junk
@@ -142,16 +206,29 @@ bulk can't drift):
 Scheduled jobs that reference orders (e.g. the payment-reminder cron) already
 no-op on a missing order, so a delete between schedule and fire is safe.
 
-**Gating:** single `deleteOrder` is all-tier (cleaning up your own orders isn't a
-Pro feature, mirroring `updateStatus`). Bulk `bulkDeleteOrders` is an Order Inbox
-surface → **Pro+** (admin act-as bypasses), capped at 100/batch, and fails the
-whole batch on any foreign id — identical posture to `bulkUpdateStatus`.
+**Access / tiering:** both `deleteOrder` and `bulkDeleteOrders` are **admin
+only** (any store), not plan-gated — permanent erasure is an ops action, not a
+paid feature, so it applies equally to Starter / Pro / Scale. (The bulk
+mutation's earlier Pro `orderInbox` gate is gone: a plain owner never reaches it,
+they're rejected up front.) Bulk checks the admin gate once up front (`isAdmin` —
+one caller identity for the batch), then still caps at 100/batch and resolves
+each order's retailer per row (for the audit context + retailer-existence check),
+so a stale client can't sneak an erase through mid-flow.
 
-**UI:** a "Delete permanently" danger action in the order-detail More-actions
-section (confirm dialog with an extra warning when the order is paid/delivered —
-it'll vanish from CSV/revenue records), and a "Delete permanently" item in the
-inbox bulk bar behind its own confirm. Both make clear the buyer is NOT notified
-and it can't be undone.
+**UI (hidden, not just disabled):** the "Delete permanently" danger action in the
+order-detail More-actions section and the "Delete permanently" item in the inbox
+bulk bar **render only under an admin act-as session** (`retailer.actingAsAdmin`);
+a plain seller never sees either — there's no confusion about what they can undo.
+`getRetailerForAdmin` sets `actingAsAdmin: true` for *any* act-as target, so an
+admin sees the action even when acting-as a store they own — matching the
+server's ownership-agnostic gate. The server guard, not the hidden UI, is the
+real boundary. Under act-as the
+actions work as before: each behind its own confirm dialog, making clear the
+buyer is NOT notified and it can't be undone (with an extra warning when the order
+is paid/delivered — it'll vanish from CSV/revenue records). On the order-detail
+page the More-actions panel collapses on desktop for a terminal order in a plain
+seller session (Cancel gone, Delete hidden, receipt lives in the header), so it
+never opens to an empty divider.
 
 **Type-to-confirm safety gate:** because this is the one irreversible action in
 the dashboard, both delete confirm dialogs pass `confirmPhrase="DELETE"` to the

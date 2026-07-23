@@ -165,6 +165,7 @@ import { internalMutation, mutation, type MutationCtx, query, type QueryCtx } fr
 import { ConvexError } from "convex/values";
 import { reserveFoundingRank } from "./foundingMembers";
 import { MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
+import { sanitizeMinOrderValue } from "./lib/minOrderRules";
 import { rateLimiter } from "./lib/rateLimiter";
 import { capsForPlan, DAY_MS, TRIAL_DAYS } from "./lib/plans";
 import {
@@ -186,6 +187,7 @@ import {
 	type SupportedCurrency,
 } from "./lib/currency";
 import {
+	adminUserIds,
 	logAdminAction,
 	type RetailerAccess,
 	requireAdmin,
@@ -497,6 +499,10 @@ type RetailerPublic = {
 	// Minimum days' notice before a fulfilment date — drives the storefront date
 	// picker's earliest selectable day. Undefined → 0 (same-day allowed).
 	minFulfilmentNoticeDays?: number;
+	// Store-wide minimum order value (minor units, 86ey9unyx). Public-safe —
+	// buyers must see the bar to reach it (checkout blocks below it). Undefined
+	// = no minimum. See convex/lib/minOrderRules.ts.
+	minOrderValue?: number;
 	// Whether the retailer has opened the Pickup settings tab at least once.
 	// Drives checklist step-4 dismissal — set to true on first tab visit by
 	// `markPickupSetupSeen`.
@@ -551,7 +557,13 @@ async function loadRetailerForUser(
 		.withIndex("by_user", (q) => q.eq("userId", userId))
 		.first();
 	if (!row) return null;
-	return buildRetailerPublic(ctx, row);
+	// A Kedaipal admin viewing their OWN store gets the highest tier unlocked in
+	// the payload (features/active), so no Pro wall or soft-lock renders. `userId`
+	// is the caller's identity AND the owner (by_user lookup), so this is strictly
+	// admin-on-own-store. The act-as read (`getRetailerForAdmin`) does NOT pass
+	// this — white-glove must see the seller's real tier. See docs/admin-console.md.
+	const adminFullAccess = adminUserIds().includes(userId);
+	return buildRetailerPublic(ctx, row, { adminFullAccess });
 }
 
 /** Map a retailer row to the OWNER/admin dashboard payload (payment methods with
@@ -560,6 +572,7 @@ async function loadRetailerForUser(
 async function buildRetailerPublic(
 	ctx: QueryCtx,
 	row: Doc<"retailers">,
+	opts?: { adminFullAccess?: boolean },
 ): Promise<RetailerPublic> {
 	const resolvedMethods = resolvePaymentMethods(row);
 	const paymentMethods: Array<PaymentMethod & { qrImageUrl?: string }> = [];
@@ -615,6 +628,7 @@ async function buildRetailerPublic(
 		businessAddress: row.businessAddress,
 		deliveryBooking: summarizeDeliveryBooking(row.deliveryBooking),
 		minFulfilmentNoticeDays: row.minFulfilmentNoticeDays,
+		minOrderValue: row.minOrderValue,
 		pickupSetupSeen: row.pickupSetupSeen,
 		termsVersion: row.termsVersion,
 		privacyVersion: row.privacyVersion,
@@ -622,7 +636,9 @@ async function buildRetailerPublic(
 		onboardingGreetingSetup: row.onboardingGreetingSetup,
 		activatedAt: row.activatedAt,
 		linkSharedAt: row.linkSharedAt,
-		subscription: resolveAccess(sub),
+		subscription: resolveAccess(sub, {
+			adminFullAccess: opts?.adminFullAccess,
+		}),
 		ordersThisMonth: usedOrders,
 		isFoundingMember: row.isFoundingMember,
 		foundingMemberRank: row.foundingMemberRank,
@@ -723,6 +739,7 @@ export const getRetailerBySlug = query({
 					offerSelfCollect: active.offerSelfCollect,
 					offerDelivery: active.offerDelivery,
 					minFulfilmentNoticeDays: active.minFulfilmentNoticeDays,
+					minOrderValue: active.minOrderValue,
 					// Founding badge is public-safe; subscription state is NOT included.
 					isFoundingMember: active.isFoundingMember,
 					foundingMemberRank: active.foundingMemberRank,
@@ -1060,6 +1077,9 @@ export const updateSettings = mutation({
 		deliveryBooking: v.optional(v.union(deliveryBookingValidator, v.null())),
 		// Minimum days' notice before a fulfilment date. Clamped to [0, 30].
 		minFulfilmentNoticeDays: v.optional(v.number()),
+		// Store-wide minimum order value (minor units). 0 clears (no minimum);
+		// undefined = no change. See convex/lib/minOrderRules.ts.
+		minOrderValue: v.optional(v.number()),
 	},
 	handler: async (ctx, args): Promise<{ ok: true }> => {
 		// Resolve the target store: an explicit `retailerId` is the admin act-as
@@ -1105,6 +1125,7 @@ export const updateSettings = mutation({
 			businessAddress: BusinessAddress | undefined;
 			deliveryBooking: DeliveryBooking | undefined;
 			minFulfilmentNoticeDays: number;
+			minOrderValue: number | undefined;
 			updatedAt: number;
 		}> = { updatedAt: Date.now() };
 
@@ -1389,6 +1410,10 @@ export const updateSettings = mutation({
 				);
 			}
 			patch.minFulfilmentNoticeDays = n;
+		}
+		if (args.minOrderValue !== undefined) {
+			// 0 sanitizes to undefined → the patch removes the field (rule cleared).
+			patch.minOrderValue = sanitizeMinOrderValue(args.minOrderValue);
 		}
 
 		// Fulfilment invariant: a storefront must always keep at least one WORKING

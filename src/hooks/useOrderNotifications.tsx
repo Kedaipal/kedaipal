@@ -161,7 +161,9 @@ export function OrderNotificationsBridge({
 	} | null>(null);
 
 	// Re-baseline whenever the subscription target changes or alerts are
-	// toggled off (so re-enabling doesn't replay the backlog).
+	// toggled off (so re-enabling doesn't replay the backlog). retailerId +
+	// prefs.enabled are intentional reset TRIGGERS, not values read in the body.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: deliberate reset triggers.
 	useEffect(() => {
 		baseline.current = null;
 	}, [retailerId, prefs.enabled]);

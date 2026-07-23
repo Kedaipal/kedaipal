@@ -43,6 +43,13 @@ interface ProductGridProps {
 	 * no extra read cost.)
 	 */
 	storeSlug?: string;
+	/**
+	 * Open the checkout/review sheet. The detail sheet's "Go to checkout" CTA
+	 * calls this (after the grid closes the sheet), so a buyer can proceed
+	 * straight from a product without hunting for the cart bar. Owned by the
+	 * route so it can reach the CartBar-hosted CheckoutSheet (a sibling).
+	 */
+	onRequestCheckout?: () => void;
 }
 
 export function ProductGrid({
@@ -51,6 +58,7 @@ export function ProductGrid({
 	products: productsOverride,
 	beforeGrid,
 	storeSlug,
+	onRequestCheckout,
 }: ProductGridProps) {
 	// `products.list` returns active products already sorted by the retailer's
 	// `sortOrder` (set via the dashboard reorder). We render in that order — the
@@ -134,6 +142,7 @@ export function ProductGrid({
 				quoteOnRequest: variant.requiresProof === true && variant.price === 0,
 				minNoticeDays: p.minNoticeDays,
 				isCustom: variant.isCustom,
+				minQuantity: p.minQuantity,
 				note: custom?.note,
 				customImageStorageId: custom?.imageStorageId,
 			},
@@ -142,15 +151,26 @@ export function ProductGrid({
 		toast.success(
 			updatingCustom
 				? "Custom request updated"
-				: `Added ${label ? `${p.name} — ${label}` : p.name} to cart`,
+				: `Added ${qty > 1 ? `${qty} × ` : ""}${label ? `${p.name} — ${label}` : p.name} to cart`,
 		);
 	};
 
 	// Quick-add only fires for single-variant products (multi-variant cards open
-	// the sheet instead), so the sole variant is unambiguous.
+	// the sheet instead), so the sole variant is unambiguous. A product with a
+	// minimum order quantity tops the cart up to it in one tap (the card shows a
+	// "Min N" chip, so the bigger add is expected); once met, +1 as usual. The
+	// top-up is clamped to the variant's remaining stock (hard-block only) so a
+	// single tap can never put more in the cart than can actually be bought.
 	const quickAdd = (p: StorefrontProduct) => {
 		const variant = p.variants[0];
-		if (variant) addVariant(p, variant, 1);
+		if (!variant) return;
+		const inCart = cart.quantityForProduct(p._id);
+		const remainingToMin = (p.minQuantity ?? 1) - inCart;
+		const stockLeft =
+			variant.blockWhenOutOfStock === true
+				? Math.max(1, variant.onHand - inCart)
+				: Number.POSITIVE_INFINITY;
+		addVariant(p, variant, Math.max(1, Math.min(remainingToMin, stockLeft)));
 	};
 
 	return (
@@ -254,6 +274,8 @@ export function ProductGrid({
 							product={product}
 							onOpen={setOpenProduct}
 							onQuickAdd={quickAdd}
+							cartQuantity={cart.quantityForProduct(product._id)}
+							cartSubtotal={cart.subtotalForProduct(product._id)}
 						/>
 					))}
 				</div>
@@ -262,11 +284,33 @@ export function ProductGrid({
 			<ProductDetailSheet
 				product={openProduct}
 				retailerId={retailerId}
+				// Units of this product already in the cart — the sheet's stepper
+				// defaults to the REMAINING amount toward the product's minimum.
+				cartQuantity={
+					openProduct ? cart.quantityForProduct(openProduct._id) : 0
+				}
+				// Whole-cart summary drives the footer "Go to checkout" CTA.
+				cartItemCount={cart.itemCount}
+				cartTotal={cart.total}
 				onClose={() => setOpenProduct(null)}
 				// Stay open after adding so a buyer can add a standard variant AND
 				// request the custom line from the same product without reopening. The
 				// toast + cart bar confirm the add; they close via the X when done.
 				onAdd={(p, variant, qty, custom) => addVariant(p, variant, qty, custom)}
+				// Close the product sheet, then hand off to the CheckoutSheet (owned
+				// by the CartBar). The open is deferred a tick: mounting the checkout
+				// dialog in the SAME commit that unmounts this one makes radix's
+				// dismiss/focus layer collide, so the checkout dialog fails to stay
+				// open. Closing first, then opening on the next task, lets this
+				// dialog's teardown finish. The gap is imperceptible (no exit anim).
+				onCheckout={
+					onRequestCheckout
+						? () => {
+								setOpenProduct(null);
+								setTimeout(onRequestCheckout, 0);
+							}
+						: undefined
+				}
 			/>
 		</>
 	);

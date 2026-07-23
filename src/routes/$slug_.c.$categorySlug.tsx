@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import { ArrowLeft } from "lucide-react";
+import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import { CartBar } from "../components/storefront/cart-bar";
 import { ProductGrid } from "../components/storefront/product-grid";
@@ -192,6 +193,9 @@ function CategoryRoute() {
 	const pickupLocations = useQuery(api.pickupLocations.listActivePublicBySlug, {
 		slug,
 	});
+	// Checkout open-state lifted here so the product detail sheet can jump
+	// straight to checkout (same wiring as the store home). See ProductGrid.
+	const [checkoutOpen, setCheckoutOpen] = useState(false);
 
 	if (!retailer || page === undefined) {
 		return <CategorySkeleton />;
@@ -235,6 +239,7 @@ function CategoryRoute() {
 					cart={cart}
 					products={page.products}
 					storeSlug={retailer.slug}
+					onRequestCheckout={() => setCheckoutOpen(true)}
 				/>
 			</section>
 
@@ -248,7 +253,10 @@ function CategoryRoute() {
 				offerSelfCollect={retailer.offerSelfCollect ?? false}
 				offerDelivery={retailer.offerDelivery ?? true}
 				minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
+				minOrderValue={retailer.minOrderValue}
 				pickupLocations={pickupLocations ?? []}
+				checkoutOpen={checkoutOpen}
+				onCheckoutOpenChange={setCheckoutOpen}
 			/>
 		</div>
 	);

@@ -1,5 +1,13 @@
 import { useMutation } from "convex/react";
-import { ImagePlus, Loader2, Minus, Plus, X } from "lucide-react";
+import {
+	ArrowRight,
+	ImagePlus,
+	Loader2,
+	Minus,
+	Plus,
+	ShoppingBag,
+	X,
+} from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../../convex/_generated/api";
@@ -9,6 +17,7 @@ import {
 	availableValuesPerAxis,
 	getCustomLine,
 	isSellable,
+	minQuantityUnreachable,
 	resolveVariant,
 } from "../../lib/variant";
 import { Button } from "../ui/button";
@@ -21,6 +30,17 @@ export type StorefrontVariant = StorefrontProduct["variants"][number];
 interface ProductDetailSheetProps {
 	product: StorefrontProduct | null;
 	retailerId: Id<"retailers">;
+	/** Units of this product already in the cart (custom lines excluded) — the
+	 * stepper defaults to the REMAINING amount toward the product's minimum
+	 * order quantity, so the happy path never trips the checkout block. */
+	cartQuantity: number;
+	/** Whole-cart item count (all products) — drives the "Go to checkout" CTA in
+	 * the footer: it only appears once the cart holds ≥1 item. Optional so the
+	 * sheet renders standalone (e.g. in tests) with the CTA hidden. */
+	cartItemCount?: number;
+	/** Whole-cart money total (minor units) — shown on the checkout CTA. 0 (or a
+	 * quote-only cart) hides the amount, keeping the count + arrow. */
+	cartTotal?: number;
 	onClose: () => void;
 	onAdd: (
 		product: StorefrontProduct,
@@ -29,13 +49,21 @@ interface ProductDetailSheetProps {
 		// Buyer's request + optional reference image for the custom line.
 		custom?: { note?: string; imageStorageId?: string },
 	) => void;
+	/** Jump straight from the product view to the checkout/review sheet without
+	 * closing the modal by hand first. Provided by the grid, which closes this
+	 * sheet then opens checkout. Absent → the CTA is hidden. See docs. */
+	onCheckout?: () => void;
 }
 
 export function ProductDetailSheet({
 	product,
 	retailerId,
+	cartQuantity,
+	cartItemCount = 0,
+	cartTotal = 0,
 	onClose,
 	onAdd,
+	onCheckout,
 }: ProductDetailSheetProps) {
 	const generateCustomImageUploadUrl = useMutation(
 		api.orders.generateCustomImageUploadUrl,
@@ -59,12 +87,22 @@ export function ProductDetailSheet({
 	const options = product?.options ?? [];
 	const variants = product?.variants ?? [];
 
+	// Latest cart count via a ref so the reset effect below can read it without
+	// re-running (and clobbering the stepper) every time the cart changes while
+	// the sheet is open.
+	const cartQuantityRef = useRef(cartQuantity);
+	cartQuantityRef.current = cartQuantity;
+
 	// Reset selection + quantity whenever a new product opens. Axes with a single
 	// value auto-select (one less tap); the implicit default variant resolves
-	// immediately when there are no axes.
+	// immediately when there are no axes. The stepper opens at the REMAINING
+	// amount toward the product's minimum order quantity (min 20, 12 in cart →
+	// starts at 8) so the buyer lands on a quantity that will actually check out.
 	useEffect(() => {
 		if (!product) return;
-		setQuantity(1);
+		setQuantity(
+			Math.max(1, (product.minQuantity ?? 1) - cartQuantityRef.current),
+		);
 		setCustomNote("");
 		setImageError(null);
 		if (blobRef.current) {
@@ -156,6 +194,24 @@ export function ProductDetailSheet({
 			? Math.max(1, selectedVariant.onHand)
 			: 99
 		: 1;
+	// Minimum-order-quantity easement (86ey9unyx): the amount still needed to
+	// reach the product's minimum, given what's already in the cart. On a
+	// no-options product the minus button floors here (the only way to comply is
+	// this one variant); with options the floor stays 1 — the buyer may mix
+	// variants to reach the minimum, and checkout judges the SUM.
+	const minQuantity = product.minQuantity ?? 0;
+	const remainingToMin = Math.max(1, minQuantity - cartQuantity);
+	const minFloor = hasOptions ? 1 : Math.min(remainingToMin, maxQty);
+	// Stock can no longer reach the minimum → the standard line is unavailable
+	// with the reason spelled out, instead of a stepper pinned at a quantity
+	// checkout would reject. The custom card below stays live (exempt from the
+	// minimum). `totalOnHand` equals the purchasable stock here: this state only
+	// fires when every standard variant hard-blocks, and the custom line's
+	// onHand is always 0.
+	const minUnreachable = minQuantityUnreachable(minQuantity, variants);
+	// Never render/add more than the stock ceiling, even if the min default
+	// exceeds it (the buyer sees the stock hint explain the tension).
+	const displayQuantity = Math.min(quantity, maxQty);
 
 	function toggle(axisIndex: number, value: string) {
 		setSelection((prev) => {
@@ -163,7 +219,12 @@ export function ProductDetailSheet({
 			next[axisIndex] = prev[axisIndex] === value ? null : value;
 			return next;
 		});
-		setQuantity(1);
+		// Re-open the stepper at the remaining amount toward the minimum (10 of
+		// 20 already in the cart → the next flavour starts at 10); 1 when no rule.
+		// `product?.` because hoisting puts this function above the null guard.
+		setQuantity(
+			Math.max(1, (product?.minQuantity ?? 1) - cartQuantityRef.current),
+		);
 	}
 
 	const priceVaries = product.priceTo > product.priceFrom;
@@ -186,6 +247,21 @@ export function ProductDetailSheet({
 		customLine && customLine.price > 0
 			? `from ${formatPrice(customLine.price, product.currency)}`
 			: "Price on quote";
+
+	// Live money total for the standard selection — shown by the stepper so the
+	// buyer sees what they're committing to before adding, and it updates on every
+	// tap. Only when a concrete, priced, sellable variant is resolved: quote lines
+	// have no price yet, and an unresolved multi-axis selection has no variant.
+	// Uses `displayQuantity` (the stock-capped, min-floored value the stepper shows
+	// and the cart receives), never the raw `quantity`, so the total can't disagree
+	// with the number above the "Add to cart" button.
+	const totalPreview =
+		selectedVariant && sellable && !selectedIsQuote
+			? {
+					unit: selectedVariant.price,
+					total: selectedVariant.price * displayQuantity,
+				}
+			: null;
 
 	return (
 		<Dialog.Root open={open} onOpenChange={(o) => !o && onClose()}>
@@ -292,6 +368,35 @@ export function ProductDetailSheet({
 										? `Only ${selectedVariant.onHand} left`
 										: `${selectedVariant.onHand} in stock`}
 							</p>
+						) : null}
+
+						{/* Minimum-order hint — surfaced here (not only at checkout) so the
+						    rule is never a surprise. When stock can't reach the minimum
+						    the hint becomes the unavailability reason instead of a rule
+						    the buyer can't comply with. See convex/lib/minOrderRules.ts. */}
+						{minQuantity >= 2 ? (
+							minUnreachable ? (
+								<p
+									role="alert"
+									className="mt-3 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive"
+								>
+									<span className="font-semibold">
+										Only {product.totalOnHand} left
+									</span>{" "}
+									— not enough to meet this product&apos;s minimum of{" "}
+									{minQuantity} per order. Check back once it&apos;s restocked.
+								</p>
+							) : (
+								<p className="mt-3 rounded-lg bg-accent/5 px-3 py-2 text-xs text-foreground">
+									<span className="font-semibold">
+										Minimum {minQuantity} per order
+									</span>
+									{hasOptions ? " — mix options to reach it." : "."}
+									{cartQuantity > 0
+										? ` You have ${cartQuantity} in your cart.`
+										: ""}
+								</p>
+							)
 						) : null}
 
 						{/* Custom / made-to-order line — a self-contained, INDEPENDENT add
@@ -431,24 +536,48 @@ export function ProductDetailSheet({
 					</div>
 
 					<div className="border-t border-border bg-background px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-6">
+						{totalPreview ? (
+							<div className="mb-3 flex items-baseline justify-between gap-2">
+								<span className="text-sm font-medium text-muted-foreground">
+									Total
+									{displayQuantity > 1 ? (
+										<span className="ml-1 tabular-nums">
+											· {displayQuantity} ×{" "}
+											{formatPrice(totalPreview.unit, product.currency)}
+										</span>
+									) : null}
+								</span>
+								<span className="text-lg font-bold tabular-nums">
+									{formatPrice(totalPreview.total, product.currency)}
+								</span>
+							</div>
+						) : null}
 						<div className="grid gap-3 sm:grid-cols-[auto_1fr] sm:items-center">
 							<div className="flex items-center justify-center gap-3 sm:justify-start">
 								<button
 									type="button"
-									onClick={() => setQuantity((q) => Math.max(1, q - 1))}
-									disabled={quantity <= 1 || !sellable}
+									onClick={() =>
+										setQuantity(Math.max(minFloor, displayQuantity - 1))
+									}
+									disabled={
+										displayQuantity <= minFloor || !sellable || minUnreachable
+									}
 									className="flex size-11 items-center justify-center rounded-full border border-border disabled:opacity-40"
 									aria-label="Decrease quantity"
 								>
 									<Minus className="size-4" />
 								</button>
 								<span className="min-w-10 text-center text-lg font-semibold">
-									{quantity}
+									{displayQuantity}
 								</span>
 								<button
 									type="button"
-									onClick={() => setQuantity((q) => Math.min(maxQty, q + 1))}
-									disabled={quantity >= maxQty || !sellable}
+									onClick={() =>
+										setQuantity(Math.min(maxQty, displayQuantity + 1))
+									}
+									disabled={
+										displayQuantity >= maxQty || !sellable || minUnreachable
+									}
 									className="flex size-11 items-center justify-center rounded-full border border-border disabled:opacity-40"
 									aria-label="Increase quantity"
 								>
@@ -457,21 +586,57 @@ export function ProductDetailSheet({
 							</div>
 							<Button
 								type="button"
-								disabled={!sellable}
+								disabled={!sellable || minUnreachable}
 								onClick={() =>
-									selectedVariant && onAdd(product, selectedVariant, quantity)
+									selectedVariant &&
+									onAdd(product, selectedVariant, displayQuantity)
 								}
 								className="h-12 w-full text-base"
 							>
-								{!selectedVariant
-									? hasOptions
-										? "Select options"
-										: "Unavailable"
-									: !sellable
-										? "Out of stock"
-										: "Add to cart"}
+								{minUnreachable
+									? "Not enough stock"
+									: !selectedVariant
+										? hasOptions
+											? "Select options"
+											: "Unavailable"
+										: !sellable
+											? "Out of stock"
+											: "Add to cart"}
 							</Button>
 						</div>
+
+						{/* Direct-to-checkout CTA — jump to the review sheet from here
+						    instead of closing the modal to reach the cart bar. Appears
+						    once the cart holds ≥1 item (this add, or an earlier one);
+						    styled as a tinted-accent secondary so it never competes with
+						    the filled "Add to cart" primary above. Mirrors the cart bar's
+						    bag + count + total. See docs/storefront-direct-checkout.md. */}
+						{onCheckout && cartItemCount > 0 ? (
+							<button
+								type="button"
+								onClick={onCheckout}
+								className="mt-3 flex h-12 w-full items-center justify-between gap-3 rounded-lg border border-accent/30 bg-accent/10 px-4 outline-none transition-colors hover:bg-accent/15 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+							>
+								<span className="flex items-center gap-2.5 text-sm font-semibold text-foreground">
+									<span className="relative flex size-6 items-center justify-center">
+										<ShoppingBag className="size-5 text-accent" />
+										<span className="absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
+											{cartItemCount}
+										</span>
+									</span>
+									Go to checkout
+								</span>
+								<span className="flex items-center gap-1.5 text-sm font-semibold tabular-nums text-foreground">
+									{cartTotal > 0
+										? formatPrice(cartTotal, product.currency)
+										: null}
+									<ArrowRight
+										className="size-4 text-muted-foreground"
+										aria-hidden
+									/>
+								</span>
+							</button>
+						) : null}
 					</div>
 				</Dialog.Content>
 			</Dialog.Portal>

@@ -12,6 +12,7 @@ import {
 	bumpCategoryCountsForProduct,
 	isProductVisible,
 } from "./lib/categoryCounts";
+import { sanitizeMinQuantity } from "./lib/minOrderRules";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertSubscriptionActive } from "./subscriptions";
 import {
@@ -501,6 +502,8 @@ export const create = mutation({
 		requiresProof: v.optional(v.boolean()),
 		minNoticeDays: v.optional(v.number()),
 		hidden: v.optional(v.boolean()),
+		// Minimum order quantity (summed across variants). 0/1 normalize to unset.
+		minQuantity: v.optional(v.number()),
 		variants: v.array(variantInputValidator),
 	},
 	handler: async (ctx, args): Promise<Id<"products">> => {
@@ -548,6 +551,7 @@ export const create = mutation({
 			requiresProof: args.requiresProof,
 			minNoticeDays: sanitizeMinNoticeDays(args.minNoticeDays),
 			hidden: args.hidden,
+			minQuantity: sanitizeMinQuantity(args.minQuantity),
 			sortOrder: args.sortOrder,
 			active: true,
 			channel: "whatsapp",
@@ -610,6 +614,8 @@ export const update = mutation({
 		// 0 clears the override (normalized to unset); undefined = no change.
 		minNoticeDays: v.optional(v.number()),
 		hidden: v.optional(v.boolean()),
+		// Minimum order quantity. 0 (or 1) clears the rule; undefined = no change.
+		minQuantity: v.optional(v.number()),
 	},
 	handler: async (ctx, { productId, ...fields }): Promise<void> => {
 		const userId = await requireUserId(ctx);
@@ -645,6 +651,10 @@ export const update = mutation({
 		if (fields.minNoticeDays !== undefined)
 			updates.minNoticeDays = sanitizeMinNoticeDays(fields.minNoticeDays);
 		if (fields.hidden !== undefined) updates.hidden = fields.hidden;
+		if (fields.minQuantity !== undefined)
+			// 0/1 sanitize to undefined, which patch treats as "remove the field" —
+			// so sending 0 clears the rule (one spelling for "no minimum").
+			updates.minQuantity = sanitizeMinQuantity(fields.minQuantity);
 
 		// Keep the denormalized category counts accurate when this edit flips the
 		// product's storefront visibility (active and/or hidden). Compute the

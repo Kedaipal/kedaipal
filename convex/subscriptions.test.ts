@@ -98,6 +98,35 @@ describe("resolveAccess (pure)", () => {
 			delivery: true,
 		});
 	});
+
+	test("adminFullAccess overrides a Starter store to the highest tier", () => {
+		// An admin on their OWN store gets every feature unlocked + never frozen,
+		// while the real plan/status stay intact so billing still tells the truth.
+		const a = resolveAccess(sub({ plan: "starter", status: "past_due" }), {
+			adminFullAccess: true,
+		});
+		expect(a.features).toEqual({
+			crm: true,
+			orderInbox: true,
+			chargeablePickup: true,
+			categories: true,
+			insights: true,
+			radiusDelivery: true,
+		delivery: true,
+		});
+		expect(a.active).toBe(true);
+		expect(a.frozen).toBe(false);
+		// The underlying subscription truth is preserved (for the billing page).
+		expect(a.plan).toBe("starter");
+		expect(a.status).toBe("past_due");
+	});
+
+	test("adminFullAccess=false leaves a Starter store gated (default path)", () => {
+		const a = resolveAccess(sub({ plan: "starter" }), {
+			adminFullAccess: false,
+		});
+		expect(a.features.crm).toBe(false);
+	});
 });
 
 describe("subscriptions — signup wiring", () => {

@@ -246,6 +246,44 @@ describe("plan gating — CRM (Pro+)", () => {
 			delivery: false,
 		});
 	});
+
+	test("an admin's OWN Starter store still resolves to the highest tier", async () => {
+		const t = setup();
+		// Store owned by the admin themselves (not an act-as target).
+		const retailer = await seedRetailer(t, ADMIN);
+		await setPlan(t, retailer._id, "starter");
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+
+		// getMyRetailer (owner read) grants full features despite the Starter plan —
+		// so no Pro wall / locked control renders in the admin's own dashboard.
+		const me = await asAdmin.query(api.retailers.getMyRetailer);
+		expect(me?.subscription?.features).toEqual({
+			crm: true,
+			orderInbox: true,
+			chargeablePickup: true,
+			categories: true,
+			insights: true,
+			radiusDelivery: true,
+		delivery: true,
+		});
+		// subscriptions.current (billing nav) resolves the same way.
+		const current = await asAdmin.query(api.subscriptions.current, {});
+		expect(current?.features.crm).toBe(true);
+		// The real plan is still reported (billing page truth).
+		expect(me?.subscription?.plan).toBe("starter");
+	});
+
+	test("assertPlanFeature bypasses for an admin on their OWN Starter store", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, ADMIN);
+		await setPlan(t, retailer._id, "starter");
+		// A CRM read on their own store is Pro-gated for a plain Starter seller, but
+		// the admin sees through it (not act-as — they own the store).
+		const count = await t
+			.withIdentity({ subject: ADMIN })
+			.query(api.customers.count, { retailerId: retailer._id });
+		expect(count).toBe(0);
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -541,25 +579,6 @@ describe("plan gating — Order Inbox (Pro+)", () => {
 		});
 		const order = await t.run((ctx) => ctx.db.get(orderId));
 		expect(order?.status).toBe("confirmed");
-	});
-
-	test("bulkDeleteOrders is Pro+ (single deleteOrder stays open)", async () => {
-		const t = setup();
-		const retailer = await seedRetailer(t, USER_A);
-		const productId = await seedProduct(t, USER_A, retailer._id);
-		const o1 = await placeOrder(t, retailer._id, productId);
-		const o2 = await placeOrder(t, retailer._id, productId);
-		await setPlan(t, retailer._id, "starter");
-		const asA = t.withIdentity({ subject: USER_A });
-
-		await expect(
-			asA.mutation(api.orders.bulkDeleteOrders, { orderIds: [o1] }),
-		).rejects.toThrow(/Pro plan/);
-
-		// Single hard delete is all-tier — a Starter store can still clean up one
-		// order at a time from its detail page.
-		await asA.mutation(api.orders.deleteOrder, { orderId: o2 });
-		expect(await t.run((ctx) => ctx.db.get(o2))).toBeNull();
 	});
 
 	test("CSV export is Pro+ (filter mode and ticked-selection mode)", async () => {

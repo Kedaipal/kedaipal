@@ -1225,3 +1225,49 @@ describe("counterCheckout — anonymous walk-in (86ey8vqp6)", () => {
 		).rejects.toThrow(/at least 3/i);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Minimum order rules (86ey9unyx) — the counter is EXEMPT by design: the
+// seller is standing there ringing up the sale, so a walk-in buying 1 unit of
+// a "min 20" product (or below the store minimum order value) must go through.
+// The storefront-only enforcement lives in orders.create (orders.test.ts).
+// ---------------------------------------------------------------------------
+describe("counterCheckout — minimum order rules exemption", () => {
+	test("counter sells below a product minimum AND the store value minimum", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.retailers.updateSettings, { minOrderValue: 10000 });
+		const productId = await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Kuih Tray",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			minQuantity: 20,
+			variants: [{ optionValues: [], price: 500, onHand: 50 }],
+		});
+		const variantId = await t.run(async (ctx) => {
+			const v = await ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", productId))
+				.first();
+			if (!v) throw new Error("variant seed failed");
+			return v._id;
+		});
+		const sessionId = await boundSession(t, retailer._id);
+		// 1 unit (RM5): below min qty 20 and the RM100 store minimum — both fine.
+		const { shortId, orderId } = await asA.mutation(
+			api.counterCheckout.createOrderFromSession,
+			{
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				paidInPerson: true,
+				paymentMethod: "cash",
+			},
+		);
+		expect(shortId).toMatch(/^ORD-/);
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.total).toBe(500);
+	});
+});

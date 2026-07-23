@@ -28,6 +28,7 @@ import {
 } from "./subscriptionUsage";
 import {
 	adminUserIds,
+	isAdmin,
 	logAdminAction,
 	type RetailerAccess,
 	requireRetailerAccess,
@@ -36,6 +37,12 @@ import {
 	assertValidFulfilmentDate,
 	matchesFulfilmentWindow,
 } from "./lib/fulfilmentDate";
+import {
+	collectMinQuantityShortfalls,
+	type MinRuleItem,
+	minOrderValueShortfall,
+	minQuantityMessage,
+} from "./lib/minOrderRules";
 import { statusToBucket } from "./lib/orderBuckets";
 import { type CsvOrder, ordersToCsv } from "./lib/orderCsv";
 import {
@@ -540,6 +547,10 @@ export const create = mutation({
 		let requiresMockup = false;
 		// Strictest per-product notice override across the cart (0 = none).
 		let maxItemNoticeDays = 0;
+		// Minimum-order-rule inputs (86ey9unyx), collected alongside the snapshot:
+		// per-line product id/name/qty + the flags the shared rules need. Checked
+		// after the loop (the rules judge summed quantities + the subtotal).
+		const ruleItems: MinRuleItem[] = [];
 		for (const item of args.items) {
 			if (!Number.isInteger(item.quantity) || item.quantity < 1)
 				throw new ConvexError("Quantity must be a positive integer");
@@ -613,6 +624,38 @@ export const create = mutation({
 				price: variant.price,
 				quantity: item.quantity,
 			});
+			ruleItems.push({
+				productId: variant.productId,
+				name: product.name,
+				quantity: item.quantity,
+				minQuantity: product.minQuantity,
+				isCustom: variant.isCustom,
+				quoteOnRequest: variantRequiresProof === true && variant.price === 0,
+			});
+		}
+
+		const itemSubtotal = snapshotItems.reduce(
+			(sum, i) => sum + i.price * i.quantity,
+			0,
+		);
+
+		// Minimum order rules (86ey9unyx) — the authoritative gate; the storefront
+		// mirrors both checks pre-submit via the same shared module, so a buyer
+		// only ever hits these from a stale tab or a direct call. Counter checkout
+		// deliberately does NOT run them (the seller is standing there).
+		const qtyShortfalls = collectMinQuantityShortfalls(ruleItems);
+		if (qtyShortfalls.length > 0) {
+			throw new ConvexError(minQuantityMessage(qtyShortfalls[0]));
+		}
+		const valueShortfall = minOrderValueShortfall(
+			retailer.minOrderValue,
+			itemSubtotal,
+			ruleItems,
+		);
+		if (valueShortfall > 0) {
+			throw new ConvexError(
+				`Minimum order of ${args.currency} ${((retailer.minOrderValue ?? 0) / 100).toFixed(2)} — add ${args.currency} ${(valueShortfall / 100).toFixed(2)} more to check out`,
+			);
 		}
 
 		// Fulfilment date: validated against the EFFECTIVE notice window — the
@@ -639,10 +682,7 @@ export const create = mutation({
 		let deliverySnapshot: DeliverySnapshot | undefined;
 		let deliveryFeePending = false;
 		if (effectiveDeliveryMethod === "delivery") {
-			const itemSubtotal = snapshotItems.reduce(
-				(sum, i) => sum + i.price * i.quantity,
-				0,
-			);
+			// itemSubtotal is hoisted above (shared with the min-order rules).
 			const liveQuote = await loadCheckoutDeliveryQuote(
 				ctx,
 				retailer._id,
@@ -838,6 +878,13 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 	// shared Kedaipal WABA). `retailerWaPhone` undefined => the CTA is hidden.
 	storeName: string;
 	retailerWaPhone?: string;
+	// The shared Kedaipal checkout number (same resolution as the storefront's
+	// getRetailerBySlug), included ONLY while the order is still `pending`: it
+	// powers the tracking page's "Send order on WhatsApp" handoff CTA — the
+	// buyer-gesture replacement for the popup-blocked checkout `window.open`.
+	// Undefined once the order is confirmed (or when no number is configured),
+	// which also hides the CTA reactively the moment the bot confirms.
+	checkoutPhone?: string;
 };
 
 export const get = query({
@@ -874,6 +921,10 @@ export const get = query({
 			retailerLocale: (retailer?.locale ?? "en") as Locale,
 			storeName: retailer?.storeName ?? "",
 			retailerWaPhone: retailer?.waPhone,
+			checkoutPhone:
+				order.status === "pending"
+					? (process.env.WHATSAPP_CHECKOUT_PHONE ?? retailer?.waPhone)
+					: undefined,
 		};
 	},
 });
@@ -1983,24 +2034,37 @@ async function deleteOrderCascade(
 }
 
 /**
- * Hard-delete a single order (owner or admin acting-as). Permanent and
- * irreversible — the UI gates it behind an explicit confirm. Not plan-gated
- * (cleaning up your own orders is all-tier, mirroring `updateStatus`); admin
- * act-as writes are audited.
+ * Hard-delete a single order — **Kedaipal admin only**. Permanent and
+ * irreversible. A plain seller is rejected server-side (Forbidden) even though
+ * they own the store: permanently erasing order/payment records sits with
+ * Kedaipal, not the seller, who uses Cancel (tombstoned + buyer notified)
+ * instead. The gate is admin membership (`isAdmin`), NOT `access.actingAsAdmin`
+ * — an admin can erase orders in ANY store, including one they personally own
+ * (which resolves via the owner branch, so `actingAsAdmin` is false there). The
+ * dashboard hides the action for sellers, but this guard — not the hidden UI —
+ * is the real boundary. Admin act-as writes (a store they don't own) are audited.
+ * ClickUp `86eyaqzpd` (admin-only restriction) atop `86ey8fr8t` (the erase).
  */
 export const deleteOrder = mutation({
 	args: { orderId: v.id("orders") },
 	handler: async (ctx, { orderId }): Promise<void> => {
 		const { order, access } = await requireOrderAccess(ctx, orderId);
+		if (!(await isAdmin(ctx))) throw new Error("Forbidden");
 		await deleteOrderCascade(ctx, order);
 		await logAdminAction(ctx, access, "orders.hardDelete", orderId);
 	},
 });
 
 /**
- * Bulk hard-delete (the inbox multi-select). Mirrors `bulkUpdateStatus`: an
- * Order Inbox surface (Pro+, admin act-as bypasses), owner-checked per order (a
- * foreign id fails the whole batch), capped at 100, one batch audit row.
+ * Bulk hard-delete (the inbox multi-select) — **Kedaipal admin only**, same
+ * policy as the single `deleteOrder`. Capped at 100/batch, one batch audit row.
+ * No plan gate: permanent erasure is an admin ops action, not a paid feature.
+ *
+ * The admin gate is checked ONCE up front (`isAdmin` — one caller identity for
+ * the whole batch, cheaper than per-order and ownership-agnostic so an admin can
+ * bulk-erase in a store they own too). The per-order `requireRetailerAccess`
+ * stays: it confirms each order's retailer exists and supplies `batchAccess` for
+ * the audit row (an admin passes it for every store, so it never rejects here).
  */
 export const bulkDeleteOrders = mutation({
 	args: { orderIds: v.array(v.id("orders")) },
@@ -2008,16 +2072,14 @@ export const bulkDeleteOrders = mutation({
 		if (orderIds.length === 0) return { deleted: 0 };
 		if (orderIds.length > 100)
 			throw new ConvexError("Too many orders selected (max 100)");
+		if (!(await isAdmin(ctx))) throw new Error("Forbidden");
 
 		let deleted = 0;
 		let batchAccess: RetailerAccess | undefined;
 		for (const orderId of orderIds) {
 			const order = await ctx.db.get(orderId);
 			if (!order) throw new ConvexError("Order not found");
-			const firstResolve = batchAccess === undefined;
 			batchAccess = await requireRetailerAccess(ctx, order.retailerId);
-			if (firstResolve && !batchAccess.actingAsAdmin)
-				await assertPlanFeature(ctx, order.retailerId, "orderInbox");
 			await deleteOrderCascade(ctx, order);
 			deleted++;
 		}
