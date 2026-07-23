@@ -111,7 +111,7 @@ describe("lalamoveAmountToSen", () => {
 });
 
 describe("payload builders", () => {
-	test("quotation body wraps in data with string coordinates", () => {
+	test("quotation body wraps in data with string coordinates, rounded to 6dp", () => {
 		const body = buildQuotationBody({
 			serviceType: "MOTORCYCLE",
 			stops: [
@@ -120,7 +120,12 @@ describe("payload builders", () => {
 					address: "Origin",
 				},
 				{
-					coordinates: { latitude: 3.2, longitude: 101.7 },
+					// High-precision Google double + float noise — must round to
+					// ≤6 decimals so Lalamove's 15-fraction-digit regex accepts it.
+					coordinates: {
+						latitude: 3.0999999999999996,
+						longitude: 101.71528123456789,
+					},
 					address: "Destination",
 				},
 			],
@@ -128,7 +133,7 @@ describe("payload builders", () => {
 		expect(body.data.serviceType).toBe("MOTORCYCLE");
 		expect(body.data.stops).toEqual([
 			{ coordinates: { lat: "3.139", lng: "101.6869" }, address: "Origin" },
-			{ coordinates: { lat: "3.2", lng: "101.7" }, address: "Destination" },
+			{ coordinates: { lat: "3.1", lng: "101.715281" }, address: "Destination" },
 		]);
 	});
 

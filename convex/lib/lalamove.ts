@@ -141,12 +141,17 @@ export function lalamoveAmountToSen(raw: string | number): number {
 	return Number(whole) * 100 + Number((frac + "00").slice(0, 2));
 }
 
-/** Lalamove wants string coordinates ({lat: "3.139", lng: "101.687"}). */
+/** Lalamove wants string coordinates ({lat: "3.139", lng: "101.687"}). Rounded
+ * to 6 decimals (~11 cm — far finer than any rider needs): Google returns
+ * high-precision doubles and a raw String() can emit 16+ decimal places (also
+ * via float round-trip noise, e.g. 3.0999999999999996), which trips Lalamove's
+ * coordinate regex (max 15 fractional digits) and 422s the whole quote. */
 export function toLalamoveCoordinates(c: {
 	latitude: number;
 	longitude: number;
 }): { lat: string; lng: string } {
-	return { lat: String(c.latitude), lng: String(c.longitude) };
+	const round6 = (n: number) => String(Math.round(n * 1e6) / 1e6);
+	return { lat: round6(c.latitude), lng: round6(c.longitude) };
 }
 
 /** Our WhatsApp phones are stored as bare digits ("60123456789"); Lalamove
