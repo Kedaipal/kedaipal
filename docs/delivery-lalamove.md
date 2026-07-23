@@ -279,6 +279,33 @@ Fulfilment and registers the prod webhook URL in his Partner Portal
 (Arif walks him through it — subtask `86eyb5w24`; the vendor guide is the
 handout).
 
+## Local testing — driving a booking through its lifecycle
+
+Lalamove's sandbox never dispatches a rider, so `PICKED_UP` / `COMPLETED`
+(and our `shipped` / `delivered` auto-transitions) never fire naturally.
+`scripts/lalamove-simulate-webhook.mjs` replays a **signed** webhook to your
+deployment so you can walk a booking forward by hand. It's **sandbox-only**
+— it refuses to run unless `LALAMOVE_API_KEY` is a `pk_test_…` key, so it
+can never touch production.
+
+Supply the same sandbox key/secret the test store has saved (the signature
+must match what the webhook route verifies), then pass the booking's
+`deliveryJobs.providerOrderId` (Convex dashboard → Data → `deliveryJobs`):
+
+```bash
+export LALAMOVE_API_KEY=pk_test_xxxx
+export LALAMOVE_API_SECRET=sk_test_xxxx
+# after tapping "Book delivery" on a confirmed delivery order:
+node --env-file=.env.local scripts/lalamove-simulate-webhook.mjs <providerOrderId> driver     # rider + tracking link
+node --env-file=.env.local scripts/lalamove-simulate-webhook.mjs <providerOrderId> ON_GOING   # "Rider on the way"
+node --env-file=.env.local scripts/lalamove-simulate-webhook.mjs <providerOrderId> PICKED_UP  # order → shipped  (real WhatsApp to buyer)
+node --env-file=.env.local scripts/lalamove-simulate-webhook.mjs <providerOrderId> COMPLETED  # order → delivered (real WhatsApp to buyer)
+```
+
+Failure paths: `CANCELED` / `EXPIRED` / `REJECTED` (job fails + one-tap
+rebook). `PICKED_UP` / `COMPLETED` really message the order's buyer number —
+book a test order with your own number to see them land.
+
 ## Follow-ups (named, not built)
 
 - Low-balance banner from `WALLET_BALANCE_CHANGED` (store last-known
