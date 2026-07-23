@@ -145,32 +145,26 @@ booking failures surface Lalamove's error as "top up your Lalamove wallet,
 then retry". `cancelBooking` (with a rider-fee warning) deliberately skips
 the eligibility gates — cancelling must work even when booking wouldn't.
 
-### Auto-book on packed (opt-in, 22 Jul)
+### Prompt to book on packed (opt-in)
 
-Zaki's ask after the first dispatch test: don't make vendors tap Book on
-every order. Auto-booking at order CREATION would be wrong (order still
-pending/unpaid, food not started, fulfilment often days away, and it's the
-vendor's wallet moving) — the natural dispatch moment is **"the food is
-packed"**, which is a tap the seller already does. So:
-`retailers.deliveryBooking.autoBookOnPacked` (opt-in toggle inside the
-Lalamove setup, copy states plainly that marking Packed spends from their
-wallet at today's price). `applyStatusTransition` schedules
-`lalamove.autoBookForOrder` on every delivery order's transition into
-`packed`; the action re-checks EVERY gate via `getAutoBookContext` (opt-in,
-keys, pin, plan, no active job, **and payment received** — automation never
-spends the vendor's wallet on an unpaid order; credit/COD sellers keep the
-manual button, which shows an unpaid heads-up in its confirm dialog) and
-books with no confirm dialog. The trigger is symmetric: packed-then-paid is
-covered by `markPaymentReceived` re-scheduling the same action when payment
-lands on an already-packed delivery order — auto-book fires on whichever of
-(packed, paid) happens second. **Future-dated orders are never auto-booked**
-(pre-orders get packed the night before; a rider a day early is a paid
-mistake) — the seller books manually on the fulfilment day and the order
-card's hint says exactly that. The order-cancel dialog also warns when a
-rider booking is still active (cancel it too or pay for a wasted trip). Failures email the seller (same `deliveryJobFailed` template) and
-land in the amber rebook state. Discoverability: pre-packed orders show
-"⚡ Auto-book is on — marking this order as Packed books the rider
-automatically" right on the dispatch card.
+Zaki's ask after weighing silent auto-book: don't spend the vendor's wallet
+without them seeing the price. So there is **NO server-side auto-booking**.
+Instead, `retailers.deliveryBooking.promptBookOnPacked` (opt-in toggle in the
+Lalamove setup) makes the order page **auto-open the Book-delivery confirm
+dialog** (today's re-quoted price + variance vs buyer-paid) the moment the
+seller marks a **paid, due-today** delivery order **Packed** — one tap to
+dispatch, or dismiss. Nothing books or charges until the seller confirms.
+
+Client-side, in `BookDeliveryCard`: an effect watches for a live transition
+INTO `packed` (a page load of an already-packed order never prompts — the
+status is baselined first), then gates on promptBookOnPacked + payment
+received + not future-dated + no active job + bookable (blockReason null),
+and calls the same `prepareBooking` the manual button uses. Future-dated
+(pre-order) and unpaid orders never prompt; the card's ⚡ hint tells the
+seller what to expect. Scoped to the order-detail page — bulk/inbox packing
+doesn't fire the dialog (no modal-spam). This replaced the briefly-built
+silent auto-book (`autoBookForOrder`/`getAutoBookContext`, removed) — see
+git history if a zero-tap option is ever wanted for high-volume sellers.
 
 ### Phones — Lalamove MY only accepts +60
 

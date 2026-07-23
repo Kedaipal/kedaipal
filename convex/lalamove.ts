@@ -13,7 +13,6 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
 	action,
-	internalAction,
 	internalMutation,
 	internalQuery,
 	query,
@@ -36,7 +35,6 @@ import {
 	toLalamoveMyPhone,
 	toLalamovePhone,
 } from "./lib/lalamove";
-import { todayMytMidnight } from "./lib/fulfilmentDate";
 import { rateLimiter } from "./lib/rateLimiter";
 import { applyStatusTransition, resolveSharedOrder } from "./orders";
 import { assertPlanFeature } from "./subscriptions";
@@ -553,15 +551,7 @@ function formatDeliveryAddress(
 }
 
 type DispatchContext =
-	| {
-			ok: false;
-			reason:
-				| DispatchBlock
-				| "not_found"
-				| "auto_off"
-				| "auto_unpaid"
-				| "auto_future";
-	  }
+	| { ok: false; reason: DispatchBlock | "not_found" }
 	| {
 			ok: true;
 			orderId: Id<"orders">;
@@ -581,9 +571,8 @@ type DispatchContext =
 	  };
 
 /**
- * Shared eligibility + payload assembly for one booking attempt — the manual
- * path (getDispatchContext) and the packed-trigger auto path
- * (getAutoBookContext) differ ONLY in auth and how the plan gate resolves.
+ * Shared eligibility + payload assembly for one booking attempt (used by the
+ * dispatch context read below).
  */
 async function dispatchContextForOrder(
 	ctx: QueryCtx,
@@ -688,50 +677,6 @@ export const getDispatchContext = internalQuery({
 	},
 });
 
-/**
- * The packed-trigger twin: no user identity (runs from the scheduler), keyed
- * by orderId, and additionally requires the seller's autoBookOnPacked opt-in.
- * Every other eligibility rule is the same shared assembly.
- */
-export const getAutoBookContext = internalQuery({
-	args: { orderId: v.id("orders") },
-	handler: async (ctx, { orderId }): Promise<DispatchContext> => {
-		const order = await ctx.db.get(orderId);
-		if (!order) return { ok: false, reason: "not_found" };
-		const retailer = await ctx.db.get(order.retailerId);
-		if (!retailer) return { ok: false, reason: "not_found" };
-		if (retailer.deliveryBooking?.autoBookOnPacked !== true) {
-			return { ok: false, reason: "auto_off" };
-		}
-		// Automation only spends the vendor's wallet on PAID orders — "vendor
-		// books a rider, buyer never pays" must stay a deliberate manual choice
-		// (credit/COD sellers use the Book button). The packed-then-paid order
-		// of events is covered too: markPaymentReceived re-schedules the
-		// auto-book when payment lands on an already-packed order.
-		if (order.paymentStatus !== "received") {
-			return { ok: false, reason: "auto_unpaid" };
-		}
-		// Never send a rider before the buyer's chosen date — pre-orders are
-		// often packed the night before. Same-day (or dateless) orders only;
-		// for future dates the seller books manually on the day, and the order
-		// card's hint says so.
-		if (
-			order.fulfilmentDate !== undefined &&
-			order.fulfilmentDate > todayMytMidnight()
-		) {
-			return { ok: false, reason: "auto_future" };
-		}
-		// No identity here — the plan gate resolves on the retailer alone (a
-		// downgraded seller's automation pauses just like their manual button).
-		let planOk = true;
-		try {
-			await assertPlanFeature(ctx, retailer._id, "delivery");
-		} catch {
-			planOk = false;
-		}
-		return dispatchContextForOrder(ctx, order, retailer, planOk);
-	},
-});
 
 /** Map a Lalamove API failure to seller-facing copy — the wallet case gets
  * the explicit "top up" ask the ticket requires; everything else stays
@@ -770,7 +715,7 @@ export const prepareBooking = action({
 	): Promise<
 		| {
 				ok: false;
-				reason: DispatchBlock | "not_found" | "auto_off" | "auto_unpaid" | "auto_future" | "quote_failed";
+				reason: DispatchBlock | "not_found" | "quote_failed";
 				message?: string;
 		  }
 		| {
@@ -851,7 +796,7 @@ export const confirmBooking = action({
 	): Promise<
 		| {
 				ok: false;
-				reason: DispatchBlock | "not_found" | "auto_off" | "auto_unpaid" | "auto_future" | "booking_failed";
+				reason: DispatchBlock | "not_found" | "booking_failed";
 				message?: string;
 		  }
 		| { ok: true; providerOrderId: string; costActual: number }
@@ -1050,104 +995,6 @@ export const markJobCancelled = internalMutation({
 	},
 });
 
-/**
- * The packed-trigger automation (opt-in per store): quote at today's price
- * and book immediately, no confirm dialog — the seller opted into exactly
- * that trade. Scheduled by applyStatusTransition on every delivery order's
- * transition INTO packed; ALL eligibility re-checks live in
- * getAutoBookContext (off / no keys / no pin / plan lapse / already booked
- * → quiet no-op, the order-detail card explains why booking didn't run).
- * Real booking failures (wallet empty, provider down) email the seller with
- * the same failed-job template the webhook path uses, and the card offers
- * manual book/rebook as always.
- */
-export const autoBookForOrder = internalAction({
-	args: { orderId: v.id("orders") },
-	handler: async (ctx, { orderId }): Promise<void> => {
-		const context = await ctx.runQuery(internal.lalamove.getAutoBookContext, {
-			orderId,
-		});
-		if (!context.ok) {
-			// Expected in the common case (feature off) — log-only, never an error.
-			console.log("[lalamove] auto-book skipped", {
-				orderId,
-				reason: context.reason,
-			});
-			return;
-		}
-		try {
-			const quotationJson = await callLalamove(
-				context.credentials,
-				"POST",
-				"/v3/quotations",
-				buildQuotationBody({
-					serviceType: context.vehicleType,
-					stops: [
-						{ coordinates: context.origin, address: context.origin.label },
-						{
-							coordinates: context.destination,
-							address: context.destination.address,
-						},
-					],
-				}),
-			);
-			const quotation = parseQuotationResponse(quotationJson);
-			const orderJson = await callLalamove(
-				context.credentials,
-				"POST",
-				"/v3/orders",
-				buildPlaceOrderBody({
-					quotationId: quotation.quotationId,
-					sender: {
-						stopId: quotation.stopIds[0],
-						name: context.sender.name,
-						phone: context.sender.phone,
-					},
-					recipient: {
-						stopId: quotation.stopIds[1],
-						name: context.recipient.name,
-						phone: context.recipient.phone,
-						remarks: context.recipient.remarks,
-					},
-					orderRef: context.shortId,
-				}),
-			);
-			const placed = parseOrderResponse(orderJson);
-			await ctx.runMutation(internal.lalamove.recordBooking, {
-				orderId: context.orderId,
-				retailerId: context.retailerId,
-				providerOrderId: placed.providerOrderId,
-				costActual: placed.priceTotal,
-				quotationId: quotation.quotationId,
-				vehicleType: context.vehicleType,
-				shareLink: placed.shareLink,
-				providerStatus: placed.status,
-			});
-			console.log("[lalamove] auto-booked on packed", {
-				shortId: context.shortId,
-				providerOrderId: placed.providerOrderId,
-				costActual: placed.priceTotal,
-			});
-		} catch (err) {
-			// A parallel manual booking can win the recordBooking race — that's
-			// success, not failure.
-			if (
-				err instanceof ConvexError &&
-				String(err.data).includes("already in progress")
-			) {
-				return;
-			}
-			console.warn("[lalamove] auto-book failed", {
-				shortId: context.shortId,
-				message: err instanceof Error ? err.message : String(err),
-			});
-			await ctx.runAction(internal.email.notifyDeliveryJobFailed, {
-				orderId: context.orderId,
-				reason: friendlyBookingError(err),
-			});
-		}
-	},
-});
 
 /** Public job shape for the order-detail card — no credentials, no secrets. */
 export type DeliveryJobView = {
@@ -1174,10 +1021,9 @@ export const getDeliveryJob = query({
 	): Promise<{
 		job: DeliveryJobView | null;
 		blockReason: DispatchBlock | null;
-		/** Seller's packed-trigger automation — the card surfaces it on
-		 * pre-packed orders so "why did/didn't it book itself" is never a
-		 * mystery. */
-		autoBookOnPacked: boolean;
+		/** Seller's opt-in "prompt me to book when I mark packed" preference —
+		 * the card auto-opens the confirm dialog on the packed transition. */
+		promptBookOnPacked: boolean;
 	} | null> => {
 		const order = await resolveSharedOrder(ctx, { shortId });
 		if (!order) return null;
@@ -1215,10 +1061,10 @@ export const getDeliveryJob = query({
 			credentials,
 			planOk,
 		});
-		const autoBookOnPacked =
-			retailer.deliveryBooking?.autoBookOnPacked === true;
+		const promptBookOnPacked =
+			retailer.deliveryBooking?.promptBookOnPacked === true;
 		return {
-			autoBookOnPacked,
+			promptBookOnPacked,
 			job: latest
 				? {
 						status: latest.status,

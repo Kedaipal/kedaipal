@@ -9,7 +9,7 @@ import {
 	RefreshCw,
 	Truck,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
@@ -61,8 +61,37 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 	const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
 	const [cancelling, setCancelling] = useState(false);
 
+	// Prompt-to-book-on-packed (opt-in): when the seller marks a PAID, due-today
+	// delivery order Packed, auto-open the confirm dialog (today's price) so they
+	// see the cost and tap to spend — never a silent booking. Fires only on a
+	// live transition INTO packed observed by this mounted card; a page load of
+	// an already-packed order never prompts (baseline the status first).
+	const prevStatusRef = useRef<string | undefined>(undefined);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: handlePrepare is a stable hoisted closure; prompt keys off the status transition only.
+	useEffect(() => {
+		const prev = prevStatusRef.current;
+		prevStatusRef.current = order.status;
+		if (!dispatch || prev === undefined) return; // loading / mount baseline
+		const justPacked = prev !== "packed" && order.status === "packed";
+		if (!justPacked) return;
+		if (!dispatch.promptBookOnPacked) return;
+		if (order.paymentStatus !== "received") return; // only paid orders
+		if (dispatch.blockReason !== null) return; // not bookable (keys/pin/plan/…)
+		const hasActiveJob =
+			!!dispatch.job &&
+			!["completed", "canceled", "expired", "rejected"].includes(
+				dispatch.job.status,
+			);
+		if (hasActiveJob) return;
+		const futureDated =
+			order.fulfilmentDate !== undefined &&
+			order.fulfilmentDate > todayMytMidnight();
+		if (futureDated) return; // book manually on the delivery day
+		void handlePrepare();
+	}, [order.status, order.paymentStatus, dispatch]);
+
 	if (order.deliveryMethod !== "delivery" || !dispatch) return null;
-	const { job, blockReason, autoBookOnPacked } = dispatch;
+	const { job, blockReason, promptBookOnPacked } = dispatch;
 	const activeJob =
 		job && !["completed", "canceled", "expired", "rejected"].includes(job.status)
 			? job
@@ -267,15 +296,15 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 				)
 			) : null}
 
-			{/* Packed-trigger automation heads-up — shown BEFORE it fires so the
-			    seller is never surprised that marking Packed spent their wallet. */}
-			{autoBookOnPacked && !activeJob && bookable ? (
+			{/* Prompt-on-packed heads-up — tells the seller the booking dialog will
+			    pop when they mark this order packed (never a silent charge). */}
+			{promptBookOnPacked && !activeJob && bookable ? (
 				<p className="text-xs text-muted-foreground">
-					⚡ Auto-book is on — the rider books automatically once this order
-					is <span className="font-medium">Packed</span> and{" "}
+					⚡ You'll be asked to book a rider (with today's price) the moment
+					this order is <span className="font-medium">Packed</span> and{" "}
 					<span className="font-medium">paid</span>
 					{isFutureDated
-						? " — and books on the delivery date, not before (this order is for a later day, so book manually that morning)"
+						? " — but as it's for a later day, book it manually on the delivery morning"
 						: order.status === "packed" && order.paymentStatus !== "received"
 							? " (waiting on payment)"
 							: order.paymentStatus === "received" &&

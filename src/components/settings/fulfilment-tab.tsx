@@ -55,7 +55,7 @@ type DeliveryBookingSummary = {
 	enabled: boolean;
 	vehicleType: "MOTORCYCLE" | "CAR";
 	hasCredentials: boolean;
-	autoBookOnPacked: boolean;
+	promptBookOnPacked: boolean;
 	apiKeyHint?: string;
 };
 
@@ -570,8 +570,8 @@ function DeliveryChargeSection({
 	const [apiKey, setApiKey] = useState("");
 	const [apiSecret, setApiSecret] = useState("");
 	const [editingKeys, setEditingKeys] = useState(false);
-	const [autoBook, setAutoBook] = useState(
-		deliveryBooking?.autoBookOnPacked ?? false,
+	const [promptBook, setPromptBook] = useState(
+		deliveryBooking?.promptBookOnPacked ?? false,
 	);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -676,7 +676,7 @@ function DeliveryChargeSection({
 							deliveryBooking: {
 								enabled: true,
 								vehicleType,
-								autoBookOnPacked: autoBook,
+								promptBookOnPacked: promptBook,
 								apiKey: apiKey.trim() || undefined,
 								apiSecret: apiSecret.trim() || undefined,
 							},
@@ -958,27 +958,28 @@ function DeliveryChargeSection({
 						</div>
 					) : null}
 
-					{/* 5 · Packed-trigger automation (opt-in) — the vendor asked for
-					    zero-tap dispatch; the copy is explicit that marking Packed
-					    SPENDS from their wallet at today's price. */}
+					{/* 5 · Prompt-to-book on packed (opt-in) — NOT silent auto-book:
+					    marking a paid, due-today order Packed pops the confirm dialog
+					    with today's price, so the seller always sees the cost + taps
+					    to spend. */}
 					<div className="flex flex-col gap-1.5 rounded-xl border border-input p-3">
 						<div className="flex items-start justify-between gap-4">
 							<div>
 								<p className="text-sm font-medium">
-									Auto-book rider when you mark an order{" "}
+									Ask me to book a rider when I mark an order{" "}
 									<span className="font-semibold">Packed</span>
 								</p>
 								<p className="mt-0.5 text-xs text-muted-foreground leading-relaxed">
-									{autoBook
-										? "On — the moment a delivery order is both Packed and paid, the rider is booked automatically at that day's price from your Lalamove wallet. No extra taps. Unpaid orders are never auto-booked (you can still book those manually), and if a booking fails you get an email plus a Rebook button on the order."
-										: "Off — you book each rider yourself with the Book delivery button on the order (two taps, with a price check first)."}
+									{promptBook
+										? "On — when you mark a paid, same-day delivery order Packed, the 'Book a rider?' dialog opens with today's price so you can confirm in one tap (or dismiss). Nothing is booked or charged until you confirm. Future-dated and unpaid orders don't prompt."
+										: "Off — you open the Book delivery button yourself when you're ready. Turn this on to be prompted the moment an order is packed."}
 								</p>
 							</div>
 							<ToggleSwitch
-								on={autoBook}
-								onChange={setAutoBook}
+								on={promptBook}
+								onChange={setPromptBook}
 								disabled={lalamoveLocked}
-								label="Auto-book rider on packed"
+								label="Prompt to book a rider on packed"
 							/>
 						</div>
 					</div>

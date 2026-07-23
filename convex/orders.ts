@@ -1854,17 +1854,11 @@ export async function applyStatusTransition(
 		orderId: order._id,
 	});
 
-	// Packed = "ready for pickup NOW" — the natural rider-dispatch moment.
-	// Opt-in Lalamove auto-booking (retailers.deliveryBooking.autoBookOnPacked)
-	// rides this transition; the scheduled action re-checks EVERY eligibility
-	// gate and quietly no-ops when the store hasn't opted in, so scheduling
-	// unconditionally for delivery orders costs nothing. See
-	// docs/delivery-lalamove.md ("Auto-book on packed").
-	if (status === "packed" && order.deliveryMethod === "delivery") {
-		await ctx.scheduler.runAfter(0, internal.lalamove.autoBookForOrder, {
-			orderId: order._id,
-		});
-	}
+	// NOTE: Lalamove dispatch is never triggered server-side. Marking a delivery
+	// order packed surfaces a "book a rider now?" prompt CLIENT-side (opt-in
+	// deliveryBooking.promptBookOnPacked) so the seller always sees today's
+	// price and taps to confirm — money never moves without a human. See
+	// docs/delivery-lalamove.md ("Prompt to book on packed") + BookDeliveryCard.
 }
 
 export const updateStatus = mutation({
@@ -2619,15 +2613,6 @@ export const markPaymentReceived = mutation({
 			internal.whatsapp.notifyPaymentReceived,
 			{ orderId },
 		);
-		// Auto-book fires on whichever lands SECOND of (packed, paid): the
-		// packed transition schedules it but the action skips unpaid orders, so
-		// payment arriving on an already-packed delivery order re-triggers here.
-		// Same action, same full eligibility re-check — quiet no-op when off.
-		if (order.deliveryMethod === "delivery" && order.status === "packed") {
-			await ctx.scheduler.runAfter(0, internal.lalamove.autoBookForOrder, {
-				orderId,
-			});
-		}
 		await logAdminAction(ctx, access, "orders.confirmPayment", orderId);
 	},
 });

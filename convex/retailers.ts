@@ -251,13 +251,13 @@ const deliveryBookingValidator = v.object({
 	apiKey: v.optional(v.string()),
 	apiSecret: v.optional(v.string()),
 	// undefined = keep the stored preference (same posture as the key fields).
-	autoBookOnPacked: v.optional(v.boolean()),
+	promptBookOnPacked: v.optional(v.boolean()),
 });
 
 type DeliveryBooking = {
 	enabled: boolean;
 	vehicleType: "MOTORCYCLE" | "CAR";
-	autoBookOnPacked?: boolean;
+	promptBookOnPacked?: boolean;
 	apiKey?: string;
 	apiSecret?: string;
 };
@@ -269,7 +269,7 @@ export type DeliveryBookingSummary = {
 	enabled: boolean;
 	vehicleType: "MOTORCYCLE" | "CAR";
 	hasCredentials: boolean;
-	autoBookOnPacked: boolean;
+	promptBookOnPacked: boolean;
 	/** Last 4 chars of the seller's own key ("…a1b2") so the settings UI can
 	 * show which key is stored without exposing it. */
 	apiKeyHint?: string;
@@ -283,7 +283,7 @@ function summarizeDeliveryBooking(
 		enabled: booking.enabled,
 		vehicleType: booking.vehicleType,
 		hasCredentials: resolveLalamoveCredentials(booking) !== null,
-		autoBookOnPacked: booking.autoBookOnPacked === true,
+		promptBookOnPacked: booking.promptBookOnPacked === true,
 		apiKeyHint: booking.apiKey ? booking.apiKey.slice(-4) : undefined,
 	};
 }
@@ -1319,9 +1319,9 @@ export const updateSettings = mutation({
 				const clean: DeliveryBooking = {
 					enabled: args.deliveryBooking.enabled,
 					vehicleType: args.deliveryBooking.vehicleType,
-					autoBookOnPacked:
-						args.deliveryBooking.autoBookOnPacked ??
-						prev?.autoBookOnPacked ??
+					promptBookOnPacked:
+						args.deliveryBooking.promptBookOnPacked ??
+						prev?.promptBookOnPacked ??
 						undefined,
 					apiKey:
 						args.deliveryBooking.apiKey === undefined
