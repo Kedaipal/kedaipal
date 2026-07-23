@@ -285,13 +285,27 @@ export function CheckoutSheet({
 	// earliest day) through today + 30. Memoised on the retailer setting so the
 	// "today" anchor is computed once per open, not on every keystroke. The
 	// server re-validates against the live window — see convex/lib/fulfilmentDate.
+	// Effective notice = the store-level setting raised by the strictest cart
+	// item's per-product override (a custom cake needs lead time; ready stock
+	// doesn't). Server enforces the same max at create.
+	const cartNoticeDays = cart.items.reduce(
+		(max, item) => Math.max(max, item.minNoticeDays ?? 0),
+		0,
+	);
+	// A custom / price-on-quote line means the date is a REQUEST, not a promise
+	// — the mockup conversation settles the real date. Copy adapts below.
+	const hasCustomLine = cart.items.some(
+		(item) => item.isCustom === true || item.quoteOnRequest === true,
+	);
 	const { minYmd, maxYmd } = useMemo(() => {
-		const bounds = fulfilmentDateBounds(minFulfilmentNoticeDays);
+		const bounds = fulfilmentDateBounds(
+			Math.max(minFulfilmentNoticeDays ?? 0, cartNoticeDays),
+		);
 		return {
 			minYmd: ymdFromEpoch(bounds.min),
 			maxYmd: ymdFromEpoch(bounds.max),
 		};
-	}, [minFulfilmentNoticeDays]);
+	}, [minFulfilmentNoticeDays, cartNoticeDays]);
 
 	const noCheckoutPhone = !checkoutPhone;
 	// Self-collect surfaces on the storefront only when the retailer opted in
@@ -456,6 +470,19 @@ export function CheckoutSheet({
 			}
 		},
 	});
+
+	// The form's default date is captured at mount (often before the cart has
+	// its strictest item, and long-lived tabs cross midnight) — pull a stale
+	// value up to the current floor whenever the sheet is open.
+	useEffect(() => {
+		if (!open) return;
+		const current = form.store.state.values.fulfilmentDate;
+		if (current && current < minYmd) {
+			form.setFieldValue("fulfilmentDate", minYmd);
+		}
+		// biome-ignore lint/correctness/useExhaustiveDependencies: form identity is stable; value read fresh inside.
+	}, [open, minYmd]);
+
 
 	function handleSubmit(e: FormEvent) {
 		submitThenFocusError(form, e);
@@ -820,19 +847,34 @@ export function CheckoutSheet({
 														{(field) => (
 															<field.DateField
 																label={
-																	deliveryMethod === "self_collect"
-																		? isDropOff
-																			? "When should we meet?"
-																			: "When will you collect?"
-																		: "When do you need it delivered?"
+																	hasCustomLine
+																		? "Requested date"
+																		: deliveryMethod === "self_collect"
+																			? isDropOff
+																				? "When should we meet?"
+																				: "When will you collect?"
+																			: "When do you need it delivered?"
 																}
 																min={minYmd}
 																max={maxYmd}
 																required
 																description={
-																	isDropOff
-																		? "Pick the date you'll meet at the drop-off point."
-																		: "Pick the date you need this order."
+																	// Custom carts: the date is the buyer's ASK — the
+																	// seller settles the final date in the design
+																	// conversation. A notice floor raised by a cart
+																	// item is explained, never silent.
+																	hasCustomLine
+																		? `Your requested date — the seller confirms the final date with you after the design is agreed.${
+																				cartNoticeDays > 0
+																					? ` Items in your cart need at least ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice.`
+																					: ""
+																			}`
+																		: cartNoticeDays >
+																				(minFulfilmentNoticeDays ?? 0)
+																			? `An item in your cart needs ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice — that's the earliest date you can pick.`
+																			: isDropOff
+																				? "Pick the date you'll meet at the drop-off point."
+																				: "Pick the date you need this order."
 																}
 															/>
 														)}

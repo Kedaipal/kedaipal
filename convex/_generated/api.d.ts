@@ -67,6 +67,7 @@ import type * as lib_whatsappCopy from "../lib/whatsappCopy.js";
 import type * as lib_whatsappSignature from "../lib/whatsappSignature.js";
 import type * as lib_whatsappWebhook from "../lib/whatsappWebhook.js";
 import type * as migrations from "../migrations.js";
+import type * as notifications from "../notifications.js";
 import type * as orders from "../orders.js";
 import type * as paymentReminders from "../paymentReminders.js";
 import type * as payments_provider from "../payments/provider.js";
@@ -145,6 +146,7 @@ declare const fullApi: ApiFromModules<{
   "lib/whatsappSignature": typeof lib_whatsappSignature;
   "lib/whatsappWebhook": typeof lib_whatsappWebhook;
   migrations: typeof migrations;
+  notifications: typeof notifications;
   orders: typeof orders;
   paymentReminders: typeof paymentReminders;
   "payments/provider": typeof payments_provider;

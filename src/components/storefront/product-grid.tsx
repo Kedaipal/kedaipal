@@ -132,6 +132,7 @@ export function ProductGrid({
 				currency: p.currency,
 				imageUrl: variant.imageUrls[0] ?? p.imageUrls[0],
 				quoteOnRequest: variant.requiresProof === true && variant.price === 0,
+				minNoticeDays: p.minNoticeDays,
 				isCustom: variant.isCustom,
 				note: custom?.note,
 				customImageStorageId: custom?.imageStorageId,

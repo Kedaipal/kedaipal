@@ -474,20 +474,10 @@ export const create = mutation({
 		const retailer = await ctx.db.get(args.retailerId);
 		if (!retailer) throw new ConvexError("Retailer not found");
 
-		// Fulfilment date: validate against the retailer's notice window when the
-		// buyer supplied one. Applies to BOTH delivery and self-collect — a cake
-		// delivered on the wrong day is as bad as one collected late.
+		// Fulfilment date is validated AFTER the item loop below — the effective
+		// notice window is max(store setting, every item's per-product override),
+		// and the overrides only become known once items resolve.
 		let sanitizedFulfilmentDate: number | undefined;
-		if (args.fulfilmentDate !== undefined) {
-			try {
-				sanitizedFulfilmentDate = assertValidFulfilmentDate(
-					args.fulfilmentDate,
-					retailer.minFulfilmentNoticeDays,
-				);
-			} catch (err) {
-				throw new ConvexError((err as Error).message);
-			}
-		}
 
 		// Delivery must be on offer. Mirrors the storefront gate (which hides the
 		// delivery option when offerDelivery is off) and closes the gap where a
@@ -548,6 +538,8 @@ export const create = mutation({
 		>();
 		// Whole-order mockup gating: set if ANY line's product requires a proof.
 		let requiresMockup = false;
+		// Strictest per-product notice override across the cart (0 = none).
+		let maxItemNoticeDays = 0;
 		for (const item of args.items) {
 			if (!Number.isInteger(item.quantity) || item.quantity < 1)
 				throw new ConvexError("Quantity must be a positive integer");
@@ -582,6 +574,10 @@ export const create = mutation({
 			// made-to-order "Custom" variant, not the fixed sizes.
 			const variantRequiresProof = variant.requiresProof ?? product.requiresProof;
 			if (variantRequiresProof === true) requiresMockup = true;
+			// Per-product fulfilment-notice override — the strictest item rules.
+			if ((product.minNoticeDays ?? 0) > maxItemNoticeDays) {
+				maxItemNoticeDays = product.minNoticeDays ?? 0;
+			}
 			const variantId = variant._id;
 			// The custom line has no optionValues — label it with its custom name so
 			// the order, WhatsApp confirm, and seller dashboard show "… (Custom)"
@@ -617,6 +613,24 @@ export const create = mutation({
 				price: variant.price,
 				quantity: item.quantity,
 			});
+		}
+
+		// Fulfilment date: validated against the EFFECTIVE notice window — the
+		// store-level setting raised by any cart item's per-product override
+		// (custom cakes need lead time; ready stock doesn't). Applies to BOTH
+		// delivery and self-collect. Counter checkout doesn't run this path.
+		if (args.fulfilmentDate !== undefined) {
+			try {
+				sanitizedFulfilmentDate = assertValidFulfilmentDate(
+					args.fulfilmentDate,
+					Math.max(
+						retailer.minFulfilmentNoticeDays ?? 0,
+						maxItemNoticeDays,
+					),
+				);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
 		}
 
 		// Delivery charge (86extzdr8): resolved server-side at create — the
@@ -1952,7 +1966,19 @@ async function deleteOrderCascade(
 		await ctx.db.patch(session._id, { orderId: undefined, updatedAt: now });
 	}
 
-	// 5. Delete the order.
+	// 5. Delete the order's Lalamove booking ledger. An ACTIVE booking is the
+	//    seller's to cancel on Lalamove's side (the delete dialog warns before
+	//    this point); once the rows are gone, late webhooks for these provider
+	//    ids become unmatched traffic and the route acks + ignores them.
+	const jobs = await ctx.db
+		.query("deliveryJobs")
+		.withIndex("by_order", (q) => q.eq("orderId", order._id))
+		.collect();
+	for (const job of jobs) {
+		await ctx.db.delete(job._id);
+	}
+
+	// 6. Delete the order.
 	await ctx.db.delete(order._id);
 }
 

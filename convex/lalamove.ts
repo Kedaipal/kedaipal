@@ -1209,3 +1209,29 @@ export const getDeliveryJob = query({
 	},
 });
 
+
+/**
+ * Daily hygiene: delete checkout-quote rows that were never consumed (buyer
+ * abandoned the sheet, superseded re-quotes). Anything older than 24h is far
+ * past CHECKOUT_QUOTE_MAX_AGE_MS, so nothing valid can ever be purged. Rides
+ * the system creation-time index; batch-capped as a runaway guard (the next
+ * night catches any remainder).
+ */
+export const purgeStaleCheckoutQuotes = internalMutation({
+	args: {},
+	handler: async (ctx): Promise<void> => {
+		const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+		const stale = await ctx.db
+			.query("deliveryQuotes")
+			.withIndex("by_creation_time", (q) => q.lt("_creationTime", cutoff))
+			.take(1000);
+		for (const row of stale) {
+			await ctx.db.delete(row._id);
+		}
+		if (stale.length > 0) {
+			console.log("[lalamove] purged stale checkout quotes", {
+				count: stale.length,
+			});
+		}
+	},
+});

@@ -1321,8 +1321,16 @@ function OrderDetailRoute() {
 				title={`Delete order #${order.shortId} permanently?`}
 				description={
 					paymentStatus === "received" || order.status === "delivered"
-						? "This order is paid/completed — deleting erases it from your sales records, receipts and CSV exports. Stock isn't affected and the customer is NOT notified. This can't be undone."
+						? `This order is paid/completed — deleting erases it from your sales records, receipts and CSV exports. Stock isn't affected and the customer is NOT notified. This can't be undone.${
+								hasActiveRiderBooking
+									? " ⚠️ A Lalamove rider booking is still active — cancel it from the Lalamove Delivery card FIRST or the rider still shows up."
+									: ""
+							}`
 						: `This erases the order, its timeline and any uploaded images for good.${
+								hasActiveRiderBooking
+									? " ⚠️ A Lalamove rider booking is still active — cancel it from the Lalamove Delivery card FIRST or the rider still shows up."
+									: ""
+							}${
 								order.status === "cancelled"
 									? ""
 									: " Reserved stock is returned and your totals are adjusted."

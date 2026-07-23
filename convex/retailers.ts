@@ -1858,6 +1858,18 @@ export const deleteUser = internalMutation({
 			await ctx.db.delete(category._id);
 		}
 
+		// Lalamove delivery ledger + transient checkout quotes.
+		const deliveryJobs = await ctx.db
+			.query("deliveryJobs")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.collect();
+		for (const job of deliveryJobs) await ctx.db.delete(job._id);
+		const deliveryQuotes = await ctx.db
+			.query("deliveryQuotes")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.collect();
+		for (const quote of deliveryQuotes) await ctx.db.delete(quote._id);
+
 		// Customers.
 		const customers = await ctx.db
 			.query("customers")

@@ -156,6 +156,7 @@ function EditProductRoute() {
 					name: product.name,
 					description: product.description,
 					hidden: product.hidden,
+					minNoticeDays: product.minNoticeDays,
 					categoryIds,
 					imageStorageIds: product.imageStorageIds,
 					imageUrls: product.imageUrls,
@@ -216,6 +217,7 @@ function EditProductRoute() {
 						name: values.name,
 						description: values.description ?? null,
 						hidden: values.hidden,
+						minNoticeDays: values.minNoticeDays,
 						imageStorageIds: values.imageStorageIds,
 					});
 					await saveVariantGrid({

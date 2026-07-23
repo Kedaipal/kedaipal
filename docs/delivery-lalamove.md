@@ -208,6 +208,25 @@ bookings still work, but shipped/delivered stop being automatic — the
 order just stays where it is until the seller advances it by hand. Dev
 deployment URL: `https://qualified-chihuahua-441.convex.site/webhook/lalamove`.
 
+### Hygiene + lifecycle guards (pre-ship audit, 22 Jul)
+
+- `deleteOrderCascade` (hard delete) also removes the order's `deliveryJobs`
+  rows; the delete dialog warns first when a booking is still ACTIVE (same
+  warning as cancel — the rider still shows up unless cancelled on Lalamove).
+- Account deletion cascades `deliveryJobs` + `deliveryQuotes` (new
+  `by_retailer` index on quotes).
+- Abandoned `deliveryQuotes` rows are purged daily
+  (`purgeStaleCheckoutQuotes` cron, >24h old — far past the 30-min consume
+  window).
+- Buyer address edits are pending-only (`updateDeliveryAddress` guard), so an
+  address can never change under an active rider booking — verified, not new.
+- Webhook handler null-guards deleted/cancelled orders (acts on neither).
+- Per-product fulfilment notice (`products.minNoticeDays`) raises the
+  checkout date floor for made-to-order items — see
+  docs/fulfilment-date.md; custom carts label the field "Requested date".
+- Seller-side awareness: browser order alerts (new order + booking failed)
+  — see docs/order-notifications.md.
+
 ## Sandbox E2E — verified 21 Jul 2026
 
 Real sandbox pass with test keys (then platform-env-based; the same keys

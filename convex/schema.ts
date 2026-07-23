@@ -373,6 +373,13 @@ export default defineSchema({
 		// fallback for variants that haven't been backfilled. See proof-approval.md
 		// + product-variants.md §5/§7.
 		blockWhenOutOfStock: v.optional(v.boolean()),
+		// Minimum days' notice THIS product needs before a fulfilment date
+		// (made-to-order/custom items). Checkout + orders.create take the MAX of
+		// the store-level minFulfilmentNoticeDays and every cart item's override,
+		// so one custom cake raises the whole order's earliest date. Undefined =
+		// no override (0 is normalized to unset — one spelling). Capped at
+		// MAX_NOTICE_DAYS. Counter checkout ignores notice entirely (unchanged).
+		minNoticeDays: v.optional(v.number()),
 		// DEPRECATED — moved to productVariants.requiresProof (per-variant).
 		requiresProof: v.optional(v.boolean()),
 		channel: v.union(v.literal("whatsapp")),
@@ -913,7 +920,9 @@ export default defineSchema({
 	// then loads the row by id, so the frozen fee can never be tampered with from
 	// the browser. Rows are transient (consumed at create or abandoned); a stale
 	// row past QUOTE_MAX_AGE_MS is refused at create and the order falls back to
-	// the deliveryFeePending path. No index needed — always fetched by _id.
+	// the deliveryFeePending path. Fetched by _id in the order flow; abandoned
+	// rows are purged daily (purgeStaleCheckoutQuotes cron) via the system
+	// creation-time index, and `by_retailer` serves the account-deletion cascade.
 	deliveryQuotes: defineTable({
 		retailerId: v.id("retailers"),
 		// Lalamove quotation id — reused at create for the snapshot audit trail.
@@ -927,7 +936,7 @@ export default defineSchema({
 		latitude: v.number(),
 		longitude: v.number(),
 		quotedAt: v.number(),
-	}),
+	}).index("by_retailer", ["retailerId"]),
 
 	// One rider booking (dispatch) against an order. The ledger row of record:
 	// actual cost the seller's own Lalamove wallet paid (BYO-only — audit +

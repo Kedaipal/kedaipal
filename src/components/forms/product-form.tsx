@@ -14,10 +14,12 @@ import {
 import { type FormEvent, type ReactNode, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { MAX_NOTICE_DAYS } from "../../../convex/lib/fulfilmentDate";
 import { convexErrorMessage, parsePriceInput } from "../../lib/format";
 import { reorderByIds } from "../../lib/reorder";
 import { productDetailsSchema } from "../../lib/schemas";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { Markdown } from "../ui/markdown";
 import { SortableList } from "../ui/sortable-list";
 import { CategoryPicker } from "./category-picker";
@@ -39,6 +41,9 @@ export interface ProductFormSubmitValues {
 	// Storefront visibility. true = hidden from the public store (still sellable
 	// at the counter). See docs/hidden-products.md.
 	hidden: boolean;
+	// Per-product fulfilment-notice override (days). undefined = no override —
+	// the store-level setting rules. Checkout takes the max across the cart.
+	minNoticeDays?: number;
 	// FULL category membership (the picker's staged selection) — the caller
 	// diffs it via categories.setProductCategories. See docs/product-categories.md.
 	categoryIds: Id<"categories">[];
@@ -71,6 +76,7 @@ interface ProductFormProps {
 		name?: string;
 		description?: string;
 		hidden?: boolean;
+		minNoticeDays?: number;
 		categoryIds?: Id<"categories">[];
 		// Deprecated product-level defaults — used only to seed per-variant flags
 		// for legacy products whose variants predate the per-variant columns.
@@ -462,6 +468,11 @@ export function ProductForm({
 	const [serverError, setServerError] = useState<string | null>(null);
 	const [showPreview, setShowPreview] = useState(false);
 	const [hidden, setHidden] = useState(initialValues?.hidden ?? false);
+	// Draft as a string so the input can be cleared while typing; parsed at
+	// submit (blank/0 = no override).
+	const [minNoticeDraft, setMinNoticeDraft] = useState(
+		initialValues?.minNoticeDays ? String(initialValues.minNoticeDays) : "",
+	);
 	const [categoryIds, setCategoryIds] = useState<Id<"categories">[]>(
 		initialValues?.categoryIds ?? [],
 	);
@@ -504,10 +515,15 @@ export function ProductForm({
 			const variants = "variants" in built ? built.variants : [];
 
 			try {
+				const minNoticeParsed = Number.parseInt(minNoticeDraft, 10);
 				await onSubmit({
 					name: parsed.name,
 					description: parsed.description,
 					hidden,
+					minNoticeDays:
+						Number.isInteger(minNoticeParsed) && minNoticeParsed > 0
+							? Math.min(minNoticeParsed, MAX_NOTICE_DAYS)
+							: 0,
 					categoryIds,
 					imageStorageIds: images.map((i) => i.id),
 					options: hasOptions
@@ -579,6 +595,39 @@ export function ProductForm({
 			</form.Subscribe>
 
 			<VisibilityControl hidden={hidden} onChange={setHidden} />
+
+			{/* Per-product fulfilment notice (made-to-order lead time). Sits with
+			    the other product-level behaviour controls; buyers see the effect
+			    as a raised earliest-date floor at checkout, with copy explaining
+			    which is why the helper here spells the interaction out. */}
+			<section className="flex flex-col gap-2 rounded-2xl border border-border bg-card p-4 shadow-sm">
+				<div className="flex items-center justify-between gap-4">
+					<div>
+						<p className="text-sm font-semibold">Minimum notice</p>
+						<p className="mt-0.5 text-xs text-muted-foreground leading-relaxed">
+							Days of lead time this product needs (custom / made-to-order
+							items). Buyers can&apos;t pick a delivery or pickup date sooner
+							than this — it raises your store-level notice when higher, and
+							the strictest item in a cart sets the whole order&apos;s
+							earliest date. Leave 0 for no extra notice.
+						</p>
+					</div>
+					<div className="flex shrink-0 items-center gap-1.5">
+						<Input
+							type="number"
+							inputMode="numeric"
+							min={0}
+							max={MAX_NOTICE_DAYS}
+							value={minNoticeDraft}
+							onChange={(e) => setMinNoticeDraft(e.target.value)}
+							placeholder="0"
+							className="h-11 w-20 text-center"
+							aria-label="Minimum notice in days"
+						/>
+						<span className="text-xs text-muted-foreground">days</span>
+					</div>
+				</div>
+			</section>
 
 			<CategoryPicker
 				retailerId={retailerId}

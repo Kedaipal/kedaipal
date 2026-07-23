@@ -1,4 +1,5 @@
 import { ConvexError, v } from "convex/values";
+import { MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
 import {
@@ -24,6 +25,19 @@ import {
 	sameOptionValues,
 	variantLabel,
 } from "./lib/variant";
+
+/** Per-product fulfilment-notice override (made-to-order items). Integer days
+ * in [0, MAX_NOTICE_DAYS]; 0 normalizes to unset so "no override" has one
+ * spelling. Checkout/create take the MAX across cart items + store setting. */
+function sanitizeMinNoticeDays(raw: number | undefined): number | undefined {
+	if (raw === undefined) return undefined;
+	if (!Number.isInteger(raw) || raw < 0 || raw > MAX_NOTICE_DAYS) {
+		throw new ConvexError(
+			`Minimum notice must be a whole number of days between 0 and ${MAX_NOTICE_DAYS}`,
+		);
+	}
+	return raw === 0 ? undefined : raw;
+}
 
 const MAX_IMAGES_PER_PRODUCT = 5;
 const MAX_IMAGES_PER_VARIANT = 3;
@@ -485,6 +499,7 @@ export const create = mutation({
 		options: v.optional(v.array(optionAxisValidator)),
 		blockWhenOutOfStock: v.optional(v.boolean()),
 		requiresProof: v.optional(v.boolean()),
+		minNoticeDays: v.optional(v.number()),
 		hidden: v.optional(v.boolean()),
 		variants: v.array(variantInputValidator),
 	},
@@ -531,6 +546,7 @@ export const create = mutation({
 			options,
 			blockWhenOutOfStock: args.blockWhenOutOfStock,
 			requiresProof: args.requiresProof,
+			minNoticeDays: sanitizeMinNoticeDays(args.minNoticeDays),
 			hidden: args.hidden,
 			sortOrder: args.sortOrder,
 			active: true,
@@ -591,6 +607,8 @@ export const update = mutation({
 		active: v.optional(v.boolean()),
 		blockWhenOutOfStock: v.optional(v.boolean()),
 		requiresProof: v.optional(v.boolean()),
+		// 0 clears the override (normalized to unset); undefined = no change.
+		minNoticeDays: v.optional(v.number()),
 		hidden: v.optional(v.boolean()),
 	},
 	handler: async (ctx, { productId, ...fields }): Promise<void> => {
@@ -624,6 +642,8 @@ export const update = mutation({
 			updates.blockWhenOutOfStock = fields.blockWhenOutOfStock;
 		if (fields.requiresProof !== undefined)
 			updates.requiresProof = fields.requiresProof;
+		if (fields.minNoticeDays !== undefined)
+			updates.minNoticeDays = sanitizeMinNoticeDays(fields.minNoticeDays);
 		if (fields.hidden !== undefined) updates.hidden = fields.hidden;
 
 		// Keep the denormalized category counts accurate when this edit flips the

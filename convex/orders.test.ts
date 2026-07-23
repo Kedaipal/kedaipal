@@ -75,6 +75,7 @@ async function seedProduct(
 		stock: number;
 		blockWhenOutOfStock: boolean;
 		requiresProof: boolean;
+		minNoticeDays: number;
 	}> = {},
 ): Promise<Id<"products">> {
 	const asUser = t.withIdentity({ subject: userId });
@@ -86,6 +87,7 @@ async function seedProduct(
 		sortOrder: 0,
 		blockWhenOutOfStock: overrides.blockWhenOutOfStock ?? true,
 		requiresProof: overrides.requiresProof ?? false,
+		minNoticeDays: overrides.minNoticeDays,
 		variants: [
 			{
 				optionValues: [],
@@ -4777,5 +4779,81 @@ describe("orders — delivery charge", () => {
 				fee: 100.5,
 			}),
 		).rejects.toThrow(/whole/);
+	});
+});
+
+describe("per-product fulfilment notice (minNoticeDays)", () => {
+	test("a cart item's override raises the whole order's earliest date", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const readyStock = await seedProduct(t, USER_A, retailer._id, {
+			stock: 100,
+		});
+		const customCake = await seedProduct(t, USER_A, retailer._id, {
+			name: "Custom cake",
+			stock: 100,
+			minNoticeDays: 5,
+		});
+
+		// Mixed cart: today violates the cake's 5-day floor even though the
+		// store-level setting allows same-day.
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [
+					{ productId: readyStock, quantity: 1 },
+					{ productId: customCake, quantity: 1 },
+				],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer: { name: "Aina" },
+				deliveryAddress: validAddress,
+				fulfilmentDate: todayMytMidnight(),
+			}),
+		).rejects.toThrow(/too soon/i);
+
+		// today + 5 days satisfies the strictest item → order lands.
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [
+				{ productId: readyStock, quantity: 1 },
+				{ productId: customCake, quantity: 1 },
+			],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Aina" },
+			deliveryAddress: validAddress,
+			fulfilmentDate: todayMytMidnight() + 5 * DAY_MS,
+		});
+		expect(shortId).toMatch(/^ORD-/);
+
+		// The ready-stock item ALONE keeps same-day (no override in the cart).
+		const sameDay = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId: readyStock, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Tan" },
+			deliveryAddress: validAddress,
+			fulfilmentDate: todayMytMidnight(),
+		});
+		expect(sameDay.shortId).toMatch(/^ORD-/);
+	});
+
+	test("products.create rejects junk notice values; 0 normalizes to unset", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await expect(
+			seedProduct(t, USER_A, retailer._id, { minNoticeDays: -1 }),
+		).rejects.toThrow(/notice/i);
+		await expect(
+			seedProduct(t, USER_A, retailer._id, { minNoticeDays: 45 }),
+		).rejects.toThrow(/notice/i);
+		const zeroId = await seedProduct(t, USER_A, retailer._id, {
+			name: "Zero notice",
+			minNoticeDays: 0,
+		});
+		const stored = await t.run(async (ctx) => ctx.db.get(zeroId));
+		expect(stored?.minNoticeDays).toBeUndefined();
 	});
 });
