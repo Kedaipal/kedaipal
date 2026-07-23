@@ -17,6 +17,7 @@ import {
 	inferLalamoveEnv,
 	resolveLalamoveCredentials,
 	signLalamoveRequest,
+	toLalamoveCoordinates,
 	toLalamoveMyPhone,
 	toLalamovePhone,
 } from "./lalamove";
@@ -272,5 +273,27 @@ describe("toLalamoveMyPhone", () => {
 		expect(toLalamoveMyPhone("6012345678901234")).toBeNull();
 		// "60" prefix but the number is actually a landline-length stub
 		expect(toLalamoveMyPhone("603123")).toBeNull();
+	});
+});
+
+describe("toLalamoveCoordinates — precision guard", () => {
+	test("rounds to 6 decimals so Google's 15+ digit doubles pass Lalamove's regex", () => {
+		// The bug: String(3.1501234567890123) → 16 fractional digits → 422.
+		expect(toLalamoveCoordinates({ latitude: 3.1501234567890123, longitude: 101.60671999999999 })).toEqual({
+			lat: "3.150123",
+			lng: "101.60672",
+		});
+	});
+	test("float round-trip noise is normalized (3.0999999999999996 → 3.1)", () => {
+		expect(toLalamoveCoordinates({ latitude: 3.0999999999999996, longitude: 101.7 })).toEqual({
+			lat: "3.1",
+			lng: "101.7",
+		});
+	});
+	test("already-short coords pass through unchanged", () => {
+		expect(toLalamoveCoordinates({ latitude: 3.1573, longitude: 101.7122 })).toEqual({
+			lat: "3.1573",
+			lng: "101.7122",
+		});
 	});
 });
