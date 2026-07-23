@@ -100,6 +100,7 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 		job && ["canceled", "expired", "rejected"].includes(job.status)
 			? job
 			: null;
+	const completedJob = job && job.status === "completed" ? job : null;
 	const bookable = order.status === "confirmed" || order.status === "packed";
 	// Auto-book never fires before the buyer's chosen date (pre-orders get
 	// packed the night before) — the hint below says so instead of surprising.
@@ -186,7 +187,11 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 					Lalamove Delivery
 				</p>
-				{activeJob ? <JobStatusPill status={activeJob.status} /> : null}
+				{activeJob ? (
+					<JobStatusPill status={activeJob.status} />
+				) : completedJob ? (
+					<JobStatusPill status="completed" />
+				) : null}
 			</div>
 
 			{/* Failed booking — amber, with the one-tap rebook the ticket asks for. */}
@@ -256,6 +261,46 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 					>
 						{cancelling ? "Cancelling…" : "Cancel booking"}
 					</Button>
+				</div>
+			) : null}
+
+			{/* Completed — the settled record: what it cost the seller, who
+			    delivered, and the trip link. Without this a delivered order rendered
+			    an empty "Lalamove Delivery" card (job is neither active nor failed). */}
+			{completedJob ? (
+				<div className="flex flex-col gap-2 text-sm">
+					<p className="text-muted-foreground">
+						This order was delivered by a Lalamove rider.
+					</p>
+					{completedJob.driver ? (
+						<div className="flex items-center gap-2 text-xs text-muted-foreground">
+							<Bike className="size-3.5 text-accent" />
+							<span className="font-medium text-foreground">
+								{completedJob.driver.name}
+							</span>
+							{completedJob.driver.plateNumber ? (
+								<span className="rounded-md bg-muted px-1.5 py-0.5 font-medium">
+									{completedJob.driver.plateNumber}
+								</span>
+							) : null}
+						</div>
+					) : null}
+					<div className="flex items-center justify-between text-xs text-muted-foreground">
+						<span>
+							Booking cost{" "}
+							{formatPrice(completedJob.costActual, order.currency)}
+						</span>
+						{completedJob.shareLink ? (
+							<a
+								href={completedJob.shareLink}
+								target="_blank"
+								rel="noopener noreferrer"
+								className="flex items-center gap-1 font-medium text-accent hover:underline"
+							>
+								Trip details <ExternalLink className="size-3" />
+							</a>
+						) : null}
+					</div>
 				</div>
 			) : null}
 
@@ -400,6 +445,15 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 }
 
 function JobStatusPill({ status }: { status: string }) {
+	// Delivered is a terminal, settled state — match the order status badge's
+	// green rather than the in-progress mint.
+	if (status === "completed") {
+		return (
+			<span className="rounded-full bg-green-100 px-2.5 py-1 text-xs font-medium text-green-800 dark:bg-green-950 dark:text-green-200">
+				Delivered
+			</span>
+		);
+	}
 	const label =
 		status === "assigning"
 			? "Finding rider"
