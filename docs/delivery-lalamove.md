@@ -94,7 +94,8 @@ autofills saved credentials into it.
 
 The reactive `delivery.quote` query answers `{ kind: "live", onUnquotable }`
 for lalamove-mode stores; the checkout then calls the
-`lalamove.quoteForCheckout` **action** once per picked address (debounced,
+`lalamove.quoteForCheckout` **action** once per picked address AND per
+chosen date (debounced,
 rate-limited per retailer — the quote-by-coordinates oracle gets the same
 trilateration caution as the radius quote). The action records the fee in a
 `deliveryQuotes` row and returns `{ quoteId, fee }`; **`orders.create` only
@@ -106,12 +107,30 @@ confirms the charge — same machinery as radius out-of-range), `block` →
 checkout refused with clear copy. Kill switch: no credentials/config → the
 quote query never says "live" and checkout behaves exactly as before.
 
+**Pre-orders are priced for THEIR day (23 Jul):** when the buyer picks a
+future fulfilment date, the quote is requested with Lalamove `scheduleAt` =
+noon MYT on that day (the hour barely moves the price; the day can), so the
+locked buyer fee reflects the delivery day, not checkout day. Changing the
+date re-quotes exactly like changing the address. Today = immediate
+pricing; the scheduleAt guard caps at Lalamove's ~30-day window and falls
+back to immediate on anything odd. Dispatch on the day still re-quotes
+immediate — variance is the vendor's, as everywhere.
+
 Note: a buyer address edit (`updateDeliveryAddress`) re-prices through the
 same resolver *without* a live quote, so under lalamove pricing it lands
 fee-pending for the seller to confirm — deliberate (an address change means
 the old price is wrong, and mutations can't fetch).
 
 ### Dispatch (Book delivery)
+
+**When can the vendor book?** From the FIRST in-progress status onwards:
+`confirmed` or `packed` (custom seller stages ride on these canonical
+anchors, so a store's own stage names change nothing). Pending orders can't
+book (order not accepted yet); shipped/delivered/cancelled can't (rider
+already moving or moot). Pre-order / mockup flows therefore work exactly as
+expected: the vendor books whenever THEY are ready — after design approval,
+after payment, on the morning of the fulfilment date — manually, or lets
+auto-book fire on packed+paid+due-today.
 
 Two-tap: `prepareBooking` re-quotes at today's price and the confirm dialog
 shows it against the buyer-paid fee (variance called out, including who
@@ -189,16 +208,39 @@ secrets → verify → act → ack. Lalamove-specific twists:
   touched, and transitions ride the exported `applyStatusTransition` so
   WhatsApp notify, stage vocabulary, activation stamping and orderEvents all
   come free.
-- Event types handled: `ORDER_STATUS_CHANGED` (7 statuses),
-  `DRIVER_ASSIGNED` (driver + shareLink, mirrored early onto
-  `orders.carrierTrackingUrl` fill-if-unset), `ORDER_AMOUNT_CHANGED`
-  (post-match fees → `costActual`), `ORDER_REPLACED` (cancel-and-clone —
-  the job follows the new provider order id). `WALLET_BALANCE_CHANGED` and
-  the undocumented-but-real `ORDER_CREATED` are logged only (a proactive
-  low-balance banner is the named follow-up). Terminal failures
-  (`canceled`/`expired`/`rejected`) mark the job failed, email the seller
-  (EN+BM `deliveryJobFailed` template), leave the order untouched, and the
-  card offers one-tap rebook.
+### Event-by-event: when it fires, what we do, who is told
+
+| Event | When Lalamove sends it | What we do | Vendor sees | Buyer sees |
+| --- | --- | --- | --- | --- |
+| `ORDER_STATUS_CHANGED: ASSIGNING_DRIVER` | booking placed / driver bailed and rematching | job pill | "Finding rider" on the order card (live) | nothing — matching churn is noise |
+| `DRIVER_ASSIGNED` | a driver accepted | driver name/phone/plate + shareLink onto the job; link mirrored to `orders.carrierTrackingUrl` (fill-if-unset) | driver row + Call + Live tracking on the card | nothing yet — deliberate: drivers can still bail; the buyer promise starts at pickup |
+| `ORDER_STATUS_CHANGED: ON_GOING` | driver is **heading to the VENDOR** to collect (not to the buyer yet) | job pill | "Rider on the way" (to *you*) | nothing |
+| `ORDER_STATUS_CHANGED: PICKED_UP` | rider has the goods, now heading to the buyer | **order → `shipped`** via `applyStatusTransition` | inbox/status flips reactively + orderEvents row | **WhatsApp shipped message with the live-tracking link** — this is the moment the buyer's tracking starts |
+| `ORDER_STATUS_CHANGED: COMPLETED` | goods handed to the buyer | **order → `delivered`** | inbox/status flips reactively + timeline row (no chime — see note) | **WhatsApp delivered message** |
+| `ORDER_STATUS_CHANGED: EXPIRED` | no driver found in Lalamove's matching window | job → failed + reason | **email** (`deliveryJobFailed`) + **browser alert** + amber card + one-tap Rebook | nothing (order unchanged — buyer was never told a rider existed) |
+| `ORDER_STATUS_CHANGED: CANCELED / REJECTED` | booking cancelled (by vendor on Lalamove's side, by Lalamove, or step 1 of a clone) | job → failed + reason | same failure surfaces as EXPIRED | nothing |
+| `ORDER_AMOUNT_CHANGED` | **after** matching/completion when the final charge differs from the quote — waiting-time fees, priority fee/tip added, toll adjustments | `costActual` updated on the job | the card's "Booking cost" updates reactively (the drift ledger vs buyer-paid fee) | nothing — buyer price is frozen |
+| `ORDER_REPLACED` | Lalamove's **cancel-and-clone**: for post-match adjustments THEY cancel the original and re-create it under a new orderId (sequence: CANCELED old → ORDER_REPLACED → clone's own events) | job repointed to the new id, **revived** to "assigning", stale failure cleared | card returns to active; if the clone-cancel briefly emailed a failure, the booking visibly recovers (rare, self-healing) | nothing |
+| `WALLET_BALANCE_CHANGED` | vendor wallet balance moved | logged only (proactive low-balance banner = named follow-up) | — | — |
+| `ORDER_CREATED` (undocumented but real) | at booking | logged only | — | — |
+
+**Why the buyer only hears at PICKED_UP and COMPLETED:** those are the two
+promises a buyer cares about ("your food is moving" / "it arrived"), and
+they're irreversible. Everything earlier (matching, assignment, rider
+heading to the stall) can churn — notifying it would send the buyer
+false-starts.
+
+**Why COMPLETED doesn't chime the vendor:** `delivered` is the expected
+happy path — the inbox shows it reactively and the interruption budget
+(chime + system notification) is reserved for events needing ACTION: new
+order, failed booking. Payment is orthogonal: a delivered-but-unpaid order
+(cash on hand-over, pay-later) stays `unpaid` and the existing payment
+machinery (claim buttons, reminder cron, manual reminder) carries it — the
+rider never collects money for us (Lalamove COD is not enabled).
+
+Terminal failures email the seller (EN+BM `deliveryJobFailed` template),
+raise a browser alert on devices with order alerts on, leave the order
+untouched, and the card offers one-tap rebook.
 
 **Registration is per SELLER** (BYO-only): each vendor pastes OUR webhook
 URL into THEIR Partner Portal → Developers → Webhook URL (Version 3). The

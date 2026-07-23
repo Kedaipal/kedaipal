@@ -182,11 +182,17 @@ export function buildQuotationBody(args: {
 	serviceType: LalamoveVehicleType | string;
 	stops: LalamoveStop[];
 	language?: string;
+	/** Epoch-ms pickup time for SCHEDULED pricing (pre-orders): quotes the
+	 * rate for that moment instead of right-now. Omit for immediate. */
+	scheduleAt?: number;
 }): { data: Record<string, unknown> } {
 	return {
 		data: {
 			serviceType: args.serviceType,
 			language: args.language ?? "en_MY",
+			...(args.scheduleAt !== undefined
+				? { scheduleAt: new Date(args.scheduleAt).toISOString() }
+				: {}),
 			stops: args.stops.map((s) => ({
 				coordinates: toLalamoveCoordinates(s.coordinates),
 				address: s.address,

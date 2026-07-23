@@ -212,6 +212,32 @@ describe("applyWebhookEvent — ORDER_STATUS_CHANGED", () => {
 		expect(order?.status).toBe("confirmed");
 	});
 
+	test("ORDER_REPLACED revives a clone-cancelled job under the new provider id", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			status: "canceled",
+			failureReason: "Cancelled by Lalamove",
+			lastEventAt: Date.parse("2026-07-21T04:00:00.000Z"),
+		});
+
+		await t.mutation(internal.lalamove.applyWebhookEvent, {
+			jobId,
+			eventType: "ORDER_REPLACED",
+			data: {
+				order: { orderId: "LLM-CLONE-2" },
+				updatedAt: "2026-07-21T04:01:00.000Z",
+			},
+			eventTimestamp: Date.parse("2026-07-21T04:01:00.000Z"),
+		});
+
+		const job = await t.run(async (ctx) => ctx.db.get(jobId));
+		expect(job?.providerOrderId).toBe("LLM-CLONE-2");
+		expect(job?.status).toBe("assigning");
+		expect(job?.failureReason).toBeUndefined();
+	});
+
 	test("a cancelled order is never touched by rider events", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t);

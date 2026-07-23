@@ -151,6 +151,11 @@ export const quoteForCheckout = action({
 		/** Buyer's formatted address (shown to the rider at dispatch re-quote
 		 * time too, so keep it human). */
 		address: v.string(),
+		/** The buyer's chosen fulfilment day (epoch-ms MYT midnight). Future
+		 * days are priced as a SCHEDULED pickup (noon MYT) so the locked fee
+		 * reflects the delivery day, not checkout day. Today/omitted =
+		 * immediate pricing. */
+		fulfilmentDate: v.optional(v.number()),
 	},
 	handler: async (
 		ctx,
@@ -174,12 +179,24 @@ export const quoteForCheckout = action({
 		if (!credentials) return { status: "unavailable" };
 
 		try {
+			// Pre-order pricing: a future fulfilment day is quoted as a SCHEDULED
+			// pickup at noon MYT on that day (the hour barely moves the price;
+			// the DAY can). Today stays an immediate quote. Guarded to Lalamove's
+			// ~30-day scheduling window; anything odd falls back to immediate.
+			const NOON_MYT_OFFSET_MS = 4 * 60 * 60 * 1000; // 12:00 MYT = 04:00 UTC
+			const scheduleAt =
+				args.fulfilmentDate !== undefined &&
+				args.fulfilmentDate > Date.now() &&
+				args.fulfilmentDate < Date.now() + 30 * 24 * 60 * 60 * 1000
+					? args.fulfilmentDate + NOON_MYT_OFFSET_MS
+					: undefined;
 			const response = await callLalamove(
 				credentials,
 				"POST",
 				"/v3/quotations",
 				buildQuotationBody({
 					serviceType: context.vehicleType,
+					scheduleAt,
 					stops: [
 						{
 							coordinates: {
@@ -340,6 +357,9 @@ export const applyWebhookEvent = internalMutation({
 							: undefined;
 					await ctx.db.patch(job._id, {
 						status,
+						// A job recovering into an active state (driver-bail rematch,
+						// clone catching up) must not carry a stale failure banner.
+						...(isActiveJobStatus(status) ? { failureReason: undefined } : {}),
 						lastEventAt: eventAt,
 						updatedAt: now,
 						...(shareLink && !job.shareLink ? { shareLink } : {}),
@@ -438,14 +458,21 @@ export const applyWebhookEvent = internalMutation({
 			}
 
 			case "ORDER_REPLACED": {
-				// Cancel-and-clone: Lalamove cancelled the order and cloned a new
-				// one (post-match adjustments). Follow the replacement — subsequent
-				// events reference the NEW provider order id.
+				// Cancel-and-clone: for post-match adjustments Lalamove CANCELS the
+				// original order and creates a clone under a NEW orderId, emitting
+				// CANCELED (old) → ORDER_REPLACED → the clone's own status events.
+				// If the CANCELED landed first, this job is sitting in a failed
+				// state (and the vendor may have received a failure email — rare,
+				// self-healing): repoint AND revive it, because the delivery is
+				// still happening under the new id.
 				const newId =
 					typeof orderData.orderId === "string" ? orderData.orderId : undefined;
 				if (newId && newId !== job.providerOrderId) {
 					await ctx.db.patch(job._id, {
 						providerOrderId: newId,
+						status: "assigning",
+						failureReason: undefined,
+						lastEventAt: eventAt,
 						updatedAt: now,
 					});
 				}

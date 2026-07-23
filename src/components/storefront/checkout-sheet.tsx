@@ -497,6 +497,9 @@ export function CheckoutSheet({
 	const watchedMethod = useStore(form.store, (s) => s.values.deliveryMethod);
 	const watchedLat = useStore(form.store, (s) => s.values.address.latitude);
 	const watchedLng = useStore(form.store, (s) => s.values.address.longitude);
+	// The chosen day PRICES the live quote (pre-orders quote as a scheduled
+	// pickup on that day) — date changes re-quote just like address changes.
+	const watchedDate = useStore(form.store, (s) => s.values.fulfilmentDate);
 	const latNum = watchedLat.trim().length > 0 ? Number(watchedLat) : NaN;
 	const lngNum = watchedLng.trim().length > 0 ? Number(watchedLng) : NaN;
 	const hasCoords = Number.isFinite(latNum) && Number.isFinite(lngNum);
@@ -554,6 +557,9 @@ export function CheckoutSheet({
 				latitude: latNum,
 				longitude: lngNum,
 				address: addressLabel,
+				fulfilmentDate: watchedDate
+					? mytMidnightFromYmd(watchedDate)
+					: undefined,
 			})
 				.then((result) => {
 					if (liveSeq.current !== seq) return; // superseded by a newer pick
@@ -569,7 +575,7 @@ export function CheckoutSheet({
 				});
 		}, 400);
 		return () => clearTimeout(timer);
-	}, [isLiveMode, open, hasCoords, latNum, lngNum]);
+	}, [isLiveMode, open, hasCoords, latNum, lngNum, watchedDate]);
 
 	// Collapse the two sources into ONE shape for the breakdown + submit gate.
 	// Live mode maps onto the static kinds (plus "calculating") so the render
