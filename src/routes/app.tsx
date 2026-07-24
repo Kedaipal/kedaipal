@@ -17,6 +17,7 @@ import { MobileHeader } from "../components/dashboard/mobile-header";
 import { Sidebar } from "../components/dashboard/sidebar";
 import { ActAsProvider, useActAs } from "../hooks/useActAs";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { OrderNotificationsBridge } from "../hooks/useOrderNotifications";
 import { useOrderToastNotifications } from "../hooks/useOrderToastNotifications";
 import { hasFeature } from "../lib/subscription";
 
@@ -172,6 +173,9 @@ function AppShell() {
 				) : null}
 				<main className="flex-1 px-5 py-6 lg:mx-auto lg:w-full lg:max-w-6xl lg:px-8 lg:py-8 print:max-w-none print:p-0">
 					<Outlet />
+					{/* Invisible: browser order alerts (chime + system notification)
+					    for this device — see Settings → Store → Order alerts. */}
+					<OrderNotificationsBridge retailerId={retailer?._id} />
 				</main>
 				<BottomNav
 					actionableCount={actionableCount}

@@ -39,6 +39,14 @@ export type DeliveryConfig =
 			 * no coordinates): "block" refuses the order, "arrange" accepts it with
 			 * the charge to be confirmed by the seller on WhatsApp. */
 			outOfRange: "block" | "arrange";
+	  }
+	| {
+			mode: "lalamove";
+			/** When no live provider quote is available (buyer typed a pin-less
+			 * address, provider/creds down): "arrange" accepts the order with the
+			 * fee pending (seller confirms on WhatsApp — never lose the sale),
+			 * "block" refuses checkout until a quotable address is pinned. */
+			onUnquotable: "arrange" | "block";
 	  };
 
 export type Coordinates = { latitude: number; longitude: number };
@@ -55,12 +63,26 @@ export type DeliveryQuote =
 	| {
 			kind: "fee";
 			fee: number;
-			mode: "flat" | "radius";
+			mode: "flat" | "radius" | "lalamove";
 			distanceKm?: number;
 			bandMaxKm?: number;
+			/** Provider-quote audit trail (mode "lalamove" only) — frozen onto the
+			 * order snapshot; dispatch always re-quotes, so never a booking input. */
+			quotationId?: string;
+			vehicleType?: string;
+			quotedAt?: number;
 	  }
-	| { kind: "pending"; reason: "out_of_range" | "no_coords" }
-	| { kind: "blocked"; reason: "out_of_range" | "no_coords" };
+	| { kind: "pending"; reason: "out_of_range" | "no_coords" | "unquotable" }
+	| { kind: "blocked"; reason: "out_of_range" | "no_coords" | "unquotable" };
+
+/** A live Lalamove quote already fetched (and server-recorded) by the checkout
+ * action — resolveDeliveryQuote only TRUSTS it, it never fetches. */
+export type LiveProviderQuote = {
+	fee: number;
+	quotationId: string;
+	vehicleType: string;
+	quotedAt: number;
+};
 
 /** Fee ceiling (sen) — RM10,000, same sanity bound as the pickup fee. */
 export const DELIVERY_FEE_MAX = 1_000_000;
@@ -105,9 +127,33 @@ export function resolveDeliveryQuote(args: {
 	/** Buyer's delivery address coordinates — undefined when they typed a
 	 * free-form address without picking a Google suggestion. */
 	destination: Coordinates | undefined;
+	/** Live Lalamove quote (mode "lalamove" only), pre-fetched by the checkout
+	 * action and loaded server-side from its deliveryQuotes row. Undefined when
+	 * none was obtainable — resolves per config.onUnquotable. */
+	liveQuote?: LiveProviderQuote;
 }): DeliveryQuote {
-	const { config, subtotal, origin, destination } = args;
+	const { config, subtotal, origin, destination, liveQuote } = args;
 	if (!config) return { kind: "free" };
+
+	if (config.mode === "lalamove") {
+		if (liveQuote) {
+			// A zero-fee provider quote doesn't exist in practice; treat 0 as
+			// free rather than storing a zero-fee snapshot (one spelling of free).
+			if (liveQuote.fee === 0) return { kind: "free" };
+			return {
+				kind: "fee",
+				fee: liveQuote.fee,
+				mode: "lalamove",
+				quotationId: liveQuote.quotationId,
+				vehicleType: liveQuote.vehicleType,
+				quotedAt: liveQuote.quotedAt,
+			};
+		}
+		const reason = destination ? "unquotable" : "no_coords";
+		return config.onUnquotable === "block"
+			? { kind: "blocked", reason }
+			: { kind: "pending", reason };
+	}
 
 	if (config.mode === "flat") {
 		if (config.freeAbove !== undefined && subtotal >= config.freeAbove) {
@@ -161,6 +207,10 @@ function assertFeeSen(raw: number, label: string, min: number): number {
  * of 0 is rejected rather than stored.
  */
 export function sanitizeDeliveryConfig(raw: DeliveryConfig): DeliveryConfig {
+	if (raw.mode === "lalamove") {
+		// Nothing numeric to normalize — the fee is always provider-quoted live.
+		return { mode: "lalamove", onUnquotable: raw.onUnquotable };
+	}
 	if (raw.mode === "flat") {
 		const fee = assertFeeSen(raw.fee, "Delivery fee", 1);
 		let freeAbove: number | undefined;

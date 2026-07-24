@@ -41,6 +41,7 @@ import { submitThenFocusError } from "../components/forms/focus-error";
 import { useAppForm } from "../components/forms/form";
 import { ShopeeIcon } from "../components/icons/shopee-icon";
 import { BillingTab } from "../components/settings/billing-tab";
+import { NotificationsCard } from "../components/settings/notifications-card";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -586,6 +587,9 @@ function SettingsRoute() {
 							/>
 						</Card>
 						<Card>
+							<NotificationsCard />
+						</Card>
+						<Card>
 							<StoreDescriptionForm
 								current={retailer.storeDescription ?? ""}
 								onSave={(storeDescription) =>
@@ -692,6 +696,7 @@ function SettingsRoute() {
 						offerDelivery={retailer.offerDelivery ?? true}
 						deliveryConfig={retailer.deliveryConfig}
 						businessAddress={retailer.businessAddress}
+						deliveryBooking={retailer.deliveryBooking}
 						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
 						minOrderValue={retailer.minOrderValue}
 						subscription={retailer.subscription}

@@ -21,6 +21,7 @@ import {
 } from "../../../convex/lib/fulfilmentDate";
 import { MIN_ORDER_VALUE_MAX } from "../../../convex/lib/minOrderRules";
 import { formatPhone } from "../../lib/customer";
+import { clientEnv } from "../../lib/env";
 import {
 	convexErrorMessage,
 	formatPrice,
@@ -49,6 +50,15 @@ type BusinessAddress = {
 	placeId?: string;
 };
 
+/** Secret-free booking summary — mirrors retailers.DeliveryBookingSummary. */
+type DeliveryBookingSummary = {
+	enabled: boolean;
+	vehicleType: "MOTORCYCLE" | "CAR";
+	hasCredentials: boolean;
+	promptBookOnPacked: boolean;
+	apiKeyHint?: string;
+};
+
 interface FulfilmentTabProps {
 	retailerId: Id<"retailers">;
 	offerSelfCollect: boolean;
@@ -57,6 +67,8 @@ interface FulfilmentTabProps {
 	deliveryConfig: DeliveryConfig | undefined;
 	/** Business address — origin for distance-based pricing. */
 	businessAddress: BusinessAddress | undefined;
+	/** Lalamove booking summary (86eyb5hrf) — secrets never reach the client. */
+	deliveryBooking: DeliveryBookingSummary | undefined;
 	minFulfilmentNoticeDays: number | undefined;
 	/** Store-wide minimum order value (minor units, 86ey9unyx) — undefined =
 	 * no minimum. See convex/lib/minOrderRules.ts. */
@@ -147,6 +159,7 @@ export function FulfilmentTab({
 	offerDelivery,
 	deliveryConfig,
 	businessAddress,
+	deliveryBooking,
 	minFulfilmentNoticeDays,
 	minOrderValue,
 	subscription,
@@ -311,12 +324,14 @@ export function FulfilmentTab({
 
 				<div className="border-t border-border pt-4">
 					<DeliveryChargeSection
-						// Remount when the saved config/address change shape so local
-						// draft state re-seeds from the server truth after a save.
-						key={`${deliveryConfig?.mode ?? "free"}:${businessAddress?.label ?? ""}`}
+						// Remount when the saved config/address/keys change shape so
+						// local draft state re-seeds from the server truth after a save.
+						key={`${deliveryConfig?.mode ?? "free"}:${businessAddress?.label ?? ""}:${deliveryBooking?.apiKeyHint ?? ""}`}
 						config={deliveryConfig}
 						businessAddress={businessAddress}
+						deliveryBooking={deliveryBooking}
 						canUseRadius={hasFeature(subscription, "radiusDelivery")}
+						canUseLalamove={hasFeature(subscription, "delivery")}
 					/>
 				</div>
 			</Card>
@@ -450,7 +465,7 @@ export function FulfilmentTab({
 
 // --- Delivery charge (86extzdr8) --------------------------------------------
 
-type ChargeMode = "free" | "flat" | "radius";
+type ChargeMode = "free" | "flat" | "radius" | "lalamove";
 
 type BandDraft = { maxKm: string; fee: string };
 
@@ -513,11 +528,17 @@ function ModeButton({
 function DeliveryChargeSection({
 	config,
 	businessAddress,
+	deliveryBooking,
 	canUseRadius,
+	canUseLalamove,
 }: {
 	config: DeliveryConfig | undefined;
 	businessAddress: BusinessAddress | undefined;
+	/** Secret-free booking summary — Lalamove is set up INSIDE this section
+	 * (a delivery-pricing choice, not a separate feature). */
+	deliveryBooking: DeliveryBookingSummary | undefined;
 	canUseRadius: boolean;
+	canUseLalamove: boolean;
 }) {
 	const updateSettings = useMutation(api.retailers.updateSettings);
 	const [mode, setMode] = useState<ChargeMode>(config?.mode ?? "free");
@@ -540,13 +561,29 @@ function DeliveryChargeSection({
 	// Business address: the autocomplete pick replaces the stored one on save.
 	const [pickedAddress, setPickedAddress] =
 		useState<GoogleSelectedAddress | null>(null);
+	// Lalamove drafts (mode "lalamove" only). Blank key inputs mean "keep the
+	// stored pair" (server: undefined = no change); `editingKeys` swaps the
+	// stored-key summary row for fresh inputs (key rotation).
+	const [vehicleType, setVehicleType] = useState<"MOTORCYCLE" | "CAR">(
+		deliveryBooking?.vehicleType ?? "MOTORCYCLE",
+	);
+	const [apiKey, setApiKey] = useState("");
+	const [apiSecret, setApiSecret] = useState("");
+	const [editingKeys, setEditingKeys] = useState(false);
+	const [promptBook, setPromptBook] = useState(
+		deliveryBooking?.promptBookOnPacked ?? false,
+	);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const hasStoredKey = !!deliveryBooking?.apiKeyHint;
+	const typedBothKeys =
+		apiKey.trim().length > 0 && apiSecret.trim().length > 0;
 
 	// A downgraded seller sitting on a radius config can still view it and
 	// switch away (clearing is un-gated server-side) — they just can't edit it.
 	const radiusLocked = !canUseRadius;
 	const radiusEditable = mode === "radius" && canUseRadius;
+	const lalamoveLocked = !canUseLalamove;
 	const effectiveAddress = pickedAddress
 		? {
 				label: pickedAddress.formattedAddress,
@@ -581,6 +618,28 @@ function DeliveryChargeSection({
 				fee: Math.round(rm * 100),
 				freeAbove: freeAboveSen,
 			};
+		} else if (mode === "lalamove") {
+			// Live provider quote (86eyb5hrf) — keep the stored onUnquotable
+			// policy (default "arrange": never lose the sale). Mirrors the server
+			// gates so the failure is a helpful message, not a thrown save.
+			if (!effectiveAddress) {
+				setError(
+					"Pick your business address from the suggestions — it's the pickup point riders are sent to.",
+				);
+				return;
+			}
+			if (!hasStoredKey || editingKeys) {
+				if (!typedBothKeys) {
+					setError(
+						"Paste both your Lalamove API key and API secret — tap “How to set up” if you don't have them yet.",
+					);
+					return;
+				}
+			}
+			nextConfig =
+				config?.mode === "lalamove"
+					? config
+					: { mode: "lalamove", onUnquotable: "arrange" };
 		} else {
 			if (!effectiveAddress) {
 				setError(
@@ -606,6 +665,30 @@ function DeliveryChargeSection({
 		}
 		setSaving(true);
 		try {
+			// Lalamove is enabled/disabled as part of the pricing choice — one
+			// save, one mental model. Switching AWAY also turns booking off (the
+			// server refuses a dangling live-quote config otherwise); the stored
+			// keys stay, so switching back later is instant.
+			const wasLalamove = deliveryBooking?.enabled === true;
+			const bookingPatch =
+				mode === "lalamove"
+					? {
+							deliveryBooking: {
+								enabled: true,
+								vehicleType,
+								promptBookOnPacked: promptBook,
+								apiKey: apiKey.trim() || undefined,
+								apiSecret: apiSecret.trim() || undefined,
+							},
+						}
+					: wasLalamove
+						? {
+								deliveryBooking: {
+									enabled: false,
+									vehicleType,
+								},
+							}
+						: {};
 			await updateSettings({
 				deliveryConfig: nextConfig,
 				// Only send the address when the seller picked a new one — an
@@ -613,13 +696,19 @@ function DeliveryChargeSection({
 				...(pickedAddress && effectiveAddress
 					? { businessAddress: effectiveAddress }
 					: {}),
+				...bookingPatch,
 			});
 			toast.success(
 				mode === "free"
 					? "Delivery charge turned off — delivery is free."
-					: "Delivery charge saved.",
+					: mode === "lalamove"
+						? "Lalamove delivery is on — book riders from any confirmed delivery order."
+						: "Delivery charge saved.",
 			);
 			setPickedAddress(null);
+			setApiKey("");
+			setApiSecret("");
+			setEditingKeys(false);
 		} catch (err) {
 			setError(convexErrorMessage(err));
 		} finally {
@@ -633,7 +722,7 @@ function DeliveryChargeSection({
 				title="Delivery charge"
 				description="What buyers pay for delivery, added to their order total at checkout. Pickup orders are never charged this."
 			/>
-			<div className="grid grid-cols-3 gap-2">
+			<div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
 				<ModeButton
 					active={mode === "free"}
 					onClick={() => setMode("free")}
@@ -656,7 +745,246 @@ function DeliveryChargeSection({
 					subtitle="Radius bands"
 					badge={radiusLocked ? <ProBadge /> : undefined}
 				/>
+				{/* Lalamove (86eyb5hrf) is a PRICING choice like the others — pick
+				    it and the full setup (address, keys, vehicle) appears below.
+				    Same Pro-lock posture as radius. */}
+				<ModeButton
+					active={mode === "lalamove"}
+					disabled={lalamoveLocked && config?.mode !== "lalamove"}
+					onClick={() => setMode("lalamove")}
+					title="Lalamove"
+					subtitle="Rider, live price"
+					badge={lalamoveLocked ? <ProBadge /> : undefined}
+				/>
 			</div>
+
+			{mode === "lalamove" ? (
+				<div className="flex flex-col gap-4">
+					<p className="rounded-lg bg-accent/10 px-3 py-2 text-xs leading-relaxed text-accent-emphasis">
+						Buyers pay the real Lalamove price for their address at checkout,
+						and you book the rider in one tap from the order — with automatic
+						shipped + live-tracking WhatsApp messages. Runs entirely on{" "}
+						<b>your own Lalamove account</b>; Kedaipal never books or pays on
+						your behalf. If a live price can&apos;t be fetched, the order is
+						still accepted and you confirm the charge afterwards.
+					</p>
+					{lalamoveLocked ? (
+						<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+							Lalamove delivery is a Pro feature. Your setup still applies to
+							new orders — upgrade in Settings → Billing to change it, or
+							switch to Free / Flat fee (always allowed).
+						</p>
+					) : null}
+
+					{/* 1 · Pickup point */}
+					<div className="flex flex-col gap-1.5">
+						<GoogleAddressAutocomplete
+							initialValue={businessAddress?.label ?? ""}
+							label="Your pickup address (riders collect here)"
+							required
+							placeholder="Start typing your business address…"
+							description={
+								effectiveAddress
+									? "✓ Pinned — riders are sent to this exact point."
+									: "Pick a Google suggestion so riders get an exact pin — your stall, kitchen or shop. Buyers never see this address."
+							}
+							onSelect={(payload) => setPickedAddress(payload)}
+							onTextChange={() => setPickedAddress(null)}
+						/>
+						{businessAddress && !pickedAddress ? (
+							<p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+								<MapPin
+									className="size-3 shrink-0 text-accent"
+									aria-hidden="true"
+								/>
+								<span className="font-mono">
+									{businessAddress.latitude.toFixed(5)},{" "}
+									{businessAddress.longitude.toFixed(5)}
+								</span>
+							</p>
+						) : null}
+					</div>
+
+					{/* 2 · Vehicle */}
+					<div className="flex flex-col gap-1.5">
+						<span className="text-xs font-medium text-muted-foreground">
+							Default vehicle
+						</span>
+						<div className="grid grid-cols-2 gap-2">
+							<ModeButton
+								active={vehicleType === "MOTORCYCLE"}
+								disabled={lalamoveLocked}
+								onClick={() => setVehicleType("MOTORCYCLE")}
+								title="Motorcycle"
+								subtitle="Most orders, cheapest"
+							/>
+							<ModeButton
+								active={vehicleType === "CAR"}
+								disabled={lalamoveLocked}
+								onClick={() => setVehicleType("CAR")}
+								title="Car"
+								subtitle="Bulky / fragile"
+							/>
+						</div>
+					</div>
+
+					{/* 3 · The seller's own API keys (BYO-only) */}
+					<div className="flex flex-col gap-2">
+						<div className="flex items-center justify-between">
+							<span className="text-xs font-medium text-muted-foreground">
+								Your Lalamove account (API key)
+							</span>
+							<a
+								href="/guides/lalamove-setup.html"
+								target="_blank"
+								rel="noopener noreferrer"
+								className="flex items-center gap-1 text-xs font-medium text-accent hover:underline"
+							>
+								How to set up <ExternalLink className="size-3" />
+							</a>
+						</div>
+						{hasStoredKey && !editingKeys ? (
+							<div className="flex items-center justify-between rounded-lg border border-input px-3 py-2 text-sm">
+								<span>
+									Key ending{" "}
+									<span className="font-mono">
+										…{deliveryBooking?.apiKeyHint}
+									</span>{" "}
+									stored
+								</span>
+								<button
+									type="button"
+									onClick={() => setEditingKeys(true)}
+									className="text-xs font-medium text-accent hover:underline"
+								>
+									Replace
+								</button>
+							</div>
+						) : (
+							<div className="flex flex-col gap-2">
+								{/* Plain text inputs with a CSS mask on the secret — NOT
+								    type="password", so Chrome never mistakes this for a
+								    login form and autofills saved credentials into it. */}
+								<Input
+									type="text"
+									name="lalamove-api-key"
+									autoComplete="off"
+									data-1p-ignore
+									data-lpignore="true"
+									data-form-type="other"
+									value={apiKey}
+									disabled={lalamoveLocked}
+									onChange={(e) => setApiKey(e.target.value)}
+									placeholder="API key (pk_…)"
+									className="h-11 font-mono text-sm"
+								/>
+								<Input
+									type="text"
+									name="lalamove-api-secret"
+									autoComplete="off"
+									data-1p-ignore
+									data-lpignore="true"
+									data-form-type="other"
+									value={apiSecret}
+									disabled={lalamoveLocked}
+									onChange={(e) => setApiSecret(e.target.value)}
+									placeholder="API secret (sk_…)"
+									className="h-11 font-mono text-sm"
+									style={
+										apiSecret.length > 0
+											? ({ WebkitTextSecurity: "disc" } as React.CSSProperties)
+											: undefined
+									}
+								/>
+								{hasStoredKey && editingKeys ? (
+									<button
+										type="button"
+										onClick={() => {
+											setEditingKeys(false);
+											setApiKey("");
+											setApiSecret("");
+										}}
+										className="self-start text-xs font-medium text-muted-foreground hover:underline"
+									>
+										Keep the stored key instead
+									</button>
+								) : null}
+							</div>
+						)}
+						<p className="text-xs text-muted-foreground">
+							From the Lalamove Partner Portal (partnerportal.lalamove.com) →
+							Developers tab. You pay Lalamove directly from your own prepaid
+							wallet — Kedaipal never books or pays on your behalf. Your key
+							stays saved if you switch pricing methods, so switching back is
+							instant.
+						</p>
+					</div>
+
+					{/* 4 · Webhook — each seller registers OUR endpoint in THEIR
+					    Partner Portal; without it bookings still work but the
+					    shipped/delivered updates stop being automatic. */}
+					{hasStoredKey ? (
+						<div className="flex flex-col gap-1.5">
+							<span className="text-xs font-medium text-muted-foreground">
+								One more step: your Lalamove webhook
+							</span>
+							<div className="flex items-center gap-2">
+								<code className="min-w-0 flex-1 truncate rounded-lg border border-input bg-muted/40 px-3 py-2.5 font-mono text-xs">
+									{lalamoveWebhookUrl()}
+								</code>
+								<Button
+									type="button"
+									variant="outline"
+									className="h-10 shrink-0 px-3 text-xs"
+									onClick={() => {
+										navigator.clipboard
+											.writeText(lalamoveWebhookUrl())
+											.then(() => toast.success("Webhook link copied"))
+											.catch(() =>
+												toast.error(
+													"Couldn't copy — select and copy manually",
+												),
+											);
+									}}
+								>
+									Copy
+								</Button>
+							</div>
+							<p className="text-xs text-muted-foreground">
+								Paste this in your Lalamove Partner Portal → Developers →
+								Webhook URL (choose version 3). It powers the automatic
+								shipped + live-tracking messages — step 5 in the guide.
+							</p>
+						</div>
+					) : null}
+
+					{/* 5 · Prompt-to-book on packed (opt-in) — NOT silent auto-book:
+					    marking a paid, due-today order Packed pops the confirm dialog
+					    with today's price, so the seller always sees the cost + taps
+					    to spend. */}
+					<div className="flex flex-col gap-1.5 rounded-xl border border-input p-3">
+						<div className="flex items-start justify-between gap-4">
+							<div>
+								<p className="text-sm font-medium">
+									Ask me to book a rider when I mark an order{" "}
+									<span className="font-semibold">Packed</span>
+								</p>
+								<p className="mt-0.5 text-xs text-muted-foreground leading-relaxed">
+									{promptBook
+										? "On — when you mark a paid, same-day delivery order Packed, the 'Book a rider?' dialog opens with today's price so you can confirm in one tap (or dismiss). Nothing is booked or charged until you confirm. Future-dated and unpaid orders don't prompt."
+										: "Off — you open the Book delivery button yourself when you're ready. Turn this on to be prompted the moment an order is packed."}
+								</p>
+							</div>
+							<ToggleSwitch
+								on={promptBook}
+								onChange={setPromptBook}
+								disabled={lalamoveLocked}
+								label="Prompt to book a rider on packed"
+							/>
+						</div>
+					</div>
+				</div>
+			) : null}
 
 			{mode === "flat" ? (
 				<div className="flex flex-col gap-3">
@@ -908,12 +1236,13 @@ function DeliveryChargeSection({
 				onClick={save}
 				disabled={
 					saving ||
-					(mode === "radius" && radiusLocked && config?.mode === "radius")
+					(mode === "radius" && radiusLocked && config?.mode === "radius") ||
+					(mode === "lalamove" && lalamoveLocked && config?.mode === "lalamove")
 				}
 				isLoading={saving}
 				className="h-11 self-start"
 			>
-				Save delivery charge
+				{mode === "lalamove" ? "Save Lalamove delivery" : "Save delivery charge"}
 			</Button>
 		</div>
 	);
@@ -1267,3 +1596,14 @@ function LocationListSkeleton() {
 		</ul>
 	);
 }
+
+// --- Lalamove rider booking (86eyb5hrf) --------------------------------------
+
+/** The deployment's Lalamove webhook endpoint — Convex HTTP actions live on
+ * the `.convex.site` twin of the client's `.convex.cloud` URL. Surfaced in
+ * the card so BYO sellers can paste it into their own Partner Portal. */
+function lalamoveWebhookUrl(): string {
+	const convexUrl = clientEnv.VITE_CONVEX_URL ?? "";
+	return `${convexUrl.replace(".convex.cloud", ".convex.site")}/webhook/lalamove`;
+}
+

@@ -21,7 +21,8 @@ export type RetailerEmailKey =
 	| "paymentClaimed"
 	| "mockupApproved"
 	| "mockupChangesRequested"
-	| "mockupDeclined";
+	| "mockupDeclined"
+	| "deliveryJobFailed";
 
 export type RetailerEmailVars = {
 	shortId: string;
@@ -38,6 +39,10 @@ export type RetailerEmailVars = {
 	proofUrl?: string;
 	// Optional — only set when key === "mockupChangesRequested".
 	mockupChangeNote?: string;
+	// Optional — only set when key === "deliveryJobFailed". Human-readable
+	// reason the Lalamove booking ended without a rider (e.g. "No driver
+	// accepted the order"). See docs/delivery-lalamove.md.
+	jobFailureReason?: string;
 	// True when the order has a made-to-order custom item that needs a mockup
 	// approved before it can be packed (and before the buyer is asked to pay).
 	// Surfaced on the newOrder / orderConfirmed alerts so the seller knows to act.
@@ -271,6 +276,20 @@ const en = {
 		const text = `🚫 Custom item declined for ${v.shortId}\n${v.customerName} declined the custom item.\nNew total: ${v.totalFormatted}. Remaining ready-made items can proceed.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
+	deliveryJobFailed: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `🚨 Delivery booking failed for ${v.shortId}`;
+		const reasonLine = v.jobFailureReason
+			? `Reason: ${v.jobFailureReason}`
+			: `The booking ended without a rider.`;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> — the Lalamove booking did not go through.`,
+			escapeHtml(reasonLine),
+			`Your buyer has <strong>not</strong> been notified and the order is unchanged — open the order to rebook a rider.`,
+		];
+		const html = wrapHtml("🚨", `Delivery booking failed — ${v.shortId}`, lines, v.dashboardUrl, "Rebook delivery");
+		const text = `🚨 Delivery booking failed for ${v.shortId}\n${reasonLine}\nYour buyer has not been notified and the order is unchanged — open the order to rebook a rider.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
 };
 
 const ms = {
@@ -395,6 +414,20 @@ const ms = {
 		];
 		const html = wrapHtml("🚫", `Item custom ditolak — ${v.shortId}`, lines, v.dashboardUrl, "Buka dashboard");
 		const text = `🚫 Item custom ditolak untuk ${v.shortId}\n${v.customerName} menolak item custom.\nJumlah baru: ${v.totalFormatted}. Item sedia-ada lain boleh diteruskan.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	deliveryJobFailed: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `🚨 Tempahan penghantaran gagal untuk ${v.shortId}`;
+		const reasonLine = v.jobFailureReason
+			? `Sebab: ${v.jobFailureReason}`
+			: `Tempahan tamat tanpa rider.`;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> — tempahan Lalamove tidak berjaya.`,
+			escapeHtml(reasonLine),
+			`Pembeli anda <strong>tidak</strong> dimaklumkan dan pesanan tidak berubah — buka pesanan untuk tempah rider semula.`,
+		];
+		const html = wrapHtml("🚨", `Tempahan penghantaran gagal — ${v.shortId}`, lines, v.dashboardUrl, "Tempah semula");
+		const text = `🚨 Tempahan penghantaran gagal untuk ${v.shortId}\n${reasonLine}\nPembeli anda tidak dimaklumkan dan pesanan tidak berubah — buka pesanan untuk tempah rider semula.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 };

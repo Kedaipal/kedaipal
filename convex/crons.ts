@@ -28,6 +28,16 @@ crons.daily(
 	{},
 );
 
+// Lalamove checkout-quote hygiene: abandoned deliveryQuotes rows (buyer never
+// completed checkout) are transient by design — purge anything older than a
+// day. See docs/delivery-lalamove.md.
+crons.daily(
+	"purge stale delivery quotes",
+	{ hourUTC: 3, minuteUTC: 45 },
+	internal.lalamove.purgeStaleCheckoutQuotes,
+	{},
+);
+
 // Counter Checkout housekeeping: flip unscanned sessions past their ~10min TTL
 // to `expired`. Reads already compute effective expiry, so this just keeps stale
 // rows out of active-session listings. See docs/counter-checkout.md.
