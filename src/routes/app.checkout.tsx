@@ -41,6 +41,7 @@ import {
 	PAYMENT_METHOD_LABELS,
 } from "../../convex/lib/paymentMethod";
 import { SendOrderDocument } from "../components/order/send-order-document";
+import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import {
@@ -464,8 +465,8 @@ function StoreQrChip({
 					<DialogHeader>
 						<DialogTitle>Ask the buyer to scan</DialogTitle>
 						<DialogDescription>
-							They scan and hit send — their checkout opens here
-							automatically, ready to ring up.
+							They scan and hit send — their checkout opens here automatically,
+							ready to ring up.
 						</DialogDescription>
 					</DialogHeader>
 					<div className="mx-auto rounded-2xl border border-border bg-white p-4">
@@ -1004,22 +1005,17 @@ function ProductThumb({
 	name: string;
 	className?: string;
 }) {
-	return url ? (
-		<img
+	return (
+		<AppImage
 			src={url}
 			alt={name}
-			loading="lazy"
-			className={cn("object-cover", className)}
+			aspect={className}
+			fallback={
+				<div className="flex h-full w-full items-center justify-center bg-muted text-muted-foreground">
+					<ImageIcon className="size-5" aria-hidden />
+				</div>
+			}
 		/>
-	) : (
-		<div
-			className={cn(
-				"flex items-center justify-center bg-muted text-muted-foreground",
-				className,
-			)}
-		>
-			<ImageIcon className="size-5" aria-hidden />
-		</div>
 	);
 }
 

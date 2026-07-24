@@ -35,6 +35,7 @@ import {
 	GoogleAddressAutocomplete,
 	type GoogleSelectedAddress,
 } from "../forms/google-address-autocomplete";
+import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Skeleton } from "../ui/skeleton";
@@ -576,8 +577,7 @@ function DeliveryChargeSection({
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const hasStoredKey = !!deliveryBooking?.apiKeyHint;
-	const typedBothKeys =
-		apiKey.trim().length > 0 && apiSecret.trim().length > 0;
+	const typedBothKeys = apiKey.trim().length > 0 && apiSecret.trim().length > 0;
 
 	// A downgraded seller sitting on a radius config can still view it and
 	// switch away (clearing is un-gated server-side) — they just can't edit it.
@@ -740,10 +740,11 @@ function DeliveryChargeSection({
 					} ${lalamoveLocked && config?.mode !== "lalamove" ? "cursor-not-allowed" : ""}`}
 				>
 					<span className="flex items-center gap-1.5">
-						<img
+						<AppImage
 							src="/img/lalamove-logo.svg"
 							alt="Lalamove"
-							className="h-4 w-auto"
+							aspect="h-4 w-auto"
+							fill={false}
 						/>
 						{lalamoveLocked ? <ProBadge /> : null}
 					</span>
@@ -790,8 +791,8 @@ function DeliveryChargeSection({
 					{lalamoveLocked ? (
 						<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
 							Lalamove delivery is a Pro feature. Your setup still applies to
-							new orders — upgrade in Settings → Billing to change it, or
-							switch to Free / Flat fee (always allowed).
+							new orders — upgrade in Settings → Billing to change it, or switch
+							to Free / Flat fee (always allowed).
 						</p>
 					) : null}
 
@@ -846,8 +847,8 @@ function DeliveryChargeSection({
 							/>
 						</div>
 						<p className="text-xs text-muted-foreground">
-							Just the default — you can switch vehicle per order in the
-							booking dialog.
+							Just the default — you can switch vehicle per order in the booking
+							dialog.
 						</p>
 					</div>
 
@@ -964,9 +965,7 @@ function DeliveryChargeSection({
 											.writeText(lalamoveWebhookUrl())
 											.then(() => toast.success("Webhook link copied"))
 											.catch(() =>
-												toast.error(
-													"Couldn't copy — select and copy manually",
-												),
+												toast.error("Couldn't copy — select and copy manually"),
 											);
 									}}
 								>
@@ -975,8 +974,8 @@ function DeliveryChargeSection({
 							</div>
 							<p className="text-xs text-muted-foreground">
 								Paste this in your Lalamove Partner Portal → Developers →
-								Webhook URL (choose version 3). It powers the automatic
-								shipped + live-tracking messages — step 5 in the guide.
+								Webhook URL (choose version 3). It powers the automatic shipped
+								+ live-tracking messages — step 5 in the guide.
 							</p>
 						</div>
 					) : null}
@@ -1265,7 +1264,9 @@ function DeliveryChargeSection({
 				isLoading={saving}
 				className="h-11 self-start"
 			>
-				{mode === "lalamove" ? "Save Lalamove delivery" : "Save delivery charge"}
+				{mode === "lalamove"
+					? "Save Lalamove delivery"
+					: "Save delivery charge"}
 			</Button>
 		</div>
 	);
@@ -1629,4 +1630,3 @@ function lalamoveWebhookUrl(): string {
 	const convexUrl = clientEnv.VITE_CONVEX_URL ?? "";
 	return `${convexUrl.replace(".convex.cloud", ".convex.site")}/webhook/lalamove`;
 }
-
