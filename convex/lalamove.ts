@@ -746,10 +746,18 @@ function friendlyBookingError(err: unknown): string {
  * paid, and the opaque ids confirmBooking needs within the 5-minute window.
  */
 export const prepareBooking = action({
-	args: { shortId: v.string() },
+	args: {
+		shortId: v.string(),
+		// Per-order vehicle override (a big single order needs a car even when
+		// the store default is motorcycle) — quotes are per-vehicle, so the
+		// dialog re-runs this on a switch. Omitted → the settings default.
+		vehicleType: v.optional(
+			v.union(v.literal("MOTORCYCLE"), v.literal("CAR")),
+		),
+	},
 	handler: async (
 		ctx,
-		{ shortId },
+		{ shortId, vehicleType: vehicleOverride },
 	): Promise<
 		| {
 				ok: false;
@@ -771,13 +779,14 @@ export const prepareBooking = action({
 			shortId,
 		});
 		if (!context.ok) return context;
+		const vehicleType = vehicleOverride ?? context.vehicleType;
 		try {
 			const response = await callLalamove(
 				context.credentials,
 				"POST",
 				"/v3/quotations",
 				buildQuotationBody({
-					serviceType: context.vehicleType,
+					serviceType: vehicleType,
 					stops: [
 						{
 							coordinates: context.origin,
@@ -798,7 +807,7 @@ export const prepareBooking = action({
 				recipientStopId: parsed.stopIds[1],
 				fee: parsed.priceTotal,
 				buyerPaidFee: context.buyerPaidFee,
-				vehicleType: context.vehicleType,
+				vehicleType,
 				buyerContactFallback: context.buyerContactFallback,
 			};
 		} catch (err) {
@@ -833,6 +842,12 @@ export const confirmBooking = action({
 		quotationId: v.string(),
 		senderStopId: v.string(),
 		recipientStopId: v.string(),
+		// The vehicle the quotation was prepared with (dialog override) — the
+		// quotationId already binds Lalamove to it; this keeps OUR ledger row
+		// labelled with what was actually booked, not the settings default.
+		vehicleType: v.optional(
+			v.union(v.literal("MOTORCYCLE"), v.literal("CAR")),
+		),
 	},
 	handler: async (
 		ctx,
@@ -857,7 +872,7 @@ export const confirmBooking = action({
 				orderId: context.orderId,
 				retailerId: context.retailerId,
 				quotationId: args.quotationId,
-				vehicleType: context.vehicleType,
+				vehicleType: args.vehicleType ?? context.vehicleType,
 			});
 		} catch {
 			return {
@@ -1192,6 +1207,62 @@ export const storePodImages = internalMutation({
 			updatedAt: Date.now(),
 		});
 		return true;
+	},
+});
+
+/**
+ * DEV/TEST helper — inject a stand-in proof-of-delivery photo. Lalamove's
+ * sandbox has no riders, so fetchPodImages can never find a real image
+ * there; this runs the SAME post-parse pipeline (download → store →
+ * storePodImages → buyer WhatsApp photo) with a placeholder, so the card
+ * thumbnails and the WA follow-up can be eyeballed locally. Internal-only
+ * (CLI/dashboard — clients can't call it):
+ *
+ *   npx convex run lalamove:devInjectPodImage '{"providerOrderId":"354…"}'
+ */
+export const devInjectPodImage = internalAction({
+	args: {
+		providerOrderId: v.string(),
+		imageUrl: v.optional(v.string()),
+	},
+	handler: async (ctx, { providerOrderId, imageUrl }): Promise<string> => {
+		const { jobId } = await ctx.runQuery(internal.lalamove.getWebhookContext, {
+			providerOrderId,
+			apiKey: "",
+		});
+		if (!jobId) return `no deliveryJobs row for ${providerOrderId}`;
+		const source =
+			imageUrl ?? "https://picsum.photos/seed/kedaipal-pod/800/600";
+		const res = await fetch(source);
+		if (!res.ok) return `image fetch failed: HTTP ${res.status}`;
+		const storageId = await ctx.storage.store(await res.blob());
+		const stored = await ctx.runMutation(internal.lalamove.storePodImages, {
+			jobId,
+			storageIds: [storageId],
+		});
+		if (!stored) return "job already has POD images — nothing injected";
+		const url = await ctx.storage.getUrl(storageId);
+		if (url) {
+			const jobRow = await ctx.runQuery(internal.lalamove.getPodJobOrder, {
+				jobId,
+			});
+			if (jobRow) {
+				await ctx.scheduler.runAfter(0, internal.whatsapp.notifyDeliveryPhoto, {
+					orderId: jobRow.orderId,
+					imageUrls: [url],
+				});
+			}
+		}
+		return `injected 1 POD image onto job ${jobId} — check the order card + buyer WhatsApp`;
+	},
+});
+
+/** Tiny lookup for devInjectPodImage — job → orderId. */
+export const getPodJobOrder = internalQuery({
+	args: { jobId: v.id("deliveryJobs") },
+	handler: async (ctx, { jobId }): Promise<{ orderId: Id<"orders"> } | null> => {
+		const job = await ctx.db.get(jobId);
+		return job ? { orderId: job.orderId } : null;
 	},
 });
 

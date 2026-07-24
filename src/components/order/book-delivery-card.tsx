@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { useAction, useQuery } from "convex/react";
 import {
 	Bike,
+	Car,
 	CircleAlert,
 	ExternalLink,
 	Loader2,
@@ -58,6 +59,10 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 		buyerContactFallback: boolean;
 	} | null>(null);
 	const [booking, setBooking] = useState(false);
+	// In-dialog vehicle switch → fresh quote (prices are per-vehicle). Keeps
+	// the dialog open with the price row loading instead of bouncing the
+	// seller back to settings to change vehicle for one order.
+	const [requoting, setRequoting] = useState(false);
 	const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
 	const [cancelling, setCancelling] = useState(false);
 
@@ -145,6 +150,26 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 		}
 	}
 
+	// Vehicle switch inside the open dialog — re-quote for the chosen vehicle
+	// (each quotation is vehicle-bound). On failure the previous quote stays.
+	async function handleSwitchVehicle(vehicleType: "MOTORCYCLE" | "CAR") {
+		if (!quote || quote.vehicleType === vehicleType || requoting) return;
+		setRequoting(true);
+		try {
+			const result = await prepareBooking({
+				shortId: order.shortId,
+				vehicleType,
+			});
+			if (!result.ok) {
+				toast.error(result.message ?? blockCopy(result.reason));
+				return;
+			}
+			setQuote(result);
+		} finally {
+			setRequoting(false);
+		}
+	}
+
 	async function handleConfirm() {
 		if (!quote) return;
 		setBooking(true);
@@ -154,6 +179,7 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 				quotationId: quote.quotationId,
 				senderStopId: quote.senderStopId,
 				recipientStopId: quote.recipientStopId,
+				vehicleType: quote.vehicleType === "CAR" ? "CAR" : "MOTORCYCLE",
 			});
 			if (!result.ok) {
 				toast.error(result.message ?? blockCopy(result.reason));
@@ -398,12 +424,41 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 					</DialogHeader>
 					{quote ? (
 						<div className="flex flex-col gap-1.5 text-sm">
+							{/* Per-order vehicle choice — defaults to the settings vehicle;
+							    switching re-quotes (prices are per-vehicle). */}
+							<div className="grid grid-cols-2 gap-2">
+								{(
+									[
+										["MOTORCYCLE", "Motorcycle", Bike],
+										["CAR", "Car", Car],
+									] as const
+								).map(([value, label, Icon]) => (
+									<button
+										key={value}
+										type="button"
+										aria-pressed={quote.vehicleType === value}
+										disabled={requoting || booking}
+										onClick={() => handleSwitchVehicle(value)}
+										className={`flex h-11 items-center justify-center gap-2 rounded-xl border-2 text-sm font-medium transition-colors ${
+											quote.vehicleType === value
+												? "border-accent bg-accent/5 text-accent"
+												: "border-border text-foreground hover:border-accent/40"
+										} ${requoting || booking ? "opacity-60" : ""}`}
+									>
+										<Icon className="size-4" /> {label}
+									</button>
+								))}
+							</div>
 							<div className="flex items-center justify-between">
 								<span className="text-muted-foreground">
 									Rider ({quote.vehicleType === "CAR" ? "Car" : "Motorcycle"})
 								</span>
 								<span className="text-lg font-bold">
-									{formatPrice(quote.fee, order.currency)}
+									{requoting ? (
+										<Loader2 className="size-4 animate-spin" />
+									) : (
+										formatPrice(quote.fee, order.currency)
+									)}
 								</span>
 							</div>
 							<div className="flex items-center justify-between text-xs text-muted-foreground">
@@ -449,7 +504,11 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 						>
 							Not now
 						</Button>
-						<Button type="button" onClick={handleConfirm} disabled={booking}>
+						<Button
+							type="button"
+							onClick={handleConfirm}
+							disabled={booking || requoting}
+						>
 							{booking ? "Booking…" : "Confirm & dispatch"}
 						</Button>
 					</DialogFooter>

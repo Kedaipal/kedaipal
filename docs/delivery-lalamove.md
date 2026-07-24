@@ -77,6 +77,15 @@ parts; half a credential is refused at save time; clearing keys while
 enabled is refused (nothing to fall back to); key fields follow the
 logoStorageId convention (`undefined` = keep stored, `""` = clear).
 
+**Settings prominence (24 Jul):** the Lalamove option is a full-width
+branded row under the Free/Flat/By-distance grid — official wordmark
+(`public/img/lalamove-logo.svg`), one-line benefit copy, and for a locked
+Starter it stays **full-colour with a Pro chip + "Upgrade to Pro to turn
+this on"** (disabled-with-reason, deliberately not a washed-out ghost) so
+every tier sees rider delivery exists — the upsell surface for the Pro
+tier. The settings vehicle is labelled as a *default* with a helper noting
+the per-order switch in the booking dialog.
+
 **IA (revised after first seller test):** Lalamove is NOT a separate card —
 it's the 4th delivery-pricing mode (Settings → Fulfilment → Delivery charge:
 Free / Flat / By distance / **Lalamove**). Picking it reveals the whole
@@ -134,7 +143,10 @@ auto-book fire on packed+paid+due-today.
 
 Two-tap: `prepareBooking` re-quotes at today's price and the confirm dialog
 shows it against the buyer-paid fee (variance called out, including who
-absorbs it); `confirmBooking` places the order within the 5-minute window
+absorbs it) **with a per-order vehicle switch** (Motorcycle ⇄ Car,
+defaulted to the settings vehicle; switching re-quotes since prices are
+per-vehicle — a bulky one-off order gets a car without a round-trip to
+Settings, and the chosen vehicle is what lands on the ledger row); `confirmBooking` places the order within the 5-minute window
 and writes the `deliveryJobs` row — the **one-active-job-per-order**
 invariant is enforced by a **reserve → POST → commit** sequence (PR #127
 review): `reserveBooking` atomically claims the slot with a placeholder

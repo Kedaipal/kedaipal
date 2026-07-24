@@ -52,7 +52,7 @@ node --env-file=.env.local scripts/lalamove-simulate-webhook.mjs \
 | `ON_GOING` | `ORDER_STATUS_CHANGED` | Job pill → "Rider on the way" (order unchanged — rider is heading to the *vendor*) |
 | `PICKED_UP` | `ORDER_STATUS_CHANGED` | **Order → `shipped`**, buyer gets the WhatsApp shipped message with live tracking |
 | `COMPLETED` | `ORDER_STATUS_CHANGED` | **Order → `delivered`**, buyer gets the delivered message; also triggers the proof-of-delivery photo fetch |
-| `POD` | `POD_STATUS_CHANGED` | Triggers the proof-of-delivery fetch path (sandbox has no rider photo, so this exercises the trigger only — the photo itself is a first-prod-booking check) |
+| `POD` | `POD_STATUS_CHANGED` | Triggers the proof-of-delivery fetch path (sandbox has no rider photo, so this exercises the trigger only — see below for injecting a stand-in photo) |
 | `CANCELED` / `EXPIRED` / `REJECTED` | `ORDER_STATUS_CHANGED` | Job fails with a reason → amber card + one-tap rebook; the order never regresses |
 
 Typical walk-through after tapping "Book delivery" on a confirmed delivery
@@ -62,5 +62,20 @@ order: `driver` → `ON_GOING` → `PICKED_UP` → `COMPLETED`.
 the order's buyer number — use your own number as the test buyer to see
 them land. Re-running a step is a harmless no-op (each run stamps a fresh
 timestamp and the event handler is idempotent).
+
+### Testing the proof-of-delivery photo locally
+
+The sandbox never produces a rider photo, so the real POD fetch always
+comes back empty there. To eyeball the photo surfaces anyway, inject a
+stand-in through the **same** post-parse pipeline (store as blob → job row
+→ buyer WhatsApp photo → card thumbnails):
+
+```bash
+npx convex run lalamove:devInjectPodImage '{"providerOrderId":"<providerOrderId>"}'
+# optional custom image: … '{"providerOrderId":"…","imageUrl":"https://…/photo.jpg"}'
+```
+
+Dev-only by nature (internal function — CLI/dashboard only). The **real**
+rider photo appearing end-to-end remains a first-prod-booking check.
 
 Full feature context: [`delivery-lalamove.md`](./delivery-lalamove.md).

@@ -1,23 +1,31 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { BookDeliveryCard } from "./book-delivery-card";
 
 // The card reads its job via useQuery and books via useAction. Stub both so it
 // renders without a ConvexProvider; `state.dispatch` is what getDeliveryJob
-// returns for the test. Router Link is only rendered in the not-set-up hint
-// branch (never in these cases) — stub it anyway so the import is inert.
-const state = vi.hoisted(() => ({ dispatch: null as unknown }));
+// returns for the test, `state.action` backs all three useAction hooks (only
+// prepareBooking is exercised here). Router Link is only rendered in the
+// not-set-up hint branch (never in these cases) — stub it anyway so the
+// import is inert.
+const state = vi.hoisted(() => ({
+	dispatch: null as unknown,
+	action: undefined as unknown,
+}));
 vi.mock("convex/react", () => ({
 	useQuery: () => state.dispatch,
-	useAction: () => vi.fn(),
+	useAction: () => state.action ?? vi.fn(),
 }));
 vi.mock("@tanstack/react-router", () => ({
 	Link: (props: Record<string, unknown>) => <a {...props} />,
 }));
 
-afterEach(cleanup);
+afterEach(() => {
+	cleanup();
+	state.action = undefined;
+});
 
 const deliveredOrder = {
 	shortId: "ORD-JXHF",
@@ -100,5 +108,43 @@ describe("BookDeliveryCard — completed job", () => {
 		expect(screen.getByText(/Booking cost/)).toBeTruthy();
 		expect(screen.queryByText("Trip details")).toBeNull();
 		expect(screen.queryByText("Rahim")).toBeNull();
+	});
+});
+
+describe("BookDeliveryCard — dispatch dialog vehicle choice", () => {
+	it("offers Motorcycle/Car in the dialog and re-quotes on switch", async () => {
+		const prepare = vi.fn().mockResolvedValue({
+			ok: true,
+			quotationId: "q1",
+			senderStopId: "s1",
+			recipientStopId: "s2",
+			fee: 1110,
+			buyerPaidFee: 1110,
+			vehicleType: "MOTORCYCLE",
+			buyerContactFallback: false,
+		});
+		state.action = prepare;
+		state.dispatch = { promptBookOnPacked: false, blockReason: null, job: null };
+		const confirmedOrder = {
+			...deliveredOrder,
+			status: "confirmed",
+		} as unknown as Doc<"orders">;
+		render(<BookDeliveryCard order={confirmedOrder} />);
+
+		fireEvent.click(screen.getByText("Book delivery"));
+		// Dialog opens with the quote — both vehicle options present, settings
+		// default (Motorcycle) selected.
+		const car = await screen.findByRole("button", { name: /Car/ });
+		const moto = screen.getByRole("button", { name: /Motorcycle/ });
+		expect(moto.getAttribute("aria-pressed")).toBe("true");
+
+		// Switching re-quotes for the chosen vehicle (prices are per-vehicle).
+		fireEvent.click(car);
+		await waitFor(() =>
+			expect(prepare).toHaveBeenLastCalledWith({
+				shortId: "ORD-JXHF",
+				vehicleType: "CAR",
+			}),
+		);
 	});
 });
