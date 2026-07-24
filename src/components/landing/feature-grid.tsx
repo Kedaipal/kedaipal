@@ -1,63 +1,62 @@
-import {
-	BarChart3,
-	BellRing,
-	Boxes,
-	ClipboardCheck,
-	MessageCircle,
-	Store,
-} from "lucide-react";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { FadeIn } from "./fade-in";
 import { Eyebrow } from "./landing-ui";
 
-const HERO_FEATURES = [
-	{
-		icon: MessageCircle,
-		title: () => m.feature_2_title(),
-		body: () => m.feature_2_body(),
-		dark: true,
-		span: "lg:col-span-2",
-	},
-	{
-		icon: Store,
-		title: () => m.feature_1_title(),
-		body: () => m.feature_1_body(),
-		dark: false,
-		span: "",
-	},
-	// "What you can sell" row — variants (wide, longer copy) + the custom-order
-	// mockup gate, our strongest made-to-order differentiator. Placed mid-grid by
-	// meaning, not appended last.
-	{
-		icon: Boxes,
-		title: () => m.feature_8_title(),
-		body: () => m.feature_8_body(),
-		dark: false,
-		span: "lg:col-span-2",
-	},
-	{
-		icon: ClipboardCheck,
-		title: () => m.feature_9_title(),
-		body: () => m.feature_9_body(),
-		dark: false,
-		span: "",
-	},
-	{
-		icon: BarChart3,
-		title: () => m.feature_3_title(),
-		body: () => m.feature_3_body(),
-		dark: false,
-		span: "",
-	},
-	{
-		icon: BellRing,
-		title: () => m.feature_7_title(),
-		body: () => m.feature_7_body(),
-		dark: false,
-		span: "lg:col-span-2",
-	},
-];
+/**
+ * Features bento — every card pairs its claim with a small rendered
+ * CSS mock of the real surface (no icons, no rasters), matching the
+ * how-it-works mockup philosophy. Mocks are decorative (`aria-hidden`).
+ *
+ * Layout: 3-column bento tiling as [2+1], [1+2], [1+1+1] — the design's
+ * source order kept, with the inbox card at span-1 (mock stacked below
+ * text) so the grid tiles without holes.
+ */
+
+/** Tiny QR square for the counter-checkout card. */
+function MiniQr() {
+	return (
+		<span className="grid size-10 shrink-0 grid-cols-4 grid-rows-4 gap-0.5 rounded-md bg-foreground p-1">
+			{Array.from({ length: 16 }).map((_, i) => (
+				<span
+					// biome-ignore lint/suspicious/noArrayIndexKey: static decorative grid, never reorders
+					key={i}
+					className={cn(
+						"rounded-[1px]",
+						i % 3 === 0 || i % 5 === 0 ? "bg-background" : "bg-transparent",
+					)}
+				/>
+			))}
+		</span>
+	);
+}
+
+function CardShell({
+	children,
+	dark = false,
+	span = false,
+	delay = 0,
+}: {
+	children: React.ReactNode;
+	dark?: boolean;
+	span?: boolean;
+	delay?: number;
+}) {
+	return (
+		<FadeIn delay={delay} className={cn("h-full", span && "lg:col-span-2")}>
+			<div
+				className={cn(
+					"flex h-full flex-col rounded-3xl border p-7 transition-all duration-200 motion-reduce:hover:translate-y-0",
+					dark
+						? "border-transparent bg-cta-mesh text-cta-mesh-foreground shadow-lg"
+						: "border-border bg-card shadow-sm hover:-translate-y-1 hover:shadow-xl hover:ring-1 hover:ring-accent/25",
+				)}
+			>
+				{children}
+			</div>
+		</FadeIn>
+	);
+}
 
 export function FeatureGrid() {
 	return (
@@ -86,44 +85,174 @@ export function FeatureGrid() {
 				</div>
 
 				<div className="mt-14 grid gap-5 md:grid-cols-2 lg:grid-cols-3">
-					{HERO_FEATURES.map((f, i) => (
-						<FadeIn
-							key={f.title()}
-							delay={i * 0.08}
-							className={cn("h-full", f.span)}
-						>
-							<div
-								className={cn(
-									"group h-full rounded-3xl border p-7 transition-all duration-200 hover:-translate-y-1 hover:shadow-xl motion-reduce:hover:translate-y-0",
-									f.dark
-										? "border-primary bg-primary text-primary-foreground shadow-lg"
-										: "border-border bg-card shadow-sm hover:ring-1 hover:ring-accent/25",
-								)}
-							>
-								<div
-									className={cn(
-										"flex size-12 items-center justify-center rounded-2xl transition-colors duration-200",
-										f.dark
-											? "bg-accent text-accent-foreground"
-											: "bg-accent/10 text-accent group-hover:bg-accent group-hover:text-accent-foreground",
-									)}
-								>
-									<f.icon className="size-6" />
-								</div>
-								<h3 className="mt-5 text-xl font-semibold">{f.title()}</h3>
-								<p
-									className={cn(
-										"mt-2 max-w-md text-sm leading-relaxed",
-										f.dark
-											? "text-primary-foreground/65"
-											: "text-muted-foreground",
-									)}
-								>
-									{f.body()}
+					{/* Payment handshake & receipts — the dark hero card */}
+					<CardShell dark span>
+						<div className="grid h-full items-center gap-6 lg:grid-cols-[1.2fr_1fr]">
+							<div>
+								<h3 className="text-xl font-semibold">
+									{m.bento_handshake_title()}
+								</h3>
+								<p className="mt-2 text-sm leading-relaxed text-cta-mesh-foreground/65">
+									{m.bento_handshake_body()}
 								</p>
 							</div>
-						</FadeIn>
-					))}
+							<div
+								aria-hidden="true"
+								className="rounded-2xl bg-white p-3.5 text-slate-900 shadow-xl"
+							>
+								<div className="flex items-center justify-between gap-2">
+									<p className="text-xs font-bold">ORD-0042 · RM 76.00</p>
+									<span className="whitespace-nowrap rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+										{m.handshake_card_badge()}
+									</span>
+								</div>
+								<div className="mt-2.5 flex gap-1.5">
+									<span className="flex h-8 flex-1 items-center justify-center rounded-full bg-accent text-[11.5px] font-bold text-accent-foreground">
+										{m.handshake_card_confirm()}
+									</span>
+									<span className="flex h-8 items-center justify-center rounded-full border border-slate-200 px-3 text-[11.5px] font-semibold text-slate-500">
+										{m.handshake_card_decline()}
+									</span>
+								</div>
+							</div>
+						</div>
+					</CardShell>
+
+					{/* Counter checkout */}
+					<CardShell delay={0.08}>
+						<h3 className="text-xl font-semibold">{m.bento_counter_title()}</h3>
+						<p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+							{m.bento_counter_body()}
+						</p>
+						<div
+							aria-hidden="true"
+							className="mt-auto flex items-center gap-3 pt-4"
+						>
+							<MiniQr />
+							<span className="text-[12.5px] font-semibold text-foreground/80">
+								{m.bento_counter_chip()}{" "}
+								<span className="font-mono font-bold text-accent-emphasis">
+									K7
+								</span>
+							</span>
+						</div>
+					</CardShell>
+
+					{/* Hosted storefront */}
+					<CardShell delay={0.08}>
+						<h3 className="text-xl font-semibold">
+							{m.bento_storefront_title()}
+						</h3>
+						<p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+							{m.bento_storefront_body()}
+						</p>
+						<div aria-hidden="true" className="mt-auto pt-4">
+							<span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/60 px-3.5 py-2 text-[12.5px] font-semibold text-foreground/80">
+								<span className="text-accent">●</span> kedaipal.com/
+								<strong className="font-bold text-accent-emphasis">
+									dapur-nadia
+								</strong>
+							</span>
+						</div>
+					</CardShell>
+
+					{/* Built for made-to-order */}
+					<CardShell span delay={0.16}>
+						<div className="grid h-full items-center gap-6 lg:grid-cols-[1.2fr_1fr]">
+							<div>
+								<h3 className="text-xl font-semibold">{m.bento_mto_title()}</h3>
+								<p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+									{m.bento_mto_body()}
+								</p>
+							</div>
+							<div aria-hidden="true" className="flex flex-col gap-2">
+								<span className="flex items-center justify-between rounded-xl border border-border px-3 py-2 text-[12.5px] font-semibold text-foreground/80">
+									{m.bento_mto_row_date()}
+									<span className="text-accent-emphasis">Sat 25 Jul</span>
+								</span>
+								<span className="flex items-center justify-between rounded-xl border border-accent/40 bg-accent/5 px-3 py-2 text-[12.5px] font-semibold text-foreground/80">
+									{m.bento_mto_row_mockup()}
+									<span className="text-accent-emphasis">
+										{m.bento_mto_row_mockup_value()}
+									</span>
+								</span>
+								<span className="flex items-center justify-between rounded-xl border border-border px-3 py-2 text-[12.5px] font-semibold text-foreground/80">
+									{m.bento_mto_row_min()}
+									<span className="text-muted-foreground">
+										{m.bento_mto_row_min_value()}
+									</span>
+								</span>
+							</div>
+						</div>
+					</CardShell>
+
+					{/* Variants */}
+					<CardShell delay={0.24}>
+						<h3 className="text-xl font-semibold">{m.bento_variants_title()}</h3>
+						<p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+							{m.bento_variants_body()}
+						</p>
+						<div
+							aria-hidden="true"
+							className="mt-auto flex flex-wrap gap-1.5 pt-4"
+						>
+							<span className="rounded-full border-2 border-foreground px-3 py-1 text-xs font-bold">
+								500g
+							</span>
+							<span className="rounded-full border border-border px-3 py-1 text-xs font-semibold text-foreground/80">
+								1kg
+							</span>
+							<span className="rounded-full border border-border px-3 py-1 text-xs font-semibold text-muted-foreground/50 line-through">
+								2kg
+							</span>
+						</div>
+					</CardShell>
+
+					{/* Delivery & pickup */}
+					<CardShell delay={0.24}>
+						<h3 className="text-xl font-semibold">{m.bento_delivery_title()}</h3>
+						<p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+							{m.bento_delivery_body()}
+						</p>
+						<div
+							aria-hidden="true"
+							className="mt-auto flex flex-wrap gap-1.5 pt-4"
+						>
+							<span className="rounded-full bg-accent/10 px-3 py-1.5 text-xs font-semibold text-accent-emphasis">
+								{m.bento_delivery_chip_free()}
+							</span>
+							<span className="rounded-full bg-muted px-3 py-1.5 text-xs font-semibold text-foreground/80">
+								{m.bento_delivery_chip_band()}
+							</span>
+						</div>
+					</CardShell>
+
+					{/* Order inbox + customer memory */}
+					<CardShell delay={0.24}>
+						<h3 className="text-xl font-semibold">{m.bento_inbox_title()}</h3>
+						<p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+							{m.bento_inbox_body()}
+						</p>
+						<div
+							aria-hidden="true"
+							className="mt-auto rounded-2xl border border-border p-3.5 shadow-sm"
+						>
+							<div className="flex items-center gap-2.5">
+								<span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent/10 font-heading text-xs font-extrabold text-accent-emphasis">
+									AR
+								</span>
+								<div className="min-w-0">
+									<p className="truncate text-[13px] font-bold">Aisyah Rahim</p>
+									<p className="truncate text-[11.5px] text-muted-foreground">
+										{m.bento_inbox_stats()}
+									</p>
+								</div>
+							</div>
+							<p className="mt-2.5 truncate rounded-lg bg-muted/70 px-2.5 py-1.5 text-[11.5px] text-muted-foreground">
+								{m.bento_inbox_note()}
+							</p>
+						</div>
+					</CardShell>
 				</div>
 
 				<p className="mt-8 text-center">
