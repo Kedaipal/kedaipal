@@ -136,8 +136,16 @@ Two-tap: `prepareBooking` re-quotes at today's price and the confirm dialog
 shows it against the buyer-paid fee (variance called out, including who
 absorbs it); `confirmBooking` places the order within the 5-minute window
 and writes the `deliveryJobs` row — the **one-active-job-per-order**
-invariant is enforced atomically inside `recordBooking`, so double-taps
-can't double-book. Every blocked state renders disabled-with-reason on the
+invariant is enforced by a **reserve → POST → commit** sequence (PR #127
+review): `reserveBooking` atomically claims the slot with a placeholder
+row (no `providerOrderId` yet) BEFORE the external `POST /v3/orders`, so
+two concurrent confirms — even with distinct quotations from phone +
+desktop — can never both dispatch a rider; the loser is rejected before
+any money moves. `commitBooking` finalizes with Lalamove's order id, a
+failed POST releases the reservation into the amber rebook card, and a
+5-minute scheduled sweep expires a reservation orphaned by a crash
+mid-call (copy points the seller at their Lalamove app, since in the
+crash-mid-POST case the rider order may exist there untracked). Every blocked state renders disabled-with-reason on the
 card (`DispatchBlock` map): wrong status, no map pin on the address (with a
 fix path — never a dead end), booking off, plan gate (Pro chip), no
 credentials, missing buyer/seller phone. Wallet-empty

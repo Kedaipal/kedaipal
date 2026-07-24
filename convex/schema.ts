@@ -967,7 +967,11 @@ export default defineSchema({
 		orderId: v.id("orders"),
 		retailerId: v.id("retailers"),
 		provider: v.literal("lalamove"),
-		providerOrderId: v.string(),
+		// Unset while the row is a pre-call RESERVATION (inserted atomically
+		// before the POST /v3/orders side effect so two concurrent confirms can't
+		// both dispatch a rider); patched in by commitBooking once Lalamove
+		// confirms. Webhook lookups by this index never match reservations.
+		providerOrderId: v.optional(v.string()),
 		// Normalized provider status. Forward flow: assigning → ongoing (driver
 		// matched) → picked_up → completed. Lalamove can REGRESS ongoing/picked_up
 		// back to assigning when a matched driver bails — the job row follows the

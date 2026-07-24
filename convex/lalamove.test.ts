@@ -794,3 +794,134 @@ describe("applyWebhookEvent — stale currentStageId cleared on auto-transition"
 		expect(order?.currentStageId).toBeUndefined();
 	});
 });
+
+describe("reserve → commit booking (double-dispatch guard, PR #127 review)", () => {
+	test("second concurrent confirm is rejected BEFORE any rider is placed", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+
+		// Two confirms race with distinct quotations (phone + desktop). The slot
+		// is claimed atomically before the external POST — loser throws here,
+		// so its POST /v3/orders never happens.
+		await t.mutation(internal.lalamove.reserveBooking, {
+			orderId,
+			retailerId: retailer._id,
+			quotationId: "quot-phone",
+			vehicleType: "MOTORCYCLE",
+		});
+		await expect(
+			t.mutation(internal.lalamove.reserveBooking, {
+				orderId,
+				retailerId: retailer._id,
+				quotationId: "quot-desktop",
+				vehicleType: "MOTORCYCLE",
+			}),
+		).rejects.toThrow(/already in progress/);
+	});
+
+	test("commit finalizes the reservation and mirrors the tracking link", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		const jobId = await t.mutation(internal.lalamove.reserveBooking, {
+			orderId,
+			retailerId: retailer._id,
+			quotationId: "quot-1",
+			vehicleType: "MOTORCYCLE",
+		});
+
+		await t.mutation(internal.lalamove.commitBooking, {
+			jobId,
+			providerOrderId: "LLM-9",
+			costActual: 1350,
+			shareLink: SHARE,
+			providerStatus: "ASSIGNING_DRIVER",
+		});
+
+		const { job, order } = await t.run(async (ctx) => ({
+			job: await ctx.db.get(jobId),
+			order: await ctx.db.get(orderId),
+		}));
+		expect(job?.providerOrderId).toBe("LLM-9");
+		expect(job?.costActual).toBe(1350);
+		expect(job?.status).toBe("assigning");
+		expect(order?.carrierTrackingUrl).toBe(SHARE);
+	});
+
+	test("release frees an uncommitted reservation for one-tap rebook; no-op after commit", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		const jobId = await t.mutation(internal.lalamove.reserveBooking, {
+			orderId,
+			retailerId: retailer._id,
+			quotationId: "quot-1",
+			vehicleType: "MOTORCYCLE",
+		});
+
+		await t.mutation(internal.lalamove.releaseReservation, {
+			jobId,
+			reason: "Lalamove rejected the stop",
+		});
+		let job = await t.run(async (ctx) => ctx.db.get(jobId));
+		expect(job?.status).toBe("canceled");
+		expect(job?.failureReason).toBe("Lalamove rejected the stop");
+
+		// Slot is free again — the rebook reserve succeeds.
+		const secondId = await t.mutation(internal.lalamove.reserveBooking, {
+			orderId,
+			retailerId: retailer._id,
+			quotationId: "quot-2",
+			vehicleType: "MOTORCYCLE",
+		});
+		await t.mutation(internal.lalamove.commitBooking, {
+			jobId: secondId,
+			providerOrderId: "LLM-10",
+			costActual: 1350,
+		});
+		// Release after commit must not touch a real booking.
+		await t.mutation(internal.lalamove.releaseReservation, {
+			jobId: secondId,
+			reason: "late error",
+		});
+		job = await t.run(async (ctx) => ctx.db.get(secondId));
+		expect(job?.status).toBe("assigning");
+		expect(job?.failureReason).toBeUndefined();
+	});
+
+	test("expiry sweep flags only a still-uncommitted reservation", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		const jobId = await t.mutation(internal.lalamove.reserveBooking, {
+			orderId,
+			retailerId: retailer._id,
+			quotationId: "quot-1",
+			vehicleType: "MOTORCYCLE",
+		});
+
+		await t.mutation(internal.lalamove.expireStaleReservation, { jobId });
+		const job = await t.run(async (ctx) => ctx.db.get(jobId));
+		expect(job?.status).toBe("expired");
+		expect(job?.failureReason).toMatch(/check your Lalamove app/i);
+
+		// Committed booking: the sweep is a no-op.
+		const liveId = await t.mutation(internal.lalamove.reserveBooking, {
+			orderId,
+			retailerId: retailer._id,
+			quotationId: "quot-2",
+			vehicleType: "MOTORCYCLE",
+		});
+		await t.mutation(internal.lalamove.commitBooking, {
+			jobId: liveId,
+			providerOrderId: "LLM-11",
+			costActual: 1000,
+		});
+		await t.mutation(internal.lalamove.expireStaleReservation, {
+			jobId: liveId,
+		});
+		const live = await t.run(async (ctx) => ctx.db.get(liveId));
+		expect(live?.status).toBe("assigning");
+	});
+});

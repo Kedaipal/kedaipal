@@ -791,8 +791,14 @@ export const prepareBooking = action({
 /**
  * Step 2: place the rider order against the confirmed quotation and write
  * the ledger row. All eligibility re-checks run again (the dialog may have
- * sat open); the one-active-job invariant is enforced ATOMICALLY inside
- * recordBooking, so two fast taps cannot double-book.
+ * sat open). The one-active-job invariant is enforced ATOMICALLY by
+ * reserveBooking BEFORE the external POST — a reservation row claims the
+ * slot, so two concurrent confirms (e.g. the same order open on phone +
+ * desktop, each with its own prepared quote) can never both dispatch a
+ * rider: the loser is rejected before any money moves. commitBooking then
+ * finalizes the reservation with Lalamove's order id; a failed POST
+ * releases it (amber card + rebook), and a scheduled expiry sweeps a
+ * reservation orphaned by a crash mid-call.
  */
 export const confirmBooking = action({
 	args: {
@@ -816,6 +822,23 @@ export const confirmBooking = action({
 			shortId: args.shortId,
 		});
 		if (!context.ok) return context;
+		// Claim the order's booking slot BEFORE the external side effect. If a
+		// concurrent confirm already holds it, bail here — no rider dispatched.
+		let jobId: Id<"deliveryJobs">;
+		try {
+			jobId = await ctx.runMutation(internal.lalamove.reserveBooking, {
+				orderId: context.orderId,
+				retailerId: context.retailerId,
+				quotationId: args.quotationId,
+				vehicleType: context.vehicleType,
+			});
+		} catch {
+			return {
+				ok: false,
+				reason: "job_active",
+				message: "A rider booking is already in progress for this order.",
+			};
+		}
 		try {
 			const response = await callLalamove(
 				context.credentials,
@@ -838,13 +861,10 @@ export const confirmBooking = action({
 				}),
 			);
 			const parsed = parseOrderResponse(response);
-			await ctx.runMutation(internal.lalamove.recordBooking, {
-				orderId: context.orderId,
-				retailerId: context.retailerId,
+			await ctx.runMutation(internal.lalamove.commitBooking, {
+				jobId,
 				providerOrderId: parsed.providerOrderId,
 				costActual: parsed.priceTotal,
-				quotationId: args.quotationId,
-				vehicleType: context.vehicleType,
 				shareLink: parsed.shareLink,
 				providerStatus: parsed.status,
 			});
@@ -858,29 +878,39 @@ export const confirmBooking = action({
 				shortId: args.shortId,
 				message: err instanceof Error ? err.message : String(err),
 			});
-			return {
-				ok: false,
-				reason: "booking_failed",
-				message: friendlyBookingError(err),
-			};
+			const message = friendlyBookingError(err);
+			// Free the slot so the seller can rebook immediately; the released row
+			// doubles as the amber failed card.
+			await ctx.runMutation(internal.lalamove.releaseReservation, {
+				jobId,
+				reason: message,
+			});
+			return { ok: false, reason: "booking_failed", message };
 		}
 	},
 });
 
-export const recordBooking = internalMutation({
+/** How long an uncommitted reservation may exist before the sweeper flags
+ * it. Generous vs the ~seconds Lalamove round-trip so a slow-but-successful
+ * POST can't race its own expiry. */
+const RESERVATION_EXPIRY_MS = 5 * 60 * 1000;
+
+/**
+ * Atomically claim the one-active-job slot for an order, BEFORE the external
+ * POST. Inserting the placeholder row and checking for a competitor happen in
+ * one transaction, so of two racing confirms exactly one wins — the ledger
+ * row now guards the Lalamove side effect too, not just itself. The
+ * reservation is visible as a live "Finding rider" job to any concurrently
+ * open order page, which is also what blocks its Book button.
+ */
+export const reserveBooking = internalMutation({
 	args: {
 		orderId: v.id("orders"),
 		retailerId: v.id("retailers"),
-		providerOrderId: v.string(),
-		costActual: v.number(),
 		quotationId: v.string(),
 		vehicleType: v.string(),
-		shareLink: v.optional(v.string()),
-		providerStatus: v.optional(v.string()),
 	},
 	handler: async (ctx, args): Promise<Id<"deliveryJobs">> => {
-		// One ACTIVE job per order, enforced where it's atomic. The action's
-		// pre-check filters the common case; this is the race-proof gate.
 		const jobs = await ctx.db
 			.query("deliveryJobs")
 			.withIndex("by_order", (q) => q.eq("orderId", args.orderId))
@@ -891,25 +921,60 @@ export const recordBooking = internalMutation({
 			);
 		}
 		const now = Date.now();
-		const status: DeliveryJobStatus =
-			normalizeLalamoveStatus(args.providerStatus) ?? "assigning";
 		const jobId = await ctx.db.insert("deliveryJobs", {
 			orderId: args.orderId,
 			retailerId: args.retailerId,
 			provider: "lalamove",
+			// providerOrderId stays unset until commitBooking — the marker that
+			// this row is a reservation, not a confirmed booking.
+			status: "assigning",
+			costActual: 0, // real figure patched in at commit (never client-supplied)
+			quotationId: args.quotationId,
+			vehicleType: args.vehicleType,
+			createdAt: now,
+			updatedAt: now,
+		});
+		// Crash safety: if the action dies between reserve and commit/release
+		// (deploy, timeout), this sweep frees the slot instead of blocking the
+		// order's bookings forever. No-op once committed or released.
+		await ctx.scheduler.runAfter(
+			RESERVATION_EXPIRY_MS,
+			internal.lalamove.expireStaleReservation,
+			{ jobId },
+		);
+		return jobId;
+	},
+});
+
+/** Finalize a reservation with Lalamove's confirmed order. */
+export const commitBooking = internalMutation({
+	args: {
+		jobId: v.id("deliveryJobs"),
+		providerOrderId: v.string(),
+		costActual: v.number(),
+		shareLink: v.optional(v.string()),
+		providerStatus: v.optional(v.string()),
+	},
+	handler: async (ctx, args) => {
+		const job = await ctx.db.get(args.jobId);
+		if (!job) return;
+		const now = Date.now();
+		const status: DeliveryJobStatus =
+			normalizeLalamoveStatus(args.providerStatus) ?? "assigning";
+		await ctx.db.patch(args.jobId, {
 			providerOrderId: args.providerOrderId,
 			status,
 			costActual: args.costActual,
-			quotationId: args.quotationId,
-			vehicleType: args.vehicleType,
 			shareLink: args.shareLink,
-			createdAt: now,
+			// A commit that lost a (5-min!) race against its own expiry sweep
+			// revives the row — the booking DOES exist at Lalamove either way.
+			failureReason: undefined,
 			updatedAt: now,
 		});
 		// Mirror the tracking link early (fill-if-unset) — same posture as the
 		// DRIVER_ASSIGNED webhook path.
 		if (args.shareLink) {
-			const order = await ctx.db.get(args.orderId);
+			const order = await ctx.db.get(job.orderId);
 			if (order && !order.carrierTrackingUrl) {
 				await ctx.db.patch(order._id, {
 					carrierTrackingUrl: args.shareLink,
@@ -917,7 +982,39 @@ export const recordBooking = internalMutation({
 				});
 			}
 		}
-		return jobId;
+	},
+});
+
+/** Free a reservation whose POST failed — the row becomes the amber failed
+ * card with one-tap rebook. No-op once committed (providerOrderId set). */
+export const releaseReservation = internalMutation({
+	args: { jobId: v.id("deliveryJobs"), reason: v.string() },
+	handler: async (ctx, { jobId, reason }) => {
+		const job = await ctx.db.get(jobId);
+		if (!job || job.providerOrderId !== undefined) return;
+		await ctx.db.patch(jobId, {
+			status: "canceled",
+			failureReason: reason,
+			updatedAt: Date.now(),
+		});
+	},
+});
+
+/** Scheduled sweep for a reservation orphaned by a crash between reserve and
+ * commit/release. The copy tells the seller to check their Lalamove app —
+ * in the crash-mid-POST case the rider order may exist there untracked. */
+export const expireStaleReservation = internalMutation({
+	args: { jobId: v.id("deliveryJobs") },
+	handler: async (ctx, { jobId }) => {
+		const job = await ctx.db.get(jobId);
+		if (!job || job.providerOrderId !== undefined) return; // committed
+		if (job.status !== "assigning") return; // already released
+		await ctx.db.patch(jobId, {
+			status: "expired",
+			failureReason:
+				"Booking never confirmed — check your Lalamove app before rebooking",
+			updatedAt: Date.now(),
+		});
 	},
 });
 
@@ -979,7 +1076,9 @@ export const getCancelContext = internalQuery({
 			.withIndex("by_order", (q) => q.eq("orderId", order._id))
 			.collect();
 		const active = jobs.find((j) => isActiveJobStatus(j.status));
-		if (!active) return null;
+		// A reservation (no providerOrderId yet) has nothing to cancel at
+		// Lalamove — it either commits, releases, or expires within seconds.
+		if (!active || active.providerOrderId === undefined) return null;
 		const retailer = await ctx.db.get(order.retailerId);
 		const credentials = resolveLalamoveCredentials(
 			retailer?.deliveryBooking as BookingConfig | undefined,
@@ -1012,7 +1111,8 @@ export const markJobCancelled = internalMutation({
 /** Public job shape for the order-detail card — no credentials, no secrets. */
 export type DeliveryJobView = {
 	status: DeliveryJobStatus;
-	providerOrderId: string;
+	/** Unset only for the seconds-long pre-commit reservation window. */
+	providerOrderId?: string;
 	costActual: number;
 	vehicleType: string;
 	driver?: { name: string; phone: string; plateNumber: string };
