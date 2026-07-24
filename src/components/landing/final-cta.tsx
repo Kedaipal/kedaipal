@@ -10,7 +10,7 @@ export function FinalCta() {
 	return (
 		<section
 			aria-labelledby="final-cta-heading"
-			className="relative overflow-hidden bg-cta-mesh text-primary-foreground"
+			className="relative overflow-hidden bg-cta-mesh text-cta-mesh-foreground"
 		>
 			{/* Decorative rings behind the CTA */}
 			<div
@@ -31,7 +31,7 @@ export function FinalCta() {
 					>
 						{m.final_heading()}
 					</h2>
-					<p className="mx-auto mt-5 max-w-xl text-lg text-primary-foreground/65">
+					<p className="mx-auto mt-5 max-w-xl text-lg text-cta-mesh-foreground/65">
 						{m.final_sub()}
 					</p>
 					<div className="mt-10 flex justify-center">
