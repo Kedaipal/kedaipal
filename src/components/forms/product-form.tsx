@@ -19,6 +19,7 @@ import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
 import { convexErrorMessage, parsePriceInput } from "../../lib/format";
 import { reorderByIds } from "../../lib/reorder";
 import { productDetailsSchema } from "../../lib/schemas";
+import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Markdown } from "../ui/markdown";
@@ -646,9 +647,9 @@ export function ProductForm({
 						<p className="mt-0.5 text-xs text-muted-foreground leading-relaxed">
 							Days of lead time this product needs (custom / made-to-order
 							items). Buyers can&apos;t pick a delivery or pickup date sooner
-							than this — it raises your store-level notice when higher, and
-							the strictest item in a cart sets the whole order&apos;s
-							earliest date. Leave 0 for no extra notice.
+							than this — it raises your store-level notice when higher, and the
+							strictest item in a cart sets the whole order&apos;s earliest
+							date. Leave 0 for no extra notice.
 						</p>
 					</div>
 					<div className="flex shrink-0 items-center gap-1.5">
@@ -756,13 +757,7 @@ export function ProductForm({
 							className="contents"
 							renderItem={(img, handle) => (
 								<div className="relative aspect-square w-full overflow-hidden rounded-xl bg-muted">
-									{img.url ? (
-										<img
-											src={img.url}
-											alt=""
-											className="size-full object-cover"
-										/>
-									) : null}
+									<AppImage src={img.url} alt="" aspect="size-full" />
 									{/* Cover badge on the first image — reordering changes
 									    which image leads on the storefront. */}
 									{img.id === images[0]?.id ? (

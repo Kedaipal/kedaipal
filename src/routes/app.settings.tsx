@@ -41,8 +41,9 @@ import { submitThenFocusError } from "../components/forms/focus-error";
 import { useAppForm } from "../components/forms/form";
 import { ShopeeIcon } from "../components/icons/shopee-icon";
 import { BillingTab } from "../components/settings/billing-tab";
-import { NotificationsCard } from "../components/settings/notifications-card";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
+import { NotificationsCard } from "../components/settings/notifications-card";
+import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
@@ -405,15 +406,16 @@ function SettingsRoute() {
 					{/* Store identity card — doubles as the deep link + tier badge. */}
 					<div className="flex items-center gap-3 rounded-2xl bg-foreground p-3.5 text-background">
 						<span className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-accent font-heading text-base font-extrabold text-accent-foreground">
-							{retailer.logoUrl ? (
-								<img
-									src={retailer.logoUrl}
-									alt=""
-									className="size-full object-cover"
-								/>
-							) : (
-								retailer.storeName.charAt(0).toUpperCase()
-							)}
+							<AppImage
+								src={retailer.logoUrl}
+								alt=""
+								aspect="size-full"
+								fallback={
+									<span className="flex h-full w-full items-center justify-center">
+										{retailer.storeName.charAt(0).toUpperCase()}
+									</span>
+								}
+							/>
 						</span>
 						<div className="flex min-w-0 flex-1 flex-col gap-0.5">
 							<span className="truncate text-[15px] font-bold">
@@ -987,10 +989,13 @@ function LogoForm({
 
 			{previewUrl ? (
 				<div className="flex items-start gap-4">
-					<img
+					<AppImage
 						src={previewUrl}
 						alt="Store logo"
-						className="h-24 w-24 rounded-2xl border border-input bg-background object-contain"
+						aspect="h-24 w-24"
+						rounded="rounded-2xl"
+						objectFit="contain"
+						className="border border-input bg-background"
 					/>
 					<div className="flex flex-1 flex-col gap-2">
 						<label className="inline-flex h-11 cursor-pointer items-center justify-center rounded-xl border border-input bg-background px-4 text-sm font-medium hover:bg-accent/5">
@@ -1085,10 +1090,12 @@ function CoverImageForm({
 
 			{previewUrl ? (
 				<div className="flex flex-col gap-3">
-					<img
+					<AppImage
 						src={previewUrl}
 						alt="Store cover"
-						className="aspect-[3/1] w-full rounded-2xl border border-input bg-muted object-cover"
+						aspect="aspect-[3/1] w-full"
+						rounded="rounded-2xl"
+						className="border border-input bg-muted"
 					/>
 					<div className="flex items-center gap-3">
 						<label className="inline-flex h-11 cursor-pointer items-center justify-center rounded-xl border border-input bg-background px-4 text-sm font-medium hover:bg-accent/5">
@@ -1439,10 +1446,13 @@ function PaymentMethodsForm({
 						<span className="text-sm font-medium">QR image</span>
 						{m.qrPreviewUrl ? (
 							<div className="flex flex-col items-start gap-2">
-								<img
+								<AppImage
 									src={m.qrPreviewUrl}
 									alt="Payment QR"
-									className="h-44 w-44 rounded-xl border border-input object-contain"
+									aspect="h-44 w-44"
+									rounded="rounded-xl"
+									objectFit="contain"
+									className="border border-input"
 								/>
 								<button
 									type="button"
