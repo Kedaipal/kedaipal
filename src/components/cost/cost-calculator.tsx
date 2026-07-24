@@ -1,5 +1,6 @@
 import { ArrowRight, TrendingDown } from "lucide-react";
 import { useState } from "react";
+import { AppImage } from "#/components/ui/app-image";
 import { Button } from "#/components/ui/button";
 import { Field, FieldLabel } from "#/components/ui/field";
 import { Slider } from "#/components/ui/slider";
@@ -241,10 +242,11 @@ function ResultCard({ result, ratioLabel }: ResultCardProps) {
 						: "border-white/10 text-cta-mesh-foreground/60",
 				)}
 			>
-				<img
+				<AppImage
 					src={result.disqualified ? "/logo-3.svg" : "/logo-dark.svg"}
 					alt="Kedaipal"
-					className="h-5 w-auto"
+					aspect="h-5 w-auto"
+					fill={false}
 				/>
 				<span>kedaipal.com/cost</span>
 			</div>

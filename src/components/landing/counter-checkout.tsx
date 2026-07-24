@@ -1,6 +1,7 @@
 import { Check } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
+import { AppImage } from "../ui/app-image";
 import { FadeIn } from "./fade-in";
 import { Eyebrow, Sticker } from "./landing-ui";
 
@@ -48,11 +49,11 @@ export function CounterCheckout() {
 						<div aria-hidden="true" className="flex justify-center">
 							<div className="relative">
 								<div className="w-64 -rotate-2 rounded-3xl border-2 border-dashed border-foreground/20 bg-card p-7 text-center shadow-xl">
-									<img
+									<AppImage
 										src="/logo-3.svg"
 										alt=""
-										className="mx-auto h-6 w-auto"
-										loading="lazy"
+										aspect="mx-auto h-6 w-auto"
+										fill={false}
 									/>
 									<QrPattern className="mx-auto mt-5 size-36" />
 									<p className="mt-5 font-heading text-[15px] font-bold">

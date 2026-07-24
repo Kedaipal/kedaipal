@@ -1,6 +1,14 @@
 import QRCode from "react-qr-code";
 import { m } from "../../paraglide/messages";
 
+/**
+ * Every `<img>` in this file is deliberately raw, NOT `AppImage`
+ * (`src/components/ui/app-image.tsx`) — this is a print/PDF-export surface,
+ * rasterized to canvas elsewhere via its own `new Image()` onload/onerror
+ * gating (`app.poster.tsx`). AppImage's lazy-loading hint and opacity-0
+ * loading state can print/rasterize blank; this component needs every image
+ * eagerly present and fully opaque the moment it renders.
+ */
 export type PosterLocale = "en" | "ms";
 
 /**

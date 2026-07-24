@@ -23,6 +23,7 @@ import { useSidebarCollapsed } from "../../hooks/useSidebarCollapsed";
 import { hasFeature } from "../../lib/subscription";
 import { cn } from "../../lib/utils";
 import { ProBadge } from "../app/pro-gate";
+import { AppImage } from "../ui/app-image";
 import { TierPill } from "./tier-pill";
 
 type Retailer = NonNullable<
@@ -81,7 +82,13 @@ export function Sidebar({
 					onClick={retailer ? undefined : exitActAs}
 					className="flex items-center gap-2.5 min-w-0"
 				>
-					<img src="/logo.svg" alt="Kedaipal" className="h-8 w-auto shrink-0" />
+					<AppImage
+						src="/logo.svg"
+						alt="Kedaipal"
+						aspect="h-8 w-auto shrink-0"
+						fill={false}
+						priority
+					/>
 					{!collapsed ? (
 						<div className="flex min-w-0 flex-col">
 							<span className="truncate text-sm font-semibold leading-tight">

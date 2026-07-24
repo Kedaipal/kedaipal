@@ -9,6 +9,20 @@
       "autoPort": false
     },
     {
+      "name": "web-landing-wt",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["exec", "vite", "dev", "--port", "3100"],
+      "port": 3100,
+      "autoPort": false
+    },
+    {
+      "name": "web-appimage-wt",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["exec", "vite", "dev", "--port", "3102"],
+      "port": 3102,
+      "autoPort": false
+    },
+    {
       "name": "web-redesign-wt",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": [

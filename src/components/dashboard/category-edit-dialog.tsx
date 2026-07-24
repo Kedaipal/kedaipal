@@ -9,6 +9,7 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import { convexErrorMessage } from "../../lib/format";
 import { reorderByIds } from "../../lib/reorder";
 import { categorySlugSchema, slugify } from "../../lib/slug";
+import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { SortableList } from "../ui/sortable-list";
@@ -233,18 +234,17 @@ export function CategoryEditDialog({
 												: "Add category image"
 										}
 									>
-										{shownImageUrl ? (
-											<img
-												src={shownImageUrl}
-												alt=""
-												className="size-full object-cover"
-											/>
-										) : (
-											<ImagePlus
-												className="size-5 text-muted-foreground"
-												aria-hidden
-											/>
-										)}
+										<AppImage
+											src={shownImageUrl}
+											alt=""
+											aspect="size-full"
+											fallback={
+												<ImagePlus
+													className="size-5 text-muted-foreground"
+													aria-hidden
+												/>
+											}
+										/>
 									</button>
 									<div className="flex flex-col items-start gap-1">
 										<p className="text-xs text-muted-foreground">
@@ -369,13 +369,7 @@ function ArrangeProducts({ categoryId }: { categoryId: Id<"categories"> }) {
 					>
 						{handle}
 						<div className="size-10 shrink-0 overflow-hidden rounded-lg bg-muted">
-							{p.imageUrl ? (
-								<img
-									src={p.imageUrl}
-									alt=""
-									className="size-full object-cover"
-								/>
-							) : null}
+							<AppImage src={p.imageUrl} alt="" aspect="size-full" />
 						</div>
 						<span className="min-w-0 flex-1 truncate text-sm font-medium">
 							{p.name}
