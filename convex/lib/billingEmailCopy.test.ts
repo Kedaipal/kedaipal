@@ -67,6 +67,12 @@ describe("renderBillingEmail", () => {
 		expect(html).toContain("Cara bayar"); // "How to pay"
 	});
 
+	it("renders Chinese copy for the zh locale", () => {
+		const { subject, html } = renderBillingEmail("zh", "invoiceIssued", base);
+		expect(subject).toContain("新账单");
+		expect(html).toContain("付款方式"); // "How to pay"
+	});
+
 	it("overdue email reads as a past-due lock notice + keeps pay details", () => {
 		const { subject, html } = renderBillingEmail("en", "invoiceOverdue", base);
 		expect(subject.toLowerCase()).toContain("past due");
@@ -102,6 +108,11 @@ describe("renderTrialEmail", () => {
 		expect(subject.toLowerCase()).toContain("percubaan");
 	});
 
+	it("renders Chinese trial copy", () => {
+		const { subject } = renderTrialEmail("zh", "trialEnded", tv);
+		expect(subject).toContain("试用期");
+	});
+
 	it("subscriptionLapsed reads as a lapsed-renewal notice (no invoice)", () => {
 		const { subject, html } = renderTrialEmail("en", "subscriptionLapsed", tv);
 		expect(subject.toLowerCase()).toContain("lapsed");
@@ -134,5 +145,10 @@ describe("renderPaymentEmail", () => {
 	it("renders Malay payment copy", () => {
 		const { subject } = renderPaymentEmail("ms", "welcome", pv);
 		expect(subject.toLowerCase()).toContain("selamat datang");
+	});
+
+	it("renders Chinese payment copy", () => {
+		const { subject } = renderPaymentEmail("zh", "welcome", pv);
+		expect(subject).toContain("欢迎");
 	});
 });

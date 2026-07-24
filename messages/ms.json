@@ -108,7 +108,7 @@
 	"faq_q_3": "Bagaimana pembayaran dikendalikan?",
 	"faq_a_3": "Pelanggan anda bayar terus kepada anda — pindahan bank, DuitNow QR, e-dompet atau tunai. Kedaipal hantar butiran bayaran anda dengan setiap pengesahan, jejak proses “Saya dah bayar”, dan keluarkan resit. Kedaipal tidak pernah sentuh wang pesanan anda. Pembayaran dalam talian semasa checkout akan datang.",
 	"faq_q_4": "Bahasa apa yang disokong?",
-	"faq_a_4": "Kedaipal kini sokong Bahasa Malaysia dan Inggeris. Bahasa Cina dan Tamil ada dalam peta jalan.",
+	"faq_a_4": "Kedaipal kini menyokong Bahasa Inggeris, Bahasa Malaysia, dan Bahasa Cina. Bahasa Tamil ada dalam peta jalan.",
 	"faq_q_5": "Adakah Kedaipal untuk WhatsApp sahaja?",
 	"faq_a_5": "Tidak. WhatsApp ialah tempat kebanyakan penjual mula sebab itulah saluran yang pelanggan mereka guna setiap hari — tetapi papan pemuka yang sama turut menggerakkan kedai web dan checkout kaunter secara langsung anda, jadi pesanan dalam talian dan pesanan walk-in berada di satu tempat.",
 	"faq_q_6": "Perniagaan jenis apa yang sesuai dengan Kedaipal?",
@@ -314,6 +314,7 @@
 	"lang_switcher_label": "Bahasa",
 	"lang_en": "English",
 	"lang_ms": "Bahasa Malaysia",
+	"lang_zh": "中文",
 
 	"cost_badge": "Kos sebenar pesanan melalui WhatsApp sahaja",
 	"cost_heading_1": "Berapa kos pesanan melalui WhatsApp sahaja",

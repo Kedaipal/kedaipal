@@ -12,6 +12,7 @@ const localeOverridesValidator = v.object({
 const messageTemplatesValidator = v.object({
 	en: v.optional(localeOverridesValidator),
 	ms: v.optional(localeOverridesValidator),
+	zh: v.optional(localeOverridesValidator),
 });
 
 // Per-retailer SHORT status labels (tracking timeline / dashboard). Six optional
@@ -29,6 +30,7 @@ const statusLabelOverridesValidator = v.object({
 const statusLabelsValidator = v.object({
 	en: v.optional(statusLabelOverridesValidator),
 	ms: v.optional(statusLabelOverridesValidator),
+	zh: v.optional(statusLabelOverridesValidator),
 });
 
 // Phase 2 custom stages. `id`/`sortOrder` optional on the wire — the server
@@ -44,9 +46,17 @@ const orderStagesValidator = v.array(
 			v.literal("shipped"),
 			v.literal("delivered"),
 		),
-		label: v.object({ en: v.string(), ms: v.optional(v.string()) }),
+		label: v.object({
+			en: v.string(),
+			ms: v.optional(v.string()),
+			zh: v.optional(v.string()),
+		}),
 		description: v.optional(
-			v.object({ en: v.optional(v.string()), ms: v.optional(v.string()) }),
+			v.object({
+				en: v.optional(v.string()),
+				ms: v.optional(v.string()),
+				zh: v.optional(v.string()),
+			}),
 		),
 		notify: v.boolean(),
 		sortOrder: v.optional(v.number()),
@@ -57,8 +67,8 @@ const orderStagesValidator = v.array(
 type OrderStageInput = {
 	id?: string;
 	anchor: StageAnchor;
-	label: { en: string; ms?: string };
-	description?: { en?: string; ms?: string };
+	label: { en: string; ms?: string; zh?: string };
+	description?: { en?: string; ms?: string; zh?: string };
 	notify: boolean;
 	sortOrder?: number;
 };
@@ -78,13 +88,16 @@ function sanitizeOrderStages(
 	const out: OrderStage[] = input.map((s, i) => {
 		const en = (s.label?.en ?? "").trim();
 		const ms = (s.label?.ms ?? "").trim();
+		const zh = (s.label?.zh ?? "").trim();
 		const descEn = (s.description?.en ?? "").trim();
 		const descMs = (s.description?.ms ?? "").trim();
+		const descZh = (s.description?.zh ?? "").trim();
 		const description =
-			descEn || descMs
+			descEn || descMs || descZh
 				? {
 						...(descEn ? { en: descEn } : {}),
 						...(descMs ? { ms: descMs } : {}),
+						...(descZh ? { zh: descZh } : {}),
 					}
 				: undefined;
 		// Reuse a client-supplied stable id; mint one for a brand-new stage. Never
@@ -93,7 +106,7 @@ function sanitizeOrderStages(
 		return {
 			id,
 			anchor: s.anchor,
-			label: { en, ...(ms ? { ms } : {}) },
+			label: { en, ...(ms ? { ms } : {}), ...(zh ? { zh } : {}) },
 			...(description ? { description } : {}),
 			notify: Boolean(s.notify),
 			sortOrder: i,
@@ -164,6 +177,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
 import { ConvexError } from "convex/values";
 import { reserveFoundingRank } from "./foundingMembers";
+import { DEFAULT_LOCALE, type Locale } from "./lib/locale";
 import { MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
 import { sanitizeMinOrderValue } from "./lib/minOrderRules";
 import { rateLimiter } from "./lib/rateLimiter";
@@ -359,8 +373,8 @@ function sanitizeStoreDescription(input: string): string | undefined {
 	return trimmed;
 }
 
-export type Locale = "en" | "ms";
-export const DEFAULT_LOCALE: Locale = "en";
+export type { Locale } from "./lib/locale";
+export { DEFAULT_LOCALE } from "./lib/locale";
 
 type LocaleOverrides = {
 	confirm?: string;
@@ -374,6 +388,7 @@ type LocaleOverrides = {
 type MessageTemplatesShape = {
 	en?: LocaleOverrides;
 	ms?: LocaleOverrides;
+	zh?: LocaleOverrides;
 };
 
 const TEMPLATE_MAX_LENGTH = 1000;
@@ -410,9 +425,11 @@ function sanitizeMessageTemplates(
 ): MessageTemplatesShape | undefined {
 	const en = sanitizeOverrides(input.en);
 	const ms = sanitizeOverrides(input.ms);
+	const zh = sanitizeOverrides(input.zh);
 	const out: MessageTemplatesShape = {};
 	if (en) out.en = en;
 	if (ms) out.ms = ms;
+	if (zh) out.zh = zh;
 	return Object.keys(out).length > 0 ? out : undefined;
 }
 
@@ -442,9 +459,11 @@ function sanitizeStatusLabelOverrides(
 function sanitizeStatusLabels(input: StatusLabels): StatusLabels | undefined {
 	const en = sanitizeStatusLabelOverrides(input.en);
 	const ms = sanitizeStatusLabelOverrides(input.ms);
+	const zh = sanitizeStatusLabelOverrides(input.zh);
 	const out: StatusLabels = {};
 	if (en) out.en = en;
 	if (ms) out.ms = ms;
+	if (zh) out.zh = zh;
 	return Object.keys(out).length > 0 ? out : undefined;
 }
 
@@ -1049,7 +1068,9 @@ export const updateSettings = mutation({
 		waPhone: v.optional(v.string()),
 		notifyEmail: v.optional(v.string()),
 		currency: v.optional(v.string()),
-		locale: v.optional(v.union(v.literal("en"), v.literal("ms"))),
+		locale: v.optional(
+			v.union(v.literal("en"), v.literal("ms"), v.literal("zh")),
+		),
 		messageTemplates: v.optional(messageTemplatesValidator),
 		statusLabels: v.optional(statusLabelsValidator),
 		orderStages: v.optional(orderStagesValidator),
