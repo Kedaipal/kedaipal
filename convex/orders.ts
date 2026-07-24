@@ -2031,6 +2031,9 @@ async function deleteOrderCascade(
 		.withIndex("by_order", (q) => q.eq("orderId", order._id))
 		.collect();
 	for (const job of jobs) {
+		for (const podId of job.podImageStorageIds ?? []) {
+			await ctx.storage.delete(podId);
+		}
 		await ctx.db.delete(job._id);
 	}
 

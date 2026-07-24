@@ -925,3 +925,41 @@ describe("reserve → commit booking (double-dispatch guard, PR #127 review)", (
 		expect(live?.status).toBe("assigning");
 	});
 });
+
+describe("proof of delivery — storePodImages", () => {
+	test("first store wins; a racing duplicate is cleaned up, not doubled", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, { status: "delivered" });
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			status: "completed",
+		});
+
+		const [first, second] = await t.run(async (ctx) => [
+			await ctx.storage.store(new Blob(["photo-1"])),
+			await ctx.storage.store(new Blob(["photo-2"])),
+		]);
+
+		const winner = await t.mutation(internal.lalamove.storePodImages, {
+			jobId,
+			storageIds: [first],
+		});
+		expect(winner).toBe(true);
+		// COMPLETED + POD_STATUS_CHANGED can double-fire the fetch — the loser
+		// must delete its blobs and leave the stored set untouched.
+		const loser = await t.mutation(internal.lalamove.storePodImages, {
+			jobId,
+			storageIds: [second],
+		});
+		expect(loser).toBe(false);
+
+		const { job, firstUrl, secondUrl } = await t.run(async (ctx) => ({
+			job: await ctx.db.get(jobId),
+			firstUrl: await ctx.storage.getUrl(first),
+			secondUrl: await ctx.storage.getUrl(second),
+		}));
+		expect(job?.podImageStorageIds).toEqual([first]);
+		expect(firstUrl).not.toBeNull();
+		expect(secondUrl).toBeNull(); // loser's blob deleted
+	});
+});

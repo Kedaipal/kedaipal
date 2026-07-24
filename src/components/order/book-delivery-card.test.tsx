@@ -74,6 +74,24 @@ describe("BookDeliveryCard — completed job", () => {
 		expect(screen.queryByText("Book delivery")).toBeNull();
 	});
 
+	it("shows the rider's proof-of-delivery photos when present", () => {
+		state.dispatch = completedDispatch();
+		(
+			state.dispatch as { job: { podImageUrls?: string[] } }
+		).job.podImageUrls = [
+			"https://files.convex.dev/pod-1.jpg",
+			"https://files.convex.dev/pod-2.jpg",
+		];
+		render(<BookDeliveryCard order={deliveredOrder} />);
+
+		expect(screen.getByText("Delivery photo from the rider")).toBeTruthy();
+		const shots = screen.getAllByAltText("Proof of delivery");
+		expect(shots).toHaveLength(2);
+		expect(shots[0].closest("a")?.getAttribute("href")).toBe(
+			"https://files.convex.dev/pod-1.jpg",
+		);
+	});
+
 	it("degrades gracefully when the completed job has no driver or share link", () => {
 		state.dispatch = completedDispatch({ driver: undefined, shareLink: undefined });
 		render(<BookDeliveryCard order={deliveredOrder} />);

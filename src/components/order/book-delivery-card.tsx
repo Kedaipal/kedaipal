@@ -301,6 +301,32 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 							</a>
 						) : null}
 					</div>
+					{/* Rider's drop-off photo (proof of delivery) — the buyer got the
+					    same shot on WhatsApp. Tap opens full size. */}
+					{completedJob.podImageUrls?.length ? (
+						<div className="flex flex-col gap-1.5">
+							<p className="text-xs text-muted-foreground">
+								Delivery photo from the rider
+							</p>
+							<div className="flex gap-2">
+								{completedJob.podImageUrls.map((url) => (
+									<a
+										key={url}
+										href={url}
+										target="_blank"
+										rel="noopener noreferrer"
+										className="block h-20 w-20 overflow-hidden rounded-xl border border-border"
+									>
+										<img
+											src={url}
+											alt="Proof of delivery"
+											className="h-full w-full object-cover"
+										/>
+									</a>
+								))}
+							</div>
+						</div>
+					) : null}
 				</div>
 			) : null}
 

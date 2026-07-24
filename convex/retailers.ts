@@ -1888,7 +1888,12 @@ export const deleteUser = internalMutation({
 			.query("deliveryJobs")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 			.collect();
-		for (const job of deliveryJobs) await ctx.db.delete(job._id);
+		for (const job of deliveryJobs) {
+			for (const podId of job.podImageStorageIds ?? []) {
+				await ctx.storage.delete(podId);
+			}
+			await ctx.db.delete(job._id);
+		}
 		const deliveryQuotes = await ctx.db
 			.query("deliveryQuotes")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
