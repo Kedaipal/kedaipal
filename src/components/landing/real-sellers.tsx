@@ -1,6 +1,5 @@
 import { CalendarCheck, ChefHat, Fish, QrCode, Star } from "lucide-react";
 import { m } from "../../paraglide/messages";
-import { AppImage } from "../ui/app-image";
 import { FadeIn } from "./fade-in";
 import { Eyebrow } from "./landing-ui";
 
@@ -8,10 +7,8 @@ import { Eyebrow } from "./landing-ui";
  * "Real sellers, real orders" proof bar. Replaces the old placeholder
  * testimonial section (dead code, never mounted) — instead of fabricated
  * quotes we don't have consent for yet, this proves the pattern with real
- * (unnamed) seller archetypes, one honest stat card, and — with K Frozen
- * Food's consent — one real named + logo'd customer. See
- * `messages/en.json` → `proof_*` for the copy and `proof_disclaimer` for the
- * no-fake-testimonials commitment.
+ * (unnamed) seller archetypes and one honest stat card. See
+ * `messages/en.json` → `proof_*` for the copy.
  */
 export function RealSellers() {
 	const archetypes = [
@@ -116,31 +113,6 @@ export function RealSellers() {
 						</div>
 					</FadeIn>
 				</div>
-
-				<FadeIn
-					delay={0.4}
-					className="mt-10 flex flex-col items-center gap-3 text-center md:mt-12"
-				>
-					<div className="inline-flex items-center gap-3 rounded-full border border-border bg-card py-1.5 pl-1.5 pr-4 shadow-sm">
-						<AppImage
-							src="/img/landing/k-frozen-food-logo.png"
-							alt={m.proof_live_customer_alt()}
-							aspect="size-10 shrink-0"
-							rounded="rounded-full"
-						/>
-						<div className="text-left">
-							<p className="text-sm font-bold leading-tight">
-								{m.proof_live_customer_name()}
-							</p>
-							<p className="text-xs leading-tight text-muted-foreground">
-								{m.proof_live_customer_caption()}
-							</p>
-						</div>
-					</div>
-					<p className="max-w-xl text-xs text-muted-foreground">
-						{m.proof_disclaimer()}
-					</p>
-				</FadeIn>
 			</div>
 		</section>
 	);
