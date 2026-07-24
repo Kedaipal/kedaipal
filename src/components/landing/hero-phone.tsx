@@ -25,7 +25,7 @@ export function HeroPhone() {
 						‹
 					</span>
 					<span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white font-heading text-[10px] font-extrabold text-emerald-800">
-						DN
+						KF
 					</span>
 					<div className="min-w-0 flex-1">
 						<p className="truncate text-sm font-semibold leading-tight">
@@ -57,7 +57,9 @@ export function HeroPhone() {
 								{m.hero_chat_cta()}
 							</span>
 						</div>
-						<p className="mt-0.5 text-right text-[8px] text-slate-500">9:12 AM</p>
+						<p className="mt-0.5 text-right text-[8px] text-slate-500">
+							9:12 AM
+						</p>
 					</div>
 
 					<div className="max-w-[85%] self-end rounded-xl rounded-tr-sm bg-[#DCF8C6] px-2.5 py-1.5 shadow-sm">
@@ -78,7 +80,9 @@ export function HeroPhone() {
 						<p className="text-xs leading-snug text-slate-800">
 							{m.hero_chat_confirm()}
 						</p>
-						<p className="mt-0.5 text-right text-[8px] text-slate-500">9:15 AM</p>
+						<p className="mt-0.5 text-right text-[8px] text-slate-500">
+							9:15 AM
+						</p>
 					</div>
 				</div>
 			</div>

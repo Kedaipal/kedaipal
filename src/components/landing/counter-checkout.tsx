@@ -1,32 +1,8 @@
 import { Check } from "lucide-react";
-import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { AppImage } from "../ui/app-image";
 import { FadeIn } from "./fade-in";
-import { Eyebrow, Sticker } from "./landing-ui";
-
-/** Decorative QR pattern — a grid of squares, same trick as the how-it-works mockups. */
-function QrPattern({ className }: { className?: string }) {
-	return (
-		<div
-			className={cn(
-				"grid grid-cols-8 grid-rows-8 gap-0.5 rounded-xl bg-foreground p-2",
-				className,
-			)}
-		>
-			{Array.from({ length: 64 }).map((_, i) => (
-				<span
-					// biome-ignore lint/suspicious/noArrayIndexKey: static decorative grid, never reorders
-					key={i}
-					className={cn(
-						"rounded-[1px]",
-						i % 3 === 0 || i % 7 === 0 ? "bg-background" : "bg-transparent",
-					)}
-				/>
-			))}
-		</div>
-	);
-}
+import { Eyebrow, QrPattern, Sticker } from "./landing-ui";
 
 /**
  * "Counter checkout" — the landing section for pain #3 (the stall and the
@@ -60,7 +36,7 @@ export function CounterCheckout() {
 										{m.counterqr_poster_scan()}
 									</p>
 									<p className="mt-1 text-xs text-muted-foreground">
-										kedaipal.com/lekor-mrganu
+										kedaipal.com/k-frozen-food
 									</p>
 								</div>
 								<Sticker
