@@ -5,12 +5,12 @@ import { m } from "../../paraglide/messages";
 import { posterQrUrls, StorePoster } from "./store-poster";
 
 const BASE = {
-	storeName: "Lekor Mr Ganu",
-	slug: "lekor-mr-ganu",
+	storeName: "K Frozen Food",
+	slug: "k-frozen-food",
 	logoUrl: null,
 	// Left QR = the walk-in KPS WhatsApp deep link (86ey5m35w); right = storefront.
 	counterUrl: "https://wa.me/60123456789?text=Store%20ref%3A%20KPS-abc",
-	onlineUrl: "https://kedaipal.com/lekor-mr-ganu?src=online",
+	onlineUrl: "https://kedaipal.com/k-frozen-food?src=online",
 } as const;
 
 afterEach(cleanup);
