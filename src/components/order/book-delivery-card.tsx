@@ -18,6 +18,7 @@ import type { DispatchBlock } from "../../../convex/lalamove";
 import { todayMytMidnight } from "../../../convex/lib/fulfilmentDate";
 import { formatPrice } from "../../lib/format";
 import { ProBadge } from "../app/pro-gate";
+import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import {
@@ -98,7 +99,8 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 	if (order.deliveryMethod !== "delivery" || !dispatch) return null;
 	const { job, blockReason, promptBookOnPacked } = dispatch;
 	const activeJob =
-		job && !["completed", "canceled", "expired", "rejected"].includes(job.status)
+		job &&
+		!["completed", "canceled", "expired", "rejected"].includes(job.status)
 			? job
 			: null;
 	const failedJob =
@@ -226,7 +228,9 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 					<p className="flex items-start gap-2">
 						<CircleAlert className="mt-0.5 size-4 shrink-0" />
 						<span>
-							<span className="font-medium">Booking didn&apos;t go through</span>
+							<span className="font-medium">
+								Booking didn&apos;t go through
+							</span>
 							{failedJob.failureReason ? ` — ${failedJob.failureReason}` : ""}.
 							Your buyer was not notified; the order is unchanged.
 						</span>
@@ -343,10 +347,10 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 										rel="noopener noreferrer"
 										className="block h-20 w-20 overflow-hidden rounded-xl border border-border"
 									>
-										<img
+										<AppImage
 											src={url}
 											alt="Proof of delivery"
-											className="h-full w-full object-cover"
+											aspect="h-20 w-20"
 										/>
 									</a>
 								))}

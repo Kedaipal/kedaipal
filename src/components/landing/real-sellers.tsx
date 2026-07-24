@@ -1,5 +1,6 @@
 import { CalendarCheck, ChefHat, Fish, QrCode, Star } from "lucide-react";
 import { m } from "../../paraglide/messages";
+import { AppImage } from "../ui/app-image";
 import { FadeIn } from "./fade-in";
 import { Eyebrow } from "./landing-ui";
 
@@ -121,13 +122,11 @@ export function RealSellers() {
 					className="mt-10 flex flex-col items-center gap-3 text-center md:mt-12"
 				>
 					<div className="inline-flex items-center gap-3 rounded-full border border-border bg-card py-1.5 pl-1.5 pr-4 shadow-sm">
-						<img
+						<AppImage
 							src="/img/landing/k-frozen-food-logo.png"
 							alt={m.proof_live_customer_alt()}
-							width={40}
-							height={40}
-							loading="lazy"
-							className="size-10 shrink-0 rounded-full object-cover"
+							aspect="size-10 shrink-0"
+							rounded="rounded-full"
 						/>
 						<div className="text-left">
 							<p className="text-sm font-bold leading-tight">

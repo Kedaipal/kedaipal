@@ -3,6 +3,7 @@ import { ImagePlus, Plus, SlidersHorizontal } from "lucide-react";
 import type { api } from "../../../convex/_generated/api";
 import { formatPrice } from "../../lib/format";
 import { minQuantityUnreachable } from "../../lib/variant";
+import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 
 export type StorefrontProduct = FunctionReturnType<
@@ -20,6 +21,9 @@ interface ProductCardProps {
 	 * in-cart line is quote-priced, in which case only the count is shown.
 	 */
 	cartSubtotal: number;
+	/** Above-the-fold hint for early grid rows — the first product photo a
+	 * buyer sees is a common LCP element. See `product-grid.tsx`. */
+	priority?: boolean;
 }
 
 export function ProductCard({
@@ -28,6 +32,7 @@ export function ProductCard({
 	onQuickAdd,
 	cartQuantity,
 	cartSubtotal,
+	priority = false,
 }: ProductCardProps) {
 	// Multi-variant products can't be quick-added — the buyer must pick options
 	// in the detail sheet first. A custom line also forces the detail sheet so the
@@ -69,11 +74,12 @@ export function ProductCard({
 				className="relative aspect-square w-full overflow-hidden bg-muted text-left"
 			>
 				{firstImage ? (
-					<img
+					<AppImage
 						src={firstImage}
 						alt={product.name}
-						className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-						loading="lazy"
+						aspect="absolute inset-0"
+						className="transition-transform duration-300 group-hover:scale-105"
+						priority={priority}
 					/>
 				) : (
 					<div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-muted/60 text-muted-foreground">

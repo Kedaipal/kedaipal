@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { getLocale, setLocale } from "../../paraglide/runtime";
+import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 
 function LanguageSwitcher() {
@@ -146,10 +147,12 @@ export function Nav() {
 			>
 				<div className="flex h-14 items-center justify-between pl-4 pr-2 md:h-16 md:pl-6 md:pr-3">
 					<Link to="/" className="flex items-center" aria-label={m.nav_home()}>
-						<img
+						<AppImage
 							src="/logo-3.svg"
 							alt="Kedaipal"
-							className="h-7 w-auto sm:h-8"
+							aspect="h-7 w-auto sm:h-8"
+							fill={false}
+							priority
 						/>
 					</Link>
 					<div className="hidden items-center gap-1 md:flex">

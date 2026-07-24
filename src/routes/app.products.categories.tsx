@@ -21,6 +21,7 @@ import {
 } from "../components/app/pro-gate";
 import { CategoryEditDialog } from "../components/dashboard/category-edit-dialog";
 import { PageHeader } from "../components/dashboard/page-header";
+import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { CopyButton } from "../components/ui/copy-button";
 import {
@@ -360,15 +361,14 @@ function CategoryCard({
 	const rowBody = (
 		<>
 			<div className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-muted ring-1 ring-border/60">
-				{category.imageUrl ? (
-					<img
-						src={category.imageUrl}
-						alt=""
-						className="size-full object-cover"
-					/>
-				) : (
-					<FolderOpen className="size-5 text-muted-foreground" aria-hidden />
-				)}
+				<AppImage
+					src={category.imageUrl}
+					alt=""
+					aspect="size-full"
+					fallback={
+						<FolderOpen className="size-5 text-muted-foreground" aria-hidden />
+					}
+				/>
 			</div>
 			<div className="flex min-w-0 flex-1 flex-col">
 				<span className="flex items-center gap-1.5">
