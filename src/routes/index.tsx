@@ -1,5 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { z } from "zod";
 import { CostCta } from "../components/landing/cost-cta";
 import { Faq } from "../components/landing/faq";
 import { FeatureGrid } from "../components/landing/feature-grid";
@@ -11,6 +10,7 @@ import { HowItWorks } from "../components/landing/how-it-works";
 import { Nav } from "../components/landing/nav";
 import { PricingTeaser } from "../components/landing/pricing-teaser";
 import { ProblemStrip } from "../components/landing/problem-strip";
+import { RealSellers } from "../components/landing/real-sellers";
 import { SetupStrip } from "../components/landing/setup-strip";
 
 const SEO_TITLE = "Kedaipal — WhatsApp Order Hub for Home Sellers in Malaysia";
@@ -102,12 +102,7 @@ const jsonLd = [
 	},
 ];
 
-const searchSchema = z.object({
-	step: z.coerce.number().int().min(1).max(4).optional(),
-});
-
 export const Route = createFileRoute("/")({
-	validateSearch: searchSchema,
 	head: () => ({
 		meta: [
 			{ title: SEO_TITLE },
@@ -145,6 +140,7 @@ function Landing() {
 		<main className="min-h-dvh bg-background text-foreground">
 			<Nav />
 			<Hero />
+			<RealSellers />
 			<ProblemStrip />
 			<CostCta />
 			<HowItWorks />
