@@ -1827,10 +1827,21 @@ export async function applyStatusTransition(
 		statusChangedAt: number;
 		updatedAt: number;
 		carrierTrackingUrl: string;
+		currentStageId: string | undefined;
 	}> = { status, statusChangedAt: now, updatedAt: now };
 	if (status === "shipped" && opts.carrierTrackingUrl) {
 		const trimmed = opts.carrierTrackingUrl.trim();
 		if (trimmed.length > 0) patch.carrierTrackingUrl = trimmed;
+	}
+	// This path transitions the CANONICAL status without stage awareness (the
+	// stage-aware path is advanceToStage, which sets both). A stored
+	// `currentStageId` from an earlier stepper tap would otherwise go stale and
+	// pin the displayed stage behind the real status — e.g. the Lalamove webhook
+	// delivering an order the seller had marked "Packed" left the tracking page
+	// reading "Packed". Clear it so the stage derives from the new status; a
+	// same-status replay keeps any within-anchor custom stage.
+	if (order.currentStageId !== undefined && status !== order.status) {
+		patch.currentStageId = undefined;
 	}
 	await ctx.db.patch(order._id, patch);
 	await ctx.db.insert("orderEvents", {

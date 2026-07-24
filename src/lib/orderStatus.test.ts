@@ -300,6 +300,49 @@ describe("resolveCurrentStage", () => {
 		expect(resolveCurrentStage({ status: "packed" }, custom)?.id).toBe("clean");
 	});
 
+	test("stale stage BEHIND status → status wins (webhook advanced status only)", () => {
+		// The Lalamove webhook / payment auto-confirm advance `status` WITHOUT
+		// moving `currentStageId`. A stored stage that has fallen behind must never
+		// pin the display back — otherwise a delivered order reads "Packed".
+		expect(
+			resolveCurrentStage(
+				{ status: "delivered", currentStageId: "default:packed" },
+				stages,
+			)?.anchor,
+		).toBe("delivered");
+		expect(
+			resolveCurrentStage(
+				{ status: "shipped", currentStageId: "default:packed" },
+				stages,
+			)?.anchor,
+		).toBe("shipped");
+	});
+
+	test("custom stage sharing the current anchor is still honoured", () => {
+		const custom = [
+			stage({
+				id: "dispatched",
+				anchor: "shipped",
+				sortOrder: 0,
+				label: { en: "Dispatched" },
+			}),
+			stage({
+				id: "near-you",
+				anchor: "shipped",
+				sortOrder: 1,
+				label: { en: "Near you" },
+			}),
+		];
+		// Status has caught up to shipped; the seller's specific shipped stage
+		// stays selected (equal ordinal, not behind).
+		expect(
+			resolveCurrentStage(
+				{ status: "shipped", currentStageId: "near-you" },
+				custom,
+			)?.id,
+		).toBe("near-you");
+	});
+
 	test("pending and cancelled resolve to no stage", () => {
 		expect(resolveCurrentStage({ status: "pending" }, stages)).toBeUndefined();
 		expect(

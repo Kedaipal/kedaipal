@@ -768,3 +768,29 @@ describe("applyWebhookEvent — seller-cancel copy preservation", () => {
 		expect(job?.failureReason).toBe("Cancelled by Lalamove");
 	});
 });
+
+describe("applyWebhookEvent — stale currentStageId cleared on auto-transition", () => {
+	test("PICKED_UP on a stepper-packed order clears the stale stage pointer", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		// Seller tapped "Packed" on the stepper → both status AND stage stored.
+		const orderId = await seedOrder(t, retailer._id, {
+			status: "packed",
+			currentStageId: "default:packed",
+		});
+		const jobId = await seedJob(t, retailer._id, orderId);
+
+		await t.mutation(internal.lalamove.applyWebhookEvent, {
+			jobId,
+			eventType: "ORDER_STATUS_CHANGED",
+			data: statusEvent("PICKED_UP", "2026-07-24T04:00:00.000Z"),
+			eventTimestamp: Date.parse("2026-07-24T04:00:00.000Z"),
+		});
+
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.status).toBe("shipped");
+		// The stale "packed" stage pointer must not survive the auto-transition —
+		// it would pin the tracking page + order detail display back to "Packed".
+		expect(order?.currentStageId).toBeUndefined();
+	});
+});

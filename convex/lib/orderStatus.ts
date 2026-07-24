@@ -302,7 +302,20 @@ export function resolveCurrentStage(
 ): OrderStage | undefined {
 	if (order.currentStageId) {
 		const found = stages.find((s) => s.id === order.currentStageId);
-		if (found) return found;
+		// Trust the stored stage only if it hasn't fallen BEHIND the canonical
+		// status. Transitions that bypass the stepper — the Lalamove webhook,
+		// payment auto-confirm — advance `status` without moving `currentStageId`,
+		// leaving the stored stage stale (e.g. status `delivered`, stage still
+		// `packed`). When that happens the status wins. Custom stages sharing the
+		// current anchor are still honoured (equal ordinal). `pending`/`cancelled`
+		// aren't anchors → anchorOrdinal is -1, so the stored stage is kept,
+		// preserving prior behaviour for those.
+		if (
+			found &&
+			anchorOrdinal(found.anchor) >= anchorOrdinal(order.status as StageAnchor)
+		) {
+			return found;
+		}
 	}
 	if (order.status === "pending" || order.status === "cancelled") {
 		return undefined;
