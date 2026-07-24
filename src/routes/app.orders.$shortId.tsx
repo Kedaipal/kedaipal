@@ -52,6 +52,7 @@ import {
 	DeliveryAddressDisplay,
 	formatAddressInline,
 } from "../components/storefront/delivery-address-display";
+import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import {
@@ -707,10 +708,14 @@ function OrderDetailRoute() {
 								rel="noopener noreferrer"
 								className="block overflow-hidden rounded-xl border border-amber-200 bg-background dark:border-amber-800"
 							>
-								<img
+								{/* Fixed-height frame (was max-h with auto height) so the
+								    skeleton has a real box to show while this — a real
+								    photo upload with no prior placeholder — loads. */}
+								<AppImage
 									src={proofUrl}
 									alt="Payment receipt"
-									className="block max-h-64 w-full object-contain"
+									aspect="h-64 w-full"
+									objectFit="contain"
 								/>
 							</a>
 						) : (
@@ -1704,14 +1709,15 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 							rel="noopener noreferrer"
 							className="block overflow-hidden rounded-xl border border-border bg-white"
 						>
-							<img
+							<AppImage
 								src={url}
 								alt="Current mockup"
-								className={
+								aspect={
 									mockupUrls.length === 1
-										? "block max-h-64 w-full object-contain"
-										: "block aspect-square w-full object-cover"
+										? "h-64 w-full"
+										: "aspect-square w-full"
 								}
+								objectFit={mockupUrls.length === 1 ? "contain" : "cover"}
 							/>
 						</a>
 					))}

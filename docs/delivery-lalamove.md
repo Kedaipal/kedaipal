@@ -359,7 +359,17 @@ rebook); `POD` fires the proof-of-delivery trigger (sandbox has no rider
 photo, so the fetch comes back empty — the photo path is a
 first-prod-booking check). `PICKED_UP` / `COMPLETED` really message the
 order's buyer number — book a test order with your own number to see them
-land. Full step table + script conventions: [`dev-scripts.md`](./dev-scripts.md).
+land.
+
+To actually see the **POD photo** on its three surfaces (buyer WhatsApp,
+buyer tracking page, vendor card) without a real rider, inject a stand-in
+through the same pipeline — no Lalamove credentials needed:
+
+```bash
+npx convex run lalamove:devInjectPodImage '{"providerOrderId":"<providerOrderId>"}'
+```
+
+Full step table, credential rules + the POD injector: [`dev-scripts.md`](./dev-scripts.md).
 
 ## Follow-ups (named, not built)
 

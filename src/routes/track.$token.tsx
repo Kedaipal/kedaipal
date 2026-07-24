@@ -29,6 +29,7 @@ import { ReceiptDownloadButton } from "../components/order/receipt-download-butt
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
 import { IvePaidDialog } from "../components/storefront/ive-paid-dialog";
+import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { CopyButton } from "../components/ui/copy-button";
 import { Skeleton } from "../components/ui/skeleton";
@@ -679,10 +680,13 @@ function TrackingRoute() {
 								rel="noopener noreferrer"
 								className="block overflow-hidden rounded-xl border border-border"
 							>
-								<img
+								{/* Fixed-height frame (was max-h with auto height) so the
+								    skeleton has a real box while a buyer on mobile data
+								    waits for this to load. */}
+								<AppImage
 									src={url}
 									alt="Proof of delivery"
-									className="max-h-72 w-full object-cover"
+									aspect="h-72 w-full"
 								/>
 							</a>
 						))}

@@ -41,7 +41,7 @@ export function ProblemStrip() {
 	return (
 		<section
 			aria-labelledby="problem-heading"
-			className="bg-cta-mesh text-primary-foreground"
+			className="bg-cta-mesh text-cta-mesh-foreground"
 		>
 			<div className="mx-auto max-w-6xl px-5 py-20 md:px-8 md:py-32">
 				<div className="grid items-center gap-12 md:grid-cols-[1.2fr_0.8fr] md:gap-16">
@@ -62,7 +62,7 @@ export function ProblemStrip() {
 				<div className="mt-16 grid gap-px overflow-hidden rounded-3xl border border-white/10 bg-white/10 md:mt-20 md:grid-cols-3">
 					{problems.map((p, i) => (
 						<FadeIn key={p.title} delay={i * 0.1} className="h-full">
-							<div className="relative h-full bg-primary p-7 md:p-9">
+							<div className="relative h-full bg-primary p-7 text-primary-foreground md:p-9">
 								<span className="text-5xl font-black leading-none text-destructive/80 md:text-6xl">
 									{String(i + 1).padStart(2, "0")}
 								</span>

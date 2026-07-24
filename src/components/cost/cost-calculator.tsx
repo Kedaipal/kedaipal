@@ -1,5 +1,6 @@
 import { ArrowRight, TrendingDown } from "lucide-react";
 import { useState } from "react";
+import { AppImage } from "#/components/ui/app-image";
 import { Button } from "#/components/ui/button";
 import { Field, FieldLabel } from "#/components/ui/field";
 import { Slider } from "#/components/ui/slider";
@@ -223,7 +224,7 @@ function ResultCard({ result, ratioLabel }: ResultCardProps) {
 				"overflow-hidden rounded-3xl shadow-xl",
 				result.disqualified
 					? "border border-border bg-muted/40 shadow-sm"
-					: "bg-cta-mesh text-primary-foreground",
+					: "bg-cta-mesh text-cta-mesh-foreground",
 			)}
 		>
 			{result.disqualified ? (
@@ -238,13 +239,14 @@ function ResultCard({ result, ratioLabel }: ResultCardProps) {
 					"flex items-center justify-between border-t px-6 py-3 text-xs",
 					result.disqualified
 						? "border-border/60 text-muted-foreground"
-						: "border-white/10 text-primary-foreground/60",
+						: "border-white/10 text-cta-mesh-foreground/60",
 				)}
 			>
-				<img
+				<AppImage
 					src={result.disqualified ? "/logo-3.svg" : "/logo-dark.svg"}
 					alt="Kedaipal"
-					className="h-5 w-auto"
+					aspect="h-5 w-auto"
+					fill={false}
 				/>
 				<span>kedaipal.com/cost</span>
 			</div>
@@ -255,12 +257,12 @@ function ResultCard({ result, ratioLabel }: ResultCardProps) {
 function QualifiedBody({ result, ratioLabel }: ResultCardProps) {
 	return (
 		<div className="p-6 md:p-8">
-			<p className="text-sm font-medium text-primary-foreground/65">
+			<p className="text-sm font-medium text-cta-mesh-foreground/65">
 				{m.cost_result_lead()}
 			</p>
 			<p className="mt-2 text-5xl font-bold tracking-tight md:text-6xl">
 				{rm(result.total)}
-				<span className="text-xl font-semibold text-primary-foreground/50">
+				<span className="text-xl font-semibold text-cta-mesh-foreground/50">
 					{" "}
 					{m.pricing_per_month()}
 				</span>
@@ -268,7 +270,7 @@ function QualifiedBody({ result, ratioLabel }: ResultCardProps) {
 
 			<dl className="mt-7 space-y-3 text-sm">
 				<div className="flex items-center justify-between gap-4 rounded-xl bg-white/[0.06] px-4 py-3">
-					<dt className="text-primary-foreground/70">
+					<dt className="text-cta-mesh-foreground/70">
 						{m.cost_missed_revenue()}
 					</dt>
 					<dd className="font-bold tabular-nums text-red-300">
@@ -276,7 +278,7 @@ function QualifiedBody({ result, ratioLabel }: ResultCardProps) {
 					</dd>
 				</div>
 				<div className="flex items-center justify-between gap-4 rounded-xl bg-white/[0.06] px-4 py-3">
-					<dt className="text-primary-foreground/70">{m.cost_chase_cost()}</dt>
+					<dt className="text-cta-mesh-foreground/70">{m.cost_chase_cost()}</dt>
 					<dd className="font-bold tabular-nums text-red-300">
 						{rm(result.chaseCost)}
 					</dd>
@@ -284,7 +286,7 @@ function QualifiedBody({ result, ratioLabel }: ResultCardProps) {
 			</dl>
 
 			<div className="mt-6 rounded-2xl border border-accent/30 bg-accent/15 p-5">
-				<p className="text-sm leading-relaxed text-primary-foreground/90">
+				<p className="text-sm leading-relaxed text-cta-mesh-foreground/90">
 					{m.cost_plug({
 						price: FOUNDING_PRICE_RM,
 						savings: rm(result.savings),
