@@ -61,6 +61,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "../components/ui/dialog";
+import { useImageLoad } from "../components/ui/image";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
@@ -693,11 +694,7 @@ function OrderDetailRoute() {
 								rel="noopener noreferrer"
 								className="block overflow-hidden rounded-xl border border-amber-200 bg-background dark:border-amber-800"
 							>
-								<img
-									src={proofUrl}
-									alt="Payment receipt"
-									className="block max-h-64 w-full object-contain"
-								/>
+								<PaymentProofImage url={proofUrl} />
 							</a>
 						) : (
 							<div className="flex items-center justify-center rounded-xl border border-amber-200 bg-background p-4 text-xs text-muted-foreground dark:border-amber-800">
@@ -1976,5 +1973,31 @@ function NotifyManagerCard({
 				</p>
 			)}
 		</section>
+	);
+}
+
+/**
+ * The buyer's uploaded payment screenshot. Content-height (portrait screenshots
+ * vary), so a reserved-height skeleton holds the space and the image fades in on
+ * load instead of painting top-to-bottom.
+ */
+function PaymentProofImage({ url }: { url: string }) {
+	const { ref, loaded, errored, onLoad, onError } = useImageLoad(url);
+	return (
+		<>
+			{!loaded && !errored ? (
+				<span aria-hidden className="block h-40 animate-pulse bg-muted" />
+			) : null}
+			<img
+				ref={ref}
+				src={url}
+				alt="Payment receipt"
+				onLoad={onLoad}
+				onError={onError}
+				className={`block max-h-64 w-full object-contain transition-opacity duration-300 ${
+					loaded || errored ? "opacity-100" : "opacity-0"
+				}`}
+			/>
+		</>
 	);
 }

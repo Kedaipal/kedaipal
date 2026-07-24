@@ -2,8 +2,10 @@ import type { FunctionReturnType } from "convex/server";
 import { ImagePlus, Plus, SlidersHorizontal } from "lucide-react";
 import type { api } from "../../../convex/_generated/api";
 import { formatPrice } from "../../lib/format";
+import { cn } from "../../lib/utils";
 import { minQuantityUnreachable } from "../../lib/variant";
 import { Button } from "../ui/button";
+import { useImageLoad } from "../ui/image";
 
 export type StorefrontProduct = FunctionReturnType<
 	typeof api.products.list
@@ -60,6 +62,9 @@ export function ProductCard({
 	// trap the buyer discovers at checkout. The custom line (its own CTA in the
 	// sheet) is unaffected, so cards with one keep their Choose button live.
 	const minUnreachable = minQuantityUnreachable(minQuantity, product.variants);
+	// Fade the thumbnail in on load; a failed load falls through to the name tile.
+	const { ref, loaded, errored, onLoad, onError } = useImageLoad(firstImage);
+	const hasImage = Boolean(firstImage) && !errored;
 
 	return (
 		<div className="group flex flex-col overflow-hidden rounded-2xl border border-border bg-card transition-shadow duration-200 hover:shadow-md">
@@ -68,13 +73,27 @@ export function ProductCard({
 				onClick={() => onOpen(product)}
 				className="relative aspect-square w-full overflow-hidden bg-muted text-left"
 			>
-				{firstImage ? (
-					<img
-						src={firstImage}
-						alt={product.name}
-						className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-						loading="lazy"
-					/>
+				{hasImage ? (
+					<>
+						{!loaded ? (
+							<span
+								aria-hidden
+								className="absolute inset-0 animate-pulse bg-muted"
+							/>
+						) : null}
+						<img
+							ref={ref}
+							src={firstImage}
+							alt={product.name}
+							onLoad={onLoad}
+							onError={onError}
+							className={cn(
+								"h-full w-full object-cover transition-[transform,opacity] duration-300 group-hover:scale-105",
+								loaded ? "opacity-100" : "opacity-0",
+							)}
+							loading="lazy"
+						/>
+					</>
 				) : (
 					<div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-muted/60 text-muted-foreground">
 						<span className="flex size-11 items-center justify-center rounded-xl bg-background/80 shadow-sm">
@@ -85,7 +104,7 @@ export function ProductCard({
 						</span>
 					</div>
 				)}
-				{firstImage && (
+				{hasImage && (
 					<div className="pointer-events-none absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-black/20 to-transparent" />
 				)}
 				{outOfStock ? (

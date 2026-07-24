@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { Img } from "../ui/image";
 
 /**
  * Brand-adjacent gradient fallbacks for categories without a tile image.
@@ -57,10 +58,10 @@ export function CategoryRail({
 						className="relative flex h-[9.5rem] w-[15rem] shrink-0 snap-start flex-col justify-end overflow-hidden rounded-2xl transition-transform active:scale-[0.98] sm:w-[17rem] lg:h-[11rem] lg:w-[19rem]"
 					>
 						{category.imageUrl ? (
-							<img
+							<Img
 								src={category.imageUrl}
 								alt=""
-								className="absolute inset-0 h-full w-full object-cover"
+								wrapperClassName="absolute inset-0"
 							/>
 						) : (
 							<div

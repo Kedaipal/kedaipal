@@ -493,14 +493,37 @@ Shipped alongside the receipt/invoice work, all in `src/routes/app.checkout.tsx`
   desk card so it spans full width and lines up with the open-checkout cards on
   desktop (no ragged button column).
 
+## Header — one "New order" dropdown (`86eyd67y1`)
+
+Every way to start a checkout is grouped behind a **single** accent `New order`
+dropdown in the Counter page header — it replaced the old two competing pill
+buttons ("Show QR" chip + "No scan?"), which read as clutter on mobile (both were
+icon-only there). One `CounterCheckoutActions` component now owns the whole
+surface (the former `StoreQrChip` + `NoScanControl` were merged and deleted). The
+menu (`ui/dropdown-menu.tsx`, a new radix `DropdownMenu` primitive) offers three
+items, each with a one-line "what happens next":
+
+1. **Show store QR** — opens the enlarged scannable QR dialog (token auto-provisions
+   on mount; the `listOpenSessions` scan-watch still auto-navigates into the walk-in
+   the moment the buyer scans). Hidden — just this item — while the store's `wa.me`
+   deep link hasn't resolved (no `WHATSAPP_CHECKOUT_PHONE`), so the phone + cash
+   paths stay usable.
+2. **Enter phone number** — opens the manual-phone bind form directly (the old
+   two-step "choose → phone" chooser is gone; the menu *is* the chooser).
+3. **Cash sale — no contact** — fires `startAnonymousSession` straight from the item.
+
+Behaviour is unchanged from the two-button version — pure IA/UX consolidation. The
+empty-state copy points at the new control ("tap **New order** to show your store
+QR … **New order** also lets you type their number or ring up a cash sale").
+
 ## Manual entry & anonymous walk-in (`86ey8vqp6`)
 
 The V1.1 identity escape hatches — the cashier can ring up **any** buyer, even one
 who won't/can't scan (no WhatsApp, dead camera, in a hurry, privacy-shy). Same
 "three converging paths, one record" model as the scan: both land a normal
 `buyer_identified` session that the rest of the flow (draft → `createOrderFromSession`
-→ receipt/invoice) treats identically. Discoverable via a **"No scan?"** control in
-the Counter page header, alongside the store-QR chip.
+→ receipt/invoice) treats identically. Discoverable via the **New order** dropdown in
+the Counter page header (see below).
 
 **Buyer name** — the session's name lives in `waProfileName` (shared slot: an
 inbound pushname on a scan, the cashier-typed name on manual/anonymous). It flows

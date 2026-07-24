@@ -1,3 +1,4 @@
+import { Img } from "../ui/image";
 import { FoundingMemberBadge } from "./founding-member-badge";
 
 /** The public-safe retailer fields the header renders — a structural subset of
@@ -35,10 +36,11 @@ export function StorefrontHeader({
 		>
 			{hasCover ? (
 				<>
-					<img
-						src={retailer.coverImageUrl ?? undefined}
+					<Img
+						src={retailer.coverImageUrl}
 						alt={`${retailer.storeName} cover`}
-						className="absolute inset-0 h-full w-full object-cover"
+						wrapperClassName="absolute inset-0"
+						loading="eager"
 					/>
 					<div
 						aria-hidden
@@ -57,10 +59,12 @@ export function StorefrontHeader({
 				className={`flex gap-4 ${hasCover ? "relative items-end" : "items-center"}`}
 			>
 				{retailer.logoUrl ? (
-					<img
+					<Img
 						src={retailer.logoUrl}
 						alt={`${retailer.storeName} logo`}
-						className={`h-16 w-16 shrink-0 rounded-2xl border-2 bg-background object-contain ${
+						loading="eager"
+						className="object-contain"
+						wrapperClassName={`h-16 w-16 shrink-0 rounded-2xl border-2 bg-background ${
 							hasCover
 								? "border-white/80 shadow-lg"
 								: "border-accent/20 shadow-sm"

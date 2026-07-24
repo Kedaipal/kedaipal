@@ -2,7 +2,6 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import {
 	ArrowLeft,
-	Building2,
 	ChevronDown,
 	ChevronRight,
 	ClipboardList,
@@ -11,11 +10,9 @@ import {
 	Landmark,
 	MapPinned,
 	MessageCircle,
-	Music2,
 	Plus,
 	QrCode,
 	ReceiptText,
-	Settings2,
 	ShieldCheck,
 	Store,
 	Trash2,
@@ -39,7 +36,6 @@ import {
 import { TierPill } from "../components/dashboard/tier-pill";
 import { submitThenFocusError } from "../components/forms/focus-error";
 import { useAppForm } from "../components/forms/form";
-import { ShopeeIcon } from "../components/icons/shopee-icon";
 import { BillingTab } from "../components/settings/billing-tab";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
 import { Button } from "../components/ui/button";
@@ -87,8 +83,7 @@ type SettingsTab =
 	| "whatsapp"
 	| "payments"
 	| "fulfilment"
-	| "order-status"
-	| "integrations";
+	| "order-status";
 
 // Legacy deep-link support: the fulfilment tab used to be "pickup" (self-collect
 // only). Old bookmarks / checklist links carry `?tab=pickup` — normalise them so
@@ -141,12 +136,6 @@ const SETTINGS_TABS: ReadonlyArray<{
 		description: "Buyer-facing order stages",
 		icon: <ClipboardList className="size-4" />,
 	},
-	{
-		id: "integrations",
-		label: "Integrations",
-		description: "Sales channels",
-		icon: <Settings2 className="size-4" />,
-	},
 ];
 
 const SETTINGS_TAB_IDS: ReadonlyArray<SettingsTab> = SETTINGS_TABS.map(
@@ -162,13 +151,7 @@ const SETTINGS_GROUPS: ReadonlyArray<{
 	{ label: "Store", tabs: ["store", "billing"] },
 	{
 		label: "Selling",
-		tabs: [
-			"whatsapp",
-			"payments",
-			"fulfilment",
-			"order-status",
-			"integrations",
-		],
+		tabs: ["whatsapp", "payments", "fulfilment", "order-status"],
 	},
 ];
 
@@ -741,42 +724,6 @@ function SettingsRoute() {
 								onSave={(orderStages) => updateSettings({ orderStages })}
 							/>
 						</Card>
-					</div>
-				) : null}
-
-				{activeTab === "integrations" ? (
-					<div className="flex flex-col gap-6 pt-2">
-						<InfoBanner title="Sales channels">
-							<p>
-								Connect your marketplace accounts to sync products and orders
-								automatically. More channels are on the way.
-							</p>
-						</InfoBanner>
-
-						<IntegrationCard
-							name="Shopee"
-							description="Sync your Shopee products and orders into Kedaipal. Manage everything from one dashboard."
-							tint="bg-[#EE4D2D]/10 text-[#EE4D2D]"
-							icon={<ShopeeIcon className="size-6" />}
-						/>
-						<IntegrationCard
-							name="Lazada"
-							description="Sync your Lazada products and orders into Kedaipal. Manage everything from one dashboard."
-							tint="bg-[#0F146D]/10 text-[#0F146D] dark:bg-[#0F146D]/30 dark:text-[#9aa6ff]"
-							icon={<Store className="size-6" />}
-						/>
-						<IntegrationCard
-							name="TikTok Shop"
-							description="Sync your TikTok Shop orders into Kedaipal so you never miss a sale."
-							tint="bg-foreground/10 text-foreground"
-							icon={<Music2 className="size-6" />}
-						/>
-						<IntegrationCard
-							name="StoreHub"
-							description="Reconcile your in-store StoreHub sales alongside online orders."
-							tint="bg-[#FF7A00]/10 text-[#FF7A00]"
-							icon={<Building2 className="size-6" />}
-						/>
 					</div>
 				) : null}
 			</div>
@@ -2326,45 +2273,6 @@ function WaPhoneForm({
 				}}
 			</form.Subscribe>
 		</form>
-	);
-}
-
-function IntegrationCard({
-	name,
-	description,
-	tint,
-	icon,
-}: {
-	name: string;
-	description: string;
-	tint: string;
-	icon: ReactNode;
-}) {
-	return (
-		<Card>
-			<div className="flex items-start gap-4">
-				<div
-					className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ${tint}`}
-				>
-					{icon}
-				</div>
-				<div className="flex flex-1 flex-col gap-1">
-					<div className="flex items-center gap-2">
-						<h3 className="text-sm font-semibold">{name}</h3>
-						<span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
-							Coming soon
-						</span>
-					</div>
-					<p className="text-xs text-muted-foreground">{description}</p>
-				</div>
-			</div>
-			<Button
-				disabled
-				className="h-11 w-full lg:h-10 lg:w-auto lg:self-end lg:min-w-[160px]"
-			>
-				Connect {name}
-			</Button>
-		</Card>
 	);
 }
 

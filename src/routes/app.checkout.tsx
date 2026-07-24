@@ -11,7 +11,6 @@ import {
 	Clock,
 	EyeOff,
 	Image as ImageIcon,
-	Keyboard,
 	LayoutGrid,
 	List,
 	Minus,
@@ -51,6 +50,14 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "../components/ui/dialog";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuLabel,
+	DropdownMenuTrigger,
+} from "../components/ui/dropdown-menu";
+import { Img } from "../components/ui/image";
 import { Input } from "../components/ui/input";
 import {
 	useActAsRetailerId,
@@ -138,13 +145,11 @@ function CounterCheckoutRoute() {
 						<span className="hidden sm:inline">All checkouts</span>
 					</button>
 				) : (
-					// The permanent store QR (buyer scans) plus the escape hatches for a
-					// buyer who won't/can't scan — manual phone entry or an anonymous cash
-					// sale. Management (rotate/print) lives on /app/poster.
-					<div className="flex shrink-0 items-center gap-2">
-						<NoScanControl onStarted={openSession} />
-						<StoreQrChip onScanned={openSession} />
-					</div>
+					// One control for every way to start a checkout: show the store QR
+					// (buyer scans), or the escape hatches for a buyer who won't/can't
+					// scan — manual phone entry or an anonymous cash sale. Management
+					// (rotate/print) lives on /app/poster.
+					<CounterCheckoutActions onStarted={openSession} />
 				)}
 			</header>
 
@@ -372,10 +377,11 @@ function EmptyCheckouts() {
 			<div className="max-w-sm">
 				<h2 className="text-base font-semibold">No open checkouts</h2>
 				<p className="mt-1 text-sm text-muted-foreground">
-					Put up your store QR (top-right) or your printed poster. When a buyer
-					scans it, their checkout appears here with a code to match. Can't
-					scan? Use <span className="font-medium">No scan?</span> to type their
-					number or ring up a cash sale.
+					Put up your printed poster, or tap{" "}
+					<span className="font-medium">New order</span> to show your store QR.
+					When a buyer scans it, their checkout appears here with a code to
+					match. Can't scan? <span className="font-medium">New order</span> also
+					lets you type their number or ring up a cash sale.
 				</p>
 			</div>
 		</div>
@@ -383,50 +389,63 @@ function EmptyCheckouts() {
 }
 
 /**
- * The one permanent store QR, compact in the page header. Tap to enlarge into a
- * scannable view for a buyer standing at the counter. Token auto-provisions
- * silently; rotating / printing the poster live on /app/poster.
- *
- * While the enlarged dialog is open the cashier is actively waiting for a scan,
- * so we watch `listOpenSessions` for the walk-in it produces and jump straight
- * into that checkout — no closing this dialog and hunting for the new card
- * (86ey5neg6).
+ * The header's single entry point for starting a counter checkout — one dropdown
+ * grouping every way an order begins, so the control reads cleanly on mobile and
+ * desktop instead of two competing pill buttons:
+ *   1. Show the store QR — buyer scans, their checkout appears + auto-opens here.
+ *   2. Enter the buyer's phone — manual bind, buyer still gets a WhatsApp
+ *      confirmation + receipt (86ey8vqp6).
+ *   3. Cash sale — fully anonymous, no WhatsApp (86ey8vqp6).
+ * Management (rotate / print the poster) lives on /app/poster.
  */
-function StoreQrChip({
-	onScanned,
+function CounterCheckoutActions({
+	onStarted,
 }: {
-	onScanned: (sessionId: string) => void;
+	onStarted: (sessionId: string) => void;
 }) {
 	const actAsRetailerId = useActAsRetailerId();
+
+	// --- Store QR (the buyer-scan path) ---
 	const storeQr = useQuery(api.counterCheckout.getStoreQr, {
 		retailerId: actAsRetailerId,
 	});
 	// Shares the identical subscription OpenCheckoutsList already holds (Convex
-	// dedupes), so the list is warm the instant the dialog opens and the baseline
-	// snapshot below is accurate on the first frame.
+	// dedupes), so the list is warm the instant the QR dialog opens and the
+	// baseline snapshot below is accurate on the first frame.
 	const sessions = useQuery(api.counterCheckout.listOpenSessions, {
 		retailerId: actAsRetailerId,
 	});
 	const ensureToken = useMutation(api.counterCheckout.ensureCounterQrToken);
 	const ensured = useRef(false);
-	const [open, setOpen] = useState(false);
+	const [qrOpen, setQrOpen] = useState(false);
 
+	// --- No-scan escape hatches: manual phone bind + anonymous cash sale ---
+	const bindManual = useMutation(api.counterCheckout.bindSessionManualPhone);
+	const startAnon = useMutation(api.counterCheckout.startAnonymousSession);
+	const [phoneOpen, setPhoneOpen] = useState(false);
+	const [name, setName] = useState("");
+	const [phone, setPhone] = useState("");
+	const [busy, setBusy] = useState(false);
+
+	// Auto-provision the counter QR token on first mount so the "Show store QR"
+	// item is ready the moment the seller opens the menu.
 	useEffect(() => {
 		if (ensured.current) return;
 		if (storeQr === undefined || storeQr.token !== null) return;
 		ensured.current = true;
 		void ensureToken({ retailerId: actAsRetailerId }).catch(() => {
-			// non-fatal — the chip just stays hidden until it resolves
+			// non-fatal — the QR item just stays hidden until it resolves
 		});
 	}, [storeQr, ensureToken, actAsRetailerId]);
 
-	// The walk-ins already present when the dialog opened — captured once so we
-	// only react to the NEXT scan, never one that was already sitting in the list.
+	// While the QR dialog is open the cashier is actively waiting for a scan, so
+	// we watch `listOpenSessions` for the walk-in it produces and jump straight
+	// into that checkout (86ey5neg6). The baseline (walk-ins already present when
+	// the dialog opened) is captured once so we only react to the NEXT scan.
 	const baseline = useRef<Set<string> | null>(null);
 	useEffect(() => {
-		if (!open) {
-			// Reset so the next open re-snapshots against a fresh list.
-			baseline.current = null;
+		if (!qrOpen) {
+			baseline.current = null; // re-snapshot on the next open
 			return;
 		}
 		if (!sessions) return; // wait for the list before we can diff
@@ -436,86 +455,30 @@ function StoreQrChip({
 		}
 		const fresh = newWalkInSince(sessions, baseline.current);
 		if (fresh) {
-			setOpen(false);
-			onScanned(fresh);
+			setQrOpen(false);
+			onStarted(fresh);
 		}
-	}, [open, sessions, onScanned]);
+	}, [qrOpen, sessions, onStarted]);
 
-	if (!storeQr?.waUrl) return null;
+	// The QR item only makes sense once the store's `wa.me` deep link resolves —
+	// without a WHATSAPP_CHECKOUT_PHONE it never does, so we hide just that item
+	// (the phone + cash paths stay available) rather than the whole control.
+	const qrReady = Boolean(storeQr?.waUrl);
 
-	return (
-		<>
-			<button
-				type="button"
-				onClick={() => setOpen(true)}
-				className="flex shrink-0 items-center gap-2 rounded-xl border border-border p-1.5 pr-3 transition-colors hover:bg-muted"
-				aria-label="Show store QR"
-			>
-				<span className="rounded-lg bg-white p-1">
-					<QRCode value={storeQr.waUrl} size={40} />
-				</span>
-				<span className="hidden text-sm font-medium text-muted-foreground sm:inline">
-					Show QR
-				</span>
-			</button>
-
-			<Dialog open={open} onOpenChange={setOpen}>
-				<DialogContent className="sm:max-w-sm">
-					<DialogHeader>
-						<DialogTitle>Ask the buyer to scan</DialogTitle>
-						<DialogDescription>
-							They scan and hit send — their checkout opens here
-							automatically, ready to ring up.
-						</DialogDescription>
-					</DialogHeader>
-					<div className="mx-auto rounded-2xl border border-border bg-white p-4">
-						<QRCode value={storeQr.waUrl} size={220} />
-					</div>
-					<Link
-						to="/app/poster"
-						onClick={() => setOpen(false)}
-						className="text-center text-xs font-semibold text-accent-emphasis hover:underline"
-					>
-						Print an A4 poster or rotate this QR →
-					</Link>
-				</DialogContent>
-			</Dialog>
-		</>
-	);
-}
-
-/**
- * The "buyer won't/can't scan" escape hatches (86ey8vqp6), alongside the store QR
- * chip so they're discoverable the moment a buyer can't scan. Opens a two-path
- * chooser: type the buyer's phone (binds a session directly, buyer still gets a
- * WhatsApp confirmation + receipt) or a fully anonymous cash sale (no contact, no
- * WhatsApp). Either path lands a normal build screen via `onStarted`.
- */
-function NoScanControl({
-	onStarted,
-}: {
-	onStarted: (sessionId: string) => void;
-}) {
-	const actAsRetailerId = useActAsRetailerId();
-	const bindManual = useMutation(api.counterCheckout.bindSessionManualPhone);
-	const startAnon = useMutation(api.counterCheckout.startAnonymousSession);
-
-	const [open, setOpen] = useState(false);
-	const [mode, setMode] = useState<"choose" | "phone">("choose");
-	const [name, setName] = useState("");
-	const [phone, setPhone] = useState("");
-	const [busy, setBusy] = useState(false);
-
-	// Reset to the chooser whenever the dialog closes so it never reopens mid-flow.
-	function change(next: boolean) {
-		setOpen(next);
+	function changePhone(next: boolean) {
+		setPhoneOpen(next);
 		if (!next) {
-			setMode("choose");
 			setName("");
 			setPhone("");
 			setBusy(false);
 		}
 	}
+
+	// A name is at least 3 chars (a single letter isn't a name) — mirrors the
+	// storefront checkout + the server validator. Phone: enough digits to be
+	// plausible; the server does the authoritative MY normalization + validation.
+	const nameReady = name.trim().length >= 3;
+	const phoneReady = phone.replace(/\D/g, "").length >= 8;
 
 	async function submitPhone() {
 		if (busy || !phoneReady || !nameReady) return;
@@ -526,7 +489,7 @@ function NoScanControl({
 				waPhone: phone,
 				name,
 			});
-			change(false);
+			changePhone(false);
 			onStarted(sessionId);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -540,7 +503,7 @@ function NoScanControl({
 		try {
 			// No name here — the cashier adds it on the build screen if they want to.
 			const { sessionId } = await startAnon({ retailerId: actAsRetailerId });
-			change(false);
+			setBusy(false);
 			onStarted(sessionId);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -548,134 +511,159 @@ function NoScanControl({
 		}
 	}
 
-	// A name is at least 3 chars (a single letter isn't a name) — mirrors the
-	// storefront checkout + the server validator.
-	const nameReady = name.trim().length >= 3;
-	// Enough digits to be a plausible number — the server does the authoritative
-	// MY normalization + validation.
-	const phoneReady = phone.replace(/\D/g, "").length >= 8;
-
 	return (
 		<>
-			<button
-				type="button"
-				onClick={() => setOpen(true)}
-				className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl border border-border px-3 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
-			>
-				<Keyboard className="size-4" />
-				<span className="hidden sm:inline">No scan?</span>
-			</button>
+			<DropdownMenu>
+				<DropdownMenuTrigger asChild>
+					<button
+						type="button"
+						className="flex h-10 shrink-0 items-center gap-1.5 rounded-xl bg-accent px-3.5 text-sm font-semibold text-accent-foreground shadow-sm transition-colors hover:bg-accent/90 aria-expanded:bg-accent/90"
+					>
+						<Plus className="size-4" />
+						New order
+						<ChevronDown className="size-4 opacity-80" />
+					</button>
+				</DropdownMenuTrigger>
+				<DropdownMenuContent className="w-[19rem] max-w-[calc(100vw-2rem)]">
+					<DropdownMenuLabel>Start a checkout</DropdownMenuLabel>
+					{qrReady ? (
+						<DropdownMenuItem onSelect={() => setQrOpen(true)}>
+							<span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-accent/12 text-accent">
+								<QrCode className="size-5" />
+							</span>
+							<span className="min-w-0">
+								<span className="block text-sm font-semibold">
+									Show store QR
+								</span>
+								<span className="block text-xs text-muted-foreground">
+									Buyer scans to connect on WhatsApp
+								</span>
+							</span>
+						</DropdownMenuItem>
+					) : null}
+					<DropdownMenuItem onSelect={() => setPhoneOpen(true)}>
+						<span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-accent/12 text-accent">
+							<Phone className="size-5" />
+						</span>
+						<span className="min-w-0">
+							<span className="block text-sm font-semibold">
+								Enter phone number
+							</span>
+							<span className="block text-xs text-muted-foreground">
+								Buyer gets confirmation & receipt on WhatsApp
+							</span>
+						</span>
+					</DropdownMenuItem>
+					<DropdownMenuItem onSelect={() => void submitAnonymous()}>
+						<span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+							<UserX className="size-5" />
+						</span>
+						<span className="min-w-0">
+							<span className="block text-sm font-semibold">
+								Cash sale — no contact
+							</span>
+							<span className="block text-xs text-muted-foreground">
+								Anonymous, paid in person, no WhatsApp
+							</span>
+						</span>
+					</DropdownMenuItem>
+				</DropdownMenuContent>
+			</DropdownMenu>
 
-			<Dialog open={open} onOpenChange={change}>
+			{/* Store QR — buyer scans it and their checkout opens here automatically. */}
+			<Dialog open={qrOpen} onOpenChange={setQrOpen}>
 				<DialogContent className="sm:max-w-sm">
 					<DialogHeader>
-						<DialogTitle>
-							{mode === "phone" ? "Enter buyer's number" : "Buyer can't scan?"}
-						</DialogTitle>
+						<DialogTitle>Ask the buyer to scan</DialogTitle>
 						<DialogDescription>
-							{mode === "phone"
-								? "We'll message their WhatsApp with the confirmation and receipt — no scan needed."
-								: "Ring them up without the QR. Pick how you'll take this order."}
+							They scan and hit send — their checkout opens here automatically,
+							ready to ring up.
 						</DialogDescription>
 					</DialogHeader>
+					{storeQr?.waUrl ? (
+						<>
+							<div className="mx-auto rounded-2xl border border-border bg-white p-4">
+								<QRCode value={storeQr.waUrl} size={220} />
+							</div>
+							<Link
+								to="/app/poster"
+								onClick={() => setQrOpen(false)}
+								className="text-center text-xs font-semibold text-accent-emphasis hover:underline"
+							>
+								Print an A4 poster or rotate this QR →
+							</Link>
+						</>
+					) : null}
+				</DialogContent>
+			</Dialog>
 
-					{mode === "choose" ? (
-						<div className="flex flex-col gap-2">
-							<button
+			{/* Manual phone bind — buyer still gets their confirmation + receipt. */}
+			<Dialog open={phoneOpen} onOpenChange={changePhone}>
+				<DialogContent className="sm:max-w-sm">
+					<DialogHeader>
+						<DialogTitle>Enter buyer's number</DialogTitle>
+						<DialogDescription>
+							We'll message their WhatsApp with the confirmation and receipt —
+							no scan needed.
+						</DialogDescription>
+					</DialogHeader>
+					<div className="flex flex-col gap-3">
+						<label className="block">
+							<span className="text-xs font-medium text-muted-foreground">
+								Buyer's name
+							</span>
+							<Input
+								type="text"
+								autoComplete="off"
+								autoFocus
+								value={name}
+								onChange={(e) => setName(e.target.value)}
+								placeholder="e.g. Aiman"
+								className="mt-1 h-12 text-base"
+							/>
+						</label>
+						<label className="block">
+							<span className="text-xs font-medium text-muted-foreground">
+								WhatsApp number
+							</span>
+							<Input
+								type="tel"
+								inputMode="tel"
+								autoComplete="off"
+								value={phone}
+								onChange={(e) => setPhone(e.target.value)}
+								onKeyDown={(e) => {
+									if (e.key === "Enter" && phoneReady && nameReady)
+										void submitPhone();
+								}}
+								placeholder="e.g. 012-345 6789"
+								className="mt-1 h-12 text-base"
+							/>
+							<span className="mt-1 block text-xs text-muted-foreground">
+								Malaysian mobile number. We'll add the country code
+								automatically.
+							</span>
+						</label>
+						<DialogFooter className="gap-2 sm:gap-2">
+							<Button
 								type="button"
-								onClick={() => setMode("phone")}
-								className="flex items-center gap-3 rounded-xl border border-border p-3 text-left hover:border-accent hover:bg-accent/5"
+								variant="outline"
+								onClick={() => changePhone(false)}
+								className="h-11"
 							>
-								<span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-accent/12 text-accent">
-									<Phone className="size-5" />
-								</span>
-								<span className="min-w-0">
-									<span className="block text-sm font-semibold">
-										Enter phone number
-									</span>
-									<span className="block text-xs text-muted-foreground">
-										Buyer gets their confirmation & receipt on WhatsApp
-									</span>
-								</span>
-							</button>
-							<button
+								Cancel
+							</Button>
+							<Button
 								type="button"
-								onClick={submitAnonymous}
-								disabled={busy}
-								className="flex items-center gap-3 rounded-xl border border-border p-3 text-left hover:border-accent hover:bg-accent/5 disabled:opacity-60"
+								onClick={submitPhone}
+								isLoading={busy}
+								disabled={busy || !phoneReady || !nameReady}
+								className="h-11"
 							>
-								<span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-									<UserX className="size-5" />
-								</span>
-								<span className="min-w-0">
-									<span className="block text-sm font-semibold">
-										No contact — cash sale
-									</span>
-									<span className="block text-xs text-muted-foreground">
-										Anonymous, paid in person, no WhatsApp sent
-									</span>
-								</span>
-							</button>
-						</div>
-					) : (
-						<div className="flex flex-col gap-3">
-							<label className="block">
-								<span className="text-xs font-medium text-muted-foreground">
-									Buyer's name
-								</span>
-								<Input
-									type="text"
-									autoComplete="off"
-									autoFocus
-									value={name}
-									onChange={(e) => setName(e.target.value)}
-									placeholder="e.g. Aiman"
-									className="mt-1 h-12 text-base"
-								/>
-							</label>
-							<label className="block">
-								<span className="text-xs font-medium text-muted-foreground">
-									WhatsApp number
-								</span>
-								<Input
-									type="tel"
-									inputMode="tel"
-									autoComplete="off"
-									value={phone}
-									onChange={(e) => setPhone(e.target.value)}
-									onKeyDown={(e) => {
-										if (e.key === "Enter" && phoneReady && nameReady)
-											void submitPhone();
-									}}
-									placeholder="e.g. 012-345 6789"
-									className="mt-1 h-12 text-base"
-								/>
-								<span className="mt-1 block text-xs text-muted-foreground">
-									Malaysian mobile number. We'll add the country code
-									automatically.
-								</span>
-							</label>
-							<DialogFooter className="gap-2 sm:gap-2">
-								<Button
-									type="button"
-									variant="outline"
-									onClick={() => setMode("choose")}
-									className="h-11"
-								>
-									Back
-								</Button>
-								<Button
-									type="button"
-									onClick={submitPhone}
-									isLoading={busy}
-									disabled={busy || !phoneReady || !nameReady}
-									className="h-11"
-								>
-									Start checkout
-								</Button>
-							</DialogFooter>
-						</div>
-					)}
+								Start checkout
+							</Button>
+						</DialogFooter>
+					</div>
 				</DialogContent>
 			</Dialog>
 		</>
@@ -1004,22 +992,13 @@ function ProductThumb({
 	name: string;
 	className?: string;
 }) {
-	return url ? (
-		<img
+	return (
+		<Img
 			src={url}
 			alt={name}
-			loading="lazy"
-			className={cn("object-cover", className)}
+			wrapperClassName={className}
+			fallback={<ImageIcon className="size-5" aria-hidden />}
 		/>
-	) : (
-		<div
-			className={cn(
-				"flex items-center justify-center bg-muted text-muted-foreground",
-				className,
-			)}
-		>
-			<ImageIcon className="size-5" aria-hidden />
-		</div>
 	);
 }
 

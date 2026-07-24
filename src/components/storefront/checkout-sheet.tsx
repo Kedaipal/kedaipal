@@ -37,6 +37,7 @@ import {
 import { submitThenFocusError } from "../forms/focus-error";
 import { useAppForm } from "../forms/form";
 import { Button } from "../ui/button";
+import { Img } from "../ui/image";
 import { AddressFieldset } from "./address-fieldset";
 
 const ADDRESS_STORAGE_KEY = "kedaipal:lastAddress";
@@ -453,15 +454,11 @@ export function CheckoutSheet({
 											key={item.variantId}
 											className="flex items-center gap-3 rounded-xl border border-border p-3"
 										>
-											{item.imageUrl ? (
-												<img
-													src={item.imageUrl}
-													alt={item.name}
-													className="size-14 shrink-0 rounded-lg object-cover"
-												/>
-											) : (
-												<div className="size-14 shrink-0 rounded-lg bg-muted" />
-											)}
+											<Img
+												src={item.imageUrl}
+												alt={item.name}
+												wrapperClassName="size-14 shrink-0 rounded-lg"
+											/>
 											<div className="flex flex-1 flex-col">
 												<span className="text-sm font-medium leading-tight">
 													{item.name}

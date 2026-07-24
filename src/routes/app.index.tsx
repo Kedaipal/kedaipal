@@ -4,7 +4,6 @@ import {
 	ArrowRight,
 	Banknote,
 	Bell,
-	Building2,
 	CalendarCheck,
 	CheckCircle2,
 	ChevronDown,
@@ -16,16 +15,14 @@ import {
 	type LucideIcon,
 	MapPin,
 	MessageCircle,
-	Music2,
 	Package,
 	Phone,
 	Printer,
 	QrCode,
 	Share2,
 	Sparkles,
-	Store,
 } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import { FirstOrderCelebration } from "../components/dashboard/first-order-celebration";
 import { GreetingChecklistRow } from "../components/dashboard/greeting-checklist-row";
@@ -37,7 +34,6 @@ import {
 } from "../components/dashboard/status-badge";
 import { StorefrontQrDialog } from "../components/dashboard/storefront-qr-dialog";
 import { WhiteGloveCard } from "../components/dashboard/white-glove-card";
-import { ShopeeIcon } from "../components/icons/shopee-icon";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
@@ -779,125 +775,81 @@ function DashboardHome() {
 				</section>
 			) : null}
 
-			{/* Recent orders + sales channels — desktop side-by-side, mobile stacked */}
+			{/* Recent orders */}
 			{!isNew ? (
-				<div className="flex flex-col gap-6 lg:grid lg:grid-cols-3 lg:items-start lg:gap-6">
-					<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-5 lg:col-span-2">
-						<div className="flex items-center justify-between">
-							<h3 className="font-heading text-base font-extrabold">
-								Recent orders
-							</h3>
-							<Link
-								to="/app/orders"
-								className="text-[13px] font-semibold text-accent-emphasis hover:underline"
-							>
-								View all →
-							</Link>
-						</div>
-						{recentOrdersLoading ? (
-							<RecentOrdersSkeleton />
-						) : recentOrders.length === 0 ? (
-							<EmptyOrders hasProduct={hasProduct} />
-						) : (
-							<ul className="flex flex-col gap-2">
-								{recentOrders.map((order) => (
-									<li key={order._id}>
-										<Link
-											to="/app/orders/$shortId"
-											params={{ shortId: order.shortId }}
-											className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-3 transition-colors hover:bg-accent/5"
-										>
-											<div className="flex min-w-0 flex-col gap-0.5">
-												<p className="truncate text-sm font-semibold">
-													{order.customer?.name ?? "Anonymous"}
-												</p>
-												<p className="truncate text-xs text-muted-foreground">
-													<span className="font-mono">#{order.shortId}</span>
-													{" · "}
-													{formatRelativeTime(order.createdAt)}
-												</p>
-											</div>
-											<div className="flex shrink-0 flex-col items-end gap-1 lg:flex-row lg:items-center lg:gap-3">
-												<p className="text-sm font-semibold tabular-nums">
-													{formatPrice(order.total, order.currency)}
-												</p>
-												<StatusBadge
-													status={order.status as AnchorStatus}
-													label={(() => {
-														const cs = resolveCurrentStage(
-															{
-																status: order.status,
-																currentStageId: order.currentStageId,
-															},
-															stages,
-														);
-														return cs
-															? stageLabel(cs, "en")
-															: resolveAnchorLabel(
-																	order.status as OrderStatus,
-																	{
-																		stages,
-																		labels: statusLabels,
-																		deliveryMethod: (order.deliveryMethod ??
-																			"delivery") as DeliveryMethod,
-																		locale: "en",
-																	},
-																);
-													})()}
-												/>
-											</div>
-										</Link>
-									</li>
-								))}
-							</ul>
-						)}
-					</section>
-
-					{/* Sales channels teaser */}
-					<section className="flex flex-col gap-3 lg:col-span-1">
-						<h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-							Sales channels
+				<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-5">
+					<div className="flex items-center justify-between">
+						<h3 className="font-heading text-base font-extrabold">
+							Recent orders
 						</h3>
-						<div className="flex flex-col gap-2">
-							<SalesChannelTeaser
-								name="Shopee"
-								description="Sync Shopee products & orders"
-								tint="bg-[#EE4D2D]/10 text-[#EE4D2D]"
-								icon={<ShopeeIcon className="size-5" />}
-							/>
-							<SalesChannelTeaser
-								name="Lazada"
-								description="Sync Lazada products & orders"
-								tint="bg-[#0F146D]/10 text-[#0F146D] dark:bg-[#0F146D]/30 dark:text-[#9aa6ff]"
-								icon={<Store className="size-5" />}
-							/>
-							<SalesChannelTeaser
-								name="TikTok Shop"
-								description="Sync TikTok Shop orders"
-								tint="bg-foreground/10 text-foreground"
-								icon={<Music2 className="size-5" />}
-							/>
-							<SalesChannelTeaser
-								name="StoreHub"
-								description="Reconcile in-store sales"
-								tint="bg-[#FF7A00]/10 text-[#FF7A00]"
-								icon={<Building2 className="size-5" />}
-							/>
-						</div>
-					</section>
-				</div>
+						<Link
+							to="/app/orders"
+							className="text-[13px] font-semibold text-accent-emphasis hover:underline"
+						>
+							View all →
+						</Link>
+					</div>
+					{recentOrdersLoading ? (
+						<RecentOrdersSkeleton />
+					) : recentOrders.length === 0 ? (
+						<EmptyOrders hasProduct={hasProduct} />
+					) : (
+						<ul className="flex flex-col gap-2">
+							{recentOrders.map((order) => (
+								<li key={order._id}>
+									<Link
+										to="/app/orders/$shortId"
+										params={{ shortId: order.shortId }}
+										className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-3 transition-colors hover:bg-accent/5"
+									>
+										<div className="flex min-w-0 flex-col gap-0.5">
+											<p className="truncate text-sm font-semibold">
+												{order.customer?.name ?? "Anonymous"}
+											</p>
+											<p className="truncate text-xs text-muted-foreground">
+												<span className="font-mono">#{order.shortId}</span>
+												{" · "}
+												{formatRelativeTime(order.createdAt)}
+											</p>
+										</div>
+										<div className="flex shrink-0 flex-col items-end gap-1 lg:flex-row lg:items-center lg:gap-3">
+											<p className="text-sm font-semibold tabular-nums">
+												{formatPrice(order.total, order.currency)}
+											</p>
+											<StatusBadge
+												status={order.status as AnchorStatus}
+												label={(() => {
+													const cs = resolveCurrentStage(
+														{
+															status: order.status,
+															currentStageId: order.currentStageId,
+														},
+														stages,
+													);
+													return cs
+														? stageLabel(cs, "en")
+														: resolveAnchorLabel(order.status as OrderStatus, {
+																stages,
+																labels: statusLabels,
+																deliveryMethod: (order.deliveryMethod ??
+																	"delivery") as DeliveryMethod,
+																locale: "en",
+															});
+												})()}
+											/>
+										</div>
+									</Link>
+								</li>
+							))}
+						</ul>
+					)}
+				</section>
 			) : null}
 		</div>
 	);
 }
 
-type SettingsTab =
-	| "store"
-	| "whatsapp"
-	| "payments"
-	| "fulfilment"
-	| "billing"
-	| "integrations";
+type SettingsTab = "store" | "whatsapp" | "payments" | "fulfilment" | "billing";
 
 export type ChecklistItem = {
 	key: string;
@@ -1137,44 +1089,6 @@ function RecentOrdersSkeleton() {
 				</li>
 			))}
 		</ul>
-	);
-}
-
-function SalesChannelTeaser({
-	name,
-	description,
-	tint,
-	icon,
-}: {
-	name: string;
-	description: string;
-	tint: string;
-	icon: ReactNode;
-}) {
-	return (
-		<Link
-			to="/app/settings"
-			search={{ tab: "integrations" }}
-			className="flex items-center gap-3 rounded-2xl border border-border bg-card p-3 transition-colors hover:bg-accent/5"
-		>
-			<div
-				className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${tint}`}
-			>
-				{icon}
-			</div>
-			<div className="flex min-w-0 flex-1 flex-col gap-0.5">
-				<div className="flex items-center gap-2">
-					<p className="truncate text-sm font-semibold">{name}</p>
-					<span className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
-						Soon
-					</span>
-				</div>
-				<p className="truncate text-[11px] text-muted-foreground">
-					{description}
-				</p>
-			</div>
-			<ArrowRight className="size-4 shrink-0 text-muted-foreground" />
-		</Link>
 	);
 }
 
