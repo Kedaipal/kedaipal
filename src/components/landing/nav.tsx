@@ -1,27 +1,68 @@
 import { useAuth } from "@clerk/tanstack-react-start";
 import { Link } from "@tanstack/react-router";
-import { ArrowRight, Globe, Menu, X } from "lucide-react";
+import { ArrowRight, Check, Globe, Menu, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import type { Locale } from "../../../convex/lib/locale";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
-import { getLocale, setLocale } from "../../paraglide/runtime";
+import { getLocale, locales, setLocale } from "../../paraglide/runtime";
 import { Button } from "../ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 
+// Short trigger label + full dropdown label per locale — keeps the button
+// compact in the nav bar while the menu itself is unambiguous.
+const SHORT_LABEL: Record<Locale, string> = { en: "EN", ms: "BM", zh: "中文" };
+const FULL_LABEL: Record<Locale, () => string> = {
+	en: m.lang_en,
+	ms: m.lang_ms,
+	zh: m.lang_zh,
+};
+
+/**
+ * 3-way locale switcher (en/ms/zh). A dropdown reads more clearly than a
+ * cycle-on-click once there are 3 options — the trigger always shows the
+ * CURRENT locale so it's never a silent toggle, and every row is a full
+ * ≥44px tap target.
+ */
 function LanguageSwitcher() {
-	const current = getLocale();
-	const next = current === "ms" ? "en" : "ms";
+	const current = getLocale() as Locale;
+	const [open, setOpen] = useState(false);
+
 	return (
-		<Button
-			type="button"
-			variant="ghost"
-			size="lg"
-			onClick={() => setLocale(next)}
-			aria-label={m.lang_switcher_label()}
-			className="tap-target rounded-full"
-		>
-			<Globe />
-			<span>{current === "ms" ? "EN" : "BM"}</span>
-		</Button>
+		<Popover open={open} onOpenChange={setOpen}>
+			<PopoverTrigger asChild>
+				<Button
+					type="button"
+					variant="ghost"
+					size="lg"
+					aria-label={m.lang_switcher_label()}
+					className="tap-target rounded-full"
+				>
+					<Globe />
+					<span>{SHORT_LABEL[current]}</span>
+				</Button>
+			</PopoverTrigger>
+			<PopoverContent align="end" className="w-48 p-1.5">
+				{(locales as readonly Locale[]).map((loc) => (
+					<button
+						key={loc}
+						type="button"
+						onClick={() => {
+							setLocale(loc);
+							setOpen(false);
+						}}
+						aria-current={loc === current}
+						className={cn(
+							"flex min-h-11 w-full items-center justify-between rounded-md px-3 text-sm font-medium transition-colors hover:bg-muted",
+							loc === current ? "text-foreground" : "text-muted-foreground",
+						)}
+					>
+						{FULL_LABEL[loc]()}
+						{loc === current ? <Check className="size-4" /> : null}
+					</button>
+				))}
+			</PopoverContent>
+		</Popover>
 	);
 }
 

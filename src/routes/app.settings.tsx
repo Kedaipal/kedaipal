@@ -80,7 +80,16 @@ const CURRENCY_OPTIONS = SUPPORTED_CURRENCIES.map((c) => ({
 const LOCALE_OPTIONS = [
 	{ value: "en", label: "English" },
 	{ value: "ms", label: "Bahasa Malaysia" },
+	{ value: "zh", label: "中文" },
 ] as const;
+
+// Shared display label for a locale, used by the language card, the WhatsApp
+// template tabs, and the locale-picker `<select>`s below.
+const LOCALE_LABELS: Record<Locale, string> = {
+	en: "English",
+	ms: "Bahasa Malaysia",
+	zh: "中文",
+};
 
 type SettingsTab =
 	| "store"
@@ -1625,7 +1634,7 @@ function MessageTemplatesForm({
 		}
 	}
 
-	const locales: Locale[] = ["en", "ms"];
+	const locales: Locale[] = ["en", "ms", "zh"];
 
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
@@ -1653,7 +1662,7 @@ function MessageTemplatesForm({
 								: "text-muted-foreground"
 						}`}
 					>
-						{loc === "en" ? "English" : "Bahasa Malaysia"}
+						{LOCALE_LABELS[loc]}
 					</button>
 				))}
 			</div>
@@ -1706,8 +1715,10 @@ type StageDraft = {
 	anchor: StageAnchor;
 	labelEn: string;
 	labelMs: string;
+	labelZh: string;
 	descEn: string;
 	descMs: string;
+	descZh: string;
 	notify: boolean;
 };
 
@@ -1720,8 +1731,10 @@ function seedToDraft(s: OrderStage): StageDraft {
 		anchor: s.anchor,
 		labelEn: s.label.en,
 		labelMs: s.label.ms ?? "",
+		labelZh: s.label.zh ?? "",
 		descEn: s.description?.en ?? "",
 		descMs: s.description?.ms ?? "",
+		descZh: s.description?.zh ?? "",
 		notify: s.notify,
 	};
 }
@@ -1734,12 +1747,14 @@ function draftsToStages(drafts: StageDraft[]): OrderStage[] {
 		label: {
 			en: d.labelEn.trim(),
 			...(d.labelMs.trim() ? { ms: d.labelMs.trim() } : {}),
+			...(d.labelZh.trim() ? { zh: d.labelZh.trim() } : {}),
 		},
-		...(d.descEn.trim() || d.descMs.trim()
+		...(d.descEn.trim() || d.descMs.trim() || d.descZh.trim()
 			? {
 					description: {
 						...(d.descEn.trim() ? { en: d.descEn.trim() } : {}),
 						...(d.descMs.trim() ? { ms: d.descMs.trim() } : {}),
+						...(d.descZh.trim() ? { zh: d.descZh.trim() } : {}),
 					},
 				}
 			: {}),
@@ -1804,8 +1819,10 @@ function StageEditor({
 				anchor: prev[prev.length - 1]?.anchor ?? "confirmed",
 				labelEn: "",
 				labelMs: "",
+				labelZh: "",
 				descEn: "",
 				descMs: "",
+				descZh: "",
 				notify: false, // intermediate stages default off (DECISION 2)
 			},
 		]);
@@ -1903,9 +1920,9 @@ function StageEditor({
 					</button>
 				</div>
 
-				{/* Stack on mobile (full-width, never misaligned); two columns at sm+
-				    where the BM label fits one line so the inputs line up. */}
-				<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+				{/* Stack on mobile (full-width, never misaligned); three columns at sm+
+				    where each label fits one line so the inputs line up. */}
+				<div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
 					<label className="flex flex-col gap-1">
 						<span className="text-xs font-medium text-muted-foreground">
 							Label (English)
@@ -1929,6 +1946,19 @@ function StageEditor({
 							maxLength={STAGE_LABEL_MAX_LENGTH}
 							value={d.labelMs}
 							onChange={(e) => update(d._key, { labelMs: e.target.value })}
+							placeholder="Optional"
+						/>
+					</label>
+					<label className="flex flex-col gap-1">
+						<span className="text-xs font-medium text-muted-foreground">
+							Label (中文)
+						</span>
+						<Input
+							type="text"
+							variant="field"
+							maxLength={STAGE_LABEL_MAX_LENGTH}
+							value={d.labelZh}
+							onChange={(e) => update(d._key, { labelZh: e.target.value })}
 							placeholder="Optional"
 						/>
 					</label>
@@ -1991,6 +2021,19 @@ function StageEditor({
 							value={d.descMs}
 							onChange={(e) => update(d._key, { descMs: e.target.value })}
 							placeholder="Pilihan"
+							rows={2}
+							maxLength={STAGE_DESCRIPTION_MAX_LENGTH}
+							className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+						/>
+					</label>
+					<label className="flex flex-col gap-1">
+						<span className="text-xs font-medium text-muted-foreground">
+							Buyer note (optional) — 中文
+						</span>
+						<textarea
+							value={d.descZh}
+							onChange={(e) => update(d._key, { descZh: e.target.value })}
+							placeholder="可选"
 							rows={2}
 							maxLength={STAGE_DESCRIPTION_MAX_LENGTH}
 							className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
@@ -2106,10 +2149,10 @@ function LocaleForm({
 	current,
 	onSave,
 }: {
-	current: "en" | "ms";
-	onSave: (locale: "en" | "ms") => Promise<unknown>;
+	current: Locale;
+	onSave: (locale: Locale) => Promise<unknown>;
 }) {
-	const [value, setValue] = useState<"en" | "ms">(current);
+	const [value, setValue] = useState<Locale>(current);
 	const dirty = value !== current;
 
 	async function handleSubmit(e: FormEvent) {
@@ -2128,7 +2171,7 @@ function LocaleForm({
 				<span className="text-sm font-medium">WhatsApp message language</span>
 				<select
 					value={value}
-					onChange={(e) => setValue(e.target.value as "en" | "ms")}
+					onChange={(e) => setValue(e.target.value as Locale)}
 					className="min-h-11 rounded-xl border border-input bg-background px-4 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 				>
 					{LOCALE_OPTIONS.map((opt) => (

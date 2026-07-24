@@ -1112,6 +1112,43 @@ describe("statusLabels (Phase 1 order status customization)", () => {
 		expect(order?.retailerLocale).toBe("ms");
 		expect(order?.statusLabels).toEqual({ ms: { shipped: "Sedia diambil" } });
 	});
+
+	test("zh statusLabels + locale round-trip, same as en/ms (86eybjw5n)", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "labels-zh");
+		await asA.mutation(api.retailers.updateSettings, {
+			locale: "zh",
+			statusLabels: { zh: { shipped: "配送中", delivered: "已送达" } },
+		});
+
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.locale).toBe("zh");
+		expect(me?.statusLabels).toEqual({
+			zh: { shipped: "配送中", delivered: "已送达" },
+		});
+	});
+
+	test("switching to zh with only en/ms statusLabels never leaks them (validator round-trip)", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "labels-zh-fallback");
+		await asA.mutation(api.retailers.updateSettings, {
+			statusLabels: {
+				en: { shipped: "Out for delivery" },
+				ms: { shipped: "Dalam penghantaran" },
+			},
+		});
+		await asA.mutation(api.retailers.updateSettings, { locale: "zh" });
+
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.locale).toBe("zh");
+		// The stored overrides are still en/ms only — no zh key was ever written,
+		// so a zh render (convex/lib/orderStatus.test.ts) falls through to the
+		// built-in zh catalog, never to this en/ms text.
+		expect(me?.statusLabels).toEqual({
+			en: { shipped: "Out for delivery" },
+			ms: { shipped: "Dalam penghantaran" },
+		});
+	});
 });
 
 describe("orderStages (Phase 2 custom stages)", () => {
@@ -1148,6 +1185,33 @@ describe("orderStages (Phase 2 custom stages)", () => {
 		const me = await asA.query(api.retailers.getMyRetailer);
 		expect(me?.orderStages?.[0].label).toEqual({ en: "Accepted" });
 		expect(me?.orderStages?.[0].description).toBeUndefined();
+	});
+
+	test("zh label + description round-trip, and blank zh is dropped like ms (86eybjw5n)", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "stages-zh");
+		await asA.mutation(api.retailers.updateSettings, {
+			orderStages: [
+				{
+					anchor: "confirmed",
+					label: { en: "Accepted", zh: "已确认" },
+					notify: true,
+					description: { en: "Order accepted", zh: "订单已接受" },
+				},
+				{
+					anchor: "packed",
+					label: { en: "Sewing", zh: "  " }, // whitespace-only zh → dropped
+					notify: false,
+				},
+			],
+		});
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.orderStages?.[0].label).toEqual({ en: "Accepted", zh: "已确认" });
+		expect(me?.orderStages?.[0].description).toEqual({
+			en: "Order accepted",
+			zh: "订单已接受",
+		});
+		expect(me?.orderStages?.[1].label).toEqual({ en: "Sewing" });
 	});
 
 	test("reusing a supplied id keeps it stable across saves", async () => {

@@ -2,11 +2,15 @@ import { useMutation } from "convex/react";
 import { Check, ChevronDown, Copy } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { api } from "../../../convex/_generated/api";
+import type { Locale } from "../../../convex/lib/locale";
 import { cn } from "../../lib/utils";
 import type { ChecklistItem } from "../../routes/app.index";
 import { Button } from "../ui/button";
 
-type GreetingLang = "en" | "ms";
+// Reuses the store's WhatsApp `Locale` (en/ms/zh) — the greeting message is
+// funnelled to the same buyer audience as the WA copy catalog, so the two
+// should never drift on which locales exist.
+type GreetingLang = Locale;
 
 /**
  * Greeting message templates funneling a customer who DM's the seller's
@@ -27,6 +31,12 @@ Boleh tengok menu dan order terus kat sini:
 👉 kedaipal.com/{{storeSlug}}
 
 Kami akan balas dalam masa terdekat. Jumpa kat sana!`,
+	zh: `您好！感谢您联系 {{storeName}} 😊
+
+您可以在这里浏览我们的菜单并下单：
+👉 kedaipal.com/{{storeSlug}}
+
+我们会尽快回复您，到时候见！`,
 };
 
 function fillTemplate(
@@ -163,6 +173,9 @@ export function GreetingChecklistRow({
 				</LangButton>
 				<LangButton active={lang === "ms"} onClick={() => setLang("ms")}>
 					Bahasa Malaysia
+				</LangButton>
+				<LangButton active={lang === "zh"} onClick={() => setLang("zh")}>
+					中文
 				</LangButton>
 			</div>
 

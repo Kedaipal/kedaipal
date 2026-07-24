@@ -133,10 +133,17 @@
 }
 
 @theme inline {
+	/* CJK fallback (zh locale, 86eybjw5n): neither Red Hat Display nor Geist
+	   ships CJK glyphs, so without an explicit fallback Chinese text would fall
+	   through to an unstyled system default. Prefer system-installed CJK fonts
+	   (zero bytes) over bundling a webfont — 'PingFang SC' (macOS/iOS),
+	   'Microsoft YaHei' (Windows), 'Noto Sans SC' (Android/Linux, often
+	   preinstalled as "Noto Sans CJK SC") — before the generic sans-serif
+	   fallback. See docs/i18n.md. */
 	--font-heading:
-		'Red Hat Display Variable', sans-serif;
+		'Red Hat Display Variable', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
 	--font-sans:
-		'Geist Variable', sans-serif;
+		'Geist Variable', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
 	--color-sidebar-ring:
 		var(--sidebar-ring);
 	--color-sidebar-border:
