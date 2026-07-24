@@ -196,6 +196,8 @@
 		var(--primary-foreground);
 	--color-primary:
 		var(--primary);
+	--color-cta-mesh-foreground:
+		var(--cta-mesh-foreground);
 	--color-popover-foreground:
 		var(--popover-foreground);
 	--color-popover:
@@ -240,6 +242,11 @@
 	/* Primary — midnight navy */
 	--primary: hsl(222 47% 11%);
 	--primary-foreground: hsl(210 40% 98%);
+
+	/* Text for bg-cta-mesh — that surface is always dark regardless of theme
+	   (see bg-cta-mesh below), so its foreground must stay fixed-light too;
+	   --primary-foreground flips in .dark and would go navy-on-navy there. */
+	--cta-mesh-foreground: hsl(210 40% 98%);
 
 	/* Secondary — soft slate */
 	--secondary: hsl(210 40% 96%);

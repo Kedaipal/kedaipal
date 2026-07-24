@@ -529,7 +529,7 @@ function PricingPage() {
 			<section>
 				<div className="mx-auto max-w-4xl px-5 py-14 md:px-8">
 					<FadeIn>
-						<div className="relative flex flex-col items-center gap-6 overflow-hidden rounded-[2rem] bg-cta-mesh p-8 text-center text-primary-foreground shadow-xl sm:flex-row sm:text-left md:p-10">
+						<div className="relative flex flex-col items-center gap-6 overflow-hidden rounded-[2rem] bg-cta-mesh p-8 text-center text-cta-mesh-foreground shadow-xl sm:flex-row sm:text-left md:p-10">
 							<div
 								aria-hidden
 								className="pointer-events-none absolute -right-16 -top-16 size-[220px] rounded-full border border-white/[0.06]"
@@ -544,9 +544,9 @@ function PricingPage() {
 								<h2 className="mt-1 text-xl font-bold md:text-2xl">
 									{m.pricingpage_banner_heading()}
 								</h2>
-								<p className="mt-2 text-sm leading-relaxed text-primary-foreground/65">
+								<p className="mt-2 text-sm leading-relaxed text-cta-mesh-foreground/65">
 									{m.pricingpage_banner_body()}{" "}
-									<span className="font-semibold text-primary-foreground">
+									<span className="font-semibold text-cta-mesh-foreground">
 										{m.pricingpage_banner_spots()}
 									</span>
 								</p>

@@ -32,7 +32,7 @@ export function FoundingTen() {
 			<div className="mx-auto max-w-6xl px-5 py-20 md:px-8 md:py-28">
 				<FadeIn>
 					{/* Membership-card panel */}
-					<div className="relative overflow-hidden rounded-[2rem] bg-cta-mesh px-6 py-14 text-primary-foreground shadow-2xl md:px-14 md:py-20">
+					<div className="relative overflow-hidden rounded-[2rem] bg-cta-mesh px-6 py-14 text-cta-mesh-foreground shadow-2xl md:px-14 md:py-20">
 						{/* Decorative rings */}
 						<div
 							aria-hidden
@@ -55,8 +55,12 @@ export function FoundingTen() {
 							>
 								{m.founding_heading()}
 							</h2>
-							<p className="mt-4 text-base leading-relaxed text-primary-foreground/65">
-								{m.founding_sub()}
+							<p className="mt-4 text-base leading-relaxed text-cta-mesh-foreground/65">
+								{/* Generic phrasing while loading / at zero — "0 sellers
+								    already pay monthly" would be false advertising. */}
+								{spotsTaken > 0
+									? m.founding_sub({ taken: spotsTaken })
+									: m.founding_sub_generic()}
 							</p>
 						</div>
 
@@ -86,7 +90,7 @@ export function FoundingTen() {
 								</div>
 							))}
 						</div>
-						<p className="relative mt-4 text-center text-sm font-medium text-primary-foreground/60">
+						<p className="relative mt-4 text-center text-sm font-medium text-cta-mesh-foreground/60">
 							{m.founding_remaining({ remaining, total: TOTAL_SPOTS })}
 						</p>
 
@@ -97,7 +101,7 @@ export function FoundingTen() {
 									className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 backdrop-blur-sm"
 								>
 									<p className="text-sm font-bold">{item.label}</p>
-									<p className="mt-1.5 text-sm leading-relaxed text-primary-foreground/60">
+									<p className="mt-1.5 text-sm leading-relaxed text-cta-mesh-foreground/60">
 										{item.body}
 									</p>
 								</div>
