@@ -301,8 +301,51 @@ export function buildPlaceOrderBody(args: {
 				},
 			],
 			...(args.orderRef ? { metadata: { orderRef: args.orderRef } } : {}),
+			// Ask the rider for a drop-off photo/signature. Free, and the proof
+			// protects the seller in "never arrived" disputes; harmless where a
+			// market/vehicle doesn't support POD (field is simply ignored).
+			isPODEnabled: true,
 		},
 	};
+}
+
+export type PodImage = {
+	stopId?: string;
+	imageUrl: string;
+	status: "DELIVERED" | "SIGNED";
+	deliveredAt?: string;
+};
+
+/**
+ * Extract proof-of-delivery images from a GET /v3/orders/{id} response.
+ * POD lives per-stop: `stops[].POD { status, image, deliveredAt }`. Only
+ * DELIVERED/SIGNED stops with a non-empty image URL count — PENDING means
+ * the rider hasn't dropped off yet, FAILED has no proof to show.
+ */
+export function parsePodImages(json: unknown): PodImage[] {
+	const data = (json as { data?: unknown })?.data ?? json;
+	const stops = (data as { stops?: unknown })?.stops;
+	if (!Array.isArray(stops)) return [];
+	const images: PodImage[] = [];
+	for (const stop of stops) {
+		const pod = (stop as { POD?: Record<string, unknown> })?.POD;
+		if (!pod) continue;
+		const status = typeof pod.status === "string" ? pod.status : "";
+		if (status !== "DELIVERED" && status !== "SIGNED") continue;
+		const imageUrl = typeof pod.image === "string" ? pod.image.trim() : "";
+		if (!imageUrl) continue;
+		images.push({
+			stopId:
+				typeof (stop as { stopId?: unknown }).stopId === "string"
+					? ((stop as { stopId: string }).stopId ?? undefined)
+					: undefined,
+			imageUrl,
+			status,
+			deliveredAt:
+				typeof pod.deliveredAt === "string" ? pod.deliveredAt : undefined,
+		});
+	}
+	return images;
 }
 
 export type ParsedProviderOrder = {

@@ -663,6 +663,36 @@ function TrackingRoute() {
 				</a>
 			) : null}
 
+			{/* Rider drop-off photo (proof of delivery) — same shot the WhatsApp
+			    delivered follow-up carried; only exists on delivered rider orders. */}
+			{order.podImageUrls?.length ? (
+				<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+						Delivery photo
+					</p>
+					<div className="flex flex-col gap-2">
+						{order.podImageUrls.map((url) => (
+							<a
+								key={url}
+								href={url}
+								target="_blank"
+								rel="noopener noreferrer"
+								className="block overflow-hidden rounded-xl border border-border"
+							>
+								<img
+									src={url}
+									alt="Proof of delivery"
+									className="max-h-72 w-full object-cover"
+								/>
+							</a>
+						))}
+					</div>
+					<p className="text-xs text-muted-foreground">
+						Taken by your rider at drop-off.
+					</p>
+				</section>
+			) : null}
+
 			{/* Pickup location — shown for self-collect orders that have a snapshot.
 			    Reads the frozen snapshot (not the live pickupLocations row) so a
 			    retailer edit after the order was placed never rewrites history. */}

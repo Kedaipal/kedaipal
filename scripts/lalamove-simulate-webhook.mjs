@@ -12,23 +12,25 @@
 // ── Setup ────────────────────────────────────────────────────────────────────
 // Supply the SAME sandbox credentials the test store has saved under Settings →
 // Fulfilment → Delivery charge → Lalamove (the signature must match what the
-// webhook route verifies with). The deployment URL is read from your
-// .env.local via Node's --env-file:
-//
-//   export LALAMOVE_API_KEY=pk_test_xxxxxxxx
-//   export LALAMOVE_API_SECRET=sk_test_xxxxxxxx
+// webhook route verifies with) — either as --key/--secret flags on the command
+// or LALAMOVE_API_KEY/LALAMOVE_API_SECRET env vars. The deployment URL is read
+// from your .env.local via Node's --env-file.
 //
 // ── Usage ────────────────────────────────────────────────────────────────────
-//   node --env-file=.env.local scripts/lalamove-simulate-webhook.mjs <providerOrderId> <STEP>
+//   node --env-file=.env.local scripts/lalamove-simulate-webhook.mjs \
+//     <providerOrderId> <STEP> --key pk_test_xxxx --secret sk_test_xxxx
 //
 //   <providerOrderId>  deliveryJobs.providerOrderId of the booking
 //                      (Convex dashboard → Data → deliveryJobs → newest row)
-//   <STEP>             driver | ON_GOING | PICKED_UP | COMPLETED
+//   <STEP>             driver | ON_GOING | PICKED_UP | COMPLETED | POD
 //                      | CANCELED | EXPIRED | REJECTED
 //                        driver     → DRIVER_ASSIGNED (fills rider + tracking link)
 //                        ON_GOING   → job pill "Rider on the way"
 //                        PICKED_UP  → order → `shipped`   (real WhatsApp to buyer)
 //                        COMPLETED  → order → `delivered` (real WhatsApp to buyer)
+//                        POD        → POD_STATUS_CHANGED (proof-of-delivery
+//                                     trigger — sandbox has no rider photo, so
+//                                     this exercises the fetch path only)
 //                        CANCELED/EXPIRED/REJECTED → job fails + one-tap rebook
 //
 // Typical walk-through after tapping "Book delivery":
@@ -41,8 +43,21 @@
 // no-op and you never have to bump anything by hand.
 import { createHmac, randomUUID } from "node:crypto";
 
-const API_KEY = process.env.LALAMOVE_API_KEY;
-const API_SECRET = process.env.LALAMOVE_API_SECRET;
+// Args: positionals (<providerOrderId> <STEP>) plus optional --key/--secret
+// flags, so any dev can run it without exporting env vars first. Flags win
+// over LALAMOVE_API_KEY / LALAMOVE_API_SECRET env.
+const positional = [];
+const flags = {};
+const argv = process.argv.slice(2);
+for (let i = 0; i < argv.length; i++) {
+	if (argv[i] === "--key" || argv[i] === "--secret") {
+		flags[argv[i].slice(2)] = argv[++i];
+	} else {
+		positional.push(argv[i]);
+	}
+}
+const API_KEY = flags.key ?? process.env.LALAMOVE_API_KEY;
+const API_SECRET = flags.secret ?? process.env.LALAMOVE_API_SECRET;
 
 // Webhook host: explicit override wins, else derive from the Convex deployment
 // URL (…convex.cloud → …convex.site, where HTTP actions live).
@@ -52,7 +67,7 @@ const siteBase =
 	process.env.CONVEX_SITE_URL ??
 	convexUrl?.replace(/\.convex\.cloud\/?$/, ".convex.site");
 
-const [providerOrderId, step] = process.argv.slice(2);
+const [providerOrderId, step] = positional;
 
 function fail(msg) {
 	console.error(`✖ ${msg}`);
@@ -61,7 +76,7 @@ function fail(msg) {
 
 if (!API_KEY || !API_SECRET)
 	fail(
-		"Set LALAMOVE_API_KEY and LALAMOVE_API_SECRET — the sandbox pk_test_/sk_test_ pair your test store has saved.",
+		"Supply the sandbox pk_test_/sk_test_ pair your test store has saved — either --key/--secret flags or LALAMOVE_API_KEY/LALAMOVE_API_SECRET env vars.",
 	);
 if (!API_KEY.startsWith("pk_test_"))
 	fail(
@@ -73,7 +88,7 @@ if (!siteBase)
 	);
 if (!providerOrderId || !step)
 	fail(
-		"Usage: node --env-file=.env.local scripts/lalamove-simulate-webhook.mjs <providerOrderId> <driver|ON_GOING|PICKED_UP|COMPLETED|CANCELED|EXPIRED|REJECTED>",
+		"Usage: node --env-file=.env.local scripts/lalamove-simulate-webhook.mjs <providerOrderId> <driver|ON_GOING|PICKED_UP|COMPLETED|POD|CANCELED|EXPIRED|REJECTED> [--key pk_test_…] [--secret sk_test_…]",
 	);
 
 const PATH = "/webhook/lalamove";
@@ -83,7 +98,17 @@ const now = new Date().toISOString();
 
 let eventType;
 let data;
-if (step.toLowerCase() === "driver") {
+if (step.toUpperCase() === "POD") {
+	// Proof-of-delivery trigger. NOTE: the handler responds by fetching
+	// GET /v3/orders from the REAL sandbox, which never has a rider photo —
+	// so this exercises the trigger path only; the image itself can only be
+	// verified on a production booking.
+	eventType = "POD_STATUS_CHANGED";
+	data = {
+		order: { orderId: providerOrderId },
+		updatedAt: now,
+	};
+} else if (step.toLowerCase() === "driver") {
 	eventType = "DRIVER_ASSIGNED";
 	data = {
 		order: { orderId: providerOrderId, shareLink: share },

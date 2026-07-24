@@ -77,6 +77,15 @@ parts; half a credential is refused at save time; clearing keys while
 enabled is refused (nothing to fall back to); key fields follow the
 logoStorageId convention (`undefined` = keep stored, `""` = clear).
 
+**Settings prominence (24 Jul):** the delivery-charge picker is a 2×2
+card grid with **Lalamove first** — branded with the official wordmark
+(`public/img/lalamove-logo.svg`) ahead of Free/Flat/By-distance. For a
+locked Starter the card stays **full-colour with a Pro chip + "upgrade to
+Pro to turn on"** (disabled-with-reason, deliberately not a washed-out
+ghost) so every tier sees rider delivery exists — the upsell surface for
+the Pro tier. The settings vehicle is labelled as a *default* with a
+helper noting the per-order switch in the booking dialog.
+
 **IA (revised after first seller test):** Lalamove is NOT a separate card —
 it's the 4th delivery-pricing mode (Settings → Fulfilment → Delivery charge:
 Free / Flat / By distance / **Lalamove**). Picking it reveals the whole
@@ -134,7 +143,10 @@ auto-book fire on packed+paid+due-today.
 
 Two-tap: `prepareBooking` re-quotes at today's price and the confirm dialog
 shows it against the buyer-paid fee (variance called out, including who
-absorbs it); `confirmBooking` places the order within the 5-minute window
+absorbs it) **with a per-order vehicle switch** (Motorcycle ⇄ Car,
+defaulted to the settings vehicle; switching re-quotes since prices are
+per-vehicle — a bulky one-off order gets a car without a round-trip to
+Settings, and the chosen vehicle is what lands on the ledger row); `confirmBooking` places the order within the 5-minute window
 and writes the `deliveryJobs` row — the **one-active-job-per-order**
 invariant is enforced by a **reserve → POST → commit** sequence (PR #127
 review): `reserveBooking` atomically claims the slot with a placeholder
@@ -223,8 +235,31 @@ secrets → verify → act → ack. Lalamove-specific twists:
 | `ORDER_STATUS_CHANGED: CANCELED / REJECTED` | booking cancelled (by vendor on Lalamove's side, by Lalamove, or step 1 of a clone) | job → failed + reason | same failure surfaces as EXPIRED | nothing |
 | `ORDER_AMOUNT_CHANGED` | **after** matching/completion when the final charge differs from the quote — waiting-time fees, priority fee/tip added, toll adjustments | `costActual` updated on the job | the card's "Booking cost" updates reactively (the drift ledger vs buyer-paid fee) | nothing — buyer price is frozen |
 | `ORDER_REPLACED` | Lalamove's **cancel-and-clone**: for post-match adjustments THEY cancel the original and re-create it under a new orderId (sequence: CANCELED old → ORDER_REPLACED → clone's own events) | job repointed to the new id, **revived** to "assigning", stale failure cleared | card returns to active; if the clone-cancel briefly emailed a failure, the booking visibly recovers (rare, self-healing) | nothing |
+| `POD_STATUS_CHANGED` | rider uploaded the drop-off photo / signature | trigger only — the truth is read from `GET /v3/orders` by the idempotent `fetchPodImages` (also scheduled at COMPLETED, whichever lands first wins; the loser's blobs are cleaned) | photo thumbnails on the delivered dispatch card | **WhatsApp photo follow-up** to the delivered message ("Delivered! 📸 …", EN+BM) |
 | `WALLET_BALANCE_CHANGED` | vendor wallet balance moved | logged only (proactive low-balance banner = named follow-up) | — | — |
 | `ORDER_CREATED` (undocumented but real) | at booking | logged only | — | — |
+
+**Proof of delivery (POD) — rider drop-off photo:** every placed order
+requests POD (`isPODEnabled: true` in `buildPlaceOrderBody` — free, and
+the photo is the seller's evidence in "never arrived" disputes). On
+completion (`COMPLETED` and/or `POD_STATUS_CHANGED` — both trigger the
+same idempotent fetch) `lalamove.fetchPodImages` reads
+`GET /v3/orders/{id}` → `stops[].POD {status, image, deliveredAt}`, keeps
+`DELIVERED`/`SIGNED` stops with an image, downloads the shots and stores
+them as **our** blobs (`deliveryJobs.podImageStorageIds` — Lalamove's URL
+lifetime is undocumented, never hotlink), retrying up to 3× at 2-min
+intervals since the upload can lag the status event. Then: the **buyer**
+gets the photo on WhatsApp as a follow-up to the delivered message
+(`notifyDeliveryPhoto`, transactional, caption EN+BM) **and** a "Delivery
+photo" card on the tracking page (`orders.get` resolves `podImageUrls` on
+delivered delivery orders only — one indexed read on that end-state, the
+hot tracking path pays nothing), and the **vendor** sees thumbnails on
+the delivered dispatch card ("Delivery photo from the rider", tap for
+full size). Races are settled in `storePodImages` (first
+set wins, loser's blobs deleted); order/account delete cascades remove the
+blobs. Sandbox never produces a POD (no riders), so the photo path is a
+**first-prod-booking check**; all parsing/storage/race logic is
+unit-tested.
 
 **Stage-pointer consistency (bug found in live testing, 24 Jul):** a seller
 tapping the stepper stores BOTH `orders.status` and `orders.currentStageId`;
@@ -308,22 +343,23 @@ deployment so you can walk a booking forward by hand. It's **sandbox-only**
 can never touch production.
 
 Supply the same sandbox key/secret the test store has saved (the signature
-must match what the webhook route verifies), then pass the booking's
-`deliveryJobs.providerOrderId` (Convex dashboard → Data → `deliveryJobs`):
+must match what the webhook route verifies) via `--key`/`--secret` flags or
+env vars, then pass the booking's `deliveryJobs.providerOrderId` (Convex
+dashboard → Data → `deliveryJobs`):
 
 ```bash
-export LALAMOVE_API_KEY=pk_test_xxxx
-export LALAMOVE_API_SECRET=sk_test_xxxx
 # after tapping "Book delivery" on a confirmed delivery order:
-node --env-file=.env.local scripts/lalamove-simulate-webhook.mjs <providerOrderId> driver     # rider + tracking link
-node --env-file=.env.local scripts/lalamove-simulate-webhook.mjs <providerOrderId> ON_GOING   # "Rider on the way"
-node --env-file=.env.local scripts/lalamove-simulate-webhook.mjs <providerOrderId> PICKED_UP  # order → shipped  (real WhatsApp to buyer)
-node --env-file=.env.local scripts/lalamove-simulate-webhook.mjs <providerOrderId> COMPLETED  # order → delivered (real WhatsApp to buyer)
+node --env-file=.env.local scripts/lalamove-simulate-webhook.mjs <providerOrderId> driver \
+  --key pk_test_xxxx --secret sk_test_xxxx
+# then: ON_GOING → PICKED_UP (order → shipped) → COMPLETED (order → delivered)
 ```
 
 Failure paths: `CANCELED` / `EXPIRED` / `REJECTED` (job fails + one-tap
-rebook). `PICKED_UP` / `COMPLETED` really message the order's buyer number —
-book a test order with your own number to see them land.
+rebook); `POD` fires the proof-of-delivery trigger (sandbox has no rider
+photo, so the fetch comes back empty — the photo path is a
+first-prod-booking check). `PICKED_UP` / `COMPLETED` really message the
+order's buyer number — book a test order with your own number to see them
+land. Full step table + script conventions: [`dev-scripts.md`](./dev-scripts.md).
 
 ## Follow-ups (named, not built)
 
