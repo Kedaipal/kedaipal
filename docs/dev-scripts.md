@@ -65,17 +65,30 @@ timestamp and the event handler is idempotent).
 
 ### Testing the proof-of-delivery photo locally
 
-The sandbox never produces a rider photo, so the real POD fetch always
-comes back empty there. To eyeball the photo surfaces anyway, inject a
-stand-in through the **same** post-parse pipeline (store as blob → job row
-→ buyer WhatsApp photo → card thumbnails):
+Lalamove's sandbox has no riders, so a real POD photo can never be fetched
+there — `<STEP> POD` above only exercises the fetch *trigger* (it comes back
+empty). To actually see the photo on all its surfaces, inject a stand-in
+through the **same** post-parse pipeline a real photo takes:
 
 ```bash
 npx convex run lalamove:devInjectPodImage '{"providerOrderId":"<providerOrderId>"}'
-# optional custom image: … '{"providerOrderId":"…","imageUrl":"https://…/photo.jpg"}'
+# custom image instead of the random placeholder:
+npx convex run lalamove:devInjectPodImage '{"providerOrderId":"…","imageUrl":"https://…/photo.jpg"}'
 ```
 
-Dev-only by nature (internal function — CLI/dashboard only). The **real**
-rider photo appearing end-to-end remains a first-prod-booking check.
+- **`<providerOrderId>`**: same as the simulator — `deliveryJobs.providerOrderId`
+  (Convex dashboard → Data → `deliveryJobs`), on a **completed** booking.
+- **No Lalamove credentials needed** — it downloads a placeholder (or your
+  `imageUrl`) instead of calling `GET /v3/orders`, so any dev can run it.
+- Internal function, so it runs via `npx convex run` (CLI) / the Convex
+  dashboard only — clients can't call it.
+
+After running, the injected photo appears on **all three** real surfaces:
+1. the buyer's **WhatsApp** (a photo follow-up to the delivered message),
+2. the buyer's **tracking page** (`/track/<token>` → "Delivery photo" card),
+3. the vendor's **order detail** (thumbnails on the delivered Lalamove card).
+
+The **real** rider photo appearing end-to-end (via the actual `GET /v3/orders`
+fetch) remains a first-prod-booking check.
 
 Full feature context: [`delivery-lalamove.md`](./delivery-lalamove.md).
