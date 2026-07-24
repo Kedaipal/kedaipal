@@ -2,6 +2,7 @@ import { Package } from "lucide-react";
 import type { ProductMetric, ProductStat } from "../../../convex/lib/insights";
 import { topProducts } from "../../../convex/lib/insights";
 import { formatPrice, formatPriceCompact } from "../../lib/format";
+import { AppImage } from "../ui/app-image";
 import { FilterChip } from "../ui/filter-chip";
 
 // Horizontal-bar ranking of best sellers, grouped by product+variant. Toggle
@@ -65,16 +66,14 @@ export function TopProducts({
 						return (
 							<li key={p.key} className="flex items-center gap-3">
 								<div className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-border bg-muted">
-									{p.thumbnailUrl ? (
-										<img
-											src={p.thumbnailUrl}
-											alt=""
-											className="size-full object-cover"
-											loading="lazy"
-										/>
-									) : (
-										<Package className="size-4 text-muted-foreground" />
-									)}
+									<AppImage
+										src={p.thumbnailUrl}
+										alt=""
+										aspect="size-full"
+										fallback={
+											<Package className="size-4 text-muted-foreground" />
+										}
+									/>
 								</div>
 								<div className="flex min-w-0 flex-1 flex-col gap-1">
 									<div className="flex items-baseline justify-between gap-2">

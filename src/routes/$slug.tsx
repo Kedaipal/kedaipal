@@ -21,6 +21,11 @@ interface StorefrontLoaderData {
 	description: string;
 	canonicalUrl: string;
 	ogImageUrl: string | undefined;
+	// Exposed distinctly from `ogImageUrl` (which also falls back to logo/first
+	// product) so `head()` can preload ONLY the actual LCP element — the header
+	// cover image `StorefrontHeader` renders with `priority` — not whichever
+	// URL happens to win the OG-image precedence.
+	coverImageUrl: string | undefined;
 }
 
 export const Route = createFileRoute("/$slug")({
@@ -76,6 +81,7 @@ export const Route = createFileRoute("/$slug")({
 			description,
 			canonicalUrl: `${SITE_URL}/${retailer.slug}`,
 			ogImageUrl,
+			coverImageUrl: retailer.coverImageUrl ?? undefined,
 		};
 	},
 	head: ({ loaderData }) => {
@@ -85,6 +91,7 @@ export const Route = createFileRoute("/$slug")({
 			description,
 			canonicalUrl,
 			ogImageUrl,
+			coverImageUrl,
 			checkoutPhone,
 			locale,
 		} = loaderData;
@@ -129,7 +136,15 @@ export const Route = createFileRoute("/$slug")({
 
 		return {
 			meta,
-			links: [{ rel: "canonical", href: canonicalUrl }],
+			links: [
+				{ rel: "canonical", href: canonicalUrl },
+				// LCP preload — StorefrontHeader renders this URL with `priority`
+				// the moment retailer data resolves; hinting the browser before
+				// the JS bundle even parses shaves the fetch off the critical path.
+				...(coverImageUrl
+					? [{ rel: "preload", as: "image", href: coverImageUrl }]
+					: []),
+			],
 			scripts: [
 				{
 					type: "application/ld+json",

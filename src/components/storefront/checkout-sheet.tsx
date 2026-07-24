@@ -43,6 +43,7 @@ import {
 } from "../../lib/schemas";
 import { submitThenFocusError } from "../forms/focus-error";
 import { useAppForm } from "../forms/form";
+import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { AddressFieldset } from "./address-fieldset";
 
@@ -386,8 +387,7 @@ export function CheckoutSheet({
 					// so the fee the buyer saw freezes onto the order. Missing/stale →
 					// the server falls back to the store's onUnquotable policy.
 					deliveryQuoteId:
-						value.deliveryMethod === "delivery" &&
-						liveQuote.state === "quoted"
+						value.deliveryMethod === "delivery" && liveQuote.state === "quoted"
 							? liveQuote.quoteId
 							: undefined,
 				});
@@ -425,7 +425,6 @@ export function CheckoutSheet({
 			form.setFieldValue("fulfilmentDate", minYmd);
 		}
 	}, [open, minYmd]);
-
 
 	function handleSubmit(e: FormEvent) {
 		submitThenFocusError(form, e);
@@ -533,7 +532,9 @@ export function CheckoutSheet({
 		if (!rawQuote) return undefined;
 		if (rawQuote.kind !== "live") return rawQuote;
 		const fallbackKind =
-			rawQuote.onUnquotable === "block" ? ("blocked" as const) : ("pending" as const);
+			rawQuote.onUnquotable === "block"
+				? ("blocked" as const)
+				: ("pending" as const);
 		if (!hasCoords) return { kind: fallbackKind, reason: "no_coords" };
 		switch (liveQuote.state) {
 			case "quoted":
@@ -592,15 +593,12 @@ export function CheckoutSheet({
 											key={item.variantId}
 											className="flex items-center gap-3 rounded-xl border border-border p-3"
 										>
-											{item.imageUrl ? (
-												<img
-													src={item.imageUrl}
-													alt={item.name}
-													className="size-14 shrink-0 rounded-lg object-cover"
-												/>
-											) : (
-												<div className="size-14 shrink-0 rounded-lg bg-muted" />
-											)}
+											<AppImage
+												src={item.imageUrl}
+												alt={item.name}
+												aspect="size-14 shrink-0"
+												rounded="rounded-lg"
+											/>
 											<div className="flex flex-1 flex-col">
 												<span className="text-sm font-medium leading-tight">
 													{item.name}
