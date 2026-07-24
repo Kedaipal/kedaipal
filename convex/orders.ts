@@ -64,8 +64,10 @@ import {
 import {
 	DELIVERY_FEE_MAX,
 	type DeliveryConfig,
+	type LiveProviderQuote,
 	resolveDeliveryQuote,
 } from "./lib/delivery";
+import { CHECKOUT_QUOTE_MAX_AGE_MS } from "./lib/lalamove";
 import {
 	anchorOrdinal,
 	type Locale,
@@ -146,6 +148,9 @@ function resolveDeliveryForOrder(
 	retailer: Doc<"retailers">,
 	subtotal: number,
 	address: { latitude?: number; longitude?: number } | undefined,
+	// Live Lalamove quote loaded from its server-side deliveryQuotes row
+	// (pricing mode "lalamove" only) — see loadCheckoutDeliveryQuote.
+	liveQuote?: LiveProviderQuote,
 ): { snapshot: DeliverySnapshot | undefined; pending: boolean } {
 	const config = retailer.deliveryConfig as DeliveryConfig | undefined;
 	if (config?.mode === "radius" && !retailer.businessAddress) {
@@ -163,12 +168,15 @@ function resolveDeliveryForOrder(
 			address?.latitude !== undefined && address.longitude !== undefined
 				? { latitude: address.latitude, longitude: address.longitude }
 				: undefined,
+		liveQuote,
 	});
 	if (quote.kind === "blocked") {
 		throw new ConvexError(
 			quote.reason === "no_coords"
 				? "Pick your address from the suggestions so we can calculate the delivery fee"
-				: "That address is outside this store's delivery area",
+				: quote.reason === "unquotable"
+					? "We couldn't price delivery to that address right now — please try again"
+					: "That address is outside this store's delivery area",
 		);
 	}
 	if (quote.kind === "pending") return { snapshot: undefined, pending: true };
@@ -179,11 +187,52 @@ function resolveDeliveryForOrder(
 				mode: quote.mode,
 				distanceKm: quote.distanceKm,
 				bandMaxKm: quote.bandMaxKm,
+				quotationId: quote.quotationId,
+				vehicleType: quote.vehicleType,
+				quotedAt: quote.quotedAt,
 			},
 			pending: false,
 		};
 	}
 	return { snapshot: undefined, pending: false };
+}
+
+/**
+ * Load + validate the checkout's live Lalamove quote (86eyb5hrf). The client
+ * only ever passes the deliveryQuotes ROW ID — the fee comes from our own
+ * record, so it can't be tampered with. Returns undefined (→ the order falls
+ * back to the store's onUnquotable policy, usually deliveryFeePending) when
+ * the row is missing/foreign/stale or was priced for different coordinates
+ * (a cheap-nearby-pin quote can't be replayed against a far delivery
+ * address; ~11 m tolerance absorbs float noise, not geography).
+ */
+async function loadCheckoutDeliveryQuote(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	quoteId: Id<"deliveryQuotes"> | undefined,
+	address: { latitude?: number; longitude?: number } | undefined,
+): Promise<LiveProviderQuote | undefined> {
+	if (!quoteId) return undefined;
+	const row = await ctx.db.get(quoteId);
+	if (!row || row.retailerId !== retailerId) return undefined;
+	if (Date.now() - row.quotedAt > CHECKOUT_QUOTE_MAX_AGE_MS) return undefined;
+	const COORD_TOLERANCE = 1e-4; // ≈11 m
+	if (
+		address?.latitude === undefined ||
+		address.longitude === undefined ||
+		Math.abs(address.latitude - row.latitude) > COORD_TOLERANCE ||
+		Math.abs(address.longitude - row.longitude) > COORD_TOLERANCE
+	) {
+		return undefined;
+	}
+	// Consume the row — a quote freezes onto at most one order.
+	await ctx.db.delete(row._id);
+	return {
+		fee: row.fee,
+		quotationId: row.quotationId,
+		vehicleType: row.vehicleType,
+		quotedAt: row.quotedAt,
+	};
 }
 
 function buildPickupSnapshot(location: Doc<"pickupLocations">): PickupSnapshot {
@@ -258,7 +307,9 @@ async function orderByToken(
  *     could read any order by shortId.
  * Exactly one of the two must be supplied.
  */
-async function resolveSharedOrder(
+// Exported for the Lalamove dispatch surfaces (convex/lalamove.ts), which
+// authenticate the seller by shortId through the same owner-or-admin seam.
+export async function resolveSharedOrder(
 	ctx: QueryCtx,
 	{ token, shortId }: { token?: string; shortId?: string },
 ): Promise<Doc<"orders"> | null> {
@@ -343,6 +394,11 @@ export const create = mutation({
 		// pre-order via generateCustomImageUploadUrl. Stored as-is (a stray/invalid
 		// id just resolves to no URL on display — same posture as proof images).
 		customerImageStorageId: v.optional(v.string()),
+		// Live Lalamove quote row minted by lalamove.quoteForCheckout (pricing
+		// mode "lalamove" only). Only the ROW ID crosses the client — the fee is
+		// read from our own record. Missing/stale/mismatched → the order falls
+		// back to the store's onUnquotable policy. See docs/delivery-lalamove.md.
+		deliveryQuoteId: v.optional(v.id("deliveryQuotes")),
 	},
 	handler: async (
 		ctx,
@@ -425,20 +481,10 @@ export const create = mutation({
 		const retailer = await ctx.db.get(args.retailerId);
 		if (!retailer) throw new ConvexError("Retailer not found");
 
-		// Fulfilment date: validate against the retailer's notice window when the
-		// buyer supplied one. Applies to BOTH delivery and self-collect — a cake
-		// delivered on the wrong day is as bad as one collected late.
+		// Fulfilment date is validated AFTER the item loop below — the effective
+		// notice window is max(store setting, every item's per-product override),
+		// and the overrides only become known once items resolve.
 		let sanitizedFulfilmentDate: number | undefined;
-		if (args.fulfilmentDate !== undefined) {
-			try {
-				sanitizedFulfilmentDate = assertValidFulfilmentDate(
-					args.fulfilmentDate,
-					retailer.minFulfilmentNoticeDays,
-				);
-			} catch (err) {
-				throw new ConvexError((err as Error).message);
-			}
-		}
 
 		// Delivery must be on offer. Mirrors the storefront gate (which hides the
 		// delivery option when offerDelivery is off) and closes the gap where a
@@ -499,6 +545,8 @@ export const create = mutation({
 		>();
 		// Whole-order mockup gating: set if ANY line's product requires a proof.
 		let requiresMockup = false;
+		// Strictest per-product notice override across the cart (0 = none).
+		let maxItemNoticeDays = 0;
 		// Minimum-order-rule inputs (86ey9unyx), collected alongside the snapshot:
 		// per-line product id/name/qty + the flags the shared rules need. Checked
 		// after the loop (the rules judge summed quantities + the subtotal).
@@ -537,6 +585,10 @@ export const create = mutation({
 			// made-to-order "Custom" variant, not the fixed sizes.
 			const variantRequiresProof = variant.requiresProof ?? product.requiresProof;
 			if (variantRequiresProof === true) requiresMockup = true;
+			// Per-product fulfilment-notice override — the strictest item rules.
+			if ((product.minNoticeDays ?? 0) > maxItemNoticeDays) {
+				maxItemNoticeDays = product.minNoticeDays ?? 0;
+			}
 			const variantId = variant._id;
 			// The custom line has no optionValues — label it with its custom name so
 			// the order, WhatsApp confirm, and seller dashboard show "… (Custom)"
@@ -606,16 +658,42 @@ export const create = mutation({
 			);
 		}
 
+		// Fulfilment date: validated against the EFFECTIVE notice window — the
+		// store-level setting raised by any cart item's per-product override
+		// (custom cakes need lead time; ready stock doesn't). Applies to BOTH
+		// delivery and self-collect. Counter checkout doesn't run this path.
+		if (args.fulfilmentDate !== undefined) {
+			try {
+				sanitizedFulfilmentDate = assertValidFulfilmentDate(
+					args.fulfilmentDate,
+					Math.max(
+						retailer.minFulfilmentNoticeDays ?? 0,
+						maxItemNoticeDays,
+					),
+				);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
+
 		// Delivery charge (86extzdr8): resolved server-side at create — the
 		// authoritative price, whatever the client previewed. Needs the item
 		// subtotal (flat free-above threshold), so it runs after the item loop.
 		let deliverySnapshot: DeliverySnapshot | undefined;
 		let deliveryFeePending = false;
 		if (effectiveDeliveryMethod === "delivery") {
+			// itemSubtotal is hoisted above (shared with the min-order rules).
+			const liveQuote = await loadCheckoutDeliveryQuote(
+				ctx,
+				retailer._id,
+				args.deliveryQuoteId,
+				sanitizedAddress,
+			);
 			const resolved = resolveDeliveryForOrder(
 				retailer,
 				itemSubtotal,
 				sanitizedAddress,
+				liveQuote,
 			);
 			deliverySnapshot = resolved.snapshot;
 			deliveryFeePending = resolved.pending;
@@ -1725,7 +1803,12 @@ async function reverseCancellationEffects(
 	await recordOrderCancelled(ctx, order.retailerId, order.createdAt);
 }
 
-async function applyStatusTransition(
+// Exported for the Lalamove webhook's auto-transitions (convex/lalamove.ts) —
+// rider picked up → shipped, completed → delivered ride the SAME path as a
+// seller tap, so WhatsApp notify, stage vocabulary, activation stamping and
+// orderEvents all come free. The webhook side guards which source statuses
+// are eligible; this helper stays transition-mechanics only.
+export async function applyStatusTransition(
 	ctx: MutationCtx,
 	order: Doc<"orders">,
 	status: TransitionStatus,
@@ -1744,10 +1827,21 @@ async function applyStatusTransition(
 		statusChangedAt: number;
 		updatedAt: number;
 		carrierTrackingUrl: string;
+		currentStageId: string | undefined;
 	}> = { status, statusChangedAt: now, updatedAt: now };
 	if (status === "shipped" && opts.carrierTrackingUrl) {
 		const trimmed = opts.carrierTrackingUrl.trim();
 		if (trimmed.length > 0) patch.carrierTrackingUrl = trimmed;
+	}
+	// This path transitions the CANONICAL status without stage awareness (the
+	// stage-aware path is advanceToStage, which sets both). A stored
+	// `currentStageId` from an earlier stepper tap would otherwise go stale and
+	// pin the displayed stage behind the real status — e.g. the Lalamove webhook
+	// delivering an order the seller had marked "Packed" left the tracking page
+	// reading "Packed". Clear it so the stage derives from the new status; a
+	// same-status replay keeps any within-anchor custom stage.
+	if (order.currentStageId !== undefined && status !== order.status) {
+		patch.currentStageId = undefined;
 	}
 	await ctx.db.patch(order._id, patch);
 	await ctx.db.insert("orderEvents", {
@@ -1770,6 +1864,12 @@ async function applyStatusTransition(
 	await ctx.scheduler.runAfter(0, internal.whatsapp.notifyStatusChange, {
 		orderId: order._id,
 	});
+
+	// NOTE: Lalamove dispatch is never triggered server-side. Marking a delivery
+	// order packed surfaces a "book a rider now?" prompt CLIENT-side (opt-in
+	// deliveryBooking.promptBookOnPacked) so the seller always sees today's
+	// price and taps to confirm — money never moves without a human. See
+	// docs/delivery-lalamove.md ("Prompt to book on packed") + BookDeliveryCard.
 }
 
 export const updateStatus = mutation({
@@ -1922,7 +2022,19 @@ async function deleteOrderCascade(
 		await ctx.db.patch(session._id, { orderId: undefined, updatedAt: now });
 	}
 
-	// 5. Delete the order.
+	// 5. Delete the order's Lalamove booking ledger. An ACTIVE booking is the
+	//    seller's to cancel on Lalamove's side (the delete dialog warns before
+	//    this point); once the rows are gone, late webhooks for these provider
+	//    ids become unmatched traffic and the route acks + ignores them.
+	const jobs = await ctx.db
+		.query("deliveryJobs")
+		.withIndex("by_order", (q) => q.eq("orderId", order._id))
+		.collect();
+	for (const job of jobs) {
+		await ctx.db.delete(job._id);
+	}
+
+	// 6. Delete the order.
 	await ctx.db.delete(order._id);
 }
 

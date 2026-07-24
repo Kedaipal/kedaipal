@@ -1,5 +1,13 @@
 import { useMutation } from "convex/react";
-import { ImagePlus, Loader2, Minus, Plus, X } from "lucide-react";
+import {
+	ArrowRight,
+	ImagePlus,
+	Loader2,
+	Minus,
+	Plus,
+	ShoppingBag,
+	X,
+} from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../../convex/_generated/api";
@@ -26,6 +34,13 @@ interface ProductDetailSheetProps {
 	 * stepper defaults to the REMAINING amount toward the product's minimum
 	 * order quantity, so the happy path never trips the checkout block. */
 	cartQuantity: number;
+	/** Whole-cart item count (all products) — drives the "Go to checkout" CTA in
+	 * the footer: it only appears once the cart holds ≥1 item. Optional so the
+	 * sheet renders standalone (e.g. in tests) with the CTA hidden. */
+	cartItemCount?: number;
+	/** Whole-cart money total (minor units) — shown on the checkout CTA. 0 (or a
+	 * quote-only cart) hides the amount, keeping the count + arrow. */
+	cartTotal?: number;
 	onClose: () => void;
 	onAdd: (
 		product: StorefrontProduct,
@@ -34,14 +49,21 @@ interface ProductDetailSheetProps {
 		// Buyer's request + optional reference image for the custom line.
 		custom?: { note?: string; imageStorageId?: string },
 	) => void;
+	/** Jump straight from the product view to the checkout/review sheet without
+	 * closing the modal by hand first. Provided by the grid, which closes this
+	 * sheet then opens checkout. Absent → the CTA is hidden. See docs. */
+	onCheckout?: () => void;
 }
 
 export function ProductDetailSheet({
 	product,
 	retailerId,
 	cartQuantity,
+	cartItemCount = 0,
+	cartTotal = 0,
 	onClose,
 	onAdd,
+	onCheckout,
 }: ProductDetailSheetProps) {
 	const generateCustomImageUploadUrl = useMutation(
 		api.orders.generateCustomImageUploadUrl,
@@ -582,6 +604,39 @@ export function ProductDetailSheet({
 											: "Add to cart"}
 							</Button>
 						</div>
+
+						{/* Direct-to-checkout CTA — jump to the review sheet from here
+						    instead of closing the modal to reach the cart bar. Appears
+						    once the cart holds ≥1 item (this add, or an earlier one);
+						    styled as a tinted-accent secondary so it never competes with
+						    the filled "Add to cart" primary above. Mirrors the cart bar's
+						    bag + count + total. See docs/storefront-direct-checkout.md. */}
+						{onCheckout && cartItemCount > 0 ? (
+							<button
+								type="button"
+								onClick={onCheckout}
+								className="mt-3 flex h-12 w-full items-center justify-between gap-3 rounded-lg border border-accent/30 bg-accent/10 px-4 outline-none transition-colors hover:bg-accent/15 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+							>
+								<span className="flex items-center gap-2.5 text-sm font-semibold text-foreground">
+									<span className="relative flex size-6 items-center justify-center">
+										<ShoppingBag className="size-5 text-accent" />
+										<span className="absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
+											{cartItemCount}
+										</span>
+									</span>
+									Go to checkout
+								</span>
+								<span className="flex items-center gap-1.5 text-sm font-semibold tabular-nums text-foreground">
+									{cartTotal > 0
+										? formatPrice(cartTotal, product.currency)
+										: null}
+									<ArrowRight
+										className="size-4 text-muted-foreground"
+										aria-hidden
+									/>
+								</span>
+							</button>
+						) : null}
 					</div>
 				</Dialog.Content>
 			</Dialog.Portal>

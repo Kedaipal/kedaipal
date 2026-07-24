@@ -1,6 +1,6 @@
 import { useStore } from "@tanstack/react-form";
 import { useNavigate } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import {
 	Clock,
 	ExternalLink,
@@ -11,7 +11,14 @@ import {
 	X,
 } from "lucide-react";
 import { Dialog } from "radix-ui";
-import { type FormEvent, type ReactNode, useMemo, useState } from "react";
+import {
+	type FormEvent,
+	type ReactNode,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { PublicDeliveryQuote } from "../../../convex/delivery";
@@ -224,13 +231,27 @@ export function CheckoutSheet({
 	// earliest day) through today + 30. Memoised on the retailer setting so the
 	// "today" anchor is computed once per open, not on every keystroke. The
 	// server re-validates against the live window — see convex/lib/fulfilmentDate.
+	// Effective notice = the store-level setting raised by the strictest cart
+	// item's per-product override (a custom cake needs lead time; ready stock
+	// doesn't). Server enforces the same max at create.
+	const cartNoticeDays = cart.items.reduce(
+		(max, item) => Math.max(max, item.minNoticeDays ?? 0),
+		0,
+	);
+	// A custom / price-on-quote line means the date is a REQUEST, not a promise
+	// — the mockup conversation settles the real date. Copy adapts below.
+	const hasCustomLine = cart.items.some(
+		(item) => item.isCustom === true || item.quoteOnRequest === true,
+	);
 	const { minYmd, maxYmd } = useMemo(() => {
-		const bounds = fulfilmentDateBounds(minFulfilmentNoticeDays);
+		const bounds = fulfilmentDateBounds(
+			Math.max(minFulfilmentNoticeDays ?? 0, cartNoticeDays),
+		);
 		return {
 			minYmd: ymdFromEpoch(bounds.min),
 			maxYmd: ymdFromEpoch(bounds.max),
 		};
-	}, [minFulfilmentNoticeDays]);
+	}, [minFulfilmentNoticeDays, cartNoticeDays]);
 
 	const noCheckoutPhone = !checkoutPhone;
 	// Self-collect surfaces on the storefront only when the retailer opted in
@@ -265,8 +286,12 @@ export function CheckoutSheet({
 			// Empty when delivery, the chosen id when self-collect with 2+ options,
 			// unused when self-collect with exactly 1 option (auto-resolved at submit).
 			pickupLocationId: "",
-			// "YYYY-MM-DD" the buyer picks for delivery/pickup. Required at submit.
-			fulfilmentDate: "",
+			// "YYYY-MM-DD" the buyer wants delivery/pickup. Defaults to the
+			// EARLIEST allowed day (today, or today + the store's notice window)
+			// — most orders are for "as soon as possible", so the common case is
+			// zero taps while pre-order buyers just pick a later date. Server
+			// re-validates the live window either way.
+			fulfilmentDate: minYmd,
 			// Optional free-text instruction for the seller (local form state — the
 			// note is order-level, not a cart item, so it doesn't belong in useCart).
 			note: "",
@@ -357,6 +382,14 @@ export function CheckoutSheet({
 					fulfilmentDate: fulfilmentEpoch,
 					customerNote,
 					customerImageStorageId,
+					// Live Lalamove quote (86eyb5hrf): pass the server-side quote row
+					// so the fee the buyer saw freezes onto the order. Missing/stale →
+					// the server falls back to the store's onUnquotable policy.
+					deliveryQuoteId:
+						value.deliveryMethod === "delivery" &&
+						liveQuote.state === "quoted"
+							? liveQuote.quoteId
+							: undefined,
 				});
 				if (value.deliveryMethod === "delivery") saveAddress(value.address);
 				cart.clearCart();
@@ -381,6 +414,19 @@ export function CheckoutSheet({
 		},
 	});
 
+	// The form's default date is captured at mount (often before the cart has
+	// its strictest item, and long-lived tabs cross midnight) — pull a stale
+	// value up to the current floor whenever the sheet is open.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: form identity is stable; value read fresh inside.
+	useEffect(() => {
+		if (!open) return;
+		const current = form.store.state.values.fulfilmentDate;
+		if (current && current < minYmd) {
+			form.setFieldValue("fulfilmentDate", minYmd);
+		}
+	}, [open, minYmd]);
+
+
 	function handleSubmit(e: FormEvent) {
 		submitThenFocusError(form, e);
 	}
@@ -394,6 +440,9 @@ export function CheckoutSheet({
 	const watchedMethod = useStore(form.store, (s) => s.values.deliveryMethod);
 	const watchedLat = useStore(form.store, (s) => s.values.address.latitude);
 	const watchedLng = useStore(form.store, (s) => s.values.address.longitude);
+	// The chosen day PRICES the live quote (pre-orders quote as a scheduled
+	// pickup on that day) — date changes re-quote just like address changes.
+	const watchedDate = useStore(form.store, (s) => s.values.fulfilmentDate);
 	const latNum = watchedLat.trim().length > 0 ? Number(watchedLat) : NaN;
 	const lngNum = watchedLng.trim().length > 0 ? Number(watchedLng) : NaN;
 	const hasCoords = Number.isFinite(latNum) && Number.isFinite(lngNum);
@@ -408,11 +457,101 @@ export function CheckoutSheet({
 				}
 			: "skip",
 	);
-	const quoteForDelivery =
-		watchedMethod === "delivery" ? deliveryQuote : undefined;
+	const rawQuote = watchedMethod === "delivery" ? deliveryQuote : undefined;
+
+	// --- Live Lalamove quote (86eyb5hrf) ------------------------------------
+	// When the store prices delivery by live provider quote, the reactive query
+	// answers {kind:"live"} and the real fee comes from the quoteForCheckout
+	// ACTION, fired once per picked address (coords only change on a Google
+	// suggestion pick, debounced as a keystroke guard). The action records the
+	// fee server-side and returns a row id — orders.create loads the fee from
+	// that row, so this state is display + gating only, same trust model as the
+	// static quote.
+	const quoteLalamove = useAction(api.lalamove.quoteForCheckout);
+	const [liveQuote, setLiveQuote] = useState<
+		| { state: "idle" }
+		| { state: "loading" }
+		| { state: "quoted"; quoteId: Id<"deliveryQuotes">; fee: number }
+		| { state: "unavailable" }
+	>({ state: "idle" });
+	const liveSeq = useRef(0);
+	const isLiveMode = rawQuote?.kind === "live";
+	// biome-ignore lint/correctness/useExhaustiveDependencies: fires per picked address (coords change only on a suggestion pick); form/action/retailerId identities are stable and the address is read fresh inside the timeout.
+	useEffect(() => {
+		if (!isLiveMode || !open || !hasCoords) {
+			liveSeq.current++;
+			setLiveQuote({ state: "idle" });
+			return;
+		}
+		const seq = ++liveSeq.current;
+		setLiveQuote({ state: "loading" });
+		const timer = setTimeout(() => {
+			const a = form.store.state.values.address;
+			const addressLabel = [
+				a.line1,
+				a.line2,
+				`${a.postcode} ${a.city}`.trim(),
+				a.state,
+			]
+				.filter((part) => part && part.trim().length > 0)
+				.join(", ");
+			quoteLalamove({
+				retailerId,
+				latitude: latNum,
+				longitude: lngNum,
+				address: addressLabel,
+				fulfilmentDate: watchedDate
+					? mytMidnightFromYmd(watchedDate)
+					: undefined,
+			})
+				.then((result) => {
+					if (liveSeq.current !== seq) return; // superseded by a newer pick
+					setLiveQuote(
+						result.status === "quoted"
+							? { state: "quoted", quoteId: result.quoteId, fee: result.fee }
+							: { state: "unavailable" },
+					);
+				})
+				.catch(() => {
+					if (liveSeq.current !== seq) return;
+					setLiveQuote({ state: "unavailable" });
+				});
+		}, 400);
+		return () => clearTimeout(timer);
+	}, [isLiveMode, open, hasCoords, latNum, lngNum, watchedDate]);
+
+	// Collapse the two sources into ONE shape for the breakdown + submit gate.
+	// Live mode maps onto the static kinds (plus "calculating") so the render
+	// below stays a single code path:
+	//  - no pin yet / provider unreachable → the store's onUnquotable policy
+	//    ("arrange" → seller-confirms-later, "block" → hard stop), exactly what
+	//    orders.create will decide server-side.
+	const quoteForDelivery:
+		| PublicDeliveryQuote
+		| { kind: "calculating" }
+		| undefined = (() => {
+		if (!rawQuote) return undefined;
+		if (rawQuote.kind !== "live") return rawQuote;
+		const fallbackKind =
+			rawQuote.onUnquotable === "block" ? ("blocked" as const) : ("pending" as const);
+		if (!hasCoords) return { kind: fallbackKind, reason: "no_coords" };
+		switch (liveQuote.state) {
+			case "quoted":
+				return liveQuote.fee === 0
+					? { kind: "free" }
+					: { kind: "fee", fee: liveQuote.fee };
+			case "unavailable":
+				return { kind: fallbackKind, reason: "unquotable" };
+			default:
+				return { kind: "calculating" };
+		}
+	})();
 	// A hard block only once the buyer has actually entered an address — while
 	// the form is still empty the note under the breakdown does the guiding.
-	const deliveryBlocked = quoteForDelivery?.kind === "blocked";
+	// "calculating" also holds submit so a tap can't race the quote.
+	const deliveryBlocked =
+		quoteForDelivery?.kind === "blocked" ||
+		quoteForDelivery?.kind === "calculating";
 
 	return (
 		<Dialog.Root open={open} onOpenChange={(o) => !o && onClose()}>
@@ -673,19 +812,34 @@ export function CheckoutSheet({
 														{(field) => (
 															<field.DateField
 																label={
-																	deliveryMethod === "self_collect"
-																		? isDropOff
-																			? "When should we meet?"
-																			: "When will you collect?"
-																		: "When do you need it delivered?"
+																	hasCustomLine
+																		? "Requested date"
+																		: deliveryMethod === "self_collect"
+																			? isDropOff
+																				? "When should we meet?"
+																				: "When will you collect?"
+																			: "When do you need it delivered?"
 																}
 																min={minYmd}
 																max={maxYmd}
 																required
 																description={
-																	isDropOff
-																		? "Pick the date you'll meet at the drop-off point."
-																		: "Pick the date you need this order."
+																	// Custom carts: the date is the buyer's ASK — the
+																	// seller settles the final date in the design
+																	// conversation. A notice floor raised by a cart
+																	// item is explained, never silent.
+																	hasCustomLine
+																		? `Your requested date — the seller confirms the final date with you after the design is agreed.${
+																				cartNoticeDays > 0
+																					? ` Items in your cart need at least ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice.`
+																					: ""
+																			}`
+																		: cartNoticeDays >
+																				(minFulfilmentNoticeDays ?? 0)
+																			? `An item in your cart needs ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice — that's the earliest date you can pick.`
+																			: isDropOff
+																				? "Pick the date you'll meet at the drop-off point."
+																				: "Pick the date you need this order."
 																}
 															/>
 														)}
@@ -787,6 +941,12 @@ export function CheckoutSheet({
 													</span>
 												</div>
 											) : null}
+											{quote?.kind === "calculating" ? (
+												<div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
+													<span>Delivery fee</span>
+													<span className="animate-pulse">Calculating…</span>
+												</div>
+											) : null}
 											<div className="flex items-center justify-between">
 												<span className="text-sm text-muted-foreground">
 													Total
@@ -815,7 +975,9 @@ export function CheckoutSheet({
 																	? " Pickup is still available."
 																	: ""
 															}`
-														: "Pick your address from the Google suggestions so we can calculate your delivery fee."}
+														: quote.reason === "unquotable"
+															? "We couldn't calculate the delivery fee right now — re-pick your address to retry, or try again shortly."
+															: "Pick your address from the Google suggestions so we can calculate your delivery fee."}
 												</p>
 											) : null}
 											{/* Minimum order rules — the reason the button below is

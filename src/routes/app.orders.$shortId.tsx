@@ -46,6 +46,7 @@ import {
 	PageHeaderSkeleton,
 } from "../components/dashboard/page-header";
 import { StatusBadge } from "../components/dashboard/status-badge";
+import { BookDeliveryCard } from "../components/order/book-delivery-card";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import {
 	DeliveryAddressDisplay,
@@ -306,6 +307,19 @@ function OrderDetailRoute() {
 	);
 	// CRM context for the customer card ("8 orders · RM 1,240") — answers "who is
 	// this?" without leaving the order.
+	// Active Lalamove booking awareness for the cancel dialog (same query the
+	// BookDeliveryCard subscribes to — Convex dedupes identical subscriptions).
+	const dispatchInfo = useQuery(
+		api.lalamove.getDeliveryJob,
+		order?.deliveryMethod === "delivery" && order.shortId
+			? { shortId: order.shortId }
+			: "skip",
+	);
+	const hasActiveRiderBooking =
+		!!dispatchInfo?.job &&
+		!["completed", "canceled", "expired", "rejected"].includes(
+			dispatchInfo.job.status,
+		);
 	const crmCustomer = useQuery(
 		api.customers.get,
 		order?.customerId ? { customerId: order.customerId } : "skip",
@@ -1107,6 +1121,11 @@ function OrderDetailRoute() {
 				/>
 			) : null}
 
+			{/* Lalamove dispatch (delivery orders): one-tap "Book delivery" with
+			    re-quote confirm, live job card (driver/plate/tracking), failed-
+			    booking rebook, and disabled-with-reason states. 86eyb5hrf. */}
+			{!isSelfCollect ? <BookDeliveryCard order={order} /> : null}
+
 			{/* Delivery address (delivery orders only) */}
 			{!isSelfCollect && order.deliveryAddress ? (
 				<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
@@ -1309,7 +1328,11 @@ function OrderDetailRoute() {
 				open={confirmCancelOpen}
 				onOpenChange={setConfirmCancelOpen}
 				title={`Cancel order #${order.shortId}?`}
-				description="The customer is notified over WhatsApp, stock is restored, and this can't be undone."
+				description={
+					hasActiveRiderBooking
+						? "The customer is notified over WhatsApp, stock is restored, and this can't be undone. ⚠️ A Lalamove rider booking is still active on this order — cancel it from the Lalamove Delivery card too, or you may pay for a wasted trip."
+						: "The customer is notified over WhatsApp, stock is restored, and this can't be undone."
+				}
 				confirmLabel="Cancel order"
 				cancelLabel="Keep order"
 				destructive
@@ -1322,8 +1345,16 @@ function OrderDetailRoute() {
 				title={`Delete order #${order.shortId} permanently?`}
 				description={
 					paymentStatus === "received" || order.status === "delivered"
-						? "This order is paid/completed — deleting erases it from your sales records, receipts and CSV exports. Stock isn't affected and the customer is NOT notified. This can't be undone."
+						? `This order is paid/completed — deleting erases it from your sales records, receipts and CSV exports. Stock isn't affected and the customer is NOT notified. This can't be undone.${
+								hasActiveRiderBooking
+									? " ⚠️ A Lalamove rider booking is still active — cancel it from the Lalamove Delivery card FIRST or the rider still shows up."
+									: ""
+							}`
 						: `This erases the order, its timeline and any uploaded images for good.${
+								hasActiveRiderBooking
+									? " ⚠️ A Lalamove rider booking is still active — cancel it from the Lalamove Delivery card FIRST or the rider still shows up."
+									: ""
+							}${
 								order.status === "cancelled"
 									? ""
 									: " Reserved stock is returned and your totals are adjusted."

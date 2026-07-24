@@ -142,9 +142,12 @@ feature-matrix additions.
 
 - **`weight_tiers`** (the original ticket's variable mode) stays parked — the radius comment
   superseded it; `productVariants.parcelWeightG` remains ready if demand returns.
-- **Provider-quoted shipping** (Lalamove/J&T, Scale tier) slots into the same seam later:
-  a `mode: "provider"` config arm + a new `deliverySnapshot.mode` — the create-time resolve
-  and the totals seam don't change shape.
+- **Provider-quoted shipping — SHIPPED for Lalamove** (Jul 2026, `86eyb5hrf`): exactly the
+  predicted evolution — `deliveryConfig` gained a `mode: "lalamove"` arm +
+  `deliverySnapshot.mode: "lalamove"`, same resolver, same totals seam. Live rider quote at
+  checkout + one-tap dispatch + webhook auto-transitions; flat/radius stay for self-delivery
+  and parcel-postage sellers. See [`docs/delivery-lalamove.md`](./delivery-lalamove.md).
+  J&T/parcel couriers remain future (DelyvaX is the named aggregator candidate).
 - Sue's routing-accurate map integration stays parked until 3+ customers ask.
 
 ## Chargeable pickup location — flat per-location fee (2026-07-07, ClickUp `86ey5tywf`)

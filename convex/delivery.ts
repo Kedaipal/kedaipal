@@ -21,8 +21,13 @@ import {
 export type PublicDeliveryQuote =
 	| { kind: "free"; reason?: "threshold" }
 	| { kind: "fee"; fee: number }
-	| { kind: "pending"; reason: "out_of_range" | "no_coords" }
-	| { kind: "blocked"; reason: "out_of_range" | "no_coords" };
+	| { kind: "pending"; reason: "out_of_range" | "no_coords" | "unquotable" }
+	| { kind: "blocked"; reason: "out_of_range" | "no_coords" | "unquotable" }
+	// Pricing mode "lalamove": this reactive query can't fetch the provider —
+	// the checkout must call the lalamove.quoteForCheckout ACTION once the
+	// buyer picks an address. `onUnquotable` tells the client what happens
+	// if that action comes back unavailable (copy + submit gating).
+	| { kind: "live"; onUnquotable: "arrange" | "block" };
 
 export const quote = query({
 	args: {
@@ -38,6 +43,12 @@ export const quote = query({
 	handler: async (ctx, args): Promise<PublicDeliveryQuote> => {
 		const retailer = await ctx.db.get(args.retailerId);
 		if (!retailer) return { kind: "free" };
+		if (retailer.deliveryConfig?.mode === "lalamove") {
+			return {
+				kind: "live",
+				onUnquotable: retailer.deliveryConfig.onUnquotable,
+			};
+		}
 		const destination =
 			args.latitude !== undefined &&
 			args.longitude !== undefined &&

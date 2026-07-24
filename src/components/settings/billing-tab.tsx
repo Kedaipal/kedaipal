@@ -200,6 +200,7 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 						</div>
 					) : null}
 
+
 					{/* Starter → Pro upgrade (manual sub: routes the request to Arif on WA). */}
 					{sub?.plan === "starter" &&
 					sub.status === "active" &&
