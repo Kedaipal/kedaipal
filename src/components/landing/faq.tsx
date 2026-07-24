@@ -8,25 +8,25 @@ export function Faq() {
 	const [openIndex, setOpenIndex] = useState<number | null>(0);
 	const [showAll, setShowAll] = useState(false);
 
+	// Primary set mirrors the landing design's six "questions sellers actually
+	// ask" — and the FAQPage JSON-LD in src/routes/index.tsx MUST mirror these
+	// (update both together, Google penalises drift).
 	const primaryItems = [
 		{ q: m.faq_q_1(), a: m.faq_a_1() },
-		{ q: m.faq_q_9(), a: m.faq_a_9() },
 		{ q: m.faq_q_3(), a: m.faq_a_3() },
+		{ q: m.faq_q_12(), a: m.faq_a_12() },
+		{ q: m.faq_q_11(), a: m.faq_a_11() },
 		{ q: m.faq_q_7(), a: m.faq_a_7() },
-		{ q: m.faq_q_8(), a: m.faq_a_8() },
+		{ q: m.faq_q_10(), a: m.faq_a_10() },
 	];
 
 	const secondaryItems = [
-		// Custom-order question leads the secondary set — first thing revealed on
-		// "See all", since made-to-order (cake decorators, persona #1) is core to the
-		// target cohort. Kept out of the primary 5 to avoid JSON-LD churn and
-		// displacing a universal buying objection.
-		{ q: m.faq_q_11(), a: m.faq_a_11() },
+		{ q: m.faq_q_9(), a: m.faq_a_9() },
+		{ q: m.faq_q_8(), a: m.faq_a_8() },
 		{ q: m.faq_q_2(), a: m.faq_a_2() },
 		{ q: m.faq_q_4(), a: m.faq_a_4() },
 		{ q: m.faq_q_5(), a: m.faq_a_5() },
 		{ q: m.faq_q_6(), a: m.faq_a_6() },
-		{ q: m.faq_q_10(), a: m.faq_a_10() },
 	];
 
 	const visibleItems = showAll

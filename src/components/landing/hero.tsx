@@ -5,8 +5,8 @@ import { ArrowRight, Bell, Check } from "lucide-react";
 import { useState } from "react";
 import { m } from "../../paraglide/messages";
 import { Input } from "../ui/input";
+import { HeroPhone } from "./hero-phone";
 import { ctaPillClass, Marquee, Sticker } from "./landing-ui";
-import { ResponsiveImage } from "./responsive-image";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
@@ -46,7 +46,7 @@ function SlugClaimForm() {
 					onChange={(e) =>
 						setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
 					}
-					placeholder="yourstore"
+					placeholder={m.hero_slug_placeholder()}
 					variant="bare"
 					className="min-w-0 flex-1 py-3 pr-2 text-sm font-semibold placeholder:text-muted-foreground/40"
 				/>
@@ -127,20 +127,7 @@ function FloatingBubble({
 function PhoneStage() {
 	const shouldReduceMotion = useReducedMotion();
 
-	const phone = (
-		<div className="relative rotate-[2deg]">
-			<ResponsiveImage
-				name="whatsapp"
-				alt={m.hero_phone_alt()}
-				widths={[280, 560, 840]}
-				sizes="(max-width: 768px) 250px, 300px"
-				width={953}
-				height={1912}
-				priority
-				className="h-auto w-[250px] [filter:drop-shadow(0_32px_48px_hsl(222_47%_11%_/_0.16))] md:w-[300px]"
-			/>
-		</div>
-	);
+	const phone = <HeroPhone />;
 
 	return (
 		<div className="relative">
@@ -155,20 +142,6 @@ function PhoneStage() {
 					{phone}
 				</motion.div>
 			)}
-
-			{/* Incoming order bubble */}
-			<FloatingBubble
-				delay={0.9}
-				className="absolute -left-6 top-12 sm:-left-14"
-			>
-				<div className="w-44 -rotate-3 rounded-2xl rounded-tl-sm border border-border bg-card p-3 shadow-lg">
-					<p className="text-[11px] font-bold text-foreground">ORD-0042</p>
-					<p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
-						{m.hero_bubble_order_items()}
-					</p>
-					<p className="mt-1 text-[11px] font-bold text-accent">RM 76.00 ✓</p>
-				</div>
-			</FloatingBubble>
 
 			{/* New order sticker */}
 			<FloatingBubble
