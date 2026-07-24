@@ -24,6 +24,29 @@ export function ctaPillClass(
 	return cn(base, variants[variant]);
 }
 
+/** Decorative QR pattern — a grid of squares standing in for a real code. */
+export function QrPattern({ className }: { className?: string }) {
+	return (
+		<div
+			className={cn(
+				"grid grid-cols-8 grid-rows-8 gap-0.5 rounded-xl bg-foreground p-2",
+				className,
+			)}
+		>
+			{Array.from({ length: 64 }).map((_, i) => (
+				<span
+					// biome-ignore lint/suspicious/noArrayIndexKey: static decorative grid, never reorders
+					key={i}
+					className={cn(
+						"rounded-[1px]",
+						i % 3 === 0 || i % 7 === 0 ? "bg-background" : "bg-transparent",
+					)}
+				/>
+			))}
+		</div>
+	);
+}
+
 interface StickerProps {
 	children: ReactNode;
 	className?: string;

@@ -15,9 +15,7 @@ import { Skeleton } from "./skeleton";
  * An unset `src` renders the same fallback with zero network request.
  *
  * Deliberately NOT used by `store-poster.tsx` (a print/PDF-export surface —
- * a lazy or opacity-0 image can print blank) or landing's `responsive-image.tsx`
- * (a build-time `<picture>`/srcset wrapper for static optimized assets, a
- * different concern from this component's runtime Convex-hosted URLs).
+ * a lazy or opacity-0 image can print blank).
  */
 
 type ImageStatus = "loading" | "loaded" | "error";
