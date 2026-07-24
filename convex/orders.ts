@@ -885,6 +885,10 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 	// Undefined once the order is confirmed (or when no number is configured),
 	// which also hides the CTA reactively the moment the bot confirms.
 	checkoutPhone?: string;
+	// Rider drop-off photos (Lalamove proof of delivery) — resolved only on
+	// delivered delivery orders; the buyer sees the same shot the WhatsApp
+	// follow-up carried, the seller the same thumbnails as the dispatch card.
+	podImageUrls?: string[];
 };
 
 export const get = query({
@@ -913,8 +917,29 @@ export const get = query({
 		// authenticated seller/admin (`shortId`) path keeps the full snapshot for
 		// the order-detail "— 7.4 km" audit line. See convex/delivery.ts.
 		const isBuyerRead = token !== undefined;
+		// Rider drop-off photo (Lalamove POD) — one indexed read, and only on
+		// the delivered end-state of delivery orders, so the hot pending/active
+		// tracking path pays nothing.
+		let podImageUrls: string[] | undefined;
+		if (order.status === "delivered" && order.deliveryMethod === "delivery") {
+			const jobs = await ctx.db
+				.query("deliveryJobs")
+				.withIndex("by_order", (q) => q.eq("orderId", order._id))
+				.collect();
+			const withPod = jobs.find(
+				(j) => j.status === "completed" && j.podImageStorageIds?.length,
+			);
+			if (withPod?.podImageStorageIds) {
+				const urls = await Promise.all(
+					withPod.podImageStorageIds.map((id) => ctx.storage.getUrl(id)),
+				);
+				const resolved = urls.filter((u): u is string => u !== null);
+				if (resolved.length > 0) podImageUrls = resolved;
+			}
+		}
 		return {
 			...order,
+			podImageUrls,
 			deliverySnapshot: isBuyerRead ? undefined : order.deliverySnapshot,
 			statusLabels: retailer?.statusLabels as StatusLabels | undefined,
 			orderStages: retailer?.orderStages as OrderStage[] | undefined,

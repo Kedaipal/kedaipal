@@ -77,14 +77,14 @@ parts; half a credential is refused at save time; clearing keys while
 enabled is refused (nothing to fall back to); key fields follow the
 logoStorageId convention (`undefined` = keep stored, `""` = clear).
 
-**Settings prominence (24 Jul):** the Lalamove option is a full-width
-branded row under the Free/Flat/By-distance grid — official wordmark
-(`public/img/lalamove-logo.svg`), one-line benefit copy, and for a locked
-Starter it stays **full-colour with a Pro chip + "Upgrade to Pro to turn
-this on"** (disabled-with-reason, deliberately not a washed-out ghost) so
-every tier sees rider delivery exists — the upsell surface for the Pro
-tier. The settings vehicle is labelled as a *default* with a helper noting
-the per-order switch in the booking dialog.
+**Settings prominence (24 Jul):** the delivery-charge picker is a 2×2
+card grid with **Lalamove first** — branded with the official wordmark
+(`public/img/lalamove-logo.svg`) ahead of Free/Flat/By-distance. For a
+locked Starter the card stays **full-colour with a Pro chip + "upgrade to
+Pro to turn on"** (disabled-with-reason, deliberately not a washed-out
+ghost) so every tier sees rider delivery exists — the upsell surface for
+the Pro tier. The settings vehicle is labelled as a *default* with a
+helper noting the per-order switch in the booking dialog.
 
 **IA (revised after first seller test):** Lalamove is NOT a separate card —
 it's the 4th delivery-pricing mode (Settings → Fulfilment → Delivery charge:
@@ -250,9 +250,12 @@ them as **our** blobs (`deliveryJobs.podImageStorageIds` — Lalamove's URL
 lifetime is undocumented, never hotlink), retrying up to 3× at 2-min
 intervals since the upload can lag the status event. Then: the **buyer**
 gets the photo on WhatsApp as a follow-up to the delivered message
-(`notifyDeliveryPhoto`, transactional, caption EN+BM), and the **vendor**
-sees thumbnails on the delivered dispatch card ("Delivery photo from the
-rider", tap for full size). Races are settled in `storePodImages` (first
+(`notifyDeliveryPhoto`, transactional, caption EN+BM) **and** a "Delivery
+photo" card on the tracking page (`orders.get` resolves `podImageUrls` on
+delivered delivery orders only — one indexed read on that end-state, the
+hot tracking path pays nothing), and the **vendor** sees thumbnails on
+the delivered dispatch card ("Delivery photo from the rider", tap for
+full size). Races are settled in `storePodImages` (first
 set wins, loser's blobs deleted); order/account delete cascades remove the
 blobs. Sandbox never produces a POD (no riders), so the photo path is a
 **first-prod-booking check**; all parsing/storage/race logic is

@@ -722,7 +722,37 @@ function DeliveryChargeSection({
 				title="Delivery charge"
 				description="What buyers pay for delivery, added to their order total at checkout. Pickup orders are never charged this."
 			/>
-			<div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+			{/* 2×2 grid, Lalamove FIRST (86eyb5hrf) — it's a pricing choice like
+			    the others, but the promoted one: branded with the official
+			    wordmark so every tier SEES rider delivery exists. For a locked
+			    Starter it stays full-colour with a Pro chip + upgrade line
+			    (disabled-with-reason, not a washed-out ghost). */}
+			<div className="grid grid-cols-2 gap-2">
+				<button
+					type="button"
+					onClick={() => setMode("lalamove")}
+					disabled={lalamoveLocked && config?.mode !== "lalamove"}
+					aria-pressed={mode === "lalamove"}
+					className={`flex flex-col items-start gap-1 rounded-xl border-2 px-3 py-2.5 text-left transition-colors ${
+						mode === "lalamove"
+							? "border-accent bg-accent/5"
+							: "border-border bg-card hover:border-accent/40"
+					} ${lalamoveLocked && config?.mode !== "lalamove" ? "cursor-not-allowed" : ""}`}
+				>
+					<span className="flex items-center gap-1.5">
+						<img
+							src="/img/lalamove-logo.svg"
+							alt="Lalamove"
+							className="h-4 w-auto"
+						/>
+						{lalamoveLocked ? <ProBadge /> : null}
+					</span>
+					<span className="text-xs text-muted-foreground">
+						{lalamoveLocked && config?.mode !== "lalamove"
+							? "Rider delivery — upgrade to Pro to turn on"
+							: "Live rider price, one-tap booking"}
+					</span>
+				</button>
 				<ModeButton
 					active={mode === "free"}
 					onClick={() => setMode("free")}
@@ -746,45 +776,6 @@ function DeliveryChargeSection({
 					badge={radiusLocked ? <ProBadge /> : undefined}
 				/>
 			</div>
-			{/* Lalamove (86eyb5hrf) is a PRICING choice like the others — pick it
-			    and the full setup (address, keys, vehicle) appears below. Rendered
-			    as its own full-width branded row so every tier SEES rider delivery
-			    exists: for a locked Starter it stays full-colour with a Pro chip +
-			    upgrade line (disabled-with-reason, not a washed-out ghost). */}
-			<button
-				type="button"
-				onClick={() => setMode("lalamove")}
-				disabled={lalamoveLocked && config?.mode !== "lalamove"}
-				aria-pressed={mode === "lalamove"}
-				className={`flex w-full items-center justify-between gap-3 rounded-xl border-2 px-4 py-3 text-left transition-colors ${
-					mode === "lalamove"
-						? "border-accent bg-accent/5"
-						: "border-border bg-card hover:border-accent/40"
-				} ${lalamoveLocked && config?.mode !== "lalamove" ? "cursor-not-allowed" : ""}`}
-			>
-				<span className="flex min-w-0 flex-col gap-1">
-					<span className="flex items-center gap-2">
-						<img
-							src="/img/lalamove-logo.svg"
-							alt="Lalamove"
-							className="h-5 w-auto"
-						/>
-						{lalamoveLocked ? <ProBadge /> : null}
-					</span>
-					<span className="text-xs text-muted-foreground">
-						Buyers pay the live rider price at checkout — you book in one tap,
-						shipped &amp; delivered update themselves.
-						{lalamoveLocked && config?.mode !== "lalamove"
-							? " Upgrade to Pro to turn this on."
-							: ""}
-					</span>
-				</span>
-				<span
-					className={`text-sm font-semibold ${mode === "lalamove" ? "text-accent" : "text-muted-foreground"}`}
-				>
-					{mode === "lalamove" ? "On" : "Use"}
-				</span>
-			</button>
 
 			{mode === "lalamove" ? (
 				<div className="flex flex-col gap-4">

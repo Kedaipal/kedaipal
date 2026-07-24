@@ -963,3 +963,40 @@ describe("proof of delivery — storePodImages", () => {
 		expect(secondUrl).toBeNull(); // loser's blob deleted
 	});
 });
+
+describe("proof of delivery — buyer tracking page (orders.get)", () => {
+	test("delivered order exposes podImageUrls on the token (buyer) path", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			status: "delivered",
+			trackingToken: "tok_pod_test_123",
+		});
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			status: "completed",
+		});
+		const storageId = await t.run(async (ctx) =>
+			ctx.storage.store(new Blob(["rider-photo"])),
+		);
+		await t.mutation(internal.lalamove.storePodImages, {
+			jobId,
+			storageIds: [storageId],
+		});
+
+		const order = await t.query(api.orders.get, { token: "tok_pod_test_123" });
+		expect(order?.podImageUrls).toHaveLength(1);
+		expect(order?.podImageUrls?.[0]).toMatch(/^https?:\/\//);
+	});
+
+	test("no photos / not delivered → podImageUrls stays undefined", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			status: "shipped",
+			trackingToken: "tok_pod_test_456",
+		});
+		await seedJob(t, retailer._id, orderId, { status: "picked_up" });
+		const order = await t.query(api.orders.get, { token: "tok_pod_test_456" });
+		expect(order?.podImageUrls).toBeUndefined();
+	});
+});
