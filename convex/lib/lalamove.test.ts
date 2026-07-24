@@ -13,6 +13,7 @@ import {
 	normalizeLalamoveStatus,
 	parseLalamoveEventTime,
 	parseOrderResponse,
+	parsePodImages,
 	parseQuotationResponse,
 	inferLalamoveEnv,
 	resolveLalamoveCredentials,
@@ -295,5 +296,61 @@ describe("toLalamoveCoordinates — precision guard", () => {
 			lat: "3.1573",
 			lng: "101.7122",
 		});
+	});
+});
+
+describe("proof of delivery", () => {
+	test("place-order body always requests POD (isPODEnabled)", () => {
+		const body = buildPlaceOrderBody({
+			quotationId: "q1",
+			sender: { stopId: "s1", name: "Store", phone: "60123456789" },
+			recipient: { stopId: "s2", name: "Aisha", phone: "60198765432" },
+		});
+		expect((body.data as { isPODEnabled: boolean }).isPODEnabled).toBe(true);
+	});
+
+	test("parsePodImages: DELIVERED/SIGNED stops with images, others skipped", () => {
+		const images = parsePodImages({
+			data: {
+				orderId: "LLM-1",
+				stops: [
+					// Sender stop — no POD object at all.
+					{ stopId: "s1", address: "Store" },
+					{
+						stopId: "s2",
+						POD: {
+							status: "DELIVERED",
+							image: "https://pod.lalamove.com/a.jpg",
+							deliveredAt: "2026-07-24T02:00:00.000Z",
+						},
+					},
+					{ stopId: "s3", POD: { status: "SIGNED", image: "https://pod.lalamove.com/b.jpg" } },
+					// Not dropped off yet / failed / photo-less → all skipped.
+					{ stopId: "s4", POD: { status: "PENDING", image: "https://pod.lalamove.com/c.jpg" } },
+					{ stopId: "s5", POD: { status: "FAILED" } },
+					{ stopId: "s6", POD: { status: "DELIVERED", image: "  " } },
+				],
+			},
+		});
+		expect(images).toEqual([
+			{
+				stopId: "s2",
+				imageUrl: "https://pod.lalamove.com/a.jpg",
+				status: "DELIVERED",
+				deliveredAt: "2026-07-24T02:00:00.000Z",
+			},
+			{
+				stopId: "s3",
+				imageUrl: "https://pod.lalamove.com/b.jpg",
+				status: "SIGNED",
+				deliveredAt: undefined,
+			},
+		]);
+	});
+
+	test("parsePodImages: malformed/POD-less responses → empty, never throws", () => {
+		expect(parsePodImages(null)).toEqual([]);
+		expect(parsePodImages({})).toEqual([]);
+		expect(parsePodImages({ data: { stops: "nope" } })).toEqual([]);
 	});
 });

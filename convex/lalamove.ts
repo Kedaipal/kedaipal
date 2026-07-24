@@ -13,6 +13,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
 	action,
+	internalAction,
 	internalMutation,
 	internalQuery,
 	query,
@@ -30,6 +31,7 @@ import {
 	normalizeLalamoveStatus,
 	parseLalamoveEventTime,
 	parseOrderResponse,
+	parsePodImages,
 	parseQuotationResponse,
 	resolveLalamoveCredentials,
 	toLalamoveMyPhone,
@@ -407,6 +409,31 @@ export const applyWebhookEvent = internalMutation({
 				) {
 					await applyStatusTransition(ctx, order, "delivered");
 				}
+				// Rider dropped off → pull the proof-of-delivery photo
+				// (isPODEnabled at place order). Scheduled regardless of the
+				// order-transition guards above — the photo exists whenever the
+				// JOB completed. Idempotent: the fetch no-ops once images are
+				// stored, so replays/COMPLETED+POD_STATUS_CHANGED double-fire is
+				// harmless.
+				if (status === "completed" && !job.podImageStorageIds) {
+					await ctx.scheduler.runAfter(0, internal.lalamove.fetchPodImages, {
+						jobId: job._id,
+						attempt: 0,
+					});
+				}
+				return;
+			}
+
+			case "POD_STATUS_CHANGED": {
+				// Dedicated proof-of-delivery event. Payload details vary by
+				// market, so we treat it purely as a trigger and read the truth
+				// from GET /v3/orders (same idempotent fetch as COMPLETED).
+				if (!job.podImageStorageIds) {
+					await ctx.scheduler.runAfter(0, internal.lalamove.fetchPodImages, {
+						jobId: job._id,
+						attempt: 0,
+					});
+				}
 				return;
 			}
 
@@ -719,10 +746,18 @@ function friendlyBookingError(err: unknown): string {
  * paid, and the opaque ids confirmBooking needs within the 5-minute window.
  */
 export const prepareBooking = action({
-	args: { shortId: v.string() },
+	args: {
+		shortId: v.string(),
+		// Per-order vehicle override (a big single order needs a car even when
+		// the store default is motorcycle) — quotes are per-vehicle, so the
+		// dialog re-runs this on a switch. Omitted → the settings default.
+		vehicleType: v.optional(
+			v.union(v.literal("MOTORCYCLE"), v.literal("CAR")),
+		),
+	},
 	handler: async (
 		ctx,
-		{ shortId },
+		{ shortId, vehicleType: vehicleOverride },
 	): Promise<
 		| {
 				ok: false;
@@ -744,13 +779,14 @@ export const prepareBooking = action({
 			shortId,
 		});
 		if (!context.ok) return context;
+		const vehicleType = vehicleOverride ?? context.vehicleType;
 		try {
 			const response = await callLalamove(
 				context.credentials,
 				"POST",
 				"/v3/quotations",
 				buildQuotationBody({
-					serviceType: context.vehicleType,
+					serviceType: vehicleType,
 					stops: [
 						{
 							coordinates: context.origin,
@@ -771,7 +807,7 @@ export const prepareBooking = action({
 				recipientStopId: parsed.stopIds[1],
 				fee: parsed.priceTotal,
 				buyerPaidFee: context.buyerPaidFee,
-				vehicleType: context.vehicleType,
+				vehicleType,
 				buyerContactFallback: context.buyerContactFallback,
 			};
 		} catch (err) {
@@ -806,6 +842,12 @@ export const confirmBooking = action({
 		quotationId: v.string(),
 		senderStopId: v.string(),
 		recipientStopId: v.string(),
+		// The vehicle the quotation was prepared with (dialog override) — the
+		// quotationId already binds Lalamove to it; this keeps OUR ledger row
+		// labelled with what was actually booked, not the settings default.
+		vehicleType: v.optional(
+			v.union(v.literal("MOTORCYCLE"), v.literal("CAR")),
+		),
 	},
 	handler: async (
 		ctx,
@@ -830,7 +872,7 @@ export const confirmBooking = action({
 				orderId: context.orderId,
 				retailerId: context.retailerId,
 				quotationId: args.quotationId,
-				vehicleType: context.vehicleType,
+				vehicleType: args.vehicleType ?? context.vehicleType,
 			});
 		} catch {
 			return {
@@ -1018,6 +1060,212 @@ export const expireStaleReservation = internalMutation({
 	},
 });
 
+// ---------------------------------------------------------------------------
+// Proof of delivery — rider drop-off photo (isPODEnabled at place order)
+// ---------------------------------------------------------------------------
+
+/** POD may lag COMPLETED by a beat (rider uploads the shot as they close the
+ * stop) — retry a few times before giving up quietly. */
+const POD_FETCH_RETRY_MS = 2 * 60 * 1000;
+const POD_FETCH_MAX_ATTEMPTS = 3;
+/** One recipient stop → normally one photo; defensive cap either way. */
+const POD_MAX_IMAGES = 3;
+
+export const getPodContext = internalQuery({
+	args: { jobId: v.id("deliveryJobs") },
+	handler: async (
+		ctx,
+		{ jobId },
+	): Promise<{
+		providerOrderId: string;
+		orderId: Id<"orders">;
+		credentials: LalamoveCredentials;
+	} | null> => {
+		const job = await ctx.db.get(jobId);
+		// Reservations have no provider order to read; already-stored jobs are
+		// done (idempotency for COMPLETED + POD_STATUS_CHANGED double-fires).
+		if (!job || job.providerOrderId === undefined || job.podImageStorageIds) {
+			return null;
+		}
+		const retailer = await ctx.db.get(job.retailerId);
+		const credentials = resolveLalamoveCredentials(
+			retailer?.deliveryBooking as BookingConfig | undefined,
+		);
+		if (!credentials) return null; // keys removed post-booking — no proof, no drama
+		return {
+			providerOrderId: job.providerOrderId,
+			orderId: job.orderId,
+			credentials,
+		};
+	},
+});
+
+/**
+ * Pull the rider's drop-off photo(s) from GET /v3/orders and store them as
+ * OUR blobs (Lalamove's image URLs have undocumented lifetime — never
+ * hotlink). On success: patch the job (vendor card thumbnails) and send the
+ * buyer a WhatsApp photo follow-up to the delivered message. Every failure
+ * mode degrades to "no photo", never blocking the delivery flow itself.
+ */
+export const fetchPodImages = internalAction({
+	args: { jobId: v.id("deliveryJobs"), attempt: v.number() },
+	handler: async (ctx, { jobId, attempt }): Promise<void> => {
+		const context = await ctx.runQuery(internal.lalamove.getPodContext, {
+			jobId,
+		});
+		if (!context) return;
+
+		const retry = async () => {
+			if (attempt + 1 < POD_FETCH_MAX_ATTEMPTS) {
+				await ctx.scheduler.runAfter(
+					POD_FETCH_RETRY_MS,
+					internal.lalamove.fetchPodImages,
+					{ jobId, attempt: attempt + 1 },
+				);
+			}
+		};
+
+		let images: ReturnType<typeof parsePodImages>;
+		try {
+			const response = await callLalamove(
+				context.credentials,
+				"GET",
+				`/v3/orders/${context.providerOrderId}`,
+			);
+			images = parsePodImages(response);
+		} catch (err) {
+			console.warn("[lalamove] POD fetch failed", {
+				providerOrderId: context.providerOrderId,
+				attempt,
+				message: err instanceof Error ? err.message : String(err),
+			});
+			await retry();
+			return;
+		}
+		if (images.length === 0) {
+			// Not uploaded yet (or POD unsupported for this market/vehicle —
+			// after the last attempt we stop quietly).
+			await retry();
+			return;
+		}
+
+		const storageIds: Id<"_storage">[] = [];
+		for (const image of images.slice(0, POD_MAX_IMAGES)) {
+			try {
+				const res = await fetch(image.imageUrl);
+				if (!res.ok) continue;
+				storageIds.push(await ctx.storage.store(await res.blob()));
+			} catch (err) {
+				console.warn("[lalamove] POD image download failed", {
+					providerOrderId: context.providerOrderId,
+					message: err instanceof Error ? err.message : String(err),
+				});
+			}
+		}
+		if (storageIds.length === 0) {
+			await retry();
+			return;
+		}
+
+		const stored = await ctx.runMutation(internal.lalamove.storePodImages, {
+			jobId,
+			storageIds,
+		});
+		if (!stored) return; // lost an idempotency race — mutation cleaned our blobs
+
+		const imageUrls: string[] = [];
+		for (const id of storageIds) {
+			const url = await ctx.storage.getUrl(id);
+			if (url) imageUrls.push(url);
+		}
+		if (imageUrls.length > 0) {
+			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyDeliveryPhoto, {
+				orderId: context.orderId,
+				imageUrls,
+			});
+		}
+	},
+});
+
+/** Attach stored POD blobs to the job. Returns false (and deletes the
+ * incoming blobs) if another fetch won the race — exactly one set survives. */
+export const storePodImages = internalMutation({
+	args: {
+		jobId: v.id("deliveryJobs"),
+		storageIds: v.array(v.id("_storage")),
+	},
+	handler: async (ctx, { jobId, storageIds }): Promise<boolean> => {
+		const job = await ctx.db.get(jobId);
+		if (!job || job.podImageStorageIds) {
+			for (const id of storageIds) {
+				await ctx.storage.delete(id);
+			}
+			return false;
+		}
+		await ctx.db.patch(jobId, {
+			podImageStorageIds: storageIds,
+			updatedAt: Date.now(),
+		});
+		return true;
+	},
+});
+
+/**
+ * DEV/TEST helper — inject a stand-in proof-of-delivery photo. Lalamove's
+ * sandbox has no riders, so fetchPodImages can never find a real image
+ * there; this runs the SAME post-parse pipeline (download → store →
+ * storePodImages → buyer WhatsApp photo) with a placeholder, so the card
+ * thumbnails and the WA follow-up can be eyeballed locally. Internal-only
+ * (CLI/dashboard — clients can't call it):
+ *
+ *   npx convex run lalamove:devInjectPodImage '{"providerOrderId":"354…"}'
+ */
+export const devInjectPodImage = internalAction({
+	args: {
+		providerOrderId: v.string(),
+		imageUrl: v.optional(v.string()),
+	},
+	handler: async (ctx, { providerOrderId, imageUrl }): Promise<string> => {
+		const { jobId } = await ctx.runQuery(internal.lalamove.getWebhookContext, {
+			providerOrderId,
+			apiKey: "",
+		});
+		if (!jobId) return `no deliveryJobs row for ${providerOrderId}`;
+		const source =
+			imageUrl ?? "https://picsum.photos/seed/kedaipal-pod/800/600";
+		const res = await fetch(source);
+		if (!res.ok) return `image fetch failed: HTTP ${res.status}`;
+		const storageId = await ctx.storage.store(await res.blob());
+		const stored = await ctx.runMutation(internal.lalamove.storePodImages, {
+			jobId,
+			storageIds: [storageId],
+		});
+		if (!stored) return "job already has POD images — nothing injected";
+		const url = await ctx.storage.getUrl(storageId);
+		if (url) {
+			const jobRow = await ctx.runQuery(internal.lalamove.getPodJobOrder, {
+				jobId,
+			});
+			if (jobRow) {
+				await ctx.scheduler.runAfter(0, internal.whatsapp.notifyDeliveryPhoto, {
+					orderId: jobRow.orderId,
+					imageUrls: [url],
+				});
+			}
+		}
+		return `injected 1 POD image onto job ${jobId} — check the order card + buyer WhatsApp`;
+	},
+});
+
+/** Tiny lookup for devInjectPodImage — job → orderId. */
+export const getPodJobOrder = internalQuery({
+	args: { jobId: v.id("deliveryJobs") },
+	handler: async (ctx, { jobId }): Promise<{ orderId: Id<"orders"> } | null> => {
+		const job = await ctx.db.get(jobId);
+		return job ? { orderId: job.orderId } : null;
+	},
+});
+
 /**
  * Cancel the active Lalamove job for an order (seller action — used before
  * or after cancelling the order itself). Deliberately NOT gated by the
@@ -1119,6 +1367,8 @@ export type DeliveryJobView = {
 	shareLink?: string;
 	failureReason?: string;
 	createdAt: number;
+	/** Rider drop-off photo URLs (proof of delivery), set once completed. */
+	podImageUrls?: string[];
 };
 
 /**
@@ -1176,6 +1426,15 @@ export const getDeliveryJob = query({
 		});
 		const promptBookOnPacked =
 			retailer.deliveryBooking?.promptBookOnPacked === true;
+		// Rider drop-off photos (proof of delivery) — resolved to URLs for the
+		// card's completed state.
+		let podImageUrls: string[] | undefined;
+		if (latest?.podImageStorageIds?.length) {
+			const urls = await Promise.all(
+				latest.podImageStorageIds.map((id) => ctx.storage.getUrl(id)),
+			);
+			podImageUrls = urls.filter((u): u is string => u !== null);
+		}
 		return {
 			promptBookOnPacked,
 			job: latest
@@ -1188,6 +1447,7 @@ export const getDeliveryJob = query({
 						shareLink: latest.shareLink,
 						failureReason: latest.failureReason,
 						createdAt: latest.createdAt,
+						podImageUrls,
 					}
 				: null,
 			blockReason,

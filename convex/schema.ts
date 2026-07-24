@@ -1005,6 +1005,11 @@ export default defineSchema({
 		// Human-readable failure detail for canceled/expired/rejected jobs
 		// (e.g. Lalamove cancelReason) — surfaced on the order-detail banner.
 		failureReason: v.optional(v.string()),
+		// Proof-of-delivery photos (rider drop-off shots; isPODEnabled at place
+		// order). Fetched from GET /v3/orders on completion and stored as OUR
+		// blobs — Lalamove's image URLs have undocumented lifetime, so we never
+		// hotlink. Deleted by the order/account cascades.
+		podImageStorageIds: v.optional(v.array(v.id("_storage"))),
 		// Timestamp of the newest webhook event APPLIED to this row — the
 		// out-of-order guard (events older than this only fill gaps, never
 		// regress fields).

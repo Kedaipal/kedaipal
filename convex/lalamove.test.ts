@@ -925,3 +925,78 @@ describe("reserve → commit booking (double-dispatch guard, PR #127 review)", (
 		expect(live?.status).toBe("assigning");
 	});
 });
+
+describe("proof of delivery — storePodImages", () => {
+	test("first store wins; a racing duplicate is cleaned up, not doubled", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, { status: "delivered" });
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			status: "completed",
+		});
+
+		const [first, second] = await t.run(async (ctx) => [
+			await ctx.storage.store(new Blob(["photo-1"])),
+			await ctx.storage.store(new Blob(["photo-2"])),
+		]);
+
+		const winner = await t.mutation(internal.lalamove.storePodImages, {
+			jobId,
+			storageIds: [first],
+		});
+		expect(winner).toBe(true);
+		// COMPLETED + POD_STATUS_CHANGED can double-fire the fetch — the loser
+		// must delete its blobs and leave the stored set untouched.
+		const loser = await t.mutation(internal.lalamove.storePodImages, {
+			jobId,
+			storageIds: [second],
+		});
+		expect(loser).toBe(false);
+
+		const { job, firstUrl, secondUrl } = await t.run(async (ctx) => ({
+			job: await ctx.db.get(jobId),
+			firstUrl: await ctx.storage.getUrl(first),
+			secondUrl: await ctx.storage.getUrl(second),
+		}));
+		expect(job?.podImageStorageIds).toEqual([first]);
+		expect(firstUrl).not.toBeNull();
+		expect(secondUrl).toBeNull(); // loser's blob deleted
+	});
+});
+
+describe("proof of delivery — buyer tracking page (orders.get)", () => {
+	test("delivered order exposes podImageUrls on the token (buyer) path", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			status: "delivered",
+			trackingToken: "tok_pod_test_123",
+		});
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			status: "completed",
+		});
+		const storageId = await t.run(async (ctx) =>
+			ctx.storage.store(new Blob(["rider-photo"])),
+		);
+		await t.mutation(internal.lalamove.storePodImages, {
+			jobId,
+			storageIds: [storageId],
+		});
+
+		const order = await t.query(api.orders.get, { token: "tok_pod_test_123" });
+		expect(order?.podImageUrls).toHaveLength(1);
+		expect(order?.podImageUrls?.[0]).toMatch(/^https?:\/\//);
+	});
+
+	test("no photos / not delivered → podImageUrls stays undefined", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			status: "shipped",
+			trackingToken: "tok_pod_test_456",
+		});
+		await seedJob(t, retailer._id, orderId, { status: "picked_up" });
+		const order = await t.query(api.orders.get, { token: "tok_pod_test_456" });
+		expect(order?.podImageUrls).toBeUndefined();
+	});
+});

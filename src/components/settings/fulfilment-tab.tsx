@@ -722,7 +722,37 @@ function DeliveryChargeSection({
 				title="Delivery charge"
 				description="What buyers pay for delivery, added to their order total at checkout. Pickup orders are never charged this."
 			/>
-			<div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+			{/* 2×2 grid, Lalamove FIRST (86eyb5hrf) — it's a pricing choice like
+			    the others, but the promoted one: branded with the official
+			    wordmark so every tier SEES rider delivery exists. For a locked
+			    Starter it stays full-colour with a Pro chip + upgrade line
+			    (disabled-with-reason, not a washed-out ghost). */}
+			<div className="grid grid-cols-2 gap-2">
+				<button
+					type="button"
+					onClick={() => setMode("lalamove")}
+					disabled={lalamoveLocked && config?.mode !== "lalamove"}
+					aria-pressed={mode === "lalamove"}
+					className={`flex flex-col items-start gap-1 rounded-xl border-2 px-3 py-2.5 text-left transition-colors ${
+						mode === "lalamove"
+							? "border-accent bg-accent/5"
+							: "border-border bg-card hover:border-accent/40"
+					} ${lalamoveLocked && config?.mode !== "lalamove" ? "cursor-not-allowed" : ""}`}
+				>
+					<span className="flex items-center gap-1.5">
+						<img
+							src="/img/lalamove-logo.svg"
+							alt="Lalamove"
+							className="h-4 w-auto"
+						/>
+						{lalamoveLocked ? <ProBadge /> : null}
+					</span>
+					<span className="text-xs text-muted-foreground">
+						{lalamoveLocked && config?.mode !== "lalamove"
+							? "Rider delivery — upgrade to Pro to turn on"
+							: "Live rider price, one-tap booking"}
+					</span>
+				</button>
 				<ModeButton
 					active={mode === "free"}
 					onClick={() => setMode("free")}
@@ -744,17 +774,6 @@ function DeliveryChargeSection({
 					title="By distance"
 					subtitle="Radius bands"
 					badge={radiusLocked ? <ProBadge /> : undefined}
-				/>
-				{/* Lalamove (86eyb5hrf) is a PRICING choice like the others — pick
-				    it and the full setup (address, keys, vehicle) appears below.
-				    Same Pro-lock posture as radius. */}
-				<ModeButton
-					active={mode === "lalamove"}
-					disabled={lalamoveLocked && config?.mode !== "lalamove"}
-					onClick={() => setMode("lalamove")}
-					title="Lalamove"
-					subtitle="Rider, live price"
-					badge={lalamoveLocked ? <ProBadge /> : undefined}
 				/>
 			</div>
 
@@ -826,6 +845,10 @@ function DeliveryChargeSection({
 								subtitle="Bulky / fragile"
 							/>
 						</div>
+						<p className="text-xs text-muted-foreground">
+							Just the default — you can switch vehicle per order in the
+							booking dialog.
+						</p>
 					</div>
 
 					{/* 3 · The seller's own API keys (BYO-only) */}
