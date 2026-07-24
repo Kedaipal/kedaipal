@@ -14,7 +14,10 @@
  * See docs/order-status-customization.md.
  */
 
-export type Locale = "en" | "ms";
+import { LOCALES, type Locale } from "../../convex/lib/locale";
+
+export type { Locale } from "../../convex/lib/locale";
+
 export type DeliveryMethod = "delivery" | "self_collect";
 
 /** The six canonical statuses a label can be attached to. */
@@ -70,6 +73,14 @@ const BASE_DEFAULTS: Record<Locale, Record<OrderStatus, string>> = {
 		delivered: "Telah Dihantar",
 		cancelled: "Dibatalkan",
 	},
+	zh: {
+		pending: "订单已收到",
+		confirmed: "已确认",
+		packed: "已打包",
+		shipped: "配送中",
+		delivered: "已送达",
+		cancelled: "已取消",
+	},
 };
 
 // Self-collect preset — only the two stages whose wording differs from delivery.
@@ -86,6 +97,10 @@ const SELF_COLLECT_DEFAULTS: Record<
 		shipped: "Sedia Diambil",
 		delivered: "Telah Diambil",
 	},
+	zh: {
+		shipped: "可以自取",
+		delivered: "已领取",
+	},
 };
 
 // Buttons are imperative; labels are nouns. Most transitions render as
@@ -94,11 +109,13 @@ const SELF_COLLECT_DEFAULTS: Record<
 const MARK_AS_PREFIX: Record<Locale, string> = {
 	en: "Mark as ",
 	ms: "Tanda sebagai ",
+	zh: "标记为 ",
 };
 
 const SYSTEM_VERBS: Record<Locale, { confirmed: string; cancelled: string }> = {
 	en: { confirmed: "Confirm Order", cancelled: "Cancel Order" },
 	ms: { confirmed: "Sahkan Pesanan", cancelled: "Batalkan Pesanan" },
+	zh: { confirmed: "确认订单", cancelled: "取消订单" },
 };
 
 export type ResolveOpts = {
@@ -196,10 +213,11 @@ export const ANCHOR_UI_LABELS: Record<StageAnchor, string> = {
 	delivered: "Done",
 };
 
-// Label: `en` required, `ms` optional (falls back to `en` for an MS buyer so a
-// seller can fill one language). Description: both optional (buyer-visible).
-export type StageLabel = { en: string; ms?: string };
-export type StageText = { en?: string; ms?: string };
+// Label: `en` required, `ms`/`zh` optional (fall back to `en` for a buyer whose
+// locale the seller left blank so a seller can fill just one language).
+// Description: all three optional (buyer-visible).
+export type StageLabel = { en: string; ms?: string; zh?: string };
+export type StageText = { en?: string; ms?: string; zh?: string };
 
 export type OrderStage = {
 	id: string;
@@ -273,26 +291,38 @@ export function resolveStages(opts: {
 	return synthesizeDefaultStages(opts);
 }
 
-/** Localized stage label — MS falls back to EN when the seller left MS blank. */
+/**
+ * Localized stage label — a non-EN locale left blank by the seller falls back
+ * to EN (the one required field). Exhaustive over `LOCALES`, so a 4th locale
+ * needs no change here.
+ */
 export function stageLabel(stage: OrderStage, locale: Locale = "en"): string {
-	if (locale === "ms") {
-		const ms = stage.label.ms?.trim();
-		if (ms) return ms;
+	if (locale !== "en") {
+		const localized = stage.label[locale]?.trim();
+		if (localized) return localized;
 	}
 	return stage.label.en;
 }
 
-/** Localized stage description, or undefined when none set for either locale. */
+/**
+ * Localized stage description, or undefined when none set in any locale.
+ * Fallback order is [requested locale, …every other locale] — e.g. a ZH buyer
+ * sees a ZH-only description if set, else falls through to EN, then MS. This
+ * generalizes the original EN⇄MS fallback pair to `LOCALES` so a future
+ * locale needs no change here.
+ */
 export function stageDescription(
 	stage: OrderStage,
 	locale: Locale = "en",
 ): string | undefined {
 	const d = stage.description;
 	if (!d) return undefined;
-	const primary = (locale === "ms" ? d.ms : d.en)?.trim();
-	if (primary) return primary;
-	const fallback = (locale === "ms" ? d.en : d.ms)?.trim();
-	return fallback || undefined;
+	const order: Locale[] = [locale, ...LOCALES.filter((l) => l !== locale)];
+	for (const l of order) {
+		const value = d[l]?.trim();
+		if (value) return value;
+	}
+	return undefined;
 }
 
 /**
@@ -365,7 +395,10 @@ export function collectStageConfigErrors(stages: OrderStage[]): string[] {
 				`A Bahasa Malaysia label exceeds ${STAGE_LABEL_MAX_LENGTH} characters.`,
 			);
 		}
-		for (const key of ["en", "ms"] as const) {
+		if ((s.label.zh?.trim().length ?? 0) > STAGE_LABEL_MAX_LENGTH) {
+			errors.push(`A 中文 label exceeds ${STAGE_LABEL_MAX_LENGTH} characters.`);
+		}
+		for (const key of LOCALES) {
 			if (
 				(s.description?.[key]?.trim().length ?? 0) >
 				STAGE_DESCRIPTION_MAX_LENGTH
@@ -481,13 +514,19 @@ export function resolveAnchorLabel(
  * `delivered` status is unchanged. Returns `resolved` untouched for every other
  * order. See ClickUp 86ey8r734. NOTE: keep in sync with convex/lib/orderStatus.ts.
  */
+const COUNTER_COMPLETED_LABEL: Record<Locale, string> = {
+	en: "Completed",
+	ms: "Selesai",
+	zh: "已完成",
+};
+
 export function displayStatusLabel(
 	order: { status: OrderStatus; source?: string },
 	resolved: string,
 	locale: Locale = "en",
 ): string {
 	if (order.source === "counter" && order.status === "delivered") {
-		return locale === "ms" ? "Selesai" : "Completed";
+		return COUNTER_COMPLETED_LABEL[locale];
 	}
 	return resolved;
 }

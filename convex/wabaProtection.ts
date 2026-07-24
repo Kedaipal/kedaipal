@@ -464,8 +464,8 @@ export const adminResumeRetailer = mutation({
 });
 
 // ---------------------------------------------------------------------------
-// Global opt-out (STOP/BERHENTI/UNSUB → out, START/MULA → in). Called from
-// handleInbound. The list is GLOBAL across the shared number.
+// Global opt-out (STOP/BERHENTI/UNSUB/停止/退订 → out, START/MULA/开始 → in).
+// Called from handleInbound. The list is GLOBAL across the shared number.
 // ---------------------------------------------------------------------------
 
 export const registerOptOut = internalMutation({
@@ -475,6 +475,8 @@ export const registerOptOut = internalMutation({
 			v.literal("stop_keyword"),
 			v.literal("berhenti_keyword"),
 			v.literal("unsub_keyword"),
+			v.literal("zh_stop_keyword"),
+			v.literal("zh_unsub_keyword"),
 			v.literal("manual_admin"),
 			v.literal("meta_complaint"),
 		),

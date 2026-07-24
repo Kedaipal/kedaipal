@@ -35,7 +35,9 @@ export default defineSchema({
 		// logoStorageId. See docs/store-cover-banner.md.
 		coverImageStorageId: v.optional(v.string()),
 		currency: v.optional(v.string()),
-		locale: v.optional(v.union(v.literal("en"), v.literal("ms"))),
+		locale: v.optional(
+			v.union(v.literal("en"), v.literal("ms"), v.literal("zh")),
+		),
 		// Per-retailer overrides for WhatsApp message copy. Any key omitted falls
 		// back to the default catalog in convex/lib/whatsappCopy.ts.
 		// Variables supported in templates: {shortId}, {storeName}.
@@ -52,6 +54,16 @@ export default defineSchema({
 					}),
 				),
 				ms: v.optional(
+					v.object({
+						confirm: v.optional(v.string()),
+						packed: v.optional(v.string()),
+						shipped: v.optional(v.string()),
+						delivered: v.optional(v.string()),
+						cancelled: v.optional(v.string()),
+						unknownFallback: v.optional(v.string()),
+					}),
+				),
+				zh: v.optional(
 					v.object({
 						confirm: v.optional(v.string()),
 						packed: v.optional(v.string()),
@@ -94,6 +106,16 @@ export default defineSchema({
 						cancelled: v.optional(v.string()),
 					}),
 				),
+				zh: v.optional(
+					v.object({
+						pending: v.optional(v.string()),
+						confirmed: v.optional(v.string()),
+						packed: v.optional(v.string()),
+						shipped: v.optional(v.string()),
+						delivered: v.optional(v.string()),
+						cancelled: v.optional(v.string()),
+					}),
+				),
 			}),
 		),
 		// Phase 2 of order-status customization: a seller-defined, ordered list of
@@ -114,11 +136,16 @@ export default defineSchema({
 						v.literal("shipped"),
 						v.literal("delivered"),
 					),
-					label: v.object({ en: v.string(), ms: v.optional(v.string()) }),
+					label: v.object({
+						en: v.string(),
+						ms: v.optional(v.string()),
+						zh: v.optional(v.string()),
+					}),
 					description: v.optional(
 						v.object({
 							en: v.optional(v.string()),
 							ms: v.optional(v.string()),
+							zh: v.optional(v.string()),
 						}),
 					),
 					notify: v.boolean(),
@@ -1268,6 +1295,8 @@ export default defineSchema({
 			v.literal("stop_keyword"),
 			v.literal("berhenti_keyword"),
 			v.literal("unsub_keyword"),
+			v.literal("zh_stop_keyword"),
+			v.literal("zh_unsub_keyword"),
 			v.literal("manual_admin"),
 			v.literal("meta_complaint"),
 		),

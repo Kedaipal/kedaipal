@@ -58,12 +58,20 @@ export function resolveSendingLimits(args: {
 	};
 }
 
-export type OptOutSource = "stop_keyword" | "berhenti_keyword" | "unsub_keyword";
+export type OptOutSource =
+	| "stop_keyword"
+	| "berhenti_keyword"
+	| "unsub_keyword"
+	| "zh_stop_keyword"
+	| "zh_unsub_keyword";
 
 /**
  * Classify an inbound message as an opt-out / opt-in keyword, or null. EXACT
- * (trimmed, case-insensitive) match only — Meta's convention, and it avoids
- * suppressing someone whose order note merely contains the word "stop". EN + MS.
+ * (trimmed) match only — Meta's convention, and it avoids suppressing someone
+ * whose order note merely contains the word "stop". EN + MS keywords are
+ * matched case-insensitively (`.toUpperCase()`, a no-op on CJK text); the
+ * Chinese keywords (停止 "stop", 退订 "unsubscribe", 开始 "start" to resume)
+ * are matched as-typed since Chinese has no case.
  */
 export function classifyOptOutKeyword(
 	text: string,
@@ -73,7 +81,9 @@ export function classifyOptOutKeyword(
 	if (t === "BERHENTI") return { kind: "out", source: "berhenti_keyword" };
 	if (t === "UNSUB" || t === "UNSUBSCRIBE")
 		return { kind: "out", source: "unsub_keyword" };
-	if (t === "START" || t === "MULA") return { kind: "in" };
+	if (t === "停止") return { kind: "out", source: "zh_stop_keyword" };
+	if (t === "退订") return { kind: "out", source: "zh_unsub_keyword" };
+	if (t === "START" || t === "MULA" || t === "开始") return { kind: "in" };
 	return null;
 }
 
