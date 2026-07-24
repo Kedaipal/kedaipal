@@ -1,8 +1,8 @@
 import { X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useEffect, useState } from "react";
-import { useImageLoad } from "#/components/ui/image";
 import { cn } from "#/lib/utils";
+import { AppImage } from "./app-image";
 
 /**
  * Shared tap-to-zoom image lightbox. Built once and reused for storefront
@@ -130,34 +130,20 @@ export function ZoomableImage({
 	caption?: string;
 }) {
 	const [open, setOpen] = useState(false);
-	const { ref, loaded, errored, onLoad, onError } = useImageLoad(src);
 	return (
 		<>
 			<button
 				type="button"
 				onClick={() => setOpen(true)}
 				aria-label={alt ? `View ${alt} full screen` : "View image full screen"}
-				className={cn("relative block cursor-zoom-in", wrapperClassName)}
+				className={cn("block cursor-zoom-in", wrapperClassName)}
 			>
-				{!loaded && !errored ? (
-					<span
-						aria-hidden
-						className="absolute inset-0 animate-pulse rounded-[inherit] bg-muted"
-					/>
-				) : null}
-				<img
-					ref={ref}
-					src={src}
-					alt={alt}
-					draggable={false}
-					onLoad={onLoad}
-					onError={onError}
-					className={cn(
-						"transition-opacity duration-300",
-						loaded || errored ? "opacity-100" : "opacity-0",
-						className,
-					)}
-				/>
+				{/* `fill={false}`: every call site already spells out its own sizing
+				    + object-fit class in `className` (the historical "same as a
+				    plain img" contract) — reuse those classes verbatim on both the
+				    AppImage wrapper and the <img> itself rather than forcing the
+				    box-fill behavior AppImage defaults to. */}
+				<AppImage src={src} alt={alt} aspect={className} fill={false} />
 			</button>
 			<ImageLightbox
 				src={src}

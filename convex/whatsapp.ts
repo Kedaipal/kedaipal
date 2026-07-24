@@ -719,6 +719,57 @@ export const notifyStatusChange = internalAction({
 });
 
 /**
+ * Rider drop-off photo (Lalamove proof of delivery) — sent as a follow-up to
+ * the delivered message once lalamove.fetchPodImages has stored the blobs.
+ * A photo of the parcel at the door is the strongest "it arrived" signal a
+ * buyer can get, and it lands seconds after the delivered text (same rhythm
+ * as the counter receipt PDF follow-up). Transactional: it's an order status
+ * artifact, so the WABA caps never block it. No text fallback — without the
+ * image there is nothing to say that the delivered message didn't already.
+ */
+export const notifyDeliveryPhoto = internalAction({
+	args: { orderId: v.id("orders"), imageUrls: v.array(v.string()) },
+	handler: async (ctx, { orderId, imageUrls }): Promise<void> => {
+		if (imageUrls.length === 0) return;
+		let meta: {
+			retailerId: Id<"retailers">;
+			shortId: string;
+			storeName: string;
+			customerWaPhone: string | undefined;
+			locale: Locale;
+		} | null = null;
+		try {
+			meta = await ctx.runQuery(internal.whatsapp.getOrderWithRetailer, {
+				orderId,
+			});
+		} catch (err) {
+			console.error("WA delivery-photo lookup failed", err);
+			return;
+		}
+		if (!meta?.customerWaPhone) return;
+		const locale = pickLocale(meta.locale);
+		const caption = renderSystemMessage(locale, "deliveryPhotoCaption", {
+			shortId: meta.shortId,
+			storeName: meta.storeName,
+		});
+		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");
+		for (const [i, imageUrl] of imageUrls.entries()) {
+			try {
+				await wa.send(meta.customerWaPhone, {
+					kind: "image",
+					imageUrl,
+					// Caption only on the first photo — a rare multi-stop order
+					// shouldn't repeat the same line under every shot.
+					caption: i === 0 ? caption : undefined,
+				});
+			} catch (err) {
+				console.error("WA delivery-photo send failed", err);
+			}
+		}
+	},
+});
+
+/**
  * Phase 2: scheduled by orders.advanceToStage when a seller advances an order
  * into a custom stage that does NOT cross a canonical anchor (so the rich status
  * templates in `notifyStatusChange` don't fire) and the stage has `notify: true`

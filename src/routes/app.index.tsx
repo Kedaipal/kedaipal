@@ -34,6 +34,7 @@ import {
 } from "../components/dashboard/status-badge";
 import { StorefrontQrDialog } from "../components/dashboard/storefront-qr-dialog";
 import { WhiteGloveCard } from "../components/dashboard/white-glove-card";
+import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
@@ -1007,11 +1008,16 @@ function StoreAvatar({
 			)}
 			aria-hidden="true"
 		>
-			{retailer.logoUrl ? (
-				<img src={retailer.logoUrl} alt="" className="size-full object-cover" />
-			) : (
-				retailer.storeName.charAt(0).toUpperCase()
-			)}
+			<AppImage
+				src={retailer.logoUrl}
+				alt=""
+				aspect="size-full"
+				fallback={
+					<span className="flex h-full w-full items-center justify-center">
+						{retailer.storeName.charAt(0).toUpperCase()}
+					</span>
+				}
+			/>
 		</span>
 	);
 }

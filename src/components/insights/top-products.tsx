@@ -2,8 +2,8 @@ import { Package } from "lucide-react";
 import type { ProductMetric, ProductStat } from "../../../convex/lib/insights";
 import { topProducts } from "../../../convex/lib/insights";
 import { formatPrice, formatPriceCompact } from "../../lib/format";
+import { AppImage } from "../ui/app-image";
 import { FilterChip } from "../ui/filter-chip";
-import { Img } from "../ui/image";
 
 // Horizontal-bar ranking of best sellers, grouped by product+variant. Toggle
 // ranks by revenue or by units. Names come from the ORDER-ITEM snapshot, so a
@@ -65,12 +65,16 @@ export function TopProducts({
 						const pct = max > 0 ? Math.max(4, (metricValue / max) * 100) : 0;
 						return (
 							<li key={p.key} className="flex items-center gap-3">
-								<Img
-									src={p.thumbnailUrl}
-									alt=""
-									wrapperClassName="size-10 shrink-0 rounded-xl border border-border"
-									fallback={<Package className="size-4" />}
-								/>
+								<div className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-border bg-muted">
+									<AppImage
+										src={p.thumbnailUrl}
+										alt=""
+										aspect="size-full"
+										fallback={
+											<Package className="size-4 text-muted-foreground" />
+										}
+									/>
+								</div>
 								<div className="flex min-w-0 flex-1 flex-col gap-1">
 									<div className="flex items-baseline justify-between gap-2">
 										<span className="min-w-0 truncate text-sm font-medium">

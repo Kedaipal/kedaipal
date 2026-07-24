@@ -55,10 +55,13 @@ Don't hand-roll what exists. From [`src/components/ui/`](../src/components/ui/):
 | Reorderable list | `SortableList` | **the** sorting standard (@dnd-kit, mobile-safe). **Never** arrow-button reordering. |
 | Loading state | `Skeleton` | prefer skeletons over spinners for content. |
 | Rich text | `Markdown` | product descriptions etc. |
-| Image (with loader) | `Img` / `useImageLoad` | **default for every image card.** `Img` renders a pulsing skeleton then cross-fades the image in on load (graceful `onError` fallback, no layout shift) — never let an image paint top-to-bottom. Size/round/aspect → `wrapperClassName`; object-fit → `className` (tailwind-merge lets it override the base `object-cover`). `useImageLoad` is the headless hook for call sites that own their markup (e.g. `ZoomableImage`, content-height images). |
-| Zoomable image | `ZoomableImage` | product/mockup imagery; tap-to-zoom lightbox, and fades in via `useImageLoad`. |
+| Image | `AppImage` | **every** raw `<img>` of a Convex-hosted/user-uploaded photo — see below. |
+| Zoomable image | `ZoomableImage` | product/mockup imagery; wraps `AppImage` internally, so it gets the same loading/error handling for free. |
 
 If a primitive is missing, **add it to `src/components/ui/`** — don't inline a one-off in a route.
+
+### Images always render via `AppImage` (2026-07-24)
+`src/components/ui/app-image.tsx` — skeleton placeholder while loading → fade-in on load → a labelled, terminal fallback (muted box + icon + the alt text) on a dead URL or unset `src`, instead of a blank box. Two sizing modes: **`fill` (default)** — `aspect` is the wrapper's box, the image crops to fill it (`objectFit="cover"|"contain"`); use for photo thumbnails, avatars, banners. **`fill={false}`** — `aspect` becomes the image's OWN intrinsic-ratio classes (e.g. `"h-8 w-auto"`) instead of a box to stretch into; use for fixed-height, auto-width brand-mark SVGs (forcing those through `w-full` inside an auto-width wrapper is the classic "percentage width in an indefinite container" CSS trap). `priority` (LCP candidates — storefront cover, first product-grid row) skips the lazy-loading hint. Local upload previews (`blob:`/`data:` URLs) auto-skip the skeleton (already instant). **Exceptions:** `store-poster.tsx` (print/PDF-export surface — a lazy or opacity-0 image can print blank; has its own `new Image()` onload/onerror gating) and `landing/responsive-image.tsx` (a build-time `<picture>`/srcset wrapper for static optimized assets — a different concern from `AppImage`'s runtime Convex-hosted URLs).
 
 ## Patterns & anti-patterns
 - **Focus:** every interactive element needs the visible ring (`focus-visible:ring-3 ring-ring/50`) — primitives already do; preserve it on custom elements.

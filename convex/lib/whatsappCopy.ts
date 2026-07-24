@@ -172,7 +172,8 @@ export type SystemMessageKey =
 	| "orderReceiptCaption"
 	| "orderInvoiceCaption"
 	| "paymentReminder"
-	| "paymentReminderIntro";
+	| "paymentReminderIntro"
+	| "deliveryPhotoCaption";
 
 type SystemCopy = {
 	paymentReceived: (v: CopyVars) => string;
@@ -222,6 +223,8 @@ type SystemCopy = {
 	// the first confirmation, so it re-states the order + amount and stands alone.
 	// See docs/payment-reminder.md. Not retailer-overridable (system copy).
 	paymentReminderIntro: (v: CopyVars) => string;
+	// Caption on the rider drop-off photo sent right after the delivered message.
+	deliveryPhotoCaption: (v: CopyVars) => string;
 };
 
 export const systemMessages: Record<Locale, SystemCopy> = {
@@ -288,6 +291,8 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			} is still awaiting payment.${
 				trackingUrl ? `\n\n📋 View your order details: ${trackingUrl}` : ""
 			}`,
+		deliveryPhotoCaption: ({ shortId }) =>
+			`Delivered! 📸 Here's your rider's drop-off photo for order ${shortId}.`,
 	},
 	ms: {
 		paymentReceived: ({ shortId, storeName, trackingUrl }) =>
@@ -352,6 +357,8 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			} masih menunggu pembayaran.${
 				trackingUrl ? `\n\n📋 Lihat butiran pesanan anda: ${trackingUrl}` : ""
 			}`,
+		deliveryPhotoCaption: ({ shortId }) =>
+			`Telah dihantar! 📸 Ini foto serahan daripada rider untuk pesanan ${shortId}.`,
 	},
 };
 

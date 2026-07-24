@@ -22,6 +22,7 @@ import type { Id } from "../../convex/_generated/dataModel";
 import { planPrice } from "../../convex/lib/plans";
 import { PageHeader } from "../components/dashboard/page-header";
 import { InvoiceDownloadButton } from "../components/settings/invoice-download-button";
+import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import {
 	Dialog,
@@ -1110,10 +1111,12 @@ function PaymentConfigForm() {
 							<span className="text-sm font-medium">DuitNow QR</span>
 							{config?.qrUrl ? (
 								<div className="flex flex-col items-start gap-2 rounded-2xl border border-border bg-background p-3">
-									<img
+									<AppImage
 										src={config.qrUrl}
 										alt="DuitNow QR"
-										className="aspect-square w-full rounded-xl object-contain"
+										aspect="aspect-square w-full"
+										rounded="rounded-xl"
+										objectFit="contain"
 									/>
 									<button
 										type="button"

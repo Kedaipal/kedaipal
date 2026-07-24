@@ -29,6 +29,7 @@ import { ReceiptDownloadButton } from "../components/order/receipt-download-butt
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
 import { IvePaidDialog } from "../components/storefront/ive-paid-dialog";
+import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { CopyButton } from "../components/ui/copy-button";
 import { Skeleton } from "../components/ui/skeleton";
@@ -661,6 +662,39 @@ function TrackingRoute() {
 					Track with carrier
 					<ExternalLink className="size-3" />
 				</a>
+			) : null}
+
+			{/* Rider drop-off photo (proof of delivery) — same shot the WhatsApp
+			    delivered follow-up carried; only exists on delivered rider orders. */}
+			{order.podImageUrls?.length ? (
+				<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+						Delivery photo
+					</p>
+					<div className="flex flex-col gap-2">
+						{order.podImageUrls.map((url) => (
+							<a
+								key={url}
+								href={url}
+								target="_blank"
+								rel="noopener noreferrer"
+								className="block overflow-hidden rounded-xl border border-border"
+							>
+								{/* Fixed-height frame (was max-h with auto height) so the
+								    skeleton has a real box while a buyer on mobile data
+								    waits for this to load. */}
+								<AppImage
+									src={url}
+									alt="Proof of delivery"
+									aspect="h-72 w-full"
+								/>
+							</a>
+						))}
+					</div>
+					<p className="text-xs text-muted-foreground">
+						Taken by your rider at drop-off.
+					</p>
+				</section>
 			) : null}
 
 			{/* Pickup location — shown for self-collect orders that have a snapshot.

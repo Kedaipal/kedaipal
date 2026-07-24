@@ -140,6 +140,7 @@ export function ProductGrid({
 				currency: p.currency,
 				imageUrl: variant.imageUrls[0] ?? p.imageUrls[0],
 				quoteOnRequest: variant.requiresProof === true && variant.price === 0,
+				minNoticeDays: p.minNoticeDays,
 				isCustom: variant.isCustom,
 				minQuantity: p.minQuantity,
 				note: custom?.note,
@@ -267,7 +268,7 @@ export function ProductGrid({
 				</div>
 			) : (
 				<div className={GRID_CLASS}>
-					{filtered.map((product) => (
+					{filtered.map((product, index) => (
 						<ProductCard
 							key={product._id}
 							product={product}
@@ -275,6 +276,9 @@ export function ProductGrid({
 							onQuickAdd={quickAdd}
 							cartQuantity={cart.quantityForProduct(product._id)}
 							cartSubtotal={cart.subtotalForProduct(product._id)}
+							// Early cards are likely above-the-fold — eager-load their
+							// photo instead of lazy so the first paint isn't blank.
+							priority={index < 4}
 						/>
 					))}
 				</div>

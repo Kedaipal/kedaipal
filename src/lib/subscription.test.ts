@@ -218,6 +218,7 @@ describe("hasFeature (client plan gate)", () => {
 				categories: false,
 				insights: false,
 				radiusDelivery: false,
+				delivery: false,
 			},
 		});
 		expect(hasFeature(starter, "crm")).toBe(false);
@@ -234,6 +235,7 @@ describe("hasFeature (client plan gate)", () => {
 				categories: true,
 				insights: true,
 				radiusDelivery: true,
+				delivery: true,
 			},
 		});
 		expect(hasFeature(pro, "crm")).toBe(true);

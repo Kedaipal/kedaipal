@@ -40,6 +40,7 @@ import {
 	PAYMENT_METHOD_LABELS,
 } from "../../convex/lib/paymentMethod";
 import { SendOrderDocument } from "../components/order/send-order-document";
+import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import {
@@ -57,7 +58,6 @@ import {
 	DropdownMenuLabel,
 	DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu";
-import { Img } from "../components/ui/image";
 import { Input } from "../components/ui/input";
 import {
 	useActAsRetailerId,
@@ -993,11 +993,15 @@ function ProductThumb({
 	className?: string;
 }) {
 	return (
-		<Img
+		<AppImage
 			src={url}
 			alt={name}
-			wrapperClassName={className}
-			fallback={<ImageIcon className="size-5" aria-hidden />}
+			aspect={className}
+			fallback={
+				<div className="flex h-full w-full items-center justify-center bg-muted text-muted-foreground">
+					<ImageIcon className="size-5" aria-hidden />
+				</div>
+			}
 		/>
 	);
 }

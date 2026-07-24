@@ -99,6 +99,18 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		period: MINUTE,
 		capacity: 10,
 	},
+	// Public checkout action that fetches a live Lalamove delivery quote (fires
+	// once per picked address, debounced client-side). Keyed by retailerId.
+	// Tighter than autocomplete: each call spends the seller's Lalamove API
+	// quota (100 quotes/min account-wide in prod), and repeated probing of a
+	// price-by-coordinates oracle is the same trilateration exposure the radius
+	// quote guards against — band-coarse pricing is accepted, a firehose isn't.
+	lalamoveQuote: {
+		kind: "token bucket",
+		rate: 10,
+		period: MINUTE,
+		capacity: 4,
+	},
 	googlePlaceDetails: {
 		kind: "token bucket",
 		rate: 10,

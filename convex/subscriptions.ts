@@ -177,6 +177,7 @@ const FEATURE_LABEL: Record<PlanFeature, string> = {
 	categories: "Organizing products into categories",
 	insights: "Seller Insights",
 	radiusDelivery: "Distance-based delivery pricing",
+	delivery: "Lalamove delivery booking",
 };
 
 /**

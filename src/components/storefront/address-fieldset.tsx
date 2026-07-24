@@ -52,12 +52,35 @@ export const AddressFieldset = withFieldGroup({
 			group.setFieldValue("postcode", parsed.postcode);
 			// Stash coordinates as strings (form-state shape is all strings — we
 			// parse back to numbers at submit time in checkout-sheet).
+			// NOTE: coords are set AFTER the structured fields on purpose — the
+			// invalidation listeners below fire on those sets, and last-write-wins
+			// keeps the fresh pin.
 			group.setFieldValue("latitude", String(payload.latitude));
 			group.setFieldValue("longitude", String(payload.longitude));
 			// Place ID travels alongside lat/lng so derived maps URLs deep-link
 			// to the named place page (not just raw coords).
 			group.setFieldValue("placeId", payload.placeId);
 		}
+
+		/**
+		 * Hand-editing a LOCATION-bearing field (line1/postcode/city/state)
+		 * invalidates the Google pin — otherwise a restored or picked-then-
+		 * overtyped address keeps pricing (and dispatching riders!) to the OLD
+		 * coordinates. Line2/notes stay pin-safe: unit numbers and gate codes
+		 * don't move the building. Clearing flips the delivery quote back to
+		 * "pick a suggestion" so the buyer is guided to re-pin, never silently
+		 * mispriced.
+		 */
+		function invalidatePin() {
+			if (group.getFieldValue("latitude") === "") return;
+			group.setFieldValue("latitude", "");
+			group.setFieldValue("longitude", "");
+			group.setFieldValue("placeId", "");
+			group.setFieldValue("mapsUrl", "");
+		}
+		const pinInvalidation = {
+			onChange: () => invalidatePin(),
+		};
 
 		return (
 			<fieldset className="flex flex-col gap-3 rounded-xl border border-border bg-card/40 p-4">
@@ -70,7 +93,7 @@ export const AddressFieldset = withFieldGroup({
 					onSelect={handleAutocompleteSelect}
 				/>
 
-				<group.AppField name="line1">
+				<group.AppField name="line1" listeners={pinInvalidation}>
 					{(field) => (
 						<field.TextField
 							label="Address line 1"
@@ -92,7 +115,7 @@ export const AddressFieldset = withFieldGroup({
 				</group.AppField>
 
 				<div className="grid grid-cols-2 gap-3">
-					<group.AppField name="postcode">
+					<group.AppField name="postcode" listeners={pinInvalidation}>
 						{(field) => (
 							<field.TextField
 								label="Postcode"
@@ -104,7 +127,7 @@ export const AddressFieldset = withFieldGroup({
 						)}
 					</group.AppField>
 
-					<group.AppField name="city">
+					<group.AppField name="city" listeners={pinInvalidation}>
 						{(field) => (
 							<field.TextField
 								label="City"
@@ -116,7 +139,7 @@ export const AddressFieldset = withFieldGroup({
 					</group.AppField>
 				</div>
 
-				<group.AppField name="state">
+				<group.AppField name="state" listeners={pinInvalidation}>
 					{(field) => (
 						<field.SelectField label="State" options={stateOptions} required />
 					)}

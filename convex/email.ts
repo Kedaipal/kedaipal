@@ -131,6 +131,63 @@ async function sendMockupSellerEmail(
 	}
 }
 
+/**
+ * Seller alert when a Lalamove booking ends without a rider (canceled /
+ * expired / rejected). Scheduled from the webhook handler in
+ * convex/lalamove.ts — fire-and-forget, same posture as the mockup alerts.
+ */
+export const notifyDeliveryJobFailed = internalAction({
+	args: {
+		orderId: v.id("orders"),
+		reason: v.optional(v.string()),
+	},
+	handler: async (ctx, { orderId, reason }): Promise<void> => {
+		let meta: {
+			shortId: string;
+			itemCount: number;
+			total: number;
+			currency: string;
+			customerName: string;
+			deliveryMethod: DeliveryMethod;
+			notifyEmail: string | undefined;
+			storeName: string;
+			locale: Locale;
+		} | null = null;
+		try {
+			meta = await ctx.runQuery(internal.email.getOrderForRetailerEmail, {
+				orderId,
+			});
+		} catch (err) {
+			console.error("Email deliveryJobFailed lookup failed", err);
+			return;
+		}
+		if (!meta || !meta.notifyEmail) return;
+		const totalFormatted = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
+		const dashboardUrl = `${process.env.SITE_URL ?? "https://kedaipal.com"}/app/orders/${meta.shortId}`;
+		const { subject, html, text } = renderRetailerEmail(
+			meta.locale,
+			"deliveryJobFailed",
+			{
+				shortId: meta.shortId,
+				itemCount: meta.itemCount,
+				totalFormatted,
+				customerName: meta.customerName,
+				deliveryMethod: meta.deliveryMethod,
+				storeName: meta.storeName,
+				dashboardUrl,
+				jobFailureReason: reason,
+			},
+		);
+		try {
+			await sendEmail(meta.notifyEmail, subject, html, text);
+		} catch (err) {
+			console.error(
+				`Email deliveryJobFailed failed (shortId=${meta.shortId}): ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
+	},
+});
+
 export const notifyMockupApproved = internalAction({
 	args: { orderId: v.id("orders") },
 	handler: async (ctx, { orderId }): Promise<void> => {

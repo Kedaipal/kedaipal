@@ -52,6 +52,7 @@ function NewProductRoute() {
 						sortOrder: Date.now(),
 						options: values.options,
 						hidden: values.hidden,
+						minNoticeDays: values.minNoticeDays,
 						minQuantity: values.minQuantity,
 						variants: values.variants,
 					});

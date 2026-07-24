@@ -17,9 +17,9 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { ProBadge } from "../components/app/pro-gate";
 import { PageHeader } from "../components/dashboard/page-header";
+import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { FilterChip, FilterChipRow } from "../components/ui/filter-chip";
-import { Img } from "../components/ui/image";
 import { Input } from "../components/ui/input";
 import {
 	Popover,
@@ -434,11 +434,9 @@ function ProductCard({
 				dim
 			}
 		>
-			<Img
-				src={p.imageUrls[0]}
-				alt=""
-				wrapperClassName="size-16 shrink-0 rounded-xl ring-1 ring-border/60"
-			/>
+			<div className="size-16 shrink-0 overflow-hidden rounded-xl bg-muted ring-1 ring-border/60">
+				<AppImage src={p.imageUrls[0]} alt="" aspect="size-full" />
+			</div>
 			{/* Fixed three-line shape (name / price · variants / stock word) so
 			    every row is the same height — a wrapping meta line was making some
 			    cards taller than their neighbours. Lines truncate, never wrap. */}

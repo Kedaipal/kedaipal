@@ -1,3 +1,5 @@
+import { AppImage } from "../ui/app-image";
+
 /**
  * "Powered by Kedaipal" storefront footer badge (ticket 86ey8zh3r).
  *
@@ -27,10 +29,11 @@ export function StorefrontFooter() {
 					<span className="rounded-full border border-[#B9D9CC] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-[#7BA394]">
 						Powered by
 					</span>
-					<img
+					<AppImage
 						src="/poster/kedaipal-lockup.svg"
 						alt="Kedaipal"
-						className="h-5 w-auto"
+						aspect="h-5 w-auto"
+						fill={false}
 					/>
 				</a>
 			</div>
