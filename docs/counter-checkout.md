@@ -516,6 +516,12 @@ Behaviour is unchanged from the two-button version — pure IA/UX consolidation.
 empty-state copy points at the new control ("tap **New order** to show your store
 QR … **New order** also lets you type their number or ring up a cash sale").
 
+**Mobile header layout:** the header stacks on mobile (`flex-col`, `sm:flex-row`)
+— the title + full description sit on top at full width (the description no longer
+truncates, so "Take an in-person order — connected to WhatsApp." is fully visible)
+and the **New order** button (and the active-session "All checkouts" back button)
+goes full-width below it. Desktop keeps the original side-by-side row.
+
 ## Manual entry & anonymous walk-in (`86ey8vqp6`)
 
 The V1.1 identity escape hatches — the cashier can ring up **any** buyer, even one

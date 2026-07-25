@@ -121,8 +121,8 @@ function CounterCheckoutRoute() {
 
 	return (
 		<div className="flex flex-col gap-6">
-			<header className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-card p-4 shadow-sm">
-				<div className="flex min-w-0 items-center gap-3">
+			<header className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+				<div className="flex min-w-0 items-start gap-3">
 					<span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent/12 text-accent">
 						<QrCode className="size-5" />
 					</span>
@@ -130,7 +130,7 @@ function CounterCheckoutRoute() {
 						<h1 className="text-xl font-bold tracking-tight">
 							Counter Checkout
 						</h1>
-						<p className="truncate text-sm text-muted-foreground">
+						<p className="text-sm text-muted-foreground">
 							Take an in-person order — connected to WhatsApp.
 						</p>
 					</div>
@@ -139,10 +139,10 @@ function CounterCheckoutRoute() {
 					<button
 						type="button"
 						onClick={backToList}
-						className="flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-border px-3 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+						className="flex h-10 w-full shrink-0 items-center justify-center gap-1.5 rounded-xl border border-border px-3 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground sm:w-auto"
 					>
 						<ArrowLeft className="size-4" />
-						<span className="hidden sm:inline">All checkouts</span>
+						All checkouts
 					</button>
 				) : (
 					// One control for every way to start a checkout: show the store QR
@@ -517,7 +517,7 @@ function CounterCheckoutActions({
 				<DropdownMenuTrigger asChild>
 					<button
 						type="button"
-						className="flex h-10 shrink-0 items-center gap-1.5 rounded-xl bg-accent px-3.5 text-sm font-semibold text-accent-foreground shadow-sm transition-colors hover:bg-accent/90 aria-expanded:bg-accent/90"
+						className="flex h-10 w-full shrink-0 items-center justify-center gap-1.5 rounded-xl bg-accent px-3.5 text-sm font-semibold text-accent-foreground shadow-sm transition-colors hover:bg-accent/90 aria-expanded:bg-accent/90 sm:w-auto"
 					>
 						<Plus className="size-4" />
 						New order
