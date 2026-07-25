@@ -1,5 +1,8 @@
 node_modules
 .DS_Store
+
+# Claude Code session worktrees (each is a full repo copy)
+.claude/worktrees/
 dist
 dist-ssr
 *.local
