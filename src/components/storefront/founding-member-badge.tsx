@@ -32,12 +32,15 @@ export function FoundingMemberBadge({
 	if (onCover) {
 		return (
 			<span className="inline-flex w-fit items-center gap-1.5 text-xs font-semibold text-white drop-shadow">
-				{/* Mint emblem reads against the header scrim regardless of theme. */}
-				<img
+				{/* Mint emblem reads against the header scrim regardless of theme;
+				    the visible label carries the meaning so the artwork is
+				    decorative (empty alt). */}
+				<AppImage
 					src="/img/badges/founding-badge-mint.png"
 					alt=""
-					aria-hidden="true"
-					className="h-7 w-auto"
+					aspect="h-7 w-auto"
+					fill={false}
+					priority
 				/>
 				{label}
 			</span>
