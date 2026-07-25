@@ -1,8 +1,11 @@
 /// <reference types="vite/client" />
 import { describe, expect, test } from "vitest";
+import { LOCALES, pickLocale } from "./locale";
 import {
 	hasTemplateOverride,
+	type MessageTemplates,
 	poweredByLine,
+	renderMessage,
 	renderPickupBlock,
 	renderStageUpdate,
 	renderSystemMessage,
@@ -10,6 +13,62 @@ import {
 } from "./whatsappCopy";
 
 const TRACK = "https://kedaipal.com/track/tok_abc";
+
+describe("pickLocale", () => {
+	test("narrows a known locale string", () => {
+		expect(pickLocale("en")).toBe("en");
+		expect(pickLocale("ms")).toBe("ms");
+		expect(pickLocale("zh")).toBe("zh");
+	});
+
+	test("falls back to en for unknown, missing, or non-string input", () => {
+		expect(pickLocale(undefined)).toBe("en");
+		expect(pickLocale(null)).toBe("en");
+		expect(pickLocale("")).toBe("en");
+		expect(pickLocale("fr")).toBe("en");
+		expect(pickLocale(42)).toBe("en");
+		expect(pickLocale({})).toBe("en");
+	});
+
+	test("covers every locale in LOCALES round-trip", () => {
+		for (const locale of LOCALES) {
+			expect(pickLocale(locale)).toBe(locale);
+		}
+	});
+});
+
+// Fallback semantics (86eybjw5n): a retailer override is looked up PER LOCALE,
+// independently — there is no cross-locale fallback chain. A store that has
+// authored EN + BM overrides and switches to zh (no zh override yet) must fall
+// through to the DEFAULT zh catalog, never silently reuse the BM/EN override
+// text. Traced in docs/i18n.md "Backend locale" section.
+describe("renderMessage — locale override fallback (86eybjw5n)", () => {
+	test("zh with no zh override falls back to the DEFAULT zh catalog, not the EN/MS override", () => {
+		const overrides: MessageTemplates = {
+			en: { confirm: "EN OVERRIDE {shortId}" },
+			ms: { confirm: "MS OVERRIDE {shortId}" },
+		};
+		const out = renderMessage(overrides, "zh", "confirm", {
+			shortId: "ORD-AB23",
+			storeName: "Acme",
+		});
+		expect(out).not.toContain("EN OVERRIDE");
+		expect(out).not.toContain("MS OVERRIDE");
+		// Matches the built-in zh confirm template, not an override.
+		expect(out).toBe(waCopy.zh.confirm({ shortId: "ORD-AB23", storeName: "Acme" }));
+	});
+
+	test("once a zh override IS authored, it wins over the zh default (same as en/ms)", () => {
+		const overrides: MessageTemplates = {
+			zh: { confirm: "自定义确认 {shortId}" },
+		};
+		const out = renderMessage(overrides, "zh", "confirm", {
+			shortId: "ORD-AB23",
+			storeName: "Acme",
+		});
+		expect(out).toBe("自定义确认 ORD-AB23");
+	});
+});
 
 // The payment-ask intros must each carry the order-page link themselves — no
 // separate "see how to pay" block is appended (ticket 86ey98ju1), so the buyer
@@ -21,7 +80,7 @@ describe("payment-ask intros carry the order-page link (86ey98ju1)", () => {
 		"paymentDueDeclined",
 		"deliveryFeeSet",
 	] as const) {
-		for (const locale of ["en", "ms"] as const) {
+		for (const locale of LOCALES) {
 			test(`${key} (${locale}) embeds the tracking URL, no dangling "how to pay:"`, () => {
 				const out = renderSystemMessage(locale, key, {
 					shortId: "ORD-AB23",
@@ -104,6 +163,14 @@ describe("renderSystemMessage", () => {
 		});
 		expect(ms).toContain("disambungkan dengan Acme Outdoor");
 		expect(ms).toContain("*K7*");
+		const zh = renderSystemMessage("zh", "storeQrConnected", {
+			shortId: "",
+			storeName: "Acme Outdoor",
+			code: "K7",
+		});
+		expect(zh).toContain("Acme Outdoor");
+		expect(zh).toContain("*K7*");
+		expect(zh).toContain("kedaipal.com/privacy");
 	});
 
 	test("counterOrderConfirmedPaid quotes the amount + tracking link", () => {
@@ -400,6 +467,27 @@ describe("drop-off-aware status copy", () => {
 			waCopy.ms.status.packed({ ...base, deliveryMethod: "self_collect" }),
 		).toContain("sedia untuk diambil");
 	});
+
+	test("packed/shipped ZH: 交收点 wording for drop-off", () => {
+		expect(
+			waCopy.zh.status.packed({
+				...base,
+				deliveryMethod: "self_collect",
+				pickupKind: "drop_off",
+			}),
+		).toContain("交收点");
+		expect(
+			waCopy.zh.status.shipped({
+				...base,
+				deliveryMethod: "self_collect",
+				pickupKind: "drop_off",
+			}),
+		).toContain("交收点见");
+		// Default self-collect ZH copy unchanged.
+		expect(
+			waCopy.zh.status.packed({ ...base, deliveryMethod: "self_collect" }),
+		).toContain("可以来拿了");
+	});
 });
 
 describe("renderStageUpdate carrier link", () => {
@@ -422,6 +510,18 @@ describe("renderStageUpdate carrier link", () => {
 		expect(out).not.toContain("Jejak penghantaran");
 		expect(out).toContain("Kemaskini pesanan ORD-TEST: Siap.");
 	});
+
+	test("ZH renders the localized head + carrier/track labels", () => {
+		const out = renderStageUpdate("zh", {
+			shortId: "ORD-TEST",
+			stageLabel: "运输中",
+			trackingUrl: "https://kedaipal.com/track/tok",
+			carrierTrackingUrl: "https://track.example/123",
+		});
+		expect(out).toContain("订单 ORD-TEST 更新：运输中。");
+		expect(out).toContain("查看物流: https://track.example/123");
+		expect(out).toContain("查看订单状态: https://kedaipal.com/track/tok");
+	});
 });
 
 describe("hasTemplateOverride", () => {
@@ -434,10 +534,16 @@ describe("hasTemplateOverride", () => {
 		).toBe(false);
 		expect(hasTemplateOverride({ en: {} }, "en", "packed")).toBe(false);
 		expect(hasTemplateOverride(undefined, "en", "packed")).toBe(false);
-		// Locale-scoped: an EN override is not an MS override.
+		// Locale-scoped: an EN override is not an MS override, nor a ZH one.
 		expect(
 			hasTemplateOverride({ en: { packed: "Custom" } }, "ms", "packed"),
 		).toBe(false);
+		expect(
+			hasTemplateOverride({ en: { packed: "Custom" } }, "zh", "packed"),
+		).toBe(false);
+		expect(
+			hasTemplateOverride({ zh: { packed: "自定义" } }, "zh", "packed"),
+		).toBe(true);
 	});
 });
 
@@ -465,6 +571,15 @@ describe("paymentReminder system message", () => {
 		expect(out).toContain("Peringatan mesra daripada Bearcamp");
 		expect(out).toContain("masih menunggu pembayaran");
 	});
+
+	test("ZH renders the localized nudge", () => {
+		const out = renderSystemMessage("zh", "paymentReminder", {
+			shortId: "ORD-TEST",
+			storeName: "Bearcamp",
+		});
+		expect(out).toContain("Bearcamp 温馨提醒");
+		expect(out).toContain("还在等待付款");
+	});
 });
 
 describe("poweredByLine growth footer", () => {
@@ -478,9 +593,15 @@ describe("poweredByLine growth footer", () => {
 		expect(out).toBe("\n\nKedai ini guna Kedaipal 🛒 kedaipal.com");
 	});
 
+	test("ZH renders the exact locked ZH copy", () => {
+		const out = poweredByLine("zh");
+		expect(out).toBe("\n\n这家店用 Kedaipal 营业 🛒 kedaipal.com");
+	});
+
 	test("leads with a blank line so it reads as a quiet footer under any body", () => {
 		expect(poweredByLine("en").startsWith("\n\n")).toBe(true);
 		expect(poweredByLine("ms").startsWith("\n\n")).toBe(true);
+		expect(poweredByLine("zh").startsWith("\n\n")).toBe(true);
 	});
 
 	test("is a system suffix, independent of retailer confirm-template overrides", () => {

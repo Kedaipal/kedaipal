@@ -2,7 +2,6 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import {
 	ArrowLeft,
-	Building2,
 	ChevronDown,
 	ChevronRight,
 	ClipboardList,
@@ -11,11 +10,9 @@ import {
 	Landmark,
 	MapPinned,
 	MessageCircle,
-	Music2,
 	Plus,
 	QrCode,
 	ReceiptText,
-	Settings2,
 	ShieldCheck,
 	Store,
 	Trash2,
@@ -39,7 +36,6 @@ import {
 import { TierPill } from "../components/dashboard/tier-pill";
 import { submitThenFocusError } from "../components/forms/focus-error";
 import { useAppForm } from "../components/forms/form";
-import { ShopeeIcon } from "../components/icons/shopee-icon";
 import { BillingTab } from "../components/settings/billing-tab";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
 import { NotificationsCard } from "../components/settings/notifications-card";
@@ -81,7 +77,16 @@ const CURRENCY_OPTIONS = SUPPORTED_CURRENCIES.map((c) => ({
 const LOCALE_OPTIONS = [
 	{ value: "en", label: "English" },
 	{ value: "ms", label: "Bahasa Malaysia" },
+	{ value: "zh", label: "中文" },
 ] as const;
+
+// Shared display label for a locale, used by the language card, the WhatsApp
+// template tabs, and the locale-picker `<select>`s below.
+const LOCALE_LABELS: Record<Locale, string> = {
+	en: "English",
+	ms: "Bahasa Malaysia",
+	zh: "中文",
+};
 
 type SettingsTab =
 	| "store"
@@ -89,8 +94,7 @@ type SettingsTab =
 	| "whatsapp"
 	| "payments"
 	| "fulfilment"
-	| "order-status"
-	| "integrations";
+	| "order-status";
 
 // Legacy deep-link support: the fulfilment tab used to be "pickup" (self-collect
 // only). Old bookmarks / checklist links carry `?tab=pickup` — normalise them so
@@ -143,12 +147,6 @@ const SETTINGS_TABS: ReadonlyArray<{
 		description: "Buyer-facing order stages",
 		icon: <ClipboardList className="size-4" />,
 	},
-	{
-		id: "integrations",
-		label: "Integrations",
-		description: "Sales channels",
-		icon: <Settings2 className="size-4" />,
-	},
 ];
 
 const SETTINGS_TAB_IDS: ReadonlyArray<SettingsTab> = SETTINGS_TABS.map(
@@ -164,13 +162,7 @@ const SETTINGS_GROUPS: ReadonlyArray<{
 	{ label: "Store", tabs: ["store", "billing"] },
 	{
 		label: "Selling",
-		tabs: [
-			"whatsapp",
-			"payments",
-			"fulfilment",
-			"order-status",
-			"integrations",
-		],
+		tabs: ["whatsapp", "payments", "fulfilment", "order-status"],
 	},
 ];
 
@@ -748,42 +740,6 @@ function SettingsRoute() {
 								onSave={(orderStages) => updateSettings({ orderStages })}
 							/>
 						</Card>
-					</div>
-				) : null}
-
-				{activeTab === "integrations" ? (
-					<div className="flex flex-col gap-6 pt-2">
-						<InfoBanner title="Sales channels">
-							<p>
-								Connect your marketplace accounts to sync products and orders
-								automatically. More channels are on the way.
-							</p>
-						</InfoBanner>
-
-						<IntegrationCard
-							name="Shopee"
-							description="Sync your Shopee products and orders into Kedaipal. Manage everything from one dashboard."
-							tint="bg-[#EE4D2D]/10 text-[#EE4D2D]"
-							icon={<ShopeeIcon className="size-6" />}
-						/>
-						<IntegrationCard
-							name="Lazada"
-							description="Sync your Lazada products and orders into Kedaipal. Manage everything from one dashboard."
-							tint="bg-[#0F146D]/10 text-[#0F146D] dark:bg-[#0F146D]/30 dark:text-[#9aa6ff]"
-							icon={<Store className="size-6" />}
-						/>
-						<IntegrationCard
-							name="TikTok Shop"
-							description="Sync your TikTok Shop orders into Kedaipal so you never miss a sale."
-							tint="bg-foreground/10 text-foreground"
-							icon={<Music2 className="size-6" />}
-						/>
-						<IntegrationCard
-							name="StoreHub"
-							description="Reconcile your in-store StoreHub sales alongside online orders."
-							tint="bg-[#FF7A00]/10 text-[#FF7A00]"
-							icon={<Building2 className="size-6" />}
-						/>
 					</div>
 				) : null}
 			</div>
@@ -1635,7 +1591,7 @@ function MessageTemplatesForm({
 		}
 	}
 
-	const locales: Locale[] = ["en", "ms"];
+	const locales: Locale[] = ["en", "ms", "zh"];
 
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
@@ -1663,7 +1619,7 @@ function MessageTemplatesForm({
 								: "text-muted-foreground"
 						}`}
 					>
-						{loc === "en" ? "English" : "Bahasa Malaysia"}
+						{LOCALE_LABELS[loc]}
 					</button>
 				))}
 			</div>
@@ -1716,8 +1672,10 @@ type StageDraft = {
 	anchor: StageAnchor;
 	labelEn: string;
 	labelMs: string;
+	labelZh: string;
 	descEn: string;
 	descMs: string;
+	descZh: string;
 	notify: boolean;
 };
 
@@ -1730,8 +1688,10 @@ function seedToDraft(s: OrderStage): StageDraft {
 		anchor: s.anchor,
 		labelEn: s.label.en,
 		labelMs: s.label.ms ?? "",
+		labelZh: s.label.zh ?? "",
 		descEn: s.description?.en ?? "",
 		descMs: s.description?.ms ?? "",
+		descZh: s.description?.zh ?? "",
 		notify: s.notify,
 	};
 }
@@ -1744,12 +1704,14 @@ function draftsToStages(drafts: StageDraft[]): OrderStage[] {
 		label: {
 			en: d.labelEn.trim(),
 			...(d.labelMs.trim() ? { ms: d.labelMs.trim() } : {}),
+			...(d.labelZh.trim() ? { zh: d.labelZh.trim() } : {}),
 		},
-		...(d.descEn.trim() || d.descMs.trim()
+		...(d.descEn.trim() || d.descMs.trim() || d.descZh.trim()
 			? {
 					description: {
 						...(d.descEn.trim() ? { en: d.descEn.trim() } : {}),
 						...(d.descMs.trim() ? { ms: d.descMs.trim() } : {}),
+						...(d.descZh.trim() ? { zh: d.descZh.trim() } : {}),
 					},
 				}
 			: {}),
@@ -1814,8 +1776,10 @@ function StageEditor({
 				anchor: prev[prev.length - 1]?.anchor ?? "confirmed",
 				labelEn: "",
 				labelMs: "",
+				labelZh: "",
 				descEn: "",
 				descMs: "",
+				descZh: "",
 				notify: false, // intermediate stages default off (DECISION 2)
 			},
 		]);
@@ -1913,9 +1877,9 @@ function StageEditor({
 					</button>
 				</div>
 
-				{/* Stack on mobile (full-width, never misaligned); two columns at sm+
-				    where the BM label fits one line so the inputs line up. */}
-				<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+				{/* Stack on mobile (full-width, never misaligned); three columns at sm+
+				    where each label fits one line so the inputs line up. */}
+				<div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
 					<label className="flex flex-col gap-1">
 						<span className="text-xs font-medium text-muted-foreground">
 							Label (English)
@@ -1939,6 +1903,19 @@ function StageEditor({
 							maxLength={STAGE_LABEL_MAX_LENGTH}
 							value={d.labelMs}
 							onChange={(e) => update(d._key, { labelMs: e.target.value })}
+							placeholder="Optional"
+						/>
+					</label>
+					<label className="flex flex-col gap-1">
+						<span className="text-xs font-medium text-muted-foreground">
+							Label (中文)
+						</span>
+						<Input
+							type="text"
+							variant="field"
+							maxLength={STAGE_LABEL_MAX_LENGTH}
+							value={d.labelZh}
+							onChange={(e) => update(d._key, { labelZh: e.target.value })}
 							placeholder="Optional"
 						/>
 					</label>
@@ -2001,6 +1978,19 @@ function StageEditor({
 							value={d.descMs}
 							onChange={(e) => update(d._key, { descMs: e.target.value })}
 							placeholder="Pilihan"
+							rows={2}
+							maxLength={STAGE_DESCRIPTION_MAX_LENGTH}
+							className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+						/>
+					</label>
+					<label className="flex flex-col gap-1">
+						<span className="text-xs font-medium text-muted-foreground">
+							Buyer note (optional) — 中文
+						</span>
+						<textarea
+							value={d.descZh}
+							onChange={(e) => update(d._key, { descZh: e.target.value })}
+							placeholder="可选"
 							rows={2}
 							maxLength={STAGE_DESCRIPTION_MAX_LENGTH}
 							className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
@@ -2116,10 +2106,10 @@ function LocaleForm({
 	current,
 	onSave,
 }: {
-	current: "en" | "ms";
-	onSave: (locale: "en" | "ms") => Promise<unknown>;
+	current: Locale;
+	onSave: (locale: Locale) => Promise<unknown>;
 }) {
-	const [value, setValue] = useState<"en" | "ms">(current);
+	const [value, setValue] = useState<Locale>(current);
 	const dirty = value !== current;
 
 	async function handleSubmit(e: FormEvent) {
@@ -2138,7 +2128,7 @@ function LocaleForm({
 				<span className="text-sm font-medium">WhatsApp message language</span>
 				<select
 					value={value}
-					onChange={(e) => setValue(e.target.value as "en" | "ms")}
+					onChange={(e) => setValue(e.target.value as Locale)}
 					className="min-h-11 rounded-xl border border-input bg-background px-4 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 				>
 					{LOCALE_OPTIONS.map((opt) => (
@@ -2341,45 +2331,6 @@ function WaPhoneForm({
 				}}
 			</form.Subscribe>
 		</form>
-	);
-}
-
-function IntegrationCard({
-	name,
-	description,
-	tint,
-	icon,
-}: {
-	name: string;
-	description: string;
-	tint: string;
-	icon: ReactNode;
-}) {
-	return (
-		<Card>
-			<div className="flex items-start gap-4">
-				<div
-					className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ${tint}`}
-				>
-					{icon}
-				</div>
-				<div className="flex flex-1 flex-col gap-1">
-					<div className="flex items-center gap-2">
-						<h3 className="text-sm font-semibold">{name}</h3>
-						<span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
-							Coming soon
-						</span>
-					</div>
-					<p className="text-xs text-muted-foreground">{description}</p>
-				</div>
-			</div>
-			<Button
-				disabled
-				className="h-11 w-full lg:h-10 lg:w-auto lg:self-end lg:min-w-[160px]"
-			>
-				Connect {name}
-			</Button>
-		</Card>
 	);
 }
 

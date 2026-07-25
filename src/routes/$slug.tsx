@@ -2,6 +2,7 @@ import { createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
+import { type Locale, OG_LOCALE } from "../../convex/lib/locale";
 import { CartBar } from "../components/storefront/cart-bar";
 import { CategoryRail } from "../components/storefront/category-rail";
 import { ProductGrid } from "../components/storefront/product-grid";
@@ -15,7 +16,7 @@ interface StorefrontLoaderData {
 	storeName: string;
 	slug: string;
 	checkoutPhone: string | undefined;
-	locale: "en" | "ms";
+	locale: Locale;
 	// SEO meta/OG/JSON-LD description. Prefers the seller's own store description
 	// (single-lined) and falls back to a generated blurb.
 	description: string;
@@ -96,7 +97,7 @@ export const Route = createFileRoute("/$slug")({
 			locale,
 		} = loaderData;
 		const title = `${storeName} — Order on WhatsApp | Kedaipal`;
-		const ogLocale = locale === "ms" ? "ms_MY" : "en_MY";
+		const ogLocale = OG_LOCALE[locale];
 
 		const meta = [
 			{ title },

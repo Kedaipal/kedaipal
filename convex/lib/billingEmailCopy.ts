@@ -70,6 +70,25 @@ const t = {
 			"Storefront dan pesanan sedia ada kekal aktif — penyuntingan kedai dijeda sehingga anda membayar.",
 		choosePlan: "Pilih pelan",
 	},
+	zh: {
+		bank: "银行",
+		accountName: "账户名称",
+		accountNo: "账户号码",
+		duitnow: "DuitNow",
+		howToPay: "付款方式",
+		invoice: "账单",
+		plan: "套餐",
+		amount: "金额",
+		dueDate: "到期日",
+		qrNote: "或扫描账单页面上的 DuitNow QR 码。",
+		noDetails: "请打开您的账单页面查看付款详情和 QR 码。",
+		cta: "查看账单并付款",
+		wasPrefix: "原价",
+		foundingDiscount: "创始会员折扣",
+		storeStaysLive:
+			"您的商店和现有订单会继续正常运作 —— 付款前暂停编辑功能。",
+		choosePlan: "选择套餐",
+	},
 } as const;
 
 /** Plain-text version of the pay lines (no HTML tags). */
@@ -300,6 +319,47 @@ const render: Record<
 			return { subject, html, text };
 		},
 	},
+	zh: {
+		invoiceIssued: (v) => {
+			const subject = `🧾 新账单 ${v.invoiceNumber} · ${v.totalFormatted}`;
+			const html = wrapBillingHtml(
+				"zh",
+				"invoiceIssued",
+				"您的 Kedaipal 账单已就绪",
+				`您好 ${escapeHtml(v.storeName)}，您的订阅账单已经准备好了，请在下方到期日前付清。`,
+				v,
+				t.zh.cta,
+			);
+			const text = `🧾 新账单 ${v.invoiceNumber}\n${v.planLabel} · ${amountText("zh", v)}\n请在 ${v.dueDateFormatted} 前付款。\n\n${payText("zh", v)}\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		invoiceReminder: (v) => {
+			const subject = `⏰ 提醒：账单 ${v.invoiceNumber} 将于 ${v.dueDateFormatted} 到期`;
+			const html = wrapBillingHtml(
+				"zh",
+				"invoiceReminder",
+				"您的账单即将到期",
+				`您好 ${escapeHtml(v.storeName)}，提醒您在到期日前付清 Kedaipal 账单。`,
+				v,
+				t.zh.cta,
+			);
+			const text = `⏰ 提醒：账单 ${v.invoiceNumber} 将于 ${v.dueDateFormatted} 到期\n${v.planLabel} · ${amountText("zh", v)}\n请在到期前付款，让您的商店保持完整运作。\n\n${payText("zh", v)}\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		invoiceOverdue: (v) => {
+			const subject = `🔒 您的订阅已逾期 · ${v.invoiceNumber}`;
+			const html = wrapBillingHtml(
+				"zh",
+				"invoiceOverdue",
+				"您的订阅已逾期",
+				`您好 ${escapeHtml(v.storeName)}，您的 Kedaipal 订阅目前已逾期。${escapeHtml(t.zh.storeStaysLive)}`,
+				v,
+				t.zh.cta,
+			);
+			const text = `🔒 您的订阅已逾期 · ${v.invoiceNumber}\n${t.zh.storeStaysLive}\n${v.planLabel} · ${amountText("zh", v)}\n\n${payText("zh", v)}\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+	},
 };
 
 /** Retailer notices with no invoice attached (trial nudges + a lapsed-subscription
@@ -391,6 +451,42 @@ const trialRender: Record<
 			return { subject, html, text };
 		},
 	},
+	zh: {
+		trialEndingSoon: (v) => {
+			const d = v.daysLeft ?? 0;
+			const dayStr = `${d} 天`;
+			const subject = `⏰ 您的 Kedaipal 试用期还剩 ${dayStr}`;
+			const lines = [
+				`您好 ${escapeHtml(v.storeName)}，您的免费试用期还剩 <strong>${dayStr}</strong>。`,
+				"选择一个套餐，继续壮大您的商店 —— 商店会保持正常运作，但试用期结束后编辑功能会暂停。",
+			];
+			const html = wrapHtml("⏰", `试用期还剩 ${dayStr}`, lines, v.billingUrl, t.zh.choosePlan);
+			const text = `⏰ 您的 Kedaipal 试用期还剩 ${dayStr}\n选择一个套餐，继续壮大您的商店 —— 试用期结束后编辑功能会暂停。\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		trialEnded: (v) => {
+			const subject = "🔒 您的 Kedaipal 免费试用期已结束";
+			const lines = [
+				`您好 ${escapeHtml(v.storeName)}，您的免费试用期已经结束。`,
+				t.zh.storeStaysLive,
+				"选择一个套餐，继续壮大您的商店。",
+			];
+			const html = wrapHtml("🔒", "您的免费试用期已结束", lines, v.billingUrl, t.zh.choosePlan);
+			const text = `🔒 您的 Kedaipal 免费试用期已结束\n${t.zh.storeStaysLive}\n选择一个套餐继续使用。\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+		subscriptionLapsed: (v) => {
+			const subject = "🔒 您的 Kedaipal 订阅已失效";
+			const lines = [
+				`您好 ${escapeHtml(v.storeName)}，您的订阅期已经结束，还未续订。`,
+				t.zh.storeStaysLive,
+				"联系我们续订，我们会把账单发给您。",
+			];
+			const html = wrapHtml("🔒", "您的订阅已失效", lines, v.billingUrl, t.zh.choosePlan);
+			const text = `🔒 您的 Kedaipal 订阅已失效\n${t.zh.storeStaysLive}\n联系我们续订，我们会把账单发给您。\n\n${v.billingUrl}`;
+			return { subject, html, text };
+		},
+	},
 };
 
 export function renderTrialEmail(
@@ -458,6 +554,28 @@ const paymentRender: Record<
 			];
 			const html = wrapHtml("🙏", "Pembayaran diterima — terima kasih", lines, v.dashboardUrl, "Buka dashboard");
 			const text = `🙏 Terima kasih atas pembayaran anda\nKami telah menerima pembayaran ${v.planLabel} anda sebanyak ${v.totalFormatted}.\nTerima kasih atas sokongan anda.\n\n${v.dashboardUrl}`;
+			return { subject, html, text };
+		},
+	},
+	zh: {
+		welcome: (v) => {
+			const subject = `🎉 欢迎加入 Kedaipal ${v.planLabel.split(" ")[0]}`;
+			const lines = [
+				`您好 ${escapeHtml(v.storeName)}，我们已收到您的付款 —— 您的 <strong>${escapeHtml(v.planLabel)}</strong> 套餐现已生效。`,
+				`欢迎加入，感谢您选择 Kedaipal。祝您的商店生意兴隆。`,
+			];
+			const html = wrapHtml("🎉", "已收到付款 —— 欢迎加入！", lines, v.dashboardUrl, "打开后台");
+			const text = `🎉 欢迎加入 Kedaipal\n我们已收到您的付款 —— 您的 ${v.planLabel} 套餐现已生效。\n感谢您选择 Kedaipal。\n\n${v.dashboardUrl}`;
+			return { subject, html, text };
+		},
+		thanks: (v) => {
+			const subject = "🙏 感谢您的付款";
+			const lines = [
+				`您好 ${escapeHtml(v.storeName)}，我们已收到您 <strong>${escapeHtml(v.planLabel)}</strong> 套餐的付款，金额 ${escapeHtml(v.totalFormatted)}。`,
+				`感谢您一直以来的支持 —— 这对我们意义重大。`,
+			];
+			const html = wrapHtml("🙏", "已收到付款 —— 谢谢", lines, v.dashboardUrl, "打开后台");
+			const text = `🙏 感谢您的付款\n我们已收到您 ${v.planLabel} 套餐的付款，金额 ${v.totalFormatted}。\n感谢您一直以来的支持。\n\n${v.dashboardUrl}`;
 			return { subject, html, text };
 		},
 	},
