@@ -719,6 +719,57 @@ export const notifyStatusChange = internalAction({
 });
 
 /**
+ * Rider drop-off photo (Lalamove proof of delivery) — sent as a follow-up to
+ * the delivered message once lalamove.fetchPodImages has stored the blobs.
+ * A photo of the parcel at the door is the strongest "it arrived" signal a
+ * buyer can get, and it lands seconds after the delivered text (same rhythm
+ * as the counter receipt PDF follow-up). Transactional: it's an order status
+ * artifact, so the WABA caps never block it. No text fallback — without the
+ * image there is nothing to say that the delivered message didn't already.
+ */
+export const notifyDeliveryPhoto = internalAction({
+	args: { orderId: v.id("orders"), imageUrls: v.array(v.string()) },
+	handler: async (ctx, { orderId, imageUrls }): Promise<void> => {
+		if (imageUrls.length === 0) return;
+		let meta: {
+			retailerId: Id<"retailers">;
+			shortId: string;
+			storeName: string;
+			customerWaPhone: string | undefined;
+			locale: Locale;
+		} | null = null;
+		try {
+			meta = await ctx.runQuery(internal.whatsapp.getOrderWithRetailer, {
+				orderId,
+			});
+		} catch (err) {
+			console.error("WA delivery-photo lookup failed", err);
+			return;
+		}
+		if (!meta?.customerWaPhone) return;
+		const locale = pickLocale(meta.locale);
+		const caption = renderSystemMessage(locale, "deliveryPhotoCaption", {
+			shortId: meta.shortId,
+			storeName: meta.storeName,
+		});
+		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");
+		for (const [i, imageUrl] of imageUrls.entries()) {
+			try {
+				await wa.send(meta.customerWaPhone, {
+					kind: "image",
+					imageUrl,
+					// Caption only on the first photo — a rare multi-stop order
+					// shouldn't repeat the same line under every shot.
+					caption: i === 0 ? caption : undefined,
+				});
+			} catch (err) {
+				console.error("WA delivery-photo send failed", err);
+			}
+		}
+	},
+});
+
+/**
  * Phase 2: scheduled by orders.advanceToStage when a seller advances an order
  * into a custom stage that does NOT cross a canonical anchor (so the rich status
  * templates in `notifyStatusChange` don't fire) and the stage has `notify: true`
@@ -1034,6 +1085,26 @@ export const getMockupNotifyMeta = internalQuery({
 	},
 });
 
+// Mockup-ready nudge — inline (not in whatsappCopy.ts) because it's a one-off
+// system notification, not a retailer-overridable template.
+const mockupReadyBody: Record<
+	Locale,
+	(greeting: string, shortId: string, storeName: string, trackingUrl: string) => string
+> = {
+	en: (greeting, shortId, storeName, trackingUrl) =>
+		`Hi${greeting}! The mockup for your ${storeName} order ${shortId} is ready. Please review and approve it before we start making it: ${trackingUrl}`,
+	ms: (greeting, shortId, storeName, trackingUrl) =>
+		`Hai${greeting}! Mockup untuk pesanan ${shortId} dari ${storeName} sudah siap. Sila semak dan luluskan sebelum kami mula membuatnya: ${trackingUrl}`,
+	zh: (greeting, shortId, storeName, trackingUrl) =>
+		`您好${greeting}！您在${storeName}的订单 ${shortId} 设计稿已经准备好了，请查看并确认，我们才开始制作：${trackingUrl}`,
+};
+
+const mockupReviewButtonText: Record<Locale, string> = {
+	en: "Review mockup",
+	ms: "Semak mockup",
+	zh: "查看设计稿",
+};
+
 /**
  * Scheduled by orders.submitMockup. Sends the buyer the mockup image + a CTA to
  * review/approve it on the tracking page. Errors swallowed (logged) so the
@@ -1069,11 +1140,13 @@ export const notifyMockupSubmitted = internalAction({
 		if (!trackingToken) return; // order vanished — don't ship a dead link
 		const trackingUrl = `${appUrl}/track/${trackingToken}`;
 		const greeting = meta.customerName ? ` ${meta.customerName}` : "";
-		const body =
-			meta.locale === "ms"
-				? `Hai${greeting}! Mockup untuk pesanan ${meta.shortId} dari ${meta.storeName} sudah siap. Sila semak dan luluskan sebelum kami mula membuatnya: ${trackingUrl}`
-				: `Hi${greeting}! The mockup for your ${meta.storeName} order ${meta.shortId} is ready. Please review and approve it before we start making it: ${trackingUrl}`;
-		const buttonText = meta.locale === "ms" ? "Semak mockup" : "Review mockup";
+		const body = mockupReadyBody[meta.locale](
+			greeting,
+			meta.shortId,
+			meta.storeName,
+			trackingUrl,
+		);
+		const buttonText = mockupReviewButtonText[meta.locale];
 
 		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");
 		try {
@@ -1374,6 +1447,15 @@ export const markFoundingWelcomed = internalMutation({
 	},
 });
 
+const foundingWelcomeBody: Record<Locale, (rank: number, billingUrl: string) => string> = {
+	en: (rank, billingUrl) =>
+		`🎉 Welcome, Founding Member #${rank} of 10! Thank you for backing Kedaipal early — your 30% lifetime discount is locked in for good. We'll reach out to set up your white-glove onboarding call. Details: ${billingUrl}`,
+	ms: (rank, billingUrl) =>
+		`🎉 Tahniah! Anda kini Founding Member #${rank} dari 10 di Kedaipal. Terima kasih kerana mempercayai kami awal — diskaun 30% seumur hidup anda kekal selamanya. Pasukan kami akan hubungi anda untuk sesi white-glove. Butiran: ${billingUrl}`,
+	zh: (rank, billingUrl) =>
+		`🎉 恭喜！您现在是 Kedaipal 10 位创始会员中的第 #${rank} 位。谢谢您这么早就信任我们 —— 您的终身 30% 折扣已经锁定，永久有效。我们的团队会联系您安排专属的入驻协助。详情：${billingUrl}`,
+};
+
 /**
  * Scheduled by invoices.markPaid when a Founding rank is claimed. Sends the
  * "Welcome, Founding Member #N of 10" WhatsApp to the retailer (the seller), then
@@ -1400,10 +1482,7 @@ export const notifyFoundingWelcome = internalAction({
 
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
 		const billingUrl = `${appUrl}/app/settings?tab=billing`;
-		const body =
-			meta.locale === "ms"
-				? `🎉 Tahniah! Anda kini Founding Member #${rank} dari 10 di Kedaipal. Terima kasih kerana mempercayai kami awal — diskaun 30% seumur hidup anda kekal selamanya. Pasukan kami akan hubungi anda untuk sesi white-glove. Butiran: ${billingUrl}`
-				: `🎉 Welcome, Founding Member #${rank} of 10! Thank you for backing Kedaipal early — your 30% lifetime discount is locked in for good. We'll reach out to set up your white-glove onboarding call. Details: ${billingUrl}`;
+		const body = foundingWelcomeBody[meta.locale](rank, billingUrl);
 		try {
 			await makeGuardedSender(ctx, retailerId, "transactional").send(meta.waPhone, {
 				kind: "text",

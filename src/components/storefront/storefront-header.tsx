@@ -1,3 +1,4 @@
+import { AppImage } from "../ui/app-image";
 import { FoundingMemberBadge } from "./founding-member-badge";
 
 /** The public-safe retailer fields the header renders — a structural subset of
@@ -35,10 +36,13 @@ export function StorefrontHeader({
 		>
 			{hasCover ? (
 				<>
-					<img
-						src={retailer.coverImageUrl ?? undefined}
+					{/* LCP candidate — the loader preloads this URL and the head()
+					    <link rel="preload"> only pays off if this instance is eager. */}
+					<AppImage
+						src={retailer.coverImageUrl}
 						alt={`${retailer.storeName} cover`}
-						className="absolute inset-0 h-full w-full object-cover"
+						aspect="absolute inset-0"
+						priority
 					/>
 					<div
 						aria-hidden
@@ -46,21 +50,25 @@ export function StorefrontHeader({
 					/>
 				</>
 			) : null}
-			<img
+			<AppImage
 				src={hasCover ? "/logo-dark.svg" : "/logo-3.svg"}
 				alt="Kedaipal"
-				className={
-					hasCover ? "relative h-5 w-auto opacity-95 drop-shadow" : "h-5 w-auto"
-				}
+				aspect="h-5 w-auto"
+				fill={false}
+				className={hasCover ? "opacity-95 drop-shadow" : undefined}
+				priority
 			/>
 			<div
 				className={`flex gap-4 ${hasCover ? "relative items-end" : "items-center"}`}
 			>
 				{retailer.logoUrl ? (
-					<img
+					<AppImage
 						src={retailer.logoUrl}
 						alt={`${retailer.storeName} logo`}
-						className={`h-16 w-16 shrink-0 rounded-2xl border-2 bg-background object-contain ${
+						aspect="h-16 w-16 shrink-0"
+						rounded="rounded-2xl"
+						objectFit="contain"
+						className={`border-2 bg-background ${
 							hasCover
 								? "border-white/80 shadow-lg"
 								: "border-accent/20 shadow-sm"

@@ -59,4 +59,28 @@ describe("renderRetailerEmail — pickup kind + detail", () => {
 		});
 		expect(text).toContain("Kaedah: Penyerahan");
 	});
+
+	test("ZH drop-off uses the 交收 label, and renders every key on the catalog", () => {
+		const { subject, html, text } = renderRetailerEmail("zh", "newOrder", {
+			...base,
+			pickupKind: "drop_off",
+			pickupLabel: "Pasar Tani",
+			pickupAddress: "Seksyen 7",
+		});
+		expect(subject).toContain("新订单");
+		expect(text).toContain("方式：交收");
+		expect(html).toContain("Pasar Tani");
+		// Every RetailerEmailKey renders without throwing in zh.
+		for (const key of [
+			"newOrder",
+			"orderConfirmed",
+			"paymentClaimed",
+			"mockupApproved",
+			"mockupChangesRequested",
+			"mockupDeclined",
+			"deliveryJobFailed",
+		] as const) {
+			expect(() => renderRetailerEmail("zh", key, base)).not.toThrow();
+		}
+	});
 });

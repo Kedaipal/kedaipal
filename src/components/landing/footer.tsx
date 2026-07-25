@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { Instagram, Mail, Music2 } from "lucide-react";
 import { LEGAL_CONTACT_EMAIL } from "../../lib/legal";
 import { m } from "../../paraglide/messages";
+import { AppImage } from "../ui/app-image";
 
 export function Footer() {
 	const contactLinkClass =
@@ -14,7 +15,12 @@ export function Footer() {
 			<div className="mx-auto max-w-6xl px-5 py-14 md:px-8">
 				<div className="grid gap-10 md:grid-cols-[minmax(0,1fr)_minmax(24rem,auto)] md:items-start">
 					<div className="max-w-sm">
-						<img src="/logo-dark.svg" alt="Kedaipal" className="h-8 w-auto" />
+						<AppImage
+							src="/logo-dark.svg"
+							alt="Kedaipal"
+							aspect="h-8 w-auto"
+							fill={false}
+						/>
 						<p className="mt-5 text-sm leading-6 text-primary-foreground/65">
 							{m.footer_tagline()}
 						</p>

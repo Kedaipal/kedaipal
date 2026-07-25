@@ -8,6 +8,7 @@ import { useQuery } from "convex/react";
 import { ArrowLeft } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
+import { type Locale, OG_LOCALE } from "../../convex/lib/locale";
 import { CartBar } from "../components/storefront/cart-bar";
 import { ProductGrid } from "../components/storefront/product-grid";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
@@ -24,7 +25,12 @@ interface CategoryLoaderData {
 	description: string;
 	canonicalUrl: string;
 	ogImageUrl: string | undefined;
-	locale: "en" | "ms";
+	locale: Locale;
+	// Distinct from `ogImageUrl` (category image → cover → logo) so `head()`
+	// preloads only the store cover — the actual LCP element `StorefrontHeader`
+	// renders with `priority` on this page too. A category image, when set,
+	// isn't preloaded here since it isn't the header's `priority` image.
+	coverImageUrl: string | undefined;
 }
 
 /**
@@ -84,6 +90,7 @@ export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 				retailer.logoUrl ??
 				undefined,
 			locale: retailer.locale ?? "en",
+			coverImageUrl: retailer.coverImageUrl ?? undefined,
 		};
 	},
 	head: ({ loaderData }) => {
@@ -94,6 +101,7 @@ export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 			description,
 			canonicalUrl,
 			ogImageUrl,
+			coverImageUrl,
 			locale,
 		} = loaderData;
 		const title = `${categoryName} — ${storeName} | Kedaipal`;
@@ -104,7 +112,7 @@ export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 			{ name: "robots", content: "index, follow" },
 			{ property: "og:type", content: "website" },
 			{ property: "og:site_name", content: "Kedaipal" },
-			{ property: "og:locale", content: locale === "ms" ? "ms_MY" : "en_MY" },
+			{ property: "og:locale", content: OG_LOCALE[locale] },
 			{ property: "og:title", content: title },
 			{ property: "og:description", content: description },
 			{ property: "og:url", content: canonicalUrl },
@@ -123,7 +131,12 @@ export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 		}
 		return {
 			meta,
-			links: [{ rel: "canonical", href: canonicalUrl }],
+			links: [
+				{ rel: "canonical", href: canonicalUrl },
+				...(coverImageUrl
+					? [{ rel: "preload", as: "image", href: coverImageUrl }]
+					: []),
+			],
 		};
 	},
 	notFoundComponent: CategoryNotFound,

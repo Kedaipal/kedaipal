@@ -1,3 +1,5 @@
+import { AppImage } from "../ui/app-image";
+
 /**
  * Public storefront badge shown on kedaipal.com/<slug> for a Founding Member.
  * Reads the denormalized `isFoundingMember` flag (public-safe). Subscription
@@ -44,18 +46,24 @@ export function FoundingMemberBadge({
 
 	return (
 		<span className="inline-flex w-fit items-center gap-1.5 text-xs font-semibold text-foreground">
-			{/* Navy on light, mint on dark — always reads against the header. */}
-			<img
+			{/* Navy on light, mint on dark — always reads against the header. The
+			    visible "Founding Member" label carries the meaning for screen
+			    readers, so both artwork variants stay decorative (empty alt). */}
+			<AppImage
 				src="/img/badges/founding-badge-navy.png"
 				alt=""
-				aria-hidden="true"
-				className="h-7 w-auto dark:hidden"
+				aspect="h-7 w-auto"
+				className="dark:hidden"
+				fill={false}
+				priority
 			/>
-			<img
+			<AppImage
 				src="/img/badges/founding-badge-mint.png"
 				alt=""
-				aria-hidden="true"
-				className="hidden h-7 w-auto dark:block"
+				aspect="h-7 w-auto"
+				className="hidden dark:block"
+				fill={false}
+				priority
 			/>
 			{label}
 		</span>

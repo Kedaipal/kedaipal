@@ -38,6 +38,10 @@ export type CartItem = {
 	// negotiation (the seller's single mockup + quote settle scope, quantity, and
 	// final price). Re-requesting updates the note instead of incrementing qty.
 	isCustom?: boolean;
+	// Per-product fulfilment-notice override, frozen at add time — checkout
+	// raises the earliest pickable date to the strictest item in the cart.
+	// Absent on legacy persisted carts → treated as 0 (no override).
+	minNoticeDays?: number;
 	// Optional buyer reference image for a custom line. Uploaded on attach (Convex
 	// storage id; serializable so it survives cart persistence) and passed to
 	// orders.create at checkout. See docs/custom-option.md.

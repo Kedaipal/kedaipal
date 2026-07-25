@@ -74,6 +74,12 @@ export type PlanFeatures = {
 	 * tier. The flat delivery fee is deliberately NOT a feature row — a wrong
 	 * total is a correctness bug, so flat is all-tier. */
 	radiusDelivery: boolean;
+	/** Lalamove delivery (86eyb5hrf): enabling rider booking + the live
+	 * provider-quote pricing mode. Gates only ENABLING/SETTING — disabling,
+	 * clearing credentials and switching pricing away stay un-gated (never
+	 * trap a downgraded seller), and buyer-side fee rendering + an order's
+	 * frozen fee are all-tier (buyer flow never varies by seller plan). */
+	delivery: boolean;
 };
 
 export type PlanFeature = keyof PlanFeatures;
@@ -86,6 +92,7 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		categories: false,
 		insights: false,
 		radiusDelivery: false,
+		delivery: false,
 	},
 	pro: {
 		crm: true,
@@ -94,6 +101,7 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		categories: true,
 		insights: true,
 		radiusDelivery: true,
+		delivery: true,
 	},
 	scale: {
 		crm: true,
@@ -102,6 +110,7 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		categories: true,
 		insights: true,
 		radiusDelivery: true,
+		delivery: true,
 	},
 };
 

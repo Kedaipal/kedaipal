@@ -8,7 +8,6 @@ import { m } from "../../paraglide/messages";
 import { Button } from "../ui/button";
 import { FadeIn } from "./fade-in";
 import { Sticker } from "./landing-ui";
-import { ResellerBandTable } from "./reseller-band-table";
 
 const TOTAL_FOUNDING_SPOTS = 10;
 
@@ -36,6 +35,7 @@ function getTiers(): TeaserTier[] {
 				m.pricing_feat_storefront(),
 				m.pricing_feat_pipeline(),
 				m.pricing_feat_wa_automation(),
+				m.pricing_feat_handshake(),
 				m.pricing_feat_1_user(),
 			],
 			popular: false,
@@ -49,8 +49,8 @@ function getTiers(): TeaserTier[] {
 			features: [
 				m.pricing_feat_everything_starter(),
 				m.pricing_feat_crm(),
-				m.pricing_feat_inbox(),
-				m.pricing_feat_reminders(),
+				m.pricing_feat_radius(),
+				m.pricing_feat_insights(),
 				m.pricing_feat_2_users(),
 			],
 			popular: true,
@@ -62,9 +62,8 @@ function getTiers(): TeaserTier[] {
 			tagline: m.pricing_tier_scale_tagline(),
 			features: [
 				m.pricing_feat_everything_pro(),
-				m.pricing_feat_reseller(),
-				m.pricing_feat_tiered(),
-				m.pricing_feat_reports(),
+				m.pricing_feat_courier(),
+				m.pricing_feat_broadcast(),
 				m.pricing_feat_5_users(),
 			],
 			popular: false,
@@ -175,13 +174,14 @@ export function PricingTeaser() {
 									{tier.tagline}
 								</p>
 
-								{tier.id === "scale" && <ResellerBandTable className="mt-4" />}
-
 								{tier.foundingPrice !== undefined && (
 									<div className="mt-3 flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2">
 										<Star className="size-3.5 shrink-0 fill-accent text-accent" />
 										<p className="text-xs font-semibold text-accent">
-											{m.pricing_founding_line({ price: tier.foundingPrice })}
+											{m.pricing_founding_line({
+												price: tier.foundingPrice,
+												remaining,
+											})}
 										</p>
 									</div>
 								)}
@@ -232,9 +232,6 @@ export function PricingTeaser() {
 
 				<FadeIn delay={0.15}>
 					<div className="mt-10 flex flex-col items-center gap-3">
-						<p className="text-center text-xs text-muted-foreground">
-							{m.pricing_future({ remaining })}
-						</p>
 						<Link
 							to="/pricing"
 							className="text-sm font-medium text-accent underline-offset-4 hover:underline"
