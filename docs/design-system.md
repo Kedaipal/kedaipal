@@ -50,7 +50,7 @@ Don't hand-roll what exists. From [`src/components/ui/`](../src/components/ui/):
 | Textarea | `Textarea` | |
 | Phone | `PhoneInput` | MY-aware; use everywhere a WA number is entered. |
 | Modal | `Dialog*` | `DialogFooter` is full-bleed + reverses on mobile. Confirm-only flows → `ConfirmDialog`. |
-| Popover / menu | `Popover`, `Command` (cmdk) | |
+| Popover / menu | `Popover`, `DropdownMenu*` (radix), `Command` (cmdk) | `DropdownMenu` = a keyboard-navigable action menu (trigger → items). Use to group related actions behind one control instead of a row of competing buttons (e.g. the counter-checkout header's "New order"). Open a `Dialog` from an item via controlled state in `onSelect` — the menu→dialog focus handoff is clean. |
 | Copy-to-clipboard | `CopyButton` | one-tap copy w/ feedback (order IDs, bank details). |
 | Reorderable list | `SortableList` | **the** sorting standard (@dnd-kit, mobile-safe). **Never** arrow-button reordering. |
 | Loading state | `Skeleton` | prefer skeletons over spinners for content. |
