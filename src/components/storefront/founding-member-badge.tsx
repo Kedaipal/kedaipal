@@ -13,8 +13,40 @@ import { AppImage } from "../ui/app-image";
  * a hover tooltip wouldn't surface on mobile (our hard requirement). The visible
  * label also carries the meaning for screen readers, so the images are marked
  * decorative. See ClickUp 86exrhptc.
+ *
+ * `onCover`: when the header sits on a seller's cover image, the badge rides the
+ * same light-on-scrim treatment as the store name and blurb (white label + the
+ * mint emblem, which reads on the dark scrim regardless of theme) so it can't
+ * wash out on a dark cover — the bug the theme-only variants left behind. See
+ * StorefrontHeader + ClickUp 86eycww5z.
  */
-export function FoundingMemberBadge({ rank }: { rank?: number }) {
+export function FoundingMemberBadge({
+	rank,
+	onCover = false,
+}: {
+	rank?: number;
+	onCover?: boolean;
+}) {
+	const label = `Founding Member${rank ? ` #${rank}` : ""}`;
+
+	if (onCover) {
+		return (
+			<span className="inline-flex w-fit items-center gap-1.5 text-xs font-semibold text-white drop-shadow">
+				{/* Mint emblem reads against the header scrim regardless of theme;
+				    the visible label carries the meaning so the artwork is
+				    decorative (empty alt). */}
+				<AppImage
+					src="/img/badges/founding-badge-mint.png"
+					alt=""
+					aspect="h-7 w-auto"
+					fill={false}
+					priority
+				/>
+				{label}
+			</span>
+		);
+	}
+
 	return (
 		<span className="inline-flex w-fit items-center gap-1.5 text-xs font-semibold text-foreground">
 			{/* Navy on light, mint on dark — always reads against the header. The
@@ -36,7 +68,7 @@ export function FoundingMemberBadge({ rank }: { rank?: number }) {
 				fill={false}
 				priority
 			/>
-			Founding Member{rank ? ` #${rank}` : ""}
+			{label}
 		</span>
 	);
 }

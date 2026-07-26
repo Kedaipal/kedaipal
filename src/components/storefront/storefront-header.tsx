@@ -84,7 +84,10 @@ export function StorefrontHeader({
 						{retailer.storeName}
 					</h1>
 					{retailer.isFoundingMember ? (
-						<FoundingMemberBadge rank={retailer.foundingMemberRank} />
+						<FoundingMemberBadge
+							rank={retailer.foundingMemberRank}
+							onCover={hasCover}
+						/>
 					) : null}
 					{retailer.storeDescription ? (
 						// Seller's own blurb wins over the generic tagline. Plain text
