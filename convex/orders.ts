@@ -140,8 +140,10 @@ type DeliverySnapshot = NonNullable<Doc<"orders">["deliverySnapshot"]>;
  * address re-price so both spell the outcome identically:
  *  - fee → a frozen `deliverySnapshot` (mirrored to `deliveryFee`);
  *  - free → nothing stored (0 is never stored — one spelling of free);
- *  - "arrange" out-of-range / coord-less → `pending: true` (the seller
- *    confirms the charge later via setDeliveryFee; payment ask is held);
+ *  - "arrange" out-of-range / coord-less / unquotable → `pending: true` +
+ *    the frozen `pendingReason` (drives the seller card's explanation — a
+ *    Lalamove store must never read "outside your delivery bands"; the
+ *    seller confirms the charge later via setDeliveryFee, payment ask held);
  *  - "block" → ConvexError, mirroring the storefront's disabled submit.
  */
 function resolveDeliveryForOrder(
@@ -151,7 +153,11 @@ function resolveDeliveryForOrder(
 	// Live Lalamove quote loaded from its server-side deliveryQuotes row
 	// (pricing mode "lalamove" only) — see loadCheckoutDeliveryQuote.
 	liveQuote?: LiveProviderQuote,
-): { snapshot: DeliverySnapshot | undefined; pending: boolean } {
+): {
+	snapshot: DeliverySnapshot | undefined;
+	pending: boolean;
+	pendingReason?: "out_of_range" | "no_coords" | "unquotable";
+} {
 	const config = retailer.deliveryConfig as DeliveryConfig | undefined;
 	if (config?.mode === "radius" && !retailer.businessAddress) {
 		// Shouldn't happen (updateSettings refuses radius without an address) —
@@ -179,7 +185,9 @@ function resolveDeliveryForOrder(
 					: "That address is outside this store's delivery area",
 		);
 	}
-	if (quote.kind === "pending") return { snapshot: undefined, pending: true };
+	if (quote.kind === "pending") {
+		return { snapshot: undefined, pending: true, pendingReason: quote.reason };
+	}
 	if (quote.kind === "fee") {
 		return {
 			snapshot: {
@@ -681,6 +689,11 @@ export const create = mutation({
 		// subtotal (flat free-above threshold), so it runs after the item loop.
 		let deliverySnapshot: DeliverySnapshot | undefined;
 		let deliveryFeePending = false;
+		let deliveryFeePendingReason:
+			| "out_of_range"
+			| "no_coords"
+			| "unquotable"
+			| undefined;
 		if (effectiveDeliveryMethod === "delivery") {
 			// itemSubtotal is hoisted above (shared with the min-order rules).
 			const liveQuote = await loadCheckoutDeliveryQuote(
@@ -697,6 +710,7 @@ export const create = mutation({
 			);
 			deliverySnapshot = resolved.snapshot;
 			deliveryFeePending = resolved.pending;
+			deliveryFeePendingReason = resolved.pendingReason;
 		}
 
 		// The chosen pickup point's frozen fee and the delivery charge ride the
@@ -761,6 +775,7 @@ export const create = mutation({
 			deliverySnapshot,
 			deliveryFee: deliverySnapshot?.fee,
 			deliveryFeePending: deliveryFeePending || undefined,
+			deliveryFeePendingReason,
 			fulfilmentDate: sanitizedFulfilmentDate,
 			customerNote: sanitizedCustomerNote,
 			// Only keep the buyer image when the order actually has a custom line —
@@ -2324,6 +2339,9 @@ export const updateDeliveryAddress = mutation({
 			deliverySnapshot: resolved.snapshot,
 			deliveryFee: resolved.snapshot?.fee,
 			deliveryFeePending: resolved.pending || undefined,
+			// Re-freeze (or clear) the reason with the flag — a re-price that
+			// resolves to a fee must not leave a stale explanation behind.
+			deliveryFeePendingReason: resolved.pendingReason,
 			subtotal,
 			total,
 			updatedAt: now,
@@ -2391,6 +2409,7 @@ export const setDeliveryFee = mutation({
 			deliverySnapshot: snapshot,
 			deliveryFee: snapshot?.fee,
 			deliveryFeePending: undefined,
+			deliveryFeePendingReason: undefined,
 			subtotal,
 			total,
 			updatedAt: now,

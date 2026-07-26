@@ -58,6 +58,16 @@ settings copy now SAYS so ("no delivery area to set…") and the By-distance
 card is subtitled "Radius bands — you deliver" so the two modes' mental
 models don't blur.
 
+The one place the band story DID leak: the order-detail **"Delivery charge
+to confirm"** card had a single hardcoded line ("This address is outside
+your delivery bands…") for every fee-pending order — including a
+lalamove-mode unquotable one. Fixed by freezing
+`orders.deliveryFeePendingReason` (`out_of_range` | `no_coords` |
+`unquotable`) with the flag at create + address re-price (cleared by
+`setDeliveryFee`); the card explains the true cause per reason, generic
+line for pre-field orders. See
+[`fulfilment.md`](./fulfilment.md#fee-pending-arrange-via-whatsapp--the-second-payment-hold).
+
 | Piece | Where |
 | --- | --- |
 | Pure client (HMAC signing, payload builders, RM→sen, status maps, credential resolver) | `convex/lib/lalamove.ts` |

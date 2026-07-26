@@ -770,11 +770,27 @@ export default defineSchema({
 		// `total` via computeOrderTotals. Unset → no fee.
 		deliveryFee: v.optional(v.number()),
 		// True while the delivery charge is still to be confirmed by the seller —
-		// a radius-mode "arrange via WhatsApp" order (out of range, or the buyer
-		// typed an address with no coordinates). While set, the payment ask is
-		// held and payment claim/receive are gated (the total is not final yet) —
-		// mirrors the mockup gate. Cleared by orders.setDeliveryFee.
+		// an "arrange via WhatsApp" order (radius mode: out of range / no
+		// coordinates; lalamove mode: no live quote / no coordinates). While set,
+		// the payment ask is held and payment claim/receive are gated (the total
+		// is not final yet) — mirrors the mockup gate. Cleared by
+		// orders.setDeliveryFee.
 		deliveryFeePending: v.optional(v.boolean()),
+		// WHY the charge is pending, frozen at the resolve that set the flag —
+		// drives the seller card's explanation (a Lalamove store must never be
+		// told "outside your delivery bands"). Absent on orders from before this
+		// field (generic copy). Cleared with the flag by setDeliveryFee.
+		deliveryFeePendingReason: v.optional(
+			v.union(
+				// Radius mode: buyer's pin is beyond the last band.
+				v.literal("out_of_range"),
+				// Either mode: buyer typed an address without picking a map pin.
+				v.literal("no_coords"),
+				// Lalamove mode: no live provider quote (fetch failed, creds down,
+				// or the checkout quote was stale by the time the order landed).
+				v.literal("unquotable"),
+			),
+		),
 		// When the buyer needs the order — their answer to "When do you need this?
 		// (delivery or pickup date)" at checkout. Stored as the epoch-ms of that
 		// calendar day's MIDNIGHT in Malaysia time (UTC+8, no DST) — see

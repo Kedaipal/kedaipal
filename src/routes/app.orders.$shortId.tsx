@@ -1505,12 +1505,28 @@ const MOCKUP_WAIVE_GRACE_MS = 48 * 60 * 60 * 1000;
 const MAX_MOCKUP_IMAGES = 5;
 
 /**
- * Amber action card for a fee-pending delivery order (86extzdr8): the buyer's
- * address fell outside the seller's distance bands (or had no coordinates) on
- * an "arrange via WhatsApp" store. The seller agrees the charge with the buyer
- * in chat, enters it here (0 = deliver free), and the held payment ask goes
- * out on WhatsApp with the final total.
+ * Amber action card for a fee-pending delivery order (86extzdr8): the charge
+ * couldn't be resolved automatically on an "arrange" store — radius mode:
+ * beyond the bands / no map pin; lalamove mode: no live quote / no map pin.
+ * The explanation keys on the order's FROZEN `deliveryFeePendingReason` (a
+ * Lalamove store must never read "outside your delivery bands"). The seller
+ * agrees the charge with the buyer in chat, enters it here (0 = deliver
+ * free), and the held payment ask goes out on WhatsApp with the final total.
  */
+const FEE_PENDING_REASON_COPY: Record<
+	NonNullable<Doc<"orders">["deliveryFeePendingReason"]> | "unknown",
+	string
+> = {
+	out_of_range:
+		"This address is outside your delivery bands, so no charge was applied yet.",
+	no_coords:
+		"The buyer's address has no map pin, so no charge could be worked out yet.",
+	unquotable:
+		"A live Lalamove price couldn't be fetched for this address, so no charge was applied yet.",
+	// Orders from before the reason was stored — stay mode-neutral.
+	unknown: "No delivery charge could be applied to this order automatically.",
+};
+
 function SetDeliveryFeeCard({ order }: { order: Doc<"orders"> }) {
 	const setDeliveryFee = useMutation(api.orders.setDeliveryFee);
 	const [feeInput, setFeeInput] = useState("");
@@ -1556,8 +1572,8 @@ function SetDeliveryFeeCard({ order }: { order: Doc<"orders"> }) {
 				</p>
 			</div>
 			<p className="text-sm text-amber-900/90 dark:text-amber-200/90">
-				This address is outside your delivery bands, so no charge was applied
-				yet. Agree it with the buyer on WhatsApp, then set it here — the payment
+				{FEE_PENDING_REASON_COPY[order.deliveryFeePendingReason ?? "unknown"]}{" "}
+				Agree it with the buyer on WhatsApp, then set it here — the payment
 				request goes out with the final total. Enter 0 to deliver free.
 			</p>
 			<div className="flex items-end gap-2">

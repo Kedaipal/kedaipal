@@ -87,7 +87,12 @@ address somehow vanished resolves **free** (logged), never a blocked storefront.
 
 An out-of-range (or coordinate-less) order on an "arrange" store lands with
 `deliveryFeePending: true` and an **incomplete total**, so payment is held exactly like the
-mockup gate:
+mockup gate. The **why** is frozen alongside the flag as
+`orders.deliveryFeePendingReason` (`out_of_range` | `no_coords` | `unquotable` — the last
+is the lalamove-mode "no live quote" case), written at create + the address re-price and
+cleared by `setDeliveryFee`; the seller card's explanation keys on it, so a Lalamove store
+is told "a live Lalamove price couldn't be fetched", never "outside your delivery bands"
+(26 Jul hotfix; orders from before the field show a mode-neutral generic line).
 
 - **WhatsApp confirm** sends `deliveryFeePendingConfirm` (EN+BM) — branded, no transfer
   reference / payment block / "I've paid" CTA.

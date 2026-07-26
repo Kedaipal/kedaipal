@@ -524,6 +524,17 @@ describe("orders.create — live quote consumption", () => {
 			deliveryAddress: address,
 		});
 		expect(none.deliveryFeePending).toBe(true);
+
+		// Every lalamove-mode pending freezes the "unquotable" reason — the
+		// seller card must explain the missing live quote, never the radius-band
+		// story (26 Jul hotfix; the address has a pin in all three cases).
+		const reasons = await t.run(async (ctx) => {
+			const orders = await ctx.db.query("orders").collect();
+			return orders
+				.filter((o) => o.deliveryFeePending === true)
+				.map((o) => o.deliveryFeePendingReason);
+		});
+		expect(reasons).toEqual(["unquotable", "unquotable", "unquotable"]);
 	});
 
 	test("onUnquotable=block refuses checkout without a live quote", async () => {
