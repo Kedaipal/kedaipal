@@ -20,6 +20,8 @@ import {
 	MAX_NOTICE_DAYS,
 } from "../../../convex/lib/fulfilmentDate";
 import { MIN_ORDER_VALUE_MAX } from "../../../convex/lib/minOrderRules";
+import { useActAsRetailerId } from "../../hooks/useActAs";
+import { useUpdateSettings } from "../../hooks/useUpdateSettings";
 import { formatPhone } from "../../lib/customer";
 import { clientEnv } from "../../lib/env";
 import {
@@ -168,23 +170,27 @@ export function FulfilmentTab({
 	const locations = useQuery(api.pickupLocations.listForRetailer, {
 		retailerId,
 	});
-	const updateSettings = useMutation(api.retailers.updateSettings);
+	const updateSettings = useUpdateSettings();
 	const setActive = useMutation(api.pickupLocations.setActive);
 	const reorder = useMutation(api.pickupLocations.reorder);
 	const markPickupSetupSeen = useMutation(api.retailers.markPickupSetupSeen);
+	const actAsRetailerId = useActAsRetailerId();
 
 	// Fire-and-forget on first mount so step 4 of the dashboard checklist
 	// dismisses. Server-side is idempotent (no-op when already true) so a
 	// double-render or re-mount doesn't double-write. We don't await or surface
-	// errors — failing this is purely cosmetic for the checklist.
+	// errors — failing this is purely cosmetic for the checklist. Skipped in
+	// admin act-as: the mutation resolves by identity, so it would stamp the
+	// ADMIN's own checklist, not the seller's (markLinkShared posture).
 	const seenFired = useRef(false);
 	useEffect(() => {
+		if (actAsRetailerId) return;
 		if (seenFired.current) return;
 		seenFired.current = true;
 		markPickupSetupSeen({}).catch(() => {
 			seenFired.current = false; // allow retry on subsequent mount
 		});
-	}, [markPickupSetupSeen]);
+	}, [markPickupSetupSeen, actAsRetailerId]);
 
 	const [editing, setEditing] = useState<Doc<"pickupLocations"> | "new" | null>(
 		null,
@@ -541,7 +547,7 @@ function DeliveryChargeSection({
 	canUseRadius: boolean;
 	canUseLalamove: boolean;
 }) {
-	const updateSettings = useMutation(api.retailers.updateSettings);
+	const updateSettings = useUpdateSettings();
 	const [mode, setMode] = useState<ChargeMode>(config?.mode ?? "free");
 	// Flat-mode drafts (RM display strings; sen on the wire).
 	const [flatFee, setFlatFee] = useState(
@@ -1280,7 +1286,7 @@ function DeliveryChargeSection({
  * toggles. 0 = same-day allowed (ready-stock sellers).
  */
 function MinNoticeCard({ initial }: { initial: number | undefined }) {
-	const updateSettings = useMutation(api.retailers.updateSettings);
+	const updateSettings = useUpdateSettings();
 	const effective = initial ?? DEFAULT_MIN_NOTICE_DAYS;
 	const [value, setValue] = useState(String(effective));
 	const [saving, setSaving] = useState(false);
@@ -1360,7 +1366,7 @@ function MinNoticeCard({ initial }: { initial: number | undefined }) {
  * quote). Blank or 0 = no minimum.
  */
 function MinOrderValueCard({ initial }: { initial: number | undefined }) {
-	const updateSettings = useMutation(api.retailers.updateSettings);
+	const updateSettings = useUpdateSettings();
 	const effective = initial ?? 0;
 	const [value, setValue] = useState(
 		effective > 0 ? (effective / 100).toFixed(2) : "",
