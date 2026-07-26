@@ -146,6 +146,17 @@ confirmation resolve to the right store.
   operate two different stores. `useActAsRetailerId()` is the raw reader for the few mutations
   that must pass an explicit `retailerId` (`updateSettings`, `renameSlug`, counter-checkout
   create/list).
+- **`useUpdateSettings()`** (`src/hooks/useUpdateSettings.ts`) — the act-as-aware wrapper for
+  `retailers.updateSettings`; it injects `actAsRetailerId` into every call. **Every settings
+  write must use this hook, never a raw `useMutation(api.retailers.updateSettings)`** — the
+  mutation resolves by identity when `retailerId` is omitted, so a raw call inside act-as
+  silently writes to the **admin's own** store (the acted-as store then "reverts" on refresh).
+  This bit in production: the Fulfilment tab's four extracted sections (method toggles,
+  delivery charge/Lalamove keys, min-notice, min-order-value) each held a raw mutation and
+  bypassed `app.settings.tsx`'s wrapper. Same posture for identity-resolved stamps: the tab's
+  `markPickupSetupSeen` mount effect now skips under act-as (mirrors `markLinkShared` on
+  `/app/poster`), since it would stamp the admin's checklist. Pinned by
+  `fulfilment-tab.test.tsx` + `useUpdateSettings.test.tsx`.
 - **`useDashboardRetailer()`** (`src/hooks/useDashboardRetailer.ts`) — the single hook every
   `/app/*` screen calls instead of `useQuery(api.retailers.getMyRetailer)`. When a session is
   active it calls `getRetailerForAdmin`, otherwise `getMyRetailer`.
