@@ -29,15 +29,9 @@ export function StorefrontHeader({
 	return (
 		<header
 			className={
-				// max-lg:w-screen — on mobile the header is a true full-bleed band
-				// (100vw), so it reaches the real viewport edge even when a classic
-				// scrollbar reserves a gutter (otherwise the light track shows as a
-				// strip beside the dark cover). The parent container clips the tiny
-				// resulting overflow (overflow-x-clip). At lg+ it stays the centered
-				// max-w-6xl card. See ClickUp 86eycww5z.
 				hasCover
-					? "relative flex min-h-[11rem] max-lg:w-screen flex-col justify-between overflow-hidden px-5 pb-5 pt-6 lg:min-h-[15rem] lg:rounded-b-3xl lg:px-8 lg:pb-7 lg:pt-8"
-					: "flex flex-col gap-4 max-lg:w-screen bg-gradient-to-b from-accent/10 to-background px-5 pb-6 pt-10 lg:rounded-b-3xl lg:px-8 lg:pb-8"
+					? "relative flex min-h-[11rem] flex-col justify-between overflow-hidden px-5 pb-5 pt-6 lg:min-h-[15rem] lg:rounded-b-3xl lg:px-8 lg:pb-7 lg:pt-8"
+					: "flex flex-col gap-4 bg-gradient-to-b from-accent/10 to-background px-5 pb-6 pt-10 lg:rounded-b-3xl lg:px-8 lg:pb-8"
 			}
 		>
 			{hasCover ? (

@@ -219,7 +219,7 @@ function CategoryRoute() {
 	}
 
 	return (
-		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col overflow-x-clip pb-20">
+		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-20">
 			{/* Same brand header as the store home (cover/logo/name) — the buyer
 			    never loses the sense of whose store they're in. */}
 			<StorefrontHeader retailer={retailer} />

@@ -226,7 +226,7 @@ function StorefrontRoute() {
 	const retailer = result.retailer;
 
 	return (
-		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col overflow-x-clip pb-20">
+		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-20">
 			{/* Shared brand header (cover/logo/name) — identical on the category
 			    pages so buyers always know whose store they're in. */}
 			<StorefrontHeader retailer={retailer} />
