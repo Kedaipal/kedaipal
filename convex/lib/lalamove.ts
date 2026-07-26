@@ -441,6 +441,42 @@ export function isActiveJobStatus(status: DeliveryJobStatus): boolean {
 	return !TERMINAL_JOB_STATUSES.has(status);
 }
 
+/**
+ * Whether the rider (via webhook) currently drives the order's canonical
+ * status — an ACTIVE job whose webhook has demonstrably delivered events
+ * (`lastEventAt` is only ever written by the webhook handler, and the
+ * ASSIGNING_DRIVER event lands seconds after booking when the seller has
+ * registered the URL). While true, picked-up → shipped and completed →
+ * delivered arrive on their own, so the seller's manual advance into those
+ * statuses sits behind a disabled-with-reason gate: a manual "shipped" would
+ * message the buyer early and WITHOUT the live-tracking link.
+ *
+ * Sellers who never registered the webhook (`lastEventAt` forever unset) are
+ * deliberately excluded — their documented degraded path IS advancing by hand.
+ */
+export function riderDrivesOrderStatus(job: {
+	status: DeliveryJobStatus;
+	lastEventAt?: number;
+}): boolean {
+	return isActiveJobStatus(job.status) && job.lastEventAt !== undefined;
+}
+
+/**
+ * Whether an advance into `targetAnchor` is one the rider's webhook manages
+ * (shipped at pickup, delivered at drop-off). Same-anchor moves (a seller's
+ * custom stages within the shipped band) don't change canonical status and
+ * stay free.
+ */
+export function isRiderManagedTransition(
+	targetAnchor: "confirmed" | "packed" | "shipped" | "delivered",
+	orderStatus: string,
+): boolean {
+	return (
+		(targetAnchor === "shipped" || targetAnchor === "delivered") &&
+		targetAnchor !== orderStatus
+	);
+}
+
 /** Provider order id out of a webhook event's `data` — undefined for
  * non-order events (wallet balance) or unrecognized shapes. */
 export function extractWebhookOrderId(data: unknown): string | undefined {

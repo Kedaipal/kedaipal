@@ -8,6 +8,7 @@ import {
 	buildQuotationBody,
 	extractWebhookOrderId,
 	isActiveJobStatus,
+	isRiderManagedTransition,
 	lalamoveAmountToSen,
 	lalamoveSigningString,
 	normalizeLalamoveStatus,
@@ -17,6 +18,7 @@ import {
 	parseQuotationResponse,
 	inferLalamoveEnv,
 	resolveLalamoveCredentials,
+	riderDrivesOrderStatus,
 	signLalamoveRequest,
 	toLalamoveCoordinates,
 	toLalamoveMyPhone,
@@ -251,6 +253,36 @@ describe("status + webhook helpers", () => {
 		// No updatedAt: ms passthrough, seconds get scaled.
 		expect(parseLalamoveEventTime({}, 1784384000000)).toBe(1784384000000);
 		expect(parseLalamoveEventTime({}, 1784384000)).toBe(1784384000000);
+	});
+
+	test("riderDrivesOrderStatus: active job + applied webhook event only", () => {
+		// Webhook demonstrably alive → the rider drives the order status.
+		expect(
+			riderDrivesOrderStatus({ status: "assigning", lastEventAt: 1_753_500_000_000 }),
+		).toBe(true);
+		expect(
+			riderDrivesOrderStatus({ status: "picked_up", lastEventAt: 1_753_500_000_000 }),
+		).toBe(true);
+		// No event ever applied = webhook-less seller — manual control is their
+		// documented degraded path, never gated.
+		expect(riderDrivesOrderStatus({ status: "assigning" })).toBe(false);
+		// Terminal jobs free the order regardless of event history.
+		expect(
+			riderDrivesOrderStatus({ status: "completed", lastEventAt: 1_753_500_000_000 }),
+		).toBe(false);
+		expect(
+			riderDrivesOrderStatus({ status: "canceled", lastEventAt: 1_753_500_000_000 }),
+		).toBe(false);
+	});
+
+	test("isRiderManagedTransition: shipped/delivered anchors that change status", () => {
+		expect(isRiderManagedTransition("shipped", "packed")).toBe(true);
+		expect(isRiderManagedTransition("delivered", "shipped")).toBe(true);
+		// Pre-pickup work stays the seller's — confirm/pack are never gated.
+		expect(isRiderManagedTransition("confirmed", "pending")).toBe(false);
+		expect(isRiderManagedTransition("packed", "confirmed")).toBe(false);
+		// Custom stages WITHIN the shipped band don't change canonical status.
+		expect(isRiderManagedTransition("shipped", "shipped")).toBe(false);
 	});
 });
 

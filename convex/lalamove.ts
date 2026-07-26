@@ -1367,6 +1367,10 @@ export type DeliveryJobView = {
 	shareLink?: string;
 	failureReason?: string;
 	createdAt: number;
+	/** Newest webhook event applied to the job — set means the seller's webhook
+	 * registration demonstrably works, so status flows automatically (drives
+	 * the order-detail manual-advance gate via riderDrivesOrderStatus). */
+	lastEventAt?: number;
 	/** Rider drop-off photo URLs (proof of delivery), set once completed. */
 	podImageUrls?: string[];
 };
@@ -1447,6 +1451,7 @@ export const getDeliveryJob = query({
 						shareLink: latest.shareLink,
 						failureReason: latest.failureReason,
 						createdAt: latest.createdAt,
+						lastEventAt: latest.lastEventAt,
 						podImageUrls,
 					}
 				: null,

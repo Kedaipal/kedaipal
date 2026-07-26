@@ -28,6 +28,10 @@ import { type ChangeEvent, type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
+import {
+	isRiderManagedTransition,
+	riderDrivesOrderStatus,
+} from "../../convex/lib/lalamove";
 import { isMockupGateClosed } from "../../convex/lib/order";
 import {
 	ORDER_PAYMENT_METHODS,
@@ -321,6 +325,13 @@ function OrderDetailRoute() {
 		!["completed", "canceled", "expired", "rejected"].includes(
 			dispatchInfo.job.status,
 		);
+	// The rider's webhook is demonstrably driving this order (active job + at
+	// least one event applied) — manual shipped/delivered advances are gated
+	// behind a confirm so the buyer isn't messaged early / without the tracking
+	// link. Webhook-less sellers (lastEventAt never set) keep manual control —
+	// that's their documented path.
+	const riderAutoUpdates =
+		!!dispatchInfo?.job && riderDrivesOrderStatus(dispatchInfo.job);
 	const crmCustomer = useQuery(
 		api.customers.get,
 		order?.customerId ? { customerId: order.customerId } : "skip",
@@ -334,6 +345,11 @@ function OrderDetailRoute() {
 	const [confirmPaymentOpen, setConfirmPaymentOpen] = useState(false);
 	const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
 	const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+	// Escape hatch for the rider-managed status gate — a webhook that dies
+	// mid-delivery must never leave the order stuck, so "update manually
+	// anyway" stays reachable behind this confirm.
+	const [confirmManualAdvanceOpen, setConfirmManualAdvanceOpen] =
+		useState(false);
 	// Rare actions (cancel, delete, receipt) collapse behind one link at the bottom.
 	const [moreOpen, setMoreOpen] = useState(false);
 	// Optional method tag captured at confirm time (the seller has just verified
@@ -588,6 +604,18 @@ function OrderDetailRoute() {
 							const blocked =
 								anchorOrdinal(nextStage.anchor) >= anchorOrdinal("packed") &&
 								mockupGated;
+							// A live rider booking with a working webhook drives shipped
+							// (pickup) and delivered (drop-off) on its own — the manual
+							// advance is disabled-with-reason, with a confirm-gated escape
+							// below so a dead webhook never strands the order.
+							const riderManaged =
+								!blocked &&
+								riderAutoUpdates &&
+								isRiderManagedTransition(nextStage.anchor, order.status);
+							const riderMoment =
+								nextStage.anchor === "delivered"
+									? "the rider drops off"
+									: "the rider picks up";
 							// First move out of pending into a confirmed-anchored stage
 							// keeps the familiar "Confirm Order" verb; everything else
 							// reads "Mark as {stage}".
@@ -596,23 +624,43 @@ function OrderDetailRoute() {
 									? "Confirm Order"
 									: `Mark as ${stageLabel(nextStage, "en")}`;
 							return (
-								<button
-									type="button"
-									onClick={() => handleAdvance(nextStage.id)}
-									disabled={pending !== null || blocked}
-									className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-foreground text-[15px] font-bold text-background transition-opacity hover:opacity-95 disabled:opacity-55"
-								>
-									{pending === nextStage.id ? (
-										"Updating…"
-									) : blocked ? (
-										`${advanceLabel} — awaiting mockup`
-									) : (
-										<>
-											{advanceLabel}
-											<ArrowRight className="size-4.5" />
-										</>
-									)}
-								</button>
+								<div className="flex flex-col gap-2">
+									<button
+										type="button"
+										onClick={() => handleAdvance(nextStage.id)}
+										disabled={pending !== null || blocked || riderManaged}
+										className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-foreground text-[15px] font-bold text-background transition-opacity hover:opacity-95 disabled:opacity-55"
+									>
+										{pending === nextStage.id ? (
+											"Updating…"
+										) : blocked ? (
+											`${advanceLabel} — awaiting mockup`
+										) : riderManaged ? (
+											`${advanceLabel} — automatic`
+										) : (
+											<>
+												{advanceLabel}
+												<ArrowRight className="size-4.5" />
+											</>
+										)}
+									</button>
+									{riderManaged ? (
+										<p className="text-xs leading-relaxed text-muted-foreground">
+											A Lalamove rider is on this order — it moves to{" "}
+											<b>{stageLabel(nextStage, "en")}</b> on its own when{" "}
+											{riderMoment}.{" "}
+											<button
+												type="button"
+												onClick={() => setConfirmManualAdvanceOpen(true)}
+												disabled={pending !== null}
+												className="font-medium underline underline-offset-2"
+											>
+												Update manually
+											</button>{" "}
+											if the automatic update didn&apos;t arrive.
+										</p>
+									) : null}
+								</div>
 							);
 						})()
 					) : order.status === "delivered" ? (
@@ -1328,6 +1376,22 @@ function OrderDetailRoute() {
 					</>
 				) : null}
 			</section>
+
+			{nextStage ? (
+				<ConfirmDialog
+					open={confirmManualAdvanceOpen}
+					onOpenChange={setConfirmManualAdvanceOpen}
+					title={`Mark as ${stageLabel(nextStage, "en")} manually?`}
+					description={`A Lalamove rider is handling this order, and its status updates automatically from the rider's progress. Marking it manually sends the buyer's WhatsApp update now${
+						nextStage.anchor === "shipped"
+							? " — before pickup, and without the live-tracking link"
+							: ""
+					}. Only do this if the automatic update didn't come through.`}
+					confirmLabel={`Mark as ${stageLabel(nextStage, "en")}`}
+					cancelLabel="Keep automatic"
+					onConfirm={() => handleAdvance(nextStage.id)}
+				/>
+			) : null}
 
 			<ConfirmDialog
 				open={confirmCancelOpen}

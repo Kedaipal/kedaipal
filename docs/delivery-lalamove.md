@@ -47,6 +47,17 @@ can charge a flat fee yet still book riders (absorbing drift); live-quote
 pricing additionally requires booking to be enabled (its vehicle +
 credentials price the quote).
 
+**No distance limit under Lalamove — by construction.** The pricing modes
+are mutually exclusive, and the `lalamove` arm of `resolveDeliveryQuote`
+never reads the radius bands, the business-address distance, or any range
+cap — a buyer at any address Lalamove serves gets a live price; an address
+Lalamove itself can't quote follows `onUnquotable` (arrange → fee-pending,
+never a lost sale). Raised by Zaki 26 Jul ("Lalamove can deliver anywhere")
+— audited: nothing to disable, the constraint genuinely doesn't exist. The
+settings copy now SAYS so ("no delivery area to set…") and the By-distance
+card is subtitled "Radius bands — you deliver" so the two modes' mental
+models don't blur.
+
 | Piece | Where |
 | --- | --- |
 | Pure client (HMAC signing, payload builders, RM→sen, status maps, credential resolver) | `convex/lib/lalamove.ts` |
@@ -297,6 +308,26 @@ guide walks it (Step E5). Graceful degradation if a seller skips it:
 bookings still work, but shipped/delivered stop being automatic — the
 order just stays where it is until the seller advances it by hand. Dev
 deployment URL: `https://qualified-chihuahua-441.convex.site/webhook/lalamove`.
+
+**Manual-advance gate while the rider drives (26 Jul hotfix):** when an
+ACTIVE job's webhook is demonstrably alive (`deliveryJobs.lastEventAt` is
+only ever written by the webhook handler, and ASSIGNING_DRIVER lands
+seconds after booking), the order-detail stepper's advance into a
+**shipped- or delivered-anchored** stage renders **disabled-with-reason**
+("…moves to Shipped on its own when the rider picks up") — a manual tap
+would message the buyer early and, for shipped, without the live-tracking
+link. Confirm/packed advances are never gated (pre-pickup work is the
+seller's), same-anchor custom-stage moves stay free, and a small
+**"Update manually" confirm-gated escape** stays reachable so a webhook
+that dies mid-delivery never strands the order. Webhook-less sellers
+(`lastEventAt` never set) see zero change — manual advancing IS their
+documented path above. Pure predicates `riderDrivesOrderStatus` +
+`isRiderManagedTransition` in `convex/lib/lalamove.ts` (unit-tested);
+client-side UX guard only — the server mutation is unchanged (the seller
+owns the order, and the webhook's same-status replays are already no-ops).
+Known gap, deliberate: the inbox **bulk** status bar can still mass-mark
+shipped without job awareness (needs a per-order job lookup in
+`searchOrders` — follow-up, not hotfix material).
 
 ### Hygiene + lifecycle guards (pre-ship audit, 22 Jul)
 
