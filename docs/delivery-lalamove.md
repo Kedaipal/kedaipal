@@ -40,32 +40,41 @@ was stale: `retailers.businessAddress` (shipped with radius delivery,
 Lalamove pickup point. One address, two consumers.
 
 Pricing rides the existing delivery-charge seam: `deliveryConfig` gained a
-third arm `{ mode: "lalamove", onUnquotable: "arrange" | "block" }` next to
-`flat`/`radius`, all resolved by the same pure `resolveDeliveryQuote`
-(`convex/lib/delivery.ts`). **Pricing and booking are orthogonal**: a seller
-can charge a flat fee yet still book riders (absorbing drift); live-quote
+third arm `{ mode: "lalamove", onUnquotable }` next to `flat`/`radius`, all
+resolved by the same pure `resolveDeliveryQuote` (`convex/lib/delivery.ts`).
+**`onUnquotable` is VESTIGIAL since 27 Jul** (Zaki): lalamove mode always
+behaves as block — see "No fee-pending under Lalamove" below; the field stays
+so stored rows validate and `sanitizeDeliveryConfig` normalizes it to
+`"block"` on save. **Pricing and booking are orthogonal**: a seller can
+charge a flat fee yet still book riders (absorbing drift); live-quote
 pricing additionally requires booking to be enabled (its vehicle +
 credentials price the quote).
 
 **No distance limit under Lalamove — by construction.** The pricing modes
 are mutually exclusive, and the `lalamove` arm of `resolveDeliveryQuote`
 never reads the radius bands, the business-address distance, or any range
-cap — a buyer at any address Lalamove serves gets a live price; an address
-Lalamove itself can't quote follows `onUnquotable` (arrange → fee-pending,
-never a lost sale). Raised by Zaki 26 Jul ("Lalamove can deliver anywhere")
-— audited: nothing to disable, the constraint genuinely doesn't exist. The
-settings copy now SAYS so ("no delivery area to set…") and the By-distance
-card is subtitled "Radius bands — you deliver" so the two modes' mental
-models don't blur.
+cap — a buyer at any address Lalamove serves gets a live price. Raised by
+Zaki 26 Jul ("Lalamove can deliver anywhere") — audited: nothing to disable,
+the constraint genuinely doesn't exist. The settings copy SAYS so ("no
+delivery area to set…") and the By-distance card is subtitled "Radius bands
+— you deliver" so the two modes' mental models don't blur.
 
-The one place the band story DID leak: the order-detail **"Delivery charge
-to confirm"** card had a single hardcoded line ("This address is outside
-your delivery bands…") for every fee-pending order — including a
-lalamove-mode unquotable one. Fixed by freezing
-`orders.deliveryFeePendingReason` (`out_of_range` | `no_coords` |
-`unquotable`) with the flag at create + address re-price (cleared by
-`setDeliveryFee`); the card explains the true cause per reason, generic
-line for pre-field orders. See
+**No fee-pending under Lalamove — strict since 27 Jul (Zaki).** A seller who
+picked Lalamove must never be handed fee homework, and the buyer must always
+see the real rider price before sending. So under lalamove pricing there is
+NO "arrange" fallback anywhere: checkout requires a pinned, quotable address
+(no pin / no quote → submit disabled with reason; `orders.create` enforces
+the same), and the tracking page's **address edit** fetches a fresh live
+quote for the new pin — the buyer sees the new fee before saving, the dialog
+passes the quote row id to `updateDeliveryAddress`, and an unpriced edit is
+refused. Shared client hook: `src/lib/use-live-delivery-quote.ts` (checkout
+sheet + edit dialog, one debounce/seq/trust model). Accepted trade-off: a
+Lalamove/API outage or broken key refuses delivery checkout on that store
+until it recovers (copy says "try again shortly"; self-collect unaffected).
+The seller card's `orders.deliveryFeePendingReason` (`out_of_range` |
+`no_coords` | `unquotable`, 26 Jul) still drives reason-true copy — under
+lalamove the `unquotable` reason is now **legacy-only** (rows from before
+the strict rule). See
 [`fulfilment.md`](./fulfilment.md#fee-pending-arrange-via-whatsapp--the-second-payment-hold).
 
 | Piece | Where |
@@ -122,8 +131,9 @@ autofills saved credentials into it.
 
 ### Checkout quote (trust model)
 
-The reactive `delivery.quote` query answers `{ kind: "live", onUnquotable }`
-for lalamove-mode stores; the checkout then calls the
+The reactive `delivery.quote` query answers `{ kind: "live" }` for
+lalamove-mode stores; the client (checkout sheet + address-edit dialog, via
+the shared `useLiveDeliveryQuote` hook) then calls the
 `lalamove.quoteForCheckout` **action** once per picked address AND per
 chosen date (debounced,
 rate-limited per retailer — the quote-by-coordinates oracle gets the same
@@ -131,11 +141,10 @@ trilateration caution as the radius quote). The action records the fee in a
 `deliveryQuotes` row and returns `{ quoteId, fee }`; **`orders.create` only
 ever accepts the row id** — coordinate-matched (±~11 m), ≤30 min old,
 consumed on use — so the browser can display the fee but never dictate it.
-Missing/stale/mismatched quote → the store's `onUnquotable` policy:
-`arrange` → the existing `deliveryFeePending` hold (payment ask held, seller
-confirms the charge — same machinery as radius out-of-range), `block` →
-checkout refused with clear copy. Kill switch: no credentials/config → the
-quote query never says "live" and checkout behaves exactly as before.
+Missing/stale/mismatched quote → **checkout refused** with clear copy
+(strict, 27 Jul — no quote, no order; see "No fee-pending under Lalamove"
+above). Kill switch: no credentials/config → the quote query never says
+"live" and checkout behaves exactly as before.
 
 **Pre-orders are priced for THEIR day (23 Jul):** when the buyer picks a
 future fulfilment date, the quote is requested with Lalamove `scheduleAt` =
@@ -147,9 +156,11 @@ back to immediate on anything odd. Dispatch on the day still re-quotes
 immediate — variance is the vendor's, as everywhere.
 
 Note: a buyer address edit (`updateDeliveryAddress`) re-prices through the
-same resolver *without* a live quote, so under lalamove pricing it lands
-fee-pending for the seller to confirm — deliberate (an address change means
-the old price is wrong, and mutations can't fetch).
+same resolver. Under lalamove pricing the edit dialog fetches a **fresh
+live quote for the new pin** (mutations can't fetch, so the dialog does —
+same hook/trust model as checkout) and passes `deliveryQuoteId`; the buyer
+sees the new fee before saving, and an unpriced edit is refused (27 Jul —
+supersedes the earlier lands-fee-pending behavior).
 
 ### Dispatch (Book delivery)
 

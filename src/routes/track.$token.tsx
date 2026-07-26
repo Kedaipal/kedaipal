@@ -859,6 +859,8 @@ function TrackingRoute() {
 				token={token}
 				currentAddress={order.deliveryAddress}
 				retailerId={order.retailerId}
+				subtotal={order.subtotal}
+				fulfilmentDate={order.fulfilmentDate}
 			/>
 
 			<IvePaidDialog

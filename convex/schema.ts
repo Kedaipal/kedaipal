@@ -249,15 +249,16 @@ export default defineSchema({
 				// REAL Lalamove price for their address, fetched via the public
 				// lalamove.quoteForCheckout action and frozen through a
 				// deliveryQuotes row (client never supplies the fee). Requires
-				// deliveryBooking credentials to resolve; when they don't, checkout
-				// falls back per `outOfRange`-style policy below ("arrange" →
-				// deliveryFeePending, the existing seller-confirms-fee state).
+				// deliveryBooking credentials to resolve; when a live quote can't
+				// be fetched, checkout/address-edit is REFUSED (strict since
+				// 27 Jul — the buyer always sees the real rider price, the seller
+				// never calculates a charge).
 				v.object({
 					mode: v.literal("lalamove"),
-					// When a live quote can't be fetched (no coords picked, provider
-					// down, creds unresolvable): "arrange" accepts the order with the
-					// fee pending (default posture — never lose the sale), "block"
-					// refuses checkout until the buyer pins a quotable address.
+					// VESTIGIAL (27 Jul): behavior is always "block" — the resolver
+					// ignores this and sanitizeDeliveryConfig normalizes stored rows
+					// to "block" on save. Kept so pre-existing "arrange" rows
+					// validate.
 					onUnquotable: v.union(v.literal("arrange"), v.literal("block")),
 				}),
 			),
@@ -770,24 +771,26 @@ export default defineSchema({
 		// `total` via computeOrderTotals. Unset → no fee.
 		deliveryFee: v.optional(v.number()),
 		// True while the delivery charge is still to be confirmed by the seller —
-		// an "arrange via WhatsApp" order (radius mode: out of range / no
-		// coordinates; lalamove mode: no live quote / no coordinates). While set,
-		// the payment ask is held and payment claim/receive are gated (the total
-		// is not final yet) — mirrors the mockup gate. Cleared by
-		// orders.setDeliveryFee.
+		// a RADIUS-mode "arrange via WhatsApp" order (out of range / no
+		// coordinates). Lalamove-priced stores never set this (strict since
+		// 27 Jul: no live quote → checkout/address-edit refused, so the seller
+		// never calculates a charge). While set, the payment ask is held and
+		// payment claim/receive are gated (the total is not final yet) — mirrors
+		// the mockup gate. Cleared by orders.setDeliveryFee.
 		deliveryFeePending: v.optional(v.boolean()),
 		// WHY the charge is pending, frozen at the resolve that set the flag —
-		// drives the seller card's explanation (a Lalamove store must never be
-		// told "outside your delivery bands"). Absent on orders from before this
-		// field (generic copy). Cleared with the flag by setDeliveryFee.
+		// drives the seller card's explanation (never claims "outside your
+		// delivery bands" when bands weren't the cause). Absent on orders from
+		// before this field (generic copy). Cleared with the flag by
+		// setDeliveryFee.
 		deliveryFeePendingReason: v.optional(
 			v.union(
 				// Radius mode: buyer's pin is beyond the last band.
 				v.literal("out_of_range"),
-				// Either mode: buyer typed an address without picking a map pin.
+				// Buyer typed an address without picking a map pin (radius mode).
 				v.literal("no_coords"),
-				// Lalamove mode: no live provider quote (fetch failed, creds down,
-				// or the checkout quote was stale by the time the order landed).
+				// LEGACY (pre-27 Jul lalamove rows): no live provider quote. New
+				// lalamove orders refuse instead of landing pending.
 				v.literal("unquotable"),
 			),
 		),

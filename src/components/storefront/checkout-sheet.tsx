@@ -1,6 +1,6 @@
 import { useStore } from "@tanstack/react-form";
 import { useNavigate } from "@tanstack/react-router";
-import { useAction, useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import {
 	Clock,
 	ExternalLink,
@@ -16,7 +16,6 @@ import {
 	type ReactNode,
 	useEffect,
 	useMemo,
-	useRef,
 	useState,
 } from "react";
 import { api } from "../../../convex/_generated/api";
@@ -41,6 +40,7 @@ import {
 	checkoutFormSchema,
 	emptyAddress,
 } from "../../lib/schemas";
+import { useLiveDeliveryQuote } from "../../lib/use-live-delivery-quote";
 import { submitThenFocusError } from "../forms/focus-error";
 import { useAppForm } from "../forms/form";
 import { AppImage } from "../ui/app-image";
@@ -385,7 +385,8 @@ export function CheckoutSheet({
 					customerImageStorageId,
 					// Live Lalamove quote (86eyb5hrf): pass the server-side quote row
 					// so the fee the buyer saw freezes onto the order. Missing/stale →
-					// the server falls back to the store's onUnquotable policy.
+					// the server refuses the order (strict: no quote, no order — the
+					// submit gate above should never let that happen).
 					deliveryQuoteId:
 						value.deliveryMethod === "delivery" && liveQuote.state === "quoted"
 							? liveQuote.quoteId
@@ -460,89 +461,42 @@ export function CheckoutSheet({
 
 	// --- Live Lalamove quote (86eyb5hrf) ------------------------------------
 	// When the store prices delivery by live provider quote, the reactive query
-	// answers {kind:"live"} and the real fee comes from the quoteForCheckout
-	// ACTION, fired once per picked address (coords only change on a Google
-	// suggestion pick, debounced as a keystroke guard). The action records the
-	// fee server-side and returns a row id — orders.create loads the fee from
-	// that row, so this state is display + gating only, same trust model as the
-	// static quote.
-	const quoteLalamove = useAction(api.lalamove.quoteForCheckout);
-	const [liveQuote, setLiveQuote] = useState<
-		| { state: "idle" }
-		| { state: "loading" }
-		| { state: "quoted"; quoteId: Id<"deliveryQuotes">; fee: number }
-		| { state: "unavailable" }
-	>({ state: "idle" });
-	const liveSeq = useRef(0);
+	// answers {kind:"live"} and the real fee comes from the shared
+	// useLiveDeliveryQuote hook (quoteForCheckout action, once per picked pin).
 	const isLiveMode = rawQuote?.kind === "live";
-	// biome-ignore lint/correctness/useExhaustiveDependencies: fires per picked address (coords change only on a suggestion pick); form/action/retailerId identities are stable and the address is read fresh inside the timeout.
-	useEffect(() => {
-		if (!isLiveMode || !open || !hasCoords) {
-			liveSeq.current++;
-			setLiveQuote({ state: "idle" });
-			return;
-		}
-		const seq = ++liveSeq.current;
-		setLiveQuote({ state: "loading" });
-		const timer = setTimeout(() => {
+	const liveQuote = useLiveDeliveryQuote({
+		enabled: isLiveMode && open,
+		retailerId,
+		latitude: hasCoords ? latNum : undefined,
+		longitude: hasCoords ? lngNum : undefined,
+		getAddressLabel: () => {
 			const a = form.store.state.values.address;
-			const addressLabel = [
-				a.line1,
-				a.line2,
-				`${a.postcode} ${a.city}`.trim(),
-				a.state,
-			]
+			return [a.line1, a.line2, `${a.postcode} ${a.city}`.trim(), a.state]
 				.filter((part) => part && part.trim().length > 0)
 				.join(", ");
-			quoteLalamove({
-				retailerId,
-				latitude: latNum,
-				longitude: lngNum,
-				address: addressLabel,
-				fulfilmentDate: watchedDate
-					? mytMidnightFromYmd(watchedDate)
-					: undefined,
-			})
-				.then((result) => {
-					if (liveSeq.current !== seq) return; // superseded by a newer pick
-					setLiveQuote(
-						result.status === "quoted"
-							? { state: "quoted", quoteId: result.quoteId, fee: result.fee }
-							: { state: "unavailable" },
-					);
-				})
-				.catch(() => {
-					if (liveSeq.current !== seq) return;
-					setLiveQuote({ state: "unavailable" });
-				});
-		}, 400);
-		return () => clearTimeout(timer);
-	}, [isLiveMode, open, hasCoords, latNum, lngNum, watchedDate]);
+		},
+		fulfilmentDate: watchedDate ? mytMidnightFromYmd(watchedDate) : undefined,
+	});
 
 	// Collapse the two sources into ONE shape for the breakdown + submit gate.
 	// Live mode maps onto the static kinds (plus "calculating") so the render
-	// below stays a single code path:
-	//  - no pin yet / provider unreachable → the store's onUnquotable policy
-	//    ("arrange" → seller-confirms-later, "block" → hard stop), exactly what
-	//    orders.create will decide server-side.
+	// below stays a single code path. No pin / no quote is a HARD stop (strict
+	// since 27 Jul): a Lalamove buyer always sees the real rider price before
+	// sending — exactly what orders.create enforces server-side.
 	const quoteForDelivery:
 		| PublicDeliveryQuote
 		| { kind: "calculating" }
 		| undefined = (() => {
 		if (!rawQuote) return undefined;
 		if (rawQuote.kind !== "live") return rawQuote;
-		const fallbackKind =
-			rawQuote.onUnquotable === "block"
-				? ("blocked" as const)
-				: ("pending" as const);
-		if (!hasCoords) return { kind: fallbackKind, reason: "no_coords" };
+		if (!hasCoords) return { kind: "blocked", reason: "no_coords" };
 		switch (liveQuote.state) {
 			case "quoted":
 				return liveQuote.fee === 0
 					? { kind: "free" }
 					: { kind: "fee", fee: liveQuote.fee };
 			case "unavailable":
-				return { kind: fallbackKind, reason: "unquotable" };
+				return { kind: "blocked", reason: "unquotable" };
 			default:
 				return { kind: "calculating" };
 		}

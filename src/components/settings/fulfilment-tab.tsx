@@ -625,9 +625,10 @@ function DeliveryChargeSection({
 				freeAbove: freeAboveSen,
 			};
 		} else if (mode === "lalamove") {
-			// Live provider quote (86eyb5hrf) — keep the stored onUnquotable
-			// policy (default "arrange": never lose the sale). Mirrors the server
-			// gates so the failure is a helpful message, not a thrown save.
+			// Live provider quote (86eyb5hrf) — `onUnquotable` is vestigial (strict
+			// since 27 Jul: no quote, no order; the sanitizer normalizes stored
+			// rows to "block"). Mirrors the server gates so the failure is a
+			// helpful message, not a thrown save.
 			if (!effectiveAddress) {
 				setError(
 					"Pick your business address from the suggestions — it's the pickup point riders are sent to.",
@@ -645,7 +646,7 @@ function DeliveryChargeSection({
 			nextConfig =
 				config?.mode === "lalamove"
 					? config
-					: { mode: "lalamove", onUnquotable: "arrange" };
+					: { mode: "lalamove", onUnquotable: "block" };
 		} else {
 			if (!effectiveAddress) {
 				setError(
@@ -791,10 +792,12 @@ function DeliveryChargeSection({
 						and you book the rider in one tap from the order — with automatic
 						shipped + live-tracking WhatsApp messages. There&apos;s{" "}
 						<b>no delivery area to set</b> — riders go anywhere Lalamove
-						serves, priced live per address. Runs entirely on{" "}
+						serves, priced live per address, and{" "}
+						<b>buyers always see the price before ordering</b> (an address
+						Lalamove can&apos;t price can&apos;t check out, so you never work
+						out a delivery charge yourself). Runs entirely on{" "}
 						<b>your own Lalamove account</b>; Kedaipal never books or pays on
-						your behalf. If a live price can&apos;t be fetched, the order is
-						still accepted and you confirm the charge afterwards.
+						your behalf.
 					</p>
 					{lalamoveLocked ? (
 						<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">

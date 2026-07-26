@@ -2281,8 +2281,15 @@ export const updateDeliveryAddress = mutation({
 	args: {
 		token: v.string(),
 		deliveryAddress: addressValidator,
+		// Lalamove-priced stores (strict since 27 Jul): the edit dialog fetches a
+		// fresh live quote for the new pin and passes its server-side row id, so
+		// the re-priced fee is the real rider price — same trust model as create.
+		deliveryQuoteId: v.optional(v.id("deliveryQuotes")),
 	},
-	handler: async (ctx, { token, deliveryAddress }): Promise<void> => {
+	handler: async (
+		ctx,
+		{ token, deliveryAddress, deliveryQuoteId },
+	): Promise<void> => {
 		await rateLimiter.limit(ctx, "addressUpdate", {
 			key: token,
 			throws: true,
@@ -2311,15 +2318,25 @@ export const updateDeliveryAddress = mutation({
 		// fee is a function of where the order goes, so the fee follows the
 		// address exactly like the pickup fee follows the point (see
 		// updatePickupLocation). Blocked destinations throw (the old address —
-		// and its total — stay untouched); an "arrange" out-of-range edit flips
-		// the order back to fee-pending. Pending-only gate above means no payment
-		// has been asked for yet, so the total is still safe to move.
+		// and its total — stay untouched); a radius "arrange" out-of-range edit
+		// flips the order back to fee-pending. A lalamove-priced edit needs the
+		// live quote loaded above or it throws — an address change can never
+		// silently drop the buyer onto a seller-calculates path. Pending-only
+		// gate above means no payment has been asked for yet, so the total is
+		// still safe to move.
 		const retailer = await ctx.db.get(order.retailerId);
 		if (!retailer) throw new ConvexError("Store not found");
+		const liveQuote = await loadCheckoutDeliveryQuote(
+			ctx,
+			order.retailerId,
+			deliveryQuoteId,
+			sanitized,
+		);
 		const resolved = resolveDeliveryForOrder(
 			retailer,
 			order.subtotal,
 			sanitized,
+			liveQuote,
 		);
 		const { subtotal, total } = computeOrderTotals(order.items, {
 			quotedAmount: order.mockupQuotedAmount,
