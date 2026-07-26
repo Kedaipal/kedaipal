@@ -1,6 +1,10 @@
 // Client-side "save this blob to a file" helpers, shared by the receipt /
-// invoice / CSV download buttons. DOM-only (no unit tests) — the data shaping
-// they hand off is tested upstream (convex/lib/pdf, convex/lib/orderCsv).
+// invoice / CSV download buttons and the tracking page's payment-QR save. The
+// DOM/share plumbing has no unit tests — the data shaping it hands off is
+// tested upstream (convex/lib/pdf, convex/lib/orderCsv); the pure filename
+// helpers below are covered in download.test.ts.
+
+import { slugify } from "./slug";
 
 /** UTF-8 byte-order mark — prepended to CSV so Excel reads non-ASCII correctly. */
 const UTF8_BOM = "﻿";
@@ -32,19 +36,27 @@ export function downloadCsv(filename: string, csv: string): void {
 	);
 }
 
-/**
- * Whether this device can share files via the OS share sheet (Web Share API
- * level 2). True on most phones/tablets (incl. the counter iPad — the sheet
- * lists WhatsApp, AirDrop, etc.), typically false on desktop browsers, where
- * the caller should fall back to a plain download.
- */
-export function canSharePdf(): boolean {
+/** Whether this device can share `file` via the OS share sheet (Web Share API
+ * level 2). True on most phones/tablets, typically false on desktop browsers,
+ * where the caller should fall back to a plain download. */
+function canShareFile(file: File): boolean {
 	if (typeof navigator === "undefined" || !navigator.canShare) return false;
 	try {
-		const probe = new File([new Uint8Array()], "probe.pdf", {
-			type: "application/pdf",
-		});
-		return navigator.canShare({ files: [probe] });
+		return navigator.canShare({ files: [file] });
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Whether this device can share PDF files via the OS share sheet (incl. the
+ * counter iPad — the sheet lists WhatsApp, AirDrop, etc.).
+ */
+export function canSharePdf(): boolean {
+	try {
+		return canShareFile(
+			new File([new Uint8Array()], "probe.pdf", { type: "application/pdf" }),
+		);
 	} catch {
 		return false;
 	}
@@ -75,4 +87,72 @@ export async function sharePdfBytes(
 			return "cancelled";
 		return "unsupported";
 	}
+}
+
+/** Filename extension for an image MIME type. Defaults to png — payment-QR
+ * uploads are png/jpeg in practice. */
+export function imageExtension(mimeType: string): string {
+	switch (mimeType) {
+		case "image/jpeg":
+			return "jpg";
+		case "image/webp":
+			return "webp";
+		case "image/gif":
+			return "gif";
+		case "image/svg+xml":
+			return "svg";
+		default:
+			return "png";
+	}
+}
+
+/** Filename base for a saved payment-QR image: the slugified method label with
+ * a `-qr` suffix when the label doesn't already say QR ("DuitNow QR" →
+ * "duitnow-qr", "TNG" → "tng-qr", "" → "payment-qr"). */
+export function qrFilenameBase(label: string): string {
+	const slug = slugify(label) || "payment";
+	return /(^|-)qr(-|$)/.test(slug) ? slug : `${slug}-qr`;
+}
+
+export type SaveImageOutcome = "shared" | "cancelled" | "downloaded" | "failed";
+
+/**
+ * Save a remote image to the buyer's device. Share-sheet first on devices that
+ * can share files — on phones "Save Image" lands it in the photo gallery,
+ * which is where e-wallet / banking apps' scan-from-gallery pickers look — and
+ * a plain download otherwise (desktop). Returns what happened so the caller
+ * can toast appropriately:
+ *  - "shared"     the OS sheet took over — say nothing;
+ *  - "cancelled"  the user dismissed the sheet — intentional, stay quiet;
+ *  - "downloaded" fell back to a file download — worth a confirming toast;
+ *  - "failed"     the image couldn't be fetched — surface an error.
+ */
+export async function saveImageFromUrl(
+	url: string,
+	baseFilename: string,
+): Promise<SaveImageOutcome> {
+	let blob: Blob;
+	try {
+		const res = await fetch(url);
+		if (!res.ok) return "failed";
+		blob = await res.blob();
+	} catch {
+		return "failed";
+	}
+	// Some responses come back untyped — File/share need a concrete image type.
+	const type = blob.type.startsWith("image/") ? blob.type : "image/png";
+	const filename = `${baseFilename}.${imageExtension(type)}`;
+	const file = new File([blob], filename, { type });
+	if (canShareFile(file)) {
+		try {
+			await navigator.share({ files: [file] });
+			return "shared";
+		} catch (err) {
+			if (err instanceof DOMException && err.name === "AbortError")
+				return "cancelled";
+			// Anything else (e.g. lost user activation) → fall through to download.
+		}
+	}
+	downloadBlob(filename, blob);
+	return "downloaded";
 }
