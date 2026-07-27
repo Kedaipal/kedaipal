@@ -1,5 +1,16 @@
+// Default (edge-runtime) environment — no `window`, which also pins the
+// SSR-safety branch below. The device-classification matrix that needs a DOM
+// lives in download.dom.test.ts.
 import { describe, expect, test } from "vitest";
-import { imageExtension, qrFilenameBase } from "./download";
+import { imageExtension, prefersShareSheet, qrFilenameBase } from "./download";
+
+describe("prefersShareSheet — non-browser safety", () => {
+	test("a runtime with no touch/pointer signals never claims share-first", () => {
+		// Server/edge render: `navigator` may exist but exposes no touch
+		// digitiser, so the answer must be a plain "no" rather than a throw.
+		expect(prefersShareSheet()).toBe(false);
+	});
+});
 
 describe("imageExtension", () => {
 	test("maps common image MIME types", () => {

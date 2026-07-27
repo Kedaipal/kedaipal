@@ -218,6 +218,43 @@ export type ParsedQuotation = {
 	expiresAt?: string;
 };
 
+/**
+ * Pull Lalamove's error code out of a failed response body. Their errors come
+ * back as `{"errors":[{"id":"ERR_…","message":"…"}]}` — the `id` is the stable
+ * machine-readable part (the message wording is not). Returns undefined for
+ * unparseable/absent bodies (network blips, HTML error pages).
+ */
+export function parseLalamoveErrorCode(body: string): string | undefined {
+	try {
+		const parsed = JSON.parse(body) as {
+			errors?: Array<{ id?: unknown }>;
+		};
+		const id = parsed?.errors?.[0]?.id;
+		return typeof id === "string" && id ? id : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Whether a quotation failure means "this destination simply isn't covered"
+ * rather than "something went wrong, try again".
+ *
+ * Lalamove is an INTRA-CITY courier: coverage is a serviceable city/metro
+ * zone, not a radius from the seller. A drop-off in another city zone is
+ * refused with `ERR_OUT_OF_SERVICE_AREA` (confirmed live 27 Jul 2026 against
+ * the MY sandbox: Beranang → Seremban ~42 km quoted fine, → Melaka ~105 km and
+ * → Alor Setar ~400 km both returned this code). `ERR_INVALID_MARKET` is the
+ * same class of "we don't serve that" for a different-country pin.
+ *
+ * This distinction is load-bearing for buyer copy: a coverage refusal must NOT
+ * read "try again shortly" — retrying the same address never works.
+ */
+export function isOutOfServiceAreaError(body: string): boolean {
+	const code = parseLalamoveErrorCode(body);
+	return code === "ERR_OUT_OF_SERVICE_AREA" || code === "ERR_INVALID_MARKET";
+}
+
 /** Parse POST /v3/quotations response (throws on shape surprises — callers
  * surface a "couldn't get a quote" state, never a garbage fee). */
 export function parseQuotationResponse(json: unknown): ParsedQuotation {

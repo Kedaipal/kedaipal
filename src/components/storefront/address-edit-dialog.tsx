@@ -212,6 +212,16 @@ export function AddressEditDialog({
 										</b>{" "}
 										— your order total updates when you save.
 									</p>
+								) : liveQuote.state === "out_of_range" ? (
+									// Permanent for this address — never suggest retrying it.
+									<p
+										role="alert"
+										className="mt-4 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
+									>
+										This address is too far — the delivery rider service
+										doesn&apos;t cover it. Pick an address closer to the store,
+										or message the store to sort it out.
+									</p>
 								) : liveQuote.state === "unavailable" ? (
 									<p
 										role="alert"

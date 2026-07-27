@@ -36,9 +36,9 @@ export function downloadCsv(filename: string, csv: string): void {
 	);
 }
 
-/** Whether this device can share `file` via the OS share sheet (Web Share API
- * level 2). True on most phones/tablets, typically false on desktop browsers,
- * where the caller should fall back to a plain download. */
+/** Whether this device CAN share `file` via the OS share sheet (Web Share API
+ * level 2) — capability only. Note this is true on macOS Safari too, so it is
+ * NOT a proxy for "is a phone"; see `prefersShareSheet`. */
 function canShareFile(file: File): boolean {
 	if (typeof navigator === "undefined" || !navigator.canShare) return false;
 	try {
@@ -46,6 +46,27 @@ function canShareFile(file: File): boolean {
 	} catch {
 		return false;
 	}
+}
+
+/**
+ * Whether the OS share sheet is the RIGHT way to SAVE a file here, as opposed
+ * to a plain download. Capability alone isn't the question — macOS Safari can
+ * share files, but a desktop user who taps "Save" wants the file in their
+ * Downloads folder, not a share-sheet popup they have to dismiss.
+ *
+ * Share-first only earns its place on touch devices, where "Save Image" puts
+ * the file in the photo gallery — which is where e-wallet / banking
+ * scan-from-gallery pickers look. Requires BOTH a touch digitiser and a coarse
+ * primary pointer, so a touchscreen laptop (touch points, but driven by a
+ * mouse, and it has a real Downloads folder) correctly gets the download.
+ * iPadOS reports a macOS UA but has touch points + a coarse pointer, so it is
+ * classified as the tablet it is.
+ */
+export function prefersShareSheet(): boolean {
+	if (typeof navigator === "undefined" || typeof window === "undefined")
+		return false;
+	if (!(navigator.maxTouchPoints > 0)) return false;
+	return window.matchMedia?.("(pointer: coarse)").matches === true;
 }
 
 /**
@@ -117,14 +138,18 @@ export function qrFilenameBase(label: string): string {
 export type SaveImageOutcome = "shared" | "cancelled" | "downloaded" | "failed";
 
 /**
- * Save a remote image to the buyer's device. Share-sheet first on devices that
- * can share files — on phones "Save Image" lands it in the photo gallery,
- * which is where e-wallet / banking apps' scan-from-gallery pickers look — and
- * a plain download otherwise (desktop). Returns what happened so the caller
- * can toast appropriately:
+ * Save a remote image to the buyer's device.
+ *
+ * **Touch devices** get the OS share sheet first: "Save Image" lands the file
+ * in the photo gallery, which is where e-wallet / banking scan-from-gallery
+ * pickers look. **Desktop gets a plain download** to the browser's download
+ * folder — even on macOS Safari, which *can* share files but where a sheet
+ * would be an unwanted popup in front of someone who just asked to save
+ * (see `prefersShareSheet`). Returns what happened so the caller can toast
+ * appropriately:
  *  - "shared"     the OS sheet took over — say nothing;
  *  - "cancelled"  the user dismissed the sheet — intentional, stay quiet;
- *  - "downloaded" fell back to a file download — worth a confirming toast;
+ *  - "downloaded" saved as a file — worth a confirming toast;
  *  - "failed"     the image couldn't be fetched — surface an error.
  */
 export async function saveImageFromUrl(
@@ -143,7 +168,7 @@ export async function saveImageFromUrl(
 	const type = blob.type.startsWith("image/") ? blob.type : "image/png";
 	const filename = `${baseFilename}.${imageExtension(type)}`;
 	const file = new File([blob], filename, { type });
-	if (canShareFile(file)) {
+	if (prefersShareSheet() && canShareFile(file)) {
 		try {
 			await navigator.share({ files: [file] });
 			return "shared";

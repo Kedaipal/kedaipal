@@ -18,6 +18,10 @@ export type LiveDeliveryQuoteState =
 	| { state: "idle" }
 	| { state: "loading" }
 	| { state: "quoted"; quoteId: Id<"deliveryQuotes">; fee: number }
+	/** The courier doesn't serve this destination — PERMANENT for this address
+	 * (Lalamove covers city zones, not a radius), so the buyer must change it.
+	 * Distinct from "unavailable" precisely so the copy can't say "try again". */
+	| { state: "out_of_range" }
 	| { state: "unavailable" };
 
 export function useLiveDeliveryQuote({
@@ -72,7 +76,9 @@ export function useLiveDeliveryQuote({
 					setQuote(
 						result.status === "quoted"
 							? { state: "quoted", quoteId: result.quoteId, fee: result.fee }
-							: { state: "unavailable" },
+							: result.status === "out_of_range"
+								? { state: "out_of_range" }
+								: { state: "unavailable" },
 					);
 				})
 				.catch(() => {

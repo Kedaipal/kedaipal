@@ -495,6 +495,11 @@ export function CheckoutSheet({
 				return liveQuote.fee === 0
 					? { kind: "free" }
 					: { kind: "fee", fee: liveQuote.fee };
+			// The courier doesn't cover this destination — same shape the radius
+			// mode uses for "too far", so the copy tells them to change address
+			// instead of the retry line that can never work.
+			case "out_of_range":
+				return { kind: "blocked", reason: "out_of_range" };
 			case "unavailable":
 				return { kind: "blocked", reason: "unquotable" };
 			default:
@@ -679,11 +684,28 @@ export function CheckoutSheet({
 									<form.Subscribe selector={(s) => s.values.deliveryMethod}>
 										{(deliveryMethod) =>
 											deliveryMethod === "delivery" ? (
-												<AddressFieldset
-													form={form}
-													fields="address"
-													retailerId={retailerId}
-												/>
+												<div className="flex flex-col gap-2">
+													<AddressFieldset
+														form={form}
+														fields="address"
+														retailerId={retailerId}
+													/>
+													{/* Live-quote (rider) stores: set the expectation BEFORE
+													    the buyer types a far-away address and hits a wall.
+													    Deliberately vague about the range — the seller's
+													    pickup point is owner-only data (never in the public
+													    payload), and Lalamove's coverage is a city zone, not
+													    a radius we could quote. */}
+													{isLiveMode ? (
+														<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+															Delivery is by rider, so the fee depends on your
+															address — you&apos;ll see it here once you pick a
+															suggestion. Addresses outside the rider&apos;s
+															coverage can&apos;t be delivered
+															{selfCollectAvailable ? " — pick up instead" : ""}.
+														</p>
+													) : null}
+												</div>
 											) : selfCollectAvailable ? (
 												singlePickup ? (
 													<PickupSummaryCard
@@ -922,11 +944,18 @@ export function CheckoutSheet({
 													className="mt-1 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive"
 												>
 													{quote.reason === "out_of_range"
-														? `This address is outside ${storeName}'s delivery area.${
-																selfCollectAvailable
-																	? " Pickup is still available."
-																	: ""
-															}`
+														? // Live-quote stores: the COURIER doesn't reach here, and
+															// retrying the same address never will — say so, and point
+															// at the two things that actually work.
+															isLiveMode
+															? `This address is too far — our delivery rider service doesn't cover it. Try an address closer to ${storeName}${
+																	selfCollectAvailable ? ", or choose pickup" : ""
+																}.`
+															: `This address is outside ${storeName}'s delivery area.${
+																	selfCollectAvailable
+																		? " Pickup is still available."
+																		: ""
+																}`
 														: quote.reason === "unquotable"
 															? "We couldn't calculate the delivery fee right now — re-pick your address to retry, or try again shortly."
 															: "Pick your address from the Google suggestions so we can calculate your delivery fee."}

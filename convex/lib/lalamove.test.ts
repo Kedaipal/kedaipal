@@ -8,10 +8,12 @@ import {
 	buildQuotationBody,
 	extractWebhookOrderId,
 	isActiveJobStatus,
+	isOutOfServiceAreaError,
 	isRiderManagedTransition,
 	lalamoveAmountToSen,
 	lalamoveSigningString,
 	normalizeLalamoveStatus,
+	parseLalamoveErrorCode,
 	parseLalamoveEventTime,
 	parseOrderResponse,
 	parsePodImages,
@@ -228,6 +230,39 @@ describe("status + webhook helpers", () => {
 		expect(normalizeLalamoveStatus("REJECTED")).toBe("rejected");
 		expect(normalizeLalamoveStatus("SOMETHING_NEW")).toBeUndefined();
 		expect(normalizeLalamoveStatus(undefined)).toBeUndefined();
+	});
+
+	test("parses Lalamove's error id out of a failure body", () => {
+		// The real 422 body, captured live from the MY sandbox (27 Jul 2026).
+		expect(
+			parseLalamoveErrorCode(
+				'{"errors":[{"id":"ERR_OUT_OF_SERVICE_AREA","message":"Given latitude/longitude is out of service area."}]}\n',
+			),
+		).toBe("ERR_OUT_OF_SERVICE_AREA");
+		expect(parseLalamoveErrorCode('{"errors":[]}')).toBeUndefined();
+		expect(parseLalamoveErrorCode("<html>502 Bad Gateway</html>")).toBeUndefined();
+		expect(parseLalamoveErrorCode("")).toBeUndefined();
+	});
+
+	test("out-of-service-area is distinguished from transient failures", () => {
+		// Coverage refusals are PERMANENT for that address — the buyer must be
+		// told to change it, never "try again shortly".
+		expect(
+			isOutOfServiceAreaError(
+				'{"errors":[{"id":"ERR_OUT_OF_SERVICE_AREA","message":"Given latitude/longitude is out of service area."}]}',
+			),
+		).toBe(true);
+		expect(
+			isOutOfServiceAreaError('{"errors":[{"id":"ERR_INVALID_MARKET"}]}'),
+		).toBe(true);
+		// Everything else is retryable / a different problem entirely.
+		expect(
+			isOutOfServiceAreaError('{"errors":[{"id":"ERR_INVALID_SERVICE_TYPE"}]}'),
+		).toBe(false);
+		expect(
+			isOutOfServiceAreaError('{"errors":[{"id":"ERR_INSUFFICIENT_BALANCE"}]}'),
+		).toBe(false);
+		expect(isOutOfServiceAreaError("gateway timeout")).toBe(false);
 	});
 
 	test("active vs terminal job statuses (one-active-job slot)", () => {
