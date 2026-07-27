@@ -139,6 +139,23 @@ surface:
   first existing row — adding "XL" to a made-to-order product no longer
   silently creates a stock-tracked row.
 
+## Edit-page header: honest status + preview
+
+- **Status chip** (`src/lib/product-status.ts`, unit-tested): the old chip was
+  `active ? "Live" : "Archived"`, so hidden and sold-out products kept reading
+  "Live". Now: **Archived > Hidden > Sold out > Live** — archived beats
+  everything, hidden (including `hiddenByCategory` suppression) beats stock
+  state, and "Sold out" derives from the server's `inStock` (any active
+  variant sellable). Each label carries a one-line `title` explanation. The
+  chip reflects the SAVED product — the summary strip reflects the draft.
+- **Preview CTA** — "Preview" (desktop header) / eye icon (mobile header)
+  opens the storefront (`storefrontUrl(slug)`) in a new tab. No product deep
+  link yet — link the URL-addressable product sheet here once the storefront
+  redesign (86eybrhrt) lands it.
+- **Full form → wizard switch-back** on the create route: the skip is
+  two-directional ("← Prefer the guided setup? Switch back", confirm-guarded
+  since a filled form can't be reverse-derived into wizard answers).
+
 ## Behaviour deltas (deliberate)
 
 - Made-to-order rows show **no stock input** (previously "Stock (optional)").

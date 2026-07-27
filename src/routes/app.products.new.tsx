@@ -112,6 +112,26 @@ function NewProductRoute() {
 			</div>
 			<h2 className="text-xl font-bold lg:hidden">New product</h2>
 
+			{/* Way back to the guided setup — the skip is two-directional. The
+			    wizard starts fresh (its questions derive state; a filled full form
+			    can't be reverse-derived), so a confirm guards typed work. */}
+			<button
+				type="button"
+				onClick={() => {
+					if (
+						window.confirm(
+							"Switch to the step-by-step setup? Anything you've typed here won't carry over.",
+						)
+					) {
+						setWizardDraft(undefined);
+						navigate({ to: "/app/products/new", search: {}, replace: true });
+					}
+				}}
+				className="self-start text-sm font-semibold text-accent-emphasis hover:underline"
+			>
+				← Prefer the guided setup? Switch back
+			</button>
+
 			<ProductForm
 				retailerId={retailer._id}
 				categoriesLocked={categoriesLocked}

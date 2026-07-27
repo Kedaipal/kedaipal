@@ -1,6 +1,6 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
-import { Archive, ArchiveRestore, ArrowLeft } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowLeft, Eye } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import {
@@ -11,11 +11,45 @@ import { ProductForm } from "../components/forms/product-form";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { type ProductStatus, productStatus } from "../lib/product-status";
+import { storefrontUrl } from "../lib/storefront-url";
 import { hasFeature } from "../lib/subscription";
+import { cn } from "../lib/utils";
 
 export const Route = createFileRoute("/app/products/$productId")({
 	component: EditProductRoute,
 });
+
+/**
+ * The product's honest one-word state — Live / Sold out / Hidden / Archived —
+ * derived by `productStatus`. Replaces the old `active ? "Live" : "Archived"`
+ * chip that kept saying "Live" for hidden and sold-out products. The `title`
+ * carries the one-line explanation on hover/long-press.
+ */
+function StatusChip({ status }: { status: ProductStatus }) {
+	return (
+		<span
+			title={status.detail}
+			className={cn(
+				"flex shrink-0 items-center gap-1.5 text-[13px] font-semibold",
+				status.tone === "live" && "text-accent-emphasis",
+				status.tone === "warn" && "text-amber-700 dark:text-amber-400",
+				status.tone === "muted" && "text-muted-foreground",
+			)}
+		>
+			<span
+				className={cn(
+					"inline-block size-2 rounded-full",
+					status.tone === "live" && "bg-accent",
+					status.tone === "warn" && "bg-amber-500",
+					status.tone === "muted" && "bg-muted-foreground/50",
+				)}
+				aria-hidden="true"
+			/>
+			{status.label}
+		</span>
+	);
+}
 
 function ProductDetailSkeleton() {
 	return (
@@ -87,6 +121,13 @@ function EditProductRoute() {
 		return <p className="text-sm text-destructive">Product not found.</p>;
 	}
 
+	const status = productStatus(product);
+	// Buyer-eye check, one tap away. Opens the storefront in a new tab — no
+	// product deep link yet (the URL-addressable product sheet is part of the
+	// storefront redesign, 86eybrhrt; link the sheet here once it lands). The
+	// status chip explains why a hidden/archived product won't appear there.
+	const previewUrl = storefrontUrl(retailer.slug);
+
 	return (
 		<div className="flex flex-col gap-4 lg:max-w-2xl">
 			<PageHeader
@@ -94,31 +135,46 @@ function EditProductRoute() {
 				subtitle={product.name}
 				back={{ to: "/app/products", label: "Products" }}
 				actions={
-					product.active ? (
-						<Button
-							variant="secondary"
-							onClick={async () => {
-								await archive({ productId: product._id });
-								navigate({ to: "/app/products" });
-							}}
-						>
-							Archive
+					<>
+						<StatusChip status={status} />
+						<Button variant="outline" asChild>
+							<a
+								href={previewUrl}
+								target="_blank"
+								rel="noreferrer"
+								title="See your storefront as buyers do (opens in a new tab)"
+							>
+								<Eye className="size-4" aria-hidden="true" />
+								Preview
+							</a>
 						</Button>
-					) : (
-						<Button
-							variant="secondary"
-							onClick={async () => {
-								await update({ productId: product._id, active: true });
-							}}
-						>
-							Restore
-						</Button>
-					)
+						{product.active ? (
+							<Button
+								variant="secondary"
+								onClick={async () => {
+									await archive({ productId: product._id });
+									navigate({ to: "/app/products" });
+								}}
+							>
+								Archive
+							</Button>
+						) : (
+							<Button
+								variant="secondary"
+								onClick={async () => {
+									await update({ productId: product._id, active: true });
+								}}
+							>
+								Restore
+							</Button>
+						)}
+					</>
 				}
 			/>
-			{/* Mobile header — back button, title, live/archived indicator (mirrors
-			    the archive state so it's visible from the top of a long form). */}
-			<div className="flex items-center gap-3 lg:hidden">
+			{/* Mobile header — back button, title, storefront preview + the honest
+			    status chip (Live / Sold out / Hidden / Archived), visible from the
+			    top of a long form. */}
+			<div className="flex items-center gap-2 lg:hidden">
 				<Link
 					to="/app/products"
 					aria-label="Back to products"
@@ -129,19 +185,17 @@ function EditProductRoute() {
 				<h2 className="min-w-0 flex-1 truncate font-heading text-lg font-extrabold leading-tight">
 					Edit product
 				</h2>
-				{product.active ? (
-					<span className="flex shrink-0 items-center gap-1.5 text-[13px] font-semibold text-accent-emphasis">
-						<span
-							className="inline-block size-2 rounded-full bg-accent"
-							aria-hidden="true"
-						/>
-						Live
-					</span>
-				) : (
-					<span className="shrink-0 text-[13px] font-semibold text-muted-foreground">
-						Archived
-					</span>
-				)}
+				<a
+					href={previewUrl}
+					target="_blank"
+					rel="noreferrer"
+					aria-label="Preview your storefront"
+					title="See your storefront as buyers do (opens in a new tab)"
+					className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted"
+				>
+					<Eye className="size-5" />
+				</a>
+				<StatusChip status={status} />
 			</div>
 
 			<ProductForm
