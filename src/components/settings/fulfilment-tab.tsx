@@ -506,7 +506,7 @@ function ModeButton({
 			onClick={onClick}
 			disabled={disabled}
 			aria-pressed={active}
-			className={`flex flex-col items-start gap-0.5 rounded-xl border-2 px-3 py-2.5 text-left transition-colors ${
+			className={`relative flex flex-col items-start gap-0.5 rounded-xl border-2 py-2.5 pl-3 pr-9 text-left transition-colors ${
 				active
 					? "border-accent bg-accent/5"
 					: "border-border bg-card hover:border-accent/40"
@@ -519,7 +519,28 @@ function ModeButton({
 				{badge}
 			</span>
 			<span className="text-xs text-muted-foreground">{subtitle}</span>
+			<ModeRadioDot active={active} />
 		</button>
+	);
+}
+
+/**
+ * Radio-style indicator in a mode card's corner. These grids choose exactly
+ * ONE option, but the tinted-border selected state alone read as "these might
+ * all be on" (Zaki, 27 Jul) — an explicit empty-ring vs filled-dot makes the
+ * pick-one semantics visible at a glance. Decorative only: the button itself
+ * carries aria-pressed.
+ */
+function ModeRadioDot({ active }: { active: boolean }) {
+	return (
+		<span
+			aria-hidden="true"
+			className={`absolute bottom-2.5 right-2.5 flex size-4 items-center justify-center rounded-full border-2 transition-colors ${
+				active ? "border-accent" : "border-border"
+			}`}
+		>
+			{active ? <span className="size-2 rounded-full bg-accent" /> : null}
+		</span>
 	);
 }
 
@@ -625,9 +646,10 @@ function DeliveryChargeSection({
 				freeAbove: freeAboveSen,
 			};
 		} else if (mode === "lalamove") {
-			// Live provider quote (86eyb5hrf) — keep the stored onUnquotable
-			// policy (default "arrange": never lose the sale). Mirrors the server
-			// gates so the failure is a helpful message, not a thrown save.
+			// Live provider quote (86eyb5hrf) — `onUnquotable` is vestigial (strict
+			// since 27 Jul: no quote, no order; the sanitizer normalizes stored
+			// rows to "block"). Mirrors the server gates so the failure is a
+			// helpful message, not a thrown save.
 			if (!effectiveAddress) {
 				setError(
 					"Pick your business address from the suggestions — it's the pickup point riders are sent to.",
@@ -645,7 +667,7 @@ function DeliveryChargeSection({
 			nextConfig =
 				config?.mode === "lalamove"
 					? config
-					: { mode: "lalamove", onUnquotable: "arrange" };
+					: { mode: "lalamove", onUnquotable: "block" };
 		} else {
 			if (!effectiveAddress) {
 				setError(
@@ -739,7 +761,7 @@ function DeliveryChargeSection({
 					onClick={() => setMode("lalamove")}
 					disabled={lalamoveLocked && config?.mode !== "lalamove"}
 					aria-pressed={mode === "lalamove"}
-					className={`flex flex-col items-start gap-1 rounded-xl border-2 px-3 py-2.5 text-left transition-colors ${
+					className={`relative flex flex-col items-start gap-1 rounded-xl border-2 py-2.5 pl-3 pr-9 text-left transition-colors ${
 						mode === "lalamove"
 							? "border-accent bg-accent/5"
 							: "border-border bg-card hover:border-accent/40"
@@ -759,6 +781,7 @@ function DeliveryChargeSection({
 							? "Rider delivery — upgrade to Pro to turn on"
 							: "Live rider price, one-tap booking"}
 					</span>
+					<ModeRadioDot active={mode === "lalamove"} />
 				</button>
 				<ModeButton
 					active={mode === "free"}
@@ -779,7 +802,7 @@ function DeliveryChargeSection({
 					disabled={radiusLocked && config?.mode !== "radius"}
 					onClick={() => setMode("radius")}
 					title="By distance"
-					subtitle="Radius bands"
+					subtitle="Radius bands — you deliver"
 					badge={radiusLocked ? <ProBadge /> : undefined}
 				/>
 			</div>
@@ -789,10 +812,27 @@ function DeliveryChargeSection({
 					<p className="rounded-lg bg-accent/10 px-3 py-2 text-xs leading-relaxed text-accent-emphasis">
 						Buyers pay the real Lalamove price for their address at checkout,
 						and you book the rider in one tap from the order — with automatic
-						shipped + live-tracking WhatsApp messages. Runs entirely on{" "}
+						shipped + live-tracking WhatsApp messages. There&apos;s{" "}
+						<b>no delivery area to set</b>, and{" "}
+						<b>buyers always see the price before ordering</b> (an address
+						Lalamove can&apos;t price can&apos;t check out, so you never work
+						out a delivery charge yourself). Runs entirely on{" "}
 						<b>your own Lalamove account</b>; Kedaipal never books or pays on
-						your behalf. If a live price can&apos;t be fetched, the order is
-						still accepted and you confirm the charge afterwards.
+						your behalf.
+					</p>
+					{/* Coverage education (27 Jul, measured live): city-zone limits are
+					    LALAMOVE's, they surprise vendors ("but Kajang is close!"), and
+					    the vehicle picker below must not read as a range picker. */}
+					<p className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+						<b>Lalamove&apos;s own coverage still applies:</b> riders serve
+						the city zone around your pickup address (e.g. Klang Valley), so
+						a buyer too far outside it sees{" "}
+						<i>&quot;this address is too far&quot;</i> and can&apos;t choose
+						delivery — roughly 40–70&nbsp;km depending on direction, and
+						never across zones (a Klang Valley store can&apos;t Lalamove to
+						Melaka). Vehicle choice doesn&apos;t change this: bike and car
+						cover the <b>same area</b> — the difference is parcel size and
+						price. Keep self-collect on as the fallback for far buyers.
 					</p>
 					{lalamoveLocked ? (
 						<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">

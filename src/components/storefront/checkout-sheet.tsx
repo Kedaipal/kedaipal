@@ -1,6 +1,6 @@
 import { useStore } from "@tanstack/react-form";
 import { useNavigate } from "@tanstack/react-router";
-import { useAction, useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import {
 	Clock,
 	ExternalLink,
@@ -16,7 +16,6 @@ import {
 	type ReactNode,
 	useEffect,
 	useMemo,
-	useRef,
 	useState,
 } from "react";
 import { api } from "../../../convex/_generated/api";
@@ -41,6 +40,7 @@ import {
 	checkoutFormSchema,
 	emptyAddress,
 } from "../../lib/schemas";
+import { useLiveDeliveryQuote } from "../../lib/use-live-delivery-quote";
 import { submitThenFocusError } from "../forms/focus-error";
 import { useAppForm } from "../forms/form";
 import { AppImage } from "../ui/app-image";
@@ -385,7 +385,8 @@ export function CheckoutSheet({
 					customerImageStorageId,
 					// Live Lalamove quote (86eyb5hrf): pass the server-side quote row
 					// so the fee the buyer saw freezes onto the order. Missing/stale →
-					// the server falls back to the store's onUnquotable policy.
+					// the server refuses the order (strict: no quote, no order — the
+					// submit gate above should never let that happen).
 					deliveryQuoteId:
 						value.deliveryMethod === "delivery" && liveQuote.state === "quoted"
 							? liveQuote.quoteId
@@ -460,89 +461,51 @@ export function CheckoutSheet({
 
 	// --- Live Lalamove quote (86eyb5hrf) ------------------------------------
 	// When the store prices delivery by live provider quote, the reactive query
-	// answers {kind:"live"} and the real fee comes from the quoteForCheckout
-	// ACTION, fired once per picked address (coords only change on a Google
-	// suggestion pick, debounced as a keystroke guard). The action records the
-	// fee server-side and returns a row id — orders.create loads the fee from
-	// that row, so this state is display + gating only, same trust model as the
-	// static quote.
-	const quoteLalamove = useAction(api.lalamove.quoteForCheckout);
-	const [liveQuote, setLiveQuote] = useState<
-		| { state: "idle" }
-		| { state: "loading" }
-		| { state: "quoted"; quoteId: Id<"deliveryQuotes">; fee: number }
-		| { state: "unavailable" }
-	>({ state: "idle" });
-	const liveSeq = useRef(0);
+	// answers {kind:"live"} and the real fee comes from the shared
+	// useLiveDeliveryQuote hook (quoteForCheckout action, once per picked pin).
 	const isLiveMode = rawQuote?.kind === "live";
-	// biome-ignore lint/correctness/useExhaustiveDependencies: fires per picked address (coords change only on a suggestion pick); form/action/retailerId identities are stable and the address is read fresh inside the timeout.
-	useEffect(() => {
-		if (!isLiveMode || !open || !hasCoords) {
-			liveSeq.current++;
-			setLiveQuote({ state: "idle" });
-			return;
-		}
-		const seq = ++liveSeq.current;
-		setLiveQuote({ state: "loading" });
-		const timer = setTimeout(() => {
+	const liveQuote = useLiveDeliveryQuote({
+		enabled: isLiveMode && open,
+		retailerId,
+		latitude: hasCoords ? latNum : undefined,
+		longitude: hasCoords ? lngNum : undefined,
+		getAddressLabel: () => {
 			const a = form.store.state.values.address;
-			const addressLabel = [
-				a.line1,
-				a.line2,
-				`${a.postcode} ${a.city}`.trim(),
-				a.state,
-			]
+			return [a.line1, a.line2, `${a.postcode} ${a.city}`.trim(), a.state]
 				.filter((part) => part && part.trim().length > 0)
 				.join(", ");
-			quoteLalamove({
-				retailerId,
-				latitude: latNum,
-				longitude: lngNum,
-				address: addressLabel,
-				fulfilmentDate: watchedDate
-					? mytMidnightFromYmd(watchedDate)
-					: undefined,
-			})
-				.then((result) => {
-					if (liveSeq.current !== seq) return; // superseded by a newer pick
-					setLiveQuote(
-						result.status === "quoted"
-							? { state: "quoted", quoteId: result.quoteId, fee: result.fee }
-							: { state: "unavailable" },
-					);
-				})
-				.catch(() => {
-					if (liveSeq.current !== seq) return;
-					setLiveQuote({ state: "unavailable" });
-				});
-		}, 400);
-		return () => clearTimeout(timer);
-	}, [isLiveMode, open, hasCoords, latNum, lngNum, watchedDate]);
+		},
+		fulfilmentDate: watchedDate ? mytMidnightFromYmd(watchedDate) : undefined,
+	});
 
 	// Collapse the two sources into ONE shape for the breakdown + submit gate.
 	// Live mode maps onto the static kinds (plus "calculating") so the render
-	// below stays a single code path:
-	//  - no pin yet / provider unreachable → the store's onUnquotable policy
-	//    ("arrange" → seller-confirms-later, "block" → hard stop), exactly what
-	//    orders.create will decide server-side.
+	// below stays a single code path. No pin / no quote is a HARD stop (strict
+	// since 27 Jul): a Lalamove buyer always sees the real rider price before
+	// sending — exactly what orders.create enforces server-side.
 	const quoteForDelivery:
 		| PublicDeliveryQuote
 		| { kind: "calculating" }
 		| undefined = (() => {
 		if (!rawQuote) return undefined;
 		if (rawQuote.kind !== "live") return rawQuote;
-		const fallbackKind =
-			rawQuote.onUnquotable === "block"
-				? ("blocked" as const)
-				: ("pending" as const);
-		if (!hasCoords) return { kind: fallbackKind, reason: "no_coords" };
+		if (!hasCoords) return { kind: "blocked", reason: "no_coords" };
 		switch (liveQuote.state) {
 			case "quoted":
 				return liveQuote.fee === 0
 					? { kind: "free" }
 					: { kind: "fee", fee: liveQuote.fee };
+			// The courier doesn't cover this destination — same shape the radius
+			// mode uses for "too far", so the copy tells them to change address
+			// instead of the retry line that can never work.
+			case "out_of_range":
+				return { kind: "blocked", reason: "out_of_range" };
+			// Seller-side breakage (revoked keys) — retrying is pointless too,
+			// but the fix is the STORE's, so the copy points there.
+			case "store_unavailable":
+				return { kind: "blocked", reason: "store_unavailable" };
 			case "unavailable":
-				return { kind: fallbackKind, reason: "unquotable" };
+				return { kind: "blocked", reason: "unquotable" };
 			default:
 				return { kind: "calculating" };
 		}
@@ -725,11 +688,28 @@ export function CheckoutSheet({
 									<form.Subscribe selector={(s) => s.values.deliveryMethod}>
 										{(deliveryMethod) =>
 											deliveryMethod === "delivery" ? (
-												<AddressFieldset
-													form={form}
-													fields="address"
-													retailerId={retailerId}
-												/>
+												<div className="flex flex-col gap-2">
+													<AddressFieldset
+														form={form}
+														fields="address"
+														retailerId={retailerId}
+													/>
+													{/* Live-quote (rider) stores: set the expectation BEFORE
+													    the buyer types a far-away address and hits a wall.
+													    Deliberately vague about the range — the seller's
+													    pickup point is owner-only data (never in the public
+													    payload), and Lalamove's coverage is a city zone, not
+													    a radius we could quote. */}
+													{isLiveMode ? (
+														<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+															Delivery is by rider, so the fee depends on your
+															address — you&apos;ll see it here once you pick a
+															suggestion. Addresses outside the rider&apos;s
+															coverage can&apos;t be delivered
+															{selfCollectAvailable ? " — pick up instead" : ""}.
+														</p>
+													) : null}
+												</div>
 											) : selfCollectAvailable ? (
 												singlePickup ? (
 													<PickupSummaryCard
@@ -968,14 +948,29 @@ export function CheckoutSheet({
 													className="mt-1 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive"
 												>
 													{quote.reason === "out_of_range"
-														? `This address is outside ${storeName}'s delivery area.${
-																selfCollectAvailable
-																	? " Pickup is still available."
-																	: ""
-															}`
-														: quote.reason === "unquotable"
-															? "We couldn't calculate the delivery fee right now — re-pick your address to retry, or try again shortly."
-															: "Pick your address from the Google suggestions so we can calculate your delivery fee."}
+														? // Live-quote stores: the COURIER doesn't reach here, and
+															// retrying the same address never will — say so, and point
+															// at the two things that actually work.
+															isLiveMode
+															? `This address is too far — our delivery rider service doesn't cover it. Try an address closer to ${storeName}${
+																	selfCollectAvailable ? ", or choose pickup" : ""
+																}.`
+															: `This address is outside ${storeName}'s delivery area.${
+																	selfCollectAvailable
+																		? " Pickup is still available."
+																		: ""
+																}`
+														: quote.reason === "store_unavailable"
+															? // Seller-side breakage — not the buyer's fault, not
+																// fixable by retrying. Give them the two real ways out.
+																`Delivery pricing isn't working for this store right now — it's on ${storeName}'s side, not yours. ${
+																	selfCollectAvailable
+																		? "Choose pickup, or message"
+																		: "Message"
+																} the store on WhatsApp to sort it out.`
+															: quote.reason === "unquotable"
+																? "We couldn't calculate the delivery fee right now — re-pick your address to retry, or try again shortly."
+																: "Pick your address from the Google suggestions so we can calculate your delivery fee."}
 												</p>
 											) : null}
 											{/* Minimum order rules — the reason the button below is
