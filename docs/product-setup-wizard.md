@@ -55,6 +55,9 @@ brand-new seller never meets the concept mid-wizard.
   to From stock at review quietly drops it (`buildWizardSubmitValues`).
 - **Custom / made-to-order option** — label, price-on-quote, buyer prompt
   (image addable later in edit).
+- **Order rules** — minimum order quantity + minimum notice days, mirroring
+  the edit form's "Order rules" card. Blank = no rule (mapped to `undefined`,
+  never 0, so the create mutation simply omits them).
 - **"Open in the full editor"** — the consistency escape hatch for everything
   else (second axis, per-choice photos): `wizardToFormInitialValues` hands the
   whole draft to `ProductForm` prefilled (in-memory via the route's
@@ -80,13 +83,22 @@ wizard's mental model:
   Size · Made to order · RM 12–28", live-derived by `describeProduct`
   (`src/lib/product-summary.ts`, unit-tested). Create/skip mode keeps the old
   readiness checklist instead (a create-time concept).
-- **Card order:** Product basics → Photos → **Pricing & choices** → **Where it
-  appears** (Visibility + Categories — publishing concerns come after what the
-  product *is*; they used to sit above the name). `CategoryPicker` gained an
-  `embedded` prop so it nests in the publishing card without double chrome.
+- **Card order:** Product basics → Photos → **Pricing & choices** → **Order
+  rules** → **Where it appears** (Visibility + Categories — publishing concerns
+  come after what the product *is*; they used to sit above the name).
+  `CategoryPicker` gained an `embedded` prop so it nests in the publishing card
+  without double chrome.
+- **"Order rules" card** (added when staging's min-order rules merged in):
+  minimum order quantity (`86ey9unyx`) + the per-product minimum notice
+  (`minNoticeDays`) live together, because both constrain *how a buyer may
+  order* — neither is about price/choices (what it costs) nor publishing
+  (where it shows). Staging had min-notice floating above the product name
+  (that slot is now the summary strip) and min-quantity tacked onto the
+  pricing card.
 - Photos moved to a shared `ProductImagesField`
   (`src/components/forms/product-images-field.tsx`), used by both the form and
-  the wizard.
+  the wizard. Both it and the variant editor render through staging's shared
+  `AppImage` primitive (`86eybq1uk`).
 
 ### The restructured `VariantEditor`
 

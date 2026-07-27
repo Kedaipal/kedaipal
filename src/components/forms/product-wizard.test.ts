@@ -198,6 +198,36 @@ describe("buildWizardSubmitValues", () => {
 		expect(priced.variants[3].customLabel).toBeUndefined();
 	});
 
+	it("carries the order rules, leaving blanks unset", () => {
+		const withRules = buildWizardSubmitValues({
+			...browniesState(),
+			minQuantity: "20",
+			minNoticeDays: "3",
+		});
+		expect(withRules.minQuantity).toBe(20);
+		expect(withRules.minNoticeDays).toBe(3);
+		// Blank = no rule at all (not 0) — the create mutation omits them.
+		const noRules = buildWizardSubmitValues(browniesState());
+		expect(noRules.minQuantity).toBeUndefined();
+		expect(noRules.minNoticeDays).toBeUndefined();
+	});
+
+	it("step 5 rejects out-of-range order rules but allows blanks", () => {
+		const base = browniesState();
+		expect(
+			wizardStepIssues({ ...base, minQuantity: "1" }, 5).map((i) => i.field),
+		).toEqual(["minQuantity"]);
+		expect(
+			wizardStepIssues({ ...base, minQuantity: "1000" }, 5).map((i) => i.field),
+		).toEqual(["minQuantity"]);
+		expect(
+			wizardStepIssues({ ...base, minNoticeDays: "31" }, 5).map((i) => i.field),
+		).toEqual(["minNoticeDays"]);
+		expect(
+			wizardStepIssues({ ...base, minQuantity: "20", minNoticeDays: "0" }, 5),
+		).toHaveLength(0);
+	});
+
 	it("step 5 validates only a non-blank invalid custom price", () => {
 		const base = browniesState();
 		expect(wizardStepIssues(base, 5)).toHaveLength(0);

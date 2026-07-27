@@ -11,6 +11,8 @@ import {
 import { type ReactNode, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { MAX_NOTICE_DAYS } from "../../../convex/lib/fulfilmentDate";
+import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
 import {
 	convexErrorMessage,
 	normalizePriceInput,
@@ -67,6 +69,10 @@ export type WizardState = {
 	/** Review "More options" — the optional custom / made-to-order line
 	 * (docs/custom-option.md). Null = not offered. */
 	customLine: { label: string; price: string; prompt: string } | null;
+	/** Review "More options" — order rules, as typed (blank = no rule).
+	 * See convex/lib/minOrderRules.ts + docs/fulfilment-date.md. */
+	minQuantity: string;
+	minNoticeDays: string;
 };
 
 /** Key into prices/stocks for the one-item (no choices) branch. */
@@ -88,6 +94,8 @@ export function emptyWizardState(): WizardState {
 		categoryIds: [],
 		requiresProof: false,
 		customLine: null,
+		minQuantity: "",
+		minNoticeDays: "",
 	};
 }
 
@@ -157,14 +165,37 @@ export function wizardStepIssues(
 			}
 		}
 	}
-	if (step === 5 && state.customLine) {
-		const raw = state.customLine.price.trim();
-		if (raw.length > 0 && parsePriceInput(raw) === null) {
-			issues.push({
-				field: "customPrice",
-				message:
-					"Not a valid price — enter a number, or leave blank for price on quote.",
-			});
+	if (step === 5) {
+		if (state.customLine) {
+			const raw = state.customLine.price.trim();
+			if (raw.length > 0 && parsePriceInput(raw) === null) {
+				issues.push({
+					field: "customPrice",
+					message:
+						"Not a valid price — enter a number, or leave blank for price on quote.",
+				});
+			}
+		}
+		// Order rules — blank is always fine; a typed value must be in range.
+		const qty = state.minQuantity.trim();
+		if (qty.length > 0) {
+			const n = Number(qty);
+			if (!Number.isInteger(n) || n < 2 || n > MIN_QUANTITY_MAX) {
+				issues.push({
+					field: "minQuantity",
+					message: `Enter a whole number between 2 and ${MIN_QUANTITY_MAX}, or leave blank.`,
+				});
+			}
+		}
+		const notice = state.minNoticeDays.trim();
+		if (notice.length > 0) {
+			const n = Number(notice);
+			if (!Number.isInteger(n) || n < 0 || n > MAX_NOTICE_DAYS) {
+				issues.push({
+					field: "minNoticeDays",
+					message: `Enter a whole number of days between 0 and ${MAX_NOTICE_DAYS}, or leave blank.`,
+				});
+			}
 		}
 	}
 	return issues;
@@ -216,11 +247,22 @@ export function buildWizardSubmitValues(
 			customPrompt: state.customLine.prompt.trim() || undefined,
 		});
 	}
+	const minQty = Number(state.minQuantity.trim());
+	const notice = Number(state.minNoticeDays.trim());
 	return {
 		name: state.name.trim(),
 		description:
 			state.description.trim().length > 0 ? state.description.trim() : undefined,
 		hidden: state.hidden,
+		// Blank → undefined (no rule); the server normalizes 0/1 to unset.
+		minQuantity:
+			state.minQuantity.trim().length > 0 && Number.isInteger(minQty)
+				? minQty
+				: undefined,
+		minNoticeDays:
+			state.minNoticeDays.trim().length > 0 && Number.isInteger(notice)
+				? notice
+				: undefined,
 		categoryIds: state.categoryIds,
 		imageStorageIds: state.images.map((i) => i.id),
 		options: state.hasChoices
@@ -967,8 +1009,8 @@ export function ProductWizard({
 									<span className="text-sm font-semibold">More options</span>
 									<span className="truncate text-xs text-muted-foreground">
 										{state.madeToOrder
-											? "Design approval · custom option · full editor"
-											: "Custom option · full editor"}
+											? "Design approval · custom option · order rules · full editor"
+											: "Custom option · order rules · full editor"}
 									</span>
 								</span>
 								{moreOpen ? (
@@ -1090,6 +1132,63 @@ export function ProductWizard({
 												</label>
 											</div>
 										) : null}
+									</div>
+
+									{/* Order rules — the same two constraints the edit form
+									    groups in its "Order rules" card. Blank = no rule. */}
+									<div className="flex flex-col gap-3 border-t border-border pt-3">
+										<span className="text-sm font-semibold">Order rules</span>
+										<label className="flex flex-col gap-1 text-sm font-medium">
+											Minimum order quantity{" "}
+											<span className="font-normal text-muted-foreground">
+												(optional)
+											</span>
+											<Input
+												type="number"
+												inputMode="numeric"
+												min={0}
+												max={MIN_QUANTITY_MAX}
+												placeholder="e.g. 20"
+												value={state.minQuantity}
+												onChange={(e) => patch({ minQuantity: e.target.value })}
+												isError={!!issueFor("minQuantity")}
+												className="h-11 w-32"
+											/>
+											<IssueText message={issueFor("minQuantity")} />
+											<span className="text-xs font-normal text-muted-foreground">
+												Buyers must order at least this many — choices
+												combined. Counter checkout ignores it.
+											</span>
+										</label>
+										<label className="flex flex-col gap-1 text-sm font-medium">
+											Minimum notice{" "}
+											<span className="font-normal text-muted-foreground">
+												(optional)
+											</span>
+											<span className="flex items-center gap-1.5">
+												<Input
+													type="number"
+													inputMode="numeric"
+													min={0}
+													max={MAX_NOTICE_DAYS}
+													placeholder="0"
+													value={state.minNoticeDays}
+													onChange={(e) =>
+														patch({ minNoticeDays: e.target.value })
+													}
+													isError={!!issueFor("minNoticeDays")}
+													className="h-11 w-24 text-center"
+												/>
+												<span className="text-sm font-normal text-muted-foreground">
+													days
+												</span>
+											</span>
+											<IssueText message={issueFor("minNoticeDays")} />
+											<span className="text-xs font-normal text-muted-foreground">
+												Lead time you need — buyers can&apos;t pick a delivery
+												or pickup date sooner than this.
+											</span>
+										</label>
 									</div>
 
 									{/* Everything else (second choice, per-choice photos…) —
