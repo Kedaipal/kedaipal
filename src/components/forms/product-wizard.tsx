@@ -308,11 +308,14 @@ export function wizardPriceLabel(state: WizardState, currency: string): string {
 		: `${currency} ${fmt(min)}–${fmt(max)}`;
 }
 
+// Titles are deliberately short — the header also carries a back button,
+// progress dots and cancel, so anything past ~12 characters truncates on a
+// narrow phone. The full question is the heading inside each step.
 const STEP_TITLES: Record<number, { title: string; sub: string }> = {
 	1: { title: "Name it", sub: "Step 1 of 5" },
 	2: { title: "Choices", sub: "Step 2 of 5" },
 	3: { title: "Price", sub: "Step 3 of 5" },
-	4: { title: "Preparing orders", sub: "Step 4 of 5" },
+	4: { title: "Preparation", sub: "Step 4 of 5" },
 	5: { title: "Review", sub: "Step 5 of 5" },
 };
 const TOTAL_STEPS = 5;
@@ -514,8 +517,11 @@ export function ProductWizard({
 
 	return (
 		<div className="flex flex-col gap-4">
-			{/* Header: back + step title + progress dots. */}
-			<div className="flex items-center gap-3">
+			{/* Header: back + step title + progress dots + cancel. Four items on one
+			    narrow row, so the gap tightens on mobile and only the CURRENT dot
+			    widens — completed steps stay small (still accent-coloured, so
+			    progress still reads) instead of eating the title's width. */}
+			<div className="flex items-center gap-2 sm:gap-3">
 				<button
 					type="button"
 					onClick={goBack}
@@ -537,7 +543,11 @@ export function ProductWizard({
 							key={i}
 							className={cn(
 								"h-1.5 rounded-full transition-all",
-								i < step ? "w-4 bg-accent" : "w-1.5 bg-border",
+								i === step - 1
+									? "w-4 bg-accent"
+									: i < step
+										? "w-1.5 bg-accent"
+										: "w-1.5 bg-border",
 							)}
 						/>
 					))}

@@ -42,6 +42,14 @@ step — including the review step's custom-line price — before submitting.
 A **Cancel ✕** in the wizard header exits directly (confirm-if-dirty) — no
 pressing Back through every step.
 
+**Header sizing (mobile):** the row carries back + title + progress dots +
+cancel, so step titles are capped at ~12 characters ("Preparation", not
+"Preparing orders" — the full question is the heading inside the step), the
+gap tightens to `gap-2` below `sm`, and only the CURRENT progress dot widens
+(completed steps stay small but accent-coloured). Measured at 320/375/390/430
+— the title fits with headroom at every width; before this, step 4 truncated
+on everything below 430.
+
 **Create-time needs kept in the wizard** (so there's never a create-then-edit
 round trip): per-choice **SKUs** behind the price-step link, **visibility**
 (counter-only products are created hidden directly — the Rahman's-lekor
