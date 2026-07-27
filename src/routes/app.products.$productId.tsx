@@ -1,6 +1,8 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import { Archive, ArchiveRestore, ArrowLeft, Eye } from "lucide-react";
+import { useState } from "react";
+import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import {
@@ -8,11 +10,11 @@ import {
 	PageHeaderSkeleton,
 } from "../components/dashboard/page-header";
 import { ProductForm } from "../components/forms/product-form";
+import { ProductDetailSheet } from "../components/storefront/product-detail-sheet";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { type ProductStatus, productStatus } from "../lib/product-status";
-import { storefrontUrl } from "../lib/storefront-url";
 import { hasFeature } from "../lib/subscription";
 import { cn } from "../lib/utils";
 
@@ -113,6 +115,10 @@ function EditProductRoute() {
 	const saveVariantGrid = useMutation(api.products.saveVariantGrid);
 	const setProductCategories = useMutation(api.categories.setProductCategories);
 	const archive = useMutation(api.products.archive);
+	// Buyer-eye preview: mounts the REAL storefront detail sheet in-page (the
+	// same bottom sheet buyers get) — no new tab. Shows the SAVED product; the
+	// summary strip is the live-draft view.
+	const [previewOpen, setPreviewOpen] = useState(false);
 
 	if (product === undefined || categoryIds === undefined || !retailer) {
 		return <ProductDetailSkeleton />;
@@ -122,11 +128,6 @@ function EditProductRoute() {
 	}
 
 	const status = productStatus(product);
-	// Buyer-eye check, one tap away. Opens the storefront in a new tab — no
-	// product deep link yet (the URL-addressable product sheet is part of the
-	// storefront redesign, 86eybrhrt; link the sheet here once it lands). The
-	// status chip explains why a hidden/archived product won't appear there.
-	const previewUrl = storefrontUrl(retailer.slug);
 
 	return (
 		<div className="flex flex-col gap-4 lg:max-w-2xl">
@@ -137,16 +138,13 @@ function EditProductRoute() {
 				actions={
 					<>
 						<StatusChip status={status} />
-						<Button variant="outline" asChild>
-							<a
-								href={previewUrl}
-								target="_blank"
-								rel="noreferrer"
-								title="See your storefront as buyers do (opens in a new tab)"
-							>
-								<Eye className="size-4" aria-hidden="true" />
-								Preview
-							</a>
+						<Button
+							variant="outline"
+							onClick={() => setPreviewOpen(true)}
+							title="See this product exactly as buyers do"
+						>
+							<Eye className="size-4" aria-hidden="true" />
+							Preview
 						</Button>
 						{product.active ? (
 							<Button
@@ -185,16 +183,15 @@ function EditProductRoute() {
 				<h2 className="min-w-0 flex-1 truncate font-heading text-lg font-extrabold leading-tight">
 					Edit product
 				</h2>
-				<a
-					href={previewUrl}
-					target="_blank"
-					rel="noreferrer"
-					aria-label="Preview your storefront"
-					title="See your storefront as buyers do (opens in a new tab)"
+				<button
+					type="button"
+					onClick={() => setPreviewOpen(true)}
+					aria-label="Preview this product as buyers see it"
+					title="See this product exactly as buyers do"
 					className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted"
 				>
 					<Eye className="size-5" />
-				</a>
+				</button>
 				<StatusChip status={status} />
 			</div>
 
@@ -290,6 +287,29 @@ function EditProductRoute() {
 					});
 					navigate({ to: "/app/products" });
 				}}
+			/>
+
+			{/* The storefront's own product sheet, buyer-identical. Cart wiring is
+			    stubbed: quantity steppers and option pills work, but "Add to cart"
+			    just explains it's a preview. Inactive variants filtered out to
+			    match what buyers can see. */}
+			<ProductDetailSheet
+				product={
+					previewOpen
+						? {
+								...product,
+								variants: product.variants.filter((vr) => vr.active),
+							}
+						: null
+				}
+				retailerId={product.retailerId}
+				cartQuantity={0}
+				onClose={() => setPreviewOpen(false)}
+				onAdd={() =>
+					toast("Just a preview — buyers add to cart here.", {
+						id: "product-preview",
+					})
+				}
 			/>
 		</div>
 	);

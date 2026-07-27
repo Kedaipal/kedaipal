@@ -23,6 +23,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { CategoryPicker } from "./category-picker";
 import type {
+	ProductFormDraft,
 	ProductFormInitialValues,
 	ProductFormSubmitValues,
 } from "./product-form";
@@ -294,6 +295,132 @@ export function wizardToFormInitialValues(
 	};
 }
 
+/**
+ * The reverse trip: derive a WizardState from the full form's as-typed draft,
+ * so switching back to the guided setup keeps every value (strings stay raw —
+ * a blank price stays blank). Whatever the wizard genuinely can't represent
+ * (a second choice, per-choice photos…) is returned in `lost`, and the route
+ * confirms with the seller before dropping it — never silently.
+ */
+export function formDraftToWizardState(draft: ProductFormDraft): {
+	state: WizardState;
+	lost: string[];
+} {
+	const lost: string[] = [];
+	const { options, rows, customLine } = draft.editor;
+
+	const hasChoices = options.length > 0;
+	const axisName = options[0]?.name ?? "";
+	const axisValues = options[0]?.values ?? [];
+	if (options.length > 1) {
+		lost.push(
+			`the second choice (${options[1].name.trim() || "unnamed"}) and its per-combination prices`,
+		);
+	}
+
+	// Per-key maps. With one axis the row key IS the value; with two axes the
+	// combinations can't map onto the wizard's single axis (already in `lost`),
+	// so the maps stay empty and prices re-ask on step 3.
+	const prices: Record<string, string> = {};
+	const stocks: Record<string, string> = {};
+	const skus: Record<string, string> = {};
+	if (options.length <= 1) {
+		for (const row of rows) {
+			const key = hasChoices ? (row.optionValues[0] ?? "") : SINGLE_KEY;
+			prices[key] = row.price;
+			stocks[key] = row.stock;
+			skus[key] = row.sku;
+		}
+	}
+
+	// Fulfilment: the wizard holds ONE answer. Mixed per-choice settings
+	// collapse to the majority — flagged, confirmed by the seller.
+	let madeToOrder: boolean | null = null;
+	if (rows.length > 0) {
+		const trackCount = rows.filter((r) => r.blockWhenOutOfStock).length;
+		const allTrack = trackCount === rows.length;
+		const allMto = trackCount === 0;
+		if (!allTrack && !allMto) {
+			lost.push(
+				"different made-to-order / from-stock settings per choice (one will apply to all)",
+			);
+		}
+		madeToOrder = allMto || (!allTrack && trackCount < rows.length - trackCount);
+	}
+
+	const proofCount = rows.filter((r) => r.requiresProof).length;
+	if (proofCount > 0 && proofCount < rows.length) {
+		lost.push("per-choice design-approval settings (one will apply to all)");
+	}
+	if (rows.some((r) => !r.active)) {
+		lost.push("deactivated choices (they'll go back on sale)");
+	}
+	if (rows.some((r) => r.imageStorageIds.length > 0)) {
+		lost.push("per-choice photos");
+	}
+	if (customLine && customLine.imageStorageIds.length > 0) {
+		lost.push("the custom option's photo");
+	}
+
+	return {
+		state: {
+			name: draft.name,
+			description: draft.description,
+			images: draft.images,
+			hasChoices,
+			axisName,
+			axisValues,
+			prices,
+			madeToOrder,
+			stocks,
+			skus,
+			hidden: draft.hidden,
+			categoryIds: draft.categoryIds,
+			requiresProof: proofCount === rows.length && rows.length > 0,
+			customLine: customLine
+				? {
+						label: customLine.label,
+						price: customLine.price,
+						prompt: customLine.prompt,
+					}
+				: null,
+			minQuantity: draft.minQuantity,
+			minNoticeDays: draft.minNoticeDays,
+		},
+		lost,
+	};
+}
+
+/**
+ * Where a restored wizard should open: the first step that still needs an
+ * answer (structural nulls included), else the review step.
+ */
+export function wizardInitialStep(state: WizardState): number {
+	for (let s = 1; s <= 4; s++) {
+		if (s === 2 && state.hasChoices === null) return 2;
+		if (s === 4 && state.madeToOrder === null) return 4;
+		if (wizardStepIssues(state, s).length > 0) return s;
+	}
+	return TOTAL_STEPS;
+}
+
+/**
+ * Step-1 skip handoff: only the fields the seller can have touched BY step 1
+ * (name, description, photos). No variants/options — the full form seeds its
+ * default blank pricing row instead of a misleading prefilled 0.00.
+ */
+export function wizardBasicsToFormInitialValues(
+	state: WizardState,
+): ProductFormInitialValues {
+	return {
+		name: state.name,
+		description:
+			state.description.trim().length > 0 ? state.description : undefined,
+		imageStorageIds: state.images.map((i) => i.id),
+		imageUrls: state.images.map((i) => i.url),
+	};
+}
+
 /** Compact "RM 12" / "RM 12–28" label for the review preview. */
 export function wizardPriceLabel(state: WizardState, currency: string): string {
 	const parsed = priceKeys(state)
@@ -374,6 +501,7 @@ export function ProductWizard({
 	onSkipToFullForm,
 	onOpenFullForm,
 	onExit,
+	initialState,
 }: {
 	/** Owning retailer — feeds the review step's category picker. */
 	retailerId: Id<"retailers">;
@@ -381,23 +509,44 @@ export function ProductWizard({
 	categoriesLocked: boolean;
 	currency: string;
 	onSubmit: (values: ProductFormSubmitValues) => Promise<void>;
-	/** "Skip — use the full form" on step 1 (power users / bulk sellers). */
-	onSkipToFullForm: () => void;
+	/** "Skip — use the full form" on step 1: carries the step-1 basics
+	 * (name/description/photos) so nothing typed is lost. */
+	onSkipToFullForm: (initialValues: ProductFormInitialValues) => void;
 	/** Review-step handoff: open the full form prefilled with the wizard draft
 	 * (second axis, per-choice photos etc. without retyping). */
 	onOpenFullForm: (initialValues: ProductFormInitialValues) => void;
 	/** Back from step 1 / Cancel — leave the wizard entirely. */
 	onExit: () => void;
+	/** Restored draft from the full form's "switch back to guided setup"
+	 * (`formDraftToWizardState`) — the wizard opens at the first unanswered
+	 * step with every carried value in place. */
+	initialState?: WizardState;
 }) {
-	const [step, setStep] = useState(1);
-	const [state, setStateRaw] = useState<WizardState>(emptyWizardState);
+	const [step, setStep] = useState(() =>
+		initialState ? wizardInitialStep(initialState) : 1,
+	);
+	const [state, setStateRaw] = useState<WizardState>(
+		() => initialState ?? emptyWizardState(),
+	);
 	const [issues, setIssues] = useState<WizardIssue[]>([]);
 	const [uploading, setUploading] = useState(false);
 	const [submitting, setSubmitting] = useState(false);
 	const [serverError, setServerError] = useState<string | null>(null);
-	const [showDescription, setShowDescription] = useState(false);
-	const [showSkus, setShowSkus] = useState(false);
-	const [moreOpen, setMoreOpen] = useState(false);
+	// Restored drafts open their optional reveals when they hold content.
+	const [showDescription, setShowDescription] = useState(
+		() => (initialState?.description ?? "").trim().length > 0,
+	);
+	const [showSkus, setShowSkus] = useState(() =>
+		Object.values(initialState?.skus ?? {}).some((v) => v.trim().length > 0),
+	);
+	const [moreOpen, setMoreOpen] = useState(
+		() =>
+			initialState !== undefined &&
+			(initialState.customLine !== null ||
+				initialState.requiresProof ||
+				initialState.minQuantity.trim().length > 0 ||
+				initialState.minNoticeDays.trim().length > 0),
+	);
 	const [valueDraft, setValueDraft] = useState("");
 	// Categories are only offered on review when the store actually has some —
 	// a brand-new seller shouldn't meet a whole new concept mid-wizard.
@@ -1257,7 +1406,9 @@ export function ProductWizard({
 				{step === 1 ? (
 					<button
 						type="button"
-						onClick={onSkipToFullForm}
+						onClick={() =>
+							onSkipToFullForm(wizardBasicsToFormInitialValues(state))
+						}
 						className="self-center text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
 					>
 						Know the full editor? Skip — use the full form

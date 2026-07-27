@@ -149,12 +149,24 @@ surface:
   variant sellable). Each label carries a one-line `title` explanation. The
   chip reflects the SAVED product — the summary strip reflects the draft.
 - **Preview CTA** — "Preview" (desktop header) / eye icon (mobile header)
-  opens the storefront (`storefrontUrl(slug)`) in a new tab. No product deep
-  link yet — link the URL-addressable product sheet here once the storefront
-  redesign (86eybrhrt) lands it.
-- **Full form → wizard switch-back** on the create route: the skip is
-  two-directional ("← Prefer the guided setup? Switch back", confirm-guarded
-  since a filled form can't be reverse-derived into wizard answers).
+  opens the REAL storefront `ProductDetailSheet` in-page (the same bottom
+  sheet buyers get) — no new tab. Inactive variants are filtered to match the
+  buyer view; option pills and steppers work; "Add to cart" shows a toast
+  explaining it's a preview. It renders the **saved** product — the summary
+  strip is the live-draft view. (When the storefront redesign 86eybrhrt lands
+  URL-addressable sheets, this stays as-is — it's already in-page.)
+- **Full form ⇄ wizard switching is value-preserving in BOTH directions** on
+  the create route. Wizard → full: the whole draft
+  (`wizardToFormInitialValues`) or, from the step-1 skip, just the basics
+  (`wizardBasicsToFormInitialValues` — no misleading prefilled 0.00 pricing
+  row). Full → wizard: `ProductForm` exposes its as-typed draft through a
+  `draftRef` getter; `formDraftToWizardState` reverse-derives a `WizardState`
+  (raw strings preserved — a blank price stays blank) and the wizard reopens
+  at the first unanswered step (`wizardInitialStep`). Anything the wizard
+  genuinely can't represent (second axis, per-choice photos, deactivated
+  choices, mixed fulfilment/approval, the custom option's photo) is listed in
+  a confirm before switching — never dropped silently. Drafts are in-memory;
+  a refresh starts the current view blank.
 
 ## Behaviour deltas (deliberate)
 

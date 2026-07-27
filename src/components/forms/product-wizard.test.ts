@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
+import type { ProductFormDraft } from "./product-form";
 import {
 	buildWizardSubmitValues,
 	emptyWizardState,
+	formDraftToWizardState,
 	type WizardState,
+	wizardBasicsToFormInitialValues,
+	wizardInitialStep,
 	wizardPriceLabel,
 	wizardStepIssues,
 	wizardToFormInitialValues,
@@ -271,6 +275,195 @@ describe("wizardToFormInitialValues (open-in-full-editor handoff)", () => {
 		expect(initial.variants?.map((v) => v.price)).toEqual([1200, 1800, 2850]);
 		expect(initial.imageStorageIds).toEqual(["st1"]);
 		expect(initial.imageUrls).toEqual(["blob:preview-1"]);
+	});
+});
+
+/** Full-form draft builder for the reverse trip (form → wizard). */
+function formDraft(partial: Partial<ProductFormDraft> = {}): ProductFormDraft {
+	return {
+		name: "Chocolate fudge brownies",
+		description: "",
+		hidden: false,
+		categoryIds: [],
+		images: [],
+		editor: {
+			options: [{ name: "Size", values: ["Small", "Medium"] }],
+			rows: [
+				{
+					optionValues: ["Small"],
+					sku: "BRN-S",
+					price: "12",
+					stock: "",
+					active: true,
+					blockWhenOutOfStock: false,
+					requiresProof: false,
+					imageStorageIds: [],
+				},
+				{
+					optionValues: ["Medium"],
+					sku: "",
+					price: "", // blank stays blank — never coerced to 0.00
+					stock: "",
+					active: true,
+					blockWhenOutOfStock: false,
+					requiresProof: false,
+					imageStorageIds: [],
+				},
+			],
+			customLine: null,
+		},
+		minQuantity: "",
+		minNoticeDays: "",
+		...partial,
+	};
+}
+
+describe("formDraftToWizardState (switch back to guided setup)", () => {
+	it("round-trips a one-axis draft losslessly, raw strings intact", () => {
+		const { state, lost } = formDraftToWizardState(formDraft());
+		expect(lost).toEqual([]);
+		expect(state.hasChoices).toBe(true);
+		expect(state.axisName).toBe("Size");
+		expect(state.axisValues).toEqual(["Small", "Medium"]);
+		expect(state.prices).toEqual({ Small: "12", Medium: "" });
+		expect(state.skus).toEqual({ Small: "BRN-S", Medium: "" });
+		expect(state.madeToOrder).toBe(true); // all rows made-to-order
+	});
+
+	it("maps a single-item draft onto the one-item branch", () => {
+		const { state, lost } = formDraftToWizardState(
+			formDraft({
+				editor: {
+					options: [],
+					rows: [
+						{
+							optionValues: [],
+							sku: "",
+							price: "5.50",
+							stock: "20",
+							active: true,
+							blockWhenOutOfStock: true,
+							requiresProof: false,
+							imageStorageIds: [],
+						},
+					],
+					customLine: null,
+				},
+			}),
+		);
+		expect(lost).toEqual([]);
+		expect(state.hasChoices).toBe(false);
+		expect(state.prices[""]).toBe("5.50");
+		expect(state.stocks[""]).toBe("20");
+		expect(state.madeToOrder).toBe(false); // from stock
+	});
+
+	it("names what the wizard can't carry: second axis, per-choice photos, deactivated rows", () => {
+		const base = formDraft();
+		const { lost } = formDraftToWizardState({
+			...base,
+			editor: {
+				options: [
+					{ name: "Size", values: ["S", "M"] },
+					{ name: "Flavour", values: ["Pandan"] },
+				],
+				rows: [
+					{
+						...base.editor.rows[0],
+						optionValues: ["S", "Pandan"],
+						imageStorageIds: ["img1"],
+					},
+					{
+						...base.editor.rows[1],
+						optionValues: ["M", "Pandan"],
+						active: false,
+					},
+				],
+				customLine: null,
+			},
+		});
+		expect(lost.join(" ")).toMatch(/second choice/i);
+		expect(lost.join(" ")).toMatch(/photos/i);
+		expect(lost.join(" ")).toMatch(/deactivated/i);
+	});
+
+	it("collapses mixed fulfilment to the majority and flags it", () => {
+		const base = formDraft();
+		const rows = ["S", "M", "L"].map((v, i) => ({
+			...base.editor.rows[0],
+			optionValues: [v],
+			sku: "",
+			blockWhenOutOfStock: i < 2, // 2 track, 1 made-to-order
+		}));
+		const { state, lost } = formDraftToWizardState({
+			...base,
+			editor: {
+				options: [{ name: "Size", values: ["S", "M", "L"] }],
+				rows,
+				customLine: null,
+			},
+		});
+		expect(lost.join(" ")).toMatch(/made-to-order \/ from-stock/i);
+		expect(state.madeToOrder).toBe(false); // majority tracks stock
+	});
+
+	it("carries the custom line and order rules through", () => {
+		const { state, lost } = formDraftToWizardState(
+			formDraft({
+				minQuantity: "20",
+				minNoticeDays: "3",
+				editor: {
+					...formDraft().editor,
+					customLine: {
+						label: "Bespoke",
+						price: "150",
+						prompt: "Theme?",
+						imageStorageIds: [],
+					},
+				},
+			}),
+		);
+		expect(lost).toEqual([]);
+		expect(state.customLine).toEqual({
+			label: "Bespoke",
+			price: "150",
+			prompt: "Theme?",
+		});
+		expect(state.minQuantity).toBe("20");
+		expect(state.minNoticeDays).toBe("3");
+	});
+});
+
+describe("wizardInitialStep", () => {
+	it("opens a fully answered draft at review", () => {
+		expect(
+			wizardInitialStep({ ...browniesState(), madeToOrder: true }),
+		).toBe(5);
+	});
+
+	it("opens at the first unanswered / invalid step", () => {
+		expect(wizardInitialStep({ ...browniesState(), name: "" })).toBe(1);
+		expect(wizardInitialStep({ ...browniesState(), hasChoices: null })).toBe(2);
+		expect(
+			wizardInitialStep({ ...browniesState(), prices: {} }),
+		).toBe(3);
+		expect(wizardInitialStep({ ...browniesState(), madeToOrder: null })).toBe(
+			4,
+		);
+	});
+});
+
+describe("wizardBasicsToFormInitialValues (step-1 skip)", () => {
+	it("carries only the step-1 basics — no prefilled 0.00 pricing row", () => {
+		const initial = wizardBasicsToFormInitialValues({
+			...emptyWizardState(),
+			name: "Brownies",
+			images: [{ id: "st1", url: "blob:p1" }],
+		});
+		expect(initial.name).toBe("Brownies");
+		expect(initial.imageStorageIds).toEqual(["st1"]);
+		expect(initial.variants).toBeUndefined();
+		expect(initial.options).toBeUndefined();
 	});
 });
 

@@ -1,22 +1,31 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { api } from "../../convex/_generated/api";
 import { PageHeader } from "../components/dashboard/page-header";
 import {
 	ProductForm,
+	type ProductFormDraft,
 	type ProductFormInitialValues,
 	type ProductFormSubmitValues,
 } from "../components/forms/product-form";
-import { ProductWizard } from "../components/forms/product-wizard";
+import {
+	formDraftToWizardState,
+	ProductWizard,
+	type WizardState,
+} from "../components/forms/product-wizard";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { hasFeature } from "../lib/subscription";
 
 /**
- * New product = the 5-step wizard by default; `?form=full` is the escape hatch
- * for power sellers (the wizard's "Skip — use the full form" link) and renders
- * the same restructured form the edit page uses. See
- * docs/product-setup-wizard.md.
+ * New product = the 5-step wizard by default; `?form=full` renders the same
+ * restructured form the edit page uses. The switch is two-directional and
+ * value-preserving: wizard → full carries the whole draft
+ * (`wizardToFormInitialValues` / step-1 basics), full → wizard reverse-derives
+ * a WizardState from the form's as-typed draft (`formDraftToWizardState`) —
+ * anything the wizard can't represent is confirmed before it's dropped.
+ * Drafts ride in memory only; a refresh starts the chosen view blank.
+ * See docs/product-setup-wizard.md.
  */
 export const Route = createFileRoute("/app/products/new")({
 	validateSearch: (search: Record<string, unknown>): { form?: "full" } =>
@@ -30,10 +39,14 @@ function NewProductRoute() {
 	const retailer = useDashboardRetailer();
 	const create = useMutation(api.products.create);
 	const setProductCategories = useMutation(api.categories.setProductCategories);
-	// The wizard's "Open in the full editor" handoff — the draft it built rides
-	// here so the full form mounts prefilled (nothing retyped). In-memory only:
-	// a refresh falls back to a blank full form, same as the skip link.
+	// Wizard → full form: the draft the wizard built (full handoff or step-1
+	// basics), seeding the form's initial values.
 	const [wizardDraft, setWizardDraft] = useState<ProductFormInitialValues>();
+	// Full form → wizard: the restored WizardState derived from the form draft.
+	const [wizardReturn, setWizardReturn] = useState<WizardState>();
+	// Live getter for the full form's as-typed state (assigned by ProductForm
+	// every render, read only on the switch-back click).
+	const formDraftRef = useRef<(() => ProductFormDraft) | null>(null);
 
 	if (!retailer) return null;
 
@@ -66,6 +79,31 @@ function NewProductRoute() {
 		navigate({ to: "/app/products" });
 	}
 
+	function openFullForm(initialValues: ProductFormInitialValues) {
+		setWizardDraft(initialValues);
+		navigate({ to: "/app/products/new", search: { form: "full" }, replace: true });
+	}
+
+	function switchBackToWizard() {
+		const draft = formDraftRef.current?.();
+		if (!draft) {
+			navigate({ to: "/app/products/new", search: {}, replace: true });
+			return;
+		}
+		const { state, lost } = formDraftToWizardState(draft);
+		// Only interrupt when something genuinely can't make the trip.
+		if (
+			lost.length > 0 &&
+			!window.confirm(
+				`The guided setup can't carry over:\n\n• ${lost.join("\n• ")}\n\nEverything else keeps its value. Switch anyway?`,
+			)
+		) {
+			return;
+		}
+		setWizardReturn(state);
+		navigate({ to: "/app/products/new", search: {}, replace: true });
+	}
+
 	// Wizard path (default) — it owns its own header/back/progress chrome.
 	if (form !== "full") {
 		return (
@@ -74,22 +112,10 @@ function NewProductRoute() {
 					retailerId={retailer._id}
 					categoriesLocked={categoriesLocked}
 					currency={retailer.currency}
+					initialState={wizardReturn}
 					onSubmit={handleCreate}
-					onSkipToFullForm={() =>
-						navigate({
-							to: "/app/products/new",
-							search: { form: "full" },
-							replace: true,
-						})
-					}
-					onOpenFullForm={(initialValues) => {
-						setWizardDraft(initialValues);
-						navigate({
-							to: "/app/products/new",
-							search: { form: "full" },
-							replace: true,
-						});
-					}}
+					onSkipToFullForm={openFullForm}
+					onOpenFullForm={openFullForm}
 					onExit={() => navigate({ to: "/app/products" })}
 				/>
 			</div>
@@ -112,21 +138,12 @@ function NewProductRoute() {
 			</div>
 			<h2 className="text-xl font-bold lg:hidden">New product</h2>
 
-			{/* Way back to the guided setup — the skip is two-directional. The
-			    wizard starts fresh (its questions derive state; a filled full form
-			    can't be reverse-derived), so a confirm guards typed work. */}
+			{/* Way back to the guided setup — value-preserving (the form's draft is
+			    reverse-derived into wizard answers; a confirm only appears when
+			    something can't make the trip). */}
 			<button
 				type="button"
-				onClick={() => {
-					if (
-						window.confirm(
-							"Switch to the step-by-step setup? Anything you've typed here won't carry over.",
-						)
-					) {
-						setWizardDraft(undefined);
-						navigate({ to: "/app/products/new", search: {}, replace: true });
-					}
-				}}
+				onClick={switchBackToWizard}
 				className="self-start text-sm font-semibold text-accent-emphasis hover:underline"
 			>
 				← Prefer the guided setup? Switch back
@@ -136,6 +153,8 @@ function NewProductRoute() {
 				retailerId={retailer._id}
 				categoriesLocked={categoriesLocked}
 				initialValues={wizardDraft}
+				mode="create"
+				draftRef={formDraftRef}
 				currency={retailer.currency}
 				submitLabel="Create product"
 				onSubmit={handleCreate}

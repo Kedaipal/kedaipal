@@ -11,7 +11,12 @@ import {
 	Save,
 	Store,
 } from "lucide-react";
-import { type FormEvent, type ReactNode, useState } from "react";
+import {
+	type FormEvent,
+	type MutableRefObject,
+	type ReactNode,
+	useState,
+} from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { MAX_NOTICE_DAYS } from "../../../convex/lib/fulfilmentDate";
 import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
@@ -73,6 +78,23 @@ export type ProductFormInitialValues = NonNullable<
 	ProductFormProps["initialValues"]
 >;
 
+/**
+ * The form's live, as-typed state — strings kept raw (blank price stays
+ * blank). Read through the `draftRef` getter by the create route's
+ * "switch back to guided setup" CTA, which reverse-derives a WizardState from
+ * it (`formDraftToWizardState`) so no typed value is lost on the way back.
+ */
+export type ProductFormDraft = {
+	name: string;
+	description: string;
+	hidden: boolean;
+	categoryIds: Id<"categories">[];
+	images: ProductImage[];
+	editor: VariantEditorState;
+	minQuantity: string;
+	minNoticeDays: string;
+};
+
 interface ProductFormProps {
 	/** Owning retailer — feeds the category picker's list query. */
 	retailerId: Id<"retailers">;
@@ -117,6 +139,15 @@ interface ProductFormProps {
 	 * competing with the primary save.
 	 */
 	stickyAction?: ReactNode;
+	/**
+	 * "create" keeps the readiness checklist even when `initialValues` are
+	 * present (the wizard handoff seeds a CREATE, not an edit). Defaults by
+	 * `initialValues` presence: seeded = edit.
+	 */
+	mode?: "create" | "edit";
+	/** Getter for the live draft — assigned every render so the create route
+	 * can read the as-typed state when switching back to the wizard. */
+	draftRef?: MutableRefObject<(() => ProductFormDraft) | null>;
 }
 
 /** Seed the editor state from existing variants, or a single empty default row. */
@@ -492,10 +523,13 @@ export function ProductForm({
 	submitLabel,
 	onSubmit,
 	stickyAction,
+	mode,
+	draftRef,
 }: ProductFormProps) {
 	// Editing an existing product vs creating a new one — the edit page leads
-	// with the summary strip; create keeps the readiness checklist.
-	const isEdit = initialValues !== undefined;
+	// with the summary strip; create keeps the readiness checklist. The wizard
+	// handoff seeds a create with initialValues, so `mode` wins when given.
+	const isEdit = mode ? mode === "edit" : initialValues !== undefined;
 
 	const [images, setImages] = useState<ProductImage[]>(
 		(initialValues?.imageStorageIds ?? []).map((id, i) => ({
@@ -586,6 +620,21 @@ export function ProductForm({
 			}
 		},
 	});
+
+	// Keep the draft getter fresh every render — the route reads it lazily on
+	// the "switch back to guided setup" click, never during render.
+	if (draftRef) {
+		draftRef.current = () => ({
+			name: form.state.values.name,
+			description: form.state.values.description ?? "",
+			hidden,
+			categoryIds,
+			images,
+			editor,
+			minQuantity: minQty,
+			minNoticeDays: minNoticeDraft,
+		});
+	}
 
 	function handleSubmit(e: FormEvent) {
 		submitThenFocusError(form, e);
