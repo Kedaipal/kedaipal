@@ -506,7 +506,7 @@ function ModeButton({
 			onClick={onClick}
 			disabled={disabled}
 			aria-pressed={active}
-			className={`flex flex-col items-start gap-0.5 rounded-xl border-2 px-3 py-2.5 text-left transition-colors ${
+			className={`relative flex flex-col items-start gap-0.5 rounded-xl border-2 py-2.5 pl-3 pr-9 text-left transition-colors ${
 				active
 					? "border-accent bg-accent/5"
 					: "border-border bg-card hover:border-accent/40"
@@ -519,7 +519,28 @@ function ModeButton({
 				{badge}
 			</span>
 			<span className="text-xs text-muted-foreground">{subtitle}</span>
+			<ModeRadioDot active={active} />
 		</button>
+	);
+}
+
+/**
+ * Radio-style indicator in a mode card's corner. These grids choose exactly
+ * ONE option, but the tinted-border selected state alone read as "these might
+ * all be on" (Zaki, 27 Jul) — an explicit empty-ring vs filled-dot makes the
+ * pick-one semantics visible at a glance. Decorative only: the button itself
+ * carries aria-pressed.
+ */
+function ModeRadioDot({ active }: { active: boolean }) {
+	return (
+		<span
+			aria-hidden="true"
+			className={`absolute bottom-2.5 right-2.5 flex size-4 items-center justify-center rounded-full border-2 transition-colors ${
+				active ? "border-accent" : "border-border"
+			}`}
+		>
+			{active ? <span className="size-2 rounded-full bg-accent" /> : null}
+		</span>
 	);
 }
 
@@ -740,7 +761,7 @@ function DeliveryChargeSection({
 					onClick={() => setMode("lalamove")}
 					disabled={lalamoveLocked && config?.mode !== "lalamove"}
 					aria-pressed={mode === "lalamove"}
-					className={`flex flex-col items-start gap-1 rounded-xl border-2 px-3 py-2.5 text-left transition-colors ${
+					className={`relative flex flex-col items-start gap-1 rounded-xl border-2 py-2.5 pl-3 pr-9 text-left transition-colors ${
 						mode === "lalamove"
 							? "border-accent bg-accent/5"
 							: "border-border bg-card hover:border-accent/40"
@@ -760,6 +781,7 @@ function DeliveryChargeSection({
 							? "Rider delivery — upgrade to Pro to turn on"
 							: "Live rider price, one-tap booking"}
 					</span>
+					<ModeRadioDot active={mode === "lalamove"} />
 				</button>
 				<ModeButton
 					active={mode === "free"}

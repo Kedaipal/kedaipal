@@ -165,7 +165,11 @@ locked Starter the card stays **full-colour with a Pro chip + "upgrade to
 Pro to turn on"** (disabled-with-reason, deliberately not a washed-out
 ghost) so every tier sees rider delivery exists — the upsell surface for
 the Pro tier. The settings vehicle is labelled as a *default* with a
-helper noting the per-order switch in the booking dialog.
+helper noting the per-order switch in the booking dialog. Every mode card
+(and the vehicle picker) carries a **radio-style corner dot** (`ModeRadioDot`,
+27 Jul) — empty ring vs filled accent dot — because the tinted-border
+selected state alone read as "these might all be on" when the grids in fact
+choose exactly one option.
 
 **IA (revised after first seller test):** Lalamove is NOT a separate card —
 it's the 4th delivery-pricing mode (Settings → Fulfilment → Delivery charge:
