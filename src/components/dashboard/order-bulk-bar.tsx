@@ -187,6 +187,7 @@ export function OrderBulkBar({
 				confirmLabel={`Delete ${count} ${orderWord}`}
 				cancelLabel={`Keep ${orderWord}`}
 				destructive
+				confirmPhrase="DELETE"
 				onConfirm={() => onDelete?.()}
 			/>
 		</div>

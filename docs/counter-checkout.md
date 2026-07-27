@@ -8,10 +8,12 @@
 >
 > **Status: V1 shipped** — backend spine (schema, session/token lifecycle,
 > inbound `KP-<token>` intent routing, live bind, expiry cron) **+** the
-> iPad-first seller UI, order-from-session, and pay-in-person. **Deferred to
-> V1.1:** the manual-phone and anonymous walk-in identity paths — see
-> [§Pending](#pending). The V1 cut = Bearcamp's happy-path counter (buyer scans →
-> seller keys order → paid now or pay-later).
+> iPad-first seller UI, order-from-session, and pay-in-person. **V1.1 shipped**
+> ([`86ey8vqp6`](https://app.clickup.com/t/86ey8vqp6)) — the manual-phone and
+> anonymous walk-in identity escape hatches, see
+> [§Manual entry & anonymous](#manual-entry--anonymous-walk-in-86ey8vqp6). The V1
+> cut was Bearcamp's happy-path counter (buyer scans → seller keys order → paid
+> now or pay-later); V1.1 removes the "buyer must scan" precondition.
 
 ---
 
@@ -121,8 +123,9 @@ posture as `pickupSnapshot.locationType`). It drives per-surface UI:
   [`order-inbox.md`](./order-inbox.md).
 
 **Identity = optional, three converging paths, one record:** token-scan (happy,
-**built**), manual phone entry (**pending**), anonymous walk-in / cash
-(**pending**).
+**built**), manual phone entry (**built**, `86ey8vqp6`), anonymous walk-in / cash
+(**built**, `86ey8vqp6`). See
+[§Manual entry & anonymous](#manual-entry--anonymous-walk-in-86ey8vqp6).
 
 ---
 
@@ -278,12 +281,13 @@ the seller doesn't have to remember a manual step.
 - **Automatic send on checkout** (`whatsapp.notifyCounterOrderCreated`, scheduled
   by `createOrderFromSession`) — the buyer's chat gets, with no seller action:
   - **Paid now** → a "confirmed & paid" text, then the **Receipt** PDF.
-  - **Pay later** → a lean payment ask — the amount + transfer-reference line +
-    an "I've paid" CTA + tracking link (via `sendPaymentMessage` with
-    `includePaymentDetails: false`), then the **Invoice** PDF. The seller's
-    bank/QR **methods block is intentionally omitted here** — the buyer already
-    received it at scan-bind (see below), and the invoice PDF carries it too, so
-    re-sending would repeat the same details.
+  - **Pay later** → a lean payment ask — the amount + order-page link (in the
+    intro copy) + transfer-reference line + the **"Make payment"** CTA button (via
+    `sendPaymentMessage`), then the **Invoice** PDF. Raw bank/QR details are
+    **never sent in the chat** (ticket 86ey98ju1) — the link points to the order
+    page's "How to pay", and the invoice PDF carries the actual details as the
+    formal document. The intro carries the link, so no separate "see how to pay"
+    block is appended (the buyer sees the link once, not twice).
 - **One PDF, two faces:** `buildOrderReceiptPdf` keys off `OrderReceiptData.paid` —
   an unpaid order prints **"Invoice"** + the "How to pay" block, a settled one
   prints **"Receipt"**. No separate invoice builder or table.
@@ -303,6 +307,17 @@ the seller doesn't have to remember a manual step.
   is a noted follow-up.
 
 ### Pay-at-bind — payment info right after the scan ([`86ey5kq7p`](https://app.clickup.com/t/86ey5kq7p))
+
+> **⚠️ Removed by [`86ey98ju1`](https://app.clickup.com/t/86ey98ju1).** Raw bank/QR
+> details are no longer sent in the WhatsApp chat, so the scan-time payment push
+> (`notifyCounterCheckoutPayment`, `getRetailerPaymentContext`, the
+> `counterCheckoutPaymentIntro` copy, and the `AwaitingScreen` "they'll get your
+> payment details right away" helper) was **deleted**. There's also no order —
+> hence no tracking page — at scan time, so there's nothing payable to point at
+> yet. The buyer now gets the payment info once the cashier rings up the order:
+> the order-create message carries the order-page link (in its intro) + the
+> **"Make payment"** button (→ order page's "How to pay") + the invoice PDF. The original design is kept
+> below for history.
 
 So the buyer can pay **whenever they're ready** — often while the cashier is
 still ringing items up — the seller's payment details are pushed **immediately
@@ -356,8 +371,9 @@ and the mint URL is exactly as public, so it needs the same limits anyway.)
   `startSessionFromStoreQr` **creates or re-claims** a `buyer_identified` session
   flagged `origin: "store_qr"`. A rescan by the same buyer re-claims the open
   session (no duplicate row, no rate-limit charge). `handleInbound` acks with
-  `storeQrConnected` (localized) then schedules the shared `notifyCounterCheckoutPayment`
-  (same pay-at-scan push — skipped on a re-claim so details never repeat).
+  `storeQrConnected` (localized). *(The scan-time payment push was removed by
+  86ey98ju1 — see the Pay-at-bind note above; the buyer gets the payment CTA at
+  order-create instead.)*
 - **Guards, in order:** unknown/rotated token → `not_found` (generic reply, no
   store leaked); re-claim; then the `storeQrScan` rate limit (`3/hr` per
   `(store, phone)`) + `MAX_OPEN_STORE_QR_SESSIONS` (10) cap → `busy` reply.
@@ -408,9 +424,46 @@ QR** — the static store QR is now the *only* counter QR.
   online" + "At the counter") each with its own Download-PNG, centered/width-capped
   on desktop, keeping the "printable A4 poster →" link. (This is the quick
   standalone-PNG grab; `/app/poster` remains the branded print.)
-- **Payment-at-scan unchanged** (`86ey5kq7p`): first scan schedules
-  `notifyCounterCheckoutPayment`; a re-claim skips it (buyer already has the
-  details); no-ops when the seller has no payment methods.
+- **Payment-at-scan removed** (`86ey98ju1`): the scan no longer pushes payment
+  details (raw bank details out of chat + no order/tracking page exists yet at
+  scan time). The buyer gets the order-page link + "Make payment" button at
+  order-create instead.
+
+#### Auto-open on scan (follow-on, same ticket)
+
+The "buyer scans → cashier picks the card out of the list" step had a needless
+beat: with the enlarged store-QR dialog open (`StoreQrChip`), the cashier is
+*already* waiting on that one buyer, so making them close the dialog and hunt for
+the new card is friction. Now the dialog **jumps straight into the checkout the
+scan produces**.
+
+- When the dialog opens it snapshots the walk-in (`origin: "store_qr"`) session
+  ids currently in `listOpenSessions` (`walkInSessionIds`). The **first** id that
+  appears afterwards and isn't in that baseline (`newWalkInSince`) is *this*
+  buyer — the dialog closes and `onScanned` navigates to their build screen. The
+  list is sorted most-recently-active first, so a fresh scan sorts to the front.
+- Diff logic is a pure helper (`src/lib/counter-scan.ts`, unit-tested) so the
+  React effect is a thin wire-up.
+- **Gated on the dialog being open** on purpose: a background scan of the printed
+  poster while the cashier is mid-building another order still just lands quietly
+  in the list (never yanks them off their current work). It also only reacts to
+  `store_qr` origins — manual-phone / anonymous (`cashier`) sessions already
+  self-navigate via `onStarted`, so they're excluded from the baseline diff.
+- **Re-claim caveat:** a returning buyer who already has an open session doesn't
+  mint a new row (`startSessionFromStoreQr` reclaims it), so re-scanning the
+  on-screen QR won't auto-open — their existing checkout is still findable by
+  code. The fresh-walk-in case (the overwhelming majority) is what this covers.
+- **Shared-token caveat:** the on-screen QR and the printed poster encode the
+  **same** `KPS-<counterQrToken>` deep link, so while the dialog is open *any* new
+  `store_qr` session auto-opens — including a different buyer scanning the poster
+  across the room, not necessarily the one at the counter. Low-probability for the
+  single-counter ICP and visibly recoverable (the build screen shows the buyer's
+  name + pairing code, so a mismatch is obvious at a glance). We accept it rather
+  than mint a per-dialog token — that would resurrect the per-session-QR flow
+  `86ey5neg6` deliberately collapsed.
+- `StoreQrChip` now shares the same `listOpenSessions` subscription
+  `OpenCheckoutsList` holds (Convex dedupes), so the list is warm the instant the
+  dialog opens and the baseline snapshot is accurate on the first frame.
 
 ### Build-screen UX polish (same ticket)
 
@@ -440,13 +493,108 @@ Shipped alongside the receipt/invoice work, all in `src/routes/app.checkout.tsx`
   desk card so it spans full width and lines up with the open-checkout cards on
   desktop (no ragged button column).
 
-## Pending (V1.1)
+## Header — one "New order" dropdown (`86eyd67y1`)
+
+Every way to start a checkout is grouped behind a **single** accent `New order`
+dropdown in the Counter page header — it replaced the old two competing pill
+buttons ("Show QR" chip + "No scan?"), which read as clutter on mobile (both were
+icon-only there). One `CounterCheckoutActions` component now owns the whole
+surface (the former `StoreQrChip` + `NoScanControl` were merged and deleted). The
+menu (`ui/dropdown-menu.tsx`, a new radix `DropdownMenu` primitive) offers three
+items, each with a one-line "what happens next":
+
+1. **Show store QR** — opens the enlarged scannable QR dialog (token auto-provisions
+   on mount; the `listOpenSessions` scan-watch still auto-navigates into the walk-in
+   the moment the buyer scans). Hidden — just this item — while the store's `wa.me`
+   deep link hasn't resolved (no `WHATSAPP_CHECKOUT_PHONE`), so the phone + cash
+   paths stay usable.
+2. **Enter phone number** — opens the manual-phone bind form directly (the old
+   two-step "choose → phone" chooser is gone; the menu *is* the chooser).
+3. **Cash sale — no contact** — fires `startAnonymousSession` straight from the item.
+
+Behaviour is unchanged from the two-button version — pure IA/UX consolidation. The
+empty-state copy points at the new control ("tap **New order** to show your store
+QR … **New order** also lets you type their number or ring up a cash sale").
+
+**Mobile header layout:** the header stacks on mobile (`flex-col`, `sm:flex-row`)
+— the title + full description sit on top at full width (the description no longer
+truncates, so "Take an in-person order — connected to WhatsApp." is fully visible)
+and the **New order** button (and the active-session "All checkouts" back button)
+goes full-width below it. Desktop keeps the original side-by-side row.
+
+## Manual entry & anonymous walk-in (`86ey8vqp6`)
+
+The V1.1 identity escape hatches — the cashier can ring up **any** buyer, even one
+who won't/can't scan (no WhatsApp, dead camera, in a hurry, privacy-shy). Same
+"three converging paths, one record" model as the scan: both land a normal
+`buyer_identified` session that the rest of the flow (draft → `createOrderFromSession`
+→ receipt/invoice) treats identically. Discoverable via the **New order** dropdown in
+the Counter page header (see below).
+
+**Buyer name** — the session's name lives in `waProfileName` (shared slot: an
+inbound pushname on a scan, the cashier-typed name on manual/anonymous). It flows
+onto the order snapshot + seeds the CRM row. Manual-phone **requires** a name (in
+the modal); an anonymous walk-in's name is **optional and editable inline** on the
+build screen (`setSessionCustomerName` → debounced save; trims + caps at 60, blank
+clears). A provided name must be **≥3 chars** everywhere (a single letter isn't a
+name) — required on the manual-phone bind, and enforced-if-present on the optional
+anonymous name (the inline editor only saves an empty or ≥3-char value, so the
+rule never fires mid-type). One shared validator seam in `convex/lib/customer.ts`
+(`requireCustomerName` / `normalizeOptionalCustomerName`) backs **both** the
+counter paths **and** `orders.create`, so the rule holds server-side on every
+order-create path — a direct mutation call can't bypass the storefront form. The
+storefront checkout name is now **required** (≥3)
+too (`checkoutFormSchema`, mirroring the `fulfilmentDate` optional-at-protocol /
+required-in-UI pattern — `orders.create` keeps `customer.name` optional for
+legacy/other callers).
+
+**Manual phone** — `counterCheckout.bindSessionManualPhone` (owner-or-admin,
+admin-audited). The cashier types the buyer's number + name; the number is
+normalized by
+`assertValidMyWaPhone` (`convex/lib/slug.ts`) to the **same E.164 digits an inbound
+scan produces** (`0xx…` → `60xx…`; `60…`/`+60…` kept) so it resolves-or-creates the
+exact same `(retailerId, waPhone)` customer — a returning buyer is recognised, never
+forked. The bind is direct (no webhook, no rate-limit/cap — those guard the public
+poster token, not a logged-in seller). The buyer still gets the WhatsApp confirmation
++ receipt/invoice and a CRM row. **PDPA:** the buyer never scanned, so the confirmation
+is our first message to them — it carries the same notice-at-collection line as the
+poster ack (`whatsappCopy.privacyNoticeLine`, threaded via `notifyCounterOrderCreated`'s
+`includePrivacyNotice`; scan buyers already got it at connect, so it's not repeated).
+**Caveat (graceful degradation):** a manual-phone buyer never opened a 24h WhatsApp
+session window, so a free-form send may be rejected by Meta. Sends are best-effort
+(errors logged) so the order/CRM are always intact; full out-of-window Utility-template
+fallback is [`86ey1fgjw`](https://app.clickup.com/t/86ey1fgjw), a follow-up.
+**Payment details:** a manual-phone **pay-later** buyer (like every buyer now,
+post-86ey98ju1) gets the order-page link + **"Make payment"** button on the
+order-create message plus the bank/QR details inside the **invoice PDF**
+(`How to pay` block) — never raw digits in the chat. (The old scan-time pay-ahead
+push was removed for everyone by 86ey98ju1.)
+
+**Anonymous** — `counterCheckout.startAnonymousSession`. A cash sale with **no phone
+contact**: the session has no `waPhone`/`customerId` (an optional name is allowed —
+see above), `createOrderFromSession` writes an order with no `customerId`/phone (name
+optional), **no customer aggregate is touched**, and **no WhatsApp is scheduled**
+(belt-and-braces: `notifyCounterOrderCreated` also no-ops on a missing
+phone). Anonymous **forces paid-in-person** — there's nobody to send a pay-later link
+to — enforced server-side and surfaced as a disabled-with-reason "Pay later" toggle.
+Anonymous orders render **"Walk-in customer"** everywhere a name shows (inbox card,
+order detail, CSV export) via the shared `orderCustomerLabel` (`convex/lib/customer.ts`
+↔ `src/lib/customer.ts`) — never blank/crash. The Done screen hides the "sent to buyer"
+framing and offers **Download / Share only**.
+
+**Re-claim safety** — if a manually-bound buyer later scans the store QR with the same
+number, `startSessionFromStoreQr`'s re-claim now spans **all** open sessions (every
+origin), so it resumes the existing session instead of forking a duplicate.
+
+**No schema change** — the session already had optional `waPhone`/`customerId`; an
+anonymous session is simply a `buyer_identified` row with no phone, and an anonymous
+order is `customer: {name: undefined, waPhone: undefined}` (both already optional).
+
+## Pending
 
 - **Resend from order detail** — the "Send receipt/invoice to buyer" action is
   currently only on the counter Done screen; order detail has Download only.
-- **Manual-phone path** — seller types the buyer's number to bind a session
-  without a scan (e.g. buyer's camera won't cooperate). Binds the session
-  directly, no webhook.
-- **Anonymous walk-in** — a cash sale with no contact: create the order off the
-  session with no buyer identity (no WhatsApp confirmation).
+- ~~**Pay-at-scan message rework** ([`86ey8vqk1`](https://app.clickup.com/t/86ey8vqk1))~~
+  — moot: the scan-time payment push was removed entirely by 86ey98ju1 (payment
+  info now rides the order-create CTA + invoice PDF).
 - *(later, ticket 3.2)* richer Desktop / iPad Console affordances.

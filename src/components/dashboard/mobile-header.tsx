@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 import type { FunctionReturnType } from "convex/server";
 import { useEffect, useRef } from "react";
 import type { api } from "../../../convex/_generated/api";
+import { AppImage } from "../ui/app-image";
 import { TierPill } from "./tier-pill";
 
 type Retailer = NonNullable<
@@ -43,7 +44,13 @@ export function MobileHeader({ retailer, adminBadge }: MobileHeaderProps) {
 			className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-border bg-background/95 px-5 py-3 backdrop-blur lg:hidden print:hidden"
 		>
 			<div className="flex min-w-0 flex-1 items-center gap-2.5">
-				<img src="/logo.svg" alt="Kedaipal" className="h-8 w-auto shrink-0" />
+				<AppImage
+					src="/logo.svg"
+					alt="Kedaipal"
+					aspect="h-8 w-auto shrink-0"
+					fill={false}
+					priority
+				/>
 				{retailer ? (
 					<div className="flex min-w-0 flex-col gap-0.5">
 						<Link

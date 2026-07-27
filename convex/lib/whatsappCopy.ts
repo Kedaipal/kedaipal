@@ -1,9 +1,9 @@
 // WhatsApp message copy catalog. Pure — no Convex imports — to keep testable.
 
+import { type Locale, pickLocale as pickLocaleBase } from "./locale";
 import { deriveMapsUrl } from "./mapsUrl";
-import type { PaymentMethod } from "./payment";
 
-export type Locale = "en" | "ms";
+export type { Locale } from "./locale";
 
 export type DeliveryMethod = "delivery" | "self_collect";
 
@@ -21,6 +21,9 @@ export type CopyVars = {
 	pickupKind?: PickupKind;
 	/** Pre-formatted money string (e.g. "MYR 25.00") for messages that quote a total. */
 	amount?: string;
+	/** Pre-formatted delivery-charge string for `deliveryFeeSet` — undefined
+	 * when the seller settled on NO extra charge (free delivery). */
+	feeAmount?: string;
 	/** Short human pairing code (e.g. "K7") the walk-in buyer shows the cashier. */
 	code?: string;
 };
@@ -38,11 +41,33 @@ type LocaleCopy = {
 	unknownFallback: () => string;
 };
 
+const CONTACT_LINE_LABEL: Record<Locale, string> = {
+	en: "Contact us",
+	ms: "Hubungi kami",
+	zh: "联系我们",
+};
+
 function contactLine(contactPhone: string | undefined, locale: Locale): string {
 	if (!contactPhone) return "";
-	return locale === "ms"
-		? `\nHubungi kami: wa.me/${contactPhone}`
-		: `\nContact us: wa.me/${contactPhone}`;
+	return `\n${CONTACT_LINE_LABEL[locale]}: wa.me/${contactPhone}`;
+}
+
+/**
+ * PDPA notice-at-collection line (86ey5m3hx). Shown the first time we store a
+ * counter buyer's number and message them without them having visited the
+ * website. The store-QR scan flow carries it in `storeQrConnected`; the manual-
+ * phone entry flow (cashier types the number, buyer never scanned) carries it on
+ * the order confirmation — their first message from us. One source of truth so
+ * the two paths never drift.
+ */
+const PRIVACY_NOTICE_LINE: Record<Locale, string> = {
+	en: "\n\nBy continuing you agree to our Privacy Policy: https://kedaipal.com/privacy",
+	ms: "\n\nDengan meneruskan, anda bersetuju dengan Dasar Privasi kami: https://kedaipal.com/privacy",
+	zh: "\n\n继续操作即表示您同意我们的隐私政策：https://kedaipal.com/privacy",
+};
+
+export function privacyNoticeLine(locale: Locale): string {
+	return PRIVACY_NOTICE_LINE[locale];
 }
 
 export const waCopy: Record<Locale, LocaleCopy> = {
@@ -53,7 +78,7 @@ export const waCopy: Record<Locale, LocaleCopy> = {
 				: deliveryMethod === "self_collect"
 					? "We'll let you know when it's ready for pickup."
 					: "We'll update you when it ships.";
-			return `✅ Order ${shortId} confirmed. ${method} — ${storeName}${trackingUrl ? `\n\nTrack order & tap 'I've paid' to send receipt: ${trackingUrl}` : ""}${contactLine(contactPhone, "en")}`;
+			return `✅ Order ${shortId} confirmed. ${method} — ${storeName}${trackingUrl ? `\n\nTrack your order & make payment here: ${trackingUrl}` : ""}${contactLine(contactPhone, "en")}`;
 		},
 		status: {
 			packed: ({ shortId, trackingUrl, deliveryMethod, pickupKind }) => {
@@ -92,7 +117,7 @@ export const waCopy: Record<Locale, LocaleCopy> = {
 				: deliveryMethod === "self_collect"
 					? "Kami akan maklumkan apabila sedia untuk diambil."
 					: "Kami akan maklumkan apabila dihantar.";
-			return `✅ Pesanan ${shortId} telah disahkan. ${method} — ${storeName}${trackingUrl ? `\n\nJejak pesanan & tekan 'I've paid' untuk hantar resit: ${trackingUrl}` : ""}${contactLine(contactPhone, "ms")}`;
+			return `✅ Pesanan ${shortId} telah disahkan. ${method} — ${storeName}${trackingUrl ? `\n\nJejak pesanan & buat pembayaran di sini: ${trackingUrl}` : ""}${contactLine(contactPhone, "ms")}`;
 		},
 		status: {
 			packed: ({ shortId, trackingUrl, deliveryMethod, pickupKind }) => {
@@ -124,12 +149,48 @@ export const waCopy: Record<Locale, LocaleCopy> = {
 		unknownFallback: () =>
 			"Hai! Untuk membuat pesanan, layari katalog kami dan tekan Checkout — anda akan dikembalikan ke sini dengan ID pesanan.",
 	},
+	zh: {
+		confirm: ({ shortId, storeName, contactPhone, trackingUrl, deliveryMethod, pickupKind }) => {
+			const method = isDropOff({ deliveryMethod, pickupKind })
+				? "东西准备好后，我们会通知您到交收点拿。"
+				: deliveryMethod === "self_collect"
+					? "东西准备好后，我们会通知您来拿。"
+					: "发货后我们会通知您。";
+			return `✅ 订单 ${shortId} 已确认。${method} —— ${storeName}${trackingUrl ? `\n\n查看订单状态和付款：${trackingUrl}` : ""}${contactLine(contactPhone, "zh")}`;
+		},
+		status: {
+			packed: ({ shortId, trackingUrl, deliveryMethod, pickupKind }) => {
+				const msg = isDropOff({ deliveryMethod, pickupKind })
+					? `📦 订单 ${shortId} 已打包，准备送到交收点。`
+					: deliveryMethod === "self_collect"
+						? `📦 订单 ${shortId} 已打包，可以来拿了。`
+						: `📦 订单 ${shortId} 已打包，准备发货。`;
+				return `${msg}${trackingUrl ? `\n\n查看订单状态：${trackingUrl}` : ""}`;
+			},
+			shipped: ({ shortId, carrierTrackingUrl, trackingUrl, deliveryMethod, pickupKind }) => {
+				if (isDropOff({ deliveryMethod, pickupKind })) {
+					return `📍 订单 ${shortId} 已经准备好了 —— 交收点见！${trackingUrl ? `\n\n订单状态：${trackingUrl}` : ""}`;
+				}
+				if (deliveryMethod === "self_collect") {
+					return `🏪 订单 ${shortId} 可以来拿了！${trackingUrl ? `\n\n订单状态：${trackingUrl}` : ""}`;
+				}
+				return `🚚 订单 ${shortId} 已经在路上了！${carrierTrackingUrl ? `\n\n查看物流：${carrierTrackingUrl}` : ""}${trackingUrl ? `\n\n订单状态：${trackingUrl}` : ""}`;
+			},
+			delivered: ({ shortId, deliveryMethod }) => {
+				if (deliveryMethod === "self_collect") {
+					return `🎉 订单 ${shortId} 已领取。谢谢惠顾！`;
+				}
+				return `🎉 订单 ${shortId} 已送达。谢谢惠顾！`;
+			},
+			cancelled: ({ shortId, contactPhone }) =>
+				`❌ 订单 ${shortId} 已取消。如有疑问请联系我们。${contactLine(contactPhone, "zh")}`,
+		},
+		unknownFallback: () =>
+			"您好！要下单的话，请浏览我们的商品目录，点击 Checkout 结账 —— 系统会把您带回这里，并附上订单编号。",
+	},
 };
 
-export function pickLocale(input: string | undefined | null): Locale {
-	if (input === "ms") return "ms";
-	return "en";
-}
+export const pickLocale = pickLocaleBase;
 
 // ---------------------------------------------------------------------------
 // System messages — locale-aware, NOT retailer-overridable.
@@ -144,17 +205,20 @@ export type SystemMessageKey =
 	| "paymentReceived"
 	| "transferReferenceLine"
 	| "mockupPendingConfirm"
+	| "deliveryFeePendingConfirm"
+	| "deliveryFeeSet"
 	| "paymentDueApproved"
 	| "paymentDueWaived"
 	| "paymentDueDeclined"
-	| "counterCheckoutPaymentIntro"
 	| "storeQrConnected"
 	| "storeQrBusy"
 	| "counterOrderConfirmedPaid"
 	| "counterOrderConfirmedUnpaid"
 	| "orderReceiptCaption"
 	| "orderInvoiceCaption"
-	| "paymentReminder";
+	| "paymentReminder"
+	| "paymentReminderIntro"
+	| "deliveryPhotoCaption";
 
 type SystemCopy = {
 	paymentReceived: (v: CopyVars) => string;
@@ -162,6 +226,14 @@ type SystemCopy = {
 	// Confirm reply for an order that still has a custom item awaiting buyer
 	// mockup approval — payment is intentionally deferred (no "I've paid" yet).
 	mockupPendingConfirm: (v: CopyVars) => string;
+	// Confirm reply while the delivery charge is still to be confirmed by the
+	// seller (radius "arrange" order, out of range / no coordinates) — payment
+	// is deferred exactly like the mockup hold. See orders.deliveryFeePending.
+	deliveryFeePendingConfirm: (v: CopyVars) => string;
+	// Intro leading the payment prompt once the seller sets the delivery charge
+	// (orders.setDeliveryFee) — quotes the charge (or "no extra charge") and the
+	// final total, then the standard payment block follows.
+	deliveryFeeSet: (v: CopyVars) => string;
 	// Intro lines that lead the payment prompt once the mockup gate opens, either
 	// by buyer approval, seller waiver, or the buyer removing the custom item from
 	// a mixed order (the ready-made remainder is now payable). Payment block follows.
@@ -171,12 +243,6 @@ type SystemCopy = {
 	// Counter Checkout (docs/counter-checkout.md): the two `counterOrderConfirmed*`
 	// messages carry the confirmed order + tracking link (paid vs pay-later branch)
 	// so the buyer never has to scan again to pay.
-	// Sent right after the store-QR connect ack: leads the retailer's payment
-	// methods block so a counter buyer can pay ahead (even before the cashier
-	// finishes) instead of waiting for the details at the end. The
-	// `renderPaymentMethods` block (with its own "💳 Payment details" header + QR
-	// images) follows. See docs/counter-checkout.md.
-	counterCheckoutPaymentIntro: (v: CopyVars) => string;
 	// Store QR poster (86ey5m35w / 86ey5neg6 — the ONLY counter QR): a buyer
 	// scanned the seller's PERMANENT printed QR. `storeQrConnected` acks the
 	// walk-in session, gives the buyer their `code` (a short pairing code they
@@ -196,6 +262,14 @@ type SystemCopy = {
 	// on an order whose payment was never claimed/received. See
 	// docs/payment-reminder.md. Not retailer-overridable (system copy).
 	paymentReminder: (v: CopyVars) => string;
+	// Intro line for the seller's MANUAL payment reminder — prefixes the payment
+	// message (transfer ref + order-page payment CTA + "Make payment" button)
+	// re-sent from the order page. Doubles as recovery when the buyer never got
+	// the first confirmation, so it re-states the order + amount and stands alone.
+	// See docs/payment-reminder.md. Not retailer-overridable (system copy).
+	paymentReminderIntro: (v: CopyVars) => string;
+	// Caption on the rider drop-off photo sent right after the delivered message.
+	deliveryPhotoCaption: (v: CopyVars) => string;
 };
 
 export const systemMessages: Record<Locale, SystemCopy> = {
@@ -210,18 +284,32 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`✅ Order ${shortId} received! It includes a custom item, so ${storeName} will send you a design to approve first — no payment needed yet. We'll share payment details right after you approve.${
 				trackingUrl ? `\n\nTrack your order: ${trackingUrl}` : ""
 			}${contactLine(contactPhone, "en")}`,
-		paymentDueApproved: ({ shortId, storeName }) =>
-			`✅ Design approved for ${shortId}! Here's how to pay so ${storeName} can start making it:`,
-		paymentDueWaived: ({ shortId, storeName }) =>
-			`Here are the payment details for your order ${shortId} from ${storeName}:`,
-		paymentDueDeclined: ({ shortId, storeName }) =>
-			`No problem — the custom item was removed from ${shortId}. Here's how to pay for the rest of your order from ${storeName}:`,
-		counterCheckoutPaymentIntro: ({ storeName }) =>
-			`💡 No need to wait for the cashier — you can pay ${storeName} whenever you're ready, even now.`,
+		deliveryFeePendingConfirm: ({ shortId, storeName, contactPhone, trackingUrl }) =>
+			`✅ Order ${shortId} received! Your address is outside ${storeName}'s standard delivery zones, so they'll confirm the delivery charge with you right here — no payment needed yet. We'll send the payment details straight after.${
+				trackingUrl ? `\n\nTrack your order: ${trackingUrl}` : ""
+			}${contactLine(contactPhone, "en")}`,
+		deliveryFeeSet: ({ shortId, storeName, amount, feeAmount, trackingUrl }) =>
+			`🚚 Delivery for ${shortId} is confirmed${
+				feeAmount ? ` — delivery charge ${feeAmount}` : " — no extra delivery charge"
+			}.${amount ? ` Your total is ${amount}.` : ""} Make payment to ${storeName} here${
+				trackingUrl ? `: ${trackingUrl}` : "."
+			}`,
+		paymentDueApproved: ({ shortId, storeName, trackingUrl }) =>
+			`✅ Design approved for ${shortId}! Make payment so ${storeName} can start making it${
+				trackingUrl ? `: ${trackingUrl}` : "."
+			}`,
+		paymentDueWaived: ({ shortId, storeName, trackingUrl }) =>
+			`Your order ${shortId} from ${storeName} is ready for payment. Make payment here${
+				trackingUrl ? `: ${trackingUrl}` : "."
+			}`,
+		paymentDueDeclined: ({ shortId, storeName, trackingUrl }) =>
+			`No problem — the custom item was removed from ${shortId}. Make payment for the rest of your order from ${storeName}${
+				trackingUrl ? `: ${trackingUrl}` : "."
+			}`,
 		storeQrConnected: ({ storeName, code }) =>
 			`You're connected to ${storeName} 🎉${
 				code ? ` Your order code is *${code}* — show it to the cashier so they can find you.` : ""
-			} They'll ring up your order and your confirmation will land right here.\n\nBy continuing you agree to our Privacy Policy: https://kedaipal.com/privacy`,
+			} They'll ring up your order and your confirmation will land right here.${privacyNoticeLine("en")}`,
 		storeQrBusy: ({ storeName }) =>
 			`${storeName} can't take new scans right now — please ask the cashier for help and they'll sort you out 🙂`,
 		counterOrderConfirmedPaid: ({ shortId, storeName, amount, trackingUrl }) =>
@@ -239,9 +327,17 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 		paymentReminder: ({ shortId, storeName, amount, trackingUrl, contactPhone }) =>
 			`👋 Friendly reminder from ${storeName}: order ${shortId}${
 				amount ? ` (${amount})` : ""
-			} is still awaiting payment. Once you've paid, tap 'I've paid' so we can get it moving${
+			} is still awaiting payment. Tap 'Make payment' to pay and confirm so we can get it moving${
 				trackingUrl ? `: ${trackingUrl}` : "."
 			}${contactLine(contactPhone, "en")}`,
+		paymentReminderIntro: ({ shortId, storeName, amount, trackingUrl }) =>
+			`👋 A reminder from ${storeName}: order ${shortId}${
+				amount ? ` (${amount})` : ""
+			} is still awaiting payment.${
+				trackingUrl ? `\n\n📋 View your order details: ${trackingUrl}` : ""
+			}`,
+		deliveryPhotoCaption: ({ shortId }) =>
+			`Delivered! 📸 Here's your rider's drop-off photo for order ${shortId}.`,
 	},
 	ms: {
 		paymentReceived: ({ shortId, storeName, trackingUrl }) =>
@@ -254,18 +350,32 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`✅ Pesanan ${shortId} diterima! Ia termasuk item custom, jadi ${storeName} akan menghantar reka bentuk untuk kelulusan anda dahulu — belum perlu bayar lagi. Kami akan kongsi maklumat pembayaran sebaik anda luluskan.${
 				trackingUrl ? `\n\nJejak pesanan anda: ${trackingUrl}` : ""
 			}${contactLine(contactPhone, "ms")}`,
-		paymentDueApproved: ({ shortId, storeName }) =>
-			`✅ Reka bentuk untuk ${shortId} telah diluluskan! Berikut cara membayar supaya ${storeName} boleh mula membuatnya:`,
-		paymentDueWaived: ({ shortId, storeName }) =>
-			`Berikut maklumat pembayaran untuk pesanan ${shortId} dari ${storeName}:`,
-		paymentDueDeclined: ({ shortId, storeName }) =>
-			`Tiada masalah — item custom telah dibuang dari ${shortId}. Berikut cara membayar untuk baki pesanan anda dari ${storeName}:`,
-		counterCheckoutPaymentIntro: ({ storeName }) =>
-			`💡 Tak perlu tunggu juruwang — anda boleh bayar ${storeName} bila-bila masa, walaupun sekarang.`,
+		deliveryFeePendingConfirm: ({ shortId, storeName, contactPhone, trackingUrl }) =>
+			`✅ Pesanan ${shortId} diterima! Alamat anda di luar zon penghantaran biasa ${storeName}, jadi mereka akan sahkan caj penghantaran dengan anda di sini — belum perlu bayar lagi. Kami akan hantar maklumat pembayaran sejurus selepas itu.${
+				trackingUrl ? `\n\nJejak pesanan anda: ${trackingUrl}` : ""
+			}${contactLine(contactPhone, "ms")}`,
+		deliveryFeeSet: ({ shortId, storeName, amount, feeAmount, trackingUrl }) =>
+			`🚚 Penghantaran untuk ${shortId} telah disahkan${
+				feeAmount ? ` — caj penghantaran ${feeAmount}` : " — tiada caj penghantaran tambahan"
+			}.${amount ? ` Jumlah anda ialah ${amount}.` : ""} Buat pembayaran kepada ${storeName} di sini${
+				trackingUrl ? `: ${trackingUrl}` : "."
+			}`,
+		paymentDueApproved: ({ shortId, storeName, trackingUrl }) =>
+			`✅ Reka bentuk untuk ${shortId} telah diluluskan! Buat pembayaran supaya ${storeName} boleh mula membuatnya${
+				trackingUrl ? `: ${trackingUrl}` : "."
+			}`,
+		paymentDueWaived: ({ shortId, storeName, trackingUrl }) =>
+			`Pesanan ${shortId} dari ${storeName} sedia untuk pembayaran. Buat pembayaran di sini${
+				trackingUrl ? `: ${trackingUrl}` : "."
+			}`,
+		paymentDueDeclined: ({ shortId, storeName, trackingUrl }) =>
+			`Tiada masalah — item custom telah dibuang dari ${shortId}. Buat pembayaran untuk baki pesanan anda dari ${storeName}${
+				trackingUrl ? `: ${trackingUrl}` : "."
+			}`,
 		storeQrConnected: ({ storeName, code }) =>
 			`Anda telah disambungkan dengan ${storeName} 🎉${
 				code ? ` Kod pesanan anda ialah *${code}* — tunjukkan kepada juruwang supaya mereka boleh cari anda.` : ""
-			} Mereka akan proses pesanan anda dan pengesahan akan sampai di sini.\n\nDengan meneruskan, anda bersetuju dengan Dasar Privasi kami: https://kedaipal.com/privacy`,
+			} Mereka akan proses pesanan anda dan pengesahan akan sampai di sini.${privacyNoticeLine("ms")}`,
 		storeQrBusy: ({ storeName }) =>
 			`${storeName} tidak dapat menerima imbasan baharu buat masa ini — sila minta bantuan juruwang ya 🙂`,
 		counterOrderConfirmedPaid: ({ shortId, storeName, amount, trackingUrl }) =>
@@ -283,9 +393,83 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 		paymentReminder: ({ shortId, storeName, amount, trackingUrl, contactPhone }) =>
 			`👋 Peringatan mesra daripada ${storeName}: pesanan ${shortId}${
 				amount ? ` (${amount})` : ""
-			} masih menunggu pembayaran. Selepas membayar, tekan 'I've paid' supaya kami boleh teruskan${
+			} masih menunggu pembayaran. Tekan 'Make payment' untuk bayar dan sahkan supaya kami boleh teruskan${
 				trackingUrl ? `: ${trackingUrl}` : "."
 			}${contactLine(contactPhone, "ms")}`,
+		paymentReminderIntro: ({ shortId, storeName, amount, trackingUrl }) =>
+			`👋 Peringatan daripada ${storeName}: pesanan ${shortId}${
+				amount ? ` (${amount})` : ""
+			} masih menunggu pembayaran.${
+				trackingUrl ? `\n\n📋 Lihat butiran pesanan anda: ${trackingUrl}` : ""
+			}`,
+		deliveryPhotoCaption: ({ shortId }) =>
+			`Telah dihantar! 📸 Ini foto serahan daripada rider untuk pesanan ${shortId}.`,
+	},
+	zh: {
+		paymentReceived: ({ shortId, storeName, trackingUrl }) =>
+			`✅ 已收到订单 ${shortId} 的付款。${storeName} 正在准备您的订单。${
+				trackingUrl ? `\n\n查看：${trackingUrl}` : ""
+			}`,
+		transferReferenceLine: ({ shortId }) =>
+			`转账时请填写 ${shortId} 作为备注，方便我们核对。`,
+		mockupPendingConfirm: ({ shortId, storeName, contactPhone, trackingUrl }) =>
+			`✅ 订单 ${shortId} 已收到！里面有客制化商品，${storeName} 会先发设计稿给您确认 —— 暂时不用付款。您确认后我们会马上发付款详情给您。${
+				trackingUrl ? `\n\n查看订单状态：${trackingUrl}` : ""
+			}${contactLine(contactPhone, "zh")}`,
+		deliveryFeePendingConfirm: ({ shortId, storeName, contactPhone, trackingUrl }) =>
+			`✅ 订单 ${shortId} 已收到！您的地址超出 ${storeName} 的标准配送范围，他们会在这里跟您确认配送费 —— 暂时不用付款。确认后我们会马上发付款详情给您。${
+				trackingUrl ? `\n\n查看订单状态：${trackingUrl}` : ""
+			}${contactLine(contactPhone, "zh")}`,
+		deliveryFeeSet: ({ shortId, storeName, amount, feeAmount, trackingUrl }) =>
+			`🚚 订单 ${shortId} 的配送已确认${
+				feeAmount ? ` —— 配送费 ${feeAmount}` : " —— 不另收配送费"
+			}。${amount ? ` 您的总额是 ${amount}。` : ""}请在这里付款给 ${storeName}${
+				trackingUrl ? `：${trackingUrl}` : "。"
+			}`,
+		paymentDueApproved: ({ shortId, storeName, trackingUrl }) =>
+			`✅ 订单 ${shortId} 的设计已确认！请付款，${storeName} 才能开始制作${
+				trackingUrl ? `：${trackingUrl}` : "。"
+			}`,
+		paymentDueWaived: ({ shortId, storeName, trackingUrl }) =>
+			`您在 ${storeName} 的订单 ${shortId} 已经可以付款了。请在这里付款${
+				trackingUrl ? `：${trackingUrl}` : "。"
+			}`,
+		paymentDueDeclined: ({ shortId, storeName, trackingUrl }) =>
+			`没问题 —— 客制化商品已从订单 ${shortId} 中移除。请为您在 ${storeName} 剩下的订单付款${
+				trackingUrl ? `：${trackingUrl}` : "。"
+			}`,
+		storeQrConnected: ({ storeName, code }) =>
+			`您已经连接上 ${storeName} 了 🎉${
+				code ? ` 您的订单代码是 *${code}* —— 出示给收银员，方便他们找到您。` : ""
+			}他们会帮您结账，确认信息会发到这里。${privacyNoticeLine("zh")}`,
+		storeQrBusy: ({ storeName }) =>
+			`${storeName} 目前无法处理新的扫码 —— 请直接找收银员帮忙 🙂`,
+		counterOrderConfirmedPaid: ({ shortId, storeName, amount, trackingUrl }) =>
+			`🧾 完成了！您在 ${storeName} 的订单 ${shortId} 已确认并付款${
+				amount ? ` —— 总额 ${amount}` : ""
+			}。谢谢惠顾！收据帮您保存好了，随时可以在这里查看订单：${trackingUrl}`,
+		counterOrderConfirmedUnpaid: ({ shortId, storeName, amount, trackingUrl }) =>
+			`🧾 谢谢您在 ${storeName} 下单！订单 ${shortId} 已确认${
+				amount ? ` —— 总额 ${amount}，方便的时候付款就好` : ""
+			}。可以在这里付款和查看订单，不急：${trackingUrl}`,
+		orderReceiptCaption: ({ shortId }) =>
+			`这是您订单 ${shortId} 的收据 🧾 谢谢惠顾！`,
+		orderInvoiceCaption: ({ shortId }) =>
+			`这是您订单 ${shortId} 的账单 🧾 里面有付款详情。`,
+		paymentReminder: ({ shortId, storeName, amount, trackingUrl, contactPhone }) =>
+			`👋 ${storeName} 温馨提醒：订单 ${shortId}${
+				amount ? `（${amount}）` : ""
+			}还在等待付款。点击 'Make payment' 付款确认，我们才能继续处理${
+				trackingUrl ? `：${trackingUrl}` : "。"
+			}${contactLine(contactPhone, "zh")}`,
+		paymentReminderIntro: ({ shortId, storeName, amount, trackingUrl }) =>
+			`👋 ${storeName} 的提醒：订单 ${shortId}${
+				amount ? `（${amount}）` : ""
+			}还在等待付款。${
+				trackingUrl ? `\n\n📋 查看订单详情：${trackingUrl}` : ""
+			}`,
+		deliveryPhotoCaption: ({ shortId }) =>
+			`已送达！📸 这是订单 ${shortId} 骑士拍的送达照片。`,
 	},
 };
 
@@ -297,6 +481,33 @@ export function renderSystemMessage(
 	return systemMessages[locale][key](vars);
 }
 
+// ---------------------------------------------------------------------------
+// "Powered by Kedaipal" growth line (ticket 86ey8zh3r)
+//
+// Appended to every buyer-facing STOREFRONT order-confirmation message so each
+// order becomes a Kedaipal impression with a click path — the digital twin of
+// the storefront footer badge. Always-on and deliberately NOT retailer-
+// overridable (locked decision, Arif 13 Jul 2026: universal or the loop doesn't
+// compound), which is why it lives here as a system suffix appended at the send
+// site rather than inside the override-able `confirm` template — a seller
+// editing their template can't strip it out.
+// ---------------------------------------------------------------------------
+
+const poweredByCopy: Record<Locale, string> = {
+	en: "This shop runs on Kedaipal 🛒 kedaipal.com",
+	ms: "Kedai ini guna Kedaipal 🛒 kedaipal.com",
+	zh: "这家店用 Kedaipal 营业 🛒 kedaipal.com",
+};
+
+/**
+ * The growth line as its own trailing block, with a leading blank line so it
+ * reads as a quiet footer under whatever confirmation message it follows.
+ * Callers append it verbatim: `body + poweredByLine(locale)`.
+ */
+export function poweredByLine(locale: Locale): string {
+	return `\n\n${poweredByCopy[locale]}`;
+}
+
 /**
  * Phase 2 — generic "your order moved to <stage>" update, sent when a seller
  * advances an order INTO a custom stage that shares its canonical anchor with
@@ -306,6 +517,17 @@ export function renderSystemMessage(
  * overrides), so this never duplicates or replaces those. Not retailer-
  * overridable — the seller controls the wording via the stage label/description.
  */
+const STAGE_UPDATE_CARRIER_LABEL: Record<Locale, string> = {
+	en: "Track shipment",
+	ms: "Jejak penghantaran",
+	zh: "查看物流",
+};
+const STAGE_UPDATE_TRACK_LABEL: Record<Locale, string> = {
+	en: "Track your order",
+	ms: "Jejak pesanan anda",
+	zh: "查看订单状态",
+};
+
 export function renderStageUpdate(
 	locale: Locale,
 	args: {
@@ -321,24 +543,21 @@ export function renderStageUpdate(
 		contactPhone?: string;
 	},
 ): string {
+	const HEAD: Record<Locale, string> = {
+		en: `📦 Order ${args.shortId} update: ${args.stageLabel}.`,
+		ms: `📦 Kemaskini pesanan ${args.shortId}: ${args.stageLabel}.`,
+		zh: `📦 订单 ${args.shortId} 更新：${args.stageLabel}。`,
+	};
 	const desc = args.stageDescription?.trim()
 		? `\n${args.stageDescription.trim()}`
 		: "";
 	const carrier = args.carrierTrackingUrl
-		? locale === "ms"
-			? `\n\nJejak penghantaran: ${args.carrierTrackingUrl}`
-			: `\n\nTrack shipment: ${args.carrierTrackingUrl}`
+		? `\n\n${STAGE_UPDATE_CARRIER_LABEL[locale]}: ${args.carrierTrackingUrl}`
 		: "";
 	const track = args.trackingUrl
-		? locale === "ms"
-			? `\n\nJejak pesanan anda: ${args.trackingUrl}`
-			: `\n\nTrack your order: ${args.trackingUrl}`
+		? `\n\n${STAGE_UPDATE_TRACK_LABEL[locale]}: ${args.trackingUrl}`
 		: "";
-	const head =
-		locale === "ms"
-			? `📦 Kemaskini pesanan ${args.shortId}: ${args.stageLabel}.`
-			: `📦 Order ${args.shortId} update: ${args.stageLabel}.`;
-	return `${head}${desc}${carrier}${track}${contactLine(args.contactPhone, locale)}`;
+	return `${HEAD[locale]}${desc}${carrier}${track}${contactLine(args.contactPhone, locale)}`;
 }
 
 // Matches ORD-XXXX where X is from the alphabet in lib/order.ts
@@ -422,90 +641,19 @@ export function defaultTemplate(locale: Locale, key: TemplateKey): string {
 }
 
 // ---------------------------------------------------------------------------
-// Payment instructions
+// Payment instructions (ticket 86ey98ju1)
+//
+// Raw bank details (account number / bank name / recipient name) and QR images
+// are NOT sent in the WhatsApp chat — they created friction and a
+// security/compliance surface (a copyable account number sitting in chat
+// history). Instead every payment message points the buyer to their own order
+// page (`/track/<token>`) — via the intro's own "pay here: <url>" line + the
+// "Make payment" CTA button — where the "How to pay" section lists all
+// seller-configured methods (bank with one-tap copy + QR) and carries the
+// "I've paid" confirm. The seller manages payment info from the dashboard; the
+// chat only links to it. No separate "see how to pay" block is appended — the
+// intro already carries the link, so the buyer sees it exactly once.
 // ---------------------------------------------------------------------------
-
-const paymentLabels: Record<
-	Locale,
-	{
-		header: string;
-		bank: string;
-		accountName: string;
-		accountNumber: string;
-		qrFollows: string;
-		qrCaption: string;
-	}
-> = {
-	en: {
-		header: "💳 Payment details",
-		bank: "Bank",
-		accountName: "Name",
-		accountNumber: "Account",
-		qrFollows: "Scan the QR below 👇",
-		qrCaption: "Scan to pay",
-	},
-	ms: {
-		header: "💳 Maklumat pembayaran",
-		bank: "Bank",
-		accountName: "Nama",
-		accountNumber: "Akaun",
-		qrFollows: "Imbas QR di bawah 👇",
-		qrCaption: "Imbas untuk bayar",
-	},
-};
-
-/**
- * Render the payment block listing ALL configured methods as plain text. Each
- * method is a labelled sub-block (`*label*` — WhatsApp renders this bold):
- *  - `bank` → Bank / Name / Account-number-on-its-own-line (so a long-press
- *    selects just the number; the web track page has a one-tap copy too);
- *  - `qr` → a "scan the QR below" line — the image itself is sent as a separate
- *    follow-up message by the caller (one per QR, captioned with the label).
- * Returns "" when there are no methods. Pure: no Convex / no storage; the caller
- * resolves QR storage URLs and sends the images.
- */
-export function renderPaymentMethods(
-	locale: Locale,
-	methods: ReadonlyArray<PaymentMethod>,
-): string {
-	if (methods.length === 0) return "";
-	const labels = paymentLabels[locale];
-	const lines: string[] = ["", labels.header];
-
-	for (const m of methods) {
-		const label = m.label.trim();
-		lines.push("");
-		lines.push(`*${label}*`);
-		if (m.type === "bank") {
-			const bank = m.bankName?.trim();
-			const accName = m.bankAccountName?.trim();
-			const accNum = m.bankAccountNumber?.trim();
-			// Skip a redundant "Bank: X" line when the label already IS the bank name.
-			if (bank && bank.toLowerCase() !== label.toLowerCase())
-				lines.push(`${labels.bank}: ${bank}`);
-			if (accName) lines.push(`${labels.accountName}: ${accName}`);
-			if (accNum) {
-				lines.push(`${labels.accountNumber}:`);
-				lines.push(accNum);
-			}
-		} else {
-			lines.push(labels.qrFollows);
-		}
-		const note = m.note?.trim();
-		if (note) lines.push(note);
-	}
-	return lines.join("\n");
-}
-
-/**
- * Caption for a QR follow-up image. Includes the method's label when given (so a
- * buyer with several QRs knows which is which), else the generic "scan to pay".
- */
-export function paymentQrCaption(locale: Locale, label?: string): string {
-	const base = paymentLabels[locale].qrCaption;
-	const trimmed = label?.trim();
-	return trimmed ? `${trimmed} — ${base}` : base;
-}
 
 // ---------------------------------------------------------------------------
 // Self-collect pickup snapshot
@@ -542,6 +690,10 @@ const pickupLabels: Record<Locale, Record<PickupKind, string>> = {
 		self_collect: "📍 Maklumat ambil sendiri",
 		drop_off: "📍 Lokasi penyerahan",
 	},
+	zh: {
+		self_collect: "📍 自取详情",
+		drop_off: "📍 交收点",
+	},
 };
 
 // Fee line under the pickup address — tells the buyer the charge is already
@@ -550,6 +702,7 @@ const pickupLabels: Record<Locale, Record<PickupKind, string>> = {
 const pickupFeeLabels: Record<Locale, string> = {
 	en: "Pickup fee (included in total)",
 	ms: "Caj ambilan (termasuk dalam jumlah)",
+	zh: "自取费（已包含在总额内）",
 };
 
 /**
@@ -571,6 +724,30 @@ const pickupFeeLabels: Record<Locale, string> = {
  * `currency` is only needed for the fee line — callers without a fee-carrying
  * snapshot can omit it (the line is skipped when either is missing).
  */
+// Delivery-fee line under the confirm intro (delivery orders) — same "already
+// inside the total" framing as the pickup-fee line so the charge never reads
+// as a surprise markup.
+const deliveryFeeLabels: Record<Locale, string> = {
+	en: "Delivery fee (included in total)",
+	ms: "Caj penghantaran (termasuk dalam jumlah)",
+	zh: "配送费（已包含在总额内）",
+};
+
+/**
+ * Render the delivery-charge line appended to the confirm / payment messages
+ * for delivery orders that carry a fee. Returns "" when there's no fee (or no
+ * currency to format with) so callers can string-concat unconditionally.
+ * Starts with its own "\n" — it joins an existing intro line.
+ */
+export function renderDeliveryFeeLine(
+	locale: Locale,
+	snapshot: { fee: number } | undefined,
+	currency?: string,
+): string {
+	if (!snapshot || !(snapshot.fee > 0) || !currency) return "";
+	return `\n🚚 ${deliveryFeeLabels[locale]}: ${currency} ${(snapshot.fee / 100).toFixed(2)}`;
+}
+
 export function renderPickupBlock(
 	locale: Locale,
 	snapshot: PickupSnapshot | undefined,

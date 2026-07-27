@@ -3,6 +3,8 @@
 // them — so this is intentionally NOT a PDF. No Convex imports; unit-tested in
 // orders.test.ts. See docs/invoices-receipts.md.
 
+import { orderCustomerLabel } from "./customer";
+
 // Malaysia is UTC+8, no DST — render the calendar day with a fixed offset.
 const MYT_OFFSET_MS = 8 * 60 * 60 * 1000;
 
@@ -33,11 +35,15 @@ export type CsvOrder = {
 	items: Array<{ name: string; variantLabel?: string; quantity: number }>;
 	subtotal: number;
 	/** Frozen per-location pickup fee (minor units). Undefined/0 = free — the
-	 * column prints "0.00" (never blank) so `Subtotal + Pickup fee = Total`
-	 * sums in a spreadsheet for a standard order. (A made-to-order/custom order
-	 * also folds a mockup quote into `total`, and there's no quote column, so
-	 * that identity doesn't hold there — the quote never was in the export.) */
+	 * column prints "0.00" (never blank) so `Subtotal + Pickup fee + Delivery
+	 * fee = Total` sums in a spreadsheet for a standard order. (A made-to-order/
+	 * custom order also folds a mockup quote into `total`, and there's no quote
+	 * column, so that identity doesn't hold there — the quote never was in the
+	 * export.) */
 	pickupFee?: number;
+	/** Frozen delivery charge (minor units) — same "0.00 never blank" rule as
+	 * pickupFee so the totals identity sums. */
+	deliveryFee?: number;
 	total: number;
 	currency: string;
 	customerNote?: string;
@@ -57,6 +63,7 @@ export const CSV_COLUMNS = [
 	"Items",
 	"Subtotal",
 	"Pickup fee",
+	"Delivery fee",
 	"Total",
 	"Currency",
 	"Note",
@@ -76,7 +83,10 @@ export function orderToCsvRow(o: CsvOrder): string[] {
 		o.shortId,
 		csvDate(o.createdAt),
 		csvDate(o.fulfilmentDate),
-		o.customer.name ?? "",
+		// "" (not "Anonymous") stays the default for a phone-only order with no
+		// name, so existing exports are unchanged; an anonymous walk-in (no phone)
+		// reads "Walk-in customer" instead of blank.
+		orderCustomerLabel(o.customer, ""),
 		o.customer.waPhone ?? "",
 		o.deliveryMethod ?? "",
 		o.status,
@@ -85,6 +95,7 @@ export function orderToCsvRow(o: CsvOrder): string[] {
 		items,
 		csvAmount(o.subtotal),
 		csvAmount(o.pickupFee ?? 0),
+		csvAmount(o.deliveryFee ?? 0),
 		csvAmount(o.total),
 		o.currency,
 		o.customerNote ?? "",

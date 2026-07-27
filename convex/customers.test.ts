@@ -85,7 +85,9 @@ async function placeOrder(
 		items: [{ productId, quantity: opts.quantity ?? 1 }],
 		currency: "MYR",
 		channel: "whatsapp",
-		customer: { name: opts.name, waPhone: opts.waPhone },
+		// Name is required at checkout (≥3 chars); default a valid one when a test
+		// only cares about phone/aggregates.
+		customer: { name: opts.name ?? "Test Buyer", waPhone: opts.waPhone },
 		deliveryAddress: validAddress,
 	});
 	return shortId;
@@ -399,9 +401,11 @@ describe("customers — WhatsApp late-bind & pushname", () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const productId = await seedProduct(t, USER_A, retailer._id);
-		// Order arrives with no phone (e.g. link-in-bio checkout).
+		// Order arrives with a checkout name but no phone (e.g. link-in-bio); the
+		// inbound WhatsApp message late-binds the phone + pushname.
 		const shortId = await placeOrder(t, retailer._id, productId, {
 			quantity: 2,
+			name: "Aisha",
 		});
 
 		await t.mutation(internal.whatsapp.confirmOrderFromWhatsApp, {
@@ -425,8 +429,9 @@ describe("customers — WhatsApp late-bind & pushname", () => {
 		expect(c.orderCount).toBe(1);
 		expect(c.totalSpent).toBe(20000);
 		expect(c.waProfileName).toBe("Aisha WA");
-		// No retailer override yet → pushname fills the name.
-		expect(c.name).toBe("Aisha WA");
+		// The checkout name is now required, so it seeds the customer and wins over
+		// the inbound pushname (pushname only fills a name that's still unset).
+		expect(c.name).toBe("Aisha");
 	});
 
 	test("late-bind confirmation is idempotent (no double counting)", async () => {

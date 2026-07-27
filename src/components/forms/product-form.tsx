@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 import {
 	Camera,
 	CheckCircle2,
+	ClipboardList,
 	Eye,
 	EyeOff,
 	Info,
@@ -12,10 +13,13 @@ import {
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useState } from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { MAX_NOTICE_DAYS } from "../../../convex/lib/fulfilmentDate";
+import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
 import { convexErrorMessage, parsePriceInput } from "../../lib/format";
 import { describeProduct } from "../../lib/product-summary";
 import { productDetailsSchema } from "../../lib/schemas";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { Markdown } from "../ui/markdown";
 import { CategoryPicker } from "./category-picker";
 import { submitThenFocusError } from "./focus-error";
@@ -35,6 +39,12 @@ export interface ProductFormSubmitValues {
 	// Storefront visibility. true = hidden from the public store (still sellable
 	// at the counter). See docs/hidden-products.md.
 	hidden: boolean;
+	// Per-product fulfilment-notice override (days). undefined = no override —
+	// the store-level setting rules. Checkout takes the max across the cart.
+	minNoticeDays?: number;
+	// Minimum order quantity (summed across variants). undefined = no minimum;
+	// the caller sends 0 to clear on edit. See convex/lib/minOrderRules.ts.
+	minQuantity?: number;
 	// FULL category membership (the picker's staged selection) — the caller
 	// diffs it via categories.setProductCategories. See docs/product-categories.md.
 	categoryIds: Id<"categories">[];
@@ -73,6 +83,8 @@ interface ProductFormProps {
 		name?: string;
 		description?: string;
 		hidden?: boolean;
+		minNoticeDays?: number;
+		minQuantity?: number;
 		categoryIds?: Id<"categories">[];
 		// Deprecated product-level defaults — used only to seed per-variant flags
 		// for legacy products whose variants predate the per-variant columns.
@@ -447,7 +459,7 @@ function VisibilityControl({
 						: "Shown on your public store and sellable everywhere."}
 				</p>
 			</div>
-			<div className="flex shrink-0 gap-1 rounded-xl bg-muted p-1">
+			<div className="flex shrink-0 self-start gap-1 rounded-xl bg-muted p-1 sm:self-auto">
 				{options.map((opt) => {
 					const selected = opt.value === hidden;
 					return (
@@ -495,6 +507,15 @@ export function ProductForm({
 	const [serverError, setServerError] = useState<string | null>(null);
 	const [showPreview, setShowPreview] = useState(false);
 	const [hidden, setHidden] = useState(initialValues?.hidden ?? false);
+	// Draft as a string so the input can be cleared while typing; parsed at
+	// submit (blank/0 = no override).
+	const [minNoticeDraft, setMinNoticeDraft] = useState(
+		initialValues?.minNoticeDays ? String(initialValues.minNoticeDays) : "",
+	);
+	// Minimum order quantity — blank = no minimum (stored ≥2; see minOrderRules).
+	const [minQty, setMinQty] = useState(
+		initialValues?.minQuantity ? String(initialValues.minQuantity) : "",
+	);
 	const [categoryIds, setCategoryIds] = useState<Id<"categories">[]>(
 		initialValues?.categoryIds ?? [],
 	);
@@ -535,12 +556,21 @@ export function ProductForm({
 			}
 			// `issues` empty ⇒ built carries the variants.
 			const variants = "variants" in built ? built.variants : [];
+			// Min-quantity input invalid → its inline error is already on screen.
+			if (!minQtyValid) return;
 
 			try {
+				const minNoticeParsed = Number.parseInt(minNoticeDraft, 10);
 				await onSubmit({
 					name: parsed.name,
 					description: parsed.description,
 					hidden,
+					minNoticeDays:
+						Number.isInteger(minNoticeParsed) && minNoticeParsed > 0
+							? Math.min(minNoticeParsed, MAX_NOTICE_DAYS)
+							: 0,
+					// 0 = no minimum (blank input) — the server normalizes 0/1 to unset.
+					minQuantity: minQtyParsed,
 					categoryIds,
 					imageStorageIds: images.map((i) => i.id),
 					options: hasOptions
@@ -562,6 +592,32 @@ export function ProductForm({
 	}
 
 	const hasAnyPrice = editor.rows.some((row) => row.price.trim().length > 0);
+
+	// Minimum order quantity — blank clears; whole number ≤ MIN_QUANTITY_MAX.
+	const minQtyTrimmed = minQty.trim();
+	const minQtyParsed = minQtyTrimmed.length === 0 ? 0 : Number(minQtyTrimmed);
+	const minQtyValid =
+		minQtyTrimmed.length === 0 ||
+		(Number.isInteger(minQtyParsed) &&
+			minQtyParsed >= 0 &&
+			minQtyParsed <= MIN_QUANTITY_MAX);
+	// Heads-up when the minimum can't currently be met: every active variant
+	// hard-blocks on stock and the combined stock sits below the minimum — buyers
+	// would be told "minimum N" yet be unable to reach it until a restock.
+	const activeRows = editor.rows.filter((row) => row.active);
+	const allHardBlock =
+		activeRows.length > 0 && activeRows.every((row) => row.blockWhenOutOfStock);
+	const totalStock = activeRows.reduce(
+		(sum, row) =>
+			sum +
+			(INT_RE.test(row.stock.trim()) ? Number.parseInt(row.stock, 10) : 0),
+		0,
+	);
+	const minQtyStockShort =
+		minQtyValid &&
+		minQtyParsed >= 2 &&
+		allHardBlock &&
+		totalStock < minQtyParsed;
 
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-5">
@@ -666,6 +722,7 @@ export function ProductForm({
 					currency={currency}
 					issues={editorIssues}
 				/>
+
 				<Link
 					to="/app/settings"
 					search={{ tab: "store" }}
@@ -674,6 +731,98 @@ export function ProductForm({
 					<Info className="size-3.5" aria-hidden />
 					Currency is set in Settings
 				</Link>
+			</ProductStepCard>
+
+			{/* Order rules — the two constraints on HOW a buyer may order this
+			    product (how many, how soon). Grouped in one card because they're
+			    the same kind of decision: neither is about price/choices (what it
+			    costs) nor publishing (where it shows). Both are optional. */}
+			<ProductStepCard
+				icon={<ClipboardList className="size-5" />}
+				kicker="Selling"
+				title="Order rules"
+				description="Optional limits on how buyers can order this product. Leave both blank for no restrictions."
+			>
+				{/* Minimum order quantity (86ey9unyx) — summed across options, so
+				    it's a product-level rule, not a per-variant one. */}
+				<div className="flex flex-col gap-2">
+					<div className="flex flex-col gap-1.5">
+						<label htmlFor="min-order-qty" className="text-sm font-medium">
+							Minimum order quantity{" "}
+							<span className="font-normal text-muted-foreground">
+								(optional)
+							</span>
+						</label>
+						<Input
+							id="min-order-qty"
+							type="number"
+							inputMode="numeric"
+							min={0}
+							max={MIN_QUANTITY_MAX}
+							placeholder="e.g. 20"
+							value={minQty}
+							onChange={(e) => setMinQty(e.target.value)}
+							variant="field"
+							isError={!minQtyValid}
+							className="w-32"
+						/>
+					</div>
+					<p className="text-xs leading-relaxed text-muted-foreground">
+						Buyers must order at least this many per order — options combined
+						(10 + 10 of two flavours meets a minimum of 20). Shown on your
+						storefront as &ldquo;Min {minQtyParsed >= 2 ? minQtyParsed : "N"}
+						&rdquo;. Counter checkout ignores it. Leave blank for no minimum.
+					</p>
+					{!minQtyValid ? (
+						<p className="text-xs text-destructive">
+							Enter a whole number between 2 and {MIN_QUANTITY_MAX}, or leave
+							blank.
+						</p>
+					) : null}
+					{minQtyStockShort ? (
+						<p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+							Heads up: combined stock is {totalStock}, below the minimum of{" "}
+							{minQtyParsed} — buyers can&apos;t reach the minimum until you
+							restock.
+						</p>
+					) : null}
+				</div>
+
+				{/* Per-product fulfilment notice (made-to-order lead time). Buyers
+				    see the effect as a raised earliest-date floor at checkout, which
+				    is why the helper spells the interaction out. */}
+				<div className="flex flex-col gap-2 border-t border-border pt-4">
+					<div className="flex flex-col gap-1.5">
+						<label htmlFor="min-notice-days" className="text-sm font-medium">
+							Minimum notice{" "}
+							<span className="font-normal text-muted-foreground">
+								(optional)
+							</span>
+						</label>
+						<div className="flex items-center gap-1.5">
+							<Input
+								id="min-notice-days"
+								type="number"
+								inputMode="numeric"
+								min={0}
+								max={MAX_NOTICE_DAYS}
+								value={minNoticeDraft}
+								onChange={(e) => setMinNoticeDraft(e.target.value)}
+								placeholder="0"
+								variant="field"
+								className="w-24 text-center"
+							/>
+							<span className="text-sm text-muted-foreground">days</span>
+						</div>
+					</div>
+					<p className="text-xs leading-relaxed text-muted-foreground">
+						Days of lead time this product needs (custom / made-to-order items).
+						Buyers can&apos;t pick a delivery or pickup date sooner than this —
+						it raises your store-level notice when higher, and the strictest
+						item in a cart sets the whole order&apos;s earliest date. Leave 0
+						for no extra notice.
+					</p>
+				</div>
 			</ProductStepCard>
 
 			{/* Publishing concerns — where the product appears — come after what

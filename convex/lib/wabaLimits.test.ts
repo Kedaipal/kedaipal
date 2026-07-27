@@ -105,13 +105,26 @@ describe("classifyOptOutKeyword", () => {
 		});
 	});
 
+	test("opt-out keywords (ZH), exact match, whitespace-trimmed", () => {
+		expect(classifyOptOutKeyword("停止")).toEqual({
+			kind: "out",
+			source: "zh_stop_keyword",
+		});
+		expect(classifyOptOutKeyword("  退订 ")).toEqual({
+			kind: "out",
+			source: "zh_unsub_keyword",
+		});
+	});
+
 	test("opt-in keywords", () => {
 		expect(classifyOptOutKeyword("START")).toEqual({ kind: "in" });
 		expect(classifyOptOutKeyword("mula")).toEqual({ kind: "in" });
+		expect(classifyOptOutKeyword("开始")).toEqual({ kind: "in" });
 	});
 
 	test("does not match a message that merely contains the word", () => {
 		expect(classifyOptOutKeyword("please stop sending me this")).toBeNull();
+		expect(classifyOptOutKeyword("我要停止吗？")).toBeNull();
 		expect(classifyOptOutKeyword("ORD-1234")).toBeNull();
 	});
 });

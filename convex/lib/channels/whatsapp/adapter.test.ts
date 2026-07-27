@@ -127,13 +127,60 @@ describe("whatsappAdapter.send — CTA degrade matrix", () => {
 		fetchMock.restore();
 	});
 
-	test("non-https url + image → degrades to image with body as caption", async () => {
+	// Dev affordance: a LOCAL http:// URL (localhost / loopback / private-LAN) is
+	// upgraded to https:// so Meta renders the button while developing. The body
+	// text keeps the original http link; only the button URL is upgraded.
+	test("local dev http url + image → interactive cta_url with https-upgraded button url", async () => {
 		const fetchMock = installFetchMock();
 		await whatsappAdapter.send("60123456789", {
 			kind: "cta",
 			body: "Order confirmed",
-			buttonText: "I've paid",
+			buttonText: "Make payment",
 			url: "http://localhost:3000/track/ORD-ABCD",
+			imageUrl: "https://kedaipal.com/logo-2.png",
+		});
+		const body = fetchMock.calls[0].body;
+		expect(body.type).toBe("interactive");
+		const interactive = body.interactive as {
+			type: string;
+			action: { parameters: { display_text: string; url: string } };
+		};
+		expect(interactive.type).toBe("cta_url");
+		expect(interactive.action.parameters.display_text).toBe("Make payment");
+		// http://localhost… upgraded to https://localhost… for the button.
+		expect(interactive.action.parameters.url).toBe(
+			"https://localhost:3000/track/ORD-ABCD",
+		);
+		fetchMock.restore();
+	});
+
+	test("local dev http url on a private-LAN host → https-upgraded button", async () => {
+		const fetchMock = installFetchMock();
+		await whatsappAdapter.send("60123456789", {
+			kind: "cta",
+			body: "Order confirmed",
+			buttonText: "Make payment",
+			url: "http://192.168.1.5:3000/track/ORD-ABCD",
+		});
+		const body = fetchMock.calls[0].body;
+		expect(body.type).toBe("interactive");
+		expect(
+			(body.interactive as { action: { parameters: { url: string } } }).action
+				.parameters.url,
+		).toBe("https://192.168.1.5:3000/track/ORD-ABCD");
+		fetchMock.restore();
+	});
+
+	// Safety net: a PUBLIC (non-local) http URL is never silently rewritten —
+	// e.g. a misconfigured prod APP_URL still degrades rather than shipping a
+	// broken/insecure button.
+	test("non-local http url + image → degrades to image with body as caption", async () => {
+		const fetchMock = installFetchMock();
+		await whatsappAdapter.send("60123456789", {
+			kind: "cta",
+			body: "Order confirmed",
+			buttonText: "Make payment",
+			url: "http://not-secure.example.com/track/ORD-ABCD",
 			imageUrl: "https://kedaipal.com/logo-2.png",
 		});
 		const body = fetchMock.calls[0].body;
@@ -145,13 +192,13 @@ describe("whatsappAdapter.send — CTA degrade matrix", () => {
 		fetchMock.restore();
 	});
 
-	test("non-https url, no image → degrades to text", async () => {
+	test("non-local http url, no image → degrades to text", async () => {
 		const fetchMock = installFetchMock();
 		await whatsappAdapter.send("60123456789", {
 			kind: "cta",
 			body: "Order confirmed",
-			buttonText: "I've paid",
-			url: "http://localhost:3000/track/ORD-ABCD",
+			buttonText: "Make payment",
+			url: "http://not-secure.example.com/track/ORD-ABCD",
 		});
 		const body = fetchMock.calls[0].body;
 		expect(body.type).toBe("text");

@@ -66,13 +66,37 @@ soft-locked, on **either** path:
 
 A **plain seller's own** `past_due` writes stay blocked — the bypass only ever applies to admins.
 
+### Plan-feature top tier (admin's own store)
+
+The past-due soft-lock isn't the only gate — Pro-and-above **features** (CRM, Order Inbox,
+categories, insights, chargeable pickup, radius delivery) are gated by plan via
+`assertPlanFeature`. Admins get the **highest tier unlocked** here too, on **both** paths:
+
+- **Server:** `assertPlanFeature(ctx, retailerId, feature)` **short-circuits for any admin**
+  (`isAdmin(ctx)`), mirroring the soft-lock bypass. Act-as call sites already skipped it via
+  `!actingAsAdmin`; this also covers **admin-on-own-store** (where `actingAsAdmin` is false).
+- **Client:** the owner read (`getMyRetailer` → `loadRetailerForUser`) detects an admin owner and
+  passes `adminFullAccess` into `resolveAccess(sub, { adminFullAccess })`, which forces
+  `features` to the **highest tier** + `active`/`!frozen` while **keeping the real
+  plan/status/trial** (so billing still tells the truth). `subscriptions.current` resolves the
+  same way. So an admin's own dashboard never renders a Pro wall / locked control — regardless of
+  what plan their own store sits on. The act-as read (`getRetailerForAdmin`) deliberately does
+  **not** pass this, so white-glove sees the seller's real tier.
+
+Without this, an admin whose own store happened to be on **Starter** would hit Pro upgrade walls +
+blocked mutations — masked only while their store sits on a Pro trial.
+
 **Chrome:** on an admin's **own** store (`isAdmin && !actingAsAdmin`), the nav tier pill reads a
 distinct **"Admin"** badge (linking to the console, not billing) instead of a trial/past-due
-countdown, and the `SubscriptionBanner` pay-nag is suppressed. **Settings → Billing** follows the
-same rule: the `BillingTab` swaps the Current-plan / status / order-usage / renew apparatus for a
-plain **"Admin account"** note (admins have no trial, tier or invoices) — so the tab never presents
-the admin as a Starter/Pro/Scale seller. While **acting-as** a seller the chrome (banner + billing
-tab) shows that seller's **real** subscription state — white-glove needs to see where they stand.
+countdown, and the `SubscriptionBanner` pay-nag is suppressed. The **mobile Settings index** (its
+header pill + the Billing-row status subtitle) and the **Admin · Sellers directory** card
+(`ownerIsAdmin` → an indigo "Admin" pill instead of the subscription status/plan) carry the same
+treatment — every place a tier/plan would otherwise show for an admin's own store now reads
+"Admin". **Settings → Billing** follows the same rule: the `BillingTab` swaps the Current-plan /
+status / order-usage / renew apparatus for a plain **"Admin account"** note (admins have no trial,
+tier or invoices) — so the tab never presents the admin as a Starter/Pro/Scale seller. While
+**acting-as** a seller the chrome (banner + billing tab + directory row) shows that seller's
+**real** subscription state — white-glove needs to see where they stand.
 
 ## Reads that had to learn "admin"
 
@@ -180,11 +204,17 @@ pause flow) is a sensible next step but not yet implemented.
 
 - `convex/lib/auth.ts` — `requireRetailerAccess`, `logAdminAction` (+ existing `isAdmin` /
   `requireAdmin`).
-- `convex/admin.ts` — `listSellersForAdmin`, `recentAuditForRetailer`.
+- `convex/admin.ts` — `listSellersForAdmin` (`ownerIsAdmin` per row), `recentAuditForRetailer`.
 - `convex/schema.ts` — `adminAuditLog` table (dev-only widen; no migration).
+- `convex/subscriptions.ts` — `assertPlanFeature` admin bypass; `resolveAccess(sub,
+  { adminFullAccess })` highest-tier override.
 - `convex/{products,customers,pickupLocations,orders,retailers,counterCheckout}.ts` —
-  access-check swaps + audit stamps + explicit-`retailerId` admin paths.
-- `src/routes/app.admin.sellers.tsx` — directory ("Manage" starts the session).
+  access-check swaps + audit stamps + explicit-`retailerId` admin paths; `retailers.ts` owner read
+  threads `adminFullAccess`.
+- `src/routes/app.admin.sellers.tsx` — directory ("Manage" starts the session); `ownerIsAdmin` →
+  "Admin" pill.
+- `src/routes/app.settings.tsx` — mobile settings index pill + Billing subtitle read "Admin" for
+  an admin's own store.
 - `src/routes/app.tsx` — `ActAsProvider` wrap + banner + redirect guard + storeless-admin mode
   + act-as-aware retailer resolution.
 - `src/hooks/useActAs.tsx` — the session (context + `sessionStorage`).

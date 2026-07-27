@@ -106,3 +106,23 @@ values. Undefined reads as the default (**0**, same-day allowed).
 
 The **Pickup Reminder** portion of Automated Reminders (Sprint 4) — a reminder
 can't fire without a committed date.
+
+## Update (2026-07-22, Lalamove round): date defaults to the earliest allowed day
+
+The storefront date field now DEFAULTS to the earliest selectable day
+(today + the store's notice window) instead of starting empty — most orders
+are "as soon as possible", so the common case is zero taps; pre-order
+buyers simply pick a later date. Counter checkout already defaulted to
+today; the server window validation is unchanged.
+
+## Update (2026-07-23): per-product notice override (minNoticeDays)
+
+`products.minNoticeDays` (0–30, 0 normalizes to unset) — made-to-order items
+declare their own lead time. The EFFECTIVE window everywhere is
+max(store-level `minFulfilmentNoticeDays`, strictest cart item): the
+storefront date picker floors to it (with copy naming the item constraint),
+`orders.create` re-validates server-side after resolving items, and the
+default date (earliest allowed day) rises with it. Custom/quote carts label
+the field "Requested date — the seller confirms the final date after the
+design is agreed". Editor surface: product form → "Minimum notice" card.
+Counter checkout still ignores notice entirely (seller in person).

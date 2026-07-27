@@ -6,9 +6,12 @@ import {
 } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import { ArrowLeft } from "lucide-react";
+import { useState } from "react";
 import { api } from "../../convex/_generated/api";
+import { type Locale, OG_LOCALE } from "../../convex/lib/locale";
 import { CartBar } from "../components/storefront/cart-bar";
 import { ProductGrid } from "../components/storefront/product-grid";
+import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { StorefrontHeader } from "../components/storefront/storefront-header";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
@@ -22,7 +25,12 @@ interface CategoryLoaderData {
 	description: string;
 	canonicalUrl: string;
 	ogImageUrl: string | undefined;
-	locale: "en" | "ms";
+	locale: Locale;
+	// Distinct from `ogImageUrl` (category image → cover → logo) so `head()`
+	// preloads only the store cover — the actual LCP element `StorefrontHeader`
+	// renders with `priority` on this page too. A category image, when set,
+	// isn't preloaded here since it isn't the header's `priority` image.
+	coverImageUrl: string | undefined;
 }
 
 /**
@@ -82,6 +90,7 @@ export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 				retailer.logoUrl ??
 				undefined,
 			locale: retailer.locale ?? "en",
+			coverImageUrl: retailer.coverImageUrl ?? undefined,
 		};
 	},
 	head: ({ loaderData }) => {
@@ -92,6 +101,7 @@ export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 			description,
 			canonicalUrl,
 			ogImageUrl,
+			coverImageUrl,
 			locale,
 		} = loaderData;
 		const title = `${categoryName} — ${storeName} | Kedaipal`;
@@ -102,7 +112,7 @@ export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 			{ name: "robots", content: "index, follow" },
 			{ property: "og:type", content: "website" },
 			{ property: "og:site_name", content: "Kedaipal" },
-			{ property: "og:locale", content: locale === "ms" ? "ms_MY" : "en_MY" },
+			{ property: "og:locale", content: OG_LOCALE[locale] },
 			{ property: "og:title", content: title },
 			{ property: "og:description", content: description },
 			{ property: "og:url", content: canonicalUrl },
@@ -121,7 +131,12 @@ export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 		}
 		return {
 			meta,
-			links: [{ rel: "canonical", href: canonicalUrl }],
+			links: [
+				{ rel: "canonical", href: canonicalUrl },
+				...(coverImageUrl
+					? [{ rel: "preload", as: "image", href: coverImageUrl }]
+					: []),
+			],
 		};
 	},
 	notFoundComponent: CategoryNotFound,
@@ -191,6 +206,9 @@ function CategoryRoute() {
 	const pickupLocations = useQuery(api.pickupLocations.listActivePublicBySlug, {
 		slug,
 	});
+	// Checkout open-state lifted here so the product detail sheet can jump
+	// straight to checkout (same wiring as the store home). See ProductGrid.
+	const [checkoutOpen, setCheckoutOpen] = useState(false);
 
 	if (!retailer || page === undefined) {
 		return <CategorySkeleton />;
@@ -201,7 +219,7 @@ function CategoryRoute() {
 	}
 
 	return (
-		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-32">
+		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-20">
 			{/* Same brand header as the store home (cover/logo/name) — the buyer
 			    never loses the sense of whose store they're in. */}
 			<StorefrontHeader retailer={retailer} />
@@ -234,8 +252,11 @@ function CategoryRoute() {
 					cart={cart}
 					products={page.products}
 					storeSlug={retailer.slug}
+					onRequestCheckout={() => setCheckoutOpen(true)}
 				/>
 			</section>
+
+			<StorefrontFooter />
 
 			<CartBar
 				cart={cart}
@@ -245,7 +266,10 @@ function CategoryRoute() {
 				offerSelfCollect={retailer.offerSelfCollect ?? false}
 				offerDelivery={retailer.offerDelivery ?? true}
 				minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
+				minOrderValue={retailer.minOrderValue}
 				pickupLocations={pickupLocations ?? []}
+				checkoutOpen={checkoutOpen}
+				onCheckoutOpenChange={setCheckoutOpen}
 			/>
 		</div>
 	);

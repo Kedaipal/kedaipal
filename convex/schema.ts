@@ -35,7 +35,9 @@ export default defineSchema({
 		// logoStorageId. See docs/store-cover-banner.md.
 		coverImageStorageId: v.optional(v.string()),
 		currency: v.optional(v.string()),
-		locale: v.optional(v.union(v.literal("en"), v.literal("ms"))),
+		locale: v.optional(
+			v.union(v.literal("en"), v.literal("ms"), v.literal("zh")),
+		),
 		// Per-retailer overrides for WhatsApp message copy. Any key omitted falls
 		// back to the default catalog in convex/lib/whatsappCopy.ts.
 		// Variables supported in templates: {shortId}, {storeName}.
@@ -52,6 +54,16 @@ export default defineSchema({
 					}),
 				),
 				ms: v.optional(
+					v.object({
+						confirm: v.optional(v.string()),
+						packed: v.optional(v.string()),
+						shipped: v.optional(v.string()),
+						delivered: v.optional(v.string()),
+						cancelled: v.optional(v.string()),
+						unknownFallback: v.optional(v.string()),
+					}),
+				),
+				zh: v.optional(
 					v.object({
 						confirm: v.optional(v.string()),
 						packed: v.optional(v.string()),
@@ -94,6 +106,16 @@ export default defineSchema({
 						cancelled: v.optional(v.string()),
 					}),
 				),
+				zh: v.optional(
+					v.object({
+						pending: v.optional(v.string()),
+						confirmed: v.optional(v.string()),
+						packed: v.optional(v.string()),
+						shipped: v.optional(v.string()),
+						delivered: v.optional(v.string()),
+						cancelled: v.optional(v.string()),
+					}),
+				),
 			}),
 		),
 		// Phase 2 of order-status customization: a seller-defined, ordered list of
@@ -114,11 +136,16 @@ export default defineSchema({
 						v.literal("shipped"),
 						v.literal("delivered"),
 					),
-					label: v.object({ en: v.string(), ms: v.optional(v.string()) }),
+					label: v.object({
+						en: v.string(),
+						ms: v.optional(v.string()),
+						zh: v.optional(v.string()),
+					}),
 					description: v.optional(
 						v.object({
 							en: v.optional(v.string()),
 							ms: v.optional(v.string()),
+							zh: v.optional(v.string()),
 						}),
 					),
 					notify: v.boolean(),
@@ -184,6 +211,80 @@ export default defineSchema({
 		// settings invariant guarantee a store always keeps ≥1 WORKING fulfilment
 		// method (delivery, or self-collect with ≥1 active pickup location).
 		offerDelivery: v.optional(v.boolean()),
+		// Seller's business address — the ORIGIN for radius-based delivery
+		// pricing (straight-line distance to the buyer's address). Captured via
+		// Google autocomplete in Settings → Fulfilment; `label` is the formatted
+		// address shown back to the seller. PRIVACY: many sellers run from home —
+		// this is OWNER-only (buildRetailerPublic) and never in the public
+		// storefront payload; buyers only ever see the resolved fee (the public
+		// quote also strips distances). See docs/fulfilment.md.
+		businessAddress: v.optional(
+			v.object({
+				label: v.string(),
+				latitude: v.number(),
+				longitude: v.number(),
+				placeId: v.optional(v.string()),
+			}),
+		),
+		// Delivery-charge config (86extzdr8). Unset = free delivery (legacy
+		// behaviour, no migration). "flat" = one fee per delivery order with an
+		// optional free-above-subtotal threshold (all-tier). "radius" = distance
+		// bands from `businessAddress` priced by straight-line km (Pro-gated on
+		// SET; clearing stays un-gated — chargeablePickup posture). Validated by
+		// sanitizeDeliveryConfig; resolved per-order by resolveDeliveryQuote and
+		// FROZEN onto orders.deliverySnapshot. See convex/lib/delivery.ts.
+		deliveryConfig: v.optional(
+			v.union(
+				v.object({
+					mode: v.literal("flat"),
+					fee: v.number(),
+					freeAbove: v.optional(v.number()),
+				}),
+				v.object({
+					mode: v.literal("radius"),
+					bands: v.array(v.object({ maxKm: v.number(), fee: v.number() })),
+					outOfRange: v.union(v.literal("block"), v.literal("arrange")),
+				}),
+				// Live provider quote at checkout (86eyb5hrf): the buyer pays the
+				// REAL Lalamove price for their address, fetched via the public
+				// lalamove.quoteForCheckout action and frozen through a
+				// deliveryQuotes row (client never supplies the fee). Requires
+				// deliveryBooking credentials to resolve; when they don't, checkout
+				// falls back per `outOfRange`-style policy below ("arrange" →
+				// deliveryFeePending, the existing seller-confirms-fee state).
+				v.object({
+					mode: v.literal("lalamove"),
+					// When a live quote can't be fetched (no coords picked, provider
+					// down, creds unresolvable): "arrange" accepts the order with the
+					// fee pending (default posture — never lose the sale), "block"
+					// refuses checkout until the buyer pins a quotable address.
+					onUnquotable: v.union(v.literal("arrange"), v.literal("block")),
+				}),
+			),
+		),
+		// Lalamove delivery booking (86eyb5hrf) — dispatch capability, orthogonal
+		// to the deliveryConfig PRICING mode above (a seller can charge a flat fee
+		// yet still book Lalamove riders). `enabled` requires `businessAddress`
+		// AND the seller's own key pair (enforced in updateSettings). BYO-ONLY
+		// (decision revised 21 Jul): `apiKey`/`apiSecret` are the seller's own
+		// Lalamove credentials (plain fields per current convention, accepted for
+		// v1) — there is NO platform fallback; Kedaipal never books or pays on a
+		// seller's behalf. Sandbox vs production is inferred from the key prefix.
+		// See docs/delivery-lalamove.md.
+		deliveryBooking: v.optional(
+			v.object({
+				enabled: v.boolean(),
+				vehicleType: v.union(v.literal("MOTORCYCLE"), v.literal("CAR")),
+				apiKey: v.optional(v.string()),
+				apiSecret: v.optional(v.string()),
+				// Opt-in convenience: when the seller marks a paid, due-today
+				// delivery order PACKED, the order page auto-opens the "book a
+				// rider now?" confirm dialog (today's price shown before any
+				// spend — client-side, no server auto-booking). Undefined = off:
+				// the seller books manually from the Book button.
+				promptBookOnPacked: v.optional(v.boolean()),
+			}),
+		),
 		// Minimum days' notice the retailer needs before a fulfilment date. Drives
 		// the lower bound of the storefront date picker (earliest selectable day =
 		// today + this). Undefined → 0 (see DEFAULT_MIN_NOTICE_DAYS) so same-day is
@@ -191,6 +292,14 @@ export default defineSchema({
 		// (the max-notice ceiling) server-side. NOTE: counter checkout (seller, in
 		// person) ignores this and always allows today. See convex/lib/fulfilmentDate.ts.
 		minFulfilmentNoticeDays: v.optional(v.number()),
+		// Store-wide minimum order value (minor units, 86ey9unyx) — the item
+		// subtotal a storefront order must reach before checkout. Undefined = no
+		// minimum (default; 0 normalizes to unset via sanitizeMinOrderValue).
+		// Public-safe (buyers must see the bar to reach it). Enforced in
+		// orders.create; counter checkout (seller, in person) is exempt, and orders
+		// carrying a custom/price-on-quote line are exempt (their real value is
+		// settled by the seller's quote). See convex/lib/minOrderRules.ts.
+		minOrderValue: v.optional(v.number()),
 		// Set to true the first time the retailer opens the Pickup settings tab.
 		// Used by the dashboard checklist to mark step 4 done after a single
 		// visit, even if the retailer chose to skip self-collect — keeps the
@@ -274,6 +383,16 @@ export default defineSchema({
 		// lists online. undefined/false = visible (legacy default; no backfill).
 		// See docs/hidden-products.md.
 		hidden: v.optional(v.boolean()),
+		// Minimum order quantity (86ey9unyx) — buyers must order at least this many
+		// units of this product per storefront order, SUMMED across the product's
+		// variants (10 + 10 of two flavours satisfies min 20 — deliberately
+		// product-level, not per-variant: "min 20 pax" is the seller's mental
+		// model, and per-variant would wrongly force 20 per flavour). Undefined =
+		// no minimum (default; 0/1 normalize to unset via sanitizeMinQuantity).
+		// Custom/made-to-order lines never count toward or trigger it (one bespoke
+		// negotiation, qty-locked 1). Enforced in orders.create; counter checkout
+		// is exempt. See convex/lib/minOrderRules.ts.
+		minQuantity: v.optional(v.number()),
 		// Denormalized storefront suppression: true when this product belongs to
 		// ≥1 category AND every one of them is hidden — so it drops off the public
 		// storefront (still counter-sellable), while a product also in a non-hidden
@@ -299,6 +418,13 @@ export default defineSchema({
 		// fallback for variants that haven't been backfilled. See proof-approval.md
 		// + product-variants.md §5/§7.
 		blockWhenOutOfStock: v.optional(v.boolean()),
+		// Minimum days' notice THIS product needs before a fulfilment date
+		// (made-to-order/custom items). Checkout + orders.create take the MAX of
+		// the store-level minFulfilmentNoticeDays and every cart item's override,
+		// so one custom cake raises the whole order's earliest date. Undefined =
+		// no override (0 is normalized to unset — one spelling). Capped at
+		// MAX_NOTICE_DAYS. Counter checkout ignores notice entirely (unchanged).
+		minNoticeDays: v.optional(v.number()),
 		// DEPRECATED — moved to productVariants.requiresProof (per-variant).
 		requiresProof: v.optional(v.boolean()),
 		channel: v.union(v.literal("whatsapp")),
@@ -611,6 +737,44 @@ export default defineSchema({
 		// equals the snapshot fee; folded into `total` via computeOrderTotals
 		// (total = subtotal + mockup quote + pickupFee). Unset → no fee.
 		pickupFee: v.optional(v.number()),
+		// Frozen delivery-charge resolution at order create (delivery orders
+		// only) — mirrors the pickupSnapshot posture: a later config/address edit
+		// never rewrites a placed order. `mode` records HOW the fee was priced:
+		// "flat" / "radius" (auto-resolved from the retailer's deliveryConfig) or
+		// "manual" (seller set it on an out-of-range "arrange" order, or adjusted
+		// it pre-payment). `distanceKm`/`bandMaxKm` audit the radius math. Unset →
+		// free delivery (0 is never stored). See convex/lib/delivery.ts.
+		deliverySnapshot: v.optional(
+			v.object({
+				fee: v.number(),
+				mode: v.union(
+					v.literal("flat"),
+					v.literal("radius"),
+					v.literal("manual"),
+					// Live Lalamove quote frozen at create (86eyb5hrf). The extra
+					// fields below audit the provider quote; dispatch always
+					// RE-quotes (Lalamove honours quotes 5 min), so these are a
+					// paper trail, never booking inputs.
+					v.literal("lalamove"),
+				),
+				distanceKm: v.optional(v.number()),
+				bandMaxKm: v.optional(v.number()),
+				// Provider-quote audit trail (mode "lalamove" only).
+				quotationId: v.optional(v.string()),
+				vehicleType: v.optional(v.string()),
+				quotedAt: v.optional(v.number()),
+			}),
+		),
+		// Order-level mirror of `deliverySnapshot.fee` (minor units) for cheap
+		// CSV/inbox/tracking reads — same posture as `pickupFee`. Folded into
+		// `total` via computeOrderTotals. Unset → no fee.
+		deliveryFee: v.optional(v.number()),
+		// True while the delivery charge is still to be confirmed by the seller —
+		// a radius-mode "arrange via WhatsApp" order (out of range, or the buyer
+		// typed an address with no coordinates). While set, the payment ask is
+		// held and payment claim/receive are gated (the total is not final yet) —
+		// mirrors the mockup gate. Cleared by orders.setDeliveryFee.
+		deliveryFeePending: v.optional(v.boolean()),
 		// When the buyer needs the order — their answer to "When do you need this?
 		// (delivery or pickup date)" at checkout. Stored as the epoch-ms of that
 		// calendar day's MIDNIGHT in Malaysia time (UTC+8, no DST) — see
@@ -661,6 +825,13 @@ export default defineSchema({
 		// daily cron at schedule time so it never double-sends. Undefined = not
 		// sent (yet, or never became due). See docs/payment-reminder.md.
 		paymentReminderSentAt: v.optional(v.number()),
+		// When the seller last MANUALLY re-sent the payment details to the buyer
+		// from the order page (distinct from the automatic paymentReminderSentAt
+		// so the two triggers never corrupt each other's once-only logic). Drives
+		// the 6h per-order cooldown and the "Reminded Xh ago" label, and lets the
+		// auto-cron skip an order the seller already nudged. Undefined = never
+		// manually reminded. See docs/payment-reminder.md.
+		lastManualReminderAt: v.optional(v.number()),
 		// Mockup/proof approval — a third independent dimension (like payment),
 		// gating the confirmed→packed transition for made-to-order orders.
 		// Undefined = order has no proof-required item (no gate). See
@@ -788,6 +959,95 @@ export default defineSchema({
 		createdAt: v.number(),
 	}).index("by_order", ["orderId"]),
 
+	// --- Lalamove delivery (docs/delivery-lalamove.md, ClickUp 86eyb5hrf) -----
+	// Server-side record of a live checkout quote. The public quoteForCheckout
+	// action writes one row and hands the CLIENT only its id + fee — orders.create
+	// then loads the row by id, so the frozen fee can never be tampered with from
+	// the browser. Rows are transient (consumed at create or abandoned); a stale
+	// row past QUOTE_MAX_AGE_MS is refused at create and the order falls back to
+	// the deliveryFeePending path. Fetched by _id in the order flow; abandoned
+	// rows are purged daily (purgeStaleCheckoutQuotes cron) via the system
+	// creation-time index, and `by_retailer` serves the account-deletion cascade.
+	deliveryQuotes: defineTable({
+		retailerId: v.id("retailers"),
+		// Lalamove quotation id — reused at create for the snapshot audit trail.
+		quotationId: v.string(),
+		// Buyer-paid fee (sen) after RM→sen conversion.
+		fee: v.number(),
+		vehicleType: v.string(),
+		// Destination coords the quote priced — orders.create verifies the order's
+		// delivery address matches (a quote for a near/cheap pin can't be replayed
+		// against a far delivery address).
+		latitude: v.number(),
+		longitude: v.number(),
+		quotedAt: v.number(),
+	}).index("by_retailer", ["retailerId"]),
+
+	// One rider booking (dispatch) against an order. The ledger row of record:
+	// actual cost the seller's own Lalamove wallet paid (BYO-only — audit +
+	// future insights, no Kedaipal settlement), driver + live-tracking link
+	// from webhooks. One ACTIVE job per order (enforced in dispatch);
+	// failed/cancelled jobs stay as history and a rebook inserts a new row.
+	// `by_provider_order` is the webhook lookup; `by_retailer` keeps per-store
+	// range reads cheap.
+	deliveryJobs: defineTable({
+		orderId: v.id("orders"),
+		retailerId: v.id("retailers"),
+		provider: v.literal("lalamove"),
+		// Unset while the row is a pre-call RESERVATION (inserted atomically
+		// before the POST /v3/orders side effect so two concurrent confirms can't
+		// both dispatch a rider); patched in by commitBooking once Lalamove
+		// confirms. Webhook lookups by this index never match reservations.
+		providerOrderId: v.optional(v.string()),
+		// Normalized provider status. Forward flow: assigning → ongoing (driver
+		// matched) → picked_up → completed. Lalamove can REGRESS ongoing/picked_up
+		// back to assigning when a matched driver bails — the job row follows the
+		// provider truth, but the ORDER status never regresses (shipped is
+		// one-way; see handleOrderStatusEvent).
+		status: v.union(
+			v.literal("assigning"),
+			v.literal("ongoing"),
+			v.literal("picked_up"),
+			v.literal("completed"),
+			v.literal("canceled"),
+			v.literal("expired"),
+			v.literal("rejected"),
+		),
+		// Actual booking cost (sen) — what the paying account is charged. Drift vs
+		// the buyer-paid orders.deliveryFee is expected (dispatch re-quotes) and
+		// lives HERE, never rewriting the order.
+		costActual: v.number(),
+		quotationId: v.string(),
+		vehicleType: v.string(),
+		driver: v.optional(
+			v.object({
+				name: v.string(),
+				phone: v.string(),
+				plateNumber: v.string(),
+			}),
+		),
+		// Buyer-facing live tracking URL (opaque — never parse). Mirrored onto
+		// orders.carrierTrackingUrl so the existing shipped copy carries it.
+		shareLink: v.optional(v.string()),
+		// Human-readable failure detail for canceled/expired/rejected jobs
+		// (e.g. Lalamove cancelReason) — surfaced on the order-detail banner.
+		failureReason: v.optional(v.string()),
+		// Proof-of-delivery photos (rider drop-off shots; isPODEnabled at place
+		// order). Fetched from GET /v3/orders on completion and stored as OUR
+		// blobs — Lalamove's image URLs have undocumented lifetime, so we never
+		// hotlink. Deleted by the order/account cascades.
+		podImageStorageIds: v.optional(v.array(v.id("_storage"))),
+		// Timestamp of the newest webhook event APPLIED to this row — the
+		// out-of-order guard (events older than this only fill gaps, never
+		// regress fields).
+		lastEventAt: v.optional(v.number()),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_order", ["orderId"])
+		.index("by_retailer", ["retailerId"])
+		.index("by_provider_order", ["providerOrderId"]),
+
 	// --- Counter Checkout (in-person order spine, docs/counter-checkout.md) ----
 	// A seller-initiated, in-person checkout session. The seller opens Counter
 	// Checkout → a session is created with an unguessable single-use `token`; the
@@ -833,6 +1093,9 @@ export default defineSchema({
 		// but no customer row until the order is created (linkOrderToCustomer).
 		customerId: v.optional(v.id("customers")),
 		waPhone: v.optional(v.string()),
+		// The buyer's name for this session: the inbound WhatsApp pushname on a scan,
+		// or the cashier-typed name on a manual-phone / anonymous bind (86ey8vqp6).
+		// Both are "a display name for this buyer"; it flows onto the order at create.
 		waProfileName: v.optional(v.string()),
 		// True when no existing customer matched the bound phone — drives the
 		// "new vs returning" dashboard state. Undefined until bound.
@@ -1032,6 +1295,8 @@ export default defineSchema({
 			v.literal("stop_keyword"),
 			v.literal("berhenti_keyword"),
 			v.literal("unsub_keyword"),
+			v.literal("zh_stop_keyword"),
+			v.literal("zh_unsub_keyword"),
 			v.literal("manual_admin"),
 			v.literal("meta_complaint"),
 		),

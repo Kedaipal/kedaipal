@@ -3,6 +3,7 @@ import { useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import { convexErrorMessage } from "../../lib/format";
 import { reorderByIds } from "../../lib/reorder";
+import { AppImage } from "../ui/app-image";
 import { SortableList } from "../ui/sortable-list";
 
 export const MAX_IMAGES = 5;
@@ -89,9 +90,7 @@ export function ProductImagesField({
 						className="contents"
 						renderItem={(img, handle) => (
 							<div className="relative aspect-square w-full overflow-hidden rounded-xl bg-muted">
-								{img.url ? (
-									<img src={img.url} alt="" className="size-full object-cover" />
-								) : null}
+								<AppImage src={img.url} alt="" aspect="size-full" />
 								{/* Cover badge on the first image — reordering changes
 								    which image leads on the storefront. */}
 								{img.id === images[0]?.id ? (

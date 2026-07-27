@@ -207,6 +207,18 @@ describe("admin console reads", () => {
 		).rejects.toThrow(/Not authorized/);
 	});
 
+	test("listSellersForAdmin flags admin-owned stores via ownerIsAdmin", async () => {
+		const t = setup();
+		await seedRetailer(t, OWNER);
+		await seedRetailer(t, ADMIN);
+		const rows = await t
+			.withIdentity({ subject: ADMIN })
+			.query(api.admin.listSellersForAdmin, {});
+		// The seller's store is not admin-owned; the admin's own store is.
+		expect(rows.find((r) => r.ownerUserId === OWNER)?.ownerIsAdmin).toBe(false);
+		expect(rows.find((r) => r.ownerUserId === ADMIN)?.ownerIsAdmin).toBe(true);
+	});
+
 	test("recentAuditForRetailer is admin-only", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, OWNER);

@@ -1,9 +1,12 @@
 import { createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
+import { useState } from "react";
 import { api } from "../../convex/_generated/api";
+import { type Locale, OG_LOCALE } from "../../convex/lib/locale";
 import { CartBar } from "../components/storefront/cart-bar";
 import { CategoryRail } from "../components/storefront/category-rail";
 import { ProductGrid } from "../components/storefront/product-grid";
+import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { StorefrontHeader } from "../components/storefront/storefront-header";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
@@ -13,12 +16,17 @@ interface StorefrontLoaderData {
 	storeName: string;
 	slug: string;
 	checkoutPhone: string | undefined;
-	locale: "en" | "ms";
+	locale: Locale;
 	// SEO meta/OG/JSON-LD description. Prefers the seller's own store description
 	// (single-lined) and falls back to a generated blurb.
 	description: string;
 	canonicalUrl: string;
 	ogImageUrl: string | undefined;
+	// Exposed distinctly from `ogImageUrl` (which also falls back to logo/first
+	// product) so `head()` can preload ONLY the actual LCP element — the header
+	// cover image `StorefrontHeader` renders with `priority` — not whichever
+	// URL happens to win the OG-image precedence.
+	coverImageUrl: string | undefined;
 }
 
 export const Route = createFileRoute("/$slug")({
@@ -74,6 +82,7 @@ export const Route = createFileRoute("/$slug")({
 			description,
 			canonicalUrl: `${SITE_URL}/${retailer.slug}`,
 			ogImageUrl,
+			coverImageUrl: retailer.coverImageUrl ?? undefined,
 		};
 	},
 	head: ({ loaderData }) => {
@@ -83,11 +92,12 @@ export const Route = createFileRoute("/$slug")({
 			description,
 			canonicalUrl,
 			ogImageUrl,
+			coverImageUrl,
 			checkoutPhone,
 			locale,
 		} = loaderData;
 		const title = `${storeName} — Order on WhatsApp | Kedaipal`;
-		const ogLocale = locale === "ms" ? "ms_MY" : "en_MY";
+		const ogLocale = OG_LOCALE[locale];
 
 		const meta = [
 			{ title },
@@ -127,7 +137,15 @@ export const Route = createFileRoute("/$slug")({
 
 		return {
 			meta,
-			links: [{ rel: "canonical", href: canonicalUrl }],
+			links: [
+				{ rel: "canonical", href: canonicalUrl },
+				// LCP preload — StorefrontHeader renders this URL with `priority`
+				// the moment retailer data resolves; hinting the browser before
+				// the JS bundle even parses shaves the fetch off the critical path.
+				...(coverImageUrl
+					? [{ rel: "preload", as: "image", href: coverImageUrl }]
+					: []),
+			],
 			scripts: [
 				{
 					type: "application/ld+json",
@@ -197,6 +215,9 @@ function StorefrontRoute() {
 	const pickupLocations = useQuery(api.pickupLocations.listActivePublicBySlug, {
 		slug,
 	});
+	// Checkout sheet open-state lives here (not in CartBar) so the product detail
+	// sheet — a sibling under this route — can open checkout directly.
+	const [checkoutOpen, setCheckoutOpen] = useState(false);
 
 	if (result === undefined || result.status !== "ok") {
 		return <StorefrontSkeleton />;
@@ -205,7 +226,7 @@ function StorefrontRoute() {
 	const retailer = result.retailer;
 
 	return (
-		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-32">
+		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-20">
 			{/* Shared brand header (cover/logo/name) — identical on the category
 			    pages so buyers always know whose store they're in. */}
 			<StorefrontHeader retailer={retailer} />
@@ -219,11 +240,14 @@ function StorefrontRoute() {
 					retailerId={retailer._id}
 					cart={cart}
 					storeSlug={retailer.slug}
+					onRequestCheckout={() => setCheckoutOpen(true)}
 					beforeGrid={
 						<CategoryRail retailerId={retailer._id} storeSlug={retailer.slug} />
 					}
 				/>
 			</section>
+
+			<StorefrontFooter />
 
 			<CartBar
 				cart={cart}
@@ -233,7 +257,10 @@ function StorefrontRoute() {
 				offerSelfCollect={retailer.offerSelfCollect ?? false}
 				offerDelivery={retailer.offerDelivery ?? true}
 				minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
+				minOrderValue={retailer.minOrderValue}
 				pickupLocations={pickupLocations ?? []}
+				checkoutOpen={checkoutOpen}
+				onCheckoutOpenChange={setCheckoutOpen}
 			/>
 		</div>
 	);

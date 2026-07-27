@@ -100,6 +100,28 @@ const LABEL_CASES: LabelCase[] = [
 		opts: { labels: BOTH_LOCALES, locale: "ms" },
 		expected: "Sedia di kedai",
 	},
+	// ZH: EN/MS-only overrides never leak to a ZH buyer (86eybjw5n).
+	{
+		name: "ZH buyer sees ZH default when only EN override set",
+		status: "shipped",
+		opts: { labels: EN_ONLY, deliveryMethod: "delivery", locale: "zh" },
+		expected: "配送中",
+	},
+	{
+		name: "ZH self_collect preset for ZH buyer",
+		status: "shipped",
+		opts: { deliveryMethod: "self_collect", locale: "zh" },
+		expected: "可以自取",
+	},
+	{
+		name: "ZH override for ZH buyer",
+		status: "shipped",
+		opts: {
+			labels: { ...BOTH_LOCALES, zh: { shipped: "门店可取" } },
+			locale: "zh",
+		},
+		expected: "门店可取",
+	},
 ];
 
 describe("resolveStatusLabel", () => {
@@ -195,6 +217,8 @@ import {
 	type OrderStage,
 	resolveCurrentStage,
 	resolveStages,
+	STAGE_DESCRIPTION_MAX_LENGTH,
+	STAGE_LABEL_MAX_LENGTH,
 	stageDescription,
 	stageLabel,
 	synthesizeDefaultStages,
@@ -300,6 +324,49 @@ describe("resolveCurrentStage", () => {
 		expect(resolveCurrentStage({ status: "packed" }, custom)?.id).toBe("clean");
 	});
 
+	test("stale stage BEHIND status → status wins (webhook advanced status only)", () => {
+		// The Lalamove webhook / payment auto-confirm advance `status` WITHOUT
+		// moving `currentStageId`. A stored stage that has fallen behind must never
+		// pin the display back — otherwise a delivered order reads "Packed".
+		expect(
+			resolveCurrentStage(
+				{ status: "delivered", currentStageId: "default:packed" },
+				stages,
+			)?.anchor,
+		).toBe("delivered");
+		expect(
+			resolveCurrentStage(
+				{ status: "shipped", currentStageId: "default:packed" },
+				stages,
+			)?.anchor,
+		).toBe("shipped");
+	});
+
+	test("custom stage sharing the current anchor is still honoured", () => {
+		const custom = [
+			stage({
+				id: "dispatched",
+				anchor: "shipped",
+				sortOrder: 0,
+				label: { en: "Dispatched" },
+			}),
+			stage({
+				id: "near-you",
+				anchor: "shipped",
+				sortOrder: 1,
+				label: { en: "Near you" },
+			}),
+		];
+		// Status has caught up to shipped; the seller's specific shipped stage
+		// stays selected (equal ordinal, not behind).
+		expect(
+			resolveCurrentStage(
+				{ status: "shipped", currentStageId: "near-you" },
+				custom,
+			)?.id,
+		).toBe("near-you");
+	});
+
 	test("pending and cancelled resolve to no stage", () => {
 		expect(resolveCurrentStage({ status: "pending" }, stages)).toBeUndefined();
 		expect(
@@ -329,9 +396,31 @@ describe("stageLabel / stageDescription", () => {
 		});
 		expect(stageLabel(t, "ms")).toBe("Menjahit");
 	});
+	test("ZH falls back to EN when ZH blank, and is used when present", () => {
+		expect(stageLabel(s, "zh")).toBe("Sewing");
+		const t = stage({
+			id: "w",
+			anchor: "packed",
+			sortOrder: 0,
+			label: { en: "Sewing", zh: "缝纫" },
+		});
+		expect(stageLabel(t, "zh")).toBe("缝纫");
+	});
 	test("no description → undefined", () => {
 		const t = stage({ id: "z", anchor: "packed", sortOrder: 0 });
 		expect(stageDescription(t, "en")).toBeUndefined();
+	});
+	test("stageDescription fallback order is [requested, …rest of LOCALES]", () => {
+		expect(stageDescription(s, "zh")).toBe("Usually 2 days");
+		const withZh = stage({
+			id: "v",
+			anchor: "packed",
+			sortOrder: 0,
+			label: { en: "Sewing" },
+			description: { zh: "通常 2 天" },
+		});
+		expect(stageDescription(withZh, "zh")).toBe("通常 2 天");
+		expect(stageDescription(withZh, "en")).toBe("通常 2 天");
 	});
 });
 
@@ -404,6 +493,21 @@ describe("collectStageConfigErrors", () => {
 			stage({ id: "b", anchor: "confirmed", sortOrder: 1 }),
 		];
 		expect(() => assertValidOrderStages(bad)).toThrow(/out of order/i);
+	});
+
+	test("flags an over-long ZH label and ZH description, same as MS", () => {
+		const bad = [
+			stage({
+				id: "a",
+				anchor: "packed",
+				sortOrder: 0,
+				label: { en: "OK", zh: "超".repeat(STAGE_LABEL_MAX_LENGTH + 1) },
+				description: { zh: "超".repeat(STAGE_DESCRIPTION_MAX_LENGTH + 1) },
+			}),
+		];
+		const msg = collectStageConfigErrors(bad).join(" ");
+		expect(msg).toMatch(/中文 label exceeds/);
+		expect(msg).toMatch(/stage description exceeds/);
 	});
 });
 
@@ -587,6 +691,15 @@ describe("displayStatusLabel — counter completion", () => {
 				"ms",
 			),
 		).toBe("Selesai");
+	});
+	test("counter + delivered is localized to ZH", () => {
+		expect(
+			displayStatusLabel(
+				{ status: "delivered", source: "counter" },
+				"已送达",
+				"zh",
+			),
+		).toBe("已完成");
 	});
 	test("storefront / legacy delivered keeps the resolved label", () => {
 		expect(

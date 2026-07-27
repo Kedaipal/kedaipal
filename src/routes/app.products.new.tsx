@@ -51,6 +51,8 @@ function NewProductRoute() {
 			sortOrder: Date.now(),
 			options: values.options,
 			hidden: values.hidden,
+			minNoticeDays: values.minNoticeDays,
+			minQuantity: values.minQuantity,
 			variants: values.variants,
 		});
 		// Junction rows keyed on the fresh id — ordered after create so a

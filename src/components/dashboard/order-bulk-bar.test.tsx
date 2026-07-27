@@ -117,7 +117,21 @@ describe("OrderBulkBar", () => {
 		expect(onDelete).not.toHaveBeenCalled();
 		expect(onApply).not.toHaveBeenCalled();
 		expect(screen.getByRole("dialog")).toBeTruthy();
-		fireEvent.click(screen.getByRole("button", { name: /delete 2 orders/i }));
+
+		// Permanent delete is gated behind a type-to-confirm box: the button stays
+		// disabled until the user types DELETE.
+		const confirmButton = screen.getByRole("button", {
+			name: /delete 2 orders/i,
+		}) as HTMLButtonElement;
+		expect(confirmButton.disabled).toBe(true);
+		fireEvent.click(confirmButton);
+		expect(onDelete).not.toHaveBeenCalled();
+
+		fireEvent.change(screen.getByLabelText("Type DELETE to confirm"), {
+			target: { value: "delete" },
+		});
+		expect(confirmButton.disabled).toBe(false);
+		fireEvent.click(confirmButton);
 		expect(onDelete).toHaveBeenCalledTimes(1);
 		expect(onApply).not.toHaveBeenCalled();
 	});

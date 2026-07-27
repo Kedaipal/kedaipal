@@ -6,31 +6,74 @@ import {
 	Pencil,
 	Phone,
 	Plus,
+	Trash2,
 	Truck,
 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
+import type { DeliveryConfig } from "../../../convex/lib/delivery";
+import { DELIVERY_BANDS_MAX } from "../../../convex/lib/delivery";
 import {
 	DEFAULT_MIN_NOTICE_DAYS,
 	MAX_NOTICE_DAYS,
 } from "../../../convex/lib/fulfilmentDate";
+import { MIN_ORDER_VALUE_MAX } from "../../../convex/lib/minOrderRules";
 import { formatPhone } from "../../lib/customer";
-import { convexErrorMessage, formatPrice } from "../../lib/format";
+import { clientEnv } from "../../lib/env";
+import {
+	convexErrorMessage,
+	formatPrice,
+	normalizePriceInput,
+	parsePriceInput,
+} from "../../lib/format";
 import { deriveMapsUrl } from "../../lib/google-address";
 import { hasFeature, type SubscriptionView } from "../../lib/subscription";
+import { ProBadge } from "../app/pro-gate";
+import {
+	GoogleAddressAutocomplete,
+	type GoogleSelectedAddress,
+} from "../forms/google-address-autocomplete";
+import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Skeleton } from "../ui/skeleton";
 import { SortableList } from "../ui/sortable-list";
 import { PickupLocationEditDialog } from "./pickup-location-edit-dialog";
 
+/** Owner-only business address (the radius-pricing origin) — mirrors the
+ * retailers.businessAddress payload field. */
+type BusinessAddress = {
+	label: string;
+	latitude: number;
+	longitude: number;
+	placeId?: string;
+};
+
+/** Secret-free booking summary — mirrors retailers.DeliveryBookingSummary. */
+type DeliveryBookingSummary = {
+	enabled: boolean;
+	vehicleType: "MOTORCYCLE" | "CAR";
+	hasCredentials: boolean;
+	promptBookOnPacked: boolean;
+	apiKeyHint?: string;
+};
+
 interface FulfilmentTabProps {
 	retailerId: Id<"retailers">;
 	offerSelfCollect: boolean;
 	offerDelivery: boolean;
+	/** Current delivery-charge config (undefined = free delivery). */
+	deliveryConfig: DeliveryConfig | undefined;
+	/** Business address — origin for distance-based pricing. */
+	businessAddress: BusinessAddress | undefined;
+	/** Lalamove booking summary (86eyb5hrf) — secrets never reach the client. */
+	deliveryBooking: DeliveryBookingSummary | undefined;
 	minFulfilmentNoticeDays: number | undefined;
+	/** Store-wide minimum order value (minor units, 86ey9unyx) — undefined =
+	 * no minimum. See convex/lib/minOrderRules.ts. */
+	minOrderValue: number | undefined;
 	/** Resolved subscription — drives the Pro-gated pickup-fee input in the
 	 * edit dialog (client mirror only; the server gate is the real lock). */
 	subscription: SubscriptionView | undefined;
@@ -115,7 +158,11 @@ export function FulfilmentTab({
 	retailerId,
 	offerSelfCollect,
 	offerDelivery,
+	deliveryConfig,
+	businessAddress,
+	deliveryBooking,
 	minFulfilmentNoticeDays,
+	minOrderValue,
 	subscription,
 }: FulfilmentTabProps) {
 	const locations = useQuery(api.pickupLocations.listForRetailer, {
@@ -249,6 +296,7 @@ export function FulfilmentTab({
 	return (
 		<div className="flex flex-col gap-6 pt-2">
 			<MinNoticeCard initial={minFulfilmentNoticeDays} />
+			<MinOrderValueCard initial={minOrderValue} />
 
 			<Card>
 				<div className="flex items-start justify-between gap-4">
@@ -274,6 +322,19 @@ export function FulfilmentTab({
 						self-collect on) before switching to pickup-only.
 					</p>
 				) : null}
+
+				<div className="border-t border-border pt-4">
+					<DeliveryChargeSection
+						// Remount when the saved config/address/keys change shape so
+						// local draft state re-seeds from the server truth after a save.
+						key={`${deliveryConfig?.mode ?? "free"}:${businessAddress?.label ?? ""}:${deliveryBooking?.apiKeyHint ?? ""}`}
+						config={deliveryConfig}
+						businessAddress={businessAddress}
+						deliveryBooking={deliveryBooking}
+						canUseRadius={hasFeature(subscription, "radiusDelivery")}
+						canUseLalamove={hasFeature(subscription, "delivery")}
+					/>
+				</div>
 			</Card>
 
 			<Card>
@@ -403,6 +464,814 @@ export function FulfilmentTab({
 	);
 }
 
+// --- Delivery charge (86extzdr8) --------------------------------------------
+
+type ChargeMode = "free" | "flat" | "radius" | "lalamove";
+
+type BandDraft = { maxKm: string; fee: string };
+
+function bandsFromConfig(config: DeliveryConfig | undefined): BandDraft[] {
+	if (config?.mode !== "radius") return [{ maxKm: "5", fee: "" }];
+	return config.bands.map((b) => ({
+		maxKm: String(b.maxKm),
+		fee: (b.fee / 100).toFixed(2),
+	}));
+}
+
+/** Segmented mode button — same visual language as the pickup KindButton. */
+function ModeButton({
+	active,
+	disabled,
+	onClick,
+	title,
+	subtitle,
+	badge,
+}: {
+	active: boolean;
+	disabled?: boolean;
+	onClick: () => void;
+	title: string;
+	subtitle: string;
+	badge?: ReactNode;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			disabled={disabled}
+			aria-pressed={active}
+			className={`flex flex-col items-start gap-0.5 rounded-xl border-2 px-3 py-2.5 text-left transition-colors ${
+				active
+					? "border-accent bg-accent/5"
+					: "border-border bg-card hover:border-accent/40"
+			} ${disabled ? "cursor-not-allowed opacity-60" : ""}`}
+		>
+			<span
+				className={`flex items-center gap-1.5 text-sm font-semibold ${active ? "text-accent" : "text-foreground"}`}
+			>
+				{title}
+				{badge}
+			</span>
+			<span className="text-xs text-muted-foreground">{subtitle}</span>
+		</button>
+	);
+}
+
+/**
+ * Delivery-charge configuration (86extzdr8) — lives inside the Delivery card
+ * because it's pricing for that method (mirrors the fee input inside the
+ * pickup-point dialog). Three modes: Free (default, today's behaviour), a
+ * flat fee with optional free-above threshold (all-tier — a wrong total is a
+ * correctness bug, not an upsell), and distance bands from the business
+ * address (Pro). Distances are STRAIGHT-LINE — the copy says so, because a
+ * seller who bands by road distance will undercharge.
+ */
+function DeliveryChargeSection({
+	config,
+	businessAddress,
+	deliveryBooking,
+	canUseRadius,
+	canUseLalamove,
+}: {
+	config: DeliveryConfig | undefined;
+	businessAddress: BusinessAddress | undefined;
+	/** Secret-free booking summary — Lalamove is set up INSIDE this section
+	 * (a delivery-pricing choice, not a separate feature). */
+	deliveryBooking: DeliveryBookingSummary | undefined;
+	canUseRadius: boolean;
+	canUseLalamove: boolean;
+}) {
+	const updateSettings = useMutation(api.retailers.updateSettings);
+	const [mode, setMode] = useState<ChargeMode>(config?.mode ?? "free");
+	// Flat-mode drafts (RM display strings; sen on the wire).
+	const [flatFee, setFlatFee] = useState(
+		config?.mode === "flat" ? (config.fee / 100).toFixed(2) : "",
+	);
+	const [freeAbove, setFreeAbove] = useState(
+		config?.mode === "flat" && config.freeAbove !== undefined
+			? (config.freeAbove / 100).toFixed(2)
+			: "",
+	);
+	// Radius-mode drafts.
+	const [bands, setBands] = useState<BandDraft[]>(() =>
+		bandsFromConfig(config),
+	);
+	const [outOfRange, setOutOfRange] = useState<"block" | "arrange">(
+		config?.mode === "radius" ? config.outOfRange : "arrange",
+	);
+	// Business address: the autocomplete pick replaces the stored one on save.
+	const [pickedAddress, setPickedAddress] =
+		useState<GoogleSelectedAddress | null>(null);
+	// Lalamove drafts (mode "lalamove" only). Blank key inputs mean "keep the
+	// stored pair" (server: undefined = no change); `editingKeys` swaps the
+	// stored-key summary row for fresh inputs (key rotation).
+	const [vehicleType, setVehicleType] = useState<"MOTORCYCLE" | "CAR">(
+		deliveryBooking?.vehicleType ?? "MOTORCYCLE",
+	);
+	const [apiKey, setApiKey] = useState("");
+	const [apiSecret, setApiSecret] = useState("");
+	const [editingKeys, setEditingKeys] = useState(false);
+	const [promptBook, setPromptBook] = useState(
+		deliveryBooking?.promptBookOnPacked ?? false,
+	);
+	const [saving, setSaving] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const hasStoredKey = !!deliveryBooking?.apiKeyHint;
+	const typedBothKeys = apiKey.trim().length > 0 && apiSecret.trim().length > 0;
+
+	// A downgraded seller sitting on a radius config can still view it and
+	// switch away (clearing is un-gated server-side) — they just can't edit it.
+	const radiusLocked = !canUseRadius;
+	const radiusEditable = mode === "radius" && canUseRadius;
+	const lalamoveLocked = !canUseLalamove;
+	const effectiveAddress = pickedAddress
+		? {
+				label: pickedAddress.formattedAddress,
+				latitude: pickedAddress.latitude,
+				longitude: pickedAddress.longitude,
+				placeId: pickedAddress.placeId,
+			}
+		: businessAddress;
+
+	async function save() {
+		setError(null);
+		let nextConfig: DeliveryConfig | null;
+		if (mode === "free") {
+			nextConfig = null;
+		} else if (mode === "flat") {
+			const rm = parsePriceInput(flatFee);
+			if (rm === null || rm <= 0) {
+				setError("Enter the flat delivery fee — numbers only, e.g. 8.00");
+				return;
+			}
+			let freeAboveSen: number | undefined;
+			if (freeAbove.trim().length > 0) {
+				const threshold = parsePriceInput(freeAbove);
+				if (threshold === null || threshold <= 0) {
+					setError("Free-delivery threshold isn't a valid amount");
+					return;
+				}
+				freeAboveSen = Math.round(threshold * 100);
+			}
+			nextConfig = {
+				mode: "flat",
+				fee: Math.round(rm * 100),
+				freeAbove: freeAboveSen,
+			};
+		} else if (mode === "lalamove") {
+			// Live provider quote (86eyb5hrf) — keep the stored onUnquotable
+			// policy (default "arrange": never lose the sale). Mirrors the server
+			// gates so the failure is a helpful message, not a thrown save.
+			if (!effectiveAddress) {
+				setError(
+					"Pick your business address from the suggestions — it's the pickup point riders are sent to.",
+				);
+				return;
+			}
+			if (!hasStoredKey || editingKeys) {
+				if (!typedBothKeys) {
+					setError(
+						"Paste both your Lalamove API key and API secret — tap “How to set up” if you don't have them yet.",
+					);
+					return;
+				}
+			}
+			nextConfig =
+				config?.mode === "lalamove"
+					? config
+					: { mode: "lalamove", onUnquotable: "arrange" };
+		} else {
+			if (!effectiveAddress) {
+				setError(
+					"Set your business address first — distances are measured from it.",
+				);
+				return;
+			}
+			const parsedBands = [];
+			for (const b of bands) {
+				const km = Number(b.maxKm);
+				const rm = parsePriceInput(b.fee.trim().length > 0 ? b.fee : "0");
+				if (!Number.isFinite(km) || km <= 0) {
+					setError("Each band needs a distance greater than 0 km");
+					return;
+				}
+				if (rm === null || rm < 0) {
+					setError("A band fee isn't a valid amount — numbers only, e.g. 5.00");
+					return;
+				}
+				parsedBands.push({ maxKm: km, fee: Math.round(rm * 100) });
+			}
+			nextConfig = { mode: "radius", bands: parsedBands, outOfRange };
+		}
+		setSaving(true);
+		try {
+			// Lalamove is enabled/disabled as part of the pricing choice — one
+			// save, one mental model. Switching AWAY also turns booking off (the
+			// server refuses a dangling live-quote config otherwise); the stored
+			// keys stay, so switching back later is instant.
+			const wasLalamove = deliveryBooking?.enabled === true;
+			const bookingPatch =
+				mode === "lalamove"
+					? {
+							deliveryBooking: {
+								enabled: true,
+								vehicleType,
+								promptBookOnPacked: promptBook,
+								apiKey: apiKey.trim() || undefined,
+								apiSecret: apiSecret.trim() || undefined,
+							},
+						}
+					: wasLalamove
+						? {
+								deliveryBooking: {
+									enabled: false,
+									vehicleType,
+								},
+							}
+						: {};
+			await updateSettings({
+				deliveryConfig: nextConfig,
+				// Only send the address when the seller picked a new one — an
+				// unchanged save must not touch (or clear) the stored address.
+				...(pickedAddress && effectiveAddress
+					? { businessAddress: effectiveAddress }
+					: {}),
+				...bookingPatch,
+			});
+			toast.success(
+				mode === "free"
+					? "Delivery charge turned off — delivery is free."
+					: mode === "lalamove"
+						? "Lalamove delivery is on — book riders from any confirmed delivery order."
+						: "Delivery charge saved.",
+			);
+			setPickedAddress(null);
+			setApiKey("");
+			setApiSecret("");
+			setEditingKeys(false);
+		} catch (err) {
+			setError(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	return (
+		<div className="flex flex-col gap-4">
+			<SectionHeading
+				title="Delivery charge"
+				description="What buyers pay for delivery, added to their order total at checkout. Pickup orders are never charged this."
+			/>
+			{/* 2×2 grid, Lalamove FIRST (86eyb5hrf) — it's a pricing choice like
+			    the others, but the promoted one: branded with the official
+			    wordmark so every tier SEES rider delivery exists. For a locked
+			    Starter it stays full-colour with a Pro chip + upgrade line
+			    (disabled-with-reason, not a washed-out ghost). */}
+			<div className="grid grid-cols-2 gap-2">
+				<button
+					type="button"
+					onClick={() => setMode("lalamove")}
+					disabled={lalamoveLocked && config?.mode !== "lalamove"}
+					aria-pressed={mode === "lalamove"}
+					className={`flex flex-col items-start gap-1 rounded-xl border-2 px-3 py-2.5 text-left transition-colors ${
+						mode === "lalamove"
+							? "border-accent bg-accent/5"
+							: "border-border bg-card hover:border-accent/40"
+					} ${lalamoveLocked && config?.mode !== "lalamove" ? "cursor-not-allowed" : ""}`}
+				>
+					<span className="flex items-center gap-1.5">
+						<AppImage
+							src="/img/lalamove-logo.svg"
+							alt="Lalamove"
+							aspect="h-4 w-auto"
+							fill={false}
+						/>
+						{lalamoveLocked ? <ProBadge /> : null}
+					</span>
+					<span className="text-xs text-muted-foreground">
+						{lalamoveLocked && config?.mode !== "lalamove"
+							? "Rider delivery — upgrade to Pro to turn on"
+							: "Live rider price, one-tap booking"}
+					</span>
+				</button>
+				<ModeButton
+					active={mode === "free"}
+					onClick={() => setMode("free")}
+					title="Free"
+					subtitle="No charge"
+				/>
+				<ModeButton
+					active={mode === "flat"}
+					onClick={() => setMode("flat")}
+					title="Flat fee"
+					subtitle="Same fee every order"
+				/>
+				<ModeButton
+					active={mode === "radius"}
+					// A seller already ON radius keeps access to the tab so they can
+					// switch away; a locked seller can't switch INTO it.
+					disabled={radiusLocked && config?.mode !== "radius"}
+					onClick={() => setMode("radius")}
+					title="By distance"
+					subtitle="Radius bands"
+					badge={radiusLocked ? <ProBadge /> : undefined}
+				/>
+			</div>
+
+			{mode === "lalamove" ? (
+				<div className="flex flex-col gap-4">
+					<p className="rounded-lg bg-accent/10 px-3 py-2 text-xs leading-relaxed text-accent-emphasis">
+						Buyers pay the real Lalamove price for their address at checkout,
+						and you book the rider in one tap from the order — with automatic
+						shipped + live-tracking WhatsApp messages. Runs entirely on{" "}
+						<b>your own Lalamove account</b>; Kedaipal never books or pays on
+						your behalf. If a live price can&apos;t be fetched, the order is
+						still accepted and you confirm the charge afterwards.
+					</p>
+					{lalamoveLocked ? (
+						<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+							Lalamove delivery is a Pro feature. Your setup still applies to
+							new orders — upgrade in Settings → Billing to change it, or switch
+							to Free / Flat fee (always allowed).
+						</p>
+					) : null}
+
+					{/* 1 · Pickup point */}
+					<div className="flex flex-col gap-1.5">
+						<GoogleAddressAutocomplete
+							initialValue={businessAddress?.label ?? ""}
+							label="Your pickup address (riders collect here)"
+							required
+							placeholder="Start typing your business address…"
+							description={
+								effectiveAddress
+									? "✓ Pinned — riders are sent to this exact point."
+									: "Pick a Google suggestion so riders get an exact pin — your stall, kitchen or shop. Buyers never see this address."
+							}
+							onSelect={(payload) => setPickedAddress(payload)}
+							onTextChange={() => setPickedAddress(null)}
+						/>
+						{businessAddress && !pickedAddress ? (
+							<p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+								<MapPin
+									className="size-3 shrink-0 text-accent"
+									aria-hidden="true"
+								/>
+								<span className="font-mono">
+									{businessAddress.latitude.toFixed(5)},{" "}
+									{businessAddress.longitude.toFixed(5)}
+								</span>
+							</p>
+						) : null}
+					</div>
+
+					{/* 2 · Vehicle */}
+					<div className="flex flex-col gap-1.5">
+						<span className="text-xs font-medium text-muted-foreground">
+							Default vehicle
+						</span>
+						<div className="grid grid-cols-2 gap-2">
+							<ModeButton
+								active={vehicleType === "MOTORCYCLE"}
+								disabled={lalamoveLocked}
+								onClick={() => setVehicleType("MOTORCYCLE")}
+								title="Motorcycle"
+								subtitle="Most orders, cheapest"
+							/>
+							<ModeButton
+								active={vehicleType === "CAR"}
+								disabled={lalamoveLocked}
+								onClick={() => setVehicleType("CAR")}
+								title="Car"
+								subtitle="Bulky / fragile"
+							/>
+						</div>
+						<p className="text-xs text-muted-foreground">
+							Just the default — you can switch vehicle per order in the booking
+							dialog.
+						</p>
+					</div>
+
+					{/* 3 · The seller's own API keys (BYO-only) */}
+					<div className="flex flex-col gap-2">
+						<div className="flex items-center justify-between">
+							<span className="text-xs font-medium text-muted-foreground">
+								Your Lalamove account (API key)
+							</span>
+							<a
+								href="/guides/lalamove-setup.html"
+								target="_blank"
+								rel="noopener noreferrer"
+								className="flex items-center gap-1 text-xs font-medium text-accent hover:underline"
+							>
+								How to set up <ExternalLink className="size-3" />
+							</a>
+						</div>
+						{hasStoredKey && !editingKeys ? (
+							<div className="flex items-center justify-between rounded-lg border border-input px-3 py-2 text-sm">
+								<span>
+									Key ending{" "}
+									<span className="font-mono">
+										…{deliveryBooking?.apiKeyHint}
+									</span>{" "}
+									stored
+								</span>
+								<button
+									type="button"
+									onClick={() => setEditingKeys(true)}
+									className="text-xs font-medium text-accent hover:underline"
+								>
+									Replace
+								</button>
+							</div>
+						) : (
+							<div className="flex flex-col gap-2">
+								{/* Plain text inputs with a CSS mask on the secret — NOT
+								    type="password", so Chrome never mistakes this for a
+								    login form and autofills saved credentials into it. */}
+								<Input
+									type="text"
+									name="lalamove-api-key"
+									autoComplete="off"
+									data-1p-ignore
+									data-lpignore="true"
+									data-form-type="other"
+									value={apiKey}
+									disabled={lalamoveLocked}
+									onChange={(e) => setApiKey(e.target.value)}
+									placeholder="API key (pk_…)"
+									className="h-11 font-mono text-sm"
+								/>
+								<Input
+									type="text"
+									name="lalamove-api-secret"
+									autoComplete="off"
+									data-1p-ignore
+									data-lpignore="true"
+									data-form-type="other"
+									value={apiSecret}
+									disabled={lalamoveLocked}
+									onChange={(e) => setApiSecret(e.target.value)}
+									placeholder="API secret (sk_…)"
+									className="h-11 font-mono text-sm"
+									style={
+										apiSecret.length > 0
+											? ({ WebkitTextSecurity: "disc" } as React.CSSProperties)
+											: undefined
+									}
+								/>
+								{hasStoredKey && editingKeys ? (
+									<button
+										type="button"
+										onClick={() => {
+											setEditingKeys(false);
+											setApiKey("");
+											setApiSecret("");
+										}}
+										className="self-start text-xs font-medium text-muted-foreground hover:underline"
+									>
+										Keep the stored key instead
+									</button>
+								) : null}
+							</div>
+						)}
+						<p className="text-xs text-muted-foreground">
+							From the Lalamove Partner Portal (partnerportal.lalamove.com) →
+							Developers tab. You pay Lalamove directly from your own prepaid
+							wallet — Kedaipal never books or pays on your behalf. Your key
+							stays saved if you switch pricing methods, so switching back is
+							instant.
+						</p>
+					</div>
+
+					{/* 4 · Webhook — each seller registers OUR endpoint in THEIR
+					    Partner Portal; without it bookings still work but the
+					    shipped/delivered updates stop being automatic. */}
+					{hasStoredKey ? (
+						<div className="flex flex-col gap-1.5">
+							<span className="text-xs font-medium text-muted-foreground">
+								One more step: your Lalamove webhook
+							</span>
+							<div className="flex items-center gap-2">
+								<code className="min-w-0 flex-1 truncate rounded-lg border border-input bg-muted/40 px-3 py-2.5 font-mono text-xs">
+									{lalamoveWebhookUrl()}
+								</code>
+								<Button
+									type="button"
+									variant="outline"
+									className="h-10 shrink-0 px-3 text-xs"
+									onClick={() => {
+										navigator.clipboard
+											.writeText(lalamoveWebhookUrl())
+											.then(() => toast.success("Webhook link copied"))
+											.catch(() =>
+												toast.error("Couldn't copy — select and copy manually"),
+											);
+									}}
+								>
+									Copy
+								</Button>
+							</div>
+							<p className="text-xs text-muted-foreground">
+								Paste this in your Lalamove Partner Portal → Developers →
+								Webhook URL (choose version 3). It powers the automatic shipped
+								+ live-tracking messages — step 5 in the guide.
+							</p>
+						</div>
+					) : null}
+
+					{/* 5 · Prompt-to-book on packed (opt-in) — NOT silent auto-book:
+					    marking a paid, due-today order Packed pops the confirm dialog
+					    with today's price, so the seller always sees the cost + taps
+					    to spend. */}
+					<div className="flex flex-col gap-1.5 rounded-xl border border-input p-3">
+						<div className="flex items-start justify-between gap-4">
+							<div>
+								<p className="text-sm font-medium">
+									Ask me to book a rider when I mark an order{" "}
+									<span className="font-semibold">Packed</span>
+								</p>
+								<p className="mt-0.5 text-xs text-muted-foreground leading-relaxed">
+									{promptBook
+										? "On — when you mark a paid, same-day delivery order Packed, the 'Book a rider?' dialog opens with today's price so you can confirm in one tap (or dismiss). Nothing is booked or charged until you confirm. Future-dated and unpaid orders don't prompt."
+										: "Off — you open the Book delivery button yourself when you're ready. Turn this on to be prompted the moment an order is packed."}
+								</p>
+							</div>
+							<ToggleSwitch
+								on={promptBook}
+								onChange={setPromptBook}
+								disabled={lalamoveLocked}
+								label="Prompt to book a rider on packed"
+							/>
+						</div>
+					</div>
+				</div>
+			) : null}
+
+			{mode === "flat" ? (
+				<div className="flex flex-col gap-3">
+					<div className="flex flex-wrap items-end gap-3">
+						<div className="flex flex-col gap-1.5">
+							<label
+								htmlFor="flat-delivery-fee"
+								className="text-xs font-medium text-muted-foreground"
+							>
+								Delivery fee
+							</label>
+							<div className="relative">
+								<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
+									RM
+								</span>
+								<input
+									id="flat-delivery-fee"
+									type="text"
+									inputMode="decimal"
+									value={flatFee}
+									onChange={(e) => setFlatFee(e.target.value)}
+									onBlur={() => setFlatFee(normalizePriceInput(flatFee))}
+									placeholder="8.00"
+									className="h-11 w-32 rounded-lg border border-input bg-background pl-11 pr-3 text-sm"
+								/>
+							</div>
+						</div>
+						<div className="flex flex-col gap-1.5">
+							<label
+								htmlFor="free-above"
+								className="text-xs font-medium text-muted-foreground"
+							>
+								Free for orders above (optional)
+							</label>
+							<div className="relative">
+								<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
+									RM
+								</span>
+								<input
+									id="free-above"
+									type="text"
+									inputMode="decimal"
+									value={freeAbove}
+									onChange={(e) => setFreeAbove(e.target.value)}
+									onBlur={() => setFreeAbove(normalizePriceInput(freeAbove))}
+									placeholder="100.00"
+									className="h-11 w-40 rounded-lg border border-input bg-background pl-11 pr-3 text-sm"
+								/>
+							</div>
+						</div>
+					</div>
+					<p className="text-xs text-muted-foreground leading-relaxed">
+						Buyers see the fee in their checkout total. An order that reaches
+						the threshold exactly ships free.
+					</p>
+				</div>
+			) : null}
+
+			{mode === "radius" ? (
+				<div className="flex flex-col gap-4">
+					{radiusLocked ? (
+						<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+							Distance-based pricing is a Pro feature. Your saved bands still
+							apply to new orders — upgrade in Settings → Billing to change
+							them, or switch to Free / Flat fee (always allowed).
+						</p>
+					) : null}
+					<div className="flex flex-col gap-1.5">
+						<GoogleAddressAutocomplete
+							initialValue={businessAddress?.label ?? ""}
+							label="Business address (measure from)"
+							required
+							placeholder="Start typing your business address…"
+							description={
+								effectiveAddress
+									? "✓ Pinned — distances are measured from this point."
+									: "Pick a Google suggestion so we can measure distances from your place. Buyers never see this address."
+							}
+							onSelect={(payload) => setPickedAddress(payload)}
+							onTextChange={() => {
+								// Typing away from a pick invalidates it — the stored
+								// address (if any) remains until a new pick is saved.
+								setPickedAddress(null);
+							}}
+						/>
+						{businessAddress && !pickedAddress ? (
+							<p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+								<MapPin
+									className="size-3 shrink-0 text-accent"
+									aria-hidden="true"
+								/>
+								<span className="font-mono">
+									{businessAddress.latitude.toFixed(5)},{" "}
+									{businessAddress.longitude.toFixed(5)}
+								</span>
+							</p>
+						) : null}
+					</div>
+
+					<div className="flex flex-col gap-2">
+						<p className="text-xs font-medium text-muted-foreground">
+							Distance bands
+						</p>
+						{bands.map((band, i) => (
+							<div
+								// biome-ignore lint/suspicious/noArrayIndexKey: rows are positional drafts with no stable identity
+								key={i}
+								className="flex items-center gap-2"
+							>
+								<span className="text-xs text-muted-foreground">Up to</span>
+								<Input
+									type="number"
+									inputMode="decimal"
+									min={0.1}
+									step={0.1}
+									value={band.maxKm}
+									disabled={!radiusEditable}
+									onChange={(e) =>
+										setBands((prev) =>
+											prev.map((b, j) =>
+												j === i ? { ...b, maxKm: e.target.value } : b,
+											),
+										)
+									}
+									variant="field"
+									className="w-20"
+									aria-label={`Band ${i + 1} distance in km`}
+								/>
+								<span className="text-xs text-muted-foreground">km →</span>
+								<div className="relative">
+									<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
+										RM
+									</span>
+									<input
+										type="text"
+										inputMode="decimal"
+										value={band.fee}
+										disabled={!radiusEditable}
+										onChange={(e) =>
+											setBands((prev) =>
+												prev.map((b, j) =>
+													j === i ? { ...b, fee: e.target.value } : b,
+												),
+											)
+										}
+										onBlur={() =>
+											setBands((prev) =>
+												prev.map((b, j) =>
+													j === i
+														? { ...b, fee: normalizePriceInput(b.fee) }
+														: b,
+												),
+											)
+										}
+										placeholder="5.00"
+										aria-label={`Band ${i + 1} fee`}
+										className="h-11 w-28 rounded-lg border border-input bg-background pl-11 pr-3 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+									/>
+								</div>
+								{bands.length > 1 && radiusEditable ? (
+									<button
+										type="button"
+										onClick={() =>
+											setBands((prev) => prev.filter((_, j) => j !== i))
+										}
+										aria-label={`Remove band ${i + 1}`}
+										className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-muted"
+									>
+										<Trash2 className="size-4" />
+									</button>
+								) : null}
+							</div>
+						))}
+						{radiusEditable && bands.length < DELIVERY_BANDS_MAX ? (
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								className="h-10 gap-1.5 self-start"
+								onClick={() =>
+									setBands((prev) => [...prev, { maxKm: "", fee: "" }])
+								}
+							>
+								<Plus className="size-4" />
+								Add band
+							</Button>
+						) : null}
+						<p className="text-xs text-muted-foreground leading-relaxed">
+							Distances are straight-line (&ldquo;as the crow flies&rdquo;) from
+							your business address, not driving routes — pad your bands a
+							little to cover real roads. A band fee of RM0 means free within
+							that distance.
+						</p>
+					</div>
+
+					<div className="flex flex-col gap-2 border-t border-border pt-4">
+						<SectionHeading title="Beyond your last band" />
+						<label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-border p-3">
+							<input
+								type="radio"
+								name="out-of-range"
+								checked={outOfRange === "arrange"}
+								disabled={!radiusEditable}
+								onChange={() => setOutOfRange("arrange")}
+								className="mt-0.5 size-4 shrink-0 accent-accent"
+							/>
+							<span className="flex flex-col gap-0.5">
+								<span className="text-sm font-medium">
+									Accept the order, arrange the charge on WhatsApp
+								</span>
+								<span className="text-xs text-muted-foreground">
+									The order comes in with the delivery charge pending — you
+									agree it with the buyer in chat, set it on the order, and the
+									payment request goes out with the final total.
+								</span>
+							</span>
+						</label>
+						<label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-border p-3">
+							<input
+								type="radio"
+								name="out-of-range"
+								checked={outOfRange === "block"}
+								disabled={!radiusEditable}
+								onChange={() => setOutOfRange("block")}
+								className="mt-0.5 size-4 shrink-0 accent-accent"
+							/>
+							<span className="flex flex-col gap-0.5">
+								<span className="text-sm font-medium">
+									Don&apos;t accept the order
+								</span>
+								<span className="text-xs text-muted-foreground">
+									Buyers outside your bands see &ldquo;outside the delivery
+									area&rdquo; and can&apos;t check out with delivery.
+								</span>
+							</span>
+						</label>
+					</div>
+				</div>
+			) : null}
+
+			{error ? (
+				<p role="alert" className="text-sm text-destructive">
+					{error}
+				</p>
+			) : null}
+
+			<Button
+				type="button"
+				onClick={save}
+				disabled={
+					saving ||
+					(mode === "radius" && radiusLocked && config?.mode === "radius") ||
+					(mode === "lalamove" && lalamoveLocked && config?.mode === "lalamove")
+				}
+				isLoading={saving}
+				className="h-11 self-start"
+			>
+				{mode === "lalamove"
+					? "Save Lalamove delivery"
+					: "Save delivery charge"}
+			</Button>
+		</div>
+	);
+}
+
 /**
  * Order-date notice setting — how many days ahead a buyer's chosen fulfilment
  * date must be. Governs the storefront date picker's earliest selectable day
@@ -477,6 +1346,91 @@ function MinNoticeCard({ initial }: { initial: number | undefined }) {
 			{value.trim().length > 0 && !valid ? (
 				<p className="text-xs text-destructive">
 					Enter a whole number between 0 and {MAX_NOTICE_DAYS}.
+				</p>
+			) : null}
+		</Card>
+	);
+}
+
+/**
+ * Store-wide minimum order value (86ey9unyx) — the item subtotal a storefront
+ * order must reach before checkout. Sits with the other order rules (next to
+ * the date-notice card). Counter checkout is exempt; orders with a custom /
+ * price-on-quote line are exempt (their value is settled by the seller's
+ * quote). Blank or 0 = no minimum.
+ */
+function MinOrderValueCard({ initial }: { initial: number | undefined }) {
+	const updateSettings = useMutation(api.retailers.updateSettings);
+	const effective = initial ?? 0;
+	const [value, setValue] = useState(
+		effective > 0 ? (effective / 100).toFixed(2) : "",
+	);
+	const [saving, setSaving] = useState(false);
+
+	const trimmed = value.trim();
+	const parsed = trimmed.length === 0 ? 0 : parsePriceInput(trimmed);
+	const sen = parsed === null ? null : Math.round(parsed * 100);
+	const valid = sen !== null && sen >= 0 && sen <= MIN_ORDER_VALUE_MAX;
+	const dirty = valid && sen !== effective;
+
+	async function save() {
+		if (!dirty || sen === null) return;
+		setSaving(true);
+		try {
+			await updateSettings({ minOrderValue: sen });
+			toast.success(
+				sen === 0
+					? "Minimum order value cleared."
+					: `Minimum order value set to ${formatPrice(sen, "MYR")}.`,
+			);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	return (
+		<Card>
+			<SectionHeading
+				title="Minimum order value"
+				description="Buyers must reach this subtotal (before delivery or pickup fees) to check out — the storefront shows them exactly how much more to add. Counter checkout and custom price-on-quote orders are never blocked. Leave blank for no minimum."
+			/>
+			<div className="flex items-end gap-3">
+				<div className="flex flex-col gap-1.5">
+					<label
+						htmlFor="min-order-value"
+						className="text-xs font-medium text-muted-foreground"
+					>
+						Minimum subtotal (RM)
+					</label>
+					<Input
+						id="min-order-value"
+						type="text"
+						inputMode="decimal"
+						placeholder="e.g. 100"
+						value={value}
+						onChange={(e) => setValue(e.target.value)}
+						onBlur={() => setValue(normalizePriceInput(value))}
+						variant="field"
+						isError={trimmed.length > 0 && !valid}
+						className="w-32"
+					/>
+				</div>
+				<Button
+					type="button"
+					onClick={save}
+					disabled={!dirty || saving}
+					isLoading={saving}
+					className="h-11"
+				>
+					Save
+				</Button>
+			</div>
+			{trimmed.length > 0 && !valid ? (
+				<p className="text-xs text-destructive">
+					Enter an amount up to {formatPrice(MIN_ORDER_VALUE_MAX, "MYR")}, or
+					leave blank for no minimum.
 				</p>
 			) : null}
 		</Card>
@@ -665,4 +1619,14 @@ function LocationListSkeleton() {
 			))}
 		</ul>
 	);
+}
+
+// --- Lalamove rider booking (86eyb5hrf) --------------------------------------
+
+/** The deployment's Lalamove webhook endpoint — Convex HTTP actions live on
+ * the `.convex.site` twin of the client's `.convex.cloud` URL. Surfaced in
+ * the card so BYO sellers can paste it into their own Partner Portal. */
+function lalamoveWebhookUrl(): string {
+	const convexUrl = clientEnv.VITE_CONVEX_URL ?? "";
+	return `${convexUrl.replace(".convex.cloud", ".convex.site")}/webhook/lalamove`;
 }

@@ -36,3 +36,21 @@ export function getDisplayName(customer: DisplayableCustomer): string {
 	if (profile) return profile;
 	return formatPhone(customer.waPhone);
 }
+
+/**
+ * Label for the buyer on an ORDER (whose `customer` is a frozen `{name, waPhone}`
+ * snapshot, not a `customers` row). Precedence: snapshot name → "Walk-in
+ * customer" for an anonymous counter sale (no name AND no phone — the only orders
+ * with neither, since every online/WhatsApp order captures a phone; 86ey8vqp6) →
+ * `fallback` for a phone-only order with no name. Never returns blank/undefined,
+ * so no display can crash on a missing name.
+ */
+export function orderCustomerLabel(
+	customer: { name?: string; waPhone?: string },
+	fallback = "Anonymous",
+): string {
+	const name = customer.name?.trim();
+	if (name) return name;
+	if (!customer.waPhone) return "Walk-in customer";
+	return fallback;
+}

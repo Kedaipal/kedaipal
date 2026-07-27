@@ -1,79 +1,78 @@
-import { useNavigate, useSearch } from "@tanstack/react-router";
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Bell, MessageCircle, ShoppingCart, Store } from "lucide-react";
+import { Check } from "lucide-react";
+import type { ReactNode } from "react";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
+import { FadeIn } from "./fade-in";
+import {
+	BrowseMockup,
+	CloseMockup,
+	RunMockup,
+	ShareMockup,
+} from "./how-it-works-mockups";
 import { Eyebrow } from "./landing-ui";
-import { ResponsiveImage } from "./responsive-image";
 
-function StepPreviewImage({ step, alt }: { step: number; alt: string }) {
-	return (
-		<ResponsiveImage
-			name={`how-step-${step}`}
-			alt={alt}
-			widths={[400, 800]}
-			sizes="(max-width: 768px) 90vw, 400px"
-			width={800}
-			height={500}
-			className="mx-auto h-auto w-full max-w-[400px] rounded-2xl shadow-lg"
-		/>
-	);
+interface HowStep {
+	label: string;
+	heading: string;
+	body: string;
+	tags: string[];
+	mockup: ReactNode;
 }
 
-function getHowStepDetails() {
+function getHowSteps(): HowStep[] {
 	return [
 		{
-			heading: m.how_detail_1_heading(),
-			description: m.how_detail_1_desc(),
-			preview: <StepPreviewImage step={1} alt={m.how_detail_1_desc()} />,
+			label: m.how_step_1_label(),
+			heading: m.how_step_1_heading(),
+			body: m.how_step_1_body(),
+			tags: [m.how_step_1_tag_1(), m.how_step_1_tag_2(), m.how_step_1_tag_3()],
+			mockup: <ShareMockup />,
 		},
 		{
-			heading: m.how_detail_2_heading(),
-			description: m.how_detail_2_desc(),
-			preview: <StepPreviewImage step={2} alt={m.how_detail_2_visual_alt()} />,
+			label: m.how_step_2_label(),
+			heading: m.how_step_2_heading(),
+			body: m.how_step_2_body(),
+			tags: [
+				m.how_step_2_tag_1(),
+				m.how_step_2_tag_2(),
+				m.how_step_2_tag_3(),
+				m.how_step_2_tag_4(),
+			],
+			mockup: <BrowseMockup />,
 		},
 		{
-			heading: m.how_detail_3_heading(),
-			description: m.how_detail_3_desc(),
-			preview: <StepPreviewImage step={3} alt={m.how_detail_3_desc()} />,
+			label: m.how_step_3_label(),
+			heading: m.how_step_3_heading(),
+			body: m.how_step_3_body(),
+			tags: [],
+			mockup: <CloseMockup />,
 		},
 		{
-			heading: m.how_detail_4_heading(),
-			description: m.how_detail_4_desc(),
-			preview: <StepPreviewImage step={4} alt={m.how_detail_4_desc()} />,
+			label: m.how_step_4_label(),
+			heading: m.how_step_4_heading(),
+			body: m.how_step_4_body(),
+			tags: [],
+			mockup: <RunMockup />,
 		},
 	];
 }
 
+/**
+ * Static vertical timeline — all four steps render simultaneously in normal
+ * document flow. No click interaction, no active/inactive state, no
+ * `?step=` URL param: this replaced a click-to-reveal stepper that didn't
+ * match the reference design (see git history on this file for the old
+ * pattern). Motion is scroll-reveal only, via `FadeIn`.
+ */
 export function HowItWorks() {
-	const { step } = useSearch({ from: "/" });
-	const navigate = useNavigate({ from: "/" });
-	const shouldReduceMotion = useReducedMotion();
-	const activeStep = step ?? 1;
-	const howStepDetails = getHowStepDetails();
-
-	const steps = [
-		{ icon: MessageCircle, title: m.how_1_title(), body: m.how_1_body() },
-		{ icon: Store, title: m.how_2_title(), body: m.how_2_body() },
-		{ icon: ShoppingCart, title: m.how_3_title(), body: m.how_3_body() },
-		{ icon: Bell, title: m.how_4_title(), body: m.how_4_body() },
-	];
-
-	function handleStepClick(stepNum: number) {
-		navigate({
-			search: (prev) => ({
-				...prev,
-				step: activeStep === stepNum ? undefined : stepNum,
-			}),
-			replace: true,
-			resetScroll: false,
-		});
-	}
-
-	const detail = howStepDetails[activeStep - 1];
+	const steps = getHowSteps();
 
 	return (
-		<section id="how" aria-labelledby="how-heading" className="bg-background">
+		<section
+			id="how"
+			aria-labelledby="how-heading"
+			className="border-y border-border bg-muted/30"
+		>
 			<div className="mx-auto max-w-6xl px-5 py-24 md:px-8 md:py-32">
 				<div className="mx-auto max-w-2xl text-center">
 					<Eyebrow className="justify-center">{m.how_label()}</Eyebrow>
@@ -89,102 +88,76 @@ export function HowItWorks() {
 					</p>
 				</div>
 
-				<div className="mt-16 grid gap-4 md:grid-cols-4">
-					{steps.map((s, i) => {
+				<div className="mt-16 md:mt-20">
+					{steps.map((step, i) => {
 						const stepNum = i + 1;
-						const isActive = activeStep === stepNum;
+						const isLast = stepNum === steps.length;
 						return (
-							<button
-								key={s.title}
-								type="button"
-								onClick={() => handleStepClick(stepNum)}
-								aria-pressed={isActive}
-								aria-label={`${m.how_step_label({ step: stepNum })}: ${s.title}`}
-								className={cn(
-									"relative flex h-full w-full flex-col rounded-3xl border p-5 text-left transition-all duration-200",
-									"hover:-translate-y-1 hover:border-accent/50 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:hover:translate-y-0",
-									isActive
-										? "border-accent bg-primary text-primary-foreground shadow-xl"
-										: "border-border bg-card shadow-sm",
-								)}
+							<FadeIn
+								key={step.label}
+								delay={i * 0.06}
+								className="flex gap-4 md:gap-8"
 							>
-								<div
-									className={cn(
-										"flex size-12 items-center justify-center rounded-2xl transition-colors",
-										isActive
-											? "bg-accent text-accent-foreground"
-											: "bg-accent/10 text-accent",
-									)}
-								>
-									<s.icon className="size-6" />
-								</div>
-								<div className="mt-4 flex items-center gap-2">
-									<span
+								<div className="flex flex-col items-center">
+									<div
+										aria-hidden
 										className={cn(
-											"text-xs font-bold",
-											isActive ? "text-accent" : "text-muted-foreground",
+											"flex size-10 shrink-0 items-center justify-center rounded-full font-heading text-base font-extrabold md:size-14 md:text-lg",
+											isLast
+												? "bg-accent text-accent-foreground shadow-lg shadow-accent/40"
+												: "bg-primary text-accent shadow-lg shadow-primary/25",
 										)}
 									>
-										0{stepNum}
-									</span>
-									<div
-										className={cn(
-											"h-px flex-1",
-											isActive ? "bg-accent/40" : "bg-border",
-										)}
-									/>
-								</div>
-								<h3 className="mt-3 text-lg font-semibold">{s.title}</h3>
-								<p
-									className={cn(
-										"mt-2 text-sm",
-										isActive
-											? "text-primary-foreground/70"
-											: "text-muted-foreground",
+										{isLast ? <Check className="size-4 md:size-5" /> : stepNum}
+									</div>
+									{!isLast && (
+										<div
+											aria-hidden
+											className="mt-2 w-0 flex-1 border-l-2 border-dashed border-border"
+										/>
 									)}
+								</div>
+
+								<div
+									className={cn("min-w-0 flex-1", !isLast && "pb-14 md:pb-20")}
 								>
-									{s.body}
-								</p>
-								{isActive && (
-									<div className="absolute bottom-3 right-3 size-2 rounded-full bg-accent" />
-								)}
-							</button>
+									<span className="sr-only">
+										{m.how_step_of({ step: stepNum, total: steps.length })}
+									</span>
+									<div className="grid grid-cols-1 gap-8 md:grid-cols-2 md:items-start md:gap-10">
+										<div className="min-w-0 md:pt-1.5">
+											<p className="text-xs font-bold uppercase tracking-widest text-accent">
+												{step.label}
+											</p>
+											<h3
+												className="mt-2 text-xl font-bold md:text-2xl"
+												style={{ letterSpacing: "-0.02em" }}
+											>
+												{step.heading}
+											</h3>
+											<p className="mt-3 text-sm leading-relaxed text-muted-foreground md:text-base">
+												{step.body}
+											</p>
+											{step.tags.length > 0 && (
+												<div className="mt-4 flex flex-wrap gap-2">
+													{step.tags.map((tag) => (
+														<span
+															key={tag}
+															className="rounded-full border border-border bg-card px-3 py-1.5 text-xs font-semibold text-foreground/80"
+														>
+															{tag}
+														</span>
+													))}
+												</div>
+											)}
+										</div>
+										<div className="min-w-0 px-1 py-2">{step.mockup}</div>
+									</div>
+								</div>
+							</FadeIn>
 						);
 					})}
 				</div>
-
-				{detail && (
-					<div className="mt-6 overflow-hidden rounded-3xl border border-accent/20 bg-card shadow-md">
-						<AnimatePresence mode="wait" initial={false}>
-							<motion.div
-								key={activeStep}
-								initial={shouldReduceMotion ? undefined : { opacity: 0, y: 12 }}
-								animate={shouldReduceMotion ? undefined : { opacity: 1, y: 0 }}
-								exit={shouldReduceMotion ? undefined : { opacity: 0, y: -8 }}
-								transition={{ duration: 0.25, ease: "easeOut" }}
-								className="grid gap-0 md:grid-cols-2"
-							>
-								<div className="flex flex-col justify-center gap-4 p-8">
-									<span className="text-xs font-bold uppercase tracking-widest text-accent">
-										{m.how_step_of({ step: activeStep, total: 4 })}
-									</span>
-									<h3
-										className="text-2xl font-bold"
-										style={{ letterSpacing: "-0.02em" }}
-									>
-										{detail.heading}
-									</h3>
-									<p className="text-base leading-relaxed text-muted-foreground">
-										{detail.description}
-									</p>
-								</div>
-								<div className="flex items-center justify-center border-t border-border/60 bg-muted/30 p-8 md:border-l md:border-t-0">
-									{detail.preview}
-								</div>
-							</motion.div>
-						</AnimatePresence>
-					</div>
-				)}
 			</div>
 		</section>
 	);

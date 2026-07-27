@@ -20,6 +20,7 @@ import {
 } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
 import { assertValidAddress } from "./lib/address";
+import { requireCustomerName } from "./lib/customer";
 import { assertPlanFeature } from "./subscriptions";
 import {
 	recordOrderCancelled,
@@ -27,6 +28,7 @@ import {
 } from "./subscriptionUsage";
 import {
 	adminUserIds,
+	isAdmin,
 	logAdminAction,
 	type RetailerAccess,
 	requireRetailerAccess,
@@ -35,8 +37,18 @@ import {
 	assertValidFulfilmentDate,
 	matchesFulfilmentWindow,
 } from "./lib/fulfilmentDate";
+import {
+	collectMinQuantityShortfalls,
+	type MinRuleItem,
+	minOrderValueShortfall,
+	minQuantityMessage,
+} from "./lib/minOrderRules";
 import { statusToBucket } from "./lib/orderBuckets";
 import { type CsvOrder, ordersToCsv } from "./lib/orderCsv";
+import {
+	type ManualReminderBlock,
+	manualReminderEligibility,
+} from "./lib/paymentReminder";
 import {
 	buildInboxPredicate,
 	compareInboxOrder,
@@ -49,6 +61,13 @@ import {
 	generateTrackingToken,
 	isMockupGateClosed,
 } from "./lib/order";
+import {
+	DELIVERY_FEE_MAX,
+	type DeliveryConfig,
+	type LiveProviderQuote,
+	resolveDeliveryQuote,
+} from "./lib/delivery";
+import { CHECKOUT_QUOTE_MAX_AGE_MS } from "./lib/lalamove";
 import {
 	anchorOrdinal,
 	type Locale,
@@ -113,6 +132,109 @@ function resolveMockupImageIds(order: Doc<"orders">): string[] {
  * drift between them. `locationType` defaults to "self_collect" so a row created
  * before drop-off existed freezes as self-collect (no blank kind downstream).
  */
+type DeliverySnapshot = NonNullable<Doc<"orders">["deliverySnapshot"]>;
+
+/**
+ * Resolve the delivery charge for a delivery order against the retailer's
+ * config and freeze it into snapshot form. Shared by `create` and the buyer's
+ * address re-price so both spell the outcome identically:
+ *  - fee → a frozen `deliverySnapshot` (mirrored to `deliveryFee`);
+ *  - free → nothing stored (0 is never stored — one spelling of free);
+ *  - "arrange" out-of-range / coord-less → `pending: true` (the seller
+ *    confirms the charge later via setDeliveryFee; payment ask is held);
+ *  - "block" → ConvexError, mirroring the storefront's disabled submit.
+ */
+function resolveDeliveryForOrder(
+	retailer: Doc<"retailers">,
+	subtotal: number,
+	address: { latitude?: number; longitude?: number } | undefined,
+	// Live Lalamove quote loaded from its server-side deliveryQuotes row
+	// (pricing mode "lalamove" only) — see loadCheckoutDeliveryQuote.
+	liveQuote?: LiveProviderQuote,
+): { snapshot: DeliverySnapshot | undefined; pending: boolean } {
+	const config = retailer.deliveryConfig as DeliveryConfig | undefined;
+	if (config?.mode === "radius" && !retailer.businessAddress) {
+		// Shouldn't happen (updateSettings refuses radius without an address) —
+		// fail open to free delivery rather than blocking the storefront.
+		console.warn(
+			`[orders] retailer ${retailer._id} has radius deliveryConfig but no businessAddress — treating delivery as free`,
+		);
+	}
+	const quote = resolveDeliveryQuote({
+		config,
+		subtotal,
+		origin: retailer.businessAddress,
+		destination:
+			address?.latitude !== undefined && address.longitude !== undefined
+				? { latitude: address.latitude, longitude: address.longitude }
+				: undefined,
+		liveQuote,
+	});
+	if (quote.kind === "blocked") {
+		throw new ConvexError(
+			quote.reason === "no_coords"
+				? "Pick your address from the suggestions so we can calculate the delivery fee"
+				: quote.reason === "unquotable"
+					? "We couldn't price delivery to that address right now — please try again"
+					: "That address is outside this store's delivery area",
+		);
+	}
+	if (quote.kind === "pending") return { snapshot: undefined, pending: true };
+	if (quote.kind === "fee") {
+		return {
+			snapshot: {
+				fee: quote.fee,
+				mode: quote.mode,
+				distanceKm: quote.distanceKm,
+				bandMaxKm: quote.bandMaxKm,
+				quotationId: quote.quotationId,
+				vehicleType: quote.vehicleType,
+				quotedAt: quote.quotedAt,
+			},
+			pending: false,
+		};
+	}
+	return { snapshot: undefined, pending: false };
+}
+
+/**
+ * Load + validate the checkout's live Lalamove quote (86eyb5hrf). The client
+ * only ever passes the deliveryQuotes ROW ID — the fee comes from our own
+ * record, so it can't be tampered with. Returns undefined (→ the order falls
+ * back to the store's onUnquotable policy, usually deliveryFeePending) when
+ * the row is missing/foreign/stale or was priced for different coordinates
+ * (a cheap-nearby-pin quote can't be replayed against a far delivery
+ * address; ~11 m tolerance absorbs float noise, not geography).
+ */
+async function loadCheckoutDeliveryQuote(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	quoteId: Id<"deliveryQuotes"> | undefined,
+	address: { latitude?: number; longitude?: number } | undefined,
+): Promise<LiveProviderQuote | undefined> {
+	if (!quoteId) return undefined;
+	const row = await ctx.db.get(quoteId);
+	if (!row || row.retailerId !== retailerId) return undefined;
+	if (Date.now() - row.quotedAt > CHECKOUT_QUOTE_MAX_AGE_MS) return undefined;
+	const COORD_TOLERANCE = 1e-4; // ≈11 m
+	if (
+		address?.latitude === undefined ||
+		address.longitude === undefined ||
+		Math.abs(address.latitude - row.latitude) > COORD_TOLERANCE ||
+		Math.abs(address.longitude - row.longitude) > COORD_TOLERANCE
+	) {
+		return undefined;
+	}
+	// Consume the row — a quote freezes onto at most one order.
+	await ctx.db.delete(row._id);
+	return {
+		fee: row.fee,
+		quotationId: row.quotationId,
+		vehicleType: row.vehicleType,
+		quotedAt: row.quotedAt,
+	};
+}
+
 function buildPickupSnapshot(location: Doc<"pickupLocations">): PickupSnapshot {
 	return {
 		label: location.label,
@@ -185,7 +307,9 @@ async function orderByToken(
  *     could read any order by shortId.
  * Exactly one of the two must be supplied.
  */
-async function resolveSharedOrder(
+// Exported for the Lalamove dispatch surfaces (convex/lalamove.ts), which
+// authenticate the seller by shortId through the same owner-or-admin seam.
+export async function resolveSharedOrder(
 	ctx: QueryCtx,
 	{ token, shortId }: { token?: string; shortId?: string },
 ): Promise<Doc<"orders"> | null> {
@@ -270,11 +394,23 @@ export const create = mutation({
 		// pre-order via generateCustomImageUploadUrl. Stored as-is (a stray/invalid
 		// id just resolves to no URL on display — same posture as proof images).
 		customerImageStorageId: v.optional(v.string()),
+		// Live Lalamove quote row minted by lalamove.quoteForCheckout (pricing
+		// mode "lalamove" only). Only the ROW ID crosses the client — the fee is
+		// read from our own record. Missing/stale/mismatched → the order falls
+		// back to the store's onUnquotable policy. See docs/delivery-lalamove.md.
+		deliveryQuoteId: v.optional(v.id("deliveryQuotes")),
 	},
 	handler: async (
 		ctx,
 		args,
-	): Promise<{ shortId: string; trackingToken: string }> => {
+	): Promise<{
+		shortId: string;
+		trackingToken: string;
+		// Server-resolved delivery charge, echoed back so the client builds the
+		// wa.me message from the STORED numbers (never its preview quote).
+		deliveryFee?: number;
+		deliveryFeePending?: boolean;
+	}> => {
 		// Rate limit FIRST — public endpoint, throttle per storefront before any DB reads.
 		await rateLimiter.limit(ctx, "orderCreate", {
 			key: args.retailerId,
@@ -323,8 +459,11 @@ export const create = mutation({
 				throw new ConvexError((err as Error).message);
 			}
 		}
+		// Name is required at checkout (≥3 chars) — enforced server-side here, not
+		// just in the storefront form, so a direct mutation call can't create a
+		// nameless/1-char order. Same rule + shared validator as the counter paths.
 		const sanitizedCustomer = {
-			name: args.customer.name?.trim() || undefined,
+			name: requireCustomerName(args.customer.name),
 			waPhone: customerWaPhone,
 		};
 
@@ -342,20 +481,10 @@ export const create = mutation({
 		const retailer = await ctx.db.get(args.retailerId);
 		if (!retailer) throw new ConvexError("Retailer not found");
 
-		// Fulfilment date: validate against the retailer's notice window when the
-		// buyer supplied one. Applies to BOTH delivery and self-collect — a cake
-		// delivered on the wrong day is as bad as one collected late.
+		// Fulfilment date is validated AFTER the item loop below — the effective
+		// notice window is max(store setting, every item's per-product override),
+		// and the overrides only become known once items resolve.
 		let sanitizedFulfilmentDate: number | undefined;
-		if (args.fulfilmentDate !== undefined) {
-			try {
-				sanitizedFulfilmentDate = assertValidFulfilmentDate(
-					args.fulfilmentDate,
-					retailer.minFulfilmentNoticeDays,
-				);
-			} catch (err) {
-				throw new ConvexError((err as Error).message);
-			}
-		}
 
 		// Delivery must be on offer. Mirrors the storefront gate (which hides the
 		// delivery option when offerDelivery is off) and closes the gap where a
@@ -416,6 +545,12 @@ export const create = mutation({
 		>();
 		// Whole-order mockup gating: set if ANY line's product requires a proof.
 		let requiresMockup = false;
+		// Strictest per-product notice override across the cart (0 = none).
+		let maxItemNoticeDays = 0;
+		// Minimum-order-rule inputs (86ey9unyx), collected alongside the snapshot:
+		// per-line product id/name/qty + the flags the shared rules need. Checked
+		// after the loop (the rules judge summed quantities + the subtotal).
+		const ruleItems: MinRuleItem[] = [];
 		for (const item of args.items) {
 			if (!Number.isInteger(item.quantity) || item.quantity < 1)
 				throw new ConvexError("Quantity must be a positive integer");
@@ -450,6 +585,10 @@ export const create = mutation({
 			// made-to-order "Custom" variant, not the fixed sizes.
 			const variantRequiresProof = variant.requiresProof ?? product.requiresProof;
 			if (variantRequiresProof === true) requiresMockup = true;
+			// Per-product fulfilment-notice override — the strictest item rules.
+			if ((product.minNoticeDays ?? 0) > maxItemNoticeDays) {
+				maxItemNoticeDays = product.minNoticeDays ?? 0;
+			}
 			const variantId = variant._id;
 			// The custom line has no optionValues — label it with its custom name so
 			// the order, WhatsApp confirm, and seller dashboard show "… (Custom)"
@@ -485,12 +624,87 @@ export const create = mutation({
 				price: variant.price,
 				quantity: item.quantity,
 			});
+			ruleItems.push({
+				productId: variant.productId,
+				name: product.name,
+				quantity: item.quantity,
+				minQuantity: product.minQuantity,
+				isCustom: variant.isCustom,
+				quoteOnRequest: variantRequiresProof === true && variant.price === 0,
+			});
 		}
 
-		// The chosen pickup point's frozen fee rides the same extras seam as the
-		// mockup quote — total = subtotal + fee from the very first insert.
+		const itemSubtotal = snapshotItems.reduce(
+			(sum, i) => sum + i.price * i.quantity,
+			0,
+		);
+
+		// Minimum order rules (86ey9unyx) — the authoritative gate; the storefront
+		// mirrors both checks pre-submit via the same shared module, so a buyer
+		// only ever hits these from a stale tab or a direct call. Counter checkout
+		// deliberately does NOT run them (the seller is standing there).
+		const qtyShortfalls = collectMinQuantityShortfalls(ruleItems);
+		if (qtyShortfalls.length > 0) {
+			throw new ConvexError(minQuantityMessage(qtyShortfalls[0]));
+		}
+		const valueShortfall = minOrderValueShortfall(
+			retailer.minOrderValue,
+			itemSubtotal,
+			ruleItems,
+		);
+		if (valueShortfall > 0) {
+			throw new ConvexError(
+				`Minimum order of ${args.currency} ${((retailer.minOrderValue ?? 0) / 100).toFixed(2)} — add ${args.currency} ${(valueShortfall / 100).toFixed(2)} more to check out`,
+			);
+		}
+
+		// Fulfilment date: validated against the EFFECTIVE notice window — the
+		// store-level setting raised by any cart item's per-product override
+		// (custom cakes need lead time; ready stock doesn't). Applies to BOTH
+		// delivery and self-collect. Counter checkout doesn't run this path.
+		if (args.fulfilmentDate !== undefined) {
+			try {
+				sanitizedFulfilmentDate = assertValidFulfilmentDate(
+					args.fulfilmentDate,
+					Math.max(
+						retailer.minFulfilmentNoticeDays ?? 0,
+						maxItemNoticeDays,
+					),
+				);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
+
+		// Delivery charge (86extzdr8): resolved server-side at create — the
+		// authoritative price, whatever the client previewed. Needs the item
+		// subtotal (flat free-above threshold), so it runs after the item loop.
+		let deliverySnapshot: DeliverySnapshot | undefined;
+		let deliveryFeePending = false;
+		if (effectiveDeliveryMethod === "delivery") {
+			// itemSubtotal is hoisted above (shared with the min-order rules).
+			const liveQuote = await loadCheckoutDeliveryQuote(
+				ctx,
+				retailer._id,
+				args.deliveryQuoteId,
+				sanitizedAddress,
+			);
+			const resolved = resolveDeliveryForOrder(
+				retailer,
+				itemSubtotal,
+				sanitizedAddress,
+				liveQuote,
+			);
+			deliverySnapshot = resolved.snapshot;
+			deliveryFeePending = resolved.pending;
+		}
+
+		// The chosen pickup point's frozen fee and the delivery charge ride the
+		// same extras seam as the mockup quote — total = subtotal + fees from the
+		// very first insert.
 		const { subtotal, total } = computeOrderTotals(snapshotItems, {
 			pickupFee: sanitizedPickupSnapshot?.fee,
+			deliveryFee: deliverySnapshot?.fee,
 		});
 		const now = Date.now();
 
@@ -544,6 +758,9 @@ export const create = mutation({
 			pickupLocationId: resolvedPickupLocationId,
 			pickupSnapshot: sanitizedPickupSnapshot,
 			pickupFee: sanitizedPickupSnapshot?.fee,
+			deliverySnapshot,
+			deliveryFee: deliverySnapshot?.fee,
+			deliveryFeePending: deliveryFeePending || undefined,
 			fulfilmentDate: sanitizedFulfilmentDate,
 			customerNote: sanitizedCustomerNote,
 			// Only keep the buyer image when the order actually has a custom line —
@@ -588,7 +805,12 @@ export const create = mutation({
 			{ orderId },
 		);
 
-		return { shortId, trackingToken };
+		return {
+			shortId,
+			trackingToken,
+			deliveryFee: deliverySnapshot?.fee,
+			deliveryFeePending: deliveryFeePending || undefined,
+		};
 	},
 });
 
@@ -656,6 +878,17 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 	// shared Kedaipal WABA). `retailerWaPhone` undefined => the CTA is hidden.
 	storeName: string;
 	retailerWaPhone?: string;
+	// The shared Kedaipal checkout number (same resolution as the storefront's
+	// getRetailerBySlug), included ONLY while the order is still `pending`: it
+	// powers the tracking page's "Send order on WhatsApp" handoff CTA — the
+	// buyer-gesture replacement for the popup-blocked checkout `window.open`.
+	// Undefined once the order is confirmed (or when no number is configured),
+	// which also hides the CTA reactively the moment the bot confirms.
+	checkoutPhone?: string;
+	// Rider drop-off photos (Lalamove proof of delivery) — resolved only on
+	// delivered delivery orders; the buyer sees the same shot the WhatsApp
+	// follow-up carried, the seller the same thumbnails as the dispatch card.
+	podImageUrls?: string[];
 };
 
 export const get = query({
@@ -675,13 +908,48 @@ export const get = query({
 		// One extra doc read on this hot public path so labels resolve from live
 		// retailer config (relabelling is retroactive — no per-order snapshot).
 		const retailer = await ctx.db.get(order.retailerId);
+		// Anti-trilateration: the delivery snapshot's radius audit fields
+		// (distanceKm ~10 m precision, bandMaxKm) are SELLER-ONLY — the public
+		// `delivery.quote` strips them for the same reason. The buyer reaches this
+		// query with a `token` (no auth), so on that path drop the whole snapshot:
+		// the buyer UI only reads the `deliveryFee`/`deliveryFeePending` mirrors,
+		// never the snapshot, so nothing legitimate depends on exposing it. The
+		// authenticated seller/admin (`shortId`) path keeps the full snapshot for
+		// the order-detail "— 7.4 km" audit line. See convex/delivery.ts.
+		const isBuyerRead = token !== undefined;
+		// Rider drop-off photo (Lalamove POD) — one indexed read, and only on
+		// the delivered end-state of delivery orders, so the hot pending/active
+		// tracking path pays nothing.
+		let podImageUrls: string[] | undefined;
+		if (order.status === "delivered" && order.deliveryMethod === "delivery") {
+			const jobs = await ctx.db
+				.query("deliveryJobs")
+				.withIndex("by_order", (q) => q.eq("orderId", order._id))
+				.collect();
+			const withPod = jobs.find(
+				(j) => j.status === "completed" && j.podImageStorageIds?.length,
+			);
+			if (withPod?.podImageStorageIds) {
+				const urls = await Promise.all(
+					withPod.podImageStorageIds.map((id) => ctx.storage.getUrl(id)),
+				);
+				const resolved = urls.filter((u): u is string => u !== null);
+				if (resolved.length > 0) podImageUrls = resolved;
+			}
+		}
 		return {
 			...order,
+			podImageUrls,
+			deliverySnapshot: isBuyerRead ? undefined : order.deliverySnapshot,
 			statusLabels: retailer?.statusLabels as StatusLabels | undefined,
 			orderStages: retailer?.orderStages as OrderStage[] | undefined,
 			retailerLocale: (retailer?.locale ?? "en") as Locale,
 			storeName: retailer?.storeName ?? "",
 			retailerWaPhone: retailer?.waPhone,
+			checkoutPhone:
+				order.status === "pending"
+					? (process.env.WHATSAPP_CHECKOUT_PHONE ?? retailer?.waPhone)
+					: undefined,
 		};
 	},
 });
@@ -864,6 +1132,77 @@ export const sendOrderDocumentToBuyer = action({
 		});
 		if (!inputs.ok) return { ok: false, reason: inputs.reason };
 		return deliverOrderDocument(ctx, inputs);
+	},
+});
+
+/**
+ * Auth + eligibility + atomic cooldown stamp for a manual payment reminder, in
+ * one mutation so two fast taps can't both slip past the 6h gate (compare on the
+ * freshly-read `lastManualReminderAt`, then patch). Owner OR admin act-as via
+ * resolveSharedOrder — the same seam the resend-document action uses; throws
+ * ConvexError on not-authenticated / forbidden. Returns the block reason (no
+ * stamp) when the order isn't in a remindable state, else stamps and hands back
+ * the orderId for the send. See docs/payment-reminder.md.
+ */
+export const prepareManualReminder = internalMutation({
+	args: { shortId: v.string() },
+	handler: async (
+		ctx,
+		{ shortId },
+	): Promise<
+		| { ok: true; orderId: Id<"orders"> }
+		| { ok: false; reason: ManualReminderBlock | "not_found" }
+	> => {
+		const order = await resolveSharedOrder(ctx, { shortId });
+		if (!order) return { ok: false, reason: "not_found" };
+		const eligibility = manualReminderEligibility(
+			{
+				status: order.status,
+				paymentStatus: order.paymentStatus,
+				mockupStatus: order.mockupStatus,
+				mockupWaivedAt: order.mockupWaivedAt,
+				deliveryFeePending: order.deliveryFeePending,
+				lastManualReminderAt: order.lastManualReminderAt,
+				createdAt: order.createdAt,
+				customer: { waPhone: order.customer.waPhone },
+			},
+			Date.now(),
+		);
+		if (!eligibility.ok) return { ok: false, reason: eligibility.reason };
+		const now = Date.now();
+		await ctx.db.patch(order._id, {
+			lastManualReminderAt: now,
+			updatedAt: now,
+		});
+		return { ok: true, orderId: order._id };
+	},
+});
+
+/**
+ * Seller-triggered "Send payment reminder" — re-sends the buyer the full payment
+ * message (amount + transfer ref + methods + QR + "I've paid" CTA) for an unpaid
+ * order, on demand. Doubles as recovery when the buyer never received the first
+ * bot confirmation. Auth + eligibility + the 6h cooldown stamp happen atomically
+ * in prepareManualReminder; the actual send is best-effort through the WABA
+ * `session_message` gateway (kill switch / caps / opt-outs apply, and may
+ * silently not deliver outside Meta's 24h window — same caveat as every session
+ * send). A blocked reason is returned WITHOUT sending, so the button can explain
+ * why. See docs/payment-reminder.md.
+ */
+export const sendPaymentReminder = action({
+	args: { shortId: v.string() },
+	handler: async (
+		ctx,
+		{ shortId },
+	): Promise<{ ok: boolean; reason?: ManualReminderBlock | "not_found" }> => {
+		const prep = await ctx.runMutation(internal.orders.prepareManualReminder, {
+			shortId,
+		});
+		if (!prep.ok) return { ok: false, reason: prep.reason };
+		await ctx.runAction(internal.whatsapp.notifyManualPaymentReminder, {
+			orderId: prep.orderId,
+		});
+		return { ok: true };
 	},
 });
 
@@ -1079,6 +1418,11 @@ export const searchOrders = query({
 		// orders read as "storefront". ANDs with the other filters.
 		source: v.optional(orderSourceValidator),
 		searchText: v.optional(v.string()),
+		// Max rows to return. OMIT it for the inbox: the query then returns the
+		// whole filtered+sorted window (up to MAX_INBOX_SCAN) as a *stable*
+		// subscription, and the client paginates by slicing that window — so
+		// "Load more" never re-scans (see docs/order-inbox.md). Callers that only
+		// need the counts (e.g. the Home strip) pass `limit: 1` to stay cheap.
 		limit: v.optional(v.number()),
 	},
 	handler: async (
@@ -1181,13 +1525,24 @@ export const searchOrders = query({
 				searchText,
 			}),
 		);
-		const sorted = [...filtered].sort(compareInboxOrder);
+		// Returned newest-created first (the scan order) — the inbox's default
+		// "Newest first" sort. The inbox applies its "Due date" toggle client-side
+		// over this stable window (sortInboxOrders), so toggling never re-queries.
+		// See docs/order-inbox.md ("Sort"). Export sorts independently.
+		const sorted = filtered;
 
-		const take = Math.max(1, Math.min(limit ?? 50, 200));
+		// No `limit` → return the full window (the inbox slices client-side, so
+		// its subscription args stay stable across "Load more"). A supplied limit
+		// (Home's counts-only `limit: 1`) still trims the payload. Either way the
+		// hard ceiling is the scan window, never the old silent 200-row cap.
+		const take = Math.max(1, Math.min(limit ?? MAX_INBOX_SCAN, MAX_INBOX_SCAN));
 		return {
 			orders: sorted.slice(0, take),
 			total: sorted.length,
 			counts,
+			// True when the scan hit MAX_INBOX_SCAN: orders older than the newest
+			// 1,000 are outside the window, so the list AND counts under-report.
+			// The inbox surfaces this in a footer; export is the full-history path.
 			capped: all.length >= MAX_INBOX_SCAN,
 		};
 	},
@@ -1261,6 +1616,7 @@ function orderToCsvSource(o: Doc<"orders">): CsvOrder {
 		items: o.items,
 		subtotal: o.subtotal,
 		pickupFee: o.pickupFee,
+		deliveryFee: o.deliveryFee,
 		total: o.total,
 		currency: o.currency,
 		customerNote: o.customerNote,
@@ -1472,7 +1828,12 @@ async function reverseCancellationEffects(
 	await recordOrderCancelled(ctx, order.retailerId, order.createdAt);
 }
 
-async function applyStatusTransition(
+// Exported for the Lalamove webhook's auto-transitions (convex/lalamove.ts) —
+// rider picked up → shipped, completed → delivered ride the SAME path as a
+// seller tap, so WhatsApp notify, stage vocabulary, activation stamping and
+// orderEvents all come free. The webhook side guards which source statuses
+// are eligible; this helper stays transition-mechanics only.
+export async function applyStatusTransition(
 	ctx: MutationCtx,
 	order: Doc<"orders">,
 	status: TransitionStatus,
@@ -1491,10 +1852,21 @@ async function applyStatusTransition(
 		statusChangedAt: number;
 		updatedAt: number;
 		carrierTrackingUrl: string;
+		currentStageId: string | undefined;
 	}> = { status, statusChangedAt: now, updatedAt: now };
 	if (status === "shipped" && opts.carrierTrackingUrl) {
 		const trimmed = opts.carrierTrackingUrl.trim();
 		if (trimmed.length > 0) patch.carrierTrackingUrl = trimmed;
+	}
+	// This path transitions the CANONICAL status without stage awareness (the
+	// stage-aware path is advanceToStage, which sets both). A stored
+	// `currentStageId` from an earlier stepper tap would otherwise go stale and
+	// pin the displayed stage behind the real status — e.g. the Lalamove webhook
+	// delivering an order the seller had marked "Packed" left the tracking page
+	// reading "Packed". Clear it so the stage derives from the new status; a
+	// same-status replay keeps any within-anchor custom stage.
+	if (order.currentStageId !== undefined && status !== order.status) {
+		patch.currentStageId = undefined;
 	}
 	await ctx.db.patch(order._id, patch);
 	await ctx.db.insert("orderEvents", {
@@ -1517,6 +1889,12 @@ async function applyStatusTransition(
 	await ctx.scheduler.runAfter(0, internal.whatsapp.notifyStatusChange, {
 		orderId: order._id,
 	});
+
+	// NOTE: Lalamove dispatch is never triggered server-side. Marking a delivery
+	// order packed surfaces a "book a rider now?" prompt CLIENT-side (opt-in
+	// deliveryBooking.promptBookOnPacked) so the seller always sees today's
+	// price and taps to confirm — money never moves without a human. See
+	// docs/delivery-lalamove.md ("Prompt to book on packed") + BookDeliveryCard.
 }
 
 export const updateStatus = mutation({
@@ -1669,29 +2047,57 @@ async function deleteOrderCascade(
 		await ctx.db.patch(session._id, { orderId: undefined, updatedAt: now });
 	}
 
-	// 5. Delete the order.
+	// 5. Delete the order's Lalamove booking ledger. An ACTIVE booking is the
+	//    seller's to cancel on Lalamove's side (the delete dialog warns before
+	//    this point); once the rows are gone, late webhooks for these provider
+	//    ids become unmatched traffic and the route acks + ignores them.
+	const jobs = await ctx.db
+		.query("deliveryJobs")
+		.withIndex("by_order", (q) => q.eq("orderId", order._id))
+		.collect();
+	for (const job of jobs) {
+		for (const podId of job.podImageStorageIds ?? []) {
+			await ctx.storage.delete(podId);
+		}
+		await ctx.db.delete(job._id);
+	}
+
+	// 6. Delete the order.
 	await ctx.db.delete(order._id);
 }
 
 /**
- * Hard-delete a single order (owner or admin acting-as). Permanent and
- * irreversible — the UI gates it behind an explicit confirm. Not plan-gated
- * (cleaning up your own orders is all-tier, mirroring `updateStatus`); admin
- * act-as writes are audited.
+ * Hard-delete a single order — **Kedaipal admin only**. Permanent and
+ * irreversible. A plain seller is rejected server-side (Forbidden) even though
+ * they own the store: permanently erasing order/payment records sits with
+ * Kedaipal, not the seller, who uses Cancel (tombstoned + buyer notified)
+ * instead. The gate is admin membership (`isAdmin`), NOT `access.actingAsAdmin`
+ * — an admin can erase orders in ANY store, including one they personally own
+ * (which resolves via the owner branch, so `actingAsAdmin` is false there). The
+ * dashboard hides the action for sellers, but this guard — not the hidden UI —
+ * is the real boundary. Admin act-as writes (a store they don't own) are audited.
+ * ClickUp `86eyaqzpd` (admin-only restriction) atop `86ey8fr8t` (the erase).
  */
 export const deleteOrder = mutation({
 	args: { orderId: v.id("orders") },
 	handler: async (ctx, { orderId }): Promise<void> => {
 		const { order, access } = await requireOrderAccess(ctx, orderId);
+		if (!(await isAdmin(ctx))) throw new Error("Forbidden");
 		await deleteOrderCascade(ctx, order);
 		await logAdminAction(ctx, access, "orders.hardDelete", orderId);
 	},
 });
 
 /**
- * Bulk hard-delete (the inbox multi-select). Mirrors `bulkUpdateStatus`: an
- * Order Inbox surface (Pro+, admin act-as bypasses), owner-checked per order (a
- * foreign id fails the whole batch), capped at 100, one batch audit row.
+ * Bulk hard-delete (the inbox multi-select) — **Kedaipal admin only**, same
+ * policy as the single `deleteOrder`. Capped at 100/batch, one batch audit row.
+ * No plan gate: permanent erasure is an admin ops action, not a paid feature.
+ *
+ * The admin gate is checked ONCE up front (`isAdmin` — one caller identity for
+ * the whole batch, cheaper than per-order and ownership-agnostic so an admin can
+ * bulk-erase in a store they own too). The per-order `requireRetailerAccess`
+ * stays: it confirms each order's retailer exists and supplies `batchAccess` for
+ * the audit row (an admin passes it for every store, so it never rejects here).
  */
 export const bulkDeleteOrders = mutation({
 	args: { orderIds: v.array(v.id("orders")) },
@@ -1699,16 +2105,14 @@ export const bulkDeleteOrders = mutation({
 		if (orderIds.length === 0) return { deleted: 0 };
 		if (orderIds.length > 100)
 			throw new ConvexError("Too many orders selected (max 100)");
+		if (!(await isAdmin(ctx))) throw new Error("Forbidden");
 
 		let deleted = 0;
 		let batchAccess: RetailerAccess | undefined;
 		for (const orderId of orderIds) {
 			const order = await ctx.db.get(orderId);
 			if (!order) throw new ConvexError("Order not found");
-			const firstResolve = batchAccess === undefined;
 			batchAccess = await requireRetailerAccess(ctx, order.retailerId);
-			if (firstResolve && !batchAccess.actingAsAdmin)
-				await assertPlanFeature(ctx, order.retailerId, "orderInbox");
 			await deleteOrderCascade(ctx, order);
 			deleted++;
 		}
@@ -1888,9 +2292,40 @@ export const updateDeliveryAddress = mutation({
 			throw new ConvexError((err as Error).message);
 		}
 
+		// Re-price the delivery charge against the NEW address — a distance-band
+		// fee is a function of where the order goes, so the fee follows the
+		// address exactly like the pickup fee follows the point (see
+		// updatePickupLocation). Blocked destinations throw (the old address —
+		// and its total — stay untouched); an "arrange" out-of-range edit flips
+		// the order back to fee-pending. Pending-only gate above means no payment
+		// has been asked for yet, so the total is still safe to move.
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		const resolved = resolveDeliveryForOrder(
+			retailer,
+			order.subtotal,
+			sanitized,
+		);
+		const { subtotal, total } = computeOrderTotals(order.items, {
+			quotedAmount: order.mockupQuotedAmount,
+			pickupFee: order.pickupFee,
+			deliveryFee: resolved.snapshot?.fee,
+		});
+		// Keep the customer's denormalized totalSpent in step with the new total.
+		if (order.customerId && total !== order.total)
+			await adjustAggregatesForTotalChange(ctx, {
+				customerId: order.customerId,
+				delta: total - order.total,
+			});
+
 		const now = Date.now();
 		await ctx.db.patch(order._id, {
 			deliveryAddress: sanitized,
+			deliverySnapshot: resolved.snapshot,
+			deliveryFee: resolved.snapshot?.fee,
+			deliveryFeePending: resolved.pending || undefined,
+			subtotal,
+			total,
 			updatedAt: now,
 		});
 		await ctx.db.insert("orderEvents", {
@@ -1899,6 +2334,88 @@ export const updateDeliveryAddress = mutation({
 			note: "address_updated",
 			createdAt: now,
 		});
+	},
+});
+
+/**
+ * Seller (or admin act-as): set — or adjust — the delivery charge on a
+ * delivery order. This is how a fee-pending "arrange via WhatsApp" order
+ * (radius mode, out of range / no coordinates) gets its final total: the
+ * seller agrees the charge with the buyer in chat, enters it here, and the
+ * held payment ask goes out with the updated total. Also usable to correct a
+ * charge before any payment is in motion (typo insurance) — locked once the
+ * buyer claims or the seller marks payment received, mirroring the mockup
+ * quote's "no re-pricing after commitment" posture. `fee` of 0 = deliver free
+ * (clears the charge and the pending flag).
+ */
+export const setDeliveryFee = mutation({
+	args: { orderId: v.id("orders"), fee: v.number() },
+	handler: async (ctx, { orderId, fee }): Promise<void> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) throw new ConvexError("Order not found");
+		// Owner OR admin acting-as (see convex/lib/auth.ts).
+		const access = await requireRetailerAccess(ctx, order.retailerId);
+		if ((order.deliveryMethod ?? "delivery") !== "delivery")
+			throw new ConvexError("Only delivery orders carry a delivery charge");
+		if (order.status === "cancelled")
+			throw new ConvexError("This order was cancelled");
+		if (
+			order.paymentStatus === "claimed" ||
+			order.paymentStatus === "received"
+		) {
+			throw new ConvexError(
+				"Payment is already in motion — the delivery charge can't change now",
+			);
+		}
+		if (!Number.isInteger(fee) || fee < 0)
+			throw new ConvexError("Delivery charge must be a whole, non-negative amount");
+		if (fee > DELIVERY_FEE_MAX)
+			throw new ConvexError("Delivery charge is unrealistically large — check the amount");
+
+		const wasPending = order.deliveryFeePending === true;
+		const snapshot: DeliverySnapshot | undefined =
+			fee > 0 ? { fee, mode: "manual" } : undefined;
+		const now = Date.now();
+		const { subtotal, total } = computeOrderTotals(order.items, {
+			quotedAmount: order.mockupQuotedAmount,
+			pickupFee: order.pickupFee,
+			deliveryFee: snapshot?.fee,
+		});
+		// Keep the customer's denormalized totalSpent in step with the new total.
+		if (order.customerId && total !== order.total)
+			await adjustAggregatesForTotalChange(ctx, {
+				customerId: order.customerId,
+				delta: total - order.total,
+			});
+		await ctx.db.patch(orderId, {
+			deliverySnapshot: snapshot,
+			deliveryFee: snapshot?.fee,
+			deliveryFeePending: undefined,
+			subtotal,
+			total,
+			updatedAt: now,
+		});
+		await ctx.db.insert("orderEvents", {
+			orderId,
+			status: order.status,
+			note: `delivery_fee_set (fee ${fee})`,
+			createdAt: now,
+		});
+		// Release the held payment ask — but only when this set actually resolved
+		// a pending charge, the buyer already got their confirm (status past
+		// "pending"), and the mockup gate isn't ALSO holding payment (that path
+		// sends its own prompt on approve/waive, which re-checks this flag).
+		if (
+			wasPending &&
+			order.status !== "pending" &&
+			!isMockupGateClosed(order) &&
+			order.customer.waPhone
+		) {
+			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyDeliveryFeeSet, {
+				orderId,
+			});
+		}
+		await logAdminAction(ctx, access, "orders.setDeliveryFee", orderId);
 	},
 });
 
@@ -1950,6 +2467,7 @@ export const updatePickupLocation = mutation({
 		const { subtotal, total } = computeOrderTotals(order.items, {
 			quotedAmount: order.mockupQuotedAmount,
 			pickupFee: snapshot.fee,
+			deliveryFee: order.deliveryFee,
 		});
 		// Keep the customer's denormalized totalSpent in step with the new total.
 		if (order.customerId && total !== order.total)
@@ -2009,6 +2527,13 @@ export const claimPayment = mutation({
 		if (isMockupGateClosed(order)) {
 			throw new ConvexError(
 				"Please approve the mockup before paying — your order total is confirmed once you approve the design.",
+			);
+		}
+		// Same hold while the delivery charge is unconfirmed — the total the
+		// buyer would be claiming against isn't final yet.
+		if (order.deliveryFeePending === true) {
+			throw new ConvexError(
+				"The seller is still confirming your delivery charge — you'll get the payment details right after.",
 			);
 		}
 
@@ -2076,6 +2601,14 @@ export const markPaymentReceived = mutation({
 		if (isMockupGateClosed(order)) {
 			throw new ConvexError(
 				"Approve or remove the custom item first — the buyer is asked to pay only after the mockup is approved (or you proceed without approval).",
+			);
+		}
+		// Delivery charge must be settled before money is recorded — otherwise
+		// the received amount is being reconciled against an unfinished total.
+		// Set the charge (0 = deliver free) and this unblocks.
+		if (order.deliveryFeePending === true) {
+			throw new ConvexError(
+				"Set the delivery charge first — the order total isn't final until you do.",
 			);
 		}
 
@@ -2303,11 +2836,12 @@ export const submitMockup = mutation({
 		);
 
 		const now = Date.now();
-		// Quote and pickup fee are independent extras — carry the frozen fee
-		// so re-pricing the custom work never drops the pickup charge.
+		// Quote, pickup fee and delivery fee are independent extras — carry the
+		// frozen fees so re-pricing the custom work never drops a charge.
 		const { subtotal, total } = computeOrderTotals(order.items, {
 			quotedAmount: effectiveQuote,
 			pickupFee: order.pickupFee,
+			deliveryFee: order.deliveryFee,
 		});
 		// Keep the customer's denormalized totalSpent in step with the new total.
 		if (order.customerId)
@@ -2375,10 +2909,11 @@ export const updateMockupQuote = mutation({
 			order.mockupQuotedAmount,
 		);
 		const now = Date.now();
-		// Same extras rule as submitMockup — keep the frozen pickup fee.
+		// Same extras rule as submitMockup — keep the frozen fees.
 		const { subtotal, total } = computeOrderTotals(order.items, {
 			quotedAmount: effectiveQuote,
 			pickupFee: order.pickupFee,
+			deliveryFee: order.deliveryFee,
 		});
 		// Keep the customer's denormalized totalSpent in step with the new total.
 		if (order.customerId)
@@ -2618,6 +3153,7 @@ export const declineMockupItem = mutation({
 		// still collects the remaining items at the same paid point.
 		const { subtotal, total } = computeOrderTotals(kept, {
 			pickupFee: order.pickupFee,
+			deliveryFee: order.deliveryFee,
 		});
 		if (order.customerId)
 			await adjustAggregatesForTotalChange(ctx, {

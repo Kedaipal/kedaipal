@@ -4,6 +4,7 @@ import {
 	cartesian,
 	getCustomLine,
 	isSellable,
+	minQuantityUnreachable,
 	resolveVariant,
 	sameOptionValues,
 	variantLabel,
@@ -177,5 +178,75 @@ describe("storefront variant helpers", () => {
 			);
 			expect([...size]).toEqual(["S"]);
 		});
+	});
+});
+
+describe("minQuantityUnreachable (86ey9unyx)", () => {
+	const hardBlock = (onHand: number, extra = {}) => ({
+		optionValues: [],
+		onHand,
+		active: true,
+		blockWhenOutOfStock: true,
+		...extra,
+	});
+
+	test("no minimum (or ≤1) is never unreachable", () => {
+		expect(minQuantityUnreachable(undefined, [hardBlock(0)])).toBe(false);
+		expect(minQuantityUnreachable(0, [hardBlock(0)])).toBe(false);
+		expect(minQuantityUnreachable(1, [hardBlock(0)])).toBe(false);
+	});
+
+	test("all-hard-block below the minimum → unreachable (the checkout dead-end)", () => {
+		expect(minQuantityUnreachable(20, [hardBlock(15)])).toBe(true);
+		// Combined across variants: 10 + 4 = 14 < 20.
+		expect(minQuantityUnreachable(20, [hardBlock(10), hardBlock(4)])).toBe(
+			true,
+		);
+	});
+
+	test("combined stock at or above the minimum stays reachable", () => {
+		expect(minQuantityUnreachable(20, [hardBlock(20)])).toBe(false);
+		// Mixing variants: 12 + 8 = 20.
+		expect(minQuantityUnreachable(20, [hardBlock(12), hardBlock(8)])).toBe(
+			false,
+		);
+	});
+
+	test("any made-to-order standard variant makes the minimum always reachable", () => {
+		expect(
+			minQuantityUnreachable(20, [
+				hardBlock(3),
+				{
+					optionValues: [],
+					onHand: 0,
+					active: true,
+					blockWhenOutOfStock: false,
+				},
+			]),
+		).toBe(false);
+	});
+
+	test("a custom line never rescues the minimum (it's excluded from min sums)", () => {
+		expect(
+			minQuantityUnreachable(20, [
+				hardBlock(15),
+				{
+					optionValues: [],
+					onHand: 0,
+					active: true,
+					blockWhenOutOfStock: false,
+					isCustom: true,
+				},
+			]),
+		).toBe(true);
+	});
+
+	test("inactive variants don't count toward reachability", () => {
+		expect(
+			minQuantityUnreachable(20, [
+				hardBlock(15),
+				hardBlock(50, { active: false }),
+			]),
+		).toBe(true);
 	});
 });

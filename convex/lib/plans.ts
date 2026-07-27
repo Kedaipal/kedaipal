@@ -67,6 +67,19 @@ export type PlanFeatures = {
 	/** Seller Insights (86ey5tfrz): the /app/insights analytics page. Starter
 	 * gets a locked teaser; the query returns `{ gated: true }` server-side. */
 	insights: boolean;
+	/** Radius-based delivery pricing (86extzdr8): distance bands from the
+	 * seller's business address. Gates only SETTING a radius config — clearing
+	 * it (or switching to the all-tier flat fee) stays un-gated so a downgraded
+	 * seller is never trapped, and an order's frozen fee displays on every
+	 * tier. The flat delivery fee is deliberately NOT a feature row — a wrong
+	 * total is a correctness bug, so flat is all-tier. */
+	radiusDelivery: boolean;
+	/** Lalamove delivery (86eyb5hrf): enabling rider booking + the live
+	 * provider-quote pricing mode. Gates only ENABLING/SETTING — disabling,
+	 * clearing credentials and switching pricing away stay un-gated (never
+	 * trap a downgraded seller), and buyer-side fee rendering + an order's
+	 * frozen fee are all-tier (buyer flow never varies by seller plan). */
+	delivery: boolean;
 };
 
 export type PlanFeature = keyof PlanFeatures;
@@ -78,6 +91,8 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		chargeablePickup: false,
 		categories: false,
 		insights: false,
+		radiusDelivery: false,
+		delivery: false,
 	},
 	pro: {
 		crm: true,
@@ -85,6 +100,8 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		chargeablePickup: true,
 		categories: true,
 		insights: true,
+		radiusDelivery: true,
+		delivery: true,
 	},
 	scale: {
 		crm: true,
@@ -92,6 +109,8 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		chargeablePickup: true,
 		categories: true,
 		insights: true,
+		radiusDelivery: true,
+		delivery: true,
 	},
 };
 

@@ -70,6 +70,32 @@ export function isSellable(variant: VariantLike): boolean {
 }
 
 /**
+ * Can the standard (non-custom) variants still reach the product's minimum
+ * order quantity (86ey9unyx)? Unreachable only when a minimum is set, the
+ * product has standard variants, every active one hard-blocks on stock, and
+ * their combined on-hand sits below the minimum — without this check the buyer
+ * is told "Min 20", the stepper caps at stock, and checkout demands units that
+ * can't be bought (a dead-end). Any made-to-order standard variant makes the
+ * minimum always reachable (unbounded qty). The custom line never rescues it:
+ * custom lines are excluded from minimum sums (see convex/lib/minOrderRules.ts)
+ * — but it also isn't blocked by this state (its own CTA stays live).
+ */
+export function minQuantityUnreachable(
+	minQuantity: number | undefined,
+	variants: readonly VariantLike[],
+): boolean {
+	if (!minQuantity || minQuantity <= 1) return false;
+	const standard = variants.filter((v) => !v.isCustom && v.active !== false);
+	if (standard.length === 0) return false;
+	if (standard.some((v) => !v.blockWhenOutOfStock)) return false;
+	const purchasable = standard.reduce(
+		(sum, v) => sum + Math.max(0, v.onHand),
+		0,
+	);
+	return purchasable < minQuantity;
+}
+
+/**
  * For each axis, the set of values that — combined with the current selection
  * on the *other* axes — has at least one sellable variant. A value not in its
  * axis's set is greyed out (reason 1: no such combo; reason 2: sold out under

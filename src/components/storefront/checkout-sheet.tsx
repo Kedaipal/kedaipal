@@ -1,4 +1,6 @@
-import { useMutation } from "convex/react";
+import { useStore } from "@tanstack/react-form";
+import { useNavigate } from "@tanstack/react-router";
+import { useAction, useMutation, useQuery } from "convex/react";
 import {
 	Clock,
 	ExternalLink,
@@ -9,16 +11,27 @@ import {
 	X,
 } from "lucide-react";
 import { Dialog } from "radix-ui";
-import { type FormEvent, type ReactNode, useMemo, useState } from "react";
+import {
+	type FormEvent,
+	type ReactNode,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import type { PublicDeliveryQuote } from "../../../convex/delivery";
 import {
 	assertValidFulfilmentDate,
-	formatFulfilmentDate,
 	fulfilmentDateBounds,
 	mytMidnightFromYmd,
 	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
+import {
+	collectMinQuantityShortfalls,
+	minOrderValueShortfall,
+} from "../../../convex/lib/minOrderRules";
 import type { UseCart } from "../../hooks/useCart";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { deriveMapsUrl } from "../../lib/google-address";
@@ -30,6 +43,7 @@ import {
 } from "../../lib/schemas";
 import { submitThenFocusError } from "../forms/focus-error";
 import { useAppForm } from "../forms/form";
+import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { AddressFieldset } from "./address-fieldset";
 
@@ -77,6 +91,9 @@ interface CheckoutSheetProps {
 	offerSelfCollect: boolean;
 	offerDelivery: boolean;
 	minFulfilmentNoticeDays: number | undefined;
+	/** Store-wide minimum order value (minor units) — checkout blocks below it.
+	 * See convex/lib/minOrderRules.ts. */
+	minOrderValue: number | undefined;
 	pickupLocations: ReadonlyArray<PublicPickupLocation>;
 }
 
@@ -155,87 +172,10 @@ function sanitizeAddress(raw: CheckoutAddressValues): SanitizedDeliveryAddress {
 	};
 }
 
-function formatAddressOneLine(addr: SanitizedDeliveryAddress): string {
-	const parts = [addr.line1];
-	if (addr.line2) parts.push(addr.line2);
-	parts.push(`${addr.postcode} ${addr.city}`);
-	parts.push(addr.state);
-	return parts.join(", ");
-}
-
-function buildWaMessage(
-	storeName: string,
-	shortId: string,
-	cart: UseCart,
-	deliveryMethod: "delivery" | "self_collect",
-	deliveryAddress: SanitizedDeliveryAddress | undefined,
-	pickupLocation: PublicPickupLocation | undefined,
-	note: string | undefined,
-	fulfilmentDate: number | undefined,
-): string {
-	const lines: string[] = [];
-	lines.push(`Hi ${storeName}, I'd like to place this order:`);
-	lines.push("");
-	lines.push(`Order: ${shortId}`);
-	let hasQuoteItem = false;
-	for (const item of cart.items) {
-		const name = item.optionLabel
-			? `${item.name} (${item.optionLabel})`
-			: item.name;
-		const suffix = item.quoteOnRequest ? " — price on quote" : "";
-		if (item.quoteOnRequest) hasQuoteItem = true;
-		lines.push(`• ${item.quantity}x ${name}${suffix}`);
-	}
-	lines.push("");
-	// The chosen point's fee is part of what the buyer pays — the message total
-	// must match the order total the server computed (subtotal + fee).
-	const pickupFee =
-		deliveryMethod === "self_collect" ? pickupFeeOf(pickupLocation) : 0;
-	if (pickupFee > 0)
-		lines.push(`Pickup fee: ${formatPrice(pickupFee, cart.currency)}`);
-	lines.push(`Total: ${formatPrice(cart.total + pickupFee, cart.currency)}`);
-	if (hasQuoteItem) lines.push("(Custom item price to be confirmed by seller)");
-	if (deliveryMethod === "self_collect") {
-		if (pickupLocation) {
-			const verb =
-				pickupLocation.locationType === "drop_off"
-					? "Drop-off at"
-					: "Self Collect at";
-			lines.push(`📍 ${verb}: ${pickupLocation.label}`);
-			lines.push(pickupLocation.address);
-			if (pickupLocation.scheduleNote)
-				lines.push(`🗓️ ${pickupLocation.scheduleNote}`);
-			const mapsUrl = deriveMapsUrl(pickupLocation);
-			if (mapsUrl) lines.push(mapsUrl);
-			if (pickupLocation.notes) lines.push(pickupLocation.notes);
-		} else {
-			lines.push("📍 Pickup");
-		}
-	} else if (deliveryAddress) {
-		lines.push(`🚚 Deliver to: ${formatAddressOneLine(deliveryAddress)}`);
-		const mapsUrl = deriveMapsUrl(deliveryAddress);
-		if (mapsUrl) lines.push(`📍 ${mapsUrl}`);
-		if (deliveryAddress.notes) lines.push(`📝 ${deliveryAddress.notes}`);
-	} else {
-		lines.push("🚚 Delivery");
-	}
-	// Fulfilment date — the buyer's answer to "bila nak?". Sits with the
-	// delivery/pickup block (it's the "when" to that "where"), above the note.
-	if (fulfilmentDate !== undefined) {
-		const verb = deliveryMethod === "self_collect" ? "Collect" : "Deliver";
-		lines.push(`🗓️ ${verb} on: ${formatFulfilmentDate(fulfilmentDate)}`);
-	}
-	// Order note last, in a clearly delimited section. It sits AFTER the
-	// "Order: ORD-XXXX" line, so even if the note text contains something that
-	// looks like an order token, the inbound parser still matches the real ID
-	// (first match) — see SHORT_ID_REGEX in whatsappCopy.
-	if (note) {
-		lines.push("");
-		lines.push("📝 Note for seller:");
-		lines.push(note);
-	}
-	return lines.join("\n");
-}
+// The buyer→seller WhatsApp handoff message is NOT built here anymore. The
+// checkout submit navigates to the tracking page, which rebuilds it from the
+// order's frozen snapshot — see src/lib/wa-order-message.ts for why (popup
+// blockers kill window.open after the awaited createOrder round-trip).
 
 export function CheckoutSheet({
 	open,
@@ -247,9 +187,41 @@ export function CheckoutSheet({
 	offerSelfCollect,
 	offerDelivery,
 	minFulfilmentNoticeDays,
+	minOrderValue,
 	pickupLocations,
 }: CheckoutSheetProps) {
 	const createOrder = useMutation(api.orders.create);
+	const navigate = useNavigate();
+
+	// Minimum order rules (86ey9unyx) — same shared module the server enforces
+	// with, so this pre-submit mirror can't disagree with orders.create. Cart
+	// items snapshot each product's minQuantity at add time.
+	const minRuleItems = cart.items.map((i) => ({
+		productId: i.productId,
+		name: i.name,
+		quantity: i.quantity,
+		minQuantity: i.minQuantity,
+		isCustom: i.isCustom,
+		quoteOnRequest: i.quoteOnRequest,
+	}));
+	const qtyShortfalls = collectMinQuantityShortfalls(minRuleItems);
+	const valueShortfall = minOrderValueShortfall(
+		minOrderValue,
+		cart.total,
+		minRuleItems,
+	);
+	const minRulesBlocked = qtyShortfalls.length > 0 || valueShortfall > 0;
+	const shortfallByProduct = new Map(
+		qtyShortfalls.map((s) => [s.productId, s]),
+	);
+	// The per-product hint renders once — on the product's FIRST non-custom line
+	// (a multi-variant product can span several cart lines).
+	const firstLineForProduct = new Map<string, number>();
+	cart.items.forEach((item, index) => {
+		if (!item.isCustom && !firstLineForProduct.has(item.productId)) {
+			firstLineForProduct.set(item.productId, index);
+		}
+	});
 	const [serverError, setServerError] = useState<string | null>(null);
 	// Submit-time "choose a pickup point" error — inline on the radio list (the
 	// shared focus helper lands on it), not a generic bottom banner. Cleared as
@@ -260,13 +232,27 @@ export function CheckoutSheet({
 	// earliest day) through today + 30. Memoised on the retailer setting so the
 	// "today" anchor is computed once per open, not on every keystroke. The
 	// server re-validates against the live window — see convex/lib/fulfilmentDate.
+	// Effective notice = the store-level setting raised by the strictest cart
+	// item's per-product override (a custom cake needs lead time; ready stock
+	// doesn't). Server enforces the same max at create.
+	const cartNoticeDays = cart.items.reduce(
+		(max, item) => Math.max(max, item.minNoticeDays ?? 0),
+		0,
+	);
+	// A custom / price-on-quote line means the date is a REQUEST, not a promise
+	// — the mockup conversation settles the real date. Copy adapts below.
+	const hasCustomLine = cart.items.some(
+		(item) => item.isCustom === true || item.quoteOnRequest === true,
+	);
 	const { minYmd, maxYmd } = useMemo(() => {
-		const bounds = fulfilmentDateBounds(minFulfilmentNoticeDays);
+		const bounds = fulfilmentDateBounds(
+			Math.max(minFulfilmentNoticeDays ?? 0, cartNoticeDays),
+		);
 		return {
 			minYmd: ymdFromEpoch(bounds.min),
 			maxYmd: ymdFromEpoch(bounds.max),
 		};
-	}, [minFulfilmentNoticeDays]);
+	}, [minFulfilmentNoticeDays, cartNoticeDays]);
 
 	const noCheckoutPhone = !checkoutPhone;
 	// Self-collect surfaces on the storefront only when the retailer opted in
@@ -301,8 +287,12 @@ export function CheckoutSheet({
 			// Empty when delivery, the chosen id when self-collect with 2+ options,
 			// unused when self-collect with exactly 1 option (auto-resolved at submit).
 			pickupLocationId: "",
-			// "YYYY-MM-DD" the buyer picks for delivery/pickup. Required at submit.
-			fulfilmentDate: "",
+			// "YYYY-MM-DD" the buyer wants delivery/pickup. Defaults to the
+			// EARLIEST allowed day (today, or today + the store's notice window)
+			// — most orders are for "as soon as possible", so the common case is
+			// zero taps while pre-order buyers just pick a later date. Server
+			// re-validates the live window either way.
+			fulfilmentDate: minYmd,
 			// Optional free-text instruction for the seller (local form state — the
 			// note is order-level, not a cart item, so it doesn't belong in useCart).
 			note: "",
@@ -312,6 +302,9 @@ export function CheckoutSheet({
 			setServerError(null);
 			setPickupError(null);
 			if (cart.items.length === 0) return;
+			// Minimum order rules — the submit button is already disabled with the
+			// reason on screen; this guard covers a race (e.g. Enter key mid-render).
+			if (minRulesBlocked) return;
 			if (noCheckoutPhone) {
 				setServerError(
 					"Order checkout is temporarily unavailable. Please try again shortly.",
@@ -326,11 +319,9 @@ export function CheckoutSheet({
 			// Resolve the chosen pickup location id. For the single-location case
 			// we never asked the buyer to pick — auto-fill from the (only) option.
 			let resolvedPickupLocationId: Id<"pickupLocations"> | undefined;
-			let resolvedPickupLocation: PublicPickupLocation | undefined;
 			if (value.deliveryMethod === "self_collect" && selfCollectAvailable) {
 				if (singlePickup) {
 					resolvedPickupLocationId = singlePickup._id;
-					resolvedPickupLocation = singlePickup;
 				} else {
 					const chosen = sortedPickups.find(
 						(p) => p._id === value.pickupLocationId,
@@ -342,7 +333,6 @@ export function CheckoutSheet({
 						return;
 					}
 					resolvedPickupLocationId = chosen._id;
-					resolvedPickupLocation = chosen;
 				}
 			}
 
@@ -376,7 +366,7 @@ export function CheckoutSheet({
 			)?.customImageStorageId;
 
 			try {
-				const { shortId } = await createOrder({
+				const { trackingToken } = await createOrder({
 					retailerId,
 					items: cart.items.map((i) => ({
 						variantId: i.variantId,
@@ -393,32 +383,176 @@ export function CheckoutSheet({
 					fulfilmentDate: fulfilmentEpoch,
 					customerNote,
 					customerImageStorageId,
+					// Live Lalamove quote (86eyb5hrf): pass the server-side quote row
+					// so the fee the buyer saw freezes onto the order. Missing/stale →
+					// the server falls back to the store's onUnquotable policy.
+					deliveryQuoteId:
+						value.deliveryMethod === "delivery" && liveQuote.state === "quoted"
+							? liveQuote.quoteId
+							: undefined,
 				});
-				const message = buildWaMessage(
-					storeName,
-					shortId,
-					cart,
-					value.deliveryMethod,
-					sanitizedAddress,
-					resolvedPickupLocation,
-					customerNote,
-					fulfilmentEpoch,
-				);
-				const url = `https://wa.me/${checkoutPhone}?text=${encodeURIComponent(message)}`;
 				if (value.deliveryMethod === "delivery") saveAddress(value.address);
 				cart.clearCart();
 				form.reset();
 				onClose();
-				window.open(url, "_blank", "noopener,noreferrer");
+				// Same-tab navigation to the tracking page, NOT window.open(wa.me):
+				// after the awaited createOrder round-trip we're outside the submit
+				// tap's transient user activation, so popup blockers (iOS Safari,
+				// IG/FB in-app webviews) silently swallow a new tab — order created,
+				// buyer stranded. The tracking page shows the "Send order on
+				// WhatsApp" anchor instead; ?send=1 makes it auto-fire the wa.me
+				// redirect (same-tab, never popup-blocked) so the buyer still lands
+				// in WhatsApp without an extra tap. See docs/order-lifecycle.md.
+				navigate({
+					to: "/track/$token",
+					params: { token: trackingToken },
+					search: { send: 1 },
+				});
 			} catch (err) {
 				setServerError(convexErrorMessage(err));
 			}
 		},
 	});
 
+	// The form's default date is captured at mount (often before the cart has
+	// its strictest item, and long-lived tabs cross midnight) — pull a stale
+	// value up to the current floor whenever the sheet is open.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: form identity is stable; value read fresh inside.
+	useEffect(() => {
+		if (!open) return;
+		const current = form.store.state.values.fulfilmentDate;
+		if (current && current < minYmd) {
+			form.setFieldValue("fulfilmentDate", minYmd);
+		}
+	}, [open, minYmd]);
+
 	function handleSubmit(e: FormEvent) {
 		submitThenFocusError(form, e);
 	}
+
+	// --- Live delivery-charge preview (86extzdr8) ---------------------------
+	// Watch the method + the coordinates the Google autocomplete stamped into
+	// form state (three primitive selectors so keystrokes elsewhere don't
+	// re-render the sheet), and quote the fee server-side. The server strips
+	// distances (privacy) and orders.create re-resolves authoritatively — this
+	// is display + gating only.
+	const watchedMethod = useStore(form.store, (s) => s.values.deliveryMethod);
+	const watchedLat = useStore(form.store, (s) => s.values.address.latitude);
+	const watchedLng = useStore(form.store, (s) => s.values.address.longitude);
+	// The chosen day PRICES the live quote (pre-orders quote as a scheduled
+	// pickup on that day) — date changes re-quote just like address changes.
+	const watchedDate = useStore(form.store, (s) => s.values.fulfilmentDate);
+	const latNum = watchedLat.trim().length > 0 ? Number(watchedLat) : NaN;
+	const lngNum = watchedLng.trim().length > 0 ? Number(watchedLng) : NaN;
+	const hasCoords = Number.isFinite(latNum) && Number.isFinite(lngNum);
+	const deliveryQuote: PublicDeliveryQuote | undefined = useQuery(
+		api.delivery.quote,
+		open && deliveryAvailable && watchedMethod === "delivery"
+			? {
+					retailerId,
+					latitude: hasCoords ? latNum : undefined,
+					longitude: hasCoords ? lngNum : undefined,
+					subtotal: cart.total,
+				}
+			: "skip",
+	);
+	const rawQuote = watchedMethod === "delivery" ? deliveryQuote : undefined;
+
+	// --- Live Lalamove quote (86eyb5hrf) ------------------------------------
+	// When the store prices delivery by live provider quote, the reactive query
+	// answers {kind:"live"} and the real fee comes from the quoteForCheckout
+	// ACTION, fired once per picked address (coords only change on a Google
+	// suggestion pick, debounced as a keystroke guard). The action records the
+	// fee server-side and returns a row id — orders.create loads the fee from
+	// that row, so this state is display + gating only, same trust model as the
+	// static quote.
+	const quoteLalamove = useAction(api.lalamove.quoteForCheckout);
+	const [liveQuote, setLiveQuote] = useState<
+		| { state: "idle" }
+		| { state: "loading" }
+		| { state: "quoted"; quoteId: Id<"deliveryQuotes">; fee: number }
+		| { state: "unavailable" }
+	>({ state: "idle" });
+	const liveSeq = useRef(0);
+	const isLiveMode = rawQuote?.kind === "live";
+	// biome-ignore lint/correctness/useExhaustiveDependencies: fires per picked address (coords change only on a suggestion pick); form/action/retailerId identities are stable and the address is read fresh inside the timeout.
+	useEffect(() => {
+		if (!isLiveMode || !open || !hasCoords) {
+			liveSeq.current++;
+			setLiveQuote({ state: "idle" });
+			return;
+		}
+		const seq = ++liveSeq.current;
+		setLiveQuote({ state: "loading" });
+		const timer = setTimeout(() => {
+			const a = form.store.state.values.address;
+			const addressLabel = [
+				a.line1,
+				a.line2,
+				`${a.postcode} ${a.city}`.trim(),
+				a.state,
+			]
+				.filter((part) => part && part.trim().length > 0)
+				.join(", ");
+			quoteLalamove({
+				retailerId,
+				latitude: latNum,
+				longitude: lngNum,
+				address: addressLabel,
+				fulfilmentDate: watchedDate
+					? mytMidnightFromYmd(watchedDate)
+					: undefined,
+			})
+				.then((result) => {
+					if (liveSeq.current !== seq) return; // superseded by a newer pick
+					setLiveQuote(
+						result.status === "quoted"
+							? { state: "quoted", quoteId: result.quoteId, fee: result.fee }
+							: { state: "unavailable" },
+					);
+				})
+				.catch(() => {
+					if (liveSeq.current !== seq) return;
+					setLiveQuote({ state: "unavailable" });
+				});
+		}, 400);
+		return () => clearTimeout(timer);
+	}, [isLiveMode, open, hasCoords, latNum, lngNum, watchedDate]);
+
+	// Collapse the two sources into ONE shape for the breakdown + submit gate.
+	// Live mode maps onto the static kinds (plus "calculating") so the render
+	// below stays a single code path:
+	//  - no pin yet / provider unreachable → the store's onUnquotable policy
+	//    ("arrange" → seller-confirms-later, "block" → hard stop), exactly what
+	//    orders.create will decide server-side.
+	const quoteForDelivery:
+		| PublicDeliveryQuote
+		| { kind: "calculating" }
+		| undefined = (() => {
+		if (!rawQuote) return undefined;
+		if (rawQuote.kind !== "live") return rawQuote;
+		const fallbackKind =
+			rawQuote.onUnquotable === "block"
+				? ("blocked" as const)
+				: ("pending" as const);
+		if (!hasCoords) return { kind: fallbackKind, reason: "no_coords" };
+		switch (liveQuote.state) {
+			case "quoted":
+				return liveQuote.fee === 0
+					? { kind: "free" }
+					: { kind: "fee", fee: liveQuote.fee };
+			case "unavailable":
+				return { kind: fallbackKind, reason: "unquotable" };
+			default:
+				return { kind: "calculating" };
+		}
+	})();
+	// A hard block only once the buyer has actually entered an address — while
+	// the form is still empty the note under the breakdown does the guiding.
+	// "calculating" also holds submit so a tap can't race the quote.
+	const deliveryBlocked =
+		quoteForDelivery?.kind === "blocked" ||
+		quoteForDelivery?.kind === "calculating";
 
 	return (
 		<Dialog.Root open={open} onOpenChange={(o) => !o && onClose()}>
@@ -454,20 +588,17 @@ export function CheckoutSheet({
 								</p>
 							) : (
 								<ul className="flex flex-col gap-3">
-									{cart.items.map((item) => (
+									{cart.items.map((item, itemIndex) => (
 										<li
 											key={item.variantId}
 											className="flex items-center gap-3 rounded-xl border border-border p-3"
 										>
-											{item.imageUrl ? (
-												<img
-													src={item.imageUrl}
-													alt={item.name}
-													className="size-14 shrink-0 rounded-lg object-cover"
-												/>
-											) : (
-												<div className="size-14 shrink-0 rounded-lg bg-muted" />
-											)}
+											<AppImage
+												src={item.imageUrl}
+												alt={item.name}
+												aspect="size-14 shrink-0"
+												rounded="rounded-lg"
+											/>
 											<div className="flex flex-1 flex-col">
 												<span className="text-sm font-medium leading-tight">
 													{item.name}
@@ -492,6 +623,22 @@ export function CheckoutSheet({
 														📎 Reference photo attached
 													</span>
 												) : null}
+												{(() => {
+													// Min-quantity hint, once per product (its first
+													// non-custom line) so the fix is visible right where
+													// the buyer would tap back to add more.
+													const shortfall = shortfallByProduct.get(
+														item.productId,
+													);
+													return shortfall &&
+														firstLineForProduct.get(item.productId) ===
+															itemIndex ? (
+														<span className="mt-1 w-fit rounded-md bg-destructive/10 px-2 py-1 text-[11px] font-medium leading-snug text-destructive">
+															Minimum {shortfall.minQuantity} per order — add{" "}
+															{shortfall.minQuantity - shortfall.have} more
+														</span>
+													) : null;
+												})()}
 											</div>
 											<div className="flex items-center gap-2">
 												<span className="text-sm font-semibold">
@@ -520,9 +667,10 @@ export function CheckoutSheet({
 								<form.AppField name="name">
 									{(field) => (
 										<field.TextField
-											label="Your name (optional)"
+											label="Your name"
 											placeholder="Ali"
 											autoComplete="name"
+											required
 										/>
 									)}
 								</form.AppField>
@@ -662,19 +810,34 @@ export function CheckoutSheet({
 														{(field) => (
 															<field.DateField
 																label={
-																	deliveryMethod === "self_collect"
-																		? isDropOff
-																			? "When should we meet?"
-																			: "When will you collect?"
-																		: "When do you need it delivered?"
+																	hasCustomLine
+																		? "Requested date"
+																		: deliveryMethod === "self_collect"
+																			? isDropOff
+																				? "When should we meet?"
+																				: "When will you collect?"
+																			: "When do you need it delivered?"
 																}
 																min={minYmd}
 																max={maxYmd}
 																required
 																description={
-																	isDropOff
-																		? "Pick the date you'll meet at the drop-off point."
-																		: "Pick the date you need this order."
+																	// Custom carts: the date is the buyer's ASK — the
+																	// seller settles the final date in the design
+																	// conversation. A notice floor raised by a cart
+																	// item is explained, never silent.
+																	hasCustomLine
+																		? `Your requested date — the seller confirms the final date with you after the design is agreed.${
+																				cartNoticeDays > 0
+																					? ` Items in your cart need at least ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice.`
+																					: ""
+																			}`
+																		: cartNoticeDays >
+																				(minFulfilmentNoticeDays ?? 0)
+																			? `An item in your cart needs ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice — that's the earliest date you can pick.`
+																			: isDropOff
+																				? "Pick the date you'll meet at the drop-off point."
+																				: "Pick the date you need this order."
 																}
 															/>
 														)}
@@ -732,30 +895,112 @@ export function CheckoutSheet({
 												sortedPickups.find((p) => p._id === pickupLocationId))
 											: undefined;
 									const pickupFee = pickupFeeOf(selectedPickup);
+									// Live delivery-charge preview (see quoteForDelivery above):
+									// a resolved fee joins the total; an "arrange" order shows a
+									// pending line; free-above-threshold earns a FREE row.
+									const quote =
+										deliveryMethod === "delivery"
+											? quoteForDelivery
+											: undefined;
+									const deliveryFee = quote?.kind === "fee" ? quote.fee : 0;
+									const showBreakdown = pickupFee > 0 || deliveryFee > 0;
 									return (
 										<div className="mb-3 flex flex-col gap-1">
+											{showBreakdown ? (
+												<div className="flex items-center justify-between text-sm text-muted-foreground">
+													<span>Subtotal</span>
+													<span>{formatPrice(cart.total, cart.currency)}</span>
+												</div>
+											) : null}
 											{pickupFee > 0 ? (
-												<>
-													<div className="flex items-center justify-between text-sm text-muted-foreground">
-														<span>Subtotal</span>
-														<span>
-															{formatPrice(cart.total, cart.currency)}
-														</span>
-													</div>
-													<div className="flex items-center justify-between text-sm text-muted-foreground">
-														<span>Pickup fee — {selectedPickup?.label}</span>
-														<span>{formatPrice(pickupFee, cart.currency)}</span>
-													</div>
-												</>
+												<div className="flex items-center justify-between text-sm text-muted-foreground">
+													<span>Pickup fee — {selectedPickup?.label}</span>
+													<span>{formatPrice(pickupFee, cart.currency)}</span>
+												</div>
+											) : null}
+											{deliveryFee > 0 ? (
+												<div className="flex items-center justify-between text-sm text-muted-foreground">
+													<span>Delivery fee</span>
+													<span>{formatPrice(deliveryFee, cart.currency)}</span>
+												</div>
+											) : null}
+											{quote?.kind === "free" &&
+											quote.reason === "threshold" ? (
+												<div className="flex items-center justify-between text-sm font-medium text-accent">
+													<span>Delivery</span>
+													<span>FREE for this order size</span>
+												</div>
+											) : null}
+											{quote?.kind === "pending" ? (
+												<div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
+													<span>Delivery charge</span>
+													<span className="text-right">
+														Confirmed by seller after checkout
+													</span>
+												</div>
+											) : null}
+											{quote?.kind === "calculating" ? (
+												<div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
+													<span>Delivery fee</span>
+													<span className="animate-pulse">Calculating…</span>
+												</div>
 											) : null}
 											<div className="flex items-center justify-between">
 												<span className="text-sm text-muted-foreground">
 													Total
 												</span>
 												<span className="text-xl font-bold">
-													{formatPrice(cart.total + pickupFee, cart.currency)}
+													{formatPrice(
+														cart.total + pickupFee + deliveryFee,
+														cart.currency,
+													)}
+													{quote?.kind === "pending" ? (
+														<span className="text-sm font-medium text-muted-foreground">
+															{" "}
+															+ delivery
+														</span>
+													) : null}
 												</span>
 											</div>
+											{quote?.kind === "blocked" ? (
+												<p
+													role="alert"
+													className="mt-1 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive"
+												>
+													{quote.reason === "out_of_range"
+														? `This address is outside ${storeName}'s delivery area.${
+																selfCollectAvailable
+																	? " Pickup is still available."
+																	: ""
+															}`
+														: quote.reason === "unquotable"
+															? "We couldn't calculate the delivery fee right now — re-pick your address to retry, or try again shortly."
+															: "Pick your address from the Google suggestions so we can calculate your delivery fee."}
+												</p>
+											) : null}
+											{/* Minimum order rules — the reason the button below is
+											    disabled, spelled out (never a silent failure). */}
+											{minRulesBlocked ? (
+												<div
+													role="alert"
+													className="mt-1 flex flex-col gap-1 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive"
+												>
+													{qtyShortfalls.map((s) => (
+														<p key={s.productId}>
+															Minimum {s.minQuantity} × {s.name} per order — you
+															have {s.have}
+														</p>
+													))}
+													{valueShortfall > 0 ? (
+														<p>
+															Minimum order{" "}
+															{formatPrice(minOrderValue ?? 0, cart.currency)} —
+															add {formatPrice(valueShortfall, cart.currency)}{" "}
+															more to check out
+														</p>
+													) : null}
+												</div>
+											) : null}
 										</div>
 									);
 								}}
@@ -774,7 +1019,13 @@ export function CheckoutSheet({
 											isSubmitting ||
 											cart.items.length === 0 ||
 											noCheckoutPhone ||
-											neitherAvailable
+											neitherAvailable ||
+											// Out-of-area / coord-less address on a "block" store —
+											// the breakdown explains why (server enforces it too).
+											deliveryBlocked ||
+											// Below a minimum order rule — the alert above the total
+											// lists exactly what's missing (server enforces it too).
+											minRulesBlocked
 										}
 										className="h-12 w-full text-base"
 									>

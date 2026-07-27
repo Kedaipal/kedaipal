@@ -12,6 +12,7 @@ const localeOverridesValidator = v.object({
 const messageTemplatesValidator = v.object({
 	en: v.optional(localeOverridesValidator),
 	ms: v.optional(localeOverridesValidator),
+	zh: v.optional(localeOverridesValidator),
 });
 
 // Per-retailer SHORT status labels (tracking timeline / dashboard). Six optional
@@ -29,6 +30,7 @@ const statusLabelOverridesValidator = v.object({
 const statusLabelsValidator = v.object({
 	en: v.optional(statusLabelOverridesValidator),
 	ms: v.optional(statusLabelOverridesValidator),
+	zh: v.optional(statusLabelOverridesValidator),
 });
 
 // Phase 2 custom stages. `id`/`sortOrder` optional on the wire — the server
@@ -44,9 +46,17 @@ const orderStagesValidator = v.array(
 			v.literal("shipped"),
 			v.literal("delivered"),
 		),
-		label: v.object({ en: v.string(), ms: v.optional(v.string()) }),
+		label: v.object({
+			en: v.string(),
+			ms: v.optional(v.string()),
+			zh: v.optional(v.string()),
+		}),
 		description: v.optional(
-			v.object({ en: v.optional(v.string()), ms: v.optional(v.string()) }),
+			v.object({
+				en: v.optional(v.string()),
+				ms: v.optional(v.string()),
+				zh: v.optional(v.string()),
+			}),
 		),
 		notify: v.boolean(),
 		sortOrder: v.optional(v.number()),
@@ -57,8 +67,8 @@ const orderStagesValidator = v.array(
 type OrderStageInput = {
 	id?: string;
 	anchor: StageAnchor;
-	label: { en: string; ms?: string };
-	description?: { en?: string; ms?: string };
+	label: { en: string; ms?: string; zh?: string };
+	description?: { en?: string; ms?: string; zh?: string };
 	notify: boolean;
 	sortOrder?: number;
 };
@@ -78,13 +88,16 @@ function sanitizeOrderStages(
 	const out: OrderStage[] = input.map((s, i) => {
 		const en = (s.label?.en ?? "").trim();
 		const ms = (s.label?.ms ?? "").trim();
+		const zh = (s.label?.zh ?? "").trim();
 		const descEn = (s.description?.en ?? "").trim();
 		const descMs = (s.description?.ms ?? "").trim();
+		const descZh = (s.description?.zh ?? "").trim();
 		const description =
-			descEn || descMs
+			descEn || descMs || descZh
 				? {
 						...(descEn ? { en: descEn } : {}),
 						...(descMs ? { ms: descMs } : {}),
+						...(descZh ? { zh: descZh } : {}),
 					}
 				: undefined;
 		// Reuse a client-supplied stable id; mint one for a brand-new stage. Never
@@ -93,7 +106,7 @@ function sanitizeOrderStages(
 		return {
 			id,
 			anchor: s.anchor,
-			label: { en, ...(ms ? { ms } : {}) },
+			label: { en, ...(ms ? { ms } : {}), ...(zh ? { zh } : {}) },
 			...(description ? { description } : {}),
 			notify: Boolean(s.notify),
 			sortOrder: i,
@@ -164,15 +177,23 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
 import { ConvexError } from "convex/values";
 import { reserveFoundingRank } from "./foundingMembers";
+import { DEFAULT_LOCALE, type Locale } from "./lib/locale";
 import { MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
+import { sanitizeMinOrderValue } from "./lib/minOrderRules";
 import { rateLimiter } from "./lib/rateLimiter";
 import { capsForPlan, DAY_MS, TRIAL_DAYS } from "./lib/plans";
 import {
 	type AccessState,
+	assertPlanFeature,
 	assertSubscriptionActive,
 	loadSubscription,
 	resolveAccess,
 } from "./subscriptions";
+import {
+	type DeliveryConfig,
+	sanitizeDeliveryConfig,
+} from "./lib/delivery";
+import { resolveLalamoveCredentials } from "./lib/lalamove";
 import { ordersThisMonth } from "./subscriptionUsage";
 import {
 	assertSupportedCurrency,
@@ -180,6 +201,7 @@ import {
 	type SupportedCurrency,
 } from "./lib/currency";
 import {
+	adminUserIds,
 	logAdminAction,
 	type RetailerAccess,
 	requireAdmin,
@@ -213,6 +235,119 @@ import {
 	type StatusLabels,
 } from "./lib/orderStatus";
 
+// Delivery-charge config + business address (86extzdr8). Wire validators for
+// updateSettings; the shape is validated/normalized by sanitizeDeliveryConfig
+// and sanitizeBusinessAddress in the handler. `v.null()` = clear.
+const deliveryConfigValidator = v.union(
+	v.object({
+		mode: v.literal("flat"),
+		fee: v.number(),
+		freeAbove: v.optional(v.number()),
+	}),
+	v.object({
+		mode: v.literal("radius"),
+		bands: v.array(v.object({ maxKm: v.number(), fee: v.number() })),
+		outOfRange: v.union(v.literal("block"), v.literal("arrange")),
+	}),
+	v.object({
+		mode: v.literal("lalamove"),
+		onUnquotable: v.union(v.literal("arrange"), v.literal("block")),
+	}),
+);
+
+// Lalamove booking config (86eyb5hrf). `null` clears; enabling requires a
+// pinned business address + resolvable credentials (BYO fields or platform
+// env) and is Pro-gated. Secrets never leave the server — reads expose only
+// a summary (see DeliveryBookingSummary).
+const deliveryBookingValidator = v.object({
+	enabled: v.boolean(),
+	vehicleType: v.union(v.literal("MOTORCYCLE"), v.literal("CAR")),
+	apiKey: v.optional(v.string()),
+	apiSecret: v.optional(v.string()),
+	// undefined = keep the stored preference (same posture as the key fields).
+	promptBookOnPacked: v.optional(v.boolean()),
+});
+
+type DeliveryBooking = {
+	enabled: boolean;
+	vehicleType: "MOTORCYCLE" | "CAR";
+	promptBookOnPacked?: boolean;
+	apiKey?: string;
+	apiSecret?: string;
+};
+
+/** Owner-read summary of the booking config — the API secret NEVER crosses
+ * to the client. BYO-only: `hasCredentials` is simply "is the seller's own
+ * key pair stored" (there is no platform fallback). */
+export type DeliveryBookingSummary = {
+	enabled: boolean;
+	vehicleType: "MOTORCYCLE" | "CAR";
+	hasCredentials: boolean;
+	promptBookOnPacked: boolean;
+	/** Last 4 chars of the seller's own key ("…a1b2") so the settings UI can
+	 * show which key is stored without exposing it. */
+	apiKeyHint?: string;
+};
+
+function summarizeDeliveryBooking(
+	booking: DeliveryBooking | undefined,
+): DeliveryBookingSummary | undefined {
+	if (!booking) return undefined;
+	return {
+		enabled: booking.enabled,
+		vehicleType: booking.vehicleType,
+		hasCredentials: resolveLalamoveCredentials(booking) !== null,
+		promptBookOnPacked: booking.promptBookOnPacked === true,
+		apiKeyHint: booking.apiKey ? booking.apiKey.slice(-4) : undefined,
+	};
+}
+
+const businessAddressValidator = v.object({
+	label: v.string(),
+	latitude: v.number(),
+	longitude: v.number(),
+	placeId: v.optional(v.string()),
+});
+
+type BusinessAddress = {
+	label: string;
+	latitude: number;
+	longitude: number;
+	placeId?: string;
+};
+
+const BUSINESS_ADDRESS_LABEL_MAX = 300;
+
+/** Validate the settings-captured business address (the radius-mode origin).
+ * Coordinates are required — the address exists to measure distance from, so
+ * a coord-less capture is meaningless (the UI only saves autocomplete picks). */
+function sanitizeBusinessAddress(raw: BusinessAddress): BusinessAddress {
+	const label = raw.label.trim();
+	if (label.length === 0) throw new ConvexError("Business address is empty");
+	if (label.length > BUSINESS_ADDRESS_LABEL_MAX) {
+		throw new ConvexError(
+			`Business address must be at most ${BUSINESS_ADDRESS_LABEL_MAX} characters`,
+		);
+	}
+	if (!Number.isFinite(raw.latitude) || raw.latitude < -90 || raw.latitude > 90) {
+		throw new ConvexError("latitude must be between -90 and 90");
+	}
+	if (
+		!Number.isFinite(raw.longitude) ||
+		raw.longitude < -180 ||
+		raw.longitude > 180
+	) {
+		throw new ConvexError("longitude must be between -180 and 180");
+	}
+	const placeId = raw.placeId?.trim();
+	return {
+		label,
+		latitude: raw.latitude,
+		longitude: raw.longitude,
+		placeId: placeId && placeId.length > 0 ? placeId : undefined,
+	};
+}
+
 /** Trim and bound a best-effort client IP before persisting. */
 function sanitizeAcceptanceIp(ip: string | undefined): string | undefined {
 	if (ip === undefined) return undefined;
@@ -238,8 +373,8 @@ function sanitizeStoreDescription(input: string): string | undefined {
 	return trimmed;
 }
 
-export type Locale = "en" | "ms";
-export const DEFAULT_LOCALE: Locale = "en";
+export type { Locale } from "./lib/locale";
+export { DEFAULT_LOCALE } from "./lib/locale";
 
 type LocaleOverrides = {
 	confirm?: string;
@@ -253,6 +388,7 @@ type LocaleOverrides = {
 type MessageTemplatesShape = {
 	en?: LocaleOverrides;
 	ms?: LocaleOverrides;
+	zh?: LocaleOverrides;
 };
 
 const TEMPLATE_MAX_LENGTH = 1000;
@@ -289,9 +425,11 @@ function sanitizeMessageTemplates(
 ): MessageTemplatesShape | undefined {
 	const en = sanitizeOverrides(input.en);
 	const ms = sanitizeOverrides(input.ms);
+	const zh = sanitizeOverrides(input.zh);
 	const out: MessageTemplatesShape = {};
 	if (en) out.en = en;
 	if (ms) out.ms = ms;
+	if (zh) out.zh = zh;
 	return Object.keys(out).length > 0 ? out : undefined;
 }
 
@@ -321,9 +459,11 @@ function sanitizeStatusLabelOverrides(
 function sanitizeStatusLabels(input: StatusLabels): StatusLabels | undefined {
 	const en = sanitizeStatusLabelOverrides(input.en);
 	const ms = sanitizeStatusLabelOverrides(input.ms);
+	const zh = sanitizeStatusLabelOverrides(input.zh);
 	const out: StatusLabels = {};
 	if (en) out.en = en;
 	if (ms) out.ms = ms;
+	if (zh) out.zh = zh;
 	return Object.keys(out).length > 0 ? out : undefined;
 }
 
@@ -366,9 +506,22 @@ type RetailerPublic = {
 	// had delivery). Storefront and settings invariant guarantee ≥1 working
 	// method, so the buyer always sees a way to receive their order.
 	offerDelivery?: boolean;
+	// Delivery-charge config (86extzdr8) + the radius-mode origin address.
+	// OWNER-only (settings UI): the business address is often the seller's home,
+	// so neither field is ever in the public storefront payload — buyers get the
+	// resolved fee from the `delivery.quote` query instead.
+	deliveryConfig?: DeliveryConfig;
+	businessAddress?: BusinessAddress;
+	// Lalamove booking summary (86eyb5hrf) — OWNER-only like the two fields
+	// above, and secret-free (see DeliveryBookingSummary).
+	deliveryBooking?: DeliveryBookingSummary;
 	// Minimum days' notice before a fulfilment date — drives the storefront date
 	// picker's earliest selectable day. Undefined → 0 (same-day allowed).
 	minFulfilmentNoticeDays?: number;
+	// Store-wide minimum order value (minor units, 86ey9unyx). Public-safe —
+	// buyers must see the bar to reach it (checkout blocks below it). Undefined
+	// = no minimum. See convex/lib/minOrderRules.ts.
+	minOrderValue?: number;
 	// Whether the retailer has opened the Pickup settings tab at least once.
 	// Drives checklist step-4 dismissal — set to true on first tab visit by
 	// `markPickupSetupSeen`.
@@ -423,7 +576,13 @@ async function loadRetailerForUser(
 		.withIndex("by_user", (q) => q.eq("userId", userId))
 		.first();
 	if (!row) return null;
-	return buildRetailerPublic(ctx, row);
+	// A Kedaipal admin viewing their OWN store gets the highest tier unlocked in
+	// the payload (features/active), so no Pro wall or soft-lock renders. `userId`
+	// is the caller's identity AND the owner (by_user lookup), so this is strictly
+	// admin-on-own-store. The act-as read (`getRetailerForAdmin`) does NOT pass
+	// this — white-glove must see the seller's real tier. See docs/admin-console.md.
+	const adminFullAccess = adminUserIds().includes(userId);
+	return buildRetailerPublic(ctx, row, { adminFullAccess });
 }
 
 /** Map a retailer row to the OWNER/admin dashboard payload (payment methods with
@@ -432,6 +591,7 @@ async function loadRetailerForUser(
 async function buildRetailerPublic(
 	ctx: QueryCtx,
 	row: Doc<"retailers">,
+	opts?: { adminFullAccess?: boolean },
 ): Promise<RetailerPublic> {
 	const resolvedMethods = resolvePaymentMethods(row);
 	const paymentMethods: Array<PaymentMethod & { qrImageUrl?: string }> = [];
@@ -483,7 +643,11 @@ async function buildRetailerPublic(
 		paymentMethods,
 		offerSelfCollect: row.offerSelfCollect,
 		offerDelivery: row.offerDelivery,
+		deliveryConfig: row.deliveryConfig as DeliveryConfig | undefined,
+		businessAddress: row.businessAddress,
+		deliveryBooking: summarizeDeliveryBooking(row.deliveryBooking),
 		minFulfilmentNoticeDays: row.minFulfilmentNoticeDays,
+		minOrderValue: row.minOrderValue,
 		pickupSetupSeen: row.pickupSetupSeen,
 		termsVersion: row.termsVersion,
 		privacyVersion: row.privacyVersion,
@@ -491,7 +655,9 @@ async function buildRetailerPublic(
 		onboardingGreetingSetup: row.onboardingGreetingSetup,
 		activatedAt: row.activatedAt,
 		linkSharedAt: row.linkSharedAt,
-		subscription: resolveAccess(sub),
+		subscription: resolveAccess(sub, {
+			adminFullAccess: opts?.adminFullAccess,
+		}),
 		ordersThisMonth: usedOrders,
 		isFoundingMember: row.isFoundingMember,
 		foundingMemberRank: row.foundingMemberRank,
@@ -592,6 +758,7 @@ export const getRetailerBySlug = query({
 					offerSelfCollect: active.offerSelfCollect,
 					offerDelivery: active.offerDelivery,
 					minFulfilmentNoticeDays: active.minFulfilmentNoticeDays,
+					minOrderValue: active.minOrderValue,
 					// Founding badge is public-safe; subscription state is NOT included.
 					isFoundingMember: active.isFoundingMember,
 					foundingMemberRank: active.foundingMemberRank,
@@ -901,7 +1068,9 @@ export const updateSettings = mutation({
 		waPhone: v.optional(v.string()),
 		notifyEmail: v.optional(v.string()),
 		currency: v.optional(v.string()),
-		locale: v.optional(v.union(v.literal("en"), v.literal("ms"))),
+		locale: v.optional(
+			v.union(v.literal("en"), v.literal("ms"), v.literal("zh")),
+		),
 		messageTemplates: v.optional(messageTemplatesValidator),
 		statusLabels: v.optional(statusLabelsValidator),
 		orderStages: v.optional(orderStagesValidator),
@@ -916,8 +1085,22 @@ export const updateSettings = mutation({
 		coverImageStorageId: v.optional(v.string()),
 		offerSelfCollect: v.optional(v.boolean()),
 		offerDelivery: v.optional(v.boolean()),
+		// Delivery-charge config (86extzdr8). `null` clears (back to free
+		// delivery — always allowed, downgrade never traps); undefined = no
+		// change. Setting radius mode is Pro-gated + requires a business address.
+		deliveryConfig: v.optional(v.union(deliveryConfigValidator, v.null())),
+		// Business address (radius-mode origin). `null` clears — rejected while
+		// a radius config still depends on it; undefined = no change.
+		businessAddress: v.optional(v.union(businessAddressValidator, v.null())),
+		// Lalamove booking (86eyb5hrf). `null` clears (un-gated — downgrade never
+		// traps); enabling requires business address + resolvable credentials and
+		// is Pro-gated. Undefined = no change.
+		deliveryBooking: v.optional(v.union(deliveryBookingValidator, v.null())),
 		// Minimum days' notice before a fulfilment date. Clamped to [0, 30].
 		minFulfilmentNoticeDays: v.optional(v.number()),
+		// Store-wide minimum order value (minor units). 0 clears (no minimum);
+		// undefined = no change. See convex/lib/minOrderRules.ts.
+		minOrderValue: v.optional(v.number()),
 	},
 	handler: async (ctx, args): Promise<{ ok: true }> => {
 		// Resolve the target store: an explicit `retailerId` is the admin act-as
@@ -959,7 +1142,11 @@ export const updateSettings = mutation({
 			paymentMethods: PaymentMethod[] | undefined;
 			offerSelfCollect: boolean;
 			offerDelivery: boolean;
+			deliveryConfig: DeliveryConfig | undefined;
+			businessAddress: BusinessAddress | undefined;
+			deliveryBooking: DeliveryBooking | undefined;
 			minFulfilmentNoticeDays: number;
+			minOrderValue: number | undefined;
 			updatedAt: number;
 		}> = { updatedAt: Date.now() };
 
@@ -1070,6 +1257,172 @@ export const updateSettings = mutation({
 		if (args.offerDelivery !== undefined) {
 			patch.offerDelivery = args.offerDelivery;
 		}
+		// Business address first so a same-call "address + radius config" save
+		// resolves the config's origin requirement against the incoming value.
+		if (args.businessAddress !== undefined) {
+			if (args.businessAddress === null) {
+				patch.businessAddress = undefined;
+			} else {
+				patch.businessAddress = sanitizeBusinessAddress(args.businessAddress);
+			}
+		}
+		if (args.deliveryConfig !== undefined) {
+			if (args.deliveryConfig === null) {
+				// Clearing (back to free delivery) is always allowed — a downgraded
+				// seller must be able to stop charging (chargeablePickup posture).
+				patch.deliveryConfig = undefined;
+			} else {
+				let clean: DeliveryConfig;
+				try {
+					clean = sanitizeDeliveryConfig(args.deliveryConfig);
+				} catch (err) {
+					throw new ConvexError((err as Error).message);
+				}
+				if (clean.mode === "radius") {
+					// Radius pricing measures FROM the business address — without one
+					// every order would silently ship free (the fail-open), so refuse
+					// the config instead of storing a dead one.
+					const effectiveAddress =
+						args.businessAddress !== undefined
+							? patch.businessAddress
+							: retailer.businessAddress;
+					if (!effectiveAddress) {
+						throw new ConvexError(
+							"Set your business address first — distance pricing measures from it.",
+						);
+					}
+					// Pro gate on SETTING radius pricing (flat is all-tier). Admin
+					// act-as bypasses for white-glove setup, mirroring the soft-lock.
+					if (!access.actingAsAdmin) {
+						await assertPlanFeature(ctx, retailer._id, "radiusDelivery");
+					}
+				}
+				if (clean.mode === "lalamove") {
+					// Live-quote pricing rides the booking config (credentials +
+					// vehicle + origin) — require booking enabled in the effective
+					// state so a dead pricing mode (every order fee-pending) can't
+					// be stored. Same Pro gate as enabling booking itself.
+					const effectiveBooking =
+						args.deliveryBooking !== undefined
+							? args.deliveryBooking
+							: (retailer.deliveryBooking as DeliveryBooking | undefined);
+					if (!effectiveBooking?.enabled) {
+						throw new ConvexError(
+							"Turn on Lalamove delivery booking first — live quotes use its credentials and vehicle type.",
+						);
+					}
+					if (!access.actingAsAdmin) {
+						await assertPlanFeature(ctx, retailer._id, "delivery");
+					}
+				}
+				patch.deliveryConfig = clean;
+			}
+		}
+		if (args.deliveryBooking !== undefined) {
+			if (args.deliveryBooking === null) {
+				// Clearing is always allowed — but never leave a live-quote pricing
+				// mode pointing at a booking config that no longer exists.
+				const effectiveConfig =
+					args.deliveryConfig !== undefined
+						? patch.deliveryConfig
+						: (retailer.deliveryConfig as DeliveryConfig | undefined);
+				if (effectiveConfig?.mode === "lalamove") {
+					throw new ConvexError(
+						"Live Lalamove pricing uses this booking setup — switch the delivery charge to another mode first.",
+					);
+				}
+				patch.deliveryBooking = undefined;
+			} else {
+				// Key semantics mirror logoStorageId: `undefined` = keep the stored
+				// value (so toggling enable/vehicle never silently wipes keys),
+				// empty string = clear.
+				const prev = retailer.deliveryBooking as DeliveryBooking | undefined;
+				const clean: DeliveryBooking = {
+					enabled: args.deliveryBooking.enabled,
+					vehicleType: args.deliveryBooking.vehicleType,
+					promptBookOnPacked:
+						args.deliveryBooking.promptBookOnPacked ??
+						prev?.promptBookOnPacked ??
+						undefined,
+					apiKey:
+						args.deliveryBooking.apiKey === undefined
+							? prev?.apiKey
+							: args.deliveryBooking.apiKey.trim() || undefined,
+					apiSecret:
+						args.deliveryBooking.apiSecret === undefined
+							? prev?.apiSecret
+							: args.deliveryBooking.apiSecret.trim() || undefined,
+				};
+				// A key without its secret (or vice versa) can never authenticate —
+				// refuse half a credential up front so the failure is at save time
+				// with a clear message, not at the first booking attempt.
+				if (!!clean.apiKey !== !!clean.apiSecret) {
+					throw new ConvexError(
+						"Enter both the Lalamove API key and API secret (or clear both).",
+					);
+				}
+				if (clean.enabled) {
+					const effectiveAddress =
+						args.businessAddress !== undefined
+							? patch.businessAddress
+							: retailer.businessAddress;
+					if (!effectiveAddress) {
+						throw new ConvexError(
+							"Add your business address first — it's the pickup point riders are sent to.",
+						);
+					}
+					// BYO-only: the seller's own key pair is required — Kedaipal has
+					// no Lalamove account and never books on a seller's behalf.
+					if (!resolveLalamoveCredentials(clean)) {
+						throw new ConvexError(
+							"Add your Lalamove API key and secret to enable delivery booking.",
+						);
+					}
+					// Pro gate on ENABLING (disabling/clearing stays un-gated; admin
+					// act-as bypasses for white-glove setup).
+					if (!access.actingAsAdmin) {
+						await assertPlanFeature(ctx, retailer._id, "delivery");
+					}
+				} else {
+					// Disabling booking while live-quote pricing is on would leave a
+					// dead pricing mode — same guard as clearing.
+					const effectiveConfig =
+						args.deliveryConfig !== undefined
+							? patch.deliveryConfig
+							: (retailer.deliveryConfig as DeliveryConfig | undefined);
+					if (effectiveConfig?.mode === "lalamove") {
+						throw new ConvexError(
+							"Live Lalamove pricing uses this booking setup — switch the delivery charge to another mode first.",
+						);
+					}
+				}
+				patch.deliveryBooking = clean;
+			}
+		}
+		// Refuse clearing the business address out from under a live radius
+		// config or an enabled Lalamove booking (either the existing state or
+		// one being set in this same call) — never an enabled-but-unquotable
+		// store.
+		if (args.businessAddress === null) {
+			const effectiveConfig =
+				args.deliveryConfig !== undefined
+					? patch.deliveryConfig
+					: (retailer.deliveryConfig as DeliveryConfig | undefined);
+			if (effectiveConfig?.mode === "radius") {
+				throw new ConvexError(
+					"Distance-based delivery pricing uses this address — switch the delivery charge off (or to a flat fee) first.",
+				);
+			}
+			const effectiveBooking =
+				args.deliveryBooking !== undefined
+					? patch.deliveryBooking
+					: (retailer.deliveryBooking as DeliveryBooking | undefined);
+			if (effectiveBooking?.enabled) {
+				throw new ConvexError(
+					"Lalamove booking sends riders to this address — turn off delivery booking first.",
+				);
+			}
+		}
 		if (args.minFulfilmentNoticeDays !== undefined) {
 			const n = args.minFulfilmentNoticeDays;
 			if (!Number.isInteger(n) || n < 0 || n > MAX_NOTICE_DAYS) {
@@ -1078,6 +1431,10 @@ export const updateSettings = mutation({
 				);
 			}
 			patch.minFulfilmentNoticeDays = n;
+		}
+		if (args.minOrderValue !== undefined) {
+			// 0 sanitizes to undefined → the patch removes the field (rule cleared).
+			patch.minOrderValue = sanitizeMinOrderValue(args.minOrderValue);
 		}
 
 		// Fulfilment invariant: a storefront must always keep at least one WORKING
@@ -1546,6 +1903,23 @@ export const deleteUser = internalMutation({
 			await deleteFile(category.imageStorageId);
 			await ctx.db.delete(category._id);
 		}
+
+		// Lalamove delivery ledger + transient checkout quotes.
+		const deliveryJobs = await ctx.db
+			.query("deliveryJobs")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.collect();
+		for (const job of deliveryJobs) {
+			for (const podId of job.podImageStorageIds ?? []) {
+				await ctx.storage.delete(podId);
+			}
+			await ctx.db.delete(job._id);
+		}
+		const deliveryQuotes = await ctx.db
+			.query("deliveryQuotes")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.collect();
+		for (const quote of deliveryQuotes) await ctx.db.delete(quote._id);
 
 		// Customers.
 		const customers = await ctx.db

@@ -23,6 +23,8 @@ describe("plans — feature entitlements", () => {
 			chargeablePickup: false,
 			categories: false,
 			insights: false,
+			radiusDelivery: false,
+			delivery: false,
 		});
 	});
 
@@ -33,6 +35,8 @@ describe("plans — feature entitlements", () => {
 			chargeablePickup: true,
 			categories: true,
 			insights: true,
+			radiusDelivery: true,
+			delivery: true,
 		});
 		expect(featuresForPlan("scale")).toEqual({
 			crm: true,
@@ -40,6 +44,8 @@ describe("plans — feature entitlements", () => {
 			chargeablePickup: true,
 			categories: true,
 			insights: true,
+			radiusDelivery: true,
+			delivery: true,
 		});
 	});
 

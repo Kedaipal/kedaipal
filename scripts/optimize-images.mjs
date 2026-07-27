@@ -19,12 +19,8 @@ const OUT_DIR = path.join(root, "public/img/landing");
 
 /** @type {{ src: string; name: string; widths: number[] }[]} */
 const ASSETS = [
-	{ src: "whatsapp.png", name: "whatsapp", widths: [280, 560, 840] },
-	{ src: "storefront.png", name: "storefront", widths: [280, 560, 840] },
-	{ src: "how-step-1.jpeg", name: "how-step-1", widths: [400, 800] },
-	{ src: "how-step-2.png", name: "how-step-2", widths: [400, 800] },
-	{ src: "how-step-3.png", name: "how-step-3", widths: [400, 800] },
-	{ src: "how-step-4.png", name: "how-step-4", widths: [400, 800] },
+	// Currently empty — the landing mockups are rendered CSS/HTML (no rasters).
+	// The pipeline stays for the next raster asset; see usage note above.
 ];
 
 // AVIF: visually-lossless for UI mockups at this quality; effort trades CPU for size.

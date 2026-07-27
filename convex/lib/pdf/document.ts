@@ -90,6 +90,11 @@ export type OrderReceiptData = {
 	pickupFee?: number;
 	// Label of the pickup point the fee belongs to ("Pasar Tani Seksyen 7").
 	pickupLabel?: string;
+	// Frozen delivery charge (sen) — its own totals row, same rule as pickupFee.
+	deliveryFee?: number;
+	// True while the delivery charge awaits seller confirmation — the invoice
+	// prints a "to be confirmed" note so the total never reads as final.
+	deliveryFeePending?: boolean;
 	total: number; // sen
 	currency: string;
 	fulfilmentDate?: number;
@@ -130,6 +135,8 @@ type OrderForReceipt = {
 	subtotal: number;
 	pickupFee?: number;
 	pickupSnapshot?: { label: string };
+	deliveryFee?: number;
+	deliveryFeePending?: boolean;
 	total: number;
 	currency: string;
 	fulfilmentDate?: number;
@@ -214,6 +221,11 @@ export function orderToReceiptData(args: {
 			order.pickupFee && order.pickupFee > 0
 				? order.pickupSnapshot?.label
 				: undefined,
+		deliveryFee:
+			order.deliveryFee && order.deliveryFee > 0
+				? order.deliveryFee
+				: undefined,
+		deliveryFeePending: order.deliveryFeePending === true || undefined,
 		total: order.total,
 		currency: order.currency,
 		fulfilmentDate: order.fulfilmentDate,

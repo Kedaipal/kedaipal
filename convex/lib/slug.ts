@@ -100,6 +100,30 @@ export function assertValidWaPhone(raw: string): string {
 }
 
 /**
+ * Normalize a Malaysian-typed phone number to the SAME E.164-ish digits an
+ * inbound WhatsApp message produces, so a cashier-keyed number keys identically
+ * to a scan bind (customers are keyed by `(retailerId, waPhone)`; a mismatch
+ * would fork a returning buyer into a duplicate CRM row and send to a bad
+ * number). A cashier types a LOCAL number (`012-345 6789`), but Meta delivers
+ * `60123456789` — so a bare `assertValidWaPhone` (which only strips separators)
+ * is not enough for manual entry. This bridges that gap:
+ *   - `0xx…`  → `60xx…`  (drop the trunk 0, prepend the MY country code)
+ *   - `60xx…` / `+60xx…` → kept as-is (already international)
+ *   - anything else → passed through and validated (assume it already carries a
+ *     country code; the 8–15-digit rule still rejects junk)
+ * Then `assertValidWaPhone` enforces the shared 8–15-digit shape. Malaysia-only
+ * for v1 — when we add markets, take the retailer's country and branch here.
+ */
+export function assertValidMyWaPhone(raw: string): string {
+	const digits = raw.replace(/\D/g, "");
+	let candidate: string;
+	if (digits.startsWith("60")) candidate = digits;
+	else if (digits.startsWith("0")) candidate = `60${digits.slice(1)}`;
+	else candidate = digits;
+	return assertValidWaPhone(candidate);
+}
+
+/**
  * Non-throwing canonicalization of a WhatsApp number to bare digits — the form
  * Meta delivers inbound (`from`) and the form `assertValidWaPhone` produces on
  * write. Use for MATCHING two numbers that may differ only in formatting (leading

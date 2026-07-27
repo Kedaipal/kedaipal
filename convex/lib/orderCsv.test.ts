@@ -84,6 +84,22 @@ describe("orderToCsvRow", () => {
 		);
 	});
 
+	test("delivery fee column prints the fee, and 0.00 when free — the totals identity sums", () => {
+		const withFee = orderToCsvRow({
+			...base,
+			deliveryMethod: "delivery",
+			deliveryFee: 800,
+			total: 13300,
+		});
+		expect(withFee[CSV_COLUMNS.indexOf("Delivery fee")]).toBe("8.00");
+		expect(withFee[CSV_COLUMNS.indexOf("Subtotal")]).toBe("125.00");
+		expect(withFee[CSV_COLUMNS.indexOf("Total")]).toBe("133.00");
+		// Free delivery (fee unset) → explicit 0.00 so Subtotal + fees = Total.
+		expect(orderToCsvRow(base)[CSV_COLUMNS.indexOf("Delivery fee")]).toBe(
+			"0.00",
+		);
+	});
+
 	test("fills sensible defaults for missing fields", () => {
 		const row = orderToCsvRow({
 			shortId: "ORD-9",
@@ -96,7 +112,8 @@ describe("orderToCsvRow", () => {
 			currency: "MYR",
 		});
 		expect(row[CSV_COLUMNS.indexOf("Payment")]).toBe("unpaid");
-		expect(row[CSV_COLUMNS.indexOf("Customer")]).toBe("");
+		// No name and no phone = an anonymous walk-in (86ey8vqp6) → labelled, not blank.
+		expect(row[CSV_COLUMNS.indexOf("Customer")]).toBe("Walk-in customer");
 		expect(row[CSV_COLUMNS.indexOf("Fulfilment date")]).toBe("");
 		expect(row[CSV_COLUMNS.indexOf("Total")]).toBe("0.00");
 	});

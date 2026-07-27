@@ -20,6 +20,7 @@ import {
 } from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { cartesian, type OptionAxis, variantLabel } from "../../lib/variant";
+import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 
@@ -719,10 +720,11 @@ export function VariantEditor({
 	function renderRowImage(i: number, row: VariantRow) {
 		return row.imageUrl ? (
 			<div className="relative size-10 shrink-0">
-				<img
+				<AppImage
 					src={row.imageUrl}
 					alt=""
-					className="size-10 rounded-lg object-cover"
+					aspect="size-10"
+					rounded="rounded-lg"
 				/>
 				<button
 					type="button"
@@ -1149,10 +1151,11 @@ export function VariantEditor({
 									<div className="flex items-start gap-3">
 										{customLine.imageUrl ? (
 											<div className="relative size-14 shrink-0">
-												<img
+												<AppImage
 													src={customLine.imageUrl}
 													alt=""
-													className="size-14 rounded-lg object-cover"
+													aspect="size-14"
+													rounded="rounded-lg"
 												/>
 												<button
 													type="button"
