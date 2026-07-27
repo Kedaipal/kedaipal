@@ -1,5 +1,6 @@
 import { SignIn } from "@clerk/tanstack-react-start";
 import { createFileRoute } from "@tanstack/react-router";
+import { AuthPage } from "../components/auth/auth-page";
 
 export const Route = createFileRoute("/sign-in/$")({
 	component: SignInPage,
@@ -7,7 +8,7 @@ export const Route = createFileRoute("/sign-in/$")({
 
 function SignInPage() {
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md items-center justify-center px-5 py-12">
+		<AuthPage>
 			<SignIn
 				routing="path"
 				path="/sign-in"
@@ -15,6 +16,6 @@ function SignInPage() {
 				fallbackRedirectUrl="/app"
 				forceRedirectUrl="/app"
 			/>
-		</main>
+		</AuthPage>
 	);
 }
