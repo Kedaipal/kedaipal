@@ -791,13 +791,26 @@ function DeliveryChargeSection({
 						Buyers pay the real Lalamove price for their address at checkout,
 						and you book the rider in one tap from the order — with automatic
 						shipped + live-tracking WhatsApp messages. There&apos;s{" "}
-						<b>no delivery area to set</b> — riders go anywhere Lalamove
-						serves, priced live per address, and{" "}
+						<b>no delivery area to set</b>, and{" "}
 						<b>buyers always see the price before ordering</b> (an address
 						Lalamove can&apos;t price can&apos;t check out, so you never work
 						out a delivery charge yourself). Runs entirely on{" "}
 						<b>your own Lalamove account</b>; Kedaipal never books or pays on
 						your behalf.
+					</p>
+					{/* Coverage education (27 Jul, measured live): city-zone limits are
+					    LALAMOVE's, they surprise vendors ("but Kajang is close!"), and
+					    the vehicle picker below must not read as a range picker. */}
+					<p className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+						<b>Lalamove&apos;s own coverage still applies:</b> riders serve
+						the city zone around your pickup address (e.g. Klang Valley), so
+						a buyer too far outside it sees{" "}
+						<i>&quot;this address is too far&quot;</i> and can&apos;t choose
+						delivery — roughly 40–70&nbsp;km depending on direction, and
+						never across zones (a Klang Valley store can&apos;t Lalamove to
+						Melaka). Vehicle choice doesn&apos;t change this: bike and car
+						cover the <b>same area</b> — the difference is parcel size and
+						price. Keep self-collect on as the fallback for far buyers.
 					</p>
 					{lalamoveLocked ? (
 						<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">

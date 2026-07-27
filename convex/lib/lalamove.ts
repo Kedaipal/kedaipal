@@ -255,6 +255,33 @@ export function isOutOfServiceAreaError(body: string): boolean {
 	return code === "ERR_OUT_OF_SERVICE_AREA" || code === "ERR_INVALID_MARKET";
 }
 
+/**
+ * Classify a failed quotation into the THREE buyer-facing stories, because
+ * each demands different copy and only one is retryable:
+ *
+ *  - "out_of_range"       the courier doesn't serve this drop-off — permanent
+ *                         for the address; the buyer must change it. NOTE:
+ *                         coverage is per CITY ZONE and identical across
+ *                         vehicle types (measured live 27 Jul, MY sandbox:
+ *                         MOTORCYCLE and CAR both quote Seremban ~42 km and
+ *                         both refuse Port Dickson ~77 km + Melaka ~105 km
+ *                         from a Beranang origin — so there is no "retry with
+ *                         a car" rescue, range ≠ vehicle).
+ *  - "store_unavailable"  the SELLER's side is broken (revoked/typo'd key →
+ *                         401/403) — retrying can't help and it's not the
+ *                         buyer's fault; point them at the store / pickup.
+ *  - "unavailable"        everything else (5xx, network, odd payloads) —
+ *                         genuinely transient, "try again shortly" is honest.
+ */
+export function classifyQuoteFailure(
+	httpStatus: number | undefined,
+	body: string,
+): "out_of_range" | "store_unavailable" | "unavailable" {
+	if (isOutOfServiceAreaError(body)) return "out_of_range";
+	if (httpStatus === 401 || httpStatus === 403) return "store_unavailable";
+	return "unavailable";
+}
+
 /** Parse POST /v3/quotations response (throws on shape surprises — callers
  * surface a "couldn't get a quote" state, never a garbage fee). */
 export function parseQuotationResponse(json: unknown): ParsedQuotation {

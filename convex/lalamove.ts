@@ -23,9 +23,9 @@ import {
 	buildLalamoveHeaders,
 	buildPlaceOrderBody,
 	buildQuotationBody,
+	classifyQuoteFailure,
 	type DeliveryJobStatus,
 	isActiveJobStatus,
-	isOutOfServiceAreaError,
 	LALAMOVE_BASE_URL,
 	type LalamoveCredentials,
 	lalamoveAmountToSen,
@@ -166,8 +166,12 @@ export const quoteForCheckout = action({
 		// The destination isn't in Lalamove's service area — a PERMANENT answer
 		// for this address, so the buyer must be told to change it, never to
 		// "try again shortly" (27 Jul: Alor Setar on a Selangor store read as a
-		// system glitch). See isOutOfServiceAreaError.
+		// system glitch). See classifyQuoteFailure.
 		| { status: "out_of_range" }
+		// The SELLER's Lalamove setup is broken (missing/revoked keys, no
+		// pickup pin) — not the buyer's fault and not retryable by them; the
+		// copy points at the store / pickup instead of an endless retry.
+		| { status: "store_unavailable" }
 		| { status: "unavailable" }
 	> => {
 		await rateLimiter.limit(ctx, "lalamoveQuote", {
@@ -180,9 +184,9 @@ export const quoteForCheckout = action({
 		const context = await ctx.runQuery(internal.lalamove.getQuoteContext, {
 			retailerId: args.retailerId,
 		});
-		if (!context) return { status: "unavailable" };
+		if (!context) return { status: "store_unavailable" };
 		const credentials = resolveLalamoveCredentials(context.booking);
-		if (!credentials) return { status: "unavailable" };
+		if (!credentials) return { status: "store_unavailable" };
 
 		try {
 			// Pre-order pricing: a future fulfilment day is quoted as a SCHEDULED
@@ -235,19 +239,22 @@ export const quoteForCheckout = action({
 			);
 			return { status: "quoted", quoteId, fee: parsed.priceTotal };
 		} catch (err) {
-			// Coverage refusal vs transient failure — the buyer sees very
-			// different copy, and only one of them is worth retrying.
-			if (
-				err instanceof LalamoveApiError &&
-				isOutOfServiceAreaError(err.body)
-			) {
-				return { status: "out_of_range" };
+			// Three buyer stories, three copies — and only ONE is retryable.
+			// See classifyQuoteFailure for the taxonomy + live measurements.
+			const status =
+				err instanceof LalamoveApiError
+					? classifyQuoteFailure(err.status, err.body)
+					: ("unavailable" as const);
+			if (status !== "out_of_range") {
+				// Coverage refusals are expected business outcomes, not errors;
+				// broken-store and transient cases stay in the logs.
+				console.warn("[lalamove] checkout quote failed", {
+					retailerId: args.retailerId,
+					status,
+					message: err instanceof Error ? err.message : String(err),
+				});
 			}
-			console.warn("[lalamove] checkout quote failed", {
-				retailerId: args.retailerId,
-				message: err instanceof Error ? err.message : String(err),
-			});
-			return { status: "unavailable" };
+			return { status };
 		}
 	},
 });

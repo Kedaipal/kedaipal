@@ -6,6 +6,7 @@ import {
 	buildLalamoveHeaders,
 	buildPlaceOrderBody,
 	buildQuotationBody,
+	classifyQuoteFailure,
 	extractWebhookOrderId,
 	isActiveJobStatus,
 	isOutOfServiceAreaError,
@@ -263,6 +264,26 @@ describe("status + webhook helpers", () => {
 			isOutOfServiceAreaError('{"errors":[{"id":"ERR_INSUFFICIENT_BALANCE"}]}'),
 		).toBe(false);
 		expect(isOutOfServiceAreaError("gateway timeout")).toBe(false);
+	});
+
+	test("classifyQuoteFailure: three buyer stories, only one retryable", () => {
+		const OOSA =
+			'{"errors":[{"id":"ERR_OUT_OF_SERVICE_AREA","message":"Given latitude/longitude is out of service area."}]}';
+		// Coverage refusal — permanent for the address, regardless of HTTP status.
+		expect(classifyQuoteFailure(422, OOSA)).toBe("out_of_range");
+		expect(classifyQuoteFailure(422, '{"errors":[{"id":"ERR_INVALID_MARKET"}]}')).toBe(
+			"out_of_range",
+		);
+		// Seller-side breakage — revoked/typo'd key signs an invalid request.
+		expect(classifyQuoteFailure(401, "unauthorized")).toBe("store_unavailable");
+		expect(classifyQuoteFailure(403, "forbidden")).toBe("store_unavailable");
+		// Everything else stays honestly transient.
+		expect(classifyQuoteFailure(500, "internal error")).toBe("unavailable");
+		expect(classifyQuoteFailure(429, "rate limited")).toBe("unavailable");
+		expect(
+			classifyQuoteFailure(422, '{"errors":[{"id":"ERR_INVALID_SERVICE_TYPE"}]}'),
+		).toBe("unavailable");
+		expect(classifyQuoteFailure(undefined, "socket hang up")).toBe("unavailable");
 	});
 
 	test("active vs terminal job statuses (one-active-job slot)", () => {

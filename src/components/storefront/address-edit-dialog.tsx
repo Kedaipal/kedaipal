@@ -222,6 +222,16 @@ export function AddressEditDialog({
 										doesn&apos;t cover it. Pick an address closer to the store,
 										or message the store to sort it out.
 									</p>
+								) : liveQuote.state === "store_unavailable" ? (
+									// Seller-side breakage — retrying can't help the buyer.
+									<p
+										role="alert"
+										className="mt-4 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
+									>
+										Delivery pricing isn&apos;t working for this store right now
+										— it&apos;s on the store&apos;s side, not yours. Message
+										them on WhatsApp to sort it out.
+									</p>
 								) : liveQuote.state === "unavailable" ? (
 									<p
 										role="alert"

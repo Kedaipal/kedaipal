@@ -500,6 +500,10 @@ export function CheckoutSheet({
 			// instead of the retry line that can never work.
 			case "out_of_range":
 				return { kind: "blocked", reason: "out_of_range" };
+			// Seller-side breakage (revoked keys) — retrying is pointless too,
+			// but the fix is the STORE's, so the copy points there.
+			case "store_unavailable":
+				return { kind: "blocked", reason: "store_unavailable" };
 			case "unavailable":
 				return { kind: "blocked", reason: "unquotable" };
 			default:
@@ -956,9 +960,17 @@ export function CheckoutSheet({
 																		? " Pickup is still available."
 																		: ""
 																}`
-														: quote.reason === "unquotable"
-															? "We couldn't calculate the delivery fee right now — re-pick your address to retry, or try again shortly."
-															: "Pick your address from the Google suggestions so we can calculate your delivery fee."}
+														: quote.reason === "store_unavailable"
+															? // Seller-side breakage — not the buyer's fault, not
+																// fixable by retrying. Give them the two real ways out.
+																`Delivery pricing isn't working for this store right now — it's on ${storeName}'s side, not yours. ${
+																	selfCollectAvailable
+																		? "Choose pickup, or message"
+																		: "Message"
+																} the store on WhatsApp to sort it out.`
+															: quote.reason === "unquotable"
+																? "We couldn't calculate the delivery fee right now — re-pick your address to retry, or try again shortly."
+																: "Pick your address from the Google suggestions so we can calculate your delivery fee."}
 												</p>
 											) : null}
 											{/* Minimum order rules — the reason the button below is

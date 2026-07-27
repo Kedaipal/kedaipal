@@ -22,6 +22,9 @@ export type LiveDeliveryQuoteState =
 	 * (Lalamove covers city zones, not a radius), so the buyer must change it.
 	 * Distinct from "unavailable" precisely so the copy can't say "try again". */
 	| { state: "out_of_range" }
+	/** The SELLER's delivery setup is broken (missing/revoked courier keys) —
+	 * nothing the buyer does fixes it; the copy points at the store / pickup. */
+	| { state: "store_unavailable" }
 	| { state: "unavailable" };
 
 export function useLiveDeliveryQuote({
@@ -76,9 +79,7 @@ export function useLiveDeliveryQuote({
 					setQuote(
 						result.status === "quoted"
 							? { state: "quoted", quoteId: result.quoteId, fee: result.fee }
-							: result.status === "out_of_range"
-								? { state: "out_of_range" }
-								: { state: "unavailable" },
+							: { state: result.status },
 					);
 				})
 				.catch(() => {

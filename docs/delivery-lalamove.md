@@ -59,42 +59,56 @@ on our side. The settings copy SAYS so ("no delivery area to set…") and the
 By-distance card is subtitled "Radius bands — you deliver" so the two modes'
 mental models don't blur.
 
-**But LALAMOVE has one — it's a city zone, not a radius (27 Jul).** Lalamove
-is an intra-city courier: a drop-off outside the pickup point's serviceable
-metro area is refused with HTTP 422
-`{"errors":[{"id":"ERR_OUT_OF_SERVICE_AREA"}]}`. Measured live against the MY
-sandbox from a **Beranang, Selangor** origin:
+**But LALAMOVE has one — it's a city zone, not a radius, and it is the SAME
+for every vehicle (27 Jul, measured live).** Lalamove is an intra-city
+courier: both stops must sit inside one serviceable city zone
+(`GET /v3/cities` for MY lists `KUL`, `JHB`, `MKZ`, `NTL`), or the quote is
+refused with HTTP 422 `{"errors":[{"id":"ERR_OUT_OF_SERVICE_AREA"}]}`.
+Head-to-head from a **Beranang, Selangor** origin (MY sandbox):
 
-| Destination | ~Distance | Result |
-| --- | --- | --- |
-| Seremban | 42 km | quoted RM 21.20 |
-| Melaka City | 105 km | `ERR_OUT_OF_SERVICE_AREA` |
-| Alor Setar | 400 km | `ERR_OUT_OF_SERVICE_AREA` |
+| Destination | ~Distance | MOTORCYCLE | CAR |
+| --- | --- | --- | --- |
+| Seremban | 42 km | RM 21.20 | RM 33.10 |
+| Port Dickson | 77 km | out of service area | out of service area |
+| Melaka City | 105 km | out of service area | out of service area |
+| Alor Setar | 400 km | out of service area | out of service area |
 
-So the boundary is the Klang Valley/greater-KL zone edge, somewhere between
-those first two — **there is no km number we could honestly publish**, and it
-differs per origin. That shapes the UX: we never promise a range, we let the
-live quote answer, and we make the refusal legible.
+Three conclusions that shaped the build:
 
-`parseLalamoveErrorCode` / `isOutOfServiceAreaError`
-(`convex/lib/lalamove.ts`, unit-tested against the real captured body) split
-a **coverage refusal** from a **transient failure**, because retrying the
-same address can never fix the former:
+1. **Vehicle ≠ range.** Bike and car share one coverage boundary — the city
+   config differentiates them by dimensions/load only (10 kg vs 40 kg). So
+   Zaki's proposed "bike failed → re-quote with car" fallback was
+   investigated and **deliberately not built**: it can never rescue an
+   out-of-zone address. Vehicle choice is parcel size + price, full stop.
+2. **Cross-zone is refused even between two Lalamove cities** — Melaka is a
+   served city (`MY MKZ`), yet Beranang (KUL zone) → Melaka fails. The rule
+   is "same zone", not "near a Lalamove city".
+3. **No km number can honestly be published** (the KUL edge sits somewhere
+   in the 42–77 km band from Beranang and differs by direction/origin), so
+   the UX never promises a range — the live quote answers, and the refusal
+   is made legible.
 
-- `quoteForCheckout` returns a distinct `{ status: "out_of_range" }`
-  (`ERR_OUT_OF_SERVICE_AREA` / `ERR_INVALID_MARKET`); everything else stays
-  `"unavailable"` and is logged.
-- Checkout maps it to the existing `blocked` + `out_of_range` shape but with
-  live-mode wording — "This address is too far — our delivery rider service
-  doesn't cover it. Try an address closer to {store}, or choose pickup" —
-  instead of the old "try again shortly", which read as a system glitch and
-  invited a pointless retry (Zaki, 27 Jul).
-- The address-edit dialog carries the same distinction.
-- **Expectation is set up front**, not just at the wall: the delivery-address
-  field on a live-quote store shows "Delivery is by rider, so the fee depends
-  on your address… Addresses outside the rider's coverage can't be
-  delivered". Deliberately vague on range — the seller's pickup point is
-  owner-only data (never in the public payload) and the zone isn't a radius.
+**Buyer-facing failure taxonomy** — `classifyQuoteFailure` (pure,
+`convex/lib/lalamove.ts`, unit-tested against the real captured 422 body)
+maps every quotation failure onto three stories, because only one is
+retryable:
+
+| Status | Trigger | Buyer sees | Retry helps? |
+| --- | --- | --- | --- |
+| `out_of_range` | `ERR_OUT_OF_SERVICE_AREA` / `ERR_INVALID_MARKET` | "This address is too far — our delivery rider service doesn't cover it. Try an address closer to {store}[, or choose pickup]." | Never — change address |
+| `store_unavailable` | HTTP 401/403 (revoked/typo'd seller key) **or** missing creds/pickup pin at quote time | "Delivery pricing isn't working for this store right now — it's on {store}'s side, not yours. [Choose pickup, or] message the store on WhatsApp." | Never — seller must fix |
+| `unavailable` | Everything else (5xx, network, odd payloads, our rate limit) | "We couldn't calculate the delivery fee right now — re-pick your address to retry, or try again shortly." | Yes |
+
+All three block submit (strict quote-or-refuse); `no_coords` (no pin picked)
+keeps its own "pick a suggestion" line. The address-edit dialog carries the
+same taxonomy. Coverage refusals are NOT logged as errors (expected business
+outcome); broken-store and transient failures are. **Expectation is set up
+front**, not just at the wall: the delivery-address field on a live-quote
+store shows "Delivery is by rider, so the fee depends on your address…
+Addresses outside the rider's coverage can't be delivered", and the
+**seller's settings panel** now teaches the same rule from their side (city
+zone around the pickup point, ~40–70 km, never cross-zone, vehicle doesn't
+change it, keep self-collect on as the fallback).
 
 **No fee-pending under Lalamove — strict since 27 Jul (Zaki).** A seller who
 picked Lalamove must never be handed fee homework, and the buyer must always
