@@ -31,7 +31,7 @@ steps.
 | 1 · Name it | "What are you selling?" — name + photos, description behind a link | `name`, `imageStorageIds`, `description` |
 | 2 · Choices | "Does the buyer pick anything?" — *Just one item* / *Buyer picks a choice* (preset chips: Size/Flavour/Weight/Pack, values typed as chips, **one axis max**) | `options` |
 | 3 · Price | One price field, or one per choice + "Same price for all". "+ Add your own item codes (SKU)" reveals per-choice SKU inputs — question-first, zero pixels unless used | per-variant `price` (+ `sku`) |
-| 4 · Preparing | "How do you prepare orders?" — *Made to order* (no stock inputs) / *From stock* (stock steppers) | `blockWhenOutOfStock` + `onHand` |
+| 4 · Preparation | "How do you prepare orders?" — *Made to order* (no stock inputs) / *From stock* (stock steppers) | `blockWhenOutOfStock` + `onHand` |
 | 5 · Review | Buyer-eye preview card + summary rows with per-row Edit + **optional publish settings** (Visible/Hidden toggle; category picker **only when the store has categories**) + the **"More options"** disclosure | submit (+ `hidden`, `categoryIds`, `requiresProof`, custom line) |
 
 Validation: the branching questions (2/4) gate Continue structurally
