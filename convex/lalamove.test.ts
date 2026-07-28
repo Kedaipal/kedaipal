@@ -463,9 +463,20 @@ describe("orders.create — live quote consumption", () => {
 		expect(quoteRow).toBeNull(); // consumed — one quote, one order
 	});
 
-	test("stale/mismatched/missing quote falls back to fee-pending (arrange)", async () => {
+	test("stale/mismatched/missing quote REFUSES checkout — no quote, no order (strict, 27 Jul)", async () => {
 		const t = setup();
+		// Seed stores a legacy `onUnquotable: "arrange"` row — the resolver must
+		// ignore it: a Lalamove seller is never handed fee homework, so there is
+		// NO fee-pending fallback under lalamove pricing.
 		const { retailer, productId } = await seedLalamoveStore(t);
+		const base = {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp" as const,
+			deliveryMethod: "delivery" as const,
+			deliveryAddress: address,
+		};
 
 		// Stale row (bypass saveCheckoutQuote to control quotedAt).
 		const staleId = await t.run(async (ctx) =>
@@ -479,18 +490,13 @@ describe("orders.create — live quote consumption", () => {
 				quotedAt: Date.now() - 31 * 60 * 1000,
 			}),
 		);
-		const stale = await t.mutation(api.orders.create, {
-			retailerId: retailer._id,
-			items: [{ productId, quantity: 1 }],
-			currency: "MYR",
-			channel: "whatsapp",
-			customer: { name: "Ana", waPhone: "60123456789" },
-			deliveryMethod: "delivery",
-			deliveryAddress: address,
-			deliveryQuoteId: staleId,
-		});
-		expect(stale.deliveryFee).toBeUndefined();
-		expect(stale.deliveryFeePending).toBe(true);
+		await expect(
+			t.mutation(api.orders.create, {
+				...base,
+				customer: { name: "Ana", waPhone: "60123456789" },
+				deliveryQuoteId: staleId,
+			}),
+		).rejects.toThrow(/couldn't price delivery/);
 
 		// Coordinate mismatch — a quote priced for a different pin is refused.
 		const farId = await t.mutation(internal.lalamove.saveCheckoutQuote, {
@@ -501,53 +507,106 @@ describe("orders.create — live quote consumption", () => {
 			latitude: address.latitude + 0.05,
 			longitude: address.longitude,
 		});
-		const far = await t.mutation(api.orders.create, {
-			retailerId: retailer._id,
-			items: [{ productId, quantity: 1 }],
-			currency: "MYR",
-			channel: "whatsapp",
-			customer: { name: "Ben", waPhone: "60123456780" },
-			deliveryMethod: "delivery",
-			deliveryAddress: address,
-			deliveryQuoteId: farId,
-		});
-		expect(far.deliveryFeePending).toBe(true);
-
-		// No quote at all.
-		const none = await t.mutation(api.orders.create, {
-			retailerId: retailer._id,
-			items: [{ productId, quantity: 1 }],
-			currency: "MYR",
-			channel: "whatsapp",
-			customer: { name: "Cah", waPhone: "60123456781" },
-			deliveryMethod: "delivery",
-			deliveryAddress: address,
-		});
-		expect(none.deliveryFeePending).toBe(true);
-	});
-
-	test("onUnquotable=block refuses checkout without a live quote", async () => {
-		const t = setup();
-		const { retailer, productId } = await seedLalamoveStore(t);
-		await t.run(async (ctx) => {
-			await ctx.db.patch(retailer._id, {
-				deliveryConfig: {
-					mode: "lalamove" as const,
-					onUnquotable: "block" as const,
-				},
-			});
-		});
 		await expect(
 			t.mutation(api.orders.create, {
-				retailerId: retailer._id,
-				items: [{ productId, quantity: 1 }],
-				currency: "MYR",
-				channel: "whatsapp",
-				customer: { name: "Dee", waPhone: "60123456782" },
-				deliveryMethod: "delivery",
-				deliveryAddress: address,
+				...base,
+				customer: { name: "Ben", waPhone: "60123456780" },
+				deliveryQuoteId: farId,
 			}),
 		).rejects.toThrow(/couldn't price delivery/);
+
+		// No quote at all.
+		await expect(
+			t.mutation(api.orders.create, {
+				...base,
+				customer: { name: "Cah", waPhone: "60123456781" },
+			}),
+		).rejects.toThrow(/couldn't price delivery/);
+
+		// No map pin at all → the pick-a-suggestion message.
+		await expect(
+			t.mutation(api.orders.create, {
+				...base,
+				customer: { name: "Dee", waPhone: "60123456782" },
+				deliveryAddress: {
+					...address,
+					latitude: undefined,
+					longitude: undefined,
+				},
+			}),
+		).rejects.toThrow(/Pick your address/);
+
+		// Nothing landed — the fee-pending back door is closed for lalamove.
+		const landed = await t.run(async (ctx) =>
+			(await ctx.db.query("orders").collect()).length,
+		);
+		expect(landed).toBe(0);
+	});
+
+	test("address edit re-prices via a fresh live quote; refused without one", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedLalamoveStore(t);
+		const quoteId = await t.mutation(internal.lalamove.saveCheckoutQuote, {
+			retailerId: retailer._id,
+			quotationId: "quot-1",
+			fee: 1350,
+			vehicleType: "MOTORCYCLE",
+			latitude: address.latitude,
+			longitude: address.longitude,
+		});
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Aisha", waPhone: "60123456789" },
+			deliveryMethod: "delivery",
+			deliveryAddress: address,
+			deliveryQuoteId: quoteId,
+		});
+		const token = await t.run(async (ctx) => {
+			const orders = await ctx.db.query("orders").collect();
+			return orders.find((o) => o.shortId === created.shortId)?.trackingToken;
+		});
+		const newAddress = {
+			...address,
+			line1: "8 Jln Kenanga 1",
+			latitude: address.latitude + 0.01,
+		};
+
+		// Without a fresh quote for the new pin → refused; old fee stands.
+		await expect(
+			t.mutation(api.orders.updateDeliveryAddress, {
+				token: token!,
+				deliveryAddress: newAddress,
+			}),
+		).rejects.toThrow(/couldn't price delivery/);
+
+		// With one → the fee follows the address at the REAL rider price.
+		const requoteId = await t.mutation(internal.lalamove.saveCheckoutQuote, {
+			retailerId: retailer._id,
+			quotationId: "quot-2",
+			fee: 2200,
+			vehicleType: "MOTORCYCLE",
+			latitude: newAddress.latitude,
+			longitude: newAddress.longitude,
+		});
+		await t.mutation(api.orders.updateDeliveryAddress, {
+			token: token!,
+			deliveryAddress: newAddress,
+			deliveryQuoteId: requoteId,
+		});
+		const after = await t.run(async (ctx) => {
+			const orders = await ctx.db.query("orders").collect();
+			return orders.find((o) => o.shortId === created.shortId);
+		});
+		expect(after?.deliveryFee).toBe(2200);
+		expect(after?.total).toBe(2500 + 2200);
+		expect(after?.deliverySnapshot).toMatchObject({
+			mode: "lalamove",
+			quotationId: "quot-2",
+		});
+		expect(after?.deliveryFeePending).toBeUndefined();
 	});
 });
 

@@ -218,6 +218,70 @@ export type ParsedQuotation = {
 	expiresAt?: string;
 };
 
+/**
+ * Pull Lalamove's error code out of a failed response body. Their errors come
+ * back as `{"errors":[{"id":"ERR_…","message":"…"}]}` — the `id` is the stable
+ * machine-readable part (the message wording is not). Returns undefined for
+ * unparseable/absent bodies (network blips, HTML error pages).
+ */
+export function parseLalamoveErrorCode(body: string): string | undefined {
+	try {
+		const parsed = JSON.parse(body) as {
+			errors?: Array<{ id?: unknown }>;
+		};
+		const id = parsed?.errors?.[0]?.id;
+		return typeof id === "string" && id ? id : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Whether a quotation failure means "this destination simply isn't covered"
+ * rather than "something went wrong, try again".
+ *
+ * Lalamove is an INTRA-CITY courier: coverage is a serviceable city/metro
+ * zone, not a radius from the seller. A drop-off in another city zone is
+ * refused with `ERR_OUT_OF_SERVICE_AREA` (confirmed live 27 Jul 2026 against
+ * the MY sandbox: Beranang → Seremban ~42 km quoted fine, → Melaka ~105 km and
+ * → Alor Setar ~400 km both returned this code). `ERR_INVALID_MARKET` is the
+ * same class of "we don't serve that" for a different-country pin.
+ *
+ * This distinction is load-bearing for buyer copy: a coverage refusal must NOT
+ * read "try again shortly" — retrying the same address never works.
+ */
+export function isOutOfServiceAreaError(body: string): boolean {
+	const code = parseLalamoveErrorCode(body);
+	return code === "ERR_OUT_OF_SERVICE_AREA" || code === "ERR_INVALID_MARKET";
+}
+
+/**
+ * Classify a failed quotation into the THREE buyer-facing stories, because
+ * each demands different copy and only one is retryable:
+ *
+ *  - "out_of_range"       the courier doesn't serve this drop-off — permanent
+ *                         for the address; the buyer must change it. NOTE:
+ *                         coverage is per CITY ZONE and identical across
+ *                         vehicle types (measured live 27 Jul, MY sandbox:
+ *                         MOTORCYCLE and CAR both quote Seremban ~42 km and
+ *                         both refuse Port Dickson ~77 km + Melaka ~105 km
+ *                         from a Beranang origin — so there is no "retry with
+ *                         a car" rescue, range ≠ vehicle).
+ *  - "store_unavailable"  the SELLER's side is broken (revoked/typo'd key →
+ *                         401/403) — retrying can't help and it's not the
+ *                         buyer's fault; point them at the store / pickup.
+ *  - "unavailable"        everything else (5xx, network, odd payloads) —
+ *                         genuinely transient, "try again shortly" is honest.
+ */
+export function classifyQuoteFailure(
+	httpStatus: number | undefined,
+	body: string,
+): "out_of_range" | "store_unavailable" | "unavailable" {
+	if (isOutOfServiceAreaError(body)) return "out_of_range";
+	if (httpStatus === 401 || httpStatus === 403) return "store_unavailable";
+	return "unavailable";
+}
+
 /** Parse POST /v3/quotations response (throws on shape surprises — callers
  * surface a "couldn't get a quote" state, never a garbage fee). */
 export function parseQuotationResponse(json: unknown): ParsedQuotation {
@@ -439,6 +503,42 @@ export const TERMINAL_JOB_STATUSES: ReadonlySet<DeliveryJobStatus> = new Set([
  * slot; anything terminal frees it for a rebook. */
 export function isActiveJobStatus(status: DeliveryJobStatus): boolean {
 	return !TERMINAL_JOB_STATUSES.has(status);
+}
+
+/**
+ * Whether the rider (via webhook) currently drives the order's canonical
+ * status — an ACTIVE job whose webhook has demonstrably delivered events
+ * (`lastEventAt` is only ever written by the webhook handler, and the
+ * ASSIGNING_DRIVER event lands seconds after booking when the seller has
+ * registered the URL). While true, picked-up → shipped and completed →
+ * delivered arrive on their own, so the seller's manual advance into those
+ * statuses sits behind a disabled-with-reason gate: a manual "shipped" would
+ * message the buyer early and WITHOUT the live-tracking link.
+ *
+ * Sellers who never registered the webhook (`lastEventAt` forever unset) are
+ * deliberately excluded — their documented degraded path IS advancing by hand.
+ */
+export function riderDrivesOrderStatus(job: {
+	status: DeliveryJobStatus;
+	lastEventAt?: number;
+}): boolean {
+	return isActiveJobStatus(job.status) && job.lastEventAt !== undefined;
+}
+
+/**
+ * Whether an advance into `targetAnchor` is one the rider's webhook manages
+ * (shipped at pickup, delivered at drop-off). Same-anchor moves (a seller's
+ * custom stages within the shipped band) don't change canonical status and
+ * stay free.
+ */
+export function isRiderManagedTransition(
+	targetAnchor: "confirmed" | "packed" | "shipped" | "delivered",
+	orderStatus: string,
+): boolean {
+	return (
+		(targetAnchor === "shipped" || targetAnchor === "delivered") &&
+		targetAnchor !== orderStatus
+	);
 }
 
 /** Provider order id out of a webhook event's `data` — undefined for
