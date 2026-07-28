@@ -6,12 +6,12 @@ import { PageHeader } from "../components/dashboard/page-header";
 import {
 	ProductForm,
 	type ProductFormDraft,
-	type ProductFormInitialValues,
 	type ProductFormSubmitValues,
 } from "../components/forms/product-form";
 import {
 	formDraftToWizardState,
 	ProductWizard,
+	type wizardHandoff,
 	type WizardState,
 } from "../components/forms/product-wizard";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
@@ -19,13 +19,11 @@ import { hasFeature } from "../lib/subscription";
 
 /**
  * New product = the 5-step wizard by default; `?form=full` renders the same
- * restructured form the edit page uses. The switch is two-directional and
- * value-preserving: wizard → full carries the whole draft
- * (`wizardToFormInitialValues` / step-1 basics), full → wizard reverse-derives
- * a WizardState from the form's as-typed draft (`formDraftToWizardState`) —
- * anything the wizard can't represent is confirmed before it's dropped.
- * Drafts ride in memory only; a refresh starts the chosen view blank.
- * See docs/product-setup-wizard.md.
+ * restructured form the edit page uses. Both views edit the SAME
+ * `VariantEditorState` substrate, so switching is lossless in both directions
+ * (`wizardHandoff` / `formDraftToWizardState`) — no capability gap, nothing
+ * to confirm. Drafts ride in memory only; a refresh starts the chosen view
+ * blank. See docs/product-setup-wizard.md.
  */
 export const Route = createFileRoute("/app/products/new")({
 	validateSearch: (search: Record<string, unknown>): { form?: "full" } =>
@@ -39,9 +37,10 @@ function NewProductRoute() {
 	const retailer = useDashboardRetailer();
 	const create = useMutation(api.products.create);
 	const setProductCategories = useMutation(api.categories.setProductCategories);
-	// Wizard → full form: the draft the wizard built (full handoff or step-1
-	// basics), seeding the form's initial values.
-	const [wizardDraft, setWizardDraft] = useState<ProductFormInitialValues>();
+	// Wizard → full form: the wizard's whole draft — basics as initialValues
+	// plus the SHARED editor substrate passed through as-is (lossless).
+	const [wizardDraft, setWizardDraft] =
+		useState<ReturnType<typeof wizardHandoff>>();
 	// Full form → wizard: the restored WizardState derived from the form draft.
 	const [wizardReturn, setWizardReturn] = useState<WizardState>();
 	// Live getter for the full form's as-typed state (assigned by ProductForm
@@ -79,28 +78,16 @@ function NewProductRoute() {
 		navigate({ to: "/app/products" });
 	}
 
-	function openFullForm(initialValues: ProductFormInitialValues) {
-		setWizardDraft(initialValues);
+	function openFullForm(handoff: ReturnType<typeof wizardHandoff>) {
+		setWizardDraft(handoff);
 		navigate({ to: "/app/products/new", search: { form: "full" }, replace: true });
 	}
 
 	function switchBackToWizard() {
+		// Both views edit the same VariantEditorState, so the trip is lossless —
+		// no confirm needed, nothing can be dropped.
 		const draft = formDraftRef.current?.();
-		if (!draft) {
-			navigate({ to: "/app/products/new", search: {}, replace: true });
-			return;
-		}
-		const { state, lost } = formDraftToWizardState(draft);
-		// Only interrupt when something genuinely can't make the trip.
-		if (
-			lost.length > 0 &&
-			!window.confirm(
-				`The guided setup can't carry over:\n\n• ${lost.join("\n• ")}\n\nEverything else keeps its value. Switch anyway?`,
-			)
-		) {
-			return;
-		}
-		setWizardReturn(state);
+		if (draft) setWizardReturn(formDraftToWizardState(draft));
 		navigate({ to: "/app/products/new", search: {}, replace: true });
 	}
 
@@ -138,9 +125,7 @@ function NewProductRoute() {
 			</div>
 			<h2 className="text-xl font-bold lg:hidden">New product</h2>
 
-			{/* Way back to the guided setup — value-preserving (the form's draft is
-			    reverse-derived into wizard answers; a confirm only appears when
-			    something can't make the trip). */}
+			{/* Way back to the guided setup — lossless (same draft substrate). */}
 			<button
 				type="button"
 				onClick={switchBackToWizard}
@@ -152,7 +137,8 @@ function NewProductRoute() {
 			<ProductForm
 				retailerId={retailer._id}
 				categoriesLocked={categoriesLocked}
-				initialValues={wizardDraft}
+				initialValues={wizardDraft?.initialValues}
+				initialEditor={wizardDraft?.initialEditor}
 				mode="create"
 				draftRef={formDraftRef}
 				currency={retailer.currency}

@@ -105,7 +105,7 @@ function IssueText({ message }: { message: string | undefined }) {
 	);
 }
 
-function emptyRow(optionValues: string[]): VariantRow {
+export function emptyRow(optionValues: string[]): VariantRow {
 	return {
 		optionValues,
 		sku: "",
@@ -125,7 +125,10 @@ function emptyRow(optionValues: string[]): VariantRow {
  * sku/image/active the seller already typed for a surviving combination (keyed
  * by label). Zero axes → a single default row (optionValues: []).
  */
-function rebuildRows(options: OptionAxis[], prev: VariantRow[]): VariantRow[] {
+export function rebuildRows(
+	options: OptionAxis[],
+	prev: VariantRow[],
+): VariantRow[] {
 	const byLabel = new Map(prev.map((r) => [variantLabel(r.optionValues), r]));
 	// When the seller adds their first axis, carry the price/stock they may have
 	// already typed in single-variant mode into every generated row. SKU + image
@@ -272,10 +275,10 @@ export function StockInput({
  * Fulfilment mode as a positive two-way choice instead of a "stop orders when
  * out of stock" checkbox (which read as a confusing double-negative). The
  * underlying field is still `blockWhenOutOfStock`: true = track stock, false =
- * made-to-order. Compact — used for the per-choice override rows; the
- * product-level question is `PrepareQuestion` below.
+ * made-to-order. Compact — used for the per-choice override rows here and in
+ * the wizard's step 4; the product-level question is `PrepareQuestion` below.
  */
-function FulfilmentToggle({
+export function FulfilmentToggle({
 	value,
 	onChange,
 }: {

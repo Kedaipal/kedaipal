@@ -148,6 +148,13 @@ interface ProductFormProps {
 	/** Getter for the live draft — assigned every render so the create route
 	 * can read the as-typed state when switching back to the wizard. */
 	draftRef?: MutableRefObject<(() => ProductFormDraft) | null>;
+	/**
+	 * Direct editor-state seed — the wizard handoff passes its OWN editor
+	 * substrate here (both views edit the same VariantEditorState), so the
+	 * switch is lossless string-for-string. Overrides the `initialValues`
+	 * variants/options derivation when present.
+	 */
+	initialEditor?: VariantEditorState;
 }
 
 /** Seed the editor state from existing variants, or a single empty default row. */
@@ -525,6 +532,7 @@ export function ProductForm({
 	stickyAction,
 	mode,
 	draftRef,
+	initialEditor,
 }: ProductFormProps) {
 	// Editing an existing product vs creating a new one — the edit page leads
 	// with the summary strip; create keeps the readiness checklist. The wizard
@@ -553,8 +561,8 @@ export function ProductForm({
 	const [categoryIds, setCategoryIds] = useState<Id<"categories">[]>(
 		initialValues?.categoryIds ?? [],
 	);
-	const [editor, setEditorState] = useState<VariantEditorState>(() =>
-		initialEditorState(initialValues),
+	const [editor, setEditorState] = useState<VariantEditorState>(
+		() => initialEditor ?? initialEditorState(initialValues),
 	);
 	// Submit-time validation issues, addressed to the exact editor input (see
 	// VariantIssue). Any edit clears them — they re-validate on the next save.

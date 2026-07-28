@@ -8,7 +8,7 @@ import {
 	Store,
 	X,
 } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { MAX_NOTICE_DAYS } from "../../../convex/lib/fulfilmentDate";
@@ -19,26 +19,42 @@ import {
 	parsePriceInput,
 } from "../../lib/format";
 import { cn } from "../../lib/utils";
+import { cartesian, type OptionAxis, variantLabel } from "../../lib/variant";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { CategoryPicker } from "./category-picker";
-import type {
-	ProductFormDraft,
-	ProductFormInitialValues,
-	ProductFormSubmitValues,
+import {
+	buildSubmitVariants,
+	collectOptionIssues,
+	type ProductFormDraft,
+	type ProductFormInitialValues,
+	type ProductFormSubmitValues,
 } from "./product-form";
 import { type ProductImage, ProductImagesField } from "./product-images-field";
-import { AXIS_PRESETS, PriceInput, StockInput } from "./variant-editor";
+import {
+	AXIS_PRESETS,
+	type CustomLineDraft,
+	emptyRow,
+	FulfilmentToggle,
+	PriceInput,
+	rebuildRows,
+	StockInput,
+	type VariantEditorState,
+	type VariantRow,
+} from "./variant-editor";
+import { VariantImageCell } from "./variant-image-cell";
 
-// Mirrors the server cap in convex/lib/variant.ts (one axis in the wizard, so
-// values are capped directly).
-const MAX_WIZARD_VALUES = 50;
+// Mirrors the server caps in convex/lib/variant.ts.
+const MAX_AXES = 2;
+const MAX_VARIANTS = 50;
 
 /**
- * Draft state for the 5-step create wizard. Answers to plain-language
- * questions; `buildWizardSubmitValues` derives the real product config from
- * them — the wizard never exposes variants/SKUs/axes vocabulary.
- * See docs/product-setup-wizard.md.
+ * Draft state for the 5-step create wizard. The selling configuration lives
+ * in `editor` — the SAME `VariantEditorState` the full form edits — so the
+ * wizard and the full form are two skins over one draft substrate: switching
+ * between them is lossless by construction, and every capability (second
+ * choice, per-choice photos/SKUs/on-off, mixed fulfilment, custom line with
+ * photo) exists in both. See docs/product-setup-wizard.md.
  */
 export type WizardState = {
 	name: string;
@@ -46,38 +62,21 @@ export type WizardState = {
 	images: ProductImage[];
 	/** Step 2 — "Does the buyer pick anything?" null until answered. */
 	hasChoices: boolean | null;
-	/** The single option axis the wizard supports (e.g. "Size"). */
-	axisName: string;
-	axisValues: string[];
-	/** Major-unit price strings, keyed by choice value; SINGLE_KEY for one-item. */
-	prices: Record<string, string>;
-	/** Step 4 — "How do you prepare orders?" null until answered. */
-	madeToOrder: boolean | null;
-	/** Integer stock strings, keyed like `prices`. Only read when From stock. */
-	stocks: Record<string, string>;
-	/** Optional seller item codes, keyed like `prices`. Revealed on the price
-	 * step behind "+ Add your own item codes (SKU)". */
-	skus: Record<string, string>;
+	/** The shared draft substrate (options + rows + custom line). */
+	editor: VariantEditorState;
+	/** Step 4 — set once "How do you prepare orders?" has been engaged with
+	 * (the actual flags live per-row on `editor.rows`). */
+	fulfilmentAnswered: boolean;
 	/** Review step — hidden = off the public storefront, still counter-sellable
 	 * (docs/hidden-products.md). Default visible. */
 	hidden: boolean;
 	/** Review step — category membership (only offered when the store has
 	 * categories). Same submit path as the full form. */
 	categoryIds: Id<"categories">[];
-	/** Review "More options" — mockup approval on every choice. Only offered
-	 * (and only applied) for made-to-order products. */
-	requiresProof: boolean;
-	/** Review "More options" — the optional custom / made-to-order line
-	 * (docs/custom-option.md). Null = not offered. */
-	customLine: { label: string; price: string; prompt: string } | null;
-	/** Review "More options" — order rules, as typed (blank = no rule).
-	 * See convex/lib/minOrderRules.ts + docs/fulfilment-date.md. */
+	/** Review "More options" — order rules, as typed (blank = no rule). */
 	minQuantity: string;
 	minNoticeDays: string;
 };
-
-/** Key into prices/stocks for the one-item (no choices) branch. */
-const SINGLE_KEY = "";
 
 export function emptyWizardState(): WizardState {
 	return {
@@ -85,16 +84,10 @@ export function emptyWizardState(): WizardState {
 		description: "",
 		images: [],
 		hasChoices: null,
-		axisName: "",
-		axisValues: [],
-		prices: {},
-		madeToOrder: null,
-		stocks: {},
-		skus: {},
+		editor: { options: [], rows: [emptyRow([])], customLine: null },
+		fulfilmentAnswered: false,
 		hidden: false,
 		categoryIds: [],
-		requiresProof: false,
-		customLine: null,
 		minQuantity: "",
 		minNoticeDays: "",
 	};
@@ -102,82 +95,93 @@ export function emptyWizardState(): WizardState {
 
 export type WizardIssue = { field: string; message: string };
 
-/** The keys a state's price/stock maps are read at (choice values, or the
- * single implicit item). */
-function priceKeys(state: WizardState): string[] {
-	return state.hasChoices ? state.axisValues : [SINGLE_KEY];
+/** Stable key for a row's price/stock/sku inputs: its variant label ("" for
+ * the single implicit item). */
+function rowKey(row: VariantRow): string {
+	return variantLabel(row.optionValues);
 }
 
 /**
- * Per-step validation, pure for tests. Steps 2/4 are additionally gated
- * structurally (Continue disabled until the question is answered).
+ * Per-step validation, pure for tests. Delegates the real rules to the SAME
+ * validators the full form uses (`collectOptionIssues`,
+ * `buildSubmitVariants`) and re-addresses them to wizard fields, so the two
+ * views can never disagree about what's valid.
  */
 export function wizardStepIssues(
 	state: WizardState,
 	step: number,
 ): WizardIssue[] {
 	const issues: WizardIssue[] = [];
+	const { options, rows, customLine } = state.editor;
 	if (step === 1) {
 		if (state.name.trim().length === 0) {
 			issues.push({ field: "name", message: "Give your product a name." });
 		}
 	}
-	if (step === 2 && state.hasChoices) {
-		if (state.axisName.trim().length === 0) {
-			issues.push({
-				field: "axisName",
-				message: "What do buyers choose by? Tap a suggestion or type your own.",
-			});
-		}
-		if (state.axisValues.length === 0) {
-			issues.push({
-				field: "axisValues",
-				message: "Add at least one choice (e.g. Small).",
-			});
-		}
-		if (state.axisValues.length > MAX_WIZARD_VALUES) {
-			issues.push({
-				field: "axisValues",
-				message: `Keep it to ${MAX_WIZARD_VALUES} choices or fewer.`,
-			});
-		}
-	}
-	if (step === 3) {
-		for (const key of priceKeys(state)) {
-			const raw = (state.prices[key] ?? "").trim();
-			if (parsePriceInput(raw) === null) {
+	if (step === 2) {
+		if (state.hasChoices === null) {
+			issues.push({ field: "hasChoices", message: "Pick one to continue." });
+		} else if (state.hasChoices) {
+			for (const issue of collectOptionIssues(options)) {
 				issues.push({
-					field: `price:${key}`,
-					message:
-						raw.length === 0
-							? "Enter a price (e.g. 12 or 12.50)."
-							: "Not a valid price — numbers only (e.g. 12 or 12.50).",
+					field:
+						issue.index === 0
+							? issue.field === "name"
+								? "axisName"
+								: "axisValues"
+							: issue.field === "name"
+								? "axis2Name"
+								: "axis2Values",
+					message: issue.message,
+				});
+			}
+			if (cartesian(options).length > MAX_VARIANTS) {
+				issues.push({
+					field: "axisValues",
+					message: `That's ${cartesian(options).length} combinations — keep it to ${MAX_VARIANTS} or fewer.`,
 				});
 			}
 		}
 	}
-	if (step === 4 && state.madeToOrder === false) {
-		for (const key of priceKeys(state)) {
-			if (!/^\d+$/.test((state.stocks[key] ?? "").trim())) {
-				issues.push({
-					field: `stock:${key}`,
-					message: "Enter how many you have (0 is fine).",
-				});
+	if (step === 3) {
+		const built = buildSubmitVariants(rows, null);
+		if ("issues" in built) {
+			for (const issue of built.issues) {
+				if (issue.where === "row" && issue.field === "price") {
+					issues.push({
+						field: `price:${rowKey(rows[issue.index])}`,
+						message: issue.message,
+					});
+				}
+			}
+		}
+	}
+	if (step === 4) {
+		if (!state.fulfilmentAnswered) {
+			issues.push({ field: "fulfilment", message: "Pick one to continue." });
+		} else {
+			const built = buildSubmitVariants(rows, null);
+			if ("issues" in built) {
+				for (const issue of built.issues) {
+					if (issue.where === "row" && issue.field === "stock") {
+						issues.push({
+							field: `stock:${rowKey(rows[issue.index])}`,
+							message: issue.message,
+						});
+					}
+				}
 			}
 		}
 	}
 	if (step === 5) {
-		if (state.customLine) {
-			const raw = state.customLine.price.trim();
-			if (raw.length > 0 && parsePriceInput(raw) === null) {
-				issues.push({
-					field: "customPrice",
-					message:
-						"Not a valid price — enter a number, or leave blank for price on quote.",
-				});
+		const built = buildSubmitVariants(rows, customLine);
+		if ("issues" in built) {
+			for (const issue of built.issues) {
+				if (issue.where === "custom") {
+					issues.push({ field: "customPrice", message: issue.message });
+				}
 			}
 		}
-		// Order rules — blank is always fine; a typed value must be in range.
 		const qty = state.minQuantity.trim();
 		if (qty.length > 0) {
 			const n = Number(qty);
@@ -203,51 +207,14 @@ export function wizardStepIssues(
 }
 
 /**
- * Map the answered wizard onto the same submit payload the full form produces —
- * the create mutation path is identical, no wizard-specific backend. Assumes
- * every step validated (call `wizardStepIssues` first).
+ * Map the answered wizard onto the same submit payload the full form
+ * produces — via the SAME `buildSubmitVariants`. Assumes every step
+ * validated (call `wizardStepIssues` first).
  */
 export function buildWizardSubmitValues(
 	state: WizardState,
 ): ProductFormSubmitValues {
-	const trackStock = state.madeToOrder === false;
-	// Mockup approval is only offered (and only applied) for made-to-order
-	// products — flipping back to From stock at review quietly drops it.
-	const requiresProof = state.madeToOrder === true && state.requiresProof;
-	const variants: ProductFormSubmitValues["variants"] = priceKeys(state).map(
-		(key) => {
-			const price = parsePriceInput((state.prices[key] ?? "").trim());
-			const stockRaw = (state.stocks[key] ?? "").trim();
-			return {
-				optionValues: key === SINGLE_KEY ? [] : [key],
-				sku: (state.skus[key] ?? "").trim() || undefined,
-				price: price !== null ? Math.round(price * 100) : 0,
-				onHand: /^\d+$/.test(stockRaw) ? Number.parseInt(stockRaw, 10) : 0,
-				active: true,
-				blockWhenOutOfStock: trackStock,
-				requiresProof,
-				imageStorageIds: [],
-			};
-		},
-	);
-	// The custom line rides as a flagged entry, mirroring the full form's
-	// buildSubmitVariants (blank price = "Price on quote").
-	if (state.customLine) {
-		const raw = state.customLine.price.trim();
-		const parsed = raw.length > 0 ? parsePriceInput(raw) : null;
-		variants.push({
-			optionValues: [],
-			price: parsed !== null ? Math.round(parsed * 100) : 0,
-			onHand: 0,
-			active: true,
-			blockWhenOutOfStock: false,
-			requiresProof: true,
-			imageStorageIds: [],
-			isCustom: true,
-			customLabel: state.customLine.label.trim() || undefined,
-			customPrompt: state.customLine.prompt.trim() || undefined,
-		});
-	}
+	const built = buildSubmitVariants(state.editor.rows, state.editor.customLine);
 	const minQty = Number(state.minQuantity.trim());
 	const notice = Number(state.minNoticeDays.trim());
 	return {
@@ -267,127 +234,62 @@ export function buildWizardSubmitValues(
 		categoryIds: state.categoryIds,
 		imageStorageIds: state.images.map((i) => i.id),
 		options: state.hasChoices
-			? [{ name: state.axisName.trim(), values: state.axisValues }]
+			? state.editor.options.map((a) => ({
+					name: a.name.trim(),
+					values: a.values,
+				}))
 			: [],
-		variants,
+		variants: "variants" in built ? built.variants : [],
 	};
 }
 
 /**
- * Hand the wizard draft to the full form (`?form=full`) with everything the
- * seller entered — the consistency escape hatch: anything the wizard doesn't
- * surface (second axis, per-choice photos…) is one tap away WITHOUT retyping.
- * Image preview URLs ride along so the photos stay visible.
+ * Wizard → full form: the editor substrate passes through AS-IS (both views
+ * edit the same shape) plus the non-editor basics. Lossless string-for-string.
  */
-export function wizardToFormInitialValues(
-	state: WizardState,
-): ProductFormInitialValues {
-	const values = buildWizardSubmitValues(state);
-	return {
-		name: values.name,
-		description: values.description,
-		hidden: values.hidden,
-		categoryIds: values.categoryIds,
-		imageStorageIds: values.imageStorageIds,
-		imageUrls: state.images.map((i) => i.url),
-		options: values.options,
-		variants: values.variants,
-	};
-}
-
-/**
- * The reverse trip: derive a WizardState from the full form's as-typed draft,
- * so switching back to the guided setup keeps every value (strings stay raw —
- * a blank price stays blank). Whatever the wizard genuinely can't represent
- * (a second choice, per-choice photos…) is returned in `lost`, and the route
- * confirms with the seller before dropping it — never silently.
- */
-export function formDraftToWizardState(draft: ProductFormDraft): {
-	state: WizardState;
-	lost: string[];
+export function wizardHandoff(state: WizardState): {
+	initialValues: ProductFormInitialValues;
+	initialEditor: VariantEditorState;
 } {
-	const lost: string[] = [];
-	const { options, rows, customLine } = draft.editor;
-
-	const hasChoices = options.length > 0;
-	const axisName = options[0]?.name ?? "";
-	const axisValues = options[0]?.values ?? [];
-	if (options.length > 1) {
-		lost.push(
-			`the second choice (${options[1].name.trim() || "unnamed"}) and its per-combination prices`,
-		);
-	}
-
-	// Per-key maps. With one axis the row key IS the value; with two axes the
-	// combinations can't map onto the wizard's single axis (already in `lost`),
-	// so the maps stay empty and prices re-ask on step 3.
-	const prices: Record<string, string> = {};
-	const stocks: Record<string, string> = {};
-	const skus: Record<string, string> = {};
-	if (options.length <= 1) {
-		for (const row of rows) {
-			const key = hasChoices ? (row.optionValues[0] ?? "") : SINGLE_KEY;
-			prices[key] = row.price;
-			stocks[key] = row.stock;
-			skus[key] = row.sku;
-		}
-	}
-
-	// Fulfilment: the wizard holds ONE answer. Mixed per-choice settings
-	// collapse to the majority — flagged, confirmed by the seller.
-	let madeToOrder: boolean | null = null;
-	if (rows.length > 0) {
-		const trackCount = rows.filter((r) => r.blockWhenOutOfStock).length;
-		const allTrack = trackCount === rows.length;
-		const allMto = trackCount === 0;
-		if (!allTrack && !allMto) {
-			lost.push(
-				"different made-to-order / from-stock settings per choice (one will apply to all)",
-			);
-		}
-		madeToOrder = allMto || (!allTrack && trackCount < rows.length - trackCount);
-	}
-
-	const proofCount = rows.filter((r) => r.requiresProof).length;
-	if (proofCount > 0 && proofCount < rows.length) {
-		lost.push("per-choice design-approval settings (one will apply to all)");
-	}
-	if (rows.some((r) => !r.active)) {
-		lost.push("deactivated choices (they'll go back on sale)");
-	}
-	if (rows.some((r) => r.imageStorageIds.length > 0)) {
-		lost.push("per-choice photos");
-	}
-	if (customLine && customLine.imageStorageIds.length > 0) {
-		lost.push("the custom option's photo");
-	}
-
+	const minQty = Number.parseInt(state.minQuantity.trim(), 10);
+	const notice = Number.parseInt(state.minNoticeDays.trim(), 10);
 	return {
-		state: {
-			name: draft.name,
-			description: draft.description,
-			images: draft.images,
-			hasChoices,
-			axisName,
-			axisValues,
-			prices,
-			madeToOrder,
-			stocks,
-			skus,
-			hidden: draft.hidden,
-			categoryIds: draft.categoryIds,
-			requiresProof: proofCount === rows.length && rows.length > 0,
-			customLine: customLine
-				? {
-						label: customLine.label,
-						price: customLine.price,
-						prompt: customLine.prompt,
-					}
-				: null,
-			minQuantity: draft.minQuantity,
-			minNoticeDays: draft.minNoticeDays,
+		initialValues: {
+			name: state.name,
+			description:
+				state.description.trim().length > 0 ? state.description : undefined,
+			hidden: state.hidden,
+			categoryIds: state.categoryIds,
+			imageStorageIds: state.images.map((i) => i.id),
+			imageUrls: state.images.map((i) => i.url),
+			minQuantity: Number.isInteger(minQty) && minQty > 0 ? minQty : undefined,
+			minNoticeDays:
+				Number.isInteger(notice) && notice > 0 ? notice : undefined,
 		},
-		lost,
+		initialEditor: state.editor,
+	};
+}
+
+/**
+ * Full form → wizard: the editor substrate passes straight through, so
+ * NOTHING is lost — no confirm, no capability gap. The wizard reopens at the
+ * first unanswered step.
+ */
+export function formDraftToWizardState(draft: ProductFormDraft): WizardState {
+	return {
+		name: draft.name,
+		description: draft.description,
+		images: draft.images,
+		// The form's shape IS the answer: axes present = buyer picks.
+		hasChoices: draft.editor.options.length > 0,
+		editor: draft.editor,
+		// The form always carries concrete per-row flags — treat as answered so
+		// the wizard doesn't re-ask what the draft already encodes.
+		fulfilmentAnswered: draft.editor.rows.length > 0,
+		hidden: draft.hidden,
+		categoryIds: draft.categoryIds,
+		minQuantity: draft.minQuantity,
+		minNoticeDays: draft.minNoticeDays,
 	};
 }
 
@@ -397,34 +299,16 @@ export function formDraftToWizardState(draft: ProductFormDraft): {
  */
 export function wizardInitialStep(state: WizardState): number {
 	for (let s = 1; s <= 4; s++) {
-		if (s === 2 && state.hasChoices === null) return 2;
-		if (s === 4 && state.madeToOrder === null) return 4;
 		if (wizardStepIssues(state, s).length > 0) return s;
 	}
 	return TOTAL_STEPS;
 }
 
-/**
- * Step-1 skip handoff: only the fields the seller can have touched BY step 1
- * (name, description, photos). No variants/options — the full form seeds its
- * default blank pricing row instead of a misleading prefilled 0.00.
- */
-export function wizardBasicsToFormInitialValues(
-	state: WizardState,
-): ProductFormInitialValues {
-	return {
-		name: state.name,
-		description:
-			state.description.trim().length > 0 ? state.description : undefined,
-		imageStorageIds: state.images.map((i) => i.id),
-		imageUrls: state.images.map((i) => i.url),
-	};
-}
-
 /** Compact "RM 12" / "RM 12–28" label for the review preview. */
 export function wizardPriceLabel(state: WizardState, currency: string): string {
-	const parsed = priceKeys(state)
-		.map((key) => parsePriceInput((state.prices[key] ?? "").trim()))
+	const parsed = state.editor.rows
+		.filter((r) => r.active)
+		.map((r) => parsePriceInput(r.price.trim()))
 		.filter((p): p is number => p !== null);
 	if (parsed.length === 0) return "";
 	const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
@@ -509,17 +393,14 @@ export function ProductWizard({
 	categoriesLocked: boolean;
 	currency: string;
 	onSubmit: (values: ProductFormSubmitValues) => Promise<void>;
-	/** "Skip — use the full form" on step 1: carries the step-1 basics
-	 * (name/description/photos) so nothing typed is lost. */
-	onSkipToFullForm: (initialValues: ProductFormInitialValues) => void;
-	/** Review-step handoff: open the full form prefilled with the wizard draft
-	 * (second axis, per-choice photos etc. without retyping). */
-	onOpenFullForm: (initialValues: ProductFormInitialValues) => void;
+	/** "Skip — use the full form" on step 1: hands off the whole draft. */
+	onSkipToFullForm: (handoff: ReturnType<typeof wizardHandoff>) => void;
+	/** Review-step handoff: open the full form on the same draft. */
+	onOpenFullForm: (handoff: ReturnType<typeof wizardHandoff>) => void;
 	/** Back from step 1 / Cancel — leave the wizard entirely. */
 	onExit: () => void;
-	/** Restored draft from the full form's "switch back to guided setup"
-	 * (`formDraftToWizardState`) — the wizard opens at the first unanswered
-	 * step with every carried value in place. */
+	/** Restored draft from the full form's "switch back to guided setup" —
+	 * the wizard opens at the first unanswered step, every value in place. */
 	initialState?: WizardState;
 }) {
 	const [step, setStep] = useState(() =>
@@ -536,37 +417,268 @@ export function ProductWizard({
 	const [showDescription, setShowDescription] = useState(
 		() => (initialState?.description ?? "").trim().length > 0,
 	);
-	const [showSkus, setShowSkus] = useState(() =>
-		Object.values(initialState?.skus ?? {}).some((v) => v.trim().length > 0),
+	// Step-3 per-choice details (photo · SKU · on/off · approval) — hidden
+	// until asked for, auto-open when a restored draft already uses them.
+	const [showRowDetails, setShowRowDetails] = useState(() =>
+		(initialState?.editor.rows ?? []).some(
+			(r) =>
+				r.sku.trim().length > 0 ||
+				r.imageStorageIds.length > 0 ||
+				!r.active ||
+				r.requiresProof,
+		),
 	);
+	// Step-4 per-choice fulfilment override — auto-open when already mixed.
+	const [varyFulfilment, setVaryFulfilment] = useState(() => {
+		const rows = initialState?.editor.rows ?? [];
+		return (
+			rows.length > 1 &&
+			rows.some((r) => r.blockWhenOutOfStock) &&
+			rows.some((r) => !r.blockWhenOutOfStock)
+		);
+	});
 	const [moreOpen, setMoreOpen] = useState(
 		() =>
 			initialState !== undefined &&
-			(initialState.customLine !== null ||
-				initialState.requiresProof ||
+			(initialState.editor.customLine !== null ||
+				initialState.editor.rows.some((r) => r.requiresProof) ||
 				initialState.minQuantity.trim().length > 0 ||
 				initialState.minNoticeDays.trim().length > 0),
 	);
-	const [valueDraft, setValueDraft] = useState("");
+	// One add-value draft per axis (max 2), mirroring the full editor.
+	const [valueDrafts, setValueDrafts] = useState<string[]>(() =>
+		(initialState?.editor.options ?? []).map(() => ""),
+	);
 	// Categories are only offered on review when the store actually has some —
 	// a brand-new seller shouldn't meet a whole new concept mid-wizard.
 	const categories = useQuery(api.categories.listForRetailer, { retailerId });
 	const hasCategories = (categories?.filter((c) => c.active).length ?? 0) > 0;
+
+	// Track blob: preview URLs so they're revoked on overwrite/remove/unmount.
+	const blobUrls = useRef<Set<string>>(new Set());
+	useEffect(
+		() => () => {
+			for (const u of blobUrls.current) URL.revokeObjectURL(u);
+		},
+		[],
+	);
+	function revokeIfBlob(url: string | undefined) {
+		if (url?.startsWith("blob:")) {
+			URL.revokeObjectURL(url);
+			blobUrls.current.delete(url);
+		}
+	}
 
 	function patch(partial: Partial<WizardState>) {
 		setStateRaw((prev) => ({ ...prev, ...partial }));
 		setIssues([]);
 		setServerError(null);
 	}
+	function patchEditor(partial: Partial<VariantEditorState>) {
+		setStateRaw((prev) => ({
+			...prev,
+			editor: { ...prev.editor, ...partial },
+		}));
+		setIssues([]);
+		setServerError(null);
+	}
+
+	const { options, rows, customLine } = state.editor;
+	const variantCount = cartesian(options).length;
+	const allTrack = rows.length > 0 && rows.every((r) => r.blockWhenOutOfStock);
+	const allMto = rows.length > 0 && rows.every((r) => !r.blockWhenOutOfStock);
+	const anyMto = rows.some((r) => !r.blockWhenOutOfStock);
+	const anyTrack = rows.some((r) => r.blockWhenOutOfStock);
+	const allProof = rows.length > 0 && rows.every((r) => r.requiresProof);
+	const someProof = rows.some((r) => r.requiresProof);
 
 	const issueFor = (field: string): string | undefined =>
 		issues.find((i) => i.field === field)?.message;
+
+	// --- Editor manipulation (same semantics as the full editor) -------------
+	function setOptions(nextOptions: OptionAxis[]) {
+		patchEditor({
+			options: nextOptions,
+			rows: rebuildRows(nextOptions, rows),
+		});
+	}
+	function setRow(index: number, rowPatch: Partial<VariantRow>) {
+		patchEditor({
+			rows: rows.map((r, i) => (i === index ? { ...r, ...rowPatch } : r)),
+		});
+	}
+	function bulkFlag(field: "blockWhenOutOfStock" | "requiresProof", v: boolean) {
+		patchEditor({ rows: rows.map((r) => ({ ...r, [field]: v })) });
+	}
+	function renameAxis(axisIndex: number, name: string) {
+		setOptions(options.map((a, i) => (i === axisIndex ? { ...a, name } : a)));
+	}
+	function addValue(axisIndex: number) {
+		const draft = (valueDrafts[axisIndex] ?? "").trim();
+		if (!draft) return;
+		const axis = options[axisIndex];
+		if (!axis) return;
+		if (axis.values.some((v) => v.toLowerCase() === draft.toLowerCase())) {
+			setValueDrafts((d) => d.map((v, i) => (i === axisIndex ? "" : v)));
+			return;
+		}
+		setOptions(
+			options.map((a, i) =>
+				i === axisIndex ? { ...a, values: [...a.values, draft] } : a,
+			),
+		);
+		setValueDrafts((d) => d.map((v, i) => (i === axisIndex ? "" : v)));
+	}
+	function removeValue(axisIndex: number, value: string) {
+		setOptions(
+			options.map((a, i) =>
+				i === axisIndex
+					? { ...a, values: a.values.filter((v) => v !== value) }
+					: a,
+			),
+		);
+	}
+	function applyPresetToAxis(
+		axisIndex: number,
+		preset: { name: string; values: string[] },
+	) {
+		const axis = options[axisIndex];
+		if (!axis) return;
+		// Rename to the preset; seed its starter values only when the axis is
+		// still empty (never clobber values the seller already typed).
+		setOptions(
+			options.map((a, i) =>
+				i === axisIndex
+					? {
+							name: preset.name,
+							values: a.values.length > 0 ? a.values : [...preset.values],
+						}
+					: a,
+			),
+		);
+	}
+	function addSecondAxis(preset?: { name: string; values: string[] }) {
+		if (options.length >= MAX_AXES) return;
+		setOptions([
+			...options,
+			preset
+				? { name: preset.name, values: [...preset.values] }
+				: { name: "", values: [] },
+		]);
+		setValueDrafts((d) => [...d, ""]);
+	}
+	function removeSecondAxis() {
+		setOptions(options.slice(0, 1));
+		setValueDrafts((d) => d.slice(0, 1));
+	}
+
+	function switchToChoices() {
+		if (state.hasChoices === true) return;
+		if (options.length === 0) {
+			patch({
+				hasChoices: true,
+				editor: {
+					...state.editor,
+					options: [{ name: "", values: [] }],
+					rows: rebuildRows([{ name: "", values: [] }], rows),
+				},
+			});
+			setValueDrafts([""]);
+		} else {
+			patch({ hasChoices: true });
+		}
+	}
+	function switchToSingle() {
+		if (state.hasChoices === false) return;
+		const hasTypedData = rows.some(
+			(r) => r.price.trim().length > 0 || r.stock.trim().length > 0,
+		);
+		if (
+			options.some((a) => a.values.length > 0) &&
+			hasTypedData &&
+			!window.confirm(
+				"Switch to a single item? Your choices and their prices will be removed.",
+			)
+		) {
+			return;
+		}
+		// Collapse to one row, carrying the first row's price/stock/flags.
+		const donor = rows[0] ?? emptyRow([]);
+		patch({
+			hasChoices: false,
+			editor: {
+				...state.editor,
+				options: [],
+				rows: [
+					{
+						...donor,
+						optionValues: [],
+						sku: "",
+						imageStorageIds: [],
+						imageUrl: undefined,
+						active: true,
+					},
+				],
+			},
+		});
+		setValueDrafts([]);
+	}
+
+	// --- Custom line ---------------------------------------------------------
+	function patchCustom(partial: Partial<CustomLineDraft>) {
+		if (!customLine) return;
+		patchEditor({ customLine: { ...customLine, ...partial } });
+	}
+	function toggleCustom(enabled: boolean) {
+		if (enabled) {
+			patchEditor({
+				customLine: {
+					label: "",
+					price: "",
+					prompt: "",
+					imageStorageIds: [],
+				},
+			});
+		} else {
+			revokeIfBlob(customLine?.imageUrl);
+			patchEditor({ customLine: null });
+		}
+	}
+
+	// Anything typed = worth a confirm before discarding.
+	const isDirty =
+		state.name.trim().length > 0 ||
+		state.images.length > 0 ||
+		options.some((a) => a.values.length > 0) ||
+		rows.some(
+			(r) =>
+				r.price.trim().length > 0 ||
+				r.stock.trim().length > 0 ||
+				r.sku.trim().length > 0,
+		) ||
+		customLine !== null ||
+		state.minQuantity.trim().length > 0 ||
+		state.minNoticeDays.trim().length > 0;
+
+	function cancelWizard() {
+		if (
+			isDirty &&
+			!window.confirm("Discard this product? Nothing has been saved.")
+		) {
+			return;
+		}
+		onExit();
+	}
 
 	// Structural gate: the branching questions must be answered before Continue
 	// makes sense; text-input problems surface on Continue instead (a disabled
 	// button with no visible reason would read as broken).
 	const structurallyAnswered =
-		step === 2 ? state.hasChoices !== null : step === 4 ? state.madeToOrder !== null : true;
+		step === 2
+			? state.hasChoices !== null
+			: step === 4
+				? state.fulfilmentAnswered
+				: true;
 
 	function goNext() {
 		const found = wizardStepIssues(state, step);
@@ -587,54 +699,8 @@ export function ProductWizard({
 		setStep((s) => s - 1);
 	}
 
-	function addChoiceValue() {
-		const draft = valueDraft.trim();
-		if (!draft) return;
-		if (
-			state.axisValues.some((v) => v.toLowerCase() === draft.toLowerCase())
-		) {
-			setValueDraft("");
-			return;
-		}
-		patch({ axisValues: [...state.axisValues, draft] });
-		setValueDraft("");
-	}
-
-	function removeChoiceValue(value: string) {
-		patch({ axisValues: state.axisValues.filter((v) => v !== value) });
-	}
-
-	function applyPreset(preset: { name: string; values: string[] }) {
-		patch({
-			axisName: preset.name,
-			// Seed starter values only while the list is untouched — never clobber
-			// choices the seller already typed.
-			axisValues:
-				state.axisValues.length > 0 ? state.axisValues : [...preset.values],
-		});
-	}
-
 	function fillAllPrices(v: string) {
-		const next: Record<string, string> = { ...state.prices };
-		for (const key of priceKeys(state)) next[key] = v;
-		patch({ prices: next });
-	}
-
-	// Anything typed = worth a confirm before discarding.
-	const isDirty =
-		state.name.trim().length > 0 ||
-		state.images.length > 0 ||
-		state.axisValues.length > 0 ||
-		Object.values(state.prices).some((v) => v.trim().length > 0);
-
-	function cancelWizard() {
-		if (
-			isDirty &&
-			!window.confirm("Discard this product? Nothing has been saved.")
-		) {
-			return;
-		}
-		onExit();
+		patchEditor({ rows: rows.map((r) => ({ ...r, price: v })) });
 	}
 
 	async function publish() {
@@ -661,8 +727,99 @@ export function ProductWizard({
 	}
 
 	const { title, sub } = STEP_TITLES[step];
-	// Const capture so TS narrows it inside the review-step JSX closures.
-	const customLine = state.customLine;
+
+	/** Axis block: presets + name + value chips (axisIndex 0 or 1). */
+	function renderAxis(axisIndex: number) {
+		const axis = options[axisIndex];
+		if (!axis) return null;
+		const nameField = axisIndex === 0 ? "axisName" : "axis2Name";
+		const valuesField = axisIndex === 0 ? "axisValues" : "axis2Values";
+		return (
+			<div className="flex flex-col gap-2">
+				<div className="flex flex-wrap items-center gap-1.5">
+					{AXIS_PRESETS.map((preset) => {
+						const usedElsewhere = options.some(
+							(a, i) =>
+								i !== axisIndex &&
+								a.name.toLowerCase() === preset.name.toLowerCase(),
+						);
+						return (
+							<button
+								key={preset.name}
+								type="button"
+								disabled={usedElsewhere}
+								onClick={() => applyPresetToAxis(axisIndex, preset)}
+								className={cn(
+									"rounded-full border px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-40",
+									axis.name.toLowerCase() === preset.name.toLowerCase()
+										? "border-accent bg-accent/10 text-accent-emphasis"
+										: "border-border hover:border-accent",
+								)}
+							>
+								{preset.name}
+							</button>
+						);
+					})}
+				</div>
+				<Input
+					placeholder="Or type your own (e.g. Colour)"
+					value={axis.name}
+					onChange={(e) => renameAxis(axisIndex, e.target.value)}
+					isError={!!issueFor(nameField)}
+					className="h-10"
+				/>
+				<IssueText message={issueFor(nameField)} />
+				<div className="flex flex-wrap items-center gap-1.5">
+					{axis.values.map((v) => (
+						<span
+							key={v}
+							className="inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1.5 text-sm font-medium"
+						>
+							{v}
+							<button
+								type="button"
+								onClick={() => removeValue(axisIndex, v)}
+								aria-label={`Remove ${v}`}
+							>
+								<X className="size-3.5" />
+							</button>
+						</span>
+					))}
+					<div className="flex items-center gap-1">
+						<Input
+							placeholder="Add a choice"
+							value={valueDrafts[axisIndex] ?? ""}
+							onChange={(e) =>
+								setValueDrafts((d) =>
+									d.map((val, i) => (i === axisIndex ? e.target.value : val)),
+								)
+							}
+							isError={!!issueFor(valuesField)}
+							onKeyDown={(e) => {
+								if (e.key === "Enter" || e.key === ",") {
+									e.preventDefault();
+									addValue(axisIndex);
+								}
+							}}
+							// Commit on blur too — Android soft keyboards don't fire a
+							// reliable Enter keydown.
+							onBlur={() => addValue(axisIndex)}
+							className="h-9 w-32"
+						/>
+						<button
+							type="button"
+							onClick={() => addValue(axisIndex)}
+							className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground hover:border-accent"
+							aria-label="Add choice"
+						>
+							<Plus className="size-4" />
+						</button>
+					</div>
+				</div>
+				<IssueText message={issueFor(valuesField)} />
+			</div>
+		);
+	}
 
 	return (
 		<div className="flex flex-col gap-4">
@@ -778,105 +935,57 @@ export function ProductWizard({
 								icon={<PackageCheck className="size-5" aria-hidden />}
 								title="Just one item"
 								description="One name, one price. e.g. Nasi lemak bungkus"
-								onClick={() => patch({ hasChoices: false })}
+								onClick={switchToSingle}
 							/>
 							<AnswerCard
 								selected={state.hasChoices === true}
 								icon={<ChefHat className="size-5" aria-hidden />}
 								title="Buyer picks a choice"
 								description="e.g. Small / Medium / Large, or Pandan / Original"
-								onClick={() => patch({ hasChoices: true })}
+								onClick={switchToChoices}
 							/>
 						</div>
 						{state.hasChoices ? (
 							<div className="flex flex-col gap-3 border-t border-border pt-3">
-								<div className="flex flex-col gap-1.5">
+								<div className="flex items-center justify-between">
 									<span className="text-sm font-medium">
 										What do they choose by?
 									</span>
-									<div className="flex flex-wrap items-center gap-1.5">
-										{AXIS_PRESETS.map((preset) => (
-											<button
-												key={preset.name}
-												type="button"
-												onClick={() => applyPreset(preset)}
-												className={cn(
-													"rounded-full border px-3 py-1.5 text-sm font-medium transition-colors",
-													state.axisName.toLowerCase() ===
-														preset.name.toLowerCase()
-														? "border-accent bg-accent/10 text-accent-emphasis"
-														: "border-border hover:border-accent",
-												)}
-											>
-												{preset.name}
-											</button>
-										))}
-									</div>
-									<Input
-										placeholder="Or type your own (e.g. Colour)"
-										value={state.axisName}
-										onChange={(e) => patch({ axisName: e.target.value })}
-										isError={!!issueFor("axisName")}
-										className="h-10"
-									/>
-									<IssueText message={issueFor("axisName")} />
-								</div>
-								<div className="flex flex-col gap-1.5">
-									<span className="text-sm font-medium">
-										The choices{" "}
-										<span className="font-normal text-muted-foreground">
-											(each gets its own price next)
+									{variantCount > 0 ? (
+										<span className="text-xs text-muted-foreground">
+											{variantCount} choice{variantCount === 1 ? "" : "s"}
 										</span>
-									</span>
-									<div className="flex flex-wrap items-center gap-1.5">
-										{state.axisValues.map((v) => (
-											<span
-												key={v}
-												className="inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1.5 text-sm font-medium"
-											>
-												{v}
-												<button
-													type="button"
-													onClick={() => removeChoiceValue(v)}
-													aria-label={`Remove ${v}`}
-												>
-													<X className="size-3.5" />
-												</button>
+									) : null}
+								</div>
+								{renderAxis(0)}
+								{/* Second axis (Size × Flavour) — full parity with the full
+								    form, zero pixels until asked for. */}
+								{options.length > 1 ? (
+									<div className="flex flex-col gap-2 rounded-xl bg-muted/40 p-3">
+										<div className="flex items-center justify-between">
+											<span className="text-sm font-medium">
+												They also choose by
 											</span>
-										))}
-										<div className="flex items-center gap-1">
-											<Input
-												placeholder="Add a choice"
-												value={valueDraft}
-												onChange={(e) => setValueDraft(e.target.value)}
-												isError={!!issueFor("axisValues")}
-												onKeyDown={(e) => {
-													if (e.key === "Enter" || e.key === ",") {
-														e.preventDefault();
-														addChoiceValue();
-													}
-												}}
-												// Commit on blur too — Android soft keyboards don't
-												// fire a reliable Enter keydown.
-												onBlur={addChoiceValue}
-												className="h-9 w-32"
-											/>
 											<button
 												type="button"
-												onClick={addChoiceValue}
-												className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground hover:border-accent"
-												aria-label="Add choice"
+												onClick={removeSecondAxis}
+												className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
+												aria-label="Remove the second choice"
 											>
-												<Plus className="size-4" />
+												<X className="size-4" />
 											</button>
 										</div>
+										{renderAxis(1)}
 									</div>
-									<IssueText message={issueFor("axisValues")} />
-								</div>
-								<p className="rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
-									Need two things (e.g. Size × Flavour)? Publish first — you can
-									add a second choice under Edit product → Advanced.
-								</p>
+								) : options[0]?.values.length ? (
+									<button
+										type="button"
+										onClick={() => addSecondAxis()}
+										className="self-start text-sm font-semibold text-accent-emphasis hover:underline"
+									>
+										+ They also choose by something else (e.g. Size × Flavour)
+									</button>
+								) : null}
 							</div>
 						) : null}
 					</>
@@ -887,7 +996,7 @@ export function ProductWizard({
 						<h3 className="text-xl font-bold leading-tight">
 							{state.hasChoices ? "Price each choice" : "Set your price"}
 						</h3>
-						{state.hasChoices && state.axisValues.length > 1 ? (
+						{rows.length > 1 ? (
 							<label className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
 								Same price for all
 								<Input
@@ -895,58 +1004,111 @@ export function ProductWizard({
 									placeholder="0.00"
 									className="h-9 w-24"
 									onChange={(e) => fillAllPrices(e.target.value)}
-									onBlur={(e) => fillAllPrices(normalizePriceInput(e.target.value))}
+									onBlur={(e) =>
+										fillAllPrices(normalizePriceInput(e.target.value))
+									}
 								/>
 							</label>
 						) : null}
 						<div className="flex flex-col gap-3">
-							{priceKeys(state).map((key) => (
-								<div key={key} className="flex flex-col gap-1">
-									<div className="flex items-center gap-3">
-										<span className="min-w-0 flex-1 truncate text-sm font-medium">
-											{key === SINGLE_KEY ? state.name.trim() || "This item" : key}
-										</span>
-										<span className="text-sm text-muted-foreground">
-											{currency}
-										</span>
-										<PriceInput
-											value={state.prices[key] ?? ""}
-											onChange={(v) =>
-												patch({ prices: { ...state.prices, [key]: v } })
-											}
-											className="h-11 w-28 text-right"
-											invalid={!!issueFor(`price:${key}`)}
-										/>
-									</div>
-									{showSkus ? (
-										<div className="flex items-center justify-end gap-2">
-											<span className="text-xs text-muted-foreground">SKU</span>
-											<Input
-												placeholder="ITEM-001"
-												value={state.skus[key] ?? ""}
-												onChange={(e) =>
-													patch({
-														skus: { ...state.skus, [key]: e.target.value },
-													})
-												}
-												className="h-9 w-40"
-												aria-label={`Item code for ${key === SINGLE_KEY ? "this item" : key}`}
+							{rows.map((row, i) => {
+								const key = rowKey(row);
+								return (
+									<div
+										key={key}
+										className={cn(
+											"flex flex-col gap-1.5",
+											!row.active && "opacity-60",
+										)}
+									>
+										<div className="flex items-center gap-3">
+											<span className="min-w-0 flex-1 truncate text-sm font-medium">
+												{key === "" ? state.name.trim() || "This item" : key}
+												{!row.active ? (
+													<span className="ml-2 text-[11px] font-semibold text-muted-foreground">
+														Off — hidden from buyers
+													</span>
+												) : null}
+											</span>
+											<span className="text-sm text-muted-foreground">
+												{currency}
+											</span>
+											<PriceInput
+												value={row.price}
+												onChange={(v) => setRow(i, { price: v })}
+												className="h-11 w-28 text-right"
+												invalid={!!issueFor(`price:${key}`)}
 											/>
 										</div>
-									) : null}
-									<IssueText message={issueFor(`price:${key}`)} />
-								</div>
-							))}
+										{showRowDetails ? (
+											<div className="flex flex-wrap items-center gap-3 rounded-lg bg-muted/40 p-2">
+												<VariantImageCell
+													imageUrl={row.imageUrl}
+													onUploaded={(id, url) => {
+														revokeIfBlob(row.imageUrl);
+														blobUrls.current.add(url);
+														setRow(i, {
+															imageStorageIds: [id],
+															imageUrl: url,
+														});
+													}}
+													onRemove={() => {
+														revokeIfBlob(row.imageUrl);
+														setRow(i, {
+															imageStorageIds: [],
+															imageUrl: undefined,
+														});
+													}}
+													label={`photo for ${key || "this item"}`}
+												/>
+												<Input
+													placeholder="SKU"
+													value={row.sku}
+													onChange={(e) => setRow(i, { sku: e.target.value })}
+													className="h-9 w-28"
+													aria-label={`Item code for ${key || "this item"}`}
+												/>
+												<label className="flex items-center gap-1.5 text-xs">
+													<input
+														type="checkbox"
+														checked={row.active}
+														onChange={(e) =>
+															setRow(i, { active: e.target.checked })
+														}
+														className="size-4"
+														aria-label={`${row.active ? "Deactivate" : "Activate"} ${key || "this item"}`}
+													/>
+													On sale
+												</label>
+												<label className="flex items-center gap-1.5 text-xs">
+													<input
+														type="checkbox"
+														checked={row.requiresProof}
+														onChange={(e) =>
+															setRow(i, { requiresProof: e.target.checked })
+														}
+														className="size-4"
+														aria-label={`Require mockup approval for ${key || "this item"}`}
+													/>
+													Design approval
+												</label>
+											</div>
+										) : null}
+										<IssueText message={issueFor(`price:${key}`)} />
+									</div>
+								);
+							})}
 						</div>
-						{/* Question-first SKU: zero pixels unless the seller uses item
-						    codes — no dedicated step for something most sellers skip. */}
-						{showSkus ? null : (
+						{/* Per-choice extras — parity with the full form's per-choice
+						    details, zero pixels unless the seller asks. */}
+						{showRowDetails ? null : (
 							<button
 								type="button"
-								onClick={() => setShowSkus(true)}
+								onClick={() => setShowRowDetails(true)}
 								className="self-start text-sm font-semibold text-accent-emphasis hover:underline"
 							>
-								+ Add your own item codes (SKU)
+								+ Photos, item codes (SKU) & more per{" "}
+								{state.hasChoices ? "choice" : "item"}
 							</button>
 						)}
 					</>
@@ -959,50 +1121,114 @@ export function ProductWizard({
 						</h3>
 						<div className="flex flex-col gap-2.5">
 							<AnswerCard
-								selected={state.madeToOrder === true}
+								selected={state.fulfilmentAnswered && allMto}
 								icon={<ChefHat className="size-5" aria-hidden />}
 								title="Made to order"
 								description="You make each order fresh. Never marked sold out."
-								onClick={() => patch({ madeToOrder: true })}
+								onClick={() => {
+									bulkFlag("blockWhenOutOfStock", false);
+									patch({ fulfilmentAnswered: true });
+								}}
 							/>
 							<AnswerCard
-								selected={state.madeToOrder === false}
+								selected={state.fulfilmentAnswered && allTrack}
 								icon={<PackageCheck className="size-5" aria-hidden />}
 								title="From stock"
 								description="You have ready items. Orders stop when you run out."
-								onClick={() => patch({ madeToOrder: false })}
+								onClick={() => {
+									bulkFlag("blockWhenOutOfStock", true);
+									patch({ fulfilmentAnswered: true });
+								}}
 							/>
 						</div>
-						{state.madeToOrder === true ? (
+						{state.fulfilmentAnswered && !allTrack && !allMto ? (
+							<p className="text-xs text-muted-foreground">
+								Currently varies per choice — pick a card to apply one setting
+								to all, or adjust each choice below.
+							</p>
+						) : null}
+						{/* Per-choice override — parity with the full form. */}
+						{rows.length > 1 ? (
+							varyFulfilment ? (
+								<div className="flex flex-col gap-2">
+									{rows.map((row, i) => (
+										<div
+											key={rowKey(row)}
+											className="flex items-center gap-3"
+										>
+											<span className="min-w-0 flex-1 truncate text-sm font-medium">
+												{rowKey(row)}
+											</span>
+											<div className="w-56 shrink-0">
+												<FulfilmentToggle
+													value={row.blockWhenOutOfStock}
+													onChange={(v) => {
+														setRow(i, { blockWhenOutOfStock: v });
+														patch({ fulfilmentAnswered: true });
+													}}
+												/>
+											</div>
+										</div>
+									))}
+									<button
+										type="button"
+										onClick={() => {
+											const trackCount = rows.filter(
+												(r) => r.blockWhenOutOfStock,
+											).length;
+											bulkFlag(
+												"blockWhenOutOfStock",
+												trackCount >= rows.length - trackCount,
+											);
+											setVaryFulfilment(false);
+										}}
+										className="self-start text-xs font-semibold text-accent-emphasis hover:underline"
+									>
+										Use one setting for all choices
+									</button>
+								</div>
+							) : (
+								<button
+									type="button"
+									onClick={() => setVaryFulfilment(true)}
+									className="self-start text-xs font-semibold text-accent-emphasis hover:underline"
+								>
+									Vary per choice
+								</button>
+							)
+						) : null}
+						{state.fulfilmentAnswered && allMto ? (
 							<p className="rounded-xl bg-accent/10 px-3 py-2.5 text-sm leading-relaxed text-accent-emphasis">
 								Nice — buyers can always order. No stock counting, nothing ever
 								shows "sold out". You'll see the day's orders in your inbox.
 							</p>
 						) : null}
-						{state.madeToOrder === false ? (
+						{state.fulfilmentAnswered && anyTrack ? (
 							<div className="flex flex-col gap-3 border-t border-border pt-3">
 								<span className="text-sm font-medium">
 									How many do you have right now?
 								</span>
-								{priceKeys(state).map((key) => (
-									<div key={key} className="flex flex-col gap-1">
-										<div className="flex items-center gap-3">
-											<span className="min-w-0 flex-1 truncate text-sm font-medium">
-												{key === SINGLE_KEY ? "In stock" : key}
-											</span>
-											<StockInput
-												value={state.stocks[key] ?? ""}
-												onChange={(v) =>
-													patch({ stocks: { ...state.stocks, [key]: v } })
-												}
-												stepper
-												className="w-40"
-												invalid={!!issueFor(`stock:${key}`)}
-											/>
+								{rows.map((row, i) => {
+									if (!row.blockWhenOutOfStock) return null;
+									const key = rowKey(row);
+									return (
+										<div key={key} className="flex flex-col gap-1">
+											<div className="flex items-center gap-3">
+												<span className="min-w-0 flex-1 truncate text-sm font-medium">
+													{key === "" ? "In stock" : key}
+												</span>
+												<StockInput
+													value={row.stock}
+													onChange={(v) => setRow(i, { stock: v })}
+													stepper
+													className="w-40"
+													invalid={!!issueFor(`stock:${key}`)}
+												/>
+											</div>
+											<IssueText message={issueFor(`stock:${key}`)} />
 										</div>
-										<IssueText message={issueFor(`stock:${key}`)} />
-									</div>
-								))}
+									);
+								})}
 								<p className="text-xs text-muted-foreground">
 									When a choice hits 0, buyers see "Sold out" until you restock.
 								</p>
@@ -1036,22 +1262,24 @@ export function ProductWizard({
 								<span className="text-sm font-bold">
 									{state.name.trim() || "Your product"}
 								</span>
-								{state.hasChoices ? (
-									<div className="flex flex-wrap gap-1.5">
-										{state.axisValues.map((v) => (
-											<span
-												key={v}
-												className="rounded-full border border-border px-2.5 py-0.5 text-[11px] font-medium"
-											>
-												{v}
-											</span>
-										))}
-									</div>
-								) : null}
+								{options.map((axis) =>
+									axis.values.length > 0 ? (
+										<div key={axis.name} className="flex flex-wrap gap-1.5">
+											{axis.values.map((v) => (
+												<span
+													key={v}
+													className="rounded-full border border-border px-2.5 py-0.5 text-[11px] font-medium"
+												>
+													{v}
+												</span>
+											))}
+										</div>
+									) : null,
+								)}
 								<span className="text-sm font-extrabold text-accent-emphasis">
 									{wizardPriceLabel(state, currency)}
 								</span>
-								{state.madeToOrder ? (
+								{allMto ? (
 									<span className="self-start rounded-md bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800 dark:bg-amber-950/50 dark:text-amber-400">
 										Made to order
 									</span>
@@ -1064,7 +1292,10 @@ export function ProductWizard({
 								{
 									label: "Choices",
 									value: state.hasChoices
-										? `${state.axisValues.length} by ${state.axisName.trim()}`
+										? `${variantCount} by ${options
+												.map((a) => a.name.trim())
+												.filter(Boolean)
+												.join(" × ")}`
 										: "Just one item",
 									step: 2,
 								},
@@ -1075,7 +1306,11 @@ export function ProductWizard({
 								},
 								{
 									label: "Preparing",
-									value: state.madeToOrder ? "Made to order" : "From stock",
+									value: allMto
+										? "Made to order"
+										: allTrack
+											? "From stock"
+											: "Varies per choice",
 									step: 4,
 								},
 							].map((row) => (
@@ -1097,10 +1332,7 @@ export function ProductWizard({
 								</div>
 							))}
 						</div>
-						{/* Optional publish settings — where the product appears. Kept on
-						    review (not their own steps) so the wizard spine stays five
-						    questions, but a counter-only or categorised product never
-						    needs a create-then-edit round trip. */}
+						{/* Optional publish settings — where the product appears. */}
 						<div className="flex flex-col gap-3 rounded-2xl border border-border p-3">
 							<div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
 								<div className="min-w-0">
@@ -1154,9 +1386,8 @@ export function ProductWizard({
 								</div>
 							) : null}
 						</div>
-						{/* More options — full parity with the edit page's Advanced, so
-						    create never needs a create-then-edit round trip. Collapsed:
-						    zero pixels for the everyday seller. */}
+						{/* More options — same capabilities as the full form's Advanced.
+						    Collapsed: zero pixels for the everyday seller. */}
 						<div className="rounded-2xl border border-dashed border-border">
 							<button
 								type="button"
@@ -1167,7 +1398,7 @@ export function ProductWizard({
 								<span className="flex min-w-0 flex-col">
 									<span className="text-sm font-semibold">More options</span>
 									<span className="truncate text-xs text-muted-foreground">
-										{state.madeToOrder
+										{anyMto
 											? "Design approval · custom option · order rules · full editor"
 											: "Custom option · order rules · full editor"}
 									</span>
@@ -1186,15 +1417,19 @@ export function ProductWizard({
 							</button>
 							{moreOpen ? (
 								<div className="flex flex-col gap-4 border-t border-border p-3">
-									{/* Mockup approval only makes sense for made-to-order work
-									    (and is only applied then — see buildWizardSubmitValues). */}
-									{state.madeToOrder ? (
+									{/* Mockup approval only makes sense for made-to-order work.
+									    Product-level here; per-choice variance lives in step 3's
+									    per-choice details (parity with the full form). */}
+									{anyMto ? (
 										<label className="flex items-start gap-2.5 text-sm">
 											<input
 												type="checkbox"
-												checked={state.requiresProof}
+												checked={allProof}
+												ref={(el) => {
+													if (el) el.indeterminate = someProof && !allProof;
+												}}
 												onChange={(e) =>
-													patch({ requiresProof: e.target.checked })
+													bulkFlag("requiresProof", e.target.checked)
 												}
 												className="mt-0.5 size-4 shrink-0"
 											/>
@@ -1205,6 +1440,9 @@ export function ProductWizard({
 												<span className="block text-xs text-muted-foreground">
 													The buyer signs off on a photo or mockup before you
 													start — e.g. a cake design approved before baking.
+													{someProof && !allProof
+														? " Currently on for some choices only — set per choice in the Price step."
+														: null}
 												</span>
 											</span>
 										</label>
@@ -1214,14 +1452,8 @@ export function ProductWizard({
 										<label className="flex items-start gap-2.5 text-sm">
 											<input
 												type="checkbox"
-												checked={state.customLine !== null}
-												onChange={(e) =>
-													patch({
-														customLine: e.target.checked
-															? { label: "", price: "", prompt: "" }
-															: null,
-													})
-												}
+												checked={customLine !== null}
+												onChange={(e) => toggleCustom(e.target.checked)}
 												className="mt-0.5 size-4 shrink-0"
 											/>
 											<span>
@@ -1236,22 +1468,39 @@ export function ProductWizard({
 										</label>
 										{customLine ? (
 											<div className="flex flex-col gap-3 rounded-lg bg-muted/40 p-3">
-												<label className="flex flex-col gap-1 text-sm font-medium">
-													Option name
-													<Input
-														value={customLine.label}
-														onChange={(e) =>
-															patch({
-																customLine: {
-																	...customLine,
-																	label: e.target.value,
-																},
-															})
-														}
-														placeholder="Custom"
-														maxLength={40}
+												<div className="flex items-start gap-3">
+													<VariantImageCell
+														imageUrl={customLine.imageUrl}
+														size="size-14"
+														onUploaded={(id, url) => {
+															revokeIfBlob(customLine.imageUrl);
+															blobUrls.current.add(url);
+															patchCustom({
+																imageStorageIds: [id],
+																imageUrl: url,
+															});
+														}}
+														onRemove={() => {
+															revokeIfBlob(customLine.imageUrl);
+															patchCustom({
+																imageStorageIds: [],
+																imageUrl: undefined,
+															});
+														}}
+														label="custom option photo"
 													/>
-												</label>
+													<label className="flex flex-1 flex-col gap-1 text-sm font-medium">
+														Option name
+														<Input
+															value={customLine.label}
+															onChange={(e) =>
+																patchCustom({ label: e.target.value })
+															}
+															placeholder="Custom"
+															maxLength={40}
+														/>
+													</label>
+												</div>
 												<label className="flex flex-col gap-1 text-sm font-medium">
 													Starting price ({currency}){" "}
 													<span className="font-normal text-muted-foreground">
@@ -1259,11 +1508,7 @@ export function ProductWizard({
 													</span>
 													<PriceInput
 														value={customLine.price}
-														onChange={(v) =>
-															patch({
-																customLine: { ...customLine, price: v },
-															})
-														}
+														onChange={(v) => patchCustom({ price: v })}
 														invalid={!!issueFor("customPrice")}
 													/>
 													<IssueText message={issueFor("customPrice")} />
@@ -1276,12 +1521,7 @@ export function ProductWizard({
 													<textarea
 														value={customLine.prompt}
 														onChange={(e) =>
-															patch({
-																customLine: {
-																	...customLine,
-																	prompt: e.target.value,
-																},
-															})
+															patchCustom({ prompt: e.target.value })
 														}
 														rows={2}
 														maxLength={280}
@@ -1293,7 +1533,7 @@ export function ProductWizard({
 										) : null}
 									</div>
 
-									{/* Order rules — the same two constraints the edit form
+									{/* Order rules — the same two constraints the full form
 									    groups in its "Order rules" card. Blank = no rule. */}
 									<div className="flex flex-col gap-3 border-t border-border pt-3">
 										<span className="text-sm font-semibold">Order rules</span>
@@ -1309,7 +1549,9 @@ export function ProductWizard({
 												max={MIN_QUANTITY_MAX}
 												placeholder="e.g. 20"
 												value={state.minQuantity}
-												onChange={(e) => patch({ minQuantity: e.target.value })}
+												onChange={(e) =>
+													patch({ minQuantity: e.target.value })
+												}
 												isError={!!issueFor("minQuantity")}
 												className="h-11 w-32"
 											/>
@@ -1350,20 +1592,18 @@ export function ProductWizard({
 										</label>
 									</div>
 
-									{/* Everything else (second choice, per-choice photos…) —
-									    hand the draft to the full editor, nothing retyped. */}
+									{/* Prefer the big-screen layout? Same draft, other skin. */}
 									<div className="flex flex-col gap-1.5 border-t border-border pt-3">
 										<Button
 											type="button"
 											variant="outline"
-											onClick={() => onOpenFullForm(wizardToFormInitialValues(state))}
+											onClick={() => onOpenFullForm(wizardHandoff(state))}
 										>
 											Open in the full editor
 										</Button>
 										<p className="text-center text-xs text-muted-foreground">
-											For a second choice (e.g. Size × Flavour), per-choice
-											photos and everything else — everything you've entered
-											comes along.
+											The same product, one page — everything you've entered
+											comes along, and you can switch back any time.
 										</p>
 									</div>
 								</div>
@@ -1406,20 +1646,13 @@ export function ProductWizard({
 				{step === 1 ? (
 					<button
 						type="button"
-						onClick={() =>
-							onSkipToFullForm(wizardBasicsToFormInitialValues(state))
-						}
+						onClick={() => onSkipToFullForm(wizardHandoff(state))}
 						className="self-center text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
 					>
 						Know the full editor? Skip — use the full form
 					</button>
 				) : null}
-				{step === 2 && !structurallyAnswered ? (
-					<p className="text-center text-xs text-muted-foreground">
-						Pick one to continue — you can change it any time.
-					</p>
-				) : null}
-				{step === 4 && !structurallyAnswered ? (
+				{(step === 2 || step === 4) && !structurallyAnswered ? (
 					<p className="text-center text-xs text-muted-foreground">
 						Pick one to continue — you can change it any time.
 					</p>

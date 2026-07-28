@@ -3,6 +3,20 @@
 ClickUp: [`86ey9udvz`](https://app.clickup.com/t/86ey9udvz) · Approved design
 mockup: <https://claude.ai/code/artifact/8a88b292-8212-47a5-bc92-6327aefb67a0>
 
+## One draft substrate, two skins (the parity invariant)
+
+**The wizard's selling configuration IS a `VariantEditorState`** — the same
+shape the full form edits (`WizardState.editor`). There is no translation
+layer between the two views, so switching (`wizardHandoff` /
+`formDraftToWizardState`) passes the substrate through untouched — every
+capability exists in both views by construction: second choice axis,
+per-choice photos/SKUs/on-off/approval, mixed fulfilment, the custom line
+with photo, order rules. The wizard's validators delegate to the SAME
+`buildSubmitVariants` / `collectOptionIssues` the form uses, re-addressed to
+wizard fields — the two views can never disagree about what's valid. Adding
+a capability to `VariantEditorState` means deciding where it surfaces in the
+wizard (usually behind a progressive-disclosure link), never whether.
+
 ## Why
 
 The add/edit product page is the first real task every new seller faces, and
@@ -29,9 +43,9 @@ steps.
 | Step | Question | Derives |
 | --- | --- | --- |
 | 1 · Name it | "What are you selling?" — name + photos, description behind a link | `name`, `imageStorageIds`, `description` |
-| 2 · Choices | "Does the buyer pick anything?" — *Just one item* / *Buyer picks a choice* (preset chips: Size/Flavour/Weight/Pack, values typed as chips, **one axis max**) | `options` |
-| 3 · Price | One price field, or one per choice + "Same price for all". "+ Add your own item codes (SKU)" reveals per-choice SKU inputs — question-first, zero pixels unless used | per-variant `price` (+ `sku`) |
-| 4 · Preparation | "How do you prepare orders?" — *Made to order* (no stock inputs) / *From stock* (stock steppers) | `blockWhenOutOfStock` + `onHand` |
+| 2 · Choices | "Does the buyer pick anything?" — *Just one item* / *Buyer picks a choice* (preset chips: Size/Flavour/Weight/Pack, values typed as chips). "+ They also choose by something else" reveals the **second axis** (Size × Flavour) — zero pixels unless used | `editor.options` |
+| 3 · Price | One price per choice (all combinations when two axes) + "Same price for all". "+ Photos, item codes (SKU) & more per choice" reveals per-row photo · SKU · on/off · design-approval — the full form's per-choice details, behind one link | per-row `price` (+ extras) |
+| 4 · Preparation | "How do you prepare orders?" — *Made to order* / *From stock* (stock steppers on tracking rows). "Vary per choice" reveals per-row Track-stock/Made-to-order toggles (auto-open when a restored draft is mixed) | per-row `blockWhenOutOfStock` + `onHand` |
 | 5 · Review | Buyer-eye preview card + summary rows with per-row Edit + **optional publish settings** (Visible/Hidden toggle; category picker **only when the store has categories**) + the **"More options"** disclosure | submit (+ `hidden`, `categoryIds`, `requiresProof`, custom line) |
 
 Validation: the branching questions (2/4) gate Continue structurally
@@ -50,36 +64,35 @@ gap tightens to `gap-2` below `sm`, and only the CURRENT progress dot widens
 — the title fits with headroom at every width; before this, step 4 truncated
 on everything below 430.
 
-**Create-time needs kept in the wizard** (so there's never a create-then-edit
-round trip): per-choice **SKUs** behind the price-step link, **visibility**
-(counter-only products are created hidden directly — the Rahman's-lekor
-pattern, docs/hidden-products.md) and **categories** on the review step. The
-category picker only renders when the store has ≥1 active category — a
-brand-new seller never meets the concept mid-wizard.
+**Publish settings on review** (never a create-then-edit round trip):
+**visibility** (counter-only products are created hidden directly — the
+Rahman's-lekor pattern, docs/hidden-products.md) and **categories** — the
+picker only renders when the store has ≥1 active category, so a brand-new
+seller never meets the concept mid-wizard.
 
-**"More options" on review — full create/edit parity without the wall:**
-- **Design approval (mockup)** — offered ONLY when the product is made to
-  order (Zaki's call: proof gating is a made-to-order concept); flipping back
-  to From stock at review quietly drops it (`buildWizardSubmitValues`).
-- **Custom / made-to-order option** — label, price-on-quote, buyer prompt
-  (image addable later in edit).
+**"More options" on review:**
+- **Design approval (mockup)** — product-level checkbox, offered when any
+  choice is made to order (proof gating is a made-to-order concept — Zaki's
+  call); indeterminate when per-choice settings vary (set per choice in the
+  Price step's details).
+- **Custom / made-to-order option** — label, price-on-quote, buyer prompt AND
+  photo (`VariantImageCell`), same as the full form.
 - **Order rules** — minimum order quantity + minimum notice days, mirroring
   the edit form's "Order rules" card. Blank = no rule (mapped to `undefined`,
   never 0, so the create mutation simply omits them).
-- **"Open in the full editor"** — the consistency escape hatch for everything
-  else (second axis, per-choice photos): `wizardToFormInitialValues` hands the
-  whole draft to `ProductForm` prefilled (in-memory via the route's
-  `wizardDraft` state; a refresh falls back to a blank full form). This gives
-  create 100% parity with edit **by construction** instead of duplicating the
-  grid machinery inside the wizard.
+- **"Open in the full editor"** — same draft, other skin: `wizardHandoff`
+  passes the editor substrate as-is (in-memory via the route's `wizardDraft`;
+  a refresh falls back to a blank full form).
 
 **Escape hatch:** "Skip — use the full form" on step 1 →
 `/app/products/new?form=full` renders the same restructured `ProductForm` the
-edit page uses (`validateSearch` on the route). The import flow is untouched —
-bulk sellers never see the wizard.
+edit page uses (`validateSearch` on the route), seeded with the whole wizard
+draft; "← Prefer the guided setup? Switch back" returns losslessly. The
+import flow is untouched — bulk sellers never see the wizard.
 
 Pure, unit-tested helpers (`product-wizard.test.ts`): `wizardStepIssues`,
-`buildWizardSubmitValues`, `wizardPriceLabel`.
+`buildWizardSubmitValues`, `wizardHandoff`, `formDraftToWizardState`,
+`wizardInitialStep`, `wizardPriceLabel`.
 
 ## Edit = the question-first full form
 
@@ -150,23 +163,14 @@ surface:
   chip reflects the SAVED product — the summary strip reflects the draft.
 - **Preview CTA** — "Preview" (desktop header) / eye icon (mobile header)
   opens the REAL storefront `ProductDetailSheet` in-page (the same bottom
-  sheet buyers get) — no new tab. Inactive variants are filtered to match the
-  buyer view; option pills and steppers work; "Add to cart" shows a toast
-  explaining it's a preview. It renders the **saved** product — the summary
-  strip is the live-draft view. (When the storefront redesign 86eybrhrt lands
-  URL-addressable sheets, this stays as-is — it's already in-page.)
-- **Full form ⇄ wizard switching is value-preserving in BOTH directions** on
-  the create route. Wizard → full: the whole draft
-  (`wizardToFormInitialValues`) or, from the step-1 skip, just the basics
-  (`wizardBasicsToFormInitialValues` — no misleading prefilled 0.00 pricing
-  row). Full → wizard: `ProductForm` exposes its as-typed draft through a
-  `draftRef` getter; `formDraftToWizardState` reverse-derives a `WizardState`
-  (raw strings preserved — a blank price stays blank) and the wizard reopens
-  at the first unanswered step (`wizardInitialStep`). Anything the wizard
-  genuinely can't represent (second axis, per-choice photos, deactivated
-  choices, mixed fulfilment/approval, the custom option's photo) is listed in
-  a confirm before switching — never dropped silently. Drafts are in-memory;
-  a refresh starts the current view blank.
+  sheet buyers get) — no new tab — fed the form's **live draft** via
+  `draftPreviewOverlay` (`src/lib/product-preview.ts`, unit-tested): unsaved
+  edits preview exactly as buyers would see them after saving. The overlay
+  mirrors the server's `productWithVariants` derivations (price range, quote
+  pricing, in-stock); identity fields come from the saved row. Option pills
+  and steppers work; "Add to cart" shows a toast explaining it's a preview.
+  Built once per open — a per-render object identity would reset the sheet's
+  selection state.
 
 ## Behaviour deltas (deliberate)
 

@@ -4,13 +4,27 @@ import {
 	buildWizardSubmitValues,
 	emptyWizardState,
 	formDraftToWizardState,
-	type WizardState,
-	wizardBasicsToFormInitialValues,
+	wizardHandoff,
 	wizardInitialStep,
 	wizardPriceLabel,
+	type WizardState,
 	wizardStepIssues,
-	wizardToFormInitialValues,
 } from "./product-wizard";
+import type { VariantRow } from "./variant-editor";
+
+function row(partial: Partial<VariantRow> = {}): VariantRow {
+	return {
+		optionValues: [],
+		sku: "",
+		price: "",
+		stock: "",
+		active: true,
+		blockWhenOutOfStock: true,
+		requiresProof: false,
+		imageStorageIds: [],
+		...partial,
+	};
+}
 
 /** A fully answered "brownies, S/M/L, made to order" wizard — the ICP case. */
 function browniesState(): WizardState {
@@ -18,10 +32,28 @@ function browniesState(): WizardState {
 		...emptyWizardState(),
 		name: "Chocolate fudge brownies",
 		hasChoices: true,
-		axisName: "Size",
-		axisValues: ["Small", "Medium", "Large"],
-		prices: { Small: "12", Medium: "18.00", Large: "28.5" },
-		madeToOrder: true,
+		fulfilmentAnswered: true,
+		editor: {
+			options: [{ name: "Size", values: ["Small", "Medium", "Large"] }],
+			rows: [
+				row({
+					optionValues: ["Small"],
+					price: "12",
+					blockWhenOutOfStock: false,
+				}),
+				row({
+					optionValues: ["Medium"],
+					price: "18.00",
+					blockWhenOutOfStock: false,
+				}),
+				row({
+					optionValues: ["Large"],
+					price: "28.5",
+					blockWhenOutOfStock: false,
+				}),
+			],
+			customLine: null,
+		},
 	};
 }
 
@@ -31,9 +63,12 @@ function singleFromStock(): WizardState {
 		...emptyWizardState(),
 		name: "Nasi lemak bungkus",
 		hasChoices: false,
-		prices: { "": "5.50" },
-		madeToOrder: false,
-		stocks: { "": "20" },
+		fulfilmentAnswered: true,
+		editor: {
+			options: [],
+			rows: [row({ price: "5.50", stock: "20" })],
+			customLine: null,
+		},
 	};
 }
 
@@ -43,66 +78,164 @@ describe("wizardStepIssues", () => {
 		expect(wizardStepIssues(browniesState(), 1)).toHaveLength(0);
 	});
 
-	it("step 2 requires an axis name and at least one choice when the buyer picks", () => {
-		const s = { ...browniesState(), axisName: " ", axisValues: [] };
-		const issues = wizardStepIssues(s, 2);
-		expect(issues.map((i) => i.field).sort()).toEqual([
+	it("step 2 requires the question answered, then a named axis with values", () => {
+		expect(
+			wizardStepIssues(emptyWizardState(), 2).map((i) => i.field),
+		).toEqual(["hasChoices"]);
+		const s = browniesState();
+		const broken: WizardState = {
+			...s,
+			editor: {
+				...s.editor,
+				options: [{ name: " ", values: [] }],
+				rows: [],
+			},
+		};
+		expect(wizardStepIssues(broken, 2).map((i) => i.field).sort()).toEqual([
 			"axisName",
 			"axisValues",
 		]);
 		// "Just one item" skips choice setup entirely.
 		expect(
-			wizardStepIssues({ ...s, hasChoices: false }, 2),
+			wizardStepIssues({ ...singleFromStock() }, 2),
 		).toHaveLength(0);
 	});
 
-	it("step 2 caps the wizard at 50 choices (server variant cap, one axis)", () => {
-		const s = {
-			...browniesState(),
-			axisValues: Array.from({ length: 51 }, (_, i) => `v${i}`),
+	it("step 2 addresses second-axis problems to the axis-2 fields", () => {
+		const s = browniesState();
+		const withEmptySecond: WizardState = {
+			...s,
+			editor: {
+				...s.editor,
+				options: [...s.editor.options, { name: "", values: [] }],
+			},
 		};
-		expect(wizardStepIssues(s, 2).some((i) => i.field === "axisValues")).toBe(
-			true,
-		);
+		expect(
+			wizardStepIssues(withEmptySecond, 2)
+				.map((i) => i.field)
+				.sort(),
+		).toEqual(["axis2Name", "axis2Values"]);
 	});
 
-	it("step 3 validates every choice's price and addresses the exact field", () => {
-		const s = {
-			...browniesState(),
-			prices: { Small: "12", Medium: "", Large: "abc" },
+	it("step 2 caps the combinations at the shared 50-variant limit", () => {
+		const s = browniesState();
+		const big: WizardState = {
+			...s,
+			editor: {
+				...s.editor,
+				options: [
+					{
+						name: "Size",
+						values: Array.from({ length: 8 }, (_, i) => `s${i}`),
+					},
+					{
+						name: "Flavour",
+						values: Array.from({ length: 7 }, (_, i) => `f${i}`),
+					},
+				],
+			},
 		};
-		const issues = wizardStepIssues(s, 3);
-		expect(issues.map((i) => i.field).sort()).toEqual([
+		expect(
+			wizardStepIssues(big, 2).some((i) => i.field === "axisValues"),
+		).toBe(true);
+	});
+
+	it("step 3 validates every active choice's price via the shared validator", () => {
+		const s = browniesState();
+		const broken: WizardState = {
+			...s,
+			editor: {
+				...s.editor,
+				rows: [
+					{ ...s.editor.rows[0] },
+					{ ...s.editor.rows[1], price: "" },
+					{ ...s.editor.rows[2], price: "abc" },
+				],
+			},
+		};
+		expect(wizardStepIssues(broken, 3).map((i) => i.field).sort()).toEqual([
 			"price:Large",
 			"price:Medium",
 		]);
+		// A deactivated choice never blocks (same rule as the full form).
+		const offRow: WizardState = {
+			...s,
+			editor: {
+				...s.editor,
+				rows: [
+					{ ...s.editor.rows[0] },
+					{ ...s.editor.rows[1], price: "", active: false },
+					{ ...s.editor.rows[2] },
+				],
+			},
+		};
+		expect(wizardStepIssues(offRow, 3)).toHaveLength(0);
 	});
 
-	it("step 4 requires stock counts only for From stock", () => {
+	it("step 4 requires stock only for tracking rows", () => {
 		// Made to order → no stock questions at all.
 		expect(wizardStepIssues(browniesState(), 4)).toHaveLength(0);
-		const fromStock: WizardState = {
-			...browniesState(),
-			madeToOrder: false,
-			stocks: { Small: "3" },
+		const s = browniesState();
+		const mixed: WizardState = {
+			...s,
+			editor: {
+				...s.editor,
+				rows: s.editor.rows.map((r, i) => ({
+					...r,
+					blockWhenOutOfStock: i === 0, // only Small tracks stock
+					stock: "",
+				})),
+			},
 		};
-		const issues = wizardStepIssues(fromStock, 4);
-		expect(issues.map((i) => i.field).sort()).toEqual([
-			"stock:Large",
-			"stock:Medium",
+		expect(wizardStepIssues(mixed, 4).map((i) => i.field)).toEqual([
+			"stock:Small",
 		]);
-		// 0 is a valid answer ("sold out right now").
+		// Unanswered structural question surfaces as its own issue.
 		expect(
 			wizardStepIssues(
-				{ ...fromStock, stocks: { Small: "3", Medium: "0", Large: "0" } },
+				{ ...s, fulfilmentAnswered: false },
 				4,
+			).map((i) => i.field),
+		).toEqual(["fulfilment"]);
+	});
+
+	it("step 5 validates custom price and order rules, allowing blanks", () => {
+		const base = browniesState();
+		expect(wizardStepIssues(base, 5)).toHaveLength(0);
+		const withBadCustom: WizardState = {
+			...base,
+			editor: {
+				...base.editor,
+				customLine: {
+					label: "",
+					price: "abc",
+					prompt: "",
+					imageStorageIds: [],
+				},
+			},
+		};
+		expect(
+			wizardStepIssues(withBadCustom, 5).map((i) => i.field),
+		).toEqual(["customPrice"]);
+		expect(
+			wizardStepIssues({ ...base, minQuantity: "1" }, 5).map((i) => i.field),
+		).toEqual(["minQuantity"]);
+		expect(
+			wizardStepIssues({ ...base, minNoticeDays: "31" }, 5).map(
+				(i) => i.field,
+			),
+		).toEqual(["minNoticeDays"]);
+		expect(
+			wizardStepIssues(
+				{ ...base, minQuantity: "20", minNoticeDays: "0" },
+				5,
 			),
 		).toHaveLength(0);
 	});
 });
 
 describe("buildWizardSubmitValues", () => {
-	it("maps the choices branch onto one option axis with per-value variants", () => {
+	it("maps the choices branch through the SHARED buildSubmitVariants", () => {
 		const values = buildWizardSubmitValues(browniesState());
 		expect(values.options).toEqual([
 			{ name: "Size", values: ["Small", "Medium", "Large"] },
@@ -113,12 +246,10 @@ describe("buildWizardSubmitValues", () => {
 			price: 1200,
 			onHand: 0,
 			active: true,
-			blockWhenOutOfStock: false, // made to order
+			blockWhenOutOfStock: false,
 			requiresProof: false,
 		});
-		// Prices round to integer sen.
 		expect(values.variants[2].price).toBe(2850);
-		// Untouched publish settings keep their defaults.
 		expect(values.hidden).toBe(false);
 		expect(values.categoryIds).toEqual([]);
 	});
@@ -133,73 +264,54 @@ describe("buildWizardSubmitValues", () => {
 				price: 550,
 				onHand: 20,
 				active: true,
-				blockWhenOutOfStock: true, // from stock
+				blockWhenOutOfStock: true,
 				requiresProof: false,
 				imageStorageIds: [],
 			},
 		]);
 	});
 
-	it("carries optional SKUs per choice, trimming and dropping blanks", () => {
-		const values = buildWizardSubmitValues({
-			...browniesState(),
-			skus: { Small: " BRN-S ", Medium: "", Large: "  " },
-		});
-		expect(values.variants.map((v) => v.sku)).toEqual([
-			"BRN-S",
-			undefined,
-			undefined,
-		]);
-	});
-
-	it("carries the review-step publish settings (hidden + categories)", () => {
-		const values = buildWizardSubmitValues({
-			...singleFromStock(),
-			hidden: true,
-			categoryIds: ["cat1", "cat2"] as never,
-		});
-		// Counter-only products are created hidden directly — no create-then-edit
-		// round trip (docs/hidden-products.md).
-		expect(values.hidden).toBe(true);
-		expect(values.categoryIds).toEqual(["cat1", "cat2"]);
-	});
-
-	it("applies mockup approval only when the product is made to order", () => {
-		const mto = buildWizardSubmitValues({
-			...browniesState(),
-			requiresProof: true,
-		});
-		expect(mto.variants.every((v) => v.requiresProof)).toBe(true);
-		// Flipping back to From stock at review quietly drops the flag.
-		const fromStock = buildWizardSubmitValues({
-			...singleFromStock(),
-			requiresProof: true,
-		});
-		expect(fromStock.variants.every((v) => !v.requiresProof)).toBe(true);
-	});
-
-	it("appends the custom line as a flagged made-to-order variant", () => {
-		const values = buildWizardSubmitValues({
-			...browniesState(),
-			customLine: { label: " Bespoke cake ", price: "", prompt: "Theme?" },
-		});
+	it("carries per-choice extras: SKU, photo, on/off, approval and the custom line", () => {
+		const s = browniesState();
+		const decked: WizardState = {
+			...s,
+			editor: {
+				options: s.editor.options,
+				rows: [
+					{
+						...s.editor.rows[0],
+						sku: " BRN-S ",
+						imageStorageIds: ["img1"],
+						requiresProof: true,
+					},
+					{ ...s.editor.rows[1], active: false },
+					{ ...s.editor.rows[2] },
+				],
+				customLine: {
+					label: " Bespoke cake ",
+					price: "150.5",
+					prompt: "Theme?",
+					imageStorageIds: ["img2"],
+				},
+			},
+		};
+		const values = buildWizardSubmitValues(decked);
 		expect(values.variants).toHaveLength(4);
-		const custom = values.variants[3];
-		expect(custom).toMatchObject({
+		expect(values.variants[0]).toMatchObject({
+			sku: "BRN-S",
+			imageStorageIds: ["img1"],
+			requiresProof: true,
+		});
+		expect(values.variants[1].active).toBe(false);
+		expect(values.variants[3]).toMatchObject({
 			isCustom: true,
 			customLabel: "Bespoke cake",
 			customPrompt: "Theme?",
-			price: 0, // blank = "Price on quote"
+			price: 15050,
+			imageStorageIds: ["img2"],
 			blockWhenOutOfStock: false,
 			requiresProof: true,
 		});
-		// A typed price rounds to sen like the full form.
-		const priced = buildWizardSubmitValues({
-			...browniesState(),
-			customLine: { label: "", price: "150.5", prompt: "" },
-		});
-		expect(priced.variants[3].price).toBe(15050);
-		expect(priced.variants[3].customLabel).toBeUndefined();
 	});
 
 	it("carries the order rules, leaving blanks unset", () => {
@@ -210,260 +322,119 @@ describe("buildWizardSubmitValues", () => {
 		});
 		expect(withRules.minQuantity).toBe(20);
 		expect(withRules.minNoticeDays).toBe(3);
-		// Blank = no rule at all (not 0) — the create mutation omits them.
 		const noRules = buildWizardSubmitValues(browniesState());
 		expect(noRules.minQuantity).toBeUndefined();
 		expect(noRules.minNoticeDays).toBeUndefined();
 	});
 
-	it("step 5 rejects out-of-range order rules but allows blanks", () => {
-		const base = browniesState();
-		expect(
-			wizardStepIssues({ ...base, minQuantity: "1" }, 5).map((i) => i.field),
-		).toEqual(["minQuantity"]);
-		expect(
-			wizardStepIssues({ ...base, minQuantity: "1000" }, 5).map((i) => i.field),
-		).toEqual(["minQuantity"]);
-		expect(
-			wizardStepIssues({ ...base, minNoticeDays: "31" }, 5).map((i) => i.field),
-		).toEqual(["minNoticeDays"]);
-		expect(
-			wizardStepIssues({ ...base, minQuantity: "20", minNoticeDays: "0" }, 5),
-		).toHaveLength(0);
-	});
-
-	it("step 5 validates only a non-blank invalid custom price", () => {
-		const base = browniesState();
-		expect(wizardStepIssues(base, 5)).toHaveLength(0);
-		expect(
-			wizardStepIssues(
-				{ ...base, customLine: { label: "", price: "", prompt: "" } },
-				5,
-			),
-		).toHaveLength(0);
-		expect(
-			wizardStepIssues(
-				{ ...base, customLine: { label: "", price: "abc", prompt: "" } },
-				5,
-			).map((i) => i.field),
-		).toEqual(["customPrice"]);
-	});
-
-	it("trims the name and drops a blank description", () => {
+	it("carries the review-step publish settings (hidden + categories)", () => {
 		const values = buildWizardSubmitValues({
 			...singleFromStock(),
-			name: "  Nasi lemak  ",
-			description: "   ",
+			hidden: true,
+			categoryIds: ["cat1", "cat2"] as never,
 		});
-		expect(values.name).toBe("Nasi lemak");
-		expect(values.description).toBeUndefined();
+		expect(values.hidden).toBe(true);
+		expect(values.categoryIds).toEqual(["cat1", "cat2"]);
 	});
 });
 
-describe("wizardToFormInitialValues (open-in-full-editor handoff)", () => {
-	it("prefills the full form with the wizard draft, image previews included", () => {
-		const state: WizardState = {
-			...browniesState(),
+describe("wizard ⇄ full form (shared substrate)", () => {
+	it("hands the editor substrate to the full form AS-IS — lossless", () => {
+		const s = browniesState();
+		const handoff = wizardHandoff({
+			...s,
 			images: [{ id: "st1", url: "blob:preview-1" }],
-		};
-		const initial = wizardToFormInitialValues(state);
-		expect(initial.name).toBe("Chocolate fudge brownies");
-		expect(initial.options).toEqual([
-			{ name: "Size", values: ["Small", "Medium", "Large"] },
-		]);
-		// Prices arrive in sen — the form's initialEditorState divides by 100.
-		expect(initial.variants?.map((v) => v.price)).toEqual([1200, 1800, 2850]);
-		expect(initial.imageStorageIds).toEqual(["st1"]);
-		expect(initial.imageUrls).toEqual(["blob:preview-1"]);
-	});
-});
-
-/** Full-form draft builder for the reverse trip (form → wizard). */
-function formDraft(partial: Partial<ProductFormDraft> = {}): ProductFormDraft {
-	return {
-		name: "Chocolate fudge brownies",
-		description: "",
-		hidden: false,
-		categoryIds: [],
-		images: [],
-		editor: {
-			options: [{ name: "Size", values: ["Small", "Medium"] }],
-			rows: [
-				{
-					optionValues: ["Small"],
-					sku: "BRN-S",
-					price: "12",
-					stock: "",
-					active: true,
-					blockWhenOutOfStock: false,
-					requiresProof: false,
-					imageStorageIds: [],
-				},
-				{
-					optionValues: ["Medium"],
-					sku: "",
-					price: "", // blank stays blank — never coerced to 0.00
-					stock: "",
-					active: true,
-					blockWhenOutOfStock: false,
-					requiresProof: false,
-					imageStorageIds: [],
-				},
-			],
-			customLine: null,
-		},
-		minQuantity: "",
-		minNoticeDays: "",
-		...partial,
-	};
-}
-
-describe("formDraftToWizardState (switch back to guided setup)", () => {
-	it("round-trips a one-axis draft losslessly, raw strings intact", () => {
-		const { state, lost } = formDraftToWizardState(formDraft());
-		expect(lost).toEqual([]);
-		expect(state.hasChoices).toBe(true);
-		expect(state.axisName).toBe("Size");
-		expect(state.axisValues).toEqual(["Small", "Medium"]);
-		expect(state.prices).toEqual({ Small: "12", Medium: "" });
-		expect(state.skus).toEqual({ Small: "BRN-S", Medium: "" });
-		expect(state.madeToOrder).toBe(true); // all rows made-to-order
+			minQuantity: "20",
+		});
+		// The editor is the SAME object — strings, flags, photos, everything.
+		expect(handoff.initialEditor).toBe(s.editor);
+		expect(handoff.initialValues.name).toBe("Chocolate fudge brownies");
+		expect(handoff.initialValues.imageStorageIds).toEqual(["st1"]);
+		expect(handoff.initialValues.minQuantity).toBe(20);
 	});
 
-	it("maps a single-item draft onto the one-item branch", () => {
-		const { state, lost } = formDraftToWizardState(
-			formDraft({
-				editor: {
-					options: [],
-					rows: [
-						{
-							optionValues: [],
-							sku: "",
-							price: "5.50",
-							stock: "20",
-							active: true,
-							blockWhenOutOfStock: true,
-							requiresProof: false,
-							imageStorageIds: [],
-						},
-					],
-					customLine: null,
-				},
-			}),
-		);
-		expect(lost).toEqual([]);
-		expect(state.hasChoices).toBe(false);
-		expect(state.prices[""]).toBe("5.50");
-		expect(state.stocks[""]).toBe("20");
-		expect(state.madeToOrder).toBe(false); // from stock
-	});
-
-	it("names what the wizard can't carry: second axis, per-choice photos, deactivated rows", () => {
-		const base = formDraft();
-		const { lost } = formDraftToWizardState({
-			...base,
+	it("restores a form draft into the wizard AS-IS — no lost list, ever", () => {
+		const draft: ProductFormDraft = {
+			name: "Brownies",
+			description: "Fudgy",
+			hidden: true,
+			categoryIds: [],
+			images: [{ id: "st1", url: "blob:p1" }],
 			editor: {
 				options: [
 					{ name: "Size", values: ["S", "M"] },
 					{ name: "Flavour", values: ["Pandan"] },
 				],
 				rows: [
-					{
-						...base.editor.rows[0],
+					row({
 						optionValues: ["S", "Pandan"],
+						price: "12",
 						imageStorageIds: ["img1"],
-					},
-					{
-						...base.editor.rows[1],
-						optionValues: ["M", "Pandan"],
-						active: false,
-					},
+						blockWhenOutOfStock: false,
+					}),
+					row({ optionValues: ["M", "Pandan"], price: "", active: false }),
 				],
-				customLine: null,
-			},
-		});
-		expect(lost.join(" ")).toMatch(/second choice/i);
-		expect(lost.join(" ")).toMatch(/photos/i);
-		expect(lost.join(" ")).toMatch(/deactivated/i);
-	});
-
-	it("collapses mixed fulfilment to the majority and flags it", () => {
-		const base = formDraft();
-		const rows = ["S", "M", "L"].map((v, i) => ({
-			...base.editor.rows[0],
-			optionValues: [v],
-			sku: "",
-			blockWhenOutOfStock: i < 2, // 2 track, 1 made-to-order
-		}));
-		const { state, lost } = formDraftToWizardState({
-			...base,
-			editor: {
-				options: [{ name: "Size", values: ["S", "M", "L"] }],
-				rows,
-				customLine: null,
-			},
-		});
-		expect(lost.join(" ")).toMatch(/made-to-order \/ from-stock/i);
-		expect(state.madeToOrder).toBe(false); // majority tracks stock
-	});
-
-	it("carries the custom line and order rules through", () => {
-		const { state, lost } = formDraftToWizardState(
-			formDraft({
-				minQuantity: "20",
-				minNoticeDays: "3",
-				editor: {
-					...formDraft().editor,
-					customLine: {
-						label: "Bespoke",
-						price: "150",
-						prompt: "Theme?",
-						imageStorageIds: [],
-					},
+				customLine: {
+					label: "Bespoke",
+					price: "",
+					prompt: "",
+					imageStorageIds: ["img2"],
 				},
-			}),
-		);
-		expect(lost).toEqual([]);
-		expect(state.customLine).toEqual({
-			label: "Bespoke",
-			price: "150",
-			prompt: "Theme?",
-		});
+			},
+			minQuantity: "20",
+			minNoticeDays: "3",
+		};
+		const state = formDraftToWizardState(draft);
+		// Substrate passes straight through — second axis, photos, deactivated
+		// rows, mixed fulfilment, custom photo all intact.
+		expect(state.editor).toBe(draft.editor);
+		expect(state.hasChoices).toBe(true);
+		expect(state.fulfilmentAnswered).toBe(true);
+		expect(state.hidden).toBe(true);
 		expect(state.minQuantity).toBe("20");
-		expect(state.minNoticeDays).toBe("3");
+	});
+
+	it("round-trips wizard → form → wizard with identical state", () => {
+		const s = browniesState();
+		const handoff = wizardHandoff(s);
+		const draft: ProductFormDraft = {
+			name: handoff.initialValues.name ?? "",
+			description: handoff.initialValues.description ?? "",
+			hidden: handoff.initialValues.hidden ?? false,
+			categoryIds: handoff.initialValues.categoryIds ?? [],
+			images: [],
+			editor: handoff.initialEditor,
+			minQuantity: "",
+			minNoticeDays: "",
+		};
+		const back = formDraftToWizardState(draft);
+		expect(back.editor).toEqual(s.editor);
+		expect(back.name).toBe(s.name);
+		expect(back.hasChoices).toBe(true);
 	});
 });
 
 describe("wizardInitialStep", () => {
 	it("opens a fully answered draft at review", () => {
-		expect(
-			wizardInitialStep({ ...browniesState(), madeToOrder: true }),
-		).toBe(5);
+		expect(wizardInitialStep(browniesState())).toBe(5);
 	});
 
 	it("opens at the first unanswered / invalid step", () => {
 		expect(wizardInitialStep({ ...browniesState(), name: "" })).toBe(1);
 		expect(wizardInitialStep({ ...browniesState(), hasChoices: null })).toBe(2);
+		const s = browniesState();
 		expect(
-			wizardInitialStep({ ...browniesState(), prices: {} }),
+			wizardInitialStep({
+				...s,
+				editor: {
+					...s.editor,
+					rows: s.editor.rows.map((r) => ({ ...r, price: "" })),
+				},
+			}),
 		).toBe(3);
-		expect(wizardInitialStep({ ...browniesState(), madeToOrder: null })).toBe(
-			4,
-		);
-	});
-});
-
-describe("wizardBasicsToFormInitialValues (step-1 skip)", () => {
-	it("carries only the step-1 basics — no prefilled 0.00 pricing row", () => {
-		const initial = wizardBasicsToFormInitialValues({
-			...emptyWizardState(),
-			name: "Brownies",
-			images: [{ id: "st1", url: "blob:p1" }],
-		});
-		expect(initial.name).toBe("Brownies");
-		expect(initial.imageStorageIds).toEqual(["st1"]);
-		expect(initial.variants).toBeUndefined();
-		expect(initial.options).toBeUndefined();
+		expect(
+			wizardInitialStep({ ...s, fulfilmentAnswered: false }),
+		).toBe(4);
 	});
 });
 
@@ -471,11 +442,38 @@ describe("wizardPriceLabel", () => {
 	it("shows a single price or a range, dropping trailing .00", () => {
 		expect(wizardPriceLabel(singleFromStock(), "RM")).toBe("RM 5.50");
 		expect(wizardPriceLabel(browniesState(), "RM")).toBe("RM 12–28.50");
+		const s = browniesState();
 		expect(
 			wizardPriceLabel(
-				{ ...browniesState(), prices: { Small: "18", Medium: "18", Large: "18.00" } },
+				{
+					...s,
+					editor: {
+						...s.editor,
+						rows: s.editor.rows.map((r) => ({ ...r, price: "18.00" })),
+					},
+				},
 				"RM",
 			),
 		).toBe("RM 18");
+	});
+
+	it("ignores deactivated choices", () => {
+		const s = browniesState();
+		expect(
+			wizardPriceLabel(
+				{
+					...s,
+					editor: {
+						...s.editor,
+						rows: [
+							{ ...s.editor.rows[0] },
+							{ ...s.editor.rows[1], active: false, price: "99" },
+							{ ...s.editor.rows[2] },
+						],
+					},
+				},
+				"RM",
+			),
+		).toBe("RM 12–28.50");
 	});
 });

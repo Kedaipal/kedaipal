@@ -1,7 +1,7 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import { Archive, ArchiveRestore, ArrowLeft, Eye } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
@@ -9,11 +9,15 @@ import {
 	PageHeader,
 	PageHeaderSkeleton,
 } from "../components/dashboard/page-header";
-import { ProductForm } from "../components/forms/product-form";
+import {
+	ProductForm,
+	type ProductFormDraft,
+} from "../components/forms/product-form";
 import { ProductDetailSheet } from "../components/storefront/product-detail-sheet";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { draftPreviewOverlay } from "../lib/product-preview";
 import { type ProductStatus, productStatus } from "../lib/product-status";
 import { hasFeature } from "../lib/subscription";
 import { cn } from "../lib/utils";
@@ -116,9 +120,15 @@ function EditProductRoute() {
 	const setProductCategories = useMutation(api.categories.setProductCategories);
 	const archive = useMutation(api.products.archive);
 	// Buyer-eye preview: mounts the REAL storefront detail sheet in-page (the
-	// same bottom sheet buyers get) — no new tab. Shows the SAVED product; the
-	// summary strip is the live-draft view.
-	const [previewOpen, setPreviewOpen] = useState(false);
+	// same bottom sheet buyers get) — no new tab — rendered from the form's
+	// LIVE DRAFT so unsaved edits show exactly as buyers would see them after
+	// saving. Built once per open (a fresh object identity every render would
+	// reset the sheet's selection state).
+	const formDraftRef = useRef<(() => ProductFormDraft) | null>(null);
+	const [previewProduct, setPreviewProduct] = useState<Record<
+		string,
+		unknown
+	> | null>(null);
 
 	if (product === undefined || categoryIds === undefined || !retailer) {
 		return <ProductDetailSkeleton />;
@@ -128,6 +138,16 @@ function EditProductRoute() {
 	}
 
 	const status = productStatus(product);
+
+	function openPreview() {
+		const draft = formDraftRef.current?.();
+		if (!draft) return;
+		// Identity fields (_id, retailerId, currency, _creationTime…) come from
+		// the saved row; everything the buyer SEES comes from the draft overlay.
+		// The cast covers the fabricated preview variant ids — the sheet only
+		// uses them as keys and through the stubbed onAdd.
+		setPreviewProduct({ ...product, ...draftPreviewOverlay(draft) });
+	}
 
 	return (
 		<div className="flex flex-col gap-4 lg:max-w-2xl">
@@ -140,8 +160,8 @@ function EditProductRoute() {
 						<StatusChip status={status} />
 						<Button
 							variant="outline"
-							onClick={() => setPreviewOpen(true)}
-							title="See this product exactly as buyers do"
+							onClick={openPreview}
+							title="See this product exactly as buyers do — including unsaved changes"
 						>
 							<Eye className="size-4" aria-hidden="true" />
 							Preview
@@ -185,9 +205,9 @@ function EditProductRoute() {
 				</h2>
 				<button
 					type="button"
-					onClick={() => setPreviewOpen(true)}
+					onClick={openPreview}
 					aria-label="Preview this product as buyers see it"
-					title="See this product exactly as buyers do"
+					title="See this product exactly as buyers do — including unsaved changes"
 					className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted"
 				>
 					<Eye className="size-5" />
@@ -198,6 +218,7 @@ function EditProductRoute() {
 			<ProductForm
 				key={product._id}
 				retailerId={product.retailerId}
+				draftRef={formDraftRef}
 				categoriesLocked={
 					!retailer.actingAsAdmin &&
 					!hasFeature(retailer.subscription, "categories")
@@ -289,22 +310,14 @@ function EditProductRoute() {
 				}}
 			/>
 
-			{/* The storefront's own product sheet, buyer-identical. Cart wiring is
-			    stubbed: quantity steppers and option pills work, but "Add to cart"
-			    just explains it's a preview. Inactive variants filtered out to
-			    match what buyers can see. */}
+			{/* The storefront's own product sheet, buyer-identical, fed the LIVE
+			    draft. Cart wiring is stubbed: quantity steppers and option pills
+			    work, but "Add to cart" just explains it's a preview. */}
 			<ProductDetailSheet
-				product={
-					previewOpen
-						? {
-								...product,
-								variants: product.variants.filter((vr) => vr.active),
-							}
-						: null
-				}
+				product={previewProduct as never}
 				retailerId={product.retailerId}
 				cartQuantity={0}
-				onClose={() => setPreviewOpen(false)}
+				onClose={() => setPreviewProduct(null)}
 				onAdd={() =>
 					toast("Just a preview — buyers add to cart here.", {
 						id: "product-preview",
