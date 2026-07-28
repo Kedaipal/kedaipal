@@ -398,12 +398,27 @@ seller's), same-anchor custom-stage moves stay free, and a small
 that dies mid-delivery never strands the order. Webhook-less sellers
 (`lastEventAt` never set) see zero change — manual advancing IS their
 documented path above. Pure predicates `riderDrivesOrderStatus` +
-`isRiderManagedTransition` in `convex/lib/lalamove.ts` (unit-tested);
-client-side UX guard only — the server mutation is unchanged (the seller
-owns the order, and the webhook's same-status replays are already no-ops).
-Known gap, deliberate: the inbox **bulk** status bar can still mass-mark
-shipped without job awareness (needs a per-order job lookup in
-`searchOrders` — follow-up, not hotfix material).
+`isRiderManagedTransition` in `convex/lib/lalamove.ts` (unit-tested).
+
+**The gate is enforced server-side** (`riderOwnsTransition` in
+`convex/orders.ts`) across all three seller entry points — `advanceToStage`
+(the stepper), `updateStatus`, and the inbox's `bulkUpdateStatus` — with the
+client-side rendering above kept purely as the UX affordance. The stepper's
+"Update manually" confirm passes `overrideRiderGate: true`; **bulk has no
+override** (whether a given order's automatic update failed is a per-order
+judgement), so a rider-driven order is **skipped** and counted in the
+mutation's `skipped` total, exactly like a mockup-gated one.
+
+Why server-side and not just UI: an early manual "shipped" is **permanent**,
+not cosmetic. `applyStatusTransition` WhatsApps the buyer immediately, and
+`SHIPPABLE_FROM` is `{confirmed, packed}` — so once the order reads
+"shipped", the rider's real PICKED_UP event is skipped and
+`carrierTrackingUrl` is never written. The buyer gets a shipped notice with
+no tracking link and the webhook can never heal it. This closes the gap
+previously logged here as "the inbox bulk status bar can still mass-mark
+shipped without job awareness"; it's resolved in the mutation (one indexed
+`by_order` lookup per order) rather than by threading job state through
+`searchOrders`.
 
 ### Hygiene + lifecycle guards (pre-ship audit, 22 Jul)
 

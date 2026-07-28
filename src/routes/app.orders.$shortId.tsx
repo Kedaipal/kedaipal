@@ -428,11 +428,13 @@ function OrderDetailRoute() {
 		Date.now(),
 	);
 
-	async function handleAdvance(stageId: string) {
+	// `overrideRiderGate` is only ever true from the "Update manually" confirm
+	// below — the server refuses a rider-managed advance without it.
+	async function handleAdvance(stageId: string, overrideRiderGate = false) {
 		if (!order) return;
 		setPending(stageId);
 		try {
-			await advanceToStage({ orderId: order._id, stageId });
+			await advanceToStage({ orderId: order._id, stageId, overrideRiderGate });
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -1389,7 +1391,7 @@ function OrderDetailRoute() {
 					}. Only do this if the automatic update didn't come through.`}
 					confirmLabel={`Mark as ${stageLabel(nextStage, "en")}`}
 					cancelLabel="Keep automatic"
-					onConfirm={() => handleAdvance(nextStage.id)}
+					onConfirm={() => handleAdvance(nextStage.id, true)}
 				/>
 			) : null}
 

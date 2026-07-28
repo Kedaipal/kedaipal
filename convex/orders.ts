@@ -21,6 +21,10 @@ import {
 import { stampRetailerActivation } from "./lib/activation";
 import { assertValidAddress } from "./lib/address";
 import { requireCustomerName } from "./lib/customer";
+import {
+	isRiderManagedTransition,
+	riderDrivesOrderStatus,
+} from "./lib/lalamove";
 import { assertPlanFeature } from "./subscriptions";
 import {
 	recordOrderCancelled,
@@ -1843,6 +1847,43 @@ async function reverseCancellationEffects(
 	await recordOrderCancelled(ctx, order.retailerId, order.createdAt);
 }
 
+/**
+ * Whether a live Lalamove rider — not the seller — owns this advance.
+ *
+ * True only when the order has an ACTIVE job whose webhook has demonstrably
+ * fired (`lastEventAt` set) AND the target anchor is one the webhook drives
+ * (shipped at pickup, delivered at drop-off). Webhook-less sellers keep manual
+ * control; that degraded path is documented in docs/delivery-lalamove.md.
+ *
+ * The damage this prevents is PERMANENT, not cosmetic: `applyStatusTransition`
+ * WhatsApps the buyer immediately, and the webhook's own guards
+ * (`SHIPPABLE_FROM` = confirmed|packed) skip the real pickup event once the
+ * order already reads "shipped" — so an early manual advance means the buyer
+ * gets a shipped notice with NO live-tracking link, and the rider's later
+ * pickup can never heal it.
+ *
+ * Mirrors the client-side gate in app.orders.$shortId.tsx, which is a UX
+ * affordance only — the inbox bulk bar reaches the same transitions with no
+ * gate at all, so this is the authoritative one.
+ */
+async function riderOwnsTransition(
+	ctx: MutationCtx,
+	order: Doc<"orders">,
+	targetAnchor: "confirmed" | "packed" | "shipped" | "delivered",
+): Promise<boolean> {
+	if (!isRiderManagedTransition(targetAnchor, order.status)) return false;
+	const job = await ctx.db
+		.query("deliveryJobs")
+		.withIndex("by_order", (q) => q.eq("orderId", order._id))
+		.first();
+	return !!job && riderDrivesOrderStatus(job);
+}
+
+/** Seller-facing message for a blocked manual advance. The order-detail
+ * stepper offers an explicit "Update manually" confirm that overrides it. */
+const RIDER_GATE_MESSAGE =
+	"A Lalamove rider is on this order — it updates itself when the rider picks up or drops off. Open the order and use “Update manually” if the automatic update didn't arrive.";
+
 // Exported for the Lalamove webhook's auto-transitions (convex/lalamove.ts) —
 // rider picked up → shipped, completed → delivered ride the SAME path as a
 // seller tap, so WhatsApp notify, stage vocabulary, activation stamping and
@@ -1920,8 +1961,14 @@ export const updateStatus = mutation({
 		// Carrier tracking URL — only accepted when transitioning to "shipped".
 		// Ignored for other status transitions.
 		carrierTrackingUrl: v.optional(v.string()),
+		// Deliberate override of the rider gate below — the seller confirmed the
+		// automatic update never arrived (dead/unregistered webhook).
+		overrideRiderGate: v.optional(v.boolean()),
 	},
-	handler: async (ctx, { orderId, status, note, carrierTrackingUrl }): Promise<void> => {
+	handler: async (
+		ctx,
+		{ orderId, status, note, carrierTrackingUrl, overrideRiderGate },
+	): Promise<void> => {
 		const { order, access } = await requireOrderAccess(ctx, orderId);
 
 		// Mockup gate: a proof-required order can't move into production (packed)
@@ -1931,6 +1978,16 @@ export const updateStatus = mutation({
 			throw new ConvexError(
 				"Awaiting mockup approval — the buyer must approve the mockup (or you can proceed without approval) before this order can be packed",
 			);
+		}
+
+		// Rider gate: the webhook drives shipped/delivered while a booking is
+		// live. Cancelling is never gated (not a rider-managed anchor).
+		if (
+			!overrideRiderGate &&
+			status !== "cancelled" &&
+			(await riderOwnsTransition(ctx, order, status))
+		) {
+			throw new ConvexError(RIDER_GATE_MESSAGE);
 		}
 
 		await applyStatusTransition(ctx, order, status, { note, carrierTrackingUrl });
@@ -1982,6 +2039,17 @@ export const bulkUpdateStatus = mutation({
 				continue;
 			}
 			if (status === "packed" && isMockupGateClosed(order)) {
+				skipped++;
+				continue;
+			}
+			// A live rider owns shipped/delivered — skip rather than message the
+			// buyer early without a tracking link. Deliberately no bulk override:
+			// overriding is a per-order judgement call (did THIS order's automatic
+			// update fail?), so it lives behind the order-detail confirm.
+			if (
+				status !== "cancelled" &&
+				(await riderOwnsTransition(ctx, order, status))
+			) {
 				skipped++;
 				continue;
 			}
@@ -2162,10 +2230,13 @@ export const advanceToStage = mutation({
 		note: v.optional(v.string()),
 		// Accepted only when the target stage is shipped-anchored; ignored otherwise.
 		carrierTrackingUrl: v.optional(v.string()),
+		// Set by the order-detail "Update manually" confirm — the seller asserts
+		// the rider's automatic update never landed. See riderOwnsTransition.
+		overrideRiderGate: v.optional(v.boolean()),
 	},
 	handler: async (
 		ctx,
-		{ orderId, stageId, note, carrierTrackingUrl },
+		{ orderId, stageId, note, carrierTrackingUrl, overrideRiderGate },
 	): Promise<void> => {
 		const { order, access } = await requireOrderAccess(ctx, orderId);
 		const retailer = access.retailer;
@@ -2196,6 +2267,15 @@ export const advanceToStage = mutation({
 			throw new ConvexError(
 				"Awaiting mockup approval — the buyer must approve the mockup (or you can proceed without approval) before this order can move into production.",
 			);
+		}
+
+		// Rider gate — same rule as updateStatus. Within-anchor stage moves don't
+		// change canonical status, so isRiderManagedTransition lets them through.
+		if (
+			!overrideRiderGate &&
+			(await riderOwnsTransition(ctx, order, targetStatus))
+		) {
+			throw new ConvexError(RIDER_GATE_MESSAGE);
 		}
 
 		const now = Date.now();

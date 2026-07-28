@@ -5188,3 +5188,187 @@ describe("minimum order rules", () => {
 		).rejects.toThrow(/whole/);
 	});
 });
+
+/**
+ * The rider gate: while a Lalamove booking is live AND its webhook has proven
+ * itself (`lastEventAt` set), the seller's manual shipped/delivered advance is
+ * refused server-side. Client-side gating alone was insufficient — the inbox
+ * bulk bar reaches the same transitions with no gate at all.
+ *
+ * Why it matters beyond a stray notification: `SHIPPABLE_FROM` in
+ * convex/lalamove.ts is {confirmed, packed}, so once the order reads "shipped"
+ * the rider's real pickup event is skipped and `carrierTrackingUrl` is never
+ * written — the buyer's tracking link is lost permanently.
+ */
+describe("orders — Lalamove rider gate on manual advances", () => {
+	const asA = (t: ReturnType<typeof setup>) =>
+		t.withIdentity({ subject: USER_A });
+
+	async function orderWithJob(
+		t: ReturnType<typeof setup>,
+		job: { status: string; lastEventAt?: number } | null,
+	) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 50 });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		if (!order) throw new Error("no order");
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "packed",
+		});
+		if (job) {
+			await t.run(async (ctx) => {
+				await ctx.db.insert("deliveryJobs", {
+					orderId: order._id,
+					retailerId: retailer._id,
+					provider: "lalamove",
+					status: job.status as "assigning",
+					costActual: 900,
+					quotationId: "q_test",
+					vehicleType: "MOTORCYCLE",
+					lastEventAt: job.lastEventAt,
+					createdAt: Date.now(),
+					updatedAt: Date.now(),
+				});
+			});
+		}
+		return { retailer, order, shortId, productId };
+	}
+
+	test("blocks a manual shipped while a live rider drives the order", async () => {
+		const t = setup();
+		const { order } = await orderWithJob(t, {
+			status: "ongoing",
+			lastEventAt: 1_753_500_000_000,
+		});
+		await expect(
+			asA(t).mutation(api.orders.updateStatus, {
+				orderId: order._id,
+				status: "shipped",
+			}),
+		).rejects.toThrow(/Lalamove rider/);
+		expect((await t.run((ctx) => ctx.db.get(order._id)))?.status).toBe("packed");
+	});
+
+	test("overrideRiderGate lets the seller through (dead webhook escape hatch)", async () => {
+		const t = setup();
+		const { order } = await orderWithJob(t, {
+			status: "ongoing",
+			lastEventAt: 1_753_500_000_000,
+		});
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "shipped",
+			overrideRiderGate: true,
+		});
+		expect((await t.run((ctx) => ctx.db.get(order._id)))?.status).toBe(
+			"shipped",
+		);
+	});
+
+	test("a webhook-less booking keeps manual control (documented degraded path)", async () => {
+		const t = setup();
+		const { order } = await orderWithJob(t, { status: "ongoing" });
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "shipped",
+		});
+		expect((await t.run((ctx) => ctx.db.get(order._id)))?.status).toBe(
+			"shipped",
+		);
+	});
+
+	test("a terminal job frees the order — no gate", async () => {
+		const t = setup();
+		const { order } = await orderWithJob(t, {
+			status: "canceled",
+			lastEventAt: 1_753_500_000_000,
+		});
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "shipped",
+		});
+		expect((await t.run((ctx) => ctx.db.get(order._id)))?.status).toBe(
+			"shipped",
+		);
+	});
+
+	test("cancelling is never gated", async () => {
+		const t = setup();
+		const { order } = await orderWithJob(t, {
+			status: "ongoing",
+			lastEventAt: 1_753_500_000_000,
+		});
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "cancelled",
+		});
+		expect((await t.run((ctx) => ctx.db.get(order._id)))?.status).toBe(
+			"cancelled",
+		);
+	});
+
+	test("advanceToStage (the order-detail stepper) is gated too, and honours the override", async () => {
+		const t = setup();
+		const { order } = await orderWithJob(t, {
+			status: "picked_up",
+			lastEventAt: 1_753_500_000_000,
+		});
+		await expect(
+			asA(t).mutation(api.orders.advanceToStage, {
+				orderId: order._id,
+				stageId: "default:shipped",
+			}),
+		).rejects.toThrow(/Lalamove rider/);
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: "default:shipped",
+			overrideRiderGate: true,
+		});
+		expect((await t.run((ctx) => ctx.db.get(order._id)))?.status).toBe(
+			"shipped",
+		);
+	});
+
+	test("bulkUpdateStatus skips the rider-driven order and still moves the rest", async () => {
+		const t = setup();
+		const { order: gated, retailer, productId } = await orderWithJob(t, {
+			status: "ongoing",
+			lastEventAt: 1_753_500_000_000,
+		});
+		const { shortId: plainShortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const plain = await t.query(api.orders.get, {
+			token: await tk(t, plainShortId),
+		});
+		if (!plain) throw new Error("no order");
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: plain._id,
+			status: "packed",
+		});
+
+		const res = await asA(t).mutation(api.orders.bulkUpdateStatus, {
+			orderIds: [gated._id, plain._id],
+			status: "shipped",
+		});
+		expect(res).toEqual({ updated: 1, skipped: 1 });
+		expect((await t.run((ctx) => ctx.db.get(gated._id)))?.status).toBe("packed");
+		expect((await t.run((ctx) => ctx.db.get(plain._id)))?.status).toBe(
+			"shipped",
+		);
+	});
+});
