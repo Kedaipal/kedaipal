@@ -50,6 +50,7 @@ import {
 } from "../hooks/useDashboardRetailer";
 import { useRevealOnAdd } from "../hooks/useRevealOnAdd";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
+import { useUpdateSettings } from "../hooks/useUpdateSettings";
 import { convexErrorMessage } from "../lib/format";
 import {
 	ANCHOR_UI_LABELS,
@@ -284,20 +285,16 @@ function SettingsRoute() {
 	// While acting-as a seller we keep the seller's real subscription state visible.
 	const adminOwnStore = isAdmin && retailer?.actingAsAdmin !== true;
 	const renameSlugMutation = useMutation(api.retailers.renameSlug);
-	const updateSettingsMutation = useMutation(api.retailers.updateSettings);
 	// In admin act-as, inject the seller's `retailerId` so edits land on THEIR
 	// store, not the admin's own (both mutations resolve by identity when it's
-	// omitted). Wrapping here keeps every call site below unchanged.
+	// omitted). Settings writes share the act-as-aware hook (also used by the
+	// extracted tab components); renameSlug is wrapped locally the same way.
 	const renameSlug = useCallback(
 		(args: { newSlug: string }) =>
 			renameSlugMutation({ ...args, retailerId: actAsRetailerId }),
 		[renameSlugMutation, actAsRetailerId],
 	);
-	const updateSettings = useCallback(
-		(args: Parameters<typeof updateSettingsMutation>[0]) =>
-			updateSettingsMutation({ ...args, retailerId: actAsRetailerId }),
-		[updateSettingsMutation, actAsRetailerId],
-	);
+	const updateSettings = useUpdateSettings();
 
 	// URL is the source of truth for the active tab, so deep links (e.g. the
 	// "View billing" banner → ?tab=billing) actually switch the tab even when the

@@ -42,6 +42,7 @@ import type * as lib_insights from "../lib/insights.js";
 import type * as lib_lalamove from "../lib/lalamove.js";
 import type * as lib_lalamoveSignature from "../lib/lalamoveSignature.js";
 import type * as lib_legal from "../lib/legal.js";
+import type * as lib_locale from "../lib/locale.js";
 import type * as lib_mapsUrl from "../lib/mapsUrl.js";
 import type * as lib_minOrderRules from "../lib/minOrderRules.js";
 import type * as lib_order from "../lib/order.js";
@@ -122,6 +123,7 @@ declare const fullApi: ApiFromModules<{
   "lib/lalamove": typeof lib_lalamove;
   "lib/lalamoveSignature": typeof lib_lalamoveSignature;
   "lib/legal": typeof lib_legal;
+  "lib/locale": typeof lib_locale;
   "lib/mapsUrl": typeof lib_mapsUrl;
   "lib/minOrderRules": typeof lib_minOrderRules;
   "lib/order": typeof lib_order;

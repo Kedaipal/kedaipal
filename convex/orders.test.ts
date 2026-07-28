@@ -4737,6 +4737,12 @@ describe("orders — delivery charge", () => {
 		let order = await t.query(api.orders.get, { token });
 		expect(order?.deliveryFeePending).toBe(true);
 		expect(order?.total).toBe(12000); // fee not yet applied
+		// WHY is frozen alongside the flag — drives the seller card's explanation
+		// (a Lalamove store must never read the radius-band copy).
+		const pendingReason = await t.run(async (ctx) =>
+			(await ctx.db.get(order!._id))?.deliveryFeePendingReason,
+		);
+		expect(pendingReason).toBe("out_of_range");
 
 		// Both payment paths are held while the total isn't final.
 		await expect(
@@ -4758,6 +4764,12 @@ describe("orders — delivery charge", () => {
 		expect(order?.deliveryFeePending).toBeUndefined();
 		expect(order?.deliveryFee).toBe(2500);
 		expect(order?.total).toBe(14500);
+		// The frozen reason clears with the flag (t.run serializes the unset
+		// field to null, so normalize explicitly).
+		const clearedReason = await t.run(async (ctx) =>
+			(await ctx.db.get(order!._id))?.deliveryFeePendingReason ?? null,
+		);
+		expect(clearedReason).toBeNull();
 		// Snapshot (mode "manual") is on the seller read; the buyer path strips it.
 		const sellerOrder = await asUser.query(api.orders.get, {
 			shortId: created.shortId,
@@ -4825,7 +4837,8 @@ describe("orders — delivery charge", () => {
 		expect(order?.deliveryFee).toBe(1500);
 		expect(order?.total).toBe(13500);
 
-		// Move out of range on an "arrange" store → back to fee-pending.
+		// Move out of range on an "arrange" store → back to fee-pending, with the
+		// re-priced reason frozen for the seller card.
 		await t.mutation(api.orders.updateDeliveryAddress, {
 			token,
 			deliveryAddress: addressAtKm(50),
@@ -4834,6 +4847,10 @@ describe("orders — delivery charge", () => {
 		expect(order?.deliveryFee).toBeUndefined();
 		expect(order?.deliveryFeePending).toBe(true);
 		expect(order?.total).toBe(12000);
+		const reason = await t.run(async (ctx) =>
+			(await ctx.db.get(order!._id))?.deliveryFeePendingReason,
+		);
+		expect(reason).toBe("out_of_range");
 	});
 
 	test("delivery fee and mockup quote are independent extras — re-pricing keeps both", async () => {

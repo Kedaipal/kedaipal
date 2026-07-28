@@ -22,12 +22,22 @@ export type PublicDeliveryQuote =
 	| { kind: "free"; reason?: "threshold" }
 	| { kind: "fee"; fee: number }
 	| { kind: "pending"; reason: "out_of_range" | "no_coords" | "unquotable" }
-	| { kind: "blocked"; reason: "out_of_range" | "no_coords" | "unquotable" }
+	// "store_unavailable" is produced only by the live-quote client collapse
+	// (broken seller keys) — the radius/flat resolver never emits it.
+	| {
+			kind: "blocked";
+			reason:
+				| "out_of_range"
+				| "no_coords"
+				| "unquotable"
+				| "store_unavailable";
+	  }
 	// Pricing mode "lalamove": this reactive query can't fetch the provider —
-	// the checkout must call the lalamove.quoteForCheckout ACTION once the
-	// buyer picks an address. `onUnquotable` tells the client what happens
-	// if that action comes back unavailable (copy + submit gating).
-	| { kind: "live"; onUnquotable: "arrange" | "block" };
+	// the client must call the lalamove.quoteForCheckout ACTION once the buyer
+	// picks an address, and no quote = no order (strict since 27 Jul: the buyer
+	// always sees the real rider price; unquotable/pin-less addresses can't
+	// submit).
+	| { kind: "live" };
 
 export const quote = query({
 	args: {
@@ -44,10 +54,7 @@ export const quote = query({
 		const retailer = await ctx.db.get(args.retailerId);
 		if (!retailer) return { kind: "free" };
 		if (retailer.deliveryConfig?.mode === "lalamove") {
-			return {
-				kind: "live",
-				onUnquotable: retailer.deliveryConfig.onUnquotable,
-			};
+			return { kind: "live" };
 		}
 		const destination =
 			args.latitude !== undefined &&
