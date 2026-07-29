@@ -5188,3 +5188,143 @@ describe("minimum order rules", () => {
 		).rejects.toThrow(/whole/);
 	});
 });
+
+describe("orders — manual courier + tracking number on shipped (86eyehvk4)", () => {
+	async function seedShippableOrder(t: ReturnType<typeof convexTest>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, {
+			token: await tk(t, shortId),
+		});
+		return { retailer, shortId, orderId: order!._id };
+	}
+
+	test("updateStatus to shipped stores courier + number and derives the registry link", async () => {
+		const t = setup();
+		const { shortId, orderId } = await seedShippableOrder(t);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.orders.updateStatus, {
+			orderId,
+			status: "shipped",
+			courierName: "J&T Express",
+			trackingNo: "630002864925",
+		});
+		const updated = await t.query(api.orders.get, {
+			token: await tk(t, shortId),
+		});
+		expect(updated?.status).toBe("shipped");
+		expect(updated?.courierName).toBe("J&T Express");
+		expect(updated?.trackingNo).toBe("630002864925");
+		expect(updated?.carrierTrackingUrl).toBe(
+			"https://www.jtexpress.my/tracking/630002864925",
+		);
+	});
+
+	test("a cold-chain courier stores name + number with no link", async () => {
+		const t = setup();
+		const { shortId, orderId } = await seedShippableOrder(t);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.orders.updateStatus, {
+			orderId,
+			status: "shipped",
+			courierName: "DD Express (cold chain)",
+			trackingNo: "DD9",
+		});
+		const updated = await t.query(api.orders.get, {
+			token: await tk(t, shortId),
+		});
+		expect(updated?.courierName).toBe("DD Express (cold chain)");
+		expect(updated?.trackingNo).toBe("DD9");
+		expect(updated?.carrierTrackingUrl).toBeUndefined();
+	});
+
+	test("shipment fields are ignored on non-shipped transitions", async () => {
+		const t = setup();
+		const { shortId, orderId } = await seedShippableOrder(t);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.orders.updateStatus, {
+			orderId,
+			status: "confirmed",
+			courierName: "J&T Express",
+			trackingNo: "JT1",
+		});
+		const updated = await t.query(api.orders.get, {
+			token: await tk(t, shortId),
+		});
+		expect(updated?.courierName).toBeUndefined();
+		expect(updated?.trackingNo).toBeUndefined();
+	});
+
+	test("advanceToStage into a shipped-anchored stage carries the shipment fields", async () => {
+		const t = setup();
+		const { shortId, orderId } = await seedShippableOrder(t);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.orders.updateStatus, {
+			orderId,
+			status: "confirmed",
+		});
+		await asA.mutation(api.orders.advanceToStage, {
+			orderId,
+			stageId: "default:shipped",
+			courierName: "Ninja Van",
+			trackingNo: "NV MY 1",
+		});
+		const updated = await t.query(api.orders.get, {
+			token: await tk(t, shortId),
+		});
+		expect(updated?.status).toBe("shipped");
+		expect(updated?.courierName).toBe("Ninja Van");
+		expect(updated?.carrierTrackingUrl).toBe(
+			"https://www.ninjavan.co/en-my/tracking?id=NV%20MY%201",
+		);
+	});
+
+	test("setShipmentTracking sets after shipped, pasted URL wins for unknown couriers, and clears", async () => {
+		const t = setup();
+		const { shortId, orderId } = await seedShippableOrder(t);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.orders.updateStatus, {
+			orderId,
+			status: "shipped",
+		});
+		// Add-after: the common "got the consignment slip later" flow.
+		await asA.mutation(api.orders.setShipmentTracking, {
+			orderId,
+			courierName: "Best Express",
+			trackingNo: "BE123",
+			carrierTrackingUrl: "https://track.example/BE123",
+		});
+		let updated = await t.query(api.orders.get, {
+			token: await tk(t, shortId),
+		});
+		expect(updated?.courierName).toBe("Best Express");
+		expect(updated?.trackingNo).toBe("BE123");
+		expect(updated?.carrierTrackingUrl).toBe("https://track.example/BE123");
+		// All-blank clears every field (one spelling of "no tracking").
+		await asA.mutation(api.orders.setShipmentTracking, { orderId });
+		updated = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(updated?.courierName).toBeUndefined();
+		expect(updated?.trackingNo).toBeUndefined();
+		expect(updated?.carrierTrackingUrl).toBeUndefined();
+	});
+
+	test("setShipmentTracking by non-owner throws Forbidden", async () => {
+		const t = setup();
+		const { orderId } = await seedShippableOrder(t);
+		const asB = t.withIdentity({ subject: USER_B });
+		await expect(
+			asB.mutation(api.orders.setShipmentTracking, {
+				orderId,
+				trackingNo: "X",
+			}),
+		).rejects.toThrow(/Forbidden/);
+	});
+});

@@ -158,6 +158,79 @@ feature-matrix additions.
   J&T/parcel couriers remain future (DelyvaX is the named aggregator candidate).
 - Sue's routing-accurate map integration stays parked until 3+ customers ask.
 
+## Manual courier + tracking number on shipped (2026-07-29, ClickUp `86eyehvk4`)
+
+Sellers shipping outstation via parcel couriers (J&T ambient, DD Cold Chain, Ninja Cold,
+Celsius) book the courier **themselves** and get a consignment number — this feature lets
+them attach it when marking shipped, so the buyer gets TikTok-style tracking through the
+existing WhatsApp update + tracking-page pipeline. No booking, no courier API, no status
+polling (EasyParcel integration is the separate phase-2 card). Driver: Haziq (Lopes Viral
+JB) + Wagyu Walid, 28 Jul.
+
+### Data model
+
+Two new optional order fields beside the pre-existing `orders.carrierTrackingUrl`:
+`orders.courierName` + `orders.trackingNo` (dev-only widen, no backfill — absent on old
+orders). `carrierTrackingUrl` stays the **single resolved-link surface**: auto-derived
+from courier + number for registry couriers, hand-pasted for "Other", or mirrored from a
+Lalamove job's `shareLink` — every pre-existing link surface (WA shipped copy, track-page
+CTA) keeps working unchanged. The ticket's `deliverySnapshot` suggestion was wrong — that
+object is the frozen create-time **pricing** snapshot; courier info is fulfilment-time
+data and lives at order level like the URL it feeds.
+
+### Courier registry — `convex/lib/couriers.ts`
+
+Pure module (no Convex imports) imported by BOTH the backend and the dashboard picklist.
+Registry couriers with best-effort tracking deep links (J&T Express, Pos Malaysia, Ninja
+Van, SPX Express, Flash Express, City-Link Express) + name-only cold-chain entries
+(Celsius Express, DD Express, Ninja Cold — no public URL pattern; the ICP's carriers get
+one-tap picks, not "Other" typing). `resolveShipmentFields` is the one shared
+trim/cap/URL-derivation resolver used by every write path: an explicitly pasted URL wins
+over derivation; all-blank input resolves to all-cleared. A stale deep-link pattern only
+costs the buyer a landing on the courier's tracking form — the number is always shown
+copyable beside the link.
+
+### Write paths
+
+- **`updateStatus` / `advanceToStage`** accept `courierName`/`trackingNo` (+ the existing
+  `carrierTrackingUrl`) on shipped(-anchored) transitions only; ignored otherwise.
+- **`setShipmentTracking`** (replaces `setCarrierTrackingUrl`) — set/clear any time from
+  the order-detail card; sellers often receive the slip after marking shipped.
+- Lalamove webhook path untouched (patches `carrierTrackingUrl` directly from
+  `shareLink`; a rider order never opens the manual prompt — the advance button is
+  disabled under rider auto-updates).
+
+### Seller UX
+
+- **Mark-shipped prompt** (`MarkShippedDialog` in
+  `src/components/order/shipment-tracking.tsx`): tapping the advance button into a
+  shipped-anchored stage on a **delivery** order with no tracking attached opens an
+  optional courier-picklist + tracking-number dialog (skippable via Cancel→the card;
+  confirm ships with or without fields). The last-used courier is remembered per device
+  (`localStorage`) since sellers ship with one courier. Helper line states exactly what
+  the buyer gets (auto link vs copyable number) — no hidden behavior.
+- **"Shipment tracking" card** on order detail (upgrade of the old URL-only "Carrier
+  Tracking" card): shows courier + mono tracking number with one-tap copy + "Track with
+  courier" link; edit mode reuses the same fieldset ("Other" adds free-text name +
+  optional pasted link). Legacy URL-only rows (incl. Lalamove links) still render.
+
+### Buyer surfaces — deliberately NO new WhatsApp sends
+
+Meta bills every outbound message from 1 Oct 2026, so this feature adds **zero** new
+sends (owner call, 29 Jul): tracking entered **at** mark-shipped rides the shipped
+WhatsApp update that was already outgoing — a `📦 {courier} — tracking no. {number}` line
+(EN/MS/ZH) above the existing links, also in `renderStageUpdate` for custom-stage sellers,
+and `{courierName}`/`{trackingNo}` interpolate in authored templates. Tracking added
+**after** shipped surfaces on the buyer's tracking page only — no auto-send, no resend
+button. `/track/<token>` shows a courier + number card with one-tap copy (works for
+cold-chain couriers with no link) above the existing "Track with carrier" CTA. CSV export
+gains "Courier" + "Tracking no" columns beside Fulfilment.
+
+Tests: `convex/lib/couriers.test.ts`, shipped-courier-line cases in
+`convex/lib/whatsappCopy.test.ts`, end-to-end transition/set/clear/auth cases in
+`convex/orders.test.ts` ("86eyehvk4" describe), CSV columns in
+`convex/lib/orderCsv.test.ts`.
+
 ## Chargeable pickup location — flat per-location fee (2026-07-07, ClickUp `86ey5tywf`)
 
 A seller can attach an **optional flat fee** (minor units / sen) to any pickup location —

@@ -100,6 +100,21 @@ describe("orderToCsvRow", () => {
 		);
 	});
 
+	test("courier + tracking no columns print when attached, blank otherwise (86eyehvk4)", () => {
+		const shipped = orderToCsvRow({
+			...base,
+			status: "shipped",
+			courierName: "J&T Express",
+			trackingNo: "630002864925",
+		});
+		expect(shipped[CSV_COLUMNS.indexOf("Courier")]).toBe("J&T Express");
+		expect(shipped[CSV_COLUMNS.indexOf("Tracking no")]).toBe("630002864925");
+		// Most orders never get one — blank, not "0.00"-style filler.
+		const plain = orderToCsvRow(base);
+		expect(plain[CSV_COLUMNS.indexOf("Courier")]).toBe("");
+		expect(plain[CSV_COLUMNS.indexOf("Tracking no")]).toBe("");
+	});
+
 	test("fills sensible defaults for missing fields", () => {
 		const row = orderToCsvRow({
 			shortId: "ORD-9",
