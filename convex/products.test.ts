@@ -2,7 +2,7 @@
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
 import { describe, expect, test } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 
@@ -1254,5 +1254,208 @@ describe("products", () => {
 				}),
 			).rejects.toThrow(/must not be tied to any option values/i);
 		});
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Product slugs + public product page (86eybrhrt PR2)
+// ---------------------------------------------------------------------------
+
+describe("product slugs", () => {
+	test("create derives a slug from the name; collisions suffix -2, -3", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+
+		const first = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Kek Batik Premium!" }),
+		);
+		const second = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Kek Batik Premium", sortOrder: 1 }),
+		);
+
+		const rows = await t.run(async (ctx) => ({
+			first: await ctx.db.get(first),
+			second: await ctx.db.get(second),
+		}));
+		expect(rows.first?.slug).toBe("kek-batik-premium");
+		expect(rows.second?.slug).toBe("kek-batik-premium-2");
+	});
+
+	test("renaming keeps the slug stable (shared links keep working)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const id = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Pavlova Mini" }),
+		);
+
+		await asA.mutation(api.products.update, {
+			productId: id,
+			name: "Pavlova Mini (New Recipe)",
+		});
+
+		const row = await t.run((ctx) => ctx.db.get(id));
+		expect(row?.slug).toBe("pavlova-mini");
+	});
+
+	test("a degenerate name still gets a valid slug", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const id = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "🎂" }),
+		);
+		const row = await t.run((ctx) => ctx.db.get(id));
+		expect(row?.slug).toBe("item");
+	});
+
+	test("editing a legacy slug-less product assigns its permanent slug", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const id = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Old Timer" }),
+		);
+		// Simulate a pre-slug row.
+		await t.run((ctx) => ctx.db.patch(id, { slug: undefined }));
+
+		await asA.mutation(api.products.update, { productId: id, hidden: false });
+
+		const row = await t.run((ctx) => ctx.db.get(id));
+		expect(row?.slug).toBe("old-timer");
+	});
+
+	test("backfillProductSlugs fills only slug-less rows, idempotently", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const keep = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Keeps Slug" }),
+		);
+		const legacy = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Legacy Row", sortOrder: 1 }),
+		);
+		await t.run((ctx) => ctx.db.patch(legacy, { slug: undefined }));
+
+		await t.mutation(internal.products.backfillProductSlugs, {});
+
+		const rows = await t.run(async (ctx) => ({
+			keep: await ctx.db.get(keep),
+			legacy: await ctx.db.get(legacy),
+		}));
+		expect(rows.keep?.slug).toBe("keeps-slug");
+		expect(rows.legacy?.slug).toBe("legacy-row");
+	});
+});
+
+describe("products.getPublicBySlug", () => {
+	test("resolves a visible product with the storefront shape", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Tent 2P", price: 12000 }),
+		);
+
+		const product = await t.query(api.products.getPublicBySlug, {
+			retailerId: retailer._id,
+			slug: "tent-2p",
+		});
+		expect(product?.name).toBe("Tent 2P");
+		expect(product?.priceFrom).toBe(12000);
+		expect(product?.variants).toHaveLength(1);
+	});
+
+	test("is case/whitespace tolerant on the slug", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Tent 2P" }),
+		);
+		const product = await t.query(api.products.getPublicBySlug, {
+			retailerId: retailer._id,
+			slug: "  TENT-2P ",
+		});
+		expect(product?.name).toBe("Tent 2P");
+	});
+
+	test("answers null for hidden, archived and unknown products", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const hidden = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Event Special" }),
+		);
+		await asA.mutation(api.products.update, {
+			productId: hidden,
+			hidden: true,
+		});
+		const archived = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Retired Tent", sortOrder: 1 }),
+		);
+		await asA.mutation(api.products.archive, { productId: archived });
+
+		expect(
+			await t.query(api.products.getPublicBySlug, {
+				retailerId: retailer._id,
+				slug: "event-special",
+			}),
+		).toBeNull();
+		expect(
+			await t.query(api.products.getPublicBySlug, {
+				retailerId: retailer._id,
+				slug: "retired-tent",
+			}),
+		).toBeNull();
+		expect(
+			await t.query(api.products.getPublicBySlug, {
+				retailerId: retailer._id,
+				slug: "never-existed",
+			}),
+		).toBeNull();
+	});
+
+	test("a hidden product KEEPS its slug — no takeover, and restoring revives the URL", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const original = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Signature Cake" }),
+		);
+		await asA.mutation(api.products.update, {
+			productId: original,
+			hidden: true,
+		});
+		// A new product with the same name must NOT steal the hidden one's URL.
+		const usurper = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Signature Cake", sortOrder: 1 }),
+		);
+		const usurperRow = await t.run((ctx) => ctx.db.get(usurper));
+		expect(usurperRow?.slug).toBe("signature-cake-2");
+
+		await asA.mutation(api.products.update, {
+			productId: original,
+			hidden: false,
+		});
+		const revived = await t.query(api.products.getPublicBySlug, {
+			retailerId: retailer._id,
+			slug: "signature-cake",
+		});
+		expect(revived?._id).toBe(original);
 	});
 });

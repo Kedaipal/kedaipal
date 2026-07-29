@@ -1,7 +1,14 @@
 import { ConvexError, v } from "convex/values";
 import { MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
 import type { Doc, Id } from "./_generated/dataModel";
-import { mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
+import {
+	internalMutation,
+	mutation,
+	type MutationCtx,
+	query,
+	type QueryCtx,
+} from "./_generated/server";
 import {
 	adminUserIds,
 	logAdminAction,
@@ -14,6 +21,7 @@ import {
 } from "./lib/categoryCounts";
 import { sanitizeMinQuantity } from "./lib/minOrderRules";
 import { rateLimiter } from "./lib/rateLimiter";
+import { SLUG_MAX, SLUG_MIN, slugify } from "./lib/slug";
 import { assertSubscriptionActive } from "./subscriptions";
 import {
 	cartesian,
@@ -193,6 +201,40 @@ export async function productWithVariants(
 		totalOnHand,
 		inStock,
 	};
+}
+
+/**
+ * Allocate a unique, permanent URL slug for a product within its retailer —
+ * /$slug/p/<productSlug> (86eybrhrt PR2). Auto-derived from the name (never a
+ * seller input) and STABLE once assigned: renames don't touch it, so a link a
+ * seller pasted into WhatsApp keeps working. Uniqueness spans the retailer's
+ * ENTIRE catalog incl. archived/hidden rows — restoring a product must never
+ * find its URL stolen. Name collisions suffix -2, -3, … (category precedent).
+ */
+async function ensureUniqueProductSlug(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	name: string,
+	excludeProductId?: Id<"products">,
+): Promise<string> {
+	// Degenerate names (emoji-only, 1–2 chars after slugification) pad into the
+	// shared 3–32 slug shape instead of failing product creation over a URL.
+	let base = slugify(name);
+	if (base.length < SLUG_MIN) base = base.length > 0 ? `item-${base}` : "item";
+	// Bounded well past the 50-product cap — a clash loop can't run away.
+	for (let n = 1; n <= MAX_PRODUCTS_PER_RETAILER + 10; n++) {
+		const suffix = n === 1 ? "" : `-${n}`;
+		const trimmed = base.slice(0, SLUG_MAX - suffix.length).replace(/-+$/, "");
+		const candidate = `${trimmed}${suffix}`;
+		const clash = await ctx.db
+			.query("products")
+			.withIndex("by_retailer_slug", (q) =>
+				q.eq("retailerId", retailerId).eq("slug", candidate),
+			)
+			.unique();
+		if (!clash || clash._id === excludeProductId) return candidate;
+	}
+	throw new ConvexError("Could not allocate a unique product link");
 }
 
 // ---------------------------------------------------------------------------
@@ -543,6 +585,7 @@ export const create = mutation({
 		const productId = await ctx.db.insert("products", {
 			retailerId: args.retailerId,
 			name: args.name.trim(),
+			slug: await ensureUniqueProductSlug(ctx, args.retailerId, args.name),
 			description: args.description,
 			currency: args.currency,
 			imageStorageIds: args.imageStorageIds,
@@ -655,6 +698,20 @@ export const update = mutation({
 			// 0/1 sanitize to undefined, which patch treats as "remove the field" —
 			// so sending 0 clears the rule (one spelling for "no minimum").
 			updates.minQuantity = sanitizeMinQuantity(fields.minQuantity);
+
+		// Lazy slug convergence for legacy rows (pre-slug catalog): the first
+		// edit gives the product its permanent URL, using the freshest name.
+		// Existing slugs are STABLE — a rename never rewrites them, so links a
+		// seller already shared keep working. backfillProductSlugs covers rows
+		// that are never edited.
+		if (ownedProduct.slug === undefined) {
+			updates.slug = await ensureUniqueProductSlug(
+				ctx,
+				ownedProduct.retailerId,
+				(updates.name as string | undefined) ?? ownedProduct.name,
+				productId,
+			);
+		}
 
 		// Keep the denormalized category counts accurate when this edit flips the
 		// product's storefront visibility (active and/or hidden). Compute the
@@ -1048,6 +1105,11 @@ export const bulkUpsert = mutation({
 				const productId = await ctx.db.insert("products", {
 					retailerId: args.retailerId,
 					name: product.name.trim(),
+					slug: await ensureUniqueProductSlug(
+						ctx,
+						args.retailerId,
+						product.name,
+					),
 					description: product.description,
 					currency: args.currency,
 					imageStorageIds: [],
@@ -1287,5 +1349,73 @@ export const reorder = mutation({
 			}
 		}
 		await logAdminAction(ctx, access, "products.reorder", retailerId);
+	},
+});
+
+// ---------------------------------------------------------------------------
+// Product pages — /$slug/p/<productSlug> (86eybrhrt PR2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Public product-page read. Applies the exact storefront visibility rules of
+ * `list` (active, not hidden, not category-suppressed) so a counter-only or
+ * archived product's URL answers null (→ 404) instead of leaking it. Unknown
+ * slug → null. Same `productWithVariants` shape as `list`, so the page, the
+ * grid and the detail sheet can never disagree about a product.
+ */
+export const getPublicBySlug = query({
+	args: { retailerId: v.id("retailers"), slug: v.string() },
+	handler: async (ctx, { retailerId, slug }) => {
+		const normalized = slug.trim().toLowerCase();
+		if (normalized.length === 0) return null;
+		const row = await ctx.db
+			.query("products")
+			.withIndex("by_retailer_slug", (q) =>
+				q.eq("retailerId", retailerId).eq("slug", normalized),
+			)
+			.unique();
+		if (
+			!row ||
+			!row.active ||
+			row.hidden === true ||
+			row.hiddenByCategory === true
+		)
+			return null;
+		return productWithVariants(ctx, row, { activeOnly: true });
+	},
+});
+
+/**
+ * One-shot backfill: give every legacy product (created before slugs existed)
+ * its permanent URL. Idempotent (rows with a slug are skipped) and batched +
+ * self-scheduling to stay inside transaction limits. Run once per deployment
+ * after the schema lands:
+ *
+ *   npx convex run products:backfillProductSlugs
+ *
+ * Until it has run, slug-less rows simply keep the in-place detail sheet —
+ * the storefront never breaks, they just aren't linkable yet.
+ */
+export const backfillProductSlugs = internalMutation({
+	args: { cursor: v.optional(v.string()) },
+	handler: async (ctx, { cursor }): Promise<void> => {
+		const page = await ctx.db
+			.query("products")
+			.paginate({ numItems: 25, cursor: cursor ?? null });
+		for (const row of page.page) {
+			if (row.slug !== undefined) continue;
+			const slug = await ensureUniqueProductSlug(
+				ctx,
+				row.retailerId,
+				row.name,
+				row._id,
+			);
+			await ctx.db.patch(row._id, { slug });
+		}
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(0, internal.products.backfillProductSlugs, {
+				cursor: page.continueCursor,
+			});
+		}
 	},
 });

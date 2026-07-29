@@ -1,0 +1,255 @@
+import {
+	createFileRoute,
+	Link,
+	notFound,
+	redirect,
+} from "@tanstack/react-router";
+import { useQuery } from "convex/react";
+import { api } from "../../convex/_generated/api";
+import { ProductPageView } from "../components/storefront/product-page";
+import { StorefrontFooter } from "../components/storefront/storefront-footer";
+import { Skeleton } from "../components/ui/skeleton";
+import { useCart } from "../hooks/useCart";
+import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
+
+interface ProductLoaderData {
+	storeName: string;
+	slug: string;
+	productName: string;
+	productSlug: string;
+	description: string;
+	canonicalUrl: string;
+	ogImageUrl: string | undefined;
+	// Offer facts for the Product JSON-LD, frozen at load time. Prices in minor
+	// units; 0/0 + quote-only means "no offers block" (price is negotiated).
+	priceFrom: number;
+	priceTo: number;
+	currency: string;
+	inStock: boolean;
+	quoteOnly: boolean;
+}
+
+/**
+ * The public product page — /$slug/p/<productSlug> (86eybrhrt PR2). The
+ * storefront's first per-product URL: shareable in WhatsApp (sellers pasting
+ * a product straight into a chat is the growth path), indexable, with a
+ * Product JSON-LD offers block. `$slug_` pathless-parent underscore = same
+ * routing trick as the category + checkout pages ($slug.tsx is a leaf).
+ */
+export const Route = createFileRoute("/$slug_/p/$productSlug")({
+	loader: async ({ params }): Promise<ProductLoaderData> => {
+		const client = getConvexHttpClient();
+		const result = await client.query(api.retailers.getRetailerBySlug, {
+			slug: params.slug,
+		});
+
+		// Renamed store → keep the buyer on the same product under the new slug.
+		if (result.status === "redirect") {
+			throw redirect({
+				to: "/$slug/p/$productSlug",
+				params: { slug: result.to, productSlug: params.productSlug },
+				statusCode: 301,
+			});
+		}
+		if (result.status === "notFound") {
+			throw notFound();
+		}
+		const retailer = result.retailer;
+
+		// Unknown, archived, hidden or category-suppressed → 404, never a leak.
+		const product = await client.query(api.products.getPublicBySlug, {
+			retailerId: retailer._id,
+			slug: params.productSlug,
+		});
+		if (product === null) {
+			throw notFound();
+		}
+
+		const productDescription = product.description?.replace(/\s+/g, " ").trim();
+		const description =
+			productDescription ||
+			`Order ${product.name} from ${retailer.storeName} on WhatsApp via Kedaipal.`;
+
+		return {
+			storeName: retailer.storeName,
+			slug: retailer.slug,
+			productName: product.name,
+			productSlug: params.productSlug,
+			description,
+			canonicalUrl: `${SITE_URL}/${retailer.slug}/p/${params.productSlug}`,
+			// Share image precedence: the product's own photo → store cover → logo.
+			ogImageUrl:
+				product.imageUrls[0] ??
+				retailer.coverImageUrl ??
+				retailer.logoUrl ??
+				undefined,
+			priceFrom: product.priceFrom,
+			priceTo: product.priceTo,
+			currency: product.currency,
+			inStock: product.inStock,
+			quoteOnly: product.hasQuotePricing && product.priceTo === 0,
+		};
+	},
+	head: ({ loaderData }) => {
+		if (!loaderData) return {};
+		const {
+			storeName,
+			productName,
+			description,
+			canonicalUrl,
+			ogImageUrl,
+			priceFrom,
+			priceTo,
+			currency,
+			inStock,
+			quoteOnly,
+		} = loaderData;
+		const title = `${productName} — ${storeName} | Kedaipal`;
+
+		const meta = [
+			{ title },
+			{ name: "description", content: description },
+			{ name: "robots", content: "index, follow" },
+			{ property: "og:type", content: "website" },
+			{ property: "og:site_name", content: "Kedaipal" },
+			{ property: "og:title", content: title },
+			{ property: "og:description", content: description },
+			{ property: "og:url", content: canonicalUrl },
+			{
+				name: "twitter:card",
+				content: ogImageUrl ? "summary_large_image" : "summary",
+			},
+			{ name: "twitter:title", content: title },
+			{ name: "twitter:description", content: description },
+		];
+		if (ogImageUrl) {
+			meta.push(
+				{ property: "og:image", content: ogImageUrl },
+				{ name: "twitter:image", content: ogImageUrl },
+			);
+		}
+
+		// Product JSON-LD. Prices convert minor → major units; quote-only
+		// products (price negotiated on the mockup) carry no offers block
+		// rather than advertising a misleading RM 0.
+		const toMajor = (sen: number) => (sen / 100).toFixed(2);
+		const availability = inStock
+			? "https://schema.org/InStock"
+			: "https://schema.org/OutOfStock";
+		const jsonLd = {
+			"@context": "https://schema.org",
+			"@type": "Product",
+			name: productName,
+			description,
+			url: canonicalUrl,
+			...(ogImageUrl ? { image: ogImageUrl } : {}),
+			...(quoteOnly
+				? {}
+				: priceFrom === priceTo
+					? {
+							offers: {
+								"@type": "Offer",
+								price: toMajor(priceFrom),
+								priceCurrency: currency,
+								availability,
+								url: canonicalUrl,
+							},
+						}
+					: {
+							offers: {
+								"@type": "AggregateOffer",
+								lowPrice: toMajor(priceFrom),
+								highPrice: toMajor(priceTo),
+								priceCurrency: currency,
+								availability,
+								url: canonicalUrl,
+							},
+						}),
+		};
+
+		return {
+			meta,
+			links: [{ rel: "canonical", href: canonicalUrl }],
+			scripts: [
+				{ type: "application/ld+json", children: JSON.stringify(jsonLd) },
+			],
+		};
+	},
+	notFoundComponent: ProductNotFound,
+	component: ProductRoute,
+});
+
+function ProductNotFound() {
+	const { slug } = Route.useParams();
+	return (
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-3 px-5 text-center">
+			<h1 className="text-3xl font-bold">Product not found</h1>
+			<p className="text-sm text-muted-foreground">
+				It may have sold out for good or been renamed — the store&apos;s full
+				catalog is still open.
+			</p>
+			<Link
+				to="/$slug"
+				params={{ slug }}
+				className="mt-1 inline-flex h-11 items-center rounded-xl bg-foreground px-4 text-sm font-medium text-background"
+			>
+				Browse the store
+			</Link>
+		</main>
+	);
+}
+
+function ProductSkeleton() {
+	return (
+		<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col gap-4 px-5 pt-4 lg:px-8 lg:pt-6">
+			<div className="flex items-center gap-3">
+				<Skeleton className="size-9 rounded-full" />
+				<Skeleton className="h-6 w-32" />
+			</div>
+			<div className="lg:flex lg:gap-10">
+				<Skeleton className="aspect-square w-full rounded-2xl lg:w-[44%]" />
+				<div className="mt-4 flex flex-1 flex-col gap-3 lg:mt-0">
+					<Skeleton className="h-8 w-2/3" />
+					<Skeleton className="h-7 w-28" />
+					<Skeleton className="h-24 w-full rounded-2xl" />
+				</div>
+			</div>
+		</div>
+	);
+}
+
+function ProductRoute() {
+	const { slug, productSlug } = Route.useParams();
+	// Live queries keep the page reactive after the SSR'd loader response —
+	// stock, prices and visibility update in place.
+	const result = useQuery(api.retailers.getRetailerBySlug, { slug });
+	const retailer = result?.status === "ok" ? result.retailer : undefined;
+	const product = useQuery(
+		api.products.getPublicBySlug,
+		retailer ? { retailerId: retailer._id, slug: productSlug } : "skip",
+	);
+	// Same per-retailer cart as every storefront surface.
+	const cart = useCart(retailer?._id);
+
+	if (!retailer || product === undefined) {
+		return <ProductSkeleton />;
+	}
+	if (product === null) {
+		// Archived/hidden while the buyer had the page open.
+		return <ProductNotFound />;
+	}
+
+	return (
+		<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col px-5 pb-44 pt-4 lg:px-8 lg:pb-10 lg:pt-6">
+			<ProductPageView
+				product={product}
+				retailerId={retailer._id}
+				storeName={retailer.storeName}
+				storeSlug={retailer.slug}
+				cart={cart}
+				canonicalUrl={`${SITE_URL}/${retailer.slug}/p/${productSlug}`}
+			/>
+			<StorefrontFooter />
+		</div>
+	);
+}

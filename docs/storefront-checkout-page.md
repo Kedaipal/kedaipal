@@ -98,9 +98,8 @@ routes' `onRequestCheckout` seam.
 
 ## Follow-ups (PR2 / PR3 of 86eybrhrt)
 
-- **PR2** — URL-addressable product detail (`/{slug}/p/{productSlug}`): sheet
-  on mobile, two-column page on desktop, shareable in WhatsApp, per-product
-  SSR/OG.
+- **PR2** — URL-addressable product detail (`/{slug}/p/{productSlug}`) —
+  **built**, see [`storefront-product-pages.md`](./storefront-product-pages.md).
 - **PR3** — landing merchandising (filter chips, featured row, 4-col desktop
   grid).
 - The empty-cart checkout state links back to the store; a "resume checkout"

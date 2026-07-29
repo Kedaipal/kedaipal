@@ -1,18 +1,14 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import { ChevronRight, Search, X } from "lucide-react";
 import { type ReactNode, useState } from "react";
-import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
-import { variantLabel } from "../../lib/variant";
 import { Input } from "../ui/input";
 import { ProductCard, type StorefrontProduct } from "./product-card";
-import {
-	ProductDetailSheet,
-	type StorefrontVariant,
-} from "./product-detail-sheet";
+import { ProductDetailSheet } from "./product-detail-sheet";
+import { addVariantToCart, type StorefrontVariant } from "./product-purchase";
 
 /** Product-card grid — denser on desktop so a product card never outweighs a
  * category hero card (categories are the highlight, products the inventory). */
@@ -79,6 +75,28 @@ export function ProductGrid({
 		null,
 	);
 	const [searchQuery, setSearchQuery] = useState("");
+	const navigate = useNavigate();
+
+	// Opening a product: desktop goes to its PAGE (/$slug/p/<productSlug> —
+	// the redesign's proper view, with a URL worth sharing); mobile keeps the
+	// in-place sheet (fastest cart-building, scroll position preserved).
+	// Slug-less rows (legacy catalog before backfillProductSlugs has run) fall
+	// back to the sheet everywhere. See docs/storefront-product-pages.md.
+	const openProductView = (p: StorefrontProduct) => {
+		if (
+			storeSlug &&
+			p.slug &&
+			typeof window !== "undefined" &&
+			window.matchMedia("(min-width: 1024px)").matches
+		) {
+			navigate({
+				to: "/$slug/p/$productSlug",
+				params: { slug: storeSlug, productSlug: p.slug },
+			});
+			return;
+		}
+		setOpenProduct(p);
+	};
 
 	if (products === undefined) {
 		return (
@@ -115,45 +133,15 @@ export function ProductGrid({
 				)
 			: [];
 
+	// Cart-line mapping + toast live in the shared helper (product-purchase.tsx)
+	// so the grid's quick-add, the sheet and the product page snapshot lines
+	// identically.
 	const addVariant = (
 		p: StorefrontProduct,
 		variant: StorefrontVariant,
 		qty: number,
 		custom?: { note?: string; imageStorageId?: string },
-	) => {
-		// The custom line has no optionValues — label it with its custom name so the
-		// cart + order can tell it apart from the default variant.
-		const label = variant.isCustom
-			? (variant.customLabel ?? "Custom")
-			: variantLabel(variant.optionValues);
-		// Re-requesting an already-in-cart custom line updates the note, not the qty.
-		const updatingCustom =
-			variant.isCustom === true &&
-			cart.items.some((i) => i.variantId === variant._id);
-		cart.addItem(
-			{
-				variantId: variant._id,
-				productId: p._id,
-				name: p.name,
-				optionLabel: label || undefined,
-				price: variant.price,
-				currency: p.currency,
-				imageUrl: variant.imageUrls[0] ?? p.imageUrls[0],
-				quoteOnRequest: variant.requiresProof === true && variant.price === 0,
-				minNoticeDays: p.minNoticeDays,
-				isCustom: variant.isCustom,
-				minQuantity: p.minQuantity,
-				note: custom?.note,
-				customImageStorageId: custom?.imageStorageId,
-			},
-			qty,
-		);
-		toast.success(
-			updatingCustom
-				? "Custom request updated"
-				: `Added ${qty > 1 ? `${qty} × ` : ""}${label ? `${p.name} — ${label}` : p.name} to cart`,
-		);
-	};
+	) => addVariantToCart(cart, p, variant, qty, custom);
 
 	// Quick-add only fires for single-variant products (multi-variant cards open
 	// the sheet instead), so the sole variant is unambiguous. A product with a
@@ -272,7 +260,7 @@ export function ProductGrid({
 						<ProductCard
 							key={product._id}
 							product={product}
-							onOpen={setOpenProduct}
+							onOpen={openProductView}
 							onQuickAdd={quickAdd}
 							cartQuantity={cart.quantityForProduct(product._id)}
 							cartSubtotal={cart.subtotalForProduct(product._id)}
@@ -295,6 +283,12 @@ export function ProductGrid({
 				// Whole-cart summary drives the footer "Go to checkout" CTA.
 				cartItemCount={cart.itemCount}
 				cartTotal={cart.total}
+				// Relative share path — absolutized at click time (SSR-safe).
+				shareUrl={
+					storeSlug && openProduct?.slug
+						? `/${storeSlug}/p/${openProduct.slug}`
+						: undefined
+				}
 				onClose={() => setOpenProduct(null)}
 				// Stay open after adding so a buyer can add a standard variant AND
 				// request the custom line from the same product without reopening. The
