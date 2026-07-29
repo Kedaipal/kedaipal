@@ -322,7 +322,7 @@ export function MarkShippedDialog({
 					</Button>
 					{riderTab && onBookRider !== undefined ? (
 						<Button onClick={onBookRider} className="h-11">
-							Book a rider…
+							Book a rider
 						</Button>
 					) : (
 						<Button onClick={handleConfirm} disabled={saving} className="h-11">

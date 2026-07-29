@@ -38,6 +38,12 @@ export const COURIERS: CourierEntry[] = [
 			`https://spx.com.my/track?${encodeURIComponent(no)}`,
 	},
 	{
+		// `/fle/tracking` is Flash's officially documented tracking path, but the
+		// `?se=` prefill param is UNVERIFIED — flashexpress.my was returning 502
+		// company-wide (root included) when this was checked on 30 Jul 2026, and
+		// the .com host sits behind a bot shield. If the param turns out wrong the
+		// buyer still lands on Flash's tracking form with our copyable number
+		// beside the link; correct it here once their site is reachable again.
 		label: "Flash Express",
 		buildTrackingUrl: (no) =>
 			`https://www.flashexpress.my/fle/tracking?se=${encodeURIComponent(no)}`,
@@ -47,8 +53,14 @@ export const COURIERS: CourierEntry[] = [
 		buildTrackingUrl: (no) =>
 			`https://www.citylinkexpress.com/tracking-result/?track0=${encodeURIComponent(no)}`,
 	},
-	// Cold-chain couriers — the frozen/outstation ICP's carriers. No public
-	// tracking-URL pattern; courier + number render as copyable text.
+	// Cold-chain couriers — the frozen/outstation ICP's carriers. Deliberately
+	// name-only: none publishes a per-parcel tracking URL we can build. Checked
+	// 30 Jul 2026 — Celsius is tracked through EasyParcel's EasyTrack (their
+	// booking channel) and Ninja Cold rides Ninja Van's B2B dashboard, but
+	// neither exposes a verifiable prefill param, and a link that silently
+	// drops the number is worse than the copyable number we already show. If a
+	// seller confirms a working deep link against a REAL consignment number,
+	// add buildTrackingUrl here — the UI needs no change.
 	{ label: "Celsius Express" },
 	{ label: "DD Express (cold chain)" },
 	{ label: "Ninja Cold" },
