@@ -113,23 +113,18 @@ function CheckoutRoute() {
 	return (
 		// No pb clearance for the CTA bar — it's sticky (in flow), not fixed.
 		<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col px-5 pb-6 pt-4 lg:px-8 lg:pb-10 lg:pt-6">
-			<header className="flex items-center justify-between gap-3">
-				<div className="flex items-center gap-3">
-					<Link
-						to="/$slug"
-						params={{ slug: retailer.slug }}
-						aria-label={`Back to ${retailer.storeName}`}
-						className="tap-target flex size-9 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:text-foreground"
-					>
-						<ArrowLeft className="size-4" aria-hidden />
-					</Link>
-					<h1 className="font-heading text-xl font-extrabold tracking-tight">
-						Checkout
-					</h1>
-				</div>
-				<span className="truncate text-sm text-muted-foreground">
-					{retailer.storeName}
-				</span>
+			<header className="flex items-center gap-3">
+				<Link
+					to="/$slug"
+					params={{ slug: retailer.slug }}
+					aria-label={`Back to ${retailer.storeName}`}
+					className="tap-target flex size-9 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:text-foreground"
+				>
+					<ArrowLeft className="size-4" aria-hidden />
+				</Link>
+				<h1 className="font-heading text-xl font-extrabold tracking-tight">
+					Checkout
+				</h1>
 			</header>
 
 			<div className="mt-4">
