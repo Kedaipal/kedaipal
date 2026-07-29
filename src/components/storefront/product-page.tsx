@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { ArrowLeft, ShoppingBag } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
 import { formatPrice } from "../../lib/format";
@@ -158,20 +158,20 @@ export function ProductPageView({
 	);
 }
 
-/** Mobile: the sheet's snap carousel. Desktop: main image + thumb strip. The
- * selected thumb resets when the variant selection swaps the image set. */
+/** Mobile: the sheet's snap carousel. Desktop: main image + thumb strip. */
 function PageGallery({ images, name }: { images: string[]; name: string }) {
-	const [index, setIndex] = useState(0);
-	// Variant selection can swap the gallery to a shorter set — clamp back.
-	useEffect(() => {
-		setIndex(0);
-	}, [images]);
+	// Track the chosen image by URL, not index: picking a variant can swap the
+	// whole set, and a stale index would either point at the wrong photo or out
+	// of range. A URL that's no longer in the set simply falls back to the first
+	// one — self-correcting, so no reset effect is needed.
+	const [selectedUrl, setSelectedUrl] = useState<string | null>(null);
 
 	if (images.length === 0) {
 		return <EmptyGallery name={name} className="aspect-[16/10] w-full" />;
 	}
 
-	const main = images[Math.min(index, images.length - 1)];
+	const main =
+		selectedUrl && images.includes(selectedUrl) ? selectedUrl : images[0];
 
 	return (
 		<>
@@ -204,11 +204,11 @@ function PageGallery({ images, name }: { images: string[]; name: string }) {
 							<button
 								key={url}
 								type="button"
-								onClick={() => setIndex(i)}
+								onClick={() => setSelectedUrl(url)}
 								aria-label={`Photo ${i + 1} of ${images.length}`}
-								aria-current={i === index}
+								aria-current={url === main}
 								className={`overflow-hidden rounded-lg border-2 transition-colors ${
-									i === index
+									url === main
 										? "border-accent"
 										: "border-transparent hover:border-accent/40"
 								}`}
