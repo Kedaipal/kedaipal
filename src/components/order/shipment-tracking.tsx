@@ -4,7 +4,11 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
-import { COURIERS, findCourier } from "../../../convex/lib/couriers";
+import {
+	COURIERS,
+	findCourier,
+	isSafeTrackingUrl,
+} from "../../../convex/lib/couriers";
 import { convexErrorMessage } from "../../lib/format";
 import { Button } from "../ui/button";
 import { CopyButton } from "../ui/copy-button";
@@ -454,7 +458,9 @@ export function ShipmentTrackingCard({
 							) : null}
 						</div>
 					) : null}
-					{order.carrierTrackingUrl ? (
+					{/* Scheme-checked like the buyer's page — a pre-sanitize row could
+					    hold a non-http(s) URL, and this anchor would run it. */}
+					{isSafeTrackingUrl(order.carrierTrackingUrl) ? (
 						<a
 							href={order.carrierTrackingUrl}
 							target="_blank"

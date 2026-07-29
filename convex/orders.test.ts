@@ -5328,3 +5328,87 @@ describe("orders — manual courier + tracking number on shipped (86eyehvk4)", (
 		).rejects.toThrow(/Forbidden/);
 	});
 });
+
+describe("orders — shipment tracking is delivery-only (PR #151 review)", () => {
+	async function seedSelfCollectOrder(t: ReturnType<typeof convexTest>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.retailers.updateSettings, {
+			offerSelfCollect: true,
+		});
+		const { pickupLocationId } = await asA.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Main",
+				address: "12 Jln Tun Razak, 50400 KL",
+				mapsUrl: "https://maps.app.goo.gl/abc",
+			},
+		);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			pickupLocationId,
+		});
+		const order = await t.query(api.orders.get, {
+			token: await tk(t, shortId),
+		});
+		return { shortId, orderId: order!._id };
+	}
+
+	test("setShipmentTracking refuses to SET on a self-collect order", async () => {
+		const t = setup();
+		const { orderId } = await seedSelfCollectOrder(t);
+		const asA = t.withIdentity({ subject: USER_A });
+		await expect(
+			asA.mutation(api.orders.setShipmentTracking, {
+				orderId,
+				courierName: "J&T Express",
+				trackingNo: "JT1",
+			}),
+		).rejects.toThrow(/delivery orders only/);
+	});
+
+	test("…but always allows the CLEAR, so a method change can't trap tracking", async () => {
+		const t = setup();
+		const { shortId, orderId } = await seedSelfCollectOrder(t);
+		const asA = t.withIdentity({ subject: USER_A });
+		// Simulate a row that carries tracking from before the guard existed.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(orderId, {
+				courierName: "J&T Express",
+				trackingNo: "JT1",
+			});
+		});
+		await asA.mutation(api.orders.setShipmentTracking, { orderId });
+		const cleared = await t.query(api.orders.get, {
+			token: await tk(t, shortId),
+		});
+		expect(cleared?.courierName).toBeUndefined();
+		expect(cleared?.trackingNo).toBeUndefined();
+	});
+
+	test("a shipped transition ignores courier fields on self-collect without failing", async () => {
+		const t = setup();
+		const { shortId, orderId } = await seedSelfCollectOrder(t);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.orders.updateStatus, {
+			orderId,
+			status: "shipped",
+			courierName: "J&T Express",
+			trackingNo: "JT1",
+		});
+		const updated = await t.query(api.orders.get, {
+			token: await tk(t, shortId),
+		});
+		// Status still advances — the stray fields are dropped, not fatal.
+		expect(updated?.status).toBe("shipped");
+		expect(updated?.courierName).toBeUndefined();
+		expect(updated?.trackingNo).toBeUndefined();
+	});
+});

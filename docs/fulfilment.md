@@ -190,6 +190,24 @@ over derivation; all-blank input resolves to all-cleared. A stale deep-link patt
 costs the buyer a landing on the courier's tracking form — the number is always shown
 copyable beside the link.
 
+**URL scheme is enforced (PR #151 review).** A pasted link only survives if it's
+`http(s)` — the tracking page renders it in a buyer-facing `<a href>`, where a
+`javascript:`/`data:` URL would execute on click (a seller attacking their own customer,
+but cheap to close now that one resolver owns every write). A scheme-less paste
+(`tracking.example/123`) gets `https://` rather than being silently dropped; any other
+scheme is refused, which can fall through to the derived link. `isSafeTrackingUrl` is
+exported and also called at **both render sites** (buyer track page + seller card), so
+rows written before this sanitize existed — the old `setCarrierTrackingUrl` accepted any
+string — are neutralised on the way out instead of needing a backfill. Lalamove's
+`shareLink` writes its own provider-generated https URL directly and is untouched.
+
+**Shipment tracking is delivery-only.** Courier fields are ignored (not fatal) on a
+self-collect `shipped` transition — moving the status is that path's real job — while
+`setShipmentTracking` **refuses to set** on a self-collect order and **always allows the
+all-blank clear**, so an order that changed fulfilment method can never be trapped
+holding tracking it shouldn't have (the set-gated/clear-un-gated posture used for
+chargeable pickup).
+
 ### Write paths
 
 - **`updateStatus` / `advanceToStage`** accept `courierName`/`trackingNo` (+ the existing

@@ -24,6 +24,7 @@ import {
 import { type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
+import { isSafeTrackingUrl } from "../../convex/lib/couriers";
 import { formatFulfilmentDate } from "../../convex/lib/fulfilmentDate";
 import { isMockupGateClosed } from "../../convex/lib/order";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
@@ -691,9 +692,14 @@ function TrackingRoute() {
 			{/* Shipment tracking — only for delivery orders. Courier + consignment
 			    number render copyable even without a link (cold-chain couriers have
 			    no public tracking page — the buyer pastes the number into the
-			    courier's app/WhatsApp instead). */}
+			    courier's app/WhatsApp instead). The link is scheme-checked at the
+			    href: write-time sanitize covers new values, but rows written before
+			    it existed could hold a javascript:/data: URL, and this anchor is
+			    the one buyer-facing surface where that would execute. */}
 			{!isSelfCollect &&
-			(order.courierName || order.trackingNo || order.carrierTrackingUrl) ? (
+			(order.courierName ||
+				order.trackingNo ||
+				isSafeTrackingUrl(order.carrierTrackingUrl)) ? (
 				<div className="mt-6 flex flex-col gap-2">
 					{order.courierName || order.trackingNo ? (
 						<div className="flex items-center justify-between gap-2 rounded-2xl border border-border bg-card p-4">
@@ -721,7 +727,7 @@ function TrackingRoute() {
 							) : null}
 						</div>
 					) : null}
-					{order.carrierTrackingUrl ? (
+					{isSafeTrackingUrl(order.carrierTrackingUrl) ? (
 						<a
 							href={order.carrierTrackingUrl}
 							target="_blank"

@@ -84,18 +84,52 @@ export type ShipmentFields = {
 };
 
 /**
+ * True when a stored tracking URL is safe to put in a buyer-facing `href`.
+ * ONLY http(s) qualifies — a `javascript:`/`data:` URL in an anchor executes on
+ * click, and the tracking page renders this link to the BUYER, so a hostile
+ * value would be the seller attacking their own customer. Write-time sanitize
+ * (below) keeps new values clean; render sites call this too so values stored
+ * before the sanitize existed (the old `setCarrierTrackingUrl` accepted any
+ * string) are neutralised on the way out rather than needing a backfill.
+ */
+export function isSafeTrackingUrl(url: string | undefined): boolean {
+	return url !== undefined && /^https?:\/\//i.test(url);
+}
+
+/**
+ * Normalize a seller-pasted tracking URL, or drop it. Scheme-less input
+ * ("tracking.example/123") is the honest typo case, so it gets `https://`
+ * rather than being silently discarded; anything carrying a non-http(s) scheme
+ * is refused outright.
+ */
+function sanitizeTrackingUrl(raw: string | undefined): string | undefined {
+	const trimmed = clip(raw, TRACKING_URL_MAX);
+	if (!trimmed) return undefined;
+	if (isSafeTrackingUrl(trimmed)) return trimmed;
+	// Any other explicit scheme (javascript:, data:, file:, ftp:…) — refuse.
+	if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return undefined;
+	// Protocol-relative "//host/path" just needs the scheme.
+	if (trimmed.startsWith("//")) return `https://${trimmed.slice(2)}`;
+	// A bare path can't be resolved without a host — not a tracking link.
+	if (trimmed.startsWith("/")) return undefined;
+	return `https://${trimmed}`;
+}
+
+/**
  * Normalize raw shipment input into the fields stored on the order. One shared
  * resolver for every write path (mark-shipped opts, stage advance, the
  * edit-after card) so trimming/caps/URL derivation can't diverge.
  *
  * URL precedence: an explicitly pasted link wins ("Other" courier with a link
  * the registry doesn't know); otherwise the link derives from a known courier +
- * tracking number. All-empty input resolves to all-undefined (= cleared).
+ * tracking number. A pasted link that isn't http(s) is dropped, which can fall
+ * through to the derived link. All-empty input resolves to all-undefined
+ * (= cleared).
  */
 export function resolveShipmentFields(input: ShipmentFields): ShipmentFields {
 	const courierName = clip(input.courierName, COURIER_NAME_MAX);
 	const trackingNo = clip(input.trackingNo, TRACKING_NO_MAX);
-	const explicitUrl = clip(input.carrierTrackingUrl, TRACKING_URL_MAX);
+	const explicitUrl = sanitizeTrackingUrl(input.carrierTrackingUrl);
 	const derivedUrl =
 		courierName && trackingNo
 			? findCourier(courierName)?.buildTrackingUrl?.(trackingNo)

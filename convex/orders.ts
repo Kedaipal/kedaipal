@@ -1879,7 +1879,12 @@ export async function applyStatusTransition(
 		trackingNo: string;
 		currentStageId: string | undefined;
 	}> = { status, statusChangedAt: now, updatedAt: now };
-	if (status === "shipped") {
+	// Courier fields describe a parcel shipment, so they only apply to delivery
+	// orders (undefined deliveryMethod reads as delivery, per the rest of the
+	// file). The UI never offers them on self-collect; if they arrive anyway they
+	// are ignored rather than failing the transition — moving the status is this
+	// path's real job, and a stray field shouldn't strand the order.
+	if (status === "shipped" && order.deliveryMethod !== "self_collect") {
 		// Shared trim/cap/URL-derivation with the edit-after card — a known
 		// courier + number auto-resolves the buyer-facing deep link.
 		const shipment = resolveShipmentFields(opts);
@@ -2243,7 +2248,12 @@ export const advanceToStage = mutation({
 		// Reset the status clock only when the canonical status actually changes
 		// (a within-anchor stage move keeps the same "Pending/Confirmed/…" bucket).
 		if (statusChanged) patch.statusChangedAt = now;
-		if (targetStatus === "shipped") {
+		// Delivery-only, and ignored (not fatal) on self-collect — see
+		// applyStatusTransition for the reasoning.
+		if (
+			targetStatus === "shipped" &&
+			order.deliveryMethod !== "self_collect"
+		) {
 			const shipment = resolveShipmentFields({
 				carrierTrackingUrl,
 				courierName,
@@ -2307,7 +2317,7 @@ export const setShipmentTracking = mutation({
 		ctx,
 		{ orderId, courierName, trackingNo, carrierTrackingUrl },
 	): Promise<void> => {
-		const { access } = await requireOrderAccess(ctx, orderId);
+		const { order, access } = await requireOrderAccess(ctx, orderId);
 
 		// All-blank input resolves to all-undefined = tracking cleared.
 		const shipment = resolveShipmentFields({
@@ -2315,6 +2325,20 @@ export const setShipmentTracking = mutation({
 			trackingNo,
 			carrierTrackingUrl,
 		});
+		// A self-collect order has no shipment to track, and the UI hides this
+		// card there — so refuse to SET, but always allow the all-blank CLEAR so
+		// an order that changed fulfilment method (or carries pre-guard data) can
+		// never be trapped with tracking it shouldn't have. Mirrors the
+		// set-gated/clear-un-gated posture used for chargeable pickup.
+		const isClearing =
+			shipment.courierName === undefined &&
+			shipment.trackingNo === undefined &&
+			shipment.carrierTrackingUrl === undefined;
+		if (order.deliveryMethod === "self_collect" && !isClearing) {
+			throw new ConvexError(
+				"Shipment tracking applies to delivery orders only — this order is for self-collect.",
+			);
+		}
 		await ctx.db.patch(orderId, {
 			courierName: shipment.courierName,
 			trackingNo: shipment.trackingNo,
