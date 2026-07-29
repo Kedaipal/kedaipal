@@ -1,21 +1,61 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
-import { Archive, ArchiveRestore, ArrowLeft } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowLeft, Eye } from "lucide-react";
+import { useRef, useState } from "react";
+import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import {
 	PageHeader,
 	PageHeaderSkeleton,
 } from "../components/dashboard/page-header";
-import { ProductForm } from "../components/forms/product-form";
+import {
+	ProductForm,
+	type ProductFormDraft,
+} from "../components/forms/product-form";
+import { ProductDetailSheet } from "../components/storefront/product-detail-sheet";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { draftPreviewOverlay } from "../lib/product-preview";
+import { type ProductStatus, productStatus } from "../lib/product-status";
 import { hasFeature } from "../lib/subscription";
+import { cn } from "../lib/utils";
 
 export const Route = createFileRoute("/app/products/$productId")({
 	component: EditProductRoute,
 });
+
+/**
+ * The product's honest one-word state — Live / Sold out / Hidden / Archived —
+ * derived by `productStatus`. Replaces the old `active ? "Live" : "Archived"`
+ * chip that kept saying "Live" for hidden and sold-out products. The `title`
+ * carries the one-line explanation on hover/long-press.
+ */
+function StatusChip({ status }: { status: ProductStatus }) {
+	return (
+		<span
+			title={status.detail}
+			className={cn(
+				"flex shrink-0 items-center gap-1.5 text-[13px] font-semibold",
+				status.tone === "live" && "text-accent-emphasis",
+				status.tone === "warn" && "text-amber-700 dark:text-amber-400",
+				status.tone === "muted" && "text-muted-foreground",
+			)}
+		>
+			<span
+				className={cn(
+					"inline-block size-2 rounded-full",
+					status.tone === "live" && "bg-accent",
+					status.tone === "warn" && "bg-amber-500",
+					status.tone === "muted" && "bg-muted-foreground/50",
+				)}
+				aria-hidden="true"
+			/>
+			{status.label}
+		</span>
+	);
+}
 
 function ProductDetailSkeleton() {
 	return (
@@ -79,12 +119,34 @@ function EditProductRoute() {
 	const saveVariantGrid = useMutation(api.products.saveVariantGrid);
 	const setProductCategories = useMutation(api.categories.setProductCategories);
 	const archive = useMutation(api.products.archive);
+	// Buyer-eye preview: mounts the REAL storefront detail sheet in-page (the
+	// same bottom sheet buyers get) — no new tab — rendered from the form's
+	// LIVE DRAFT so unsaved edits show exactly as buyers would see them after
+	// saving. Built once per open (a fresh object identity every render would
+	// reset the sheet's selection state).
+	const formDraftRef = useRef<(() => ProductFormDraft) | null>(null);
+	const [previewProduct, setPreviewProduct] = useState<Record<
+		string,
+		unknown
+	> | null>(null);
 
 	if (product === undefined || categoryIds === undefined || !retailer) {
 		return <ProductDetailSkeleton />;
 	}
 	if (product === null) {
 		return <p className="text-sm text-destructive">Product not found.</p>;
+	}
+
+	const status = productStatus(product);
+
+	function openPreview() {
+		const draft = formDraftRef.current?.();
+		if (!draft) return;
+		// Identity fields (_id, retailerId, currency, _creationTime…) come from
+		// the saved row; everything the buyer SEES comes from the draft overlay.
+		// The cast covers the fabricated preview variant ids — the sheet only
+		// uses them as keys and through the stubbed onAdd.
+		setPreviewProduct({ ...product, ...draftPreviewOverlay(draft) });
 	}
 
 	return (
@@ -94,31 +156,43 @@ function EditProductRoute() {
 				subtitle={product.name}
 				back={{ to: "/app/products", label: "Products" }}
 				actions={
-					product.active ? (
+					<>
+						<StatusChip status={status} />
 						<Button
-							variant="secondary"
-							onClick={async () => {
-								await archive({ productId: product._id });
-								navigate({ to: "/app/products" });
-							}}
+							variant="outline"
+							onClick={openPreview}
+							title="See this product exactly as buyers do — including unsaved changes"
 						>
-							Archive
+							<Eye className="size-4" aria-hidden="true" />
+							Preview
 						</Button>
-					) : (
-						<Button
-							variant="secondary"
-							onClick={async () => {
-								await update({ productId: product._id, active: true });
-							}}
-						>
-							Restore
-						</Button>
-					)
+						{product.active ? (
+							<Button
+								variant="secondary"
+								onClick={async () => {
+									await archive({ productId: product._id });
+									navigate({ to: "/app/products" });
+								}}
+							>
+								Archive
+							</Button>
+						) : (
+							<Button
+								variant="secondary"
+								onClick={async () => {
+									await update({ productId: product._id, active: true });
+								}}
+							>
+								Restore
+							</Button>
+						)}
+					</>
 				}
 			/>
-			{/* Mobile header — back button, title, live/archived indicator (mirrors
-			    the archive state so it's visible from the top of a long form). */}
-			<div className="flex items-center gap-3 lg:hidden">
+			{/* Mobile header — back button, title, storefront preview + the honest
+			    status chip (Live / Sold out / Hidden / Archived), visible from the
+			    top of a long form. */}
+			<div className="flex items-center gap-2 lg:hidden">
 				<Link
 					to="/app/products"
 					aria-label="Back to products"
@@ -129,24 +203,22 @@ function EditProductRoute() {
 				<h2 className="min-w-0 flex-1 truncate font-heading text-lg font-extrabold leading-tight">
 					Edit product
 				</h2>
-				{product.active ? (
-					<span className="flex shrink-0 items-center gap-1.5 text-[13px] font-semibold text-accent-emphasis">
-						<span
-							className="inline-block size-2 rounded-full bg-accent"
-							aria-hidden="true"
-						/>
-						Live
-					</span>
-				) : (
-					<span className="shrink-0 text-[13px] font-semibold text-muted-foreground">
-						Archived
-					</span>
-				)}
+				<button
+					type="button"
+					onClick={openPreview}
+					aria-label="Preview this product as buyers see it"
+					title="See this product exactly as buyers do — including unsaved changes"
+					className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted"
+				>
+					<Eye className="size-5" />
+				</button>
+				<StatusChip status={status} />
 			</div>
 
 			<ProductForm
 				key={product._id}
 				retailerId={product.retailerId}
+				draftRef={formDraftRef}
 				categoriesLocked={
 					!retailer.actingAsAdmin &&
 					!hasFeature(retailer.subscription, "categories")
@@ -236,6 +308,21 @@ function EditProductRoute() {
 					});
 					navigate({ to: "/app/products" });
 				}}
+			/>
+
+			{/* The storefront's own product sheet, buyer-identical, fed the LIVE
+			    draft. Cart wiring is stubbed: quantity steppers and option pills
+			    work, but "Add to cart" just explains it's a preview. */}
+			<ProductDetailSheet
+				product={previewProduct as never}
+				retailerId={product.retailerId}
+				cartQuantity={0}
+				onClose={() => setPreviewProduct(null)}
+				onAdd={() =>
+					toast("Just a preview — buyers add to cart here.", {
+						id: "product-preview",
+					})
+				}
 			/>
 		</div>
 	);
