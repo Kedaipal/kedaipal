@@ -102,6 +102,25 @@ function rowKey(row: VariantRow): string {
 }
 
 /**
+ * A server SKU rejection names the offending code (`SKU "BRN-S" is already
+ * used…` / `Duplicate SKU "BRN-S" within this product`). Match it back to the
+ * row that owns it so the wizard can land the seller on that exact input.
+ * Pure + exported for tests.
+ */
+export function skuConflictTarget(
+	message: string,
+	rows: VariantRow[],
+): { key: string; sku: string } | null {
+	const match = /sku "([^"]+)"/i.exec(message);
+	if (!match) return null;
+	const sku = match[1];
+	const row = rows.find(
+		(r) => r.sku.trim().toLowerCase() === sku.trim().toLowerCase(),
+	);
+	return row ? { key: rowKey(row), sku } : null;
+}
+
+/**
  * Per-step validation, pure for tests. Delegates the real rules to the SAME
  * validators the full form uses (`collectOptionIssues`,
  * `buildSubmitVariants`) and re-addresses them to wizard fields, so the two
@@ -143,7 +162,11 @@ export function wizardStepIssues(
 			}
 		}
 	}
-	if (step === 3) {
+	// An axis with no values yet keeps the PREVIOUS rows (see rebuildRows) and
+	// hides them, so per-row validation waits for a real grid — step 2's own
+	// "add at least one value" issue is the actionable one.
+	const gridReady = cartesian(options).length > 0;
+	if (step === 3 && gridReady) {
 		const built = buildSubmitVariants(rows, null);
 		if ("issues" in built) {
 			for (const issue of built.issues) {
@@ -159,7 +182,7 @@ export function wizardStepIssues(
 	if (step === 4) {
 		if (!state.fulfilmentAnswered) {
 			issues.push({ field: "fulfilment", message: "Pick one to continue." });
-		} else {
+		} else if (gridReady) {
 			const built = buildSubmitVariants(rows, null);
 			if ("issues" in built) {
 				for (const issue of built.issues) {
@@ -251,8 +274,12 @@ export function wizardHandoff(state: WizardState): {
 	initialValues: ProductFormInitialValues;
 	initialEditor: VariantEditorState;
 } {
-	const minQty = Number.parseInt(state.minQuantity.trim(), 10);
-	const notice = Number.parseInt(state.minNoticeDays.trim(), 10);
+	// Parse EXACTLY as wizardStepIssues validates (Number + isInteger), so a
+	// value the wizard rejects can never arrive silently truncated in the form.
+	const minQtyRaw = state.minQuantity.trim();
+	const noticeRaw = state.minNoticeDays.trim();
+	const minQty = minQtyRaw.length > 0 ? Number(minQtyRaw) : Number.NaN;
+	const notice = noticeRaw.length > 0 ? Number(noticeRaw) : Number.NaN;
 	return {
 		initialValues: {
 			name: state.name,
@@ -645,16 +672,22 @@ export function ProductWizard({
 		}
 	}
 
-	// Anything typed = worth a confirm before discarding.
+	// Anything the seller has touched = worth a confirm before discarding.
 	const isDirty =
 		state.name.trim().length > 0 ||
+		state.description.trim().length > 0 ||
 		state.images.length > 0 ||
-		options.some((a) => a.values.length > 0) ||
+		state.hidden ||
+		state.categoryIds.length > 0 ||
+		options.some((a) => a.name.trim().length > 0 || a.values.length > 0) ||
 		rows.some(
 			(r) =>
 				r.price.trim().length > 0 ||
 				r.stock.trim().length > 0 ||
-				r.sku.trim().length > 0,
+				r.sku.trim().length > 0 ||
+				r.imageStorageIds.length > 0 ||
+				!r.active ||
+				r.requiresProof,
 		) ||
 		customLine !== null ||
 		state.minQuantity.trim().length > 0 ||
@@ -721,7 +754,18 @@ export function ProductWizard({
 		try {
 			await onSubmit(buildWizardSubmitValues(state));
 		} catch (err) {
-			setServerError(convexErrorMessage(err));
+			const message = convexErrorMessage(err);
+			// A rejected SKU names itself in the message — take the seller to the
+			// row that owns it with the details open, instead of a generic banner
+			// on the review step with no pointer to the offending choice.
+			const conflict = skuConflictTarget(message, rows);
+			if (conflict) {
+				setIssues([{ field: `sku:${conflict.key}`, message }]);
+				setShowRowDetails(true);
+				setStep(3);
+			} else {
+				setServerError(message);
+			}
 			setSubmitting(false);
 		}
 	}
@@ -1065,6 +1109,7 @@ export function ProductWizard({
 													placeholder="SKU"
 													value={row.sku}
 													onChange={(e) => setRow(i, { sku: e.target.value })}
+													isError={!!issueFor(`sku:${key}`)}
 													className="h-9 w-28"
 													aria-label={`Item code for ${key || "this item"}`}
 												/>
@@ -1092,6 +1137,7 @@ export function ProductWizard({
 													/>
 													Design approval
 												</label>
+												<IssueText message={issueFor(`sku:${key}`)} />
 											</div>
 										) : null}
 										<IssueText message={issueFor(`price:${key}`)} />

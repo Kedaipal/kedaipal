@@ -15,12 +15,14 @@ import {
 	type FormEvent,
 	type MutableRefObject,
 	type ReactNode,
+	useLayoutEffect,
 	useState,
 } from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { MAX_NOTICE_DAYS } from "../../../convex/lib/fulfilmentDate";
 import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
 import { convexErrorMessage, parsePriceInput } from "../../lib/format";
+import { cartesian } from "../../lib/variant";
 import { describeProduct } from "../../lib/product-summary";
 import { productDetailsSchema } from "../../lib/schemas";
 import { Button } from "../ui/button";
@@ -587,10 +589,15 @@ export function ProductForm({
 			// beneath), so the shared focus helper lands on the offending field —
 			// never a generic banner the seller has to decode.
 			const hasOptions = editor.options.length > 0;
+			// An axis with no values yet means the rows still describe the
+			// PREVIOUS shape (kept on purpose — see rebuildRows) and aren't on
+			// screen. Report only the actionable axis problem; row messages would
+			// be addressed to inputs the seller can't see.
+			const gridReady = cartesian(editor.options).length > 0;
 			const built = buildSubmitVariants(editor.rows, editor.customLine);
 			const issues = [
 				...collectOptionIssues(editor.options),
-				...("issues" in built ? built.issues : []),
+				...(gridReady && "issues" in built ? built.issues : []),
 			];
 			if (issues.length > 0) {
 				setEditorIssues(issues);
@@ -629,9 +636,12 @@ export function ProductForm({
 		},
 	});
 
-	// Keep the draft getter fresh every render — the route reads it lazily on
-	// the "switch back to guided setup" click, never during render.
-	if (draftRef) {
+	// Keep the draft getter fresh after every commit — the route reads it
+	// lazily on the "switch back to guided setup" / Preview click, never during
+	// render. Assigned in a layout effect (not the render body) so a discarded
+	// concurrent render can't publish its state through the ref.
+	useLayoutEffect(() => {
+		if (!draftRef) return;
 		draftRef.current = () => ({
 			name: form.state.values.name,
 			description: form.state.values.description ?? "",
@@ -642,7 +652,10 @@ export function ProductForm({
 			minQuantity: minQty,
 			minNoticeDays: minNoticeDraft,
 		});
-	}
+		return () => {
+			draftRef.current = null;
+		};
+	});
 
 	function handleSubmit(e: FormEvent) {
 		submitThenFocusError(form, e);

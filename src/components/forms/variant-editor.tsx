@@ -129,6 +129,13 @@ export function rebuildRows(
 	options: OptionAxis[],
 	prev: VariantRow[],
 ): VariantRow[] {
+	// An axis with no values yet produces ZERO combinations (cartesian short-
+	// circuits to []). That's a transient authoring moment — the seller has just
+	// tapped "Buyer picks a choice" or added a second axis and hasn't typed the
+	// values — NOT an instruction to throw their work away. Keep the rows as they
+	// are so the price/fulfilment they already entered is still around to seed
+	// the grid when the first value lands.
+	if (cartesian(options).length === 0) return prev;
 	const byLabel = new Map(prev.map((r) => [variantLabel(r.optionValues), r]));
 	// When the seller adds their first axis, carry the price/stock they may have
 	// already typed in single-variant mode into every generated row. SKU + image
@@ -505,6 +512,10 @@ export function VariantEditor({
 
 	const variantCount = useMemo(() => cartesian(options).length, [options]);
 	const overCap = variantCount > MAX_VARIANTS;
+	// While an axis has no values the rows still describe the PREVIOUS shape
+	// (kept deliberately — see rebuildRows), so per-choice UI must wait for the
+	// grid to actually exist rather than render a phantom blank-labelled row.
+	const gridReady = variantCount > 0;
 
 	function setOptions(nextOptions: OptionAxis[]) {
 		update({ options: nextOptions, rows: rebuildRows(nextOptions, rows) });
@@ -960,7 +971,7 @@ export function VariantEditor({
 					</div>
 
 					{/* The choices & their prices. */}
-					{rows.length > 0 ? (
+					{gridReady ? (
 						<div className="flex flex-col gap-2">
 							<span className="text-sm font-medium">The choices & prices</span>
 							{rows.length > 3 ? (
@@ -1053,9 +1064,9 @@ export function VariantEditor({
 			)}
 
 			{/* Q2 — how orders are prepared. Product-level answer applied to every
-			    choice; "vary per choice" reveals the per-row override. Hidden until
-			    a choices-mode product has its first row (nothing to apply to yet). */}
-			{rows.length > 0 ? (
+			    choice; "vary per choice" reveals the per-row override. Waits for a
+			    real grid — an axis mid-authoring has nothing to apply to yet. */}
+			{gridReady ? (
 				<div className="flex flex-col gap-1.5 border-t border-border pt-3">
 					<PrepareQuestion
 						allTrack={allTrack}
@@ -1298,7 +1309,7 @@ export function VariantEditor({
 
 						{/* Per-choice details: SKU, photo, on/off sale, per-choice
 						    approval. Single-item mode gets just the SKU. */}
-						{hasOptions && rows.length > 0 ? (
+						{hasOptions && gridReady ? (
 							<div className="flex flex-col gap-2">
 								<span className="text-sm font-medium">Per-choice details</span>
 								<ul className="flex flex-col gap-2">

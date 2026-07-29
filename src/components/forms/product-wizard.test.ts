@@ -4,13 +4,14 @@ import {
 	buildWizardSubmitValues,
 	emptyWizardState,
 	formDraftToWizardState,
+	skuConflictTarget,
+	type WizardState,
 	wizardHandoff,
 	wizardInitialStep,
 	wizardPriceLabel,
-	type WizardState,
 	wizardStepIssues,
 } from "./product-wizard";
-import type { VariantRow } from "./variant-editor";
+import { rebuildRows, type VariantRow } from "./variant-editor";
 
 function row(partial: Partial<VariantRow> = {}): VariantRow {
 	return {
@@ -79,9 +80,9 @@ describe("wizardStepIssues", () => {
 	});
 
 	it("step 2 requires the question answered, then a named axis with values", () => {
-		expect(
-			wizardStepIssues(emptyWizardState(), 2).map((i) => i.field),
-		).toEqual(["hasChoices"]);
+		expect(wizardStepIssues(emptyWizardState(), 2).map((i) => i.field)).toEqual(
+			["hasChoices"],
+		);
 		const s = browniesState();
 		const broken: WizardState = {
 			...s,
@@ -91,14 +92,13 @@ describe("wizardStepIssues", () => {
 				rows: [],
 			},
 		};
-		expect(wizardStepIssues(broken, 2).map((i) => i.field).sort()).toEqual([
-			"axisName",
-			"axisValues",
-		]);
-		// "Just one item" skips choice setup entirely.
 		expect(
-			wizardStepIssues({ ...singleFromStock() }, 2),
-		).toHaveLength(0);
+			wizardStepIssues(broken, 2)
+				.map((i) => i.field)
+				.sort(),
+		).toEqual(["axisName", "axisValues"]);
+		// "Just one item" skips choice setup entirely.
+		expect(wizardStepIssues({ ...singleFromStock() }, 2)).toHaveLength(0);
 	});
 
 	it("step 2 addresses second-axis problems to the axis-2 fields", () => {
@@ -135,9 +135,9 @@ describe("wizardStepIssues", () => {
 				],
 			},
 		};
-		expect(
-			wizardStepIssues(big, 2).some((i) => i.field === "axisValues"),
-		).toBe(true);
+		expect(wizardStepIssues(big, 2).some((i) => i.field === "axisValues")).toBe(
+			true,
+		);
 	});
 
 	it("step 3 validates every active choice's price via the shared validator", () => {
@@ -153,10 +153,11 @@ describe("wizardStepIssues", () => {
 				],
 			},
 		};
-		expect(wizardStepIssues(broken, 3).map((i) => i.field).sort()).toEqual([
-			"price:Large",
-			"price:Medium",
-		]);
+		expect(
+			wizardStepIssues(broken, 3)
+				.map((i) => i.field)
+				.sort(),
+		).toEqual(["price:Large", "price:Medium"]);
 		// A deactivated choice never blocks (same rule as the full form).
 		const offRow: WizardState = {
 			...s,
@@ -192,10 +193,9 @@ describe("wizardStepIssues", () => {
 		]);
 		// Unanswered structural question surfaces as its own issue.
 		expect(
-			wizardStepIssues(
-				{ ...s, fulfilmentAnswered: false },
-				4,
-			).map((i) => i.field),
+			wizardStepIssues({ ...s, fulfilmentAnswered: false }, 4).map(
+				(i) => i.field,
+			),
 		).toEqual(["fulfilment"]);
 	});
 
@@ -214,22 +214,17 @@ describe("wizardStepIssues", () => {
 				},
 			},
 		};
-		expect(
-			wizardStepIssues(withBadCustom, 5).map((i) => i.field),
-		).toEqual(["customPrice"]);
+		expect(wizardStepIssues(withBadCustom, 5).map((i) => i.field)).toEqual([
+			"customPrice",
+		]);
 		expect(
 			wizardStepIssues({ ...base, minQuantity: "1" }, 5).map((i) => i.field),
 		).toEqual(["minQuantity"]);
 		expect(
-			wizardStepIssues({ ...base, minNoticeDays: "31" }, 5).map(
-				(i) => i.field,
-			),
+			wizardStepIssues({ ...base, minNoticeDays: "31" }, 5).map((i) => i.field),
 		).toEqual(["minNoticeDays"]);
 		expect(
-			wizardStepIssues(
-				{ ...base, minQuantity: "20", minNoticeDays: "0" },
-				5,
-			),
+			wizardStepIssues({ ...base, minQuantity: "20", minNoticeDays: "0" }, 5),
 		).toHaveLength(0);
 	});
 });
@@ -414,6 +409,93 @@ describe("wizard ⇄ full form (shared substrate)", () => {
 	});
 });
 
+describe("switching to choices keeps the seller's work (PR #108 review)", () => {
+	it("preserves price + Made-to-order through the empty-axis moment", () => {
+		// The seller's path in the wizard: step 3 price, step 4 "Made to order",
+		// then back to step 2 and re-toggle "Buyer picks a choice" → preset.
+		const typed: WizardState = {
+			...emptyWizardState(),
+			name: "Brownies",
+			hasChoices: false,
+			fulfilmentAnswered: true,
+			editor: {
+				options: [],
+				rows: [row({ price: "12", blockWhenOutOfStock: false })],
+				customLine: null,
+			},
+		};
+		// Re-toggle → an axis with no values yet.
+		const emptyAxis = rebuildRows(
+			[{ name: "", values: [] }],
+			typed.editor.rows,
+		);
+		expect(emptyAxis).toBe(typed.editor.rows);
+		// Tap the "Size" preset → the grid inherits price AND fulfilment.
+		const grid = rebuildRows(
+			[{ name: "Size", values: ["Small", "Medium", "Large"] }],
+			emptyAxis,
+		);
+		expect(grid.map((r) => r.price)).toEqual(["12", "12", "12"]);
+		expect(grid.map((r) => r.blockWhenOutOfStock)).toEqual([
+			false,
+			false,
+			false,
+		]);
+		// And the resulting product is made-to-order, not stock-tracked-at-zero.
+		const values = buildWizardSubmitValues({
+			...typed,
+			hasChoices: true,
+			editor: {
+				options: [{ name: "Size", values: ["Small", "Medium", "Large"] }],
+				rows: grid,
+				customLine: null,
+			},
+		});
+		expect(values.variants.every((v) => !v.blockWhenOutOfStock)).toBe(true);
+		expect(values.variants.every((v) => v.price === 1200)).toBe(true);
+	});
+
+	it("holds row validation until the axis actually has values", () => {
+		const midAuthoring: WizardState = {
+			...browniesState(),
+			editor: {
+				...browniesState().editor,
+				options: [{ name: "Size", values: [] }],
+			},
+		};
+		// Step 2 reports the actionable problem…
+		expect(wizardStepIssues(midAuthoring, 2).map((i) => i.field)).toEqual([
+			"axisValues",
+		]);
+		// …and steps 3/4 stay quiet rather than flagging invisible rows.
+		expect(wizardStepIssues(midAuthoring, 3)).toHaveLength(0);
+		expect(wizardStepIssues(midAuthoring, 4)).toHaveLength(0);
+	});
+});
+
+describe("skuConflictTarget", () => {
+	const rows = [
+		row({ optionValues: ["Small"], sku: "BRN-S" }),
+		row({ optionValues: ["Medium"], sku: "BRN-M" }),
+	];
+
+	it("points a server SKU rejection at the row that owns the code", () => {
+		expect(
+			skuConflictTarget('SKU "BRN-M" is already used by another variant', rows),
+		).toEqual({ key: "Medium", sku: "BRN-M" });
+		expect(
+			skuConflictTarget('Duplicate SKU "BRN-S" within this product', rows),
+		).toEqual({ key: "Small", sku: "BRN-S" });
+	});
+
+	it("returns null when the message names no SKU or an unknown one", () => {
+		expect(skuConflictTarget("Rate limit exceeded", rows)).toBeNull();
+		expect(
+			skuConflictTarget('SKU "OTHER" is already used by another variant', rows),
+		).toBeNull();
+	});
+});
+
 describe("wizardInitialStep", () => {
 	it("opens a fully answered draft at review", () => {
 		expect(wizardInitialStep(browniesState())).toBe(5);
@@ -432,9 +514,7 @@ describe("wizardInitialStep", () => {
 				},
 			}),
 		).toBe(3);
-		expect(
-			wizardInitialStep({ ...s, fulfilmentAnswered: false }),
-		).toBe(4);
+		expect(wizardInitialStep({ ...s, fulfilmentAnswered: false })).toBe(4);
 	});
 });
 

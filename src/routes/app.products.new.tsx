@@ -2,6 +2,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import { useRef, useState } from "react";
 import { api } from "../../convex/_generated/api";
+import type { Id } from "../../convex/_generated/dataModel";
 import { PageHeader } from "../components/dashboard/page-header";
 import {
 	ProductForm,
@@ -46,6 +47,9 @@ function NewProductRoute() {
 	// Live getter for the full form's as-typed state (assigned by ProductForm
 	// every render, read only on the switch-back click).
 	const formDraftRef = useRef<(() => ProductFormDraft) | null>(null);
+	// Set once the product row exists — makes a post-create failure (categories)
+	// retryable without minting a second product.
+	const createdProductId = useRef<Id<"products"> | null>(null);
 
 	if (!retailer) return null;
 
@@ -54,19 +58,26 @@ function NewProductRoute() {
 
 	async function handleCreate(values: ProductFormSubmitValues) {
 		if (!retailer) return;
-		const productId = await create({
-			retailerId: retailer._id,
-			name: values.name,
-			description: values.description,
-			currency: retailer.currency,
-			imageStorageIds: values.imageStorageIds,
-			sortOrder: Date.now(),
-			options: values.options,
-			hidden: values.hidden,
-			minNoticeDays: values.minNoticeDays,
-			minQuantity: values.minQuantity,
-			variants: values.variants,
-		});
+		// The two writes aren't atomic: if categories fail (plan gate, rate
+		// limit) the product already exists and the seller sees the error with
+		// Publish re-enabled. Remember the id so a retry ATTACHES CATEGORIES to
+		// that product instead of creating a duplicate.
+		const productId =
+			createdProductId.current ??
+			(await create({
+				retailerId: retailer._id,
+				name: values.name,
+				description: values.description,
+				currency: retailer.currency,
+				imageStorageIds: values.imageStorageIds,
+				sortOrder: Date.now(),
+				options: values.options,
+				hidden: values.hidden,
+				minNoticeDays: values.minNoticeDays,
+				minQuantity: values.minQuantity,
+				variants: values.variants,
+			}));
+		createdProductId.current = productId;
 		// Junction rows keyed on the fresh id — ordered after create so a
 		// category error can never block the core product save.
 		if (values.categoryIds.length > 0) {

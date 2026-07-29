@@ -52,8 +52,13 @@ export function ProductImagesField({
 					body: file,
 				});
 				if (!res.ok) throw new Error("Upload failed");
-				const { storageId } = (await res.json()) as { storageId: string };
-				added.push({ id: storageId, url: URL.createObjectURL(file) });
+				// Validate the response shape before trusting it — an error body
+				// would otherwise store `undefined` as a storage id and only
+				// surface server-side (same guard as VariantImageCell).
+				const body = (await res.json()) as { storageId?: unknown };
+				if (typeof body.storageId !== "string")
+					throw new Error("Upload failed: unexpected response");
+				added.push({ id: body.storageId, url: URL.createObjectURL(file) });
 			}
 			onChange([...images, ...added]);
 		} catch (err) {
