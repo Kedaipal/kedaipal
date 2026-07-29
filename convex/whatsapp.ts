@@ -152,6 +152,8 @@ export const getOrderWithRetailer = internalQuery({
 		retailerWaPhone: string | undefined;
 		retailerSlug: string;
 		carrierTrackingUrl: string | undefined;
+		courierName: string | undefined;
+		trackingNo: string | undefined;
 		deliveryMethod: DeliveryMethod;
 		// The order's frozen pickup kind — drives "pickup" vs "drop-off point"
 		// wording in status copy. Undefined for delivery orders + legacy snapshots.
@@ -181,6 +183,8 @@ export const getOrderWithRetailer = internalQuery({
 			retailerWaPhone: retailer.waPhone,
 			retailerSlug: retailer.slug,
 			carrierTrackingUrl: order.carrierTrackingUrl,
+			courierName: order.courierName,
+			trackingNo: order.trackingNo,
 			deliveryMethod: (order.deliveryMethod as DeliveryMethod | undefined) ?? "delivery",
 			pickupKind: (order.pickupSnapshot as PickupSnapshot | undefined)
 				?.locationType,
@@ -629,6 +633,8 @@ export const notifyStatusChange = internalAction({
 			retailerWaPhone: string | undefined;
 			retailerSlug: string;
 			carrierTrackingUrl: string | undefined;
+			courierName: string | undefined;
+			trackingNo: string | undefined;
 			deliveryMethod: DeliveryMethod;
 			pickupKind: PickupKind | undefined;
 			locale: Locale;
@@ -691,6 +697,8 @@ export const notifyStatusChange = internalAction({
 					trackingUrl,
 					carrierTrackingUrl:
 						status === "shipped" ? meta.carrierTrackingUrl : undefined,
+					courierName: status === "shipped" ? meta.courierName : undefined,
+					trackingNo: status === "shipped" ? meta.trackingNo : undefined,
 					contactPhone: meta.retailerWaPhone,
 				});
 			}
@@ -704,6 +712,8 @@ export const notifyStatusChange = internalAction({
 				contactPhone: meta.retailerWaPhone,
 				trackingUrl,
 				carrierTrackingUrl: meta.carrierTrackingUrl,
+				courierName: meta.courierName,
+				trackingNo: meta.trackingNo,
 				deliveryMethod: meta.deliveryMethod,
 				pickupKind: meta.pickupKind,
 			});
@@ -812,6 +822,8 @@ export const notifyStageEntry = internalAction({
 			trackingUrl: `${appUrl}/track/${trackingToken}`,
 			carrierTrackingUrl:
 				stage.anchor === "shipped" ? meta.carrierTrackingUrl : undefined,
+			courierName: stage.anchor === "shipped" ? meta.courierName : undefined,
+			trackingNo: stage.anchor === "shipped" ? meta.trackingNo : undefined,
 			contactPhone: meta.retailerWaPhone,
 		});
 		try {
