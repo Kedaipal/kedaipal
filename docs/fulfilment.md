@@ -211,16 +211,20 @@ copyable beside the link.
   line states exactly what the buyer gets (auto link vs copyable number vs nothing) —
   no hidden behavior. **"No courier" collapses the form** (number/link inputs hide, and
   `draftToFields` treats the state as an explicit clear so hidden leftovers never save).
-- **Lalamove interplay** (Zaki's test feedback, 29 Jul): booking a rider is a
-  *different* flow that lives on the Lalamove Delivery card, and its book moment is
-  **packed** (`promptBookOnPacked`), never shipped — with a rider, "shipped" fires
-  automatically at pickup, so a seller manually marking shipped is saying "no rider on
-  this one". The prompt therefore (a) is **suppressed when a rider booking is active**
-  (belt-and-braces — booking already mirrors its `shareLink` onto `carrierTrackingUrl`,
-  which suppresses it anyway) and (b) shows a **signpost** ("book from the Lalamove
-  Delivery card instead") whenever a rider is bookable right now
-  (`getDeliveryJob.blockReason === null`) — a Lalamove-priced store with an unbooked
-  order sees the parcel form *with* directions to the rider flow, not instead of it.
+- **Lalamove interplay** (Zaki's test feedback, 29–30 Jul): booking a rider is a
+  *different* flow whose home is the Lalamove Delivery card (book moment **packed**,
+  `promptBookOnPacked` — with a rider, "shipped" fires automatically at pickup, so a
+  seller manually marking shipped is saying "no rider on this one"). Two easings:
+  (a) the prompt is **suppressed when a rider booking is active** (belt-and-braces —
+  booking already mirrors its `shareLink` onto `carrierTrackingUrl`, which suppresses
+  it anyway); (b) when a rider is **bookable right now**
+  (`getDeliveryJob.blockReason === null`) the prompt opens as **two tabs, rider
+  first** — "Lalamove rider" (copy + a `Book a rider…` CTA that closes the prompt and
+  bumps `bookRequestToken`, which `BookDeliveryCard` watches to open its own
+  quote→confirm dialog through the same bookability guards) and "Parcel courier" (the
+  manual form). The card sits far down the page, so the prompt is the second,
+  eye-level place to book — same flow, two entrances. Non-Lalamove sellers see the
+  plain courier form, no tabs.
 - **"Shipment tracking" card** on order detail (upgrade of the old URL-only "Carrier
   Tracking" card): shows courier + mono tracking number with one-tap copy + "Track with
   courier" link; edit mode reuses the same fieldset ("Other" adds free-text name +

@@ -345,6 +345,10 @@ function OrderDetailRoute() {
 	// instead of a direct advance when the target stage is shipped-anchored on a
 	// delivery order with no tracking attached yet.
 	const [shipDialogOpen, setShipDialogOpen] = useState(false);
+	// Bumped by the prompt's "Book a rider…" CTA — BookDeliveryCard watches it
+	// and opens its own quote→confirm dialog, so the seller can book from the
+	// eye-level prompt without scrolling down to the card.
+	const [bookRequestToken, setBookRequestToken] = useState(0);
 	const [confirmingPayment, setConfirmingPayment] = useState(false);
 	const [sendingReminder, setSendingReminder] = useState(false);
 	const [confirmPaymentOpen, setConfirmPaymentOpen] = useState(false);
@@ -1190,7 +1194,9 @@ function OrderDetailRoute() {
 			{/* Lalamove dispatch (delivery orders): one-tap "Book delivery" with
 			    re-quote confirm, live job card (driver/plate/tracking), failed-
 			    booking rebook, and disabled-with-reason states. 86eyb5hrf. */}
-			{!isSelfCollect ? <BookDeliveryCard order={order} /> : null}
+			{!isSelfCollect ? (
+				<BookDeliveryCard order={order} bookRequestToken={bookRequestToken} />
+			) : null}
 
 			{/* Delivery address (delivery orders only) */}
 			{!isSelfCollect && order.deliveryAddress ? (
@@ -1332,8 +1338,15 @@ function OrderDetailRoute() {
 					onConfirm={(fields) => handleAdvance(nextStage.id, fields)}
 					// blockReason === null ⟺ a rider could be booked right now
 					// (keys configured, plan ok, coords present, no active job) —
-					// exactly when the "use the Lalamove card instead" signpost helps.
-					riderBookable={dispatchInfo?.blockReason === null}
+					// then the dialog opens rider-first with a direct booking CTA.
+					onBookRider={
+						dispatchInfo?.blockReason === null
+							? () => {
+									setShipDialogOpen(false);
+									setBookRequestToken((t) => t + 1);
+								}
+							: undefined
+					}
 				/>
 			) : null}
 

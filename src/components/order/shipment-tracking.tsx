@@ -186,32 +186,40 @@ function ShipmentFieldset({
 }
 
 /**
- * The advance-to-shipped prompt: optional courier + tracking number collected
- * at the moment the seller marks a delivery order shipped, so the buyer's
- * shipped WhatsApp update (already outgoing) carries the tracking. Skippable —
- * shipping without tracking is one tap, and the card below covers add-later.
+ * The advance-to-shipped prompt. When a Lalamove rider is bookable on the
+ * order (`onBookRider` provided), it opens as TWO TABS with the rider first —
+ * the Lalamove Delivery card sits far down the page, so this is the second,
+ * eye-level place to book (same guarded flow; the CTA closes this dialog and
+ * opens the card's quote→confirm dialog). The second tab is the manual
+ * parcel-courier form. Without a bookable rider it's the plain courier form.
+ * Skippable either way — shipping without tracking stays one tap, and the
+ * card below covers add-later.
  */
 export function MarkShippedDialog({
 	open,
 	onOpenChange,
 	advanceLabel,
 	onConfirm,
-	riderBookable = false,
+	onBookRider,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	/** The advance button's own label, e.g. "Mark as Shipped" — stage vocabulary. */
 	advanceLabel: string;
 	onConfirm: (fields: ShipmentFields) => Promise<void>;
-	/** True when a Lalamove rider could be booked on this order right now
-	 * (keys configured, no active job). Renders a signpost so a rider seller
-	 * isn't left wondering why this form only lists parcel couriers — booking
-	 * lives on the Lalamove Delivery card (its live tracking attaches itself,
-	 * and the rider's pickup drives "shipped" automatically). */
-	riderBookable?: boolean;
+	/** Present ⟺ a Lalamove rider could be booked on this order right now
+	 * (keys configured, plan ok, no active job). Called from the rider tab's
+	 * CTA — the parent closes this dialog and triggers the SAME booking flow
+	 * as the Lalamove Delivery card (today's price shown, tap to confirm;
+	 * live tracking attaches itself and the rider's pickup drives "shipped"). */
+	onBookRider?: () => void;
 }) {
 	const [draft, setDraft] = useState<ShipmentDraft | null>(null);
 	const [saving, setSaving] = useState(false);
+	// Rider-first when booking is on the table — the manual form is one tap
+	// away for the outstation-parcel case. Plain courier form otherwise.
+	const [tab, setTab] = useState<"rider" | "courier">("rider");
+	const riderTab = onBookRider !== undefined && tab === "rider";
 	// Lazy-init on open so the last-used courier is read fresh each time.
 	const activeDraft = draft ?? {
 		courier: readLastCourier(),
@@ -239,28 +247,70 @@ export function MarkShippedDialog({
 			open={open}
 			onOpenChange={(next) => {
 				onOpenChange(next);
-				if (!next) setDraft(null);
+				if (!next) {
+					setDraft(null);
+					setTab("rider");
+				}
 			}}
 		>
 			<DialogContent>
 				<DialogHeader>
 					<DialogTitle>{advanceLabel}</DialogTitle>
-					<DialogDescription>
-						Add the courier and tracking number — it goes into the buyer&apos;s
-						WhatsApp update and tracking page. Optional; you can also add it
-						later from this order.
-					</DialogDescription>
+					{onBookRider === undefined ? (
+						<DialogDescription>
+							Add the courier and tracking number — it goes into the
+							buyer&apos;s WhatsApp update and tracking page. Optional; you can
+							also add it later from this order.
+						</DialogDescription>
+					) : (
+						<DialogDescription>How is this order going out?</DialogDescription>
+					)}
 				</DialogHeader>
-				{riderBookable ? (
-					<p className="rounded-xl bg-muted/60 p-3 text-xs leading-relaxed text-muted-foreground">
-						Sending this one with a <b>Lalamove rider</b>? Book it from the
-						Lalamove Delivery card on the order page instead — live tracking
-						attaches automatically and the order moves on its own when the rider
-						picks up. This form is for parcel couriers (J&amp;T, DD Cold Chain,
-						and others).
-					</p>
+
+				{onBookRider !== undefined ? (
+					<div className="flex gap-2 border-b border-input">
+						{(
+							[
+								["rider", "Lalamove rider"],
+								["courier", "Parcel courier"],
+							] as const
+						).map(([key, label]) => (
+							<button
+								key={key}
+								type="button"
+								onClick={() => setTab(key)}
+								className={`min-h-11 px-3 text-sm font-medium ${
+									tab === key
+										? "border-b-2 border-primary text-primary"
+										: "text-muted-foreground"
+								}`}
+							>
+								{label}
+							</button>
+						))}
+					</div>
 				) : null}
-				<ShipmentFieldset draft={activeDraft} onChange={setDraft} />
+
+				{riderTab ? (
+					<p className="text-sm leading-relaxed text-muted-foreground">
+						Book a Lalamove rider for this delivery — you&apos;ll see
+						today&apos;s price and confirm before anything is charged. Live
+						tracking attaches automatically, and the order updates on its own
+						when the rider picks up, so there&apos;s nothing to mark manually.
+					</p>
+				) : (
+					<>
+						{onBookRider !== undefined ? (
+							<p className="text-xs leading-relaxed text-muted-foreground">
+								Shipping with a parcel courier instead — the tracking below goes
+								into the buyer&apos;s WhatsApp update and tracking page.
+								Optional; you can also add it later from this order.
+							</p>
+						) : null}
+						<ShipmentFieldset draft={activeDraft} onChange={setDraft} />
+					</>
+				)}
+
 				<DialogFooter>
 					<Button
 						variant="secondary"
@@ -270,9 +320,15 @@ export function MarkShippedDialog({
 					>
 						Cancel
 					</Button>
-					<Button onClick={handleConfirm} disabled={saving} className="h-11">
-						{saving ? "Updating…" : advanceLabel}
-					</Button>
+					{riderTab && onBookRider !== undefined ? (
+						<Button onClick={onBookRider} className="h-11">
+							Book a rider…
+						</Button>
+					) : (
+						<Button onClick={handleConfirm} disabled={saving} className="h-11">
+							{saving ? "Updating…" : advanceLabel}
+						</Button>
+					)}
 				</DialogFooter>
 			</DialogContent>
 		</Dialog>
