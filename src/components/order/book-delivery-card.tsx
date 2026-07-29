@@ -41,7 +41,18 @@ import {
  * Renders only on delivery orders. For sellers who never set up Lalamove it
  * collapses to a one-line discoverability hint on bookable orders.
  */
-export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
+export function BookDeliveryCard({
+	order,
+	bookRequestToken = 0,
+}: {
+	order: Doc<"orders">;
+	/** Increment to request the booking flow from OUTSIDE the card — the
+	 * mark-shipped dialog's "Lalamove rider" tab uses this so the seller can
+	 * book without scrolling down to the card. Same guarded entry as the
+	 * packed prompt (bookable status, keys ok, no active job), so it can
+	 * never book more than the card itself would allow. */
+	bookRequestToken?: number;
+}) {
 	const dispatch = useQuery(api.lalamove.getDeliveryJob, {
 		shortId: order.shortId,
 	});
@@ -95,6 +106,27 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 		if (futureDated) return; // book manually on the delivery day
 		void handlePrepare();
 	}, [order.status, order.paymentStatus, dispatch]);
+
+	// External book request (mark-shipped dialog's "Lalamove rider" tab). Token
+	// baseline on mount so a remount never re-fires a stale request; the same
+	// bookability guards as above, minus the paid/due-today conditions — this
+	// is an explicit seller tap, not an automatic prompt.
+	const prevTokenRef = useRef(bookRequestToken);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: handlePrepare is a stable hoisted closure; the effect keys off the token only.
+	useEffect(() => {
+		const prev = prevTokenRef.current;
+		prevTokenRef.current = bookRequestToken;
+		if (bookRequestToken === prev) return;
+		if (!dispatch || dispatch.blockReason !== null) return;
+		const hasActiveJob =
+			!!dispatch.job &&
+			!["completed", "canceled", "expired", "rejected"].includes(
+				dispatch.job.status,
+			);
+		if (hasActiveJob) return;
+		if (order.status !== "confirmed" && order.status !== "packed") return;
+		void handlePrepare();
+	}, [bookRequestToken, dispatch, order.status]);
 
 	if (order.deliveryMethod !== "delivery" || !dispatch) return null;
 	const { job, blockReason, promptBookOnPacked } = dispatch;

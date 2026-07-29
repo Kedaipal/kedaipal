@@ -825,7 +825,18 @@ export default defineSchema({
 		// Optional external carrier tracking URL set by the retailer when marking
 		// shipped. Surfaced on the customer tracking page and included in the
 		// WhatsApp shipped notification. Only relevant for delivery orders.
+		// Auto-derived from courierName + trackingNo for registry couriers
+		// (convex/lib/couriers.ts), hand-pasted for "Other", or mirrored from a
+		// Lalamove job's shareLink.
 		carrierTrackingUrl: v.optional(v.string()),
+		// Manual parcel-courier shipment info (86eyehvk4) — the seller ships via
+		// J&T/DD Cold Chain/etc themselves and pastes the consignment number at
+		// mark-shipped (or after, on the order-detail card). Rendered as copyable
+		// text on the tracking page + in the shipped WhatsApp update; NEVER
+		// triggers its own outbound message (Meta bills per message from Oct
+		// 2026 — late-added tracking is track-page-only). Delivery orders only.
+		courierName: v.optional(v.string()),
+		trackingNo: v.optional(v.string()),
 		// Payment handshake — independent of the fulfilment status pipeline above.
 		// `unpaid` (or undefined) → shopper hasn't claimed payment yet.
 		// `claimed` → shopper tapped "I've paid" on the tracking page.

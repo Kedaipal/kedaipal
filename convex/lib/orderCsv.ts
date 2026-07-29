@@ -47,6 +47,10 @@ export type CsvOrder = {
 	total: number;
 	currency: string;
 	customerNote?: string;
+	/** Manual parcel-courier shipment info (delivery orders marked shipped via
+	 * J&T/DD Cold Chain/etc). Blank when not attached — most orders. */
+	courierName?: string;
+	trackingNo?: string;
 };
 
 /** Fixed column order — the header row and every record follow this. */
@@ -57,6 +61,9 @@ export const CSV_COLUMNS = [
 	"Customer",
 	"Phone",
 	"Fulfilment",
+	// Courier + consignment number sit with the fulfilment column they refine.
+	"Courier",
+	"Tracking no",
 	"Status",
 	"Payment",
 	"Payment method",
@@ -89,6 +96,8 @@ export function orderToCsvRow(o: CsvOrder): string[] {
 		orderCustomerLabel(o.customer, ""),
 		o.customer.waPhone ?? "",
 		o.deliveryMethod ?? "",
+		o.courierName ?? "",
+		o.trackingNo ?? "",
 		o.status,
 		o.paymentStatus ?? "unpaid",
 		o.paymentMethod ?? "",
