@@ -240,7 +240,7 @@ function ProductRoute() {
 	}
 
 	return (
-		<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col px-5 pb-44 pt-4 lg:px-8 lg:pb-10 lg:pt-6">
+		<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col px-5 pb-6 pt-4 lg:px-8 lg:pb-10 lg:pt-6">
 			<ProductPageView
 				product={product}
 				retailerId={retailer._id}
