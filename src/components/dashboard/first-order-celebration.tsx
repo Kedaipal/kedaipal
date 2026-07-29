@@ -1,5 +1,6 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
 import { PartyPopper } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 
@@ -20,7 +21,9 @@ export function FirstOrderCelebration({
 	slug: string;
 	storeName: string;
 }) {
-	const instructions = useQuery(api.billing.paymentInstructions, {});
+	const instructions = useQuery(
+		convexQuery(api.billing.paymentInstructions, {}),
+	).data;
 
 	const phone = instructions?.whatsappPhone;
 	const testimonialUrl = phone

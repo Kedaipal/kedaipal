@@ -1,22 +1,34 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { BookDeliveryCard } from "./book-delivery-card";
 
-// The card reads its job via useQuery and books via useAction. Stub both so it
-// renders without a ConvexProvider; `state.dispatch` is what getDeliveryJob
-// returns for the test, `state.action` backs all three useAction hooks (only
-// prepareBooking is exercised here). Router Link is only rendered in the
-// not-set-up hint branch (never in these cases) — stub it anyway so the
-// import is inert.
+// The card reads its job via `useQuery(convexQuery(...)).data` and books via
+// useAction. Stub the adapter (convexQuery passthrough + a TanStack useQuery that
+// returns `{ data: state.dispatch }`) so it renders without a QueryClientProvider;
+// `state.dispatch` is what getDeliveryJob returns for the test, `state.action`
+// backs all three useAction hooks (only prepareBooking is exercised here). Router
+// Link is only rendered in the not-set-up hint branch (never in these cases) —
+// stub it anyway so the import is inert.
 const state = vi.hoisted(() => ({
 	dispatch: null as unknown,
 	action: undefined as unknown,
 }));
 vi.mock("convex/react", () => ({
-	useQuery: () => state.dispatch,
 	useAction: () => state.action ?? vi.fn(),
+}));
+vi.mock("@convex-dev/react-query", () => ({
+	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
+}));
+vi.mock("@tanstack/react-query", () => ({
+	useQuery: () => ({ data: state.dispatch }),
 }));
 vi.mock("@tanstack/react-router", () => ({
 	Link: (props: Record<string, unknown>) => <a {...props} />,
@@ -84,12 +96,11 @@ describe("BookDeliveryCard — completed job", () => {
 
 	it("shows the rider's proof-of-delivery photos when present", () => {
 		state.dispatch = completedDispatch();
-		(
-			state.dispatch as { job: { podImageUrls?: string[] } }
-		).job.podImageUrls = [
-			"https://files.convex.dev/pod-1.jpg",
-			"https://files.convex.dev/pod-2.jpg",
-		];
+		(state.dispatch as { job: { podImageUrls?: string[] } }).job.podImageUrls =
+			[
+				"https://files.convex.dev/pod-1.jpg",
+				"https://files.convex.dev/pod-2.jpg",
+			];
 		render(<BookDeliveryCard order={deliveredOrder} />);
 
 		expect(screen.getByText("Delivery photo from the rider")).toBeTruthy();
@@ -101,7 +112,10 @@ describe("BookDeliveryCard — completed job", () => {
 	});
 
 	it("degrades gracefully when the completed job has no driver or share link", () => {
-		state.dispatch = completedDispatch({ driver: undefined, shareLink: undefined });
+		state.dispatch = completedDispatch({
+			driver: undefined,
+			shareLink: undefined,
+		});
 		render(<BookDeliveryCard order={deliveredOrder} />);
 
 		expect(screen.getByText("Delivered")).toBeTruthy();
@@ -124,7 +138,11 @@ describe("BookDeliveryCard — dispatch dialog vehicle choice", () => {
 			buyerContactFallback: false,
 		});
 		state.action = prepare;
-		state.dispatch = { promptBookOnPacked: false, blockReason: null, job: null };
+		state.dispatch = {
+			promptBookOnPacked: false,
+			blockReason: null,
+			job: null,
+		};
 		const confirmedOrder = {
 			...deliveredOrder,
 			status: "confirmed",

@@ -1,5 +1,7 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import {
 	ArrowLeft,
@@ -179,15 +181,17 @@ function ActiveSession({
 	onCancelActive,
 }: {
 	sessionId: SessionId;
-	retailer: ReturnType<typeof useQuery<typeof api.retailers.getMyRetailer>>;
+	retailer: FunctionReturnType<typeof api.retailers.getMyRetailer> | undefined;
 	created: CreatedOrder | null;
 	onCreated: (c: CreatedOrder) => void;
 	onBackToList: () => void;
 	onCancelActive: () => void;
 }) {
-	const session = useQuery(api.counterCheckout.getCheckoutSession, {
-		sessionId,
-	});
+	const session = useQuery(
+		convexQuery(api.counterCheckout.getCheckoutSession, {
+			sessionId,
+		}),
+	).data;
 
 	if (session === undefined)
 		return <p className="text-sm text-muted-foreground">Loading…</p>;
@@ -257,9 +261,11 @@ function OpenCheckoutsList({
 	onCancel: (id: string) => void;
 }) {
 	const actAsRetailerId = useActAsRetailerId();
-	const sessions = useQuery(api.counterCheckout.listOpenSessions, {
-		retailerId: actAsRetailerId,
-	});
+	const sessions = useQuery(
+		convexQuery(api.counterCheckout.listOpenSessions, {
+			retailerId: actAsRetailerId,
+		}),
+	).data;
 	// Hold the row pending cancellation so a single shared confirm covers the
 	// whole list — cancelling drops the open checkout and any items added to it.
 	const [pendingCancel, setPendingCancel] = useState<{
@@ -399,15 +405,19 @@ function StoreQrChip({
 	onScanned: (sessionId: string) => void;
 }) {
 	const actAsRetailerId = useActAsRetailerId();
-	const storeQr = useQuery(api.counterCheckout.getStoreQr, {
-		retailerId: actAsRetailerId,
-	});
+	const storeQr = useQuery(
+		convexQuery(api.counterCheckout.getStoreQr, {
+			retailerId: actAsRetailerId,
+		}),
+	).data;
 	// Shares the identical subscription OpenCheckoutsList already holds (Convex
 	// dedupes), so the list is warm the instant the dialog opens and the baseline
 	// snapshot below is accurate on the first frame.
-	const sessions = useQuery(api.counterCheckout.listOpenSessions, {
-		retailerId: actAsRetailerId,
-	});
+	const sessions = useQuery(
+		convexQuery(api.counterCheckout.listOpenSessions, {
+			retailerId: actAsRetailerId,
+		}),
+	).data;
 	const ensureToken = useMutation(api.counterCheckout.ensureCounterQrToken);
 	const ensured = useRef(false);
 	const [open, setOpen] = useState(false);
@@ -1245,7 +1255,9 @@ function BuildOrderScreen({
 	// Counter uses listForCounter (not the public list) so hidden, counter-only
 	// SKUs — e.g. a pre-priced event product — are ringable in person while
 	// staying off the storefront. See docs/hidden-products.md.
-	const products = useQuery(api.products.listForCounter, { retailerId });
+	const products = useQuery(
+		convexQuery(api.products.listForCounter, { retailerId }),
+	).data;
 	const createOrder = useMutation(api.counterCheckout.createOrderFromSession);
 	const saveDraft = useMutation(api.counterCheckout.saveSessionDraft);
 	const saveName = useMutation(api.counterCheckout.setSessionCustomerName);

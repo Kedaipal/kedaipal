@@ -1,5 +1,7 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useAction, useMutation, useQuery } from "convex/react";
+import { useAction, useMutation } from "convex/react";
 import {
 	ArrowLeft,
 	ArrowRight,
@@ -286,7 +288,7 @@ function OrderProgressStepper({
 function OrderDetailRoute() {
 	const { shortId } = Route.useParams();
 	const navigate = useNavigate();
-	const order = useQuery(api.orders.get, { shortId });
+	const order = useQuery(convexQuery(api.orders.get, { shortId })).data;
 	const updateStatus = useMutation(api.orders.updateStatus);
 	const advanceToStage = useMutation(api.orders.advanceToStage);
 	const setCarrierUrl = useMutation(api.orders.setCarrierTrackingUrl);
@@ -299,32 +301,40 @@ function OrderDetailRoute() {
 	const retailer = useDashboardRetailer();
 	const canHardDelete = retailer?.actingAsAdmin === true;
 	const proofUrl = useQuery(
-		api.orders.getPaymentProofUrl,
-		order?.paymentProofStorageId ? { orderId: order._id } : "skip",
-	);
+		convexQuery(
+			api.orders.getPaymentProofUrl,
+			order?.paymentProofStorageId ? { orderId: order._id } : "skip",
+		),
+	).data;
 	const customerImageUrl = useQuery(
-		api.orders.getCustomerImageUrl,
-		order?.customerImageStorageId ? { shortId } : "skip",
-	);
+		convexQuery(
+			api.orders.getCustomerImageUrl,
+			order?.customerImageStorageId ? { shortId } : "skip",
+		),
+	).data;
 	// CRM context for the customer card ("8 orders · RM 1,240") — answers "who is
 	// this?" without leaving the order.
 	// Active Lalamove booking awareness for the cancel dialog (same query the
 	// BookDeliveryCard subscribes to — Convex dedupes identical subscriptions).
 	const dispatchInfo = useQuery(
-		api.lalamove.getDeliveryJob,
-		order?.deliveryMethod === "delivery" && order.shortId
-			? { shortId: order.shortId }
-			: "skip",
-	);
+		convexQuery(
+			api.lalamove.getDeliveryJob,
+			order?.deliveryMethod === "delivery" && order.shortId
+				? { shortId: order.shortId }
+				: "skip",
+		),
+	).data;
 	const hasActiveRiderBooking =
 		!!dispatchInfo?.job &&
 		!["completed", "canceled", "expired", "rejected"].includes(
 			dispatchInfo.job.status,
 		);
 	const crmCustomer = useQuery(
-		api.customers.get,
-		order?.customerId ? { customerId: order.customerId } : "skip",
-	);
+		convexQuery(
+			api.customers.get,
+			order?.customerId ? { customerId: order.customerId } : "skip",
+		),
+	).data;
 	// Holds the id of the in-flight advance target ("cancel" for cancellation).
 	const [pending, setPending] = useState<string | null>(null);
 	const [carrierInput, setCarrierInput] = useState<string | null>(null);
@@ -1539,9 +1549,9 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 	const submitMockup = useMutation(api.orders.submitMockup);
 	const updateMockupQuote = useMutation(api.orders.updateMockupQuote);
 	const waiveMockup = useMutation(api.orders.waiveMockup);
-	const mockupUrls = useQuery(api.orders.getMockupUrls, {
-		shortId: order.shortId,
-	});
+	const mockupUrls = useQuery(
+		convexQuery(api.orders.getMockupUrls, { shortId: order.shortId }),
+	).data;
 	const [uploading, setUploading] = useState(false);
 	const [waiving, setWaiving] = useState(false);
 	const [savingPrice, setSavingPrice] = useState(false);
@@ -1931,9 +1941,11 @@ function NotifyManagerCard({
 	// the order (legacy orders), in which case we fall back to the snapshot-
 	// only Copy flow.
 	const liveLocation = useQuery(
-		api.pickupLocations.getOwnedById,
-		pickupLocationId ? { pickupLocationId } : "skip",
-	);
+		convexQuery(
+			api.pickupLocations.getOwnedById,
+			pickupLocationId ? { pickupLocationId } : "skip",
+		),
+	).data;
 	const managerName = liveLocation?.managerName?.trim();
 	const managerWaPhone = liveLocation?.managerWaPhone?.trim();
 	// Phone is the gate — without it there's no wa.me link to open. Name is

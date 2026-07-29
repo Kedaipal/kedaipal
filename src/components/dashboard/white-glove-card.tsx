@@ -1,4 +1,6 @@
-import { useMutation, useQuery } from "convex/react";
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
+import { useMutation } from "convex/react";
 import { Award, X } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 
@@ -9,11 +11,13 @@ import { api } from "../../../convex/_generated/api";
  * docs/manual-subscription.md.
  */
 export function WhiteGloveCard({ slug }: { slug: string }) {
-	const status = useQuery(api.foundingMembers.myStatus, {});
+	const status = useQuery(convexQuery(api.foundingMembers.myStatus, {})).data;
 	const instructions = useQuery(
-		api.billing.paymentInstructions,
-		status && !status.whiteGloveScheduled ? {} : "skip",
-	);
+		convexQuery(
+			api.billing.paymentInstructions,
+			status && !status.whiteGloveScheduled ? {} : "skip",
+		),
+	).data;
 	const markScheduled = useMutation(
 		api.foundingMembers.markWhiteGloveScheduled,
 	);

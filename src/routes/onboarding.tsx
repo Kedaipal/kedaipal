@@ -3,13 +3,15 @@ import {
 	RedirectToSignUp,
 	Show,
 } from "@clerk/tanstack-react-start";
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
 	createFileRoute,
 	Link,
 	useLocation,
 	useNavigate,
 } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import { Sparkles } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -70,7 +72,7 @@ function OnboardingRoute() {
 function OnboardingForm() {
 	const navigate = useNavigate();
 	const search = Route.useSearch();
-	const retailer = useQuery(api.retailers.getMyRetailer);
+	const retailer = useQuery(convexQuery(api.retailers.getMyRetailer, {})).data;
 	const createRetailer = useMutation(api.retailers.createRetailer);
 
 	// Assisted = an admin-generated prefill link. Seed the fields, surface the WA

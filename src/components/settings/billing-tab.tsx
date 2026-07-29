@@ -1,4 +1,5 @@
-import { useQuery } from "convex/react";
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import type { FunctionReturnType } from "convex/server";
 import {
 	Award,
@@ -39,9 +40,12 @@ function formatDate(ms: number): string {
  * and invoice history. See docs/manual-subscription.md. */
 export function BillingTab({ retailer }: { retailer: Retailer }) {
 	const sub = retailer.subscription;
-	const isAdmin = useQuery(api.billing.amIAdmin) ?? false;
-	const invoices = useQuery(api.invoices.myInvoices, {}) ?? [];
-	const instructions = useQuery(api.billing.paymentInstructions, {});
+	const isAdmin = useQuery(convexQuery(api.billing.amIAdmin, {})).data ?? false;
+	const invoices =
+		useQuery(convexQuery(api.invoices.myInvoices, {})).data ?? [];
+	const instructions = useQuery(
+		convexQuery(api.billing.paymentInstructions, {}),
+	).data;
 
 	// A Kedaipal admin on their OWN store runs the app for free and is never on a
 	// tier — no trial, plan, cap or invoice applies. Mirror the shell chrome (which
@@ -199,7 +203,6 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 							</p>
 						</div>
 					) : null}
-
 
 					{/* Starter → Pro upgrade (manual sub: routes the request to Arif on WA). */}
 					{sub?.plan === "starter" &&

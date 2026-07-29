@@ -1,5 +1,7 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import { Archive, ArchiveRestore, ArrowLeft } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
@@ -67,14 +69,18 @@ function EditProductRoute() {
 	const { productId } = Route.useParams();
 	const navigate = useNavigate();
 	const retailer = useDashboardRetailer();
-	const product = useQuery(api.products.get, {
-		productId: productId as Id<"products">,
-	});
+	const product = useQuery(
+		convexQuery(api.products.get, {
+			productId: productId as Id<"products">,
+		}),
+	).data;
 	// Current category membership seeds the form's picker — awaited alongside
 	// the product so the form mounts once with complete initial values.
-	const categoryIds = useQuery(api.categories.getProductCategoryIds, {
-		productId: productId as Id<"products">,
-	});
+	const categoryIds = useQuery(
+		convexQuery(api.categories.getProductCategoryIds, {
+			productId: productId as Id<"products">,
+		}),
+	).data;
 	const update = useMutation(api.products.update);
 	const saveVariantGrid = useMutation(api.products.saveVariantGrid);
 	const setProductCategories = useMutation(api.categories.setProductCategories);

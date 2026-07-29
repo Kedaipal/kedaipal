@@ -1,5 +1,6 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
 import { ExternalLink, Sparkles } from "lucide-react";
 import type { ReactNode } from "react";
 import { api } from "../../../convex/_generated/api";
@@ -28,7 +29,9 @@ export function ProFeatureWall({
 	blurb: string;
 	bullets?: string[];
 }) {
-	const instructions = useQuery(api.billing.paymentInstructions, {});
+	const instructions = useQuery(
+		convexQuery(api.billing.paymentInstructions, {}),
+	).data;
 	const waUrl = instructions?.whatsappPhone
 		? `https://wa.me/${instructions.whatsappPhone.replace(/\D/g, "")}?text=${encodeURIComponent(
 				`Hi, I'd like to upgrade to Pro for my Kedaipal store (/${slug}).`,

@@ -1,5 +1,7 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useConvex, useMutation, useQuery } from "convex/react";
+import { useConvex, useMutation } from "convex/react";
 import {
 	ArrowUpDown,
 	CalendarDays,
@@ -281,27 +283,29 @@ function OrdersRoute() {
 	const isAdminActingAs = retailer?.actingAsAdmin === true;
 
 	const result = useQuery(
-		api.orders.searchOrders,
-		retailer
-			? inboxEnabled
-				? {
-						retailerId: retailer._id,
-						bucket,
-						paymentStatuses: pay.length > 0 ? pay : undefined,
-						paymentMethods: method.length > 0 ? method : undefined,
-						methodUnspecified: munspec || undefined,
-						dateFrom: from,
-						dateTo: to,
-						mockupPending: mockup || undefined,
-						fulfilmentWindow: fwin,
-						source,
-						searchText: debounced || undefined,
-						// No limit → stable full-window subscription; we paginate below
-						// by slicing to `visibleCount`, so "Load more" never re-queries.
-					}
-				: { retailerId: retailer._id, bucket: "all" as const }
-			: "skip",
-	);
+		convexQuery(
+			api.orders.searchOrders,
+			retailer
+				? inboxEnabled
+					? {
+							retailerId: retailer._id,
+							bucket,
+							paymentStatuses: pay.length > 0 ? pay : undefined,
+							paymentMethods: method.length > 0 ? method : undefined,
+							methodUnspecified: munspec || undefined,
+							dateFrom: from,
+							dateTo: to,
+							mockupPending: mockup || undefined,
+							fulfilmentWindow: fwin,
+							source,
+							searchText: debounced || undefined,
+							// No limit → stable full-window subscription; we paginate below
+							// by slicing to `visibleCount`, so "Load more" never re-queries.
+						}
+					: { retailerId: retailer._id, bucket: "all" as const }
+				: "skip",
+		),
+	).data;
 	const countsRef = useRef<NonNullable<typeof result>["counts"] | null>(null);
 
 	if (!retailer) return <OrdersInboxSkeleton />;

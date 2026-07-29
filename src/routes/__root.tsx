@@ -1,11 +1,12 @@
 import { ClerkProvider, useAuth } from "@clerk/tanstack-react-start";
 import { TanStackDevtools } from "@tanstack/react-devtools";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 import { ConvexProviderWithClerk } from "convex/react-clerk";
 import { Toaster } from "sonner";
 import { useGoogleAnalytics } from "../hooks/useGoogleAnalytics";
-import { getConvexClient } from "../lib/convex";
+import { getConvexClient, getQueryClient } from "../lib/convex";
 import { clientEnv } from "../lib/env";
 import { getLocale } from "../paraglide/runtime";
 import appCss from "../styles.css?url";
@@ -60,13 +61,18 @@ function Providers({ children }: { children: React.ReactNode }) {
 	if (!publishableKey || !clientEnv.VITE_CONVEX_URL) {
 		return <SetupNotice />;
 	}
+	// Both constructed only past the env guard above — getQueryClient() reaches
+	// getConvexClient(), which throws when VITE_CONVEX_URL is unset.
 	const convex = getConvexClient();
+	const queryClient = getQueryClient();
 	return (
-		<ClerkProvider publishableKey={publishableKey}>
-			<ConvexProviderWithClerk client={convex} useAuth={useAuth}>
-				{children}
-			</ConvexProviderWithClerk>
-		</ClerkProvider>
+		<QueryClientProvider client={queryClient}>
+			<ClerkProvider publishableKey={publishableKey}>
+				<ConvexProviderWithClerk client={convex} useAuth={useAuth}>
+					{children}
+				</ConvexProviderWithClerk>
+			</ClerkProvider>
+		</QueryClientProvider>
 	);
 }
 

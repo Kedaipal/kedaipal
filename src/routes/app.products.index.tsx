@@ -1,5 +1,7 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import {
 	ChevronRight,
@@ -186,9 +188,11 @@ function ProductsRoute() {
 		!retailer.actingAsAdmin &&
 		!hasFeature(retailer.subscription, "categories");
 	const products = useQuery(
-		api.products.listAll,
-		retailer ? { retailerId: retailer._id } : "skip",
-	);
+		convexQuery(
+			api.products.listAll,
+			retailer ? { retailerId: retailer._id } : "skip",
+		),
+	).data;
 
 	const [rawQuery, setRawQuery] = useState("");
 	const [query, setQuery] = useState("");

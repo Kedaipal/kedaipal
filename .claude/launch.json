@@ -9,6 +9,21 @@
       "autoPort": false
     },
     {
+      "name": "web-fecache-wt",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "-C",
+        "../kedaipal-wt-86eydh0dy",
+        "exec",
+        "vite",
+        "dev",
+        "--port",
+        "3115"
+      ],
+      "port": 3115,
+      "autoPort": false
+    },
+    {
       "name": "web-landing-wt",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["exec", "vite", "dev", "--port", "3100"],

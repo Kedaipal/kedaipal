@@ -1,6 +1,8 @@
+import { convexQuery } from "@convex-dev/react-query";
 import { useStore } from "@tanstack/react-form";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { useAction, useMutation, useQuery } from "convex/react";
+import { useAction, useMutation } from "convex/react";
 import {
 	Clock,
 	ExternalLink,
@@ -446,16 +448,18 @@ export function CheckoutSheet({
 	const lngNum = watchedLng.trim().length > 0 ? Number(watchedLng) : NaN;
 	const hasCoords = Number.isFinite(latNum) && Number.isFinite(lngNum);
 	const deliveryQuote: PublicDeliveryQuote | undefined = useQuery(
-		api.delivery.quote,
-		open && deliveryAvailable && watchedMethod === "delivery"
-			? {
-					retailerId,
-					latitude: hasCoords ? latNum : undefined,
-					longitude: hasCoords ? lngNum : undefined,
-					subtotal: cart.total,
-				}
-			: "skip",
-	);
+		convexQuery(
+			api.delivery.quote,
+			open && deliveryAvailable && watchedMethod === "delivery"
+				? {
+						retailerId,
+						latitude: hasCoords ? latNum : undefined,
+						longitude: hasCoords ? lngNum : undefined,
+						subtotal: cart.total,
+					}
+				: "skip",
+		),
+	).data;
 	const rawQuote = watchedMethod === "delivery" ? deliveryQuote : undefined;
 
 	// --- Live Lalamove quote (86eyb5hrf) ------------------------------------

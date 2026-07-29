@@ -1,5 +1,7 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import { ImagePlus, Loader2, Printer, RefreshCw } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -67,9 +69,11 @@ function PosterRoute() {
 	// encodes this `KPS-` wa.me deep link so a scan starts a walk-in checkout
 	// the cashier rings up. `waUrl` is undefined until a token exists / if the
 	// WABA number is unset.
-	const storeQr = useQuery(api.counterCheckout.getStoreQr, {
-		retailerId: actAsRetailerId,
-	});
+	const storeQr = useQuery(
+		convexQuery(api.counterCheckout.getStoreQr, {
+			retailerId: actAsRetailerId,
+		}),
+	).data;
 	const ensureCounterQrToken = useMutation(
 		api.counterCheckout.ensureCounterQrToken,
 	);

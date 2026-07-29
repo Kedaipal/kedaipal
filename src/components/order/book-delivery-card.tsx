@@ -1,5 +1,7 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useAction, useQuery } from "convex/react";
+import { useAction } from "convex/react";
 import {
 	Bike,
 	Car,
@@ -42,9 +44,11 @@ import {
  * collapses to a one-line discoverability hint on bookable orders.
  */
 export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
-	const dispatch = useQuery(api.lalamove.getDeliveryJob, {
-		shortId: order.shortId,
-	});
+	const dispatch = useQuery(
+		convexQuery(api.lalamove.getDeliveryJob, {
+			shortId: order.shortId,
+		}),
+	).data;
 	const prepareBooking = useAction(api.lalamove.prepareBooking);
 	const confirmBooking = useAction(api.lalamove.confirmBooking);
 	const cancelBooking = useAction(api.lalamove.cancelBooking);

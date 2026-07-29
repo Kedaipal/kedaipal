@@ -1,4 +1,5 @@
-import { useQuery } from "convex/react";
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { AlertOctagon, MessageCircle } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import { Button } from "../ui/button";
@@ -28,9 +29,8 @@ export function SendingPausedBanner({
 	// Only fetch the support number when actually paused (skip the query on every
 	// dashboard load for the common, un-paused case).
 	const instructions = useQuery(
-		api.billing.paymentInstructions,
-		paused ? {} : "skip",
-	);
+		convexQuery(api.billing.paymentInstructions, paused ? {} : "skip"),
+	).data;
 
 	if (!paused) return null;
 

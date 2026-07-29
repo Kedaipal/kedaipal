@@ -1,4 +1,6 @@
-import { useMutation, useQuery } from "convex/react";
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
+import { useMutation } from "convex/react";
 import {
 	Clock,
 	ExternalLink,
@@ -165,9 +167,9 @@ export function FulfilmentTab({
 	minOrderValue,
 	subscription,
 }: FulfilmentTabProps) {
-	const locations = useQuery(api.pickupLocations.listForRetailer, {
-		retailerId,
-	});
+	const locations = useQuery(
+		convexQuery(api.pickupLocations.listForRetailer, { retailerId }),
+	).data;
 	const updateSettings = useMutation(api.retailers.updateSettings);
 	const setActive = useMutation(api.pickupLocations.setActive);
 	const reorder = useMutation(api.pickupLocations.reorder);

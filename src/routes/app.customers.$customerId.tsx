@@ -1,5 +1,6 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
 import { ChevronLeft, Users } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
@@ -31,15 +32,19 @@ function CustomerDetailRoute() {
 	// Held while the retailer payload is loading too — the plan isn't known yet,
 	// and firing the query for a Starter seller would hit the server gate.
 	const customer = useQuery(
-		api.customers.get,
-		!retailer || crmLocked ? "skip" : { customerId: id },
-	);
+		convexQuery(
+			api.customers.get,
+			!retailer || crmLocked ? "skip" : { customerId: id },
+		),
+	).data;
 	const orders = useQuery(
-		api.customers.ordersByCustomer,
-		!retailer || crmLocked
-			? "skip"
-			: { customerId: id, paginationOpts: { numItems: 50, cursor: null } },
-	);
+		convexQuery(
+			api.customers.ordersByCustomer,
+			!retailer || crmLocked
+				? "skip"
+				: { customerId: id, paginationOpts: { numItems: 50, cursor: null } },
+		),
+	).data;
 
 	if (crmLocked && retailer) {
 		return (

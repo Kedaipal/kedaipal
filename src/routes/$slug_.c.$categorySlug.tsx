@@ -1,10 +1,11 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
 	createFileRoute,
 	Link,
 	notFound,
 	redirect,
 } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
 import { ArrowLeft } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
@@ -194,17 +195,21 @@ function CategorySkeleton() {
 function CategoryRoute() {
 	const { slug, categorySlug } = Route.useParams();
 	// Live queries keep the page reactive after the SSR'd loader response.
-	const result = useQuery(api.retailers.getRetailerBySlug, { slug });
+	const result = useQuery(
+		convexQuery(api.retailers.getRetailerBySlug, { slug }),
+	).data;
 	const retailer = result?.status === "ok" ? result.retailer : undefined;
 	const page = useQuery(
-		api.categories.getPublicPage,
-		retailer ? { retailerId: retailer._id, categorySlug } : "skip",
-	);
+		convexQuery(
+			api.categories.getPublicPage,
+			retailer ? { retailerId: retailer._id, categorySlug } : "skip",
+		),
+	).data;
 	// Same per-retailer cart as the store home — items carry across pages.
 	const cart = useCart(retailer?._id);
-	const pickupLocations = useQuery(api.pickupLocations.listActivePublicBySlug, {
-		slug,
-	});
+	const pickupLocations = useQuery(
+		convexQuery(api.pickupLocations.listActivePublicBySlug, { slug }),
+	).data;
 	// Checkout open-state lifted here so the product detail sheet can jump
 	// straight to checkout (same wiring as the store home). See ProductGrid.
 	const [checkoutOpen, setCheckoutOpen] = useState(false);

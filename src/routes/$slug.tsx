@@ -1,5 +1,6 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, notFound, redirect } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import { CartBar } from "../components/storefront/cart-bar";
@@ -203,7 +204,9 @@ function StorefrontSkeleton() {
 function StorefrontRoute() {
 	const { slug } = Route.useParams();
 	// Live query keeps the catalog reactive after the SSR'd loader response.
-	const result = useQuery(api.retailers.getRetailerBySlug, { slug });
+	const result = useQuery(
+		convexQuery(api.retailers.getRetailerBySlug, { slug }),
+	).data;
 	const cart = useCart(
 		result && result.status === "ok" ? result.retailer._id : undefined,
 	);
@@ -211,9 +214,9 @@ function StorefrontRoute() {
 	// sheet when the retailer has self-collect on. Loading state (undefined) is
 	// folded into "no locations" at the call site to avoid blocking storefront
 	// render on a sidecar query.
-	const pickupLocations = useQuery(api.pickupLocations.listActivePublicBySlug, {
-		slug,
-	});
+	const pickupLocations = useQuery(
+		convexQuery(api.pickupLocations.listActivePublicBySlug, { slug }),
+	).data;
 	// Checkout sheet open-state lives here (not in CartBar) so the product detail
 	// sheet — a sibling under this route — can open checkout directly.
 	const [checkoutOpen, setCheckoutOpen] = useState(false);
