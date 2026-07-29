@@ -121,6 +121,21 @@ wizard's mental model:
   the wizard. Both it and the variant editor render through staging's shared
   `AppImage` primitive (`86eybq1uk`).
 
+### `rebuildRows` and the empty-axis moment
+
+Tapping "Buyer picks a choice" (or adding a second axis) seeds an axis with
+NO values, and `cartesian` over zero values is `[]`. `rebuildRows` therefore
+returns `prev` untouched whenever the axes yield zero combinations — an
+incomplete axis is a transient authoring state, not an instruction to discard
+the price/fulfilment the seller already typed. That keeps the documented
+`seed` branch reachable: the single implicit row survives the switch and seeds
+every generated row when the first value lands (PR #108 review, finding 1 —
+without this, a made-to-order seller's RM12 came back blank and
+stock-tracked). While the grid is incomplete, per-choice UI and per-row
+validation both gate on `gridReady` (`cartesian(options).length > 0`) so the
+surviving row never shows as a blank-labelled choice and errors can't target
+invisible inputs. Covered by `rebuild-rows.test.ts`.
+
 ### The restructured `VariantEditor`
 
 `src/components/forms/variant-editor.tsx` — same state shape
