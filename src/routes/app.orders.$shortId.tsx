@@ -623,11 +623,16 @@ function OrderDetailRoute() {
 											// seller has the consignment slip in hand — prompt for
 											// courier + tracking (optional) so the buyer's shipped
 											// WhatsApp update carries it. Skipped when tracking is
-											// already attached; rider-managed orders never reach
-											// here (button disabled — Lalamove provides the link).
+											// already attached AND when a rider booking is active
+											// (belt-and-braces: booking mirrors its shareLink onto
+											// carrierTrackingUrl, but a parcel-courier form must
+											// never front a rider order even if that link is
+											// missing). Webhook-driven orders never reach here at
+											// all — the button is disabled.
 											if (
 												nextStage.anchor === "shipped" &&
 												order.deliveryMethod === "delivery" &&
+												!hasActiveRiderBooking &&
 												!order.trackingNo &&
 												!order.carrierTrackingUrl
 											) {
@@ -1325,6 +1330,10 @@ function OrderDetailRoute() {
 					onOpenChange={setShipDialogOpen}
 					advanceLabel={`Mark as ${stageLabel(nextStage, "en")}`}
 					onConfirm={(fields) => handleAdvance(nextStage.id, fields)}
+					// blockReason === null ⟺ a rider could be booked right now
+					// (keys configured, plan ok, coords present, no active job) —
+					// exactly when the "use the Lalamove card instead" signpost helps.
+					riderBookable={dispatchInfo?.blockReason === null}
 				/>
 			) : null}
 

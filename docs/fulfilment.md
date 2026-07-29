@@ -206,9 +206,21 @@ copyable beside the link.
   `src/components/order/shipment-tracking.tsx`): tapping the advance button into a
   shipped-anchored stage on a **delivery** order with no tracking attached opens an
   optional courier-picklist + tracking-number dialog (skippable via Cancel→the card;
-  confirm ships with or without fields). The last-used courier is remembered per device
-  (`localStorage`) since sellers ship with one courier. Helper line states exactly what
-  the buyer gets (auto link vs copyable number) — no hidden behavior.
+  confirming with "No courier" ships without tracking). The last-used courier is
+  remembered per device (`localStorage`) since sellers ship with one courier. Helper
+  line states exactly what the buyer gets (auto link vs copyable number vs nothing) —
+  no hidden behavior. **"No courier" collapses the form** (number/link inputs hide, and
+  `draftToFields` treats the state as an explicit clear so hidden leftovers never save).
+- **Lalamove interplay** (Zaki's test feedback, 29 Jul): booking a rider is a
+  *different* flow that lives on the Lalamove Delivery card, and its book moment is
+  **packed** (`promptBookOnPacked`), never shipped — with a rider, "shipped" fires
+  automatically at pickup, so a seller manually marking shipped is saying "no rider on
+  this one". The prompt therefore (a) is **suppressed when a rider booking is active**
+  (belt-and-braces — booking already mirrors its `shareLink` onto `carrierTrackingUrl`,
+  which suppresses it anyway) and (b) shows a **signpost** ("book from the Lalamove
+  Delivery card instead") whenever a rider is bookable right now
+  (`getDeliveryJob.blockReason === null`) — a Lalamove-priced store with an unbooked
+  order sees the parcel form *with* directions to the rider flow, not instead of it.
 - **"Shipment tracking" card** on order detail (upgrade of the old URL-only "Carrier
   Tracking" card): shows courier + mono tracking number with one-tap copy + "Track with
   courier" link; edit mode reuses the same fieldset ("Other" adds free-text name +

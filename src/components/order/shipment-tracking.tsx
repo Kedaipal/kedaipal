@@ -1,5 +1,5 @@
 import { useMutation } from "convex/react";
-import { ExternalLink, Truck } from "lucide-react";
+import { ChevronDown, ExternalLink, Truck } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
@@ -65,6 +65,9 @@ function storeLastCourier(courier: string): void {
 }
 
 function draftToFields(draft: ShipmentDraft): ShipmentFields {
+	// "No courier" is an explicit whole-form clear — the number/link inputs are
+	// hidden in that state, so any leftover draft values must not silently save.
+	if (draft.courier === "") return {};
 	const courierName =
 		draft.courier === OTHER ? draft.otherName.trim() : draft.courier;
 	return {
@@ -75,8 +78,10 @@ function draftToFields(draft: ShipmentDraft): ShipmentFields {
 	};
 }
 
+// appearance-none + our own chevron: the native macOS caret hugs the right
+// border and ignores padding, so it fought the rounded-xl focus ring.
 const SELECT_CLASSES =
-	"min-h-11 w-full rounded-xl border border-input bg-background px-4 text-base outline-none transition-colors focus:border-ring focus:ring-2 focus:ring-ring/50";
+	"min-h-11 w-full appearance-none rounded-xl border border-input bg-background px-4 pr-10 text-base outline-none transition-colors focus:border-ring focus:ring-2 focus:ring-ring/50";
 
 /** Shared fieldset: courier picklist + tracking number (+ name/link for "Other"). */
 function ShipmentFieldset({
@@ -89,73 +94,93 @@ function ShipmentFieldset({
 	autoFocusTracking?: boolean;
 }) {
 	const selected = findCourier(draft.courier);
+	const noCourier = draft.courier === "";
 	return (
 		<div className="flex flex-col gap-3">
 			<label className="flex flex-col gap-1.5">
 				<span className="text-xs font-medium text-muted-foreground">
 					Courier
 				</span>
-				<select
-					value={draft.courier}
-					onChange={(e) => onChange({ ...draft, courier: e.target.value })}
-					className={SELECT_CLASSES}
-				>
-					<option value="">No courier</option>
-					{COURIERS.map((c) => (
-						<option key={c.label} value={c.label}>
-							{c.label}
-						</option>
-					))}
-					<option value={OTHER}>Other courier</option>
-				</select>
-			</label>
-			{draft.courier === OTHER ? (
-				<label className="flex flex-col gap-1.5">
-					<span className="text-xs font-medium text-muted-foreground">
-						Courier name
-					</span>
-					<Input
-						value={draft.otherName}
-						onChange={(e) => onChange({ ...draft, otherName: e.target.value })}
-						placeholder="e.g. Best Express"
-						className="h-11 rounded-xl"
+				<div className="relative">
+					<select
+						value={draft.courier}
+						onChange={(e) => onChange({ ...draft, courier: e.target.value })}
+						className={SELECT_CLASSES}
+					>
+						<option value="">No courier</option>
+						{COURIERS.map((c) => (
+							<option key={c.label} value={c.label}>
+								{c.label}
+							</option>
+						))}
+						<option value={OTHER}>Other courier</option>
+					</select>
+					<ChevronDown
+						aria-hidden="true"
+						className="pointer-events-none absolute right-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
 					/>
-				</label>
-			) : null}
-			<label className="flex flex-col gap-1.5">
-				<span className="text-xs font-medium text-muted-foreground">
-					Tracking number
-				</span>
-				<Input
-					autoFocus={autoFocusTracking}
-					value={draft.trackingNo}
-					onChange={(e) => onChange({ ...draft, trackingNo: e.target.value })}
-					placeholder="e.g. 630002864925"
-					className="h-11 rounded-xl"
-				/>
+				</div>
 			</label>
-			{draft.courier === OTHER ? (
-				<label className="flex flex-col gap-1.5">
-					<span className="text-xs font-medium text-muted-foreground">
-						Tracking link (optional)
-					</span>
-					<Input
-						type="url"
-						value={draft.url}
-						onChange={(e) => onChange({ ...draft, url: e.target.value })}
-						placeholder="https://…"
-						className="h-11 rounded-xl"
-					/>
-				</label>
+			{/* "No courier" collapses the form — the remaining inputs only make
+			    sense once a courier is picked, and draftToFields treats this state
+			    as an explicit clear. */}
+			{!noCourier ? (
+				<>
+					{draft.courier === OTHER ? (
+						<label className="flex flex-col gap-1.5">
+							<span className="text-xs font-medium text-muted-foreground">
+								Courier name
+							</span>
+							<Input
+								value={draft.otherName}
+								onChange={(e) =>
+									onChange({ ...draft, otherName: e.target.value })
+								}
+								placeholder="e.g. Best Express"
+								className="h-11 rounded-xl"
+							/>
+						</label>
+					) : null}
+					<label className="flex flex-col gap-1.5">
+						<span className="text-xs font-medium text-muted-foreground">
+							Tracking number
+						</span>
+						<Input
+							autoFocus={autoFocusTracking}
+							value={draft.trackingNo}
+							onChange={(e) =>
+								onChange({ ...draft, trackingNo: e.target.value })
+							}
+							placeholder="e.g. 630002864925"
+							className="h-11 rounded-xl"
+						/>
+					</label>
+					{draft.courier === OTHER ? (
+						<label className="flex flex-col gap-1.5">
+							<span className="text-xs font-medium text-muted-foreground">
+								Tracking link (optional)
+							</span>
+							<Input
+								type="url"
+								value={draft.url}
+								onChange={(e) => onChange({ ...draft, url: e.target.value })}
+								placeholder="https://…"
+								className="h-11 rounded-xl"
+							/>
+						</label>
+					) : null}
+				</>
 			) : null}
 			{/* Tell the seller what the buyer will get — no hidden behavior. */}
-			{selected ? (
-				<p className="text-xs leading-relaxed text-muted-foreground">
-					{selected.buildTrackingUrl
-						? `The buyer gets a ${selected.label} tracking link automatically.`
-						: `${selected.label} has no public tracking page — the buyer sees the number to copy instead.`}
-				</p>
-			) : null}
+			<p className="text-xs leading-relaxed text-muted-foreground">
+				{noCourier
+					? "No tracking info will be attached — you can add it later from this order."
+					: selected
+						? selected.buildTrackingUrl
+							? `The buyer gets a ${selected.label} tracking link automatically.`
+							: `${selected.label} has no public tracking page — the buyer sees the number to copy instead.`
+						: "The buyer sees the courier name and number to copy — paste a link if the courier has a tracking page."}
+			</p>
 		</div>
 	);
 }
@@ -171,12 +196,19 @@ export function MarkShippedDialog({
 	onOpenChange,
 	advanceLabel,
 	onConfirm,
+	riderBookable = false,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	/** The advance button's own label, e.g. "Mark as Shipped" — stage vocabulary. */
 	advanceLabel: string;
 	onConfirm: (fields: ShipmentFields) => Promise<void>;
+	/** True when a Lalamove rider could be booked on this order right now
+	 * (keys configured, no active job). Renders a signpost so a rider seller
+	 * isn't left wondering why this form only lists parcel couriers — booking
+	 * lives on the Lalamove Delivery card (its live tracking attaches itself,
+	 * and the rider's pickup drives "shipped" automatically). */
+	riderBookable?: boolean;
 }) {
 	const [draft, setDraft] = useState<ShipmentDraft | null>(null);
 	const [saving, setSaving] = useState(false);
@@ -219,6 +251,15 @@ export function MarkShippedDialog({
 						later from this order.
 					</DialogDescription>
 				</DialogHeader>
+				{riderBookable ? (
+					<p className="rounded-xl bg-muted/60 p-3 text-xs leading-relaxed text-muted-foreground">
+						Sending this one with a <b>Lalamove rider</b>? Book it from the
+						Lalamove Delivery card on the order page instead — live tracking
+						attaches automatically and the order moves on its own when the rider
+						picks up. This form is for parcel couriers (J&amp;T, DD Cold Chain,
+						and others).
+					</p>
+				) : null}
 				<ShipmentFieldset draft={activeDraft} onChange={setDraft} />
 				<DialogFooter>
 					<Button
