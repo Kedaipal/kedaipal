@@ -6,17 +6,22 @@ import {
 	buildLalamoveHeaders,
 	buildPlaceOrderBody,
 	buildQuotationBody,
+	classifyQuoteFailure,
 	extractWebhookOrderId,
 	isActiveJobStatus,
+	isOutOfServiceAreaError,
+	isRiderManagedTransition,
 	lalamoveAmountToSen,
 	lalamoveSigningString,
 	normalizeLalamoveStatus,
+	parseLalamoveErrorCode,
 	parseLalamoveEventTime,
 	parseOrderResponse,
 	parsePodImages,
 	parseQuotationResponse,
 	inferLalamoveEnv,
 	resolveLalamoveCredentials,
+	riderDrivesOrderStatus,
 	signLalamoveRequest,
 	toLalamoveCoordinates,
 	toLalamoveMyPhone,
@@ -228,6 +233,59 @@ describe("status + webhook helpers", () => {
 		expect(normalizeLalamoveStatus(undefined)).toBeUndefined();
 	});
 
+	test("parses Lalamove's error id out of a failure body", () => {
+		// The real 422 body, captured live from the MY sandbox (27 Jul 2026).
+		expect(
+			parseLalamoveErrorCode(
+				'{"errors":[{"id":"ERR_OUT_OF_SERVICE_AREA","message":"Given latitude/longitude is out of service area."}]}\n',
+			),
+		).toBe("ERR_OUT_OF_SERVICE_AREA");
+		expect(parseLalamoveErrorCode('{"errors":[]}')).toBeUndefined();
+		expect(parseLalamoveErrorCode("<html>502 Bad Gateway</html>")).toBeUndefined();
+		expect(parseLalamoveErrorCode("")).toBeUndefined();
+	});
+
+	test("out-of-service-area is distinguished from transient failures", () => {
+		// Coverage refusals are PERMANENT for that address — the buyer must be
+		// told to change it, never "try again shortly".
+		expect(
+			isOutOfServiceAreaError(
+				'{"errors":[{"id":"ERR_OUT_OF_SERVICE_AREA","message":"Given latitude/longitude is out of service area."}]}',
+			),
+		).toBe(true);
+		expect(
+			isOutOfServiceAreaError('{"errors":[{"id":"ERR_INVALID_MARKET"}]}'),
+		).toBe(true);
+		// Everything else is retryable / a different problem entirely.
+		expect(
+			isOutOfServiceAreaError('{"errors":[{"id":"ERR_INVALID_SERVICE_TYPE"}]}'),
+		).toBe(false);
+		expect(
+			isOutOfServiceAreaError('{"errors":[{"id":"ERR_INSUFFICIENT_BALANCE"}]}'),
+		).toBe(false);
+		expect(isOutOfServiceAreaError("gateway timeout")).toBe(false);
+	});
+
+	test("classifyQuoteFailure: three buyer stories, only one retryable", () => {
+		const OOSA =
+			'{"errors":[{"id":"ERR_OUT_OF_SERVICE_AREA","message":"Given latitude/longitude is out of service area."}]}';
+		// Coverage refusal — permanent for the address, regardless of HTTP status.
+		expect(classifyQuoteFailure(422, OOSA)).toBe("out_of_range");
+		expect(classifyQuoteFailure(422, '{"errors":[{"id":"ERR_INVALID_MARKET"}]}')).toBe(
+			"out_of_range",
+		);
+		// Seller-side breakage — revoked/typo'd key signs an invalid request.
+		expect(classifyQuoteFailure(401, "unauthorized")).toBe("store_unavailable");
+		expect(classifyQuoteFailure(403, "forbidden")).toBe("store_unavailable");
+		// Everything else stays honestly transient.
+		expect(classifyQuoteFailure(500, "internal error")).toBe("unavailable");
+		expect(classifyQuoteFailure(429, "rate limited")).toBe("unavailable");
+		expect(
+			classifyQuoteFailure(422, '{"errors":[{"id":"ERR_INVALID_SERVICE_TYPE"}]}'),
+		).toBe("unavailable");
+		expect(classifyQuoteFailure(undefined, "socket hang up")).toBe("unavailable");
+	});
+
 	test("active vs terminal job statuses (one-active-job slot)", () => {
 		expect(isActiveJobStatus("assigning")).toBe(true);
 		expect(isActiveJobStatus("picked_up")).toBe(true);
@@ -251,6 +309,36 @@ describe("status + webhook helpers", () => {
 		// No updatedAt: ms passthrough, seconds get scaled.
 		expect(parseLalamoveEventTime({}, 1784384000000)).toBe(1784384000000);
 		expect(parseLalamoveEventTime({}, 1784384000)).toBe(1784384000000);
+	});
+
+	test("riderDrivesOrderStatus: active job + applied webhook event only", () => {
+		// Webhook demonstrably alive → the rider drives the order status.
+		expect(
+			riderDrivesOrderStatus({ status: "assigning", lastEventAt: 1_753_500_000_000 }),
+		).toBe(true);
+		expect(
+			riderDrivesOrderStatus({ status: "picked_up", lastEventAt: 1_753_500_000_000 }),
+		).toBe(true);
+		// No event ever applied = webhook-less seller — manual control is their
+		// documented degraded path, never gated.
+		expect(riderDrivesOrderStatus({ status: "assigning" })).toBe(false);
+		// Terminal jobs free the order regardless of event history.
+		expect(
+			riderDrivesOrderStatus({ status: "completed", lastEventAt: 1_753_500_000_000 }),
+		).toBe(false);
+		expect(
+			riderDrivesOrderStatus({ status: "canceled", lastEventAt: 1_753_500_000_000 }),
+		).toBe(false);
+	});
+
+	test("isRiderManagedTransition: shipped/delivered anchors that change status", () => {
+		expect(isRiderManagedTransition("shipped", "packed")).toBe(true);
+		expect(isRiderManagedTransition("delivered", "shipped")).toBe(true);
+		// Pre-pickup work stays the seller's — confirm/pack are never gated.
+		expect(isRiderManagedTransition("confirmed", "pending")).toBe(false);
+		expect(isRiderManagedTransition("packed", "confirmed")).toBe(false);
+		// Custom stages WITHIN the shipped band don't change canonical status.
+		expect(isRiderManagedTransition("shipped", "shipped")).toBe(false);
 	});
 });
 

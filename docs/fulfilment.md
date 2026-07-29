@@ -85,9 +85,17 @@ address somehow vanished resolves **free** (logged), never a blocked storefront.
 
 ### Fee-pending ("arrange via WhatsApp") — the second payment hold
 
-An out-of-range (or coordinate-less) order on an "arrange" store lands with
+An out-of-range (or coordinate-less) order on a **radius** "arrange" store lands with
 `deliveryFeePending: true` and an **incomplete total**, so payment is held exactly like the
-mockup gate:
+mockup gate. **Lalamove-priced stores never land here** (strict since 27 Jul — no live
+quote means checkout/address-edit is refused, so the buyer always sees the real rider
+price and the seller never calculates a charge; see
+[`delivery-lalamove.md`](./delivery-lalamove.md)). The **why** is frozen alongside the
+flag as `orders.deliveryFeePendingReason` (`out_of_range` | `no_coords` | `unquotable` —
+the last only on legacy lalamove rows from before the strict rule), written at create +
+the address re-price and cleared by `setDeliveryFee`; the seller card's explanation keys
+on it, so it never claims "outside your delivery bands" when bands weren't the cause
+(26 Jul hotfix; orders from before the field show a mode-neutral generic line).
 
 - **WhatsApp confirm** sends `deliveryFeePendingConfirm` (EN+BM) — branded, no transfer
   reference / payment block / "I've paid" CTA.

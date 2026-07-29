@@ -5,6 +5,7 @@ import {
 	CalendarDays,
 	CheckCircle,
 	Clock,
+	Download,
 	ExternalLink,
 	HandCoins,
 	Hourglass,
@@ -35,6 +36,7 @@ import { CopyButton } from "../components/ui/copy-button";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { getConvexHttpClient } from "../lib/convex-server";
+import { qrFilenameBase, saveImageFromUrl } from "../lib/download";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import {
 	deriveMapsUrl,
@@ -271,6 +273,23 @@ function TrackingRoute() {
 	);
 	const [editingAddress, setEditingAddress] = useState(false);
 	const [claimingPayment, setClaimingPayment] = useState(false);
+	// Index of the payment-QR currently being saved (spinner on that button only).
+	const [savingQrIndex, setSavingQrIndex] = useState<number | null>(null);
+
+	async function handleSaveQr(label: string, url: string, index: number) {
+		setSavingQrIndex(index);
+		try {
+			const outcome = await saveImageFromUrl(url, qrFilenameBase(label));
+			if (outcome === "downloaded") {
+				toast.success("QR saved — open it from your downloads to scan.");
+			} else if (outcome === "failed") {
+				toast.error("Couldn't save the QR — please try again.");
+			}
+			// "shared" → the OS sheet took over; "cancelled" → intentional. Silent.
+		} finally {
+			setSavingQrIndex(null);
+		}
+	}
 
 	if (order === undefined) {
 		return <TrackingSkeleton />;
@@ -592,6 +611,25 @@ function TrackingRoute() {
 									<p className="text-xs text-muted-foreground">
 										Tap to enlarge &amp; scan
 									</p>
+									<Button
+										type="button"
+										variant="outline"
+										onClick={() =>
+											m.qrImageUrl
+												? handleSaveQr(m.label, m.qrImageUrl, i)
+												: undefined
+										}
+										isLoading={savingQrIndex === i}
+										disabled={savingQrIndex !== null}
+										className="mt-0.5 h-11 rounded-full px-5"
+									>
+										{savingQrIndex !== i && <Download className="size-4" />}
+										Save QR
+									</Button>
+									<p className="max-w-64 text-center text-xs text-muted-foreground">
+										Paying on this phone? Save the QR to your gallery, then
+										scan it from inside TNG eWallet or your banking app.
+									</p>
 								</div>
 							) : null}
 							{m.note ? (
@@ -821,6 +859,8 @@ function TrackingRoute() {
 				token={token}
 				currentAddress={order.deliveryAddress}
 				retailerId={order.retailerId}
+				subtotal={order.subtotal}
+				fulfilmentDate={order.fulfilmentDate}
 			/>
 
 			<IvePaidDialog

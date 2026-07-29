@@ -42,10 +42,12 @@ export type DeliveryConfig =
 	  }
 	| {
 			mode: "lalamove";
-			/** When no live provider quote is available (buyer typed a pin-less
-			 * address, provider/creds down): "arrange" accepts the order with the
-			 * fee pending (seller confirms on WhatsApp — never lose the sale),
-			 * "block" refuses checkout until a quotable address is pinned. */
+			/** VESTIGIAL (27 Jul 2026, Zaki): lalamove mode now ALWAYS refuses an
+			 * order without a live quote — a seller who picked Lalamove must never
+			 * be handed fee homework, and the buyer must always see the real rider
+			 * price before sending. The field stays so stored rows validate;
+			 * `sanitizeDeliveryConfig` normalizes it to "block" on save and the
+			 * resolver ignores it. */
 			onUnquotable: "arrange" | "block";
 	  };
 
@@ -149,10 +151,16 @@ export function resolveDeliveryQuote(args: {
 				quotedAt: liveQuote.quotedAt,
 			};
 		}
-		const reason = destination ? "unquotable" : "no_coords";
-		return config.onUnquotable === "block"
-			? { kind: "blocked", reason }
-			: { kind: "pending", reason };
+		// No live quote → ALWAYS refuse (27 Jul, Zaki — `onUnquotable` ignored):
+		// a Lalamove seller must never be handed fee homework, and the buyer must
+		// always see the real rider price before sending. The checkout requires a
+		// pinned, quotable address; the trade-off (a Lalamove outage refuses
+		// delivery checkout until it recovers) is accepted and copy says "try
+		// again shortly".
+		return {
+			kind: "blocked",
+			reason: destination ? "unquotable" : "no_coords",
+		};
 	}
 
 	if (config.mode === "flat") {
@@ -209,7 +217,9 @@ function assertFeeSen(raw: number, label: string, min: number): number {
 export function sanitizeDeliveryConfig(raw: DeliveryConfig): DeliveryConfig {
 	if (raw.mode === "lalamove") {
 		// Nothing numeric to normalize — the fee is always provider-quoted live.
-		return { mode: "lalamove", onUnquotable: raw.onUnquotable };
+		// `onUnquotable` is vestigial (always-block behavior); normalize stored
+		// rows to "block" on save so the data reads truthfully.
+		return { mode: "lalamove", onUnquotable: "block" };
 	}
 	if (raw.mode === "flat") {
 		const fee = assertFeeSen(raw.fee, "Delivery fee", 1);
