@@ -18,3 +18,8 @@ graphify-out/
 
 # only for individual dev usage
 .dev.vars
+
+# Claude Code drops isolated worktrees here. Never commit them — and don't
+# work in them either: task worktrees are siblings of the repo root
+# (../kedaipal-wt-<ticket>), branched off origin/staging.
+.claude/worktrees/
