@@ -56,8 +56,18 @@ see past. A route fixes the architecture, not just the paint:
    unchanged.
 6. **Min-order-rule hints are actionable** — the per-line "add N more" hint
    now sits next to the stepper that fixes it; the blocked alert stays in the
-   totals block; the mobile bar shows a one-line reason when the CTA is
-   disabled ("Below the store's minimum — see your order summary above").
+   totals block.
+7. **Disabled-with-reason on the CTA** — one `blockedReason` line renders
+   directly above the button in **both** places it appears (desktop summary
+   footer, mobile sticky bar): store not accepting orders → checkout
+   unavailable → below minimum → *"Add your delivery address to continue"* →
+   calculating → can't deliver here. The quote's own `no_coords` copy is
+   suppressed while the address is still empty so the buyer never gets two
+   versions of the same nudge.
+8. **The Google pin is the single source of truth** (ClickUp `86eye50qv`,
+   folded in here so the same form isn't redesigned twice) — the delivery
+   address block no longer shows a search *and* a parallel manual form. See
+   [`fulfilment.md`](./fulfilment.md#the-buyers-address--the-google-pin-is-the-single-source-of-truth).
 
 ## The receipt summary (the "Order Ticket" skin)
 

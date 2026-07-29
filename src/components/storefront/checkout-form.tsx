@@ -521,6 +521,26 @@ export function CheckoutPage({
 		quoteForDelivery?.kind === "blocked" ||
 		quoteForDelivery?.kind === "calculating";
 
+	// --- Can this store accept a hand-typed address? (86eye50qv) ------------
+	// While the buyer has NO pin, the live quote already answers exactly that
+	// question: a store that can't price a pin-less address answers "blocked".
+	// That's true for a live Lalamove quote and for radius bands set to block
+	// out-of-range — the two modes where a manually-typed address is a dead end
+	// (it can never be quoted, so checkout would refuse it anyway). Everything
+	// else (flat, free, radius-arrange) doesn't need coordinates, so the manual
+	// escape hatch stays. Held back until the quote resolves so the disclosure
+	// appears rather than flickering away.
+	const allowManualAddressEntry =
+		rawQuote !== undefined &&
+		!(!hasCoords && quoteForDelivery?.kind === "blocked");
+
+	// The address the buyer has actually committed to. Manual mode fills line1
+	// without a pin; the search fills both. Empty means nothing to deliver to,
+	// which keeps the CTA disabled — with a reason, never silently.
+	const watchedLine1 = useStore(form.store, (s) => s.values.address.line1);
+	const addressIncomplete =
+		watchedMethod === "delivery" && watchedLine1.trim().length === 0;
+
 	// ------------------------------------------------------------------ render
 
 	if (cart.items.length === 0) {
@@ -552,6 +572,23 @@ export function CheckoutPage({
 		);
 	}
 
+	// Why the CTA is disabled, in the buyer's words. Ordered by what they'd fix
+	// first. `null` = nothing blocking (or the only gap is a field the form
+	// already marks inline, like the name).
+	const blockedReason: string | null = neitherAvailable
+		? "This store isn't accepting orders right now"
+		: noCheckoutPhone
+			? "Checkout is temporarily unavailable — please try again shortly"
+			: minRulesBlocked
+				? "Below the store's minimum — see your order summary"
+				: addressIncomplete
+					? "Add your delivery address to continue"
+					: quoteForDelivery?.kind === "calculating"
+						? "Calculating your delivery fee…"
+						: deliveryBlocked
+							? "We can't deliver to this address — see your order summary"
+							: null;
+
 	const submitButton = (
 		<form.Subscribe
 			selector={(s) => ({
@@ -582,6 +619,13 @@ export function CheckoutPage({
 			)}
 		</form.Subscribe>
 	);
+	// Disabled-with-reason: the line sits directly above the CTA in BOTH places
+	// it renders (desktop summary footer, mobile sticky bar).
+	const blockedReasonLine = blockedReason ? (
+		<p className="text-center text-xs font-medium text-destructive">
+			{blockedReason}
+		</p>
+	) : null;
 	// The handoff is a two-step by design (tracking page fires the wa.me link)
 	// — say what happens next so the CTA never feels like a bait-and-switch.
 	const reassurance = (
@@ -673,7 +717,13 @@ export function CheckoutPage({
 												} the store on WhatsApp to sort it out.`
 											: quote.reason === "unquotable"
 												? "We couldn't calculate the delivery fee right now — re-pick your address to retry, or try again shortly."
-												: "Pick your address from the Google suggestions so we can calculate your delivery fee."
+												: // no_coords. Worth saying only once the buyer has an address
+													// at all — on an untouched form the reason line above the
+													// CTA already says "add your address", and two versions of
+													// the same nudge is noise.
+													addressIncomplete
+													? undefined
+													: "Pick your address from the Google suggestions so we can calculate your delivery fee."
 									: undefined;
 							return (
 								<CheckoutSummary
@@ -696,6 +746,7 @@ export function CheckoutPage({
 										// Desktop CTA lives with the money it commits to; the
 										// mobile CTA is the sticky bar below.
 										<div className="mt-4 hidden flex-col gap-3 lg:flex">
+											{blockedReasonLine}
 											{submitButton}
 											{reassurance}
 											{privacyLine}
@@ -784,6 +835,7 @@ export function CheckoutPage({
 												form={form}
 												fields="address"
 												retailerId={retailerId}
+												allowManualEntry={allowManualAddressEntry}
 											/>
 											{/* Live-quote (rider) stores: set the expectation BEFORE
 											    the buyer types a far-away address and hits a wall.
@@ -994,37 +1046,26 @@ export function CheckoutPage({
 							const quote =
 								deliveryMethod === "delivery" ? quoteForDelivery : undefined;
 							const deliveryFee = quote?.kind === "fee" ? quote.fee : 0;
-							const blocked = minRulesBlocked || (quote && deliveryBlocked);
 							return (
-								<>
-									{blocked ? (
-										<p className="text-center text-[11px] font-medium text-destructive">
-											{minRulesBlocked
-												? "Below the store's minimum — see your order summary above"
-												: quote?.kind === "calculating"
-													? "Calculating your delivery fee…"
-													: "Delivery can't be quoted — see your order summary above"}
-										</p>
-									) : null}
-									<div className="flex items-center justify-between">
-										<span className="text-sm text-muted-foreground">Total</span>
-										<span className="text-lg font-bold tabular-nums">
-											{formatPrice(
-												cart.total + pickupFee + deliveryFee,
-												cart.currency,
-											)}
-											{quote?.kind === "pending" ? (
-												<span className="text-xs font-medium text-muted-foreground">
-													{" "}
-													+ delivery
-												</span>
-											) : null}
-										</span>
-									</div>
-								</>
+								<div className="flex items-center justify-between">
+									<span className="text-sm text-muted-foreground">Total</span>
+									<span className="text-lg font-bold tabular-nums">
+										{formatPrice(
+											cart.total + pickupFee + deliveryFee,
+											cart.currency,
+										)}
+										{quote?.kind === "pending" ? (
+											<span className="text-xs font-medium text-muted-foreground">
+												{" "}
+												+ delivery
+											</span>
+										) : null}
+									</span>
+								</div>
 							);
 						}}
 					</form.Subscribe>
+					{blockedReasonLine}
 					{submitButton}
 					{reassurance}
 				</div>

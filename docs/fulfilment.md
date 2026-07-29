@@ -55,6 +55,39 @@ which was **wrong** for any seller who charges postage/rider fees. A seller now 
   `orders.deliveryFee` for cheap CSV/inbox/tracking reads. `0` never stored.
 - `orders.deliveryFeePending` — the "arrange" hold (below).
 
+### The buyer's address — the Google pin is the single source of truth
+
+ClickUp `86eye50qv`. The delivery-address block used to show a Google search **and**
+a parallel manual form — two competing address bars, where hand-editing a field after
+picking a suggestion could leave the order priced for one place and addressed to
+another. (The stale-pin half was closed first, by `86eyb5hrf`: editing a
+location-bearing field clears the pin, so the quote falls back to "pick a suggestion"
+instead of silently keeping the old coordinates.) The form now makes the drift
+structurally impossible. `AddressFieldset` has two faces:
+
+- **Locked** — a pin is set. Street/postcode/city/state collapse into a read-only
+  **"Location confirmed"** card. Only **unit/floor** and **delivery notes** stay
+  editable: neither can move the building. **"Wrong address? Search again"** clears
+  the whole location (notes survive — they describe *how* to deliver, not *where*)
+  and returns to the search. A restored `kedaipal:lastAddress` **with** a pin mounts
+  straight into this state.
+- **Searching** — no pin. The Google search is the only address input.
+
+**Manual entry is an explicit escape hatch**, behind a "Can't find your address?"
+disclosure, for addresses Google genuinely doesn't know (new tamans, kampung
+addresses) — not an API-down detector. It auto-opens for a restored address that
+never had a pin, so returning buyers still see their own data. The pin-invalidation
+listeners stay on those fields as defence in depth.
+
+**Store-mode split.** The hatch is hidden where a pin-less address is a dead end —
+**live-quote (Lalamove)** and **radius + block** stores, which price from
+coordinates and would refuse the order anyway. The checkout derives this from the
+quote it already subscribes to: while the buyer has no pin, a store that answers
+`blocked` is exactly a store that can't price a hand-typed address (flat / free /
+radius-arrange answer `fee`/`free`/`pending` and keep the hatch). No extra server
+field. The tracking-page `AddressEditDialog` passes `allowManualEntry={!isLiveMode}`
+for the same reason — `liveSaveBlocked` already refuses a pin-less save there.
+
 ### Resolution — one pure function, three callers
 
 `resolveDeliveryQuote({ config, subtotal, origin, destination })` in **`convex/lib/delivery.ts`**

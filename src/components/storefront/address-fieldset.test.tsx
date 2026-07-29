@@ -34,13 +34,15 @@ import { AddressFieldset } from "./address-fieldset";
 
 afterEach(cleanup);
 
-/** Minimal parent harness — mirrors how the checkout sheet mounts the group,
+/** Minimal parent harness — mirrors how the checkout page mounts the group,
  * and exposes live address values for assertions. */
 function Harness({
 	initial = { ...emptyAddress },
+	allowManualEntry = true,
 	onState,
 }: {
 	initial?: CheckoutAddressValues;
+	allowManualEntry?: boolean;
 	onState: (values: CheckoutAddressValues) => void;
 }) {
 	const form = useAppForm({
@@ -48,7 +50,12 @@ function Harness({
 	});
 	return (
 		<>
-			<AddressFieldset form={form} fields="address" retailerId={undefined} />
+			<AddressFieldset
+				form={form}
+				fields="address"
+				retailerId={undefined}
+				allowManualEntry={allowManualEntry}
+			/>
 			<form.Subscribe selector={(s) => s.values.address}>
 				{(address) => {
 					onState(address);
@@ -59,8 +66,32 @@ function Harness({
 	);
 }
 
-describe("AddressFieldset — pin lifecycle (stale-coordinate guard)", () => {
-	it("a Google pick stamps coordinates; hand-editing line1 clears them", () => {
+/** Open the "Can't find your address?" escape hatch. */
+function openManualEntry() {
+	fireEvent.click(screen.getByRole("button", { name: /Enter it manually/i }));
+}
+
+const PINNED_ADDRESS: CheckoutAddressValues = {
+	...emptyAddress,
+	line1: "Old Street 1",
+	city: "Bangi",
+	state: "Selangor",
+	postcode: "43650",
+	latitude: "2.9",
+	longitude: "101.78",
+	placeId: "old-place",
+};
+
+describe("AddressFieldset — pin is the single source of truth (86eye50qv)", () => {
+	it("before a pick, the search is the only address input", () => {
+		render(<Harness onState={() => {}} />);
+		expect(screen.getByText("mock-pick")).toBeTruthy();
+		// No parallel manual form competing with the search.
+		expect(screen.queryByLabelText(/Address line 1/i)).toBeNull();
+		expect(screen.queryByLabelText(/Postcode/i)).toBeNull();
+	});
+
+	it("picking a suggestion locks the location into a read-only card", () => {
 		let latest = { ...emptyAddress };
 		render(
 			<Harness
@@ -71,21 +102,18 @@ describe("AddressFieldset — pin lifecycle (stale-coordinate guard)", () => {
 		);
 
 		fireEvent.click(screen.getByText("mock-pick"));
+
 		expect(latest.latitude).toBe("3.1456");
 		expect(latest.longitude).toBe("101.7021");
 		expect(latest.placeId).toBe("place-123");
-
-		// Buyer types over the street line → the old pin no longer describes
-		// the address, so it must clear (quote falls back to "pick again").
-		fireEvent.change(screen.getByLabelText(/Address line 1/i), {
-			target: { value: "99 Jalan Lain" },
-		});
-		expect(latest.latitude).toBe("");
-		expect(latest.longitude).toBe("");
-		expect(latest.placeId).toBe("");
+		// The location fields are gone — they can no longer contradict the pin.
+		expect(screen.getByText("Location confirmed")).toBeTruthy();
+		expect(screen.queryByLabelText(/Address line 1/i)).toBeNull();
+		expect(screen.queryByLabelText(/Postcode/i)).toBeNull();
+		expect(screen.queryByLabelText(/^City/i)).toBeNull();
 	});
 
-	it("line2 (unit numbers) and notes never touch the pin", () => {
+	it("keeps unit + notes editable while locked (neither moves the pin)", () => {
 		let latest = { ...emptyAddress };
 		render(
 			<Harness
@@ -95,46 +123,103 @@ describe("AddressFieldset — pin lifecycle (stale-coordinate guard)", () => {
 			/>,
 		);
 		fireEvent.click(screen.getByText("mock-pick"));
-		fireEvent.change(screen.getByLabelText(/Address line 2/i), {
+
+		fireEvent.change(screen.getByLabelText(/Unit \/ floor/i), {
 			target: { value: "Unit 12-3" },
 		});
 		fireEvent.change(screen.getByLabelText(/Delivery notes/i), {
 			target: { value: "gate code 4321" },
 		});
+
+		expect(latest.line2).toBe("Unit 12-3");
+		expect(latest.notes).toBe("gate code 4321");
 		expect(latest.latitude).toBe("3.1456");
 		expect(latest.longitude).toBe("101.7021");
 	});
 
-	it("a RESTORED address (prefilled with old coords) loses its pin on edit", () => {
+	it("'Search again' drops the whole location but keeps delivery notes", () => {
 		let latest = { ...emptyAddress };
 		render(
 			<Harness
-				initial={{
-					...emptyAddress,
-					line1: "Old Street 1",
-					city: "Bangi",
-					state: "Selangor",
-					postcode: "43650",
-					latitude: "2.9",
-					longitude: "101.78",
-					placeId: "old-place",
-				}}
+				initial={{ ...PINNED_ADDRESS, notes: "call on arrival" }}
 				onState={(v) => {
 					latest = v;
 				}}
 			/>,
 		);
-		// Prefill intact on mount (returning-buyer convenience).
-		expect(latest.latitude).toBe("2.9");
-		// Typing a different postcode kills the stale pin.
-		fireEvent.change(screen.getByLabelText(/Postcode/i), {
-			target: { value: "50200" },
-		});
+		// A restored address WITH a pin mounts straight into the locked state.
+		expect(screen.getByText("Location confirmed")).toBeTruthy();
+
+		fireEvent.click(screen.getByRole("button", { name: /Search again/i }));
+
+		expect(latest.line1).toBe("");
+		expect(latest.postcode).toBe("");
+		expect(latest.city).toBe("");
 		expect(latest.latitude).toBe("");
-		expect(latest.longitude).toBe("");
+		expect(latest.placeId).toBe("");
+		// Notes describe HOW to deliver, not WHERE — they survive.
+		expect(latest.notes).toBe("call on arrival");
+		// …and we're back on the search.
+		expect(screen.getByText("mock-pick")).toBeTruthy();
+	});
+});
+
+describe("AddressFieldset — manual entry escape hatch", () => {
+	it("is available by default and reveals the manual fields", () => {
+		render(<Harness onState={() => {}} />);
+		expect(screen.queryByLabelText(/Address line 1/i)).toBeNull();
+		openManualEntry();
+		expect(screen.getByLabelText(/Address line 1/i)).toBeTruthy();
+		expect(screen.getByLabelText(/Postcode/i)).toBeTruthy();
 	});
 
-	it("re-picking after an edit restores a fresh pin (last write wins)", () => {
+	it("is hidden when the store prices from coordinates", () => {
+		render(<Harness allowManualEntry={false} onState={() => {}} />);
+		expect(screen.queryByText(/Enter it manually/i)).toBeNull();
+		expect(screen.queryByLabelText(/Address line 1/i)).toBeNull();
+		// The search is still the way in.
+		expect(screen.getByText("mock-pick")).toBeTruthy();
+	});
+
+	it("opens itself for a restored address that never had a pin", () => {
+		render(
+			<Harness
+				initial={{ ...emptyAddress, line1: "Kampung Baru, Lot 5" }}
+				onState={() => {}}
+			/>,
+		);
+		// The buyer's own data is visible, not hidden behind a disclosure.
+		expect(
+			(screen.getByLabelText(/Address line 1/i) as HTMLInputElement).value,
+		).toBe("Kampung Baru, Lot 5");
+	});
+});
+
+describe("AddressFieldset — stale-coordinate guard (defence in depth)", () => {
+	it("hand-editing a location field in manual mode clears a stale pin", () => {
+		let latest = { ...emptyAddress };
+		render(
+			<Harness
+				initial={PINNED_ADDRESS}
+				onState={(v) => {
+					latest = v;
+				}}
+			/>,
+		);
+		// Leave the locked state, then type the address by hand.
+		fireEvent.click(screen.getByRole("button", { name: /Search again/i }));
+		openManualEntry();
+		fireEvent.change(screen.getByLabelText(/Address line 1/i), {
+			target: { value: "99 Jalan Lain" },
+		});
+
+		expect(latest.line1).toBe("99 Jalan Lain");
+		expect(latest.latitude).toBe("");
+		expect(latest.longitude).toBe("");
+		expect(latest.placeId).toBe("");
+	});
+
+	it("re-picking after a manual edit restores a fresh pin (last write wins)", () => {
 		let latest = { ...emptyAddress };
 		render(
 			<Harness
@@ -143,11 +228,12 @@ describe("AddressFieldset — pin lifecycle (stale-coordinate guard)", () => {
 				}}
 			/>,
 		);
-		fireEvent.click(screen.getByText("mock-pick"));
-		fireEvent.change(screen.getByLabelText(/City/i), {
+		openManualEntry();
+		fireEvent.change(screen.getByLabelText(/^City/i), {
 			target: { value: "Elsewhere" },
 		});
 		expect(latest.latitude).toBe("");
+
 		// Pick again — the select handler sets structured fields first, coords
 		// last, so the invalidation listeners can't eat the fresh pin.
 		fireEvent.click(screen.getByText("mock-pick"));
