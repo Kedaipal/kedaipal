@@ -1,15 +1,19 @@
 import { Minus, Plus, Trash2 } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import type { PublicDeliveryQuote } from "../../../convex/delivery";
-import type { UseCart } from "../../hooks/useCart";
+import type { CartItem, UseCart } from "../../hooks/useCart";
 import { formatPrice } from "../../lib/format";
-import { AppImage } from "../ui/app-image";
 
 /**
- * The checkout page's order summary — a receipt-styled card (the "Order
- * Ticket" treatment from the storefront redesign, 86eybrhrt): dotted leader
- * lines, dashed separators, tabular digits, and a stamped Total. Personality
- * lives HERE, never in the form controls below it.
+ * The checkout page's order summary — the "Order Ticket" from the storefront
+ * redesign (86eybrhrt), rendered 1:1 with the chosen design: centered store
+ * masthead, monospaced receipt lines with dotted leaders (no thumbnails),
+ * chunky dashed rules, a stamped TOTAL, and a perforated tear-off edge.
+ * Personality lives HERE, never in the form controls below it.
+ *
+ * Interactivity keeps PR1's headline fix: tapping a receipt line reveals its
+ * quantity stepper inline (per the design's caption); lines with a
+ * min-quantity shortfall come pre-expanded so the fix is already in hand.
  *
  * Pure component: cart mutations go through the `UseCart` handle, totals and
  * quote states are computed by the checkout form and passed in via
@@ -25,8 +29,21 @@ export interface QtyShortfall {
 	have: number;
 }
 
+/** Receipt money column: bare "45.00" — the RM lives on the TOTAL row only,
+ * exactly like a printed kedai receipt (and the chosen design). */
+function receiptAmount(sen: number): string {
+	return (sen / 100).toFixed(2);
+}
+
+/** "1× Kek Batik · 1kg" — the receipt line's left column. */
+function receiptLabel(item: CartItem): string {
+	return `${item.quantity}× ${item.name}${item.optionLabel ? ` · ${item.optionLabel}` : ""}`;
+}
+
 interface CheckoutSummaryProps {
 	cart: UseCart;
+	/** Masthead — the ticket is issued in the store's name. */
+	storeName: string;
 	/** "+ Add more items" — routes back to the store without losing state. */
 	onAddMore?: () => void;
 	/**
@@ -36,23 +53,30 @@ interface CheckoutSummaryProps {
 	 */
 	stockCapFor?: (variantId: string) => number | undefined;
 	/** Per-product min-quantity shortfalls, rendered once per product on its
-	 * first non-custom line — right next to the stepper that fixes them. */
+	 * first non-custom line — which comes pre-expanded so the stepper that
+	 * fixes the shortfall is already showing. */
 	shortfalls?: ReadonlyArray<QtyShortfall>;
-	/** Totals block (usually `CheckoutTotals`) — rendered under a dashed rule. */
+	/** Totals block (usually `CheckoutTotals`) — fee rows join the receipt
+	 * lines; the TOTAL row draws its own dashed rule. */
 	totals?: ReactNode;
-	/** Desktop CTA slot rendered at the card's end (hidden on mobile by the
-	 * caller — the mobile CTA lives in the sticky bottom bar). */
+	/** Desktop CTA slot — rendered BELOW the ticket's perforated edge (the CTA
+	 * is not part of the receipt). Hidden on mobile by the caller. */
 	footer?: ReactNode;
 }
 
 export function CheckoutSummary({
 	cart,
+	storeName,
 	onAddMore,
 	stockCapFor,
 	shortfalls,
 	totals,
 	footer,
 }: CheckoutSummaryProps) {
+	// One line expanded at a time by tap; shortfall lines are always expanded
+	// (the buyer must act on them, so the stepper can't hide behind a tap).
+	const [expandedId, setExpandedId] = useState<string | null>(null);
+
 	const shortfallByProduct = new Map(
 		(shortfalls ?? []).map((s) => [s.productId, s]),
 	);
@@ -66,116 +90,137 @@ export function CheckoutSummary({
 	});
 
 	return (
-		<section
-			aria-label="Order summary"
-			className="flex flex-col rounded-2xl border border-border bg-card p-4 shadow-sm"
-		>
-			<div className="flex items-baseline justify-between">
-				<h2 className="font-heading text-base font-bold">Your order</h2>
-				<span className="text-xs text-muted-foreground">
-					{cart.itemCount} {cart.itemCount === 1 ? "item" : "items"}
-				</span>
-			</div>
+		<div>
+			<section
+				aria-label="Order summary"
+				className="rounded-t-xl bg-card px-4 pt-4 pb-3 shadow-[0_2px_12px_rgba(15,23,42,0.08)] ring-1 ring-border/40"
+			>
+				{/* Masthead — store name + ticket state, centered like the print. */}
+				<div className="pb-3 text-center">
+					<h2 className="font-heading text-base font-extrabold uppercase tracking-[0.06em]">
+						{storeName}
+					</h2>
+					<p className="mt-1 font-mono text-[10px] uppercase tracking-[0.3em] text-muted-foreground">
+						Order ticket · Draft
+					</p>
+				</div>
+				<div className="border-t-2 border-dashed border-border" aria-hidden />
 
-			<ul className="mt-2 flex flex-col">
-				{cart.items.map((item, itemIndex) => {
-					const shortfall = shortfallByProduct.get(item.productId);
-					const showShortfall =
-						shortfall && firstLineForProduct.get(item.productId) === itemIndex;
-					const cap = stockCapFor?.(item.variantId);
-					return (
-						<li
-							key={item.variantId}
-							className="flex items-start gap-3 border-b border-border/60 py-3 last:border-b-0"
-						>
-							<AppImage
-								src={item.imageUrl}
-								alt={item.name}
-								aspect="size-12 shrink-0"
-								rounded="rounded-lg"
-							/>
-							<div className="flex min-w-0 flex-1 flex-col gap-0.5">
-								<span className="text-sm font-medium leading-tight">
-									{item.name}
-								</span>
-								{item.optionLabel ? (
-									<span className="text-xs font-medium text-muted-foreground">
-										{item.optionLabel}
+				<ul className="py-2">
+					{cart.items.map((item, itemIndex) => {
+						const shortfall = shortfallByProduct.get(item.productId);
+						const isFirstLine =
+							firstLineForProduct.get(item.productId) === itemIndex;
+						const showShortfall = shortfall && isFirstLine;
+						const expanded =
+							expandedId === item.variantId || showShortfall === true;
+						const cap = stockCapFor?.(item.variantId);
+						return (
+							<li key={item.variantId}>
+								<button
+									type="button"
+									aria-expanded={expanded}
+									onClick={() =>
+										setExpandedId((prev) =>
+											prev === item.variantId ? null : item.variantId,
+										)
+									}
+									className="flex min-h-8 w-full items-baseline gap-2 py-1 text-left font-mono text-[13px] leading-6"
+								>
+									<span className="min-w-0 truncate">{receiptLabel(item)}</span>
+									<span
+										aria-hidden
+										className="flex-1 border-b-2 border-dotted border-border"
+									/>
+									<span className="shrink-0 tabular-nums">
+										{item.quoteOnRequest
+											? "On quote"
+											: receiptAmount(item.price * item.quantity)}
 									</span>
-								) : null}
-								<span className="text-xs text-muted-foreground">
-									{item.quoteOnRequest
-										? "Price on quote"
-										: `${formatPrice(item.price, item.currency)} each`}
-								</span>
+								</button>
+
 								{item.note ? (
-									<span className="mt-1 rounded-md bg-muted/60 px-2 py-1 text-[11px] leading-snug text-muted-foreground">
+									<p className="mb-1 truncate pl-4 font-mono text-[11px] text-muted-foreground">
 										📝 {item.note}
-									</span>
+									</p>
 								) : null}
 								{item.customImageStorageId ? (
-									<span className="mt-1 w-fit rounded-md bg-muted/60 px-2 py-1 text-[11px] leading-snug text-muted-foreground">
+									<p className="mb-1 pl-4 font-mono text-[11px] text-muted-foreground">
 										📎 Reference photo attached
-									</span>
+									</p>
 								) : null}
 								{showShortfall ? (
-									<span className="mt-1 w-fit rounded-md bg-destructive/10 px-2 py-1 text-[11px] font-medium leading-snug text-destructive">
+									<p className="mb-1 w-fit rounded-md bg-destructive/10 px-2 py-1 text-[11px] font-medium leading-snug text-destructive">
 										Minimum {shortfall.minQuantity} per order — add{" "}
 										{shortfall.minQuantity - shortfall.have} more
-									</span>
+									</p>
 								) : null}
-								<div className="mt-1.5">
-									{item.isCustom ? (
-										// Custom lines are one bespoke negotiation, locked to qty 1
-										// — no stepper, just a way out.
-										<button
-											type="button"
-											onClick={() => cart.removeItem(item.variantId)}
-											className="tap-target flex w-fit items-center gap-1 rounded-full border border-border px-2.5 py-1 text-[11px] font-medium text-muted-foreground hover:border-destructive/40 hover:text-destructive"
-											aria-label={`Remove ${item.name}`}
-										>
-											<Trash2 className="size-3" aria-hidden />
-											Remove
-										</button>
-									) : (
-										<QtyStepper
-											name={item.name}
-											quantity={item.quantity}
-											max={cap}
-											onChange={(next) =>
-												cart.updateQuantity(item.variantId, next)
-											}
-										/>
-									)}
-								</div>
-							</div>
-							<span className="text-sm font-semibold tabular-nums">
-								{item.quoteOnRequest
-									? "On quote"
-									: formatPrice(item.price * item.quantity, item.currency)}
-							</span>
-						</li>
-					);
-				})}
-			</ul>
 
-			{onAddMore ? (
-				<button
-					type="button"
-					onClick={onAddMore}
-					className="tap-target mt-1 w-fit text-xs font-semibold text-accent-emphasis underline-offset-2 hover:underline"
-				>
-					+ Add more items
-				</button>
-			) : null}
+								{expanded ? (
+									<div className="flex items-center justify-between gap-3 pb-2 pt-1">
+										{item.isCustom ? (
+											// Custom lines are one bespoke negotiation, locked to
+											// qty 1 — no stepper, just a way out.
+											<button
+												type="button"
+												onClick={() => cart.removeItem(item.variantId)}
+												className="tap-target flex w-fit items-center gap-1 rounded-full border border-border px-2.5 py-1 text-[11px] font-medium text-muted-foreground hover:border-destructive/40 hover:text-destructive"
+												aria-label={`Remove ${item.name}`}
+											>
+												<Trash2 className="size-3" aria-hidden />
+												Remove
+											</button>
+										) : (
+											<>
+												<QtyStepper
+													name={item.name}
+													quantity={item.quantity}
+													max={cap}
+													onChange={(next) =>
+														cart.updateQuantity(item.variantId, next)
+													}
+												/>
+												{!item.quoteOnRequest ? (
+													<span className="text-xs text-muted-foreground">
+														{formatPrice(item.price, item.currency)} each
+													</span>
+												) : null}
+											</>
+										)}
+									</div>
+								) : null}
+							</li>
+						);
+					})}
+				</ul>
 
-			{totals ? (
-				<div className="mt-3 border-t-2 border-dashed border-border pt-3">
-					{totals}
+				{/* Fee/quote rows join the receipt block; TOTAL draws its own rule. */}
+				{totals}
+
+				<div className="flex items-center justify-between pt-2">
+					<p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+						Tap an item to edit
+					</p>
+					{onAddMore ? (
+						<button
+							type="button"
+							onClick={onAddMore}
+							className="tap-target text-xs font-semibold text-accent-emphasis underline-offset-2 hover:underline"
+						>
+							+ Add more items
+						</button>
+					) : null}
 				</div>
-			) : null}
+			</section>
+
+			{/* The tear-off edge — semicircle punch-outs, like the printed ticket. */}
+			<div
+				aria-hidden
+				className="h-2.5 [background-image:radial-gradient(circle_at_8px_-3px,transparent_7px,var(--color-card)_7.5px)] [background-size:16px_10px] [filter:drop-shadow(0_2px_2px_rgba(15,23,42,0.07))]"
+			/>
+
 			{footer}
-		</section>
+		</div>
 	);
 }
 
@@ -264,64 +309,34 @@ export function CheckoutTotals({
 	minRuleAlerts,
 }: CheckoutTotalsProps) {
 	const deliveryFee = quote?.kind === "fee" ? quote.fee : 0;
-	// Subtotal only earns its row when another money line gives it meaning —
-	// a lone "Subtotal + Total" pair saying the same number is noise.
-	const showBreakdown =
-		pickupFee > 0 ||
-		deliveryFee > 0 ||
-		(quote?.kind === "free" && quote.reason === "threshold") ||
-		quote?.kind === "pending" ||
-		quote?.kind === "calculating";
 	const total = subtotal + pickupFee + deliveryFee;
 
 	return (
-		<div className="flex flex-col gap-1.5">
-			{showBreakdown ? (
-				<ReceiptLine label="Subtotal" value={formatPrice(subtotal, currency)} />
-			) : null}
+		<div className="flex flex-col">
+			{/* Charges print as muted receipt lines right under the items — the
+			    design shows items + fees as one block, no separate Subtotal row
+			    (the items above already sum in plain sight). */}
 			{pickupFee > 0 ? (
-				<ReceiptLine
-					label={
-						pickupFeeLabel ? `Pickup fee — ${pickupFeeLabel}` : "Pickup fee"
-					}
-					value={formatPrice(pickupFee, currency)}
+				<FeeLine
+					label={pickupFeeLabel ? `Pickup · ${pickupFeeLabel}` : "Pickup fee"}
+					value={receiptAmount(pickupFee)}
 				/>
 			) : null}
 			{deliveryFee > 0 ? (
-				<ReceiptLine
-					label="Delivery fee"
-					value={formatPrice(deliveryFee, currency)}
-				/>
+				<FeeLine label="Delivery" value={receiptAmount(deliveryFee)} />
 			) : null}
 			{quote?.kind === "free" && quote.reason === "threshold" ? (
-				<div className="flex items-center justify-between text-sm font-medium text-accent-emphasis">
-					<span>Delivery</span>
-					<span>FREE for this order size</span>
-				</div>
+				<FeeLine label="Delivery" value="FREE" accent />
 			) : null}
 			{quote?.kind === "pending" ? (
-				<div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
-					<span>Delivery charge</span>
-					<span className="text-right">Confirmed by seller after checkout</span>
-				</div>
+				<FeeLine label="Delivery" value="Seller confirms" />
 			) : null}
 			{quote?.kind === "calculating" ? (
-				<div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
-					<span>Delivery fee</span>
-					<span className="animate-pulse">Calculating…</span>
-				</div>
+				<FeeLine label="Delivery" value="Calculating…" pulse />
 			) : null}
 
-			{/* Own dashed rule only when fee rows sit above it — with no breakdown
-			    the summary card's rule already frames this row (no double lines). */}
-			<div
-				className={`flex items-center justify-between ${
-					showBreakdown
-						? "mt-1 border-t-2 border-dashed border-border pt-3"
-						: ""
-				}`}
-			>
-				<span className="-rotate-2 rounded-md border-2 border-accent/50 px-2 py-0.5 text-[11px] font-extrabold uppercase tracking-[0.12em] text-accent-emphasis">
+			<div className="mt-2 flex items-center justify-between border-t-2 border-dashed border-border pt-3">
+				<span className="-rotate-2 rounded-md border-2 border-accent/50 px-2 py-0.5 font-mono text-[11px] font-extrabold uppercase tracking-[0.14em] text-accent-emphasis">
 					Total
 				</span>
 				<span className="text-xl font-bold tabular-nums">
@@ -338,7 +353,7 @@ export function CheckoutTotals({
 			{blockedCopy ? (
 				<p
 					role="alert"
-					className="mt-1 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive"
+					className="mt-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive"
 				>
 					{blockedCopy}
 				</p>
@@ -348,15 +363,32 @@ export function CheckoutTotals({
 	);
 }
 
-function ReceiptLine({ label, value }: { label: string; value: string }) {
+/** One muted charge line in receipt type — "Delivery ······ 8.00". */
+function FeeLine({
+	label,
+	value,
+	accent = false,
+	pulse = false,
+}: {
+	label: string;
+	value: string;
+	accent?: boolean;
+	pulse?: boolean;
+}) {
 	return (
-		<div className="flex items-baseline gap-2 text-sm">
-			<span className="text-muted-foreground">{label}</span>
+		<div
+			className={`flex items-baseline gap-2 py-0.5 font-mono text-[13px] leading-6 ${
+				accent ? "text-accent-emphasis" : "text-muted-foreground"
+			}`}
+		>
+			<span className="min-w-0 truncate">{label}</span>
 			<span
 				aria-hidden
-				className="flex-1 -translate-y-0.5 border-b border-dotted border-border"
+				className="flex-1 border-b-2 border-dotted border-border"
 			/>
-			<span className="tabular-nums">{value}</span>
+			<span className={`shrink-0 tabular-nums ${pulse ? "animate-pulse" : ""}`}>
+				{value}
+			</span>
 		</div>
 	);
 }

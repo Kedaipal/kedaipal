@@ -17,8 +17,12 @@ see past. A route fixes the architecture, not just the paint:
 - **Desktop** gets a two-column layout (`lg:`): numbered form sections left,
   **sticky receipt summary** right with the CTA under the money it commits to.
 - **Mobile** stays single-column: summary first (this page IS the review),
-  then the sections, with a **fixed bottom bar** (live total + CTA) always in
-  thumb reach.
+  then the sections, with a **sticky bottom bar** (live total + CTA) always
+  in thumb reach. Sticky, not fixed: `position: fixed; bottom: 0` pins to
+  the *layout* viewport, so a phone browser's expanding bottom toolbar
+  (scroll-up gesture) covered the bar's lower edge — `sticky bottom-0` is in
+  flow, tracks the *visual* viewport through toolbar changes, and needs no
+  clearance padding under the page (design-system rule #4).
 - Browser **back** returns to the store; **refresh** keeps the buyer's place
   (the cart is localStorage, keyed per retailer); an abandoned desktop cart
   can be returned to via URL. `noindex` — a checkout is transactional.
@@ -69,14 +73,31 @@ see past. A route fixes the architecture, not just the paint:
    address block no longer shows a search *and* a parallel manual form. See
    [`fulfilment.md`](./fulfilment.md#the-buyers-address--the-google-pin-is-the-single-source-of-truth).
 
-## The receipt summary (the "Order Ticket" skin)
+## The receipt summary (the "Order Ticket", 1:1 with the design)
 
 `CheckoutSummary` + `CheckoutTotals` in
-`src/components/storefront/checkout-summary.tsx` — dotted leader lines on fee
-rows, dashed separators, `tabular-nums` digits, and a stamped **TOTAL** chip
-(the one personality moment; form controls stay conventional). Pure
-components: cart mutations via the `UseCart` handle, quote state passed in —
-unit-tested without Convex/router providers
+`src/components/storefront/checkout-summary.tsx`, rendered faithful to the
+chosen design (Zaki, 30 Jul — "follow the design closely, down to the font"):
+
+- **Masthead**: centered store name (heading face, uppercase) over a
+  letterspaced mono `ORDER TICKET · DRAFT` line.
+- **Receipt lines in monospace** with dotted leaders and **bare amounts**
+  (`5× Quantity item ······ 250.00`) — no thumbnails, RM appears only on the
+  TOTAL row, like a printed kedai receipt. Charges (pickup/delivery fees,
+  FREE-threshold, pending, calculating) print as muted receipt lines in the
+  same block; there is **no Subtotal row** (the items above sum in plain
+  sight — per the design).
+- **Tap a line to edit** (the design's own caption): the quantity stepper +
+  unit price reveal inline; custom lines reveal a Remove chip. A permanent
+  mono hint ("TAP AN ITEM TO EDIT") keeps it discoverable, and a line with a
+  **min-quantity shortfall comes pre-expanded** — the stepper that fixes it
+  is already in hand.
+- Chunky dashed rules, the rotated **TOTAL** stamp, and a **perforated
+  tear-off edge** (radial-gradient punch-outs) close the ticket; the desktop
+  CTA sits *below* the perforation — the button is not part of the receipt.
+
+Pure components: cart mutations via the `UseCart` handle, quote state passed
+in — unit-tested without Convex/router providers
 (`checkout-summary.test.tsx`).
 
 ## What moved, not changed

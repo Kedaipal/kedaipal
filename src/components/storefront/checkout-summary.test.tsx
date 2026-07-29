@@ -42,22 +42,47 @@ function makeCart(items: CartItem[]): UseCart {
 	} as unknown as UseCart;
 }
 
-describe("CheckoutSummary", () => {
-	it("renders each line with unit price and line total", () => {
+function renderSummary(
+	cart: UseCart,
+	extra: Partial<Parameters<typeof CheckoutSummary>[0]> = {},
+) {
+	return render(
+		<CheckoutSummary cart={cart} storeName="Sue Chef Kitchen" {...extra} />,
+	);
+}
+
+/** Expand a line's inline controls by tapping its receipt row. */
+function tapLine(pattern: RegExp) {
+	fireEvent.click(screen.getByRole("button", { name: pattern }));
+}
+
+describe("CheckoutSummary (order ticket)", () => {
+	it("prints the masthead and mono receipt lines with bare amounts", () => {
 		const cart = makeCart([
-			makeItem({ variantId: "v1", quantity: 2, price: 4500 }),
+			makeItem({
+				variantId: "v1",
+				quantity: 2,
+				price: 4500,
+				optionLabel: "1kg",
+			}),
 		]);
-		render(<CheckoutSummary cart={cart} />);
-		// getAllByText: the AppImage placeholder repeats the name as its alt text.
-		expect(screen.getAllByText("Kek Batik").length).toBeGreaterThan(0);
-		expect(screen.getByText("RM 45.00 each")).toBeTruthy();
-		expect(screen.getByText("RM 90.00")).toBeTruthy();
-		expect(screen.getByText("2 items")).toBeTruthy();
+		renderSummary(cart);
+		expect(screen.getByText("Sue Chef Kitchen")).toBeTruthy();
+		expect(screen.getByText("Order ticket · Draft")).toBeTruthy();
+		// "2× Kek Batik · 1kg …… 90.00" — RM only appears on the TOTAL row.
+		expect(
+			screen.getByRole("button", { name: /2× Kek Batik · 1kg/ }),
+		).toBeTruthy();
+		expect(screen.getByText("90.00")).toBeTruthy();
 	});
 
-	it("steps quantity up and down through cart.updateQuantity", () => {
+	it("reveals the stepper on tap and steps through cart.updateQuantity", () => {
 		const cart = makeCart([makeItem({ variantId: "v1", quantity: 2 })]);
-		render(<CheckoutSummary cart={cart} />);
+		renderSummary(cart);
+		// Collapsed by default — the receipt stays clean until the buyer acts.
+		expect(screen.queryByRole("button", { name: /Increase/ })).toBeNull();
+
+		tapLine(/2× Kek Batik/);
 		fireEvent.click(
 			screen.getByRole("button", { name: "Increase Kek Batik quantity" }),
 		);
@@ -66,11 +91,14 @@ describe("CheckoutSummary", () => {
 			screen.getByRole("button", { name: "Decrease Kek Batik quantity" }),
 		);
 		expect(cart.updateQuantity).toHaveBeenCalledWith("v1", 1);
+		// Unit price surfaces with the controls.
+		expect(screen.getByText("RM 45.00 each")).toBeTruthy();
 	});
 
 	it("turns the minus button into remove at quantity 1", () => {
 		const cart = makeCart([makeItem({ variantId: "v1", quantity: 1 })]);
-		render(<CheckoutSummary cart={cart} />);
+		renderSummary(cart);
+		tapLine(/1× Kek Batik/);
 		fireEvent.click(screen.getByRole("button", { name: "Remove Kek Batik" }));
 		// updateQuantity(…, 0) removes the line in the cart reducer.
 		expect(cart.updateQuantity).toHaveBeenCalledWith("v1", 0);
@@ -78,7 +106,8 @@ describe("CheckoutSummary", () => {
 
 	it("caps the stepper at the stock cap with a visible reason", () => {
 		const cart = makeCart([makeItem({ variantId: "v1", quantity: 3 })]);
-		render(<CheckoutSummary cart={cart} stockCapFor={() => 3} />);
+		renderSummary(cart, { stockCapFor: () => 3 });
+		tapLine(/3× Kek Batik/);
 		const plus = screen.getByRole("button", {
 			name: "Increase Kek Batik quantity",
 		}) as HTMLButtonElement;
@@ -97,37 +126,40 @@ describe("CheckoutSummary", () => {
 				quantity: 1,
 			}),
 		]);
-		render(<CheckoutSummary cart={cart} />);
-		expect(screen.queryByRole("button", { name: /Increase/ })).toBeNull();
+		renderSummary(cart);
 		expect(screen.getByText("On quote")).toBeTruthy();
+		tapLine(/1× Bespoke cake/);
+		expect(screen.queryByRole("button", { name: /Increase/ })).toBeNull();
 		fireEvent.click(
 			screen.getByRole("button", { name: "Remove Bespoke cake" }),
 		);
 		expect(cart.removeItem).toHaveBeenCalledWith("vc");
 	});
 
-	it("renders a min-quantity shortfall once, on the product's first line", () => {
+	it("pre-expands a shortfall line so the fixing stepper is already showing", () => {
 		const cart = makeCart([
 			makeItem({ variantId: "v1", quantity: 2 }),
 			makeItem({ variantId: "v2", quantity: 1, optionLabel: "Large" }),
 		]);
-		render(
-			<CheckoutSummary
-				cart={cart}
-				shortfalls={[
-					{ productId: "p1", name: "Kek Batik", minQuantity: 5, have: 3 },
-				]}
-			/>,
-		);
+		renderSummary(cart, {
+			shortfalls: [
+				{ productId: "p1", name: "Kek Batik", minQuantity: 5, have: 3 },
+			],
+		});
+		// Hint renders once, on the product's first line…
 		expect(
 			screen.getAllByText("Minimum 5 per order — add 2 more"),
 		).toHaveLength(1);
+		// …and that line's stepper is out without a tap (v1 is the first line).
+		expect(
+			screen.getByRole("button", { name: "Increase Kek Batik quantity" }),
+		).toBeTruthy();
 	});
 
 	it("fires onAddMore", () => {
 		const cart = makeCart([makeItem({ variantId: "v1" })]);
 		const onAddMore = vi.fn();
-		render(<CheckoutSummary cart={cart} onAddMore={onAddMore} />);
+		renderSummary(cart, { onAddMore });
 		fireEvent.click(screen.getByRole("button", { name: "+ Add more items" }));
 		expect(onAddMore).toHaveBeenCalled();
 	});
@@ -136,11 +168,11 @@ describe("CheckoutSummary", () => {
 describe("CheckoutTotals", () => {
 	it("shows just the total when there are no extra charges", () => {
 		render(<CheckoutTotals subtotal={9000} currency="MYR" pickupFee={0} />);
-		expect(screen.queryByText("Subtotal")).toBeNull();
 		expect(screen.getByText("RM 90.00")).toBeTruthy();
+		expect(screen.queryByText("Delivery")).toBeNull();
 	});
 
-	it("breaks down subtotal + fees and sums the total", () => {
+	it("prints fee lines as receipt rows and sums the total", () => {
 		render(
 			<CheckoutTotals
 				subtotal={9000}
@@ -150,9 +182,11 @@ describe("CheckoutTotals", () => {
 				quote={{ kind: "fee", fee: 800 }}
 			/>,
 		);
-		expect(screen.getByText("Subtotal")).toBeTruthy();
-		expect(screen.getByText("Pickup fee — Tent HQ")).toBeTruthy();
-		expect(screen.getByText("Delivery fee")).toBeTruthy();
+		// Bare amounts on charge lines; RM only on the total.
+		expect(screen.getByText("Pickup · Tent HQ")).toBeTruthy();
+		expect(screen.getByText("2.00")).toBeTruthy();
+		expect(screen.getByText("Delivery")).toBeTruthy();
+		expect(screen.getByText("8.00")).toBeTruthy();
 		// 90.00 + 2.00 + 8.00
 		expect(screen.getByText("RM 100.00")).toBeTruthy();
 	});
@@ -166,7 +200,7 @@ describe("CheckoutTotals", () => {
 				quote={{ kind: "pending", reason: "out_of_range" }}
 			/>,
 		);
-		expect(screen.getByText("Confirmed by seller after checkout")).toBeTruthy();
+		expect(screen.getByText("Seller confirms")).toBeTruthy();
 		expect(screen.getByText("+ delivery")).toBeTruthy();
 	});
 
@@ -179,7 +213,7 @@ describe("CheckoutTotals", () => {
 				quote={{ kind: "free", reason: "threshold" }}
 			/>,
 		);
-		expect(screen.getByText("FREE for this order size")).toBeTruthy();
+		expect(screen.getByText("FREE")).toBeTruthy();
 	});
 
 	it("renders blocked copy as an alert", () => {

@@ -111,7 +111,8 @@ function CheckoutRoute() {
 	}
 
 	return (
-		<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col px-5 pb-40 pt-4 lg:px-8 lg:pb-10 lg:pt-6">
+		// No pb clearance for the CTA bar — it's sticky (in flow), not fixed.
+		<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col px-5 pb-6 pt-4 lg:px-8 lg:pb-10 lg:pt-6">
 			<header className="flex items-center justify-between gap-3">
 				<div className="flex items-center gap-3">
 					<Link
