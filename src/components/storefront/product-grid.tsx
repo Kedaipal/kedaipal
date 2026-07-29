@@ -44,10 +44,10 @@ interface ProductGridProps {
 	 */
 	storeSlug?: string;
 	/**
-	 * Open the checkout/review sheet. The detail sheet's "Go to checkout" CTA
-	 * calls this (after the grid closes the sheet), so a buyer can proceed
-	 * straight from a product without hunting for the cart bar. Owned by the
-	 * route so it can reach the CartBar-hosted CheckoutSheet (a sibling).
+	 * Proceed to checkout. The detail sheet's "Go to checkout" CTA calls this
+	 * (after the grid closes the sheet), so a buyer can proceed straight from a
+	 * product without hunting for the cart bar. The routes navigate to the
+	 * checkout page (/$slug/checkout — 86eybrhrt PR1).
 	 */
 	onRequestCheckout?: () => void;
 }
@@ -300,12 +300,10 @@ export function ProductGrid({
 				// request the custom line from the same product without reopening. The
 				// toast + cart bar confirm the add; they close via the X when done.
 				onAdd={(p, variant, qty, custom) => addVariant(p, variant, qty, custom)}
-				// Close the product sheet, then hand off to the CheckoutSheet (owned
-				// by the CartBar). The open is deferred a tick: mounting the checkout
-				// dialog in the SAME commit that unmounts this one makes radix's
-				// dismiss/focus layer collide, so the checkout dialog fails to stay
-				// open. Closing first, then opening on the next task, lets this
-				// dialog's teardown finish. The gap is imperceptible (no exit anim).
+				// Close the product sheet, then hand off to the checkout page. The
+				// navigation is deferred a tick so this dialog's teardown (focus
+				// restore, scroll unlock) finishes before the route transition —
+				// the gap is imperceptible (no exit anim).
 				onCheckout={
 					onRequestCheckout
 						? () => {

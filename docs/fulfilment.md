@@ -60,7 +60,7 @@ which was **wrong** for any seller who charges postage/rider fees. A seller now 
 `resolveDeliveryQuote({ config, subtotal, origin, destination })` in **`convex/lib/delivery.ts`**
 (pure, unit-tested) returns `free | fee | pending | blocked` and is called by:
 
-1. **`delivery.quote`** (public query) — the checkout sheet quotes live once the buyer picks
+1. **`delivery.quote`** (public query) — the checkout page quotes live once the buyer picks
    an address suggestion, so the fee is visible **before** "Send order" (ticket AC).
    **Privacy: the public quote strips `distanceKm`/`bandMaxKm`** — returning raw distances to
    arbitrary probe coordinates would let a caller trilaterate the seller's home; band-coarse
@@ -246,7 +246,7 @@ The first live drop-off test (Bearcamp) surfaced surfaces that still said
 "collect"/"pickup" for drop-off orders. All copy now branches on the frozen
 `pickupSnapshot.locationType` (legacy `undefined` → self-collect, as everywhere):
 
-- **Checkout date step** (`checkout-sheet.tsx`): label "When should we meet?" +
+- **Checkout date step** (`checkout-form.tsx`): label "When should we meet?" +
   helper "Pick the date you'll meet at the drop-off point." (was "When will you
   collect?" for both kinds).
 - **WhatsApp status copy** (`convex/lib/whatsappCopy.ts`, EN + MS): `CopyVars`
@@ -318,7 +318,7 @@ Effective reads everywhere: `offerDelivery ?? true`, `offerSelfCollect ?? false`
 - **Settings → Fulfilment** (renamed from "Pickup"; `?tab=pickup` deep-links redirect):
   Delivery toggle card + Self-collect toggle card (both wired to the invariant) above the
   pickup-locations list. Component: `src/components/settings/fulfilment-tab.tsx`.
-- **Storefront checkout** (`checkout-sheet.tsx`): drills `offerDelivery` through
+- **Storefront checkout** (`checkout-form.tsx`): drills `offerDelivery` through
   `$slug.tsx` → `cart-bar.tsx`. Shows the two-button method picker only when **both** are
   offered; a single method drops straight to its form (address / pickup picker).
 - **Dashboard checklist** (`app.index.tsx`): the optional "Add a pickup location" step
@@ -411,9 +411,9 @@ The pickup snapshot (and the buyer's chosen `deliveryAddress`) is **frozen at or
 | `src/components/settings/pickup-locations-tab.tsx` | Settings tab body — `offerSelfCollect` toggle card + locations list (up/down arrows, edit, active toggle, "show inactive" collapsible). |
 | `src/components/settings/pickup-location-edit-dialog.tsx` | Bottom-sheet add/edit modal, mirrors `address-edit-dialog.tsx`. |
 | `src/routes/app.settings.tsx` | New `"pickup"` tab wired into the tab bar + search validator. |
-| `src/routes/$slug.tsx` | Sidecar `listActivePublicBySlug` query passed through `CartBar` to `CheckoutSheet`. |
+| `src/routes/$slug.tsx` | Sidecar `listActivePublicBySlug` query passed through `CartBar` to `checkout page (CheckoutPage)`. |
 | `src/components/storefront/cart-bar.tsx` | Drills `offerSelfCollect` + `pickupLocations` through. |
-| `src/components/storefront/checkout-sheet.tsx` | Self-Collect button hidden when unavailable; 0/1/2+ branching (auto-confirm card for 1, required radio for 2+); pickup block inlined into the `wa.me` prefilled text. |
+| `src/components/storefront/checkout-form.tsx` | Self-Collect button hidden when unavailable; 0/1/2+ branching (auto-confirm card for 1, required radio for 2+); pickup block inlined into the `wa.me` prefilled text. |
 | `src/routes/track.$token.tsx` | "Pick up at" card for self-collect orders, rendered from the frozen snapshot. |
 | `src/routes/app.index.tsx` | Dashboard checklist step 4 (only when `offerSelfCollect` is on); marked "Optional" via the pill in both expanded and collapsed row variants. Done logic: `pickupSetupSeen \|\| hasAnyActive`. |
 | `src/routes/app.orders.$shortId.tsx` | Seller order detail — "Pick up at" card mirroring the delivery address block, plus a "Notify store manager" panel with a pre-built copy-to-clipboard snippet for forwarding to whoever runs the pickup spot. |
@@ -526,7 +526,7 @@ Both URLs are derived from stored coordinates — no app-specific data is captur
 
 ### Storefront checkout branching
 
-`checkout-sheet.tsx` branches on the active-location count when self-collect is selected:
+`checkout-form.tsx` branches on the active-location count when self-collect is selected:
 
 - **0 active locations** (or `offerSelfCollect` off): the Self Collect tile is hidden entirely; the row collapses to a single full-width Delivery button.
 - **1 active location**: the tile shows; selecting it renders a `PickupSummaryCard` (auto-confirmed, no input). The id is resolved at submit time from the single option.

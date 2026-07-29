@@ -51,7 +51,7 @@ export const AddressFieldset = withFieldGroup({
 			group.setFieldValue("state", parsed.state);
 			group.setFieldValue("postcode", parsed.postcode);
 			// Stash coordinates as strings (form-state shape is all strings — we
-			// parse back to numbers at submit time in checkout-sheet).
+			// parse back to numbers at submit time in checkout-form).
 			// NOTE: coords are set AFTER the structured fields on purpose — the
 			// invalidation listeners below fire on those sets, and last-write-wins
 			// keeps the fresh pin.

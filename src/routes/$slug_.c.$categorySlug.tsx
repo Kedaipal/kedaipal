@@ -3,10 +3,10 @@ import {
 	Link,
 	notFound,
 	redirect,
+	useNavigate,
 } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import { ArrowLeft } from "lucide-react";
-import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import { type Locale, OG_LOCALE } from "../../convex/lib/locale";
 import { CartBar } from "../components/storefront/cart-bar";
@@ -194,6 +194,7 @@ function CategorySkeleton() {
 
 function CategoryRoute() {
 	const { slug, categorySlug } = Route.useParams();
+	const navigate = useNavigate();
 	// Live queries keep the page reactive after the SSR'd loader response.
 	const result = useQuery(api.retailers.getRetailerBySlug, { slug });
 	const retailer = result?.status === "ok" ? result.retailer : undefined;
@@ -203,12 +204,6 @@ function CategoryRoute() {
 	);
 	// Same per-retailer cart as the store home — items carry across pages.
 	const cart = useCart(retailer?._id);
-	const pickupLocations = useQuery(api.pickupLocations.listActivePublicBySlug, {
-		slug,
-	});
-	// Checkout open-state lifted here so the product detail sheet can jump
-	// straight to checkout (same wiring as the store home). See ProductGrid.
-	const [checkoutOpen, setCheckoutOpen] = useState(false);
 
 	if (!retailer || page === undefined) {
 		return <CategorySkeleton />;
@@ -252,25 +247,15 @@ function CategoryRoute() {
 					cart={cart}
 					products={page.products}
 					storeSlug={retailer.slug}
-					onRequestCheckout={() => setCheckoutOpen(true)}
+					onRequestCheckout={() =>
+						navigate({ to: "/$slug/checkout", params: { slug: retailer.slug } })
+					}
 				/>
 			</section>
 
 			<StorefrontFooter />
 
-			<CartBar
-				cart={cart}
-				retailerId={retailer._id}
-				storeName={retailer.storeName}
-				checkoutPhone={retailer.checkoutPhone}
-				offerSelfCollect={retailer.offerSelfCollect ?? false}
-				offerDelivery={retailer.offerDelivery ?? true}
-				minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
-				minOrderValue={retailer.minOrderValue}
-				pickupLocations={pickupLocations ?? []}
-				checkoutOpen={checkoutOpen}
-				onCheckoutOpenChange={setCheckoutOpen}
-			/>
+			<CartBar cart={cart} storeSlug={retailer.slug} />
 		</div>
 	);
 }

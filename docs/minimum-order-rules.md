@@ -53,7 +53,7 @@ server's authoritative gate can never disagree:
   ("Minimum order of MYR 100.00 — add MYR 35.00 more to check out"). Runs
   before delivery resolution / totals. Create-time only — post-order seller
   edits (address re-price, mockup re-price, fee-pending) never re-check.
-- **Client (the easement):** the checkout sheet maps `cart.items` through the
+- **Client (the easement):** the checkout page maps `cart.items` through the
   same functions. Cart items snapshot `minQuantity` at add time (like
   price/name); the server re-checks against live values, so a stale cart can
   at worst see a server error, never a wrong order.
@@ -85,7 +85,7 @@ server's authoritative gate can never disagree:
   Note the seller-form stock warning only fires while editing — this
   storefront state is what covers stock *eroding* below the minimum through
   normal sales.
-- **Checkout sheet:** a red inline hint on the offending product's first line
+- **Checkout page:** a red inline hint on the offending product's first line
   ("Minimum 20 per order — add 8 more"), a `role="alert"` banner above the
   total listing every shortfall (same pattern as the delivery out-of-range
   block), and the **"Send order on WhatsApp" button disables** while any rule
@@ -115,7 +115,7 @@ server's authoritative gate can never disagree:
   `buildRetailerPublic` + `getRetailerBySlug` expose it (public-safe).
 - Client: `useCart` gained `CartItem.minQuantity` + `quantityForProduct()`;
   `minOrderValue` threads `$slug.tsx` / category route → `CartBar` →
-  `CheckoutSheet`.
+  `checkout page (CheckoutPage)`.
 - Bulk import (`products.bulkUpsert`) does not set `minQuantity` — sellers add
   it in the editor after import (acceptable v1 gap; the import schema is CSV
   parity-focused).
