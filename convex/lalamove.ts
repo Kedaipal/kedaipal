@@ -1412,6 +1412,13 @@ export const getDeliveryJob = query({
 		/** Seller's opt-in "prompt me to book when I mark packed" preference —
 		 * the card auto-opens the confirm dialog on the packed transition. */
 		promptBookOnPacked: boolean;
+		/** Rider dispatch IS this vendor's delivery method. Settings couples this
+		 * 1:1 with the "Lalamove" delivery-charge choice (picking it enables
+		 * booking, switching away disables it), so it answers the seller-facing
+		 * question "do I send riders or parcels?" — and the dashboard drops every
+		 * manual parcel-courier surface when it's true (86eyff02p). Distinct from
+		 * `blockReason === null`, which is about THIS order being bookable now. */
+		bookingEnabled: boolean;
 	} | null> => {
 		const order = await resolveSharedOrder(ctx, { shortId });
 		if (!order) return null;
@@ -1462,6 +1469,7 @@ export const getDeliveryJob = query({
 		}
 		return {
 			promptBookOnPacked,
+			bookingEnabled: retailer.deliveryBooking?.enabled === true,
 			job: latest
 				? {
 						status: latest.status,

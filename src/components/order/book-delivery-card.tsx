@@ -14,8 +14,8 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
-import type { DispatchBlock } from "../../../convex/lalamove";
 import { todayMytMidnight } from "../../../convex/lib/fulfilmentDate";
+import { dispatchBlockCopy } from "../../lib/dispatch-block";
 import { formatPrice } from "../../lib/format";
 import { ProBadge } from "../app/pro-gate";
 import { AppImage } from "../ui/app-image";
@@ -175,7 +175,7 @@ export function BookDeliveryCard({
 		try {
 			const result = await prepareBooking({ shortId: order.shortId });
 			if (!result.ok) {
-				toast.error(result.message ?? blockCopy(result.reason));
+				toast.error(result.message ?? dispatchBlockCopy(result.reason));
 				return;
 			}
 			setQuote(result);
@@ -195,7 +195,7 @@ export function BookDeliveryCard({
 				vehicleType,
 			});
 			if (!result.ok) {
-				toast.error(result.message ?? blockCopy(result.reason));
+				toast.error(result.message ?? dispatchBlockCopy(result.reason));
 				return;
 			}
 			setQuote(result);
@@ -216,7 +216,7 @@ export function BookDeliveryCard({
 				vehicleType: quote.vehicleType === "CAR" ? "CAR" : "MOTORCYCLE",
 			});
 			if (!result.ok) {
-				toast.error(result.message ?? blockCopy(result.reason));
+				toast.error(result.message ?? dispatchBlockCopy(result.reason));
 				return;
 			}
 			setQuote(null);
@@ -423,7 +423,7 @@ export function BookDeliveryCard({
 							{blockReason === "plan_gated" ? <ProBadge /> : null}
 						</Button>
 						<p className="text-xs text-muted-foreground">
-							{blockCopy(blockReason)}
+							{dispatchBlockCopy(blockReason)}
 						</p>
 					</div>
 				)
@@ -590,23 +590,3 @@ function JobStatusPill({ status }: { status: string }) {
 	);
 }
 
-function blockCopy(reason: DispatchBlock | "not_found" | string): string {
-	switch (reason) {
-		case "no_coords":
-			return "This address has no map pin, so a rider can't be routed to it. Ask the buyer to re-pick their address from the suggestions on their tracking page, or update it for them.";
-		case "no_buyer_phone":
-			return "This order has no buyer WhatsApp number for the rider to contact.";
-		case "no_seller_phone":
-			return "Add a Malaysian (+60) WhatsApp number in Settings → Store first — Lalamove riders need a local pickup contact.";
-		case "plan_gated":
-			return "Lalamove booking is a Pro feature. Upgrade to book riders in one tap.";
-		case "no_credentials":
-			return "Your Lalamove API key is missing — add it under Settings → Fulfilment → Delivery charge → Lalamove.";
-		case "booking_disabled":
-			return "Lalamove isn't your delivery method right now — choose it under Settings → Fulfilment → Delivery charge.";
-		case "bad_status":
-			return "Delivery can be booked once the order is confirmed.";
-		default:
-			return "Booking isn't available for this order.";
-	}
-}
