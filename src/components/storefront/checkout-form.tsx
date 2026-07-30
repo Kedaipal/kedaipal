@@ -44,6 +44,7 @@ import {
 	type PublicPickupLocation,
 	pickupFeeOf,
 } from "./pickup-location-options";
+import { StorefrontFooter } from "./storefront-footer";
 
 const ADDRESS_STORAGE_KEY = "kedaipal:lastAddress";
 
@@ -1091,6 +1092,14 @@ export function CheckoutPage({
 					{reassurance}
 					{privacyLine}
 				</div>
+				{/* Nested INSIDE the sticky bar, not a page-level sibling after it —
+				    see StorefrontFooter's `edgeToEdge` doc for why: a sticky-bottom
+				    bar can render pinned to the viewport before the user has
+				    actually scrolled to the document's true end, so anything placed
+				    after it as a separate element shows a phantom gap until that
+				    exact scroll position. Nesting it here means there's no "after"
+				    to fall out of sync with — always zero gap, on any device. */}
+				<StorefrontFooter compact edgeToEdge />
 			</div>
 		</form>
 	);

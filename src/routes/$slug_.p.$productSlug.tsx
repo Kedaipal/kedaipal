@@ -267,7 +267,12 @@ function ProductRoute() {
 				cart={cart}
 				canonicalUrl={`${SITE_URL}/${retailer.slug}/p/${productSlug}`}
 			/>
-			<StorefrontFooter compact />
+			{/* Desktop only — mobile's copy is nested inside ProductPageView's own
+			    sticky purchase bar (see product-page.tsx) so it can never show a
+			    gap against the sticky-positioned bar above it. */}
+			<div className="hidden lg:block">
+				<StorefrontFooter compact />
+			</div>
 		</div>
 	);
 }
