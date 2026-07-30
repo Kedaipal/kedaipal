@@ -137,11 +137,15 @@ describe("AddressFieldset — pin is the single source of truth (86eye50qv)", ()
 		expect(latest.longitude).toBe("101.7021");
 	});
 
-	it("'Search again' drops the whole location but keeps delivery notes", () => {
+	it("'Search again' drops the location but keeps the unit + delivery notes", () => {
 		let latest = { ...emptyAddress };
 		render(
 			<Harness
-				initial={{ ...PINNED_ADDRESS, notes: "call on arrival" }}
+				initial={{
+					...PINNED_ADDRESS,
+					line2: "Unit 12-3",
+					notes: "call on arrival",
+				}}
 				onState={(v) => {
 					latest = v;
 				}}
@@ -159,6 +163,10 @@ describe("AddressFieldset — pin is the single source of truth (86eye50qv)", ()
 		expect(latest.placeId).toBe("");
 		// Notes describe HOW to deliver, not WHERE — they survive.
 		expect(latest.notes).toBe("call on arrival");
+		// So does the unit/floor: it's the buyer's own typing, the locked card
+		// leaves it editable, and a re-pick never restores it — wiping it here
+		// would silently ship the order to a high-rise with no floor.
+		expect(latest.line2).toBe("Unit 12-3");
 		// …and we're back on the search.
 		expect(screen.getByText("mock-pick")).toBeTruthy();
 	});

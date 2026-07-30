@@ -112,9 +112,15 @@ export function CheckoutSummary({
 						const isFirstLine =
 							firstLineForProduct.get(item.productId) === itemIndex;
 						const showShortfall = shortfall && isFirstLine;
-						const expanded =
-							expandedId === item.variantId || showShortfall === true;
 						const cap = stockCapFor?.(item.variantId);
+						// Stock fell under a persisted quantity — the buyer must lower
+						// it to check out, so show the stepper without a tap (same
+						// posture as a min-quantity shortfall).
+						const overStock = cap !== undefined && item.quantity > cap;
+						const expanded =
+							expandedId === item.variantId ||
+							showShortfall === true ||
+							overStock;
 						return (
 							<li key={item.variantId}>
 								<button
@@ -153,6 +159,11 @@ export function CheckoutSummary({
 									<p className="mb-1 w-fit rounded-md bg-destructive/10 px-2 py-1 text-[11px] font-medium leading-snug text-destructive">
 										Minimum {shortfall.minQuantity} per order — add{" "}
 										{shortfall.minQuantity - shortfall.have} more
+									</p>
+								) : null}
+								{overStock ? (
+									<p className="mb-1 w-fit rounded-md bg-destructive/10 px-2 py-1 text-[11px] font-medium leading-snug text-destructive">
+										Only {cap} left — lower this to {cap} to continue
 									</p>
 								) : null}
 

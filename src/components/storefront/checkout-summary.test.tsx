@@ -156,6 +156,20 @@ describe("CheckoutSummary (order ticket)", () => {
 		).toBeTruthy();
 	});
 
+	it("pre-expands + names a line that now exceeds live stock", () => {
+		// Persisted cart says 5; the seller has since dropped stock to 2.
+		const cart = makeCart([makeItem({ variantId: "v1", quantity: 5 })]);
+		renderSummary(cart, { stockCapFor: () => 2 });
+		// No tap needed — the buyer must lower it, so the stepper is out…
+		expect(
+			screen.getByRole("button", { name: "Decrease Kek Batik quantity" }),
+		).toBeTruthy();
+		// …and the reason is named on the line itself.
+		expect(
+			screen.getByText("Only 2 left — lower this to 2 to continue"),
+		).toBeTruthy();
+	});
+
 	it("fires onAddMore", () => {
 		const cart = makeCart([makeItem({ variantId: "v1" })]);
 		const onAddMore = vi.fn();

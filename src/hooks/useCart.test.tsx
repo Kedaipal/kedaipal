@@ -117,3 +117,53 @@ describe("useCart — per-product aggregates (grid 'N in cart · RM total')", ()
 		expect(result.current.subtotalForProduct(P1)).toBe(0);
 	});
 });
+
+describe("useCart — hydration signal (checkout's empty-vs-unknown guard)", () => {
+	const P1 = "p1" as unknown as Id<"products">;
+	const stored = [
+		{
+			variantId: "v1",
+			productId: P1,
+			name: "Kek Batik",
+			price: 4500,
+			currency: "MYR",
+			quantity: 2,
+		},
+	];
+
+	it("is false while the retailer is still unknown", () => {
+		const { result } = renderHook(() => useCart(undefined));
+		// The route hasn't resolved the store yet, so hydration hasn't even been
+		// ATTEMPTED — an empty `items` here means "unknown", not "empty cart".
+		// Checkout must hold its skeleton instead of offering "Browse the store".
+		expect(result.current.hydrated).toBe(false);
+		expect(result.current.items).toEqual([]);
+	});
+
+	it("flips true once this retailer's stored cart is applied", () => {
+		localStorage.setItem(`kedaipal:cart:${RID}`, JSON.stringify(stored));
+		const { result } = renderHook(() => useCart(RID));
+		expect(result.current.hydrated).toBe(true);
+		expect(result.current.items).toHaveLength(1);
+		expect(result.current.itemCount).toBe(2);
+	});
+
+	it("is true for a genuinely empty cart (so checkout can still say so)", () => {
+		const { result } = renderHook(() => useCart(RID));
+		expect(result.current.hydrated).toBe(true);
+		expect(result.current.items).toEqual([]);
+	});
+
+	it("re-arms when the retailer changes — a cart is per store", () => {
+		localStorage.setItem(`kedaipal:cart:${RID}`, JSON.stringify(stored));
+		const { result, rerender } = renderHook(
+			({ id }: { id: Id<"retailers"> | undefined }) => useCart(id),
+			{ initialProps: { id: undefined as Id<"retailers"> | undefined } },
+		);
+		expect(result.current.hydrated).toBe(false);
+
+		rerender({ id: RID });
+		expect(result.current.hydrated).toBe(true);
+		expect(result.current.itemCount).toBe(2);
+	});
+});
