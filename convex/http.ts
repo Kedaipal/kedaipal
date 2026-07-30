@@ -86,6 +86,23 @@ http.route({
 			});
 		}
 
+		// Outbound-delivery statuses ride the same webhook (value.statuses). Only
+		// `failed` is acted on today: it's how a confirmation push to a typo'd /
+		// unreachable number reports back (86eyf1rck). The mutation probes by
+		// wamid and no-ops for the vast majority of statuses (ordinary sends).
+		for (const ev of adapter.parseStatuses(rawBody)) {
+			if (ev.status !== "failed") continue;
+			console.warn("WA outbound message failed", {
+				providerMessageId: ev.providerMessageId,
+				recipientId: ev.recipientId,
+				errorDetail: ev.errorDetail,
+			});
+			await ctx.runMutation(internal.orders.markConfirmationPushFailed, {
+				wamid: ev.providerMessageId,
+				errorDetail: ev.errorDetail,
+			});
+		}
+
 		// WABA health events ride the SAME webhook (different `field`):
 		// phone_number_quality_update / account_update. Capture them so the send
 		// gateway can auto-throttle on degradation and ops gets paged. These

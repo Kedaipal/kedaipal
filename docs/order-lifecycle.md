@@ -65,18 +65,85 @@ Public mutation (no auth — the storefront is anonymous). Steps, in order ([`co
 1. **Rate limit first** — `orderCreate` keyed by `retailerId` (token bucket: burst 5, 30/min). Throttle before any DB reads. See [`validation-and-rate-limits.md`](./validation-and-rate-limits.md).
 2. **Delivery-method invariant** — `delivery` requires `deliveryAddress`; `self_collect` forbids it. Default method is `delivery`.
 3. **Address validation** — `assertValidAddress` (Malaysia-only) sanitizes and trims.
-4. **Phone validation** — `assertValidWaPhone` if a phone was provided (optional at checkout).
+4. **Phone validation** — `assertValidMyWaPhone` if a phone was provided (MY-aware: a local `012-345 6789` normalizes to the `60…` form Meta delivers inbound, so the customer record can't fork). The storefront form **requires** the phone (86eyf1rck — the confirmation push needs a reachable number, gated client-side by `myWaPhoneCheckoutSchema`, MY mobiles only); the arg stays optional at the protocol level so legacy callers/tests ride the old flow.
 5. **Item validation** — 1–100 items. Each item names a **variant** by `variantId` (preferred) or a single-variant product's `productId` (resolved to its sole variant; ambiguous for multi-variant products → rejected). The variant + its parent product must belong to the retailer, both be `active`, and match the order currency. **Stock is enforced only when the variant hard-blocks** — `variant.blockWhenOutOfStock ?? product.blockWhenOutOfStock` resolves true. Made-to-order variants (frozen pack-to-order, metal prints, a "Custom" size) never block, even when a sibling variant in the same listing does. Quantities for the same variant across multiple line items are summed before the (conditional) `onHand` check. Each line snapshots `{productId, variantId, name, variantLabel, price, quantity}`.
 6. **Compute totals** — `computeOrderTotals` (currently `total === subtotal`).
 7. **Reserve stock** — for **hard-block variants only** (resolved per-variant), patch each variant's `onHand` down within the same transaction (atomic; rolls back on any failure). Variants are re-fetched fresh to avoid stale values. Made-to-order variants are never decremented.
 8. **Collision-safe `shortId`** — up to 3 attempts via `generateShortId`; throws if all collide.
-9. **Insert order** (`status: "pending"`) + a `pending` `orderEvents` row.
+9. **Insert order** — `status: "confirmed"` when the **confirmation-push path is active** (buyer phone present AND `WHATSAPP_ORDER_CONFIRM_TEMPLATE` set — see the next section), else `status: "pending"`. Always writes a `pending` `orderEvents` row; the push path adds a `"Confirmed at checkout"` `confirmed` event and stamps `stampRetailerActivation` (the same milestone the legacy inbound-confirm path stamps).
 10. **Early customer link** — if a phone is known, `linkOrderToCustomer` creates/updates the customer and stamps `customerId`. Phone-less orders are linked later (see confirmation).
 11. **Fire-and-forget email** — schedule `notifyRetailerOrderAlert`.
+12. **Confirmation push** (push path only) — schedule `whatsapp.notifyStorefrontOrderCreated` (see the next section).
 
-Returns `{ shortId, trackingToken }`.
+Returns `{ shortId, trackingToken, confirmedAtCreate? }` — checkout navigates to `/track/<token>` **without** `?send=1` when `confirmedAtCreate` is true.
 
-### The WhatsApp handoff — why checkout never calls `window.open`
+### The confirmation push — the order commits at "Place order" (86eyf1rck)
+
+Since Meta's WhatsApp in-app browser rollout, a store link opened inside a
+WhatsApp thread hits a "Continue to chat" interstitial when it tries to bounce
+back via `wa.me` — buyers bail and the order strands as `pending` with no
+phone. So the storefront no longer depends on the buyer's send at all:
+
+- **Checkout requires a MY WhatsApp mobile number** ("Who's ordering?" card,
+  PDPA notice line beneath, EN/BM by store locale). Client gate
+  `myWaPhoneCheckoutSchema` (`src/lib/schemas.ts`), server re-validates with
+  `assertValidMyWaPhone`.
+- **The order inserts as `confirmed`** and Kedaipal's WABA pushes the
+  confirmation — the Meta-approved **utility template**
+  `order_confirmation_utility` (EN + BM variants; body params `shortId`,
+  `storeName`, formatted total; the dynamic URL button carries the **tracking
+  token** — its own parameter namespace, never a body slot). Sent by
+  `whatsapp.notifyStorefrontOrderCreated` via
+  `makeGuardedSender(ctx, retailerId, "transactional")`; the log row records
+  category `utility_template` + the template name (per-template cost
+  accounting for Meta's Oct-2026 per-message billing). This is the order's
+  **one** outbound message — payment details stay on the order page
+  (86ey98ju1 posture); the buyer's reply opens the free service window, from
+  which point the seller's custom confirm template copy applies (noted inline
+  in the Settings template editor).
+- **A seller's custom `confirm` template override does NOT apply to the
+  push** — template wording is fixed at Meta approval. Their copy takes over
+  from the first in-window message onward.
+- **Config switch:** `WHATSAPP_ORDER_CONFIRM_TEMPLATE` (Convex env; set to the
+  approved template name). Unset ⇒ everything below this point degrades to the
+  legacy `pending` + `?send=1` handoff — the code ships decoupled from Meta
+  review. `retailers.getRetailerBySlug` exposes `confirmPushEnabled` so
+  checkout copy is truthful pre-submit ("Place order" vs "Send order on
+  WhatsApp").
+
+**Outcome stamps** (`orders.confirmationPushStatus` / `confirmationPushAt` /
+`confirmationPushWamid`):
+
+- `"sent"` — Meta accepted the send; the wamid is stored because the
+  **`statuses` webhook** (same `POST /webhook/whatsapp`, `value.statuses`)
+  identifies messages only by it. A later `failed` event →
+  `orders.markConfirmationPushFailed` (indexed probe on
+  `by_confirmation_wamid`; no-ops for ordinary sends) flips it to `"failed"`.
+- `"failed"` — the send errored or Meta reported delivery failure (typo'd /
+  unreachable number). The tracking page flips to the **manual Send card**
+  (recovery framing: "We couldn't reach you") and the seller's order detail
+  shows an amber **"Couldn't reach the buyer on WhatsApp"** note.
+- `"recovered"` — the buyer completed the manual `wa.me` send after a failed
+  push. `confirmOrderFromWhatsApp` treats an inbound ORD ref for a
+  failed-push order as proof of ownership: it **re-stamps
+  `customer.waPhone` to the sender** (the checkout-typed number was wrong),
+  **relinks the customer record** (decrements the typo'd number's aggregates,
+  links the real one), and clears both warnings. Deliberately narrow — a
+  healthy (`sent`) order's number is never overwritten by a forwarded
+  message, and a late/replayed `failed` webhook never regresses `recovered`.
+
+Tracking-page states (`src/routes/track.$token.tsx`): fresh push-path arrival
+shows **"Order placed ✓ — confirmation sent to your WhatsApp"** + an optional
+open-WhatsApp anchor — **no auto-redirect anywhere on this path**;
+`orders.get` serves `checkoutPhone` while `pending` **or** whenever a push
+stamp exists (the anchor + recovery card need the wa.me target).
+
+### The WhatsApp handoff — the legacy / fallback path
+
+Everything in this section is now the **fallback**: it runs when the push path
+is inactive (template env unset, or a rare phone-less direct create) and as
+the **recovery surface** for failed pushes and legacy pending orders. The
+mechanics are unchanged:
 
 The storefront checkout **does not** open `wa.me` itself. `window.open` after
 the awaited `orders.create` round-trip falls outside the submit tap's
@@ -95,16 +162,21 @@ WhatsApp"** card ([`src/routes/track.$token.tsx`](../src/routes/track.$token.tsx
 - The CTA is a plain **anchor** to the `wa.me` deep link — tapping it is a
   fresh user gesture, which browsers always allow.
 - A **copy-link fallback** covers webviews that refuse to open WhatsApp at
-  all (the buyer pastes it into a real browser).
+  all (the buyer pastes it into a real browser). Inside **WhatsApp's own
+  in-app browser** (`isWhatsAppWebview`, UA sniff) the row instead copies the
+  **order message body** ("Copy order message") — a `wa.me` link is exactly
+  what just failed there; the buyer pastes the message straight into the chat
+  they came from. EN/BM.
 - The message is **rebuilt from the order's frozen snapshot** on every render
   (`src/lib/wa-order-message.ts` — items, address/pickup, note, fulfilment
   date), so the handoff survives refreshes and lost sessions, and doubles as
   recovery for any pending order where the buyer bailed before sending.
 - `orders.get` serves `checkoutPhone` (same `WHATSAPP_CHECKOUT_PHONE` →
-  `retailers.waPhone` fallback as the storefront) **only while the order is
-  `pending`**, so the card hides itself reactively the moment the bot
-  confirms. Counter orders are created `confirmed` (buyer binds via QR scan)
-  and never see it.
+  `retailers.waPhone` fallback as the storefront) while the order is
+  `pending` **or carries any `confirmationPushStatus`** (the push-path
+  success anchor + failed-push recovery card need the wa.me target); the
+  cards themselves gate on status + push state. Counter orders are created
+  `confirmed` with no push stamp (buyer binds via QR scan) and never see it.
 
 **Auto-fire on arrival (`?send=1`):** checkout navigates to
 `/track/<token>?send=1`, and the card **auto-triggers the handoff** so the
@@ -121,7 +193,10 @@ navigating away**, and returning from WhatsApp (bfcache `pageshow` /
 `visibilitychange`) also settles the button — so refresh or back never
 re-fires the redirect or leaves the button stuck loading. Only checkout
 sets `?send=1`; organic visits to a pending order get the manual card
-unchanged.
+unchanged. **Inside WhatsApp's in-app browser the auto-fire is skipped
+entirely** (`isWhatsAppWebview` — the redirect would bounce the buyer into a
+"Continue to chat" interstitial while they're already in WhatsApp); the
+manual button renders immediately and `?send=1` is still consumed.
 
 ## WhatsApp confirmation
 
@@ -133,6 +208,12 @@ Inbound flow lives in [`convex/whatsapp.ts`](../convex/whatsapp.ts), entered fro
 - `confirmOrderFromWhatsApp` (internal mutation) is **idempotent**:
   - If `pending`, transitions to `confirmed` and writes a `"Confirmed via WhatsApp"` event.
   - Stamps `order.customer.waPhone` if it was empty (link-in-bio backfill).
+  - **Failed-push recovery (86eyf1rck)** — if the order's
+    `confirmationPushStatus` is `"failed"`, the inbound ORD ref proves the
+    sender owns the order: their number **replaces** the typo'd checkout
+    number, the customer record is relinked (old aggregates decremented), and
+    the status flips to `"recovered"`. Only a failed push unlocks this — a
+    healthy order's number is never overwritten.
   - **Late customer link** — if `customerId` is still null, normalizes the phone and calls `linkOrderToCustomer`. Orders already linked at checkout are skipped (no double counting).
   - Refreshes the customer's `waProfileName` from the sender's pushname (never clobbers a retailer-edited `name`).
 - The reply is rendered in the retailer's locale (`en`/`ms`) and sent as a **CTA message** ("I've paid" button → tracking page). It degrades to plain text when interactive buttons aren't available (e.g. non-HTTPS `APP_URL` in dev). A **hard-coded, non-overridable** transfer-reference line is always appended (see [`payment-handshake.md`](./payment-handshake.md#transfer-reference)). A payment QR is sent as a follow-up image if configured.

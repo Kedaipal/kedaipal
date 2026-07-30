@@ -906,6 +906,23 @@ export default defineSchema({
 		// status transition. Optional: pre-inbox orders fall back to updatedAt /
 		// createdAt at read time, so no backfill. See docs/order-inbox.md.
 		statusChangedAt: v.optional(v.number()),
+		// WABA confirmation push (86eyf1rck) — the template message Kedaipal sends
+		// the buyer at storefront checkout, replacing the buyer-initiated wa.me
+		// handoff. "sent" = Meta accepted the send; "failed" = the send errored or
+		// Meta's statuses webhook reported failure (typo'd/unreachable number) —
+		// flips the tracking page to the manual Send card + an amber note on the
+		// seller's order detail; "recovered" = a failed push whose buyer then
+		// completed the manual wa.me send (the chat now exists — both warnings
+		// clear). Undefined = legacy order or push path inactive (template env
+		// unset). Widen-only, no backfill.
+		confirmationPushStatus: v.optional(
+			v.union(v.literal("sent"), v.literal("failed"), v.literal("recovered")),
+		),
+		confirmationPushAt: v.optional(v.number()),
+		// Meta's message id (wamid) for the confirmation push. The statuses
+		// webhook identifies messages ONLY by this id, so it's the correlation key
+		// that lets a delivery failure find its order (see by_confirmation_wamid).
+		confirmationPushWamid: v.optional(v.string()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
@@ -915,7 +932,8 @@ export default defineSchema({
 		.index("by_retailer_mockup", ["retailerId", "mockupStatus"])
 		.index("by_shortId", ["shortId"])
 		.index("by_tracking_token", ["trackingToken"])
-		.index("by_customer", ["customerId"]),
+		.index("by_customer", ["customerId"])
+		.index("by_confirmation_wamid", ["confirmationPushWamid"]),
 
 	/**
 	 * Retailer-managed library of self-collect pickup locations. Frozen onto

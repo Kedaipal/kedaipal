@@ -34,7 +34,7 @@ import {
 } from "./_generated/server";
 import { requireAdmin } from "./lib/auth";
 import { getAdapter } from "./lib/channels/registry";
-import type { OutboundMessage } from "./lib/channels/types";
+import type { OutboundMessage, SendReceipt } from "./lib/channels/types";
 import { sendEmail } from "./lib/email";
 import { rateLimiter } from "./lib/rateLimiter";
 import { normalizeWaPhone } from "./lib/slug";
@@ -67,9 +67,10 @@ type SendDecision =
 	| { allowed: true }
 	| { allowed: false; status: BlockedStatus };
 
-/** A drop-in replacement for the raw channel adapter's send, with guardrails. */
+/** A drop-in replacement for the raw channel adapter's send, with guardrails.
+ * Resolves with the adapter's receipt (provider message id) when one exists. */
 export type GuardedSender = {
-	send(to: string, msg: OutboundMessage): Promise<void>;
+	send(to: string, msg: OutboundMessage): Promise<SendReceipt | undefined>;
 };
 
 /**
@@ -80,6 +81,12 @@ export type GuardedSender = {
  *     caller's catch/fallback doesn't re-send the same blocked message),
  *   - on allow: hits Meta, then logs sent / failed. A Meta failure still throws,
  *     preserving each caller's existing fallback behaviour.
+ *
+ * A `template` message is GATED by the sender's category like any other send
+ * (the order-confirmation push rides "transactional" — core promise), but its
+ * LOG row records the message class truthfully: category `utility_template` +
+ * the template name, so per-template cost accounting (Meta bills templates
+ * per-send from Oct 2026) never depends on parsing message bodies.
  */
 export function makeGuardedSender(
 	ctx: ActionCtx,
@@ -88,7 +95,14 @@ export function makeGuardedSender(
 ): GuardedSender {
 	const adapter = getAdapter("whatsapp");
 	return {
-		async send(to: string, msg: OutboundMessage): Promise<void> {
+		async send(
+			to: string,
+			msg: OutboundMessage,
+		): Promise<SendReceipt | undefined> {
+			const logCategory: MessageCategory =
+				msg.kind === "template" ? "utility_template" : category;
+			const templateName =
+				msg.kind === "template" ? msg.templateName : undefined;
 			const decision = await ctx.runMutation(internal.wabaProtection.canSend, {
 				retailerId: retailerId ?? undefined,
 				toPhone: to,
@@ -98,31 +112,35 @@ export function makeGuardedSender(
 				await ctx.runMutation(internal.wabaProtection.logSend, {
 					retailerId: retailerId ?? undefined,
 					toWaPhone: to,
-					category,
+					category: logCategory,
 					status: decision.status,
+					templateName,
 				});
 				console.warn("WA send blocked by guardrail", {
 					retailerId,
 					category,
 					status: decision.status,
 				});
-				return;
+				return undefined;
 			}
 			try {
-				await adapter.send(to, msg);
+				const receipt = await adapter.send(to, msg);
 				await ctx.runMutation(internal.wabaProtection.logSend, {
 					retailerId: retailerId ?? undefined,
 					toWaPhone: to,
-					category,
+					category: logCategory,
 					status: "sent",
+					templateName,
 				});
+				return receipt;
 			} catch (err) {
 				await ctx.runMutation(internal.wabaProtection.logSend, {
 					retailerId: retailerId ?? undefined,
 					toWaPhone: to,
-					category,
+					category: logCategory,
 					status: "failed",
 					errorCode: err instanceof Error ? err.message : String(err),
+					templateName,
 				});
 				throw err;
 			}

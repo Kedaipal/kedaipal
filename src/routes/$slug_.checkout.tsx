@@ -174,6 +174,8 @@ function CheckoutRoute() {
 						storeName={retailer.storeName}
 						storeSlug={retailer.slug}
 						checkoutPhone={retailer.checkoutPhone}
+						locale={retailer.locale}
+						confirmPushEnabled={retailer.confirmPushEnabled ?? false}
 						offerSelfCollect={retailer.offerSelfCollect ?? false}
 						offerDelivery={retailer.offerDelivery ?? true}
 						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}

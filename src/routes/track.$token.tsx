@@ -37,6 +37,7 @@ import { CopyButton } from "../components/ui/copy-button";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { getConvexHttpClient } from "../lib/convex-server";
+import { formatPhone } from "../lib/customer";
 import { qrFilenameBase, saveImageFromUrl } from "../lib/download";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import {
@@ -55,7 +56,7 @@ import {
 	stageDescription,
 	stageLabel,
 } from "../lib/orderStatus";
-import { createWaAutoOpen } from "../lib/wa-auto-open";
+import { createWaAutoOpen, isWhatsAppWebview } from "../lib/wa-auto-open";
 import { buildOrderWaMessage, waOrderUrl } from "../lib/wa-order-message";
 
 type PaymentStatus = "unpaid" | "claimed" | "received";
@@ -432,28 +433,46 @@ function TrackingRoute() {
 				})}
 			</p>
 
-			{/* WhatsApp handoff — the ONE action for a fresh storefront order.
-			    Checkout can't open wa.me itself (popup blockers eat window.open
-			    after the awaited createOrder — see src/lib/wa-order-message.ts),
-			    so it lands the buyer here and THIS anchor tap — a fresh user
-			    gesture — carries the order to the seller's WhatsApp. Shown while
-			    the order is still pending (checkoutPhone is only served then), so
-			    it doubles as recovery for any buyer who bailed before sending.
-			    Counter orders bind via QR scan and never need this. */}
-			{order.status === "pending" &&
-			order.checkoutPhone &&
+			{/* WhatsApp handoff / confirmation state for storefront orders.
+			    - pending → the legacy Send card: checkout can't open wa.me itself
+			      (popup blockers eat window.open after the awaited createOrder —
+			      see src/lib/wa-order-message.ts), so the buyer sends from here.
+			      Doubles as recovery for any buyer who bailed before sending.
+			    - confirmed + push "sent" → "Order placed ✓" success card (86eyf1rck
+			      — Kedaipal's WABA pushed the confirmation; nothing left to send).
+			    - confirmed + push "failed" → the Send card again, reframed as the
+			      recovery path for an unreachable/typo'd number.
+			    - push "recovered" → nothing (the chat exists).
+			    Counter orders bind via QR scan and never render any of these. */}
+			{order.checkoutPhone &&
 			(order.source ?? "storefront") === "storefront" ? (
-				<SendOrderCard
-					order={order}
-					checkoutPhone={order.checkoutPhone}
-					autoSend={send === 1}
-					onAutoSendConsumed={() =>
-						// Drop ?send=1 from the URL (and history, via replace) the moment
-						// the auto-attempt starts, so back/refresh lands on a plain
-						// tracking URL instead of re-firing the redirect.
-						navigate({ search: {}, replace: true })
-					}
-				/>
+				order.status === "pending" ? (
+					<SendOrderCard
+						order={order}
+						checkoutPhone={order.checkoutPhone}
+						autoSend={send === 1}
+						onAutoSendConsumed={() =>
+							// Drop ?send=1 from the URL (and history, via replace) the moment
+							// the auto-attempt starts, so back/refresh lands on a plain
+							// tracking URL instead of re-firing the redirect.
+							navigate({ search: {}, replace: true })
+						}
+					/>
+				) : order.confirmationPushStatus === "failed" ? (
+					<SendOrderCard
+						order={order}
+						checkoutPhone={order.checkoutPhone}
+						pushFailed
+						autoSend={false}
+						onAutoSendConsumed={() => {}}
+					/>
+				) : order.confirmationPushStatus === "sent" &&
+					order.status === "confirmed" ? (
+					<ConfirmationSentCard
+						ms={order.retailerLocale === "ms"}
+						checkoutPhone={order.checkoutPhone}
+					/>
+				) : null
 			) : null}
 
 			{/* Current status card */}
@@ -1144,6 +1163,54 @@ type TrackedOrder = NonNullable<
 >;
 
 /**
+ * Fresh-arrival success state for the confirmation-push flow (86eyf1rck): the
+ * order committed at checkout and Kedaipal's WABA pushed the confirmation —
+ * there is nothing left for the buyer to send, so this card says exactly that
+ * (and offers a plain open-WhatsApp anchor for buyers who want the chat now).
+ * No auto-redirect anywhere on this path.
+ */
+function ConfirmationSentCard({
+	ms,
+	checkoutPhone,
+}: {
+	ms: boolean;
+	checkoutPhone: string;
+}) {
+	return (
+		<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-accent/40 bg-accent/5 p-4">
+			<div className="flex items-center gap-3">
+				<CheckCircle className="size-5 shrink-0 text-accent" />
+				<div className="min-w-0 flex-1">
+					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+						{ms ? "Pesanan diterima" : "Order placed"}
+					</p>
+					<p className="font-semibold">
+						{ms
+							? "Pengesahan dihantar ke WhatsApp anda"
+							: "Confirmation sent to your WhatsApp"}
+					</p>
+				</div>
+			</div>
+			<p className="text-sm text-muted-foreground">
+				{ms
+					? "Tak perlu hantar apa-apa — semak WhatsApp anda untuk pengesahan dan cara membayar. Halaman ini sentiasa menunjukkan status terkini pesanan anda."
+					: "Nothing to send — check your WhatsApp for the confirmation and how to pay. This page always shows your order's latest status."}
+			</p>
+			<Button asChild variant="outline" className="h-11 w-full">
+				<a
+					href={`https://wa.me/${checkoutPhone}`}
+					target="_blank"
+					rel="noopener noreferrer"
+				>
+					<MessageCircle className="size-4" />
+					{ms ? "Buka WhatsApp" : "Open WhatsApp"}
+				</a>
+			</Button>
+		</section>
+	);
+}
+
+/**
  * "Send your order on WhatsApp" — completes the storefront checkout handoff.
  * The wa.me message is rebuilt from the order's frozen snapshot on every
  * render, so this survives refreshes and lost sessions (no client state to
@@ -1164,11 +1231,16 @@ function SendOrderCard({
 	checkoutPhone,
 	autoSend,
 	onAutoSendConsumed,
+	pushFailed = false,
 }: {
 	order: TrackedOrder;
 	checkoutPhone: string;
 	autoSend: boolean;
 	onAutoSendConsumed: () => void;
+	/** Recovery mode (86eyf1rck): the WABA confirmation push to the checkout
+	 * number failed — reframe the card around reaching the buyer, not
+	 * confirming the (already confirmed) order. Never auto-fires. */
+	pushFailed?: boolean;
 }) {
 	const ms = order.retailerLocale === "ms";
 	const storeName = order.storeName || (ms ? "kedai" : "the store");
@@ -1192,7 +1264,17 @@ function SendOrderCard({
 			order.mockupWaivedAt == null,
 	});
 	const waUrl = waOrderUrl(checkoutPhone, message);
-	const [sending, setSending] = useState(autoSend);
+	// Inside WhatsApp's own in-app browser the wa.me auto-redirect hits a
+	// "Continue to chat" interstitial + open-app prompt while the buyer is
+	// ALREADY in WhatsApp — most bail there. Skip the auto-fire entirely and
+	// render the manual button (a deliberate tap survives the interstitial far
+	// better than a surprise redirect). Mount-only read: the UA can't change.
+	const [inWaWebview] = useState(
+		() =>
+			typeof navigator !== "undefined" &&
+			isWhatsAppWebview(navigator.userAgent),
+	);
+	const [sending, setSending] = useState(autoSend && !inWaWebview);
 
 	// Auto-fire the handoff exactly once per checkout arrival. Mount-only by
 	// design: `autoSend` is fixed at mount (the search param is stripped before
@@ -1200,7 +1282,10 @@ function SendOrderCard({
 	// biome-ignore lint/correctness/useExhaustiveDependencies: mount-only auto-attempt, see above
 	useEffect(() => {
 		if (!autoSend) return;
+		// Consume ?send=1 even when skipping (WA webview), so refresh/back
+		// lands on a plain tracking URL either way.
 		onAutoSendConsumed();
+		if (inWaWebview) return;
 		const ctrl = createWaAutoOpen({
 			openUrl: () => window.location.assign(waUrl),
 			onSettled: () => setSending(false),
@@ -1232,7 +1317,13 @@ function SendOrderCard({
 				<Send className="size-5 shrink-0 text-accent" />
 				<div className="min-w-0 flex-1">
 					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-						{ms ? "Satu langkah lagi" : "One last step"}
+						{pushFailed
+							? ms
+								? "Kami tak dapat hubungi anda"
+								: "We couldn't reach you"
+							: ms
+								? "Satu langkah lagi"
+								: "One last step"}
 					</p>
 					<p className="font-semibold">
 						{ms
@@ -1242,9 +1333,13 @@ function SendOrderCard({
 				</div>
 			</div>
 			<p className="text-sm text-muted-foreground">
-				{ms
-					? `Pesanan anda telah disimpan. Hantar di WhatsApp supaya ${storeName} boleh sahkan pesanan dan hubungi anda.`
-					: `Your order is saved. Send it on WhatsApp so ${storeName} can confirm it and reach you.`}
+				{pushFailed
+					? ms
+						? `Pengesahan WhatsApp ke ${formatPhone(order.customer.waPhone ?? "")} tak sampai — nombor itu mungkin tersilap taip. Hantar mesej ini supaya ${storeName} boleh hubungi anda di nombor yang betul.`
+						: `Your WhatsApp confirmation to ${formatPhone(order.customer.waPhone ?? "")} didn't go through — that number may have a typo. Send this message so ${storeName} can reach you on the right one.`
+					: ms
+						? `Pesanan anda telah disimpan. Hantar di WhatsApp supaya ${storeName} boleh sahkan pesanan dan hubungi anda.`
+						: `Your order is saved. Send it on WhatsApp so ${storeName} can confirm it and reach you.`}
 			</p>
 			{sending ? (
 				<Button className="h-12 w-full text-base" disabled>
@@ -1259,20 +1354,40 @@ function SendOrderCard({
 					</a>
 				</Button>
 			)}
-			<div className="flex items-center justify-between gap-2 rounded-xl bg-muted/50 px-3 py-2.5">
-				<p className="text-xs text-muted-foreground">
-					{ms
-						? "WhatsApp tak terbuka? Salin pautan dan buka dalam pelayar anda."
-						: "WhatsApp didn't open? Copy the link and open it in your browser."}
-				</p>
-				<CopyButton
-					value={waUrl}
-					ariaLabel={ms ? "Salin pautan WhatsApp" : "Copy WhatsApp link"}
-					successMessage={
-						ms ? "Pautan WhatsApp disalin" : "WhatsApp link copied"
-					}
-				/>
-			</div>
+			{inWaWebview ? (
+				// WA in-app browser: a wa.me link is exactly what just failed to open,
+				// so the fallback copies the MESSAGE BODY — the buyer pastes it
+				// straight into the store's chat they came from.
+				<div className="flex items-center justify-between gap-2 rounded-xl bg-muted/50 px-3 py-2.5">
+					<p className="text-xs text-muted-foreground">
+						{ms
+							? "Butang tak berfungsi? Salin mesej pesanan dan tampal terus dalam chat WhatsApp."
+							: "Button not working? Copy your order message and paste it into the WhatsApp chat."}
+					</p>
+					<CopyButton
+						value={message}
+						ariaLabel={ms ? "Salin mesej pesanan" : "Copy order message"}
+						successMessage={
+							ms ? "Mesej pesanan disalin" : "Order message copied"
+						}
+					/>
+				</div>
+			) : (
+				<div className="flex items-center justify-between gap-2 rounded-xl bg-muted/50 px-3 py-2.5">
+					<p className="text-xs text-muted-foreground">
+						{ms
+							? "WhatsApp tak terbuka? Salin pautan dan buka dalam pelayar anda."
+							: "WhatsApp didn't open? Copy the link and open it in your browser."}
+					</p>
+					<CopyButton
+						value={waUrl}
+						ariaLabel={ms ? "Salin pautan WhatsApp" : "Copy WhatsApp link"}
+						successMessage={
+							ms ? "Pautan WhatsApp disalin" : "WhatsApp link copied"
+						}
+					/>
+				</div>
+			)}
 		</section>
 	);
 }

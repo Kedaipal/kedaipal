@@ -54,6 +54,12 @@ interface CheckoutPageProps {
 	storeName: string;
 	storeSlug: string;
 	checkoutPhone: string | undefined;
+	/** Store locale — localizes the buyer-facing PDPA line under the phone
+	 * field (the rest of checkout is EN pending the storefront i18n phase). */
+	locale: string;
+	/** Confirmation-push path active (86eyf1rck): the CTA promises a WhatsApp
+	 * confirmation FROM Kedaipal instead of the wa.me send-it-yourself step. */
+	confirmPushEnabled: boolean;
 	offerSelfCollect: boolean;
 	offerDelivery: boolean;
 	minFulfilmentNoticeDays: number | undefined;
@@ -156,6 +162,8 @@ export function CheckoutPage({
 	storeName,
 	storeSlug,
 	checkoutPhone,
+	locale,
+	confirmPushEnabled,
 	offerSelfCollect,
 	offerDelivery,
 	minFulfilmentNoticeDays,
@@ -291,6 +299,9 @@ export function CheckoutPage({
 	const form = useAppForm({
 		defaultValues: {
 			name: "",
+			// Buyer's WhatsApp number (86eyf1rck) — required: the confirmation
+			// push (or the wa.me fallback) is how the order reaches a chat at all.
+			waPhone: "",
 			deliveryMethod: defaultMethod,
 			address: loadSavedAddress(),
 			// Empty when delivery, the chosen id when self-collect with 2+ options,
@@ -375,7 +386,7 @@ export function CheckoutPage({
 			)?.customImageStorageId;
 
 			try {
-				const { trackingToken } = await createOrder({
+				const { trackingToken, confirmedAtCreate } = await createOrder({
 					retailerId,
 					items: cart.items.map((i) => ({
 						variantId: i.variantId,
@@ -385,6 +396,10 @@ export function CheckoutPage({
 					channel: "whatsapp",
 					customer: {
 						name: value.name?.trim() || undefined,
+						// Raw as typed — the server normalizes ("012-345 6789" →
+						// "60123456789") via assertValidMyWaPhone, the same bridge the
+						// counter manual bind uses.
+						waPhone: value.waPhone.trim(),
 					},
 					deliveryMethod: value.deliveryMethod,
 					deliveryAddress: sanitizedAddress,
@@ -409,14 +424,17 @@ export function CheckoutPage({
 				// after the awaited createOrder round-trip we're outside the submit
 				// tap's transient user activation, so popup blockers (iOS Safari,
 				// IG/FB in-app webviews) silently swallow a new tab — order created,
-				// buyer stranded. The tracking page shows the "Send order on
-				// WhatsApp" anchor instead; ?send=1 makes it auto-fire the wa.me
-				// redirect (same-tab, never popup-blocked) so the buyer still lands
-				// in WhatsApp without an extra tap. See docs/order-lifecycle.md.
+				// buyer stranded. Push path (confirmedAtCreate): the order is already
+				// committed + confirmed and Kedaipal's WABA is pushing the
+				// confirmation, so the tracking page shows the "Order placed ✓" state
+				// — NO ?send=1, no wa.me redirect anywhere. Legacy path: ?send=1
+				// auto-fires the wa.me redirect (same-tab, never popup-blocked) so
+				// the buyer still lands in WhatsApp without an extra tap. See
+				// docs/order-lifecycle.md.
 				navigate({
 					to: "/track/$token",
 					params: { token: trackingToken },
-					search: { send: 1 },
+					search: confirmedAtCreate ? {} : { send: 1 },
 				});
 			} catch (err) {
 				setServerError(convexErrorMessage(err));
@@ -632,7 +650,13 @@ export function CheckoutPage({
 					}
 					className="h-12 w-full text-base"
 				>
-					{isSubmitting ? "Sending…" : "Send order on WhatsApp"}
+					{isSubmitting
+						? confirmPushEnabled
+							? "Placing order…"
+							: "Sending…"
+						: confirmPushEnabled
+							? "Place order"
+							: "Send order on WhatsApp"}
 				</Button>
 			)}
 		</form.Subscribe>
@@ -644,11 +668,15 @@ export function CheckoutPage({
 			{blockedReason}
 		</p>
 	) : null;
-	// The handoff is a two-step by design (tracking page fires the wa.me link)
-	// — say what happens next so the CTA never feels like a bait-and-switch.
+	// Say what happens next so the CTA never feels like a bait-and-switch.
+	// Push path: the order commits here and the confirmation is pushed TO the
+	// buyer's WhatsApp — no redirect. Legacy path: the handoff is a two-step by
+	// design (tracking page fires the wa.me link).
 	const reassurance = (
 		<p className="text-center text-xs text-muted-foreground">
-			Opens WhatsApp to confirm with {storeName} — nothing is paid yet.
+			{confirmPushEnabled
+				? `Your order goes straight to ${storeName} — confirmation lands in your WhatsApp. Nothing is paid yet.`
+				: `Opens WhatsApp to confirm with ${storeName} — nothing is paid yet.`}
 		</p>
 	);
 	const privacyLine = (
@@ -791,6 +819,56 @@ export function CheckoutPage({
 								/>
 							)}
 						</form.AppField>
+						<form.AppField name="waPhone">
+							{(field) => (
+								<field.TextField
+									label="WhatsApp number"
+									type="tel"
+									inputMode="tel"
+									autoComplete="tel"
+									placeholder="e.g. 012-345 6789"
+									required
+									description={
+										confirmPushEnabled
+											? "Your order confirmation lands in this WhatsApp. Malaysian mobile — we add the country code automatically."
+											: `${storeName} reaches you on this WhatsApp about your order. Malaysian mobile — we add the country code automatically.`
+									}
+								/>
+							)}
+						</form.AppField>
+						{/* PDPA notice-at-collection — the buyer-facing line the WhatsApp
+						    flows carry via privacyNoticeLine; localized to the store
+						    locale like the tracking page (rest of checkout copy is EN
+						    pending the storefront i18n phase). */}
+						<p className="text-xs text-muted-foreground">
+							{locale === "ms" ? (
+								<>
+									Nombor anda digunakan untuk pesanan ini sahaja — pengesahan
+									dan status pesanan dihantar ke WhatsApp anda.{" "}
+									<a
+										href="/privacy"
+										target="_blank"
+										rel="noopener noreferrer"
+										className="underline hover:text-foreground"
+									>
+										Dasar Privasi
+									</a>
+								</>
+							) : (
+								<>
+									Your number is used for this order only — confirmations and
+									status updates go to your WhatsApp.{" "}
+									<a
+										href="/privacy"
+										target="_blank"
+										rel="noopener noreferrer"
+										className="underline hover:text-foreground"
+									>
+										Privacy Policy
+									</a>
+								</>
+							)}
+						</p>
 					</CheckoutSection>
 
 					<CheckoutSection

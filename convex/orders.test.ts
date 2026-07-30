@@ -1,8 +1,8 @@
 /// <reference types="vite/client" />
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { api } from "./_generated/api";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { todayMytMidnight } from "./lib/fulfilmentDate";
 import { sortInboxOrders } from "./lib/orderInboxFilter";
@@ -5410,5 +5410,158 @@ describe("orders — shipment tracking is delivery-only (PR #151 review)", () =>
 		expect(updated?.status).toBe("shipped");
 		expect(updated?.courierName).toBeUndefined();
 		expect(updated?.trackingNo).toBeUndefined();
+	});
+});
+
+describe("orders — confirmation push at create (86eyf1rck)", () => {
+	afterEach(() => {
+		delete process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE;
+		delete process.env.WHATSAPP_CHECKOUT_PHONE;
+	});
+
+	async function createWith(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+		waPhone?: string,
+	) {
+		return t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone },
+			deliveryAddress: validAddress,
+		});
+	}
+
+	async function orderBy(t: ReturnType<typeof setup>, shortId: string) {
+		return t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+	}
+
+	test("template env + phone → committed as confirmed, activation stamped, customer linked", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const result = await createWith(t, retailer._id, productId, "60123456789");
+		expect(result.confirmedAtCreate).toBe(true);
+
+		const order = await orderBy(t, result.shortId);
+		expect(order?.status).toBe("confirmed");
+		expect(order?.customerId).toBeDefined();
+		// Timeline keeps both beats: placed, then confirmed at checkout.
+		const events = await t.run(async (ctx) =>
+			ctx.db
+				.query("orderEvents")
+				.filter((q) => q.eq(q.field("orderId"), order!._id))
+				.collect(),
+		);
+		expect(events.map((e) => e.status)).toEqual(["pending", "confirmed"]);
+		// First confirmed order activates the store (same milestone as the legacy
+		// inbound-confirm path).
+		const freshRetailer = await t.run(async (ctx) => ctx.db.get(retailer._id));
+		expect(freshRetailer?.activatedAt).toBeTypeOf("number");
+	});
+
+	test("template env set but NO phone → legacy pending flow", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const result = await createWith(t, retailer._id, productId, undefined);
+		expect(result.confirmedAtCreate).toBeUndefined();
+		expect((await orderBy(t, result.shortId))?.status).toBe("pending");
+	});
+
+	test("template env unset → degrades to today's pending + wa.me flow even with a phone", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const result = await createWith(t, retailer._id, productId, "60123456789");
+		expect(result.confirmedAtCreate).toBeUndefined();
+		const order = await orderBy(t, result.shortId);
+		expect(order?.status).toBe("pending");
+		expect(order?.confirmationPushStatus).toBeUndefined();
+	});
+
+	test("local-format MY number is normalized to the inbound (60…) form", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await createWith(
+			t,
+			retailer._id,
+			productId,
+			"012-345 6789",
+		);
+		expect((await orderBy(t, shortId))?.customer.waPhone).toBe("60123456789");
+	});
+
+	test("junk phone is rejected", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await expect(
+			createWith(t, retailer._id, productId, "12345"),
+		).rejects.toThrow(/WhatsApp number/);
+	});
+
+	test("get serves checkoutPhone for the failed-push recovery card (confirmed order)", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		process.env.WHATSAPP_CHECKOUT_PHONE = "601155555555";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await createWith(
+			t,
+			retailer._id,
+			productId,
+			"60123456789",
+		);
+		const order = await orderBy(t, shortId);
+
+		// Push believed sent → checkoutPhone still served (Open-WhatsApp anchor).
+		await t.mutation(internal.orders.recordConfirmationPush, {
+			orderId: order!._id,
+			status: "sent",
+			wamid: "wamid.X1",
+		});
+		let viewed = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(viewed?.status).toBe("confirmed");
+		expect(viewed?.checkoutPhone).toBe("601155555555");
+		expect(viewed?.confirmationPushStatus).toBe("sent");
+
+		// Push failed → the manual Send card needs the wa.me target.
+		await t.mutation(internal.orders.markConfirmationPushFailed, {
+			wamid: "wamid.X1",
+		});
+		viewed = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(viewed?.confirmationPushStatus).toBe("failed");
+		expect(viewed?.checkoutPhone).toBe("601155555555");
+	});
+
+	test("get hides checkoutPhone on a confirmed legacy order (no push state)", async () => {
+		process.env.WHATSAPP_CHECKOUT_PHONE = "601155555555";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await createWith(
+			t,
+			retailer._id,
+			productId,
+			"60123456789",
+		);
+		const order = await orderBy(t, shortId);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order!._id, { status: "confirmed" });
+		});
+		const viewed = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(viewed?.checkoutPhone).toBeUndefined();
 	});
 });

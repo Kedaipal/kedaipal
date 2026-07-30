@@ -19,7 +19,28 @@ function readCredentials(): WaCredentials {
 	return { accessToken, phoneNumberId };
 }
 
-async function postMessage(payload: Record<string, unknown>): Promise<void> {
+/**
+ * The Meta-approved utility template for the storefront order-confirmation
+ * push (86eyf1rck) — `order_confirmation_utility` in production. Unset ⇒ the
+ * push path is INACTIVE and storefront checkout degrades to the legacy
+ * buyer-sends-first wa.me handoff, so the code ships decoupled from template
+ * approval. Read at call time (same posture as readCredentials) so tests can
+ * stub via process.env.
+ */
+export function orderConfirmTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/**
+ * POST one message payload to the Cloud API. Returns Meta's message id
+ * (`wamid…`) when the response carries one — the ONLY key the `statuses`
+ * webhook later identifies the message by, so delivery-failure handling
+ * (typo'd number → failed confirmation push) depends on capturing it here.
+ */
+async function postMessage(
+	payload: Record<string, unknown>,
+): Promise<string | undefined> {
 	const { accessToken, phoneNumberId } = readCredentials();
 	const url = `https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`;
 	const res = await fetch(url, {
@@ -33,6 +54,17 @@ async function postMessage(payload: Record<string, unknown>): Promise<void> {
 	if (!res.ok) {
 		const body = await res.text();
 		throw new Error(`WhatsApp send failed (${res.status}): ${body}`);
+	}
+	try {
+		const body = (await res.json()) as {
+			messages?: Array<{ id?: unknown }>;
+		};
+		const id = body?.messages?.[0]?.id;
+		return typeof id === "string" ? id : undefined;
+	} catch {
+		// A 2xx with an unparseable body — the send succeeded, we just can't
+		// correlate its statuses webhook later. Never fail the send over it.
+		return undefined;
 	}
 }
 
@@ -133,8 +165,8 @@ export async function sendTemplate(
 	templateName: string,
 	languageCode: string,
 	components?: ReadonlyArray<Record<string, unknown>>,
-): Promise<void> {
-	await postMessage({
+): Promise<string | undefined> {
+	return postMessage({
 		messaging_product: "whatsapp",
 		recipient_type: "individual",
 		to: toPhone,

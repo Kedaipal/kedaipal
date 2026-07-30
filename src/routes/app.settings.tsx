@@ -1649,6 +1649,14 @@ function MessageTemplatesForm({
 								maxLength={1000}
 								className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 							/>
+							{key === "confirm" ? (
+								<p className="text-xs text-muted-foreground leading-relaxed">
+									The very first confirmation for an online order is sent from
+									a fixed Meta-approved template (WhatsApp's rule for
+									messaging a buyer who hasn't replied yet). Your copy here
+									takes over from the buyer's first reply onward.
+								</p>
+							) : null}
 						</label>
 					);
 				})}
