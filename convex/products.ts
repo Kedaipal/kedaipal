@@ -1393,10 +1393,12 @@ export const getPublicBySlug = query({
 			)
 			.unique();
 		// Fallback for rows the slug backfill hasn't stamped yet: match on the
-		// slug derived from the name. Bounded by the 50-product cap, and once a
-		// row has a stored slug the index arm answers first, so this never runs
-		// on a migrated catalog. Keeps every product addressable the moment the
-		// page ships, independent of when the backfill is run.
+		// slug derived from the name. Bounded by the 50-product cap. A HIT on a
+		// migrated catalog never reaches here (the index arm answers first); a
+		// MISS — an unknown or probed slug — always does, which is the same
+		// bounded scan `list` already runs on every storefront page load.
+		// Keeps every product addressable the moment the page ships,
+		// independent of when the backfill is run.
 		const row =
 			indexed ??
 			(
@@ -1419,6 +1421,61 @@ export const getPublicBySlug = query({
 });
 
 /**
+ * Every storefront-visible product as `{storeSlug, productSlug, updatedAt}` for
+ * `/sitemap.xml`. Without this the product pages would be undiscoverable: the
+ * grid's `<Link>`s make them crawlable once a bot is already on a storefront,
+ * but the sitemap is what tells Google the pages exist at all — and the pages
+ * carry `robots: index, follow`, a canonical and `Product` JSON-LD that are
+ * inert until something points at them.
+ *
+ * Same visibility rules as `list`, applied per retailer (active, not hidden,
+ * not category-suppressed) — a counter-only or archived product must not appear
+ * in a public sitemap any more than it appears on the storefront. Slug-less
+ * legacy rows are SKIPPED rather than emitted via `effectiveSlug`: a derived
+ * slug is a temporary address, and publishing one to a crawler risks indexing a
+ * URL the backfill is about to change. Cross-retailer scan, like
+ * `retailers.listSlugsForSitemap` — the route caches for an hour.
+ */
+export const listForSitemap = query({
+	args: {},
+	handler: async (
+		ctx,
+	): Promise<
+		Array<{ storeSlug: string; productSlug: string; updatedAt: number }>
+	> => {
+		const retailers = await ctx.db.query("retailers").collect();
+		const out: Array<{
+			storeSlug: string;
+			productSlug: string;
+			updatedAt: number;
+		}> = [];
+		for (const retailer of retailers) {
+			const rows = await ctx.db
+				.query("products")
+				.withIndex("by_retailer_active", (q) =>
+					q.eq("retailerId", retailer._id).eq("active", true),
+				)
+				.filter((q) =>
+					q.and(
+						q.neq(q.field("hidden"), true),
+						q.neq(q.field("hiddenByCategory"), true),
+					),
+				)
+				.collect();
+			for (const row of rows) {
+				if (row.slug === undefined) continue;
+				out.push({
+					storeSlug: retailer.slug,
+					productSlug: row.slug,
+					updatedAt: row._creationTime,
+				});
+			}
+		}
+		return out;
+	},
+});
+
+/**
  * One-shot backfill: give every legacy product (created before slugs existed)
  * its permanent URL. Idempotent (rows with a slug are skipped) and batched +
  * self-scheduling to stay inside transaction limits. Run once per deployment
@@ -1426,8 +1483,12 @@ export const getPublicBySlug = query({
  *
  *   npx convex run products:backfillProductSlugs
  *
- * Until it has run, slug-less rows simply keep the in-place detail sheet —
- * the storefront never breaks, they just aren't linkable yet.
+ * Until it has run, slug-less rows stay reachable through `effectiveSlug` (the
+ * derived name-slug arm of `getPublicBySlug`) — nothing 404s, the URLs just
+ * aren't stored yet. Run it right after the deploy anyway: `ensureUniqueProductSlug`
+ * only sees STORED slugs, so until every row has one a brand-new product can be
+ * handed the slug a legacy row is currently answering to, and the older product's
+ * link would resolve to the newer one.
  */
 export const backfillProductSlugs = internalMutation({
 	args: { cursor: v.optional(v.string()) },

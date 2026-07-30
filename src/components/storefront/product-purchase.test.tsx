@@ -1,7 +1,19 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GoToCheckoutBar } from "./product-purchase";
+import type { Id } from "../../../convex/_generated/dataModel";
+import type { StorefrontProduct } from "./product-card";
+import {
+	CustomOrderCard,
+	GoToCheckoutBar,
+	OptionPills,
+	PurchaseStepper,
+	useProductPurchase,
+} from "./product-purchase";
+
+// The buy box uses useMutation for the buyer's reference-image upload; stub it
+// so the pieces render without a ConvexProvider.
+vi.mock("convex/react", () => ({ useMutation: () => vi.fn() }));
 
 afterEach(cleanup);
 
@@ -65,5 +77,128 @@ describe("GoToCheckoutBar", () => {
 		expect(
 			screen.queryByRole("button", { name: /go to checkout/i }),
 		).toBeNull();
+	});
+});
+
+const RID = "r1" as unknown as Id<"retailers">;
+
+/** Two sizes + a custom line, hard-block stock — the shape a live stock change
+ * can move under a buyer who's mid-decision. */
+function cake(onHandM: number): StorefrontProduct {
+	return {
+		_id: "p1",
+		name: "Cake",
+		slug: "cake",
+		currency: "MYR",
+		imageUrls: [],
+		options: [{ name: "Size", values: ["S", "M"] }],
+		priceFrom: 1000,
+		priceTo: 1500,
+		hasQuotePricing: true,
+		inStock: true,
+		totalOnHand: 3 + onHandM,
+		variants: [
+			{
+				_id: "vS",
+				optionValues: ["S"],
+				onHand: 3,
+				active: true,
+				blockWhenOutOfStock: true,
+				requiresProof: false,
+				price: 1000,
+				imageUrls: [],
+			},
+			{
+				_id: "vM",
+				optionValues: ["M"],
+				onHand: onHandM,
+				active: true,
+				blockWhenOutOfStock: true,
+				requiresProof: false,
+				price: 1500,
+				imageUrls: [],
+			},
+			{
+				_id: "vC",
+				optionValues: [],
+				onHand: 0,
+				active: true,
+				blockWhenOutOfStock: false,
+				requiresProof: true,
+				price: 0,
+				isCustom: true,
+				customLabel: "Bespoke",
+				customPrompt: "Tell us your theme",
+				imageUrls: [],
+			},
+		],
+	} as unknown as StorefrontProduct;
+}
+
+/** Minimal harness: the buy-box pieces a buyer actually fills in. */
+function BuyBox({ product }: { product: StorefrontProduct }) {
+	const pp = useProductPurchase({ product, retailerId: RID, cartQuantity: 0 });
+	return (
+		<>
+			<OptionPills pp={pp} />
+			<PurchaseStepper pp={pp} />
+			<CustomOrderCard pp={pp} onAdd={vi.fn()} />
+		</>
+	);
+}
+
+/**
+ * The product PAGE feeds `useProductPurchase` a LIVE `getPublicBySlug` result,
+ * so any write to the row or its variants — another buyer's order decrementing
+ * stock, a seller price edit — hands the hook a brand-new object for the SAME
+ * product. The reset must key on identity (`_id`), never the object, or an
+ * in-flight buyer silently loses what they've entered. (The detail sheet was
+ * immune by accident: it holds a snapshot in the caller's state.)
+ */
+describe("useProductPurchase — a live product update is not a new product", () => {
+	it("keeps the buyer's option, quantity and custom note when stock moves under them", () => {
+		const { rerender } = render(<BuyBox product={cake(2)} />);
+
+		// Buyer picks M, steps to 2, and types their custom spec.
+		fireEvent.click(screen.getByRole("button", { name: "M" }));
+		fireEvent.click(screen.getByRole("button", { name: /increase quantity/i }));
+		const note = screen.getByPlaceholderText("Tell us your theme");
+		fireEvent.change(note, { target: { value: "Two tiers, mint icing" } });
+		expect(screen.getByText("2")).toBeTruthy();
+
+		// Someone else's order lands: same product, one less M in stock.
+		rerender(<BuyBox product={cake(1)} />);
+
+		// Selection survives (the pill is still the selected one)…
+		expect(screen.getByRole("button", { name: "M" }).className).toContain(
+			"bg-accent",
+		);
+		// …the typed spec survives…
+		expect((note as HTMLTextAreaElement).value).toBe("Two tiers, mint icing");
+		// …and the quantity clamps to the new ceiling instead of resetting to 1.
+		expect(screen.getByText("1")).toBeTruthy();
+	});
+
+	it("still resets everything when a DIFFERENT product opens", () => {
+		const { rerender } = render(<BuyBox product={cake(2)} />);
+		fireEvent.click(screen.getByRole("button", { name: "M" }));
+		fireEvent.change(screen.getByPlaceholderText("Tell us your theme"), {
+			target: { value: "Two tiers" },
+		});
+
+		const other = {
+			...cake(2),
+			_id: "p2",
+			name: "Kuih box",
+		} as StorefrontProduct;
+		rerender(<BuyBox product={other} />);
+
+		expect(screen.getByRole("button", { name: "M" }).className).not.toContain(
+			"bg-accent",
+		);
+		expect(
+			(screen.getByPlaceholderText("Tell us your theme") as HTMLTextAreaElement)
+				.value,
+		).toBe("");
 	});
 });

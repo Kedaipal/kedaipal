@@ -17,12 +17,14 @@ see past. A route fixes the architecture, not just the paint:
 - **Desktop** gets a two-column layout (`lg:`): numbered form sections left,
   **sticky receipt summary** right with the CTA under the money it commits to.
 - **Mobile** stays single-column: summary first (this page IS the review),
-  then the sections, with a **sticky bottom bar** (live total + CTA) always
-  in thumb reach. Sticky, not fixed: `position: fixed; bottom: 0` pins to
-  the *layout* viewport, so a phone browser's expanding bottom toolbar
-  (scroll-up gesture) covered the bar's lower edge — `sticky bottom-0` is in
-  flow, tracks the *visual* viewport through toolbar changes, and needs no
-  clearance padding under the page (design-system rule #4).
+  then the sections, with a **fixed bottom bar** (live total + CTA) always in
+  thumb reach — same `fixed inset-x-0 bottom-0` as `CartBar` and the product
+  page's purchase bar, so the powered-by footer floats above it exactly like
+  every other storefront page (design-system rule #4). An earlier pass tried
+  `sticky` here on the theory that a form needs an in-flow bar; tested on a
+  phone it just welded the badge to the bar and made checkout the odd page
+  out. The route reserves the bar's **measured** height
+  (`--storefront-bar-h`), so there's no dead space under the badge.
 - Browser **back** returns to the store; **refresh** keeps the buyer's place
   (the cart is localStorage, keyed per retailer); an abandoned desktop cart
   can be returned to via URL. `noindex` — a checkout is transactional.
@@ -151,7 +153,7 @@ would have shared one duplicated heading. Purely semantic — identical styling
 either way.
 
 The bottom CTA bar's stacking against the footer (fixed bar, measured
-clearance) is described in
+clearance) is written up once in
 [`storefront-product-pages.md`](./storefront-product-pages.md#the-bottom-bar-and-the-footer).
 
 ## Follow-ups (PR2 / PR3 of 86eybrhrt)

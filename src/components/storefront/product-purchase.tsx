@@ -83,16 +83,31 @@ export function useProductPurchase({
 	// the view is open.
 	const cartQuantityRef = useRef(cartQuantity);
 	cartQuantityRef.current = cartQuantity;
+	// Same trick for the product doc itself, for a sharper reason: the product
+	// PAGE feeds this hook a LIVE query result, so anything that writes the row
+	// or its variants — someone else's order decrementing hard-block stock, the
+	// seller editing a price — hands us a brand-new object for the SAME product.
+	// Depending on that object would re-run the reset below and silently wipe an
+	// in-flight buyer's option pills, quantity, custom note and uploaded
+	// reference photo. The effect keys on `product._id` instead and reads the
+	// current doc through here. (The detail SHEET was immune by accident: it
+	// gets a snapshot held in the caller's state.)
+	const productRef = useRef(product);
+	productRef.current = product;
+	const productId = product?._id;
 
-	// Reset selection + quantity whenever a new product opens. Axes with a single
-	// value auto-select (one less tap); the implicit default variant resolves
-	// immediately when there are no axes. The stepper opens at the REMAINING
-	// amount toward the product's minimum order quantity (min 20, 12 in cart →
-	// starts at 8) so the buyer lands on a quantity that will actually check out.
+	// Reset selection + quantity whenever a new product opens — identity, not a
+	// fresh copy of the same one. Axes with a single value auto-select (one less
+	// tap); the implicit default variant resolves immediately when there are no
+	// axes. The stepper opens at the REMAINING amount toward the product's
+	// minimum order quantity (min 20, 12 in cart → starts at 8) so the buyer
+	// lands on a quantity that will actually check out.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: productId is the deliberate reset TRIGGER, not a value the body reads — the doc itself comes from productRef so a live re-push can't wipe buyer input.
 	useEffect(() => {
-		if (!product) return;
+		const opened = productRef.current;
+		if (!opened) return;
 		setQuantity(
-			Math.max(1, (product.minQuantity ?? 1) - cartQuantityRef.current),
+			Math.max(1, (opened.minQuantity ?? 1) - cartQuantityRef.current),
 		);
 		setCustomNote("");
 		setImageError(null);
@@ -102,11 +117,11 @@ export function useProductPurchase({
 		}
 		setCustomImage(null);
 		setSelection(
-			(product.options ?? []).map((axis) =>
+			(opened.options ?? []).map((axis) =>
 				axis.values.length === 1 ? axis.values[0] : null,
 			),
 		);
-	}, [product]);
+	}, [productId]);
 
 	// Revoke the last preview on unmount.
 	useEffect(

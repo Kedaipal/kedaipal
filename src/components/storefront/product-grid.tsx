@@ -1,4 +1,4 @@
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import { ChevronRight, Search, X } from "lucide-react";
 import { type ReactNode, useState } from "react";
@@ -20,8 +20,8 @@ interface ProductGridProps {
 	/**
 	 * Pre-filtered product set (the nested category page passes the category's
 	 * own products in within-category order). When set, the grid skips its own
-	 * `products.list` query and renders these — same cards, search, detail
-	 * sheet and cart-add, no forked component.
+	 * `products.list` query and renders these — same cards, search, product
+	 * links and cart-add, no forked component.
 	 */
 	products?: StorefrontProduct[];
 	/**
@@ -32,12 +32,16 @@ interface ProductGridProps {
 	 */
 	beforeGrid?: ReactNode;
 	/**
-	 * Store slug for category deep links. When set, the search also matches
-	 * CATEGORY names — matching categories render as tappable tiles above the
-	 * product results. (Shares the rail's `listActivePublic` subscription, so
-	 * no extra read cost.)
+	 * Store slug — every card links to `/{storeSlug}/p/{productSlug}`, and the
+	 * search also matches CATEGORY names, rendering matches as tappable tiles
+	 * above the product results. (Shares the rail's `listActivePublic`
+	 * subscription, so no extra read cost.)
+	 *
+	 * Required: a card with nowhere to link is a dead tile, so there's no
+	 * meaningful grid without it. Both mount points (store home, category page)
+	 * have the slug in hand.
 	 */
-	storeSlug?: string;
+	storeSlug: string;
 }
 
 export function ProductGrid({
@@ -58,27 +62,8 @@ export function ProductGrid({
 	const products = productsOverride ?? listed;
 	// Same query the CategoryRail subscribes to — Convex dedupes identical
 	// (query, args) subscriptions, so this costs nothing extra.
-	const categories = useQuery(
-		api.categories.listActivePublic,
-		storeSlug ? { retailerId } : "skip",
-	);
+	const categories = useQuery(api.categories.listActivePublic, { retailerId });
 	const [searchQuery, setSearchQuery] = useState("");
-	const navigate = useNavigate();
-
-	// Opening a product goes to its PAGE on EVERY breakpoint. A modal on mobile
-	// hid the one thing PR2 exists to give buyers — the product's URL in the
-	// address bar, which is how sharing actually happens on a phone — and cost
-	// more screen on the smaller device, not less. `slug` is always present:
-	// every write path assigns one and the server derives a fallback for
-	// un-backfilled rows (see products.effectiveSlug).
-	// See docs/storefront-product-pages.md.
-	const openProductView = (p: StorefrontProduct) => {
-		if (!storeSlug) return;
-		navigate({
-			to: "/$slug/p/$productSlug",
-			params: { slug: storeSlug, productSlug: p.slug },
-		});
-	};
 
 	if (products === undefined) {
 		return (
@@ -109,15 +94,15 @@ export function ProductGrid({
 		: products;
 	// Category-name matches surface as tappable tiles above product results.
 	const matchedCategories =
-		searchQuery && storeSlug && categories
+		searchQuery && categories
 			? categories.filter((c) =>
 					c.name.toLowerCase().includes(searchQuery.toLowerCase()),
 				)
 			: [];
 
 	// Cart-line mapping + toast live in the shared helper (product-purchase.tsx)
-	// so the grid's quick-add, the sheet and the product page snapshot lines
-	// identically.
+	// so the grid's quick-add, the product page and the seller's preview sheet
+	// snapshot lines identically.
 	const addVariant = (
 		p: StorefrontProduct,
 		variant: StorefrontVariant,
@@ -125,8 +110,8 @@ export function ProductGrid({
 		custom?: { note?: string; imageStorageId?: string },
 	) => addVariantToCart(cart, p, variant, qty, custom);
 
-	// Quick-add only fires for single-variant products (multi-variant cards open
-	// the sheet instead), so the sole variant is unambiguous. A product with a
+	// Quick-add only fires for single-variant products (multi-variant cards link
+	// to the product page instead), so the sole variant is unambiguous. A product with a
 	// minimum order quantity tops the cart up to it in one tap (the card shows a
 	// "Min N" chip, so the bigger add is expected); once met, +1 as usual. The
 	// top-up is clamped to the variant's remaining stock (hard-block only) so a
@@ -156,7 +141,7 @@ export function ProductGrid({
 						value={searchQuery}
 						onChange={(e) => setSearchQuery(e.target.value)}
 						placeholder={
-							storeSlug && categories && categories.length > 0
+							categories && categories.length > 0
 								? "Search products & categories…"
 								: "Search products…"
 						}
@@ -190,8 +175,7 @@ export function ProductGrid({
 							<Link
 								key={category._id}
 								to="/$slug/c/$categorySlug"
-								// biome-ignore lint/style/noNonNullAssertion: matchedCategories is only non-empty when storeSlug is set
-								params={{ slug: storeSlug!, categorySlug: category.slug }}
+								params={{ slug: storeSlug, categorySlug: category.slug }}
 								className="flex h-11 items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 transition-colors hover:border-accent/50"
 							>
 								<span className="text-[13.5px] font-semibold">
@@ -238,11 +222,19 @@ export function ProductGrid({
 				</div>
 			) : (
 				<div className={GRID_CLASS}>
+					{/* Opening a product goes to its PAGE on EVERY breakpoint, and the
+					    card owns that link itself — a real `<Link>`, so it's crawlable,
+					    ⌘-clickable and prefetched on hover. A modal on mobile hid the one
+					    thing PR2 exists to give buyers: the product's URL in the address
+					    bar, which is how sharing actually happens on a phone. `slug` is
+					    always present — every write path assigns one and the server
+					    derives a fallback for un-backfilled rows (effectiveSlug).
+					    See docs/storefront-product-pages.md. */}
 					{filtered.map((product, index) => (
 						<ProductCard
 							key={product._id}
 							product={product}
-							onOpen={openProductView}
+							storeSlug={storeSlug}
 							onQuickAdd={quickAdd}
 							cartQuantity={cart.quantityForProduct(product._id)}
 							cartSubtotal={cart.subtotalForProduct(product._id)}

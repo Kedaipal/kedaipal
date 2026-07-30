@@ -36,8 +36,8 @@ interface CategoryLoaderData {
  * Nested storefront category page — /$slug/c/$categorySlug. The `$slug_`
  * filename (pathless-parent underscore) gives the URL prefix WITHOUT nesting
  * under $slug.tsx, which is a leaf route with no <Outlet/>. Shares the home
- * page's cart (useCart is keyed per retailerId in localStorage), cards, detail
- * sheet and checkout — only the product set is scoped to the category.
+ * page's cart (useCart is keyed per retailerId in localStorage), cards, product
+ * pages and checkout — only the product set is scoped to the category.
  */
 export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 	loader: async ({ params }): Promise<CategoryLoaderData> => {

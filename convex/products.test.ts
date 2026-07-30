@@ -1503,3 +1503,101 @@ describe("products.getPublicBySlug", () => {
 		expect(revived?._id).toBe(original);
 	});
 });
+
+describe("products.listForSitemap", () => {
+	test("emits one URL pair per storefront-visible product", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Tent 2P" }),
+		);
+		await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Camp Stove", sortOrder: 1 }),
+		);
+
+		const rows = await t.query(api.products.listForSitemap);
+		expect(
+			rows
+				.filter((r) => r.storeSlug === retailer.slug)
+				.map((r) => r.productSlug)
+				.sort(),
+		).toEqual(["camp-stove", "tent-2p"]);
+	});
+
+	// A sitemap is public: anything the storefront hides must not be advertised
+	// to a crawler either, or Google indexes URLs that answer 404.
+	test("omits hidden and archived products", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const hidden = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Counter Only" }),
+		);
+		await asA.mutation(api.products.update, {
+			productId: hidden,
+			hidden: true,
+		});
+		const archived = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Retired Tent", sortOrder: 1 }),
+		);
+		await asA.mutation(api.products.archive, { productId: archived });
+		await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Live Tent", sortOrder: 2 }),
+		);
+
+		const slugs = (await t.query(api.products.listForSitemap))
+			.filter((r) => r.storeSlug === retailer.slug)
+			.map((r) => r.productSlug);
+		expect(slugs).toEqual(["live-tent"]);
+	});
+
+	// A derived slug is a temporary address — publishing one to a crawler risks
+	// indexing a URL the backfill is about to replace.
+	test("skips legacy rows that have no stored slug yet", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const id = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Legacy Tent" }),
+		);
+		await t.run((ctx) => ctx.db.patch(id, { slug: undefined }));
+
+		expect(
+			(await t.query(api.products.listForSitemap)).filter(
+				(r) => r.storeSlug === retailer.slug,
+			),
+		).toEqual([]);
+
+		// …and picks it up the moment the backfill stamps one.
+		await t.mutation(internal.products.backfillProductSlugs, {});
+		expect(
+			(await t.query(api.products.listForSitemap))
+				.filter((r) => r.storeSlug === retailer.slug)
+				.map((r) => r.productSlug),
+		).toEqual(["legacy-tent"]);
+	});
+
+	test("scopes each product to its own store's slug", async () => {
+		const t = setup();
+		const a = await seedRetailer(t, USER_A);
+		const b = await seedRetailer(t, USER_B);
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.products.create, baseProduct(a._id, { name: "A Tent" }));
+		await t
+			.withIdentity({ subject: USER_B })
+			.mutation(api.products.create, baseProduct(b._id, { name: "B Tent" }));
+
+		const rows = await t.query(api.products.listForSitemap);
+		expect(
+			rows.map((r) => `${r.storeSlug}/p/${r.productSlug}`).sort(),
+		).toEqual([`${a.slug}/p/a-tent`, `${b.slug}/p/b-tent`].sort());
+	});
+});

@@ -103,6 +103,25 @@ cart-line snapshots — grid quick-add, sheet and page all call it).
 - **Share affordance**: `shareProductLink` uses the OS share sheet when
   available (the WhatsApp path on mobile) and falls back to clipboard + toast.
 
+### The reset effect keys on `_id`, never the product object
+
+The two surfaces feed the hook the same *shape* but not the same *lifetime*:
+the sheet passes a snapshot held in the caller's `useState`, the page passes a
+**live** `getPublicBySlug` result. Convex hands back a fresh object whenever
+the query's value actually changes, so on the page anything that writes the row
+or its variants — another buyer's order decrementing hard-block stock, the
+seller editing a price — arrives as a brand-new object for the *same* product.
+
+So the "a new product opened" reset (clear selection, re-seed the stepper at the
+remaining-to-minimum, clear the custom note, revoke the uploaded reference
+photo) depends on `product?._id` and reads the current doc through a ref. Keyed
+on the object it would fire on every live update and silently wipe an in-flight
+buyer's typed cake spec and uploaded photo — the exact ICP flow. Everything
+that *should* react to the new data already does, derived per render:
+`availability`/`sellable` re-resolve, and `displayQuantity` clamps to the new
+`maxQty` instead of resetting to 1. Pinned both ways by test (same `_id` keeps
+state, different `_id` resets).
+
 ## How buyers reach each view
 
 - **Grid card tap** — navigates to the page on **every** breakpoint (see
@@ -117,22 +136,67 @@ cart-line snapshots — grid quick-add, sheet and page all call it).
   `AggregateOffer`; quote-only products carry **no** offers block rather than
   advertising RM 0).
 
+## Discoverability — the pages have to be findable
+
+The SEO apparatus above (canonical, `robots: index, follow`, `Product` JSON-LD)
+is **inert on its own**. Two things point at it, and both are load-bearing:
+
+**1. The card is a real `<a href>`.** `ProductCard` renders its photo, its name
+and (when orderable) its "Choose" CTA as TanStack `<Link>`s — not a
+`<button onClick={navigate}>`. A click handler navigates fine and is invisible
+to everything else: a crawler can only follow an anchor, and buyers lose
+⌘/middle-click-to-new-tab, right-click "copy link address", the hover URL
+preview, and the router's `defaultPreload: "intent"` prefetch. On the surface
+whose entire job is producing a pasteable link, that's the wrong trade. Same
+shape `CategoryRail` already uses for `/{store}/c/{category}`.
+
+  - The photo link is `aria-hidden` + `tabIndex={-1}` so a screen reader
+    announces the card's destination **once** (the name link), not three times.
+  - An unorderable product (out of stock, or stock below its minimum with no
+    custom line) renders "Choose" as a **disabled button** instead — an `<a>`
+    can't be disabled, and disabled-with-reason beats a live link to a page the
+    buyer can't order from.
+  - `ProductGrid.storeSlug` is therefore **required**: a card with nowhere to
+    link is a dead tile.
+
+**2. `/sitemap.xml` lists every visible product.** `products.listForSitemap`
+emits `{storeSlug, productSlug, updatedAt}` per retailer, applying `list`'s
+exact visibility rules — a hidden, category-suppressed or archived product must
+not be advertised to a crawler any more than it's shown on the storefront, or
+Google indexes URLs that answer 404. Priority `0.6` (below the store home at
+`0.8` — the storefront is the entry a seller shares, a product page is a leaf),
+`changefreq weekly`.
+
+  - Slug-less legacy rows are **skipped**, not emitted via `effectiveSlug`: a
+    derived slug is a temporary address, and publishing one to a crawler risks
+    indexing a URL `backfillProductSlugs` is about to change. They appear the
+    run after the backfill.
+  - Cross-retailer scan, like `retailers.listSlugsForSitemap`; the route caches
+    for an hour.
+
 ## The bottom bar and the footer
 
 Applies to both pages that carry a bottom CTA bar (product, checkout), and to
-any new one. Two earlier attempts got this wrong, so the reasoning is here:
+any new one. Three attempts got this wrong, so the reasoning is here.
 
 **The bar is `position: fixed`** (`fixed inset-x-0 bottom-0`, matching the
 long-standing `CartBar`), the footer is an ordinary direct flex child of the
 route container *after* it, and the route reserves bottom clearance. Because
 `fixed` is out of document flow, the powered-by badge renders as page content
-**above** the floating bar — the store home's stacking.
+**above** the floating bar — the store home's stacking, on every page.
 
 - ✗ *Nest the footer inside the bar.* Welds the badge to the bar and eats
   sticky-footer space on mobile.
 - ✗ *Make the bar `sticky` instead.* Sticky sits **in** flow, so a following
-  footer renders **below** the bar. (This was briefly written down as a house
-  rule — it isn't one.)
+  footer renders **below** the bar. Tried twice: once as a house rule, once as
+  "forms should differ from browse pages because a fixed bar fights the soft
+  keyboard". Both were rejected on a real phone — the badge reads as welded to
+  the bar and checkout becomes the one page that stacks differently from its
+  siblings. The keyboard worry didn't hold up either: a fixed bar goes *behind*
+  the keyboard (both iOS Safari and Chrome Android keep fixed elements pinned to
+  the layout viewport), it doesn't cover the focused field, and `CartBar` has
+  shipped `fixed` on the store home — which also has an input — from the start.
+  Design-system rule #4 now says `fixed` outright.
 
 **The clearance is measured, not guessed.** The bar calls
 `usePublishedHeight("--storefront-bar-h")` (`src/hooks/usePublishedHeight.ts`,
@@ -140,8 +204,7 @@ the same ResizeObserver pattern as the dashboard's `--app-bottomnav-h`) and the
 route reserves `pb-[var(--storefront-bar-h,12rem)] lg:pb-10`. These bars change
 height for real — a blocked CTA adds a reason line, copy wraps at 320px, the
 safe-area inset varies per device — and a hardcoded `pb-64` overshot by 60-75px,
-which showed up as dead space under the badge. Verified: at 320px the checkout
-bar grows 181→197px and the reservation follows.
+which showed up as dead space under the badge.
 
 Gotcha: a `display: none` bar measures 0, and `var(--x, fallback)` does **not**
 fall back on `0px` (only when unset) — so consumers must set their own value at
@@ -167,6 +230,21 @@ degenerate names, lazy assignment on edit, backfill idempotency,
 `getPublicBySlug` visibility rules (hidden/archived/unknown → null), and the
 no-URL-takeover + restore-revives-URL invariant, plus the derived-slug
 fallback (resolves an un-backfilled row, and still returns null when hidden).
-Frontend: `product-purchase.test.tsx` covers the shared checkout CTA, and
-`product-detail-sheet.test.tsx` keeps the buy-box contract (custom line,
-live total, minimum-quantity states) through the seller-preview shell.
+`listForSitemap` is pinned on all four of its promises: one pair per visible
+product, hidden/archived omitted, slug-less rows skipped until the backfill
+stamps them, and each product scoped to its own store's slug.
+
+Frontend:
+
+- `product-card.test.tsx` renders the card under a **real** router (no mocking)
+  and asserts genuine hrefs — the name is an `<a>` to the product page, the
+  photo link carries the same href but is `aria-hidden`/untabbable, "Choose"
+  is a link when orderable and a disabled button when not, and a click
+  navigates client-side.
+- `product-purchase.test.tsx` covers the shared checkout CTA **and** the
+  live-update contract: a re-rendered product with the same `_id` but changed
+  stock keeps the buyer's option, quantity and custom note (quantity clamps to
+  the new ceiling rather than resetting), while a different `_id` still resets
+  everything.
+- `product-detail-sheet.test.tsx` keeps the buy-box contract (custom line,
+  live total, minimum-quantity states) through the seller-preview shell.
