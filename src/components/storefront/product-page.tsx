@@ -3,6 +3,7 @@ import { ArrowLeft } from "lucide-react";
 import { useState } from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
+import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { AppImage } from "../ui/app-image";
 import { Markdown } from "../ui/markdown";
 import { ZoomableImage } from "../ui/zoomable-image";
@@ -63,6 +64,9 @@ export function ProductPageView({
 	});
 	const goToCheckout = () =>
 		navigate({ to: "/$slug/checkout", params: { slug: storeSlug } });
+	// The route reserves exactly this bar's height as bottom padding — see the
+	// bar's own comment below.
+	const barRef = usePublishedHeight<HTMLDivElement>("--storefront-bar-h");
 
 	return (
 		<>
@@ -127,8 +131,14 @@ export function ProductPageView({
 					    of document flow, so the powered-by footer renders as page
 					    content ABOVE it, same as the store home. Sticky would sit in
 					    flow and push the footer below the bar. The route reserves
-					    matching bottom clearance. */}
-					<div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 px-5 py-4 shadow-[0_-12px_30px_rgba(15,23,42,0.08)] backdrop-blur pb-[max(1rem,env(safe-area-inset-bottom))] lg:static lg:z-auto lg:mt-6 lg:border-t-0 lg:bg-transparent lg:p-0 lg:shadow-none lg:backdrop-blur-none">
+					    clearance equal to `--storefront-bar-h`, which this bar
+					    publishes as it's measured — so the gap under the footer badge
+					    is the footer's own padding and nothing else, whatever height
+					    the bar happens to be. */}
+					<div
+						ref={barRef}
+						className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 px-5 py-4 shadow-[0_-12px_30px_rgba(15,23,42,0.08)] backdrop-blur pb-[max(1rem,env(safe-area-inset-bottom))] lg:static lg:z-auto lg:mt-6 lg:border-t-0 lg:bg-transparent lg:p-0 lg:shadow-none lg:backdrop-blur-none"
+					>
 						<div className="mx-auto max-w-xl lg:mx-0 lg:max-w-none">
 							<TotalPreviewRow pp={pp} />
 							<div className="grid gap-3 sm:grid-cols-[auto_1fr] sm:items-center">

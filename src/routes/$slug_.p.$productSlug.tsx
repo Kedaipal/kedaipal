@@ -257,9 +257,12 @@ function ProductRoute() {
 	return (
 		// No horizontal page padding: the shared header is full-bleed (its cover
 		// image must reach the edges, same as the store home + category pages);
-		// each section below owns its own px. pb-64 reserves room for the FIXED
-		// mobile purchase bar so it can't cover the footer (store-home pattern).
-		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-64 lg:pb-10">
+		// each section below owns its own px. The bottom padding reserves room
+		// for the FIXED mobile purchase bar so it can't cover the footer — the
+		// bar publishes its measured height as --storefront-bar-h, so the
+		// reservation is exact rather than a guess with dead space under the
+		// badge. The fallback only applies for the frame before first measure.
+		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-[var(--storefront-bar-h,12rem)] lg:pb-10">
 			<ProductPageView
 				product={product}
 				retailerId={retailer._id}
@@ -270,7 +273,7 @@ function ProductRoute() {
 			/>
 			{/* Direct flex child so its `mt-auto` anchors it to the bottom of the
 			    page — same placement as the store home and category pages. */}
-			<StorefrontFooter compact />
+			<StorefrontFooter />
 		</div>
 	);
 }
