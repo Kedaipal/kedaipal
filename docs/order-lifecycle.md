@@ -65,7 +65,7 @@ Public mutation (no auth — the storefront is anonymous). Steps, in order ([`co
 1. **Rate limit first** — `orderCreate` keyed by `retailerId` (token bucket: burst 5, 30/min). Throttle before any DB reads. See [`validation-and-rate-limits.md`](./validation-and-rate-limits.md).
 2. **Delivery-method invariant** — `delivery` requires `deliveryAddress`; `self_collect` forbids it. Default method is `delivery`.
 3. **Address validation** — `assertValidAddress` (Malaysia-only) sanitizes and trims.
-4. **Phone validation** — `assertValidMyWaPhone` if a phone was provided (MY-aware: a local `012-345 6789` normalizes to the `60…` form Meta delivers inbound, so the customer record can't fork). The storefront form **requires** the phone (86eyf1rck — the confirmation push needs a reachable number, gated client-side by `myWaPhoneCheckoutSchema`, MY mobiles only); the arg stays optional at the protocol level so legacy callers/tests ride the old flow.
+4. **Phone validation** — `assertValidMyMobile` if a phone was provided (MY-aware: a local `012-345 6789` normalizes to the `60…` form Meta delivers inbound, so the customer record can't fork). The storefront form **requires** the phone (86eyf1rck — the confirmation push needs a reachable number, gated client-side by the mirrored `myWaPhoneCheckoutSchema`; both require a MY **mobile** shape, since a landline can never receive WhatsApp); the arg stays optional at the protocol level so legacy callers/tests ride the old flow.
 5. **Item validation** — 1–100 items. Each item names a **variant** by `variantId` (preferred) or a single-variant product's `productId` (resolved to its sole variant; ambiguous for multi-variant products → rejected). The variant + its parent product must belong to the retailer, both be `active`, and match the order currency. **Stock is enforced only when the variant hard-blocks** — `variant.blockWhenOutOfStock ?? product.blockWhenOutOfStock` resolves true. Made-to-order variants (frozen pack-to-order, metal prints, a "Custom" size) never block, even when a sibling variant in the same listing does. Quantities for the same variant across multiple line items are summed before the (conditional) `onHand` check. Each line snapshots `{productId, variantId, name, variantLabel, price, quantity}`.
 6. **Compute totals** — `computeOrderTotals` (currently `total === subtotal`).
 7. **Reserve stock** — for **hard-block variants only** (resolved per-variant), patch each variant's `onHand` down within the same transaction (atomic; rolls back on any failure). Variants are re-fetched fresh to avoid stale values. Made-to-order variants are never decremented.
@@ -85,9 +85,20 @@ back via `wa.me` — buyers bail and the order strands as `pending` with no
 phone. So the storefront no longer depends on the buyer's send at all:
 
 - **Checkout requires a MY WhatsApp mobile number** ("Who's ordering?" card,
-  PDPA notice line beneath, EN/BM by store locale). Client gate
-  `myWaPhoneCheckoutSchema` (`src/lib/schemas.ts`), server re-validates with
-  `assertValidMyWaPhone`.
+  echoed back formatted for typo-spotting, PDPA notice line beneath, EN/BM by
+  store locale). Client gate `myWaPhoneCheckoutSchema` (`src/lib/schemas.ts`),
+  server re-validates with `assertValidMyMobile` — the stricter sibling of
+  `assertValidMyWaPhone` that also demands a MY **mobile** prefix, because a
+  landline satisfies the 8–15-digit rule but can never receive WhatsApp.
+- **Not every order takes this path.** `confirmedAtCreate` also requires the
+  total to be **final**: an order with a mockup gate (a price-on-quote line can
+  be `RM 0.00`) or a pending delivery fee falls back to the legacy
+  `pending` + `?send=1` handoff. The approved template hard-codes
+  "Total: {{3}}. Tap below to see how to pay", and both halves are false while a
+  price is outstanding and the payment ask is held — and template wording can't
+  be softened per-order. The legacy `mockupPendingConfirm` /
+  `deliveryFeePendingConfirm` branches already say the right thing for these.
+  Lifting the exclusion needs a second approved template with no total slot.
 - **The order inserts as `confirmed`** and Kedaipal's WABA pushes the
   confirmation — the Meta-approved **utility template**
   `order_confirmation_utility` (EN + BM variants; body params `shortId`,

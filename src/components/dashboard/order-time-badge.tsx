@@ -21,11 +21,21 @@ export function OrderTimeBadge({
 		statusChangedAt?: number;
 		updatedAt?: number;
 		createdAt: number;
+		// Seen-state: an unseen push-path order escalates like a pending one did.
+		seenAt?: number;
+		confirmationPushStatus?: string;
 	};
 	now: number;
 }) {
 	const ms = statusAgeMs(order, now);
-	const severity = statusAgeSeverity(order.status as OrderStatus, ms);
+	const severity = statusAgeSeverity(
+		{
+			status: order.status as OrderStatus,
+			seenAt: order.seenAt,
+			confirmationPushStatus: order.confirmationPushStatus,
+		},
+		ms,
+	);
 	const cls =
 		severity === "urgent"
 			? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"

@@ -18,6 +18,7 @@ New token: **`--accent-emphasis`** (readable mint for text/icons on mint-tinted 
 ### Home (`app.index.tsx`)
 - **Today strip replaces the 4-stat grid** — three tappable counts (Due today / New orders / Unpaid) that deep-link into the pre-filtered inbox (`?fwin=today`, `?bucket=new`, `?pay=unpaid&pay=claimed`). Due-today gets the navy hero cell (F&B's #1 morning question).
 - **"Needs attention" list** — actionable rows (new-to-confirm, due today, unpaid with RM outstanding), each with a destination; rows only render when the count > 0, whole section hides when caught up.
+  - **What "New" counts changed with the confirmation push** (86eyf1rck): storefront orders now commit as `confirmed` at checkout, so `pending` no longer marks "the seller hasn't dealt with it". The New count (this row, the Today-strip cell, the inbox chip, and the amber/red age escalation) is now **`pending` OR unseen** — an order the seller hasn't opened, drained by `orders.markSeen` on opening the order detail. Backfill-free and counter-safe; see [`order-inbox.md`](./order-inbox.md#decisions-locked-with-the-cto).
 - **Share card** keeps the landing page's dashed ticket border; QR opens the existing dialog; Copy/Preview stamp `linkSharedAt` as before.
 - Mobile greeting header ("Good morning, {store}" + date + logo/initial avatar → settings).
 - New-user states (welcome banner, how-it-works, setup checklist, first-order celebration, white-glove card) unchanged.

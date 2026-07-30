@@ -44,7 +44,7 @@ import {
 	minOrderValueShortfall,
 	minQuantityMessage,
 } from "./lib/minOrderRules";
-import { statusToBucket } from "./lib/orderBuckets";
+import { orderBucket } from "./lib/orderBuckets";
 import { type CsvOrder, ordersToCsv } from "./lib/orderCsv";
 import {
 	type ManualReminderBlock,
@@ -909,8 +909,25 @@ export const create = mutation({
 		// and Kedaipal's WABA pushes the confirmation template (scheduled below).
 		// No step depends on the buyer surviving Meta's wa.me interstitial.
 		// Template env unset ⇒ exact legacy behaviour (pending + ?send=1 handoff).
+		//
+		// EXCEPT when the total isn't final yet. The approved template hard-codes
+		// "Total: {{3}}. Tap below to see how to pay" — both claims are false while
+		// a price is outstanding:
+		//   - a mockup-gated order can carry a price-on-quote line (price 0), so it
+		//     would announce "Total: MYR 0.00" on a cake that hasn't been quoted;
+		//   - a `deliveryFeePending` order's total grows by the fee the seller
+		//     arranges later;
+		// and in both cases the payment ask is deliberately HELD (isMockupGateClosed
+		// / the delivery-fee hold), so "tap below to pay" is a dead end. Template
+		// wording is fixed at Meta approval, so we can't soften it per-order —
+		// these fall back to the legacy handoff, whose `mockupPendingConfirm` /
+		// `deliveryFeePendingConfirm` branches already say the right thing. Lifting
+		// this needs a second approved template with no total slot (noted as a
+		// follow-up — it leaves made-to-order buyers on the wa.me path for now).
+		const totalIsFinal = !requiresMockup && !deliveryFeePending;
 		const confirmedAtCreate =
 			customerWaPhone !== undefined &&
+			totalIsFinal &&
 			orderConfirmTemplateName() !== undefined;
 
 		const orderId = await ctx.db.insert("orders", {
@@ -1144,6 +1161,12 @@ export const get = query({
 			...order,
 			podImageUrls,
 			deliverySnapshot: isBuyerRead ? undefined : order.deliverySnapshot,
+			// Meta's message id has no buyer use and this read is unauthenticated —
+			// strip it on the token path alongside the delivery snapshot. The
+			// buyer-facing cards branch on `confirmationPushStatus`, never the wamid.
+			confirmationPushWamid: isBuyerRead
+				? undefined
+				: order.confirmationPushWamid,
 			statusLabels: retailer?.statusLabels as StatusLabels | undefined,
 			orderStages: retailer?.orderStages as OrderStage[] | undefined,
 			retailerLocale: (retailer?.locale ?? "en") as Locale,
@@ -1697,7 +1720,7 @@ export const searchOrders = query({
 			unpaidAmount: 0,
 		};
 		for (const o of all) {
-			const b = statusToBucket(o.status);
+			const b = orderBucket(o);
 			counts[b]++;
 			if (needsMockup(o.mockupStatus)) counts.mockupPending++;
 			const open = b === "new" || b === "in_progress";
@@ -2124,6 +2147,26 @@ export async function applyStatusTransition(
 	// price and taps to confirm — money never moves without a human. See
 	// docs/delivery-lalamove.md ("Prompt to book on packed") + BookDeliveryCard.
 }
+
+/**
+ * Stamp an order as seen by the seller (86eyf1rck). Idempotent set-if-unset.
+ *
+ * Confirmation-push orders are born `confirmed`, so `pending` no longer marks
+ * "haven't looked at this yet" — this does. Called when the seller opens the
+ * order, which is the moment they've actually looked at it; that drains it from
+ * the New bucket, the Home tile and the age escalation. Never un-set, so an
+ * order can't bounce back to "new" after being read.
+ */
+export const markSeen = mutation({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<void> => {
+		const { order } = await requireOrderAccess(ctx, orderId);
+		if (order.seenAt !== undefined) return;
+		// No updatedAt bump: "the seller looked at it" isn't an order change, and
+		// touching updatedAt would corrupt the time-in-status badge.
+		await ctx.db.patch(order._id, { seenAt: Date.now() });
+	},
+});
 
 export const updateStatus = mutation({
 	args: {

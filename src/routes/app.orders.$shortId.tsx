@@ -23,7 +23,12 @@ import {
 	Truck,
 	User,
 } from "lucide-react";
-import { type ChangeEvent, type ReactNode, useState } from "react";
+import {
+	type ChangeEvent,
+	type ReactNode,
+	useEffect,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
@@ -300,6 +305,16 @@ function OrderDetailRoute() {
 	const markPaymentReceived = useMutation(api.orders.markPaymentReceived);
 	const sendPaymentReminder = useAction(api.orders.sendPaymentReminder);
 	const deleteOrder = useMutation(api.orders.deleteOrder);
+	// Opening the order IS the seller seeing it — drains it from the New bucket,
+	// the Home tile and the age escalation (86eyf1rck). Fire-and-forget: a failed
+	// stamp just means it stays flagged as new, which is the safe direction.
+	const markSeen = useMutation(api.orders.markSeen);
+	const orderId = order?._id;
+	const alreadySeen = order?.seenAt !== undefined;
+	useEffect(() => {
+		if (!orderId || alreadySeen) return;
+		void markSeen({ orderId }).catch(() => {});
+	}, [orderId, alreadySeen, markSeen]);
 	// Permanent hard delete is admin-only (Kedaipal support); a plain seller only
 	// ever cancels. Hide the danger action unless this is an admin act-as session —
 	// the server enforces the same rule, so this is discoverability, not the guard.

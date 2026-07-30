@@ -1516,10 +1516,17 @@ describe("storefront confirmation push (86eyf1rck)", () => {
 			await tk(t, shortId),
 		);
 
-		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		// Read from the DB: the wamid is Meta's internal message id and is
+		// deliberately stripped from the unauthenticated buyer read.
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
 		expect(order?.confirmationPushStatus).toBe("sent");
 		expect(order?.confirmationPushWamid).toBe("wamid.PUSH1");
 		expect(order?.confirmationPushAt).toBeTypeOf("number");
+		const buyerView = await t.query(api.orders.get, {
+			token: await tk(t, shortId),
+		});
+		expect(buyerView?.confirmationPushStatus).toBe("sent");
+		expect(buyerView?.confirmationPushWamid).toBeUndefined();
 		fetchMock.restore();
 	});
 

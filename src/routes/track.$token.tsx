@@ -21,7 +21,13 @@ import {
 	Truck,
 	XCircle,
 } from "lucide-react";
-import { type FormEvent, type ReactNode, useEffect, useState } from "react";
+import {
+	type FormEvent,
+	type ReactNode,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { isSafeTrackingUrl } from "../../convex/lib/couriers";
@@ -1282,6 +1288,13 @@ function PushFailedCard({
 	const [editing, setEditing] = useState(false);
 	const [value, setValue] = useState("");
 	const [busy, setBusy] = useState(false);
+	// Focus on open rather than autoFocus: the field only mounts when the buyer
+	// taps "Update my number", so this is a response to their action, not a
+	// page-load surprise. One-shot — a callback ref would re-fire every keystroke.
+	const phoneInputRef = useRef<HTMLInputElement>(null);
+	useEffect(() => {
+		if (editing) phoneInputRef.current?.focus();
+	}, [editing]);
 
 	async function handleSave(e: FormEvent) {
 		e.preventDefault();
@@ -1345,10 +1358,7 @@ function PushFailedCard({
 							type="tel"
 							inputMode="tel"
 							autoComplete="tel"
-							// Focused via ref, not autoFocus: the field only mounts when the
-							// buyer taps "Update my number", so moving focus there is a
-							// response to their action rather than a page-load surprise.
-							ref={(el) => el?.focus()}
+							ref={phoneInputRef}
 							value={value}
 							onChange={(e) => setValue(e.target.value)}
 							placeholder="e.g. 012-345 6789"

@@ -351,6 +351,16 @@ export async function adjustAggregatesForTotalChange(
  * seller's CRM shows a phantom customer who ordered once and a real customer
  * who never did.
  *
+ * **Cancelled orders move the phone only.** Cancelling already ran
+ * `decrementAggregatesForCancel` (see `reverseCancellationEffects`) while
+ * leaving `customerId` set, and neither repair route gates on status — a
+ * cancelled order is still reachable via its failed-push card. Re-running the
+ * decrement here would subtract a second time (silently eating a *different*
+ * real order's count/spend if that customer has others) and the re-link would
+ * then credit the new customer with an order that no longer exists. A cancelled
+ * order contributes nothing to either record, so there is nothing to move — the
+ * same trap `deleteOrderCascade` guards.
+ *
  * No-ops when the phone hasn't actually changed. Caller is responsible for
  * authorization and for validating/normalizing `newPhone` first.
  */
@@ -360,6 +370,13 @@ export async function moveOrderToPhone(
 ): Promise<Id<"customers"> | undefined> {
 	if (order.customer.waPhone === newPhone) return order.customerId;
 
+	// Always correct the number itself, so later messages reach the buyer.
+	await ctx.db.patch(order._id, {
+		customer: { ...order.customer, waPhone: newPhone },
+		updatedAt: Date.now(),
+	});
+	if (order.status === "cancelled") return order.customerId;
+
 	// Un-count it from the record it was (wrongly) attributed to at checkout.
 	if (order.customerId) {
 		await decrementAggregatesForCancel(ctx, {
@@ -367,10 +384,6 @@ export async function moveOrderToPhone(
 			orderTotal: order.total,
 		});
 	}
-	await ctx.db.patch(order._id, {
-		customer: { ...order.customer, waPhone: newPhone },
-		updatedAt: Date.now(),
-	});
 	// Re-link against the real number (also re-stamps order.customerId).
 	return linkOrderToCustomer(ctx, {
 		retailerId: order.retailerId,

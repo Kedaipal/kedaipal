@@ -937,6 +937,14 @@ export default defineSchema({
 			v.union(v.literal("unreachable"), v.literal("system")),
 		),
 		confirmationPushAt: v.optional(v.number()),
+		// When the seller first opened this order (86eyf1rck). Before the
+		// confirmation push, `pending` WAS the seller's "haven't looked at it yet"
+		// signal — the New bucket, the Home tile and the amber/red age escalation
+		// all keyed on it. Push-path orders skip `pending` entirely, so that signal
+		// would silently die; this stamp replaces it. Scoped to push-path orders at
+		// read time (see orderBuckets.isUnseenOrder), so legacy and counter orders
+		// need no backfill and behave exactly as before.
+		seenAt: v.optional(v.number()),
 		// Meta's message id (wamid) for the confirmation push. The statuses
 		// webhook identifies messages ONLY by this id, so it's the correlation key
 		// that lets a delivery failure find its order (see by_confirmation_wamid).
