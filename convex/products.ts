@@ -193,6 +193,9 @@ export async function productWithVariants(
 		.some((vr) => (vr.blockWhenOutOfStock ? vr.onHand > 0 : true));
 	return {
 		...base,
+		// Always usable by the storefront's product-page links, even before the
+		// slug backfill has stamped this row.
+		slug: effectiveSlug(product),
 		variants,
 		variantCount: variants.length,
 		priceFrom: prices.length ? Math.min(...prices) : 0,
@@ -235,6 +238,21 @@ async function ensureUniqueProductSlug(
 		if (!clash || clash._id === excludeProductId) return candidate;
 	}
 	throw new ConvexError("Could not allocate a unique product link");
+}
+
+/**
+ * The slug a product is addressable by RIGHT NOW. Stored slug when it has one;
+ * otherwise derived from the name on the fly. Legacy rows created before slugs
+ * existed only get a stored one when they're next edited or when
+ * `backfillProductSlugs` runs — without this fallback they'd be un-openable
+ * between a deploy and that backfill, since the storefront's only product view
+ * is the URL-addressed page. Derived slugs resolve through the name-match arm
+ * of `getPublicBySlug`.
+ */
+function effectiveSlug(product: Doc<"products">): string {
+	if (product.slug !== undefined) return product.slug;
+	const base = slugify(product.name);
+	return base.length >= SLUG_MIN ? base : `item-${product._id.slice(0, 6)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1368,12 +1386,27 @@ export const getPublicBySlug = query({
 	handler: async (ctx, { retailerId, slug }) => {
 		const normalized = slug.trim().toLowerCase();
 		if (normalized.length === 0) return null;
-		const row = await ctx.db
+		const indexed = await ctx.db
 			.query("products")
 			.withIndex("by_retailer_slug", (q) =>
 				q.eq("retailerId", retailerId).eq("slug", normalized),
 			)
 			.unique();
+		// Fallback for rows the slug backfill hasn't stamped yet: match on the
+		// slug derived from the name. Bounded by the 50-product cap, and once a
+		// row has a stored slug the index arm answers first, so this never runs
+		// on a migrated catalog. Keeps every product addressable the moment the
+		// page ships, independent of when the backfill is run.
+		const row =
+			indexed ??
+			(
+				await ctx.db
+					.query("products")
+					.withIndex("by_retailer_active", (q) =>
+						q.eq("retailerId", retailerId).eq("active", true),
+					)
+					.collect()
+			).find((p) => p.slug === undefined && effectiveSlug(p) === normalized);
 		if (
 			!row ||
 			!row.active ||

@@ -146,7 +146,7 @@ function CheckoutRoute() {
 				/>
 			</div>
 
-			<StorefrontFooter />
+			<StorefrontFooter compact />
 		</div>
 	);
 }

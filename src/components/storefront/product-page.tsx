@@ -1,9 +1,8 @@
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, ShoppingBag } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { useState } from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
-import { formatPrice } from "../../lib/format";
 import { AppImage } from "../ui/app-image";
 import { Markdown } from "../ui/markdown";
 import { ZoomableImage } from "../ui/zoomable-image";
@@ -21,11 +20,18 @@ import {
 	TotalPreviewRow,
 	useProductPurchase,
 } from "./product-purchase";
+import {
+	StorefrontHeader,
+	type StorefrontHeaderRetailer,
+} from "./storefront-header";
 
 interface ProductPageViewProps {
 	product: StorefrontProduct;
 	retailerId: Id<"retailers">;
-	storeName: string;
+	/** Drives the SHARED storefront brand header — same component the store
+	 * home and category pages render, so a buyer landing here from a WhatsApp
+	 * link sees the seller's identity, not a bare product card. */
+	retailer: StorefrontHeaderRetailer;
 	storeSlug: string;
 	cart: UseCart;
 	/** Absolute canonical URL of this page — the Copy-link chip's payload. */
@@ -35,16 +41,16 @@ interface ProductPageViewProps {
 /**
  * The URL-addressable product view — /$slug/p/<productSlug> (86eybrhrt PR2).
  * This is what a shared WhatsApp link or a search result lands on: a real
- * page with the store's identity, a proper two-column layout on desktop, and
- * the same buy box as the in-store sheet (both compose product-purchase.tsx,
- * so they can't drift). Mobile keeps a single column with a sticky purchase
- * bar; in-store browsing on mobile still uses the sheet — this page is the
- * destination for links, not a detour in the middle of cart-building.
+ * page carrying the SHARED storefront header (same brand block as the store
+ * home and category pages), a back link to the catalog, and a two-column
+ * layout on desktop. Mobile is a single column with a sticky purchase bar.
+ * This is the ONLY product view on every breakpoint — the buy box lives in
+ * product-purchase.tsx.
  */
 export function ProductPageView({
 	product,
 	retailerId,
-	storeName,
+	retailer,
 	storeSlug,
 	cart,
 	canonicalUrl,
@@ -60,44 +66,27 @@ export function ProductPageView({
 
 	return (
 		<>
-			{/* Store identity bar — where am I, how do I get back, what's in my
-			    cart. The cart chip doubles as the desktop path to checkout. */}
-			<header className="flex items-center justify-between gap-3">
-				<div className="flex min-w-0 items-center gap-3">
-					<Link
-						to="/$slug"
-						params={{ slug: storeSlug }}
-						aria-label={`Back to ${storeName}`}
-						className="tap-target flex size-9 shrink-0 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:text-foreground"
-					>
-						<ArrowLeft className="size-4" aria-hidden />
-					</Link>
-					<span className="truncate font-heading text-base font-bold">
-						{storeName}
-					</span>
-				</div>
-				{cart.itemCount > 0 ? (
-					<button
-						type="button"
-						onClick={goToCheckout}
-						className="tap-target flex shrink-0 items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3.5 py-1.5 text-xs font-semibold transition-colors hover:bg-accent/15"
-					>
-						<span className="relative flex size-5 items-center justify-center">
-							<ShoppingBag className="size-4 text-accent" aria-hidden />
-							<span className="absolute -right-1.5 -top-1.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-primary px-0.5 text-[9px] font-bold text-primary-foreground">
-								{cart.itemCount}
-							</span>
-						</span>
-						<span className="tabular-nums">
-							{cart.total > 0
-								? formatPrice(cart.total, cart.currency)
-								: "Checkout"}
-						</span>
-					</button>
-				) : null}
-			</header>
+			{/* The same brand header the store home and category pages render —
+			    a buyer arriving from a shared WhatsApp link lands in the SELLER's
+			    store, not on an anonymous product card. */}
+			<StorefrontHeader retailer={retailer} />
 
-			<div className="mt-4 lg:flex lg:items-start lg:gap-10">
+			{/* Back to the catalog — mirrors the category page's affordance, so
+			    every level of the storefront has the same way out. The cart lives
+			    in the sticky purchase bar below (count + total + go to checkout),
+			    so there's no second cart chip up here saying the same thing. */}
+			<div className="px-5 pt-4 lg:px-8">
+				<Link
+					to="/$slug"
+					params={{ slug: storeSlug }}
+					className="inline-flex w-fit items-center gap-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+				>
+					<ArrowLeft className="size-4" aria-hidden />
+					All products
+				</Link>
+			</div>
+
+			<div className="mt-4 px-5 lg:flex lg:items-start lg:gap-10 lg:px-8">
 				{/* Gallery — snap carousel on mobile (the sheet's pattern), main
 				    image + thumbnail strip on desktop. */}
 				<div className="lg:w-[44%] lg:shrink-0">

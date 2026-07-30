@@ -7,7 +7,6 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
 import { Input } from "../ui/input";
 import { ProductCard, type StorefrontProduct } from "./product-card";
-import { ProductDetailSheet } from "./product-detail-sheet";
 import { addVariantToCart, type StorefrontVariant } from "./product-purchase";
 
 /** Product-card grid — denser on desktop so a product card never outweighs a
@@ -39,13 +38,6 @@ interface ProductGridProps {
 	 * no extra read cost.)
 	 */
 	storeSlug?: string;
-	/**
-	 * Proceed to checkout. The detail sheet's "Go to checkout" CTA calls this
-	 * (after the grid closes the sheet), so a buyer can proceed straight from a
-	 * product without hunting for the cart bar. The routes navigate to the
-	 * checkout page (/$slug/checkout — 86eybrhrt PR1).
-	 */
-	onRequestCheckout?: () => void;
 }
 
 export function ProductGrid({
@@ -54,7 +46,6 @@ export function ProductGrid({
 	products: productsOverride,
 	beforeGrid,
 	storeSlug,
-	onRequestCheckout,
 }: ProductGridProps) {
 	// `products.list` returns active products already sorted by the retailer's
 	// `sortOrder` (set via the dashboard reorder). We render in that order — the
@@ -71,31 +62,22 @@ export function ProductGrid({
 		api.categories.listActivePublic,
 		storeSlug ? { retailerId } : "skip",
 	);
-	const [openProduct, setOpenProduct] = useState<StorefrontProduct | null>(
-		null,
-	);
 	const [searchQuery, setSearchQuery] = useState("");
 	const navigate = useNavigate();
 
-	// Opening a product: desktop goes to its PAGE (/$slug/p/<productSlug> —
-	// the redesign's proper view, with a URL worth sharing); mobile keeps the
-	// in-place sheet (fastest cart-building, scroll position preserved).
-	// Slug-less rows (legacy catalog before backfillProductSlugs has run) fall
-	// back to the sheet everywhere. See docs/storefront-product-pages.md.
+	// Opening a product goes to its PAGE on EVERY breakpoint. A modal on mobile
+	// hid the one thing PR2 exists to give buyers — the product's URL in the
+	// address bar, which is how sharing actually happens on a phone — and cost
+	// more screen on the smaller device, not less. `slug` is always present:
+	// every write path assigns one and the server derives a fallback for
+	// un-backfilled rows (see products.effectiveSlug).
+	// See docs/storefront-product-pages.md.
 	const openProductView = (p: StorefrontProduct) => {
-		if (
-			storeSlug &&
-			p.slug &&
-			typeof window !== "undefined" &&
-			window.matchMedia("(min-width: 1024px)").matches
-		) {
-			navigate({
-				to: "/$slug/p/$productSlug",
-				params: { slug: storeSlug, productSlug: p.slug },
-			});
-			return;
-		}
-		setOpenProduct(p);
+		if (!storeSlug) return;
+		navigate({
+			to: "/$slug/p/$productSlug",
+			params: { slug: storeSlug, productSlug: p.slug },
+		});
 	};
 
 	if (products === undefined) {
@@ -271,42 +253,6 @@ export function ProductGrid({
 					))}
 				</div>
 			)}
-
-			<ProductDetailSheet
-				product={openProduct}
-				retailerId={retailerId}
-				// Units of this product already in the cart — the sheet's stepper
-				// defaults to the REMAINING amount toward the product's minimum.
-				cartQuantity={
-					openProduct ? cart.quantityForProduct(openProduct._id) : 0
-				}
-				// Whole-cart summary drives the footer "Go to checkout" CTA.
-				cartItemCount={cart.itemCount}
-				cartTotal={cart.total}
-				// Relative share path — absolutized at click time (SSR-safe).
-				shareUrl={
-					storeSlug && openProduct?.slug
-						? `/${storeSlug}/p/${openProduct.slug}`
-						: undefined
-				}
-				onClose={() => setOpenProduct(null)}
-				// Stay open after adding so a buyer can add a standard variant AND
-				// request the custom line from the same product without reopening. The
-				// toast + cart bar confirm the add; they close via the X when done.
-				onAdd={(p, variant, qty, custom) => addVariant(p, variant, qty, custom)}
-				// Close the product sheet, then hand off to the checkout page. The
-				// navigation is deferred a tick so this dialog's teardown (focus
-				// restore, scroll unlock) finishes before the route transition —
-				// the gap is imperceptible (no exit anim).
-				onCheckout={
-					onRequestCheckout
-						? () => {
-								setOpenProduct(null);
-								setTimeout(onRequestCheckout, 0);
-							}
-						: undefined
-				}
-			/>
 		</>
 	);
 }

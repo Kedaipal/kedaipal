@@ -1,4 +1,4 @@
-import { Link as LinkIcon, X } from "lucide-react";
+import { X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { Markdown } from "../ui/markdown";
@@ -8,13 +8,11 @@ import {
 	AddToCartButton,
 	CustomOrderCard,
 	EmptyGallery,
-	GoToCheckoutBar,
 	type OnAddVariant,
 	OptionPills,
 	PurchaseHints,
 	PurchaseStepper,
 	type StorefrontVariant,
-	shareProductLink,
 	TotalPreviewRow,
 	useProductPurchase,
 } from "./product-purchase";
@@ -28,41 +26,28 @@ interface ProductDetailSheetProps {
 	 * stepper defaults to the REMAINING amount toward the product's minimum
 	 * order quantity, so the happy path never trips the checkout block. */
 	cartQuantity: number;
-	/** Whole-cart item count (all products) — drives the "Go to checkout" CTA in
-	 * the footer: it only appears once the cart holds ≥1 item. Optional so the
-	 * sheet renders standalone (e.g. in tests) with the CTA hidden. */
-	cartItemCount?: number;
-	/** Whole-cart money total (minor units) — shown on the checkout CTA. 0 (or a
-	 * quote-only cart) hides the amount, keeping the count + arrow. */
-	cartTotal?: number;
-	/** Shareable path/URL of this product's page (/$slug/p/<productSlug>) —
-	 * shows a copy-link button in the header. Absent (slug-less legacy row, or
-	 * a standalone render) → no share affordance. See 86eybrhrt PR2. */
-	shareUrl?: string;
 	onClose: () => void;
 	onAdd: OnAddVariant;
-	/** Jump straight from the product view to the checkout page without
-	 * closing the modal by hand first. Provided by the grid, which closes this
-	 * sheet then navigates. Absent → the CTA is hidden. See docs. */
-	onCheckout?: () => void;
 }
 
 /**
- * The in-store product view — a bottom sheet on mobile (fast cart-building
- * while browsing), a centered dialog at `sm:`. The URL-addressable sibling is
- * the product PAGE (product-page.tsx); both compose the same purchase pieces
- * from product-purchase.tsx, so the buy box can't drift between them.
+ * The SELLER's buyer-eye preview of a product, used by the product editor
+ * (`app.products.$productId.tsx`) — a bottom sheet on mobile, a centered
+ * dialog at `sm:`.
+ *
+ * Buyers never see this: the storefront routes every product tap to the
+ * URL-addressable PAGE (`product-page.tsx`) on every breakpoint. A sheet is
+ * still right HERE — a draft the seller is editing has no public URL to
+ * navigate to, and the preview shouldn't leave the editor. Both surfaces
+ * compose the same pieces from `product-purchase.tsx`, so what the seller
+ * previews is what the buyer gets.
  */
 export function ProductDetailSheet({
 	product,
 	retailerId,
 	cartQuantity,
-	cartItemCount = 0,
-	cartTotal = 0,
-	shareUrl,
 	onClose,
 	onAdd,
-	onCheckout,
 }: ProductDetailSheetProps) {
 	const pp = useProductPurchase({ product, retailerId, cartQuantity });
 
@@ -84,27 +69,15 @@ export function ProductDetailSheet({
 						<Dialog.Title className="text-base font-semibold">
 							Product details
 						</Dialog.Title>
-						<div className="flex items-center gap-1">
-							{shareUrl ? (
-								<button
-									type="button"
-									onClick={() => void shareProductLink(shareUrl)}
-									className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-muted"
-									aria-label="Copy product link"
-								>
-									<LinkIcon className="size-4" />
-								</button>
-							) : null}
-							<Dialog.Close asChild>
-								<button
-									type="button"
-									className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-muted"
-									aria-label="Close"
-								>
-									<X className="size-5" />
-								</button>
-							</Dialog.Close>
-						</div>
+						<Dialog.Close asChild>
+							<button
+								type="button"
+								className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-muted"
+								aria-label="Close"
+							>
+								<X className="size-5" />
+							</button>
+						</Dialog.Close>
 					</div>
 
 					<div className="flex-1 overflow-y-auto px-5 py-4 sm:px-6">
@@ -154,12 +127,6 @@ export function ProductDetailSheet({
 							<PurchaseStepper pp={pp} />
 							<AddToCartButton pp={pp} onAdd={onAdd} />
 						</div>
-						<GoToCheckoutBar
-							cartItemCount={cartItemCount}
-							cartTotal={cartTotal}
-							currency={product.currency}
-							onCheckout={onCheckout}
-						/>
 					</div>
 				</Dialog.Content>
 			</Dialog.Portal>

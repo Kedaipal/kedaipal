@@ -1428,6 +1428,50 @@ describe("products.getPublicBySlug", () => {
 		).toBeNull();
 	});
 
+	test("resolves a legacy slug-less product by its derived name slug", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const id = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Tent 2P" }),
+		);
+		// Simulate a row created before slugs existed and not yet backfilled.
+		await t.run((ctx) => ctx.db.patch(id, { slug: undefined }));
+
+		// Still addressable — otherwise it'd be un-openable between a deploy and
+		// the backfill, since the page is the storefront's only product view.
+		const product = await t.query(api.products.getPublicBySlug, {
+			retailerId: retailer._id,
+			slug: "tent-2p",
+		});
+		expect(product?._id).toBe(id);
+		// …and the list hands the grid a usable link for it.
+		const listed = await t.query(api.products.list, {
+			retailerId: retailer._id,
+		});
+		expect(listed.find((p) => p._id === id)?.slug).toBe("tent-2p");
+	});
+
+	test("the derived fallback still respects visibility (hidden → null)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const id = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Event Special" }),
+		);
+		await asA.mutation(api.products.update, { productId: id, hidden: true });
+		await t.run((ctx) => ctx.db.patch(id, { slug: undefined }));
+
+		expect(
+			await t.query(api.products.getPublicBySlug, {
+				retailerId: retailer._id,
+				slug: "event-special",
+			}),
+		).toBeNull();
+	});
+
 	test("a hidden product KEEPS its slug — no takeover, and restoring revives the URL", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);

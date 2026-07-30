@@ -1,9 +1,4 @@
-import {
-	createFileRoute,
-	notFound,
-	redirect,
-	useNavigate,
-} from "@tanstack/react-router";
+import { createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { type Locale, OG_LOCALE } from "../../convex/lib/locale";
@@ -207,7 +202,6 @@ function StorefrontSkeleton() {
 
 function StorefrontRoute() {
 	const { slug } = Route.useParams();
-	const navigate = useNavigate();
 	// Live query keeps the catalog reactive after the SSR'd loader response.
 	const result = useQuery(api.retailers.getRetailerBySlug, { slug });
 	const cart = useCart(
@@ -219,10 +213,6 @@ function StorefrontRoute() {
 	}
 
 	const retailer = result.retailer;
-	// Checkout is a real route (86eybrhrt PR1) — the cart bar and the product
-	// detail sheet's "Go to checkout" both navigate there.
-	const goToCheckout = () =>
-		navigate({ to: "/$slug/checkout", params: { slug: retailer.slug } });
 
 	return (
 		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-20">
@@ -239,7 +229,6 @@ function StorefrontRoute() {
 					retailerId={retailer._id}
 					cart={cart}
 					storeSlug={retailer.slug}
-					onRequestCheckout={goToCheckout}
 					beforeGrid={
 						<CategoryRail retailerId={retailer._id} storeSlug={retailer.slug} />
 					}

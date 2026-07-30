@@ -201,12 +201,19 @@ function ProductNotFound() {
 
 function ProductSkeleton() {
 	return (
-		<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col gap-4 px-5 pt-4 lg:px-8 lg:pt-6">
-			<div className="flex items-center gap-3">
-				<Skeleton className="size-9 rounded-full" />
-				<Skeleton className="h-6 w-32" />
-			</div>
-			<div className="lg:flex lg:gap-10">
+		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-20">
+			{/* Mirrors the shared StorefrontHeader shape so the swap-in is seamless. */}
+			<header className="flex flex-col gap-4 bg-gradient-to-b from-accent/10 to-background px-5 pb-6 pt-10 lg:rounded-b-3xl lg:px-8">
+				<Skeleton className="h-5 w-24" />
+				<div className="flex items-center gap-4">
+					<Skeleton className="h-16 w-16 shrink-0 rounded-2xl" />
+					<div className="flex flex-col gap-2">
+						<Skeleton className="h-7 w-40" />
+						<Skeleton className="h-4 w-48" />
+					</div>
+				</div>
+			</header>
+			<div className="mt-4 px-5 lg:flex lg:gap-10 lg:px-8">
 				<Skeleton className="aspect-square w-full rounded-2xl lg:w-[44%]" />
 				<div className="mt-4 flex flex-1 flex-col gap-3 lg:mt-0">
 					<Skeleton className="h-8 w-2/3" />
@@ -248,16 +255,19 @@ function ProductRoute() {
 	}
 
 	return (
-		<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col px-5 pb-6 pt-4 lg:px-8 lg:pb-10 lg:pt-6">
+		// No page padding: the shared header is full-bleed (its cover image must
+		// reach the edges, same as the store home + category pages); each section
+		// below owns its own px.
+		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col">
 			<ProductPageView
 				product={product}
 				retailerId={retailer._id}
-				storeName={retailer.storeName}
+				retailer={retailer}
 				storeSlug={retailer.slug}
 				cart={cart}
 				canonicalUrl={`${SITE_URL}/${retailer.slug}/p/${productSlug}`}
 			/>
-			<StorefrontFooter />
+			<StorefrontFooter compact />
 		</div>
 	);
 }

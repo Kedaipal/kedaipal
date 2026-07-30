@@ -15,9 +15,18 @@ import { AppImage } from "../ui/app-image";
  * convention (same as the poster QR `?src=` links) so the click path this badge
  * creates is measurable. Opens in a new tab so the buyer never loses the store.
  */
-export function StorefrontFooter() {
+export function StorefrontFooter({
+	/** Tighter vertical rhythm for pages that end in a bordered sticky bar
+	 * (checkout, product) — the bar's own edge already separates the footer,
+	 * so the browse pages' generous top gap just reads as dead space there. */
+	compact = false,
+}: {
+	compact?: boolean;
+} = {}) {
 	return (
-		<footer className="mt-auto px-5 pb-6 pt-8 lg:px-8">
+		<footer
+			className={`mt-auto px-5 lg:px-8 ${compact ? "pb-4 pt-4" : "pb-6 pt-8"}`}
+		>
 			<div className="flex justify-center">
 				<a
 					href="https://kedaipal.com?src=storefront_badge"

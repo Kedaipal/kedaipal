@@ -3,7 +3,6 @@ import {
 	Link,
 	notFound,
 	redirect,
-	useNavigate,
 } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import { ArrowLeft } from "lucide-react";
@@ -194,7 +193,6 @@ function CategorySkeleton() {
 
 function CategoryRoute() {
 	const { slug, categorySlug } = Route.useParams();
-	const navigate = useNavigate();
 	// Live queries keep the page reactive after the SSR'd loader response.
 	const result = useQuery(api.retailers.getRetailerBySlug, { slug });
 	const retailer = result?.status === "ok" ? result.retailer : undefined;
@@ -247,9 +245,6 @@ function CategoryRoute() {
 					cart={cart}
 					products={page.products}
 					storeSlug={retailer.slug}
-					onRequestCheckout={() =>
-						navigate({ to: "/$slug/checkout", params: { slug: retailer.slug } })
-					}
 				/>
 			</section>
 
