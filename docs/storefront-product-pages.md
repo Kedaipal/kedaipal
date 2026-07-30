@@ -99,7 +99,7 @@ cart-line snapshots — grid quick-add, sheet and page all call it).
   saying it twice is the redundancy we removed from the checkout header.
   Below that: gallery (mobile snap carousel; desktop hero + thumbnails,
   variant-aware), buy box with a **Copy link** chip, and purchase controls
-  that are a sticky bottom bar on mobile and in-flow on desktop.
+  that are a fixed bottom bar on mobile and in-flow on desktop (`lg:static`).
 - **Share affordance**: `shareProductLink` uses the OS share sheet when
   available (the WhatsApp path on mobile) and falls back to clipboard + toast.
 
@@ -116,6 +116,41 @@ cart-line snapshots — grid quick-add, sheet and page all call it).
   photo → cover → logo precedence) + `Product` JSON-LD (`Offer` /
   `AggregateOffer`; quote-only products carry **no** offers block rather than
   advertising RM 0).
+
+## The bottom bar and the footer
+
+Applies to both pages that carry a bottom CTA bar (product, checkout), and to
+any new one. Two earlier attempts got this wrong, so the reasoning is here:
+
+**The bar is `position: fixed`** (`fixed inset-x-0 bottom-0`, matching the
+long-standing `CartBar`), the footer is an ordinary direct flex child of the
+route container *after* it, and the route reserves bottom clearance. Because
+`fixed` is out of document flow, the powered-by badge renders as page content
+**above** the floating bar — the store home's stacking.
+
+- ✗ *Nest the footer inside the bar.* Welds the badge to the bar and eats
+  sticky-footer space on mobile.
+- ✗ *Make the bar `sticky` instead.* Sticky sits **in** flow, so a following
+  footer renders **below** the bar. (This was briefly written down as a house
+  rule — it isn't one.)
+
+**The clearance is measured, not guessed.** The bar calls
+`usePublishedHeight("--storefront-bar-h")` (`src/hooks/usePublishedHeight.ts`,
+the same ResizeObserver pattern as the dashboard's `--app-bottomnav-h`) and the
+route reserves `pb-[var(--storefront-bar-h,12rem)] lg:pb-10`. These bars change
+height for real — a blocked CTA adds a reason line, copy wraps at 320px, the
+safe-area inset varies per device — and a hardcoded `pb-64` overshot by 60-75px,
+which showed up as dead space under the badge. Verified: at 320px the checkout
+bar grows 181→197px and the reservation follows.
+
+Gotcha: a `display: none` bar measures 0, and `var(--x, fallback)` does **not**
+fall back on `0px` (only when unset) — so consumers must set their own value at
+breakpoints where the bar is hidden, hence the paired `lg:pb-10`.
+
+`StorefrontFooter` takes no props: all four storefront pages share one rhythm
+(32px above the badge, 24px below). It briefly had a `compact` variant for the
+bar pages, which only made sense while those bars were `sticky` and sat in flow
+right under it.
 
 ## Deliberate scope edges
 

@@ -215,7 +215,7 @@ function CategoryRoute() {
 		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-20">
 			{/* Same brand header as the store home (cover/logo/name) — the buyer
 			    never loses the sense of whose store they're in. */}
-			<StorefrontHeader retailer={retailer} />
+			<StorefrontHeader retailer={retailer} asPageHeading={false} />
 
 			{/* Category identity: a way back, then the category's own name + blurb. */}
 			<div className="flex flex-col gap-2 px-5 pt-4 lg:px-8">
@@ -228,9 +228,11 @@ function CategoryRoute() {
 					All products
 				</Link>
 				<div className="flex flex-col gap-1">
-					<h2 className="font-heading text-2xl font-extrabold leading-tight tracking-tight">
+					{/* This page's own subject, so it owns the <h1>; the brand header
+					    above renders the store name as plain text here. */}
+					<h1 className="font-heading text-2xl font-extrabold leading-tight tracking-tight">
 						{page.category.name}
-					</h2>
+					</h1>
 					{page.category.description ? (
 						<p className="line-clamp-3 whitespace-pre-line text-sm text-muted-foreground">
 							{page.category.description}

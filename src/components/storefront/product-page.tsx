@@ -73,7 +73,7 @@ export function ProductPageView({
 			{/* The same brand header the store home and category pages render —
 			    a buyer arriving from a shared WhatsApp link lands in the SELLER's
 			    store, not on an anonymous product card. */}
-			<StorefrontHeader retailer={retailer} />
+			<StorefrontHeader retailer={retailer} asPageHeading={false} />
 
 			{/* Back to the catalog — mirrors the category page's affordance, so
 			    every level of the storefront has the same way out. The cart lives
