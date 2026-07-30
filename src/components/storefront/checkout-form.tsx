@@ -26,12 +26,17 @@ import {
 import type { UseCart } from "../../hooks/useCart";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { quickPickDays } from "../../lib/checkout-dates";
-import { convexErrorMessage, formatPrice } from "../../lib/format";
+import {
+	convexErrorMessage,
+	formatMyMobile,
+	formatPrice,
+} from "../../lib/format";
 import { composeCustomerNote } from "../../lib/order-note";
 import {
 	type CheckoutAddressValues,
 	checkoutFormSchema,
 	emptyAddress,
+	myWaPhoneCheckoutSchema,
 } from "../../lib/schemas";
 import { useLiveDeliveryQuote } from "../../lib/use-live-delivery-quote";
 import { submitThenFocusError } from "../forms/focus-error";
@@ -836,6 +841,30 @@ export function CheckoutPage({
 								/>
 							)}
 						</form.AppField>
+						{/* Echo the NORMALIZED number back once it parses. The whole point
+						    of capturing a phone here is that the confirmation reaches it,
+						    and the realistic failure is a transposed digit — which the
+						    buyer can only catch if they see the number grouped the way
+						    they'd read it. Costs nothing and blocks nobody (a genuinely
+						    unreachable number still degrades to the recovery card). */}
+						<form.Subscribe selector={(s) => s.values.waPhone}>
+							{(typed) => {
+								const parsed = myWaPhoneCheckoutSchema.safeParse(typed ?? "");
+								if (!parsed.success) return null;
+								const pretty = formatMyMobile(parsed.data);
+								return (
+									<p className="text-sm font-medium text-accent-emphasis">
+										{locale === "ms"
+											? confirmPushEnabled
+												? `Pengesahan akan dihantar ke ${pretty} — pastikan nombor ini betul.`
+												: `${storeName} akan hubungi anda di ${pretty} — pastikan nombor ini betul.`
+											: confirmPushEnabled
+												? `We'll send your confirmation to ${pretty} — check it's right.`
+												: `${storeName} will reach you at ${pretty} — check it's right.`}
+									</p>
+								);
+							}}
+						</form.Subscribe>
 						{/* PDPA notice-at-collection — the buyer-facing line the WhatsApp
 						    flows carry via privacyNoticeLine; localized to the store
 						    locale like the tracking page (rest of checkout copy is EN
