@@ -4,6 +4,7 @@ import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { PUSH_MAX_ATTEMPTS } from "./lib/confirmationPush";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -1431,6 +1432,344 @@ describe("drop-off + custom-stage status copy (86ey570am)", () => {
 		const body = (fetchMock.waCalls()[0].body as { text: { body: string } })
 			.text.body;
 		expect(body).toContain("on the way");
+		fetchMock.restore();
+	});
+});
+
+describe("storefront confirmation push (86eyf1rck)", () => {
+	const TEMPLATE = "order_confirmation_utility";
+
+	/** Fetch mock whose graph responses echo a wamid (like the real Cloud API). */
+	function installWamidFetchMock(wamid: string) {
+		const calls: FetchCall[] = [];
+		const original = globalThis.fetch;
+		globalThis.fetch = vi.fn(async (url: unknown, init?: RequestInit) => {
+			const body = init?.body ? JSON.parse(init.body as string) : null;
+			calls.push({ url: String(url), body });
+			if (String(url).includes("graph.facebook.com")) {
+				return new Response(JSON.stringify({ messages: [{ id: wamid }] }), {
+					status: 200,
+				});
+			}
+			return new Response("{}", { status: 200 });
+		}) as unknown as typeof fetch;
+		return {
+			calls,
+			waCalls: () => calls.filter((c) => c.url.includes("graph.facebook.com")),
+			restore: () => {
+				globalThis.fetch = original;
+			},
+		};
+	}
+
+	afterEach(() => {
+		delete process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE;
+	});
+
+	async function orderIdOf(t: ReturnType<typeof setup>, shortId: string) {
+		return await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			if (!o) throw new Error("order missing");
+			return o._id;
+		});
+	}
+
+	test("sends the template (ms language for ms store) and stamps sent + wamid", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = TEMPLATE;
+		const t = setup();
+		const fetchMock = installWamidFetchMock("wamid.PUSH1");
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "ms");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+
+		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, { orderId });
+
+		const wa = fetchMock.waCalls();
+		expect(wa).toHaveLength(1);
+		const body = wa[0].body as {
+			type: string;
+			to: string;
+			template: {
+				name: string;
+				language: { code: string };
+				components: Array<{
+					type: string;
+					parameters: Array<{ text: string }>;
+				}>;
+			};
+		};
+		expect(body.type).toBe("template");
+		expect(body.to).toBe("60123456789");
+		expect(body.template.name).toBe(TEMPLATE);
+		expect(body.template.language.code).toBe("ms");
+		// Body params in order: shortId, storeName, formatted amount.
+		expect(body.template.components[0].parameters.map((p) => p.text)).toEqual([
+			shortId,
+			"Test Outdoor",
+			"MYR 120.00",
+		]);
+		// Button param is the tracking TOKEN (never the shortId).
+		expect(body.template.components[1].parameters[0].text).toBe(
+			await tk(t, shortId),
+		);
+
+		// Read from the DB: the wamid is Meta's internal message id and is
+		// deliberately stripped from the unauthenticated buyer read.
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.confirmationPushStatus).toBe("sent");
+		expect(order?.confirmationPushWamid).toBe("wamid.PUSH1");
+		expect(order?.confirmationPushAt).toBeTypeOf("number");
+		const buyerView = await t.query(api.orders.get, {
+			token: await tk(t, shortId),
+		});
+		expect(buyerView?.confirmationPushStatus).toBe("sent");
+		expect(buyerView?.confirmationPushWamid).toBeUndefined();
+		fetchMock.restore();
+	});
+
+	/** Stub graph.facebook.com with a fixed failure response. */
+	function installFailingFetch(status: number, body: string) {
+		const original = globalThis.fetch;
+		globalThis.fetch = vi.fn(async (url: unknown) => {
+			if (String(url).includes("graph.facebook.com")) {
+				return new Response(body, { status });
+			}
+			return new Response("{}", { status: 200 });
+		}) as unknown as typeof fetch;
+		return () => {
+			globalThis.fetch = original;
+		};
+	}
+
+	test("a transient 5xx is retried, so the buyer is never told to send it themselves", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = TEMPLATE;
+		const t = setup();
+		const restore = installFailingFetch(500, "boom");
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+
+		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, { orderId });
+
+		// Still in flight — NOT stamped failed, so no recovery card is shown.
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(order?.confirmationPushStatus).toBe("sending");
+		expect(order?.confirmationPushFailureKind).toBeUndefined();
+		restore();
+	});
+
+	test("the last attempt of a transient failure gives up as a system fault (never blames the number)", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = TEMPLATE;
+		const t = setup();
+		const restore = installFailingFetch(503, "unavailable");
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+
+		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, {
+			orderId,
+			attempt: PUSH_MAX_ATTEMPTS,
+		});
+
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(order?.confirmationPushStatus).toBe("failed");
+		expect(order?.confirmationPushFailureKind).toBe("system");
+		restore();
+	});
+
+	test("an unreachable number fails immediately on attempt 1 and is attributed to the number", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = TEMPLATE;
+		const t = setup();
+		const restore = installFailingFetch(
+			400,
+			JSON.stringify({
+				error: { code: 131026, message: "(#131026) Message undeliverable" },
+			}),
+		);
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+
+		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, { orderId });
+
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(order?.confirmationPushStatus).toBe("failed");
+		expect(order?.confirmationPushFailureKind).toBe("unreachable");
+		restore();
+	});
+
+	test("a template misconfiguration is OUR fault, not the buyer's number", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = TEMPLATE;
+		const t = setup();
+		const restore = installFailingFetch(
+			400,
+			JSON.stringify({
+				error: { code: 132001, message: "template does not exist" },
+			}),
+		);
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+
+		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, { orderId });
+
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(order?.confirmationPushStatus).toBe("failed");
+		expect(order?.confirmationPushFailureKind).toBe("system");
+		restore();
+	});
+
+	test("an in-flight retry stops once the buyer has already been reached", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = TEMPLATE;
+		const t = setup();
+		const fetchMock = installWamidFetchMock("wamid.SHOULDNOTSEND");
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+		// Buyer reached us another way (manual send) while attempts were queued.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(orderId, { confirmationPushStatus: "recovered" });
+		});
+
+		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, {
+			orderId,
+			attempt: 2,
+		});
+
+		expect(fetchMock.waCalls()).toHaveLength(0);
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.confirmationPushStatus).toBe("recovered");
+		fetchMock.restore();
+	});
+
+	test("no-ops (no send, no stamp) when the template env is unset", async () => {
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+
+		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, { orderId });
+
+		expect(fetchMock.waCalls()).toHaveLength(0);
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(order?.confirmationPushStatus).toBeUndefined();
+		fetchMock.restore();
+	});
+
+	test("failed push + inbound ORD from a DIFFERENT phone re-stamps the number, relinks the customer and marks recovered", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = TEMPLATE;
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		// Buyer typos their number at checkout → linked to the wrong customer.
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60129999999" },
+			deliveryAddress: {
+				line1: "12 Jln Mawar 3",
+				city: "Petaling Jaya",
+				state: "Selangor",
+				postcode: "47301",
+			},
+		});
+		// Push path was active → order committed as confirmed at create.
+		const orderId = await orderIdOf(t, shortId);
+		const preRecovery = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(preRecovery?.status).toBe("confirmed");
+		const staleCustomerId = preRecovery?.customerId;
+		expect(staleCustomerId).toBeDefined();
+		await t.mutation(internal.orders.recordConfirmationPush, {
+			orderId,
+			status: "failed",
+		});
+
+		// The buyer sends the order message manually from their REAL WhatsApp.
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: `Hi, my order ${shortId}`,
+		});
+
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.customer.waPhone).toBe("60123456789");
+		expect(order?.confirmationPushStatus).toBe("recovered");
+		expect(order?.customerId).toBeDefined();
+		expect(order?.customerId).not.toBe(staleCustomerId);
+		// The typo'd number's customer record no longer counts this order.
+		const stale = await t.run(async (ctx) => ctx.db.get(staleCustomerId!));
+		expect(stale?.orderCount).toBe(0);
+		expect(stale?.totalSpent).toBe(0);
+		const real = await t.run(async (ctx) => ctx.db.get(order!.customerId!));
+		expect(real?.waPhone).toBe("60123456789");
+		expect(real?.orderCount).toBe(1);
+		expect(real?.totalSpent).toBe(12000);
+		fetchMock.restore();
+	});
+
+	test("a healthy (push sent) order's number is NOT overwritten by a different sender", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = TEMPLATE;
+		const t = setup();
+		const fetchMock = installWamidFetchMock("wamid.OK9");
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, { orderId });
+
+		// A friend forwards the order message from THEIR phone.
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60175555555",
+			text: shortId,
+		});
+
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.customer.waPhone).toBe("60123456789");
+		expect(order?.confirmationPushStatus).toBe("sent");
+		fetchMock.restore();
+	});
+
+	test("statuses webhook failed event flips sent → failed via wamid; recovered never regresses", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = TEMPLATE;
+		const t = setup();
+		const fetchMock = installWamidFetchMock("wamid.FLIP1");
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, { orderId });
+
+		// Unknown wamid → no-op.
+		await t.mutation(internal.orders.markConfirmationPushFailed, {
+			wamid: "wamid.UNKNOWN",
+		});
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(orderId)))?.confirmationPushStatus,
+		).toBe("sent");
+
+		// The real failure event lands.
+		await t.mutation(internal.orders.markConfirmationPushFailed, {
+			wamid: "wamid.FLIP1",
+			errorDetail: "131026: Message undeliverable",
+		});
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(orderId)))?.confirmationPushStatus,
+		).toBe("failed");
+
+		// Buyer recovers via manual send; a late replayed webhook must not regress.
+		await t.action(internal.whatsapp.handleInbound, {
+			fromPhone: "60123456789",
+			text: shortId,
+		});
+		await t.mutation(internal.orders.markConfirmationPushFailed, {
+			wamid: "wamid.FLIP1",
+		});
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(orderId)))?.confirmationPushStatus,
+		).toBe("recovered");
 		fetchMock.restore();
 	});
 });

@@ -341,6 +341,60 @@ export async function adjustAggregatesForTotalChange(
 	});
 }
 
+/**
+ * Move an order onto a different WhatsApp number, carrying its CRM history with
+ * it. Used by the two confirmation-push repair paths (86eyf1rck): the buyer
+ * sending the ORD message manually from their real WhatsApp, and the buyer
+ * correcting the number on their order page. Both mean the same thing — the
+ * number captured at checkout was wrong — so both must move the order's
+ * aggregates off the wrong customer record and onto the right one, or the
+ * seller's CRM shows a phantom customer who ordered once and a real customer
+ * who never did.
+ *
+ * **Cancelled orders move the phone only.** Cancelling already ran
+ * `decrementAggregatesForCancel` (see `reverseCancellationEffects`) while
+ * leaving `customerId` set, and neither repair route gates on status — a
+ * cancelled order is still reachable via its failed-push card. Re-running the
+ * decrement here would subtract a second time (silently eating a *different*
+ * real order's count/spend if that customer has others) and the re-link would
+ * then credit the new customer with an order that no longer exists. A cancelled
+ * order contributes nothing to either record, so there is nothing to move — the
+ * same trap `deleteOrderCascade` guards.
+ *
+ * No-ops when the phone hasn't actually changed. Caller is responsible for
+ * authorization and for validating/normalizing `newPhone` first.
+ */
+export async function moveOrderToPhone(
+	ctx: MutationCtx,
+	{ order, newPhone }: { order: Doc<"orders">; newPhone: string },
+): Promise<Id<"customers"> | undefined> {
+	if (order.customer.waPhone === newPhone) return order.customerId;
+
+	// Always correct the number itself, so later messages reach the buyer.
+	await ctx.db.patch(order._id, {
+		customer: { ...order.customer, waPhone: newPhone },
+		updatedAt: Date.now(),
+	});
+	if (order.status === "cancelled") return order.customerId;
+
+	// Un-count it from the record it was (wrongly) attributed to at checkout.
+	if (order.customerId) {
+		await decrementAggregatesForCancel(ctx, {
+			customerId: order.customerId,
+			orderTotal: order.total,
+		});
+	}
+	// Re-link against the real number (also re-stamps order.customerId).
+	return linkOrderToCustomer(ctx, {
+		retailerId: order.retailerId,
+		waPhone: newPhone,
+		orderId: order._id,
+		orderTotal: order.total,
+		orderCreatedAt: order.createdAt,
+		customerName: order.customer.name,
+	});
+}
+
 // ---------------------------------------------------------------------------
 // Backfill migration
 // ---------------------------------------------------------------------------

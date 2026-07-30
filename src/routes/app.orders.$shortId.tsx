@@ -23,7 +23,12 @@ import {
 	Truck,
 	User,
 } from "lucide-react";
-import { type ChangeEvent, type ReactNode, useState } from "react";
+import {
+	type ChangeEvent,
+	type ReactNode,
+	useEffect,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
@@ -301,6 +306,16 @@ function OrderDetailRoute() {
 	const markPaymentReceived = useMutation(api.orders.markPaymentReceived);
 	const sendPaymentReminder = useAction(api.orders.sendPaymentReminder);
 	const deleteOrder = useMutation(api.orders.deleteOrder);
+	// Opening the order IS the seller seeing it — drains it from the New bucket,
+	// the Home tile and the age escalation (86eyf1rck). Fire-and-forget: a failed
+	// stamp just means it stays flagged as new, which is the safe direction.
+	const markSeen = useMutation(api.orders.markSeen);
+	const orderId = order?._id;
+	const alreadySeen = order?.seenAt !== undefined;
+	useEffect(() => {
+		if (!orderId || alreadySeen) return;
+		void markSeen({ orderId }).catch(() => {});
+	}, [orderId, alreadySeen, markSeen]);
 	// Permanent hard delete is admin-only (Kedaipal support); a plain seller only
 	// ever cancels. Hide the danger action unless this is an admin act-as session —
 	// the server enforces the same rule, so this is discoverability, not the guard.
@@ -690,6 +705,44 @@ function OrderDetailRoute() {
 					) : undefined
 				}
 			/>
+
+			{/* Confirmation push failed (86eyf1rck). Amber like the payment claim: it
+			    needs the seller's eyes. Two causes, two different things for the
+			    seller to do — blaming the buyer's number when the fault was ours
+			    would send them chasing a customer for no reason. Clears itself once
+			    the buyer is reached (manual send, or they correct their number). */}
+			{order.confirmationPushStatus === "failed" &&
+			order.status !== "cancelled" ? (
+				<section className="flex gap-3 rounded-2xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-800 dark:bg-amber-950/50">
+					<MessageCircle className="size-5 shrink-0 text-amber-600 dark:text-amber-400" />
+					<div className="min-w-0 flex-1">
+						<p className="text-xs font-semibold uppercase tracking-widest text-amber-700 dark:text-amber-300">
+							{order.confirmationPushFailureKind === "system"
+								? "Buyer's confirmation didn't go out"
+								: "Couldn't reach the buyer on WhatsApp"}
+						</p>
+						{order.confirmationPushFailureKind === "system" ? (
+							<p className="mt-1 text-sm text-amber-950 dark:text-amber-100">
+								A WhatsApp problem on our side stopped the confirmation for
+								this order — the buyer's number{" "}
+								<b>{formatPhone(order.customer.waPhone ?? "")}</b> looks fine,
+								so no need to chase them about it. The order is confirmed and
+								they can see and pay for it on their order page. Message them
+								yourself if you'd like to confirm it personally.
+							</p>
+						) : (
+							<p className="mt-1 text-sm text-amber-950 dark:text-amber-100">
+								The confirmation to{" "}
+								<b>{formatPhone(order.customer.waPhone ?? "")}</b> didn't
+								deliver — that number may have a typo or no WhatsApp, so status
+								updates won't reach them either. Their order page offers a
+								&ldquo;Update my number&rdquo; fix; if they reach you another
+								way, check the number with them.
+							</p>
+						)}
+					</div>
+				</section>
+			) : null}
 
 			{/* Shopper's note + optional custom-line reference photo — front-and-centre
 			    so it isn't missed when fulfilling. Plain text, escaped by React. */}

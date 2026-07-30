@@ -19,20 +19,101 @@ function readCredentials(): WaCredentials {
 	return { accessToken, phoneNumberId };
 }
 
-async function postMessage(payload: Record<string, unknown>): Promise<void> {
+/**
+ * The Meta-approved utility template for the storefront order-confirmation
+ * push (86eyf1rck) — `order_confirmation_utility` in production. Unset ⇒ the
+ * push path is INACTIVE and storefront checkout degrades to the legacy
+ * buyer-sends-first wa.me handoff, so the code ships decoupled from template
+ * approval. Read at call time (same posture as readCredentials) so tests can
+ * stub via process.env.
+ */
+export function orderConfirmTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/**
+ * A failed Cloud API send, carrying the machine-readable bits a caller needs to
+ * decide whether retrying could ever help: the HTTP status and Meta's own error
+ * code. Without these a caller can only regex the message text, and the two
+ * cases are opposite — a 503 deserves a retry, a `131026` (recipient not on
+ * WhatsApp) never will. `responded: false` means the request never produced a
+ * response at all (DNS/TLS/abort), so no message can have been sent — the only
+ * case where retrying is guaranteed free of double-send risk.
+ */
+export class WhatsAppSendError extends Error {
+	readonly httpStatus?: number;
+	readonly metaCode?: number;
+	readonly responded: boolean;
+	constructor(
+		message: string,
+		opts: { httpStatus?: number; metaCode?: number; responded: boolean },
+	) {
+		super(message);
+		this.name = "WhatsAppSendError";
+		this.httpStatus = opts.httpStatus;
+		this.metaCode = opts.metaCode;
+		this.responded = opts.responded;
+	}
+}
+
+/**
+ * POST one message payload to the Cloud API. Returns Meta's message id
+ * (`wamid…`) when the response carries one — the ONLY key the `statuses`
+ * webhook later identifies the message by, so delivery-failure handling
+ * (typo'd number → failed confirmation push) depends on capturing it here.
+ *
+ * Throws `WhatsAppSendError` on failure so callers can classify retryability.
+ */
+async function postMessage(
+	payload: Record<string, unknown>,
+): Promise<string | undefined> {
 	const { accessToken, phoneNumberId } = readCredentials();
 	const url = `https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`;
-	const res = await fetch(url, {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${accessToken}`,
-			"Content-Type": "application/json",
-		},
-		body: JSON.stringify(payload),
-	});
+	let res: Response;
+	try {
+		res = await fetch(url, {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${accessToken}`,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify(payload),
+		});
+	} catch (err) {
+		// Never reached Meta (network/DNS/TLS/abort) — nothing was sent.
+		throw new WhatsAppSendError(
+			`WhatsApp send failed before response: ${
+				err instanceof Error ? err.message : String(err)
+			}`,
+			{ responded: false },
+		);
+	}
 	if (!res.ok) {
 		const body = await res.text();
-		throw new Error(`WhatsApp send failed (${res.status}): ${body}`);
+		let metaCode: number | undefined;
+		try {
+			const parsed = JSON.parse(body) as { error?: { code?: unknown } };
+			const code = parsed?.error?.code;
+			if (typeof code === "number") metaCode = code;
+		} catch {
+			// Non-JSON error body (proxy/gateway HTML) — status alone classifies it.
+		}
+		throw new WhatsAppSendError(
+			`WhatsApp send failed (${res.status}): ${body}`,
+			{ httpStatus: res.status, metaCode, responded: true },
+		);
+	}
+	try {
+		const body = (await res.json()) as {
+			messages?: Array<{ id?: unknown }>;
+		};
+		const id = body?.messages?.[0]?.id;
+		return typeof id === "string" ? id : undefined;
+	} catch {
+		// A 2xx with an unparseable body — the send succeeded, we just can't
+		// correlate its statuses webhook later. Never fail the send over it.
+		return undefined;
 	}
 }
 
@@ -133,8 +214,8 @@ export async function sendTemplate(
 	templateName: string,
 	languageCode: string,
 	components?: ReadonlyArray<Record<string, unknown>>,
-): Promise<void> {
-	await postMessage({
+): Promise<string | undefined> {
+	return postMessage({
 		messaging_product: "whatsapp",
 		recipient_type: "individual",
 		to: toPhone,

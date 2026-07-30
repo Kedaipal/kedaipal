@@ -17,6 +17,7 @@ import {
 	adjustAggregatesForTotalChange,
 	decrementAggregatesForCancel,
 	linkOrderToCustomer,
+	moveOrderToPhone,
 } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
 import { assertValidAddress } from "./lib/address";
@@ -43,7 +44,7 @@ import {
 	minOrderValueShortfall,
 	minQuantityMessage,
 } from "./lib/minOrderRules";
-import { statusToBucket } from "./lib/orderBuckets";
+import { orderBucket } from "./lib/orderBuckets";
 import { type CsvOrder, ordersToCsv } from "./lib/orderCsv";
 import {
 	type ManualReminderBlock,
@@ -86,7 +87,8 @@ import {
 import { buildOrderReceiptPdf } from "./lib/pdf/render";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 import { rateLimiter } from "./lib/rateLimiter";
-import { assertValidWaPhone } from "./lib/slug";
+import { assertValidMyMobile } from "./lib/slug";
+import { orderConfirmTemplateName } from "./lib/whatsapp";
 import { variantLabel } from "./lib/variant";
 import { renderSystemMessage } from "./lib/whatsappCopy";
 import { makeGuardedSender } from "./wabaProtection";
@@ -365,6 +367,140 @@ export const ensureTrackingToken = internalMutation({
 	},
 });
 
+/**
+ * Send-site stamp for the storefront confirmation push (86eyf1rck): "sent"
+ * (with Meta's wamid, when echoed) or "failed" (the send itself errored).
+ * Drives the tracking page's state card and the seller-side delivery note.
+ */
+export const recordConfirmationPush = internalMutation({
+	args: {
+		orderId: v.id("orders"),
+		status: v.union(v.literal("sent"), v.literal("failed")),
+		wamid: v.optional(v.string()),
+		// Required in practice for "failed" — drives whether the buyer is asked
+		// to fix their number or merely told we're having trouble.
+		failureKind: v.optional(
+			v.union(v.literal("unreachable"), v.literal("system")),
+		),
+	},
+	handler: async (
+		ctx,
+		{ orderId, status, wamid, failureKind },
+	): Promise<void> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) return;
+		// The buyer may have reached us by another route while attempts were in
+		// flight (manual send / corrected number) — never overwrite that.
+		if (order.confirmationPushStatus === "recovered") return;
+		await ctx.db.patch(orderId, {
+			confirmationPushStatus: status,
+			confirmationPushFailureKind: status === "failed" ? failureKind : undefined,
+			confirmationPushAt: Date.now(),
+			confirmationPushWamid: wamid,
+			updatedAt: Date.now(),
+		});
+	},
+});
+
+/**
+ * Webhook-side stamp: Meta's `statuses` webhook reported `failed` for an
+ * outbound message. Statuses arrive for EVERY message the shared number sends,
+ * so this is a cheap indexed probe — no matching order (not a confirmation
+ * push) is the common case and a silent no-op. Only a push still believed
+ * "sent" flips to "failed": "recovered" must never regress on a late/replayed
+ * webhook event.
+ */
+export const markConfirmationPushFailed = internalMutation({
+	args: {
+		wamid: v.string(),
+		errorDetail: v.optional(v.string()),
+	},
+	handler: async (ctx, { wamid, errorDetail }): Promise<void> => {
+		const order = await ctx.db
+			.query("orders")
+			.withIndex("by_confirmation_wamid", (q) =>
+				q.eq("confirmationPushWamid", wamid),
+			)
+			.first();
+		if (!order || order.confirmationPushStatus !== "sent") return;
+		console.warn("WA confirmation push failed for order", {
+			shortId: order.shortId,
+			errorDetail,
+		});
+		await ctx.db.patch(order._id, {
+			confirmationPushStatus: "failed",
+			// Meta accepted the send then failed to DELIVER it — that's the number,
+			// not us, so the buyer gets the repair affordance.
+			confirmationPushFailureKind: "unreachable",
+			updatedAt: Date.now(),
+		});
+	},
+});
+
+/**
+ * Buyer repairs the WhatsApp number on their own order after the confirmation
+ * push failed to reach it (86eyf1rck).
+ *
+ * This is the direct fix for the only failure this feature can't self-heal: a
+ * typo'd number. Without it the buyer's only route is to send us a wa.me
+ * message so the inbound path can infer their real number — a workaround for a
+ * missing edit control. Authorized by the tracking token exactly like
+ * `updateDeliveryAddress`, and deliberately scoped to `failed` pushes: there is
+ * no reason to rewrite the number on a healthy order, and keeping the window
+ * that narrow means a leaked token can't quietly redirect a seller's
+ * order messages.
+ *
+ * On success the order moves to the new number (carrying its CRM aggregates via
+ * the shared `moveOrderToPhone`) and the push is re-scheduled from attempt 1,
+ * so the buyer gets their confirmation without doing anything else.
+ */
+export const updateBuyerPhone = mutation({
+	args: { token: v.string(), waPhone: v.string() },
+	handler: async (ctx, { token, waPhone }): Promise<void> => {
+		// Each accepted save costs an outbound template send.
+		await rateLimiter.limit(ctx, "buyerPhoneUpdate", {
+			key: token,
+			throws: true,
+		});
+
+		const order = await orderByToken(ctx, token);
+		if (!order) throw new ConvexError("Order not found");
+		if (order.confirmationPushStatus !== "failed") {
+			throw new ConvexError(
+				"This order's WhatsApp number can't be changed right now",
+			);
+		}
+
+		let normalized: string;
+		try {
+			normalized = assertValidMyMobile(waPhone);
+		} catch (err) {
+			throw new ConvexError((err as Error).message);
+		}
+		if (normalized === order.customer.waPhone) {
+			throw new ConvexError(
+				"That's the same number we already tried — check the digits and try again",
+			);
+		}
+
+		await moveOrderToPhone(ctx, { order, newPhone: normalized });
+		// Back to "sending" so the buyer sees the attempt in flight rather than a
+		// stale failure, and a late webhook for the OLD message can't re-fail it
+		// (markConfirmationPushFailed only acts on a push still believed "sent").
+		await ctx.db.patch(order._id, {
+			confirmationPushStatus: "sending",
+			confirmationPushFailureKind: undefined,
+			confirmationPushWamid: undefined,
+			updatedAt: Date.now(),
+		});
+		await ctx.scheduler.runAfter(
+			0,
+			internal.whatsapp.notifyStorefrontOrderCreated,
+			{ orderId: order._id },
+		);
+	},
+});
+
 export const create = mutation({
 	args: {
 		retailerId: v.id("retailers"),
@@ -419,6 +555,11 @@ export const create = mutation({
 		// wa.me message from the STORED numbers (never its preview quote).
 		deliveryFee?: number;
 		deliveryFeePending?: boolean;
+		// True when the order was committed as `confirmed` at create and the WABA
+		// confirmation push was scheduled (86eyf1rck) — checkout then navigates to
+		// the tracking page WITHOUT ?send=1 (no wa.me handoff needed). False/absent
+		// = the legacy buyer-sends-first flow (phone missing or template env unset).
+		confirmedAtCreate?: boolean;
 	}> => {
 		// Rate limit FIRST — public endpoint, throttle per storefront before any DB reads.
 		await rateLimiter.limit(ctx, "orderCreate", {
@@ -458,12 +599,18 @@ export const create = mutation({
 			}
 		}
 
-		// Customer waPhone is optional at checkout — the WhatsApp webhook
-		// stamps it automatically when the shopper sends the order message.
+		// Customer waPhone: the storefront form requires it (86eyf1rck — the
+		// confirmation push needs a reachable number), but it stays optional at
+		// the protocol level so legacy callers/tests keep working; a phone-less
+		// order simply rides the old buyer-sends-first wa.me flow, where the
+		// WhatsApp webhook stamps the number on the inbound message. MY-aware
+		// normalization (assertValidMyMobile): buyers type local numbers
+		// ("012-345 6789"), and the stored form must match what Meta delivers
+		// inbound (60…) or the customer record would fork.
 		let customerWaPhone: string | undefined;
 		if (args.customer.waPhone) {
 			try {
-				customerWaPhone = assertValidWaPhone(args.customer.waPhone);
+				customerWaPhone = assertValidMyMobile(args.customer.waPhone);
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
 			}
@@ -756,6 +903,33 @@ export const create = mutation({
 		// → a collision check would be theatre; just generate it.
 		const trackingToken = generateTrackingToken();
 
+		// Confirmation-push path (86eyf1rck): with a reachable buyer number AND
+		// the approved template configured, the order is COMMITTED the moment the
+		// buyer taps "Place order" — inserted as `confirmed`, activation stamped,
+		// and Kedaipal's WABA pushes the confirmation template (scheduled below).
+		// No step depends on the buyer surviving Meta's wa.me interstitial.
+		// Template env unset ⇒ exact legacy behaviour (pending + ?send=1 handoff).
+		//
+		// EXCEPT when the total isn't final yet. The approved template hard-codes
+		// "Total: {{3}}. Tap below to see how to pay" — both claims are false while
+		// a price is outstanding:
+		//   - a mockup-gated order can carry a price-on-quote line (price 0), so it
+		//     would announce "Total: MYR 0.00" on a cake that hasn't been quoted;
+		//   - a `deliveryFeePending` order's total grows by the fee the seller
+		//     arranges later;
+		// and in both cases the payment ask is deliberately HELD (isMockupGateClosed
+		// / the delivery-fee hold), so "tap below to pay" is a dead end. Template
+		// wording is fixed at Meta approval, so we can't soften it per-order —
+		// these fall back to the legacy handoff, whose `mockupPendingConfirm` /
+		// `deliveryFeePendingConfirm` branches already say the right thing. Lifting
+		// this needs a second approved template with no total slot (noted as a
+		// follow-up — it leaves made-to-order buyers on the wa.me path for now).
+		const totalIsFinal = !requiresMockup && !deliveryFeePending;
+		const confirmedAtCreate =
+			customerWaPhone !== undefined &&
+			totalIsFinal &&
+			orderConfirmTemplateName() !== undefined;
+
 		const orderId = await ctx.db.insert("orders", {
 			retailerId: args.retailerId,
 			shortId,
@@ -764,7 +938,7 @@ export const create = mutation({
 			subtotal,
 			total,
 			currency: args.currency,
-			status: "pending",
+			status: confirmedAtCreate ? "confirmed" : "pending",
 			channel: args.channel,
 			source: "storefront",
 			customer: sanitizedCustomer,
@@ -785,6 +959,11 @@ export const create = mutation({
 				? args.customerImageStorageId
 				: undefined,
 			mockupStatus: requiresMockup ? "pending" : undefined,
+			// Stamped in the SAME transaction as the insert so the push state is
+			// never ambiguous: a confirmed storefront order with no stamp would be
+			// indistinguishable from one whose send is still in flight, and the
+			// tracking page needs to tell the buyer which it is.
+			confirmationPushStatus: confirmedAtCreate ? "sending" : undefined,
 			statusChangedAt: now,
 			createdAt: now,
 			updatedAt: now,
@@ -795,6 +974,19 @@ export const create = mutation({
 			status: "pending",
 			createdAt: now,
 		});
+		if (confirmedAtCreate) {
+			// The timeline keeps both beats — placed, then confirmed — mirroring
+			// what the legacy inbound-confirm path produced.
+			await ctx.db.insert("orderEvents", {
+				orderId,
+				status: "confirmed",
+				note: "Confirmed at checkout",
+				createdAt: now,
+			});
+			// First order reaching confirmed activates the store (one-time stamp) —
+			// the same milestone confirmOrderFromWhatsApp stamps on the legacy path.
+			await stampRetailerActivation(ctx, args.retailerId, now);
+		}
 
 		// Meter the order against the retailer's monthly usage (SOFT cap — the
 		// nudge banner, never a block on this public mutation).
@@ -821,11 +1013,23 @@ export const create = mutation({
 			{ orderId },
 		);
 
+		// The buyer's WhatsApp confirmation — the ONE outbound message this order
+		// sends (Meta bills per message from Oct 2026). Fire-and-forget like the
+		// email; a send failure stamps confirmationPushStatus, never fails create.
+		if (confirmedAtCreate) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.whatsapp.notifyStorefrontOrderCreated,
+				{ orderId },
+			);
+		}
+
 		return {
 			shortId,
 			trackingToken,
 			deliveryFee: deliverySnapshot?.fee,
 			deliveryFeePending: deliveryFeePending || undefined,
+			confirmedAtCreate: confirmedAtCreate || undefined,
 		};
 	},
 });
@@ -957,13 +1161,25 @@ export const get = query({
 			...order,
 			podImageUrls,
 			deliverySnapshot: isBuyerRead ? undefined : order.deliverySnapshot,
+			// Meta's message id has no buyer use and this read is unauthenticated —
+			// strip it on the token path alongside the delivery snapshot. The
+			// buyer-facing cards branch on `confirmationPushStatus`, never the wamid.
+			confirmationPushWamid: isBuyerRead
+				? undefined
+				: order.confirmationPushWamid,
 			statusLabels: retailer?.statusLabels as StatusLabels | undefined,
 			orderStages: retailer?.orderStages as OrderStage[] | undefined,
 			retailerLocale: (retailer?.locale ?? "en") as Locale,
 			storeName: retailer?.storeName ?? "",
 			retailerWaPhone: retailer?.waPhone,
+			// Served while the order still needs (or benefits from) a path into the
+			// shared-number chat: pending = the legacy manual/auto Send card; a
+			// confirmation-push order keeps it for the "Open WhatsApp" anchor
+			// ("sent") and the manual-send recovery card ("failed"). The cards
+			// themselves gate on status + confirmationPushStatus.
 			checkoutPhone:
-				order.status === "pending"
+				order.status === "pending" ||
+				order.confirmationPushStatus !== undefined
 					? (process.env.WHATSAPP_CHECKOUT_PHONE ?? retailer?.waPhone)
 					: undefined,
 		};
@@ -1504,7 +1720,7 @@ export const searchOrders = query({
 			unpaidAmount: 0,
 		};
 		for (const o of all) {
-			const b = statusToBucket(o.status);
+			const b = orderBucket(o);
 			counts[b]++;
 			if (needsMockup(o.mockupStatus)) counts.mockupPending++;
 			const open = b === "new" || b === "in_progress";
@@ -1931,6 +2147,26 @@ export async function applyStatusTransition(
 	// price and taps to confirm — money never moves without a human. See
 	// docs/delivery-lalamove.md ("Prompt to book on packed") + BookDeliveryCard.
 }
+
+/**
+ * Stamp an order as seen by the seller (86eyf1rck). Idempotent set-if-unset.
+ *
+ * Confirmation-push orders are born `confirmed`, so `pending` no longer marks
+ * "haven't looked at this yet" — this does. Called when the seller opens the
+ * order, which is the moment they've actually looked at it; that drains it from
+ * the New bucket, the Home tile and the age escalation. Never un-set, so an
+ * order can't bounce back to "new" after being read.
+ */
+export const markSeen = mutation({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<void> => {
+		const { order } = await requireOrderAccess(ctx, orderId);
+		if (order.seenAt !== undefined) return;
+		// No updatedAt bump: "the seller looked at it" isn't an order change, and
+		// touching updatedAt would corrupt the time-in-status badge.
+		await ctx.db.patch(order._id, { seenAt: Date.now() });
+	},
+});
 
 export const updateStatus = mutation({
 	args: {

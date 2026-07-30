@@ -906,6 +906,49 @@ export default defineSchema({
 		// status transition. Optional: pre-inbox orders fall back to updatedAt /
 		// createdAt at read time, so no backfill. See docs/order-inbox.md.
 		statusChangedAt: v.optional(v.number()),
+		// WABA confirmation push (86eyf1rck) — the template message Kedaipal sends
+		// the buyer at storefront checkout, replacing the buyer-initiated wa.me
+		// handoff. Lifecycle:
+		//   "sending"   — stamped in the same transaction as the insert, so the
+		//                 state is never ambiguous while attempts are in flight
+		//                 (the action retries transient failures with backoff).
+		//   "sent"      — Meta accepted it; may still flip to "failed" if the
+		//                 statuses webhook reports undelivered.
+		//   "failed"    — terminal after retries. `confirmationPushFailureKind`
+		//                 says whose problem it is, which drives whether the
+		//                 buyer is asked to fix their number or merely informed.
+		//   "recovered" — a failed push whose buyer then reached us anyway (manual
+		//                 wa.me send, or corrected their number), so the chat
+		//                 exists and both warnings clear.
+		// Undefined = legacy order or push path inactive (template env unset).
+		// Widen-only, no backfill.
+		confirmationPushStatus: v.optional(
+			v.union(
+				v.literal("sending"),
+				v.literal("sent"),
+				v.literal("failed"),
+				v.literal("recovered"),
+			),
+		),
+		// Set alongside a "failed" status. "unreachable" = the number can't
+		// receive (typo'd / not on WhatsApp) so the buyer can repair it;
+		// "system" = our side or Meta's, so we never blame the buyer's number.
+		confirmationPushFailureKind: v.optional(
+			v.union(v.literal("unreachable"), v.literal("system")),
+		),
+		confirmationPushAt: v.optional(v.number()),
+		// When the seller first opened this order (86eyf1rck). Before the
+		// confirmation push, `pending` WAS the seller's "haven't looked at it yet"
+		// signal — the New bucket, the Home tile and the amber/red age escalation
+		// all keyed on it. Push-path orders skip `pending` entirely, so that signal
+		// would silently die; this stamp replaces it. Scoped to push-path orders at
+		// read time (see orderBuckets.isUnseenOrder), so legacy and counter orders
+		// need no backfill and behave exactly as before.
+		seenAt: v.optional(v.number()),
+		// Meta's message id (wamid) for the confirmation push. The statuses
+		// webhook identifies messages ONLY by this id, so it's the correlation key
+		// that lets a delivery failure find its order (see by_confirmation_wamid).
+		confirmationPushWamid: v.optional(v.string()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
@@ -915,7 +958,8 @@ export default defineSchema({
 		.index("by_retailer_mockup", ["retailerId", "mockupStatus"])
 		.index("by_shortId", ["shortId"])
 		.index("by_tracking_token", ["trackingToken"])
-		.index("by_customer", ["customerId"]),
+		.index("by_customer", ["customerId"])
+		.index("by_confirmation_wamid", ["confirmationPushWamid"]),
 
 	/**
 	 * Retailer-managed library of self-collect pickup locations. Frozen onto
