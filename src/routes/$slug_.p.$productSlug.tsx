@@ -231,7 +231,15 @@ function ProductRoute() {
 	// Same per-retailer cart as every storefront surface.
 	const cart = useCart(retailer?._id);
 
-	if (!retailer || product === undefined) {
+	// Also wait on the cart: `cartQuantity` seeds the min-quantity stepper's
+	// opening value, so mounting the buy box before the persisted cart is read
+	// could open it at the wrong number. In practice hydration (a synchronous
+	// localStorage read) lands well before the product query, so this costs
+	// nothing — it just makes "cart-dependent UI waits for the cart" uniform.
+	// The store/category pages deliberately DON'T gate on this: their CartBar
+	// degrades additively ("Empty" → filled), and holding the catalog on
+	// localStorage would be a worse trade.
+	if (!retailer || product === undefined || !cart.hydrated) {
 		return <ProductSkeleton />;
 	}
 	if (product === null) {
