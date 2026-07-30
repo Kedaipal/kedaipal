@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import type { FunctionReturnType } from "convex/server";
 import { ImagePlus, Plus, SlidersHorizontal } from "lucide-react";
 import type { api } from "../../../convex/_generated/api";
@@ -12,7 +13,16 @@ export type StorefrontProduct = FunctionReturnType<
 
 interface ProductCardProps {
 	product: StorefrontProduct;
-	onOpen: (product: StorefrontProduct) => void;
+	/**
+	 * Store slug — the card's photo, name and "Choose" all resolve to the
+	 * product's own page, `/{storeSlug}/p/{productSlug}`. Real `<Link>`s, not
+	 * click handlers: an `<a href>` is the only thing a crawler can follow (the
+	 * page ships canonical + Product JSON-LD, which is inert without one), and
+	 * it's what gives buyers ⌘-click, open-in-new-tab, "copy link address" and
+	 * the router's hover prefetch on the surface whose entire job is producing
+	 * a pasteable link. See docs/storefront-product-pages.md.
+	 */
+	storeSlug: string;
 	onQuickAdd: (product: StorefrontProduct) => void;
 	/** Units of this product already in the cart (custom lines excluded). */
 	cartQuantity: number;
@@ -28,14 +38,14 @@ interface ProductCardProps {
 
 export function ProductCard({
 	product,
-	onOpen,
+	storeSlug,
 	onQuickAdd,
 	cartQuantity,
 	cartSubtotal,
 	priority = false,
 }: ProductCardProps) {
 	// Multi-variant products can't be quick-added — the buyer must pick options
-	// in the detail sheet first. A custom line also forces the detail sheet so the
+	// on the product page first. A custom line also forces the product page so the
 	// buyer can see (and choose) the made-to-order option. See docs/custom-option.md.
 	const hasOptions = (product.options?.length ?? 0) > 0;
 	const hasCustom = product.variants.some((v) => v.isCustom);
@@ -62,16 +72,27 @@ export function ProductCard({
 	const minQuantity = product.minQuantity ?? 0;
 	// Stock can no longer reach the minimum (all-hard-block, combined on-hand
 	// below it) → the standard line is unavailable-with-reason, never a stepper
-	// trap the buyer discovers at checkout. The custom line (its own CTA in the
-	// sheet) is unaffected, so cards with one keep their Choose button live.
+	// trap the buyer discovers at checkout. The custom line (its own CTA on the
+	// product page) is unaffected, so cards with one keep their Choose button live.
 	const minUnreachable = minQuantityUnreachable(minQuantity, product.variants);
+	// A live custom line keeps Choose usable (its own CTA on the page is exempt
+	// from the minimum) even when the standard variants can't reach it.
+	const chooseDisabled = outOfStock || (minUnreachable && !hasCustom);
+	const pageLink = {
+		to: "/$slug/p/$productSlug",
+		params: { slug: storeSlug, productSlug: product.slug },
+	} as const;
 
 	return (
 		<div className="group flex flex-col overflow-hidden rounded-2xl border border-border bg-card transition-shadow duration-200 hover:shadow-md">
-			<button
-				type="button"
-				onClick={() => onOpen(product)}
-				className="relative aspect-square w-full overflow-hidden bg-muted text-left"
+			<Link
+				{...pageLink}
+				// The photo is decorative here — the name link right below is the
+				// card's accessible door, so screen readers don't announce the same
+				// destination twice.
+				tabIndex={-1}
+				aria-hidden
+				className="relative block aspect-square w-full overflow-hidden bg-muted text-left"
 			>
 				{firstImage ? (
 					<AppImage
@@ -127,18 +148,17 @@ export function ProductCard({
 						) : null}
 					</span>
 				) : null}
-			</button>
+			</Link>
 
 			<div className="flex flex-1 flex-col gap-2 p-3">
 				{/* Fixed 2-line name zone: 1-line names reserve the second line so the
 				    price row sits at the same height on every card in a grid row. */}
-				<button
-					type="button"
-					onClick={() => onOpen(product)}
+				<Link
+					{...pageLink}
 					className="line-clamp-2 min-h-[2.05rem] text-left text-[13px] font-medium leading-tight"
 				>
 					{product.name}
-				</button>
+				</Link>
 				<p className="text-base font-bold leading-tight tabular-nums">
 					{allQuote ? (
 						<span className="text-sm font-semibold">Price on quote</span>
@@ -166,20 +186,34 @@ export function ProductCard({
 					</p>
 				) : null}
 				{needsDetail ? (
-					<Button
-						type="button"
-						onClick={() => onOpen(product)}
-						// A live custom line keeps Choose usable (its own CTA in the
-						// sheet is exempt from the minimum) even when the standard
-						// variants can't reach it.
-						disabled={outOfStock || (minUnreachable && !hasCustom)}
-						size="sm"
-						variant="outline"
-						className="mt-auto h-11 w-full rounded-xl"
-					>
-						<SlidersHorizontal className="size-4" />
-						Choose
-					</Button>
+					// Disabled-with-reason wins over a link that goes nowhere useful:
+					// an unorderable product renders the inert button (an `<a>` can't
+					// be disabled), an orderable one renders the real link so the CTA
+					// is as copyable as the photo and the name.
+					chooseDisabled ? (
+						<Button
+							type="button"
+							disabled
+							size="sm"
+							variant="outline"
+							className="mt-auto h-11 w-full rounded-xl"
+						>
+							<SlidersHorizontal className="size-4" />
+							Choose
+						</Button>
+					) : (
+						<Button
+							asChild
+							size="sm"
+							variant="outline"
+							className="mt-auto h-11 w-full rounded-xl"
+						>
+							<Link {...pageLink}>
+								<SlidersHorizontal className="size-4" />
+								Choose
+							</Link>
+						</Button>
+					)
 				) : (
 					<Button
 						type="button"

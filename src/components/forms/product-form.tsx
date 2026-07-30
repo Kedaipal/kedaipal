@@ -1,8 +1,8 @@
 import { Link } from "@tanstack/react-router";
-import { useMutation } from "convex/react";
 import {
 	Camera,
 	CheckCircle2,
+	ClipboardList,
 	Eye,
 	EyeOff,
 	Info,
@@ -11,22 +11,27 @@ import {
 	Save,
 	Store,
 } from "lucide-react";
-import { type FormEvent, type ReactNode, useState } from "react";
-import { api } from "../../../convex/_generated/api";
+import {
+	type FormEvent,
+	type MutableRefObject,
+	type ReactNode,
+	useLayoutEffect,
+	useState,
+} from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { MAX_NOTICE_DAYS } from "../../../convex/lib/fulfilmentDate";
 import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
 import { convexErrorMessage, parsePriceInput } from "../../lib/format";
-import { reorderByIds } from "../../lib/reorder";
+import { cartesian } from "../../lib/variant";
+import { describeProduct } from "../../lib/product-summary";
 import { productDetailsSchema } from "../../lib/schemas";
-import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Markdown } from "../ui/markdown";
-import { SortableList } from "../ui/sortable-list";
 import { CategoryPicker } from "./category-picker";
 import { submitThenFocusError } from "./focus-error";
 import { useAppForm } from "./form";
+import { type ProductImage, ProductImagesField } from "./product-images-field";
 import {
 	type CustomLineDraft,
 	VariantEditor,
@@ -34,8 +39,6 @@ import {
 	type VariantIssue,
 	type VariantRow,
 } from "./variant-editor";
-
-const MAX_IMAGES = 5;
 
 export interface ProductFormSubmitValues {
 	name: string;
@@ -70,6 +73,29 @@ export interface ProductFormSubmitValues {
 		customPrompt?: string;
 	}[];
 }
+
+/** Seed shape for the form — also produced by the wizard's open-in-full-editor
+ * handoff (`wizardToFormInitialValues`). */
+export type ProductFormInitialValues = NonNullable<
+	ProductFormProps["initialValues"]
+>;
+
+/**
+ * The form's live, as-typed state — strings kept raw (blank price stays
+ * blank). Read through the `draftRef` getter by the create route's
+ * "switch back to guided setup" CTA, which reverse-derives a WizardState from
+ * it (`formDraftToWizardState`) so no typed value is lost on the way back.
+ */
+export type ProductFormDraft = {
+	name: string;
+	description: string;
+	hidden: boolean;
+	categoryIds: Id<"categories">[];
+	images: ProductImage[];
+	editor: VariantEditorState;
+	minQuantity: string;
+	minNoticeDays: string;
+};
 
 interface ProductFormProps {
 	/** Owning retailer — feeds the category picker's list query. */
@@ -115,6 +141,22 @@ interface ProductFormProps {
 	 * competing with the primary save.
 	 */
 	stickyAction?: ReactNode;
+	/**
+	 * "create" keeps the readiness checklist even when `initialValues` are
+	 * present (the wizard handoff seeds a CREATE, not an edit). Defaults by
+	 * `initialValues` presence: seeded = edit.
+	 */
+	mode?: "create" | "edit";
+	/** Getter for the live draft — assigned every render so the create route
+	 * can read the as-typed state when switching back to the wizard. */
+	draftRef?: MutableRefObject<(() => ProductFormDraft) | null>;
+	/**
+	 * Direct editor-state seed — the wizard handoff passes its OWN editor
+	 * substrate here (both views edit the same VariantEditorState), so the
+	 * switch is lossless string-for-string. Overrides the `initialValues`
+	 * variants/options derivation when present.
+	 */
+	initialEditor?: VariantEditorState;
 }
 
 /** Seed the editor state from existing variants, or a single empty default row. */
@@ -391,6 +433,38 @@ function ProductReadiness({
 }
 
 /**
+ * Edit-mode summary strip — the product's selling setup in plain words
+ * ("3 choices by Size · Made to order · RM 12–28"), live-derived from the
+ * draft state so the seller confirms what they have before touching anything.
+ */
+function ProductSummaryStrip({
+	name,
+	editor,
+	currency,
+}: {
+	name: string;
+	editor: VariantEditorState;
+	currency: string;
+}) {
+	const summary = describeProduct(
+		{
+			options: editor.options,
+			rows: editor.rows,
+			hasCustomLine: editor.customLine !== null,
+		},
+		currency,
+	);
+	return (
+		<div className="rounded-2xl border border-accent/20 bg-accent/5 px-4 py-3 text-sm leading-relaxed">
+			<span className="font-semibold text-accent-emphasis">
+				{name.trim() || "This product"}
+			</span>{" "}
+			— {summary}
+		</div>
+	);
+}
+
+/**
  * Product-level storefront visibility. A first-class status (not a buried
  * toggle) because it changes where the product appears. Hidden products stay
  * fully sellable in counter checkout — surfaced in the helper so the behaviour
@@ -416,13 +490,10 @@ function VisibilityControl({
 		},
 	];
 	return (
-		<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between lg:p-5">
+		<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 			<div className="min-w-0">
-				<p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-					Storefront
-				</p>
-				<h3 className="text-base font-semibold leading-tight">Visibility</h3>
-				<p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+				<h4 className="text-sm font-semibold leading-tight">Visibility</h4>
+				<p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
 					{hidden
 						? "Hidden from your public store. Still sellable in counter checkout."
 						: "Shown on your public store and sellable everywhere."}
@@ -449,7 +520,7 @@ function VisibilityControl({
 					);
 				})}
 			</div>
-		</section>
+		</div>
 	);
 }
 
@@ -461,10 +532,16 @@ export function ProductForm({
 	submitLabel,
 	onSubmit,
 	stickyAction,
+	mode,
+	draftRef,
+	initialEditor,
 }: ProductFormProps) {
-	const generateUploadUrl = useMutation(api.products.generateUploadUrl);
+	// Editing an existing product vs creating a new one — the edit page leads
+	// with the summary strip; create keeps the readiness checklist. The wizard
+	// handoff seeds a create with initialValues, so `mode` wins when given.
+	const isEdit = mode ? mode === "edit" : initialValues !== undefined;
 
-	const [images, setImages] = useState<{ id: string; url: string }[]>(
+	const [images, setImages] = useState<ProductImage[]>(
 		(initialValues?.imageStorageIds ?? []).map((id, i) => ({
 			id,
 			url: initialValues?.imageUrls?.[i] ?? "",
@@ -486,8 +563,8 @@ export function ProductForm({
 	const [categoryIds, setCategoryIds] = useState<Id<"categories">[]>(
 		initialValues?.categoryIds ?? [],
 	);
-	const [editor, setEditorState] = useState<VariantEditorState>(() =>
-		initialEditorState(initialValues),
+	const [editor, setEditorState] = useState<VariantEditorState>(
+		() => initialEditor ?? initialEditorState(initialValues),
 	);
 	// Submit-time validation issues, addressed to the exact editor input (see
 	// VariantIssue). Any edit clears them — they re-validate on the next save.
@@ -512,10 +589,15 @@ export function ProductForm({
 			// beneath), so the shared focus helper lands on the offending field —
 			// never a generic banner the seller has to decode.
 			const hasOptions = editor.options.length > 0;
+			// An axis with no values yet means the rows still describe the
+			// PREVIOUS shape (kept on purpose — see rebuildRows) and aren't on
+			// screen. Report only the actionable axis problem; row messages would
+			// be addressed to inputs the seller can't see.
+			const gridReady = cartesian(editor.options).length > 0;
 			const built = buildSubmitVariants(editor.rows, editor.customLine);
 			const issues = [
 				...collectOptionIssues(editor.options),
-				...("issues" in built ? built.issues : []),
+				...(gridReady && "issues" in built ? built.issues : []),
 			];
 			if (issues.length > 0) {
 				setEditorIssues(issues);
@@ -554,41 +636,26 @@ export function ProductForm({
 		},
 	});
 
-	async function handleFiles(files: FileList | null) {
-		if (!files || files.length === 0) return;
-		if (images.length + files.length > MAX_IMAGES) {
-			setServerError(`Maximum ${MAX_IMAGES} images per product`);
-			return;
-		}
-		setServerError(null);
-		setUploading(true);
-		try {
-			for (const file of Array.from(files)) {
-				const url = await generateUploadUrl();
-				const res = await fetch(url, {
-					method: "POST",
-					headers: { "Content-Type": file.type },
-					body: file,
-				});
-				if (!res.ok) throw new Error("Upload failed");
-				const { storageId } = (await res.json()) as { storageId: string };
-				const previewUrl = URL.createObjectURL(file);
-				setImages((prev) => [...prev, { id: storageId, url: previewUrl }]);
-			}
-		} catch (err) {
-			setServerError(convexErrorMessage(err));
-		} finally {
-			setUploading(false);
-		}
-	}
-
-	function removeImage(id: string) {
-		setImages((prev) => prev.filter((i) => i.id !== id));
-	}
-
-	function reorderImages(orderedIds: string[]) {
-		setImages((prev) => reorderByIds(prev, orderedIds, (img) => img.id));
-	}
+	// Keep the draft getter fresh after every commit — the route reads it
+	// lazily on the "switch back to guided setup" / Preview click, never during
+	// render. Assigned in a layout effect (not the render body) so a discarded
+	// concurrent render can't publish its state through the ref.
+	useLayoutEffect(() => {
+		if (!draftRef) return;
+		draftRef.current = () => ({
+			name: form.state.values.name,
+			description: form.state.values.description ?? "",
+			hidden,
+			categoryIds,
+			images,
+			editor,
+			minQuantity: minQty,
+			minNoticeDays: minNoticeDraft,
+		});
+		return () => {
+			draftRef.current = null;
+		};
+	});
 
 	function handleSubmit(e: FormEvent) {
 		submitThenFocusError(form, e);
@@ -624,61 +691,29 @@ export function ProductForm({
 
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-5">
-			<form.Subscribe selector={(s) => s.values.name.trim().length > 0}>
-				{(hasName) => (
-					<ProductReadiness
-						hasName={hasName}
-						hasPrice={hasAnyPrice}
-						imageCount={images.length}
-					/>
-				)}
-			</form.Subscribe>
-
-			<VisibilityControl hidden={hidden} onChange={setHidden} />
-
-			{/* Per-product fulfilment notice (made-to-order lead time). Sits with
-			    the other product-level behaviour controls; buyers see the effect
-			    as a raised earliest-date floor at checkout, with copy explaining
-			    which is why the helper here spells the interaction out. */}
-			<section className="flex flex-col gap-2 rounded-2xl border border-border bg-card p-4 shadow-sm">
-				<div className="flex items-center justify-between gap-4">
-					<div>
-						<p className="text-sm font-semibold">Minimum notice</p>
-						<p className="mt-0.5 text-xs text-muted-foreground leading-relaxed">
-							Days of lead time this product needs (custom / made-to-order
-							items). Buyers can&apos;t pick a delivery or pickup date sooner
-							than this — it raises your store-level notice when higher, and the
-							strictest item in a cart sets the whole order&apos;s earliest
-							date. Leave 0 for no extra notice.
-						</p>
-					</div>
-					<div className="flex shrink-0 items-center gap-1.5">
-						<Input
-							type="number"
-							inputMode="numeric"
-							min={0}
-							max={MAX_NOTICE_DAYS}
-							value={minNoticeDraft}
-							onChange={(e) => setMinNoticeDraft(e.target.value)}
-							placeholder="0"
-							className="h-11 w-20 text-center"
-							aria-label="Minimum notice in days"
+			{/* Lead-in: the edit page confirms what the product IS in words; the
+			    create path shows what's still needed. */}
+			<form.Subscribe selector={(s) => s.values.name}>
+				{(name) =>
+					isEdit ? (
+						<ProductSummaryStrip
+							name={name}
+							editor={editor}
+							currency={currency}
 						/>
-						<span className="text-xs text-muted-foreground">days</span>
-					</div>
-				</div>
-			</section>
-
-			<CategoryPicker
-				retailerId={retailerId}
-				selectedIds={categoryIds}
-				onChange={setCategoryIds}
-				locked={categoriesLocked}
-			/>
+					) : (
+						<ProductReadiness
+							hasName={name.trim().length > 0}
+							hasPrice={hasAnyPrice}
+							imageCount={images.length}
+						/>
+					)
+				}
+			</form.Subscribe>
 
 			<ProductStepCard
 				icon={<PackageCheck className="size-5" />}
-				kicker="Step 1"
+				kicker="The product"
 				title="Product basics"
 				description="Start with the name shoppers will recognise, then add a short description only if it helps them decide."
 			>
@@ -730,84 +765,26 @@ export function ProductForm({
 
 			<ProductStepCard
 				icon={<Camera className="size-5" />}
-				kicker="Step 2"
+				kicker="The product"
 				title="Photos"
 				description="Use the first image as the storefront cover. Extra images help shoppers compare angles, flavours, sizes, or packaging."
 			>
-				<div className="flex items-center justify-between gap-3">
-					<span className="text-sm font-medium">
-						Product images{" "}
-						<span className="text-muted-foreground">
-							({images.length}/{MAX_IMAGES})
-						</span>
-					</span>
-					{images.length > 1 ? (
-						<p className="text-xs text-muted-foreground">Drag to reorder</p>
-					) : null}
-				</div>
-				<div className="grid grid-cols-3 gap-2">
-					{/* `className="contents"` lets the sortable <li>s join this grid
-					    directly, so the "+ Add" tile flows in the next free cell. */}
-					{images.length > 0 ? (
-						<SortableList
-							items={images}
-							getId={(img) => img.id}
-							onReorder={reorderImages}
-							strategy="grid"
-							className="contents"
-							renderItem={(img, handle) => (
-								<div className="relative aspect-square w-full overflow-hidden rounded-xl bg-muted">
-									<AppImage src={img.url} alt="" aspect="size-full" />
-									{/* Cover badge on the first image — reordering changes
-									    which image leads on the storefront. */}
-									{img.id === images[0]?.id ? (
-										<span className="absolute bottom-1 left-1 rounded-md bg-background/90 px-1.5 py-0.5 text-[10px] font-medium shadow">
-											Cover
-										</span>
-									) : null}
-									{/* Grip handle only matters with 2+ images. */}
-									{images.length > 1 ? (
-										<span className="absolute left-1 top-1 rounded-lg bg-background/90 shadow">
-											{handle}
-										</span>
-									) : null}
-									{/* 44px tap target (mobile rule) with a lighter visible
-									    chip, so two corner controls don't crowd the cell. */}
-									<button
-										type="button"
-										onClick={() => removeImage(img.id)}
-										className="absolute right-0 top-0 flex size-11 items-center justify-center"
-										aria-label="Remove image"
-									>
-										<span className="flex size-8 items-center justify-center rounded-full bg-background/90 text-lg leading-none shadow">
-											×
-										</span>
-									</button>
-								</div>
-							)}
-						/>
-					) : null}
-					{images.length < MAX_IMAGES ? (
-						<label className="flex aspect-square cursor-pointer items-center justify-center rounded-xl border border-dashed border-border text-sm text-muted-foreground hover:border-ring">
-							{uploading ? "Uploading…" : "+ Add"}
-							<input
-								type="file"
-								accept="image/*"
-								multiple
-								disabled={uploading}
-								onChange={(e) => handleFiles(e.target.files)}
-								className="hidden"
-							/>
-						</label>
-					) : null}
-				</div>
+				<ProductImagesField
+					images={images}
+					onChange={(next) => {
+						setServerError(null);
+						setImages(next);
+					}}
+					onUploadingChange={setUploading}
+					onError={setServerError}
+				/>
 			</ProductStepCard>
 
 			<ProductStepCard
 				icon={<Layers3 className="size-5" />}
-				kicker="Step 3"
-				title="Price, stock and options"
-				description="Keep it simple for one product, or add sizes, flavours, weights, and made-to-order choices when buyers need to choose."
+				kicker="Selling"
+				title="Pricing & choices"
+				description="One price for one item — or let buyers pick a size, flavour or weight, each with its own price."
 			>
 				<VariantEditor
 					value={editor}
@@ -816,10 +793,29 @@ export function ProductForm({
 					issues={editorIssues}
 				/>
 
-				{/* Minimum order quantity (86ey9unyx) — an order rule on the whole
-				    product (summed across options), so it sits here with price/stock,
-				    not per variant row. */}
-				<div className="flex flex-col gap-2 border-t border-border pt-4">
+				<Link
+					to="/app/settings"
+					search={{ tab: "store" }}
+					className="inline-flex items-center gap-1.5 self-start rounded-full bg-muted px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+				>
+					<Info className="size-3.5" aria-hidden />
+					Currency is set in Settings
+				</Link>
+			</ProductStepCard>
+
+			{/* Order rules — the two constraints on HOW a buyer may order this
+			    product (how many, how soon). Grouped in one card because they're
+			    the same kind of decision: neither is about price/choices (what it
+			    costs) nor publishing (where it shows). Both are optional. */}
+			<ProductStepCard
+				icon={<ClipboardList className="size-5" />}
+				kicker="Selling"
+				title="Order rules"
+				description="Optional limits on how buyers can order this product. Leave both blank for no restrictions."
+			>
+				{/* Minimum order quantity (86ey9unyx) — summed across options, so
+				    it's a product-level rule, not a per-variant one. */}
+				<div className="flex flex-col gap-2">
 					<div className="flex flex-col gap-1.5">
 						<label htmlFor="min-order-qty" className="text-sm font-medium">
 							Minimum order quantity{" "}
@@ -862,14 +858,61 @@ export function ProductForm({
 					) : null}
 				</div>
 
-				<Link
-					to="/app/settings"
-					search={{ tab: "store" }}
-					className="inline-flex items-center gap-1.5 self-start rounded-full bg-muted px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
-				>
-					<Info className="size-3.5" aria-hidden />
-					Currency is set in Settings
-				</Link>
+				{/* Per-product fulfilment notice (made-to-order lead time). Buyers
+				    see the effect as a raised earliest-date floor at checkout, which
+				    is why the helper spells the interaction out. */}
+				<div className="flex flex-col gap-2 border-t border-border pt-4">
+					<div className="flex flex-col gap-1.5">
+						<label htmlFor="min-notice-days" className="text-sm font-medium">
+							Minimum notice{" "}
+							<span className="font-normal text-muted-foreground">
+								(optional)
+							</span>
+						</label>
+						<div className="flex items-center gap-1.5">
+							<Input
+								id="min-notice-days"
+								type="number"
+								inputMode="numeric"
+								min={0}
+								max={MAX_NOTICE_DAYS}
+								value={minNoticeDraft}
+								onChange={(e) => setMinNoticeDraft(e.target.value)}
+								placeholder="0"
+								variant="field"
+								className="w-24 text-center"
+							/>
+							<span className="text-sm text-muted-foreground">days</span>
+						</div>
+					</div>
+					<p className="text-xs leading-relaxed text-muted-foreground">
+						Days of lead time this product needs (custom / made-to-order items).
+						Buyers can&apos;t pick a delivery or pickup date sooner than this —
+						it raises your store-level notice when higher, and the strictest
+						item in a cart sets the whole order&apos;s earliest date. Leave 0
+						for no extra notice.
+					</p>
+				</div>
+			</ProductStepCard>
+
+			{/* Publishing concerns — where the product appears — come after what
+			    the product IS. See docs/product-setup-wizard.md. */}
+			<ProductStepCard
+				icon={<Store className="size-5" />}
+				kicker="Publishing"
+				title="Where it appears"
+				description="Control storefront visibility and which categories the product shows under."
+			>
+				<VisibilityControl hidden={hidden} onChange={setHidden} />
+				<div className="border-t border-border pt-4">
+					<CategoryPicker
+						retailerId={retailerId}
+						selectedIds={categoryIds}
+						onChange={setCategoryIds}
+						locked={categoriesLocked}
+						embedded
+					/>
+				</div>
 			</ProductStepCard>
 
 			{serverError ? (

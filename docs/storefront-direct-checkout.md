@@ -4,8 +4,10 @@
 added items from inside the **product detail sheet** had to close the sheet (tap
 the ✕) to reach the fixed **cart bar** and its "Checkout on WhatsApp" button — an
 extra, non-obvious step on the path to buying. This adds a **"Go to checkout"**
-CTA in the sheet's own footer so the buyer proceeds straight to the review sheet
-without leaving the product view. All-tier, buyer-facing, no plan gating (the
+CTA in the sheet's own footer so the buyer proceeds straight to checkout
+without leaving the product view. (Checkout is now a **page** —
+`/{slug}/checkout`, see [`storefront-checkout-page.md`](./storefront-checkout-page.md)
+— the CTA navigates there.) All-tier, buyer-facing, no plan gating (the
 buyer flow can't vary by seller plan — same reasoning as the checkout date
 picker and the price preview). Source: Zaki, 20 Jul 2026. ClickUp `86eybhqye`.
 
@@ -32,31 +34,29 @@ stepper + "Add to cart" row in the sticky footer:
 - The **money total is dropped when the cart total is 0** (a quote-only cart of
   made-to-order lines) — the count + arrow remain, no misleading `RM 0.00`.
   Same posture as the grid tile's "N in cart" line.
-- Tapping it **closes the product sheet, then opens the checkout/review sheet**
-  (closing first avoids two stacked radix dialogs). The buyer lands on the same
-  "Review your order" sheet the cart bar opens — this is a shortcut to it, not a
-  second checkout path.
+- Tapping it **closes the product sheet, then navigates to the checkout page**
+  (the navigation is deferred a tick so the dialog's teardown finishes cleanly).
+  The buyer lands on the same `/{slug}/checkout` page the cart bar opens — this
+  is a shortcut to it, not a second checkout path.
 
 The product sheet still **stays open after "Add to cart"** (so a buyer can add a
 standard variant *and* request the custom line in one visit); the new CTA is the
 explicit "I'm done, take me to checkout" exit, replacing the implicit
 close-then-find-the-cart-bar dance.
 
-## Wiring — why the route owns the open-state
+## Wiring — why the route owns the handoff
 
-The product detail sheet (owned by `ProductGrid`) and the checkout sheet (owned
-by `CartBar`) are **siblings** under the storefront route. For the product sheet
-to open checkout, the open-state was **lifted to the route**:
+The product detail sheet is owned by `ProductGrid`, but "proceed to checkout"
+is a route concern. The routes pass the trigger down (originally to open the
+checkout sheet; since the checkout-page redesign it's a `navigate` to
+`/{slug}/checkout`):
 
-- `CartBar` no longer owns `checkoutOpen` — it's **controlled** via
-  `checkoutOpen` + `onCheckoutOpenChange` props.
 - `ProductGrid` takes `onRequestCheckout`, threads a wrapped `onCheckout` to the
   detail sheet that first closes the sheet (`setOpenProduct(null)`) then calls
   `onRequestCheckout()`.
-- Each route (`/$slug` and `/$slug/c/$categorySlug`) holds
-  `const [checkoutOpen, setCheckoutOpen] = useState(false)` and passes the
-  trigger to `ProductGrid` and the state to `CartBar`. Both storefront routes
-  render the same trio, so both got the identical three-line wiring.
+- Each route (`/$slug` and `/$slug/c/$categorySlug`) passes a `navigate` to
+  `/$slug/checkout`. `CartBar` takes the same destination from its `storeSlug`
+  prop, so the two entry points can't drift.
 
 The detail sheet's new props (`cartItemCount`, `cartTotal`, `onCheckout`) are all
 **optional** — a standalone render (e.g. tests) omits them and the CTA simply

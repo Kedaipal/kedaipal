@@ -5,7 +5,7 @@
 // docs/order-inbox.md + docs/invoices-receipts.md.
 
 import { matchesFulfilmentWindow } from "./fulfilmentDate";
-import { BUCKET_STATUSES, type OrderStatus } from "./orderBuckets";
+import { orderBucket, type OrderStatus } from "./orderBuckets";
 
 export type InboxBucket = "all" | "new" | "in_progress" | "completed" | "cancelled";
 
@@ -28,6 +28,9 @@ export type InboxFilterArgs = {
 /** The order fields the predicate reads. A structural subset of Doc<"orders">. */
 export type FilterableOrder = {
 	status: OrderStatus;
+	/** Seen-state, for the "New" bucket on push-path orders (86eyf1rck). */
+	seenAt?: number;
+	confirmationPushStatus?: string;
 	mockupStatus?: string;
 	paymentStatus?: "unpaid" | "claimed" | "received";
 	paymentMethod?: string;
@@ -63,11 +66,11 @@ export function buildInboxPredicate(
 			? new Set(args.paymentMethods)
 			: null;
 	const wantUnspecified = args.methodUnspecified === true;
-	const bucketStatuses =
-		args.bucket === "all" ? null : new Set(BUCKET_STATUSES[args.bucket]);
-
 	return (o) => {
-		if (bucketStatuses && !bucketStatuses.has(o.status)) return false;
+		// Bucket membership goes through the same seen-aware resolver the counts
+		// use, so the chip count and the list can't disagree: an unseen push-path
+		// order shows under "New" and NOT under "In progress" (86eyf1rck).
+		if (args.bucket !== "all" && orderBucket(o) !== args.bucket) return false;
 		if (args.mockupPending && !needsMockup(o.mockupStatus)) return false;
 		// Source filter — legacy/undefined source reads as "storefront".
 		if (args.source !== undefined && (o.source ?? "storefront") !== args.source)

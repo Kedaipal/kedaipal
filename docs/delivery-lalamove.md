@@ -134,7 +134,7 @@ the strict rule). See
 | Webhook signature verification | `convex/lib/lalamoveSignature.ts` |
 | Convex functions (network client, checkout quote, dispatch, webhook handler) | `convex/lalamove.ts` |
 | Webhook route | `convex/http.ts` `POST /webhook/lalamove` |
-| Buyer checkout wiring | `src/components/storefront/checkout-sheet.tsx` |
+| Buyer checkout wiring | `src/components/storefront/checkout-form.tsx` |
 | Seller dispatch card | `src/components/order/book-delivery-card.tsx` |
 | Seller setup (4th pricing mode inside Delivery charge) | `src/components/settings/fulfilment-tab.tsx` (`DeliveryChargeSection`) |
 
@@ -187,7 +187,7 @@ autofills saved credentials into it.
 ### Checkout quote (trust model)
 
 The reactive `delivery.quote` query answers `{ kind: "live" }` for
-lalamove-mode stores; the client (checkout sheet + address-edit dialog, via
+lalamove-mode stores; the client (checkout page + address-edit dialog, via
 the shared `useLiveDeliveryQuote` hook) then calls the
 `lalamove.quoteForCheckout` **action** once per picked address AND per
 chosen date (debounced,
@@ -247,7 +247,12 @@ mid-call (copy points the seller at their Lalamove app, since in the
 crash-mid-POST case the rider order may exist there untracked). Every blocked state renders disabled-with-reason on the
 card (`DispatchBlock` map): wrong status, no map pin on the address (with a
 fix path — never a dead end), booking off, plan gate (Pro chip), no
-credentials, missing buyer/seller phone. Wallet-empty
+credentials, missing buyer/seller phone. That copy lives in
+`src/lib/dispatch-block.ts` (`dispatchBlockCopy`) because the **mark-shipped
+prompt** renders the same reasons — a rider vendor is never offered the manual
+parcel-courier form, so this copy is their whole explanation before they choose
+to ship without a rider (ClickUp `86eyff02p`, see
+[`fulfilment.md`](./fulfilment.md#seller-ux)). Wallet-empty
 booking failures surface Lalamove's error as "top up your Lalamove wallet,
 then retry". `cancelBooking` (with a rider-fee warning) deliberately skips
 the eligibility gates — cancelling must work even when booking wouldn't.

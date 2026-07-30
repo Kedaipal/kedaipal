@@ -13,6 +13,11 @@ export type CopyVars = {
 	contactPhone?: string;
 	trackingUrl?: string;
 	carrierTrackingUrl?: string;
+	// Manual parcel-courier shipment info (86eyehvk4) — rendered as a copyable
+	// line in the shipped update (delivery branch only). Rides the message
+	// that's already being sent; never triggers its own outbound message.
+	courierName?: string;
+	trackingNo?: string;
 	deliveryMethod?: DeliveryMethod;
 	// The order's frozen pickup kind (pickupSnapshot.locationType). Only
 	// meaningful when deliveryMethod is self_collect; undefined (legacy
@@ -52,6 +57,29 @@ function contactLine(contactPhone: string | undefined, locale: Locale): string {
 	return `\n${CONTACT_LINE_LABEL[locale]}: wa.me/${contactPhone}`;
 }
 
+const TRACKING_NO_LABEL: Record<Locale, string> = {
+	en: "tracking no.",
+	ms: "no. penjejakan",
+	zh: "快递单号",
+};
+
+/** "📦 J&T Express — tracking no. JT123" under the shipped headline. The buyer
+ * copies the number into the courier's app even when no deep link exists
+ * (cold-chain couriers). Empty string when the seller attached nothing. */
+function courierLine(
+	v: Pick<CopyVars, "courierName" | "trackingNo">,
+	locale: Locale,
+): string {
+	const { courierName, trackingNo } = v;
+	if (!courierName && !trackingNo) return "";
+	const label = TRACKING_NO_LABEL[locale];
+	const dash = locale === "zh" ? "——" : "—";
+	if (courierName && trackingNo)
+		return `\n📦 ${courierName} ${dash} ${label} ${trackingNo}`;
+	if (courierName) return `\n📦 ${courierName}`;
+	return `\n📦 ${label} ${trackingNo}`;
+}
+
 /**
  * PDPA notice-at-collection line (86ey5m3hx). Shown the first time we store a
  * counter buyer's number and message them without them having visited the
@@ -89,14 +117,14 @@ export const waCopy: Record<Locale, LocaleCopy> = {
 						: `📦 Order ${shortId} is packed and ready to ship.`;
 				return `${msg}${trackingUrl ? `\n\nTrack your order: ${trackingUrl}` : ""}`;
 			},
-			shipped: ({ shortId, carrierTrackingUrl, trackingUrl, deliveryMethod, pickupKind }) => {
+			shipped: ({ shortId, carrierTrackingUrl, courierName, trackingNo, trackingUrl, deliveryMethod, pickupKind }) => {
 				if (isDropOff({ deliveryMethod, pickupKind })) {
 					return `📍 Order ${shortId} is ready — see you at the drop-off point!${trackingUrl ? `\n\nOrder status: ${trackingUrl}` : ""}`;
 				}
 				if (deliveryMethod === "self_collect") {
 					return `🏪 Order ${shortId} is ready for pickup!${trackingUrl ? `\n\nOrder status: ${trackingUrl}` : ""}`;
 				}
-				return `🚚 Order ${shortId} is on the way!${carrierTrackingUrl ? `\n\nTrack shipment: ${carrierTrackingUrl}` : ""}${trackingUrl ? `\n\nOrder status: ${trackingUrl}` : ""}`;
+				return `🚚 Order ${shortId} is on the way!${courierLine({ courierName, trackingNo }, "en")}${carrierTrackingUrl ? `\n\nTrack shipment: ${carrierTrackingUrl}` : ""}${trackingUrl ? `\n\nOrder status: ${trackingUrl}` : ""}`;
 			},
 			delivered: ({ shortId, deliveryMethod }) => {
 				if (deliveryMethod === "self_collect") {
@@ -128,14 +156,14 @@ export const waCopy: Record<Locale, LocaleCopy> = {
 						: `📦 Pesanan ${shortId} sudah dibungkus dan sedia untuk dihantar.`;
 				return `${msg}${trackingUrl ? `\n\nJejak pesanan anda: ${trackingUrl}` : ""}`;
 			},
-			shipped: ({ shortId, carrierTrackingUrl, trackingUrl, deliveryMethod, pickupKind }) => {
+			shipped: ({ shortId, carrierTrackingUrl, courierName, trackingNo, trackingUrl, deliveryMethod, pickupKind }) => {
 				if (isDropOff({ deliveryMethod, pickupKind })) {
 					return `📍 Pesanan ${shortId} sedia — jumpa di lokasi penyerahan!${trackingUrl ? `\n\nStatus pesanan: ${trackingUrl}` : ""}`;
 				}
 				if (deliveryMethod === "self_collect") {
 					return `🏪 Pesanan ${shortId} sedia untuk diambil!${trackingUrl ? `\n\nStatus pesanan: ${trackingUrl}` : ""}`;
 				}
-				return `🚚 Pesanan ${shortId} dalam perjalanan!${carrierTrackingUrl ? `\n\nJejak penghantaran: ${carrierTrackingUrl}` : ""}${trackingUrl ? `\n\nStatus pesanan: ${trackingUrl}` : ""}`;
+				return `🚚 Pesanan ${shortId} dalam perjalanan!${courierLine({ courierName, trackingNo }, "ms")}${carrierTrackingUrl ? `\n\nJejak penghantaran: ${carrierTrackingUrl}` : ""}${trackingUrl ? `\n\nStatus pesanan: ${trackingUrl}` : ""}`;
 			},
 			delivered: ({ shortId, deliveryMethod }) => {
 				if (deliveryMethod === "self_collect") {
@@ -167,14 +195,14 @@ export const waCopy: Record<Locale, LocaleCopy> = {
 						: `📦 订单 ${shortId} 已打包，准备发货。`;
 				return `${msg}${trackingUrl ? `\n\n查看订单状态：${trackingUrl}` : ""}`;
 			},
-			shipped: ({ shortId, carrierTrackingUrl, trackingUrl, deliveryMethod, pickupKind }) => {
+			shipped: ({ shortId, carrierTrackingUrl, courierName, trackingNo, trackingUrl, deliveryMethod, pickupKind }) => {
 				if (isDropOff({ deliveryMethod, pickupKind })) {
 					return `📍 订单 ${shortId} 已经准备好了 —— 交收点见！${trackingUrl ? `\n\n订单状态：${trackingUrl}` : ""}`;
 				}
 				if (deliveryMethod === "self_collect") {
 					return `🏪 订单 ${shortId} 可以来拿了！${trackingUrl ? `\n\n订单状态：${trackingUrl}` : ""}`;
 				}
-				return `🚚 订单 ${shortId} 已经在路上了！${carrierTrackingUrl ? `\n\n查看物流：${carrierTrackingUrl}` : ""}${trackingUrl ? `\n\n订单状态：${trackingUrl}` : ""}`;
+				return `🚚 订单 ${shortId} 已经在路上了！${courierLine({ courierName, trackingNo }, "zh")}${carrierTrackingUrl ? `\n\n查看物流：${carrierTrackingUrl}` : ""}${trackingUrl ? `\n\n订单状态：${trackingUrl}` : ""}`;
 			},
 			delivered: ({ shortId, deliveryMethod }) => {
 				if (deliveryMethod === "self_collect") {
@@ -540,6 +568,10 @@ export function renderStageUpdate(
 		// tracking even when the seller's stage copy replaces the canonical
 		// "on the way" template.
 		carrierTrackingUrl?: string;
+		// Manual courier + consignment number — same shipped-anchored crossings,
+		// so custom-stage sellers' buyers keep the copyable number too.
+		courierName?: string;
+		trackingNo?: string;
 		contactPhone?: string;
 	},
 ): string {
@@ -551,13 +583,14 @@ export function renderStageUpdate(
 	const desc = args.stageDescription?.trim()
 		? `\n${args.stageDescription.trim()}`
 		: "";
+	const courier = courierLine(args, locale);
 	const carrier = args.carrierTrackingUrl
 		? `\n\n${STAGE_UPDATE_CARRIER_LABEL[locale]}: ${args.carrierTrackingUrl}`
 		: "";
 	const track = args.trackingUrl
 		? `\n\n${STAGE_UPDATE_TRACK_LABEL[locale]}: ${args.trackingUrl}`
 		: "";
-	return `${HEAD[locale]}${desc}${carrier}${track}${contactLine(args.contactPhone, locale)}`;
+	return `${HEAD[locale]}${desc}${courier}${carrier}${track}${contactLine(args.contactPhone, locale)}`;
 }
 
 // Matches ORD-XXXX where X is from the alphabet in lib/order.ts
@@ -590,6 +623,8 @@ function interpolate(template: string, vars: CopyVars): string {
 		.replaceAll("{contactPhone}", vars.contactPhone ?? "")
 		.replaceAll("{trackingUrl}", vars.trackingUrl ?? "")
 		.replaceAll("{carrierTrackingUrl}", vars.carrierTrackingUrl ?? "")
+		.replaceAll("{courierName}", vars.courierName ?? "")
+		.replaceAll("{trackingNo}", vars.trackingNo ?? "")
 		.replaceAll("{deliveryMethod}", vars.deliveryMethod ?? "delivery");
 }
 

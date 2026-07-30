@@ -27,6 +27,7 @@ import { Route as AppSettingsRouteImport } from './routes/app.settings'
 import { Route as AppPosterRouteImport } from './routes/app.poster'
 import { Route as AppInsightsRouteImport } from './routes/app.insights'
 import { Route as AppCheckoutRouteImport } from './routes/app.checkout'
+import { Route as SlugCheckoutRouteImport } from './routes/$slug_.checkout'
 import { Route as AppProductsIndexRouteImport } from './routes/app.products.index'
 import { Route as AppOrdersIndexRouteImport } from './routes/app.orders.index'
 import { Route as AppCustomersIndexRouteImport } from './routes/app.customers.index'
@@ -39,6 +40,7 @@ import { Route as AppCustomersCustomerIdRouteImport } from './routes/app.custome
 import { Route as AppAdminWabaRouteImport } from './routes/app.admin.waba'
 import { Route as AppAdminSellersRouteImport } from './routes/app.admin.sellers'
 import { Route as AppAdminBillingRouteImport } from './routes/app.admin.billing'
+import { Route as SlugPProductSlugRouteImport } from './routes/$slug_.p.$productSlug'
 import { Route as SlugCCategorySlugRouteImport } from './routes/$slug_.c.$categorySlug'
 
 const TermsRoute = TermsRouteImport.update({
@@ -131,6 +133,11 @@ const AppCheckoutRoute = AppCheckoutRouteImport.update({
   path: '/checkout',
   getParentRoute: () => AppRoute,
 } as any)
+const SlugCheckoutRoute = SlugCheckoutRouteImport.update({
+  id: '/$slug_/checkout',
+  path: '/$slug/checkout',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AppProductsIndexRoute = AppProductsIndexRouteImport.update({
   id: '/products/',
   path: '/products/',
@@ -191,6 +198,11 @@ const AppAdminBillingRoute = AppAdminBillingRouteImport.update({
   path: '/admin/billing',
   getParentRoute: () => AppRoute,
 } as any)
+const SlugPProductSlugRoute = SlugPProductSlugRouteImport.update({
+  id: '/$slug_/p/$productSlug',
+  path: '/$slug/p/$productSlug',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SlugCCategorySlugRoute = SlugCCategorySlugRouteImport.update({
   id: '/$slug_/c/$categorySlug',
   path: '/$slug/c/$categorySlug',
@@ -208,6 +220,7 @@ export interface FileRoutesByFullPath {
   '/privacy': typeof PrivacyRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/terms': typeof TermsRoute
+  '/$slug/checkout': typeof SlugCheckoutRoute
   '/app/checkout': typeof AppCheckoutRoute
   '/app/insights': typeof AppInsightsRoute
   '/app/poster': typeof AppPosterRoute
@@ -217,6 +230,7 @@ export interface FileRoutesByFullPath {
   '/track/$token': typeof TrackTokenRoute
   '/app/': typeof AppIndexRoute
   '/$slug/c/$categorySlug': typeof SlugCCategorySlugRoute
+  '/$slug/p/$productSlug': typeof SlugPProductSlugRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
   '/app/admin/sellers': typeof AppAdminSellersRoute
   '/app/admin/waba': typeof AppAdminWabaRoute
@@ -240,6 +254,7 @@ export interface FileRoutesByTo {
   '/privacy': typeof PrivacyRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/terms': typeof TermsRoute
+  '/$slug/checkout': typeof SlugCheckoutRoute
   '/app/checkout': typeof AppCheckoutRoute
   '/app/insights': typeof AppInsightsRoute
   '/app/poster': typeof AppPosterRoute
@@ -249,6 +264,7 @@ export interface FileRoutesByTo {
   '/track/$token': typeof TrackTokenRoute
   '/app': typeof AppIndexRoute
   '/$slug/c/$categorySlug': typeof SlugCCategorySlugRoute
+  '/$slug/p/$productSlug': typeof SlugPProductSlugRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
   '/app/admin/sellers': typeof AppAdminSellersRoute
   '/app/admin/waba': typeof AppAdminWabaRoute
@@ -274,6 +290,7 @@ export interface FileRoutesById {
   '/privacy': typeof PrivacyRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/terms': typeof TermsRoute
+  '/$slug_/checkout': typeof SlugCheckoutRoute
   '/app/checkout': typeof AppCheckoutRoute
   '/app/insights': typeof AppInsightsRoute
   '/app/poster': typeof AppPosterRoute
@@ -283,6 +300,7 @@ export interface FileRoutesById {
   '/track/$token': typeof TrackTokenRoute
   '/app/': typeof AppIndexRoute
   '/$slug_/c/$categorySlug': typeof SlugCCategorySlugRoute
+  '/$slug_/p/$productSlug': typeof SlugPProductSlugRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
   '/app/admin/sellers': typeof AppAdminSellersRoute
   '/app/admin/waba': typeof AppAdminWabaRoute
@@ -309,6 +327,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sitemap.xml'
     | '/terms'
+    | '/$slug/checkout'
     | '/app/checkout'
     | '/app/insights'
     | '/app/poster'
@@ -318,6 +337,7 @@ export interface FileRouteTypes {
     | '/track/$token'
     | '/app/'
     | '/$slug/c/$categorySlug'
+    | '/$slug/p/$productSlug'
     | '/app/admin/billing'
     | '/app/admin/sellers'
     | '/app/admin/waba'
@@ -341,6 +361,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sitemap.xml'
     | '/terms'
+    | '/$slug/checkout'
     | '/app/checkout'
     | '/app/insights'
     | '/app/poster'
@@ -350,6 +371,7 @@ export interface FileRouteTypes {
     | '/track/$token'
     | '/app'
     | '/$slug/c/$categorySlug'
+    | '/$slug/p/$productSlug'
     | '/app/admin/billing'
     | '/app/admin/sellers'
     | '/app/admin/waba'
@@ -374,6 +396,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sitemap.xml'
     | '/terms'
+    | '/$slug_/checkout'
     | '/app/checkout'
     | '/app/insights'
     | '/app/poster'
@@ -383,6 +406,7 @@ export interface FileRouteTypes {
     | '/track/$token'
     | '/app/'
     | '/$slug_/c/$categorySlug'
+    | '/$slug_/p/$productSlug'
     | '/app/admin/billing'
     | '/app/admin/sellers'
     | '/app/admin/waba'
@@ -408,10 +432,12 @@ export interface RootRouteChildren {
   PrivacyRoute: typeof PrivacyRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   TermsRoute: typeof TermsRoute
+  SlugCheckoutRoute: typeof SlugCheckoutRoute
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
   TrackTokenRoute: typeof TrackTokenRoute
   SlugCCategorySlugRoute: typeof SlugCCategorySlugRoute
+  SlugPProductSlugRoute: typeof SlugPProductSlugRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -542,6 +568,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppCheckoutRouteImport
       parentRoute: typeof AppRoute
     }
+    '/$slug_/checkout': {
+      id: '/$slug_/checkout'
+      path: '/$slug/checkout'
+      fullPath: '/$slug/checkout'
+      preLoaderRoute: typeof SlugCheckoutRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/app/products/': {
       id: '/app/products/'
       path: '/products'
@@ -626,6 +659,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAdminBillingRouteImport
       parentRoute: typeof AppRoute
     }
+    '/$slug_/p/$productSlug': {
+      id: '/$slug_/p/$productSlug'
+      path: '/$slug/p/$productSlug'
+      fullPath: '/$slug/p/$productSlug'
+      preLoaderRoute: typeof SlugPProductSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/$slug_/c/$categorySlug': {
       id: '/$slug_/c/$categorySlug'
       path: '/$slug/c/$categorySlug'
@@ -689,10 +729,12 @@ const rootRouteChildren: RootRouteChildren = {
   PrivacyRoute: PrivacyRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   TermsRoute: TermsRoute,
+  SlugCheckoutRoute: SlugCheckoutRoute,
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,
   TrackTokenRoute: TrackTokenRoute,
   SlugCCategorySlugRoute: SlugCCategorySlugRoute,
+  SlugPProductSlugRoute: SlugPProductSlugRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

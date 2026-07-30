@@ -14,8 +14,8 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
-import type { DispatchBlock } from "../../../convex/lalamove";
 import { todayMytMidnight } from "../../../convex/lib/fulfilmentDate";
+import { dispatchBlockCopy } from "../../lib/dispatch-block";
 import { formatPrice } from "../../lib/format";
 import { ProBadge } from "../app/pro-gate";
 import { AppImage } from "../ui/app-image";
@@ -41,7 +41,18 @@ import {
  * Renders only on delivery orders. For sellers who never set up Lalamove it
  * collapses to a one-line discoverability hint on bookable orders.
  */
-export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
+export function BookDeliveryCard({
+	order,
+	bookRequestToken = 0,
+}: {
+	order: Doc<"orders">;
+	/** Increment to request the booking flow from OUTSIDE the card — the
+	 * mark-shipped dialog's "Lalamove rider" tab uses this so the seller can
+	 * book without scrolling down to the card. Same guarded entry as the
+	 * packed prompt (bookable status, keys ok, no active job), so it can
+	 * never book more than the card itself would allow. */
+	bookRequestToken?: number;
+}) {
 	const dispatch = useQuery(api.lalamove.getDeliveryJob, {
 		shortId: order.shortId,
 	});
@@ -96,6 +107,27 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 		void handlePrepare();
 	}, [order.status, order.paymentStatus, dispatch]);
 
+	// External book request (mark-shipped dialog's "Lalamove rider" tab). Token
+	// baseline on mount so a remount never re-fires a stale request; the same
+	// bookability guards as above, minus the paid/due-today conditions — this
+	// is an explicit seller tap, not an automatic prompt.
+	const prevTokenRef = useRef(bookRequestToken);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: handlePrepare is a stable hoisted closure; the effect keys off the token only.
+	useEffect(() => {
+		const prev = prevTokenRef.current;
+		prevTokenRef.current = bookRequestToken;
+		if (bookRequestToken === prev) return;
+		if (!dispatch || dispatch.blockReason !== null) return;
+		const hasActiveJob =
+			!!dispatch.job &&
+			!["completed", "canceled", "expired", "rejected"].includes(
+				dispatch.job.status,
+			);
+		if (hasActiveJob) return;
+		if (order.status !== "confirmed" && order.status !== "packed") return;
+		void handlePrepare();
+	}, [bookRequestToken, dispatch, order.status]);
+
 	if (order.deliveryMethod !== "delivery" || !dispatch) return null;
 	const { job, blockReason, promptBookOnPacked } = dispatch;
 	const activeJob =
@@ -143,7 +175,7 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 		try {
 			const result = await prepareBooking({ shortId: order.shortId });
 			if (!result.ok) {
-				toast.error(result.message ?? blockCopy(result.reason));
+				toast.error(result.message ?? dispatchBlockCopy(result.reason));
 				return;
 			}
 			setQuote(result);
@@ -163,7 +195,7 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 				vehicleType,
 			});
 			if (!result.ok) {
-				toast.error(result.message ?? blockCopy(result.reason));
+				toast.error(result.message ?? dispatchBlockCopy(result.reason));
 				return;
 			}
 			setQuote(result);
@@ -184,7 +216,7 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 				vehicleType: quote.vehicleType === "CAR" ? "CAR" : "MOTORCYCLE",
 			});
 			if (!result.ok) {
-				toast.error(result.message ?? blockCopy(result.reason));
+				toast.error(result.message ?? dispatchBlockCopy(result.reason));
 				return;
 			}
 			setQuote(null);
@@ -391,7 +423,7 @@ export function BookDeliveryCard({ order }: { order: Doc<"orders"> }) {
 							{blockReason === "plan_gated" ? <ProBadge /> : null}
 						</Button>
 						<p className="text-xs text-muted-foreground">
-							{blockCopy(blockReason)}
+							{dispatchBlockCopy(blockReason)}
 						</p>
 					</div>
 				)
@@ -558,23 +590,3 @@ function JobStatusPill({ status }: { status: string }) {
 	);
 }
 
-function blockCopy(reason: DispatchBlock | "not_found" | string): string {
-	switch (reason) {
-		case "no_coords":
-			return "This address has no map pin, so a rider can't be routed to it. Ask the buyer to re-pick their address from the suggestions on their tracking page, or update it for them.";
-		case "no_buyer_phone":
-			return "This order has no buyer WhatsApp number for the rider to contact.";
-		case "no_seller_phone":
-			return "Add a Malaysian (+60) WhatsApp number in Settings → Store first — Lalamove riders need a local pickup contact.";
-		case "plan_gated":
-			return "Lalamove booking is a Pro feature. Upgrade to book riders in one tap.";
-		case "no_credentials":
-			return "Your Lalamove API key is missing — add it under Settings → Fulfilment → Delivery charge → Lalamove.";
-		case "booking_disabled":
-			return "Lalamove isn't your delivery method right now — choose it under Settings → Fulfilment → Delivery charge.";
-		case "bad_status":
-			return "Delivery can be booked once the order is confirmed.";
-		default:
-			return "Booking isn't available for this order.";
-	}
-}

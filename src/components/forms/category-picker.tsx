@@ -27,11 +27,15 @@ export function CategoryPicker({
 	selectedIds,
 	onChange,
 	locked,
+	embedded = false,
 }: {
 	retailerId: Id<"retailers">;
 	selectedIds: Id<"categories">[];
 	onChange: (ids: Id<"categories">[]) => void;
 	locked: boolean;
+	/** Render without the outer card chrome — for use inside another section
+	 * card (the product form's "Where it appears"). */
+	embedded?: boolean;
 }) {
 	const categories = useQuery(api.categories.listForRetailer, { retailerId });
 	const active = categories?.filter((c) => c.active);
@@ -52,16 +56,36 @@ export function CategoryPicker({
 	}
 
 	return (
-		<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4 shadow-sm lg:p-5">
+		<section
+			className={
+				embedded
+					? "flex flex-col gap-3"
+					: "flex flex-col gap-3 rounded-2xl border border-border bg-card p-4 shadow-sm lg:p-5"
+			}
+		>
 			<div className="min-w-0">
-				<p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-					Storefront
-				</p>
-				<h3 className="flex items-center gap-2 text-base font-semibold leading-tight">
+				{embedded ? null : (
+					<p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+						Storefront
+					</p>
+				)}
+				<h3
+					className={
+						embedded
+							? "flex items-center gap-2 text-sm font-semibold leading-tight"
+							: "flex items-center gap-2 text-base font-semibold leading-tight"
+					}
+				>
 					Categories
 					{locked ? <ProBadge /> : null}
 				</h3>
-				<p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+				<p
+					className={
+						embedded
+							? "mt-0.5 text-xs leading-relaxed text-muted-foreground"
+							: "mt-1 text-sm leading-relaxed text-muted-foreground"
+					}
+				>
 					{locked
 						? "Adding products to categories is part of the Pro plan. You can still remove this product from its current categories."
 						: "Pick where this product appears when buyers browse by category. It always stays in the “All products” view."}

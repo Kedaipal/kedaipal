@@ -242,7 +242,17 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 		[byProduct],
 	);
 
+	// Has THIS retailer's persisted cart been read into state yet? The reducer
+	// starts at EMPTY_STATE and hydrates in an effect, so the first committed
+	// render always reports an empty cart — measured: navigating to checkout
+	// painted "Your cart is empty" before the items arrived. Surfaces that would
+	// otherwise render a dead-end empty state (and offer a "browse the store"
+	// exit) must hold a skeleton until this is true. `retailerId` undefined =
+	// hydration hasn't even been attempted.
+	const hydrated = retailerId !== undefined && state.hydratedFor === retailerId;
+
 	return {
+		hydrated,
 		items: state.items,
 		itemCount,
 		total,

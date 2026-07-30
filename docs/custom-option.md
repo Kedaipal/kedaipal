@@ -160,7 +160,7 @@ Authoring + resolution: `convex/schema.ts`, `convex/lib/variant.ts`,
 
 Storefront + ordering: `src/components/storefront/product-detail-sheet.tsx`
 (independent add + buyer note + reference-photo upload), `…/product-card.tsx`,
-`…/product-grid.tsx` (note/image → cart, stay-open), `…/checkout-sheet.tsx`
+`…/product-grid.tsx` (note/image → cart, stay-open), `…/checkout-form.tsx`
 (`composeCustomerNote` + first custom image → `customerImageStorageId`),
 `src/hooks/useCart.ts` (`CartItem.note` / `.customImageStorageId`),
 `src/lib/order-note.ts`. Backend: `orders.generateCustomImageUploadUrl` +

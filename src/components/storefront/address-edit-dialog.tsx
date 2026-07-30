@@ -193,6 +193,11 @@ export function AddressEditDialog({
 									placeId: "placeId",
 								}}
 								retailerId={retailerId}
+								// A live-quoted (Lalamove) order is re-priced from the pin —
+								// `liveSaveBlocked` refuses a save without a fresh quote — so a
+								// hand-typed address here would be a dead end. Every other mode
+								// keeps the manual escape hatch. See 86eye50qv.
+								allowManualEntry={!isLiveMode}
 							/>
 							{/* Live-priced store: the new address's rider price, shown
 							    BEFORE saving — the save stays disabled until it resolves. */}

@@ -207,7 +207,7 @@ describe("customers — queries", () => {
 			quantity: 1,
 		});
 		await placeOrder(t, retailer._id, productId, {
-			waPhone: "60222222222",
+			waPhone: "60122222222",
 			quantity: 5,
 		});
 
@@ -218,7 +218,7 @@ describe("customers — queries", () => {
 			paginationOpts: { numItems: 50, cursor: null },
 		});
 		expect(list.page.map((c) => c.waPhone)).toEqual([
-			"60222222222",
+			"60122222222",
 			"60111111111",
 		]);
 	});

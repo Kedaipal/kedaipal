@@ -16,6 +16,10 @@ interface BadgeOrder {
 	mockupStatus?: string;
 	/** Checkout surface — counter orders get a defaulted date, so no date badge. */
 	source?: string;
+	/** Seen-state: a confirmation-push order the seller hasn't opened escalates
+	 * on age exactly as a `pending` order used to (86eyf1rck). */
+	seenAt?: number;
+	confirmationPushStatus?: string;
 }
 
 /** A terminal order is finished — its due date can no longer be "late". */
@@ -63,7 +67,11 @@ export function OrderContextBadge({
 		);
 	}
 	const severity = statusAgeSeverity(
-		order.status as OrderStatus,
+		{
+			status: order.status as OrderStatus,
+			seenAt: order.seenAt,
+			confirmationPushStatus: order.confirmationPushStatus,
+		},
 		statusAgeMs(order, now),
 	);
 	if (severity !== "normal") {
