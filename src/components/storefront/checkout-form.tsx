@@ -534,6 +534,16 @@ export function CheckoutPage({
 		rawQuote !== undefined &&
 		!(!hasCoords && quoteForDelivery?.kind === "blocked");
 
+	// Stock eroded under a persisted cart (qty 5, seller drops to 2): the line
+	// shows "Only 2 in stock" with `+` disabled, but the order would still be
+	// submitted and refused server-side. Gate it here with a named reason —
+	// wrong-but-enabled is exactly what the house rule forbids — and the
+	// summary pre-expands the offending line so the fixing stepper is showing.
+	const overStockLine = cart.items.find((item) => {
+		const cap = stockCapFor(item.variantId);
+		return cap !== undefined && item.quantity > cap;
+	});
+
 	// The address the buyer has actually committed to. Manual mode fills line1
 	// without a pin; the search fills both. Empty means nothing to deliver to,
 	// which keeps the CTA disabled — with a reason, never silently.
@@ -581,13 +591,15 @@ export function CheckoutPage({
 			? "Checkout is temporarily unavailable — please try again shortly"
 			: minRulesBlocked
 				? "Below the store's minimum — see your order summary"
-				: addressIncomplete
-					? "Add your delivery address to continue"
-					: quoteForDelivery?.kind === "calculating"
-						? "Calculating your delivery fee…"
-						: deliveryBlocked
-							? "We can't deliver to this address — see your order summary"
-							: null;
+				: overStockLine
+					? `Only ${stockCapFor(overStockLine.variantId)} × ${overStockLine.name} left — lower the quantity to continue`
+					: addressIncomplete
+						? "Add your delivery address to continue"
+						: quoteForDelivery?.kind === "calculating"
+							? "Calculating your delivery fee…"
+							: deliveryBlocked
+								? "We can't deliver to this address — see your order summary"
+								: null;
 
 	const submitButton = (
 		<form.Subscribe
@@ -610,7 +622,9 @@ export function CheckoutPage({
 						deliveryBlocked ||
 						// Below a minimum order rule — the alert above the total
 						// lists exactly what's missing (server enforces it too).
-						minRulesBlocked
+						minRulesBlocked ||
+						// A line now exceeds live stock (server enforces it too).
+						overStockLine !== undefined
 					}
 					className="h-12 w-full text-base"
 				>
@@ -1075,6 +1089,7 @@ export function CheckoutPage({
 					{blockedReasonLine}
 					{submitButton}
 					{reassurance}
+					{privacyLine}
 				</div>
 			</div>
 		</form>

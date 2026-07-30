@@ -106,7 +106,11 @@ function CheckoutRoute() {
 		slug,
 	});
 
-	if (!retailer) {
+	// Hold the skeleton until BOTH the store and the persisted cart are known.
+	// Without the cart gate the first committed render shows the empty-cart
+	// panel — with a "Browse {store}" button that navigates away from checkout
+	// — before the buyer's items hydrate from localStorage.
+	if (!retailer || !cart.hydrated) {
 		return <CheckoutSkeleton />;
 	}
 

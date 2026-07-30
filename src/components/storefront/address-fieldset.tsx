@@ -15,11 +15,15 @@ const stateOptions = [
 ];
 
 /** Fields that describe WHERE the order goes — cleared together by "Search
- * again", and the only ones that can move the Google pin. `notes` is
- * deliberately absent: "call when you arrive" survives an address change. */
+ * again", and the only ones that can move the Google pin. `line2` and `notes`
+ * are deliberately absent: a unit/floor and "call when you arrive" are the
+ * buyer's own typing, and the locked card leaves BOTH editable, so a stale
+ * one is visible and one tap from correct. Wiping them on "Search again" —
+ * the only route back to fixing a street — would silently lose the unit and
+ * ship to a high-rise with no floor. A re-pick never restores it
+ * (`handleAutocompleteSelect` doesn't touch either field). */
 const LOCATION_FIELDS = [
 	"line1",
-	"line2",
 	"city",
 	"state",
 	"postcode",
