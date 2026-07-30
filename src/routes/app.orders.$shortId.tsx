@@ -28,6 +28,7 @@ import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 import {
+	isActiveJobStatus,
 	isRiderManagedTransition,
 	riderDrivesOrderStatus,
 } from "../../convex/lib/lalamove";
@@ -324,10 +325,11 @@ function OrderDetailRoute() {
 			: "skip",
 	);
 	const hasActiveRiderBooking =
-		!!dispatchInfo?.job &&
-		!["completed", "canceled", "expired", "rejected"].includes(
-			dispatchInfo.job.status,
-		);
+		!!dispatchInfo?.job && isActiveJobStatus(dispatchInfo.job.status);
+	// Rider dispatch IS this vendor's delivery method (they picked Lalamove as
+	// their delivery charge). They never ship parcels, so no manual courier
+	// surface is offered anywhere on this page — 86eyff02p.
+	const lalamoveVendor = dispatchInfo?.bookingEnabled === true;
 	// The rider's webhook is demonstrably driving this order (active job + at
 	// least one event applied) — manual shipped/delivered advances are gated
 	// behind a confirm so the buyer isn't messaged early / without the tracking
@@ -624,13 +626,14 @@ function OrderDetailRoute() {
 										type="button"
 										onClick={() => {
 											// Marking a delivery order shipped is THE moment the
-											// seller has the consignment slip in hand — prompt for
-											// courier + tracking (optional) so the buyer's shipped
-											// WhatsApp update carries it. Skipped when tracking is
-											// already attached AND when a rider booking is active
-											// (belt-and-braces: booking mirrors its shareLink onto
-											// carrierTrackingUrl, but a parcel-courier form must
-											// never front a rider order even if that link is
+											// seller decides how it goes out, so prompt first: a
+											// parcel seller for courier + tracking (optional, rides
+											// the shipped WhatsApp update), a rider vendor for the
+											// booking they may not have made yet. Skipped when
+											// tracking is already attached AND when a rider booking
+											// is active (belt-and-braces: booking mirrors its
+											// shareLink onto carrierTrackingUrl, but a booked order
+											// must never be re-prompted even if that link is
 											// missing). Webhook-driven orders never reach here at
 											// all — the button is disabled.
 											if (
@@ -1246,7 +1249,9 @@ function OrderDetailRoute() {
 			) : null}
 
 			{/* Shipment tracking — manual courier + tracking number (86eyehvk4) */}
-			{showCarrierSection ? <ShipmentTrackingCard order={order} /> : null}
+			{showCarrierSection ? (
+				<ShipmentTrackingCard order={order} readOnly={lalamoveVendor} />
+			) : null}
 
 			{order.mockupStatus !== undefined ? <MockupCard order={order} /> : null}
 
@@ -1336,17 +1341,16 @@ function OrderDetailRoute() {
 					onOpenChange={setShipDialogOpen}
 					advanceLabel={`Mark as ${stageLabel(nextStage, "en")}`}
 					onConfirm={(fields) => handleAdvance(nextStage.id, fields)}
-					// blockReason === null ⟺ a rider could be booked right now
-					// (keys configured, plan ok, coords present, no active job) —
-					// then the dialog opens rider-first with a direct booking CTA.
-					onBookRider={
-						dispatchInfo?.blockReason === null
-							? () => {
-									setShipDialogOpen(false);
-									setBookRequestToken((t) => t + 1);
-								}
-							: undefined
-					}
+					// A rider vendor gets the rider prompt, never the parcel-courier
+					// form; blockReason === null ⟺ a rider could be booked on THIS
+					// order right now (keys ok, plan ok, coords present, no active
+					// job), otherwise the prompt states the reason instead.
+					lalamoveVendor={lalamoveVendor}
+					riderBlockReason={dispatchInfo?.blockReason ?? null}
+					onBookRider={() => {
+						setShipDialogOpen(false);
+						setBookRequestToken((t) => t + 1);
+					}}
 				/>
 			) : null}
 

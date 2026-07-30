@@ -1,14 +1,16 @@
 import { useMutation } from "convex/react";
-import { ChevronDown, ExternalLink, Truck } from "lucide-react";
+import { ChevronDown, CircleAlert, ExternalLink, Truck } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import type { DispatchBlock } from "../../../convex/lalamove";
 import {
 	COURIERS,
 	findCourier,
 	isSafeTrackingUrl,
 } from "../../../convex/lib/couriers";
+import { dispatchBlockCopy } from "../../lib/dispatch-block";
 import { convexErrorMessage } from "../../lib/format";
 import { Button } from "../ui/button";
 import { CopyButton } from "../ui/copy-button";
@@ -190,13 +192,21 @@ function ShipmentFieldset({
 }
 
 /**
- * The advance-to-shipped prompt. When a Lalamove rider is bookable on the
- * order (`onBookRider` provided), it opens as TWO TABS with the rider first —
- * the Lalamove Delivery card sits far down the page, so this is the second,
- * eye-level place to book (same guarded flow; the CTA closes this dialog and
- * opens the card's quote→confirm dialog). The second tab is the manual
- * parcel-courier form. Without a bookable rider it's the plain courier form.
- * Skippable either way — shipping without tracking stays one tap, and the
+ * The advance-to-shipped prompt, in one of two shapes decided by the vendor's
+ * delivery method (86eyff02p):
+ *
+ * - **Rider dispatch** (`lalamoveVendor`, i.e. Lalamove is the delivery charge
+ *   they picked): riders only, **no manual courier form at all** — they don't
+ *   ship parcels, so a courier picklist here would be noise that invites
+ *   tracking contradicting the rider's own live link. Bookable → the rider
+ *   explainer + a "Book a rider" CTA (the Lalamove Delivery card sits far down
+ *   the page, so this is the second, eye-level entrance to the SAME guarded
+ *   flow). Not bookable → the reason, in the seller's words, with the fix path;
+ *   either way there's an explicit "ship without a rider" escape so the order
+ *   can always move.
+ * - **Everyone else**: the plain optional courier + tracking-number form.
+ *
+ * Skippable in every shape — shipping without tracking stays one tap, and the
  * card below covers add-later.
  */
 export function MarkShippedDialog({
@@ -204,6 +214,8 @@ export function MarkShippedDialog({
 	onOpenChange,
 	advanceLabel,
 	onConfirm,
+	lalamoveVendor,
+	riderBlockReason,
 	onBookRider,
 }: {
 	open: boolean;
@@ -211,19 +223,22 @@ export function MarkShippedDialog({
 	/** The advance button's own label, e.g. "Mark as Shipped" — stage vocabulary. */
 	advanceLabel: string;
 	onConfirm: (fields: ShipmentFields) => Promise<void>;
-	/** Present ⟺ a Lalamove rider could be booked on this order right now
-	 * (keys configured, plan ok, no active job). Called from the rider tab's
-	 * CTA — the parent closes this dialog and triggers the SAME booking flow
-	 * as the Lalamove Delivery card (today's price shown, tap to confirm;
-	 * live tracking attaches itself and the rider's pickup drives "shipped"). */
-	onBookRider?: () => void;
+	/** Rider dispatch IS this vendor's delivery method
+	 * (`getDeliveryJob.bookingEnabled`) — the manual parcel-courier form is not
+	 * offered to them anywhere. */
+	lalamoveVendor: boolean;
+	/** Why a rider can't be booked on THIS order right now; null = bookable.
+	 * Only read when `lalamoveVendor` — both come from the same resolved
+	 * `getDeliveryJob` read, so they can't disagree. */
+	riderBlockReason: DispatchBlock | null;
+	/** Closes this prompt and triggers the SAME booking flow as the Lalamove
+	 * Delivery card (today's price shown, tap to confirm; live tracking attaches
+	 * itself and the rider's pickup drives "shipped"). */
+	onBookRider: () => void;
 }) {
 	const [draft, setDraft] = useState<ShipmentDraft | null>(null);
 	const [saving, setSaving] = useState(false);
-	// Rider-first when booking is on the table — the manual form is one tap
-	// away for the outstation-parcel case. Plain courier form otherwise.
-	const [tab, setTab] = useState<"rider" | "courier">("rider");
-	const riderTab = onBookRider !== undefined && tab === "rider";
+	const riderBookable = lalamoveVendor && riderBlockReason === null;
 	// Lazy-init on open so the last-used courier is read fresh each time.
 	const activeDraft = draft ?? {
 		courier: readLastCourier(),
@@ -232,11 +247,13 @@ export function MarkShippedDialog({
 		url: "",
 	};
 
+	// Rider vendors advance with no shipment fields — there's no courier form to
+	// read, and a rider's tracking link attaches itself on booking.
 	async function handleConfirm() {
 		setSaving(true);
 		try {
-			await onConfirm(draftToFields(activeDraft));
-			storeLastCourier(activeDraft.courier);
+			await onConfirm(lalamoveVendor ? {} : draftToFields(activeDraft));
+			if (!lalamoveVendor) storeLastCourier(activeDraft.courier);
 			onOpenChange(false);
 			setDraft(null);
 		} catch {
@@ -251,68 +268,70 @@ export function MarkShippedDialog({
 			open={open}
 			onOpenChange={(next) => {
 				onOpenChange(next);
-				if (!next) {
-					setDraft(null);
-					setTab("rider");
-				}
+				if (!next) setDraft(null);
 			}}
 		>
 			<DialogContent>
 				<DialogHeader>
 					<DialogTitle>{advanceLabel}</DialogTitle>
-					{onBookRider === undefined ? (
+					{lalamoveVendor ? (
+						<DialogDescription>
+							{riderBookable
+								? "How is this order going out?"
+								: "A rider can't be booked for this order right now."}
+						</DialogDescription>
+					) : (
 						<DialogDescription>
 							Add the courier and tracking number — it goes into the
 							buyer&apos;s WhatsApp update and tracking page. Optional; you can
 							also add it later from this order.
 						</DialogDescription>
-					) : (
-						<DialogDescription>How is this order going out?</DialogDescription>
 					)}
 				</DialogHeader>
 
-				{onBookRider !== undefined ? (
-					<div className="flex gap-2 border-b border-input">
-						{(
-							[
-								["rider", "Lalamove rider"],
-								["courier", "Parcel courier"],
-							] as const
-						).map(([key, label]) => (
-							<button
-								key={key}
-								type="button"
-								onClick={() => setTab(key)}
-								className={`min-h-11 px-3 text-sm font-medium ${
-									tab === key
-										? "border-b-2 border-primary text-primary"
-										: "text-muted-foreground"
-								}`}
-							>
-								{label}
-							</button>
-						))}
-					</div>
-				) : null}
-
-				{riderTab ? (
-					<p className="text-sm leading-relaxed text-muted-foreground">
-						Book a Lalamove rider for this delivery — you&apos;ll see
-						today&apos;s price and confirm before anything is charged. Live
-						tracking attaches automatically, and the order updates on its own
-						when the rider picks up, so there&apos;s nothing to mark manually.
-					</p>
-				) : (
-					<>
-						{onBookRider !== undefined ? (
-							<p className="text-xs leading-relaxed text-muted-foreground">
-								Shipping with a parcel courier instead — the tracking below goes
-								into the buyer&apos;s WhatsApp update and tracking page.
-								Optional; you can also add it later from this order.
+				{lalamoveVendor ? (
+					// Branch on the reason itself, not the derived `riderBookable`, so the
+					// blocked arm has it narrowed to a real DispatchBlock.
+					riderBlockReason === null ? (
+						<div className="flex flex-col gap-2.5">
+							<p className="text-sm leading-relaxed text-muted-foreground">
+								Book a Lalamove rider for this delivery — you&apos;ll see
+								today&apos;s price and confirm before anything is charged. Live
+								tracking attaches automatically, and the order updates on its
+								own when the rider picks up, so there&apos;s nothing to mark
+								manually.
 							</p>
-						) : null}
-						<ShipmentFieldset draft={activeDraft} onChange={setDraft} />
-					</>
+							{/* Dropping the buyer off yourself is a real case — keep the plain
+							    advance reachable so "Book a rider" is never the only way out. */}
+							<p className="text-xs leading-relaxed text-muted-foreground">
+								Not sending a rider for this one?{" "}
+								<button
+									type="button"
+									onClick={handleConfirm}
+									disabled={saving}
+									className="font-medium underline underline-offset-2 disabled:opacity-55"
+								>
+									{saving ? "Updating…" : `${advanceLabel} without a rider`}
+								</button>
+							</p>
+						</div>
+					) : (
+						// Blocked: say why (with its fix path) and let the seller choose —
+						// back out and fix it, or ship this one without a rider. Never a
+						// silent advance, never a wall.
+						<div className="flex gap-2.5 rounded-xl border border-amber-300 bg-amber-50 p-3 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+							<CircleAlert className="size-4 shrink-0 translate-y-0.5" />
+							<div className="flex flex-col gap-1.5 text-sm leading-relaxed">
+								<p>{dispatchBlockCopy(riderBlockReason)}</p>
+								<p className="text-amber-900/80 dark:text-amber-200/80">
+									Close this to sort it out and book after — or carry on below
+									if this one&apos;s going out another way.
+								</p>
+							</div>
+						</div>
+					)
+				) : (
+					<ShipmentFieldset draft={activeDraft} onChange={setDraft} />
 				)}
 
 				<DialogFooter>
@@ -324,13 +343,17 @@ export function MarkShippedDialog({
 					>
 						Cancel
 					</Button>
-					{riderTab && onBookRider !== undefined ? (
+					{riderBookable ? (
 						<Button onClick={onBookRider} className="h-11">
 							Book a rider
 						</Button>
 					) : (
 						<Button onClick={handleConfirm} disabled={saving} className="h-11">
-							{saving ? "Updating…" : advanceLabel}
+							{saving
+								? "Updating…"
+								: lalamoveVendor
+									? `${advanceLabel} anyway`
+									: advanceLabel}
 						</Button>
 					)}
 				</DialogFooter>
@@ -342,9 +365,15 @@ export function MarkShippedDialog({
 /**
  * Order-detail "Shipment tracking" card: shows the attached courier + number
  * (copyable) + track link, with an edit mode for add-after / corrections.
+ *
+ * `readOnly` is the rider-dispatch vendor (86eyff02p): manual courier entry is
+ * not theirs to do, so the card keeps showing what the buyer sees — the link
+ * and number a booking mirrored onto the order — but drops Add/Edit, and
+ * disappears entirely while there's nothing attached.
  */
 export function ShipmentTrackingCard({
 	order,
+	readOnly = false,
 }: {
 	order: {
 		_id: Id<"orders">;
@@ -352,6 +381,7 @@ export function ShipmentTrackingCard({
 		trackingNo?: string;
 		carrierTrackingUrl?: string;
 	};
+	readOnly?: boolean;
 }) {
 	const setShipmentTracking = useMutation(api.orders.setShipmentTracking);
 	const [draft, setDraft] = useState<ShipmentDraft | null>(null);
@@ -360,6 +390,9 @@ export function ShipmentTrackingCard({
 	const hasAny = Boolean(
 		order.courierName || order.trackingNo || order.carrierTrackingUrl,
 	);
+	// Nothing to show and nothing to add — the Lalamove Delivery card above is
+	// where a rider vendor's dispatch lives.
+	if (readOnly && !hasAny) return null;
 
 	function startEdit() {
 		const known = order.courierName
@@ -398,7 +431,7 @@ export function ShipmentTrackingCard({
 				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 					Shipment Tracking
 				</p>
-				{!editing ? (
+				{!editing && !readOnly ? (
 					<button
 						type="button"
 						onClick={startEdit}

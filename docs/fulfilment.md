@@ -262,24 +262,47 @@ chargeable pickup).
   line states exactly what the buyer gets (auto link vs copyable number vs nothing) —
   no hidden behavior. **"No courier" collapses the form** (number/link inputs hide, and
   `draftToFields` treats the state as an explicit clear so hidden leftovers never save).
-- **Lalamove interplay** (Zaki's test feedback, 29–30 Jul): booking a rider is a
-  *different* flow whose home is the Lalamove Delivery card (book moment **packed**,
-  `promptBookOnPacked` — with a rider, "shipped" fires automatically at pickup, so a
-  seller manually marking shipped is saying "no rider on this one"). Two easings:
-  (a) the prompt is **suppressed when a rider booking is active** (belt-and-braces —
-  booking already mirrors its `shareLink` onto `carrierTrackingUrl`, which suppresses
-  it anyway); (b) when a rider is **bookable right now**
-  (`getDeliveryJob.blockReason === null`) the prompt opens as **two tabs, rider
-  first** — "Lalamove rider" (copy + a `Book a rider…` CTA that closes the prompt and
-  bumps `bookRequestToken`, which `BookDeliveryCard` watches to open its own
-  quote→confirm dialog through the same bookability guards) and "Parcel courier" (the
-  manual form). The card sits far down the page, so the prompt is the second,
-  eye-level place to book — same flow, two entrances. Non-Lalamove sellers see the
-  plain courier form, no tabs.
+- **Manual courier is for parcel sellers only** (ClickUp `86eyff02p`, corrects the
+  two-tab prompt this feature first shipped with). The gate is
+  **`getDeliveryJob.bookingEnabled`** = `retailers.deliveryBooking.enabled` — Settings
+  couples it 1:1 with the Lalamove delivery-charge choice (picking Lalamove enables
+  booking, switching to Free/Flat/Radius disables it), so it answers the seller-facing
+  question "do I send riders or parcels?". It is deliberately **not**
+  `deliveryConfig.mode`: booking-enabled is what every other dispatch guard already
+  keys on, and it's the behavioural truth. A rider vendor gets **no courier picklist
+  anywhere** — the prompt is rider-only and the card below goes read-only. The
+  suppressions from Zaki's 29–30 Jul test pass still hold: the prompt never opens on an
+  order with tracking attached or an **active rider booking** (belt-and-braces —
+  booking mirrors its `shareLink` onto `carrierTrackingUrl`, which suppresses it
+  anyway), and webhook-driven orders never get there at all (the advance button is
+  disabled under rider auto-updates).
+  - **Rider bookable now** (`blockReason === null`): the rider explainer + a
+    `Book a rider` CTA that closes the prompt and bumps `bookRequestToken`, which
+    `BookDeliveryCard` watches to open its own quote→confirm dialog through the same
+    bookability guards. The card sits far down the page, so the prompt is the second,
+    eye-level entrance to one flow — plus a quiet
+    `Mark as {stage} without a rider` link, because dropping an order off yourself is
+    real and `Book a rider` must never be the only way out.
+  - **Rider not bookable** (plan downgrade, keys cleared, missing phone, legacy
+    address with no map pin): the prompt says so in the seller's words via the shared
+    `dispatchBlockCopy` (moved out of `book-delivery-card.tsx` into
+    `src/lib/dispatch-block.ts` so the card and the prompt can't drift), names the fix
+    path, and offers the choice the owner asked for — Cancel to go fix it, or
+    `Mark as {stage} anyway` for an order going out another way. Never a silent
+    advance, never a manual-courier fallback.
+  - **Server stays permissive** (deliberate): `advanceToStage` / `setShipmentTracking`
+    still accept courier fields from a rider vendor. Nothing is at risk if they arrive,
+    a hard reject would fight the Lalamove webhook that writes `carrierTrackingUrl`
+    itself, and it would trap an order whose vendor switched delivery mode after
+    shipping. This is a UI-shape rule, not a security boundary.
 - **"Shipment tracking" card** on order detail (upgrade of the old URL-only "Carrier
   Tracking" card): shows courier + mono tracking number with one-tap copy + "Track with
   courier" link; edit mode reuses the same fieldset ("Other" adds free-text name +
   optional pasted link). Legacy URL-only rows (incl. Lalamove links) still render.
+  For a **rider vendor** the card is `readOnly`: it still shows what the buyer sees
+  (the number/link a booking mirrored onto the order, copyable) but drops Add/Edit, and
+  renders **nothing at all** while no tracking is attached — dispatch for them lives in
+  the Lalamove Delivery card above.
 
 ### Buyer surfaces — deliberately NO new WhatsApp sends
 
@@ -296,7 +319,9 @@ gains "Courier" + "Tracking no" columns beside Fulfilment.
 Tests: `convex/lib/couriers.test.ts`, shipped-courier-line cases in
 `convex/lib/whatsappCopy.test.ts`, end-to-end transition/set/clear/auth cases in
 `convex/orders.test.ts` ("86eyehvk4" describe), CSV columns in
-`convex/lib/orderCsv.test.ts`.
+`convex/lib/orderCsv.test.ts`. Rider-vendor prompt shapes + the read-only card in
+`src/components/order/shipment-tracking.test.tsx`, block copy in
+`src/lib/dispatch-block.test.ts`.
 
 ## Chargeable pickup location — flat per-location fee (2026-07-07, ClickUp `86ey5tywf`)
 
