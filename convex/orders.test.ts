@@ -5204,6 +5204,27 @@ describe("orders — Lalamove rider gate on manual advances", () => {
 	const asA = (t: ReturnType<typeof setup>) =>
 		t.withIdentity({ subject: USER_A });
 
+	async function insertJob(
+		t: ReturnType<typeof setup>,
+		ids: { orderId: Id<"orders">; retailerId: Id<"retailers"> },
+		job: { status: string; lastEventAt?: number },
+	) {
+		await t.run(async (ctx) => {
+			await ctx.db.insert("deliveryJobs", {
+				orderId: ids.orderId,
+				retailerId: ids.retailerId,
+				provider: "lalamove",
+				status: job.status as "assigning",
+				costActual: 900,
+				quotationId: "q_test",
+				vehicleType: "MOTORCYCLE",
+				lastEventAt: job.lastEventAt,
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			});
+		});
+	}
+
 	async function orderWithJob(
 		t: ReturnType<typeof setup>,
 		job: { status: string; lastEventAt?: number } | null,
@@ -5224,22 +5245,8 @@ describe("orders — Lalamove rider gate on manual advances", () => {
 			orderId: order._id,
 			status: "packed",
 		});
-		if (job) {
-			await t.run(async (ctx) => {
-				await ctx.db.insert("deliveryJobs", {
-					orderId: order._id,
-					retailerId: retailer._id,
-					provider: "lalamove",
-					status: job.status as "assigning",
-					costActual: 900,
-					quotationId: "q_test",
-					vehicleType: "MOTORCYCLE",
-					lastEventAt: job.lastEventAt,
-					createdAt: Date.now(),
-					updatedAt: Date.now(),
-				});
-			});
-		}
+		if (job)
+			await insertJob(t, { orderId: order._id, retailerId: retailer._id }, job);
 		return { retailer, order, shortId, productId };
 	}
 
@@ -5299,6 +5306,31 @@ describe("orders — Lalamove rider gate on manual advances", () => {
 		expect((await t.run((ctx) => ctx.db.get(order._id)))?.status).toBe(
 			"shipped",
 		);
+	});
+
+	// The rebook case, and the reason the gate must read the ACTIVE row rather
+	// than `.first()`: `by_order` is indexed on orderId alone, so the oldest row
+	// comes back first — and a released (canceled) booking is deliberately KEPT
+	// as the amber "failed" card before the seller rebooks. Reading the oldest
+	// would fail open on precisely the sellers reaching for the manual button.
+	test("a newer active job still gates, even behind a terminal one (rebook)", async () => {
+		const t = setup();
+		const { order, retailer } = await orderWithJob(t, {
+			status: "canceled",
+			lastEventAt: 1_753_500_000_000,
+		});
+		await insertJob(
+			t,
+			{ orderId: order._id, retailerId: retailer._id },
+			{ status: "ongoing", lastEventAt: 1_753_500_100_000 },
+		);
+		await expect(
+			asA(t).mutation(api.orders.updateStatus, {
+				orderId: order._id,
+				status: "shipped",
+			}),
+		).rejects.toThrow(/Lalamove rider/);
+		expect((await t.run((ctx) => ctx.db.get(order._id)))?.status).toBe("packed");
 	});
 
 	test("cancelling is never gated", async () => {

@@ -22,6 +22,7 @@ import { stampRetailerActivation } from "./lib/activation";
 import { assertValidAddress } from "./lib/address";
 import { requireCustomerName } from "./lib/customer";
 import {
+	isActiveJobStatus,
 	isRiderManagedTransition,
 	riderDrivesOrderStatus,
 } from "./lib/lalamove";
@@ -1872,11 +1873,19 @@ async function riderOwnsTransition(
 	targetAnchor: "confirmed" | "packed" | "shipped" | "delivered",
 ): Promise<boolean> {
 	if (!isRiderManagedTransition(targetAnchor, order.status)) return false;
-	const job = await ctx.db
+	// An order can hold SEVERAL job rows: a failed booking's released row is kept
+	// on purpose (it doubles as the amber "failed" card) and `reserveBooking`
+	// then lets the seller rebook, so a live rider is routinely NOT the oldest
+	// row. `by_order` is indexed on orderId alone, so `.first()` would return the
+	// oldest and fail open on exactly the rebooked orders most likely to reach
+	// for the manual button. Pick the ACTIVE row, like every other by_order
+	// reader (dispatchContextForOrder, reserveBooking, the cancel resolver).
+	const jobs = await ctx.db
 		.query("deliveryJobs")
 		.withIndex("by_order", (q) => q.eq("orderId", order._id))
-		.first();
-	return !!job && riderDrivesOrderStatus(job);
+		.collect();
+	const active = jobs.find((j) => isActiveJobStatus(j.status));
+	return !!active && riderDrivesOrderStatus(active);
 }
 
 /** Seller-facing message for a blocked manual advance. The order-detail

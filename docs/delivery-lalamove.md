@@ -417,8 +417,18 @@ not cosmetic. `applyStatusTransition` WhatsApps the buyer immediately, and
 no tracking link and the webhook can never heal it. This closes the gap
 previously logged here as "the inbox bulk status bar can still mass-mark
 shipped without job awareness"; it's resolved in the mutation (one indexed
-`by_order` lookup per order) rather than by threading job state through
+`by_order` read per order, and only once `isRiderManagedTransition` has
+already ruled the anchor in) rather than by threading job state through
 `searchOrders`.
+
+The gate reads the order's **ACTIVE** job row, not its first. An order
+routinely holds several `deliveryJobs` rows — a failed booking's released row
+is kept on purpose as the amber "failed" card, and `reserveBooking` then lets
+the seller rebook — and `by_order` is indexed on `orderId` alone, so a
+`.first()` would return the *oldest* row and read a rebooked order as
+rider-free. Every `by_order` reader (`dispatchContextForOrder`,
+`reserveBooking`, the cancel resolver, `dispatchStateForOrder`) therefore
+`.collect()`s and picks on `isActiveJobStatus`; the gate follows suit.
 
 ### Hygiene + lifecycle guards (pre-ship audit, 22 Jul)
 
