@@ -9,6 +9,7 @@ import { ArrowLeft } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import { type Locale, OG_LOCALE } from "../../convex/lib/locale";
 import { CartBar } from "../components/storefront/cart-bar";
+import { CategoryChips } from "../components/storefront/category-chips";
 import { ProductGrid } from "../components/storefront/product-grid";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { StorefrontHeader } from "../components/storefront/storefront-header";
@@ -181,7 +182,7 @@ function CategorySkeleton() {
 				<Skeleton className="h-8 w-48" />
 			</div>
 			<section className="mt-2 px-5 lg:px-8">
-				<div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
+				<div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
 					{[0, 1, 2, 3].map((n) => (
 						<Skeleton key={n} className="aspect-square w-full rounded-2xl" />
 					))}
@@ -242,11 +243,22 @@ function CategoryRoute() {
 			</div>
 
 			<section className="mt-2 px-5 lg:px-8">
+				{/* The same chip row as the store home, with THIS category active —
+				    buyers hop laterally (kuih → cakes) without going through back.
+				    The "← All products" link above stays as the way "up"; the chips
+				    are the way "across". */}
 				<ProductGrid
 					retailerId={retailer._id}
 					cart={cart}
 					products={page.products}
 					storeSlug={retailer.slug}
+					beforeGrid={
+						<CategoryChips
+							retailerId={retailer._id}
+							storeSlug={retailer.slug}
+							activeCategorySlug={page.category.slug}
+						/>
+					}
 				/>
 			</section>
 

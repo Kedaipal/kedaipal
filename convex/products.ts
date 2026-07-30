@@ -1,5 +1,5 @@
 import { ConvexError, v } from "convex/values";
-import { MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
+import { isMytMidnight, MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import {
@@ -20,6 +20,7 @@ import {
 	isProductVisible,
 } from "./lib/categoryCounts";
 import { sanitizeMinQuantity } from "./lib/minOrderRules";
+import { POPULAR_SCAN_CAP, rankPopularProducts } from "./lib/popularProducts";
 import { rateLimiter } from "./lib/rateLimiter";
 import { SLUG_MAX, SLUG_MIN, slugify } from "./lib/slug";
 import { assertSubscriptionActive } from "./subscriptions";
@@ -1472,6 +1473,41 @@ export const listForSitemap = query({
 			}
 		}
 		return out;
+	},
+});
+
+/**
+ * PUBLIC (unauthenticated storefront) — ranked product-id candidates for the
+ * landing's "Popular this week" feature card (86eybrhrt PR3). Real order data,
+ * zero seller curation; ranking + thresholds live in `lib/popularProducts.ts`.
+ *
+ * Returns ONLY ids: the client resolves them against the `products.list` it
+ * already subscribes to, so visibility rules apply once (a hidden/archived/
+ * sold-out top seller is skipped for the next candidate, never leaked), and
+ * no sales counts ever cross the public wire.
+ *
+ * Cache discipline (the insights precedent): `since` must be an MYT-midnight
+ * epoch — every buyer on the same date sends identical args and shares one
+ * cached result, instead of a per-pageview `Date.now()` fragmenting the
+ * cache. The newest-first `take(POPULAR_SCAN_CAP)` bounds the indexed read
+ * whatever window a hand-rolled client asks for.
+ */
+export const popularProducts = query({
+	args: { retailerId: v.id("retailers"), since: v.number() },
+	handler: async (ctx, { retailerId, since }) => {
+		if (!isMytMidnight(since)) {
+			throw new ConvexError("since must be an MYT-midnight epoch");
+		}
+		const recent = await ctx.db
+			.query("orders")
+			.withIndex("by_retailer", (q) =>
+				q.eq("retailerId", retailerId).gte("_creationTime", since),
+			)
+			.order("desc")
+			.take(POPULAR_SCAN_CAP);
+		return rankPopularProducts(
+			recent.map((o) => ({ status: o.status, items: o.items })),
+		);
 	},
 });
 

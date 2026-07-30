@@ -4,6 +4,7 @@ import { convexTest } from "convex-test";
 import { describe, expect, test } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { todayMytMidnight } from "./lib/fulfilmentDate";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -1599,5 +1600,112 @@ describe("products.listForSitemap", () => {
 		expect(
 			rows.map((r) => `${r.storeSlug}/p/${r.productSlug}`).sort(),
 		).toEqual([`${a.slug}/p/a-tent`, `${b.slug}/p/b-tent`].sort());
+	});
+});
+
+describe("popularProducts (public, storefront featured card)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+
+	/** Insert an order directly — only the fields the ranking reads matter. */
+	async function insertOrder(
+		t: ReturnType<typeof convexTest>,
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+		opts: { status?: string; quantity?: number; seq: number },
+	) {
+		const now = Date.now();
+		await t.run(async (ctx) =>
+			ctx.db.insert("orders", {
+				retailerId,
+				shortId: `ORD-POP${opts.seq}`,
+				items: [
+					{
+						productId,
+						name: "Tent 2P",
+						price: 12000,
+						quantity: opts.quantity ?? 1,
+					},
+				],
+				subtotal: 12000,
+				total: 12000,
+				currency: "MYR",
+				status: opts.status ?? "confirmed",
+				channel: "whatsapp",
+				customer: { name: "Aisyah", waPhone: "60123456789" },
+				createdAt: now,
+				updatedAt: now,
+			}),
+		);
+	}
+
+	test("ranks recent revenue orders and stays scoped to the retailer", async () => {
+		const t = setup();
+		const retailerA = await seedRetailer(t, USER_A);
+		const retailerB = await seedRetailer(t, USER_B);
+		const asA = t.withIdentity({ subject: USER_A });
+		const asB = t.withIdentity({ subject: USER_B });
+		const cake = await asA.mutation(
+			api.products.create,
+			baseProduct(retailerA._id, { name: "Cake" }),
+		);
+		const pie = await asA.mutation(
+			api.products.create,
+			baseProduct(retailerA._id, { name: "Pie", sortOrder: 1 }),
+		);
+		const other = await asB.mutation(
+			api.products.create,
+			baseProduct(retailerB._id, { name: "Other" }),
+		);
+
+		// Cake: 3 orders. Pie: 2 orders + 1 pending (doesn't count).
+		await insertOrder(t, retailerA._id, cake, { seq: 1 });
+		await insertOrder(t, retailerA._id, cake, { seq: 2, status: "delivered" });
+		await insertOrder(t, retailerA._id, cake, { seq: 3, status: "packed" });
+		await insertOrder(t, retailerA._id, pie, { seq: 4 });
+		await insertOrder(t, retailerA._id, pie, { seq: 5 });
+		await insertOrder(t, retailerA._id, pie, { seq: 6, status: "pending" });
+		// Retailer B's own volume must never leak into A's ranking.
+		await insertOrder(t, retailerB._id, other, { seq: 7 });
+		await insertOrder(t, retailerB._id, other, { seq: 8 });
+
+		const since = todayMytMidnight() - 7 * DAY;
+		const ranked = await t.query(api.products.popularProducts, {
+			retailerId: retailerA._id,
+			since,
+		});
+		expect(ranked).toEqual([cake, pie]);
+
+		const rankedB = await t.query(api.products.popularProducts, {
+			retailerId: retailerB._id,
+			since,
+		});
+		expect(rankedB).toEqual([other]);
+	});
+
+	test("a single order is not 'popular' — empty result, row hides", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const cake = await asUser.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Cake" }),
+		);
+		await insertOrder(t, retailer._id, cake, { seq: 1 });
+		const ranked = await t.query(api.products.popularProducts, {
+			retailerId: retailer._id,
+			since: todayMytMidnight() - 7 * DAY,
+		});
+		expect(ranked).toEqual([]);
+	});
+
+	test("rejects a since that is not an MYT midnight (cache-key discipline)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await expect(
+			t.query(api.products.popularProducts, {
+				retailerId: retailer._id,
+				since: Date.now(),
+			}),
+		).rejects.toThrow(/MYT-midnight/);
 	});
 });

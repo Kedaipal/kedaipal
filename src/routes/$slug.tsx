@@ -3,7 +3,8 @@ import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { type Locale, OG_LOCALE } from "../../convex/lib/locale";
 import { CartBar } from "../components/storefront/cart-bar";
-import { CategoryRail } from "../components/storefront/category-rail";
+import { CategoryChips } from "../components/storefront/category-chips";
+import { FeaturedProduct } from "../components/storefront/featured-product";
 import { ProductGrid } from "../components/storefront/product-grid";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { StorefrontHeader } from "../components/storefront/storefront-header";
@@ -183,7 +184,7 @@ function StorefrontSkeleton() {
 				</div>
 			</header>
 			<section className="mt-4 flex flex-col gap-4 px-5 lg:px-8">
-				<div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
+				<div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
 					{[0, 1, 2, 3, 4, 5, 6, 7].map((n) => (
 						<div
 							key={n}
@@ -221,16 +222,27 @@ function StorefrontRoute() {
 			<StorefrontHeader retailer={retailer} />
 
 			<section className="mt-2 px-5 lg:px-8">
-				{/* Search first (sticky inside the grid), then the category hero
-				    carousel as the page's main highlight, then the full grid under an
-				    "All products" divider. Zero-category stores render no hero — the
-				    page stays search + grid, same as pre-categories. */}
+				{/* Search first (sticky inside the grid), then the merchandised lead:
+				    category filter chips + the "Popular this week" feature card, then
+				    the full grid (86eybrhrt PR3). Both lead pieces render nothing when
+				    they have nothing honest to show (no categories / no qualifying
+				    orders), so quiet stores stay search + grid. */}
 				<ProductGrid
 					retailerId={retailer._id}
 					cart={cart}
 					storeSlug={retailer.slug}
 					beforeGrid={
-						<CategoryRail retailerId={retailer._id} storeSlug={retailer.slug} />
+						<>
+							<CategoryChips
+								retailerId={retailer._id}
+								storeSlug={retailer.slug}
+							/>
+							<FeaturedProduct
+								retailerId={retailer._id}
+								storeSlug={retailer.slug}
+								cart={cart}
+							/>
+						</>
 					}
 				/>
 			</section>

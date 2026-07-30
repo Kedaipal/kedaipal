@@ -58,6 +58,7 @@ import type * as lib_pdf_document from "../lib/pdf/document.js";
 import type * as lib_pdf_logo from "../lib/pdf/logo.js";
 import type * as lib_pdf_render from "../lib/pdf/render.js";
 import type * as lib_plans from "../lib/plans.js";
+import type * as lib_popularProducts from "../lib/popularProducts.js";
 import type * as lib_rateLimiter from "../lib/rateLimiter.js";
 import type * as lib_slug from "../lib/slug.js";
 import type * as lib_storeProfile from "../lib/storeProfile.js";
@@ -140,6 +141,7 @@ declare const fullApi: ApiFromModules<{
   "lib/pdf/logo": typeof lib_pdf_logo;
   "lib/pdf/render": typeof lib_pdf_render;
   "lib/plans": typeof lib_plans;
+  "lib/popularProducts": typeof lib_popularProducts;
   "lib/rateLimiter": typeof lib_rateLimiter;
   "lib/slug": typeof lib_slug;
   "lib/storeProfile": typeof lib_storeProfile;

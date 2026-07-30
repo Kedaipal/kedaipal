@@ -7,12 +7,13 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
 import { Input } from "../ui/input";
 import { ProductCard, type StorefrontProduct } from "./product-card";
-import { addVariantToCart, type StorefrontVariant } from "./product-purchase";
+import { quickAddProductToCart } from "./product-purchase";
 
-/** Product-card grid — denser on desktop so a product card never outweighs a
- * category hero card (categories are the highlight, products the inventory). */
-const GRID_CLASS =
-	"grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6";
+/** Product-card grid — 4 columns on desktop (86eybrhrt PR3). The old 5/6-col
+ * density existed so cards never outweighed the category hero tiles; those
+ * tiles are now light filter chips (category-chips.tsx), so the products ARE
+ * the page and get tiles ~50% larger. */
+const GRID_CLASS = "grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4";
 
 interface ProductGridProps {
 	retailerId: Id<"retailers">;
@@ -100,33 +101,12 @@ export function ProductGrid({
 				)
 			: [];
 
-	// Cart-line mapping + toast live in the shared helper (product-purchase.tsx)
-	// so the grid's quick-add, the product page and the seller's preview sheet
-	// snapshot lines identically.
-	const addVariant = (
-		p: StorefrontProduct,
-		variant: StorefrontVariant,
-		qty: number,
-		custom?: { note?: string; imageStorageId?: string },
-	) => addVariantToCart(cart, p, variant, qty, custom);
-
-	// Quick-add only fires for single-variant products (multi-variant cards link
-	// to the product page instead), so the sole variant is unambiguous. A product with a
-	// minimum order quantity tops the cart up to it in one tap (the card shows a
-	// "Min N" chip, so the bigger add is expected); once met, +1 as usual. The
-	// top-up is clamped to the variant's remaining stock (hard-block only) so a
-	// single tap can never put more in the cart than can actually be bought.
-	const quickAdd = (p: StorefrontProduct) => {
-		const variant = p.variants[0];
-		if (!variant) return;
-		const inCart = cart.quantityForProduct(p._id);
-		const remainingToMin = (p.minQuantity ?? 1) - inCart;
-		const stockLeft =
-			variant.blockWhenOutOfStock === true
-				? Math.max(1, variant.onHand - inCart)
-				: Number.POSITIVE_INFINITY;
-		addVariant(p, variant, Math.max(1, Math.min(remainingToMin, stockLeft)));
-	};
+	// One-tap add — quick-add only fires for single-variant products
+	// (multi-variant cards link to the product page instead). The shared helper
+	// (cart-line snapshot, toast, min-quantity top-up, stock clamp) also serves
+	// the landing's featured card, so the two buttons can't drift. See
+	// product-purchase.tsx.
+	const quickAdd = (p: StorefrontProduct) => quickAddProductToCart(cart, p);
 
 	return (
 		<>
