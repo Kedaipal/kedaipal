@@ -21,7 +21,7 @@ no migration; legacy orders read as "no note". No index.
 
 ## Flow
 
-1. **Checkout** (`checkout-sheet.tsx`) — an optional "Note for seller" textarea
+1. **Checkout** (`checkout-form.tsx`) — an optional "Note for seller" textarea
    (multiline, `maxLength` 500 with a live counter that warns near the cap). Held
    as local form state, not in `useCart` (the note is order-level, not a cart item).
 2. **Create** (`orders.create`) — accepts `customerNote`, trims it, treats

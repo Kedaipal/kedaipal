@@ -1,6 +1,10 @@
-import { createFileRoute, notFound, redirect } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	notFound,
+	redirect,
+	useNavigate,
+} from "@tanstack/react-router";
 import { useQuery } from "convex/react";
-import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import { type Locale, OG_LOCALE } from "../../convex/lib/locale";
 import { CartBar } from "../components/storefront/cart-bar";
@@ -203,27 +207,22 @@ function StorefrontSkeleton() {
 
 function StorefrontRoute() {
 	const { slug } = Route.useParams();
+	const navigate = useNavigate();
 	// Live query keeps the catalog reactive after the SSR'd loader response.
 	const result = useQuery(api.retailers.getRetailerBySlug, { slug });
 	const cart = useCart(
 		result && result.status === "ok" ? result.retailer._id : undefined,
 	);
-	// Active pickup locations — public, unauthed. Only consulted by the checkout
-	// sheet when the retailer has self-collect on. Loading state (undefined) is
-	// folded into "no locations" at the call site to avoid blocking storefront
-	// render on a sidecar query.
-	const pickupLocations = useQuery(api.pickupLocations.listActivePublicBySlug, {
-		slug,
-	});
-	// Checkout sheet open-state lives here (not in CartBar) so the product detail
-	// sheet — a sibling under this route — can open checkout directly.
-	const [checkoutOpen, setCheckoutOpen] = useState(false);
 
 	if (result === undefined || result.status !== "ok") {
 		return <StorefrontSkeleton />;
 	}
 
 	const retailer = result.retailer;
+	// Checkout is a real route (86eybrhrt PR1) — the cart bar and the product
+	// detail sheet's "Go to checkout" both navigate there.
+	const goToCheckout = () =>
+		navigate({ to: "/$slug/checkout", params: { slug: retailer.slug } });
 
 	return (
 		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-20">
@@ -240,7 +239,7 @@ function StorefrontRoute() {
 					retailerId={retailer._id}
 					cart={cart}
 					storeSlug={retailer.slug}
-					onRequestCheckout={() => setCheckoutOpen(true)}
+					onRequestCheckout={goToCheckout}
 					beforeGrid={
 						<CategoryRail retailerId={retailer._id} storeSlug={retailer.slug} />
 					}
@@ -249,19 +248,7 @@ function StorefrontRoute() {
 
 			<StorefrontFooter />
 
-			<CartBar
-				cart={cart}
-				retailerId={retailer._id}
-				storeName={retailer.storeName}
-				checkoutPhone={retailer.checkoutPhone}
-				offerSelfCollect={retailer.offerSelfCollect ?? false}
-				offerDelivery={retailer.offerDelivery ?? true}
-				minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
-				minOrderValue={retailer.minOrderValue}
-				pickupLocations={pickupLocations ?? []}
-				checkoutOpen={checkoutOpen}
-				onCheckoutOpenChange={setCheckoutOpen}
-			/>
+			<CartBar cart={cart} storeSlug={retailer.slug} />
 		</div>
 	);
 }

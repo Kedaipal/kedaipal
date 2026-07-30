@@ -24,6 +24,7 @@ import {
 import { type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
+import { isSafeTrackingUrl } from "../../convex/lib/couriers";
 import { formatFulfilmentDate } from "../../convex/lib/fulfilmentDate";
 import { isMockupGateClosed } from "../../convex/lib/order";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
@@ -627,8 +628,8 @@ function TrackingRoute() {
 										Save QR
 									</Button>
 									<p className="max-w-64 text-center text-xs text-muted-foreground">
-										Paying on this phone? Save the QR to your gallery, then
-										scan it from inside TNG eWallet or your banking app.
+										Paying on this phone? Save the QR to your gallery, then scan
+										it from inside TNG eWallet or your banking app.
 									</p>
 								</div>
 							) : null}
@@ -688,18 +689,57 @@ function TrackingRoute() {
 				</div>
 			) : null}
 
-			{/* Carrier tracking CTA — only for delivery orders */}
-			{!isSelfCollect && order.carrierTrackingUrl ? (
-				<a
-					href={order.carrierTrackingUrl}
-					target="_blank"
-					rel="noopener noreferrer"
-					className="mt-6 flex items-center justify-center gap-2 rounded-2xl border border-accent/40 bg-accent/5 px-4 py-3 text-sm font-semibold text-accent transition-colors hover:bg-accent/10"
-				>
-					<Truck className="size-4" />
-					Track with carrier
-					<ExternalLink className="size-3" />
-				</a>
+			{/* Shipment tracking — only for delivery orders. Courier + consignment
+			    number render copyable even without a link (cold-chain couriers have
+			    no public tracking page — the buyer pastes the number into the
+			    courier's app/WhatsApp instead). The link is scheme-checked at the
+			    href: write-time sanitize covers new values, but rows written before
+			    it existed could hold a javascript:/data: URL, and this anchor is
+			    the one buyer-facing surface where that would execute. */}
+			{!isSelfCollect &&
+			(order.courierName ||
+				order.trackingNo ||
+				isSafeTrackingUrl(order.carrierTrackingUrl)) ? (
+				<div className="mt-6 flex flex-col gap-2">
+					{order.courierName || order.trackingNo ? (
+						<div className="flex items-center justify-between gap-2 rounded-2xl border border-border bg-card p-4">
+							<div className="flex min-w-0 items-center gap-3">
+								<Truck className="size-4 shrink-0 text-muted-foreground" />
+								<div className="min-w-0">
+									{order.courierName ? (
+										<p className="truncate text-sm font-medium text-foreground">
+											{order.courierName}
+										</p>
+									) : null}
+									{order.trackingNo ? (
+										<p className="truncate font-mono text-sm text-muted-foreground">
+											{order.trackingNo}
+										</p>
+									) : null}
+								</div>
+							</div>
+							{order.trackingNo ? (
+								<CopyButton
+									value={order.trackingNo}
+									ariaLabel="Copy tracking number"
+									successMessage="Tracking number copied"
+								/>
+							) : null}
+						</div>
+					) : null}
+					{isSafeTrackingUrl(order.carrierTrackingUrl) ? (
+						<a
+							href={order.carrierTrackingUrl}
+							target="_blank"
+							rel="noopener noreferrer"
+							className="flex items-center justify-center gap-2 rounded-2xl border border-accent/40 bg-accent/5 px-4 py-3 text-sm font-semibold text-accent transition-colors hover:bg-accent/10"
+						>
+							<Truck className="size-4" />
+							Track with carrier
+							<ExternalLink className="size-3" />
+						</a>
+					) : null}
+				</div>
 			) : null}
 
 			{/* Rider drop-off photo (proof of delivery) — same shot the WhatsApp

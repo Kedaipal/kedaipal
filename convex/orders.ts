@@ -73,6 +73,7 @@ import {
 	resolveDeliveryQuote,
 } from "./lib/delivery";
 import { CHECKOUT_QUOTE_MAX_AGE_MS } from "./lib/lalamove";
+import { resolveShipmentFields } from "./lib/couriers";
 import {
 	anchorOrdinal,
 	type Locale,
@@ -1640,6 +1641,8 @@ function orderToCsvSource(o: Doc<"orders">): CsvOrder {
 		total: o.total,
 		currency: o.currency,
 		customerNote: o.customerNote,
+		courierName: o.courierName,
+		trackingNo: o.trackingNo,
 	};
 }
 
@@ -1902,7 +1905,12 @@ export async function applyStatusTransition(
 	ctx: MutationCtx,
 	order: Doc<"orders">,
 	status: TransitionStatus,
-	opts: { note?: string; carrierTrackingUrl?: string } = {},
+	opts: {
+		note?: string;
+		carrierTrackingUrl?: string;
+		courierName?: string;
+		trackingNo?: string;
+	} = {},
 ): Promise<void> {
 	const now = Date.now();
 
@@ -1917,11 +1925,23 @@ export async function applyStatusTransition(
 		statusChangedAt: number;
 		updatedAt: number;
 		carrierTrackingUrl: string;
+		courierName: string;
+		trackingNo: string;
 		currentStageId: string | undefined;
 	}> = { status, statusChangedAt: now, updatedAt: now };
-	if (status === "shipped" && opts.carrierTrackingUrl) {
-		const trimmed = opts.carrierTrackingUrl.trim();
-		if (trimmed.length > 0) patch.carrierTrackingUrl = trimmed;
+	// Courier fields describe a parcel shipment, so they only apply to delivery
+	// orders (undefined deliveryMethod reads as delivery, per the rest of the
+	// file). The UI never offers them on self-collect; if they arrive anyway they
+	// are ignored rather than failing the transition — moving the status is this
+	// path's real job, and a stray field shouldn't strand the order.
+	if (status === "shipped" && order.deliveryMethod !== "self_collect") {
+		// Shared trim/cap/URL-derivation with the edit-after card — a known
+		// courier + number auto-resolves the buyer-facing deep link.
+		const shipment = resolveShipmentFields(opts);
+		if (shipment.courierName) patch.courierName = shipment.courierName;
+		if (shipment.trackingNo) patch.trackingNo = shipment.trackingNo;
+		if (shipment.carrierTrackingUrl)
+			patch.carrierTrackingUrl = shipment.carrierTrackingUrl;
 	}
 	// This path transitions the CANONICAL status without stage awareness (the
 	// stage-aware path is advanceToStage, which sets both). A stored
@@ -1967,16 +1987,27 @@ export const updateStatus = mutation({
 		orderId: v.id("orders"),
 		status: transitionStatusValidator,
 		note: v.optional(v.string()),
-		// Carrier tracking URL — only accepted when transitioning to "shipped".
-		// Ignored for other status transitions.
+		// Shipment tracking — only accepted when transitioning to "shipped".
+		// Ignored for other status transitions. A registry courier + number
+		// auto-derives carrierTrackingUrl (convex/lib/couriers.ts).
 		carrierTrackingUrl: v.optional(v.string()),
+		courierName: v.optional(v.string()),
+		trackingNo: v.optional(v.string()),
 		// Deliberate override of the rider gate below — the seller confirmed the
 		// automatic update never arrived (dead/unregistered webhook).
 		overrideRiderGate: v.optional(v.boolean()),
 	},
 	handler: async (
 		ctx,
-		{ orderId, status, note, carrierTrackingUrl, overrideRiderGate },
+		{
+			orderId,
+			status,
+			note,
+			carrierTrackingUrl,
+			courierName,
+			trackingNo,
+			overrideRiderGate,
+		},
 	): Promise<void> => {
 		const { order, access } = await requireOrderAccess(ctx, orderId);
 
@@ -1990,7 +2021,9 @@ export const updateStatus = mutation({
 		}
 
 		// Rider gate: the webhook drives shipped/delivered while a booking is
-		// live. Cancelling is never gated (not a rider-managed anchor).
+		// live. Cancelling is never gated (not a rider-managed anchor). Sits
+		// before the transition so the manual courier fields above can't land on
+		// an order a rider already owns.
 		if (
 			!overrideRiderGate &&
 			status !== "cancelled" &&
@@ -1999,7 +2032,12 @@ export const updateStatus = mutation({
 			throw new ConvexError(RIDER_GATE_MESSAGE);
 		}
 
-		await applyStatusTransition(ctx, order, status, { note, carrierTrackingUrl });
+		await applyStatusTransition(ctx, order, status, {
+			note,
+			carrierTrackingUrl,
+			courierName,
+			trackingNo,
+		});
 		await logAdminAction(ctx, access, "orders.updateStatus", orderId);
 	},
 });
@@ -2237,15 +2275,27 @@ export const advanceToStage = mutation({
 		orderId: v.id("orders"),
 		stageId: v.string(),
 		note: v.optional(v.string()),
-		// Accepted only when the target stage is shipped-anchored; ignored otherwise.
+		// Shipment tracking — accepted only when the target stage is
+		// shipped-anchored; ignored otherwise. A registry courier + number
+		// auto-derives carrierTrackingUrl (convex/lib/couriers.ts).
 		carrierTrackingUrl: v.optional(v.string()),
+		courierName: v.optional(v.string()),
+		trackingNo: v.optional(v.string()),
 		// Set by the order-detail "Update manually" confirm — the seller asserts
 		// the rider's automatic update never landed. See riderOwnsTransition.
 		overrideRiderGate: v.optional(v.boolean()),
 	},
 	handler: async (
 		ctx,
-		{ orderId, stageId, note, carrierTrackingUrl, overrideRiderGate },
+		{
+			orderId,
+			stageId,
+			note,
+			carrierTrackingUrl,
+			courierName,
+			trackingNo,
+			overrideRiderGate,
+		},
 	): Promise<void> => {
 		const { order, access } = await requireOrderAccess(ctx, orderId);
 		const retailer = access.retailer;
@@ -2294,15 +2344,29 @@ export const advanceToStage = mutation({
 			status: typeof targetStatus;
 			currentStageId: string;
 			carrierTrackingUrl: string;
+			courierName: string;
+			trackingNo: string;
 			statusChangedAt: number;
 			updatedAt: number;
 		}> = { status: targetStatus, currentStageId: stage.id, updatedAt: now };
 		// Reset the status clock only when the canonical status actually changes
 		// (a within-anchor stage move keeps the same "Pending/Confirmed/…" bucket).
 		if (statusChanged) patch.statusChangedAt = now;
-		if (targetStatus === "shipped" && carrierTrackingUrl) {
-			const trimmed = carrierTrackingUrl.trim();
-			if (trimmed.length > 0) patch.carrierTrackingUrl = trimmed;
+		// Delivery-only, and ignored (not fatal) on self-collect — see
+		// applyStatusTransition for the reasoning.
+		if (
+			targetStatus === "shipped" &&
+			order.deliveryMethod !== "self_collect"
+		) {
+			const shipment = resolveShipmentFields({
+				carrierTrackingUrl,
+				courierName,
+				trackingNo,
+			});
+			if (shipment.courierName) patch.courierName = shipment.courierName;
+			if (shipment.trackingNo) patch.trackingNo = shipment.trackingNo;
+			if (shipment.carrierTrackingUrl)
+				patch.carrierTrackingUrl = shipment.carrierTrackingUrl;
 		}
 		await ctx.db.patch(orderId, patch);
 
@@ -2339,24 +2403,53 @@ export const advanceToStage = mutation({
 });
 
 /**
- * Set or clear the carrier tracking URL on an order.
- * Retailer may receive the courier link after marking shipped, so this is
- * intentionally not restricted by status.
+ * Set or clear the manual shipment tracking on an order (courier name +
+ * tracking number + link — the link auto-derives for registry couriers, or is
+ * pasted for "Other"). Retailer may receive the consignment number after
+ * marking shipped, so this is intentionally not restricted by status.
+ * Deliberately NEVER messages the buyer (Meta bills per outbound message from
+ * Oct 2026) — late-added tracking surfaces on the buyer's tracking page only.
  */
-export const setCarrierTrackingUrl = mutation({
+export const setShipmentTracking = mutation({
 	args: {
 		orderId: v.id("orders"),
+		courierName: v.optional(v.string()),
+		trackingNo: v.optional(v.string()),
 		carrierTrackingUrl: v.optional(v.string()),
 	},
-	handler: async (ctx, { orderId, carrierTrackingUrl }): Promise<void> => {
-		const { access } = await requireOrderAccess(ctx, orderId);
+	handler: async (
+		ctx,
+		{ orderId, courierName, trackingNo, carrierTrackingUrl },
+	): Promise<void> => {
+		const { order, access } = await requireOrderAccess(ctx, orderId);
 
-		const trimmed = carrierTrackingUrl?.trim() ?? "";
+		// All-blank input resolves to all-undefined = tracking cleared.
+		const shipment = resolveShipmentFields({
+			courierName,
+			trackingNo,
+			carrierTrackingUrl,
+		});
+		// A self-collect order has no shipment to track, and the UI hides this
+		// card there — so refuse to SET, but always allow the all-blank CLEAR so
+		// an order that changed fulfilment method (or carries pre-guard data) can
+		// never be trapped with tracking it shouldn't have. Mirrors the
+		// set-gated/clear-un-gated posture used for chargeable pickup.
+		const isClearing =
+			shipment.courierName === undefined &&
+			shipment.trackingNo === undefined &&
+			shipment.carrierTrackingUrl === undefined;
+		if (order.deliveryMethod === "self_collect" && !isClearing) {
+			throw new ConvexError(
+				"Shipment tracking applies to delivery orders only — this order is for self-collect.",
+			);
+		}
 		await ctx.db.patch(orderId, {
-			carrierTrackingUrl: trimmed.length > 0 ? trimmed : undefined,
+			courierName: shipment.courierName,
+			trackingNo: shipment.trackingNo,
+			carrierTrackingUrl: shipment.carrierTrackingUrl,
 			updatedAt: Date.now(),
 		});
-		await logAdminAction(ctx, access, "orders.setCarrierTrackingUrl", orderId);
+		await logAdminAction(ctx, access, "orders.setShipmentTracking", orderId);
 	},
 });
 

@@ -11,7 +11,6 @@ import {
 	ChevronDown,
 	ChevronRight,
 	Copy,
-	ExternalLink,
 	HandCoins,
 	Hourglass,
 	ImagePlus,
@@ -52,6 +51,11 @@ import {
 import { StatusBadge } from "../components/dashboard/status-badge";
 import { BookDeliveryCard } from "../components/order/book-delivery-card";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
+import {
+	MarkShippedDialog,
+	type ShipmentFields,
+	ShipmentTrackingCard,
+} from "../components/order/shipment-tracking";
 import {
 	DeliveryAddressDisplay,
 	formatAddressInline,
@@ -293,7 +297,6 @@ function OrderDetailRoute() {
 	const order = useQuery(api.orders.get, { shortId });
 	const updateStatus = useMutation(api.orders.updateStatus);
 	const advanceToStage = useMutation(api.orders.advanceToStage);
-	const setCarrierUrl = useMutation(api.orders.setCarrierTrackingUrl);
 	const markPaymentReceived = useMutation(api.orders.markPaymentReceived);
 	const sendPaymentReminder = useAction(api.orders.sendPaymentReminder);
 	const deleteOrder = useMutation(api.orders.deleteOrder);
@@ -338,8 +341,14 @@ function OrderDetailRoute() {
 	);
 	// Holds the id of the in-flight advance target ("cancel" for cancellation).
 	const [pending, setPending] = useState<string | null>(null);
-	const [carrierInput, setCarrierInput] = useState<string | null>(null);
-	const [savingCarrier, setSavingCarrier] = useState(false);
+	// The mark-shipped prompt (courier + tracking number, optional). Opened
+	// instead of a direct advance when the target stage is shipped-anchored on a
+	// delivery order with no tracking attached yet.
+	const [shipDialogOpen, setShipDialogOpen] = useState(false);
+	// Bumped by the prompt's "Book a rider…" CTA — BookDeliveryCard watches it
+	// and opens its own quote→confirm dialog, so the seller can book from the
+	// eye-level prompt without scrolling down to the card.
+	const [bookRequestToken, setBookRequestToken] = useState(0);
 	const [confirmingPayment, setConfirmingPayment] = useState(false);
 	const [sendingReminder, setSendingReminder] = useState(false);
 	const [confirmPaymentOpen, setConfirmPaymentOpen] = useState(false);
@@ -400,7 +409,6 @@ function OrderDetailRoute() {
 	const hasDestructiveAction = !isTerminal || canHardDelete;
 	const showCarrierSection =
 		!isSelfCollect && !["pending", "cancelled"].includes(order.status);
-	const editingCarrier = carrierInput !== null;
 	const paymentStatus = (order.paymentStatus ?? "unpaid") as PaymentStatus;
 	// Production (any packed-or-later stage) is blocked while a mockup is required
 	// but not yet approved/waived. Shared gate — same source as the server.
@@ -428,15 +436,23 @@ function OrderDetailRoute() {
 		Date.now(),
 	);
 
-	// `overrideRiderGate` is only ever true from the "Update manually" confirm
-	// below — the server refuses a rider-managed advance without it.
-	async function handleAdvance(stageId: string, overrideRiderGate = false) {
+	// Two independent optional extras ride this one seam: the mark-shipped dialog
+	// supplies courier fields, and `overrideRiderGate` is only ever true from the
+	// "Update manually" confirm below — the server refuses a rider-managed
+	// advance without it.
+	async function handleAdvance(
+		stageId: string,
+		extra?: ShipmentFields & { overrideRiderGate?: boolean },
+	) {
 		if (!order) return;
 		setPending(stageId);
 		try {
-			await advanceToStage({ orderId: order._id, stageId, overrideRiderGate });
+			await advanceToStage({ orderId: order._id, stageId, ...extra });
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
+			// Rethrow so the mark-shipped dialog stays open for a retry (the toast
+			// above is the user-facing message; plain button paths swallow it).
+			throw err;
 		} finally {
 			setPending(null);
 		}
@@ -472,22 +488,6 @@ function OrderDetailRoute() {
 			throw err;
 		} finally {
 			setPending(null);
-		}
-	}
-
-	async function handleSaveCarrier() {
-		if (!order || carrierInput === null) return;
-		setSavingCarrier(true);
-		try {
-			await setCarrierUrl({
-				orderId: order._id,
-				carrierTrackingUrl: carrierInput || undefined,
-			});
-			setCarrierInput(null);
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setSavingCarrier(false);
 		}
 	}
 
@@ -629,7 +629,29 @@ function OrderDetailRoute() {
 								<div className="flex flex-col gap-2">
 									<button
 										type="button"
-										onClick={() => handleAdvance(nextStage.id)}
+										onClick={() => {
+											// Marking a delivery order shipped is THE moment the
+											// seller has the consignment slip in hand — prompt for
+											// courier + tracking (optional) so the buyer's shipped
+											// WhatsApp update carries it. Skipped when tracking is
+											// already attached AND when a rider booking is active
+											// (belt-and-braces: booking mirrors its shareLink onto
+											// carrierTrackingUrl, but a parcel-courier form must
+											// never front a rider order even if that link is
+											// missing). Webhook-driven orders never reach here at
+											// all — the button is disabled.
+											if (
+												nextStage.anchor === "shipped" &&
+												order.deliveryMethod === "delivery" &&
+												!hasActiveRiderBooking &&
+												!order.trackingNo &&
+												!order.carrierTrackingUrl
+											) {
+												setShipDialogOpen(true);
+												return;
+											}
+											void handleAdvance(nextStage.id).catch(() => {});
+										}}
 										disabled={pending !== null || blocked || riderManaged}
 										className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-foreground text-[15px] font-bold text-background transition-opacity hover:opacity-95 disabled:opacity-55"
 									>
@@ -1179,7 +1201,9 @@ function OrderDetailRoute() {
 			{/* Lalamove dispatch (delivery orders): one-tap "Book delivery" with
 			    re-quote confirm, live job card (driver/plate/tracking), failed-
 			    booking rebook, and disabled-with-reason states. 86eyb5hrf. */}
-			{!isSelfCollect ? <BookDeliveryCard order={order} /> : null}
+			{!isSelfCollect ? (
+				<BookDeliveryCard order={order} bookRequestToken={bookRequestToken} />
+			) : null}
 
 			{/* Delivery address (delivery orders only) */}
 			{!isSelfCollect && order.deliveryAddress ? (
@@ -1228,74 +1252,8 @@ function OrderDetailRoute() {
 				</section>
 			) : null}
 
-			{/* Carrier tracking */}
-			{showCarrierSection ? (
-				<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
-					<div className="flex items-center justify-between">
-						<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-							Carrier Tracking
-						</p>
-						{!editingCarrier ? (
-							<button
-								type="button"
-								onClick={() => setCarrierInput(order.carrierTrackingUrl ?? "")}
-								className="text-xs text-accent hover:underline"
-							>
-								{order.carrierTrackingUrl ? "Edit" : "Add link"}
-							</button>
-						) : null}
-					</div>
-
-					{editingCarrier ? (
-						<div className="flex flex-col gap-2">
-							<Input
-								autoFocus
-								type="url"
-								value={carrierInput}
-								onChange={(e) => setCarrierInput(e.target.value)}
-								placeholder="https://www.spx.my/track?..."
-								className="h-10 w-full rounded-lg border-border px-3 text-sm"
-							/>
-							<p className="text-xs text-muted-foreground">
-								SPX, Lalamove, NinjaVan, J&amp;T, etc. Sent to the customer via
-								WhatsApp.
-							</p>
-							<div className="flex gap-2">
-								<Button
-									onClick={handleSaveCarrier}
-									disabled={savingCarrier}
-									className="h-9 flex-1 text-sm"
-								>
-									{savingCarrier ? "Saving…" : "Save"}
-								</Button>
-								<Button
-									variant="secondary"
-									onClick={() => setCarrierInput(null)}
-									disabled={savingCarrier}
-									className="h-9 text-sm"
-								>
-									Cancel
-								</Button>
-							</div>
-						</div>
-					) : order.carrierTrackingUrl ? (
-						<a
-							href={order.carrierTrackingUrl}
-							target="_blank"
-							rel="noopener noreferrer"
-							className="flex items-center gap-2 text-sm text-accent underline underline-offset-2"
-						>
-							<Truck className="size-4 shrink-0" />
-							<span className="truncate">{order.carrierTrackingUrl}</span>
-							<ExternalLink className="size-3 shrink-0" />
-						</a>
-					) : (
-						<p className="text-sm text-muted-foreground">
-							No tracking link added yet.
-						</p>
-					)}
-				</section>
-			) : null}
+			{/* Shipment tracking — manual courier + tracking number (86eyehvk4) */}
+			{showCarrierSection ? <ShipmentTrackingCard order={order} /> : null}
 
 			{order.mockupStatus !== undefined ? <MockupCard order={order} /> : null}
 
@@ -1380,6 +1338,26 @@ function OrderDetailRoute() {
 			</section>
 
 			{nextStage ? (
+				<MarkShippedDialog
+					open={shipDialogOpen}
+					onOpenChange={setShipDialogOpen}
+					advanceLabel={`Mark as ${stageLabel(nextStage, "en")}`}
+					onConfirm={(fields) => handleAdvance(nextStage.id, fields)}
+					// blockReason === null ⟺ a rider could be booked right now
+					// (keys configured, plan ok, coords present, no active job) —
+					// then the dialog opens rider-first with a direct booking CTA.
+					onBookRider={
+						dispatchInfo?.blockReason === null
+							? () => {
+									setShipDialogOpen(false);
+									setBookRequestToken((t) => t + 1);
+								}
+							: undefined
+					}
+				/>
+			) : null}
+
+			{nextStage ? (
 				<ConfirmDialog
 					open={confirmManualAdvanceOpen}
 					onOpenChange={setConfirmManualAdvanceOpen}
@@ -1391,7 +1369,9 @@ function OrderDetailRoute() {
 					}. Only do this if the automatic update didn't come through.`}
 					confirmLabel={`Mark as ${stageLabel(nextStage, "en")}`}
 					cancelLabel="Keep automatic"
-					onConfirm={() => handleAdvance(nextStage.id, true)}
+					onConfirm={() =>
+						handleAdvance(nextStage.id, { overrideRiderGate: true })
+					}
 				/>
 			) : null}
 

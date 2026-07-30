@@ -615,3 +615,117 @@ describe("poweredByLine growth footer", () => {
 		expect(poweredByLine("en")).toContain("Kedaipal");
 	});
 });
+
+describe("shipped courier line — manual courier + tracking no (86eyehvk4)", () => {
+	const base = { shortId: "ORD-TEST", storeName: "Bearcamp" };
+	const shipment = {
+		courierName: "J&T Express",
+		trackingNo: "630002864925",
+		carrierTrackingUrl: "https://www.jtexpress.my/tracking/630002864925",
+		trackingUrl: TRACK,
+	};
+
+	test("EN delivery shipped carries courier + number + both links", () => {
+		const out = waCopy.en.status.shipped({
+			...base,
+			deliveryMethod: "delivery",
+			...shipment,
+		});
+		expect(out).toContain("📦 J&T Express — tracking no. 630002864925");
+		expect(out).toContain(
+			"Track shipment: https://www.jtexpress.my/tracking/630002864925",
+		);
+		expect(out).toContain(`Order status: ${TRACK}`);
+	});
+
+	test("MS + ZH use localized tracking-number labels", () => {
+		expect(
+			waCopy.ms.status.shipped({
+				...base,
+				deliveryMethod: "delivery",
+				...shipment,
+			}),
+		).toContain("📦 J&T Express — no. penjejakan 630002864925");
+		expect(
+			waCopy.zh.status.shipped({
+				...base,
+				deliveryMethod: "delivery",
+				...shipment,
+			}),
+		).toContain("📦 J&T Express —— 快递单号 630002864925");
+	});
+
+	test("degrades to courier-only or number-only when one side is missing", () => {
+		expect(
+			waCopy.en.status.shipped({
+				...base,
+				deliveryMethod: "delivery",
+				courierName: "DD Express (cold chain)",
+			}),
+		).toContain("📦 DD Express (cold chain)");
+		expect(
+			waCopy.en.status.shipped({
+				...base,
+				deliveryMethod: "delivery",
+				trackingNo: "DD9",
+			}),
+		).toContain("📦 tracking no. DD9");
+	});
+
+	test("no courier line when nothing is attached (existing shape unchanged)", () => {
+		const out = waCopy.en.status.shipped({
+			...base,
+			deliveryMethod: "delivery",
+			trackingUrl: TRACK,
+		});
+		expect(out).not.toContain("📦");
+	});
+
+	test("self-collect / drop-off shipped never carries the courier line", () => {
+		for (const pickupKind of [undefined, "drop_off"] as const) {
+			const out = waCopy.en.status.shipped({
+				...base,
+				deliveryMethod: "self_collect",
+				pickupKind,
+				...shipment,
+			});
+			expect(out).not.toContain("J&T Express");
+		}
+	});
+
+	test("renderStageUpdate carries the courier line for shipped-anchored stages", () => {
+		const out = renderStageUpdate("en", {
+			shortId: "ORD-TEST",
+			stageLabel: "On the lorry",
+			trackingUrl: TRACK,
+			courierName: "J&T Express",
+			trackingNo: "630002864925",
+			carrierTrackingUrl: "https://www.jtexpress.my/tracking/630002864925",
+		});
+		expect(out).toContain("📦 J&T Express — tracking no. 630002864925");
+		expect(out).toContain(
+			"Track shipment: https://www.jtexpress.my/tracking/630002864925",
+		);
+	});
+
+	test("authored shipped templates can interpolate {courierName}/{trackingNo}", () => {
+		const overrides: MessageTemplates = {
+			en: { shipped: "Sent via {courierName}, track with {trackingNo}" },
+		};
+		expect(
+			renderMessage(overrides, "en", "shipped", {
+				...base,
+				deliveryMethod: "delivery",
+				courierName: "J&T Express",
+				trackingNo: "JT1",
+			}),
+		).toBe("Sent via J&T Express, track with JT1");
+		// Missing values interpolate to empty, never the literal placeholder.
+		expect(
+			renderMessage(overrides, "en", "shipped", {
+				...base,
+				deliveryMethod: "delivery",
+			}),
+		).toBe("Sent via , track with ");
+	});
+});

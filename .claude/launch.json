@@ -43,6 +43,36 @@
       ],
       "port": 3101,
       "autoPort": false
+    },
+    {
+      "name": "web-qr-save-wt",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "-C",
+        "../kedaipal-wt-hotfix-track-save-qr",
+        "exec",
+        "vite",
+        "dev",
+        "--port",
+        "3104"
+      ],
+      "port": 3104,
+      "autoPort": false
+    },
+    {
+      "name": "web-courier-wt",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "-C",
+        "../kedaipal-wt-86eyehvk4",
+        "exec",
+        "vite",
+        "dev",
+        "--port",
+        "3105"
+      ],
+      "port": 3105,
+      "autoPort": false
     }
   ]
 }
