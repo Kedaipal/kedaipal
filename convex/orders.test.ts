@@ -5565,3 +5565,140 @@ describe("orders — confirmation push at create (86eyf1rck)", () => {
 		expect(viewed?.checkoutPhone).toBeUndefined();
 	});
 });
+
+describe("orders — buyer repairs their number after a failed push (86eyf1rck)", () => {
+	afterEach(() => {
+		delete process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE;
+	});
+
+	/** Order committed via the push path, then stamped as a failed push. */
+	async function seedFailedPush(t: ReturnType<typeof setup>) {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			// Typo: 019… instead of the buyer's real 012…
+			customer: { name: "Ali", waPhone: "0199999999" },
+			deliveryAddress: validAddress,
+		});
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		await t.mutation(internal.orders.recordConfirmationPush, {
+			orderId: order!._id,
+			status: "failed",
+			failureKind: "unreachable",
+		});
+		return { retailer, shortId, orderId: order!._id, staleCustomerId: order!.customerId! };
+	}
+
+	test("corrects the number, moves the CRM history, and re-queues the push", async () => {
+		const t = setup();
+		const { shortId, orderId, staleCustomerId } = await seedFailedPush(t);
+
+		await t.mutation(api.orders.updateBuyerPhone, {
+			token: await tk(t, shortId),
+			waPhone: "012-345 6789",
+		});
+
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		// Normalized to the inbound form, and back in flight (not stuck failed).
+		expect(order?.customer.waPhone).toBe("60123456789");
+		expect(order?.confirmationPushStatus).toBe("sending");
+		expect(order?.confirmationPushFailureKind).toBeUndefined();
+		// A late statuses webhook for the OLD message can't re-fail this order.
+		expect(order?.confirmationPushWamid).toBeUndefined();
+
+		// CRM: the order moved off the typo'd record onto the real one.
+		expect(order?.customerId).toBeDefined();
+		expect(order?.customerId).not.toBe(staleCustomerId);
+		const stale = await t.run(async (ctx) => ctx.db.get(staleCustomerId));
+		expect(stale?.orderCount).toBe(0);
+		expect(stale?.totalSpent).toBe(0);
+		const real = await t.run(async (ctx) => ctx.db.get(order!.customerId!));
+		expect(real?.waPhone).toBe("60123456789");
+		expect(real?.orderCount).toBe(1);
+		expect(real?.totalSpent).toBe(12000);
+	});
+
+	test("rejects an invalid number", async () => {
+		const t = setup();
+		const { shortId } = await seedFailedPush(t);
+		await expect(
+			t.mutation(api.orders.updateBuyerPhone, {
+				token: await tk(t, shortId),
+				waPhone: "03-1234 5678",
+			}),
+		).rejects.toThrow(/Malaysian mobile/);
+	});
+
+	test("rejects re-submitting the same number that already failed", async () => {
+		const t = setup();
+		const { shortId } = await seedFailedPush(t);
+		await expect(
+			t.mutation(api.orders.updateBuyerPhone, {
+				token: await tk(t, shortId),
+				waPhone: "0199999999",
+			}),
+		).rejects.toThrow(/same number/);
+	});
+
+	test("is closed unless the push actually failed — a healthy order's number can't be rewritten", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		// status is "sending" straight out of create — not a repairable state.
+		await expect(
+			t.mutation(api.orders.updateBuyerPhone, {
+				token: await tk(t, shortId),
+				waPhone: "0117654321",
+			}),
+		).rejects.toThrow(/can't be changed/);
+
+		const orderId = await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			return o!._id;
+		});
+		await t.mutation(internal.orders.recordConfirmationPush, {
+			orderId,
+			status: "sent",
+			wamid: "wamid.OK",
+		});
+		await expect(
+			t.mutation(api.orders.updateBuyerPhone, {
+				token: await tk(t, shortId),
+				waPhone: "0117654321",
+			}),
+		).rejects.toThrow(/can't be changed/);
+	});
+
+	test("an unknown token can't reach another order", async () => {
+		const t = setup();
+		await seedFailedPush(t);
+		await expect(
+			t.mutation(api.orders.updateBuyerPhone, {
+				token: "__no_such_order__",
+				waPhone: "012-345 6789",
+			}),
+		).rejects.toThrow(/not found/);
+	});
+});

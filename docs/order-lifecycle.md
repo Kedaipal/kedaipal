@@ -112,31 +112,76 @@ phone. So the storefront no longer depends on the buyer's send at all:
   WhatsApp").
 
 **Outcome stamps** (`orders.confirmationPushStatus` / `confirmationPushAt` /
-`confirmationPushWamid`):
+`confirmationPushWamid` / `confirmationPushFailureKind`):
 
+- `"sending"` — stamped in the **same transaction as the insert**, so the state
+  is never ambiguous while attempts (including retries) are in flight. Without
+  it, a confirmed order with no stamp is indistinguishable from one still
+  sending, and the tracking page can't tell the buyer which.
 - `"sent"` — Meta accepted the send; the wamid is stored because the
   **`statuses` webhook** (same `POST /webhook/whatsapp`, `value.statuses`)
   identifies messages only by it. A later `failed` event →
   `orders.markConfirmationPushFailed` (indexed probe on
-  `by_confirmation_wamid`; no-ops for ordinary sends) flips it to `"failed"`.
-- `"failed"` — the send errored or Meta reported delivery failure (typo'd /
-  unreachable number). The tracking page flips to the **manual Send card**
-  (recovery framing: "We couldn't reach you") and the seller's order detail
-  shows an amber **"Couldn't reach the buyer on WhatsApp"** note.
-- `"recovered"` — the buyer completed the manual `wa.me` send after a failed
-  push. `confirmOrderFromWhatsApp` treats an inbound ORD ref for a
-  failed-push order as proof of ownership: it **re-stamps
-  `customer.waPhone` to the sender** (the checkout-typed number was wrong),
-  **relinks the customer record** (decrements the typo'd number's aggregates,
-  links the real one), and clears both warnings. Deliberately narrow — a
-  healthy (`sent`) order's number is never overwritten by a forwarded
-  message, and a late/replayed `failed` webhook never regresses `recovered`.
+  `by_confirmation_wamid`; no-ops for ordinary sends) flips it to `"failed"`
+  with kind `unreachable` — Meta accepted then failed to *deliver*, which is
+  the number, not us.
+- `"failed"` — terminal, after retries. `confirmationPushFailureKind` records
+  whose problem it is (see below).
+- `"recovered"` — the buyer reached us anyway, by either repair route. Clears
+  both the buyer card and the seller note.
 
-Tracking-page states (`src/routes/track.$token.tsx`): fresh push-path arrival
-shows **"Order placed ✓ — confirmation sent to your WhatsApp"** + an optional
-open-WhatsApp anchor — **no auto-redirect anywhere on this path**;
-`orders.get` serves `checkoutPhone` while `pending` **or** whenever a push
-stamp exists (the anchor + recovery card need the wa.me target).
+**Retries — a blip must never become the buyer's job.** `notifyStorefrontOrderCreated`
+takes a 1-based `attempt` and reschedules itself with backoff
+(30s → 2m → 8m, `convex/lib/confirmationPush.ts`). The classifier is pure and
+unit-tested, and splits three ways:
+
+| Cause | Behaviour |
+| --- | --- |
+| No response / 5xx / 408 / 429 / throttle codes (130429, 131048, 131056, 80007) | Retry, then give up as `system` |
+| Unreachable recipient (131026, 131030, 131047, 131051) | Terminal immediately, `unreachable` |
+| Template problems (132000/132001/132005/132007/132012/132015/132016/…) | Terminal immediately, `system` |
+| Any other 4xx | Terminal, `system` |
+
+The load-bearing rule is the **double-send guard**: Meta exposes no idempotency
+key, so we only retry when the evidence says nothing was delivered — a request
+that never got a response, or a status Meta returns *instead of* accepting the
+message. An ambiguous 2xx is never retried. An in-flight retry also re-reads the
+order and bails if it's already `sent`/`recovered`.
+
+**Two repair routes for a wrong number**, both funnelling through the shared
+`customers.moveOrderToPhone` so they can't diverge (each moves the CRM
+aggregates off the wrong record onto the right one):
+
+1. **`orders.updateBuyerPhone`** (token capability, same trust model as
+   `updateDeliveryAddress`) — the buyer corrects the number on their own order
+   page; the push is re-queued from attempt 1. Gated to `failed` pushes only:
+   there's no reason to rewrite a healthy order's number, and the narrow window
+   means a leaked token can't quietly redirect a seller's order messages.
+   Rate-limited (`buyerPhoneUpdate`) because every accepted save costs a send.
+2. **Inbound ORD message** — `confirmOrderFromWhatsApp` treats an ORD ref sent
+   to the shared number, for an order whose push *failed*, as proof of
+   ownership and adopts the sender's number. Deliberately narrow: a healthy
+   order's number is never overwritten by a forwarded message, and a
+   late/replayed `failed` webhook never regresses `recovered`.
+
+**Buyer-facing states** (`src/routes/track.$token.tsx`) — none of which gate the
+page. The order is confirmed in every branch and the payment block stays
+reachable: withholding a buyer's receipt because we couldn't send a *message*
+would invert the point of the feature.
+
+| State | What the buyer sees |
+| --- | --- |
+| `sending` | Quiet "Sending your confirmation to +60 …" line. Nothing asked. |
+| `sent` | "Order placed ✓ — confirmation sent to your WhatsApp" + optional open-chat anchor. **No auto-redirect anywhere on this path.** |
+| `failed` + `unreachable` | Amber card naming the number, **"Update my number"** (saves → re-sends), plus a quiet "or message us" link. |
+| `failed` + `system` | Amber card stating it's our fault, the order is confirmed, and they can still pay. **No action demanded.** |
+| `recovered` | Nothing. |
+
+The seller's order detail mirrors the same split, so a system fault never sends
+them chasing a customer whose number was fine.
+
+`orders.get` serves `checkoutPhone` while `pending` **or** whenever a push stamp
+exists (the anchor + repair routes need the wa.me target).
 
 ### The WhatsApp handoff — the legacy / fallback path
 

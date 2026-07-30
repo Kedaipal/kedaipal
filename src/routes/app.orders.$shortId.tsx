@@ -688,27 +688,40 @@ function OrderDetailRoute() {
 				}
 			/>
 
-			{/* Confirmation push failed (86eyf1rck) — the buyer's WhatsApp couldn't
-			    be reached (typo'd/unreachable number), so nothing outbound lands
-			    until it's fixed. Amber like the payment claim: it needs the seller's
-			    eyes. Clears itself when the buyer completes the manual send from
-			    their order page ("recovered"). */}
+			{/* Confirmation push failed (86eyf1rck). Amber like the payment claim: it
+			    needs the seller's eyes. Two causes, two different things for the
+			    seller to do — blaming the buyer's number when the fault was ours
+			    would send them chasing a customer for no reason. Clears itself once
+			    the buyer is reached (manual send, or they correct their number). */}
 			{order.confirmationPushStatus === "failed" &&
 			order.status !== "cancelled" ? (
 				<section className="flex gap-3 rounded-2xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-800 dark:bg-amber-950/50">
 					<MessageCircle className="size-5 shrink-0 text-amber-600 dark:text-amber-400" />
 					<div className="min-w-0 flex-1">
 						<p className="text-xs font-semibold uppercase tracking-widest text-amber-700 dark:text-amber-300">
-							Couldn't reach the buyer on WhatsApp
+							{order.confirmationPushFailureKind === "system"
+								? "Buyer's confirmation didn't go out"
+								: "Couldn't reach the buyer on WhatsApp"}
 						</p>
-						<p className="mt-1 text-sm text-amber-950 dark:text-amber-100">
-							The order confirmation to{" "}
-							<b>{formatPhone(order.customer.waPhone ?? "")}</b> didn't
-							deliver — the number may have a typo or no WhatsApp. Their order
-							page is showing a &ldquo;Send your order on WhatsApp&rdquo;
-							button that fixes this; if the buyer contacts you another way,
-							point them there or double-check the number together.
-						</p>
+						{order.confirmationPushFailureKind === "system" ? (
+							<p className="mt-1 text-sm text-amber-950 dark:text-amber-100">
+								A WhatsApp problem on our side stopped the confirmation for
+								this order — the buyer's number{" "}
+								<b>{formatPhone(order.customer.waPhone ?? "")}</b> looks fine,
+								so no need to chase them about it. The order is confirmed and
+								they can see and pay for it on their order page. Message them
+								yourself if you'd like to confirm it personally.
+							</p>
+						) : (
+							<p className="mt-1 text-sm text-amber-950 dark:text-amber-100">
+								The confirmation to{" "}
+								<b>{formatPhone(order.customer.waPhone ?? "")}</b> didn't
+								deliver — that number may have a typo or no WhatsApp, so status
+								updates won't reach them either. Their order page offers a
+								&ldquo;Update my number&rdquo; fix; if they reach you another
+								way, check the number with them.
+							</p>
+						)}
 					</div>
 				</section>
 			) : null}

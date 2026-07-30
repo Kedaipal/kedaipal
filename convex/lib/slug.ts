@@ -147,6 +147,28 @@ export function assertValidMyWaPhone(raw: string): string {
 }
 
 /**
+ * Stricter sibling of `assertValidMyWaPhone` for numbers we intend to MESSAGE:
+ * normalizes the same way, then requires a Malaysian **mobile** shape (`601X`
+ * plus 8–9 digits). A landline (`03-…` → `60312345678`) satisfies the loose
+ * 8–15-digit rule but can never receive WhatsApp, so accepting one guarantees a
+ * failed confirmation push — better to reject it at the door with copy the
+ * buyer can act on.
+ *
+ * Mirrors `myWaPhoneCheckoutSchema` in `src/lib/schemas.ts` (same message, same
+ * pattern); the client fails fast, this is the authority. Used by the storefront
+ * order paths (86eyf1rck). Deliberately NOT applied to the counter's manual
+ * bind, where a cashier may legitimately key an unusual number for a buyer
+ * standing in front of them.
+ */
+export function assertValidMyMobile(raw: string): string {
+	const normalized = assertValidMyWaPhone(raw);
+	if (!/^601\d{8,9}$/.test(normalized)) {
+		throw new Error("Enter a Malaysian mobile number (e.g. 012-345 6789)");
+	}
+	return normalized;
+}
+
+/**
  * Non-throwing canonicalization of a WhatsApp number to bare digits — the form
  * Meta delivers inbound (`from`) and the form `assertValidWaPhone` produces on
  * write. Use for MATCHING two numbers that may differ only in formatting (leading

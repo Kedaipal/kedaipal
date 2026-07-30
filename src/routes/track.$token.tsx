@@ -21,7 +21,7 @@ import {
 	Truck,
 	XCircle,
 } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { isSafeTrackingUrl } from "../../convex/lib/couriers";
@@ -37,9 +37,12 @@ import { CopyButton } from "../components/ui/copy-button";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { getConvexHttpClient } from "../lib/convex-server";
-import { formatPhone } from "../lib/customer";
 import { qrFilenameBase, saveImageFromUrl } from "../lib/download";
-import { convexErrorMessage, formatPrice } from "../lib/format";
+import {
+	convexErrorMessage,
+	formatMyMobile,
+	formatPrice,
+} from "../lib/format";
 import {
 	deriveMapsUrl,
 	googleMapsNavUrl,
@@ -433,16 +436,20 @@ function TrackingRoute() {
 				})}
 			</p>
 
-			{/* WhatsApp handoff / confirmation state for storefront orders.
-			    - pending → the legacy Send card: checkout can't open wa.me itself
-			      (popup blockers eat window.open after the awaited createOrder —
-			      see src/lib/wa-order-message.ts), so the buyer sends from here.
-			      Doubles as recovery for any buyer who bailed before sending.
-			    - confirmed + push "sent" → "Order placed ✓" success card (86eyf1rck
-			      — Kedaipal's WABA pushed the confirmation; nothing left to send).
-			    - confirmed + push "failed" → the Send card again, reframed as the
-			      recovery path for an unreachable/typo'd number.
-			    - push "recovered" → nothing (the chat exists).
+			{/* Confirmation state for storefront orders (86eyf1rck). The order is
+			    already committed in every branch below — none of this blocks the
+			    buyer from reading the order or paying, because the confirmation
+			    MESSAGE failing is not a reason to withhold their receipt.
+			      - pending → the legacy Send card: on the pre-push flow checkout
+			        can't open wa.me itself (popup blockers eat window.open after the
+			        awaited createOrder — see src/lib/wa-order-message.ts), so the
+			        buyer sends from here.
+			      - push "sending" → quiet "on its way" line (attempts, incl. retries,
+			        are in flight; nothing is asked of the buyer).
+			      - push "sent" → "Order placed ✓" success card.
+			      - push "failed" → cause-aware card: an unreachable number offers the
+			        repair (edit it), a system fault only informs.
+			      - push "recovered" → nothing (we've reached them).
 			    Counter orders bind via QR scan and never render any of these. */}
 			{order.checkoutPhone &&
 			(order.source ?? "storefront") === "storefront" ? (
@@ -459,12 +466,11 @@ function TrackingRoute() {
 						}
 					/>
 				) : order.confirmationPushStatus === "failed" ? (
-					<SendOrderCard
-						order={order}
-						checkoutPhone={order.checkoutPhone}
-						pushFailed
-						autoSend={false}
-						onAutoSendConsumed={() => {}}
+					<PushFailedCard token={token} order={order} />
+				) : order.confirmationPushStatus === "sending" ? (
+					<PushSendingCard
+						ms={order.retailerLocale === "ms"}
+						waPhone={order.customer.waPhone}
 					/>
 				) : order.confirmationPushStatus === "sent" &&
 					order.status === "confirmed" ? (
@@ -1211,6 +1217,197 @@ function ConfirmationSentCard({
 }
 
 /**
+ * Confirmation push in flight (86eyf1rck), including retries. Deliberately a
+ * quiet line rather than a spinner-and-progress affair: the order is confirmed,
+ * nothing is required of the buyer, and the only reason to mention it at all is
+ * that checkout promised a WhatsApp message — so silence here would read as the
+ * promise being broken.
+ */
+function PushSendingCard({
+	ms,
+	waPhone,
+}: {
+	ms: boolean;
+	waPhone: string | undefined;
+}) {
+	const pretty = waPhone ? formatMyMobile(waPhone) : "";
+	return (
+		<section className="mt-6 flex items-center gap-3 rounded-2xl border border-border bg-card p-4">
+			<Loader2 className="size-5 shrink-0 animate-spin text-muted-foreground" />
+			<div className="min-w-0 flex-1">
+				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+					{ms ? "Pesanan diterima" : "Order placed"}
+				</p>
+				<p className="text-sm">
+					{ms
+						? `Menghantar pengesahan ke WhatsApp ${pretty}…`
+						: `Sending your confirmation to ${pretty} on WhatsApp…`}
+				</p>
+			</div>
+		</section>
+	);
+}
+
+/**
+ * The confirmation push gave up (86eyf1rck). Two very different truths behind
+ * one status, so two very different asks:
+ *
+ *  - `unreachable` — the number can't receive WhatsApp (typo'd, no account).
+ *    Only the buyer can fix that, so the primary action is **editing the
+ *    number**, which re-sends immediately. The wa.me send stays as a quiet
+ *    secondary route (it also repairs the number, via the inbound path).
+ *  - `system` — Meta or us. The buyer's number is fine and asking them to do
+ *    anything would be passing our failure to them, so this state only informs.
+ *
+ * Amber, not the accent palette: this is a warning, and an earlier revision
+ * rendered it in the mint success colour, which read as "all good".
+ * Crucially it does NOT gate the page — the order is confirmed and the payment
+ * block below stays reachable. Withholding a buyer's receipt because we
+ * couldn't send a message would invert the whole point of the feature.
+ */
+function PushFailedCard({
+	token,
+	order,
+}: {
+	token: string;
+	order: TrackedOrder;
+}) {
+	const ms = order.retailerLocale === "ms";
+	const storeName = order.storeName || (ms ? "kedai" : "the store");
+	const unreachable = order.confirmationPushFailureKind !== "system";
+	const pretty = order.customer.waPhone
+		? formatMyMobile(order.customer.waPhone)
+		: "";
+	const updatePhone = useMutation(api.orders.updateBuyerPhone);
+	const [editing, setEditing] = useState(false);
+	const [value, setValue] = useState("");
+	const [busy, setBusy] = useState(false);
+
+	async function handleSave(e: FormEvent) {
+		e.preventDefault();
+		setBusy(true);
+		try {
+			await updatePhone({ token, waPhone: value.trim() });
+			toast.success(
+				ms
+					? "Nombor dikemas kini — pengesahan sedang dihantar"
+					: "Number updated — sending your confirmation now",
+			);
+			setEditing(false);
+			setValue("");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	return (
+		<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-800 dark:bg-amber-950/50">
+			<div className="flex items-center gap-3">
+				<MessageCircle className="size-5 shrink-0 text-amber-600 dark:text-amber-400" />
+				<div className="min-w-0 flex-1">
+					<p className="text-xs font-semibold uppercase tracking-widest text-amber-700 dark:text-amber-300">
+						{ms ? "Pesanan diterima" : "Order placed"}
+					</p>
+					<p className="font-semibold text-amber-950 dark:text-amber-100">
+						{unreachable
+							? ms
+								? "Pengesahan WhatsApp tak sampai"
+								: "Your WhatsApp confirmation didn't arrive"
+							: ms
+								? "Pengesahan WhatsApp tertunda"
+								: "Your WhatsApp confirmation is delayed"}
+					</p>
+				</div>
+			</div>
+			<p className="text-sm text-amber-950/90 dark:text-amber-100/90">
+				{unreachable
+					? ms
+						? `Kami tak dapat hantar ke ${pretty} — nombor itu mungkin tersilap taip atau tiada WhatsApp. Pesanan anda tetap disahkan dan butiran di bawah adalah muktamad.`
+						: `We couldn't deliver it to ${pretty} — that number may have a typo, or no WhatsApp account. Your order is still confirmed and everything below is final.`
+					: ms
+						? `Masalah di pihak kami, bukan nombor anda. Pesanan anda telah disahkan dan ${storeName} sudah menerimanya — anda masih boleh membayar di bawah.`
+						: `That's a problem on our side, not with your number. Your order is confirmed and ${storeName} already has it — you can still pay below.`}
+			</p>
+
+			{unreachable ? (
+				editing ? (
+					<form onSubmit={handleSave} className="flex flex-col gap-2">
+						<label
+							htmlFor="repair-wa-phone"
+							className="text-xs font-medium text-amber-950 dark:text-amber-100"
+						>
+							{ms ? "Nombor WhatsApp anda" : "Your WhatsApp number"}
+						</label>
+						<input
+							id="repair-wa-phone"
+							type="tel"
+							inputMode="tel"
+							autoComplete="tel"
+							// Focused via ref, not autoFocus: the field only mounts when the
+							// buyer taps "Update my number", so moving focus there is a
+							// response to their action rather than a page-load surprise.
+							ref={(el) => el?.focus()}
+							value={value}
+							onChange={(e) => setValue(e.target.value)}
+							placeholder="e.g. 012-345 6789"
+							className="h-12 rounded-xl border border-amber-300 bg-white px-4 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50 dark:border-amber-700 dark:bg-amber-950"
+						/>
+						<div className="flex gap-2">
+							<Button
+								type="submit"
+								isLoading={busy}
+								disabled={busy || value.trim().length === 0}
+								className="h-11 flex-1"
+							>
+								{ms ? "Simpan & hantar" : "Save & resend"}
+							</Button>
+							<Button
+								type="button"
+								variant="outline"
+								onClick={() => setEditing(false)}
+								disabled={busy}
+								className="h-11"
+							>
+								{ms ? "Batal" : "Cancel"}
+							</Button>
+						</div>
+					</form>
+				) : (
+					<Button
+						type="button"
+						onClick={() => {
+							setValue("");
+							setEditing(true);
+						}}
+						className="h-12 w-full text-base"
+					>
+						{ms ? "Kemas kini nombor" : "Update my number"}
+					</Button>
+				)
+			) : null}
+
+			{/* Secondary route, kept because it also repairs the number (the inbound
+			    ORD message relinks the sender) and costs nothing to offer. Never the
+			    primary ask — that would make our delivery problem the buyer's job. */}
+			{order.checkoutPhone ? (
+				<a
+					href={`https://wa.me/${order.checkoutPhone}`}
+					target="_blank"
+					rel="noopener noreferrer"
+					className="text-center text-xs font-medium text-amber-800 underline dark:text-amber-300"
+				>
+					{ms
+						? "Atau mesej kami di WhatsApp"
+						: "Or message us on WhatsApp instead"}
+				</a>
+			) : null}
+		</section>
+	);
+}
+
+/**
  * "Send your order on WhatsApp" — completes the storefront checkout handoff.
  * The wa.me message is rebuilt from the order's frozen snapshot on every
  * render, so this survives refreshes and lost sessions (no client state to
@@ -1231,16 +1428,11 @@ function SendOrderCard({
 	checkoutPhone,
 	autoSend,
 	onAutoSendConsumed,
-	pushFailed = false,
 }: {
 	order: TrackedOrder;
 	checkoutPhone: string;
 	autoSend: boolean;
 	onAutoSendConsumed: () => void;
-	/** Recovery mode (86eyf1rck): the WABA confirmation push to the checkout
-	 * number failed — reframe the card around reaching the buyer, not
-	 * confirming the (already confirmed) order. Never auto-fires. */
-	pushFailed?: boolean;
 }) {
 	const ms = order.retailerLocale === "ms";
 	const storeName = order.storeName || (ms ? "kedai" : "the store");
@@ -1317,13 +1509,7 @@ function SendOrderCard({
 				<Send className="size-5 shrink-0 text-accent" />
 				<div className="min-w-0 flex-1">
 					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-						{pushFailed
-							? ms
-								? "Kami tak dapat hubungi anda"
-								: "We couldn't reach you"
-							: ms
-								? "Satu langkah lagi"
-								: "One last step"}
+						{ms ? "Satu langkah lagi" : "One last step"}
 					</p>
 					<p className="font-semibold">
 						{ms
@@ -1333,13 +1519,9 @@ function SendOrderCard({
 				</div>
 			</div>
 			<p className="text-sm text-muted-foreground">
-				{pushFailed
-					? ms
-						? `Pengesahan WhatsApp ke ${formatPhone(order.customer.waPhone ?? "")} tak sampai — nombor itu mungkin tersilap taip. Hantar mesej ini supaya ${storeName} boleh hubungi anda di nombor yang betul.`
-						: `Your WhatsApp confirmation to ${formatPhone(order.customer.waPhone ?? "")} didn't go through — that number may have a typo. Send this message so ${storeName} can reach you on the right one.`
-					: ms
-						? `Pesanan anda telah disimpan. Hantar di WhatsApp supaya ${storeName} boleh sahkan pesanan dan hubungi anda.`
-						: `Your order is saved. Send it on WhatsApp so ${storeName} can confirm it and reach you.`}
+				{ms
+					? `Pesanan anda telah disimpan. Hantar di WhatsApp supaya ${storeName} boleh sahkan pesanan dan hubungi anda.`
+					: `Your order is saved. Send it on WhatsApp so ${storeName} can confirm it and reach you.`}
 			</p>
 			{sending ? (
 				<Button className="h-12 w-full text-base" disabled>

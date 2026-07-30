@@ -59,7 +59,15 @@ export type OutboundMessage =
  * it when delivery failure needs to find its way back to a record (e.g. the
  * order-confirmation push). Undefined when the provider didn't echo one.
  */
-export type SendReceipt = { providerMessageId?: string };
+export type SendReceipt = {
+	providerMessageId?: string;
+	/** Set by the WABA gateway when it suppressed the send (opt-out, cap,
+	 * pause, quality halt) — the message never reached the provider. Callers
+	 * that stamp delivery state must check this: a blocked send resolves
+	 * normally rather than throwing, so treating "no throw" as "sent" would
+	 * record a message that was never attempted. */
+	blocked?: string;
+};
 
 /**
  * Normalized outbound-delivery status event (WhatsApp `statuses` webhook).

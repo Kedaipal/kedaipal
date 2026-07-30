@@ -7,11 +7,15 @@ import {
 	internalQuery,
 } from "./_generated/server";
 import {
-	decrementAggregatesForCancel,
 	linkOrderToCustomer,
+	moveOrderToPhone,
 	refreshWaProfileName,
 } from "./customers";
-import { orderConfirmTemplateName } from "./lib/whatsapp";
+import {
+	orderConfirmTemplateName,
+	WhatsAppSendError,
+} from "./lib/whatsapp";
+import { classifyPushFailure } from "./lib/confirmationPush";
 import { type GuardedSender, makeGuardedSender } from "./wabaProtection";
 import { stampRetailerActivation } from "./lib/activation";
 import { classifyOptOutKeyword } from "./lib/wabaLimits";
@@ -88,20 +92,18 @@ export const confirmOrderFromWhatsApp = internalMutation({
 		// checkout-typed number, and the buyer just proved ownership of this order
 		// by sending its ORD ref from a WORKING WhatsApp — adopt the sender's
 		// number so every later message (status updates, payment ask) reaches
-		// them, and clear the failure ("recovered" hides the tracking-page Send
+		// them, and clear the failure ("recovered" hides the tracking-page repair
 		// card + the seller's amber note). Deliberately narrow: a healthy order's
 		// stored number is never overwritten by a forwarded message — only a
-		// FAILED push unlocks the re-stamp.
+		// FAILED push unlocks the re-stamp. The actual phone move + CRM relink is
+		// applied below via the shared moveOrderToPhone.
 		const pushFailed = order.confirmationPushStatus === "failed";
-		let staleCustomerId: Id<"customers"> | undefined;
+		const adoptSenderPhone =
+			pushFailed &&
+			!!order.customer.waPhone &&
+			order.customer.waPhone !== fromPhone;
 		if (pushFailed) {
 			patch.confirmationPushStatus = "recovered";
-			if (order.customer.waPhone && order.customer.waPhone !== fromPhone) {
-				patch.customer = { ...order.customer, waPhone: fromPhone };
-				// The order was linked (and aggregates counted) against the typo'd
-				// number's customer record at checkout — move it to the real one.
-				staleCustomerId = order.customerId;
-			}
 		}
 		if (wasPending) {
 			patch.status = "confirmed";
@@ -126,15 +128,15 @@ export const confirmOrderFromWhatsApp = internalMutation({
 		// were already linked at checkout (customerId set) — skip to avoid double
 		// counting. Phone-less orders are linked here (the late-bind case).
 		let customerId = order.customerId;
-		if (staleCustomerId) {
-			// Recovery relink: un-count the order from the typo'd number's customer
-			// record, then fall through to the normal link path with the sender's
-			// real number (linkOrderToCustomer re-stamps order.customerId).
-			await decrementAggregatesForCancel(ctx, {
-				customerId: staleCustomerId,
-				orderTotal: order.total,
+		if (adoptSenderPhone) {
+			// Recovery: move the order (and its CRM aggregates) off the typo'd
+			// number onto the sender's real one. Shared with the buyer's own
+			// "update number" repair so the two can't drift.
+			customerId = await moveOrderToPhone(ctx, {
+				// Re-read so the patch above (status/recovered) is reflected.
+				order: (await ctx.db.get(order._id)) ?? order,
+				newPhone: fromPhone,
 			});
-			customerId = undefined;
 		}
 		if (!customerId) {
 			const linkPhone = patch.customer?.waPhone ?? order.customer.waPhone ?? fromPhone;
@@ -202,6 +204,9 @@ export const getOrderWithRetailer = internalQuery({
 		orderStages: OrderStage[] | undefined;
 		statusLabels: StatusLabels | undefined;
 		currentStageId: string | undefined;
+		// Lets an in-flight confirmation-push retry bail out when the buyer has
+		// already been reached (86eyf1rck).
+		confirmationPushStatus: Doc<"orders">["confirmationPushStatus"];
 	} | null> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) return null;
@@ -232,6 +237,7 @@ export const getOrderWithRetailer = internalQuery({
 			orderStages: retailer.orderStages as OrderStage[] | undefined,
 			statusLabels: retailer.statusLabels as StatusLabels | undefined,
 			currentStageId: order.currentStageId,
+			confirmationPushStatus: order.confirmationPushStatus,
 		};
 	},
 });
@@ -1600,8 +1606,14 @@ export const getCounterOrderMeta = internalQuery({
  * manual wa.me Send card as recovery.
  */
 export const notifyStorefrontOrderCreated = internalAction({
-	args: { orderId: v.id("orders") },
-	handler: async (ctx, { orderId }): Promise<void> => {
+	args: {
+		orderId: v.id("orders"),
+		// 1-based; the scheduler passes attempt+1 when retrying a transient
+		// failure. Absent = first try (so existing scheduled jobs stay valid).
+		attempt: v.optional(v.number()),
+	},
+	handler: async (ctx, { orderId, attempt: attemptArg }): Promise<void> => {
+		const attempt = attemptArg ?? 1;
 		const templateName = orderConfirmTemplateName();
 		if (!templateName) return; // push path inactive — nothing to send
 		const meta = await ctx
@@ -1611,6 +1623,14 @@ export const notifyStorefrontOrderCreated = internalAction({
 				return null;
 			});
 		if (!meta || !meta.customerWaPhone) return;
+		// A push that already landed (or was superseded by the buyer reaching us
+		// another way) must not be re-sent by an in-flight retry.
+		if (
+			meta.confirmationPushStatus === "sent" ||
+			meta.confirmationPushStatus === "recovered"
+		) {
+			return;
+		}
 
 		const trackingToken =
 			meta.trackingToken ??
@@ -1633,16 +1653,55 @@ export const notifyStorefrontOrderCreated = internalAction({
 				// appends ONLY this suffix (the tracking token, not the shortId).
 				urlButtonParam: trackingToken,
 			});
+			if (receipt?.blocked) {
+				// The WABA gateway suppressed it (opt-out, cap, pause). Not our
+				// buyer's fault and not retryable here — the gateway is the policy.
+				// Transactional bypasses gating today, so this is defence in depth.
+				await ctx.runMutation(internal.orders.recordConfirmationPush, {
+					orderId,
+					status: "failed",
+					failureKind: "system",
+				});
+				return;
+			}
 			await ctx.runMutation(internal.orders.recordConfirmationPush, {
 				orderId,
 				status: "sent",
 				wamid: receipt?.providerMessageId,
 			});
 		} catch (err) {
-			console.error("WA storefront confirm push failed", err);
+			// Retry a blip rather than handing our problem to the buyer; give up
+			// immediately on anything Meta will reject identically next time.
+			const outcome = classifyPushFailure(
+				err instanceof WhatsAppSendError
+					? {
+							httpStatus: err.httpStatus,
+							metaCode: err.metaCode,
+							responded: err.responded,
+						}
+					: // Not a send error at all (a bug in our own code path) — treat as
+						// responded so it can't spin, and report it as ours.
+						{ responded: true },
+				attempt,
+			);
+			console.error("WA storefront confirm push failed", {
+				shortId: meta.shortId,
+				attempt,
+				outcome,
+				err,
+			});
+			if (outcome.retry) {
+				await ctx.scheduler.runAfter(
+					outcome.delayMs,
+					internal.whatsapp.notifyStorefrontOrderCreated,
+					{ orderId, attempt: attempt + 1 },
+				);
+				return;
+			}
 			await ctx.runMutation(internal.orders.recordConfirmationPush, {
 				orderId,
 				status: "failed",
+				failureKind: outcome.kind,
 			});
 		}
 	},

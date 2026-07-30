@@ -17,6 +17,7 @@ import {
 	adjustAggregatesForTotalChange,
 	decrementAggregatesForCancel,
 	linkOrderToCustomer,
+	moveOrderToPhone,
 } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
 import { assertValidAddress } from "./lib/address";
@@ -86,7 +87,7 @@ import {
 import { buildOrderReceiptPdf } from "./lib/pdf/render";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 import { rateLimiter } from "./lib/rateLimiter";
-import { assertValidMyWaPhone } from "./lib/slug";
+import { assertValidMyMobile } from "./lib/slug";
 import { orderConfirmTemplateName } from "./lib/whatsapp";
 import { variantLabel } from "./lib/variant";
 import { renderSystemMessage } from "./lib/whatsappCopy";
@@ -376,12 +377,24 @@ export const recordConfirmationPush = internalMutation({
 		orderId: v.id("orders"),
 		status: v.union(v.literal("sent"), v.literal("failed")),
 		wamid: v.optional(v.string()),
+		// Required in practice for "failed" — drives whether the buyer is asked
+		// to fix their number or merely told we're having trouble.
+		failureKind: v.optional(
+			v.union(v.literal("unreachable"), v.literal("system")),
+		),
 	},
-	handler: async (ctx, { orderId, status, wamid }): Promise<void> => {
+	handler: async (
+		ctx,
+		{ orderId, status, wamid, failureKind },
+	): Promise<void> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) return;
+		// The buyer may have reached us by another route while attempts were in
+		// flight (manual send / corrected number) — never overwrite that.
+		if (order.confirmationPushStatus === "recovered") return;
 		await ctx.db.patch(orderId, {
 			confirmationPushStatus: status,
+			confirmationPushFailureKind: status === "failed" ? failureKind : undefined,
 			confirmationPushAt: Date.now(),
 			confirmationPushWamid: wamid,
 			updatedAt: Date.now(),
@@ -416,8 +429,75 @@ export const markConfirmationPushFailed = internalMutation({
 		});
 		await ctx.db.patch(order._id, {
 			confirmationPushStatus: "failed",
+			// Meta accepted the send then failed to DELIVER it — that's the number,
+			// not us, so the buyer gets the repair affordance.
+			confirmationPushFailureKind: "unreachable",
 			updatedAt: Date.now(),
 		});
+	},
+});
+
+/**
+ * Buyer repairs the WhatsApp number on their own order after the confirmation
+ * push failed to reach it (86eyf1rck).
+ *
+ * This is the direct fix for the only failure this feature can't self-heal: a
+ * typo'd number. Without it the buyer's only route is to send us a wa.me
+ * message so the inbound path can infer their real number — a workaround for a
+ * missing edit control. Authorized by the tracking token exactly like
+ * `updateDeliveryAddress`, and deliberately scoped to `failed` pushes: there is
+ * no reason to rewrite the number on a healthy order, and keeping the window
+ * that narrow means a leaked token can't quietly redirect a seller's
+ * order messages.
+ *
+ * On success the order moves to the new number (carrying its CRM aggregates via
+ * the shared `moveOrderToPhone`) and the push is re-scheduled from attempt 1,
+ * so the buyer gets their confirmation without doing anything else.
+ */
+export const updateBuyerPhone = mutation({
+	args: { token: v.string(), waPhone: v.string() },
+	handler: async (ctx, { token, waPhone }): Promise<void> => {
+		// Each accepted save costs an outbound template send.
+		await rateLimiter.limit(ctx, "buyerPhoneUpdate", {
+			key: token,
+			throws: true,
+		});
+
+		const order = await orderByToken(ctx, token);
+		if (!order) throw new ConvexError("Order not found");
+		if (order.confirmationPushStatus !== "failed") {
+			throw new ConvexError(
+				"This order's WhatsApp number can't be changed right now",
+			);
+		}
+
+		let normalized: string;
+		try {
+			normalized = assertValidMyMobile(waPhone);
+		} catch (err) {
+			throw new ConvexError((err as Error).message);
+		}
+		if (normalized === order.customer.waPhone) {
+			throw new ConvexError(
+				"That's the same number we already tried — check the digits and try again",
+			);
+		}
+
+		await moveOrderToPhone(ctx, { order, newPhone: normalized });
+		// Back to "sending" so the buyer sees the attempt in flight rather than a
+		// stale failure, and a late webhook for the OLD message can't re-fail it
+		// (markConfirmationPushFailed only acts on a push still believed "sent").
+		await ctx.db.patch(order._id, {
+			confirmationPushStatus: "sending",
+			confirmationPushFailureKind: undefined,
+			confirmationPushWamid: undefined,
+			updatedAt: Date.now(),
+		});
+		await ctx.scheduler.runAfter(
+			0,
+			internal.whatsapp.notifyStorefrontOrderCreated,
+			{ orderId: order._id },
+		);
 	},
 });
 
@@ -524,13 +604,13 @@ export const create = mutation({
 		// the protocol level so legacy callers/tests keep working; a phone-less
 		// order simply rides the old buyer-sends-first wa.me flow, where the
 		// WhatsApp webhook stamps the number on the inbound message. MY-aware
-		// normalization (assertValidMyWaPhone): buyers type local numbers
+		// normalization (assertValidMyMobile): buyers type local numbers
 		// ("012-345 6789"), and the stored form must match what Meta delivers
 		// inbound (60…) or the customer record would fork.
 		let customerWaPhone: string | undefined;
 		if (args.customer.waPhone) {
 			try {
-				customerWaPhone = assertValidMyWaPhone(args.customer.waPhone);
+				customerWaPhone = assertValidMyMobile(args.customer.waPhone);
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
 			}
@@ -862,6 +942,11 @@ export const create = mutation({
 				? args.customerImageStorageId
 				: undefined,
 			mockupStatus: requiresMockup ? "pending" : undefined,
+			// Stamped in the SAME transaction as the insert so the push state is
+			// never ambiguous: a confirmed storefront order with no stamp would be
+			// indistinguishable from one whose send is still in flight, and the
+			// tracking page needs to tell the buyer which it is.
+			confirmationPushStatus: confirmedAtCreate ? "sending" : undefined,
 			statusChangedAt: now,
 			createdAt: now,
 			updatedAt: now,

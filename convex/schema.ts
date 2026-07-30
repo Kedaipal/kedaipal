@@ -908,15 +908,33 @@ export default defineSchema({
 		statusChangedAt: v.optional(v.number()),
 		// WABA confirmation push (86eyf1rck) — the template message Kedaipal sends
 		// the buyer at storefront checkout, replacing the buyer-initiated wa.me
-		// handoff. "sent" = Meta accepted the send; "failed" = the send errored or
-		// Meta's statuses webhook reported failure (typo'd/unreachable number) —
-		// flips the tracking page to the manual Send card + an amber note on the
-		// seller's order detail; "recovered" = a failed push whose buyer then
-		// completed the manual wa.me send (the chat now exists — both warnings
-		// clear). Undefined = legacy order or push path inactive (template env
-		// unset). Widen-only, no backfill.
+		// handoff. Lifecycle:
+		//   "sending"   — stamped in the same transaction as the insert, so the
+		//                 state is never ambiguous while attempts are in flight
+		//                 (the action retries transient failures with backoff).
+		//   "sent"      — Meta accepted it; may still flip to "failed" if the
+		//                 statuses webhook reports undelivered.
+		//   "failed"    — terminal after retries. `confirmationPushFailureKind`
+		//                 says whose problem it is, which drives whether the
+		//                 buyer is asked to fix their number or merely informed.
+		//   "recovered" — a failed push whose buyer then reached us anyway (manual
+		//                 wa.me send, or corrected their number), so the chat
+		//                 exists and both warnings clear.
+		// Undefined = legacy order or push path inactive (template env unset).
+		// Widen-only, no backfill.
 		confirmationPushStatus: v.optional(
-			v.union(v.literal("sent"), v.literal("failed"), v.literal("recovered")),
+			v.union(
+				v.literal("sending"),
+				v.literal("sent"),
+				v.literal("failed"),
+				v.literal("recovered"),
+			),
+		),
+		// Set alongside a "failed" status. "unreachable" = the number can't
+		// receive (typo'd / not on WhatsApp) so the buyer can repair it;
+		// "system" = our side or Meta's, so we never blame the buyer's number.
+		confirmationPushFailureKind: v.optional(
+			v.union(v.literal("unreachable"), v.literal("system")),
 		),
 		confirmationPushAt: v.optional(v.number()),
 		// Meta's message id (wamid) for the confirmation push. The statuses

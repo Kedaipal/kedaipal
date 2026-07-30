@@ -121,7 +121,10 @@ export function makeGuardedSender(
 					category,
 					status: decision.status,
 				});
-				return undefined;
+				// Reported, not thrown (callers must not re-send a blocked message) —
+				// but surfaced so a caller that records delivery state can tell
+				// "suppressed" apart from "delivered".
+				return { blocked: decision.status };
 			}
 			try {
 				const receipt = await adapter.send(to, msg);

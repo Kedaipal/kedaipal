@@ -33,27 +33,76 @@ export function orderConfirmTemplateName(): string | undefined {
 }
 
 /**
+ * A failed Cloud API send, carrying the machine-readable bits a caller needs to
+ * decide whether retrying could ever help: the HTTP status and Meta's own error
+ * code. Without these a caller can only regex the message text, and the two
+ * cases are opposite — a 503 deserves a retry, a `131026` (recipient not on
+ * WhatsApp) never will. `responded: false` means the request never produced a
+ * response at all (DNS/TLS/abort), so no message can have been sent — the only
+ * case where retrying is guaranteed free of double-send risk.
+ */
+export class WhatsAppSendError extends Error {
+	readonly httpStatus?: number;
+	readonly metaCode?: number;
+	readonly responded: boolean;
+	constructor(
+		message: string,
+		opts: { httpStatus?: number; metaCode?: number; responded: boolean },
+	) {
+		super(message);
+		this.name = "WhatsAppSendError";
+		this.httpStatus = opts.httpStatus;
+		this.metaCode = opts.metaCode;
+		this.responded = opts.responded;
+	}
+}
+
+/**
  * POST one message payload to the Cloud API. Returns Meta's message id
  * (`wamid…`) when the response carries one — the ONLY key the `statuses`
  * webhook later identifies the message by, so delivery-failure handling
  * (typo'd number → failed confirmation push) depends on capturing it here.
+ *
+ * Throws `WhatsAppSendError` on failure so callers can classify retryability.
  */
 async function postMessage(
 	payload: Record<string, unknown>,
 ): Promise<string | undefined> {
 	const { accessToken, phoneNumberId } = readCredentials();
 	const url = `https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`;
-	const res = await fetch(url, {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${accessToken}`,
-			"Content-Type": "application/json",
-		},
-		body: JSON.stringify(payload),
-	});
+	let res: Response;
+	try {
+		res = await fetch(url, {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${accessToken}`,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify(payload),
+		});
+	} catch (err) {
+		// Never reached Meta (network/DNS/TLS/abort) — nothing was sent.
+		throw new WhatsAppSendError(
+			`WhatsApp send failed before response: ${
+				err instanceof Error ? err.message : String(err)
+			}`,
+			{ responded: false },
+		);
+	}
 	if (!res.ok) {
 		const body = await res.text();
-		throw new Error(`WhatsApp send failed (${res.status}): ${body}`);
+		let metaCode: number | undefined;
+		try {
+			const parsed = JSON.parse(body) as { error?: { code?: unknown } };
+			const code = parsed?.error?.code;
+			if (typeof code === "number") metaCode = code;
+		} catch {
+			// Non-JSON error body (proxy/gateway HTML) — status alone classifies it.
+		}
+		throw new WhatsAppSendError(
+			`WhatsApp send failed (${res.status}): ${body}`,
+			{ httpStatus: res.status, metaCode, responded: true },
+		);
 	}
 	try {
 		const body = (await res.json()) as {
