@@ -201,13 +201,14 @@ function ShipmentFieldset({
  *   tracking contradicting the rider's own live link. Bookable → the rider
  *   explainer + a "Book a rider" CTA (the Lalamove Delivery card sits far down
  *   the page, so this is the second, eye-level entrance to the SAME guarded
- *   flow). Not bookable → the reason, in the seller's words, with the fix path;
- *   either way there's an explicit "ship without a rider" escape so the order
- *   can always move.
+ *   flow). Not bookable → the reason, in the seller's words, with the fix path.
  * - **Everyone else**: the plain optional courier + tracking-number form.
  *
- * Skippable in every shape — shipping without tracking stays one tap, and the
- * card below covers add-later.
+ * Skippable in every shape, and every shape keeps a real footer button that
+ * advances the order — "Book a rider" is never the only way out. Recording how
+ * a rider vendor's blocked order actually went out is the CARD's job, not this
+ * prompt's (`ShipmentTrackingCard`, which stays editable in exactly that
+ * state); the blocked copy says so, so the path isn't hidden.
  */
 export function MarkShippedDialog({
 	open,
@@ -293,28 +294,13 @@ export function MarkShippedDialog({
 					// Branch on the reason itself, not the derived `riderBookable`, so the
 					// blocked arm has it narrowed to a real DispatchBlock.
 					riderBlockReason === null ? (
-						<div className="flex flex-col gap-2.5">
-							<p className="text-sm leading-relaxed text-muted-foreground">
-								Book a Lalamove rider for this delivery — you&apos;ll see
-								today&apos;s price and confirm before anything is charged. Live
-								tracking attaches automatically, and the order updates on its
-								own when the rider picks up, so there&apos;s nothing to mark
-								manually.
-							</p>
-							{/* Dropping the buyer off yourself is a real case — keep the plain
-							    advance reachable so "Book a rider" is never the only way out. */}
-							<p className="text-xs leading-relaxed text-muted-foreground">
-								Not sending a rider for this one?{" "}
-								<button
-									type="button"
-									onClick={handleConfirm}
-									disabled={saving}
-									className="font-medium underline underline-offset-2 disabled:opacity-55"
-								>
-									{saving ? "Updating…" : `${advanceLabel} without a rider`}
-								</button>
-							</p>
-						</div>
+						<p className="text-sm leading-relaxed text-muted-foreground">
+							Book a Lalamove rider for this delivery — you&apos;ll see
+							today&apos;s price and confirm before anything is charged. Live
+							tracking attaches automatically, and the order updates on its own
+							when the rider picks up, so there&apos;s nothing to mark manually.
+							Dropping this one off yourself? Ship it without a rider below.
+						</p>
 					) : (
 						// Blocked: say why (with its fix path) and let the seller choose —
 						// back out and fix it, or ship this one without a rider. Never a
@@ -323,9 +309,13 @@ export function MarkShippedDialog({
 							<CircleAlert className="size-4 shrink-0 translate-y-0.5" />
 							<div className="flex flex-col gap-1.5 text-sm leading-relaxed">
 								<p>{dispatchBlockCopy(riderBlockReason)}</p>
+								{/* Name the add-tracking path explicitly: an order going out
+								    another way is exactly the one that needs a courier +
+								    consignment number, and the card below is where it goes. */}
 								<p className="text-amber-900/80 dark:text-amber-200/80">
-									Close this to sort it out and book after — or carry on below
-									if this one&apos;s going out another way.
+									Close this to sort it out and book after — or ship it anyway
+									below and add the courier + tracking number from the Shipment
+									tracking card on this order.
 								</p>
 							</div>
 						</div>
@@ -343,6 +333,20 @@ export function MarkShippedDialog({
 					>
 						Cancel
 					</Button>
+					{/* Booking is on the table, so it leads — but shipping without a
+					    rider is a real path and gets a real button (a text link inside a
+					    paragraph fails the ≥44px tap-target rule, and here it's the only
+					    way to move the order). Quiet variant keeps the hierarchy. */}
+					{riderBookable ? (
+						<Button
+							variant="link"
+							onClick={handleConfirm}
+							disabled={saving}
+							className="h-11"
+						>
+							{saving ? "Updating…" : `${advanceLabel} without a rider`}
+						</Button>
+					) : null}
 					{riderBookable ? (
 						<Button onClick={onBookRider} className="h-11">
 							Book a rider
@@ -366,10 +370,18 @@ export function MarkShippedDialog({
  * Order-detail "Shipment tracking" card: shows the attached courier + number
  * (copyable) + track link, with an edit mode for add-after / corrections.
  *
- * `readOnly` is the rider-dispatch vendor (86eyff02p): manual courier entry is
- * not theirs to do, so the card keeps showing what the buyer sees — the link
- * and number a booking mirrored onto the order — but drops Add/Edit, and
- * disappears entirely while there's nothing attached.
+ * `readOnly` means a rider is handling this delivery (booked, or bookable right
+ * now) — manual courier entry isn't theirs to do, so the card keeps showing
+ * what the buyer sees (the link and number a booking mirrored onto the order)
+ * but drops Add/Edit, and disappears entirely while there's nothing attached.
+ *
+ * It is deliberately NOT "the vendor uses Lalamove": when no rider can be
+ * booked — a Pro→Starter downgrade leaves `deliveryBooking.enabled` true and
+ * `blockReason` permanently `plan_gated`, and a legacy pinless address or a
+ * phone-less counter order does the same per order — the parcel that actually
+ * went out still needs its consignment number recorded. Hiding this card there
+ * would leave the store with no way to enter tracking at all, which is the
+ * downgrade-never-traps-the-seller line the rest of the codebase holds.
  */
 export function ShipmentTrackingCard({
 	order,

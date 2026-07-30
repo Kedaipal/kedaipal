@@ -280,16 +280,21 @@ chargeable pickup).
     `Book a rider` CTA that closes the prompt and bumps `bookRequestToken`, which
     `BookDeliveryCard` watches to open its own quote→confirm dialog through the same
     bookability guards. The card sits far down the page, so the prompt is the second,
-    eye-level entrance to one flow — plus a quiet
-    `Mark as {stage} without a rider` link, because dropping an order off yourself is
-    real and `Book a rider` must never be the only way out.
+    eye-level entrance to one flow — plus a quiet (`variant="link"`, still `h-11`)
+    `Mark as {stage} without a rider` **footer button**, because dropping an order off
+    yourself is real, `Book a rider` must never be the only way out, and the only way
+    out can't be a text link inside a sentence (tap-target rule 1).
   - **Rider not bookable** (plan downgrade, keys cleared, missing phone, legacy
     address with no map pin): the prompt says so in the seller's words via the shared
     `dispatchBlockCopy` (moved out of `book-delivery-card.tsx` into
-    `src/lib/dispatch-block.ts` so the card and the prompt can't drift), names the fix
-    path, and offers the choice the owner asked for — Cancel to go fix it, or
-    `Mark as {stage} anyway` for an order going out another way. Never a silent
-    advance, never a manual-courier fallback.
+    `src/lib/dispatch-block.ts` so the card and the prompt can't drift — a
+    `Record<DispatchBlock, string>`, so a new block reason is a compile error, not a
+    silent fallback), names the fix path, and offers the choice the owner asked for —
+    Cancel to go fix it, or `Mark as {stage} anyway` for an order going out another
+    way. Never a silent advance, and still no courier picklist **in the prompt**: the
+    copy points at the Shipment tracking card below, which is where an add-later
+    consignment number has always belonged and which stays editable in exactly this
+    state (see the card bullet).
   - **Server stays permissive** (deliberate): `advanceToStage` / `setShipmentTracking`
     still accept courier fields from a rider vendor. Nothing is at risk if they arrive,
     a hard reject would fight the Lalamove webhook that writes `carrierTrackingUrl`
@@ -299,10 +304,23 @@ chargeable pickup).
   Tracking" card): shows courier + mono tracking number with one-tap copy + "Track with
   courier" link; edit mode reuses the same fieldset ("Other" adds free-text name +
   optional pasted link). Legacy URL-only rows (incl. Lalamove links) still render.
-  For a **rider vendor** the card is `readOnly`: it still shows what the buyer sees
-  (the number/link a booking mirrored onto the order, copyable) but drops Add/Edit, and
-  renders **nothing at all** while no tracking is attached — dispatch for them lives in
-  the Lalamove Delivery card above.
+  The card is `readOnly` while **a rider is actually handling the delivery** —
+  `lalamoveVendor && (blockReason === null || hasActiveRiderBooking)`: it still shows
+  what the buyer sees (the number/link a booking mirrored onto the order, copyable) but
+  drops Add/Edit, and renders **nothing at all** while no tracking is attached, since
+  dispatch for them lives in the Lalamove Delivery card above.
+  **Deliberately not keyed on vendor type alone** (PR #154 review): nothing clears
+  `deliveryBooking.enabled` on a Pro→Starter downgrade, `PLAN_FEATURES.delivery` gates
+  only *enabling*, and the Lalamove checkout quote is all-tier — so a downgraded store
+  keeps taking rider-priced orders with `blockReason` permanently `plan_gated`. Since
+  `setShipmentTracking` has no other caller in `src/`, a vendor-type gate would leave
+  that store with **no way to record a consignment number anywhere**, silently and
+  store-wide. Same shape per-order for `no_coords` (legacy pinless address) and
+  `no_buyer_phone` (anonymous counter order). The "a rider vendor never picks a
+  courier" thesis holds while a rider is on the table; the moment the product says it
+  can't book one, the parcel that went out instead still needs its number — the
+  downgrade-never-traps-the-seller line `chargeablePickup`/`categories`/`radiusDelivery`
+  already hold.
 
 ### Buyer surfaces — deliberately NO new WhatsApp sends
 

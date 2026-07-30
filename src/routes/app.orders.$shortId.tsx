@@ -1249,8 +1249,19 @@ function OrderDetailRoute() {
 			) : null}
 
 			{/* Shipment tracking — manual courier + tracking number (86eyehvk4) */}
+			{/* Read-only only while a rider is actually handling this delivery
+			    (booked, or bookable right now). If booking is blocked — Starter
+			    downgrade, pinless legacy address, phone-less counter order — the
+			    parcel that went out instead still needs its consignment number, so
+			    the manual entry stays. See ShipmentTrackingCard. */}
 			{showCarrierSection ? (
-				<ShipmentTrackingCard order={order} readOnly={lalamoveVendor} />
+				<ShipmentTrackingCard
+					order={order}
+					readOnly={
+						lalamoveVendor &&
+						(dispatchInfo?.blockReason === null || hasActiveRiderBooking)
+					}
+				/>
 			) : null}
 
 			{order.mockupStatus !== undefined ? <MockupCard order={order} /> : null}

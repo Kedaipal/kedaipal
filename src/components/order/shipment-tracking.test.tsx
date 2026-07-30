@@ -88,9 +88,14 @@ describe("MarkShippedDialog", () => {
 	it("keeps a plain advance reachable for a rider vendor not booking today", async () => {
 		const { onConfirm, onBookRider } = renderDialog({ lalamoveVendor: true });
 
-		fireEvent.click(
-			screen.getByRole("button", { name: "Mark as Shipped without a rider" }),
-		);
+		const shipWithout = screen.getByRole("button", {
+			name: "Mark as Shipped without a rider",
+		});
+		// A real footer button, not a text link inside a sentence: on the bookable
+		// arm it's the only way to move the order, so it owes the ≥44px target.
+		expect(shipWithout.className).toContain("h-11");
+
+		fireEvent.click(shipWithout);
 
 		// Advances with no shipment fields — there's no courier form to read.
 		await waitFor(() => expect(onConfirm).toHaveBeenCalledWith({}));
@@ -131,6 +136,14 @@ describe("ShipmentTrackingCard", () => {
 			/>,
 		);
 		expect(screen.getByRole("button", { name: "Edit" })).toBeTruthy();
+	});
+
+	// The trap this guards: readOnly keyed on vendor type alone would leave a
+	// downgraded (permanently plan_gated) rider store with NO way to record a
+	// consignment number anywhere — setShipmentTracking has no other caller.
+	it("keeps manual entry when no rider is handling the delivery", () => {
+		render(<ShipmentTrackingCard order={{ _id: ORDER_ID }} readOnly={false} />);
+		expect(screen.getByRole("button", { name: "Add tracking" })).toBeTruthy();
 	});
 
 	it("shows a rider vendor what the buyer sees, with no manual entry", () => {
