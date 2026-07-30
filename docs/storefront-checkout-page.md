@@ -17,12 +17,14 @@ see past. A route fixes the architecture, not just the paint:
 - **Desktop** gets a two-column layout (`lg:`): numbered form sections left,
   **sticky receipt summary** right with the CTA under the money it commits to.
 - **Mobile** stays single-column: summary first (this page IS the review),
-  then the sections, with a **sticky bottom bar** (live total + CTA) always
-  in thumb reach. Sticky, not fixed: `position: fixed; bottom: 0` pins to
-  the *layout* viewport, so a phone browser's expanding bottom toolbar
-  (scroll-up gesture) covered the bar's lower edge — `sticky bottom-0` is in
-  flow, tracks the *visual* viewport through toolbar changes, and needs no
-  clearance padding under the page (design-system rule #4).
+  then the sections, with a **fixed bottom bar** (live total + CTA) always in
+  thumb reach — same `fixed inset-x-0 bottom-0` as `CartBar` and the product
+  page's purchase bar, so the powered-by footer floats above it exactly like
+  every other storefront page (design-system rule #4). An earlier pass tried
+  `sticky` here on the theory that a form needs an in-flow bar; tested on a
+  phone it just welded the badge to the bar and made checkout the odd page
+  out. The route reserves the bar's **measured** height
+  (`--storefront-bar-h`), so there's no dead space under the badge.
 - Browser **back** returns to the store; **refresh** keeps the buyer's place
   (the cart is localStorage, keyed per retailer); an abandoned desktop cart
   can be returned to via URL. `noindex` — a checkout is transactional.
@@ -117,11 +119,47 @@ its button (label now just "Checkout") navigates to the route. The product
 detail sheet's "Go to checkout" exit (86eybhqye) navigates there too, via the
 routes' `onRequestCheckout` seam.
 
+## Page chrome — the same header and footer as everywhere else
+
+Checkout renders the shared **`StorefrontHeader`** (cover, logo, store name,
+founding badge, blurb) and the **`StorefrontFooter`** badge, so all four
+storefront surfaces — store home, category, product, checkout — are the same
+page shape. It shipped without a header first and read as bare and off-brand
+next to the others.
+
+The usual e-commerce instinct is the opposite: strip the chrome on checkout so
+nothing tempts the buyer out of the funnel. That rule is about **payment**
+pages, where an exit costs a captured card. Nothing is charged here — checkout
+composes a WhatsApp message — and the only way out is back to the store, which
+keeps the cart and may well come back with more in it. The seller's brand at
+the moment of ordering is worth more than the leak it doesn't cause.
+
+Two layout consequences:
+
+- The container drops its own `px` (the header is full-bleed — its cover image
+  must reach the edges) and each section below owns its padding, exactly like
+  the other three routes.
+- It stays `max-w-5xl` where the others are `max-w-6xl`. Capping the *content*
+  narrower than the header instead centres the two on different axes, leaving
+  the brand block indented 64px off the page it heads — which reads as a bug. A
+  slightly narrower header is the cheaper inconsistency, and suits a task page.
+
+**Heading rule (applies to every storefront page):** each page's `<h1>` is its
+own subject — store name on the home, category name, product name, "Checkout".
+`StorefrontHeader` takes `asPageHeading` (default `true`, for the home) and
+renders the store name as a `<p>` on the subpages. Without it, adding the
+header here would have given checkout two `<h1>`s, and every page in the store
+would have shared one duplicated heading. Purely semantic — identical styling
+either way.
+
+The bottom CTA bar's stacking against the footer (fixed bar, measured
+clearance) is written up once in
+[`storefront-product-pages.md`](./storefront-product-pages.md#the-bottom-bar-and-the-footer).
+
 ## Follow-ups (PR2 / PR3 of 86eybrhrt)
 
-- **PR2** — URL-addressable product detail (`/{slug}/p/{productSlug}`): sheet
-  on mobile, two-column page on desktop, shareable in WhatsApp, per-product
-  SSR/OG.
+- **PR2** — URL-addressable product detail (`/{slug}/p/{productSlug}`) —
+  **built**, see [`storefront-product-pages.md`](./storefront-product-pages.md).
 - **PR3** — landing merchandising (filter chips, featured row, 4-col desktop
   grid).
 - The empty-cart checkout state links back to the store; a "resume checkout"

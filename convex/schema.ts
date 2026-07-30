@@ -366,6 +366,14 @@ export default defineSchema({
 		// separate narrow migration. See docs/product-variants.md §5.
 		sku: v.optional(v.string()),
 		name: v.string(),
+		// URL slug for the public product page — /$slug/p/<productSlug>
+		// (86eybrhrt PR2). Auto-generated from the name at create (never a seller
+		// input), unique per retailer, and STABLE across renames so shared
+		// WhatsApp links keep working. Optional during the widen: legacy rows are
+		// filled by products.backfillProductSlugs; reads fall back to the in-place
+		// sheet when absent. Archived/hidden products KEEP their slug (restoring
+		// one must not find its URL stolen).
+		slug: v.optional(v.string()),
 		// Product-level rich text rendered as sanitized markdown on the storefront
 		// (specs + "what's included"). NOT the home for store-wide FAQ.
 		description: v.optional(v.string()),
@@ -435,7 +443,8 @@ export default defineSchema({
 	})
 		.index("by_retailer", ["retailerId"])
 		.index("by_retailer_active", ["retailerId", "active"])
-		.index("by_retailer_sku", ["retailerId", "sku"]),
+		.index("by_retailer_sku", ["retailerId", "sku"])
+		.index("by_retailer_slug", ["retailerId", "slug"]),
 
 	/**
 	 * First-class sellable unit. Every product resolves to ≥1 variant — a

@@ -3,7 +3,6 @@ import {
 	Link,
 	notFound,
 	redirect,
-	useNavigate,
 } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import { ArrowLeft } from "lucide-react";
@@ -37,8 +36,8 @@ interface CategoryLoaderData {
  * Nested storefront category page — /$slug/c/$categorySlug. The `$slug_`
  * filename (pathless-parent underscore) gives the URL prefix WITHOUT nesting
  * under $slug.tsx, which is a leaf route with no <Outlet/>. Shares the home
- * page's cart (useCart is keyed per retailerId in localStorage), cards, detail
- * sheet and checkout — only the product set is scoped to the category.
+ * page's cart (useCart is keyed per retailerId in localStorage), cards, product
+ * pages and checkout — only the product set is scoped to the category.
  */
 export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 	loader: async ({ params }): Promise<CategoryLoaderData> => {
@@ -194,7 +193,6 @@ function CategorySkeleton() {
 
 function CategoryRoute() {
 	const { slug, categorySlug } = Route.useParams();
-	const navigate = useNavigate();
 	// Live queries keep the page reactive after the SSR'd loader response.
 	const result = useQuery(api.retailers.getRetailerBySlug, { slug });
 	const retailer = result?.status === "ok" ? result.retailer : undefined;
@@ -217,7 +215,7 @@ function CategoryRoute() {
 		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-20">
 			{/* Same brand header as the store home (cover/logo/name) — the buyer
 			    never loses the sense of whose store they're in. */}
-			<StorefrontHeader retailer={retailer} />
+			<StorefrontHeader retailer={retailer} asPageHeading={false} />
 
 			{/* Category identity: a way back, then the category's own name + blurb. */}
 			<div className="flex flex-col gap-2 px-5 pt-4 lg:px-8">
@@ -230,9 +228,11 @@ function CategoryRoute() {
 					All products
 				</Link>
 				<div className="flex flex-col gap-1">
-					<h2 className="font-heading text-2xl font-extrabold leading-tight tracking-tight">
+					{/* This page's own subject, so it owns the <h1>; the brand header
+					    above renders the store name as plain text here. */}
+					<h1 className="font-heading text-2xl font-extrabold leading-tight tracking-tight">
 						{page.category.name}
-					</h2>
+					</h1>
 					{page.category.description ? (
 						<p className="line-clamp-3 whitespace-pre-line text-sm text-muted-foreground">
 							{page.category.description}
@@ -247,9 +247,6 @@ function CategoryRoute() {
 					cart={cart}
 					products={page.products}
 					storeSlug={retailer.slug}
-					onRequestCheckout={() =>
-						navigate({ to: "/$slug/checkout", params: { slug: retailer.slug } })
-					}
 				/>
 			</section>
 

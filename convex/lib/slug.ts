@@ -37,6 +37,29 @@ export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
 	"www",
 ]);
 
+/**
+ * Best-effort slugification of free text (store names, product names):
+ * - strip diacritics (NFKD + combining-mark removal)
+ * - lowercase
+ * - non-alphanumeric → `-`
+ * - collapse repeated dashes
+ * - trim leading/trailing dashes
+ * - truncate to 32 chars (dash-safe)
+ * Mirrors `src/lib/slug.ts` exactly.
+ */
+export function slugify(input: string): string {
+	const normalized = input
+		.normalize("NFKD")
+		.replace(/[\u0300-\u036f]/g, "")
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/-+/g, "-")
+		.replace(/^-|-$/g, "");
+
+	if (normalized.length <= 32) return normalized;
+	return normalized.slice(0, 32).replace(/-$/, "");
+}
+
 export const SLUG_MIN = 3;
 export const SLUG_MAX = 32;
 const SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;

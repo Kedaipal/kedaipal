@@ -40,6 +40,7 @@ import { Route as AppCustomersCustomerIdRouteImport } from './routes/app.custome
 import { Route as AppAdminWabaRouteImport } from './routes/app.admin.waba'
 import { Route as AppAdminSellersRouteImport } from './routes/app.admin.sellers'
 import { Route as AppAdminBillingRouteImport } from './routes/app.admin.billing'
+import { Route as SlugPProductSlugRouteImport } from './routes/$slug_.p.$productSlug'
 import { Route as SlugCCategorySlugRouteImport } from './routes/$slug_.c.$categorySlug'
 
 const TermsRoute = TermsRouteImport.update({
@@ -197,6 +198,11 @@ const AppAdminBillingRoute = AppAdminBillingRouteImport.update({
   path: '/admin/billing',
   getParentRoute: () => AppRoute,
 } as any)
+const SlugPProductSlugRoute = SlugPProductSlugRouteImport.update({
+  id: '/$slug_/p/$productSlug',
+  path: '/$slug/p/$productSlug',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SlugCCategorySlugRoute = SlugCCategorySlugRouteImport.update({
   id: '/$slug_/c/$categorySlug',
   path: '/$slug/c/$categorySlug',
@@ -224,6 +230,7 @@ export interface FileRoutesByFullPath {
   '/track/$token': typeof TrackTokenRoute
   '/app/': typeof AppIndexRoute
   '/$slug/c/$categorySlug': typeof SlugCCategorySlugRoute
+  '/$slug/p/$productSlug': typeof SlugPProductSlugRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
   '/app/admin/sellers': typeof AppAdminSellersRoute
   '/app/admin/waba': typeof AppAdminWabaRoute
@@ -257,6 +264,7 @@ export interface FileRoutesByTo {
   '/track/$token': typeof TrackTokenRoute
   '/app': typeof AppIndexRoute
   '/$slug/c/$categorySlug': typeof SlugCCategorySlugRoute
+  '/$slug/p/$productSlug': typeof SlugPProductSlugRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
   '/app/admin/sellers': typeof AppAdminSellersRoute
   '/app/admin/waba': typeof AppAdminWabaRoute
@@ -292,6 +300,7 @@ export interface FileRoutesById {
   '/track/$token': typeof TrackTokenRoute
   '/app/': typeof AppIndexRoute
   '/$slug_/c/$categorySlug': typeof SlugCCategorySlugRoute
+  '/$slug_/p/$productSlug': typeof SlugPProductSlugRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
   '/app/admin/sellers': typeof AppAdminSellersRoute
   '/app/admin/waba': typeof AppAdminWabaRoute
@@ -328,6 +337,7 @@ export interface FileRouteTypes {
     | '/track/$token'
     | '/app/'
     | '/$slug/c/$categorySlug'
+    | '/$slug/p/$productSlug'
     | '/app/admin/billing'
     | '/app/admin/sellers'
     | '/app/admin/waba'
@@ -361,6 +371,7 @@ export interface FileRouteTypes {
     | '/track/$token'
     | '/app'
     | '/$slug/c/$categorySlug'
+    | '/$slug/p/$productSlug'
     | '/app/admin/billing'
     | '/app/admin/sellers'
     | '/app/admin/waba'
@@ -395,6 +406,7 @@ export interface FileRouteTypes {
     | '/track/$token'
     | '/app/'
     | '/$slug_/c/$categorySlug'
+    | '/$slug_/p/$productSlug'
     | '/app/admin/billing'
     | '/app/admin/sellers'
     | '/app/admin/waba'
@@ -425,6 +437,7 @@ export interface RootRouteChildren {
   SignUpSplatRoute: typeof SignUpSplatRoute
   TrackTokenRoute: typeof TrackTokenRoute
   SlugCCategorySlugRoute: typeof SlugCCategorySlugRoute
+  SlugPProductSlugRoute: typeof SlugPProductSlugRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -646,6 +659,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAdminBillingRouteImport
       parentRoute: typeof AppRoute
     }
+    '/$slug_/p/$productSlug': {
+      id: '/$slug_/p/$productSlug'
+      path: '/$slug/p/$productSlug'
+      fullPath: '/$slug/p/$productSlug'
+      preLoaderRoute: typeof SlugPProductSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/$slug_/c/$categorySlug': {
       id: '/$slug_/c/$categorySlug'
       path: '/$slug/c/$categorySlug'
@@ -714,6 +734,7 @@ const rootRouteChildren: RootRouteChildren = {
   SignUpSplatRoute: SignUpSplatRoute,
   TrackTokenRoute: TrackTokenRoute,
   SlugCCategorySlugRoute: SlugCCategorySlugRoute,
+  SlugPProductSlugRoute: SlugPProductSlugRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

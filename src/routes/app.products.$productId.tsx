@@ -310,9 +310,13 @@ function EditProductRoute() {
 				}}
 			/>
 
-			{/* The storefront's own product sheet, buyer-identical, fed the LIVE
-			    draft. Cart wiring is stubbed: quantity steppers and option pills
-			    work, but "Add to cart" just explains it's a preview. */}
+			{/* Buyer-eye preview of the LIVE draft, composed from the same
+			    product-purchase.tsx pieces the buyer's product page uses — so what
+			    the seller previews is what the buyer gets. A sheet (not the page)
+			    because a draft has no public URL to navigate to and the preview
+			    shouldn't eject the seller from the editor. Cart wiring is stubbed:
+			    quantity steppers and option pills work, but "Add to cart" just
+			    explains it's a preview. */}
 			<ProductDetailSheet
 				product={previewProduct as never}
 				retailerId={product.retailerId}
