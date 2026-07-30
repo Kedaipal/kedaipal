@@ -255,10 +255,11 @@ function ProductRoute() {
 	}
 
 	return (
-		// No page padding: the shared header is full-bleed (its cover image must
-		// reach the edges, same as the store home + category pages); each section
-		// below owns its own px.
-		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col">
+		// No horizontal page padding: the shared header is full-bleed (its cover
+		// image must reach the edges, same as the store home + category pages);
+		// each section below owns its own px. pb-64 reserves room for the FIXED
+		// mobile purchase bar so it can't cover the footer (store-home pattern).
+		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-64 lg:pb-10">
 			<ProductPageView
 				product={product}
 				retailerId={retailer._id}

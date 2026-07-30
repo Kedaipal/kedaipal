@@ -119,13 +119,16 @@ export function ProductPageView({
 						</div>
 					) : null}
 
-					{/* Purchase controls — sticky bottom bar on mobile (thumb reach),
-					    in-flow under the buy box on desktop. One block, two homes.
-					    STICKY, not fixed: fixed bottom-0 pins to the LAYOUT viewport,
-					    so a phone browser's expanding bottom toolbar covers the bar's
-					    lower edge — sticky tracks the VISUAL viewport (same fix as the
-					    checkout bar; design-system rule #4). */}
-					<div className="sticky bottom-0 z-30 -mx-5 mt-4 border-t border-border bg-background/95 px-5 py-4 shadow-[0_-12px_30px_rgba(15,23,42,0.08)] backdrop-blur pb-[max(1rem,env(safe-area-inset-bottom))] lg:static lg:z-auto lg:mx-0 lg:mt-6 lg:border-t-0 lg:bg-transparent lg:p-0 lg:shadow-none lg:backdrop-blur-none">
+					{/* Purchase controls — fixed bottom bar on mobile (thumb reach),
+					    in-flow under the buy box on desktop (`lg:static`). One block,
+					    two homes.
+
+					    FIXED on mobile, matching the storefront CartBar: it stays OUT
+					    of document flow, so the powered-by footer renders as page
+					    content ABOVE it, same as the store home. Sticky would sit in
+					    flow and push the footer below the bar. The route reserves
+					    matching bottom clearance. */}
+					<div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 px-5 py-4 shadow-[0_-12px_30px_rgba(15,23,42,0.08)] backdrop-blur pb-[max(1rem,env(safe-area-inset-bottom))] lg:static lg:z-auto lg:mt-6 lg:border-t-0 lg:bg-transparent lg:p-0 lg:shadow-none lg:backdrop-blur-none">
 						<div className="mx-auto max-w-xl lg:mx-0 lg:max-w-none">
 							<TotalPreviewRow pp={pp} />
 							<div className="grid gap-3 sm:grid-cols-[auto_1fr] sm:items-center">

@@ -1041,15 +1041,17 @@ export function CheckoutPage({
 				</div>
 			</div>
 
-			{/* Mobile sticky CTA — total + send, always in thumb reach. Desktop
-			    uses the summary card's own footer instead. STICKY, not fixed: a
-			    fixed bottom-0 element pins to the LAYOUT viewport, so a phone
-			    browser's expanding bottom toolbar (scroll-up gesture) covers the
-			    bar's lower edge; sticky is laid out in flow and tracks the VISUAL
-			    viewport, so it rides toolbar changes cleanly — and needs no
-			    clearance padding under the page. (The design system's rule #4
-			    prescribes sticky for exactly this.) */}
-			<div className="sticky bottom-0 z-30 -mx-5 mt-6 border-t border-border bg-background/95 px-5 py-3 shadow-[0_-12px_30px_rgba(15,23,42,0.08)] backdrop-blur pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:hidden">
+			{/* Mobile CTA bar — total + send, always in thumb reach. Desktop uses
+			    the summary card's own footer instead.
+
+			    FIXED, matching the storefront CartBar exactly (cart-bar.tsx):
+			    fixed keeps the bar OUT of document flow, so the powered-by footer
+			    renders as ordinary page content ABOVE it — the same stacking the
+			    store home has. A sticky bar sits IN flow, which pushes the footer
+			    below it and makes the badge look welded to the bar. The route
+			    reserves matching bottom clearance so the bar never covers the
+			    footer. */}
+			<div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 px-5 py-3 shadow-[0_-12px_30px_rgba(15,23,42,0.08)] backdrop-blur pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:hidden">
 				<div className="mx-auto flex max-w-xl flex-col gap-2">
 					<form.Subscribe
 						selector={(s) => ({

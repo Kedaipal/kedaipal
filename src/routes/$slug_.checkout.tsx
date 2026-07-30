@@ -115,8 +115,11 @@ function CheckoutRoute() {
 	}
 
 	return (
-		// No pb clearance for the CTA bar — it's sticky (in flow), not fixed.
-		<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col px-5 pb-6 pt-4 lg:px-8 lg:pb-10 lg:pt-6">
+		// pb-64 reserves room for the FIXED mobile CTA bar (out of flow, so it
+		// would otherwise cover the footer). Same trick as the store home's pb-20
+		// under its CartBar — just taller, because this bar carries the total,
+		// CTA, reassurance and privacy lines. Desktop has no fixed bar.
+		<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col px-5 pb-64 pt-4 lg:px-8 lg:pb-10 lg:pt-6">
 			<header className="flex items-center gap-3">
 				<Link
 					to="/$slug"
