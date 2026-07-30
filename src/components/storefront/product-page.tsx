@@ -20,7 +20,6 @@ import {
 	TotalPreviewRow,
 	useProductPurchase,
 } from "./product-purchase";
-import { StorefrontFooter } from "./storefront-footer";
 import {
 	StorefrontHeader,
 	type StorefrontHeaderRetailer,
@@ -144,20 +143,6 @@ export function ProductPageView({
 								currency={product.currency}
 								onCheckout={goToCheckout}
 							/>
-						</div>
-						{/* Mobile only, and nested INSIDE the sticky bar rather than a
-						    page-level sibling after it — see StorefrontFooter's
-						    `edgeToEdge` doc: a sticky-bottom bar can render pinned to
-						    the viewport before the user has scrolled to the document's
-						    true end, so anything placed after it separately shows a
-						    phantom gap until that exact scroll position. Nesting it
-						    here means there's no "after" to fall out of sync with.
-						    Desktop's copy is the plain page-level footer below (this
-						    bar is `lg:static`, in-flow, so no sticky artifact there —
-						    and this instance is hidden on desktop to avoid a duplicate
-						    squeezed into the narrower details column). */}
-						<div className="lg:hidden">
-							<StorefrontFooter compact edgeToEdge />
 						</div>
 					</div>
 				</div>

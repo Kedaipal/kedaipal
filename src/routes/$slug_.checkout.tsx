@@ -146,14 +146,9 @@ function CheckoutRoute() {
 				/>
 			</div>
 
-			{/* Desktop only — mobile's copy is nested inside CheckoutPage's own
-			    sticky CTA bar (see checkout-form.tsx) so it can never show a gap
-			    against the sticky-positioned bar above it. Desktop has no sticky
-			    bar (the CTA sits in-flow in the summary card), so a plain
-			    page-level footer here is exactly right. */}
-			<div className="hidden lg:block">
-				<StorefrontFooter compact />
-			</div>
+			{/* Direct flex child so its `mt-auto` anchors it to the bottom of the
+			    page — same placement as the store home and category pages. */}
+			<StorefrontFooter compact />
 		</div>
 	);
 }
