@@ -318,6 +318,14 @@ function TrackingRoute() {
 	);
 	const config = statusConfig[order.status];
 	const isCancelled = order.status === "cancelled";
+	// Pending-only, deliberately — and that now excludes fee-pending orders,
+	// since the confirmation push commits them as `confirmed` at create
+	// (86eyfq0w5). Locked call (Zaki, 31 Jul): a `deliveryFeePending` order is
+	// one the SELLER is actively pricing (often alongside a mockup), so letting
+	// the buyer move the destination underneath would invalidate the quote
+	// they're mid-way through settling. Out-of-range buyers go through the
+	// store ("Contact the store to change this address"), not a silent
+	// re-price. Don't "fix" this by widening the gate without re-deciding it.
 	const canEditAddress = order.status === "pending" && !isSelfCollect;
 	const paymentStatus = (order.paymentStatus ?? "unpaid") as PaymentStatus;
 	const paymentConfig = getPaymentConfig(paymentStatus);
@@ -478,6 +486,12 @@ function TrackingRoute() {
 						ms={order.retailerLocale === "ms"}
 						waPhone={order.customer.waPhone}
 					/>
+				) : order.confirmationPushStatus === "deferred" &&
+					order.status === "confirmed" ? (
+					// Confirmed-only, like the `sent` arm: the card promises a future
+					// message, which is false on a cancelled order (belt — cancel also
+					// clears the stamp) and stale noise once fulfilment moves on.
+					<PushDeferredCard ms={order.retailerLocale === "ms"} />
 				) : order.confirmationPushStatus === "sent" &&
 					order.status === "confirmed" ? (
 					<ConfirmationSentCard
@@ -1218,6 +1232,31 @@ function ConfirmationSentCard({
 					{ms ? "Buka WhatsApp" : "Open WhatsApp"}
 				</a>
 			</Button>
+		</section>
+	);
+}
+
+/**
+ * Order committed but its price isn't final yet (86eyfq0w5) — a mockup quote
+ * or an arranged delivery fee is outstanding, so the WhatsApp confirmation
+ * (whose template states the total) deliberately waits. Say so, or the
+ * checkout promise of "confirmation lands in your WhatsApp" looks broken.
+ * The mockup/fee sections further down the page carry the actual next step.
+ */
+function PushDeferredCard({ ms }: { ms: boolean }) {
+	return (
+		<section className="mt-6 flex items-center gap-3 rounded-2xl border border-border bg-card p-4">
+			<CheckCircle className="size-5 shrink-0 text-accent" />
+			<div className="min-w-0 flex-1">
+				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+					{ms ? "Pesanan diterima" : "Order placed"}
+				</p>
+				<p className="text-sm">
+					{ms
+						? "Kami akan hantar pengesahan WhatsApp anda sebaik sahaja harga disahkan."
+						: "We'll send your WhatsApp confirmation as soon as your price is confirmed."}
+				</p>
+			</div>
 		</section>
 	);
 }

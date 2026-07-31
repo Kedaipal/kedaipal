@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { todayMytMidnight } from "./lib/fulfilmentDate";
@@ -5703,114 +5703,351 @@ describe("orders — buyer repairs their number after a failed push (86eyf1rck)"
 	});
 });
 
-describe("orders — push path skips orders whose total isn't final (86eyf1rck)", () => {
+describe("orders — deferred push for non-final totals (86eyfq0w5)", () => {
+	// Fake timers: scheduled actions must NOT auto-fire (the suite asserts WHAT
+	// was scheduled via _scheduled_functions, then runs actions manually).
+	beforeEach(() => {
+		vi.useFakeTimers();
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		process.env.WHATSAPP_ACCESS_TOKEN = "test-token";
+		process.env.WHATSAPP_PHONE_NUMBER_ID = "test-phone-id";
+	});
 	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
 		delete process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE;
 	});
 
-	test("a mockup-gated order stays pending — the template would announce a price that hasn't been quoted", async () => {
-		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
-		const t = setup();
-		const retailer = await seedRetailer(t, USER_A);
-		const asA = t.withIdentity({ subject: USER_A });
-		// Price-on-quote custom line: price 0 until the seller quotes the mockup.
-		const productId = await asA.mutation(api.products.create, {
-			retailerId: retailer._id,
-			name: "Custom cake",
-			currency: "MYR",
-			imageStorageIds: [],
-			sortOrder: 0,
-			variants: [
-				{ optionValues: [], price: 8000, onHand: 5 },
-				{
-					optionValues: [],
-					price: 0,
-					onHand: 0,
-					isCustom: true,
-					customLabel: "Bespoke",
-					requiresProof: true,
-				},
-			],
+	/** Names of not-yet-run scheduled functions matching `needle`. */
+	async function scheduled(t: ReturnType<typeof setup>, needle: string) {
+		return t.run(async (ctx) => {
+			const rows = await ctx.db.system.query("_scheduled_functions").collect();
+			return rows
+				.filter(
+					(r) => r.state.kind === "pending" && r.name.includes(needle),
+				)
+				.map((r) => r.name);
 		});
-		const variantId = await t.run(async (ctx) => {
-			const rows = await ctx.db
-				.query("productVariants")
-				.withIndex("by_product", (q) => q.eq("productId", productId))
-				.collect();
-			const custom = rows.find((r) => r.isCustom);
-			if (!custom) throw new Error("no custom variant");
-			return custom._id;
+	}
+
+	function installWamidFetchMock(wamid: string) {
+		const calls: Array<{ url: string; body: unknown }> = [];
+		const original = globalThis.fetch;
+		globalThis.fetch = vi.fn(async (url: unknown, init?: RequestInit) => {
+			const body = init?.body ? JSON.parse(init.body as string) : null;
+			calls.push({ url: String(url), body });
+			if (String(url).includes("graph.facebook.com")) {
+				return new Response(JSON.stringify({ messages: [{ id: wamid }] }), {
+					status: 200,
+				});
+			}
+			return new Response("{}", { status: 200 });
+		}) as unknown as typeof fetch;
+		return {
+			waCalls: () => calls.filter((c) => c.url.includes("graph.facebook.com")),
+			restore: () => {
+				globalThis.fetch = original;
+			},
+		};
+	}
+
+	async function orderIdOf(t: ReturnType<typeof setup>, shortId: string) {
+		return t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			if (!o) throw new Error("order missing");
+			return o._id;
+		});
+	}
+
+	/** Storefront order for a requiresProof (price-on-quote gate) product. */
+	async function mockupOrder(
+		t: ReturnType<typeof setup>,
+		opts: { feePending?: boolean } = {},
+	) {
+		const retailer = await seedRetailer(t, USER_A);
+		if (opts.feePending) {
+			await t.run(async (ctx) => {
+				await ctx.db.patch(retailer._id, {
+					businessAddress: {
+						label: "Kedai, Semenyih, Selangor",
+						latitude: 2.9073303,
+						longitude: 101.8333674,
+					},
+					deliveryConfig: {
+						mode: "radius",
+						bands: [{ maxKm: 5, fee: 500 }],
+						outOfRange: "arrange",
+					},
+				});
+			});
+		}
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			requiresProof: true,
+			blockWhenOutOfStock: false,
 		});
 		const result = await t.mutation(api.orders.create, {
 			retailerId: retailer._id,
-			items: [{ variantId, quantity: 1 }],
+			items: [{ productId, quantity: 1 }],
 			currency: "MYR",
 			channel: "whatsapp",
 			customer: { name: "Ali", waPhone: "60123456789" },
 			deliveryAddress: validAddress,
 		});
+		return { retailer, ...result, orderId: await orderIdOf(t, result.shortId) };
+	}
 
-		expect(result.confirmedAtCreate).toBeUndefined();
-		const order = await t.run(async (ctx) =>
-			ctx.db
-				.query("orders")
-				.withIndex("by_shortId", (q) => q.eq("shortId", result.shortId))
-				.first(),
-		);
-		expect(order?.status).toBe("pending");
+	test("mockup order COMMITS at create (no wa.me anywhere) with the push deferred, not scheduled", async () => {
+		const t = setup();
+		const { orderId, confirmedAtCreate } = await mockupOrder(t);
+		// The bug this ticket kills: this used to fall back to pending + ?send=1.
+		expect(confirmedAtCreate).toBe(true);
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.status).toBe("confirmed");
 		expect(order?.mockupStatus).toBe("pending");
-		// No push scheduled, so no "Total: MYR 0.00" message can go out.
-		expect(order?.confirmationPushStatus).toBeUndefined();
+		expect(order?.confirmationPushStatus).toBe("deferred");
+		// Nothing queued — the price isn't final, so no message may exist yet.
+		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toEqual([]);
 	});
 
-	test("a delivery-fee-pending order stays pending — its total still grows by the arranged fee", async () => {
-		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+	test("fee-pending order commits with the push deferred too", async () => {
+		const t = setup();
+		const { orderId, confirmedAtCreate } = await mockupOrder(t, {
+			feePending: true,
+		});
+		expect(confirmedAtCreate).toBe(true);
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.status).toBe("confirmed");
+		expect(order?.deliveryFeePending).toBe(true);
+		expect(order?.confirmationPushStatus).toBe("deferred");
+		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toEqual([]);
+	});
+
+	test("standard final-total order still pushes at create", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const productId = await seedProduct(t, USER_A, retailer._id);
-		// Radius pricing with "arrange" out-of-range policy, no business address →
-		// the fee can't be resolved at create, so the order lands fee-pending.
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		const orderId = await orderIdOf(t, shortId);
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.confirmationPushStatus).toBe("sending");
+		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toHaveLength(1);
+	});
+
+	test("mockup approval fires the deferred template with the final quoted total — and NOT the free-form prompt", async () => {
+		const t = setup();
+		const { orderId, shortId } = await mockupOrder(t);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.orders.submitMockup, {
+			orderId,
+			storageIds: ["m1"],
+			quotedAmount: 5000,
+		});
+		await t.mutation(api.orders.approveMockup, { token: await tk(t, shortId) });
+
+		// The gate-open transaction CLAIMED the push (deferred → sending) and
+		// scheduled it — not the legacy prompt. The claim being transactional is
+		// the double-send guard: a racing second gate event serializes after
+		// this, sees "sending", and schedules nothing.
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(orderId)))
+				?.confirmationPushStatus,
+		).toBe("sending");
+		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toHaveLength(1);
+		expect(await scheduled(t, "notifyPaymentDue")).toEqual([]);
+
+		const fetchMock = installWamidFetchMock("wamid.DEF1");
+		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, { orderId });
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		const money = `MYR ${((order?.total ?? 0) / 100).toFixed(2)}`;
+		const wa = fetchMock.waCalls();
+		expect(wa).toHaveLength(1);
+		const body = wa[0].body as {
+			type: string;
+			template: {
+				components: Array<{ type: string; parameters: Array<{ text: string }> }>;
+			};
+		};
+		expect(body.type).toBe("template");
+		expect(body.template.components[0].parameters.map((x) => x.text)).toEqual([
+			shortId,
+			"Test Store",
+			money,
+		]);
+		// Quote folded into the announced total.
+		expect(order?.total).toBe(12000 + 5000);
+		expect(order?.confirmationPushStatus).toBe("sent");
+		fetchMock.restore();
+	});
+
+	test("seller waiving the mockup fires the deferred push too", async () => {
+		const t = setup();
+		const { orderId } = await mockupOrder(t);
+		const asA = t.withIdentity({ subject: USER_A });
+		// Waiver needs a submitted mockup + the 48h grace elapsed since
+		// submission — submit, then backdate the submission stamp.
+		await asA.mutation(api.orders.submitMockup, {
+			orderId,
+			storageIds: ["m1"],
+			quotedAmount: 5000,
+		});
 		await t.run(async (ctx) => {
-			await ctx.db.patch(retailer._id, {
-				businessAddress: {
-					label: "Kedai, Semenyih, Selangor",
-					latitude: 2.9073303,
-					longitude: 101.8333674,
-				},
-				deliveryConfig: {
-					mode: "radius",
-					bands: [{ maxKm: 5, fee: 500 }],
-					outOfRange: "arrange",
-				},
+			await ctx.db.patch(orderId, {
+				mockupSubmittedAt: Date.now() - 49 * 3600_000,
 			});
 		});
-		const result = await t.mutation(api.orders.create, {
-			retailerId: retailer._id,
-			items: [{ productId, quantity: 1 }],
-			currency: "MYR",
-			channel: "whatsapp",
-			customer: { name: "Ali", waPhone: "60123456789" },
-			deliveryAddress: validAddress,
-		});
-
-		const order = await t.run(async (ctx) =>
-			ctx.db
-				.query("orders")
-				.withIndex("by_shortId", (q) => q.eq("shortId", result.shortId))
-				.first(),
-		);
-		expect(order?.deliveryFeePending).toBe(true);
-		expect(result.confirmedAtCreate).toBeUndefined();
-		expect(order?.status).toBe("pending");
-		expect(order?.confirmationPushStatus).toBeUndefined();
+		await asA.mutation(api.orders.waiveMockup, { orderId });
+		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toHaveLength(1);
+		expect(await scheduled(t, "notifyPaymentDue")).toEqual([]);
 	});
 
-	test("an ordinary order with a final total still takes the push path", async () => {
-		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+	test("declining the custom item fires the push for the ready-made remainder; custom-only decline cancels and sends nothing", async () => {
+		// Remainder case: custom line + a standard line in one order.
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
-		const productId = await seedProduct(t, USER_A, retailer._id);
-		const result = await t.mutation(api.orders.create, {
+		const customProduct = await seedProduct(t, USER_A, retailer._id, {
+			name: "Custom cake",
+			requiresProof: true,
+			blockWhenOutOfStock: false,
+		});
+		const standardProduct = await seedProduct(t, USER_A, retailer._id, {
+			name: "Brownies box",
+		});
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [
+				{ productId: customProduct, quantity: 1 },
+				{ productId: standardProduct, quantity: 1 },
+			],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		const orderId = await orderIdOf(t, shortId);
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(orderId)))
+				?.confirmationPushStatus,
+		).toBe("deferred");
+		await t.mutation(api.orders.declineMockupItem, {
+			token: await tk(t, shortId),
+		});
+		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toHaveLength(1);
+		expect(await scheduled(t, "notifyPaymentDue")).toEqual([]);
+
+		// Custom-only case: declining everything IS a cancellation — the order's
+		// confirmation must never exist. (The action's cancelled guard is the
+		// second line of defence; here the site simply never schedules it.)
+		const t2 = setup();
+		const { orderId: soloId, shortId: soloShort } = await mockupOrder(t2);
+		await t2.mutation(api.orders.declineMockupItem, {
+			token: await tk(t2, soloShort),
+		});
+		const solo = await t2.run(async (ctx) => ctx.db.get(soloId));
+		expect(solo?.status).toBe("cancelled");
+		expect(solo?.confirmationPushStatus).toBeUndefined();
+		expect(await scheduled(t2, "notifyStorefrontOrderCreated")).toEqual([]);
+	});
+
+	test("double hold (mockup + fee) sends exactly once, after BOTH clear", async () => {
+		const t = setup();
+		const { orderId, shortId } = await mockupOrder(t, { feePending: true });
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.orders.submitMockup, {
+			orderId,
+			storageIds: ["m1"],
+			quotedAmount: 5000,
+		});
+		await t.mutation(api.orders.approveMockup, { token: await tk(t, shortId) });
+
+		// Gate 1 open, gate 2 (fee) still held → the site must NOT claim: the
+		// order stays deferred and nothing is scheduled at all.
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(orderId)))
+				?.confirmationPushStatus,
+		).toBe("deferred");
+		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toEqual([]);
+
+		// Seller sets the fee → BOTH gates now clear inside that transaction →
+		// it wins the claim and schedules the one send.
+		await asA.mutation(api.orders.setDeliveryFee, { orderId, fee: 700 });
+		expect(await scheduled(t, "notifyDeliveryFeeSet")).toEqual([]);
+		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toHaveLength(1);
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(orderId)))
+				?.confirmationPushStatus,
+		).toBe("sending");
+		const fetchMock = installWamidFetchMock("wamid.DBL1");
+		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, { orderId });
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(fetchMock.waCalls()).toHaveLength(1);
+		expect(order?.confirmationPushStatus).toBe("sent");
+		// Announced total = base + quote + fee.
+		expect(order?.total).toBe(12000 + 5000 + 700);
+		fetchMock.restore();
+	});
+
+	test("the action refuses to send while a hold is open, whoever schedules it", async () => {
+		const t = setup();
+		const { orderId } = await mockupOrder(t);
+		// Force the state a bug would need: sending-stamped but the mockup gate
+		// still closed. The claim path can't produce this; the action is the
+		// last line of defence against a wrong "Total: {{3}}" going out.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(orderId, { confirmationPushStatus: "sending" });
+		});
+		const fetchMock = installWamidFetchMock("wamid.HELD");
+		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, { orderId });
+		expect(fetchMock.waCalls()).toHaveLength(0);
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(orderId)))
+				?.confirmationPushStatus,
+		).toBe("sending");
+		fetchMock.restore();
+	});
+
+	test("cancelled while deferred → the confirmation never sends", async () => {
+		const t = setup();
+		const { orderId } = await mockupOrder(t);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.orders.updateStatus, {
+			orderId,
+			status: "cancelled",
+		});
+		// The deferred stamp is cleared on cancel — the "confirmation coming"
+		// promise must not outlive the order (the tracking card keys on it).
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(orderId)))
+				?.confirmationPushStatus,
+		).toBeUndefined();
+		const fetchMock = installWamidFetchMock("wamid.NOPE");
+		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, { orderId });
+		expect(fetchMock.waCalls()).toHaveLength(0);
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(orderId)))
+				?.confirmationPushStatus,
+		).not.toBe("sent");
+		fetchMock.restore();
+	});
+
+	test("legacy flow (env unset) is untouched: pending order, free-form prompt on approval", async () => {
+		delete process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE;
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			requiresProof: true,
+			blockWhenOutOfStock: false,
+		});
+		const { shortId, confirmedAtCreate } = await t.mutation(api.orders.create, {
 			retailerId: retailer._id,
 			items: [{ productId, quantity: 1 }],
 			currency: "MYR",
@@ -5818,7 +6055,24 @@ describe("orders — push path skips orders whose total isn't final (86eyf1rck)"
 			customer: { name: "Ali", waPhone: "60123456789" },
 			deliveryAddress: validAddress,
 		});
-		expect(result.confirmedAtCreate).toBe(true);
+		expect(confirmedAtCreate).toBeUndefined();
+		const orderId = await orderIdOf(t, shortId);
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.status).toBe("pending");
+		expect(order?.confirmationPushStatus).toBeUndefined();
+		// Confirm via the legacy inbound path, then approve — the old prompt runs.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(orderId, { status: "confirmed" });
+		});
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.orders.submitMockup, {
+			orderId,
+			storageIds: ["m1"],
+			quotedAmount: 5000,
+		});
+		await t.mutation(api.orders.approveMockup, { token: await tk(t, shortId) });
+		expect(await scheduled(t, "notifyPaymentDue")).toHaveLength(1);
+		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toEqual([]);
 	});
 });
 
