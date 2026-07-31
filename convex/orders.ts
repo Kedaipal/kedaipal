@@ -373,22 +373,39 @@ export const ensureTrackingToken = internalMutation({
  * Drives the tracking page's state card and the seller-side delivery note.
  */
 /**
- * Flip a deferred push to "sending" the moment its send is genuinely underway
- * (86eyfq0w5). Called by notifyStorefrontOrderCreated AFTER its hold guards
- * pass, so the buyer's page never claims "sending…" while the price is still
- * being negotiated. One-directional: only ever moves deferred → sending.
+ * Transactional claim for a deferred confirmation push (86eyfq0w5). Called by
+ * the gate-open mutations (mockup approve/waive/decline-with-remainder,
+ * setDeliveryFee) in the SAME transaction as their gate patch: it re-reads the
+ * order (ctx.db.get sees this transaction's own writes), and only when NO hold
+ * remains flips deferred → sending and schedules the one send.
+ *
+ * The flip IS the de-dup. Convex mutations are serializable, so exactly one
+ * gate-open transaction can ever observe "deferred" with both holds clear —
+ * a second gate event racing in (seller sets the fee a second after the buyer
+ * approves the mockup) serializes after the winner, sees "sending", and
+ * schedules nothing. That's what makes "double-hold sends exactly once" hold
+ * under concurrency, not just under the tidy orderings tests produce; a claim
+ * inside the ACTION couldn't guarantee it, because two in-flight actions read
+ * their metadata before either outcome commits.
  */
-export const markConfirmationPushSending = internalMutation({
-	args: { orderId: v.id("orders") },
-	handler: async (ctx, { orderId }): Promise<void> => {
-		const order = await ctx.db.get(orderId);
-		if (!order || order.confirmationPushStatus !== "deferred") return;
-		await ctx.db.patch(orderId, {
-			confirmationPushStatus: "sending",
-			updatedAt: Date.now(),
-		});
-	},
-});
+async function claimDeferredPush(
+	ctx: MutationCtx,
+	orderId: Id<"orders">,
+): Promise<void> {
+	const fresh = await ctx.db.get(orderId);
+	if (!fresh || fresh.confirmationPushStatus !== "deferred") return;
+	if (fresh.status === "cancelled") return;
+	if (isMockupGateClosed(fresh) || fresh.deliveryFeePending === true) return;
+	await ctx.db.patch(orderId, {
+		confirmationPushStatus: "sending",
+		updatedAt: Date.now(),
+	});
+	await ctx.scheduler.runAfter(
+		0,
+		internal.whatsapp.notifyStorefrontOrderCreated,
+		{ orderId },
+	);
+}
 
 export const recordConfirmationPush = internalMutation({
 	args: {
@@ -2115,7 +2132,16 @@ export async function applyStatusTransition(
 		courierName: string;
 		trackingNo: string;
 		currentStageId: string | undefined;
+		confirmationPushStatus: undefined;
 	}> = { status, statusChangedAt: now, updatedAt: now };
+	// A deferred push is a PROMISE about the future ("your confirmation is
+	// coming once the price is confirmed") — cancelling the order invalidates
+	// it, so clear the stamp or the buyer's page keeps making a claim about an
+	// order that no longer exists. Terminal states (sent/failed/recovered) are
+	// history, not promises, and survive cancellation untouched.
+	if (status === "cancelled" && order.confirmationPushStatus === "deferred") {
+		patch.confirmationPushStatus = undefined;
+	}
 	// Courier fields describe a parcel shipment, so they only apply to delivery
 	// orders (undefined deliveryMethod reads as delivery, per the rest of the
 	// file). The UI never offers them on self-collect; if they arrive anyway they
@@ -2779,11 +2805,7 @@ export const setDeliveryFee = mutation({
 		// (fee actually resolved, buyer already confirmed, mockup not also
 		// holding — that path prompts via notifyPaymentDue).
 		if (wasPending && order.confirmationPushStatus === "deferred") {
-			await ctx.scheduler.runAfter(
-				0,
-				internal.whatsapp.notifyStorefrontOrderCreated,
-				{ orderId },
-			);
+			await claimDeferredPush(ctx, orderId);
 		} else if (
 			wasPending &&
 			order.status !== "pending" &&
@@ -3353,11 +3375,7 @@ export const approveMockup = mutation({
 		// a doubly-held order sends exactly once). Legacy orders keep the
 		// free-form payment prompt their open chat can actually receive.
 		if (order.confirmationPushStatus === "deferred") {
-			await ctx.scheduler.runAfter(
-				0,
-				internal.whatsapp.notifyStorefrontOrderCreated,
-				{ orderId: order._id },
-			);
+			await claimDeferredPush(ctx, order._id);
 		} else {
 			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyPaymentDue, {
 				orderId: order._id,
@@ -3437,11 +3455,7 @@ export const waiveMockup = mutation({
 		// Push-path orders get their deferred confirmation template (86eyfq0w5);
 		// legacy orders get the free-form payment prompt.
 		if (order.confirmationPushStatus === "deferred") {
-			await ctx.scheduler.runAfter(
-				0,
-				internal.whatsapp.notifyStorefrontOrderCreated,
-				{ orderId },
-			);
+			await claimDeferredPush(ctx, orderId);
 		} else {
 			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyPaymentDue, {
 				orderId,
@@ -3533,6 +3547,13 @@ export const declineMockupItem = mutation({
 				status: "cancelled",
 				mockupStatus: undefined,
 				mockupQuotedAmount: undefined,
+				// The deferred-push promise dies with the order (see
+				// applyStatusTransition's cancel branch — this cancel path bypasses
+				// that helper, so it clears the stamp itself).
+				confirmationPushStatus:
+					order.confirmationPushStatus === "deferred"
+						? undefined
+						: order.confirmationPushStatus,
 				updatedAt: now,
 			});
 			await ctx.db.insert("orderEvents", {
@@ -3581,11 +3602,7 @@ export const declineMockupItem = mutation({
 		// somehow already paid, it's still the order's first (and correct)
 		// message. Legacy unpaid orders get the free-form payment nudge.
 		if (order.confirmationPushStatus === "deferred") {
-			await ctx.scheduler.runAfter(
-				0,
-				internal.whatsapp.notifyStorefrontOrderCreated,
-				{ orderId: order._id },
-			);
+			await claimDeferredPush(ctx, order._id);
 		} else if ((order.paymentStatus ?? "unpaid") === "unpaid")
 			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyPaymentDue, {
 				orderId: order._id,

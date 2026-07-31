@@ -5854,7 +5854,14 @@ describe("orders — deferred push for non-final totals (86eyfq0w5)", () => {
 		});
 		await t.mutation(api.orders.approveMockup, { token: await tk(t, shortId) });
 
-		// The gate-open site chose the template path, not the legacy prompt.
+		// The gate-open transaction CLAIMED the push (deferred → sending) and
+		// scheduled it — not the legacy prompt. The claim being transactional is
+		// the double-send guard: a racing second gate event serializes after
+		// this, sees "sending", and schedules nothing.
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(orderId)))
+				?.confirmationPushStatus,
+		).toBe("sending");
 		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toHaveLength(1);
 		expect(await scheduled(t, "notifyPaymentDue")).toEqual([]);
 
@@ -5947,6 +5954,7 @@ describe("orders — deferred push for non-final totals (86eyfq0w5)", () => {
 		});
 		const solo = await t2.run(async (ctx) => ctx.db.get(soloId));
 		expect(solo?.status).toBe("cancelled");
+		expect(solo?.confirmationPushStatus).toBeUndefined();
 		expect(await scheduled(t2, "notifyStorefrontOrderCreated")).toEqual([]);
 	});
 
@@ -5961,24 +5969,49 @@ describe("orders — deferred push for non-final totals (86eyfq0w5)", () => {
 		});
 		await t.mutation(api.orders.approveMockup, { token: await tk(t, shortId) });
 
-		// Gate 1 open, gate 2 (fee) still held → the action must refuse to send.
-		const fetchMock = installWamidFetchMock("wamid.DBL1");
-		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, { orderId });
-		expect(fetchMock.waCalls()).toHaveLength(0);
+		// Gate 1 open, gate 2 (fee) still held → the site must NOT claim: the
+		// order stays deferred and nothing is scheduled at all.
 		expect(
 			(await t.run(async (ctx) => ctx.db.get(orderId)))
 				?.confirmationPushStatus,
 		).toBe("deferred");
+		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toEqual([]);
 
-		// Seller sets the fee → second gate opens → template goes out once.
+		// Seller sets the fee → BOTH gates now clear inside that transaction →
+		// it wins the claim and schedules the one send.
 		await asA.mutation(api.orders.setDeliveryFee, { orderId, fee: 700 });
 		expect(await scheduled(t, "notifyDeliveryFeeSet")).toEqual([]);
+		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toHaveLength(1);
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(orderId)))
+				?.confirmationPushStatus,
+		).toBe("sending");
+		const fetchMock = installWamidFetchMock("wamid.DBL1");
 		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, { orderId });
 		const order = await t.run(async (ctx) => ctx.db.get(orderId));
 		expect(fetchMock.waCalls()).toHaveLength(1);
 		expect(order?.confirmationPushStatus).toBe("sent");
 		// Announced total = base + quote + fee.
 		expect(order?.total).toBe(12000 + 5000 + 700);
+		fetchMock.restore();
+	});
+
+	test("the action refuses to send while a hold is open, whoever schedules it", async () => {
+		const t = setup();
+		const { orderId } = await mockupOrder(t);
+		// Force the state a bug would need: sending-stamped but the mockup gate
+		// still closed. The claim path can't produce this; the action is the
+		// last line of defence against a wrong "Total: {{3}}" going out.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(orderId, { confirmationPushStatus: "sending" });
+		});
+		const fetchMock = installWamidFetchMock("wamid.HELD");
+		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, { orderId });
+		expect(fetchMock.waCalls()).toHaveLength(0);
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(orderId)))
+				?.confirmationPushStatus,
+		).toBe("sending");
 		fetchMock.restore();
 	});
 
@@ -5990,6 +6023,12 @@ describe("orders — deferred push for non-final totals (86eyfq0w5)", () => {
 			orderId,
 			status: "cancelled",
 		});
+		// The deferred stamp is cleared on cancel — the "confirmation coming"
+		// promise must not outlive the order (the tracking card keys on it).
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(orderId)))
+				?.confirmationPushStatus,
+		).toBeUndefined();
 		const fetchMock = installWamidFetchMock("wamid.NOPE");
 		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, { orderId });
 		expect(fetchMock.waCalls()).toHaveLength(0);

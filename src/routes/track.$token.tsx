@@ -478,7 +478,11 @@ function TrackingRoute() {
 						ms={order.retailerLocale === "ms"}
 						waPhone={order.customer.waPhone}
 					/>
-				) : order.confirmationPushStatus === "deferred" ? (
+				) : order.confirmationPushStatus === "deferred" &&
+					order.status === "confirmed" ? (
+					// Confirmed-only, like the `sent` arm: the card promises a future
+					// message, which is false on a cancelled order (belt — cancel also
+					// clears the stamp) and stale noise once fulfilment moves on.
 					<PushDeferredCard ms={order.retailerLocale === "ms"} />
 				) : order.confirmationPushStatus === "sent" &&
 					order.status === "confirmed" ? (

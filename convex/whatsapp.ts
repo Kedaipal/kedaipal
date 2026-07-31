@@ -1640,26 +1640,18 @@ export const notifyStorefrontOrderCreated = internalAction({
 		) {
 			return;
 		}
-		// Deferred-push chokepoint (86eyfq0w5): while EITHER price hold is still
-		// open, the template's "Total: {{3}}" would be wrong — leave the order
-		// deferred and let the OTHER gate-open site schedule us again. This is
-		// what makes a doubly-held order (mockup + fee) send exactly once, after
-		// both clear, without the sites coordinating.
+		// Hold guard, defence-in-depth (86eyfq0w5): the transactional claim in
+		// orders.ts (claimDeferredPush) only stamps "sending" + schedules when no
+		// price hold remains, so a legitimate invocation never trips this. It
+		// stays because sending a wrong "Total: {{3}}" is the one mistake this
+		// feature must never make, whatever schedules us.
 		if (meta.mockupGateClosed || meta.deliveryFeePending) {
-			console.log("WA confirm push held: price not final yet", {
+			console.warn("WA confirm push refused: price not final", {
 				shortId: meta.shortId,
 				mockupGateClosed: meta.mockupGateClosed,
 				deliveryFeePending: meta.deliveryFeePending,
 			});
 			return;
-		}
-		// Passing the guards means this send is really happening — surface that
-		// to the buyer's page ("sending…" instead of "we'll send once your price
-		// is confirmed"), and keep the state machine one-directional.
-		if (meta.confirmationPushStatus === "deferred") {
-			await ctx.runMutation(internal.orders.markConfirmationPushSending, {
-				orderId,
-			});
 		}
 
 		const trackingToken =
