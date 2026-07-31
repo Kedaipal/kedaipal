@@ -198,6 +198,13 @@ aggregates off the wrong record onto the right one):
    order's number is never overwritten by a forwarded message, and a
    late/replayed `failed` webhook never regresses `recovered`.
 
+**Address editing stops at `pending`** — which, on the push path, means a
+buyer can no longer edit their own address once the order commits. Deliberate
+(Zaki, 31 Jul): a `deliveryFeePending` order is one the **seller** is actively
+pricing, often alongside a mockup, so a buyer moving the destination underneath
+would invalidate the quote mid-settlement. Out-of-range buyers go through the
+store, not a silent re-price. Revisit only as an explicit decision.
+
 **Buyer-facing states** (`src/routes/track.$token.tsx`) — none of which gate the
 page. The order is confirmed in every branch and the payment block stays
 reachable: withholding a buyer's receipt because we couldn't send a *message*

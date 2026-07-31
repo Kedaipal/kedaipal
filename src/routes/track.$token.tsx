@@ -318,6 +318,14 @@ function TrackingRoute() {
 	);
 	const config = statusConfig[order.status];
 	const isCancelled = order.status === "cancelled";
+	// Pending-only, deliberately — and that now excludes fee-pending orders,
+	// since the confirmation push commits them as `confirmed` at create
+	// (86eyfq0w5). Locked call (Zaki, 31 Jul): a `deliveryFeePending` order is
+	// one the SELLER is actively pricing (often alongside a mockup), so letting
+	// the buyer move the destination underneath would invalidate the quote
+	// they're mid-way through settling. Out-of-range buyers go through the
+	// store ("Contact the store to change this address"), not a silent
+	// re-price. Don't "fix" this by widening the gate without re-deciding it.
 	const canEditAddress = order.status === "pending" && !isSelfCollect;
 	const paymentStatus = (order.paymentStatus ?? "unpaid") as PaymentStatus;
 	const paymentConfig = getPaymentConfig(paymentStatus);
