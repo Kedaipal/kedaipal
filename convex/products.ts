@@ -286,6 +286,24 @@ function validateCustomLine(variant: VariantInput): VariantInput {
 	};
 }
 
+function plural(n: number, word: string): string {
+	return n === 1 ? word : `${word}s`;
+}
+
+/** "Options [Size: S, M]" / "A product with no options" — names what the server rebuilt the grid from. */
+function describeAxes(options: OptionAxis[]): string {
+	if (options.length === 0) return "A product with no options";
+	return `Options [${options.map((a) => `${a.name}: ${a.values.join(", ")}`).join("] × [")}]`;
+}
+
+/** Render a combo list for an error, with the empty tuple shown as "(no options)". */
+function describeCombos(combos: readonly (readonly string[])[]): string {
+	if (combos.length === 0) return "none";
+	return combos
+		.map((c) => (c.length === 0 ? "(no options)" : `"${variantLabel(c)}"`))
+		.join(", ");
+}
+
 /**
  * Validate a full set of variant inputs. The set is split into the cartesian
  * MATRIX (isCustom falsy) and an optional CUSTOM line (isCustom true). The matrix
@@ -310,7 +328,9 @@ function validateVariantSet(
 	const expected = cartesian(options); // includes [[]] for no-axes products
 	if (matrix.length !== expected.length)
 		throw new ConvexError(
-			`Expected ${expected.length} variants for these options, got ${matrix.length}`,
+			`${describeAxes(options)} makes ${expected.length} ${plural(expected.length, "combination")} ` +
+				`(${describeCombos(expected)}), but ${matrix.length} ${plural(matrix.length, "variant")} ` +
+				`arrived (${describeCombos(matrix.map((vr) => vr.optionValues))}).`,
 		);
 
 	const seenCombos: string[][] = [];
@@ -358,7 +378,9 @@ function validateVariantSet(
 	for (const combo of expected) {
 		if (!cleaned.some((vr) => sameOptionValues(vr.optionValues, combo)))
 			throw new ConvexError(
-				`Missing variant for combination "${variantLabel(combo)}"`,
+				`Missing variant for combination "${variantLabel(combo)}" — ` +
+					`${describeAxes(options)} needs ${describeCombos(expected)}, ` +
+					`but only ${describeCombos(cleaned.map((vr) => vr.optionValues))} arrived.`,
 			);
 	}
 

@@ -38,6 +38,7 @@ import {
 	FulfilmentToggle,
 	PriceInput,
 	rebuildRows,
+	reconcileForSubmit,
 	StockInput,
 	type VariantEditorState,
 	type VariantRow,
@@ -131,7 +132,17 @@ export function wizardStepIssues(
 	step: number,
 ): WizardIssue[] {
 	const issues: WizardIssue[] = [];
-	const { options, rows, customLine } = state.editor;
+	// Validate the shape that will actually be SUBMITTED (see
+	// buildWizardSubmitValues), not the raw editor state — otherwise a rebuilt
+	// row's missing price passes the steps and then collapses `variants` to an
+	// empty array at submit, which the server rejects as "needs at least one
+	// variant". Sanitizing also keeps the axis checks in step with the server,
+	// which trims values and drops blank ones.
+	const { customLine } = state.editor;
+	const { options, rows } = reconcileForSubmit(
+		state.editor.options,
+		state.editor.rows,
+	);
 	if (step === 1) {
 		if (state.name.trim().length === 0) {
 			issues.push({ field: "name", message: "Give your product a name." });
@@ -140,7 +151,12 @@ export function wizardStepIssues(
 	if (step === 2) {
 		if (state.hasChoices === null) {
 			issues.push({ field: "hasChoices", message: "Pick one to continue." });
-		} else if (state.hasChoices) {
+		}
+		// Validate whenever axes EXIST, not when `hasChoices` says they should.
+		// The answer flag is a UI affordance; the editor is the source of truth.
+		// Gating on the flag meant a wizard whose flag had fallen out of sync
+		// skipped option validation entirely and submitted an unsavable payload.
+		if (options.length > 0) {
 			for (const issue of collectOptionIssues(options)) {
 				issues.push({
 					field:
@@ -237,7 +253,16 @@ export function wizardStepIssues(
 export function buildWizardSubmitValues(
 	state: WizardState,
 ): ProductFormSubmitValues {
-	const built = buildSubmitVariants(state.editor.rows, state.editor.customLine);
+	// Reconcile before building: `options` and `variants` MUST come from the same
+	// pair. Deriving the axes from `state.hasChoices` (a second source of truth)
+	// instead of the editor let the two disagree — a wizard whose hasChoices had
+	// fallen out of sync shipped `options: []` alongside a multi-row grid, and the
+	// server rejected it with a count mismatch the seller could not act on.
+	const reconciled = reconcileForSubmit(
+		state.editor.options,
+		state.editor.rows,
+	);
+	const built = buildSubmitVariants(reconciled.rows, state.editor.customLine);
 	const minQty = Number(state.minQuantity.trim());
 	const notice = Number(state.minNoticeDays.trim());
 	return {
@@ -256,12 +281,7 @@ export function buildWizardSubmitValues(
 				: undefined,
 		categoryIds: state.categoryIds,
 		imageStorageIds: state.images.map((i) => i.id),
-		options: state.hasChoices
-			? state.editor.options.map((a) => ({
-					name: a.name.trim(),
-					values: a.values,
-				}))
-			: [],
+		options: reconciled.options,
 		variants: "variants" in built ? built.variants : [],
 	};
 }
