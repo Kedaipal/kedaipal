@@ -372,6 +372,24 @@ export const ensureTrackingToken = internalMutation({
  * (with Meta's wamid, when echoed) or "failed" (the send itself errored).
  * Drives the tracking page's state card and the seller-side delivery note.
  */
+/**
+ * Flip a deferred push to "sending" the moment its send is genuinely underway
+ * (86eyfq0w5). Called by notifyStorefrontOrderCreated AFTER its hold guards
+ * pass, so the buyer's page never claims "sending…" while the price is still
+ * being negotiated. One-directional: only ever moves deferred → sending.
+ */
+export const markConfirmationPushSending = internalMutation({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<void> => {
+		const order = await ctx.db.get(orderId);
+		if (!order || order.confirmationPushStatus !== "deferred") return;
+		await ctx.db.patch(orderId, {
+			confirmationPushStatus: "sending",
+			updatedAt: Date.now(),
+		});
+	},
+});
+
 export const recordConfirmationPush = internalMutation({
 	args: {
 		orderId: v.id("orders"),
@@ -910,24 +928,20 @@ export const create = mutation({
 		// No step depends on the buyer surviving Meta's wa.me interstitial.
 		// Template env unset ⇒ exact legacy behaviour (pending + ?send=1 handoff).
 		//
-		// EXCEPT when the total isn't final yet. The approved template hard-codes
-		// "Total: {{3}}. Tap below to see how to pay" — both claims are false while
-		// a price is outstanding:
-		//   - a mockup-gated order can carry a price-on-quote line (price 0), so it
-		//     would announce "Total: MYR 0.00" on a cake that hasn't been quoted;
-		//   - a `deliveryFeePending` order's total grows by the fee the seller
-		//     arranges later;
-		// and in both cases the payment ask is deliberately HELD (isMockupGateClosed
-		// / the delivery-fee hold), so "tap below to pay" is a dead end. Template
-		// wording is fixed at Meta approval, so we can't soften it per-order —
-		// these fall back to the legacy handoff, whose `mockupPendingConfirm` /
-		// `deliveryFeePendingConfirm` branches already say the right thing. Lifting
-		// this needs a second approved template with no total slot (noted as a
-		// follow-up — it leaves made-to-order buyers on the wa.me path for now).
+		// The push TIMING depends on whether the total is final (86eyfq0w5). The
+		// approved template states "Total: {{3}}" — false while a price is
+		// outstanding (a price-on-quote line is RM 0.00 until quoted; a
+		// fee-pending total grows by the arranged fee). So a non-final order still
+		// COMMITS here exactly like any other — confirmed, activation, customer
+		// link, no wa.me step anywhere — but its push is stamped "deferred" and
+		// fires from the gate-open sites (mockup approve/waive/decline,
+		// setDeliveryFee) once the price is agreed, replacing the free-form
+		// payment prompt those sites used to send (which a push-path buyer's
+		// window-less chat couldn't receive anyway). The message is then always
+		// sent with a true, final total.
 		const totalIsFinal = !requiresMockup && !deliveryFeePending;
 		const confirmedAtCreate =
 			customerWaPhone !== undefined &&
-			totalIsFinal &&
 			orderConfirmTemplateName() !== undefined;
 
 		const orderId = await ctx.db.insert("orders", {
@@ -962,8 +976,13 @@ export const create = mutation({
 			// Stamped in the SAME transaction as the insert so the push state is
 			// never ambiguous: a confirmed storefront order with no stamp would be
 			// indistinguishable from one whose send is still in flight, and the
-			// tracking page needs to tell the buyer which it is.
-			confirmationPushStatus: confirmedAtCreate ? "sending" : undefined,
+			// tracking page needs to tell the buyer which it is. Non-final totals
+			// start "deferred" — the send waits for the price to be confirmed.
+			confirmationPushStatus: confirmedAtCreate
+				? totalIsFinal
+					? "sending"
+					: "deferred"
+				: undefined,
 			statusChangedAt: now,
 			createdAt: now,
 			updatedAt: now,
@@ -1016,7 +1035,9 @@ export const create = mutation({
 		// The buyer's WhatsApp confirmation — the ONE outbound message this order
 		// sends (Meta bills per message from Oct 2026). Fire-and-forget like the
 		// email; a send failure stamps confirmationPushStatus, never fails create.
-		if (confirmedAtCreate) {
+		// A deferred (non-final-total) order schedules nothing here — its push
+		// fires from the gate-open sites once the price is confirmed.
+		if (confirmedAtCreate && totalIsFinal) {
 			await ctx.scheduler.runAfter(
 				0,
 				internal.whatsapp.notifyStorefrontOrderCreated,
@@ -2751,11 +2772,19 @@ export const setDeliveryFee = mutation({
 			note: `delivery_fee_set (fee ${fee})`,
 			createdAt: now,
 		});
-		// Release the held payment ask — but only when this set actually resolved
-		// a pending charge, the buyer already got their confirm (status past
-		// "pending"), and the mockup gate isn't ALSO holding payment (that path
-		// sends its own prompt on approve/waive, which re-checks this flag).
-		if (
+		// Release the held payment ask. A push-path order (86eyfq0w5) gets its
+		// DEFERRED confirmation template — the action re-checks the mockup hold,
+		// so a doubly-held order sends exactly once, after both clear. Legacy
+		// orders keep the free-form held-payment ask, with the original guards
+		// (fee actually resolved, buyer already confirmed, mockup not also
+		// holding — that path prompts via notifyPaymentDue).
+		if (wasPending && order.confirmationPushStatus === "deferred") {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.whatsapp.notifyStorefrontOrderCreated,
+				{ orderId },
+			);
+		} else if (
 			wasPending &&
 			order.status !== "pending" &&
 			!isMockupGateClosed(order) &&
@@ -3318,12 +3347,23 @@ export const approveMockup = mutation({
 		await ctx.scheduler.runAfter(0, internal.email.notifyMockupApproved, {
 			orderId: order._id,
 		});
-		// Gate is now open → send the buyer the payment prompt that was deferred
-		// at confirm time (the "I've paid" CTA over WhatsApp).
-		await ctx.scheduler.runAfter(0, internal.whatsapp.notifyPaymentDue, {
-			orderId: order._id,
-			reason: "approved",
-		});
+		// Gate is now open → the price is agreed. A push-path order (86eyfq0w5)
+		// gets its DEFERRED confirmation template now — first and only message,
+		// carrying the final quoted total (the action re-checks the fee hold, so
+		// a doubly-held order sends exactly once). Legacy orders keep the
+		// free-form payment prompt their open chat can actually receive.
+		if (order.confirmationPushStatus === "deferred") {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.whatsapp.notifyStorefrontOrderCreated,
+				{ orderId: order._id },
+			);
+		} else {
+			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyPaymentDue, {
+				orderId: order._id,
+				reason: "approved",
+			});
+		}
 	},
 });
 
@@ -3393,12 +3433,21 @@ export const waiveMockup = mutation({
 			note: "mockup_waived",
 			createdAt: now,
 		});
-		// Gate forced open without buyer approval → the buyer still needs to pay,
-		// so send the payment prompt deferred at confirm time.
-		await ctx.scheduler.runAfter(0, internal.whatsapp.notifyPaymentDue, {
-			orderId,
-			reason: "waived",
-		});
+		// Gate forced open without buyer approval → the buyer still needs to pay.
+		// Push-path orders get their deferred confirmation template (86eyfq0w5);
+		// legacy orders get the free-form payment prompt.
+		if (order.confirmationPushStatus === "deferred") {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.whatsapp.notifyStorefrontOrderCreated,
+				{ orderId },
+			);
+		} else {
+			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyPaymentDue, {
+				orderId,
+				reason: "waived",
+			});
+		}
 		await logAdminAction(ctx, access, "orders.waiveMockup", orderId);
 	},
 });
@@ -3527,10 +3576,17 @@ export const declineMockupItem = mutation({
 		await ctx.scheduler.runAfter(0, internal.email.notifyMockupDeclined, {
 			orderId: order._id,
 		});
-		// The gate is now open and the buyer owes for the ready-made remainder, but
-		// they may close the page — nudge them with the payment prompt over
-		// WhatsApp. Skip if payment was already taken (e.g. seller marked received).
-		if ((order.paymentStatus ?? "unpaid") === "unpaid")
+		// The gate is now open and the buyer owes for the ready-made remainder.
+		// Push-path orders get their deferred confirmation template now — even if
+		// somehow already paid, it's still the order's first (and correct)
+		// message. Legacy unpaid orders get the free-form payment nudge.
+		if (order.confirmationPushStatus === "deferred") {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.whatsapp.notifyStorefrontOrderCreated,
+				{ orderId: order._id },
+			);
+		} else if ((order.paymentStatus ?? "unpaid") === "unpaid")
 			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyPaymentDue, {
 				orderId: order._id,
 				reason: "declined",

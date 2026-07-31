@@ -924,6 +924,11 @@ export default defineSchema({
 		// Widen-only, no backfill.
 		confirmationPushStatus: v.optional(
 			v.union(
+				//   "deferred" — order committed at create but its total isn't final
+				//                yet (mockup price-on-quote / delivery-fee-pending);
+				//                the push fires when the price is confirmed
+				//                (86eyfq0w5) so the template's total is always true.
+				v.literal("deferred"),
 				v.literal("sending"),
 				v.literal("sent"),
 				v.literal("failed"),

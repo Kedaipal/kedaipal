@@ -478,6 +478,8 @@ function TrackingRoute() {
 						ms={order.retailerLocale === "ms"}
 						waPhone={order.customer.waPhone}
 					/>
+				) : order.confirmationPushStatus === "deferred" ? (
+					<PushDeferredCard ms={order.retailerLocale === "ms"} />
 				) : order.confirmationPushStatus === "sent" &&
 					order.status === "confirmed" ? (
 					<ConfirmationSentCard
@@ -1218,6 +1220,31 @@ function ConfirmationSentCard({
 					{ms ? "Buka WhatsApp" : "Open WhatsApp"}
 				</a>
 			</Button>
+		</section>
+	);
+}
+
+/**
+ * Order committed but its price isn't final yet (86eyfq0w5) — a mockup quote
+ * or an arranged delivery fee is outstanding, so the WhatsApp confirmation
+ * (whose template states the total) deliberately waits. Say so, or the
+ * checkout promise of "confirmation lands in your WhatsApp" looks broken.
+ * The mockup/fee sections further down the page carry the actual next step.
+ */
+function PushDeferredCard({ ms }: { ms: boolean }) {
+	return (
+		<section className="mt-6 flex items-center gap-3 rounded-2xl border border-border bg-card p-4">
+			<CheckCircle className="size-5 shrink-0 text-accent" />
+			<div className="min-w-0 flex-1">
+				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+					{ms ? "Pesanan diterima" : "Order placed"}
+				</p>
+				<p className="text-sm">
+					{ms
+						? "Kami akan hantar pengesahan WhatsApp anda sebaik sahaja harga disahkan."
+						: "We'll send your WhatsApp confirmation as soon as your price is confirmed."}
+				</p>
+			</div>
 		</section>
 	);
 }
