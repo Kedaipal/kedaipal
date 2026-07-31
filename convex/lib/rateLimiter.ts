@@ -55,6 +55,16 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		period: MINUTE,
 		capacity: 3,
 	},
+	// Buyer correcting the WhatsApp number on their own order after the
+	// confirmation push failed (86eyf1rck). Tighter than addressUpdate because
+	// every accepted save triggers a fresh template send, which costs money —
+	// a couple of genuine typo fixes is the realistic ceiling.
+	buyerPhoneUpdate: {
+		kind: "token bucket",
+		rate: 3,
+		period: 10 * MINUTE,
+		capacity: 2,
+	},
 	paymentClaim: {
 		kind: "token bucket",
 		rate: 5,

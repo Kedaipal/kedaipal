@@ -207,6 +207,152 @@ describe("whatsappAdapter.send — CTA degrade matrix", () => {
 	});
 });
 
+describe("whatsappAdapter.send — template kind (86eyf1rck)", () => {
+	test("template → Meta template payload with body + url-button components", async () => {
+		const fetchMock = installFetchMock();
+		await whatsappAdapter.send("60123456789", {
+			kind: "template",
+			templateName: "order_confirmation_utility",
+			languageCode: "ms",
+			bodyParams: ["ORD-ABCD", "K Frozen Food", "RM 24.00"],
+			urlButtonParam: "a1B2c3D4e5F6",
+		});
+		const body = fetchMock.calls[0].body;
+		expect(body.type).toBe("template");
+		expect(body.template).toEqual({
+			name: "order_confirmation_utility",
+			language: { code: "ms" },
+			components: [
+				{
+					type: "body",
+					parameters: [
+						{ type: "text", text: "ORD-ABCD" },
+						{ type: "text", text: "K Frozen Food" },
+						{ type: "text", text: "RM 24.00" },
+					],
+				},
+				{
+					type: "button",
+					sub_type: "url",
+					index: "0",
+					// The button's parameter is the tracking-token SUFFIX Meta appends
+					// to the approved URL — its own namespace, never a body slot.
+					parameters: [{ type: "text", text: "a1B2c3D4e5F6" }],
+				},
+			],
+		});
+		fetchMock.restore();
+	});
+
+	test("template without urlButtonParam → body component only", async () => {
+		const fetchMock = installFetchMock();
+		await whatsappAdapter.send("60123456789", {
+			kind: "template",
+			templateName: "some_template",
+			languageCode: "en",
+			bodyParams: ["one"],
+		});
+		const body = fetchMock.calls[0].body;
+		expect(
+			(body.template as { components: unknown[] }).components,
+		).toHaveLength(1);
+		fetchMock.restore();
+	});
+
+	test("template send returns the wamid Meta echoes as the receipt", async () => {
+		const original = globalThis.fetch;
+		globalThis.fetch = vi.fn(
+			async () =>
+				new Response(JSON.stringify({ messages: [{ id: "wamid.TEST123" }] }), {
+					status: 200,
+				}),
+		) as unknown as typeof fetch;
+		const receipt = await whatsappAdapter.send("60123456789", {
+			kind: "template",
+			templateName: "order_confirmation_utility",
+			languageCode: "en",
+			bodyParams: ["ORD-ABCD", "Store", "RM 1.00"],
+			urlButtonParam: "tok",
+		});
+		expect(receipt).toEqual({ providerMessageId: "wamid.TEST123" });
+		globalThis.fetch = original;
+	});
+
+	test("template send with an id-less 2xx response resolves undefined receipt", async () => {
+		const fetchMock = installFetchMock(); // returns "{}"
+		const receipt = await whatsappAdapter.send("60123456789", {
+			kind: "template",
+			templateName: "order_confirmation_utility",
+			languageCode: "en",
+			bodyParams: ["ORD-ABCD", "Store", "RM 1.00"],
+		});
+		expect(receipt).toBeUndefined();
+		fetchMock.restore();
+	});
+});
+
+describe("whatsappAdapter.parseStatuses", () => {
+	test("extracts failed status events with recipient + flattened error", () => {
+		const raw = JSON.stringify({
+			entry: [
+				{
+					changes: [
+						{
+							value: {
+								statuses: [
+									{
+										id: "wamid.FAIL1",
+										status: "failed",
+										recipient_id: "60123456789",
+										errors: [
+											{ code: 131026, title: "Message undeliverable" },
+										],
+									},
+									{ id: "wamid.OK1", status: "delivered", recipient_id: "60111111111" },
+								],
+							},
+						},
+					],
+				},
+			],
+		});
+		expect(whatsappAdapter.parseStatuses(raw)).toEqual([
+			{
+				providerMessageId: "wamid.FAIL1",
+				status: "failed",
+				recipientId: "60123456789",
+				errorDetail: "131026: Message undeliverable",
+			},
+			{
+				providerMessageId: "wamid.OK1",
+				status: "delivered",
+				recipientId: "60111111111",
+				errorDetail: undefined,
+			},
+		]);
+	});
+
+	test("inbound-message bodies and malformed JSON yield no status events", () => {
+		const inbound = JSON.stringify({
+			entry: [
+				{
+					changes: [
+						{
+							value: {
+								messages: [
+									{ from: "60123456789", type: "text", text: { body: "hi" } },
+								],
+							},
+						},
+					],
+				},
+			],
+		});
+		expect(whatsappAdapter.parseStatuses(inbound)).toEqual([]);
+		expect(whatsappAdapter.parseStatuses("not json")).toEqual([]);
+	});
+});
+
 describe("whatsappAdapter.parseInbound", () => {
 	test("maps Meta text webhook to InboundEnvelope[]", () => {
 		const raw = JSON.stringify({

@@ -194,6 +194,7 @@ import {
 	sanitizeDeliveryConfig,
 } from "./lib/delivery";
 import { resolveLalamoveCredentials } from "./lib/lalamove";
+import { orderConfirmTemplateName } from "./lib/whatsapp";
 import { ordersThisMonth } from "./subscriptionUsage";
 import {
 	assertSupportedCurrency,
@@ -477,6 +478,11 @@ type RetailerPublic = {
 	waPhone?: string;
 	notifyEmail?: string;
 	checkoutPhone?: string;
+	// Whether the storefront confirmation-push path is active (86eyf1rck —
+	// approved WA template configured): checkout then promises "confirmation
+	// lands in your WhatsApp" instead of the wa.me handoff. Public-safe (a
+	// deployment-level flag, not seller data); only the by-slug payload sets it.
+	confirmPushEnabled?: boolean;
 	logoStorageId?: string;
 	logoUrl?: string;
 	// Wide cover/banner. Public-safe — the storefront header hero and the PRIMARY
@@ -745,6 +751,7 @@ export const getRetailerBySlug = query({
 					storeDescription: active.storeDescription,
 					waPhone: active.waPhone,
 					checkoutPhone: process.env.WHATSAPP_CHECKOUT_PHONE ?? active.waPhone,
+					confirmPushEnabled: orderConfirmTemplateName() !== undefined,
 					logoStorageId: active.logoStorageId,
 					logoUrl,
 					coverImageStorageId: active.coverImageStorageId,

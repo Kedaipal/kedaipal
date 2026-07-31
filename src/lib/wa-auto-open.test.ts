@@ -1,5 +1,48 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createWaAutoOpen } from "./wa-auto-open";
+import { createWaAutoOpen, isWhatsAppWebview } from "./wa-auto-open";
+
+describe("isWhatsAppWebview", () => {
+	it("detects the WhatsApp token in Android in-app browser UAs", () => {
+		expect(
+			isWhatsAppWebview(
+				"Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/130.0.0.0 Mobile Safari/537.36 WhatsApp/2.25.1.75 A",
+			),
+		).toBe(true);
+	});
+
+	it("detects the WhatsApp token in iOS in-app browser UAs", () => {
+		expect(
+			isWhatsAppWebview(
+				"Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/22B83 WhatsApp/25.1.78 i",
+			),
+		).toBe(true);
+	});
+
+	it("is case-insensitive", () => {
+		expect(isWhatsAppWebview("some-ua whatsapp/1.0")).toBe(true);
+	});
+
+	it("passes ordinary mobile browsers through (auto-fire keeps working)", () => {
+		expect(
+			isWhatsAppWebview(
+				"Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1",
+			),
+		).toBe(false);
+		expect(
+			isWhatsAppWebview(
+				"Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36",
+			),
+		).toBe(false);
+	});
+
+	it("does not match other in-app webviews (IG/FB keep today's flow)", () => {
+		expect(
+			isWhatsAppWebview(
+				"Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/22B83 Instagram 361.0.0.35.82",
+			),
+		).toBe(false);
+	});
+});
 
 describe("createWaAutoOpen", () => {
 	beforeEach(() => {

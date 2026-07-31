@@ -78,6 +78,34 @@ export function sanitizeIntInput(v: string): string {
 }
 
 /**
+ * Group a stored MY mobile (digits-only, `60…`) the way a Malaysian reads one:
+ * `60123456789` → `+60 12-345 6789`, `601159399791` → `+60 11-5939 9791`.
+ *
+ * Purpose is **typo-spotting**, not decoration: checkout echoes the number back
+ * to the buyer before they commit (86eyf1rck), and a transposed digit is only
+ * catchable when the grouping matches how they typed it. Deliberately separate
+ * from `formatPhone` (src/lib/customer.ts), which renders one ungrouped run
+ * (`+60 1159399791`) and is mirrored into `convex/` for the seller dashboard —
+ * regrouping that shared helper is a cross-surface change, not this field's job.
+ *
+ * Non-MY / unexpected shapes fall back to `+<digits>` rather than guessing.
+ */
+export function formatMyMobile(waPhone: string): string {
+	const digits = waPhone.replace(/\D/g, "");
+	// Same shape the checkout schema accepts (myWaPhoneCheckoutSchema).
+	if (!/^601\d{8,9}$/.test(digits)) {
+		return digits.length > 0 ? `+${digits}` : "";
+	}
+	// After the country code: a 2-digit network prefix (1X) then the subscriber
+	// number, split 3+4 (10-digit local) or 4+4 (11-digit local, e.g. 011/015).
+	const national = digits.slice(2);
+	const prefix = national.slice(0, 2);
+	const rest = national.slice(2);
+	const split = rest.length === 8 ? 4 : 3;
+	return `+60 ${prefix}-${rest.slice(0, split)} ${rest.slice(split)}`;
+}
+
+/**
  * Parse a user-typed price string into a non-negative number, or `null` if it
  * isn't a clean price.
  *

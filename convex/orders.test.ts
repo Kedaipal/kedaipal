@@ -1,8 +1,8 @@
 /// <reference types="vite/client" />
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { api } from "./_generated/api";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { todayMytMidnight } from "./lib/fulfilmentDate";
 import { sortInboxOrders } from "./lib/orderInboxFilter";
@@ -5410,5 +5410,644 @@ describe("orders — shipment tracking is delivery-only (PR #151 review)", () =>
 		expect(updated?.status).toBe("shipped");
 		expect(updated?.courierName).toBeUndefined();
 		expect(updated?.trackingNo).toBeUndefined();
+	});
+});
+
+describe("orders — confirmation push at create (86eyf1rck)", () => {
+	afterEach(() => {
+		delete process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE;
+		delete process.env.WHATSAPP_CHECKOUT_PHONE;
+	});
+
+	async function createWith(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+		waPhone?: string,
+	) {
+		return t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone },
+			deliveryAddress: validAddress,
+		});
+	}
+
+	async function orderBy(t: ReturnType<typeof setup>, shortId: string) {
+		return t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+	}
+
+	test("template env + phone → committed as confirmed, activation stamped, customer linked", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const result = await createWith(t, retailer._id, productId, "60123456789");
+		expect(result.confirmedAtCreate).toBe(true);
+
+		const order = await orderBy(t, result.shortId);
+		expect(order?.status).toBe("confirmed");
+		expect(order?.customerId).toBeDefined();
+		// Timeline keeps both beats: placed, then confirmed at checkout.
+		const events = await t.run(async (ctx) =>
+			ctx.db
+				.query("orderEvents")
+				.filter((q) => q.eq(q.field("orderId"), order!._id))
+				.collect(),
+		);
+		expect(events.map((e) => e.status)).toEqual(["pending", "confirmed"]);
+		// First confirmed order activates the store (same milestone as the legacy
+		// inbound-confirm path).
+		const freshRetailer = await t.run(async (ctx) => ctx.db.get(retailer._id));
+		expect(freshRetailer?.activatedAt).toBeTypeOf("number");
+	});
+
+	test("template env set but NO phone → legacy pending flow", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const result = await createWith(t, retailer._id, productId, undefined);
+		expect(result.confirmedAtCreate).toBeUndefined();
+		expect((await orderBy(t, result.shortId))?.status).toBe("pending");
+	});
+
+	test("template env unset → degrades to today's pending + wa.me flow even with a phone", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const result = await createWith(t, retailer._id, productId, "60123456789");
+		expect(result.confirmedAtCreate).toBeUndefined();
+		const order = await orderBy(t, result.shortId);
+		expect(order?.status).toBe("pending");
+		expect(order?.confirmationPushStatus).toBeUndefined();
+	});
+
+	test("local-format MY number is normalized to the inbound (60…) form", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await createWith(
+			t,
+			retailer._id,
+			productId,
+			"012-345 6789",
+		);
+		expect((await orderBy(t, shortId))?.customer.waPhone).toBe("60123456789");
+	});
+
+	test("junk phone is rejected", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await expect(
+			createWith(t, retailer._id, productId, "12345"),
+		).rejects.toThrow(/WhatsApp number/);
+	});
+
+	test("get serves checkoutPhone for the failed-push recovery card (confirmed order)", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		process.env.WHATSAPP_CHECKOUT_PHONE = "601155555555";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await createWith(
+			t,
+			retailer._id,
+			productId,
+			"60123456789",
+		);
+		const order = await orderBy(t, shortId);
+
+		// Push believed sent → checkoutPhone still served (Open-WhatsApp anchor).
+		await t.mutation(internal.orders.recordConfirmationPush, {
+			orderId: order!._id,
+			status: "sent",
+			wamid: "wamid.X1",
+		});
+		let viewed = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(viewed?.status).toBe("confirmed");
+		expect(viewed?.checkoutPhone).toBe("601155555555");
+		expect(viewed?.confirmationPushStatus).toBe("sent");
+
+		// Push failed → the manual Send card needs the wa.me target.
+		await t.mutation(internal.orders.markConfirmationPushFailed, {
+			wamid: "wamid.X1",
+		});
+		viewed = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(viewed?.confirmationPushStatus).toBe("failed");
+		expect(viewed?.checkoutPhone).toBe("601155555555");
+	});
+
+	test("get hides checkoutPhone on a confirmed legacy order (no push state)", async () => {
+		process.env.WHATSAPP_CHECKOUT_PHONE = "601155555555";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await createWith(
+			t,
+			retailer._id,
+			productId,
+			"60123456789",
+		);
+		const order = await orderBy(t, shortId);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order!._id, { status: "confirmed" });
+		});
+		const viewed = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(viewed?.checkoutPhone).toBeUndefined();
+	});
+});
+
+describe("orders — buyer repairs their number after a failed push (86eyf1rck)", () => {
+	afterEach(() => {
+		delete process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE;
+	});
+
+	/** Order committed via the push path, then stamped as a failed push. */
+	async function seedFailedPush(t: ReturnType<typeof setup>) {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			// Typo: 019… instead of the buyer's real 012…
+			customer: { name: "Ali", waPhone: "0199999999" },
+			deliveryAddress: validAddress,
+		});
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		await t.mutation(internal.orders.recordConfirmationPush, {
+			orderId: order!._id,
+			status: "failed",
+			failureKind: "unreachable",
+		});
+		return { retailer, shortId, orderId: order!._id, staleCustomerId: order!.customerId! };
+	}
+
+	test("corrects the number, moves the CRM history, and re-queues the push", async () => {
+		const t = setup();
+		const { shortId, orderId, staleCustomerId } = await seedFailedPush(t);
+
+		await t.mutation(api.orders.updateBuyerPhone, {
+			token: await tk(t, shortId),
+			waPhone: "012-345 6789",
+		});
+
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		// Normalized to the inbound form, and back in flight (not stuck failed).
+		expect(order?.customer.waPhone).toBe("60123456789");
+		expect(order?.confirmationPushStatus).toBe("sending");
+		expect(order?.confirmationPushFailureKind).toBeUndefined();
+		// A late statuses webhook for the OLD message can't re-fail this order.
+		expect(order?.confirmationPushWamid).toBeUndefined();
+
+		// CRM: the order moved off the typo'd record onto the real one.
+		expect(order?.customerId).toBeDefined();
+		expect(order?.customerId).not.toBe(staleCustomerId);
+		const stale = await t.run(async (ctx) => ctx.db.get(staleCustomerId));
+		expect(stale?.orderCount).toBe(0);
+		expect(stale?.totalSpent).toBe(0);
+		const real = await t.run(async (ctx) => ctx.db.get(order!.customerId!));
+		expect(real?.waPhone).toBe("60123456789");
+		expect(real?.orderCount).toBe(1);
+		expect(real?.totalSpent).toBe(12000);
+	});
+
+	test("rejects an invalid number", async () => {
+		const t = setup();
+		const { shortId } = await seedFailedPush(t);
+		await expect(
+			t.mutation(api.orders.updateBuyerPhone, {
+				token: await tk(t, shortId),
+				waPhone: "03-1234 5678",
+			}),
+		).rejects.toThrow(/Malaysian mobile/);
+	});
+
+	test("rejects re-submitting the same number that already failed", async () => {
+		const t = setup();
+		const { shortId } = await seedFailedPush(t);
+		await expect(
+			t.mutation(api.orders.updateBuyerPhone, {
+				token: await tk(t, shortId),
+				waPhone: "0199999999",
+			}),
+		).rejects.toThrow(/same number/);
+	});
+
+	test("is closed unless the push actually failed — a healthy order's number can't be rewritten", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		// status is "sending" straight out of create — not a repairable state.
+		await expect(
+			t.mutation(api.orders.updateBuyerPhone, {
+				token: await tk(t, shortId),
+				waPhone: "0117654321",
+			}),
+		).rejects.toThrow(/can't be changed/);
+
+		const orderId = await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			return o!._id;
+		});
+		await t.mutation(internal.orders.recordConfirmationPush, {
+			orderId,
+			status: "sent",
+			wamid: "wamid.OK",
+		});
+		await expect(
+			t.mutation(api.orders.updateBuyerPhone, {
+				token: await tk(t, shortId),
+				waPhone: "0117654321",
+			}),
+		).rejects.toThrow(/can't be changed/);
+	});
+
+	test("an unknown token can't reach another order", async () => {
+		const t = setup();
+		await seedFailedPush(t);
+		await expect(
+			t.mutation(api.orders.updateBuyerPhone, {
+				token: "__no_such_order__",
+				waPhone: "012-345 6789",
+			}),
+		).rejects.toThrow(/not found/);
+	});
+});
+
+describe("orders — push path skips orders whose total isn't final (86eyf1rck)", () => {
+	afterEach(() => {
+		delete process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE;
+	});
+
+	test("a mockup-gated order stays pending — the template would announce a price that hasn't been quoted", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		// Price-on-quote custom line: price 0 until the seller quotes the mockup.
+		const productId = await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Custom cake",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			variants: [
+				{ optionValues: [], price: 8000, onHand: 5 },
+				{
+					optionValues: [],
+					price: 0,
+					onHand: 0,
+					isCustom: true,
+					customLabel: "Bespoke",
+					requiresProof: true,
+				},
+			],
+		});
+		const variantId = await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", productId))
+				.collect();
+			const custom = rows.find((r) => r.isCustom);
+			if (!custom) throw new Error("no custom variant");
+			return custom._id;
+		});
+		const result = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ variantId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+
+		expect(result.confirmedAtCreate).toBeUndefined();
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", result.shortId))
+				.first(),
+		);
+		expect(order?.status).toBe("pending");
+		expect(order?.mockupStatus).toBe("pending");
+		// No push scheduled, so no "Total: MYR 0.00" message can go out.
+		expect(order?.confirmationPushStatus).toBeUndefined();
+	});
+
+	test("a delivery-fee-pending order stays pending — its total still grows by the arranged fee", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		// Radius pricing with "arrange" out-of-range policy, no business address →
+		// the fee can't be resolved at create, so the order lands fee-pending.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				businessAddress: {
+					label: "Kedai, Semenyih, Selangor",
+					latitude: 2.9073303,
+					longitude: 101.8333674,
+				},
+				deliveryConfig: {
+					mode: "radius",
+					bands: [{ maxKm: 5, fee: 500 }],
+					outOfRange: "arrange",
+				},
+			});
+		});
+		const result = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", result.shortId))
+				.first(),
+		);
+		expect(order?.deliveryFeePending).toBe(true);
+		expect(result.confirmedAtCreate).toBeUndefined();
+		expect(order?.status).toBe("pending");
+		expect(order?.confirmationPushStatus).toBeUndefined();
+	});
+
+	test("an ordinary order with a final total still takes the push path", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const result = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		expect(result.confirmedAtCreate).toBe(true);
+	});
+});
+
+describe("orders — repairing a CANCELLED order's number (86eyf1rck)", () => {
+	afterEach(() => {
+		delete process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE;
+	});
+
+	test("moves the phone but never re-counts aggregates the cancel already reversed", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+
+		// A real earlier order from the SAME (typo'd) number, so a stray decrement
+		// would visibly eat its count/spend rather than just flooring at zero.
+		await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "0199999999" },
+			deliveryAddress: validAddress,
+		});
+		// The order that gets cancelled, then repaired.
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "0199999999" },
+			deliveryAddress: validAddress,
+		});
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		const typoCustomerId = order!.customerId!;
+		// Two orders on that record before anything else happens.
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(typoCustomerId)))?.orderCount,
+		).toBe(2);
+
+		// Push fails, THEN the seller cancels (which reverses this order's
+		// aggregates but leaves confirmationPushStatus alone).
+		await t.mutation(internal.orders.recordConfirmationPush, {
+			orderId: order!._id,
+			status: "failed",
+			failureKind: "unreachable",
+		});
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: order!._id,
+			status: "cancelled",
+		});
+		const afterCancel = await t.run(async (ctx) => ctx.db.get(typoCustomerId));
+		expect(afterCancel?.orderCount).toBe(1);
+		const spentAfterCancel = afterCancel!.totalSpent;
+
+		// The buyer repairs the number on the (now cancelled) order.
+		await t.mutation(api.orders.updateBuyerPhone, {
+			token: await tk(t, shortId),
+			waPhone: "012-345 6789",
+		});
+
+		const repaired = await t.run(async (ctx) => ctx.db.get(order!._id));
+		// Phone still moves, so any later contact reaches the buyer…
+		expect(repaired?.customer.waPhone).toBe("60123456789");
+		// …but the surviving order's count/spend is untouched — no second decrement.
+		const typoRecord = await t.run(async (ctx) => ctx.db.get(typoCustomerId));
+		expect(typoRecord?.orderCount).toBe(1);
+		expect(typoRecord?.totalSpent).toBe(spentAfterCancel);
+		// And a cancelled order is never credited to the new customer.
+		const newRecord = await t.run(async (ctx) =>
+			ctx.db
+				.query("customers")
+				.withIndex("by_retailer_phone", (q) =>
+					q.eq("retailerId", retailer._id).eq("waPhone", "60123456789"),
+				)
+				.unique(),
+		);
+		expect(newRecord).toBeNull();
+	});
+});
+
+describe("orders — the seller's unseen-order signal survives confirm-at-create (86eyf1rck)", () => {
+	afterEach(() => {
+		delete process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE;
+	});
+
+	test("a push-path order counts as New until the seller opens it", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		const asA = t.withIdentity({ subject: USER_A });
+		const orderId = await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			return o!._id;
+		});
+
+		// Born `confirmed`, yet the seller hasn't looked at it — so it must still
+		// register as new work, not vanish into "in progress".
+		const before = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "new",
+		});
+		expect(before.counts.new).toBe(1);
+		expect(before.counts.in_progress).toBe(0);
+		expect(before.orders.map((o) => o.shortId)).toEqual([shortId]);
+
+		await asA.mutation(api.orders.markSeen, { orderId });
+
+		const after = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "new",
+		});
+		expect(after.counts.new).toBe(0);
+		expect(after.counts.in_progress).toBe(1);
+		expect(after.orders).toHaveLength(0);
+		// Exactly one bucket at a time — it's now in the in-progress list.
+		const inProgress = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "in_progress",
+		});
+		expect(inProgress.orders.map((o) => o.shortId)).toEqual([shortId]);
+	});
+
+	test("markSeen is idempotent and never un-sets", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		const asA = t.withIdentity({ subject: USER_A });
+		const orderId = await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			return o!._id;
+		});
+		await asA.mutation(api.orders.markSeen, { orderId });
+		const first = await t.run(async (ctx) => (await ctx.db.get(orderId))?.seenAt);
+		await asA.mutation(api.orders.markSeen, { orderId });
+		expect(
+			await t.run(async (ctx) => (await ctx.db.get(orderId))?.seenAt),
+		).toBe(first);
+	});
+
+	test("markSeen refuses a store the caller doesn't own", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		const orderId = await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			return o!._id;
+		});
+		await seedRetailer(t, USER_B);
+		await expect(
+			t.withIdentity({ subject: USER_B }).mutation(api.orders.markSeen, {
+				orderId,
+			}),
+		).rejects.toThrow(/forbidden/i);
+	});
+
+	test("legacy confirmed orders don't retroactively become New (no backfill needed)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		// Template env unset → legacy pending order, then confirmed as before.
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		const asA = t.withIdentity({ subject: USER_A });
+		const orderId = await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			return o!._id;
+		});
+		await asA.mutation(api.orders.updateStatus, {
+			orderId,
+			status: "confirmed",
+		});
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		// No confirmationPushStatus → never treated as unseen.
+		expect(res.counts.new).toBe(0);
+		expect(res.counts.in_progress).toBe(1);
 	});
 });

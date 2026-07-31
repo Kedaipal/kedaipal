@@ -13,6 +13,20 @@
  * the WhatsApp app must never leave the button stuck loading).
  */
 
+/**
+ * Whether the page is running inside WhatsApp's own in-app browser (the
+ * Nov-2025 rollout that opens storefront links from a chat without leaving
+ * WhatsApp). Auto-firing wa.me there bounces the buyer into a "Continue to
+ * chat" interstitial + open-app prompt while they're ALREADY in WhatsApp —
+ * most bail and the order strands as pending. Detection is deliberately a
+ * plain UA sniff: WhatsApp stamps its token (e.g. "WhatsApp/2.25.x") into the
+ * webview UA on both platforms, and a false negative just means today's
+ * auto-fire behaviour, so there's no need for fragile webview heuristics.
+ */
+export function isWhatsAppWebview(userAgent: string): boolean {
+	return /whatsapp/i.test(userAgent);
+}
+
 /** Let the tracking page paint before whisking the buyer away. */
 export const WA_AUTO_OPEN_DELAY_MS = 600;
 /** If we're still on the page this long after navigating, the open failed. */

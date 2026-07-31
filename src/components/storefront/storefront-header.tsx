@@ -16,15 +16,27 @@ export interface StorefrontHeaderRetailer {
 /**
  * The storefront's brand header — Kedaipal mark, optional cover image as the
  * background (bottom-weighted scrim keeps text legible), store logo, name,
- * founding badge and blurb. Shared by the store home AND the nested category
- * pages so the look and feel is identical everywhere a buyer lands.
+ * founding badge and blurb. Shared by the store home, the nested category
+ * pages, the product page and checkout so the look and feel is identical
+ * everywhere a buyer lands.
  */
 export function StorefrontHeader({
 	retailer,
+	asPageHeading = true,
 }: {
 	retailer: StorefrontHeaderRetailer;
+	/**
+	 * Whether the store name is this page's `<h1>`. True on the store home,
+	 * where the store IS the page. False on every subpage (category, product,
+	 * checkout), which names its own subject in an `<h1>` — the brand block is
+	 * chrome there, so marking it up as the heading too would both duplicate
+	 * the same `<h1>` across every page in the store and give the page two of
+	 * them. Purely semantic: the rendered text is styled identically.
+	 */
+	asPageHeading?: boolean;
 }) {
 	const hasCover = !!retailer.coverImageUrl;
+	const StoreName = asPageHeading ? "h1" : "p";
 
 	return (
 		<header
@@ -76,13 +88,13 @@ export function StorefrontHeader({
 					/>
 				) : null}
 				<div className="flex flex-col gap-1">
-					<h1
+					<StoreName
 						className={`text-2xl font-bold leading-tight tracking-tight ${
 							hasCover ? "text-white drop-shadow-md" : ""
 						}`}
 					>
 						{retailer.storeName}
-					</h1>
+					</StoreName>
 					{retailer.isFoundingMember ? (
 						<FoundingMemberBadge
 							rank={retailer.foundingMemberRank}

@@ -24,13 +24,19 @@ import {
 	minOrderValueShortfall,
 } from "../../../convex/lib/minOrderRules";
 import type { UseCart } from "../../hooks/useCart";
+import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { quickPickDays } from "../../lib/checkout-dates";
-import { convexErrorMessage, formatPrice } from "../../lib/format";
+import {
+	convexErrorMessage,
+	formatMyMobile,
+	formatPrice,
+} from "../../lib/format";
 import { composeCustomerNote } from "../../lib/order-note";
 import {
 	type CheckoutAddressValues,
 	checkoutFormSchema,
 	emptyAddress,
+	myWaPhoneCheckoutSchema,
 } from "../../lib/schemas";
 import { useLiveDeliveryQuote } from "../../lib/use-live-delivery-quote";
 import { submitThenFocusError } from "../forms/focus-error";
@@ -53,6 +59,12 @@ interface CheckoutPageProps {
 	storeName: string;
 	storeSlug: string;
 	checkoutPhone: string | undefined;
+	/** Store locale — localizes the buyer-facing PDPA line under the phone
+	 * field (the rest of checkout is EN pending the storefront i18n phase). */
+	locale: string;
+	/** Confirmation-push path active (86eyf1rck): the CTA promises a WhatsApp
+	 * confirmation FROM Kedaipal instead of the wa.me send-it-yourself step. */
+	confirmPushEnabled: boolean;
 	offerSelfCollect: boolean;
 	offerDelivery: boolean;
 	minFulfilmentNoticeDays: number | undefined;
@@ -155,12 +167,17 @@ export function CheckoutPage({
 	storeName,
 	storeSlug,
 	checkoutPhone,
+	locale,
+	confirmPushEnabled,
 	offerSelfCollect,
 	offerDelivery,
 	minFulfilmentNoticeDays,
 	minOrderValue,
 	pickupLocations,
 }: CheckoutPageProps) {
+	// The route reserves exactly this bar's height as bottom padding — see the
+	// bar's own comment near the bottom of this component.
+	const barRef = usePublishedHeight<HTMLDivElement>("--storefront-bar-h");
 	const createOrder = useMutation(api.orders.create);
 	const navigate = useNavigate();
 	// Success path clears the cart, which would flash the empty-cart state for
@@ -287,6 +304,9 @@ export function CheckoutPage({
 	const form = useAppForm({
 		defaultValues: {
 			name: "",
+			// Buyer's WhatsApp number (86eyf1rck) — required: the confirmation
+			// push (or the wa.me fallback) is how the order reaches a chat at all.
+			waPhone: "",
 			deliveryMethod: defaultMethod,
 			address: loadSavedAddress(),
 			// Empty when delivery, the chosen id when self-collect with 2+ options,
@@ -371,7 +391,7 @@ export function CheckoutPage({
 			)?.customImageStorageId;
 
 			try {
-				const { trackingToken } = await createOrder({
+				const { trackingToken, confirmedAtCreate } = await createOrder({
 					retailerId,
 					items: cart.items.map((i) => ({
 						variantId: i.variantId,
@@ -381,6 +401,10 @@ export function CheckoutPage({
 					channel: "whatsapp",
 					customer: {
 						name: value.name?.trim() || undefined,
+						// Raw as typed — the server normalizes ("012-345 6789" →
+						// "60123456789") via assertValidMyWaPhone, the same bridge the
+						// counter manual bind uses.
+						waPhone: value.waPhone.trim(),
 					},
 					deliveryMethod: value.deliveryMethod,
 					deliveryAddress: sanitizedAddress,
@@ -405,14 +429,17 @@ export function CheckoutPage({
 				// after the awaited createOrder round-trip we're outside the submit
 				// tap's transient user activation, so popup blockers (iOS Safari,
 				// IG/FB in-app webviews) silently swallow a new tab — order created,
-				// buyer stranded. The tracking page shows the "Send order on
-				// WhatsApp" anchor instead; ?send=1 makes it auto-fire the wa.me
-				// redirect (same-tab, never popup-blocked) so the buyer still lands
-				// in WhatsApp without an extra tap. See docs/order-lifecycle.md.
+				// buyer stranded. Push path (confirmedAtCreate): the order is already
+				// committed + confirmed and Kedaipal's WABA is pushing the
+				// confirmation, so the tracking page shows the "Order placed ✓" state
+				// — NO ?send=1, no wa.me redirect anywhere. Legacy path: ?send=1
+				// auto-fires the wa.me redirect (same-tab, never popup-blocked) so
+				// the buyer still lands in WhatsApp without an extra tap. See
+				// docs/order-lifecycle.md.
 				navigate({
 					to: "/track/$token",
 					params: { token: trackingToken },
-					search: { send: 1 },
+					search: confirmedAtCreate ? {} : { send: 1 },
 				});
 			} catch (err) {
 				setServerError(convexErrorMessage(err));
@@ -628,7 +655,13 @@ export function CheckoutPage({
 					}
 					className="h-12 w-full text-base"
 				>
-					{isSubmitting ? "Sending…" : "Send order on WhatsApp"}
+					{isSubmitting
+						? confirmPushEnabled
+							? "Placing order…"
+							: "Sending…"
+						: confirmPushEnabled
+							? "Place order"
+							: "Send order on WhatsApp"}
 				</Button>
 			)}
 		</form.Subscribe>
@@ -640,11 +673,15 @@ export function CheckoutPage({
 			{blockedReason}
 		</p>
 	) : null;
-	// The handoff is a two-step by design (tracking page fires the wa.me link)
-	// — say what happens next so the CTA never feels like a bait-and-switch.
+	// Say what happens next so the CTA never feels like a bait-and-switch.
+	// Push path: the order commits here and the confirmation is pushed TO the
+	// buyer's WhatsApp — no redirect. Legacy path: the handoff is a two-step by
+	// design (tracking page fires the wa.me link).
 	const reassurance = (
 		<p className="text-center text-xs text-muted-foreground">
-			Opens WhatsApp to confirm with {storeName} — nothing is paid yet.
+			{confirmPushEnabled
+				? `Your order goes straight to ${storeName} — confirmation lands in your WhatsApp. Nothing is paid yet.`
+				: `Opens WhatsApp to confirm with ${storeName} — nothing is paid yet.`}
 		</p>
 	);
 	const privacyLine = (
@@ -787,6 +824,80 @@ export function CheckoutPage({
 								/>
 							)}
 						</form.AppField>
+						<form.AppField name="waPhone">
+							{(field) => (
+								<field.TextField
+									label="WhatsApp number"
+									type="tel"
+									inputMode="tel"
+									autoComplete="tel"
+									placeholder="e.g. 012-345 6789"
+									required
+									description={
+										confirmPushEnabled
+											? "Your order confirmation lands in this WhatsApp. Malaysian mobile — we add the country code automatically."
+											: `${storeName} reaches you on this WhatsApp about your order. Malaysian mobile — we add the country code automatically.`
+									}
+								/>
+							)}
+						</form.AppField>
+						{/* Echo the NORMALIZED number back once it parses. The whole point
+						    of capturing a phone here is that the confirmation reaches it,
+						    and the realistic failure is a transposed digit — which the
+						    buyer can only catch if they see the number grouped the way
+						    they'd read it. Costs nothing and blocks nobody (a genuinely
+						    unreachable number still degrades to the recovery card). */}
+						<form.Subscribe selector={(s) => s.values.waPhone}>
+							{(typed) => {
+								const parsed = myWaPhoneCheckoutSchema.safeParse(typed ?? "");
+								if (!parsed.success) return null;
+								const pretty = formatMyMobile(parsed.data);
+								return (
+									<p className="text-sm font-medium text-accent-emphasis">
+										{locale === "ms"
+											? confirmPushEnabled
+												? `Pengesahan akan dihantar ke ${pretty} — pastikan nombor ini betul.`
+												: `${storeName} akan hubungi anda di ${pretty} — pastikan nombor ini betul.`
+											: confirmPushEnabled
+												? `We'll send your confirmation to ${pretty} — check it's right.`
+												: `${storeName} will reach you at ${pretty} — check it's right.`}
+									</p>
+								);
+							}}
+						</form.Subscribe>
+						{/* PDPA notice-at-collection — the buyer-facing line the WhatsApp
+						    flows carry via privacyNoticeLine; localized to the store
+						    locale like the tracking page (rest of checkout copy is EN
+						    pending the storefront i18n phase). */}
+						<p className="text-xs text-muted-foreground">
+							{locale === "ms" ? (
+								<>
+									Nombor anda digunakan untuk pesanan ini sahaja — pengesahan
+									dan status pesanan dihantar ke WhatsApp anda.{" "}
+									<a
+										href="/privacy"
+										target="_blank"
+										rel="noopener noreferrer"
+										className="underline hover:text-foreground"
+									>
+										Dasar Privasi
+									</a>
+								</>
+							) : (
+								<>
+									Your number is used for this order only — confirmations and
+									status updates go to your WhatsApp.{" "}
+									<a
+										href="/privacy"
+										target="_blank"
+										rel="noopener noreferrer"
+										className="underline hover:text-foreground"
+									>
+										Privacy Policy
+									</a>
+								</>
+							)}
+						</p>
 					</CheckoutSection>
 
 					<CheckoutSection
@@ -1041,15 +1152,23 @@ export function CheckoutPage({
 				</div>
 			</div>
 
-			{/* Mobile sticky CTA — total + send, always in thumb reach. Desktop
-			    uses the summary card's own footer instead. STICKY, not fixed: a
-			    fixed bottom-0 element pins to the LAYOUT viewport, so a phone
-			    browser's expanding bottom toolbar (scroll-up gesture) covers the
-			    bar's lower edge; sticky is laid out in flow and tracks the VISUAL
-			    viewport, so it rides toolbar changes cleanly — and needs no
-			    clearance padding under the page. (The design system's rule #4
-			    prescribes sticky for exactly this.) */}
-			<div className="sticky bottom-0 z-30 -mx-5 mt-6 border-t border-border bg-background/95 px-5 py-3 shadow-[0_-12px_30px_rgba(15,23,42,0.08)] backdrop-blur pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:hidden">
+			{/* Mobile CTA bar — total + send, always in thumb reach. Desktop uses
+			    the summary card's own footer instead.
+
+			    FIXED, matching the storefront CartBar exactly (cart-bar.tsx):
+			    fixed keeps the bar OUT of document flow, so the powered-by footer
+			    renders as ordinary page content ABOVE it — the same stacking the
+			    store home has. A sticky bar sits IN flow, which pushes the footer
+			    below it and makes the badge look welded to the bar. The route
+			    reserves clearance equal to `--storefront-bar-h`, which this bar
+			    publishes as it's measured — so the gap under the footer badge is
+			    the footer's own padding and nothing else, whatever height the bar
+			    happens to be (the reassurance + privacy lines wrap at narrow
+			    widths, and a blocked CTA adds a reason line). */}
+			<div
+				ref={barRef}
+				className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 px-5 py-3 shadow-[0_-12px_30px_rgba(15,23,42,0.08)] backdrop-blur pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:hidden"
+			>
 				<div className="mx-auto flex max-w-xl flex-col gap-2">
 					<form.Subscribe
 						selector={(s) => ({

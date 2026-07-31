@@ -1,5 +1,6 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import {
+	formatMyMobile,
 	formatOrderTimestamp,
 	formatPriceCompact,
 	normalizePriceInput,
@@ -118,5 +119,26 @@ describe("formatOrderTimestamp", () => {
 	test("different-year stamp includes the year", () => {
 		const s = formatOrderTimestamp(placedAt, new Date(2027, 0, 1).getTime());
 		expect(s).toMatch(/2026/);
+	});
+});
+
+describe("formatMyMobile", () => {
+	it("groups a 10-digit local mobile as +60 1X-XXX XXXX", () => {
+		expect(formatMyMobile("60123456789")).toBe("+60 12-345 6789");
+	});
+
+	it("groups an 11-digit local mobile (011/015) as +60 1X-XXXX XXXX", () => {
+		expect(formatMyMobile("601159399791")).toBe("+60 11-5939 9791");
+		expect(formatMyMobile("601549882211")).toBe("+60 15-4988 2211");
+	});
+
+	it("tolerates formatting already present in the input", () => {
+		expect(formatMyMobile("+60 11-5939 9791")).toBe("+60 11-5939 9791");
+	});
+
+	it("falls back to a plain +digits for non-MY / unexpected shapes", () => {
+		expect(formatMyMobile("6581815321")).toBe("+6581815321");
+		expect(formatMyMobile("60312345678")).toBe("+60312345678");
+		expect(formatMyMobile("")).toBe("");
 	});
 });
