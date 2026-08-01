@@ -2,7 +2,7 @@
 
 **Status: implemented.** The store home's lead is merchandised: category
 **filter chips** replace the image-tile rail, a data-driven **"Popular this
-week"** feature card gives the page a lead story, and the desktop grid drops
+week"** shelf scrolls the store's real bestsellers, and the desktop grid drops
 to **4 columns** with visibly larger tiles. Third and final slice of the
 storefront buyer redesign (ClickUp `86eybrhrt`, direction B "Market Page"
 locked 20 Jul 2026). Buyer-facing, all-tier. Follows
@@ -43,59 +43,71 @@ explicit: *"rail cards were heavy for ≤3 categories."*
   just no longer a storefront surface. If they earn a home later, the
   category page header is the natural spot.
 
-## "Popular this week" — the featured lead
+## "Popular this week" — the merchandising shelf
 
 `featured-product.tsx` + the public query `products.popularProducts` + pure
 ranking in `convex/lib/popularProducts.ts`.
 
 **Real order data, zero seller curation.** The target cohort won't
 merchandise by hand, and a hand-picked "featured" flag goes stale; actual
-orders don't lie. The card renders the top-ranked product as a horizontal
-lead (photo + **Bestseller** badge, name, one-line blurb, price, Add /
-Choose options), closed by the "All products" divider that hands over to the
-grid.
+orders don't lie. The section renders a **horizontally scrollable shelf** of
+the qualifying products, closed by the "All products" divider that hands over
+to the grid.
 
 - **Ranking** = distinct orders per product in the last 7 days (quantity as
   tiebreak, id as the stable final tiebreak). Distinct orders, not units —
   one 40-pax bulk order shouldn't outrank ten customers buying one cake
   each. Only revenue statuses count (`isRevenueOrder`: confirmed→delivered;
   pending/cancelled excluded).
-- **Honesty threshold**: fewer than 2 orders in the window → no candidates →
-  the row hides entirely. A new or quiet store shows search + chips + grid,
-  never a hollow "bestseller" claim. (`POPULAR_MIN_ORDERS`.)
+- **Honesty threshold**: fewer than 2 orders in the window → not a candidate;
+  if nothing qualifies the section hides entirely. A new or quiet store shows
+  search + chips + grid, never a hollow "bestseller" claim.
+  (`POPULAR_MIN_ORDERS = 2`.)
+- **Up to `POPULAR_TOP_CANDIDATES = 10`** on the shelf. The row scrolls, so
+  extra items cost nothing in layout — the cap exists because past ~10 a
+  "popular this week" shelf stops being a shortlist and starts being the
+  catalog, which the grid below already is.
 - **Ids only cross the wire.** The query returns ranked product ids — no
   order counts — because it's unauthenticated: a store's sales volume is the
   seller's business, not a competitor's scraping target. The client resolves
   ids against the `products.list` subscription it already holds (Convex
   dedupes identical subscriptions — no extra read), so public-visibility
-  rules apply exactly once, and a top seller that's since been hidden,
-  archived, sold out or min-quantity-trapped is **skipped for the next
-  candidate** (the query returns up to `POPULAR_TOP_CANDIDATES = 5`) rather
-  than featured as unbuyable.
-- **Cache discipline** (the insights precedent): the client sends
-  `since = popularSince()` — MYT midnight, 7 days back — so every buyer on
-  the same date sends identical args and shares one cached result; the
-  server **rejects** non-midnight anchors rather than letting per-pageview
-  `Date.now()` values fragment the cache. The scan is an indexed
-  newest-first `by_retailer` range read bounded by
+  rules apply exactly once, and any candidate since hidden, archived, sold
+  out or min-quantity-trapped **drops out of the row** rather than being
+  merchandised as unbuyable.
+- **The window ROLLS, ending now** — it is not a calendar week. `since =
+  popularSince()` is MYT midnight 7 days back with **no upper bound**, so on
+  3 Oct the shelf covers 26 Sep 00:00 → now and on 4 Oct it covers 27 Sep
+  00:00 → now. Nothing resets on a week boundary, so the shelf never blanks
+  out on a particular weekday. Test-pinned (`popularSince` "slides forward
+  one day per day").
+- **Cache discipline** (the insights precedent): day-aligning that anchor
+  means every buyer on the same MYT date sends identical args and shares one
+  cached result; the server **rejects** non-midnight anchors rather than
+  letting per-pageview `Date.now()` values fragment the cache. The scan is an
+  indexed newest-first `by_retailer` range read bounded by
   `take(POPULAR_SCAN_CAP = 500)` whatever window a hand-rolled client asks
   for.
-- The Add button reuses the grid's exact quick-add via the extracted
-  `quickAddProductToCart` (product-purchase.tsx): min-quantity top-up,
-  hard-block stock clamp, one author. Multi-variant/custom products render
-  "Choose options" → the product page, mirroring the card affordance rules.
 
-**One compact card, capped at `max-w-md` — never full-bleed.** The design
-only ever mocked this section in a phone frame, and getting the width right
-took two corrections (Zaki, 31 Jul): the mobile card stretched to 1150px was
-a thumbnail beside a metre of nothing, and a full-width banner variant was no
-better — **a single lead item doesn't carry a whole row at any size**. The
-cap leaves phones at their natural width and gives desktop a standard card,
-left-aligned under the section label. Inside, the CTA is a **chip beside the
-price** (`h-11` auto-width — the 44px tap target kept, label "Choose"
-matching the grid cards), not a full-width slab under the copy. 448×125px on
-desktop with a 112px image panel; the "All products" divider still spans the
-section, so the short card reads as deliberate.
+**The shelf renders the shared `ProductCard`** — the same component the grid
+uses — in fixed-width cells (`w-40 sm:w-44 lg:w-52`) inside a full-bleed
+snap-scroller, identical on mobile and desktop (the Grab/Pandamart pattern
+Zaki asked for). Reusing the card means the shelf inherits every state the
+grid already handles — out-of-stock, low stock, "Min N", custom-available,
+quick-add vs Choose, real `<Link>`s for crawlers — and the two surfaces
+cannot drift. There is deliberately **no "Bestseller" ribbon**: the section
+heading already says what the row is, and stamping it on all ten would be
+noise. Add reuses the grid's exact `quickAddProductToCart` (min-quantity
+top-up, hard-block stock clamp, one author).
+
+*Getting here took three passes (Zaki, 31 Jul), worth recording so the
+shape isn't relitigated:* the design only ever mocked this section in a phone
+frame, so the first cut shipped one mobile card at every width — a thumbnail
+marooned beside a metre of nothing at 1150px. A full-width banner variant was
+worse. Capping a single card at `max-w-md` looked fine but answered the wrong
+question: **the section was never meant to be one item.** A scrolling shelf
+of the actual ranked list fills the row honestly at any width and needs no
+breakpoint-specific layout at all.
 
 ## 4-column desktop grid
 
@@ -106,20 +118,21 @@ products are the page, and the design call was tiles ~50% larger.
 
 ## Layout order (store home)
 
-Search (sticky, first control) → chips → featured card → "All products"
-divider → grid. Chips and featured both slot into `ProductGrid`'s
-`beforeGrid`, so an active search hides them and results take the whole
-surface (existing behaviour, unchanged). The divider renders with the
-featured card (it separates the lead story from the catalog); chips alone
-flow straight into the grid.
+Search (sticky, first control) → chips → popular shelf → "All products"
+divider → grid. Chips and shelf both slot into `ProductGrid`'s `beforeGrid`,
+so an active search hides them and results take the whole surface (existing
+behaviour, unchanged). The divider renders with the shelf (it separates the
+bestsellers from the full catalog); chips alone flow straight into the grid.
 
 ## Tests
 
 `convex/lib/popularProducts.test.ts` (ranking: distinct-order counting,
-status filtering, threshold, cap, determinism; `popularSince` alignment),
+status filtering, threshold, cap, determinism; `popularSince` day-alignment
+AND the rolling-window slide),
 `convex/products.test.ts` (query: ranking end-to-end, retailer isolation,
 single-order hides, non-midnight `since` rejected),
 `category-chips.test.tsx` (All + per-category links, active states,
-zero-category null), `featured-product.test.tsx` (loading/empty null,
-candidate skipping for unlisted/sold-out, quick-add wiring, multi-variant →
-page).
+zero-category null), `featured-product.test.tsx` (loading/empty null, the
+whole ranked set shelved in rank order, unranked catalog products stay off,
+unlisted/sold-out candidates dropped, quick-add wiring, multi-variant → page,
+and the error boundary degrading to nothing).

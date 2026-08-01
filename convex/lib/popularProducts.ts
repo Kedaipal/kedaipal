@@ -21,12 +21,18 @@ export const POPULAR_WINDOW_DAYS = 7;
 export const POPULAR_MIN_ORDERS = 2;
 
 /**
- * How many ranked candidates the query returns. The client picks the FIRST
- * one that's actually presentable (still publicly listed, in stock, minimum
- * quantity reachable) — the runners-up exist so a newly hidden or sold-out
- * top seller doesn't blank the row.
+ * How many ranked candidates the query returns — the shelf's ceiling. The
+ * client renders every candidate that's actually presentable (still publicly
+ * listed, in stock, minimum quantity reachable), in rank order, as a
+ * horizontally scrollable row; ones that have since sold out or been hidden
+ * simply drop out rather than blanking the shelf.
+ *
+ * 10 is a deliberate cap, not a guess: the row scrolls, so more items cost
+ * nothing in layout, but every id here is a product the client must resolve
+ * and render, and past ~10 a "popular this week" shelf stops being a
+ * shortlist and starts being the catalog (which the grid below already is).
  */
-export const POPULAR_TOP_CANDIDATES = 5;
+export const POPULAR_TOP_CANDIDATES = 10;
 
 /**
  * Newest-first scan bound. At the cohort's volume (20+ orders/week) a 7-day
@@ -39,10 +45,17 @@ export const POPULAR_SCAN_CAP = 500;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * The `since` anchor the storefront sends: MYT midnight, 7 days back. Aligned
- * to a day boundary so every buyer on the same date sends identical args and
- * shares one cached query result (the insights cache discipline) — the server
- * rejects unaligned values for exactly that reason.
+ * The `since` anchor the storefront sends: MYT midnight, 7 days back.
+ *
+ * This is a ROLLING window ending *now*, not a calendar week — on 3 Oct it
+ * spans 26 Sep 00:00 → now, and on 4 Oct it spans 27 Sep 00:00 → now. There
+ * is no upper bound and nothing resets on a week boundary, so the shelf never
+ * blanks out on a particular weekday; it always reflects the last 7 days of
+ * trading. (Verified by test below.)
+ *
+ * Aligned to the day boundary so every buyer on the same date sends identical
+ * args and shares one cached query result (the insights cache discipline) —
+ * the server rejects unaligned values for exactly that reason.
  */
 export function popularSince(now: number = Date.now()): number {
 	return todayMytMidnight(now) - POPULAR_WINDOW_DAYS * DAY_MS;

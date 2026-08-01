@@ -104,34 +104,51 @@ describe("FeaturedProduct", () => {
 		expect(mount().container.innerHTML).toBe("");
 	});
 
-	it("features the top candidate with its blurb, price and a working link", () => {
-		productsResult = [makeProduct("cake"), makeProduct("pie")];
-		popularResult = ["cake"];
+	it("shelves every qualifying candidate, in rank order", () => {
+		productsResult = [
+			makeProduct("cake"),
+			makeProduct("pie"),
+			makeProduct("tart"),
+			// In the catalog but NOT ranked popular — must stay off the shelf.
+			makeProduct("unranked"),
+		];
+		popularResult = ["tart", "cake", "pie"];
 		mount();
 		expect(screen.getByText("Popular this week")).toBeTruthy();
-		expect(screen.getByText("Bestseller")).toBeTruthy();
-		expect(screen.getByText("Rich, dense, tea-time classic")).toBeTruthy();
-		// Image and title are separate links to the same page.
-		const links = screen.getAllByRole("link", { name: "Product cake" });
-		expect(links).toHaveLength(2);
-		for (const link of links) {
-			expect(link.getAttribute("href")).toBe("/herb/p/cake");
-		}
+
+		const shelf = screen
+			.getByRole("region", { name: "Popular this week" })
+			.querySelectorAll("a[href^='/herb/p/']");
+		// Rank order preserved (the query already sorted them), and each card's
+		// photo + name are both links to the same page.
+		const hrefs = [...shelf].map((a) => a.getAttribute("href"));
+		expect([...new Set(hrefs)]).toEqual([
+			"/herb/p/tart",
+			"/herb/p/cake",
+			"/herb/p/pie",
+		]);
+		expect(screen.queryByText("Product unranked")).toBeNull();
 		// Hands over to the grid below.
 		expect(screen.getByText("All products")).toBeTruthy();
 	});
 
-	it("skips candidates that are unlisted or sold out, never featuring the unbuyable", () => {
+	it("drops candidates that are unlisted or sold out, never shelving the unbuyable", () => {
 		productsResult = [
-			// Top candidate sold out; runner-up is fine. ("hidden-one" isn't in
+			// Top candidate sold out; the rest are fine. ("hidden-one" isn't in
 			// the public list at all — a hidden/archived top seller.)
 			makeProduct("soldout", { inStock: false }),
 			makeProduct("pie"),
 		];
 		popularResult = ["hidden-one", "soldout", "pie"];
 		mount();
-		expect(screen.getByText("Product pie")).toBeTruthy();
-		expect(screen.queryByText("Product soldout")).toBeNull();
+		// Assert on hrefs, not text: an image-less ProductCard prints the name
+		// twice (photo placeholder + title), so text queries are ambiguous.
+		const hrefs = [
+			...screen
+				.getByRole("region", { name: "Popular this week" })
+				.querySelectorAll("a[href^='/herb/p/']"),
+		].map((a) => a.getAttribute("href"));
+		expect([...new Set(hrefs)]).toEqual(["/herb/p/pie"]);
 	});
 
 	it("quick-adds a single-variant product straight into the cart", () => {

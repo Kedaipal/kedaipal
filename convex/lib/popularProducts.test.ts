@@ -80,11 +80,37 @@ describe("rankPopularProducts", () => {
 });
 
 describe("popularSince", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+
 	it("is an MYT midnight 7 days back — the day-aligned cache anchor", () => {
 		const since = popularSince();
-		expect((since + MYT_OFFSET_MS) % (24 * 60 * 60 * 1000)).toBe(0);
-		const daysBack = (Date.now() - since) / (24 * 60 * 60 * 1000);
+		expect((since + MYT_OFFSET_MS) % DAY).toBe(0);
+		const daysBack = (Date.now() - since) / DAY;
 		expect(daysBack).toBeGreaterThanOrEqual(7);
 		expect(daysBack).toBeLessThan(8);
+	});
+
+	// The window ROLLS with today; it is not a calendar week. If it ever became
+	// one, the shelf would empty out every time a new week started — the exact
+	// failure mode this pins against.
+	it("slides forward one day per day, so the shelf never resets on a weekday", () => {
+		const at = (iso: string) => popularSince(new Date(iso).getTime());
+		const oct3 = at("2026-10-03T15:00:00+08:00");
+		const oct4 = at("2026-10-04T09:00:00+08:00");
+		const oct5 = at("2026-10-05T23:59:00+08:00");
+
+		// One day later → window start moves exactly one day later.
+		expect(oct4 - oct3).toBe(DAY);
+		expect(oct5 - oct4).toBe(DAY);
+		// On 3 Oct the window opens on 26 Sep (7 days back), and runs to "now" —
+		// the query applies no upper bound.
+		expect(new Date(oct3 + MYT_OFFSET_MS).toISOString().slice(0, 10)).toBe(
+			"2026-09-26",
+		);
+		// Time of day never moves the anchor: two buyers on the same MYT date
+		// send identical args, which is what keeps the query cached.
+		expect(at("2026-10-03T00:05:00+08:00")).toBe(
+			at("2026-10-03T23:55:00+08:00"),
+		);
 	});
 });
