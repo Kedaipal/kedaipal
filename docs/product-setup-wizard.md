@@ -154,11 +154,16 @@ broke it:
    was `false`. Once the flag and the editor disagreed, the wizard shipped
    `options: []` beside a multi-row grid and skipped the very check that would
    have caught it. Both now read the editor: the flag is a UI affordance only.
-2. **The client and server disagreed about blank values.** `normalizeOptions`
-   trims values and **drops** blank ones; the client's `collectOptionIssues`
-   never trimmed, so a whitespace-only value counted as a combination on the
-   client that the server then discarded, shrinking `expected` behind the grid's
-   back. `sanitizeOptions` is the client mirror of that rule.
+2. **The client and server disagreed about blank values** — a latent gap, *not*
+   a demonstrated cause of the reported bug. `normalizeOptions` trims values and
+   silently **drops** blank ones; the client's `collectOptionIssues` never
+   trimmed, so a whitespace-only value would count as a combination on the
+   client that the server then discards, shrinking `expected` behind the grid's
+   back. No reachable path feeds it one today (`addValue` trims and rejects
+   blanks in both editors, the presets are clean, and stored options come back
+   server-normalized), so `sanitizeOptions` is defence-in-depth that keeps the
+   two sides provably in step — worth having, but it did not produce the
+   `Expected 1 variants…` report. Cause 1 is the one that did.
 
 `reconcileForSubmit(options, rows)` is the backstop, called at **both** submit
 sites (the full form and `buildWizardSubmitValues`). It sanitizes the axes, then
@@ -176,8 +181,20 @@ normal inline row issue (`buildSubmitVariants`), and the full form writes the
 reconciled grid back into editor state before validating so the message points at
 an input the seller can actually see. The result: a mismatch costs a re-typed
 price, never an unsavable product. The server's two throws now name the axes and
-the combinations received. Covered by `variant-grid-reconcile.test.ts` +
-`convex/products.test.ts`.
+the combinations received (truncated past six — the full list at the 50-variant
+cap is a ~1KB banner).
+
+**Validation and render must read the same source.** Moving validation onto the
+editor without moving the render created a new dead end (caught in PR #156
+review): step 2 raised an `axisName`/`axisValues` issue while the axis block was
+still gated on `state.hasChoices`, so the message had no mounted input, and since
+the wizard has no generic issue banner, Continue silently did nothing. One
+derived `showAxes = state.hasChoices === true || options.length > 0` now feeds
+the render gate, both `AnswerCard` selections, and the step 3/5 wording, and the
+"pick one to continue" check only fires when the editor genuinely has no axes.
+The rule to keep: **any state validation can reject must be reachable and
+visible on screen.** Covered by `variant-grid-reconcile.test.ts`,
+`product-wizard-axes-render.test.tsx` and `convex/products.test.ts`.
 
 ### The restructured `VariantEditor`
 

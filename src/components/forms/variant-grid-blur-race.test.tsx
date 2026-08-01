@@ -16,8 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("convex/react", () => ({ useMutation: () => vi.fn() }));
 
-import { cartesian, type OptionAxis } from "../../lib/variant";
-import { buildSubmitVariants } from "./product-form";
+import { cartesian, type OptionAxis, variantLabel } from "../../lib/variant";
 import {
 	reconcileForSubmit,
 	VariantEditor,
@@ -56,19 +55,25 @@ function Harness({
 	);
 }
 
-/** The server's check, mirrored — see convex/products.ts validateVariantSet. */
-function serverAccepts(
+/**
+ * Does the EDITOR itself still hold the invariant — do `rows` cover
+ * `cartesian(options)` exactly? Computed independently rather than by calling
+ * `reconcileForSubmit`: a helper that ran the function under test would pass
+ * even if reconcile were a no-op, which makes it no tripwire at all. Zero
+ * combinations is exempt — an incomplete axis deliberately keeps the previous
+ * rows (see rebuildRows).
+ */
+function editorInvariantHolds(
 	options: OptionAxis[],
 	rows: VariantEditorState["rows"],
 ) {
-	const reconciled = reconcileForSubmit(options, rows);
-	const built = buildSubmitVariants(reconciled.rows, null);
-	const variants = "variants" in built ? built.variants : [];
-	const matrix = variants.filter((v) => !v.isCustom);
-	// An unpriced rebuilt row yields issues instead of variants — that's the
-	// seller-fixable path, not a dead end, so treat it as "not a server reject".
-	if (!("variants" in built)) return true;
-	return matrix.length === cartesian(reconciled.options).length;
+	const expected = cartesian(options);
+	if (expected.length === 0) return true;
+	const present = new Set(rows.map((r) => variantLabel(r.optionValues)));
+	return (
+		rows.length === expected.length &&
+		expected.every((combo) => present.has(variantLabel(combo)))
+	);
 }
 
 const withOptions: VariantEditorState = {
@@ -102,7 +107,7 @@ describe("Add-value blur committing in the same gesture as a mode switch", () =>
 
 		// Guard: the switch must actually have happened, or this asserts nothing.
 		expect(latest.options).toEqual([]);
-		expect(serverAccepts(latest.options, latest.rows)).toBe(true);
+		expect(editorInvariantHolds(latest.options, latest.rows)).toBe(true);
 	});
 
 	it("survives the reverse order — click handled before the pending blur", () => {
@@ -120,7 +125,7 @@ describe("Add-value blur committing in the same gesture as a mode switch", () =>
 		fireEvent.click(screen.getByRole("button", { name: /just one item/i }));
 		fireEvent.blur(draft);
 
-		expect(serverAccepts(latest.options, latest.rows)).toBe(true);
+		expect(editorInvariantHolds(latest.options, latest.rows)).toBe(true);
 	});
 
 	it("keeps the payload consistent when the blur lands after the switch", () => {
@@ -140,7 +145,7 @@ describe("Add-value blur committing in the same gesture as a mode switch", () =>
 		expect(reconciled.rows).toHaveLength(
 			cartesian(reconciled.options).length || reconciled.rows.length,
 		);
-		expect(serverAccepts(latest.options, latest.rows)).toBe(true);
+		expect(editorInvariantHolds(latest.options, latest.rows)).toBe(true);
 	});
 
 	it("commits a blurred draft value into a consistent grid", () => {
@@ -155,6 +160,6 @@ describe("Add-value blur committing in the same gesture as a mode switch", () =>
 
 		expect(latest.options[0].values).toEqual(["S", "M", "L"]);
 		expect(latest.rows).toHaveLength(3);
-		expect(serverAccepts(latest.options, latest.rows)).toBe(true);
+		expect(editorInvariantHolds(latest.options, latest.rows)).toBe(true);
 	});
 });

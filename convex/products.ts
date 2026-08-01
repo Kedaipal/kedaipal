@@ -356,12 +356,21 @@ function describeAxes(options: OptionAxis[]): string {
 	return `Options [${options.map((a) => `${a.name}: ${a.values.join(", ")}`).join("] × [")}]`;
 }
 
-/** Render a combo list for an error, with the empty tuple shown as "(no options)". */
+/**
+ * Render a combo list for an error, with the empty tuple shown as
+ * "(no options)". Truncated — at the 50-variant cap the full list is a ~1KB
+ * string in a seller-facing banner, and the first few already identify the
+ * mismatch.
+ */
+const MAX_COMBOS_IN_ERROR = 6;
 function describeCombos(combos: readonly (readonly string[])[]): string {
 	if (combos.length === 0) return "none";
-	return combos
+	const shown = combos
+		.slice(0, MAX_COMBOS_IN_ERROR)
 		.map((c) => (c.length === 0 ? "(no options)" : `"${variantLabel(c)}"`))
 		.join(", ");
+	const rest = combos.length - MAX_COMBOS_IN_ERROR;
+	return rest > 0 ? `${shown} …and ${rest} more` : shown;
 }
 
 /**

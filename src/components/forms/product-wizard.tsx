@@ -138,6 +138,15 @@ export function wizardStepIssues(
 	// empty array at submit, which the server rejects as "needs at least one
 	// variant". Sanitizing also keeps the axis checks in step with the server,
 	// which trims values and drops blank ones.
+	//
+	// CAVEAT: unlike the full form, the wizard never writes the reconciled grid
+	// back into `state.editor` (this function is pure and has no setter). That's
+	// safe only while reconcile can't actually rebuild rows here — every wizard
+	// option write goes through `setOptions` → `rebuildRows`, so the grid already
+	// covers the cartesian. If a path ever breaks that, the step 3/4 issues keyed
+	// `price:${rowKey(reconciledRows[i])}` would address rows that aren't
+	// rendered, reproducing the unrenderable-issue dead end at a later step. Add
+	// the write-back (or reconcile on mount) before introducing such a path.
 	const { customLine } = state.editor;
 	const { options, rows } = reconcileForSubmit(
 		state.editor.options,
@@ -149,7 +158,10 @@ export function wizardStepIssues(
 		}
 	}
 	if (step === 2) {
-		if (state.hasChoices === null) {
+		// Axes in the editor ARE the answer, so only an editor with none can be
+		// "unanswered". Asking again while a grid exists would contradict the
+		// screen, which renders the choices block off the same derivation.
+		if (state.hasChoices === null && options.length === 0) {
 			issues.push({ field: "hasChoices", message: "Pick one to continue." });
 		}
 		// Validate whenever axes EXIST, not when `hasChoices` says they should.
@@ -268,7 +280,9 @@ export function buildWizardSubmitValues(
 	return {
 		name: state.name.trim(),
 		description:
-			state.description.trim().length > 0 ? state.description.trim() : undefined,
+			state.description.trim().length > 0
+				? state.description.trim()
+				: undefined,
 		hidden: state.hidden,
 		// Blank → undefined (no rule); the server normalizes 0/1 to unset.
 		minQuantity:
@@ -531,6 +545,13 @@ export function ProductWizard({
 	}
 
 	const { options, rows, customLine } = state.editor;
+	// "Does this product have choices?" — the EDITOR answers it, not the flag.
+	// `hasChoices` is only the step-2 affordance; if the two ever disagree the
+	// axis block must still render, or validation (which reads the editor) can
+	// raise an axisName/axisValues issue against an input that isn't mounted and
+	// Continue silently does nothing. Every render-time "has choices" read below
+	// goes through this, so the screen can never contradict the payload.
+	const showAxes = state.hasChoices === true || options.length > 0;
 	const variantCount = cartesian(options).length;
 	const allTrack = rows.length > 0 && rows.every((r) => r.blockWhenOutOfStock);
 	const allMto = rows.length > 0 && rows.every((r) => !r.blockWhenOutOfStock);
@@ -554,7 +575,10 @@ export function ProductWizard({
 			rows: rows.map((r, i) => (i === index ? { ...r, ...rowPatch } : r)),
 		});
 	}
-	function bulkFlag(field: "blockWhenOutOfStock" | "requiresProof", v: boolean) {
+	function bulkFlag(
+		field: "blockWhenOutOfStock" | "requiresProof",
+		v: boolean,
+	) {
 		patchEditor({ rows: rows.map((r) => ({ ...r, [field]: v })) });
 	}
 	function renameAxis(axisIndex: number, name: string) {
@@ -995,21 +1019,21 @@ export function ProductWizard({
 						</p>
 						<div className="flex flex-col gap-2.5">
 							<AnswerCard
-								selected={state.hasChoices === false}
+								selected={state.hasChoices === false && !showAxes}
 								icon={<PackageCheck className="size-5" aria-hidden />}
 								title="Just one item"
 								description="One name, one price. e.g. Nasi lemak bungkus"
 								onClick={switchToSingle}
 							/>
 							<AnswerCard
-								selected={state.hasChoices === true}
+								selected={showAxes}
 								icon={<ChefHat className="size-5" aria-hidden />}
 								title="Buyer picks a choice"
 								description="e.g. Small / Medium / Large, or Pandan / Original"
 								onClick={switchToChoices}
 							/>
 						</div>
-						{state.hasChoices ? (
+						{showAxes ? (
 							<div className="flex flex-col gap-3 border-t border-border pt-3">
 								<div className="flex items-center justify-between">
 									<span className="text-sm font-medium">
@@ -1058,7 +1082,7 @@ export function ProductWizard({
 				{step === 3 ? (
 					<>
 						<h3 className="text-xl font-bold leading-tight">
-							{state.hasChoices ? "Price each choice" : "Set your price"}
+							{showAxes ? "Price each choice" : "Set your price"}
 						</h3>
 						{rows.length > 1 ? (
 							<label className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
@@ -1174,7 +1198,7 @@ export function ProductWizard({
 								className="self-start text-sm font-semibold text-accent-emphasis hover:underline"
 							>
 								+ Photos, item codes (SKU) & more per{" "}
-								{state.hasChoices ? "choice" : "item"}
+								{showAxes ? "choice" : "item"}
 							</button>
 						)}
 					</>
@@ -1218,10 +1242,7 @@ export function ProductWizard({
 							varyFulfilment ? (
 								<div className="flex flex-col gap-2">
 									{rows.map((row, i) => (
-										<div
-											key={rowKey(row)}
-											className="flex items-center gap-3"
-										>
+										<div key={rowKey(row)} className="flex items-center gap-3">
 											<span className="min-w-0 flex-1 truncate text-sm font-medium">
 												{rowKey(row)}
 											</span>
@@ -1357,7 +1378,7 @@ export function ProductWizard({
 							{[
 								{
 									label: "Choices",
-									value: state.hasChoices
+									value: showAxes
 										? `${variantCount} by ${options
 												.map((a) => a.name.trim())
 												.filter(Boolean)
@@ -1615,16 +1636,14 @@ export function ProductWizard({
 												max={MIN_QUANTITY_MAX}
 												placeholder="e.g. 20"
 												value={state.minQuantity}
-												onChange={(e) =>
-													patch({ minQuantity: e.target.value })
-												}
+												onChange={(e) => patch({ minQuantity: e.target.value })}
 												isError={!!issueFor("minQuantity")}
 												className="h-11 w-32"
 											/>
 											<IssueText message={issueFor("minQuantity")} />
 											<span className="text-xs font-normal text-muted-foreground">
-												Buyers must order at least this many — choices
-												combined. Counter checkout ignores it.
+												Buyers must order at least this many — choices combined.
+												Counter checkout ignores it.
 											</span>
 										</label>
 										<label className="flex flex-col gap-1 text-sm font-medium">
