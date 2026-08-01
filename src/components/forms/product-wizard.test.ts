@@ -529,9 +529,7 @@ describe("wizardInitialStep", () => {
 		// the screen renders the choices block off the editor, so demanding an
 		// answer here would contradict what the seller is looking at.
 		expect(wizardInitialStep({ ...browniesState(), hasChoices: null })).toBe(5);
-		expect(wizardInitialStep({ ...browniesState(), hasChoices: false })).toBe(
-			5,
-		);
+		expect(wizardInitialStep({ ...browniesState(), hasChoices: false })).toBe(5);
 	});
 });
 

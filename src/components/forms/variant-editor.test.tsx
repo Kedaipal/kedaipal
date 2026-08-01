@@ -121,9 +121,9 @@ describe("VariantEditor — vary per choice", () => {
 		expect(screen.queryByRole("button", { name: /track stock/i })).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: /vary per choice/i }));
 		// One compact Track stock / Made to order pair per row.
-		expect(
-			screen.getAllByRole("button", { name: /track stock/i }),
-		).toHaveLength(2);
+		expect(screen.getAllByRole("button", { name: /track stock/i })).toHaveLength(
+			2,
+		);
 	});
 
 	it("auto-opens the per-choice override for a legacy mixed product", () => {
@@ -136,9 +136,9 @@ describe("VariantEditor — vary per choice", () => {
 		};
 		render(<Harness initial={mixed} />);
 		// Mixed state must never look uniform — the override list is pre-open…
-		expect(
-			screen.getAllByRole("button", { name: /track stock/i }),
-		).toHaveLength(2);
+		expect(screen.getAllByRole("button", { name: /track stock/i })).toHaveLength(
+			2,
+		);
 		// …and the product-level cards say why nothing is selected.
 		expect(screen.getByText(/varies per choice/i)).toBeTruthy();
 	});
@@ -349,11 +349,7 @@ describe("VariantEditor — inline submit issues", () => {
 	it("marks the option-axis name input for an option issue", () => {
 		render(
 			<VariantEditor
-				value={{
-					...withOptions,
-					options: [{ name: "", values: [] }],
-					rows: [],
-				}}
+				value={{ ...withOptions, options: [{ name: "", values: [] }], rows: [] }}
 				onChange={() => {}}
 				currency="RM"
 				issues={[

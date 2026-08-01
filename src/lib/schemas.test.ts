@@ -15,7 +15,9 @@ describe("myWaPhoneCheckoutSchema", () => {
 	});
 
 	it("accepts 011-series numbers (one digit longer)", () => {
-		expect(myWaPhoneCheckoutSchema.parse("011-2345 6789")).toBe("601123456789");
+		expect(myWaPhoneCheckoutSchema.parse("011-2345 6789")).toBe(
+			"601123456789",
+		);
 	});
 
 	it("rejects non-mobile and non-MY numbers with the checkout copy", () => {
