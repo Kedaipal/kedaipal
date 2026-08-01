@@ -28,11 +28,13 @@ never left the data or the dashboard; this puts them back on the storefront.
   filters: `/c/{slug}` keeps its SSR/SEO and shareable deep links (the
   dashboard's per-category copy-link still lands somewhere real), and there
   is exactly one navigation model.
-- The **category page renders the same rail with its own tile ringed**
-  (`activeCategorySlug`), so buyers hop laterally (kuih → cakes) without
-  going through back. The page's "← All products" link stays the way *up*;
-  the tiles are the way *across*. There is no "All" tile — that link already
-  exists, above.
+- **Store home only.** The rail briefly also rendered on the category page
+  with the current tile ringed, for lateral hops (kuih → cakes); that was cut
+  (Zaki, 31 Jul). Inside a category the page already names it (h1 + blurb)
+  and the only job left is browsing what's in it, so a row of siblings just
+  competes with the products it sits on top of. "← All products" is the way
+  back out. No "All" tile either, for the same reason — that link already
+  exists.
 - **Scrim is heavier than the old rail's** (`from-primary/90 via-primary/30`).
   These tiles are a third the area with 13px names, and a seller's photo can
   be pale — a white-iced cake on marble left white-on-light. The top of the
@@ -124,10 +126,8 @@ products" divider → grid. Rail and shelf both slot into `ProductGrid`'s
 when it renders nothing),
 so an active search hides them and results take the whole surface (existing
 behaviour, unchanged). The divider renders with the shelf, since it separates
-the bestsellers from the full catalog. The **category page** has no shelf and
-so no divider, so it hangs its own `mb-5` on the rail — safe there because
-reaching a category page at all means a visible category exists, so the rail
-always renders.
+the bestsellers from the full catalog. The **category page** renders neither
+rail nor shelf — it goes header → back link → category name → search → grid.
 
 ## Tests
 
@@ -136,8 +136,8 @@ status filtering, threshold, cap, determinism; `popularSince` day-alignment
 AND the rolling-window slide),
 `convex/products.test.ts` (query: ranking end-to-end, retailer isolation,
 single-order hides, non-midnight `since` rejected),
-`category-rail.test.tsx` (a tile per category with count + link, active
-ring only on the current one, deterministic gradient fallback, own image when
+`category-rail.test.tsx` (a tile per category with count + link, no tile ever
+marked as the current page, deterministic gradient fallback, own image when
 set, zero-category null), `featured-product.test.tsx` (loading/empty null, the
 whole ranked set shelved in rank order, unranked catalog products stay off,
 unlisted/sold-out candidates dropped, quick-add wiring, multi-variant → page,

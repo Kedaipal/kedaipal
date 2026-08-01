@@ -43,19 +43,21 @@ function gradientFor(slug: string): string {
  *
  * Tiles are LINKS to the existing `/c/{slug}` pages, not client-side filters:
  * those routes keep their SSR/SEO and shareable deep links, and there's
- * exactly one navigation model. The category page renders this same rail with
- * its own tile marked active, so buyers hop laterally (kuih → cakes) without
- * going through back; "← All products" up there stays the way *up*.
+ * exactly one navigation model.
+ *
+ * **Store home only.** It briefly also rendered on the category page with the
+ * current tile ringed, for lateral hops (kuih → cakes); Zaki cut that (31 Jul)
+ * and it's the right call — inside a category the page already names it and
+ * the only job left is browsing what's in it, so a row of siblings just
+ * competes with the products it sits on top of. "← All products" is the way
+ * back out.
  */
 export function CategoryRail({
 	retailerId,
 	storeSlug,
-	activeCategorySlug,
 }: {
 	retailerId: Id<"retailers">;
 	storeSlug: string;
-	/** Set on the category page — that tile renders with an accent ring. */
-	activeCategorySlug?: string;
 }) {
 	const categories = useQuery(api.categories.listActivePublic, { retailerId });
 	if (!categories || categories.length === 0) return null;
@@ -72,18 +74,12 @@ export function CategoryRail({
 			    box — without it the first tile parks against the screen edge). */}
 			<div className="-mx-5 mt-2 flex snap-x scroll-pl-5 gap-3 overflow-x-auto px-5 pb-1 [scrollbar-width:none] lg:-mx-8 lg:scroll-pl-8 lg:px-8 [&::-webkit-scrollbar]:hidden">
 				{categories.map((category) => {
-					const active = category.slug === activeCategorySlug;
 					return (
 						<Link
 							key={category._id}
 							to="/$slug/c/$categorySlug"
 							params={{ slug: storeSlug, categorySlug: category.slug }}
-							aria-current={active ? "page" : undefined}
-							className={`relative flex h-24 w-36 shrink-0 snap-start flex-col justify-end overflow-hidden rounded-xl transition-transform active:scale-[0.98] lg:h-28 lg:w-44 ${
-								active
-									? "ring-2 ring-accent ring-offset-2 ring-offset-background"
-									: ""
-							}`}
+							className="relative flex h-24 w-36 shrink-0 snap-start flex-col justify-end overflow-hidden rounded-xl transition-transform active:scale-[0.98] lg:h-28 lg:w-44"
 						>
 							{category.imageUrl ? (
 								<AppImage

@@ -77,23 +77,13 @@ describe("CategoryRail", () => {
 		expect(screen.getByText("8")).toBeTruthy();
 	});
 
-	it("marks only the current category as the active tile", () => {
+	// The rail is store-home-only, so no tile is ever "the page you're on" —
+	// it had an active-ring variant while it also rendered inside a category,
+	// and that whole surface was cut.
+	it("never marks a tile as the current page", () => {
 		categories.push(cat("cakes", "Cakes"), cat("kuih", "Kuih"));
-		// Store home: nothing is the current category.
 		render(<CategoryRail retailerId={RID} storeSlug="herb" />);
 		expect(document.querySelectorAll('[aria-current="page"]')).toHaveLength(0);
-		cleanup();
-
-		render(
-			<CategoryRail
-				retailerId={RID}
-				storeSlug="herb"
-				activeCategorySlug="cakes"
-			/>,
-		);
-		const current = document.querySelectorAll('[aria-current="page"]');
-		expect(current).toHaveLength(1);
-		expect(current[0].getAttribute("href")).toBe("/herb/c/cakes");
 	});
 
 	it("falls back to a deterministic gradient when a category has no image", () => {
