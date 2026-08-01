@@ -101,9 +101,17 @@ function FeaturedProductInner({
 			{/* Full-bleed scroller: the negative margins let cards run to the
 			    screen edge (the parent section pads px-5 / lg:px-8) so a
 			    part-visible card at the right edge advertises that the row
-			    scrolls. Same treatment the category rail used before it became
-			    chips. Fixed card widths — a shelf item shouldn't stretch. */}
-			<div className="-mx-5 mt-2 flex snap-x gap-3 overflow-x-auto px-5 pb-1 [scrollbar-width:none] lg:-mx-8 lg:px-8 [&::-webkit-scrollbar]:hidden">
+			    scrolls. Fixed card widths — a shelf item shouldn't stretch.
+
+			    `scroll-pl-*` is load-bearing, and must track the px-* above.
+			    Snap positions are measured from the SCROLLPORT (the padding
+			    box), not the content box, so `snap-start` parked the first card
+			    hard against the screen edge and silently cancelled the left
+			    padding — the row sat 20px out of line with the search bar and
+			    grid. scroll-padding moves the snapport in to match. (The
+			    trailing edge was always fine; only the snapped rest position
+			    was wrong.) */}
+			<div className="-mx-5 mt-2 flex snap-x scroll-pl-5 gap-3 overflow-x-auto px-5 pb-1 [scrollbar-width:none] lg:-mx-8 lg:scroll-pl-8 lg:px-8 [&::-webkit-scrollbar]:hidden">
 				{featured.map((product, index) => (
 					<div
 						key={product._id}
@@ -122,8 +130,10 @@ function FeaturedProductInner({
 					</div>
 				))}
 			</div>
-			{/* Hands over to the full grid — same divider the category rail used. */}
-			<div className="flex items-center gap-3 pb-1 pt-5" aria-hidden>
+			{/* Hands over to the full grid — same divider the category rail used.
+			    The label needs real air beneath it or it reads as a caption on
+			    the first row of cards rather than a heading for all of them. */}
+			<div className="flex items-center gap-3 pb-4 pt-5" aria-hidden>
 				<span className="h-px flex-1 bg-border" />
 				<span className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">
 					All products
