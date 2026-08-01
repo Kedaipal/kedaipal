@@ -503,7 +503,14 @@ describe("wizardInitialStep", () => {
 
 	it("opens at the first unanswered / invalid step", () => {
 		expect(wizardInitialStep({ ...browniesState(), name: "" })).toBe(1);
-		expect(wizardInitialStep({ ...browniesState(), hasChoices: null })).toBe(2);
+		// Step 2 counts as unanswered only when the EDITOR has no axes either.
+		expect(
+			wizardInitialStep({
+				...browniesState(),
+				hasChoices: null,
+				editor: { options: [], rows: [row()], customLine: null },
+			}),
+		).toBe(2);
 		const s = browniesState();
 		expect(
 			wizardInitialStep({
@@ -515,6 +522,14 @@ describe("wizardInitialStep", () => {
 			}),
 		).toBe(3);
 		expect(wizardInitialStep({ ...s, fulfilmentAnswered: false })).toBe(4);
+	});
+
+	it("treats axes in the editor as the answer to step 2 (86eyex5vk)", () => {
+		// A stale `hasChoices` must not re-ask a question the grid already answers —
+		// the screen renders the choices block off the editor, so demanding an
+		// answer here would contradict what the seller is looking at.
+		expect(wizardInitialStep({ ...browniesState(), hasChoices: null })).toBe(5);
+		expect(wizardInitialStep({ ...browniesState(), hasChoices: false })).toBe(5);
 	});
 });
 

@@ -151,18 +151,72 @@ describe("products", () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const asA = t.withIdentity({ subject: USER_A });
+		const create = asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Salmon",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [{ name: "Weight", values: ["500g", "1kg"] }],
+			// Only one of the two required combinations.
+			variants: [{ optionValues: ["500g"], price: 4500, onHand: 0 }],
+		});
+		// The message must name the axes it rebuilt from AND the combos it got —
+		// the bare count was a dead end with nothing to act on (86eyex5vk).
+		await expect(create).rejects.toThrow(/Options \[Weight: 500g, 1kg\]/);
+		await expect(create).rejects.toThrow(/2 combinations \("500g", "1kg"\)/);
+		await expect(create).rejects.toThrow(/1 variant arrived \("500g"\)/);
+	});
+
+	test("no-axes product reports the empty combo readably, not as a bare count", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		// The shape Arif hit: zero axes, two non-custom rows (86eyex5vk).
 		await expect(
 			asA.mutation(api.products.create, {
 				retailerId: retailer._id,
-				name: "Salmon",
+				name: "Kuih",
 				currency: "MYR",
 				imageStorageIds: [],
 				sortOrder: 0,
-				options: [{ name: "Weight", values: ["500g", "1kg"] }],
-				// Only one of the two required combinations.
-				variants: [{ optionValues: ["500g"], price: 4500, onHand: 0 }],
+				options: [],
+				variants: [
+					{ optionValues: [], price: 1200, onHand: 0 },
+					{ optionValues: [], price: 1800, onHand: 0 },
+				],
 			}),
-		).rejects.toThrow(/Expected 2 variants/);
+		).rejects.toThrow(
+			/A product with no options makes 1 combination \(\(no options\)\), but 2 variants arrived/,
+		);
+	});
+
+	test("a no-axes product with a custom line saves — the custom line is not matrix", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		// Two variants arrive but only one is matrix, so expected===1 holds.
+		const productId = await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Custom cake",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [],
+			variants: [
+				{ optionValues: [], price: 12000, onHand: 0 },
+				{
+					optionValues: [],
+					price: 0,
+					onHand: 0,
+					isCustom: true,
+					customLabel: "Tell us your design",
+				},
+			],
+		});
+		const product = await asA.query(api.products.get, { productId });
+		expect(product?.variants).toHaveLength(2);
+		expect(product?.variants.filter((vr) => vr.isCustom)).toHaveLength(1);
 	});
 
 	test("create rejects an invalid combination value", async () => {

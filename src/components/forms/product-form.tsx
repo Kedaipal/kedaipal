@@ -34,6 +34,7 @@ import { useAppForm } from "./form";
 import { type ProductImage, ProductImagesField } from "./product-images-field";
 import {
 	type CustomLineDraft,
+	reconcileForSubmit,
 	VariantEditor,
 	type VariantEditorState,
 	type VariantIssue,
@@ -588,15 +589,25 @@ export function ProductForm({
 			// Issues are addressed to the exact input (marked aria-invalid, message
 			// beneath), so the shared focus helper lands on the offending field —
 			// never a generic banner the seller has to decode.
-			const hasOptions = editor.options.length > 0;
+			// Reconcile FIRST: seeded state (a stored product, a wizard handoff) or
+			// a commit against a stale closure can leave rows that don't describe
+			// `options`, which the server rejects with a count mismatch the seller
+			// has no field to fix. Rebuilding costs a re-typed price at worst.
+			const reconciled = reconcileForSubmit(editor.options, editor.rows);
+			if (reconciled.rows !== editor.rows) {
+				// Show the seller the grid that's actually about to be saved, so any
+				// row issue below points at an input they can see and correct.
+				setEditorState({ ...editor, ...reconciled });
+			}
+			const hasOptions = reconciled.options.length > 0;
 			// An axis with no values yet means the rows still describe the
 			// PREVIOUS shape (kept on purpose — see rebuildRows) and aren't on
 			// screen. Report only the actionable axis problem; row messages would
 			// be addressed to inputs the seller can't see.
-			const gridReady = cartesian(editor.options).length > 0;
-			const built = buildSubmitVariants(editor.rows, editor.customLine);
+			const gridReady = cartesian(reconciled.options).length > 0;
+			const built = buildSubmitVariants(reconciled.rows, editor.customLine);
 			const issues = [
-				...collectOptionIssues(editor.options),
+				...collectOptionIssues(reconciled.options),
 				...(gridReady && "issues" in built ? built.issues : []),
 			];
 			if (issues.length > 0) {
@@ -622,12 +633,9 @@ export function ProductForm({
 					minQuantity: minQtyParsed,
 					categoryIds,
 					imageStorageIds: images.map((i) => i.id),
-					options: hasOptions
-						? editor.options.map((a) => ({
-								name: a.name.trim(),
-								values: a.values,
-							}))
-						: [],
+					// Derived from the SAME reconciled pair as `variants` above, so the
+					// axes and the grid can never describe different products.
+					options: hasOptions ? reconciled.options : [],
 					variants,
 				});
 			} catch (err) {

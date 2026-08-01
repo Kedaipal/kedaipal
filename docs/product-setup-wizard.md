@@ -136,6 +136,66 @@ validation both gate on `gridReady` (`cartesian(options).length > 0`) so the
 surviving row never shows as a blank-labelled choice and errors can't target
 invisible inputs. Covered by `rebuild-rows.test.ts`.
 
+### The grid/axes invariant and `reconcileForSubmit` (2026-07-31, ClickUp `86eyex5vk`)
+
+Whatever the client submits, `options` and `variants` must describe the **same**
+product — `rows.length === cartesian(options).length`, and the rows must cover
+exactly those combinations. The server enforces it in `validateVariantSet`; when
+it's violated the seller got `Expected 1 variants for these options, got 2` with
+**no field to fix** — a dead end that made the product unsavable.
+
+Every in-editor path upholds the invariant through `rebuildRows`. Two things
+broke it:
+
+1. **`hasChoices` was a second source of truth.** The wizard's step-2 answer flag
+   decided the payload's axes (`options: state.hasChoices ? … : []`) while
+   `variants` came from `state.editor.rows` unconditionally, and
+   `wizardStepIssues` step 2 skipped option validation **entirely** when the flag
+   was `false`. Once the flag and the editor disagreed, the wizard shipped
+   `options: []` beside a multi-row grid and skipped the very check that would
+   have caught it. Both now read the editor: the flag is a UI affordance only.
+2. **The client and server disagreed about blank values** — a latent gap, *not*
+   a demonstrated cause of the reported bug. `normalizeOptions` trims values and
+   silently **drops** blank ones; the client's `collectOptionIssues` never
+   trimmed, so a whitespace-only value would count as a combination on the
+   client that the server then discards, shrinking `expected` behind the grid's
+   back. No reachable path feeds it one today (`addValue` trims and rejects
+   blanks in both editors, the presets are clean, and stored options come back
+   server-normalized), so `sanitizeOptions` is defence-in-depth that keeps the
+   two sides provably in step — worth having, but it did not produce the
+   `Expected 1 variants…` report. Cause 1 is the one that did.
+
+`reconcileForSubmit(options, rows)` is the backstop, called at **both** submit
+sites (the full form and `buildWizardSubmitValues`). It sanitizes the axes, then
+rebuilds the rows unless they already cover the cartesian exactly — coverage, not
+just count, since two rows carrying a stale or duplicated tuple pass a length
+check and still fail the server's "Missing variant for combination". State the
+editor never derived (a stored product whose options and variants disagree, a
+wizard handoff, a commit against a stale render closure) is repaired instead of
+rejected. Rows are left untouched while an axis is still incomplete — that's the
+transient moment above, and the axis's own "add at least one value" is the
+actionable message.
+
+A rebuild can mint a combination the seller never priced. That surfaces as the
+normal inline row issue (`buildSubmitVariants`), and the full form writes the
+reconciled grid back into editor state before validating so the message points at
+an input the seller can actually see. The result: a mismatch costs a re-typed
+price, never an unsavable product. The server's two throws now name the axes and
+the combinations received (truncated past six — the full list at the 50-variant
+cap is a ~1KB banner).
+
+**Validation and render must read the same source.** Moving validation onto the
+editor without moving the render created a new dead end (caught in PR #156
+review): step 2 raised an `axisName`/`axisValues` issue while the axis block was
+still gated on `state.hasChoices`, so the message had no mounted input, and since
+the wizard has no generic issue banner, Continue silently did nothing. One
+derived `showAxes = state.hasChoices === true || options.length > 0` now feeds
+the render gate, both `AnswerCard` selections, and the step 3/5 wording, and the
+"pick one to continue" check only fires when the editor genuinely has no axes.
+The rule to keep: **any state validation can reject must be reachable and
+visible on screen.** Covered by `variant-grid-reconcile.test.ts`,
+`product-wizard-axes-render.test.tsx` and `convex/products.test.ts`.
+
 ### The restructured `VariantEditor`
 
 `src/components/forms/variant-editor.tsx` — same state shape

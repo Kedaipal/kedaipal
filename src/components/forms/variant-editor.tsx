@@ -170,6 +170,54 @@ export function rebuildRows(
 	});
 }
 
+/**
+ * Client mirror of the server's value handling in `normalizeOptions`
+ * (convex/lib/variant.ts): axis names and values are trimmed and blank values
+ * are DROPPED. The two sides must agree — if the client counts a blank value as
+ * a combination the server then discards, the grid the seller sees is bigger
+ * than the one the server rebuilds and the save dies on a count mismatch with
+ * no field to blame.
+ */
+export function sanitizeOptions(options: OptionAxis[]): OptionAxis[] {
+	return options.map((axis) => ({
+		name: axis.name.trim(),
+		values: axis.values.map((v) => v.trim()).filter((v) => v.length > 0),
+	}));
+}
+
+/**
+ * Submit-time reconcile — the grid must describe EXACTLY the axes being saved.
+ *
+ * Every in-editor path rebuilds rows through `rebuildRows`, so the invariant
+ * holds while the seller works. It can still be violated by state the editor
+ * did not derive: a product seeded on mount whose stored options and variants
+ * disagree, a wizard handoff, or a commit that landed against a stale render
+ * closure. Rebuilding here means such a mismatch costs the seller a re-typed
+ * price — never an unsavable product with a server error they can't act on.
+ *
+ * Rows are returned untouched when the axes are still incomplete (zero
+ * combinations); that's a transient authoring moment and `collectOptionIssues`
+ * already reports it as the actionable problem. See docs/product-variants.md.
+ */
+export function reconcileForSubmit(
+	options: OptionAxis[],
+	rows: VariantRow[],
+): { options: OptionAxis[]; rows: VariantRow[] } {
+	const sanitized = sanitizeOptions(options);
+	const expected = cartesian(sanitized);
+	if (expected.length === 0) return { options: sanitized, rows };
+	// Coverage, not just count: the server checks BOTH the cartesian size and
+	// that every combination is present, so two rows carrying the same (or a
+	// stale) tuple pass a length check and still fail on "Missing variant for
+	// combination". Deduping through a Set catches duplicates for free.
+	const present = new Set(rows.map((r) => variantLabel(r.optionValues)));
+	const covered =
+		rows.length === expected.length &&
+		expected.every((combo) => present.has(variantLabel(combo)));
+	if (covered) return { options: sanitized, rows };
+	return { options: sanitized, rows: rebuildRows(sanitized, rows) };
+}
+
 // Quick-start axis templates for the cohort (F&B + metal prints). Tapping one
 // pre-fills a new axis name + common starter values that the seller then edits.
 // Exported for the create wizard's "They choose by" chips.
@@ -864,7 +912,9 @@ export function VariantEditor({
 			{/* Q1 — does the buyer pick anything? Drives the shape of everything
 			    below: one price field vs a price per choice. */}
 			<div className="flex flex-col gap-1.5">
-				<span className="text-sm font-medium">Does the buyer pick anything?</span>
+				<span className="text-sm font-medium">
+					Does the buyer pick anything?
+				</span>
 				<div className="flex gap-1 rounded-xl bg-muted p-1">
 					<button
 						type="button"
@@ -985,7 +1035,8 @@ export function VariantEditor({
 											bulkFill("price", normalizePriceInput(e.target.value))
 										}
 									/>
-									{allTrack || (!allMto && rows.some((r) => r.blockWhenOutOfStock)) ? (
+									{allTrack ||
+									(!allMto && rows.some((r) => r.blockWhenOutOfStock)) ? (
 										<Input
 											inputMode="numeric"
 											placeholder="Fill all stock"
@@ -1044,9 +1095,7 @@ export function VariantEditor({
 										{varyFulfilment ? (
 											<FulfilmentToggle
 												value={row.blockWhenOutOfStock}
-												onChange={(v) =>
-													setRow(i, { blockWhenOutOfStock: v })
-												}
+												onChange={(v) => setRow(i, { blockWhenOutOfStock: v })}
 											/>
 										) : null}
 									</li>
@@ -1329,9 +1378,7 @@ export function VariantEditor({
 												<Input
 													placeholder="SKU"
 													value={row.sku}
-													onChange={(e) =>
-														setRow(i, { sku: e.target.value })
-													}
+													onChange={(e) => setRow(i, { sku: e.target.value })}
 													className="h-9 w-28"
 													aria-label={`SKU for ${variantLabel(row.optionValues)}`}
 												/>
