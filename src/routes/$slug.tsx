@@ -3,7 +3,7 @@ import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { type Locale, OG_LOCALE } from "../../convex/lib/locale";
 import { CartBar } from "../components/storefront/cart-bar";
-import { CategoryChips } from "../components/storefront/category-chips";
+import { CategoryRail } from "../components/storefront/category-rail";
 import { FeaturedProduct } from "../components/storefront/featured-product";
 import { ProductGrid } from "../components/storefront/product-grid";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
@@ -223,7 +223,7 @@ function StorefrontRoute() {
 
 			<section className="mt-2 px-5 lg:px-8">
 				{/* Search first (sticky inside the grid), then the merchandised lead:
-				    category filter chips + the "Popular this week" feature card, then
+				    the category rail + the "Popular this week" shelf, then
 				    the full grid (86eybrhrt PR3). Both lead pieces render nothing when
 				    they have nothing honest to show (no categories / no qualifying
 				    orders), so quiet stores stay search + grid. */}
@@ -232,8 +232,13 @@ function StorefrontRoute() {
 					cart={cart}
 					storeSlug={retailer.slug}
 					beforeGrid={
-						<>
-							<CategoryChips
+						// `gap-6` owns the rhythm between the two lead sections rather
+						// than either one carrying a trailing margin: each renders null
+						// on a store that has no categories / no qualifying orders, and
+						// a gap only applies between siblings that actually exist — so
+						// neither can leave a dangling space behind it.
+						<div className="flex flex-col gap-6">
+							<CategoryRail
 								retailerId={retailer._id}
 								storeSlug={retailer.slug}
 							/>
@@ -242,7 +247,7 @@ function StorefrontRoute() {
 								storeSlug={retailer.slug}
 								cart={cart}
 							/>
-						</>
+						</div>
 					}
 				/>
 			</section>

@@ -1,7 +1,7 @@
 # Storefront — landing merchandising (buyer redesign PR3)
 
 **Status: implemented.** The store home's lead is merchandised: category
-**filter chips** replace the image-tile rail, a data-driven **"Popular this
+**image tiles** shrink into a scrollable rail, a data-driven **"Popular this
 week"** shelf scrolls the store's real bestsellers, and the desktop grid drops
 to **4 columns** with visibly larger tiles. Third and final slice of the
 storefront buyer redesign (ClickUp `86eybrhrt`, direction B "Market Page"
@@ -9,39 +9,38 @@ locked 20 Jul 2026). Buyer-facing, all-tier. Follows
 [`storefront-checkout-page.md`](./storefront-checkout-page.md) (PR1) and
 [`storefront-product-pages.md`](./storefront-product-pages.md) (PR2).
 
-## Category chips, not hero tiles
+## Category rail — small image tiles, in a carousel
 
-`category-chips.tsx` replaces `category-rail.tsx` (deleted). The rail's big
-image cards were heavy for the typical ≤3-category store and pushed the
-products — the actual inventory — below the fold; the design call was
-explicit: *"rail cards were heavy for ≤3 categories."*
+`category-rail.tsx`. A horizontal snap-scroller of category tiles: the
+category's own image (or a deterministic brand-adjacent gradient when it has
+none), its name, and its live product count.
 
-- The chips are **links to the existing category pages**, not client-side
+**Sized down from the original rail, not removed.** PR3 first replaced the
+full-size rail with text chips, because tiles at `h-[9.5rem] w-[15rem]`
+dominated the fold on a ≤3-category store and pushed the products — the
+actual inventory — below it. Zaki's call (31 Jul) was that losing the
+photography went too far: for a food seller the picture *is* the menu. So the
+tiles came back at `h-24 w-36` (`lg:h-28 lg:w-44`) — roughly a third of the
+old area — which keeps the images without burying the grid. Tile images had
+never left the data or the dashboard; this puts them back on the storefront.
+
+- Tiles are **links to the existing category pages**, not client-side
   filters: `/c/{slug}` keeps its SSR/SEO and shareable deep links (the
   dashboard's per-category copy-link still lands somewhere real), and there
   is exactly one navigation model.
-- **"All"** links to the store home and reads active there; the **category
-  page renders the same row with its own chip active**
+- The **category page renders the same rail with its own tile ringed**
   (`activeCategorySlug`), so buyers hop laterally (kuih → cakes) without
-  going through back. The page's "← All products" link stays as the way
-  *up*; chips are the way *across*.
+  going through back. The page's "← All products" link stays the way *up*;
+  the tiles are the way *across*. There is no "All" tile — that link already
+  exists, above.
+- **Scrim is heavier than the old rail's** (`from-primary/90 via-primary/30`).
+  These tiles are a third the area with 13px names, and a seller's photo can
+  be pale — a white-iced cake on marble left white-on-light. The top of the
+  gradient stays near-clear so the photography still reads.
 - Zero-category stores render nothing — pixel-identical to the
-  pre-categories storefront (the rail's contract, kept).
-- **Every storefront `<Link to="/$slug">` passes
-  `activeOptions={{ exact: true }}`.** TanStack Router matches prefixes by
-  default and stamps its own `aria-current="page"` on anything it considers
-  active — so on `/herb/c/cakes` the store-home link (`/herb`, a prefix) was
-  announced as the current page *alongside* the real one, silently
-  overriding an explicit `aria-current={undefined}`. Found on the chips;
-  it was already true of the pre-existing "← All products" back links on the
-  category, product and checkout pages, so all six call sites were fixed
-  together. The styling was always right, which is why it looked fine —
-  only a screen reader (or the DOM) showed three "current" links on one
-  page. The chips test pins the `exact` request, since a plain-anchor `Link`
-  stub cannot reproduce the router's own matching.
-- Category **tile images still exist** in the data and dashboard — they're
-  just no longer a storefront surface. If they earn a home later, the
-  category page header is the natural spot.
+  pre-categories storefront (the rail's original contract, kept).
+- Same scroller mechanics as the popular shelf below it, including the
+  `scroll-pl-*` fix described there.
 
 ## "Popular this week" — the merchandising shelf
 
@@ -61,7 +60,7 @@ to the grid.
   pending/cancelled excluded).
 - **Honesty threshold**: fewer than 2 orders in the window → not a candidate;
   if nothing qualifies the section hides entirely. A new or quiet store shows
-  search + chips + grid, never a hollow "bestseller" claim.
+  search + rail + grid, never a hollow "bestseller" claim.
   (`POPULAR_MIN_ORDERS = 2`.)
 - **Up to `POPULAR_TOP_CANDIDATES = 10`** on the shelf. The row scrolls, so
   extra items cost nothing in layout — the cap exists because past ~10 a
@@ -113,16 +112,22 @@ breakpoint-specific layout at all.
 
 `GRID_CLASS` in `product-grid.tsx`: `lg:grid-cols-5 xl:grid-cols-6` →
 `lg:grid-cols-4` (skeletons synced). The old density existed so product
-cards never outweighed the category hero tiles; with the rail gone the
-products are the page, and the design call was tiles ~50% larger.
+cards never outweighed the category hero tiles; with those tiles now a third
+of their old size the products are the page, and the design call was tiles
+~50% larger.
 
 ## Layout order (store home)
 
-Search (sticky, first control) → chips → popular shelf → "All products"
-divider → grid. Chips and shelf both slot into `ProductGrid`'s `beforeGrid`,
+Search (sticky, first control) → category rail → popular shelf → "All
+products" divider → grid. Rail and shelf both slot into `ProductGrid`'s
+`beforeGrid` (wrapped in a `gap-6` column so neither leaves a dangling gap
+when it renders nothing),
 so an active search hides them and results take the whole surface (existing
-behaviour, unchanged). The divider renders with the shelf (it separates the
-bestsellers from the full catalog); chips alone flow straight into the grid.
+behaviour, unchanged). The divider renders with the shelf, since it separates
+the bestsellers from the full catalog. The **category page** has no shelf and
+so no divider, so it hangs its own `mb-5` on the rail — safe there because
+reaching a category page at all means a visible category exists, so the rail
+always renders.
 
 ## Tests
 
@@ -131,8 +136,9 @@ status filtering, threshold, cap, determinism; `popularSince` day-alignment
 AND the rolling-window slide),
 `convex/products.test.ts` (query: ranking end-to-end, retailer isolation,
 single-order hides, non-midnight `since` rejected),
-`category-chips.test.tsx` (All + per-category links, active states,
-zero-category null), `featured-product.test.tsx` (loading/empty null, the
+`category-rail.test.tsx` (a tile per category with count + link, active
+ring only on the current one, deterministic gradient fallback, own image when
+set, zero-category null), `featured-product.test.tsx` (loading/empty null, the
 whole ranked set shelved in rank order, unranked catalog products stay off,
 unlisted/sold-out candidates dropped, quick-add wiring, multi-variant → page,
 and the error boundary degrading to nothing).

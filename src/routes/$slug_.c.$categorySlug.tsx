@@ -9,7 +9,7 @@ import { ArrowLeft } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import { type Locale, OG_LOCALE } from "../../convex/lib/locale";
 import { CartBar } from "../components/storefront/cart-bar";
-import { CategoryChips } from "../components/storefront/category-chips";
+import { CategoryRail } from "../components/storefront/category-rail";
 import { ProductGrid } from "../components/storefront/product-grid";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { StorefrontHeader } from "../components/storefront/storefront-header";
@@ -245,9 +245,9 @@ function CategoryRoute() {
 			</div>
 
 			<section className="mt-2 px-5 lg:px-8">
-				{/* The same chip row as the store home, with THIS category active —
+				{/* The same rail as the store home, with THIS category active —
 				    buyers hop laterally (kuih → cakes) without going through back.
-				    The "← All products" link above stays as the way "up"; the chips
+				    The "← All products" link above stays as the way "up"; the tiles
 				    are the way "across". */}
 				<ProductGrid
 					retailerId={retailer._id}
@@ -255,11 +255,20 @@ function CategoryRoute() {
 					products={page.products}
 					storeSlug={retailer.slug}
 					beforeGrid={
-						<CategoryChips
-							retailerId={retailer._id}
-							storeSlug={retailer.slug}
-							activeCategorySlug={page.category.slug}
-						/>
+						// The store home separates the rail from the grid with the
+						// "All products" divider; this page has no such divider, so the
+						// rail would otherwise sit flush on the first row of cards. Safe
+						// to hang the margin on a wrapper here (unlike the home, where
+						// the sections can vanish): reaching a category page at all
+						// means at least one visible category exists, so the rail
+						// always renders.
+						<div className="mb-5">
+							<CategoryRail
+								retailerId={retailer._id}
+								storeSlug={retailer.slug}
+								activeCategorySlug={page.category.slug}
+							/>
+						</div>
 					}
 				/>
 			</section>

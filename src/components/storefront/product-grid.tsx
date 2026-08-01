@@ -11,7 +11,7 @@ import { quickAddProductToCart } from "./product-purchase";
 
 /** Product-card grid — 4 columns on desktop (86eybrhrt PR3). The old 5/6-col
  * density existed so cards never outweighed the category hero tiles; those
- * tiles are now light filter chips (category-chips.tsx), so the products ARE
+ * tiles are now a compact carousel (category-rail.tsx), so the products ARE
  * the page and get tiles ~50% larger. */
 const GRID_CLASS = "grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4";
 
