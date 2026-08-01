@@ -40,12 +40,93 @@ was stale: `retailers.businessAddress` (shipped with radius delivery,
 Lalamove pickup point. One address, two consumers.
 
 Pricing rides the existing delivery-charge seam: `deliveryConfig` gained a
-third arm `{ mode: "lalamove", onUnquotable: "arrange" | "block" }` next to
-`flat`/`radius`, all resolved by the same pure `resolveDeliveryQuote`
-(`convex/lib/delivery.ts`). **Pricing and booking are orthogonal**: a seller
-can charge a flat fee yet still book riders (absorbing drift); live-quote
+third arm `{ mode: "lalamove", onUnquotable }` next to `flat`/`radius`, all
+resolved by the same pure `resolveDeliveryQuote` (`convex/lib/delivery.ts`).
+**`onUnquotable` is VESTIGIAL since 27 Jul** (Zaki): lalamove mode always
+behaves as block — see "No fee-pending under Lalamove" below; the field stays
+so stored rows validate and `sanitizeDeliveryConfig` normalizes it to
+`"block"` on save. **Pricing and booking are orthogonal**: a seller can
+charge a flat fee yet still book riders (absorbing drift); live-quote
 pricing additionally requires booking to be enabled (its vehicle +
 credentials price the quote).
+
+**No KEDAIPAL distance limit under Lalamove — by construction.** The pricing
+modes are mutually exclusive, and the `lalamove` arm of
+`resolveDeliveryQuote` never reads the radius bands, the business-address
+distance, or any range cap of ours — we impose no delivery area. Raised by
+Zaki 26 Jul ("Lalamove can deliver anywhere") — audited: nothing to disable
+on our side. The settings copy SAYS so ("no delivery area to set…") and the
+By-distance card is subtitled "Radius bands — you deliver" so the two modes'
+mental models don't blur.
+
+**But LALAMOVE has one — it's a city zone, not a radius, and it is the SAME
+for every vehicle (27 Jul, measured live).** Lalamove is an intra-city
+courier: both stops must sit inside one serviceable city zone
+(`GET /v3/cities` for MY lists `KUL`, `JHB`, `MKZ`, `NTL`), or the quote is
+refused with HTTP 422 `{"errors":[{"id":"ERR_OUT_OF_SERVICE_AREA"}]}`.
+Head-to-head from a **Beranang, Selangor** origin (MY sandbox):
+
+| Destination | ~Distance | MOTORCYCLE | CAR |
+| --- | --- | --- | --- |
+| Seremban | 42 km | RM 21.20 | RM 33.10 |
+| Port Dickson | 77 km | out of service area | out of service area |
+| Melaka City | 105 km | out of service area | out of service area |
+| Alor Setar | 400 km | out of service area | out of service area |
+
+Three conclusions that shaped the build:
+
+1. **Vehicle ≠ range.** Bike and car share one coverage boundary — the city
+   config differentiates them by dimensions/load only (10 kg vs 40 kg). So
+   Zaki's proposed "bike failed → re-quote with car" fallback was
+   investigated and **deliberately not built**: it can never rescue an
+   out-of-zone address. Vehicle choice is parcel size + price, full stop.
+2. **Cross-zone is refused even between two Lalamove cities** — Melaka is a
+   served city (`MY MKZ`), yet Beranang (KUL zone) → Melaka fails. The rule
+   is "same zone", not "near a Lalamove city".
+3. **No km number can honestly be published** (the KUL edge sits somewhere
+   in the 42–77 km band from Beranang and differs by direction/origin), so
+   the UX never promises a range — the live quote answers, and the refusal
+   is made legible.
+
+**Buyer-facing failure taxonomy** — `classifyQuoteFailure` (pure,
+`convex/lib/lalamove.ts`, unit-tested against the real captured 422 body)
+maps every quotation failure onto three stories, because only one is
+retryable:
+
+| Status | Trigger | Buyer sees | Retry helps? |
+| --- | --- | --- | --- |
+| `out_of_range` | `ERR_OUT_OF_SERVICE_AREA` / `ERR_INVALID_MARKET` | "This address is too far — our delivery rider service doesn't cover it. Try an address closer to {store}[, or choose pickup]." | Never — change address |
+| `store_unavailable` | HTTP 401/403 (revoked/typo'd seller key) **or** missing creds/pickup pin at quote time | "Delivery pricing isn't working for this store right now — it's on {store}'s side, not yours. [Choose pickup, or] message the store on WhatsApp." | Never — seller must fix |
+| `unavailable` | Everything else (5xx, network, odd payloads, our rate limit) | "We couldn't calculate the delivery fee right now — re-pick your address to retry, or try again shortly." | Yes |
+
+All three block submit (strict quote-or-refuse); `no_coords` (no pin picked)
+keeps its own "pick a suggestion" line. The address-edit dialog carries the
+same taxonomy. Coverage refusals are NOT logged as errors (expected business
+outcome); broken-store and transient failures are. **Expectation is set up
+front**, not just at the wall: the delivery-address field on a live-quote
+store shows "Delivery is by rider, so the fee depends on your address…
+Addresses outside the rider's coverage can't be delivered", and the
+**seller's settings panel** now teaches the same rule from their side (city
+zone around the pickup point, ~40–70 km, never cross-zone, vehicle doesn't
+change it, keep self-collect on as the fallback).
+
+**No fee-pending under Lalamove — strict since 27 Jul (Zaki).** A seller who
+picked Lalamove must never be handed fee homework, and the buyer must always
+see the real rider price before sending. So under lalamove pricing there is
+NO "arrange" fallback anywhere: checkout requires a pinned, quotable address
+(no pin / no quote → submit disabled with reason; `orders.create` enforces
+the same), and the tracking page's **address edit** fetches a fresh live
+quote for the new pin — the buyer sees the new fee before saving, the dialog
+passes the quote row id to `updateDeliveryAddress`, and an unpriced edit is
+refused. Shared client hook: `src/lib/use-live-delivery-quote.ts` (checkout
+sheet + edit dialog, one debounce/seq/trust model). Accepted trade-off: a
+Lalamove/API outage or broken key refuses delivery checkout on that store
+until it recovers (copy says "try again shortly"; self-collect unaffected).
+The seller card's `orders.deliveryFeePendingReason` (`out_of_range` |
+`no_coords` | `unquotable`, 26 Jul) still drives reason-true copy — under
+lalamove the `unquotable` reason is now **legacy-only** (rows from before
+the strict rule). See
+[`fulfilment.md`](./fulfilment.md#fee-pending-arrange-via-whatsapp--the-second-payment-hold).
 
 | Piece | Where |
 | --- | --- |
@@ -53,7 +134,7 @@ credentials price the quote).
 | Webhook signature verification | `convex/lib/lalamoveSignature.ts` |
 | Convex functions (network client, checkout quote, dispatch, webhook handler) | `convex/lalamove.ts` |
 | Webhook route | `convex/http.ts` `POST /webhook/lalamove` |
-| Buyer checkout wiring | `src/components/storefront/checkout-sheet.tsx` |
+| Buyer checkout wiring | `src/components/storefront/checkout-form.tsx` |
 | Seller dispatch card | `src/components/order/book-delivery-card.tsx` |
 | Seller setup (4th pricing mode inside Delivery charge) | `src/components/settings/fulfilment-tab.tsx` (`DeliveryChargeSection`) |
 
@@ -84,7 +165,11 @@ locked Starter the card stays **full-colour with a Pro chip + "upgrade to
 Pro to turn on"** (disabled-with-reason, deliberately not a washed-out
 ghost) so every tier sees rider delivery exists — the upsell surface for
 the Pro tier. The settings vehicle is labelled as a *default* with a
-helper noting the per-order switch in the booking dialog.
+helper noting the per-order switch in the booking dialog. Every mode card
+(and the vehicle picker) carries a **radio-style corner dot** (`ModeRadioDot`,
+27 Jul) — empty ring vs filled accent dot — because the tinted-border
+selected state alone read as "these might all be on" when the grids in fact
+choose exactly one option.
 
 **IA (revised after first seller test):** Lalamove is NOT a separate card —
 it's the 4th delivery-pricing mode (Settings → Fulfilment → Delivery charge:
@@ -101,8 +186,9 @@ autofills saved credentials into it.
 
 ### Checkout quote (trust model)
 
-The reactive `delivery.quote` query answers `{ kind: "live", onUnquotable }`
-for lalamove-mode stores; the checkout then calls the
+The reactive `delivery.quote` query answers `{ kind: "live" }` for
+lalamove-mode stores; the client (checkout page + address-edit dialog, via
+the shared `useLiveDeliveryQuote` hook) then calls the
 `lalamove.quoteForCheckout` **action** once per picked address AND per
 chosen date (debounced,
 rate-limited per retailer — the quote-by-coordinates oracle gets the same
@@ -110,11 +196,10 @@ trilateration caution as the radius quote). The action records the fee in a
 `deliveryQuotes` row and returns `{ quoteId, fee }`; **`orders.create` only
 ever accepts the row id** — coordinate-matched (±~11 m), ≤30 min old,
 consumed on use — so the browser can display the fee but never dictate it.
-Missing/stale/mismatched quote → the store's `onUnquotable` policy:
-`arrange` → the existing `deliveryFeePending` hold (payment ask held, seller
-confirms the charge — same machinery as radius out-of-range), `block` →
-checkout refused with clear copy. Kill switch: no credentials/config → the
-quote query never says "live" and checkout behaves exactly as before.
+Missing/stale/mismatched quote → **checkout refused** with clear copy
+(strict, 27 Jul — no quote, no order; see "No fee-pending under Lalamove"
+above). Kill switch: no credentials/config → the quote query never says
+"live" and checkout behaves exactly as before.
 
 **Pre-orders are priced for THEIR day (23 Jul):** when the buyer picks a
 future fulfilment date, the quote is requested with Lalamove `scheduleAt` =
@@ -126,9 +211,11 @@ back to immediate on anything odd. Dispatch on the day still re-quotes
 immediate — variance is the vendor's, as everywhere.
 
 Note: a buyer address edit (`updateDeliveryAddress`) re-prices through the
-same resolver *without* a live quote, so under lalamove pricing it lands
-fee-pending for the seller to confirm — deliberate (an address change means
-the old price is wrong, and mutations can't fetch).
+same resolver. Under lalamove pricing the edit dialog fetches a **fresh
+live quote for the new pin** (mutations can't fetch, so the dialog does —
+same hook/trust model as checkout) and passes `deliveryQuoteId`; the buyer
+sees the new fee before saving, and an unpriced edit is refused (27 Jul —
+supersedes the earlier lands-fee-pending behavior).
 
 ### Dispatch (Book delivery)
 
@@ -160,7 +247,12 @@ mid-call (copy points the seller at their Lalamove app, since in the
 crash-mid-POST case the rider order may exist there untracked). Every blocked state renders disabled-with-reason on the
 card (`DispatchBlock` map): wrong status, no map pin on the address (with a
 fix path — never a dead end), booking off, plan gate (Pro chip), no
-credentials, missing buyer/seller phone. Wallet-empty
+credentials, missing buyer/seller phone. That copy lives in
+`src/lib/dispatch-block.ts` (`dispatchBlockCopy`) because the **mark-shipped
+prompt** renders the same reasons — a rider vendor is never offered the manual
+parcel-courier form, so this copy is their whole explanation before they choose
+to ship without a rider (ClickUp `86eyff02p`, see
+[`fulfilment.md`](./fulfilment.md#seller-ux)). Wallet-empty
 booking failures surface Lalamove's error as "top up your Lalamove wallet,
 then retry". `cancelBooking` (with a rider-fee warning) deliberately skips
 the eligibility gates — cancelling must work even when booking wouldn't.
@@ -297,6 +389,26 @@ guide walks it (Step E5). Graceful degradation if a seller skips it:
 bookings still work, but shipped/delivered stop being automatic — the
 order just stays where it is until the seller advances it by hand. Dev
 deployment URL: `https://qualified-chihuahua-441.convex.site/webhook/lalamove`.
+
+**Manual-advance gate while the rider drives (26 Jul hotfix):** when an
+ACTIVE job's webhook is demonstrably alive (`deliveryJobs.lastEventAt` is
+only ever written by the webhook handler, and ASSIGNING_DRIVER lands
+seconds after booking), the order-detail stepper's advance into a
+**shipped- or delivered-anchored** stage renders **disabled-with-reason**
+("…moves to Shipped on its own when the rider picks up") — a manual tap
+would message the buyer early and, for shipped, without the live-tracking
+link. Confirm/packed advances are never gated (pre-pickup work is the
+seller's), same-anchor custom-stage moves stay free, and a small
+**"Update manually" confirm-gated escape** stays reachable so a webhook
+that dies mid-delivery never strands the order. Webhook-less sellers
+(`lastEventAt` never set) see zero change — manual advancing IS their
+documented path above. Pure predicates `riderDrivesOrderStatus` +
+`isRiderManagedTransition` in `convex/lib/lalamove.ts` (unit-tested);
+client-side UX guard only — the server mutation is unchanged (the seller
+owns the order, and the webhook's same-status replays are already no-ops).
+Known gap, deliberate: the inbox **bulk** status bar can still mass-mark
+shipped without job awareness (needs a per-order job lookup in
+`searchOrders` — follow-up, not hotfix material).
 
 ### Hygiene + lifecycle guards (pre-ship audit, 22 Jul)
 

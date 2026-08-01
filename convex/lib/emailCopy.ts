@@ -1,5 +1,9 @@
 // Retailer-facing email copy catalog. Pure — no Convex imports — to keep testable.
-// Bilingual (en / ms) parity with the prior WhatsApp retailer alerts.
+// Trilingual (en / ms / zh) parity with the WhatsApp retailer alerts.
+
+import type { Locale } from "./locale";
+
+export type { Locale } from "./locale";
 
 // Brand logo for email headers. Must be an absolute, publicly-reachable URL (email
 // clients can't load localhost / app-relative assets), so it always points at the
@@ -10,8 +14,6 @@ export const LOGO_URL = "https://kedaipal.com/logo-2.png";
 export function logoHeader(marginBottom = 16): string {
 	return `<img src="${LOGO_URL}" alt="Kedaipal" width="132" style="display:block;border:0;outline:none;text-decoration:none;height:auto;margin:0 0 ${marginBottom}px 0;" />`;
 }
-
-export type Locale = "en" | "ms";
 
 export type DeliveryMethod = "delivery" | "self_collect";
 
@@ -71,6 +73,7 @@ export type RetailerEmailVars = {
 const deliveryLabel: Record<Locale, Record<DeliveryMethod, string>> = {
 	en: { delivery: "Delivery", self_collect: "Self-collect" },
 	ms: { delivery: "Penghantaran", self_collect: "Ambil sendiri" },
+	zh: { delivery: "配送", self_collect: "自取" },
 };
 
 // Kind-aware pickup label. A drop-off meetup reads very differently from
@@ -81,6 +84,7 @@ const pickupKindLabel: Record<
 > = {
 	en: { self_collect: "Self-collect", drop_off: "Drop-off" },
 	ms: { self_collect: "Ambil sendiri", drop_off: "Penyerahan" },
+	zh: { self_collect: "自取", drop_off: "交收" },
 };
 
 /**
@@ -98,6 +102,12 @@ function methodLabel(locale: Locale, v: RetailerEmailVars): string {
  * note, maps link). Empty for delivery orders or when no point was captured.
  * `asHtml` toggles anchor vs raw-URL for the maps link and escaping.
  */
+const OPEN_IN_MAPS_LABEL: Record<Locale, string> = {
+	en: "Open in maps",
+	ms: "Buka peta",
+	zh: "在地图中打开",
+};
+
 function pickupDetailLines(
 	locale: Locale,
 	v: RetailerEmailVars,
@@ -114,7 +124,7 @@ function pickupDetailLines(
 	if (v.pickupMapsUrl) {
 		lines.push(
 			asHtml
-				? `<a href="${escapeHtml(v.pickupMapsUrl)}" style="color:#2563eb;text-decoration:underline;">${locale === "ms" ? "Buka peta" : "Open in maps"}</a>`
+				? `<a href="${escapeHtml(v.pickupMapsUrl)}" style="color:#2563eb;text-decoration:underline;">${OPEN_IN_MAPS_LABEL[locale]}</a>`
 				: v.pickupMapsUrl,
 		);
 	}
@@ -432,9 +442,150 @@ const ms = {
 	},
 };
 
+const zh = {
+	newOrder: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `🔔 新订单 ${v.shortId} · ${v.totalFormatted}`;
+		const mockupHtml = `⚠️ <strong>客制化商品</strong> —— 请发送设计稿给顾客确认。顾客确认前先不收款。`;
+		const mockupText = `⚠️ 客制化商品 —— 请发送设计稿给顾客确认。顾客确认前先不收款。`;
+		const feePendingHtml = `🚚 <strong>配送费待确认</strong> —— 这个地址超出您的配送范围。请在订单页面设置配送费；设置前不会向顾客要求付款。`;
+		const feePendingText = `🚚 配送费待确认 —— 这个地址超出您的配送范围。请在订单页面设置配送费；设置前不会向顾客要求付款。`;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} 件商品 · ${escapeHtml(v.totalFormatted)}`,
+			`顾客：${escapeHtml(v.customerName)}`,
+			`方式：${methodLabel("zh", v)}`,
+			...pickupDetailLines("zh", v, true),
+			...(v.fulfilmentDateLabel
+				? [`📅 需要日期：<strong>${escapeHtml(v.fulfilmentDateLabel)}</strong>`]
+				: []),
+			...(v.requiresMockup ? [mockupHtml] : []),
+			...(v.deliveryFeePending ? [feePendingHtml] : []),
+			`请打开您的后台管理这张订单。`,
+		];
+		const html = wrapHtml("🔔", `新订单 ${v.shortId}`, lines, v.dashboardUrl, "打开后台");
+		const dateText = v.fulfilmentDateLabel ? `\n需要日期：${v.fulfilmentDateLabel}` : "";
+		const text = `🔔 新订单 ${v.shortId}\n${v.itemCount} 件商品 · ${v.totalFormatted}\n顾客：${v.customerName}\n方式：${methodLabel("zh", v)}${pickupDetailLines("zh", v, false)
+			.map((l) => `\n${l}`)
+			.join("")}${dateText}\n${v.requiresMockup ? `\n${mockupText}\n` : ""}${v.deliveryFeePending ? `\n${feePendingText}\n` : ""}\n请打开您的后台管理这张订单。\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	orderConfirmed: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `✅ 订单 ${v.shortId} 已确认 · ${v.totalFormatted}`;
+		const nextStepsHtml = v.requiresMockup
+			? `⚠️ <strong>客制化商品</strong> —— 打包前请发送设计稿给顾客确认。顾客确认前先不收款。`
+			: v.deliveryFeePending
+				? `🚚 <strong>配送费待确认</strong> —— 这个地址超出您的配送范围。请在订单页面设置配送费；设置前不会向顾客要求付款。`
+				: `可以进行下一步了 —— 收到付款后打包发货。`;
+		const nextStepsText = v.requiresMockup
+			? `⚠️ 客制化商品 —— 打包前请发送设计稿给顾客确认。顾客确认前先不收款。`
+			: v.deliveryFeePending
+				? `🚚 配送费待确认 —— 这个地址超出您的配送范围。请在订单页面设置配送费；设置前不会向顾客要求付款。`
+				: `可以进行下一步了 —— 收到付款后打包发货。`;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} 件商品 · ${escapeHtml(v.totalFormatted)}`,
+			`顾客：${escapeHtml(v.customerName)}`,
+			`方式：${methodLabel("zh", v)}`,
+			...pickupDetailLines("zh", v, true),
+			...(v.fulfilmentDateLabel
+				? [`📅 需要日期：<strong>${escapeHtml(v.fulfilmentDateLabel)}</strong>`]
+				: []),
+			nextStepsHtml,
+		];
+		const html = wrapHtml("✅", `订单 ${v.shortId} 已确认`, lines, v.dashboardUrl, "打开后台");
+		const dateText = v.fulfilmentDateLabel ? `\n需要日期：${v.fulfilmentDateLabel}` : "";
+		const text = `✅ 订单 ${v.shortId} 已确认\n${v.itemCount} 件商品 · ${v.totalFormatted}\n顾客：${v.customerName}\n方式：${methodLabel("zh", v)}${pickupDetailLines("zh", v, false)
+			.map((l) => `\n${l}`)
+			.join("")}${dateText}\n\n${nextStepsText}\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	paymentClaimed: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `🪙 已收到 ${v.shortId} 的付款提交 · ${v.totalFormatted}`;
+		const refLine = v.paymentReference
+			? `备注：<strong>${escapeHtml(v.paymentReference)}</strong>`
+			: `备注：<em>未提供</em>`;
+		const proofLine = v.proofUrl
+			? `<a href="${escapeHtml(v.proofUrl)}" style="color:#2563eb;text-decoration:underline;">查看收据截图</a>`
+			: `截图：<em>未提供</em>`;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} 件商品 · ${escapeHtml(v.totalFormatted)}`,
+			`顾客：${escapeHtml(v.customerName)}`,
+			refLine,
+			proofLine,
+			`请在银行 App 核实，然后在后台确认。`,
+		];
+		const html = wrapHtml(
+			"🪙",
+			`已收到 ${v.shortId} 的付款提交`,
+			lines,
+			v.dashboardUrl,
+			"打开后台",
+		);
+		const refTextLine = v.paymentReference
+			? `备注：${v.paymentReference}`
+			: `备注：未提供`;
+		const proofTextLine = v.proofUrl
+			? `截图：${v.proofUrl}`
+			: `截图：未提供`;
+		const text = `🪙 已收到 ${v.shortId} 的付款提交\n${v.itemCount} 件商品 · ${v.totalFormatted}\n顾客：${v.customerName}\n${refTextLine}\n${proofTextLine}\n\n请在银行 App 核实，然后在后台确认。\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	mockupApproved: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `🎨 ${v.shortId} 的设计稿已确认`;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> —— ${escapeHtml(v.customerName)} 已确认设计稿。`,
+			`可以开始制作和打包这张订单了。`,
+		];
+		const html = wrapHtml("🎨", `设计稿已确认 —— ${v.shortId}`, lines, v.dashboardUrl, "打开后台");
+		const text = `🎨 ${v.shortId} 的设计稿已确认\n${v.customerName} 已确认设计稿 —— 可以开始制作了。\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	mockupChangesRequested: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `✏️ ${v.shortId} 的设计稿需要修改`;
+		const noteLine = v.mockupChangeNote
+			? `要求修改：<em>${escapeHtml(v.mockupChangeNote)}</em>`
+			: `没有留言。`;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> —— ${escapeHtml(v.customerName)} 要求修改设计稿。`,
+			noteLine,
+			`请更新设计稿并重新发送给顾客确认。`,
+		];
+		const html = wrapHtml("✏️", `设计稿需要修改 —— ${v.shortId}`, lines, v.dashboardUrl, "打开后台");
+		const noteText = v.mockupChangeNote
+			? `要求修改：${v.mockupChangeNote}`
+			: `没有留言。`;
+		const text = `✏️ ${v.shortId} 的设计稿需要修改\n${v.customerName} 要求修改。\n${noteText}\n请更新并重新发送确认。\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	mockupDeclined: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `🚫 ${v.shortId} 的客制化商品已取消`;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> —— ${escapeHtml(v.customerName)} 取消了客制化商品。`,
+			`客制化项目已移除；订单总额现在是 <strong>${escapeHtml(v.totalFormatted)}</strong>。`,
+			`其余现货商品可以照常处理。`,
+		];
+		const html = wrapHtml("🚫", `客制化商品已取消 —— ${v.shortId}`, lines, v.dashboardUrl, "打开后台");
+		const text = `🚫 ${v.shortId} 的客制化商品已取消\n${v.customerName} 取消了客制化商品。\n新总额：${v.totalFormatted}。其余现货商品可以照常处理。\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	deliveryJobFailed: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `🚨 ${v.shortId} 的配送预订失败`;
+		const reasonLine = v.jobFailureReason
+			? `原因：${v.jobFailureReason}`
+			: `预订没有配对到骑士。`;
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> —— Lalamove 预订没有成功。`,
+			escapeHtml(reasonLine),
+			`顾客<strong>还没有</strong>收到通知，订单也没有变化 —— 请打开订单重新预订骑士。`,
+		];
+		const html = wrapHtml("🚨", `配送预订失败 —— ${v.shortId}`, lines, v.dashboardUrl, "重新预订");
+		const text = `🚨 ${v.shortId} 的配送预订失败\n${reasonLine}\n顾客还没有收到通知，订单也没有变化 —— 请打开订单重新预订骑士。\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+};
+
 const catalog: Record<Locale, Record<RetailerEmailKey, (v: RetailerEmailVars) => RenderedEmail>> = {
 	en,
 	ms,
+	zh,
 };
 
 export function renderRetailerEmail(

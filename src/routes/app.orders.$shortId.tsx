@@ -13,7 +13,6 @@ import {
 	ChevronDown,
 	ChevronRight,
 	Copy,
-	ExternalLink,
 	HandCoins,
 	Hourglass,
 	ImagePlus,
@@ -26,10 +25,15 @@ import {
 	Truck,
 	User,
 } from "lucide-react";
-import { type ChangeEvent, type ReactNode, useState } from "react";
+import { type ChangeEvent, type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
+import {
+	isActiveJobStatus,
+	isRiderManagedTransition,
+	riderDrivesOrderStatus,
+} from "../../convex/lib/lalamove";
 import { isMockupGateClosed } from "../../convex/lib/order";
 import {
 	ORDER_PAYMENT_METHODS,
@@ -50,6 +54,11 @@ import {
 import { StatusBadge } from "../components/dashboard/status-badge";
 import { BookDeliveryCard } from "../components/order/book-delivery-card";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
+import {
+	MarkShippedDialog,
+	type ShipmentFields,
+	ShipmentTrackingCard,
+} from "../components/order/shipment-tracking";
 import {
 	DeliveryAddressDisplay,
 	formatAddressInline,
@@ -291,10 +300,19 @@ function OrderDetailRoute() {
 	const order = useQuery(convexQuery(api.orders.get, { shortId })).data;
 	const updateStatus = useMutation(api.orders.updateStatus);
 	const advanceToStage = useMutation(api.orders.advanceToStage);
-	const setCarrierUrl = useMutation(api.orders.setCarrierTrackingUrl);
 	const markPaymentReceived = useMutation(api.orders.markPaymentReceived);
 	const sendPaymentReminder = useAction(api.orders.sendPaymentReminder);
 	const deleteOrder = useMutation(api.orders.deleteOrder);
+	// Opening the order IS the seller seeing it — drains it from the New bucket,
+	// the Home tile and the age escalation (86eyf1rck). Fire-and-forget: a failed
+	// stamp just means it stays flagged as new, which is the safe direction.
+	const markSeen = useMutation(api.orders.markSeen);
+	const orderId = order?._id;
+	const alreadySeen = order?.seenAt !== undefined;
+	useEffect(() => {
+		if (!orderId || alreadySeen) return;
+		void markSeen({ orderId }).catch(() => {});
+	}, [orderId, alreadySeen, markSeen]);
 	// Permanent hard delete is admin-only (Kedaipal support); a plain seller only
 	// ever cancels. Hide the danger action unless this is an admin act-as session —
 	// the server enforces the same rule, so this is discoverability, not the guard.
@@ -325,10 +343,18 @@ function OrderDetailRoute() {
 		),
 	).data;
 	const hasActiveRiderBooking =
-		!!dispatchInfo?.job &&
-		!["completed", "canceled", "expired", "rejected"].includes(
-			dispatchInfo.job.status,
-		);
+		!!dispatchInfo?.job && isActiveJobStatus(dispatchInfo.job.status);
+	// Rider dispatch IS this vendor's delivery method (they picked Lalamove as
+	// their delivery charge). They never ship parcels, so no manual courier
+	// surface is offered anywhere on this page — 86eyff02p.
+	const lalamoveVendor = dispatchInfo?.bookingEnabled === true;
+	// The rider's webhook is demonstrably driving this order (active job + at
+	// least one event applied) — manual shipped/delivered advances are gated
+	// behind a confirm so the buyer isn't messaged early / without the tracking
+	// link. Webhook-less sellers (lastEventAt never set) keep manual control —
+	// that's their documented path.
+	const riderAutoUpdates =
+		!!dispatchInfo?.job && riderDrivesOrderStatus(dispatchInfo.job);
 	const crmCustomer = useQuery(
 		convexQuery(
 			api.customers.get,
@@ -337,13 +363,24 @@ function OrderDetailRoute() {
 	).data;
 	// Holds the id of the in-flight advance target ("cancel" for cancellation).
 	const [pending, setPending] = useState<string | null>(null);
-	const [carrierInput, setCarrierInput] = useState<string | null>(null);
-	const [savingCarrier, setSavingCarrier] = useState(false);
+	// The mark-shipped prompt (courier + tracking number, optional). Opened
+	// instead of a direct advance when the target stage is shipped-anchored on a
+	// delivery order with no tracking attached yet.
+	const [shipDialogOpen, setShipDialogOpen] = useState(false);
+	// Bumped by the prompt's "Book a rider…" CTA — BookDeliveryCard watches it
+	// and opens its own quote→confirm dialog, so the seller can book from the
+	// eye-level prompt without scrolling down to the card.
+	const [bookRequestToken, setBookRequestToken] = useState(0);
 	const [confirmingPayment, setConfirmingPayment] = useState(false);
 	const [sendingReminder, setSendingReminder] = useState(false);
 	const [confirmPaymentOpen, setConfirmPaymentOpen] = useState(false);
 	const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
 	const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+	// Escape hatch for the rider-managed status gate — a webhook that dies
+	// mid-delivery must never leave the order stuck, so "update manually
+	// anyway" stays reachable behind this confirm.
+	const [confirmManualAdvanceOpen, setConfirmManualAdvanceOpen] =
+		useState(false);
 	// Rare actions (cancel, delete, receipt) collapse behind one link at the bottom.
 	const [moreOpen, setMoreOpen] = useState(false);
 	// Optional method tag captured at confirm time (the seller has just verified
@@ -394,7 +431,6 @@ function OrderDetailRoute() {
 	const hasDestructiveAction = !isTerminal || canHardDelete;
 	const showCarrierSection =
 		!isSelfCollect && !["pending", "cancelled"].includes(order.status);
-	const editingCarrier = carrierInput !== null;
 	const paymentStatus = (order.paymentStatus ?? "unpaid") as PaymentStatus;
 	// Production (any packed-or-later stage) is blocked while a mockup is required
 	// but not yet approved/waived. Shared gate — same source as the server.
@@ -422,13 +458,16 @@ function OrderDetailRoute() {
 		Date.now(),
 	);
 
-	async function handleAdvance(stageId: string) {
+	async function handleAdvance(stageId: string, shipment?: ShipmentFields) {
 		if (!order) return;
 		setPending(stageId);
 		try {
-			await advanceToStage({ orderId: order._id, stageId });
+			await advanceToStage({ orderId: order._id, stageId, ...shipment });
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
+			// Rethrow so the mark-shipped dialog stays open for a retry (the toast
+			// above is the user-facing message; plain button paths swallow it).
+			throw err;
 		} finally {
 			setPending(null);
 		}
@@ -464,22 +503,6 @@ function OrderDetailRoute() {
 			throw err;
 		} finally {
 			setPending(null);
-		}
-	}
-
-	async function handleSaveCarrier() {
-		if (!order || carrierInput === null) return;
-		setSavingCarrier(true);
-		try {
-			await setCarrierUrl({
-				orderId: order._id,
-				carrierTrackingUrl: carrierInput || undefined,
-			});
-			setCarrierInput(null);
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setSavingCarrier(false);
 		}
 	}
 
@@ -598,6 +621,18 @@ function OrderDetailRoute() {
 							const blocked =
 								anchorOrdinal(nextStage.anchor) >= anchorOrdinal("packed") &&
 								mockupGated;
+							// A live rider booking with a working webhook drives shipped
+							// (pickup) and delivered (drop-off) on its own — the manual
+							// advance is disabled-with-reason, with a confirm-gated escape
+							// below so a dead webhook never strands the order.
+							const riderManaged =
+								!blocked &&
+								riderAutoUpdates &&
+								isRiderManagedTransition(nextStage.anchor, order.status);
+							const riderMoment =
+								nextStage.anchor === "delivered"
+									? "the rider drops off"
+									: "the rider picks up";
 							// First move out of pending into a confirmed-anchored stage
 							// keeps the familiar "Confirm Order" verb; everything else
 							// reads "Mark as {stage}".
@@ -606,23 +641,66 @@ function OrderDetailRoute() {
 									? "Confirm Order"
 									: `Mark as ${stageLabel(nextStage, "en")}`;
 							return (
-								<button
-									type="button"
-									onClick={() => handleAdvance(nextStage.id)}
-									disabled={pending !== null || blocked}
-									className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-foreground text-[15px] font-bold text-background transition-opacity hover:opacity-95 disabled:opacity-55"
-								>
-									{pending === nextStage.id ? (
-										"Updating…"
-									) : blocked ? (
-										`${advanceLabel} — awaiting mockup`
-									) : (
-										<>
-											{advanceLabel}
-											<ArrowRight className="size-4.5" />
-										</>
-									)}
-								</button>
+								<div className="flex flex-col gap-2">
+									<button
+										type="button"
+										onClick={() => {
+											// Marking a delivery order shipped is THE moment the
+											// seller decides how it goes out, so prompt first: a
+											// parcel seller for courier + tracking (optional, rides
+											// the shipped WhatsApp update), a rider vendor for the
+											// booking they may not have made yet. Skipped when
+											// tracking is already attached AND when a rider booking
+											// is active (belt-and-braces: booking mirrors its
+											// shareLink onto carrierTrackingUrl, but a booked order
+											// must never be re-prompted even if that link is
+											// missing). Webhook-driven orders never reach here at
+											// all — the button is disabled.
+											if (
+												nextStage.anchor === "shipped" &&
+												order.deliveryMethod === "delivery" &&
+												!hasActiveRiderBooking &&
+												!order.trackingNo &&
+												!order.carrierTrackingUrl
+											) {
+												setShipDialogOpen(true);
+												return;
+											}
+											void handleAdvance(nextStage.id).catch(() => {});
+										}}
+										disabled={pending !== null || blocked || riderManaged}
+										className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-foreground text-[15px] font-bold text-background transition-opacity hover:opacity-95 disabled:opacity-55"
+									>
+										{pending === nextStage.id ? (
+											"Updating…"
+										) : blocked ? (
+											`${advanceLabel} — awaiting mockup`
+										) : riderManaged ? (
+											`${advanceLabel} — automatic`
+										) : (
+											<>
+												{advanceLabel}
+												<ArrowRight className="size-4.5" />
+											</>
+										)}
+									</button>
+									{riderManaged ? (
+										<p className="text-xs leading-relaxed text-muted-foreground">
+											A Lalamove rider is on this order — it moves to{" "}
+											<b>{stageLabel(nextStage, "en")}</b> on its own when{" "}
+											{riderMoment}.{" "}
+											<button
+												type="button"
+												onClick={() => setConfirmManualAdvanceOpen(true)}
+												disabled={pending !== null}
+												className="font-medium underline underline-offset-2"
+											>
+												Update manually
+											</button>{" "}
+											if the automatic update didn&apos;t arrive.
+										</p>
+									) : null}
+								</div>
 							);
 						})()
 					) : order.status === "delivered" ? (
@@ -632,6 +710,44 @@ function OrderDetailRoute() {
 					) : undefined
 				}
 			/>
+
+			{/* Confirmation push failed (86eyf1rck). Amber like the payment claim: it
+			    needs the seller's eyes. Two causes, two different things for the
+			    seller to do — blaming the buyer's number when the fault was ours
+			    would send them chasing a customer for no reason. Clears itself once
+			    the buyer is reached (manual send, or they correct their number). */}
+			{order.confirmationPushStatus === "failed" &&
+			order.status !== "cancelled" ? (
+				<section className="flex gap-3 rounded-2xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-800 dark:bg-amber-950/50">
+					<MessageCircle className="size-5 shrink-0 text-amber-600 dark:text-amber-400" />
+					<div className="min-w-0 flex-1">
+						<p className="text-xs font-semibold uppercase tracking-widest text-amber-700 dark:text-amber-300">
+							{order.confirmationPushFailureKind === "system"
+								? "Buyer's confirmation didn't go out"
+								: "Couldn't reach the buyer on WhatsApp"}
+						</p>
+						{order.confirmationPushFailureKind === "system" ? (
+							<p className="mt-1 text-sm text-amber-950 dark:text-amber-100">
+								A WhatsApp problem on our side stopped the confirmation for this
+								order — the buyer's number{" "}
+								<b>{formatPhone(order.customer.waPhone ?? "")}</b> looks fine,
+								so no need to chase them about it. The order is confirmed and
+								they can see and pay for it on their order page. Message them
+								yourself if you'd like to confirm it personally.
+							</p>
+						) : (
+							<p className="mt-1 text-sm text-amber-950 dark:text-amber-100">
+								The confirmation to{" "}
+								<b>{formatPhone(order.customer.waPhone ?? "")}</b> didn't
+								deliver — that number may have a typo or no WhatsApp, so status
+								updates won't reach them either. Their order page offers a
+								&ldquo;Update my number&rdquo; fix; if they reach you another
+								way, check the number with them.
+							</p>
+						)}
+					</div>
+				</section>
+			) : null}
 
 			{/* Shopper's note + optional custom-line reference photo — front-and-centre
 			    so it isn't missed when fulfilling. Plain text, escaped by React. */}
@@ -1139,7 +1255,9 @@ function OrderDetailRoute() {
 			{/* Lalamove dispatch (delivery orders): one-tap "Book delivery" with
 			    re-quote confirm, live job card (driver/plate/tracking), failed-
 			    booking rebook, and disabled-with-reason states. 86eyb5hrf. */}
-			{!isSelfCollect ? <BookDeliveryCard order={order} /> : null}
+			{!isSelfCollect ? (
+				<BookDeliveryCard order={order} bookRequestToken={bookRequestToken} />
+			) : null}
 
 			{/* Delivery address (delivery orders only) */}
 			{!isSelfCollect && order.deliveryAddress ? (
@@ -1188,73 +1306,20 @@ function OrderDetailRoute() {
 				</section>
 			) : null}
 
-			{/* Carrier tracking */}
+			{/* Shipment tracking — manual courier + tracking number (86eyehvk4) */}
+			{/* Read-only only while a rider is actually handling this delivery
+			    (booked, or bookable right now). If booking is blocked — Starter
+			    downgrade, pinless legacy address, phone-less counter order — the
+			    parcel that went out instead still needs its consignment number, so
+			    the manual entry stays. See ShipmentTrackingCard. */}
 			{showCarrierSection ? (
-				<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
-					<div className="flex items-center justify-between">
-						<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-							Carrier Tracking
-						</p>
-						{!editingCarrier ? (
-							<button
-								type="button"
-								onClick={() => setCarrierInput(order.carrierTrackingUrl ?? "")}
-								className="text-xs text-accent hover:underline"
-							>
-								{order.carrierTrackingUrl ? "Edit" : "Add link"}
-							</button>
-						) : null}
-					</div>
-
-					{editingCarrier ? (
-						<div className="flex flex-col gap-2">
-							<Input
-								autoFocus
-								type="url"
-								value={carrierInput}
-								onChange={(e) => setCarrierInput(e.target.value)}
-								placeholder="https://www.spx.my/track?..."
-								className="h-10 w-full rounded-lg border-border px-3 text-sm"
-							/>
-							<p className="text-xs text-muted-foreground">
-								SPX, Lalamove, NinjaVan, J&amp;T, etc. Sent to the customer via
-								WhatsApp.
-							</p>
-							<div className="flex gap-2">
-								<Button
-									onClick={handleSaveCarrier}
-									disabled={savingCarrier}
-									className="h-9 flex-1 text-sm"
-								>
-									{savingCarrier ? "Saving…" : "Save"}
-								</Button>
-								<Button
-									variant="secondary"
-									onClick={() => setCarrierInput(null)}
-									disabled={savingCarrier}
-									className="h-9 text-sm"
-								>
-									Cancel
-								</Button>
-							</div>
-						</div>
-					) : order.carrierTrackingUrl ? (
-						<a
-							href={order.carrierTrackingUrl}
-							target="_blank"
-							rel="noopener noreferrer"
-							className="flex items-center gap-2 text-sm text-accent underline underline-offset-2"
-						>
-							<Truck className="size-4 shrink-0" />
-							<span className="truncate">{order.carrierTrackingUrl}</span>
-							<ExternalLink className="size-3 shrink-0" />
-						</a>
-					) : (
-						<p className="text-sm text-muted-foreground">
-							No tracking link added yet.
-						</p>
-					)}
-				</section>
+				<ShipmentTrackingCard
+					order={order}
+					readOnly={
+						lalamoveVendor &&
+						(dispatchInfo?.blockReason === null || hasActiveRiderBooking)
+					}
+				/>
 			) : null}
 
 			{order.mockupStatus !== undefined ? <MockupCard order={order} /> : null}
@@ -1338,6 +1403,41 @@ function OrderDetailRoute() {
 					</>
 				) : null}
 			</section>
+
+			{nextStage ? (
+				<MarkShippedDialog
+					open={shipDialogOpen}
+					onOpenChange={setShipDialogOpen}
+					advanceLabel={`Mark as ${stageLabel(nextStage, "en")}`}
+					onConfirm={(fields) => handleAdvance(nextStage.id, fields)}
+					// A rider vendor gets the rider prompt, never the parcel-courier
+					// form; blockReason === null ⟺ a rider could be booked on THIS
+					// order right now (keys ok, plan ok, coords present, no active
+					// job), otherwise the prompt states the reason instead.
+					lalamoveVendor={lalamoveVendor}
+					riderBlockReason={dispatchInfo?.blockReason ?? null}
+					onBookRider={() => {
+						setShipDialogOpen(false);
+						setBookRequestToken((t) => t + 1);
+					}}
+				/>
+			) : null}
+
+			{nextStage ? (
+				<ConfirmDialog
+					open={confirmManualAdvanceOpen}
+					onOpenChange={setConfirmManualAdvanceOpen}
+					title={`Mark as ${stageLabel(nextStage, "en")} manually?`}
+					description={`A Lalamove rider is handling this order, and its status updates automatically from the rider's progress. Marking it manually sends the buyer's WhatsApp update now${
+						nextStage.anchor === "shipped"
+							? " — before pickup, and without the live-tracking link"
+							: ""
+					}. Only do this if the automatic update didn't come through.`}
+					confirmLabel={`Mark as ${stageLabel(nextStage, "en")}`}
+					cancelLabel="Keep automatic"
+					onConfirm={() => handleAdvance(nextStage.id)}
+				/>
+			) : null}
 
 			<ConfirmDialog
 				open={confirmCancelOpen}
@@ -1451,12 +1551,28 @@ const MOCKUP_WAIVE_GRACE_MS = 48 * 60 * 60 * 1000;
 const MAX_MOCKUP_IMAGES = 5;
 
 /**
- * Amber action card for a fee-pending delivery order (86extzdr8): the buyer's
- * address fell outside the seller's distance bands (or had no coordinates) on
- * an "arrange via WhatsApp" store. The seller agrees the charge with the buyer
- * in chat, enters it here (0 = deliver free), and the held payment ask goes
- * out on WhatsApp with the final total.
+ * Amber action card for a fee-pending delivery order (86extzdr8): the charge
+ * couldn't be resolved automatically on an "arrange" store — radius mode:
+ * beyond the bands / no map pin; lalamove mode: no live quote / no map pin.
+ * The explanation keys on the order's FROZEN `deliveryFeePendingReason` (a
+ * Lalamove store must never read "outside your delivery bands"). The seller
+ * agrees the charge with the buyer in chat, enters it here (0 = deliver
+ * free), and the held payment ask goes out on WhatsApp with the final total.
  */
+const FEE_PENDING_REASON_COPY: Record<
+	NonNullable<Doc<"orders">["deliveryFeePendingReason"]> | "unknown",
+	string
+> = {
+	out_of_range:
+		"This address is outside your delivery bands, so no charge was applied yet.",
+	no_coords:
+		"The buyer's address has no map pin, so no charge could be worked out yet.",
+	unquotable:
+		"A live Lalamove price couldn't be fetched for this address, so no charge was applied yet.",
+	// Orders from before the reason was stored — stay mode-neutral.
+	unknown: "No delivery charge could be applied to this order automatically.",
+};
+
 function SetDeliveryFeeCard({ order }: { order: Doc<"orders"> }) {
 	const setDeliveryFee = useMutation(api.orders.setDeliveryFee);
 	const [feeInput, setFeeInput] = useState("");
@@ -1502,8 +1618,8 @@ function SetDeliveryFeeCard({ order }: { order: Doc<"orders"> }) {
 				</p>
 			</div>
 			<p className="text-sm text-amber-900/90 dark:text-amber-200/90">
-				This address is outside your delivery bands, so no charge was applied
-				yet. Agree it with the buyer on WhatsApp, then set it here — the payment
+				{FEE_PENDING_REASON_COPY[order.deliveryFeePendingReason ?? "unknown"]}{" "}
+				Agree it with the buyer on WhatsApp, then set it here — the payment
 				request goes out with the final total. Enter 0 to deliver free.
 			</p>
 			<div className="flex items-end gap-2">

@@ -27,6 +27,29 @@ export const waPhoneOptionalSchema = z
 	.transform((s) => (s && s.trim().length > 0 ? s : undefined))
 	.pipe(waPhoneSchema.optional());
 
+// Buyer's WhatsApp number at storefront checkout (86eyf1rck). Mirrors the
+// server's `assertValidMyWaPhone` normalization (strip separators, local
+// `0xx…` → `60xx…`) and then requires a Malaysian MOBILE shape — 601X plus
+// 8–9 digits — so the confirmation push can actually reach a WhatsApp
+// account. Malaysia-only for v1, consistent with the counter manual bind and
+// the Lalamove rider-contact constraint. The server re-validates.
+export const myWaPhoneCheckoutSchema = z
+	.string()
+	.transform((s) => {
+		const digits = s.replace(/\D/g, "");
+		if (digits.startsWith("60")) return digits;
+		if (digits.startsWith("0")) return `60${digits.slice(1)}`;
+		return digits;
+	})
+	.pipe(
+		z
+			.string()
+			.regex(
+				/^601\d{8,9}$/,
+				"Enter a Malaysian mobile number (e.g. 012-345 6789)",
+			),
+	);
+
 export const settingsWaPhoneFormSchema = z.object({
 	waPhone: waPhoneSchema,
 });
@@ -121,7 +144,7 @@ export const strictAddressSchema = z.object({
 // `latitude` and `longitude` are stringified numbers captured from Google
 // Places autocomplete — kept as strings here to match TanStack Form's
 // all-string form state. Empty when the buyer skipped autocomplete; the
-// submit handler in checkout-sheet parses them back to numbers.
+// submit handler in checkout-form parses them back to numbers.
 // `placeId` travels alongside lat/lng so derived maps URLs deep-link to
 // the named Google place rather than raw coords.
 export const addressFormFieldsSchema = z.object({
@@ -144,6 +167,9 @@ export const checkoutFormSchema = z
 			.trim()
 			.min(3, "Your name must be at least 3 characters")
 			.max(60, "Name must be at most 60 characters"),
+		// Required so the order is reachable the moment it's placed — the
+		// confirmation lands in THIS number's WhatsApp (86eyf1rck).
+		waPhone: myWaPhoneCheckoutSchema,
 		deliveryMethod: deliveryMethodSchema,
 		address: addressFormFieldsSchema,
 		// Convex id of the chosen pickup location when deliveryMethod is

@@ -36,7 +36,9 @@ Dark mode: `.dark` class on an ancestor; **mint becomes `primary`**. Every new s
 1. **≥44px tap targets** for anything interactive. ⚠️ **`Button`'s own sizes top out at `h-9` = 36px** — even `size="lg"` and `size="icon"` do **not** clear 44px. For any primary *touch* target, add the **`tap-target`** utility (or `min-h-11`) to the button, or use the Input `field` variant for fields. (Mouse-only desktop controls may stay compact — 44px is a touch rule.) Icon-only buttons should use `size="icon"` + `tap-target`, not a text size like `lg`.
 2. **Single-column by default**, widen at `sm:`/`lg:`. Never design desktop-first and shrink.
 3. **Safe areas:** bottom-anchored bars use `pb-[max(0.75rem,env(safe-area-inset-bottom))]` (or the `safe-bottom` utility). See [`bottom-nav.tsx`](../src/components/dashboard/bottom-nav.tsx).
-4. **Sticky primary action** on long flows (`sticky bottom-0` + border + `bg-background`), not a button lost at the bottom of a scroll.
+4. **Bottom-anchored primary action** on long flows (border + `bg-background`), not a button lost at the bottom of a scroll. **`fixed inset-x-0 bottom-0`** — every action bar in the app does this ([`cart-bar.tsx`](../src/components/storefront/cart-bar.tsx), the product page's purchase bar, [`checkout-form.tsx`](../src/components/storefront/checkout-form.tsx), the cost calculator, the orders bulk bar). Out of flow means the page's own footer renders as ordinary content **above** the floating bar, so every page stacks the same way — a `sticky` bar sits IN flow and shoves the footer below it, which reads as welded and inconsistent with its sibling pages.
+   - A fixed bar is out of flow, so **the page must reserve its height**: measure it with [`usePublishedHeight`](../src/hooks/usePublishedHeight.ts) and pad with `pb-[var(--storefront-bar-h,…)]` rather than hardcoding a guess that rots as the bar's content wraps. A `display:none` bar measures `0px` and `var(…, fallback)` only fires when the property is *unset*, so pair it with a breakpoint override (`lg:pb-10`).
+   - `sticky bottom-0` is for a bar that's the **last element in its own scroll container with nothing after it** — the dashboard [`bottom-nav.tsx`](../src/components/dashboard/bottom-nav.tsx), which has no footer to stack against.
 5. Bottom nav / desktop sidebar swap at `lg` (`lg:hidden` / `hidden lg:flex`).
 
 ## Primitives — reach for these first
@@ -50,7 +52,7 @@ Don't hand-roll what exists. From [`src/components/ui/`](../src/components/ui/):
 | Textarea | `Textarea` | |
 | Phone | `PhoneInput` | MY-aware; use everywhere a WA number is entered. |
 | Modal | `Dialog*` | `DialogFooter` is full-bleed + reverses on mobile. Confirm-only flows → `ConfirmDialog`. |
-| Popover / menu | `Popover`, `Command` (cmdk) | |
+| Popover / menu | `Popover`, `DropdownMenu*` (radix), `Command` (cmdk) | `DropdownMenu` = a keyboard-navigable action menu (trigger → items). Use to group related actions behind one control instead of a row of competing buttons (e.g. the counter-checkout header's "New order"). Open a `Dialog` from an item via controlled state in `onSelect` — the menu→dialog focus handoff is clean. |
 | Copy-to-clipboard | `CopyButton` | one-tap copy w/ feedback (order IDs, bank details). |
 | Reorderable list | `SortableList` | **the** sorting standard (@dnd-kit, mobile-safe). **Never** arrow-button reordering. |
 | Loading state | `Skeleton` | prefer skeletons over spinners for content. |

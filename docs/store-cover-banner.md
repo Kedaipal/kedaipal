@@ -47,9 +47,13 @@ index — only ever read alongside the retailer row, same as `logoStorageId`.
    blurb **overlay** on top over a bottom-weighted scrim
    (`bg-gradient-to-t from-black/80 …`) so text stays legible on any image —
    identity is bottom-anchored (`justify-between`), name/blurb switch to white with
-   a drop-shadow. When **unset**, the header falls back to the original light
-   gradient layout (top-anchored, dark text) — no empty gap. `hasCover` gates the
-   two layouts in one `<header>`.
+   a drop-shadow. The **Founding Member badge** rides the same treatment: on a
+   cover it takes an `onCover` prop and renders a white label + the mint emblem
+   (which reads on the dark scrim regardless of theme) instead of its default
+   theme-driven navy/dark look — otherwise it washed out on darker covers (ClickUp
+   `86eycww5z`). When **unset**, the header falls back to the original light
+   gradient layout (top-anchored, dark text, default badge) — no empty gap.
+   `hasCover` gates the two layouts in one `<header>`.
 6. **OG / SEO** (`$slug.tsx` loader/head) — image precedence is
    **cover → logo → first product image**. `twitter:card` stays
    `summary_large_image` whenever any image resolves; the same resolved URL feeds

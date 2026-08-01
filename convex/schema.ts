@@ -35,7 +35,9 @@ export default defineSchema({
 		// logoStorageId. See docs/store-cover-banner.md.
 		coverImageStorageId: v.optional(v.string()),
 		currency: v.optional(v.string()),
-		locale: v.optional(v.union(v.literal("en"), v.literal("ms"))),
+		locale: v.optional(
+			v.union(v.literal("en"), v.literal("ms"), v.literal("zh")),
+		),
 		// Per-retailer overrides for WhatsApp message copy. Any key omitted falls
 		// back to the default catalog in convex/lib/whatsappCopy.ts.
 		// Variables supported in templates: {shortId}, {storeName}.
@@ -52,6 +54,16 @@ export default defineSchema({
 					}),
 				),
 				ms: v.optional(
+					v.object({
+						confirm: v.optional(v.string()),
+						packed: v.optional(v.string()),
+						shipped: v.optional(v.string()),
+						delivered: v.optional(v.string()),
+						cancelled: v.optional(v.string()),
+						unknownFallback: v.optional(v.string()),
+					}),
+				),
+				zh: v.optional(
 					v.object({
 						confirm: v.optional(v.string()),
 						packed: v.optional(v.string()),
@@ -94,6 +106,16 @@ export default defineSchema({
 						cancelled: v.optional(v.string()),
 					}),
 				),
+				zh: v.optional(
+					v.object({
+						pending: v.optional(v.string()),
+						confirmed: v.optional(v.string()),
+						packed: v.optional(v.string()),
+						shipped: v.optional(v.string()),
+						delivered: v.optional(v.string()),
+						cancelled: v.optional(v.string()),
+					}),
+				),
 			}),
 		),
 		// Phase 2 of order-status customization: a seller-defined, ordered list of
@@ -114,11 +136,16 @@ export default defineSchema({
 						v.literal("shipped"),
 						v.literal("delivered"),
 					),
-					label: v.object({ en: v.string(), ms: v.optional(v.string()) }),
+					label: v.object({
+						en: v.string(),
+						ms: v.optional(v.string()),
+						zh: v.optional(v.string()),
+					}),
 					description: v.optional(
 						v.object({
 							en: v.optional(v.string()),
 							ms: v.optional(v.string()),
+							zh: v.optional(v.string()),
 						}),
 					),
 					notify: v.boolean(),
@@ -222,15 +249,16 @@ export default defineSchema({
 				// REAL Lalamove price for their address, fetched via the public
 				// lalamove.quoteForCheckout action and frozen through a
 				// deliveryQuotes row (client never supplies the fee). Requires
-				// deliveryBooking credentials to resolve; when they don't, checkout
-				// falls back per `outOfRange`-style policy below ("arrange" →
-				// deliveryFeePending, the existing seller-confirms-fee state).
+				// deliveryBooking credentials to resolve; when a live quote can't
+				// be fetched, checkout/address-edit is REFUSED (strict since
+				// 27 Jul — the buyer always sees the real rider price, the seller
+				// never calculates a charge).
 				v.object({
 					mode: v.literal("lalamove"),
-					// When a live quote can't be fetched (no coords picked, provider
-					// down, creds unresolvable): "arrange" accepts the order with the
-					// fee pending (default posture — never lose the sale), "block"
-					// refuses checkout until the buyer pins a quotable address.
+					// VESTIGIAL (27 Jul): behavior is always "block" — the resolver
+					// ignores this and sanitizeDeliveryConfig normalizes stored rows
+					// to "block" on save. Kept so pre-existing "arrange" rows
+					// validate.
 					onUnquotable: v.union(v.literal("arrange"), v.literal("block")),
 				}),
 			),
@@ -338,6 +366,14 @@ export default defineSchema({
 		// separate narrow migration. See docs/product-variants.md §5.
 		sku: v.optional(v.string()),
 		name: v.string(),
+		// URL slug for the public product page — /$slug/p/<productSlug>
+		// (86eybrhrt PR2). Auto-generated from the name at create (never a seller
+		// input), unique per retailer, and STABLE across renames so shared
+		// WhatsApp links keep working. Optional during the widen: legacy rows are
+		// filled by products.backfillProductSlugs; reads fall back to the in-place
+		// sheet when absent. Archived/hidden products KEEP their slug (restoring
+		// one must not find its URL stolen).
+		slug: v.optional(v.string()),
 		// Product-level rich text rendered as sanitized markdown on the storefront
 		// (specs + "what's included"). NOT the home for store-wide FAQ.
 		description: v.optional(v.string()),
@@ -407,7 +443,8 @@ export default defineSchema({
 	})
 		.index("by_retailer", ["retailerId"])
 		.index("by_retailer_active", ["retailerId", "active"])
-		.index("by_retailer_sku", ["retailerId", "sku"]),
+		.index("by_retailer_sku", ["retailerId", "sku"])
+		.index("by_retailer_slug", ["retailerId", "slug"]),
 
 	/**
 	 * First-class sellable unit. Every product resolves to ≥1 variant — a
@@ -743,11 +780,29 @@ export default defineSchema({
 		// `total` via computeOrderTotals. Unset → no fee.
 		deliveryFee: v.optional(v.number()),
 		// True while the delivery charge is still to be confirmed by the seller —
-		// a radius-mode "arrange via WhatsApp" order (out of range, or the buyer
-		// typed an address with no coordinates). While set, the payment ask is
-		// held and payment claim/receive are gated (the total is not final yet) —
-		// mirrors the mockup gate. Cleared by orders.setDeliveryFee.
+		// a RADIUS-mode "arrange via WhatsApp" order (out of range / no
+		// coordinates). Lalamove-priced stores never set this (strict since
+		// 27 Jul: no live quote → checkout/address-edit refused, so the seller
+		// never calculates a charge). While set, the payment ask is held and
+		// payment claim/receive are gated (the total is not final yet) — mirrors
+		// the mockup gate. Cleared by orders.setDeliveryFee.
 		deliveryFeePending: v.optional(v.boolean()),
+		// WHY the charge is pending, frozen at the resolve that set the flag —
+		// drives the seller card's explanation (never claims "outside your
+		// delivery bands" when bands weren't the cause). Absent on orders from
+		// before this field (generic copy). Cleared with the flag by
+		// setDeliveryFee.
+		deliveryFeePendingReason: v.optional(
+			v.union(
+				// Radius mode: buyer's pin is beyond the last band.
+				v.literal("out_of_range"),
+				// Buyer typed an address without picking a map pin (radius mode).
+				v.literal("no_coords"),
+				// LEGACY (pre-27 Jul lalamove rows): no live provider quote. New
+				// lalamove orders refuse instead of landing pending.
+				v.literal("unquotable"),
+			),
+		),
 		// When the buyer needs the order — their answer to "When do you need this?
 		// (delivery or pickup date)" at checkout. Stored as the epoch-ms of that
 		// calendar day's MIDNIGHT in Malaysia time (UTC+8, no DST) — see
@@ -770,7 +825,18 @@ export default defineSchema({
 		// Optional external carrier tracking URL set by the retailer when marking
 		// shipped. Surfaced on the customer tracking page and included in the
 		// WhatsApp shipped notification. Only relevant for delivery orders.
+		// Auto-derived from courierName + trackingNo for registry couriers
+		// (convex/lib/couriers.ts), hand-pasted for "Other", or mirrored from a
+		// Lalamove job's shareLink.
 		carrierTrackingUrl: v.optional(v.string()),
+		// Manual parcel-courier shipment info (86eyehvk4) — the seller ships via
+		// J&T/DD Cold Chain/etc themselves and pastes the consignment number at
+		// mark-shipped (or after, on the order-detail card). Rendered as copyable
+		// text on the tracking page + in the shipped WhatsApp update; NEVER
+		// triggers its own outbound message (Meta bills per message from Oct
+		// 2026 — late-added tracking is track-page-only). Delivery orders only.
+		courierName: v.optional(v.string()),
+		trackingNo: v.optional(v.string()),
 		// Payment handshake — independent of the fulfilment status pipeline above.
 		// `unpaid` (or undefined) → shopper hasn't claimed payment yet.
 		// `claimed` → shopper tapped "I've paid" on the tracking page.
@@ -840,6 +906,54 @@ export default defineSchema({
 		// status transition. Optional: pre-inbox orders fall back to updatedAt /
 		// createdAt at read time, so no backfill. See docs/order-inbox.md.
 		statusChangedAt: v.optional(v.number()),
+		// WABA confirmation push (86eyf1rck) — the template message Kedaipal sends
+		// the buyer at storefront checkout, replacing the buyer-initiated wa.me
+		// handoff. Lifecycle:
+		//   "sending"   — stamped in the same transaction as the insert, so the
+		//                 state is never ambiguous while attempts are in flight
+		//                 (the action retries transient failures with backoff).
+		//   "sent"      — Meta accepted it; may still flip to "failed" if the
+		//                 statuses webhook reports undelivered.
+		//   "failed"    — terminal after retries. `confirmationPushFailureKind`
+		//                 says whose problem it is, which drives whether the
+		//                 buyer is asked to fix their number or merely informed.
+		//   "recovered" — a failed push whose buyer then reached us anyway (manual
+		//                 wa.me send, or corrected their number), so the chat
+		//                 exists and both warnings clear.
+		// Undefined = legacy order or push path inactive (template env unset).
+		// Widen-only, no backfill.
+		confirmationPushStatus: v.optional(
+			v.union(
+				//   "deferred" — order committed at create but its total isn't final
+				//                yet (mockup price-on-quote / delivery-fee-pending);
+				//                the push fires when the price is confirmed
+				//                (86eyfq0w5) so the template's total is always true.
+				v.literal("deferred"),
+				v.literal("sending"),
+				v.literal("sent"),
+				v.literal("failed"),
+				v.literal("recovered"),
+			),
+		),
+		// Set alongside a "failed" status. "unreachable" = the number can't
+		// receive (typo'd / not on WhatsApp) so the buyer can repair it;
+		// "system" = our side or Meta's, so we never blame the buyer's number.
+		confirmationPushFailureKind: v.optional(
+			v.union(v.literal("unreachable"), v.literal("system")),
+		),
+		confirmationPushAt: v.optional(v.number()),
+		// When the seller first opened this order (86eyf1rck). Before the
+		// confirmation push, `pending` WAS the seller's "haven't looked at it yet"
+		// signal — the New bucket, the Home tile and the amber/red age escalation
+		// all keyed on it. Push-path orders skip `pending` entirely, so that signal
+		// would silently die; this stamp replaces it. Scoped to push-path orders at
+		// read time (see orderBuckets.isUnseenOrder), so legacy and counter orders
+		// need no backfill and behave exactly as before.
+		seenAt: v.optional(v.number()),
+		// Meta's message id (wamid) for the confirmation push. The statuses
+		// webhook identifies messages ONLY by this id, so it's the correlation key
+		// that lets a delivery failure find its order (see by_confirmation_wamid).
+		confirmationPushWamid: v.optional(v.string()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
@@ -849,7 +963,8 @@ export default defineSchema({
 		.index("by_retailer_mockup", ["retailerId", "mockupStatus"])
 		.index("by_shortId", ["shortId"])
 		.index("by_tracking_token", ["trackingToken"])
-		.index("by_customer", ["customerId"]),
+		.index("by_customer", ["customerId"])
+		.index("by_confirmation_wamid", ["confirmationPushWamid"]),
 
 	/**
 	 * Retailer-managed library of self-collect pickup locations. Frozen onto
@@ -1268,6 +1383,8 @@ export default defineSchema({
 			v.literal("stop_keyword"),
 			v.literal("berhenti_keyword"),
 			v.literal("unsub_keyword"),
+			v.literal("zh_stop_keyword"),
+			v.literal("zh_unsub_keyword"),
 			v.literal("manual_admin"),
 			v.literal("meta_complaint"),
 		),

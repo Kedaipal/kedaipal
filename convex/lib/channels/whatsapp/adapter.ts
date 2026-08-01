@@ -12,15 +12,21 @@ import type {
 	ChannelCapabilities,
 	InboundEnvelope,
 	OutboundMessage,
+	SendReceipt,
+	StatusEvent,
 } from "../types";
 import {
 	sendCtaUrlButton,
 	sendCtaUrlWithImage,
 	sendDocument,
 	sendImage,
+	sendTemplate,
 	sendText,
 } from "../../whatsapp";
-import { extractInboundMessages } from "../../whatsappWebhook";
+import {
+	extractInboundMessages,
+	extractStatusEvents,
+} from "../../whatsappWebhook";
 import { verifyMetaSignature } from "../../whatsappSignature";
 
 const capabilities: ChannelCapabilities = { ctaButtons: true };
@@ -54,7 +60,10 @@ function ctaButtonUrl(url: string): string | null {
 	return null;
 }
 
-async function send(to: string, msg: OutboundMessage): Promise<void> {
+async function send(
+	to: string,
+	msg: OutboundMessage,
+): Promise<SendReceipt | undefined> {
 	switch (msg.kind) {
 		case "text":
 			await sendText(to, msg.body);
@@ -65,6 +74,32 @@ async function send(to: string, msg: OutboundMessage): Promise<void> {
 		case "document":
 			await sendDocument(to, msg.documentUrl, msg.filename, msg.caption);
 			return;
+		case "template": {
+			// Meta numbers body and button parameters INDEPENDENTLY — the button's
+			// {{1}} is its own namespace, filled from `urlButtonParam` (the value
+			// Meta appends to the approved dynamic-URL suffix), never a body slot.
+			const components: Array<Record<string, unknown>> = [
+				{
+					type: "body",
+					parameters: msg.bodyParams.map((text) => ({ type: "text", text })),
+				},
+			];
+			if (msg.urlButtonParam !== undefined) {
+				components.push({
+					type: "button",
+					sub_type: "url",
+					index: "0",
+					parameters: [{ type: "text", text: msg.urlButtonParam }],
+				});
+			}
+			const providerMessageId = await sendTemplate(
+				to,
+				msg.templateName,
+				msg.languageCode,
+				components,
+			);
+			return providerMessageId ? { providerMessageId } : undefined;
+		}
 		case "cta": {
 			const buttonUrl = ctaButtonUrl(msg.url);
 			if (buttonUrl) {
@@ -116,6 +151,23 @@ function parseInbound(rawBody: string, _headers: Headers): InboundEnvelope[] {
 	}));
 }
 
+function parseStatuses(rawBody: string): StatusEvent[] {
+	let payload: unknown;
+	try {
+		payload = JSON.parse(rawBody);
+	} catch {
+		// Same posture as parseInbound: a malformed-but-signed body yields no
+		// events (parseInbound already logged the anomaly on the same request).
+		return [];
+	}
+	return extractStatusEvents(payload).map((s) => ({
+		providerMessageId: s.id,
+		status: s.status,
+		recipientId: s.recipientId,
+		errorDetail: s.errorDetail,
+	}));
+}
+
 async function verifySignature(
 	rawBody: string,
 	headers: Headers,
@@ -134,5 +186,6 @@ export const whatsappAdapter: ChannelAdapter = {
 	capabilities,
 	send,
 	parseInbound,
+	parseStatuses,
 	verifySignature,
 };

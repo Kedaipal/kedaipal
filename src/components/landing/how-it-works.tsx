@@ -68,7 +68,11 @@ export function HowItWorks() {
 	const steps = getHowSteps();
 
 	return (
-		<section id="how" aria-labelledby="how-heading" className="bg-background">
+		<section
+			id="how"
+			aria-labelledby="how-heading"
+			className="border-y border-border bg-muted/30"
+		>
 			<div className="mx-auto max-w-6xl px-5 py-24 md:px-8 md:py-32">
 				<div className="mx-auto max-w-2xl text-center">
 					<Eyebrow className="justify-center">{m.how_label()}</Eyebrow>
@@ -98,10 +102,10 @@ export function HowItWorks() {
 									<div
 										aria-hidden
 										className={cn(
-											"flex size-9 shrink-0 items-center justify-center rounded-full text-sm font-bold md:size-12 md:text-base",
+											"flex size-10 shrink-0 items-center justify-center rounded-full font-heading text-base font-extrabold md:size-14 md:text-lg",
 											isLast
-												? "bg-accent text-accent-foreground"
-												: "bg-primary text-primary-foreground",
+												? "bg-accent text-accent-foreground shadow-lg shadow-accent/40"
+												: "bg-primary text-accent shadow-lg shadow-primary/25",
 										)}
 									>
 										{isLast ? <Check className="size-4 md:size-5" /> : stepNum}
@@ -120,8 +124,8 @@ export function HowItWorks() {
 									<span className="sr-only">
 										{m.how_step_of({ step: stepNum, total: steps.length })}
 									</span>
-									<div className="grid grid-cols-1 gap-6 md:grid-cols-2 md:items-center md:gap-10">
-										<div className="min-w-0">
+									<div className="grid grid-cols-1 gap-8 md:grid-cols-2 md:items-start md:gap-10">
+										<div className="min-w-0 md:pt-1.5">
 											<p className="text-xs font-bold uppercase tracking-widest text-accent">
 												{step.label}
 											</p>
@@ -139,7 +143,7 @@ export function HowItWorks() {
 													{step.tags.map((tag) => (
 														<span
 															key={tag}
-															className="rounded-full border border-accent/20 bg-accent/10 px-3 py-1 text-xs font-medium text-accent"
+															className="rounded-full border border-border bg-card px-3 py-1.5 text-xs font-semibold text-foreground/80"
 														>
 															{tag}
 														</span>
@@ -147,9 +151,7 @@ export function HowItWorks() {
 												</div>
 											)}
 										</div>
-										<div className="min-w-0 overflow-hidden rounded-3xl border border-border bg-muted/30 p-6 shadow-sm md:p-8">
-											{step.mockup}
-										</div>
+										<div className="min-w-0 px-1 py-2">{step.mockup}</div>
 									</div>
 								</div>
 							</FadeIn>

@@ -1,8 +1,9 @@
 // WhatsApp message copy catalog. Pure — no Convex imports — to keep testable.
 
+import { type Locale, pickLocale as pickLocaleBase } from "./locale";
 import { deriveMapsUrl } from "./mapsUrl";
 
-export type Locale = "en" | "ms";
+export type { Locale } from "./locale";
 
 export type DeliveryMethod = "delivery" | "self_collect";
 
@@ -12,6 +13,11 @@ export type CopyVars = {
 	contactPhone?: string;
 	trackingUrl?: string;
 	carrierTrackingUrl?: string;
+	// Manual parcel-courier shipment info (86eyehvk4) — rendered as a copyable
+	// line in the shipped update (delivery branch only). Rides the message
+	// that's already being sent; never triggers its own outbound message.
+	courierName?: string;
+	trackingNo?: string;
 	deliveryMethod?: DeliveryMethod;
 	// The order's frozen pickup kind (pickupSnapshot.locationType). Only
 	// meaningful when deliveryMethod is self_collect; undefined (legacy
@@ -40,11 +46,38 @@ type LocaleCopy = {
 	unknownFallback: () => string;
 };
 
+const CONTACT_LINE_LABEL: Record<Locale, string> = {
+	en: "Contact us",
+	ms: "Hubungi kami",
+	zh: "联系我们",
+};
+
 function contactLine(contactPhone: string | undefined, locale: Locale): string {
 	if (!contactPhone) return "";
-	return locale === "ms"
-		? `\nHubungi kami: wa.me/${contactPhone}`
-		: `\nContact us: wa.me/${contactPhone}`;
+	return `\n${CONTACT_LINE_LABEL[locale]}: wa.me/${contactPhone}`;
+}
+
+const TRACKING_NO_LABEL: Record<Locale, string> = {
+	en: "tracking no.",
+	ms: "no. penjejakan",
+	zh: "快递单号",
+};
+
+/** "📦 J&T Express — tracking no. JT123" under the shipped headline. The buyer
+ * copies the number into the courier's app even when no deep link exists
+ * (cold-chain couriers). Empty string when the seller attached nothing. */
+function courierLine(
+	v: Pick<CopyVars, "courierName" | "trackingNo">,
+	locale: Locale,
+): string {
+	const { courierName, trackingNo } = v;
+	if (!courierName && !trackingNo) return "";
+	const label = TRACKING_NO_LABEL[locale];
+	const dash = locale === "zh" ? "——" : "—";
+	if (courierName && trackingNo)
+		return `\n📦 ${courierName} ${dash} ${label} ${trackingNo}`;
+	if (courierName) return `\n📦 ${courierName}`;
+	return `\n📦 ${label} ${trackingNo}`;
 }
 
 /**
@@ -55,10 +88,14 @@ function contactLine(contactPhone: string | undefined, locale: Locale): string {
  * the order confirmation — their first message from us. One source of truth so
  * the two paths never drift.
  */
+const PRIVACY_NOTICE_LINE: Record<Locale, string> = {
+	en: "\n\nBy continuing you agree to our Privacy Policy: https://kedaipal.com/privacy",
+	ms: "\n\nDengan meneruskan, anda bersetuju dengan Dasar Privasi kami: https://kedaipal.com/privacy",
+	zh: "\n\n继续操作即表示您同意我们的隐私政策：https://kedaipal.com/privacy",
+};
+
 export function privacyNoticeLine(locale: Locale): string {
-	return locale === "ms"
-		? "\n\nDengan meneruskan, anda bersetuju dengan Dasar Privasi kami: https://kedaipal.com/privacy"
-		: "\n\nBy continuing you agree to our Privacy Policy: https://kedaipal.com/privacy";
+	return PRIVACY_NOTICE_LINE[locale];
 }
 
 export const waCopy: Record<Locale, LocaleCopy> = {
@@ -80,14 +117,14 @@ export const waCopy: Record<Locale, LocaleCopy> = {
 						: `📦 Order ${shortId} is packed and ready to ship.`;
 				return `${msg}${trackingUrl ? `\n\nTrack your order: ${trackingUrl}` : ""}`;
 			},
-			shipped: ({ shortId, carrierTrackingUrl, trackingUrl, deliveryMethod, pickupKind }) => {
+			shipped: ({ shortId, carrierTrackingUrl, courierName, trackingNo, trackingUrl, deliveryMethod, pickupKind }) => {
 				if (isDropOff({ deliveryMethod, pickupKind })) {
 					return `📍 Order ${shortId} is ready — see you at the drop-off point!${trackingUrl ? `\n\nOrder status: ${trackingUrl}` : ""}`;
 				}
 				if (deliveryMethod === "self_collect") {
 					return `🏪 Order ${shortId} is ready for pickup!${trackingUrl ? `\n\nOrder status: ${trackingUrl}` : ""}`;
 				}
-				return `🚚 Order ${shortId} is on the way!${carrierTrackingUrl ? `\n\nTrack shipment: ${carrierTrackingUrl}` : ""}${trackingUrl ? `\n\nOrder status: ${trackingUrl}` : ""}`;
+				return `🚚 Order ${shortId} is on the way!${courierLine({ courierName, trackingNo }, "en")}${carrierTrackingUrl ? `\n\nTrack shipment: ${carrierTrackingUrl}` : ""}${trackingUrl ? `\n\nOrder status: ${trackingUrl}` : ""}`;
 			},
 			delivered: ({ shortId, deliveryMethod }) => {
 				if (deliveryMethod === "self_collect") {
@@ -119,14 +156,14 @@ export const waCopy: Record<Locale, LocaleCopy> = {
 						: `📦 Pesanan ${shortId} sudah dibungkus dan sedia untuk dihantar.`;
 				return `${msg}${trackingUrl ? `\n\nJejak pesanan anda: ${trackingUrl}` : ""}`;
 			},
-			shipped: ({ shortId, carrierTrackingUrl, trackingUrl, deliveryMethod, pickupKind }) => {
+			shipped: ({ shortId, carrierTrackingUrl, courierName, trackingNo, trackingUrl, deliveryMethod, pickupKind }) => {
 				if (isDropOff({ deliveryMethod, pickupKind })) {
 					return `📍 Pesanan ${shortId} sedia — jumpa di lokasi penyerahan!${trackingUrl ? `\n\nStatus pesanan: ${trackingUrl}` : ""}`;
 				}
 				if (deliveryMethod === "self_collect") {
 					return `🏪 Pesanan ${shortId} sedia untuk diambil!${trackingUrl ? `\n\nStatus pesanan: ${trackingUrl}` : ""}`;
 				}
-				return `🚚 Pesanan ${shortId} dalam perjalanan!${carrierTrackingUrl ? `\n\nJejak penghantaran: ${carrierTrackingUrl}` : ""}${trackingUrl ? `\n\nStatus pesanan: ${trackingUrl}` : ""}`;
+				return `🚚 Pesanan ${shortId} dalam perjalanan!${courierLine({ courierName, trackingNo }, "ms")}${carrierTrackingUrl ? `\n\nJejak penghantaran: ${carrierTrackingUrl}` : ""}${trackingUrl ? `\n\nStatus pesanan: ${trackingUrl}` : ""}`;
 			},
 			delivered: ({ shortId, deliveryMethod }) => {
 				if (deliveryMethod === "self_collect") {
@@ -140,12 +177,48 @@ export const waCopy: Record<Locale, LocaleCopy> = {
 		unknownFallback: () =>
 			"Hai! Untuk membuat pesanan, layari katalog kami dan tekan Checkout — anda akan dikembalikan ke sini dengan ID pesanan.",
 	},
+	zh: {
+		confirm: ({ shortId, storeName, contactPhone, trackingUrl, deliveryMethod, pickupKind }) => {
+			const method = isDropOff({ deliveryMethod, pickupKind })
+				? "东西准备好后，我们会通知您到交收点拿。"
+				: deliveryMethod === "self_collect"
+					? "东西准备好后，我们会通知您来拿。"
+					: "发货后我们会通知您。";
+			return `✅ 订单 ${shortId} 已确认。${method} —— ${storeName}${trackingUrl ? `\n\n查看订单状态和付款：${trackingUrl}` : ""}${contactLine(contactPhone, "zh")}`;
+		},
+		status: {
+			packed: ({ shortId, trackingUrl, deliveryMethod, pickupKind }) => {
+				const msg = isDropOff({ deliveryMethod, pickupKind })
+					? `📦 订单 ${shortId} 已打包，准备送到交收点。`
+					: deliveryMethod === "self_collect"
+						? `📦 订单 ${shortId} 已打包，可以来拿了。`
+						: `📦 订单 ${shortId} 已打包，准备发货。`;
+				return `${msg}${trackingUrl ? `\n\n查看订单状态：${trackingUrl}` : ""}`;
+			},
+			shipped: ({ shortId, carrierTrackingUrl, courierName, trackingNo, trackingUrl, deliveryMethod, pickupKind }) => {
+				if (isDropOff({ deliveryMethod, pickupKind })) {
+					return `📍 订单 ${shortId} 已经准备好了 —— 交收点见！${trackingUrl ? `\n\n订单状态：${trackingUrl}` : ""}`;
+				}
+				if (deliveryMethod === "self_collect") {
+					return `🏪 订单 ${shortId} 可以来拿了！${trackingUrl ? `\n\n订单状态：${trackingUrl}` : ""}`;
+				}
+				return `🚚 订单 ${shortId} 已经在路上了！${courierLine({ courierName, trackingNo }, "zh")}${carrierTrackingUrl ? `\n\n查看物流：${carrierTrackingUrl}` : ""}${trackingUrl ? `\n\n订单状态：${trackingUrl}` : ""}`;
+			},
+			delivered: ({ shortId, deliveryMethod }) => {
+				if (deliveryMethod === "self_collect") {
+					return `🎉 订单 ${shortId} 已领取。谢谢惠顾！`;
+				}
+				return `🎉 订单 ${shortId} 已送达。谢谢惠顾！`;
+			},
+			cancelled: ({ shortId, contactPhone }) =>
+				`❌ 订单 ${shortId} 已取消。如有疑问请联系我们。${contactLine(contactPhone, "zh")}`,
+		},
+		unknownFallback: () =>
+			"您好！要下单的话，请浏览我们的商品目录，点击 Checkout 结账 —— 系统会把您带回这里，并附上订单编号。",
+	},
 };
 
-export function pickLocale(input: string | undefined | null): Locale {
-	if (input === "ms") return "ms";
-	return "en";
-}
+export const pickLocale = pickLocaleBase;
 
 // ---------------------------------------------------------------------------
 // System messages — locale-aware, NOT retailer-overridable.
@@ -360,6 +433,72 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 		deliveryPhotoCaption: ({ shortId }) =>
 			`Telah dihantar! 📸 Ini foto serahan daripada rider untuk pesanan ${shortId}.`,
 	},
+	zh: {
+		paymentReceived: ({ shortId, storeName, trackingUrl }) =>
+			`✅ 已收到订单 ${shortId} 的付款。${storeName} 正在准备您的订单。${
+				trackingUrl ? `\n\n查看：${trackingUrl}` : ""
+			}`,
+		transferReferenceLine: ({ shortId }) =>
+			`转账时请填写 ${shortId} 作为备注，方便我们核对。`,
+		mockupPendingConfirm: ({ shortId, storeName, contactPhone, trackingUrl }) =>
+			`✅ 订单 ${shortId} 已收到！里面有客制化商品，${storeName} 会先发设计稿给您确认 —— 暂时不用付款。您确认后我们会马上发付款详情给您。${
+				trackingUrl ? `\n\n查看订单状态：${trackingUrl}` : ""
+			}${contactLine(contactPhone, "zh")}`,
+		deliveryFeePendingConfirm: ({ shortId, storeName, contactPhone, trackingUrl }) =>
+			`✅ 订单 ${shortId} 已收到！您的地址超出 ${storeName} 的标准配送范围，他们会在这里跟您确认配送费 —— 暂时不用付款。确认后我们会马上发付款详情给您。${
+				trackingUrl ? `\n\n查看订单状态：${trackingUrl}` : ""
+			}${contactLine(contactPhone, "zh")}`,
+		deliveryFeeSet: ({ shortId, storeName, amount, feeAmount, trackingUrl }) =>
+			`🚚 订单 ${shortId} 的配送已确认${
+				feeAmount ? ` —— 配送费 ${feeAmount}` : " —— 不另收配送费"
+			}。${amount ? ` 您的总额是 ${amount}。` : ""}请在这里付款给 ${storeName}${
+				trackingUrl ? `：${trackingUrl}` : "。"
+			}`,
+		paymentDueApproved: ({ shortId, storeName, trackingUrl }) =>
+			`✅ 订单 ${shortId} 的设计已确认！请付款，${storeName} 才能开始制作${
+				trackingUrl ? `：${trackingUrl}` : "。"
+			}`,
+		paymentDueWaived: ({ shortId, storeName, trackingUrl }) =>
+			`您在 ${storeName} 的订单 ${shortId} 已经可以付款了。请在这里付款${
+				trackingUrl ? `：${trackingUrl}` : "。"
+			}`,
+		paymentDueDeclined: ({ shortId, storeName, trackingUrl }) =>
+			`没问题 —— 客制化商品已从订单 ${shortId} 中移除。请为您在 ${storeName} 剩下的订单付款${
+				trackingUrl ? `：${trackingUrl}` : "。"
+			}`,
+		storeQrConnected: ({ storeName, code }) =>
+			`您已经连接上 ${storeName} 了 🎉${
+				code ? ` 您的订单代码是 *${code}* —— 出示给收银员，方便他们找到您。` : ""
+			}他们会帮您结账，确认信息会发到这里。${privacyNoticeLine("zh")}`,
+		storeQrBusy: ({ storeName }) =>
+			`${storeName} 目前无法处理新的扫码 —— 请直接找收银员帮忙 🙂`,
+		counterOrderConfirmedPaid: ({ shortId, storeName, amount, trackingUrl }) =>
+			`🧾 完成了！您在 ${storeName} 的订单 ${shortId} 已确认并付款${
+				amount ? ` —— 总额 ${amount}` : ""
+			}。谢谢惠顾！收据帮您保存好了，随时可以在这里查看订单：${trackingUrl}`,
+		counterOrderConfirmedUnpaid: ({ shortId, storeName, amount, trackingUrl }) =>
+			`🧾 谢谢您在 ${storeName} 下单！订单 ${shortId} 已确认${
+				amount ? ` —— 总额 ${amount}，方便的时候付款就好` : ""
+			}。可以在这里付款和查看订单，不急：${trackingUrl}`,
+		orderReceiptCaption: ({ shortId }) =>
+			`这是您订单 ${shortId} 的收据 🧾 谢谢惠顾！`,
+		orderInvoiceCaption: ({ shortId }) =>
+			`这是您订单 ${shortId} 的账单 🧾 里面有付款详情。`,
+		paymentReminder: ({ shortId, storeName, amount, trackingUrl, contactPhone }) =>
+			`👋 ${storeName} 温馨提醒：订单 ${shortId}${
+				amount ? `（${amount}）` : ""
+			}还在等待付款。点击 'Make payment' 付款确认，我们才能继续处理${
+				trackingUrl ? `：${trackingUrl}` : "。"
+			}${contactLine(contactPhone, "zh")}`,
+		paymentReminderIntro: ({ shortId, storeName, amount, trackingUrl }) =>
+			`👋 ${storeName} 的提醒：订单 ${shortId}${
+				amount ? `（${amount}）` : ""
+			}还在等待付款。${
+				trackingUrl ? `\n\n📋 查看订单详情：${trackingUrl}` : ""
+			}`,
+		deliveryPhotoCaption: ({ shortId }) =>
+			`已送达！📸 这是订单 ${shortId} 骑士拍的送达照片。`,
+	},
 };
 
 export function renderSystemMessage(
@@ -385,6 +524,7 @@ export function renderSystemMessage(
 const poweredByCopy: Record<Locale, string> = {
 	en: "This shop runs on Kedaipal 🛒 kedaipal.com",
 	ms: "Kedai ini guna Kedaipal 🛒 kedaipal.com",
+	zh: "这家店用 Kedaipal 营业 🛒 kedaipal.com",
 };
 
 /**
@@ -405,6 +545,17 @@ export function poweredByLine(locale: Locale): string {
  * overrides), so this never duplicates or replaces those. Not retailer-
  * overridable — the seller controls the wording via the stage label/description.
  */
+const STAGE_UPDATE_CARRIER_LABEL: Record<Locale, string> = {
+	en: "Track shipment",
+	ms: "Jejak penghantaran",
+	zh: "查看物流",
+};
+const STAGE_UPDATE_TRACK_LABEL: Record<Locale, string> = {
+	en: "Track your order",
+	ms: "Jejak pesanan anda",
+	zh: "查看订单状态",
+};
+
 export function renderStageUpdate(
 	locale: Locale,
 	args: {
@@ -417,27 +568,29 @@ export function renderStageUpdate(
 		// tracking even when the seller's stage copy replaces the canonical
 		// "on the way" template.
 		carrierTrackingUrl?: string;
+		// Manual courier + consignment number — same shipped-anchored crossings,
+		// so custom-stage sellers' buyers keep the copyable number too.
+		courierName?: string;
+		trackingNo?: string;
 		contactPhone?: string;
 	},
 ): string {
+	const HEAD: Record<Locale, string> = {
+		en: `📦 Order ${args.shortId} update: ${args.stageLabel}.`,
+		ms: `📦 Kemaskini pesanan ${args.shortId}: ${args.stageLabel}.`,
+		zh: `📦 订单 ${args.shortId} 更新：${args.stageLabel}。`,
+	};
 	const desc = args.stageDescription?.trim()
 		? `\n${args.stageDescription.trim()}`
 		: "";
+	const courier = courierLine(args, locale);
 	const carrier = args.carrierTrackingUrl
-		? locale === "ms"
-			? `\n\nJejak penghantaran: ${args.carrierTrackingUrl}`
-			: `\n\nTrack shipment: ${args.carrierTrackingUrl}`
+		? `\n\n${STAGE_UPDATE_CARRIER_LABEL[locale]}: ${args.carrierTrackingUrl}`
 		: "";
 	const track = args.trackingUrl
-		? locale === "ms"
-			? `\n\nJejak pesanan anda: ${args.trackingUrl}`
-			: `\n\nTrack your order: ${args.trackingUrl}`
+		? `\n\n${STAGE_UPDATE_TRACK_LABEL[locale]}: ${args.trackingUrl}`
 		: "";
-	const head =
-		locale === "ms"
-			? `📦 Kemaskini pesanan ${args.shortId}: ${args.stageLabel}.`
-			: `📦 Order ${args.shortId} update: ${args.stageLabel}.`;
-	return `${head}${desc}${carrier}${track}${contactLine(args.contactPhone, locale)}`;
+	return `${HEAD[locale]}${desc}${courier}${carrier}${track}${contactLine(args.contactPhone, locale)}`;
 }
 
 // Matches ORD-XXXX where X is from the alphabet in lib/order.ts
@@ -470,6 +623,8 @@ function interpolate(template: string, vars: CopyVars): string {
 		.replaceAll("{contactPhone}", vars.contactPhone ?? "")
 		.replaceAll("{trackingUrl}", vars.trackingUrl ?? "")
 		.replaceAll("{carrierTrackingUrl}", vars.carrierTrackingUrl ?? "")
+		.replaceAll("{courierName}", vars.courierName ?? "")
+		.replaceAll("{trackingNo}", vars.trackingNo ?? "")
 		.replaceAll("{deliveryMethod}", vars.deliveryMethod ?? "delivery");
 }
 
@@ -570,6 +725,10 @@ const pickupLabels: Record<Locale, Record<PickupKind, string>> = {
 		self_collect: "📍 Maklumat ambil sendiri",
 		drop_off: "📍 Lokasi penyerahan",
 	},
+	zh: {
+		self_collect: "📍 自取详情",
+		drop_off: "📍 交收点",
+	},
 };
 
 // Fee line under the pickup address — tells the buyer the charge is already
@@ -578,6 +737,7 @@ const pickupLabels: Record<Locale, Record<PickupKind, string>> = {
 const pickupFeeLabels: Record<Locale, string> = {
 	en: "Pickup fee (included in total)",
 	ms: "Caj ambilan (termasuk dalam jumlah)",
+	zh: "自取费（已包含在总额内）",
 };
 
 /**
@@ -605,6 +765,7 @@ const pickupFeeLabels: Record<Locale, string> = {
 const deliveryFeeLabels: Record<Locale, string> = {
 	en: "Delivery fee (included in total)",
 	ms: "Caj penghantaran (termasuk dalam jumlah)",
+	zh: "配送费（已包含在总额内）",
 };
 
 /**

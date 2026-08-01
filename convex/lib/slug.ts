@@ -37,6 +37,29 @@ export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
 	"www",
 ]);
 
+/**
+ * Best-effort slugification of free text (store names, product names):
+ * - strip diacritics (NFKD + combining-mark removal)
+ * - lowercase
+ * - non-alphanumeric → `-`
+ * - collapse repeated dashes
+ * - trim leading/trailing dashes
+ * - truncate to 32 chars (dash-safe)
+ * Mirrors `src/lib/slug.ts` exactly.
+ */
+export function slugify(input: string): string {
+	const normalized = input
+		.normalize("NFKD")
+		.replace(/[\u0300-\u036f]/g, "")
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/-+/g, "-")
+		.replace(/^-|-$/g, "");
+
+	if (normalized.length <= 32) return normalized;
+	return normalized.slice(0, 32).replace(/-$/, "");
+}
+
 export const SLUG_MIN = 3;
 export const SLUG_MAX = 32;
 const SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
@@ -121,6 +144,28 @@ export function assertValidMyWaPhone(raw: string): string {
 	else if (digits.startsWith("0")) candidate = `60${digits.slice(1)}`;
 	else candidate = digits;
 	return assertValidWaPhone(candidate);
+}
+
+/**
+ * Stricter sibling of `assertValidMyWaPhone` for numbers we intend to MESSAGE:
+ * normalizes the same way, then requires a Malaysian **mobile** shape (`601X`
+ * plus 8–9 digits). A landline (`03-…` → `60312345678`) satisfies the loose
+ * 8–15-digit rule but can never receive WhatsApp, so accepting one guarantees a
+ * failed confirmation push — better to reject it at the door with copy the
+ * buyer can act on.
+ *
+ * Mirrors `myWaPhoneCheckoutSchema` in `src/lib/schemas.ts` (same message, same
+ * pattern); the client fails fast, this is the authority. Used by the storefront
+ * order paths (86eyf1rck). Deliberately NOT applied to the counter's manual
+ * bind, where a cashier may legitimately key an unusual number for a buyer
+ * standing in front of them.
+ */
+export function assertValidMyMobile(raw: string): string {
+	const normalized = assertValidMyWaPhone(raw);
+	if (!/^601\d{8,9}$/.test(normalized)) {
+		throw new Error("Enter a Malaysian mobile number (e.g. 012-345 6789)");
+	}
+	return normalized;
 }
 
 /**

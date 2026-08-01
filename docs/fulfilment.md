@@ -55,12 +55,45 @@ which was **wrong** for any seller who charges postage/rider fees. A seller now 
   `orders.deliveryFee` for cheap CSV/inbox/tracking reads. `0` never stored.
 - `orders.deliveryFeePending` — the "arrange" hold (below).
 
+### The buyer's address — the Google pin is the single source of truth
+
+ClickUp `86eye50qv`. The delivery-address block used to show a Google search **and**
+a parallel manual form — two competing address bars, where hand-editing a field after
+picking a suggestion could leave the order priced for one place and addressed to
+another. (The stale-pin half was closed first, by `86eyb5hrf`: editing a
+location-bearing field clears the pin, so the quote falls back to "pick a suggestion"
+instead of silently keeping the old coordinates.) The form now makes the drift
+structurally impossible. `AddressFieldset` has two faces:
+
+- **Locked** — a pin is set. Street/postcode/city/state collapse into a read-only
+  **"Location confirmed"** card. Only **unit/floor** and **delivery notes** stay
+  editable: neither can move the building. **"Wrong address? Search again"** clears
+  the whole location (notes survive — they describe *how* to deliver, not *where*)
+  and returns to the search. A restored `kedaipal:lastAddress` **with** a pin mounts
+  straight into this state.
+- **Searching** — no pin. The Google search is the only address input.
+
+**Manual entry is an explicit escape hatch**, behind a "Can't find your address?"
+disclosure, for addresses Google genuinely doesn't know (new tamans, kampung
+addresses) — not an API-down detector. It auto-opens for a restored address that
+never had a pin, so returning buyers still see their own data. The pin-invalidation
+listeners stay on those fields as defence in depth.
+
+**Store-mode split.** The hatch is hidden where a pin-less address is a dead end —
+**live-quote (Lalamove)** and **radius + block** stores, which price from
+coordinates and would refuse the order anyway. The checkout derives this from the
+quote it already subscribes to: while the buyer has no pin, a store that answers
+`blocked` is exactly a store that can't price a hand-typed address (flat / free /
+radius-arrange answer `fee`/`free`/`pending` and keep the hatch). No extra server
+field. The tracking-page `AddressEditDialog` passes `allowManualEntry={!isLiveMode}`
+for the same reason — `liveSaveBlocked` already refuses a pin-less save there.
+
 ### Resolution — one pure function, three callers
 
 `resolveDeliveryQuote({ config, subtotal, origin, destination })` in **`convex/lib/delivery.ts`**
 (pure, unit-tested) returns `free | fee | pending | blocked` and is called by:
 
-1. **`delivery.quote`** (public query) — the checkout sheet quotes live once the buyer picks
+1. **`delivery.quote`** (public query) — the checkout page quotes live once the buyer picks
    an address suggestion, so the fee is visible **before** "Send order" (ticket AC).
    **Privacy: the public quote strips `distanceKm`/`bandMaxKm`** — returning raw distances to
    arbitrary probe coordinates would let a caller trilaterate the seller's home; band-coarse
@@ -85,9 +118,17 @@ address somehow vanished resolves **free** (logged), never a blocked storefront.
 
 ### Fee-pending ("arrange via WhatsApp") — the second payment hold
 
-An out-of-range (or coordinate-less) order on an "arrange" store lands with
+An out-of-range (or coordinate-less) order on a **radius** "arrange" store lands with
 `deliveryFeePending: true` and an **incomplete total**, so payment is held exactly like the
-mockup gate:
+mockup gate. **Lalamove-priced stores never land here** (strict since 27 Jul — no live
+quote means checkout/address-edit is refused, so the buyer always sees the real rider
+price and the seller never calculates a charge; see
+[`delivery-lalamove.md`](./delivery-lalamove.md)). The **why** is frozen alongside the
+flag as `orders.deliveryFeePendingReason` (`out_of_range` | `no_coords` | `unquotable` —
+the last only on legacy lalamove rows from before the strict rule), written at create +
+the address re-price and cleared by `setDeliveryFee`; the seller card's explanation keys
+on it, so it never claims "outside your delivery bands" when bands weren't the cause
+(26 Jul hotfix; orders from before the field show a mode-neutral generic line).
 
 - **WhatsApp confirm** sends `deliveryFeePendingConfirm` (EN+BM) — branded, no transfer
   reference / payment block / "I've paid" CTA.
@@ -149,6 +190,156 @@ feature-matrix additions.
   and parcel-postage sellers. See [`docs/delivery-lalamove.md`](./delivery-lalamove.md).
   J&T/parcel couriers remain future (DelyvaX is the named aggregator candidate).
 - Sue's routing-accurate map integration stays parked until 3+ customers ask.
+
+## Manual courier + tracking number on shipped (2026-07-29, ClickUp `86eyehvk4`)
+
+Sellers shipping outstation via parcel couriers (J&T ambient, DD Cold Chain, Ninja Cold,
+Celsius) book the courier **themselves** and get a consignment number — this feature lets
+them attach it when marking shipped, so the buyer gets TikTok-style tracking through the
+existing WhatsApp update + tracking-page pipeline. No booking, no courier API, no status
+polling (EasyParcel integration is the separate phase-2 card). Driver: Haziq (Lopes Viral
+JB) + Wagyu Walid, 28 Jul.
+
+### Data model
+
+Two new optional order fields beside the pre-existing `orders.carrierTrackingUrl`:
+`orders.courierName` + `orders.trackingNo` (dev-only widen, no backfill — absent on old
+orders). `carrierTrackingUrl` stays the **single resolved-link surface**: auto-derived
+from courier + number for registry couriers, hand-pasted for "Other", or mirrored from a
+Lalamove job's `shareLink` — every pre-existing link surface (WA shipped copy, track-page
+CTA) keeps working unchanged. The ticket's `deliverySnapshot` suggestion was wrong — that
+object is the frozen create-time **pricing** snapshot; courier info is fulfilment-time
+data and lives at order level like the URL it feeds.
+
+### Courier registry — `convex/lib/couriers.ts`
+
+Pure module (no Convex imports) imported by BOTH the backend and the dashboard picklist.
+Registry couriers with best-effort tracking deep links (J&T Express, Pos Malaysia, Ninja
+Van, SPX Express, Flash Express, City-Link Express) + name-only cold-chain entries
+(Celsius Express, DD Express, Ninja Cold — no public URL pattern; the ICP's carriers get
+one-tap picks, not "Other" typing). `resolveShipmentFields` is the one shared
+trim/cap/URL-derivation resolver used by every write path: an explicitly pasted URL wins
+over derivation; all-blank input resolves to all-cleared. A stale deep-link pattern only
+costs the buyer a landing on the courier's tracking form — the number is always shown
+copyable beside the link.
+
+**URL scheme is enforced (PR #151 review).** A pasted link only survives if it's
+`http(s)` — the tracking page renders it in a buyer-facing `<a href>`, where a
+`javascript:`/`data:` URL would execute on click (a seller attacking their own customer,
+but cheap to close now that one resolver owns every write). A scheme-less paste
+(`tracking.example/123`) gets `https://` rather than being silently dropped; any other
+scheme is refused, which can fall through to the derived link. `isSafeTrackingUrl` is
+exported and also called at **both render sites** (buyer track page + seller card), so
+rows written before this sanitize existed — the old `setCarrierTrackingUrl` accepted any
+string — are neutralised on the way out instead of needing a backfill. Lalamove's
+`shareLink` writes its own provider-generated https URL directly and is untouched.
+
+**Shipment tracking is delivery-only.** Courier fields are ignored (not fatal) on a
+self-collect `shipped` transition — moving the status is that path's real job — while
+`setShipmentTracking` **refuses to set** on a self-collect order and **always allows the
+all-blank clear**, so an order that changed fulfilment method can never be trapped
+holding tracking it shouldn't have (the set-gated/clear-un-gated posture used for
+chargeable pickup).
+
+### Write paths
+
+- **`updateStatus` / `advanceToStage`** accept `courierName`/`trackingNo` (+ the existing
+  `carrierTrackingUrl`) on shipped(-anchored) transitions only; ignored otherwise.
+- **`setShipmentTracking`** (replaces `setCarrierTrackingUrl`) — set/clear any time from
+  the order-detail card; sellers often receive the slip after marking shipped.
+- Lalamove webhook path untouched (patches `carrierTrackingUrl` directly from
+  `shareLink`; a rider order never opens the manual prompt — the advance button is
+  disabled under rider auto-updates).
+
+### Seller UX
+
+- **Mark-shipped prompt** (`MarkShippedDialog` in
+  `src/components/order/shipment-tracking.tsx`): tapping the advance button into a
+  shipped-anchored stage on a **delivery** order with no tracking attached opens an
+  optional courier-picklist + tracking-number dialog (skippable via Cancel→the card;
+  confirming with "No courier" ships without tracking). The last-used courier is
+  remembered per device (`localStorage`) since sellers ship with one courier. Helper
+  line states exactly what the buyer gets (auto link vs copyable number vs nothing) —
+  no hidden behavior. **"No courier" collapses the form** (number/link inputs hide, and
+  `draftToFields` treats the state as an explicit clear so hidden leftovers never save).
+- **Manual courier is for parcel sellers only** (ClickUp `86eyff02p`, corrects the
+  two-tab prompt this feature first shipped with). The gate is
+  **`getDeliveryJob.bookingEnabled`** = `retailers.deliveryBooking.enabled` — Settings
+  couples it 1:1 with the Lalamove delivery-charge choice (picking Lalamove enables
+  booking, switching to Free/Flat/Radius disables it), so it answers the seller-facing
+  question "do I send riders or parcels?". It is deliberately **not**
+  `deliveryConfig.mode`: booking-enabled is what every other dispatch guard already
+  keys on, and it's the behavioural truth. A rider vendor gets **no courier picklist
+  anywhere** — the prompt is rider-only and the card below goes read-only. The
+  suppressions from Zaki's 29–30 Jul test pass still hold: the prompt never opens on an
+  order with tracking attached or an **active rider booking** (belt-and-braces —
+  booking mirrors its `shareLink` onto `carrierTrackingUrl`, which suppresses it
+  anyway), and webhook-driven orders never get there at all (the advance button is
+  disabled under rider auto-updates).
+  - **Rider bookable now** (`blockReason === null`): the rider explainer + a
+    `Book a rider` CTA that closes the prompt and bumps `bookRequestToken`, which
+    `BookDeliveryCard` watches to open its own quote→confirm dialog through the same
+    bookability guards. The card sits far down the page, so the prompt is the second,
+    eye-level entrance to one flow — plus a quiet (`variant="link"`, still `h-11`)
+    `Mark as {stage} without a rider` **footer button**, because dropping an order off
+    yourself is real, `Book a rider` must never be the only way out, and the only way
+    out can't be a text link inside a sentence (tap-target rule 1).
+  - **Rider not bookable** (plan downgrade, keys cleared, missing phone, legacy
+    address with no map pin): the prompt says so in the seller's words via the shared
+    `dispatchBlockCopy` (moved out of `book-delivery-card.tsx` into
+    `src/lib/dispatch-block.ts` so the card and the prompt can't drift — a
+    `Record<DispatchBlock, string>`, so a new block reason is a compile error, not a
+    silent fallback), names the fix path, and offers the choice the owner asked for —
+    Cancel to go fix it, or `Mark as {stage} anyway` for an order going out another
+    way. Never a silent advance, and still no courier picklist **in the prompt**: the
+    copy points at the Shipment tracking card below, which is where an add-later
+    consignment number has always belonged and which stays editable in exactly this
+    state (see the card bullet).
+  - **Server stays permissive** (deliberate): `advanceToStage` / `setShipmentTracking`
+    still accept courier fields from a rider vendor. Nothing is at risk if they arrive,
+    a hard reject would fight the Lalamove webhook that writes `carrierTrackingUrl`
+    itself, and it would trap an order whose vendor switched delivery mode after
+    shipping. This is a UI-shape rule, not a security boundary.
+- **"Shipment tracking" card** on order detail (upgrade of the old URL-only "Carrier
+  Tracking" card): shows courier + mono tracking number with one-tap copy + "Track with
+  courier" link; edit mode reuses the same fieldset ("Other" adds free-text name +
+  optional pasted link). Legacy URL-only rows (incl. Lalamove links) still render.
+  The card is `readOnly` while **a rider is actually handling the delivery** —
+  `lalamoveVendor && (blockReason === null || hasActiveRiderBooking)`: it still shows
+  what the buyer sees (the number/link a booking mirrored onto the order, copyable) but
+  drops Add/Edit, and renders **nothing at all** while no tracking is attached, since
+  dispatch for them lives in the Lalamove Delivery card above.
+  **Deliberately not keyed on vendor type alone** (PR #154 review): nothing clears
+  `deliveryBooking.enabled` on a Pro→Starter downgrade, `PLAN_FEATURES.delivery` gates
+  only *enabling*, and the Lalamove checkout quote is all-tier — so a downgraded store
+  keeps taking rider-priced orders with `blockReason` permanently `plan_gated`. Since
+  `setShipmentTracking` has no other caller in `src/`, a vendor-type gate would leave
+  that store with **no way to record a consignment number anywhere**, silently and
+  store-wide. Same shape per-order for `no_coords` (legacy pinless address) and
+  `no_buyer_phone` (anonymous counter order). The "a rider vendor never picks a
+  courier" thesis holds while a rider is on the table; the moment the product says it
+  can't book one, the parcel that went out instead still needs its number — the
+  downgrade-never-traps-the-seller line `chargeablePickup`/`categories`/`radiusDelivery`
+  already hold.
+
+### Buyer surfaces — deliberately NO new WhatsApp sends
+
+Meta bills every outbound message from 1 Oct 2026, so this feature adds **zero** new
+sends (owner call, 29 Jul): tracking entered **at** mark-shipped rides the shipped
+WhatsApp update that was already outgoing — a `📦 {courier} — tracking no. {number}` line
+(EN/MS/ZH) above the existing links, also in `renderStageUpdate` for custom-stage sellers,
+and `{courierName}`/`{trackingNo}` interpolate in authored templates. Tracking added
+**after** shipped surfaces on the buyer's tracking page only — no auto-send, no resend
+button. `/track/<token>` shows a courier + number card with one-tap copy (works for
+cold-chain couriers with no link) above the existing "Track with carrier" CTA. CSV export
+gains "Courier" + "Tracking no" columns beside Fulfilment.
+
+Tests: `convex/lib/couriers.test.ts`, shipped-courier-line cases in
+`convex/lib/whatsappCopy.test.ts`, end-to-end transition/set/clear/auth cases in
+`convex/orders.test.ts` ("86eyehvk4" describe), CSV columns in
+`convex/lib/orderCsv.test.ts`. Rider-vendor prompt shapes + the read-only card in
+`src/components/order/shipment-tracking.test.tsx`, block copy in
+`src/lib/dispatch-block.test.ts`.
 
 ## Chargeable pickup location — flat per-location fee (2026-07-07, ClickUp `86ey5tywf`)
 
@@ -238,7 +429,7 @@ The first live drop-off test (Bearcamp) surfaced surfaces that still said
 "collect"/"pickup" for drop-off orders. All copy now branches on the frozen
 `pickupSnapshot.locationType` (legacy `undefined` → self-collect, as everywhere):
 
-- **Checkout date step** (`checkout-sheet.tsx`): label "When should we meet?" +
+- **Checkout date step** (`checkout-form.tsx`): label "When should we meet?" +
   helper "Pick the date you'll meet at the drop-off point." (was "When will you
   collect?" for both kinds).
 - **WhatsApp status copy** (`convex/lib/whatsappCopy.ts`, EN + MS): `CopyVars`
@@ -310,7 +501,7 @@ Effective reads everywhere: `offerDelivery ?? true`, `offerSelfCollect ?? false`
 - **Settings → Fulfilment** (renamed from "Pickup"; `?tab=pickup` deep-links redirect):
   Delivery toggle card + Self-collect toggle card (both wired to the invariant) above the
   pickup-locations list. Component: `src/components/settings/fulfilment-tab.tsx`.
-- **Storefront checkout** (`checkout-sheet.tsx`): drills `offerDelivery` through
+- **Storefront checkout** (`checkout-form.tsx`): drills `offerDelivery` through
   `$slug.tsx` → `cart-bar.tsx`. Shows the two-button method picker only when **both** are
   offered; a single method drops straight to its form (address / pickup picker).
 - **Dashboard checklist** (`app.index.tsx`): the optional "Add a pickup location" step
@@ -403,9 +594,9 @@ The pickup snapshot (and the buyer's chosen `deliveryAddress`) is **frozen at or
 | `src/components/settings/pickup-locations-tab.tsx` | Settings tab body — `offerSelfCollect` toggle card + locations list (up/down arrows, edit, active toggle, "show inactive" collapsible). |
 | `src/components/settings/pickup-location-edit-dialog.tsx` | Bottom-sheet add/edit modal, mirrors `address-edit-dialog.tsx`. |
 | `src/routes/app.settings.tsx` | New `"pickup"` tab wired into the tab bar + search validator. |
-| `src/routes/$slug.tsx` | Sidecar `listActivePublicBySlug` query passed through `CartBar` to `CheckoutSheet`. |
+| `src/routes/$slug.tsx` | Sidecar `listActivePublicBySlug` query passed through `CartBar` to `checkout page (CheckoutPage)`. |
 | `src/components/storefront/cart-bar.tsx` | Drills `offerSelfCollect` + `pickupLocations` through. |
-| `src/components/storefront/checkout-sheet.tsx` | Self-Collect button hidden when unavailable; 0/1/2+ branching (auto-confirm card for 1, required radio for 2+); pickup block inlined into the `wa.me` prefilled text. |
+| `src/components/storefront/checkout-form.tsx` | Self-Collect button hidden when unavailable; 0/1/2+ branching (auto-confirm card for 1, required radio for 2+); pickup block inlined into the `wa.me` prefilled text. |
 | `src/routes/track.$token.tsx` | "Pick up at" card for self-collect orders, rendered from the frozen snapshot. |
 | `src/routes/app.index.tsx` | Dashboard checklist step 4 (only when `offerSelfCollect` is on); marked "Optional" via the pill in both expanded and collapsed row variants. Done logic: `pickupSetupSeen \|\| hasAnyActive`. |
 | `src/routes/app.orders.$shortId.tsx` | Seller order detail — "Pick up at" card mirroring the delivery address block, plus a "Notify store manager" panel with a pre-built copy-to-clipboard snippet for forwarding to whoever runs the pickup spot. |
@@ -518,7 +709,7 @@ Both URLs are derived from stored coordinates — no app-specific data is captur
 
 ### Storefront checkout branching
 
-`checkout-sheet.tsx` branches on the active-location count when self-collect is selected:
+`checkout-form.tsx` branches on the active-location count when self-collect is selected:
 
 - **0 active locations** (or `offerSelfCollect` off): the Self Collect tile is hidden entirely; the row collapses to a single full-width Delivery button.
 - **1 active location**: the tile shows; selecting it renders a `PickupSummaryCard` (auto-confirmed, no input). The id is resolved at submit time from the single option.

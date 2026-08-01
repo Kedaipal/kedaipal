@@ -1,134 +1,170 @@
 import { Inbox } from "lucide-react";
-import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
+import { AppImage } from "../ui/app-image";
+import { QrPattern } from "./landing-ui";
 
 /**
- * Rendered CSS/HTML mockups for the "How it works" timeline rows. Built from
- * semantic design tokens (no raster screenshots) so they never drift from the
- * real theme and need no image pipeline. Purely decorative — the adjacent
- * label + heading + description already carry the accessible content, so
- * every root here is `aria-hidden`.
+ * Rendered CSS/HTML mockups for the "How it works" timeline rows, matching
+ * the Landing Rewrite design reference: floating, slightly-rotated cards
+ * with their own shadows (no shared frame). Steps 1 and 3 are WhatsApp
+ * surfaces — their trade-dress colours (#ECE5DD wallpaper, #DCF8C6 outgoing
+ * bubble) are intentionally literal, same as `hero-phone.tsx`: a WhatsApp
+ * chat can't theme-flip. Steps 2 and 4 mock Kedaipal's own UI and use theme
+ * tokens (step 4 reuses the real `StatusBadge` palette). Purely decorative —
+ * the adjacent label + heading + description carry the accessible content,
+ * so every root here is `aria-hidden`.
  */
 
-/** Step 1 — Share: WhatsApp-status card + a small "scan to order" QR card beside it. */
+/** Avatar-initials chip for the demo store (K Frozen Food). */
+function StoreInitials({ className }: { className?: string }) {
+	return (
+		<span aria-hidden className={className}>
+			KF
+		</span>
+	);
+}
+
+/** Step 1 — Share: WhatsApp status bubble with a link preview + a "scan to order" QR poster card. */
 export function ShareMockup() {
 	return (
 		<div
 			aria-hidden="true"
-			className="mx-auto flex w-full max-w-[340px] flex-col items-stretch gap-3 sm:flex-row"
+			className="mx-auto flex w-full max-w-[480px] flex-col items-center gap-5 lg:flex-row lg:items-start lg:gap-3"
 		>
-			<div className="min-w-0 flex-1 overflow-hidden rounded-2xl bg-primary text-primary-foreground shadow-lg">
-				<div className="flex items-center gap-3 border-b border-white/10 p-4">
-					<div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-accent text-sm font-bold text-accent-foreground">
-						DN
-					</div>
-					<div className="min-w-0">
-						<p className="truncate text-sm font-semibold">
-							{m.how_mockup_1_store()}
+			<div className="w-full max-w-[300px] rotate-1 rounded-[20px] bg-[#ECE5DD] p-3.5 shadow-xl">
+				<div className="ml-auto max-w-[250px] rounded-xl rounded-tr-sm bg-[#DCF8C6] p-2 shadow-sm">
+					<div className="rounded-lg bg-white/70 px-3 py-2.5">
+						<div className="flex items-center gap-2">
+							<StoreInitials className="flex size-8 shrink-0 items-center justify-center rounded-[10px] border border-emerald-600/25 bg-white font-heading text-[11px] font-extrabold text-emerald-800" />
+							<div className="min-w-0">
+								<p className="truncate text-xs font-bold text-slate-900">
+									{m.how_mockup_1_store()}
+								</p>
+								<p className="truncate text-[10px] text-slate-500">
+									{m.how_mockup_1_tagline()}
+								</p>
+							</div>
+						</div>
+						<p className="mt-2 truncate text-[11px] font-semibold text-emerald-700">
+							{m.how_mockup_1_url()}
 						</p>
-						<p className="truncate text-xs text-primary-foreground/60">
-							{m.how_mockup_1_tagline()}
-						</p>
 					</div>
-				</div>
-				<div className="p-4">
-					<div className="rounded-xl bg-white/10 p-3">
-						<p className="text-sm leading-snug">{m.how_mockup_1_caption()}</p>
-					</div>
-					<div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-primary-foreground/50">
-						<span className="truncate">{m.how_mockup_1_url()}</span>
-						<span className="shrink-0">{m.how_mockup_1_time()} ✓✓</span>
-					</div>
+					<p className="mx-1 mb-0.5 mt-2 text-[12.5px] leading-snug text-slate-800">
+						{m.how_mockup_1_caption()}
+					</p>
+					<p className="mx-1 text-right text-[9px] text-slate-500">
+						{m.how_mockup_1_time()} ✓✓
+					</p>
 				</div>
 			</div>
 
-			<div className="flex flex-row items-center gap-3 rounded-2xl border-2 border-dashed border-accent/40 bg-card p-3 text-center shadow-sm sm:w-[104px] sm:shrink-0 sm:flex-col sm:justify-center">
-				<div className="grid size-14 shrink-0 grid-cols-4 grid-rows-4 gap-0.5 rounded-md bg-foreground p-1.5">
-					{Array.from({ length: 16 }).map((_, i) => (
-						<span
-							// biome-ignore lint/suspicious/noArrayIndexKey: static decorative grid, never reorders
-							key={i}
-							className={cn(
-								"rounded-[1px]",
-								i % 3 === 0 || i % 5 === 0 ? "bg-background" : "bg-transparent",
-							)}
-						/>
-					))}
-				</div>
-				<p className="text-xs font-semibold leading-tight">
+			<div className="w-[140px] shrink-0 -rotate-2 rounded-2xl border-2 border-dashed border-foreground/20 bg-card p-3.5 text-center shadow-lg lg:mt-8">
+				<AppImage
+					src="/logo-3.svg"
+					alt=""
+					aspect="mx-auto h-3 w-auto"
+					fill={false}
+				/>
+				<QrPattern className="mx-auto mt-2.5 size-[76px] rounded-lg p-1.5" />
+				<p className="mt-3 font-heading text-[11px] font-bold">
 					{m.how_mockup_1_qr_label()}
+				</p>
+				<p className="mt-0.5 truncate text-[8px] text-muted-foreground">
+					{m.how_mockup_1_url()}
 				</p>
 			</div>
 		</div>
 	);
 }
 
-/** Step 2 — Browse: storefront product cards + sticky cart bar, framed like an in-WhatsApp browser. */
+/** Step 2 — Browse: the hosted storefront — product grid tiles + sticky cart bar. */
 export function BrowseMockup() {
 	return (
 		<div
 			aria-hidden="true"
-			className="mx-auto w-full max-w-[340px] overflow-hidden rounded-2xl border border-border bg-card shadow-lg"
+			className="mx-auto w-full max-w-[320px] -rotate-1 overflow-hidden rounded-3xl border border-border bg-card shadow-xl"
 		>
-			<div className="flex items-center gap-1.5 border-b border-border bg-muted/60 px-3 py-2">
-				<span className="flex gap-1" aria-hidden>
-					<span className="size-1.5 rounded-full bg-border" />
-					<span className="size-1.5 rounded-full bg-border" />
-					<span className="size-1.5 rounded-full bg-border" />
-				</span>
-				<span className="ml-1 truncate text-[10px] font-bold tracking-wide text-muted-foreground">
-					kedaipal
-				</span>
-			</div>
-			<div className="flex items-center gap-3 bg-primary p-4 text-primary-foreground">
-				<div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent text-xs font-bold text-accent-foreground">
-					DN
-				</div>
-				<p className="min-w-0 truncate text-sm font-semibold">
-					{m.how_mockup_2_store()} — {m.how_mockup_2_tagline()}
-				</p>
-			</div>
-			<div className="space-y-2 p-3">
-				<div className="flex items-center gap-3 rounded-xl border border-border p-2.5">
-					<div className="size-11 shrink-0 rounded-lg bg-accent/15" />
-					<div className="min-w-0 flex-1">
-						<p className="truncate text-xs font-semibold">
-							{m.how_mockup_2_product_1_name()}
+			<div className="flex flex-col gap-4 bg-gradient-to-b from-accent/10 to-card px-5 pb-4 pt-5">
+				<AppImage
+					src="/logo-3.svg"
+					alt=""
+					aspect="h-4 w-auto self-start"
+					fill={false}
+				/>
+				<div className="flex items-center gap-3.5">
+					<StoreInitials className="flex size-12 shrink-0 items-center justify-center rounded-2xl border-2 border-accent/20 bg-card font-heading text-base font-extrabold text-accent-emphasis shadow-sm" />
+					<div className="min-w-0">
+						<p className="truncate font-heading text-lg font-bold leading-tight">
+							{m.how_mockup_2_store()}
 						</p>
-						<p className="text-xs text-muted-foreground">
-							{m.how_mockup_2_product_1_price()}
+						<p className="truncate text-xs text-muted-foreground">
+							{m.how_mockup_2_tagline()}
 						</p>
 					</div>
-					<span className="shrink-0 rounded-full bg-accent/10 px-2.5 py-1 text-[11px] font-bold text-accent">
-						{m.how_mockup_2_product_1_cta()}
-					</span>
 				</div>
-				<div className="flex items-center gap-3 rounded-xl border border-border p-2.5">
-					<div className="relative size-11 shrink-0 rounded-lg bg-accent/15">
-						<span className="absolute -left-1.5 -top-1.5 rounded-full bg-destructive px-1.5 py-0.5 text-[9px] font-bold text-destructive-foreground">
+			</div>
+
+			<div className="grid grid-cols-2 gap-2 px-3 pb-3 pt-1">
+				<div className="flex flex-col overflow-hidden rounded-2xl border border-border bg-card">
+					<div className="flex aspect-square items-center justify-center bg-muted">
+						<span className="font-mono text-[9px] text-muted-foreground/70">
+							brownie photo
+						</span>
+					</div>
+					<div className="flex flex-1 flex-col gap-1.5 p-2.5">
+						<p className="min-h-[30px] text-xs font-medium leading-tight">
+							{m.how_mockup_2_product_1_name()}
+						</p>
+						<p className="text-sm font-bold">
+							{m.how_mockup_2_product_1_price()}
+						</p>
+						<span className="mt-auto flex h-9 items-center justify-center rounded-[10px] bg-primary text-xs font-semibold text-primary-foreground">
+							{m.how_mockup_2_product_1_cta()}
+						</span>
+					</div>
+				</div>
+				<div className="flex flex-col overflow-hidden rounded-2xl border border-border bg-card">
+					<div className="relative flex aspect-square items-center justify-center bg-muted">
+						<span className="font-mono text-[9px] text-muted-foreground/70">
+							kek lapis photo
+						</span>
+						<span className="absolute left-1.5 top-1.5 rounded-full bg-card/85 px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-wide text-muted-foreground">
 							{m.how_mockup_2_product_2_badge()}
 						</span>
 					</div>
-					<div className="min-w-0 flex-1">
-						<p className="truncate text-xs font-semibold">
+					<div className="flex flex-1 flex-col gap-1.5 p-2.5">
+						<p className="min-h-[30px] text-xs font-medium leading-tight">
 							{m.how_mockup_2_product_2_name()}
 						</p>
-						<p className="text-xs text-muted-foreground">
-							{m.how_mockup_2_product_2_from()}{" "}
+						<p className="text-sm font-bold">
+							<span className="text-[10px] font-medium text-muted-foreground">
+								{m.how_mockup_2_product_2_from()}
+							</span>{" "}
 							{m.how_mockup_2_product_2_price()}
 						</p>
+						<span className="mt-auto flex h-9 items-center justify-center rounded-[10px] border border-border bg-card text-xs font-semibold">
+							{m.how_mockup_2_product_2_cta()}
+						</span>
 					</div>
-					<span className="shrink-0 rounded-full border border-accent/30 px-2.5 py-1 text-[11px] font-bold text-accent">
-						{m.how_mockup_2_product_2_cta()}
-					</span>
 				</div>
 			</div>
-			<div className="flex items-center justify-between gap-2 border-t border-border bg-accent px-4 py-3 text-accent-foreground">
-				<span className="text-xs font-bold">
-					{m.how_mockup_2_cart_count()} · {m.how_mockup_2_cart_label()} ·{" "}
-					{m.how_mockup_2_cart_total()}
+
+			<div className="flex items-center gap-3 border-t border-border bg-card px-4 py-3">
+				<span className="relative flex size-10 shrink-0 items-center justify-center rounded-full bg-muted text-[15px]">
+					🛍
+					<span className="absolute -right-0.5 -top-0.5 flex size-[17px] items-center justify-center rounded-full bg-primary text-[9px] font-bold text-primary-foreground">
+						{m.how_mockup_2_cart_count()}
+					</span>
 				</span>
-				<span className="text-xs font-bold underline underline-offset-2">
+				<div className="min-w-0 flex-1">
+					<p className="text-[9px] uppercase tracking-wider text-muted-foreground">
+						{m.how_mockup_2_cart_label()}
+					</p>
+					<p className="text-[13px] font-semibold">
+						{m.how_mockup_2_cart_total()}
+					</p>
+				</div>
+				<span className="flex h-10 shrink-0 items-center rounded-xl bg-primary px-3.5 text-xs font-semibold text-primary-foreground">
 					{m.how_mockup_2_cart_cta()}
 				</span>
 			</div>
@@ -136,36 +172,43 @@ export function BrowseMockup() {
 	);
 }
 
-/** Step 3 — Close: WhatsApp order bubble + Kedaipal confirm reply. */
+/** Step 3 — Close: WhatsApp order bubble + Kedaipal confirm reply on the chat wallpaper. */
 export function CloseMockup() {
 	return (
-		<div aria-hidden="true" className="mx-auto w-full max-w-[320px] space-y-2">
-			<div className="ml-auto max-w-[85%] rounded-2xl rounded-tr-sm bg-accent/15 p-3">
-				<p className="text-xs leading-relaxed">{m.how_mockup_3_greeting()}</p>
-				<p className="mt-1.5 text-xs font-bold">{m.how_mockup_3_order_id()}</p>
-				<p className="mt-0.5 text-xs text-muted-foreground">
+		<div
+			aria-hidden="true"
+			className="mx-auto flex w-full max-w-[340px] rotate-1 flex-col gap-2.5 rounded-[20px] bg-[#ECE5DD] p-4 shadow-xl"
+		>
+			<div className="max-w-[85%] self-end rounded-xl rounded-tr-sm bg-[#DCF8C6] px-3 py-2 shadow-sm">
+				<p className="text-[12.5px] leading-relaxed text-slate-800">
+					{m.how_mockup_3_greeting()}
+				</p>
+				<p className="mt-1.5 text-[12.5px] font-bold leading-relaxed text-slate-800">
+					{m.how_mockup_3_order_id()}
+				</p>
+				<p className="text-[12.5px] leading-relaxed text-slate-800">
 					{m.how_mockup_3_item()}
-				</p>
-				<p className="text-xs text-muted-foreground">
+					<br />
 					{m.how_mockup_3_total()}
-				</p>
-				<p className="text-xs text-muted-foreground">
+					<br />
 					{m.how_mockup_3_payment()}
 				</p>
+				<p className="mt-1 text-right text-[9px] text-slate-500">10:02 AM ✓✓</p>
 			</div>
-			<div className="mr-auto max-w-[85%] rounded-2xl rounded-tl-sm border border-border bg-card p-3 shadow-sm">
-				<p className="text-xs leading-relaxed">
+			<div className="max-w-[85%] self-start rounded-xl rounded-tl-sm bg-white px-3 py-2 shadow-sm">
+				<p className="text-[12.5px] leading-relaxed text-slate-800">
 					{m.how_mockup_3_confirm_line1()}
 				</p>
-				<p className="mt-1.5 text-xs leading-relaxed text-accent underline underline-offset-2">
+				<p className="mt-1.5 text-[12.5px] leading-relaxed text-sky-600">
 					{m.how_mockup_3_confirm_line2()}
 				</p>
+				<p className="mt-1 text-right text-[9px] text-slate-500">10:02 AM</p>
 			</div>
 		</div>
 	);
 }
 
-/** Step 4 — Run: order-inbox rows with a due-today banner + status badges. */
+/** Step 4 — Run: due-today banner pill + floating order-inbox cards with real status colours. */
 export function RunMockup() {
 	const orders = [
 		{
@@ -173,10 +216,29 @@ export function RunMockup() {
 			amount: m.how_mockup_4_order_1_amount(),
 			id: m.how_mockup_4_order_1_id(),
 			time: m.how_mockup_4_order_1_time(),
-			items: m.how_mockup_4_order_1_items(),
+			items: [
+				{
+					label: m.how_mockup_4_order_1_item_1(),
+					price: m.how_mockup_4_order_1_item_1_price(),
+				},
+				{
+					label: m.how_mockup_4_order_1_item_2(),
+					price: m.how_mockup_4_order_1_item_2_price(),
+				},
+			],
+			// Class strings mirror the dashboard's StatusBadge palette
+			// (`dashboard/status-badge.tsx`) so the mock matches the real inbox.
 			badges: [
-				m.how_mockup_4_order_1_badge_1(),
-				m.how_mockup_4_order_1_badge_2(),
+				{
+					label: m.how_mockup_4_order_1_badge_1(),
+					className:
+						"bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200",
+				},
+				{
+					label: m.how_mockup_4_order_1_badge_2(),
+					className:
+						"bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200",
+				},
 			],
 		},
 		{
@@ -184,49 +246,79 @@ export function RunMockup() {
 			amount: m.how_mockup_4_order_2_amount(),
 			id: m.how_mockup_4_order_2_id(),
 			time: m.how_mockup_4_order_2_time(),
-			items: m.how_mockup_4_order_2_items(),
-			badges: [m.how_mockup_4_order_2_badge_1()],
+			items: [
+				{
+					label: m.how_mockup_4_order_2_item_1(),
+					price: m.how_mockup_4_order_2_item_1_price(),
+				},
+			],
+			badges: [
+				{
+					label: m.how_mockup_4_order_2_badge_1(),
+					className:
+						"bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200",
+				},
+			],
 		},
 	];
 
 	return (
 		<div
 			aria-hidden="true"
-			className="mx-auto w-full max-w-[340px] overflow-hidden rounded-2xl border border-border bg-card shadow-lg"
+			className="mx-auto flex w-full max-w-[360px] -rotate-1 flex-col gap-2"
 		>
-			<div className="flex items-center justify-between gap-2 bg-accent/10 px-4 py-2.5 text-xs font-bold text-accent">
-				<span className="flex items-center gap-2">
-					<Inbox className="size-3.5" />
+			<div className="flex items-center gap-2.5 rounded-2xl bg-primary px-4 py-3 text-primary-foreground shadow-lg">
+				<Inbox className="size-4 shrink-0 text-accent" />
+				<span className="min-w-0 flex-1 truncate text-[13px] font-semibold">
 					{m.how_mockup_4_banner()}
 				</span>
-				<span>{m.how_mockup_4_banner_cta()}</span>
+				<span className="shrink-0 text-[13px] font-bold text-accent">
+					{m.how_mockup_4_banner_cta()}
+				</span>
 			</div>
-			<div className="divide-y divide-border">
-				{orders.map((order) => (
-					<div key={order.id} className="p-3">
-						<div className="flex items-center justify-between gap-2">
-							<p className="truncate text-xs font-semibold">{order.name}</p>
-							<p className="shrink-0 text-xs font-bold">{order.amount}</p>
-						</div>
-						<p className="mt-0.5 truncate text-[11px] text-muted-foreground">
-							{order.id} · {order.time}
+
+			{orders.map((order) => (
+				<div
+					key={order.id}
+					className="rounded-2xl border border-border bg-card p-3.5 shadow-sm"
+				>
+					<div className="flex items-center justify-between gap-2.5">
+						<p className="truncate text-sm font-semibold">{order.name}</p>
+						<p className="shrink-0 text-sm font-bold tabular-nums">
+							{order.amount}
 						</p>
-						<p className="mt-1 truncate text-[11px] text-muted-foreground">
-							{order.items}
-						</p>
-						<div className="mt-2 flex flex-wrap gap-1.5">
-							{order.badges.map((badge) => (
-								<span
-									key={badge}
-									className="rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-bold text-accent"
-								>
-									{badge}
-								</span>
-							))}
-						</div>
 					</div>
-				))}
-			</div>
+					<p className="mt-0.5 truncate text-xs text-muted-foreground">
+						<span className="font-mono">{order.id}</span> · {order.time}
+					</p>
+					<div className="mt-2 flex flex-col gap-1 rounded-xl bg-muted/70 px-2.5 py-2">
+						{order.items.map((item) => (
+							<div
+								key={item.label}
+								className="flex justify-between gap-3 text-[12.5px]"
+							>
+								<span className="min-w-0 truncate font-medium">
+									{item.label}
+								</span>
+								<span className="shrink-0 text-muted-foreground tabular-nums">
+									{item.price}
+								</span>
+							</div>
+						))}
+					</div>
+					<div className="mt-2.5 flex items-center gap-1.5">
+						{order.badges.map((badge) => (
+							<span
+								key={badge.label}
+								className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${badge.className}`}
+							>
+								{badge.label}
+							</span>
+						))}
+						<span className="ml-auto text-sm text-muted-foreground/50">›</span>
+					</div>
+				</div>
+			))}
 		</div>
 	);
 }

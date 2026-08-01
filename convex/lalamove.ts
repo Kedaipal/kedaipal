@@ -23,6 +23,7 @@ import {
 	buildLalamoveHeaders,
 	buildPlaceOrderBody,
 	buildQuotationBody,
+	classifyQuoteFailure,
 	type DeliveryJobStatus,
 	isActiveJobStatus,
 	LALAMOVE_BASE_URL,
@@ -162,6 +163,15 @@ export const quoteForCheckout = action({
 		args,
 	): Promise<
 		| { status: "quoted"; quoteId: Id<"deliveryQuotes">; fee: number }
+		// The destination isn't in Lalamove's service area — a PERMANENT answer
+		// for this address, so the buyer must be told to change it, never to
+		// "try again shortly" (27 Jul: Alor Setar on a Selangor store read as a
+		// system glitch). See classifyQuoteFailure.
+		| { status: "out_of_range" }
+		// The SELLER's Lalamove setup is broken (missing/revoked keys, no
+		// pickup pin) — not the buyer's fault and not retryable by them; the
+		// copy points at the store / pickup instead of an endless retry.
+		| { status: "store_unavailable" }
 		| { status: "unavailable" }
 	> => {
 		await rateLimiter.limit(ctx, "lalamoveQuote", {
@@ -174,9 +184,9 @@ export const quoteForCheckout = action({
 		const context = await ctx.runQuery(internal.lalamove.getQuoteContext, {
 			retailerId: args.retailerId,
 		});
-		if (!context) return { status: "unavailable" };
+		if (!context) return { status: "store_unavailable" };
 		const credentials = resolveLalamoveCredentials(context.booking);
-		if (!credentials) return { status: "unavailable" };
+		if (!credentials) return { status: "store_unavailable" };
 
 		try {
 			// Pre-order pricing: a future fulfilment day is quoted as a SCHEDULED
@@ -229,11 +239,22 @@ export const quoteForCheckout = action({
 			);
 			return { status: "quoted", quoteId, fee: parsed.priceTotal };
 		} catch (err) {
-			console.warn("[lalamove] checkout quote failed", {
-				retailerId: args.retailerId,
-				message: err instanceof Error ? err.message : String(err),
-			});
-			return { status: "unavailable" };
+			// Three buyer stories, three copies — and only ONE is retryable.
+			// See classifyQuoteFailure for the taxonomy + live measurements.
+			const status =
+				err instanceof LalamoveApiError
+					? classifyQuoteFailure(err.status, err.body)
+					: ("unavailable" as const);
+			if (status !== "out_of_range") {
+				// Coverage refusals are expected business outcomes, not errors;
+				// broken-store and transient cases stay in the logs.
+				console.warn("[lalamove] checkout quote failed", {
+					retailerId: args.retailerId,
+					status,
+					message: err instanceof Error ? err.message : String(err),
+				});
+			}
+			return { status };
 		}
 	},
 });
@@ -1367,6 +1388,10 @@ export type DeliveryJobView = {
 	shareLink?: string;
 	failureReason?: string;
 	createdAt: number;
+	/** Newest webhook event applied to the job — set means the seller's webhook
+	 * registration demonstrably works, so status flows automatically (drives
+	 * the order-detail manual-advance gate via riderDrivesOrderStatus). */
+	lastEventAt?: number;
 	/** Rider drop-off photo URLs (proof of delivery), set once completed. */
 	podImageUrls?: string[];
 };
@@ -1387,6 +1412,13 @@ export const getDeliveryJob = query({
 		/** Seller's opt-in "prompt me to book when I mark packed" preference —
 		 * the card auto-opens the confirm dialog on the packed transition. */
 		promptBookOnPacked: boolean;
+		/** Rider dispatch IS this vendor's delivery method. Settings couples this
+		 * 1:1 with the "Lalamove" delivery-charge choice (picking it enables
+		 * booking, switching away disables it), so it answers the seller-facing
+		 * question "do I send riders or parcels?" — and the dashboard drops every
+		 * manual parcel-courier surface when it's true (86eyff02p). Distinct from
+		 * `blockReason === null`, which is about THIS order being bookable now. */
+		bookingEnabled: boolean;
 	} | null> => {
 		const order = await resolveSharedOrder(ctx, { shortId });
 		if (!order) return null;
@@ -1437,6 +1469,7 @@ export const getDeliveryJob = query({
 		}
 		return {
 			promptBookOnPacked,
+			bookingEnabled: retailer.deliveryBooking?.enabled === true,
 			job: latest
 				? {
 						status: latest.status,
@@ -1447,6 +1480,7 @@ export const getDeliveryJob = query({
 						shareLink: latest.shareLink,
 						failureReason: latest.failureReason,
 						createdAt: latest.createdAt,
+						lastEventAt: latest.lastEventAt,
 						podImageUrls,
 					}
 				: null,

@@ -150,7 +150,7 @@ export function FeatureGrid() {
 							<span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/60 px-3.5 py-2 text-[12.5px] font-semibold text-foreground/80">
 								<span className="text-accent">●</span> kedaipal.com/
 								<strong className="font-bold text-accent-emphasis">
-									dapur-nadia
+									k-frozen-food
 								</strong>
 							</span>
 						</div>
@@ -188,7 +188,9 @@ export function FeatureGrid() {
 
 					{/* Variants */}
 					<CardShell delay={0.24}>
-						<h3 className="text-xl font-semibold">{m.bento_variants_title()}</h3>
+						<h3 className="text-xl font-semibold">
+							{m.bento_variants_title()}
+						</h3>
 						<p className="mt-2 text-sm leading-relaxed text-muted-foreground">
 							{m.bento_variants_body()}
 						</p>
@@ -210,7 +212,9 @@ export function FeatureGrid() {
 
 					{/* Delivery & pickup */}
 					<CardShell delay={0.24}>
-						<h3 className="text-xl font-semibold">{m.bento_delivery_title()}</h3>
+						<h3 className="text-xl font-semibold">
+							{m.bento_delivery_title()}
+						</h3>
 						<p className="mt-2 text-sm leading-relaxed text-muted-foreground">
 							{m.bento_delivery_body()}
 						</p>

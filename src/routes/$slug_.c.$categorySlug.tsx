@@ -7,8 +7,8 @@ import {
 	redirect,
 } from "@tanstack/react-router";
 import { ArrowLeft } from "lucide-react";
-import { useState } from "react";
 import { api } from "../../convex/_generated/api";
+import { type Locale, OG_LOCALE } from "../../convex/lib/locale";
 import { CartBar } from "../components/storefront/cart-bar";
 import { ProductGrid } from "../components/storefront/product-grid";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
@@ -25,7 +25,7 @@ interface CategoryLoaderData {
 	description: string;
 	canonicalUrl: string;
 	ogImageUrl: string | undefined;
-	locale: "en" | "ms";
+	locale: Locale;
 	// Distinct from `ogImageUrl` (category image → cover → logo) so `head()`
 	// preloads only the store cover — the actual LCP element `StorefrontHeader`
 	// renders with `priority` on this page too. A category image, when set,
@@ -37,8 +37,8 @@ interface CategoryLoaderData {
  * Nested storefront category page — /$slug/c/$categorySlug. The `$slug_`
  * filename (pathless-parent underscore) gives the URL prefix WITHOUT nesting
  * under $slug.tsx, which is a leaf route with no <Outlet/>. Shares the home
- * page's cart (useCart is keyed per retailerId in localStorage), cards, detail
- * sheet and checkout — only the product set is scoped to the category.
+ * page's cart (useCart is keyed per retailerId in localStorage), cards, product
+ * pages and checkout — only the product set is scoped to the category.
  */
 export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 	loader: async ({ params }): Promise<CategoryLoaderData> => {
@@ -112,7 +112,7 @@ export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 			{ name: "robots", content: "index, follow" },
 			{ property: "og:type", content: "website" },
 			{ property: "og:site_name", content: "Kedaipal" },
-			{ property: "og:locale", content: locale === "ms" ? "ms_MY" : "en_MY" },
+			{ property: "og:locale", content: OG_LOCALE[locale] },
 			{ property: "og:title", content: title },
 			{ property: "og:description", content: description },
 			{ property: "og:url", content: canonicalUrl },
@@ -207,12 +207,6 @@ function CategoryRoute() {
 	).data;
 	// Same per-retailer cart as the store home — items carry across pages.
 	const cart = useCart(retailer?._id);
-	const pickupLocations = useQuery(
-		convexQuery(api.pickupLocations.listActivePublicBySlug, { slug }),
-	).data;
-	// Checkout open-state lifted here so the product detail sheet can jump
-	// straight to checkout (same wiring as the store home). See ProductGrid.
-	const [checkoutOpen, setCheckoutOpen] = useState(false);
 
 	if (!retailer || page === undefined) {
 		return <CategorySkeleton />;
@@ -226,7 +220,7 @@ function CategoryRoute() {
 		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-20">
 			{/* Same brand header as the store home (cover/logo/name) — the buyer
 			    never loses the sense of whose store they're in. */}
-			<StorefrontHeader retailer={retailer} />
+			<StorefrontHeader retailer={retailer} asPageHeading={false} />
 
 			{/* Category identity: a way back, then the category's own name + blurb. */}
 			<div className="flex flex-col gap-2 px-5 pt-4 lg:px-8">
@@ -239,9 +233,11 @@ function CategoryRoute() {
 					All products
 				</Link>
 				<div className="flex flex-col gap-1">
-					<h2 className="font-heading text-2xl font-extrabold leading-tight tracking-tight">
+					{/* This page's own subject, so it owns the <h1>; the brand header
+					    above renders the store name as plain text here. */}
+					<h1 className="font-heading text-2xl font-extrabold leading-tight tracking-tight">
 						{page.category.name}
-					</h2>
+					</h1>
 					{page.category.description ? (
 						<p className="line-clamp-3 whitespace-pre-line text-sm text-muted-foreground">
 							{page.category.description}
@@ -256,25 +252,12 @@ function CategoryRoute() {
 					cart={cart}
 					products={page.products}
 					storeSlug={retailer.slug}
-					onRequestCheckout={() => setCheckoutOpen(true)}
 				/>
 			</section>
 
 			<StorefrontFooter />
 
-			<CartBar
-				cart={cart}
-				retailerId={retailer._id}
-				storeName={retailer.storeName}
-				checkoutPhone={retailer.checkoutPhone}
-				offerSelfCollect={retailer.offerSelfCollect ?? false}
-				offerDelivery={retailer.offerDelivery ?? true}
-				minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
-				minOrderValue={retailer.minOrderValue}
-				pickupLocations={pickupLocations ?? []}
-				checkoutOpen={checkoutOpen}
-				onCheckoutOpenChange={setCheckoutOpen}
-			/>
+			<CartBar cart={cart} storeSlug={retailer.slug} />
 		</div>
 	);
 }

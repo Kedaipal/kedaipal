@@ -22,6 +22,8 @@ import {
 	MAX_NOTICE_DAYS,
 } from "../../../convex/lib/fulfilmentDate";
 import { MIN_ORDER_VALUE_MAX } from "../../../convex/lib/minOrderRules";
+import { useActAsRetailerId } from "../../hooks/useActAs";
+import { useUpdateSettings } from "../../hooks/useUpdateSettings";
 import { formatPhone } from "../../lib/customer";
 import { clientEnv } from "../../lib/env";
 import {
@@ -170,23 +172,27 @@ export function FulfilmentTab({
 	const locations = useQuery(
 		convexQuery(api.pickupLocations.listForRetailer, { retailerId }),
 	).data;
-	const updateSettings = useMutation(api.retailers.updateSettings);
+	const updateSettings = useUpdateSettings();
 	const setActive = useMutation(api.pickupLocations.setActive);
 	const reorder = useMutation(api.pickupLocations.reorder);
 	const markPickupSetupSeen = useMutation(api.retailers.markPickupSetupSeen);
+	const actAsRetailerId = useActAsRetailerId();
 
 	// Fire-and-forget on first mount so step 4 of the dashboard checklist
 	// dismisses. Server-side is idempotent (no-op when already true) so a
 	// double-render or re-mount doesn't double-write. We don't await or surface
-	// errors — failing this is purely cosmetic for the checklist.
+	// errors — failing this is purely cosmetic for the checklist. Skipped in
+	// admin act-as: the mutation resolves by identity, so it would stamp the
+	// ADMIN's own checklist, not the seller's (markLinkShared posture).
 	const seenFired = useRef(false);
 	useEffect(() => {
+		if (actAsRetailerId) return;
 		if (seenFired.current) return;
 		seenFired.current = true;
 		markPickupSetupSeen({}).catch(() => {
 			seenFired.current = false; // allow retry on subsequent mount
 		});
-	}, [markPickupSetupSeen]);
+	}, [markPickupSetupSeen, actAsRetailerId]);
 
 	const [editing, setEditing] = useState<Doc<"pickupLocations"> | "new" | null>(
 		null,
@@ -502,7 +508,7 @@ function ModeButton({
 			onClick={onClick}
 			disabled={disabled}
 			aria-pressed={active}
-			className={`flex flex-col items-start gap-0.5 rounded-xl border-2 px-3 py-2.5 text-left transition-colors ${
+			className={`relative flex flex-col items-start gap-0.5 rounded-xl border-2 py-2.5 pl-3 pr-9 text-left transition-colors ${
 				active
 					? "border-accent bg-accent/5"
 					: "border-border bg-card hover:border-accent/40"
@@ -515,7 +521,28 @@ function ModeButton({
 				{badge}
 			</span>
 			<span className="text-xs text-muted-foreground">{subtitle}</span>
+			<ModeRadioDot active={active} />
 		</button>
+	);
+}
+
+/**
+ * Radio-style indicator in a mode card's corner. These grids choose exactly
+ * ONE option, but the tinted-border selected state alone read as "these might
+ * all be on" (Zaki, 27 Jul) — an explicit empty-ring vs filled-dot makes the
+ * pick-one semantics visible at a glance. Decorative only: the button itself
+ * carries aria-pressed.
+ */
+function ModeRadioDot({ active }: { active: boolean }) {
+	return (
+		<span
+			aria-hidden="true"
+			className={`absolute bottom-2.5 right-2.5 flex size-4 items-center justify-center rounded-full border-2 transition-colors ${
+				active ? "border-accent" : "border-border"
+			}`}
+		>
+			{active ? <span className="size-2 rounded-full bg-accent" /> : null}
+		</span>
 	);
 }
 
@@ -543,7 +570,7 @@ function DeliveryChargeSection({
 	canUseRadius: boolean;
 	canUseLalamove: boolean;
 }) {
-	const updateSettings = useMutation(api.retailers.updateSettings);
+	const updateSettings = useUpdateSettings();
 	const [mode, setMode] = useState<ChargeMode>(config?.mode ?? "free");
 	// Flat-mode drafts (RM display strings; sen on the wire).
 	const [flatFee, setFlatFee] = useState(
@@ -621,9 +648,10 @@ function DeliveryChargeSection({
 				freeAbove: freeAboveSen,
 			};
 		} else if (mode === "lalamove") {
-			// Live provider quote (86eyb5hrf) — keep the stored onUnquotable
-			// policy (default "arrange": never lose the sale). Mirrors the server
-			// gates so the failure is a helpful message, not a thrown save.
+			// Live provider quote (86eyb5hrf) — `onUnquotable` is vestigial (strict
+			// since 27 Jul: no quote, no order; the sanitizer normalizes stored
+			// rows to "block"). Mirrors the server gates so the failure is a
+			// helpful message, not a thrown save.
 			if (!effectiveAddress) {
 				setError(
 					"Pick your business address from the suggestions — it's the pickup point riders are sent to.",
@@ -641,7 +669,7 @@ function DeliveryChargeSection({
 			nextConfig =
 				config?.mode === "lalamove"
 					? config
-					: { mode: "lalamove", onUnquotable: "arrange" };
+					: { mode: "lalamove", onUnquotable: "block" };
 		} else {
 			if (!effectiveAddress) {
 				setError(
@@ -735,7 +763,7 @@ function DeliveryChargeSection({
 					onClick={() => setMode("lalamove")}
 					disabled={lalamoveLocked && config?.mode !== "lalamove"}
 					aria-pressed={mode === "lalamove"}
-					className={`flex flex-col items-start gap-1 rounded-xl border-2 px-3 py-2.5 text-left transition-colors ${
+					className={`relative flex flex-col items-start gap-1 rounded-xl border-2 py-2.5 pl-3 pr-9 text-left transition-colors ${
 						mode === "lalamove"
 							? "border-accent bg-accent/5"
 							: "border-border bg-card hover:border-accent/40"
@@ -755,6 +783,7 @@ function DeliveryChargeSection({
 							? "Rider delivery — upgrade to Pro to turn on"
 							: "Live rider price, one-tap booking"}
 					</span>
+					<ModeRadioDot active={mode === "lalamove"} />
 				</button>
 				<ModeButton
 					active={mode === "free"}
@@ -775,7 +804,7 @@ function DeliveryChargeSection({
 					disabled={radiusLocked && config?.mode !== "radius"}
 					onClick={() => setMode("radius")}
 					title="By distance"
-					subtitle="Radius bands"
+					subtitle="Radius bands — you deliver"
 					badge={radiusLocked ? <ProBadge /> : undefined}
 				/>
 			</div>
@@ -785,10 +814,26 @@ function DeliveryChargeSection({
 					<p className="rounded-lg bg-accent/10 px-3 py-2 text-xs leading-relaxed text-accent-emphasis">
 						Buyers pay the real Lalamove price for their address at checkout,
 						and you book the rider in one tap from the order — with automatic
-						shipped + live-tracking WhatsApp messages. Runs entirely on{" "}
+						shipped + live-tracking WhatsApp messages. There&apos;s{" "}
+						<b>no delivery area to set</b>, and{" "}
+						<b>buyers always see the price before ordering</b> (an address
+						Lalamove can&apos;t price can&apos;t check out, so you never work
+						out a delivery charge yourself). Runs entirely on{" "}
 						<b>your own Lalamove account</b>; Kedaipal never books or pays on
-						your behalf. If a live price can&apos;t be fetched, the order is
-						still accepted and you confirm the charge afterwards.
+						your behalf.
+					</p>
+					{/* Coverage education (27 Jul, measured live): city-zone limits are
+					    LALAMOVE's, they surprise vendors ("but Kajang is close!"), and
+					    the vehicle picker below must not read as a range picker. */}
+					<p className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+						<b>Lalamove&apos;s own coverage still applies:</b> riders serve the
+						city zone around your pickup address (e.g. Klang Valley), so a buyer
+						too far outside it sees <i>&quot;this address is too far&quot;</i>{" "}
+						and can&apos;t choose delivery — roughly 40–70&nbsp;km depending on
+						direction, and never across zones (a Klang Valley store can&apos;t
+						Lalamove to Melaka). Vehicle choice doesn&apos;t change this: bike
+						and car cover the <b>same area</b> — the difference is parcel size
+						and price. Keep self-collect on as the fallback for far buyers.
 					</p>
 					{lalamoveLocked ? (
 						<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
@@ -1282,7 +1327,7 @@ function DeliveryChargeSection({
  * toggles. 0 = same-day allowed (ready-stock sellers).
  */
 function MinNoticeCard({ initial }: { initial: number | undefined }) {
-	const updateSettings = useMutation(api.retailers.updateSettings);
+	const updateSettings = useUpdateSettings();
 	const effective = initial ?? DEFAULT_MIN_NOTICE_DAYS;
 	const [value, setValue] = useState(String(effective));
 	const [saving, setSaving] = useState(false);
@@ -1362,7 +1407,7 @@ function MinNoticeCard({ initial }: { initial: number | undefined }) {
  * quote). Blank or 0 = no minimum.
  */
 function MinOrderValueCard({ initial }: { initial: number | undefined }) {
-	const updateSettings = useMutation(api.retailers.updateSettings);
+	const updateSettings = useUpdateSettings();
 	const effective = initial ?? 0;
 	const [value, setValue] = useState(
 		effective > 0 ? (effective / 100).toFixed(2) : "",

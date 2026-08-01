@@ -3,17 +3,12 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { ChevronRight, Search, X } from "lucide-react";
 import { type ReactNode, useState } from "react";
-import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
-import { variantLabel } from "../../lib/variant";
 import { Input } from "../ui/input";
 import { ProductCard, type StorefrontProduct } from "./product-card";
-import {
-	ProductDetailSheet,
-	type StorefrontVariant,
-} from "./product-detail-sheet";
+import { addVariantToCart, type StorefrontVariant } from "./product-purchase";
 
 /** Product-card grid — denser on desktop so a product card never outweighs a
  * category hero card (categories are the highlight, products the inventory). */
@@ -26,8 +21,8 @@ interface ProductGridProps {
 	/**
 	 * Pre-filtered product set (the nested category page passes the category's
 	 * own products in within-category order). When set, the grid skips its own
-	 * `products.list` query and renders these — same cards, search, detail
-	 * sheet and cart-add, no forked component.
+	 * `products.list` query and renders these — same cards, search, product
+	 * links and cart-add, no forked component.
 	 */
 	products?: StorefrontProduct[];
 	/**
@@ -38,19 +33,16 @@ interface ProductGridProps {
 	 */
 	beforeGrid?: ReactNode;
 	/**
-	 * Store slug for category deep links. When set, the search also matches
-	 * CATEGORY names — matching categories render as tappable tiles above the
-	 * product results. (Shares the rail's `listActivePublic` subscription, so
-	 * no extra read cost.)
+	 * Store slug — every card links to `/{storeSlug}/p/{productSlug}`, and the
+	 * search also matches CATEGORY names, rendering matches as tappable tiles
+	 * above the product results. (Shares the rail's `listActivePublic`
+	 * subscription, so no extra read cost.)
+	 *
+	 * Required: a card with nowhere to link is a dead tile, so there's no
+	 * meaningful grid without it. Both mount points (store home, category page)
+	 * have the slug in hand.
 	 */
-	storeSlug?: string;
-	/**
-	 * Open the checkout/review sheet. The detail sheet's "Go to checkout" CTA
-	 * calls this (after the grid closes the sheet), so a buyer can proceed
-	 * straight from a product without hunting for the cart bar. Owned by the
-	 * route so it can reach the CartBar-hosted CheckoutSheet (a sibling).
-	 */
-	onRequestCheckout?: () => void;
+	storeSlug: string;
 }
 
 export function ProductGrid({
@@ -59,7 +51,6 @@ export function ProductGrid({
 	products: productsOverride,
 	beforeGrid,
 	storeSlug,
-	onRequestCheckout,
 }: ProductGridProps) {
 	// `products.list` returns active products already sorted by the retailer's
 	// `sortOrder` (set via the dashboard reorder). We render in that order — the
@@ -72,14 +63,8 @@ export function ProductGrid({
 	// Same query the CategoryRail subscribes to — Convex dedupes identical
 	// (query, args) subscriptions, so this costs nothing extra.
 	const categories = useQuery(
-		convexQuery(
-			api.categories.listActivePublic,
-			storeSlug ? { retailerId } : "skip",
-		),
+		convexQuery(api.categories.listActivePublic, { retailerId }),
 	).data;
-	const [openProduct, setOpenProduct] = useState<StorefrontProduct | null>(
-		null,
-	);
 	const [searchQuery, setSearchQuery] = useState("");
 
 	if (products === undefined) {
@@ -111,54 +96,24 @@ export function ProductGrid({
 		: products;
 	// Category-name matches surface as tappable tiles above product results.
 	const matchedCategories =
-		searchQuery && storeSlug && categories
+		searchQuery && categories
 			? categories.filter((c) =>
 					c.name.toLowerCase().includes(searchQuery.toLowerCase()),
 				)
 			: [];
 
+	// Cart-line mapping + toast live in the shared helper (product-purchase.tsx)
+	// so the grid's quick-add, the product page and the seller's preview sheet
+	// snapshot lines identically.
 	const addVariant = (
 		p: StorefrontProduct,
 		variant: StorefrontVariant,
 		qty: number,
 		custom?: { note?: string; imageStorageId?: string },
-	) => {
-		// The custom line has no optionValues — label it with its custom name so the
-		// cart + order can tell it apart from the default variant.
-		const label = variant.isCustom
-			? (variant.customLabel ?? "Custom")
-			: variantLabel(variant.optionValues);
-		// Re-requesting an already-in-cart custom line updates the note, not the qty.
-		const updatingCustom =
-			variant.isCustom === true &&
-			cart.items.some((i) => i.variantId === variant._id);
-		cart.addItem(
-			{
-				variantId: variant._id,
-				productId: p._id,
-				name: p.name,
-				optionLabel: label || undefined,
-				price: variant.price,
-				currency: p.currency,
-				imageUrl: variant.imageUrls[0] ?? p.imageUrls[0],
-				quoteOnRequest: variant.requiresProof === true && variant.price === 0,
-				minNoticeDays: p.minNoticeDays,
-				isCustom: variant.isCustom,
-				minQuantity: p.minQuantity,
-				note: custom?.note,
-				customImageStorageId: custom?.imageStorageId,
-			},
-			qty,
-		);
-		toast.success(
-			updatingCustom
-				? "Custom request updated"
-				: `Added ${qty > 1 ? `${qty} × ` : ""}${label ? `${p.name} — ${label}` : p.name} to cart`,
-		);
-	};
+	) => addVariantToCart(cart, p, variant, qty, custom);
 
-	// Quick-add only fires for single-variant products (multi-variant cards open
-	// the sheet instead), so the sole variant is unambiguous. A product with a
+	// Quick-add only fires for single-variant products (multi-variant cards link
+	// to the product page instead), so the sole variant is unambiguous. A product with a
 	// minimum order quantity tops the cart up to it in one tap (the card shows a
 	// "Min N" chip, so the bigger add is expected); once met, +1 as usual. The
 	// top-up is clamped to the variant's remaining stock (hard-block only) so a
@@ -188,7 +143,7 @@ export function ProductGrid({
 						value={searchQuery}
 						onChange={(e) => setSearchQuery(e.target.value)}
 						placeholder={
-							storeSlug && categories && categories.length > 0
+							categories && categories.length > 0
 								? "Search products & categories…"
 								: "Search products…"
 						}
@@ -222,8 +177,7 @@ export function ProductGrid({
 							<Link
 								key={category._id}
 								to="/$slug/c/$categorySlug"
-								// biome-ignore lint/style/noNonNullAssertion: matchedCategories is only non-empty when storeSlug is set
-								params={{ slug: storeSlug!, categorySlug: category.slug }}
+								params={{ slug: storeSlug, categorySlug: category.slug }}
 								className="flex h-11 items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 transition-colors hover:border-accent/50"
 							>
 								<span className="text-[13.5px] font-semibold">
@@ -270,11 +224,19 @@ export function ProductGrid({
 				</div>
 			) : (
 				<div className={GRID_CLASS}>
+					{/* Opening a product goes to its PAGE on EVERY breakpoint, and the
+					    card owns that link itself — a real `<Link>`, so it's crawlable,
+					    ⌘-clickable and prefetched on hover. A modal on mobile hid the one
+					    thing PR2 exists to give buyers: the product's URL in the address
+					    bar, which is how sharing actually happens on a phone. `slug` is
+					    always present — every write path assigns one and the server
+					    derives a fallback for un-backfilled rows (effectiveSlug).
+					    See docs/storefront-product-pages.md. */}
 					{filtered.map((product, index) => (
 						<ProductCard
 							key={product._id}
 							product={product}
-							onOpen={setOpenProduct}
+							storeSlug={storeSlug}
 							onQuickAdd={quickAdd}
 							cartQuantity={cart.quantityForProduct(product._id)}
 							cartSubtotal={cart.subtotalForProduct(product._id)}
@@ -285,38 +247,6 @@ export function ProductGrid({
 					))}
 				</div>
 			)}
-
-			<ProductDetailSheet
-				product={openProduct}
-				retailerId={retailerId}
-				// Units of this product already in the cart — the sheet's stepper
-				// defaults to the REMAINING amount toward the product's minimum.
-				cartQuantity={
-					openProduct ? cart.quantityForProduct(openProduct._id) : 0
-				}
-				// Whole-cart summary drives the footer "Go to checkout" CTA.
-				cartItemCount={cart.itemCount}
-				cartTotal={cart.total}
-				onClose={() => setOpenProduct(null)}
-				// Stay open after adding so a buyer can add a standard variant AND
-				// request the custom line from the same product without reopening. The
-				// toast + cart bar confirm the add; they close via the X when done.
-				onAdd={(p, variant, qty, custom) => addVariant(p, variant, qty, custom)}
-				// Close the product sheet, then hand off to the CheckoutSheet (owned
-				// by the CartBar). The open is deferred a tick: mounting the checkout
-				// dialog in the SAME commit that unmounts this one makes radix's
-				// dismiss/focus layer collide, so the checkout dialog fails to stay
-				// open. Closing first, then opening on the next task, lets this
-				// dialog's teardown finish. The gap is imperceptible (no exit anim).
-				onCheckout={
-					onRequestCheckout
-						? () => {
-								setOpenProduct(null);
-								setTimeout(onRequestCheckout, 0);
-							}
-						: undefined
-				}
-			/>
 		</>
 	);
 }
