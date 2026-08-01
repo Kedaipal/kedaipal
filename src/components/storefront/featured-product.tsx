@@ -134,17 +134,17 @@ function FeaturedCard({
 		.trim();
 
 	return (
-		// Mobile: a compact horizontal card (a thumbnail beside text) — the
-		// design's phone frame. Desktop: a BANNER, not that same card stretched.
-		// The design only ever mocked this section on a phone, and carrying the
-		// mobile proportions to 1150px left a 144px thumbnail marooned beside
-		// ~1000px of nothing. A lead story needs a picture with real presence, so
-		// the image becomes a 38% panel and the row grows to a fixed banner height.
-		<div className="mt-2 flex overflow-hidden rounded-2xl border border-border bg-card transition-shadow duration-200 hover:shadow-md lg:min-h-[15rem]">
+		// ONE compact card at every width, capped at max-w-md. A single lead
+		// item must read as a card, not claim the row: full-bleed width was
+		// tried twice (mobile card stretched to 1150px, then a banner variant)
+		// and both looked wrong — one product doesn't carry that much surface.
+		// The cap leaves phones at their natural width and gives desktop a
+		// standard card, left-aligned under the section label.
+		<div className="mt-2 flex w-full max-w-md overflow-hidden rounded-2xl border border-border bg-card transition-shadow duration-200 hover:shadow-md">
 			<Link
 				to="/$slug/p/$productSlug"
 				params={{ slug: storeSlug, productSlug: product.slug }}
-				className="relative w-28 shrink-0 self-stretch overflow-hidden bg-muted sm:w-36 lg:w-[38%] lg:max-w-[26rem]"
+				className="relative w-28 shrink-0 self-stretch overflow-hidden bg-muted"
 				aria-label={product.name}
 			>
 				{firstImage ? (
@@ -156,70 +156,67 @@ function FeaturedCard({
 					/>
 				) : (
 					<span className="absolute inset-0 flex items-center justify-center text-muted-foreground">
-						<ImagePlus className="size-6 lg:size-10" />
+						<ImagePlus className="size-6" />
 					</span>
 				)}
-				<span className="absolute bottom-2 left-2 rounded-full bg-background/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-foreground backdrop-blur-sm lg:bottom-4 lg:left-4 lg:px-3 lg:py-1 lg:text-[11px]">
+				<span className="absolute bottom-2 left-2 rounded-full bg-background/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-foreground backdrop-blur-sm">
 					Bestseller
 				</span>
 			</Link>
 
-			{/* Desktop splits this into two columns — copy left, action right —
-			    so the extra width is spent on purpose instead of trailing off
-			    into whitespace after a short product name. */}
-			<div className="flex min-w-0 flex-1 flex-col gap-1 p-3 sm:p-4 lg:flex-row lg:items-center lg:justify-between lg:gap-8 lg:p-8">
-				<div className="flex min-w-0 flex-col gap-1 lg:gap-2">
-					<Link
-						to="/$slug/p/$productSlug"
-						params={{ slug: storeSlug, productSlug: product.slug }}
-						className="line-clamp-1 text-[15px] font-semibold leading-tight lg:font-heading lg:text-2xl lg:font-extrabold lg:tracking-tight"
-					>
-						{product.name}
-					</Link>
-					{blurb ? (
-						<p className="line-clamp-2 text-xs leading-snug text-muted-foreground lg:max-w-prose lg:text-sm">
-							{blurb}
-						</p>
-					) : null}
-					<p className="text-base font-bold leading-tight tabular-nums lg:text-xl">
-						{allQuote ? (
-							<span className="text-sm font-semibold lg:text-base">
-								Price on quote
-							</span>
-						) : (
-							<>
-								{showFrom ? (
-									<span className="text-xs font-medium text-muted-foreground lg:text-sm">
-										from{" "}
-									</span>
-								) : null}
-								{formatPrice(product.priceFrom, product.currency)}
-							</>
-						)}
+			<div className="flex min-w-0 flex-1 flex-col gap-1 p-3.5">
+				<Link
+					to="/$slug/p/$productSlug"
+					params={{ slug: storeSlug, productSlug: product.slug }}
+					className="line-clamp-1 text-[15px] font-semibold leading-tight"
+				>
+					{product.name}
+				</Link>
+				{blurb ? (
+					<p className="line-clamp-2 text-xs leading-snug text-muted-foreground">
+						{blurb}
 					</p>
-					{cartQuantity > 0 ? (
-						<p className="text-xs font-semibold text-accent tabular-nums lg:text-sm">
-							{cartQuantity} in cart
-							{cartSubtotal > 0
-								? ` · ${formatPrice(cartSubtotal, product.currency)}`
-								: ""}
+				) : null}
+				{/* Price left, compact action right — a chip-sized button, not a
+				    full-width slab (h-11 keeps the 44px tap target). */}
+				<div className="mt-auto flex items-end justify-between gap-3 pt-2">
+					<div className="flex min-w-0 flex-col gap-0.5">
+						<p className="text-base font-bold leading-tight tabular-nums">
+							{allQuote ? (
+								<span className="text-sm font-semibold">Price on quote</span>
+							) : (
+								<>
+									{showFrom ? (
+										<span className="text-xs font-medium text-muted-foreground">
+											from{" "}
+										</span>
+									) : null}
+									{formatPrice(product.priceFrom, product.currency)}
+								</>
+							)}
 						</p>
-					) : null}
-				</div>
-				<div className="mt-auto pt-2 lg:mt-0 lg:shrink-0 lg:pt-0">
+						{cartQuantity > 0 ? (
+							<p className="text-xs font-semibold text-accent tabular-nums">
+								{cartQuantity} in cart
+								{cartSubtotal > 0
+									? ` · ${formatPrice(cartSubtotal, product.currency)}`
+									: ""}
+							</p>
+						) : null}
+					</div>
 					{needsDetail ? (
 						<Button
 							asChild
 							size="sm"
 							variant="outline"
-							className="h-11 w-full rounded-xl sm:w-auto sm:px-6 lg:h-12 lg:px-8 lg:text-base"
+							className="h-11 shrink-0 rounded-xl px-4"
 						>
 							<Link
 								to="/$slug/p/$productSlug"
 								params={{ slug: storeSlug, productSlug: product.slug }}
 							>
 								<SlidersHorizontal className="size-4" />
-								Choose options
+								Choose
 							</Link>
 						</Button>
 					) : (
@@ -227,7 +224,7 @@ function FeaturedCard({
 							type="button"
 							onClick={() => quickAddProductToCart(cart, product)}
 							size="sm"
-							className="h-11 w-full rounded-xl sm:w-auto sm:px-6 lg:h-12 lg:px-8 lg:text-base"
+							className="h-11 shrink-0 rounded-xl px-4"
 						>
 							<Plus className="size-4" />
 							Add

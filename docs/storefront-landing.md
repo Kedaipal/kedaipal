@@ -85,15 +85,17 @@ grid.
   hard-block stock clamp, one author. Multi-variant/custom products render
   "Choose options" → the product page, mirroring the card affordance rules.
 
-**Two shapes, one component.** The design only ever mocked this section in a
-phone frame, and the first cut shipped that mobile card at every width: at
-1150px a 144px thumbnail sat marooned beside ~1000px of nothing. Mobile keeps
-the compact card (thumbnail beside text); from `lg` it becomes a **banner** —
-the image is a 38% panel (capped 26rem) against a 15rem-tall row, the name
-steps up to the heading face at `text-2xl`, and the content column splits
-`justify-between` so the CTA is pinned right instead of the copy trailing off
-into whitespace. Measured at the 1024px breakpoint: 364px image / 594px
-content / 116px CTA, no overflow.
+**One compact card, capped at `max-w-md` — never full-bleed.** The design
+only ever mocked this section in a phone frame, and getting the width right
+took two corrections (Zaki, 31 Jul): the mobile card stretched to 1150px was
+a thumbnail beside a metre of nothing, and a full-width banner variant was no
+better — **a single lead item doesn't carry a whole row at any size**. The
+cap leaves phones at their natural width and gives desktop a standard card,
+left-aligned under the section label. Inside, the CTA is a **chip beside the
+price** (`h-11` auto-width — the 44px tap target kept, label "Choose"
+matching the grid cards), not a full-width slab under the copy. 448×125px on
+desktop with a 112px image panel; the "All products" divider still spans the
+section, so the short card reads as deliberate.
 
 ## 4-column desktop grid
 

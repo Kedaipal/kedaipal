@@ -195,9 +195,7 @@ describe("FeaturedProduct", () => {
 		mount();
 		expect(screen.queryByRole("button", { name: /add/i })).toBeNull();
 		expect(
-			screen
-				.getByRole("link", { name: /choose options/i })
-				.getAttribute("href"),
+			screen.getByRole("link", { name: /choose/i }).getAttribute("href"),
 		).toBe("/herb/p/cake");
 	});
 });
