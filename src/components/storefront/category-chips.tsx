@@ -50,9 +50,16 @@ export function CategoryChips({
 			// Full-bleed scroll row on mobile (parent section pads px-5 / lg:px-8).
 			className="-mx-5 mb-4 flex snap-x gap-2 overflow-x-auto px-5 pb-1 [scrollbar-width:none] lg:-mx-8 lg:px-8 [&::-webkit-scrollbar]:hidden"
 		>
+			{/* `exact` is load-bearing, not decoration. TanStack Router matches
+			    prefixes by default and sets `aria-current="page"` ITSELF on any
+			    link it considers active — so on /herb/c/cakes the store-home link
+			    (/herb, a prefix) was announced as the current page alongside the
+			    real one, overriding the `undefined` below. Screen readers heard two
+			    current pages; the styling was right, which is why it looked fine. */}
 			<Link
 				to="/$slug"
 				params={{ slug: storeSlug }}
+				activeOptions={{ exact: true }}
 				aria-current={activeCategorySlug ? undefined : "page"}
 				className={chipClass(!activeCategorySlug)}
 			>

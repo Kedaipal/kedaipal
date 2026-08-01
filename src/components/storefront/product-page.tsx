@@ -83,6 +83,7 @@ export function ProductPageView({
 				<Link
 					to="/$slug"
 					params={{ slug: storeSlug }}
+					activeOptions={{ exact: true }}
 					className="inline-flex w-fit items-center gap-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
 				>
 					<ArrowLeft className="size-4" aria-hidden />

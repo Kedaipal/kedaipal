@@ -155,6 +155,7 @@ function CategoryNotFound() {
 			<Link
 				to="/$slug"
 				params={{ slug }}
+				activeOptions={{ exact: true }}
 				className="mt-1 inline-flex h-11 items-center rounded-xl bg-foreground px-4 text-sm font-medium text-background"
 			>
 				Browse all products
@@ -223,6 +224,7 @@ function CategoryRoute() {
 				<Link
 					to="/$slug"
 					params={{ slug: retailer.slug }}
+					activeOptions={{ exact: true }}
 					className="inline-flex w-fit items-center gap-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
 				>
 					<ArrowLeft className="size-4" aria-hidden />

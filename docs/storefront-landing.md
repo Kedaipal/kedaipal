@@ -27,6 +27,18 @@ explicit: *"rail cards were heavy for ≤3 categories."*
   *up*; chips are the way *across*.
 - Zero-category stores render nothing — pixel-identical to the
   pre-categories storefront (the rail's contract, kept).
+- **Every storefront `<Link to="/$slug">` passes
+  `activeOptions={{ exact: true }}`.** TanStack Router matches prefixes by
+  default and stamps its own `aria-current="page"` on anything it considers
+  active — so on `/herb/c/cakes` the store-home link (`/herb`, a prefix) was
+  announced as the current page *alongside* the real one, silently
+  overriding an explicit `aria-current={undefined}`. Found on the chips;
+  it was already true of the pre-existing "← All products" back links on the
+  category, product and checkout pages, so all six call sites were fixed
+  together. The styling was always right, which is why it looked fine —
+  only a screen reader (or the DOM) showed three "current" links on one
+  page. The chips test pins the `exact` request, since a plain-anchor `Link`
+  stub cannot reproduce the router's own matching.
 - Category **tile images still exist** in the data and dashboard — they're
   just no longer a storefront surface. If they earn a home later, the
   category page header is the natural spot.
