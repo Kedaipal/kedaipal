@@ -108,6 +108,21 @@
       ],
       "port": 3108,
       "autoPort": false
+    },
+    {
+      "name": "web-deferred-push-wt",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "-C",
+        "../kedaipal-wt-86eyfq0w5",
+        "exec",
+        "vite",
+        "dev",
+        "--port",
+        "3109"
+      ],
+      "port": 3109,
+      "autoPort": false
     }
   ]
 }

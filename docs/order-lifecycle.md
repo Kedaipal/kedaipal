@@ -90,15 +90,32 @@ phone. So the storefront no longer depends on the buyer's send at all:
   server re-validates with `assertValidMyMobile` — the stricter sibling of
   `assertValidMyWaPhone` that also demands a MY **mobile** prefix, because a
   landline satisfies the 8–15-digit rule but can never receive WhatsApp.
-- **Not every order takes this path.** `confirmedAtCreate` also requires the
-  total to be **final**: an order with a mockup gate (a price-on-quote line can
-  be `RM 0.00`) or a pending delivery fee falls back to the legacy
-  `pending` + `?send=1` handoff. The approved template hard-codes
-  "Total: {{3}}. Tap below to see how to pay", and both halves are false while a
-  price is outstanding and the payment ask is held — and template wording can't
-  be softened per-order. The legacy `mockupPendingConfirm` /
-  `deliveryFeePendingConfirm` branches already say the right thing for these.
-  Lifting the exclusion needs a second approved template with no total slot.
+- **Every storefront order takes this path** — including custom/made-to-order
+  and fee-pending orders. What varies is push **timing** (86eyfq0w5): the
+  approved template states "Total: {{3}}", so an order whose total isn't final
+  yet (a price-on-quote line is RM 0.00 until quoted; a fee-pending total grows
+  by the arranged fee) commits identically at create but its push is stamped
+  **`deferred`** and fires once the price is confirmed — from the gate-open
+  sites (mockup approve / waive / decline-with-remainder, `setDeliveryFee`),
+  where it **replaces** the legacy free-form payment prompt (which a push-path
+  buyer's window-less chat couldn't receive anyway). The de-dup is the
+  **transactional claim** (`claimDeferredPush` in `convex/orders.ts`): inside
+  the same mutation that opened a gate, the order is re-read and — only when
+  NO hold remains — flipped `deferred → sending` and the send scheduled.
+  Mutations are serializable, so exactly one gate-open transaction can win the
+  flip; a second gate event racing in (fee set a second after the mockup
+  approval) serializes after the winner, sees `sending`, and schedules
+  nothing — that's what makes a doubly-held order send exactly once **under
+  concurrency**, not just in tidy orderings. `notifyStorefrontOrderCreated`
+  keeps a hold guard as defence-in-depth (a wrong "Total" is the one mistake
+  this feature must never make) plus a cancelled-order guard. **Cancelling a
+  deferred order clears the stamp** (both `applyStatusTransition` and
+  `declineMockupItem`'s custom-only cancel): the stamp is a promise about a
+  future message, and the promise dies with the order — the tracking page's
+  deferred card additionally renders only while `confirmed`. A custom-only
+  order whose buyer declines the item is a cancellation — no confirmation ever
+  exists. Legacy orders (env unset, buyer messaged first) keep the free-form
+  `notifyPaymentDue` / `notifyDeliveryFeeSet` prompts unchanged.
 - **The order inserts as `confirmed`** and Kedaipal's WABA pushes the
   confirmation — the Meta-approved **utility template**
   `order_confirmation_utility` (EN + BM variants; body params `shortId`,
@@ -125,10 +142,16 @@ phone. So the storefront no longer depends on the buyer's send at all:
 **Outcome stamps** (`orders.confirmationPushStatus` / `confirmationPushAt` /
 `confirmationPushWamid` / `confirmationPushFailureKind`):
 
-- `"sending"` — stamped in the **same transaction as the insert**, so the state
-  is never ambiguous while attempts (including retries) are in flight. Without
-  it, a confirmed order with no stamp is indistinguishable from one still
-  sending, and the tracking page can't tell the buyer which.
+- `"deferred"` — total not final at create (mockup quote / delivery fee
+  outstanding); the push fires when the price is confirmed. Flipped to
+  `"sending"` by the winning gate-open transaction (`claimDeferredPush`), so
+  the buyer's page never claims "sending…" mid-negotiation; cleared on
+  cancel.
+- `"sending"` — stamped in the **same transaction as the insert** (or on a
+  deferred push passing its guards), so the state is never ambiguous while
+  attempts (including retries) are in flight. Without it, a confirmed order
+  with no stamp is indistinguishable from one still sending, and the tracking
+  page can't tell the buyer which.
 - `"sent"` — Meta accepted the send; the wamid is stored because the
   **`statuses` webhook** (same `POST /webhook/whatsapp`, `value.statuses`)
   identifies messages only by it. A later `failed` event →
@@ -175,6 +198,13 @@ aggregates off the wrong record onto the right one):
    order's number is never overwritten by a forwarded message, and a
    late/replayed `failed` webhook never regresses `recovered`.
 
+**Address editing stops at `pending`** — which, on the push path, means a
+buyer can no longer edit their own address once the order commits. Deliberate
+(Zaki, 31 Jul): a `deliveryFeePending` order is one the **seller** is actively
+pricing, often alongside a mockup, so a buyer moving the destination underneath
+would invalidate the quote mid-settlement. Out-of-range buyers go through the
+store, not a silent re-price. Revisit only as an explicit decision.
+
 **Buyer-facing states** (`src/routes/track.$token.tsx`) — none of which gate the
 page. The order is confirmed in every branch and the payment block stays
 reachable: withholding a buyer's receipt because we couldn't send a *message*
@@ -182,6 +212,7 @@ would invert the point of the feature.
 
 | State | What the buyer sees |
 | --- | --- |
+| `deferred` | Quiet "Order placed ✓ — we'll send your WhatsApp confirmation as soon as your price is confirmed." Nothing asked. |
 | `sending` | Quiet "Sending your confirmation to +60 …" line. Nothing asked. |
 | `sent` | "Order placed ✓ — confirmation sent to your WhatsApp" + optional open-chat anchor. **No auto-redirect anywhere on this path.** |
 | `failed` + `unreachable` | Amber card naming the number, **"Update my number"** (saves → re-sends), plus a quiet "or message us" link. |
