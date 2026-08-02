@@ -18,9 +18,15 @@ existing mockup-approval + re-quote machinery (`requiresProof` → `mockupStatus
 end-to-end, so there is **no new order-flow code**.
 
 > When NOT to use it: a product that is *only* bespoke (no standard variants)
-> should just be a single made-to-order variant with **Require mockup approval**
-> on — that's the existing path. The custom option is for "standard catalog **plus**
-> a bespoke line on the same product."
+> is the **"Made to order" product type** — the third answer to "What kind of
+> product is it?" in both the wizard and the full editor (ClickUp `86eyfq04j`).
+> It produces exactly the shape this section always prescribed (one implicit
+> variant, `requiresProof: true`, `blockWhenOutOfStock: false`, price 0 =
+> "Price on quote"); before it existed the seller had to invent a price and
+> find this checkbox under Advanced to get there. See
+> [`product-setup-wizard.md`](./product-setup-wizard.md#the-made-to-order-product-type-2026-08-02-clickup-86eyfq04j).
+> The custom option below is for "standard catalog **plus** a bespoke line on
+> the same product."
 
 ## 2. Data model
 

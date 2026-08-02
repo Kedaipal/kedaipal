@@ -33,7 +33,7 @@ derives `options`, variant rows and `blockWhenOutOfStock` from the answers.
 Zero backend change: everything still maps onto `ProductFormSubmitValues` and
 the existing `products.create` / `saveVariantGrid` mutations.
 
-## Create = the 5-step wizard (`/app/products/new`)
+## Create = the wizard (`/app/products/new`)
 
 `src/components/forms/product-wizard.tsx`, mounted by
 `src/routes/app.products.new.tsx`. One question per screen, progress dots,
@@ -43,10 +43,56 @@ steps.
 | Step | Question | Derives |
 | --- | --- | --- |
 | 1 · Name it | "What are you selling?" — name + photos, description behind a link | `name`, `imageStorageIds`, `description` |
-| 2 · Choices | "Does the buyer pick anything?" — *Just one item* / *Buyer picks a choice* (preset chips: Size/Flavour/Weight/Pack, values typed as chips). "+ They also choose by something else" reveals the **second axis** (Size × Flavour) — zero pixels unless used | `editor.options` |
-| 3 · Price | One price per choice (all combinations when two axes) + "Same price for all". "+ Photos, item codes (SKU) & more per choice" reveals per-row photo · SKU · on/off · design-approval — the full form's per-choice details, behind one link | per-row `price` (+ extras) |
-| 4 · Preparation | "How do you prepare orders?" — *Made to order* / *From stock* (stock steppers on tracking rows). "Vary per choice" reveals per-row Track-stock/Made-to-order toggles (auto-open when a restored draft is mixed) | per-row `blockWhenOutOfStock` + `onHand` |
+| 2 · Type | "What kind of product is it?" — *Just one item* / *Buyer picks a choice* (preset chips: Size/Flavour/Weight/Pack, values typed as chips) / *Made to order*. "+ They also choose by something else" reveals the **second axis** (Size × Flavour) — zero pixels unless used | `editor.options`, `shape` |
+| 3 · Price | One price per choice (all combinations when two axes) + "Same price for all". "+ Photos, item codes (SKU) & more per choice" reveals per-row photo · SKU · on/off · design-approval — the full form's per-choice details, behind one link. **Made to order:** one optional "starting price" | per-row `price` (+ extras) |
+| 4 · Preparation | "How do you prepare orders?" — *Made fresh* / *From stock* (stock steppers on tracking rows). "Vary per choice" reveals per-row Track-stock/Made-fresh toggles (auto-open when a restored draft is mixed). **Skipped entirely for made-to-order** | per-row `blockWhenOutOfStock` + `onHand` |
 | 5 · Review | Buyer-eye preview card + summary rows with per-row Edit + **optional publish settings** (Visible/Hidden toggle; category picker **only when the store has categories**) + the **"More options"** disclosure | submit (+ `hidden`, `categoryIds`, `requiresProof`, custom line) |
+
+### The "Made to order" product type (2026-08-02, ClickUp `86eyfq04j`)
+
+Step 2's answer is a three-way `ProductShape` (`single` | `choices` |
+`made_to_order`), not a `hasChoices` boolean. A bespoke seller — the ICP's
+cake decorator — previously had **no way through the wizard**: every path
+demanded a price, and the only bespoke affordance was a checkbox under the
+full form's Advanced disclosure.
+
+**No schema or server change.** A made-to-order product sells through the shape
+the catalog has always supported and [`custom-option.md`](./custom-option.md)
+already prescribed: ONE implicit variant with `requiresProof: true`,
+`blockWhenOutOfStock: false`, price 0 — which `productWithVariants` already
+reads as a quote variant (`hasQuotePricing`) and the storefront already renders
+as **"Price on quote"**. This ticket only built the route to it.
+
+- **Steps:** `wizardSteps(shape)` → `[1, 2, 3, 5]`. Preparation is dropped —
+  "how do you prepare orders?" has exactly one answer for a thing that is by
+  definition made to order, and offering "From stock" there would silently undo
+  the type. Step ids stay stable so every `step === n` branch is untouched;
+  only the walked ORDER changes, and the progress dots / "Step N of M" count
+  off the walked sequence.
+- **Price is optional.** Blank means "Price on quote"; a typed amount shows as
+  a "from" floor. `reconcileForSubmit` resolves blank → `"0"` on the ONE submit
+  path both editors share, so it can't be accepted in the wizard and rejected
+  in the full form.
+- **Derived, never stored twice.** `isMadeToOrderOnly(editor)` reads the rows;
+  the render-time `madeToOrder` is `!showAxes && (shape === "made_to_order" ||
+  isMadeToOrderOnly(...))` — the same "the editor answers, not the flag"
+  posture `86eyex5vk` established for `showAxes`. Deliberately **not** keyed on
+  price, so typing a "from" figure can't flip the mode mid-edit.
+- **Nothing is asked twice.** Mockup approval and the custom line are dropped
+  from More options / Advanced for this type: approval is what the type *is*
+  (a checkbox that turns the product into a free item is a trap), and a bespoke
+  line on a bespoke product is the same offer twice. Both are removed from the
+  tree, not CSS-hidden — a `hidden` class still leaves them for screen readers.
+- **Full editor parity.** `VariantEditor`'s Q1 is a three-segment control, and
+  the summary strip reads "Made to order · Price on quote" (or "· from RM 120")
+  instead of "One item · Made fresh · No price yet", which framed a deliberate
+  shape as unfinished setup.
+
+**Renamed in passing:** the *prepare* answer "Made to order" → **"Made fresh"**
+(wizard step 4, `PrepareQuestion`, `FulfilmentToggle`, `describeProduct`). It
+only ever meant "don't track stock", and leaving it would have put two controls
+with the same label and different meanings on one screen — exactly the
+confusion `86eyfq04j` was filed about.
 
 Validation: the branching questions (2/4) gate Continue structurally
 (disabled + one-line reason); text inputs validate on Continue with inline

@@ -156,6 +156,47 @@ The bottom CTA bar's stacking against the footer (fixed bar, measured
 clearance) is written up once in
 [`storefront-product-pages.md`](./storefront-product-pages.md#the-bottom-bar-and-the-footer).
 
+## Post-release polish (2026-08-02, ClickUp `86eyfq04j`)
+
+Six fixes from the 31 Jul release, all on this page:
+
+- **`+60` prefix on the WhatsApp field.** `TextField` gained a `prefix` prop
+  (bordered wrapper owns the focus ring, the input goes `variant="bare"` — the
+  house composite pattern the `kedaipal.com/` slug boxes already use).
+  **The badge is a promise, so the validator had to keep it:** it invites
+  "12-345 6789", which the old normalizer accepted from neither arm (`0…` and
+  `60…` only) and rejected. `assertValidMyMobile` (server, the authority) and
+  `myWaPhoneCheckoutSchema` (client mirror) now also take a bare MY mobile NSN,
+  pinned to `^1\d{8,9}$` so a foreign number that merely starts with 1 (a US
+  `+1` is 11 digits) can never be silently rewritten to a Malaysian one. The
+  loose `assertValidMyWaPhone` is untouched — the counter's manual bind may
+  legitimately key a foreign number.
+- **Caret on every receipt row.** The rows have been tappable since PR1, but
+  the only cue was a caption under the whole list. The chevron sits on the LEFT
+  so the money column stays flush, and its ~1rem footprint matches the `pl-4`
+  the note / attachment sub-lines already indent by.
+- **Truck on the delivery charge** (all four quote states — fee / free /
+  pending / calculating are one concept), and a package on the pickup charge:
+  a glyph on one of two fee rows would read as a bug, not a decision.
+- **No card inside a card.** `CheckoutSection` is a bordered card, so
+  everything nested in it now carries **fill, not outline**: the method picker
+  became the house segmented control (`bg-muted p-1`, raised `bg-background`
+  on the selected segment), and `AddressFieldset` / `PickupSummaryCard` /
+  the pickup radio rows / the confirmed-address card dropped their borders.
+  `AddressFieldset` also lost its duplicate visible title — it now takes an
+  optional `legend`, passed only when the section heading is the method
+  question rather than "Delivery address" (the dialog has its own title).
+  Date chips keep their border: a pill is a chip, not a card.
+- **Pickup title spacing** — a `<legend>` is rendered by the fieldset and is
+  **not a flex item**, so the fieldset's `gap-3` never applied below it and the
+  title sat flush against the first option. Fixed with `mb-2` on the legend
+  itself (same fix in `AddressFieldset`).
+- **Mobile bottom bar trimmed.** It stacked a total, a blocked reason, the CTA
+  and *two* full sentences of small print. The reassurance line is now
+  desktop-only — "confirmation lands in your WhatsApp" is already the phone
+  field's own description — and the bar carries one line: `Nothing is paid yet
+  · Privacy Policy`.
+
 ## Follow-ups (PR2 / PR3 of 86eybrhrt)
 
 - **PR2** — URL-addressable product detail (`/{slug}/p/{productSlug}`) —
