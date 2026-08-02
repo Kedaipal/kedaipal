@@ -146,6 +146,10 @@ function PrivacyPage() {
 						improve usage.
 					</li>
 					<li>
+						<strong>Microsoft Clarity</strong> — session replays and heatmaps to
+						diagnose usability issues and improve the interface.
+					</li>
+					<li>
 						<strong>Calendly</strong> — scheduling onboarding and support calls.
 					</li>
 				</ul>
