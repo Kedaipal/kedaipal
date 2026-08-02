@@ -1126,9 +1126,7 @@ export function ProductWizard({
 						</p>
 						<div className="flex flex-col gap-2.5">
 							<AnswerCard
-								selected={
-									state.shape === "single" && !showAxes && !madeToOrder
-								}
+								selected={state.shape === "single" && !showAxes && !madeToOrder}
 								icon={<PackageCheck className="size-5" aria-hidden />}
 								title="Just one item"
 								description="One name, one price. e.g. Nasi lemak bungkus"

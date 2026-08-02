@@ -107,9 +107,7 @@ describe("wizard step 2 — axes render whenever they exist", () => {
 			editor: { options: [], rows: [emptyRow([])], customLine: null },
 		});
 		renderWizard(fresh);
-		expect(wizardStepIssues(fresh, 2).map((i) => i.field)).toContain(
-			"shape",
-		);
+		expect(wizardStepIssues(fresh, 2).map((i) => i.field)).toContain("shape");
 		// No axis block until the seller answers — the normal first-run path.
 		expect(screen.queryByPlaceholderText("Add a choice")).toBeNull();
 	});

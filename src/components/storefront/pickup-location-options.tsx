@@ -220,7 +220,9 @@ export function PickupLocationRadioList({
 			{/* `mb-2`, not the fieldset's `gap-3`: a <legend> is rendered by the
 			    fieldset itself and is NOT a flex item, so the gap never applies
 			    below it and the title sat flush against the first option. */}
-			<legend className="mb-2 text-sm font-medium">Choose a pickup point</legend>
+			<legend className="mb-2 text-sm font-medium">
+				Choose a pickup point
+			</legend>
 			{error ? (
 				<p role="alert" className="text-sm text-destructive">
 					{error}

@@ -647,7 +647,13 @@ describe("wizard — made-to-order product type", () => {
 		expect(wizardPriceLabel(s, "RM")).toBe("Price on quote");
 		expect(
 			wizardPriceLabel(
-				{ ...s, editor: { ...s.editor, rows: [{ ...s.editor.rows[0], price: "120" }] } },
+				{
+					...s,
+					editor: {
+						...s.editor,
+						rows: [{ ...s.editor.rows[0], price: "120" }],
+					},
+				},
 				"RM",
 			),
 		).toBe("From RM 120");

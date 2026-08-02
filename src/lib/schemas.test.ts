@@ -15,9 +15,7 @@ describe("myWaPhoneCheckoutSchema", () => {
 	});
 
 	it("accepts 011-series numbers (one digit longer)", () => {
-		expect(myWaPhoneCheckoutSchema.parse("011-2345 6789")).toBe(
-			"601123456789",
-		);
+		expect(myWaPhoneCheckoutSchema.parse("011-2345 6789")).toBe("601123456789");
 	});
 
 	// The field renders a "+60" prefix badge (86eyfq04j), so a buyer who reads

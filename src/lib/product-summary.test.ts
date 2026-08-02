@@ -30,8 +30,16 @@ describe("describeProduct", () => {
 				{
 					options: [{ name: "Size", values: ["S", "M", "L"] }],
 					rows: [
-						row({ optionValues: ["S"], price: "12", blockWhenOutOfStock: false }),
-						row({ optionValues: ["M"], price: "18", blockWhenOutOfStock: false }),
+						row({
+							optionValues: ["S"],
+							price: "12",
+							blockWhenOutOfStock: false,
+						}),
+						row({
+							optionValues: ["M"],
+							price: "18",
+							blockWhenOutOfStock: false,
+						}),
 						row({
 							optionValues: ["L"],
 							price: "28.50",
