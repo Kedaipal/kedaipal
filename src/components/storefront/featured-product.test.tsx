@@ -128,8 +128,9 @@ describe("FeaturedProduct", () => {
 			"/herb/p/pie",
 		]);
 		expect(screen.queryByText("Product unranked")).toBeNull();
-		// Hands over to the grid below.
-		expect(screen.getByText("All products")).toBeTruthy();
+		// The "All products" divider is deliberately NOT here — it belongs to the
+		// grid (product-grid.tsx), so it survives this shelf returning null.
+		expect(screen.queryByText("All products")).toBeNull();
 	});
 
 	it("drops candidates that are unlisted or sold out, never shelving the unbuyable", () => {

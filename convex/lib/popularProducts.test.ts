@@ -56,13 +56,20 @@ describe("rankPopularProducts", () => {
 		expect(rankPopularProducts([order("confirmed", ["cake", 5])])).toEqual([]);
 	});
 
-	it("returns at most the candidate cap, ids only", () => {
-		const orders = Array.from({ length: POPULAR_TOP_CANDIDATES + 3 }, (_, i) => [
-			order("confirmed", [`p${i}`, 1]),
-			order("confirmed", [`p${i}`, 1]),
-		]).flat();
+	// Capping is the QUERY's job, and only after it drops products the
+	// storefront doesn't list — otherwise an unlisted bestseller eats a slot
+	// with nothing to back-fill it. See products.popularProducts.
+	it("returns the full ranked list uncapped, ids only", () => {
+		const extra = 3;
+		const orders = Array.from(
+			{ length: POPULAR_TOP_CANDIDATES + extra },
+			(_, i) => [
+				order("confirmed", [`p${i}`, 1]),
+				order("confirmed", [`p${i}`, 1]),
+			],
+		).flat();
 		const ranked = rankPopularProducts(orders);
-		expect(ranked).toHaveLength(POPULAR_TOP_CANDIDATES);
+		expect(ranked).toHaveLength(POPULAR_TOP_CANDIDATES + extra);
 		for (const entry of ranked) expect(typeof entry).toBe("string");
 	});
 

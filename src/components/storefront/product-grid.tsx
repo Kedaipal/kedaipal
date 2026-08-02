@@ -15,6 +15,37 @@ import { quickAddProductToCart } from "./product-purchase";
  * the page and get tiles ~50% larger. */
 const GRID_CLASS = "grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4";
 
+/**
+ * The "All products" rule that hands merchandising over to the full catalog.
+ *
+ * It lives beside the grid it labels, NOT inside whichever section happens to
+ * sit above it — it was briefly owned by the popular shelf, which meant it
+ * disappeared along with the shelf on any store under the qualifying-orders
+ * threshold, leaving category tiles 4px from the first product row. That's not
+ * an edge case: it's every newly-onboarded seller and every quiet week.
+ *
+ * Render it as the last child of `beforeGrid`, after a `peer`-marked wrapper
+ * holding the merchandising sections. `peer-[:not(:empty)]` then shows it only
+ * when at least one of those sections actually rendered — the wrapper is
+ * genuinely `:empty` when they all return null (React renders no nodes, and
+ * JSX drops the whitespace between them), so all four combinations are right
+ * with no extra queries or prop-drilling.
+ */
+export function AllProductsDivider() {
+	return (
+		<div
+			aria-hidden
+			className="hidden items-center gap-3 pb-4 pt-5 peer-[:not(:empty)]:flex"
+		>
+			<span className="h-px flex-1 bg-border" />
+			<span className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">
+				All products
+			</span>
+			<span className="h-px flex-1 bg-border" />
+		</div>
+	);
+}
+
 interface ProductGridProps {
 	retailerId: Id<"retailers">;
 	cart: UseCart;

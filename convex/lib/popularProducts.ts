@@ -21,13 +21,17 @@ export const POPULAR_WINDOW_DAYS = 7;
 export const POPULAR_MIN_ORDERS = 2;
 
 /**
- * How many ranked candidates the query returns — the shelf's ceiling. The
- * client renders every candidate that's actually presentable (still publicly
- * listed, in stock, minimum quantity reachable), in rank order, as a
- * horizontally scrollable row; ones that have since sold out or been hidden
- * simply drop out rather than blanking the shelf.
+ * How many ids the query returns — the shelf's ceiling.
  *
- * 10 is a deliberate cap, not a guess: the row scrolls, so more items cost
+ * The cap is applied by the QUERY, and only **after** it has dropped products
+ * that aren't publicly listed. Capping first (which this did until the PR #155
+ * review) starves the shelf: ranking reads `orders.items[].productId` with no
+ * product lookup, so a counter-only SKU — hidden from the storefront but fully
+ * counter-sellable, and its orders count — would take a slot and then be
+ * filtered out on the client, with no rank-11 to back-fill it. A stall seller
+ * whose top ten are counter-only got an empty "Popular this week".
+ *
+ * 10 is a deliberate ceiling, not a guess: the row scrolls, so more items cost
  * nothing in layout, but every id here is a product the client must resolve
  * and render, and past ~10 a "popular this week" shelf stops being a
  * shortlist and starts being the catalog (which the grid below already is).
@@ -74,6 +78,12 @@ export type PopularOrderInput = {
  * min-quantity product shouldn't outrank ten customers buying one cake each.
  * Pending/cancelled orders don't count (the insights revenue-status set).
  *
+ * Returns the FULL ranked list, deliberately uncapped: the caller filters to
+ * storefront-visible products first and only then takes the top
+ * `POPULAR_TOP_CANDIDATES`, so an unlisted bestseller can't eat a slot. Length
+ * is naturally bounded — distinct products across one retailer's recent orders,
+ * itself under the per-retailer product cap.
+ *
  * Returns ONLY ids, no counts — this feeds an unauthenticated storefront
  * query, and a store's sales volume is the seller's business, not a
  * competitor's scraping target.
@@ -103,6 +113,5 @@ export function rankPopularProducts(
 				b.quantity - a.quantity ||
 				idA.localeCompare(idB),
 		)
-		.slice(0, POPULAR_TOP_CANDIDATES)
 		.map(([id]) => id);
 }

@@ -5,7 +5,10 @@ import { type Locale, OG_LOCALE } from "../../convex/lib/locale";
 import { CartBar } from "../components/storefront/cart-bar";
 import { CategoryRail } from "../components/storefront/category-rail";
 import { FeaturedProduct } from "../components/storefront/featured-product";
-import { ProductGrid } from "../components/storefront/product-grid";
+import {
+	AllProductsDivider,
+	ProductGrid,
+} from "../components/storefront/product-grid";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { StorefrontHeader } from "../components/storefront/storefront-header";
 import { Skeleton } from "../components/ui/skeleton";
@@ -232,22 +235,29 @@ function StorefrontRoute() {
 					cart={cart}
 					storeSlug={retailer.slug}
 					beforeGrid={
-						// `gap-6` owns the rhythm between the two lead sections rather
-						// than either one carrying a trailing margin: each renders null
-						// on a store that has no categories / no qualifying orders, and
-						// a gap only applies between siblings that actually exist — so
-						// neither can leave a dangling space behind it.
-						<div className="flex flex-col gap-6">
-							<CategoryRail
-								retailerId={retailer._id}
-								storeSlug={retailer.slug}
-							/>
-							<FeaturedProduct
-								retailerId={retailer._id}
-								storeSlug={retailer.slug}
-								cart={cart}
-							/>
-						</div>
+						<>
+							{/* `gap-6` owns the rhythm between the two lead sections
+							    rather than either one carrying a trailing margin: each
+							    renders null on a store with no categories / no qualifying
+							    orders, and a gap only applies between siblings that
+							    actually exist — so neither can leave a dangling space.
+							    `peer` lets the divider below detect whether either one
+							    rendered at all. */}
+							<div className="peer flex flex-col gap-6">
+								<CategoryRail
+									retailerId={retailer._id}
+									storeSlug={retailer.slug}
+								/>
+								<FeaturedProduct
+									retailerId={retailer._id}
+									storeSlug={retailer.slug}
+									cart={cart}
+								/>
+							</div>
+							{/* Shows only when something above it rendered — otherwise the
+							    grid follows the search bar directly. */}
+							<AllProductsDivider />
+						</>
 					}
 				/>
 			</section>

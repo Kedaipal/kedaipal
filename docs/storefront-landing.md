@@ -52,8 +52,7 @@ ranking in `convex/lib/popularProducts.ts`.
 **Real order data, zero seller curation.** The target cohort won't
 merchandise by hand, and a hand-picked "featured" flag goes stale; actual
 orders don't lie. The section renders a **horizontally scrollable shelf** of
-the qualifying products, closed by the "All products" divider that hands over
-to the grid.
+the qualifying products.
 
 - **Ranking** = distinct orders per product in the last 7 days (quantity as
   tiebreak, id as the stable final tiebreak). Distinct orders, not units —
@@ -68,14 +67,25 @@ to the grid.
   extra items cost nothing in layout — the cap exists because past ~10 a
   "popular this week" shelf stops being a shortlist and starts being the
   catalog, which the grid below already is.
-- **Ids only cross the wire.** The query returns ranked product ids — no
-  order counts — because it's unauthenticated: a store's sales volume is the
-  seller's business, not a competitor's scraping target. The client resolves
-  ids against the `products.list` subscription it already holds (Convex
-  dedupes identical subscriptions — no extra read), so public-visibility
-  rules apply exactly once, and any candidate since hidden, archived, sold
-  out or min-quantity-trapped **drops out of the row** rather than being
-  merchandised as unbuyable.
+- **Visibility is filtered server-side, BEFORE the cap** — and that order is
+  the whole point. Ranking reads `orders.items[].productId` with no product
+  lookup, so counter-only SKUs (hidden from the storefront, fully
+  counter-sellable, and their orders count) rank like anything else. Capping
+  to ten first and letting the client discard them — which is what PR3
+  originally did — spends slots on products that can never render, with no
+  rank-11 to back-fill: a stall seller whose top ten are counter-only got an
+  **empty shelf**. `rankPopularProducts` therefore returns the full ranked
+  list and the query filters (same index + rules as `list`) then slices.
+  Caught in the PR #155 review; pinned by a query test.
+- **Ids only cross the wire, and only listable ones.** The query returns
+  ranked product ids — no order counts — because it's unauthenticated: a
+  store's sales volume is the seller's business, not a competitor's scraping
+  target. **Live stock and minimum-quantity stay client-side** on purpose:
+  they change by the minute and the client already holds them reactively in
+  `products.list` (Convex dedupes the identical subscription — no extra
+  read), so a candidate that sells out or becomes min-trapped drops out of
+  the row without a round trip. Visibility, by contrast, is server truth (see
+  above).
 - **The window ROLLS, ending now** — it is not a calendar week. `since =
   popularSince()` is MYT midnight 7 days back with **no upper bound**, so on
   3 Oct the shelf covers 26 Sep 00:00 → now and on 4 Oct it covers 27 Sep
@@ -125,9 +135,22 @@ products" divider → grid. Rail and shelf both slot into `ProductGrid`'s
 `beforeGrid` (wrapped in a `gap-6` column so neither leaves a dangling gap
 when it renders nothing),
 so an active search hides them and results take the whole surface (existing
-behaviour, unchanged). The divider renders with the shelf, since it separates
-the bestsellers from the full catalog. The **category page** renders neither
-rail nor shelf — it goes header → back link → category name → search → grid.
+behaviour, unchanged).
+
+The **"All products" divider belongs to the grid it labels**
+(`AllProductsDivider`, exported from `product-grid.tsx`), not to whichever
+section sits above it. It was briefly owned by the popular shelf, which meant
+it vanished with the shelf on any store under the qualifying-orders threshold
+— leaving category tiles 4px from the first product row, on every
+newly-onboarded seller and every quiet week (PR #155 review). It now renders
+as the last child of `beforeGrid` after a `peer`-marked wrapper, shown via
+`peer-[:not(:empty)]` only when at least one merchandising section actually
+rendered. The wrapper is genuinely `:empty` when they all return null, so all
+four combinations are right with no extra queries or prop-drilling —
+verified in-browser across rail+shelf / rail-only / shelf-only / neither.
+
+The **category page** renders neither rail nor shelf — it goes header → back
+link → category name → search → grid.
 
 ## Tests
 
@@ -135,7 +158,9 @@ rail nor shelf — it goes header → back link → category name → search →
 status filtering, threshold, cap, determinism; `popularSince` day-alignment
 AND the rolling-window slide),
 `convex/products.test.ts` (query: ranking end-to-end, retailer isolation,
-single-order hides, non-midnight `since` rejected),
+single-order hides, non-midnight `since` rejected, **unlisted bestsellers
+never consume a slot**; plus `get` refusing an archived product to a
+non-owner),
 `category-rail.test.tsx` (a tile per category with count + link, no tile ever
 marked as the current page, deterministic gradient fallback, own image when
 set, zero-category null), `featured-product.test.tsx` (loading/empty null, the

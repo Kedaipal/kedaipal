@@ -11,9 +11,13 @@ import { quickAddProductToCart } from "./product-purchase";
 /**
  * "Popular this week" — the store home's merchandising shelf (86eybrhrt PR3):
  * a horizontally scrollable row of the products real buyers actually ordered
- * most over the last 7 days, closed by the "All products" divider that hands
- * over to the grid. The scroller is the Grab/Pandamart pattern and behaves
- * identically on mobile and desktop — a shelf, not a hero.
+ * most over the last 7 days. The scroller is the Grab/Pandamart pattern and
+ * behaves identically on mobile and desktop — a shelf, not a hero.
+ *
+ * The "All products" divider below it is NOT rendered here — it belongs to the
+ * grid it labels (`AllProductsDivider` in product-grid.tsx). Owning it here
+ * meant it vanished along with the shelf on any store with no qualifying
+ * orders, leaving category tiles flush against the product grid.
  *
  * Data-driven (ranked ids from `products.popularProducts`), zero seller
  * curation, and it hides entirely when nothing qualifies (new or quiet
@@ -129,16 +133,6 @@ function FeaturedProductInner({
 						/>
 					</div>
 				))}
-			</div>
-			{/* Hands over to the full grid — same divider the category rail used.
-			    The label needs real air beneath it or it reads as a caption on
-			    the first row of cards rather than a heading for all of them. */}
-			<div className="flex items-center gap-3 pb-4 pt-5" aria-hidden>
-				<span className="h-px flex-1 bg-border" />
-				<span className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">
-					All products
-				</span>
-				<span className="h-px flex-1 bg-border" />
 			</div>
 		</section>
 	);
