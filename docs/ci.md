@@ -51,36 +51,104 @@ edge-runtime) runs offline.
 
 ## Branch protection (manual, one-time)
 
-Required status checks make a red gate actually **block** the merge button.
-This is a repo-settings change done once by an admin (not in code):
+Until this is done the gate **reports but doesn't block** — a red check is
+just a red icon you can merge past. This is a repo-settings change, done once
+by a repo admin; it is not code.
 
-1. GitHub → **Settings → Branches → Add branch protection rule**.
-2. Branch name pattern: `staging`.
-3. Tick **Require status checks to pass before merging**, search for and
-   select **`Typecheck, lint & test`** (the check appears in the search only
-   after it has run at least once — open any PR first).
-4. Leave "Require branches to be up to date" off unless you want every open
-   PR to re-run CI after each merge (safer, but adds a re-run per merge —
-   the `push`-to-`staging` run already covers the merged result).
-5. Repeat steps 1–3 for `main`.
+The exact check name to require is **`Typecheck, lint & test`**. It only
+appears in GitHub's search box after it has run at least once, which it has
+(PR #159).
 
-Or via `gh` (same effect, per branch):
+Use a **ruleset**, not classic branch protection: one ruleset targets
+`staging` **and** `main` together, whereas classic needs a separate rule per
+branch. Rulesets are also where GitHub is putting new functionality.
+
+1. GitHub → **Settings → Rules → Rulesets → New ruleset → New branch ruleset**.
+2. Name it `PR gate`; set **Enforcement status: Active**.
+3. Under **Target branches → Add target**, add `staging`, then add `main`
+   (two targets, one ruleset).
+4. Tick **Require status checks to pass**, then **Add checks** → search
+   `Typecheck, lint & test` → select it.
+5. Leave **Require branches to be up to date before merging** off unless you
+   want every open PR to re-run CI after each merge to the base. It's safer
+   but costs a re-run per merge, and the `push`-to-`staging` run already
+   covers the merged result.
+6. Tick **Block force pushes**. Leave "Require a pull request before merging"
+   on if you want the no-direct-push rule enforced rather than conventional.
+7. **Create**.
+
+Equivalent via `gh` — one call covers both branches:
 
 ```bash
-gh api -X PUT repos/Kedaipal/kedaipal/branches/staging/protection --input - <<'EOF'
+gh api -X POST repos/Kedaipal/kedaipal/rulesets --input - <<'EOF'
 {
-  "required_status_checks": { "strict": false, "contexts": ["Typecheck, lint & test"] },
-  "enforce_admins": false,
-  "required_pull_request_reviews": null,
-  "restrictions": null
+  "name": "PR gate",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["refs/heads/staging", "refs/heads/main"], "exclude": [] } },
+  "rules": [
+    { "type": "non_fast_forward" },
+    { "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": false,
+        "required_status_checks": [{ "context": "Typecheck, lint & test" }]
+      }
+    }
+  ]
 }
 EOF
 ```
 
-A side effect worth knowing: with required checks on, **direct pushes** to
-`staging`/`main` are blocked unless the commit already has a passing check —
-which enforces the "everything goes through a PR" rule the project already
-follows.
+Verify it took effect:
+
+```bash
+gh api repos/Kedaipal/kedaipal/rulesets --jq '.[] | {name, enforcement}'
+```
+
+Two things worth knowing before you turn it on:
+
+- **It applies to you too.** With the ruleset active, a direct `git push` to
+  `staging` or `main` is rejected unless the commit already carries a passing
+  check. That enforces the PR-only rule the project already follows by hand,
+  but it will bite if you're used to pushing a quick fix straight to
+  `staging`. Bypass is available under the ruleset's **Bypass list** if you
+  add yourself — leaving it empty is the stricter, recommended setting.
+- **Plan check:** rulesets and required checks are free here because
+  `Kedaipal/kedaipal` is a **public** repo. On a Free org a *private* repo
+  can't use them at all — worth remembering if the repo is ever flipped
+  private.
+
+## Running the gate locally
+
+`pnpm gate` runs exactly what CI runs, in the same order:
+
+```bash
+pnpm gate
+```
+
+That's `pnpm lint && pnpm typecheck && pnpm test` — the same three commands
+as the workflow's three steps (CI keeps them separate so the Actions UI shows
+which one failed). Takes ~35 s on an M-series Mac.
+
+If you change a workflow file itself, two extra checks:
+
+```bash
+act --list -W .github/workflows/ci.yml   # parses the YAML, shows jobs + triggers
+brew install actionlint && actionlint    # static checker for expressions/syntax
+```
+
+A full local run of the workflow in Docker is possible —
+`act pull_request -W .github/workflows/ci.yml --container-architecture linux/amd64`
+— but it needs Docker Desktop running and pulls a large runner image. Note
+the currently-installed `act` (0.2.8x) is flagged for CVE-2026-34041/34042;
+`brew upgrade act` before using it that way. For this workflow it isn't worth
+it: the gate is three pnpm commands, and `pnpm gate` tests them honestly.
+
+**Note:** `pnpm lint` scans `src/` per `biome.json`. The config excludes
+`.claude/**` — without that, Biome walks into any Claude Code worktree left
+under `.claude/worktrees/` and aborts with "Found a nested root
+configuration". If lint ever fails that way again, a stray nested worktree is
+the cause.
 
 ## Known gaps (deferred to the full CI/CD ticket)
 
