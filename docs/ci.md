@@ -35,15 +35,38 @@ ran lint).
 
 Steps: checkout → pnpm → Node → `pnpm install --frozen-lockfile` → paraglide
 compile (`src/paraglide/` is gitignored; typecheck and tests need it) →
-`pnpm lint` → `pnpm typecheck` → `pnpm test`. Budget: `timeout-minutes: 10`
-(the whole gate runs in ~35 s locally; a few minutes on a runner).
+`pnpm lint` → `pnpm typecheck` → `pnpm test` → `pnpm build`. Budget:
+`timeout-minutes: 10` (~45 s locally; a couple of minutes on a runner).
+
+`pnpm build` is in the gate because **`convex-deploy` runs before the
+Cloudflare build**: a build-only breakage that reached `main` would deploy a
+new Convex backend against the old frontend, with no rollback step. Verifying
+the build before any deploy job removes that skew. It needs no `VITE_*`
+values — those are read at runtime, so the build is secret-free like the rest
+of the gate.
 
 **Toolchain is pinned from the repo, not the workflow:**
 
-- Node comes from [`.nvmrc`](../.nvmrc) (`node-version-file`) — currently 20,
-  matching `engines.node >= 20`. Bump `.nvmrc` once and CI + deploy follow.
+- Node comes from [`.nvmrc`](../.nvmrc) (`node-version-file`) — currently
+  **24**. Bump `.nvmrc` once and CI + deploy follow.
 - pnpm comes from `package.json` `packageManager` (`pnpm/action-setup@v4`
   reads it) — currently 10.18.0.
+
+**Why 24 specifically** (this bit is load-bearing — see the note below):
+production deploys had been running `node-version: lts/*`, which resolves to
+**24.18.0**, so 24 is what prod has actually been building on. Node 20 is
+**EOL since 2026-04-30** (no security patches, on the job that holds
+`CONVEX_DEPLOY_KEY` and `CLOUDFLARE_API_TOKEN`), and
+`@tanstack/react-start` — a build-time vite plugin — declares
+`engines.node: ">=22.12.0"`, which Node 20 does not satisfy. `engines.node`
+in `package.json` is `>=22.12.0` to match the strictest real constraint in
+the tree rather than the older, untrue `>=20`.
+
+> **Don't pin `.nvmrc` below 22.12.** The first cut of this workflow switched
+> deploy from `lts/*` to `.nvmrc` while `.nvmrc` still said `20`, which
+> silently downgraded the production toolchain by four majors onto the one
+> step no gate covered. Caught in review. If you bump `.nvmrc`, check it
+> against `@tanstack/react-start`'s `engines` first.
 
 No secrets or env vars are needed by the gate — `convex/_generated/` and
 `src/routeTree.gen.ts` are checked in, and the test suite (convex-test +
@@ -162,9 +185,12 @@ Two things worth knowing before you turn it on:
 pnpm gate
 ```
 
-That's `pnpm lint && pnpm typecheck && pnpm test` — the same three commands
-as the workflow's three steps (CI keeps them separate so the Actions UI shows
-which one failed). Takes ~35 s on an M-series Mac.
+That's `pnpm lint && pnpm typecheck && pnpm test && pnpm build` — the same
+four commands as the workflow's four steps (CI keeps them separate so the
+Actions UI shows which one failed). Takes ~45 s on an M-series Mac.
+
+It runs on whatever Node you have locally, which is **not** necessarily the
+pinned 24 — check with `node -v` if you're chasing a CI-only failure.
 
 If you change a workflow file itself, two extra checks:
 
@@ -188,16 +214,17 @@ the cause.
 
 ## Known gaps (deferred to the full CI/CD ticket)
 
-- **No build step in the gate.** A PR that breaks `vite build` but passes
-  tsc/lint/vitest only fails at deploy time — after Convex has already
-  deployed, before Cloudflare does (deploy-order skew). The build needs
-  `VITE_*` vars, so it belongs with the staging-environment work.
 - **`pnpm check` (Biome lint + format) is red on staging** (21 format
   errors as of Aug 2026). The gate deliberately runs `pnpm lint` only;
   format enforcement needs a one-off `biome format --write` cleanup first.
 - **Biome only scans `src/`** (`biome.json` `files.includes`) — `convex/`
   is not linted anywhere, in CI or locally.
-- **`deploy.yml` has no concurrency guard** — two rapid merges to `main`
-  race their deploy jobs.
+- **`deploy.yml`'s deploy jobs have no concurrency guard** — two rapid
+  merges to `main` still race `convex-deploy`/`deploy`. The *gate* jobs now
+  serialize per-branch, which has a side effect worth recognising: with
+  several merges in quick succession, a superseded queued gate is cancelled,
+  so `needs: gate` skips that run's deploy. That's safer than racing, but it
+  surfaces as a skipped/failed-looking deploy on `main` rather than an
+  explicit "superseded".
 - The deploy workflow's Convex env-var sync swallows failures
   (`|| echo "Warning..."`).

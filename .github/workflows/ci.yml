@@ -47,3 +47,10 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+      # Runs here, not just in deploy: `convex-deploy` runs BEFORE the
+      # Cloudflare build, so a build-only breakage would otherwise ship a new
+      # backend against the old frontend with no rollback step. Needs no
+      # VITE_* vars — those are read at runtime, not build time.
+      - name: Build
+        run: pnpm build
