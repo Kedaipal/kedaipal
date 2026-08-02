@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { ArrowLeft } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
@@ -109,6 +109,15 @@ export function ProductPageView({
 						</div>
 					</div>
 
+					{/* Description sits directly under the title, ahead of the option
+					    pickers: "what is this" is the question a buyer answers before
+					    "which size", and it used to sit below the custom-order card
+					    where it read as a footnote. Renders nothing at all when the
+					    seller hasn't written one — no empty block, no stray gap. */}
+					{product.description ? (
+						<ProductDescription text={product.description} />
+					) : null}
+
 					<OptionPills pp={pp} />
 					<PurchaseHints pp={pp} />
 					<CustomOrderCard
@@ -117,12 +126,6 @@ export function ProductPageView({
 							addVariantToCart(cart, p, variant, qty, custom)
 						}
 					/>
-
-					{product.description ? (
-						<div className="mt-4">
-							<Markdown>{product.description}</Markdown>
-						</div>
-					) : null}
 
 					{/* Purchase controls — fixed bottom bar on mobile (thumb reach),
 					    in-flow under the buy box on desktop (`lg:static`). One block,
@@ -162,6 +165,57 @@ export function ProductPageView({
 				</div>
 			</div>
 		</>
+	);
+}
+
+/**
+ * The seller's own copy, directly under the title. Markdown, so it keeps the
+ * line breaks and lists sellers write ingredients and lead times in.
+ *
+ * Clamped to three lines with a Read-more toggle, because moving it above the
+ * option pickers means its length now decides how far down the pickers sit.
+ * Measured on the dev catalog: a 240-character description already runs four
+ * lines at 430px and pushes the Size pills under the fixed purchase bar — and
+ * a seller listing ingredients, allergens and lead time writes far more than
+ * 240 characters. The clamp bounds that at three lines no matter what's typed,
+ * while the full text stays one tap away (and is always in the DOM, so it's
+ * still indexable and selectable).
+ */
+export function ProductDescription({ text }: { text: string }) {
+	const [expanded, setExpanded] = useState(false);
+	const [clamped, setClamped] = useState(false);
+	const ref = useRef<HTMLDivElement>(null);
+
+	// Only measure while collapsed: expanded, scrollHeight === clientHeight by
+	// definition, so re-checking there would decide the text no longer overflows
+	// and yank the "Show less" button out from under the reader.
+	useEffect(() => {
+		if (expanded) return;
+		const el = ref.current;
+		if (!el) return;
+		const check = () => setClamped(el.scrollHeight > el.clientHeight + 1);
+		check();
+		const observer = new ResizeObserver(check);
+		observer.observe(el);
+		return () => observer.disconnect();
+	}, [expanded]);
+
+	return (
+		<div className="mt-3">
+			<div ref={ref} className={expanded ? undefined : "line-clamp-3"}>
+				<Markdown>{text}</Markdown>
+			</div>
+			{clamped ? (
+				<button
+					type="button"
+					onClick={() => setExpanded((open) => !open)}
+					aria-expanded={expanded}
+					className="mt-1 py-1 text-sm font-medium text-accent underline-offset-2 hover:underline"
+				>
+					{expanded ? "Show less" : "Read more"}
+				</button>
+			) : null}
+		</div>
 	);
 }
 
