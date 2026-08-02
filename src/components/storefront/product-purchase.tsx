@@ -354,6 +354,35 @@ export function addVariantToCart(
 	);
 }
 
+/**
+ * One-tap add for a SINGLE-variant product (multi-variant products open the
+ * product page to pick options first, so the sole variant is unambiguous).
+ * Shared by the grid's card button and the landing's featured card so the
+ * min-quantity top-up logic has one author.
+ *
+ * A product with a minimum order quantity tops the cart up to it in one tap
+ * (the card shows a "Min N" chip, so the bigger add is expected); once met,
+ * +1 as usual. The top-up is clamped to the variant's remaining stock
+ * (hard-block only) so a single tap can never put more in the cart than can
+ * actually be bought.
+ */
+export function quickAddProductToCart(cart: UseCart, p: StorefrontProduct) {
+	const variant = p.variants[0];
+	if (!variant) return;
+	const inCart = cart.quantityForProduct(p._id);
+	const remainingToMin = (p.minQuantity ?? 1) - inCart;
+	const stockLeft =
+		variant.blockWhenOutOfStock === true
+			? Math.max(1, variant.onHand - inCart)
+			: Number.POSITIVE_INFINITY;
+	addVariantToCart(
+		cart,
+		p,
+		variant,
+		Math.max(1, Math.min(remainingToMin, stockLeft)),
+	);
+}
+
 /** Share/copy a product link: OS share sheet when available (the WhatsApp
  * path on mobile), clipboard + toast otherwise. `url` may be relative — it's
  * absolutized against the current origin at call time (SSR-safe: only ever

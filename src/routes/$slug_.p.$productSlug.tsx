@@ -191,6 +191,7 @@ function ProductNotFound() {
 			<Link
 				to="/$slug"
 				params={{ slug }}
+				activeOptions={{ exact: true }}
 				className="mt-1 inline-flex h-11 items-center rounded-xl bg-foreground px-4 text-sm font-medium text-background"
 			>
 				Browse the store

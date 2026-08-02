@@ -156,6 +156,7 @@ function CheckoutRoute() {
 					<Link
 						to="/$slug"
 						params={{ slug: retailer.slug }}
+						activeOptions={{ exact: true }}
 						aria-label={`Back to ${retailer.storeName}`}
 						className="tap-target flex size-9 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:text-foreground"
 					>
