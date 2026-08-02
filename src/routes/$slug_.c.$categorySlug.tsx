@@ -154,6 +154,7 @@ function CategoryNotFound() {
 			<Link
 				to="/$slug"
 				params={{ slug }}
+				activeOptions={{ exact: true }}
 				className="mt-1 inline-flex h-11 items-center rounded-xl bg-foreground px-4 text-sm font-medium text-background"
 			>
 				Browse all products
@@ -181,7 +182,7 @@ function CategorySkeleton() {
 				<Skeleton className="h-8 w-48" />
 			</div>
 			<section className="mt-2 px-5 lg:px-8">
-				<div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
+				<div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
 					{[0, 1, 2, 3].map((n) => (
 						<Skeleton key={n} className="aspect-square w-full rounded-2xl" />
 					))}
@@ -222,6 +223,7 @@ function CategoryRoute() {
 				<Link
 					to="/$slug"
 					params={{ slug: retailer.slug }}
+					activeOptions={{ exact: true }}
 					className="inline-flex w-fit items-center gap-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
 				>
 					<ArrowLeft className="size-4" aria-hidden />
@@ -242,6 +244,11 @@ function CategoryRoute() {
 			</div>
 
 			<section className="mt-2 px-5 lg:px-8">
+				{/* No category rail here. Once a buyer is inside a category the page
+				    already names it (h1 + blurb above) and the only move that
+				    matters is browsing what's in it; a row of sibling categories
+				    just competes with the products it sits on top of. "← All
+				    products" is the way back out. */}
 				<ProductGrid
 					retailerId={retailer._id}
 					cart={cart}
