@@ -49,11 +49,13 @@ No secrets or env vars are needed by the gate — `convex/_generated/` and
 `src/routeTree.gen.ts` are checked in, and the test suite (convex-test +
 edge-runtime) runs offline.
 
-## Branch protection (manual, one-time)
+## Branch protection (manual, one-time) — ✅ done 2026-08-02
 
 Until this is done the gate **reports but doesn't block** — a red check is
 just a red icon you can merge past. This is a repo-settings change, done once
-by a repo admin; it is not code.
+by a repo admin; it is not code. It is **already enabled** (see
+[Verifying it took effect](#verifying-it-took-effect)); the steps below are
+kept for reference and for re-creating it.
 
 The exact check name to require is **`Typecheck, lint & test`**. It only
 appears in GitHub's search box after it has run at least once, which it has
@@ -65,8 +67,16 @@ branch. Rulesets are also where GitHub is putting new functionality.
 
 1. GitHub → **Settings → Rules → Rulesets → New ruleset → New branch ruleset**.
 2. Name it `PR gate`; set **Enforcement status: Active**.
-3. Under **Target branches → Add target**, add `staging`, then add `main`
-   (two targets, one ruleset).
+3. Under **Target branches → Add target → Include by pattern**, enter
+   `staging`, then repeat for `main` (two targets, one ruleset). There is no
+   "pick a branch from a list" option — patterns are how you name a specific
+   branch.
+
+   **Enter the bare branch name — not `refs/heads/staging`.** The UI stores
+   the `refs/heads/` prefix itself; typing it would save
+   `refs/heads/refs/heads/staging` and match nothing. The fully-qualified
+   form is only for the REST API (the `gh` call below). Confirm what was
+   actually stored with the verify command at the end of this section.
 4. Tick **Require status checks to pass**, then **Add checks** → search
    `Typecheck, lint & test` → select it.
 5. Leave **Require branches to be up to date before merging** off unless you
@@ -99,11 +109,37 @@ gh api -X POST repos/Kedaipal/kedaipal/rulesets --input - <<'EOF'
 EOF
 ```
 
-Verify it took effect:
+### Verifying it took effect
+
+Check what the ruleset actually stored (targets should be **fully-qualified**
+here even though you typed bare names in the UI):
 
 ```bash
-gh api repos/Kedaipal/kedaipal/rulesets --jq '.[] | {name, enforcement}'
+gh api repos/Kedaipal/kedaipal/rulesets --jq '.[] | select(.name=="PR gate") | {targets: .conditions.ref_name.include, checks: [.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context]}'
 ```
+
+Expected: targets `["refs/heads/main","refs/heads/staging"]`, checks
+`["Typecheck, lint & test"]`.
+
+Better still, ask GitHub what is enforced on a branch — this is the aggregate
+of every ruleset, so it catches a rule that silently targets nothing:
+
+```bash
+gh api repos/Kedaipal/kedaipal/rules/branches/staging --jq '[.[].type]'
+```
+
+Expected: `["deletion","non_fast_forward","required_status_checks"]`.
+
+**Enabled 2026-08-02** — ruleset `PR gate` (id 20243331), active, targeting
+`main` + `staging`, requiring `Typecheck, lint & test`, strict off, bypass
+list empty. Confirmed enforcing on PR #159 (`mergeStateStatus: CLEAN`).
+
+A note on the older **`Basic safety net`** ruleset (id 18379053): it is
+`active` but its include list is **empty**, so it targets no branches and
+enforces nothing despite the name. Its two rules (`deletion`,
+`non_fast_forward`) are both carried by `PR gate`, so it is redundant — safe
+to delete, or give it targets if you want it to mean something. Worth knowing
+that an active-looking ruleset can protect nothing.
 
 Two things worth knowing before you turn it on:
 
