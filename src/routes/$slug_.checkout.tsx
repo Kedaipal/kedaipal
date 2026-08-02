@@ -179,6 +179,9 @@ function CheckoutRoute() {
 						confirmPushEnabled={retailer.confirmPushEnabled ?? false}
 						offerSelfCollect={retailer.offerSelfCollect ?? false}
 						offerDelivery={retailer.offerDelivery ?? true}
+						collectsFromCustomer={
+							retailer.deliveryCollectsFromCustomer ?? false
+						}
 						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
 						minOrderValue={retailer.minOrderValue}
 						pickupLocations={pickupLocations ?? []}

@@ -94,6 +94,7 @@ export const getQuoteContext = internalQuery({
 		origin: { latitude: number; longitude: number; label: string };
 		vehicleType: string;
 		booking: { apiKey?: string; apiSecret?: string };
+		deliveryDirection: "standard" | "collection";
 	} | null> => {
 		const retailer = await ctx.db.get(retailerId);
 		if (!retailer) return null;
@@ -113,6 +114,8 @@ export const getQuoteContext = internalQuery({
 				apiKey: retailer.deliveryBooking?.apiKey,
 				apiSecret: retailer.deliveryBooking?.apiSecret,
 			},
+			deliveryDirection:
+				retailer.deliveryBooking?.deliveryDirection ?? "standard",
 		};
 	},
 });
@@ -200,6 +203,20 @@ export const quoteForCheckout = action({
 				args.fulfilmentDate < Date.now() + 30 * 24 * 60 * 60 * 1000
 					? args.fulfilmentDate + NOON_MYT_OFFSET_MS
 					: undefined;
+			const storeStop = {
+				coordinates: {
+					latitude: context.origin.latitude,
+					longitude: context.origin.longitude,
+				},
+				address: context.origin.label,
+			};
+			const buyerStop = {
+				coordinates: {
+					latitude: args.latitude,
+					longitude: args.longitude,
+				},
+				address: args.address.trim().slice(0, 500) || "Delivery address",
+			};
 			const response = await callLalamove(
 				credentials,
 				"POST",
@@ -207,22 +224,15 @@ export const quoteForCheckout = action({
 				buildQuotationBody({
 					serviceType: context.vehicleType,
 					scheduleAt,
-					stops: [
-						{
-							coordinates: {
-								latitude: context.origin.latitude,
-								longitude: context.origin.longitude,
-							},
-							address: context.origin.label,
-						},
-						{
-							coordinates: {
-								latitude: args.latitude,
-								longitude: args.longitude,
-							},
-							address: args.address.trim().slice(0, 500) || "Delivery address",
-						},
-					],
+					// Collection service quotes the trip the rider will actually
+					// drive (buyer → store); route prices aren't guaranteed
+					// direction-symmetric (tolls, one-ways), and dispatch re-quotes
+					// the same direction — so the buyer-paid fee and the variance
+					// display stay honest.
+					stops:
+						context.deliveryDirection === "collection"
+							? [buyerStop, storeStop]
+							: [storeStop, buyerStop],
 				}),
 			);
 			const parsed = parseQuotationResponse(response);
@@ -417,18 +427,26 @@ export const applyWebhookEvent = internalMutation({
 				}
 
 				// Order auto-transitions ride order-status guards, so replayed /
-				// stale events are naturally idempotent here too.
+				// stale events are naturally idempotent here too. COLLECTION jobs
+				// update the JOB row only (86eyg0n8e): picked_up means the rider
+				// took the goods FROM the buyer and completed means they reached
+				// the SELLER — neither is "shipped/delivered to the customer", so
+				// the seller advances the order by hand (their custom stages tell
+				// the real story: collected → cleaning → …).
+				const collection = job.deliveryDirection === "collection";
 				const order = await ctx.db.get(job.orderId);
 				if (!order || order.status === "cancelled") return;
-				if (status === "picked_up" && SHIPPABLE_FROM.has(order.status)) {
-					await applyStatusTransition(ctx, order, "shipped", {
-						carrierTrackingUrl: job.shareLink ?? shareLink,
-					});
-				} else if (
-					status === "completed" &&
-					DELIVERABLE_FROM.has(order.status)
-				) {
-					await applyStatusTransition(ctx, order, "delivered");
+				if (!collection) {
+					if (status === "picked_up" && SHIPPABLE_FROM.has(order.status)) {
+						await applyStatusTransition(ctx, order, "shipped", {
+							carrierTrackingUrl: job.shareLink ?? shareLink,
+						});
+					} else if (
+						status === "completed" &&
+						DELIVERABLE_FROM.has(order.status)
+					) {
+						await applyStatusTransition(ctx, order, "delivered");
+					}
 				}
 				// Rider dropped off → pull the proof-of-delivery photo
 				// (isPODEnabled at place order). Scheduled regardless of the
@@ -475,9 +493,13 @@ export const applyWebhookEvent = internalMutation({
 				});
 				// Mirror the live-tracking link onto the order early (fill-if-unset)
 				// so the shipped message always carries it even if PICKED_UP arrives
-				// before we ever saw a shareLink on a status event.
+				// before we ever saw a shareLink on a status event. NOT for
+				// collection jobs: their order never auto-ships, and a later manual
+				// shipped-anchored advance would present the stale LEG-1 collection
+				// trip as shipment tracking — the link stays on the job row (seller
+				// card) instead.
 				const link = job.shareLink ?? shareLink;
-				if (link) {
+				if (link && job.deliveryDirection !== "collection") {
 					const order = await ctx.db.get(job.orderId);
 					if (order && !order.carrierTrackingUrl) {
 						await ctx.db.patch(order._id, {
@@ -626,6 +648,11 @@ type DispatchContext =
 			 * dialog so nobody is surprised when the rider calls the store). */
 			buyerContactFallback: boolean;
 			vehicleType: string;
+			/** "collection" reverses the trip: origin/sender are the BUYER's
+			 * side, destination/recipient the seller's (86eyg0n8e). Snapshotted
+			 * onto the job row at reserve so the webhook obeys what was booked,
+			 * not the live setting. */
+			deliveryDirection: "standard" | "collection";
 			credentials: LalamoveCredentials;
 	  };
 
@@ -677,6 +704,30 @@ async function dispatchContextForOrder(
 		order.deliveryAddress?.notes,
 		order.customerNote,
 	].filter((p): p is string => !!p && p.trim().length > 0);
+	const remarks = remarksParts.join(" · ").slice(0, 400) || undefined;
+	const storePoint = {
+		latitude: businessAddress.latitude,
+		longitude: businessAddress.longitude,
+		address: businessAddress.label,
+	};
+	const buyerPoint = {
+		latitude: address.latitude!,
+		longitude: address.longitude!,
+		address: formatDeliveryAddress(address),
+	};
+	const storeContact = { name: retailer.storeName, phone: sellerPhone };
+	const buyerContact = {
+		name: order.customer.name ?? "Customer",
+		phone: buyerMyPhone ?? sellerPhone,
+	};
+	// Collection service (86eyg0n8e): the whole trip reverses — rider collects
+	// at the BUYER's address (buyer becomes the sender contact, same +60
+	// fallback) and drops off at the store. Remarks always ride the recipient
+	// stop (the only remarks slot in Lalamove v3), which either way is the stop
+	// where the order ref matters at hand-over.
+	const collection =
+		(retailer.deliveryBooking as BookingConfig).deliveryDirection ===
+		"collection";
 	return {
 		ok: true,
 		orderId: order._id,
@@ -684,24 +735,20 @@ async function dispatchContextForOrder(
 		shortId: order.shortId,
 		buyerPaidFee: order.deliveryFee ?? 0,
 		origin: {
-			latitude: businessAddress.latitude,
-			longitude: businessAddress.longitude,
-			label: businessAddress.label,
+			latitude: collection ? buyerPoint.latitude : storePoint.latitude,
+			longitude: collection ? buyerPoint.longitude : storePoint.longitude,
+			label: collection ? buyerPoint.address : storePoint.address,
 		},
-		destination: {
-			latitude: address.latitude!,
-			longitude: address.longitude!,
-			address: formatDeliveryAddress(address),
-		},
-		sender: { name: retailer.storeName, phone: sellerPhone },
+		destination: collection ? storePoint : buyerPoint,
+		sender: collection ? buyerContact : storeContact,
 		recipient: {
-			name: order.customer.name ?? "Customer",
-			phone: buyerMyPhone ?? sellerPhone,
-			remarks: remarksParts.join(" · ").slice(0, 400) || undefined,
+			...(collection ? storeContact : buyerContact),
+			remarks,
 		},
 		buyerContactFallback: buyerMyPhone === null,
 		vehicleType:
 			(retailer.deliveryBooking as BookingConfig).vehicleType ?? "MOTORCYCLE",
+		deliveryDirection: collection ? "collection" : "standard",
 		credentials,
 	};
 }
@@ -894,6 +941,7 @@ export const confirmBooking = action({
 				retailerId: context.retailerId,
 				quotationId: args.quotationId,
 				vehicleType: args.vehicleType ?? context.vehicleType,
+				deliveryDirection: context.deliveryDirection,
 			});
 		} catch {
 			return {
@@ -972,6 +1020,9 @@ export const reserveBooking = internalMutation({
 		retailerId: v.id("retailers"),
 		quotationId: v.string(),
 		vehicleType: v.string(),
+		deliveryDirection: v.optional(
+			v.union(v.literal("standard"), v.literal("collection")),
+		),
 	},
 	handler: async (ctx, args): Promise<Id<"deliveryJobs">> => {
 		const jobs = await ctx.db
@@ -994,6 +1045,10 @@ export const reserveBooking = internalMutation({
 			costActual: 0, // real figure patched in at commit (never client-supplied)
 			quotationId: args.quotationId,
 			vehicleType: args.vehicleType,
+			// "standard" stays unset (one spelling for the default) — only a
+			// collection booking changes webhook behaviour.
+			deliveryDirection:
+				args.deliveryDirection === "collection" ? "collection" : undefined,
 			createdAt: now,
 			updatedAt: now,
 		});
@@ -1035,8 +1090,8 @@ export const commitBooking = internalMutation({
 			updatedAt: now,
 		});
 		// Mirror the tracking link early (fill-if-unset) — same posture as the
-		// DRIVER_ASSIGNED webhook path.
-		if (args.shareLink) {
+		// DRIVER_ASSIGNED webhook path, including its collection exclusion.
+		if (args.shareLink && job.deliveryDirection !== "collection") {
 			const order = await ctx.db.get(job.orderId);
 			if (order && !order.carrierTrackingUrl) {
 				await ctx.db.patch(order._id, {
@@ -1101,6 +1156,7 @@ export const getPodContext = internalQuery({
 		providerOrderId: string;
 		orderId: Id<"orders">;
 		credentials: LalamoveCredentials;
+		deliveryDirection: "standard" | "collection";
 	} | null> => {
 		const job = await ctx.db.get(jobId);
 		// Reservations have no provider order to read; already-stored jobs are
@@ -1117,6 +1173,7 @@ export const getPodContext = internalQuery({
 			providerOrderId: job.providerOrderId,
 			orderId: job.orderId,
 			credentials,
+			deliveryDirection: job.deliveryDirection ?? "standard",
 		};
 	},
 });
@@ -1193,6 +1250,12 @@ export const fetchPodImages = internalAction({
 			storageIds,
 		});
 		if (!stored) return; // lost an idempotency race — mutation cleaned our blobs
+
+		// Collection jobs keep the photo as the SELLER's hand-over record only —
+		// it shows the rider dropping the buyer's gear at the seller's own
+		// doorstep, and the order isn't delivered, so the "Delivered! 📸"
+		// follow-up would be flatly wrong for the buyer.
+		if (context.deliveryDirection === "collection") return;
 
 		const imageUrls: string[] = [];
 		for (const id of storageIds) {
@@ -1419,6 +1482,12 @@ export const getDeliveryJob = query({
 		 * manual parcel-courier surface when it's true (86eyff02p). Distinct from
 		 * `blockReason === null`, which is about THIS order being bookable now. */
 		bookingEnabled: boolean;
+		/** Which way the rider travels (86eyg0n8e): the latest job's frozen
+		 * direction when one exists (a completed card describes what happened),
+		 * else the live setting (what the Book button WILL do). "collection"
+		 * relabels the card ("Send rider to collect") and lifts the
+		 * manual-advance gate — the webhook never drives a collection order. */
+		deliveryDirection: "standard" | "collection";
 	} | null> => {
 		const order = await resolveSharedOrder(ctx, { shortId });
 		if (!order) return null;
@@ -1470,6 +1539,10 @@ export const getDeliveryJob = query({
 		return {
 			promptBookOnPacked,
 			bookingEnabled: retailer.deliveryBooking?.enabled === true,
+			deliveryDirection:
+				latest?.deliveryDirection ??
+				retailer.deliveryBooking?.deliveryDirection ??
+				"standard",
 			job: latest
 				? {
 						status: latest.status,

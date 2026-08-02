@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { BookDeliveryCard } from "./book-delivery-card";
@@ -84,12 +90,11 @@ describe("BookDeliveryCard — completed job", () => {
 
 	it("shows the rider's proof-of-delivery photos when present", () => {
 		state.dispatch = completedDispatch();
-		(
-			state.dispatch as { job: { podImageUrls?: string[] } }
-		).job.podImageUrls = [
-			"https://files.convex.dev/pod-1.jpg",
-			"https://files.convex.dev/pod-2.jpg",
-		];
+		(state.dispatch as { job: { podImageUrls?: string[] } }).job.podImageUrls =
+			[
+				"https://files.convex.dev/pod-1.jpg",
+				"https://files.convex.dev/pod-2.jpg",
+			];
 		render(<BookDeliveryCard order={deliveredOrder} />);
 
 		expect(screen.getByText("Delivery photo from the rider")).toBeTruthy();
@@ -101,7 +106,10 @@ describe("BookDeliveryCard — completed job", () => {
 	});
 
 	it("degrades gracefully when the completed job has no driver or share link", () => {
-		state.dispatch = completedDispatch({ driver: undefined, shareLink: undefined });
+		state.dispatch = completedDispatch({
+			driver: undefined,
+			shareLink: undefined,
+		});
 		render(<BookDeliveryCard order={deliveredOrder} />);
 
 		expect(screen.getByText("Delivered")).toBeTruthy();
@@ -124,7 +132,11 @@ describe("BookDeliveryCard — dispatch dialog vehicle choice", () => {
 			buyerContactFallback: false,
 		});
 		state.action = prepare;
-		state.dispatch = { promptBookOnPacked: false, blockReason: null, job: null };
+		state.dispatch = {
+			promptBookOnPacked: false,
+			blockReason: null,
+			job: null,
+		};
 		const confirmedOrder = {
 			...deliveredOrder,
 			status: "confirmed",
@@ -146,5 +158,63 @@ describe("BookDeliveryCard — dispatch dialog vehicle choice", () => {
 				vehicleType: "CAR",
 			}),
 		);
+	});
+});
+
+describe("BookDeliveryCard — collection service (86eyg0n8e)", () => {
+	const confirmedOrder = {
+		shortId: "ORD-COLL",
+		deliveryMethod: "delivery",
+		status: "confirmed",
+		currency: "MYR",
+		paymentStatus: "received",
+	} as unknown as Doc<"orders">;
+
+	it("bookable collection order: header + button read 'collect', never 'Book delivery'", () => {
+		state.dispatch = {
+			promptBookOnPacked: false,
+			bookingEnabled: true,
+			deliveryDirection: "collection",
+			blockReason: null,
+			job: null,
+		};
+		render(<BookDeliveryCard order={confirmedOrder} />);
+
+		expect(screen.getByText("Lalamove Collection")).toBeTruthy();
+		expect(screen.getByText("Send rider to collect")).toBeTruthy();
+		expect(screen.queryByText("Book delivery")).toBeNull();
+	});
+
+	it("completed collection job: 'Arrived' pill, collected-from-customer record, seller-only photo label", () => {
+		state.dispatch = {
+			...completedDispatch(),
+			deliveryDirection: "collection",
+			job: {
+				...completedDispatch().job,
+				podImageUrls: ["https://example.com/pod.jpg"],
+			},
+		};
+		render(<BookDeliveryCard order={deliveredOrder} />);
+
+		// The trip ended at the SELLER's outlet — "Delivered" would misread.
+		expect(screen.getByText("Arrived")).toBeTruthy();
+		expect(screen.queryByText("Delivered")).toBeNull();
+		expect(
+			screen.getByText(/collected this order from your customer/),
+		).toBeTruthy();
+		expect(screen.getByText(/not sent to the buyer/)).toBeTruthy();
+	});
+
+	it("standard dispatch payload keeps every existing label (regression pin)", () => {
+		state.dispatch = {
+			...completedDispatch(),
+			deliveryDirection: "standard",
+		};
+		render(<BookDeliveryCard order={deliveredOrder} />);
+		expect(screen.getByText("Lalamove Delivery")).toBeTruthy();
+		expect(screen.getByText("Delivered")).toBeTruthy();
+		expect(
+			screen.getByText("This order was delivered by a Lalamove rider."),
+		).toBeTruthy();
 	});
 });

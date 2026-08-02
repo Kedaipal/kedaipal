@@ -35,6 +35,9 @@ interface AddressEditDialogProps {
 	/** The order's fulfilment day (epoch-ms MYT midnight) — a live re-quote is
 	 * priced for THAT day, matching how the original checkout quoted it. */
 	fulfilmentDate?: number;
+	/** Collection-service order (86eyg0n8e): the rider collects FROM this
+	 * address — the dialog's labels and quote lines say so. */
+	collectsFromCustomer?: boolean;
 }
 
 function toFormValues(
@@ -63,6 +66,7 @@ export function AddressEditDialog({
 	retailerId,
 	subtotal,
 	fulfilmentDate,
+	collectsFromCustomer = false,
 }: AddressEditDialogProps) {
 	const updateAddress = useMutation(api.orders.updateDeliveryAddress);
 	const [serverError, setServerError] = useState<string | null>(null);
@@ -160,7 +164,9 @@ export function AddressEditDialog({
 				>
 					<div className="flex items-center justify-between border-b border-border px-5 py-3">
 						<Dialog.Title className="text-base font-semibold">
-							Edit delivery address
+							{collectsFromCustomer
+								? "Edit collection address"
+								: "Edit delivery address"}
 						</Dialog.Title>
 						<Dialog.Close asChild>
 							<button
@@ -198,18 +204,22 @@ export function AddressEditDialog({
 								// hand-typed address here would be a dead end. Every other mode
 								// keeps the manual escape hatch. See 86eye50qv.
 								allowManualEntry={!isLiveMode}
+								collectsFromCustomer={collectsFromCustomer}
 							/>
 							{/* Live-priced store: the new address's rider price, shown
 							    BEFORE saving — the save stays disabled until it resolves. */}
 							{isLiveMode ? (
 								!hasCoords ? (
 									<p className="mt-4 rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
-										Pick your address from the suggestions to get the delivery
-										price for it.
+										Pick your address from the suggestions to get the{" "}
+										{collectsFromCustomer ? "collection" : "delivery"} price for
+										it.
 									</p>
 								) : liveQuote.state === "quoted" ? (
 									<p className="mt-4 rounded-lg bg-accent/10 px-3 py-2 text-sm text-accent-emphasis">
-										Delivery to this address:{" "}
+										{collectsFromCustomer
+											? "Collection from this address:"
+											: "Delivery to this address:"}{" "}
 										<b>
 											{liveQuote.fee === 0
 												? "Free"
@@ -223,9 +233,10 @@ export function AddressEditDialog({
 										role="alert"
 										className="mt-4 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
 									>
-										This address is too far — the delivery rider service
-										doesn&apos;t cover it. Pick an address closer to the store,
-										or message the store to sort it out.
+										This address is too far — the{" "}
+										{collectsFromCustomer ? "collection" : "delivery"} rider
+										service doesn&apos;t cover it. Pick an address closer to the
+										store, or message the store to sort it out.
 									</p>
 								) : liveQuote.state === "store_unavailable" ? (
 									// Seller-side breakage — retrying can't help the buyer.
@@ -233,9 +244,10 @@ export function AddressEditDialog({
 										role="alert"
 										className="mt-4 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
 									>
-										Delivery pricing isn&apos;t working for this store right now
-										— it&apos;s on the store&apos;s side, not yours. Message
-										them on WhatsApp to sort it out.
+										{collectsFromCustomer ? "Collection" : "Delivery"} pricing
+										isn&apos;t working for this store right now — it&apos;s on
+										the store&apos;s side, not yours. Message them on WhatsApp
+										to sort it out.
 									</p>
 								) : liveQuote.state === "unavailable" ? (
 									<p

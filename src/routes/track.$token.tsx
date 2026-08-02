@@ -44,11 +44,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { getConvexHttpClient } from "../lib/convex-server";
 import { qrFilenameBase, saveImageFromUrl } from "../lib/download";
-import {
-	convexErrorMessage,
-	formatMyMobile,
-	formatPrice,
-} from "../lib/format";
+import { convexErrorMessage, formatMyMobile, formatPrice } from "../lib/format";
 import {
 	deriveMapsUrl,
 	googleMapsNavUrl,
@@ -311,6 +307,10 @@ function TrackingRoute() {
 
 	const deliveryMethod = (order.deliveryMethod ?? "delivery") as DeliveryMethod;
 	const isSelfCollect = deliveryMethod === "self_collect";
+	// Collection service (86eyg0n8e, frozen at order create): the rider picks
+	// up FROM this buyer's address — every "Deliver…" label flips to collection
+	// wording so the page never claims something is being sent to them.
+	const isCollection = order.deliveryDirection === "collection";
 	const statusConfig = getStatusConfig(
 		deliveryMethod,
 		order.statusLabels,
@@ -868,12 +868,13 @@ function TrackingRoute() {
 				</section>
 			) : null}
 
-			{/* Delivery address — shown for delivery orders that have an address */}
+			{/* Delivery address — shown for delivery orders that have an address.
+			    Collection orders: this is where the rider collects FROM. */}
 			{!isSelfCollect && order.deliveryAddress ? (
 				<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 					<div className="flex items-center justify-between">
 						<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-							Deliver to
+							{isCollection ? "Collect from" : "Deliver to"}
 						</p>
 						{canEditAddress ? (
 							<button
@@ -920,7 +921,9 @@ function TrackingRoute() {
 					? order.pickupSnapshot?.locationType === "drop_off"
 						? "Drop-off"
 						: "Self Collect"
-					: "Delivery"}
+					: isCollection
+						? "Collection from your address"
+						: "Delivery"}
 			</div>
 
 			{/* Fulfilment date the buyer chose — reassures them the seller has it. */}
@@ -931,7 +934,9 @@ function TrackingRoute() {
 						? order.pickupSnapshot?.locationType === "drop_off"
 							? "Meet on "
 							: "Collect on "
-						: "Delivery on "}
+						: isCollection
+							? "We collect on "
+							: "Delivery on "}
 					<span className="font-semibold">
 						{formatFulfilmentDate(order.fulfilmentDate)}
 					</span>
@@ -946,6 +951,7 @@ function TrackingRoute() {
 				retailerId={order.retailerId}
 				subtotal={order.subtotal}
 				fulfilmentDate={order.fulfilmentDate}
+				collectsFromCustomer={isCollection}
 			/>
 
 			<IvePaidDialog
@@ -1023,7 +1029,7 @@ function TrackingRoute() {
 				{/* Frozen delivery charge — same reconciliation rule as the pickup fee. */}
 				{order.deliveryFee && order.deliveryFee > 0 ? (
 					<div className="flex items-center justify-between px-3 text-sm text-muted-foreground">
-						<span>Delivery fee</span>
+						<span>{isCollection ? "Collection fee" : "Delivery fee"}</span>
 						<span className="tabular-nums">
 							{formatPrice(order.deliveryFee, order.currency)}
 						</span>
@@ -1495,6 +1501,7 @@ function SendOrderCard({
 		deliveryFee: order.deliveryFee,
 		deliveryFeePending: order.deliveryFeePending,
 		deliveryMethod: order.deliveryMethod,
+		deliveryDirection: order.deliveryDirection,
 		deliveryAddress: order.deliveryAddress,
 		pickupSnapshot: order.pickupSnapshot,
 		fulfilmentDate: order.fulfilmentDate,

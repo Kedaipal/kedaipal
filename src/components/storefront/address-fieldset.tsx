@@ -76,8 +76,14 @@ export const AddressFieldset = withFieldGroup({
 		 * coordinates (flat / free / radius-arrange) keep the escape hatch.
 		 */
 		allowManualEntry: true,
+		/**
+		 * Collection-service store (86eyg0n8e): the rider COLLECTS from this
+		 * address instead of delivering to it — the legend and notes label say
+		 * so, since "Delivery address" would read backwards to the buyer.
+		 */
+		collectsFromCustomer: false,
 	},
-	render: ({ group, retailerId, allowManualEntry }) => {
+	render: ({ group, retailerId, allowManualEntry, collectsFromCustomer }) => {
 		function handleAutocompleteSelect(payload: GoogleSelectedAddress) {
 			const parsed = parseGoogleAddress(
 				payload.addressComponents,
@@ -143,7 +149,11 @@ export const AddressFieldset = withFieldGroup({
 			<group.AppField name="notes">
 				{(field) => (
 					<field.TextareaField
-						label="Delivery notes (optional)"
+						label={
+							collectsFromCustomer
+								? "Collection notes (optional)"
+								: "Delivery notes (optional)"
+						}
 						placeholder="Landmark, gate code, courier instructions"
 						rows={2}
 					/>
@@ -199,7 +209,9 @@ export const AddressFieldset = withFieldGroup({
 
 		return (
 			<fieldset className="flex flex-col gap-3 rounded-xl border border-border bg-card/40 p-4">
-				<legend className="px-1 text-sm font-medium">Delivery address</legend>
+				<legend className="px-1 text-sm font-medium">
+					{collectsFromCustomer ? "Collection address" : "Delivery address"}
+				</legend>
 
 				<group.Subscribe selector={(s) => s.values}>
 					{(values) => {

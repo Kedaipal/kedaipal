@@ -23,12 +23,7 @@ import {
 	Truck,
 	User,
 } from "lucide-react";
-import {
-	type ChangeEvent,
-	type ReactNode,
-	useEffect,
-	useState,
-} from "react";
+import { type ChangeEvent, type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
@@ -345,13 +340,21 @@ function OrderDetailRoute() {
 	// their delivery charge). They never ship parcels, so no manual courier
 	// surface is offered anywhere on this page — 86eyff02p.
 	const lalamoveVendor = dispatchInfo?.bookingEnabled === true;
+	// Collection service (86eyg0n8e): the rider collects FROM the customer, so
+	// the webhook only ever moves the JOB — the order status stays the
+	// seller's to advance by hand throughout.
+	const collectionService = dispatchInfo?.deliveryDirection === "collection";
 	// The rider's webhook is demonstrably driving this order (active job + at
 	// least one event applied) — manual shipped/delivered advances are gated
 	// behind a confirm so the buyer isn't messaged early / without the tracking
 	// link. Webhook-less sellers (lastEventAt never set) keep manual control —
-	// that's their documented path.
+	// that's their documented path. Never true for collection orders: their
+	// webhook deliberately doesn't drive order status, so the "moves on its
+	// own" gate would both lie and strand the seller.
 	const riderAutoUpdates =
-		!!dispatchInfo?.job && riderDrivesOrderStatus(dispatchInfo.job);
+		!!dispatchInfo?.job &&
+		!collectionService &&
+		riderDrivesOrderStatus(dispatchInfo.job);
 	const crmCustomer = useQuery(
 		api.customers.get,
 		order?.customerId ? { customerId: order.customerId } : "skip",
@@ -650,10 +653,16 @@ function OrderDetailRoute() {
 											// shareLink onto carrierTrackingUrl, but a booked order
 											// must never be re-prompted even if that link is
 											// missing). Webhook-driven orders never reach here at
-											// all — the button is disabled.
+											// all — the button is disabled. Collection stores skip
+											// the prompt entirely: their rider trip is buyer→store
+											// (booked from the Collection card at confirm time), so
+											// offering "book a rider" at the shipped moment would
+											// dispatch ANOTHER collection — the return leg is its
+											// own order (86eyg0n8e, Leg 2 out of scope).
 											if (
 												nextStage.anchor === "shipped" &&
 												order.deliveryMethod === "delivery" &&
+												!collectionService &&
 												!hasActiveRiderBooking &&
 												!order.trackingNo &&
 												!order.carrierTrackingUrl
@@ -723,8 +732,8 @@ function OrderDetailRoute() {
 						</p>
 						{order.confirmationPushFailureKind === "system" ? (
 							<p className="mt-1 text-sm text-amber-950 dark:text-amber-100">
-								A WhatsApp problem on our side stopped the confirmation for
-								this order — the buyer's number{" "}
+								A WhatsApp problem on our side stopped the confirmation for this
+								order — the buyer's number{" "}
 								<b>{formatPhone(order.customer.waPhone ?? "")}</b> looks fine,
 								so no need to chase them about it. The order is confirmed and
 								they can see and pay for it on their order page. Message them
@@ -1254,12 +1263,16 @@ function OrderDetailRoute() {
 				<BookDeliveryCard order={order} bookRequestToken={bookRequestToken} />
 			) : null}
 
-			{/* Delivery address (delivery orders only) */}
+			{/* Delivery address (delivery orders only). Collection orders relabel:
+			    this is where the rider COLLECTS, not where anything is delivered
+			    (frozen order.deliveryDirection, 86eyg0n8e). */}
 			{!isSelfCollect && order.deliveryAddress ? (
 				<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 					<div className="flex items-center justify-between">
 						<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-							Delivery Address
+							{order.deliveryDirection === "collection"
+								? "Collect From"
+								: "Delivery Address"}
 						</p>
 						<div className="flex items-center gap-1">
 							<button

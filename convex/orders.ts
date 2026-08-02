@@ -895,6 +895,16 @@ export const create = mutation({
 			deliveryFeePending = resolved.pending;
 			deliveryFeePendingReason = resolved.pendingReason;
 		}
+		// Frozen trip direction (86eyg0n8e): stamped from the store's live
+		// collection-service setting so buyer surfaces (tracking labels, WA
+		// confirm) stay true to what this order promised even if the seller
+		// toggles the mode later — the pickupSnapshot posture. Standard stays
+		// unset (one spelling for the default; every pre-existing order).
+		const deliveryDirection =
+			effectiveDeliveryMethod === "delivery" &&
+			retailer.deliveryBooking?.deliveryDirection === "collection"
+				? ("collection" as const)
+				: undefined;
 
 		// The chosen pickup point's frozen fee and the delivery charge ride the
 		// same extras seam as the mockup quote — total = subtotal + fees from the
@@ -974,6 +984,7 @@ export const create = mutation({
 			source: "storefront",
 			customer: sanitizedCustomer,
 			deliveryMethod: effectiveDeliveryMethod,
+			deliveryDirection,
 			deliveryAddress: sanitizedAddress,
 			pickupLocationId: resolvedPickupLocationId,
 			pickupSnapshot: sanitizedPickupSnapshot,
@@ -1177,9 +1188,18 @@ export const get = query({
 		const isBuyerRead = token !== undefined;
 		// Rider drop-off photo (Lalamove POD) — one indexed read, and only on
 		// the delivered end-state of delivery orders, so the hot pending/active
-		// tracking path pays nothing.
+		// tracking path pays nothing. Collection orders (86eyg0n8e) never
+		// surface it here: their POD shows the rider dropping the buyer's gear
+		// at the SELLER's doorstep — captioning that "taken by your rider at
+		// drop-off" once the seller manually marks the order delivered would
+		// read as nonsense to the buyer. The seller still sees it on the
+		// dispatch card (getDeliveryJob).
 		let podImageUrls: string[] | undefined;
-		if (order.status === "delivered" && order.deliveryMethod === "delivery") {
+		if (
+			order.status === "delivered" &&
+			order.deliveryMethod === "delivery" &&
+			order.deliveryDirection !== "collection"
+		) {
 			const jobs = await ctx.db
 				.query("deliveryJobs")
 				.withIndex("by_order", (q) => q.eq("orderId", order._id))

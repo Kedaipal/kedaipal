@@ -429,6 +429,77 @@ shipped without job awareness (needs a per-order job lookup in
 - Seller-side awareness: browser order alerts (new order + booking failed)
   — see docs/order-notifications.md.
 
+## Collection service — Leg 1, rider collects FROM the buyer (86eyg0n8e)
+
+Bearcamp (tent/gear cleaning) runs the trip in **reverse**: the rider picks
+up at the **customer's address** and drops off at the seller's outlet. One
+store-level switch flips the whole feature:
+`retailers.deliveryBooking.deliveryDirection: "standard" | "collection"`
+(undefined = standard — every existing seller; toggle lives in the Lalamove
+settings section above prompt-on-packed). It sits on `deliveryBooking`, NOT
+the ticket's `deliveryConfig.lalamove` arm, because pricing-mode switches
+rebuild that arm wholesale while the booking object merges per-field
+(`promptBookOnPacked` precedent) — so a month on Flat pricing and back can
+never silently reset a collection store to standard. **Every branch is gated
+on `=== "collection"`, so standard-direction stores are behaviourally
+untouched.**
+
+Three freezes, one setting:
+
+- **`orders.deliveryDirection`** — stamped at create (pickupSnapshot
+  posture) so buyer surfaces stay true if the store toggles later. Drives:
+  checkout copy (section title "Collection address", "where should we
+  collect from?" flavour intro, rider-fee expectation line, date question
+  "When should we collect it?", fee lines "Collection"), the wa.me message
+  ("🚚 Collect from:", "Collection fee:", "🗓️ Collect from me on:"), the
+  WA confirm's method line ("We'll update you once collection from your
+  address is arranged." EN/MS/ZH — packed/shipped/delivered defaults stay
+  ship-flavoured on purpose: a collection store's real vocabulary is custom
+  stages, e.g. collected → cleaning → ready), the tracking page ("Collect
+  from", "Collection from your address", "We collect on", "Collection
+  fee") and the seller order page ("Collect From"). The public slug payload
+  carries the one-bit `deliveryCollectsFromCustomer` for checkout.
+- **`deliveryJobs.deliveryDirection`** — snapshotted at `reserveBooking` so
+  the webhook obeys what was BOOKED, not the live setting.
+- **Dispatch swap** — `dispatchContextForOrder` swaps stops AND contacts:
+  origin/sender = buyer (same +60 fallback → seller number, buyer's real
+  number in remarks), destination/recipient = the outlet. The checkout
+  quote (`quoteForCheckout`) prices the same buyer→store direction (route
+  prices aren't guaranteed symmetric), so buyer-paid fee and dispatch
+  re-quote can't systematically drift.
+
+**The webhook only moves the JOB on a collection booking.** `picked_up`
+means "rider took the goods FROM the buyer" and `completed` means "they
+reached the seller" — neither is shipped/delivered *to the customer*, so
+order status stays the seller's to advance by hand (their custom stages
+tell the story). Three side-channels are closed with it:
+
+- **No `carrierTrackingUrl` mirror** (DRIVER_ASSIGNED + commitBooking): a
+  later manual shipped-anchored advance would otherwise present the stale
+  Leg-1 collection trip as shipment tracking. Live tracking stays on the
+  job row (seller card). Trade-off accepted (Zaki, 2 Aug): the buyer gets
+  no live "rider approaching you" link in v1 — the rider calls them (buyer
+  is the pickup contact); a track-page live view reading the job row is the
+  named follow-up.
+- **POD photo is seller-only**: it shows the rider dropping the buyer's
+  gear at the seller's own doorstep, so `fetchPodImages` skips the buyer
+  WhatsApp follow-up and `orders.get` never exposes `podImageUrls` on
+  collection orders (even after the seller manually marks delivered — the
+  caption "taken by your rider at drop-off" would read as nonsense). The
+  dispatch card keeps the thumbnails, labelled "kept for your records".
+- **The manual-advance gate lifts** (`riderAutoUpdates` in order detail):
+  the "moves to Shipped on its own" disabled-state would both lie and
+  strand a collection seller. The mark-shipped rider prompt is also
+  skipped — offering "book a rider" at the shipped moment would dispatch
+  ANOTHER buyer→store collection; the return journey is **Leg 2, out of
+  scope** (Bearcamp raises a separate order for it).
+
+Seller card copy flips throughout ("Lalamove Collection", "Send rider to
+collect", pills Finding rider → Heading to customer → Collected → Arrived,
+"Buyer paid for collection"). Pricing (`resolveDeliveryQuote`) is untouched
+— distance is symmetric; `deliveryFeePending`, radius/flat modes and the
+no-fee-pending-under-Lalamove rule all apply unchanged.
+
 ## Sandbox E2E — verified 21 Jul 2026
 
 Real sandbox pass with test keys (then platform-env-based; the same keys
@@ -494,3 +565,9 @@ Full step table, credential rules + the POD injector: [`dev-scripts.md`](./dev-s
 - DelyvaX as provider #2 (parcel couriers / courier choice).
 - Vendor onboarding guide (PDF): drafted with real Partner Portal
   screenshots; finalize once Kedaipal-side settings screenshots exist.
+- Collection Leg 2 (return journey after the seller's work) — today a
+  separate manual order; a "book return trip" that clones the order with
+  the direction flipped is the natural v2.
+- Buyer-facing live rider view on the tracking page for ACTIVE collection
+  jobs (read from the job row so it can't go stale — see the
+  no-carrierTrackingUrl-mirror decision above).

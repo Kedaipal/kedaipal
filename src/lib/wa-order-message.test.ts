@@ -151,3 +151,47 @@ describe("waOrderUrl", () => {
 		);
 	});
 });
+
+describe("buildOrderWaMessage — collection service (86eyg0n8e)", () => {
+	test("collection order says 'Collect from' with a collection fee line", () => {
+		const msg = buildOrderWaMessage({
+			...baseOrder,
+			total: 12500,
+			deliveryFee: 1500,
+			deliveryMethod: "delivery",
+			deliveryDirection: "collection",
+			deliveryAddress: {
+				line1: "12 Jalan Mawar",
+				city: "Kuala Lumpur",
+				state: "WP Kuala Lumpur",
+				postcode: "53100",
+				latitude: 3.2,
+				longitude: 101.7,
+			},
+			fulfilmentDate: Date.UTC(2026, 7, 10) - 8 * 60 * 60 * 1000,
+		});
+		expect(msg).toContain("🚚 Collect from: 12 Jalan Mawar");
+		expect(msg).toContain(`Collection fee: ${formatPrice(1500, "MYR")}`);
+		expect(msg).toContain("🗓️ Collect from me on:");
+		expect(msg).not.toContain("Deliver to");
+		expect(msg).not.toContain("Delivery fee");
+	});
+
+	test("standard delivery wording is untouched (regression pin)", () => {
+		const msg = buildOrderWaMessage({
+			...baseOrder,
+			total: 12500,
+			deliveryFee: 1500,
+			deliveryMethod: "delivery",
+			deliveryDirection: "standard",
+			deliveryAddress: {
+				line1: "12 Jalan Mawar",
+				city: "Kuala Lumpur",
+				state: "WP Kuala Lumpur",
+				postcode: "53100",
+			},
+		});
+		expect(msg).toContain("🚚 Deliver to: 12 Jalan Mawar");
+		expect(msg).toContain(`Delivery fee: ${formatPrice(1500, "MYR")}`);
+	});
+});

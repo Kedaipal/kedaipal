@@ -35,6 +35,10 @@ export interface WaOrderMessageInput {
 	 * checkout-time behaviour the delivery-charge feature shipped. */
 	deliveryFeePending?: boolean;
 	deliveryMethod?: "delivery" | "self_collect";
+	/** Frozen trip direction (86eyg0n8e): "collection" = the rider collects
+	 * FROM this address, so the message reads "Collect from", never
+	 * "Deliver to". */
+	deliveryDirection?: "standard" | "collection";
 	deliveryAddress?: {
 		line1: string;
 		line2?: string;
@@ -98,11 +102,12 @@ export function buildOrderWaMessage(order: WaOrderMessageInput): string {
 	// page and receipt show. An "arrange later" delivery order has no charge
 	// baked in yet (deliveryFeePending) — flag the total as provisional so the
 	// buyer isn't misled into thinking it's final.
+	const isCollection = order.deliveryDirection === "collection";
 	if (order.pickupFee && order.pickupFee > 0)
 		lines.push(`Pickup fee: ${formatPrice(order.pickupFee, order.currency)}`);
 	if (order.deliveryFee && order.deliveryFee > 0)
 		lines.push(
-			`Delivery fee: ${formatPrice(order.deliveryFee, order.currency)}`,
+			`${isCollection ? "Collection" : "Delivery"} fee: ${formatPrice(order.deliveryFee, order.currency)}`,
 		);
 	const deliveryFeePending = order.deliveryFeePending === true;
 	lines.push(
@@ -129,16 +134,23 @@ export function buildOrderWaMessage(order: WaOrderMessageInput): string {
 			lines.push("📍 Pickup");
 		}
 	} else if (order.deliveryAddress) {
-		lines.push(`🚚 Deliver to: ${formatAddressOneLine(order.deliveryAddress)}`);
+		lines.push(
+			`🚚 ${isCollection ? "Collect from" : "Deliver to"}: ${formatAddressOneLine(order.deliveryAddress)}`,
+		);
 		const mapsUrl = deriveMapsUrl(order.deliveryAddress);
 		if (mapsUrl) lines.push(`📍 ${mapsUrl}`);
 		if (order.deliveryAddress.notes)
 			lines.push(`📝 ${order.deliveryAddress.notes}`);
 	} else {
-		lines.push("🚚 Delivery");
+		lines.push(isCollection ? "🚚 Collection" : "🚚 Delivery");
 	}
 	if (order.fulfilmentDate !== undefined) {
-		const verb = method === "self_collect" ? "Collect" : "Deliver";
+		const verb =
+			method === "self_collect"
+				? "Collect"
+				: isCollection
+					? "Collect from me"
+					: "Deliver";
 		lines.push(`🗓️ ${verb} on: ${formatFulfilmentDate(order.fulfilmentDate)}`);
 	}
 	// Order note last, in a clearly delimited section. It sits AFTER the

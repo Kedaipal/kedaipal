@@ -39,10 +39,12 @@ afterEach(cleanup);
 function Harness({
 	initial = { ...emptyAddress },
 	allowManualEntry = true,
+	collectsFromCustomer = false,
 	onState,
 }: {
 	initial?: CheckoutAddressValues;
 	allowManualEntry?: boolean;
+	collectsFromCustomer?: boolean;
 	onState: (values: CheckoutAddressValues) => void;
 }) {
 	const form = useAppForm({
@@ -55,6 +57,7 @@ function Harness({
 				fields="address"
 				retailerId={undefined}
 				allowManualEntry={allowManualEntry}
+				collectsFromCustomer={collectsFromCustomer}
 			/>
 			<form.Subscribe selector={(s) => s.values.address}>
 				{(address) => {

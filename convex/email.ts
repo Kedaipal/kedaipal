@@ -38,6 +38,7 @@ export const getOrderForRetailerEmail = internalQuery({
 		currency: string;
 		customerName: string;
 		deliveryMethod: DeliveryMethod;
+		deliveryDirection: "standard" | "collection" | undefined;
 		pickupSnapshot: PickupSnapshot | undefined;
 		fulfilmentDate: number | undefined;
 		notifyEmail: string | undefined;
@@ -61,6 +62,7 @@ export const getOrderForRetailerEmail = internalQuery({
 			currency: order.currency,
 			customerName: order.customer.name ?? "Anonymous",
 			deliveryMethod: (order.deliveryMethod as DeliveryMethod | undefined) ?? "delivery",
+			deliveryDirection: order.deliveryDirection,
 			pickupSnapshot: order.pickupSnapshot,
 			fulfilmentDate: order.fulfilmentDate,
 			notifyEmail: retailer.notifyEmail,
@@ -95,6 +97,7 @@ async function sendMockupSellerEmail(
 		currency: string;
 		customerName: string;
 		deliveryMethod: DeliveryMethod;
+		deliveryDirection: "standard" | "collection" | undefined;
 		notifyEmail: string | undefined;
 		storeName: string;
 		locale: Locale;
@@ -118,6 +121,7 @@ async function sendMockupSellerEmail(
 		totalFormatted,
 		customerName: meta.customerName,
 		deliveryMethod: meta.deliveryMethod,
+		deliveryDirection: meta.deliveryDirection,
 		storeName: meta.storeName,
 		dashboardUrl,
 		mockupChangeNote: meta.mockupChangeNote,
@@ -149,6 +153,7 @@ export const notifyDeliveryJobFailed = internalAction({
 			currency: string;
 			customerName: string;
 			deliveryMethod: DeliveryMethod;
+			deliveryDirection: "standard" | "collection" | undefined;
 			notifyEmail: string | undefined;
 			storeName: string;
 			locale: Locale;
@@ -173,6 +178,7 @@ export const notifyDeliveryJobFailed = internalAction({
 				totalFormatted,
 				customerName: meta.customerName,
 				deliveryMethod: meta.deliveryMethod,
+				deliveryDirection: meta.deliveryDirection,
 				storeName: meta.storeName,
 				dashboardUrl,
 				jobFailureReason: reason,
@@ -226,6 +232,7 @@ export const notifyRetailerOrderAlert = internalAction({
 			currency: string;
 			customerName: string;
 			deliveryMethod: DeliveryMethod;
+			deliveryDirection: "standard" | "collection" | undefined;
 			pickupSnapshot: PickupSnapshot | undefined;
 			fulfilmentDate: number | undefined;
 			notifyEmail: string | undefined;
@@ -266,6 +273,7 @@ export const notifyRetailerOrderAlert = internalAction({
 			totalFormatted,
 			customerName: meta.customerName,
 			deliveryMethod: meta.deliveryMethod,
+			deliveryDirection: meta.deliveryDirection,
 			storeName: meta.storeName,
 			dashboardUrl,
 			requiresMockup: meta.requiresMockup,
@@ -321,6 +329,7 @@ export const notifyPaymentClaimed = internalAction({
 			currency: string;
 			customerName: string;
 			deliveryMethod: DeliveryMethod;
+			deliveryDirection: "standard" | "collection" | undefined;
 			notifyEmail: string | undefined;
 			storeName: string;
 			locale: Locale;
@@ -374,6 +383,7 @@ export const notifyPaymentClaimed = internalAction({
 				totalFormatted,
 				customerName: meta.customerName,
 				deliveryMethod: meta.deliveryMethod,
+				deliveryDirection: meta.deliveryDirection,
 				storeName: meta.storeName,
 				dashboardUrl,
 				paymentReference: meta.paymentReference,

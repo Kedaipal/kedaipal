@@ -130,6 +130,10 @@ export function BookDeliveryCard({
 
 	if (order.deliveryMethod !== "delivery" || !dispatch) return null;
 	const { job, blockReason, promptBookOnPacked } = dispatch;
+	// Collection service (86eyg0n8e): the rider collects FROM the customer and
+	// brings the goods here — every label on this card flips to say so, and the
+	// webhook only moves the job pill (the seller advances the order by hand).
+	const collection = dispatch.deliveryDirection === "collection";
 	const activeJob =
 		job &&
 		!["completed", "canceled", "expired", "rejected"].includes(job.status)
@@ -245,12 +249,12 @@ export function BookDeliveryCard({
 		<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 			<div className="flex items-center justify-between">
 				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-					Lalamove Delivery
+					{collection ? "Lalamove Collection" : "Lalamove Delivery"}
 				</p>
 				{activeJob ? (
-					<JobStatusPill status={activeJob.status} />
+					<JobStatusPill status={activeJob.status} collection={collection} />
 				) : completedJob ? (
-					<JobStatusPill status="completed" />
+					<JobStatusPill status="completed" collection={collection} />
 				) : null}
 			</div>
 
@@ -294,9 +298,9 @@ export function BookDeliveryCard({
 						</div>
 					) : (
 						<p className="text-muted-foreground">
-							Finding a rider… this usually takes a few minutes. When one picks
-							up, the buyer gets the shipped message with live tracking
-							automatically.
+							{collection
+								? "Finding a rider… this usually takes a few minutes. They'll collect from your customer's address and bring it here — you advance the order status yourself once it arrives."
+								: "Finding a rider… this usually takes a few minutes. When one picks up, the buyer gets the shipped message with live tracking automatically."}
 						</p>
 					)}
 					<div className="flex items-center justify-between text-xs text-muted-foreground">
@@ -332,7 +336,9 @@ export function BookDeliveryCard({
 			{completedJob ? (
 				<div className="flex flex-col gap-2 text-sm">
 					<p className="text-muted-foreground">
-						This order was delivered by a Lalamove rider.
+						{collection
+							? "A Lalamove rider collected this order from your customer and dropped it off with you."
+							: "This order was delivered by a Lalamove rider."}
 					</p>
 					{completedJob.driver ? (
 						<div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -363,12 +369,15 @@ export function BookDeliveryCard({
 							</a>
 						) : null}
 					</div>
-					{/* Rider's drop-off photo (proof of delivery) — the buyer got the
-					    same shot on WhatsApp. Tap opens full size. */}
+					{/* Rider's drop-off photo (proof of delivery). Standard: the buyer
+					    got the same shot on WhatsApp. Collection: seller-only — it
+					    shows the hand-over at THIS outlet, never sent to the buyer. */}
 					{completedJob.podImageUrls?.length ? (
 						<div className="flex flex-col gap-1.5">
 							<p className="text-xs text-muted-foreground">
-								Delivery photo from the rider
+								{collection
+									? "Drop-off photo from the rider (kept for your records — not sent to the buyer)"
+									: "Delivery photo from the rider"}
 							</p>
 							<div className="flex gap-2">
 								{completedJob.podImageUrls.map((url) => (
@@ -408,18 +417,21 @@ export function BookDeliveryCard({
 							</>
 						) : failedJob ? (
 							<>
-								<RefreshCw className="size-4" /> Rebook delivery
+								<RefreshCw className="size-4" />{" "}
+								{collection ? "Rebook collection" : "Rebook delivery"}
 							</>
 						) : (
 							<>
-								<Truck className="size-4" /> Book delivery
+								<Truck className="size-4" />{" "}
+								{collection ? "Send rider to collect" : "Book delivery"}
 							</>
 						)}
 					</Button>
 				) : (
 					<div className="flex flex-col gap-2">
 						<Button type="button" className="h-11 w-full" disabled>
-							<Truck className="size-4" /> Book delivery
+							<Truck className="size-4" />{" "}
+							{collection ? "Send rider to collect" : "Book delivery"}
 							{blockReason === "plan_gated" ? <ProBadge /> : null}
 						</Button>
 						<p className="text-xs text-muted-foreground">
@@ -452,10 +464,15 @@ export function BookDeliveryCard({
 			<Dialog open={quote !== null} onOpenChange={(o) => !o && setQuote(null)}>
 				<DialogContent>
 					<DialogHeader>
-						<DialogTitle>Book a Lalamove rider?</DialogTitle>
+						<DialogTitle>
+							{collection
+								? "Send a rider to collect?"
+								: "Book a Lalamove rider?"}
+						</DialogTitle>
 						<DialogDescription>
-							Today&apos;s price for this delivery. The price is locked for 5
-							minutes — confirm to dispatch.
+							{collection
+								? "Today's price to collect from your customer's address. The price is locked for 5 minutes — confirm to dispatch."
+								: "Today's price for this delivery. The price is locked for 5 minutes — confirm to dispatch."}
 						</DialogDescription>
 					</DialogHeader>
 					{quote ? (
@@ -498,7 +515,11 @@ export function BookDeliveryCard({
 								</span>
 							</div>
 							<div className="flex items-center justify-between text-xs text-muted-foreground">
-								<span>Buyer paid for delivery</span>
+								<span>
+									{collection
+										? "Buyer paid for collection"
+										: "Buyer paid for delivery"}
+								</span>
 								<span>{formatPrice(quote.buyerPaidFee, order.currency)}</span>
 							</div>
 							{order.paymentStatus !== "received" ? (
@@ -565,13 +586,20 @@ export function BookDeliveryCard({
 	);
 }
 
-function JobStatusPill({ status }: { status: string }) {
+function JobStatusPill({
+	status,
+	collection,
+}: {
+	status: string;
+	collection: boolean;
+}) {
 	// Delivered is a terminal, settled state — match the order status badge's
-	// green rather than the in-progress mint.
+	// green rather than the in-progress mint. Collection trips end at the
+	// SELLER's outlet, so "Delivered" would misread — "Arrived" it is.
 	if (status === "completed") {
 		return (
 			<span className="rounded-full bg-green-100 px-2.5 py-1 text-xs font-medium text-green-800 dark:bg-green-950 dark:text-green-200">
-				Delivered
+				{collection ? "Arrived" : "Delivered"}
 			</span>
 		);
 	}
@@ -579,9 +607,13 @@ function JobStatusPill({ status }: { status: string }) {
 		status === "assigning"
 			? "Finding rider"
 			: status === "ongoing"
-				? "Rider on the way"
+				? collection
+					? "Heading to customer"
+					: "Rider on the way"
 				: status === "picked_up"
-					? "Picked up"
+					? collection
+						? "Collected"
+						: "Picked up"
 					: status;
 	return (
 		<span className="rounded-full bg-accent/15 px-2.5 py-1 text-xs font-medium text-accent-emphasis">
@@ -589,4 +621,3 @@ function JobStatusPill({ status }: { status: string }) {
 		</span>
 	);
 }
-

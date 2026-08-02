@@ -67,6 +67,11 @@ interface CheckoutPageProps {
 	confirmPushEnabled: boolean;
 	offerSelfCollect: boolean;
 	offerDelivery: boolean;
+	/** Collection-service store (86eyg0n8e): the rider collects FROM the
+	 * buyer's address — every "delivery" label on this form flips to
+	 * collection wording so the buyer isn't told something is being sent to
+	 * them. Public flag `deliveryCollectsFromCustomer` on the slug payload. */
+	collectsFromCustomer: boolean;
 	minFulfilmentNoticeDays: number | undefined;
 	/** Store-wide minimum order value (minor units) — checkout blocks below it.
 	 * See convex/lib/minOrderRules.ts. */
@@ -171,6 +176,7 @@ export function CheckoutPage({
 	confirmPushEnabled,
 	offerSelfCollect,
 	offerDelivery,
+	collectsFromCustomer,
 	minFulfilmentNoticeDays,
 	minOrderValue,
 	pickupLocations,
@@ -621,11 +627,17 @@ export function CheckoutPage({
 				: overStockLine
 					? `Only ${stockCapFor(overStockLine.variantId)} × ${overStockLine.name} left — lower the quantity to continue`
 					: addressIncomplete
-						? "Add your delivery address to continue"
+						? collectsFromCustomer
+							? "Add your collection address to continue"
+							: "Add your delivery address to continue"
 						: quoteForDelivery?.kind === "calculating"
-							? "Calculating your delivery fee…"
+							? collectsFromCustomer
+								? "Calculating your collection fee…"
+								: "Calculating your delivery fee…"
 							: deliveryBlocked
-								? "We can't deliver to this address — see your order summary"
+								? collectsFromCustomer
+									? "We can't collect from this address — see your order summary"
+									: "We can't deliver to this address — see your order summary"
 								: null;
 
 	const submitButton = (
@@ -743,6 +755,11 @@ export function CheckoutPage({
 							const pickupFee = pickupFeeOf(selectedPickup);
 							const quote =
 								deliveryMethod === "delivery" ? quoteForDelivery : undefined;
+							// Collection stores talk about collecting FROM the buyer —
+							// the failure stories are otherwise identical.
+							const feeNoun = collectsFromCustomer
+								? "collection fee"
+								: "delivery fee";
 							const blockedCopy =
 								quote?.kind === "blocked"
 									? quote.reason === "out_of_range"
@@ -750,10 +767,14 @@ export function CheckoutPage({
 											// retrying the same address never will — say so, and point
 											// at the two things that actually work.
 											isLiveMode
-											? `This address is too far — our delivery rider service doesn't cover it. Try an address closer to ${storeName}${
+											? `This address is too far — our ${
+													collectsFromCustomer ? "collection" : "delivery"
+												} rider service doesn't cover it. Try an address closer to ${storeName}${
 													selfCollectAvailable ? ", or choose pickup" : ""
 												}.`
-											: `This address is outside ${storeName}'s delivery area.${
+											: `This address is outside ${storeName}'s ${
+													collectsFromCustomer ? "collection" : "delivery"
+												} area.${
 													selfCollectAvailable
 														? " Pickup is still available."
 														: ""
@@ -761,20 +782,22 @@ export function CheckoutPage({
 										: quote.reason === "store_unavailable"
 											? // Seller-side breakage — not the buyer's fault, not
 												// fixable by retrying. Give them the two real ways out.
-												`Delivery pricing isn't working for this store right now — it's on ${storeName}'s side, not yours. ${
+												`${
+													collectsFromCustomer ? "Collection" : "Delivery"
+												} pricing isn't working for this store right now — it's on ${storeName}'s side, not yours. ${
 													selfCollectAvailable
 														? "Choose pickup, or message"
 														: "Message"
 												} the store on WhatsApp to sort it out.`
 											: quote.reason === "unquotable"
-												? "We couldn't calculate the delivery fee right now — re-pick your address to retry, or try again shortly."
+												? `We couldn't calculate the ${feeNoun} right now — re-pick your address to retry, or try again shortly.`
 												: // no_coords. Worth saying only once the buyer has an address
 													// at all — on an untouched form the reason line above the
 													// CTA already says "add your address", and two versions of
 													// the same nudge is noise.
 													addressIncomplete
 													? undefined
-													: "Pick your address from the Google suggestions so we can calculate your delivery fee."
+													: `Pick your address from the Google suggestions so we can calculate your ${feeNoun}.`
 									: undefined;
 							return (
 								<CheckoutSummary
@@ -792,6 +815,9 @@ export function CheckoutPage({
 											quote={quote}
 											blockedCopy={blockedCopy}
 											minRuleAlerts={minRuleAlerts}
+											collectsFromCustomer={
+												deliveryMethod === "delivery" && collectsFromCustomer
+											}
 										/>
 									}
 									footer={
@@ -906,7 +932,9 @@ export function CheckoutPage({
 							bothAvailable
 								? "How do you want to get it?"
 								: deliveryAvailable
-									? "Delivery address"
+									? collectsFromCustomer
+										? "Collection address"
+										: "Delivery address"
 									: "Pickup point"
 						}
 					>
@@ -957,11 +985,18 @@ export function CheckoutPage({
 								{(deliveryMethod) =>
 									deliveryMethod === "delivery" ? (
 										<div className="flex flex-col gap-2">
+											{collectsFromCustomer ? (
+												<p className="rounded-lg bg-accent/5 px-3 py-2 text-xs text-foreground">
+													{storeName} collects from you — a rider picks your
+													items up at this address and brings them to the store.
+												</p>
+											) : null}
 											<AddressFieldset
 												form={form}
 												fields="address"
 												retailerId={retailerId}
 												allowManualEntry={allowManualAddressEntry}
+												collectsFromCustomer={collectsFromCustomer}
 											/>
 											{/* Live-quote (rider) stores: set the expectation BEFORE
 											    the buyer types a far-away address and hits a wall.
@@ -971,10 +1006,9 @@ export function CheckoutPage({
 											    a radius we could quote. */}
 											{isLiveMode ? (
 												<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-													Delivery is by rider, so the fee depends on your
-													address — you&apos;ll see it here once you pick a
-													suggestion. Addresses outside the rider&apos;s
-													coverage can&apos;t be delivered
+													{collectsFromCustomer
+														? "Collection is by rider, so the fee depends on your address — you'll see it here once you pick a suggestion. Addresses outside the rider's coverage can't be collected from"
+														: "Delivery is by rider, so the fee depends on your address — you'll see it here once you pick a suggestion. Addresses outside the rider's coverage can't be delivered"}
 													{selfCollectAvailable ? " — pick up instead" : ""}.
 												</p>
 											) : null}
@@ -1042,7 +1076,9 @@ export function CheckoutPage({
 													? isDropOff
 														? "When should we meet?"
 														: "When will you collect?"
-													: "When do you need it delivered?"
+													: collectsFromCustomer
+														? "When should we collect it?"
+														: "When do you need it delivered?"
 										}
 									>
 										{selectedPickup?.scheduleNote ? (

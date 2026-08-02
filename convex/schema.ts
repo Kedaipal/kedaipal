@@ -284,6 +284,21 @@ export default defineSchema({
 				// spend — client-side, no server auto-booking). Undefined = off:
 				// the seller books manually from the Book button.
 				promptBookOnPacked: v.optional(v.boolean()),
+				// Which way riders travel (86eyg0n8e, Bearcamp collection service):
+				// "collection" reverses the trip — the rider picks up FROM the
+				// buyer's address and drops off AT businessAddress (gear-cleaning /
+				// repair services). Undefined = "standard" (rider delivers to the
+				// buyer; every existing seller). Lives HERE — not on the
+				// deliveryConfig "lalamove" arm — because pricing-mode switches
+				// rebuild that arm wholesale while this object merges per-field
+				// (promptBookOnPacked precedent), so the setting survives a
+				// temporary switch to flat pricing. Dispatch swaps stops/contacts,
+				// the webhook stops driving order status (picked_up ≠ delivered to
+				// the customer), and buyer-facing labels flip via the per-order
+				// freeze on orders.deliveryDirection.
+				deliveryDirection: v.optional(
+					v.union(v.literal("standard"), v.literal("collection")),
+				),
 			}),
 		),
 		// Minimum days' notice the retailer needs before a fulfilment date. Drives
@@ -672,6 +687,16 @@ export default defineSchema({
 		// for orders created before this field existed.
 		deliveryMethod: v.optional(
 			v.union(v.literal("delivery"), v.literal("self_collect")),
+		),
+		// Which way the rider travels on a delivery order (86eyg0n8e). Frozen at
+		// create from the retailer's deliveryBooking.deliveryDirection so a later
+		// settings toggle never relabels a placed order (pickupSnapshot posture).
+		// "collection" = the rider collects FROM the buyer's address and brings
+		// the order TO the seller (Bearcamp gear-wash); buyer surfaces read
+		// "Collect from" / collection copy off this. Undefined = standard
+		// delivery (every pre-existing order).
+		deliveryDirection: v.optional(
+			v.union(v.literal("standard"), v.literal("collection")),
 		),
 		// Structured shipping address. Required when deliveryMethod === "delivery"
 		// and forbidden when "self_collect" — invariant enforced in orders.create.
@@ -1107,6 +1132,15 @@ export default defineSchema({
 		costActual: v.number(),
 		quotationId: v.string(),
 		vehicleType: v.string(),
+		// Trip direction frozen at reserve time (86eyg0n8e). "collection" = this
+		// booking picked up FROM the buyer and dropped off AT the seller, so the
+		// webhook must update THIS row only — picked_up/completed never advance
+		// the order (arriving at the seller's outlet is not "delivered" to the
+		// customer) and the POD photo is never WhatsApp'd to the buyer (it shows
+		// the seller's own doorstep). Undefined = standard (every existing job).
+		deliveryDirection: v.optional(
+			v.union(v.literal("standard"), v.literal("collection")),
+		),
 		driver: v.optional(
 			v.object({
 				name: v.string(),

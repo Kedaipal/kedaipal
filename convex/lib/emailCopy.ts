@@ -32,6 +32,10 @@ export type RetailerEmailVars = {
 	totalFormatted: string;
 	customerName: string;
 	deliveryMethod: DeliveryMethod;
+	// The order's frozen trip direction (86eyg0n8e) — "collection" flips the
+	// "Method:" label to collection wording (the rider collects FROM the
+	// buyer's address). Undefined = standard delivery.
+	deliveryDirection?: "standard" | "collection";
 	storeName: string;
 	dashboardUrl: string;
 	// Optional — only set when key === "paymentClaimed". Reference the shopper
@@ -76,6 +80,14 @@ const deliveryLabel: Record<Locale, Record<DeliveryMethod, string>> = {
 	zh: { delivery: "配送", self_collect: "自取" },
 };
 
+// Collection service (86eyg0n8e): the rider collects FROM the customer — a
+// "Delivery" method line next to the buyer's address would read backwards.
+const collectionLabel: Record<Locale, string> = {
+	en: "Collection (from customer)",
+	ms: "Kutipan (dari pelanggan)",
+	zh: "上门取件",
+};
+
 // Kind-aware pickup label. A drop-off meetup reads very differently from
 // collecting at the seller's place, so the seller alert distinguishes them.
 const pickupKindLabel: Record<
@@ -93,7 +105,11 @@ const pickupKindLabel: Record<
  * real arrangement, not a generic "Self-collect" for every pickup.
  */
 function methodLabel(locale: Locale, v: RetailerEmailVars): string {
-	if (v.deliveryMethod === "delivery") return deliveryLabel[locale].delivery;
+	if (v.deliveryMethod === "delivery") {
+		return v.deliveryDirection === "collection"
+			? collectionLabel[locale]
+			: deliveryLabel[locale].delivery;
+	}
 	return pickupKindLabel[locale][v.pickupKind ?? "self_collect"];
 }
 
