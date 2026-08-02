@@ -13,6 +13,9 @@ export type SummaryInput = {
 		price: string;
 		active: boolean;
 		blockWhenOutOfStock: boolean;
+		/** Needed to tell a **made-to-order** product (bespoke, quoted, mockup
+		 * approved) from one that's merely made fresh with a fixed price. */
+		requiresProof: boolean;
 	}[];
 	hasCustomLine: boolean;
 };
@@ -27,6 +30,24 @@ export function describeProduct(
 	currency: string,
 ): string {
 	const parts: string[] = [];
+
+	// A made-to-order product describes itself: no choices, no stock, and a
+	// price that doesn't exist yet by design. Reading "One item · Made fresh ·
+	// No price yet" would frame all three as things left to fill in.
+	const madeToOrderOnly =
+		options.length === 0 &&
+		rows.length === 1 &&
+		rows[0]?.requiresProof === true &&
+		rows[0].blockWhenOutOfStock === false;
+	if (madeToOrderOnly) {
+		const base = parsePriceInput(rows[0].price.trim());
+		return [
+			"Made to order",
+			base && base > 0
+				? `from ${currency} ${formatMajor(base)}`
+				: "Price on quote",
+		].join(" · ");
+	}
 
 	// What the buyer picks.
 	if (options.length === 0) {
@@ -49,7 +70,7 @@ export function describeProduct(
 		const allTrack = judged.every((r) => r.blockWhenOutOfStock);
 		const allMto = judged.every((r) => !r.blockWhenOutOfStock);
 		parts.push(
-			allTrack ? "From stock" : allMto ? "Made to order" : "Mixed fulfilment",
+			allTrack ? "From stock" : allMto ? "Made fresh" : "Mixed fulfilment",
 		);
 	}
 

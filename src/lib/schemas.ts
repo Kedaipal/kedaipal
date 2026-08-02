@@ -28,17 +28,22 @@ export const waPhoneOptionalSchema = z
 	.pipe(waPhoneSchema.optional());
 
 // Buyer's WhatsApp number at storefront checkout (86eyf1rck). Mirrors the
-// server's `assertValidMyWaPhone` normalization (strip separators, local
-// `0xx…` → `60xx…`) and then requires a Malaysian MOBILE shape — 601X plus
-// 8–9 digits — so the confirmation push can actually reach a WhatsApp
-// account. Malaysia-only for v1, consistent with the counter manual bind and
-// the Lalamove rider-contact constraint. The server re-validates.
+// server's `assertValidMyMobile` normalization (strip separators, local
+// `0xx…` → `60xx…`, bare NSN `1xx…` → `60xx…`) and then requires a Malaysian
+// MOBILE shape — 601X plus 8–9 digits — so the confirmation push can actually
+// reach a WhatsApp account. Malaysia-only for v1, consistent with the counter
+// manual bind and the Lalamove rider-contact constraint. The server re-validates.
+//
+// The bare-NSN arm exists because the field renders a `+60` prefix: a buyer who
+// reads that badge and types "12-345 6789" must not be rejected. Pinned to 9–10
+// digits so it can't swallow a foreign number that merely starts with 1.
 export const myWaPhoneCheckoutSchema = z
 	.string()
 	.transform((s) => {
 		const digits = s.replace(/\D/g, "");
 		if (digits.startsWith("60")) return digits;
 		if (digits.startsWith("0")) return `60${digits.slice(1)}`;
+		if (/^1\d{8,9}$/.test(digits)) return `60${digits}`;
 		return digits;
 	})
 	.pipe(

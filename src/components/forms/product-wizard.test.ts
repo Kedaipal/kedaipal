@@ -10,6 +10,7 @@ import {
 	wizardInitialStep,
 	wizardPriceLabel,
 	wizardStepIssues,
+	wizardSteps,
 } from "./product-wizard";
 import { rebuildRows, type VariantRow } from "./variant-editor";
 
@@ -32,7 +33,7 @@ function browniesState(): WizardState {
 	return {
 		...emptyWizardState(),
 		name: "Chocolate fudge brownies",
-		hasChoices: true,
+		shape: "choices",
 		fulfilmentAnswered: true,
 		editor: {
 			options: [{ name: "Size", values: ["Small", "Medium", "Large"] }],
@@ -63,7 +64,7 @@ function singleFromStock(): WizardState {
 	return {
 		...emptyWizardState(),
 		name: "Nasi lemak bungkus",
-		hasChoices: false,
+		shape: "single",
 		fulfilmentAnswered: true,
 		editor: {
 			options: [],
@@ -81,7 +82,7 @@ describe("wizardStepIssues", () => {
 
 	it("step 2 requires the question answered, then a named axis with values", () => {
 		expect(wizardStepIssues(emptyWizardState(), 2).map((i) => i.field)).toEqual(
-			["hasChoices"],
+			["shape"],
 		);
 		const s = browniesState();
 		const broken: WizardState = {
@@ -383,7 +384,7 @@ describe("wizard ⇄ full form (shared substrate)", () => {
 		// Substrate passes straight through — second axis, photos, deactivated
 		// rows, mixed fulfilment, custom photo all intact.
 		expect(state.editor).toBe(draft.editor);
-		expect(state.hasChoices).toBe(true);
+		expect(state.shape).toBe("choices");
 		expect(state.fulfilmentAnswered).toBe(true);
 		expect(state.hidden).toBe(true);
 		expect(state.minQuantity).toBe("20");
@@ -405,7 +406,7 @@ describe("wizard ⇄ full form (shared substrate)", () => {
 		const back = formDraftToWizardState(draft);
 		expect(back.editor).toEqual(s.editor);
 		expect(back.name).toBe(s.name);
-		expect(back.hasChoices).toBe(true);
+		expect(back.shape).toBe("choices");
 	});
 });
 
@@ -416,7 +417,7 @@ describe("switching to choices keeps the seller's work (PR #108 review)", () => 
 		const typed: WizardState = {
 			...emptyWizardState(),
 			name: "Brownies",
-			hasChoices: false,
+			shape: "single",
 			fulfilmentAnswered: true,
 			editor: {
 				options: [],
@@ -444,7 +445,7 @@ describe("switching to choices keeps the seller's work (PR #108 review)", () => 
 		// And the resulting product is made-to-order, not stock-tracked-at-zero.
 		const values = buildWizardSubmitValues({
 			...typed,
-			hasChoices: true,
+			shape: "choices",
 			editor: {
 				options: [{ name: "Size", values: ["Small", "Medium", "Large"] }],
 				rows: grid,
@@ -507,7 +508,7 @@ describe("wizardInitialStep", () => {
 		expect(
 			wizardInitialStep({
 				...browniesState(),
-				hasChoices: null,
+				shape: null,
 				editor: { options: [], rows: [row()], customLine: null },
 			}),
 		).toBe(2);
@@ -525,11 +526,11 @@ describe("wizardInitialStep", () => {
 	});
 
 	it("treats axes in the editor as the answer to step 2 (86eyex5vk)", () => {
-		// A stale `hasChoices` must not re-ask a question the grid already answers —
+		// A stale step-2 answer must not re-ask a question the grid already answers —
 		// the screen renders the choices block off the editor, so demanding an
 		// answer here would contradict what the seller is looking at.
-		expect(wizardInitialStep({ ...browniesState(), hasChoices: null })).toBe(5);
-		expect(wizardInitialStep({ ...browniesState(), hasChoices: false })).toBe(5);
+		expect(wizardInitialStep({ ...browniesState(), shape: null })).toBe(5);
+		expect(wizardInitialStep({ ...browniesState(), shape: "single" })).toBe(5);
 	});
 });
 
@@ -570,5 +571,122 @@ describe("wizardPriceLabel", () => {
 				"RM",
 			),
 		).toBe("RM 12–28.50");
+	});
+});
+
+/**
+ * The third product type (86eyfq04j): a bespoke seller previously had no way
+ * through the wizard without inventing a price and finding the custom option
+ * under Advanced.
+ */
+describe("wizard — made-to-order product type", () => {
+	/** "Custom cake" — no choices, no stock, price deliberately unset. */
+	function madeToOrderState(): WizardState {
+		return {
+			...emptyWizardState(),
+			name: "Custom cake",
+			shape: "made_to_order",
+			fulfilmentAnswered: true,
+			editor: {
+				options: [],
+				rows: [row({ blockWhenOutOfStock: false, requiresProof: true })],
+				customLine: null,
+			},
+		};
+	}
+
+	it("skips Preparation — the type has already answered it", () => {
+		expect(wizardSteps("made_to_order")).toEqual([1, 2, 3, 5]);
+		expect(wizardSteps("single")).toEqual([1, 2, 3, 4, 5]);
+		expect(wizardSteps("choices")).toEqual([1, 2, 3, 4, 5]);
+		expect(wizardSteps(null)).toEqual([1, 2, 3, 4, 5]);
+	});
+
+	it("accepts a blank price where every other type demands one", () => {
+		expect(wizardStepIssues(madeToOrderState(), 3)).toHaveLength(0);
+		// The same blank price on a plain single item is still an error.
+		const plain: WizardState = {
+			...madeToOrderState(),
+			shape: "single",
+			editor: {
+				options: [],
+				rows: [row({ price: "" })],
+				customLine: null,
+			},
+		};
+		expect(wizardStepIssues(plain, 3)).toHaveLength(1);
+	});
+
+	it("submits the blank price as 0 — the storefront's 'Price on quote'", () => {
+		const values = buildWizardSubmitValues(madeToOrderState());
+		expect(values.options).toEqual([]);
+		expect(values.variants).toHaveLength(1);
+		expect(values.variants[0]).toMatchObject({
+			price: 0,
+			optionValues: [],
+			// Both flags are what make the storefront read it as a quote.
+			requiresProof: true,
+			blockWhenOutOfStock: false,
+		});
+	});
+
+	it("submits a typed starting price as a real amount", () => {
+		const s = madeToOrderState();
+		const values = buildWizardSubmitValues({
+			...s,
+			editor: {
+				...s.editor,
+				rows: [{ ...s.editor.rows[0], price: "120" }],
+			},
+		});
+		expect(values.variants[0].price).toBe(12000);
+	});
+
+	it("labels the review as a quote, or a floor once priced", () => {
+		const s = madeToOrderState();
+		expect(wizardPriceLabel(s, "RM")).toBe("Price on quote");
+		expect(
+			wizardPriceLabel(
+				{ ...s, editor: { ...s.editor, rows: [{ ...s.editor.rows[0], price: "120" }] } },
+				"RM",
+			),
+		).toBe("From RM 120");
+	});
+
+	it("opens an answered draft on Review, never on the skipped step", () => {
+		expect(wizardInitialStep(madeToOrderState())).toBe(5);
+	});
+
+	it("recognises the type when reopening a full-form draft", () => {
+		const draft: ProductFormDraft = {
+			name: "Custom cake",
+			description: "",
+			images: [],
+			hidden: false,
+			categoryIds: [],
+			minQuantity: "",
+			minNoticeDays: "",
+			editor: madeToOrderState().editor,
+		};
+		expect(formDraftToWizardState(draft).shape).toBe("made_to_order");
+	});
+
+	it("does not mistake a plain made-fresh item for the bespoke type", () => {
+		const draft: ProductFormDraft = {
+			name: "Nasi lemak",
+			description: "",
+			images: [],
+			hidden: false,
+			categoryIds: [],
+			minQuantity: "",
+			minNoticeDays: "",
+			editor: {
+				options: [],
+				// Made fresh, but priced and NOT mockup-gated.
+				rows: [row({ price: "5.50", blockWhenOutOfStock: false })],
+				customLine: null,
+			},
+		};
+		expect(formDraftToWizardState(draft).shape).toBe("single");
 	});
 });

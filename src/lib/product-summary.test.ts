@@ -9,6 +9,7 @@ function row(
 		price: "10",
 		active: true,
 		blockWhenOutOfStock: true,
+		requiresProof: false,
 		...partial,
 	};
 }
@@ -23,7 +24,7 @@ describe("describeProduct", () => {
 		).toBe("One item · From stock · RM 18");
 	});
 
-	it("describes the ICP case: choices by Size, made to order, price range", () => {
+	it("describes the ICP case: choices by Size, made fresh, price range", () => {
 		expect(
 			describeProduct(
 				{
@@ -41,7 +42,7 @@ describe("describeProduct", () => {
 				},
 				"RM",
 			),
-		).toBe("3 choices by Size · Made to order · RM 12–28.50");
+		).toBe("3 choices by Size · Made fresh · RM 12–28.50");
 	});
 
 	it("joins two axes with × and flags mixed fulfilment", () => {
@@ -94,5 +95,44 @@ describe("describeProduct", () => {
 				"RM",
 			),
 		).toBe("One item · From stock · No price yet · + custom option");
+	});
+});
+
+describe("describeProduct — made-to-order products (86eyfq04j)", () => {
+	// One never-out-of-stock, approval-gated row and no axes: the product IS the
+	// custom order, so "One item · Made fresh · No price yet" would frame all
+	// three as unfinished setup rather than the deliberate shape it is.
+	const madeToOrder = {
+		options: [],
+		rows: [row({ price: "", blockWhenOutOfStock: false, requiresProof: true })],
+		hasCustomLine: false,
+	};
+
+	it("reads as a quote, not as a missing price", () => {
+		expect(describeProduct(madeToOrder, "RM")).toBe(
+			"Made to order · Price on quote",
+		);
+	});
+
+	it("shows a typed starting price as a floor", () => {
+		expect(
+			describeProduct(
+				{ ...madeToOrder, rows: [{ ...madeToOrder.rows[0], price: "120" }] },
+				"RM",
+			),
+		).toBe("Made to order · from RM 120");
+	});
+
+	it("leaves an ordinary made-fresh item alone", () => {
+		expect(
+			describeProduct(
+				{
+					options: [],
+					rows: [row({ price: "12", blockWhenOutOfStock: false })],
+					hasCustomLine: false,
+				},
+				"RM",
+			),
+		).toBe("One item · Made fresh · RM 12");
 	});
 });

@@ -146,6 +146,10 @@ export function assertValidMyWaPhone(raw: string): string {
 	return assertValidWaPhone(candidate);
 }
 
+/** A Malaysian mobile national significant number typed WITHOUT the trunk 0 —
+ * `12-345 6789`, i.e. 9–10 digits starting with 1. See `assertValidMyMobile`. */
+const MY_MOBILE_NSN = /^1\d{8,9}$/;
+
 /**
  * Stricter sibling of `assertValidMyWaPhone` for numbers we intend to MESSAGE:
  * normalizes the same way, then requires a Malaysian **mobile** shape (`601X`
@@ -154,6 +158,16 @@ export function assertValidMyWaPhone(raw: string): string {
  * failed confirmation push — better to reject it at the door with copy the
  * buyer can act on.
  *
+ * Accepts one shape the loose normalizer doesn't: a bare NSN (`12-345 6789`,
+ * no trunk 0, no country code). Checkout shows a `+60` prefix on the field, so
+ * "type the rest" is exactly what that badge asks for — without this the buyer
+ * who obeys the prefix gets rejected. Safe to fold in HERE and not in
+ * `assertValidMyWaPhone`: the pattern is pinned to 9–10 digits starting with 1,
+ * so a non-MY international number that happens to start with 1 (a US `+1`,
+ * which is 11 digits) can't be captured and silently rewritten to a Malaysian
+ * one. The loose normalizer stays untouched for the counter's manual bind,
+ * where a cashier may legitimately key a foreign number.
+ *
  * Mirrors `myWaPhoneCheckoutSchema` in `src/lib/schemas.ts` (same message, same
  * pattern); the client fails fast, this is the authority. Used by the storefront
  * order paths (86eyf1rck). Deliberately NOT applied to the counter's manual
@@ -161,7 +175,10 @@ export function assertValidMyWaPhone(raw: string): string {
  * standing in front of them.
  */
 export function assertValidMyMobile(raw: string): string {
-	const normalized = assertValidMyWaPhone(raw);
+	const digits = raw.replace(/\D/g, "");
+	const normalized = MY_MOBILE_NSN.test(digits)
+		? assertValidMyWaPhone(`60${digits}`)
+		: assertValidMyWaPhone(raw);
 	if (!/^601\d{8,9}$/.test(normalized)) {
 		throw new Error("Enter a Malaysian mobile number (e.g. 012-345 6789)");
 	}

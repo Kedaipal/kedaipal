@@ -1,4 +1,4 @@
-import { Minus, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, Minus, Package, Plus, Trash2, Truck } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import type { PublicDeliveryQuote } from "../../../convex/delivery";
 import type { CartItem, UseCart } from "../../hooks/useCart";
@@ -133,6 +133,17 @@ export function CheckoutSummary({
 									}
 									className="flex min-h-8 w-full items-baseline gap-2 py-1 text-left font-mono text-[13px] leading-6"
 								>
+									{/* Disclosure caret — these rows have been tappable since the
+									    ticket redesign, but the only hint was a caption under the
+									    whole list. Sits on the LEFT so the money column stays
+									    flush; its ~1rem footprint matches the `pl-4` the note /
+									    attachment sub-lines already indent by. */}
+									<ChevronDown
+										aria-hidden
+										className={`size-3 shrink-0 translate-y-0.5 text-muted-foreground transition-transform motion-reduce:transition-none ${
+											expanded ? "rotate-180" : ""
+										}`}
+									/>
 									<span className="min-w-0 truncate">{receiptLabel(item)}</span>
 									<span
 										aria-hidden
@@ -322,6 +333,11 @@ export function CheckoutTotals({
 	const deliveryFee = quote?.kind === "fee" ? quote.fee : 0;
 	const total = subtotal + pickupFee + deliveryFee;
 
+	// One icon per fulfilment charge so the row is legible at a glance instead of
+	// blending into the item lines above it. Every delivery state gets the same
+	// truck (fee / free / pending / calculating are one concept, not four).
+	const truck = <Truck className="size-3.5 shrink-0" aria-hidden />;
+
 	return (
 		<div className="flex flex-col">
 			{/* Charges print as muted receipt lines right under the items — the
@@ -329,21 +345,26 @@ export function CheckoutTotals({
 			    (the items above already sum in plain sight). */}
 			{pickupFee > 0 ? (
 				<FeeLine
+					icon={<Package className="size-3.5 shrink-0" aria-hidden />}
 					label={pickupFeeLabel ? `Pickup · ${pickupFeeLabel}` : "Pickup fee"}
 					value={receiptAmount(pickupFee)}
 				/>
 			) : null}
 			{deliveryFee > 0 ? (
-				<FeeLine label="Delivery" value={receiptAmount(deliveryFee)} />
+				<FeeLine
+					icon={truck}
+					label="Delivery"
+					value={receiptAmount(deliveryFee)}
+				/>
 			) : null}
 			{quote?.kind === "free" && quote.reason === "threshold" ? (
-				<FeeLine label="Delivery" value="FREE" accent />
+				<FeeLine icon={truck} label="Delivery" value="FREE" accent />
 			) : null}
 			{quote?.kind === "pending" ? (
-				<FeeLine label="Delivery" value="Seller confirms" />
+				<FeeLine icon={truck} label="Delivery" value="Seller confirms" />
 			) : null}
 			{quote?.kind === "calculating" ? (
-				<FeeLine label="Delivery" value="Calculating…" pulse />
+				<FeeLine icon={truck} label="Delivery" value="Calculating…" pulse />
 			) : null}
 
 			<div className="mt-2 flex items-center justify-between border-t-2 border-dashed border-border pt-3">
@@ -374,13 +395,18 @@ export function CheckoutTotals({
 	);
 }
 
-/** One muted charge line in receipt type — "Delivery ······ 8.00". */
+/** One muted charge line in receipt type — "🚚 Delivery ······ 8.00". */
 function FeeLine({
+	icon,
 	label,
 	value,
 	accent = false,
 	pulse = false,
 }: {
+	/** Fulfilment glyph (truck / package) — decorative, the label carries the
+	 * meaning. Occupies the same left gutter as the items' disclosure caret, so
+	 * the whole receipt keeps one text column. */
+	icon?: ReactNode;
 	label: string;
 	value: string;
 	accent?: boolean;
@@ -392,6 +418,7 @@ function FeeLine({
 				accent ? "text-accent-emphasis" : "text-muted-foreground"
 			}`}
 		>
+			{icon ? <span className="translate-y-0.5">{icon}</span> : null}
 			<span className="min-w-0 truncate">{label}</span>
 			<span
 				aria-hidden

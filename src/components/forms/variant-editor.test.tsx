@@ -1,14 +1,19 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // VariantEditor calls useMutation for image uploads; stub it so the component
 // renders without a ConvexProvider. (Uses a per-file jsdom env since the
 // default vitest environment is edge-runtime.)
 vi.mock("convex/react", () => ({ useMutation: () => vi.fn() }));
 
-import { VariantEditor, type VariantEditorState } from "./variant-editor";
+import {
+	isMadeToOrderOnly,
+	reconcileForSubmit,
+	VariantEditor,
+	type VariantEditorState,
+} from "./variant-editor";
 
 afterEach(cleanup);
 
@@ -50,10 +55,10 @@ const withOptions: VariantEditorState = {
 	customLine: null,
 };
 
-describe("VariantEditor — the two promoted questions", () => {
-	it("asks 'Does the buyer pick anything?' with Just one item selected for a single product", () => {
+describe("VariantEditor — the promoted questions", () => {
+	it("asks 'What kind of product is it?' with Just one item selected for a single product", () => {
 		render(<Harness initial={singleVariant} />);
-		expect(screen.getByText(/does the buyer pick anything/i)).toBeTruthy();
+		expect(screen.getByText(/what kind of product is it/i)).toBeTruthy();
 		expect(
 			screen
 				.getByRole("button", { name: /just one item/i })
@@ -61,23 +66,21 @@ describe("VariantEditor — the two promoted questions", () => {
 		).toBe("true");
 		expect(
 			screen
-				.getByRole("button", { name: /buyer picks a choice/i })
+				.getByRole("button", { name: /^buyer picks$/i })
 				.getAttribute("aria-pressed"),
 		).toBe("false");
 	});
 
-	it("switching to 'Buyer picks a choice' reveals the axis setup with preset chips", () => {
+	it("switching to 'Buyer picks' reveals the axis setup with preset chips", () => {
 		render(<Harness initial={singleVariant} />);
-		fireEvent.click(
-			screen.getByRole("button", { name: /buyer picks a choice/i }),
-		);
+		fireEvent.click(screen.getByRole("button", { name: /^buyer picks$/i }));
 		expect(screen.getByText(/they choose by/i)).toBeTruthy();
 		// The cohort presets are one tap away.
 		expect(screen.getByRole("button", { name: "Size" })).toBeTruthy();
 		expect(screen.getByRole("button", { name: "Flavour" })).toBeTruthy();
 	});
 
-	it("offers a positive Made to order / From stock choice (no double-negative)", () => {
+	it("offers a positive Made fresh / From stock choice (no double-negative)", () => {
 		render(<Harness initial={singleVariant} />);
 		expect(screen.getByText(/how do you prepare orders/i)).toBeTruthy();
 		// blockWhenOutOfStock=true → From stock is the pressed card.
@@ -88,21 +91,21 @@ describe("VariantEditor — the two promoted questions", () => {
 		).toBe("true");
 		expect(
 			screen
-				.getByRole("button", { name: /made to order/i })
+				.getByRole("button", { name: /made fresh/i })
 				.getAttribute("aria-pressed"),
 		).toBe("false");
 	});
 
-	it("hides the stock input entirely once the product is made to order", () => {
+	it("hides the stock input entirely once the product is made fresh", () => {
 		render(<Harness initial={singleVariant} />);
 		expect(screen.getByText(/in stock now/i)).toBeTruthy();
-		fireEvent.click(screen.getByRole("button", { name: /made to order/i }));
+		fireEvent.click(screen.getByRole("button", { name: /made fresh/i }));
 		expect(
 			screen
-				.getByRole("button", { name: /made to order/i })
+				.getByRole("button", { name: /made fresh/i })
 				.getAttribute("aria-pressed"),
 		).toBe("true");
-		// Made to order never runs out — no stock question at all.
+		// Made fresh never runs out — no stock question at all.
 		expect(screen.queryByText(/in stock now/i)).toBeNull();
 	});
 
@@ -110,8 +113,114 @@ describe("VariantEditor — the two promoted questions", () => {
 		render(<Harness initial={withOptions} />);
 		// Both rows track stock → both show a stock input.
 		expect(screen.getAllByLabelText("Stock on hand")).toHaveLength(2);
-		fireEvent.click(screen.getByRole("button", { name: /made to order/i }));
+		fireEvent.click(screen.getByRole("button", { name: /made fresh/i }));
 		expect(screen.queryByLabelText("Stock on hand")).toBeNull();
+	});
+});
+
+describe("VariantEditor — made-to-order product type (86eyfq04j)", () => {
+	// Leaving a priced multi-choice product confirms first (jsdom's stub returns
+	// undefined, which would silently abort every switch below).
+	beforeEach(() => {
+		vi.spyOn(window, "confirm").mockReturnValue(true);
+	});
+
+	it("confirms before discarding priced choices", () => {
+		render(<Harness initial={withOptions} />);
+		fireEvent.click(screen.getByRole("button", { name: /^made to order$/i }));
+		expect(window.confirm).toHaveBeenCalled();
+	});
+
+	it("switching to Made to order drops choices, stock and the price requirement", () => {
+		render(<Harness initial={withOptions} />);
+		fireEvent.click(screen.getByRole("button", { name: /^made to order$/i }));
+		expect(
+			screen
+				.getByRole("button", { name: /^made to order$/i })
+				.getAttribute("aria-pressed"),
+		).toBe("true");
+		// Nothing to pick, nothing to count.
+		expect(screen.queryByText(/they choose by/i)).toBeNull();
+		expect(screen.queryByLabelText("Stock on hand")).toBeNull();
+		expect(screen.queryByText(/in stock now/i)).toBeNull();
+		// The price is explicitly optional, with the buyer-facing consequence.
+		expect(screen.getByText(/starting price/i)).toBeTruthy();
+		expect(screen.getByText(/price on quote/i)).toBeTruthy();
+	});
+
+	it("does not re-ask the questions the type has already answered", () => {
+		render(<Harness initial={withOptions} />);
+		fireEvent.click(screen.getByRole("button", { name: /^made to order$/i }));
+		// Preparation is constitutive — asking again lets it be silently undone.
+		expect(screen.queryByText(/how do you prepare orders/i)).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: /advanced/i }));
+		// Approval is what the type IS; a bespoke line on a bespoke product is
+		// the same offer twice.
+		expect(screen.queryByText(/^mockup approval$/i)).toBeNull();
+		expect(screen.queryByText(/^custom orders$/i)).toBeNull();
+	});
+
+	it("switching back to a plain item restores stock tracking and drops approval", () => {
+		render(<Harness initial={singleVariant} />);
+		fireEvent.click(screen.getByRole("button", { name: /^made to order$/i }));
+		fireEvent.click(screen.getByRole("button", { name: /just one item/i }));
+		expect(
+			screen
+				.getByRole("button", { name: /just one item/i })
+				.getAttribute("aria-pressed"),
+		).toBe("true");
+		expect(screen.getByText(/in stock now/i)).toBeTruthy();
+		expect(screen.getByText(/how do you prepare orders/i)).toBeTruthy();
+	});
+});
+
+describe("isMadeToOrderOnly / reconcileForSubmit", () => {
+	const madeToOrder: VariantEditorState = {
+		options: [],
+		rows: [
+			{
+				...singleVariant.rows[0],
+				price: "",
+				stock: "",
+				blockWhenOutOfStock: false,
+				requiresProof: true,
+			},
+		],
+		customLine: null,
+	};
+
+	it("recognises the one never-out-of-stock, approval-gated row", () => {
+		expect(isMadeToOrderOnly(madeToOrder)).toBe(true);
+		expect(isMadeToOrderOnly(singleVariant)).toBe(false);
+		expect(isMadeToOrderOnly(withOptions)).toBe(false);
+	});
+
+	it("stays true once a 'from' price is typed — the mode must not flip mid-edit", () => {
+		expect(
+			isMadeToOrderOnly({
+				...madeToOrder,
+				rows: [{ ...madeToOrder.rows[0], price: "120" }],
+			}),
+		).toBe(true);
+	});
+
+	it("resolves a blank made-to-order price to 0 ('Price on quote')", () => {
+		expect(
+			reconcileForSubmit(madeToOrder.options, madeToOrder.rows).rows[0].price,
+		).toBe("0");
+		// A typed price is left exactly as the seller wrote it.
+		expect(
+			reconcileForSubmit(madeToOrder.options, [
+				{ ...madeToOrder.rows[0], price: "120" },
+			]).rows[0].price,
+		).toBe("120");
+		// Every other product still has to state a price — blank stays blank so
+		// buildSubmitVariants can raise its own "enter a price" issue.
+		expect(
+			reconcileForSubmit(singleVariant.options, [
+				{ ...singleVariant.rows[0], price: "" },
+			]).rows[0].price,
+		).toBe("");
 	});
 });
 
@@ -120,10 +229,10 @@ describe("VariantEditor — vary per choice", () => {
 		render(<Harness initial={withOptions} />);
 		expect(screen.queryByRole("button", { name: /track stock/i })).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: /vary per choice/i }));
-		// One compact Track stock / Made to order pair per row.
-		expect(screen.getAllByRole("button", { name: /track stock/i })).toHaveLength(
-			2,
-		);
+		// One compact Track stock / Made fresh pair per row.
+		expect(
+			screen.getAllByRole("button", { name: /track stock/i }),
+		).toHaveLength(2);
 	});
 
 	it("auto-opens the per-choice override for a legacy mixed product", () => {
@@ -136,9 +245,9 @@ describe("VariantEditor — vary per choice", () => {
 		};
 		render(<Harness initial={mixed} />);
 		// Mixed state must never look uniform — the override list is pre-open…
-		expect(screen.getAllByRole("button", { name: /track stock/i })).toHaveLength(
-			2,
-		);
+		expect(
+			screen.getAllByRole("button", { name: /track stock/i }),
+		).toHaveLength(2);
 		// …and the product-level cards say why nothing is selected.
 		expect(screen.getByText(/varies per choice/i)).toBeTruthy();
 	});
@@ -176,17 +285,23 @@ describe("VariantEditor — Advanced disclosure", () => {
 	it("keeps SKU, approval and the custom option collapsed by default", () => {
 		render(<Harness initial={singleVariant} />);
 		expect(screen.getByRole("button", { name: /advanced/i })).toBeTruthy();
-		expect(screen.queryByText(/require mockup approval/i)).toBeNull();
+		expect(screen.queryByText(/^mockup approval$/i)).toBeNull();
 		expect(screen.queryByPlaceholderText("ITEM-001")).toBeNull();
 	});
 
-	it("opens on demand and describes mockup approval in seller-recognisable terms", () => {
+	it("opens on demand and names the two easily-confused options distinctly", () => {
 		render(<Harness initial={singleVariant} />);
 		fireEvent.click(screen.getByRole("button", { name: /advanced/i }));
+		// 86eyfq04j: these two were both titled after mockups, so a seller had to
+		// read three lines of prose to tell an approval STEP from an extra thing
+		// to SELL. Distinct titles, and neither title contains the other.
+		expect(screen.getByText(/^mockup approval$/i)).toBeTruthy();
+		expect(screen.getByText(/^custom orders$/i)).toBeTruthy();
+		// The approval body describes the gate; the custom body describes the line.
 		expect(
-			screen.getByText(/require mockup approval before making it/i),
+			screen.getByText(/can't be packed until they approve/i),
 		).toBeTruthy();
-		expect(screen.getByText(/cake decorator/i)).toBeTruthy();
+		expect(screen.getByText(/when nothing above fits/i)).toBeTruthy();
 		expect(screen.getByPlaceholderText("ITEM-001")).toBeTruthy();
 	});
 
@@ -252,7 +367,7 @@ describe("VariantEditor — custom / made-to-order line", () => {
 		render(<Harness initial={withOptions} />);
 		fireEvent.click(screen.getByRole("button", { name: /advanced/i }));
 		const toggle = screen.getByRole("checkbox", {
-			name: /also offer a custom \/ made-to-order option/i,
+			name: /custom orders/i,
 		}) as HTMLInputElement;
 		// Hidden until enabled — no name/price/prompt fields yet.
 		expect(screen.queryByPlaceholderText("Custom")).toBeNull();
@@ -349,7 +464,11 @@ describe("VariantEditor — inline submit issues", () => {
 	it("marks the option-axis name input for an option issue", () => {
 		render(
 			<VariantEditor
-				value={{ ...withOptions, options: [{ name: "", values: [] }], rows: [] }}
+				value={{
+					...withOptions,
+					options: [{ name: "", values: [] }],
+					rows: [],
+				}}
 				onChange={() => {}}
 				currency="RM"
 				issues={[

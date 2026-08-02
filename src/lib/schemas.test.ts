@@ -20,6 +20,15 @@ describe("myWaPhoneCheckoutSchema", () => {
 		);
 	});
 
+	// The field renders a "+60" prefix badge (86eyfq04j), so a buyer who reads
+	// it and types only the rest must be accepted — otherwise the badge tells
+	// them to do the one thing the validator rejects.
+	it("accepts a bare national number typed after the +60 badge", () => {
+		expect(myWaPhoneCheckoutSchema.parse("123456789")).toBe("60123456789");
+		expect(myWaPhoneCheckoutSchema.parse("12-345 6789")).toBe("60123456789");
+		expect(myWaPhoneCheckoutSchema.parse("1123456789")).toBe("601123456789");
+	});
+
 	it("rejects non-mobile and non-MY numbers with the checkout copy", () => {
 		for (const bad of [
 			"12345", // junk

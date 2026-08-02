@@ -673,29 +673,43 @@ export function CheckoutPage({
 			{blockedReason}
 		</p>
 	) : null;
+	const privacyPolicyLink = (
+		<a
+			href="/privacy"
+			target="_blank"
+			rel="noopener noreferrer"
+			className="underline hover:text-foreground"
+		>
+			Privacy Policy
+		</a>
+	);
 	// Say what happens next so the CTA never feels like a bait-and-switch.
 	// Push path: the order commits here and the confirmation is pushed TO the
 	// buyer's WhatsApp — no redirect. Legacy path: the handoff is a two-step by
 	// design (tracking page fires the wa.me link).
-	const reassurance = (
-		<p className="text-center text-xs text-muted-foreground">
-			{confirmPushEnabled
-				? `Your order goes straight to ${storeName} — confirmation lands in your WhatsApp. Nothing is paid yet.`
-				: `Opens WhatsApp to confirm with ${storeName} — nothing is paid yet.`}
-		</p>
+	//
+	// DESKTOP only. On mobile this rode along in the fixed bottom bar, where two
+	// full sentences of small print pushed the CTA up and buried the total; the
+	// bar gets `finePrintCompact` instead. Nothing is lost by dropping it there:
+	// "confirmation lands in your WhatsApp" is already the phone field's own
+	// description, three thumb-scrolls up.
+	const finePrint = (
+		<>
+			<p className="text-center text-xs text-muted-foreground">
+				{confirmPushEnabled
+					? `Your order goes straight to ${storeName} — confirmation lands in your WhatsApp. Nothing is paid yet.`
+					: `Opens WhatsApp to confirm with ${storeName} — nothing is paid yet.`}
+			</p>
+			<p className="text-center text-xs text-muted-foreground">
+				By placing this order, you agree to our {privacyPolicyLink}.
+			</p>
+		</>
 	);
-	const privacyLine = (
+	// The mobile bar's whole fine print: the one thing that lowers the stakes of
+	// tapping, plus the legal link we can't drop. One line, not four.
+	const finePrintCompact = (
 		<p className="text-center text-xs text-muted-foreground">
-			By placing this order, you agree to our{" "}
-			<a
-				href="/privacy"
-				target="_blank"
-				rel="noopener noreferrer"
-				className="underline hover:text-foreground"
-			>
-				Privacy Policy
-			</a>
-			.
+			Nothing is paid yet · {privacyPolicyLink}
 		</p>
 	);
 
@@ -800,8 +814,7 @@ export function CheckoutPage({
 										<div className="mt-4 hidden flex-col gap-3 lg:flex">
 											{blockedReasonLine}
 											{submitButton}
-											{reassurance}
-											{privacyLine}
+											{finePrint}
 										</div>
 									}
 								/>
@@ -831,12 +844,17 @@ export function CheckoutPage({
 									type="tel"
 									inputMode="tel"
 									autoComplete="tel"
-									placeholder="e.g. 012-345 6789"
+									// The badge says the country code is handled, so the
+									// placeholder shows the rest. A buyer who ignores it and
+									// types the full "012-345 6789" (or "60123…") is still
+									// normalized to the same number — see myWaPhoneCheckoutSchema.
+									prefix="+60"
+									placeholder="12-345 6789"
 									required
 									description={
 										confirmPushEnabled
-											? "Your order confirmation lands in this WhatsApp. Malaysian mobile — we add the country code automatically."
-											: `${storeName} reaches you on this WhatsApp about your order. Malaysian mobile — we add the country code automatically.`
+											? "Your order confirmation lands in this WhatsApp."
+											: `${storeName} reaches you on this WhatsApp about your order.`
 									}
 								/>
 							)}
@@ -916,34 +934,44 @@ export function CheckoutPage({
 						    → pickup picker). The settings invariant keeps ≥1 on offer. */}
 						{bothAvailable ? (
 							<form.AppField name="deliveryMethod">
-								{(field) => (
-									<div className="grid grid-cols-2 gap-2">
-										<button
-											type="button"
-											onClick={() => field.handleChange("delivery")}
-											className={`flex flex-col items-center gap-1.5 rounded-xl border-2 px-3 py-3 text-sm font-medium transition-colors ${
-												field.state.value === "delivery"
-													? "border-accent bg-accent/5 text-accent"
-													: "border-border bg-card text-muted-foreground hover:border-accent/40"
-											}`}
-										>
-											<Truck className="size-5" />
-											Delivery
-										</button>
-										<button
-											type="button"
-											onClick={() => field.handleChange("self_collect")}
-											className={`flex flex-col items-center gap-1.5 rounded-xl border-2 px-3 py-3 text-sm font-medium transition-colors ${
-												field.state.value === "self_collect"
-													? "border-accent bg-accent/5 text-accent"
-													: "border-border bg-card text-muted-foreground hover:border-accent/40"
-											}`}
-										>
-											<Package className="size-5" />
-											Pickup
-										</button>
-									</div>
-								)}
+								{(field) => {
+									// Segmented control, not two bordered tiles: this sits INSIDE
+									// a bordered CheckoutSection, and a boxed choice inside a box
+									// reads as two competing cards. Same shell the product
+									// editor's mode switcher uses (`bg-muted p-1`, raised
+									// `bg-background` on the selected segment) — selection is
+									// carried by fill + elevation, no extra border anywhere.
+									const segment = (active: boolean) =>
+										`flex flex-col items-center gap-1.5 rounded-lg px-3 py-3 text-sm font-medium transition-colors ${
+											active
+												? "bg-background text-accent-emphasis shadow-sm"
+												: "text-muted-foreground hover:text-foreground"
+										}`;
+									return (
+										<div className="grid grid-cols-2 gap-1 rounded-xl bg-muted p-1">
+											<button
+												type="button"
+												aria-pressed={field.state.value === "delivery"}
+												onClick={() => field.handleChange("delivery")}
+												className={segment(field.state.value === "delivery")}
+											>
+												<Truck className="size-5" aria-hidden />
+												Delivery
+											</button>
+											<button
+												type="button"
+												aria-pressed={field.state.value === "self_collect"}
+												onClick={() => field.handleChange("self_collect")}
+												className={segment(
+													field.state.value === "self_collect",
+												)}
+											>
+												<Package className="size-5" aria-hidden />
+												Pickup
+											</button>
+										</div>
+									);
+								}}
 							</form.AppField>
 						) : null}
 
@@ -962,6 +990,10 @@ export function CheckoutPage({
 												fields="address"
 												retailerId={retailerId}
 												allowManualEntry={allowManualAddressEntry}
+												// Only when the section heading is the method question
+												// ("How do you want to get it?") — a delivery-only store
+												// already has "Delivery address" as its section title.
+												legend={bothAvailable ? "Delivery address" : undefined}
 											/>
 											{/* Live-quote (rider) stores: set the expectation BEFORE
 											    the buyer types a far-away address and hits a wall.
@@ -1207,8 +1239,7 @@ export function CheckoutPage({
 					</form.Subscribe>
 					{blockedReasonLine}
 					{submitButton}
-					{reassurance}
-					{privacyLine}
+					{finePrintCompact}
 				</div>
 			</div>
 		</form>

@@ -51,7 +51,9 @@ export function PickupSummaryCard({
 	currency: string;
 }) {
 	return (
-		<section className="flex flex-col gap-2 rounded-xl border-2 border-accent/30 bg-accent/5 p-4">
+		// Fill only, no outline: this renders inside the checkout's bordered
+		// section, where a bordered card would read as a second competing card.
+		<section className="flex flex-col gap-2 rounded-xl bg-accent/5 p-4">
 			<div className="flex items-start gap-2">
 				<MapPin
 					className="size-4 shrink-0 text-accent mt-0.5"
@@ -159,12 +161,13 @@ export function PickupLocationRadioList({
 		const selected = value === loc._id;
 		const mapsUrl = deriveMapsUrl(loc);
 		return (
+			// Fill, not outline — see PickupSummaryCard. The radio itself is the
+			// primary selection affordance; the accent wash just makes the chosen
+			// row scannable without drawing another card inside the section's card.
 			<label
 				key={loc._id}
-				className={`flex cursor-pointer items-start gap-3 rounded-xl border-2 p-3 transition-colors ${
-					selected
-						? "border-accent bg-accent/5"
-						: "border-border bg-card hover:border-accent/40"
+				className={`flex cursor-pointer items-start gap-3 rounded-xl p-3 transition-colors ${
+					selected ? "bg-accent/10" : "bg-muted/50 hover:bg-muted"
 				}`}
 			>
 				<input
@@ -214,7 +217,10 @@ export function PickupLocationRadioList({
 
 	return (
 		<fieldset className="flex flex-col gap-3">
-			<legend className="text-sm font-medium">Choose a pickup point</legend>
+			{/* `mb-2`, not the fieldset's `gap-3`: a <legend> is rendered by the
+			    fieldset itself and is NOT a flex item, so the gap never applies
+			    below it and the title sat flush against the first option. */}
+			<legend className="mb-2 text-sm font-medium">Choose a pickup point</legend>
 			{error ? (
 				<p role="alert" className="text-sm text-destructive">
 					{error}

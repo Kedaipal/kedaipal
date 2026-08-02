@@ -3,7 +3,11 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { CartItem, UseCart } from "../../hooks/useCart";
-import { CheckoutSummary, CheckoutTotals } from "./checkout-summary";
+import {
+	CheckoutSummary,
+	type CheckoutQuoteView,
+	CheckoutTotals,
+} from "./checkout-summary";
 
 afterEach(cleanup);
 
@@ -243,5 +247,52 @@ describe("CheckoutTotals", () => {
 		expect(screen.getByRole("alert").textContent).toContain(
 			"outside the delivery area",
 		);
+	});
+});
+
+describe("checkout summary — 31 Jul bug fixes (86eyfq04j)", () => {
+	it("gives every product row a caret that flips when expanded", () => {
+		const cart = makeCart([makeItem({ variantId: "v1" })]);
+		const { container } = render(
+			<CheckoutSummary cart={cart} storeName="K Frozen Food" />,
+		);
+		// The rows have been tappable since the ticket redesign; the only cue was
+		// a caption under the whole list, so nobody found them.
+		const caret = () => container.querySelector("li svg.lucide-chevron-down");
+		expect(caret()).toBeTruthy();
+		expect(caret()?.getAttribute("class")).not.toContain("rotate-180");
+		fireEvent.click(screen.getByRole("button", { expanded: false }));
+		expect(caret()?.getAttribute("class")).toContain("rotate-180");
+	});
+
+	it("marks the delivery charge with a truck in every quote state", () => {
+		const quotes: CheckoutQuoteView[] = [
+			{ kind: "fee", fee: 800 },
+			{ kind: "free", reason: "threshold" },
+			{ kind: "pending", reason: "unquotable" },
+			{ kind: "calculating" },
+		];
+		for (const quote of quotes) {
+			const { container, unmount } = render(
+				<CheckoutTotals
+					subtotal={9000}
+					currency="MYR"
+					pickupFee={0}
+					quote={quote}
+				/>,
+			);
+			expect(
+				container.querySelector("svg.lucide-truck"),
+				`expected a truck for quote kind ${quote?.kind}`,
+			).toBeTruthy();
+			unmount();
+		}
+	});
+
+	it("marks a pickup charge with its own glyph, so one fee row isn't the odd one out", () => {
+		const { container } = render(
+			<CheckoutTotals subtotal={9000} currency="MYR" pickupFee={200} />,
+		);
+		expect(container.querySelector("svg.lucide-package")).toBeTruthy();
 	});
 });
