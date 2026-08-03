@@ -1753,8 +1753,8 @@ export function ProductWizard({
 										</label>
 										{madeToOrder ? (
 											<p className="rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
-												This product is already a custom order, so a separate
-												custom line would offer the same thing twice.
+												This product already asks the buyer what they want, so a
+												custom line would ask twice.
 												{customLine ? " Untick it unless you meant to." : null}
 											</p>
 										) : null}

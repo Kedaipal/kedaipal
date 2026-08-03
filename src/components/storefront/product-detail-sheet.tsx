@@ -7,6 +7,7 @@ import type { StorefrontProduct } from "./product-card";
 import {
 	AddToCartButton,
 	CustomOrderCard,
+	MadeToOrderRequest,
 	EmptyGallery,
 	type OnAddVariant,
 	OptionPills,
@@ -112,6 +113,7 @@ export function ProductDetailSheet({
 
 						<OptionPills pp={pp} />
 						<PurchaseHints pp={pp} />
+						<MadeToOrderRequest pp={pp} />
 						<CustomOrderCard pp={pp} onAdd={onAdd} />
 
 						{product.description ? (

@@ -110,6 +110,26 @@ as **"Price on quote"**. This ticket only built the route to it.
   instead of "One item · Made fresh · No price yet", which framed a deliberate
   shape as unfinished setup.
 
+**The buyer's brief rides the product's own Add to cart.** The request textarea
+and reference-photo uploader used to live only on `CustomOrderCard`, which
+renders for an `isCustom` row — so a made-to-order product offered a quantity
+stepper, an "Add to cart" and **no way to say what was wanted**, leaving the
+seller to chase the brief on WhatsApp. It now delivers both halves of its own
+promise: `useProductPurchase` exposes `madeToOrderOnly` (no axes, no custom
+line, one approval-gated never-out-of-stock variant), `MadeToOrderRequest`
+renders the brief in the buy box, and `AddToCartButton` carries `{note,
+imageStorageId}` on that path (and holds while a photo is still uploading).
+`RequestFields` is the one implementation both homes share, so the two can't
+drift.
+
+The `!customLine` guard is load-bearing: when a custom line exists it already
+carries the brief, so the product falls back to the previous two-card shape
+rather than showing **two** request boxes. That's also why the seller-side
+custom-line toggle stays visible for this type with a note that it would "ask
+twice" — a product that is itself a custom order has no use for a second
+bespoke line, but hiding a control whose data still submits is the bug PR #160
+review caught.
+
 **Renamed in passing:** the *prepare* answer "Made to order" → **"Made fresh"**
 (wizard step 4, `PrepareQuestion`, `FulfilmentToggle`, `describeProduct`). It
 only ever meant "don't track stock", and leaving it would have put two controls

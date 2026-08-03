@@ -177,8 +177,9 @@ describe("wizard — a derived type flip stays coherent and escapable", () => {
 		expect(
 			screen.getByRole("checkbox", { name: /custom orders/i }),
 		).toBeTruthy();
-		// The redundancy is stated rather than hidden.
-		expect(screen.getByText(/already a custom order/i)).toBeTruthy();
+		// The redundancy is stated rather than hidden — the made-to-order product
+		// now collects the buyer's brief itself, so a custom line asks twice.
+		expect(screen.getByText(/would ask twice/i)).toBeTruthy();
 
 		// Unticking is the way back out.
 		fireEvent.click(after);

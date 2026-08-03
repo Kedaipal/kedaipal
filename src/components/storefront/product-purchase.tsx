@@ -251,6 +251,25 @@ export function useProductPurchase({
 					: formatPrice(product.priceFrom, product.currency)
 		: "";
 
+	/**
+	 * A product whose ONE sellable line is made to order — no axes, gated on
+	 * mockup approval, never out of stock (`86eyfq04j`'s product type). Its buyer
+	 * has just as much to tell the seller as a custom line's does (the tent's
+	 * size, the cake's design), but the request textarea + reference photo used
+	 * to live only on `CustomOrderCard`, which renders for an `isCustom` row —
+	 * so this product offered a quantity stepper, an "Add to cart", and no way
+	 * to say what was wanted. The brief rides the MAIN add instead.
+	 *
+	 * Requires `!customLine` on purpose: when one exists it already carries the
+	 * brief, and two request boxes on one product is the confusion this removes.
+	 */
+	const madeToOrderOnly =
+		!hasOptions &&
+		!customLine &&
+		variants.length === 1 &&
+		variants[0]?.requiresProof === true &&
+		variants[0]?.blockWhenOutOfStock !== true;
+
 	// Custom line's own price label (independent of the standard selection).
 	const customPriceLabel =
 		product && customLine && customLine.price > 0
@@ -284,6 +303,7 @@ export function useProductPurchase({
 		sellable,
 		variantBlocks,
 		hasOptions,
+		madeToOrderOnly,
 		images,
 		maxQty,
 		minQuantity,
@@ -515,53 +535,24 @@ export function PurchaseHints({ pp }: { pp: ProductPurchase }) {
 /** Custom / made-to-order line — a self-contained, INDEPENDENT add (its own
  * button), not mutually exclusive with the variant pills. Shows once
  * regardless of how many sizes/flavours exist. */
-export function CustomOrderCard({
+/**
+ * The buyer's brief: a free-text request plus an optional reference photo.
+ * ONE implementation, two homes — the custom line's card
+ * (`CustomOrderCard`) and a made-to-order product's own buy box
+ * (`MadeToOrderRequest`). They ask the same question, so they must not drift.
+ */
+function RequestFields({
 	pp,
-	onAdd,
+	prompt,
 }: {
 	pp: ProductPurchase;
-	onAdd: OnAddVariant;
+	/** The seller's own wording, used as the placeholder. */
+	prompt?: string;
 }) {
-	const product = pp.product;
-	const customLine = pp.customLine;
-	if (!product || !customLine) return null;
 	return (
-		<div className="mt-5 rounded-2xl border border-border bg-muted/30 p-3">
-			{pp.hasOptions ? (
-				<p className="mb-2 text-xs font-medium text-muted-foreground">
-					Or order a custom one
-				</p>
-			) : null}
-			<div className="flex items-center gap-3">
-				{customLine.imageUrls[0] ? (
-					<ZoomableImage
-						src={customLine.imageUrls[0]}
-						alt={customLine.customLabel ?? "Custom"}
-						caption={customLine.customLabel ?? "Custom"}
-						wrapperClassName="size-12 shrink-0"
-						className="size-12 rounded-lg object-cover"
-					/>
-				) : (
-					<span className="flex size-12 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground">
-						<ImagePlus className="size-5" />
-					</span>
-				)}
-				<span className="flex min-w-0 flex-1 flex-col gap-0.5">
-					<span className="flex items-center gap-2">
-						<span className="text-sm font-semibold">
-							{customLine.customLabel ?? "Custom"}
-						</span>
-						<span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-							Made to order
-						</span>
-					</span>
-					<span className="text-xs text-muted-foreground">
-						{pp.customPriceLabel}
-					</span>
-				</span>
-			</div>
+		<>
 			{/* The seller's prompt becomes the placeholder so the buyer can
-			    actually type their spec — the whole point of a custom line. */}
+			    actually type their spec — the whole point of a bespoke line. */}
 			<label className="mt-3 flex flex-col gap-1">
 				<span className="text-xs font-medium text-muted-foreground">
 					Your request
@@ -572,7 +563,7 @@ export function CustomOrderCard({
 					rows={2}
 					maxLength={280}
 					placeholder={
-						customLine.customPrompt ||
+						prompt ||
 						"Tell the seller what you'd like — size, colour, design, date…"
 					}
 					className="rounded-xl border border-input bg-background px-3 py-2 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
@@ -629,6 +620,75 @@ export function CustomOrderCard({
 					<p className="text-xs text-destructive">{pp.imageError}</p>
 				) : null}
 			</div>
+		</>
+	);
+}
+
+/**
+ * The brief for a **made-to-order product** — the type IS the bespoke offer, so
+ * this sits in the buy box and the normal "Add to cart" carries it. No separate
+ * card and no second button: there is exactly one thing to order here, unlike a
+ * custom line bolted onto a standard catalog.
+ */
+export function MadeToOrderRequest({ pp }: { pp: ProductPurchase }) {
+	if (!pp.madeToOrderOnly) return null;
+	return (
+		<div className="mt-5 rounded-2xl border border-border bg-muted/30 p-3">
+			<p className="text-xs font-medium text-muted-foreground">
+				Made to order — tell the seller what you need and they&apos;ll confirm
+				the price with you.
+			</p>
+			<RequestFields pp={pp} />
+		</div>
+	);
+}
+
+export function CustomOrderCard({
+	pp,
+	onAdd,
+}: {
+	pp: ProductPurchase;
+	onAdd: OnAddVariant;
+}) {
+	const product = pp.product;
+	const customLine = pp.customLine;
+	if (!product || !customLine) return null;
+	return (
+		<div className="mt-5 rounded-2xl border border-border bg-muted/30 p-3">
+			{pp.hasOptions ? (
+				<p className="mb-2 text-xs font-medium text-muted-foreground">
+					Or order a custom one
+				</p>
+			) : null}
+			<div className="flex items-center gap-3">
+				{customLine.imageUrls[0] ? (
+					<ZoomableImage
+						src={customLine.imageUrls[0]}
+						alt={customLine.customLabel ?? "Custom"}
+						caption={customLine.customLabel ?? "Custom"}
+						wrapperClassName="size-12 shrink-0"
+						className="size-12 rounded-lg object-cover"
+					/>
+				) : (
+					<span className="flex size-12 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground">
+						<ImagePlus className="size-5" />
+					</span>
+				)}
+				<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+					<span className="flex items-center gap-2">
+						<span className="text-sm font-semibold">
+							{customLine.customLabel ?? "Custom"}
+						</span>
+						<span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+							Made to order
+						</span>
+					</span>
+					<span className="text-xs text-muted-foreground">
+						{pp.customPriceLabel}
+					</span>
+				</span>
+			</div>
+			<RequestFields pp={pp} prompt={customLine.customPrompt} />
 
 			<Button
 				type="button"
@@ -720,12 +780,27 @@ export function AddToCartButton({
 	return (
 		<Button
 			type="button"
-			disabled={!pp.sellable || pp.minUnreachable}
-			onClick={() =>
-				pp.product &&
-				pp.selectedVariant &&
-				onAdd(pp.product, pp.selectedVariant, pp.displayQuantity)
+			// A made-to-order product's brief is uploaded through this same button
+			// (see MadeToOrderRequest) — hold it while the photo is still going up,
+			// or the add would drop the reference the seller needs.
+			disabled={
+				!pp.sellable ||
+				pp.minUnreachable ||
+				(pp.madeToOrderOnly && pp.uploadingImage)
 			}
+			onClick={() => {
+				if (!pp.product || !pp.selectedVariant) return;
+				if (pp.madeToOrderOnly) {
+					// This IS the bespoke line — carry the buyer's request with it.
+					onAdd(pp.product, pp.selectedVariant, pp.displayQuantity, {
+						note: pp.customNote.trim() || undefined,
+						imageStorageId: pp.customImage?.storageId,
+					});
+					pp.resetCustomAfterAdd();
+					return;
+				}
+				onAdd(pp.product, pp.selectedVariant, pp.displayQuantity);
+			}}
 			className="h-12 w-full text-base"
 		>
 			{pp.minUnreachable

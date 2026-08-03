@@ -26,7 +26,9 @@ end-to-end, so there is **no new order-flow code**.
 > find this checkbox under Advanced to get there. See
 > [`product-setup-wizard.md`](./product-setup-wizard.md#the-made-to-order-product-type-2026-08-02-clickup-86eyfq04j).
 > The custom option below is for "standard catalog **plus** a bespoke line on
-> the same product."
+> the same product" — that is its only job. A made-to-order product collects
+> the buyer's request through its OWN buy box (`MadeToOrderRequest`), so a
+> custom line there would ask the same question twice.
 
 ## 2. Data model
 

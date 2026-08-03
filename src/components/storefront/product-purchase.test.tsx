@@ -4,8 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { StorefrontProduct } from "./product-card";
 import {
+	AddToCartButton,
 	CustomOrderCard,
 	GoToCheckoutBar,
+	MadeToOrderRequest,
+	type OnAddVariant,
 	OptionPills,
 	PurchaseStepper,
 	useProductPurchase,
@@ -200,5 +203,100 @@ describe("useProductPurchase — a live product update is not a new product", ()
 			(screen.getByPlaceholderText("Tell us your theme") as HTMLTextAreaElement)
 				.value,
 		).toBe("");
+	});
+});
+
+/** A made-to-order PRODUCT: no axes, one approval-gated line, price on quote. */
+function bespokeService(): StorefrontProduct {
+	return {
+		_id: "p2",
+		name: "Tent wash",
+		slug: "tent-wash",
+		currency: "MYR",
+		imageUrls: [],
+		options: [],
+		priceFrom: 0,
+		priceTo: 0,
+		hasQuotePricing: true,
+		inStock: true,
+		totalOnHand: 0,
+		variants: [
+			{
+				_id: "vMTO",
+				optionValues: [],
+				onHand: 0,
+				active: true,
+				blockWhenOutOfStock: false,
+				requiresProof: true,
+				price: 0,
+				imageUrls: [],
+			},
+		],
+	} as unknown as StorefrontProduct;
+}
+
+/**
+ * A made-to-order product IS the bespoke offer, so the buyer's brief rides its
+ * own "Add to cart". Before this, the request textarea + reference photo lived
+ * only on `CustomOrderCard` (an `isCustom` row), so a made-to-order product
+ * offered a stepper, an Add button and no way to say what was wanted — the
+ * seller had to chase the brief on WhatsApp. See docs/product-setup-wizard.md.
+ */
+describe("made-to-order product — the buyer can state their request", () => {
+	function MtoBox({
+		product,
+		onAdd,
+	}: {
+		product: StorefrontProduct;
+		onAdd: OnAddVariant;
+	}) {
+		const pp = useProductPurchase({
+			product,
+			retailerId: RID,
+			cartQuantity: 0,
+		});
+		return (
+			<>
+				<MadeToOrderRequest pp={pp} />
+				<CustomOrderCard pp={pp} onAdd={vi.fn()} />
+				<AddToCartButton pp={pp} onAdd={onAdd} />
+			</>
+		);
+	}
+
+	it("offers exactly one request box, on the product itself", () => {
+		render(<MtoBox product={bespokeService()} onAdd={vi.fn()} />);
+		expect(screen.getAllByText("Your request")).toHaveLength(1);
+		expect(screen.getByText(/tell the seller what you need/i)).toBeTruthy();
+		// No second bespoke card, and no competing "Request custom order" button.
+		expect(
+			screen.queryByRole("button", { name: /request custom order/i }),
+		).toBeNull();
+	});
+
+	it("carries the brief on the normal Add to cart", () => {
+		const onAdd = vi.fn();
+		render(<MtoBox product={bespokeService()} onAdd={onAdd} />);
+		fireEvent.change(screen.getByRole("textbox"), {
+			target: { value: "  4-person dome, muddy  " },
+		});
+		fireEvent.click(screen.getByRole("button", { name: /add to cart/i }));
+		expect(onAdd).toHaveBeenCalledWith(
+			expect.objectContaining({ _id: "p2" }),
+			expect.objectContaining({ _id: "vMTO" }),
+			1,
+			{ note: "4-person dome, muddy", imageStorageId: undefined },
+		);
+	});
+
+	it("leaves a standard catalog's custom line exactly as it was", () => {
+		// `cake` has axes AND an isCustom row: the card keeps the brief, and the
+		// product's own buy box must not sprout a second one.
+		render(<MtoBox product={cake(2)} onAdd={vi.fn()} />);
+		expect(screen.getAllByText("Your request")).toHaveLength(1);
+		expect(
+			screen.getByRole("button", { name: /request custom order/i }),
+		).toBeTruthy();
+		expect(screen.queryByText(/tell the seller what you need/i)).toBeNull();
 	});
 });
