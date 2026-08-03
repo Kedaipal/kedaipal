@@ -375,10 +375,9 @@ function OrderDetailRoute() {
 	//
 	// Never true for collection orders: there the rider drives the FRONT of the
 	// flow, not shipped/delivered, so this gate would both lie and strand.
-	const riderHandlingTrip =
-		!!dispatchInfo?.job &&
-		!collectionService &&
-		isActiveJobStatus(dispatchInfo.job.status);
+	// Derived from the same signal the tracking card reads, so the stepper gate
+	// and that card can't drift apart.
+	const riderHandlingTrip = hasActiveRiderBooking && !collectionService;
 	// Has that booking actually reported yet? Only then can we promise the
 	// status moves on its own — otherwise the seller may have no webhook.
 	const riderWebhookReporting =

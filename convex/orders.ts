@@ -2358,13 +2358,22 @@ export const bulkUpdateStatus = mutation({
 	handler: async (
 		ctx,
 		{ orderIds, status },
-	): Promise<{ updated: number; skipped: number }> => {
-		if (orderIds.length === 0) return { updated: 0, skipped: 0 };
+	): Promise<{
+		updated: number;
+		skipped: number;
+		/** Of `skipped`, how many were collection orders whose items are still
+		 * with the buyer — the one skip reason the seller can act on, so the
+		 * toast can name it instead of leaving a silent no-op. */
+		skippedAwaitingCollection: number;
+	}> => {
+		if (orderIds.length === 0)
+			return { updated: 0, skipped: 0, skippedAwaitingCollection: 0 };
 		if (orderIds.length > 100)
 			throw new ConvexError("Too many orders selected (max 100)");
 
 		let updated = 0;
 		let skipped = 0;
+		let skippedAwaitingCollection = 0;
 		// The inbox multi-select is single-retailer, so every id resolves to the
 		// same access descriptor; keep the last one for a single batch audit row.
 		let batchAccess: RetailerAccess | undefined;
@@ -2399,6 +2408,7 @@ export const bulkUpdateStatus = mutation({
 				isCollectionGateClosed(order)
 			) {
 				skipped++;
+				skippedAwaitingCollection++;
 				continue;
 			}
 			await applyStatusTransition(ctx, order, status);
@@ -2406,7 +2416,7 @@ export const bulkUpdateStatus = mutation({
 		}
 		if (batchAccess)
 			await logAdminAction(ctx, batchAccess, "orders.bulkUpdateStatus");
-		return { updated, skipped };
+		return { updated, skipped, skippedAwaitingCollection };
 	},
 });
 

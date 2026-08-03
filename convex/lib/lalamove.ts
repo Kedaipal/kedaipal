@@ -515,8 +515,13 @@ export function isActiveJobStatus(status: DeliveryJobStatus): boolean {
  * statuses sits behind a disabled-with-reason gate: a manual "shipped" would
  * message the buyer early and WITHOUT the live-tracking link.
  *
- * Sellers who never registered the webhook (`lastEventAt` forever unset) are
- * deliberately excluded — their documented degraded path IS advancing by hand.
+ * NOTE (3 Aug): this is no longer the GATE — it only decides the wording. The
+ * gate is now "an ACTIVE job exists" (see the order-detail stepper), because
+ * requiring a webhook event left it off between booking and the first event,
+ * which is exactly when a seller can click a live trip through to delivered.
+ * A webhook-less seller is protected by the confirm-gated escape instead, and
+ * this predicate picks the honest copy for them ("…as long as your Lalamove
+ * webhook is set up" rather than promising it moves on its own).
  */
 export function riderDrivesOrderStatus(job: {
 	status: DeliveryJobStatus;

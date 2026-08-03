@@ -704,9 +704,13 @@ function TrackingRoute() {
 				<section className="mt-6 flex items-start gap-3 rounded-2xl border border-border bg-card p-4">
 					<Truck className="mt-0.5 size-5 shrink-0 text-accent" />
 					<p className="text-sm text-foreground">
-						<span className="font-medium">Collected</span> — a rider picked your
-						items up and delivered them to {order.storeName || "the store"}.
-						They&apos;ll update this page as your order progresses.
+						{/* Provenance-neutral: `collectedAt` means "the goods are with
+						    the seller", and the seller may have collected in person —
+						    naming a rider would assert a trip that never happened. The
+						    live strip below narrates the real trip when there is one. */}
+						<span className="font-medium">Collected</span> — your items are with{" "}
+						{order.storeName || "the store"}. They&apos;ll update this page as
+						your order progresses.
 					</p>
 				</section>
 			) : null}

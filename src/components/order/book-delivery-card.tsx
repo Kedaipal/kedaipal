@@ -102,10 +102,10 @@ export function BookDeliveryCard({
 		// standard order does by reaching `delivered`). The seller books from
 		// the card's own "Send rider to collect".
 		if (
-			dispatch.deliveryDirection === "collection" ||
+			order.deliveryDirection === "collection" ||
 			dispatch.job?.deliveryDirection === "collection"
 		) {
-			return;
+			return; // see orderCollection below — this order's own nature
 		}
 		const hasActiveJob =
 			!!dispatch.job &&
@@ -136,10 +136,10 @@ export function BookDeliveryCard({
 		// collection orders) — kept as defence in depth so a future caller can't
 		// auto-dispatch a collection the seller didn't ask for.
 		if (
-			dispatch.deliveryDirection === "collection" ||
+			order.deliveryDirection === "collection" ||
 			dispatch.job?.deliveryDirection === "collection"
 		) {
-			return;
+			return; // see orderCollection below — this order's own nature
 		}
 		const hasActiveJob =
 			!!dispatch.job &&
@@ -167,6 +167,13 @@ export function BookDeliveryCard({
 	const jobCollection = dispatch.job
 		? dispatch.job.deliveryDirection === "collection"
 		: collection;
+	//  · `orderCollection` — what THIS ORDER is (frozen at create, and at
+	//    booking if the seller switched modes in between). Everything that
+	//    GATES or PROMISES behaviour for this order keys off it, so the card,
+	//    the stepper and the server can't disagree about one order.
+	const orderCollection =
+		order.deliveryDirection === "collection" ||
+		dispatch.job?.deliveryDirection === "collection";
 	const activeJob =
 		job &&
 		!["completed", "canceled", "expired", "rejected"].includes(job.status)
@@ -185,7 +192,12 @@ export function BookDeliveryCard({
 	// fails `bookable` — but a collection order deliberately never advances, so
 	// the stop has to be explicit. A FAILED collection still offers Rebook (no
 	// rider ever came); only success ends it.
-	const collectionDone = jobCollection && completedJob !== null;
+	// "The goods are with the seller" — however they got here: a completed rider
+	// trip, or the seller collecting in person (which stamps the same field).
+	// Either way there is nothing left to fetch, so the book CTA must retire.
+	const collectionDone =
+		(jobCollection && completedJob !== null) ||
+		(orderCollection && order.collectedAt !== undefined);
 	// Auto-book never fires before the buyer's chosen date (pre-orders get
 	// packed the night before) — the hint below says so instead of surprising.
 	const isFutureDated =
@@ -495,7 +507,7 @@ export function BookDeliveryCard({
 
 			{/* Prompt-on-packed heads-up — tells the seller the booking dialog will
 			    pop when they mark this order packed (never a silent charge). */}
-			{promptBookOnPacked && !activeJob && bookable && !collection ? (
+			{promptBookOnPacked && !activeJob && bookable && !orderCollection ? (
 				<p className="text-xs text-muted-foreground">
 					⚡ You'll be asked to book a rider (with today's price) the moment
 					this order is <span className="font-medium">Packed</span> and{" "}

@@ -3267,7 +3267,7 @@ describe("orders — bulk status", () => {
 			orderIds: [o1._id, o2._id, o3._id],
 			status: "confirmed",
 		});
-		expect(res).toEqual({ updated: 2, skipped: 1 });
+		expect(res).toMatchObject({ updated: 2, skipped: 1 });
 		for (const id of [o1._id, o2._id, o3._id]) {
 			expect((await t.run((ctx) => ctx.db.get(id)))?.status).toBe("confirmed");
 		}
@@ -3297,7 +3297,7 @@ describe("orders — bulk status", () => {
 			orderIds: [plain._id, gated._id],
 			status: "packed",
 		});
-		expect(res).toEqual({ updated: 1, skipped: 1 });
+		expect(res).toMatchObject({ updated: 1, skipped: 1 });
 		expect((await t.run((ctx) => ctx.db.get(plain._id)))?.status).toBe("packed");
 		// Gated order is untouched (mockup not approved).
 		expect((await t.run((ctx) => ctx.db.get(gated._id)))?.status).toBe(
@@ -6477,7 +6477,7 @@ describe("orders — the collection gate holds on EVERY status write path", () =
 			orderIds: ids,
 			status: "packed",
 		});
-		expect(res).toEqual({ updated: 1, skipped: 1 });
+		expect(res).toMatchObject({ updated: 1, skipped: 1 });
 		const rows = await t.run(async (ctx) => [
 			await ctx.db.get(ids[0]),
 			await ctx.db.get(ids[1]),
@@ -6505,6 +6505,104 @@ describe("orders — the collection gate holds on EVERY status write path", () =
 			orderIds: [o._id],
 			status: "packed",
 		});
-		expect(res).toEqual({ updated: 1, skipped: 0 });
+		expect(res).toMatchObject({ updated: 1, skipped: 0 });
+	});
+});
+
+describe("orders — collection gate: the remaining edges", () => {
+	const asA = (t: ReturnType<typeof setup>) =>
+		t.withIdentity({ subject: USER_A });
+
+	/** One store, many orders — an account can only own one retailer. */
+	async function seedStore(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		return { retailer, productId };
+	}
+
+	async function order(
+		t: ReturnType<typeof setup>,
+		collection: boolean,
+		store?: { retailer: { _id: Id<"retailers"> }; productId: Id<"products"> },
+	) {
+		const { retailer, productId } = store ?? (await seedStore(t));
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		if (!o) throw new Error("no order");
+		if (collection) {
+			await t.run(async (ctx) => {
+				await ctx.db.patch(o._id, { deliveryDirection: "collection" });
+			});
+		}
+		return o;
+	}
+
+	test("markCollected is INERT on a standard order — it must never stamp arrival", async () => {
+		// collectedAt mutes the due-date badge and flips buyer copy; a standard
+		// order must never acquire it through this escape.
+		const t = setup();
+		const o = await order(t, false);
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: o._id,
+			stageId: "default:packed",
+			markCollected: true,
+		});
+		const after = await t.run(async (ctx) => ctx.db.get(o._id));
+		expect(after?.status).toBe("packed");
+		expect(after?.collectedAt).toBeUndefined();
+	});
+
+	test("the backfill is idempotent and never touches a standard order", async () => {
+		const t = setup();
+		const store = await seedStore(t);
+		const collectionOrder = await order(t, true, store);
+		const standardOrder = await order(t, false, store);
+		const at = 1_785_000_000_000;
+		await t.run(async (ctx) => {
+			const mk = async (orderId: typeof collectionOrder._id, dir?: string) => {
+				await ctx.db.insert("deliveryJobs", {
+					orderId,
+					retailerId: collectionOrder.retailerId,
+					provider: "lalamove" as const,
+					providerOrderId: `LLM-${orderId}`,
+					status: "completed" as const,
+					costActual: 1000,
+					quotationId: "q",
+					vehicleType: "MOTORCYCLE",
+					...(dir ? { deliveryDirection: dir as "collection" } : {}),
+					lastEventAt: at,
+					createdAt: at,
+					updatedAt: at,
+				});
+			};
+			await mk(collectionOrder._id, "collection");
+			await mk(standardOrder._id);
+		});
+
+		const first = await t.mutation(
+			internal.orders.backfillCollectionCollectedAt,
+			{},
+		);
+		expect(first.stamped).toBe(1);
+		const stamped = await t.run(async (ctx) => ctx.db.get(collectionOrder._id));
+		expect(stamped?.collectedAt).toBe(at);
+		const untouched = await t.run(async (ctx) => ctx.db.get(standardOrder._id));
+		expect(untouched?.collectedAt).toBeUndefined();
+
+		// Running twice must not move the arrival moment.
+		const second = await t.mutation(
+			internal.orders.backfillCollectionCollectedAt,
+			{},
+		);
+		expect(second.stamped).toBe(0);
+		const again = await t.run(async (ctx) => ctx.db.get(collectionOrder._id));
+		expect(again?.collectedAt).toBe(at);
 	});
 });

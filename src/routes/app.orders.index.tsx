@@ -436,7 +436,13 @@ function OrdersRoute() {
 			const res = await bulkUpdateStatus({ orderIds: ids, status });
 			toast.success(
 				res.skipped > 0
-					? `Updated ${res.updated} · skipped ${res.skipped}`
+					? // Name the actionable reason — a bare "skipped 2" leaves the
+						// seller guessing why their bulk action half-worked.
+						`Updated ${res.updated} · skipped ${res.skipped}${
+							res.skippedAwaitingCollection > 0
+								? ` (${res.skippedAwaitingCollection} still with your customer)`
+								: ""
+						}`
 					: `Updated ${res.updated} order${res.updated === 1 ? "" : "s"}`,
 			);
 			// Clear the selection but STAY in select mode — the bulk bar (and the

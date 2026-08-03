@@ -1554,3 +1554,44 @@ describe("collection service — collectedAt (the goods-arrived stamp)", () => {
 		expect(order?.collectedAt).toBe(Date.parse("2026-08-02T05:00:00.000Z"));
 	});
 });
+
+describe("collection service — booking freezes the direction onto the order", () => {
+	test("an order placed as STANDARD, booked after the seller switched, becomes a collection order", async () => {
+		// Zaki's own dev-testing path: place test orders, then flip the toggle.
+		// Dispatch reads the store's LIVE mode, but every gate and label reads the
+		// ORDER — so without this the rider genuinely collects from the buyer
+		// while the order still calls itself a delivery, invisible to the status
+		// gate and to the buyer's live-rider strip.
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id); // no direction
+		await t.mutation(internal.lalamove.reserveBooking, {
+			orderId,
+			retailerId: retailer._id,
+			quotationId: "quot-switch",
+			vehicleType: "MOTORCYCLE",
+			deliveryDirection: "collection",
+		});
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.deliveryDirection).toBe("collection");
+	});
+
+	test("a STANDARD booking never touches the order's direction", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			deliveryDirection: "collection",
+		});
+		await t.mutation(internal.lalamove.reserveBooking, {
+			orderId,
+			retailerId: retailer._id,
+			quotationId: "quot-std",
+			vehicleType: "MOTORCYCLE",
+			deliveryDirection: "standard",
+		});
+		// Set-if-unset, never un-set: a standard booking can't erase a collection
+		// order's nature (its buyer was told "we collect from you").
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.deliveryDirection).toBe("collection");
+	});
+});

@@ -371,6 +371,7 @@ describe("BookDeliveryCard — collection never auto-prompts (86eyg0n8e)", () =>
 		status: "confirmed",
 		currency: "MYR",
 		paymentStatus: "received",
+		deliveryDirection: "collection",
 	} as unknown as Doc<"orders">;
 
 	const noJobYet = {
@@ -408,7 +409,11 @@ describe("BookDeliveryCard — collection never auto-prompts (86eyg0n8e)", () =>
 		const prepare = vi.fn().mockResolvedValue({ ok: false, reason: "x" });
 		state.action = prepare;
 		state.dispatch = { ...noJobYet, deliveryDirection: "standard" };
-		const standard = { ...collectionOrder } as Doc<"orders">;
+		// Genuinely standard — on the ORDER too, which is what the guard reads.
+		const standard = {
+			...collectionOrder,
+			deliveryDirection: undefined,
+		} as Doc<"orders">;
 		const { rerender } = render(<BookDeliveryCard order={standard} />);
 		expect(screen.getByText(/You'll be asked to book a rider/)).toBeTruthy();
 		rerender(
@@ -419,5 +424,56 @@ describe("BookDeliveryCard — collection never auto-prompts (86eyg0n8e)", () =>
 		await waitFor(() => {
 			expect(prepare).toHaveBeenCalled();
 		});
+	});
+});
+
+describe("BookDeliveryCard — collected by hand (86eyg0n8e)", () => {
+	const collectedByHand = {
+		shortId: "ORD-HAND",
+		deliveryMethod: "delivery",
+		status: "packed",
+		currency: "MYR",
+		paymentStatus: "received",
+		deliveryDirection: "collection",
+		collectedAt: 1_785_000_000_000,
+	} as unknown as Doc<"orders">;
+
+	it("stops offering to fetch goods the seller already has, even with no job", () => {
+		// The escape stamps collectedAt with no rider involved. Without honouring
+		// it, the card kept offering "Send rider to collect" — a second, paid,
+		// pointless trip for items already on the bench.
+		state.dispatch = {
+			promptBookOnPacked: false,
+			bookingEnabled: true,
+			deliveryDirection: "collection",
+			blockReason: null,
+			job: null,
+		};
+		render(<BookDeliveryCard order={collectedByHand} />);
+		expect(screen.queryByText("Send rider to collect")).toBeNull();
+	});
+
+	it("the prompt guard reads the ORDER's direction, not the store's live setting", () => {
+		// A collection order on a store that has since switched to standard must
+		// still never auto-prompt: three surfaces gating one order have to agree.
+		state.dispatch = {
+			promptBookOnPacked: true,
+			bookingEnabled: true,
+			deliveryDirection: "standard", // the store, today
+			blockReason: null,
+			job: null,
+		};
+		render(
+			<BookDeliveryCard
+				order={
+					{
+						...collectedByHand,
+						status: "confirmed",
+						collectedAt: undefined,
+					} as unknown as Doc<"orders">
+				}
+			/>,
+		);
+		expect(screen.queryByText(/You'll be asked to book a rider/)).toBeNull();
 	});
 });

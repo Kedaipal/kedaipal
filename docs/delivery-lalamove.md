@@ -387,7 +387,9 @@ URL into THEIR Partner Portal → Developers → Webhook URL (Version 3). The
 settings card surfaces the exact URL with a copy button and the vendor
 guide walks it (Step E5). Graceful degradation if a seller skips it:
 bookings still work, but shipped/delivered stop being automatic — the
-order just stays where it is until the seller advances it by hand. Dev
+order stays where it is until the seller advances it by hand, which since
+3 Aug costs one confirm per transition while a booking is active (the
+"Update manually" escape; see the manual-advance gate below). Dev
 deployment URL: `https://qualified-chihuahua-441.convex.site/webhook/lalamove`.
 
 **Manual-advance gate while the rider drives (26 Jul hotfix; tightened

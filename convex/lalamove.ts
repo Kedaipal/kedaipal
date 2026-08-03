@@ -1050,6 +1050,24 @@ export const reserveBooking = internalMutation({
 			);
 		}
 		const now = Date.now();
+		// Dispatch reads the store's LIVE direction, while `orders.deliveryDirection`
+		// was frozen at create — so an order placed before the seller switched to
+		// collection, and booked after, produces a collection trip on an order that
+		// still calls itself standard. Everything downstream keys off the ORDER
+		// (the status gate, the buyer's live-rider strip, the labels), so it would
+		// all be blind to a rider genuinely heading to the buyer's door. Freeze the
+		// real direction onto the order here, set-if-unset — a booking is the
+		// moment the trip becomes a fact. Never un-set: a standard booking on a
+		// collection order leaves the order alone.
+		if (args.deliveryDirection === "collection") {
+			const order = await ctx.db.get(args.orderId);
+			if (order && order.deliveryDirection === undefined) {
+				await ctx.db.patch(args.orderId, {
+					deliveryDirection: "collection",
+					updatedAt: now,
+				});
+			}
+		}
 		const jobId = await ctx.db.insert("deliveryJobs", {
 			orderId: args.orderId,
 			retailerId: args.retailerId,
