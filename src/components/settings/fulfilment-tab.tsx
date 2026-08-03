@@ -1062,6 +1062,14 @@ function DeliveryChargeSection({
 										? 'On — riders collect from your customer\'s address and bring the order to your outlet (for cleaning, repair or laundry services). Checkout asks buyers for a collection address, and order statuses stay yours to advance — the rider\'s progress only moves the booking card, since "picked up" isn\'t "delivered to the customer" here. The return trip after your work is done is a separate order.'
 										: "Off — riders deliver from your outlet to the customer (the normal direction). Turn this on if your business collects items from customers instead, like a cleaning or repair service."}
 								</p>
+								{collectionMode !==
+								(deliveryBooking?.deliveryDirection === "collection") ? (
+									<p className="mt-1.5 text-xs text-amber-700 leading-relaxed dark:text-amber-400">
+										Applies to <span className="font-medium">new orders</span>.
+										Orders already placed keep the arrangement they promised
+										their buyer, so anything in flight is unaffected.
+									</p>
+								) : null}
 								{collectionMode ? (
 									<p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">
 										💡 Rename your order steps to match your workflow (e.g.

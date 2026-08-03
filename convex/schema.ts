@@ -698,6 +698,17 @@ export default defineSchema({
 		deliveryDirection: v.optional(
 			v.union(v.literal("standard"), v.literal("collection")),
 		),
+		// When a COLLECTION rider actually dropped the buyer's items with the
+		// seller (86eyg0n8e). Stamped by the Lalamove webhook off the completed
+		// job — a timestamp, NOT a status change: the order lifecycle stays the
+		// seller's. It is the only ORDER-level record that the goods arrived, so
+		// it powers (a) muting the fulfilment-date badge — that date is the
+		// COLLECTION day, the start of the seller's work rather than a deadline,
+		// so it would otherwise show red "Overdue" for the whole healthy service
+		// window on every collection order — and (b) the buyer's persistent
+		// "Collected on …" line, which outlives the transient live-rider strip.
+		// Set once, never cleared.
+		collectedAt: v.optional(v.number()),
 		// Structured shipping address. Required when deliveryMethod === "delivery"
 		// and forbidden when "self_collect" — invariant enforced in orders.create.
 		// Validated/sanitized server-side via convex/lib/address.ts.

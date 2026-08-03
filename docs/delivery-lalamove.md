@@ -504,6 +504,18 @@ tell the story). Three side-channels are closed with it:
   skipped — offering "book a rider" at the shipped moment would dispatch
   ANOTHER buyer→store collection; the return journey is **Leg 2, out of
   scope** (Bearcamp raises a separate order for it).
+- **`orders.collectedAt`** — the webhook stamps WHEN the goods arrived (a
+  timestamp, never a status change). It exists because a collection order's
+  `fulfilmentDate` is the day the rider COLLECTS — the start of the seller's
+  work, not a deadline — so the inbox/date badge would otherwise show red
+  **"Overdue" for the entire healthy service window** on every collection
+  order, and (being a strict priority list) would suppress every other
+  contextual badge under it. Keyed on the goods arriving rather than on
+  status, because a seller may anchor their own "Collected" stage at
+  `confirmed`. Before collection a passed date still reads red — that
+  genuinely means nothing came in. The same stamp gives the buyer a
+  persistent "Collected on …" line once the live rider strip retires, so
+  their page is never silent mid-service.
 - **A completed collection is TERMINAL for the card** (`collectionDone`,
   3 Aug — bug found by Zaki in local testing). Because the order never
   advances, it sits at confirmed/packed forever, so `bookable` stayed true

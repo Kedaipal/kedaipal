@@ -436,6 +436,21 @@ export const applyWebhookEvent = internalMutation({
 				const collection = job.deliveryDirection === "collection";
 				const order = await ctx.db.get(job.orderId);
 				if (!order || order.status === "cancelled") return;
+				// The goods physically arrived with the seller. Recording WHEN is
+				// not advancing the order — the lifecycle stays theirs — but it's
+				// the only order-level trace that collection happened, and both
+				// the seller's due-date badge and the buyer's page need it (see
+				// orders.collectedAt). Set-if-unset, so replays never move it.
+				if (
+					collection &&
+					status === "completed" &&
+					order.collectedAt === undefined
+				) {
+					await ctx.db.patch(order._id, {
+						collectedAt: eventAt,
+						updatedAt: now,
+					});
+				}
 				if (!collection) {
 					if (status === "picked_up" && SHIPPABLE_FROM.has(order.status)) {
 						await applyStatusTransition(ctx, order, "shipped", {

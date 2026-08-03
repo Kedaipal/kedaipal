@@ -698,6 +698,19 @@ function TrackingRoute() {
 			    appears when the store books and vanishes when the trip ends —
 			    deliberately a transient strip, not a status: the order's
 			    lifecycle stays the seller's. */}
+			{!isCancelled &&
+			!order.collectionRider &&
+			order.collectedAt !== undefined ? (
+				<section className="mt-6 flex items-start gap-3 rounded-2xl border border-border bg-card p-4">
+					<Truck className="mt-0.5 size-5 shrink-0 text-accent" />
+					<p className="text-sm text-foreground">
+						<span className="font-medium">Collected</span> — a rider picked your
+						items up and delivered them to {order.storeName || "the store"}.
+						They&apos;ll update this page as your order progresses.
+					</p>
+				</section>
+			) : null}
+
 			{!isCancelled && order.collectionRider ? (
 				<section className="mt-6 flex flex-col gap-2 rounded-2xl border border-accent/40 bg-accent/5 p-4">
 					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
@@ -981,7 +994,9 @@ function TrackingRoute() {
 							? "Meet on "
 							: "Collect on "
 						: isCollection
-							? "We collect on "
+							? order.collectedAt !== undefined
+								? "Collected on "
+								: "We collect on "
 							: "Delivery on "}
 					<span className="font-semibold">
 						{formatFulfilmentDate(order.fulfilmentDate)}

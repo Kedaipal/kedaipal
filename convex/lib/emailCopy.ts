@@ -99,6 +99,12 @@ const pickupKindLabel: Record<
 	zh: { self_collect: "自取", drop_off: "交收" },
 };
 
+/** Collection service (86eyg0n8e) — the rider collects FROM the customer, so
+ * the seller's next step is dispatching one, not packing a parcel. */
+function isCollection(v: RetailerEmailVars): boolean {
+	return v.deliveryDirection === "collection";
+}
+
 /**
  * Effective "Method:" label. Delivery is delivery; a pickup order resolves to
  * the kind-specific label ("Self-collect" / "Drop-off") so the seller sees the
@@ -210,12 +216,16 @@ const en = {
 			? `⚠️ <strong>Custom item</strong> — send a mockup for the buyer to approve before packing. Payment is held until they approve.`
 			: v.deliveryFeePending
 				? `🚚 <strong>Delivery charge to confirm</strong> — this address is outside your bands. Set the charge on the order page; the buyer's payment ask is held until you do.`
-				: `Ready for next steps — pack and ship when payment lands.`;
+				: (isCollection(v)
+					? "Ready for next steps — send a rider to collect from your customer."
+					: "Ready for next steps — pack and ship when payment lands.");
 		const nextStepsText = v.requiresMockup
 			? `⚠️ Custom item — send a mockup for the buyer to approve before packing. Payment is held until they approve.`
 			: v.deliveryFeePending
 				? `🚚 Delivery charge to confirm — this address is outside your bands. Set the charge on the order page; the buyer's payment ask is held until you do.`
-				: `Ready for next steps — pack and ship when payment lands.`;
+				: (isCollection(v)
+					? "Ready for next steps — send a rider to collect from your customer."
+					: "Ready for next steps — pack and ship when payment lands.");
 		const lines = [
 			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} item(s) · ${escapeHtml(v.totalFormatted)}`,
 			`Customer: ${escapeHtml(v.customerName)}`,
@@ -490,12 +500,16 @@ const zh = {
 			? `⚠️ <strong>客制化商品</strong> —— 打包前请发送设计稿给顾客确认。顾客确认前先不收款。`
 			: v.deliveryFeePending
 				? `🚚 <strong>配送费待确认</strong> —— 这个地址超出您的配送范围。请在订单页面设置配送费；设置前不会向顾客要求付款。`
-				: `可以进行下一步了 —— 收到付款后打包发货。`;
+				: (isCollection(v)
+					? "可以进行下一步了 —— 安排骑手上门向顾客取件。"
+					: "可以进行下一步了 —— 收到付款后打包发货。");
 		const nextStepsText = v.requiresMockup
 			? `⚠️ 客制化商品 —— 打包前请发送设计稿给顾客确认。顾客确认前先不收款。`
 			: v.deliveryFeePending
 				? `🚚 配送费待确认 —— 这个地址超出您的配送范围。请在订单页面设置配送费；设置前不会向顾客要求付款。`
-				: `可以进行下一步了 —— 收到付款后打包发货。`;
+				: (isCollection(v)
+					? "可以进行下一步了 —— 安排骑手上门向顾客取件。"
+					: "可以进行下一步了 —— 收到付款后打包发货。");
 		const lines = [
 			`<strong>${escapeHtml(v.shortId)}</strong> · ${v.itemCount} 件商品 · ${escapeHtml(v.totalFormatted)}`,
 			`顾客：${escapeHtml(v.customerName)}`,

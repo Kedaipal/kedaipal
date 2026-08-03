@@ -1490,3 +1490,67 @@ describe("collection service — live rider strip (orders.get)", () => {
 		expect(order?.collectionRider).toBeUndefined();
 	});
 });
+
+describe("collection service — collectedAt (the goods-arrived stamp)", () => {
+	test("a COMPLETED collection stamps the order without advancing it; replays never move it", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			deliveryDirection: "collection",
+		});
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			deliveryDirection: "collection",
+		});
+		const event = {
+			jobId,
+			eventType: "ORDER_STATUS_CHANGED",
+			data: statusEvent("COMPLETED", "2026-08-02T05:00:00.000Z"),
+			eventTimestamp: Date.parse("2026-08-02T05:00:00.000Z"),
+		};
+		await t.mutation(internal.lalamove.applyWebhookEvent, event);
+		const first = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(first?.collectedAt).toBe(Date.parse("2026-08-02T05:00:00.000Z"));
+		// A stamp is not a status change — the lifecycle stays the seller's.
+		expect(first?.status).toBe("confirmed");
+
+		// A later replay (Lalamove retries for 24h) must not rewrite the moment.
+		await t.mutation(internal.lalamove.applyWebhookEvent, {
+			...event,
+			data: statusEvent("COMPLETED", "2026-08-03T05:00:00.000Z"),
+			eventTimestamp: Date.parse("2026-08-03T05:00:00.000Z"),
+		});
+		const second = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(second?.collectedAt).toBe(first?.collectedAt);
+	});
+
+	test("a standard delivery never gets the stamp (it reaches `delivered` instead)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, { status: "shipped" });
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			status: "picked_up",
+		});
+		await t.mutation(internal.lalamove.applyWebhookEvent, {
+			jobId,
+			eventType: "ORDER_STATUS_CHANGED",
+			data: statusEvent("COMPLETED", "2026-08-02T05:00:00.000Z"),
+			eventTimestamp: Date.parse("2026-08-02T05:00:00.000Z"),
+		});
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.collectedAt).toBeUndefined();
+		expect(order?.status).toBe("delivered");
+	});
+
+	test("the buyer's tracking read exposes it, so the page can say 'Collected on'", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			trackingToken: "tok_collected_at",
+			deliveryDirection: "collection",
+			collectedAt: Date.parse("2026-08-02T05:00:00.000Z"),
+		});
+		void orderId;
+		const order = await t.query(api.orders.get, { token: "tok_collected_at" });
+		expect(order?.collectedAt).toBe(Date.parse("2026-08-02T05:00:00.000Z"));
+	});
+});

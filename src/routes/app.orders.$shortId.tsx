@@ -343,11 +343,21 @@ function OrderDetailRoute() {
 	// Collection service (86eyg0n8e): the rider collects FROM the customer, so
 	// the webhook only ever moves the JOB — the order status stays the
 	// seller's to advance by hand throughout.
-	const collectionService = dispatchInfo?.deliveryDirection === "collection";
-	// The dispatch card's own heading — the cancel/delete warnings point the
-	// seller AT it, so they must call it what it's actually called on this
-	// order ("Lalamove Collection" on a collection store).
-	const dispatchCardName = collectionService
+	// Read from the ORDER, frozen at create — never the store's live setting.
+	// A seller switching modes mid-flight must not retroactively change how an
+	// already-placed order behaves: flipping to collection would strip the
+	// rider gate off in-flight standard deliveries (letting a manual "shipped"
+	// message the buyer early, without the tracking link), and flipping away
+	// would impose that gate on a collection order it would strand.
+	const collectionService = order?.deliveryDirection === "collection";
+	// The dispatch card names itself after the TRIP it shows (or, with no job
+	// yet, the store's current mode) — mirror that exactly, since the
+	// cancel/delete warnings point the seller AT that card by name.
+	const dispatchCardName = (
+		dispatchInfo?.job
+			? dispatchInfo.job.deliveryDirection === "collection"
+			: dispatchInfo?.deliveryDirection === "collection"
+	)
 		? "Lalamove Collection"
 		: "Lalamove Delivery";
 	// The rider's webhook is demonstrably driving this order (active job + at
@@ -1067,7 +1077,9 @@ function OrderDetailRoute() {
 							? order.pickupSnapshot?.locationType === "drop_off"
 								? "Drop-off"
 								: "Self Collect"
-							: "Delivery"}
+							: collectionService
+								? "Collection"
+								: "Delivery"}
 					</p>
 					{order.fulfilmentDate !== undefined && order.source !== "counter" ? (
 						<div className="flex items-center gap-1.5">
@@ -1076,12 +1088,14 @@ function OrderDetailRoute() {
 									? order.pickupSnapshot?.locationType === "drop_off"
 										? "Meet on"
 										: "Collect on"
-									: "Deliver on"}
+									: collectionService
+										? "Collect on"
+										: "Deliver on"}
 							</span>
 							<FulfilmentDateBadge
 								epoch={order.fulfilmentDate}
 								size="md"
-								muted={isTerminal}
+								muted={isTerminal || order.collectedAt !== undefined}
 							/>
 						</div>
 					) : null}
