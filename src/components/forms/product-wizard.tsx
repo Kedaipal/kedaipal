@@ -724,15 +724,32 @@ export function ProductWizard({
 		);
 	}
 
+	/**
+	 * Leaving made-to-order has to CLEAR its flags, not just change the answer.
+	 * `madeToOrder` is derived from the rows (`isMadeToOrderOnly`), so a switch
+	 * that carried `requiresProof`/`blockWhenOutOfStock` through left the type
+	 * still reading as made-to-order: the target card wouldn't light up and the
+	 * "no choices, no stock" note stayed on screen. Ordinary rows track stock
+	 * and aren't approval-gated — `emptyRow`'s defaults.
+	 */
+	function clearMadeToOrderFlags(row: VariantRow): VariantRow {
+		if (!madeToOrder) return row;
+		return { ...row, blockWhenOutOfStock: true, requiresProof: false };
+	}
+
 	function switchToChoices() {
 		if (state.shape === "choices") return;
 		if (options.length === 0) {
+			const seed = rows.map(clearMadeToOrderFlags);
 			patch({
 				shape: "choices",
+				// A made-to-order draft has answered nothing about stock; the grid
+				// re-asks it at step 4 like any other multi-choice product.
+				fulfilmentAnswered: madeToOrder ? false : state.fulfilmentAnswered,
 				editor: {
 					...state.editor,
 					options: [{ name: "", values: [] }],
-					rows: rebuildRows([{ name: "", values: [] }], rows),
+					rows: rebuildRows([{ name: "", values: [] }], seed),
 				},
 			});
 			setValueDrafts([""]);
@@ -741,12 +758,15 @@ export function ProductWizard({
 		}
 	}
 	function switchToSingle() {
-		if (state.shape === "single") return;
+		if (state.shape === "single" && !madeToOrder) return;
 		if (!confirmLosingChoices()) return;
 		// Collapse to one row, carrying the first row's price/stock/flags.
-		const donor = rows[0] ?? emptyRow([]);
+		const donor = clearMadeToOrderFlags(rows[0] ?? emptyRow([]));
 		patch({
 			shape: "single",
+			// Same reason as switchToChoices: "how do you prepare orders?" was
+			// never asked, so step 4 must ask it rather than inherit an answer.
+			fulfilmentAnswered: madeToOrder ? false : state.fulfilmentAnswered,
 			editor: {
 				...state.editor,
 				options: [],

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { cn } from "../../lib/utils";
 import { Field, FieldDescription, FieldError, FieldLabel } from "../ui/field";
 import { Input } from "../ui/input";
@@ -14,16 +15,17 @@ interface TextFieldProps {
 	autoComplete?: string;
 	disabled?: boolean;
 	/**
-	 * Fixed text welded to the front of the value — "+60" on a phone field,
-	 * "RM" on money. Renders inside the control's border (the house composite
-	 * pattern: bordered wrapper owns the focus ring, the input goes `bare`), so
-	 * it reads as part of the number rather than a separate label.
+	 * Fixed content welded to the front of the value — a country flag + dial
+	 * code, an "RM" on money. Renders inside the control's border on a tinted
+	 * plate with a **vertical rule** separating it from the input, the shape
+	 * every phone field in this market uses (Grab, Shopee, Stripe): the fixed
+	 * part is visibly not editable, so nobody wonders whether to retype it.
 	 *
 	 * It is a PROMISE about what the field already contains: whatever the
 	 * caller's schema normalizes to must accept a value typed without it, or
-	 * the badge tells the buyer to do something the validator then rejects.
+	 * the prefix tells the user to do something the validator then rejects.
 	 */
-	prefix?: string;
+	prefix?: ReactNode;
 }
 
 export function TextField({
@@ -55,7 +57,7 @@ export function TextField({
 			onBlur={() => field.handleBlur()}
 			variant={prefix ? "bare" : "field"}
 			isError={isInvalid}
-			className={cn(mono && "font-mono", prefix && "min-h-11 pl-1.5 text-base")}
+			className={cn(mono && "font-mono", prefix && "min-h-11 px-3 text-base")}
 		/>
 	);
 
@@ -67,22 +69,21 @@ export function TextField({
 			</FieldLabel>
 			{prefix ? (
 				// Mirrors the `field` input variant's chrome on the WRAPPER so the
-				// prefix sits inside one control. Focus + invalid styling has to be
-				// lifted here too — a `bare` input paints neither.
+				// prefix and the input read as one control. Focus + invalid styling
+				// has to be lifted here too — a `bare` input paints neither.
+				// `overflow-hidden` lets the prefix plate fill the rounded corner.
 				<div
 					className={cn(
-						"flex min-h-11 items-center rounded-xl border border-input bg-transparent pl-4 transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50 dark:bg-input/30",
+						"flex min-h-11 items-center overflow-hidden rounded-xl border border-input bg-transparent transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50 dark:bg-input/30",
 						disabled && "cursor-not-allowed bg-input/50 opacity-50",
 						isInvalid &&
 							"border-destructive ring-3 ring-destructive/20 dark:border-destructive/50 dark:ring-destructive/40",
 					)}
 				>
-					{/* aria-hidden: the prefix is decoration on top of the label, and
-					    screen readers would otherwise read it as part of the value. */}
-					<span
-						aria-hidden
-						className="select-none text-base text-muted-foreground"
-					>
+					{/* The plate + right rule is what makes the fixed part obviously
+					    fixed. `select-none` so a drag-select of the number doesn't
+					    sweep the dial code into the copy. */}
+					<span className="flex select-none items-center gap-1.5 self-stretch border-r border-input bg-muted/60 px-3 text-muted-foreground">
 						{prefix}
 					</span>
 					{input}

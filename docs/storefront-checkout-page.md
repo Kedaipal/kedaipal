@@ -160,9 +160,18 @@ clearance) is written up once in
 
 Six fixes from the 31 Jul release, all on this page:
 
-- **`+60` prefix on the WhatsApp field.** `TextField` gained a `prefix` prop
-  (bordered wrapper owns the focus ring, the input goes `variant="bare"` — the
-  house composite pattern the `kedaipal.com/` slug boxes already use).
+- **`+60` country prefix on the WhatsApp field.** `TextField` gained a `prefix`
+  slot (bordered wrapper owns the focus ring, the input goes `variant="bare"` —
+  the house composite pattern the `kedaipal.com/` slug boxes already use),
+  rendering **flag + dial code on a tinted plate with a vertical rule** before
+  the input — the shape every phone field in this market uses (Grab, Shopee,
+  Touch 'n Go, Stripe), so the fixed part is visibly not editable. The flag is
+  an **inline SVG** (`my-phone-prefix.tsx`), not an emoji and not
+  `react-phone-number-input`'s flag set: emoji regional-indicator pairs render
+  as the letters "MY" on Windows, and that module is one barrel of ~250 country
+  SVGs — the whole set would land in the public storefront bundle for one
+  country. It is the static counterpart of `PhoneField`'s searchable country
+  picker, which would be a control with one valid answer here.
   **The badge is a promise, so the validator had to keep it:** it invites
   "12-345 6789", which the old normalizer accepted from neither arm (`0…` and
   `60…` only) and rejected. `assertValidMyMobile` (server, the authority) and
@@ -194,8 +203,13 @@ Six fixes from the 31 Jul release, all on this page:
 - **Mobile bottom bar trimmed.** It stacked a total, a blocked reason, the CTA
   and *two* full sentences of small print. The reassurance line is now
   desktop-only — "confirmation lands in your WhatsApp" is already the phone
-  field's own description — and the bar carries one line: `Nothing is paid yet
-  · Privacy Policy`.
+  field's own description — leaving the bar the one line it can't drop, the
+  consent sentence, which ends on the Privacy Policy link.
+- **Quantity controls lost their circles.** Three ringed pills for −/qty/+
+  inside an already-bordered receipt line was heavy chrome around a one-digit
+  number; the glyphs alone are the control now (hover fill only). The 44px tap
+  target is unchanged — `tap-target` sizes the hit area, the border was
+  decoration. Same treatment on the custom line's Remove.
 
 ## Follow-ups (PR2 / PR3 of 86eybrhrt)
 

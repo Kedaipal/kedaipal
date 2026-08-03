@@ -40,6 +40,7 @@ import {
 } from "../../lib/schemas";
 import { useLiveDeliveryQuote } from "../../lib/use-live-delivery-quote";
 import { submitThenFocusError } from "../forms/focus-error";
+import { MyPhonePrefix } from "../forms/my-phone-prefix";
 import { useAppForm } from "../forms/form";
 import { Button } from "../ui/button";
 import { AddressFieldset } from "./address-fieldset";
@@ -705,11 +706,13 @@ export function CheckoutPage({
 			</p>
 		</>
 	);
-	// The mobile bar's whole fine print: the one thing that lowers the stakes of
-	// tapping, plus the legal link we can't drop. One line, not four.
+	// The mobile bar's whole fine print: the consent line, which is the only
+	// part we can't drop, and which ends on the link so it reads as one
+	// sentence. The reassurance stays desktop-only (the phone field's own
+	// description already promises the WhatsApp confirmation).
 	const finePrintCompact = (
 		<p className="text-center text-xs text-muted-foreground">
-			Nothing is paid yet · {privacyPolicyLink}
+			By placing this order, you agree to our {privacyPolicyLink}.
 		</p>
 	);
 
@@ -844,11 +847,11 @@ export function CheckoutPage({
 									type="tel"
 									inputMode="tel"
 									autoComplete="tel"
-									// The badge says the country code is handled, so the
+									// The plate says the country code is handled, so the
 									// placeholder shows the rest. A buyer who ignores it and
 									// types the full "012-345 6789" (or "60123…") is still
 									// normalized to the same number — see myWaPhoneCheckoutSchema.
-									prefix="+60"
+									prefix={<MyPhonePrefix />}
 									placeholder="12-345 6789"
 									required
 									description={

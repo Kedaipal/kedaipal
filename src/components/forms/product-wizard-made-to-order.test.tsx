@@ -62,14 +62,15 @@ describe("wizard — the Made to order type is reachable and self-explaining", (
 		expect(screen.getByText("What kind of product is it?")).toBeTruthy();
 		const card = screen.getByRole("button", { name: /made to order/i });
 		expect(card.getAttribute("aria-pressed")).toBe("false");
-		expect(screen.getByText(/you quote a price and get a mockup approved/i))
-			.toBeTruthy();
+		expect(
+			screen.getByText(/you quote a price and get a mockup approved/i),
+		).toBeTruthy();
 
 		pickMadeToOrder();
 		expect(
-			screen.getByRole("button", { name: /made to order/i }).getAttribute(
-				"aria-pressed",
-			),
+			screen
+				.getByRole("button", { name: /made to order/i })
+				.getAttribute("aria-pressed"),
 		).toBe("true");
 		// Discoverability rule: say up front what this type skips and what a
 		// blank price will mean, before the seller reaches either.
@@ -81,6 +82,31 @@ describe("wizard — the Made to order type is reachable and self-explaining", (
 		expect(screen.getByText("Step 2 of 5")).toBeTruthy();
 		pickMadeToOrder();
 		expect(screen.getByText("Step 2 of 4")).toBeTruthy();
+	});
+
+	it("releases the type when the seller changes their mind", () => {
+		// Regression: `madeToOrder` is DERIVED from the row's flags, and the
+		// switch used to carry the donor row through untouched — so leaving the
+		// type kept `requiresProof`, the target card never lit up, and the
+		// "no choices, no stock" note stayed on screen under it.
+		renderWizard(atTypeStep());
+		pickMadeToOrder();
+		fireEvent.click(screen.getByRole("button", { name: /just one item/i }));
+
+		expect(
+			screen
+				.getByRole("button", { name: /just one item/i })
+				.getAttribute("aria-pressed"),
+		).toBe("true");
+		expect(
+			screen
+				.getByRole("button", { name: /made to order/i })
+				.getAttribute("aria-pressed"),
+		).toBe("false");
+		// The type's explainer belongs to the type, not the step.
+		expect(screen.queryByText(/no choices and no stock to set up/i)).toBeNull();
+		// …and the five-step route is back, Preparation included.
+		expect(screen.getByText("Step 2 of 5")).toBeTruthy();
 	});
 
 	it("goes straight from Price to Review, and never demands an amount", () => {
@@ -98,7 +124,9 @@ describe("wizard — the Made to order type is reachable and self-explaining", (
 		expect(screen.getByText("Step 4 of 4")).toBeTruthy();
 		// …and step 4 is REVIEW, not "How do you prepare orders?".
 		expect(screen.queryByText(/how do you prepare orders/i)).toBeNull();
-		expect(screen.getByRole("button", { name: /publish product/i })).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /publish product/i }),
+		).toBeTruthy();
 		// The review reads it as a quote, never as a missing price.
 		expect(screen.getAllByText(/price on quote/i).length).toBeGreaterThan(0);
 	});

@@ -182,14 +182,15 @@ export function CheckoutSummary({
 									<div className="flex items-center justify-between gap-3 pb-2 pt-1">
 										{item.isCustom ? (
 											// Custom lines are one bespoke negotiation, locked to
-											// qty 1 — no stepper, just a way out.
+											// qty 1 — no stepper, just a way out. Borderless, like
+											// the stepper it stands in for.
 											<button
 												type="button"
 												onClick={() => cart.removeItem(item.variantId)}
-												className="tap-target flex w-fit items-center gap-1 rounded-full border border-border px-2.5 py-1 text-[11px] font-medium text-muted-foreground hover:border-destructive/40 hover:text-destructive"
+												className="tap-target flex w-fit items-center gap-1.5 rounded-lg px-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-destructive"
 												aria-label={`Remove ${item.name}`}
 											>
-												<Trash2 className="size-3" aria-hidden />
+												<Trash2 className="size-4" aria-hidden />
 												Remove
 											</button>
 										) : (
@@ -259,18 +260,24 @@ function QtyStepper({
 }) {
 	const atMax = max !== undefined && quantity >= max;
 	const removing = quantity === 1;
+	// Bare glyphs, no ringed circles. Three outlined pills for −/qty/+ inside an
+	// already-bordered receipt line read as heavy chrome around a one-digit
+	// number; the icon alone is the control. The 44px tap target is unchanged —
+	// `tap-target` sizes the hit area, the border was only ever decoration.
+	const stepBtn =
+		"tap-target flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors";
 	return (
-		<div className="flex items-center gap-1.5">
+		<div className="flex items-center gap-1">
 			<button
 				type="button"
 				onClick={() => onChange(quantity - 1)}
-				className="tap-target flex size-8 items-center justify-center rounded-full border border-border text-muted-foreground transition-colors hover:border-accent/50 hover:text-foreground"
+				className={`${stepBtn} hover:bg-muted hover:text-foreground`}
 				aria-label={removing ? `Remove ${name}` : `Decrease ${name} quantity`}
 			>
 				{removing ? (
-					<Trash2 className="size-3.5" aria-hidden />
+					<Trash2 className="size-4" aria-hidden />
 				) : (
-					<Minus className="size-3.5" aria-hidden />
+					<Minus className="size-4" aria-hidden />
 				)}
 			</button>
 			<span className="min-w-6 text-center text-sm font-semibold tabular-nums">
@@ -280,10 +287,10 @@ function QtyStepper({
 				type="button"
 				onClick={() => onChange(quantity + 1)}
 				disabled={atMax}
-				className="tap-target flex size-8 items-center justify-center rounded-full border border-border text-muted-foreground transition-colors disabled:opacity-40 enabled:hover:border-accent/50 enabled:hover:text-foreground"
+				className={`${stepBtn} disabled:opacity-40 enabled:hover:bg-muted enabled:hover:text-foreground`}
 				aria-label={`Increase ${name} quantity`}
 			>
-				<Plus className="size-3.5" aria-hidden />
+				<Plus className="size-4" aria-hidden />
 			</button>
 			{atMax ? (
 				<span className="text-[11px] text-muted-foreground">
