@@ -35,7 +35,7 @@ function PrivacyPage() {
 			title="Privacy Policy"
 			lastUpdated={PRIVACY_VERSION}
 			summary={[
-				"We collect retailer account details, catalog and order data, shopper contact details (mainly WhatsApp number), and basic technical data.",
+				"We collect retailer account details, catalog and order data, shopper contact details (mainly WhatsApp number), basic technical data, and masked recordings of how our pages are used.",
 				"We use it to run the Service, deliver order updates over WhatsApp, and keep accounts secure — we never sell personal data.",
 				"We share data only with the service providers listed below that help us operate (e.g. Convex, Clerk, Meta, Stripe, HitPay).",
 				"You have rights under Malaysia's Personal Data Protection Act 2010 (PDPA), including access, correction, and withdrawal of consent.",
@@ -84,6 +84,15 @@ function PrivacyPage() {
 					<strong>Technical data.</strong> We collect basic technical
 					information such as IP address, browser type, device type, and log
 					data for security and debugging.
+				</p>
+				<p>
+					<strong>Usage analytics and session recordings.</strong> We use
+					third-party analytics that record how our pages are used — page views,
+					clicks and taps, scrolling, and a replay of on-screen activity —
+					alongside the page address, browser, and device. Recordings mask what
+					you type into forms, and we additionally mask the areas of the retailer
+					dashboard that display customer names, phone numbers, addresses, and
+					notes. We do not record the buyer order-tracking pages at all.
 				</p>
 			</section>
 
@@ -164,10 +173,17 @@ function PrivacyPage() {
 					4. Cookies and Similar Technologies
 				</h2>
 				<p>
-					We use cookies and similar technologies that are strictly necessary to
-					operate the Service, including authenticating retailer sessions and
-					remembering cart contents on the storefront. We do not use advertising
-					or cross-site tracking cookies.
+					Some of the cookies and similar technologies we use are strictly
+					necessary to operate the Service, including authenticating retailer
+					sessions and remembering cart contents on the storefront.
+				</p>
+				<p>
+					We also use analytics cookies set by Google Analytics and Microsoft
+					Clarity. These recognise a returning browser so we can measure usage
+					and replay sessions to diagnose usability problems; Microsoft Clarity's
+					identifiers persist for up to one year. They are not strictly
+					necessary, and we do not use advertising or cross-site tracking
+					cookies.
 				</p>
 			</section>
 

@@ -81,6 +81,7 @@ import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { MASK_PII } from "../lib/analytics-privacy";
 import { formatPhone, orderCustomerLabel } from "../lib/customer";
 import {
 	convexErrorMessage,
@@ -747,7 +748,10 @@ function OrderDetailRoute() {
 			{/* Shopper's note + optional custom-line reference photo — front-and-centre
 			    so it isn't missed when fulfilling. Plain text, escaped by React. */}
 			{order.customerNote || order.customerImageStorageId ? (
-				<section className="flex gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4">
+				<section
+					{...MASK_PII}
+					className="flex gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4"
+				>
 					<StickyNote className="size-5 shrink-0 text-amber-600" />
 					<div className="min-w-0 flex-1">
 						<p className="text-xs font-semibold uppercase tracking-widest text-amber-700">
@@ -972,7 +976,10 @@ function OrderDetailRoute() {
 			{/* Customer — CRM context inline (order count, lifetime spend) with
 			    WhatsApp as the hero contact action. The avatar row deep-links to
 			    the full profile when one exists. */}
-			<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+			<section
+				{...MASK_PII}
+				className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4"
+			>
 				{(() => {
 					const avatarRow = (
 						<>
