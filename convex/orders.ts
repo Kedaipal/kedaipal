@@ -68,7 +68,10 @@ import {
 	type LiveProviderQuote,
 	resolveDeliveryQuote,
 } from "./lib/delivery";
-import { CHECKOUT_QUOTE_MAX_AGE_MS } from "./lib/lalamove";
+import {
+	CHECKOUT_QUOTE_MAX_AGE_MS,
+	isActiveJobStatus,
+} from "./lib/lalamove";
 import { resolveShipmentFields } from "./lib/couriers";
 import {
 	anchorOrdinal,
@@ -1158,6 +1161,16 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 	// delivered delivery orders; the buyer sees the same shot the WhatsApp
 	// follow-up carried, the seller the same thumbnails as the dispatch card.
 	podImageUrls?: string[];
+	// Live collection-rider strip (86eyg0n8e) — present only while a rider is
+	// ACTIVELY collecting from the buyer on a collection order; the tracking
+	// page renders it as a transient card, never a status. Driver phone, cost
+	// and provider ids deliberately never cross.
+	collectionRider?: {
+		status: "assigning" | "ongoing" | "picked_up";
+		driverName?: string;
+		plateNumber?: string;
+		shareLink?: string;
+	};
 };
 
 export const get = query({
@@ -1215,9 +1228,52 @@ export const get = query({
 				if (resolved.length > 0) podImageUrls = resolved;
 			}
 		}
+		// Live collection-rider strip (86eyg0n8e): while a rider is actively
+		// collecting FROM this buyer, the tracking page shows the trip live —
+		// the buyer's only window into "who is knocking and when", since
+		// collection orders never mirror a tracking URL and never auto-advance.
+		// Read from the live job row so it can't go stale (the whole reason the
+		// mirror was skipped); one indexed read, collection orders only, and the
+		// strip vanishes the moment the job leaves its active states. Exposes
+		// trip state + driver name/plate + Lalamove's buyer-facing share page —
+		// never the driver's phone, cost or provider ids.
+		let collectionRider:
+			| {
+					status: "assigning" | "ongoing" | "picked_up";
+					driverName?: string;
+					plateNumber?: string;
+					shareLink?: string;
+			  }
+			| undefined;
+		if (
+			order.deliveryMethod === "delivery" &&
+			order.deliveryDirection === "collection" &&
+			order.status !== "cancelled"
+		) {
+			const jobs = await ctx.db
+				.query("deliveryJobs")
+				.withIndex("by_order", (q) => q.eq("orderId", order._id))
+				.collect();
+			// The ACTIVE row, never .first() — failed attempts keep their rows.
+			const active = jobs.find((j) => isActiveJobStatus(j.status));
+			if (
+				active &&
+				(active.status === "assigning" ||
+					active.status === "ongoing" ||
+					active.status === "picked_up")
+			) {
+				collectionRider = {
+					status: active.status,
+					driverName: active.driver?.name,
+					plateNumber: active.driver?.plateNumber || undefined,
+					shareLink: active.shareLink,
+				};
+			}
+		}
 		return {
 			...order,
 			podImageUrls,
+			collectionRider,
 			deliverySnapshot: isBuyerRead ? undefined : order.deliverySnapshot,
 			// Meta's message id has no buyer use and this read is unauthenticated —
 			// strip it on the token path alongside the delivery snapshot. The

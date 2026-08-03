@@ -26,6 +26,11 @@ vi.mock("convex/react");
 vi.mock("../forms/google-address-autocomplete", () => ({
 	GoogleAddressAutocomplete: () => <input aria-label="address" />,
 }));
+// The collection toggle's stage-editor tip renders a router Link — inert
+// anchor stub, same as book-delivery-card.test.tsx.
+vi.mock("@tanstack/react-router", () => ({
+	Link: (props: Record<string, unknown>) => <a {...props} />,
+}));
 
 const NAME = {
 	updateSettings: getFunctionName(api.retailers.updateSettings),

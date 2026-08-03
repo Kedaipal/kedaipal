@@ -1414,3 +1414,59 @@ describe("collection service (86eyg0n8e) — reversed trips", () => {
 		).toBe(false);
 	});
 });
+
+describe("collection service — live rider strip (orders.get)", () => {
+	async function collectionOrderWithJob(
+		t: ReturnType<typeof setup>,
+		jobOverrides: Partial<Doc<"deliveryJobs">>,
+	) {
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			trackingToken: "tok_rider_strip",
+			deliveryDirection: "collection",
+		});
+		await seedJob(t, retailer._id, orderId, {
+			deliveryDirection: "collection",
+			...jobOverrides,
+		});
+		return orderId;
+	}
+
+	test("active collection job → buyer sees trip state + driver + share link, nothing sensitive", async () => {
+		const t = setup();
+		await collectionOrderWithJob(t, {
+			status: "ongoing",
+			driver: { name: "Farid", phone: "+60161234567", plateNumber: "WXY 1234" },
+			shareLink: SHARE,
+		});
+		const order = await t.query(api.orders.get, { token: "tok_rider_strip" });
+		expect(order?.collectionRider).toEqual({
+			status: "ongoing",
+			driverName: "Farid",
+			plateNumber: "WXY 1234",
+			shareLink: SHARE,
+		});
+		// The rider's own phone never crosses to the buyer payload.
+		expect(JSON.stringify(order?.collectionRider)).not.toContain(
+			"60161234567",
+		);
+	});
+
+	test("strip vanishes once the trip ends (completed job)", async () => {
+		const t = setup();
+		await collectionOrderWithJob(t, { status: "completed" });
+		const order = await t.query(api.orders.get, { token: "tok_rider_strip" });
+		expect(order?.collectionRider).toBeUndefined();
+	});
+
+	test("standard delivery orders never get the strip (their tracking is the shipped message)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			trackingToken: "tok_rider_std",
+		});
+		await seedJob(t, retailer._id, orderId, { status: "ongoing" });
+		const order = await t.query(api.orders.get, { token: "tok_rider_std" });
+		expect(order?.collectionRider).toBeUndefined();
+	});
+});

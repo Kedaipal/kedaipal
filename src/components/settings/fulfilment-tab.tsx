@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import {
 	Clock,
@@ -1061,6 +1062,20 @@ function DeliveryChargeSection({
 										? 'On — riders collect from your customer\'s address and bring the order to your outlet (for cleaning, repair or laundry services). Checkout asks buyers for a collection address, and order statuses stay yours to advance — the rider\'s progress only moves the booking card, since "picked up" isn\'t "delivered to the customer" here. The return trip after your work is done is a separate order.'
 										: "Off — riders deliver from your outlet to the customer (the normal direction). Turn this on if your business collects items from customers instead, like a cleaning or repair service."}
 								</p>
+								{collectionMode ? (
+									<p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">
+										💡 Rename your order steps to match your workflow (e.g.
+										Collecting → Cleaning → Ready) in{" "}
+										<Link
+											to="/app/settings"
+											search={{ tab: "order-status" }}
+											className="font-medium text-accent hover:underline"
+										>
+											Settings → Order status
+										</Link>
+										— buyers see those names on their tracking page.
+									</p>
+								) : null}
 							</div>
 							<ToggleSwitch
 								on={collectionMode}

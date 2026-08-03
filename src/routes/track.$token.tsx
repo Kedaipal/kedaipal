@@ -693,6 +693,52 @@ function TrackingRoute() {
 				<MockupReview token={token} order={order} />
 			) : null}
 
+			{/* Live collection rider (86eyg0n8e) — while a rider is actively on
+			    the way to collect FROM this buyer. Reads the live job, so it
+			    appears when the store books and vanishes when the trip ends —
+			    deliberately a transient strip, not a status: the order's
+			    lifecycle stays the seller's. */}
+			{!isCancelled && order.collectionRider ? (
+				<section className="mt-6 flex flex-col gap-2 rounded-2xl border border-accent/40 bg-accent/5 p-4">
+					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+						Collection rider
+					</p>
+					<div className="flex items-start gap-3">
+						<Truck className="mt-0.5 size-5 shrink-0 text-accent" />
+						<div className="min-w-0 flex-1">
+							<p className="text-sm font-medium text-foreground">
+								{order.collectionRider.status === "assigning"
+									? "Finding a rider to collect your items — this usually takes a few minutes."
+									: order.collectionRider.status === "ongoing"
+										? `${order.collectionRider.driverName ?? "Your rider"} is on the way to your address to collect.`
+										: `Collected — your items are on the way to ${order.storeName || "the store"}.`}
+							</p>
+							{order.collectionRider.plateNumber &&
+							order.collectionRider.status !== "picked_up" ? (
+								<p className="mt-0.5 text-xs text-muted-foreground">
+									Look for plate{" "}
+									<span className="font-mono font-medium text-foreground">
+										{order.collectionRider.plateNumber}
+									</span>
+									.
+								</p>
+							) : null}
+						</div>
+					</div>
+					{isSafeTrackingUrl(order.collectionRider.shareLink) ? (
+						<a
+							href={order.collectionRider.shareLink}
+							target="_blank"
+							rel="noopener noreferrer"
+							className="flex items-center justify-center gap-2 rounded-xl border border-accent/40 bg-card px-4 py-2.5 text-sm font-semibold text-accent transition-colors hover:bg-accent/10"
+						>
+							Track your rider
+							<ExternalLink className="size-3" />
+						</a>
+					) : null}
+				</section>
+			) : null}
+
 			{/* Progress timeline — not shown for cancelled orders */}
 			{!isCancelled ? (
 				<div className="mt-6 flex flex-col gap-0">
