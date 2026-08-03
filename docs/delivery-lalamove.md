@@ -565,6 +565,16 @@ tell the story). Three side-channels are closed with it:
   production has no collection orders yet; ran on dev 3 Aug, 1 stamped).
   Standard delivery is untouched by construction: the predicate is false
   for every non-collection order (verified against all 130 dev orders).
+- **A manual collection offers to cancel the rider** (4 Aug). Taking the
+  "I already have the items" escape while a booking is still ACTIVE left the
+  rider on their way to fetch goods the seller already had. The escape now
+  warns up front ("we'll ask whether to cancel them next") and, once the
+  collection is actually recorded, asks: *Cancel the rider booking?* It is
+  **asked, never automatic** — Lalamove can charge once a driver is
+  assigned, so the spend stays the seller's call — and it reuses the same
+  `cancelBooking` action the dispatch card's own cancel button uses. Only
+  the collection escape does this: a standard order's manual advance means
+  the webhook was quiet, not that the rider is redundant.
 - **A completed collection is TERMINAL for the card** (`collectionDone`,
   3 Aug — bug found by Zaki in local testing). Because the order never
   advances, it sits at confirmed/packed forever, so `bookable` stayed true

@@ -302,6 +302,7 @@ function OrderDetailRoute() {
 	const advanceToStage = useMutation(api.orders.advanceToStage);
 	const markPaymentReceived = useMutation(api.orders.markPaymentReceived);
 	const sendPaymentReminder = useAction(api.orders.sendPaymentReminder);
+	const cancelRiderBooking = useAction(api.lalamove.cancelBooking);
 	const deleteOrder = useMutation(api.orders.deleteOrder);
 	// Opening the order IS the seller seeing it — drains it from the New bucket,
 	// the Home tile and the age escalation (86eyf1rck). Fire-and-forget: a failed
@@ -416,6 +417,12 @@ function OrderDetailRoute() {
 	// person, or the rider's webhook never reported. Confirming stamps the
 	// arrival, so the order unblocks for good rather than asking every stage.
 	const [confirmCollectedOpen, setConfirmCollectedOpen] = useState(false);
+	// Raised right after a manual collection when a rider is STILL booked —
+	// they'd otherwise turn up for goods the seller already has. Never
+	// automatic: cancelling can cost a Lalamove fee once a driver is assigned,
+	// and that's the seller's money and their call.
+	const [confirmCancelRiderOpen, setConfirmCancelRiderOpen] = useState(false);
+	const [cancellingRider, setCancellingRider] = useState(false);
 	// Rare actions (cancel, delete, receipt) collapse behind one link at the bottom.
 	const [moreOpen, setMoreOpen] = useState(false);
 	// Optional method tag captured at confirm time (the seller has just verified
@@ -1550,6 +1557,31 @@ function OrderDetailRoute() {
 				/>
 			) : null}
 
+			{/* The rider is now pointless — the goods are already with the seller.
+			    Asked, never automatic: Lalamove can charge a cancellation fee once
+			    a driver is assigned, so the spend stays the seller's decision. */}
+			<ConfirmDialog
+				open={confirmCancelRiderOpen}
+				onOpenChange={setConfirmCancelRiderOpen}
+				title="Cancel the rider booking?"
+				description="You've marked this order as collected, but a Lalamove rider is still booked to pick it up — they'll turn up for items you already have. Cancelling stops that; Lalamove may charge a fee if a driver was already assigned."
+				confirmLabel={cancellingRider ? "Cancelling…" : "Cancel the rider"}
+				cancelLabel="Keep the booking"
+				destructive
+				onConfirm={async () => {
+					setCancellingRider(true);
+					try {
+						const result = await cancelRiderBooking({
+							shortId: order.shortId,
+						});
+						if (result.ok) toast.success("Lalamove booking cancelled.");
+						else toast.error(result.message ?? "Couldn't cancel the booking.");
+					} finally {
+						setCancellingRider(false);
+					}
+				}}
+			/>
+
 			{/* Collection escape: the seller has the items without a rider having
 			    reported it. Confirming records the arrival, so this asks once —
 			    every later stage moves freely. */}
@@ -1558,12 +1590,22 @@ function OrderDetailRoute() {
 					open={confirmCollectedOpen}
 					onOpenChange={setConfirmCollectedOpen}
 					title="Do you already have the items?"
-					description="Confirm only if your customer's items are physically with you — no rider has reported collecting them. This marks the order as collected, so you can move it through your stages from here."
+					description={`Confirm only if your customer's items are physically with you — no rider has reported collecting them. This marks the order as collected, so you can move it through your stages from here.${
+						hasActiveRiderBooking
+							? " A rider is still booked for this order — we'll ask whether to cancel them next."
+							: ""
+					}`}
 					confirmLabel="Yes, I have the items"
 					cancelLabel="Not yet"
-					onConfirm={() =>
-						handleAdvance(nextStage.id, undefined, { markCollected: true })
-					}
+					onConfirm={async () => {
+						await handleAdvance(nextStage.id, undefined, {
+							markCollected: true,
+						});
+						// Only after the collection is actually recorded — a failed
+						// advance must not leave the seller cancelling a rider for
+						// an order that never moved.
+						if (hasActiveRiderBooking) setConfirmCancelRiderOpen(true);
+					}}
 				/>
 			) : null}
 

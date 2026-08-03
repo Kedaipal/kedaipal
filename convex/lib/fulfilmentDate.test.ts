@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
+import { MIN_SCHEDULE_LEAD_MS } from "./lalamove";
 import {
 	assertValidFulfilmentTime,
+	EARLIEST_FULFILMENT_LEAD_MINUTES,
 	composeFulfilmentMoment,
 	defaultFulfilmentTimeMinutes,
 	formatFulfilmentDateTime,
@@ -196,10 +198,11 @@ describe("fulfilment time (86eyg0n8e follow-up)", () => {
 		expect(
 			defaultFulfilmentTimeMinutes(AUG4, AUG4 + (14 * 60 + 30) * 60_000),
 		).toBe(15 * 60 + 30);
-		// Late night clamps to 23:30 rather than spilling into tomorrow.
+		// Late evening: clamped inside the day, and never under that moment's
+		// floor (23:20 + 15 = 23:35, so 23:30 would already be impossible).
 		expect(
 			defaultFulfilmentTimeMinutes(AUG4, AUG4 + (23 * 60 + 20) * 60_000),
-		).toBe(23 * 60 + 30);
+		).toBe(23 * 60 + 55);
 	});
 
 	test("default: a future day is 10:00 AM, never a 'now'-derived clock time", () => {
@@ -208,14 +211,40 @@ describe("fulfilment time (86eyg0n8e follow-up)", () => {
 		);
 	});
 
-	test("floor: today is 30 min out rounded to 5; other days are free", () => {
-		expect(minSelectableTimeMinutes(AUG4, NOW_1412)).toBe(14 * 60 + 45);
+	test("floor: today is the lead time out, rounded to 5; other days are free", () => {
+		// 14:12 + 15 = 14:27 → rounds to 14:30.
+		expect(minSelectableTimeMinutes(AUG4, NOW_1412)).toBe(14 * 60 + 30);
 		expect(minSelectableTimeMinutes(AUG4 + 86_400_000, NOW_1412)).toBe(0);
 	});
 
-	test("the last half-hour of the day has no bookable slot left", () => {
+	test("THE INVARIANT: the prefilled default is never below the floor", () => {
+		// The bug Zaki hit: default and floor were computed independently, so a
+		// value that was fine at mount could sit under the floor and the
+		// browser blocked submit with its own message. Sweep the whole day.
+		for (let minute = 0; minute < 1440; minute += 1) {
+			const now = AUG4 + minute * 60_000;
+			for (const day of [AUG4, AUG4 + 86_400_000]) {
+				// Skip the last minutes of the day, where no valid slot exists at
+				// all — hasSelectableTimeToday is false and the form pushes the
+				// buyer to tomorrow instead.
+				if (!hasSelectableTimeToday(now) && day === AUG4) continue;
+				const def = defaultFulfilmentTimeMinutes(day, now);
+				expect(def).toBeGreaterThanOrEqual(minSelectableTimeMinutes(day, now));
+				expect(def).toBeLessThan(1440);
+			}
+		}
+	});
+
+	test("the floor and the dispatch threshold are ONE number, not two", () => {
+		// If these drift, a buyer can pick a time we then refuse to schedule.
+		expect(MIN_SCHEDULE_LEAD_MS).toBe(
+			EARLIEST_FULFILMENT_LEAD_MINUTES * 60_000,
+		);
+	});
+
+	test("the last minutes of the day have no bookable slot left", () => {
 		expect(hasSelectableTimeToday(NOW_1412)).toBe(true);
-		expect(hasSelectableTimeToday(AUG4 + (23 * 60 + 45) * 60_000)).toBe(false);
+		expect(hasSelectableTimeToday(AUG4 + (23 * 60 + 50) * 60_000)).toBe(false);
 	});
 
 	test("HH:MM round-trips; garbage becomes NaN", () => {

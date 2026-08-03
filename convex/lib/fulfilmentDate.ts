@@ -214,6 +214,26 @@ export function matchesFulfilmentWindow(
 export const MINUTES_PER_DAY = 24 * 60;
 const MINUTE_MS = 60 * 1000;
 
+/**
+ * How far ahead the earliest selectable time sits (minutes).
+ *
+ * MEASURED against the Lalamove MY sandbox (4 Aug 2026, devProbeScheduleAt):
+ * their ONLY rule is "not in the past, not more than 30 days ahead" —
+ * `scheduleAt` at +1 min quotes fine, +0 min and anything earlier is refused
+ * with `ERR_INVALID_FIELD` ("Date cannot be a past date or more than 30 days
+ * in advance"), and overnight slots (02:00, 03:00) quote normally, so there
+ * are no operating hours to model.
+ *
+ * So this 15 is OURS, not theirs: enough of a buffer that a submit can't race
+ * the clock into their past-date refusal, and enough that "arrive at X" is
+ * physically plausible for a rider. It is deliberately SMALL — the earlier
+ * 30-minute floor drifted past the prefilled time while a buyer filled the
+ * form, and the browser then blocked submit with its own native message.
+ * Shared with the dispatch decision (MIN_SCHEDULE_LEAD_MS) so the time a
+ * buyer may pick and the time we will schedule can never disagree.
+ */
+export const EARLIEST_FULFILMENT_LEAD_MINUTES = 15;
+
 /** Minutes since MYT midnight for an arbitrary instant. */
 export function mytMinutesOfDay(now: number = Date.now()): number {
 	return Math.floor(((now + MYT_OFFSET_MS) % DAY_MS) / MINUTE_MS);
@@ -255,8 +275,24 @@ export function defaultFulfilmentTimeMinutes(
 	now: number = Date.now(),
 ): number {
 	if (dateEpoch !== todayMytMidnight(now)) return 10 * 60;
-	const target = mytMinutesOfDay(now) + 60;
-	return Math.min(Math.ceil(target / 30) * 30, MINUTES_PER_DAY - 30);
+	// An hour out, rounded to a neat half-hour — but NEVER below the floor,
+	// which is what makes the prefilled value always submittable. The hour
+	// (rather than the floor itself) is deliberate breathing room: a value
+	// sitting exactly on the floor would go stale within minutes of the buyer
+	// starting to type.
+	const floor = minSelectableTimeMinutes(dateEpoch, now);
+	// The day has run out of bookable slots (see hasSelectableTimeToday) —
+	// nothing valid exists to return, so hand back the last time of day and
+	// let the caller push the buyer to tomorrow.
+	if (floor >= MINUTES_PER_DAY) return MINUTES_PER_DAY - 5;
+	const target = Math.max(mytMinutesOfDay(now) + 60, floor);
+	// Clamped to 23:55 rather than spilling into tomorrow, and floored so a
+	// late-evening order can still pick the last valid slot instead of being
+	// handed an already-impossible 23:30.
+	return Math.max(
+		floor,
+		Math.min(Math.ceil(target / 30) * 30, MINUTES_PER_DAY - 5),
+	);
 }
 
 /**
@@ -270,7 +306,11 @@ export function minSelectableTimeMinutes(
 	now: number = Date.now(),
 ): number {
 	if (dateEpoch !== todayMytMidnight(now)) return 0;
-	return Math.ceil((mytMinutesOfDay(now) + 30) / 5) * 5;
+	return (
+		Math.ceil(
+			(mytMinutesOfDay(now) + EARLIEST_FULFILMENT_LEAD_MINUTES) / 5,
+		) * 5
+	);
 }
 
 /** False only in the last half-hour before midnight, when "today" has no

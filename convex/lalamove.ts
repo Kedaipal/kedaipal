@@ -1680,3 +1680,102 @@ export const purgeStaleCheckoutQuotes = internalMutation({
 		}
 	},
 });
+
+/**
+ * DEV/TEST helper — measure Lalamove's REAL constraints on a scheduled
+ * pickup, so our lead-time floor is grounded in their behaviour instead of a
+ * guess. Posts quotations (which never book or charge) at a series of
+ * offsets from now and reports which are accepted.
+ *
+ *   npx convex run lalamove:devProbeScheduleAt '{"offsetsMinutes":[5,15,25,35,60]}'
+ *
+ * SANDBOX ONLY — refuses on a production key pair, mirroring
+ * scripts/lalamove-simulate-webhook.mjs. Internal (CLI/dashboard only).
+ */
+export const devProbeScheduleAt = internalAction({
+	args: {
+		offsetsMinutes: v.array(v.number()),
+		/** Defaults to the first retailer with Lalamove credentials. */
+		retailerId: v.optional(v.id("retailers")),
+	},
+	handler: async (
+		ctx,
+		{ offsetsMinutes, retailerId },
+	): Promise<Record<string, string>> => {
+		const probe = await ctx.runQuery(internal.lalamove.getProbeContext, {
+			retailerId,
+		});
+		if (!probe) return { error: "no retailer with Lalamove credentials" };
+		if (probe.credentials.env !== "sandbox") {
+			return { error: "refusing: not a sandbox key pair" };
+		}
+		const out: Record<string, string> = {};
+		for (const offset of offsetsMinutes) {
+			const at = Date.now() + offset * 60_000;
+			try {
+				const response = await callLalamove(
+					probe.credentials,
+					"POST",
+					"/v3/quotations",
+					buildQuotationBody({
+						serviceType: "MOTORCYCLE",
+						scheduleAt: at,
+						stops: [
+							{
+								coordinates: {
+									latitude: probe.origin.latitude,
+									longitude: probe.origin.longitude,
+								},
+								address: probe.origin.label,
+							},
+							{
+								coordinates: { latitude: 3.1073, longitude: 101.6067 },
+								address: "12 Jln Mawar 3, Petaling Jaya, Selangor",
+							},
+						],
+					}),
+				);
+				const parsed = parseQuotationResponse(response);
+				out[`+${offset}m`] = `OK — ${(parsed.priceTotal / 100).toFixed(2)}`;
+			} catch (err) {
+				out[`+${offset}m`] =
+					err instanceof LalamoveApiError
+						? `HTTP ${err.status} ${err.body.slice(0, 160)}`
+						: String(err).slice(0, 160);
+			}
+		}
+		return out;
+	},
+});
+
+/** Credentials + pickup pin for devProbeScheduleAt. */
+export const getProbeContext = internalQuery({
+	args: { retailerId: v.optional(v.id("retailers")) },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{
+		origin: { latitude: number; longitude: number; label: string };
+		credentials: LalamoveCredentials;
+	} | null> => {
+		const retailers = retailerId
+			? [await ctx.db.get(retailerId)]
+			: await ctx.db.query("retailers").collect();
+		for (const r of retailers) {
+			if (!r?.businessAddress) continue;
+			const credentials = resolveLalamoveCredentials(
+				r.deliveryBooking as BookingConfig | undefined,
+			);
+			if (!credentials) continue;
+			return {
+				origin: {
+					latitude: r.businessAddress.latitude,
+					longitude: r.businessAddress.longitude,
+					label: r.businessAddress.label,
+				},
+				credentials,
+			};
+		}
+		return null;
+	},
+});

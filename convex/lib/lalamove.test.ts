@@ -2,7 +2,9 @@
 // conversion, response parsing, status normalization. See lalamove.ts.
 import { createHmac } from "node:crypto";
 import { describe, expect, test } from "vitest";
+import { EARLIEST_FULFILMENT_LEAD_MINUTES } from "./fulfilmentDate";
 import {
+	MIN_SCHEDULE_LEAD_MS,
 	resolveScheduleAt,
 	buildLalamoveHeaders,
 	buildPlaceOrderBody,
@@ -455,11 +457,20 @@ describe("resolveScheduleAt (86eyg0n8e follow-up)", () => {
 	test("past and imminent moments book now — the buyer's ask is already due", () => {
 		expect(resolveScheduleAt(NOW - 5 * MIN, NOW)).toBeUndefined();
 		expect(resolveScheduleAt(NOW, NOW)).toBeUndefined();
-		expect(resolveScheduleAt(NOW + 29 * MIN, NOW)).toBeUndefined();
+		expect(resolveScheduleAt(NOW + 14 * MIN, NOW)).toBeUndefined();
 	});
 
 	test("exactly at the lead boundary schedules", () => {
-		expect(resolveScheduleAt(NOW + 30 * MIN, NOW)).toBe(NOW + 30 * MIN);
+		expect(resolveScheduleAt(NOW + 15 * MIN, NOW)).toBe(NOW + 15 * MIN);
+	});
+
+	test("the threshold tracks the checkout floor — one number, not two", () => {
+		// Measured on the MY sandbox: Lalamove itself accepts +1 min and
+		// refuses only past / >30 days. This threshold is OUR product choice,
+		// and it must equal what the buyer was allowed to pick.
+		expect(MIN_SCHEDULE_LEAD_MS).toBe(
+			EARLIEST_FULFILMENT_LEAD_MINUTES * 60_000,
+		);
 	});
 
 	test("beyond Lalamove's ~30-day window books now rather than erroring", () => {

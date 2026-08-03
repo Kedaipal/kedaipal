@@ -15,10 +15,11 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import type { PublicDeliveryQuote } from "../../../convex/delivery";
 import {
 	assertValidFulfilmentDate,
-	composeFulfilmentMoment,
 	defaultFulfilmentTimeMinutes,
+	formatFulfilmentTime,
 	fulfilmentDateBounds,
 	hhmmFromMinutes,
+	MINUTES_PER_DAY,
 	minSelectableTimeMinutes,
 	mytMidnightFromYmd,
 	timeMinutesFromHhmm,
@@ -411,8 +412,21 @@ export function CheckoutPage({
 					);
 					return;
 				}
-				if (composeFulfilmentMoment(fulfilmentEpoch, parsed) < Date.now()) {
-					setServerError("That time has already passed — pick a later time.");
+				// Judge against the FLOOR, not merely "the past": the input's own
+				// `min` would otherwise block submit with the browser's native
+				// message. The ticking repair above normally keeps this from
+				// firing at all — this is the raced-clock backstop, in our words.
+				const floor = minSelectableTimeMinutes(fulfilmentEpoch);
+				if (parsed < floor) {
+					const verb = collectsFromCustomer ? "collect" : "deliver";
+					setServerError(
+						// Past midnight-minus-the-lead there is no valid slot left
+						// today at all, so naming an "earliest time" would be
+						// nonsense — send them to tomorrow instead.
+						floor >= MINUTES_PER_DAY
+							? `There's no time left to ${verb} today — pick tomorrow.`
+							: `The earliest we can ${verb} is ${formatFulfilmentTime(floor)} — pick that or later.`,
+					);
 					return;
 				}
 				fulfilmentTimeMinutes = parsed;
@@ -534,14 +548,31 @@ export function CheckoutPage({
 		if (!watchedDate) return;
 		const dayEpoch = mytMidnightFromYmd(watchedDate);
 		if (Number.isNaN(dayEpoch)) return;
-		const current = timeMinutesFromHhmm(form.store.state.values.fulfilmentTime);
-		const floor = minSelectableTimeMinutes(dayEpoch);
-		if (Number.isNaN(current) || current < floor) {
-			form.setFieldValue(
-				"fulfilmentTime",
-				hhmmFromMinutes(defaultFulfilmentTimeMinutes(dayEpoch)),
+		const repair = () => {
+			const current = timeMinutesFromHhmm(
+				form.store.state.values.fulfilmentTime,
 			);
-		}
+			const floor = minSelectableTimeMinutes(dayEpoch);
+			if (Number.isNaN(current) || current < floor) {
+				form.setFieldValue(
+					"fulfilmentTime",
+					hhmmFromMinutes(defaultFulfilmentTimeMinutes(dayEpoch)),
+				);
+			}
+		};
+		repair();
+		// The floor MOVES with the wall clock, so a prefilled time goes stale
+		// while the buyer fills in the rest of the form — and the input's own
+		// `min` would then block submit with the browser's native message
+		// instead of ours. Re-run the repair on a tick, and whenever the buyer
+		// returns to the tab (mobile checkouts get backgrounded constantly).
+		// Only ever moves a value that has already become impossible.
+		const timer = setInterval(repair, 30_000);
+		document.addEventListener("visibilitychange", repair);
+		return () => {
+			clearInterval(timer);
+			document.removeEventListener("visibilitychange", repair);
+		};
 	}, [watchedDate]);
 	const latNum = watchedLat.trim().length > 0 ? Number(watchedLat) : NaN;
 	const lngNum = watchedLng.trim().length > 0 ? Number(watchedLng) : NaN;
