@@ -15,8 +15,13 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import type { PublicDeliveryQuote } from "../../../convex/delivery";
 import {
 	assertValidFulfilmentDate,
+	composeFulfilmentMoment,
+	defaultFulfilmentTimeMinutes,
 	fulfilmentDateBounds,
+	hhmmFromMinutes,
+	minSelectableTimeMinutes,
 	mytMidnightFromYmd,
+	timeMinutesFromHhmm,
 	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
 import {
@@ -325,6 +330,13 @@ export function CheckoutPage({
 			// zero taps while pre-order buyers just pick a later date. Server
 			// re-validates the live window either way.
 			fulfilmentDate: minYmd,
+			// "HH:MM" the rider should arrive (delivery orders, 86eyg0n8e
+			// follow-up). Prefilled — today rounds ~an hour out to the next
+			// half-hour; a future first-allowed day defaults 10:00 AM — so the
+			// required field never costs a tap unless the buyer cares.
+			fulfilmentTime: hhmmFromMinutes(
+				defaultFulfilmentTimeMinutes(mytMidnightFromYmd(minYmd)),
+			),
 			// Optional free-text instruction for the seller (local form state — the
 			// note is order-level, not a cart item, so it doesn't belong in useCart).
 			note: "",
@@ -384,6 +396,28 @@ export function CheckoutPage({
 				return;
 			}
 
+			// Fulfilment time (delivery orders): the input is prefilled and
+			// floored, so failures here are a cleared field or a form that sat
+			// past its chosen slot. The dispatch rule absorbs near-past moments
+			// (books "now"), so only reject what's nonsense to promise.
+			let fulfilmentTimeMinutes: number | undefined;
+			if (value.deliveryMethod === "delivery") {
+				const parsed = timeMinutesFromHhmm(value.fulfilmentTime);
+				if (Number.isNaN(parsed)) {
+					setServerError(
+						collectsFromCustomer
+							? "Pick a collection time."
+							: "Pick a delivery time.",
+					);
+					return;
+				}
+				if (composeFulfilmentMoment(fulfilmentEpoch, parsed) < Date.now()) {
+					setServerError("That time has already passed — pick a later time.");
+					return;
+				}
+				fulfilmentTimeMinutes = parsed;
+			}
+
 			const trimmedNote = value.note?.trim();
 			const generalNote =
 				trimmedNote && trimmedNote.length > 0 ? trimmedNote : undefined;
@@ -417,6 +451,7 @@ export function CheckoutPage({
 					deliveryAddress: sanitizedAddress,
 					pickupLocationId: resolvedPickupLocationId,
 					fulfilmentDate: fulfilmentEpoch,
+					fulfilmentTimeMinutes,
 					customerNote,
 					customerImageStorageId,
 					// Live Lalamove quote (86eyb5hrf): pass the server-side quote row
@@ -481,6 +516,33 @@ export function CheckoutPage({
 	// The chosen day PRICES the live quote (pre-orders quote as a scheduled
 	// pickup on that day) — date changes re-quote just like address changes.
 	const watchedDate = useStore(form.store, (s) => s.values.fulfilmentDate);
+	const watchedTime = useStore(form.store, (s) => s.values.fulfilmentTime);
+	// Parsed once for the two consumers below; NaN (cleared field) reads as
+	// "no time" so the quote falls back to the day-level pricing.
+	const watchedTimeMinutes = (() => {
+		const t = timeMinutesFromHhmm(watchedTime);
+		return Number.isNaN(t) ? undefined : t;
+	})();
+	// The time's floor moves with the chosen DAY (today is floored to ~30 min
+	// out; other days are free). When a date change — chip tap, picker, the
+	// midnight bump above — leaves the chosen slot behind the floor, pull it
+	// up to that day's default rather than letting submit bounce it. Only
+	// ever adjusts an INVALID slot; a deliberately chosen future time is
+	// never touched.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: form identity is stable; values read fresh inside.
+	useEffect(() => {
+		if (!watchedDate) return;
+		const dayEpoch = mytMidnightFromYmd(watchedDate);
+		if (Number.isNaN(dayEpoch)) return;
+		const current = timeMinutesFromHhmm(form.store.state.values.fulfilmentTime);
+		const floor = minSelectableTimeMinutes(dayEpoch);
+		if (Number.isNaN(current) || current < floor) {
+			form.setFieldValue(
+				"fulfilmentTime",
+				hhmmFromMinutes(defaultFulfilmentTimeMinutes(dayEpoch)),
+			);
+		}
+	}, [watchedDate]);
 	const latNum = watchedLat.trim().length > 0 ? Number(watchedLat) : NaN;
 	const lngNum = watchedLng.trim().length > 0 ? Number(watchedLng) : NaN;
 	const hasCoords = Number.isFinite(latNum) && Number.isFinite(lngNum);
@@ -514,6 +576,7 @@ export function CheckoutPage({
 				.join(", ");
 		},
 		fulfilmentDate: watchedDate ? mytMidnightFromYmd(watchedDate) : undefined,
+		fulfilmentTimeMinutes: watchedTimeMinutes,
 	});
 
 	// Collapse the two sources into ONE shape for the breakdown + submit gate.
@@ -1167,33 +1230,73 @@ export function CheckoutPage({
 												})}
 											</div>
 										) : null}
-										<form.AppField name="fulfilmentDate">
-											{(field) => (
-												<field.DateField
-													label="Date"
-													min={minYmd}
-													max={maxYmd}
-													required
-													description={
-														// Custom carts: the date is the buyer's ASK — the
-														// seller settles the final date in the design
-														// conversation. A notice floor raised by a cart
-														// item is explained, never silent.
-														hasCustomLine
-															? `Your requested date — the seller confirms the final date with you after the design is agreed.${
-																	cartNoticeDays > 0
-																		? ` Items in your cart need at least ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice.`
-																		: ""
-																}`
-															: cartNoticeDays > (minFulfilmentNoticeDays ?? 0)
-																? `An item in your cart needs ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice — that's the earliest date you can pick.`
-																: isDropOff
-																	? "Pick the date you'll meet at the drop-off point."
-																	: "Pick the date you need this order."
-													}
-												/>
-											)}
-										</form.AppField>
+										{/* Delivery orders pair the date with a TIME (86eyg0n8e
+										    follow-up): a rider arriving at — or collecting from —
+										    the buyer shouldn't be an all-day window. Pickup keeps
+										    date-only: the point's own schedule governs its hours. */}
+										<div
+											className={
+												deliveryMethod === "delivery"
+													? "grid grid-cols-2 gap-3"
+													: undefined
+											}
+										>
+											<form.AppField name="fulfilmentDate">
+												{(field) => (
+													<field.DateField
+														label="Date"
+														min={minYmd}
+														max={maxYmd}
+														required
+														description={
+															// Custom carts: the date is the buyer's ASK — the
+															// seller settles the final date in the design
+															// conversation. A notice floor raised by a cart
+															// item is explained, never silent.
+															hasCustomLine
+																? `Your requested date — the seller confirms the final date with you after the design is agreed.${
+																		cartNoticeDays > 0
+																			? ` Items in your cart need at least ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice.`
+																			: ""
+																	}`
+																: cartNoticeDays >
+																		(minFulfilmentNoticeDays ?? 0)
+																	? `An item in your cart needs ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice — that's the earliest date you can pick.`
+																	: isDropOff
+																		? "Pick the date you'll meet at the drop-off point."
+																		: "Pick the date you need this order."
+														}
+													/>
+												)}
+											</form.AppField>
+											{deliveryMethod === "delivery" ? (
+												<form.AppField name="fulfilmentTime">
+													{(field) => (
+														<field.TimeField
+															label="Time"
+															required
+															min={(() => {
+																if (!watchedDate) return undefined;
+																const day = mytMidnightFromYmd(watchedDate);
+																if (Number.isNaN(day)) return undefined;
+																const floor = minSelectableTimeMinutes(day);
+																// Last half-hour of the day: no valid floor
+																// exists ("24:00" isn't a time) — the floor
+																// effect has already bumped the value.
+																return floor < 1440
+																	? hhmmFromMinutes(floor)
+																	: undefined;
+															})()}
+															description={
+																collectsFromCustomer
+																	? "When the rider should come to you."
+																	: "When you'd like it to arrive."
+															}
+														/>
+													)}
+												</form.AppField>
+											) : null}
+										</div>
 									</CheckoutSection>
 								);
 							}}

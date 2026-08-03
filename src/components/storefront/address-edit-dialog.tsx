@@ -35,6 +35,9 @@ interface AddressEditDialogProps {
 	/** The order's fulfilment day (epoch-ms MYT midnight) — a live re-quote is
 	 * priced for THAT day, matching how the original checkout quoted it. */
 	fulfilmentDate?: number;
+	/** The order's chosen time (minutes since MYT midnight) — the re-quote
+	 * then prices the exact moment, same as checkout did. */
+	fulfilmentTimeMinutes?: number;
 	/** Collection-service order (86eyg0n8e): the rider collects FROM this
 	 * address — the dialog's labels and quote lines say so. */
 	collectsFromCustomer?: boolean;
@@ -66,6 +69,7 @@ export function AddressEditDialog({
 	retailerId,
 	subtotal,
 	fulfilmentDate,
+	fulfilmentTimeMinutes,
 	collectsFromCustomer = false,
 }: AddressEditDialogProps) {
 	const updateAddress = useMutation(api.orders.updateDeliveryAddress);
@@ -145,6 +149,7 @@ export function AddressEditDialog({
 				.join(", ");
 		},
 		fulfilmentDate,
+		fulfilmentTimeMinutes,
 	});
 	// A live-priced store can only save a PRICED address — the buyer sees the
 	// new rider fee before confirming, mirroring checkout.

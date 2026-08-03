@@ -36,6 +36,7 @@ import {
 } from "./lib/auth";
 import {
 	assertValidFulfilmentDate,
+	assertValidFulfilmentTime,
 	matchesFulfilmentWindow,
 } from "./lib/fulfilmentDate";
 import {
@@ -572,6 +573,10 @@ export const create = mutation({
 		// need to pass it; the storefront UI requires it. Validated against the
 		// retailer's notice window when present. See convex/lib/fulfilmentDate.ts.
 		fulfilmentDate: v.optional(v.number()),
+		// What time on that day (minutes since MYT midnight) — captured for
+		// delivery orders; ignored on self-collect (their moment is governed by
+		// the pickup point's own schedule). See the schema comment.
+		fulfilmentTimeMinutes: v.optional(v.number()),
 		// Optional free-text instruction the shopper typed at checkout.
 		customerNote: v.optional(v.string()),
 		// Optional reference image the buyer attached for a custom line, uploaded
@@ -870,6 +875,26 @@ export const create = mutation({
 				throw new ConvexError((err as Error).message);
 			}
 		}
+		// Fulfilment time (86eyg0n8e follow-up): kept only where it means
+		// something — a delivery order WITH a date. Range-only validation by
+		// design (see assertValidFulfilmentTime): "is the moment still ahead"
+		// is judged at checkout client-side and again at dispatch, where a past
+		// moment simply books "now" — a strict server check here would let
+		// clock skew or a long-idle form reject a legitimate checkout.
+		let sanitizedFulfilmentTime: number | undefined;
+		if (
+			args.fulfilmentTimeMinutes !== undefined &&
+			sanitizedFulfilmentDate !== undefined &&
+			effectiveDeliveryMethod === "delivery"
+		) {
+			try {
+				sanitizedFulfilmentTime = assertValidFulfilmentTime(
+					args.fulfilmentTimeMinutes,
+				);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
 
 		// Delivery charge (86extzdr8): resolved server-side at create — the
 		// authoritative price, whatever the client previewed. Needs the item
@@ -998,6 +1023,7 @@ export const create = mutation({
 			deliveryFeePending: deliveryFeePending || undefined,
 			deliveryFeePendingReason,
 			fulfilmentDate: sanitizedFulfilmentDate,
+			fulfilmentTimeMinutes: sanitizedFulfilmentTime,
 			customerNote: sanitizedCustomerNote,
 			// Only keep the buyer image when the order actually has a custom line —
 			// guards a stray id on a non-custom order.

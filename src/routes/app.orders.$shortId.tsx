@@ -27,6 +27,7 @@ import { type ChangeEvent, type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
+import { formatFulfilmentTime } from "../../convex/lib/fulfilmentDate";
 import {
 	isActiveJobStatus,
 	isRiderManagedTransition,
@@ -1174,6 +1175,11 @@ function OrderDetailRoute() {
 								size="md"
 								muted={isTerminal || order.collectedAt !== undefined}
 							/>
+							{order.fulfilmentTimeMinutes !== undefined ? (
+								<span className="text-sm font-medium">
+									{formatFulfilmentTime(order.fulfilmentTimeMinutes)}
+								</span>
+							) : null}
 						</div>
 					) : null}
 				</div>

@@ -188,6 +188,11 @@ export const checkoutFormSchema = z
 		// the precise range check lives in the submit handler — here we only require
 		// that a day was picked. Empty string = nothing chosen yet.
 		fulfilmentDate: z.string().min(1, "Pick when you need this order"),
+		// "HH:MM" — the delivery-order time (86eyg0n8e follow-up). Prefilled and
+		// only rendered for delivery, so emptiness is a cleared field; the form
+		// enforces it at submit (a schema .min here would block pickup orders,
+		// which never render the input).
+		fulfilmentTime: z.string(),
 		// Optional free-text instruction for the seller. Always a string in form
 		// state (empty allowed); trimmed to undefined at submit. Cap mirrors the
 		// server (MAX_CUSTOMER_NOTE in convex/orders.ts).

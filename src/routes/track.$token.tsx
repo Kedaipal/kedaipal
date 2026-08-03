@@ -31,7 +31,7 @@ import {
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { isSafeTrackingUrl } from "../../convex/lib/couriers";
-import { formatFulfilmentDate } from "../../convex/lib/fulfilmentDate";
+import { formatFulfilmentDateTime } from "../../convex/lib/fulfilmentDate";
 import { isMockupGateClosed } from "../../convex/lib/order";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
@@ -1003,7 +1003,10 @@ function TrackingRoute() {
 								: "We collect on "
 							: "Delivery on "}
 					<span className="font-semibold">
-						{formatFulfilmentDate(order.fulfilmentDate)}
+						{formatFulfilmentDateTime(
+							order.fulfilmentDate,
+							order.fulfilmentTimeMinutes,
+						)}
 					</span>
 				</div>
 			) : null}
@@ -1016,6 +1019,7 @@ function TrackingRoute() {
 				retailerId={order.retailerId}
 				subtotal={order.subtotal}
 				fulfilmentDate={order.fulfilmentDate}
+				fulfilmentTimeMinutes={order.fulfilmentTimeMinutes}
 				collectsFromCustomer={isCollection}
 			/>
 
@@ -1570,6 +1574,7 @@ function SendOrderCard({
 		deliveryAddress: order.deliveryAddress,
 		pickupSnapshot: order.pickupSnapshot,
 		fulfilmentDate: order.fulfilmentDate,
+		fulfilmentTimeMinutes: order.fulfilmentTimeMinutes,
 		customerNote: order.customerNote,
 		quotePending:
 			order.mockupStatus !== undefined &&

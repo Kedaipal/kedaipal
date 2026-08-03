@@ -173,6 +173,15 @@ describe("buildOrderWaMessage — collection service (86eyg0n8e)", () => {
 		expect(msg).toContain("🚚 Collect from: 12 Jalan Mawar");
 		expect(msg).toContain(`Collection fee: ${formatPrice(1500, "MYR")}`);
 		expect(msg).toContain("🗓️ Collect from me on:");
+		// With a chosen time the line carries it (86eyg0n8e follow-up).
+		expect(
+			buildOrderWaMessage({
+				...baseOrder,
+				deliveryMethod: "delivery",
+				fulfilmentDate: Date.UTC(2026, 7, 10) - 8 * 60 * 60 * 1000,
+				fulfilmentTimeMinutes: 930,
+			}),
+		).toContain("🗓️ Deliver on: Mon, 10 Aug 2026 · 3:30 PM");
 		expect(msg).not.toContain("Deliver to");
 		expect(msg).not.toContain("Delivery fee");
 	});

@@ -13,7 +13,7 @@ import {
 	renderRetailerEmail,
 	type RetailerEmailKey,
 } from "./lib/emailCopy";
-import { formatFulfilmentDate } from "./lib/fulfilmentDate";
+import { formatFulfilmentDateTime } from "./lib/fulfilmentDate";
 import { deriveMapsUrl } from "./lib/mapsUrl";
 import type { PickupSnapshot } from "./lib/whatsappCopy";
 
@@ -41,6 +41,7 @@ export const getOrderForRetailerEmail = internalQuery({
 		deliveryDirection: "standard" | "collection" | undefined;
 		pickupSnapshot: PickupSnapshot | undefined;
 		fulfilmentDate: number | undefined;
+		fulfilmentTimeMinutes: number | undefined;
 		notifyEmail: string | undefined;
 		storeName: string;
 		locale: Locale;
@@ -65,6 +66,7 @@ export const getOrderForRetailerEmail = internalQuery({
 			deliveryDirection: order.deliveryDirection,
 			pickupSnapshot: order.pickupSnapshot,
 			fulfilmentDate: order.fulfilmentDate,
+			fulfilmentTimeMinutes: order.fulfilmentTimeMinutes,
 			notifyEmail: retailer.notifyEmail,
 			storeName: retailer.storeName,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
@@ -235,6 +237,7 @@ export const notifyRetailerOrderAlert = internalAction({
 			deliveryDirection: "standard" | "collection" | undefined;
 			pickupSnapshot: PickupSnapshot | undefined;
 			fulfilmentDate: number | undefined;
+		fulfilmentTimeMinutes: number | undefined;
 			notifyEmail: string | undefined;
 			storeName: string;
 			locale: Locale;
@@ -280,7 +283,10 @@ export const notifyRetailerOrderAlert = internalAction({
 			deliveryFeePending: meta.deliveryFeePending,
 			fulfilmentDateLabel:
 				meta.fulfilmentDate !== undefined
-					? formatFulfilmentDate(meta.fulfilmentDate)
+					? formatFulfilmentDateTime(
+							meta.fulfilmentDate,
+							meta.fulfilmentTimeMinutes,
+						)
 					: undefined,
 			// Pickup point detail for the kind-aware "Method:" label + the
 			// where/when block. Only meaningful for pickup orders; emailCopy

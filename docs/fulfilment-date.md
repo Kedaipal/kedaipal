@@ -126,3 +126,43 @@ default date (earliest allowed day) rises with it. Custom/quote carts label
 the field "Requested date — the seller confirms the final date after the
 design is agreed". Editor surface: product form → "Minimum notice" card.
 Counter checkout still ignores notice entirely (seller in person).
+
+## Fulfilment TIME (4 Aug 2026, 86eyg0n8e follow-up)
+
+Delivery orders (both directions — rider to the buyer, or collecting from
+them) now capture **what time** as well as the day: a rider arriving at
+someone's door shouldn't be an all-day window. Zaki's call: datetime for
+both delivery types; pickup/self-collect stays date-only, since a pickup
+point's hours are governed by its own schedule note.
+
+- **Storage: a separate field, deliberately.** `orders.fulfilmentTimeMinutes`
+  (minutes since MYT midnight, 0..1439). `fulfilmentDate` keeps its
+  whole-midnight invariant — the validator rejects non-midnights, and the
+  inbox sort, due-today counts, urgency badges and window chips all compare
+  midnights — so the time composes with the day (`composeFulfilmentMoment`)
+  and can never drift from it. Legacy, counter and self-collect orders have
+  no time, and every consumer treats "no time" as the old date-only
+  behaviour.
+- **Checkout: required but prefilled** (zero extra taps): today → the next
+  30-minute mark at least an hour out (2:12 PM → 3:30 PM), clamped 23:30; a
+  future day → 10:00 AM (`defaultFulfilmentTimeMinutes`). The input floor is
+  ~30 min out when the chosen day is today (`minSelectableTimeMinutes`), and
+  a date change that strands the chosen slot behind the floor bumps it to
+  that day's default — an invalid slot is fixed, a deliberate future one is
+  never touched. Native `<input type="time">` (TimeField, DateField's
+  sibling), 5-minute steps.
+- **Validation is deliberately lenient server-side** (range-only): whether
+  the moment is still ahead is judged at checkout submit client-side and
+  again at dispatch, where a past moment simply books "now" — a strict
+  server check would let clock skew or a long-idle form reject a legitimate
+  checkout.
+- **The time rides every surface the date already had**: wa.me message
+  ("🗓️ Deliver on: Tue, 4 Aug 2026 · 3:30 PM"), tracking page, seller order
+  page (beside the day badge — the badge itself stays day-granular), the
+  new-order email. One formatter (`formatFulfilmentDateTime`) so it can't
+  appear in two spellings. The inbox deliberately stays day-granular.
+- **Lalamove**: the checkout quote prices the exact moment and dispatch
+  defaults to it — see docs/delivery-lalamove.md ("priced for THEIR
+  moment" + the scheduled-booking paragraph). The shared rule is
+  `resolveScheduleAt`: ≥30 min ahead and within ~30 days schedules,
+  anything else books now.

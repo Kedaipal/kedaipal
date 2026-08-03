@@ -572,3 +572,27 @@ export function parseLalamoveEventTime(
 		? Math.round(envelopeTimestamp * 1000)
 		: envelopeTimestamp;
 }
+
+/** How close to "now" a scheduled pickup may be before we book immediate
+ * instead — Lalamove rejects near-term scheduleAt values, and a rider being
+ * dispatched right away serves a 20-minutes-out ask better anyway. */
+export const MIN_SCHEDULE_LEAD_MS = 30 * 60 * 1000;
+/** Lalamove's own scheduling window (~30 days). */
+export const MAX_SCHEDULE_AHEAD_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * The one rule for turning a buyer's chosen moment into a Lalamove
+ * `scheduleAt` (86eyg0n8e follow-up): still comfortably ahead → schedule for
+ * exactly then; past, imminent, or absurdly far → book "now" (undefined).
+ * Shared by the checkout quote and dispatch so the fee the buyer paid and
+ * the trip the vendor books can't be priced for different moments.
+ */
+export function resolveScheduleAt(
+	moment: number | undefined,
+	now: number = Date.now(),
+): number | undefined {
+	if (moment === undefined) return undefined;
+	if (moment < now + MIN_SCHEDULE_LEAD_MS) return undefined;
+	if (moment > now + MAX_SCHEDULE_AHEAD_MS) return undefined;
+	return moment;
+}

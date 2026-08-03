@@ -3,6 +3,7 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import {
+	resolveScheduleAt,
 	buildLalamoveHeaders,
 	buildPlaceOrderBody,
 	buildQuotationBody,
@@ -440,5 +441,34 @@ describe("proof of delivery", () => {
 		expect(parsePodImages(null)).toEqual([]);
 		expect(parsePodImages({})).toEqual([]);
 		expect(parsePodImages({ data: { stops: "nope" } })).toEqual([]);
+	});
+});
+
+describe("resolveScheduleAt (86eyg0n8e follow-up)", () => {
+	const NOW = 1_785_000_000_000;
+	const MIN = 60_000;
+
+	test("a comfortably future moment schedules for exactly then", () => {
+		expect(resolveScheduleAt(NOW + 90 * MIN, NOW)).toBe(NOW + 90 * MIN);
+	});
+
+	test("past and imminent moments book now — the buyer's ask is already due", () => {
+		expect(resolveScheduleAt(NOW - 5 * MIN, NOW)).toBeUndefined();
+		expect(resolveScheduleAt(NOW, NOW)).toBeUndefined();
+		expect(resolveScheduleAt(NOW + 29 * MIN, NOW)).toBeUndefined();
+	});
+
+	test("exactly at the lead boundary schedules", () => {
+		expect(resolveScheduleAt(NOW + 30 * MIN, NOW)).toBe(NOW + 30 * MIN);
+	});
+
+	test("beyond Lalamove's ~30-day window books now rather than erroring", () => {
+		expect(
+			resolveScheduleAt(NOW + 31 * 24 * 60 * MIN, NOW),
+		).toBeUndefined();
+	});
+
+	test("no moment = the pre-existing immediate booking", () => {
+		expect(resolveScheduleAt(undefined, NOW)).toBeUndefined();
 	});
 });

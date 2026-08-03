@@ -847,6 +847,18 @@ export default defineSchema({
 		// sorts to the bottom of the date-ascending inbox). Validated server-side
 		// to a whole MYT day within [today + retailer notice, today + 30 days].
 		fulfilmentDate: v.optional(v.number()),
+		// WHAT TIME on that day (86eyg0n8e follow-up) — minutes since MYT
+		// midnight (0..1439), captured at checkout for DELIVERY orders (both
+		// directions: the rider's arrival at the buyer, or the collection from
+		// them, shouldn't be an all-day window). Deliberately a separate field:
+		// `fulfilmentDate` must stay a whole midnight (the validator enforces
+		// it, and the inbox sort / due-today counts / urgency badges all
+		// compare midnights), so the time composes with it via
+		// composeFulfilmentMoment and can never drift from the day. Absent on
+		// legacy, counter and self-collect orders — every consumer treats
+		// "no time" as the old date-only behaviour. Drives the Lalamove
+		// scheduled booking default (past moments book "now").
+		fulfilmentTimeMinutes: v.optional(v.number()),
 		// Free-text instruction the shopper attached at checkout ("no onions",
 		// "deliver after 5pm"). Optional; absent on orders created before this
 		// field. Distinct from deliveryAddress.notes (address/gate detail, delivery
@@ -1174,6 +1186,13 @@ export default defineSchema({
 		// out-of-order guard (events older than this only fill gaps, never
 		// regress fields).
 		lastEventAt: v.optional(v.number()),
+		// The pickup moment this booking was SCHEDULED for (86eyg0n8e
+		// follow-up): the `scheduleAt` sent to Lalamove, from the order's
+		// fulfilment date+time when that moment was still ahead at dispatch.
+		// Unset = an immediate booking (every pre-existing job). Display-only
+		// on our side — the card says "Scheduled · 3:30 PM" instead of sitting
+		// on "Finding rider" for hours; Lalamove owns the actual timing.
+		scheduledAt: v.optional(v.number()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})

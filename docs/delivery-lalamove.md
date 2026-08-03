@@ -201,14 +201,17 @@ Missing/stale/mismatched quote → **checkout refused** with clear copy
 above). Kill switch: no credentials/config → the quote query never says
 "live" and checkout behaves exactly as before.
 
-**Pre-orders are priced for THEIR day (23 Jul):** when the buyer picks a
-future fulfilment date, the quote is requested with Lalamove `scheduleAt` =
-noon MYT on that day (the hour barely moves the price; the day can), so the
-locked buyer fee reflects the delivery day, not checkout day. Changing the
-date re-quotes exactly like changing the address. Today = immediate
-pricing; the scheduleAt guard caps at Lalamove's ~30-day window and falls
-back to immediate on anything odd. Dispatch on the day still re-quotes
-immediate — variance is the vendor's, as everywhere.
+**Pre-orders are priced for THEIR moment (23 Jul; exact time since 4 Aug):**
+checkout now captures a fulfilment TIME alongside the date
+(`orders.fulfilmentTimeMinutes` — see docs/fulfilment-date.md), so the quote
+is requested with Lalamove `scheduleAt` = the buyer's exact chosen moment.
+Changing the date OR the time re-quotes exactly like changing the address.
+Orders without a time (legacy, or a cleared field) keep the old noon-MYT
+day heuristic byte-for-byte. One pure rule decides both here and at
+dispatch — `resolveScheduleAt` (`convex/lib/lalamove.ts`): a moment ≥30 min
+ahead and within ~30 days schedules; anything past, imminent or absurd
+books "now" — so the fee the buyer paid and the trip the vendor books can
+never be priced for different moments.
 
 Note: a buyer address edit (`updateDeliveryAddress`) re-prices through the
 same resolver. Under lalamove pricing the edit dialog fetches a **fresh
@@ -228,9 +231,17 @@ expected: the vendor books whenever THEY are ready — after design approval,
 after payment, on the morning of the fulfilment date — manually, or lets
 auto-book fire on packed+paid+due-today.
 
-Two-tap: `prepareBooking` re-quotes at today's price and the confirm dialog
+Two-tap: `prepareBooking` re-quotes and the confirm dialog
 shows it against the buyer-paid fee (variance called out, including who
-absorbs it) **with a per-order vehicle switch** (Motorcycle ⇄ Car,
+absorbs it). **The booking defaults to the buyer's chosen moment (4 Aug):**
+when the order carries a fulfilment date+time still ≥30 min ahead, the
+quotation is prepared with `scheduleAt` = exactly that, the dialog says
+"Scheduled pickup — the rider comes 4 Aug · 3:30 PM", and the job row
+records `deliveryJobs.scheduledAt` so the card reads "Scheduled pickup —
+3:30 PM" instead of sitting on "Finding rider" for hours (Lalamove assigns
+a driver closer to the time). A past or imminent moment books NOW — the
+buyer's ask is already due — and the dialog says that instead. Timeless
+orders behave exactly as before. Same two-tap, same variance rules **with a per-order vehicle switch** (Motorcycle ⇄ Car,
 defaulted to the settings vehicle; switching re-quotes since prices are
 per-vehicle — a bulky one-off order gets a car without a round-trip to
 Settings, and the chosen vehicle is what lands on the ledger row); `confirmBooking` places the order within the 5-minute window

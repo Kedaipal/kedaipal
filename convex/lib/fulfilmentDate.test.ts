@@ -1,5 +1,14 @@
 import { describe, expect, test } from "vitest";
 import {
+	assertValidFulfilmentTime,
+	composeFulfilmentMoment,
+	defaultFulfilmentTimeMinutes,
+	formatFulfilmentDateTime,
+	formatFulfilmentTime,
+	hasSelectableTimeToday,
+	hhmmFromMinutes,
+	minSelectableTimeMinutes,
+	timeMinutesFromHhmm,
 	assertValidFulfilmentDate,
 	clampMinNoticeDays,
 	formatFulfilmentDate,
@@ -159,5 +168,75 @@ describe("matchesFulfilmentWindow", () => {
 		);
 		// Overdue dates don't fall in "this week".
 		expect(matchesFulfilmentWindow(JUN_26 - DAY, "this_week", NOW)).toBe(false);
+	});
+});
+
+describe("fulfilment time (86eyg0n8e follow-up)", () => {
+	// 4 Aug 2026 14:12 MYT — an ordinary afternoon instant.
+	const AUG4 = Date.UTC(2026, 7, 3, 16, 0, 0); // MYT midnight 4 Aug
+	const NOW_1412 = AUG4 + (14 * 60 + 12) * 60_000;
+
+	test("assertValidFulfilmentTime: range-only, integers only", () => {
+		expect(assertValidFulfilmentTime(0)).toBe(0);
+		expect(assertValidFulfilmentTime(1439)).toBe(1439);
+		for (const bad of [-1, 1440, 90.5, Number.NaN]) {
+			expect(() => assertValidFulfilmentTime(bad)).toThrow(/time of day/);
+		}
+	});
+
+	test("composeFulfilmentMoment: midnight + minutes = the exact instant", () => {
+		expect(composeFulfilmentMoment(AUG4, 14 * 60 + 30)).toBe(
+			AUG4 + (14 * 60 + 30) * 60_000,
+		);
+	});
+
+	test("default: today rounds an hour out to the next half-hour (2:12 PM → 3:30 PM)", () => {
+		expect(defaultFulfilmentTimeMinutes(AUG4, NOW_1412)).toBe(15 * 60 + 30);
+		// Exactly on a slot: 2:30 PM + 1h = 3:30 PM, no extra rounding.
+		expect(
+			defaultFulfilmentTimeMinutes(AUG4, AUG4 + (14 * 60 + 30) * 60_000),
+		).toBe(15 * 60 + 30);
+		// Late night clamps to 23:30 rather than spilling into tomorrow.
+		expect(
+			defaultFulfilmentTimeMinutes(AUG4, AUG4 + (23 * 60 + 20) * 60_000),
+		).toBe(23 * 60 + 30);
+	});
+
+	test("default: a future day is 10:00 AM, never a 'now'-derived clock time", () => {
+		expect(defaultFulfilmentTimeMinutes(AUG4 + 86_400_000, NOW_1412)).toBe(
+			600,
+		);
+	});
+
+	test("floor: today is 30 min out rounded to 5; other days are free", () => {
+		expect(minSelectableTimeMinutes(AUG4, NOW_1412)).toBe(14 * 60 + 45);
+		expect(minSelectableTimeMinutes(AUG4 + 86_400_000, NOW_1412)).toBe(0);
+	});
+
+	test("the last half-hour of the day has no bookable slot left", () => {
+		expect(hasSelectableTimeToday(NOW_1412)).toBe(true);
+		expect(hasSelectableTimeToday(AUG4 + (23 * 60 + 45) * 60_000)).toBe(false);
+	});
+
+	test("HH:MM round-trips; garbage becomes NaN", () => {
+		expect(timeMinutesFromHhmm("15:30")).toBe(930);
+		expect(hhmmFromMinutes(930)).toBe("15:30");
+		expect(hhmmFromMinutes(5)).toBe("00:05");
+		for (const bad of ["24:00", "12:60", "9:30", "abc", ""]) {
+			expect(Number.isNaN(timeMinutesFromHhmm(bad))).toBe(true);
+		}
+	});
+
+	test("labels: 12-hour, and one spelling for date · time", () => {
+		expect(formatFulfilmentTime(0)).toBe("12:00 AM");
+		expect(formatFulfilmentTime(930)).toBe("3:30 PM");
+		expect(formatFulfilmentTime(12 * 60)).toBe("12:00 PM");
+		expect(formatFulfilmentDateTime(AUG4, 930)).toBe(
+			"Tue, 4 Aug 2026 · 3:30 PM",
+		);
+		// No time → exactly the old date label, so legacy surfaces can't shift.
+		expect(formatFulfilmentDateTime(AUG4, undefined)).toBe(
+			formatFulfilmentDate(AUG4),
+		);
 	});
 });

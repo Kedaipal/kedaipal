@@ -6606,3 +6606,87 @@ describe("orders — collection gate: the remaining edges", () => {
 		expect(again?.collectedAt).toBe(at);
 	});
 });
+
+describe("orders — fulfilment time at create (86eyg0n8e follow-up)", () => {
+	async function store(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		return { retailer, productId };
+	}
+
+	function tomorrowMidnight() {
+		// The validator's window is [today+notice, today+30] — tomorrow is
+		// always inside it regardless of when the test runs.
+		return (
+			Math.floor((Date.now() + 8 * 3600_000) / 86_400_000) * 86_400_000 -
+			8 * 3600_000 +
+			86_400_000
+		);
+	}
+
+	test("a delivery order keeps its time; the moment composes with the day", async () => {
+		const t = setup();
+		const { retailer, productId } = await store(t);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: validAddress,
+			fulfilmentDate: tomorrowMidnight(),
+			fulfilmentTimeMinutes: 15 * 60 + 30,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(o?.fulfilmentTimeMinutes).toBe(930);
+	});
+
+	test("self-collect ignores a stray time — the point's schedule governs pickup hours", async () => {
+		const t = setup();
+		const { retailer, productId } = await store(t);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: tomorrowMidnight(),
+			fulfilmentTimeMinutes: 930,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(o?.fulfilmentTimeMinutes).toBeUndefined();
+	});
+
+	test("an out-of-range time is refused, a timeless delivery order is not", async () => {
+		const t = setup();
+		const { retailer, productId } = await store(t);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryMethod: "delivery",
+				deliveryAddress: validAddress,
+				fulfilmentDate: tomorrowMidnight(),
+				fulfilmentTimeMinutes: 1440,
+			}),
+		).rejects.toThrow(/time of day/i);
+		// No time at all = the pre-existing date-only order, unchanged.
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: validAddress,
+			fulfilmentDate: tomorrowMidnight(),
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(o?.fulfilmentTimeMinutes).toBeUndefined();
+	});
+});

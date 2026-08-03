@@ -1595,3 +1595,114 @@ describe("collection service — booking freezes the direction onto the order", 
 		expect(order?.deliveryDirection).toBe("collection");
 	});
 });
+
+describe("scheduled dispatch (86eyg0n8e follow-up)", () => {
+	const asUser = (t: ReturnType<typeof setup>) =>
+		t.withIdentity({ subject: USER });
+
+	test("getDispatchContext composes the buyer's moment; timeless orders carry none", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				waPhone: "60198765432",
+				businessAddress: {
+					label: "Fruit Hut HQ",
+					latitude: 3.139,
+					longitude: 101.6869,
+				},
+				deliveryBooking: {
+					enabled: true,
+					vehicleType: "MOTORCYCLE" as const,
+					apiKey: "pk_test_sched",
+					apiSecret: "sk_test_sched",
+				},
+			});
+		});
+		const day = 1_790_000_000_000 - (1_790_000_000_000 % 86_400_000) - 8 * 3_600_000;
+		const withTime = await seedOrder(t, retailer._id, {
+			deliveryAddress: {
+				line1: "12 Jln Mawar 3",
+				city: "PJ",
+				state: "Selangor",
+				postcode: "47301",
+				latitude: 3.1,
+				longitude: 101.6,
+			},
+			fulfilmentDate: day,
+			fulfilmentTimeMinutes: 930,
+		});
+		const shortId = await t.run(async (ctx) => {
+			const o = await ctx.db.get(withTime);
+			return o?.shortId ?? "";
+		});
+		const context = await asUser(t).query(
+			internal.lalamove.getDispatchContext,
+			{ shortId },
+		);
+		if (!context.ok) throw new Error(`expected ok, got ${context.reason}`);
+		expect(context.requestedMoment).toBe(day + 930 * 60_000);
+
+		// Date without time — the pre-existing behaviour: nothing to schedule.
+		const dateOnly = await seedOrder(t, retailer._id, {
+			deliveryAddress: {
+				line1: "12 Jln Mawar 3",
+				city: "PJ",
+				state: "Selangor",
+				postcode: "47301",
+				latitude: 3.1,
+				longitude: 101.6,
+			},
+			fulfilmentDate: day,
+		});
+		const shortId2 = await t.run(async (ctx) => {
+			const o = await ctx.db.get(dateOnly);
+			return o?.shortId ?? "";
+		});
+		const context2 = await asUser(t).query(
+			internal.lalamove.getDispatchContext,
+			{ shortId: shortId2 },
+		);
+		if (!context2.ok) throw new Error(`expected ok, got ${context2.reason}`);
+		expect(context2.requestedMoment).toBeUndefined();
+	});
+
+	test("reserveBooking stamps the schedule; the card payload exposes it", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		const at = Date.now() + 3 * 3_600_000;
+		await t.mutation(internal.lalamove.reserveBooking, {
+			orderId,
+			retailerId: retailer._id,
+			quotationId: "quot-sched",
+			vehicleType: "MOTORCYCLE",
+			scheduledAt: at,
+		});
+		const shortId = await t.run(async (ctx) => {
+			const o = await ctx.db.get(orderId);
+			return o?.shortId ?? "";
+		});
+		const dispatch = await asUser(t).query(api.lalamove.getDeliveryJob, {
+			shortId,
+		});
+		expect(dispatch?.job?.scheduledAt).toBe(at);
+
+		// An immediate booking stays unset — every pre-existing job's shape.
+		const orderB = await seedOrder(t, retailer._id);
+		await t.mutation(internal.lalamove.reserveBooking, {
+			orderId: orderB,
+			retailerId: retailer._id,
+			quotationId: "quot-now",
+			vehicleType: "MOTORCYCLE",
+		});
+		const jobB = await t.run(async (ctx) => {
+			const jobs = await ctx.db
+				.query("deliveryJobs")
+				.withIndex("by_order", (q) => q.eq("orderId", orderB))
+				.collect();
+			return jobs[0];
+		});
+		expect(jobB?.scheduledAt).toBeUndefined();
+	});
+});

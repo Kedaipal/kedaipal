@@ -14,7 +14,10 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
-import { todayMytMidnight } from "../../../convex/lib/fulfilmentDate";
+import {
+	formatFulfilmentDateTime,
+	todayMytMidnight,
+} from "../../../convex/lib/fulfilmentDate";
 import { dispatchBlockCopy } from "../../lib/dispatch-block";
 import { formatPrice } from "../../lib/format";
 import { ProBadge } from "../app/pro-gate";
@@ -69,6 +72,9 @@ export function BookDeliveryCard({
 		buyerPaidFee: number;
 		vehicleType: string;
 		buyerContactFallback: boolean;
+		/** The pickup moment this quote is scheduled for — undefined = the
+		 * rider comes now (86eyg0n8e follow-up). */
+		scheduledFor?: number;
 	} | null>(null);
 	const [booking, setBooking] = useState(false);
 	// In-dialog vehicle switch → fresh quote (prices are per-vehicle). Keeps
@@ -271,6 +277,7 @@ export function BookDeliveryCard({
 				senderStopId: quote.senderStopId,
 				recipientStopId: quote.recipientStopId,
 				vehicleType: quote.vehicleType === "CAR" ? "CAR" : "MOTORCYCLE",
+				scheduledFor: quote.scheduledFor,
 			});
 			if (!result.ok) {
 				toast.error(result.message ?? dispatchBlockCopy(result.reason));
@@ -349,6 +356,18 @@ export function BookDeliveryCard({
 								</a>
 							) : null}
 						</div>
+					) : activeJob.scheduledAt !== undefined &&
+						activeJob.scheduledAt > Date.now() ? (
+						<p className="text-muted-foreground">
+							Scheduled pickup —{" "}
+							<span className="font-medium text-foreground">
+								{formatScheduledMoment(activeJob.scheduledAt)}
+							</span>
+							. Lalamove assigns a rider closer to the time
+							{jobCollection
+								? "; they'll collect from your customer's address and bring it here."
+								: "; the buyer gets the shipped message with live tracking at pickup."}
+						</p>
 					) : (
 						<p className="text-muted-foreground">
 							{jobCollection
@@ -541,6 +560,21 @@ export function BookDeliveryCard({
 					</DialogHeader>
 					{quote ? (
 						<div className="flex flex-col gap-1.5 text-sm">
+							{/* A scheduled pickup and a rider-now dispatch are different
+							    purchases — say which one this confirm buys. */}
+							<p
+								className={`rounded-lg px-3 py-2 text-xs ${
+									quote.scheduledFor
+										? "bg-accent/10 text-accent-emphasis"
+										: "bg-muted text-muted-foreground"
+								}`}
+							>
+								{quote.scheduledFor
+									? `Scheduled pickup — the rider comes ${formatScheduledMoment(
+											quote.scheduledFor,
+										)}, the time the buyer asked for.`
+									: "The rider comes now — the buyer's requested time is already here (or none was set)."}
+							</p>
 							{/* Per-order vehicle choice — defaults to the settings vehicle;
 							    switching re-quotes (prices are per-vehicle). */}
 							<div className="grid grid-cols-2 gap-2">
@@ -648,6 +682,15 @@ export function BookDeliveryCard({
 			/>
 		</section>
 	);
+}
+
+/** "4 Aug 2026 · 3:30 PM" from an epoch moment — the card's one spelling for
+ * a scheduled pickup (86eyg0n8e follow-up). */
+function formatScheduledMoment(moment: number): string {
+	const day = todayMytMidnight(moment);
+	return formatFulfilmentDateTime(day, Math.round((moment - day) / 60000), {
+		weekday: false,
+	});
 }
 
 function JobStatusPill({

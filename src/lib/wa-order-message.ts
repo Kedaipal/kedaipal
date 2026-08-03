@@ -1,4 +1,4 @@
-import { formatFulfilmentDate } from "../../convex/lib/fulfilmentDate";
+import { formatFulfilmentDateTime } from "../../convex/lib/fulfilmentDate";
 import { deriveMapsUrl } from "../../convex/lib/mapsUrl";
 import { formatPrice } from "./format";
 
@@ -63,6 +63,8 @@ export interface WaOrderMessageInput {
 		placeId?: string;
 	};
 	fulfilmentDate?: number;
+	/** Minutes since MYT midnight — appended to the date line when present. */
+	fulfilmentTimeMinutes?: number;
 	customerNote?: string;
 	/** True while a made-to-order line's price is still an open quote (order
 	 * has a mockup gate that hasn't been approved/waived). Price-0 lines then
@@ -151,7 +153,9 @@ export function buildOrderWaMessage(order: WaOrderMessageInput): string {
 				: isCollection
 					? "Collect from me"
 					: "Deliver";
-		lines.push(`🗓️ ${verb} on: ${formatFulfilmentDate(order.fulfilmentDate)}`);
+		lines.push(
+			`🗓️ ${verb} on: ${formatFulfilmentDateTime(order.fulfilmentDate, order.fulfilmentTimeMinutes)}`,
+		);
 	}
 	// Order note last, in a clearly delimited section. It sits AFTER the
 	// "Order: ORD-XXXX" line, so even if the note text contains something that

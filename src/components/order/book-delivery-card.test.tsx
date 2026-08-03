@@ -477,3 +477,53 @@ describe("BookDeliveryCard — collected by hand (86eyg0n8e)", () => {
 		expect(screen.queryByText(/You'll be asked to book a rider/)).toBeNull();
 	});
 });
+
+describe("BookDeliveryCard — scheduled pickups (86eyg0n8e follow-up)", () => {
+	const order = {
+		shortId: "ORD-SCHED",
+		deliveryMethod: "delivery",
+		status: "confirmed",
+		currency: "MYR",
+		paymentStatus: "received",
+	} as unknown as Doc<"orders">;
+
+	it("an active scheduled booking says WHEN, not a bare 'Finding rider…' for hours", () => {
+		state.dispatch = {
+			promptBookOnPacked: false,
+			bookingEnabled: true,
+			deliveryDirection: "standard",
+			blockReason: null,
+			job: {
+				status: "assigning",
+				providerOrderId: "LLM-S1",
+				costActual: 1200,
+				vehicleType: "MOTORCYCLE",
+				createdAt: 1_700_000_000_000,
+				deliveryDirection: "standard",
+				scheduledAt: Date.now() + 4 * 3_600_000,
+			},
+		};
+		render(<BookDeliveryCard order={order} />);
+		expect(screen.getByText(/Scheduled pickup/)).toBeTruthy();
+		expect(screen.queryByText(/Finding a rider/)).toBeNull();
+	});
+
+	it("an immediate booking keeps the exact pre-existing copy (regression pin)", () => {
+		state.dispatch = {
+			promptBookOnPacked: false,
+			bookingEnabled: true,
+			deliveryDirection: "standard",
+			blockReason: null,
+			job: {
+				status: "assigning",
+				providerOrderId: "LLM-S2",
+				costActual: 1200,
+				vehicleType: "MOTORCYCLE",
+				createdAt: 1_700_000_000_000,
+				deliveryDirection: "standard",
+			},
+		};
+		render(<BookDeliveryCard order={order} />);
+		expect(screen.getByText(/Finding a rider/)).toBeTruthy();
+	});
+});

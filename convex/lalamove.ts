@@ -35,10 +35,12 @@ import {
 	parsePodImages,
 	parseQuotationResponse,
 	resolveLalamoveCredentials,
+	resolveScheduleAt,
 	toLalamoveMyPhone,
 	toLalamovePhone,
 } from "./lib/lalamove";
 import { rateLimiter } from "./lib/rateLimiter";
+import { composeFulfilmentMoment } from "./lib/fulfilmentDate";
 import { applyStatusTransition, resolveSharedOrder } from "./orders";
 import { assertPlanFeature } from "./subscriptions";
 
@@ -160,6 +162,13 @@ export const quoteForCheckout = action({
 		 * reflects the delivery day, not checkout day. Today/omitted =
 		 * immediate pricing. */
 		fulfilmentDate: v.optional(v.number()),
+		/** The buyer's chosen time on that day (minutes since MYT midnight,
+		 * 86eyg0n8e follow-up). When present the quote is priced for the EXACT
+		 * moment instead of the noon heuristic — the same resolveScheduleAt
+		 * rule dispatch uses, so the buyer-paid fee and the booked trip can't
+		 * be priced for different moments. Omitted (older clients, no time
+		 * captured) keeps the noon behaviour byte-identical. */
+		fulfilmentTimeMinutes: v.optional(v.number()),
 	},
 	handler: async (
 		ctx,
@@ -199,10 +208,18 @@ export const quoteForCheckout = action({
 			const NOON_MYT_OFFSET_MS = 4 * 60 * 60 * 1000; // 12:00 MYT = 04:00 UTC
 			const scheduleAt =
 				args.fulfilmentDate !== undefined &&
-				args.fulfilmentDate > Date.now() &&
-				args.fulfilmentDate < Date.now() + 30 * 24 * 60 * 60 * 1000
-					? args.fulfilmentDate + NOON_MYT_OFFSET_MS
-					: undefined;
+				args.fulfilmentTimeMinutes !== undefined
+					? resolveScheduleAt(
+							composeFulfilmentMoment(
+								args.fulfilmentDate,
+								args.fulfilmentTimeMinutes,
+							),
+						)
+					: args.fulfilmentDate !== undefined &&
+							args.fulfilmentDate > Date.now() &&
+							args.fulfilmentDate < Date.now() + 30 * 24 * 60 * 60 * 1000
+						? args.fulfilmentDate + NOON_MYT_OFFSET_MS
+						: undefined;
 			const storeStop = {
 				coordinates: {
 					latitude: context.origin.latitude,
@@ -668,6 +685,11 @@ type DispatchContext =
 			 * onto the job row at reserve so the webhook obeys what was booked,
 			 * not the live setting. */
 			deliveryDirection: "standard" | "collection";
+			/** The exact moment the buyer asked for (fulfilment date + time),
+			 * when both were captured — the default pickup time for a booking.
+			 * resolveScheduleAt decides at prepare time whether it is still
+			 * ahead (schedule for then) or past/imminent (book now). */
+			requestedMoment?: number;
 			credentials: LalamoveCredentials;
 	  };
 
@@ -764,6 +786,14 @@ async function dispatchContextForOrder(
 		vehicleType:
 			(retailer.deliveryBooking as BookingConfig).vehicleType ?? "MOTORCYCLE",
 		deliveryDirection: collection ? "collection" : "standard",
+		requestedMoment:
+			order.fulfilmentDate !== undefined &&
+			order.fulfilmentTimeMinutes !== undefined
+				? composeFulfilmentMoment(
+						order.fulfilmentDate,
+						order.fulfilmentTimeMinutes,
+					)
+				: undefined,
 		credentials,
 	};
 }
@@ -856,6 +886,12 @@ export const prepareBooking = action({
 				buyerPaidFee: number;
 				vehicleType: string;
 				buyerContactFallback: boolean;
+				/** The pickup moment this quotation was scheduled for — the
+				 * buyer's fulfilment date+time when still ahead at prepare time
+				 * (86eyg0n8e follow-up). Undefined = the rider comes now (the
+				 * moment is past/imminent, or the order carries no time). The
+				 * dialog says which; confirmBooking stamps it on the job. */
+				scheduledFor?: number;
 		  }
 	> => {
 		const context = await ctx.runQuery(internal.lalamove.getDispatchContext, {
@@ -863,6 +899,9 @@ export const prepareBooking = action({
 		});
 		if (!context.ok) return context;
 		const vehicleType = vehicleOverride ?? context.vehicleType;
+		// The buyer's ask is the DEFAULT; past or imminent books now — the
+		// same pure rule the checkout quote used to price the fee.
+		const scheduledFor = resolveScheduleAt(context.requestedMoment);
 		try {
 			const response = await callLalamove(
 				context.credentials,
@@ -870,6 +909,7 @@ export const prepareBooking = action({
 				"/v3/quotations",
 				buildQuotationBody({
 					serviceType: vehicleType,
+					scheduleAt: scheduledFor,
 					stops: [
 						{
 							coordinates: context.origin,
@@ -892,6 +932,7 @@ export const prepareBooking = action({
 				buyerPaidFee: context.buyerPaidFee,
 				vehicleType,
 				buyerContactFallback: context.buyerContactFallback,
+				scheduledFor,
 			};
 		} catch (err) {
 			console.warn("[lalamove] dispatch quote failed", {
@@ -931,6 +972,10 @@ export const confirmBooking = action({
 		vehicleType: v.optional(
 			v.union(v.literal("MOTORCYCLE"), v.literal("CAR")),
 		),
+		// The scheduled pickup the quotation was prepared with (see
+		// prepareBooking.scheduledFor) — display truth for the job row only;
+		// Lalamove's timing is already bound by the quotationId.
+		scheduledFor: v.optional(v.number()),
 	},
 	handler: async (
 		ctx,
@@ -957,6 +1002,7 @@ export const confirmBooking = action({
 				quotationId: args.quotationId,
 				vehicleType: args.vehicleType ?? context.vehicleType,
 				deliveryDirection: context.deliveryDirection,
+				scheduledAt: args.scheduledFor,
 			});
 		} catch {
 			return {
@@ -1038,6 +1084,7 @@ export const reserveBooking = internalMutation({
 		deliveryDirection: v.optional(
 			v.union(v.literal("standard"), v.literal("collection")),
 		),
+		scheduledAt: v.optional(v.number()),
 	},
 	handler: async (ctx, args): Promise<Id<"deliveryJobs">> => {
 		const jobs = await ctx.db
@@ -1082,6 +1129,7 @@ export const reserveBooking = internalMutation({
 			// collection booking changes webhook behaviour.
 			deliveryDirection:
 				args.deliveryDirection === "collection" ? "collection" : undefined,
+			scheduledAt: args.scheduledAt,
 			createdAt: now,
 			updatedAt: now,
 		});
@@ -1495,6 +1543,10 @@ export type DeliveryJobView = {
 	 * booking would do. They differ after a seller switches modes — and will
 	 * differ routinely once direction can vary per order (per-product v2). */
 	deliveryDirection: "standard" | "collection";
+	/** Scheduled pickup moment, when this booking was placed for later —
+	 * lets the card say "Scheduled · 3:30 PM" instead of sitting on
+	 * "Finding rider" for hours. Unset = immediate booking. */
+	scheduledAt?: number;
 };
 
 /**
@@ -1594,6 +1646,7 @@ export const getDeliveryJob = query({
 						// Unset on rows booked before collection existed → standard,
 						// which is exactly what those trips were.
 						deliveryDirection: latest.deliveryDirection ?? "standard",
+						scheduledAt: latest.scheduledAt,
 					}
 				: null,
 			blockReason,
