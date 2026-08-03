@@ -55,6 +55,7 @@ function Harness({
 				fields="address"
 				retailerId={undefined}
 				allowManualEntry={allowManualEntry}
+				legend={undefined}
 			/>
 			<form.Subscribe selector={(s) => s.values.address}>
 				{(address) => {

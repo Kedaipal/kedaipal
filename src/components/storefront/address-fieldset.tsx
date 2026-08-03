@@ -76,8 +76,15 @@ export const AddressFieldset = withFieldGroup({
 		 * coordinates (flat / free / radius-arrange) keep the escape hatch.
 		 */
 		allowManualEntry: true,
+		/**
+		 * Visible heading for the group. Omit when the surrounding card or dialog
+		 * already announces "delivery address" — both callers usually do, and a
+		 * second title would just repeat it. Either way the fieldset keeps an
+		 * accessible name (the legend goes `sr-only` when this is unset).
+		 */
+		legend: undefined as string | undefined,
 	},
-	render: ({ group, retailerId, allowManualEntry }) => {
+	render: ({ group, retailerId, allowManualEntry, legend }) => {
 		function handleAutocompleteSelect(payload: GoogleSelectedAddress) {
 			const parsed = parseGoogleAddress(
 				payload.addressComponents,
@@ -198,8 +205,15 @@ export const AddressFieldset = withFieldGroup({
 		);
 
 		return (
-			<fieldset className="flex flex-col gap-3 rounded-xl border border-border bg-card/40 p-4">
-				<legend className="px-1 text-sm font-medium">Delivery address</legend>
+			// No border/background of its own: both callers already sit inside a
+			// bordered card (the checkout section) or a dialog with its own title,
+			// so the old box drew a second card with a duplicate heading inside the
+			// first. `mb-2` on the visible legend, not the fieldset's `gap-3` — a
+			// <legend> is not a flex item, so the gap never applies below it.
+			<fieldset className="flex flex-col gap-3">
+				<legend className={legend ? "mb-2 text-sm font-medium" : "sr-only"}>
+					{legend ?? "Delivery address"}
+				</legend>
 
 				<group.Subscribe selector={(s) => s.values}>
 					{(values) => {
@@ -270,7 +284,9 @@ function ConfirmedAddressCard({
 	const locality = [postcode, city].filter(Boolean).join(" ").trim();
 	const region = [locality, state].filter(Boolean).join(", ");
 	return (
-		<div className="flex flex-col gap-2 rounded-xl border-2 border-accent/30 bg-accent/5 p-3">
+		// Tinted fill, no border — inside an already-bordered section a second
+		// outline just boxes a box; the accent wash carries "confirmed" on its own.
+		<div className="flex flex-col gap-2 rounded-xl bg-accent/5 p-3">
 			<div className="flex items-start gap-2">
 				<MapPin
 					className="mt-0.5 size-4 shrink-0 text-accent"
@@ -325,7 +341,7 @@ function ManualEntryDisclosure({
 	}
 
 	return (
-		<div className="flex flex-col gap-3 rounded-lg border border-dashed border-border p-3">
+		<div className="flex flex-col gap-3 rounded-lg bg-muted/50 p-3">
 			<p className="text-xs text-muted-foreground">
 				Typing it yourself — we won&apos;t have a map pin for this one, so the
 				seller may confirm the exact spot with you.

@@ -9,14 +9,13 @@ import { Markdown } from "../ui/markdown";
 import { ZoomableImage } from "../ui/zoomable-image";
 import type { StorefrontProduct } from "./product-card";
 import {
-	AddToCartButton,
 	addVariantToCart,
 	CustomOrderCard,
 	EmptyGallery,
 	GoToCheckoutBar,
 	OptionPills,
+	PurchaseActions,
 	PurchaseHints,
-	PurchaseStepper,
 	ShareLinkChip,
 	TotalPreviewRow,
 	useProductPurchase,
@@ -129,7 +128,8 @@ export function ProductPageView({
 
 					{/* Purchase controls — fixed bottom bar on mobile (thumb reach),
 					    in-flow under the buy box on desktop (`lg:static`). One block,
-					    two homes.
+					    two homes. `PurchaseActions` guarantees it always has a CTA,
+					    whatever the product's type, so this chrome is never empty.
 
 					    FIXED on mobile, matching the storefront CartBar: it stays OUT
 					    of document flow, so the powered-by footer renders as page
@@ -145,15 +145,12 @@ export function ProductPageView({
 					>
 						<div className="mx-auto max-w-xl lg:mx-0 lg:max-w-none">
 							<TotalPreviewRow pp={pp} />
-							<div className="grid gap-3 sm:grid-cols-[auto_1fr] sm:items-center">
-								<PurchaseStepper pp={pp} />
-								<AddToCartButton
-									pp={pp}
-									onAdd={(p, variant, qty, custom) =>
-										addVariantToCart(cart, p, variant, qty, custom)
-									}
-								/>
-							</div>
+							<PurchaseActions
+								pp={pp}
+								onAdd={(p, variant, qty, custom) =>
+									addVariantToCart(cart, p, variant, qty, custom)
+								}
+							/>
 							<GoToCheckoutBar
 								cartItemCount={cart.itemCount}
 								cartTotal={cart.total}

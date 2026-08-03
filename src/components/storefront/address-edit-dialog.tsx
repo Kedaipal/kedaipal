@@ -193,6 +193,8 @@ export function AddressEditDialog({
 									placeId: "placeId",
 								}}
 								retailerId={retailerId}
+								// The dialog's own title already says "Edit delivery address".
+								legend={undefined}
 								// A live-quoted (Lalamove) order is re-priced from the pin —
 								// `liveSaveBlocked` refuses a save without a fresh quote — so a
 								// hand-typed address here would be a dead end. Every other mode

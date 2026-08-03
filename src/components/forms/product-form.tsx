@@ -605,6 +605,9 @@ export function ProductForm({
 			// screen. Report only the actionable axis problem; row messages would
 			// be addressed to inputs the seller can't see.
 			const gridReady = cartesian(reconciled.options).length > 0;
+			// A made-to-order product reconciles to an EMPTY matrix — its custom
+			// line is the whole offer, and `buildSubmitVariants` emits that line
+			// as the product's only variant.
 			const built = buildSubmitVariants(reconciled.rows, editor.customLine);
 			const issues = [
 				...collectOptionIssues(reconciled.options),

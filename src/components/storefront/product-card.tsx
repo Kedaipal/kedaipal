@@ -84,7 +84,13 @@ export function ProductCard({
 	} as const;
 
 	return (
-		<div className="group flex flex-col overflow-hidden rounded-2xl border border-border bg-card transition-shadow duration-200 hover:shadow-md">
+		// `h-full` so the card FILLS its track. Grid cells and the popular
+		// shelf's flex row both stretch, but without this the card was only as
+		// tall as its own content — so a two-line name, or the "N in cart" line
+		// appearing on some cards and not others, left a row of ragged tiles with
+		// their Add buttons at different heights. The body is already `flex-1`
+		// and the CTAs `mt-auto`, so filling is all that was missing.
+		<div className="group flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-card transition-shadow duration-200 hover:shadow-md">
 			<Link
 				{...pageLink}
 				// The photo is decorative here — the name link right below is the

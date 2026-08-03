@@ -396,11 +396,27 @@ function validateVariantSet(
 
 	if (customLines.length > 1)
 		throw new ConvexError("A product can have at most one custom option");
-	if (matrix.length === 0)
+
+	/**
+	 * A product's sellable lines are the cartesian **matrix ∪ the custom line**,
+	 * so a product whose ONLY line is bespoke is legitimate — that's the "Made to
+	 * order" product type (ClickUp `86eyfq04j`): a tent wash, a commissioned
+	 * cake. It carries no matrix because there is nothing to enumerate; the
+	 * custom line IS the offer, which is what gives the buyer the request box and
+	 * the qty-1 lock for free.
+	 *
+	 * Requires no axes: axes with an empty matrix would be a grid describing
+	 * combinations nothing sells. Everything else keeps the exact old rules, and
+	 * this only ever LOOSENS them, so no stored product becomes invalid.
+	 */
+	const customOnly =
+		matrix.length === 0 && customLines.length === 1 && options.length === 0;
+
+	if (matrix.length === 0 && !customOnly)
 		throw new ConvexError("A product needs at least one variant");
 
 	const expected = cartesian(options); // includes [[]] for no-axes products
-	if (matrix.length !== expected.length)
+	if (!customOnly && matrix.length !== expected.length)
 		throw new ConvexError(
 			`${describeAxes(options)} makes ${expected.length} ${plural(expected.length, "combination")} ` +
 				`(${describeCombos(expected)}), but ${matrix.length} ${plural(matrix.length, "variant")} ` +
@@ -449,7 +465,9 @@ function validateVariantSet(
 
 	// Confirm every expected combination is present (covers the "missing combo"
 	// case that the count check alone can't catch once duplicates are ruled out).
-	for (const combo of expected) {
+	// Skipped for a custom-only product: `cartesian([])` is `[[]]`, so this would
+	// demand the empty matrix row the made-to-order type exists to avoid.
+	for (const combo of customOnly ? [] : expected) {
 		if (!cleaned.some((vr) => sameOptionValues(vr.optionValues, combo)))
 			throw new ConvexError(
 				`Missing variant for combination "${variantLabel(combo)}" — ` +
