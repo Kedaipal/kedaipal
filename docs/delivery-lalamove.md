@@ -476,11 +476,16 @@ tell the story). Three side-channels are closed with it:
 
 - **No `carrierTrackingUrl` mirror** (DRIVER_ASSIGNED + commitBooking): a
   later manual shipped-anchored advance would otherwise present the stale
-  Leg-1 collection trip as shipment tracking. Live tracking stays on the
-  job row (seller card). Trade-off accepted (Zaki, 2 Aug): the buyer gets
-  no live "rider approaching you" link in v1 — the rider calls them (buyer
-  is the pickup contact); a track-page live view reading the job row is the
-  named follow-up.
+  Leg-1 collection trip as shipment tracking. Instead the buyer gets the
+  **live collection-rider strip** (3 Aug, Zaki's ask after first local
+  test): while a job is ACTIVE, `orders.get` returns `collectionRider`
+  (trip state, driver name + plate, Lalamove share link — never the
+  driver's phone, cost or provider ids) and `/track` renders a transient
+  card above the timeline ("Finding a rider…" → "{driver} is on the way to
+  your address" + plate → "Collected — on the way to {store}"). It reads
+  the live job row, so it can't go stale and vanishes the moment the trip
+  ends — deliberately a strip, not a status: the order lifecycle stays the
+  seller's. Verified against a real sandbox booking on dev.
 - **POD photo is seller-only**: it shows the rider dropping the buyer's
   gear at the seller's own doorstep, so `fetchPodImages` skips the buyer
   WhatsApp follow-up and `orders.get` never exposes `podImageUrls` on
@@ -568,6 +573,10 @@ Full step table, credential rules + the POD injector: [`dev-scripts.md`](./dev-s
 - Collection Leg 2 (return journey after the seller's work) — today a
   separate manual order; a "book return trip" that clones the order with
   the direction flipped is the natural v2.
-- Buyer-facing live rider view on the tracking page for ACTIVE collection
-  jobs (read from the job row so it can't go stale — see the
-  no-carrierTrackingUrl-mirror decision above).
+- Per-product collection flag for mixed catalogs (a store selling goods
+  AND a collection service): `products.collectionService` constrains the
+  cart (no mixing directions in one order — one order = one trip) and
+  `orders.deliveryDirection` derives from the items instead of the store
+  toggle. Everything at the order/job layer is already direction-keyed, so
+  this slots in without rework. Tracked in ClickUp; build when the first
+  real mixed-catalog seller appears.
