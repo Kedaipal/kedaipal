@@ -148,16 +148,52 @@ describe("VariantEditor — made-to-order product type (86eyfq04j)", () => {
 		expect(screen.getByText(/price on quote/i)).toBeTruthy();
 	});
 
-	it("does not re-ask the questions the type has already answered", () => {
+	it("does not re-ask preparation — the type has already answered it", () => {
 		render(<Harness initial={withOptions} />);
 		fireEvent.click(screen.getByRole("button", { name: /^made to order$/i }));
-		// Preparation is constitutive — asking again lets it be silently undone.
+		// Constitutive: offering "From stock" here would silently undo the type.
 		expect(screen.queryByText(/how do you prepare orders/i)).toBeNull();
+	});
+
+	it("keeps the flag controls that DERIVE the type mounted (PR #160 review)", () => {
+		// The type is derived from `requiresProof` + `blockWhenOutOfStock`, so
+		// hiding the controls that set them made the approval checkbox unmount
+		// the instant it was ticked — nothing left to untick — and let a set
+		// custom line publish with no way to clear it.
+		render(<Harness initial={singleVariant} />);
+		// The flip needs both flags, so the row goes made-fresh first — the
+		// reviewer's exact repro (one item → priced → Made fresh → approval).
+		fireEvent.click(screen.getByRole("button", { name: /made fresh/i }));
 		fireEvent.click(screen.getByRole("button", { name: /advanced/i }));
-		// Approval is what the type IS; a bespoke line on a bespoke product is
-		// the same offer twice.
-		expect(screen.queryByText(/^mockup approval$/i)).toBeNull();
-		expect(screen.queryByText(/^custom orders$/i)).toBeNull();
+		const approval = screen.getByRole("checkbox", {
+			name: /mockup approval/i,
+		}) as HTMLInputElement;
+		expect(approval.checked).toBe(false);
+
+		// Ticking it derives the made-to-order type…
+		fireEvent.click(approval);
+		expect(
+			screen
+				.getByRole("button", { name: /^made to order$/i })
+				.getAttribute("aria-pressed"),
+		).toBe("true");
+		// …and the checkbox is still there, checked, so it can be undone.
+		const after = screen.getByRole("checkbox", {
+			name: /mockup approval/i,
+		}) as HTMLInputElement;
+		expect(after.checked).toBe(true);
+		// The custom-orders control stays reachable too.
+		expect(
+			screen.getByRole("checkbox", { name: /custom orders/i }),
+		).toBeTruthy();
+
+		// Unticking is the way back out.
+		fireEvent.click(after);
+		expect(
+			screen
+				.getByRole("button", { name: /just one item/i })
+				.getAttribute("aria-pressed"),
+		).toBe("true");
 	});
 
 	it("switching back to a plain item restores stock tracking and drops approval", () => {

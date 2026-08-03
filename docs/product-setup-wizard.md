@@ -69,15 +69,37 @@ as **"Price on quote"**. This ticket only built the route to it.
   the type. Step ids stay stable so every `step === n` branch is untouched;
   only the walked ORDER changes, and the progress dots / "Step N of M" count
   off the walked sequence.
-- **Price is optional.** Blank means "Price on quote"; a typed amount shows as
-  a "from" floor. `reconcileForSubmit` resolves blank → `"0"` on the ONE submit
+- **Price is optional.** Blank means "Price on quote"; a typed amount is just
+  the price — **no "from" prefix**, because the product has exactly one variant,
+  so `productWithVariants` reports `priceFrom === priceTo` and the storefront
+  prints a flat figure. The seller-side labels said "from" in the first cut and
+  promised a range the buyer never sees. `reconcileForSubmit` resolves blank → `"0"` on the ONE submit
   path both editors share, so it can't be accepted in the wizard and rejected
   in the full form.
-- **Derived, never stored twice.** `isMadeToOrderOnly(editor)` reads the rows;
-  the render-time `madeToOrder` is `!showAxes && (shape === "made_to_order" ||
-  isMadeToOrderOnly(...))` — the same "the editor answers, not the flag"
-  posture `86eyex5vk` established for `showAxes`. Deliberately **not** keyed on
-  price, so typing a "from" figure can't flip the mode mid-edit.
+- **Derived, never stored twice — through ONE function.** `effectiveShape(state)`
+  is the single read: axes present ⇒ `choices`; else `isMadeToOrderOnly(editor)`
+  (or an explicit answer) ⇒ `made_to_order`; else `state.shape`. The same "the
+  editor answers, not the flag" posture `86eyex5vk` established for axes, now
+  covering all three answers. Validation, the step sequence, which card is lit
+  and the review rows all read it, so the screen can't contradict the payload.
+  Deliberately **not** keyed on price, so typing a figure can't flip the mode.
+
+  Splitting that read is exactly what PR #160's review caught: the step-2 card
+  keyed on `state.shape` while the type's explainer keyed on the derived flag,
+  so ticking **Mockup approval** on a made-fresh single item — which produces
+  the made-to-order flag pair — rendered the explainer with **no card selected**
+  and a Review that claimed "Type: Made to order" beside "Preparing: Made fresh".
+- **The controls that DERIVE the type stay mounted.** Mockup approval and the
+  custom line were hidden for made-to-order on the reasoning that the type
+  already implies them. But ticking approval is *how a seller reaches the type*,
+  so hiding it meant the checkbox unmounted the instant it was used with nothing
+  left to untick, and a set `customLine` kept publishing with no control to clear
+  it — the invisible submit `switchToMadeToOrder` explicitly guards against.
+  Both now render in every mode: approval shows checked (unticking is the way
+  back out), and the custom line carries a one-line note saying it's redundant
+  here rather than vanishing. **Preparation stays hidden** — that one is a
+  question the type answers, not a control that unmounts itself when used, and
+  "Just one item" is still the way out.
 - **Nothing is asked twice.** Mockup approval and the custom line are dropped
   from More options / Advanced for this type: approval is what the type *is*
   (a checkbox that turns the product into a free item is a trap), and a bespoke

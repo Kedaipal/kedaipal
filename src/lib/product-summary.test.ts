@@ -122,13 +122,13 @@ describe("describeProduct — made-to-order products (86eyfq04j)", () => {
 		);
 	});
 
-	it("shows a typed starting price as a floor", () => {
+	it("shows a typed price as the price, not a floor", () => {
 		expect(
 			describeProduct(
 				{ ...madeToOrder, rows: [{ ...madeToOrder.rows[0], price: "120" }] },
 				"RM",
 			),
-		).toBe("Made to order · from RM 120");
+		).toBe("Made to order · RM 120");
 	});
 
 	it("leaves an ordinary made-fresh item alone", () => {

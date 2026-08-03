@@ -110,7 +110,7 @@ function IssueText({ message }: { message: string | undefined }) {
  * The single row a **made-to-order** product sells through: no axes, never
  * out of stock, gated on the buyer approving a mockup. Price is left blank —
  * it resolves to 0, which the storefront renders as "Price on quote" — but a
- * seller who wants a "from" figure can type one.
+ * seller with a fixed price for the work can type one.
  */
 export function madeToOrderRow(): VariantRow {
 	return {
@@ -997,11 +997,9 @@ export function VariantEditor({
 	// Made-to-order has already answered both of the first two — approval is what
 	// the type IS, and a bespoke line on a bespoke product is the same offer
 	// twice — so neither is listed or rendered below.
-	const advancedTeaser = madeToOrder
-		? "SKU"
-		: hasOptions
-			? `${MOCKUP_APPROVAL_COPY.teaser} · ${CUSTOM_LINE_COPY.teaser} · a second choice · per-choice SKUs & photos`
-			: `${MOCKUP_APPROVAL_COPY.teaser} · ${CUSTOM_LINE_COPY.teaser} · SKU`;
+	const advancedTeaser = hasOptions
+		? `${MOCKUP_APPROVAL_COPY.teaser} · ${CUSTOM_LINE_COPY.teaser} · a second choice · per-choice SKUs & photos`
+		: `${MOCKUP_APPROVAL_COPY.teaser} · ${CUSTOM_LINE_COPY.teaser} · SKU`;
 
 	return (
 		<div className="flex flex-col gap-4">
@@ -1307,138 +1305,138 @@ export function VariantEditor({
 						    product into a free item is a trap, and a bespoke line on a
 						    bespoke product is the same offer twice. Not rendered at all —
 						    a `hidden` class would leave them for screen readers. */}
-						{madeToOrder ? null : (
-							<>
-								<MockupApprovalToggle
-									checked={allProof}
-									indeterminate={someProof && !allProof}
-									onChange={(v) => bulkFillFlag("requiresProof", v)}
-								/>
+						{/* Both stay mounted on a made-to-order product. The type is
+						    DERIVED from these very flags, so hiding them meant ticking
+						    approval on a made-fresh single item unmounted the checkbox
+						    that did it, and a set custom line kept publishing with no
+						    control left to clear it (PR #160 review). Unticking approval
+						    is the way back to “Just one item”. */}
+						<MockupApprovalToggle
+							checked={allProof}
+							indeterminate={someProof && !allProof}
+							onChange={(v) => bulkFillFlag("requiresProof", v)}
+						/>
 
-								{/* Custom / made-to-order line — sits OUTSIDE the grid, so a
+						{/* Custom / made-to-order line — sits OUTSIDE the grid, so a
 						    bespoke option shows up exactly once instead of multiplying
 						    across every size/flavour. See docs/custom-option.md. */}
-								<div className="flex flex-col gap-3 rounded-xl border border-border p-3">
-									<label className="flex items-start gap-2.5 text-sm">
-										<input
-											type="checkbox"
-											checked={customLine !== null}
-											onChange={(e) => toggleCustomLine(e.target.checked)}
-											className="mt-0.5 size-4 shrink-0"
+						<div className="flex flex-col gap-3 rounded-xl border border-border p-3">
+							<label className="flex items-start gap-2.5 text-sm">
+								<input
+									type="checkbox"
+									checked={customLine !== null}
+									onChange={(e) => toggleCustomLine(e.target.checked)}
+									className="mt-0.5 size-4 shrink-0"
+								/>
+								<span>
+									<span className="font-medium">{CUSTOM_LINE_COPY.title}</span>
+									<span className="block text-xs text-muted-foreground">
+										{CUSTOM_LINE_COPY.body}
+									</span>
+								</span>
+							</label>
+
+							{customLine ? (
+								<div className="flex flex-col gap-3 rounded-lg bg-muted/40 p-3">
+									<div className="flex items-start gap-3">
+										{customLine.imageUrl ? (
+											<div className="relative size-14 shrink-0">
+												<AppImage
+													src={customLine.imageUrl}
+													alt=""
+													aspect="size-14"
+													rounded="rounded-lg"
+												/>
+												<button
+													type="button"
+													onClick={() => {
+														if (customLine.imageUrl?.startsWith("blob:")) {
+															URL.revokeObjectURL(customLine.imageUrl);
+															blobUrls.current.delete(customLine.imageUrl);
+														}
+														setCustomLine({
+															imageStorageIds: [],
+															imageUrl: undefined,
+														});
+													}}
+													className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-background text-xs shadow ring-1 ring-border"
+													aria-label="Remove custom image"
+												>
+													<X className="size-3" />
+												</button>
+											</div>
+										) : (
+											<label className="flex size-14 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-dashed border-border text-muted-foreground hover:border-ring">
+												{uploadingCustom ? (
+													<span className="text-[10px]">…</span>
+												) : (
+													<ImagePlus className="size-4" />
+												)}
+												<input
+													type="file"
+													accept="image/*"
+													disabled={uploadingCustom}
+													onChange={(e) =>
+														void uploadCustomImage(e.target.files)
+													}
+													className="hidden"
+												/>
+											</label>
+										)}
+										<label className="flex flex-1 flex-col gap-1 text-sm font-medium">
+											Option name
+											<Input
+												value={customLine.label}
+												onChange={(e) =>
+													setCustomLine({ label: e.target.value })
+												}
+												placeholder="Custom"
+												maxLength={40}
+											/>
+										</label>
+									</div>
+
+									<label className="flex flex-col gap-1 text-sm font-medium">
+										Starting price ({currency}){" "}
+										<span className="font-normal text-muted-foreground">
+											(optional)
+										</span>
+										<PriceInput
+											value={customLine.price}
+											onChange={(v) => setCustomLine({ price: v })}
+											invalid={!!issueFor("custom", 0, "price")}
 										/>
-										<span>
-											<span className="font-medium">
-												{CUSTOM_LINE_COPY.title}
-											</span>
-											<span className="block text-xs text-muted-foreground">
-												{CUSTOM_LINE_COPY.body}
-											</span>
+										<IssueText message={issueFor("custom", 0, "price")} />
+										<span className="text-xs font-normal text-muted-foreground">
+											Leave blank to show “Price on quote” — you set the price
+											on the mockup after the order comes in.
 										</span>
 									</label>
 
-									{customLine ? (
-										<div className="flex flex-col gap-3 rounded-lg bg-muted/40 p-3">
-											<div className="flex items-start gap-3">
-												{customLine.imageUrl ? (
-													<div className="relative size-14 shrink-0">
-														<AppImage
-															src={customLine.imageUrl}
-															alt=""
-															aspect="size-14"
-															rounded="rounded-lg"
-														/>
-														<button
-															type="button"
-															onClick={() => {
-																if (customLine.imageUrl?.startsWith("blob:")) {
-																	URL.revokeObjectURL(customLine.imageUrl);
-																	blobUrls.current.delete(customLine.imageUrl);
-																}
-																setCustomLine({
-																	imageStorageIds: [],
-																	imageUrl: undefined,
-																});
-															}}
-															className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-background text-xs shadow ring-1 ring-border"
-															aria-label="Remove custom image"
-														>
-															<X className="size-3" />
-														</button>
-													</div>
-												) : (
-													<label className="flex size-14 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-dashed border-border text-muted-foreground hover:border-ring">
-														{uploadingCustom ? (
-															<span className="text-[10px]">…</span>
-														) : (
-															<ImagePlus className="size-4" />
-														)}
-														<input
-															type="file"
-															accept="image/*"
-															disabled={uploadingCustom}
-															onChange={(e) =>
-																void uploadCustomImage(e.target.files)
-															}
-															className="hidden"
-														/>
-													</label>
-												)}
-												<label className="flex flex-1 flex-col gap-1 text-sm font-medium">
-													Option name
-													<Input
-														value={customLine.label}
-														onChange={(e) =>
-															setCustomLine({ label: e.target.value })
-														}
-														placeholder="Custom"
-														maxLength={40}
-													/>
-												</label>
-											</div>
+									<label className="flex flex-col gap-1 text-sm font-medium">
+										What should the buyer tell you?{" "}
+										<span className="font-normal text-muted-foreground">
+											(optional)
+										</span>
+										<textarea
+											value={customLine.prompt}
+											onChange={(e) =>
+												setCustomLine({ prompt: e.target.value })
+											}
+											rows={2}
+											maxLength={280}
+											placeholder="e.g. Tell us your design, flavour, size & date needed"
+											className="rounded-xl border border-input bg-background px-3 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+										/>
+									</label>
 
-											<label className="flex flex-col gap-1 text-sm font-medium">
-												Starting price ({currency}){" "}
-												<span className="font-normal text-muted-foreground">
-													(optional)
-												</span>
-												<PriceInput
-													value={customLine.price}
-													onChange={(v) => setCustomLine({ price: v })}
-													invalid={!!issueFor("custom", 0, "price")}
-												/>
-												<IssueText message={issueFor("custom", 0, "price")} />
-												<span className="text-xs font-normal text-muted-foreground">
-													Leave blank to show “Price on quote” — you set the
-													price on the mockup after the order comes in.
-												</span>
-											</label>
-
-											<label className="flex flex-col gap-1 text-sm font-medium">
-												What should the buyer tell you?{" "}
-												<span className="font-normal text-muted-foreground">
-													(optional)
-												</span>
-												<textarea
-													value={customLine.prompt}
-													onChange={(e) =>
-														setCustomLine({ prompt: e.target.value })
-													}
-													rows={2}
-													maxLength={280}
-													placeholder="e.g. Tell us your design, flavour, size & date needed"
-													className="rounded-xl border border-input bg-background px-3 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-												/>
-											</label>
-
-											<p className="text-xs text-muted-foreground">
-												🧑‍🍳 Made to order · ✅ buyer approves a mockup before
-												you start.
-											</p>
-										</div>
-									) : null}
+									<p className="text-xs text-muted-foreground">
+										🧑‍🍳 Made to order · ✅ buyer approves a mockup before you
+										start.
+									</p>
 								</div>
-							</>
-						)}
+							) : null}
+						</div>
 
 						{/* Second axis (choices mode only) — Size × Flavour grids. */}
 						{hasOptions ? (

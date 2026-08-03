@@ -41,11 +41,10 @@ export function describeProduct(
 		rows[0].blockWhenOutOfStock === false;
 	if (madeToOrderOnly) {
 		const base = parsePriceInput(rows[0].price.trim());
+		// No "from" prefix: one variant means the storefront prints a flat price.
 		return [
 			"Made to order",
-			base && base > 0
-				? `from ${currency} ${formatMajor(base)}`
-				: "Price on quote",
+			base && base > 0 ? `${currency} ${formatMajor(base)}` : "Price on quote",
 		].join(" · ");
 	}
 

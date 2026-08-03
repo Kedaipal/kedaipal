@@ -131,3 +131,105 @@ describe("wizard — the Made to order type is reachable and self-explaining", (
 		expect(screen.getAllByText(/price on quote/i).length).toBeGreaterThan(0);
 	});
 });
+
+/**
+ * PR #160 review, MEDIUM: the mockup-approval checkbox could flip a draft into
+ * the DERIVED made-to-order type mid-edit. The controls that set the flags were
+ * hidden for that type, so the checkbox unmounted the instant it was used, a
+ * set custom line kept publishing with nothing left to clear it, and step 2
+ * showed no card selected while the type's explainer rendered underneath —
+ * because the card read `state.shape` and the explainer read the derivation.
+ */
+describe("wizard — a derived type flip stays coherent and escapable", () => {
+	/** One item, priced, made fresh — the state the reviewer's repro reaches. */
+	function madeFreshSingle(): WizardState {
+		return atTypeStep({
+			shape: "single",
+			fulfilmentAnswered: true,
+			editor: {
+				options: [],
+				rows: [{ ...emptyRow([]), price: "120", blockWhenOutOfStock: false }],
+				customLine: null,
+			},
+		});
+	}
+
+	/** Open Review's "More options", where both flag controls live. */
+	function openMoreOptions() {
+		fireEvent.click(screen.getByRole("button", { name: /more options/i }));
+	}
+
+	it("keeps the approval checkbox mounted after it derives the type", () => {
+		// An answered draft opens on Review, where More options lives.
+		renderWizard(madeFreshSingle());
+		openMoreOptions();
+
+		fireEvent.click(screen.getByRole("checkbox", { name: /mockup approval/i }));
+
+		// The control that caused the flip is still there, checked, so it's
+		// reversible — it used to unmount itself the instant it was used.
+		const after = screen.getByRole("checkbox", {
+			name: /mockup approval/i,
+		}) as HTMLInputElement;
+		expect(after.checked).toBe(true);
+		// …and so is the custom-orders control, which used to vanish while its
+		// draft stayed in state and published invisibly.
+		expect(
+			screen.getByRole("checkbox", { name: /custom orders/i }),
+		).toBeTruthy();
+		// The redundancy is stated rather than hidden.
+		expect(screen.getByText(/already a custom order/i)).toBeTruthy();
+
+		// Unticking is the way back out.
+		fireEvent.click(after);
+		expect(
+			(
+				screen.getByRole("checkbox", {
+					name: /mockup approval/i,
+				}) as HTMLInputElement
+			).checked,
+		).toBe(false);
+	});
+
+	it("shows ONE coherent type on step 2 after the flip", () => {
+		renderWizard(
+			atTypeStep({
+				shape: "single",
+				fulfilmentAnswered: true,
+				editor: {
+					options: [],
+					// Already flipped: made fresh + approval, `shape` still "single".
+					rows: [
+						{
+							...emptyRow([]),
+							price: "120",
+							blockWhenOutOfStock: false,
+							requiresProof: true,
+						},
+					],
+					customLine: null,
+				},
+			}),
+		);
+		// Opens on Review; walk back to the type question (route is 1-2-3-5).
+		fireEvent.click(screen.getByRole("button", { name: /previous step/i }));
+		fireEvent.click(screen.getByRole("button", { name: /previous step/i }));
+
+		// The card and the explainer now read the SAME derivation: the card used
+		// to key on `state.shape` (nothing lit) while the explainer keyed on the
+		// derived flag (rendered), so the screen contradicted itself.
+		expect(
+			screen
+				.getByRole("button", { name: /made to order/i })
+				.getAttribute("aria-pressed"),
+		).toBe("true");
+		expect(
+			screen
+				.getByRole("button", { name: /just one item/i })
+				.getAttribute("aria-pressed"),
+		).toBe("false");
+		expect(screen.getByText(/no choices and no stock to set up/i)).toBeTruthy();
+		// The walked route matches the shown type.
+		expect(screen.getByText("Step 2 of 4")).toBeTruthy();
+	});
+});
