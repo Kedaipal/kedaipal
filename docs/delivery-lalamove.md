@@ -390,25 +390,37 @@ bookings still work, but shipped/delivered stop being automatic — the
 order just stays where it is until the seller advances it by hand. Dev
 deployment URL: `https://qualified-chihuahua-441.convex.site/webhook/lalamove`.
 
-**Manual-advance gate while the rider drives (26 Jul hotfix):** when an
-ACTIVE job's webhook is demonstrably alive (`deliveryJobs.lastEventAt` is
-only ever written by the webhook handler, and ASSIGNING_DRIVER lands
-seconds after booking), the order-detail stepper's advance into a
-**shipped- or delivered-anchored** stage renders **disabled-with-reason**
-("…moves to Shipped on its own when the rider picks up") — a manual tap
-would message the buyer early and, for shipped, without the live-tracking
-link. Confirm/packed advances are never gated (pre-pickup work is the
-seller's), same-anchor custom-stage moves stay free, and a small
-**"Update manually" confirm-gated escape** stays reachable so a webhook
-that dies mid-delivery never strands the order. Webhook-less sellers
-(`lastEventAt` never set) see zero change — manual advancing IS their
-documented path above. Pure predicates `riderDrivesOrderStatus` +
-`isRiderManagedTransition` in `convex/lib/lalamove.ts` (unit-tested);
-client-side UX guard only — the server mutation is unchanged (the seller
+**Manual-advance gate while the rider drives (26 Jul hotfix; tightened
+3 Aug):** while an order has an **ACTIVE** rider job, the order-detail
+stepper's advance into a **shipped- or delivered-anchored** stage renders
+**disabled-with-reason** — a manual tap would message the buyer early and,
+for shipped, without the live-tracking link. Confirm/packed advances are
+never gated (pre-pickup work is the seller's), same-anchor custom-stage
+moves stay free, and a **"Update manually" confirm-gated escape** stays
+reachable so a dead webhook never strands the order (cancelling the
+booking lifts the gate outright — a second way out).
+
+The gate originally ALSO required `deliveryJobs.lastEventAt`, i.e. proof
+the webhook was alive, so that webhook-less sellers kept manual control.
+That left the gate **off during exactly the window it matters most** —
+between placing the booking and the first event landing — and Zaki hit it
+in live testing on 3 Aug: booked a rider, then clicked straight through to
+"Collected" on a live trip. Since the escape already protects the
+webhook-less seller, the `lastEventAt` condition was dropped; it now only
+picks the honest wording ("moves on its own when the rider picks up" once
+the booking has reported, vs "…as long as your Lalamove webhook is set
+up" before that). Predicates: `isActiveJobStatus` +
+`isRiderManagedTransition`; `riderDrivesOrderStatus` now only answers "has
+this booking reported yet?" for copy.
+
+Client-side UX guard only — the server mutation is unchanged (the seller
 owns the order, and the webhook's same-status replays are already no-ops).
 Known gap, deliberate: the inbox **bulk** status bar can still mass-mark
 shipped without job awareness (needs a per-order job lookup in
-`searchOrders` — follow-up, not hotfix material).
+`searchOrders` — follow-up, not hotfix material). NOTE the collection gate
+below is different: that one IS server-enforced on every write path,
+because it protects a business rule (goods that aren't there yet) rather
+than message timing.
 
 ### Hygiene + lifecycle guards (pre-ship audit, 22 Jul)
 
@@ -516,6 +528,30 @@ tell the story). Three side-channels are closed with it:
   genuinely means nothing came in. The same stamp gives the buyer a
   persistent "Collected on …" line once the live rider strip retires, so
   their page is never silent mid-service.
+- **The seller cannot move a collection order until the goods arrive**
+  (3 Aug, Zaki's second catch). On a collection order the rider brings the
+  goods IN, so "packed" / "cleaning" / "ready" cannot be true beforehand —
+  yet the stepper let him mark Packed with no rider even booked, and
+  prompt-on-packed then offered to dispatch one, which is backwards
+  (packing happens AFTER arrival). Now `isCollectionGateClosed`
+  (`convex/lib/order.ts`, beside `isMockupGateClosed` and shaped like it)
+  blocks every advance into a packed-or-later anchor while
+  `deliveryDirection === "collection"` and `collectedAt` is unset.
+  **Server-enforced on all three seller write paths** — `advanceToStage`
+  and `updateStatus` throw, `bulkUpdateStatus` SKIPS (one ineligible order
+  must not fail a batch, the mockup-gate posture) — with the stepper
+  mirroring it as disabled-with-reason pointing at "Send rider to collect".
+  Cancelling is never gated. The escape is **"I already have the items"**,
+  for a seller who fetched them in person or whose webhook never reported:
+  it rides `advanceToStage({ markCollected: true })`, which stamps
+  `collectedAt` in the same transaction — so the question is asked once,
+  not at every stage. **prompt-on-packed never fires on a collection
+  order** and its ⚡ hint is hidden, since the promise it makes is one this
+  flow must never keep. One-shot `orders:backfillCollectionCollectedAt`
+  stamps orders whose rider completed before the field existed (dev only —
+  production has no collection orders yet; ran on dev 3 Aug, 1 stamped).
+  Standard delivery is untouched by construction: the predicate is false
+  for every non-collection order (verified against all 130 dev orders).
 - **A completed collection is TERMINAL for the card** (`collectionDone`,
   3 Aug — bug found by Zaki in local testing). Because the order never
   advances, it sits at confirmed/packed forever, so `bookable` stayed true

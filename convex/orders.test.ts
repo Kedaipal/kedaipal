@@ -6305,3 +6305,206 @@ describe("orders — the seller's unseen-order signal survives confirm-at-create
 		expect(res.counts.in_progress).toBe(1);
 	});
 });
+
+describe("orders — collection gate on advanceToStage (86eyg0n8e)", () => {
+	const asA = (t: ReturnType<typeof setup>) =>
+		t.withIdentity({ subject: USER_A });
+
+	/** An order whose rider collects FROM the buyer — the goods are not with
+	 * the seller until a rider brings them in. */
+	async function collectionOrder(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		if (!order) throw new Error("no order");
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order._id, { deliveryDirection: "collection" });
+		});
+		return { retailer, order, shortId };
+	}
+
+	test("production stages are refused while the items are still with the buyer", async () => {
+		const t = setup();
+		const { order } = await collectionOrder(t);
+		// Accepting the order is NOT fulfilment — confirming stays open.
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: "default:confirmed",
+		});
+		for (const stageId of [
+			"default:packed",
+			"default:shipped",
+			"default:delivered",
+		]) {
+			await expect(
+				asA(t).mutation(api.orders.advanceToStage, {
+					orderId: order._id,
+					stageId,
+				}),
+			).rejects.toThrow(/still with your customer/i);
+		}
+	});
+
+	test("the escape lets a seller who fetched the items proceed, and stamps the arrival once", async () => {
+		const t = setup();
+		const { order, shortId } = await collectionOrder(t);
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: "default:packed",
+			markCollected: true,
+		});
+		const after = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(after?.status).toBe("packed");
+		expect(after?.collectedAt).toBeGreaterThan(0);
+
+		// Asked once: every later stage moves without the escape…
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: "default:shipped",
+		});
+		const later = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(later?.status).toBe("shipped");
+		// …and the arrival moment never moves.
+		expect(later?.collectedAt).toBe(after?.collectedAt);
+		void shortId;
+	});
+
+	test("a rider-collected order needs no escape (collectedAt already stamped)", async () => {
+		const t = setup();
+		const { order } = await collectionOrder(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order._id, { collectedAt: Date.now() });
+		});
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: "default:packed",
+		});
+		const after = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(after?.status).toBe("packed");
+	});
+
+	test("STANDARD delivery is untouched — packing precedes the trip (regression pin)", async () => {
+		const t = setup();
+		const { order } = await plainOrderForCollectionSuite(t);
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: "default:packed",
+		});
+		const after = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(after?.status).toBe("packed");
+		expect(after?.collectedAt).toBeUndefined();
+	});
+
+	/** Same seed, no direction — the control for the pin above. */
+	async function plainOrderForCollectionSuite(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		if (!order) throw new Error("no order");
+		return { retailer, order, shortId };
+	}
+});
+
+describe("orders — the collection gate holds on EVERY status write path", () => {
+	const asA = (t: ReturnType<typeof setup>) =>
+		t.withIdentity({ subject: USER_A });
+
+	async function collectionOrders(t: ReturnType<typeof setup>, n = 1) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const ids = [];
+		for (let i = 0; i < n; i++) {
+			const { shortId } = await t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+			});
+			const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+			if (!o) throw new Error("no order");
+			await t.run(async (ctx) => {
+				await ctx.db.patch(o._id, { deliveryDirection: "collection" });
+			});
+			ids.push(o._id);
+		}
+		return { retailer, ids };
+	}
+
+	test("updateStatus can't pack an order still with the buyer, but can still cancel it", async () => {
+		const t = setup();
+		const { ids } = await collectionOrders(t);
+		await expect(
+			asA(t).mutation(api.orders.updateStatus, {
+				orderId: ids[0],
+				status: "packed",
+			}),
+		).rejects.toThrow(/still with your customer/i);
+		// Cancelling is never gated — an order must always be escapable.
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: ids[0],
+			status: "cancelled",
+		});
+		const after = await t.run(async (ctx) => ctx.db.get(ids[0]));
+		expect(after?.status).toBe("cancelled");
+	});
+
+	test("bulkUpdateStatus SKIPS an un-collected order instead of failing the batch", async () => {
+		const t = setup();
+		const { ids } = await collectionOrders(t, 2);
+		// One order's goods have arrived; the other's haven't.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(ids[0], { collectedAt: Date.now() });
+		});
+		const res = await asA(t).mutation(api.orders.bulkUpdateStatus, {
+			orderIds: ids,
+			status: "packed",
+		});
+		expect(res).toEqual({ updated: 1, skipped: 1 });
+		const rows = await t.run(async (ctx) => [
+			await ctx.db.get(ids[0]),
+			await ctx.db.get(ids[1]),
+		]);
+		expect(rows[0]?.status).toBe("packed");
+		// Untouched (test orders start `pending`), and crucially NOT errored.
+		expect(rows[1]?.status).toBe("pending");
+	});
+
+	test("STANDARD orders bulk-pack exactly as before (regression pin)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		if (!o) throw new Error("no order");
+		const res = await asA(t).mutation(api.orders.bulkUpdateStatus, {
+			orderIds: [o._id],
+			status: "packed",
+		});
+		expect(res).toEqual({ updated: 1, skipped: 0 });
+	});
+});

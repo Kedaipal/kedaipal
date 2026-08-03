@@ -361,17 +361,33 @@ function OrderDetailRoute() {
 	)
 		? "Lalamove Collection"
 		: "Lalamove Delivery";
-	// The rider's webhook is demonstrably driving this order (active job + at
-	// least one event applied) — manual shipped/delivered advances are gated
-	// behind a confirm so the buyer isn't messaged early / without the tracking
-	// link. Webhook-less sellers (lastEventAt never set) keep manual control —
-	// that's their documented path. Never true for collection orders: their
-	// webhook deliberately doesn't drive order status, so the "moves on its
-	// own" gate would both lie and strand the seller.
-	const riderAutoUpdates =
+	// A rider is mid-trip with this order: manual shipped/delivered advances are
+	// gated behind a confirm, so the seller can't message the buyer "on the way"
+	// before pickup (and without the tracking link).
+	//
+	// Gated from the moment of BOOKING, not from the first webhook event. The
+	// old predicate also required `lastEventAt`, which left the gate off during
+	// exactly the window it matters most — between placing the booking and the
+	// first event landing — so a seller could click straight through a live
+	// rider trip. The confirm-gated escape below is what protects the
+	// webhook-less seller instead, and cancelling the booking lifts the gate
+	// outright, so neither can be stranded.
+	//
+	// Never true for collection orders: there the rider drives the FRONT of the
+	// flow, not shipped/delivered, so this gate would both lie and strand.
+	const riderHandlingTrip =
 		!!dispatchInfo?.job &&
 		!collectionService &&
-		riderDrivesOrderStatus(dispatchInfo.job);
+		isActiveJobStatus(dispatchInfo.job.status);
+	// Has that booking actually reported yet? Only then can we promise the
+	// status moves on its own — otherwise the seller may have no webhook.
+	const riderWebhookReporting =
+		!!dispatchInfo?.job && riderDrivesOrderStatus(dispatchInfo.job);
+	// Collection order whose goods are still with the buyer: nothing downstream
+	// ("packed", "cleaning", "ready") can be true yet. Mirrors the server gate
+	// in orders.advanceToStage.
+	const awaitingCollection =
+		collectionService && order?.collectedAt === undefined;
 	const crmCustomer = useQuery(
 		api.customers.get,
 		order?.customerId ? { customerId: order.customerId } : "skip",
@@ -396,6 +412,10 @@ function OrderDetailRoute() {
 	// anyway" stays reachable behind this confirm.
 	const [confirmManualAdvanceOpen, setConfirmManualAdvanceOpen] =
 		useState(false);
+	// Escape hatch for the collection gate — the seller fetched the items in
+	// person, or the rider's webhook never reported. Confirming stamps the
+	// arrival, so the order unblocks for good rather than asking every stage.
+	const [confirmCollectedOpen, setConfirmCollectedOpen] = useState(false);
 	// Rare actions (cancel, delete, receipt) collapse behind one link at the bottom.
 	const [moreOpen, setMoreOpen] = useState(false);
 	// Optional method tag captured at confirm time (the seller has just verified
@@ -473,11 +493,20 @@ function OrderDetailRoute() {
 		Date.now(),
 	);
 
-	async function handleAdvance(stageId: string, shipment?: ShipmentFields) {
+	async function handleAdvance(
+		stageId: string,
+		shipment?: ShipmentFields,
+		opts?: { markCollected?: boolean },
+	) {
 		if (!order) return;
 		setPending(stageId);
 		try {
-			await advanceToStage({ orderId: order._id, stageId, ...shipment });
+			await advanceToStage({
+				orderId: order._id,
+				stageId,
+				...shipment,
+				...(opts?.markCollected ? { markCollected: true } : {}),
+			});
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 			// Rethrow so the mark-shipped dialog stays open for a retry (the toast
@@ -642,8 +671,15 @@ function OrderDetailRoute() {
 							// below so a dead webhook never strands the order.
 							const riderManaged =
 								!blocked &&
-								riderAutoUpdates &&
+								riderHandlingTrip &&
 								isRiderManagedTransition(nextStage.anchor, order.status);
+							// Collection: the goods aren't with the seller yet, so no production
+							// stage can be true. Never overlaps riderManaged (that one is off on
+							// collection orders) — same order the server checks them in.
+							const collectionPending =
+								!blocked &&
+								awaitingCollection &&
+								anchorOrdinal(nextStage.anchor) >= anchorOrdinal("packed");
 							const riderMoment =
 								nextStage.anchor === "delivered"
 									? "the rider drops off"
@@ -689,13 +725,20 @@ function OrderDetailRoute() {
 											}
 											void handleAdvance(nextStage.id).catch(() => {});
 										}}
-										disabled={pending !== null || blocked || riderManaged}
+										disabled={
+											pending !== null ||
+											blocked ||
+											riderManaged ||
+											collectionPending
+										}
 										className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-foreground text-[15px] font-bold text-background transition-opacity hover:opacity-95 disabled:opacity-55"
 									>
 										{pending === nextStage.id ? (
 											"Updating…"
 										) : blocked ? (
 											`${advanceLabel} — awaiting mockup`
+										) : collectionPending ? (
+											`${advanceLabel} — awaiting collection`
 										) : riderManaged ? (
 											`${advanceLabel} — automatic`
 										) : (
@@ -705,11 +748,37 @@ function OrderDetailRoute() {
 											</>
 										)}
 									</button>
-									{riderManaged ? (
+									{collectionPending ? (
 										<p className="text-xs leading-relaxed text-muted-foreground">
-											A Lalamove rider is on this order — it moves to{" "}
-											<b>{stageLabel(nextStage, "en")}</b> on its own when{" "}
-											{riderMoment}.{" "}
+											This order is still with your customer — send a rider to
+											collect it, and you can move it on once the items are with
+											you.{" "}
+											<button
+												type="button"
+												onClick={() => setConfirmCollectedOpen(true)}
+												disabled={pending !== null}
+												className="font-medium underline underline-offset-2"
+											>
+												I already have the items
+											</button>{" "}
+											if you collected them yourself.
+										</p>
+									) : riderManaged ? (
+										<p className="text-xs leading-relaxed text-muted-foreground">
+											{riderWebhookReporting ? (
+												<>
+													A Lalamove rider is on this order — it moves to{" "}
+													<b>{stageLabel(nextStage, "en")}</b> on its own when{" "}
+													{riderMoment}.
+												</>
+											) : (
+												<>
+													A Lalamove rider is booked for this order — it moves
+													to <b>{stageLabel(nextStage, "en")}</b> on its own
+													once {riderMoment}, as long as your Lalamove webhook
+													is set up.
+												</>
+											)}{" "}
 											<button
 												type="button"
 												onClick={() => setConfirmManualAdvanceOpen(true)}
@@ -718,7 +787,9 @@ function OrderDetailRoute() {
 											>
 												Update manually
 											</button>{" "}
-											if the automatic update didn&apos;t arrive.
+											{riderWebhookReporting
+												? "if the automatic update didn't arrive."
+												: "to move it yourself instead."}
 										</p>
 									) : null}
 								</div>
@@ -1471,6 +1542,23 @@ function OrderDetailRoute() {
 					confirmLabel={`Mark as ${stageLabel(nextStage, "en")}`}
 					cancelLabel="Keep automatic"
 					onConfirm={() => handleAdvance(nextStage.id)}
+				/>
+			) : null}
+
+			{/* Collection escape: the seller has the items without a rider having
+			    reported it. Confirming records the arrival, so this asks once —
+			    every later stage moves freely. */}
+			{nextStage ? (
+				<ConfirmDialog
+					open={confirmCollectedOpen}
+					onOpenChange={setConfirmCollectedOpen}
+					title="Do you already have the items?"
+					description="Confirm only if your customer's items are physically with you — no rider has reported collecting them. This marks the order as collected, so you can move it through your stages from here."
+					confirmLabel="Yes, I have the items"
+					cancelLabel="Not yet"
+					onConfirm={() =>
+						handleAdvance(nextStage.id, undefined, { markCollected: true })
+					}
 				/>
 			) : null}
 

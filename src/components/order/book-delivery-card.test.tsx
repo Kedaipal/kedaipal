@@ -359,3 +359,65 @@ describe("BookDeliveryCard — store-now vs trip-then (86eyg0n8e)", () => {
 		expect(screen.getByText("Rebook collection")).toBeTruthy();
 	});
 });
+
+describe("BookDeliveryCard — collection never auto-prompts (86eyg0n8e)", () => {
+	// The prompt means "you packed it, now send it out". On a collection order
+	// the rider brings goods IN — packing happens AFTER they arrive — so
+	// prompting before any booking offered a trip at the wrong moment, and the
+	// ⚡ hint promised something that must never happen.
+	const collectionOrder = {
+		shortId: "ORD-COLL2",
+		deliveryMethod: "delivery",
+		status: "confirmed",
+		currency: "MYR",
+		paymentStatus: "received",
+	} as unknown as Doc<"orders">;
+
+	const noJobYet = {
+		promptBookOnPacked: true,
+		bookingEnabled: true,
+		deliveryDirection: "collection",
+		blockReason: null,
+		job: null,
+	};
+
+	it("marking Packed with no booking yet does not open the booking dialog", async () => {
+		const prepare = vi.fn();
+		state.action = prepare;
+		state.dispatch = noJobYet;
+		const { rerender } = render(<BookDeliveryCard order={collectionOrder} />);
+		rerender(
+			<BookDeliveryCard
+				order={{ ...collectionOrder, status: "packed" } as Doc<"orders">}
+			/>,
+		);
+		await waitFor(() => {
+			expect(prepare).not.toHaveBeenCalled();
+		});
+	});
+
+	it("drops the ⚡ prompt hint, which would promise a prompt that never comes", () => {
+		state.dispatch = noJobYet;
+		render(<BookDeliveryCard order={collectionOrder} />);
+		expect(screen.queryByText(/You'll be asked to book a rider/)).toBeNull();
+		// The way to book is still right there.
+		expect(screen.getByText("Send rider to collect")).toBeTruthy();
+	});
+
+	it("a STANDARD order keeps the prompt and its hint (regression pin)", async () => {
+		const prepare = vi.fn().mockResolvedValue({ ok: false, reason: "x" });
+		state.action = prepare;
+		state.dispatch = { ...noJobYet, deliveryDirection: "standard" };
+		const standard = { ...collectionOrder } as Doc<"orders">;
+		const { rerender } = render(<BookDeliveryCard order={standard} />);
+		expect(screen.getByText(/You'll be asked to book a rider/)).toBeTruthy();
+		rerender(
+			<BookDeliveryCard
+				order={{ ...standard, status: "packed" } as Doc<"orders">}
+			/>,
+		);
+		await waitFor(() => {
+			expect(prepare).toHaveBeenCalled();
+		});
+	});
+});

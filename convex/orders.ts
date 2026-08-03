@@ -60,6 +60,7 @@ import {
 	computeOrderTotals,
 	generateShortId,
 	generateTrackingToken,
+	isCollectionGateClosed,
 	isMockupGateClosed,
 } from "./lib/order";
 import {
@@ -2319,6 +2320,19 @@ export const updateStatus = mutation({
 			);
 		}
 
+		// Collection gate (86eyg0n8e) — the goods are still with the buyer, so no
+		// production status can be true. Cancelling stays open (same posture as
+		// the mockup gate above).
+		if (
+			status !== "cancelled" &&
+			anchorOrdinal(status) >= anchorOrdinal("packed") &&
+			isCollectionGateClosed(order)
+		) {
+			throw new ConvexError(
+				"This order is still with your customer — send a rider to collect it first. If the items are already with you, use “I already have the items” on the order page.",
+			);
+		}
+
 		await applyStatusTransition(ctx, order, status, {
 			note,
 			carrierTrackingUrl,
@@ -2373,6 +2387,17 @@ export const bulkUpdateStatus = mutation({
 				continue;
 			}
 			if (status === "packed" && isMockupGateClosed(order)) {
+				skipped++;
+				continue;
+			}
+			// A collection order whose items haven't arrived can't be moved into
+			// production in bulk either — skipped, not fatal, so the rest of the
+			// batch still lands (mockup-gate posture).
+			if (
+				status !== "cancelled" &&
+				anchorOrdinal(status) >= anchorOrdinal("packed") &&
+				isCollectionGateClosed(order)
+			) {
 				skipped++;
 				continue;
 			}
@@ -2557,10 +2582,23 @@ export const advanceToStage = mutation({
 		carrierTrackingUrl: v.optional(v.string()),
 		courierName: v.optional(v.string()),
 		trackingNo: v.optional(v.string()),
+		// Collection service escape (86eyg0n8e): the seller asserts the items are
+		// already with them — they collected in person, or the rider's webhook
+		// never reported. Stamps `collectedAt` so the order unblocks for good
+		// instead of asking again at every stage. Ignored on standard orders.
+		markCollected: v.optional(v.boolean()),
 	},
 	handler: async (
 		ctx,
-		{ orderId, stageId, note, carrierTrackingUrl, courierName, trackingNo },
+		{
+			orderId,
+			stageId,
+			note,
+			carrierTrackingUrl,
+			courierName,
+			trackingNo,
+			markCollected,
+		},
 	): Promise<void> => {
 		const { order, access } = await requireOrderAccess(ctx, orderId);
 		const retailer = access.retailer;
@@ -2593,6 +2631,23 @@ export const advanceToStage = mutation({
 			);
 		}
 
+		// Collection gate (86eyg0n8e): on a COLLECTION order the rider brings the
+		// goods IN, so nothing downstream ("packed", "cleaning", "ready") can be
+		// true before they arrive. The seller books the rider first and the order
+		// waits. Same anchor-ordinal shape as the mockup gate above, and the same
+		// escape posture: `markCollected` lets a seller who fetched the items
+		// themselves (or whose webhook never reported) proceed — which stamps the
+		// arrival, so this asks once, not at every stage. Standard delivery is
+		// untouched: the rider takes goods OUT, so packing precedes the trip.
+		const collectingFromBuyer =
+			isCollectionGateClosed(order) &&
+			anchorOrdinal(targetStatus) >= anchorOrdinal("packed");
+		if (collectingFromBuyer && markCollected !== true) {
+			throw new ConvexError(
+				"This order is still with your customer — send a rider to collect it first. If the items are already with you, use “I already have the items” on the order page.",
+			);
+		}
+
 		const now = Date.now();
 		const statusChanged = order.status !== targetStatus;
 
@@ -2604,7 +2659,12 @@ export const advanceToStage = mutation({
 			trackingNo: string;
 			statusChangedAt: number;
 			updatedAt: number;
+			collectedAt: number;
 		}> = { status: targetStatus, currentStageId: stage.id, updatedAt: now };
+		// Set-if-unset, so a later manual advance can't move the arrival moment.
+		if (collectingFromBuyer && markCollected === true) {
+			patch.collectedAt = now;
+		}
 		// Reset the status clock only when the canonical status actually changes
 		// (a within-anchor stage move keeps the same "Pending/Confirmed/…" bucket).
 		if (statusChanged) patch.statusChangedAt = now;
@@ -3706,5 +3766,50 @@ export const getMockupUrls = query({
 			resolveMockupImageIds(order).map((id) => ctx.storage.getUrl(id)),
 		);
 		return urls.filter((u): u is string => u !== null);
+	},
+});
+
+/**
+ * One-shot backfill (86eyg0n8e): stamp `collectedAt` on COLLECTION orders whose
+ * rider already completed the trip before that field existed.
+ *
+ *   npx convex run orders:backfillCollectionCollectedAt
+ *
+ * Without it, such an order sits behind the collection gate forever — the rider
+ * genuinely brought the goods in, but nothing recorded WHEN, so the seller would
+ * have to take the "I already have the items" escape on an order that needs no
+ * escape. The arrival moment is taken from the job's last webhook event (its
+ * completion), falling back to the job's `updatedAt`.
+ *
+ * **Production is a no-op** — the collection service has never shipped there, so
+ * no order carries `deliveryDirection: "collection"` yet. This exists for dev
+ * deployments that tested the flow before the field landed. Idempotent: only
+ * touches rows where `collectedAt` is unset.
+ */
+export const backfillCollectionCollectedAt = internalMutation({
+	args: {},
+	handler: async (ctx): Promise<{ scanned: number; stamped: number }> => {
+		const jobs = await ctx.db
+			.query("deliveryJobs")
+			.filter((q) => q.eq(q.field("status"), "completed"))
+			.collect();
+		let stamped = 0;
+		for (const job of jobs) {
+			if (job.deliveryDirection !== "collection") continue;
+			const order = await ctx.db.get(job.orderId);
+			if (!order) continue;
+			if (order.deliveryDirection !== "collection") continue;
+			if (order.collectedAt !== undefined) continue;
+			await ctx.db.patch(order._id, {
+				collectedAt: job.lastEventAt ?? job.updatedAt,
+				updatedAt: Date.now(),
+			});
+			stamped++;
+		}
+		console.log("[orders] collectedAt backfill", {
+			scanned: jobs.length,
+			stamped,
+		});
+		return { scanned: jobs.length, stamped };
 	},
 });

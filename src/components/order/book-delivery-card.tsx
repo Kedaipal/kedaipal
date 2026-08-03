@@ -94,14 +94,16 @@ export function BookDeliveryCard({
 		if (!dispatch.promptBookOnPacked) return;
 		if (order.paymentStatus !== "received") return; // only paid orders
 		if (dispatch.blockReason !== null) return; // not bookable (keys/pin/plan/…)
-		// A finished COLLECTION trip is terminal (see collectionDone below). The
-		// order still sits at confirmed/packed because the webhook never advances
-		// it, so "Packed" — the seller's natural next step once the goods land —
-		// would otherwise auto-open the dialog and dispatch a SECOND rider to the
-		// buyer. Standard orders can't reach here (they're delivered by then).
+		// COLLECTION orders never auto-prompt. The prompt means "you packed it,
+		// now send it out" — but here the rider brings goods IN, so packing
+		// happens AFTER they arrive: before collection it would offer a trip at
+		// the wrong moment, and after it would dispatch a SECOND one (the order
+		// sits at confirmed/packed forever, so it can't self-close the way a
+		// standard order does by reaching `delivered`). The seller books from
+		// the card's own "Send rider to collect".
 		if (
-			dispatch.job?.deliveryDirection === "collection" &&
-			dispatch.job?.status === "completed"
+			dispatch.deliveryDirection === "collection" ||
+			dispatch.job?.deliveryDirection === "collection"
 		) {
 			return;
 		}
@@ -129,13 +131,13 @@ export function BookDeliveryCard({
 		prevTokenRef.current = bookRequestToken;
 		if (bookRequestToken === prev) return;
 		if (!dispatch || dispatch.blockReason !== null) return;
-		// Same terminal-collection stop as the packed prompt. Unreachable today
-		// (the mark-shipped prompt that raises this token is skipped entirely on
+		// Same collection stop as the packed prompt. Unreachable today (the
+		// mark-shipped prompt that raises this token is skipped entirely on
 		// collection orders) — kept as defence in depth so a future caller can't
-		// dispatch a second collection.
+		// auto-dispatch a collection the seller didn't ask for.
 		if (
-			dispatch.job?.deliveryDirection === "collection" &&
-			dispatch.job?.status === "completed"
+			dispatch.deliveryDirection === "collection" ||
+			dispatch.job?.deliveryDirection === "collection"
 		) {
 			return;
 		}
@@ -493,7 +495,7 @@ export function BookDeliveryCard({
 
 			{/* Prompt-on-packed heads-up — tells the seller the booking dialog will
 			    pop when they mark this order packed (never a silent charge). */}
-			{promptBookOnPacked && !activeJob && bookable && !collectionDone ? (
+			{promptBookOnPacked && !activeJob && bookable && !collection ? (
 				<p className="text-xs text-muted-foreground">
 					⚡ You'll be asked to book a rider (with today's price) the moment
 					this order is <span className="font-medium">Packed</span> and{" "}
