@@ -1244,6 +1244,75 @@ describe("products", () => {
 			expect(product?.hasQuotePricing).toBe(true);
 		});
 
+		test("a product can be JUST a custom line — the made-to-order type", async () => {
+			// 86eyfq04j: the type IS one bespoke offer, so it carries no matrix at
+			// all. Modelling it as `isCustom` is what earns it the storefront's
+			// existing bespoke flow instead of a parallel path.
+			const t = setup();
+			const retailer = await seedRetailer(t, USER_A);
+			const asA = t.withIdentity({ subject: USER_A });
+			const id = await asA.mutation(api.products.create, {
+				retailerId: retailer._id,
+				name: "Tent wash",
+				currency: "MYR",
+				imageStorageIds: [],
+				sortOrder: 0,
+				options: [],
+				variants: [
+					{
+						optionValues: [],
+						price: 0,
+						onHand: 0,
+						isCustom: true,
+						customPrompt: "Tent size, model & how dirty",
+					},
+				],
+			});
+			const product = await asA.query(api.products.get, { productId: id });
+			expect(product?.variants).toHaveLength(1);
+			expect(product?.variants[0].isCustom).toBe(true);
+			expect(product?.variants[0].requiresProof).toBe(true);
+			expect(product?.variants[0].blockWhenOutOfStock).toBe(false);
+			// Price-on-quote, and never "free".
+			expect(product?.hasQuotePricing).toBe(true);
+			// Always orderable — made on demand, so it can't sell out.
+			expect(product?.inStock).toBe(true);
+		});
+
+		test("an EMPTY variant set is still rejected", async () => {
+			const t = setup();
+			const retailer = await seedRetailer(t, USER_A);
+			const asA = t.withIdentity({ subject: USER_A });
+			await expect(
+				asA.mutation(api.products.create, {
+					retailerId: retailer._id,
+					name: "Nothing",
+					currency: "MYR",
+					imageStorageIds: [],
+					sortOrder: 0,
+					options: [],
+					variants: [],
+				}),
+			).rejects.toThrow(/at least one variant/i);
+		});
+
+		test("axes with no matrix are still rejected — a grid selling nothing", async () => {
+			const t = setup();
+			const retailer = await seedRetailer(t, USER_A);
+			const asA = t.withIdentity({ subject: USER_A });
+			await expect(
+				asA.mutation(api.products.create, {
+					retailerId: retailer._id,
+					name: "Cake",
+					currency: "MYR",
+					imageStorageIds: [],
+					sortOrder: 0,
+					options: [{ name: "Size", values: ["S", "M"] }],
+					variants: [{ optionValues: [], price: 0, onHand: 0, isCustom: true }],
+				}),
+			).rejects.toThrow(/at least one variant/i);
+		});
+
 		test("blank custom label defaults to \"Custom\"", async () => {
 			const t = setup();
 			const retailer = await seedRetailer(t, USER_A);

@@ -38,9 +38,8 @@ import {
 	type CustomLineDraft,
 	emptyRow,
 	FulfilmentToggle,
-	customLineForSubmit,
+	emptyCustomLine,
 	isMadeToOrderOnly,
-	madeToOrderRow,
 	PriceInput,
 	rebuildRows,
 	reconcileForSubmit,
@@ -195,9 +194,7 @@ export function wizardStepIssues(
 	step: number,
 ): WizardIssue[] {
 	const issues: WizardIssue[] = [];
-	// The custom line the SUBMIT will carry — null on a made-to-order product,
-	// so a stale custom price can't raise an issue pointing at a hidden input.
-	const customLine = customLineForSubmit(state.editor);
+	const { customLine } = state.editor;
 	// Validate the shape that will actually be SUBMITTED (see
 	// buildWizardSubmitValues), not the raw editor state — otherwise a rebuilt
 	// row's missing price passes the steps and then collapses `variants` to an
@@ -262,7 +259,20 @@ export function wizardStepIssues(
 	// hides them, so per-row validation waits for a real grid — step 2's own
 	// "add at least one value" issue is the actionable one.
 	const gridReady = cartesian(options).length > 0;
-	if (step === 3 && gridReady) {
+	// Made to order prices its OWN line at step 3 (it has no matrix), so a bad
+	// amount must surface THERE, not on the review step where the input isn't.
+	const madeToOrder = isMadeToOrderOnly(state.editor);
+	if (step === 3 && madeToOrder) {
+		const built = buildSubmitVariants([], customLine);
+		if ("issues" in built) {
+			for (const issue of built.issues) {
+				if (issue.where === "custom") {
+					issues.push({ field: "customPrice", message: issue.message });
+				}
+			}
+		}
+	}
+	if (step === 3 && !madeToOrder && gridReady) {
 		const built = buildSubmitVariants(rows, null);
 		if ("issues" in built) {
 			for (const issue of built.issues) {
@@ -293,7 +303,8 @@ export function wizardStepIssues(
 		}
 	}
 	if (step === 5) {
-		const built = buildSubmitVariants(rows, customLine);
+		// Made to order already raised this at step 3, where its price input is.
+		const built = buildSubmitVariants(rows, madeToOrder ? null : customLine);
 		if ("issues" in built) {
 			for (const issue of built.issues) {
 				if (issue.where === "custom") {
@@ -342,10 +353,9 @@ export function buildWizardSubmitValues(
 		state.editor.options,
 		state.editor.rows,
 	);
-	const built = buildSubmitVariants(
-		reconciled.rows,
-		customLineForSubmit(state.editor),
-	);
+	// A made-to-order product reconciles to an EMPTY matrix — its custom line is
+	// the whole offer, emitted by `buildSubmitVariants` as the only variant.
+	const built = buildSubmitVariants(reconciled.rows, state.editor.customLine);
 	const minQty = Number(state.minQuantity.trim());
 	const notice = Number(state.minNoticeDays.trim());
 	return {
@@ -447,21 +457,21 @@ export function wizardInitialStep(state: WizardState): number {
 
 /** Compact "RM 12" / "RM 12–28" label for the review preview. */
 export function wizardPriceLabel(state: WizardState, currency: string): string {
-	const madeToOrder = effectiveShape(state) === "made_to_order";
+	// Made to order has no matrix — its price lives on the bespoke line.
+	if (effectiveShape(state) === "made_to_order") {
+		const base = parsePriceInput(state.editor.customLine?.price.trim() ?? "");
+		return base && base > 0
+			? `${currency} ${base % 1 === 0 ? String(base) : base.toFixed(2)}`
+			: "Price on quote";
+	}
 	const parsed = state.editor.rows
 		.filter((r) => r.active)
 		.map((r) => parsePriceInput(r.price.trim()))
-		// A made-to-order row at 0 is "Price on quote", not a free product — the
-		// same exclusion `productWithVariants` applies to the displayed range.
-		.filter((p): p is number => p !== null && !(madeToOrder && p === 0));
-	if (parsed.length === 0) return madeToOrder ? "Price on quote" : "";
+		.filter((p): p is number => p !== null);
+	if (parsed.length === 0) return "";
 	const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
 	const min = Math.min(...parsed);
 	const max = Math.max(...parsed);
-	// No "from" prefix on a priced made-to-order product: it has exactly ONE
-	// variant, so `productWithVariants` reports priceFrom === priceTo and the
-	// storefront prints a flat price. Saying "from" here would promise the
-	// seller a range the buyer never sees.
 	return min === max
 		? `${currency} ${fmt(min)}`
 		: `${currency} ${fmt(min)}–${fmt(max)}`;
@@ -671,33 +681,6 @@ export function ProductWizard({
 		patchEditor({ rows: rows.map((r) => ({ ...r, [field]: v })) });
 	}
 
-	/** Mockup approval — see `setApproval` in variant-editor.tsx. On a made-fresh
-	 * single item this derives the made-to-order type, which retires the separate
-	 * custom line; ask before discarding what the seller typed there. */
-	function setApproval(next: boolean) {
-		const derivesType =
-			next &&
-			isMadeToOrderOnly({
-				options,
-				rows: rows.map((r) => ({ ...r, requiresProof: true })),
-			});
-		if (derivesType && customLine) {
-			if (
-				!window.confirm(
-					"That makes this whole product a custom order, so the separate custom line will be removed. Continue?",
-				)
-			) {
-				return;
-			}
-			revokeIfBlob(customLine.imageUrl);
-			patchEditor({
-				rows: rows.map((r) => ({ ...r, requiresProof: true })),
-				customLine: null,
-			});
-			return;
-		}
-		bulkFlag("requiresProof", next);
-	}
 	function renameAxis(axisIndex: number, name: string) {
 		setOptions(options.map((a, i) => (i === axisIndex ? { ...a, name } : a)));
 	}
@@ -779,24 +762,28 @@ export function ProductWizard({
 	 * "no choices, no stock" note stayed on screen. Ordinary rows track stock
 	 * and aren't approval-gated — `emptyRow`'s defaults.
 	 */
-	function clearMadeToOrderFlags(row: VariantRow): VariantRow {
-		if (!madeToOrder) return row;
-		return { ...row, blockWhenOutOfStock: true, requiresProof: false };
+	/** Leaving made-to-order: that type has NO matrix, so the other two need a
+	 * real row to build from, and its bespoke line retires with it. The price
+	 * carries across so the seller doesn't retype. */
+	function rowsLeavingMadeToOrder(): VariantRow[] {
+		return [{ ...emptyRow([]), price: customLine?.price ?? "" }];
 	}
 
 	function switchToChoices() {
 		if (showAxes) return;
 		if (options.length === 0) {
-			const seed = rows.map(clearMadeToOrderFlags);
+			const seed = madeToOrder ? rowsLeavingMadeToOrder() : rows;
 			patch({
 				shape: "choices",
 				// A made-to-order draft has answered nothing about stock; the grid
 				// re-asks it at step 4 like any other multi-choice product.
 				fulfilmentAnswered: madeToOrder ? false : state.fulfilmentAnswered,
 				editor: {
-					...state.editor,
 					options: [{ name: "", values: [] }],
 					rows: rebuildRows([{ name: "", values: [] }], seed),
+					// The bespoke line retires with the type — the choices are the
+					// offer now.
+					customLine: madeToOrder ? null : state.editor.customLine,
 				},
 			});
 			setValueDrafts([""]);
@@ -808,7 +795,9 @@ export function ProductWizard({
 		if (shape === "single") return;
 		if (!confirmLosingChoices()) return;
 		// Collapse to one row, carrying the first row's price/stock/flags.
-		const donor = clearMadeToOrderFlags(rows[0] ?? emptyRow([]));
+		const donor = madeToOrder
+			? rowsLeavingMadeToOrder()[0]
+			: (rows[0] ?? emptyRow([]));
 		patch({
 			shape: "single",
 			// Same reason as switchToChoices: "how do you prepare orders?" was
@@ -817,6 +806,7 @@ export function ProductWizard({
 			editor: {
 				...state.editor,
 				options: [],
+				customLine: madeToOrder ? null : state.editor.customLine,
 				rows: [
 					{
 						...donor,
@@ -837,27 +827,26 @@ export function ProductWizard({
 		const donor = rows[0] ?? emptyRow([]);
 		// The type IS the fulfilment answer (made to order, never out of stock,
 		// mockup-approved), so step 4 has nothing left to ask — mark it answered
-		// and drop it from the sequence. Stock is cleared: it can't apply.
-		// A separate "Custom" line would be a bespoke option on a bespoke
-		// product, so any draft one is dropped here rather than left to submit
-		// invisibly from a step this type no longer shows.
-		revokeIfBlob(customLine?.imageUrl);
+		// and drop it from the sequence.
+		//
+		// The product becomes ONE bespoke line and no matrix at all: modelling the
+		// type as `isCustom` is what gives it the storefront's existing bespoke
+		// flow (request box, "Choose" routing, qty-1 cart line) instead of a
+		// parallel path. An existing custom line is kept — same offer, and the
+		// seller already wrote its prompt.
 		patch({
 			shape: "made_to_order",
 			fulfilmentAnswered: true,
 			editor: {
 				options: [],
-				customLine: null,
-				rows: [
-					{
-						...madeToOrderRow(),
-						// Keep what still means something: a price the seller already
-						// typed becomes the "from" figure.
-						price: donor.price,
-						imageStorageIds: donor.imageStorageIds,
-						imageUrl: donor.imageUrl,
-					},
-				],
+				rows: [],
+				customLine: customLine ?? {
+					...emptyCustomLine(),
+					// Carry what still means something from the row being retired.
+					price: donor?.price ?? "",
+					imageStorageIds: donor?.imageStorageIds ?? [],
+					imageUrl: donor?.imageUrl,
+				},
 			},
 		});
 		setValueDrafts([]);
@@ -1278,18 +1267,53 @@ export function ProductWizard({
 									? "Do you have a starting price?"
 									: "Set your price"}
 						</h3>
-						{/* The only step where a blank price is a valid answer — say so up
-						    front, or the seller stares at an empty required-looking field.
-						    `reconcileForSubmit` turns blank into 0, which the storefront
-						    already renders as "Price on quote". */}
+						{/* Made to order edits its OWN line — the product has no matrix to
+						    price. Both fields are optional: a blank price is the storefront's
+						    "Price on quote", and the prompt becomes the placeholder in the
+						    buyer's request box. */}
 						{madeToOrder ? (
-							<p className="-mt-2 text-sm text-muted-foreground">
-								Optional. Leave it blank and buyers see &ldquo;Price on
-								quote&rdquo; — you set the real price when you send them a
-								mockup. Enter an amount and buyers see that price.
-							</p>
+							<>
+								<p className="-mt-2 text-sm text-muted-foreground">
+									Optional. Leave it blank and buyers see &ldquo;Price on
+									quote&rdquo; — you set the real price when you send them a
+									mockup. Enter an amount and buyers see that price.
+								</p>
+								<label className="flex items-center gap-3 text-sm font-medium">
+									<span className="min-w-0 flex-1 truncate">
+										{state.name.trim() || "This item"}
+									</span>
+									<span className="text-sm text-muted-foreground">
+										{currency}
+									</span>
+									<PriceInput
+										value={customLine?.price ?? ""}
+										onChange={(v) => patchCustom({ price: v })}
+										className="h-11 w-28 text-right"
+										invalid={!!issueFor("customPrice")}
+									/>
+								</label>
+								<IssueText message={issueFor("customPrice")} />
+								<label className="flex flex-col gap-1.5 text-sm font-medium">
+									What should the buyer tell you?{" "}
+									<span className="font-normal text-muted-foreground">
+										(optional)
+									</span>
+									<textarea
+										value={customLine?.prompt ?? ""}
+										onChange={(e) => patchCustom({ prompt: e.target.value })}
+										rows={2}
+										maxLength={280}
+										placeholder="e.g. Tell us your design, flavour, size & date needed"
+										className="rounded-xl border border-input bg-background px-3 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+									/>
+									<span className="text-xs font-normal text-muted-foreground">
+										Becomes the placeholder in the buyer&apos;s request box on
+										your storefront.
+									</span>
+								</label>
+							</>
 						) : null}
-						{rows.length > 1 ? (
+						{!madeToOrder && rows.length > 1 ? (
 							<label className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
 								Same price for all
 								<Input
@@ -1396,7 +1420,7 @@ export function ProductWizard({
 						</div>
 						{/* Per-choice extras — parity with the full form's per-choice
 						    details, zero pixels unless the seller asks. */}
-						{showRowDetails ? null : (
+						{showRowDetails || madeToOrder ? null : (
 							<button
 								type="button"
 								onClick={() => setShowRowDetails(true)}
@@ -1743,7 +1767,9 @@ export function ProductWizard({
 												ref={(el) => {
 													if (el) el.indeterminate = someProof && !allProof;
 												}}
-												onChange={(e) => setApproval(e.target.checked)}
+												onChange={(e) =>
+													bulkFlag("requiresProof", e.target.checked)
+												}
 												className="mt-0.5 size-4 shrink-0"
 											/>
 											<span>
@@ -1760,13 +1786,11 @@ export function ProductWizard({
 										</label>
 									) : null}
 
-									{/* Not offered on a made-to-order product: that product IS
-									    the custom order and already asks the buyer for their brief,
-									    so a custom line would ask twice. Safe to HIDE only because
-									    `customLineForSubmit` drops the data too, and `setApproval`
-									    confirms before the flag flip discards a line the seller
-									    typed — a hidden control whose value still published was the
-									    PR #160 review finding. */}
+									{/* Not offered on a made-to-order product: that product
+									    already IS this line, so adding one to itself is the same
+									    offer twice. Nothing is stranded behind the hidden control
+									    — `switchToMadeToOrder` moves the seller's line onto the
+									    product rather than leaving a second one in state. */}
 									{madeToOrder ? null : (
 										<div className="flex flex-col gap-3">
 											<label className="flex items-start gap-2.5 text-sm">

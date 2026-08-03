@@ -9,7 +9,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("convex/react", () => ({ useMutation: () => vi.fn() }));
 
 import {
-	customLineForSubmit,
 	isMadeToOrderOnly,
 	reconcileForSubmit,
 	VariantEditor,
@@ -144,9 +143,9 @@ describe("VariantEditor — made-to-order product type (86eyfq04j)", () => {
 		expect(screen.queryByText(/they choose by/i)).toBeNull();
 		expect(screen.queryByLabelText("Stock on hand")).toBeNull();
 		expect(screen.queryByText(/in stock now/i)).toBeNull();
-		// The price is explicitly optional, with the buyer-facing consequence.
-		expect(screen.getByText(/starting price/i)).toBeTruthy();
+		// The type's OWN setup: an optional price and the buyer's question.
 		expect(screen.getByText(/price on quote/i)).toBeTruthy();
+		expect(screen.getByText(/what should the buyer tell you/i)).toBeTruthy();
 	});
 
 	it("does not re-ask preparation — the type has already answered it", () => {
@@ -156,85 +155,7 @@ describe("VariantEditor — made-to-order product type (86eyfq04j)", () => {
 		expect(screen.queryByText(/how do you prepare orders/i)).toBeNull();
 	});
 
-	it("keeps the approval checkbox usable after it derives the type", () => {
-		// The type is derived from `requiresProof` + `blockWhenOutOfStock`, so
-		// hiding the checkbox that sets it made it unmount the instant it was
-		// ticked — nothing left to untick (PR #160 review).
-		render(<Harness initial={singleVariant} />);
-		// The flip needs both flags, so the row goes made-fresh first — the
-		// reviewer's exact repro (one item → priced → Made fresh → approval).
-		fireEvent.click(screen.getByRole("button", { name: /made fresh/i }));
-		fireEvent.click(screen.getByRole("button", { name: /advanced/i }));
-		const approval = screen.getByRole("checkbox", {
-			name: /mockup approval/i,
-		}) as HTMLInputElement;
-		expect(approval.checked).toBe(false);
-
-		fireEvent.click(approval);
-		expect(
-			screen
-				.getByRole("button", { name: /^made to order$/i })
-				.getAttribute("aria-pressed"),
-		).toBe("true");
-		const after = screen.getByRole("checkbox", {
-			name: /mockup approval/i,
-		}) as HTMLInputElement;
-		expect(after.checked).toBe(true);
-
-		// Unticking is the way back out.
-		fireEvent.click(after);
-		expect(
-			screen
-				.getByRole("button", { name: /just one item/i })
-				.getAttribute("aria-pressed"),
-		).toBe("true");
-	});
-
-	it("drops the custom-orders option — the product IS the custom order", () => {
-		render(<Harness initial={singleVariant} />);
-		fireEvent.click(screen.getByRole("button", { name: /advanced/i }));
-		// A plain item can offer one…
-		expect(
-			screen.getByRole("checkbox", { name: /custom orders/i }),
-		).toBeTruthy();
-		// …a made-to-order product can't: it already asks the buyer for their
-		// brief on its own buy box, so a custom line would ask twice.
-		fireEvent.click(screen.getByRole("button", { name: /^made to order$/i }));
-		expect(
-			screen.queryByRole("checkbox", { name: /custom orders/i }),
-		).toBeNull();
-	});
-
-	it("confirms before the approval flag discards a custom line", () => {
-		const withCustom: VariantEditorState = {
-			...singleVariant,
-			rows: [{ ...singleVariant.rows[0], blockWhenOutOfStock: false }],
-			customLine: {
-				label: "Bespoke",
-				price: "",
-				prompt: "Tell us your theme",
-				imageStorageIds: [],
-			},
-		};
-		vi.spyOn(window, "confirm").mockReturnValue(false);
-		render(<Harness initial={withCustom} />);
-		// Advanced auto-opens when the product already uses it (custom line set),
-		// so clicking the disclosure here would CLOSE it.
-		fireEvent.click(screen.getByRole("checkbox", { name: /mockup approval/i }));
-		// Declined: the flag is untouched and the custom line survives, so the
-		// seller's label/prompt/image are never wiped without being asked.
-		expect(window.confirm).toHaveBeenCalled();
-		expect(
-			screen.getByRole("checkbox", { name: /custom orders/i }),
-		).toBeTruthy();
-		expect(
-			screen
-				.getByRole("button", { name: /just one item/i })
-				.getAttribute("aria-pressed"),
-		).toBe("true");
-	});
-
-	it("switching back to a plain item restores stock tracking and drops approval", () => {
+	it("switching back to a plain item restores a real matrix row", () => {
 		render(<Harness initial={singleVariant} />);
 		fireEvent.click(screen.getByRole("button", { name: /^made to order$/i }));
 		fireEvent.click(screen.getByRole("button", { name: /just one item/i }));
@@ -249,74 +170,43 @@ describe("VariantEditor — made-to-order product type (86eyfq04j)", () => {
 });
 
 describe("isMadeToOrderOnly / reconcileForSubmit", () => {
+	const bespokeLine = { label: "", price: "", prompt: "", imageStorageIds: [] };
+	// The type IS a custom line: no axes, no matrix, one bespoke offer.
 	const madeToOrder: VariantEditorState = {
 		options: [],
-		rows: [
-			{
-				...singleVariant.rows[0],
-				price: "",
-				stock: "",
-				blockWhenOutOfStock: false,
-				requiresProof: true,
-			},
-		],
-		customLine: null,
+		rows: [],
+		customLine: bespokeLine,
 	};
 
-	it("recognises the one never-out-of-stock, approval-gated row", () => {
+	it("recognises a custom-only product", () => {
 		expect(isMadeToOrderOnly(madeToOrder)).toBe(true);
 		expect(isMadeToOrderOnly(singleVariant)).toBe(false);
 		expect(isMadeToOrderOnly(withOptions)).toBe(false);
+		// A custom line ALONGSIDE a matrix is the other feature — not this type.
+		expect(
+			isMadeToOrderOnly({
+				...singleVariant,
+				customLine: madeToOrder.customLine,
+			}),
+		).toBe(false);
 	});
 
-	it("stays true once a 'from' price is typed — the mode must not flip mid-edit", () => {
+	it("stays true once a price is typed — the mode must not flip mid-edit", () => {
 		expect(
 			isMadeToOrderOnly({
 				...madeToOrder,
-				rows: [{ ...madeToOrder.rows[0], price: "120" }],
+				customLine: { ...bespokeLine, price: "120" },
 			}),
 		).toBe(true);
 	});
 
-	it("drops the custom line from a made-to-order submit", () => {
-		// The editors hide the control for this type; this is what stops the DATA
-		// outliving it and publishing invisibly (PR #160 review).
-		const withCustom: VariantEditorState = {
-			...madeToOrder,
-			customLine: {
-				label: "Bespoke",
-				price: "",
-				prompt: "",
-				imageStorageIds: [],
-			},
-		};
-		expect(customLineForSubmit(withCustom)).toBeNull();
-		// Every other product keeps it — this is scoped, not a blanket drop.
-		expect(
-			customLineForSubmit({
-				...singleVariant,
-				customLine: withCustom.customLine,
-			}),
-		).not.toBeNull();
-	});
-
-	it("resolves a blank made-to-order price to 0 ('Price on quote')", () => {
-		expect(
-			reconcileForSubmit(madeToOrder.options, madeToOrder.rows).rows[0].price,
-		).toBe("0");
-		// A typed price is left exactly as the seller wrote it.
-		expect(
-			reconcileForSubmit(madeToOrder.options, [
-				{ ...madeToOrder.rows[0], price: "120" },
-			]).rows[0].price,
-		).toBe("120");
-		// Every other product still has to state a price — blank stays blank so
-		// buildSubmitVariants can raise its own "enter a price" issue.
-		expect(
-			reconcileForSubmit(singleVariant.options, [
-				{ ...singleVariant.rows[0], price: "" },
-			]).rows[0].price,
-		).toBe("");
+	it("never invents a matrix row for a custom-only product", () => {
+		// `cartesian([])` is `[[]]`, so a naive reconcile would helpfully rebuild
+		// the very empty row this type exists to avoid — and the server would then
+		// see a matrix product with a stray RM0 variant beside the bespoke one.
+		const out = reconcileForSubmit(madeToOrder.options, madeToOrder.rows);
+		expect(out.rows).toEqual([]);
+		expect(out.options).toEqual([]);
 	});
 });
 

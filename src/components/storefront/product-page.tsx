@@ -12,7 +12,6 @@ import {
 	AddToCartButton,
 	addVariantToCart,
 	CustomOrderCard,
-	MadeToOrderRequest,
 	EmptyGallery,
 	GoToCheckoutBar,
 	OptionPills,
@@ -121,7 +120,6 @@ export function ProductPageView({
 
 					<OptionPills pp={pp} />
 					<PurchaseHints pp={pp} />
-					<MadeToOrderRequest pp={pp} />
 					<CustomOrderCard
 						pp={pp}
 						onAdd={(p, variant, qty, custom) =>

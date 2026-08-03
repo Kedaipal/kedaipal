@@ -192,6 +192,14 @@ export function useProductPurchase({
 	// the stock hint. Made-to-order variants are unbounded (made on demand).
 	const variantBlocks = selectedVariant?.blockWhenOutOfStock === true;
 	const hasOptions = options.length > 0;
+	/**
+	 * Does this product sell anything through the standard buy box? A
+	 * **made-to-order** product doesn't (86eyfq04j): its only variant is the
+	 * custom line, which `resolveVariant` deliberately excludes, so the stepper
+	 * and "Add to cart" would render permanently disabled reading "Unavailable".
+	 * The custom card's own "Request custom order" is the CTA there.
+	 */
+	const sellsStandardLine = variants.some((vr) => vr.isCustom !== true);
 	// Gallery + price fall back to the product hero when the variant has none.
 	const images =
 		selectedVariant && selectedVariant.imageUrls.length > 0
@@ -251,25 +259,6 @@ export function useProductPurchase({
 					: formatPrice(product.priceFrom, product.currency)
 		: "";
 
-	/**
-	 * A product whose ONE sellable line is made to order — no axes, gated on
-	 * mockup approval, never out of stock (`86eyfq04j`'s product type). Its buyer
-	 * has just as much to tell the seller as a custom line's does (the tent's
-	 * size, the cake's design), but the request textarea + reference photo used
-	 * to live only on `CustomOrderCard`, which renders for an `isCustom` row —
-	 * so this product offered a quantity stepper, an "Add to cart", and no way
-	 * to say what was wanted. The brief rides the MAIN add instead.
-	 *
-	 * Requires `!customLine` on purpose: when one exists it already carries the
-	 * brief, and two request boxes on one product is the confusion this removes.
-	 */
-	const madeToOrderOnly =
-		!hasOptions &&
-		!customLine &&
-		variants.length === 1 &&
-		variants[0]?.requiresProof === true &&
-		variants[0]?.blockWhenOutOfStock !== true;
-
 	// Custom line's own price label (independent of the standard selection).
 	const customPriceLabel =
 		product && customLine && customLine.price > 0
@@ -303,7 +292,7 @@ export function useProductPurchase({
 		sellable,
 		variantBlocks,
 		hasOptions,
-		madeToOrderOnly,
+		sellsStandardLine,
 		images,
 		maxQty,
 		minQuantity,
@@ -537,9 +526,10 @@ export function PurchaseHints({ pp }: { pp: ProductPurchase }) {
  * regardless of how many sizes/flavours exist. */
 /**
  * The buyer's brief: a free-text request plus an optional reference photo.
- * ONE implementation, two homes — the custom line's card
- * (`CustomOrderCard`) and a made-to-order product's own buy box
- * (`MadeToOrderRequest`). They ask the same question, so they must not drift.
+ * Rendered by `CustomOrderCard`, which serves BOTH a bespoke line alongside a
+ * standard catalog and a whole made-to-order product — the latter is just a
+ * product whose only variant is that line (86eyfq04j), so it inherits this and
+ * the "Choose"-not-quick-add routing and the qty-1 cart lock with it.
  */
 function RequestFields({
 	pp,
@@ -621,25 +611,6 @@ function RequestFields({
 				) : null}
 			</div>
 		</>
-	);
-}
-
-/**
- * The brief for a **made-to-order product** — the type IS the bespoke offer, so
- * this sits in the buy box and the normal "Add to cart" carries it. No separate
- * card and no second button: there is exactly one thing to order here, unlike a
- * custom line bolted onto a standard catalog.
- */
-export function MadeToOrderRequest({ pp }: { pp: ProductPurchase }) {
-	if (!pp.madeToOrderOnly) return null;
-	return (
-		<div className="mt-5 rounded-2xl border border-border bg-muted/30 p-3">
-			<p className="text-xs font-medium text-muted-foreground">
-				Made to order — tell the seller what you need and they&apos;ll confirm
-				the price with you.
-			</p>
-			<RequestFields pp={pp} />
-		</div>
 	);
 }
 
@@ -733,6 +704,8 @@ export function TotalPreviewRow({ pp }: { pp: ProductPurchase }) {
 
 /** The − qty + trio. */
 export function PurchaseStepper({ pp }: { pp: ProductPurchase }) {
+	// Nothing to step through on a made-to-order product — see sellsStandardLine.
+	if (!pp.sellsStandardLine) return null;
 	return (
 		<div className="flex items-center justify-center gap-3 sm:justify-start">
 			<button
@@ -777,30 +750,18 @@ export function AddToCartButton({
 	pp: ProductPurchase;
 	onAdd: OnAddVariant;
 }) {
+	// A made-to-order product is bought through the custom card's own button;
+	// this one would sit disabled saying "Unavailable". See sellsStandardLine.
+	if (!pp.sellsStandardLine) return null;
 	return (
 		<Button
 			type="button"
-			// A made-to-order product's brief is uploaded through this same button
-			// (see MadeToOrderRequest) — hold it while the photo is still going up,
-			// or the add would drop the reference the seller needs.
-			disabled={
-				!pp.sellable ||
-				pp.minUnreachable ||
-				(pp.madeToOrderOnly && pp.uploadingImage)
+			disabled={!pp.sellable || pp.minUnreachable}
+			onClick={() =>
+				pp.product &&
+				pp.selectedVariant &&
+				onAdd(pp.product, pp.selectedVariant, pp.displayQuantity)
 			}
-			onClick={() => {
-				if (!pp.product || !pp.selectedVariant) return;
-				if (pp.madeToOrderOnly) {
-					// This IS the bespoke line — carry the buyer's request with it.
-					onAdd(pp.product, pp.selectedVariant, pp.displayQuantity, {
-						note: pp.customNote.trim() || undefined,
-						imageStorageId: pp.customImage?.storageId,
-					});
-					pp.resetCustomAfterAdd();
-					return;
-				}
-				onAdd(pp.product, pp.selectedVariant, pp.displayQuantity);
-			}}
 			className="h-12 w-full text-base"
 		>
 			{pp.minUnreachable

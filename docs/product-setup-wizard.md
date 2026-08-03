@@ -44,97 +44,76 @@ steps.
 | --- | --- | --- |
 | 1 · Name it | "What are you selling?" — name + photos, description behind a link | `name`, `imageStorageIds`, `description` |
 | 2 · Type | "What kind of product is it?" — *Just one item* / *Buyer picks a choice* (preset chips: Size/Flavour/Weight/Pack, values typed as chips) / *Made to order*. "+ They also choose by something else" reveals the **second axis** (Size × Flavour) — zero pixels unless used | `editor.options`, `shape` |
-| 3 · Price | One price per choice (all combinations when two axes) + "Same price for all". "+ Photos, item codes (SKU) & more per choice" reveals per-row photo · SKU · on/off · design-approval — the full form's per-choice details, behind one link. **Made to order:** one optional "starting price" | per-row `price` (+ extras) |
+| 3 · Price | One price per choice (all combinations when two axes) + "Same price for all". "+ Photos, item codes (SKU) & more per choice" reveals per-row photo · SKU · on/off · design-approval — the full form's per-choice details, behind one link. **Made to order:** its OWN line — optional price + "What should the buyer tell you?" | per-row `price` (+ extras), or `customLine` |
 | 4 · Preparation | "How do you prepare orders?" — *Made fresh* / *From stock* (stock steppers on tracking rows). "Vary per choice" reveals per-row Track-stock/Made-fresh toggles (auto-open when a restored draft is mixed). **Skipped entirely for made-to-order** | per-row `blockWhenOutOfStock` + `onHand` |
 | 5 · Review | Buyer-eye preview card + summary rows with per-row Edit + **optional publish settings** (Visible/Hidden toggle; category picker **only when the store has categories**) + the **"More options"** disclosure | submit (+ `hidden`, `categoryIds`, `requiresProof`, custom line) |
 
 ### The "Made to order" product type (2026-08-02, ClickUp `86eyfq04j`)
 
 Step 2's answer is a three-way `ProductShape` (`single` | `choices` |
-`made_to_order`), not a `hasChoices` boolean. A bespoke seller — the ICP's
-cake decorator — previously had **no way through the wizard**: every path
-demanded a price, and the only bespoke affordance was a checkbox under the
-full form's Advanced disclosure.
+`made_to_order`), not a `hasChoices` boolean. A bespoke seller — the ICP's cake
+decorator, Bearcamp's tent wash — previously had **no way through the wizard**:
+every path demanded a price, and the only bespoke affordance was a checkbox
+under the full form's Advanced disclosure.
 
-**No schema or server change.** A made-to-order product sells through the shape
-the catalog has always supported and [`custom-option.md`](./custom-option.md)
-already prescribed: ONE implicit variant with `requiresProof: true`,
-`blockWhenOutOfStock: false`, price 0 — which `productWithVariants` already
-reads as a quote variant (`hasQuotePricing`) and the storefront already renders
-as **"Price on quote"**. This ticket only built the route to it.
+**The type IS a custom line.** A made-to-order product carries **no cartesian
+matrix at all** — `{options: [], rows: [], customLine}` — so it saves as ONE
+`isCustom` variant. That is the whole design: modelling it this way means it
+*inherits* everything the storefront already does for bespoke work instead of
+needing a parallel path for each piece —
 
+| Behaviour | Comes free from `isCustom` |
+|---|---|
+| Buyer states their request + attaches a reference photo | `CustomOrderCard` |
+| Card shows **Choose** and routes to the product page | `ProductCard`'s `hasCustom` — a one-tap quick-add can't bypass the brief |
+| Cart line locked to qty 1, re-adding updates the note | `addVariantToCart`'s `updatingCustom` — no accumulating a one-off |
+| Order gated on mockup approval, price settled on the quote | `requiresProof` → `mockupStatus` |
+| Exempt from minimum-order rules | `convex/lib/minOrderRules.ts` |
+
+The first cut instead built a second buyer path (`madeToOrderOnly` +
+`MadeToOrderRequest` in the buy box) on top of a plain implicit variant. It
+worked on the product page and was bypassed everywhere else — PR #160 review
+caught the grid/shelf quick-add going straight to cart with an empty brief, and
+the quantity accumulating on a one-off item. Both vanish with the model above,
+which is why the parallel path is gone.
+
+- **Server:** `validateVariantSet` allows an empty matrix for exactly this
+  shape (`customOnly` — no axes, one custom line), and skips the
+  combination-coverage loop with it. Everything else keeps the old rules; an
+  empty variant set, and axes with no matrix, still throw. It only ever
+  **loosens**, so no stored product becomes invalid.
 - **Steps:** `wizardSteps(shape)` → `[1, 2, 3, 5]`. Preparation is dropped —
   "how do you prepare orders?" has exactly one answer for a thing that is by
-  definition made to order, and offering "From stock" there would silently undo
-  the type. Step ids stay stable so every `step === n` branch is untouched;
-  only the walked ORDER changes, and the progress dots / "Step N of M" count
-  off the walked sequence.
-- **Price is optional.** Blank means "Price on quote"; a typed amount is just
-  the price — **no "from" prefix**, because the product has exactly one variant,
-  so `productWithVariants` reports `priceFrom === priceTo` and the storefront
-  prints a flat figure. The seller-side labels said "from" in the first cut and
-  promised a range the buyer never sees. `reconcileForSubmit` resolves blank → `"0"` on the ONE submit
-  path both editors share, so it can't be accepted in the wizard and rejected
-  in the full form.
+  definition made to order. Step ids stay stable so every `step === n` branch is
+  untouched; only the walked ORDER changes, and the progress dots / "Step N of
+  M" count off the walked sequence.
+- **Step 3 edits the line itself:** an optional price (blank = "Price on
+  quote"; a typed amount is just the price — one variant means `priceFrom ===
+  priceTo`, so no "from" prefix) and **"What should the buyer tell you?"**,
+  which becomes the placeholder in the buyer's request box. A bad amount raises
+  at step 3, where the input is — not on Review.
 - **Derived, never stored twice — through ONE function.** `effectiveShape(state)`
-  is the single read: axes present ⇒ `choices`; else `isMadeToOrderOnly(editor)`
-  (or an explicit answer) ⇒ `made_to_order`; else `state.shape`. The same "the
-  editor answers, not the flag" posture `86eyex5vk` established for axes, now
-  covering all three answers. Validation, the step sequence, which card is lit
-  and the review rows all read it, so the screen can't contradict the payload.
-  Deliberately **not** keyed on price, so typing a figure can't flip the mode.
-
-  Splitting that read is exactly what PR #160's review caught: the step-2 card
-  keyed on `state.shape` while the type's explainer keyed on the derived flag,
-  so ticking **Mockup approval** on a made-fresh single item — which produces
-  the made-to-order flag pair — rendered the explainer with **no card selected**
-  and a Review that claimed "Type: Made to order" beside "Preparing: Made fresh".
-- **The controls that DERIVE the type stay mounted.** Mockup approval and the
-  custom line were hidden for made-to-order on the reasoning that the type
-  already implies them. But ticking approval is *how a seller reaches the type*,
-  so hiding it meant the checkbox unmounted the instant it was used with nothing
-  left to untick, and a set `customLine` kept publishing with no control to clear
-  it — the invisible submit `switchToMadeToOrder` explicitly guards against.
-  Both now render in every mode: approval shows checked (unticking is the way
-  back out), and the custom line carries a one-line note saying it's redundant
-  here rather than vanishing. **Preparation stays hidden** — that one is a
-  question the type answers, not a control that unmounts itself when used, and
-  "Just one item" is still the way out.
-- **Nothing is asked twice.** Mockup approval and the custom line are dropped
-  from More options / Advanced for this type: approval is what the type *is*
-  (a checkbox that turns the product into a free item is a trap), and a bespoke
-  line on a bespoke product is the same offer twice. Both are removed from the
-  tree, not CSS-hidden — a `hidden` class still leaves them for screen readers.
-- **Full editor parity.** `VariantEditor`'s Q1 is a three-segment control, and
-  the summary strip reads "Made to order · Price on quote" (or "· from RM 120")
-  instead of "One item · Made fresh · No price yet", which framed a deliberate
-  shape as unfinished setup.
-
-**The buyer's brief rides the product's own Add to cart.** The request textarea
-and reference-photo uploader used to live only on `CustomOrderCard`, which
-renders for an `isCustom` row — so a made-to-order product offered a quantity
-stepper, an "Add to cart" and **no way to say what was wanted**, leaving the
-seller to chase the brief on WhatsApp. It now delivers both halves of its own
-promise: `useProductPurchase` exposes `madeToOrderOnly` (no axes, no custom
-line, one approval-gated never-out-of-stock variant), `MadeToOrderRequest`
-renders the brief in the buy box, and `AddToCartButton` carries `{note,
-imageStorageId}` on that path (and holds while a photo is still uploading).
-`RequestFields` is the one implementation both homes share, so the two can't
-drift.
-
-The `!customLine` guard is load-bearing: when a custom line exists it already
-carries the brief, so the product falls back to the previous two-card shape
-rather than showing **two** request boxes.
-
-**The custom-line option is not offered on this type**, in either editor — the
-product IS the custom order, so a second bespoke line would ask the buyer for
-the same brief twice. Hiding it is only safe because the DATA goes with it, on
-three levels: `switchToMadeToOrder` clears it, `setApproval` **confirms** before
-the derived flag flip discards a line the seller typed (never a silent wipe of
-their label/prompt/image), and `customLineForSubmit` drops it at submit whatever
-route the state arrived by — legacy row, handoff, import. A hidden control whose
-value still published was the PR #160 review finding; keeping a redundant
-checkbox on screen was the wrong answer to it.
+  is the single read: axes present ⇒ `choices`; else an explicit answer or
+  `isMadeToOrderOnly(editor)` ⇒ `made_to_order`; else `state.shape`. The same
+  "the editor answers, not the flag" posture `86eyex5vk` established for axes.
+  Validation, the step sequence, which card is lit and the review rows all read
+  it, so the screen can't contradict the payload. Splitting that read is what
+  PR #160's review caught: the step-2 card keyed on `state.shape` while the
+  explainer keyed on a derived flag, so a draft could render the explainer with
+  **no card selected** and a Review claiming "Type: Made to order" beside
+  "Preparing: Made fresh".
+- **The custom-line option isn't offered on this type** in either editor — the
+  product already is that line, so adding one to itself is the same offer twice.
+  Nothing is stranded behind the hidden control, because the type is only
+  reachable through `switchToMadeToOrder`, which *moves* the seller's line onto
+  the product rather than leaving a second one in state. Leaving the type
+  (`switchToSingle` / `switchToChoices`) restores a real matrix row and retires
+  the line, carrying its price across.
+- **The buy box hides itself.** `resolveVariant` deliberately excludes
+  `isCustom`, so a made-to-order product resolves no standard variant; without
+  a guard the stepper and "Add to cart" would render permanently disabled
+  reading "Unavailable". `sellsStandardLine` gates both, and the custom card's
+  own "Request custom order" is the CTA.
 
 **Renamed in passing:** the *prepare* answer "Made to order" → **"Made fresh"**
 (wizard step 4, `PrepareQuestion`, `FulfilmentToggle`, `describeProduct`). It

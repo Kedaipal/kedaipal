@@ -7,7 +7,6 @@ import {
 	AddToCartButton,
 	CustomOrderCard,
 	GoToCheckoutBar,
-	MadeToOrderRequest,
 	type OnAddVariant,
 	OptionPills,
 	PurchaseStepper,
@@ -206,7 +205,8 @@ describe("useProductPurchase — a live product update is not a new product", ()
 	});
 });
 
-/** A made-to-order PRODUCT: no axes, one approval-gated line, price on quote. */
+/** A made-to-order PRODUCT (86eyfq04j): no axes, no matrix — its ONE variant
+ * IS the custom line, which is what gives it the request box for free. */
 function bespokeService(): StorefrontProduct {
 	return {
 		_id: "p2",
@@ -229,6 +229,9 @@ function bespokeService(): StorefrontProduct {
 				blockWhenOutOfStock: false,
 				requiresProof: true,
 				price: 0,
+				isCustom: true,
+				customLabel: "Tent wash",
+				customPrompt: "Tent size, model & how dirty",
 				imageUrls: [],
 			},
 		],
@@ -236,13 +239,11 @@ function bespokeService(): StorefrontProduct {
 }
 
 /**
- * A made-to-order product IS the bespoke offer, so the buyer's brief rides its
- * own "Add to cart". Before this, the request textarea + reference photo lived
- * only on `CustomOrderCard` (an `isCustom` row), so a made-to-order product
- * offered a stepper, an Add button and no way to say what was wanted — the
- * seller had to chase the brief on WhatsApp. See docs/product-setup-wizard.md.
+ * Modelling the type as `isCustom` means it INHERITS the bespoke flow rather
+ * than needing a parallel one: the request box, the qty-1 cart line, and the
+ * "Choose" routing that stops a one-tap quick-add bypassing the brief.
  */
-describe("made-to-order product — the buyer can state their request", () => {
+describe("made-to-order product — one bespoke line, existing flow", () => {
 	function MtoBox({
 		product,
 		onAdd,
@@ -257,46 +258,55 @@ describe("made-to-order product — the buyer can state their request", () => {
 		});
 		return (
 			<>
-				<MadeToOrderRequest pp={pp} />
-				<CustomOrderCard pp={pp} onAdd={vi.fn()} />
-				<AddToCartButton pp={pp} onAdd={onAdd} />
+				<CustomOrderCard pp={pp} onAdd={onAdd} />
+				<PurchaseStepper pp={pp} />
+				<AddToCartButton pp={pp} onAdd={vi.fn()} />
 			</>
 		);
 	}
 
-	it("offers exactly one request box, on the product itself", () => {
+	it("asks for the brief once, through the custom card", () => {
 		render(<MtoBox product={bespokeService()} onAdd={vi.fn()} />);
 		expect(screen.getAllByText("Your request")).toHaveLength(1);
-		expect(screen.getByText(/tell the seller what you need/i)).toBeTruthy();
-		// No second bespoke card, and no competing "Request custom order" button.
+		// The seller's prompt is the placeholder — set in the type's own setup.
 		expect(
-			screen.queryByRole("button", { name: /request custom order/i }),
-		).toBeNull();
+			screen.getByPlaceholderText("Tent size, model & how dirty"),
+		).toBeTruthy();
 	});
 
-	it("carries the brief on the normal Add to cart", () => {
+	it("hides the standard buy box — there is no standard line to sell", () => {
+		render(<MtoBox product={bespokeService()} onAdd={vi.fn()} />);
+		// Would otherwise render permanently disabled as "Unavailable".
+		expect(screen.queryByRole("button", { name: /add to cart/i })).toBeNull();
+		expect(screen.queryByRole("button", { name: /increase/i })).toBeNull();
+		// The custom card's own CTA is the way to order.
+		expect(
+			screen.getByRole("button", { name: /request custom order/i }),
+		).toBeTruthy();
+	});
+
+	it("carries the brief and the reference photo on that add", () => {
 		const onAdd = vi.fn();
 		render(<MtoBox product={bespokeService()} onAdd={onAdd} />);
 		fireEvent.change(screen.getByRole("textbox"), {
 			target: { value: "  4-person dome, muddy  " },
 		});
-		fireEvent.click(screen.getByRole("button", { name: /add to cart/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /request custom order/i }),
+		);
 		expect(onAdd).toHaveBeenCalledWith(
 			expect.objectContaining({ _id: "p2" }),
-			expect.objectContaining({ _id: "vMTO" }),
+			expect.objectContaining({ _id: "vMTO", isCustom: true }),
 			1,
 			{ note: "4-person dome, muddy", imageStorageId: undefined },
 		);
 	});
 
 	it("leaves a standard catalog's custom line exactly as it was", () => {
-		// `cake` has axes AND an isCustom row: the card keeps the brief, and the
-		// product's own buy box must not sprout a second one.
 		render(<MtoBox product={cake(2)} onAdd={vi.fn()} />);
 		expect(screen.getAllByText("Your request")).toHaveLength(1);
-		expect(
-			screen.getByRole("button", { name: /request custom order/i }),
-		).toBeTruthy();
-		expect(screen.queryByText(/tell the seller what you need/i)).toBeNull();
+		// …and that product DOES keep its standard buy box (the CTA reads
+		// "Select options" until a size is picked, but it's mounted).
+		expect(screen.getByRole("button", { name: /increase/i })).toBeTruthy();
 	});
 });

@@ -17,18 +17,20 @@ This feature lets a product offer **one** custom / made-to-order line that lives
 existing mockup-approval + re-quote machinery (`requiresProof` → `mockupStatus`)
 end-to-end, so there is **no new order-flow code**.
 
-> When NOT to use it: a product that is *only* bespoke (no standard variants)
-> is the **"Made to order" product type** — the third answer to "What kind of
-> product is it?" in both the wizard and the full editor (ClickUp `86eyfq04j`).
-> It produces exactly the shape this section always prescribed (one implicit
-> variant, `requiresProof: true`, `blockWhenOutOfStock: false`, price 0 =
-> "Price on quote"); before it existed the seller had to invent a price and
-> find this checkbox under Advanced to get there. See
+> A product that is *only* bespoke (no standard variants) is the **"Made to
+> order" product type** — the third answer to "What kind of product is it?" in
+> both editors (ClickUp `86eyfq04j`). It is **this same custom line, as the
+> product's only variant**: no cartesian matrix at all, which the server allows
+> for exactly that shape (`validateVariantSet`'s `customOnly`). So everything
+> below — the buyer's request box, the "Choose" routing that stops a one-tap
+> quick-add, the qty-1 cart line, mockup approval, the min-order exemption —
+> applies to it unchanged, by construction rather than by a parallel code path.
+> See
 > [`product-setup-wizard.md`](./product-setup-wizard.md#the-made-to-order-product-type-2026-08-02-clickup-86eyfq04j).
-> The custom option below is for "standard catalog **plus** a bespoke line on
-> the same product" — that is its only job. A made-to-order product collects
-> the buyer's request through its OWN buy box (`MadeToOrderRequest`), so a
-> custom line there would ask the same question twice.
+>
+> The **checkbox** below is therefore only for the other case: a standard
+> catalog **plus** a bespoke line on the same product. It isn't offered on a
+> made-to-order product, which already is that line.
 
 ## 2. Data model
 

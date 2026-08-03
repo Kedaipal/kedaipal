@@ -580,7 +580,16 @@ describe("wizardPriceLabel", () => {
  * under Advanced.
  */
 describe("wizard — made-to-order product type", () => {
-	/** "Custom cake" — no choices, no stock, price deliberately unset. */
+	/** The bespoke line a made-to-order product sells through. */
+	const bespokeLine = {
+		label: "",
+		price: "",
+		prompt: "",
+		imageStorageIds: [] as string[],
+	};
+
+	/** "Custom cake" — the type IS one bespoke line: no axes, no matrix, price
+	 * deliberately unset ("Price on quote"). */
 	function madeToOrderState(): WizardState {
 		return {
 			...emptyWizardState(),
@@ -589,8 +598,8 @@ describe("wizard — made-to-order product type", () => {
 			fulfilmentAnswered: true,
 			editor: {
 				options: [],
-				rows: [row({ blockWhenOutOfStock: false, requiresProof: true })],
-				customLine: null,
+				rows: [],
+				customLine: { label: "", price: "", prompt: "", imageStorageIds: [] },
 			},
 		};
 	}
@@ -604,6 +613,20 @@ describe("wizard — made-to-order product type", () => {
 
 	it("accepts a blank price where every other type demands one", () => {
 		expect(wizardStepIssues(madeToOrderState(), 3)).toHaveLength(0);
+		// A junk amount still fails — and at step 3, where the input lives.
+		const bad = madeToOrderState();
+		expect(
+			wizardStepIssues(
+				{
+					...bad,
+					editor: {
+						...bad.editor,
+						customLine: { ...bespokeLine, price: "abc" },
+					},
+				},
+				3,
+			).map((i) => i.field),
+		).toEqual(["customPrice"]);
 		// The same blank price on a plain single item is still an error.
 		const plain: WizardState = {
 			...madeToOrderState(),
@@ -617,26 +640,28 @@ describe("wizard — made-to-order product type", () => {
 		expect(wizardStepIssues(plain, 3)).toHaveLength(1);
 	});
 
-	it("submits the blank price as 0 — the storefront's 'Price on quote'", () => {
+	it("submits ONE custom variant and no matrix", () => {
 		const values = buildWizardSubmitValues(madeToOrderState());
 		expect(values.options).toEqual([]);
 		expect(values.variants).toHaveLength(1);
 		expect(values.variants[0]).toMatchObject({
 			price: 0,
 			optionValues: [],
-			// Both flags are what make the storefront read it as a quote.
+			// `isCustom` is the whole point: it's what earns the storefront's
+			// request box, "Choose" routing and qty-1 cart line.
+			isCustom: true,
 			requiresProof: true,
 			blockWhenOutOfStock: false,
 		});
 	});
 
-	it("submits a typed starting price as a real amount", () => {
+	it("submits a typed price as a real amount", () => {
 		const s = madeToOrderState();
 		const values = buildWizardSubmitValues({
 			...s,
 			editor: {
 				...s.editor,
-				rows: [{ ...s.editor.rows[0], price: "120" }],
+				customLine: { ...bespokeLine, price: "120" },
 			},
 		});
 		expect(values.variants[0].price).toBe(12000);
@@ -651,7 +676,7 @@ describe("wizard — made-to-order product type", () => {
 					...s,
 					editor: {
 						...s.editor,
-						rows: [{ ...s.editor.rows[0], price: "120" }],
+						customLine: { ...bespokeLine, price: "120" },
 					},
 				},
 				"RM",
@@ -675,6 +700,24 @@ describe("wizard — made-to-order product type", () => {
 			editor: madeToOrderState().editor,
 		};
 		expect(formDraftToWizardState(draft).shape).toBe("made_to_order");
+	});
+
+	it("does not mistake a custom line ALONGSIDE a catalog for the type", () => {
+		const draft: ProductFormDraft = {
+			name: "Cake",
+			description: "",
+			images: [],
+			hidden: false,
+			categoryIds: [],
+			minQuantity: "",
+			minNoticeDays: "",
+			editor: {
+				options: [],
+				rows: [row({ price: "20" })],
+				customLine: { label: "", price: "", prompt: "", imageStorageIds: [] },
+			},
+		};
+		expect(formDraftToWizardState(draft).shape).toBe("single");
 	});
 
 	it("does not mistake a plain made-fresh item for the bespoke type", () => {

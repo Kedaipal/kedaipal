@@ -107,52 +107,30 @@ function IssueText({ message }: { message: string | undefined }) {
 }
 
 /**
- * The single row a **made-to-order** product sells through: no axes, never
- * out of stock, gated on the buyer approving a mockup. Price is left blank —
- * it resolves to 0, which the storefront renders as "Price on quote" — but a
- * seller with a fixed price for the work can type one.
+ * Is this draft the **"Made to order" product type** (ClickUp `86eyfq04j`)?
+ *
+ * The type IS a custom line: no axes, no cartesian matrix, one bespoke offer.
+ * That's the whole point — modelling it as `isCustom` means it inherits the
+ * flow the storefront already has for bespoke work (a request box + reference
+ * photo, a "Choose" card that routes to the product page instead of a one-tap
+ * quick-add, a cart line locked to qty 1, `requiresProof` → `mockupStatus`)
+ * rather than needing a second parallel path for each of those.
+ *
+ * The server allows the empty matrix for exactly this shape — see
+ * `validateVariantSet`'s `customOnly`.
  */
-export function madeToOrderRow(): VariantRow {
-	return {
-		...emptyRow([]),
-		blockWhenOutOfStock: false,
-		requiresProof: true,
-	};
+export function isMadeToOrderOnly(state: VariantEditorState): boolean {
+	return (
+		state.options.length === 0 &&
+		state.rows.length === 0 &&
+		state.customLine !== null
+	);
 }
 
-/**
- * Is this draft a made-to-order-only product? DERIVED from the substrate
- * rather than stored, so the editor's mode control and the wizard's step-2
- * answer can never disagree with the rows they describe.
- *
- * Deliberately not keyed on price: a made-to-order product that carries a
- * "from RM120" starting price is still made to order, and a mode that flipped
- * as soon as the seller typed a number would be a trap.
- */
-export function isMadeToOrderOnly(
-	state: Pick<VariantEditorState, "options" | "rows">,
-): boolean {
-	if (state.options.length > 0 || state.rows.length !== 1) return false;
-	const row = state.rows[0];
-	return row?.requiresProof === true && row.blockWhenOutOfStock === false;
-}
-
-/**
- * The custom line as the submit layer should see it — **dropped** when the
- * product is itself made to order.
- *
- * A bespoke line on a bespoke product is the same offer twice, so the editors
- * don't show the control for that type. This is what makes hiding it SAFE: the
- * data can't outlive the control and publish invisibly (PR #160 review), and a
- * blank custom price can't raise a submit issue pointing at an input that
- * isn't on screen. Covers every route in — the type picker, the derived flag
- * flip, a legacy row, a wizard handoff — instead of trusting each one to tidy
- * up after itself.
- */
-export function customLineForSubmit(
-	state: VariantEditorState,
-): CustomLineDraft | null {
-	return isMadeToOrderOnly(state) ? null : state.customLine;
+/** A fresh bespoke offer — the one line a made-to-order product sells. Price
+ * blank = "Price on quote"; the seller can type a fixed one instead. */
+export function emptyCustomLine(): CustomLineDraft {
+	return { label: "", price: "", prompt: "", imageStorageIds: [] };
 }
 
 export function emptyRow(optionValues: string[]): VariantRow {
@@ -254,16 +232,13 @@ export function reconcileForSubmit(
 	rows: VariantRow[],
 ): { options: OptionAxis[]; rows: VariantRow[] } {
 	const sanitized = sanitizeOptions(options);
-	// A made-to-order product may leave the price blank, which means **"Price on
-	// quote"** — the convention the custom line already uses — not "unanswered".
-	// Resolved here, on the one submit path both editors share, so leaving it
-	// blank can't be accepted in the wizard and rejected in the full form
-	// (86eyfq04j).
-	const priced = isMadeToOrderOnly({ options: sanitized, rows })
-		? rows.map((row) =>
-				row.price.trim().length === 0 ? { ...row, price: "0" } : row,
-			)
-		: rows;
+	// A made-to-order product has NO matrix — its custom line is the whole offer
+	// (86eyfq04j). `cartesian([])` is `[[]]`, so without this the reconcile would
+	// helpfully invent the empty matrix row the type exists to avoid.
+	if (sanitized.length === 0 && rows.length === 0) {
+		return { options: sanitized, rows };
+	}
+	const priced = rows;
 	const expected = cartesian(sanitized);
 	if (expected.length === 0) return { options: sanitized, rows: priced };
 	// Coverage, not just count: the server checks BOTH the cartesian size and
@@ -644,10 +619,15 @@ export function VariantEditor({
 	function switchToChoices() {
 		if (hasOptions) return;
 		if (!confirmLosingChoices()) return;
-		// Leaving made-to-order: the axis grid is priced per choice, so the
-		// implicit row's quote-shaped flags mustn't be inherited by every combo.
+		// Leaving made-to-order: that type has NO matrix, so the grid needs a row
+		// to build from, and its bespoke line retires (the choices are the offer
+		// now — carry its price across so the seller doesn't retype).
 		if (madeToOrder) {
-			update({ options: [{ name: "", values: [] }], rows: [emptyRow([])] });
+			update({
+				options: [{ name: "", values: [] }],
+				rows: [{ ...emptyRow([]), price: customLine?.price ?? "" }],
+				customLine: null,
+			});
 		} else {
 			setOptions([{ name: "", values: [] }]);
 		}
@@ -667,26 +647,25 @@ export function VariantEditor({
 	}
 
 	/**
-	 * Made to order: one implicit row, never out of stock, mockup-approved.
-	 * A blank/0 price is the "Price on quote" the storefront already renders —
-	 * the seller can still type a "from" figure.
+	 * Made to order: the product becomes ONE bespoke line and no matrix at all.
+	 * A blank price is the "Price on quote" the storefront already renders. An
+	 * existing custom line is kept rather than replaced — the seller already
+	 * wrote its prompt/price, and it's the same offer either way.
 	 */
 	function switchToMadeToOrder() {
 		if (madeToOrder) return;
 		if (!confirmLosingChoices()) return;
-		const donor = rows[0] ?? emptyRow([]);
+		const donor = rows[0];
 		update({
 			options: [],
-			rows: [
-				{
-					...madeToOrderRow(),
-					price: donor.price,
-					imageStorageIds: donor.imageStorageIds,
-					imageUrl: donor.imageUrl,
-				},
-			],
-			// A bespoke line on a bespoke product is the same offer twice.
-			customLine: null,
+			rows: [],
+			customLine: customLine ?? {
+				...emptyCustomLine(),
+				// Carry what still means something from the row being retired.
+				price: donor?.price ?? "",
+				imageStorageIds: donor?.imageStorageIds ?? [],
+				imageUrl: donor?.imageUrl,
+			},
 		});
 		setValueDrafts([]);
 	}
@@ -695,11 +674,13 @@ export function VariantEditor({
 		if (!hasOptions && !madeToOrder) return;
 		if (!confirmLosingChoices()) return;
 		if (madeToOrder) {
-			// Back to an ordinary item: stock tracking on, approval off — the
-			// defaults `emptyRow` gives every new product.
+			// Back to an ordinary item: it needs a real matrix row (made-to-order
+			// has none) with `emptyRow`'s defaults — stock tracked, approval off —
+			// and the bespoke line retires with the type.
 			update({
 				options: [],
-				rows: [{ ...rows[0], blockWhenOutOfStock: true, requiresProof: false }],
+				rows: [{ ...emptyRow([]), price: customLine?.price ?? "" }],
+				customLine: null,
 			});
 			setValueDrafts([]);
 			return;
@@ -803,40 +784,6 @@ export function VariantEditor({
 		v: boolean,
 	) {
 		update({ rows: rows.map((r) => ({ ...r, [field]: v })) });
-	}
-
-	/**
-	 * Mockup approval, with the one side effect it can have: on a made-fresh
-	 * single item, ticking it makes the PRODUCT itself made to order
-	 * (`isMadeToOrderOnly`), which retires the separate custom line — that line
-	 * would then ask the buyer for the same brief twice.
-	 *
-	 * Clearing it silently would lose a label, prompt, price and image the seller
-	 * typed, so ask first; declining leaves the flag alone. Without this the only
-	 * options were a silent wipe or leaving a redundant control on screen.
-	 */
-	function setApproval(next: boolean) {
-		const derivesType =
-			next &&
-			isMadeToOrderOnly({
-				options,
-				rows: rows.map((r) => ({ ...r, requiresProof: true })),
-			});
-		if (derivesType && customLine) {
-			if (
-				!window.confirm(
-					"That makes this whole product a custom order, so the separate custom line will be removed. Continue?",
-				)
-			) {
-				return;
-			}
-			update({
-				rows: rows.map((r) => ({ ...r, requiresProof: true })),
-				customLine: null,
-			});
-			return;
-		}
-		bulkFillFlag("requiresProof", next);
 	}
 
 	// --- Custom line ---------------------------------------------------------
@@ -1106,31 +1053,56 @@ export function VariantEditor({
 				</p>
 			</div>
 
-			{/* Single-item and made-to-order modes: one price. Stock shows only
-			    when the row actually tracks it (never for made-to-order). */}
-			{!hasOptions ? (
+			{/* Made to order: the product IS one bespoke line, so its setup is that
+			    line's own fields — an optional price and the question the buyer
+			    answers. There is no matrix row to price and no stock to count. */}
+			{madeToOrder ? (
+				<div className="flex flex-col gap-3">
+					<label className="flex flex-col gap-1 text-sm font-medium">
+						Price ({currency}){" "}
+						<span className="font-normal text-muted-foreground">
+							(optional)
+						</span>
+						<PriceInput
+							value={customLine?.price ?? ""}
+							onChange={(v) => setCustomLine({ price: v })}
+							invalid={!!issueFor("custom", 0, "price")}
+						/>
+						<IssueText message={issueFor("custom", 0, "price")} />
+						<span className="text-xs font-normal text-muted-foreground">
+							Leave blank to show “Price on quote” — you set the real price on
+							the mockup after the order comes in.
+						</span>
+					</label>
+					<label className="flex flex-col gap-1 text-sm font-medium">
+						What should the buyer tell you?{" "}
+						<span className="font-normal text-muted-foreground">
+							(optional)
+						</span>
+						<textarea
+							value={customLine?.prompt ?? ""}
+							onChange={(e) => setCustomLine({ prompt: e.target.value })}
+							rows={2}
+							maxLength={280}
+							placeholder="e.g. Tell us your design, flavour, size & date needed"
+							className="rounded-xl border border-input bg-background px-3 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+						/>
+						<span className="text-xs font-normal text-muted-foreground">
+							Becomes the placeholder in the buyer&apos;s request box on your
+							storefront.
+						</span>
+					</label>
+				</div>
+			) : !hasOptions ? (
 				<div className="grid grid-cols-2 gap-3">
 					<label className="flex flex-col gap-1 text-sm font-medium">
-						{madeToOrder
-							? `Starting price (${currency})`
-							: `Price (${currency})`}
-						{madeToOrder ? (
-							<span className="font-normal text-muted-foreground">
-								(optional)
-							</span>
-						) : null}
+						Price ({currency})
 						<PriceInput
 							value={rows[0]?.price ?? ""}
 							onChange={(v) => setRow(0, { price: v })}
 							invalid={!!issueFor("row", 0, "price")}
 						/>
 						<IssueText message={issueFor("row", 0, "price")} />
-						{madeToOrder ? (
-							<span className="text-xs font-normal text-muted-foreground">
-								Leave blank (or 0) to show “Price on quote” — you set the real
-								price on the mockup after the order comes in.
-							</span>
-						) : null}
 					</label>
 					{rows[0]?.blockWhenOutOfStock ? (
 						<label className="flex flex-col gap-1 text-sm font-medium">
@@ -1366,7 +1338,7 @@ export function VariantEditor({
 						<MockupApprovalToggle
 							checked={allProof}
 							indeterminate={someProof && !allProof}
-							onChange={setApproval}
+							onChange={(v) => bulkFillFlag("requiresProof", v)}
 						/>
 
 						{/* Custom / made-to-order line — sits OUTSIDE the grid, so a
@@ -1376,13 +1348,12 @@ export function VariantEditor({
 						    the editor below it is already a tinted block — three nested
 						    outlines for one checkbox (86eyfq04j's card-in-card sweep).
 
-						    NOT offered on a made-to-order product: that product IS the
-						    custom order and already asks the buyer for their brief
-						    (`MadeToOrderRequest`), so a custom line would ask twice.
-						    Hiding is safe here only because `customLineForSubmit` drops
-						    the data too — a hidden control whose value still publishes
-						    was the PR #160 review finding, and `setApproval` confirms
-						    before the flag flip discards a line the seller typed. */}
+						    NOT offered on a made-to-order product, because that product
+						    already IS this line — adding one to itself is the same offer
+						    twice. Nothing can be stranded behind the hidden control: the
+						    type is only reachable through `switchToMadeToOrder`, which
+						    moves the seller's line onto the product rather than leaving a
+						    second one in state. */}
 						{madeToOrder ? null : (
 							<div className="flex flex-col gap-3">
 								<label className="flex items-start gap-2.5 text-sm">
