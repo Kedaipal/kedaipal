@@ -344,6 +344,12 @@ function OrderDetailRoute() {
 	// the webhook only ever moves the JOB — the order status stays the
 	// seller's to advance by hand throughout.
 	const collectionService = dispatchInfo?.deliveryDirection === "collection";
+	// The dispatch card's own heading — the cancel/delete warnings point the
+	// seller AT it, so they must call it what it's actually called on this
+	// order ("Lalamove Collection" on a collection store).
+	const dispatchCardName = collectionService
+		? "Lalamove Collection"
+		: "Lalamove Delivery";
 	// The rider's webhook is demonstrably driving this order (active job + at
 	// least one event applied) — manual shipped/delivered advances are gated
 	// behind a confirm so the buyer isn't messaged early / without the tracking
@@ -1453,7 +1459,7 @@ function OrderDetailRoute() {
 				title={`Cancel order #${order.shortId}?`}
 				description={
 					hasActiveRiderBooking
-						? "The customer is notified over WhatsApp, stock is restored, and this can't be undone. ⚠️ A Lalamove rider booking is still active on this order — cancel it from the Lalamove Delivery card too, or you may pay for a wasted trip."
+						? `The customer is notified over WhatsApp, stock is restored, and this can't be undone. ⚠️ A Lalamove rider booking is still active on this order — cancel it from the ${dispatchCardName} card too, or you may pay for a wasted trip.`
 						: "The customer is notified over WhatsApp, stock is restored, and this can't be undone."
 				}
 				confirmLabel="Cancel order"
@@ -1470,12 +1476,12 @@ function OrderDetailRoute() {
 					paymentStatus === "received" || order.status === "delivered"
 						? `This order is paid/completed — deleting erases it from your sales records, receipts and CSV exports. Stock isn't affected and the customer is NOT notified. This can't be undone.${
 								hasActiveRiderBooking
-									? " ⚠️ A Lalamove rider booking is still active — cancel it from the Lalamove Delivery card FIRST or the rider still shows up."
+									? ` ⚠️ A Lalamove rider booking is still active — cancel it from the ${dispatchCardName} card FIRST or the rider still shows up.`
 									: ""
 							}`
 						: `This erases the order, its timeline and any uploaded images for good.${
 								hasActiveRiderBooking
-									? " ⚠️ A Lalamove rider booking is still active — cancel it from the Lalamove Delivery card FIRST or the rider still shows up."
+									? ` ⚠️ A Lalamove rider booking is still active — cancel it from the ${dispatchCardName} card FIRST or the rider still shows up.`
 									: ""
 							}${
 								order.status === "cancelled"

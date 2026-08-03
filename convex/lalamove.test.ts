@@ -1258,7 +1258,7 @@ describe("collection service (86eyg0n8e) — reversed trips", () => {
 		expect(b?.deliveryDirection).toBeUndefined(); // one spelling for default
 	});
 
-	test("getDeliveryJob reports the JOB's frozen direction over the live setting", async () => {
+	test("getDeliveryJob splits store-now vs trip-then, so a switched mode never rewrites history", async () => {
 		const t = setup();
 		const retailer = await seedCollectionStore(t);
 		const orderId = await seedOrder(t, retailer._id, {
@@ -1285,7 +1285,27 @@ describe("collection service (86eyg0n8e) — reversed trips", () => {
 		const dispatch = await asUser(t).query(api.lalamove.getDeliveryJob, {
 			shortId,
 		});
-		expect(dispatch?.deliveryDirection).toBe("collection");
+		// The store would book a STANDARD delivery now…
+		expect(dispatch?.deliveryDirection).toBe("standard");
+		// …but this trip was a collection, and the card describes it as one.
+		expect(dispatch?.job?.deliveryDirection).toBe("collection");
+	});
+
+	test("the inverse: a pre-collection job on a now-collection store still reads standard", async () => {
+		const t = setup();
+		const retailer = await seedCollectionStore(t);
+		const orderId = await seedOrder(t, retailer._id);
+		// A job booked before collection mode existed carries no direction.
+		await seedJob(t, retailer._id, orderId, { status: "completed" });
+		const shortId = await t.run(async (ctx) => {
+			const order = await ctx.db.get(orderId);
+			return order?.shortId ?? "";
+		});
+		const dispatch = await asUser(t).query(api.lalamove.getDeliveryJob, {
+			shortId,
+		});
+		expect(dispatch?.deliveryDirection).toBe("collection"); // store today
+		expect(dispatch?.job?.deliveryDirection).toBe("standard"); // that trip
 	});
 
 	test("orders.create freezes deliveryDirection from the store setting", async () => {

@@ -191,6 +191,7 @@ describe("BookDeliveryCard — collection service (86eyg0n8e)", () => {
 			deliveryDirection: "collection",
 			job: {
 				...completedDispatch().job,
+				deliveryDirection: "collection",
 				podImageUrls: ["https://example.com/pod.jpg"],
 			},
 		};
@@ -209,6 +210,7 @@ describe("BookDeliveryCard — collection service (86eyg0n8e)", () => {
 		state.dispatch = {
 			...completedDispatch(),
 			deliveryDirection: "standard",
+			job: { ...completedDispatch().job, deliveryDirection: "standard" },
 		};
 		render(<BookDeliveryCard order={deliveredOrder} />);
 		expect(screen.getByText("Lalamove Delivery")).toBeTruthy();
@@ -244,6 +246,7 @@ describe("BookDeliveryCard — a completed collection is terminal (86eyg0n8e)", 
 				providerOrderId: "3545890794555130640",
 				costActual: 1000,
 				vehicleType: "MOTORCYCLE",
+				deliveryDirection: "collection",
 				driver: {
 					name: "TestDriver 44111",
 					phone: "+60111111111",
@@ -309,8 +312,50 @@ describe("BookDeliveryCard — a completed collection is terminal (86eyg0n8e)", 
 		state.dispatch = {
 			...completedCollection(),
 			deliveryDirection: "standard",
+			job: { ...completedCollection().job, deliveryDirection: "standard" },
 		};
 		render(<BookDeliveryCard order={collectedOrder} />);
 		expect(screen.getByText("Book delivery")).toBeTruthy();
+	});
+});
+
+describe("BookDeliveryCard — store-now vs trip-then (86eyg0n8e)", () => {
+	// The card answers two different questions and must not conflate them:
+	// what THIS trip was (frozen on the job) vs what booking NOW would do (the
+	// store's live setting). They diverge after a seller switches modes — and
+	// will diverge routinely once direction varies per order.
+	it("describes a past standard trip as a delivery while offering today's collection", () => {
+		state.dispatch = {
+			promptBookOnPacked: false,
+			bookingEnabled: true,
+			deliveryDirection: "collection", // the store, today
+			blockReason: null,
+			job: {
+				status: "expired",
+				providerOrderId: "LLM-OLD",
+				costActual: 0,
+				vehicleType: "MOTORCYCLE",
+				failureReason: "No driver accepted the order",
+				createdAt: 1_700_000_000_000,
+				deliveryDirection: "standard", // …but that trip was a delivery
+			},
+		};
+		render(
+			<BookDeliveryCard
+				order={
+					{
+						shortId: "ORD-SWAP",
+						deliveryMethod: "delivery",
+						status: "confirmed",
+						currency: "MYR",
+						paymentStatus: "received",
+					} as unknown as Doc<"orders">
+				}
+			/>,
+		);
+		// History is narrated truthfully…
+		expect(screen.getByText("Lalamove Delivery")).toBeTruthy();
+		// …and the button promises exactly what dispatch would book now.
+		expect(screen.getByText("Rebook collection")).toBeTruthy();
 	});
 });

@@ -1457,6 +1457,11 @@ export type DeliveryJobView = {
 	lastEventAt?: number;
 	/** Rider drop-off photo URLs (proof of delivery), set once completed. */
 	podImageUrls?: string[];
+	/** The direction THIS trip was booked in (86eyg0n8e), frozen at reserve.
+	 * Describes what happened; the store-level setting below says what a NEW
+	 * booking would do. They differ after a seller switches modes — and will
+	 * differ routinely once direction can vary per order (per-product v2). */
+	deliveryDirection: "standard" | "collection";
 };
 
 /**
@@ -1482,11 +1487,11 @@ export const getDeliveryJob = query({
 		 * manual parcel-courier surface when it's true (86eyff02p). Distinct from
 		 * `blockReason === null`, which is about THIS order being bookable now. */
 		bookingEnabled: boolean;
-		/** Which way the rider travels (86eyg0n8e): the latest job's frozen
-		 * direction when one exists (a completed card describes what happened),
-		 * else the live setting (what the Book button WILL do). "collection"
-		 * relabels the card ("Send rider to collect") and lifts the
-		 * manual-advance gate — the webhook never drives a collection order. */
+		/** The STORE's current direction (86eyg0n8e) — what booking from this
+		 * card would do right now, so it drives the button/dialog wording and
+		 * the manual-advance gate. What a past trip actually did lives on
+		 * `job.deliveryDirection`; the two only diverge after a mode switch (and
+		 * routinely once direction varies per order — per-product v2). */
 		deliveryDirection: "standard" | "collection";
 	} | null> => {
 		const order = await resolveSharedOrder(ctx, { shortId });
@@ -1540,9 +1545,7 @@ export const getDeliveryJob = query({
 			promptBookOnPacked,
 			bookingEnabled: retailer.deliveryBooking?.enabled === true,
 			deliveryDirection:
-				latest?.deliveryDirection ??
-				retailer.deliveryBooking?.deliveryDirection ??
-				"standard",
+				retailer.deliveryBooking?.deliveryDirection ?? "standard",
 			job: latest
 				? {
 						status: latest.status,
@@ -1555,6 +1558,9 @@ export const getDeliveryJob = query({
 						createdAt: latest.createdAt,
 						lastEventAt: latest.lastEventAt,
 						podImageUrls,
+						// Unset on rows booked before collection existed → standard,
+						// which is exactly what those trips were.
+						deliveryDirection: latest.deliveryDirection ?? "standard",
 					}
 				: null,
 			blockReason,

@@ -100,7 +100,7 @@ export function BookDeliveryCard({
 		// would otherwise auto-open the dialog and dispatch a SECOND rider to the
 		// buyer. Standard orders can't reach here (they're delivered by then).
 		if (
-			dispatch.deliveryDirection === "collection" &&
+			dispatch.job?.deliveryDirection === "collection" &&
 			dispatch.job?.status === "completed"
 		) {
 			return;
@@ -134,7 +134,7 @@ export function BookDeliveryCard({
 		// collection orders) — kept as defence in depth so a future caller can't
 		// dispatch a second collection.
 		if (
-			dispatch.deliveryDirection === "collection" &&
+			dispatch.job?.deliveryDirection === "collection" &&
 			dispatch.job?.status === "completed"
 		) {
 			return;
@@ -152,9 +152,19 @@ export function BookDeliveryCard({
 	if (order.deliveryMethod !== "delivery" || !dispatch) return null;
 	const { job, blockReason, promptBookOnPacked } = dispatch;
 	// Collection service (86eyg0n8e): the rider collects FROM the customer and
-	// brings the goods here — every label on this card flips to say so, and the
-	// webhook only moves the job pill (the seller advances the order by hand).
+	// brings the goods here. TWO questions, two sources — they only diverge
+	// after a seller switches modes (and will diverge routinely once direction
+	// varies per order):
+	//  · `collection` — what booking NOW would do (the store's live setting):
+	//    drives the button, the confirm dialog and the prompt hint, so a label
+	//    can never promise a different trip than the one dispatch books.
+	//  · `jobCollection` — what THIS trip actually was (frozen on the job):
+	//    drives every line that describes it, so a past delivery is never
+	//    narrated as a collection.
 	const collection = dispatch.deliveryDirection === "collection";
+	const jobCollection = dispatch.job
+		? dispatch.job.deliveryDirection === "collection"
+		: collection;
 	const activeJob =
 		job &&
 		!["completed", "canceled", "expired", "rejected"].includes(job.status)
@@ -173,7 +183,7 @@ export function BookDeliveryCard({
 	// fails `bookable` — but a collection order deliberately never advances, so
 	// the stop has to be explicit. A FAILED collection still offers Rebook (no
 	// rider ever came); only success ends it.
-	const collectionDone = collection && completedJob !== null;
+	const collectionDone = jobCollection && completedJob !== null;
 	// Auto-book never fires before the buyer's chosen date (pre-orders get
 	// packed the night before) — the hint below says so instead of surprising.
 	const isFutureDated =
@@ -278,12 +288,12 @@ export function BookDeliveryCard({
 		<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 			<div className="flex items-center justify-between">
 				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-					{collection ? "Lalamove Collection" : "Lalamove Delivery"}
+					{jobCollection ? "Lalamove Collection" : "Lalamove Delivery"}
 				</p>
 				{activeJob ? (
-					<JobStatusPill status={activeJob.status} collection={collection} />
+					<JobStatusPill status={activeJob.status} collection={jobCollection} />
 				) : completedJob ? (
-					<JobStatusPill status="completed" collection={collection} />
+					<JobStatusPill status="completed" collection={jobCollection} />
 				) : null}
 			</div>
 
@@ -327,7 +337,7 @@ export function BookDeliveryCard({
 						</div>
 					) : (
 						<p className="text-muted-foreground">
-							{collection
+							{jobCollection
 								? "Finding a rider… this usually takes a few minutes. They'll collect from your customer's address and bring it here — you advance the order status yourself once it arrives."
 								: "Finding a rider… this usually takes a few minutes. When one picks up, the buyer gets the shipped message with live tracking automatically."}
 						</p>
@@ -365,7 +375,7 @@ export function BookDeliveryCard({
 			{completedJob ? (
 				<div className="flex flex-col gap-2 text-sm">
 					<p className="text-muted-foreground">
-						{collection
+						{jobCollection
 							? "A Lalamove rider collected this order from your customer and dropped it off with you."
 							: "This order was delivered by a Lalamove rider."}
 					</p>
@@ -374,7 +384,7 @@ export function BookDeliveryCard({
 					    be another COLLECTION (the store-wide direction), so today the
 					    return leg is booked in the vendor's own Lalamove app. See the
 					    Leg 2 follow-up in docs/delivery-lalamove.md. */}
-					{collection ? (
+					{jobCollection ? (
 						<p className="text-xs text-muted-foreground">
 							Sending it back after your work? Book that trip in your Lalamove
 							app — return trips aren&apos;t handled here yet.
@@ -415,7 +425,7 @@ export function BookDeliveryCard({
 					{completedJob.podImageUrls?.length ? (
 						<div className="flex flex-col gap-1.5">
 							<p className="text-xs text-muted-foreground">
-								{collection
+								{jobCollection
 									? "Drop-off photo from the rider (kept for your records — not sent to the buyer)"
 									: "Delivery photo from the rider"}
 							</p>
