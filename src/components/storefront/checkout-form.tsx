@@ -15,8 +15,13 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import type { PublicDeliveryQuote } from "../../../convex/delivery";
 import {
 	assertValidFulfilmentDate,
+	composeFulfilmentMoment,
+	defaultFulfilmentTimeMinutes,
 	fulfilmentDateBounds,
+	hhmmFromMinutes,
+	minSelectableTimeMinutes,
 	mytMidnightFromYmd,
+	timeMinutesFromHhmm,
 	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
 import {
@@ -40,8 +45,8 @@ import {
 } from "../../lib/schemas";
 import { useLiveDeliveryQuote } from "../../lib/use-live-delivery-quote";
 import { submitThenFocusError } from "../forms/focus-error";
-import { MyPhonePrefix } from "../forms/my-phone-prefix";
 import { useAppForm } from "../forms/form";
+import { MyPhonePrefix } from "../forms/my-phone-prefix";
 import { Button } from "../ui/button";
 import { AddressFieldset } from "./address-fieldset";
 import { CheckoutSummary, CheckoutTotals } from "./checkout-summary";
@@ -68,6 +73,11 @@ interface CheckoutPageProps {
 	confirmPushEnabled: boolean;
 	offerSelfCollect: boolean;
 	offerDelivery: boolean;
+	/** Collection-service store (86eyg0n8e): the rider collects FROM the
+	 * buyer's address — every "delivery" label on this form flips to
+	 * collection wording so the buyer isn't told something is being sent to
+	 * them. Public flag `deliveryCollectsFromCustomer` on the slug payload. */
+	collectsFromCustomer: boolean;
 	minFulfilmentNoticeDays: number | undefined;
 	/** Store-wide minimum order value (minor units) — checkout blocks below it.
 	 * See convex/lib/minOrderRules.ts. */
@@ -172,6 +182,7 @@ export function CheckoutPage({
 	confirmPushEnabled,
 	offerSelfCollect,
 	offerDelivery,
+	collectsFromCustomer,
 	minFulfilmentNoticeDays,
 	minOrderValue,
 	pickupLocations,
@@ -319,6 +330,13 @@ export function CheckoutPage({
 			// zero taps while pre-order buyers just pick a later date. Server
 			// re-validates the live window either way.
 			fulfilmentDate: minYmd,
+			// "HH:MM" the rider should arrive (delivery orders, 86eyg0n8e
+			// follow-up). Prefilled — today rounds ~an hour out to the next
+			// half-hour; a future first-allowed day defaults 10:00 AM — so the
+			// required field never costs a tap unless the buyer cares.
+			fulfilmentTime: hhmmFromMinutes(
+				defaultFulfilmentTimeMinutes(mytMidnightFromYmd(minYmd)),
+			),
 			// Optional free-text instruction for the seller (local form state — the
 			// note is order-level, not a cart item, so it doesn't belong in useCart).
 			note: "",
@@ -378,6 +396,28 @@ export function CheckoutPage({
 				return;
 			}
 
+			// Fulfilment time (delivery orders): the input is prefilled and
+			// floored, so failures here are a cleared field or a form that sat
+			// past its chosen slot. The dispatch rule absorbs near-past moments
+			// (books "now"), so only reject what's nonsense to promise.
+			let fulfilmentTimeMinutes: number | undefined;
+			if (value.deliveryMethod === "delivery") {
+				const parsed = timeMinutesFromHhmm(value.fulfilmentTime);
+				if (Number.isNaN(parsed)) {
+					setServerError(
+						collectsFromCustomer
+							? "Pick a collection time."
+							: "Pick a delivery time.",
+					);
+					return;
+				}
+				if (composeFulfilmentMoment(fulfilmentEpoch, parsed) < Date.now()) {
+					setServerError("That time has already passed — pick a later time.");
+					return;
+				}
+				fulfilmentTimeMinutes = parsed;
+			}
+
 			const trimmedNote = value.note?.trim();
 			const generalNote =
 				trimmedNote && trimmedNote.length > 0 ? trimmedNote : undefined;
@@ -411,6 +451,7 @@ export function CheckoutPage({
 					deliveryAddress: sanitizedAddress,
 					pickupLocationId: resolvedPickupLocationId,
 					fulfilmentDate: fulfilmentEpoch,
+					fulfilmentTimeMinutes,
 					customerNote,
 					customerImageStorageId,
 					// Live Lalamove quote (86eyb5hrf): pass the server-side quote row
@@ -475,6 +516,33 @@ export function CheckoutPage({
 	// The chosen day PRICES the live quote (pre-orders quote as a scheduled
 	// pickup on that day) — date changes re-quote just like address changes.
 	const watchedDate = useStore(form.store, (s) => s.values.fulfilmentDate);
+	const watchedTime = useStore(form.store, (s) => s.values.fulfilmentTime);
+	// Parsed once for the two consumers below; NaN (cleared field) reads as
+	// "no time" so the quote falls back to the day-level pricing.
+	const watchedTimeMinutes = (() => {
+		const t = timeMinutesFromHhmm(watchedTime);
+		return Number.isNaN(t) ? undefined : t;
+	})();
+	// The time's floor moves with the chosen DAY (today is floored to ~30 min
+	// out; other days are free). When a date change — chip tap, picker, the
+	// midnight bump above — leaves the chosen slot behind the floor, pull it
+	// up to that day's default rather than letting submit bounce it. Only
+	// ever adjusts an INVALID slot; a deliberately chosen future time is
+	// never touched.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: form identity is stable; values read fresh inside.
+	useEffect(() => {
+		if (!watchedDate) return;
+		const dayEpoch = mytMidnightFromYmd(watchedDate);
+		if (Number.isNaN(dayEpoch)) return;
+		const current = timeMinutesFromHhmm(form.store.state.values.fulfilmentTime);
+		const floor = minSelectableTimeMinutes(dayEpoch);
+		if (Number.isNaN(current) || current < floor) {
+			form.setFieldValue(
+				"fulfilmentTime",
+				hhmmFromMinutes(defaultFulfilmentTimeMinutes(dayEpoch)),
+			);
+		}
+	}, [watchedDate]);
 	const latNum = watchedLat.trim().length > 0 ? Number(watchedLat) : NaN;
 	const lngNum = watchedLng.trim().length > 0 ? Number(watchedLng) : NaN;
 	const hasCoords = Number.isFinite(latNum) && Number.isFinite(lngNum);
@@ -508,6 +576,7 @@ export function CheckoutPage({
 				.join(", ");
 		},
 		fulfilmentDate: watchedDate ? mytMidnightFromYmd(watchedDate) : undefined,
+		fulfilmentTimeMinutes: watchedTimeMinutes,
 	});
 
 	// Collapse the two sources into ONE shape for the breakdown + submit gate.
@@ -622,11 +691,17 @@ export function CheckoutPage({
 				: overStockLine
 					? `Only ${stockCapFor(overStockLine.variantId)} × ${overStockLine.name} left — lower the quantity to continue`
 					: addressIncomplete
-						? "Add your delivery address to continue"
+						? collectsFromCustomer
+							? "Add your collection address to continue"
+							: "Add your delivery address to continue"
 						: quoteForDelivery?.kind === "calculating"
-							? "Calculating your delivery fee…"
+							? collectsFromCustomer
+								? "Calculating your collection fee…"
+								: "Calculating your delivery fee…"
 							: deliveryBlocked
-								? "We can't deliver to this address — see your order summary"
+								? collectsFromCustomer
+									? "We can't collect from this address — see your order summary"
+									: "We can't deliver to this address — see your order summary"
 								: null;
 
 	const submitButton = (
@@ -760,6 +835,11 @@ export function CheckoutPage({
 							const pickupFee = pickupFeeOf(selectedPickup);
 							const quote =
 								deliveryMethod === "delivery" ? quoteForDelivery : undefined;
+							// Collection stores talk about collecting FROM the buyer —
+							// the failure stories are otherwise identical.
+							const feeNoun = collectsFromCustomer
+								? "collection fee"
+								: "delivery fee";
 							const blockedCopy =
 								quote?.kind === "blocked"
 									? quote.reason === "out_of_range"
@@ -767,10 +847,14 @@ export function CheckoutPage({
 											// retrying the same address never will — say so, and point
 											// at the two things that actually work.
 											isLiveMode
-											? `This address is too far — our delivery rider service doesn't cover it. Try an address closer to ${storeName}${
+											? `This address is too far — our ${
+													collectsFromCustomer ? "collection" : "delivery"
+												} rider service doesn't cover it. Try an address closer to ${storeName}${
 													selfCollectAvailable ? ", or choose pickup" : ""
 												}.`
-											: `This address is outside ${storeName}'s delivery area.${
+											: `This address is outside ${storeName}'s ${
+													collectsFromCustomer ? "collection" : "delivery"
+												} area.${
 													selfCollectAvailable
 														? " Pickup is still available."
 														: ""
@@ -778,20 +862,22 @@ export function CheckoutPage({
 										: quote.reason === "store_unavailable"
 											? // Seller-side breakage — not the buyer's fault, not
 												// fixable by retrying. Give them the two real ways out.
-												`Delivery pricing isn't working for this store right now — it's on ${storeName}'s side, not yours. ${
+												`${
+													collectsFromCustomer ? "Collection" : "Delivery"
+												} pricing isn't working for this store right now — it's on ${storeName}'s side, not yours. ${
 													selfCollectAvailable
 														? "Choose pickup, or message"
 														: "Message"
 												} the store on WhatsApp to sort it out.`
 											: quote.reason === "unquotable"
-												? "We couldn't calculate the delivery fee right now — re-pick your address to retry, or try again shortly."
+												? `We couldn't calculate the ${feeNoun} right now — re-pick your address to retry, or try again shortly.`
 												: // no_coords. Worth saying only once the buyer has an address
 													// at all — on an untouched form the reason line above the
 													// CTA already says "add your address", and two versions of
 													// the same nudge is noise.
 													addressIncomplete
 													? undefined
-													: "Pick your address from the Google suggestions so we can calculate your delivery fee."
+													: `Pick your address from the Google suggestions so we can calculate your ${feeNoun}.`
 									: undefined;
 							return (
 								<CheckoutSummary
@@ -809,6 +895,9 @@ export function CheckoutPage({
 											quote={quote}
 											blockedCopy={blockedCopy}
 											minRuleAlerts={minRuleAlerts}
+											collectsFromCustomer={
+												deliveryMethod === "delivery" && collectsFromCustomer
+											}
 										/>
 									}
 									footer={
@@ -927,7 +1016,9 @@ export function CheckoutPage({
 							bothAvailable
 								? "How do you want to get it?"
 								: deliveryAvailable
-									? "Delivery address"
+									? collectsFromCustomer
+										? "Collection address"
+										: "Delivery address"
 									: "Pickup point"
 						}
 					>
@@ -959,7 +1050,10 @@ export function CheckoutPage({
 												className={segment(field.state.value === "delivery")}
 											>
 												<Truck className="size-5" aria-hidden />
-												Delivery
+												{/* On a collection store this segment means "a rider
+												    comes to me", so "Delivery" would contradict the
+												    line right under it. */}
+												{collectsFromCustomer ? "Collection" : "Delivery"}
 											</button>
 											<button
 												type="button"
@@ -988,6 +1082,12 @@ export function CheckoutPage({
 								{(deliveryMethod) =>
 									deliveryMethod === "delivery" ? (
 										<div className="flex flex-col gap-2">
+											{collectsFromCustomer ? (
+												<p className="rounded-lg bg-accent/5 px-3 py-2 text-xs text-foreground">
+													{storeName} collects from you — a rider picks your
+													items up at this address and brings them to the store.
+												</p>
+											) : null}
 											<AddressFieldset
 												form={form}
 												fields="address"
@@ -996,7 +1096,14 @@ export function CheckoutPage({
 												// Only when the section heading is the method question
 												// ("How do you want to get it?") — a delivery-only store
 												// already has "Delivery address" as its section title.
-												legend={bothAvailable ? "Delivery address" : undefined}
+												legend={
+													bothAvailable
+														? collectsFromCustomer
+															? "Collection address"
+															: "Delivery address"
+														: undefined
+												}
+												collectsFromCustomer={collectsFromCustomer}
 											/>
 											{/* Live-quote (rider) stores: set the expectation BEFORE
 											    the buyer types a far-away address and hits a wall.
@@ -1006,10 +1113,9 @@ export function CheckoutPage({
 											    a radius we could quote. */}
 											{isLiveMode ? (
 												<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-													Delivery is by rider, so the fee depends on your
-													address — you&apos;ll see it here once you pick a
-													suggestion. Addresses outside the rider&apos;s
-													coverage can&apos;t be delivered
+													{collectsFromCustomer
+														? "Collection is by rider, so the fee depends on your address — you'll see it here once you pick a suggestion. Addresses outside the rider's coverage can't be collected from"
+														: "Delivery is by rider, so the fee depends on your address — you'll see it here once you pick a suggestion. Addresses outside the rider's coverage can't be delivered"}
 													{selfCollectAvailable ? " — pick up instead" : ""}.
 												</p>
 											) : null}
@@ -1077,7 +1183,9 @@ export function CheckoutPage({
 													? isDropOff
 														? "When should we meet?"
 														: "When will you collect?"
-													: "When do you need it delivered?"
+													: collectsFromCustomer
+														? "When should we collect it?"
+														: "When do you need it delivered?"
 										}
 									>
 										{selectedPickup?.scheduleNote ? (
@@ -1122,33 +1230,73 @@ export function CheckoutPage({
 												})}
 											</div>
 										) : null}
-										<form.AppField name="fulfilmentDate">
-											{(field) => (
-												<field.DateField
-													label="Date"
-													min={minYmd}
-													max={maxYmd}
-													required
-													description={
-														// Custom carts: the date is the buyer's ASK — the
-														// seller settles the final date in the design
-														// conversation. A notice floor raised by a cart
-														// item is explained, never silent.
-														hasCustomLine
-															? `Your requested date — the seller confirms the final date with you after the design is agreed.${
-																	cartNoticeDays > 0
-																		? ` Items in your cart need at least ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice.`
-																		: ""
-																}`
-															: cartNoticeDays > (minFulfilmentNoticeDays ?? 0)
-																? `An item in your cart needs ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice — that's the earliest date you can pick.`
-																: isDropOff
-																	? "Pick the date you'll meet at the drop-off point."
-																	: "Pick the date you need this order."
-													}
-												/>
-											)}
-										</form.AppField>
+										{/* Delivery orders pair the date with a TIME (86eyg0n8e
+										    follow-up): a rider arriving at — or collecting from —
+										    the buyer shouldn't be an all-day window. Pickup keeps
+										    date-only: the point's own schedule governs its hours. */}
+										<div
+											className={
+												deliveryMethod === "delivery"
+													? "grid grid-cols-2 gap-3"
+													: undefined
+											}
+										>
+											<form.AppField name="fulfilmentDate">
+												{(field) => (
+													<field.DateField
+														label="Date"
+														min={minYmd}
+														max={maxYmd}
+														required
+														description={
+															// Custom carts: the date is the buyer's ASK — the
+															// seller settles the final date in the design
+															// conversation. A notice floor raised by a cart
+															// item is explained, never silent.
+															hasCustomLine
+																? `Your requested date — the seller confirms the final date with you after the design is agreed.${
+																		cartNoticeDays > 0
+																			? ` Items in your cart need at least ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice.`
+																			: ""
+																	}`
+																: cartNoticeDays >
+																		(minFulfilmentNoticeDays ?? 0)
+																	? `An item in your cart needs ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice — that's the earliest date you can pick.`
+																	: isDropOff
+																		? "Pick the date you'll meet at the drop-off point."
+																		: "Pick the date you need this order."
+														}
+													/>
+												)}
+											</form.AppField>
+											{deliveryMethod === "delivery" ? (
+												<form.AppField name="fulfilmentTime">
+													{(field) => (
+														<field.TimeField
+															label="Time"
+															required
+															min={(() => {
+																if (!watchedDate) return undefined;
+																const day = mytMidnightFromYmd(watchedDate);
+																if (Number.isNaN(day)) return undefined;
+																const floor = minSelectableTimeMinutes(day);
+																// Last half-hour of the day: no valid floor
+																// exists ("24:00" isn't a time) — the floor
+																// effect has already bumped the value.
+																return floor < 1440
+																	? hhmmFromMinutes(floor)
+																	: undefined;
+															})()}
+															description={
+																collectsFromCustomer
+																	? "When the rider should come to you."
+																	: "When you'd like it to arrive."
+															}
+														/>
+													)}
+												</form.AppField>
+											) : null}
+										</div>
 									</CheckoutSection>
 								);
 							}}

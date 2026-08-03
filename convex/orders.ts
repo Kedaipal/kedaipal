@@ -36,6 +36,7 @@ import {
 } from "./lib/auth";
 import {
 	assertValidFulfilmentDate,
+	assertValidFulfilmentTime,
 	matchesFulfilmentWindow,
 } from "./lib/fulfilmentDate";
 import {
@@ -60,6 +61,7 @@ import {
 	computeOrderTotals,
 	generateShortId,
 	generateTrackingToken,
+	isCollectionGateClosed,
 	isMockupGateClosed,
 } from "./lib/order";
 import {
@@ -68,7 +70,10 @@ import {
 	type LiveProviderQuote,
 	resolveDeliveryQuote,
 } from "./lib/delivery";
-import { CHECKOUT_QUOTE_MAX_AGE_MS } from "./lib/lalamove";
+import {
+	CHECKOUT_QUOTE_MAX_AGE_MS,
+	isActiveJobStatus,
+} from "./lib/lalamove";
 import { resolveShipmentFields } from "./lib/couriers";
 import {
 	anchorOrdinal,
@@ -568,6 +573,10 @@ export const create = mutation({
 		// need to pass it; the storefront UI requires it. Validated against the
 		// retailer's notice window when present. See convex/lib/fulfilmentDate.ts.
 		fulfilmentDate: v.optional(v.number()),
+		// What time on that day (minutes since MYT midnight) — captured for
+		// delivery orders; ignored on self-collect (their moment is governed by
+		// the pickup point's own schedule). See the schema comment.
+		fulfilmentTimeMinutes: v.optional(v.number()),
 		// Optional free-text instruction the shopper typed at checkout.
 		customerNote: v.optional(v.string()),
 		// Optional reference image the buyer attached for a custom line, uploaded
@@ -866,6 +875,26 @@ export const create = mutation({
 				throw new ConvexError((err as Error).message);
 			}
 		}
+		// Fulfilment time (86eyg0n8e follow-up): kept only where it means
+		// something — a delivery order WITH a date. Range-only validation by
+		// design (see assertValidFulfilmentTime): "is the moment still ahead"
+		// is judged at checkout client-side and again at dispatch, where a past
+		// moment simply books "now" — a strict server check here would let
+		// clock skew or a long-idle form reject a legitimate checkout.
+		let sanitizedFulfilmentTime: number | undefined;
+		if (
+			args.fulfilmentTimeMinutes !== undefined &&
+			sanitizedFulfilmentDate !== undefined &&
+			effectiveDeliveryMethod === "delivery"
+		) {
+			try {
+				sanitizedFulfilmentTime = assertValidFulfilmentTime(
+					args.fulfilmentTimeMinutes,
+				);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
 
 		// Delivery charge (86extzdr8): resolved server-side at create — the
 		// authoritative price, whatever the client previewed. Needs the item
@@ -895,6 +924,16 @@ export const create = mutation({
 			deliveryFeePending = resolved.pending;
 			deliveryFeePendingReason = resolved.pendingReason;
 		}
+		// Frozen trip direction (86eyg0n8e): stamped from the store's live
+		// collection-service setting so buyer surfaces (tracking labels, WA
+		// confirm) stay true to what this order promised even if the seller
+		// toggles the mode later — the pickupSnapshot posture. Standard stays
+		// unset (one spelling for the default; every pre-existing order).
+		const deliveryDirection =
+			effectiveDeliveryMethod === "delivery" &&
+			retailer.deliveryBooking?.deliveryDirection === "collection"
+				? ("collection" as const)
+				: undefined;
 
 		// The chosen pickup point's frozen fee and the delivery charge ride the
 		// same extras seam as the mockup quote — total = subtotal + fees from the
@@ -974,6 +1013,7 @@ export const create = mutation({
 			source: "storefront",
 			customer: sanitizedCustomer,
 			deliveryMethod: effectiveDeliveryMethod,
+			deliveryDirection,
 			deliveryAddress: sanitizedAddress,
 			pickupLocationId: resolvedPickupLocationId,
 			pickupSnapshot: sanitizedPickupSnapshot,
@@ -983,6 +1023,7 @@ export const create = mutation({
 			deliveryFeePending: deliveryFeePending || undefined,
 			deliveryFeePendingReason,
 			fulfilmentDate: sanitizedFulfilmentDate,
+			fulfilmentTimeMinutes: sanitizedFulfilmentTime,
 			customerNote: sanitizedCustomerNote,
 			// Only keep the buyer image when the order actually has a custom line —
 			// guards a stray id on a non-custom order.
@@ -1147,6 +1188,16 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 	// delivered delivery orders; the buyer sees the same shot the WhatsApp
 	// follow-up carried, the seller the same thumbnails as the dispatch card.
 	podImageUrls?: string[];
+	// Live collection-rider strip (86eyg0n8e) — present only while a rider is
+	// ACTIVELY collecting from the buyer on a collection order; the tracking
+	// page renders it as a transient card, never a status. Driver phone, cost
+	// and provider ids deliberately never cross.
+	collectionRider?: {
+		status: "assigning" | "ongoing" | "picked_up";
+		driverName?: string;
+		plateNumber?: string;
+		shareLink?: string;
+	};
 };
 
 export const get = query({
@@ -1177,9 +1228,18 @@ export const get = query({
 		const isBuyerRead = token !== undefined;
 		// Rider drop-off photo (Lalamove POD) — one indexed read, and only on
 		// the delivered end-state of delivery orders, so the hot pending/active
-		// tracking path pays nothing.
+		// tracking path pays nothing. Collection orders (86eyg0n8e) never
+		// surface it here: their POD shows the rider dropping the buyer's gear
+		// at the SELLER's doorstep — captioning that "taken by your rider at
+		// drop-off" once the seller manually marks the order delivered would
+		// read as nonsense to the buyer. The seller still sees it on the
+		// dispatch card (getDeliveryJob).
 		let podImageUrls: string[] | undefined;
-		if (order.status === "delivered" && order.deliveryMethod === "delivery") {
+		if (
+			order.status === "delivered" &&
+			order.deliveryMethod === "delivery" &&
+			order.deliveryDirection !== "collection"
+		) {
 			const jobs = await ctx.db
 				.query("deliveryJobs")
 				.withIndex("by_order", (q) => q.eq("orderId", order._id))
@@ -1195,9 +1255,52 @@ export const get = query({
 				if (resolved.length > 0) podImageUrls = resolved;
 			}
 		}
+		// Live collection-rider strip (86eyg0n8e): while a rider is actively
+		// collecting FROM this buyer, the tracking page shows the trip live —
+		// the buyer's only window into "who is knocking and when", since
+		// collection orders never mirror a tracking URL and never auto-advance.
+		// Read from the live job row so it can't go stale (the whole reason the
+		// mirror was skipped); one indexed read, collection orders only, and the
+		// strip vanishes the moment the job leaves its active states. Exposes
+		// trip state + driver name/plate + Lalamove's buyer-facing share page —
+		// never the driver's phone, cost or provider ids.
+		let collectionRider:
+			| {
+					status: "assigning" | "ongoing" | "picked_up";
+					driverName?: string;
+					plateNumber?: string;
+					shareLink?: string;
+			  }
+			| undefined;
+		if (
+			order.deliveryMethod === "delivery" &&
+			order.deliveryDirection === "collection" &&
+			order.status !== "cancelled"
+		) {
+			const jobs = await ctx.db
+				.query("deliveryJobs")
+				.withIndex("by_order", (q) => q.eq("orderId", order._id))
+				.collect();
+			// The ACTIVE row, never .first() — failed attempts keep their rows.
+			const active = jobs.find((j) => isActiveJobStatus(j.status));
+			if (
+				active &&
+				(active.status === "assigning" ||
+					active.status === "ongoing" ||
+					active.status === "picked_up")
+			) {
+				collectionRider = {
+					status: active.status,
+					driverName: active.driver?.name,
+					plateNumber: active.driver?.plateNumber || undefined,
+					shareLink: active.shareLink,
+				};
+			}
+		}
 		return {
 			...order,
 			podImageUrls,
+			collectionRider,
 			deliverySnapshot: isBuyerRead ? undefined : order.deliverySnapshot,
 			// Meta's message id has no buyer use and this read is unauthenticated —
 			// strip it on the token path alongside the delivery snapshot. The
@@ -1882,6 +1985,7 @@ function orderToCsvSource(o: Doc<"orders">): CsvOrder {
 		paymentStatus: o.paymentStatus,
 		paymentMethod: o.paymentMethod,
 		deliveryMethod: o.deliveryMethod,
+		deliveryDirection: o.deliveryDirection,
 		customer: o.customer,
 		items: o.items,
 		subtotal: o.subtotal,
@@ -2242,6 +2346,19 @@ export const updateStatus = mutation({
 			);
 		}
 
+		// Collection gate (86eyg0n8e) — the goods are still with the buyer, so no
+		// production status can be true. Cancelling stays open (same posture as
+		// the mockup gate above).
+		if (
+			status !== "cancelled" &&
+			anchorOrdinal(status) >= anchorOrdinal("packed") &&
+			isCollectionGateClosed(order)
+		) {
+			throw new ConvexError(
+				"This order is still with your customer — send a rider to collect it first. If the items are already with you, use “I already have the items” on the order page.",
+			);
+		}
+
 		await applyStatusTransition(ctx, order, status, {
 			note,
 			carrierTrackingUrl,
@@ -2267,13 +2384,22 @@ export const bulkUpdateStatus = mutation({
 	handler: async (
 		ctx,
 		{ orderIds, status },
-	): Promise<{ updated: number; skipped: number }> => {
-		if (orderIds.length === 0) return { updated: 0, skipped: 0 };
+	): Promise<{
+		updated: number;
+		skipped: number;
+		/** Of `skipped`, how many were collection orders whose items are still
+		 * with the buyer — the one skip reason the seller can act on, so the
+		 * toast can name it instead of leaving a silent no-op. */
+		skippedAwaitingCollection: number;
+	}> => {
+		if (orderIds.length === 0)
+			return { updated: 0, skipped: 0, skippedAwaitingCollection: 0 };
 		if (orderIds.length > 100)
 			throw new ConvexError("Too many orders selected (max 100)");
 
 		let updated = 0;
 		let skipped = 0;
+		let skippedAwaitingCollection = 0;
 		// The inbox multi-select is single-retailer, so every id resolves to the
 		// same access descriptor; keep the last one for a single batch audit row.
 		let batchAccess: RetailerAccess | undefined;
@@ -2299,12 +2425,24 @@ export const bulkUpdateStatus = mutation({
 				skipped++;
 				continue;
 			}
+			// A collection order whose items haven't arrived can't be moved into
+			// production in bulk either — skipped, not fatal, so the rest of the
+			// batch still lands (mockup-gate posture).
+			if (
+				status !== "cancelled" &&
+				anchorOrdinal(status) >= anchorOrdinal("packed") &&
+				isCollectionGateClosed(order)
+			) {
+				skipped++;
+				skippedAwaitingCollection++;
+				continue;
+			}
 			await applyStatusTransition(ctx, order, status);
 			updated++;
 		}
 		if (batchAccess)
 			await logAdminAction(ctx, batchAccess, "orders.bulkUpdateStatus");
-		return { updated, skipped };
+		return { updated, skipped, skippedAwaitingCollection };
 	},
 });
 
@@ -2480,10 +2618,23 @@ export const advanceToStage = mutation({
 		carrierTrackingUrl: v.optional(v.string()),
 		courierName: v.optional(v.string()),
 		trackingNo: v.optional(v.string()),
+		// Collection service escape (86eyg0n8e): the seller asserts the items are
+		// already with them — they collected in person, or the rider's webhook
+		// never reported. Stamps `collectedAt` so the order unblocks for good
+		// instead of asking again at every stage. Ignored on standard orders.
+		markCollected: v.optional(v.boolean()),
 	},
 	handler: async (
 		ctx,
-		{ orderId, stageId, note, carrierTrackingUrl, courierName, trackingNo },
+		{
+			orderId,
+			stageId,
+			note,
+			carrierTrackingUrl,
+			courierName,
+			trackingNo,
+			markCollected,
+		},
 	): Promise<void> => {
 		const { order, access } = await requireOrderAccess(ctx, orderId);
 		const retailer = access.retailer;
@@ -2516,6 +2667,23 @@ export const advanceToStage = mutation({
 			);
 		}
 
+		// Collection gate (86eyg0n8e): on a COLLECTION order the rider brings the
+		// goods IN, so nothing downstream ("packed", "cleaning", "ready") can be
+		// true before they arrive. The seller books the rider first and the order
+		// waits. Same anchor-ordinal shape as the mockup gate above, and the same
+		// escape posture: `markCollected` lets a seller who fetched the items
+		// themselves (or whose webhook never reported) proceed — which stamps the
+		// arrival, so this asks once, not at every stage. Standard delivery is
+		// untouched: the rider takes goods OUT, so packing precedes the trip.
+		const collectingFromBuyer =
+			isCollectionGateClosed(order) &&
+			anchorOrdinal(targetStatus) >= anchorOrdinal("packed");
+		if (collectingFromBuyer && markCollected !== true) {
+			throw new ConvexError(
+				"This order is still with your customer — send a rider to collect it first. If the items are already with you, use “I already have the items” on the order page.",
+			);
+		}
+
 		const now = Date.now();
 		const statusChanged = order.status !== targetStatus;
 
@@ -2527,7 +2695,12 @@ export const advanceToStage = mutation({
 			trackingNo: string;
 			statusChangedAt: number;
 			updatedAt: number;
+			collectedAt: number;
 		}> = { status: targetStatus, currentStageId: stage.id, updatedAt: now };
+		// Set-if-unset, so a later manual advance can't move the arrival moment.
+		if (collectingFromBuyer && markCollected === true) {
+			patch.collectedAt = now;
+		}
 		// Reset the status clock only when the canonical status actually changes
 		// (a within-anchor stage move keeps the same "Pending/Confirmed/…" bucket).
 		if (statusChanged) patch.statusChangedAt = now;
@@ -3629,5 +3802,50 @@ export const getMockupUrls = query({
 			resolveMockupImageIds(order).map((id) => ctx.storage.getUrl(id)),
 		);
 		return urls.filter((u): u is string => u !== null);
+	},
+});
+
+/**
+ * One-shot backfill (86eyg0n8e): stamp `collectedAt` on COLLECTION orders whose
+ * rider already completed the trip before that field existed.
+ *
+ *   npx convex run orders:backfillCollectionCollectedAt
+ *
+ * Without it, such an order sits behind the collection gate forever — the rider
+ * genuinely brought the goods in, but nothing recorded WHEN, so the seller would
+ * have to take the "I already have the items" escape on an order that needs no
+ * escape. The arrival moment is taken from the job's last webhook event (its
+ * completion), falling back to the job's `updatedAt`.
+ *
+ * **Production is a no-op** — the collection service has never shipped there, so
+ * no order carries `deliveryDirection: "collection"` yet. This exists for dev
+ * deployments that tested the flow before the field landed. Idempotent: only
+ * touches rows where `collectedAt` is unset.
+ */
+export const backfillCollectionCollectedAt = internalMutation({
+	args: {},
+	handler: async (ctx): Promise<{ scanned: number; stamped: number }> => {
+		const jobs = await ctx.db
+			.query("deliveryJobs")
+			.filter((q) => q.eq(q.field("status"), "completed"))
+			.collect();
+		let stamped = 0;
+		for (const job of jobs) {
+			if (job.deliveryDirection !== "collection") continue;
+			const order = await ctx.db.get(job.orderId);
+			if (!order) continue;
+			if (order.deliveryDirection !== "collection") continue;
+			if (order.collectedAt !== undefined) continue;
+			await ctx.db.patch(order._id, {
+				collectedAt: job.lastEventAt ?? job.updatedAt,
+				updatedAt: Date.now(),
+			});
+			stamped++;
+		}
+		console.log("[orders] collectedAt backfill", {
+			scanned: jobs.length,
+			stamped,
+		});
+		return { scanned: jobs.length, stamped };
 	},
 });

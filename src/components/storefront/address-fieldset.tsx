@@ -83,8 +83,20 @@ export const AddressFieldset = withFieldGroup({
 		 * accessible name (the legend goes `sr-only` when this is unset).
 		 */
 		legend: undefined as string | undefined,
+		/**
+		 * Collection-service store (86eyg0n8e): the rider COLLECTS from this
+		 * address instead of delivering to it — the fallback legend and the notes
+		 * label say so, since "Delivery address" reads backwards to that buyer.
+		 */
+		collectsFromCustomer: false,
 	},
-	render: ({ group, retailerId, allowManualEntry, legend }) => {
+	render: ({
+		group,
+		retailerId,
+		allowManualEntry,
+		legend,
+		collectsFromCustomer,
+	}) => {
 		function handleAutocompleteSelect(payload: GoogleSelectedAddress) {
 			const parsed = parseGoogleAddress(
 				payload.addressComponents,
@@ -150,7 +162,11 @@ export const AddressFieldset = withFieldGroup({
 			<group.AppField name="notes">
 				{(field) => (
 					<field.TextareaField
-						label="Delivery notes (optional)"
+						label={
+							collectsFromCustomer
+								? "Collection notes (optional)"
+								: "Delivery notes (optional)"
+						}
 						placeholder="Landmark, gate code, courier instructions"
 						rows={2}
 					/>
@@ -212,7 +228,8 @@ export const AddressFieldset = withFieldGroup({
 			// <legend> is not a flex item, so the gap never applies below it.
 			<fieldset className="flex flex-col gap-3">
 				<legend className={legend ? "mb-2 text-sm font-medium" : "sr-only"}>
-					{legend ?? "Delivery address"}
+					{legend ??
+						(collectsFromCustomer ? "Collection address" : "Delivery address")}
 				</legend>
 
 				<group.Subscribe selector={(s) => s.values}>

@@ -339,6 +339,9 @@ interface CheckoutTotalsProps {
 	blockedCopy?: string;
 	/** Min-order-rule alert lines (the reason the CTA is disabled). */
 	minRuleAlerts?: ReactNode;
+	/** Collection-service store (86eyg0n8e) — the rider fee line reads
+	 * "Collection" instead of "Delivery". */
+	collectsFromCustomer?: boolean;
 }
 
 export function CheckoutTotals({
@@ -349,9 +352,11 @@ export function CheckoutTotals({
 	quote,
 	blockedCopy,
 	minRuleAlerts,
+	collectsFromCustomer = false,
 }: CheckoutTotalsProps) {
 	const deliveryFee = quote?.kind === "fee" ? quote.fee : 0;
 	const total = subtotal + pickupFee + deliveryFee;
+	const feeLabel = collectsFromCustomer ? "Collection" : "Delivery";
 
 	// One icon per fulfilment charge so the row is legible at a glance instead of
 	// blending into the item lines above it. Every delivery state gets the same
@@ -373,18 +378,18 @@ export function CheckoutTotals({
 			{deliveryFee > 0 ? (
 				<FeeLine
 					icon={truck}
-					label="Delivery"
+					label={feeLabel}
 					value={receiptAmount(deliveryFee)}
 				/>
 			) : null}
 			{quote?.kind === "free" && quote.reason === "threshold" ? (
-				<FeeLine icon={truck} label="Delivery" value="FREE" accent />
+				<FeeLine icon={truck} label={feeLabel} value="FREE" accent />
 			) : null}
 			{quote?.kind === "pending" ? (
-				<FeeLine icon={truck} label="Delivery" value="Seller confirms" />
+				<FeeLine icon={truck} label={feeLabel} value="Seller confirms" />
 			) : null}
 			{quote?.kind === "calculating" ? (
-				<FeeLine icon={truck} label="Delivery" value="Calculating…" pulse />
+				<FeeLine icon={truck} label={feeLabel} value="Calculating…" pulse />
 			) : null}
 
 			<div className="mt-2 flex items-center justify-between border-t-2 border-dashed border-border pt-3">
@@ -396,7 +401,7 @@ export function CheckoutTotals({
 					{quote?.kind === "pending" ? (
 						<span className="text-sm font-medium text-muted-foreground">
 							{" "}
-							+ delivery
+							+ {collectsFromCustomer ? "collection" : "delivery"}
 						</span>
 					) : null}
 				</span>

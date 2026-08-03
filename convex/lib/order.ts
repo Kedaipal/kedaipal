@@ -108,3 +108,31 @@ export function isMockupGateClosed(order: MockupGateFields): boolean {
 		order.mockupWaivedAt === undefined
 	);
 }
+
+/** The order fields the collection gate reads (86eyg0n8e). */
+export type CollectionGateFields = {
+	deliveryDirection?: "standard" | "collection";
+	collectedAt?: number;
+};
+
+/**
+ * The collection gate is "closed" while a COLLECTION order's items are still
+ * with the buyer: the rider brings the goods IN, so nothing downstream
+ * ("packed", "cleaning", "ready to return") can be true before they arrive.
+ * It opens when the rider's webhook stamps `collectedAt` — or when the seller
+ * declares they collected in person, which stamps the same field, so the
+ * question is asked once rather than at every stage.
+ *
+ * Standard delivery is never gated: there the rider takes goods OUT, so
+ * packing legitimately precedes the trip.
+ *
+ * **Single source of truth** — imported by every seller-side status write
+ * (`advanceToStage`, `updateStatus`, `bulkUpdateStatus`) and mirrored by the
+ * order-detail stepper. The callers decide the ANCHOR they're moving into;
+ * this only answers "are the goods here yet?".
+ */
+export function isCollectionGateClosed(order: CollectionGateFields): boolean {
+	return (
+		order.deliveryDirection === "collection" && order.collectedAt === undefined
+	);
+}

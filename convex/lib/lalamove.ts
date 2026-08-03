@@ -515,8 +515,13 @@ export function isActiveJobStatus(status: DeliveryJobStatus): boolean {
  * statuses sits behind a disabled-with-reason gate: a manual "shipped" would
  * message the buyer early and WITHOUT the live-tracking link.
  *
- * Sellers who never registered the webhook (`lastEventAt` forever unset) are
- * deliberately excluded — their documented degraded path IS advancing by hand.
+ * NOTE (3 Aug): this is no longer the GATE — it only decides the wording. The
+ * gate is now "an ACTIVE job exists" (see the order-detail stepper), because
+ * requiring a webhook event left it off between booking and the first event,
+ * which is exactly when a seller can click a live trip through to delivered.
+ * A webhook-less seller is protected by the confirm-gated escape instead, and
+ * this predicate picks the honest copy for them ("…as long as your Lalamove
+ * webhook is set up" rather than promising it moves on its own).
  */
 export function riderDrivesOrderStatus(job: {
 	status: DeliveryJobStatus;
@@ -566,4 +571,28 @@ export function parseLalamoveEventTime(
 	return envelopeTimestamp < 1e12
 		? Math.round(envelopeTimestamp * 1000)
 		: envelopeTimestamp;
+}
+
+/** How close to "now" a scheduled pickup may be before we book immediate
+ * instead — Lalamove rejects near-term scheduleAt values, and a rider being
+ * dispatched right away serves a 20-minutes-out ask better anyway. */
+export const MIN_SCHEDULE_LEAD_MS = 30 * 60 * 1000;
+/** Lalamove's own scheduling window (~30 days). */
+export const MAX_SCHEDULE_AHEAD_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * The one rule for turning a buyer's chosen moment into a Lalamove
+ * `scheduleAt` (86eyg0n8e follow-up): still comfortably ahead → schedule for
+ * exactly then; past, imminent, or absurdly far → book "now" (undefined).
+ * Shared by the checkout quote and dispatch so the fee the buyer paid and
+ * the trip the vendor books can't be priced for different moments.
+ */
+export function resolveScheduleAt(
+	moment: number | undefined,
+	now: number = Date.now(),
+): number | undefined {
+	if (moment === undefined) return undefined;
+	if (moment < now + MIN_SCHEDULE_LEAD_MS) return undefined;
+	if (moment > now + MAX_SCHEDULE_AHEAD_MS) return undefined;
+	return moment;
 }

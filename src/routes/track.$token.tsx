@@ -31,7 +31,7 @@ import {
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { isSafeTrackingUrl } from "../../convex/lib/couriers";
-import { formatFulfilmentDate } from "../../convex/lib/fulfilmentDate";
+import { formatFulfilmentDateTime } from "../../convex/lib/fulfilmentDate";
 import { isMockupGateClosed } from "../../convex/lib/order";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
@@ -44,11 +44,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { getConvexHttpClient } from "../lib/convex-server";
 import { qrFilenameBase, saveImageFromUrl } from "../lib/download";
-import {
-	convexErrorMessage,
-	formatMyMobile,
-	formatPrice,
-} from "../lib/format";
+import { convexErrorMessage, formatMyMobile, formatPrice } from "../lib/format";
 import {
 	deriveMapsUrl,
 	googleMapsNavUrl,
@@ -311,6 +307,10 @@ function TrackingRoute() {
 
 	const deliveryMethod = (order.deliveryMethod ?? "delivery") as DeliveryMethod;
 	const isSelfCollect = deliveryMethod === "self_collect";
+	// Collection service (86eyg0n8e, frozen at order create): the rider picks
+	// up FROM this buyer's address — every "Deliver…" label flips to collection
+	// wording so the page never claims something is being sent to them.
+	const isCollection = order.deliveryDirection === "collection";
 	const statusConfig = getStatusConfig(
 		deliveryMethod,
 		order.statusLabels,
@@ -693,6 +693,69 @@ function TrackingRoute() {
 				<MockupReview token={token} order={order} />
 			) : null}
 
+			{/* Live collection rider (86eyg0n8e) — while a rider is actively on
+			    the way to collect FROM this buyer. Reads the live job, so it
+			    appears when the store books and vanishes when the trip ends —
+			    deliberately a transient strip, not a status: the order's
+			    lifecycle stays the seller's. */}
+			{!isCancelled &&
+			!order.collectionRider &&
+			order.collectedAt !== undefined ? (
+				<section className="mt-6 flex items-start gap-3 rounded-2xl border border-border bg-card p-4">
+					<Truck className="mt-0.5 size-5 shrink-0 text-accent" />
+					<p className="text-sm text-foreground">
+						{/* Provenance-neutral: `collectedAt` means "the goods are with
+						    the seller", and the seller may have collected in person —
+						    naming a rider would assert a trip that never happened. The
+						    live strip below narrates the real trip when there is one. */}
+						<span className="font-medium">Collected</span> — your items are with{" "}
+						{order.storeName || "the store"}. They&apos;ll update this page as
+						your order progresses.
+					</p>
+				</section>
+			) : null}
+
+			{!isCancelled && order.collectionRider ? (
+				<section className="mt-6 flex flex-col gap-2 rounded-2xl border border-accent/40 bg-accent/5 p-4">
+					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+						Collection rider
+					</p>
+					<div className="flex items-start gap-3">
+						<Truck className="mt-0.5 size-5 shrink-0 text-accent" />
+						<div className="min-w-0 flex-1">
+							<p className="text-sm font-medium text-foreground">
+								{order.collectionRider.status === "assigning"
+									? "Finding a rider to collect your items — this usually takes a few minutes."
+									: order.collectionRider.status === "ongoing"
+										? `${order.collectionRider.driverName ?? "Your rider"} is on the way to your address to collect.`
+										: `Collected — your items are on the way to ${order.storeName || "the store"}.`}
+							</p>
+							{order.collectionRider.plateNumber &&
+							order.collectionRider.status !== "picked_up" ? (
+								<p className="mt-0.5 text-xs text-muted-foreground">
+									Look for plate{" "}
+									<span className="font-mono font-medium text-foreground">
+										{order.collectionRider.plateNumber}
+									</span>
+									.
+								</p>
+							) : null}
+						</div>
+					</div>
+					{isSafeTrackingUrl(order.collectionRider.shareLink) ? (
+						<a
+							href={order.collectionRider.shareLink}
+							target="_blank"
+							rel="noopener noreferrer"
+							className="flex items-center justify-center gap-2 rounded-xl border border-accent/40 bg-card px-4 py-2.5 text-sm font-semibold text-accent transition-colors hover:bg-accent/10"
+						>
+							Track your rider
+							<ExternalLink className="size-3" />
+						</a>
+					) : null}
+				</section>
+			) : null}
+
 			{/* Progress timeline — not shown for cancelled orders */}
 			{!isCancelled ? (
 				<div className="mt-6 flex flex-col gap-0">
@@ -868,12 +931,13 @@ function TrackingRoute() {
 				</section>
 			) : null}
 
-			{/* Delivery address — shown for delivery orders that have an address */}
+			{/* Delivery address — shown for delivery orders that have an address.
+			    Collection orders: this is where the rider collects FROM. */}
 			{!isSelfCollect && order.deliveryAddress ? (
 				<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 					<div className="flex items-center justify-between">
 						<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-							Deliver to
+							{isCollection ? "Collect from" : "Deliver to"}
 						</p>
 						{canEditAddress ? (
 							<button
@@ -920,7 +984,9 @@ function TrackingRoute() {
 					? order.pickupSnapshot?.locationType === "drop_off"
 						? "Drop-off"
 						: "Self Collect"
-					: "Delivery"}
+					: isCollection
+						? "Collection from your address"
+						: "Delivery"}
 			</div>
 
 			{/* Fulfilment date the buyer chose — reassures them the seller has it. */}
@@ -931,9 +997,16 @@ function TrackingRoute() {
 						? order.pickupSnapshot?.locationType === "drop_off"
 							? "Meet on "
 							: "Collect on "
-						: "Delivery on "}
+						: isCollection
+							? order.collectedAt !== undefined
+								? "Collected on "
+								: "We collect on "
+							: "Delivery on "}
 					<span className="font-semibold">
-						{formatFulfilmentDate(order.fulfilmentDate)}
+						{formatFulfilmentDateTime(
+							order.fulfilmentDate,
+							order.fulfilmentTimeMinutes,
+						)}
 					</span>
 				</div>
 			) : null}
@@ -946,6 +1019,8 @@ function TrackingRoute() {
 				retailerId={order.retailerId}
 				subtotal={order.subtotal}
 				fulfilmentDate={order.fulfilmentDate}
+				fulfilmentTimeMinutes={order.fulfilmentTimeMinutes}
+				collectsFromCustomer={isCollection}
 			/>
 
 			<IvePaidDialog
@@ -1023,7 +1098,7 @@ function TrackingRoute() {
 				{/* Frozen delivery charge — same reconciliation rule as the pickup fee. */}
 				{order.deliveryFee && order.deliveryFee > 0 ? (
 					<div className="flex items-center justify-between px-3 text-sm text-muted-foreground">
-						<span>Delivery fee</span>
+						<span>{isCollection ? "Collection fee" : "Delivery fee"}</span>
 						<span className="tabular-nums">
 							{formatPrice(order.deliveryFee, order.currency)}
 						</span>
@@ -1495,9 +1570,11 @@ function SendOrderCard({
 		deliveryFee: order.deliveryFee,
 		deliveryFeePending: order.deliveryFeePending,
 		deliveryMethod: order.deliveryMethod,
+		deliveryDirection: order.deliveryDirection,
 		deliveryAddress: order.deliveryAddress,
 		pickupSnapshot: order.pickupSnapshot,
 		fulfilmentDate: order.fulfilmentDate,
+		fulfilmentTimeMinutes: order.fulfilmentTimeMinutes,
 		customerNote: order.customerNote,
 		quotePending:
 			order.mockupStatus !== undefined &&

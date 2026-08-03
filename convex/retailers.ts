@@ -267,12 +267,17 @@ const deliveryBookingValidator = v.object({
 	apiSecret: v.optional(v.string()),
 	// undefined = keep the stored preference (same posture as the key fields).
 	promptBookOnPacked: v.optional(v.boolean()),
+	// undefined = keep the stored direction (86eyg0n8e — see schema comment).
+	deliveryDirection: v.optional(
+		v.union(v.literal("standard"), v.literal("collection")),
+	),
 });
 
 type DeliveryBooking = {
 	enabled: boolean;
 	vehicleType: "MOTORCYCLE" | "CAR";
 	promptBookOnPacked?: boolean;
+	deliveryDirection?: "standard" | "collection";
 	apiKey?: string;
 	apiSecret?: string;
 };
@@ -285,6 +290,9 @@ export type DeliveryBookingSummary = {
 	vehicleType: "MOTORCYCLE" | "CAR";
 	hasCredentials: boolean;
 	promptBookOnPacked: boolean;
+	/** Collection service (86eyg0n8e): riders collect FROM the buyer and drop
+	 * off AT the seller. Undefined-on-the-row reads as "standard" here. */
+	deliveryDirection: "standard" | "collection";
 	/** Last 4 chars of the seller's own key ("…a1b2") so the settings UI can
 	 * show which key is stored without exposing it. */
 	apiKeyHint?: string;
@@ -299,6 +307,7 @@ function summarizeDeliveryBooking(
 		vehicleType: booking.vehicleType,
 		hasCredentials: resolveLalamoveCredentials(booking) !== null,
 		promptBookOnPacked: booking.promptBookOnPacked === true,
+		deliveryDirection: booking.deliveryDirection ?? "standard",
 		apiKeyHint: booking.apiKey ? booking.apiKey.slice(-4) : undefined,
 	};
 }
@@ -483,6 +492,13 @@ type RetailerPublic = {
 	// lands in your WhatsApp" instead of the wa.me handoff. Public-safe (a
 	// deployment-level flag, not seller data); only the by-slug payload sets it.
 	confirmPushEnabled?: boolean;
+	// Collection-service store (86eyg0n8e): the rider collects FROM the buyer's
+	// address and brings the order TO the seller (Bearcamp gear-wash). Flips
+	// checkout copy ("Collection address — where should we collect from?") and
+	// the wa.me line. Public-safe — a one-bit service-model fact, no location
+	// data; derived from deliveryBooking.deliveryDirection, which itself never
+	// crosses to the public payload. Only the by-slug payload sets it.
+	deliveryCollectsFromCustomer?: boolean;
 	logoStorageId?: string;
 	logoUrl?: string;
 	// Wide cover/banner. Public-safe — the storefront header hero and the PRIMARY
@@ -752,6 +768,11 @@ export const getRetailerBySlug = query({
 					waPhone: active.waPhone,
 					checkoutPhone: process.env.WHATSAPP_CHECKOUT_PHONE ?? active.waPhone,
 					confirmPushEnabled: orderConfirmTemplateName() !== undefined,
+					// Service-model bit only — the booking config itself stays
+					// owner-only (see the RetailerPublic comment).
+					deliveryCollectsFromCustomer:
+						(active.deliveryBooking as DeliveryBooking | undefined)
+							?.deliveryDirection === "collection",
 					logoStorageId: active.logoStorageId,
 					logoUrl,
 					coverImageStorageId: active.coverImageStorageId,
@@ -1351,6 +1372,16 @@ export const updateSettings = mutation({
 						args.deliveryBooking.promptBookOnPacked ??
 						prev?.promptBookOnPacked ??
 						undefined,
+					// "standard" normalizes to unset so the default has one spelling
+					// (the sanitizeFee 0→unset posture); undefined keeps the stored
+					// direction — a pricing-mode switch away and back can't reset a
+					// collection store to standard.
+					deliveryDirection:
+						args.deliveryBooking.deliveryDirection === undefined
+							? prev?.deliveryDirection
+							: args.deliveryBooking.deliveryDirection === "collection"
+								? "collection"
+								: undefined,
 					apiKey:
 						args.deliveryBooking.apiKey === undefined
 							? prev?.apiKey
