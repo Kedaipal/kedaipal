@@ -21,6 +21,7 @@ const clientEnvSchema = z.object({
 	VITE_CONVEX_URL: z.string().url().optional(),
 	VITE_CLERK_PUBLISHABLE_KEY: z.string().optional(),
 	VITE_GA_MEASUREMENT_ID: z.string().optional(),
+	VITE_CLARITY_PROJECT_ID: z.string().optional(),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
@@ -40,4 +41,5 @@ export const clientEnv: ClientEnv = clientEnvSchema.parse({
 	VITE_CONVEX_URL: import.meta.env.VITE_CONVEX_URL,
 	VITE_CLERK_PUBLISHABLE_KEY: import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
 	VITE_GA_MEASUREMENT_ID: import.meta.env.VITE_GA_MEASUREMENT_ID,
+	VITE_CLARITY_PROJECT_ID: import.meta.env.VITE_CLARITY_PROJECT_ID,
 });

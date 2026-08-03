@@ -4,6 +4,7 @@ import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 import { ConvexProviderWithClerk } from "convex/react-clerk";
 import { Toaster } from "sonner";
+import { useClarity } from "../hooks/useClarity";
 import { useGoogleAnalytics } from "../hooks/useGoogleAnalytics";
 import { getConvexClient } from "../lib/convex";
 import { clientEnv } from "../lib/env";
@@ -98,6 +99,7 @@ function SetupNotice() {
 
 function RootDocument({ children }: { children: React.ReactNode }) {
 	useGoogleAnalytics();
+	useClarity();
 	return (
 		<html lang={getLocale()} suppressHydrationWarning>
 			<head>
