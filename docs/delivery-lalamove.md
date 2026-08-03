@@ -498,6 +498,20 @@ tell the story). Three side-channels are closed with it:
   skipped — offering "book a rider" at the shipped moment would dispatch
   ANOTHER buyer→store collection; the return journey is **Leg 2, out of
   scope** (Bearcamp raises a separate order for it).
+- **A completed collection is TERMINAL for the card** (`collectionDone`,
+  3 Aug — bug found by Zaki in local testing). Because the order never
+  advances, it sits at confirmed/packed forever, so `bookable` stayed true
+  and the card re-offered "Send rider to collect" after the goods had
+  already arrived — a second, paid, pointless trip. Worse, the
+  prompt-on-packed effect had the same hole: marking the collected order
+  **Packed** (the natural next step in a wash workflow) would have
+  AUTO-OPENED the booking dialog. Both are now stopped on
+  collection + `job.status === "completed"`; a **failed** collection still
+  offers Rebook (no rider ever came), and standard orders are untouched
+  (they self-close by reaching `delivered`). The settled card answers the
+  question that state raises — "how do I get it back to them?" — with the
+  honest Leg-2 answer: book the return in your own Lalamove app, since a
+  return order raised here would just be another collection.
 
 Seller card copy flips throughout ("Lalamove Collection", "Send rider to
 collect", pills Finding rider → Heading to customer → Collected → Arrived,

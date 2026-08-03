@@ -218,3 +218,99 @@ describe("BookDeliveryCard — collection service (86eyg0n8e)", () => {
 		).toBeTruthy();
 	});
 });
+
+describe("BookDeliveryCard — a completed collection is terminal (86eyg0n8e)", () => {
+	// Regression: a collection order NEVER auto-advances (the webhook only moves
+	// the job), so it sits at confirmed/packed forever. `bookable` therefore
+	// stays true after the trip finishes and the card re-offered "Send rider to
+	// collect" — a second, pointless, PAID trip back to the buyer's address.
+	// Standard orders never hit this: they're `delivered` by then.
+	const collectedOrder = {
+		shortId: "ORD-COLL",
+		deliveryMethod: "delivery",
+		status: "confirmed",
+		currency: "MYR",
+		paymentStatus: "received",
+	} as unknown as Doc<"orders">;
+
+	function completedCollection(promptBookOnPacked = false) {
+		return {
+			promptBookOnPacked,
+			bookingEnabled: true,
+			deliveryDirection: "collection",
+			blockReason: null,
+			job: {
+				status: "completed",
+				providerOrderId: "3545890794555130640",
+				costActual: 1000,
+				vehicleType: "MOTORCYCLE",
+				driver: {
+					name: "TestDriver 44111",
+					phone: "+60111111111",
+					plateNumber: "VP2381474",
+				},
+				shareLink: "https://share.sandbox.lalamove.com/?MY123",
+				createdAt: 1_700_000_000_000,
+			},
+		};
+	}
+
+	it("hides the book button + the prompt hint once the goods have arrived", () => {
+		state.dispatch = completedCollection(true);
+		render(<BookDeliveryCard order={collectedOrder} />);
+
+		// The settled record still renders…
+		expect(screen.getByText("Arrived")).toBeTruthy();
+		expect(
+			screen.getByText(/collected this order from your customer/),
+		).toBeTruthy();
+		// …but nothing offers another trip to the buyer.
+		expect(screen.queryByText("Send rider to collect")).toBeNull();
+		expect(screen.queryByText("Rebook collection")).toBeNull();
+		expect(screen.queryByText(/You'll be asked to book a rider/)).toBeNull();
+		// And the seller isn't left wondering how to return the goods.
+		expect(screen.getByText(/Sending it back after your work/)).toBeTruthy();
+	});
+
+	it("marking the collected order Packed never auto-opens a second booking", async () => {
+		const prepare = vi.fn();
+		state.action = prepare;
+		state.dispatch = completedCollection(true);
+		const { rerender } = render(<BookDeliveryCard order={collectedOrder} />);
+
+		// The seller's natural next step after the goods land: mark it Packed.
+		// With promptBookOnPacked on, this transition used to fire the booking
+		// dialog — dispatching a rider back to the customer automatically.
+		rerender(
+			<BookDeliveryCard
+				order={{ ...collectedOrder, status: "packed" } as Doc<"orders">}
+			/>,
+		);
+		await waitFor(() => {
+			expect(prepare).not.toHaveBeenCalled();
+		});
+	});
+
+	it("a FAILED collection still offers a rebook — no rider ever came", () => {
+		state.dispatch = {
+			...completedCollection(),
+			job: {
+				...completedCollection().job,
+				status: "expired",
+				failureReason: "No driver accepted the order",
+			},
+		};
+		render(<BookDeliveryCard order={collectedOrder} />);
+		expect(screen.getByText("Rebook collection")).toBeTruthy();
+	});
+
+	it("a completed STANDARD job on a still-bookable order keeps today's behaviour", () => {
+		// Guard against over-reach: the stop is collection-only.
+		state.dispatch = {
+			...completedCollection(),
+			deliveryDirection: "standard",
+		};
+		render(<BookDeliveryCard order={collectedOrder} />);
+		expect(screen.getByText("Book delivery")).toBeTruthy();
+	});
+});

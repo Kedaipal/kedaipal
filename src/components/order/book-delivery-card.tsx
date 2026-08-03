@@ -94,6 +94,17 @@ export function BookDeliveryCard({
 		if (!dispatch.promptBookOnPacked) return;
 		if (order.paymentStatus !== "received") return; // only paid orders
 		if (dispatch.blockReason !== null) return; // not bookable (keys/pin/plan/…)
+		// A finished COLLECTION trip is terminal (see collectionDone below). The
+		// order still sits at confirmed/packed because the webhook never advances
+		// it, so "Packed" — the seller's natural next step once the goods land —
+		// would otherwise auto-open the dialog and dispatch a SECOND rider to the
+		// buyer. Standard orders can't reach here (they're delivered by then).
+		if (
+			dispatch.deliveryDirection === "collection" &&
+			dispatch.job?.status === "completed"
+		) {
+			return;
+		}
 		const hasActiveJob =
 			!!dispatch.job &&
 			!["completed", "canceled", "expired", "rejected"].includes(
@@ -118,6 +129,16 @@ export function BookDeliveryCard({
 		prevTokenRef.current = bookRequestToken;
 		if (bookRequestToken === prev) return;
 		if (!dispatch || dispatch.blockReason !== null) return;
+		// Same terminal-collection stop as the packed prompt. Unreachable today
+		// (the mark-shipped prompt that raises this token is skipped entirely on
+		// collection orders) — kept as defence in depth so a future caller can't
+		// dispatch a second collection.
+		if (
+			dispatch.deliveryDirection === "collection" &&
+			dispatch.job?.status === "completed"
+		) {
+			return;
+		}
 		const hasActiveJob =
 			!!dispatch.job &&
 			!["completed", "canceled", "expired", "rejected"].includes(
@@ -145,6 +166,14 @@ export function BookDeliveryCard({
 			: null;
 	const completedJob = job && job.status === "completed" ? job : null;
 	const bookable = order.status === "confirmed" || order.status === "packed";
+	// A completed COLLECTION trip is TERMINAL for this order: the goods are
+	// already at the outlet, so "Send rider to collect" would dispatch a second
+	// pointless trip to the buyer's address (and charge for it). Standard orders
+	// close themselves — the webhook advances them to shipped/delivered, which
+	// fails `bookable` — but a collection order deliberately never advances, so
+	// the stop has to be explicit. A FAILED collection still offers Rebook (no
+	// rider ever came); only success ends it.
+	const collectionDone = collection && completedJob !== null;
 	// Auto-book never fires before the buyer's chosen date (pre-orders get
 	// packed the night before) — the hint below says so instead of surprising.
 	const isFutureDated =
@@ -340,6 +369,17 @@ export function BookDeliveryCard({
 							? "A Lalamove rider collected this order from your customer and dropped it off with you."
 							: "This order was delivered by a Lalamove rider."}
 					</p>
+					{/* The question this state raises — "so how do I get it back to
+					    them?" — answered honestly: a return order created here would
+					    be another COLLECTION (the store-wide direction), so today the
+					    return leg is booked in the vendor's own Lalamove app. See the
+					    Leg 2 follow-up in docs/delivery-lalamove.md. */}
+					{collection ? (
+						<p className="text-xs text-muted-foreground">
+							Sending it back after your work? Book that trip in your Lalamove
+							app — return trips aren&apos;t handled here yet.
+						</p>
+					) : null}
 					{completedJob.driver ? (
 						<div className="flex items-center gap-2 text-xs text-muted-foreground">
 							<Bike className="size-3.5 text-accent" />
@@ -402,7 +442,7 @@ export function BookDeliveryCard({
 			) : null}
 
 			{/* Book / rebook — or the disabled-with-reason state. */}
-			{!activeJob && bookable ? (
+			{!activeJob && bookable && !collectionDone ? (
 				blockReason === null || blockReason === "job_active" ? (
 					<Button
 						type="button"
@@ -443,7 +483,7 @@ export function BookDeliveryCard({
 
 			{/* Prompt-on-packed heads-up — tells the seller the booking dialog will
 			    pop when they mark this order packed (never a silent charge). */}
-			{promptBookOnPacked && !activeJob && bookable ? (
+			{promptBookOnPacked && !activeJob && bookable && !collectionDone ? (
 				<p className="text-xs text-muted-foreground">
 					⚡ You'll be asked to book a rider (with today's price) the moment
 					this order is <span className="font-medium">Packed</span> and{" "}
