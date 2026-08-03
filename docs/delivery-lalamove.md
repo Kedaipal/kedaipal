@@ -458,7 +458,13 @@ Three freezes, one setting:
   stages, e.g. collected → cleaning → ready), the tracking page ("Collect
   from", "Collection from your address", "We collect on", "Collection
   fee") and the seller order page ("Collect From"). The public slug payload
-  carries the one-bit `deliveryCollectsFromCustomer` for checkout.
+  carries the one-bit `deliveryCollectsFromCustomer` for checkout. **CSV is
+  the deliberate exception**: the *Fulfilment* cell reads `collection`, but
+  the header row is untouched (still "Delivery fee"). One export can hold
+  both directions — a store that switched modes, and routinely once
+  direction varies per order — so a per-row column NAME is impossible, and
+  a seller's bookkeeping template keys on names. Value-level, not
+  header-level.
 - **`deliveryJobs.deliveryDirection`** — snapshotted at `reserveBooking` so
   the webhook obeys what was BOOKED, not the live setting.
 - **Dispatch swap** — `dispatchContextForOrder` swaps stops AND contacts:

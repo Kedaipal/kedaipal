@@ -61,6 +61,27 @@ describe("orderToCsvRow", () => {
 		customerNote: "No nuts",
 	};
 
+	test("a collection order's Fulfilment cell says so; the header never moves (86eyg0n8e)", () => {
+		const collection = orderToCsvRow({
+			...base,
+			deliveryDirection: "collection",
+		});
+		expect(collection[CSV_COLUMNS.indexOf("Fulfilment")]).toBe("collection");
+		// The column set is fixed — one export can hold both directions, so a
+		// seller's bookkeeping template must keep matching on names.
+		expect(CSV_COLUMNS).toContain("Delivery fee");
+		expect(CSV_COLUMNS).not.toContain("Collection fee");
+		// Standard + pickup rows are untouched.
+		expect(orderToCsvRow(base)[CSV_COLUMNS.indexOf("Fulfilment")]).toBe(
+			"delivery",
+		);
+		expect(
+			orderToCsvRow({ ...base, deliveryMethod: "self_collect" })[
+				CSV_COLUMNS.indexOf("Fulfilment")
+			],
+		).toBe("self_collect");
+	});
+
 	test("summarizes items as 'qty x name (variant)'", () => {
 		const row = orderToCsvRow(base);
 		expect(row[CSV_COLUMNS.indexOf("Items")]).toBe(

@@ -31,6 +31,13 @@ export type CsvOrder = {
 	paymentStatus?: string;
 	paymentMethod?: string;
 	deliveryMethod?: string;
+	/** Frozen trip direction (86eyg0n8e). A collection order's rider went
+	 * buyer -> store, so the Fulfilment CELL reads "collection" instead of
+	 * "delivery". Deliberately a value, not a column: one export can hold
+	 * both directions (a store that switched modes, and routinely once
+	 * direction varies per order), so the header must stay fixed — a
+	 * seller's bookkeeping template keys on column names. */
+	deliveryDirection?: string;
 	customer: { name?: string; waPhone?: string };
 	items: Array<{ name: string; variantLabel?: string; quantity: number }>;
 	subtotal: number;
@@ -95,7 +102,7 @@ export function orderToCsvRow(o: CsvOrder): string[] {
 		// reads "Walk-in customer" instead of blank.
 		orderCustomerLabel(o.customer, ""),
 		o.customer.waPhone ?? "",
-		o.deliveryMethod ?? "",
+		o.deliveryDirection === "collection" ? "collection" : (o.deliveryMethod ?? ""),
 		o.courierName ?? "",
 		o.trackingNo ?? "",
 		o.status,

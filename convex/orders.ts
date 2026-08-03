@@ -1958,6 +1958,7 @@ function orderToCsvSource(o: Doc<"orders">): CsvOrder {
 		paymentStatus: o.paymentStatus,
 		paymentMethod: o.paymentMethod,
 		deliveryMethod: o.deliveryMethod,
+		deliveryDirection: o.deliveryDirection,
 		customer: o.customer,
 		items: o.items,
 		subtotal: o.subtotal,
