@@ -124,11 +124,17 @@ drift.
 
 The `!customLine` guard is load-bearing: when a custom line exists it already
 carries the brief, so the product falls back to the previous two-card shape
-rather than showing **two** request boxes. That's also why the seller-side
-custom-line toggle stays visible for this type with a note that it would "ask
-twice" — a product that is itself a custom order has no use for a second
-bespoke line, but hiding a control whose data still submits is the bug PR #160
-review caught.
+rather than showing **two** request boxes.
+
+**The custom-line option is not offered on this type**, in either editor — the
+product IS the custom order, so a second bespoke line would ask the buyer for
+the same brief twice. Hiding it is only safe because the DATA goes with it, on
+three levels: `switchToMadeToOrder` clears it, `setApproval` **confirms** before
+the derived flag flip discards a line the seller typed (never a silent wipe of
+their label/prompt/image), and `customLineForSubmit` drops it at submit whatever
+route the state arrived by — legacy row, handoff, import. A hidden control whose
+value still published was the PR #160 review finding; keeping a redundant
+checkbox on screen was the wrong answer to it.
 
 **Renamed in passing:** the *prepare* answer "Made to order" → **"Made fresh"**
 (wizard step 4, `PrepareQuestion`, `FulfilmentToggle`, `describeProduct`). It

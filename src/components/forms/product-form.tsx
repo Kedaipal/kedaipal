@@ -34,6 +34,7 @@ import { useAppForm } from "./form";
 import { type ProductImage, ProductImagesField } from "./product-images-field";
 import {
 	type CustomLineDraft,
+	customLineForSubmit,
 	reconcileForSubmit,
 	VariantEditor,
 	type VariantEditorState,
@@ -606,8 +607,13 @@ export function ProductForm({
 			// be addressed to inputs the seller can't see.
 			const gridReady = cartesian(reconciled.options).length > 0;
 			// `reconciled.rows` also resolves a made-to-order product's blank price
-			// to 0 ("Price on quote") — see reconcileForSubmit.
-			const built = buildSubmitVariants(reconciled.rows, editor.customLine);
+			// to 0 ("Price on quote") — see reconcileForSubmit. `customLineForSubmit`
+			// drops a custom line the made-to-order type retires, so it can never
+			// publish from behind a hidden control.
+			const built = buildSubmitVariants(
+				reconciled.rows,
+				customLineForSubmit(editor),
+			);
 			const issues = [
 				...collectOptionIssues(reconciled.options),
 				...(gridReady && "issues" in built ? built.issues : []),

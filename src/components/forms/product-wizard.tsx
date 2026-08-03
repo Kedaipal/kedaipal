@@ -38,6 +38,7 @@ import {
 	type CustomLineDraft,
 	emptyRow,
 	FulfilmentToggle,
+	customLineForSubmit,
 	isMadeToOrderOnly,
 	madeToOrderRow,
 	PriceInput,
@@ -194,6 +195,9 @@ export function wizardStepIssues(
 	step: number,
 ): WizardIssue[] {
 	const issues: WizardIssue[] = [];
+	// The custom line the SUBMIT will carry — null on a made-to-order product,
+	// so a stale custom price can't raise an issue pointing at a hidden input.
+	const customLine = customLineForSubmit(state.editor);
 	// Validate the shape that will actually be SUBMITTED (see
 	// buildWizardSubmitValues), not the raw editor state — otherwise a rebuilt
 	// row's missing price passes the steps and then collapses `variants` to an
@@ -209,7 +213,6 @@ export function wizardStepIssues(
 	// `price:${rowKey(reconciledRows[i])}` would address rows that aren't
 	// rendered, reproducing the unrenderable-issue dead end at a later step. Add
 	// the write-back (or reconcile on mount) before introducing such a path.
-	const { customLine } = state.editor;
 	// `reconcileForSubmit` also resolves a made-to-order product's blank price to
 	// 0 ("Price on quote"), so step 3 doesn't demand an amount this type has by
 	// design left open.
@@ -339,7 +342,10 @@ export function buildWizardSubmitValues(
 		state.editor.options,
 		state.editor.rows,
 	);
-	const built = buildSubmitVariants(reconciled.rows, state.editor.customLine);
+	const built = buildSubmitVariants(
+		reconciled.rows,
+		customLineForSubmit(state.editor),
+	);
 	const minQty = Number(state.minQuantity.trim());
 	const notice = Number(state.minNoticeDays.trim());
 	return {
@@ -663,6 +669,34 @@ export function ProductWizard({
 		v: boolean,
 	) {
 		patchEditor({ rows: rows.map((r) => ({ ...r, [field]: v })) });
+	}
+
+	/** Mockup approval — see `setApproval` in variant-editor.tsx. On a made-fresh
+	 * single item this derives the made-to-order type, which retires the separate
+	 * custom line; ask before discarding what the seller typed there. */
+	function setApproval(next: boolean) {
+		const derivesType =
+			next &&
+			isMadeToOrderOnly({
+				options,
+				rows: rows.map((r) => ({ ...r, requiresProof: true })),
+			});
+		if (derivesType && customLine) {
+			if (
+				!window.confirm(
+					"That makes this whole product a custom order, so the separate custom line will be removed. Continue?",
+				)
+			) {
+				return;
+			}
+			revokeIfBlob(customLine.imageUrl);
+			patchEditor({
+				rows: rows.map((r) => ({ ...r, requiresProof: true })),
+				customLine: null,
+			});
+			return;
+		}
+		bulkFlag("requiresProof", next);
 	}
 	function renameAxis(axisIndex: number, name: string) {
 		setOptions(options.map((a, i) => (i === axisIndex ? { ...a, name } : a)));
@@ -1670,7 +1704,7 @@ export function ProductWizard({
 									<span className="truncate text-xs text-muted-foreground">
 										{[
 											anyMto ? MOCKUP_APPROVAL_COPY.teaser : null,
-											CUSTOM_LINE_COPY.teaser,
+											madeToOrder ? null : CUSTOM_LINE_COPY.teaser,
 											"order rules",
 											"full editor",
 										]
@@ -1709,9 +1743,7 @@ export function ProductWizard({
 												ref={(el) => {
 													if (el) el.indeterminate = someProof && !allProof;
 												}}
-												onChange={(e) =>
-													bulkFlag("requiresProof", e.target.checked)
-												}
+												onChange={(e) => setApproval(e.target.checked)}
 												className="mt-0.5 size-4 shrink-0"
 											/>
 											<span>
@@ -1728,102 +1760,98 @@ export function ProductWizard({
 										</label>
 									) : null}
 
-									{/* Never hidden on a made-to-order product. It IS redundant
-									    there — a bespoke line on a bespoke product is the same
-									    offer twice — but hiding it while `customLine` stayed set
-									    let a draft custom line publish invisibly, with no control
-									    left to remove it (PR #160 review). Say it's redundant
-									    instead, and keep the way out on screen. */}
-									<div className="flex flex-col gap-3">
-										<label className="flex items-start gap-2.5 text-sm">
-											<input
-												type="checkbox"
-												checked={customLine !== null}
-												onChange={(e) => toggleCustom(e.target.checked)}
-												className="mt-0.5 size-4 shrink-0"
-											/>
-											<span>
-												<span className="font-medium">
-													{CUSTOM_LINE_COPY.title}
+									{/* Not offered on a made-to-order product: that product IS
+									    the custom order and already asks the buyer for their brief,
+									    so a custom line would ask twice. Safe to HIDE only because
+									    `customLineForSubmit` drops the data too, and `setApproval`
+									    confirms before the flag flip discards a line the seller
+									    typed — a hidden control whose value still published was the
+									    PR #160 review finding. */}
+									{madeToOrder ? null : (
+										<div className="flex flex-col gap-3">
+											<label className="flex items-start gap-2.5 text-sm">
+												<input
+													type="checkbox"
+													checked={customLine !== null}
+													onChange={(e) => toggleCustom(e.target.checked)}
+													className="mt-0.5 size-4 shrink-0"
+												/>
+												<span>
+													<span className="font-medium">
+														{CUSTOM_LINE_COPY.title}
+													</span>
+													<span className="block text-xs text-muted-foreground">
+														{CUSTOM_LINE_COPY.body}
+													</span>
 												</span>
-												<span className="block text-xs text-muted-foreground">
-													{CUSTOM_LINE_COPY.body}
-												</span>
-											</span>
-										</label>
-										{madeToOrder ? (
-											<p className="rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
-												This product already asks the buyer what they want, so a
-												custom line would ask twice.
-												{customLine ? " Untick it unless you meant to." : null}
-											</p>
-										) : null}
-										{customLine ? (
-											<div className="flex flex-col gap-3 rounded-lg bg-muted/40 p-3">
-												<div className="flex items-start gap-3">
-													<VariantImageCell
-														imageUrl={customLine.imageUrl}
-														size="size-14"
-														onUploaded={(id, url) => {
-															revokeIfBlob(customLine.imageUrl);
-															blobUrls.current.add(url);
-															patchCustom({
-																imageStorageIds: [id],
-																imageUrl: url,
-															});
-														}}
-														onRemove={() => {
-															revokeIfBlob(customLine.imageUrl);
-															patchCustom({
-																imageStorageIds: [],
-																imageUrl: undefined,
-															});
-														}}
-														label="custom option photo"
-													/>
-													<label className="flex flex-1 flex-col gap-1 text-sm font-medium">
-														Option name
-														<Input
-															value={customLine.label}
+											</label>
+											{customLine ? (
+												<div className="flex flex-col gap-3 rounded-lg bg-muted/40 p-3">
+													<div className="flex items-start gap-3">
+														<VariantImageCell
+															imageUrl={customLine.imageUrl}
+															size="size-14"
+															onUploaded={(id, url) => {
+																revokeIfBlob(customLine.imageUrl);
+																blobUrls.current.add(url);
+																patchCustom({
+																	imageStorageIds: [id],
+																	imageUrl: url,
+																});
+															}}
+															onRemove={() => {
+																revokeIfBlob(customLine.imageUrl);
+																patchCustom({
+																	imageStorageIds: [],
+																	imageUrl: undefined,
+																});
+															}}
+															label="custom option photo"
+														/>
+														<label className="flex flex-1 flex-col gap-1 text-sm font-medium">
+															Option name
+															<Input
+																value={customLine.label}
+																onChange={(e) =>
+																	patchCustom({ label: e.target.value })
+																}
+																placeholder="Custom"
+																maxLength={40}
+															/>
+														</label>
+													</div>
+													<label className="flex flex-col gap-1 text-sm font-medium">
+														Starting price ({currency}){" "}
+														<span className="font-normal text-muted-foreground">
+															(optional — blank shows “Price on quote”)
+														</span>
+														<PriceInput
+															value={customLine.price}
+															onChange={(v) => patchCustom({ price: v })}
+															invalid={!!issueFor("customPrice")}
+														/>
+														<IssueText message={issueFor("customPrice")} />
+													</label>
+													<label className="flex flex-col gap-1 text-sm font-medium">
+														What should the buyer tell you?{" "}
+														<span className="font-normal text-muted-foreground">
+															(optional)
+														</span>
+														<textarea
+															value={customLine.prompt}
 															onChange={(e) =>
-																patchCustom({ label: e.target.value })
+																patchCustom({ prompt: e.target.value })
 															}
-															placeholder="Custom"
-															maxLength={40}
+															rows={2}
+															maxLength={280}
+															placeholder="e.g. Tell us your design, flavour, size & date needed"
+															className="rounded-xl border border-input bg-background px-3 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 														/>
 													</label>
 												</div>
-												<label className="flex flex-col gap-1 text-sm font-medium">
-													Starting price ({currency}){" "}
-													<span className="font-normal text-muted-foreground">
-														(optional — blank shows “Price on quote”)
-													</span>
-													<PriceInput
-														value={customLine.price}
-														onChange={(v) => patchCustom({ price: v })}
-														invalid={!!issueFor("customPrice")}
-													/>
-													<IssueText message={issueFor("customPrice")} />
-												</label>
-												<label className="flex flex-col gap-1 text-sm font-medium">
-													What should the buyer tell you?{" "}
-													<span className="font-normal text-muted-foreground">
-														(optional)
-													</span>
-													<textarea
-														value={customLine.prompt}
-														onChange={(e) =>
-															patchCustom({ prompt: e.target.value })
-														}
-														rows={2}
-														maxLength={280}
-														placeholder="e.g. Tell us your design, flavour, size & date needed"
-														className="rounded-xl border border-input bg-background px-3 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-													/>
-												</label>
-											</div>
-										) : null}
-									</div>
+											) : null}
+										</div>
+									)}
 
 									{/* Order rules — the same two constraints the full form
 									    groups in its "Order rules" card. Blank = no rule. */}

@@ -172,14 +172,12 @@ describe("wizard — a derived type flip stays coherent and escapable", () => {
 			name: /mockup approval/i,
 		}) as HTMLInputElement;
 		expect(after.checked).toBe(true);
-		// …and so is the custom-orders control, which used to vanish while its
-		// draft stayed in state and published invisibly.
+		// The custom-orders option is gone — the product IS the custom order and
+		// already asks the buyer for their brief, so a custom line asks twice.
+		// Safe to hide because `customLineForSubmit` drops the data with it.
 		expect(
-			screen.getByRole("checkbox", { name: /custom orders/i }),
-		).toBeTruthy();
-		// The redundancy is stated rather than hidden — the made-to-order product
-		// now collects the buyer's brief itself, so a custom line asks twice.
-		expect(screen.getByText(/would ask twice/i)).toBeTruthy();
+			screen.queryByRole("checkbox", { name: /custom orders/i }),
+		).toBeNull();
 
 		// Unticking is the way back out.
 		fireEvent.click(after);
