@@ -196,6 +196,20 @@ describe("VariantEditor — made-to-order product type (86eyfq04j)", () => {
 		).toBe("true");
 	});
 
+	it("says why a custom line is redundant here, matching the wizard", () => {
+		// Parity: the wizard showed this note, the full editor didn't — so the
+		// same seller got two different explanations of the same option.
+		render(<Harness initial={singleVariant} />);
+		fireEvent.click(screen.getByRole("button", { name: /^made to order$/i }));
+		fireEvent.click(screen.getByRole("button", { name: /advanced/i }));
+		expect(screen.getByText(/would ask twice/i)).toBeTruthy();
+		// A plain item has no such note — the option is a real choice there.
+		cleanup();
+		render(<Harness initial={singleVariant} />);
+		fireEvent.click(screen.getByRole("button", { name: /advanced/i }));
+		expect(screen.queryByText(/would ask twice/i)).toBeNull();
+	});
+
 	it("switching back to a plain item restores stock tracking and drops approval", () => {
 		render(<Harness initial={singleVariant} />);
 		fireEvent.click(screen.getByRole("button", { name: /^made to order$/i }));

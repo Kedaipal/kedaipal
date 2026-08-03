@@ -1319,8 +1319,11 @@ export function VariantEditor({
 
 						{/* Custom / made-to-order line — sits OUTSIDE the grid, so a
 						    bespoke option shows up exactly once instead of multiplying
-						    across every size/flavour. See docs/custom-option.md. */}
-						<div className="flex flex-col gap-3 rounded-xl border border-border p-3">
+						    across every size/flavour. See docs/custom-option.md.
+						    No border of its own: it sits inside the Advanced card, and
+						    the editor below it is already a tinted block — three nested
+						    outlines for one checkbox (86eyfq04j's card-in-card sweep). */}
+						<div className="flex flex-col gap-3">
 							<label className="flex items-start gap-2.5 text-sm">
 								<input
 									type="checkbox"
@@ -1335,6 +1338,19 @@ export function VariantEditor({
 									</span>
 								</span>
 							</label>
+
+							{/* Same note the wizard shows — a made-to-order product already
+							    asks the buyer for their brief on its own buy box
+							    (`MadeToOrderRequest`), so a custom line asks twice. Stated,
+							    not hidden: hiding a control whose data still submits is the
+							    bug PR #160 review caught. */}
+							{madeToOrder ? (
+								<p className="rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
+									This product already asks the buyer what they want, so a
+									custom line would ask twice.
+									{customLine ? " Untick it unless you meant to." : null}
+								</p>
+							) : null}
 
 							{customLine ? (
 								<div className="flex flex-col gap-3 rounded-lg bg-muted/40 p-3">
