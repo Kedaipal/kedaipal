@@ -21,6 +21,18 @@ import { formatPrice } from "../../lib/format";
  * Convex or router providers.
  */
 
+/**
+ * The leading icon box every expanded receipt row starts with. Shared so the
+ * custom line's Remove and the stepper's minus/trash land on the SAME x.
+ *
+ * `tap-target` is what actually sets the width here — it forces a 44px minimum
+ * (the mobile rule), which overrides `size-8`'s 32px. That's why the two icons
+ * sat 6px apart: the stepper centred its glyph in the 44px button while the
+ * Remove button's own icon well was a plain 32px span. Both go through this.
+ */
+const ROW_ICON_WELL =
+	"tap-target flex size-8 shrink-0 items-center justify-center";
+
 /** Min-quantity shortfall per product (from convex/lib/minOrderRules). */
 export interface QtyShortfall {
 	productId: string;
@@ -187,10 +199,12 @@ export function CheckoutSummary({
 											<button
 												type="button"
 												onClick={() => cart.removeItem(item.variantId)}
-												className="tap-target flex w-fit items-center gap-1.5 rounded-lg px-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-destructive"
+												className="flex w-fit items-center gap-1 rounded-lg pr-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-destructive"
 												aria-label={`Remove ${item.name}`}
 											>
-												<Trash2 className="size-4" aria-hidden />
+												<span className={ROW_ICON_WELL}>
+													<Trash2 className="size-4" aria-hidden />
+												</span>
 												Remove
 											</button>
 										) : (
@@ -264,8 +278,7 @@ function QtyStepper({
 	// already-bordered receipt line read as heavy chrome around a one-digit
 	// number; the icon alone is the control. The 44px tap target is unchanged —
 	// `tap-target` sizes the hit area, the border was only ever decoration.
-	const stepBtn =
-		"tap-target flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors";
+	const stepBtn = `${ROW_ICON_WELL} rounded-lg text-muted-foreground transition-colors`;
 	return (
 		<div className="flex items-center gap-1">
 			<button
