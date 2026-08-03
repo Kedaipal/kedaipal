@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { cn } from "../../lib/utils";
 import { Field, FieldDescription, FieldError, FieldLabel } from "../ui/field";
 import { Input } from "../ui/input";
@@ -13,6 +14,18 @@ interface TextFieldProps {
 	mono?: boolean;
 	autoComplete?: string;
 	disabled?: boolean;
+	/**
+	 * Fixed content welded to the front of the value — a country flag + dial
+	 * code, an "RM" on money. Renders inside the control's border on a tinted
+	 * plate with a **vertical rule** separating it from the input, the shape
+	 * every phone field in this market uses (Grab, Shopee, Stripe): the fixed
+	 * part is visibly not editable, so nobody wonders whether to retype it.
+	 *
+	 * It is a PROMISE about what the field already contains: whatever the
+	 * caller's schema normalizes to must accept a value typed without it, or
+	 * the prefix tells the user to do something the validator then rejects.
+	 */
+	prefix?: ReactNode;
 }
 
 export function TextField({
@@ -25,9 +38,28 @@ export function TextField({
 	mono = false,
 	autoComplete,
 	disabled = false,
+	prefix,
 }: TextFieldProps) {
 	const field = useFieldContext<string>();
 	const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid;
+
+	const input = (
+		<Input
+			id={field.name}
+			name={field.name}
+			type={type}
+			inputMode={inputMode}
+			autoComplete={autoComplete}
+			disabled={disabled}
+			placeholder={placeholder}
+			value={field.state.value ?? ""}
+			onChange={(e) => field.handleChange(e.target.value)}
+			onBlur={() => field.handleBlur()}
+			variant={prefix ? "bare" : "field"}
+			isError={isInvalid}
+			className={cn(mono && "font-mono", prefix && "min-h-11 px-3 text-base")}
+		/>
+	);
 
 	return (
 		<Field data-invalid={isInvalid}>
@@ -35,21 +67,30 @@ export function TextField({
 				{label}
 				{required ? <span className="ml-0.5 text-destructive">*</span> : null}
 			</FieldLabel>
-			<Input
-				id={field.name}
-				name={field.name}
-				type={type}
-				inputMode={inputMode}
-				autoComplete={autoComplete}
-				disabled={disabled}
-				placeholder={placeholder}
-				value={field.state.value ?? ""}
-				onChange={(e) => field.handleChange(e.target.value)}
-				onBlur={() => field.handleBlur()}
-				variant="field"
-				isError={isInvalid}
-				className={cn(mono && "font-mono")}
-			/>
+			{prefix ? (
+				// Mirrors the `field` input variant's chrome on the WRAPPER so the
+				// prefix and the input read as one control. Focus + invalid styling
+				// has to be lifted here too — a `bare` input paints neither.
+				// `overflow-hidden` lets the prefix plate fill the rounded corner.
+				<div
+					className={cn(
+						"flex min-h-11 items-center overflow-hidden rounded-xl border border-input bg-transparent transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50 dark:bg-input/30",
+						disabled && "cursor-not-allowed bg-input/50 opacity-50",
+						isInvalid &&
+							"border-destructive ring-3 ring-destructive/20 dark:border-destructive/50 dark:ring-destructive/40",
+					)}
+				>
+					{/* The plate + right rule is what makes the fixed part obviously
+					    fixed. `select-none` so a drag-select of the number doesn't
+					    sweep the dial code into the copy. */}
+					<span className="flex select-none items-center gap-1.5 self-stretch border-r border-input bg-muted/60 px-3 text-muted-foreground">
+						{prefix}
+					</span>
+					{input}
+				</div>
+			) : (
+				input
+			)}
 			{description ? <FieldDescription>{description}</FieldDescription> : null}
 			{isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
 		</Field>

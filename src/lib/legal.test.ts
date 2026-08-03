@@ -1,7 +1,9 @@
 import { describe, expect, test } from "vitest";
+import * as serverLegal from "../../convex/lib/legal";
 import {
 	AUP_VERSION,
 	consentIsStale,
+	LEGAL_CONTACT_EMAIL,
 	PRIVACY_VERSION,
 	TERMS_VERSION,
 } from "./legal";
@@ -11,6 +13,22 @@ const allCurrent = {
 	privacyVersion: PRIVACY_VERSION,
 	aupVersion: AUP_VERSION,
 };
+
+// The two files are hand-mirrored (Convex bundles from `convex/`, the frontend
+// from `src/`). Bumping only one silently desyncs the "Last updated" date shown
+// on the legal page from the version stamped onto retailers — and from the one
+// `consentIsStale` compares against, so the re-acceptance banner never fires.
+describe("legal constants mirror convex/lib/legal.ts", () => {
+	test("all three document versions match", () => {
+		expect(TERMS_VERSION).toBe(serverLegal.TERMS_VERSION);
+		expect(PRIVACY_VERSION).toBe(serverLegal.PRIVACY_VERSION);
+		expect(AUP_VERSION).toBe(serverLegal.AUP_VERSION);
+	});
+
+	test("the contact address matches", () => {
+		expect(LEGAL_CONTACT_EMAIL).toBe(serverLegal.LEGAL_CONTACT_EMAIL);
+	});
+});
 
 describe("consentIsStale", () => {
 	test("false when all three accepted versions are current", () => {
