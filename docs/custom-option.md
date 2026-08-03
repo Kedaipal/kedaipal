@@ -86,14 +86,25 @@ out of the grid rows.
 
 ## 5. Buyer UX (`product-detail-sheet.tsx` + `product-card.tsx` + `product-grid.tsx`)
 
-- The detail sheet shows a separated, **self-contained "Custom order" card** below
-  the standard variant picker (and standalone for no-axes products): a zoomable
-  image, label, price ("from RM x" / "Price on quote"), a **"Your request"
-  textarea** (the seller's `customPrompt` is its placeholder — so the buyer can
-  type their size/colour/design spec, capped at 280 chars), and **its own "Request
-  custom order" button**. It is **independent** of the axis pills — *not* mutually
-  exclusive — so a buyer can add a standard variant **and** request the custom line
-  in one visit. The bottom sticky "Add to cart" drives only the standard variant.
+- The product page (and the seller's draft-preview sheet) shows a separated,
+  **self-contained "Custom order" card** below the standard variant picker: a
+  zoomable image, label, price ("from RM x" / "Price on quote"), a **"Your
+  request" textarea** (the seller's `customPrompt` is its placeholder — so the
+  buyer can type their size/colour/design spec, capped at 280 chars), and **its
+  own "Request custom order" button**. It is **independent** of the axis pills —
+  *not* mutually exclusive — so a buyer can add a standard variant **and**
+  request the custom line in one visit. The purchase bar's "Add to cart" drives
+  only the standard variant.
+- **Where that CTA lives depends on whether the line IS the product.** One
+  component decides, for both views: `PurchaseActions` renders the stepper +
+  "Add to cart" when the product sells a standard line, and **"Request custom
+  order"** when it doesn't (a made-to-order product — see
+  [`product-setup-wizard.md`](./product-setup-wizard.md#the-made-to-order-product-type-2026-08-02-clickup-86eyfq04j)).
+  So the bar always holds exactly one CTA, wherever the buyer's thumb already
+  is, and `CustomOrderCard` renders its own button **only** in the
+  catalog-plus-bespoke case — never both. On a made-to-order product the card
+  also drops its identity row (thumbnail / label / price): the page heading
+  already carries all three, and it states the mockup gate instead.
 - The buyer's request rides the cart line (`CartItem.note`) and is folded —
   labelled by item — into the order's **`customerNote`** at checkout via
   `composeCustomerNote` (`src/lib/order-note.ts`), so it reaches the seller through

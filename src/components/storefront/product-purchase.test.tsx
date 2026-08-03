@@ -4,12 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { StorefrontProduct } from "./product-card";
 import {
-	AddToCartButton,
 	CustomOrderCard,
 	GoToCheckoutBar,
 	type OnAddVariant,
 	OptionPills,
-	PurchaseStepper,
+	PurchaseActions,
 	useProductPurchase,
 } from "./product-purchase";
 
@@ -143,7 +142,7 @@ function BuyBox({ product }: { product: StorefrontProduct }) {
 	return (
 		<>
 			<OptionPills pp={pp} />
-			<PurchaseStepper pp={pp} />
+			<PurchaseActions pp={pp} onAdd={vi.fn()} />
 			<CustomOrderCard pp={pp} onAdd={vi.fn()} />
 		</>
 	);
@@ -259,8 +258,8 @@ describe("made-to-order product — one bespoke line, existing flow", () => {
 		return (
 			<>
 				<CustomOrderCard pp={pp} onAdd={onAdd} />
-				<PurchaseStepper pp={pp} />
-				<AddToCartButton pp={pp} onAdd={vi.fn()} />
+				{/* The purchase bar's contents, exactly as both views render them. */}
+				<PurchaseActions pp={pp} onAdd={onAdd} />
 			</>
 		);
 	}
@@ -279,10 +278,42 @@ describe("made-to-order product — one bespoke line, existing flow", () => {
 		// Would otherwise render permanently disabled as "Unavailable".
 		expect(screen.queryByRole("button", { name: /add to cart/i })).toBeNull();
 		expect(screen.queryByRole("button", { name: /increase/i })).toBeNull();
-		// The custom card's own CTA is the way to order.
+	});
+
+	/**
+	 * The purchase bar is FIXED at the bottom on mobile. If `PurchaseActions`
+	 * rendered nothing for this type, the buyer got a strip of empty chrome
+	 * while the only CTA sat up the page, out of thumb reach — so the bar owns
+	 * the CTA for every product type, and the card above never duplicates it.
+	 */
+	it("puts its CTA in the purchase bar, exactly once", () => {
+		// MtoBox renders the card AND the bar; the card contributes no button for
+		// this type, so a single match proves the bar is where the CTA lives.
+		render(<MtoBox product={bespokeService()} onAdd={vi.fn()} />);
 		expect(
-			screen.getByRole("button", { name: /request custom order/i }),
+			screen.getAllByRole("button", { name: /request custom order/i }),
+		).toHaveLength(1);
+	});
+
+	/** A bespoke line beside a real catalog keeps its own in-card button, and
+	 * the bar stays the standard buy box — one CTA each, no crossover. */
+	it("keeps the in-card button when the line is only an extra", () => {
+		render(<MtoBox product={cake(2)} onAdd={vi.fn()} />);
+		expect(
+			screen.getAllByRole("button", { name: /request custom order/i }),
+		).toHaveLength(1);
+		expect(
+			screen.getByRole("button", { name: /select options/i }),
 		).toBeTruthy();
+	});
+
+	/** The page's h1 already carries the name, gallery and price — the card
+	 * must not restate them as a second "Custom · Price on quote" item. */
+	it("does not restate the product's own identity", () => {
+		render(<MtoBox product={bespokeService()} onAdd={vi.fn()} />);
+		expect(screen.queryByText("Price on quote")).toBeNull();
+		// What the buyer doesn't know yet — the mockup gate — is stated instead.
+		expect(screen.getByText(/approve a mockup/i)).toBeTruthy();
 	});
 
 	it("carries the brief and the reference photo on that add", () => {

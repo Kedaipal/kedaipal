@@ -1092,6 +1092,13 @@ export function VariantEditor({
 							storefront.
 						</span>
 					</label>
+					{/* Stated, not offered as a toggle: mockup approval is what this
+					    type IS (the server forces it on the line), so a checkbox here
+					    would be a control that can't be turned off. */}
+					<p className="rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
+						🧑‍🍳 Made to order · ✅ the buyer approves your mockup before you
+						start — always on for this type.
+					</p>
 				</div>
 			) : !hasOptions ? (
 				<div className="grid grid-cols-2 gap-3">
@@ -1301,60 +1308,53 @@ export function VariantEditor({
 			) : null}
 
 			{/* Advanced — everything the everyday seller never needs, present and
-			    labelled (discoverability rule) but zero pixels until opened. */}
-			<div className="rounded-xl border border-dashed border-border">
-				<button
-					type="button"
-					onClick={() => setAdvOpen((v) => !v)}
-					aria-expanded={advOpen}
-					className="flex w-full items-center justify-between gap-3 p-3 text-left"
-				>
-					<span className="flex min-w-0 flex-col">
-						<span className="text-sm font-semibold">Advanced</span>
-						<span className="truncate text-xs text-muted-foreground">
-							{advancedTeaser}
+			    labelled (discoverability rule) but zero pixels until opened.
+			    NOT rendered for made-to-order: that type has no matrix, so every
+			    control in here is dead for it — approval is constitutive (and
+			    `bulkFillFlag` over `rows: []` is a no-op that can't even toggle),
+			    SKU binds to `rows[0]`, the custom line IS the product, and the
+			    second axis is already gated on `hasOptions`. The approval fact is
+			    stated in the type's own setup above instead. */}
+			{madeToOrder ? null : (
+				<div className="rounded-xl border border-dashed border-border">
+					<button
+						type="button"
+						onClick={() => setAdvOpen((v) => !v)}
+						aria-expanded={advOpen}
+						className="flex w-full items-center justify-between gap-3 p-3 text-left"
+					>
+						<span className="flex min-w-0 flex-col">
+							<span className="text-sm font-semibold">Advanced</span>
+							<span className="truncate text-xs text-muted-foreground">
+								{advancedTeaser}
+							</span>
 						</span>
-					</span>
+						{advOpen ? (
+							<ChevronUp className="size-4 shrink-0 text-muted-foreground" />
+						) : (
+							<ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+						)}
+					</button>
+
 					{advOpen ? (
-						<ChevronUp className="size-4 shrink-0 text-muted-foreground" />
-					) : (
-						<ChevronDown className="size-4 shrink-0 text-muted-foreground" />
-					)}
-				</button>
+						<div className="flex flex-col gap-4 border-t border-border p-3">
+							<MockupApprovalToggle
+								checked={allProof}
+								indeterminate={someProof && !allProof}
+								onChange={(v) => bulkFillFlag("requiresProof", v)}
+							/>
 
-				{advOpen ? (
-					<div className="flex flex-col gap-4 border-t border-border p-3">
-						{/* Both of these are constitutive of a made-to-order product, so
-						    it renders neither: an approval checkbox that quietly turns the
-						    product into a free item is a trap, and a bespoke line on a
-						    bespoke product is the same offer twice. Not rendered at all —
-						    a `hidden` class would leave them for screen readers. */}
-						{/* Both stay mounted on a made-to-order product. The type is
-						    DERIVED from these very flags, so hiding them meant ticking
-						    approval on a made-fresh single item unmounted the checkbox
-						    that did it, and a set custom line kept publishing with no
-						    control left to clear it (PR #160 review). Unticking approval
-						    is the way back to “Just one item”. */}
-						<MockupApprovalToggle
-							checked={allProof}
-							indeterminate={someProof && !allProof}
-							onChange={(v) => bulkFillFlag("requiresProof", v)}
-						/>
-
-						{/* Custom / made-to-order line — sits OUTSIDE the grid, so a
+							{/* Custom / made-to-order line — sits OUTSIDE the grid, so a
 						    bespoke option shows up exactly once instead of multiplying
 						    across every size/flavour. See docs/custom-option.md.
 						    No border of its own: it sits inside the Advanced card, and
 						    the editor below it is already a tinted block — three nested
 						    outlines for one checkbox (86eyfq04j's card-in-card sweep).
 
-						    NOT offered on a made-to-order product, because that product
-						    already IS this line — adding one to itself is the same offer
-						    twice. Nothing can be stranded behind the hidden control: the
-						    type is only reachable through `switchToMadeToOrder`, which
-						    moves the seller's line onto the product rather than leaving a
-						    second one in state. */}
-						{madeToOrder ? null : (
+						    A made-to-order product never reaches here — the whole
+						    Advanced card is hidden for it, because that product already
+						    IS this line and offering to add one would be the same offer
+						    twice. */}
 							<div className="flex flex-col gap-3">
 								<label className="flex items-start gap-2.5 text-sm">
 									<input
@@ -1474,127 +1474,129 @@ export function VariantEditor({
 									</div>
 								) : null}
 							</div>
-						)}
 
-						{/* Second axis (choices mode only) — Size × Flavour grids. */}
-						{hasOptions ? (
-							options.length > 1 ? (
-								<div className="flex flex-col gap-2">
-									<span className="text-sm font-medium">Second choice</span>
-									{renderAxisEditor(1, true)}
-								</div>
-							) : (
-								<div className="flex flex-col gap-2">
-									<Button
-										type="button"
-										variant="outline"
-										size="sm"
-										onClick={addAxis}
-										className="self-start"
-									>
-										<Plus className="size-4" />
-										Add a second choice (e.g. Size × Flavour)
-									</Button>
-									<div className="flex flex-wrap items-center gap-1.5">
-										<span className="text-xs text-muted-foreground">
-											Quick add:
-										</span>
-										{AXIS_PRESETS.map((preset) => {
-											const used = options.some(
-												(a) =>
-													a.name.toLowerCase() === preset.name.toLowerCase(),
-											);
-											return (
-												<button
-													key={preset.name}
-													type="button"
-													disabled={used}
-													onClick={() => addPresetAxis(preset)}
-													className="rounded-full border border-border px-2.5 py-1 text-xs font-medium hover:border-accent disabled:opacity-40"
-												>
-													+ {preset.name}
-												</button>
-											);
-										})}
+							{/* Second axis (choices mode only) — Size × Flavour grids. */}
+							{hasOptions ? (
+								options.length > 1 ? (
+									<div className="flex flex-col gap-2">
+										<span className="text-sm font-medium">Second choice</span>
+										{renderAxisEditor(1, true)}
 									</div>
-								</div>
-							)
-						) : null}
-
-						{/* Per-choice details: SKU, photo, on/off sale, per-choice
-						    approval. Single-item mode gets just the SKU. */}
-						{hasOptions && gridReady ? (
-							<div className="flex flex-col gap-2">
-								<span className="text-sm font-medium">Per-choice details</span>
-								<ul className="flex flex-col gap-2">
-									{rows.map((row, i) => (
-										<li
-											key={variantLabel(row.optionValues)}
-											className={cn(
-												"flex flex-col gap-2 rounded-lg bg-muted/40 p-2.5",
-												!row.active && "opacity-60",
-											)}
+								) : (
+									<div className="flex flex-col gap-2">
+										<Button
+											type="button"
+											variant="outline"
+											size="sm"
+											onClick={addAxis}
+											className="self-start"
 										>
-											<div className="flex items-center gap-2.5">
-												{renderRowImage(i, row)}
-												<span className="min-w-0 flex-1 truncate text-sm font-medium">
-													{variantLabel(row.optionValues)}
-												</span>
-												<Input
-													placeholder="SKU"
-													value={row.sku}
-													onChange={(e) => setRow(i, { sku: e.target.value })}
-													className="h-9 w-28"
-													aria-label={`SKU for ${variantLabel(row.optionValues)}`}
-												/>
-											</div>
-											<div className="flex flex-wrap items-center gap-4 text-xs">
-												<label className="flex items-center gap-1.5">
-													<input
-														type="checkbox"
-														checked={row.active}
-														onChange={(e) =>
-															setRow(i, { active: e.target.checked })
-														}
-														className="size-4"
-														aria-label={`${row.active ? "Deactivate" : "Activate"} ${variantLabel(row.optionValues)}`}
+											<Plus className="size-4" />
+											Add a second choice (e.g. Size × Flavour)
+										</Button>
+										<div className="flex flex-wrap items-center gap-1.5">
+											<span className="text-xs text-muted-foreground">
+												Quick add:
+											</span>
+											{AXIS_PRESETS.map((preset) => {
+												const used = options.some(
+													(a) =>
+														a.name.toLowerCase() === preset.name.toLowerCase(),
+												);
+												return (
+													<button
+														key={preset.name}
+														type="button"
+														disabled={used}
+														onClick={() => addPresetAxis(preset)}
+														className="rounded-full border border-border px-2.5 py-1 text-xs font-medium hover:border-accent disabled:opacity-40"
+													>
+														+ {preset.name}
+													</button>
+												);
+											})}
+										</div>
+									</div>
+								)
+							) : null}
+
+							{/* Per-choice details: SKU, photo, on/off sale, per-choice
+						    approval. Single-item mode gets just the SKU. */}
+							{hasOptions && gridReady ? (
+								<div className="flex flex-col gap-2">
+									<span className="text-sm font-medium">
+										Per-choice details
+									</span>
+									<ul className="flex flex-col gap-2">
+										{rows.map((row, i) => (
+											<li
+												key={variantLabel(row.optionValues)}
+												className={cn(
+													"flex flex-col gap-2 rounded-lg bg-muted/40 p-2.5",
+													!row.active && "opacity-60",
+												)}
+											>
+												<div className="flex items-center gap-2.5">
+													{renderRowImage(i, row)}
+													<span className="min-w-0 flex-1 truncate text-sm font-medium">
+														{variantLabel(row.optionValues)}
+													</span>
+													<Input
+														placeholder="SKU"
+														value={row.sku}
+														onChange={(e) => setRow(i, { sku: e.target.value })}
+														className="h-9 w-28"
+														aria-label={`SKU for ${variantLabel(row.optionValues)}`}
 													/>
-													On sale
-												</label>
-												<label className="flex items-center gap-1.5">
-													<input
-														type="checkbox"
-														checked={row.requiresProof}
-														onChange={(e) =>
-															setRow(i, { requiresProof: e.target.checked })
-														}
-														className="size-4"
-														aria-label={`Require mockup approval for ${variantLabel(row.optionValues)}`}
-													/>
-													Mockup approval
-												</label>
-											</div>
-										</li>
-									))}
-								</ul>
-							</div>
-						) : null}
-						{!hasOptions ? (
-							<label className="flex flex-col gap-1 text-sm font-medium">
-								SKU{" "}
-								<span className="font-normal text-muted-foreground">
-									(optional — your own item code)
-								</span>
-								<Input
-									placeholder="ITEM-001"
-									value={rows[0]?.sku ?? ""}
-									onChange={(e) => setRow(0, { sku: e.target.value })}
-								/>
-							</label>
-						) : null}
-					</div>
-				) : null}
-			</div>
+												</div>
+												<div className="flex flex-wrap items-center gap-4 text-xs">
+													<label className="flex items-center gap-1.5">
+														<input
+															type="checkbox"
+															checked={row.active}
+															onChange={(e) =>
+																setRow(i, { active: e.target.checked })
+															}
+															className="size-4"
+															aria-label={`${row.active ? "Deactivate" : "Activate"} ${variantLabel(row.optionValues)}`}
+														/>
+														On sale
+													</label>
+													<label className="flex items-center gap-1.5">
+														<input
+															type="checkbox"
+															checked={row.requiresProof}
+															onChange={(e) =>
+																setRow(i, { requiresProof: e.target.checked })
+															}
+															className="size-4"
+															aria-label={`Require mockup approval for ${variantLabel(row.optionValues)}`}
+														/>
+														Mockup approval
+													</label>
+												</div>
+											</li>
+										))}
+									</ul>
+								</div>
+							) : null}
+							{!hasOptions ? (
+								<label className="flex flex-col gap-1 text-sm font-medium">
+									SKU{" "}
+									<span className="font-normal text-muted-foreground">
+										(optional — your own item code)
+									</span>
+									<Input
+										placeholder="ITEM-001"
+										value={rows[0]?.sku ?? ""}
+										onChange={(e) => setRow(0, { sku: e.target.value })}
+									/>
+								</label>
+							) : null}
+						</div>
+					) : null}
+				</div>
+			)}
 		</div>
 	);
 }

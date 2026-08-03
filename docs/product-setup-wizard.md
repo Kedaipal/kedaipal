@@ -109,11 +109,32 @@ which is why the parallel path is gone.
   the product rather than leaving a second one in state. Leaving the type
   (`switchToSingle` / `switchToChoices`) restores a real matrix row and retires
   the line, carrying its price across.
-- **The buy box hides itself.** `resolveVariant` deliberately excludes
-  `isCustom`, so a made-to-order product resolves no standard variant; without
-  a guard the stepper and "Add to cart" would render permanently disabled
-  reading "Unavailable". `sellsStandardLine` gates both, and the custom card's
-  own "Request custom order" is the CTA.
+- **The full form's whole Advanced disclosure is hidden for this type**, not
+  just the custom-line row. Every control inside it is dead here: mockup
+  approval is constitutive (and its `bulkFillFlag` maps over `rows: []`, so the
+  checkbox couldn't toggle even if you clicked it — it rendered *unchecked* on a
+  product that always requires approval), SKU binds to `rows[0]`, the custom
+  line IS the product, and the second axis is already gated on having choices. A
+  disclosure whose every control is inert reads as a broken setting, so the card
+  goes and the one fact worth knowing is **stated inline** in the type's own
+  setup: *"🧑‍🍳 Made to order · ✅ the buyer approves your mockup before you start
+  — always on for this type."* Leaving the type brings Advanced straight back.
+- **The purchase bar always has a CTA — `PurchaseActions` decides which.**
+  `resolveVariant` deliberately excludes `isCustom`, so a made-to-order product
+  resolves no standard variant; the stepper and "Add to cart" would render
+  permanently disabled reading "Unavailable". Both editors' views feed their bar
+  a single `PurchaseActions`, which renders the standard pair when
+  `sellsStandardLine` and **"Request custom order"** otherwise. Deciding once, in
+  one place, is the point: the two views can't disagree about a product's CTA,
+  and on mobile — where that bar is `fixed` — it can never be empty chrome with
+  the real CTA scrolled out of thumb reach (PR #160 review).
+- **The card doesn't restate the page.** When the custom line *is* the product,
+  `CustomOrderCard` drops its own thumbnail / label / price row — the page's h1,
+  gallery and price label already say all three, and repeating them as
+  "Custom · Price on quote" reads as a second item. It leads with the mockup
+  gate instead ("You'll approve a mockup before your order is made"), which is
+  the one thing the buyer doesn't know yet, and its CTA moves to the bar. Beside
+  a real catalog the card is unchanged: full identity row, quiet outline button.
 
 **Renamed in passing:** the *prepare* answer "Made to order" → **"Made fresh"**
 (wizard step 4, `PrepareQuestion`, `FulfilmentToggle`, `describeProduct`). It

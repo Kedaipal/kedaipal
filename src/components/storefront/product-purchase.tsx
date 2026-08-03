@@ -624,59 +624,103 @@ export function CustomOrderCard({
 	const product = pp.product;
 	const customLine = pp.customLine;
 	if (!product || !customLine) return null;
+	// Is this line the WHOLE product (made-to-order, 86eyfq04j) or a bespoke
+	// extra beside a standard catalog? The two need different framing. As the
+	// product it must not restate the page's own heading — its name, photo and
+	// price label are already the h1, the gallery and the price above, and a
+	// second "Custom · Price on quote" block under them reads as a different
+	// item. What the buyer does NOT know yet is the mockup gate, so that's what
+	// the line says instead. Its CTA moves to the purchase bar with every other
+	// product's — see PurchaseActions.
+	const isTheProduct = !pp.sellsStandardLine;
 	return (
 		<div className="mt-5 rounded-2xl border border-border bg-muted/30 p-3">
-			{pp.hasOptions ? (
-				<p className="mb-2 text-xs font-medium text-muted-foreground">
-					Or order a custom one
+			{isTheProduct ? (
+				<p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+					<span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide">
+						Made to order
+					</span>
+					You&apos;ll approve a mockup before your order is made.
 				</p>
-			) : null}
-			<div className="flex items-center gap-3">
-				{customLine.imageUrls[0] ? (
-					<ZoomableImage
-						src={customLine.imageUrls[0]}
-						alt={customLine.customLabel ?? "Custom"}
-						caption={customLine.customLabel ?? "Custom"}
-						wrapperClassName="size-12 shrink-0"
-						className="size-12 rounded-lg object-cover"
-					/>
-				) : (
-					<span className="flex size-12 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground">
-						<ImagePlus className="size-5" />
-					</span>
-				)}
-				<span className="flex min-w-0 flex-1 flex-col gap-0.5">
-					<span className="flex items-center gap-2">
-						<span className="text-sm font-semibold">
-							{customLine.customLabel ?? "Custom"}
+			) : (
+				<>
+					{pp.hasOptions ? (
+						<p className="mb-2 text-xs font-medium text-muted-foreground">
+							Or order a custom one
+						</p>
+					) : null}
+					<div className="flex items-center gap-3">
+						{customLine.imageUrls[0] ? (
+							<ZoomableImage
+								src={customLine.imageUrls[0]}
+								alt={customLine.customLabel ?? "Custom"}
+								caption={customLine.customLabel ?? "Custom"}
+								wrapperClassName="size-12 shrink-0"
+								className="size-12 rounded-lg object-cover"
+							/>
+						) : (
+							<span className="flex size-12 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground">
+								<ImagePlus className="size-5" />
+							</span>
+						)}
+						<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+							<span className="flex items-center gap-2">
+								<span className="text-sm font-semibold">
+									{customLine.customLabel ?? "Custom"}
+								</span>
+								<span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+									Made to order
+								</span>
+							</span>
+							<span className="text-xs text-muted-foreground">
+								{pp.customPriceLabel}
+							</span>
 						</span>
-						<span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-							Made to order
-						</span>
-					</span>
-					<span className="text-xs text-muted-foreground">
-						{pp.customPriceLabel}
-					</span>
-				</span>
-			</div>
+					</div>
+				</>
+			)}
 			<RequestFields pp={pp} prompt={customLine.customPrompt} />
 
-			<Button
-				type="button"
-				variant="outline"
-				disabled={pp.uploadingImage}
-				onClick={() => {
-					onAdd(product, customLine, 1, {
-						note: pp.customNote.trim() || undefined,
-						imageStorageId: pp.customImage?.storageId,
-					});
-					pp.resetCustomAfterAdd();
-				}}
-				className="mt-3 h-11 w-full"
-			>
-				Request custom order
-			</Button>
+			{isTheProduct ? null : <CustomOrderButton pp={pp} onAdd={onAdd} />}
 		</div>
+	);
+}
+
+/**
+ * "Request custom order" — the bespoke line's add.
+ *
+ * Rendered in TWO places by design, never both at once: inside the card when
+ * the line is an extra beside a standard catalog (quiet outline, so it can't
+ * out-shout "Add to cart"), and in the purchase bar when the line IS the
+ * product (filled primary, matching AddToCartButton — it's the only CTA there).
+ */
+function CustomOrderButton({
+	pp,
+	onAdd,
+}: {
+	pp: ProductPurchase;
+	onAdd: OnAddVariant;
+}) {
+	const product = pp.product;
+	const customLine = pp.customLine;
+	if (!product || !customLine) return null;
+	const isTheProduct = !pp.sellsStandardLine;
+	return (
+		<Button
+			type="button"
+			variant={isTheProduct ? "default" : "outline"}
+			disabled={pp.uploadingImage}
+			onClick={() => {
+				onAdd(product, customLine, 1, {
+					note: pp.customNote.trim() || undefined,
+					imageStorageId: pp.customImage?.storageId,
+				});
+				pp.resetCustomAfterAdd();
+			}}
+			className={isTheProduct ? "h-12 w-full text-base" : "mt-3 h-11 w-full"}
+		>
+			Request custom order
+		</Button>
 	);
 }
 
@@ -702,10 +746,38 @@ export function TotalPreviewRow({ pp }: { pp: ProductPurchase }) {
 	);
 }
 
+/**
+ * The product's action, whatever "buy this" means for its type — the ONE thing
+ * both views put in their purchase bar.
+ *
+ * A standard product gets the stepper + "Add to cart". A made-to-order product
+ * has no standard line to step through (`resolveVariant` excludes the custom
+ * line), so those two would render permanently disabled as "Unavailable" —
+ * and on mobile that left a FIXED bottom bar of pure chrome while the real CTA
+ * sat up the page, out of thumb reach. It gets "Request custom order" instead.
+ *
+ * Deciding here, once, is the point: the bar can never be empty, and the two
+ * views can't disagree about which CTA a product shows.
+ */
+export function PurchaseActions({
+	pp,
+	onAdd,
+}: {
+	pp: ProductPurchase;
+	onAdd: OnAddVariant;
+}) {
+	if (!pp.sellsStandardLine && pp.customLine)
+		return <CustomOrderButton pp={pp} onAdd={onAdd} />;
+	return (
+		<div className="grid gap-3 sm:grid-cols-[auto_1fr] sm:items-center">
+			<PurchaseStepper pp={pp} />
+			<AddToCartButton pp={pp} onAdd={onAdd} />
+		</div>
+	);
+}
+
 /** The − qty + trio. */
-export function PurchaseStepper({ pp }: { pp: ProductPurchase }) {
-	// Nothing to step through on a made-to-order product — see sellsStandardLine.
-	if (!pp.sellsStandardLine) return null;
+function PurchaseStepper({ pp }: { pp: ProductPurchase }) {
 	return (
 		<div className="flex items-center justify-center gap-3 sm:justify-start">
 			<button
@@ -743,16 +815,13 @@ export function PurchaseStepper({ pp }: { pp: ProductPurchase }) {
 
 /** The primary CTA, with the full label ladder (min-unreachable → select
  * options → out of stock → add). */
-export function AddToCartButton({
+function AddToCartButton({
 	pp,
 	onAdd,
 }: {
 	pp: ProductPurchase;
 	onAdd: OnAddVariant;
 }) {
-	// A made-to-order product is bought through the custom card's own button;
-	// this one would sit disabled saying "Unavailable". See sellsStandardLine.
-	if (!pp.sellsStandardLine) return null;
 	return (
 		<Button
 			type="button"

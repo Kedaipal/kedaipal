@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // default vitest environment is edge-runtime.)
 vi.mock("convex/react", () => ({ useMutation: () => vi.fn() }));
 
+import { CUSTOM_LINE_COPY, MOCKUP_APPROVAL_COPY } from "./advanced-option-copy";
 import {
 	isMadeToOrderOnly,
 	reconcileForSubmit,
@@ -153,6 +154,31 @@ describe("VariantEditor — made-to-order product type (86eyfq04j)", () => {
 		fireEvent.click(screen.getByRole("button", { name: /^made to order$/i }));
 		// Constitutive: offering "From stock" here would silently undo the type.
 		expect(screen.queryByText(/how do you prepare orders/i)).toBeNull();
+	});
+
+	/**
+	 * Every control under Advanced is dead for this type: approval is
+	 * constitutive (and `bulkFillFlag` over `rows: []` can't even toggle a
+	 * checkbox), SKU binds to `rows[0]`, the custom line IS the product, and the
+	 * second axis is already gated on having choices. A disclosure whose every
+	 * control is inert reads as a broken setting, so the whole card is hidden and
+	 * the one fact worth stating is stated inline.
+	 */
+	it("hides Advanced — every control in it is dead for this type", () => {
+		render(<Harness initial={withOptions} />);
+		fireEvent.click(screen.getByRole("button", { name: /^made to order$/i }));
+		expect(screen.queryByText("Advanced")).toBeNull();
+		expect(screen.queryByText(MOCKUP_APPROVAL_COPY.title)).toBeNull();
+		expect(screen.queryByText(CUSTOM_LINE_COPY.title)).toBeNull();
+		// Stated, not offered: the buyer always approves a mockup on this type.
+		expect(screen.getByText(/always on for this type/i)).toBeTruthy();
+	});
+
+	it("brings Advanced back when the product leaves the type", () => {
+		render(<Harness initial={singleVariant} />);
+		fireEvent.click(screen.getByRole("button", { name: /^made to order$/i }));
+		fireEvent.click(screen.getByRole("button", { name: /just one item/i }));
+		expect(screen.getByText("Advanced")).toBeTruthy();
 	});
 
 	it("switching back to a plain item restores a real matrix row", () => {
