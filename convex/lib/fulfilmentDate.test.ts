@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { MIN_SCHEDULE_LEAD_MS } from "./lalamove";
+import { MIN_SCHEDULE_LEAD_MS, resolveScheduleAt } from "./lalamove";
 import {
 	assertValidFulfilmentTime,
 	EARLIEST_FULFILMENT_LEAD_MINUTES,
@@ -192,17 +192,42 @@ describe("fulfilment time (86eyg0n8e follow-up)", () => {
 		);
 	});
 
-	test("default: today rounds an hour out to the next half-hour (2:12 PM → 3:30 PM)", () => {
-		expect(defaultFulfilmentTimeMinutes(AUG4, NOW_1412)).toBe(15 * 60 + 30);
-		// Exactly on a slot: 2:30 PM + 1h = 3:30 PM, no extra rounding.
-		expect(
-			defaultFulfilmentTimeMinutes(AUG4, AUG4 + (14 * 60 + 30) * 60_000),
-		).toBe(15 * 60 + 30);
-		// Late evening: clamped inside the day, and never under that moment's
-		// floor (23:20 + 15 = 23:35, so 23:30 would already be impossible).
+	test("default: today is AS SOON AS POSSIBLE — the floor itself", () => {
+		// 14:12 + 15 lead = 14:27 → rounds to 14:30. Not an arbitrary hour out:
+		// ordering at 8:09 and being offered 9:30 read as a made-up wait.
+		expect(defaultFulfilmentTimeMinutes(AUG4, NOW_1412)).toBe(14 * 60 + 30);
+		expect(defaultFulfilmentTimeMinutes(AUG4, NOW_1412)).toBe(
+			minSelectableTimeMinutes(AUG4, NOW_1412),
+		);
+		// Late evening still lands on a real slot inside the day.
 		expect(
 			defaultFulfilmentTimeMinutes(AUG4, AUG4 + (23 * 60 + 20) * 60_000),
-		).toBe(23 * 60 + 55);
+		).toBe(23 * 60 + 35);
+	});
+
+	test("the ASAP default is never more than the lead + a rounding step out", () => {
+		// "As soon as possible" has to MEAN that: at any minute of the day the
+		// prefill sits within the lead time plus the 5-minute rounding, never
+		// an invented wait.
+		for (let minute = 0; minute < 1440; minute += 1) {
+			const now = AUG4 + minute * 60_000;
+			if (!hasSelectableTimeToday(now)) continue;
+			const out = defaultFulfilmentTimeMinutes(AUG4, now) - minute;
+			expect(out).toBeGreaterThanOrEqual(EARLIEST_FULFILMENT_LEAD_MINUTES);
+			expect(out).toBeLessThanOrEqual(EARLIEST_FULFILMENT_LEAD_MINUTES + 5);
+		}
+	});
+
+	test("by the time a vendor dispatches, an ASAP order books a rider NOW", () => {
+		// The seller books minutes-to-hours after checkout, so the buyer's
+		// "as soon as possible" moment is past by then and resolveScheduleAt
+		// turns it into an immediate dispatch rather than a scheduled pickup.
+		const orderedAt = NOW_1412;
+		const moment = composeFulfilmentMoment(
+			AUG4,
+			defaultFulfilmentTimeMinutes(AUG4, orderedAt),
+		);
+		expect(resolveScheduleAt(moment, orderedAt + 20 * 60_000)).toBeUndefined();
 	});
 
 	test("default: a future day is 10:00 AM, never a 'now'-derived clock time", () => {

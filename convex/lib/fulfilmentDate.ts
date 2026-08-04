@@ -264,35 +264,36 @@ export function composeFulfilmentMoment(
 }
 
 /**
- * Prefill for the checkout time input. Today → the next 30-minute mark at
- * least an hour out (2:12 PM → 3:30 PM) so a rider slot is realistic;
- * clamped to 23:30 late at night. A future day → 10:00 AM (a "now"-derived
- * clock time would be meaningless there — ordering at 11 PM must not
- * default tomorrow to 11 PM).
+ * Prefill for the checkout time input.
+ *
+ * Today → **the earliest we can come** (the floor), because that is what
+ * most buyers mean: "I'm ready, send someone." An hour-out default was
+ * tried first and read as an arbitrary wait — ordering at 8:09 and being
+ * offered 9:30. A buyer who needs later just changes it.
+ *
+ * This also lands the common case on the nicest dispatch behaviour: a
+ * moment inside the lead window resolves to an IMMEDIATE booking
+ * (resolveScheduleAt), so "as soon as possible" books a rider now rather
+ * than scheduling one.
+ *
+ * A future day → 10:00 AM. A "now"-derived clock time is meaningless there
+ * (ordering at 11 PM must not default tomorrow to 11 PM), and that day's
+ * floor is 0 — midnight would be worse than useless.
  */
 export function defaultFulfilmentTimeMinutes(
 	dateEpoch: number,
 	now: number = Date.now(),
 ): number {
 	if (dateEpoch !== todayMytMidnight(now)) return 10 * 60;
-	// An hour out, rounded to a neat half-hour — but NEVER below the floor,
-	// which is what makes the prefilled value always submittable. The hour
-	// (rather than the floor itself) is deliberate breathing room: a value
-	// sitting exactly on the floor would go stale within minutes of the buyer
-	// starting to type.
 	const floor = minSelectableTimeMinutes(dateEpoch, now);
 	// The day has run out of bookable slots (see hasSelectableTimeToday) —
 	// nothing valid exists to return, so hand back the last time of day and
 	// let the caller push the buyer to tomorrow.
 	if (floor >= MINUTES_PER_DAY) return MINUTES_PER_DAY - 5;
-	const target = Math.max(mytMinutesOfDay(now) + 60, floor);
-	// Clamped to 23:55 rather than spilling into tomorrow, and floored so a
-	// late-evening order can still pick the last valid slot instead of being
-	// handed an already-impossible 23:30.
-	return Math.max(
-		floor,
-		Math.min(Math.ceil(target / 30) * 30, MINUTES_PER_DAY - 5),
-	);
+	// The floor IS the default: earliest possible, and by construction never
+	// below itself. The checkout's repair keeps it tracking the clock while
+	// the buyer fills the rest of the form.
+	return floor;
 }
 
 /**

@@ -143,10 +143,16 @@ point's hours are governed by its own schedule note.
   and can never drift from it. Legacy, counter and self-collect orders have
   no time, and every consumer treats "no time" as the old date-only
   behaviour.
-- **Checkout: required but prefilled** (zero extra taps): today → the next
-  30-minute mark at least an hour out (2:12 PM → 3:30 PM); a future day →
-  10:00 AM (`defaultFulfilmentTimeMinutes`). Native `<input type="time">`
-  (TimeField, DateField's sibling), 5-minute steps.
+- **Checkout: required but prefilled** (zero extra taps): today → **as soon
+  as possible**, i.e. the floor itself (8:09 AM → 8:25 AM); a future day →
+  10:00 AM (`defaultFulfilmentTimeMinutes`). An hour-out default was tried
+  first and read as an invented wait (Zaki: *"8:09 → 9:30, that's like
+  1.5hrs"*) — most buyers mean "I'm ready, send someone", and anyone who
+  needs later just changes it. It also lands the common case on the nicer
+  dispatch behaviour: by the time the seller books, that moment is past, so
+  `resolveScheduleAt` turns it into an IMMEDIATE booking rather than a
+  scheduled pickup. Native `<input type="time">` (TimeField, DateField's
+  sibling), 5-minute steps.
 - **The earliest selectable time is `now + EARLIEST_FULFILMENT_LEAD_MINUTES`
   (15), rounded to 5** — and that number is OURS, not Lalamove's. Measured
   on the MY sandbox 4 Aug 2026 (`lalamove:devProbeScheduleAt`): their only
