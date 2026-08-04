@@ -100,6 +100,18 @@ cart-line snapshots — grid quick-add, sheet and page all call it).
   Below that: gallery (mobile snap carousel; desktop hero + thumbnails,
   variant-aware), buy box with a **Copy link** chip, and purchase controls
   that are a fixed bottom bar on mobile and in-flow on desktop (`lg:static`).
+- **Description sits directly under the title/price, above the option
+  pickers** (Zaki, 31 Jul). It used to render below the custom-order card,
+  where it read as a footnote — but "what is this" is the question a buyer
+  answers *before* "which size", especially arriving cold from a pasted
+  WhatsApp link. It's **clamped to three lines with a Read more toggle**,
+  because moving it up means its length now decides how far down the pickers
+  sit: measured on dev, a 240-character description already ran four lines at
+  430px and pushed the Size pills under the fixed purchase bar, and a seller
+  listing ingredients, allergens and lead time writes far more than that. The
+  full text stays in the DOM (indexable, selectable) — only its height is
+  bounded. Products with no description render nothing at all: no empty
+  block, no stray gap.
 - **Share affordance**: `shareProductLink` uses the OS share sheet when
   available (the WhatsApp path on mobile) and falls back to clipboard + toast.
 

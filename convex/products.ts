@@ -1,5 +1,5 @@
 import { ConvexError, v } from "convex/values";
-import { MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
+import { isMytMidnight, MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import {
@@ -20,6 +20,11 @@ import {
 	isProductVisible,
 } from "./lib/categoryCounts";
 import { sanitizeMinQuantity } from "./lib/minOrderRules";
+import {
+	POPULAR_SCAN_CAP,
+	POPULAR_TOP_CANDIDATES,
+	rankPopularProducts,
+} from "./lib/popularProducts";
 import { rateLimiter } from "./lib/rateLimiter";
 import { SLUG_MAX, SLUG_MIN, slugify } from "./lib/slug";
 import { assertSubscriptionActive } from "./subscriptions";
@@ -346,6 +351,33 @@ function validateCustomLine(variant: VariantInput): VariantInput {
 	};
 }
 
+function plural(n: number, word: string): string {
+	return n === 1 ? word : `${word}s`;
+}
+
+/** "Options [Size: S, M]" / "A product with no options" — names what the server rebuilt the grid from. */
+function describeAxes(options: OptionAxis[]): string {
+	if (options.length === 0) return "A product with no options";
+	return `Options [${options.map((a) => `${a.name}: ${a.values.join(", ")}`).join("] × [")}]`;
+}
+
+/**
+ * Render a combo list for an error, with the empty tuple shown as
+ * "(no options)". Truncated — at the 50-variant cap the full list is a ~1KB
+ * string in a seller-facing banner, and the first few already identify the
+ * mismatch.
+ */
+const MAX_COMBOS_IN_ERROR = 6;
+function describeCombos(combos: readonly (readonly string[])[]): string {
+	if (combos.length === 0) return "none";
+	const shown = combos
+		.slice(0, MAX_COMBOS_IN_ERROR)
+		.map((c) => (c.length === 0 ? "(no options)" : `"${variantLabel(c)}"`))
+		.join(", ");
+	const rest = combos.length - MAX_COMBOS_IN_ERROR;
+	return rest > 0 ? `${shown} …and ${rest} more` : shown;
+}
+
 /**
  * Validate a full set of variant inputs. The set is split into the cartesian
  * MATRIX (isCustom falsy) and an optional CUSTOM line (isCustom true). The matrix
@@ -364,13 +396,31 @@ function validateVariantSet(
 
 	if (customLines.length > 1)
 		throw new ConvexError("A product can have at most one custom option");
-	if (matrix.length === 0)
+
+	/**
+	 * A product's sellable lines are the cartesian **matrix ∪ the custom line**,
+	 * so a product whose ONLY line is bespoke is legitimate — that's the "Made to
+	 * order" product type (ClickUp `86eyfq04j`): a tent wash, a commissioned
+	 * cake. It carries no matrix because there is nothing to enumerate; the
+	 * custom line IS the offer, which is what gives the buyer the request box and
+	 * the qty-1 lock for free.
+	 *
+	 * Requires no axes: axes with an empty matrix would be a grid describing
+	 * combinations nothing sells. Everything else keeps the exact old rules, and
+	 * this only ever LOOSENS them, so no stored product becomes invalid.
+	 */
+	const customOnly =
+		matrix.length === 0 && customLines.length === 1 && options.length === 0;
+
+	if (matrix.length === 0 && !customOnly)
 		throw new ConvexError("A product needs at least one variant");
 
 	const expected = cartesian(options); // includes [[]] for no-axes products
-	if (matrix.length !== expected.length)
+	if (!customOnly && matrix.length !== expected.length)
 		throw new ConvexError(
-			`Expected ${expected.length} variants for these options, got ${matrix.length}`,
+			`${describeAxes(options)} makes ${expected.length} ${plural(expected.length, "combination")} ` +
+				`(${describeCombos(expected)}), but ${matrix.length} ${plural(matrix.length, "variant")} ` +
+				`arrived (${describeCombos(matrix.map((vr) => vr.optionValues))}).`,
 		);
 
 	const seenCombos: string[][] = [];
@@ -415,10 +465,14 @@ function validateVariantSet(
 
 	// Confirm every expected combination is present (covers the "missing combo"
 	// case that the count check alone can't catch once duplicates are ruled out).
-	for (const combo of expected) {
+	// Skipped for a custom-only product: `cartesian([])` is `[[]]`, so this would
+	// demand the empty matrix row the made-to-order type exists to avoid.
+	for (const combo of customOnly ? [] : expected) {
 		if (!cleaned.some((vr) => sameOptionValues(vr.optionValues, combo)))
 			throw new ConvexError(
-				`Missing variant for combination "${variantLabel(combo)}"`,
+				`Missing variant for combination "${variantLabel(combo)}" — ` +
+					`${describeAxes(options)} needs ${describeCombos(expected)}, ` +
+					`but only ${describeCombos(cleaned.map((vr) => vr.optionValues))} arrived.`,
 			);
 	}
 
@@ -540,7 +594,14 @@ export const get = query({
 		// that they never leak through a public query. Both the seller's own
 		// `hidden` toggle and category suppression (`hiddenByCategory`) apply.
 		// Owner/admin still see it to edit. See docs/hidden-products.md.
-		if ((row.hidden || row.hiddenByCategory) && !canEdit) return null;
+		//
+		// `!row.active` (archived) is in the same bucket and was missing: every
+		// other public read excludes archived products (`list` and
+		// `getPublicBySlug` both scope to `active`), so a bare id was the one way
+		// to pull an archived product's full public payload. Pre-existing, found
+		// in the PR #155 review.
+		if ((!row.active || row.hidden || row.hiddenByCategory) && !canEdit)
+			return null;
 		return productWithVariants(ctx, row, { activeOnly: !canEdit });
 	},
 });
@@ -1472,6 +1533,72 @@ export const listForSitemap = query({
 			}
 		}
 		return out;
+	},
+});
+
+/**
+ * PUBLIC (unauthenticated storefront) — ranked product-id candidates for the
+ * landing's "Popular this week" feature card (86eybrhrt PR3). Real order data,
+ * zero seller curation; ranking + thresholds live in `lib/popularProducts.ts`.
+ *
+ * Returns ONLY ids, and only ids of products the storefront actually lists —
+ * no sales counts ever cross the public wire, and an archived or counter-only
+ * product is never named to an unauthenticated caller.
+ *
+ * **Visibility is filtered before the cap, and that order matters.** Ranking
+ * reads `orders.items[].productId` with no product lookup, so counter-only
+ * SKUs (hidden from the storefront, fully counter-sellable, and their orders
+ * count) rank like anything else. Capping to ten first and letting the client
+ * discard them — which is what this did until the PR #155 review — spends
+ * slots on products that can never render, with nothing to back-fill them: a
+ * stall seller whose top ten are counter-only got an empty shelf.
+ *
+ * Live stock and minimum-quantity stay a CLIENT concern: they change by the
+ * minute and the client already has them reactively in `products.list`, so
+ * re-deriving them here would just be a staler copy.
+ *
+ * Cache discipline (the insights precedent): `since` must be an MYT-midnight
+ * epoch — every buyer on the same date sends identical args and shares one
+ * cached result, instead of a per-pageview `Date.now()` fragmenting the
+ * cache. The newest-first `take(POPULAR_SCAN_CAP)` bounds the indexed read
+ * whatever window a hand-rolled client asks for.
+ */
+export const popularProducts = query({
+	args: { retailerId: v.id("retailers"), since: v.number() },
+	handler: async (ctx, { retailerId, since }) => {
+		if (!isMytMidnight(since)) {
+			throw new ConvexError("since must be an MYT-midnight epoch");
+		}
+		const recent = await ctx.db
+			.query("orders")
+			.withIndex("by_retailer", (q) =>
+				q.eq("retailerId", retailerId).gte("_creationTime", since),
+			)
+			.order("desc")
+			.take(POPULAR_SCAN_CAP);
+		const ranked = rankPopularProducts(
+			recent.map((o) => ({ status: o.status, items: o.items })),
+		);
+		if (ranked.length === 0) return [];
+		// Exactly `list`'s visibility rules, read the same way (one indexed query
+		// over this retailer's active products, capped small) so the shelf and
+		// the grid can never disagree about what's public.
+		const listable = await ctx.db
+			.query("products")
+			.withIndex("by_retailer_active", (q) =>
+				q.eq("retailerId", retailerId).eq("active", true),
+			)
+			.filter((q) =>
+				q.and(
+					q.neq(q.field("hidden"), true),
+					q.neq(q.field("hiddenByCategory"), true),
+				),
+			)
+			.collect();
+		const listableIds = new Set<string>(listable.map((p) => p._id));
+		return ranked
+			.filter((id) => listableIds.has(id))
+			.slice(0, POPULAR_TOP_CANDIDATES);
 	},
 });
 

@@ -13,7 +13,7 @@ import {
 	renderRetailerEmail,
 	type RetailerEmailKey,
 } from "./lib/emailCopy";
-import { formatFulfilmentDate } from "./lib/fulfilmentDate";
+import { formatFulfilmentDateTime } from "./lib/fulfilmentDate";
 import { deriveMapsUrl } from "./lib/mapsUrl";
 import type { PickupSnapshot } from "./lib/whatsappCopy";
 
@@ -38,8 +38,10 @@ export const getOrderForRetailerEmail = internalQuery({
 		currency: string;
 		customerName: string;
 		deliveryMethod: DeliveryMethod;
+		deliveryDirection: "standard" | "collection" | undefined;
 		pickupSnapshot: PickupSnapshot | undefined;
 		fulfilmentDate: number | undefined;
+		fulfilmentTimeMinutes: number | undefined;
 		notifyEmail: string | undefined;
 		storeName: string;
 		locale: Locale;
@@ -61,8 +63,10 @@ export const getOrderForRetailerEmail = internalQuery({
 			currency: order.currency,
 			customerName: order.customer.name ?? "Anonymous",
 			deliveryMethod: (order.deliveryMethod as DeliveryMethod | undefined) ?? "delivery",
+			deliveryDirection: order.deliveryDirection,
 			pickupSnapshot: order.pickupSnapshot,
 			fulfilmentDate: order.fulfilmentDate,
+			fulfilmentTimeMinutes: order.fulfilmentTimeMinutes,
 			notifyEmail: retailer.notifyEmail,
 			storeName: retailer.storeName,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
@@ -95,6 +99,7 @@ async function sendMockupSellerEmail(
 		currency: string;
 		customerName: string;
 		deliveryMethod: DeliveryMethod;
+		deliveryDirection: "standard" | "collection" | undefined;
 		notifyEmail: string | undefined;
 		storeName: string;
 		locale: Locale;
@@ -118,6 +123,7 @@ async function sendMockupSellerEmail(
 		totalFormatted,
 		customerName: meta.customerName,
 		deliveryMethod: meta.deliveryMethod,
+		deliveryDirection: meta.deliveryDirection,
 		storeName: meta.storeName,
 		dashboardUrl,
 		mockupChangeNote: meta.mockupChangeNote,
@@ -149,6 +155,7 @@ export const notifyDeliveryJobFailed = internalAction({
 			currency: string;
 			customerName: string;
 			deliveryMethod: DeliveryMethod;
+			deliveryDirection: "standard" | "collection" | undefined;
 			notifyEmail: string | undefined;
 			storeName: string;
 			locale: Locale;
@@ -173,6 +180,7 @@ export const notifyDeliveryJobFailed = internalAction({
 				totalFormatted,
 				customerName: meta.customerName,
 				deliveryMethod: meta.deliveryMethod,
+				deliveryDirection: meta.deliveryDirection,
 				storeName: meta.storeName,
 				dashboardUrl,
 				jobFailureReason: reason,
@@ -226,8 +234,10 @@ export const notifyRetailerOrderAlert = internalAction({
 			currency: string;
 			customerName: string;
 			deliveryMethod: DeliveryMethod;
+			deliveryDirection: "standard" | "collection" | undefined;
 			pickupSnapshot: PickupSnapshot | undefined;
 			fulfilmentDate: number | undefined;
+		fulfilmentTimeMinutes: number | undefined;
 			notifyEmail: string | undefined;
 			storeName: string;
 			locale: Locale;
@@ -266,13 +276,17 @@ export const notifyRetailerOrderAlert = internalAction({
 			totalFormatted,
 			customerName: meta.customerName,
 			deliveryMethod: meta.deliveryMethod,
+			deliveryDirection: meta.deliveryDirection,
 			storeName: meta.storeName,
 			dashboardUrl,
 			requiresMockup: meta.requiresMockup,
 			deliveryFeePending: meta.deliveryFeePending,
 			fulfilmentDateLabel:
 				meta.fulfilmentDate !== undefined
-					? formatFulfilmentDate(meta.fulfilmentDate)
+					? formatFulfilmentDateTime(
+							meta.fulfilmentDate,
+							meta.fulfilmentTimeMinutes,
+						)
 					: undefined,
 			// Pickup point detail for the kind-aware "Method:" label + the
 			// where/when block. Only meaningful for pickup orders; emailCopy
@@ -321,6 +335,7 @@ export const notifyPaymentClaimed = internalAction({
 			currency: string;
 			customerName: string;
 			deliveryMethod: DeliveryMethod;
+			deliveryDirection: "standard" | "collection" | undefined;
 			notifyEmail: string | undefined;
 			storeName: string;
 			locale: Locale;
@@ -374,6 +389,7 @@ export const notifyPaymentClaimed = internalAction({
 				totalFormatted,
 				customerName: meta.customerName,
 				deliveryMethod: meta.deliveryMethod,
+				deliveryDirection: meta.deliveryDirection,
 				storeName: meta.storeName,
 				dashboardUrl,
 				paymentReference: meta.paymentReference,

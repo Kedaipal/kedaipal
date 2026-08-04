@@ -108,6 +108,36 @@
       ],
       "port": 3108,
       "autoPort": false
+    },
+    {
+      "name": "web-deferred-push-wt",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "-C",
+        "../kedaipal-wt-86eyfq0w5",
+        "exec",
+        "vite",
+        "dev",
+        "--port",
+        "3109"
+      ],
+      "port": 3109,
+      "autoPort": false
+    },
+    {
+      "name": "web-jul31-bugfixes-wt",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "-C",
+        "../kedaipal-wt-86eyfq04j",
+        "exec",
+        "vite",
+        "dev",
+        "--port",
+        "3114"
+      ],
+      "port": 3114,
+      "autoPort": false
     }
   ]
 }

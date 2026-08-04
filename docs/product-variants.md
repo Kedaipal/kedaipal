@@ -310,3 +310,20 @@ row flagged `isCustom`, told apart from a no-axes default by the flag, never by 
 It reuses the `requiresProof` → `mockupStatus` re-quote machinery end-to-end (no order-flow
 changes). Full spec — data model, the reconcile/resolve invariant care, seller + buyer UX —
 in [`docs/custom-option.md`](./custom-option.md).
+
+## 14. The grid/axes submit invariant (added 2026-07-31, ClickUp `86eyex5vk`)
+
+`validateVariantSet` (`convex/products.ts`) rebuilds the grid from `options` and
+requires the submitted matrix to cover it exactly. A payload whose axes and rows
+describe different products was rejected with a bare count
+(`Expected 1 variants for these options, got 2`) that named no field, so the
+seller could not save the product at all.
+
+Client side, `reconcileForSubmit` (`src/components/forms/variant-editor.tsx`) is
+now the single gate both submit paths pass through — it sanitizes the axes with
+`sanitizeOptions` (the client mirror of the server's trim-and-drop-blank rule in
+`normalizeOptions`) and rebuilds the rows unless they already cover the cartesian
+exactly. The wizard's `hasChoices` flag no longer decides the payload's axes.
+Server side, both throws now name the axes they rebuilt from and the combinations
+that arrived. Rationale and the two failure modes are written up in
+[`docs/product-setup-wizard.md`](./product-setup-wizard.md#the-gridaxes-invariant-and-reconcileforsubmit-2026-07-31-clickup-86eyex5vk).

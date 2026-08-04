@@ -4,6 +4,7 @@ import { convexTest } from "convex-test";
 import { describe, expect, test } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { todayMytMidnight } from "./lib/fulfilmentDate";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -151,18 +152,72 @@ describe("products", () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const asA = t.withIdentity({ subject: USER_A });
+		const create = asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Salmon",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [{ name: "Weight", values: ["500g", "1kg"] }],
+			// Only one of the two required combinations.
+			variants: [{ optionValues: ["500g"], price: 4500, onHand: 0 }],
+		});
+		// The message must name the axes it rebuilt from AND the combos it got —
+		// the bare count was a dead end with nothing to act on (86eyex5vk).
+		await expect(create).rejects.toThrow(/Options \[Weight: 500g, 1kg\]/);
+		await expect(create).rejects.toThrow(/2 combinations \("500g", "1kg"\)/);
+		await expect(create).rejects.toThrow(/1 variant arrived \("500g"\)/);
+	});
+
+	test("no-axes product reports the empty combo readably, not as a bare count", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		// The shape Arif hit: zero axes, two non-custom rows (86eyex5vk).
 		await expect(
 			asA.mutation(api.products.create, {
 				retailerId: retailer._id,
-				name: "Salmon",
+				name: "Kuih",
 				currency: "MYR",
 				imageStorageIds: [],
 				sortOrder: 0,
-				options: [{ name: "Weight", values: ["500g", "1kg"] }],
-				// Only one of the two required combinations.
-				variants: [{ optionValues: ["500g"], price: 4500, onHand: 0 }],
+				options: [],
+				variants: [
+					{ optionValues: [], price: 1200, onHand: 0 },
+					{ optionValues: [], price: 1800, onHand: 0 },
+				],
 			}),
-		).rejects.toThrow(/Expected 2 variants/);
+		).rejects.toThrow(
+			/A product with no options makes 1 combination \(\(no options\)\), but 2 variants arrived/,
+		);
+	});
+
+	test("a no-axes product with a custom line saves — the custom line is not matrix", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		// Two variants arrive but only one is matrix, so expected===1 holds.
+		const productId = await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Custom cake",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [],
+			variants: [
+				{ optionValues: [], price: 12000, onHand: 0 },
+				{
+					optionValues: [],
+					price: 0,
+					onHand: 0,
+					isCustom: true,
+					customLabel: "Tell us your design",
+				},
+			],
+		});
+		const product = await asA.query(api.products.get, { productId });
+		expect(product?.variants).toHaveLength(2);
+		expect(product?.variants.filter((vr) => vr.isCustom)).toHaveLength(1);
 	});
 
 	test("create rejects an invalid combination value", async () => {
@@ -478,6 +533,27 @@ describe("products", () => {
 		const asOwner = await asA.query(api.products.get, { productId: id });
 		expect(asOwner?._id).toBe(id);
 		// Unauthenticated / non-owner caller gets nothing — no leak.
+		expect(await t.query(api.products.get, { productId: id })).toBeNull();
+		const asB = t.withIdentity({ subject: USER_B });
+		expect(await asB.query(api.products.get, { productId: id })).toBeNull();
+	});
+
+	// Same promise as `hidden` above, for the archive flag. Every other public
+	// read scopes to `active` (`list`, `getPublicBySlug`), so a bare id was the
+	// one way to pull an archived product's public payload. Found in the PR #155
+	// review; the owner must still read it, or archived products couldn't be
+	// opened to restore them.
+	test("get returns null for an archived product to a non-owner, full to the owner", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const id = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Retired Tent" }),
+		);
+		await asA.mutation(api.products.archive, { productId: id });
+
+		expect((await asA.query(api.products.get, { productId: id }))?._id).toBe(id);
 		expect(await t.query(api.products.get, { productId: id })).toBeNull();
 		const asB = t.withIdentity({ subject: USER_B });
 		expect(await asB.query(api.products.get, { productId: id })).toBeNull();
@@ -1168,6 +1244,75 @@ describe("products", () => {
 			expect(product?.hasQuotePricing).toBe(true);
 		});
 
+		test("a product can be JUST a custom line — the made-to-order type", async () => {
+			// 86eyfq04j: the type IS one bespoke offer, so it carries no matrix at
+			// all. Modelling it as `isCustom` is what earns it the storefront's
+			// existing bespoke flow instead of a parallel path.
+			const t = setup();
+			const retailer = await seedRetailer(t, USER_A);
+			const asA = t.withIdentity({ subject: USER_A });
+			const id = await asA.mutation(api.products.create, {
+				retailerId: retailer._id,
+				name: "Tent wash",
+				currency: "MYR",
+				imageStorageIds: [],
+				sortOrder: 0,
+				options: [],
+				variants: [
+					{
+						optionValues: [],
+						price: 0,
+						onHand: 0,
+						isCustom: true,
+						customPrompt: "Tent size, model & how dirty",
+					},
+				],
+			});
+			const product = await asA.query(api.products.get, { productId: id });
+			expect(product?.variants).toHaveLength(1);
+			expect(product?.variants[0].isCustom).toBe(true);
+			expect(product?.variants[0].requiresProof).toBe(true);
+			expect(product?.variants[0].blockWhenOutOfStock).toBe(false);
+			// Price-on-quote, and never "free".
+			expect(product?.hasQuotePricing).toBe(true);
+			// Always orderable — made on demand, so it can't sell out.
+			expect(product?.inStock).toBe(true);
+		});
+
+		test("an EMPTY variant set is still rejected", async () => {
+			const t = setup();
+			const retailer = await seedRetailer(t, USER_A);
+			const asA = t.withIdentity({ subject: USER_A });
+			await expect(
+				asA.mutation(api.products.create, {
+					retailerId: retailer._id,
+					name: "Nothing",
+					currency: "MYR",
+					imageStorageIds: [],
+					sortOrder: 0,
+					options: [],
+					variants: [],
+				}),
+			).rejects.toThrow(/at least one variant/i);
+		});
+
+		test("axes with no matrix are still rejected — a grid selling nothing", async () => {
+			const t = setup();
+			const retailer = await seedRetailer(t, USER_A);
+			const asA = t.withIdentity({ subject: USER_A });
+			await expect(
+				asA.mutation(api.products.create, {
+					retailerId: retailer._id,
+					name: "Cake",
+					currency: "MYR",
+					imageStorageIds: [],
+					sortOrder: 0,
+					options: [{ name: "Size", values: ["S", "M"] }],
+					variants: [{ optionValues: [], price: 0, onHand: 0, isCustom: true }],
+				}),
+			).rejects.toThrow(/at least one variant/i);
+		});
+
 		test("blank custom label defaults to \"Custom\"", async () => {
 			const t = setup();
 			const retailer = await seedRetailer(t, USER_A);
@@ -1599,5 +1744,159 @@ describe("products.listForSitemap", () => {
 		expect(
 			rows.map((r) => `${r.storeSlug}/p/${r.productSlug}`).sort(),
 		).toEqual([`${a.slug}/p/a-tent`, `${b.slug}/p/b-tent`].sort());
+	});
+});
+
+describe("popularProducts (public, storefront featured card)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+
+	/** Insert an order directly — only the fields the ranking reads matter. */
+	async function insertOrder(
+		t: ReturnType<typeof convexTest>,
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+		opts: { status?: string; quantity?: number; seq: number },
+	) {
+		const now = Date.now();
+		await t.run(async (ctx) =>
+			ctx.db.insert("orders", {
+				retailerId,
+				shortId: `ORD-POP${opts.seq}`,
+				items: [
+					{
+						productId,
+						name: "Tent 2P",
+						price: 12000,
+						quantity: opts.quantity ?? 1,
+					},
+				],
+				subtotal: 12000,
+				total: 12000,
+				currency: "MYR",
+				status: opts.status ?? "confirmed",
+				channel: "whatsapp",
+				customer: { name: "Aisyah", waPhone: "60123456789" },
+				createdAt: now,
+				updatedAt: now,
+			}),
+		);
+	}
+
+	test("ranks recent revenue orders and stays scoped to the retailer", async () => {
+		const t = setup();
+		const retailerA = await seedRetailer(t, USER_A);
+		const retailerB = await seedRetailer(t, USER_B);
+		const asA = t.withIdentity({ subject: USER_A });
+		const asB = t.withIdentity({ subject: USER_B });
+		const cake = await asA.mutation(
+			api.products.create,
+			baseProduct(retailerA._id, { name: "Cake" }),
+		);
+		const pie = await asA.mutation(
+			api.products.create,
+			baseProduct(retailerA._id, { name: "Pie", sortOrder: 1 }),
+		);
+		const other = await asB.mutation(
+			api.products.create,
+			baseProduct(retailerB._id, { name: "Other" }),
+		);
+
+		// Cake: 3 orders. Pie: 2 orders + 1 pending (doesn't count).
+		await insertOrder(t, retailerA._id, cake, { seq: 1 });
+		await insertOrder(t, retailerA._id, cake, { seq: 2, status: "delivered" });
+		await insertOrder(t, retailerA._id, cake, { seq: 3, status: "packed" });
+		await insertOrder(t, retailerA._id, pie, { seq: 4 });
+		await insertOrder(t, retailerA._id, pie, { seq: 5 });
+		await insertOrder(t, retailerA._id, pie, { seq: 6, status: "pending" });
+		// Retailer B's own volume must never leak into A's ranking.
+		await insertOrder(t, retailerB._id, other, { seq: 7 });
+		await insertOrder(t, retailerB._id, other, { seq: 8 });
+
+		const since = todayMytMidnight() - 7 * DAY;
+		const ranked = await t.query(api.products.popularProducts, {
+			retailerId: retailerA._id,
+			since,
+		});
+		expect(ranked).toEqual([cake, pie]);
+
+		const rankedB = await t.query(api.products.popularProducts, {
+			retailerId: retailerB._id,
+			since,
+		});
+		expect(rankedB).toEqual([other]);
+	});
+
+	test("a single order is not 'popular' — empty result, row hides", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const cake = await asUser.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Cake" }),
+		);
+		await insertOrder(t, retailer._id, cake, { seq: 1 });
+		const ranked = await t.query(api.products.popularProducts, {
+			retailerId: retailer._id,
+			since: todayMytMidnight() - 7 * DAY,
+		});
+		expect(ranked).toEqual([]);
+	});
+
+	test("rejects a since that is not an MYT midnight (cache-key discipline)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await expect(
+			t.query(api.products.popularProducts, {
+				retailerId: retailer._id,
+				since: Date.now(),
+			}),
+		).rejects.toThrow(/MYT-midnight/);
+	});
+
+	// The starvation bug from the PR #155 review: ranking sees counter-only and
+	// archived products (their orders are real), so capping before filtering
+	// spent slots on products that can never render, with no rank-11 to
+	// back-fill. A stall seller whose top sellers are counter-only got an empty
+	// shelf. Visibility now filters BEFORE the cap.
+	test("unlisted bestsellers never consume a slot — lower ranks back-fill", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const make = async (name: string, sortOrder: number) =>
+			asUser.mutation(
+				api.products.create,
+				baseProduct(retailer._id, { name, sortOrder }),
+			);
+		// Two top sellers that the storefront does NOT list...
+		const counterOnly = await make("Counter only", 0);
+		const archived = await make("Retired", 1);
+		// ...and one that it does, ranked below both.
+		const listed = await make("Listed", 2);
+
+		await asUser.mutation(api.products.update, {
+			productId: counterOnly,
+			hidden: true,
+		});
+		await asUser.mutation(api.products.archive, { productId: archived });
+
+		// Ranking order: counterOnly (4) > archived (3) > listed (2).
+		let seq = 0;
+		for (const [productId, count] of [
+			[counterOnly, 4],
+			[archived, 3],
+			[listed, 2],
+		] as const) {
+			for (let i = 0; i < count; i++) {
+				await insertOrder(t, retailer._id, productId, { seq: ++seq });
+			}
+		}
+
+		const ranked = await t.query(api.products.popularProducts, {
+			retailerId: retailer._id,
+			since: todayMytMidnight() - 7 * DAY,
+		});
+		// The listed product is surfaced despite ranking third, and neither
+		// unlisted id is named to an unauthenticated caller.
+		expect(ranked).toEqual([listed]);
 	});
 });

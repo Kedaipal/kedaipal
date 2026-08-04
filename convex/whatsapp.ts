@@ -207,6 +207,10 @@ export const getOrderWithRetailer = internalQuery({
 		// Lets an in-flight confirmation-push retry bail out when the buyer has
 		// already been reached (86eyf1rck).
 		confirmationPushStatus: Doc<"orders">["confirmationPushStatus"];
+		// The two price holds (86eyfq0w5): while either is open the deferred
+		// push must NOT fire — the template's total would be wrong.
+		mockupGateClosed: boolean;
+		deliveryFeePending: boolean;
 	} | null> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) return null;
@@ -238,6 +242,8 @@ export const getOrderWithRetailer = internalQuery({
 			statusLabels: retailer.statusLabels as StatusLabels | undefined,
 			currentStageId: order.currentStageId,
 			confirmationPushStatus: order.confirmationPushStatus,
+			mockupGateClosed: isMockupGateClosed(order),
+			deliveryFeePending: order.deliveryFeePending === true,
 		};
 	},
 });
@@ -255,6 +261,9 @@ export const getRetailerLocaleForOrder = internalQuery({
 		retailerWaPhone: string | undefined;
 		messageTemplates: MessageTemplates | undefined;
 		deliveryMethod: DeliveryMethod;
+		// Frozen trip direction (86eyg0n8e) — flips the confirm's "we'll update
+		// you when it ships" line to collection wording.
+		deliveryDirection: "standard" | "collection" | undefined;
 		pickupSnapshot: PickupSnapshot | undefined;
 		// Frozen delivery charge — renders the fee line in the confirm reply.
 		deliverySnapshot: { fee: number } | undefined;
@@ -284,6 +293,7 @@ export const getRetailerLocaleForOrder = internalQuery({
 				| MessageTemplates
 				| undefined,
 			deliveryMethod: (order.deliveryMethod as DeliveryMethod | undefined) ?? "delivery",
+			deliveryDirection: order.deliveryDirection,
 			pickupSnapshot: order.pickupSnapshot,
 			deliverySnapshot: order.deliverySnapshot,
 			currency: order.currency,
@@ -625,6 +635,7 @@ export const handleInbound = internalAction({
 					contactPhone,
 					trackingUrl,
 					deliveryMethod: meta?.deliveryMethod ?? "delivery",
+					deliveryDirection: meta?.deliveryDirection,
 					pickupKind: meta?.pickupSnapshot?.locationType,
 				},
 			);
@@ -1623,12 +1634,28 @@ export const notifyStorefrontOrderCreated = internalAction({
 				return null;
 			});
 		if (!meta || !meta.customerWaPhone) return;
+		// A cancelled order's confirmation must never go out — reachable when a
+		// deferred order is cancelled between a gate opening and this running.
+		if (meta.status === "cancelled") return;
 		// A push that already landed (or was superseded by the buyer reaching us
 		// another way) must not be re-sent by an in-flight retry.
 		if (
 			meta.confirmationPushStatus === "sent" ||
 			meta.confirmationPushStatus === "recovered"
 		) {
+			return;
+		}
+		// Hold guard, defence-in-depth (86eyfq0w5): the transactional claim in
+		// orders.ts (claimDeferredPush) only stamps "sending" + schedules when no
+		// price hold remains, so a legitimate invocation never trips this. It
+		// stays because sending a wrong "Total: {{3}}" is the one mistake this
+		// feature must never make, whatever schedules us.
+		if (meta.mockupGateClosed || meta.deliveryFeePending) {
+			console.warn("WA confirm push refused: price not final", {
+				shortId: meta.shortId,
+				mockupGateClosed: meta.mockupGateClosed,
+				deliveryFeePending: meta.deliveryFeePending,
+			});
 			return;
 		}
 

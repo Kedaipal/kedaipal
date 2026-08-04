@@ -284,6 +284,21 @@ export default defineSchema({
 				// spend — client-side, no server auto-booking). Undefined = off:
 				// the seller books manually from the Book button.
 				promptBookOnPacked: v.optional(v.boolean()),
+				// Which way riders travel (86eyg0n8e, Bearcamp collection service):
+				// "collection" reverses the trip — the rider picks up FROM the
+				// buyer's address and drops off AT businessAddress (gear-cleaning /
+				// repair services). Undefined = "standard" (rider delivers to the
+				// buyer; every existing seller). Lives HERE — not on the
+				// deliveryConfig "lalamove" arm — because pricing-mode switches
+				// rebuild that arm wholesale while this object merges per-field
+				// (promptBookOnPacked precedent), so the setting survives a
+				// temporary switch to flat pricing. Dispatch swaps stops/contacts,
+				// the webhook stops driving order status (picked_up ≠ delivered to
+				// the customer), and buyer-facing labels flip via the per-order
+				// freeze on orders.deliveryDirection.
+				deliveryDirection: v.optional(
+					v.union(v.literal("standard"), v.literal("collection")),
+				),
 			}),
 		),
 		// Minimum days' notice the retailer needs before a fulfilment date. Drives
@@ -673,6 +688,27 @@ export default defineSchema({
 		deliveryMethod: v.optional(
 			v.union(v.literal("delivery"), v.literal("self_collect")),
 		),
+		// Which way the rider travels on a delivery order (86eyg0n8e). Frozen at
+		// create from the retailer's deliveryBooking.deliveryDirection so a later
+		// settings toggle never relabels a placed order (pickupSnapshot posture).
+		// "collection" = the rider collects FROM the buyer's address and brings
+		// the order TO the seller (Bearcamp gear-wash); buyer surfaces read
+		// "Collect from" / collection copy off this. Undefined = standard
+		// delivery (every pre-existing order).
+		deliveryDirection: v.optional(
+			v.union(v.literal("standard"), v.literal("collection")),
+		),
+		// When a COLLECTION rider actually dropped the buyer's items with the
+		// seller (86eyg0n8e). Stamped by the Lalamove webhook off the completed
+		// job — a timestamp, NOT a status change: the order lifecycle stays the
+		// seller's. It is the only ORDER-level record that the goods arrived, so
+		// it powers (a) muting the fulfilment-date badge — that date is the
+		// COLLECTION day, the start of the seller's work rather than a deadline,
+		// so it would otherwise show red "Overdue" for the whole healthy service
+		// window on every collection order — and (b) the buyer's persistent
+		// "Collected on …" line, which outlives the transient live-rider strip.
+		// Set once, never cleared.
+		collectedAt: v.optional(v.number()),
 		// Structured shipping address. Required when deliveryMethod === "delivery"
 		// and forbidden when "self_collect" — invariant enforced in orders.create.
 		// Validated/sanitized server-side via convex/lib/address.ts.
@@ -811,6 +847,18 @@ export default defineSchema({
 		// sorts to the bottom of the date-ascending inbox). Validated server-side
 		// to a whole MYT day within [today + retailer notice, today + 30 days].
 		fulfilmentDate: v.optional(v.number()),
+		// WHAT TIME on that day (86eyg0n8e follow-up) — minutes since MYT
+		// midnight (0..1439), captured at checkout for DELIVERY orders (both
+		// directions: the rider's arrival at the buyer, or the collection from
+		// them, shouldn't be an all-day window). Deliberately a separate field:
+		// `fulfilmentDate` must stay a whole midnight (the validator enforces
+		// it, and the inbox sort / due-today counts / urgency badges all
+		// compare midnights), so the time composes with it via
+		// composeFulfilmentMoment and can never drift from the day. Absent on
+		// legacy, counter and self-collect orders — every consumer treats
+		// "no time" as the old date-only behaviour. Drives the Lalamove
+		// scheduled booking default (past moments book "now").
+		fulfilmentTimeMinutes: v.optional(v.number()),
 		// Free-text instruction the shopper attached at checkout ("no onions",
 		// "deliver after 5pm"). Optional; absent on orders created before this
 		// field. Distinct from deliveryAddress.notes (address/gate detail, delivery
@@ -924,6 +972,11 @@ export default defineSchema({
 		// Widen-only, no backfill.
 		confirmationPushStatus: v.optional(
 			v.union(
+				//   "deferred" — order committed at create but its total isn't final
+				//                yet (mockup price-on-quote / delivery-fee-pending);
+				//                the push fires when the price is confirmed
+				//                (86eyfq0w5) so the template's total is always true.
+				v.literal("deferred"),
 				v.literal("sending"),
 				v.literal("sent"),
 				v.literal("failed"),
@@ -1102,6 +1155,15 @@ export default defineSchema({
 		costActual: v.number(),
 		quotationId: v.string(),
 		vehicleType: v.string(),
+		// Trip direction frozen at reserve time (86eyg0n8e). "collection" = this
+		// booking picked up FROM the buyer and dropped off AT the seller, so the
+		// webhook must update THIS row only — picked_up/completed never advance
+		// the order (arriving at the seller's outlet is not "delivered" to the
+		// customer) and the POD photo is never WhatsApp'd to the buyer (it shows
+		// the seller's own doorstep). Undefined = standard (every existing job).
+		deliveryDirection: v.optional(
+			v.union(v.literal("standard"), v.literal("collection")),
+		),
 		driver: v.optional(
 			v.object({
 				name: v.string(),
@@ -1124,6 +1186,13 @@ export default defineSchema({
 		// out-of-order guard (events older than this only fill gaps, never
 		// regress fields).
 		lastEventAt: v.optional(v.number()),
+		// The pickup moment this booking was SCHEDULED for (86eyg0n8e
+		// follow-up): the `scheduleAt` sent to Lalamove, from the order's
+		// fulfilment date+time when that moment was still ahead at dispatch.
+		// Unset = an immediate booking (every pre-existing job). Display-only
+		// on our side — the card says "Scheduled · 3:30 PM" instead of sitting
+		// on "Finding rider" for hours; Lalamove owns the actual timing.
+		scheduledAt: v.optional(v.number()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})

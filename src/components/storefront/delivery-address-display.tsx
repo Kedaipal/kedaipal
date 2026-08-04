@@ -1,4 +1,5 @@
 import type { Doc } from "../../../convex/_generated/dataModel";
+import { MASK_PII } from "../../lib/analytics-privacy";
 
 type OrderAddress = NonNullable<Doc<"orders">["deliveryAddress"]>;
 
@@ -14,7 +15,7 @@ export function DeliveryAddressDisplay({
 	address,
 }: DeliveryAddressDisplayProps) {
 	return (
-		<div className="flex flex-col gap-0.5 text-sm">
+		<div {...MASK_PII} className="flex flex-col gap-0.5 text-sm">
 			<p className="font-medium">{address.line1}</p>
 			{address.line2 ? <p>{address.line2}</p> : null}
 			<p>
