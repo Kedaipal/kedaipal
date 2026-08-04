@@ -24,7 +24,6 @@ function renderDialog(props: {
 	riderBlockReason?: "plan_gated" | "no_coords" | null;
 }) {
 	const onConfirm = vi.fn().mockResolvedValue(undefined);
-	const onBookRider = vi.fn();
 	render(
 		<MarkShippedDialog
 			open
@@ -33,10 +32,9 @@ function renderDialog(props: {
 			onConfirm={onConfirm}
 			lalamoveVendor={props.lalamoveVendor}
 			riderBlockReason={props.riderBlockReason ?? null}
-			onBookRider={onBookRider}
 		/>,
 	);
-	return { onConfirm, onBookRider };
+	return { onConfirm };
 }
 
 beforeEach(() => {
@@ -75,31 +73,26 @@ describe("MarkShippedDialog", () => {
 		expect(screen.queryByRole("button", { name: "Book a rider" })).toBeNull();
 	});
 
-	it("shows a rider vendor the booking CTA and no courier form", () => {
-		const { onBookRider } = renderDialog({ lalamoveVendor: true });
+	it("never offers booking itself — a bookable order goes to the booking modal", async () => {
+		// This dialog is the BLOCKED/parcel surface. When a rider CAN be booked
+		// the order page opens the dispatch card's own modal instead (live price,
+		// vehicle switch, variance), so a second, poorer booking CTA here would
+		// be a competing door onto the same spend.
+		const { onConfirm } = renderDialog({
+			lalamoveVendor: true,
+			riderBlockReason: "no_coords",
+		});
 
+		expect(screen.queryByRole("button", { name: "Book a rider" })).toBeNull();
+		// And no courier form either — manual couriers aren't a rider vendor's job.
 		expect(screen.queryByLabelText("Courier")).toBeNull();
 		expect(screen.queryByLabelText("Tracking number")).toBeNull();
 
-		fireEvent.click(screen.getByRole("button", { name: "Book a rider" }));
-		expect(onBookRider).toHaveBeenCalledTimes(1);
-	});
-
-	it("keeps a plain advance reachable for a rider vendor not booking today", async () => {
-		const { onConfirm, onBookRider } = renderDialog({ lalamoveVendor: true });
-
-		const shipWithout = screen.getByRole("button", {
-			name: "Mark as Shipped without a rider",
-		});
-		// A real footer button, not a text link inside a sentence: on the bookable
-		// arm it's the only way to move the order, so it owes the ≥44px target.
-		expect(shipWithout.className).toContain("h-11");
-
-		fireEvent.click(shipWithout);
-
+		fireEvent.click(
+			screen.getByRole("button", { name: "Mark as Shipped anyway" }),
+		);
 		// Advances with no shipment fields — there's no courier form to read.
 		await waitFor(() => expect(onConfirm).toHaveBeenCalledWith({}));
-		expect(onBookRider).not.toHaveBeenCalled();
 	});
 
 	it("states why a rider can't be booked, and lets the seller ship anyway", async () => {

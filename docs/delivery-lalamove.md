@@ -263,7 +263,11 @@ credentials, missing buyer/seller phone. That copy lives in
 prompt** renders the same reasons — a rider vendor is never offered the manual
 parcel-courier form, so this copy is their whole explanation before they choose
 to ship without a rider (ClickUp `86eyff02p`, see
-[`fulfilment.md`](./fulfilment.md#seller-ux)). Wallet-empty
+[`fulfilment.md`](./fulfilment.md#seller-ux)). That prompt is now the
+**blocked-only** surface for them: when a rider *can* be booked, advancing the
+order by hand opens this card's own booking dialog instead (4 Aug — one modal,
+one price, one vehicle switch), with a `Mark as {stage} without a rider` action
+inside it for the order going out another way. Wallet-empty
 booking failures surface Lalamove's error as "top up your Lalamove wallet,
 then retry". `cancelBooking` (with a rider-fee warning) deliberately skips
 the eligibility gates — cancelling must work even when booking wouldn't.

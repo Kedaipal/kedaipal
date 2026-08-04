@@ -47,14 +47,26 @@ import {
 export function BookDeliveryCard({
 	order,
 	bookRequestToken = 0,
+	advanceWithoutRider,
+	onAdvanceBookUnavailable,
 }: {
 	order: Doc<"orders">;
 	/** Increment to request the booking flow from OUTSIDE the card — the
-	 * mark-shipped dialog's "Lalamove rider" tab uses this so the seller can
-	 * book without scrolling down to the card. Same guarded entry as the
+	 * order stepper raises it when the seller advances a bookable Lalamove
+	 * order by hand, so they land in THIS modal (live price, vehicle switch,
+	 * variance) instead of an intermediate prompt. Same guarded entry as the
 	 * packed prompt (bookable status, keys ok, no active job), so it can
 	 * never book more than the card itself would allow. */
 	bookRequestToken?: number;
+	/** Offered inside the booking modal only when the seller got here by
+	 * advancing the order themselves: they may be delivering this one without
+	 * a rider, and dismissing the modal would otherwise leave the order stuck
+	 * with no way forward. Label carries their stage vocabulary. */
+	advanceWithoutRider?: { label: string; onConfirm: () => void };
+	/** The quote failed on that same manual-advance path (out of service area,
+	 * provider down). The seller asked to move the order and got a toast — the
+	 * page owes them the other route out, so it reopens its own prompt. */
+	onAdvanceBookUnavailable?: () => void;
 }) {
 	const dispatch = useQuery(api.lalamove.getDeliveryJob, {
 		shortId: order.shortId,
@@ -81,6 +93,14 @@ export function BookDeliveryCard({
 	// the dialog open with the price row loading instead of bouncing the
 	// seller back to settings to change vehicle for one order.
 	const [requoting, setRequoting] = useState(false);
+	// Did this quote flow start from the seller trying to ADVANCE the order
+	// (vs. tapping the card's own book button / the packed prompt)? Only then
+	// does dismissing leave them stuck, so only then does the modal offer the
+	// no-rider way out.
+	const [fromAdvance, setFromAdvance] = useState(false);
+	// Bumped when the seller closes the modal mid-quote, so the in-flight
+	// result knows it's orphaned.
+	const prepareGenRef = useRef(0);
 	const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
 	const [cancelling, setCancelling] = useState(false);
 
@@ -126,10 +146,11 @@ export function BookDeliveryCard({
 		void handlePrepare();
 	}, [order.status, order.paymentStatus, dispatch]);
 
-	// External book request (mark-shipped dialog's "Lalamove rider" tab). Token
-	// baseline on mount so a remount never re-fires a stale request; the same
-	// bookability guards as above, minus the paid/due-today conditions — this
-	// is an explicit seller tap, not an automatic prompt.
+	// External book request — the stepper raises it when the seller advances a
+	// bookable order by hand, so THIS modal answers "how is it going out?".
+	// Token baseline on mount so a remount never re-fires a stale request; the
+	// same bookability guards as above, minus the paid/due-today conditions —
+	// this is an explicit seller tap, not an automatic prompt.
 	const prevTokenRef = useRef(bookRequestToken);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: handlePrepare is a stable hoisted closure; the effect keys off the token only.
 	useEffect(() => {
@@ -137,10 +158,10 @@ export function BookDeliveryCard({
 		prevTokenRef.current = bookRequestToken;
 		if (bookRequestToken === prev) return;
 		if (!dispatch || dispatch.blockReason !== null) return;
-		// Same collection stop as the packed prompt. Unreachable today (the
-		// mark-shipped prompt that raises this token is skipped entirely on
-		// collection orders) — kept as defence in depth so a future caller can't
-		// auto-dispatch a collection the seller didn't ask for.
+		// Same collection stop as the packed prompt. Unreachable today (a
+		// collection order's advance never raises this token) — kept as defence
+		// in depth so a future caller can't auto-dispatch a collection the
+		// seller didn't ask for.
 		if (
 			order.deliveryDirection === "collection" ||
 			dispatch.job?.deliveryDirection === "collection"
@@ -154,7 +175,7 @@ export function BookDeliveryCard({
 			);
 		if (hasActiveJob) return;
 		if (order.status !== "confirmed" && order.status !== "packed") return;
-		void handlePrepare();
+		void handlePrepare({ fromAdvance: true });
 	}, [bookRequestToken, dispatch, order.status]);
 
 	if (order.deliveryMethod !== "delivery" || !dispatch) return null;
@@ -233,12 +254,18 @@ export function BookDeliveryCard({
 	}
 	if (!job && !bookable) return null;
 
-	async function handlePrepare() {
+	async function handlePrepare(opts?: { fromAdvance?: boolean }) {
+		setFromAdvance(opts?.fromAdvance === true);
 		setPreparing(true);
+		const gen = prepareGenRef.current;
 		try {
 			const result = await prepareBooking({ shortId: order.shortId });
+			if (gen !== prepareGenRef.current) return; // dismissed while quoting
 			if (!result.ok) {
 				toast.error(result.message ?? dispatchBlockCopy(result.reason));
+				// No quote means no modal — and on the advance path that would
+				// leave the seller's tap with nothing but a toast.
+				if (opts?.fromAdvance) onAdvanceBookUnavailable?.();
 				return;
 			}
 			setQuote(result);
@@ -490,7 +517,7 @@ export function BookDeliveryCard({
 					<Button
 						type="button"
 						className="h-11 w-full"
-						onClick={handlePrepare}
+						onClick={() => handlePrepare()}
 						disabled={preparing}
 					>
 						{preparing ? (
@@ -544,7 +571,16 @@ export function BookDeliveryCard({
 			) : null}
 
 			{/* Confirm dialog — fresh price + variance vs what the buyer paid. */}
-			<Dialog open={quote !== null} onOpenChange={(o) => !o && setQuote(null)}>
+			<Dialog
+				open={quote !== null || preparing}
+				onOpenChange={(o) => {
+					if (o) return;
+					// Dismissed mid-quote: the action can't be recalled, so mark this
+					// attempt stale and let its result land nowhere.
+					if (preparing) prepareGenRef.current += 1;
+					setQuote(null);
+				}}
+			>
 				<DialogContent>
 					<DialogHeader>
 						<DialogTitle>
@@ -558,7 +594,12 @@ export function BookDeliveryCard({
 								: "Today's price for this delivery. The price is locked for 5 minutes — confirm to dispatch."}
 						</DialogDescription>
 					</DialogHeader>
-					{quote ? (
+					{quote === null ? (
+						<div className="flex items-center gap-2 py-1 text-sm text-muted-foreground">
+							<Loader2 className="size-4 animate-spin" />
+							Getting today&apos;s price from Lalamove…
+						</div>
+					) : (
 						<div className="flex flex-col gap-1.5 text-sm">
 							{/* A scheduled pickup and a rider-now dispatch are different
 							    purchases — say which one this confirm buys. */}
@@ -649,6 +690,27 @@ export function BookDeliveryCard({
 								</p>
 							) : null}
 						</div>
+					)}
+					{/* The way out for an order going by hand. Its own full-width row,
+					    not a third button in the footer: three side-by-side actions
+					    read as three equal choices, and this label carries the
+					    seller's stage vocabulary so it can be long. */}
+					{fromAdvance && advanceWithoutRider ? (
+						<Button
+							type="button"
+							variant="outline"
+							// Buttons are `whitespace-nowrap` by default; this label carries
+							// the seller's own stage vocabulary and can be long, so let it
+							// wrap rather than force the modal wider than its max-width.
+							className="h-auto min-h-11 w-full py-2 whitespace-normal"
+							disabled={booking || quote === null}
+							onClick={() => {
+								setQuote(null);
+								advanceWithoutRider.onConfirm();
+							}}
+						>
+							{advanceWithoutRider.label}
+						</Button>
 					) : null}
 					<DialogFooter>
 						<Button
@@ -662,7 +724,7 @@ export function BookDeliveryCard({
 						<Button
 							type="button"
 							onClick={handleConfirm}
-							disabled={booking || requoting}
+							disabled={booking || requoting || quote === null}
 						>
 							{booking ? "Booking…" : "Confirm & dispatch"}
 						</Button>

@@ -527,3 +527,158 @@ describe("BookDeliveryCard — scheduled pickups (86eyg0n8e follow-up)", () => {
 		expect(screen.getByText(/Finding a rider/)).toBeTruthy();
 	});
 });
+
+// A seller who advances a bookable Lalamove order by hand lands in THIS modal
+// — live price, vehicle switch, variance — not a separate "how is this going
+// out?" prompt in front of it. `bookRequestToken` is how the order stepper
+// asks, and `advanceWithoutRider` is the way out for the one they're
+// delivering themselves.
+describe("BookDeliveryCard — manual advance opens the booking modal", () => {
+	const bookableQuote = {
+		ok: true,
+		quotationId: "q1",
+		senderStopId: "s1",
+		recipientStopId: "s2",
+		fee: 1110,
+		buyerPaidFee: 1110,
+		vehicleType: "MOTORCYCLE",
+		buyerContactFallback: false,
+	};
+	const packedOrder = {
+		shortId: "ORD-JXHF",
+		deliveryMethod: "delivery",
+		status: "packed",
+		currency: "MYR",
+		paymentStatus: "received",
+	} as unknown as Doc<"orders">;
+
+	function bookable() {
+		return { promptBookOnPacked: false, blockReason: null, job: null };
+	}
+
+	it("raising the token opens the real quote dialog, with the no-rider way out", async () => {
+		state.action = vi.fn().mockResolvedValue(bookableQuote);
+		state.dispatch = bookable();
+		const onConfirm = vi.fn();
+		const { rerender } = render(
+			<BookDeliveryCard
+				order={packedOrder}
+				bookRequestToken={0}
+				advanceWithoutRider={{
+					label: "Mark as Ready for Pickup without a rider",
+					onConfirm,
+				}}
+			/>,
+		);
+		// Nothing opens on mount — the token is baselined, so a remount can't
+		// replay a stale request.
+		expect(screen.queryByRole("dialog")).toBeNull();
+
+		rerender(
+			<BookDeliveryCard
+				order={packedOrder}
+				bookRequestToken={1}
+				advanceWithoutRider={{
+					label: "Mark as Ready for Pickup without a rider",
+					onConfirm,
+				}}
+			/>,
+		);
+
+		// The same modal the packed prompt shows: vehicle choice and a confirm
+		// that names the spend.
+		expect(
+			await screen.findByRole("button", { name: /Motorcycle/ }),
+		).toBeTruthy();
+		expect(screen.getByRole("button", { name: /Car/ })).toBeTruthy();
+		expect(screen.getByText("Confirm & dispatch")).toBeTruthy();
+
+		// Dismissing would otherwise leave the order exactly where it was, so
+		// this path — and only this path — offers the advance itself.
+		fireEvent.click(
+			screen.getByRole("button", {
+				name: "Mark as Ready for Pickup without a rider",
+			}),
+		);
+		expect(onConfirm).toHaveBeenCalledTimes(1);
+	});
+
+	it("opens on the tap and says it's waiting — the quote is a live provider call", async () => {
+		let release: (v: unknown) => void = () => {};
+		state.action = vi.fn(() => new Promise((resolve) => (release = resolve)));
+		state.dispatch = bookable();
+		const { rerender } = render(
+			<BookDeliveryCard order={packedOrder} bookRequestToken={0} />,
+		);
+		rerender(<BookDeliveryCard order={packedOrder} bookRequestToken={1} />);
+
+		// The modal is up BEFORE Lalamove answers — an unchanged page for the
+		// length of a network round-trip reads as a dead button.
+		expect(
+			await screen.findByText(/Getting today's price from Lalamove/),
+		).toBeTruthy();
+		// …and it can't be confirmed until there's a price to confirm.
+		expect(
+			screen
+				.getByRole("button", { name: /Confirm & dispatch/ })
+				.hasAttribute("disabled"),
+		).toBe(true);
+
+		release(bookableQuote);
+		expect(await screen.findByRole("button", { name: /Car/ })).toBeTruthy();
+		expect(screen.queryByText(/Getting today's price/)).toBeNull();
+	});
+
+	it("the card's own button opens the same modal WITHOUT that escape", async () => {
+		state.action = vi.fn().mockResolvedValue(bookableQuote);
+		state.dispatch = bookable();
+		render(
+			<BookDeliveryCard
+				order={packedOrder}
+				advanceWithoutRider={{
+					label: "Mark as Ready for Pickup without a rider",
+					onConfirm: vi.fn(),
+				}}
+			/>,
+		);
+
+		fireEvent.click(screen.getByText("Book delivery"));
+		await screen.findByText("Confirm & dispatch");
+		// Booking here isn't blocking a status change, so advancing the order
+		// would be an unrelated action smuggled into a spend confirmation.
+		expect(
+			screen.queryByRole("button", {
+				name: "Mark as Ready for Pickup without a rider",
+			}),
+		).toBeNull();
+	});
+
+	it("a quote that fails on the advance path hands the seller back to the prompt", async () => {
+		// Out of service area, provider down: no quote means no modal, and the
+		// seller's tap would otherwise produce nothing but a toast.
+		state.action = vi
+			.fn()
+			.mockResolvedValue({ ok: false, reason: "no_coords" });
+		state.dispatch = bookable();
+		const onAdvanceBookUnavailable = vi.fn();
+		const { rerender } = render(
+			<BookDeliveryCard
+				order={packedOrder}
+				bookRequestToken={0}
+				onAdvanceBookUnavailable={onAdvanceBookUnavailable}
+			/>,
+		);
+		rerender(
+			<BookDeliveryCard
+				order={packedOrder}
+				bookRequestToken={1}
+				onAdvanceBookUnavailable={onAdvanceBookUnavailable}
+			/>,
+		);
+
+		await waitFor(() =>
+			expect(onAdvanceBookUnavailable).toHaveBeenCalledTimes(1),
+		);
+		expect(screen.queryByText("Confirm & dispatch")).toBeNull();
+	});
+});

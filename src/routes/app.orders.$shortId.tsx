@@ -704,7 +704,7 @@ function OrderDetailRoute() {
 										type="button"
 										onClick={() => {
 											// Marking a delivery order shipped is THE moment the
-											// seller decides how it goes out, so prompt first: a
+											// seller decides how it goes out, so ask first: a
 											// parcel seller for courier + tracking (optional, rides
 											// the shipped WhatsApp update), a rider vendor for the
 											// booking they may not have made yet. Skipped when
@@ -727,6 +727,22 @@ function OrderDetailRoute() {
 												!order.trackingNo &&
 												!order.carrierTrackingUrl
 											) {
+												// A rider vendor who CAN book goes straight to the
+												// booking modal on the card below — the same one
+												// prompt-on-packed opens, with the live price,
+												// vehicle switch and variance. An intermediate
+												// "how is this going out?" prompt in front of it
+												// was pure chrome for them. The parcel form (and
+												// the blocked-reason copy, which the booking modal
+												// can't show because there's nothing to quote)
+												// still belong to MarkShippedDialog.
+												if (
+													lalamoveVendor &&
+													dispatchInfo?.blockReason === null
+												) {
+													setBookRequestToken((t) => t + 1);
+													return;
+												}
 												setShipDialogOpen(true);
 												return;
 											}
@@ -1370,7 +1386,24 @@ function OrderDetailRoute() {
 			    re-quote confirm, live job card (driver/plate/tracking), failed-
 			    booking rebook, and disabled-with-reason states. 86eyb5hrf. */}
 			{!isSelfCollect ? (
-				<BookDeliveryCard order={order} bookRequestToken={bookRequestToken} />
+				<BookDeliveryCard
+					order={order}
+					bookRequestToken={bookRequestToken}
+					// The way out of that modal when this one is going by hand. The
+					// card renders it ONLY on the manual-advance path, so the packed
+					// prompt and the card's own button stay a plain book-or-not.
+					advanceWithoutRider={
+						nextStage
+							? {
+									label: `${stageLabel(nextStage, "en")} without a rider`,
+									onConfirm: () => {
+										void handleAdvance(nextStage.id);
+									},
+								}
+							: undefined
+					}
+					onAdvanceBookUnavailable={() => setShipDialogOpen(true)}
+				/>
 			) : null}
 
 			{/* Delivery address (delivery orders only). Collection orders relabel:
@@ -1528,16 +1561,12 @@ function OrderDetailRoute() {
 					onOpenChange={setShipDialogOpen}
 					advanceLabel={`Mark as ${stageLabel(nextStage, "en")}`}
 					onConfirm={(fields) => handleAdvance(nextStage.id, fields)}
-					// A rider vendor gets the rider prompt, never the parcel-courier
-					// form; blockReason === null ⟺ a rider could be booked on THIS
-					// order right now (keys ok, plan ok, coords present, no active
-					// job), otherwise the prompt states the reason instead.
+					// A rider vendor gets the blocked-rider notice, never the
+					// parcel-courier form — and never a booking CTA, because a
+					// bookable order never reaches this dialog (the advance opens
+					// the dispatch card's booking modal instead).
 					lalamoveVendor={lalamoveVendor}
 					riderBlockReason={dispatchInfo?.blockReason ?? null}
-					onBookRider={() => {
-						setShipDialogOpen(false);
-						setBookRequestToken((t) => t + 1);
-					}}
 				/>
 			) : null}
 
