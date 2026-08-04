@@ -13,6 +13,8 @@
 //    1dp precision) — converted to integer sen at this boundary, like every
 //    other money field in the repo.
 
+import { EARLIEST_FULFILMENT_LEAD_MINUTES } from "./fulfilmentDate";
+
 export type LalamoveEnv = "sandbox" | "production";
 
 /** How long a checkout deliveryQuotes row stays honourable at orders.create.
@@ -573,11 +575,21 @@ export function parseLalamoveEventTime(
 		: envelopeTimestamp;
 }
 
-/** How close to "now" a scheduled pickup may be before we book immediate
- * instead — Lalamove rejects near-term scheduleAt values, and a rider being
- * dispatched right away serves a 20-minutes-out ask better anyway. */
-export const MIN_SCHEDULE_LEAD_MS = 30 * 60 * 1000;
-/** Lalamove's own scheduling window (~30 days). */
+/**
+ * How close to "now" a scheduled pickup may be before we book IMMEDIATE
+ * instead. Shares the checkout floor's constant so the time a buyer may pick
+ * and the time we will schedule can never disagree.
+ *
+ * Measured, not assumed (MY sandbox, 4 Aug 2026 — `devProbeScheduleAt`):
+ * Lalamove accepts `scheduleAt` from +1 min to +30 days and refuses anything
+ * past or beyond that with `ERR_INVALID_FIELD`. So this threshold is a
+ * product choice, not their limit: within the window an immediate booking
+ * starts matching a driver right away, which serves a "come in 10 minutes"
+ * ask better than a scheduled order would.
+ */
+export const MIN_SCHEDULE_LEAD_MS =
+	EARLIEST_FULFILMENT_LEAD_MINUTES * 60 * 1000;
+/** Lalamove's own scheduling window — measured: +30 days quotes, +31 refuses. */
 export const MAX_SCHEDULE_AHEAD_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**

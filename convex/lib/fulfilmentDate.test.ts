@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
+import { MIN_SCHEDULE_LEAD_MS, resolveScheduleAt } from "./lalamove";
 import {
 	assertValidFulfilmentTime,
+	EARLIEST_FULFILMENT_LEAD_MINUTES,
 	composeFulfilmentMoment,
 	defaultFulfilmentTimeMinutes,
 	formatFulfilmentDateTime,
@@ -190,16 +192,42 @@ describe("fulfilment time (86eyg0n8e follow-up)", () => {
 		);
 	});
 
-	test("default: today rounds an hour out to the next half-hour (2:12 PM → 3:30 PM)", () => {
-		expect(defaultFulfilmentTimeMinutes(AUG4, NOW_1412)).toBe(15 * 60 + 30);
-		// Exactly on a slot: 2:30 PM + 1h = 3:30 PM, no extra rounding.
-		expect(
-			defaultFulfilmentTimeMinutes(AUG4, AUG4 + (14 * 60 + 30) * 60_000),
-		).toBe(15 * 60 + 30);
-		// Late night clamps to 23:30 rather than spilling into tomorrow.
+	test("default: today is AS SOON AS POSSIBLE — the floor itself", () => {
+		// 14:12 + 15 lead = 14:27 → rounds to 14:30. Not an arbitrary hour out:
+		// ordering at 8:09 and being offered 9:30 read as a made-up wait.
+		expect(defaultFulfilmentTimeMinutes(AUG4, NOW_1412)).toBe(14 * 60 + 30);
+		expect(defaultFulfilmentTimeMinutes(AUG4, NOW_1412)).toBe(
+			minSelectableTimeMinutes(AUG4, NOW_1412),
+		);
+		// Late evening still lands on a real slot inside the day.
 		expect(
 			defaultFulfilmentTimeMinutes(AUG4, AUG4 + (23 * 60 + 20) * 60_000),
-		).toBe(23 * 60 + 30);
+		).toBe(23 * 60 + 35);
+	});
+
+	test("the ASAP default is never more than the lead + a rounding step out", () => {
+		// "As soon as possible" has to MEAN that: at any minute of the day the
+		// prefill sits within the lead time plus the 5-minute rounding, never
+		// an invented wait.
+		for (let minute = 0; minute < 1440; minute += 1) {
+			const now = AUG4 + minute * 60_000;
+			if (!hasSelectableTimeToday(now)) continue;
+			const out = defaultFulfilmentTimeMinutes(AUG4, now) - minute;
+			expect(out).toBeGreaterThanOrEqual(EARLIEST_FULFILMENT_LEAD_MINUTES);
+			expect(out).toBeLessThanOrEqual(EARLIEST_FULFILMENT_LEAD_MINUTES + 5);
+		}
+	});
+
+	test("by the time a vendor dispatches, an ASAP order books a rider NOW", () => {
+		// The seller books minutes-to-hours after checkout, so the buyer's
+		// "as soon as possible" moment is past by then and resolveScheduleAt
+		// turns it into an immediate dispatch rather than a scheduled pickup.
+		const orderedAt = NOW_1412;
+		const moment = composeFulfilmentMoment(
+			AUG4,
+			defaultFulfilmentTimeMinutes(AUG4, orderedAt),
+		);
+		expect(resolveScheduleAt(moment, orderedAt + 20 * 60_000)).toBeUndefined();
 	});
 
 	test("default: a future day is 10:00 AM, never a 'now'-derived clock time", () => {
@@ -208,14 +236,40 @@ describe("fulfilment time (86eyg0n8e follow-up)", () => {
 		);
 	});
 
-	test("floor: today is 30 min out rounded to 5; other days are free", () => {
-		expect(minSelectableTimeMinutes(AUG4, NOW_1412)).toBe(14 * 60 + 45);
+	test("floor: today is the lead time out, rounded to 5; other days are free", () => {
+		// 14:12 + 15 = 14:27 → rounds to 14:30.
+		expect(minSelectableTimeMinutes(AUG4, NOW_1412)).toBe(14 * 60 + 30);
 		expect(minSelectableTimeMinutes(AUG4 + 86_400_000, NOW_1412)).toBe(0);
 	});
 
-	test("the last half-hour of the day has no bookable slot left", () => {
+	test("THE INVARIANT: the prefilled default is never below the floor", () => {
+		// The bug Zaki hit: default and floor were computed independently, so a
+		// value that was fine at mount could sit under the floor and the
+		// browser blocked submit with its own message. Sweep the whole day.
+		for (let minute = 0; minute < 1440; minute += 1) {
+			const now = AUG4 + minute * 60_000;
+			for (const day of [AUG4, AUG4 + 86_400_000]) {
+				// Skip the last minutes of the day, where no valid slot exists at
+				// all — hasSelectableTimeToday is false and the form pushes the
+				// buyer to tomorrow instead.
+				if (!hasSelectableTimeToday(now) && day === AUG4) continue;
+				const def = defaultFulfilmentTimeMinutes(day, now);
+				expect(def).toBeGreaterThanOrEqual(minSelectableTimeMinutes(day, now));
+				expect(def).toBeLessThan(1440);
+			}
+		}
+	});
+
+	test("the floor and the dispatch threshold are ONE number, not two", () => {
+		// If these drift, a buyer can pick a time we then refuse to schedule.
+		expect(MIN_SCHEDULE_LEAD_MS).toBe(
+			EARLIEST_FULFILMENT_LEAD_MINUTES * 60_000,
+		);
+	});
+
+	test("the last minutes of the day have no bookable slot left", () => {
 		expect(hasSelectableTimeToday(NOW_1412)).toBe(true);
-		expect(hasSelectableTimeToday(AUG4 + (23 * 60 + 45) * 60_000)).toBe(false);
+		expect(hasSelectableTimeToday(AUG4 + (23 * 60 + 50) * 60_000)).toBe(false);
 	});
 
 	test("HH:MM round-trips; garbage becomes NaN", () => {

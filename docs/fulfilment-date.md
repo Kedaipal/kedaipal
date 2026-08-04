@@ -143,14 +143,39 @@ point's hours are governed by its own schedule note.
   and can never drift from it. Legacy, counter and self-collect orders have
   no time, and every consumer treats "no time" as the old date-only
   behaviour.
-- **Checkout: required but prefilled** (zero extra taps): today → the next
-  30-minute mark at least an hour out (2:12 PM → 3:30 PM), clamped 23:30; a
-  future day → 10:00 AM (`defaultFulfilmentTimeMinutes`). The input floor is
-  ~30 min out when the chosen day is today (`minSelectableTimeMinutes`), and
-  a date change that strands the chosen slot behind the floor bumps it to
-  that day's default — an invalid slot is fixed, a deliberate future one is
-  never touched. Native `<input type="time">` (TimeField, DateField's
+- **Checkout: required but prefilled** (zero extra taps): today → **as soon
+  as possible**, i.e. the floor itself (8:09 AM → 8:25 AM); a future day →
+  10:00 AM (`defaultFulfilmentTimeMinutes`). An hour-out default was tried
+  first and read as an invented wait (Zaki: *"8:09 → 9:30, that's like
+  1.5hrs"*) — most buyers mean "I'm ready, send someone", and anyone who
+  needs later just changes it. It also lands the common case on the nicer
+  dispatch behaviour: by the time the seller books, that moment is past, so
+  `resolveScheduleAt` turns it into an IMMEDIATE booking rather than a
+  scheduled pickup. Native `<input type="time">` (TimeField, DateField's
   sibling), 5-minute steps.
+- **The earliest selectable time is `now + EARLIEST_FULFILMENT_LEAD_MINUTES`
+  (15), rounded to 5** — and that number is OURS, not Lalamove's. Measured
+  on the MY sandbox 4 Aug 2026 (`lalamove:devProbeScheduleAt`): their only
+  rule is *"Date cannot be a past date or more than 30 days in advance"* —
+  `scheduleAt` at **+1 min quotes fine**, +0 and earlier are refused with
+  `ERR_INVALID_FIELD`, **+30 days works and +31 fails**, and **overnight
+  slots (02:00, 03:00) quote normally**, so there are no operating hours to
+  model. 15 minutes is a buffer so a submit can't race the clock into their
+  past-date refusal, plus a plausibility floor for a rider actually
+  arriving. The same constant drives the dispatch schedule-vs-now decision
+  (`MIN_SCHEDULE_LEAD_MS`), pinned by a test, so a buyer can never pick a
+  time we'd then refuse to schedule.
+- **The prefill can't fall under the floor.** Two guarantees, because the
+  first shipped without the second and Zaki hit it: (a)
+  `defaultFulfilmentTimeMinutes` is *derived from* the floor — pinned by a
+  minute-by-minute sweep of the whole day — and (b) the floor MOVES with the
+  wall clock, so the checkout re-runs the repair every 30s and whenever the
+  tab regains focus, bumping only a value that has already become
+  impossible. Without (b) a buyer who lingered ~45 minutes was blocked at
+  submit by the browser's own native `min` message, not ours. The submit
+  check now judges against the floor too and says the earliest time in our
+  words — or, in the last minutes of a day where no slot is left at all,
+  sends them to tomorrow.
 - **Validation is deliberately lenient server-side** (range-only): whether
   the moment is still ahead is judged at checkout submit client-side and
   again at dispatch, where a past moment simply books "now" — a strict
