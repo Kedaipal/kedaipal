@@ -14,6 +14,7 @@ import { StorefrontHeader } from "../components/storefront/storefront-header";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
+import { ssrRead } from "../lib/ssr-read";
 
 interface StorefrontLoaderData {
 	storeName: string;
@@ -33,11 +34,17 @@ interface StorefrontLoaderData {
 }
 
 export const Route = createFileRoute("/$slug")({
-	loader: async ({ params }): Promise<StorefrontLoaderData> => {
+	loader: async ({ params }): Promise<StorefrontLoaderData | null> => {
 		const client = getConvexHttpClient();
-		const result = await client.query(api.retailers.getRetailerBySlug, {
-			slug: params.slug,
-		});
+		const read = await ssrRead(() =>
+			client.query(api.retailers.getRetailerBySlug, { slug: params.slug }),
+		);
+		// Transient upstream failure: render the shell (head() falls back to
+		// defaults, the client's reactive query paints the store) instead of
+		// serving the buyer an error page (86eyheqzv). A definitive notFound
+		// below still 404s — the two must never be conflated.
+		if (!read.ok) return null;
+		const result = read.value;
 
 		if (result.status === "redirect") {
 			throw redirect({

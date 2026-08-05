@@ -43,6 +43,7 @@ import { CopyButton } from "../components/ui/copy-button";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { getConvexHttpClient } from "../lib/convex-server";
+import { ssrRead } from "../lib/ssr-read";
 import { qrFilenameBase, saveImageFromUrl } from "../lib/download";
 import { convexErrorMessage, formatMyMobile, formatPrice } from "../lib/format";
 import {
@@ -115,19 +116,28 @@ export const Route = createFileRoute("/track/$token")({
 	validateSearch: (search: Record<string, unknown>): { send?: 1 } => ({
 		send: search.send === 1 || search.send === "1" ? 1 : undefined,
 	}),
-	loader: async ({ params }) => {
-		const client = getConvexHttpClient();
-		const order = await client.query(api.orders.get, {
-			token: params.token,
-		});
-		if (!order) throw notFound();
+	loader: async ({ params }): Promise<{ shortId: string | null }> => {
+		const read = await ssrRead(() =>
+			getConvexHttpClient().query(api.orders.get, { token: params.token }),
+		);
+		// Transient upstream failure ≠ bad token: this loader only feeds head()
+		// meta — the page's real data is the client's reactive query — so a blip
+		// soft-degrades to the shell instead of dead-ending the buyer's WhatsApp
+		// link on an error page (86eyheqzv). Only a definitive null (the query
+		// answered: no such token) is a 404.
+		if (!read.ok) return { shortId: null };
+		if (!read.value) throw notFound();
 		// Surface only the human-readable shortId to the page head — never echo the
 		// secret token into a title/canonical that could leak via referrer/history.
-		return { shortId: order.shortId };
+		return { shortId: read.value.shortId };
 	},
 	head: ({ loaderData }) => ({
 		meta: [
-			{ title: `Order ${loaderData?.shortId ?? ""} — Kedaipal` },
+			{
+				title: loaderData?.shortId
+					? `Order ${loaderData.shortId} — Kedaipal`
+					: "Your order — Kedaipal",
+			},
 			// noindex + no canonical: the URL carries a capability token, so it must
 			// never be indexed or advertised.
 			{ name: "robots", content: "noindex" },

@@ -11,6 +11,7 @@ import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
+import { ssrRead } from "../lib/ssr-read";
 
 interface ProductLoaderData {
 	storeName: string;
@@ -37,11 +38,16 @@ interface ProductLoaderData {
  * routing trick as the category + checkout pages ($slug.tsx is a leaf).
  */
 export const Route = createFileRoute("/$slug_/p/$productSlug")({
-	loader: async ({ params }): Promise<ProductLoaderData> => {
+	loader: async ({ params }): Promise<ProductLoaderData | null> => {
 		const client = getConvexHttpClient();
-		const result = await client.query(api.retailers.getRetailerBySlug, {
-			slug: params.slug,
-		});
+		const retailerRead = await ssrRead(() =>
+			client.query(api.retailers.getRetailerBySlug, { slug: params.slug }),
+		);
+		// Transient upstream failure: render the shell (client query paints the
+		// product) instead of an error page (86eyheqzv). Definitive notFounds
+		// below still 404.
+		if (!retailerRead.ok) return null;
+		const result = retailerRead.value;
 
 		// Renamed store → keep the buyer on the same product under the new slug.
 		if (result.status === "redirect") {
@@ -57,10 +63,14 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 		const retailer = result.retailer;
 
 		// Unknown, archived, hidden or category-suppressed → 404, never a leak.
-		const product = await client.query(api.products.getPublicBySlug, {
-			retailerId: retailer._id,
-			slug: params.productSlug,
-		});
+		const productRead = await ssrRead(() =>
+			client.query(api.products.getPublicBySlug, {
+				retailerId: retailer._id,
+				slug: params.productSlug,
+			}),
+		);
+		if (!productRead.ok) return null;
+		const product = productRead.value;
 		if (product === null) {
 			throw notFound();
 		}

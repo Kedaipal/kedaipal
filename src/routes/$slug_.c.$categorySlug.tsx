@@ -15,6 +15,7 @@ import { StorefrontHeader } from "../components/storefront/storefront-header";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
+import { ssrRead } from "../lib/ssr-read";
 
 interface CategoryLoaderData {
 	storeName: string;
@@ -40,11 +41,16 @@ interface CategoryLoaderData {
  * pages and checkout — only the product set is scoped to the category.
  */
 export const Route = createFileRoute("/$slug_/c/$categorySlug")({
-	loader: async ({ params }): Promise<CategoryLoaderData> => {
+	loader: async ({ params }): Promise<CategoryLoaderData | null> => {
 		const client = getConvexHttpClient();
-		const result = await client.query(api.retailers.getRetailerBySlug, {
-			slug: params.slug,
-		});
+		const retailerRead = await ssrRead(() =>
+			client.query(api.retailers.getRetailerBySlug, { slug: params.slug }),
+		);
+		// Transient upstream failure: render the shell (client query paints the
+		// category) instead of an error page (86eyheqzv). Definitive notFounds
+		// below still 404.
+		if (!retailerRead.ok) return null;
+		const result = retailerRead.value;
 
 		// Renamed store → keep the buyer on the same category under the new slug.
 		if (result.status === "redirect") {
@@ -60,10 +66,14 @@ export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 		const retailer = result.retailer;
 
 		// Unknown or archived category → 404, never a silent empty page.
-		const page = await client.query(api.categories.getPublicPage, {
-			retailerId: retailer._id,
-			categorySlug: params.categorySlug,
-		});
+		const pageRead = await ssrRead(() =>
+			client.query(api.categories.getPublicPage, {
+				retailerId: retailer._id,
+				categorySlug: params.categorySlug,
+			}),
+		);
+		if (!pageRead.ok) return null;
+		const page = pageRead.value;
 		if (page === null) {
 			throw notFound();
 		}
