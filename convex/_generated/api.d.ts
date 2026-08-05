@@ -63,6 +63,7 @@ import type * as lib_popularProducts from "../lib/popularProducts.js";
 import type * as lib_rateLimiter from "../lib/rateLimiter.js";
 import type * as lib_slug from "../lib/slug.js";
 import type * as lib_storeProfile from "../lib/storeProfile.js";
+import type * as lib_trackingToken from "../lib/trackingToken.js";
 import type * as lib_usagePeriod from "../lib/usagePeriod.js";
 import type * as lib_variant from "../lib/variant.js";
 import type * as lib_wabaLimits from "../lib/wabaLimits.js";
@@ -147,6 +148,7 @@ declare const fullApi: ApiFromModules<{
   "lib/rateLimiter": typeof lib_rateLimiter;
   "lib/slug": typeof lib_slug;
   "lib/storeProfile": typeof lib_storeProfile;
+  "lib/trackingToken": typeof lib_trackingToken;
   "lib/usagePeriod": typeof lib_usagePeriod;
   "lib/variant": typeof lib_variant;
   "lib/wabaLimits": typeof lib_wabaLimits;

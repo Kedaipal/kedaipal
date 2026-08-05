@@ -64,6 +64,7 @@ import {
 	isCollectionGateClosed,
 	isMockupGateClosed,
 } from "./lib/order";
+import { normalizeTrackingToken } from "./lib/trackingToken";
 import {
 	DELIVERY_FEE_MAX,
 	type DeliveryConfig,
@@ -305,11 +306,15 @@ async function orderByToken(
 	ctx: QueryCtx | MutationCtx,
 	trackingToken: string,
 ): Promise<Doc<"orders"> | null> {
+	// Defence in depth for placeholder-polluted links (86eyheqzv): the server
+	// entry 301s `/track/{{1}}<token>` before the router, but any polluted
+	// token that reaches a query directly still resolves. Tokens never contain
+	// braces, so stripping is unambiguous.
+	const token = normalizeTrackingToken(trackingToken);
+	if (token.length === 0) return null;
 	return ctx.db
 		.query("orders")
-		.withIndex("by_tracking_token", (q) =>
-			q.eq("trackingToken", trackingToken),
-		)
+		.withIndex("by_tracking_token", (q) => q.eq("trackingToken", token))
 		.first();
 }
 
