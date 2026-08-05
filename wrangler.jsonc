@@ -4,7 +4,9 @@
   "account_id": "8eb311132741dadfcd1fef79b8b7c1df",
   "compatibility_date": "2025-09-02",
   "compatibility_flags": ["nodejs_compat"],
-  "main": "@tanstack/react-start/server-entry",
+  // Custom entry: default Start handler + the /track placeholder-link rescue
+  // (86eyheqzv) — see src/server-entry.ts.
+  "main": "./src/server-entry.ts",
   "assets": {
     "directory": "./dist/client"
   },

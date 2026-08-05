@@ -2,6 +2,43 @@
 
 **ClickUp:** [`86eyheqzv`](https://app.clickup.com/t/86eyheqzv) · **Shipped:** 2026-08-05 (dev)
 
+## ROOT CAUSE (confirmed via buyer screenshot, 2026-08-05)
+
+The WhatsApp confirmation template's **URL button composes to
+`/track/{{1}}<token>`** — the registered button URL carries `{{1}}` as
+literal text instead of a recognized dynamic variable, so WhatsApp *appends*
+the token after the braces rather than substituting it. Tapping that URL hit
+an infinite redirect: TanStack's URL canonicalization answers
+`/track/%7B%7B1%7D%7D…` with a 307 whose `Location` has the braces
+**decoded**, the browser re-encodes them to request it, forever —
+`net::ERR_TOO_MANY_REDIRECTS`, before any page code (loader, boundary, React)
+ever runs. Reproduced with curl against prod (6/6 redirects, stable loop).
+
+Why it looked new: before the confirmation push (86eyf1rck) the confirm was a
+plain text message whose URL **our code** built — always clean. The button
+only became the link buyers tap when that shipped. Other messages (status
+updates) still embed clean plain-text URLs, which is why some taps worked and
+some didn't — "intermittent" was really *which link the buyer tapped*.
+
+Two-part fix:
+
+1. **Server-side rescue (this repo — makes every already-sent button work,
+   since those links are frozen in buyers' chats):** custom Worker entry
+   `src/server-entry.ts` (wired via wrangler `main`) 301s a polluted
+   `/track` path to the clean-token URL *before* the router sees it —
+   handles percent-encoded and literal brace forms, preserves the query
+   string, logs a `console.warn` per rescue so the rate is visible in the
+   Worker's log stream. Pure logic + tests in `convex/lib/trackingToken.ts`;
+   `orderByToken` (the single `by_tracking_token` reader) normalizes too, as
+   defence in depth. Tokens are crypto-random alphanumerics — braces can
+   never legitimately appear, so stripping is unambiguous.
+2. **Meta-side correction (seller/ops):** re-register the template's button
+   URL so the variable is recognized — in WhatsApp Manager the URL field must
+   be built with the **Add variable** control (base
+   `https://kedaipal.com/track/`, UI appends `{{1}}`), not hand-typed braces.
+   Until then, new messages still carry polluted links; the rescue absorbs
+   them.
+
 ## The incident
 
 Buyers tapping the tracking link / confirmation-template URL button in their
