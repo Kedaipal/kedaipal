@@ -5,7 +5,6 @@ import {
 	CalendarDays,
 	CheckCircle,
 	Clock,
-	Download,
 	ExternalLink,
 	HandCoins,
 	Hourglass,
@@ -38,7 +37,7 @@ import { paymentMethodLabel } from "../../convex/lib/paymentMethod";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
-import { IvePaidDialog } from "../components/storefront/ive-paid-dialog";
+import { ManualPaymentDialog } from "../components/storefront/manual-payment-dialog";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { CopyButton } from "../components/ui/copy-button";
@@ -46,7 +45,6 @@ import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { getConvexHttpClient } from "../lib/convex-server";
 import { ssrRead } from "../lib/ssr-read";
-import { qrFilenameBase, saveImageFromUrl } from "../lib/download";
 import { convexErrorMessage, formatMyMobile, formatPrice } from "../lib/format";
 import {
 	deriveMapsUrl,
@@ -313,12 +311,10 @@ function TrackingRoute() {
 		paymentInfo?.gatewayMethods,
 	);
 	const [editingAddress, setEditingAddress] = useState(false);
+	// The manual-payment sheet (methods + I've-paid proof in one door) — opened
+	// by the payment card's primary button on manual stores, the bank-transfer
+	// fallback on gateway stores, and "Update proof" on a claimed order.
 	const [claimingPayment, setClaimingPayment] = useState(false);
-	// Index of the payment-QR currently being saved (spinner on that button only).
-	const [savingQrIndex, setSavingQrIndex] = useState<number | null>(null);
-	// Manual bank/QR details start collapsed while the gateway path is primary;
-	// one tap reveals them (and they stay the full section when no gateway).
-	const [showManualMethods, setShowManualMethods] = useState(false);
 	const createGatewayCheckout = useAction(api.hitpay.createCheckout);
 	const verifyGatewayCheckout = useAction(api.hitpay.verifyCheckout);
 	const [payingNow, setPayingNow] = useState(false);
@@ -351,21 +347,6 @@ function TrackingRoute() {
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 			setPayingNow(false);
-		}
-	}
-
-	async function handleSaveQr(label: string, url: string, index: number) {
-		setSavingQrIndex(index);
-		try {
-			const outcome = await saveImageFromUrl(url, qrFilenameBase(label));
-			if (outcome === "downloaded") {
-				toast.success("QR saved — open it from your downloads to scan.");
-			} else if (outcome === "failed") {
-				toast.error("Couldn't save the QR — please try again.");
-			}
-			// "shared" → the OS sheet took over; "cancelled" → intentional. Silent.
-		} finally {
-			setSavingQrIndex(null);
 		}
 	}
 
@@ -679,12 +660,19 @@ function TrackingRoute() {
 								</button>
 							</>
 						) : (
-							<Button
-								onClick={() => setClaimingPayment(true)}
-								className="h-12 w-full text-base"
-							>
-								I've paid
-							</Button>
+							<>
+								<Button
+									onClick={() => setClaimingPayment(true)}
+									className="h-12 w-full text-base"
+								>
+									Pay now · {formatPrice(order.total, order.currency)}
+								</Button>
+								<p className="text-xs opacity-80">
+									Bank transfer or QR — pay in your banking app, then attach
+									the receipt so {order.storeName || "the store"} can confirm
+									it.
+								</p>
+							</>
 						)
 					) : null}
 
@@ -706,122 +694,6 @@ function TrackingRoute() {
 						</div>
 					) : null}
 				</section>
-			) : null}
-
-			{/* How to pay — the seller's payment methods (banks + QRs) with one-tap
-			    copy on each account number (the MY bank-transfer friction point).
-			    Shown while a payment is still due and not deferred behind a closed
-			    mockup gate; hidden once received/cancelled or when none configured.
-			    While the HitPay Pay-now path is primary (86eyb6z3a) the manual
-			    details start COLLAPSED behind one tap — still there for the
-			    transfer-anyway buyer, no longer competing with the gateway. */}
-			{!isCancelled &&
-			!mockupGateClosed &&
-			!deliveryFeeHeld &&
-			paymentStatus !== "received" &&
-			paymentMethods.length > 0 ? (
-				gatewayAvailable && paymentStatus === "unpaid" && !showManualMethods ? (
-					<section className="mt-4 rounded-2xl border border-border bg-card p-4">
-						<button
-							type="button"
-							onClick={() => setShowManualMethods(true)}
-							className="flex w-full items-center justify-between gap-3 text-left"
-						>
-							<span className="text-sm text-muted-foreground">
-								Prefer bank transfer or QR?
-							</span>
-							<span className="shrink-0 text-sm font-medium text-accent">
-								Show payment details
-							</span>
-						</button>
-					</section>
-				) : (
-				<section className="mt-4 flex flex-col gap-4 rounded-2xl border border-border bg-card p-4">
-					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-						How to pay
-					</p>
-					{paymentMethods.map((m, i) => (
-						<div
-							// biome-ignore lint/suspicious/noArrayIndexKey: payment methods are a render-stable embedded array with no stable id; label+index is fine and stable within a render
-							key={`${m.label}-${i}`}
-							className="flex flex-col gap-2 border-border [&:not(:first-of-type)]:border-t [&:not(:first-of-type)]:pt-4"
-						>
-							<p className="text-sm font-semibold">{m.label}</p>
-							{m.type === "bank" ? (
-								<>
-									{m.bankName && m.bankName !== m.label ? (
-										<div className="flex items-baseline justify-between gap-3 text-sm">
-											<span className="text-muted-foreground">Bank</span>
-											<span className="font-medium">{m.bankName}</span>
-										</div>
-									) : null}
-									{m.bankAccountName ? (
-										<div className="flex items-baseline justify-between gap-3 text-sm">
-											<span className="text-muted-foreground">Name</span>
-											<span className="text-right font-medium">
-												{m.bankAccountName}
-											</span>
-										</div>
-									) : null}
-									{m.bankAccountNumber ? (
-										<div className="flex items-center justify-between gap-2 rounded-xl bg-muted/50 px-3 py-2.5">
-											<div className="min-w-0">
-												<p className="text-xs text-muted-foreground">
-													Account number
-												</p>
-												<p className="break-all font-mono text-base font-semibold">
-													{m.bankAccountNumber}
-												</p>
-											</div>
-											<CopyButton
-												value={m.bankAccountNumber}
-												ariaLabel="Copy account number"
-												successMessage="Account number copied"
-											/>
-										</div>
-									) : null}
-								</>
-							) : m.qrImageUrl ? (
-								<div className="flex flex-col items-center gap-1.5">
-									<ZoomableImage
-										src={m.qrImageUrl}
-										alt={`${m.label} QR code`}
-										caption={m.label}
-										className="max-h-56 w-auto rounded-lg border border-border bg-white"
-									/>
-									<p className="text-xs text-muted-foreground">
-										Tap to enlarge &amp; scan
-									</p>
-									<Button
-										type="button"
-										variant="outline"
-										onClick={() =>
-											m.qrImageUrl
-												? handleSaveQr(m.label, m.qrImageUrl, i)
-												: undefined
-										}
-										isLoading={savingQrIndex === i}
-										disabled={savingQrIndex !== null}
-										className="mt-0.5 h-11 rounded-full px-5"
-									>
-										{savingQrIndex !== i && <Download className="size-4" />}
-										Save QR
-									</Button>
-									<p className="max-w-64 text-center text-xs text-muted-foreground">
-										Paying on this phone? Save the QR to your gallery, then scan
-										it from inside TNG eWallet or your banking app.
-									</p>
-								</div>
-							) : null}
-							{m.note ? (
-								<p className="whitespace-pre-line break-words text-sm text-muted-foreground">
-									{m.note}
-								</p>
-							) : null}
-						</div>
-					))}
-				</section>
-				)
 			) : null}
 
 			{/* Mockup approval — buyer reviews the seller's proof before production. */}
@@ -1159,11 +1031,13 @@ function TrackingRoute() {
 				collectsFromCustomer={isCollection}
 			/>
 
-			<IvePaidDialog
+			<ManualPaymentDialog
 				open={claimingPayment}
 				onClose={() => setClaimingPayment(false)}
 				token={token}
 				shortId={order.shortId}
+				storeName={order.storeName || "the store"}
+				methods={paymentMethods}
 				hasExistingClaim={paymentStatus === "claimed"}
 			/>
 

@@ -40,12 +40,20 @@ nothing here gets rebuilt.
    pause keeps the keys so resuming is one tap.
 2. **Pay now (buyer).** `orders.getPaymentMethods` returns
    `gatewayAvailable` per-order (connected + enabled + unpaid + both price
-   holds clear + total ≥ RM0.30). The order page renders Pay now primary,
-   "Paid by bank transfer instead?" as the claim fallback, and the manual
-   bank/QR details **collapsed behind one tap**. WhatsApp copy needed **zero
-   changes** — the confirm template's URL button and the "Make payment" CTA
-   already land on `/track/<token>`, which is the one payment door for
-   storefront *and* counter pay-later orders.
+   holds clear + total ≥ RM0.30). The order page carries ONE payment door:
+   - **gateway store** → "Pay now · RM X" opens the hosted checkout;
+     "Paid by bank transfer instead? Tell the store" underneath;
+   - **manual store** → the same "Pay now · RM X" button instead opens the
+     **`ManualPaymentDialog`** sheet.
+   All manual payment lives in that sheet (`manual-payment-dialog.tsx`,
+   which absorbed the old always-visible "How to pay" section AND the old
+   IvePaidDialog): "1 · Pay with any of these" (bank rows with one-tap
+   copy, QR zoom + Save QR) → "2 · Then tell the store" (reference +
+   receipt screenshot → `claimPayment`). "Update proof" on a claimed order
+   reopens the same sheet. WhatsApp copy needed **zero changes** — the
+   confirm template's URL button and the "Make payment" CTA already land on
+   `/track/<token>`, the one payment door for storefront *and* counter
+   pay-later orders.
 3. **Mint (lazy, never at order create).** `hitpay.createCheckout` (public
    action, token capability, rate-limited) re-checks every guard
    server-side, then reuses the stored request when it's fresh (<55 min) and
