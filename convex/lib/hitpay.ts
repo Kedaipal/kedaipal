@@ -83,7 +83,9 @@ export const HITPAY_MIN_AMOUNT_SEN = 30;
  * buyer could load a nearly-expired page — HitPay refuses payment on an
  * expired request, so the failure mode is their "link expired" screen, not a
  * stray charge. */
-export const HITPAY_REQUEST_EXPIRES_AFTER = "1 hour";
+// "60 mins", not "1 hour" — the API 422s on the singular-unit form
+// (verified against the live sandbox: "The expires after format is invalid").
+export const HITPAY_REQUEST_EXPIRES_AFTER = "60 mins";
 export const HITPAY_REQUEST_REUSE_MS = 55 * 60 * 1000;
 
 /** Minor units (sen) → HitPay's decimal string ("1250" sen → "12.50"). */

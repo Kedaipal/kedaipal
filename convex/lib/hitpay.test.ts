@@ -108,7 +108,7 @@ describe("buildPaymentRequestParams", () => {
 		expect(p.get("webhook")).toBe(inputs.webhookUrl);
 		expect(p.get("name")).toBe("Aina");
 		expect(p.get("phone")).toBe("60123456789");
-		expect(p.get("expires_after")).toBe("1 hour");
+		expect(p.get("expires_after")).toBe("60 mins");
 	});
 
 	test("suppresses HitPay's own SMS/email notifications (SMS defaults ON upstream)", () => {
