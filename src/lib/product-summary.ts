@@ -17,7 +17,9 @@ export type SummaryInput = {
 		 * approved) from one that's merely made fresh with a fixed price. */
 		requiresProof: boolean;
 	}[];
-	hasCustomLine: boolean;
+	/** The product's bespoke line, if it offers one — its price is the seller's
+	 * starting price, so the strip needs the value, not just its presence. */
+	customLine: { price: string } | null;
 };
 
 /** "12" / "12.50" — trailing .00 dropped so the strip reads like speech. */
@@ -26,7 +28,7 @@ function formatMajor(n: number): string {
 }
 
 export function describeProduct(
-	{ options, rows, hasCustomLine }: SummaryInput,
+	{ options, rows, customLine }: SummaryInput,
 	currency: string,
 ): string {
 	const parts: string[] = [];
@@ -45,6 +47,22 @@ export function describeProduct(
 		return [
 			"Made to order",
 			base && base > 0 ? `${currency} ${formatMajor(base)}` : "Price on quote",
+		].join(" · ");
+	}
+
+	// The editor's **made-to-order type**: no matrix at all, the product IS its
+	// bespoke line (see VariantEditor.switchToMadeToOrder). Without this the
+	// strip fell through to "One item · No price yet · + custom option" — three
+	// wrong statements about a perfectly configured product. Its price is a
+	// STARTING price (the mockup quote lands on top), so this says exactly what
+	// the storefront prints: "From RM 40" (86eyhn4mr).
+	if (options.length === 0 && rows.length === 0 && customLine) {
+		const base = parsePriceInput(customLine.price.trim());
+		return [
+			"Made to order",
+			base && base > 0
+				? `From ${currency} ${formatMajor(base)}`
+				: "Price on quote",
 		].join(" · ");
 	}
 
@@ -89,7 +107,7 @@ export function describeProduct(
 		);
 	}
 
-	if (hasCustomLine) parts.push("+ custom option");
+	if (customLine) parts.push("+ custom option");
 
 	return parts.join(" · ");
 }

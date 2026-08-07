@@ -457,11 +457,13 @@ export function wizardInitialStep(state: WizardState): number {
 
 /** Compact "RM 12" / "RM 12–28" label for the review preview. */
 export function wizardPriceLabel(state: WizardState, currency: string): string {
-	// Made to order has no matrix — its price lives on the bespoke line.
+	// Made to order has no matrix — its price lives on the bespoke line, and is
+	// a STARTING price the mockup quote lands on top of, so the preview says
+	// exactly what the storefront prints: "From RM 40" (86eyhn4mr).
 	if (effectiveShape(state) === "made_to_order") {
 		const base = parsePriceInput(state.editor.customLine?.price.trim() ?? "");
 		return base && base > 0
-			? `${currency} ${base % 1 === 0 ? String(base) : base.toFixed(2)}`
+			? `From ${currency} ${base % 1 === 0 ? String(base) : base.toFixed(2)}`
 			: "Price on quote";
 	}
 	const parsed = state.editor.rows
@@ -1276,7 +1278,9 @@ export function ProductWizard({
 								<p className="-mt-2 text-sm text-muted-foreground">
 									Optional. Leave it blank and buyers see &ldquo;Price on
 									quote&rdquo; — you set the real price when you send them a
-									mockup. Enter an amount and buyers see that price.
+									mockup. Enter an amount and buyers see &ldquo;From{" "}
+									{currency} …&rdquo;, so nobody mistakes it for the final
+									price.
 								</p>
 								<label className="flex items-center gap-3 text-sm font-medium">
 									<span className="min-w-0 flex-1 truncate">

@@ -451,7 +451,7 @@ function ProductSummaryStrip({
 		{
 			options: editor.options,
 			rows: editor.rows,
-			hasCustomLine: editor.customLine !== null,
+			customLine: editor.customLine,
 		},
 		currency,
 	);

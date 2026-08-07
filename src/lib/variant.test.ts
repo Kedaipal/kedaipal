@@ -3,6 +3,7 @@ import {
 	availableValuesPerAxis,
 	cartesian,
 	getCustomLine,
+	hasStartingPrice,
 	isSellable,
 	minQuantityUnreachable,
 	resolveVariant,
@@ -167,6 +168,34 @@ describe("storefront variant helpers", () => {
 		test("getCustomLine returns the flagged row, or null when absent", () => {
 			expect(getCustomLine(variants)?.isCustom).toBe(true);
 			expect(getCustomLine([variants[0]])).toBeNull();
+		});
+
+		describe("hasStartingPrice (86eyhn4mr)", () => {
+			test("a priced custom line makes the product's price a floor", () => {
+				expect(
+					hasStartingPrice([
+						{ price: 5000 },
+						{ price: 4000, isCustom: true, active: true },
+					]),
+				).toBe(true);
+			});
+			test("an unpriced custom line is 'Price on quote', not a floor", () => {
+				// price 0 is already covered by hasQuotePricing — printing "From RM 0"
+				// would be worse than the quote label it currently gets.
+				expect(hasStartingPrice([{ price: 0, isCustom: true }])).toBe(false);
+			});
+			test("standard variants are fixed prices, however many", () => {
+				expect(hasStartingPrice([{ price: 5000 }, { price: 8000 }])).toBe(false);
+			});
+			test("a deactivated custom line doesn't qualify the price", () => {
+				// Buyers can't order it, so it can't be what the shown price is 'from'.
+				expect(
+					hasStartingPrice([
+						{ price: 5000 },
+						{ price: 4000, isCustom: true, active: false },
+					]),
+				).toBe(false);
+			});
 		});
 		test("is excluded from axis availability (not pill-addressable)", () => {
 			// Only the real "S" variant should make "S" available — the custom row's
