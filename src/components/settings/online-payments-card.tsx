@@ -15,6 +15,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { convexErrorMessage } from "../../lib/format";
 import { ProBadge } from "../app/pro-gate";
+import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import { Input } from "../ui/input";
@@ -69,16 +70,25 @@ export function OnlinePaymentsCard({
 
 	return (
 		<div className="flex flex-col gap-4">
-			<div className="flex flex-col gap-1">
-				<div className="flex items-center gap-2">
+			<div className="flex flex-col gap-2">
+				<div className="flex items-center gap-2.5">
+					{/* Official HitPay mark (light-background variant of the checkout
+					    header's own asset) — the Lalamove-logo precedent. */}
+					<AppImage
+						src="/img/hitpay-logo.svg"
+						alt="HitPay"
+						aspect="size-7"
+						fill={false}
+						className="shrink-0"
+					/>
 					<h2 className="font-heading text-lg font-bold">Online payments</h2>
 					{!canUse ? <ProBadge /> : null}
 				</div>
 				<p className="text-sm text-muted-foreground">
-					Let buyers pay by Touch 'n Go, DuitNow QR, FPX or card — powered by
-					your own HitPay account. Your bank &amp; QR details below stay as the
-					manual fallback.
+					Let buyers pay online through your own HitPay account. Your bank
+					&amp; QR details above stay as the manual fallback.
 				</p>
+				<MethodLogos />
 			</div>
 
 			{connected ? (
@@ -258,7 +268,8 @@ export function OnlinePaymentsCard({
 								>
 									hitpayapp.com <ExternalLink className="size-3" />
 								</a>{" "}
-								and add your logo there (buyers see it at checkout).
+								— add your logo and brand colour there (Settings → Checkout
+								Customisation); buyers see them on the payment page.
 							</li>
 							<li>
 								In the HitPay dashboard, open{" "}
@@ -323,6 +334,36 @@ function Bullet({ children }: { children: React.ReactNode }) {
 			</span>
 			<span>{children}</span>
 		</li>
+	);
+}
+
+/** The rails buyers get — official marks from HitPay's own gateway plugin,
+ * rendered as quiet white chips (the way payment forms wear them). */
+const METHOD_LOGOS: Array<{ src: string; alt: string }> = [
+	{ src: "/img/payment/touchngo.svg", alt: "Touch 'n Go eWallet" },
+	{ src: "/img/payment/duitnow.svg", alt: "DuitNow QR" },
+	{ src: "/img/payment/fpx.svg", alt: "FPX online banking" },
+	{ src: "/img/payment/visa.svg", alt: "Visa" },
+	{ src: "/img/payment/master.svg", alt: "Mastercard" },
+];
+
+function MethodLogos() {
+	return (
+		<div className="flex flex-wrap items-center gap-1.5">
+			{METHOD_LOGOS.map((m) => (
+				<span
+					key={m.src}
+					className="flex h-7 w-11 items-center justify-center rounded-md border border-border bg-white px-1.5"
+				>
+					<AppImage
+						src={m.src}
+						alt={m.alt}
+						aspect="h-4 w-auto"
+						fill={false}
+					/>
+				</span>
+			))}
+		</div>
 	);
 }
 
