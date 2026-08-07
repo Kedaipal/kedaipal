@@ -33,6 +33,7 @@ import { api } from "../../convex/_generated/api";
 import { isSafeTrackingUrl } from "../../convex/lib/couriers";
 import { formatFulfilmentDateTime } from "../../convex/lib/fulfilmentDate";
 import { isMockupGateClosed } from "../../convex/lib/order";
+import { describeGatewayMethods } from "../../convex/lib/hitpay";
 import { paymentMethodLabel } from "../../convex/lib/paymentMethod";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
@@ -305,6 +306,12 @@ function TrackingRoute() {
 	// The seller's HitPay checkout can take THIS order's payment right now
 	// (86eyb6z3a) — connection on, price holds clear, payment still open.
 	const gatewayAvailable = paymentInfo?.gatewayAvailable === true;
+	// Name only the rails this account actually has enabled (probed truth);
+	// null falls back to a generic line rather than promising methods the
+	// seller never switched on.
+	const gatewayMethodsLabel = describeGatewayMethods(
+		paymentInfo?.gatewayMethods,
+	);
 	const [editingAddress, setEditingAddress] = useState(false);
 	const [claimingPayment, setClaimingPayment] = useState(false);
 	// Index of the payment-QR currently being saved (spinner on that button only).
@@ -657,9 +664,11 @@ function TrackingRoute() {
 										: `Pay now · ${formatPrice(order.total, order.currency)}`}
 								</Button>
 								<p className="text-xs opacity-80">
-									Pay by Touch 'n Go, DuitNow, FPX or card on {order.storeName ||
-										"the store"}
-									's secure HitPay page — your order confirms automatically.
+									{gatewayMethodsLabel
+										? `Pay by ${gatewayMethodsLabel} on `
+										: "Pay in your banking or eWallet app on "}
+									{order.storeName || "the store"}'s secure HitPay page — your
+									order confirms automatically.
 								</p>
 								<button
 									type="button"

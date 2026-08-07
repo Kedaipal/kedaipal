@@ -115,7 +115,10 @@ export const getCheckoutContext = internalQuery({
 });
 
 /** Persist a freshly minted request onto the order — with a same-transaction
- * re-check that the world didn't move while the action was on the wire. */
+ * re-check that the world didn't move while the action was on the wire. Also
+ * the opportunistic freshness path for the account's enabled-methods list:
+ * every real mint echoes it, so the settings chips + buyer copy stay true
+ * without extra API calls. */
 export const recordCheckoutRequest = internalMutation({
 	args: {
 		orderId: v.id("orders"),
@@ -123,13 +126,26 @@ export const recordCheckoutRequest = internalMutation({
 		url: v.string(),
 		amountSen: v.number(),
 		currency: v.string(),
+		accountMethods: v.optional(v.array(v.string())),
 	},
 	handler: async (
 		ctx,
-		{ orderId, requestId, url, amountSen, currency },
+		{ orderId, requestId, url, amountSen, currency, accountMethods },
 	): Promise<{ ok: boolean }> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) return { ok: false };
+		if (accountMethods && accountMethods.length > 0) {
+			const retailer = await ctx.db.get(order.retailerId);
+			if (retailer?.hitpay?.apiKey) {
+				await ctx.db.patch(order.retailerId, {
+					hitpay: {
+						...retailer.hitpay,
+						paymentMethods: accountMethods,
+						methodsCheckedAt: Date.now(),
+					},
+				});
+			}
+		}
 		// The order settled or re-priced between the action's read and now —
 		// refuse to store the link. Nobody has seen this URL yet (the action
 		// only returns it after we say ok), so the orphaned request just
@@ -145,6 +161,117 @@ export const recordCheckoutRequest = internalMutation({
 			updatedAt: Date.now(),
 		});
 		return { ok: true };
+	},
+});
+
+/** Context for the connect-time probe (below). */
+export const getRefreshContext = internalQuery({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{ credentials: HitpayCredentials; currency: string } | null> => {
+		const retailer = await ctx.db.get(retailerId);
+		const credentials = resolveHitpayCredentials(retailer?.hitpay);
+		if (!retailer || !credentials) return null;
+		return { credentials, currency: retailer.currency ?? "MYR" };
+	},
+});
+
+/** Stamp the probe's outcome. A null list with a fresh `methodsCheckedAt`
+ * means "the key was rejected" — the settings card renders the check-your-key
+ * warning off exactly that shape. */
+export const recordAccountMethods = internalMutation({
+	args: {
+		retailerId: v.id("retailers"),
+		methods: v.union(v.array(v.string()), v.null()),
+	},
+	handler: async (ctx, { retailerId, methods }): Promise<void> => {
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer?.hitpay?.apiKey) return;
+		await ctx.db.patch(retailerId, {
+			hitpay: {
+				...retailer.hitpay,
+				paymentMethods: methods ?? undefined,
+				methodsCheckedAt: Date.now(),
+			},
+		});
+	},
+});
+
+/**
+ * Connect-time probe (scheduled by retailers.updateSettings whenever a
+ * credential is stored): mints a throwaway 1.00 request that expires in 5
+ * minutes to (a) validate the pasted key against the right environment and
+ * (b) read back the ACCOUNT's enabled payment methods — the source of truth
+ * for the settings chips and the buyer's Pay-now copy. A 401/403 records
+ * "checked, no list" (bad key); transient failures record nothing and leave
+ * any previous truth in place.
+ */
+export const refreshAccountMethods = internalAction({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<void> => {
+		const context: {
+			credentials: HitpayCredentials;
+			currency: string;
+		} | null = await ctx.runQuery(internal.hitpay.getRefreshContext, {
+			retailerId,
+		});
+		if (!context) return;
+
+		const params = new URLSearchParams();
+		params.set("amount", "1.00");
+		params.set("currency", context.currency.toUpperCase());
+		params.set("purpose", "Kedaipal connection check — safe to ignore");
+		params.set("reference_number", "KEDAIPAL-CONNECT");
+		params.set("redirect_url", "https://kedaipal.com");
+		params.set("send_sms", "false");
+		params.set("send_email", "false");
+		params.set("expires_after", "5 mins");
+
+		let response: Response;
+		try {
+			response = await fetch(
+				`${HITPAY_API_BASE[context.credentials.mode]}/payment-requests`,
+				{
+					method: "POST",
+					headers: {
+						"X-BUSINESS-API-KEY": context.credentials.apiKey,
+						"Content-Type": "application/x-www-form-urlencoded",
+						"X-Requested-With": "XMLHttpRequest",
+					},
+					body: params.toString(),
+				},
+			);
+		} catch (err) {
+			console.error("hitpay.refreshAccountMethods: probe failed", err);
+			return;
+		}
+		if (response.status === 401 || response.status === 403) {
+			console.warn("hitpay.refreshAccountMethods: key rejected", {
+				retailerId,
+			});
+			await ctx.runMutation(internal.hitpay.recordAccountMethods, {
+				retailerId,
+				methods: null,
+			});
+			return;
+		}
+		if (!response.ok) {
+			console.error("hitpay.refreshAccountMethods: probe rejected", {
+				status: response.status,
+				body: (await response.text()).slice(0, 300),
+			});
+			return;
+		}
+		const request = (await response.json()) as HitpayPaymentRequest;
+		if (!request.payment_methods || request.payment_methods.length === 0) {
+			return;
+		}
+		await ctx.runMutation(internal.hitpay.recordAccountMethods, {
+			retailerId,
+			methods: request.payment_methods,
+		});
 	},
 });
 
@@ -274,6 +401,7 @@ export const createCheckout = action({
 				url: request.url,
 				amountSen: context.total,
 				currency: context.currency.toUpperCase(),
+				accountMethods: request.payment_methods,
 			},
 		);
 		if (!recorded.ok) {

@@ -27,6 +27,10 @@ type HitpaySummary = {
 	mode?: "sandbox" | "production";
 	apiKeyHint?: string;
 	connectedAt?: number;
+	/** The account's probed enabled rails; `methodsCheckedAt` with NO list =
+	 * the probe ran and HitPay rejected the key. */
+	paymentMethods?: string[];
+	methodsCheckedAt?: number;
 };
 
 type HitpayPatch = {
@@ -88,7 +92,6 @@ export function OnlinePaymentsCard({
 					Let buyers pay online through your own HitPay account. Your bank
 					&amp; QR details above stay as the manual fallback.
 				</p>
-				<MethodLogos />
 			</div>
 
 			{connected ? (
@@ -122,6 +125,30 @@ export function OnlinePaymentsCard({
 								? "Buyers see a Pay now button on their order page. Payments confirm the order automatically and you're notified on WhatsApp-side as usual."
 								: "Paused — buyers don't see Pay now right now. Your keys are kept, so resuming is one tap."}
 						</p>
+						{/* The account's ACTUAL rails (probed truth) — never a promise.
+						    checkedAt-with-no-list = HitPay rejected the key. */}
+						{hitpay?.paymentMethods?.length ? (
+							<div className="flex flex-col gap-1.5">
+								<p className="text-xs font-medium text-muted-foreground">
+									Buyers can pay with
+								</p>
+								<MethodLogos codes={hitpay.paymentMethods} />
+								<p className="text-[11px] text-muted-foreground">
+									Turn methods on or off in your HitPay dashboard — this list
+									follows it.
+								</p>
+							</div>
+						) : hitpay?.methodsCheckedAt ? (
+							<p className="text-xs font-medium text-amber-700">
+								HitPay rejected this API key — double-check it (Replace keys
+								below), or buyers' payments will fail.
+							</p>
+						) : (
+							<p className="text-xs text-muted-foreground">
+								Checking which payment methods your HitPay account has
+								enabled…
+							</p>
+						)}
 						{hitpay?.mode === "sandbox" ? (
 							<p className="text-xs text-amber-700">
 								This is a HitPay <strong>sandbox</strong> key — payments are
@@ -227,6 +254,16 @@ export function OnlinePaymentsCard({
 				</>
 			) : (
 				<>
+					{/* Capability pitch — explicitly captioned so it never reads as a
+					    promise: buyers only see what the seller enables in HitPay. */}
+					<div className="flex flex-col gap-1.5">
+						<MethodLogos codes={PITCH_CODES} />
+						<p className="text-[11px] text-muted-foreground">
+							…and more. You pick which methods to switch on in your HitPay
+							dashboard — buyers only ever see the ones you've enabled.
+						</p>
+					</div>
+
 					{/* What connecting means — the three things to understand first,
 					    kept to one line each (Zaki: bullets, not paragraphs). */}
 					<ul className="flex flex-col gap-1.5 text-sm">
@@ -337,32 +374,66 @@ function Bullet({ children }: { children: React.ReactNode }) {
 	);
 }
 
-/** The rails buyers get — official marks from HitPay's own gateway plugin,
- * rendered as quiet white chips (the way payment forms wear them). */
-const METHOD_LOGOS: Array<{ src: string; alt: string }> = [
-	{ src: "/img/payment/touchngo.svg", alt: "Touch 'n Go eWallet" },
-	{ src: "/img/payment/duitnow.svg", alt: "DuitNow QR" },
-	{ src: "/img/payment/fpx.svg", alt: "FPX online banking" },
-	{ src: "/img/payment/visa.svg", alt: "Visa" },
-	{ src: "/img/payment/master.svg", alt: "Mastercard" },
-];
+/** Official method marks from HitPay's own gateway plugin, keyed by the API
+ * codes their account probe returns. "card" fans out to Visa+Mastercard. */
+const METHOD_ICONS: Record<string, Array<{ src: string; alt: string }>> = {
+	touch_n_go: [{ src: "/img/payment/touchngo.svg", alt: "Touch 'n Go eWallet" }],
+	duitnow: [{ src: "/img/payment/duitnow.svg", alt: "DuitNow QR" }],
+	fpx: [{ src: "/img/payment/fpx.svg", alt: "FPX online banking" }],
+	card: [
+		{ src: "/img/payment/visa.svg", alt: "Visa" },
+		{ src: "/img/payment/master.svg", alt: "Mastercard" },
+	],
+	grabpay: [{ src: "/img/payment/grabpay.svg", alt: "GrabPay" }],
+	grabpay_direct: [{ src: "/img/payment/grabpay.svg", alt: "GrabPay" }],
+	shopee_pay: [{ src: "/img/payment/shopeepay.svg", alt: "ShopeePay" }],
+	boost: [{ src: "/img/payment/boost.svg", alt: "Boost" }],
+	paynow_online: [{ src: "/img/payment/paynow.svg", alt: "PayNow" }],
+};
 
-function MethodLogos() {
+/** What the pitch shows before any account is connected — HitPay's MY
+ * capability, explicitly captioned as "what you enable is what buyers see". */
+const PITCH_CODES = ["touch_n_go", "duitnow", "fpx", "card"];
+
+/**
+ * Method chips. With `codes` (the connected account's probed list) it renders
+ * ONLY those rails — never a promise the seller hasn't enabled; codes without
+ * an icon render as small text chips so nothing silently disappears.
+ */
+function MethodLogos({ codes }: { codes: string[] }) {
+	const seen = new Set<string>();
 	return (
 		<div className="flex flex-wrap items-center gap-1.5">
-			{METHOD_LOGOS.map((m) => (
-				<span
-					key={m.src}
-					className="flex h-7 w-11 items-center justify-center rounded-md border border-border bg-white px-1.5"
-				>
-					<AppImage
-						src={m.src}
-						alt={m.alt}
-						aspect="h-4 w-auto"
-						fill={false}
-					/>
-				</span>
-			))}
+			{codes.map((code) => {
+				const icons = METHOD_ICONS[code.toLowerCase()];
+				if (!icons) {
+					return (
+						<span
+							key={code}
+							className="flex h-7 items-center rounded-md border border-border bg-white px-2 text-[10px] font-medium text-muted-foreground"
+						>
+							{code.replace(/_/g, " ")}
+						</span>
+					);
+				}
+				return icons.map((m) => {
+					if (seen.has(m.src)) return null;
+					seen.add(m.src);
+					return (
+						<span
+							key={m.src}
+							className="flex h-7 w-11 items-center justify-center rounded-md border border-border bg-white px-1.5"
+						>
+							<AppImage
+								src={m.src}
+								alt={m.alt}
+								aspect="h-4 w-auto"
+								fill={false}
+							/>
+						</span>
+					);
+				});
+			})}
 		</div>
 	);
 }

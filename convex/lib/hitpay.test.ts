@@ -3,6 +3,7 @@ import {
 	buildPaymentRequestParams,
 	computeHitpayHmac,
 	decimalStringToSen,
+	describeGatewayMethods,
 	hitpayCheckoutConfigured,
 	inferHitpayMode,
 	mapHitpayPaymentType,
@@ -83,6 +84,36 @@ describe("mapHitpayPaymentType", () => {
 		expect(mapHitpayPaymentType("paynow_online")).toBe("other");
 		expect(mapHitpayPaymentType("some_new_wallet")).toBe("other");
 		expect(mapHitpayPaymentType(undefined)).toBeUndefined();
+	});
+});
+
+describe("describeGatewayMethods", () => {
+	test("names only the rails the account actually has", () => {
+		expect(describeGatewayMethods(["duitnow", "touch_n_go"])).toBe(
+			"DuitNow or Touch 'n Go",
+		);
+		expect(describeGatewayMethods(["fpx"])).toBe("FPX");
+		expect(describeGatewayMethods(["touch_n_go", "duitnow", "fpx", "card"])).toBe(
+			"Touch 'n Go, DuitNow, FPX or card",
+		);
+	});
+
+	test("dedupes aliases, skips unknown codes, caps the sentence", () => {
+		expect(describeGatewayMethods(["grabpay", "grabpay_direct"])).toBe(
+			"GrabPay",
+		);
+		expect(describeGatewayMethods(["some_new_rail"])).toBeNull();
+		expect(describeGatewayMethods(undefined)).toBeNull();
+		expect(describeGatewayMethods([])).toBeNull();
+		expect(
+			describeGatewayMethods([
+				"touch_n_go",
+				"duitnow",
+				"fpx",
+				"card",
+				"grabpay",
+			]),
+		).toBe("Touch 'n Go, DuitNow, FPX and more");
 	});
 });
 

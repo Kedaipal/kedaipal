@@ -91,6 +91,31 @@ nothing here gets rebuilt.
    `card→card`, everything else → `other`. Donut/inbox filter pick these up
    through the existing seam (donut opacity ramp widened to 8 slots).
 
+## The enabled-methods probe — honest chips, validated keys
+
+The UI never hardcodes which rails a store offers. HitPay resolves an
+account's enabled methods per API key (echoed as `payment_methods[]` on
+every payment-request create), so:
+
+- **Connect-time probe** (`hitpay.refreshAccountMethods`, scheduled by
+  `updateSettings` whenever a credential is stored): mints a throwaway
+  RM1.00 / 5-min-expiry request ("Kedaipal connection check — safe to
+  ignore" in the seller's HitPay dashboard) purely to read that echo. This
+  doubles as **key validation**: 401/403 stamps `methodsCheckedAt` with NO
+  list, and the connect card renders "HitPay rejected this API key" off
+  exactly that shape. Transient failures record nothing (prior truth kept).
+- **Opportunistic refresh**: every real checkout mint echoes the list, and
+  `recordCheckoutRequest` re-stamps it — zero extra API calls, so the truth
+  follows the seller's HitPay dashboard within one buyer tap.
+- **Renders from truth only**: the settings card's "Buyers can pay with"
+  chips (official plugin-repo marks keyed by API code, text-chip fallback
+  for unknown codes) and the buyer page's "Pay by Touch 'n Go or DuitNow…"
+  line (`describeGatewayMethods`) both read the stored list; unknown/empty
+  → a generic "bank or eWallet app" line, never an invented rail. The
+  DISCONNECTED card shows a capability row explicitly captioned "buyers
+  only ever see the ones you've enabled". Replacing the API key clears the
+  stored list (different account, different truth) and re-probes.
+
 ## Guard model — where each rule lives
 
 - **Holds gate the MINT, not the webhook.** `createCheckout` refuses while

@@ -373,6 +373,7 @@ describe("hitpay.createCheckout", () => {
 					status: "pending",
 					amount: body.get("amount"),
 					currency: "myr",
+					payment_methods: ["duitnow", "touch_n_go"],
 				}),
 				{ status: 201 },
 			);
@@ -387,6 +388,16 @@ describe("hitpay.createCheckout", () => {
 		expect(row?.gatewayRequestId).toBe("req_live_1");
 		expect(row?.gatewayRequestedAmount).toBe(total);
 		expect(row?.gatewayRequestedCurrency).toBe("MYR");
+
+		// Every real mint refreshes the account's enabled-methods truth for free.
+		const retailerRow = await t.run(async (ctx) => ctx.db.get(retailer._id));
+		expect(retailerRow?.hitpay?.paymentMethods).toEqual([
+			"duitnow",
+			"touch_n_go",
+		]);
+		// …and the buyer query now names exactly those rails.
+		const info = await t.query(api.orders.getPaymentMethods, { token });
+		expect(info?.gatewayMethods).toEqual(["duitnow", "touch_n_go"]);
 
 		// Second tap while the request is fresh → same URL, no second mint.
 		const second = await t.action(api.hitpay.createCheckout, { token });
@@ -595,6 +606,104 @@ describe("POST /webhook/hitpay", () => {
 		);
 		expect(res.status).toBe(500);
 		void retailer;
+	});
+});
+
+describe("account-methods probe (connect-time key validation)", () => {
+	test("probe stores the account's enabled rails on success", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await connectHitpay(t, USER_A);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url: unknown, init?: RequestInit) => {
+				const body = new URLSearchParams(String(init?.body));
+				expect(body.get("expires_after")).toBe("5 mins");
+				expect(body.get("send_sms")).toBe("false");
+				return new Response(
+					JSON.stringify({
+						id: "req_probe",
+						url: "https://checkout/x",
+						status: "pending",
+						amount: "1.00",
+						currency: "myr",
+						payment_methods: ["touch_n_go", "duitnow"],
+					}),
+					{ status: 201 },
+				);
+			}),
+		);
+		await t.action(internal.hitpay.refreshAccountMethods, {
+			retailerId: retailer._id,
+		});
+		const row = await t.run(async (ctx) => ctx.db.get(retailer._id));
+		expect(row?.hitpay?.paymentMethods).toEqual(["touch_n_go", "duitnow"]);
+		expect(row?.hitpay?.methodsCheckedAt).toBeTypeOf("number");
+	});
+
+	test("401 marks the key rejected (checkedAt, no list); 500 leaves prior truth", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await connectHitpay(t, USER_A);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response("unauthorized", { status: 401 })),
+		);
+		await t.action(internal.hitpay.refreshAccountMethods, {
+			retailerId: retailer._id,
+		});
+		let row = await t.run(async (ctx) => ctx.db.get(retailer._id));
+		expect(row?.hitpay?.paymentMethods).toBeUndefined();
+		expect(row?.hitpay?.methodsCheckedAt).toBeTypeOf("number");
+
+		// Seed a prior truth, then a transient failure must NOT clobber it.
+		await t.run(async (ctx) => {
+			const r = await ctx.db.get(retailer._id);
+			if (!r?.hitpay) throw new Error("no hitpay");
+			await ctx.db.patch(retailer._id, {
+				hitpay: { ...r.hitpay, paymentMethods: ["duitnow"] },
+			});
+		});
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response("oops", { status: 500 })),
+		);
+		await t.action(internal.hitpay.refreshAccountMethods, {
+			retailerId: retailer._id,
+		});
+		row = await t.run(async (ctx) => ctx.db.get(retailer._id));
+		expect(row?.hitpay?.paymentMethods).toEqual(["duitnow"]);
+	});
+
+	test("replacing the key clears the previous account's method truth", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await connectHitpay(t, USER_A);
+		await t.run(async (ctx) => {
+			const r = await ctx.db.get(retailer._id);
+			if (!r?.hitpay) throw new Error("no hitpay");
+			await ctx.db.patch(retailer._id, {
+				hitpay: {
+					...r.hitpay,
+					paymentMethods: ["duitnow"],
+					methodsCheckedAt: 123,
+				},
+			});
+		});
+		const asA = t.withIdentity({ subject: USER_A });
+		// Pause/resume (keys untouched) keeps the truth…
+		await asA.mutation(api.retailers.updateSettings, {
+			hitpay: { enabled: false },
+		});
+		let row = await t.run(async (ctx) => ctx.db.get(retailer._id));
+		expect(row?.hitpay?.paymentMethods).toEqual(["duitnow"]);
+		// …a NEW key drops it (different account, different truth).
+		await asA.mutation(api.retailers.updateSettings, {
+			hitpay: { enabled: true, apiKey: "test_other_key", salt: "s2" },
+		});
+		row = await t.run(async (ctx) => ctx.db.get(retailer._id));
+		expect(row?.hitpay?.paymentMethods).toBeUndefined();
+		expect(row?.hitpay?.methodsCheckedAt).toBeUndefined();
 	});
 });
 

@@ -339,6 +339,12 @@ export type HitpaySummary = {
 	/** Last 4 chars of the stored API key ("…a1b2") for the settings UI. */
 	apiKeyHint?: string;
 	connectedAt?: number;
+	/** The ACCOUNT's enabled rails (probed at connect, refreshed by mints) —
+	 * the settings chips render from this, never from a hardcoded set.
+	 * `methodsCheckedAt` set with NO list = the probe ran and the key was
+	 * rejected (drives the "check your key" warning). */
+	paymentMethods?: string[];
+	methodsCheckedAt?: number;
 };
 
 function summarizeHitpay(
@@ -352,6 +358,8 @@ function summarizeHitpay(
 		mode: credentials?.mode,
 		apiKeyHint: config.apiKey ? config.apiKey.slice(-4) : undefined,
 		connectedAt: config.connectedAt,
+		paymentMethods: config.paymentMethods,
+		methodsCheckedAt: config.methodsCheckedAt,
 	};
 }
 
@@ -1502,17 +1510,24 @@ export const updateSettings = mutation({
 				// stored value (toggling enabled never silently wipes keys), empty
 				// string = clear.
 				const prev = retailer.hitpay as HitpayConfig | undefined;
+				const nextApiKey =
+					args.hitpay.apiKey === undefined
+						? prev?.apiKey
+						: args.hitpay.apiKey.trim() || undefined;
+				// A changed key is a different account — its probed method list is
+				// someone else's truth. Drop it and let the probe repopulate; a
+				// pause/resume (key untouched) keeps it.
+				const keyChanged = nextApiKey !== prev?.apiKey;
 				const clean: HitpayConfig = {
 					enabled: args.hitpay.enabled,
-					apiKey:
-						args.hitpay.apiKey === undefined
-							? prev?.apiKey
-							: args.hitpay.apiKey.trim() || undefined,
+					apiKey: nextApiKey,
 					salt:
 						args.hitpay.salt === undefined
 							? prev?.salt
 							: args.hitpay.salt.trim() || undefined,
 					connectedAt: prev?.connectedAt,
+					paymentMethods: keyChanged ? undefined : prev?.paymentMethods,
+					methodsCheckedAt: keyChanged ? undefined : prev?.methodsCheckedAt,
 				};
 				// Half a credential can neither create checkouts nor verify
 				// webhooks — refuse it at save time with a clear message.
@@ -1542,6 +1557,17 @@ export const updateSettings = mutation({
 					? (prev?.connectedAt ?? Date.now())
 					: undefined;
 				patch.hitpay = clean;
+				// Probe the account (validates the key + learns its enabled payment
+				// methods) whenever a credential is stored and the truth is missing
+				// or belongs to a replaced key. Post-commit via the scheduler, so
+				// the action reads the row this save writes.
+				if (credentials && clean.methodsCheckedAt === undefined) {
+					await ctx.scheduler.runAfter(
+						0,
+						internal.hitpay.refreshAccountMethods,
+						{ retailerId: retailer._id },
+					);
+				}
 			}
 		}
 		// Refuse clearing the business address out from under a live radius

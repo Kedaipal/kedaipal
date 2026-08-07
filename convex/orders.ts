@@ -1654,6 +1654,10 @@ export const getPaymentMethods = query({
 		// Server-side truth for the buyer's "Pay now" button; createCheckout
 		// re-checks everything, so this is presentation, not authorization.
 		gatewayAvailable: boolean;
+		// The ACCOUNT's enabled rails (probed truth, see schema) so the Pay-now
+		// explainer names only methods this seller actually offers. Undefined =
+		// not yet probed → the page uses a generic "bank or eWallet" line.
+		gatewayMethods?: string[];
 	} | null> => {
 		const order = await orderByToken(ctx, token);
 		if (!order) return null;
@@ -1680,7 +1684,13 @@ export const getPaymentMethods = query({
 			}
 			resolved.push({ ...m, qrImageUrl });
 		}
-		return { methods: resolved, gatewayAvailable };
+		return {
+			methods: resolved,
+			gatewayAvailable,
+			gatewayMethods: gatewayAvailable
+				? retailer.hitpay?.paymentMethods
+				: undefined,
+		};
 	},
 });
 

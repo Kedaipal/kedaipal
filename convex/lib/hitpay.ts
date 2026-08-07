@@ -40,6 +40,10 @@ export type HitpayConfig = {
 	apiKey?: string;
 	salt?: string;
 	connectedAt?: number;
+	/** The account's enabled rails as HitPay resolves them for this key —
+	 * probed at connect, refreshed on every checkout mint (see schema note). */
+	paymentMethods?: string[];
+	methodsCheckedAt?: number;
 };
 
 export type HitpayCredentials = {
@@ -131,6 +135,46 @@ export function mapHitpayPaymentType(
 	}
 }
 
+/** Buyer-friendly names for HitPay's method codes — used to NAME rails in
+ * buyer-facing copy, strictly from the account's probed list (never a
+ * hardcoded promise). Codes we can't name are simply not named; they still
+ * work end-to-end (the checkout page itself is HitPay's). */
+const METHOD_DISPLAY_NAMES: Record<string, string> = {
+	touch_n_go: "Touch 'n Go",
+	duitnow: "DuitNow",
+	fpx: "FPX",
+	card: "card",
+	grabpay: "GrabPay",
+	grabpay_direct: "GrabPay",
+	shopee_pay: "ShopeePay",
+	boost: "Boost",
+	atome: "Atome",
+	paynow_online: "PayNow",
+};
+
+/**
+ * "Touch 'n Go, DuitNow or FPX"-style phrase from the account's enabled
+ * method codes; null when nothing nameable is known (callers fall back to a
+ * generic "bank or eWallet app" line). Caps at four names so the sentence
+ * stays a sentence.
+ */
+export function describeGatewayMethods(
+	codes: string[] | undefined,
+): string | null {
+	if (!codes || codes.length === 0) return null;
+	const names = [
+		...new Set(
+			codes
+				.map((c) => METHOD_DISPLAY_NAMES[c.toLowerCase()])
+				.filter((n): n is string => n !== undefined),
+		),
+	];
+	if (names.length === 0) return null;
+	if (names.length === 1) return names[0];
+	if (names.length > 4) return `${names.slice(0, 3).join(", ")} and more`;
+	return `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`;
+}
+
 /** Inputs for a payment-request create call — everything order-derived so the
  * builder stays a pure, testable mapping. */
 export type PaymentRequestInputs = {
@@ -183,6 +227,9 @@ export type HitpayPaymentRequest = {
 	status: string;
 	amount: string;
 	currency: string;
+	/** The ACCOUNT's enabled methods, resolved by HitPay when the request
+	 * omits `payment_methods` — our source of truth for the honest chips. */
+	payment_methods?: string[];
 	payments?: Array<{
 		id: string;
 		status: string;

@@ -317,6 +317,17 @@ export default defineSchema({
 				apiKey: v.optional(v.string()),
 				salt: v.optional(v.string()),
 				connectedAt: v.optional(v.number()),
+				// The ACCOUNT's enabled payment methods, as HitPay resolves them for
+				// this key (e.g. ["duitnow","touch_n_go"]). Learned from a throwaway
+				// probe request at connect time (which doubles as key validation)
+				// and refreshed opportunistically from every real checkout mint —
+				// the settings chips and the buyer's Pay-now copy only ever name
+				// rails from this list, so the UI can't promise methods the seller
+				// hasn't enabled. `methodsCheckedAt` set with NO list = the probe
+				// ran and the key was rejected (surfaces "check your key" in the
+				// card). Cleared whenever the stored key changes.
+				paymentMethods: v.optional(v.array(v.string())),
+				methodsCheckedAt: v.optional(v.number()),
 			}),
 		),
 		// Minimum days' notice the retailer needs before a fulfilment date. Drives
