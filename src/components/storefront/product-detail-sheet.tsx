@@ -9,6 +9,7 @@ import {
 	EmptyGallery,
 	type OnAddVariant,
 	OptionPills,
+	PriceLabel,
 	PurchaseActions,
 	PurchaseHints,
 	type StorefrontVariant,
@@ -104,9 +105,10 @@ export function ProductDetailSheet({
 							<h2 className="text-xl font-bold leading-tight">
 								{product.name}
 							</h2>
-							<p className="shrink-0 text-2xl font-bold tabular-nums">
-								{pp.priceLabel}
-							</p>
+							<PriceLabel
+								value={pp.priceLabel}
+								className="shrink-0 text-2xl"
+							/>
 						</div>
 
 						<OptionPills pp={pp} />

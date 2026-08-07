@@ -14,6 +14,7 @@ import {
 	EmptyGallery,
 	GoToCheckoutBar,
 	OptionPills,
+	PriceLabel,
 	PurchaseActions,
 	PurchaseHints,
 	ShareLinkChip,
@@ -103,7 +104,7 @@ export function ProductPageView({
 							{product.name}
 						</h1>
 						<div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-							<p className="text-2xl font-bold tabular-nums">{pp.priceLabel}</p>
+							<PriceLabel value={pp.priceLabel} className="text-2xl" />
 							<ShareLinkChip url={canonicalUrl} />
 						</div>
 					</div>

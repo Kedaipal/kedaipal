@@ -50,7 +50,11 @@ import { useAppForm } from "../forms/form";
 import { MyPhonePrefix } from "../forms/my-phone-prefix";
 import { Button } from "../ui/button";
 import { AddressFieldset } from "./address-fieldset";
-import { CheckoutSummary, CheckoutTotals } from "./checkout-summary";
+import {
+	CheckoutSummary,
+	CheckoutTotals,
+	pendingTotalParts,
+} from "./checkout-summary";
 import {
 	PickupLocationRadioList,
 	PickupSummaryCard,
@@ -929,6 +933,7 @@ export function CheckoutPage({
 											collectsFromCustomer={
 												deliveryMethod === "delivery" && collectsFromCustomer
 											}
+											awaitingQuote={hasCustomLine}
 										/>
 									}
 									footer={
@@ -1400,6 +1405,15 @@ export function CheckoutPage({
 							const quote =
 								deliveryMethod === "delivery" ? quoteForDelivery : undefined;
 							const deliveryFee = quote?.kind === "fee" ? quote.fee : 0;
+							// Same "not the final bill" list as the receipt block above,
+							// from the same helper — the two totals sit on one screen at
+							// desktop widths and must never disagree.
+							const pendingParts = pendingTotalParts({
+								awaitingQuote: hasCustomLine,
+								quotePending: quote?.kind === "pending",
+								collectsFromCustomer:
+									deliveryMethod === "delivery" && collectsFromCustomer,
+							});
 							return (
 								<div className="flex items-center justify-between">
 									<span className="text-sm text-muted-foreground">Total</span>
@@ -1408,10 +1422,10 @@ export function CheckoutPage({
 											cart.total + pickupFee + deliveryFee,
 											cart.currency,
 										)}
-										{quote?.kind === "pending" ? (
+										{pendingParts.length > 0 ? (
 											<span className="text-xs font-medium text-muted-foreground">
 												{" "}
-												+ delivery
+												+ {pendingParts.join(" + ")}
 											</span>
 										) : null}
 									</span>

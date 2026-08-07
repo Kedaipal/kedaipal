@@ -18,7 +18,7 @@ describe("describeProduct", () => {
 	it("describes a single tracked item with one price", () => {
 		expect(
 			describeProduct(
-				{ options: [], rows: [row({ price: "18.00" })], hasCustomLine: false },
+				{ options: [], rows: [row({ price: "18.00" })], customLine: null },
 				"RM",
 			),
 		).toBe("One item · From stock · RM 18");
@@ -46,7 +46,7 @@ describe("describeProduct", () => {
 							blockWhenOutOfStock: false,
 						}),
 					],
-					hasCustomLine: false,
+					customLine: null,
 				},
 				"RM",
 			),
@@ -68,7 +68,7 @@ describe("describeProduct", () => {
 							blockWhenOutOfStock: false,
 						}),
 					],
-					hasCustomLine: false,
+					customLine: null,
 				},
 				"RM",
 			),
@@ -89,7 +89,7 @@ describe("describeProduct", () => {
 							blockWhenOutOfStock: false,
 						}),
 					],
-					hasCustomLine: false,
+					customLine: null,
 				},
 				"RM",
 			),
@@ -99,7 +99,7 @@ describe("describeProduct", () => {
 	it("notes a missing price and a custom line", () => {
 		expect(
 			describeProduct(
-				{ options: [], rows: [row({ price: "" })], hasCustomLine: true },
+				{ options: [], rows: [row({ price: "" })], customLine: { price: "" } },
 				"RM",
 			),
 		).toBe("One item · From stock · No price yet · + custom option");
@@ -113,7 +113,7 @@ describe("describeProduct — made-to-order products (86eyfq04j)", () => {
 	const madeToOrder = {
 		options: [],
 		rows: [row({ price: "", blockWhenOutOfStock: false, requiresProof: true })],
-		hasCustomLine: false,
+		customLine: null,
 	};
 
 	it("reads as a quote, not as a missing price", () => {
@@ -131,13 +131,30 @@ describe("describeProduct — made-to-order products (86eyfq04j)", () => {
 		).toBe("Made to order · RM 120");
 	});
 
+	// The shape the editor's "Made to order" mode actually writes: no matrix at
+	// all, the product IS its bespoke line (86eyhn4mr).
+	it("prices the bespoke line as a floor, matching the storefront's From", () => {
+		expect(
+			describeProduct(
+				{ options: [], rows: [], customLine: { price: "40" } },
+				"RM",
+			),
+		).toBe("Made to order · From RM 40");
+	});
+
+	it("still reads as a quote when the bespoke line has no price", () => {
+		expect(
+			describeProduct({ options: [], rows: [], customLine: { price: "" } }, "RM"),
+		).toBe("Made to order · Price on quote");
+	});
+
 	it("leaves an ordinary made-fresh item alone", () => {
 		expect(
 			describeProduct(
 				{
 					options: [],
 					rows: [row({ price: "12", blockWhenOutOfStock: false })],
-					hasCustomLine: false,
+					customLine: null,
 				},
 				"RM",
 			),
