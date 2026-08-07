@@ -37,7 +37,7 @@ function renderNav(props: Partial<BottomNavProps> = {}, initialPath = "/app") {
 	const rootRoute = createRootRoute({
 		component: () => (
 			<>
-				<BottomNav actionableCount={0} {...props} />
+				<BottomNav newOrdersCount={0} {...props} />
 				<Outlet />
 			</>
 		),
@@ -72,7 +72,7 @@ function renderNav(props: Partial<BottomNavProps> = {}, initialPath = "/app") {
 
 describe("BottomNav — 5-tab bar + More sheet", () => {
 	it("renders the daily-loop tabs plus More (no Products/Settings tabs)", async () => {
-		renderNav({ actionableCount: 3 });
+		renderNav({ newOrdersCount: 3 });
 		await waitFor(() => expect(screen.getByText("Home")).toBeTruthy());
 		for (const label of ["Home", "Orders", "Counter", "Insights", "More"]) {
 			expect(screen.getByText(label)).toBeTruthy();
@@ -82,6 +82,29 @@ describe("BottomNav — 5-tab bar + More sheet", () => {
 		expect(screen.queryByText("Settings")).toBeNull();
 		// Orders badge carries through.
 		expect(screen.getByText("3")).toBeTruthy();
+	});
+
+	it("the Orders badge lands on the New bucket it counted", async () => {
+		const router = renderNav({ newOrdersCount: 2 });
+		await waitFor(() => expect(screen.getByText("Orders")).toBeTruthy());
+		fireEvent.click(screen.getByText("Orders"));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/app/orders"),
+		);
+		expect(router.state.location.search).toEqual({ bucket: "new" });
+	});
+
+	it("with nothing new, Orders is plain navigation (no bucket filter)", async () => {
+		const router = renderNav({ newOrdersCount: 0 });
+		await waitFor(() => expect(screen.getByText("Orders")).toBeTruthy());
+		// No badge to land on — filtering the inbox to an empty "New" list would
+		// hide the orders the seller opened the tab to see.
+		expect(screen.queryByText("0")).toBeNull();
+		fireEvent.click(screen.getByText("Orders"));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/app/orders"),
+		);
+		expect(router.state.location.search).toEqual({});
 	});
 
 	it("marks Insights with a Pro chip when the plan locks it", async () => {
