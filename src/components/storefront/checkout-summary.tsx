@@ -164,7 +164,12 @@ export function CheckoutSummary({
 									<span className="shrink-0 tabular-nums">
 										{item.quoteOnRequest
 											? "On quote"
-											: receiptAmount(item.price * item.quantity)}
+											: // A priced custom line is the seller's STARTING price —
+												// the mockup quote lands on top, so the receipt must not
+												// print it as the settled amount (86eyhn4mr).
+												`${item.isCustom ? "From " : ""}${receiptAmount(
+													item.price * item.quantity,
+												)}`}
 									</span>
 								</button>
 
@@ -342,6 +347,33 @@ interface CheckoutTotalsProps {
 	/** Collection-service store (86eyg0n8e) — the rider fee line reads
 	 * "Collection" instead of "Delivery". */
 	collectsFromCustomer?: boolean;
+	/** The cart holds a custom line, so this TOTAL is not the bill: a quote-only
+	 * line contributes nothing yet, and a starting-price line only contributes
+	 * its floor — the seller settles both on the mockup. Prints "+ your quote"
+	 * beside the total, the same posture as a pending delivery fee (86eyhn4mr). */
+	awaitingQuote?: boolean;
+}
+
+/**
+ * What's still missing from the printed total, named beside it ("+ your quote
+ * + delivery"). Both holds can be open at once — a custom cake to an
+ * out-of-range address — so they read as one list rather than one silently
+ * winning. Shared by the receipt block and the mobile bottom bar so the two
+ * totals can never disagree about how final they are.
+ */
+export function pendingTotalParts({
+	awaitingQuote = false,
+	quotePending = false,
+	collectsFromCustomer = false,
+}: {
+	awaitingQuote?: boolean;
+	quotePending?: boolean;
+	collectsFromCustomer?: boolean;
+}): string[] {
+	const parts: string[] = [];
+	if (awaitingQuote) parts.push("your quote");
+	if (quotePending) parts.push(collectsFromCustomer ? "collection" : "delivery");
+	return parts;
 }
 
 export function CheckoutTotals({
@@ -353,10 +385,16 @@ export function CheckoutTotals({
 	blockedCopy,
 	minRuleAlerts,
 	collectsFromCustomer = false,
+	awaitingQuote = false,
 }: CheckoutTotalsProps) {
 	const deliveryFee = quote?.kind === "fee" ? quote.fee : 0;
 	const total = subtotal + pickupFee + deliveryFee;
 	const feeLabel = collectsFromCustomer ? "Collection" : "Delivery";
+	const pendingParts = pendingTotalParts({
+		awaitingQuote,
+		quotePending: quote?.kind === "pending",
+		collectsFromCustomer,
+	});
 
 	// One icon per fulfilment charge so the row is legible at a glance instead of
 	// blending into the item lines above it. Every delivery state gets the same
@@ -398,10 +436,10 @@ export function CheckoutTotals({
 				</span>
 				<span className="text-xl font-bold tabular-nums">
 					{formatPrice(total, currency)}
-					{quote?.kind === "pending" ? (
+					{pendingParts.length > 0 ? (
 						<span className="text-sm font-medium text-muted-foreground">
 							{" "}
-							+ {collectsFromCustomer ? "collection" : "delivery"}
+							+ {pendingParts.join(" + ")}
 						</span>
 					) : null}
 				</span>

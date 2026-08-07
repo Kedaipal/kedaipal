@@ -38,6 +38,7 @@ import {
 } from "../lib/product-export";
 import { reorderByIds } from "../lib/reorder";
 import { hasFeature } from "../lib/subscription";
+import { hasStartingPrice } from "../lib/variant";
 
 type StatusFilter = "all" | "active" | "archived";
 
@@ -418,6 +419,13 @@ function ProductCard({
 	const lowStock =
 		p.active && blockOOS && p.totalOnHand > 0 && p.totalOnHand <= 3;
 	const priceVaries = p.priceTo > p.priceFrom;
+	// Mirror the storefront card exactly, so the seller's list never states a
+	// price more confidently than the buyer's does: everything quoted reads
+	// "Price on quote", and a floor (range, cheaper quote line, or a custom
+	// line's starting price) is prefixed "From" (86eyhn4mr).
+	const allQuote = p.hasQuotePricing && p.priceTo === 0;
+	const showFrom =
+		priceVaries || p.hasQuotePricing || hasStartingPrice(p.variants);
 	const variantCount = p.variants.length;
 	// Archived products read greyed wherever they appear (All view, Archived tab,
 	// and the reorder tail).
@@ -444,8 +452,14 @@ function ProductCard({
 				<span className="truncate text-[14.5px] font-semibold">{p.name}</span>
 				<span className="truncate text-[13px] text-muted-foreground">
 					<span className="font-medium text-foreground">
-						{priceVaries ? "from " : ""}
-						{formatPrice(p.priceFrom, p.currency)}
+						{allQuote ? (
+							"Price on quote"
+						) : (
+							<>
+								{showFrom ? "From " : ""}
+								{formatPrice(p.priceFrom, p.currency)}
+							</>
+						)}
 					</span>
 					{variantCount > 1 ? ` · ${variantCount} variants` : ""}
 				</span>

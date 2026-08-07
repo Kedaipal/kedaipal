@@ -14,9 +14,11 @@ import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
+import { cn } from "../../lib/utils";
 import {
 	availableValuesPerAxis,
 	getCustomLine,
+	hasStartingPrice,
 	isSellable,
 	minQuantityUnreachable,
 	resolveVariant,
@@ -29,6 +31,38 @@ import type { StorefrontProduct } from "./product-card";
 export type StorefrontVariant = StorefrontProduct["variants"][number];
 
 export type CustomAddPayload = { note?: string; imageStorageId?: string };
+
+/**
+ * A price to print, plus whether it's only a starting point. The "From" is a
+ * separate flag rather than baked into the string so every surface renders it
+ * the same way — a small muted word ahead of the amount, never part of the big
+ * bold number it qualifies.
+ */
+export type PriceLabelValue = { from?: boolean; text: string };
+
+/**
+ * The one renderer for a storefront headline price (product page + detail
+ * sheet). Keeps "From RM 40.00" legible as *two* things: the qualifier and the
+ * money. See `hasStartingPrice` in src/lib/variant.ts (86eyhn4mr).
+ */
+export function PriceLabel({
+	value,
+	className,
+}: {
+	value: PriceLabelValue;
+	className?: string;
+}) {
+	return (
+		<p className={cn("font-bold tabular-nums", className)}>
+			{value.from ? (
+				<span className="mr-1 align-baseline text-sm font-medium text-muted-foreground">
+					From
+				</span>
+			) : null}
+			{value.text}
+		</p>
+	);
+}
 
 export type OnAddVariant = (
 	product: StorefrontProduct,
@@ -247,23 +281,35 @@ export function useProductPurchase({
 	// sets the real price on the mockup after the order is placed.
 	const selectedIsQuote =
 		selectedVariant?.requiresProof === true && selectedVariant.price === 0;
-	const priceLabel = product
+	/**
+	 * The headline price. `from` is the buyer's warning that the number is a
+	 * FLOOR, not the bill — a range across variants, a cheaper quote-priced
+	 * option, or a custom line whose starting price the seller tops up on the
+	 * mockup (86eyhn4mr). A resolved STANDARD variant always prints its own
+	 * exact price: a custom line elsewhere on the product doesn't make that
+	 * fixed size negotiable.
+	 */
+	const priceLabel: PriceLabelValue = product
 		? selectedVariant
 			? selectedIsQuote
-				? "Price on quote"
-				: formatPrice(selectedVariant.price, product.currency)
+				? { text: "Price on quote" }
+				: { text: formatPrice(selectedVariant.price, product.currency) }
 			: product.hasQuotePricing && product.priceTo === 0
-				? "Price on quote"
-				: priceVaries || product.hasQuotePricing
-					? `from ${formatPrice(product.priceFrom, product.currency)}`
-					: formatPrice(product.priceFrom, product.currency)
-		: "";
+				? { text: "Price on quote" }
+				: {
+						from:
+							priceVaries ||
+							product.hasQuotePricing ||
+							hasStartingPrice(variants),
+						text: formatPrice(product.priceFrom, product.currency),
+					}
+		: { text: "" };
 
 	// Custom line's own price label (independent of the standard selection).
-	const customPriceLabel =
+	const customPriceLabel: PriceLabelValue =
 		product && customLine && customLine.price > 0
-			? `from ${formatPrice(customLine.price, product.currency)}`
-			: "Price on quote";
+			? { from: true, text: formatPrice(customLine.price, product.currency) }
+			: { text: "Price on quote" };
 
 	// Live money total for the standard selection — shown by the stepper so the
 	// buyer sees what they're committing to before adding, and it updates on every
@@ -672,8 +718,11 @@ export function CustomOrderCard({
 									Made to order
 								</span>
 							</span>
+							{/* Already small + muted in full, so the "From" needs no
+							    separate styling — it just has to be there. */}
 							<span className="text-xs text-muted-foreground">
-								{pp.customPriceLabel}
+								{pp.customPriceLabel.from ? "From " : ""}
+								{pp.customPriceLabel.text}
 							</span>
 						</span>
 					</div>
