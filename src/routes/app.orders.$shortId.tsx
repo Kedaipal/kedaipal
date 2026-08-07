@@ -77,6 +77,7 @@ import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
 import { formatPhone, orderCustomerLabel } from "../lib/customer";
 import {
@@ -315,10 +316,15 @@ function OrderDetailRoute() {
 		void markSeen({ orderId }).catch(() => {});
 	}, [orderId, alreadySeen, markSeen]);
 	// Permanent hard delete is admin-only (Kedaipal support); a plain seller only
-	// ever cancels. Hide the danger action unless this is an admin act-as session —
-	// the server enforces the same rule, so this is discoverability, not the guard.
+	// ever cancels. `canHardDeleteOrders` mirrors the server gate and is shared with
+	// the inbox bulk bar so the two surfaces can't drift — this is discoverability,
+	// the server is the guard.
 	const retailer = useDashboardRetailer();
-	const canHardDelete = retailer?.actingAsAdmin === true;
+	const amIAdmin = useQuery(api.billing.amIAdmin);
+	const canHardDelete = canHardDeleteOrders({
+		actingAsAdmin: retailer?.actingAsAdmin,
+		amIAdmin,
+	});
 	const proofUrl = useQuery(
 		api.orders.getPaymentProofUrl,
 		order?.paymentProofStorageId ? { orderId: order._id } : "skip",
@@ -1531,9 +1537,9 @@ function OrderDetailRoute() {
 								{pending === "cancel" ? "Updating…" : "Cancel Order"}
 							</Button>
 						) : null}
-						{/* Permanent hard delete — admin act-as only (Kedaipal support).
-						    Hidden for a plain seller, who cancels instead; the server
-						    enforces the same rule. Works in any status; irreversible. */}
+						{/* Permanent hard delete — Kedaipal admins only (own store or
+						    act-as). Hidden for a plain seller, who cancels instead; the
+						    server enforces the same rule. Any status; irreversible. */}
 						{canHardDelete ? (
 							<>
 								<Button
@@ -1546,8 +1552,9 @@ function OrderDetailRoute() {
 									{pending === "delete" ? "Deleting…" : "Delete permanently"}
 								</Button>
 								<p className="border-t border-border bg-muted/30 px-4 py-2.5 text-[11px] leading-snug text-muted-foreground">
-									Deleting removes this order and its records for good — this
-									can't be undone.
+									Kedaipal admin only — sellers don't see this. Deleting removes
+									this order and its records for good, and is recorded in the
+									admin log.
 								</p>
 							</>
 						) : null}
