@@ -408,3 +408,89 @@ export const notifyPaymentClaimed = internalAction({
 		}
 	},
 });
+
+/**
+ * Scheduled by orders.receiveGatewayPayment (86eyb6z3a) when an authentic
+ * HitPay payment doesn't match the order's current total — the one gateway
+ * state that needs a human: money moved, but auto-receiving would record a
+ * wrong number. Same lookup/skip/swallow pattern as `notifyPaymentClaimed`.
+ */
+export const notifyGatewayPaymentMismatch = internalAction({
+	args: {
+		orderId: v.id("orders"),
+		paidAmountSen: v.number(),
+		paidCurrency: v.string(),
+		paymentId: v.string(),
+	},
+	handler: async (
+		ctx,
+		{ orderId, paidAmountSen, paidCurrency, paymentId },
+	): Promise<void> => {
+		let meta: {
+			shortId: string;
+			status: Doc<"orders">["status"];
+			itemCount: number;
+			total: number;
+			currency: string;
+			customerName: string;
+			deliveryMethod: DeliveryMethod;
+			deliveryDirection: "standard" | "collection" | undefined;
+			notifyEmail: string | undefined;
+			storeName: string;
+			locale: Locale;
+			paymentReference: string | undefined;
+			paymentProofStorageId: string | undefined;
+		} | null = null;
+		try {
+			meta = await ctx.runQuery(internal.email.getOrderForRetailerEmail, {
+				orderId,
+			});
+		} catch (err) {
+			console.error("Email gateway-mismatch lookup failed", err);
+			return;
+		}
+		if (!meta) {
+			console.error(
+				`Email gateway-mismatch skipped: no order meta (orderId=${orderId})`,
+			);
+			return;
+		}
+		if (!meta.notifyEmail) {
+			console.warn(
+				`Email gateway-mismatch skipped: notifyEmail is empty (orderId=${orderId}, shortId=${meta.shortId})`,
+			);
+			return;
+		}
+
+		const totalFormatted = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
+		const gatewayPaidFormatted = `${paidCurrency} ${(paidAmountSen / 100).toFixed(2)}`;
+		const dashboardUrl = `${process.env.SITE_URL ?? "https://kedaipal.com"}/app/orders/${meta.shortId}`;
+
+		const { subject, html, text } = renderRetailerEmail(
+			meta.locale,
+			"gatewayMismatch",
+			{
+				shortId: meta.shortId,
+				itemCount: meta.itemCount,
+				totalFormatted,
+				customerName: meta.customerName,
+				deliveryMethod: meta.deliveryMethod,
+				deliveryDirection: meta.deliveryDirection,
+				storeName: meta.storeName,
+				dashboardUrl,
+				paymentReference: paymentId,
+				gatewayPaidFormatted,
+			},
+		);
+
+		try {
+			await sendEmail(meta.notifyEmail, subject, html, text);
+		} catch (err) {
+			console.error(
+				`Email gateway-mismatch failed (shortId=${meta.shortId}, to=${meta.notifyEmail}): ${
+					err instanceof Error ? err.message : String(err)
+				}`,
+			);
+		}
+	},
+});

@@ -1,5 +1,5 @@
 import { createFileRoute, notFound } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import {
 	BadgeCheck,
 	CalendarDays,
@@ -33,6 +33,7 @@ import { api } from "../../convex/_generated/api";
 import { isSafeTrackingUrl } from "../../convex/lib/couriers";
 import { formatFulfilmentDateTime } from "../../convex/lib/fulfilmentDate";
 import { isMockupGateClosed } from "../../convex/lib/order";
+import { paymentMethodLabel } from "../../convex/lib/paymentMethod";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
@@ -113,8 +114,16 @@ export const Route = createFileRoute("/track/$token")({
 	// "Send on WhatsApp" handoff once the page mounts. The component strips it
 	// (replace) before navigating away, so refresh / back-from-WhatsApp never
 	// re-triggers the redirect.
-	validateSearch: (search: Record<string, unknown>): { send?: 1 } => ({
+	validateSearch: (
+		search: Record<string, unknown>,
+	): { send?: 1; status?: string; reference?: string } => ({
 		send: search.send === 1 || search.send === "1" ? 1 : undefined,
+		// HitPay redirect-return params (86eyb6z3a): their PRESENCE triggers a
+		// server-side verify against HitPay's status API; the values themselves
+		// are display-only and never trusted.
+		status: typeof search.status === "string" ? search.status : undefined,
+		reference:
+			typeof search.reference === "string" ? search.reference : undefined,
 	}),
 	loader: async ({ params }): Promise<{ shortId: string | null }> => {
 		const read = await ssrRead(() =>
@@ -270,7 +279,11 @@ function TrackingSkeleton() {
 
 function TrackingRoute() {
 	const { token } = Route.useParams();
-	const { send } = Route.useSearch();
+	const {
+		send,
+		status: returnStatus,
+		reference: returnReference,
+	} = Route.useSearch();
 	const navigate = Route.useNavigate();
 	const order = useQuery(api.orders.get, { token });
 	// Only subscribe to payment methods when the "How to pay" section can actually
@@ -284,14 +297,55 @@ function TrackingRoute() {
 		(order.paymentStatus ?? "unpaid") !== "received" &&
 		!isMockupGateClosed(order) &&
 		order.deliveryFeePending !== true;
-	const paymentMethods = useQuery(
+	const paymentInfo = useQuery(
 		api.orders.getPaymentMethods,
 		showPaymentSection ? { token } : "skip",
 	);
+	const paymentMethods = paymentInfo?.methods ?? [];
+	// The seller's HitPay checkout can take THIS order's payment right now
+	// (86eyb6z3a) — connection on, price holds clear, payment still open.
+	const gatewayAvailable = paymentInfo?.gatewayAvailable === true;
 	const [editingAddress, setEditingAddress] = useState(false);
 	const [claimingPayment, setClaimingPayment] = useState(false);
 	// Index of the payment-QR currently being saved (spinner on that button only).
 	const [savingQrIndex, setSavingQrIndex] = useState<number | null>(null);
+	// Manual bank/QR details start collapsed while the gateway path is primary;
+	// one tap reveals them (and they stay the full section when no gateway).
+	const [showManualMethods, setShowManualMethods] = useState(false);
+	const createGatewayCheckout = useAction(api.hitpay.createCheckout);
+	const verifyGatewayCheckout = useAction(api.hitpay.verifyCheckout);
+	const [payingNow, setPayingNow] = useState(false);
+	// Landing back from HitPay's checkout (?status&reference appended to the
+	// redirect): show a "confirming" state while ONE server-side verify runs —
+	// the params themselves are never trusted, and the reactive order query
+	// flips the card the moment the webhook or the verify records the payment.
+	const gatewayReturn =
+		returnStatus !== undefined || returnReference !== undefined;
+	const [confirmingGateway, setConfirmingGateway] = useState(gatewayReturn);
+	const verifiedOnReturn = useRef(false);
+	useEffect(() => {
+		if (!gatewayReturn || verifiedOnReturn.current) return;
+		verifiedOnReturn.current = true;
+		// Strip the return params immediately (replace) so refresh/back lands on
+		// a plain tracking URL instead of re-firing the verify.
+		navigate({ search: {}, replace: true });
+		verifyGatewayCheckout({ token })
+			.catch(() => undefined)
+			.finally(() => setConfirmingGateway(false));
+	}, [gatewayReturn, navigate, verifyGatewayCheckout, token]);
+
+	async function handlePayNow() {
+		setPayingNow(true);
+		try {
+			const { url } = await createGatewayCheckout({ token });
+			// Same-tab on purpose: the WhatsApp in-app browser has no tab UI, and
+			// HitPay redirects straight back here when the payment settles.
+			window.location.assign(url);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+			setPayingNow(false);
+		}
+	}
 
 	async function handleSaveQr(label: string, url: string, index: number) {
 		setSavingQrIndex(index);
@@ -546,6 +600,14 @@ function TrackingRoute() {
 						) : null}
 					</div>
 
+					{/* Gateway settlements record the rail (TnG / FPX / card…) — show
+					    it so the buyer's receipt view matches what they just did. */}
+					{paymentStatus === "received" && order.paymentMethod ? (
+						<p className="text-xs opacity-80">
+							Paid via {paymentMethodLabel(order.paymentMethod)}
+						</p>
+					) : null}
+
 					{paymentStatus === "unpaid" ? (
 						mockupGateClosed ? (
 							<>
@@ -570,6 +632,42 @@ function TrackingRoute() {
 									charge on WhatsApp — payment opens with the final total right
 									after.
 								</p>
+							</>
+						) : confirmingGateway ? (
+							// Just back from HitPay — one server-side verify is in flight.
+							// If it (or the webhook) finds the payment, the reactive query
+							// flips this card to Confirmed; otherwise the buttons return.
+							<>
+								<Button disabled isLoading className="h-12 w-full text-base">
+									Confirming your payment…
+								</Button>
+								<p className="text-xs opacity-80">
+									Checking with HitPay — this usually takes a few seconds.
+								</p>
+							</>
+						) : gatewayAvailable ? (
+							<>
+								<Button
+									onClick={handlePayNow}
+									isLoading={payingNow}
+									className="h-12 w-full text-base"
+								>
+									{payingNow
+										? "Opening secure checkout…"
+										: `Pay now · ${formatPrice(order.total, order.currency)}`}
+								</Button>
+								<p className="text-xs opacity-80">
+									Pay by Touch 'n Go, DuitNow, FPX or card on {order.storeName ||
+										"the store"}
+									's secure HitPay page — your order confirms automatically.
+								</p>
+								<button
+									type="button"
+									onClick={() => setClaimingPayment(true)}
+									className="self-start text-sm font-medium underline-offset-2 hover:underline"
+								>
+									Paid by bank transfer instead? Tell the store
+								</button>
 							</>
 						) : (
 							<Button
@@ -604,13 +702,31 @@ function TrackingRoute() {
 			{/* How to pay — the seller's payment methods (banks + QRs) with one-tap
 			    copy on each account number (the MY bank-transfer friction point).
 			    Shown while a payment is still due and not deferred behind a closed
-			    mockup gate; hidden once received/cancelled or when none configured. */}
+			    mockup gate; hidden once received/cancelled or when none configured.
+			    While the HitPay Pay-now path is primary (86eyb6z3a) the manual
+			    details start COLLAPSED behind one tap — still there for the
+			    transfer-anyway buyer, no longer competing with the gateway. */}
 			{!isCancelled &&
 			!mockupGateClosed &&
 			!deliveryFeeHeld &&
 			paymentStatus !== "received" &&
-			paymentMethods &&
 			paymentMethods.length > 0 ? (
+				gatewayAvailable && paymentStatus === "unpaid" && !showManualMethods ? (
+					<section className="mt-4 rounded-2xl border border-border bg-card p-4">
+						<button
+							type="button"
+							onClick={() => setShowManualMethods(true)}
+							className="flex w-full items-center justify-between gap-3 text-left"
+						>
+							<span className="text-sm text-muted-foreground">
+								Prefer bank transfer or QR?
+							</span>
+							<span className="shrink-0 text-sm font-medium text-accent">
+								Show payment details
+							</span>
+						</button>
+					</section>
+				) : (
 				<section className="mt-4 flex flex-col gap-4 rounded-2xl border border-border bg-card p-4">
 					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 						How to pay
@@ -696,6 +812,7 @@ function TrackingRoute() {
 						</div>
 					))}
 				</section>
+				)
 			) : null}
 
 			{/* Mockup approval — buyer reviews the seller's proof before production. */}

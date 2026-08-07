@@ -24,7 +24,8 @@ export type RetailerEmailKey =
 	| "mockupApproved"
 	| "mockupChangesRequested"
 	| "mockupDeclined"
-	| "deliveryJobFailed";
+	| "deliveryJobFailed"
+	| "gatewayMismatch";
 
 export type RetailerEmailVars = {
 	shortId: string;
@@ -45,6 +46,10 @@ export type RetailerEmailVars = {
 	proofUrl?: string;
 	// Optional — only set when key === "mockupChangesRequested".
 	mockupChangeNote?: string;
+	// Optional — only set when key === "gatewayMismatch" (86eyb6z3a). What the
+	// buyer actually paid through HitPay ("MYR 45.00"), shown against
+	// `totalFormatted`; `paymentReference` carries the HitPay payment id.
+	gatewayPaidFormatted?: string;
 	// Optional — only set when key === "deliveryJobFailed". Human-readable
 	// reason the Lalamove booking ended without a rider (e.g. "No driver
 	// accepted the order"). See docs/delivery-lalamove.md.
@@ -326,6 +331,19 @@ const en = {
 		const text = `🚨 Delivery booking failed for ${v.shortId}\n${reasonLine}\nYour buyer has not been notified and the order is unchanged — open the order to rebook a rider.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
+	gatewayMismatch: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `⚠️ Online payment doesn't match ${v.shortId}'s total`;
+		const paid = v.gatewayPaidFormatted ?? "an unknown amount";
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> · ${escapeHtml(v.customerName)}`,
+			`The buyer paid <strong>${escapeHtml(paid)}</strong> through HitPay, but the order total is <strong>${escapeHtml(v.totalFormatted)}</strong>.`,
+			`This usually means the total changed after their payment link was created.`,
+			`The order was <strong>not</strong> auto-marked paid. Check the payment in your HitPay dashboard (reference: ${escapeHtml(v.paymentReference ?? "—")}), then settle it on the order page — mark it received if the amount is fine, or refund via HitPay.`,
+		];
+		const html = wrapHtml("⚠️", `Online payment mismatch — ${v.shortId}`, lines, v.dashboardUrl, "Open the order");
+		const text = `⚠️ Online payment doesn't match ${v.shortId}'s total\nThe buyer paid ${paid} through HitPay, but the order total is ${v.totalFormatted}.\nThis usually means the total changed after their payment link was created.\nThe order was NOT auto-marked paid. Check the payment in your HitPay dashboard (reference: ${v.paymentReference ?? "—"}), then settle it on the order page — mark it received if the amount is fine, or refund via HitPay.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
 };
 
 const ms = {
@@ -464,6 +482,19 @@ const ms = {
 		];
 		const html = wrapHtml("🚨", `Tempahan penghantaran gagal — ${v.shortId}`, lines, v.dashboardUrl, "Tempah semula");
 		const text = `🚨 Tempahan penghantaran gagal untuk ${v.shortId}\n${reasonLine}\nPembeli anda tidak dimaklumkan dan pesanan tidak berubah — buka pesanan untuk tempah rider semula.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	gatewayMismatch: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `⚠️ Bayaran online tidak sepadan dengan jumlah ${v.shortId}`;
+		const paid = v.gatewayPaidFormatted ?? "jumlah tidak diketahui";
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> · ${escapeHtml(v.customerName)}`,
+			`Pembeli membayar <strong>${escapeHtml(paid)}</strong> melalui HitPay, tetapi jumlah pesanan ialah <strong>${escapeHtml(v.totalFormatted)}</strong>.`,
+			`Ini biasanya bermakna jumlah berubah selepas pautan bayaran mereka dibuat.`,
+			`Pesanan <strong>tidak</strong> ditanda berbayar secara automatik. Semak bayaran dalam dashboard HitPay anda (rujukan: ${escapeHtml(v.paymentReference ?? "—")}), kemudian selesaikan pada halaman pesanan — tanda diterima jika jumlahnya OK, atau buat refund melalui HitPay.`,
+		];
+		const html = wrapHtml("⚠️", `Bayaran online tidak sepadan — ${v.shortId}`, lines, v.dashboardUrl, "Buka pesanan");
+		const text = `⚠️ Bayaran online tidak sepadan dengan jumlah ${v.shortId}\nPembeli membayar ${paid} melalui HitPay, tetapi jumlah pesanan ialah ${v.totalFormatted}.\nIni biasanya bermakna jumlah berubah selepas pautan bayaran mereka dibuat.\nPesanan TIDAK ditanda berbayar secara automatik. Semak bayaran dalam dashboard HitPay anda (rujukan: ${v.paymentReference ?? "—"}), kemudian selesaikan pada halaman pesanan — tanda diterima jika jumlahnya OK, atau buat refund melalui HitPay.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 };
@@ -608,6 +639,19 @@ const zh = {
 		];
 		const html = wrapHtml("🚨", `配送预订失败 —— ${v.shortId}`, lines, v.dashboardUrl, "重新预订");
 		const text = `🚨 ${v.shortId} 的配送预订失败\n${reasonLine}\n顾客还没有收到通知，订单也没有变化 —— 请打开订单重新预订骑士。\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	gatewayMismatch: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `⚠️ 线上付款金额与订单 ${v.shortId} 不符`;
+		const paid = v.gatewayPaidFormatted ?? "未知金额";
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> · ${escapeHtml(v.customerName)}`,
+			`顾客通过 HitPay 支付了 <strong>${escapeHtml(paid)}</strong>，但订单总额是 <strong>${escapeHtml(v.totalFormatted)}</strong>。`,
+			`这通常表示付款链接生成后订单总额发生了变化。`,
+			`订单<strong>没有</strong>自动标记为已付款。请在您的 HitPay 后台核对这笔付款（参考号：${escapeHtml(v.paymentReference ?? "—")}），然后在订单页处理 —— 金额没问题就标记为已收款，否则通过 HitPay 退款。`,
+		];
+		const html = wrapHtml("⚠️", `线上付款金额不符 —— ${v.shortId}`, lines, v.dashboardUrl, "打开订单");
+		const text = `⚠️ 线上付款金额与订单 ${v.shortId} 不符\n顾客通过 HitPay 支付了 ${paid}，但订单总额是 ${v.totalFormatted}。\n这通常表示付款链接生成后订单总额发生了变化。\n订单没有自动标记为已付款。请在您的 HitPay 后台核对这笔付款（参考号：${v.paymentReference ?? "—"}），然后在订单页处理 —— 金额没问题就标记为已收款，否则通过 HitPay 退款。\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 };
