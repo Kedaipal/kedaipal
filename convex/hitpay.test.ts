@@ -487,7 +487,7 @@ describe("POST /webhook/hitpay", () => {
 
 	test("authentic completed payment → received + auto-confirm + event", async () => {
 		const t = setup();
-		const { orderId, total } = await seedPayableOrder(t);
+		const { orderId, total, token } = await seedPayableOrder(t);
 		// Push-path orders are born confirmed in prod; this seed's order is
 		// pending (no template env), which exercises the auto-confirm branch.
 		const res = await post(
@@ -516,6 +516,10 @@ describe("POST /webhook/hitpay", () => {
 		expect(
 			events.some((e) => e.note === "payment_received_auto_confirm"),
 		).toBe(true);
+		// The buyer's track page shows the same ref the seller sees (86eyjmhby)
+		// — pin that the unauthenticated token read exposes it.
+		const buyerOrder = await t.query(api.orders.get, { token });
+		expect(buyerOrder?.gatewayPaymentId).toBe("pay_0001");
 	});
 
 	test("duplicate delivery no-ops; tampered hmac is rejected", async () => {

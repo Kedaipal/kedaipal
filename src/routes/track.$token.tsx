@@ -588,12 +588,54 @@ function TrackingRoute() {
 						) : null}
 					</div>
 
-					{/* Gateway settlements record the rail (TnG / FPX / card…) — show
-					    it so the buyer's receipt view matches what they just did. */}
-					{paymentStatus === "received" && order.paymentMethod ? (
-						<p className="text-xs opacity-80">
-							Paid via {paymentMethodLabel(order.paymentMethod)}
-						</p>
+					{/* Settlement detail — the rail the buyer paid on (TnG / FPX /
+					    card…) and, for gateway settlements, the HitPay reference the
+					    seller's order detail also shows (86eyjmhby), so both sides quote
+					    one number when a payment question comes up.
+
+					    Both are facets of the SAME fact ("this is how it was paid"), so
+					    they're one child of the card's `gap-3` column with their own
+					    tight spacing — as separate children the card's gap pushed the
+					    ref far enough from "Paid via" to read as unrelated. The ref sits
+					    on its own quiet surface because it's a value to copy, not prose:
+					    tone-agnostic white/border (never a hardcoded emerald that could
+					    disagree with `paymentConfig.tone`), and the mono string itself
+					    drops the muted opacity so a 36-char id stays legible while its
+					    label stays secondary to the "Payment Confirmed" headline. */}
+					{paymentStatus === "received" &&
+					(order.paymentMethod || order.gatewayPaymentId) ? (
+						<div className="flex flex-col gap-1.5">
+							{order.paymentMethod ? (
+								<p className="text-xs opacity-80">
+									Paid via {paymentMethodLabel(order.paymentMethod)}
+								</p>
+							) : null}
+							{order.gatewayPaymentId ? (
+								<div className="rounded-lg border border-black/5 bg-white/60 px-2.5 py-1.5">
+									{/* Copy sits beside the LABEL, not the value, so the id gets
+									    the chip's full width — a 36-char HitPay reference then
+									    renders complete at 375px instead of truncating, and a
+									    half-shown reference number can't be matched against a
+									    banking-app entry, which is the whole job. `break-all`
+									    only engages if an id ever outgrows one line. The Copy
+									    text stays visible at every width: icon-only is a 38px
+									    target, under the 44px mobile rule. */}
+									<div className="flex items-center justify-between gap-2">
+										<p className="text-[10px] font-medium uppercase tracking-wider opacity-70">
+											Payment ref
+										</p>
+										<CopyButton
+											value={order.gatewayPaymentId}
+											ariaLabel="Copy payment reference"
+											successMessage="Payment reference copied"
+										/>
+									</div>
+									<p className="break-all font-mono text-xs">
+										{order.gatewayPaymentId}
+									</p>
+								</div>
+							) : null}
+						</div>
 					) : null}
 
 					{paymentStatus === "unpaid" ? (

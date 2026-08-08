@@ -37,7 +37,18 @@ nothing here gets rebuilt.
    **inferred from the key** (`inferHitpayMode`), no toggle; the card badges
    "Test mode" amber on a sandbox key. Enabling is Pro-gated
    (`PLAN_FEATURES.onlinePayments`); pause/disconnect never are, and
-   pause keeps the keys so resuming is one tap.
+   pause keeps the keys so resuming is one tap. The card links the
+   **print-ready vendor guide** `/guides/hitpay-setup.html` (86eyjmhby,
+   Lalamove-guide precedent): sign-up → KYC (SSM) → enable MY methods →
+   copy key + salt → connect → RM1 test → **cancel the test order**. That
+   last step is load-bearing, not tidiness: the webhook acts only on
+   `status === "completed"`, so a HitPay refund is acked and ignored and
+   the order stays `received` forever — phantom collected revenue in
+   Insights, unrestored hard-block stock, inflated customer aggregates.
+   Cancel is the seller's only escape (hard delete is admin-only) and it
+   reverses all three via `reverseCancellationEffects`. The guide's refund
+   FAQ carries the same warning for real buyer refunds. Until refund
+   reconciliation exists (`86eyjmnbd`), that manual step IS the contract.
 2. **Pay now (buyer).** `orders.getPaymentMethods` returns
    `gatewayAvailable` per-order (connected + enabled + unpaid + both price
    holds clear + total ≥ RM0.30). The order page carries ONE payment door:
@@ -89,7 +100,9 @@ nothing here gets rebuilt.
    activation stamp, orderEvents row, `notifyPaymentReceived` WhatsApp (an
    existing message — no new send types). `paymentReference` stores the
    HitPay payment id; the seller's order page shows "Paid online via HitPay
-   · <rail> · Ref …".
+   · <rail> · Ref …", and the buyer's paid card carries the same
+   "Payment ref …" with one-tap copy (86eyjmhby) — both sides quote one
+   number when a payment question comes up.
 6. **Method stamping.** The v1 webhook has no `payment_type`, so webhook
    receives stamp `other` and schedule `enrichPaymentMethod`, which fetches
    the real rail off the status API (`recordGatewayMethod` upgrades only an
@@ -198,12 +211,24 @@ every payment-request create), so:
   `charge.*` webhooks, commission %) waits on HitPay enabling Kedaipal's
   platform account (86eyb6z2d) — additive: swap the connect card's input
   for an OAuth button + register the platform events endpoint.
-- **Refund statuses on the order** (refund_pending/refunded), pay-at-
-  checkout auto-hop (same action, called right after order create),
-  fee-passing UI (`add_admin_fee` — exists in the seller's own HitPay
-  dashboard per-method anyway), counter pay-at-scan links (no amount exists
-  before ring-up), and a printable `/guides/hitpay-setup.html` are all
-  deliberate v1 cuts.
+- **Refunds are invisible to Kedaipal, and that has teeth.** The webhook
+  acts only on `status === "completed"` (`convex/http.ts`), so a refund is
+  acked and dropped: the order keeps `paymentStatus: "received"`, its money
+  keeps counting as collected revenue in Insights, hard-block stock stays
+  decremented, and the customer's `orderCount`/`totalSpent` stay inflated —
+  and the buyer's track page still reads "Payment Confirmed". The seller's
+  only in-product correction is **cancel**, which reverses stock + customer
+  aggregates (`reverseCancellationEffects`) and drops the order out of every
+  Insights figure; hard delete is admin-only (86eyaqzpd). Both the vendor
+  guide's RM1-test step and its refund FAQ say this out loud, because a
+  seller who follows the test and stops at "refunded in HitPay" ends day one
+  with wrong revenue, stock and CRM numbers. Refund statuses on the order
+  (refund_pending/refunded) + API-triggered refunds are ticketed as
+  `86eyjmnbd`.
+- Pay-at-checkout auto-hop (same action, called right after order create)
+  and fee-passing UI (`add_admin_fee` — exists in the seller's own HitPay
+  dashboard per-method anyway) and counter pay-at-scan links (no amount
+  exists before ring-up) are deliberate v1 cuts.
 - Two near-simultaneous different-amount links: the pre-re-price link stays
   payable until expiry; covered by the mismatch guard, documented above.
 
