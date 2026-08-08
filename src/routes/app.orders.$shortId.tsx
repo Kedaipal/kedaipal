@@ -1081,13 +1081,22 @@ function OrderDetailRoute() {
 							Payment received
 						</p>
 						<p className="text-sm text-emerald-900">
-							{order.paymentReceivedAt
-								? `Confirmed ${formatRelative(order.paymentReceivedAt)}`
-								: "Confirmed by you"}
+							{order.gatewayPaymentId
+								? // Auto-confirmed by the HitPay webhook (86eyb6z3a) — say so,
+									// since nobody on the team pressed the button.
+									`Paid online via HitPay${order.paymentReceivedAt ? ` ${formatRelative(order.paymentReceivedAt)}` : ""}`
+								: order.paymentReceivedAt
+									? `Confirmed ${formatRelative(order.paymentReceivedAt)}`
+									: "Confirmed by you"}
 							{order.paymentMethod
 								? ` · ${paymentMethodLabel(order.paymentMethod)}`
 								: ""}
 						</p>
+						{order.gatewayPaymentId ? (
+							<p className="mt-0.5 truncate font-mono text-xs text-emerald-800/80">
+								Ref {order.gatewayPaymentId}
+							</p>
+						) : null}
 					</div>
 				</section>
 			) : null}

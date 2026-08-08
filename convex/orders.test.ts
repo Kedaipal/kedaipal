@@ -233,10 +233,12 @@ describe("orders", () => {
 				],
 			});
 		});
-		const methods = await t.query(api.orders.getPaymentMethods, { token: await tk(t, shortId) });
-		expect(methods).toHaveLength(2);
-		expect(methods?.[0].label).toBe("Maybank");
-		expect(methods?.[1].bankAccountNumber).toBe("8001-2233");
+		const result = await t.query(api.orders.getPaymentMethods, { token: await tk(t, shortId) });
+		expect(result?.methods).toHaveLength(2);
+		expect(result?.methods[0].label).toBe("Maybank");
+		expect(result?.methods[1].bankAccountNumber).toBe("8001-2233");
+		// No HitPay connection on this store → the gateway path is off.
+		expect(result?.gatewayAvailable).toBe(false);
 
 		// Legacy single object is still read (synthesized into one method).
 		await t.run(async (ctx) => {
@@ -249,9 +251,9 @@ describe("orders", () => {
 			});
 		});
 		const legacy = await t.query(api.orders.getPaymentMethods, { token: await tk(t, shortId) });
-		expect(legacy).toHaveLength(1);
-		expect(legacy?.[0].label).toBe("Hong Leong");
-		expect(legacy?.[0].bankAccountNumber).toBe("9000-1111"); // trimmed
+		expect(legacy?.methods).toHaveLength(1);
+		expect(legacy?.methods[0].label).toBe("Hong Leong");
+		expect(legacy?.methods[0].bankAccountNumber).toBe("9000-1111"); // trimmed
 
 		// Unknown order → null.
 		expect(
