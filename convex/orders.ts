@@ -3329,7 +3329,10 @@ export const receiveGatewayPayment = internalMutation({
 	handler: async (
 		ctx,
 		{ orderId, paymentId, amountSen, currency, paymentType },
-	): Promise<{ applied: boolean; reason?: "duplicate" | "amount_mismatch" }> => {
+	): Promise<{
+		applied: boolean;
+		reason?: "duplicate" | "amount_mismatch" | "cancelled";
+	}> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) return { applied: false, reason: "duplicate" };
 		if (
@@ -3341,6 +3344,31 @@ export const receiveGatewayPayment = internalMutation({
 		}
 
 		const now = Date.now();
+		if (order.status === "cancelled") {
+			// Pay-after-cancel (PR #172 review, finding 2): createCheckout refuses
+			// cancelled orders, but a link minted BEFORE the cancel stays payable
+			// at HitPay for up to an hour. An authentic late payment must never
+			// resurrect the order or WhatsApp the buyer "payment received" — it
+			// needs a human and a refund. Event + seller email, no state flip.
+			await ctx.db.insert("orderEvents", {
+				orderId,
+				status: order.status,
+				note: `gateway_paid_after_cancel: paid ${(amountSen / 100).toFixed(2)} ${currency.toUpperCase()} on the cancelled order (hitpay ${paymentId})`,
+				createdAt: now,
+			});
+			await ctx.scheduler.runAfter(
+				0,
+				internal.email.notifyGatewayPaymentIssue,
+				{
+					orderId,
+					kind: "paid_after_cancel",
+					paidAmountSen: amountSen,
+					paidCurrency: currency.toUpperCase(),
+					paymentId,
+				},
+			);
+			return { applied: false, reason: "cancelled" };
+		}
 		if (
 			amountSen !== order.total ||
 			currency.toUpperCase() !== order.currency.toUpperCase()
@@ -3356,9 +3384,10 @@ export const receiveGatewayPayment = internalMutation({
 			});
 			await ctx.scheduler.runAfter(
 				0,
-				internal.email.notifyGatewayPaymentMismatch,
+				internal.email.notifyGatewayPaymentIssue,
 				{
 					orderId,
+					kind: "amount_mismatch",
 					paidAmountSen: amountSen,
 					paidCurrency: currency.toUpperCase(),
 					paymentId,

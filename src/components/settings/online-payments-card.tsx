@@ -206,11 +206,15 @@ export function OnlinePaymentsCard({
 							</>
 						) : (
 							<>
+								{/* Pausing is never gated; RESUMING is enabling, so a
+								    downgraded seller gets disabled-with-reason instead of a
+								    button that fails server-side (house style). */}
 								<Button
 									type="button"
 									variant={hitpay?.enabled ? "outline" : "default"}
 									className="h-11"
 									isLoading={saving}
+									disabled={!hitpay?.enabled && !canUse}
 									onClick={() =>
 										save(
 											{ hitpay: { enabled: !(hitpay?.enabled ?? false) } },
@@ -240,6 +244,12 @@ export function OnlinePaymentsCard({
 							</>
 						)}
 					</div>
+					{!editingKeys && !hitpay?.enabled && !canUse ? (
+						<p className="text-xs text-muted-foreground">
+							Resuming online payments needs Pro — upgrade in Settings →
+							Billing. Your keys are kept meanwhile.
+						</p>
+					) : null}
 					<ConfirmDialog
 						open={confirmingDisconnect}
 						onOpenChange={setConfirmingDisconnect}

@@ -163,6 +163,7 @@ async function stampRequest(
 	orderId: Id<"orders">,
 	overrides: Partial<{
 		requestId: string;
+		previousRequestId: string;
 		amount: number;
 		currency: string;
 		at: number;
@@ -171,6 +172,7 @@ async function stampRequest(
 	await t.run(async (ctx) => {
 		await ctx.db.patch(orderId, {
 			gatewayRequestId: overrides.requestId ?? "req_0001",
+			gatewayPreviousRequestId: overrides.previousRequestId,
 			gatewayCheckoutUrl: "https://checkout.sandbox.hit-pay.com/x",
 			gatewayRequestedAmount: overrides.amount ?? 12000,
 			gatewayRequestedCurrency: overrides.currency ?? "MYR",
@@ -606,6 +608,178 @@ describe("POST /webhook/hitpay", () => {
 		);
 		expect(res.status).toBe(500);
 		void retailer;
+	});
+});
+
+describe("replaced links + pay-after-cancel (PR #172 review)", () => {
+	async function seedPayableOrder(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await connectHitpay(t, USER_A);
+		const order = await seedOrder(t, retailer._id, productId);
+		return { retailer, ...order };
+	}
+
+	function post(t: ReturnType<typeof setup>, body: string) {
+		return t.fetch("/webhook/hitpay", {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded" },
+			body,
+		});
+	}
+
+	test("payment on a re-priced REPLACED link records the mismatch instead of silence", async () => {
+		const t = setup();
+		const { orderId, total } = await seedPayableOrder(t);
+		// Current request prices the new total; the replaced one carried the old
+		// price and its link is still payable at HitPay.
+		await stampRequest(t, orderId, {
+			requestId: "req_new",
+			previousRequestId: "req_old",
+			amount: total,
+		});
+		const oldPrice = ((total - 1000) / 100).toFixed(2);
+		const res = await post(
+			t,
+			await signedWebhookBody(webhookFields("req_old", { amount: oldPrice })),
+		);
+		expect(res.status).toBe(200);
+		const row = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(row?.paymentStatus ?? "unpaid").toBe("unpaid");
+		const events = await t.run(async (ctx) =>
+			ctx.db
+				.query("orderEvents")
+				.withIndex("by_order", (q) => q.eq("orderId", orderId))
+				.collect(),
+		);
+		expect(
+			events.some((e) => e.note?.startsWith("gateway_amount_mismatch")),
+		).toBe(true);
+	});
+
+	test("double-mint race: replacement keeps the old id, DELETEs the stale link, and a same-amount payment on it applies", async () => {
+		const t = setup();
+		const { orderId, token, total } = await seedPayableOrder(t);
+		let mintCount = 0;
+		const deleted: string[] = [];
+		const fetchMock = vi.fn(async (url: unknown, init?: RequestInit) => {
+			if (init?.method === "DELETE") {
+				deleted.push(String(url));
+				return new Response("{}", { status: 200 });
+			}
+			mintCount++;
+			return new Response(
+				JSON.stringify({
+					id: `req_mint_${mintCount}`,
+					url: `https://checkout.sandbox.hit-pay.com/m${mintCount}`,
+					status: "pending",
+					amount: (total / 100).toFixed(2),
+					currency: "myr",
+				}),
+				{ status: 201 },
+			);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		await t.action(api.hitpay.createCheckout, { token });
+		// Age the first request past the reuse window so the next tap re-mints
+		// at the SAME amount (the two-open-tabs shape).
+		await t.run(async (ctx) => {
+			await ctx.db.patch(orderId, {
+				gatewayRequestedAt: Date.now() - 56 * 60 * 1000,
+			});
+		});
+		await t.action(api.hitpay.createCheckout, { token });
+
+		const row = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(row?.gatewayRequestId).toBe("req_mint_2");
+		expect(row?.gatewayPreviousRequestId).toBe("req_mint_1");
+		// Best-effort void of the stale link at HitPay.
+		expect(deleted.some((u) => u.includes("req_mint_1"))).toBe(true);
+
+		// The buyer pays the old (same-amount) link anyway → applies normally.
+		const res = await post(
+			t,
+			await signedWebhookBody(
+				webhookFields("req_mint_1", { amount: (total / 100).toFixed(2) }),
+			),
+		);
+		expect(res.status).toBe(200);
+		const paid = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(paid?.paymentStatus).toBe("received");
+		expect(paid?.gatewayPaymentId).toBe("pay_0001");
+	});
+
+	test("pay-after-cancel: event + seller email path, no state flip, no buyer message", async () => {
+		const t = setup();
+		const { orderId, total } = await seedPayableOrder(t);
+		await stampRequest(t, orderId, { amount: total });
+		await t.run(async (ctx) => {
+			await ctx.db.patch(orderId, { status: "cancelled" });
+		});
+		const res = await post(
+			t,
+			await signedWebhookBody(
+				webhookFields("req_0001", { amount: (total / 100).toFixed(2) }),
+			),
+		);
+		expect(res.status).toBe(200);
+		const row = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(row?.status).toBe("cancelled");
+		expect(row?.paymentStatus ?? "unpaid").toBe("unpaid");
+		expect(row?.gatewayPaymentId).toBeUndefined();
+		const events = await t.run(async (ctx) =>
+			ctx.db
+				.query("orderEvents")
+				.withIndex("by_order", (q) => q.eq("orderId", orderId))
+				.collect(),
+		);
+		expect(
+			events.some((e) => e.note?.startsWith("gateway_paid_after_cancel")),
+		).toBe(true);
+	});
+
+	test("verifyCheckout falls back to the replaced request when the current one is unpaid", async () => {
+		const t = setup();
+		const { orderId, token, total } = await seedPayableOrder(t);
+		await stampRequest(t, orderId, {
+			requestId: "req_new",
+			previousRequestId: "req_old",
+			amount: total,
+		});
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: unknown) => {
+				const isOld = String(url).includes("req_old");
+				return new Response(
+					JSON.stringify({
+						id: isOld ? "req_old" : "req_new",
+						url: "https://checkout/x",
+						status: isOld ? "completed" : "pending",
+						amount: (total / 100).toFixed(2),
+						currency: "myr",
+						payments: isOld
+							? [
+									{
+										id: "pay_prev",
+										status: "succeeded",
+										payment_type: "duitnow",
+										amount: (total / 100).toFixed(2),
+										currency: "myr",
+									},
+								]
+							: [],
+					}),
+					{ status: 200 },
+				);
+			}),
+		);
+		const result = await t.action(api.hitpay.verifyCheckout, { token });
+		expect(result.paymentStatus).toBe("received");
+		const row = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(row?.paymentStatus).toBe("received");
+		expect(row?.gatewayPaymentId).toBe("pay_prev");
+		expect(row?.paymentMethod).toBe("duitnow");
 	});
 });
 

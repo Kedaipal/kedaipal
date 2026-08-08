@@ -25,7 +25,8 @@ export type RetailerEmailKey =
 	| "mockupChangesRequested"
 	| "mockupDeclined"
 	| "deliveryJobFailed"
-	| "gatewayMismatch";
+	| "gatewayMismatch"
+	| "gatewayPaidCancelled";
 
 export type RetailerEmailVars = {
 	shortId: string;
@@ -344,6 +345,19 @@ const en = {
 		const text = `⚠️ Online payment doesn't match ${v.shortId}'s total\nThe buyer paid ${paid} through HitPay, but the order total is ${v.totalFormatted}.\nThis usually means the total changed after their payment link was created.\nThe order was NOT auto-marked paid. Check the payment in your HitPay dashboard (reference: ${v.paymentReference ?? "—"}), then settle it on the order page — mark it received if the amount is fine, or refund via HitPay.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
+	gatewayPaidCancelled: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `⚠️ Buyer paid the CANCELLED order ${v.shortId}`;
+		const paid = v.gatewayPaidFormatted ?? "an unknown amount";
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> · ${escapeHtml(v.customerName)}`,
+			`The buyer paid <strong>${escapeHtml(paid)}</strong> through HitPay — but this order was already cancelled when the payment came in (their payment link stays open for up to an hour).`,
+			`The order was <strong>not</strong> reopened and the buyer was <strong>not</strong> messaged.`,
+			`Refund the payment in your HitPay dashboard (reference: ${escapeHtml(v.paymentReference ?? "—")}) and let the buyer know.`,
+		];
+		const html = wrapHtml("⚠️", `Paid after cancel — ${v.shortId}`, lines, v.dashboardUrl, "Open the order");
+		const text = `⚠️ Buyer paid the CANCELLED order ${v.shortId}\nThe buyer paid ${paid} through HitPay — but this order was already cancelled when the payment came in (their payment link stays open for up to an hour).\nThe order was NOT reopened and the buyer was NOT messaged.\nRefund the payment in your HitPay dashboard (reference: ${v.paymentReference ?? "—"}) and let the buyer know.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
 };
 
 const ms = {
@@ -495,6 +509,19 @@ const ms = {
 		];
 		const html = wrapHtml("⚠️", `Bayaran online tidak sepadan — ${v.shortId}`, lines, v.dashboardUrl, "Buka pesanan");
 		const text = `⚠️ Bayaran online tidak sepadan dengan jumlah ${v.shortId}\nPembeli membayar ${paid} melalui HitPay, tetapi jumlah pesanan ialah ${v.totalFormatted}.\nIni biasanya bermakna jumlah berubah selepas pautan bayaran mereka dibuat.\nPesanan TIDAK ditanda berbayar secara automatik. Semak bayaran dalam dashboard HitPay anda (rujukan: ${v.paymentReference ?? "—"}), kemudian selesaikan pada halaman pesanan — tanda diterima jika jumlahnya OK, atau buat refund melalui HitPay.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	gatewayPaidCancelled: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `⚠️ Pembeli membayar pesanan yang DIBATALKAN ${v.shortId}`;
+		const paid = v.gatewayPaidFormatted ?? "jumlah tidak diketahui";
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> · ${escapeHtml(v.customerName)}`,
+			`Pembeli membayar <strong>${escapeHtml(paid)}</strong> melalui HitPay — tetapi pesanan ini sudah dibatalkan semasa bayaran masuk (pautan bayaran mereka kekal aktif sehingga sejam).`,
+			`Pesanan <strong>tidak</strong> dibuka semula dan pembeli <strong>tidak</strong> dihubungi.`,
+			`Buat refund dalam dashboard HitPay anda (rujukan: ${escapeHtml(v.paymentReference ?? "—")}) dan maklumkan kepada pembeli.`,
+		];
+		const html = wrapHtml("⚠️", `Bayaran selepas batal — ${v.shortId}`, lines, v.dashboardUrl, "Buka pesanan");
+		const text = `⚠️ Pembeli membayar pesanan yang DIBATALKAN ${v.shortId}\nPembeli membayar ${paid} melalui HitPay — tetapi pesanan ini sudah dibatalkan semasa bayaran masuk (pautan bayaran mereka kekal aktif sehingga sejam).\nPesanan TIDAK dibuka semula dan pembeli TIDAK dihubungi.\nBuat refund dalam dashboard HitPay anda (rujukan: ${v.paymentReference ?? "—"}) dan maklumkan kepada pembeli.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 };
@@ -652,6 +679,19 @@ const zh = {
 		];
 		const html = wrapHtml("⚠️", `线上付款金额不符 —— ${v.shortId}`, lines, v.dashboardUrl, "打开订单");
 		const text = `⚠️ 线上付款金额与订单 ${v.shortId} 不符\n顾客通过 HitPay 支付了 ${paid}，但订单总额是 ${v.totalFormatted}。\n这通常表示付款链接生成后订单总额发生了变化。\n订单没有自动标记为已付款。请在您的 HitPay 后台核对这笔付款（参考号：${v.paymentReference ?? "—"}），然后在订单页处理 —— 金额没问题就标记为已收款，否则通过 HitPay 退款。\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	gatewayPaidCancelled: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `⚠️ 顾客支付了已取消的订单 ${v.shortId}`;
+		const paid = v.gatewayPaidFormatted ?? "未知金额";
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> · ${escapeHtml(v.customerName)}`,
+			`顾客通过 HitPay 支付了 <strong>${escapeHtml(paid)}</strong> —— 但付款到账时这笔订单已被取消（付款链接最长会保持一小时有效）。`,
+			`订单<strong>没有</strong>重新打开，顾客也<strong>没有</strong>收到消息。`,
+			`请在您的 HitPay 后台退款（参考号：${escapeHtml(v.paymentReference ?? "—")}），并通知顾客。`,
+		];
+		const html = wrapHtml("⚠️", `取消后付款 —— ${v.shortId}`, lines, v.dashboardUrl, "打开订单");
+		const text = `⚠️ 顾客支付了已取消的订单 ${v.shortId}\n顾客通过 HitPay 支付了 ${paid} —— 但付款到账时这笔订单已被取消（付款链接最长会保持一小时有效）。\n订单没有重新打开，顾客也没有收到消息。\n请在您的 HitPay 后台退款（参考号：${v.paymentReference ?? "—"}），并通知顾客。\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 };

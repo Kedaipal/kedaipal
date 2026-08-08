@@ -958,6 +958,16 @@ export default defineSchema({
 		// "paid online" marker on the seller's order detail. HitPay-only today;
 		// widen to a provider union if a second gateway ever lands.
 		gatewayRequestId: v.optional(v.string()),
+		// The most recently REPLACED request id (PR #172 review, finding 1).
+		// HitPay keeps a replaced link payable until its 60-min expiry (we
+		// best-effort DELETE it, but that can fail), so a payment on the old
+		// link must stay correlatable: the webhook resolves this index too and
+		// funnels into receiveGatewayPayment, whose amount check then applies
+		// it (same total — the double-mint race) or records the mismatch event
+		// + seller email (paid a stale price). Only ONE generation is kept —
+		// a third mint drops the oldest id, whose link has at most minutes of
+		// expiry left by then.
+		gatewayPreviousRequestId: v.optional(v.string()),
 		gatewayCheckoutUrl: v.optional(v.string()),
 		gatewayRequestedAmount: v.optional(v.number()), // minor units at mint time
 		gatewayRequestedCurrency: v.optional(v.string()),
@@ -1059,7 +1069,10 @@ export default defineSchema({
 		.index("by_confirmation_wamid", ["confirmationPushWamid"])
 		// HitPay webhook correlation: the completion callback identifies itself
 		// only by payment_request_id (mirrors by_confirmation_wamid's role).
-		.index("by_gateway_request", ["gatewayRequestId"]),
+		// The previous-id twin keeps payments on a REPLACED (re-priced /
+		// double-minted) link correlatable instead of silently 200-acked.
+		.index("by_gateway_request", ["gatewayRequestId"])
+		.index("by_gateway_previous_request", ["gatewayPreviousRequestId"]),
 
 	/**
 	 * Retailer-managed library of self-collect pickup locations. Frozen onto

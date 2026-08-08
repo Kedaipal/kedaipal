@@ -410,21 +410,28 @@ export const notifyPaymentClaimed = internalAction({
 });
 
 /**
- * Scheduled by orders.receiveGatewayPayment (86eyb6z3a) when an authentic
- * HitPay payment doesn't match the order's current total — the one gateway
- * state that needs a human: money moved, but auto-receiving would record a
- * wrong number. Same lookup/skip/swallow pattern as `notifyPaymentClaimed`.
+ * Scheduled by orders.receiveGatewayPayment (86eyb6z3a) for the two gateway
+ * states that need a human because money moved but auto-receiving would lie:
+ *  - "amount_mismatch" — an authentic payment that doesn't match the order's
+ *    current total (stale re-priced link);
+ *  - "paid_after_cancel" — an authentic payment on an order cancelled after
+ *    the link was minted (needs a refund, never a resurrection).
+ * Same lookup/skip/swallow pattern as `notifyPaymentClaimed`.
  */
-export const notifyGatewayPaymentMismatch = internalAction({
+export const notifyGatewayPaymentIssue = internalAction({
 	args: {
 		orderId: v.id("orders"),
+		kind: v.union(
+			v.literal("amount_mismatch"),
+			v.literal("paid_after_cancel"),
+		),
 		paidAmountSen: v.number(),
 		paidCurrency: v.string(),
 		paymentId: v.string(),
 	},
 	handler: async (
 		ctx,
-		{ orderId, paidAmountSen, paidCurrency, paymentId },
+		{ orderId, kind, paidAmountSen, paidCurrency, paymentId },
 	): Promise<void> => {
 		let meta: {
 			shortId: string;
@@ -468,7 +475,7 @@ export const notifyGatewayPaymentMismatch = internalAction({
 
 		const { subject, html, text } = renderRetailerEmail(
 			meta.locale,
-			"gatewayMismatch",
+			kind === "paid_after_cancel" ? "gatewayPaidCancelled" : "gatewayMismatch",
 			{
 				shortId: meta.shortId,
 				itemCount: meta.itemCount,

@@ -135,9 +135,25 @@ every payment-request create), so:
 - `claimed` blocks Pay now (the buyer already said they transferred —
   double-paying is the risk); a webhook settling a previously-claimed order
   still applies (real money beats a claim).
-- Reuse-while-fresh (55 min vs 60 min expiry) means at most ONE live
-  payable link per order per amount; an amount change mints a new request
-  and the old one is caught by the mismatch guard if ever paid.
+- **Replaced links stay payable at HitPay until their 60-min expiry** (PR
+  #172 review, finding 1) — reuse-while-fresh only prevents *minting*
+  duplicates, it can't kill an already-minted link. So a replacement does
+  three things: the old id moves to `orders.gatewayPreviousRequestId`
+  (indexed — the webhook and the reconcile resolve BOTH generations, so a
+  payment on the old link always reaches `receiveGatewayPayment`, where the
+  amount check applies it or records the mismatch), the action best-effort
+  `DELETE`s the stale request at HitPay (sandbox-verified; failure just
+  falls back to the correlation), and only ONE previous generation is kept
+  (a third mint drops the oldest id, which has minutes of life left).
+- **Pay-after-cancel never resurrects the order** (finding 2): a link
+  minted before a cancel stays payable, so `receiveGatewayPayment` branches
+  on `status === "cancelled"` → `gateway_paid_after_cancel` event + the
+  `gatewayPaidCancelled` seller email (refund via HitPay dashboard), no
+  state flip, no buyer WhatsApp. The seller's own `markPaymentReceived`
+  keeps no such guard on purpose — that's a deliberate human act.
+- Accepted v1 buyer-side gap: a buyer who paid a stale link sees the page
+  still asking for payment (only the seller is emailed) until the seller
+  settles it — the sheet/manual claim remains their self-serve signal.
 
 ## Verified against the real sandbox (7 Aug 2026)
 

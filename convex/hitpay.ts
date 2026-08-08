@@ -67,6 +67,9 @@ type CheckoutContext = {
 		currency: string;
 		mintedAt: number;
 	} | null;
+	/** A replaced request whose link may still be payable at HitPay — the
+	 * reconcile checks it too, so a lost webhook can't strand that payment. */
+	previousRequestId: string | undefined;
 	gatewayPaymentId: string | undefined;
 };
 
@@ -109,6 +112,7 @@ export const getCheckoutContext = internalQuery({
 							mintedAt: order.gatewayRequestedAt,
 						}
 					: null,
+			previousRequestId: order.gatewayPreviousRequestId,
 			gatewayPaymentId: order.gatewayPaymentId,
 		};
 	},
@@ -131,7 +135,7 @@ export const recordCheckoutRequest = internalMutation({
 	handler: async (
 		ctx,
 		{ orderId, requestId, url, amountSen, currency, accountMethods },
-	): Promise<{ ok: boolean }> => {
+	): Promise<{ ok: boolean; replacedRequestId?: string }> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) return { ok: false };
 		if (accountMethods && accountMethods.length > 0) {
@@ -152,15 +156,26 @@ export const recordCheckoutRequest = internalMutation({
 		// expires on HitPay's side, unpaid.
 		if ((order.paymentStatus ?? "unpaid") !== "unpaid") return { ok: false };
 		if (order.total !== amountSen) return { ok: false };
+		// A replaced request stays payable at HitPay until expiry — keep its id
+		// so the webhook can still correlate a payment on it (PR #172 review,
+		// finding 1), and hand it back so the action can best-effort DELETE the
+		// stale link at HitPay.
+		const replacedRequestId =
+			order.gatewayRequestId && order.gatewayRequestId !== requestId
+				? order.gatewayRequestId
+				: undefined;
 		await ctx.db.patch(orderId, {
 			gatewayRequestId: requestId,
+			...(replacedRequestId
+				? { gatewayPreviousRequestId: replacedRequestId }
+				: {}),
 			gatewayCheckoutUrl: url,
 			gatewayRequestedAmount: amountSen,
 			gatewayRequestedCurrency: currency,
 			gatewayRequestedAt: Date.now(),
 			updatedAt: Date.now(),
 		});
-		return { ok: true };
+		return { ok: true, replacedRequestId };
 	},
 });
 
@@ -393,23 +408,46 @@ export const createCheckout = action({
 			throw new ConvexError(GATEWAY_DOWN);
 		}
 
-		const recorded: { ok: boolean } = await ctx.runMutation(
-			internal.hitpay.recordCheckoutRequest,
-			{
+		const recorded: { ok: boolean; replacedRequestId?: string } =
+			await ctx.runMutation(internal.hitpay.recordCheckoutRequest, {
 				orderId: context.orderId,
 				requestId: request.id,
 				url: request.url,
 				amountSen: context.total,
 				currency: context.currency.toUpperCase(),
 				accountMethods: request.payment_methods,
-			},
-		);
+			});
 		if (!recorded.ok) {
 			// The order changed under us (paid / re-priced mid-flight). The minted
 			// request was never shown to anyone; it expires unpaid on HitPay.
 			throw new ConvexError(
 				"The order just changed — refresh the page and try again.",
 			);
+		}
+		if (recorded.replacedRequestId) {
+			// Best-effort: kill the replaced link at HitPay so the stale price
+			// can't be paid at all (sandbox-verified DELETE). Failure is fine —
+			// the previous-id correlation above still catches a payment on it.
+			await fetch(
+				`${HITPAY_API_BASE[context.credentials.mode]}/payment-requests/${recorded.replacedRequestId}`,
+				{
+					method: "DELETE",
+					headers: {
+						"X-BUSINESS-API-KEY": context.credentials.apiKey,
+						"X-Requested-With": "XMLHttpRequest",
+					},
+				},
+			)
+				.then((r) => {
+					if (!r.ok) {
+						console.warn("hitpay.createCheckout: stale-link delete rejected", {
+							status: r.status,
+						});
+					}
+				})
+				.catch((err) => {
+					console.warn("hitpay.createCheckout: stale-link delete failed", err);
+				});
 		}
 		return { url: request.url };
 	},
@@ -444,10 +482,20 @@ export const verifyCheckout = action({
 			return { paymentStatus: "unpaid" };
 		}
 
-		const settled = await fetchSettledPayment(
-			context.credentials,
-			context.existing.requestId,
-		);
+		// Current request first; a REPLACED request's link may also have been
+		// paid (it stays live at HitPay until expiry/delete), so check it too —
+		// the receive mutation's amount check decides what that payment means.
+		const settled =
+			(await fetchSettledPayment(
+				context.credentials,
+				context.existing.requestId,
+			)) ??
+			(context.previousRequestId
+				? await fetchSettledPayment(
+						context.credentials,
+						context.previousRequestId,
+					)
+				: null);
 		if (!settled) return { paymentStatus: "unpaid" };
 
 		const result: { applied: boolean; reason?: string } =
@@ -523,12 +571,23 @@ export const getWebhookContext = internalQuery({
 		ctx,
 		{ paymentRequestId },
 	): Promise<{ orderId: Id<"orders">; salt: string | null } | null> => {
-		const order = await ctx.db
-			.query("orders")
-			.withIndex("by_gateway_request", (q) =>
-				q.eq("gatewayRequestId", paymentRequestId),
-			)
-			.first();
+		// Current request first, then the REPLACED one — a re-priced or
+		// double-minted link stays payable at HitPay until expiry, and a payment
+		// on it must reach receiveGatewayPayment (whose amount check applies it
+		// or records the mismatch) instead of being 200-acked as unknown.
+		const order =
+			(await ctx.db
+				.query("orders")
+				.withIndex("by_gateway_request", (q) =>
+					q.eq("gatewayRequestId", paymentRequestId),
+				)
+				.first()) ??
+			(await ctx.db
+				.query("orders")
+				.withIndex("by_gateway_previous_request", (q) =>
+					q.eq("gatewayPreviousRequestId", paymentRequestId),
+				)
+				.first());
 		if (!order) return null;
 		const retailer = await ctx.db.get(order.retailerId);
 		const credentials = resolveHitpayCredentials(retailer?.hitpay);
