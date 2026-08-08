@@ -136,38 +136,6 @@
   .step h3 { margin-bottom: 4px; }
   .step p:last-of-type, .step ul:last-of-type { margin-bottom: 0; }
 
-  /* ============ Screenshot placeholders ============ */
-  .shot {
-    border: 2px dashed var(--mint-deep);
-    background: var(--mint-tint);
-    border-radius: 8px;
-    padding: 18px 14px;
-    text-align: center;
-    color: var(--navy-soft);
-    font-size: 9.5pt;
-    margin: 10px 0 2px;
-    min-height: 52px;
-    break-inside: avoid;
-  }
-  .shot .shot-label { font-weight: 700; color: var(--navy); }
-  .shot .shot-note { font-size: 8.5pt; color: var(--ink-soft); margin-top: 2px; }
-
-
-  /* ============ Real screenshots ============ */
-  .shot-real { margin: 10px 0 2px; break-inside: avoid; }
-  .shot-real img {
-    width: 100%; max-width: 100%; display: block;
-    border: 1.5px solid var(--line); border-radius: 8px;
-    background: #fff;
-  }
-  .shot-real .pair { display: flex; gap: 10px; }
-  .shot-real .pair img { width: calc(50% - 5px); }
-  .shot-real figcaption {
-    font-size: 8.5pt; color: var(--ink-soft);
-    margin-top: 4px; text-align: center;
-  }
-
-
   /* ============ UI reproductions (faithful dashboard illustrations) ============ */
   .mockup { margin: 10px 0 2px; break-inside: avoid; border: 1.5px solid var(--line); border-radius: 10px; overflow: hidden; background: #F6F8FA; }
   .mockup .bar { display: flex; align-items: center; gap: 5px; padding: 7px 11px; background: #ECEFF3; border-bottom: 1px solid var(--line); }
@@ -182,20 +150,9 @@
   .k-toggle { width:42px; height:24px; border-radius:999px; background:#2FA968; position:relative; flex-shrink:0; }
   .k-toggle::after { content:""; position:absolute; top:3px; left:21px; width:18px; height:18px; border-radius:50%; background:#fff; }
   .k-label { font-size:8.5pt; font-weight:600; color:var(--ink-soft); margin:13px 0 6px; }
-  .k-veh { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
-  .k-opt { border:1.5px solid #E6EAF0; border-radius:10px; padding:9px 12px; text-align:center; }
-  .k-opt.sel { border-color:#2FA968; background:#F0F9F4; }
-  .k-opt b { font-size:9.5pt; color:var(--navy); display:block; }
-  .k-opt.sel b { color:#2E8B5A; }
-  .k-opt small { font-size:7.5pt; color:var(--ink-soft); }
   .k-input { border:1px solid #E6EAF0; border-radius:9px; padding:9px 11px; font-size:9pt; color:#96A0AF; background:#fff; margin-bottom:8px; font-family: ui-monospace, Menlo, monospace; }
   .k-input.filled { color:var(--navy); }
-  .k-help { font-size:8pt; color:var(--ink-soft); line-height:1.45; margin-top:2px; }
   .k-btn { display:inline-block; background:#2FA968; color:#fff; font-size:9pt; font-weight:600; padding:9px 16px; border-radius:9px; margin-top:11px; }
-  .k-stored { display:flex; justify-content:space-between; align-items:center; border:1px solid #E6EAF0; border-radius:9px; padding:10px 12px; font-size:9pt; color:var(--navy); }
-  .k-stored .rm { color:#D96C60; font-weight:600; font-size:8.5pt; }
-  .k-pin { display:flex; align-items:center; gap:5px; font-size:8pt; color:var(--mint-deep); margin-top:6px; font-weight:600; }
-  .k-pin .mono { font-family:ui-monospace,Menlo,monospace; color:var(--ink-soft); font-weight:400; }
 
   /* ============ Callouts ============ */
   .callout {
@@ -304,6 +261,7 @@
     <div class="cover-card">
       <h3>🧰 What you need</h3>
       <ul>
+        <li>A <strong>Kedaipal Pro plan</strong> — online payments is a Pro feature (check this first, before the paperwork below)</li>
         <li>Your <strong>SSM registration</strong> (business registration number)</li>
         <li>The IC of the owner/director (for verification)</li>
         <li>Your <strong>business bank account</strong> (where payouts land)</li>
@@ -501,7 +459,8 @@
   <div class="step">
     <div class="num">3</div>
     <h3>That's the setup done</h3>
-    <p>From now on, every unpaid order page shows a <strong>Pay now</strong> button. When a buyer pays, the order flips to <strong>Payment received</strong> by itself and the buyer gets the confirmation on WhatsApp — you don't touch anything.</p>
+    <p>From now on, unpaid order pages show a <strong>Pay now</strong> button. When a buyer pays, the order flips to <strong>Payment received</strong> by itself and the buyer gets the confirmation on WhatsApp — you don't touch anything.</p>
+    <p style="margin-bottom:0">One exception, and it's deliberate: orders whose price isn't final yet — waiting for you to approve a mockup, or to set a delivery charge — have no Pay now button until you settle the price. Nobody should pay a total that's about to change.</p>
   </div>
 </section>
 
@@ -531,6 +490,13 @@
     <div class="num">3</div>
     <h3>Refund it from the HitPay dashboard</h3>
     <p>In HitPay, find the payment and refund it. (Refunds always happen in the HitPay dashboard — there's no refund button in Kedaipal.)</p>
+  </div>
+
+  <div class="step">
+    <div class="num">4</div>
+    <h3>Cancel the test order in Kedaipal — don't skip this</h3>
+    <p>Open the order in Kedaipal and <strong>cancel</strong> it. Refunding in HitPay does <strong>not</strong> tell Kedaipal anything, so until you cancel, that RM1 keeps counting as real money you collected.</p>
+    <p style="margin-bottom:0">Cancelling puts everything back: the RM1 drops out of your revenue and Insights, the stock you "sold" returns to the product, and the test stops counting as a real order against your own customer record.</p>
   </div>
 
   <div class="callout warn">
@@ -588,6 +554,11 @@
     <p class="a">In the HitPay dashboard (find the payment → refund). Kedaipal shows the payment reference on both your order page and the buyer's — quote it to find the payment fast.</p>
   </div>
 
+  <div class="callout warn">
+    <h3>⚠️ After a refund, fix the order in Kedaipal too</h3>
+    <p style="margin-bottom:0">A refund in HitPay does <strong>not</strong> reach Kedaipal — the order stays marked <strong>Payment received</strong>, keeps counting in your revenue and Insights, and the buyer's page still shows it as paid. Update the order yourself: <strong>cancel</strong> it if the whole order is off (that also returns the stock and takes it out of your figures), or leave a note if you only refunded part of it.</p>
+  </div>
+
   <div class="faq">
     <p class="q">I don't have SSM registration — can I still use this?</p>
     <p class="a">Not yet — HitPay's verification requires a registered business (a Bank Negara rule, same for every gateway). Your manual bank transfer + QR flow keeps working as always, and you can connect later once registered.</p>
@@ -604,12 +575,12 @@
   <h2 style="margin-bottom:4px">Final checklist</h2>
   <p style="color:var(--ink-soft)">Tick these off and you're live:</p>
   <ul class="checklist">
-    <li><span class="box"></span> HitPay <strong>Malaysia</strong> account created and email confirmed</li>
-    <li><span class="box"></span> Verification submitted (SSM + IC + bank account) and <strong>approved</strong></li>
-    <li><span class="box"></span> Payment methods switched on (DuitNow QR at minimum)</li>
-    <li><span class="box"></span> Logo + brand colour set in Checkout Customisation</li>
-    <li><span class="box"></span> API key + salt pasted into Kedaipal → Settings → Payments, card shows <strong>Connected</strong></li>
-    <li><span class="box"></span> RM1 test order paid and auto-confirmed, then refunded</li>
+    <li><span class="box"></span><span> HitPay <strong>Malaysia</strong> account created and email confirmed</span></li>
+    <li><span class="box"></span><span> Verification submitted (SSM + IC + bank account) and <strong>approved</strong></span></li>
+    <li><span class="box"></span><span> Payment methods switched on (DuitNow QR at minimum)</span></li>
+    <li><span class="box"></span><span> Logo + brand colour set in Checkout Customisation</span></li>
+    <li><span class="box"></span><span> API key + salt pasted into Kedaipal → Settings → Payments, card shows <strong>Connected</strong></span></li>
+    <li><span class="box"></span><span> RM1 test order paid and auto-confirmed, then refunded in HitPay <strong>and cancelled in Kedaipal</strong></span></li>
   </ul>
 
   <div class="support">
@@ -623,7 +594,7 @@
     </div>
   </div>
 
-  <p class="doc-footer">Kedaipal vendor guide · HitPay online payments setup · This guide is safe to print and hand to whoever manages your store.</p>
+  <p class="doc-footer">Kedaipal vendor guide · HitPay online payments setup · Fees and steps last checked August 2026 — HitPay sets its own rates, so check their dashboard for today's numbers if this copy has been sitting on a shelf. This guide is safe to print and hand to whoever manages your store.</p>
 </section>
 
 </body>
