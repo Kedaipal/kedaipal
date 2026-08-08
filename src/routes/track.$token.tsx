@@ -596,6 +596,25 @@ function TrackingRoute() {
 						</p>
 					) : null}
 
+					{/* HitPay payment reference (86eyjmhby) — the same ref the seller's
+					    order detail shows, so both sides quote one number when a payment
+					    question comes up. Copyable: buyers paste it into the WhatsApp
+					    chat or match it against their banking-app history. */}
+					{paymentStatus === "received" && order.gatewayPaymentId ? (
+						<div className="flex min-w-0 items-center gap-2 text-xs opacity-80">
+							<p className="min-w-0 truncate">
+								Payment ref{" "}
+								<span className="font-mono">{order.gatewayPaymentId}</span>
+							</p>
+							<CopyButton
+								value={order.gatewayPaymentId}
+								ariaLabel="Copy payment reference"
+								successMessage="Payment reference copied"
+								labelClassName="hidden sm:inline"
+							/>
+						</div>
+					) : null}
+
 					{paymentStatus === "unpaid" ? (
 						mockupGateClosed ? (
 							<>

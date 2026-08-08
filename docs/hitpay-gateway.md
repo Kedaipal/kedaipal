@@ -37,7 +37,10 @@ nothing here gets rebuilt.
    **inferred from the key** (`inferHitpayMode`), no toggle; the card badges
    "Test mode" amber on a sandbox key. Enabling is Pro-gated
    (`PLAN_FEATURES.onlinePayments`); pause/disconnect never are, and
-   pause keeps the keys so resuming is one tap.
+   pause keeps the keys so resuming is one tap. The card links the
+   **print-ready vendor guide** `/guides/hitpay-setup.html` (86eyjmhby,
+   Lalamove-guide precedent): sign-up → KYC (SSM) → enable MY methods →
+   copy key + salt → connect → RM1 test.
 2. **Pay now (buyer).** `orders.getPaymentMethods` returns
    `gatewayAvailable` per-order (connected + enabled + unpaid + both price
    holds clear + total ≥ RM0.30). The order page carries ONE payment door:
@@ -89,7 +92,9 @@ nothing here gets rebuilt.
    activation stamp, orderEvents row, `notifyPaymentReceived` WhatsApp (an
    existing message — no new send types). `paymentReference` stores the
    HitPay payment id; the seller's order page shows "Paid online via HitPay
-   · <rail> · Ref …".
+   · <rail> · Ref …", and the buyer's paid card carries the same
+   "Payment ref …" with one-tap copy (86eyjmhby) — both sides quote one
+   number when a payment question comes up.
 6. **Method stamping.** The v1 webhook has no `payment_type`, so webhook
    receives stamp `other` and schedule `enrichPaymentMethod`, which fetches
    the real rail off the status API (`recordGatewayMethod` upgrades only an

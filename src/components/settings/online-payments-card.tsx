@@ -324,6 +324,17 @@ export function OnlinePaymentsCard({
 							</li>
 							<li>Paste the API key and the salt (side by side there) below.</li>
 						</ol>
+						{/* Lalamove-guide precedent: a print-ready walkthrough for
+						    sellers who want every screen spelled out (86eyjmhby). */}
+						<a
+							href="/guides/hitpay-setup.html"
+							target="_blank"
+							rel="noopener noreferrer"
+							className="flex items-center gap-1 self-start text-xs font-medium text-accent hover:underline"
+						>
+							Full step-by-step guide (print-ready){" "}
+							<ExternalLink className="size-3" />
+						</a>
 					</div>
 
 					<KeyInputs
