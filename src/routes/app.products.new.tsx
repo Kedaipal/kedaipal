@@ -1,9 +1,10 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { useRef, useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { PageHeader } from "../components/dashboard/page-header";
+import { Button } from "../components/ui/button";
 import {
 	ProductForm,
 	type ProductFormDraft,
@@ -36,6 +37,13 @@ function NewProductRoute() {
 	const navigate = useNavigate();
 	const { form } = Route.useSearch();
 	const retailer = useDashboardRetailer();
+	// Room to save? Checked BEFORE the wizard renders — letting a seller build a
+	// whole product and only then bounce off the server gate is the dead end this
+	// route would otherwise have. Tiny query (six numbers, no catalog).
+	const cap = useQuery(
+		api.products.capState,
+		retailer ? { retailerId: retailer._id } : "skip",
+	);
 	const create = useMutation(api.products.create);
 	const setProductCategories = useMutation(api.categories.setProductCategories);
 	// Wizard → full form: the wizard's whole draft — basics as initialValues
@@ -100,6 +108,37 @@ function NewProductRoute() {
 		const draft = formDraftRef.current?.();
 		if (draft) setWizardReturn(formDraftToWizardState(draft));
 		navigate({ to: "/app/products/new", search: {}, replace: true });
+	}
+
+	// At the ceiling neither view can save, so neither is offered — the seller is
+	// told what's wrong and given the one action that fixes it, instead of
+	// discovering it after building a product. Covers the deep-link/bookmark path
+	// the disabled New button on the list can't. `cap === undefined` (still
+	// loading) falls through to the form: the server is the real gate, and
+	// blocking on a pending read would flash a wall at every seller.
+	if (cap?.atCap) {
+		return (
+			<div className="flex flex-col gap-4 lg:max-w-2xl">
+				<PageHeader
+					title="New product"
+					back={{ to: "/app/products", label: "Products" }}
+				/>
+				<section className="rounded-2xl border border-amber-200 bg-amber-50/70 p-5 dark:border-amber-800 dark:bg-amber-950/50">
+					<h2 className="font-heading text-lg font-extrabold leading-tight">
+						You've reached the {cap.cap}-product limit
+					</h2>
+					<p className="mt-2 text-sm leading-snug text-muted-foreground">
+						Your shop holds {cap.used} products, and archived ones still count
+						toward the limit. Delete a product you no longer sell to free up a
+						slot — or message us if your shop genuinely needs more than{" "}
+						{cap.cap}.
+					</p>
+					<Button asChild className="mt-4 h-11">
+						<Link to="/app/products">Back to products</Link>
+					</Button>
+				</section>
+			</div>
+		);
 	}
 
 	// Wizard path (default) — it owns its own header/back/progress chrome.

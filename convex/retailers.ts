@@ -180,6 +180,7 @@ import { reserveFoundingRank } from "./foundingMembers";
 import { DEFAULT_LOCALE, type Locale } from "./lib/locale";
 import { MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
 import { sanitizeMinOrderValue } from "./lib/minOrderRules";
+import { deleteProductCascade } from "./lib/productDelete";
 import { rateLimiter } from "./lib/rateLimiter";
 import { capsForPlan, DAY_MS, TRIAL_DAYS } from "./lib/plans";
 import {
@@ -2042,23 +2043,16 @@ export const deleteUser = internalMutation({
 			await ctx.db.delete(order._id);
 		}
 
-		// Products → their variants (+ variant images) and image files.
+		// Products → their variants (+ variant images), image files and category
+		// memberships, via the shared cascade so this can't drift from the
+		// surgical products.deletePermanently. Category `productCount` is
+		// deliberately NOT maintained here — the category rows themselves are
+		// deleted a few lines below, so decrementing them first is pure waste.
 		const products = await ctx.db
 			.query("products")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 			.collect();
-		for (const product of products) {
-			const variants = await ctx.db
-				.query("productVariants")
-				.withIndex("by_product", (q) => q.eq("productId", product._id))
-				.collect();
-			for (const variant of variants) {
-				for (const imageId of variant.imageStorageIds) await deleteFile(imageId);
-				await ctx.db.delete(variant._id);
-			}
-			for (const imageId of product.imageStorageIds) await deleteFile(imageId);
-			await ctx.db.delete(product._id);
-		}
+		for (const product of products) await deleteProductCascade(ctx, product);
 
 		// Categories + product↔category junction rows (+ tile images).
 		const junctionRows = await ctx.db

@@ -21,6 +21,12 @@ import {
 } from "./lib/categoryCounts";
 import { sanitizeMinQuantity } from "./lib/minOrderRules";
 import {
+	assertProductCap,
+	MAX_PRODUCTS_PER_RETAILER,
+	productCapState,
+} from "./lib/productCap";
+import { deleteProductCascade } from "./lib/productDelete";
+import {
 	POPULAR_SCAN_CAP,
 	POPULAR_TOP_CANDIDATES,
 	rankPopularProducts,
@@ -56,7 +62,6 @@ function sanitizeMinNoticeDays(raw: number | undefined): number | undefined {
 const MAX_IMAGES_PER_PRODUCT = 5;
 const MAX_IMAGES_PER_VARIANT = 3;
 const MAX_BULK_IMPORT_BATCH = 50;
-const MAX_PRODUCTS_PER_RETAILER = 50;
 const MAX_SKU_LENGTH = 60;
 
 /**
@@ -93,6 +98,23 @@ async function assertVariantSkuUnique(
 		.first();
 	if (existing && existing._id !== excludeVariantId)
 		throw new ConvexError(`SKU "${sku}" is already used by another variant`);
+}
+
+/**
+ * How many products this store holds — TOTAL rows, active AND archived, which
+ * is exactly what the cap counts (see convex/lib/productCap.ts for why). One
+ * author so the gate, the import preview and the dashboard counter can't
+ * disagree about what "used" means.
+ */
+async function countProductsForRetailer(
+	ctx: QueryCtx | MutationCtx,
+	retailerId: Id<"retailers">,
+): Promise<number> {
+	const rows = await ctx.db
+		.query("products")
+		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+		.collect();
+	return rows.length;
 }
 
 async function requireUserId(ctx: QueryCtx | MutationCtx): Promise<string> {
@@ -229,7 +251,10 @@ async function ensureUniqueProductSlug(
 	// shared 3–32 slug shape instead of failing product creation over a URL.
 	let base = slugify(name);
 	if (base.length < SLUG_MIN) base = base.length > 0 ? `item-${base}` : "item";
-	// Bounded well past the 50-product cap — a clash loop can't run away.
+	// Bounded past the per-store product cap — a clash loop can't run away. Only
+	// reachable if a store's whole catalog shares one slug base, and an
+	// admin-exempt store sitting above the cap just gets the same clear throw
+	// below rather than an unbounded scan.
 	for (let n = 1; n <= MAX_PRODUCTS_PER_RETAILER + 10; n++) {
 		const suffix = n === 1 ? "" : `-${n}`;
 		const trimmed = base.slice(0, SLUG_MAX - suffix.length).replace(/-+$/, "");
@@ -559,6 +584,25 @@ export const listForCounter = query({
 	},
 });
 
+/**
+ * Just the store's product-cap state — a handful of numbers, no catalog. The
+ * create surfaces (`/app/products/new`) need to know whether there's room
+ * before letting a seller build a product they couldn't save, and pulling the
+ * whole hydrated catalog (variants + signed image URLs) to derive one integer
+ * would be absurd. The products list keeps deriving it from the `listAll` it
+ * already holds; both go through `productCapState`, so the flags can't drift.
+ */
+export const capState = query({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }) => {
+		const access = await requireRetailerOwnership(ctx, retailerId);
+		return productCapState(
+			await countProductsForRetailer(ctx, retailerId),
+			access.actingAsAdmin,
+		);
+	},
+});
+
 export const listAll = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }) => {
@@ -637,15 +681,15 @@ export const create = mutation({
 		if (!access.actingAsAdmin)
 			await assertSubscriptionActive(ctx, args.retailerId);
 
-		const existingCount = await ctx.db
-			.query("products")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", args.retailerId))
-			.collect()
-			.then((r) => r.length);
-		if (existingCount >= MAX_PRODUCTS_PER_RETAILER)
-			throw new ConvexError(
-				`Maximum ${MAX_PRODUCTS_PER_RETAILER} products per retailer`,
-			);
+		// Product cap — counts archived rows too, so deleting (not archiving) is
+		// what frees a slot. An admin operating the store (act-as) is exempt: a
+		// white-glove Enterprise catalog gets stocked past the ceiling by hand,
+		// the same posture as the subscription soft-lock bypass above.
+		assertProductCap(
+			await countProductsForRetailer(ctx, args.retailerId),
+			1,
+			access.actingAsAdmin,
+		);
 
 		if (args.name.trim().length === 0) throw new ConvexError("Name is required");
 		if (args.imageStorageIds.length > MAX_IMAGES_PER_PRODUCT)
@@ -1027,6 +1071,49 @@ export const archive = mutation({
 	},
 });
 
+/**
+ * Permanently erase a product — the escape valve that makes the product cap an
+ * honest contract rather than a one-way ratchet (86eyjmf4q). Distinct from
+ * `archive`, which only takes a product off the storefront and KEEPS its slot:
+ * the cap counts total rows, so deleting is the ONLY way to free one.
+ *
+ * **Refuses once the product has ever been ordered** (`orderedAt` set). Order
+ * lines carry `items[].productId` as a hard reference beside the frozen
+ * name/price snapshot, so erasing a sold product would orphan those references
+ * (Insights groups top products by productId and resolves the row for its
+ * thumbnail). A sold product is archived instead — history stays intact. That
+ * still leaves every row that actually clogs a cap deletable: test products,
+ * typos, duplicated imports, and seasonal SKUs that never sold.
+ *
+ * Owner-OR-admin, matching `archive` — this is a seller's own catalog
+ * housekeeping, NOT the admin-only posture of the order hard delete (orders are
+ * financial records; a never-sold product is not). Deliberately not
+ * subscription-gated for the same reason `archive` isn't: reducing is always
+ * allowed, so a past_due or downgraded seller is never trapped.
+ */
+export const deletePermanently = mutation({
+	args: { productId: v.id("products") },
+	handler: async (ctx, { productId }): Promise<void> => {
+		const userId = await requireUserId(ctx);
+		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
+		const { product, access } = await requireProductOwnership(ctx, productId);
+
+		if (product.orderedAt !== undefined)
+			throw new ConvexError(
+				"This product has been ordered before, so it can't be deleted — its past orders still reference it. Archive it instead to take it off your storefront.",
+			);
+
+		// Decrement the categories this product was counted in BEFORE the cascade
+		// drops its junction rows (the bump reads them to know which categories to
+		// touch). Archived/hidden products were never counted, so nothing to undo.
+		if (isProductVisible(product))
+			await bumpCategoryCountsForProduct(ctx, productId, -1);
+
+		await deleteProductCascade(ctx, product);
+		await logAdminAction(ctx, access, "products.deletePermanently", productId);
+	},
+});
+
 // ---------------------------------------------------------------------------
 // Bulk import — variant-aware (one-row-per-variant; see
 // docs/bulk-product-upload-roadmap.md + product-variants.md §9).
@@ -1155,17 +1242,15 @@ export const bulkUpsert = mutation({
 			});
 		}
 
-		// Product cap — only creates count.
+		// Product cap — only the rows that would be INSERTED consume a slot; a
+		// sheet that just updates existing products by SKU never touches it.
+		// Admin act-as is exempt (see products.create).
 		const insertCount = classified.filter((x) => x.c.mode === "create").length;
-		const existingCount = await ctx.db
-			.query("products")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", args.retailerId))
-			.collect()
-			.then((r) => r.length);
-		if (existingCount + insertCount > MAX_PRODUCTS_PER_RETAILER)
-			throw new ConvexError(
-				`Would exceed the ${MAX_PRODUCTS_PER_RETAILER}-product limit per retailer (currently ${existingCount}, +${insertCount} new)`,
-			);
+		assertProductCap(
+			await countProductsForRetailer(ctx, args.retailerId),
+			insertCount,
+			access.actingAsAdmin,
+		);
 
 		const now = Date.now();
 		let created = 0;
@@ -1262,7 +1347,7 @@ export const bulkUpsertPreview = query({
 		products: v.array(importProductValidator),
 	},
 	handler: async (ctx, args) => {
-		await requireRetailerOwnership(ctx, args.retailerId);
+		const access = await requireRetailerOwnership(ctx, args.retailerId);
 		const products = args.products as ImportProduct[];
 		if (totalImportVariants(products) > MAX_BULK_IMPORT_BATCH)
 			throw new ConvexError(
@@ -1370,6 +1455,15 @@ export const bulkUpsertPreview = query({
 				variants: variantsTotal,
 				autoFilled: autoFilledTotal,
 			},
+			// Cap state so the import screen can warn BEFORE the seller confirms —
+			// the sheet is chunked across several bulkUpsert calls, so without this
+			// a too-large import would half-apply and then throw partway through.
+			// Same for every chunk (no writes happen during a preview), so the
+			// client can read it off any one of them.
+			cap: productCapState(
+				await countProductsForRetailer(ctx, args.retailerId),
+				access.actingAsAdmin,
+			),
 		};
 	},
 });
@@ -1637,6 +1731,52 @@ export const backfillProductSlugs = internalMutation({
 			await ctx.scheduler.runAfter(0, internal.products.backfillProductSlugs, {
 				cursor: page.continueCursor,
 			});
+		}
+	},
+});
+
+/**
+ * One-shot backfill for `products.orderedAt` (86eyjmf4q). Existing products
+ * predate the stamp, so without this every one of them would look "never
+ * ordered" and `deletePermanently` would happily erase a product that live
+ * order lines still reference. Run once per deployment after the schema lands:
+ *
+ *   npx convex run products:backfillProductOrderedAt
+ *
+ * Paginates ORDERS (the source of truth) rather than products, since the fact
+ * lives in `orders.items[]` and there's no index from a product back to its
+ * orders. Batched + self-scheduling to stay inside transaction limits, like the
+ * slug backfill above. Converges on the EARLIEST order per product, because
+ * page order is not chronological — the stamp is only read as a boolean today,
+ * but a half-true timestamp is the kind of thing a later feature trips over.
+ */
+export const backfillProductOrderedAt = internalMutation({
+	args: { cursor: v.optional(v.string()) },
+	handler: async (ctx, { cursor }): Promise<void> => {
+		const page = await ctx.db
+			.query("orders")
+			.paginate({ numItems: 25, cursor: cursor ?? null });
+		for (const order of page.page) {
+			// Cancelled orders count: the line still names the product, so erasing
+			// it would orphan that reference exactly as a live order would.
+			const orderedAt = order.createdAt;
+			const seen = new Set<string>();
+			for (const item of order.items) {
+				if (seen.has(item.productId)) continue;
+				seen.add(item.productId);
+				const product = await ctx.db.get(item.productId);
+				if (!product) continue; // already erased with its store
+				if (product.orderedAt !== undefined && product.orderedAt <= orderedAt)
+					continue;
+				await ctx.db.patch(item.productId, { orderedAt });
+			}
+		}
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.products.backfillProductOrderedAt,
+				{ cursor: page.continueCursor },
+			);
 		}
 	},
 });

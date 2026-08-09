@@ -20,6 +20,7 @@ import {
 	moveOrderToPhone,
 } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
+import { stampProductsOrdered } from "./lib/productOrdered";
 import { assertValidAddress } from "./lib/address";
 import { requireCustomerName } from "./lib/customer";
 import { assertPlanFeature } from "./subscriptions";
@@ -1081,6 +1082,10 @@ export const create = mutation({
 		// Meter the order against the retailer's monthly usage (SOFT cap — the
 		// nudge banner, never a block on this public mutation).
 		await recordOrderCreated(ctx, args.retailerId, now);
+
+		// Mark every product on this order as having sold, so it can no longer be
+		// permanently deleted out from under the order lines that now reference it.
+		await stampProductsOrdered(ctx, snapshotItems, now);
 
 		// Link to the aggregated customer record when we already know the phone.
 		// Phone-less orders (link-in-bio checkout) are linked later when the

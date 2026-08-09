@@ -1,10 +1,11 @@
 /// <reference types="vite/client" />
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { todayMytMidnight } from "./lib/fulfilmentDate";
+import { MAX_PRODUCTS_PER_RETAILER as CAP } from "./lib/productCap";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -1898,5 +1899,341 @@ describe("popularProducts (public, storefront featured card)", () => {
 		// The listed product is surfaced despite ranking third, and neither
 		// unlisted id is named to an unauthenticated caller.
 		expect(ranked).toEqual([listed]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Product cap + permanent delete (86eyjmf4q)
+// ---------------------------------------------------------------------------
+
+describe("product cap", () => {
+	const ADMIN = "user_admin_cap";
+	let prevAdminEnv: string | undefined;
+
+	beforeEach(() => {
+		prevAdminEnv = process.env.ADMIN_USER_IDS;
+		process.env.ADMIN_USER_IDS = ADMIN;
+	});
+	afterEach(() => {
+		process.env.ADMIN_USER_IDS = prevAdminEnv;
+	});
+
+	/**
+	 * Fill a store to `count` product rows directly. Going through the public
+	 * create mutation 200 times would test the cap by way of 200 slug-uniqueness
+	 * scans; the gate itself is what's under test here.
+	 */
+	async function fillCatalog(
+		t: ReturnType<typeof convexTest>,
+		retailerId: Id<"retailers">,
+		count: number,
+		opts: { active?: boolean } = {},
+	) {
+		await t.run(async (ctx) => {
+			const now = Date.now();
+			for (let i = 0; i < count; i++) {
+				await ctx.db.insert("products", {
+					retailerId,
+					name: `Filler ${i}`,
+					slug: `filler-${i}`,
+					currency: "MYR",
+					imageStorageIds: [],
+					active: opts.active ?? true,
+					channel: "whatsapp" as const,
+					sortOrder: i,
+					createdAt: now,
+					updatedAt: now,
+				});
+			}
+		});
+	}
+
+	test("create is allowed on the last free slot and refused on the next", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await fillCatalog(t, retailer._id, CAP - 1);
+
+		// The one that lands exactly on the cap still goes through.
+		await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Last one", sortOrder: 900 }),
+		);
+
+		await expect(
+			asA.mutation(
+				api.products.create,
+				baseProduct(retailer._id, { name: "One too many", sortOrder: 901 }),
+			),
+		).rejects.toThrow(/limit/i);
+	});
+
+	test("ARCHIVED products still hold their slot — archiving is not a way to free one", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		// Every row archived, so an "active products" reading of the cap would
+		// see an empty store and wave this through.
+		await fillCatalog(t, retailer._id, CAP, { active: false });
+
+		await expect(
+			asA.mutation(
+				api.products.create,
+				baseProduct(retailer._id, { name: "Blocked", sortOrder: 900 }),
+			),
+		).rejects.toThrow(/limit/i);
+	});
+
+	test("restoring an archived product at the cap can't breach it", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await fillCatalog(t, retailer._id, CAP - 1, { active: false });
+		const archived = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Seasonal", sortOrder: 900 }),
+		);
+		await asA.mutation(api.products.archive, { productId: archived });
+
+		// The store is at the cap on rows. Restoring is a status flip, not a new
+		// row — it must be allowed, and must not change what the cap sees. (Under
+		// an active-only cap this is exactly the move that would sneak past it.)
+		await asA.mutation(api.products.update, {
+			productId: archived,
+			active: true,
+		});
+
+		const state = await asA.query(api.products.capState, {
+			retailerId: retailer._id,
+		});
+		expect(state.used).toBe(CAP);
+		expect(state.atCap).toBe(true);
+	});
+
+	test("a Kedaipal admin acting as the store can stock it past the ceiling", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await fillCatalog(t, retailer._id, CAP);
+
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+		await asAdmin.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "White glove", sortOrder: 900 }),
+		);
+
+		const state = await asAdmin.query(api.products.capState, {
+			retailerId: retailer._id,
+		});
+		expect(state.used).toBe(CAP + 1);
+		expect(state.overCap).toBe(true);
+		// ...but the seller themselves is still capped — the exemption is the
+		// admin's, not the store's.
+		const asA = t.withIdentity({ subject: USER_A });
+		await expect(
+			asA.mutation(
+				api.products.create,
+				baseProduct(retailer._id, { name: "Seller try", sortOrder: 901 }),
+			),
+		).rejects.toThrow(/limit/i);
+	});
+
+	test("bulk import refuses a sheet that doesn't fit, and says how many would", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await fillCatalog(t, retailer._id, CAP - 2);
+
+		await expect(
+			asA.mutation(api.products.bulkUpsert, {
+				retailerId: retailer._id,
+				currency: "MYR",
+				products: [
+					importSingle("Import A", { price: 1000, stock: 1 }),
+					importSingle("Import B", { price: 1000, stock: 1 }),
+					importSingle("Import C", { price: 1000, stock: 1 }),
+				],
+			}),
+		).rejects.toThrow(/Only 2 of these 3/);
+	});
+
+	test("an import that only updates existing products is unaffected by a full catalog", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Priced", sku: "SKU-1", price: 1000 }),
+		);
+		await fillCatalog(t, retailer._id, CAP - 1);
+
+		// Store is exactly at the cap, but re-pricing consumes no slot.
+		const res = await asA.mutation(api.products.bulkUpsert, {
+			retailerId: retailer._id,
+			currency: "MYR",
+			products: [
+				importSingle("Priced", { sku: "SKU-1", price: 2500, stock: 4 }),
+			],
+		});
+		expect(res.created).toBe(0);
+		expect(res.updated).toBe(1);
+	});
+
+	test("capState is owner-or-admin only", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asB = t.withIdentity({ subject: USER_B });
+		await expect(
+			asB.query(api.products.capState, { retailerId: retailer._id }),
+		).rejects.toThrow(/forbidden/i);
+	});
+});
+
+describe("deletePermanently", () => {
+	test("erases the product, its variants and its category membership, freeing a slot", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Typo prodcut" }),
+		);
+		const { categoryId } = await asA.mutation(api.categories.create, {
+			retailerId: retailer._id,
+			name: "Cakes",
+			slug: "cakes",
+		});
+		await asA.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: [categoryId],
+		});
+
+		await asA.mutation(api.products.deletePermanently, { productId });
+
+		const leftovers = await t.run(async (ctx) => ({
+			product: await ctx.db.get(productId),
+			variants: await ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", productId))
+				.collect(),
+			junctions: await ctx.db
+				.query("productCategories")
+				.withIndex("by_product", (q) => q.eq("productId", productId))
+				.collect(),
+			category: await ctx.db.get(categoryId),
+		}));
+		expect(leftovers.product).toBeNull();
+		expect(leftovers.variants).toEqual([]);
+		expect(leftovers.junctions).toEqual([]);
+		// The category survives, with its visible-product count wound back.
+		expect(leftovers.category?.productCount ?? 0).toBe(0);
+
+		const state = await asA.query(api.products.capState, {
+			retailerId: retailer._id,
+		});
+		expect(state.used).toBe(0);
+	});
+
+	test("refuses a product that has ever been ordered — history keeps its slot", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Real seller" }),
+		);
+		await t.run((ctx) => ctx.db.patch(productId, { orderedAt: Date.now() }));
+
+		await expect(
+			asA.mutation(api.products.deletePermanently, { productId }),
+		).rejects.toThrow(/ordered before/i);
+		expect(await t.run((ctx) => ctx.db.get(productId))).not.toBeNull();
+	});
+
+	test("a CANCELLED order still protects the product — the line still names it", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Ordered then cancelled" }),
+		);
+		const before = await asA.query(api.products.get, { productId });
+		const variantId = before?.variants[0]?._id;
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ variantId: variantId as Id<"productVariants">, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali" },
+			deliveryAddress: {
+				line1: "12 Jln Mawar",
+				city: "PJ",
+				state: "Selangor",
+				postcode: "47301",
+			},
+		});
+		const orderId = await t.run(async (ctx) => {
+			const row = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", created.shortId))
+				.unique();
+			return row?._id as Id<"orders">;
+		});
+		await asA.mutation(api.orders.updateStatus, {
+			orderId,
+			status: "cancelled",
+		});
+
+		await expect(
+			asA.mutation(api.products.deletePermanently, { productId }),
+		).rejects.toThrow(/ordered before/i);
+	});
+
+	test("a real storefront order stamps orderedAt, which then blocks the delete", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Sells today" }),
+		);
+		const before = await asA.query(api.products.get, { productId });
+		expect(before?.orderedAt).toBeUndefined();
+		// Deletable right up until it sells.
+		const variantId = before?.variants[0]?._id;
+
+		await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ variantId: variantId as Id<"productVariants">, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali" },
+			deliveryAddress: {
+				line1: "12 Jln Mawar",
+				city: "PJ",
+				state: "Selangor",
+				postcode: "47301",
+			},
+		});
+
+		const after = await asA.query(api.products.get, { productId });
+		expect(after?.orderedAt).toBeGreaterThan(0);
+		await expect(
+			asA.mutation(api.products.deletePermanently, { productId }),
+		).rejects.toThrow(/ordered before/i);
+	});
+
+	test("a non-owner can't delete another store's product", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id),
+		);
+		const asB = t.withIdentity({ subject: USER_B });
+		await expect(
+			asB.mutation(api.products.deletePermanently, { productId }),
+		).rejects.toThrow(/forbidden/i);
 	});
 });

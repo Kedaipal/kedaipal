@@ -27,6 +27,7 @@ import {
 } from "./_generated/server";
 import { linkOrderToCustomer, refreshWaProfileName } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
+import { stampProductsOrdered } from "./lib/productOrdered";
 import { recordOrderCreated } from "./subscriptionUsage";
 import {
 	adminUserIds,
@@ -793,6 +794,10 @@ export const createOrderFromSession = mutation({
 		// Meter against the monthly usage nudge (SOFT cap, never a block) —
 		// counter orders count like storefront ones.
 		await recordOrderCreated(ctx, retailer._id, now);
+
+		// Mark every product on this order as having sold, so it can no longer be
+		// permanently deleted out from under the order lines that now reference it.
+		await stampProductsOrdered(ctx, snapshotItems, now);
 
 		// Link customer aggregates (creates the row for a brand-new buyer). Skipped
 		// for an anonymous sale — no identity means no customer row to touch, so the
