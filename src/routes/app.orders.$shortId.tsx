@@ -65,6 +65,7 @@ import {
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
+import { CopyButton } from "../components/ui/copy-button";
 import {
 	Dialog,
 	DialogContent,
@@ -1081,19 +1082,44 @@ function OrderDetailRoute() {
 			{/* Received → read-only confirmation. */}
 			{paymentStatus === "received" ? (
 				<section className="flex items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4">
-					<BadgeCheck className="size-5 text-emerald-700" />
+					<BadgeCheck className="size-5 shrink-0 text-emerald-700" />
 					<div className="min-w-0 flex-1">
 						<p className="text-xs font-semibold uppercase tracking-widest text-emerald-800">
 							Payment received
 						</p>
 						<p className="text-sm text-emerald-900">
-							{order.paymentReceivedAt
-								? `Confirmed ${formatRelative(order.paymentReceivedAt)}`
-								: "Confirmed by you"}
+							{order.gatewayPaymentId
+								? // Auto-confirmed by the HitPay webhook (86eyb6z3a) — say so,
+									// since nobody on the team pressed the button.
+									`Paid online via HitPay${order.paymentReceivedAt ? ` ${formatRelative(order.paymentReceivedAt)}` : ""}`
+								: order.paymentReceivedAt
+									? `Confirmed ${formatRelative(order.paymentReceivedAt)}`
+									: "Confirmed by you"}
 							{order.paymentMethod
 								? ` · ${paymentMethodLabel(order.paymentMethod)}`
 								: ""}
 						</p>
+						{order.gatewayPaymentId ? (
+							// The seller is the side that pastes this into HitPay's
+							// dashboard search (to refund or reconcile), so the copy
+							// affordance belongs here at least as much as on the buyer's
+							// page — it was the buyer-only half of "one number both sides
+							// quote". `break-all` over `truncate`: a half-shown reference
+							// can't be matched against a dashboard entry.
+							<div className="mt-1 flex items-start justify-between gap-2">
+								<p className="min-w-0 break-all font-mono text-xs text-emerald-800/80">
+									Ref {order.gatewayPaymentId}
+								</p>
+								<CopyButton
+									value={order.gatewayPaymentId}
+									ariaLabel="Copy payment reference"
+									successMessage="Payment reference copied"
+									// Layout only — no colour override, so the primitive's
+									// own "Copied" green still lands on tap.
+									className="-my-2"
+								/>
+							</div>
+						) : null}
 					</div>
 				</section>
 			) : null}

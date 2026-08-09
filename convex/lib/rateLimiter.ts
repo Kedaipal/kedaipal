@@ -71,6 +71,25 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		period: MINUTE,
 		capacity: 3,
 	},
+	// Buyer's "Pay now" tap (86eyb6z3a) — mints (or reuses) a HitPay payment
+	// request. Keyed by tracking token. Each fresh mint is an outbound API call
+	// on the SELLER's HitPay account, so sized like paymentClaim: a burst of
+	// retries after a flaky redirect is legitimate, a firehose isn't.
+	gatewayCheckout: {
+		kind: "token bucket",
+		rate: 5,
+		period: MINUTE,
+		capacity: 3,
+	},
+	// Redirect-return reconcile against HitPay's status API (86eyb6z3a), keyed
+	// by tracking token. Fires once per checkout landing (+ a manual refresh or
+	// two while "Confirming payment…" shows).
+	gatewayVerify: {
+		kind: "token bucket",
+		rate: 6,
+		period: MINUTE,
+		capacity: 4,
+	},
 	proofUpload: {
 		kind: "token bucket",
 		rate: 3,

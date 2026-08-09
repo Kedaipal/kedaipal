@@ -212,6 +212,37 @@ under `.claude/worktrees/` and aborts with "Found a nested root
 configuration". If lint ever fails that way again, a stray nested worktree is
 the cause.
 
+## Dependency pinning — TanStack is exact-pinned (2026-08-07, ClickUp 86eyjadx7)
+
+`package.json` used to spec six TanStack packages as the `latest` dist-tag.
+The lockfile kept CI honest (`--frozen-lockfile`), but a dist-tag re-resolves
+on **any** lockfile touch — a `pnpm add` of an unrelated package on a dev
+machine silently jumped the whole framework to whatever shipped that morning,
+riding into an unrelated PR untested.
+
+That stopped being hypothetical on 4 Aug 2026: TanStack shipped a ground-up
+**lane-scheduler rewrite** of loader/preload/redirect/SSR-status handling as a
+*patch* release tagged "Fix" (`react-router@1.170.19`,
+[PR #7805](https://github.com/TanStack/router/pull/7805), 27 issues closed) —
+exactly the machinery the buyer-page-resilience work (86eyheqzv) depends on.
+Since TanStack ships breaking changes in patches, **no semver range protects
+us**; only exact pins do.
+
+The rules, enforced by `src/lib/dependency-pins.test.ts` (runs in the gate):
+
+- **No dependency may use a dist-tag or wildcard spec** (`latest`, `next`,
+  `*`) — every spec states a concrete version.
+- **The TanStack router/start family is exact-pinned** (no `^`/`~`):
+  `react-router`, `react-start`, `react-router-devtools`, `react-devtools`,
+  `devtools-vite`, `router-plugin`. Upgrades are a deliberate task — bump the
+  whole family **in lockstep** to one release, run the gate, and regression-test
+  the buyer surfaces (see ClickUp 86eyjadza for the checklist).
+
+`@tanstack/react-router-ssr-query` was removed in the same change — it was
+imported nowhere (a scaffold leftover), and it was the only thing pulling
+`@tanstack/react-query`/`query-core` into the lockfile. If a future change
+adopts TanStack Query directly, add it as a first-class pinned dependency.
+
 ## Known gaps (deferred to the full CI/CD ticket)
 
 - **`pnpm check` (Biome lint + format) is red on staging** (21 format
