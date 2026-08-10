@@ -1,6 +1,13 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
-import { Archive, ArchiveRestore, ArrowLeft, Eye, Trash2 } from "lucide-react";
+import {
+	Archive,
+	ArchiveRestore,
+	ArrowLeft,
+	Eye,
+	Info,
+	Trash2,
+} from "lucide-react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
@@ -16,6 +23,14 @@ import {
 import { ProductDetailSheet } from "../components/storefront/product-detail-sheet";
 import { Button } from "../components/ui/button";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "../components/ui/dialog";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { convexErrorMessage } from "../lib/format";
@@ -123,6 +138,7 @@ function EditProductRoute() {
 	const archive = useMutation(api.products.archive);
 	const deletePermanently = useMutation(api.products.deletePermanently);
 	const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+	const [whyCantDeleteOpen, setWhyCantDeleteOpen] = useState(false);
 	const [deleting, setDeleting] = useState(false);
 	// Buyer-eye preview: mounts the REAL storefront detail sheet in-page (the
 	// same bottom sheet buyers get) — no new tab — rendered from the form's
@@ -261,32 +277,34 @@ function EditProductRoute() {
 				}}
 				submitLabel="Save changes"
 				stickyAction={
+					// Labelled, and NOT tinted red — an icon-only red button here read
+					// as "delete", when archive is the reversible, gentle action. The
+					// word is the disambiguation; red is reserved for the true
+					// destructive CTA below the form.
 					product.active ? (
 						<Button
 							type="button"
 							variant="outline"
-							size="icon"
-							className="size-12 shrink-0 rounded-xl bg-background text-destructive hover:bg-destructive/10 hover:text-destructive"
-							aria-label="Archive product"
+							className="h-12 shrink-0 gap-2 rounded-xl bg-background px-4"
 							onClick={async () => {
 								await archive({ productId: product._id });
 								navigate({ to: "/app/products" });
 							}}
 						>
-							<Archive className="size-5" />
+							<Archive className="size-4" />
+							Archive
 						</Button>
 					) : (
 						<Button
 							type="button"
 							variant="outline"
-							size="icon"
-							className="size-12 shrink-0 rounded-xl bg-background"
-							aria-label="Restore product"
+							className="h-12 shrink-0 gap-2 rounded-xl bg-background px-4"
 							onClick={async () => {
 								await update({ productId: product._id, active: true });
 							}}
 						>
-							<ArchiveRestore className="size-5" />
+							<ArchiveRestore className="size-4" />
+							Restore
 						</Button>
 					)
 				}
@@ -339,50 +357,73 @@ function EditProductRoute() {
 			/>
 
 			{/* Permanent delete — the only way to free a slot under the product cap
-			    (archiving keeps it). Sits in its own section below the form rather
-			    than beside Archive in the header: it is not the same kind of action,
-			    and a destructive control next to a routine one invites the misclick.
-			    Sold products are refused with the reason, never hidden — the seller
-			    needs to learn that history is why, and that archiving is the path. */}
-			<section className="overflow-hidden rounded-2xl border border-border">
-				<div className="border-b border-border bg-muted/30 px-4 py-2.5">
-					<h2 className="text-[13px] font-semibold">Delete this product</h2>
-				</div>
-				{hasSold ? (
-					<div className="px-4 py-3.5">
+			    (archiving keeps it). A single quiet row below the form, NOT beside
+			    Save/Archive in the sticky bar (a destructive control next to routine
+			    ones invites the misclick) and NOT a boxed "danger zone" (a whole
+			    section for one button over-announces it). Sold products keep the
+			    control visible but blocked — tapping opens the WHY dialog instead of
+			    a dead disabled button, because the shared Button's
+			    `disabled:pointer-events-none` means a disabled control can't even
+			    show a hover tooltip, and a reason you can't reach on a phone is a
+			    reason that doesn't exist. The dialog also offers Archive, so the
+			    blocked path ends in the right action rather than a shrug. */}
+			{hasSold ? (
+				<Button
+					type="button"
+					variant="ghost"
+					onClick={() => setWhyCantDeleteOpen(true)}
+					className="h-11 self-start gap-2 px-3 text-sm font-medium text-muted-foreground"
+				>
+					<Trash2 className="size-4" aria-hidden="true" />
+					Delete permanently
+					<Info className="size-4" aria-hidden="true" />
+				</Button>
+			) : (
+				<Button
+					type="button"
+					variant="ghost"
+					onClick={() => setConfirmDeleteOpen(true)}
+					disabled={deleting}
+					className="h-11 self-start gap-2 px-3 text-sm font-medium text-destructive hover:bg-destructive/10 hover:text-destructive"
+				>
+					<Trash2 className="size-4" aria-hidden="true" />
+					{deleting ? "Deleting…" : "Delete permanently"}
+				</Button>
+			)}
+
+			<Dialog open={whyCantDeleteOpen} onOpenChange={setWhyCantDeleteOpen}>
+				<DialogContent className="sm:max-w-sm">
+					<DialogHeader>
+						<DialogTitle>This product can't be deleted</DialogTitle>
+						<DialogDescription>
+							It has been ordered before, and those orders still reference it —
+							deleting it would break their history. Products with order history
+							can only be archived: that takes them off your storefront and
+							counter, but keeps their records (and their slot toward your
+							product limit).
+						</DialogDescription>
+					</DialogHeader>
+					<DialogFooter>
 						<Button
-							disabled
-							variant="ghost"
-							className="h-11 w-full justify-start gap-2.5 rounded-xl px-3 text-sm font-medium"
+							variant="outline"
+							onClick={() => setWhyCantDeleteOpen(false)}
 						>
-							<Trash2 className="size-4" aria-hidden="true" />
-							Delete permanently
+							Close
 						</Button>
-						<p className="mt-2 px-1 text-[12px] leading-snug text-muted-foreground">
-							This product has been ordered before, so it can't be deleted — past
-							orders still reference it. Archive it instead to take it off your
-							storefront.
-						</p>
-					</div>
-				) : (
-					<div className="px-4 py-3.5">
-						<Button
-							onClick={() => setConfirmDeleteOpen(true)}
-							disabled={deleting}
-							variant="ghost"
-							className="h-11 w-full justify-start gap-2.5 rounded-xl px-3 text-sm font-medium text-destructive hover:bg-destructive/10 hover:text-destructive"
-						>
-							<Trash2 className="size-4" aria-hidden="true" />
-							{deleting ? "Deleting…" : "Delete permanently"}
-						</Button>
-						<p className="mt-2 px-1 text-[12px] leading-snug text-muted-foreground">
-							Removes it and its photos for good — this can't be undone.
-							Deleting is what frees up a slot toward your product limit;
-							archiving keeps it.
-						</p>
-					</div>
-				)}
-			</section>
+						{product.active ? (
+							<Button
+								onClick={async () => {
+									await archive({ productId: product._id });
+									navigate({ to: "/app/products" });
+								}}
+							>
+								<Archive className="size-4" />
+								Archive instead
+							</Button>
+						) : null}
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 
 			<ConfirmDialog
 				open={confirmDeleteOpen}

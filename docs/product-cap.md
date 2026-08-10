@@ -135,8 +135,8 @@ never-sold product is not). It is deliberately **not** subscription-gated, for t
 | Products page, at the cap | Amber card: the limit, that **archived products count**, and that deleting frees a slot |
 | "New product" button (both breakpoints) | Disabled-with-reason at the cap. An `<a>` can't be disabled, so the blocked state renders a real `<button>` rather than a link that would only fail at the server |
 | `/app/products/new` | Guarded before the wizard renders — covers the deep-link/bookmark path the disabled button can't, so nobody builds a whole product and only then bounces off the gate. A still-loading cap falls through to the form; the server is the real gate |
-| Product detail | A "Delete this product" section below the form (**not** beside Archive in the header — different kind of action, and a destructive control next to a routine one invites the misclick), with the archive-vs-delete distinction stated |
-| Product detail, sold product | Delete **disabled with the reason**, never hidden — the seller needs to learn that history is why, and that archiving is the path |
+| Product detail | A single quiet red "Delete permanently" row below the form (**not** beside Save/Archive in the sticky bar — a destructive control next to routine ones invites the misclick — and not a boxed "danger zone", which over-announces one button). The sticky bar's archive control is a **labelled** outline button ("Archive"/"Restore") — the earlier red icon-only version read as delete |
+| Product detail, sold product | The control stays visible but blocked: tapping opens a **"why can't I delete this?" dialog** that explains the order-history reason and offers **Archive instead** as its action. One affordance for desktop and mobile alike — the shared Button's `disabled:pointer-events-none` means a plain disabled control can't even show a hover tooltip, and a reason you can't reach on a phone is a reason that doesn't exist |
 | Import preview | Remaining slots when near the cap; an over-cap sheet blocks Confirm with how many fit |
 
 The import block is client-side **on purpose**: the sheet is chunked across several `bulkUpsert`
@@ -147,6 +147,15 @@ The delete confirm is a plain destructive `ConfirmDialog` — **no** type-to-con
 the order hard delete. That gate exists there because deleting a paid order destroys financial
 history; a product that has never sold is irreversible but low-stakes, and a seller clearing ten
 typo rows shouldn't type DELETE ten times.
+
+## Testing the cap locally
+
+The limit is one constant — `MAX_PRODUCTS_PER_RETAILER` in `convex/lib/productCap.ts`. To exercise
+the cap states without seeding 200 products, temporarily lower it (e.g. to 20), then
+`npx convex dev --once` so the server gate picks it up (the client side hot-reloads on its own —
+same module, imported by both). Everything derives from the constant: the 80% counter threshold,
+the at-cap card, the import maths, and the whole test suite, so tests stay green at any value.
+**Revert before committing** — nothing pins 200 except this constant, which is the point.
 
 ## Deliberately not done
 
