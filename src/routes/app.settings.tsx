@@ -2154,7 +2154,7 @@ function LocaleForm({
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
 			<label className="flex flex-col gap-2">
-				<span className="text-sm font-medium">WhatsApp message language</span>
+				<span className="text-sm font-medium">Message language</span>
 				<select
 					value={value}
 					onChange={(e) => setValue(e.target.value as Locale)}
@@ -2166,8 +2166,12 @@ function LocaleForm({
 						</option>
 					))}
 				</select>
+				{/* The field reaches further than its old "sent to shoppers" copy
+				    admitted: retailer email alerts have always rendered in it, and
+				    the WhatsApp order alerts (86eyhw9zy) now do too. */}
 				<span className="text-xs text-muted-foreground">
-					Used for order confirmations and shipping updates sent to shoppers.
+					Used for order confirmations and shipping updates sent to shoppers —
+					and for the order alerts we send you by email and WhatsApp.
 				</span>
 			</label>
 

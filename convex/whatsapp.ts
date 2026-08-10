@@ -41,6 +41,7 @@ import {
 	renderPickupBlock,
 	renderStageUpdate,
 	renderSystemMessage,
+	TEMPLATE_LANGUAGE,
 	type DeliveryMethod,
 	type Locale,
 	type MessageTemplates,
@@ -1587,6 +1588,7 @@ export const getOrderForSellerAlert = internalQuery({
 		fulfilmentTimeMinutes: number | undefined;
 		notifyWaPhone: string | undefined;
 		orderWaAlerts: boolean;
+		locale: Locale;
 	} | null> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) return null;
@@ -1604,6 +1606,7 @@ export const getOrderForSellerAlert = internalQuery({
 			fulfilmentTimeMinutes: order.fulfilmentTimeMinutes,
 			notifyWaPhone: retailer.notifyWaPhone,
 			orderWaAlerts: retailer.orderWaAlerts === true,
+			locale: (retailer.locale as Locale | undefined) ?? "en",
 		};
 	},
 });
@@ -1665,10 +1668,9 @@ export const notifySellerNewOrder = internalAction({
 			const receipt = await wa.send(meta.notifyWaPhone, {
 				kind: "template",
 				templateName,
-				// Seller alerts are approved in English only for now — the /app
-				// dashboard the button lands on is EN. Add ms/zh template variants
-				// alongside the dashboard localization phase.
-				languageCode: "en",
+				// Same store-locale switch the retailer's EMAIL alerts already use
+				// (renderRetailerEmail) — a BM seller reads BM on both channels.
+				languageCode: TEMPLATE_LANGUAGE[pickLocale(meta.locale)],
 				bodyParams: [meta.shortId, meta.customerName, money, fulfilment],
 				// The approved button URL is https://kedaipal.com/app/orders/{{1}} —
 				// Meta appends ONLY this suffix (the shortId; the seller is
@@ -1738,7 +1740,7 @@ export const notifySellerPaymentClaim = internalAction({
 			const receipt = await wa.send(meta.notifyWaPhone, {
 				kind: "template",
 				templateName,
-				languageCode: "en",
+				languageCode: TEMPLATE_LANGUAGE[pickLocale(meta.locale)],
 				bodyParams: [meta.customerName, meta.shortId, money],
 				urlButtonParam: meta.shortId,
 			});
@@ -1875,9 +1877,7 @@ export const notifyStorefrontOrderCreated = internalAction({
 			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
 		if (!trackingToken) return; // order vanished — don't ship a dead link
 		const locale = pickLocale(meta.locale);
-		// Only EN + BM template variants are approved; zh rides EN until the
-		// Mandarin phase 2/3 submits (and this map gains) a zh variant.
-		const languageCode = locale === "ms" ? "ms" : "en";
+		const languageCode = TEMPLATE_LANGUAGE[locale];
 		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
 
 		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");

@@ -41,9 +41,38 @@ decoupled from Meta template review.
 Register the button URL via Meta's **Add variable** control — never hand-type
 `{{1}}` (the 86eyheqzv redirect-loop root cause). The deep link rides the
 `shortId` (the seller is Clerk-authenticated on /app), never the buyer's
-capability token. Templates are approved **EN-only** for now — the /app
-dashboard the button lands on is EN; add `ms`/`zh` language variants when the
-dashboard localizes. Send language is hardcoded `en` in both actions.
+capability token.
+
+### Language: EN + BM, driven by `retailers.locale`
+
+Both templates are submitted with **English and Bahasa Malaysia** variants and
+the send picks one from the store's locale — the same switch the retailer's
+**email** alerts have always used (`renderRetailerEmail(meta.locale, …)`), so a
+BM seller reads BM on both channels. An EN-only WhatsApp alert next to a BM
+email would have been the odd one out.
+
+Resolution goes through **`TEMPLATE_LANGUAGE`** (`convex/lib/whatsappCopy.ts`),
+an exhaustive `Record<Locale, "en" | "ms">` that is the ONE author of template
+language for every template send — the buyer confirmation push included (it
+previously carried its own `locale === "ms" ? …` ternary). **zh rides EN**: the
+copy catalog is zh-complete but no zh *template* is approved, and naming an
+unapproved language makes Meta reject the send outright — that would silently
+kill a zh store's alerts rather than degrade them. Adding a 4th locale is a
+compile error here, never a silent English fallback (the 86eybjw5n rule).
+
+Two deliberate carry-overs, both matching what the retailer emails already do:
+- the **fulfilment date** in `{{4}}` is formatted by `formatFulfilmentDateTime`,
+  which is EN-only (`Tue, 12 Aug 2026 · 3:30 PM`), so a BM alert carries an
+  English date. Localizing that formatter is a cross-surface i18n change (buyer
+  WhatsApp, emails, tracking, PDFs all share it), not this feature's job;
+- the **/app dashboard** the button opens is English until the i18n `/app`
+  sweep — the emails link to the same English pages today.
+
+`retailers.locale` is one field serving two audiences (what shoppers receive,
+what the seller receives). The settings card's label was narrowed to "Message
+language" and its helper now states both reaches, so the shared field isn't
+hidden behaviour. Splitting seller-UI language from buyer-message language
+belongs to the `/app` localization phase, if it's ever worth the second field.
 
 ### Category decision: `utility_template`, not `transactional`
 
@@ -79,9 +108,9 @@ follow-up ticket; until it lands, an opted-in seller gets both.
   (`src/components/settings/wa-order-alerts-card.tsx`), grouped with the
   browser + email notification cards. Renders only when
   `retailer.waOrderAlertsAvailable` (template env set). Input prefills from
-  `waPhone`; copy names both events, the counter exclusion, and that email +
-  browser alerts keep working alongside. Starter sees disabled-with-reason +
-  the Pro chip.
+  `waPhone`; copy names both events, the counter exclusion, the alert language,
+  and that email + browser alerts keep working alongside. Starter sees
+  disabled-with-reason + the Pro chip.
 - Deliberately **not** on the /pricing table yet — the feature is env-gated on
   Meta approval, and the table must never promise what a deployment can't do.
   Add the row when the templates are live in prod.

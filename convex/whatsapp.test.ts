@@ -1838,9 +1838,9 @@ describe("seller WhatsApp order alerts (86eyhw9zy)", () => {
 		expect(body.to).toBe(SELLER_PHONE);
 		expect(body.type).toBe("template");
 		expect(body.template.name).toBe(NEW_ORDER_TEMPLATE);
-		// Seller alerts are EN-only regardless of the store's buyer locale (the
-		// /app dashboard the button lands on is EN).
-		expect(body.template.language.code).toBe("en");
+		// Seller alerts follow the STORE's locale, exactly like the retailer's
+		// email alerts (renderRetailerEmail) — a BM store gets the ms variant.
+		expect(body.template.language.code).toBe("ms");
 		const bodyComponent = body.template.components.find(
 			(c) => c.type === "body",
 		);
@@ -1855,6 +1855,34 @@ describe("seller WhatsApp order alerts (86eyhw9zy)", () => {
 		// The /app deep link rides the shortId (seller is authenticated) — never
 		// the buyer's capability token.
 		expect(button?.parameters[0]?.text).toBe(shortId);
+		fetchMock.restore();
+	});
+
+	test("an EN store gets the en variant; a zh store rides en until zh templates are approved", async () => {
+		process.env.WHATSAPP_SELLER_NEW_ORDER_TEMPLATE = NEW_ORDER_TEMPLATE;
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		await enableAlerts(t, retailerId);
+		const fetchMock = installFetchMock();
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+
+		await t.action(internal.whatsapp.notifySellerNewOrder, { orderId });
+		expect(
+			(fetchMock.waCalls()[0].body as { template: { language: { code: string } } })
+				.template.language.code,
+		).toBe("en");
+
+		// zh: the copy catalog is zh-complete but no zh TEMPLATE is approved, so
+		// the send must fall back to en rather than name a language Meta rejects.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailerId, { locale: "zh" });
+		});
+		await t.action(internal.whatsapp.notifySellerNewOrder, { orderId });
+		expect(
+			(fetchMock.waCalls()[1].body as { template: { language: { code: string } } })
+				.template.language.code,
+		).toBe("en");
 		fetchMock.restore();
 	});
 
@@ -1916,7 +1944,7 @@ describe("seller WhatsApp order alerts (86eyhw9zy)", () => {
 	test("payment-claim alert sends buyer/shortId/total — counter orders INCLUDED (claims land when nobody's at the counter)", async () => {
 		process.env.WHATSAPP_SELLER_PAYMENT_CLAIM_TEMPLATE = CLAIM_TEMPLATE;
 		const t = setup();
-		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "ms");
 		await enableAlerts(t, retailerId);
 		const fetchMock = installFetchMock();
 		const shortId = await createPendingOrder(t, retailerId, productId);
@@ -1934,11 +1962,14 @@ describe("seller WhatsApp order alerts (86eyhw9zy)", () => {
 			to: string;
 			template: {
 				name: string;
+				language: { code: string };
 				components: Array<{ type: string; parameters: Array<{ text: string }> }>;
 			};
 		};
 		expect(body.to).toBe(SELLER_PHONE);
 		expect(body.template.name).toBe(CLAIM_TEMPLATE);
+		// Both seller alerts localize — not just the new-order one.
+		expect(body.template.language.code).toBe("ms");
 		const params = body.template.components
 			.find((c) => c.type === "body")
 			?.parameters.map((p) => p.text);

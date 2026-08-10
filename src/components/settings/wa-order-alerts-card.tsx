@@ -128,6 +128,13 @@ export function WaOrderAlertsCard({
 					(you&apos;re already there), and email + browser alerts keep working
 					alongside.
 				</p>
+				{/* The alert language isn't a separate setting — it follows the
+				    store's message language, same as the retailer emails. Said here
+				    so a BM seller isn't surprised either way (no hidden behaviour). */}
+				<p className="text-xs text-muted-foreground">
+					Alerts are written in your store&apos;s message language — change it
+					under the WhatsApp tab.
+				</p>
 			</div>
 
 			{enabled ? (
