@@ -186,9 +186,29 @@ async function loadVariants(ctx: QueryCtx, productId: Id<"products">) {
 export async function productWithVariants(
 	ctx: QueryCtx,
 	product: Doc<"products">,
-	opts: { activeOnly: boolean },
+	opts: { activeOnly: boolean; forOwner?: boolean },
 ) {
 	const base = await withImageUrls(ctx, product);
+	// Seller-only fields are stripped unless the caller is an owner/admin surface.
+	// `orderedAt` is sales-derived — it says whether a product has EVER sold and
+	// when it first did — and this helper's `...base` spread feeds the public,
+	// unauthenticated reads (`list`, `getPublicBySlug`, the category page). Left
+	// in, anyone could diff a store's catalog for the SKUs that have never sold a
+	// single unit. That's the same line `popularProducts` already draws by
+	// returning ids only so sales volume never crosses the public wire.
+	//
+	// NOT keyed off `activeOnly`: the two look interchangeable but aren't —
+	// `listForCounter` is owner-gated and still passes `activeOnly: true`, so
+	// reusing it as an owner proxy would be right by accident today and wrong the
+	// next time a surface mixes them. This is also the seam for any future
+	// seller-only column: add it to the destructure, not to the payload.
+	// Typed as `typeof base` (where `orderedAt` is already optional) rather than
+	// letting TS infer a union: a Convex query has ONE return type regardless of
+	// the runtime auth branch, so the shape has to admit the field being absent.
+	// The stripped object is assignable precisely because the field is optional.
+	const { orderedAt: _orderedAt, ...publicBase } = base;
+	const visibleBase: typeof base =
+		opts.forOwner === true ? base : publicBase;
 	const all = await loadVariants(ctx, product._id);
 	// Resolve the per-variant flags, falling back to the (deprecated) product-level
 	// defaults so legacy variants that predate the per-variant columns keep behaving
@@ -219,7 +239,7 @@ export async function productWithVariants(
 		.filter((vr) => vr.active)
 		.some((vr) => (vr.blockWhenOutOfStock ? vr.onHand > 0 : true));
 	return {
-		...base,
+		...visibleBase,
 		// Always usable by the storefront's product-page links, even before the
 		// slug backfill has stamped this row.
 		slug: effectiveSlug(product),
@@ -579,7 +599,10 @@ export const listForCounter = query({
 			.collect();
 		rows.sort(bySortOrder);
 		return Promise.all(
-			rows.map((row) => productWithVariants(ctx, row, { activeOnly: true })),
+			rows.map((row) =>
+				// Owner-gated read (counter checkout), so seller-only fields are safe.
+				productWithVariants(ctx, row, { activeOnly: true, forOwner: true }),
+			),
 		);
 	},
 });
@@ -613,7 +636,10 @@ export const listAll = query({
 			.collect();
 		rows.sort(byActiveThenSort);
 		return Promise.all(
-			rows.map((row) => productWithVariants(ctx, row, { activeOnly: false })),
+				// Owner-gated dashboard read — seller-only fields stay in.
+			rows.map((row) =>
+				productWithVariants(ctx, row, { activeOnly: false, forOwner: true }),
+			),
 		);
 	},
 });
@@ -646,7 +672,13 @@ export const get = query({
 		// in the PR #155 review.
 		if ((!row.active || row.hidden || row.hiddenByCategory) && !canEdit)
 			return null;
-		return productWithVariants(ctx, row, { activeOnly: !canEdit });
+		// Shared endpoint: the same `canEdit` that decides whether inactive variants
+		// are visible also decides whether seller-only fields are. An
+		// unauthenticated buyer hitting this by id gets the public shape.
+		return productWithVariants(ctx, row, {
+			activeOnly: !canEdit,
+			forOwner: canEdit,
+		});
 	},
 });
 

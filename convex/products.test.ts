@@ -2237,3 +2237,75 @@ describe("deletePermanently", () => {
 		).rejects.toThrow(/forbidden/i);
 	});
 });
+
+describe("orderedAt is seller-only", () => {
+	/** Seed a product that has sold, so `orderedAt` is actually populated. */
+	async function soldProduct(t: ReturnType<typeof convexTest>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Sold thing" }),
+		);
+		const owned = await asA.query(api.products.get, { productId });
+		await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [
+				{
+					variantId: owned?.variants[0]?._id as Id<"productVariants">,
+					quantity: 1,
+				},
+			],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali" },
+			deliveryAddress: {
+				line1: "12 Jln Mawar",
+				city: "PJ",
+				state: "Selangor",
+				postcode: "47301",
+			},
+		});
+		return { retailer, asA, productId };
+	}
+
+	test("the public storefront list never reveals which products have sold", async () => {
+		const t = setup();
+		const { retailer } = await soldProduct(t);
+		// Unauthenticated — exactly what a competitor can call.
+		const listed = await t.query(api.products.list, {
+			retailerId: retailer._id,
+		});
+		expect(listed.length).toBeGreaterThan(0);
+		for (const p of listed) expect(p).not.toHaveProperty("orderedAt");
+	});
+
+	test("the public product page read doesn't either", async () => {
+		const t = setup();
+		const { retailer, productId } = await soldProduct(t);
+		const bySlug = await t.query(api.products.getPublicBySlug, {
+			retailerId: retailer._id,
+			slug: "sold-thing",
+		});
+		expect(bySlug).not.toBeNull();
+		expect(bySlug).not.toHaveProperty("orderedAt");
+
+		// Same via a bare id as an unauthenticated caller.
+		const anon = await t.query(api.products.get, { productId });
+		expect(anon).not.toHaveProperty("orderedAt");
+	});
+
+	test("but the owner still sees it — the delete gate's UI depends on it", async () => {
+		const t = setup();
+		const { retailer, asA, productId } = await soldProduct(t);
+		const owned = await asA.query(api.products.get, { productId });
+		expect(owned?.orderedAt).toBeGreaterThan(0);
+
+		const dashboard = await asA.query(api.products.listAll, {
+			retailerId: retailer._id,
+		});
+		expect(dashboard.find((p) => p._id === productId)?.orderedAt).toBeGreaterThan(
+			0,
+		);
+	});
+});

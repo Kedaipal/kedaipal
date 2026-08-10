@@ -101,6 +101,26 @@ Stamped set-if-unset at **both** order-create sites (`orders.create` + `counterC
 cleared. `updatedAt` is deliberately not bumped — that field means "when the seller last edited
 this", and a sale is not an edit.
 
+**It is seller-only, and stripped from every public read** (PR-review catch). `orderedAt` is the
+first sales-derived field on the product row, and `productWithVariants` spreads the whole row into
+the unauthenticated `products.list`, `getPublicBySlug` and the category page — left in, anyone could
+diff a store's catalog for the SKUs that have never sold a single unit, plus the first-sale date of
+every one that has. That's the same line `popularProducts` already draws by returning ids only so
+sales volume never crosses the public wire.
+
+The helper takes an explicit `forOwner` flag, set on the owner-gated reads (`listAll`,
+`listForCounter`, and `get` when `canEdit`). It is deliberately **not** keyed off the existing
+`activeOnly` flag, which looks interchangeable but isn't — `listForCounter` is owner-gated and still
+passes `activeOnly: true`, so reusing it would be right by accident today and wrong the next time a
+surface mixes them. That flag is the seam for any future seller-only column: add it to the
+destructure, not to the payload.
+
+One typing note: the return is annotated `typeof base` (where `orderedAt` is already optional)
+rather than letting TS infer a union of the two shapes. A Convex query has ONE return type
+regardless of which runtime auth branch it took, so the shape has to admit the field being absent —
+and inferring the union silently dropped `orderedAt` from the *owner* type too, which broke the
+`hasSold` check the delete UI depends on.
+
 **Backfill (run once per deployment):**
 
 ```bash
@@ -177,5 +197,9 @@ the at-cap card, the import maths, and the whole test suite, so tests stay green
   unaffected, cascade completeness, the sold-product refusal (including via a **cancelled** order),
   `orderedAt` stamping from a real order, and non-owner rejection.
 
+- `convex/products.test.ts` → `describe("orderedAt is seller-only")` — the public list and the
+  public product reads must not carry `orderedAt`; the owner reads must.
+
 Mutation-tested: flipping the count to active-only turns the archived-counts and restore-breach
-tests red; removing the `orderedAt` refusal turns all three sold-product tests red.
+tests red; removing the `orderedAt` refusal turns all three sold-product tests red; restoring the
+public `orderedAt` spread turns both leak tests red while the owner test stays green.
