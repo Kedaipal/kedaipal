@@ -301,6 +301,35 @@ export default defineSchema({
 				),
 			}),
 		),
+		// HitPay online payments (86eyb6z3a) — BYO-ONLY like deliveryBooking above:
+		// `apiKey`/`salt` are the seller's OWN HitPay credentials (plain fields per
+		// current convention; never exposed to clients — reads emit only a
+		// HitpaySummary). Sandbox vs production is inferred from the key prefix
+		// ("test_" → sandbox, verified against a live sandbox key). `enabled` false
+		// pauses the buyer's Pay-now button WITHOUT wiping the keys, so a seller
+		// can switch online payments off and back on instantly. Enabling is
+		// Pro-gated; disabling/clearing never is (downgrade never traps), and an
+		// order's gateway fields keep working on every tier. `connectedAt` stamps
+		// the first save that stored a full credential. See docs/hitpay-gateway.md.
+		hitpay: v.optional(
+			v.object({
+				enabled: v.boolean(),
+				apiKey: v.optional(v.string()),
+				salt: v.optional(v.string()),
+				connectedAt: v.optional(v.number()),
+				// The ACCOUNT's enabled payment methods, as HitPay resolves them for
+				// this key (e.g. ["duitnow","touch_n_go"]). Learned from a throwaway
+				// probe request at connect time (which doubles as key validation)
+				// and refreshed opportunistically from every real checkout mint —
+				// the settings chips and the buyer's Pay-now copy only ever name
+				// rails from this list, so the UI can't promise methods the seller
+				// hasn't enabled. `methodsCheckedAt` set with NO list = the probe
+				// ran and the key was rejected (surfaces "check your key" in the
+				// card). Cleared whenever the stored key changes.
+				paymentMethods: v.optional(v.array(v.string())),
+				methodsCheckedAt: v.optional(v.number()),
+			}),
+		),
 		// Minimum days' notice the retailer needs before a fulfilment date. Drives
 		// the lower bound of the storefront date picker (earliest selectable day =
 		// today + this). Undefined → 0 (see DEFAULT_MIN_NOTICE_DAYS) so same-day is
@@ -451,6 +480,22 @@ export default defineSchema({
 		minNoticeDays: v.optional(v.number()),
 		// DEPRECATED — moved to productVariants.requiresProof (per-variant).
 		requiresProof: v.optional(v.boolean()),
+		// When this product first appeared on a real order (set-if-unset at both
+		// order-create sites — storefront + counter — and never cleared, not even
+		// when that order is cancelled or hard-deleted: "was it ever sold?" is a
+		// question about history, and a cancelled order still has a frozen line
+		// naming this product).
+		//
+		// Its only job is to answer that question in O(1). `products.deletePermanently`
+		// refuses once it's set, because `orders.items[].productId` is a hard
+		// reference alongside the frozen name/price snapshot — erasing a product
+		// that past orders point at would orphan those references (Insights groups
+		// top products by productId and resolves the row for its thumbnail). A
+		// product that HAS sold is archived instead, which keeps its slot under the
+		// product cap. Undefined = never ordered (also the legacy default; the
+		// products:backfillProductOrderedAt one-shot fills existing rows).
+		// See convex/lib/productCap.ts + docs/product-cap.md.
+		orderedAt: v.optional(v.number()),
 		channel: v.union(v.literal("whatsapp")),
 		sortOrder: v.number(),
 		createdAt: v.number(),
@@ -919,6 +964,31 @@ export default defineSchema({
 		// auto-cron skip an order the seller already nudged. Undefined = never
 		// manually reminded. See docs/payment-reminder.md.
 		lastManualReminderAt: v.optional(v.number()),
+		// HitPay hosted-checkout payment request (86eyb6z3a) — the LATEST request
+		// minted for this order. Lazy: created when the buyer taps "Pay now" on the
+		// order page (never at order create), replaced when it expires or the total
+		// changes — so a request always prices the CURRENT total, and an old link
+		// that still gets paid is caught by the receive mutation's amount check
+		// (event + seller email, no auto-receive). `gatewayPaymentId` is the
+		// settled HitPay payment id — the webhook's idempotency key, and the
+		// "paid online" marker on the seller's order detail. HitPay-only today;
+		// widen to a provider union if a second gateway ever lands.
+		gatewayRequestId: v.optional(v.string()),
+		// The most recently REPLACED request id (PR #172 review, finding 1).
+		// HitPay keeps a replaced link payable until its 60-min expiry (we
+		// best-effort DELETE it, but that can fail), so a payment on the old
+		// link must stay correlatable: the webhook resolves this index too and
+		// funnels into receiveGatewayPayment, whose amount check then applies
+		// it (same total — the double-mint race) or records the mismatch event
+		// + seller email (paid a stale price). Only ONE generation is kept —
+		// a third mint drops the oldest id, whose link has at most minutes of
+		// expiry left by then.
+		gatewayPreviousRequestId: v.optional(v.string()),
+		gatewayCheckoutUrl: v.optional(v.string()),
+		gatewayRequestedAmount: v.optional(v.number()), // minor units at mint time
+		gatewayRequestedCurrency: v.optional(v.string()),
+		gatewayRequestedAt: v.optional(v.number()),
+		gatewayPaymentId: v.optional(v.string()),
 		// Mockup/proof approval — a third independent dimension (like payment),
 		// gating the confirmed→packed transition for made-to-order orders.
 		// Undefined = order has no proof-required item (no gate). See
@@ -1012,7 +1082,13 @@ export default defineSchema({
 		.index("by_shortId", ["shortId"])
 		.index("by_tracking_token", ["trackingToken"])
 		.index("by_customer", ["customerId"])
-		.index("by_confirmation_wamid", ["confirmationPushWamid"]),
+		.index("by_confirmation_wamid", ["confirmationPushWamid"])
+		// HitPay webhook correlation: the completion callback identifies itself
+		// only by payment_request_id (mirrors by_confirmation_wamid's role).
+		// The previous-id twin keeps payments on a REPLACED (re-priced /
+		// double-minted) link correlatable instead of silently 200-acked.
+		.index("by_gateway_request", ["gatewayRequestId"])
+		.index("by_gateway_previous_request", ["gatewayPreviousRequestId"]),
 
 	/**
 	 * Retailer-managed library of self-collect pickup locations. Frozen onto

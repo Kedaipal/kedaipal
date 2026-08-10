@@ -180,6 +180,7 @@ import { reserveFoundingRank } from "./foundingMembers";
 import { DEFAULT_LOCALE, type Locale } from "./lib/locale";
 import { MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
 import { sanitizeMinOrderValue } from "./lib/minOrderRules";
+import { deleteProductCascade } from "./lib/productDelete";
 import { rateLimiter } from "./lib/rateLimiter";
 import { capsForPlan, DAY_MS, TRIAL_DAYS } from "./lib/plans";
 import {
@@ -194,6 +195,10 @@ import {
 	sanitizeDeliveryConfig,
 } from "./lib/delivery";
 import { resolveLalamoveCredentials } from "./lib/lalamove";
+import {
+	type HitpayConfig,
+	resolveHitpayCredentials,
+} from "./lib/hitpay";
 import { orderConfirmTemplateName } from "./lib/whatsapp";
 import { ordersThisMonth } from "./subscriptionUsage";
 import {
@@ -309,6 +314,53 @@ function summarizeDeliveryBooking(
 		promptBookOnPacked: booking.promptBookOnPacked === true,
 		deliveryDirection: booking.deliveryDirection ?? "standard",
 		apiKeyHint: booking.apiKey ? booking.apiKey.slice(-4) : undefined,
+	};
+}
+
+// HitPay connection (86eyb6z3a). `null` clears; enabling requires resolvable
+// credentials and is Pro-gated. Secrets never leave the server — reads expose
+// only a summary (see HitpaySummary). `connectedAt` is server-stamped, so the
+// wire validator deliberately omits it.
+const hitpayValidator = v.object({
+	enabled: v.boolean(),
+	// undefined = keep the stored value; empty string = clear (logoStorageId
+	// posture, mirrored from deliveryBooking's key semantics).
+	apiKey: v.optional(v.string()),
+	salt: v.optional(v.string()),
+});
+
+/** Owner-read summary of the HitPay connection — the API key + webhook salt
+ * NEVER cross to the client. BYO-only: `hasCredentials` is "is the seller's
+ * own key pair stored". `mode` is inferred from the key prefix so the settings
+ * card can badge a sandbox connection. */
+export type HitpaySummary = {
+	enabled: boolean;
+	hasCredentials: boolean;
+	mode?: "sandbox" | "production";
+	/** Last 4 chars of the stored API key ("…a1b2") for the settings UI. */
+	apiKeyHint?: string;
+	connectedAt?: number;
+	/** The ACCOUNT's enabled rails (probed at connect, refreshed by mints) —
+	 * the settings chips render from this, never from a hardcoded set.
+	 * `methodsCheckedAt` set with NO list = the probe ran and the key was
+	 * rejected (drives the "check your key" warning). */
+	paymentMethods?: string[];
+	methodsCheckedAt?: number;
+};
+
+function summarizeHitpay(
+	config: HitpayConfig | undefined,
+): HitpaySummary | undefined {
+	if (!config) return undefined;
+	const credentials = resolveHitpayCredentials(config);
+	return {
+		enabled: config.enabled,
+		hasCredentials: credentials !== null,
+		mode: credentials?.mode,
+		apiKeyHint: config.apiKey ? config.apiKey.slice(-4) : undefined,
+		connectedAt: config.connectedAt,
+		paymentMethods: config.paymentMethods,
+		methodsCheckedAt: config.methodsCheckedAt,
 	};
 }
 
@@ -537,6 +589,10 @@ type RetailerPublic = {
 	// Lalamove booking summary (86eyb5hrf) — OWNER-only like the two fields
 	// above, and secret-free (see DeliveryBookingSummary).
 	deliveryBooking?: DeliveryBookingSummary;
+	// HitPay connection summary (86eyb6z3a) — OWNER-only and secret-free like
+	// deliveryBooking. Buyers learn "gateway available" per-order through
+	// orders.getPaymentMethods, never from a retailer payload.
+	hitpay?: HitpaySummary;
 	// Minimum days' notice before a fulfilment date — drives the storefront date
 	// picker's earliest selectable day. Undefined → 0 (same-day allowed).
 	minFulfilmentNoticeDays?: number;
@@ -668,6 +724,7 @@ async function buildRetailerPublic(
 		deliveryConfig: row.deliveryConfig as DeliveryConfig | undefined,
 		businessAddress: row.businessAddress,
 		deliveryBooking: summarizeDeliveryBooking(row.deliveryBooking),
+		hitpay: summarizeHitpay(row.hitpay as HitpayConfig | undefined),
 		minFulfilmentNoticeDays: row.minFulfilmentNoticeDays,
 		minOrderValue: row.minOrderValue,
 		pickupSetupSeen: row.pickupSetupSeen,
@@ -1124,6 +1181,9 @@ export const updateSettings = mutation({
 		// traps); enabling requires business address + resolvable credentials and
 		// is Pro-gated. Undefined = no change.
 		deliveryBooking: v.optional(v.union(deliveryBookingValidator, v.null())),
+		// HitPay connection (86eyb6z3a). `null` clears (un-gated); enabling
+		// requires resolvable credentials and is Pro-gated. Undefined = no change.
+		hitpay: v.optional(v.union(hitpayValidator, v.null())),
 		// Minimum days' notice before a fulfilment date. Clamped to [0, 30].
 		minFulfilmentNoticeDays: v.optional(v.number()),
 		// Store-wide minimum order value (minor units). 0 clears (no minimum);
@@ -1173,6 +1233,7 @@ export const updateSettings = mutation({
 			deliveryConfig: DeliveryConfig | undefined;
 			businessAddress: BusinessAddress | undefined;
 			deliveryBooking: DeliveryBooking | undefined;
+			hitpay: HitpayConfig | undefined;
 			minFulfilmentNoticeDays: number;
 			minOrderValue: number | undefined;
 			updatedAt: number;
@@ -1435,6 +1496,79 @@ export const updateSettings = mutation({
 					}
 				}
 				patch.deliveryBooking = clean;
+			}
+		}
+		if (args.hitpay !== undefined) {
+			if (args.hitpay === null) {
+				// Disconnecting is always allowed (downgrade never traps). An order
+				// with a still-open checkout link degrades gracefully: without the
+				// salt the webhook can't verify, so a late payment surfaces in
+				// HitPay's own dashboard and the seller marks it received by hand —
+				// see docs/hitpay-gateway.md.
+				patch.hitpay = undefined;
+			} else {
+				// Key semantics mirror deliveryBooking: `undefined` = keep the
+				// stored value (toggling enabled never silently wipes keys), empty
+				// string = clear.
+				const prev = retailer.hitpay as HitpayConfig | undefined;
+				const nextApiKey =
+					args.hitpay.apiKey === undefined
+						? prev?.apiKey
+						: args.hitpay.apiKey.trim() || undefined;
+				// A changed key is a different account — its probed method list is
+				// someone else's truth. Drop it and let the probe repopulate; a
+				// pause/resume (key untouched) keeps it.
+				const keyChanged = nextApiKey !== prev?.apiKey;
+				const clean: HitpayConfig = {
+					enabled: args.hitpay.enabled,
+					apiKey: nextApiKey,
+					salt:
+						args.hitpay.salt === undefined
+							? prev?.salt
+							: args.hitpay.salt.trim() || undefined,
+					connectedAt: prev?.connectedAt,
+					paymentMethods: keyChanged ? undefined : prev?.paymentMethods,
+					methodsCheckedAt: keyChanged ? undefined : prev?.methodsCheckedAt,
+				};
+				// Half a credential can neither create checkouts nor verify
+				// webhooks — refuse it at save time with a clear message.
+				if (!!clean.apiKey !== !!clean.salt) {
+					throw new ConvexError(
+						"Enter both the HitPay API key and the salt (or clear both) — they sit side by side on HitPay's API Keys page.",
+					);
+				}
+				const credentials = resolveHitpayCredentials(clean);
+				if (clean.enabled) {
+					// BYO-only: the seller's own key pair is required — Kedaipal has
+					// no HitPay account in the money path.
+					if (!credentials) {
+						throw new ConvexError(
+							"Paste your HitPay API key and salt to turn on online payments.",
+						);
+					}
+					// Pro gate on ENABLING (disabling/clearing stays un-gated; admin
+					// act-as bypasses for white-glove setup).
+					if (!access.actingAsAdmin) {
+						await assertPlanFeature(ctx, retailer._id, "onlinePayments");
+					}
+				}
+				// First save that stores a full credential stamps the connection
+				// time; clearing the credential clears the stamp with it.
+				clean.connectedAt = credentials
+					? (prev?.connectedAt ?? Date.now())
+					: undefined;
+				patch.hitpay = clean;
+				// Probe the account (validates the key + learns its enabled payment
+				// methods) whenever a credential is stored and the truth is missing
+				// or belongs to a replaced key. Post-commit via the scheduler, so
+				// the action reads the row this save writes.
+				if (credentials && clean.methodsCheckedAt === undefined) {
+					await ctx.scheduler.runAfter(
+						0,
+						internal.hitpay.refreshAccountMethods,
+						{ retailerId: retailer._id },
+					);
+				}
 			}
 		}
 		// Refuse clearing the business address out from under a live radius
@@ -1909,23 +2043,16 @@ export const deleteUser = internalMutation({
 			await ctx.db.delete(order._id);
 		}
 
-		// Products → their variants (+ variant images) and image files.
+		// Products → their variants (+ variant images), image files and category
+		// memberships, via the shared cascade so this can't drift from the
+		// surgical products.deletePermanently. Category `productCount` is
+		// deliberately NOT maintained here — the category rows themselves are
+		// deleted a few lines below, so decrementing them first is pure waste.
 		const products = await ctx.db
 			.query("products")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 			.collect();
-		for (const product of products) {
-			const variants = await ctx.db
-				.query("productVariants")
-				.withIndex("by_product", (q) => q.eq("productId", product._id))
-				.collect();
-			for (const variant of variants) {
-				for (const imageId of variant.imageStorageIds) await deleteFile(imageId);
-				await ctx.db.delete(variant._id);
-			}
-			for (const imageId of product.imageStorageIds) await deleteFile(imageId);
-			await ctx.db.delete(product._id);
-		}
+		for (const product of products) await deleteProductCascade(ctx, product);
 
 		// Categories + product↔category junction rows (+ tile images).
 		const junctionRows = await ctx.db

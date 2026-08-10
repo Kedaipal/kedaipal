@@ -65,6 +65,7 @@ import {
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
+import { CopyButton } from "../components/ui/copy-button";
 import {
 	Dialog,
 	DialogContent,
@@ -77,6 +78,7 @@ import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
 import { formatPhone, orderCustomerLabel } from "../lib/customer";
 import {
@@ -315,10 +317,15 @@ function OrderDetailRoute() {
 		void markSeen({ orderId }).catch(() => {});
 	}, [orderId, alreadySeen, markSeen]);
 	// Permanent hard delete is admin-only (Kedaipal support); a plain seller only
-	// ever cancels. Hide the danger action unless this is an admin act-as session —
-	// the server enforces the same rule, so this is discoverability, not the guard.
+	// ever cancels. `canHardDeleteOrders` mirrors the server gate and is shared with
+	// the inbox bulk bar so the two surfaces can't drift — this is discoverability,
+	// the server is the guard.
 	const retailer = useDashboardRetailer();
-	const canHardDelete = retailer?.actingAsAdmin === true;
+	const amIAdmin = useQuery(api.billing.amIAdmin);
+	const canHardDelete = canHardDeleteOrders({
+		actingAsAdmin: retailer?.actingAsAdmin,
+		amIAdmin,
+	});
 	const proofUrl = useQuery(
 		api.orders.getPaymentProofUrl,
 		order?.paymentProofStorageId ? { orderId: order._id } : "skip",
@@ -1075,19 +1082,44 @@ function OrderDetailRoute() {
 			{/* Received → read-only confirmation. */}
 			{paymentStatus === "received" ? (
 				<section className="flex items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4">
-					<BadgeCheck className="size-5 text-emerald-700" />
+					<BadgeCheck className="size-5 shrink-0 text-emerald-700" />
 					<div className="min-w-0 flex-1">
 						<p className="text-xs font-semibold uppercase tracking-widest text-emerald-800">
 							Payment received
 						</p>
 						<p className="text-sm text-emerald-900">
-							{order.paymentReceivedAt
-								? `Confirmed ${formatRelative(order.paymentReceivedAt)}`
-								: "Confirmed by you"}
+							{order.gatewayPaymentId
+								? // Auto-confirmed by the HitPay webhook (86eyb6z3a) — say so,
+									// since nobody on the team pressed the button.
+									`Paid online via HitPay${order.paymentReceivedAt ? ` ${formatRelative(order.paymentReceivedAt)}` : ""}`
+								: order.paymentReceivedAt
+									? `Confirmed ${formatRelative(order.paymentReceivedAt)}`
+									: "Confirmed by you"}
 							{order.paymentMethod
 								? ` · ${paymentMethodLabel(order.paymentMethod)}`
 								: ""}
 						</p>
+						{order.gatewayPaymentId ? (
+							// The seller is the side that pastes this into HitPay's
+							// dashboard search (to refund or reconcile), so the copy
+							// affordance belongs here at least as much as on the buyer's
+							// page — it was the buyer-only half of "one number both sides
+							// quote". `break-all` over `truncate`: a half-shown reference
+							// can't be matched against a dashboard entry.
+							<div className="mt-1 flex items-start justify-between gap-2">
+								<p className="min-w-0 break-all font-mono text-xs text-emerald-800/80">
+									Ref {order.gatewayPaymentId}
+								</p>
+								<CopyButton
+									value={order.gatewayPaymentId}
+									ariaLabel="Copy payment reference"
+									successMessage="Payment reference copied"
+									// Layout only — no colour override, so the primitive's
+									// own "Copied" green still lands on tap.
+									className="-my-2"
+								/>
+							</div>
+						) : null}
 					</div>
 				</section>
 			) : null}
@@ -1531,9 +1563,9 @@ function OrderDetailRoute() {
 								{pending === "cancel" ? "Updating…" : "Cancel Order"}
 							</Button>
 						) : null}
-						{/* Permanent hard delete — admin act-as only (Kedaipal support).
-						    Hidden for a plain seller, who cancels instead; the server
-						    enforces the same rule. Works in any status; irreversible. */}
+						{/* Permanent hard delete — Kedaipal admins only (own store or
+						    act-as). Hidden for a plain seller, who cancels instead; the
+						    server enforces the same rule. Any status; irreversible. */}
 						{canHardDelete ? (
 							<>
 								<Button
@@ -1546,8 +1578,9 @@ function OrderDetailRoute() {
 									{pending === "delete" ? "Deleting…" : "Delete permanently"}
 								</Button>
 								<p className="border-t border-border bg-muted/30 px-4 py-2.5 text-[11px] leading-snug text-muted-foreground">
-									Deleting removes this order and its records for good — this
-									can't be undone.
+									Kedaipal admin only — sellers don't see this. Deleting removes
+									this order and its records for good, and is recorded in the
+									admin log.
 								</p>
 							</>
 						) : null}

@@ -233,10 +233,12 @@ describe("orders", () => {
 				],
 			});
 		});
-		const methods = await t.query(api.orders.getPaymentMethods, { token: await tk(t, shortId) });
-		expect(methods).toHaveLength(2);
-		expect(methods?.[0].label).toBe("Maybank");
-		expect(methods?.[1].bankAccountNumber).toBe("8001-2233");
+		const result = await t.query(api.orders.getPaymentMethods, { token: await tk(t, shortId) });
+		expect(result?.methods).toHaveLength(2);
+		expect(result?.methods[0].label).toBe("Maybank");
+		expect(result?.methods[1].bankAccountNumber).toBe("8001-2233");
+		// No HitPay connection on this store → the gateway path is off.
+		expect(result?.gatewayAvailable).toBe(false);
 
 		// Legacy single object is still read (synthesized into one method).
 		await t.run(async (ctx) => {
@@ -249,9 +251,9 @@ describe("orders", () => {
 			});
 		});
 		const legacy = await t.query(api.orders.getPaymentMethods, { token: await tk(t, shortId) });
-		expect(legacy).toHaveLength(1);
-		expect(legacy?.[0].label).toBe("Hong Leong");
-		expect(legacy?.[0].bankAccountNumber).toBe("9000-1111"); // trimmed
+		expect(legacy?.methods).toHaveLength(1);
+		expect(legacy?.methods[0].label).toBe("Hong Leong");
+		expect(legacy?.methods[0].bankAccountNumber).toBe("9000-1111"); // trimmed
 
 		// Unknown order → null.
 		expect(
@@ -3673,6 +3675,42 @@ describe("orders — bulk hard delete", () => {
 		}
 	});
 
+	test("audits one row per erased order, filed under that order's own store", async () => {
+		// The old code wrote ONE row using whichever access happened to be last in
+		// the loop, so a batch spanning two stores filed the whole erase under the
+		// second store and named no orders at all. Per-order rows are correct across
+		// stores by construction (86eyhz189).
+		const t = setup();
+		const rA = await seedRetailer(t, USER_A);
+		const rB = await seedRetailer(t, USER_B);
+		const pA = await seedProduct(t, USER_A, rA._id, { stock: 100 });
+		const pB = await seedProduct(t, USER_B, rB._id, { stock: 100 });
+		const aIds = [await mk(t, rA._id, pA), await mk(t, rA._id, pA)];
+		const bIds = [await mk(t, rB._id, pB)];
+
+		await t
+			.withIdentity({ subject: ADMIN })
+			.mutation(api.orders.bulkDeleteOrders, { orderIds: [...aIds, ...bIds] });
+
+		const rowsFor = (retailerId: Id<"retailers">) =>
+			t.run((ctx) =>
+				ctx.db
+					.query("adminAuditLog")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+					.collect(),
+			);
+		const auditA = await rowsFor(rA._id);
+		const auditB = await rowsFor(rB._id);
+		expect(auditA.map((r) => r.targetId).sort()).toEqual([...aIds].sort());
+		expect(auditB.map((r) => r.targetId)).toEqual(bIds);
+		for (const row of [...auditA, ...auditB]) {
+			expect(row).toMatchObject({
+				adminUserId: ADMIN,
+				action: "orders.bulkDeleteOrders",
+			});
+		}
+	});
+
 	test("a plain owner cannot bulk delete — Forbidden, orders untouched", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
@@ -3749,16 +3787,22 @@ describe("orders — hard delete (admin owns the store)", () => {
 			.mutation(api.orders.deleteOrder, { orderId });
 		expect(await t.run((ctx) => ctx.db.get(orderId))).toBeNull();
 
-		// NOT audited: erasing your own store's order is an owner write
-		// (actingAsAdmin:false), and the audit log traces cross-store white-glove
-		// writes only — logAdminAction no-ops here by design.
+		// AUDITED even though this is an owner write (actingAsAdmin:false). The
+		// ordinary `logAdminAction` no-ops here — an irreversible erase uses
+		// `logDestructiveAdminAction` precisely so ownership can't suppress the
+		// trace, since the deleted row can't be asked who removed it (86eyhz189).
 		const audit = await t.run((ctx) =>
 			ctx.db
 				.query("adminAuditLog")
 				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
 				.collect(),
 		);
-		expect(audit).toHaveLength(0);
+		expect(audit).toHaveLength(1);
+		expect(audit[0]).toMatchObject({
+			adminUserId: USER_A,
+			action: "orders.hardDelete",
+			targetId: orderId,
+		});
 	});
 
 	test("an admin can bulk hard-delete orders in a store they own", async () => {
@@ -3776,6 +3820,21 @@ describe("orders — hard delete (admin owns the store)", () => {
 		for (const id of ids) {
 			expect(await t.run((ctx) => ctx.db.get(id))).toBeNull();
 		}
+
+		// One audit row PER erased order (not one per batch), own-store included —
+		// so the log answers WHICH orders are gone, not just how many.
+		const audit = await t.run((ctx) =>
+			ctx.db
+				.query("adminAuditLog")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.collect(),
+		);
+		expect(audit).toHaveLength(2);
+		expect(audit.map((r) => r.action)).toEqual([
+			"orders.bulkDeleteOrders",
+			"orders.bulkDeleteOrders",
+		]);
+		expect(audit.map((r) => r.targetId).sort()).toEqual([...ids].sort());
 	});
 });
 

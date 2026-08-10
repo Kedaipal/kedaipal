@@ -20,6 +20,7 @@ import {
 	moveOrderToPhone,
 } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
+import { stampProductsOrdered } from "./lib/productOrdered";
 import { assertValidAddress } from "./lib/address";
 import { requireCustomerName } from "./lib/customer";
 import { assertPlanFeature } from "./subscriptions";
@@ -31,6 +32,7 @@ import {
 	adminUserIds,
 	isAdmin,
 	logAdminAction,
+	logDestructiveAdminAction,
 	type RetailerAccess,
 	requireRetailerAccess,
 } from "./lib/auth";
@@ -91,7 +93,15 @@ import {
 	orderToReceiptData,
 } from "./lib/pdf/document";
 import { buildOrderReceiptPdf } from "./lib/pdf/render";
-import { orderPaymentMethodValidator } from "./lib/paymentMethod";
+import {
+	type OrderPaymentMethod,
+	orderPaymentMethodValidator,
+} from "./lib/paymentMethod";
+import {
+	HITPAY_MIN_AMOUNT_SEN,
+	hitpayCheckoutConfigured,
+	mapHitpayPaymentType,
+} from "./lib/hitpay";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidMyMobile } from "./lib/slug";
 import { orderConfirmTemplateName } from "./lib/whatsapp";
@@ -302,7 +312,7 @@ type OrderItemSnapshot = {
  * shortId-as-capability (shortId is ~1M combinations, enumerable). See
  * docs/infra-cost-scaling.md §6.
  */
-async function orderByToken(
+export async function orderByToken(
 	ctx: QueryCtx | MutationCtx,
 	trackingToken: string,
 ): Promise<Doc<"orders"> | null> {
@@ -1074,6 +1084,10 @@ export const create = mutation({
 		// nudge banner, never a block on this public mutation).
 		await recordOrderCreated(ctx, args.retailerId, now);
 
+		// Mark every product on this order as having sold, so it can no longer be
+		// permanently deleted out from under the order lines that now reference it.
+		await stampProductsOrdered(ctx, snapshotItems, now);
+
 		// Link to the aggregated customer record when we already know the phone.
 		// Phone-less orders (link-in-bio checkout) are linked later when the
 		// shopper messages the WhatsApp number — see confirmOrderFromWhatsApp.
@@ -1656,13 +1670,34 @@ export const getPaymentMethods = query({
 	handler: async (
 		ctx,
 		{ token },
-	): Promise<Array<PaymentMethod & { qrImageUrl?: string }> | null> => {
+	): Promise<{
+		methods: Array<PaymentMethod & { qrImageUrl?: string }>;
+		// Whether THIS order can be paid through the seller's HitPay checkout
+		// right now (86eyb6z3a) — connection on + credentials stored + payment
+		// still open + both price holds clear + total within HitPay's floor.
+		// Server-side truth for the buyer's "Pay now" button; createCheckout
+		// re-checks everything, so this is presentation, not authorization.
+		gatewayAvailable: boolean;
+		// The ACCOUNT's enabled rails (probed truth, see schema) so the Pay-now
+		// explainer names only methods this seller actually offers. Undefined =
+		// not yet probed → the page uses a generic "bank or eWallet" line.
+		gatewayMethods?: string[];
+	} | null> => {
 		const order = await orderByToken(ctx, token);
 		if (!order) return null;
 		const retailer = await ctx.db.get(order.retailerId);
 		if (!retailer) return null;
+
+		const gatewayAvailable =
+			hitpayCheckoutConfigured(retailer.hitpay) &&
+			order.status !== "cancelled" &&
+			(order.paymentStatus ?? "unpaid") === "unpaid" &&
+			!isMockupGateClosed(order) &&
+			order.deliveryFeePending !== true &&
+			order.total >= HITPAY_MIN_AMOUNT_SEN;
+
 		const methods = resolvePaymentMethods(retailer);
-		if (methods.length === 0) return null;
+		if (methods.length === 0 && !gatewayAvailable) return null;
 
 		const resolved: Array<PaymentMethod & { qrImageUrl?: string }> = [];
 		for (const m of methods) {
@@ -1673,7 +1708,13 @@ export const getPaymentMethods = query({
 			}
 			resolved.push({ ...m, qrImageUrl });
 		}
-		return resolved;
+		return {
+			methods: resolved,
+			gatewayAvailable,
+			gatewayMethods: gatewayAvailable
+				? retailer.hitpay?.paymentMethods
+				: undefined,
+		};
 	},
 });
 
@@ -2565,8 +2606,11 @@ async function deleteOrderCascade(
  * — an admin can erase orders in ANY store, including one they personally own
  * (which resolves via the owner branch, so `actingAsAdmin` is false there). The
  * dashboard hides the action for sellers, but this guard — not the hidden UI —
- * is the real boundary. Admin act-as writes (a store they don't own) are audited.
- * ClickUp `86eyaqzpd` (admin-only restriction) atop `86ey8fr8t` (the erase).
+ * is the real boundary. EVERY erase is audited, including one in a store the
+ * admin owns (`logDestructiveAdminAction`) — the deleted row can't be asked who
+ * removed it, so the trace has to be unconditional.
+ * ClickUp `86eyaqzpd` (admin-only restriction) atop `86ey8fr8t` (the erase),
+ * `86eyhz189` (always audited).
  */
 export const deleteOrder = mutation({
 	args: { orderId: v.id("orders") },
@@ -2574,20 +2618,27 @@ export const deleteOrder = mutation({
 		const { order, access } = await requireOrderAccess(ctx, orderId);
 		if (!(await isAdmin(ctx))) throw new Error("Forbidden");
 		await deleteOrderCascade(ctx, order);
-		await logAdminAction(ctx, access, "orders.hardDelete", orderId);
+		await logDestructiveAdminAction(ctx, access, "orders.hardDelete", orderId);
 	},
 });
 
 /**
  * Bulk hard-delete (the inbox multi-select) — **Kedaipal admin only**, same
- * policy as the single `deleteOrder`. Capped at 100/batch, one batch audit row.
+ * policy as the single `deleteOrder`. Capped at 100/batch.
  * No plan gate: permanent erasure is an admin ops action, not a paid feature.
  *
  * The admin gate is checked ONCE up front (`isAdmin` — one caller identity for
  * the whole batch, cheaper than per-order and ownership-agnostic so an admin can
  * bulk-erase in a store they own too). The per-order `requireRetailerAccess`
- * stays: it confirms each order's retailer exists and supplies `batchAccess` for
- * the audit row (an admin passes it for every store, so it never rejects here).
+ * stays: it confirms each order's retailer exists and supplies the access record
+ * for that order's audit row (an admin passes it for every store, so it never
+ * rejects here).
+ *
+ * Audit is ONE ROW PER ERASED ORDER, not one per batch (86eyhz189). A batch row
+ * could only carry a single `retailerId`, so a batch spanning two stores would
+ * file the whole erase under whichever store happened to be last — and a bare
+ * count answers "how many" when the question an irreversible delete raises is
+ * "WHICH order is gone". Per-order rows are correct across stores by construction.
  */
 export const bulkDeleteOrders = mutation({
 	args: { orderIds: v.array(v.id("orders")) },
@@ -2598,16 +2649,19 @@ export const bulkDeleteOrders = mutation({
 		if (!(await isAdmin(ctx))) throw new Error("Forbidden");
 
 		let deleted = 0;
-		let batchAccess: RetailerAccess | undefined;
 		for (const orderId of orderIds) {
 			const order = await ctx.db.get(orderId);
 			if (!order) throw new ConvexError("Order not found");
-			batchAccess = await requireRetailerAccess(ctx, order.retailerId);
+			const access = await requireRetailerAccess(ctx, order.retailerId);
 			await deleteOrderCascade(ctx, order);
+			await logDestructiveAdminAction(
+				ctx,
+				access,
+				"orders.bulkDeleteOrders",
+				orderId,
+			);
 			deleted++;
 		}
-		if (batchAccess)
-			await logAdminAction(ctx, batchAccess, "orders.bulkDeleteOrders");
 		return { deleted };
 	},
 });
@@ -3171,6 +3225,74 @@ export const claimPayment = mutation({
 });
 
 /**
+ * The one author of the payment-received state change, shared by the seller's
+ * `markPaymentReceived` and the HitPay gateway's webhook receive (86eyb6z3a) so
+ * the two paths can never drift: paymentStatus → received, pending orders
+ * auto-confirm (+ the activation stamp), the orderEvents row is written, and
+ * `notifyPaymentReceived` is scheduled — deliberately NOT `notifyStatusChange`,
+ * so an auto-confirm sends exactly one WhatsApp message.
+ *
+ * Callers own their guards: the seller path throws on the mockup/delivery-fee
+ * holds (the money hasn't moved yet, so refusing is safe); the gateway path
+ * enforces those holds at CHECKOUT-CREATION time instead, because by webhook
+ * time the buyer's money has already moved and refusing to record it would be
+ * a lie. Callers also own idempotency (skip when already `received`).
+ */
+async function applyPaymentReceived(
+	ctx: MutationCtx,
+	order: Doc<"orders">,
+	opts: {
+		now: number;
+		paymentMethod?: OrderPaymentMethod;
+		/** Detail folded into the non-auto-confirm event note. */
+		noteDetail?: string;
+		/** Extra fields written in the same patch (gateway ids). */
+		extraPatch?: Partial<Doc<"orders">>;
+	},
+): Promise<void> {
+	const { now, paymentMethod, noteDetail, extraPatch } = opts;
+	const shouldAutoConfirm = order.status === "pending";
+
+	const patch: Partial<Doc<"orders">> = {
+		...extraPatch,
+		paymentStatus: "received",
+		paymentReceivedAt: now,
+		updatedAt: now,
+	};
+	if (paymentMethod) patch.paymentMethod = paymentMethod;
+	if (shouldAutoConfirm) {
+		patch.status = "confirmed";
+	}
+	await ctx.db.patch(order._id, patch);
+
+	if (shouldAutoConfirm) {
+		await ctx.db.insert("orderEvents", {
+			orderId: order._id,
+			status: "confirmed",
+			note: "payment_received_auto_confirm",
+			createdAt: now,
+		});
+		// First order reaching confirmed activates the store (one-time stamp).
+		await stampRetailerActivation(ctx, order.retailerId, now);
+	} else {
+		await ctx.db.insert("orderEvents", {
+			orderId: order._id,
+			status: order.status,
+			note: noteDetail && noteDetail.length > 0
+				? `payment_received: ${noteDetail}`
+				: "payment_received",
+			createdAt: now,
+		});
+	}
+
+	await ctx.scheduler.runAfter(
+		0,
+		internal.whatsapp.notifyPaymentReceived,
+		{ orderId: order._id },
+	);
+}
+
+/**
  * Retailer-only mutation: mark that the payment has landed in the bank app.
  * Auto-bumps `pending → confirmed` (the new payment-received WhatsApp message
  * already covers the shopper-facing handshake, so this skips the regular
@@ -3209,47 +3331,148 @@ export const markPaymentReceived = mutation({
 			);
 		}
 
-		const now = Date.now();
-		const trimmedNote = note?.trim();
-		const shouldAutoConfirm = order.status === "pending";
+		await applyPaymentReceived(ctx, order, {
+			now: Date.now(),
+			paymentMethod,
+			noteDetail: note?.trim(),
+		});
+		await logAdminAction(ctx, access, "orders.confirmPayment", orderId);
+	},
+});
 
-		const patch: Partial<Doc<"orders">> = {
-			paymentStatus: "received",
-			paymentReceivedAt: now,
-			updatedAt: now,
-		};
-		if (paymentMethod) patch.paymentMethod = paymentMethod;
-		if (shouldAutoConfirm) {
-			patch.status = "confirmed";
+/**
+ * Internal receive path for a settled HitPay charge (86eyb6z3a) — called by
+ * the `/webhook/hitpay` route and the redirect-return reconcile action, both
+ * of which have already VERIFIED the event (HMAC / authenticated status
+ * fetch). This mutation is the single judge of what an authentic event is
+ * allowed to do:
+ *  - idempotent by `gatewayPaymentId` (duplicate deliveries no-op);
+ *  - the paid amount+currency must echo the order's CURRENT total — a stale
+ *    checkout link paid after a re-price records an event + emails the seller
+ *    instead of auto-receiving (the money moved; a human reconciles it);
+ *  - otherwise it applies the exact `markPaymentReceived` semantics via
+ *    `applyPaymentReceived` (auto-confirm, activation, WhatsApp receipt).
+ * Deliberately NO hold guards here: checkout creation enforces them, and
+ * money that has already moved must never be silently dropped.
+ */
+export const receiveGatewayPayment = internalMutation({
+	args: {
+		orderId: v.id("orders"),
+		paymentId: v.string(),
+		amountSen: v.number(),
+		currency: v.string(),
+		paymentType: v.optional(v.string()),
+	},
+	handler: async (
+		ctx,
+		{ orderId, paymentId, amountSen, currency, paymentType },
+	): Promise<{
+		applied: boolean;
+		reason?: "duplicate" | "amount_mismatch" | "cancelled";
+	}> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) return { applied: false, reason: "duplicate" };
+		if (
+			order.gatewayPaymentId === paymentId ||
+			order.paymentStatus === "received"
+		) {
+			// Duplicate webhook delivery, or the seller already marked it by hand.
+			return { applied: false, reason: "duplicate" };
 		}
-		await ctx.db.patch(orderId, patch);
 
-		if (shouldAutoConfirm) {
-			await ctx.db.insert("orderEvents", {
-				orderId,
-				status: "confirmed",
-				note: "payment_received_auto_confirm",
-				createdAt: now,
-			});
-			// First order reaching confirmed activates the store (one-time stamp).
-			await stampRetailerActivation(ctx, order.retailerId, now);
-		} else {
+		const now = Date.now();
+		if (order.status === "cancelled") {
+			// Pay-after-cancel (PR #172 review, finding 2): createCheckout refuses
+			// cancelled orders, but a link minted BEFORE the cancel stays payable
+			// at HitPay for up to an hour. An authentic late payment must never
+			// resurrect the order or WhatsApp the buyer "payment received" — it
+			// needs a human and a refund. Event + seller email, no state flip.
 			await ctx.db.insert("orderEvents", {
 				orderId,
 				status: order.status,
-				note: trimmedNote && trimmedNote.length > 0
-					? `payment_received: ${trimmedNote}`
-					: "payment_received",
+				note: `gateway_paid_after_cancel: paid ${(amountSen / 100).toFixed(2)} ${currency.toUpperCase()} on the cancelled order (hitpay ${paymentId})`,
 				createdAt: now,
 			});
+			await ctx.scheduler.runAfter(
+				0,
+				internal.email.notifyGatewayPaymentIssue,
+				{
+					orderId,
+					kind: "paid_after_cancel",
+					paidAmountSen: amountSen,
+					paidCurrency: currency.toUpperCase(),
+					paymentId,
+				},
+			);
+			return { applied: false, reason: "cancelled" };
+		}
+		if (
+			amountSen !== order.total ||
+			currency.toUpperCase() !== order.currency.toUpperCase()
+		) {
+			// Authentic payment, wrong number — the buyer paid an outdated checkout
+			// link (total re-priced after mint) or a tampered/foreign request.
+			// Record + tell the seller; never auto-receive a mismatched amount.
+			await ctx.db.insert("orderEvents", {
+				orderId,
+				status: order.status,
+				note: `gateway_amount_mismatch: paid ${(amountSen / 100).toFixed(2)} ${currency.toUpperCase()}, order total ${(order.total / 100).toFixed(2)} ${order.currency.toUpperCase()} (hitpay ${paymentId})`,
+				createdAt: now,
+			});
+			await ctx.scheduler.runAfter(
+				0,
+				internal.email.notifyGatewayPaymentIssue,
+				{
+					orderId,
+					kind: "amount_mismatch",
+					paidAmountSen: amountSen,
+					paidCurrency: currency.toUpperCase(),
+					paymentId,
+				},
+			);
+			return { applied: false, reason: "amount_mismatch" };
 		}
 
-		await ctx.scheduler.runAfter(
-			0,
-			internal.whatsapp.notifyPaymentReceived,
-			{ orderId },
-		);
-		await logAdminAction(ctx, access, "orders.confirmPayment", orderId);
+		await applyPaymentReceived(ctx, order, {
+			now,
+			// A gateway settlement is always a known settlement — unknown rails
+			// stamp "other" rather than staying blank (see mapHitpayPaymentType).
+			paymentMethod: mapHitpayPaymentType(paymentType) ?? "other",
+			noteDetail: `hitpay${paymentType ? ` (${paymentType})` : ""}`,
+			extraPatch: {
+				gatewayPaymentId: paymentId,
+				// The HitPay payment id doubles as the transfer reference the seller
+				// can look up in their HitPay dashboard.
+				paymentReference: paymentId,
+			},
+		});
+		return { applied: true };
+	},
+});
+
+/**
+ * Late method enrichment for webhook-received payments (86eyb6z3a): the v1
+ * completion webhook carries no payment_type, so the receive stamps "other"
+ * and the reconcile action follows up with the status fetch's real rail.
+ * Only upgrades an "other" stamp on the SAME settled payment — never rewrites
+ * a seller's hand-picked method.
+ */
+export const recordGatewayMethod = internalMutation({
+	args: {
+		orderId: v.id("orders"),
+		paymentId: v.string(),
+		paymentType: v.string(),
+	},
+	handler: async (ctx, { orderId, paymentId, paymentType }): Promise<void> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) return;
+		if (order.gatewayPaymentId !== paymentId) return;
+		if (order.paymentMethod !== undefined && order.paymentMethod !== "other") {
+			return;
+		}
+		const method = mapHitpayPaymentType(paymentType);
+		if (!method || method === order.paymentMethod) return;
+		await ctx.db.patch(orderId, { paymentMethod: method });
 	},
 });
 
