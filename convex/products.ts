@@ -1110,6 +1110,14 @@ export const deletePermanently = mutation({
 			await bumpCategoryCountsForProduct(ctx, productId, -1);
 
 		await deleteProductCascade(ctx, product);
+		// `logAdminAction` (owner writes not logged), NOT the always-audit
+		// `logDestructiveAdminAction` that `orders.hardDelete` uses — deliberate.
+		// That one exists because an order erase is admin-only and destroys a
+		// financial record, so it must always answer "who did this?". This
+		// mutation is owner-or-admin by design, so always-auditing would file
+		// every seller's routine typo cleanup into `adminAuditLog` under an
+		// `adminUserId` that isn't an admin. A never-sold product also leaves no
+		// history to reconstruct — that's precisely what `orderedAt` guarantees.
 		await logAdminAction(ctx, access, "products.deletePermanently", productId);
 	},
 });
