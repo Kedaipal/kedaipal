@@ -18,10 +18,18 @@ Overrides from `$ARGUMENTS`: `2 weeks`, `since 2026-07-20`, a specific date. Say
 State lives at `~/.claude/kedaipal-recap/state.json` (`mkdir -p` on first run):
 
 ```json
-{ "lastRun": "2026-08-03", "windowEnd": "2026-08-03", "artifactUrl": "https://claude.ai/…" }
+{
+  "lastRun": "2026-08-10",
+  "windowEnd": "2026-08-10",
+  "briefs": { "2026-08-03": "https://claude.ai/…", "2026-08-10": "https://claude.ai/…" }
+}
 ```
 
-Read it first. If `lastRun` exists and the user didn't override, prefer **since `windowEnd`** so nothing is double-reported across runs — but never a window shorter than 3 days (just report the short window honestly). After publishing, write `lastRun`, `windowEnd`, and `artifactUrl` back. **Reuse `artifactUrl`** by passing it as `url` so the link stays stable week to week.
+Read it first. If `lastRun` exists and the user didn't override, prefer **since `windowEnd`** so nothing is double-reported across runs — but never a window shorter than 3 days (just report the short window honestly). After publishing, write `lastRun`, `windowEnd`, and the new `briefs` entry back.
+
+**Publish each week to its own URL** — a dated file path (`weekly-recap-<YYYY-MM-DD>.html`) mints a new artifact. Do *not* pass last week's URL as `url`: a weekly brief is a dated record of that week, and republishing over it destroys the archive. Link the previous week's URL from the footer instead, so the run reads as a series.
+
+Build the page fresh every run. The scratchpad is session-scoped and is cleaned between sessions — last week's HTML will not be there, so never plan on editing it.
 
 ## Gather — run these in parallel
 
