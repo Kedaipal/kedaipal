@@ -10,6 +10,7 @@ import { Download, FileSpreadsheet, Info, Upload } from "lucide-react";
 import { type ChangeEvent, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
+import { fitsWithinProductCap } from "../../convex/lib/productCap";
 import { PageHeader } from "../components/dashboard/page-header";
 import { Button } from "../components/ui/button";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
@@ -82,6 +83,7 @@ const SCHEMA_DOCS: Array<{ column: string; required: boolean; notes: string }> =
 type PreviewResult = FunctionReturnType<typeof api.products.bulkUpsertPreview>;
 type PlanEntry = PreviewResult["plan"][number];
 type PreviewSummary = PreviewResult["summary"];
+type PreviewCap = PreviewResult["cap"];
 
 /** Map a parsed grouped product to the bulkUpsert API shape. */
 function toApiProduct(p: GroupedProductImport) {
@@ -134,6 +136,7 @@ function ImportProductsRoute() {
 	const [preview, setPreview] = useState<{
 		plan: PlanEntry[];
 		summary: PreviewSummary;
+		cap: PreviewCap;
 	} | null>(null);
 
 	if (!retailer) return null;
@@ -174,6 +177,10 @@ function ImportProductsRoute() {
 				variants: 0,
 				autoFilled: 0,
 			};
+			// Identical on every chunk (a preview writes nothing), so the last one
+			// stands for all — kept out of the summary because it describes the
+			// STORE, not the sheet.
+			let cap: PreviewCap | null = null;
 			for (const chunk of chunkByVariants(parsed.products)) {
 				const res = await convex.query(api.products.bulkUpsertPreview, {
 					retailerId: retailer._id,
@@ -185,8 +192,9 @@ function ImportProductsRoute() {
 				summary.updates += res.summary.updates;
 				summary.variants += res.summary.variants;
 				summary.autoFilled += res.summary.autoFilled;
+				cap = res.cap;
 			}
-			setPreview({ plan, summary });
+			if (cap) setPreview({ plan, summary, cap });
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -217,6 +225,14 @@ function ImportProductsRoute() {
 	const hasParseErrors = (parsed?.errorRows.length ?? 0) > 0;
 	const hasPreviewErrors =
 		preview?.plan.some((p) => p.action === "error") ?? false;
+	// Only the NEW products consume slots — a sheet that just re-prices existing
+	// ones never touches the cap. Blocked client-side rather than left to the
+	// server because the import is chunked into several bulkUpsert calls: without
+	// this, an oversized sheet would apply the first chunks and then throw
+	// partway, leaving the catalog half-imported.
+	const capOverflow =
+		preview !== null &&
+		!fitsWithinProductCap(preview.cap, preview.summary.creates);
 	const canPreview =
 		parsed !== null &&
 		parsed.products.length > 0 &&
@@ -349,6 +365,28 @@ function ImportProductsRoute() {
 				<PreviewSection plan={preview.plan} summary={preview.summary} />
 			) : null}
 
+			{/* The cap is only mentioned when it actually bears on this import —
+			    a 12-product shop adding 5 more hears nothing. */}
+			{capOverflow ? (
+				<section className="rounded-2xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/50">
+					<p className="text-sm font-semibold">
+						This import doesn't fit your {preview?.cap.cap}-product limit
+					</p>
+					<p className="mt-1 text-[13px] leading-snug text-muted-foreground">
+						Your shop holds {preview?.cap.used} of {preview?.cap.cap} products
+						(archived ones count), so there's room for{" "}
+						{preview?.cap.remaining} more — but this sheet adds{" "}
+						{preview?.summary.creates}. Delete products you no longer sell, or
+						take rows out of the sheet.
+					</p>
+				</section>
+			) : preview && preview.summary.creates > 0 && preview.cap.showCounter ? (
+				<p className="text-[13px] text-muted-foreground">
+					Uses {preview.summary.creates} of your {preview.cap.remaining}{" "}
+					remaining product slots.
+				</p>
+			) : null}
+
 			{parsed && parsed.products.length > 0 && !preview ? (
 				<Button
 					type="button"
@@ -367,7 +405,7 @@ function ImportProductsRoute() {
 					<Button
 						type="button"
 						onClick={handleConfirm}
-						disabled={importing || hasPreviewErrors}
+						disabled={importing || hasPreviewErrors || capOverflow}
 						className="h-12 flex-1"
 					>
 						{importing
