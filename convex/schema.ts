@@ -25,6 +25,18 @@ export default defineSchema({
 		// When unset, the retailer simply receives no email notifications —
 		// behaviour mirrors the WhatsApp waPhone field above.
 		notifyEmail: v.optional(v.string()),
+		// Seller WhatsApp order alerts (86eyhw9zy): the MY mobile that receives
+		// them. Deliberately SEPARATE from `waPhone` (the buyer-facing store
+		// contact / wa.me fallback / Lalamove sender) so a multi-person store can
+		// route alerts to whoever runs orders — same split as notifyEmail vs the
+		// Clerk email. Stored in the normalized inbound form ("60…", via
+		// assertValidMyMobile). Unset ⇒ no WhatsApp alerts.
+		notifyWaPhone: v.optional(v.string()),
+		// Opt-in switch for the seller WhatsApp order alerts (new order +
+		// payment claim, sent as Meta utility templates to notifyWaPhone).
+		// Off/unset by default — each alert is a billable Meta send. Enabling is
+		// Pro-gated (PLAN_FEATURES.waOrderAlerts); disabling is always allowed.
+		orderWaAlerts: v.optional(v.boolean()),
 		// Convex storage ID for the store's logo. Public — surfaced on the
 		// storefront header, dashboard hero, and as the OG image fallback.
 		logoStorageId: v.optional(v.string()),

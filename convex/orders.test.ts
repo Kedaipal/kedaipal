@@ -5871,7 +5871,14 @@ describe("orders — deferred push for non-final totals (86eyfq0w5)", () => {
 		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, { orderId });
 		const order = await t.run(async (ctx) => ctx.db.get(orderId));
 		const money = `MYR ${((order?.total ?? 0) / 100).toFixed(2)}`;
-		const wa = fetchMock.waCalls();
+		// Scope to THIS order's sends: scheduled jobs left over from earlier
+		// real-timer tests in this file can settle during this test's awaits and
+		// drop their (other-shortId) messages into the same global fetch mock.
+		// A free-form prompt for THIS order would still carry this shortId and
+		// fail the length check, so the "template, not prompt" claim holds.
+		const wa = fetchMock
+			.waCalls()
+			.filter((c) => JSON.stringify(c.body).includes(shortId));
 		expect(wa).toHaveLength(1);
 		const body = wa[0].body as {
 			type: string;

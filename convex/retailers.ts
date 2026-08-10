@@ -198,7 +198,10 @@ import {
 	type HitpayConfig,
 	resolveHitpayCredentials,
 } from "./lib/hitpay";
-import { orderConfirmTemplateName } from "./lib/whatsapp";
+import {
+	orderConfirmTemplateName,
+	sellerNewOrderTemplateName,
+} from "./lib/whatsapp";
 import { ordersThisMonth } from "./subscriptionUsage";
 import {
 	assertSupportedCurrency,
@@ -215,9 +218,11 @@ import {
 import { STORE_DESCRIPTION_MAX } from "./lib/storeProfile";
 import {
 	assertValidEmail,
+	assertValidMyMobile,
 	assertValidSlug,
 	assertValidStoreName,
 	assertValidWaPhone,
+	normalizeWaPhone,
 } from "./lib/slug";
 import {
 	AUP_VERSION,
@@ -537,6 +542,17 @@ type RetailerPublic = {
 	storeDescription?: string;
 	waPhone?: string;
 	notifyEmail?: string;
+	// Seller WhatsApp order alerts (86eyhw9zy) — OWNER-only alert config: the
+	// receiving MY mobile + the opt-in flag, plus two derived bits the settings
+	// card needs: `waOrderAlertsAvailable` (an approved seller template is
+	// configured on this deployment — card hidden otherwise) and
+	// `notifyWaPhoneOptedOut` (the saved number holds a global STOP opt-out, so
+	// the gateway would suppress every alert — the card must say so instead of
+	// letting the toggle silently do nothing). Never on the by-slug payload.
+	notifyWaPhone?: string;
+	orderWaAlerts?: boolean;
+	waOrderAlertsAvailable?: boolean;
+	notifyWaPhoneOptedOut?: boolean;
 	checkoutPhone?: string;
 	// Whether the storefront confirmation-push path is active (86eyf1rck —
 	// approved WA template configured): checkout then promises "confirmation
@@ -701,6 +717,21 @@ async function buildRetailerPublic(
 		.withIndex("by_retailer", (q) => q.eq("retailerId", row._id))
 		.first();
 	const usedOrders = await ordersThisMonth(ctx, row._id);
+	// Seller WA alerts (86eyhw9zy): surface whether the saved number holds an
+	// active global STOP opt-out — the WABA gateway would suppress every alert,
+	// so the settings card warns instead of the toggle silently doing nothing.
+	let notifyWaPhoneOptedOut = false;
+	const alertPhone = row.notifyWaPhone;
+	if (alertPhone) {
+		const optOut = await ctx.db
+			.query("optOuts")
+			.withIndex("by_phone", (q) =>
+				q.eq("waPhone", normalizeWaPhone(alertPhone)),
+			)
+			.order("desc")
+			.first();
+		notifyWaPhoneOptedOut = !!optOut && optOut.reactivatedAt === undefined;
+	}
 	return {
 		_id: row._id,
 		slug: row.slug,
@@ -708,6 +739,10 @@ async function buildRetailerPublic(
 		storeDescription: row.storeDescription,
 		waPhone: row.waPhone,
 		notifyEmail: row.notifyEmail,
+		notifyWaPhone: row.notifyWaPhone,
+		orderWaAlerts: row.orderWaAlerts,
+		waOrderAlertsAvailable: sellerNewOrderTemplateName() !== undefined,
+		notifyWaPhoneOptedOut,
 		logoStorageId: row.logoStorageId,
 		logoUrl,
 		coverImageStorageId: row.coverImageStorageId,
@@ -1151,6 +1186,12 @@ export const updateSettings = mutation({
 		storeDescription: v.optional(v.string()),
 		waPhone: v.optional(v.string()),
 		notifyEmail: v.optional(v.string()),
+		// Seller WhatsApp order alerts (86eyhw9zy). notifyWaPhone: blank clears
+		// (and switches the alerts off with it); undefined = no change; validated
+		// as a MY mobile and normalized to the inbound "60…" form. orderWaAlerts:
+		// enabling is Pro-gated + requires a number; disabling always allowed.
+		notifyWaPhone: v.optional(v.string()),
+		orderWaAlerts: v.optional(v.boolean()),
 		currency: v.optional(v.string()),
 		locale: v.optional(
 			v.union(v.literal("en"), v.literal("ms"), v.literal("zh")),
@@ -1218,6 +1259,8 @@ export const updateSettings = mutation({
 			storeDescription: string | undefined;
 			waPhone: string | undefined;
 			notifyEmail: string | undefined;
+			notifyWaPhone: string | undefined;
+			orderWaAlerts: boolean;
 			logoStorageId: string | undefined;
 			coverImageStorageId: string | undefined;
 			currency: SupportedCurrency;
@@ -1256,6 +1299,54 @@ export const updateSettings = mutation({
 				try { patch.notifyEmail = assertValidEmail(args.notifyEmail); } catch (err) { throw new ConvexError((err as Error).message); }
 			} else {
 				patch.notifyEmail = undefined;
+			}
+		}
+		if (args.notifyWaPhone !== undefined) {
+			if (args.notifyWaPhone.trim().length > 0) {
+				let alertPhone: string;
+				try {
+					alertPhone = assertValidMyMobile(args.notifyWaPhone);
+				} catch (err) {
+					throw new ConvexError((err as Error).message);
+				}
+				// The shared WABA can't message itself — catch the pasted-the-wrong-
+				// number mistake instead of letting every alert silently die.
+				const checkoutPhone = process.env.WHATSAPP_CHECKOUT_PHONE;
+				if (checkoutPhone && normalizeWaPhone(checkoutPhone) === alertPhone) {
+					throw new ConvexError(
+						"That's Kedaipal's own WhatsApp number — enter the number that should receive your order alerts.",
+					);
+				}
+				patch.notifyWaPhone = alertPhone;
+			} else {
+				patch.notifyWaPhone = undefined;
+				// Clearing the number switches the alerts off with it — an enabled
+				// toggle with nowhere to send would be a silent no-op.
+				if (retailer.orderWaAlerts && args.orderWaAlerts === undefined) {
+					patch.orderWaAlerts = false;
+				}
+			}
+		}
+		if (args.orderWaAlerts !== undefined) {
+			if (args.orderWaAlerts) {
+				// Enabling is the Pro surface (each alert is a billable Meta send);
+				// admin act-as bypasses for white-glove, mirroring the soft-lock.
+				// Disabling below stays un-gated — downgrade never traps.
+				if (!access.actingAsAdmin) {
+					await assertPlanFeature(ctx, retailer._id, "waOrderAlerts");
+				}
+				const effectivePhone =
+					args.notifyWaPhone !== undefined
+						? patch.notifyWaPhone
+						: retailer.notifyWaPhone;
+				if (!effectivePhone) {
+					throw new ConvexError(
+						"Add the WhatsApp number that should receive order alerts first.",
+					);
+				}
+				patch.orderWaAlerts = true;
+			} else {
+				patch.orderWaAlerts = false;
 			}
 		}
 		if (args.currency !== undefined) {

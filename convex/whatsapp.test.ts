@@ -1773,3 +1773,233 @@ describe("storefront confirmation push (86eyf1rck)", () => {
 		fetchMock.restore();
 	});
 });
+
+describe("seller WhatsApp order alerts (86eyhw9zy)", () => {
+	const NEW_ORDER_TEMPLATE = "seller_new_order_utility";
+	const CLAIM_TEMPLATE = "seller_payment_claim_utility";
+	const SELLER_PHONE = "60198765432";
+
+	afterEach(() => {
+		delete process.env.WHATSAPP_SELLER_NEW_ORDER_TEMPLATE;
+		delete process.env.WHATSAPP_SELLER_PAYMENT_CLAIM_TEMPLATE;
+	});
+
+	async function orderIdOf(t: ReturnType<typeof setup>, shortId: string) {
+		return await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			if (!o) throw new Error("order missing");
+			return o._id;
+		});
+	}
+
+	/** Flip the seeded retailer's alert config on directly — the settings
+	 * mutation's own validation/gating has its own suite in retailers.test.ts. */
+	async function enableAlerts(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+	) {
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailerId, {
+				notifyWaPhone: SELLER_PHONE,
+				orderWaAlerts: true,
+			});
+		});
+	}
+
+	test("new-order alert sends the template to the seller's number with shortId/buyer/total/date + app deep-link param", async () => {
+		process.env.WHATSAPP_SELLER_NEW_ORDER_TEMPLATE = NEW_ORDER_TEMPLATE;
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "ms");
+		await enableAlerts(t, retailerId);
+		const fetchMock = installFetchMock();
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+
+		await t.action(internal.whatsapp.notifySellerNewOrder, { orderId });
+
+		const wa = fetchMock.waCalls();
+		expect(wa).toHaveLength(1);
+		const body = wa[0].body as {
+			to: string;
+			type: string;
+			template: {
+				name: string;
+				language: { code: string };
+				components: Array<{
+					type: string;
+					sub_type?: string;
+					parameters: Array<{ text: string }>;
+				}>;
+			};
+		};
+		expect(body.to).toBe(SELLER_PHONE);
+		expect(body.type).toBe("template");
+		expect(body.template.name).toBe(NEW_ORDER_TEMPLATE);
+		// Seller alerts are EN-only regardless of the store's buyer locale (the
+		// /app dashboard the button lands on is EN).
+		expect(body.template.language.code).toBe("en");
+		const bodyComponent = body.template.components.find(
+			(c) => c.type === "body",
+		);
+		const params = bodyComponent?.parameters.map((p) => p.text);
+		expect(params?.[0]).toBe(shortId);
+		expect(params?.[1]).toBe("Ali");
+		expect(params?.[2]).toBe("MYR 120.00");
+		// createPendingOrder sets no fulfilment date → the non-empty placeholder.
+		expect(params?.[3]).toBe("—");
+		const button = body.template.components.find((c) => c.type === "button");
+		expect(button?.sub_type).toBe("url");
+		// The /app deep link rides the shortId (seller is authenticated) — never
+		// the buyer's capability token.
+		expect(button?.parameters[0]?.text).toBe(shortId);
+		fetchMock.restore();
+	});
+
+	test("no send when the template env is unset, the toggle is off, or the number is missing", async () => {
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		await enableAlerts(t, retailerId);
+		const fetchMock = installFetchMock();
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+
+		// Env unset — feature inactive even though the retailer opted in.
+		await t.action(internal.whatsapp.notifySellerNewOrder, { orderId });
+		expect(fetchMock.waCalls()).toHaveLength(0);
+
+		// Toggle off.
+		process.env.WHATSAPP_SELLER_NEW_ORDER_TEMPLATE = NEW_ORDER_TEMPLATE;
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailerId, { orderWaAlerts: false });
+		});
+		await t.action(internal.whatsapp.notifySellerNewOrder, { orderId });
+		expect(fetchMock.waCalls()).toHaveLength(0);
+
+		// Toggle on but no number.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailerId, {
+				orderWaAlerts: true,
+				notifyWaPhone: undefined,
+			});
+		});
+		await t.action(internal.whatsapp.notifySellerNewOrder, { orderId });
+		expect(fetchMock.waCalls()).toHaveLength(0);
+		fetchMock.restore();
+	});
+
+	test("counter orders and cancelled orders never alert", async () => {
+		process.env.WHATSAPP_SELLER_NEW_ORDER_TEMPLATE = NEW_ORDER_TEMPLATE;
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		await enableAlerts(t, retailerId);
+		const fetchMock = installFetchMock();
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+
+		await t.run(async (ctx) => {
+			await ctx.db.patch(orderId, { source: "counter" });
+		});
+		await t.action(internal.whatsapp.notifySellerNewOrder, { orderId });
+		expect(fetchMock.waCalls()).toHaveLength(0);
+
+		await t.run(async (ctx) => {
+			await ctx.db.patch(orderId, { source: "storefront", status: "cancelled" });
+		});
+		await t.action(internal.whatsapp.notifySellerNewOrder, { orderId });
+		expect(fetchMock.waCalls()).toHaveLength(0);
+		fetchMock.restore();
+	});
+
+	test("payment-claim alert sends buyer/shortId/total — counter orders INCLUDED (claims land when nobody's at the counter)", async () => {
+		process.env.WHATSAPP_SELLER_PAYMENT_CLAIM_TEMPLATE = CLAIM_TEMPLATE;
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		await enableAlerts(t, retailerId);
+		const fetchMock = installFetchMock();
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+		// A counter pay-later order still alerts on claim.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(orderId, { source: "counter" });
+		});
+
+		await t.action(internal.whatsapp.notifySellerPaymentClaim, { orderId });
+
+		const wa = fetchMock.waCalls();
+		expect(wa).toHaveLength(1);
+		const body = wa[0].body as {
+			to: string;
+			template: {
+				name: string;
+				components: Array<{ type: string; parameters: Array<{ text: string }> }>;
+			};
+		};
+		expect(body.to).toBe(SELLER_PHONE);
+		expect(body.template.name).toBe(CLAIM_TEMPLATE);
+		const params = body.template.components
+			.find((c) => c.type === "body")
+			?.parameters.map((p) => p.text);
+		expect(params).toEqual(["Ali", shortId, "MYR 120.00"]);
+		fetchMock.restore();
+	});
+
+	test("claimPayment schedules the seller claim alert", async () => {
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		await t.mutation(api.orders.claimPayment, {
+			token: await tk(t, shortId),
+			reference: "MBB1234",
+		});
+		const jobs = await t.run((ctx) =>
+			ctx.db.system.query("_scheduled_functions").collect(),
+		);
+		expect(
+			jobs.filter((j) => j.name.includes("notifySellerPaymentClaim")),
+		).toHaveLength(1);
+	});
+
+	test("orders.create schedules the seller new-order alert", async () => {
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		await createPendingOrder(t, retailerId, productId);
+		const jobs = await t.run((ctx) =>
+			ctx.db.system.query("_scheduled_functions").collect(),
+		);
+		expect(
+			jobs.filter((j) => j.name.includes("notifySellerNewOrder")),
+		).toHaveLength(1);
+	});
+
+	test("a STOP'd seller number is suppressed by the gateway — utility_template alerts are gated, never transactional", async () => {
+		process.env.WHATSAPP_SELLER_NEW_ORDER_TEMPLATE = NEW_ORDER_TEMPLATE;
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		await enableAlerts(t, retailerId);
+		await t.run(async (ctx) => {
+			await ctx.db.insert("optOuts", {
+				waPhone: SELLER_PHONE,
+				source: "stop_keyword",
+				createdAt: Date.now(),
+			});
+		});
+		const fetchMock = installFetchMock();
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+
+		await t.action(internal.whatsapp.notifySellerNewOrder, { orderId });
+
+		expect(fetchMock.waCalls()).toHaveLength(0);
+		const log = await t.run(async (ctx) =>
+			ctx.db.query("outboundMessageLog").collect(),
+		);
+		const blocked = log.find((row) => row.status === "blocked_optout");
+		expect(blocked).toBeDefined();
+		expect(blocked?.category).toBe("utility_template");
+		expect(blocked?.templateName).toBe(NEW_ORDER_TEMPLATE);
+		fetchMock.restore();
+	});
+});
