@@ -45,6 +45,13 @@ inlined ~15× in `orders.ts`. These were centralised into **`convex/lib/auth.ts`
 - **`logAdminAction(ctx, access, action, targetId?)`** — writes one `adminAuditLog` row, but
   only when `access.actingAsAdmin`. A no-op for ordinary owner writes. Called after each
   admin-capable mutation so every white-glove edit is attributable to a person.
+- **`logDestructiveAdminAction(ctx, access, action, targetId?)`** — same row, minus the
+  ownership no-op: it records even when the admin **owns** the store. Reserved for
+  irreversible erasures (today: `orders.hardDelete`, `orders.bulkDeleteOrders`). The no-op is
+  the right default for ordinary edits — routine and recoverable — but a permanent record
+  deletion must always answer "who did this?", and the deleted row isn't around to be asked.
+  Both share one private inserter so the two policies can't drift. Use `logAdminAction`
+  unless the write destroys data irreversibly. ClickUp `86eyhz189`.
 
 Admins are the same env allowlist as billing (`ADMIN_USER_IDS`, via `isAdmin` / `requireAdmin`
 in `convex/lib/auth.ts`) — **not** a DB field, **not** a Clerk role (yet). The client
