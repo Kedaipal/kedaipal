@@ -242,9 +242,10 @@ export default defineSchema({
 		// behaviour, no migration). "flat" = one fee per delivery order with an
 		// optional free-above-subtotal threshold (all-tier). "radius" = distance
 		// bands from `businessAddress` priced by straight-line km (Pro-gated on
-		// SET; clearing stays un-gated — chargeablePickup posture). Validated by
-		// sanitizeDeliveryConfig; resolved per-order by resolveDeliveryQuote and
-		// FROZEN onto orders.deliverySnapshot. See convex/lib/delivery.ts.
+		// SET; clearing stays un-gated — chargeablePickup posture). "weight" =
+		// the seller's parcel-courier rate card (all-tier — see below). Validated
+		// by sanitizeDeliveryConfig; resolved per-order by resolveDeliveryQuote
+		// and FROZEN onto orders.deliverySnapshot. See convex/lib/delivery.ts.
 		deliveryConfig: v.optional(
 			v.union(
 				v.object({
@@ -256,6 +257,33 @@ export default defineSchema({
 					mode: v.literal("radius"),
 					bands: v.array(v.object({ maxKm: v.number(), fee: v.number() })),
 					outOfRange: v.union(v.literal("block"), v.literal("arrange")),
+				}),
+				// Weight/zone courier rate card (86eyeea1n, frozen/outstation
+				// sellers): named zones of MY_STATES states, each with ascending
+				// weight bands (maxKg inclusive ≈ the courier's box tier, fee in
+				// sen) and an optional per-zone free-above-subtotal threshold.
+				// Priced from the buyer's address STATE + the cart's summed variant
+				// parcelWeightG — no coordinates, no courier API; dispatch stays
+				// manual. All-tier (a pricing mode with zero provider cost —
+				// correctness for outstation sellers, decided with Arif 11 Aug).
+				// onOutOfBands = state in no zone OR cart beyond the last band;
+				// onUnpriceable = weight unknowable (missing parcel weights or a
+				// custom line). Both: "block" refuses checkout, "arrange" lands
+				// deliveryFeePending.
+				v.object({
+					mode: v.literal("weight"),
+					zones: v.array(
+						v.object({
+							name: v.string(),
+							states: v.array(v.string()),
+							bands: v.array(
+								v.object({ maxKg: v.number(), fee: v.number() }),
+							),
+							freeAbove: v.optional(v.number()),
+						}),
+					),
+					onOutOfBands: v.union(v.literal("block"), v.literal("arrange")),
+					onUnpriceable: v.union(v.literal("block"), v.literal("arrange")),
 				}),
 				// Live provider quote at checkout (86eyb5hrf): the buyer pays the
 				// REAL Lalamove price for their address, fetched via the public
@@ -843,10 +871,12 @@ export default defineSchema({
 		// Frozen delivery-charge resolution at order create (delivery orders
 		// only) — mirrors the pickupSnapshot posture: a later config/address edit
 		// never rewrites a placed order. `mode` records HOW the fee was priced:
-		// "flat" / "radius" (auto-resolved from the retailer's deliveryConfig) or
-		// "manual" (seller set it on an out-of-range "arrange" order, or adjusted
-		// it pre-payment). `distanceKm`/`bandMaxKm` audit the radius math. Unset →
-		// free delivery (0 is never stored). See convex/lib/delivery.ts.
+		// "flat" / "radius" / "weight" (auto-resolved from the retailer's
+		// deliveryConfig) or "manual" (seller set it on an out-of-range "arrange"
+		// order, or adjusted it pre-payment). `distanceKm`/`bandMaxKm` audit the
+		// radius math; `zoneName`/`chargeableKg`/`bandMaxKg` audit the weight
+		// math. Unset → free delivery (0 is never stored). See
+		// convex/lib/delivery.ts.
 		deliverySnapshot: v.optional(
 			v.object({
 				fee: v.number(),
@@ -859,9 +889,17 @@ export default defineSchema({
 					// RE-quotes (Lalamove honours quotes 5 min), so these are a
 					// paper trail, never booking inputs.
 					v.literal("lalamove"),
+					// Weight/zone rate card (86eyeea1n).
+					v.literal("weight"),
 				),
 				distanceKm: v.optional(v.number()),
 				bandMaxKm: v.optional(v.number()),
+				// Weight-mode audit trail (mode "weight" only): which zone priced
+				// the order, the cart's summed parcel weight (kg, gram precision)
+				// and the band it landed in.
+				zoneName: v.optional(v.string()),
+				chargeableKg: v.optional(v.number()),
+				bandMaxKg: v.optional(v.number()),
 				// Provider-quote audit trail (mode "lalamove" only).
 				quotationId: v.optional(v.string()),
 				vehicleType: v.optional(v.string()),
@@ -873,12 +911,13 @@ export default defineSchema({
 		// `total` via computeOrderTotals. Unset → no fee.
 		deliveryFee: v.optional(v.number()),
 		// True while the delivery charge is still to be confirmed by the seller —
-		// a RADIUS-mode "arrange via WhatsApp" order (out of range / no
-		// coordinates). Lalamove-priced stores never set this (strict since
-		// 27 Jul: no live quote → checkout/address-edit refused, so the seller
-		// never calculates a charge). While set, the payment ask is held and
-		// payment claim/receive are gated (the total is not final yet) — mirrors
-		// the mockup gate. Cleared by orders.setDeliveryFee.
+		// a RADIUS- or WEIGHT-mode "arrange via WhatsApp" order (out of range /
+		// no coordinates / unserved state / overweight / unweighable cart).
+		// Lalamove-priced stores never set this (strict since 27 Jul: no live
+		// quote → checkout/address-edit refused, so the seller never calculates
+		// a charge). While set, the payment ask is held and payment
+		// claim/receive are gated (the total is not final yet) — mirrors the
+		// mockup gate. Cleared by orders.setDeliveryFee.
 		deliveryFeePending: v.optional(v.boolean()),
 		// WHY the charge is pending, frozen at the resolve that set the flag —
 		// drives the seller card's explanation (never claims "outside your
@@ -894,6 +933,20 @@ export default defineSchema({
 				// LEGACY (pre-27 Jul lalamove rows): no live provider quote. New
 				// lalamove orders refuse instead of landing pending.
 				v.literal("unquotable"),
+				// Weight mode (86eyeea1n): order carries no delivery address, so
+				// there's no state to zone-match (the no_coords parallel — reachable
+				// only via legacy/protocol callers; the storefront always sends an
+				// address).
+				v.literal("no_state"),
+				// Weight mode: buyer's state is in none of the seller's zones.
+				v.literal("unserved_state"),
+				// Weight mode: the cart outweighs the zone's heaviest band.
+				v.literal("over_bands"),
+				// Weight mode: a non-custom item has no parcel weight set.
+				v.literal("missing_weights"),
+				// Weight mode: the cart holds a custom / price-on-quote line, so
+				// its weight is unknowable until the seller quotes.
+				v.literal("custom_item"),
 			),
 		),
 		// When the buyer needs the order — their answer to "When do you need this?

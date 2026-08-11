@@ -76,6 +76,7 @@ async function seedProduct(
 		blockWhenOutOfStock: boolean;
 		requiresProof: boolean;
 		minNoticeDays: number;
+		parcelWeightG: number;
 	}> = {},
 ): Promise<Id<"products">> {
 	const asUser = t.withIdentity({ subject: userId });
@@ -93,6 +94,7 @@ async function seedProduct(
 				optionValues: [],
 				price: overrides.price ?? 12000,
 				onHand: overrides.stock ?? 100,
+				parcelWeightG: overrides.parcelWeightG,
 			},
 		],
 	});
@@ -4968,6 +4970,328 @@ describe("orders — delivery charge", () => {
 				fee: 100.5,
 			}),
 		).rejects.toThrow(/whole/);
+	});
+});
+
+describe("orders — weight/zone delivery charge (86eyeea1n)", () => {
+	const WEIGHT_CONFIG: {
+		mode: "weight";
+		zones: {
+			name: string;
+			states: string[];
+			bands: { maxKg: number; fee: number }[];
+			freeAbove?: number;
+		}[];
+		onOutOfBands: "block" | "arrange";
+		onUnpriceable: "block" | "arrange";
+	} = {
+		mode: "weight",
+		zones: [
+			{
+				name: "West Malaysia",
+				states: ["Selangor", "WP Kuala Lumpur"],
+				bands: [
+					{ maxKg: 3, fee: 800 },
+					{ maxKg: 10, fee: 2000 },
+				],
+			},
+			{
+				name: "East Malaysia",
+				states: ["Sabah", "Sarawak"],
+				bands: [{ maxKg: 5, fee: 6600 }],
+				freeAbove: 100000,
+			},
+		],
+		onOutOfBands: "arrange",
+		onUnpriceable: "arrange",
+	};
+
+	async function seedWeightRetailer(
+		t: ReturnType<typeof setup>,
+		config: typeof WEIGHT_CONFIG = WEIGHT_CONFIG,
+	) {
+		const retailer = await seedRetailer(t, USER_A);
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.retailers.updateSettings, { deliveryConfig: config });
+		return retailer;
+	}
+
+	/** The single-variant product's variantId (the public quote takes cart lines). */
+	async function variantOf(
+		t: ReturnType<typeof setup>,
+		productId: Id<"products">,
+	): Promise<Id<"productVariants">> {
+		return t.run(async (ctx) => {
+			const vr = await ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", productId))
+				.first();
+			if (!vr) throw new Error("variant missing");
+			return vr._id;
+		});
+	}
+
+	test("state + summed weight pick the fee — with a COORDINATE-LESS manual address (the mode's whole point)", async () => {
+		const t = setup();
+		const retailer = await seedWeightRetailer(t);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			parcelWeightG: 500,
+		});
+
+		// 3 × 500 g = 1.5 kg → West "up to 3 kg" band. validAddress carries a
+		// state but NO lat/lng — weight mode must price it anyway.
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 3 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: validAddress,
+		});
+		expect(created.deliveryFee).toBe(800);
+		expect(created.deliveryFeePending).toBeUndefined();
+
+		// Seller path: full snapshot incl. the zone/weight audit.
+		const sellerOrder = await t
+			.withIdentity({ subject: USER_A })
+			.query(api.orders.get, { shortId: created.shortId });
+		expect(sellerOrder?.deliverySnapshot).toMatchObject({
+			fee: 800,
+			mode: "weight",
+			zoneName: "West Malaysia",
+			chargeableKg: 1.5,
+			bandMaxKg: 3,
+		});
+		expect(sellerOrder?.total).toBe(3 * 12000 + 800);
+
+		// Buyer path: fee mirror only, snapshot stripped (same posture as radius).
+		const buyerOrder = await t.query(api.orders.get, {
+			token: await tk(t, created.shortId),
+		});
+		expect(buyerOrder?.deliveryFee).toBe(800);
+		expect(buyerOrder?.deliverySnapshot).toBeUndefined();
+	});
+
+	test("unserved state on an 'arrange' store lands fee-pending with the frozen reason", async () => {
+		const t = setup();
+		const retailer = await seedWeightRetailer(t);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			parcelWeightG: 500,
+		});
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: { ...validAddress, state: "Kelantan" },
+		});
+		expect(created.deliveryFee).toBeUndefined();
+		expect(created.deliveryFeePending).toBe(true);
+		const sellerOrder = await t
+			.withIdentity({ subject: USER_A })
+			.query(api.orders.get, { shortId: created.shortId });
+		expect(sellerOrder?.deliveryFeePending).toBe(true);
+		expect(sellerOrder?.deliveryFeePendingReason).toBe("unserved_state");
+	});
+
+	test("'block' policies refuse checkout with cause-true messages", async () => {
+		const t = setup();
+		const retailer = await seedWeightRetailer(t, {
+			...WEIGHT_CONFIG,
+			onOutOfBands: "block",
+			onUnpriceable: "block",
+		});
+		const weighted = await seedProduct(t, USER_A, retailer._id, {
+			parcelWeightG: 6000,
+			name: "Frozen bundle",
+		});
+		const weightless = await seedProduct(t, USER_A, retailer._id, {
+			name: "No-weight item",
+		});
+		const base = {
+			retailerId: retailer._id,
+			currency: "MYR",
+			channel: "whatsapp" as const,
+			customer,
+			deliveryMethod: "delivery" as const,
+		};
+		// 2 × 6 kg = 12 kg > the 10 kg last band → overweight.
+		await expect(
+			t.mutation(api.orders.create, {
+				...base,
+				items: [{ productId: weighted, quantity: 2 }],
+				deliveryAddress: validAddress,
+			}),
+		).rejects.toThrow(/heavier than the store's delivery rates/);
+		// Unserved state names the state.
+		await expect(
+			t.mutation(api.orders.create, {
+				...base,
+				items: [{ productId: weighted, quantity: 1 }],
+				deliveryAddress: { ...validAddress, state: "Kelantan" },
+			}),
+		).rejects.toThrow(/doesn't deliver to Kelantan/);
+		// A weightless item can't be priced.
+		await expect(
+			t.mutation(api.orders.create, {
+				...base,
+				items: [{ productId: weightless, quantity: 1 }],
+				deliveryAddress: validAddress,
+			}),
+		).rejects.toThrow(/can't price delivery/);
+	});
+
+	test("a custom / price-on-quote line makes the cart unpriceable (never silently underweighed)", async () => {
+		const t = setup();
+		const retailer = await seedWeightRetailer(t);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const productId = await asUser.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Custom hamper",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			blockWhenOutOfStock: false,
+			requiresProof: true,
+			variants: [
+				{ optionValues: [], price: 12000, onHand: 0, parcelWeightG: 500 },
+				{
+					optionValues: [],
+					price: 0,
+					onHand: 0,
+					isCustom: true,
+					customLabel: "Bespoke",
+				},
+			],
+		});
+		const rows = await t.run(async (ctx) =>
+			ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", productId))
+				.collect(),
+		);
+		const customVariant = rows.find((r) => r.isCustom);
+		if (!customVariant) throw new Error("custom variant missing");
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, variantId: customVariant._id, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: validAddress,
+		});
+		expect(created.deliveryFeePending).toBe(true);
+		const sellerOrder = await t
+			.withIdentity({ subject: USER_A })
+			.query(api.orders.get, { shortId: created.shortId });
+		expect(sellerOrder?.deliveryFeePendingReason).toBe("custom_item");
+	});
+
+	test("per-zone freeAbove ships free at the boundary", async () => {
+		const t = setup();
+		const retailer = await seedWeightRetailer(t);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			parcelWeightG: 500,
+			price: 50000,
+		});
+		// 2 × RM500 = RM1,000 == East's freeAbove → free.
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 2 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: { ...validAddress, state: "Sabah" },
+		});
+		expect(created.deliveryFee).toBeUndefined();
+		expect(created.deliveryFeePending).toBeUndefined();
+		const order = await t.query(api.orders.get, {
+			token: await tk(t, created.shortId),
+		});
+		expect(order?.total).toBe(order?.subtotal);
+	});
+
+	test("address re-price follows the ZONE: Selangor → Sabah re-weighs and re-prices; unserved flips to fee-pending", async () => {
+		const t = setup();
+		const retailer = await seedWeightRetailer(t);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			parcelWeightG: 500,
+		});
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 3 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: validAddress,
+		});
+		expect(created.deliveryFee).toBe(800);
+		const token = await tk(t, created.shortId);
+
+		// Selangor → Sabah: same 1.5 kg, East zone's band prices it.
+		await t.mutation(api.orders.updateDeliveryAddress, {
+			token,
+			deliveryAddress: { ...validAddress, state: "Sabah" },
+		});
+		let order = await t.query(api.orders.get, { token });
+		expect(order?.deliveryFee).toBe(6600);
+		expect(order?.total).toBe(3 * 12000 + 6600);
+
+		// Sabah → Kelantan (unserved, arrange): fee cleared, hold opens.
+		await t.mutation(api.orders.updateDeliveryAddress, {
+			token,
+			deliveryAddress: { ...validAddress, state: "Kelantan" },
+		});
+		order = await t.query(api.orders.get, { token });
+		expect(order?.deliveryFee).toBeUndefined();
+		expect(order?.deliveryFeePending).toBe(true);
+		expect(order?.total).toBe(3 * 12000);
+		const sellerOrder = await t
+			.withIdentity({ subject: USER_A })
+			.query(api.orders.get, { shortId: created.shortId });
+		expect(sellerOrder?.deliveryFeePendingReason).toBe("unserved_state");
+	});
+
+	test("the public delivery.quote prices by state + cart lines and strips zone internals", async () => {
+		const t = setup();
+		const retailer = await seedWeightRetailer(t);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			parcelWeightG: 500,
+		});
+		const variantId = await variantOf(t, productId);
+
+		const priced = await t.query(api.delivery.quote, {
+			retailerId: retailer._id,
+			subtotal: 24000,
+			state: "Selangor",
+			items: [{ variantId, quantity: 2 }],
+		});
+		expect(priced).toEqual({ kind: "fee", fee: 800 });
+
+		// Before any address exists (no state) the quote holds per onUnpriceable —
+		// the checkout renders "Enter address", never a fee guess.
+		const preAddress = await t.query(api.delivery.quote, {
+			retailerId: retailer._id,
+			subtotal: 24000,
+			items: [{ variantId, quantity: 2 }],
+		});
+		expect(preAddress).toEqual({ kind: "pending", reason: "no_state" });
+
+		// An unrecognized state string reads as ABSENT, never as unserved.
+		const garbageState = await t.query(api.delivery.quote, {
+			retailerId: retailer._id,
+			subtotal: 24000,
+			state: "Jakarta",
+			items: [{ variantId, quantity: 2 }],
+		});
+		expect(garbageState).toEqual({ kind: "pending", reason: "no_state" });
 	});
 });
 

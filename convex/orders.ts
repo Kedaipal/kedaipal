@@ -68,10 +68,14 @@ import {
 } from "./lib/order";
 import { normalizeTrackingToken } from "./lib/trackingToken";
 import {
+	type CartWeightItem,
+	type CartWeightSummary,
 	DELIVERY_FEE_MAX,
 	type DeliveryConfig,
+	type DeliveryQuoteReason,
 	type LiveProviderQuote,
 	resolveDeliveryQuote,
+	summarizeCartWeight,
 } from "./lib/delivery";
 import {
 	CHECKOUT_QUOTE_MAX_AGE_MS,
@@ -154,28 +158,64 @@ function resolveMockupImageIds(order: Doc<"orders">): string[] {
 type DeliverySnapshot = NonNullable<Doc<"orders">["deliverySnapshot"]>;
 
 /**
+ * Buyer-facing refusal copy per blocked-quote reason ("block" policies only —
+ * "arrange" policies land pending instead). The weight-mode reasons keep the
+ * store in the sentence: the buyer's next move is contacting the seller, not
+ * fixing their own input.
+ */
+function blockedDeliveryMessage(
+	reason: DeliveryQuoteReason,
+	state: string | undefined,
+): string {
+	const messages: Record<DeliveryQuoteReason, string> = {
+		no_coords:
+			"Pick your address from the suggestions so we can calculate the delivery fee",
+		unquotable:
+			"We couldn't price delivery to that address right now — please try again",
+		out_of_range: "That address is outside this store's delivery area",
+		no_state: "Add a delivery address so we can calculate the delivery fee",
+		unserved_state: state
+			? `This store doesn't deliver to ${state}`
+			: "This store doesn't deliver to that state",
+		over_bands:
+			"This order is heavier than the store's delivery rates — contact the store on WhatsApp to arrange it",
+		missing_weights:
+			"The store can't price delivery for this order yet — contact them on WhatsApp to arrange it",
+		custom_item:
+			"This order includes a custom item, so the store confirms its delivery fee directly — contact them on WhatsApp",
+	};
+	return messages[reason];
+}
+
+/**
  * Resolve the delivery charge for a delivery order against the retailer's
  * config and freeze it into snapshot form. Shared by `create` and the buyer's
  * address re-price so both spell the outcome identically:
  *  - fee → a frozen `deliverySnapshot` (mirrored to `deliveryFee`);
  *  - free → nothing stored (0 is never stored — one spelling of free);
- *  - "arrange" out-of-range / coord-less / unquotable → `pending: true` +
- *    the frozen `pendingReason` (drives the seller card's explanation — a
- *    Lalamove store must never read "outside your delivery bands"; the
- *    seller confirms the charge later via setDeliveryFee, payment ask held);
+ *  - "arrange" out-of-range / coord-less / unquotable / unserved / overweight /
+ *    unweighable → `pending: true` + the frozen `pendingReason` (drives the
+ *    seller card's explanation — a Lalamove store must never read "outside
+ *    your delivery bands"; the seller confirms the charge later via
+ *    setDeliveryFee, payment ask held);
  *  - "block" → ConvexError, mirroring the storefront's disabled submit.
  */
 function resolveDeliveryForOrder(
 	retailer: Doc<"retailers">,
 	subtotal: number,
-	address: { latitude?: number; longitude?: number } | undefined,
+	address:
+		| { latitude?: number; longitude?: number; state?: string }
+		| undefined,
+	// Cart parcel-weight summary (pricing mode "weight" only) — from
+	// summarizeCartWeight over the order's resolved variants.
+	cartWeight?: CartWeightSummary,
 	// Live Lalamove quote loaded from its server-side deliveryQuotes row
 	// (pricing mode "lalamove" only) — see loadCheckoutDeliveryQuote.
 	liveQuote?: LiveProviderQuote,
 ): {
 	snapshot: DeliverySnapshot | undefined;
 	pending: boolean;
-	pendingReason?: "out_of_range" | "no_coords" | "unquotable";
+	pendingReason?: DeliveryQuoteReason;
 } {
 	const config = retailer.deliveryConfig as DeliveryConfig | undefined;
 	if (config?.mode === "radius" && !retailer.businessAddress) {
@@ -193,16 +233,12 @@ function resolveDeliveryForOrder(
 			address?.latitude !== undefined && address.longitude !== undefined
 				? { latitude: address.latitude, longitude: address.longitude }
 				: undefined,
+		state: address?.state,
+		cartWeight,
 		liveQuote,
 	});
 	if (quote.kind === "blocked") {
-		throw new ConvexError(
-			quote.reason === "no_coords"
-				? "Pick your address from the suggestions so we can calculate the delivery fee"
-				: quote.reason === "unquotable"
-					? "We couldn't price delivery to that address right now — please try again"
-					: "That address is outside this store's delivery area",
-		);
+		throw new ConvexError(blockedDeliveryMessage(quote.reason, address?.state));
 	}
 	if (quote.kind === "pending") {
 		return { snapshot: undefined, pending: true, pendingReason: quote.reason };
@@ -214,6 +250,9 @@ function resolveDeliveryForOrder(
 				mode: quote.mode,
 				distanceKm: quote.distanceKm,
 				bandMaxKm: quote.bandMaxKm,
+				zoneName: quote.zoneName,
+				chargeableKg: quote.chargeableKg,
+				bandMaxKg: quote.bandMaxKg,
 				quotationId: quote.quotationId,
 				vehicleType: quote.vehicleType,
 				quotedAt: quote.quotedAt,
@@ -766,6 +805,9 @@ export const create = mutation({
 		// per-line product id/name/qty + the flags the shared rules need. Checked
 		// after the loop (the rules judge summed quantities + the subtotal).
 		const ruleItems: MinRuleItem[] = [];
+		// Parcel-weight inputs (86eyeea1n, pricing mode "weight") — collected from
+		// the same resolved variants so the fee weighs exactly what was ordered.
+		const weightItems: CartWeightItem[] = [];
 		for (const item of args.items) {
 			if (!Number.isInteger(item.quantity) || item.quantity < 1)
 				throw new ConvexError("Quantity must be a positive integer");
@@ -847,6 +889,11 @@ export const create = mutation({
 				isCustom: variant.isCustom,
 				quoteOnRequest: variantRequiresProof === true && variant.price === 0,
 			});
+			weightItems.push({
+				parcelWeightG: variant.parcelWeightG,
+				quantity: item.quantity,
+				isCustom: variant.isCustom === true,
+			});
 		}
 
 		const itemSubtotal = snapshotItems.reduce(
@@ -916,11 +963,7 @@ export const create = mutation({
 		// subtotal (flat free-above threshold), so it runs after the item loop.
 		let deliverySnapshot: DeliverySnapshot | undefined;
 		let deliveryFeePending = false;
-		let deliveryFeePendingReason:
-			| "out_of_range"
-			| "no_coords"
-			| "unquotable"
-			| undefined;
+		let deliveryFeePendingReason: DeliveryQuoteReason | undefined;
 		if (effectiveDeliveryMethod === "delivery") {
 			// itemSubtotal is hoisted above (shared with the min-order rules).
 			const liveQuote = await loadCheckoutDeliveryQuote(
@@ -933,6 +976,7 @@ export const create = mutation({
 				retailer,
 				itemSubtotal,
 				sanitizedAddress,
+				summarizeCartWeight(weightItems),
 				liveQuote,
 			);
 			deliverySnapshot = resolved.snapshot;
@@ -2920,12 +2964,12 @@ export const updateDeliveryAddress = mutation({
 		// fee is a function of where the order goes, so the fee follows the
 		// address exactly like the pickup fee follows the point (see
 		// updatePickupLocation). Blocked destinations throw (the old address —
-		// and its total — stay untouched); a radius "arrange" out-of-range edit
-		// flips the order back to fee-pending. A lalamove-priced edit needs the
-		// live quote loaded above or it throws — an address change can never
-		// silently drop the buyer onto a seller-calculates path. Pending-only
-		// gate above means no payment has been asked for yet, so the total is
-		// still safe to move.
+		// and its total — stay untouched); a radius/weight "arrange" edit flips
+		// the order back to fee-pending. A lalamove-priced edit needs the live
+		// quote loaded above or it throws — an address change can never silently
+		// drop the buyer onto a seller-calculates path. Pending-only gate above
+		// means no payment has been asked for yet, so the total is still safe to
+		// move.
 		const retailer = await ctx.db.get(order.retailerId);
 		if (!retailer) throw new ConvexError("Store not found");
 		const liveQuote = await loadCheckoutDeliveryQuote(
@@ -2934,10 +2978,33 @@ export const updateDeliveryAddress = mutation({
 			deliveryQuoteId,
 			sanitized,
 		);
+		// Weight-mode re-price (86eyeea1n) weighs the ORDER's frozen lines against
+		// live variant weights — a state change can move the order to another
+		// zone's bands, so the weight must be summed again, not read off the old
+		// snapshot. A line whose variant is gone (legacy pre-variant orders)
+		// reads weightless and resolves per onUnpriceable — never a silent
+		// underweigh.
+		let cartWeight: CartWeightSummary | undefined;
+		if (retailer.deliveryConfig?.mode === "weight") {
+			const weightItems: CartWeightItem[] = await Promise.all(
+				order.items.map(async (item): Promise<CartWeightItem> => {
+					const variant = item.variantId
+						? await ctx.db.get(item.variantId)
+						: null;
+					return {
+						parcelWeightG: variant?.parcelWeightG ?? 0,
+						quantity: item.quantity,
+						isCustom: variant?.isCustom === true,
+					};
+				}),
+			);
+			cartWeight = summarizeCartWeight(weightItems);
+		}
 		const resolved = resolveDeliveryForOrder(
 			retailer,
 			order.subtotal,
 			sanitized,
+			cartWeight,
 			liveQuote,
 		);
 		const { subtotal, total } = computeOrderTotals(order.items, {

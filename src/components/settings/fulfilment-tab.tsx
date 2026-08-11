@@ -14,8 +14,12 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
-import type { DeliveryConfig } from "../../../convex/lib/delivery";
-import { DELIVERY_BANDS_MAX } from "../../../convex/lib/delivery";
+import { MY_STATES } from "../../../convex/lib/address";
+import type { DeliveryConfig, DeliveryZone } from "../../../convex/lib/delivery";
+import {
+	DELIVERY_BANDS_MAX,
+	DELIVERY_ZONES_MAX,
+} from "../../../convex/lib/delivery";
 import {
 	DEFAULT_MIN_NOTICE_DAYS,
 	MAX_NOTICE_DAYS,
@@ -33,7 +37,9 @@ import {
 } from "../../lib/format";
 import { deriveMapsUrl } from "../../lib/google-address";
 import { hasFeature, type SubscriptionView } from "../../lib/subscription";
+import { jntSeedZones } from "../../lib/weight-zone-seed";
 import { ProBadge } from "../app/pro-gate";
+import { FilterChip } from "../ui/filter-chip";
 import {
 	GoogleAddressAutocomplete,
 	type GoogleSelectedAddress,
@@ -474,7 +480,7 @@ export function FulfilmentTab({
 
 // --- Delivery charge (86extzdr8) --------------------------------------------
 
-type ChargeMode = "free" | "flat" | "radius" | "lalamove";
+type ChargeMode = "free" | "flat" | "radius" | "weight" | "lalamove";
 
 type BandDraft = { maxKm: string; fee: string };
 
@@ -484,6 +490,42 @@ function bandsFromConfig(config: DeliveryConfig | undefined): BandDraft[] {
 		maxKm: String(b.maxKm),
 		fee: (b.fee / 100).toFixed(2),
 	}));
+}
+
+// Weight/zone drafts (86eyeea1n) — RM display strings; sen on the wire.
+type WeightBandDraft = { maxKg: string; fee: string };
+type ZoneDraft = {
+	name: string;
+	states: string[];
+	bands: WeightBandDraft[];
+	freeAbove: string;
+};
+
+/** Config/seed zones → editable drafts (one converter for both sources, so
+ * the seed can never save differently from a stored card). */
+function zoneDraftsFromZones(
+	zones: Pick<DeliveryZone, "name" | "states" | "bands" | "freeAbove">[],
+): ZoneDraft[] {
+	return zones.map((z) => ({
+		name: z.name,
+		states: [...z.states],
+		bands: z.bands.map((b) => ({
+			maxKg: String(b.maxKg),
+			fee: (b.fee / 100).toFixed(2),
+		})),
+		freeAbove: z.freeAbove !== undefined ? (z.freeAbove / 100).toFixed(2) : "",
+	}));
+}
+
+function weightZonesFromConfig(config: DeliveryConfig | undefined): ZoneDraft[] {
+	// Empty = the template/blank chooser renders instead of an empty form.
+	if (config?.mode !== "weight") return [];
+	return zoneDraftsFromZones(config.zones);
+}
+
+/** A fresh zone draft — one starter band so the row structure is visible. */
+function blankZoneDraft(): ZoneDraft {
+	return { name: "", states: [], bands: [{ maxKg: "3", fee: "" }], freeAbove: "" };
 }
 
 /** Segmented mode button — same visual language as the pickup KindButton. */
@@ -588,6 +630,17 @@ function DeliveryChargeSection({
 	const [outOfRange, setOutOfRange] = useState<"block" | "arrange">(
 		config?.mode === "radius" ? config.outOfRange : "arrange",
 	);
+	// Weight-mode drafts (86eyeea1n). Both policies default to "arrange" — the
+	// radius posture: never lose an order to a rate-card gap by default.
+	const [zones, setZones] = useState<ZoneDraft[]>(() =>
+		weightZonesFromConfig(config),
+	);
+	const [onOutOfBands, setOnOutOfBands] = useState<"block" | "arrange">(
+		config?.mode === "weight" ? config.onOutOfBands : "arrange",
+	);
+	const [onUnpriceable, setOnUnpriceable] = useState<"block" | "arrange">(
+		config?.mode === "weight" ? config.onUnpriceable : "arrange",
+	);
 	// Business address: the autocomplete pick replaces the stored one on save.
 	const [pickedAddress, setPickedAddress] =
 		useState<GoogleSelectedAddress | null>(null);
@@ -619,6 +672,17 @@ function DeliveryChargeSection({
 	const radiusLocked = !canUseRadius;
 	const radiusEditable = mode === "radius" && canUseRadius;
 	const lalamoveLocked = !canUseLalamove;
+	// Weight-mode derived views: which zone owns each state (chips make a
+	// double-claim unrepresentable) and which states no zone covers.
+	const claimedStates = new Map<string, number>();
+	zones.forEach((z, zi) => {
+		for (const s of z.states) {
+			if (!claimedStates.has(s)) claimedStates.set(s, zi);
+		}
+	});
+	const uncoveredStates = MY_STATES.filter((s) => !claimedStates.has(s));
+	const patchZone = (i: number, patch: Partial<ZoneDraft>) =>
+		setZones((prev) => prev.map((z, j) => (j === i ? { ...z, ...patch } : z)));
 	const effectiveAddress = pickedAddress
 		? {
 				label: pickedAddress.formattedAddress,
@@ -652,6 +716,74 @@ function DeliveryChargeSection({
 				mode: "flat",
 				fee: Math.round(rm * 100),
 				freeAbove: freeAboveSen,
+			};
+		} else if (mode === "weight") {
+			// Mirrors sanitizeDeliveryConfig's weight rules so failures are a
+			// helpful inline message, not a thrown save. Cross-zone state clashes
+			// can't happen by construction (claimed chips are disabled), so only
+			// the per-zone rules need checking here.
+			if (zones.length === 0) {
+				setError(
+					"Add at least one delivery zone — or start from the J&T template above.",
+				);
+				return;
+			}
+			const seenNames = new Set<string>();
+			const parsedZones: DeliveryZone[] = [];
+			for (const zone of zones) {
+				const name = zone.name.trim();
+				if (name.length === 0) {
+					setError("Every zone needs a name — e.g. West Malaysia.");
+					return;
+				}
+				if (seenNames.has(name.toLowerCase())) {
+					setError(`Two zones are both named “${name}” — rename one.`);
+					return;
+				}
+				seenNames.add(name.toLowerCase());
+				if (zone.states.length === 0) {
+					setError(`Zone “${name}” needs at least one state.`);
+					return;
+				}
+				const parsedBands: DeliveryZone["bands"] = [];
+				for (const b of zone.bands) {
+					const kg = Number(b.maxKg);
+					const rm = parsePriceInput(b.fee.trim().length > 0 ? b.fee : "0");
+					if (!Number.isFinite(kg) || kg <= 0) {
+						setError(`Each band in “${name}” needs a weight greater than 0 kg`);
+						return;
+					}
+					if (rm === null || rm < 0) {
+						setError(
+							`A band fee in “${name}” isn't a valid amount — numbers only, e.g. 8.00`,
+						);
+						return;
+					}
+					parsedBands.push({ maxKg: kg, fee: Math.round(rm * 100) });
+				}
+				let freeAboveSen: number | undefined;
+				if (zone.freeAbove.trim().length > 0) {
+					const threshold = parsePriceInput(zone.freeAbove);
+					if (threshold === null || threshold <= 0) {
+						setError(
+							`The free-delivery threshold for “${name}” isn't a valid amount`,
+						);
+						return;
+					}
+					freeAboveSen = Math.round(threshold * 100);
+				}
+				parsedZones.push({
+					name,
+					states: zone.states,
+					bands: parsedBands,
+					freeAbove: freeAboveSen,
+				});
+			}
+			nextConfig = {
+				mode: "weight",
+				zones: parsedZones,
+				onOutOfBands,
+				onUnpriceable,
 			};
 		} else if (mode === "lalamove") {
 			// Live provider quote (86eyb5hrf) — `onUnquotable` is vestigial (strict
@@ -822,6 +954,15 @@ function DeliveryChargeSection({
 					title="By distance"
 					subtitle="Radius bands — you deliver"
 					badge={radiusLocked ? <ProBadge /> : undefined}
+				/>
+				{/* Weight/zone rate card (86eyeea1n) — all-tier: it's the correctness
+				    fix for outstation parcel sellers (J&T/DD/Ninja), with zero
+				    provider cost to Kedaipal. */}
+				<ModeButton
+					active={mode === "weight"}
+					onClick={() => setMode("weight")}
+					title="By weight & zone"
+					subtitle="Courier rate card — you ship"
 				/>
 			</div>
 
@@ -1361,6 +1502,191 @@ function DeliveryChargeSection({
 				</div>
 			) : null}
 
+			{mode === "weight" ? (
+				<div className="flex flex-col gap-4">
+					<p className="rounded-lg bg-accent/10 px-3 py-2 text-xs leading-relaxed text-accent-emphasis">
+						Sell nationwide with your parcel courier&apos;s own rate card (J&T,
+						DD Cold Chain, Ninja Cold…). Buyers pay by <b>where the order
+						goes</b> — their state&apos;s zone — and <b>what it weighs</b>:
+						each product&apos;s parcel weight × quantity. You book the courier
+						yourself as usual; Kedaipal prices the checkout.
+					</p>
+					<p className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+						A band works like a box tier — <b>&ldquo;up to 5 kg =
+						RM30&rdquo;</b> (S 5 kg / M 10 kg / L 20 kg). Rates use{" "}
+						<b>actual weight only</b>; if your courier bills volumetric
+						(size-based) weight, pick the safer band when you copy your card
+						over.
+					</p>
+
+					{zones.length === 0 ? (
+						<div className="flex flex-col gap-2.5 rounded-xl border border-dashed border-border p-4">
+							<p className="text-sm font-medium">Start your rate card</p>
+							<p className="text-xs leading-relaxed text-muted-foreground">
+								The template pre-fills West + East Malaysia with J&T&apos;s
+								published ambient rates (Aug 2026) — replace them with what you
+								actually pay your courier.
+							</p>
+							<div className="flex flex-wrap gap-2">
+								<Button
+									type="button"
+									size="sm"
+									className="h-10"
+									onClick={() => {
+										setZones(zoneDraftsFromZones(jntSeedZones()));
+										setError(null);
+									}}
+								>
+									Use the J&T template
+								</Button>
+								<Button
+									type="button"
+									size="sm"
+									variant="outline"
+									className="h-10"
+									onClick={() => setZones([blankZoneDraft()])}
+								>
+									Start blank
+								</Button>
+							</div>
+						</div>
+					) : (
+						<div className="flex flex-col gap-3">
+							{zones.map((zone, zi) => (
+								<WeightZoneCard
+									// biome-ignore lint/suspicious/noArrayIndexKey: rows are positional drafts with no stable identity
+									key={zi}
+									zone={zone}
+									index={zi}
+									claimed={claimedStates}
+									onPatch={(patch) => patchZone(zi, patch)}
+									onRemove={() =>
+										setZones((prev) => prev.filter((_, j) => j !== zi))
+									}
+								/>
+							))}
+							{zones.length < DELIVERY_ZONES_MAX ? (
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									className="h-10 gap-1.5 self-start"
+									onClick={() => setZones((prev) => [...prev, blankZoneDraft()])}
+								>
+									<Plus className="size-4" />
+									Add zone
+								</Button>
+							) : null}
+							{uncoveredStates.length > 0 ? (
+								<p className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+									<b>Not covered:</b> {uncoveredStates.join(", ")} — buyers
+									there{" "}
+									{onOutOfBands === "block"
+										? "see “not delivered to your state” and can't check out with delivery."
+										: "can still order; you confirm the delivery charge on WhatsApp."}
+								</p>
+							) : null}
+						</div>
+					)}
+
+					<div className="flex flex-col gap-2 border-t border-border pt-4">
+						<SectionHeading title="Outside your zones, or heavier than your bands" />
+						<label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-border p-3">
+							<input
+								type="radio"
+								name="weight-out-of-bands"
+								checked={onOutOfBands === "arrange"}
+								onChange={() => setOnOutOfBands("arrange")}
+								className="mt-0.5 size-4 shrink-0 accent-accent"
+							/>
+							<span className="flex flex-col gap-0.5">
+								<span className="text-sm font-medium">
+									Accept the order, arrange the charge on WhatsApp
+								</span>
+								<span className="text-xs text-muted-foreground">
+									The order comes in with the delivery charge pending — you
+									agree it with the buyer in chat, set it on the order, and the
+									payment request goes out with the final total.
+								</span>
+							</span>
+						</label>
+						<label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-border p-3">
+							<input
+								type="radio"
+								name="weight-out-of-bands"
+								checked={onOutOfBands === "block"}
+								onChange={() => setOnOutOfBands("block")}
+								className="mt-0.5 size-4 shrink-0 accent-accent"
+							/>
+							<span className="flex flex-col gap-0.5">
+								<span className="text-sm font-medium">
+									Don&apos;t accept the order
+								</span>
+								<span className="text-xs text-muted-foreground">
+									Buyers in a state you don&apos;t cover — or with an order
+									heavier than your last band — can&apos;t check out with
+									delivery.
+								</span>
+							</span>
+						</label>
+					</div>
+
+					<div className="flex flex-col gap-2 border-t border-border pt-4">
+						<SectionHeading title="When the weight can't be calculated" />
+						<p className="-mt-1 text-xs text-muted-foreground">
+							Happens when an item has no parcel weight set, or the order
+							includes a custom / quote-first item.
+						</p>
+						<label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-border p-3">
+							<input
+								type="radio"
+								name="weight-unpriceable"
+								checked={onUnpriceable === "arrange"}
+								onChange={() => setOnUnpriceable("arrange")}
+								className="mt-0.5 size-4 shrink-0 accent-accent"
+							/>
+							<span className="flex flex-col gap-0.5">
+								<span className="text-sm font-medium">
+									Accept the order, arrange the charge on WhatsApp
+								</span>
+								<span className="text-xs text-muted-foreground">
+									Recommended — a missing weight never costs you the order. The
+									charge comes in pending, like out-of-zone orders above.
+								</span>
+							</span>
+						</label>
+						<label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-border p-3">
+							<input
+								type="radio"
+								name="weight-unpriceable"
+								checked={onUnpriceable === "block"}
+								onChange={() => setOnUnpriceable("block")}
+								className="mt-0.5 size-4 shrink-0 accent-accent"
+							/>
+							<span className="flex flex-col gap-0.5">
+								<span className="text-sm font-medium">
+									Don&apos;t accept the order
+								</span>
+								<span className="text-xs text-muted-foreground">
+									Checkout is refused until every item in the cart has a parcel
+									weight.
+								</span>
+							</span>
+						</label>
+					</div>
+
+					<p className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+						<b>Weights come from your products:</b> every product choice has a
+						&ldquo;Parcel weight&rdquo; field in the product editor, and the
+						bulk-import sheet has a <span className="font-mono">weight_grams</span>{" "}
+						column. Items without a weight follow the rule above.{" "}
+						<Link to="/app/products" className="font-medium underline">
+							Open Products
+						</Link>
+					</p>
+				</div>
+			) : null}
+
 			{error ? (
 				<p role="alert" className="text-sm text-destructive">
 					{error}
@@ -1382,6 +1708,213 @@ function DeliveryChargeSection({
 					? "Save Lalamove delivery"
 					: "Save delivery charge"}
 			</Button>
+		</div>
+	);
+}
+
+/**
+ * One zone of the weight-mode rate card (86eyeea1n): name, member-state chips,
+ * ascending weight bands and an optional per-zone free-above threshold. A
+ * state already claimed by ANOTHER zone renders disabled — one state, one
+ * zone; the sanitizer would reject the overlap, the chips make it
+ * unrepresentable — with a one-line legend explaining the grey (visible on
+ * mobile, where a hover tooltip isn't).
+ */
+function WeightZoneCard({
+	zone,
+	index,
+	claimed,
+	onPatch,
+	onRemove,
+}: {
+	zone: ZoneDraft;
+	index: number;
+	/** state → owning zone index across the whole draft. */
+	claimed: Map<string, number>;
+	onPatch: (patch: Partial<ZoneDraft>) => void;
+	onRemove: () => void;
+}) {
+	const hasForeignClaims = MY_STATES.some((s) => {
+		const owner = claimed.get(s);
+		return owner !== undefined && owner !== index;
+	});
+	return (
+		<div className="flex flex-col gap-3.5 rounded-xl border border-border bg-card p-3.5">
+			<div className="flex items-center gap-2">
+				<Input
+					value={zone.name}
+					onChange={(e) => onPatch({ name: e.target.value })}
+					placeholder={index === 0 ? "West Malaysia" : "East Malaysia"}
+					aria-label={`Zone ${index + 1} name`}
+					variant="field"
+					className="flex-1 font-medium"
+				/>
+				<button
+					type="button"
+					onClick={onRemove}
+					aria-label={`Remove zone ${index + 1}`}
+					className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted"
+				>
+					<Trash2 className="size-4" />
+				</button>
+			</div>
+
+			<div className="flex flex-col gap-1.5">
+				<p className="text-xs font-medium text-muted-foreground">
+					States in this zone
+				</p>
+				<div className="flex flex-wrap gap-1.5">
+					{MY_STATES.map((state) => {
+						const owner = claimed.get(state);
+						const inThisZone = owner === index;
+						return (
+							<FilterChip
+								key={state}
+								tone="accent"
+								selected={inThisZone}
+								disabled={owner !== undefined && !inThisZone}
+								className="disabled:cursor-not-allowed disabled:opacity-40"
+								onClick={() =>
+									onPatch({
+										states: inThisZone
+											? zone.states.filter((s) => s !== state)
+											: [...zone.states, state],
+									})
+								}
+							>
+								{state}
+							</FilterChip>
+						);
+					})}
+				</div>
+				{hasForeignClaims ? (
+					<p className="text-xs text-muted-foreground">
+						Greyed-out states are already in another zone.
+					</p>
+				) : null}
+			</div>
+
+			<div className="flex flex-col gap-2">
+				<p className="text-xs font-medium text-muted-foreground">
+					Weight bands
+				</p>
+				{zone.bands.map((band, i) => (
+					<div
+						// biome-ignore lint/suspicious/noArrayIndexKey: rows are positional drafts with no stable identity
+						key={i}
+						className="flex items-center gap-2"
+					>
+						<span className="text-xs text-muted-foreground">Up to</span>
+						<Input
+							type="number"
+							inputMode="decimal"
+							min={0.1}
+							step={0.1}
+							value={band.maxKg}
+							onChange={(e) =>
+								onPatch({
+									bands: zone.bands.map((b, j) =>
+										j === i ? { ...b, maxKg: e.target.value } : b,
+									),
+								})
+							}
+							variant="field"
+							className="w-20"
+							aria-label={`Zone ${index + 1} band ${i + 1} weight in kg`}
+						/>
+						<span className="text-xs text-muted-foreground">kg →</span>
+						<div className="relative">
+							<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
+								RM
+							</span>
+							<input
+								type="text"
+								inputMode="decimal"
+								value={band.fee}
+								onChange={(e) =>
+									onPatch({
+										bands: zone.bands.map((b, j) =>
+											j === i ? { ...b, fee: e.target.value } : b,
+										),
+									})
+								}
+								onBlur={() =>
+									onPatch({
+										bands: zone.bands.map((b, j) =>
+											j === i ? { ...b, fee: normalizePriceInput(b.fee) } : b,
+										),
+									})
+								}
+								placeholder="8.00"
+								aria-label={`Zone ${index + 1} band ${i + 1} fee`}
+								className="h-11 w-28 rounded-lg border border-input bg-background pl-11 pr-3 text-sm"
+							/>
+						</div>
+						{zone.bands.length > 1 ? (
+							<button
+								type="button"
+								onClick={() =>
+									onPatch({ bands: zone.bands.filter((_, j) => j !== i) })
+								}
+								aria-label={`Remove zone ${index + 1} band ${i + 1}`}
+								className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-muted"
+							>
+								<Trash2 className="size-4" />
+							</button>
+						) : null}
+					</div>
+				))}
+				{zone.bands.length < DELIVERY_BANDS_MAX ? (
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						className="h-10 gap-1.5 self-start"
+						onClick={() =>
+							onPatch({ bands: [...zone.bands, { maxKg: "", fee: "" }] })
+						}
+					>
+						<Plus className="size-4" />
+						Add band
+					</Button>
+				) : null}
+				<p className="text-xs leading-relaxed text-muted-foreground">
+					An order at exactly a band&apos;s weight is inside it. Heavier than
+					your last band follows the rule below. A band fee of RM0 means free
+					up to that weight.
+				</p>
+			</div>
+
+			<div className="flex flex-col gap-1.5">
+				<label
+					htmlFor={`zone-${index}-free-above`}
+					className="text-xs font-medium text-muted-foreground"
+				>
+					Free delivery for orders above (optional)
+				</label>
+				<div className="relative self-start">
+					<span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
+						RM
+					</span>
+					<input
+						id={`zone-${index}-free-above`}
+						type="text"
+						inputMode="decimal"
+						value={zone.freeAbove}
+						onChange={(e) => onPatch({ freeAbove: e.target.value })}
+						onBlur={() =>
+							onPatch({ freeAbove: normalizePriceInput(zone.freeAbove) })
+						}
+						placeholder="150.00"
+						className="h-11 w-40 rounded-lg border border-input bg-background pl-11 pr-3 text-sm"
+					/>
+				</div>
+				<p className="text-xs leading-relaxed text-muted-foreground">
+					Orders to this zone at or above this amount ship free — whatever they
+					weigh. The marketplace move: fund it from the commission you&apos;re
+					not paying.
+				</p>
+			</div>
 		</div>
 	);
 }

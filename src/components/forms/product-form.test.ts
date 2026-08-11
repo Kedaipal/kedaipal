@@ -12,6 +12,7 @@ function row(overrides: Partial<VariantRow> = {}): VariantRow {
 		active: true,
 		blockWhenOutOfStock: true,
 		requiresProof: false,
+		parcelWeightG: "",
 		imageStorageIds: [],
 		...overrides,
 	};
