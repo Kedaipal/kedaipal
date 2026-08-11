@@ -492,6 +492,22 @@ export default defineSchema({
 		minNoticeDays: v.optional(v.number()),
 		// DEPRECATED — moved to productVariants.requiresProof (per-variant).
 		requiresProof: v.optional(v.boolean()),
+		// When this product first appeared on a real order (set-if-unset at both
+		// order-create sites — storefront + counter — and never cleared, not even
+		// when that order is cancelled or hard-deleted: "was it ever sold?" is a
+		// question about history, and a cancelled order still has a frozen line
+		// naming this product).
+		//
+		// Its only job is to answer that question in O(1). `products.deletePermanently`
+		// refuses once it's set, because `orders.items[].productId` is a hard
+		// reference alongside the frozen name/price snapshot — erasing a product
+		// that past orders point at would orphan those references (Insights groups
+		// top products by productId and resolves the row for its thumbnail). A
+		// product that HAS sold is archived instead, which keeps its slot under the
+		// product cap. Undefined = never ordered (also the legacy default; the
+		// products:backfillProductOrderedAt one-shot fills existing rows).
+		// See convex/lib/productCap.ts + docs/product-cap.md.
+		orderedAt: v.optional(v.number()),
 		channel: v.union(v.literal("whatsapp")),
 		sortOrder: v.number(),
 		createdAt: v.number(),

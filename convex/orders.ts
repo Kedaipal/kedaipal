@@ -20,6 +20,7 @@ import {
 	moveOrderToPhone,
 } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
+import { stampProductsOrdered } from "./lib/productOrdered";
 import { assertValidAddress } from "./lib/address";
 import { requireCustomerName } from "./lib/customer";
 import { assertPlanFeature } from "./subscriptions";
@@ -31,6 +32,7 @@ import {
 	adminUserIds,
 	isAdmin,
 	logAdminAction,
+	logDestructiveAdminAction,
 	type RetailerAccess,
 	requireRetailerAccess,
 } from "./lib/auth";
@@ -1081,6 +1083,10 @@ export const create = mutation({
 		// Meter the order against the retailer's monthly usage (SOFT cap — the
 		// nudge banner, never a block on this public mutation).
 		await recordOrderCreated(ctx, args.retailerId, now);
+
+		// Mark every product on this order as having sold, so it can no longer be
+		// permanently deleted out from under the order lines that now reference it.
+		await stampProductsOrdered(ctx, snapshotItems, now);
 
 		// Link to the aggregated customer record when we already know the phone.
 		// Phone-less orders (link-in-bio checkout) are linked later when the
@@ -2591,8 +2597,11 @@ async function deleteOrderCascade(
  * — an admin can erase orders in ANY store, including one they personally own
  * (which resolves via the owner branch, so `actingAsAdmin` is false there). The
  * dashboard hides the action for sellers, but this guard — not the hidden UI —
- * is the real boundary. Admin act-as writes (a store they don't own) are audited.
- * ClickUp `86eyaqzpd` (admin-only restriction) atop `86ey8fr8t` (the erase).
+ * is the real boundary. EVERY erase is audited, including one in a store the
+ * admin owns (`logDestructiveAdminAction`) — the deleted row can't be asked who
+ * removed it, so the trace has to be unconditional.
+ * ClickUp `86eyaqzpd` (admin-only restriction) atop `86ey8fr8t` (the erase),
+ * `86eyhz189` (always audited).
  */
 export const deleteOrder = mutation({
 	args: { orderId: v.id("orders") },
@@ -2600,20 +2609,27 @@ export const deleteOrder = mutation({
 		const { order, access } = await requireOrderAccess(ctx, orderId);
 		if (!(await isAdmin(ctx))) throw new Error("Forbidden");
 		await deleteOrderCascade(ctx, order);
-		await logAdminAction(ctx, access, "orders.hardDelete", orderId);
+		await logDestructiveAdminAction(ctx, access, "orders.hardDelete", orderId);
 	},
 });
 
 /**
  * Bulk hard-delete (the inbox multi-select) — **Kedaipal admin only**, same
- * policy as the single `deleteOrder`. Capped at 100/batch, one batch audit row.
+ * policy as the single `deleteOrder`. Capped at 100/batch.
  * No plan gate: permanent erasure is an admin ops action, not a paid feature.
  *
  * The admin gate is checked ONCE up front (`isAdmin` — one caller identity for
  * the whole batch, cheaper than per-order and ownership-agnostic so an admin can
  * bulk-erase in a store they own too). The per-order `requireRetailerAccess`
- * stays: it confirms each order's retailer exists and supplies `batchAccess` for
- * the audit row (an admin passes it for every store, so it never rejects here).
+ * stays: it confirms each order's retailer exists and supplies the access record
+ * for that order's audit row (an admin passes it for every store, so it never
+ * rejects here).
+ *
+ * Audit is ONE ROW PER ERASED ORDER, not one per batch (86eyhz189). A batch row
+ * could only carry a single `retailerId`, so a batch spanning two stores would
+ * file the whole erase under whichever store happened to be last — and a bare
+ * count answers "how many" when the question an irreversible delete raises is
+ * "WHICH order is gone". Per-order rows are correct across stores by construction.
  */
 export const bulkDeleteOrders = mutation({
 	args: { orderIds: v.array(v.id("orders")) },
@@ -2624,16 +2640,19 @@ export const bulkDeleteOrders = mutation({
 		if (!(await isAdmin(ctx))) throw new Error("Forbidden");
 
 		let deleted = 0;
-		let batchAccess: RetailerAccess | undefined;
 		for (const orderId of orderIds) {
 			const order = await ctx.db.get(orderId);
 			if (!order) throw new ConvexError("Order not found");
-			batchAccess = await requireRetailerAccess(ctx, order.retailerId);
+			const access = await requireRetailerAccess(ctx, order.retailerId);
 			await deleteOrderCascade(ctx, order);
+			await logDestructiveAdminAction(
+				ctx,
+				access,
+				"orders.bulkDeleteOrders",
+				orderId,
+			);
 			deleted++;
 		}
-		if (batchAccess)
-			await logAdminAction(ctx, batchAccess, "orders.bulkDeleteOrders");
 		return { deleted };
 	},
 });
