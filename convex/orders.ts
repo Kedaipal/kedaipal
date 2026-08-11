@@ -46,6 +46,10 @@ import {
 	minQuantityMessage,
 } from "./lib/minOrderRules";
 import { orderBucket } from "./lib/orderBuckets";
+import {
+	type ManualReminderBlock,
+	manualReminderEligibility,
+} from "./lib/paymentReminder";
 import { type CsvOrder, ordersToCsv } from "./lib/orderCsv";
 import {
 	buildInboxPredicate,
@@ -1401,6 +1405,84 @@ export const generateReceiptPdf = action({
 		// An unpaid order is an invoice, a settled one a receipt (see buildOrderReceiptPdf).
 		const prefix = inputs.data.paid ? "Receipt" : "Invoice";
 		return { pdf, filename: `${prefix}-${inputs.shortId}.pdf` };
+	},
+});
+
+/**
+ * Auth + eligibility + atomic cooldown stamp for a manual payment reminder, in
+ * one mutation so two fast taps can't both slip past the 24h gate (compare on
+ * the freshly-read `lastManualReminderAt`, then patch). Owner OR admin act-as
+ * via resolveSharedOrder — the same seam the receipt PDF uses; throws
+ * ConvexError on not-authenticated / forbidden. Returns the block reason (no
+ * stamp) when the order isn't in a remindable state, else stamps and hands back
+ * the orderId for the send.
+ *
+ * The window rules (day 11–14, 24h cooldown — 86eyd63r8 revision) live in the
+ * pure `manualReminderEligibility`, shared verbatim with the dashboard button,
+ * so the disabled-with-reason UI and this lock can never disagree.
+ * See docs/payment-reminder.md.
+ */
+export const prepareManualReminder = internalMutation({
+	args: { shortId: v.string() },
+	handler: async (
+		ctx,
+		{ shortId },
+	): Promise<
+		| { ok: true; orderId: Id<"orders"> }
+		| { ok: false; reason: ManualReminderBlock | "not_found" }
+	> => {
+		const order = await resolveSharedOrder(ctx, { shortId });
+		if (!order) return { ok: false, reason: "not_found" };
+		const eligibility = manualReminderEligibility(
+			{
+				status: order.status,
+				paymentStatus: order.paymentStatus,
+				mockupStatus: order.mockupStatus,
+				mockupWaivedAt: order.mockupWaivedAt,
+				deliveryFeePending: order.deliveryFeePending,
+				lastManualReminderAt: order.lastManualReminderAt,
+				createdAt: order.createdAt,
+				customer: { waPhone: order.customer.waPhone },
+			},
+			Date.now(),
+		);
+		if (!eligibility.ok) return { ok: false, reason: eligibility.reason };
+		const now = Date.now();
+		await ctx.db.patch(order._id, {
+			lastManualReminderAt: now,
+			updatedAt: now,
+		});
+		return { ok: true, orderId: order._id };
+	},
+});
+
+/**
+ * Seller-triggered "Send payment reminder" — the one deliberate exception to
+ * one-message-per-order (86eyd63r8): each send is a human tap, not an
+ * automation, and the window is boxed to days 11–14 of the open-payment window
+ * at most once per 24h (so an order can ever receive at most 4). Re-sends the
+ * buyer the full payment message (amount + transfer ref + "Make payment" CTA
+ * to their order page). Auth + eligibility + the cooldown stamp happen
+ * atomically in prepareManualReminder; the actual send is best-effort through
+ * the WABA `session_message` gateway (kill switch / caps / opt-outs apply, and
+ * may silently not deliver outside Meta's 24h service window — the button's
+ * helper says so). A blocked reason is returned WITHOUT sending, so the button
+ * can explain why. See docs/payment-reminder.md.
+ */
+export const sendPaymentReminder = action({
+	args: { shortId: v.string() },
+	handler: async (
+		ctx,
+		{ shortId },
+	): Promise<{ ok: boolean; reason?: ManualReminderBlock | "not_found" }> => {
+		const prep = await ctx.runMutation(internal.orders.prepareManualReminder, {
+			shortId,
+		});
+		if (!prep.ok) return { ok: false, reason: prep.reason };
+		await ctx.runAction(internal.whatsapp.notifyManualPaymentReminder, {
+			orderId: prep.orderId,
+		});
+		return { ok: true };
 	},
 });
 

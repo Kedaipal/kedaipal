@@ -685,13 +685,17 @@ function SettingsRoute() {
 								onSave={(patch) => updateSettings(patch)}
 							/>
 						</Card>
-						{/* Says plainly that nothing chases the buyer for us, so a seller
-						    never assumes a nudge went out that didn't. */}
+						{/* Says plainly that nothing chases the buyer automatically, and
+						    names the one manual tool that exists — so the behaviour is
+						    discoverable without a seller assuming a nudge went out that
+						    didn't (docs/payment-reminder.md). */}
 						<p className="px-1 text-xs text-muted-foreground">
-							Kedaipal doesn't chase unpaid orders. Each order gets one WhatsApp
-							— the confirmation — and it links the buyer to their order page,
-							where these payment details and the “I've paid” button live. To
-							nudge someone, message them yourself.
+							Kedaipal doesn't chase unpaid orders automatically. Each order
+							gets one WhatsApp — the confirmation — and it links the buyer to
+							their order page, where these payment details and the “I've
+							paid” button live. If an order is still unpaid on day 11, a
+							“Send payment reminder” button appears on its order page (once
+							per day, until day 14) — sending it is always your call.
 						</p>
 					</div>
 				) : null}

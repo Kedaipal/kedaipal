@@ -697,14 +697,128 @@ export const handleInbound = internalAction({
 	},
 });
 
-// NOTE (86eyd63r8, one message per order): every proactive buyer notification
-// that used to live here — status changes, custom stage pings, payment
-// received, mockup submitted, the payment-due prompts, delivery-fee-set, both
-// payment reminders and the Lalamove proof-of-delivery photos — has been
-// removed. An order now gets exactly ONE outbound WhatsApp message: the
-// confirmation push below, sent once the price is final. Everything that
-// followed it is on the tracking page instead.
+// NOTE (86eyd63r8, one message per order): every proactive AUTOMATIC buyer
+// notification that used to live here — status changes, custom stage pings,
+// payment received, mockup submitted, the payment-due prompts,
+// delivery-fee-set, the day-11 reminder cron and the Lalamove
+// proof-of-delivery photos — has been removed. An order gets exactly ONE
+// automatic outbound WhatsApp: the confirmation push below, sent once the
+// price is final. Everything that followed it is on the tracking page.
+// The single seller-DRIVEN exception is notifyManualPaymentReminder — one
+// human tap per send, window-boxed to days 11–14 (docs/payment-reminder.md).
 // See docs/one-message-per-order.md.
+
+/**
+ * Metadata for the seller's manual payment reminder. Only fields the send
+ * needs; the auth + eligibility + cooldown stamp already ran atomically in
+ * orders.prepareManualReminder — the re-checks here only cover the state
+ * changing between the seller's tap and this action running.
+ */
+export const getManualReminderContext = internalQuery({
+	args: { orderId: v.id("orders") },
+	handler: async (
+		ctx,
+		{ orderId },
+	): Promise<{
+		retailerId: Id<"retailers">;
+		shortId: string;
+		storeName: string;
+		customerWaPhone: string | undefined;
+		total: number;
+		currency: string;
+		trackingToken: string | undefined;
+		locale: Locale;
+		pickupSnapshot: PickupSnapshot | undefined;
+		status: Doc<"orders">["status"];
+		paymentStatus: Doc<"orders">["paymentStatus"];
+		mockupPending: boolean;
+		deliveryFeePending: boolean;
+	} | null> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) return null;
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) return null;
+		return {
+			retailerId: order.retailerId,
+			shortId: order.shortId,
+			storeName: retailer.storeName,
+			customerWaPhone: order.customer.waPhone,
+			total: order.total,
+			currency: order.currency,
+			trackingToken: order.trackingToken,
+			locale: (retailer.locale as Locale | undefined) ?? "en",
+			pickupSnapshot: order.pickupSnapshot,
+			status: order.status,
+			paymentStatus: order.paymentStatus,
+			mockupPending: isMockupGateClosed(order),
+			deliveryFeePending: order.deliveryFeePending === true,
+		};
+	},
+});
+
+/**
+ * The seller's "Send payment reminder" (orders.sendPaymentReminder) — the ONE
+ * deliberate exception to one-message-per-order, because each send is a human
+ * decision, not an automation: available only on days 11–14 of the open-payment
+ * window, at most once per 24h (both enforced in prepareManualReminder before
+ * this is ever invoked). Re-sends the full payment message — reminder intro →
+ * amount + transfer ref → "Make payment" CTA to the order page.
+ *
+ * Sent as a gated `session_message` (kill switch / caps / opt-outs apply) and
+ * best-effort: by day 11 the buyer's 24h service window is almost always
+ * closed, so a free-form send can silently not deliver (Meta 131047) unless
+ * the buyer has messaged recently. The button's helper copy says so — and
+ * moving this onto a registered utility template is part of the remaining
+ * 86eyd63r8 template work, which fixes the deliverability for good.
+ */
+export const notifyManualPaymentReminder = internalAction({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<void> => {
+		const meta = await ctx
+			.runQuery(internal.whatsapp.getManualReminderContext, { orderId })
+			.catch((err) => {
+				console.error("WA manual-reminder lookup failed", err);
+				return null;
+			});
+		if (!meta) return;
+		if (!meta.customerWaPhone) return;
+		// Order left the "open + unpaid" state between the seller's tap and here.
+		if (meta.status === "cancelled") return;
+		if (meta.paymentStatus === "claimed" || meta.paymentStatus === "received")
+			return;
+		// Custom item re-gated (e.g. buyer requested changes) — payment isn't owed.
+		if (meta.mockupPending) return;
+		// Delivery charge re-flagged pending in the gap — the total isn't final.
+		if (meta.deliveryFeePending) return;
+
+		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
+		const trackingToken =
+			meta.trackingToken ??
+			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
+		if (!trackingToken) return; // order vanished — don't ship a dead link
+		const locale = pickLocale(meta.locale);
+		const trackingUrl = `${appUrl}/track/${trackingToken}`;
+		const introBody = renderSystemMessage(locale, "paymentReminderIntro", {
+			shortId: meta.shortId,
+			storeName: meta.storeName,
+			amount: `${meta.currency} ${(meta.total / 100).toFixed(2)}`,
+			trackingUrl,
+		});
+		await sendPaymentMessage(
+			makeGuardedSender(ctx, meta.retailerId, "session_message"),
+			meta.customerWaPhone,
+			{
+				introBody,
+				locale,
+				shortId: meta.shortId,
+				storeName: meta.storeName,
+				trackingUrl,
+				pickupSnapshot: meta.pickupSnapshot,
+				currency: meta.currency,
+			},
+		);
+	},
+});
 
 // ---------------------------------------------------------------------------
 // Diagnostic helpers

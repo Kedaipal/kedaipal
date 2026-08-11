@@ -33,6 +33,7 @@ import {
 	riderDrivesOrderStatus,
 } from "../../convex/lib/lalamove";
 import { isMockupGateClosed } from "../../convex/lib/order";
+import { manualReminderEligibility } from "../../convex/lib/paymentReminder";
 import {
 	ORDER_PAYMENT_METHODS,
 	type OrderPaymentMethod,
@@ -181,6 +182,17 @@ function formatRelative(epochMs: number | undefined): string {
 	return `${Math.floor(diff / day)}d ago`;
 }
 
+/** "in 3h" / "tomorrow-ish" phrasing for the reminder cooldown + unlock. */
+function formatUntil(epochMs: number): string {
+	const diff = epochMs - Date.now();
+	const minute = 60_000;
+	const hour = 60 * minute;
+	if (diff <= 0) return "now";
+	if (diff < hour) return `in ${Math.max(1, Math.round(diff / minute))}m`;
+	if (diff < 36 * hour) return `in ${Math.round(diff / hour)}h`;
+	return `in ${Math.round(diff / (24 * hour))} days`;
+}
+
 /**
  * Stepper + next action, always on top: dots for reached stages, an outlined
  * dot for the next one, and the single most likely transition as a big button
@@ -263,6 +275,8 @@ function OrderDetailRoute() {
 	const advanceToStage = useMutation(api.orders.advanceToStage);
 	const markPaymentReceived = useMutation(api.orders.markPaymentReceived);
 	const cancelRiderBooking = useAction(api.lalamove.cancelBooking);
+	const sendPaymentReminder = useAction(api.orders.sendPaymentReminder);
+	const [sendingReminder, setSendingReminder] = useState(false);
 	const deleteOrder = useMutation(api.orders.deleteOrder);
 	// Opening the order IS the seller seeing it — drains it from the New bucket,
 	// the Home tile and the age escalation (86eyf1rck). Fire-and-forget: a failed
@@ -971,16 +985,105 @@ function OrderDetailRoute() {
 								? "Set the delivery charge first"
 								: "Mark payment received"}
 					</Button>
-					{/* Chasing payment is yours to do now — Kedaipal sends the buyer one
-					    WhatsApp per order and no automatic reminders, so point the
-					    seller at the chat button they already have. */}
-					{!mockupGated && !deliveryFeePending ? (
-						<p className="border-t border-border pt-3 text-xs text-muted-foreground">
-							Kedaipal doesn't chase payment for you. How to pay is always on
-							the buyer's order page — nudge them yourself with the WhatsApp
-							button below if you need to.
-						</p>
-					) : null}
+					{/* The manual payment reminder (86eyd63r8, revised 8 Aug): Kedaipal
+					    never chases automatically — the seller gets a window-boxed
+					    button instead. Hidden before day 11 (a control that's dead for
+					    10 days is noise — the line below names the unlock day), live
+					    on days 11–14 at most once per 24h, and closed for good after
+					    day 14. The eligibility mirrors the server's
+					    manualReminderEligibility exactly, so the disabled reasons here
+					    can never disagree with the mutation's lock. */}
+					{!mockupGated && !deliveryFeePending
+						? (() => {
+								const eligibility = manualReminderEligibility(
+									{
+										status: order.status,
+										paymentStatus: order.paymentStatus,
+										mockupStatus: order.mockupStatus,
+										mockupWaivedAt: order.mockupWaivedAt,
+										deliveryFeePending: order.deliveryFeePending,
+										lastManualReminderAt: order.lastManualReminderAt,
+										createdAt: order.createdAt,
+										customer: { waPhone: order.customer.waPhone },
+									},
+									Date.now(),
+								);
+								const blocked = eligibility.ok ? undefined : eligibility;
+								if (blocked?.reason === "too_early") {
+									return (
+										<p className="border-t border-border pt-3 text-xs text-muted-foreground">
+											Kedaipal doesn't chase payment for you — how to pay is
+											always on the buyer's order page. If this is still
+											unpaid on day 11, a "Send payment reminder" button
+											unlocks here ({blocked.unlockAt ? formatUntil(blocked.unlockAt) : "later"}); until then, nudge them yourself with
+											the WhatsApp button below.
+										</p>
+									);
+								}
+								if (blocked?.reason === "window_closed") {
+									return (
+										<p className="border-t border-border pt-3 text-xs text-muted-foreground">
+											The reminder window has closed — this order is past day
+											14 unpaid, which is beyond a nudge. Settle it with the
+											buyer directly (the WhatsApp button below), then mark
+											payment received — or cancel the order.
+										</p>
+									);
+								}
+								if (blocked?.reason === "no_contact") {
+									return (
+										<p className="border-t border-border pt-3 text-xs text-muted-foreground">
+											No buyer WhatsApp number on file, so there's nobody to
+											remind — how to pay stays on the order page.
+										</p>
+									);
+								}
+								const onCooldown = blocked?.reason === "cooldown";
+								return (
+									<div className="flex flex-col gap-2 border-t border-border pt-3">
+										<Button
+											onClick={async () => {
+												setSendingReminder(true);
+												try {
+													const res = await sendPaymentReminder({ shortId });
+													if (res.ok) {
+														toast.success("Payment reminder sent", {
+															description:
+																"Amount, reference and the order-page link — you can send the next one in 24 hours.",
+														});
+													} else {
+														toast.error("Reminder not sent", {
+															description:
+																res.reason === "cooldown"
+																	? "You've already reminded this buyer in the last 24 hours."
+																	: res.reason === "window_closed"
+																		? "The day-14 reminder window has closed."
+																		: "This order can't be reminded right now.",
+														});
+													}
+												} finally {
+													setSendingReminder(false);
+												}
+											}}
+											isLoading={sendingReminder}
+											disabled={sendingReminder || onCooldown}
+											variant="outline"
+											className="h-11 w-full"
+										>
+											<MessageCircle className="size-4" />
+											{onCooldown
+												? `Reminded — next ${blocked?.retryAt ? formatUntil(blocked.retryAt) : "in 24h"}`
+												: "Send payment reminder on WhatsApp"}
+										</Button>
+										<p className="text-xs text-muted-foreground">
+											{onCooldown
+												? "Once per day, and only until day 14 — after that it's a conversation, not a nudge."
+												: "Sends the amount, transfer reference and their order-page link. Once per day until day 14. If the buyer has never replied on WhatsApp, Meta may not deliver it — the chat button below always works."}
+										</p>
+									</div>
+								);
+							})()
+						: null}
 				</section>
 			) : null}
 

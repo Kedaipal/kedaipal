@@ -15,6 +15,10 @@
  *
  * If you add a buyer-facing WhatsApp send, one of these tests SHOULD go red.
  * That is the point — put the information on the tracking page instead.
+ *
+ * The one sanctioned exception is the seller's MANUAL payment reminder
+ * (day 11–14, once per 24h, human tap only — convex/manualPaymentReminder
+ * .test.ts owns it). It never appears here because nothing ever schedules it.
  * See docs/one-message-per-order.md.
  */
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";

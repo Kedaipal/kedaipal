@@ -12,6 +12,11 @@ One, on every plan. Not "one plus a status update", not "one per stage" — one.
 Nothing in the fulfilment, payment, mockup, courier or rider flow proactively
 messages a buyer any more.
 
+The one deliberate exception is **seller-driven**, never automatic: the manual
+payment reminder, available on the order page only on days 11–14 of the
+open-payment window, at most once per 24h — every send is a human tap. See
+[`payment-reminder.md`](./payment-reminder.md).
+
 The buyer's one message is the Meta-approved utility template
 `order_confirmation_utility` (`WHATSAPP_ORDER_CONFIRM_TEMPLATE`) — body params
 shortId / store / total, URL button = the **tracking token**. Its whole job is
@@ -154,12 +159,13 @@ Every row below used to be an outbound WhatsApp send. All roads now lead to
 | `notifyMockupSubmitted` — mockup image + review CTA | `submitMockup` | **Replaced by the one confirmation**, which now fires at submit and links straight to the review UI. |
 | `notifyPaymentDue` (`approved` / `waived` / `declined` intros) | `approveMockup`, `waiveMockup`, `declineMockupItem` | The confirmation already went out at submit; "How to pay" lives on the page. |
 | `notifyDeliveryFeeSet` | `orders.setDeliveryFee` | **Replaced by the one confirmation**, which now fires there and carries the charge + final total. |
-| `notifyPaymentReminder` — automatic day-11 nudge | daily cron `paymentReminders.sendDuePaymentReminders` | Nothing. Chasing is the seller's call — see below. |
-| `notifyManualPaymentReminder` — seller's "Send payment reminder" button | `orders.sendPaymentReminder` | Nothing. The seller messages the buyer themselves. |
+| `notifyPaymentReminder` — automatic day-11 nudge | daily cron `paymentReminders.sendDuePaymentReminders` | The **seller's** day-11 reminder button (8 Aug revision): same timing, human finger — [`payment-reminder.md`](./payment-reminder.md). |
 | `orders.sendOrderDocument` / `sendOrderDocumentToBuyer` — counter receipt/invoice PDF | `notifyCounterOrderCreated`, Done-screen Resend | Download / Share on the cashier's Done screen; **Receipt** button on the buyer's own order page. |
 | `notifyDeliveryPhoto` — Lalamove POD photos | `lalamove.fetchPodImages` | "Delivery photo" card on the order page + the seller's dispatch card. (This was the one send that produced *N* messages from one event — up to 3 images.) |
 
-**Modules deleted:** `convex/lib/paymentReminder.ts`, `convex/paymentReminders.ts`.
+**Modules deleted:** `convex/paymentReminders.ts` (the cron).
+`convex/lib/paymentReminder.ts` returned on 8 Aug carrying the manual button's
+window rules — the cron predicates stayed dead.
 **Removed from `OrderStage`:** the `notify` field.
 **Removed from `lib/orderStatus.ts`** (both `convex/lib` and `src/lib` mirrors):
 `MAX_NOTIFY_STAGES`, `stageNotifyPlan`, `StageNotifyPlan`.
@@ -225,7 +231,7 @@ NOT notified, and every new line below matches that tone.
 | --- | --- |
 | **Cancellation is silent.** No tombstone message, no apology text. | The cancel confirm dialog (`src/routes/app.orders.$shortId.tsx`) and the inbox bulk-cancel dialog (`src/components/dashboard/order-bulk-bar.tsx`): *"The customer is NOT notified — the cancellation only shows on their order page, so tell them yourself if they're expecting it."* |
 | **Advancing a status or stage tells the buyer nothing on WhatsApp.** | A line under the order-detail stepper: *"Moving the order along updates the buyer's order page — it doesn't send them a WhatsApp."* Plus a note under the Settings → Order status stage editor explaining what stages still do. |
-| **There is no payment chasing over WhatsApp at all** — no day-11 cron, no manual button. | Settings → Payments, under the payment-methods card: *"Kedaipal doesn't chase unpaid orders…To nudge someone, message them yourself."* And on the unpaid Payment card of the order itself, pointing at the seller's own WhatsApp deep link. |
+| **No AUTOMATIC payment chasing** — the day-11 cron is gone. What remains is the seller's own reminder button, window-boxed to days 11–14, once per 24h, closed forever after ([`payment-reminder.md`](./payment-reminder.md)). | Settings → Payments names the day-11 unlock; the unpaid Payment card on order detail carries the button, its cooldown state, and the day-14 closure copy. |
 | **Confirming a payment doesn't ping the buyer.** | The mark-received confirm dialog says the buyer isn't messaged; the buyer's page carries *"This page updates the moment {store} confirms your payment."* |
 | **Counter orders no longer get the invoice/receipt PDF in chat.** | The Done screen (`src/components/order/order-document-actions.tsx`): *"Hand {buyer} their {receipt} now if they want one. It isn't sent on WhatsApp — they can open it any time from the order page we linked them to."* An anonymous cash sale says plainly that this is their only copy. |
 | **Courier + tracking number never ride a message.** | The mark-shipped prompt and the Shipment tracking card both state that the number lands on the buyer's order page. |
@@ -292,7 +298,7 @@ fine and costs nothing. Adding a `wa.send` is the thing to stop at.
 [`waba-protection.md`](./waba-protection.md) ·
 [`proof-approval.md`](./proof-approval.md) ·
 [`counter-checkout.md`](./counter-checkout.md) ·
-[`payment-reminder.md`](./payment-reminder.md) (tombstone) ·
+[`payment-reminder.md`](./payment-reminder.md) (the manual-reminder exception) ·
 [`order-status-customization.md`](./order-status-customization.md) ·
 [`fulfilment.md`](./fulfilment.md) ·
 [`delivery-lalamove.md`](./delivery-lalamove.md)

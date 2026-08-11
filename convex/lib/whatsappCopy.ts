@@ -158,7 +158,8 @@ export type SystemMessageKey =
 	| "storeQrConnected"
 	| "storeQrBusy"
 	| "counterOrderConfirmedPaid"
-	| "counterOrderConfirmedUnpaid";
+	| "counterOrderConfirmedUnpaid"
+	| "paymentReminderIntro";
 
 type SystemCopy = {
 	transferReferenceLine: (v: CopyVars) => string;
@@ -183,6 +184,11 @@ type SystemCopy = {
 	// so the buyer never has to scan again to pay.
 	counterOrderConfirmedPaid: (v: CopyVars) => string;
 	counterOrderConfirmedUnpaid: (v: CopyVars) => string;
+	// The ONE exception to "we only reply" in this catalog: the seller's manual
+	// "Send payment reminder" (order detail, day 11–14 only, once per 24h —
+	// docs/payment-reminder.md). Seller-initiated per tap, never automatic, and
+	// sent as a gated `session_message` so caps/opt-outs apply.
+	paymentReminderIntro: (v: CopyVars) => string;
 };
 
 export const systemMessages: Record<Locale, SystemCopy> = {
@@ -211,6 +217,12 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`🧾 Thanks for your order at ${storeName}! Order ${shortId} is confirmed${
 				amount ? ` — total ${amount} to pay whenever you're ready` : ""
 			}. Pay and track everything here, no rush: ${trackingUrl}`,
+	paymentReminderIntro: ({ shortId, storeName, amount, trackingUrl }) =>
+			`👋 A reminder from ${storeName}: order ${shortId}${
+				amount ? ` (${amount})` : ""
+			} is still awaiting payment.${
+				trackingUrl ? `\n\n📋 View your order details: ${trackingUrl}` : ""
+			}`,
 	},
 	ms: {
 		transferReferenceLine: ({ shortId }) =>
@@ -237,6 +249,12 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`🧾 Terima kasih atas pesanan anda di ${storeName}! Pesanan ${shortId} telah disahkan${
 				amount ? ` — jumlah ${amount} untuk dibayar bila-bila anda sedia` : ""
 			}. Bayar & jejak pesanan di sini, tak perlu tergesa-gesa: ${trackingUrl}`,
+	paymentReminderIntro: ({ shortId, storeName, amount, trackingUrl }) =>
+			`👋 Peringatan daripada ${storeName}: pesanan ${shortId}${
+				amount ? ` (${amount})` : ""
+			} masih menunggu pembayaran.${
+				trackingUrl ? `\n\n📋 Lihat butiran pesanan anda: ${trackingUrl}` : ""
+			}`,
 	},
 	zh: {
 		transferReferenceLine: ({ shortId }) =>
@@ -263,6 +281,12 @@ export const systemMessages: Record<Locale, SystemCopy> = {
 			`🧾 谢谢您在 ${storeName} 下单！订单 ${shortId} 已确认${
 				amount ? ` —— 总额 ${amount}，方便的时候付款就好` : ""
 			}。可以在这里付款和查看订单，不急：${trackingUrl}`,
+	paymentReminderIntro: ({ shortId, storeName, amount, trackingUrl }) =>
+			`👋 ${storeName} 的提醒：订单 ${shortId}${
+				amount ? `（${amount}）` : ""
+			}还在等待付款。${
+				trackingUrl ? `\n\n📋 查看订单详情：${trackingUrl}` : ""
+			}`,
 	},
 };
 
