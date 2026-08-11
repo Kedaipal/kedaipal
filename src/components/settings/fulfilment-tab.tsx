@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import {
 	Clock,
@@ -59,6 +60,7 @@ type DeliveryBookingSummary = {
 	vehicleType: "MOTORCYCLE" | "CAR";
 	hasCredentials: boolean;
 	promptBookOnPacked: boolean;
+	deliveryDirection: "standard" | "collection";
 	apiKeyHint?: string;
 };
 
@@ -601,6 +603,12 @@ function DeliveryChargeSection({
 	const [promptBook, setPromptBook] = useState(
 		deliveryBooking?.promptBookOnPacked ?? false,
 	);
+	// Collection service (86eyg0n8e): riders collect FROM the customer and
+	// bring orders here (gear-wash / repair stores). Reverses dispatch, stops
+	// webhook auto-status, and flips buyer-facing copy to "collection".
+	const [collectionMode, setCollectionMode] = useState(
+		deliveryBooking?.deliveryDirection === "collection",
+	);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const hasStoredKey = !!deliveryBooking?.apiKeyHint;
@@ -652,7 +660,9 @@ function DeliveryChargeSection({
 			// helpful message, not a thrown save.
 			if (!effectiveAddress) {
 				setError(
-					"Pick your business address from the suggestions — it's the pickup point riders are sent to.",
+					collectionMode
+						? "Pick your business address from the suggestions — it's where riders drop off what they collect."
+						: "Pick your business address from the suggestions — it's the pickup point riders are sent to.",
 				);
 				return;
 			}
@@ -705,12 +715,20 @@ function DeliveryChargeSection({
 								enabled: true,
 								vehicleType,
 								promptBookOnPacked: promptBook,
+								// Explicit both ways so turning the toggle OFF really
+								// clears it ("standard" normalizes to unset server-side).
+								deliveryDirection: collectionMode
+									? ("collection" as const)
+									: ("standard" as const),
 								apiKey: apiKey.trim() || undefined,
 								apiSecret: apiSecret.trim() || undefined,
 							},
 						}
 					: wasLalamove
 						? {
+								// Direction is deliberately omitted here — the server keeps
+								// the stored value, so switching pricing away and back never
+								// resets a collection store to standard.
 								deliveryBooking: {
 									enabled: false,
 									vehicleType,
@@ -825,15 +843,14 @@ function DeliveryChargeSection({
 					    LALAMOVE's, they surprise vendors ("but Kajang is close!"), and
 					    the vehicle picker below must not read as a range picker. */}
 					<p className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-						<b>Lalamove&apos;s own coverage still applies:</b> riders serve
-						the city zone around your pickup address (e.g. Klang Valley), so
-						a buyer too far outside it sees{" "}
-						<i>&quot;this address is too far&quot;</i> and can&apos;t choose
-						delivery — roughly 40–70&nbsp;km depending on direction, and
-						never across zones (a Klang Valley store can&apos;t Lalamove to
-						Melaka). Vehicle choice doesn&apos;t change this: bike and car
-						cover the <b>same area</b> — the difference is parcel size and
-						price. Keep self-collect on as the fallback for far buyers.
+						<b>Lalamove&apos;s own coverage still applies:</b> riders serve the
+						city zone around your pickup address (e.g. Klang Valley), so a buyer
+						too far outside it sees <i>&quot;this address is too far&quot;</i>{" "}
+						and can&apos;t choose delivery — roughly 40–70&nbsp;km depending on
+						direction, and never across zones (a Klang Valley store can&apos;t
+						Lalamove to Melaka). Vehicle choice doesn&apos;t change this: bike
+						and car cover the <b>same area</b> — the difference is parcel size
+						and price. Keep self-collect on as the fallback for far buyers.
 					</p>
 					{lalamoveLocked ? (
 						<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
@@ -847,12 +864,18 @@ function DeliveryChargeSection({
 					<div className="flex flex-col gap-1.5">
 						<GoogleAddressAutocomplete
 							initialValue={businessAddress?.label ?? ""}
-							label="Your pickup address (riders collect here)"
+							label={
+								collectionMode
+									? "Your outlet address (riders drop off here)"
+									: "Your pickup address (riders collect here)"
+							}
 							required
 							placeholder="Start typing your business address…"
 							description={
 								effectiveAddress
-									? "✓ Pinned — riders are sent to this exact point."
+									? collectionMode
+										? "✓ Pinned — riders bring collected orders to this exact point."
+										: "✓ Pinned — riders are sent to this exact point."
 									: "Pick a Google suggestion so riders get an exact pin — your stall, kitchen or shop. Buyers never see this address."
 							}
 							onSelect={(payload) => setPickedAddress(payload)}
@@ -1028,7 +1051,52 @@ function DeliveryChargeSection({
 						</div>
 					) : null}
 
-					{/* 5 · Prompt-to-book on packed (opt-in) — NOT silent auto-book:
+					{/* 5 · Collection service (86eyg0n8e, Bearcamp) — reverses the trip:
+					    riders collect FROM the customer's address and drop off at the
+					    business address. Sits ABOVE prompt-on-packed because it changes
+					    what the whole feature does, not just when it prompts. */}
+					<div className="flex flex-col gap-1.5 rounded-xl border border-input p-3">
+						<div className="flex items-start justify-between gap-4">
+							<div>
+								<p className="text-sm font-medium">Collection service</p>
+								<p className="mt-0.5 text-xs text-muted-foreground leading-relaxed">
+									{collectionMode
+										? 'On — riders collect from your customer\'s address and bring the order to your outlet (for cleaning, repair or laundry services). Checkout asks buyers for a collection address, and order statuses stay yours to advance — the rider\'s progress only moves the booking card, since "picked up" isn\'t "delivered to the customer" here. The return trip after your work is done is a separate order.'
+										: "Off — riders deliver from your outlet to the customer (the normal direction). Turn this on if your business collects items from customers instead, like a cleaning or repair service."}
+								</p>
+								{collectionMode !==
+								(deliveryBooking?.deliveryDirection === "collection") ? (
+									<p className="mt-1.5 text-xs text-amber-700 leading-relaxed dark:text-amber-400">
+										Applies to <span className="font-medium">new orders</span>.
+										Orders already placed keep the arrangement they promised
+										their buyer, so anything in flight is unaffected.
+									</p>
+								) : null}
+								{collectionMode ? (
+									<p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">
+										💡 Rename your order steps to match your workflow (e.g.
+										Collecting → Cleaning → Ready) in{" "}
+										<Link
+											to="/app/settings"
+											search={{ tab: "order-status" }}
+											className="font-medium text-accent hover:underline"
+										>
+											Settings → Order status
+										</Link>
+										— buyers see those names on their tracking page.
+									</p>
+								) : null}
+							</div>
+							<ToggleSwitch
+								on={collectionMode}
+								onChange={setCollectionMode}
+								disabled={lalamoveLocked}
+								label="Collection service"
+							/>
+						</div>
+					</div>
+
+					{/* 6 · Prompt-to-book on packed (opt-in) — NOT silent auto-book:
 					    marking a paid, due-today order Packed pops the confirm dialog
 					    with today's price, so the seller always sees the cost + taps
 					    to spend. */}

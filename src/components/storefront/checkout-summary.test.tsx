@@ -140,6 +140,28 @@ describe("CheckoutSummary (order ticket)", () => {
 		expect(cart.removeItem).toHaveBeenCalledWith("vc");
 	});
 
+	/** A PRICED custom line is the seller's starting price, so the receipt can't
+	 * print it as the settled amount (86eyhn4mr). */
+	it("prefixes From on a priced custom line", () => {
+		const cart = makeCart([
+			makeItem({
+				variantId: "vc",
+				name: "Tent wash",
+				isCustom: true,
+				price: 4000,
+				quantity: 1,
+			}),
+		]);
+		renderSummary(cart);
+		expect(screen.getByText("From 40.00")).toBeTruthy();
+	});
+
+	it("leaves an ordinary line's amount bare", () => {
+		const cart = makeCart([makeItem({ variantId: "v1", quantity: 1 })]);
+		renderSummary(cart);
+		expect(screen.getByText("45.00")).toBeTruthy();
+	});
+
 	it("pre-expands a shortfall line so the fixing stepper is already showing", () => {
 		const cart = makeCart([
 			makeItem({ variantId: "v1", quantity: 2 }),
@@ -232,6 +254,47 @@ describe("CheckoutTotals", () => {
 			/>,
 		);
 		expect(screen.getByText("FREE")).toBeTruthy();
+	});
+
+	/** A custom line means this total isn't the bill yet (86eyhn4mr) — the same
+	 * posture the pending delivery fee already had. */
+	it("names an open quote on the total", () => {
+		render(
+			<CheckoutTotals
+				subtotal={4000}
+				currency="MYR"
+				pickupFee={0}
+				awaitingQuote
+			/>,
+		);
+		expect(screen.getByText("+ your quote")).toBeTruthy();
+	});
+
+	it("lists both holds when the quote AND the delivery fee are open", () => {
+		render(
+			<CheckoutTotals
+				subtotal={4000}
+				currency="MYR"
+				pickupFee={0}
+				awaitingQuote
+				quote={{ kind: "pending", reason: "out_of_range" }}
+			/>,
+		);
+		// Neither may silently win — the buyer is waiting on two numbers.
+		expect(screen.getByText("+ your quote + delivery")).toBeTruthy();
+	});
+
+	it("says collection, not delivery, on a collection-service store", () => {
+		render(
+			<CheckoutTotals
+				subtotal={4000}
+				currency="MYR"
+				pickupFee={0}
+				collectsFromCustomer
+				quote={{ kind: "pending", reason: "out_of_range" }}
+			/>,
+		);
+		expect(screen.getByText("+ collection")).toBeTruthy();
 	});
 
 	it("renders blocked copy as an alert", () => {

@@ -233,10 +233,12 @@ describe("orders", () => {
 				],
 			});
 		});
-		const methods = await t.query(api.orders.getPaymentMethods, { token: await tk(t, shortId) });
-		expect(methods).toHaveLength(2);
-		expect(methods?.[0].label).toBe("Maybank");
-		expect(methods?.[1].bankAccountNumber).toBe("8001-2233");
+		const result = await t.query(api.orders.getPaymentMethods, { token: await tk(t, shortId) });
+		expect(result?.methods).toHaveLength(2);
+		expect(result?.methods[0].label).toBe("Maybank");
+		expect(result?.methods[1].bankAccountNumber).toBe("8001-2233");
+		// No HitPay connection on this store → the gateway path is off.
+		expect(result?.gatewayAvailable).toBe(false);
 
 		// Legacy single object is still read (synthesized into one method).
 		await t.run(async (ctx) => {
@@ -249,9 +251,9 @@ describe("orders", () => {
 			});
 		});
 		const legacy = await t.query(api.orders.getPaymentMethods, { token: await tk(t, shortId) });
-		expect(legacy).toHaveLength(1);
-		expect(legacy?.[0].label).toBe("Hong Leong");
-		expect(legacy?.[0].bankAccountNumber).toBe("9000-1111"); // trimmed
+		expect(legacy?.methods).toHaveLength(1);
+		expect(legacy?.methods[0].label).toBe("Hong Leong");
+		expect(legacy?.methods[0].bankAccountNumber).toBe("9000-1111"); // trimmed
 
 		// Unknown order → null.
 		expect(
@@ -3264,7 +3266,7 @@ describe("orders — bulk status", () => {
 			orderIds: [o1._id, o2._id, o3._id],
 			status: "confirmed",
 		});
-		expect(res).toEqual({ updated: 2, skipped: 1 });
+		expect(res).toMatchObject({ updated: 2, skipped: 1 });
 		for (const id of [o1._id, o2._id, o3._id]) {
 			expect((await t.run((ctx) => ctx.db.get(id)))?.status).toBe("confirmed");
 		}
@@ -3294,7 +3296,7 @@ describe("orders — bulk status", () => {
 			orderIds: [plain._id, gated._id],
 			status: "packed",
 		});
-		expect(res).toEqual({ updated: 1, skipped: 1 });
+		expect(res).toMatchObject({ updated: 1, skipped: 1 });
 		expect((await t.run((ctx) => ctx.db.get(plain._id)))?.status).toBe("packed");
 		// Gated order is untouched (mockup not approved).
 		expect((await t.run((ctx) => ctx.db.get(gated._id)))?.status).toBe(
@@ -3670,6 +3672,42 @@ describe("orders — bulk hard delete", () => {
 		}
 	});
 
+	test("audits one row per erased order, filed under that order's own store", async () => {
+		// The old code wrote ONE row using whichever access happened to be last in
+		// the loop, so a batch spanning two stores filed the whole erase under the
+		// second store and named no orders at all. Per-order rows are correct across
+		// stores by construction (86eyhz189).
+		const t = setup();
+		const rA = await seedRetailer(t, USER_A);
+		const rB = await seedRetailer(t, USER_B);
+		const pA = await seedProduct(t, USER_A, rA._id, { stock: 100 });
+		const pB = await seedProduct(t, USER_B, rB._id, { stock: 100 });
+		const aIds = [await mk(t, rA._id, pA), await mk(t, rA._id, pA)];
+		const bIds = [await mk(t, rB._id, pB)];
+
+		await t
+			.withIdentity({ subject: ADMIN })
+			.mutation(api.orders.bulkDeleteOrders, { orderIds: [...aIds, ...bIds] });
+
+		const rowsFor = (retailerId: Id<"retailers">) =>
+			t.run((ctx) =>
+				ctx.db
+					.query("adminAuditLog")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+					.collect(),
+			);
+		const auditA = await rowsFor(rA._id);
+		const auditB = await rowsFor(rB._id);
+		expect(auditA.map((r) => r.targetId).sort()).toEqual([...aIds].sort());
+		expect(auditB.map((r) => r.targetId)).toEqual(bIds);
+		for (const row of [...auditA, ...auditB]) {
+			expect(row).toMatchObject({
+				adminUserId: ADMIN,
+				action: "orders.bulkDeleteOrders",
+			});
+		}
+	});
+
 	test("a plain owner cannot bulk delete — Forbidden, orders untouched", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
@@ -3746,16 +3784,22 @@ describe("orders — hard delete (admin owns the store)", () => {
 			.mutation(api.orders.deleteOrder, { orderId });
 		expect(await t.run((ctx) => ctx.db.get(orderId))).toBeNull();
 
-		// NOT audited: erasing your own store's order is an owner write
-		// (actingAsAdmin:false), and the audit log traces cross-store white-glove
-		// writes only — logAdminAction no-ops here by design.
+		// AUDITED even though this is an owner write (actingAsAdmin:false). The
+		// ordinary `logAdminAction` no-ops here — an irreversible erase uses
+		// `logDestructiveAdminAction` precisely so ownership can't suppress the
+		// trace, since the deleted row can't be asked who removed it (86eyhz189).
 		const audit = await t.run((ctx) =>
 			ctx.db
 				.query("adminAuditLog")
 				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
 				.collect(),
 		);
-		expect(audit).toHaveLength(0);
+		expect(audit).toHaveLength(1);
+		expect(audit[0]).toMatchObject({
+			adminUserId: USER_A,
+			action: "orders.hardDelete",
+			targetId: orderId,
+		});
 	});
 
 	test("an admin can bulk hard-delete orders in a store they own", async () => {
@@ -3773,6 +3817,21 @@ describe("orders — hard delete (admin owns the store)", () => {
 		for (const id of ids) {
 			expect(await t.run((ctx) => ctx.db.get(id))).toBeNull();
 		}
+
+		// One audit row PER erased order (not one per batch), own-store included —
+		// so the log answers WHICH orders are gone, not just how many.
+		const audit = await t.run((ctx) =>
+			ctx.db
+				.query("adminAuditLog")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.collect(),
+		);
+		expect(audit).toHaveLength(2);
+		expect(audit.map((r) => r.action)).toEqual([
+			"orders.bulkDeleteOrders",
+			"orders.bulkDeleteOrders",
+		]);
+		expect(audit.map((r) => r.targetId).sort()).toEqual([...ids].sort());
 	});
 });
 
@@ -6199,5 +6258,390 @@ describe("orders — the seller's unseen-order signal survives confirm-at-create
 		// No confirmationPushStatus → never treated as unseen.
 		expect(res.counts.new).toBe(0);
 		expect(res.counts.in_progress).toBe(1);
+	});
+});
+
+describe("orders — collection gate on advanceToStage (86eyg0n8e)", () => {
+	const asA = (t: ReturnType<typeof setup>) =>
+		t.withIdentity({ subject: USER_A });
+
+	/** An order whose rider collects FROM the buyer — the goods are not with
+	 * the seller until a rider brings them in. */
+	async function collectionOrder(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		if (!order) throw new Error("no order");
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order._id, { deliveryDirection: "collection" });
+		});
+		return { retailer, order, shortId };
+	}
+
+	test("production stages are refused while the items are still with the buyer", async () => {
+		const t = setup();
+		const { order } = await collectionOrder(t);
+		// Accepting the order is NOT fulfilment — confirming stays open.
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: "default:confirmed",
+		});
+		for (const stageId of [
+			"default:packed",
+			"default:shipped",
+			"default:delivered",
+		]) {
+			await expect(
+				asA(t).mutation(api.orders.advanceToStage, {
+					orderId: order._id,
+					stageId,
+				}),
+			).rejects.toThrow(/still with your customer/i);
+		}
+	});
+
+	test("the escape lets a seller who fetched the items proceed, and stamps the arrival once", async () => {
+		const t = setup();
+		const { order, shortId } = await collectionOrder(t);
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: "default:packed",
+			markCollected: true,
+		});
+		const after = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(after?.status).toBe("packed");
+		expect(after?.collectedAt).toBeGreaterThan(0);
+
+		// Asked once: every later stage moves without the escape…
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: "default:shipped",
+		});
+		const later = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(later?.status).toBe("shipped");
+		// …and the arrival moment never moves.
+		expect(later?.collectedAt).toBe(after?.collectedAt);
+		void shortId;
+	});
+
+	test("a rider-collected order needs no escape (collectedAt already stamped)", async () => {
+		const t = setup();
+		const { order } = await collectionOrder(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order._id, { collectedAt: Date.now() });
+		});
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: "default:packed",
+		});
+		const after = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(after?.status).toBe("packed");
+	});
+
+	test("STANDARD delivery is untouched — packing precedes the trip (regression pin)", async () => {
+		const t = setup();
+		const { order } = await plainOrderForCollectionSuite(t);
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: "default:packed",
+		});
+		const after = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(after?.status).toBe("packed");
+		expect(after?.collectedAt).toBeUndefined();
+	});
+
+	/** Same seed, no direction — the control for the pin above. */
+	async function plainOrderForCollectionSuite(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		if (!order) throw new Error("no order");
+		return { retailer, order, shortId };
+	}
+});
+
+describe("orders — the collection gate holds on EVERY status write path", () => {
+	const asA = (t: ReturnType<typeof setup>) =>
+		t.withIdentity({ subject: USER_A });
+
+	async function collectionOrders(t: ReturnType<typeof setup>, n = 1) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const ids = [];
+		for (let i = 0; i < n; i++) {
+			const { shortId } = await t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+			});
+			const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+			if (!o) throw new Error("no order");
+			await t.run(async (ctx) => {
+				await ctx.db.patch(o._id, { deliveryDirection: "collection" });
+			});
+			ids.push(o._id);
+		}
+		return { retailer, ids };
+	}
+
+	test("updateStatus can't pack an order still with the buyer, but can still cancel it", async () => {
+		const t = setup();
+		const { ids } = await collectionOrders(t);
+		await expect(
+			asA(t).mutation(api.orders.updateStatus, {
+				orderId: ids[0],
+				status: "packed",
+			}),
+		).rejects.toThrow(/still with your customer/i);
+		// Cancelling is never gated — an order must always be escapable.
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: ids[0],
+			status: "cancelled",
+		});
+		const after = await t.run(async (ctx) => ctx.db.get(ids[0]));
+		expect(after?.status).toBe("cancelled");
+	});
+
+	test("bulkUpdateStatus SKIPS an un-collected order instead of failing the batch", async () => {
+		const t = setup();
+		const { ids } = await collectionOrders(t, 2);
+		// One order's goods have arrived; the other's haven't.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(ids[0], { collectedAt: Date.now() });
+		});
+		const res = await asA(t).mutation(api.orders.bulkUpdateStatus, {
+			orderIds: ids,
+			status: "packed",
+		});
+		expect(res).toMatchObject({ updated: 1, skipped: 1 });
+		const rows = await t.run(async (ctx) => [
+			await ctx.db.get(ids[0]),
+			await ctx.db.get(ids[1]),
+		]);
+		expect(rows[0]?.status).toBe("packed");
+		// Untouched (test orders start `pending`), and crucially NOT errored.
+		expect(rows[1]?.status).toBe("pending");
+	});
+
+	test("STANDARD orders bulk-pack exactly as before (regression pin)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		if (!o) throw new Error("no order");
+		const res = await asA(t).mutation(api.orders.bulkUpdateStatus, {
+			orderIds: [o._id],
+			status: "packed",
+		});
+		expect(res).toMatchObject({ updated: 1, skipped: 0 });
+	});
+});
+
+describe("orders — collection gate: the remaining edges", () => {
+	const asA = (t: ReturnType<typeof setup>) =>
+		t.withIdentity({ subject: USER_A });
+
+	/** One store, many orders — an account can only own one retailer. */
+	async function seedStore(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		return { retailer, productId };
+	}
+
+	async function order(
+		t: ReturnType<typeof setup>,
+		collection: boolean,
+		store?: { retailer: { _id: Id<"retailers"> }; productId: Id<"products"> },
+	) {
+		const { retailer, productId } = store ?? (await seedStore(t));
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		if (!o) throw new Error("no order");
+		if (collection) {
+			await t.run(async (ctx) => {
+				await ctx.db.patch(o._id, { deliveryDirection: "collection" });
+			});
+		}
+		return o;
+	}
+
+	test("markCollected is INERT on a standard order — it must never stamp arrival", async () => {
+		// collectedAt mutes the due-date badge and flips buyer copy; a standard
+		// order must never acquire it through this escape.
+		const t = setup();
+		const o = await order(t, false);
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: o._id,
+			stageId: "default:packed",
+			markCollected: true,
+		});
+		const after = await t.run(async (ctx) => ctx.db.get(o._id));
+		expect(after?.status).toBe("packed");
+		expect(after?.collectedAt).toBeUndefined();
+	});
+
+	test("the backfill is idempotent and never touches a standard order", async () => {
+		const t = setup();
+		const store = await seedStore(t);
+		const collectionOrder = await order(t, true, store);
+		const standardOrder = await order(t, false, store);
+		const at = 1_785_000_000_000;
+		await t.run(async (ctx) => {
+			const mk = async (orderId: typeof collectionOrder._id, dir?: string) => {
+				await ctx.db.insert("deliveryJobs", {
+					orderId,
+					retailerId: collectionOrder.retailerId,
+					provider: "lalamove" as const,
+					providerOrderId: `LLM-${orderId}`,
+					status: "completed" as const,
+					costActual: 1000,
+					quotationId: "q",
+					vehicleType: "MOTORCYCLE",
+					...(dir ? { deliveryDirection: dir as "collection" } : {}),
+					lastEventAt: at,
+					createdAt: at,
+					updatedAt: at,
+				});
+			};
+			await mk(collectionOrder._id, "collection");
+			await mk(standardOrder._id);
+		});
+
+		const first = await t.mutation(
+			internal.orders.backfillCollectionCollectedAt,
+			{},
+		);
+		expect(first.stamped).toBe(1);
+		const stamped = await t.run(async (ctx) => ctx.db.get(collectionOrder._id));
+		expect(stamped?.collectedAt).toBe(at);
+		const untouched = await t.run(async (ctx) => ctx.db.get(standardOrder._id));
+		expect(untouched?.collectedAt).toBeUndefined();
+
+		// Running twice must not move the arrival moment.
+		const second = await t.mutation(
+			internal.orders.backfillCollectionCollectedAt,
+			{},
+		);
+		expect(second.stamped).toBe(0);
+		const again = await t.run(async (ctx) => ctx.db.get(collectionOrder._id));
+		expect(again?.collectedAt).toBe(at);
+	});
+});
+
+describe("orders — fulfilment time at create (86eyg0n8e follow-up)", () => {
+	async function store(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		return { retailer, productId };
+	}
+
+	function tomorrowMidnight() {
+		// The validator's window is [today+notice, today+30] — tomorrow is
+		// always inside it regardless of when the test runs.
+		return (
+			Math.floor((Date.now() + 8 * 3600_000) / 86_400_000) * 86_400_000 -
+			8 * 3600_000 +
+			86_400_000
+		);
+	}
+
+	test("a delivery order keeps its time; the moment composes with the day", async () => {
+		const t = setup();
+		const { retailer, productId } = await store(t);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: validAddress,
+			fulfilmentDate: tomorrowMidnight(),
+			fulfilmentTimeMinutes: 15 * 60 + 30,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(o?.fulfilmentTimeMinutes).toBe(930);
+	});
+
+	test("self-collect ignores a stray time — the point's schedule governs pickup hours", async () => {
+		const t = setup();
+		const { retailer, productId } = await store(t);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: tomorrowMidnight(),
+			fulfilmentTimeMinutes: 930,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(o?.fulfilmentTimeMinutes).toBeUndefined();
+	});
+
+	test("an out-of-range time is refused, a timeless delivery order is not", async () => {
+		const t = setup();
+		const { retailer, productId } = await store(t);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryMethod: "delivery",
+				deliveryAddress: validAddress,
+				fulfilmentDate: tomorrowMidnight(),
+				fulfilmentTimeMinutes: 1440,
+			}),
+		).rejects.toThrow(/time of day/i);
+		// No time at all = the pre-existing date-only order, unchanged.
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: validAddress,
+			fulfilmentDate: tomorrowMidnight(),
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(o?.fulfilmentTimeMinutes).toBeUndefined();
 	});
 });

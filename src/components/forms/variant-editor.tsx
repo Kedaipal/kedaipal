@@ -1058,8 +1058,10 @@ export function VariantEditor({
 			    answers. There is no matrix row to price and no stock to count. */}
 			{madeToOrder ? (
 				<div className="flex flex-col gap-3">
+					{/* "Starting price", not "Price" — the same field as the bespoke
+					    line under Advanced, and the buyer sees it as "From RM 40". */}
 					<label className="flex flex-col gap-1 text-sm font-medium">
-						Price ({currency}){" "}
+						Starting price ({currency}){" "}
 						<span className="font-normal text-muted-foreground">
 							(optional)
 						</span>
@@ -1070,8 +1072,9 @@ export function VariantEditor({
 						/>
 						<IssueText message={issueFor("custom", 0, "price")} />
 						<span className="text-xs font-normal text-muted-foreground">
-							Leave blank to show “Price on quote” — you set the real price on
-							the mockup after the order comes in.
+							Buyers see “From {currency} …”, so they know the final price
+							comes with the mockup. Leave blank to show “Price on quote”
+							instead.
 						</span>
 					</label>
 					<label className="flex flex-col gap-1 text-sm font-medium">
@@ -1445,8 +1448,9 @@ export function VariantEditor({
 											/>
 											<IssueText message={issueFor("custom", 0, "price")} />
 											<span className="text-xs font-normal text-muted-foreground">
-												Leave blank to show “Price on quote” — you set the price
-												on the mockup after the order comes in.
+												Buyers see “From {currency} …”, so they know the final
+												price comes with the mockup. Leave blank to show “Price
+												on quote” instead.
 											</span>
 										</label>
 

@@ -380,17 +380,31 @@ though they own the store. The gate is admin membership, **not**
 `access.actingAsAdmin`: an admin can erase orders in **any** store, including one
 they personally own (which resolves via `requireRetailerAccess`'s owner branch,
 where `actingAsAdmin` is `false` — the earlier `actingAsAdmin` guard wrongly
-blocked that case). An admin erase on a store they **don't** own drops an
-`adminAuditLog` row (action `orders.hardDelete` / `orders.bulkDeleteOrders`) —
-that's the white-glove trail `logAdminAction` records; an admin erasing their own
-store's order is an owner write and isn't audited. ClickUp `86ey8fr8t` (the
-erase), `86eyaqzpd` (admin-only restriction).
+blocked that case). ClickUp `86ey8fr8t` (the erase), `86eyaqzpd` (admin-only
+restriction), `86eyhz189` (always audited + own-store UI).
+
+**Every erase is audited** — an `adminAuditLog` row per erased order (action
+`orders.hardDelete` / `orders.bulkDeleteOrders`, `targetId` = the order id),
+**including one in a store the admin owns**. That's the one place the ordinary
+`logAdminAction` policy is deliberately overridden: it no-ops on owner writes
+(routine, recoverable, not worth tracing), but an irreversible erase must always
+answer "who did this?" — and the deleted row isn't around to be asked. Hence
+`logDestructiveAdminAction` (`convex/lib/auth.ts`), which shares one inserter with
+`logAdminAction` and differs only in skipping the ownership no-op. Since these
+mutations are gated on admin membership, an own-store erase is still an admin
+acting; it just didn't arrive through act-as.
+
+Bulk writes **one row per erased order, not one per batch**. A batch row can only
+carry a single `retailerId`, so a batch spanning two stores would file the whole
+erase under whichever store happened to be last — and a bare count answers "how
+many" when the question an irreversible delete raises is "*which* order is gone".
+Per-order rows are correct across stores by construction.
 
 **Why admin-only:** a hard delete is irreversible (no tombstone) and wipes
 invoice / receipt / revenue-driving data. Leaving it in seller hands meant a
-disputed or fat-fingered order could vanish with no oversight and no audit row
-(owner writes aren't audited). Sellers keep **Cancel** — tombstoned, and the
-buyer's order page shows the cancellation — as their way to make an order go
+disputed or fat-fingered order could vanish with no oversight. Sellers keep
+**Cancel** — tombstoned, and the buyer's order page shows the cancellation
+(nothing is WhatsApp'd, 86eyd63r8) — as their way to make an order go
 away; permanent erasure sits with Kedaipal.
 
 **It leaves nothing behind.** Cancel is silent on WhatsApp too now, but a
@@ -441,18 +455,31 @@ so a stale client can't sneak an erase through mid-flow.
 
 **UI (hidden, not just disabled):** the "Delete permanently" danger action in the
 order-detail More-actions section and the "Delete permanently" item in the inbox
-bulk bar **render only under an admin act-as session** (`retailer.actingAsAdmin`);
-a plain seller never sees either — there's no confusion about what they can undo.
-`getRetailerForAdmin` sets `actingAsAdmin: true` for *any* act-as target, so an
-admin sees the action even when acting-as a store they own — matching the
-server's ownership-agnostic gate. The server guard, not the hidden UI, is the
-real boundary. Under act-as the
-actions work as before: each behind its own confirm dialog, making clear the
+bulk bar render for **Kedaipal admins only**, via the shared
+`canHardDeleteOrders({ actingAsAdmin, amIAdmin })` (`src/lib/admin-actions.ts`) —
+one rule for both surfaces so they can't drift, `false` until the checks resolve
+so nothing flashes in mid-load. A plain seller never sees either, so there's no
+confusion about what they can undo. The
+two-part condition mirrors the server's ownership-agnostic gate: `actingAsAdmin`
+is the fast path (already on the retailer payload, so another store's order detail
+renders the action with no extra round-trip), and `amIAdmin` adds the **own-store**
+case, which act-as can't express — an admin viewing their own store resolves
+through the owner branch, so `actingAsAdmin` is `false` there. Before `86eyhz189`
+the UI gated on `actingAsAdmin` alone, which meant an admin had to open
+`/app/admin/sellers` and act-as *their own store* to delete an order in it —
+functional (`getRetailerForAdmin` sets `actingAsAdmin: true` for any act-as
+target) but a pointless detour, since the server never required it. The server
+guard, not the hidden UI, is the real boundary. The
+actions work the same either way: each behind its own confirm dialog, making clear the
 buyer is NOT notified and it can't be undone (with an extra warning when the order
 is paid/delivered — it'll vanish from CSV/revenue records). On the order-detail
 page the More-actions panel collapses on desktop for a terminal order in a plain
 seller session (Cancel gone, Delete hidden, receipt lives in the header), so it
-never opens to an empty divider.
+never opens to an empty divider. The helper line under the order-detail button
+names both facts an admin can't otherwise see — that sellers don't get this
+action, and that the erase is recorded in the admin log — since the action now
+appears on an admin's own store, where there's no act-as banner to signal that
+they're looking at something a seller wouldn't.
 
 **Type-to-confirm safety gate:** because this is the one irreversible action in
 the dashboard, both delete confirm dialogs pass `confirmPhrase="DELETE"` to the

@@ -13,6 +13,8 @@
 //    1dp precision) — converted to integer sen at this boundary, like every
 //    other money field in the repo.
 
+import { EARLIEST_FULFILMENT_LEAD_MINUTES } from "./fulfilmentDate";
+
 export type LalamoveEnv = "sandbox" | "production";
 
 /** How long a checkout deliveryQuotes row stays honourable at orders.create.
@@ -515,8 +517,13 @@ export function isActiveJobStatus(status: DeliveryJobStatus): boolean {
  * statuses sits behind a disabled-with-reason gate: a manual "shipped" would
  * message the buyer early and WITHOUT the live-tracking link.
  *
- * Sellers who never registered the webhook (`lastEventAt` forever unset) are
- * deliberately excluded — their documented degraded path IS advancing by hand.
+ * NOTE (3 Aug): this is no longer the GATE — it only decides the wording. The
+ * gate is now "an ACTIVE job exists" (see the order-detail stepper), because
+ * requiring a webhook event left it off between booking and the first event,
+ * which is exactly when a seller can click a live trip through to delivered.
+ * A webhook-less seller is protected by the confirm-gated escape instead, and
+ * this predicate picks the honest copy for them ("…as long as your Lalamove
+ * webhook is set up" rather than promising it moves on its own).
  */
 export function riderDrivesOrderStatus(job: {
 	status: DeliveryJobStatus;
@@ -566,4 +573,38 @@ export function parseLalamoveEventTime(
 	return envelopeTimestamp < 1e12
 		? Math.round(envelopeTimestamp * 1000)
 		: envelopeTimestamp;
+}
+
+/**
+ * How close to "now" a scheduled pickup may be before we book IMMEDIATE
+ * instead. Shares the checkout floor's constant so the time a buyer may pick
+ * and the time we will schedule can never disagree.
+ *
+ * Measured, not assumed (MY sandbox, 4 Aug 2026 — `devProbeScheduleAt`):
+ * Lalamove accepts `scheduleAt` from +1 min to +30 days and refuses anything
+ * past or beyond that with `ERR_INVALID_FIELD`. So this threshold is a
+ * product choice, not their limit: within the window an immediate booking
+ * starts matching a driver right away, which serves a "come in 10 minutes"
+ * ask better than a scheduled order would.
+ */
+export const MIN_SCHEDULE_LEAD_MS =
+	EARLIEST_FULFILMENT_LEAD_MINUTES * 60 * 1000;
+/** Lalamove's own scheduling window — measured: +30 days quotes, +31 refuses. */
+export const MAX_SCHEDULE_AHEAD_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * The one rule for turning a buyer's chosen moment into a Lalamove
+ * `scheduleAt` (86eyg0n8e follow-up): still comfortably ahead → schedule for
+ * exactly then; past, imminent, or absurdly far → book "now" (undefined).
+ * Shared by the checkout quote and dispatch so the fee the buyer paid and
+ * the trip the vendor books can't be priced for different moments.
+ */
+export function resolveScheduleAt(
+	moment: number | undefined,
+	now: number = Date.now(),
+): number | undefined {
+	if (moment === undefined) return undefined;
+	if (moment < now + MIN_SCHEDULE_LEAD_MS) return undefined;
+	if (moment > now + MAX_SCHEDULE_AHEAD_MS) return undefined;
+	return moment;
 }

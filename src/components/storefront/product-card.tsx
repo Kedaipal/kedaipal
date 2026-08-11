@@ -3,7 +3,7 @@ import type { FunctionReturnType } from "convex/server";
 import { ImagePlus, Plus, SlidersHorizontal } from "lucide-react";
 import type { api } from "../../../convex/_generated/api";
 import { formatPrice } from "../../lib/format";
-import { minQuantityUnreachable } from "../../lib/variant";
+import { hasStartingPrice, minQuantityUnreachable } from "../../lib/variant";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 
@@ -64,9 +64,12 @@ export function ProductCard({
 		product.totalOnHand <= 5;
 	const priceVaries = product.priceTo > product.priceFrom;
 	// "Price on quote": made-to-order variants at RM0 (seller quotes on the mockup).
-	// allQuote = no priced variants at all; showFrom = a cheaper/quote option exists.
+	// allQuote = no priced variants at all; showFrom = the printed price is only a
+	// floor — a cheaper/quote option exists, or a custom line's STARTING price the
+	// seller tops up on the mockup (86eyhn4mr).
 	const allQuote = product.hasQuotePricing && product.priceTo === 0;
-	const showFrom = priceVaries || product.hasQuotePricing;
+	const showFrom =
+		priceVaries || product.hasQuotePricing || hasStartingPrice(product.variants);
 	const firstImage = product.imageUrls[0];
 	// Minimum order quantity (≥2 when set — sanitizer normalizes 0/1 away).
 	const minQuantity = product.minQuantity ?? 0;
@@ -172,7 +175,7 @@ export function ProductCard({
 						<>
 							{showFrom ? (
 								<span className="text-xs font-medium text-muted-foreground">
-									from{" "}
+									From{" "}
 								</span>
 							) : null}
 							{formatPrice(product.priceFrom, product.currency)}

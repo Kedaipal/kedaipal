@@ -29,6 +29,23 @@ export function getCustomLine<T extends VariantLike>(
 	return variants.find((v) => v.isCustom) ?? null;
 }
 
+/**
+ * Does this product's price only mark a FLOOR? A custom line's price is the
+ * seller's *starting* price (the field is literally labelled "Starting price"
+ * in the editor): the real amount is the mockup quote, which is added on top
+ * (`computeOrderTotals` extras), so the printed number can only go up. Priced
+ * at 0 it's "Price on quote" instead — `hasQuotePricing` already covers that.
+ * Every storefront price surface prefixes "From" when this is true, so a buyer
+ * never reads a starting price as a fixed one (86eyhn4mr).
+ */
+export function hasStartingPrice(
+	variants: readonly { isCustom?: boolean; active?: boolean; price: number }[],
+): boolean {
+	return variants.some(
+		(v) => v.isCustom === true && v.active !== false && v.price > 0,
+	);
+}
+
 /** ["1kg","Fillet"] → "1kg / Fillet"; "" for the implicit default variant. */
 export function variantLabel(optionValues: readonly string[]): string {
 	return optionValues.join(" / ");

@@ -1,11 +1,10 @@
 import { createFileRoute, notFound } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import {
 	BadgeCheck,
 	CalendarDays,
 	CheckCircle,
 	Clock,
-	Download,
 	ExternalLink,
 	HandCoins,
 	Hourglass,
@@ -31,24 +30,22 @@ import {
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { isSafeTrackingUrl } from "../../convex/lib/couriers";
-import { formatFulfilmentDate } from "../../convex/lib/fulfilmentDate";
+import { formatFulfilmentDateTime } from "../../convex/lib/fulfilmentDate";
 import { isMockupGateClosed } from "../../convex/lib/order";
+import { describeGatewayMethods } from "../../convex/lib/hitpay";
+import { paymentMethodLabel } from "../../convex/lib/paymentMethod";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
-import { IvePaidDialog } from "../components/storefront/ive-paid-dialog";
+import { ManualPaymentDialog } from "../components/storefront/manual-payment-dialog";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { CopyButton } from "../components/ui/copy-button";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { getConvexHttpClient } from "../lib/convex-server";
-import { qrFilenameBase, saveImageFromUrl } from "../lib/download";
-import {
-	convexErrorMessage,
-	formatMyMobile,
-	formatPrice,
-} from "../lib/format";
+import { ssrRead } from "../lib/ssr-read";
+import { convexErrorMessage, formatMyMobile, formatPrice } from "../lib/format";
 import {
 	deriveMapsUrl,
 	googleMapsNavUrl,
@@ -116,22 +113,39 @@ export const Route = createFileRoute("/track/$token")({
 	// "Send on WhatsApp" handoff once the page mounts. The component strips it
 	// (replace) before navigating away, so refresh / back-from-WhatsApp never
 	// re-triggers the redirect.
-	validateSearch: (search: Record<string, unknown>): { send?: 1 } => ({
+	validateSearch: (
+		search: Record<string, unknown>,
+	): { send?: 1; status?: string; reference?: string } => ({
 		send: search.send === 1 || search.send === "1" ? 1 : undefined,
+		// HitPay redirect-return params (86eyb6z3a): their PRESENCE triggers a
+		// server-side verify against HitPay's status API; the values themselves
+		// are display-only and never trusted.
+		status: typeof search.status === "string" ? search.status : undefined,
+		reference:
+			typeof search.reference === "string" ? search.reference : undefined,
 	}),
-	loader: async ({ params }) => {
-		const client = getConvexHttpClient();
-		const order = await client.query(api.orders.get, {
-			token: params.token,
-		});
-		if (!order) throw notFound();
+	loader: async ({ params }): Promise<{ shortId: string | null }> => {
+		const read = await ssrRead(() =>
+			getConvexHttpClient().query(api.orders.get, { token: params.token }),
+		);
+		// Transient upstream failure ≠ bad token: this loader only feeds head()
+		// meta — the page's real data is the client's reactive query — so a blip
+		// soft-degrades to the shell instead of dead-ending the buyer's WhatsApp
+		// link on an error page (86eyheqzv). Only a definitive null (the query
+		// answered: no such token) is a 404.
+		if (!read.ok) return { shortId: null };
+		if (!read.value) throw notFound();
 		// Surface only the human-readable shortId to the page head — never echo the
 		// secret token into a title/canonical that could leak via referrer/history.
-		return { shortId: order.shortId };
+		return { shortId: read.value.shortId };
 	},
 	head: ({ loaderData }) => ({
 		meta: [
-			{ title: `Order ${loaderData?.shortId ?? ""} — Kedaipal` },
+			{
+				title: loaderData?.shortId
+					? `Order ${loaderData.shortId} — Kedaipal`
+					: "Your order — Kedaipal",
+			},
 			// noindex + no canonical: the URL carries a capability token, so it must
 			// never be indexed or advertised.
 			{ name: "robots", content: "noindex" },
@@ -264,7 +278,11 @@ function TrackingSkeleton() {
 
 function TrackingRoute() {
 	const { token } = Route.useParams();
-	const { send } = Route.useSearch();
+	const {
+		send,
+		status: returnStatus,
+		reference: returnReference,
+	} = Route.useSearch();
 	const navigate = Route.useNavigate();
 	const order = useQuery(api.orders.get, { token });
 	// Only subscribe to payment methods when the "How to pay" section can actually
@@ -278,27 +296,57 @@ function TrackingRoute() {
 		(order.paymentStatus ?? "unpaid") !== "received" &&
 		!isMockupGateClosed(order) &&
 		order.deliveryFeePending !== true;
-	const paymentMethods = useQuery(
+	const paymentInfo = useQuery(
 		api.orders.getPaymentMethods,
 		showPaymentSection ? { token } : "skip",
 	);
+	const paymentMethods = paymentInfo?.methods ?? [];
+	// The seller's HitPay checkout can take THIS order's payment right now
+	// (86eyb6z3a) — connection on, price holds clear, payment still open.
+	const gatewayAvailable = paymentInfo?.gatewayAvailable === true;
+	// Name only the rails this account actually has enabled (probed truth);
+	// null falls back to a generic line rather than promising methods the
+	// seller never switched on.
+	const gatewayMethodsLabel = describeGatewayMethods(
+		paymentInfo?.gatewayMethods,
+	);
 	const [editingAddress, setEditingAddress] = useState(false);
+	// The manual-payment sheet (methods + I've-paid proof in one door) — opened
+	// by the payment card's primary button on manual stores, the bank-transfer
+	// fallback on gateway stores, and "Update proof" on a claimed order.
 	const [claimingPayment, setClaimingPayment] = useState(false);
-	// Index of the payment-QR currently being saved (spinner on that button only).
-	const [savingQrIndex, setSavingQrIndex] = useState<number | null>(null);
+	const createGatewayCheckout = useAction(api.hitpay.createCheckout);
+	const verifyGatewayCheckout = useAction(api.hitpay.verifyCheckout);
+	const [payingNow, setPayingNow] = useState(false);
+	// Landing back from HitPay's checkout (?status&reference appended to the
+	// redirect): show a "confirming" state while ONE server-side verify runs —
+	// the params themselves are never trusted, and the reactive order query
+	// flips the card the moment the webhook or the verify records the payment.
+	const gatewayReturn =
+		returnStatus !== undefined || returnReference !== undefined;
+	const [confirmingGateway, setConfirmingGateway] = useState(gatewayReturn);
+	const verifiedOnReturn = useRef(false);
+	useEffect(() => {
+		if (!gatewayReturn || verifiedOnReturn.current) return;
+		verifiedOnReturn.current = true;
+		// Strip the return params immediately (replace) so refresh/back lands on
+		// a plain tracking URL instead of re-firing the verify.
+		navigate({ search: {}, replace: true });
+		verifyGatewayCheckout({ token })
+			.catch(() => undefined)
+			.finally(() => setConfirmingGateway(false));
+	}, [gatewayReturn, navigate, verifyGatewayCheckout, token]);
 
-	async function handleSaveQr(label: string, url: string, index: number) {
-		setSavingQrIndex(index);
+	async function handlePayNow() {
+		setPayingNow(true);
 		try {
-			const outcome = await saveImageFromUrl(url, qrFilenameBase(label));
-			if (outcome === "downloaded") {
-				toast.success("QR saved — open it from your downloads to scan.");
-			} else if (outcome === "failed") {
-				toast.error("Couldn't save the QR — please try again.");
-			}
-			// "shared" → the OS sheet took over; "cancelled" → intentional. Silent.
-		} finally {
-			setSavingQrIndex(null);
+			const { url } = await createGatewayCheckout({ token });
+			// Same-tab on purpose: the WhatsApp in-app browser has no tab UI, and
+			// HitPay redirects straight back here when the payment settles.
+			window.location.assign(url);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+			setPayingNow(false);
 		}
 	}
 
@@ -311,6 +359,10 @@ function TrackingRoute() {
 
 	const deliveryMethod = (order.deliveryMethod ?? "delivery") as DeliveryMethod;
 	const isSelfCollect = deliveryMethod === "self_collect";
+	// Collection service (86eyg0n8e, frozen at order create): the rider picks
+	// up FROM this buyer's address — every "Deliver…" label flips to collection
+	// wording so the page never claims something is being sent to them.
+	const isCollection = order.deliveryDirection === "collection";
 	const statusConfig = getStatusConfig(
 		deliveryMethod,
 		order.statusLabels,
@@ -536,6 +588,56 @@ function TrackingRoute() {
 						) : null}
 					</div>
 
+					{/* Settlement detail — the rail the buyer paid on (TnG / FPX /
+					    card…) and, for gateway settlements, the HitPay reference the
+					    seller's order detail also shows (86eyjmhby), so both sides quote
+					    one number when a payment question comes up.
+
+					    Both are facets of the SAME fact ("this is how it was paid"), so
+					    they're one child of the card's `gap-3` column with their own
+					    tight spacing — as separate children the card's gap pushed the
+					    ref far enough from "Paid via" to read as unrelated. The ref sits
+					    on its own quiet surface because it's a value to copy, not prose:
+					    tone-agnostic white/border (never a hardcoded emerald that could
+					    disagree with `paymentConfig.tone`), and the mono string itself
+					    drops the muted opacity so a 36-char id stays legible while its
+					    label stays secondary to the "Payment Confirmed" headline. */}
+					{paymentStatus === "received" &&
+					(order.paymentMethod || order.gatewayPaymentId) ? (
+						<div className="flex flex-col gap-1.5">
+							{order.paymentMethod ? (
+								<p className="text-xs opacity-80">
+									Paid via {paymentMethodLabel(order.paymentMethod)}
+								</p>
+							) : null}
+							{order.gatewayPaymentId ? (
+								<div className="rounded-lg border border-black/5 bg-white/60 px-2.5 py-1.5">
+									{/* Copy sits beside the LABEL, not the value, so the id gets
+									    the chip's full width — a 36-char HitPay reference then
+									    renders complete at 375px instead of truncating, and a
+									    half-shown reference number can't be matched against a
+									    banking-app entry, which is the whole job. `break-all`
+									    only engages if an id ever outgrows one line. The Copy
+									    text stays visible at every width: icon-only is a 38px
+									    target, under the 44px mobile rule. */}
+									<div className="flex items-center justify-between gap-2">
+										<p className="text-[10px] font-medium uppercase tracking-wider opacity-70">
+											Payment ref
+										</p>
+										<CopyButton
+											value={order.gatewayPaymentId}
+											ariaLabel="Copy payment reference"
+											successMessage="Payment reference copied"
+										/>
+									</div>
+									<p className="break-all font-mono text-xs">
+										{order.gatewayPaymentId}
+									</p>
+								</div>
+							) : null}
+						</div>
+					) : null}
+
 					{paymentStatus === "unpaid" ? (
 						mockupGateClosed ? (
 							<>
@@ -561,13 +663,58 @@ function TrackingRoute() {
 									soon as they set it.
 								</p>
 							</>
+						) : confirmingGateway ? (
+							// Just back from HitPay — one server-side verify is in flight.
+							// If it (or the webhook) finds the payment, the reactive query
+							// flips this card to Confirmed; otherwise the buttons return.
+							<>
+								<Button disabled isLoading className="h-12 w-full text-base">
+									Confirming your payment…
+								</Button>
+								<p className="text-xs opacity-80">
+									Checking with HitPay — this usually takes a few seconds.
+								</p>
+							</>
+						) : gatewayAvailable ? (
+							<>
+								<Button
+									onClick={handlePayNow}
+									isLoading={payingNow}
+									className="h-12 w-full text-base"
+								>
+									{payingNow
+										? "Opening secure checkout…"
+										: `Pay now · ${formatPrice(order.total, order.currency)}`}
+								</Button>
+								<p className="text-xs opacity-80">
+									{gatewayMethodsLabel
+										? `Pay by ${gatewayMethodsLabel} on `
+										: "Pay in your banking or eWallet app on "}
+									{order.storeName || "the store"}'s secure HitPay page — your
+									order confirms automatically.
+								</p>
+								<button
+									type="button"
+									onClick={() => setClaimingPayment(true)}
+									className="self-start text-sm font-medium underline-offset-2 hover:underline"
+								>
+									Paid by bank transfer instead? Tell the store
+								</button>
+							</>
 						) : (
-							<Button
-								onClick={() => setClaimingPayment(true)}
-								className="h-12 w-full text-base"
-							>
-								I've paid
-							</Button>
+							<>
+								<Button
+									onClick={() => setClaimingPayment(true)}
+									className="h-12 w-full text-base"
+								>
+									Pay now · {formatPrice(order.total, order.currency)}
+								</Button>
+								<p className="text-xs opacity-80">
+									Bank transfer or QR — pay in your banking app, then attach
+									the receipt so {order.storeName || "the store"} can confirm
+									it.
+								</p>
+							</>
 						)
 					) : null}
 
@@ -599,106 +746,72 @@ function TrackingRoute() {
 				</section>
 			) : null}
 
-			{/* How to pay — the seller's payment methods (banks + QRs) with one-tap
-			    copy on each account number (the MY bank-transfer friction point).
-			    Shown while a payment is still due and not deferred behind a closed
-			    mockup gate; hidden once received/cancelled or when none configured. */}
-			{!isCancelled &&
-			!mockupGateClosed &&
-			!deliveryFeeHeld &&
-			paymentStatus !== "received" &&
-			paymentMethods &&
-			paymentMethods.length > 0 ? (
-				<section className="mt-4 flex flex-col gap-4 rounded-2xl border border-border bg-card p-4">
-					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-						How to pay
-					</p>
-					{paymentMethods.map((m, i) => (
-						<div
-							// biome-ignore lint/suspicious/noArrayIndexKey: payment methods are a render-stable embedded array with no stable id; label+index is fine and stable within a render
-							key={`${m.label}-${i}`}
-							className="flex flex-col gap-2 border-border [&:not(:first-of-type)]:border-t [&:not(:first-of-type)]:pt-4"
-						>
-							<p className="text-sm font-semibold">{m.label}</p>
-							{m.type === "bank" ? (
-								<>
-									{m.bankName && m.bankName !== m.label ? (
-										<div className="flex items-baseline justify-between gap-3 text-sm">
-											<span className="text-muted-foreground">Bank</span>
-											<span className="font-medium">{m.bankName}</span>
-										</div>
-									) : null}
-									{m.bankAccountName ? (
-										<div className="flex items-baseline justify-between gap-3 text-sm">
-											<span className="text-muted-foreground">Name</span>
-											<span className="text-right font-medium">
-												{m.bankAccountName}
-											</span>
-										</div>
-									) : null}
-									{m.bankAccountNumber ? (
-										<div className="flex items-center justify-between gap-2 rounded-xl bg-muted/50 px-3 py-2.5">
-											<div className="min-w-0">
-												<p className="text-xs text-muted-foreground">
-													Account number
-												</p>
-												<p className="break-all font-mono text-base font-semibold">
-													{m.bankAccountNumber}
-												</p>
-											</div>
-											<CopyButton
-												value={m.bankAccountNumber}
-												ariaLabel="Copy account number"
-												successMessage="Account number copied"
-											/>
-										</div>
-									) : null}
-								</>
-							) : m.qrImageUrl ? (
-								<div className="flex flex-col items-center gap-1.5">
-									<ZoomableImage
-										src={m.qrImageUrl}
-										alt={`${m.label} QR code`}
-										caption={m.label}
-										className="max-h-56 w-auto rounded-lg border border-border bg-white"
-									/>
-									<p className="text-xs text-muted-foreground">
-										Tap to enlarge &amp; scan
-									</p>
-									<Button
-										type="button"
-										variant="outline"
-										onClick={() =>
-											m.qrImageUrl
-												? handleSaveQr(m.label, m.qrImageUrl, i)
-												: undefined
-										}
-										isLoading={savingQrIndex === i}
-										disabled={savingQrIndex !== null}
-										className="mt-0.5 h-11 rounded-full px-5"
-									>
-										{savingQrIndex !== i && <Download className="size-4" />}
-										Save QR
-									</Button>
-									<p className="max-w-64 text-center text-xs text-muted-foreground">
-										Paying on this phone? Save the QR to your gallery, then scan
-										it from inside TNG eWallet or your banking app.
-									</p>
-								</div>
-							) : null}
-							{m.note ? (
-								<p className="whitespace-pre-line break-words text-sm text-muted-foreground">
-									{m.note}
-								</p>
-							) : null}
-						</div>
-					))}
-				</section>
-			) : null}
-
 			{/* Mockup approval — buyer reviews the seller's proof before production. */}
 			{!isCancelled && order.mockupStatus !== undefined ? (
 				<MockupReview token={token} order={order} />
+			) : null}
+
+			{/* Live collection rider (86eyg0n8e) — while a rider is actively on
+			    the way to collect FROM this buyer. Reads the live job, so it
+			    appears when the store books and vanishes when the trip ends —
+			    deliberately a transient strip, not a status: the order's
+			    lifecycle stays the seller's. */}
+			{!isCancelled &&
+			!order.collectionRider &&
+			order.collectedAt !== undefined ? (
+				<section className="mt-6 flex items-start gap-3 rounded-2xl border border-border bg-card p-4">
+					<Truck className="mt-0.5 size-5 shrink-0 text-accent" />
+					<p className="text-sm text-foreground">
+						{/* Provenance-neutral: `collectedAt` means "the goods are with
+						    the seller", and the seller may have collected in person —
+						    naming a rider would assert a trip that never happened. The
+						    live strip below narrates the real trip when there is one. */}
+						<span className="font-medium">Collected</span> — your items are with{" "}
+						{order.storeName || "the store"}. They&apos;ll update this page as
+						your order progresses.
+					</p>
+				</section>
+			) : null}
+
+			{!isCancelled && order.collectionRider ? (
+				<section className="mt-6 flex flex-col gap-2 rounded-2xl border border-accent/40 bg-accent/5 p-4">
+					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+						Collection rider
+					</p>
+					<div className="flex items-start gap-3">
+						<Truck className="mt-0.5 size-5 shrink-0 text-accent" />
+						<div className="min-w-0 flex-1">
+							<p className="text-sm font-medium text-foreground">
+								{order.collectionRider.status === "assigning"
+									? "Finding a rider to collect your items — this usually takes a few minutes."
+									: order.collectionRider.status === "ongoing"
+										? `${order.collectionRider.driverName ?? "Your rider"} is on the way to your address to collect.`
+										: `Collected — your items are on the way to ${order.storeName || "the store"}.`}
+							</p>
+							{order.collectionRider.plateNumber &&
+							order.collectionRider.status !== "picked_up" ? (
+								<p className="mt-0.5 text-xs text-muted-foreground">
+									Look for plate{" "}
+									<span className="font-mono font-medium text-foreground">
+										{order.collectionRider.plateNumber}
+									</span>
+									.
+								</p>
+							) : null}
+						</div>
+					</div>
+					{isSafeTrackingUrl(order.collectionRider.shareLink) ? (
+						<a
+							href={order.collectionRider.shareLink}
+							target="_blank"
+							rel="noopener noreferrer"
+							className="flex items-center justify-center gap-2 rounded-xl border border-accent/40 bg-card px-4 py-2.5 text-sm font-semibold text-accent transition-colors hover:bg-accent/10"
+						>
+							Track your rider
+							<ExternalLink className="size-3" />
+						</a>
+					) : null}
+				</section>
 			) : null}
 
 			{/* Progress timeline — not shown for cancelled orders */}
@@ -877,12 +990,13 @@ function TrackingRoute() {
 				</section>
 			) : null}
 
-			{/* Delivery address — shown for delivery orders that have an address */}
+			{/* Delivery address — shown for delivery orders that have an address.
+			    Collection orders: this is where the rider collects FROM. */}
 			{!isSelfCollect && order.deliveryAddress ? (
 				<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 					<div className="flex items-center justify-between">
 						<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-							Deliver to
+							{isCollection ? "Collect from" : "Deliver to"}
 						</p>
 						{canEditAddress ? (
 							<button
@@ -929,7 +1043,9 @@ function TrackingRoute() {
 					? order.pickupSnapshot?.locationType === "drop_off"
 						? "Drop-off"
 						: "Self Collect"
-					: "Delivery"}
+					: isCollection
+						? "Collection from your address"
+						: "Delivery"}
 			</div>
 
 			{/* Fulfilment date the buyer chose — reassures them the seller has it. */}
@@ -940,9 +1056,16 @@ function TrackingRoute() {
 						? order.pickupSnapshot?.locationType === "drop_off"
 							? "Meet on "
 							: "Collect on "
-						: "Delivery on "}
+						: isCollection
+							? order.collectedAt !== undefined
+								? "Collected on "
+								: "We collect on "
+							: "Delivery on "}
 					<span className="font-semibold">
-						{formatFulfilmentDate(order.fulfilmentDate)}
+						{formatFulfilmentDateTime(
+							order.fulfilmentDate,
+							order.fulfilmentTimeMinutes,
+						)}
 					</span>
 				</div>
 			) : null}
@@ -955,13 +1078,17 @@ function TrackingRoute() {
 				retailerId={order.retailerId}
 				subtotal={order.subtotal}
 				fulfilmentDate={order.fulfilmentDate}
+				fulfilmentTimeMinutes={order.fulfilmentTimeMinutes}
+				collectsFromCustomer={isCollection}
 			/>
 
-			<IvePaidDialog
+			<ManualPaymentDialog
 				open={claimingPayment}
 				onClose={() => setClaimingPayment(false)}
 				token={token}
 				shortId={order.shortId}
+				storeName={order.storeName || "the store"}
+				methods={paymentMethods}
 				hasExistingClaim={paymentStatus === "claimed"}
 			/>
 
@@ -1032,7 +1159,7 @@ function TrackingRoute() {
 				{/* Frozen delivery charge — same reconciliation rule as the pickup fee. */}
 				{order.deliveryFee && order.deliveryFee > 0 ? (
 					<div className="flex items-center justify-between px-3 text-sm text-muted-foreground">
-						<span>Delivery fee</span>
+						<span>{isCollection ? "Collection fee" : "Delivery fee"}</span>
 						<span className="tabular-nums">
 							{formatPrice(order.deliveryFee, order.currency)}
 						</span>
@@ -1513,9 +1640,11 @@ function SendOrderCard({
 		deliveryFee: order.deliveryFee,
 		deliveryFeePending: order.deliveryFeePending,
 		deliveryMethod: order.deliveryMethod,
+		deliveryDirection: order.deliveryDirection,
 		deliveryAddress: order.deliveryAddress,
 		pickupSnapshot: order.pickupSnapshot,
 		fulfilmentDate: order.fulfilmentDate,
+		fulfilmentTimeMinutes: order.fulfilmentTimeMinutes,
 		customerNote: order.customerNote,
 		quotePending:
 			order.mockupStatus !== undefined &&

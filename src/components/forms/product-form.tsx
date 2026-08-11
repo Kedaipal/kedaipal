@@ -451,7 +451,7 @@ function ProductSummaryStrip({
 		{
 			options: editor.options,
 			rows: editor.rows,
-			hasCustomLine: editor.customLine !== null,
+			customLine: editor.customLine,
 		},
 		currency,
 	);
@@ -937,7 +937,8 @@ export function ProductForm({
 			) : null}
 
 			{/* Sticky action bar — on a long form, save must never scroll away.
-			    Rare actions (archive) sit beside it as a quiet icon. */}
+			    Rare-but-reversible actions (archive/restore) sit beside it as a
+			    labelled outline button — an icon alone here read as "delete". */}
 			<form.Subscribe
 				selector={(s) => ({
 					canSubmit: s.canSubmit,

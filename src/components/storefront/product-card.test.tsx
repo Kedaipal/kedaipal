@@ -121,6 +121,53 @@ describe("ProductCard — in-cart line", () => {
 	});
 });
 
+describe("ProductCard — price label (86eyhn4mr)", () => {
+	/** The bespoke line a made-to-order seller offers, priced from RM 40. */
+	const customLine = {
+		_id: "vc",
+		optionValues: [],
+		onHand: 0,
+		active: true,
+		blockWhenOutOfStock: false,
+		requiresProof: true,
+		price: 4000,
+		imageUrls: [],
+		isCustom: true,
+	};
+
+	it("prints a plain price when every variant is a fixed price", async () => {
+		renderCard();
+		await waitFor(() => expect(nameLink()).toBeTruthy());
+		expect(screen.queryByText(/from/i)).toBeNull();
+	});
+
+	it("prefixes From when the only line is a custom one with a starting price", async () => {
+		renderCard({
+			product: {
+				...product,
+				priceFrom: 4000,
+				priceTo: 4000,
+				variants: [customLine],
+			} as unknown as StorefrontProduct,
+		});
+		// A single price that the mockup quote lands on top of — the whole point
+		// of the ticket: without "From" the buyer reads RM 40 as the bill.
+		await waitFor(() => expect(screen.getByText("From")).toBeTruthy());
+		expect(screen.getByText(/RM\s*40\.00/)).toBeTruthy();
+	});
+
+	it("prefixes From when a custom line sits beside identically-priced stock", async () => {
+		// priceFrom === priceTo, so the range alone wouldn't have flagged it.
+		renderCard({
+			product: {
+				...product,
+				variants: [product.variants[0], { ...customLine, price: 5000 }],
+			} as unknown as StorefrontProduct,
+		});
+		await waitFor(() => expect(screen.getByText("From")).toBeTruthy());
+	});
+});
+
 describe("ProductCard — product page links", () => {
 	const HREF = "/kfrozenfood/p/ceramic-mug";
 

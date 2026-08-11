@@ -39,6 +39,7 @@ import { useAppForm } from "../components/forms/form";
 import { BillingTab } from "../components/settings/billing-tab";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
 import { NotificationsCard } from "../components/settings/notifications-card";
+import { OnlinePaymentsCard } from "../components/settings/online-payments-card";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -68,7 +69,7 @@ import {
 	settingsNotifyEmailFormSchema,
 	settingsWaPhoneFormSchema,
 } from "../lib/schemas";
-import { tierPill } from "../lib/subscription";
+import { hasFeature, tierPill } from "../lib/subscription";
 
 const CURRENCY_OPTIONS = SUPPORTED_CURRENCIES.map((c) => ({
 	value: c,
@@ -131,7 +132,7 @@ const SETTINGS_TABS: ReadonlyArray<{
 	{
 		id: "payments",
 		label: "Payments",
-		description: "Bank accounts and QR codes",
+		description: "Bank accounts, QR codes & online payments",
 		icon: <CreditCard className="size-4" />,
 	},
 	// One home for "how buyers get their order" — delivery + self-collect toggles
@@ -675,6 +676,13 @@ function SettingsRoute() {
 							<PaymentMethodsForm
 								current={retailer.paymentMethods ?? []}
 								onSave={(paymentMethods) => updateSettings({ paymentMethods })}
+							/>
+						</Card>
+						<Card>
+							<OnlinePaymentsCard
+								hitpay={retailer.hitpay}
+								canUse={hasFeature(retailer.subscription, "onlinePayments")}
+								onSave={(patch) => updateSettings(patch)}
 							/>
 						</Card>
 						{/* Says plainly that nothing chases the buyer for us, so a seller

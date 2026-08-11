@@ -8,6 +8,7 @@ import {
 	GoToCheckoutBar,
 	type OnAddVariant,
 	OptionPills,
+	PriceLabel,
 	PurchaseActions,
 	useProductPurchase,
 } from "./product-purchase";
@@ -236,6 +237,66 @@ function bespokeService(): StorefrontProduct {
 		],
 	} as unknown as StorefrontProduct;
 }
+
+/**
+ * The headline price both product views print (86eyhn4mr). A custom line's
+ * price is the seller's STARTING price — the mockup quote lands on top — so
+ * printing it bare invites the buyer to read it as the bill, which is exactly
+ * what BearCamp's variable-priced services hit.
+ */
+describe("headline price — starting vs fixed", () => {
+	function Price({ product }: { product: StorefrontProduct }) {
+		const pp = useProductPurchase({ product, retailerId: RID, cartQuantity: 0 });
+		return <PriceLabel value={pp.priceLabel} />;
+	}
+
+	/** The made-to-order product, but with a starting price typed in. */
+	function pricedService(): StorefrontProduct {
+		const base = bespokeService();
+		return {
+			...base,
+			priceFrom: 4000,
+			priceTo: 4000,
+			// A priced custom line is NOT a quote line (that's price 0).
+			hasQuotePricing: false,
+			variants: [{ ...base.variants[0], price: 4000 }],
+		} as unknown as StorefrontProduct;
+	}
+
+	it("prefixes From on a made-to-order product's starting price", () => {
+		render(<Price product={pricedService()} />);
+		expect(screen.getByText("From")).toBeTruthy();
+		expect(screen.getByText(/RM\s*40\.00/)).toBeTruthy();
+	});
+
+	it("still says Price on quote when the custom line has no price", () => {
+		render(<Price product={bespokeService()} />);
+		expect(screen.getByText("Price on quote")).toBeTruthy();
+		expect(screen.queryByText("From")).toBeNull();
+	});
+
+	it("prints a SELECTED standard variant's price bare, custom line or not", () => {
+		// The buyer picked a fixed size; the bespoke line beside it doesn't make
+		// that size negotiable, so "From RM 15" would be a lie.
+		function Picked() {
+			const pp = useProductPurchase({
+				product: cake(2),
+				retailerId: RID,
+				cartQuantity: 0,
+			});
+			return (
+				<>
+					<OptionPills pp={pp} />
+					<PriceLabel value={pp.priceLabel} />
+				</>
+			);
+		}
+		render(<Picked />);
+		fireEvent.click(screen.getByRole("button", { name: "M" }));
+		expect(screen.getByText(/RM\s*15\.00/)).toBeTruthy();
+		expect(screen.queryByText("From")).toBeNull();
+	});
+});
 
 /**
  * Modelling the type as `isCustom` means it INHERITS the bespoke flow rather

@@ -261,6 +261,9 @@ export const getRetailerLocaleForOrder = internalQuery({
 		retailerWaPhone: string | undefined;
 		messageTemplates: MessageTemplates | undefined;
 		deliveryMethod: DeliveryMethod;
+		// Frozen trip direction (86eyg0n8e) — flips the confirm's "we'll update
+		// you when it ships" line to collection wording.
+		deliveryDirection: "standard" | "collection" | undefined;
 		pickupSnapshot: PickupSnapshot | undefined;
 		// Frozen delivery charge — renders the fee line in the confirm reply.
 		deliverySnapshot: { fee: number } | undefined;
@@ -297,6 +300,7 @@ export const getRetailerLocaleForOrder = internalQuery({
 				| MessageTemplates
 				| undefined,
 			deliveryMethod: (order.deliveryMethod as DeliveryMethod | undefined) ?? "delivery",
+			deliveryDirection: order.deliveryDirection,
 			pickupSnapshot: order.pickupSnapshot,
 			deliverySnapshot: order.deliverySnapshot,
 			currency: order.currency,
@@ -662,6 +666,7 @@ export const handleInbound = internalAction({
 					contactPhone,
 					trackingUrl,
 					deliveryMethod: meta?.deliveryMethod ?? "delivery",
+					deliveryDirection: meta?.deliveryDirection,
 					pickupKind: meta?.pickupSnapshot?.locationType,
 				},
 			);

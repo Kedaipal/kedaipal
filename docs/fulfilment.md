@@ -284,14 +284,25 @@ chargeable pickup).
   booking mirrors its `shareLink` onto `carrierTrackingUrl`, which suppresses it
   anyway), and webhook-driven orders never get there at all (the advance button is
   disabled under rider auto-updates).
-  - **Rider bookable now** (`blockReason === null`): the rider explainer + a
-    `Book a rider` CTA that closes the prompt and bumps `bookRequestToken`, which
-    `BookDeliveryCard` watches to open its own quote→confirm dialog through the same
-    bookability guards. The card sits far down the page, so the prompt is the second,
-    eye-level entrance to one flow — plus a quiet (`variant="link"`, still `h-11`)
-    `Mark as {stage} without a rider` **footer button**, because dropping an order off
-    yourself is real, `Book a rider` must never be the only way out, and the only way
-    out can't be a text link inside a sentence (tap-target rule 1).
+  - **Rider bookable now** (`blockReason === null`): **this prompt never opens.** The
+    advance button bumps `bookRequestToken` directly and the seller lands in
+    `BookDeliveryCard`'s **own** quote→confirm dialog — the same one prompt-on-packed
+    opens, with today's live price, the Motorcycle/Car switch, the variance against
+    what the buyer paid and the scheduled-vs-now line. The first cut put a
+    `Book a rider` CTA in an intermediate prompt in front of it; that was pure chrome
+    for a rider vendor (revised 4 Aug), and a second booking CTA is a competing door
+    onto the same spend. Both entrances still run the same bookability guards
+    (bookable status, keys ok, no active job, never a collection order).
+    - The booking modal then carries the **`advanceWithoutRider`** action — a quiet
+      (`variant="link"`) `Mark as {stage} without a rider` in its footer — because
+      dismissing the modal would otherwise leave an order the seller is dropping off
+      themselves exactly where it was. It renders **only on this path**: the card
+      tracks whether the quote flow started from an advance (`fromAdvance`), so the
+      packed prompt and the card's own button stay a plain book-or-not rather than
+      smuggling a status change into a spend confirmation.
+    - If the quote itself fails (out of service area, provider down) there's no modal
+      to show, so `onAdvanceBookUnavailable` hands the seller back to this prompt —
+      a tap that produced nothing but a toast would be a dead end.
   - **Rider not bookable** (plan downgrade, keys cleared, missing phone, legacy
     address with no map pin): the prompt says so in the seller's words via the shared
     `dispatchBlockCopy` (moved out of `book-delivery-card.tsx` into

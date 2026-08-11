@@ -74,3 +74,58 @@ describe("OrderContextBadge — fulfilment date gating", () => {
 		expect(container.textContent).toBe("");
 	});
 });
+
+describe("OrderContextBadge — collection orders (86eyg0n8e)", () => {
+	function collection(overrides = {}) {
+		return {
+			status: "confirmed",
+			createdAt: NOW,
+			source: "storefront",
+			fulfilmentDate: OVERDUE,
+			deliveryDirection: "collection",
+			...overrides,
+		};
+	}
+
+	it("stays red before collection — the day passed and nothing has arrived", () => {
+		render(<OrderContextBadge order={collection()} now={NOW} />);
+		expect(screen.getByText(/Overdue/).className).toMatch(/red/);
+	});
+
+	it("goes neutral once the rider delivered the goods, even though the order never reaches `delivered`", () => {
+		// The regression: a collection order's date is the COLLECTION day, and
+		// the webhook deliberately never advances the order — so without the
+		// collectedAt mute this reads red for the whole service window.
+		render(
+			<OrderContextBadge
+				order={collection({ collectedAt: NOW - DAY })}
+				now={NOW}
+			/>,
+		);
+		expect(screen.queryByText(/Overdue/)).toBeNull();
+		expect(screen.getByText(/\d/).className).not.toMatch(/red|orange|amber/);
+	});
+
+	it("a collected order still surfaces a blocking mockup — the mute is date-only", () => {
+		render(
+			<OrderContextBadge
+				order={collection({ collectedAt: NOW - DAY, mockupStatus: "pending" })}
+				now={NOW}
+			/>,
+		);
+		expect(screen.getByText("Mockup pending")).toBeTruthy();
+	});
+
+	it("a standard order with the same stamp is unaffected (guard against over-reach)", () => {
+		render(
+			<OrderContextBadge
+				order={collection({
+					deliveryDirection: undefined,
+					collectedAt: NOW - DAY,
+				})}
+				now={NOW}
+			/>,
+		);
+		expect(screen.getByText(/Overdue/).className).toMatch(/red/);
+	});
+});

@@ -15,6 +15,10 @@ import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import {
+	productCapBlockReason,
+	productCapState,
+} from "../../convex/lib/productCap";
 import { ProBadge } from "../components/app/pro-gate";
 import { PageHeader } from "../components/dashboard/page-header";
 import { AppImage } from "../components/ui/app-image";
@@ -38,6 +42,7 @@ import {
 } from "../lib/product-export";
 import { reorderByIds } from "../lib/reorder";
 import { hasFeature } from "../lib/subscription";
+import { hasStartingPrice } from "../lib/variant";
 
 type StatusFilter = "all" | "active" | "archived";
 
@@ -211,6 +216,29 @@ function ProductsRoute() {
 		};
 	}, [products]);
 
+	// Product cap. `counts.all` is the right input by construction: `listAll`
+	// returns every row, active AND archived, which is exactly what the cap
+	// counts. Client mirror of the server gate (server is the lock) — admin
+	// act-as is exempt so a white-glove catalog can be stocked past the ceiling.
+	const cap = productCapState(counts.all, retailer?.actingAsAdmin === true);
+	// null while there's room — one source for the disabled button and its reason.
+	const capBlockReason = productCapBlockReason(
+		counts.all,
+		retailer?.actingAsAdmin === true,
+	);
+	const countsLine =
+		products === undefined
+			? "Loading…"
+			: `${counts.active} active · ${counts.archived} archived`;
+	// The ceiling only appears once it's plausibly relevant (≥80%), so a small
+	// catalog is never nagged about a limit it will never reach. An admin-stocked
+	// store ABOVE the ceiling shows no ratio — "250 of 200" reads as a bug rather
+	// than the bespoke arrangement it is.
+	const productsSubtitle =
+		products === undefined || cap.overCap || !cap.showCounter
+			? countsLine
+			: `${countsLine} · ${cap.used} of ${cap.cap} used`;
+
 	const filtered = useMemo(() => {
 		if (!products) return undefined;
 		const q = query.trim().toLowerCase();
@@ -279,11 +307,7 @@ function ProductsRoute() {
 		<div className="flex flex-col gap-4 lg:gap-5">
 			<PageHeader
 				title="Products"
-				subtitle={
-					products === undefined
-						? "Loading…"
-						: `${counts.active} active · ${counts.archived} archived`
-				}
+				subtitle={productsSubtitle}
 				actions={
 					<>
 						{BULK_IO_ENABLED ? (
@@ -294,9 +318,11 @@ function ProductsRoute() {
 							/>
 						) : null}
 						<CategoriesLink locked={categoriesLocked} />
-						<Button asChild className="h-10">
-							<Link to="/app/products/new">+ New product</Link>
-						</Button>
+						<NewProductButton
+							blockedReason={capBlockReason}
+							label="+ New product"
+							className="h-10"
+						/>
 					</>
 				}
 			/>
@@ -309,7 +335,7 @@ function ProductsRoute() {
 						<Skeleton className="h-3 w-32 rounded" />
 					) : (
 						<p className="text-[13px] text-muted-foreground">
-							{counts.active} active · {counts.archived} archived
+							{productsSubtitle}
 						</p>
 					)}
 				</div>
@@ -322,11 +348,30 @@ function ProductsRoute() {
 						/>
 					) : null}
 					<CategoriesLink locked={categoriesLocked} mobile />
-					<Button asChild className="h-11">
-						<Link to="/app/products/new">+ New</Link>
-					</Button>
+					<NewProductButton
+						blockedReason={capBlockReason}
+						label="+ New"
+						className="h-11"
+					/>
 				</div>
 			</div>
+
+			{/* At the ceiling the disabled New button needs to say WHY, and the
+			    reason isn't guessable: archiving looks like removal but keeps the
+			    slot, so only deleting frees one. A `title` tooltip can't carry that
+			    on a phone, which is where these sellers work. */}
+			{capBlockReason ? (
+				<section className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-800 dark:bg-amber-950/50">
+					<p className="text-sm font-semibold">
+						You've reached the {cap.cap}-product limit
+					</p>
+					<p className="mt-1 text-[13px] leading-snug text-muted-foreground">
+						Archived products still count toward it. Delete a product you no
+						longer sell to free up a slot — or message us if your shop genuinely
+						needs more than {cap.cap}.
+					</p>
+				</section>
+			) : null}
 
 			<div className="relative lg:max-w-md">
 				<Search
@@ -406,6 +451,34 @@ function ProductsRoute() {
 	);
 }
 
+/**
+ * "New product", disabled-with-reason once the store is at the product cap.
+ * Rendered at both header breakpoints, so the block lives in one place and the
+ * two can't disagree. An `<a>` can't be disabled, so the blocked state renders a
+ * real `<button>` rather than a link that would only fail at the server.
+ */
+function NewProductButton({
+	blockedReason,
+	label,
+	className,
+}: {
+	blockedReason: string | null;
+	label: string;
+	className?: string;
+}) {
+	if (blockedReason)
+		return (
+			<Button disabled title={blockedReason} className={className}>
+				{label}
+			</Button>
+		);
+	return (
+		<Button asChild className={className}>
+			<Link to="/app/products/new">{label}</Link>
+		</Button>
+	);
+}
+
 function ProductCard({
 	product: p,
 	dragHandle,
@@ -418,6 +491,13 @@ function ProductCard({
 	const lowStock =
 		p.active && blockOOS && p.totalOnHand > 0 && p.totalOnHand <= 3;
 	const priceVaries = p.priceTo > p.priceFrom;
+	// Mirror the storefront card exactly, so the seller's list never states a
+	// price more confidently than the buyer's does: everything quoted reads
+	// "Price on quote", and a floor (range, cheaper quote line, or a custom
+	// line's starting price) is prefixed "From" (86eyhn4mr).
+	const allQuote = p.hasQuotePricing && p.priceTo === 0;
+	const showFrom =
+		priceVaries || p.hasQuotePricing || hasStartingPrice(p.variants);
 	const variantCount = p.variants.length;
 	// Archived products read greyed wherever they appear (All view, Archived tab,
 	// and the reorder tail).
@@ -444,8 +524,14 @@ function ProductCard({
 				<span className="truncate text-[14.5px] font-semibold">{p.name}</span>
 				<span className="truncate text-[13px] text-muted-foreground">
 					<span className="font-medium text-foreground">
-						{priceVaries ? "from " : ""}
-						{formatPrice(p.priceFrom, p.currency)}
+						{allQuote ? (
+							"Price on quote"
+						) : (
+							<>
+								{showFrom ? "From " : ""}
+								{formatPrice(p.priceFrom, p.currency)}
+							</>
+						)}
 					</span>
 					{variantCount > 1 ? ` · ${variantCount} variants` : ""}
 				</span>

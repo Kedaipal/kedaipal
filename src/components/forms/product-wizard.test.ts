@@ -667,7 +667,9 @@ describe("wizard — made-to-order product type", () => {
 		expect(values.variants[0].price).toBe(12000);
 	});
 
-	it("labels the review as a quote, or the price once one is typed", () => {
+	// A typed amount is a STARTING price — the mockup quote lands on top — so the
+	// review preview says what the storefront prints: "From RM 120" (86eyhn4mr).
+	it("labels the review as a quote, or a starting price once one is typed", () => {
 		const s = madeToOrderState();
 		expect(wizardPriceLabel(s, "RM")).toBe("Price on quote");
 		expect(
@@ -681,7 +683,7 @@ describe("wizard — made-to-order product type", () => {
 				},
 				"RM",
 			),
-		).toBe("RM 120");
+		).toBe("From RM 120");
 	});
 
 	it("opens an answered draft on Review, never on the skipped step", () => {

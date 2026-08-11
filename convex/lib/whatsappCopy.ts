@@ -26,6 +26,11 @@ export type CopyVars = {
 	contactPhone?: string;
 	trackingUrl?: string;
 	deliveryMethod?: DeliveryMethod;
+	// The order's frozen trip direction (orders.deliveryDirection, 86eyg0n8e).
+	// "collection" = the rider collects FROM the buyer (gear-wash stores) — the
+	// confirm's "we'll update you when it ships" line flips to collection
+	// wording. Only meaningful on delivery orders; undefined = standard.
+	deliveryDirection?: "standard" | "collection";
 	// The order's frozen pickup kind (pickupSnapshot.locationType). Only
 	// meaningful when deliveryMethod is self_collect; undefined (legacy
 	// snapshots / delivery orders) reads as self-collect, matching
@@ -45,6 +50,13 @@ function isDropOff(v: Pick<CopyVars, "deliveryMethod" | "pickupKind">): boolean 
 // There is deliberately no `status` copy here. Packed / shipped / delivered /
 // cancelled no longer message the buyer at all (86eyd63r8) — those states are
 // read off the order page instead.
+
+/** True when the rider collects FROM the buyer (86eyg0n8e). Direction is only
+ * ever stamped on delivery orders, so the flag alone decides. */
+function isCollection(v: Pick<CopyVars, "deliveryDirection">): boolean {
+	return v.deliveryDirection === "collection";
+}
+
 type LocaleCopy = {
 	confirm: (v: CopyVars) => string;
 	unknownFallback: () => string;
@@ -84,36 +96,42 @@ export function privacyNoticeLine(locale: Locale): string {
 // order page as the place progress and payment live instead.
 export const waCopy: Record<Locale, LocaleCopy> = {
 	en: {
-		confirm: ({ shortId, storeName, contactPhone, trackingUrl, deliveryMethod, pickupKind }) => {
+		confirm: ({ shortId, storeName, contactPhone, trackingUrl, deliveryMethod, deliveryDirection, pickupKind }) => {
 			const method = isDropOff({ deliveryMethod, pickupKind })
 				? "We'll have it ready at the drop-off point."
 				: deliveryMethod === "self_collect"
 					? "We'll have it ready for pickup."
-					: "We're getting it ready to ship.";
+					: isCollection({ deliveryDirection })
+						? "We're arranging collection from your address."
+						: "We're getting it ready to ship.";
 			return `✅ Order ${shortId} confirmed. ${method} — ${storeName}${trackingUrl ? `\n\nProgress & payment are on your order page: ${trackingUrl}` : ""}${contactLine(contactPhone, "en")}`;
 		},
 		unknownFallback: () =>
 			"Hi! To place an order, browse our catalog and tap Checkout — you'll be sent back here with an order ID.",
 	},
 	ms: {
-		confirm: ({ shortId, storeName, contactPhone, trackingUrl, deliveryMethod, pickupKind }) => {
+		confirm: ({ shortId, storeName, contactPhone, trackingUrl, deliveryMethod, deliveryDirection, pickupKind }) => {
 			const method = isDropOff({ deliveryMethod, pickupKind })
 				? "Kami akan sediakan di lokasi penyerahan."
 				: deliveryMethod === "self_collect"
 					? "Kami akan sediakan untuk diambil."
-					: "Kami sedang sediakan untuk dihantar.";
+					: isCollection({ deliveryDirection })
+						? "Kami sedang atur kutipan dari alamat anda."
+						: "Kami sedang sediakan untuk dihantar.";
 			return `✅ Pesanan ${shortId} telah disahkan. ${method} — ${storeName}${trackingUrl ? `\n\nStatus & pembayaran ada di halaman pesanan anda: ${trackingUrl}` : ""}${contactLine(contactPhone, "ms")}`;
 		},
 		unknownFallback: () =>
 			"Hai! Untuk membuat pesanan, layari katalog kami dan tekan Checkout — anda akan dikembalikan ke sini dengan ID pesanan.",
 	},
 	zh: {
-		confirm: ({ shortId, storeName, contactPhone, trackingUrl, deliveryMethod, pickupKind }) => {
+		confirm: ({ shortId, storeName, contactPhone, trackingUrl, deliveryMethod, deliveryDirection, pickupKind }) => {
 			const method = isDropOff({ deliveryMethod, pickupKind })
 				? "我们会在交收点为您准备好。"
 				: deliveryMethod === "self_collect"
 					? "我们会帮您准备好，等您来拿。"
-					: "我们正在为您准备发货。";
+					: isCollection({ deliveryDirection })
+						? "我们正在安排上门取件。"
+						: "我们正在为您准备发货。";
 			return `✅ 订单 ${shortId} 已确认。${method} —— ${storeName}${trackingUrl ? `\n\n订单进度和付款都在订单页面：${trackingUrl}` : ""}${contactLine(contactPhone, "zh")}`;
 		},
 		unknownFallback: () =>
