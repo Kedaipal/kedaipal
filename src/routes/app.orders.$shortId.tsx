@@ -62,6 +62,7 @@ import {
 	DeliveryAddressDisplay,
 	formatAddressInline,
 } from "../components/storefront/delivery-address-display";
+import { ProBadge } from "../components/app/pro-gate";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
@@ -98,6 +99,7 @@ import {
 	stageLabel,
 } from "../lib/orderStatus";
 import { suppressNextOrderConfirmedToast } from "../lib/orderToastSuppression";
+import { isCrmLocked } from "../lib/subscription";
 
 export const Route = createFileRoute("/app/orders/$shortId")({
 	component: OrderDetailRoute,
@@ -396,9 +398,16 @@ function OrderDetailRoute() {
 	// in orders.advanceToStage.
 	const awaitingCollection =
 		collectionService && order?.collectedAt === undefined;
+	// Pro gate (CRM). Skipped until the retailer payload resolves AND the plan
+	// allows it — `customers.get` throws `assertPlanFeature` for Starter, and a
+	// route-level useQuery throw takes the whole order page down (the exact bug
+	// this guard fixes; customers list/detail carry the same skip).
+	const crmLocked = isCrmLocked(retailer);
 	const crmCustomer = useQuery(
 		api.customers.get,
-		order?.customerId ? { customerId: order.customerId } : "skip",
+		retailer && !crmLocked && order?.customerId
+			? { customerId: order.customerId }
+			: "skip",
 	);
 	// Holds the id of the in-flight advance target ("cancel" for cancellation).
 	const [pending, setPending] = useState<string | null>(null);
@@ -1164,6 +1173,10 @@ function OrderDetailRoute() {
 							aria-label="View customer profile"
 						>
 							{avatarRow}
+							{/* Starter: the profile link lands on the customers upgrade
+							    wall — badge it so the tap is never a surprise (the CRM
+							    stats line above stays hidden for the same reason). */}
+							{crmLocked ? <ProBadge className="shrink-0" /> : null}
 							<ChevronRight className="size-4.5 shrink-0 text-muted-foreground/60" />
 						</Link>
 					) : (

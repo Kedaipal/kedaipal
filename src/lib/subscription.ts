@@ -29,6 +29,32 @@ export function hasFeature(
 	return sub.features[feature];
 }
 
+/**
+ * One truth for "must the CRM stay un-rendered AND un-queried for this
+ * dashboard payload?" — Starter plan, not admin act-as, payload loaded.
+ * Shared by every route that touches a Pro-gated `api.customers.*` query
+ * (customers list/detail, order detail's CRM context line).
+ *
+ * Call sites must skip the query while the payload is still LOADING too
+ * (`retailer && !isCrmLocked(retailer) ? args : "skip"`) — this helper stays
+ * false then so upgrade walls never flash mid-load, but firing a Pro-gated
+ * query before the plan is known trips the server gate, and a route-level
+ * useQuery throw takes the whole page down (the Starter order-detail crash,
+ * fixed on 86eyeea1n).
+ */
+export function isCrmLocked(
+	retailer:
+		| { actingAsAdmin?: boolean; subscription?: SubscriptionView }
+		| null
+		| undefined,
+): boolean {
+	return (
+		!!retailer &&
+		!retailer.actingAsAdmin &&
+		!hasFeature(retailer.subscription, "crm")
+	);
+}
+
 /** Canonical short tier labels (Starter/Pro/Scale) for the nav pill + billing UI. */
 export const PLAN_LABEL: Record<SubscriptionView["plan"], string> = {
 	starter: "Starter",

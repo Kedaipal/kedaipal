@@ -101,6 +101,17 @@ order-linking helpers are deliberately NOT gated** — a Starter store's custome
 data keeps aggregating in the background, so the CRM is fully populated the
 day they upgrade (and the upgrade wall says exactly that).
 
+**Every client call site of a gated `api.customers.*` query must skip until
+the plan is known and allows it** — one shared `isCrmLocked(retailer)` in
+`src/lib/subscription.ts` (customers list/detail + the order-detail CRM
+context line all use it, pattern `retailer && !isCrmLocked(retailer) ? args :
+"skip"`). The lesson (fixed 11 Aug 2026, on the 86eyeea1n branch): order
+detail gated its `customers.get` only on `order.customerId` existing, so on a
+Starter store the server's `assertPlanFeature` throw took down the ENTIRE
+order page — and since the confirmation push links a customer at create,
+that was every new storefront order. A route-level `useQuery` throw is a page
+crash, not a hidden card; the plan mirror must run before the query fires.
+
 ## Known limitations
 
 - **Phone-number change = new customer.** v1 treats a new `(retailerId, waPhone)` as a distinct customer; a manual merge tool is v2.
