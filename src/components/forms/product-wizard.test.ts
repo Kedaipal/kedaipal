@@ -23,6 +23,7 @@ function row(partial: Partial<VariantRow> = {}): VariantRow {
 		active: true,
 		blockWhenOutOfStock: true,
 		requiresProof: false,
+		parcelWeightG: "",
 		imageStorageIds: [],
 		...partial,
 	};
@@ -262,6 +263,9 @@ describe("buildWizardSubmitValues", () => {
 				active: true,
 				blockWhenOutOfStock: true,
 				requiresProof: false,
+				// The wizard flows through buildSubmitVariants too, so a blank draft
+				// weight submits as an explicit 0 (= unset), same as the full form.
+				parcelWeightG: 0,
 				imageStorageIds: [],
 			},
 		]);

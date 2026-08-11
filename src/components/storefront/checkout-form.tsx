@@ -523,14 +523,17 @@ export function CheckoutPage({
 	}
 
 	// --- Live delivery-charge preview (86extzdr8) ---------------------------
-	// Watch the method + the coordinates the Google autocomplete stamped into
-	// form state (three primitive selectors so keystrokes elsewhere don't
-	// re-render the page), and quote the fee server-side. The server strips
-	// distances (privacy) and orders.create re-resolves authoritatively — this
-	// is display + gating only.
+	// Watch the method + the coordinates/state the Google autocomplete (or the
+	// manual form) stamped into form state (primitive selectors so keystrokes
+	// elsewhere don't re-render the page), and quote the fee server-side. The
+	// server strips distances/zone internals (privacy) and orders.create
+	// re-resolves authoritatively — this is display + gating only.
 	const watchedMethod = useStore(form.store, (s) => s.values.deliveryMethod);
 	const watchedLat = useStore(form.store, (s) => s.values.address.latitude);
 	const watchedLng = useStore(form.store, (s) => s.values.address.longitude);
+	// Weight-mode stores zone-match on the STATE — a manual address (no pin)
+	// prices fine there, so the state rides along beside the coordinates.
+	const watchedState = useStore(form.store, (s) => s.values.address.state);
 	// The chosen day PRICES the live quote (pre-orders quote as a scheduled
 	// pickup on that day) — date changes re-quote just like address changes.
 	const watchedDate = useStore(form.store, (s) => s.values.fulfilmentDate);
@@ -588,6 +591,15 @@ export function CheckoutPage({
 					retailerId,
 					latitude: hasCoords ? latNum : undefined,
 					longitude: hasCoords ? lngNum : undefined,
+					state:
+						watchedState.trim().length > 0 ? watchedState.trim() : undefined,
+					// Weight-mode input: the server reads each variant's parcel weight
+					// itself, so the quote re-runs whenever the cart changes — two
+					// carts with the same subtotal can weigh differently.
+					items: cart.items.map((item) => ({
+						variantId: item.variantId,
+						quantity: item.quantity,
+					})),
 					subtotal: cart.total,
 				}
 			: "skip",
@@ -655,16 +667,25 @@ export function CheckoutPage({
 
 	// --- Can this store accept a hand-typed address? (86eye50qv) ------------
 	// While the buyer has NO pin, the live quote already answers exactly that
-	// question: a store that can't price a pin-less address answers "blocked".
-	// That's true for a live Lalamove quote and for radius bands set to block
-	// out-of-range — the two modes where a manually-typed address is a dead end
-	// (it can never be quoted, so checkout would refuse it anyway). Everything
-	// else (flat, free, radius-arrange) doesn't need coordinates, so the manual
-	// escape hatch stays. Held back until the quote resolves so the disclosure
-	// appears rather than flickering away.
+	// question: a store that can't price a pin-less address answers "blocked"
+	// with a PIN-shaped reason. That's true for a live Lalamove quote and for
+	// radius bands set to block out-of-range — the two modes where a
+	// manually-typed address is a dead end (it can never be quoted, so checkout
+	// would refuse it anyway). Everything else — flat, free, radius-arrange,
+	// and ALL of weight mode (86eyeea1n: it prices from the state, which the
+	// manual form provides) — doesn't need coordinates, so the manual escape
+	// hatch stays. Weight-mode blocked reasons (no state yet / unserved state /
+	// overweight / unweighable) must NOT hide it: manual entry is how the buyer
+	// supplies or fixes the state in the first place. Held back until the quote
+	// resolves so the disclosure appears rather than flickering away.
+	const pinRequiredBlock =
+		quoteForDelivery?.kind === "blocked" &&
+		(quoteForDelivery.reason === "no_coords" ||
+			quoteForDelivery.reason === "unquotable" ||
+			quoteForDelivery.reason === "out_of_range" ||
+			quoteForDelivery.reason === "store_unavailable");
 	const allowManualAddressEntry =
-		rawQuote !== undefined &&
-		!(!hasCoords && quoteForDelivery?.kind === "blocked");
+		rawQuote !== undefined && !(!hasCoords && pinRequiredBlock);
 
 	// Stock eroded under a persisted cart (qty 5, seller drops to 2): the line
 	// shows "Only 2 in stock" with `+` disabled, but the order would still be
@@ -714,6 +735,27 @@ export function CheckoutPage({
 		);
 	}
 
+	// The one-line CTA reason for a blocked quote. Weight-mode blocks aren't
+	// always the ADDRESS's fault — an overweight cart or an unpriceable item
+	// must not send the buyer off to "fix" a perfectly good address.
+	const feeNounShort = collectsFromCustomer ? "collection fee" : "delivery fee";
+	const deliveryBlockedLine = (() => {
+		if (quoteForDelivery?.kind !== "blocked") return null;
+		switch (quoteForDelivery.reason) {
+			case "no_state":
+				return `Choose your state so we can calculate your ${feeNounShort}`;
+			case "over_bands":
+				return "This order is too heavy for the store's delivery rates — see your order summary";
+			case "missing_weights":
+			case "custom_item":
+				return `Your ${feeNounShort} can't be worked out for this order — see your order summary`;
+			default:
+				return collectsFromCustomer
+					? "We can't collect from this address — see your order summary"
+					: "We can't deliver to this address — see your order summary";
+		}
+	})();
+
 	// Why the CTA is disabled, in the buyer's words. Ordered by what they'd fix
 	// first. `null` = nothing blocking (or the only gap is a field the form
 	// already marks inline, like the name).
@@ -733,11 +775,7 @@ export function CheckoutPage({
 							? collectsFromCustomer
 								? "Calculating your collection fee…"
 								: "Calculating your delivery fee…"
-							: deliveryBlocked
-								? collectsFromCustomer
-									? "We can't collect from this address — see your order summary"
-									: "We can't deliver to this address — see your order summary"
-								: null;
+							: (deliveryBlockedLine ?? null);
 
 	const submitButton = (
 		<form.Subscribe
@@ -875,13 +913,14 @@ export function CheckoutPage({
 							const feeNoun = collectsFromCustomer
 								? "collection fee"
 								: "delivery fee";
-							const blockedCopy =
-								quote?.kind === "blocked"
-									? quote.reason === "out_of_range"
-										? // Live-quote stores: the COURIER doesn't reach here, and
-											// retrying the same address never will — say so, and point
-											// at the two things that actually work.
-											isLiveMode
+							const blockedCopy = (() => {
+								if (quote?.kind !== "blocked") return undefined;
+								switch (quote.reason) {
+									case "out_of_range":
+										// Live-quote stores: the COURIER doesn't reach here, and
+										// retrying the same address never will — say so, and point
+										// at the two things that actually work.
+										return isLiveMode
 											? `This address is too far — our ${
 													collectsFromCustomer ? "collection" : "delivery"
 												} rider service doesn't cover it. Try an address closer to ${storeName}${
@@ -893,27 +932,64 @@ export function CheckoutPage({
 													selfCollectAvailable
 														? " Pickup is still available."
 														: ""
-												}`
-										: quote.reason === "store_unavailable"
-											? // Seller-side breakage — not the buyer's fault, not
-												// fixable by retrying. Give them the two real ways out.
-												`${
-													collectsFromCustomer ? "Collection" : "Delivery"
-												} pricing isn't working for this store right now — it's on ${storeName}'s side, not yours. ${
-													selfCollectAvailable
-														? "Choose pickup, or message"
-														: "Message"
-												} the store on WhatsApp to sort it out.`
-											: quote.reason === "unquotable"
-												? `We couldn't calculate the ${feeNoun} right now — re-pick your address to retry, or try again shortly.`
-												: // no_coords. Worth saying only once the buyer has an address
-													// at all — on an untouched form the reason line above the
-													// CTA already says "add your address", and two versions of
-													// the same nudge is noise.
-													addressIncomplete
-													? undefined
-													: `Pick your address from the Google suggestions so we can calculate your ${feeNoun}.`
-									: undefined;
+												}`;
+									case "store_unavailable":
+										// Seller-side breakage — not the buyer's fault, not
+										// fixable by retrying. Give them the two real ways out.
+										return `${
+											collectsFromCustomer ? "Collection" : "Delivery"
+										} pricing isn't working for this store right now — it's on ${storeName}'s side, not yours. ${
+											selfCollectAvailable
+												? "Choose pickup, or message"
+												: "Message"
+										} the store on WhatsApp to sort it out.`;
+									case "unquotable":
+										return `We couldn't calculate the ${feeNoun} right now — re-pick your address to retry, or try again shortly.`;
+									// Weight-mode blocks (86eyeea1n) ------------------------
+									case "unserved_state":
+										return `${storeName} doesn't ${
+											collectsFromCustomer ? "collect from" : "deliver to"
+										} ${
+											watchedState.trim().length > 0
+												? watchedState.trim()
+												: "that state"
+										} yet.${
+											selfCollectAvailable ? " Pickup is still available." : ""
+										}`;
+									case "over_bands":
+										return `This order is heavier than ${storeName}'s delivery rates cover. Remove some items${
+											selfCollectAvailable ? ", choose pickup," : ""
+										} or message the store on WhatsApp to arrange it.`;
+									case "missing_weights":
+										// Seller config gap (unset parcel weights) — the buyer
+										// can't fix it, so frame it like store_unavailable.
+										return `The ${feeNoun} can't be calculated for these items right now — it's on ${storeName}'s side, not yours. ${
+											selfCollectAvailable
+												? "Choose pickup, or message"
+												: "Message"
+										} the store on WhatsApp to sort it out.`;
+									case "custom_item":
+										return `Your order includes a custom item, so ${storeName} confirms the ${feeNoun} with you directly. ${
+											selfCollectAvailable
+												? "Choose pickup, or message"
+												: "Message"
+										} them on WhatsApp to arrange it.`;
+									case "no_state":
+										// Like no_coords below: worth saying only once the buyer
+										// has an address at all.
+										return addressIncomplete
+											? undefined
+											: `Choose your state so we can calculate your ${feeNoun}.`;
+									default:
+										// no_coords. Worth saying only once the buyer has an
+										// address at all — on an untouched form the reason line
+										// above the CTA already says "add your address", and two
+										// versions of the same nudge is noise.
+										return addressIncomplete
+											? undefined
+											: `Pick your address from the Google suggestions so we can calculate your ${feeNoun}.`;
+								}
+							})();
 							return (
 								<CheckoutSummary
 									cart={cart}

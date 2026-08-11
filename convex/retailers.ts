@@ -256,6 +256,19 @@ const deliveryConfigValidator = v.union(
 		outOfRange: v.union(v.literal("block"), v.literal("arrange")),
 	}),
 	v.object({
+		mode: v.literal("weight"),
+		zones: v.array(
+			v.object({
+				name: v.string(),
+				states: v.array(v.string()),
+				bands: v.array(v.object({ maxKg: v.number(), fee: v.number() })),
+				freeAbove: v.optional(v.number()),
+			}),
+		),
+		onOutOfBands: v.union(v.literal("block"), v.literal("arrange")),
+		onUnpriceable: v.union(v.literal("block"), v.literal("arrange")),
+	}),
+	v.object({
 		mode: v.literal("lalamove"),
 		onUnquotable: v.union(v.literal("arrange"), v.literal("block")),
 	}),
@@ -1386,6 +1399,13 @@ export const updateSettings = mutation({
 						await assertPlanFeature(ctx, retailer._id, "radiusDelivery");
 					}
 				}
+				// Weight/zone pricing (86eyeea1n) deliberately carries NO plan gate
+				// and NO businessAddress requirement — it prices from the buyer's
+				// state + cart weight alone, costs Kedaipal nothing per order, and
+				// is the correctness fix for outstation parcel sellers (all-tier,
+				// decided with Arif 11 Aug). sanitizeDeliveryConfig above already
+				// guarantees ≥1 zone with ≥1 state + ≥1 band, so a stored weight
+				// config can never be dead weight.
 				if (clean.mode === "lalamove") {
 					// Live-quote pricing rides the booking config (credentials +
 					// vehicle + origin) — require booking enabled in the effective

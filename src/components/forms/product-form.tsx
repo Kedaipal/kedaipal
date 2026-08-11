@@ -22,6 +22,7 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import { MAX_NOTICE_DAYS } from "../../../convex/lib/fulfilmentDate";
 import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
 import { convexErrorMessage, parsePriceInput } from "../../lib/format";
+import { PRODUCT_WEIGHT_MAX } from "../../lib/product-import";
 import { cartesian } from "../../lib/variant";
 import { describeProduct } from "../../lib/product-summary";
 import { productDetailsSchema } from "../../lib/schemas";
@@ -66,6 +67,13 @@ export interface ProductFormSubmitValues {
 		active: boolean;
 		blockWhenOutOfStock: boolean;
 		requiresProof: boolean;
+		// Parcel weight in grams (86eyeea1n). Both builders (full form + wizard)
+		// route through buildSubmitVariants, which always sends a number — blank
+		// input = explicit 0 = unset — so clearing the field really clears the
+		// stored weight (`undefined` would hit the server's preserve-on-update
+		// path). Optional in the type only because the CUSTOM line entry omits
+		// it (its weight is unknowable by design; server defaults 0).
+		parcelWeightG?: number;
 		imageStorageIds: string[];
 		// The custom / made-to-order line is submitted as a flagged entry in this
 		// same array (server splits matrix vs custom). See docs/custom-option.md.
@@ -126,6 +134,7 @@ interface ProductFormProps {
 			active?: boolean;
 			blockWhenOutOfStock?: boolean;
 			requiresProof?: boolean;
+			parcelWeightG?: number;
 			imageStorageIds?: string[];
 			imageUrls?: string[];
 			isCustom?: boolean;
@@ -136,6 +145,9 @@ interface ProductFormProps {
 	currency: string;
 	submitLabel: string;
 	onSubmit: (values: ProductFormSubmitValues) => Promise<void>;
+	/** The store prices delivery by weight/zone (86eyeea1n) — promotes the
+	 * variant parcel-weight inputs out of Advanced (see VariantEditor). */
+	weightMode?: boolean;
 	/**
 	 * Optional secondary control rendered beside Save in the sticky action bar
 	 * (e.g. the edit page's archive icon) — rare actions ride along without
@@ -185,6 +197,12 @@ function initialEditorState(
 				active: vr.active ?? true,
 				blockWhenOutOfStock: vr.blockWhenOutOfStock ?? blockFallback,
 				requiresProof: vr.requiresProof ?? proofFallback,
+				// 0 = unset — shown blank, not "0", so the field reads as empty
+				// rather than "weighs nothing".
+				parcelWeightG:
+					vr.parcelWeightG && vr.parcelWeightG > 0
+						? String(vr.parcelWeightG)
+						: "",
 				imageStorageIds: vr.imageStorageIds ?? [],
 				imageUrl: vr.imageUrls?.[0],
 			}));
@@ -217,6 +235,7 @@ function initialEditorState(
 				active: true,
 				blockWhenOutOfStock: true,
 				requiresProof: false,
+				parcelWeightG: "",
 				imageStorageIds: [],
 			},
 		],
@@ -284,6 +303,26 @@ export function buildSubmitVariants(
 		const priceNum = parsePriceInput(row.price.trim());
 		const priceOk = priceNum !== null;
 		const stockOk = INT_RE.test(row.stock.trim());
+		// Parcel weight (86eyeea1n): optional whole grams. Blank = 0 = unset —
+		// sent explicitly so clearing the field really clears the stored weight
+		// (undefined would hit the server's preserve-on-update path). Validated
+		// even on inactive rows: a bad value is a typo wherever it sits, and
+		// silently zeroing it would un-weigh the row on reactivation.
+		const weightStr = row.parcelWeightG.trim();
+		const weightOk =
+			weightStr.length === 0 ||
+			(INT_RE.test(weightStr) &&
+				Number.parseInt(weightStr, 10) <= PRODUCT_WEIGHT_MAX);
+		if (!weightOk) {
+			issues.push({
+				where: "row",
+				index,
+				field: "weight",
+				message: INT_RE.test(weightStr)
+					? "That's heavier than 1,000 kg — check the number (grams)."
+					: "Whole grams only (e.g. 500 for half a kilo).",
+			});
+		}
 		if (row.active) {
 			if (!priceOk) {
 				issues.push({
@@ -313,6 +352,9 @@ export function buildSubmitVariants(
 			active: row.active,
 			blockWhenOutOfStock: row.blockWhenOutOfStock,
 			requiresProof: row.requiresProof,
+			parcelWeightG: weightOk && weightStr.length > 0
+				? Number.parseInt(weightStr, 10)
+				: 0,
 			imageStorageIds: row.imageStorageIds,
 		});
 	});
@@ -532,6 +574,7 @@ export function ProductForm({
 	currency,
 	submitLabel,
 	onSubmit,
+	weightMode = false,
 	stickyAction,
 	mode,
 	draftRef,
@@ -802,6 +845,7 @@ export function ProductForm({
 					onChange={setEditor}
 					currency={currency}
 					issues={editorIssues}
+					weightMode={weightMode}
 				/>
 
 				<Link

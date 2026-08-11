@@ -268,6 +268,7 @@ function EditProductRoute() {
 						// Resolved per-variant server-side (override ?? product default).
 						blockWhenOutOfStock: vr.blockWhenOutOfStock,
 						requiresProof: vr.requiresProof,
+						parcelWeightG: vr.parcelWeightG,
 						imageStorageIds: vr.imageStorageIds,
 						imageUrls: vr.imageUrls,
 						isCustom: vr.isCustom,
@@ -275,6 +276,10 @@ function EditProductRoute() {
 						customPrompt: vr.customPrompt,
 					})),
 				}}
+				// Weight/zone-priced store (86eyeea1n): parcel weight is promoted to
+				// a first-class field in the editor — a weightless item strands that
+				// store's checkout on "missing weights".
+				weightMode={retailer.deliveryConfig?.mode === "weight"}
 				submitLabel="Save changes"
 				stickyAction={
 					// Labelled, and NOT tinted red — an icon-only red button here read
