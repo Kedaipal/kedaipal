@@ -39,6 +39,7 @@ import { useAppForm } from "../components/forms/form";
 import { BillingTab } from "../components/settings/billing-tab";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
 import { NotificationsCard } from "../components/settings/notifications-card";
+import { WaOrderAlertsCard } from "../components/settings/wa-order-alerts-card";
 import { OnlinePaymentsCard } from "../components/settings/online-payments-card";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
@@ -581,6 +582,27 @@ function SettingsRoute() {
 						<Card>
 							<NotificationsCard />
 						</Card>
+						{/* Notification surfaces live together: browser (above), WhatsApp,
+						    email (below). The WA card only mounts when the deployment has
+						    an approved seller template configured (86eyhw9zy). */}
+						{retailer.waOrderAlertsAvailable ? (
+							<Card>
+								<WaOrderAlertsCard
+									enabled={retailer.orderWaAlerts === true}
+									currentPhone={retailer.notifyWaPhone ?? ""}
+									fallbackPhone={retailer.waPhone ?? ""}
+									optedOut={retailer.notifyWaPhoneOptedOut === true}
+									canUse={hasFeature(retailer.subscription, "waOrderAlerts")}
+									onSave={(patch) => updateSettings(patch)}
+								/>
+							</Card>
+						) : null}
+						<Card>
+							<NotifyEmailForm
+								current={retailer.notifyEmail ?? ""}
+								onSave={(notifyEmail) => updateSettings({ notifyEmail })}
+							/>
+						</Card>
 						<Card>
 							<StoreDescriptionForm
 								current={retailer.storeDescription ?? ""}
@@ -602,12 +624,6 @@ function SettingsRoute() {
 								onSave={(coverImageStorageId) =>
 									updateSettings({ coverImageStorageId })
 								}
-							/>
-						</Card>
-						<Card>
-							<NotifyEmailForm
-								current={retailer.notifyEmail ?? ""}
-								onSave={(notifyEmail) => updateSettings({ notifyEmail })}
 							/>
 						</Card>
 						<Card>
@@ -2138,7 +2154,7 @@ function LocaleForm({
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
 			<label className="flex flex-col gap-2">
-				<span className="text-sm font-medium">WhatsApp message language</span>
+				<span className="text-sm font-medium">Message language</span>
 				<select
 					value={value}
 					onChange={(e) => setValue(e.target.value as Locale)}
@@ -2150,8 +2166,12 @@ function LocaleForm({
 						</option>
 					))}
 				</select>
+				{/* The field reaches further than its old "sent to shoppers" copy
+				    admitted: retailer email alerts have always rendered in it, and
+				    the WhatsApp order alerts (86eyhw9zy) now do too. */}
 				<span className="text-xs text-muted-foreground">
-					Used for order confirmations and shipping updates sent to shoppers.
+					Used for order confirmations and shipping updates sent to shoppers —
+					and for the order alerts we send you by email and WhatsApp.
 				</span>
 			</label>
 

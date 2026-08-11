@@ -221,6 +221,7 @@ describe("hasFeature (client plan gate)", () => {
 				radiusDelivery: false,
 				delivery: false,
 				onlinePayments: false,
+				waOrderAlerts: false,
 			},
 		});
 		expect(hasFeature(starter, "crm")).toBe(false);
@@ -230,6 +231,7 @@ describe("hasFeature (client plan gate)", () => {
 		expect(hasFeature(starter, "insights")).toBe(false);
 		expect(hasFeature(starter, "radiusDelivery")).toBe(false);
 		expect(hasFeature(starter, "onlinePayments")).toBe(false);
+		expect(hasFeature(starter, "waOrderAlerts")).toBe(false);
 		const pro = sub({
 			features: {
 				crm: true,
@@ -240,6 +242,7 @@ describe("hasFeature (client plan gate)", () => {
 				radiusDelivery: true,
 				delivery: true,
 				onlinePayments: true,
+				waOrderAlerts: true,
 			},
 		});
 		expect(hasFeature(pro, "crm")).toBe(true);
@@ -248,6 +251,7 @@ describe("hasFeature (client plan gate)", () => {
 		expect(hasFeature(pro, "insights")).toBe(true);
 		expect(hasFeature(pro, "radiusDelivery")).toBe(true);
 		expect(hasFeature(pro, "onlinePayments")).toBe(true);
+		expect(hasFeature(pro, "waOrderAlerts")).toBe(true);
 	});
 
 	test("fails open when the subscription/features are missing (loading, comped)", () => {
@@ -267,6 +271,7 @@ describe("isCrmLocked", () => {
 			radiusDelivery: false,
 			delivery: false,
 			onlinePayments: false,
+			waOrderAlerts: false,
 		},
 	});
 

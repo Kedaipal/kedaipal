@@ -1153,6 +1153,15 @@ export const create = mutation({
 			{ orderId },
 		);
 
+		// Seller WhatsApp order alert (86eyhw9zy) — storefront orders only, so
+		// counter checkout (its own create path) never schedules one. The action
+		// itself checks the opt-in toggle + template env and no-ops otherwise.
+		await ctx.scheduler.runAfter(
+			0,
+			internal.whatsapp.notifySellerNewOrder,
+			{ orderId },
+		);
+
 		// The buyer's WhatsApp confirmation — the ONE outbound message this order
 		// sends (Meta bills per message from Oct 2026). Fire-and-forget like the
 		// email; a send failure stamps confirmationPushStatus, never fails create.
@@ -3268,6 +3277,15 @@ export const claimPayment = mutation({
 		await ctx.scheduler.runAfter(
 			0,
 			internal.email.notifyPaymentClaimed,
+			{ orderId: order._id },
+		);
+
+		// Seller WhatsApp payment-claim alert (86eyhw9zy). Counter pay-later
+		// orders included — a claim lands hours after the sale, when nobody is
+		// standing at the counter. The action checks toggle + template env.
+		await ctx.scheduler.runAfter(
+			0,
+			internal.whatsapp.notifySellerPaymentClaim,
 			{ orderId: order._id },
 		);
 	},
