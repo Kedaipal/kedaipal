@@ -1594,12 +1594,22 @@ export const getOrderForSellerAlert = internalQuery({
 		if (!order) return null;
 		const retailer = await ctx.db.get(order.retailerId);
 		if (!retailer) return null;
+		// Meta rejects template parameters containing newlines, tabs, or 4+
+		// consecutive spaces — and the buyer's name is the FIRST buyer-controlled
+		// string to enter a template param (the confirm push's params are all
+		// system-controlled). sanitizeCustomerName trims ends but never interior
+		// whitespace, so a pasted "Ali\tBaba" would kill the whole send (terminal
+		// per classifyPushFailure). Collapse here, at the one choke point both
+		// alert actions read; whitespace-only degenerates to the placeholder
+		// rather than an empty param (also a Meta rejection).
+		const rawName = order.customer.name ?? "";
+		const customerName = rawName.replace(/\s+/g, " ").trim() || "Anonymous";
 		return {
 			retailerId: order.retailerId,
 			shortId: order.shortId,
 			status: order.status,
 			source: order.source,
-			customerName: order.customer.name ?? "Anonymous",
+			customerName,
 			total: order.total,
 			currency: order.currency,
 			fulfilmentDate: order.fulfilmentDate,

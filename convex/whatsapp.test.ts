@@ -1858,6 +1858,55 @@ describe("seller WhatsApp order alerts (86eyhw9zy)", () => {
 		fetchMock.restore();
 	});
 
+	test("buyer names are whitespace-collapsed before entering template params (Meta rejects newlines/tabs/4+ spaces)", async () => {
+		process.env.WHATSAPP_SELLER_NEW_ORDER_TEMPLATE = NEW_ORDER_TEMPLATE;
+		const t = setup();
+		const { retailerId, productId } = await seedRetailerWithLocale(t, "en");
+		await enableAlerts(t, retailerId);
+		const fetchMock = installFetchMock();
+		const shortId = await createPendingOrder(t, retailerId, productId);
+		const orderId = await orderIdOf(t, shortId);
+		// A name pasted from a spreadsheet/contacts app — interior tab + newline
+		// + a run of spaces survive sanitizeCustomerName (it only trims ends).
+		await t.run(async (ctx) => {
+			const o = await ctx.db.get(orderId);
+			await ctx.db.patch(orderId, {
+				customer: { ...o!.customer, name: "Ali\tBaba\n    Jr" },
+			});
+		});
+		await t.action(internal.whatsapp.notifySellerNewOrder, { orderId });
+		const body = fetchMock.waCalls()[0].body as {
+			template: {
+				components: Array<{ type: string; parameters: Array<{ text: string }> }>;
+			};
+		};
+		const params = body.template.components
+			.find((c) => c.type === "body")
+			?.parameters.map((p) => p.text);
+		expect(params?.[1]).toBe("Ali Baba Jr");
+
+		// Whitespace-only degenerates to the placeholder, never an empty param
+		// (Meta rejects those too).
+		await t.run(async (ctx) => {
+			const o = await ctx.db.get(orderId);
+			await ctx.db.patch(orderId, {
+				customer: { ...o!.customer, name: "\t\n " },
+			});
+		});
+		await t.action(internal.whatsapp.notifySellerNewOrder, { orderId });
+		const body2 = fetchMock.waCalls()[1].body as {
+			template: {
+				components: Array<{ type: string; parameters: Array<{ text: string }> }>;
+			};
+		};
+		expect(
+			body2.template.components
+				.find((c) => c.type === "body")
+				?.parameters.map((p) => p.text)?.[1],
+		).toBe("Anonymous");
+		fetchMock.restore();
+	});
+
 	test("an EN store gets the en variant; a zh store rides en until zh templates are approved", async () => {
 		process.env.WHATSAPP_SELLER_NEW_ORDER_TEMPLATE = NEW_ORDER_TEMPLATE;
 		const t = setup();
