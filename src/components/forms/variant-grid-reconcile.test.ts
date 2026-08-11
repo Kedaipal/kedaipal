@@ -6,7 +6,7 @@
  * the SAME product — `rows.length === cartesian(options).length`. Every
  * in-editor path upheld it via `rebuildRows`; it was broken by state the editor
  * didn't derive (a seeded product, a wizard handoff) and by the wizard's
- * `hasChoices` flag acting as a second source of truth for "has axes".
+ * the step-2 answer acting as a second source of truth for "has axes".
  */
 import { describe, expect, it } from "vitest";
 import { normalizeOptions } from "../../../convex/lib/variant";
@@ -146,7 +146,7 @@ function wizard(partial: Partial<WizardState>): WizardState {
 		name: "Kuih lapis",
 		description: "",
 		images: [],
-		hasChoices: null,
+		shape: null,
 		editor: { options: [], rows: [row([])], customLine: null },
 		fulfilmentAnswered: true,
 		hidden: false,
@@ -158,12 +158,12 @@ function wizard(partial: Partial<WizardState>): WizardState {
 }
 
 describe("wizard submit payload", () => {
-	it("derives options from the editor, not from hasChoices", () => {
-		// The reported dead end: hasChoices had fallen out of sync with the editor,
+	it("derives options from the editor, not from the step-2 answer", () => {
+		// The reported dead end: the step-2 answer had fallen out of sync with the editor,
 		// so the payload carried `options: []` beside a two-row grid and the server
 		// threw "Expected 1 variants for these options, got 2".
 		const state = wizard({
-			hasChoices: false,
+			shape: "single",
 			editor: {
 				options: [{ name: "Size", values: ["S", "M"] }],
 				rows: [row(["S"]), row(["M"])],
@@ -177,16 +177,16 @@ describe("wizard submit payload", () => {
 		).toBeNull();
 	});
 
-	it("validates the axes whenever they exist, even if hasChoices says otherwise", () => {
+	it("validates the axes whenever they exist, even if the answer says otherwise", () => {
 		const state = wizard({
-			hasChoices: false,
+			shape: "single",
 			editor: {
 				options: [{ name: "", values: ["S"] }], // unnamed axis
 				rows: [row(["S"])],
 				customLine: null,
 			},
 		});
-		// Previously skipped entirely when hasChoices === false, so an unnamed axis
+		// Previously skipped entirely when the answer said "single", so an unnamed axis
 		// sailed through to a server throw.
 		expect(wizardStepIssues(state, 2).map((i) => i.field)).toContain(
 			"axisName",
@@ -194,7 +194,7 @@ describe("wizard submit payload", () => {
 	});
 
 	it("still publishes a plain single-item product", () => {
-		const state = wizard({ hasChoices: false });
+		const state = wizard({ shape: "single" });
 		const values = buildWizardSubmitValues(state);
 		expect(values.options).toEqual([]);
 		expect(values.variants).toHaveLength(1);
@@ -207,7 +207,7 @@ describe("wizard submit payload", () => {
 		// Two variants, one expected combo — the shape that must NOT trip the
 		// count check (ticket AC 4c).
 		const state = wizard({
-			hasChoices: false,
+			shape: "single",
 			editor: {
 				options: [],
 				rows: [row([])],
@@ -231,7 +231,7 @@ describe("wizard submit payload", () => {
 		// A reconcile can mint a combination the seller never priced. That must
 		// surface as a step issue, not collapse `variants` to [] at submit.
 		const state = wizard({
-			hasChoices: true,
+			shape: "choices",
 			editor: {
 				options: [{ name: "Size", values: ["S", "M"] }],
 				rows: [row(["S"], "30")], // grid is short one row

@@ -217,7 +217,6 @@ export function MarkShippedDialog({
 	onConfirm,
 	lalamoveVendor,
 	riderBlockReason,
-	onBookRider,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
@@ -228,18 +227,15 @@ export function MarkShippedDialog({
 	 * (`getDeliveryJob.bookingEnabled`) — the manual parcel-courier form is not
 	 * offered to them anywhere. */
 	lalamoveVendor: boolean;
-	/** Why a rider can't be booked on THIS order right now; null = bookable.
-	 * Only read when `lalamoveVendor` — both come from the same resolved
-	 * `getDeliveryJob` read, so they can't disagree. */
+	/** Why a rider can't be booked on THIS order right now. Only read when
+	 * `lalamoveVendor` — both come from the same resolved `getDeliveryJob`
+	 * read, so they can't disagree. For a rider vendor it is always set by the
+	 * time this dialog opens: a BOOKABLE order skips it entirely and goes
+	 * straight to the booking modal on the dispatch card. */
 	riderBlockReason: DispatchBlock | null;
-	/** Closes this prompt and triggers the SAME booking flow as the Lalamove
-	 * Delivery card (today's price shown, tap to confirm; live tracking attaches
-	 * itself and the rider's pickup drives "shipped"). */
-	onBookRider: () => void;
 }) {
 	const [draft, setDraft] = useState<ShipmentDraft | null>(null);
 	const [saving, setSaving] = useState(false);
-	const riderBookable = lalamoveVendor && riderBlockReason === null;
 	// Lazy-init on open so the last-used courier is read fresh each time.
 	const activeDraft = draft ?? {
 		courier: readLastCourier(),
@@ -277,8 +273,8 @@ export function MarkShippedDialog({
 					<DialogTitle>{advanceLabel}</DialogTitle>
 					{lalamoveVendor ? (
 						<DialogDescription>
-							{riderBookable
-								? "How is this order going out?"
+							{riderBlockReason === null
+								? "This order has no rider attached."
 								: "A rider can't be booked for this order right now."}
 						</DialogDescription>
 					) : (
@@ -291,17 +287,7 @@ export function MarkShippedDialog({
 				</DialogHeader>
 
 				{lalamoveVendor ? (
-					// Branch on the reason itself, not the derived `riderBookable`, so the
-					// blocked arm has it narrowed to a real DispatchBlock.
-					riderBlockReason === null ? (
-						<p className="text-sm leading-relaxed text-muted-foreground">
-							Book a Lalamove rider for this delivery — you&apos;ll see
-							today&apos;s price and confirm before anything is charged. Live
-							tracking attaches automatically, and the order updates on its own
-							when the rider picks up, so there&apos;s nothing to mark manually.
-							Dropping this one off yourself? Ship it without a rider below.
-						</p>
-					) : (
+					riderBlockReason === null ? null : ( // bookable → booking modal, not here
 						// Blocked: say why (with its fix path) and let the seller choose —
 						// back out and fix it, or ship this one without a rider. Never a
 						// silent advance, never a wall.
@@ -310,8 +296,8 @@ export function MarkShippedDialog({
 							<div className="flex flex-col gap-1.5 text-sm leading-relaxed">
 								<p>{dispatchBlockCopy(riderBlockReason)}</p>
 								{/* Name the add-tracking path explicitly: an order going out
-								    another way is exactly the one that needs a courier +
-								    consignment number, and the card below is where it goes. */}
+							    another way is exactly the one that needs a courier +
+							    consignment number, and the card below is where it goes. */}
 								<p className="text-amber-900/80 dark:text-amber-200/80">
 									Close this to sort it out and book after — or ship it anyway
 									below and add the courier + tracking number from the Shipment
@@ -333,33 +319,13 @@ export function MarkShippedDialog({
 					>
 						Cancel
 					</Button>
-					{/* Booking is on the table, so it leads — but shipping without a
-					    rider is a real path and gets a real button (a text link inside a
-					    paragraph fails the ≥44px tap-target rule, and here it's the only
-					    way to move the order). Quiet variant keeps the hierarchy. */}
-					{riderBookable ? (
-						<Button
-							variant="link"
-							onClick={handleConfirm}
-							disabled={saving}
-							className="h-11"
-						>
-							{saving ? "Updating…" : `${advanceLabel} without a rider`}
-						</Button>
-					) : null}
-					{riderBookable ? (
-						<Button onClick={onBookRider} className="h-11">
-							Book a rider
-						</Button>
-					) : (
-						<Button onClick={handleConfirm} disabled={saving} className="h-11">
-							{saving
-								? "Updating…"
-								: lalamoveVendor
-									? `${advanceLabel} anyway`
-									: advanceLabel}
-						</Button>
-					)}
+					<Button onClick={handleConfirm} disabled={saving} className="h-11">
+						{saving
+							? "Updating…"
+							: lalamoveVendor
+								? `${advanceLabel} anyway`
+								: advanceLabel}
+					</Button>
 				</DialogFooter>
 			</DialogContent>
 		</Dialog>

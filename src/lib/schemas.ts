@@ -28,17 +28,22 @@ export const waPhoneOptionalSchema = z
 	.pipe(waPhoneSchema.optional());
 
 // Buyer's WhatsApp number at storefront checkout (86eyf1rck). Mirrors the
-// server's `assertValidMyWaPhone` normalization (strip separators, local
-// `0xx…` → `60xx…`) and then requires a Malaysian MOBILE shape — 601X plus
-// 8–9 digits — so the confirmation push can actually reach a WhatsApp
-// account. Malaysia-only for v1, consistent with the counter manual bind and
-// the Lalamove rider-contact constraint. The server re-validates.
+// server's `assertValidMyMobile` normalization (strip separators, local
+// `0xx…` → `60xx…`, bare NSN `1xx…` → `60xx…`) and then requires a Malaysian
+// MOBILE shape — 601X plus 8–9 digits — so the confirmation push can actually
+// reach a WhatsApp account. Malaysia-only for v1, consistent with the counter
+// manual bind and the Lalamove rider-contact constraint. The server re-validates.
+//
+// The bare-NSN arm exists because the field renders a `+60` prefix: a buyer who
+// reads that badge and types "12-345 6789" must not be rejected. Pinned to 9–10
+// digits so it can't swallow a foreign number that merely starts with 1.
 export const myWaPhoneCheckoutSchema = z
 	.string()
 	.transform((s) => {
 		const digits = s.replace(/\D/g, "");
 		if (digits.startsWith("60")) return digits;
 		if (digits.startsWith("0")) return `60${digits.slice(1)}`;
+		if (/^1\d{8,9}$/.test(digits)) return `60${digits}`;
 		return digits;
 	})
 	.pipe(
@@ -183,6 +188,11 @@ export const checkoutFormSchema = z
 		// the precise range check lives in the submit handler — here we only require
 		// that a day was picked. Empty string = nothing chosen yet.
 		fulfilmentDate: z.string().min(1, "Pick when you need this order"),
+		// "HH:MM" — the delivery-order time (86eyg0n8e follow-up). Prefilled and
+		// only rendered for delivery, so emptiness is a cleared field; the form
+		// enforces it at submit (a schema .min here would block pickup orders,
+		// which never render the input).
+		fulfilmentTime: z.string(),
 		// Optional free-text instruction for the seller. Always a string in form
 		// state (empty allowed); trimmed to undefined at submit. Cap mirrors the
 		// server (MAX_CUSTOMER_NOTE in convex/orders.ts).

@@ -108,6 +108,13 @@ stay `undefined` = online/unknown. **Filterable on the orders inbox** (the
 no method matches no method filter. Drives future analytics on reliable data
 without adding buyer friction. See [`counter-checkout.md`](./counter-checkout.md).
 
-## Future: PSP swap-in
+## PSP swap-in — now real (HitPay, 86eyb6z3a)
 
-The schema and notification slots are shaped for a gateway integration (HitPay Connect / Billplz / Stripe Connect). Adding it means flipping `paymentStatus` to `received` from a PSP webhook instead of the manual button — the end state and downstream messaging are identical. See [`payment-handshake-roadmap.md`](./payment-handshake-roadmap.md) and the customer-payment-gateway roadmap item in [`CLAUDE.md`](../CLAUDE.md).
+The slot this section predicted is live: a HitPay webhook (or the
+redirect-return reconcile) flips `paymentStatus` to `received` through the
+same `applyPaymentReceived` core as the manual button — auto-confirm,
+activation stamp, and `notifyPaymentReceived` are byte-identical, and the
+manual claim/mark-received handshake keeps working beside it (buyers can
+still transfer; sellers without HitPay see zero change). Gateway orders also
+stamp a reliable `paymentMethod` (incl. the new `fpx`). Full design:
+[`hitpay-gateway.md`](./hitpay-gateway.md).

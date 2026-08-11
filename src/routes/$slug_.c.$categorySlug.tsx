@@ -16,6 +16,7 @@ import { StorefrontHeader } from "../components/storefront/storefront-header";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
+import { ssrRead } from "../lib/ssr-read";
 
 interface CategoryLoaderData {
 	storeName: string;
@@ -41,11 +42,16 @@ interface CategoryLoaderData {
  * pages and checkout — only the product set is scoped to the category.
  */
 export const Route = createFileRoute("/$slug_/c/$categorySlug")({
-	loader: async ({ params }): Promise<CategoryLoaderData> => {
+	loader: async ({ params }): Promise<CategoryLoaderData | null> => {
 		const client = getConvexHttpClient();
-		const result = await client.query(api.retailers.getRetailerBySlug, {
-			slug: params.slug,
-		});
+		const retailerRead = await ssrRead(() =>
+			client.query(api.retailers.getRetailerBySlug, { slug: params.slug }),
+		);
+		// Transient upstream failure: render the shell (client query paints the
+		// category) instead of an error page (86eyheqzv). Definitive notFounds
+		// below still 404.
+		if (!retailerRead.ok) return null;
+		const result = retailerRead.value;
 
 		// Renamed store → keep the buyer on the same category under the new slug.
 		if (result.status === "redirect") {
@@ -61,10 +67,14 @@ export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 		const retailer = result.retailer;
 
 		// Unknown or archived category → 404, never a silent empty page.
-		const page = await client.query(api.categories.getPublicPage, {
-			retailerId: retailer._id,
-			categorySlug: params.categorySlug,
-		});
+		const pageRead = await ssrRead(() =>
+			client.query(api.categories.getPublicPage, {
+				retailerId: retailer._id,
+				categorySlug: params.categorySlug,
+			}),
+		);
+		if (!pageRead.ok) return null;
+		const page = pageRead.value;
 		if (page === null) {
 			throw notFound();
 		}
@@ -155,6 +165,7 @@ function CategoryNotFound() {
 			<Link
 				to="/$slug"
 				params={{ slug }}
+				activeOptions={{ exact: true }}
 				className="mt-1 inline-flex h-11 items-center rounded-xl bg-foreground px-4 text-sm font-medium text-background"
 			>
 				Browse all products
@@ -182,7 +193,7 @@ function CategorySkeleton() {
 				<Skeleton className="h-8 w-48" />
 			</div>
 			<section className="mt-2 px-5 lg:px-8">
-				<div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
+				<div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
 					{[0, 1, 2, 3].map((n) => (
 						<Skeleton key={n} className="aspect-square w-full rounded-2xl" />
 					))}
@@ -227,6 +238,7 @@ function CategoryRoute() {
 				<Link
 					to="/$slug"
 					params={{ slug: retailer.slug }}
+					activeOptions={{ exact: true }}
 					className="inline-flex w-fit items-center gap-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
 				>
 					<ArrowLeft className="size-4" aria-hidden />
@@ -247,6 +259,11 @@ function CategoryRoute() {
 			</div>
 
 			<section className="mt-2 px-5 lg:px-8">
+				{/* No category rail here. Once a buyer is inside a category the page
+				    already names it (h1 + blurb above) and the only move that
+				    matters is browsing what's in it; a row of sibling categories
+				    just competes with the products it sits on top of. "← All
+				    products" is the way back out. */}
 				<ProductGrid
 					retailerId={retailer._id}
 					cart={cart}

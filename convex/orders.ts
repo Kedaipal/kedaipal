@@ -20,6 +20,7 @@ import {
 	moveOrderToPhone,
 } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
+import { stampProductsOrdered } from "./lib/productOrdered";
 import { assertValidAddress } from "./lib/address";
 import { requireCustomerName } from "./lib/customer";
 import { assertPlanFeature } from "./subscriptions";
@@ -31,11 +32,13 @@ import {
 	adminUserIds,
 	isAdmin,
 	logAdminAction,
+	logDestructiveAdminAction,
 	type RetailerAccess,
 	requireRetailerAccess,
 } from "./lib/auth";
 import {
 	assertValidFulfilmentDate,
+	assertValidFulfilmentTime,
 	matchesFulfilmentWindow,
 } from "./lib/fulfilmentDate";
 import {
@@ -60,15 +63,20 @@ import {
 	computeOrderTotals,
 	generateShortId,
 	generateTrackingToken,
+	isCollectionGateClosed,
 	isMockupGateClosed,
 } from "./lib/order";
+import { normalizeTrackingToken } from "./lib/trackingToken";
 import {
 	DELIVERY_FEE_MAX,
 	type DeliveryConfig,
 	type LiveProviderQuote,
 	resolveDeliveryQuote,
 } from "./lib/delivery";
-import { CHECKOUT_QUOTE_MAX_AGE_MS } from "./lib/lalamove";
+import {
+	CHECKOUT_QUOTE_MAX_AGE_MS,
+	isActiveJobStatus,
+} from "./lib/lalamove";
 import { resolveShipmentFields } from "./lib/couriers";
 import {
 	anchorOrdinal,
@@ -85,7 +93,15 @@ import {
 	orderToReceiptData,
 } from "./lib/pdf/document";
 import { buildOrderReceiptPdf } from "./lib/pdf/render";
-import { orderPaymentMethodValidator } from "./lib/paymentMethod";
+import {
+	type OrderPaymentMethod,
+	orderPaymentMethodValidator,
+} from "./lib/paymentMethod";
+import {
+	HITPAY_MIN_AMOUNT_SEN,
+	hitpayCheckoutConfigured,
+	mapHitpayPaymentType,
+} from "./lib/hitpay";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidMyMobile } from "./lib/slug";
 import { orderConfirmTemplateName } from "./lib/whatsapp";
@@ -296,15 +312,19 @@ type OrderItemSnapshot = {
  * shortId-as-capability (shortId is ~1M combinations, enumerable). See
  * docs/infra-cost-scaling.md §6.
  */
-async function orderByToken(
+export async function orderByToken(
 	ctx: QueryCtx | MutationCtx,
 	trackingToken: string,
 ): Promise<Doc<"orders"> | null> {
+	// Defence in depth for placeholder-polluted links (86eyheqzv): the server
+	// entry 301s `/track/{{1}}<token>` before the router, but any polluted
+	// token that reaches a query directly still resolves. Tokens never contain
+	// braces, so stripping is unambiguous.
+	const token = normalizeTrackingToken(trackingToken);
+	if (token.length === 0) return null;
 	return ctx.db
 		.query("orders")
-		.withIndex("by_tracking_token", (q) =>
-			q.eq("trackingToken", trackingToken),
-		)
+		.withIndex("by_tracking_token", (q) => q.eq("trackingToken", token))
 		.first();
 }
 
@@ -568,6 +588,10 @@ export const create = mutation({
 		// need to pass it; the storefront UI requires it. Validated against the
 		// retailer's notice window when present. See convex/lib/fulfilmentDate.ts.
 		fulfilmentDate: v.optional(v.number()),
+		// What time on that day (minutes since MYT midnight) — captured for
+		// delivery orders; ignored on self-collect (their moment is governed by
+		// the pickup point's own schedule). See the schema comment.
+		fulfilmentTimeMinutes: v.optional(v.number()),
 		// Optional free-text instruction the shopper typed at checkout.
 		customerNote: v.optional(v.string()),
 		// Optional reference image the buyer attached for a custom line, uploaded
@@ -866,6 +890,26 @@ export const create = mutation({
 				throw new ConvexError((err as Error).message);
 			}
 		}
+		// Fulfilment time (86eyg0n8e follow-up): kept only where it means
+		// something — a delivery order WITH a date. Range-only validation by
+		// design (see assertValidFulfilmentTime): "is the moment still ahead"
+		// is judged at checkout client-side and again at dispatch, where a past
+		// moment simply books "now" — a strict server check here would let
+		// clock skew or a long-idle form reject a legitimate checkout.
+		let sanitizedFulfilmentTime: number | undefined;
+		if (
+			args.fulfilmentTimeMinutes !== undefined &&
+			sanitizedFulfilmentDate !== undefined &&
+			effectiveDeliveryMethod === "delivery"
+		) {
+			try {
+				sanitizedFulfilmentTime = assertValidFulfilmentTime(
+					args.fulfilmentTimeMinutes,
+				);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
 
 		// Delivery charge (86extzdr8): resolved server-side at create — the
 		// authoritative price, whatever the client previewed. Needs the item
@@ -895,6 +939,16 @@ export const create = mutation({
 			deliveryFeePending = resolved.pending;
 			deliveryFeePendingReason = resolved.pendingReason;
 		}
+		// Frozen trip direction (86eyg0n8e): stamped from the store's live
+		// collection-service setting so buyer surfaces (tracking labels, WA
+		// confirm) stay true to what this order promised even if the seller
+		// toggles the mode later — the pickupSnapshot posture. Standard stays
+		// unset (one spelling for the default; every pre-existing order).
+		const deliveryDirection =
+			effectiveDeliveryMethod === "delivery" &&
+			retailer.deliveryBooking?.deliveryDirection === "collection"
+				? ("collection" as const)
+				: undefined;
 
 		// The chosen pickup point's frozen fee and the delivery charge ride the
 		// same extras seam as the mockup quote — total = subtotal + fees from the
@@ -974,6 +1028,7 @@ export const create = mutation({
 			source: "storefront",
 			customer: sanitizedCustomer,
 			deliveryMethod: effectiveDeliveryMethod,
+			deliveryDirection,
 			deliveryAddress: sanitizedAddress,
 			pickupLocationId: resolvedPickupLocationId,
 			pickupSnapshot: sanitizedPickupSnapshot,
@@ -983,6 +1038,7 @@ export const create = mutation({
 			deliveryFeePending: deliveryFeePending || undefined,
 			deliveryFeePendingReason,
 			fulfilmentDate: sanitizedFulfilmentDate,
+			fulfilmentTimeMinutes: sanitizedFulfilmentTime,
 			customerNote: sanitizedCustomerNote,
 			// Only keep the buyer image when the order actually has a custom line —
 			// guards a stray id on a non-custom order.
@@ -1027,6 +1083,10 @@ export const create = mutation({
 		// Meter the order against the retailer's monthly usage (SOFT cap — the
 		// nudge banner, never a block on this public mutation).
 		await recordOrderCreated(ctx, args.retailerId, now);
+
+		// Mark every product on this order as having sold, so it can no longer be
+		// permanently deleted out from under the order lines that now reference it.
+		await stampProductsOrdered(ctx, snapshotItems, now);
 
 		// Link to the aggregated customer record when we already know the phone.
 		// Phone-less orders (link-in-bio checkout) are linked later when the
@@ -1147,6 +1207,16 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 	// delivered delivery orders; the buyer sees the same shot the WhatsApp
 	// follow-up carried, the seller the same thumbnails as the dispatch card.
 	podImageUrls?: string[];
+	// Live collection-rider strip (86eyg0n8e) — present only while a rider is
+	// ACTIVELY collecting from the buyer on a collection order; the tracking
+	// page renders it as a transient card, never a status. Driver phone, cost
+	// and provider ids deliberately never cross.
+	collectionRider?: {
+		status: "assigning" | "ongoing" | "picked_up";
+		driverName?: string;
+		plateNumber?: string;
+		shareLink?: string;
+	};
 };
 
 export const get = query({
@@ -1177,9 +1247,18 @@ export const get = query({
 		const isBuyerRead = token !== undefined;
 		// Rider drop-off photo (Lalamove POD) — one indexed read, and only on
 		// the delivered end-state of delivery orders, so the hot pending/active
-		// tracking path pays nothing.
+		// tracking path pays nothing. Collection orders (86eyg0n8e) never
+		// surface it here: their POD shows the rider dropping the buyer's gear
+		// at the SELLER's doorstep — captioning that "taken by your rider at
+		// drop-off" once the seller manually marks the order delivered would
+		// read as nonsense to the buyer. The seller still sees it on the
+		// dispatch card (getDeliveryJob).
 		let podImageUrls: string[] | undefined;
-		if (order.status === "delivered" && order.deliveryMethod === "delivery") {
+		if (
+			order.status === "delivered" &&
+			order.deliveryMethod === "delivery" &&
+			order.deliveryDirection !== "collection"
+		) {
 			const jobs = await ctx.db
 				.query("deliveryJobs")
 				.withIndex("by_order", (q) => q.eq("orderId", order._id))
@@ -1195,9 +1274,52 @@ export const get = query({
 				if (resolved.length > 0) podImageUrls = resolved;
 			}
 		}
+		// Live collection-rider strip (86eyg0n8e): while a rider is actively
+		// collecting FROM this buyer, the tracking page shows the trip live —
+		// the buyer's only window into "who is knocking and when", since
+		// collection orders never mirror a tracking URL and never auto-advance.
+		// Read from the live job row so it can't go stale (the whole reason the
+		// mirror was skipped); one indexed read, collection orders only, and the
+		// strip vanishes the moment the job leaves its active states. Exposes
+		// trip state + driver name/plate + Lalamove's buyer-facing share page —
+		// never the driver's phone, cost or provider ids.
+		let collectionRider:
+			| {
+					status: "assigning" | "ongoing" | "picked_up";
+					driverName?: string;
+					plateNumber?: string;
+					shareLink?: string;
+			  }
+			| undefined;
+		if (
+			order.deliveryMethod === "delivery" &&
+			order.deliveryDirection === "collection" &&
+			order.status !== "cancelled"
+		) {
+			const jobs = await ctx.db
+				.query("deliveryJobs")
+				.withIndex("by_order", (q) => q.eq("orderId", order._id))
+				.collect();
+			// The ACTIVE row, never .first() — failed attempts keep their rows.
+			const active = jobs.find((j) => isActiveJobStatus(j.status));
+			if (
+				active &&
+				(active.status === "assigning" ||
+					active.status === "ongoing" ||
+					active.status === "picked_up")
+			) {
+				collectionRider = {
+					status: active.status,
+					driverName: active.driver?.name,
+					plateNumber: active.driver?.plateNumber || undefined,
+					shareLink: active.shareLink,
+				};
+			}
+		}
 		return {
 			...order,
 			podImageUrls,
+			collectionRider,
 			deliverySnapshot: isBuyerRead ? undefined : order.deliverySnapshot,
 			// Meta's message id has no buyer use and this read is unauthenticated —
 			// strip it on the token path alongside the delivery snapshot. The
@@ -1530,13 +1652,34 @@ export const getPaymentMethods = query({
 	handler: async (
 		ctx,
 		{ token },
-	): Promise<Array<PaymentMethod & { qrImageUrl?: string }> | null> => {
+	): Promise<{
+		methods: Array<PaymentMethod & { qrImageUrl?: string }>;
+		// Whether THIS order can be paid through the seller's HitPay checkout
+		// right now (86eyb6z3a) — connection on + credentials stored + payment
+		// still open + both price holds clear + total within HitPay's floor.
+		// Server-side truth for the buyer's "Pay now" button; createCheckout
+		// re-checks everything, so this is presentation, not authorization.
+		gatewayAvailable: boolean;
+		// The ACCOUNT's enabled rails (probed truth, see schema) so the Pay-now
+		// explainer names only methods this seller actually offers. Undefined =
+		// not yet probed → the page uses a generic "bank or eWallet" line.
+		gatewayMethods?: string[];
+	} | null> => {
 		const order = await orderByToken(ctx, token);
 		if (!order) return null;
 		const retailer = await ctx.db.get(order.retailerId);
 		if (!retailer) return null;
+
+		const gatewayAvailable =
+			hitpayCheckoutConfigured(retailer.hitpay) &&
+			order.status !== "cancelled" &&
+			(order.paymentStatus ?? "unpaid") === "unpaid" &&
+			!isMockupGateClosed(order) &&
+			order.deliveryFeePending !== true &&
+			order.total >= HITPAY_MIN_AMOUNT_SEN;
+
 		const methods = resolvePaymentMethods(retailer);
-		if (methods.length === 0) return null;
+		if (methods.length === 0 && !gatewayAvailable) return null;
 
 		const resolved: Array<PaymentMethod & { qrImageUrl?: string }> = [];
 		for (const m of methods) {
@@ -1547,7 +1690,13 @@ export const getPaymentMethods = query({
 			}
 			resolved.push({ ...m, qrImageUrl });
 		}
-		return resolved;
+		return {
+			methods: resolved,
+			gatewayAvailable,
+			gatewayMethods: gatewayAvailable
+				? retailer.hitpay?.paymentMethods
+				: undefined,
+		};
 	},
 });
 
@@ -1882,6 +2031,7 @@ function orderToCsvSource(o: Doc<"orders">): CsvOrder {
 		paymentStatus: o.paymentStatus,
 		paymentMethod: o.paymentMethod,
 		deliveryMethod: o.deliveryMethod,
+		deliveryDirection: o.deliveryDirection,
 		customer: o.customer,
 		items: o.items,
 		subtotal: o.subtotal,
@@ -2242,6 +2392,19 @@ export const updateStatus = mutation({
 			);
 		}
 
+		// Collection gate (86eyg0n8e) — the goods are still with the buyer, so no
+		// production status can be true. Cancelling stays open (same posture as
+		// the mockup gate above).
+		if (
+			status !== "cancelled" &&
+			anchorOrdinal(status) >= anchorOrdinal("packed") &&
+			isCollectionGateClosed(order)
+		) {
+			throw new ConvexError(
+				"This order is still with your customer — send a rider to collect it first. If the items are already with you, use “I already have the items” on the order page.",
+			);
+		}
+
 		await applyStatusTransition(ctx, order, status, {
 			note,
 			carrierTrackingUrl,
@@ -2267,13 +2430,22 @@ export const bulkUpdateStatus = mutation({
 	handler: async (
 		ctx,
 		{ orderIds, status },
-	): Promise<{ updated: number; skipped: number }> => {
-		if (orderIds.length === 0) return { updated: 0, skipped: 0 };
+	): Promise<{
+		updated: number;
+		skipped: number;
+		/** Of `skipped`, how many were collection orders whose items are still
+		 * with the buyer — the one skip reason the seller can act on, so the
+		 * toast can name it instead of leaving a silent no-op. */
+		skippedAwaitingCollection: number;
+	}> => {
+		if (orderIds.length === 0)
+			return { updated: 0, skipped: 0, skippedAwaitingCollection: 0 };
 		if (orderIds.length > 100)
 			throw new ConvexError("Too many orders selected (max 100)");
 
 		let updated = 0;
 		let skipped = 0;
+		let skippedAwaitingCollection = 0;
 		// The inbox multi-select is single-retailer, so every id resolves to the
 		// same access descriptor; keep the last one for a single batch audit row.
 		let batchAccess: RetailerAccess | undefined;
@@ -2299,12 +2471,24 @@ export const bulkUpdateStatus = mutation({
 				skipped++;
 				continue;
 			}
+			// A collection order whose items haven't arrived can't be moved into
+			// production in bulk either — skipped, not fatal, so the rest of the
+			// batch still lands (mockup-gate posture).
+			if (
+				status !== "cancelled" &&
+				anchorOrdinal(status) >= anchorOrdinal("packed") &&
+				isCollectionGateClosed(order)
+			) {
+				skipped++;
+				skippedAwaitingCollection++;
+				continue;
+			}
 			await applyStatusTransition(ctx, order, status);
 			updated++;
 		}
 		if (batchAccess)
 			await logAdminAction(ctx, batchAccess, "orders.bulkUpdateStatus");
-		return { updated, skipped };
+		return { updated, skipped, skippedAwaitingCollection };
 	},
 });
 
@@ -2404,8 +2588,11 @@ async function deleteOrderCascade(
  * — an admin can erase orders in ANY store, including one they personally own
  * (which resolves via the owner branch, so `actingAsAdmin` is false there). The
  * dashboard hides the action for sellers, but this guard — not the hidden UI —
- * is the real boundary. Admin act-as writes (a store they don't own) are audited.
- * ClickUp `86eyaqzpd` (admin-only restriction) atop `86ey8fr8t` (the erase).
+ * is the real boundary. EVERY erase is audited, including one in a store the
+ * admin owns (`logDestructiveAdminAction`) — the deleted row can't be asked who
+ * removed it, so the trace has to be unconditional.
+ * ClickUp `86eyaqzpd` (admin-only restriction) atop `86ey8fr8t` (the erase),
+ * `86eyhz189` (always audited).
  */
 export const deleteOrder = mutation({
 	args: { orderId: v.id("orders") },
@@ -2413,20 +2600,27 @@ export const deleteOrder = mutation({
 		const { order, access } = await requireOrderAccess(ctx, orderId);
 		if (!(await isAdmin(ctx))) throw new Error("Forbidden");
 		await deleteOrderCascade(ctx, order);
-		await logAdminAction(ctx, access, "orders.hardDelete", orderId);
+		await logDestructiveAdminAction(ctx, access, "orders.hardDelete", orderId);
 	},
 });
 
 /**
  * Bulk hard-delete (the inbox multi-select) — **Kedaipal admin only**, same
- * policy as the single `deleteOrder`. Capped at 100/batch, one batch audit row.
+ * policy as the single `deleteOrder`. Capped at 100/batch.
  * No plan gate: permanent erasure is an admin ops action, not a paid feature.
  *
  * The admin gate is checked ONCE up front (`isAdmin` — one caller identity for
  * the whole batch, cheaper than per-order and ownership-agnostic so an admin can
  * bulk-erase in a store they own too). The per-order `requireRetailerAccess`
- * stays: it confirms each order's retailer exists and supplies `batchAccess` for
- * the audit row (an admin passes it for every store, so it never rejects here).
+ * stays: it confirms each order's retailer exists and supplies the access record
+ * for that order's audit row (an admin passes it for every store, so it never
+ * rejects here).
+ *
+ * Audit is ONE ROW PER ERASED ORDER, not one per batch (86eyhz189). A batch row
+ * could only carry a single `retailerId`, so a batch spanning two stores would
+ * file the whole erase under whichever store happened to be last — and a bare
+ * count answers "how many" when the question an irreversible delete raises is
+ * "WHICH order is gone". Per-order rows are correct across stores by construction.
  */
 export const bulkDeleteOrders = mutation({
 	args: { orderIds: v.array(v.id("orders")) },
@@ -2437,16 +2631,19 @@ export const bulkDeleteOrders = mutation({
 		if (!(await isAdmin(ctx))) throw new Error("Forbidden");
 
 		let deleted = 0;
-		let batchAccess: RetailerAccess | undefined;
 		for (const orderId of orderIds) {
 			const order = await ctx.db.get(orderId);
 			if (!order) throw new ConvexError("Order not found");
-			batchAccess = await requireRetailerAccess(ctx, order.retailerId);
+			const access = await requireRetailerAccess(ctx, order.retailerId);
 			await deleteOrderCascade(ctx, order);
+			await logDestructiveAdminAction(
+				ctx,
+				access,
+				"orders.bulkDeleteOrders",
+				orderId,
+			);
 			deleted++;
 		}
-		if (batchAccess)
-			await logAdminAction(ctx, batchAccess, "orders.bulkDeleteOrders");
 		return { deleted };
 	},
 });
@@ -2480,10 +2677,23 @@ export const advanceToStage = mutation({
 		carrierTrackingUrl: v.optional(v.string()),
 		courierName: v.optional(v.string()),
 		trackingNo: v.optional(v.string()),
+		// Collection service escape (86eyg0n8e): the seller asserts the items are
+		// already with them — they collected in person, or the rider's webhook
+		// never reported. Stamps `collectedAt` so the order unblocks for good
+		// instead of asking again at every stage. Ignored on standard orders.
+		markCollected: v.optional(v.boolean()),
 	},
 	handler: async (
 		ctx,
-		{ orderId, stageId, note, carrierTrackingUrl, courierName, trackingNo },
+		{
+			orderId,
+			stageId,
+			note,
+			carrierTrackingUrl,
+			courierName,
+			trackingNo,
+			markCollected,
+		},
 	): Promise<void> => {
 		const { order, access } = await requireOrderAccess(ctx, orderId);
 		const retailer = access.retailer;
@@ -2516,6 +2726,23 @@ export const advanceToStage = mutation({
 			);
 		}
 
+		// Collection gate (86eyg0n8e): on a COLLECTION order the rider brings the
+		// goods IN, so nothing downstream ("packed", "cleaning", "ready") can be
+		// true before they arrive. The seller books the rider first and the order
+		// waits. Same anchor-ordinal shape as the mockup gate above, and the same
+		// escape posture: `markCollected` lets a seller who fetched the items
+		// themselves (or whose webhook never reported) proceed — which stamps the
+		// arrival, so this asks once, not at every stage. Standard delivery is
+		// untouched: the rider takes goods OUT, so packing precedes the trip.
+		const collectingFromBuyer =
+			isCollectionGateClosed(order) &&
+			anchorOrdinal(targetStatus) >= anchorOrdinal("packed");
+		if (collectingFromBuyer && markCollected !== true) {
+			throw new ConvexError(
+				"This order is still with your customer — send a rider to collect it first. If the items are already with you, use “I already have the items” on the order page.",
+			);
+		}
+
 		const now = Date.now();
 		const statusChanged = order.status !== targetStatus;
 
@@ -2527,7 +2754,12 @@ export const advanceToStage = mutation({
 			trackingNo: string;
 			statusChangedAt: number;
 			updatedAt: number;
+			collectedAt: number;
 		}> = { status: targetStatus, currentStageId: stage.id, updatedAt: now };
+		// Set-if-unset, so a later manual advance can't move the arrival moment.
+		if (collectingFromBuyer && markCollected === true) {
+			patch.collectedAt = now;
+		}
 		// Reset the status clock only when the canonical status actually changes
 		// (a within-anchor stage move keeps the same "Pending/Confirmed/…" bucket).
 		if (statusChanged) patch.statusChangedAt = now;
@@ -2975,6 +3207,74 @@ export const claimPayment = mutation({
 });
 
 /**
+ * The one author of the payment-received state change, shared by the seller's
+ * `markPaymentReceived` and the HitPay gateway's webhook receive (86eyb6z3a) so
+ * the two paths can never drift: paymentStatus → received, pending orders
+ * auto-confirm (+ the activation stamp), the orderEvents row is written, and
+ * `notifyPaymentReceived` is scheduled — deliberately NOT `notifyStatusChange`,
+ * so an auto-confirm sends exactly one WhatsApp message.
+ *
+ * Callers own their guards: the seller path throws on the mockup/delivery-fee
+ * holds (the money hasn't moved yet, so refusing is safe); the gateway path
+ * enforces those holds at CHECKOUT-CREATION time instead, because by webhook
+ * time the buyer's money has already moved and refusing to record it would be
+ * a lie. Callers also own idempotency (skip when already `received`).
+ */
+async function applyPaymentReceived(
+	ctx: MutationCtx,
+	order: Doc<"orders">,
+	opts: {
+		now: number;
+		paymentMethod?: OrderPaymentMethod;
+		/** Detail folded into the non-auto-confirm event note. */
+		noteDetail?: string;
+		/** Extra fields written in the same patch (gateway ids). */
+		extraPatch?: Partial<Doc<"orders">>;
+	},
+): Promise<void> {
+	const { now, paymentMethod, noteDetail, extraPatch } = opts;
+	const shouldAutoConfirm = order.status === "pending";
+
+	const patch: Partial<Doc<"orders">> = {
+		...extraPatch,
+		paymentStatus: "received",
+		paymentReceivedAt: now,
+		updatedAt: now,
+	};
+	if (paymentMethod) patch.paymentMethod = paymentMethod;
+	if (shouldAutoConfirm) {
+		patch.status = "confirmed";
+	}
+	await ctx.db.patch(order._id, patch);
+
+	if (shouldAutoConfirm) {
+		await ctx.db.insert("orderEvents", {
+			orderId: order._id,
+			status: "confirmed",
+			note: "payment_received_auto_confirm",
+			createdAt: now,
+		});
+		// First order reaching confirmed activates the store (one-time stamp).
+		await stampRetailerActivation(ctx, order.retailerId, now);
+	} else {
+		await ctx.db.insert("orderEvents", {
+			orderId: order._id,
+			status: order.status,
+			note: noteDetail && noteDetail.length > 0
+				? `payment_received: ${noteDetail}`
+				: "payment_received",
+			createdAt: now,
+		});
+	}
+
+	await ctx.scheduler.runAfter(
+		0,
+		internal.whatsapp.notifyPaymentReceived,
+		{ orderId: order._id },
+	);
+}
+
+/**
  * Retailer-only mutation: mark that the payment has landed in the bank app.
  * Auto-bumps `pending → confirmed` (the new payment-received WhatsApp message
  * already covers the shopper-facing handshake, so this skips the regular
@@ -3013,47 +3313,148 @@ export const markPaymentReceived = mutation({
 			);
 		}
 
-		const now = Date.now();
-		const trimmedNote = note?.trim();
-		const shouldAutoConfirm = order.status === "pending";
+		await applyPaymentReceived(ctx, order, {
+			now: Date.now(),
+			paymentMethod,
+			noteDetail: note?.trim(),
+		});
+		await logAdminAction(ctx, access, "orders.confirmPayment", orderId);
+	},
+});
 
-		const patch: Partial<Doc<"orders">> = {
-			paymentStatus: "received",
-			paymentReceivedAt: now,
-			updatedAt: now,
-		};
-		if (paymentMethod) patch.paymentMethod = paymentMethod;
-		if (shouldAutoConfirm) {
-			patch.status = "confirmed";
+/**
+ * Internal receive path for a settled HitPay charge (86eyb6z3a) — called by
+ * the `/webhook/hitpay` route and the redirect-return reconcile action, both
+ * of which have already VERIFIED the event (HMAC / authenticated status
+ * fetch). This mutation is the single judge of what an authentic event is
+ * allowed to do:
+ *  - idempotent by `gatewayPaymentId` (duplicate deliveries no-op);
+ *  - the paid amount+currency must echo the order's CURRENT total — a stale
+ *    checkout link paid after a re-price records an event + emails the seller
+ *    instead of auto-receiving (the money moved; a human reconciles it);
+ *  - otherwise it applies the exact `markPaymentReceived` semantics via
+ *    `applyPaymentReceived` (auto-confirm, activation, WhatsApp receipt).
+ * Deliberately NO hold guards here: checkout creation enforces them, and
+ * money that has already moved must never be silently dropped.
+ */
+export const receiveGatewayPayment = internalMutation({
+	args: {
+		orderId: v.id("orders"),
+		paymentId: v.string(),
+		amountSen: v.number(),
+		currency: v.string(),
+		paymentType: v.optional(v.string()),
+	},
+	handler: async (
+		ctx,
+		{ orderId, paymentId, amountSen, currency, paymentType },
+	): Promise<{
+		applied: boolean;
+		reason?: "duplicate" | "amount_mismatch" | "cancelled";
+	}> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) return { applied: false, reason: "duplicate" };
+		if (
+			order.gatewayPaymentId === paymentId ||
+			order.paymentStatus === "received"
+		) {
+			// Duplicate webhook delivery, or the seller already marked it by hand.
+			return { applied: false, reason: "duplicate" };
 		}
-		await ctx.db.patch(orderId, patch);
 
-		if (shouldAutoConfirm) {
-			await ctx.db.insert("orderEvents", {
-				orderId,
-				status: "confirmed",
-				note: "payment_received_auto_confirm",
-				createdAt: now,
-			});
-			// First order reaching confirmed activates the store (one-time stamp).
-			await stampRetailerActivation(ctx, order.retailerId, now);
-		} else {
+		const now = Date.now();
+		if (order.status === "cancelled") {
+			// Pay-after-cancel (PR #172 review, finding 2): createCheckout refuses
+			// cancelled orders, but a link minted BEFORE the cancel stays payable
+			// at HitPay for up to an hour. An authentic late payment must never
+			// resurrect the order or WhatsApp the buyer "payment received" — it
+			// needs a human and a refund. Event + seller email, no state flip.
 			await ctx.db.insert("orderEvents", {
 				orderId,
 				status: order.status,
-				note: trimmedNote && trimmedNote.length > 0
-					? `payment_received: ${trimmedNote}`
-					: "payment_received",
+				note: `gateway_paid_after_cancel: paid ${(amountSen / 100).toFixed(2)} ${currency.toUpperCase()} on the cancelled order (hitpay ${paymentId})`,
 				createdAt: now,
 			});
+			await ctx.scheduler.runAfter(
+				0,
+				internal.email.notifyGatewayPaymentIssue,
+				{
+					orderId,
+					kind: "paid_after_cancel",
+					paidAmountSen: amountSen,
+					paidCurrency: currency.toUpperCase(),
+					paymentId,
+				},
+			);
+			return { applied: false, reason: "cancelled" };
+		}
+		if (
+			amountSen !== order.total ||
+			currency.toUpperCase() !== order.currency.toUpperCase()
+		) {
+			// Authentic payment, wrong number — the buyer paid an outdated checkout
+			// link (total re-priced after mint) or a tampered/foreign request.
+			// Record + tell the seller; never auto-receive a mismatched amount.
+			await ctx.db.insert("orderEvents", {
+				orderId,
+				status: order.status,
+				note: `gateway_amount_mismatch: paid ${(amountSen / 100).toFixed(2)} ${currency.toUpperCase()}, order total ${(order.total / 100).toFixed(2)} ${order.currency.toUpperCase()} (hitpay ${paymentId})`,
+				createdAt: now,
+			});
+			await ctx.scheduler.runAfter(
+				0,
+				internal.email.notifyGatewayPaymentIssue,
+				{
+					orderId,
+					kind: "amount_mismatch",
+					paidAmountSen: amountSen,
+					paidCurrency: currency.toUpperCase(),
+					paymentId,
+				},
+			);
+			return { applied: false, reason: "amount_mismatch" };
 		}
 
-		await ctx.scheduler.runAfter(
-			0,
-			internal.whatsapp.notifyPaymentReceived,
-			{ orderId },
-		);
-		await logAdminAction(ctx, access, "orders.confirmPayment", orderId);
+		await applyPaymentReceived(ctx, order, {
+			now,
+			// A gateway settlement is always a known settlement — unknown rails
+			// stamp "other" rather than staying blank (see mapHitpayPaymentType).
+			paymentMethod: mapHitpayPaymentType(paymentType) ?? "other",
+			noteDetail: `hitpay${paymentType ? ` (${paymentType})` : ""}`,
+			extraPatch: {
+				gatewayPaymentId: paymentId,
+				// The HitPay payment id doubles as the transfer reference the seller
+				// can look up in their HitPay dashboard.
+				paymentReference: paymentId,
+			},
+		});
+		return { applied: true };
+	},
+});
+
+/**
+ * Late method enrichment for webhook-received payments (86eyb6z3a): the v1
+ * completion webhook carries no payment_type, so the receive stamps "other"
+ * and the reconcile action follows up with the status fetch's real rail.
+ * Only upgrades an "other" stamp on the SAME settled payment — never rewrites
+ * a seller's hand-picked method.
+ */
+export const recordGatewayMethod = internalMutation({
+	args: {
+		orderId: v.id("orders"),
+		paymentId: v.string(),
+		paymentType: v.string(),
+	},
+	handler: async (ctx, { orderId, paymentId, paymentType }): Promise<void> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) return;
+		if (order.gatewayPaymentId !== paymentId) return;
+		if (order.paymentMethod !== undefined && order.paymentMethod !== "other") {
+			return;
+		}
+		const method = mapHitpayPaymentType(paymentType);
+		if (!method || method === order.paymentMethod) return;
+		await ctx.db.patch(orderId, { paymentMethod: method });
 	},
 });
 
@@ -3629,5 +4030,50 @@ export const getMockupUrls = query({
 			resolveMockupImageIds(order).map((id) => ctx.storage.getUrl(id)),
 		);
 		return urls.filter((u): u is string => u !== null);
+	},
+});
+
+/**
+ * One-shot backfill (86eyg0n8e): stamp `collectedAt` on COLLECTION orders whose
+ * rider already completed the trip before that field existed.
+ *
+ *   npx convex run orders:backfillCollectionCollectedAt
+ *
+ * Without it, such an order sits behind the collection gate forever — the rider
+ * genuinely brought the goods in, but nothing recorded WHEN, so the seller would
+ * have to take the "I already have the items" escape on an order that needs no
+ * escape. The arrival moment is taken from the job's last webhook event (its
+ * completion), falling back to the job's `updatedAt`.
+ *
+ * **Production is a no-op** — the collection service has never shipped there, so
+ * no order carries `deliveryDirection: "collection"` yet. This exists for dev
+ * deployments that tested the flow before the field landed. Idempotent: only
+ * touches rows where `collectedAt` is unset.
+ */
+export const backfillCollectionCollectedAt = internalMutation({
+	args: {},
+	handler: async (ctx): Promise<{ scanned: number; stamped: number }> => {
+		const jobs = await ctx.db
+			.query("deliveryJobs")
+			.filter((q) => q.eq(q.field("status"), "completed"))
+			.collect();
+		let stamped = 0;
+		for (const job of jobs) {
+			if (job.deliveryDirection !== "collection") continue;
+			const order = await ctx.db.get(job.orderId);
+			if (!order) continue;
+			if (order.deliveryDirection !== "collection") continue;
+			if (order.collectedAt !== undefined) continue;
+			await ctx.db.patch(order._id, {
+				collectedAt: job.lastEventAt ?? job.updatedAt,
+				updatedAt: Date.now(),
+			});
+			stamped++;
+		}
+		console.log("[orders] collectedAt backfill", {
+			scanned: jobs.length,
+			stamped,
+		});
+		return { scanned: jobs.length, stamped };
 	},
 });

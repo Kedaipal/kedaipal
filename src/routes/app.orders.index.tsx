@@ -64,6 +64,7 @@ import {
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
+import { canHardDeleteOrders } from "../lib/admin-actions";
 import { orderCustomerLabel } from "../lib/customer";
 import { downloadCsv } from "../lib/download";
 import {
@@ -278,9 +279,13 @@ function OrdersRoute() {
 		hasFeature(retailer.subscription, "orderInbox");
 
 	// Permanent hard delete (single + bulk) is admin-only (Kedaipal support); a
-	// plain seller only ever cancels. Gate the bulk "Delete permanently" action on
-	// an active act-as session — the server enforces the same rule.
-	const isAdminActingAs = retailer?.actingAsAdmin === true;
+	// plain seller only ever cancels. Same shared gate as order detail — see
+	// `canHardDeleteOrders`. The server is the real guard.
+	const amIAdmin = useQuery(convexQuery(api.billing.amIAdmin, {})).data;
+	const canHardDelete = canHardDeleteOrders({
+		actingAsAdmin: retailer?.actingAsAdmin,
+		amIAdmin,
+	});
 
 	const result = useQuery(
 		convexQuery(
@@ -440,7 +445,13 @@ function OrdersRoute() {
 			const res = await bulkUpdateStatus({ orderIds: ids, status });
 			toast.success(
 				res.skipped > 0
-					? `Updated ${res.updated} · skipped ${res.skipped}`
+					? // Name the actionable reason — a bare "skipped 2" leaves the
+						// seller guessing why their bulk action half-worked.
+						`Updated ${res.updated} · skipped ${res.skipped}${
+							res.skippedAwaitingCollection > 0
+								? ` (${res.skippedAwaitingCollection} still with your customer)`
+								: ""
+						}`
 					: `Updated ${res.updated} order${res.updated === 1 ? "" : "s"}`,
 			);
 			// Clear the selection but STAY in select mode — the bulk bar (and the
@@ -965,7 +976,7 @@ function OrdersRoute() {
 					actions={bulkActions}
 					allSelected={allSelected}
 					onApply={applyBulk}
-					onDelete={isAdminActingAs ? applyBulkDelete : undefined}
+					onDelete={canHardDelete ? applyBulkDelete : undefined}
 					onToggleSelectAll={toggleSelectAll}
 					onExit={exitSelectMode}
 					busy={bulkBusy}

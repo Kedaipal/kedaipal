@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Set up HitPay for your Kedaipal store — Vendor Guide</title>
+<style>
+  /* ============ Print setup ============ */
+  @page { size: A4; margin: 18mm; }
+  @media print {
+    .page-break { break-before: page; }
+    a { color: inherit; text-decoration: none; }
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+
+  /* ============ Base ============ */
+  :root {
+    --navy: #1B2A4A;
+    --navy-soft: #2C3E63;
+    --mint: #B9D9CC;
+    --mint-deep: #7BA394;
+    --mint-tint: #EFF7F3;
+    --paper: #FFFFFF;
+    --ink: #22304A;
+    --ink-soft: #5A6579;
+    --amber-tint: #FFF7E8;
+    --amber-edge: #E4B85C;
+    --red-tint: #FDF0EF;
+    --red-edge: #D96C60;
+    --line: #E3E8EF;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: var(--ink);
+    background: var(--paper);
+    font-size: 11pt;
+    line-height: 1.55;
+    max-width: 174mm; /* A4 minus margins, keeps screen preview honest */
+    margin: 0 auto;
+    padding: 12px 16px 40px;
+  }
+  h1, h2, h3 { color: var(--navy); line-height: 1.2; }
+  h1 { font-size: 26pt; letter-spacing: -0.5px; }
+  h2 { font-size: 17pt; margin-bottom: 4px; }
+  h3 { font-size: 12pt; margin-bottom: 2px; }
+  p { margin-bottom: 8px; }
+  ul, ol { margin: 0 0 8px 20px; }
+  li { margin-bottom: 4px; }
+  strong { color: var(--navy); }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--mint-tint);
+    border: 1px solid var(--mint);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 9.5pt;
+    color: var(--navy);
+    white-space: nowrap;
+  }
+  a { color: var(--mint-deep); }
+
+  /* ============ Cover ============ */
+  .cover { padding-top: 18mm; }
+  .brandline {
+    display: inline-block;
+    background: var(--mint);
+    color: var(--navy);
+    font-weight: 700;
+    font-size: 9pt;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 4px 12px;
+    border-radius: 999px;
+    margin-bottom: 14px;
+  }
+  .cover h1 { margin-bottom: 6px; }
+  .cover .subtitle { font-size: 13pt; color: var(--ink-soft); margin-bottom: 22px; }
+  .cover-cards { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+  .cover-card {
+    flex: 1 1 46%;
+    border: 1.5px solid var(--line);
+    border-top: 4px solid var(--mint);
+    border-radius: 10px;
+    padding: 14px 16px;
+    background: #fff;
+  }
+  .cover-card h3 { margin-bottom: 8px; }
+  .cover-card ul { margin-left: 18px; margin-bottom: 0; }
+  .route {
+    background: var(--navy);
+    color: #fff;
+    border-radius: 10px;
+    padding: 14px 18px;
+    font-size: 10.5pt;
+  }
+  .route strong { color: var(--mint); }
+
+  /* ============ Section headers ============ */
+  .section-head { margin: 26px 0 12px; display: flex; align-items: center; gap: 12px; }
+  .section-badge {
+    flex: 0 0 auto;
+    width: 40px; height: 40px;
+    border-radius: 10px;
+    background: var(--navy);
+    color: var(--mint);
+    font-weight: 800;
+    font-size: 15pt;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .section-head .kicker {
+    font-size: 8.5pt; letter-spacing: 1.5px; text-transform: uppercase;
+    color: var(--mint-deep); font-weight: 700;
+  }
+
+  /* ============ Step cards ============ */
+  .step {
+    border: 1.5px solid var(--line);
+    border-radius: 10px;
+    padding: 12px 14px 12px 54px;
+    margin-bottom: 12px;
+    position: relative;
+    break-inside: avoid;
+  }
+  .step .num {
+    position: absolute;
+    left: 12px; top: 12px;
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    background: var(--mint);
+    color: var(--navy);
+    font-weight: 800;
+    font-size: 12pt;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .step h3 { margin-bottom: 4px; }
+  .step p:last-of-type, .step ul:last-of-type { margin-bottom: 0; }
+
+  /* ============ UI reproductions (faithful dashboard illustrations) ============ */
+  .mockup { margin: 10px 0 2px; break-inside: avoid; border: 1.5px solid var(--line); border-radius: 10px; overflow: hidden; background: #F6F8FA; }
+  .mockup .bar { display: flex; align-items: center; gap: 5px; padding: 7px 11px; background: #ECEFF3; border-bottom: 1px solid var(--line); }
+  .mockup .bar i { width: 8px; height: 8px; border-radius: 50%; background: #CBD2DC; }
+  .mockup .bar span { margin-left: 8px; font-size: 8pt; color: var(--ink-soft); font-family: ui-monospace, Menlo, monospace; }
+  .mockup .body { padding: 14px; }
+  .mockup figcaption { font-size: 8.5pt; color: var(--ink-soft); text-align: center; margin-top: 4px; }
+  .k-card { background:#fff; border:1px solid #E6EAF0; border-radius:14px; padding:16px; }
+  .k-head { display:flex; justify-content:space-between; align-items:flex-start; gap:14px; }
+  .k-title { font-size:11pt; font-weight:700; color:var(--navy); }
+  .k-desc { font-size:8.5pt; color:var(--ink-soft); margin-top:3px; line-height:1.4; }
+  .k-toggle { width:42px; height:24px; border-radius:999px; background:#2FA968; position:relative; flex-shrink:0; }
+  .k-toggle::after { content:""; position:absolute; top:3px; left:21px; width:18px; height:18px; border-radius:50%; background:#fff; }
+  .k-label { font-size:8.5pt; font-weight:600; color:var(--ink-soft); margin:13px 0 6px; }
+  .k-input { border:1px solid #E6EAF0; border-radius:9px; padding:9px 11px; font-size:9pt; color:#96A0AF; background:#fff; margin-bottom:8px; font-family: ui-monospace, Menlo, monospace; }
+  .k-input.filled { color:var(--navy); }
+  .k-btn { display:inline-block; background:#2FA968; color:#fff; font-size:9pt; font-weight:600; padding:9px 16px; border-radius:9px; margin-top:11px; }
+
+  /* ============ Callouts ============ */
+  .callout {
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin: 12px 0;
+    break-inside: avoid;
+  }
+  .callout h3 { margin-bottom: 6px; }
+  .callout.tip { background: var(--mint-tint); border-left: 5px solid var(--mint-deep); }
+  .callout.warn { background: var(--amber-tint); border-left: 5px solid var(--amber-edge); }
+  .callout.danger { background: var(--red-tint); border-left: 5px solid var(--red-edge); }
+  .callout.danger h3 { color: #A5382E; }
+
+  .dodont { display: flex; gap: 12px; flex-wrap: wrap; margin: 12px 0; }
+  .dodont > div {
+    flex: 1 1 46%;
+    border-radius: 10px;
+    padding: 12px 14px;
+    break-inside: avoid;
+  }
+  .do { background: var(--mint-tint); border: 1.5px solid var(--mint-deep); }
+  .dont { background: var(--red-tint); border: 1.5px solid var(--red-edge); }
+  .dodont h3 { margin-bottom: 6px; }
+  .dont h3 { color: #A5382E; }
+  .dodont ul { margin-bottom: 0; margin-left: 18px; }
+
+  /* ============ FAQ ============ */
+  .faq { border-bottom: 1px solid var(--line); padding: 10px 0; break-inside: avoid; }
+  .faq:last-of-type { border-bottom: none; }
+  .faq .q { font-weight: 700; color: var(--navy); margin-bottom: 3px; }
+  .faq .q::before { content: "Q. "; color: var(--mint-deep); }
+  .faq .a { margin-bottom: 0; }
+  .faq .a::before { content: "A. "; color: var(--mint-deep); font-weight: 700; }
+
+  /* ============ Checklist ============ */
+  .checklist { list-style: none; margin: 10px 0 0; }
+  .checklist li {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 8px 4px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 0;
+  }
+  .checklist .box {
+    flex: 0 0 auto;
+    width: 16px; height: 16px;
+    border: 2px solid var(--navy);
+    border-radius: 4px;
+    margin-top: 3px;
+  }
+  .sendbox {
+    border: 2px solid var(--navy);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin: 16px 0;
+    break-inside: avoid;
+  }
+  .sendbox h3 { margin-bottom: 8px; }
+  .sendbox .keyrow {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--mint-tint);
+    border: 1px solid var(--mint);
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin-bottom: 8px;
+  }
+  .sendbox .keyrow:last-child { margin-bottom: 0; }
+  .sendbox .keyrow .tag {
+    background: var(--navy); color: var(--mint);
+    font-size: 8pt; font-weight: 700; letter-spacing: 1px;
+    border-radius: 4px; padding: 2px 8px; text-transform: uppercase;
+    flex: 0 0 auto;
+  }
+
+  .support {
+    display: flex; gap: 12px; flex-wrap: wrap; margin-top: 14px;
+  }
+  .support > div {
+    flex: 1 1 46%;
+    border: 1.5px solid var(--line);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .support h3 { margin-bottom: 4px; }
+
+  /* ============ Footer ============ */
+  .doc-footer {
+    margin-top: 30px;
+    padding-top: 10px;
+    border-top: 2px solid var(--mint);
+    color: var(--ink-soft);
+    font-size: 8.5pt;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<!-- ============================== COVER ============================== -->
+<section class="cover">
+  <span class="brandline">Kedaipal · Vendor Guide</span>
+  <h1>Set up HitPay for your Kedaipal store</h1>
+  <p class="subtitle">Give buyers a one-tap <strong>Pay now</strong> button — DuitNow QR, Touch 'n Go, FPX and cards — with payments confirmed automatically.</p>
+
+  <div class="cover-cards">
+    <div class="cover-card">
+      <h3>🧰 What you need</h3>
+      <ul>
+        <li>A <strong>Kedaipal Pro plan</strong> — online payments is a Pro feature (check this first, before the paperwork below)</li>
+        <li>Your <strong>SSM registration</strong> (business registration number)</li>
+        <li>The IC of the owner/director (for verification)</li>
+        <li>Your <strong>business bank account</strong> (where payouts land)</li>
+        <li>About <strong>20 minutes</strong> — plus 1–3 working days for HitPay to approve your account</li>
+      </ul>
+    </div>
+    <div class="cover-card">
+      <h3>🎁 What you get</h3>
+      <ul>
+        <li><strong>One-tap Pay now</strong> on every order page — buyers pay in their own banking or eWallet app</li>
+        <li><strong>Automatic confirmation</strong> — no more "I've paid" screenshots, no more checking your bank app</li>
+        <li>Money lands in <strong>your own bank account</strong> — Kedaipal never touches it</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="route">
+    <strong>The plan, in one line:</strong> Create your HitPay account (A) → get verified (B) → switch on your payment methods (C) → copy your API Key &amp; Salt (D) → paste them into Kedaipal (E) → do one RM1 test (F). Done.
+  </div>
+
+  <div class="callout tip">
+    <h3>💡 Important to know first</h3>
+    <p style="margin-bottom:0">The HitPay account is <strong>yours</strong>, not Kedaipal's. Buyers pay <strong>you</strong>; HitPay takes a small fee per transaction (around 1.2%–2%) and pays the rest into your bank account. <strong>Kedaipal takes nothing</strong> from your sales.</p>
+  </div>
+</section>
+
+<!-- ============================== STEP A ============================== -->
+<section class="page-break">
+  <div class="section-head">
+    <div class="section-badge">A</div>
+    <div>
+      <div class="kicker">Step A · about 5 minutes</div>
+      <h2>Create your HitPay account</h2>
+    </div>
+  </div>
+  <p>HitPay is a payments company used by thousands of Southeast Asian businesses. A free account gives you the DuitNow QR / TnG / FPX / card rails and the API keys Kedaipal uses to create your checkout pages.</p>
+
+  <div class="step">
+    <div class="num">1</div>
+    <h3>Go to hitpayapp.com and sign up</h3>
+    <p>On your phone or laptop, open <strong>hitpayapp.com</strong> and tap <strong>Sign up</strong>. Choose <strong>Malaysia</strong> as your country — this decides which payment methods you can offer.</p>
+  </div>
+
+  <div class="step">
+    <div class="num">2</div>
+    <h3>Confirm your email</h3>
+    <p>HitPay emails you a confirmation link. Tap it, set your password, and you're into the dashboard.</p>
+  </div>
+
+  <div class="callout warn">
+    <h3>⚠️ Pick Malaysia, not Singapore</h3>
+    <p style="margin-bottom:0">HitPay started in Singapore, and the sign-up sometimes defaults there. A Singapore account can't offer DuitNow QR / TnG / FPX to Malaysian buyers — make sure the country says <strong>Malaysia</strong> before you continue.</p>
+  </div>
+</section>
+
+<!-- ============================== STEP B ============================== -->
+<section>
+  <div class="section-head">
+    <div class="section-badge">B</div>
+    <div>
+      <div class="kicker">Step B · 10 minutes + 1–3 working days for approval</div>
+      <h2>Get verified (KYC)</h2>
+    </div>
+  </div>
+  <p>Before HitPay lets real money flow, they must verify your business — this is a Bank Negara requirement, the same check every payment company does. In the dashboard, look for the <strong>verification / activate your account</strong> banner and submit:</p>
+
+  <div class="step">
+    <div class="num">1</div>
+    <h3>Your business details</h3>
+    <ul>
+      <li><strong>SSM registration number</strong> (Enterprise or Sdn Bhd both work)</li>
+      <li>Business name exactly as registered</li>
+      <li>What you sell (e.g. "food &amp; beverages — cakes and pastries")</li>
+    </ul>
+  </div>
+
+  <div class="step">
+    <div class="num">2</div>
+    <h3>The owner's identity</h3>
+    <p>A photo of the owner/director's <strong>IC</strong> (front and back) and sometimes a selfie. This is standard — it proves the account belongs to a real person.</p>
+  </div>
+
+  <div class="step">
+    <div class="num">3</div>
+    <h3>Your payout bank account</h3>
+    <p>The bank account where HitPay deposits your money. Use your <strong>business account</strong> if you have one — the account name should match your SSM registration.</p>
+  </div>
+
+  <div class="callout tip">
+    <h3>💡 While you wait for approval</h3>
+    <p style="margin-bottom:0">Approval usually takes <strong>1–3 working days</strong>. You can already do Steps C and D in the meantime — just hold the RM1 test (Step F) until the account is approved.</p>
+  </div>
+</section>
+
+<!-- ============================== STEP C ============================== -->
+<section class="page-break">
+  <div class="section-head">
+    <div class="section-badge">C</div>
+    <div>
+      <div class="kicker">Step C · about 3 minutes</div>
+      <h2>Switch on your payment methods</h2>
+    </div>
+  </div>
+  <p>In the HitPay dashboard, open <strong>Settings → Payment Methods</strong> and turn on the ways you want buyers to pay. Kedaipal automatically detects what you've enabled and shows exactly those to your buyers — nothing more, nothing less.</p>
+
+  <div class="step">
+    <div class="num">1</div>
+    <h3>Recommended for Malaysian buyers</h3>
+    <ul>
+      <li><strong>DuitNow QR</strong> — works with every MY banking app · fee ≈ 1.2%</li>
+      <li><strong>Touch 'n Go eWallet</strong> — fee ≈ 1.9%</li>
+      <li><strong>FPX</strong> — online banking transfer · fee ≈ 1.8% + RM0.40</li>
+      <li><strong>Cards</strong> — Visa / Mastercard · fee ≈ 1.2% + RM1 (local)</li>
+    </ul>
+    <p>Fees are charged by HitPay per transaction and can change — the dashboard shows the current rate next to each method. There's no monthly fee.</p>
+  </div>
+
+  <div class="step">
+    <div class="num">2</div>
+    <h3>Add your logo and brand colour</h3>
+    <p>Open <strong>Settings → Checkout Customisation</strong> and upload your store logo + pick your colour. Buyers see <strong>your brand</strong> on the payment page — not Kedaipal's, not plain HitPay.</p>
+  </div>
+
+  <div class="callout warn">
+    <h3>⚠️ Some methods need extra approval</h3>
+    <p style="margin-bottom:0">FPX and cards may ask for extra documents or a short review before they switch on. DuitNow QR and TnG usually work first. Start with what's available — you can add the rest later, and Kedaipal picks up changes automatically.</p>
+  </div>
+</section>
+
+<!-- ============================== STEP D ============================== -->
+<section>
+  <div class="section-head">
+    <div class="section-badge">D</div>
+    <div>
+      <div class="kicker">Step D · about 1 minute</div>
+      <h2>Copy your API Key &amp; Salt</h2>
+    </div>
+  </div>
+  <p>These two codes are how Kedaipal creates checkout pages on your behalf. In the HitPay dashboard, open <strong>Settings → API Keys</strong> — the API key and the salt sit side by side on that page.</p>
+
+  <div class="sendbox">
+    <h3>You are copying exactly two things</h3>
+    <div class="keyrow"><span class="tag">API Key</span> <span>a long code — this identifies your account</span></div>
+    <div class="keyrow"><span class="tag">Salt</span> <span>a second long code — this proves messages really come from HitPay</span></div>
+  </div>
+
+  <div class="callout danger">
+    <h3>🔒 Treat these like your bank password</h3>
+    <p style="margin-bottom:0">Anyone with these codes can create payment pages in your name. Only ever paste them into <strong>Kedaipal → Settings → Payments</strong>. Never send them by WhatsApp or email — not even to Kedaipal support (we never ask for them).</p>
+  </div>
+</section>
+
+<!-- ============================== STEP E ============================== -->
+<section class="page-break">
+  <div class="section-head">
+    <div class="section-badge">E</div>
+    <div>
+      <div class="kicker">Step E · about 2 minutes</div>
+      <h2>Paste the keys into Kedaipal</h2>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">1</div>
+    <h3>Open Kedaipal → Settings → Payments</h3>
+    <p>Scroll to the <strong>Online payments</strong> card (the one with the HitPay logo).</p>
+  </div>
+
+  <div class="step">
+    <div class="num">2</div>
+    <h3>Paste both codes and tap Connect</h3>
+    <p>Kedaipal checks the key with HitPay on the spot. When it works, the card shows <strong>Connected</strong> plus the payment methods you enabled in Step C. If it says the key was rejected, re-copy both codes — a missing character is the usual culprit.</p>
+    <figure class="mockup">
+      <div class="bar"><i></i><i></i><i></i><span>kedaipal.com/app/settings — Payments</span></div>
+      <div class="body">
+        <div class="k-card">
+          <div class="k-head">
+            <div>
+              <div class="k-title">Online payments</div>
+              <div class="k-desc">Buyers pay by DuitNow QR, TnG, FPX or card — confirmed automatically.</div>
+            </div>
+            <div class="k-toggle"></div>
+          </div>
+          <div class="k-label">API key</div>
+          <div class="k-input filled">live_a59e…fe05</div>
+          <div class="k-label">Salt</div>
+          <div class="k-input filled">••••••••••••••••</div>
+          <span class="k-btn">Connect HitPay</span>
+        </div>
+      </div>
+      <figcaption>The Online payments card in Kedaipal — paste both codes here and nowhere else.</figcaption>
+    </figure>
+  </div>
+
+  <div class="step">
+    <div class="num">3</div>
+    <h3>That's the setup done</h3>
+    <p>From now on, unpaid order pages show a <strong>Pay now</strong> button. When a buyer pays, the order flips to <strong>Payment received</strong> by itself and the buyer gets the confirmation on WhatsApp — you don't touch anything.</p>
+    <p style="margin-bottom:0">One exception, and it's deliberate: orders whose price isn't final yet — waiting for you to approve a mockup, or to set a delivery charge — have no Pay now button until you settle the price. Nobody should pay a total that's about to change.</p>
+  </div>
+</section>
+
+<!-- ============================== STEP F ============================== -->
+<section>
+  <div class="section-head">
+    <div class="section-badge">F</div>
+    <div>
+      <div class="kicker">Step F · about 3 minutes · after HitPay approves your account</div>
+      <h2>Do one RM1 test</h2>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">1</div>
+    <h3>Place a small test order in your own store</h3>
+    <p>Open your storefront link, order the cheapest item (or create a temporary RM1 product), and open the order page.</p>
+  </div>
+
+  <div class="step">
+    <div class="num">2</div>
+    <h3>Pay it for real</h3>
+    <p>Tap <strong>Pay now</strong>, pay with DuitNow QR or TnG, and watch the order flip to <strong>Payment received</strong> on its own — usually within seconds.</p>
+  </div>
+
+  <div class="step">
+    <div class="num">3</div>
+    <h3>Refund it from the HitPay dashboard</h3>
+    <p>In HitPay, find the payment and refund it. (Refunds always happen in the HitPay dashboard — there's no refund button in Kedaipal.)</p>
+  </div>
+
+  <div class="step">
+    <div class="num">4</div>
+    <h3>Cancel the test order in Kedaipal — don't skip this</h3>
+    <p>Open the order in Kedaipal and <strong>cancel</strong> it. Refunding in HitPay does <strong>not</strong> tell Kedaipal anything, so until you cancel, that RM1 keeps counting as real money you collected.</p>
+    <p style="margin-bottom:0">Cancelling puts everything back: the RM1 drops out of your revenue and Insights, the stock you "sold" returns to the product, and the test stops counting as a real order against your own customer record.</p>
+  </div>
+
+  <div class="callout warn">
+    <h3>⏱️ Payouts are not instant — this surprises everyone once</h3>
+    <p style="margin-bottom:0">The buyer's app says "paid" instantly, but HitPay transfers the money to your bank in <strong>2–3 working days</strong> (T+2/T+3). That's normal for every payment gateway. Don't panic when the RM1 isn't in your bank the same evening.</p>
+  </div>
+</section>
+
+<!-- ============================== DO / DON'T ============================== -->
+<section class="page-break">
+  <h2 style="margin-bottom:10px">Quick rules</h2>
+  <div class="dodont">
+    <div class="do">
+      <h3>✅ Do</h3>
+      <ul>
+        <li>Keep your bank/QR details in Kedaipal too — buyers can still pay by manual transfer, and it's your backup</li>
+        <li>Check the HitPay app/dashboard for your payout schedule</li>
+        <li>Add new payment methods any time — Kedaipal detects them automatically</li>
+        <li>Use <strong>Pause</strong> in Kedaipal if you ever want to switch Pay now off temporarily — your keys are kept</li>
+      </ul>
+    </div>
+    <div class="dont">
+      <h3>❌ Don't</h3>
+      <ul>
+        <li>Don't share your API key or salt with anyone</li>
+        <li>Don't mark gateway payments received by hand — they confirm themselves</li>
+        <li>Don't use a Singapore HitPay account for a Malaysian store</li>
+        <li>Don't expect the payout the same day — T+2/T+3 working days is normal</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== FAQ ============================== -->
+<section>
+  <h2 style="margin-bottom:10px">Common questions</h2>
+
+  <div class="faq">
+    <p class="q">How much does this cost?</p>
+    <p class="a">HitPay has no monthly fee — only a small per-transaction fee (about 1.2% for DuitNow QR, 1.9% for TnG, 1.8% + RM0.40 for FPX). Kedaipal charges nothing on top. On a RM50 order paid by DuitNow QR, you receive about RM49.40.</p>
+  </div>
+
+  <div class="faq">
+    <p class="q">Who holds my money?</p>
+    <p class="a">HitPay collects from the buyer and pays your bank account directly in 2–3 working days. The money never passes through Kedaipal.</p>
+  </div>
+
+  <div class="faq">
+    <p class="q">Can buyers still pay by manual bank transfer?</p>
+    <p class="a">Yes. The order page keeps a "Paid by bank transfer instead?" option, and your saved bank/QR details still work exactly as before. Pay now is an extra door, not a replacement.</p>
+  </div>
+
+  <div class="faq">
+    <p class="q">A buyer wants a refund — where do I do it?</p>
+    <p class="a">In the HitPay dashboard (find the payment → refund). Kedaipal shows the payment reference on both your order page and the buyer's — quote it to find the payment fast.</p>
+  </div>
+
+  <div class="callout warn">
+    <h3>⚠️ After a refund, fix the order in Kedaipal too</h3>
+    <p style="margin-bottom:0">A refund in HitPay does <strong>not</strong> reach Kedaipal — the order stays marked <strong>Payment received</strong>, keeps counting in your revenue and Insights, and the buyer's page still shows it as paid. Update the order yourself: <strong>cancel</strong> it if the whole order is off (that also returns the stock and takes it out of your figures), or leave a note if you only refunded part of it.</p>
+  </div>
+
+  <div class="faq">
+    <p class="q">I don't have SSM registration — can I still use this?</p>
+    <p class="a">Not yet — HitPay's verification requires a registered business (a Bank Negara rule, same for every gateway). Your manual bank transfer + QR flow keeps working as always, and you can connect later once registered.</p>
+  </div>
+
+  <div class="faq">
+    <p class="q">What happens if I change my HitPay password?</p>
+    <p class="a">Nothing — the API key and salt are separate from your login. Only if you regenerate the keys in HitPay do you need to paste the new pair into Kedaipal (use <strong>Replace keys</strong> on the card).</p>
+  </div>
+</section>
+
+<!-- ============================== CHECKLIST ============================== -->
+<section>
+  <h2 style="margin-bottom:4px">Final checklist</h2>
+  <p style="color:var(--ink-soft)">Tick these off and you're live:</p>
+  <ul class="checklist">
+    <li><span class="box"></span><span> HitPay <strong>Malaysia</strong> account created and email confirmed</span></li>
+    <li><span class="box"></span><span> Verification submitted (SSM + IC + bank account) and <strong>approved</strong></span></li>
+    <li><span class="box"></span><span> Payment methods switched on (DuitNow QR at minimum)</span></li>
+    <li><span class="box"></span><span> Logo + brand colour set in Checkout Customisation</span></li>
+    <li><span class="box"></span><span> API key + salt pasted into Kedaipal → Settings → Payments, card shows <strong>Connected</strong></span></li>
+    <li><span class="box"></span><span> RM1 test order paid and auto-confirmed, then refunded in HitPay <strong>and cancelled in Kedaipal</strong></span></li>
+  </ul>
+
+  <div class="support">
+    <div>
+      <h3>Stuck on HitPay's side?</h3>
+      <p style="margin-bottom:0">Account approval, payout, refunds, fees → HitPay support (chat bubble in their dashboard, or <strong>support@hit-pay.com</strong>).</p>
+    </div>
+    <div>
+      <h3>Stuck on Kedaipal's side?</h3>
+      <p style="margin-bottom:0">Keys rejected, Pay now not showing, order not confirming → message us on WhatsApp — we'll check it with you.</p>
+    </div>
+  </div>
+
+  <p class="doc-footer">Kedaipal vendor guide · HitPay online payments setup · Fees and steps last checked August 2026 — HitPay sets its own rates, so check their dashboard for today's numbers if this copy has been sitting on a shelf. This guide is safe to print and hand to whoever manages your store.</p>
+</section>
+
+</body>
+</html>

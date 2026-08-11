@@ -11,7 +11,7 @@
  */
 
 export const TERMS_VERSION = "2026-07-01";
-export const PRIVACY_VERSION = "2026-07-01";
+export const PRIVACY_VERSION = "2026-08-04";
 export const AUP_VERSION = "2026-05-26";
 
 /** Contact address shown in Terms, Privacy, and the AUP. */

@@ -201,14 +201,17 @@ Missing/stale/mismatched quote → **checkout refused** with clear copy
 above). Kill switch: no credentials/config → the quote query never says
 "live" and checkout behaves exactly as before.
 
-**Pre-orders are priced for THEIR day (23 Jul):** when the buyer picks a
-future fulfilment date, the quote is requested with Lalamove `scheduleAt` =
-noon MYT on that day (the hour barely moves the price; the day can), so the
-locked buyer fee reflects the delivery day, not checkout day. Changing the
-date re-quotes exactly like changing the address. Today = immediate
-pricing; the scheduleAt guard caps at Lalamove's ~30-day window and falls
-back to immediate on anything odd. Dispatch on the day still re-quotes
-immediate — variance is the vendor's, as everywhere.
+**Pre-orders are priced for THEIR moment (23 Jul; exact time since 4 Aug):**
+checkout now captures a fulfilment TIME alongside the date
+(`orders.fulfilmentTimeMinutes` — see docs/fulfilment-date.md), so the quote
+is requested with Lalamove `scheduleAt` = the buyer's exact chosen moment.
+Changing the date OR the time re-quotes exactly like changing the address.
+Orders without a time (legacy, or a cleared field) keep the old noon-MYT
+day heuristic byte-for-byte. One pure rule decides both here and at
+dispatch — `resolveScheduleAt` (`convex/lib/lalamove.ts`): a moment ≥30 min
+ahead and within ~30 days schedules; anything past, imminent or absurd
+books "now" — so the fee the buyer paid and the trip the vendor books can
+never be priced for different moments.
 
 Note: a buyer address edit (`updateDeliveryAddress`) re-prices through the
 same resolver. Under lalamove pricing the edit dialog fetches a **fresh
@@ -228,9 +231,17 @@ expected: the vendor books whenever THEY are ready — after design approval,
 after payment, on the morning of the fulfilment date — manually, or lets
 auto-book fire on packed+paid+due-today.
 
-Two-tap: `prepareBooking` re-quotes at today's price and the confirm dialog
+Two-tap: `prepareBooking` re-quotes and the confirm dialog
 shows it against the buyer-paid fee (variance called out, including who
-absorbs it) **with a per-order vehicle switch** (Motorcycle ⇄ Car,
+absorbs it). **The booking defaults to the buyer's chosen moment (4 Aug):**
+when the order carries a fulfilment date+time still ≥30 min ahead, the
+quotation is prepared with `scheduleAt` = exactly that, the dialog says
+"Scheduled pickup — the rider comes 4 Aug · 3:30 PM", and the job row
+records `deliveryJobs.scheduledAt` so the card reads "Scheduled pickup —
+3:30 PM" instead of sitting on "Finding rider" for hours (Lalamove assigns
+a driver closer to the time). A past or imminent moment books NOW — the
+buyer's ask is already due — and the dialog says that instead. Timeless
+orders behave exactly as before. Same two-tap, same variance rules **with a per-order vehicle switch** (Motorcycle ⇄ Car,
 defaulted to the settings vehicle; switching re-quotes since prices are
 per-vehicle — a bulky one-off order gets a car without a round-trip to
 Settings, and the chosen vehicle is what lands on the ledger row); `confirmBooking` places the order within the 5-minute window
@@ -252,7 +263,11 @@ credentials, missing buyer/seller phone. That copy lives in
 prompt** renders the same reasons — a rider vendor is never offered the manual
 parcel-courier form, so this copy is their whole explanation before they choose
 to ship without a rider (ClickUp `86eyff02p`, see
-[`fulfilment.md`](./fulfilment.md#seller-ux)). Wallet-empty
+[`fulfilment.md`](./fulfilment.md#seller-ux)). That prompt is now the
+**blocked-only** surface for them: when a rider *can* be booked, advancing the
+order by hand opens this card's own booking dialog instead (4 Aug — one modal,
+one price, one vehicle switch), with a `Mark as {stage} without a rider` action
+inside it for the order going out another way. Wallet-empty
 booking failures surface Lalamove's error as "top up your Lalamove wallet,
 then retry". `cancelBooking` (with a rider-fee warning) deliberately skips
 the eligibility gates — cancelling must work even when booking wouldn't.
@@ -387,28 +402,42 @@ URL into THEIR Partner Portal → Developers → Webhook URL (Version 3). The
 settings card surfaces the exact URL with a copy button and the vendor
 guide walks it (Step E5). Graceful degradation if a seller skips it:
 bookings still work, but shipped/delivered stop being automatic — the
-order just stays where it is until the seller advances it by hand. Dev
+order stays where it is until the seller advances it by hand, which since
+3 Aug costs one confirm per transition while a booking is active (the
+"Update manually" escape; see the manual-advance gate below). Dev
 deployment URL: `https://qualified-chihuahua-441.convex.site/webhook/lalamove`.
 
-**Manual-advance gate while the rider drives (26 Jul hotfix):** when an
-ACTIVE job's webhook is demonstrably alive (`deliveryJobs.lastEventAt` is
-only ever written by the webhook handler, and ASSIGNING_DRIVER lands
-seconds after booking), the order-detail stepper's advance into a
-**shipped- or delivered-anchored** stage renders **disabled-with-reason**
-("…moves to Shipped on its own when the rider picks up") — a manual tap
-would message the buyer early and, for shipped, without the live-tracking
-link. Confirm/packed advances are never gated (pre-pickup work is the
-seller's), same-anchor custom-stage moves stay free, and a small
-**"Update manually" confirm-gated escape** stays reachable so a webhook
-that dies mid-delivery never strands the order. Webhook-less sellers
-(`lastEventAt` never set) see zero change — manual advancing IS their
-documented path above. Pure predicates `riderDrivesOrderStatus` +
-`isRiderManagedTransition` in `convex/lib/lalamove.ts` (unit-tested);
-client-side UX guard only — the server mutation is unchanged (the seller
+**Manual-advance gate while the rider drives (26 Jul hotfix; tightened
+3 Aug):** while an order has an **ACTIVE** rider job, the order-detail
+stepper's advance into a **shipped- or delivered-anchored** stage renders
+**disabled-with-reason** — a manual tap would message the buyer early and,
+for shipped, without the live-tracking link. Confirm/packed advances are
+never gated (pre-pickup work is the seller's), same-anchor custom-stage
+moves stay free, and a **"Update manually" confirm-gated escape** stays
+reachable so a dead webhook never strands the order (cancelling the
+booking lifts the gate outright — a second way out).
+
+The gate originally ALSO required `deliveryJobs.lastEventAt`, i.e. proof
+the webhook was alive, so that webhook-less sellers kept manual control.
+That left the gate **off during exactly the window it matters most** —
+between placing the booking and the first event landing — and Zaki hit it
+in live testing on 3 Aug: booked a rider, then clicked straight through to
+"Collected" on a live trip. Since the escape already protects the
+webhook-less seller, the `lastEventAt` condition was dropped; it now only
+picks the honest wording ("moves on its own when the rider picks up" once
+the booking has reported, vs "…as long as your Lalamove webhook is set
+up" before that). Predicates: `isActiveJobStatus` +
+`isRiderManagedTransition`; `riderDrivesOrderStatus` now only answers "has
+this booking reported yet?" for copy.
+
+Client-side UX guard only — the server mutation is unchanged (the seller
 owns the order, and the webhook's same-status replays are already no-ops).
 Known gap, deliberate: the inbox **bulk** status bar can still mass-mark
 shipped without job awareness (needs a per-order job lookup in
-`searchOrders` — follow-up, not hotfix material).
+`searchOrders` — follow-up, not hotfix material). NOTE the collection gate
+below is different: that one IS server-enforced on every write path,
+because it protects a business rule (goods that aren't there yet) rather
+than message timing.
 
 ### Hygiene + lifecycle guards (pre-ship audit, 22 Jul)
 
@@ -428,6 +457,148 @@ shipped without job awareness (needs a per-order job lookup in
   docs/fulfilment-date.md; custom carts label the field "Requested date".
 - Seller-side awareness: browser order alerts (new order + booking failed)
   — see docs/order-notifications.md.
+
+## Collection service — Leg 1, rider collects FROM the buyer (86eyg0n8e)
+
+Bearcamp (tent/gear cleaning) runs the trip in **reverse**: the rider picks
+up at the **customer's address** and drops off at the seller's outlet. One
+store-level switch flips the whole feature:
+`retailers.deliveryBooking.deliveryDirection: "standard" | "collection"`
+(undefined = standard — every existing seller; toggle lives in the Lalamove
+settings section above prompt-on-packed). It sits on `deliveryBooking`, NOT
+the ticket's `deliveryConfig.lalamove` arm, because pricing-mode switches
+rebuild that arm wholesale while the booking object merges per-field
+(`promptBookOnPacked` precedent) — so a month on Flat pricing and back can
+never silently reset a collection store to standard. **Every branch is gated
+on `=== "collection"`, so standard-direction stores are behaviourally
+untouched.**
+
+Three freezes, one setting:
+
+- **`orders.deliveryDirection`** — stamped at create (pickupSnapshot
+  posture) so buyer surfaces stay true if the store toggles later. Drives:
+  checkout copy (section title "Collection address", "where should we
+  collect from?" flavour intro, rider-fee expectation line, date question
+  "When should we collect it?", fee lines "Collection"), the wa.me message
+  ("🚚 Collect from:", "Collection fee:", "🗓️ Collect from me on:"), the
+  WA confirm's method line ("We'll update you once collection from your
+  address is arranged." EN/MS/ZH — packed/shipped/delivered defaults stay
+  ship-flavoured on purpose: a collection store's real vocabulary is custom
+  stages, e.g. collected → cleaning → ready), the tracking page ("Collect
+  from", "Collection from your address", "We collect on", "Collection
+  fee") and the seller order page ("Collect From"). The public slug payload
+  carries the one-bit `deliveryCollectsFromCustomer` for checkout. **CSV is
+  the deliberate exception**: the *Fulfilment* cell reads `collection`, but
+  the header row is untouched (still "Delivery fee"). One export can hold
+  both directions — a store that switched modes, and routinely once
+  direction varies per order — so a per-row column NAME is impossible, and
+  a seller's bookkeeping template keys on names. Value-level, not
+  header-level.
+- **`deliveryJobs.deliveryDirection`** — snapshotted at `reserveBooking` so
+  the webhook obeys what was BOOKED, not the live setting.
+- **Dispatch swap** — `dispatchContextForOrder` swaps stops AND contacts:
+  origin/sender = buyer (same +60 fallback → seller number, buyer's real
+  number in remarks), destination/recipient = the outlet. The checkout
+  quote (`quoteForCheckout`) prices the same buyer→store direction (route
+  prices aren't guaranteed symmetric), so buyer-paid fee and dispatch
+  re-quote can't systematically drift.
+
+**The webhook only moves the JOB on a collection booking.** `picked_up`
+means "rider took the goods FROM the buyer" and `completed` means "they
+reached the seller" — neither is shipped/delivered *to the customer*, so
+order status stays the seller's to advance by hand (their custom stages
+tell the story). Three side-channels are closed with it:
+
+- **No `carrierTrackingUrl` mirror** (DRIVER_ASSIGNED + commitBooking): a
+  later manual shipped-anchored advance would otherwise present the stale
+  Leg-1 collection trip as shipment tracking. Instead the buyer gets the
+  **live collection-rider strip** (3 Aug, Zaki's ask after first local
+  test): while a job is ACTIVE, `orders.get` returns `collectionRider`
+  (trip state, driver name + plate, Lalamove share link — never the
+  driver's phone, cost or provider ids) and `/track` renders a transient
+  card above the timeline ("Finding a rider…" → "{driver} is on the way to
+  your address" + plate → "Collected — on the way to {store}"). It reads
+  the live job row, so it can't go stale and vanishes the moment the trip
+  ends — deliberately a strip, not a status: the order lifecycle stays the
+  seller's. Verified against a real sandbox booking on dev.
+- **POD photo is seller-only**: it shows the rider dropping the buyer's
+  gear at the seller's own doorstep, so `fetchPodImages` skips the buyer
+  WhatsApp follow-up and `orders.get` never exposes `podImageUrls` on
+  collection orders (even after the seller manually marks delivered — the
+  caption "taken by your rider at drop-off" would read as nonsense). The
+  dispatch card keeps the thumbnails, labelled "kept for your records".
+- **The manual-advance gate lifts** (`riderAutoUpdates` in order detail):
+  the "moves to Shipped on its own" disabled-state would both lie and
+  strand a collection seller. The mark-shipped rider prompt is also
+  skipped — offering "book a rider" at the shipped moment would dispatch
+  ANOTHER buyer→store collection; the return journey is **Leg 2, out of
+  scope** (Bearcamp raises a separate order for it).
+- **`orders.collectedAt`** — the webhook stamps WHEN the goods arrived (a
+  timestamp, never a status change). It exists because a collection order's
+  `fulfilmentDate` is the day the rider COLLECTS — the start of the seller's
+  work, not a deadline — so the inbox/date badge would otherwise show red
+  **"Overdue" for the entire healthy service window** on every collection
+  order, and (being a strict priority list) would suppress every other
+  contextual badge under it. Keyed on the goods arriving rather than on
+  status, because a seller may anchor their own "Collected" stage at
+  `confirmed`. Before collection a passed date still reads red — that
+  genuinely means nothing came in. The same stamp gives the buyer a
+  persistent "Collected on …" line once the live rider strip retires, so
+  their page is never silent mid-service.
+- **The seller cannot move a collection order until the goods arrive**
+  (3 Aug, Zaki's second catch). On a collection order the rider brings the
+  goods IN, so "packed" / "cleaning" / "ready" cannot be true beforehand —
+  yet the stepper let him mark Packed with no rider even booked, and
+  prompt-on-packed then offered to dispatch one, which is backwards
+  (packing happens AFTER arrival). Now `isCollectionGateClosed`
+  (`convex/lib/order.ts`, beside `isMockupGateClosed` and shaped like it)
+  blocks every advance into a packed-or-later anchor while
+  `deliveryDirection === "collection"` and `collectedAt` is unset.
+  **Server-enforced on all three seller write paths** — `advanceToStage`
+  and `updateStatus` throw, `bulkUpdateStatus` SKIPS (one ineligible order
+  must not fail a batch, the mockup-gate posture) — with the stepper
+  mirroring it as disabled-with-reason pointing at "Send rider to collect".
+  Cancelling is never gated. The escape is **"I already have the items"**,
+  for a seller who fetched them in person or whose webhook never reported:
+  it rides `advanceToStage({ markCollected: true })`, which stamps
+  `collectedAt` in the same transaction — so the question is asked once,
+  not at every stage. **prompt-on-packed never fires on a collection
+  order** and its ⚡ hint is hidden, since the promise it makes is one this
+  flow must never keep. One-shot `orders:backfillCollectionCollectedAt`
+  stamps orders whose rider completed before the field existed (dev only —
+  production has no collection orders yet; ran on dev 3 Aug, 1 stamped).
+  Standard delivery is untouched by construction: the predicate is false
+  for every non-collection order (verified against all 130 dev orders).
+- **A manual collection offers to cancel the rider** (4 Aug). Taking the
+  "I already have the items" escape while a booking is still ACTIVE left the
+  rider on their way to fetch goods the seller already had. The escape now
+  warns up front ("we'll ask whether to cancel them next") and, once the
+  collection is actually recorded, asks: *Cancel the rider booking?* It is
+  **asked, never automatic** — Lalamove can charge once a driver is
+  assigned, so the spend stays the seller's call — and it reuses the same
+  `cancelBooking` action the dispatch card's own cancel button uses. Only
+  the collection escape does this: a standard order's manual advance means
+  the webhook was quiet, not that the rider is redundant.
+- **A completed collection is TERMINAL for the card** (`collectionDone`,
+  3 Aug — bug found by Zaki in local testing). Because the order never
+  advances, it sits at confirmed/packed forever, so `bookable` stayed true
+  and the card re-offered "Send rider to collect" after the goods had
+  already arrived — a second, paid, pointless trip. Worse, the
+  prompt-on-packed effect had the same hole: marking the collected order
+  **Packed** (the natural next step in a wash workflow) would have
+  AUTO-OPENED the booking dialog. Both are now stopped on
+  collection + `job.status === "completed"`; a **failed** collection still
+  offers Rebook (no rider ever came), and standard orders are untouched
+  (they self-close by reaching `delivered`). The settled card answers the
+  question that state raises — "how do I get it back to them?" — with the
+  honest Leg-2 answer: book the return in your own Lalamove app, since a
+  return order raised here would just be another collection.
+
+Seller card copy flips throughout ("Lalamove Collection", "Send rider to
+collect", pills Finding rider → Heading to customer → Collected → Arrived,
+"Buyer paid for collection"). Pricing (`resolveDeliveryQuote`) is untouched
+— distance is symmetric; `deliveryFeePending`, radius/flat modes and the
+no-fee-pending-under-Lalamove rule all apply unchanged.
 
 ## Sandbox E2E — verified 21 Jul 2026
 
@@ -494,3 +665,13 @@ Full step table, credential rules + the POD injector: [`dev-scripts.md`](./dev-s
 - DelyvaX as provider #2 (parcel couriers / courier choice).
 - Vendor onboarding guide (PDF): drafted with real Partner Portal
   screenshots; finalize once Kedaipal-side settings screenshots exist.
+- Collection Leg 2 (return journey after the seller's work) — today a
+  separate manual order; a "book return trip" that clones the order with
+  the direction flipped is the natural v2.
+- Per-product collection flag for mixed catalogs (a store selling goods
+  AND a collection service): `products.collectionService` constrains the
+  cart (no mixing directions in one order — one order = one trip) and
+  `orders.deliveryDirection` derives from the items instead of the store
+  toggle. Everything at the order/job layer is already direction-keyed, so
+  this slots in without rework. Tracked in ClickUp; build when the first
+  real mixed-catalog seller appears.

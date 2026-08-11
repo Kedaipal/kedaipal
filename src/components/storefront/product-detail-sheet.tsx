@@ -5,13 +5,13 @@ import { Markdown } from "../ui/markdown";
 import { ZoomableImage } from "../ui/zoomable-image";
 import type { StorefrontProduct } from "./product-card";
 import {
-	AddToCartButton,
 	CustomOrderCard,
 	EmptyGallery,
 	type OnAddVariant,
 	OptionPills,
+	PriceLabel,
+	PurchaseActions,
 	PurchaseHints,
-	PurchaseStepper,
 	type StorefrontVariant,
 	TotalPreviewRow,
 	useProductPurchase,
@@ -105,9 +105,10 @@ export function ProductDetailSheet({
 							<h2 className="text-xl font-bold leading-tight">
 								{product.name}
 							</h2>
-							<p className="shrink-0 text-2xl font-bold tabular-nums">
-								{pp.priceLabel}
-							</p>
+							<PriceLabel
+								value={pp.priceLabel}
+								className="shrink-0 text-2xl"
+							/>
 						</div>
 
 						<OptionPills pp={pp} />
@@ -123,10 +124,7 @@ export function ProductDetailSheet({
 
 					<div className="border-t border-border bg-background px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-6">
 						<TotalPreviewRow pp={pp} />
-						<div className="grid gap-3 sm:grid-cols-[auto_1fr] sm:items-center">
-							<PurchaseStepper pp={pp} />
-							<AddToCartButton pp={pp} onAdd={onAdd} />
-						</div>
+						<PurchaseActions pp={pp} onAdd={onAdd} />
 					</div>
 				</Dialog.Content>
 			</Dialog.Portal>

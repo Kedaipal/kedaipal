@@ -138,6 +138,21 @@
       ],
       "port": 3109,
       "autoPort": false
+    },
+    {
+      "name": "web-jul31-bugfixes-wt",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "-C",
+        "../kedaipal-wt-86eyfq04j",
+        "exec",
+        "vite",
+        "dev",
+        "--port",
+        "3114"
+      ],
+      "port": 3114,
+      "autoPort": false
     }
   ]
 }

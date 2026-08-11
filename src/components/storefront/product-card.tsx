@@ -3,7 +3,7 @@ import type { FunctionReturnType } from "convex/server";
 import { ImagePlus, Plus, SlidersHorizontal } from "lucide-react";
 import type { api } from "../../../convex/_generated/api";
 import { formatPrice } from "../../lib/format";
-import { minQuantityUnreachable } from "../../lib/variant";
+import { hasStartingPrice, minQuantityUnreachable } from "../../lib/variant";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 
@@ -64,9 +64,12 @@ export function ProductCard({
 		product.totalOnHand <= 5;
 	const priceVaries = product.priceTo > product.priceFrom;
 	// "Price on quote": made-to-order variants at RM0 (seller quotes on the mockup).
-	// allQuote = no priced variants at all; showFrom = a cheaper/quote option exists.
+	// allQuote = no priced variants at all; showFrom = the printed price is only a
+	// floor — a cheaper/quote option exists, or a custom line's STARTING price the
+	// seller tops up on the mockup (86eyhn4mr).
 	const allQuote = product.hasQuotePricing && product.priceTo === 0;
-	const showFrom = priceVaries || product.hasQuotePricing;
+	const showFrom =
+		priceVaries || product.hasQuotePricing || hasStartingPrice(product.variants);
 	const firstImage = product.imageUrls[0];
 	// Minimum order quantity (≥2 when set — sanitizer normalizes 0/1 away).
 	const minQuantity = product.minQuantity ?? 0;
@@ -84,7 +87,13 @@ export function ProductCard({
 	} as const;
 
 	return (
-		<div className="group flex flex-col overflow-hidden rounded-2xl border border-border bg-card transition-shadow duration-200 hover:shadow-md">
+		// `h-full` so the card FILLS its track. Grid cells and the popular
+		// shelf's flex row both stretch, but without this the card was only as
+		// tall as its own content — so a two-line name, or the "N in cart" line
+		// appearing on some cards and not others, left a row of ragged tiles with
+		// their Add buttons at different heights. The body is already `flex-1`
+		// and the CTAs `mt-auto`, so filling is all that was missing.
+		<div className="group flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-card transition-shadow duration-200 hover:shadow-md">
 			<Link
 				{...pageLink}
 				// The photo is decorative here — the name link right below is the
@@ -166,7 +175,7 @@ export function ProductCard({
 						<>
 							{showFrom ? (
 								<span className="text-xs font-medium text-muted-foreground">
-									from{" "}
+									From{" "}
 								</span>
 							) : null}
 							{formatPrice(product.priceFrom, product.currency)}

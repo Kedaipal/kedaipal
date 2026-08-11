@@ -451,7 +451,7 @@ function ProductSummaryStrip({
 		{
 			options: editor.options,
 			rows: editor.rows,
-			hasCustomLine: editor.customLine !== null,
+			customLine: editor.customLine,
 		},
 		currency,
 	);
@@ -605,6 +605,9 @@ export function ProductForm({
 			// screen. Report only the actionable axis problem; row messages would
 			// be addressed to inputs the seller can't see.
 			const gridReady = cartesian(reconciled.options).length > 0;
+			// A made-to-order product reconciles to an EMPTY matrix — its custom
+			// line is the whole offer, and `buildSubmitVariants` emits that line
+			// as the product's only variant.
 			const built = buildSubmitVariants(reconciled.rows, editor.customLine);
 			const issues = [
 				...collectOptionIssues(reconciled.options),
@@ -934,7 +937,8 @@ export function ProductForm({
 			) : null}
 
 			{/* Sticky action bar — on a long form, save must never scroll away.
-			    Rare actions (archive) sit beside it as a quiet icon. */}
+			    Rare-but-reversible actions (archive/restore) sit beside it as a
+			    labelled outline button — an icon alone here read as "delete". */}
 			<form.Subscribe
 				selector={(s) => ({
 					canSubmit: s.canSubmit,

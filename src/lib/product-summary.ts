@@ -13,8 +13,13 @@ export type SummaryInput = {
 		price: string;
 		active: boolean;
 		blockWhenOutOfStock: boolean;
+		/** Needed to tell a **made-to-order** product (bespoke, quoted, mockup
+		 * approved) from one that's merely made fresh with a fixed price. */
+		requiresProof: boolean;
 	}[];
-	hasCustomLine: boolean;
+	/** The product's bespoke line, if it offers one — its price is the seller's
+	 * starting price, so the strip needs the value, not just its presence. */
+	customLine: { price: string } | null;
 };
 
 /** "12" / "12.50" — trailing .00 dropped so the strip reads like speech. */
@@ -23,10 +28,43 @@ function formatMajor(n: number): string {
 }
 
 export function describeProduct(
-	{ options, rows, hasCustomLine }: SummaryInput,
+	{ options, rows, customLine }: SummaryInput,
 	currency: string,
 ): string {
 	const parts: string[] = [];
+
+	// A made-to-order product describes itself: no choices, no stock, and a
+	// price that doesn't exist yet by design. Reading "One item · Made fresh ·
+	// No price yet" would frame all three as things left to fill in.
+	const madeToOrderOnly =
+		options.length === 0 &&
+		rows.length === 1 &&
+		rows[0]?.requiresProof === true &&
+		rows[0].blockWhenOutOfStock === false;
+	if (madeToOrderOnly) {
+		const base = parsePriceInput(rows[0].price.trim());
+		// No "from" prefix: one variant means the storefront prints a flat price.
+		return [
+			"Made to order",
+			base && base > 0 ? `${currency} ${formatMajor(base)}` : "Price on quote",
+		].join(" · ");
+	}
+
+	// The editor's **made-to-order type**: no matrix at all, the product IS its
+	// bespoke line (see VariantEditor.switchToMadeToOrder). Without this the
+	// strip fell through to "One item · No price yet · + custom option" — three
+	// wrong statements about a perfectly configured product. Its price is a
+	// STARTING price (the mockup quote lands on top), so this says exactly what
+	// the storefront prints: "From RM 40" (86eyhn4mr).
+	if (options.length === 0 && rows.length === 0 && customLine) {
+		const base = parsePriceInput(customLine.price.trim());
+		return [
+			"Made to order",
+			base && base > 0
+				? `From ${currency} ${formatMajor(base)}`
+				: "Price on quote",
+		].join(" · ");
+	}
 
 	// What the buyer picks.
 	if (options.length === 0) {
@@ -49,7 +87,7 @@ export function describeProduct(
 		const allTrack = judged.every((r) => r.blockWhenOutOfStock);
 		const allMto = judged.every((r) => !r.blockWhenOutOfStock);
 		parts.push(
-			allTrack ? "From stock" : allMto ? "Made to order" : "Mixed fulfilment",
+			allTrack ? "From stock" : allMto ? "Made fresh" : "Mixed fulfilment",
 		);
 	}
 
@@ -69,7 +107,7 @@ export function describeProduct(
 		);
 	}
 
-	if (hasCustomLine) parts.push("+ custom option");
+	if (customLine) parts.push("+ custom option");
 
 	return parts.join(" · ");
 }

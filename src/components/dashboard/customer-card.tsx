@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import type { Doc } from "../../../convex/_generated/dataModel";
+import { MASK_PII } from "../../lib/analytics-privacy";
 import { formatPhone, getDisplayName } from "../../lib/customer";
 import {
 	formatPrice,
@@ -48,6 +49,7 @@ export function CustomerCard({
 
 	return (
 		<Link
+			{...MASK_PII}
 			to="/app/customers/$customerId"
 			params={{ customerId: customer._id }}
 			className="group flex items-center gap-3 rounded-2xl border border-border bg-card px-3.5 py-3 transition-all hover:border-ring hover:shadow-sm"

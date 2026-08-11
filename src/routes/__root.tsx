@@ -1,11 +1,19 @@
 import { ClerkProvider, useAuth } from "@clerk/tanstack-react-start";
 import { TanStackDevtools } from "@tanstack/react-devtools";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
+import {
+	createRootRoute,
+	HeadContent,
+	Scripts,
+	useMatches,
+} from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
+import { ConvexProvider } from "convex/react";
 import { ConvexProviderWithClerk } from "convex/react-clerk";
 import { Toaster } from "sonner";
+import { useClarity } from "../hooks/useClarity";
 import { useGoogleAnalytics } from "../hooks/useGoogleAnalytics";
+import { isBuyerRouteId } from "../lib/buyer-routes";
 import { getConvexClient, getQueryClient } from "../lib/convex";
 import { clientEnv } from "../lib/env";
 import { getLocale } from "../paraglide/runtime";
@@ -57,6 +65,15 @@ export const Route = createRootRoute({
 });
 
 function Providers({ children }: { children: React.ReactNode }) {
+	// Buyer surfaces (storefront family + /track) render Clerk-free: shoppers
+	// can never sign in there, and Clerk's boot cost every buyer page view 8
+	// requests to per-IP rate-limited endpoints (86eyheqzv — see
+	// lib/buyer-routes.ts). Matched route ids — not raw pathnames — decide the
+	// branch, so the router's own precedence keeps `/pricing` vs `/$slug`
+	// unambiguous. Crossing between a buyer page and a Clerk page remounts the
+	// subtree; that crossing is rare (storefront → landing) and a clean remount
+	// is exactly what a provider swap needs.
+	const isBuyerSurface = useMatches().some((m) => isBuyerRouteId(m.routeId));
 	const publishableKey = clientEnv.VITE_CLERK_PUBLISHABLE_KEY;
 	if (!publishableKey || !clientEnv.VITE_CONVEX_URL) {
 		return <SetupNotice />;
@@ -65,13 +82,20 @@ function Providers({ children }: { children: React.ReactNode }) {
 	// getConvexClient(), which throws when VITE_CONVEX_URL is unset.
 	const convex = getConvexClient();
 	const queryClient = getQueryClient();
+	// QueryClientProvider wraps BOTH branches: buyer pages read via
+	// useQuery(convexQuery(...)) too, and keeping the provider outside the
+	// buyer/Clerk switch means the query cache survives that subtree remount.
 	return (
 		<QueryClientProvider client={queryClient}>
-			<ClerkProvider publishableKey={publishableKey}>
-				<ConvexProviderWithClerk client={convex} useAuth={useAuth}>
-					{children}
-				</ConvexProviderWithClerk>
-			</ClerkProvider>
+			{isBuyerSurface ? (
+				<ConvexProvider client={convex}>{children}</ConvexProvider>
+			) : (
+				<ClerkProvider publishableKey={publishableKey}>
+					<ConvexProviderWithClerk client={convex} useAuth={useAuth}>
+						{children}
+					</ConvexProviderWithClerk>
+				</ClerkProvider>
+			)}
 		</QueryClientProvider>
 	);
 }
@@ -104,6 +128,7 @@ function SetupNotice() {
 
 function RootDocument({ children }: { children: React.ReactNode }) {
 	useGoogleAnalytics();
+	useClarity();
 	return (
 		<html lang={getLocale()} suppressHydrationWarning>
 			<head>

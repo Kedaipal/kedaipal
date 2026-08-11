@@ -29,6 +29,7 @@ import { type ChangeEvent, type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
+import { formatFulfilmentTime } from "../../convex/lib/fulfilmentDate";
 import {
 	isActiveJobStatus,
 	isRiderManagedTransition,
@@ -66,6 +67,7 @@ import {
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
+import { CopyButton } from "../components/ui/copy-button";
 import {
 	Dialog,
 	DialogContent,
@@ -78,6 +80,8 @@ import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { canHardDeleteOrders } from "../lib/admin-actions";
+import { MASK_PII } from "../lib/analytics-privacy";
 import { formatPhone, orderCustomerLabel } from "../lib/customer";
 import {
 	convexErrorMessage,
@@ -302,6 +306,7 @@ function OrderDetailRoute() {
 	const advanceToStage = useMutation(api.orders.advanceToStage);
 	const markPaymentReceived = useMutation(api.orders.markPaymentReceived);
 	const sendPaymentReminder = useAction(api.orders.sendPaymentReminder);
+	const cancelRiderBooking = useAction(api.lalamove.cancelBooking);
 	const deleteOrder = useMutation(api.orders.deleteOrder);
 	// Opening the order IS the seller seeing it — drains it from the New bucket,
 	// the Home tile and the age escalation (86eyf1rck). Fire-and-forget: a failed
@@ -314,10 +319,15 @@ function OrderDetailRoute() {
 		void markSeen({ orderId }).catch(() => {});
 	}, [orderId, alreadySeen, markSeen]);
 	// Permanent hard delete is admin-only (Kedaipal support); a plain seller only
-	// ever cancels. Hide the danger action unless this is an admin act-as session —
-	// the server enforces the same rule, so this is discoverability, not the guard.
+	// ever cancels. `canHardDeleteOrders` mirrors the server gate and is shared with
+	// the inbox bulk bar so the two surfaces can't drift — this is discoverability,
+	// the server is the guard.
 	const retailer = useDashboardRetailer();
-	const canHardDelete = retailer?.actingAsAdmin === true;
+	const amIAdmin = useQuery(convexQuery(api.billing.amIAdmin, {})).data;
+	const canHardDelete = canHardDeleteOrders({
+		actingAsAdmin: retailer?.actingAsAdmin,
+		amIAdmin,
+	});
 	const proofUrl = useQuery(
 		convexQuery(
 			api.orders.getPaymentProofUrl,
@@ -348,13 +358,52 @@ function OrderDetailRoute() {
 	// their delivery charge). They never ship parcels, so no manual courier
 	// surface is offered anywhere on this page — 86eyff02p.
 	const lalamoveVendor = dispatchInfo?.bookingEnabled === true;
-	// The rider's webhook is demonstrably driving this order (active job + at
-	// least one event applied) — manual shipped/delivered advances are gated
-	// behind a confirm so the buyer isn't messaged early / without the tracking
-	// link. Webhook-less sellers (lastEventAt never set) keep manual control —
-	// that's their documented path.
-	const riderAutoUpdates =
+	// Collection service (86eyg0n8e): the rider collects FROM the customer, so
+	// the webhook only ever moves the JOB — the order status stays the
+	// seller's to advance by hand throughout.
+	// Read from the ORDER, frozen at create — never the store's live setting.
+	// A seller switching modes mid-flight must not retroactively change how an
+	// already-placed order behaves: flipping to collection would strip the
+	// rider gate off in-flight standard deliveries (letting a manual "shipped"
+	// message the buyer early, without the tracking link), and flipping away
+	// would impose that gate on a collection order it would strand.
+	const collectionService = order?.deliveryDirection === "collection";
+	// The dispatch card names itself after the TRIP it shows (or, with no job
+	// yet, the store's current mode) — mirror that exactly, since the
+	// cancel/delete warnings point the seller AT that card by name.
+	const dispatchCardName = (
+		dispatchInfo?.job
+			? dispatchInfo.job.deliveryDirection === "collection"
+			: dispatchInfo?.deliveryDirection === "collection"
+	)
+		? "Lalamove Collection"
+		: "Lalamove Delivery";
+	// A rider is mid-trip with this order: manual shipped/delivered advances are
+	// gated behind a confirm, so the seller can't message the buyer "on the way"
+	// before pickup (and without the tracking link).
+	//
+	// Gated from the moment of BOOKING, not from the first webhook event. The
+	// old predicate also required `lastEventAt`, which left the gate off during
+	// exactly the window it matters most — between placing the booking and the
+	// first event landing — so a seller could click straight through a live
+	// rider trip. The confirm-gated escape below is what protects the
+	// webhook-less seller instead, and cancelling the booking lifts the gate
+	// outright, so neither can be stranded.
+	//
+	// Never true for collection orders: there the rider drives the FRONT of the
+	// flow, not shipped/delivered, so this gate would both lie and strand.
+	// Derived from the same signal the tracking card reads, so the stepper gate
+	// and that card can't drift apart.
+	const riderHandlingTrip = hasActiveRiderBooking && !collectionService;
+	// Has that booking actually reported yet? Only then can we promise the
+	// status moves on its own — otherwise the seller may have no webhook.
+	const riderWebhookReporting =
 		!!dispatchInfo?.job && riderDrivesOrderStatus(dispatchInfo.job);
+	// Collection order whose goods are still with the buyer: nothing downstream
+	// ("packed", "cleaning", "ready") can be true yet. Mirrors the server gate
+	// in orders.advanceToStage.
+	const awaitingCollection =
+		collectionService && order?.collectedAt === undefined;
 	const crmCustomer = useQuery(
 		convexQuery(
 			api.customers.get,
@@ -381,6 +430,16 @@ function OrderDetailRoute() {
 	// anyway" stays reachable behind this confirm.
 	const [confirmManualAdvanceOpen, setConfirmManualAdvanceOpen] =
 		useState(false);
+	// Escape hatch for the collection gate — the seller fetched the items in
+	// person, or the rider's webhook never reported. Confirming stamps the
+	// arrival, so the order unblocks for good rather than asking every stage.
+	const [confirmCollectedOpen, setConfirmCollectedOpen] = useState(false);
+	// Raised right after a manual collection when a rider is STILL booked —
+	// they'd otherwise turn up for goods the seller already has. Never
+	// automatic: cancelling can cost a Lalamove fee once a driver is assigned,
+	// and that's the seller's money and their call.
+	const [confirmCancelRiderOpen, setConfirmCancelRiderOpen] = useState(false);
+	const [cancellingRider, setCancellingRider] = useState(false);
 	// Rare actions (cancel, delete, receipt) collapse behind one link at the bottom.
 	const [moreOpen, setMoreOpen] = useState(false);
 	// Optional method tag captured at confirm time (the seller has just verified
@@ -458,11 +517,20 @@ function OrderDetailRoute() {
 		Date.now(),
 	);
 
-	async function handleAdvance(stageId: string, shipment?: ShipmentFields) {
+	async function handleAdvance(
+		stageId: string,
+		shipment?: ShipmentFields,
+		opts?: { markCollected?: boolean },
+	) {
 		if (!order) return;
 		setPending(stageId);
 		try {
-			await advanceToStage({ orderId: order._id, stageId, ...shipment });
+			await advanceToStage({
+				orderId: order._id,
+				stageId,
+				...shipment,
+				...(opts?.markCollected ? { markCollected: true } : {}),
+			});
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 			// Rethrow so the mark-shipped dialog stays open for a retry (the toast
@@ -627,8 +695,15 @@ function OrderDetailRoute() {
 							// below so a dead webhook never strands the order.
 							const riderManaged =
 								!blocked &&
-								riderAutoUpdates &&
+								riderHandlingTrip &&
 								isRiderManagedTransition(nextStage.anchor, order.status);
+							// Collection: the goods aren't with the seller yet, so no production
+							// stage can be true. Never overlaps riderManaged (that one is off on
+							// collection orders) — same order the server checks them in.
+							const collectionPending =
+								!blocked &&
+								awaitingCollection &&
+								anchorOrdinal(nextStage.anchor) >= anchorOrdinal("packed");
 							const riderMoment =
 								nextStage.anchor === "delivered"
 									? "the rider drops off"
@@ -646,7 +721,7 @@ function OrderDetailRoute() {
 										type="button"
 										onClick={() => {
 											// Marking a delivery order shipped is THE moment the
-											// seller decides how it goes out, so prompt first: a
+											// seller decides how it goes out, so ask first: a
 											// parcel seller for courier + tracking (optional, rides
 											// the shipped WhatsApp update), a rider vendor for the
 											// booking they may not have made yet. Skipped when
@@ -655,26 +730,55 @@ function OrderDetailRoute() {
 											// shareLink onto carrierTrackingUrl, but a booked order
 											// must never be re-prompted even if that link is
 											// missing). Webhook-driven orders never reach here at
-											// all — the button is disabled.
+											// all — the button is disabled. Collection stores skip
+											// the prompt entirely: their rider trip is buyer→store
+											// (booked from the Collection card at confirm time), so
+											// offering "book a rider" at the shipped moment would
+											// dispatch ANOTHER collection — the return leg is its
+											// own order (86eyg0n8e, Leg 2 out of scope).
 											if (
 												nextStage.anchor === "shipped" &&
 												order.deliveryMethod === "delivery" &&
+												!collectionService &&
 												!hasActiveRiderBooking &&
 												!order.trackingNo &&
 												!order.carrierTrackingUrl
 											) {
+												// A rider vendor who CAN book goes straight to the
+												// booking modal on the card below — the same one
+												// prompt-on-packed opens, with the live price,
+												// vehicle switch and variance. An intermediate
+												// "how is this going out?" prompt in front of it
+												// was pure chrome for them. The parcel form (and
+												// the blocked-reason copy, which the booking modal
+												// can't show because there's nothing to quote)
+												// still belong to MarkShippedDialog.
+												if (
+													lalamoveVendor &&
+													dispatchInfo?.blockReason === null
+												) {
+													setBookRequestToken((t) => t + 1);
+													return;
+												}
 												setShipDialogOpen(true);
 												return;
 											}
 											void handleAdvance(nextStage.id).catch(() => {});
 										}}
-										disabled={pending !== null || blocked || riderManaged}
+										disabled={
+											pending !== null ||
+											blocked ||
+											riderManaged ||
+											collectionPending
+										}
 										className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-foreground text-[15px] font-bold text-background transition-opacity hover:opacity-95 disabled:opacity-55"
 									>
 										{pending === nextStage.id ? (
 											"Updating…"
 										) : blocked ? (
 											`${advanceLabel} — awaiting mockup`
+										) : collectionPending ? (
+											`${advanceLabel} — awaiting collection`
 										) : riderManaged ? (
 											`${advanceLabel} — automatic`
 										) : (
@@ -684,11 +788,37 @@ function OrderDetailRoute() {
 											</>
 										)}
 									</button>
-									{riderManaged ? (
+									{collectionPending ? (
 										<p className="text-xs leading-relaxed text-muted-foreground">
-											A Lalamove rider is on this order — it moves to{" "}
-											<b>{stageLabel(nextStage, "en")}</b> on its own when{" "}
-											{riderMoment}.{" "}
+											This order is still with your customer — send a rider to
+											collect it, and you can move it on once the items are with
+											you.{" "}
+											<button
+												type="button"
+												onClick={() => setConfirmCollectedOpen(true)}
+												disabled={pending !== null}
+												className="font-medium underline underline-offset-2"
+											>
+												I already have the items
+											</button>{" "}
+											if you collected them yourself.
+										</p>
+									) : riderManaged ? (
+										<p className="text-xs leading-relaxed text-muted-foreground">
+											{riderWebhookReporting ? (
+												<>
+													A Lalamove rider is on this order — it moves to{" "}
+													<b>{stageLabel(nextStage, "en")}</b> on its own when{" "}
+													{riderMoment}.
+												</>
+											) : (
+												<>
+													A Lalamove rider is booked for this order — it moves
+													to <b>{stageLabel(nextStage, "en")}</b> on its own
+													once {riderMoment}, as long as your Lalamove webhook
+													is set up.
+												</>
+											)}{" "}
 											<button
 												type="button"
 												onClick={() => setConfirmManualAdvanceOpen(true)}
@@ -697,7 +827,9 @@ function OrderDetailRoute() {
 											>
 												Update manually
 											</button>{" "}
-											if the automatic update didn&apos;t arrive.
+											{riderWebhookReporting
+												? "if the automatic update didn't arrive."
+												: "to move it yourself instead."}
 										</p>
 									) : null}
 								</div>
@@ -752,7 +884,10 @@ function OrderDetailRoute() {
 			{/* Shopper's note + optional custom-line reference photo — front-and-centre
 			    so it isn't missed when fulfilling. Plain text, escaped by React. */}
 			{order.customerNote || order.customerImageStorageId ? (
-				<section className="flex gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4">
+				<section
+					{...MASK_PII}
+					className="flex gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4"
+				>
 					<StickyNote className="size-5 shrink-0 text-amber-600" />
 					<div className="min-w-0 flex-1">
 						<p className="text-xs font-semibold uppercase tracking-widest text-amber-700">
@@ -957,19 +1092,44 @@ function OrderDetailRoute() {
 			{/* Received → read-only confirmation. */}
 			{paymentStatus === "received" ? (
 				<section className="flex items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4">
-					<BadgeCheck className="size-5 text-emerald-700" />
+					<BadgeCheck className="size-5 shrink-0 text-emerald-700" />
 					<div className="min-w-0 flex-1">
 						<p className="text-xs font-semibold uppercase tracking-widest text-emerald-800">
 							Payment received
 						</p>
 						<p className="text-sm text-emerald-900">
-							{order.paymentReceivedAt
-								? `Confirmed ${formatRelative(order.paymentReceivedAt)}`
-								: "Confirmed by you"}
+							{order.gatewayPaymentId
+								? // Auto-confirmed by the HitPay webhook (86eyb6z3a) — say so,
+									// since nobody on the team pressed the button.
+									`Paid online via HitPay${order.paymentReceivedAt ? ` ${formatRelative(order.paymentReceivedAt)}` : ""}`
+								: order.paymentReceivedAt
+									? `Confirmed ${formatRelative(order.paymentReceivedAt)}`
+									: "Confirmed by you"}
 							{order.paymentMethod
 								? ` · ${paymentMethodLabel(order.paymentMethod)}`
 								: ""}
 						</p>
+						{order.gatewayPaymentId ? (
+							// The seller is the side that pastes this into HitPay's
+							// dashboard search (to refund or reconcile), so the copy
+							// affordance belongs here at least as much as on the buyer's
+							// page — it was the buyer-only half of "one number both sides
+							// quote". `break-all` over `truncate`: a half-shown reference
+							// can't be matched against a dashboard entry.
+							<div className="mt-1 flex items-start justify-between gap-2">
+								<p className="min-w-0 break-all font-mono text-xs text-emerald-800/80">
+									Ref {order.gatewayPaymentId}
+								</p>
+								<CopyButton
+									value={order.gatewayPaymentId}
+									ariaLabel="Copy payment reference"
+									successMessage="Payment reference copied"
+									// Layout only — no colour override, so the primitive's
+									// own "Copied" green still lands on tap.
+									className="-my-2"
+								/>
+							</div>
+						) : null}
 					</div>
 				</section>
 			) : null}
@@ -977,7 +1137,10 @@ function OrderDetailRoute() {
 			{/* Customer — CRM context inline (order count, lifetime spend) with
 			    WhatsApp as the hero contact action. The avatar row deep-links to
 			    the full profile when one exists. */}
-			<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+			<section
+				{...MASK_PII}
+				className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4"
+			>
 				{(() => {
 					const avatarRow = (
 						<>
@@ -1057,7 +1220,9 @@ function OrderDetailRoute() {
 							? order.pickupSnapshot?.locationType === "drop_off"
 								? "Drop-off"
 								: "Self Collect"
-							: "Delivery"}
+							: collectionService
+								? "Collection"
+								: "Delivery"}
 					</p>
 					{order.fulfilmentDate !== undefined && order.source !== "counter" ? (
 						<div className="flex items-center gap-1.5">
@@ -1066,13 +1231,20 @@ function OrderDetailRoute() {
 									? order.pickupSnapshot?.locationType === "drop_off"
 										? "Meet on"
 										: "Collect on"
-									: "Deliver on"}
+									: collectionService
+										? "Collect on"
+										: "Deliver on"}
 							</span>
 							<FulfilmentDateBadge
 								epoch={order.fulfilmentDate}
 								size="md"
-								muted={isTerminal}
+								muted={isTerminal || order.collectedAt !== undefined}
 							/>
+							{order.fulfilmentTimeMinutes !== undefined ? (
+								<span className="text-sm font-medium">
+									{formatFulfilmentTime(order.fulfilmentTimeMinutes)}
+								</span>
+							) : null}
 						</div>
 					) : null}
 				</div>
@@ -1256,15 +1428,36 @@ function OrderDetailRoute() {
 			    re-quote confirm, live job card (driver/plate/tracking), failed-
 			    booking rebook, and disabled-with-reason states. 86eyb5hrf. */}
 			{!isSelfCollect ? (
-				<BookDeliveryCard order={order} bookRequestToken={bookRequestToken} />
+				<BookDeliveryCard
+					order={order}
+					bookRequestToken={bookRequestToken}
+					// The way out of that modal when this one is going by hand. The
+					// card renders it ONLY on the manual-advance path, so the packed
+					// prompt and the card's own button stay a plain book-or-not.
+					advanceWithoutRider={
+						nextStage
+							? {
+									label: `${stageLabel(nextStage, "en")} without a rider`,
+									onConfirm: () => {
+										void handleAdvance(nextStage.id);
+									},
+								}
+							: undefined
+					}
+					onAdvanceBookUnavailable={() => setShipDialogOpen(true)}
+				/>
 			) : null}
 
-			{/* Delivery address (delivery orders only) */}
+			{/* Delivery address (delivery orders only). Collection orders relabel:
+			    this is where the rider COLLECTS, not where anything is delivered
+			    (frozen order.deliveryDirection, 86eyg0n8e). */}
 			{!isSelfCollect && order.deliveryAddress ? (
 				<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 					<div className="flex items-center justify-between">
 						<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-							Delivery Address
+							{order.deliveryDirection === "collection"
+								? "Collect From"
+								: "Delivery Address"}
 						</p>
 						<div className="flex items-center gap-1">
 							<button
@@ -1380,9 +1573,9 @@ function OrderDetailRoute() {
 								{pending === "cancel" ? "Updating…" : "Cancel Order"}
 							</Button>
 						) : null}
-						{/* Permanent hard delete — admin act-as only (Kedaipal support).
-						    Hidden for a plain seller, who cancels instead; the server
-						    enforces the same rule. Works in any status; irreversible. */}
+						{/* Permanent hard delete — Kedaipal admins only (own store or
+						    act-as). Hidden for a plain seller, who cancels instead; the
+						    server enforces the same rule. Any status; irreversible. */}
 						{canHardDelete ? (
 							<>
 								<Button
@@ -1395,8 +1588,9 @@ function OrderDetailRoute() {
 									{pending === "delete" ? "Deleting…" : "Delete permanently"}
 								</Button>
 								<p className="border-t border-border bg-muted/30 px-4 py-2.5 text-[11px] leading-snug text-muted-foreground">
-									Deleting removes this order and its records for good — this
-									can't be undone.
+									Kedaipal admin only — sellers don't see this. Deleting removes
+									this order and its records for good, and is recorded in the
+									admin log.
 								</p>
 							</>
 						) : null}
@@ -1410,16 +1604,12 @@ function OrderDetailRoute() {
 					onOpenChange={setShipDialogOpen}
 					advanceLabel={`Mark as ${stageLabel(nextStage, "en")}`}
 					onConfirm={(fields) => handleAdvance(nextStage.id, fields)}
-					// A rider vendor gets the rider prompt, never the parcel-courier
-					// form; blockReason === null ⟺ a rider could be booked on THIS
-					// order right now (keys ok, plan ok, coords present, no active
-					// job), otherwise the prompt states the reason instead.
+					// A rider vendor gets the blocked-rider notice, never the
+					// parcel-courier form — and never a booking CTA, because a
+					// bookable order never reaches this dialog (the advance opens
+					// the dispatch card's booking modal instead).
 					lalamoveVendor={lalamoveVendor}
 					riderBlockReason={dispatchInfo?.blockReason ?? null}
-					onBookRider={() => {
-						setShipDialogOpen(false);
-						setBookRequestToken((t) => t + 1);
-					}}
 				/>
 			) : null}
 
@@ -1439,13 +1629,65 @@ function OrderDetailRoute() {
 				/>
 			) : null}
 
+			{/* The rider is now pointless — the goods are already with the seller.
+			    Asked, never automatic: Lalamove can charge a cancellation fee once
+			    a driver is assigned, so the spend stays the seller's decision. */}
+			<ConfirmDialog
+				open={confirmCancelRiderOpen}
+				onOpenChange={setConfirmCancelRiderOpen}
+				title="Cancel the rider booking?"
+				description="You've marked this order as collected, but a Lalamove rider is still booked to pick it up — they'll turn up for items you already have. Cancelling stops that; Lalamove may charge a fee if a driver was already assigned."
+				confirmLabel={cancellingRider ? "Cancelling…" : "Cancel the rider"}
+				cancelLabel="Keep the booking"
+				destructive
+				onConfirm={async () => {
+					setCancellingRider(true);
+					try {
+						const result = await cancelRiderBooking({
+							shortId: order.shortId,
+						});
+						if (result.ok) toast.success("Lalamove booking cancelled.");
+						else toast.error(result.message ?? "Couldn't cancel the booking.");
+					} finally {
+						setCancellingRider(false);
+					}
+				}}
+			/>
+
+			{/* Collection escape: the seller has the items without a rider having
+			    reported it. Confirming records the arrival, so this asks once —
+			    every later stage moves freely. */}
+			{nextStage ? (
+				<ConfirmDialog
+					open={confirmCollectedOpen}
+					onOpenChange={setConfirmCollectedOpen}
+					title="Do you already have the items?"
+					description={`Confirm only if your customer's items are physically with you — no rider has reported collecting them. This marks the order as collected, so you can move it through your stages from here.${
+						hasActiveRiderBooking
+							? " A rider is still booked for this order — we'll ask whether to cancel them next."
+							: ""
+					}`}
+					confirmLabel="Yes, I have the items"
+					cancelLabel="Not yet"
+					onConfirm={async () => {
+						await handleAdvance(nextStage.id, undefined, {
+							markCollected: true,
+						});
+						// Only after the collection is actually recorded — a failed
+						// advance must not leave the seller cancelling a rider for
+						// an order that never moved.
+						if (hasActiveRiderBooking) setConfirmCancelRiderOpen(true);
+					}}
+				/>
+			) : null}
+
 			<ConfirmDialog
 				open={confirmCancelOpen}
 				onOpenChange={setConfirmCancelOpen}
 				title={`Cancel order #${order.shortId}?`}
 				description={
 					hasActiveRiderBooking
-						? "The customer is notified over WhatsApp, stock is restored, and this can't be undone. ⚠️ A Lalamove rider booking is still active on this order — cancel it from the Lalamove Delivery card too, or you may pay for a wasted trip."
+						? `The customer is notified over WhatsApp, stock is restored, and this can't be undone. ⚠️ A Lalamove rider booking is still active on this order — cancel it from the ${dispatchCardName} card too, or you may pay for a wasted trip.`
 						: "The customer is notified over WhatsApp, stock is restored, and this can't be undone."
 				}
 				confirmLabel="Cancel order"
@@ -1462,12 +1704,12 @@ function OrderDetailRoute() {
 					paymentStatus === "received" || order.status === "delivered"
 						? `This order is paid/completed — deleting erases it from your sales records, receipts and CSV exports. Stock isn't affected and the customer is NOT notified. This can't be undone.${
 								hasActiveRiderBooking
-									? " ⚠️ A Lalamove rider booking is still active — cancel it from the Lalamove Delivery card FIRST or the rider still shows up."
+									? ` ⚠️ A Lalamove rider booking is still active — cancel it from the ${dispatchCardName} card FIRST or the rider still shows up.`
 									: ""
 							}`
 						: `This erases the order, its timeline and any uploaded images for good.${
 								hasActiveRiderBooking
-									? " ⚠️ A Lalamove rider booking is still active — cancel it from the Lalamove Delivery card FIRST or the rider still shows up."
+									? ` ⚠️ A Lalamove rider booking is still active — cancel it from the ${dispatchCardName} card FIRST or the rider still shows up.`
 									: ""
 							}${
 								order.status === "cancelled"

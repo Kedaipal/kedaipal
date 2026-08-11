@@ -3,7 +3,7 @@
  * Regression cover for the PR #156 review finding (86eyex5vk).
  *
  * Validation reads the EDITOR ("validate whenever axes exist"), so the render
- * must too. While the axis block was still gated on `state.hasChoices`, the
+ * must too. While the axis block was still gated on the step-2 answer, the
  * divergent state this PR exists to survive — flag says "just one item" while
  * `editor.options` holds an axis — made step 2 raise an `axisName`/`axisValues`
  * issue against an input that was never mounted. The wizard has no generic
@@ -39,7 +39,7 @@ function divergent(overrides: Partial<WizardState> = {}): WizardState {
 		name: "Kuih lapis",
 		description: "",
 		images: [],
-		hasChoices: false,
+		shape: "single",
 		editor: {
 			options: [{ name: "", values: ["S"] }],
 			rows: [{ ...emptyRow(["S"]), price: "10", stock: "5" }],
@@ -77,10 +77,10 @@ describe("wizard step 2 — axes render whenever they exist", () => {
 		);
 	});
 
-	it("mounts the axis input the issue is addressed to, despite hasChoices=false", () => {
+	it("mounts the axis input the issue is addressed to, despite a single-item answer", () => {
 		renderWizard(divergent());
 		// Opens on step 2 (first step with an issue).
-		expect(screen.getByText("Does the buyer pick anything?")).toBeTruthy();
+		expect(screen.getByText("What kind of product is it?")).toBeTruthy();
 		// The offending input exists, so the message has somewhere to land and
 		// the seller has a way out.
 		expect(screen.getByPlaceholderText("Add a choice")).toBeTruthy();
@@ -91,7 +91,7 @@ describe("wizard step 2 — axes render whenever they exist", () => {
 		renderWizard(divergent());
 		fireEvent.click(screen.getByRole("button", { name: /continue/i }));
 		// Still on step 2, but now WITH a visible, actionable message.
-		expect(screen.getByText("Does the buyer pick anything?")).toBeTruthy();
+		expect(screen.getByText("What kind of product is it?")).toBeTruthy();
 		expect(screen.getByText(/Give this option a name/i)).toBeTruthy();
 	});
 
@@ -109,13 +109,11 @@ describe("wizard step 2 — axes render whenever they exist", () => {
 
 	it("still asks the question when the editor genuinely has no axes", () => {
 		const fresh = divergent({
-			hasChoices: null,
+			shape: null,
 			editor: { options: [], rows: [emptyRow([])], customLine: null },
 		});
 		renderWizard(fresh);
-		expect(wizardStepIssues(fresh, 2).map((i) => i.field)).toContain(
-			"hasChoices",
-		);
+		expect(wizardStepIssues(fresh, 2).map((i) => i.field)).toContain("shape");
 		// No axis block until the seller answers — the normal first-run path.
 		expect(screen.queryByPlaceholderText("Add a choice")).toBeNull();
 	});

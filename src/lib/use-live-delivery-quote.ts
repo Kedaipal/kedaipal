@@ -34,6 +34,7 @@ export function useLiveDeliveryQuote({
 	longitude,
 	getAddressLabel,
 	fulfilmentDate,
+	fulfilmentTimeMinutes,
 }: {
 	/** False while the store isn't live-priced / the surface is closed. */
 	enabled: boolean;
@@ -47,6 +48,10 @@ export function useLiveDeliveryQuote({
 	/** Epoch-ms MYT midnight of the chosen day — pre-orders are priced for
 	 * THEIR day, so date changes re-quote like address changes. */
 	fulfilmentDate?: number;
+	/** Chosen time on that day (minutes since MYT midnight, 86eyg0n8e
+	 * follow-up) — the quote then prices the exact moment instead of the noon
+	 * heuristic; a time change re-quotes exactly like a date change. */
+	fulfilmentTimeMinutes?: number;
 }): LiveDeliveryQuoteState {
 	const quoteLalamove = useAction(api.lalamove.quoteForCheckout);
 	const [quote, setQuote] = useState<LiveDeliveryQuoteState>({
@@ -73,6 +78,7 @@ export function useLiveDeliveryQuote({
 				longitude,
 				address: labelRef.current(),
 				fulfilmentDate,
+				fulfilmentTimeMinutes,
 			})
 				.then((result) => {
 					if (seq.current !== mySeq) return; // superseded by a newer pick
@@ -88,7 +94,15 @@ export function useLiveDeliveryQuote({
 				});
 		}, 400);
 		return () => clearTimeout(timer);
-	}, [enabled, retailerId, hasCoords, latitude, longitude, fulfilmentDate]);
+	}, [
+		enabled,
+		retailerId,
+		hasCoords,
+		latitude,
+		longitude,
+		fulfilmentDate,
+		fulfilmentTimeMinutes,
+	]);
 
 	return quote;
 }

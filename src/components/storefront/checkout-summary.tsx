@@ -1,4 +1,4 @@
-import { Minus, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, Minus, Package, Plus, Trash2, Truck } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import type { PublicDeliveryQuote } from "../../../convex/delivery";
 import type { CartItem, UseCart } from "../../hooks/useCart";
@@ -20,6 +20,18 @@ import { formatPrice } from "../../lib/format";
  * `CheckoutTotals` / the `totals` slot — so this stays unit-testable without
  * Convex or router providers.
  */
+
+/**
+ * The leading icon box every expanded receipt row starts with. Shared so the
+ * custom line's Remove and the stepper's minus/trash land on the SAME x.
+ *
+ * `tap-target` is what actually sets the width here — it forces a 44px minimum
+ * (the mobile rule), which overrides `size-8`'s 32px. That's why the two icons
+ * sat 6px apart: the stepper centred its glyph in the 44px button while the
+ * Remove button's own icon well was a plain 32px span. Both go through this.
+ */
+const ROW_ICON_WELL =
+	"tap-target flex size-8 shrink-0 items-center justify-center";
 
 /** Min-quantity shortfall per product (from convex/lib/minOrderRules). */
 export interface QtyShortfall {
@@ -133,6 +145,17 @@ export function CheckoutSummary({
 									}
 									className="flex min-h-8 w-full items-baseline gap-2 py-1 text-left font-mono text-[13px] leading-6"
 								>
+									{/* Disclosure caret — these rows have been tappable since the
+									    ticket redesign, but the only hint was a caption under the
+									    whole list. Sits on the LEFT so the money column stays
+									    flush; its ~1rem footprint matches the `pl-4` the note /
+									    attachment sub-lines already indent by. */}
+									<ChevronDown
+										aria-hidden
+										className={`size-3 shrink-0 translate-y-0.5 text-muted-foreground transition-transform motion-reduce:transition-none ${
+											expanded ? "rotate-180" : ""
+										}`}
+									/>
 									<span className="min-w-0 truncate">{receiptLabel(item)}</span>
 									<span
 										aria-hidden
@@ -141,7 +164,12 @@ export function CheckoutSummary({
 									<span className="shrink-0 tabular-nums">
 										{item.quoteOnRequest
 											? "On quote"
-											: receiptAmount(item.price * item.quantity)}
+											: // A priced custom line is the seller's STARTING price —
+												// the mockup quote lands on top, so the receipt must not
+												// print it as the settled amount (86eyhn4mr).
+												`${item.isCustom ? "From " : ""}${receiptAmount(
+													item.price * item.quantity,
+												)}`}
 									</span>
 								</button>
 
@@ -171,14 +199,17 @@ export function CheckoutSummary({
 									<div className="flex items-center justify-between gap-3 pb-2 pt-1">
 										{item.isCustom ? (
 											// Custom lines are one bespoke negotiation, locked to
-											// qty 1 — no stepper, just a way out.
+											// qty 1 — no stepper, just a way out. Borderless, like
+											// the stepper it stands in for.
 											<button
 												type="button"
 												onClick={() => cart.removeItem(item.variantId)}
-												className="tap-target flex w-fit items-center gap-1 rounded-full border border-border px-2.5 py-1 text-[11px] font-medium text-muted-foreground hover:border-destructive/40 hover:text-destructive"
+												className="flex w-fit items-center gap-1 rounded-lg pr-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-destructive"
 												aria-label={`Remove ${item.name}`}
 											>
-												<Trash2 className="size-3" aria-hidden />
+												<span className={ROW_ICON_WELL}>
+													<Trash2 className="size-4" aria-hidden />
+												</span>
 												Remove
 											</button>
 										) : (
@@ -248,18 +279,23 @@ function QtyStepper({
 }) {
 	const atMax = max !== undefined && quantity >= max;
 	const removing = quantity === 1;
+	// Bare glyphs, no ringed circles. Three outlined pills for −/qty/+ inside an
+	// already-bordered receipt line read as heavy chrome around a one-digit
+	// number; the icon alone is the control. The 44px tap target is unchanged —
+	// `tap-target` sizes the hit area, the border was only ever decoration.
+	const stepBtn = `${ROW_ICON_WELL} rounded-lg text-muted-foreground transition-colors`;
 	return (
-		<div className="flex items-center gap-1.5">
+		<div className="flex items-center gap-1">
 			<button
 				type="button"
 				onClick={() => onChange(quantity - 1)}
-				className="tap-target flex size-8 items-center justify-center rounded-full border border-border text-muted-foreground transition-colors hover:border-accent/50 hover:text-foreground"
+				className={`${stepBtn} hover:bg-muted hover:text-foreground`}
 				aria-label={removing ? `Remove ${name}` : `Decrease ${name} quantity`}
 			>
 				{removing ? (
-					<Trash2 className="size-3.5" aria-hidden />
+					<Trash2 className="size-4" aria-hidden />
 				) : (
-					<Minus className="size-3.5" aria-hidden />
+					<Minus className="size-4" aria-hidden />
 				)}
 			</button>
 			<span className="min-w-6 text-center text-sm font-semibold tabular-nums">
@@ -269,10 +305,10 @@ function QtyStepper({
 				type="button"
 				onClick={() => onChange(quantity + 1)}
 				disabled={atMax}
-				className="tap-target flex size-8 items-center justify-center rounded-full border border-border text-muted-foreground transition-colors disabled:opacity-40 enabled:hover:border-accent/50 enabled:hover:text-foreground"
+				className={`${stepBtn} disabled:opacity-40 enabled:hover:bg-muted enabled:hover:text-foreground`}
 				aria-label={`Increase ${name} quantity`}
 			>
-				<Plus className="size-3.5" aria-hidden />
+				<Plus className="size-4" aria-hidden />
 			</button>
 			{atMax ? (
 				<span className="text-[11px] text-muted-foreground">
@@ -308,6 +344,36 @@ interface CheckoutTotalsProps {
 	blockedCopy?: string;
 	/** Min-order-rule alert lines (the reason the CTA is disabled). */
 	minRuleAlerts?: ReactNode;
+	/** Collection-service store (86eyg0n8e) — the rider fee line reads
+	 * "Collection" instead of "Delivery". */
+	collectsFromCustomer?: boolean;
+	/** The cart holds a custom line, so this TOTAL is not the bill: a quote-only
+	 * line contributes nothing yet, and a starting-price line only contributes
+	 * its floor — the seller settles both on the mockup. Prints "+ your quote"
+	 * beside the total, the same posture as a pending delivery fee (86eyhn4mr). */
+	awaitingQuote?: boolean;
+}
+
+/**
+ * What's still missing from the printed total, named beside it ("+ your quote
+ * + delivery"). Both holds can be open at once — a custom cake to an
+ * out-of-range address — so they read as one list rather than one silently
+ * winning. Shared by the receipt block and the mobile bottom bar so the two
+ * totals can never disagree about how final they are.
+ */
+export function pendingTotalParts({
+	awaitingQuote = false,
+	quotePending = false,
+	collectsFromCustomer = false,
+}: {
+	awaitingQuote?: boolean;
+	quotePending?: boolean;
+	collectsFromCustomer?: boolean;
+}): string[] {
+	const parts: string[] = [];
+	if (awaitingQuote) parts.push("your quote");
+	if (quotePending) parts.push(collectsFromCustomer ? "collection" : "delivery");
+	return parts;
 }
 
 export function CheckoutTotals({
@@ -318,9 +384,22 @@ export function CheckoutTotals({
 	quote,
 	blockedCopy,
 	minRuleAlerts,
+	collectsFromCustomer = false,
+	awaitingQuote = false,
 }: CheckoutTotalsProps) {
 	const deliveryFee = quote?.kind === "fee" ? quote.fee : 0;
 	const total = subtotal + pickupFee + deliveryFee;
+	const feeLabel = collectsFromCustomer ? "Collection" : "Delivery";
+	const pendingParts = pendingTotalParts({
+		awaitingQuote,
+		quotePending: quote?.kind === "pending",
+		collectsFromCustomer,
+	});
+
+	// One icon per fulfilment charge so the row is legible at a glance instead of
+	// blending into the item lines above it. Every delivery state gets the same
+	// truck (fee / free / pending / calculating are one concept, not four).
+	const truck = <Truck className="size-3.5 shrink-0" aria-hidden />;
 
 	return (
 		<div className="flex flex-col">
@@ -329,21 +408,26 @@ export function CheckoutTotals({
 			    (the items above already sum in plain sight). */}
 			{pickupFee > 0 ? (
 				<FeeLine
+					icon={<Package className="size-3.5 shrink-0" aria-hidden />}
 					label={pickupFeeLabel ? `Pickup · ${pickupFeeLabel}` : "Pickup fee"}
 					value={receiptAmount(pickupFee)}
 				/>
 			) : null}
 			{deliveryFee > 0 ? (
-				<FeeLine label="Delivery" value={receiptAmount(deliveryFee)} />
+				<FeeLine
+					icon={truck}
+					label={feeLabel}
+					value={receiptAmount(deliveryFee)}
+				/>
 			) : null}
 			{quote?.kind === "free" && quote.reason === "threshold" ? (
-				<FeeLine label="Delivery" value="FREE" accent />
+				<FeeLine icon={truck} label={feeLabel} value="FREE" accent />
 			) : null}
 			{quote?.kind === "pending" ? (
-				<FeeLine label="Delivery" value="Seller confirms" />
+				<FeeLine icon={truck} label={feeLabel} value="Seller confirms" />
 			) : null}
 			{quote?.kind === "calculating" ? (
-				<FeeLine label="Delivery" value="Calculating…" pulse />
+				<FeeLine icon={truck} label={feeLabel} value="Calculating…" pulse />
 			) : null}
 
 			<div className="mt-2 flex items-center justify-between border-t-2 border-dashed border-border pt-3">
@@ -352,10 +436,10 @@ export function CheckoutTotals({
 				</span>
 				<span className="text-xl font-bold tabular-nums">
 					{formatPrice(total, currency)}
-					{quote?.kind === "pending" ? (
+					{pendingParts.length > 0 ? (
 						<span className="text-sm font-medium text-muted-foreground">
 							{" "}
-							+ delivery
+							+ {pendingParts.join(" + ")}
 						</span>
 					) : null}
 				</span>
@@ -374,13 +458,18 @@ export function CheckoutTotals({
 	);
 }
 
-/** One muted charge line in receipt type — "Delivery ······ 8.00". */
+/** One muted charge line in receipt type — "🚚 Delivery ······ 8.00". */
 function FeeLine({
+	icon,
 	label,
 	value,
 	accent = false,
 	pulse = false,
 }: {
+	/** Fulfilment glyph (truck / package) — decorative, the label carries the
+	 * meaning. Occupies the same left gutter as the items' disclosure caret, so
+	 * the whole receipt keeps one text column. */
+	icon?: ReactNode;
 	label: string;
 	value: string;
 	accent?: boolean;
@@ -392,6 +481,7 @@ function FeeLine({
 				accent ? "text-accent-emphasis" : "text-muted-foreground"
 			}`}
 		>
+			{icon ? <span className="translate-y-0.5">{icon}</span> : null}
 			<span className="min-w-0 truncate">{label}</span>
 			<span
 				aria-hidden

@@ -92,6 +92,9 @@ export type OrderReceiptData = {
 	pickupLabel?: string;
 	// Frozen delivery charge (sen) — its own totals row, same rule as pickupFee.
 	deliveryFee?: number;
+	// Collection service (86eyg0n8e): the rider collected FROM the buyer, so
+	// the charge row prints "Collection fee", never "Delivery fee".
+	deliveryDirection?: "standard" | "collection";
 	// True while the delivery charge awaits seller confirmation — the invoice
 	// prints a "to be confirmed" note so the total never reads as final.
 	deliveryFeePending?: boolean;
@@ -136,6 +139,7 @@ type OrderForReceipt = {
 	pickupFee?: number;
 	pickupSnapshot?: { label: string };
 	deliveryFee?: number;
+	deliveryDirection?: "standard" | "collection";
 	deliveryFeePending?: boolean;
 	total: number;
 	currency: string;
@@ -225,6 +229,7 @@ export function orderToReceiptData(args: {
 			order.deliveryFee && order.deliveryFee > 0
 				? order.deliveryFee
 				: undefined,
+		deliveryDirection: order.deliveryDirection,
 		deliveryFeePending: order.deliveryFeePending === true || undefined,
 		total: order.total,
 		currency: order.currency,

@@ -23,6 +23,7 @@ import { cartesian, type OptionAxis, variantLabel } from "../../lib/variant";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { CUSTOM_LINE_COPY, MOCKUP_APPROVAL_COPY } from "./advanced-option-copy";
 
 // Mirrors the server caps in convex/lib/variant.ts.
 const MAX_AXES = 2;
@@ -103,6 +104,33 @@ function IssueText({ message }: { message: string | undefined }) {
 			{message}
 		</span>
 	);
+}
+
+/**
+ * Is this draft the **"Made to order" product type** (ClickUp `86eyfq04j`)?
+ *
+ * The type IS a custom line: no axes, no cartesian matrix, one bespoke offer.
+ * That's the whole point — modelling it as `isCustom` means it inherits the
+ * flow the storefront already has for bespoke work (a request box + reference
+ * photo, a "Choose" card that routes to the product page instead of a one-tap
+ * quick-add, a cart line locked to qty 1, `requiresProof` → `mockupStatus`)
+ * rather than needing a second parallel path for each of those.
+ *
+ * The server allows the empty matrix for exactly this shape — see
+ * `validateVariantSet`'s `customOnly`.
+ */
+export function isMadeToOrderOnly(state: VariantEditorState): boolean {
+	return (
+		state.options.length === 0 &&
+		state.rows.length === 0 &&
+		state.customLine !== null
+	);
+}
+
+/** A fresh bespoke offer — the one line a made-to-order product sells. Price
+ * blank = "Price on quote"; the seller can type a fixed one instead. */
+export function emptyCustomLine(): CustomLineDraft {
+	return { label: "", price: "", prompt: "", imageStorageIds: [] };
 }
 
 export function emptyRow(optionValues: string[]): VariantRow {
@@ -204,18 +232,25 @@ export function reconcileForSubmit(
 	rows: VariantRow[],
 ): { options: OptionAxis[]; rows: VariantRow[] } {
 	const sanitized = sanitizeOptions(options);
+	// A made-to-order product has NO matrix — its custom line is the whole offer
+	// (86eyfq04j). `cartesian([])` is `[[]]`, so without this the reconcile would
+	// helpfully invent the empty matrix row the type exists to avoid.
+	if (sanitized.length === 0 && rows.length === 0) {
+		return { options: sanitized, rows };
+	}
+	const priced = rows;
 	const expected = cartesian(sanitized);
-	if (expected.length === 0) return { options: sanitized, rows };
+	if (expected.length === 0) return { options: sanitized, rows: priced };
 	// Coverage, not just count: the server checks BOTH the cartesian size and
 	// that every combination is present, so two rows carrying the same (or a
 	// stale) tuple pass a length check and still fail on "Missing variant for
 	// combination". Deduping through a Set catches duplicates for free.
-	const present = new Set(rows.map((r) => variantLabel(r.optionValues)));
+	const present = new Set(priced.map((r) => variantLabel(r.optionValues)));
 	const covered =
-		rows.length === expected.length &&
+		priced.length === expected.length &&
 		expected.every((combo) => present.has(variantLabel(combo)));
-	if (covered) return { options: sanitized, rows };
-	return { options: sanitized, rows: rebuildRows(sanitized, rows) };
+	if (covered) return { options: sanitized, rows: priced };
+	return { options: sanitized, rows: rebuildRows(sanitized, priced) };
 }
 
 // Quick-start axis templates for the cohort (F&B + metal prints). Tapping one
@@ -365,7 +400,7 @@ export function FulfilmentToggle({
 				className={optionClass(!value)}
 			>
 				<ChefHat className="size-3.5" />
-				Made to order
+				Made fresh
 			</button>
 		</div>
 	);
@@ -375,6 +410,12 @@ export function FulfilmentToggle({
  * The product-level "How do you prepare orders?" question — two answer cards
  * that apply to every choice at once. Mixed per-choice state (legacy or via the
  * override) leaves both unselected with a "varies per choice" note.
+ *
+ * The stock-free answer is **"Made fresh"**, not "Made to order": since
+ * 86eyfq04j that phrase names a whole PRODUCT TYPE in the question above this
+ * one, and two controls on one screen with the same label and different
+ * meanings is the exact confusion that ticket was filed about. This question
+ * only ever asked whether stock is tracked — "Made fresh" says that plainly.
  */
 function PrepareQuestion({
 	allTrack,
@@ -404,7 +445,7 @@ function PrepareQuestion({
 				>
 					<span className="inline-flex items-center gap-1.5 text-sm font-semibold">
 						<ChefHat className="size-4 text-accent-emphasis" aria-hidden />
-						Made to order
+						Made fresh
 					</span>
 					<span className="text-xs text-muted-foreground">
 						You make each order fresh. Never runs out — buyers can always order.
@@ -462,13 +503,9 @@ function MockupApprovalToggle({
 				className="mt-0.5 size-4 shrink-0"
 			/>
 			<span>
-				<span className="font-medium">
-					Require mockup approval before making it
-				</span>
+				<span className="font-medium">{MOCKUP_APPROVAL_COPY.title}</span>
 				<span className="block text-xs text-muted-foreground">
-					The buyer signs off on a photo or mockup before you start — e.g. a
-					cake decorator gets the design approved before baking. The order can't
-					move to “packed” until they approve.
+					{MOCKUP_APPROVAL_COPY.body}
 					{indeterminate
 						? " Currently on for some choices only — set per choice below."
 						: null}
@@ -486,6 +523,9 @@ export function VariantEditor({
 }: VariantEditorProps) {
 	const { options, rows, customLine } = value;
 	const hasOptions = options.length > 0;
+	// Third product type (86eyfq04j) — derived from the rows, never stored, so
+	// the control and the data it describes can't drift apart.
+	const madeToOrder = isMadeToOrderOnly(value);
 	// Submit-time issue lookup — the offending input renders aria-invalid with its
 	// message beneath, so the seller (and focusFirstInvalidField) land on it.
 	const issueFor = (
@@ -575,24 +615,74 @@ export function VariantEditor({
 		});
 	}
 
-	// --- Mode switch (the "Does the buyer pick anything?" question) -----------
+	// --- Mode switch (the "What kind of product is it?" question) -------------
 	function switchToChoices() {
 		if (hasOptions) return;
-		setOptions([{ name: "", values: [] }]);
+		if (!confirmLosingChoices()) return;
+		// Leaving made-to-order: that type has NO matrix, so the grid needs a row
+		// to build from, and its bespoke line retires (the choices are the offer
+		// now — carry its price across so the seller doesn't retype).
+		if (madeToOrder) {
+			update({
+				options: [{ name: "", values: [] }],
+				rows: [{ ...emptyRow([]), price: customLine?.price ?? "" }],
+				customLine: null,
+			});
+		} else {
+			setOptions([{ name: "", values: [] }]);
+		}
 		setValueDrafts([""]);
 	}
 
-	function switchToSingle() {
-		if (!hasOptions) return;
+	/** Confirm before a mode switch throws away priced choices. */
+	function confirmLosingChoices(): boolean {
+		if (!hasOptions) return true;
 		const hasTypedData = rows.some(
 			(r) => r.price.trim().length > 0 || r.stock.trim().length > 0,
 		);
-		if (
-			hasTypedData &&
-			!window.confirm(
-				"Switch to a single item? Your choices and their prices will be removed.",
-			)
-		) {
+		if (!hasTypedData) return true;
+		return window.confirm(
+			"Change the product type? Your choices and their prices will be removed.",
+		);
+	}
+
+	/**
+	 * Made to order: the product becomes ONE bespoke line and no matrix at all.
+	 * A blank price is the "Price on quote" the storefront already renders. An
+	 * existing custom line is kept rather than replaced — the seller already
+	 * wrote its prompt/price, and it's the same offer either way.
+	 */
+	function switchToMadeToOrder() {
+		if (madeToOrder) return;
+		if (!confirmLosingChoices()) return;
+		const donor = rows[0];
+		update({
+			options: [],
+			rows: [],
+			customLine: customLine ?? {
+				...emptyCustomLine(),
+				// Carry what still means something from the row being retired.
+				price: donor?.price ?? "",
+				imageStorageIds: donor?.imageStorageIds ?? [],
+				imageUrl: donor?.imageUrl,
+			},
+		});
+		setValueDrafts([]);
+	}
+
+	function switchToSingle() {
+		if (!hasOptions && !madeToOrder) return;
+		if (!confirmLosingChoices()) return;
+		if (madeToOrder) {
+			// Back to an ordinary item: it needs a real matrix row (made-to-order
+			// has none) with `emptyRow`'s defaults — stock tracked, approval off —
+			// and the bespoke line retires with the type.
+			update({
+				options: [],
+				rows: [{ ...emptyRow([]), price: customLine?.price ?? "" }],
+				customLine: null,
+			});
+			setValueDrafts([]);
 			return;
 		}
 		// Collapse to one row, carrying the first row's price/stock/flags so the
@@ -903,55 +993,117 @@ export function VariantEditor({
 		);
 	}
 
+	// Made-to-order has already answered both of the first two — approval is what
+	// the type IS, and a bespoke line on a bespoke product is the same offer
+	// twice — so neither is listed or rendered below.
 	const advancedTeaser = hasOptions
-		? "Design approval · custom option · a second choice · per-choice SKUs & photos"
-		: "Design approval · custom option · SKU";
+		? `${MOCKUP_APPROVAL_COPY.teaser} · ${CUSTOM_LINE_COPY.teaser} · a second choice · per-choice SKUs & photos`
+		: `${MOCKUP_APPROVAL_COPY.teaser} · ${CUSTOM_LINE_COPY.teaser} · SKU`;
 
 	return (
 		<div className="flex flex-col gap-4">
-			{/* Q1 — does the buyer pick anything? Drives the shape of everything
-			    below: one price field vs a price per choice. */}
+			{/* Q1 — what kind of product is it? Drives the shape of everything
+			    below: one price field, a price per choice, or no required price
+			    at all. Three segments now (86eyfq04j) — a bespoke seller had no
+			    way in without inventing a price and digging through Advanced. */}
 			<div className="flex flex-col gap-1.5">
-				<span className="text-sm font-medium">
-					Does the buyer pick anything?
-				</span>
+				<span className="text-sm font-medium">What kind of product is it?</span>
 				<div className="flex gap-1 rounded-xl bg-muted p-1">
-					<button
-						type="button"
-						aria-pressed={!hasOptions}
-						onClick={switchToSingle}
-						className={cn(
-							"flex h-10 flex-1 items-center justify-center rounded-lg text-sm font-medium transition-colors",
-							!hasOptions
-								? "bg-background text-foreground shadow-sm"
-								: "text-muted-foreground hover:text-foreground",
-						)}
-					>
-						Just one item
-					</button>
-					<button
-						type="button"
-						aria-pressed={hasOptions}
-						onClick={switchToChoices}
-						className={cn(
-							"flex h-10 flex-1 items-center justify-center rounded-lg text-sm font-medium transition-colors",
-							hasOptions
-								? "bg-background text-foreground shadow-sm"
-								: "text-muted-foreground hover:text-foreground",
-						)}
-					>
-						Buyer picks a choice
-					</button>
+					{(
+						[
+							{
+								label: "Just one item",
+								active: !hasOptions && !madeToOrder,
+								onClick: switchToSingle,
+							},
+							{
+								label: "Buyer picks",
+								active: hasOptions,
+								onClick: switchToChoices,
+							},
+							{
+								label: "Made to order",
+								active: madeToOrder,
+								onClick: switchToMadeToOrder,
+							},
+						] as const
+					).map((mode) => (
+						<button
+							key={mode.label}
+							type="button"
+							aria-pressed={mode.active}
+							onClick={mode.onClick}
+							className={cn(
+								"flex h-10 flex-1 items-center justify-center rounded-lg px-1 text-center text-xs font-medium transition-colors sm:text-sm",
+								mode.active
+									? "bg-background text-foreground shadow-sm"
+									: "text-muted-foreground hover:text-foreground",
+							)}
+						>
+							{mode.label}
+						</button>
+					))}
 				</div>
 				<p className="text-xs text-muted-foreground">
 					{hasOptions
 						? "Each choice gets its own price below."
-						: "One name, one price. Pick the other side for sizes, flavours or weights."}
+						: madeToOrder
+							? "No choices, no stock. The buyer describes what they want, you quote it and they approve a mockup before you start."
+							: "One name, one price. Pick another type for sizes and flavours, or for bespoke work."}
 				</p>
 			</div>
 
-			{/* Single-item mode: one price (+ stock only when tracking). */}
-			{!hasOptions ? (
+			{/* Made to order: the product IS one bespoke line, so its setup is that
+			    line's own fields — an optional price and the question the buyer
+			    answers. There is no matrix row to price and no stock to count. */}
+			{madeToOrder ? (
+				<div className="flex flex-col gap-3">
+					{/* "Starting price", not "Price" — the same field as the bespoke
+					    line under Advanced, and the buyer sees it as "From RM 40". */}
+					<label className="flex flex-col gap-1 text-sm font-medium">
+						Starting price ({currency}){" "}
+						<span className="font-normal text-muted-foreground">
+							(optional)
+						</span>
+						<PriceInput
+							value={customLine?.price ?? ""}
+							onChange={(v) => setCustomLine({ price: v })}
+							invalid={!!issueFor("custom", 0, "price")}
+						/>
+						<IssueText message={issueFor("custom", 0, "price")} />
+						<span className="text-xs font-normal text-muted-foreground">
+							Buyers see “From {currency} …”, so they know the final price
+							comes with the mockup. Leave blank to show “Price on quote”
+							instead.
+						</span>
+					</label>
+					<label className="flex flex-col gap-1 text-sm font-medium">
+						What should the buyer tell you?{" "}
+						<span className="font-normal text-muted-foreground">
+							(optional)
+						</span>
+						<textarea
+							value={customLine?.prompt ?? ""}
+							onChange={(e) => setCustomLine({ prompt: e.target.value })}
+							rows={2}
+							maxLength={280}
+							placeholder="e.g. Tell us your design, flavour, size & date needed"
+							className="rounded-xl border border-input bg-background px-3 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+						/>
+						<span className="text-xs font-normal text-muted-foreground">
+							Becomes the placeholder in the buyer&apos;s request box on your
+							storefront.
+						</span>
+					</label>
+					{/* Stated, not offered as a toggle: mockup approval is what this
+					    type IS (the server forces it on the line), so a checkbox here
+					    would be a control that can't be turned off. */}
+					<p className="rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
+						🧑‍🍳 Made to order · ✅ the buyer approves your mockup before you
+						start — always on for this type.
+					</p>
+				</div>
+			) : !hasOptions ? (
 				<div className="grid grid-cols-2 gap-3">
 					<label className="flex flex-col gap-1 text-sm font-medium">
 						Price ({currency})
@@ -1114,8 +1266,10 @@ export function VariantEditor({
 
 			{/* Q2 — how orders are prepared. Product-level answer applied to every
 			    choice; "vary per choice" reveals the per-row override. Waits for a
-			    real grid — an axis mid-authoring has nothing to apply to yet. */}
-			{gridReady ? (
+			    real grid — an axis mid-authoring has nothing to apply to yet.
+			    Skipped entirely for made-to-order: the type IS the answer, and
+			    picking "from stock" here would silently undo it. */}
+			{gridReady && !madeToOrder ? (
 				<div className="flex flex-col gap-1.5 border-t border-border pt-3">
 					<PrepareQuestion
 						allTrack={allTrack}
@@ -1157,279 +1311,296 @@ export function VariantEditor({
 			) : null}
 
 			{/* Advanced — everything the everyday seller never needs, present and
-			    labelled (discoverability rule) but zero pixels until opened. */}
-			<div className="rounded-xl border border-dashed border-border">
-				<button
-					type="button"
-					onClick={() => setAdvOpen((v) => !v)}
-					aria-expanded={advOpen}
-					className="flex w-full items-center justify-between gap-3 p-3 text-left"
-				>
-					<span className="flex min-w-0 flex-col">
-						<span className="text-sm font-semibold">Advanced</span>
-						<span className="truncate text-xs text-muted-foreground">
-							{advancedTeaser}
+			    labelled (discoverability rule) but zero pixels until opened.
+			    NOT rendered for made-to-order: that type has no matrix, so every
+			    control in here is dead for it — approval is constitutive (and
+			    `bulkFillFlag` over `rows: []` is a no-op that can't even toggle),
+			    SKU binds to `rows[0]`, the custom line IS the product, and the
+			    second axis is already gated on `hasOptions`. The approval fact is
+			    stated in the type's own setup above instead. */}
+			{madeToOrder ? null : (
+				<div className="rounded-xl border border-dashed border-border">
+					<button
+						type="button"
+						onClick={() => setAdvOpen((v) => !v)}
+						aria-expanded={advOpen}
+						className="flex w-full items-center justify-between gap-3 p-3 text-left"
+					>
+						<span className="flex min-w-0 flex-col">
+							<span className="text-sm font-semibold">Advanced</span>
+							<span className="truncate text-xs text-muted-foreground">
+								{advancedTeaser}
+							</span>
 						</span>
-					</span>
+						{advOpen ? (
+							<ChevronUp className="size-4 shrink-0 text-muted-foreground" />
+						) : (
+							<ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+						)}
+					</button>
+
 					{advOpen ? (
-						<ChevronUp className="size-4 shrink-0 text-muted-foreground" />
-					) : (
-						<ChevronDown className="size-4 shrink-0 text-muted-foreground" />
-					)}
-				</button>
+						<div className="flex flex-col gap-4 border-t border-border p-3">
+							<MockupApprovalToggle
+								checked={allProof}
+								indeterminate={someProof && !allProof}
+								onChange={(v) => bulkFillFlag("requiresProof", v)}
+							/>
 
-				{advOpen ? (
-					<div className="flex flex-col gap-4 border-t border-border p-3">
-						<MockupApprovalToggle
-							checked={allProof}
-							indeterminate={someProof && !allProof}
-							onChange={(v) => bulkFillFlag("requiresProof", v)}
-						/>
-
-						{/* Custom / made-to-order line — sits OUTSIDE the grid, so a
+							{/* Custom / made-to-order line — sits OUTSIDE the grid, so a
 						    bespoke option shows up exactly once instead of multiplying
-						    across every size/flavour. See docs/custom-option.md. */}
-						<div className="flex flex-col gap-3 rounded-xl border border-border p-3">
-							<label className="flex items-start gap-2.5 text-sm">
-								<input
-									type="checkbox"
-									checked={customLine !== null}
-									onChange={(e) => toggleCustomLine(e.target.checked)}
-									className="mt-0.5 size-4 shrink-0"
-								/>
-								<span>
-									<span className="font-medium">
-										Also offer a custom / made-to-order option
-									</span>
-									<span className="block text-xs text-muted-foreground">
-										A separate “Custom” line buyers can request — made to order,
-										with a mockup they approve (and any quote you set) before
-										paying. Kept out of the choices above, so it appears once.
-									</span>
-								</span>
-							</label>
+						    across every size/flavour. See docs/custom-option.md.
+						    No border of its own: it sits inside the Advanced card, and
+						    the editor below it is already a tinted block — three nested
+						    outlines for one checkbox (86eyfq04j's card-in-card sweep).
 
-							{customLine ? (
-								<div className="flex flex-col gap-3 rounded-lg bg-muted/40 p-3">
-									<div className="flex items-start gap-3">
-										{customLine.imageUrl ? (
-											<div className="relative size-14 shrink-0">
-												<AppImage
-													src={customLine.imageUrl}
-													alt=""
-													aspect="size-14"
-													rounded="rounded-lg"
-												/>
-												<button
-													type="button"
-													onClick={() => {
-														if (customLine.imageUrl?.startsWith("blob:")) {
-															URL.revokeObjectURL(customLine.imageUrl);
-															blobUrls.current.delete(customLine.imageUrl);
+						    A made-to-order product never reaches here — the whole
+						    Advanced card is hidden for it, because that product already
+						    IS this line and offering to add one would be the same offer
+						    twice. */}
+							<div className="flex flex-col gap-3">
+								<label className="flex items-start gap-2.5 text-sm">
+									<input
+										type="checkbox"
+										checked={customLine !== null}
+										onChange={(e) => toggleCustomLine(e.target.checked)}
+										className="mt-0.5 size-4 shrink-0"
+									/>
+									<span>
+										<span className="font-medium">
+											{CUSTOM_LINE_COPY.title}
+										</span>
+										<span className="block text-xs text-muted-foreground">
+											{CUSTOM_LINE_COPY.body}
+										</span>
+									</span>
+								</label>
+
+								{customLine ? (
+									<div className="flex flex-col gap-3 rounded-lg bg-muted/40 p-3">
+										<div className="flex items-start gap-3">
+											{customLine.imageUrl ? (
+												<div className="relative size-14 shrink-0">
+													<AppImage
+														src={customLine.imageUrl}
+														alt=""
+														aspect="size-14"
+														rounded="rounded-lg"
+													/>
+													<button
+														type="button"
+														onClick={() => {
+															if (customLine.imageUrl?.startsWith("blob:")) {
+																URL.revokeObjectURL(customLine.imageUrl);
+																blobUrls.current.delete(customLine.imageUrl);
+															}
+															setCustomLine({
+																imageStorageIds: [],
+																imageUrl: undefined,
+															});
+														}}
+														className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-background text-xs shadow ring-1 ring-border"
+														aria-label="Remove custom image"
+													>
+														<X className="size-3" />
+													</button>
+												</div>
+											) : (
+												<label className="flex size-14 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-dashed border-border text-muted-foreground hover:border-ring">
+													{uploadingCustom ? (
+														<span className="text-[10px]">…</span>
+													) : (
+														<ImagePlus className="size-4" />
+													)}
+													<input
+														type="file"
+														accept="image/*"
+														disabled={uploadingCustom}
+														onChange={(e) =>
+															void uploadCustomImage(e.target.files)
 														}
-														setCustomLine({
-															imageStorageIds: [],
-															imageUrl: undefined,
-														});
-													}}
-													className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-background text-xs shadow ring-1 ring-border"
-													aria-label="Remove custom image"
-												>
-													<X className="size-3" />
-												</button>
-											</div>
-										) : (
-											<label className="flex size-14 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-dashed border-border text-muted-foreground hover:border-ring">
-												{uploadingCustom ? (
-													<span className="text-[10px]">…</span>
-												) : (
-													<ImagePlus className="size-4" />
-												)}
-												<input
-													type="file"
-													accept="image/*"
-													disabled={uploadingCustom}
+														className="hidden"
+													/>
+												</label>
+											)}
+											<label className="flex flex-1 flex-col gap-1 text-sm font-medium">
+												Option name
+												<Input
+													value={customLine.label}
 													onChange={(e) =>
-														void uploadCustomImage(e.target.files)
+														setCustomLine({ label: e.target.value })
 													}
-													className="hidden"
+													placeholder="Custom"
+													maxLength={40}
 												/>
 											</label>
-										)}
-										<label className="flex flex-1 flex-col gap-1 text-sm font-medium">
-											Option name
-											<Input
-												value={customLine.label}
+										</div>
+
+										<label className="flex flex-col gap-1 text-sm font-medium">
+											Starting price ({currency}){" "}
+											<span className="font-normal text-muted-foreground">
+												(optional)
+											</span>
+											<PriceInput
+												value={customLine.price}
+												onChange={(v) => setCustomLine({ price: v })}
+												invalid={!!issueFor("custom", 0, "price")}
+											/>
+											<IssueText message={issueFor("custom", 0, "price")} />
+											<span className="text-xs font-normal text-muted-foreground">
+												Buyers see “From {currency} …”, so they know the final
+												price comes with the mockup. Leave blank to show “Price
+												on quote” instead.
+											</span>
+										</label>
+
+										<label className="flex flex-col gap-1 text-sm font-medium">
+											What should the buyer tell you?{" "}
+											<span className="font-normal text-muted-foreground">
+												(optional)
+											</span>
+											<textarea
+												value={customLine.prompt}
 												onChange={(e) =>
-													setCustomLine({ label: e.target.value })
+													setCustomLine({ prompt: e.target.value })
 												}
-												placeholder="Custom"
-												maxLength={40}
+												rows={2}
+												maxLength={280}
+												placeholder="e.g. Tell us your design, flavour, size & date needed"
+												className="rounded-xl border border-input bg-background px-3 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 											/>
 										</label>
+
+										<p className="text-xs text-muted-foreground">
+											🧑‍🍳 Made to order · ✅ buyer approves a mockup before you
+											start.
+										</p>
 									</div>
+								) : null}
+							</div>
 
-									<label className="flex flex-col gap-1 text-sm font-medium">
-										Starting price ({currency}){" "}
-										<span className="font-normal text-muted-foreground">
-											(optional)
-										</span>
-										<PriceInput
-											value={customLine.price}
-											onChange={(v) => setCustomLine({ price: v })}
-											invalid={!!issueFor("custom", 0, "price")}
-										/>
-										<IssueText message={issueFor("custom", 0, "price")} />
-										<span className="text-xs font-normal text-muted-foreground">
-											Leave blank to show “Price on quote” — you set the price
-											on the mockup after the order comes in.
-										</span>
-									</label>
+							{/* Second axis (choices mode only) — Size × Flavour grids. */}
+							{hasOptions ? (
+								options.length > 1 ? (
+									<div className="flex flex-col gap-2">
+										<span className="text-sm font-medium">Second choice</span>
+										{renderAxisEditor(1, true)}
+									</div>
+								) : (
+									<div className="flex flex-col gap-2">
+										<Button
+											type="button"
+											variant="outline"
+											size="sm"
+											onClick={addAxis}
+											className="self-start"
+										>
+											<Plus className="size-4" />
+											Add a second choice (e.g. Size × Flavour)
+										</Button>
+										<div className="flex flex-wrap items-center gap-1.5">
+											<span className="text-xs text-muted-foreground">
+												Quick add:
+											</span>
+											{AXIS_PRESETS.map((preset) => {
+												const used = options.some(
+													(a) =>
+														a.name.toLowerCase() === preset.name.toLowerCase(),
+												);
+												return (
+													<button
+														key={preset.name}
+														type="button"
+														disabled={used}
+														onClick={() => addPresetAxis(preset)}
+														className="rounded-full border border-border px-2.5 py-1 text-xs font-medium hover:border-accent disabled:opacity-40"
+													>
+														+ {preset.name}
+													</button>
+												);
+											})}
+										</div>
+									</div>
+								)
+							) : null}
 
-									<label className="flex flex-col gap-1 text-sm font-medium">
-										What should the buyer tell you?{" "}
-										<span className="font-normal text-muted-foreground">
-											(optional)
-										</span>
-										<textarea
-											value={customLine.prompt}
-											onChange={(e) =>
-												setCustomLine({ prompt: e.target.value })
-											}
-											rows={2}
-											maxLength={280}
-											placeholder="e.g. Tell us your design, flavour, size & date needed"
-											className="rounded-xl border border-input bg-background px-3 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-										/>
-									</label>
-
-									<p className="text-xs text-muted-foreground">
-										🧑‍🍳 Made to order · ✅ buyer approves a mockup before you
-										start.
-									</p>
+							{/* Per-choice details: SKU, photo, on/off sale, per-choice
+						    approval. Single-item mode gets just the SKU. */}
+							{hasOptions && gridReady ? (
+								<div className="flex flex-col gap-2">
+									<span className="text-sm font-medium">
+										Per-choice details
+									</span>
+									<ul className="flex flex-col gap-2">
+										{rows.map((row, i) => (
+											<li
+												key={variantLabel(row.optionValues)}
+												className={cn(
+													"flex flex-col gap-2 rounded-lg bg-muted/40 p-2.5",
+													!row.active && "opacity-60",
+												)}
+											>
+												<div className="flex items-center gap-2.5">
+													{renderRowImage(i, row)}
+													<span className="min-w-0 flex-1 truncate text-sm font-medium">
+														{variantLabel(row.optionValues)}
+													</span>
+													<Input
+														placeholder="SKU"
+														value={row.sku}
+														onChange={(e) => setRow(i, { sku: e.target.value })}
+														className="h-9 w-28"
+														aria-label={`SKU for ${variantLabel(row.optionValues)}`}
+													/>
+												</div>
+												<div className="flex flex-wrap items-center gap-4 text-xs">
+													<label className="flex items-center gap-1.5">
+														<input
+															type="checkbox"
+															checked={row.active}
+															onChange={(e) =>
+																setRow(i, { active: e.target.checked })
+															}
+															className="size-4"
+															aria-label={`${row.active ? "Deactivate" : "Activate"} ${variantLabel(row.optionValues)}`}
+														/>
+														On sale
+													</label>
+													<label className="flex items-center gap-1.5">
+														<input
+															type="checkbox"
+															checked={row.requiresProof}
+															onChange={(e) =>
+																setRow(i, { requiresProof: e.target.checked })
+															}
+															className="size-4"
+															aria-label={`Require mockup approval for ${variantLabel(row.optionValues)}`}
+														/>
+														Mockup approval
+													</label>
+												</div>
+											</li>
+										))}
+									</ul>
 								</div>
 							) : null}
+							{!hasOptions ? (
+								<label className="flex flex-col gap-1 text-sm font-medium">
+									SKU{" "}
+									<span className="font-normal text-muted-foreground">
+										(optional — your own item code)
+									</span>
+									<Input
+										placeholder="ITEM-001"
+										value={rows[0]?.sku ?? ""}
+										onChange={(e) => setRow(0, { sku: e.target.value })}
+									/>
+								</label>
+							) : null}
 						</div>
-
-						{/* Second axis (choices mode only) — Size × Flavour grids. */}
-						{hasOptions ? (
-							options.length > 1 ? (
-								<div className="flex flex-col gap-2">
-									<span className="text-sm font-medium">Second choice</span>
-									{renderAxisEditor(1, true)}
-								</div>
-							) : (
-								<div className="flex flex-col gap-2">
-									<Button
-										type="button"
-										variant="outline"
-										size="sm"
-										onClick={addAxis}
-										className="self-start"
-									>
-										<Plus className="size-4" />
-										Add a second choice (e.g. Size × Flavour)
-									</Button>
-									<div className="flex flex-wrap items-center gap-1.5">
-										<span className="text-xs text-muted-foreground">
-											Quick add:
-										</span>
-										{AXIS_PRESETS.map((preset) => {
-											const used = options.some(
-												(a) =>
-													a.name.toLowerCase() === preset.name.toLowerCase(),
-											);
-											return (
-												<button
-													key={preset.name}
-													type="button"
-													disabled={used}
-													onClick={() => addPresetAxis(preset)}
-													className="rounded-full border border-border px-2.5 py-1 text-xs font-medium hover:border-accent disabled:opacity-40"
-												>
-													+ {preset.name}
-												</button>
-											);
-										})}
-									</div>
-								</div>
-							)
-						) : null}
-
-						{/* Per-choice details: SKU, photo, on/off sale, per-choice
-						    approval. Single-item mode gets just the SKU. */}
-						{hasOptions && gridReady ? (
-							<div className="flex flex-col gap-2">
-								<span className="text-sm font-medium">Per-choice details</span>
-								<ul className="flex flex-col gap-2">
-									{rows.map((row, i) => (
-										<li
-											key={variantLabel(row.optionValues)}
-											className={cn(
-												"flex flex-col gap-2 rounded-lg bg-muted/40 p-2.5",
-												!row.active && "opacity-60",
-											)}
-										>
-											<div className="flex items-center gap-2.5">
-												{renderRowImage(i, row)}
-												<span className="min-w-0 flex-1 truncate text-sm font-medium">
-													{variantLabel(row.optionValues)}
-												</span>
-												<Input
-													placeholder="SKU"
-													value={row.sku}
-													onChange={(e) => setRow(i, { sku: e.target.value })}
-													className="h-9 w-28"
-													aria-label={`SKU for ${variantLabel(row.optionValues)}`}
-												/>
-											</div>
-											<div className="flex flex-wrap items-center gap-4 text-xs">
-												<label className="flex items-center gap-1.5">
-													<input
-														type="checkbox"
-														checked={row.active}
-														onChange={(e) =>
-															setRow(i, { active: e.target.checked })
-														}
-														className="size-4"
-														aria-label={`${row.active ? "Deactivate" : "Activate"} ${variantLabel(row.optionValues)}`}
-													/>
-													On sale
-												</label>
-												<label className="flex items-center gap-1.5">
-													<input
-														type="checkbox"
-														checked={row.requiresProof}
-														onChange={(e) =>
-															setRow(i, { requiresProof: e.target.checked })
-														}
-														className="size-4"
-														aria-label={`Require mockup approval for ${variantLabel(row.optionValues)}`}
-													/>
-													Mockup approval
-												</label>
-											</div>
-										</li>
-									))}
-								</ul>
-							</div>
-						) : null}
-						{!hasOptions ? (
-							<label className="flex flex-col gap-1 text-sm font-medium">
-								SKU{" "}
-								<span className="font-normal text-muted-foreground">
-									(optional — your own item code)
-								</span>
-								<Input
-									placeholder="ITEM-001"
-									value={rows[0]?.sku ?? ""}
-									onChange={(e) => setRow(0, { sku: e.target.value })}
-								/>
-							</label>
-						) : null}
-					</div>
-				) : null}
-			</div>
+					) : null}
+				</div>
+			)}
 		</div>
 	);
 }

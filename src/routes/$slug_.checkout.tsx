@@ -14,6 +14,7 @@ import { StorefrontHeader } from "../components/storefront/storefront-header";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
 import { getConvexHttpClient } from "../lib/convex-server";
+import { ssrRead } from "../lib/ssr-read";
 
 interface CheckoutLoaderData {
 	storeName: string;
@@ -30,11 +31,16 @@ interface CheckoutLoaderData {
  * page. Noindex: a checkout is transactional, not a landing surface.
  */
 export const Route = createFileRoute("/$slug_/checkout")({
-	loader: async ({ params }): Promise<CheckoutLoaderData> => {
+	loader: async ({ params }): Promise<CheckoutLoaderData | null> => {
 		const client = getConvexHttpClient();
-		const result = await client.query(api.retailers.getRetailerBySlug, {
-			slug: params.slug,
-		});
+		const read = await ssrRead(() =>
+			client.query(api.retailers.getRetailerBySlug, { slug: params.slug }),
+		);
+		// Transient upstream failure: render the shell — the checkout's real data
+		// is the client's reactive query — never an error page mid-purchase
+		// (86eyheqzv). Definitive notFound below still 404s.
+		if (!read.ok) return null;
+		const result = read.value;
 
 		// Renamed store → keep the buyer on checkout under the new slug.
 		if (result.status === "redirect") {
@@ -159,6 +165,7 @@ function CheckoutRoute() {
 					<Link
 						to="/$slug"
 						params={{ slug: retailer.slug }}
+						activeOptions={{ exact: true }}
 						aria-label={`Back to ${retailer.storeName}`}
 						className="tap-target flex size-9 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:text-foreground"
 					>
@@ -181,6 +188,9 @@ function CheckoutRoute() {
 						confirmPushEnabled={retailer.confirmPushEnabled ?? false}
 						offerSelfCollect={retailer.offerSelfCollect ?? false}
 						offerDelivery={retailer.offerDelivery ?? true}
+						collectsFromCustomer={
+							retailer.deliveryCollectsFromCustomer ?? false
+						}
 						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
 						minOrderValue={retailer.minOrderValue}
 						pickupLocations={pickupLocations ?? []}

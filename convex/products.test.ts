@@ -1,9 +1,11 @@
 /// <reference types="vite/client" />
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { todayMytMidnight } from "./lib/fulfilmentDate";
+import { MAX_PRODUCTS_PER_RETAILER as CAP } from "./lib/productCap";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -532,6 +534,27 @@ describe("products", () => {
 		const asOwner = await asA.query(api.products.get, { productId: id });
 		expect(asOwner?._id).toBe(id);
 		// Unauthenticated / non-owner caller gets nothing — no leak.
+		expect(await t.query(api.products.get, { productId: id })).toBeNull();
+		const asB = t.withIdentity({ subject: USER_B });
+		expect(await asB.query(api.products.get, { productId: id })).toBeNull();
+	});
+
+	// Same promise as `hidden` above, for the archive flag. Every other public
+	// read scopes to `active` (`list`, `getPublicBySlug`), so a bare id was the
+	// one way to pull an archived product's public payload. Found in the PR #155
+	// review; the owner must still read it, or archived products couldn't be
+	// opened to restore them.
+	test("get returns null for an archived product to a non-owner, full to the owner", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const id = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Retired Tent" }),
+		);
+		await asA.mutation(api.products.archive, { productId: id });
+
+		expect((await asA.query(api.products.get, { productId: id }))?._id).toBe(id);
 		expect(await t.query(api.products.get, { productId: id })).toBeNull();
 		const asB = t.withIdentity({ subject: USER_B });
 		expect(await asB.query(api.products.get, { productId: id })).toBeNull();
@@ -1222,6 +1245,75 @@ describe("products", () => {
 			expect(product?.hasQuotePricing).toBe(true);
 		});
 
+		test("a product can be JUST a custom line — the made-to-order type", async () => {
+			// 86eyfq04j: the type IS one bespoke offer, so it carries no matrix at
+			// all. Modelling it as `isCustom` is what earns it the storefront's
+			// existing bespoke flow instead of a parallel path.
+			const t = setup();
+			const retailer = await seedRetailer(t, USER_A);
+			const asA = t.withIdentity({ subject: USER_A });
+			const id = await asA.mutation(api.products.create, {
+				retailerId: retailer._id,
+				name: "Tent wash",
+				currency: "MYR",
+				imageStorageIds: [],
+				sortOrder: 0,
+				options: [],
+				variants: [
+					{
+						optionValues: [],
+						price: 0,
+						onHand: 0,
+						isCustom: true,
+						customPrompt: "Tent size, model & how dirty",
+					},
+				],
+			});
+			const product = await asA.query(api.products.get, { productId: id });
+			expect(product?.variants).toHaveLength(1);
+			expect(product?.variants[0].isCustom).toBe(true);
+			expect(product?.variants[0].requiresProof).toBe(true);
+			expect(product?.variants[0].blockWhenOutOfStock).toBe(false);
+			// Price-on-quote, and never "free".
+			expect(product?.hasQuotePricing).toBe(true);
+			// Always orderable — made on demand, so it can't sell out.
+			expect(product?.inStock).toBe(true);
+		});
+
+		test("an EMPTY variant set is still rejected", async () => {
+			const t = setup();
+			const retailer = await seedRetailer(t, USER_A);
+			const asA = t.withIdentity({ subject: USER_A });
+			await expect(
+				asA.mutation(api.products.create, {
+					retailerId: retailer._id,
+					name: "Nothing",
+					currency: "MYR",
+					imageStorageIds: [],
+					sortOrder: 0,
+					options: [],
+					variants: [],
+				}),
+			).rejects.toThrow(/at least one variant/i);
+		});
+
+		test("axes with no matrix are still rejected — a grid selling nothing", async () => {
+			const t = setup();
+			const retailer = await seedRetailer(t, USER_A);
+			const asA = t.withIdentity({ subject: USER_A });
+			await expect(
+				asA.mutation(api.products.create, {
+					retailerId: retailer._id,
+					name: "Cake",
+					currency: "MYR",
+					imageStorageIds: [],
+					sortOrder: 0,
+					options: [{ name: "Size", values: ["S", "M"] }],
+					variants: [{ optionValues: [], price: 0, onHand: 0, isCustom: true }],
+				}),
+			).rejects.toThrow(/at least one variant/i);
+		});
+
 		test("blank custom label defaults to \"Custom\"", async () => {
 			const t = setup();
 			const retailer = await seedRetailer(t, USER_A);
@@ -1653,5 +1745,567 @@ describe("products.listForSitemap", () => {
 		expect(
 			rows.map((r) => `${r.storeSlug}/p/${r.productSlug}`).sort(),
 		).toEqual([`${a.slug}/p/a-tent`, `${b.slug}/p/b-tent`].sort());
+	});
+});
+
+describe("popularProducts (public, storefront featured card)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+
+	/** Insert an order directly — only the fields the ranking reads matter. */
+	async function insertOrder(
+		t: ReturnType<typeof convexTest>,
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+		opts: { status?: string; quantity?: number; seq: number },
+	) {
+		const now = Date.now();
+		await t.run(async (ctx) =>
+			ctx.db.insert("orders", {
+				retailerId,
+				shortId: `ORD-POP${opts.seq}`,
+				items: [
+					{
+						productId,
+						name: "Tent 2P",
+						price: 12000,
+						quantity: opts.quantity ?? 1,
+					},
+				],
+				subtotal: 12000,
+				total: 12000,
+				currency: "MYR",
+				status: opts.status ?? "confirmed",
+				channel: "whatsapp",
+				customer: { name: "Aisyah", waPhone: "60123456789" },
+				createdAt: now,
+				updatedAt: now,
+			}),
+		);
+	}
+
+	test("ranks recent revenue orders and stays scoped to the retailer", async () => {
+		const t = setup();
+		const retailerA = await seedRetailer(t, USER_A);
+		const retailerB = await seedRetailer(t, USER_B);
+		const asA = t.withIdentity({ subject: USER_A });
+		const asB = t.withIdentity({ subject: USER_B });
+		const cake = await asA.mutation(
+			api.products.create,
+			baseProduct(retailerA._id, { name: "Cake" }),
+		);
+		const pie = await asA.mutation(
+			api.products.create,
+			baseProduct(retailerA._id, { name: "Pie", sortOrder: 1 }),
+		);
+		const other = await asB.mutation(
+			api.products.create,
+			baseProduct(retailerB._id, { name: "Other" }),
+		);
+
+		// Cake: 3 orders. Pie: 2 orders + 1 pending (doesn't count).
+		await insertOrder(t, retailerA._id, cake, { seq: 1 });
+		await insertOrder(t, retailerA._id, cake, { seq: 2, status: "delivered" });
+		await insertOrder(t, retailerA._id, cake, { seq: 3, status: "packed" });
+		await insertOrder(t, retailerA._id, pie, { seq: 4 });
+		await insertOrder(t, retailerA._id, pie, { seq: 5 });
+		await insertOrder(t, retailerA._id, pie, { seq: 6, status: "pending" });
+		// Retailer B's own volume must never leak into A's ranking.
+		await insertOrder(t, retailerB._id, other, { seq: 7 });
+		await insertOrder(t, retailerB._id, other, { seq: 8 });
+
+		const since = todayMytMidnight() - 7 * DAY;
+		const ranked = await t.query(api.products.popularProducts, {
+			retailerId: retailerA._id,
+			since,
+		});
+		expect(ranked).toEqual([cake, pie]);
+
+		const rankedB = await t.query(api.products.popularProducts, {
+			retailerId: retailerB._id,
+			since,
+		});
+		expect(rankedB).toEqual([other]);
+	});
+
+	test("a single order is not 'popular' — empty result, row hides", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const cake = await asUser.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Cake" }),
+		);
+		await insertOrder(t, retailer._id, cake, { seq: 1 });
+		const ranked = await t.query(api.products.popularProducts, {
+			retailerId: retailer._id,
+			since: todayMytMidnight() - 7 * DAY,
+		});
+		expect(ranked).toEqual([]);
+	});
+
+	test("rejects a since that is not an MYT midnight (cache-key discipline)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await expect(
+			t.query(api.products.popularProducts, {
+				retailerId: retailer._id,
+				since: Date.now(),
+			}),
+		).rejects.toThrow(/MYT-midnight/);
+	});
+
+	// The starvation bug from the PR #155 review: ranking sees counter-only and
+	// archived products (their orders are real), so capping before filtering
+	// spent slots on products that can never render, with no rank-11 to
+	// back-fill. A stall seller whose top sellers are counter-only got an empty
+	// shelf. Visibility now filters BEFORE the cap.
+	test("unlisted bestsellers never consume a slot — lower ranks back-fill", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const make = async (name: string, sortOrder: number) =>
+			asUser.mutation(
+				api.products.create,
+				baseProduct(retailer._id, { name, sortOrder }),
+			);
+		// Two top sellers that the storefront does NOT list...
+		const counterOnly = await make("Counter only", 0);
+		const archived = await make("Retired", 1);
+		// ...and one that it does, ranked below both.
+		const listed = await make("Listed", 2);
+
+		await asUser.mutation(api.products.update, {
+			productId: counterOnly,
+			hidden: true,
+		});
+		await asUser.mutation(api.products.archive, { productId: archived });
+
+		// Ranking order: counterOnly (4) > archived (3) > listed (2).
+		let seq = 0;
+		for (const [productId, count] of [
+			[counterOnly, 4],
+			[archived, 3],
+			[listed, 2],
+		] as const) {
+			for (let i = 0; i < count; i++) {
+				await insertOrder(t, retailer._id, productId, { seq: ++seq });
+			}
+		}
+
+		const ranked = await t.query(api.products.popularProducts, {
+			retailerId: retailer._id,
+			since: todayMytMidnight() - 7 * DAY,
+		});
+		// The listed product is surfaced despite ranking third, and neither
+		// unlisted id is named to an unauthenticated caller.
+		expect(ranked).toEqual([listed]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Product cap + permanent delete (86eyjmf4q)
+// ---------------------------------------------------------------------------
+
+describe("product cap", () => {
+	const ADMIN = "user_admin_cap";
+	let prevAdminEnv: string | undefined;
+
+	beforeEach(() => {
+		prevAdminEnv = process.env.ADMIN_USER_IDS;
+		process.env.ADMIN_USER_IDS = ADMIN;
+	});
+	afterEach(() => {
+		process.env.ADMIN_USER_IDS = prevAdminEnv;
+	});
+
+	/**
+	 * Fill a store to `count` product rows directly. Going through the public
+	 * create mutation 200 times would test the cap by way of 200 slug-uniqueness
+	 * scans; the gate itself is what's under test here.
+	 */
+	async function fillCatalog(
+		t: ReturnType<typeof convexTest>,
+		retailerId: Id<"retailers">,
+		count: number,
+		opts: { active?: boolean } = {},
+	) {
+		await t.run(async (ctx) => {
+			const now = Date.now();
+			for (let i = 0; i < count; i++) {
+				await ctx.db.insert("products", {
+					retailerId,
+					name: `Filler ${i}`,
+					slug: `filler-${i}`,
+					currency: "MYR",
+					imageStorageIds: [],
+					active: opts.active ?? true,
+					channel: "whatsapp" as const,
+					sortOrder: i,
+					createdAt: now,
+					updatedAt: now,
+				});
+			}
+		});
+	}
+
+	test("create is allowed on the last free slot and refused on the next", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await fillCatalog(t, retailer._id, CAP - 1);
+
+		// The one that lands exactly on the cap still goes through.
+		await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Last one", sortOrder: 900 }),
+		);
+
+		await expect(
+			asA.mutation(
+				api.products.create,
+				baseProduct(retailer._id, { name: "One too many", sortOrder: 901 }),
+			),
+		).rejects.toThrow(/limit/i);
+	});
+
+	test("ARCHIVED products still hold their slot — archiving is not a way to free one", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		// Every row archived, so an "active products" reading of the cap would
+		// see an empty store and wave this through.
+		await fillCatalog(t, retailer._id, CAP, { active: false });
+
+		await expect(
+			asA.mutation(
+				api.products.create,
+				baseProduct(retailer._id, { name: "Blocked", sortOrder: 900 }),
+			),
+		).rejects.toThrow(/limit/i);
+	});
+
+	test("restoring an archived product at the cap can't breach it", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await fillCatalog(t, retailer._id, CAP - 1, { active: false });
+		const archived = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Seasonal", sortOrder: 900 }),
+		);
+		await asA.mutation(api.products.archive, { productId: archived });
+
+		// The store is at the cap on rows. Restoring is a status flip, not a new
+		// row — it must be allowed, and must not change what the cap sees. (Under
+		// an active-only cap this is exactly the move that would sneak past it.)
+		await asA.mutation(api.products.update, {
+			productId: archived,
+			active: true,
+		});
+
+		const state = await asA.query(api.products.capState, {
+			retailerId: retailer._id,
+		});
+		expect(state.used).toBe(CAP);
+		expect(state.atCap).toBe(true);
+	});
+
+	test("a Kedaipal admin acting as the store can stock it past the ceiling", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await fillCatalog(t, retailer._id, CAP);
+
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+		await asAdmin.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "White glove", sortOrder: 900 }),
+		);
+
+		const state = await asAdmin.query(api.products.capState, {
+			retailerId: retailer._id,
+		});
+		expect(state.used).toBe(CAP + 1);
+		expect(state.overCap).toBe(true);
+		// ...but the seller themselves is still capped — the exemption is the
+		// admin's, not the store's.
+		const asA = t.withIdentity({ subject: USER_A });
+		await expect(
+			asA.mutation(
+				api.products.create,
+				baseProduct(retailer._id, { name: "Seller try", sortOrder: 901 }),
+			),
+		).rejects.toThrow(/limit/i);
+	});
+
+	test("bulk import refuses a sheet that doesn't fit, and says how many would", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await fillCatalog(t, retailer._id, CAP - 2);
+
+		await expect(
+			asA.mutation(api.products.bulkUpsert, {
+				retailerId: retailer._id,
+				currency: "MYR",
+				products: [
+					importSingle("Import A", { price: 1000, stock: 1 }),
+					importSingle("Import B", { price: 1000, stock: 1 }),
+					importSingle("Import C", { price: 1000, stock: 1 }),
+				],
+			}),
+		).rejects.toThrow(/Only 2 of these 3/);
+	});
+
+	test("an import that only updates existing products is unaffected by a full catalog", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Priced", sku: "SKU-1", price: 1000 }),
+		);
+		await fillCatalog(t, retailer._id, CAP - 1);
+
+		// Store is exactly at the cap, but re-pricing consumes no slot.
+		const res = await asA.mutation(api.products.bulkUpsert, {
+			retailerId: retailer._id,
+			currency: "MYR",
+			products: [
+				importSingle("Priced", { sku: "SKU-1", price: 2500, stock: 4 }),
+			],
+		});
+		expect(res.created).toBe(0);
+		expect(res.updated).toBe(1);
+	});
+
+	test("capState is owner-or-admin only", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asB = t.withIdentity({ subject: USER_B });
+		await expect(
+			asB.query(api.products.capState, { retailerId: retailer._id }),
+		).rejects.toThrow(/forbidden/i);
+	});
+});
+
+describe("deletePermanently", () => {
+	test("erases the product, its variants and its category membership, freeing a slot", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Typo prodcut" }),
+		);
+		const { categoryId } = await asA.mutation(api.categories.create, {
+			retailerId: retailer._id,
+			name: "Cakes",
+			slug: "cakes",
+		});
+		await asA.mutation(api.categories.setProductCategories, {
+			productId,
+			categoryIds: [categoryId],
+		});
+
+		await asA.mutation(api.products.deletePermanently, { productId });
+
+		const leftovers = await t.run(async (ctx) => ({
+			product: await ctx.db.get(productId),
+			variants: await ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", productId))
+				.collect(),
+			junctions: await ctx.db
+				.query("productCategories")
+				.withIndex("by_product", (q) => q.eq("productId", productId))
+				.collect(),
+			category: await ctx.db.get(categoryId),
+		}));
+		expect(leftovers.product).toBeNull();
+		expect(leftovers.variants).toEqual([]);
+		expect(leftovers.junctions).toEqual([]);
+		// The category survives, with its visible-product count wound back.
+		expect(leftovers.category?.productCount ?? 0).toBe(0);
+
+		const state = await asA.query(api.products.capState, {
+			retailerId: retailer._id,
+		});
+		expect(state.used).toBe(0);
+	});
+
+	test("refuses a product that has ever been ordered — history keeps its slot", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Real seller" }),
+		);
+		await t.run((ctx) => ctx.db.patch(productId, { orderedAt: Date.now() }));
+
+		await expect(
+			asA.mutation(api.products.deletePermanently, { productId }),
+		).rejects.toThrow(/ordered before/i);
+		expect(await t.run((ctx) => ctx.db.get(productId))).not.toBeNull();
+	});
+
+	test("a CANCELLED order still protects the product — the line still names it", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Ordered then cancelled" }),
+		);
+		const before = await asA.query(api.products.get, { productId });
+		const variantId = before?.variants[0]?._id;
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ variantId: variantId as Id<"productVariants">, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali" },
+			deliveryAddress: {
+				line1: "12 Jln Mawar",
+				city: "PJ",
+				state: "Selangor",
+				postcode: "47301",
+			},
+		});
+		const orderId = await t.run(async (ctx) => {
+			const row = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", created.shortId))
+				.unique();
+			return row?._id as Id<"orders">;
+		});
+		await asA.mutation(api.orders.updateStatus, {
+			orderId,
+			status: "cancelled",
+		});
+
+		await expect(
+			asA.mutation(api.products.deletePermanently, { productId }),
+		).rejects.toThrow(/ordered before/i);
+	});
+
+	test("a real storefront order stamps orderedAt, which then blocks the delete", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Sells today" }),
+		);
+		const before = await asA.query(api.products.get, { productId });
+		expect(before?.orderedAt).toBeUndefined();
+		// Deletable right up until it sells.
+		const variantId = before?.variants[0]?._id;
+
+		await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ variantId: variantId as Id<"productVariants">, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali" },
+			deliveryAddress: {
+				line1: "12 Jln Mawar",
+				city: "PJ",
+				state: "Selangor",
+				postcode: "47301",
+			},
+		});
+
+		const after = await asA.query(api.products.get, { productId });
+		expect(after?.orderedAt).toBeGreaterThan(0);
+		await expect(
+			asA.mutation(api.products.deletePermanently, { productId }),
+		).rejects.toThrow(/ordered before/i);
+	});
+
+	test("a non-owner can't delete another store's product", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id),
+		);
+		const asB = t.withIdentity({ subject: USER_B });
+		await expect(
+			asB.mutation(api.products.deletePermanently, { productId }),
+		).rejects.toThrow(/forbidden/i);
+	});
+});
+
+describe("orderedAt is seller-only", () => {
+	/** Seed a product that has sold, so `orderedAt` is actually populated. */
+	async function soldProduct(t: ReturnType<typeof convexTest>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Sold thing" }),
+		);
+		const owned = await asA.query(api.products.get, { productId });
+		await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [
+				{
+					variantId: owned?.variants[0]?._id as Id<"productVariants">,
+					quantity: 1,
+				},
+			],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali" },
+			deliveryAddress: {
+				line1: "12 Jln Mawar",
+				city: "PJ",
+				state: "Selangor",
+				postcode: "47301",
+			},
+		});
+		return { retailer, asA, productId };
+	}
+
+	test("the public storefront list never reveals which products have sold", async () => {
+		const t = setup();
+		const { retailer } = await soldProduct(t);
+		// Unauthenticated — exactly what a competitor can call.
+		const listed = await t.query(api.products.list, {
+			retailerId: retailer._id,
+		});
+		expect(listed.length).toBeGreaterThan(0);
+		for (const p of listed) expect(p).not.toHaveProperty("orderedAt");
+	});
+
+	test("the public product page read doesn't either", async () => {
+		const t = setup();
+		const { retailer, productId } = await soldProduct(t);
+		const bySlug = await t.query(api.products.getPublicBySlug, {
+			retailerId: retailer._id,
+			slug: "sold-thing",
+		});
+		expect(bySlug).not.toBeNull();
+		expect(bySlug).not.toHaveProperty("orderedAt");
+
+		// Same via a bare id as an unauthenticated caller.
+		const anon = await t.query(api.products.get, { productId });
+		expect(anon).not.toHaveProperty("orderedAt");
+	});
+
+	test("but the owner still sees it — the delete gate's UI depends on it", async () => {
+		const t = setup();
+		const { retailer, asA, productId } = await soldProduct(t);
+		const owned = await asA.query(api.products.get, { productId });
+		expect(owned?.orderedAt).toBeGreaterThan(0);
+
+		const dashboard = await asA.query(api.products.listAll, {
+			retailerId: retailer._id,
+		});
+		expect(dashboard.find((p) => p._id === productId)?.orderedAt).toBeGreaterThan(
+			0,
+		);
 	});
 });
