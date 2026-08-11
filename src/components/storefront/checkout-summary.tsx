@@ -424,7 +424,16 @@ export function CheckoutTotals({
 				<FeeLine icon={truck} label={feeLabel} value="FREE" accent />
 			) : null}
 			{quote?.kind === "pending" ? (
-				<FeeLine icon={truck} label={feeLabel} value="Seller confirms" />
+				<FeeLine
+					icon={truck}
+					label={feeLabel}
+					// "no_state" pending = the buyer simply hasn't entered an address
+					// yet (weight-mode arrange stores) — "Seller confirms" there would
+					// announce a human step that picking an address makes unnecessary.
+					value={
+						quote.reason === "no_state" ? "Enter address" : "Seller confirms"
+					}
+				/>
 			) : null}
 			{quote?.kind === "calculating" ? (
 				<FeeLine icon={truck} label={feeLabel} value="Calculating…" pulse />

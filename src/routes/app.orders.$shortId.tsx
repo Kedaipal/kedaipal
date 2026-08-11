@@ -62,6 +62,7 @@ import {
 	DeliveryAddressDisplay,
 	formatAddressInline,
 } from "../components/storefront/delivery-address-display";
+import { ProBadge } from "../components/app/pro-gate";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
@@ -98,6 +99,7 @@ import {
 	stageLabel,
 } from "../lib/orderStatus";
 import { suppressNextOrderConfirmedToast } from "../lib/orderToastSuppression";
+import { isCrmLocked } from "../lib/subscription";
 
 export const Route = createFileRoute("/app/orders/$shortId")({
 	component: OrderDetailRoute,
@@ -396,9 +398,16 @@ function OrderDetailRoute() {
 	// in orders.advanceToStage.
 	const awaitingCollection =
 		collectionService && order?.collectedAt === undefined;
+	// Pro gate (CRM). Skipped until the retailer payload resolves AND the plan
+	// allows it — `customers.get` throws `assertPlanFeature` for Starter, and a
+	// route-level useQuery throw takes the whole order page down (the exact bug
+	// this guard fixes; customers list/detail carry the same skip).
+	const crmLocked = isCrmLocked(retailer);
 	const crmCustomer = useQuery(
 		api.customers.get,
-		order?.customerId ? { customerId: order.customerId } : "skip",
+		retailer && !crmLocked && order?.customerId
+			? { customerId: order.customerId }
+			: "skip",
 	);
 	// Holds the id of the in-flight advance target ("cancel" for cancellation).
 	const [pending, setPending] = useState<string | null>(null);
@@ -1164,6 +1173,10 @@ function OrderDetailRoute() {
 							aria-label="View customer profile"
 						>
 							{avatarRow}
+							{/* Starter: the profile link lands on the customers upgrade
+							    wall — badge it so the tap is never a surprise (the CRM
+							    stats line above stays hidden for the same reason). */}
+							{crmLocked ? <ProBadge className="shrink-0" /> : null}
 							<ChevronRight className="size-4.5 shrink-0 text-muted-foreground/60" />
 						</Link>
 					) : (
@@ -1297,7 +1310,8 @@ function OrderDetailRoute() {
 					</div>
 				) : null}
 				{/* Frozen delivery charge — annotated with how it was priced (band
-				    distance / manual) so the number is auditable at a glance. */}
+				    distance / zone + weight / manual) so the number is auditable at
+				    a glance. */}
 				{order.deliveryFee && order.deliveryFee > 0 ? (
 					<div className="flex items-center justify-between px-3 text-sm text-muted-foreground">
 						<span>
@@ -1305,9 +1319,18 @@ function OrderDetailRoute() {
 							{order.deliverySnapshot?.mode === "radius" &&
 							order.deliverySnapshot.distanceKm !== undefined
 								? ` — ${order.deliverySnapshot.distanceKm} km`
-								: order.deliverySnapshot?.mode === "manual"
-									? " — set by you"
-									: ""}
+								: order.deliverySnapshot?.mode === "weight"
+									? ` — ${[
+											order.deliverySnapshot.zoneName,
+											order.deliverySnapshot.chargeableKg !== undefined
+												? `${order.deliverySnapshot.chargeableKg} kg`
+												: undefined,
+										]
+											.filter(Boolean)
+											.join(" · ")}`
+									: order.deliverySnapshot?.mode === "manual"
+										? " — set by you"
+										: ""}
 						</span>
 						<span className="tabular-nums">
 							{formatPrice(order.deliveryFee, order.currency)}
@@ -1785,11 +1808,14 @@ const MAX_MOCKUP_IMAGES = 5;
 /**
  * Amber action card for a fee-pending delivery order (86extzdr8): the charge
  * couldn't be resolved automatically on an "arrange" store — radius mode:
- * beyond the bands / no map pin; lalamove mode: no live quote / no map pin.
+ * beyond the bands / no map pin; lalamove mode: no live quote / no map pin;
+ * weight mode (86eyeea1n): unserved state / overweight / unweighable cart.
  * The explanation keys on the order's FROZEN `deliveryFeePendingReason` (a
  * Lalamove store must never read "outside your delivery bands"). The seller
  * agrees the charge with the buyer in chat, enters it here (0 = deliver
  * free), and the held payment ask goes out on WhatsApp with the final total.
+ * The missing_weights copy names the FIX (set parcel weights), not just the
+ * state — it's the one reason the seller can make never happen again.
  */
 const FEE_PENDING_REASON_COPY: Record<
 	NonNullable<Doc<"orders">["deliveryFeePendingReason"]> | "unknown",
@@ -1801,6 +1827,16 @@ const FEE_PENDING_REASON_COPY: Record<
 		"The buyer's address has no map pin, so no charge could be worked out yet.",
 	unquotable:
 		"A live Lalamove price couldn't be fetched for this address, so no charge was applied yet.",
+	no_state:
+		"The order has no delivery address yet, so no zone could be matched for the charge.",
+	unserved_state:
+		"The buyer's state isn't in any of your delivery zones, so no charge was applied yet.",
+	over_bands:
+		"This order weighs more than your heaviest weight band, so no charge was applied yet.",
+	missing_weights:
+		"Some items have no parcel weight set, so the charge couldn't be calculated — add weights in Products to price future orders automatically.",
+	custom_item:
+		"This order includes a custom item, so its weight isn't known until you've agreed the details.",
 	// Orders from before the reason was stored — stay mode-neutral.
 	unknown: "No delivery charge could be applied to this order automatically.",
 };
