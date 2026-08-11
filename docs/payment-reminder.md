@@ -1,162 +1,104 @@
-# Unpaid-order payment reminder (2026-07-03, ClickUp `86ey570am`)
+# Unpaid-order payment reminder — **REMOVED** (2026-08-04)
 
-One automatic WhatsApp nudge to a buyer whose order is still unpaid near the
-end of its open-payment window. Directly serves universal pain #2 — *"I'm
-chasing customers for payment confirmation"* — without the seller lifting a
-finger.
+> **This feature no longer exists.** Both halves of it — the automatic day-11
+> cron and the seller's manual "Send payment reminder" button — were deleted by
+> the one-message-per-order policy, ClickUp
+> [`86eyd63r8`](https://app.clickup.com/t/86eyd63r8). See
+> [`one-message-per-order.md`](./one-message-per-order.md).
+>
+> This file is kept as a tombstone: the standard it established (a 14-day
+> payment window, one nudge, never auto-cancel) was a real product decision, and
+> the next person to reach for "we should remind buyers to pay" needs to know it
+> was built, shipped, and deliberately removed — not overlooked.
 
-> **Manual companion (2026-07-16, ClickUp `86ey9xar5`):** the seller can also
-> re-send the payment details on demand from the order page — see
-> [Manual payment reminder](#manual-payment-reminder-seller-triggered) below.
+## What existed (2026-07-03 `86ey570am`, extended 2026-07-16 `86ey9xar5`)
 
-## The standard (established here — no prior default existed)
+**The automatic nudge.** Every order had a **14-day open-payment window** from
+creation. At **day 11** — three days before it closed — a still-unpaid order got
+**one** WhatsApp reminder, ever, stamped on `orders.paymentReminderSentAt`.
+Nothing auto-cancelled at day 14; the window was a reminder deadline, not an
+expiry, and the copy never threatened cancellation.
 
-- Every order has a **14-day open-payment window** from creation
-  (`OPEN_PAYMENT_WINDOW_DAYS`).
-- At **day 11** (3 days before the window closes, `PAYMENT_REMINDER_LEAD_DAYS`)
-  the buyer gets **one** WhatsApp reminder — ever. Stamped on
-  `orders.paymentReminderSentAt`.
-- **Nothing auto-cancels at day 14.** The window is a reminder deadline, not an
-  expiry — the copy deliberately never threatens cancellation. Auto-expiry /
-  escalation is a separate product decision (follow-up).
+An order was "due" when all of: `status` in `confirmed`/`packed`/`shipped`/**`delivered`**
+(`delivered` counted — F&B sellers deliver on credit and settle at week's end, so
+goods-arrived ≠ goods-paid-for); `paymentStatus` neither `claimed` nor `received`
+(a buyer who tapped "I've paid" is waiting on the *seller*); the mockup gate open;
+never reminded before; buyer had a `waPhone`; order ≥ 11 days old.
 
-> Origin note: the ticket referenced a "14-day default" seen in a seller's
-> custom status description ("collect within 14 days"), but no such default
-> existed anywhere in code or docs — this feature *establishes* it for the
-> payment dimension.
+Moving parts: `convex/lib/paymentReminder.ts` (pure predicates + constants),
+`convex/paymentReminders.ts` (daily cron sweep at 02:00 UTC = 10:00 MYT),
+`whatsapp.notifyPaymentReminder` (the send), `whatsappCopy.paymentReminder`
+(EN/MS/ZH system copy), and a one-line note under Settings → Payments so the
+behaviour was never a surprise.
 
-## When is an order "due"? (`convex/lib/paymentReminder.ts`, pure + unit-tested)
+The design decisions worth remembering, in case any of this is rebuilt on a
+different channel: **stamp at schedule time, re-check at send time** (at-most-once
+across crashes and retries); a **bounded creation-time index scan** over the
+`[now − 14d, now − 11d]` slice rather than a table walk, which also self-healed
+across missed cron days; and it was sent as a gated **`session_message`**, not
+`transactional`, because an unsolicited nudge days after the last conversation is
+exactly the traffic WABA protection exists to govern.
 
-All of:
-- `status` is `confirmed` / `packed` / `shipped` / **`delivered`** — a `pending`
-  order was never confirmed in chat so payment isn't owed yet; `cancelled` is
-  closed. **`delivered` counts** (PR feedback, 2026-07-03): F&B sellers
-  routinely deliver stock on credit and settle at the end of the week/month —
-  "goods arrived" does not imply "goods paid for", so a delivered-but-unpaid
-  order still gets nudged;
-- `paymentStatus` is neither `claimed` nor `received` — a buyer who tapped
-  **"I've paid"** is waiting on the *seller*, so nudging them would be wrong;
-- the **mockup gate isn't closed** (`isMockupGateClosed`) — custom orders defer
-  payment until design approval, and the confirm message promised "no payment
-  needed yet";
-- never reminded before; buyer has a `waPhone`; order is ≥ 11 days old.
+**The manual companion.** A **"Send payment reminder"** button on the order's
+unpaid Payment card re-sent the buyer the full payment message on demand. No age
+gate, no once-ever cap — the seller drove it — but with a 6-hour cooldown stamped
+atomically in `orders.prepareManualReminder` (compare-and-set on
+`lastManualReminderAt`, so two fast taps couldn't both slip through), and
+disabled-with-reason for every state where asking for payment would be wrong:
+`cancelled`/`pending`, already `paid`, buyer-`claimed`, `mockup_gated`,
+`fee_pending`, `no_contact`, `cooldown`. It doubled as recovery when the buyer
+never received the first bot reply.
 
-## Moving parts
+## Why it went
 
-| Piece | Where |
-|---|---|
-| Constants + `isPaymentReminderDue` | `convex/lib/paymentReminder.ts` |
-| Daily cron sweep | `convex/paymentReminders.ts` → registered in `convex/crons.ts` (02:00 UTC = 10:00 MYT, a humane send hour) |
-| Send action | `convex/whatsapp.ts` `notifyPaymentReminder` |
-| Copy (EN/MS, system message — not retailer-overridable) | `convex/lib/whatsappCopy.ts` `paymentReminder` |
-| Stamp | `orders.paymentReminderSentAt` (schema widened dev-only, optional forever — no backfill) |
-| Seller discoverability | Settings → Payments: one-line note under the payment methods card |
+Meta bills every delivered message from 1 October 2026. A reminder is, by
+definition, a message sent to a buyer who is already ignoring you — the worst
+possible cost-per-outcome on the platform — and it sat on top of a lifecycle
+already spending ~RM 0.34 per order. An order now gets exactly one outbound
+WhatsApp: the confirmation. Chasing payment is not something Kedaipal does on the
+seller's behalf any more.
 
-## Design decisions
+There is also a truth problem the removal fixes. A `session_message` sent days
+after the last inbound may simply not deliver (outside Meta's 24-hour window),
+so the feature's headline promise — *"we chase your customers for you"* — was
+only ever best-effort. Better to not claim it than to claim it unreliably.
 
-- **Stamp at schedule time, re-check at send time.** The cron writes
-  `paymentReminderSentAt` in the same transaction that schedules the send, so a
-  crash/retry can never double-message; the action re-loads the order and
-  drops silently if payment was claimed/received (or the order closed) in the
-  gap. Net effect: at-most-once.
-- **Bounded index scan, no full table walk.** The sweep reads only orders whose
-  `_creationTime` falls inside `[now − 14d, now − 11d]` on the built-in
-  creation-time index — at most 3 days of orders platform-wide per run, and it
-  self-heals across missed cron days. Orders older than 14 days age out
-  (reminding after the referenced deadline would be noise).
-- **Sent as a gated `session_message`, NOT `transactional`.** An unsolicited
-  nudge days after the last conversation is exactly the traffic WABA
-  protection exists to govern — the kill switch, per-seller caps, and STOP
-  opt-outs all apply. (Known real-world caveat shared with all our text sends:
-  outside Meta's 24-hour customer-service window a session text may not
-  deliver; moving reminders to an approved utility **template** is the
-  follow-up that fixes deliverability platform-wide.)
-- **Not retailer-configurable in v1.** One window, one lead time, system copy.
-  Per-seller tuning (window length, opt-out, custom copy) belongs to the S4
-  "Automated Reminders" roadmap item and can layer on this seam.
+## What a seller does instead
 
-## Manual payment reminder (seller-triggered)
+1. **The buyer's order page is the payment surface.** The one confirmation
+   message links to `/track/<token>`, which carries "How to pay", the bank/QR
+   details and the "I've paid" button, and updates live. Nothing about being
+   unpaid is hidden from the buyer.
+2. **The inbox surfaces who owes.** The **Unpaid** chip and the unpaid-amount
+   figure on the dashboard home come from the same `searchOrders` counts they
+   always did — that surface is untouched.
+3. **The seller messages them, from their own number.** The unpaid Payment card
+   on order detail carries a WhatsApp deep link to the buyer, and Settings →
+   Payments now says plainly: *"Kedaipal doesn't chase unpaid orders… To nudge
+   someone, message them yourself."* A message from the seller's own number is
+   also the one a buyer actually recognises.
 
-_ClickUp `86ey9xar5` (2026-07-16)._ A **"Send payment reminder"** button on the
-order page's unpaid Payment card lets the seller re-send the buyer the payment
-details on demand — the human counterpart to the day-11 cron. It doubles as a
-**recovery path**: if the buyer's first bot reply never landed (a swallowed send
-after `confirmOrderFromWhatsApp` flips the order to `confirmed`), one tap re-ships
-the whole confirmation.
+## Residue in the codebase
 
-### What it sends
+`orders.paymentReminderSentAt` and `orders.lastManualReminderAt` are still on the
+schema with **no writer**. Harmless and cheaper to leave than to migrate; drop
+them in the next schema-narrowing pass. Every function and module named above is
+gone — do not reference `api.orders.sendPaymentReminder`,
+`internal.whatsapp.notifyPaymentReminder`, `notifyManualPaymentReminder`,
+`convex/lib/paymentReminder.ts` or `convex/paymentReminders.ts`.
 
-The **full payment message** (not the terse auto-cron copy) via the shared
-`sendPaymentMessage`: a reminder intro (`paymentReminderIntro`, EN/BM) → pickup
-block → transfer-reference line → payment methods → QR images, capped by an
-**"I've paid" CTA** + tracking link. Standing alone, it works whether the buyer
-is being chased or is seeing the details for the first time. **No powered-by
-footer** — this is a transactional re-send, not a fresh storefront confirm.
+## If this ever comes back
 
-The intro also carries an **explicit "View your order details" tracking link**
-(`trackingUrl`) as tappable text, separate from the "I've paid" CTA button: a
-buyer who just wants to *see* their order (not pay yet) has an obvious link and
-never has to scroll back through old chat messages to find it.
+It should not come back as WhatsApp. The two directions that survive the
+per-message economics:
 
-### When can the seller send it? (`manualReminderEligibility`, pure + tested)
+- **A page the buyer already has** — the reminder is the order page; the missing
+  piece would be getting them to re-open it (a browser push / PWA notification,
+  which costs nothing per send).
+- **Email**, where we already send the seller's own order alerts for free.
 
-Unlike the auto nudge there's **no age gate and no once-ever cap** — the seller
-drives it. The blocks mirror the states where asking the buyer to pay would be
-wrong or impossible, returned as the first failing reason so the button can
-explain itself:
-
-| Reason | Why blocked |
-|---|---|
-| `cancelled` / `pending` | No live confirmed order (a `pending` order was never confirmed in chat, so no buyer `waPhone` exists). |
-| `paid` | `paymentStatus === "received"` — nothing to chase. |
-| `claimed` | Buyer tapped "I've paid" → waiting on the **seller**, not the reverse. |
-| `mockup_gated` | Custom item still needs approval; the buyer was told "no payment needed yet". |
-| `fee_pending` | Delivery charge not set yet — the total the buyer would pay isn't final (mirrors the mockup-gate hold; button is hidden, like mockup-gated). |
-| `no_contact` | No buyer WhatsApp number on file. |
-| `cooldown` | A manual reminder went out **< 6h ago** (`MANUAL_REMINDER_COOLDOWN_MS`); carries `retryAt`. |
-
-### Moving parts
-
-| Piece | Where |
-|---|---|
-| Constant + `manualReminderEligibility` / `ManualReminderBlock` | `convex/lib/paymentReminder.ts` |
-| Auth + eligibility + atomic cooldown stamp | `convex/orders.ts` `prepareManualReminder` (internal mutation; `resolveSharedOrder` owner-or-admin) |
-| Public seller action | `convex/orders.ts` `sendPaymentReminder({ shortId })` |
-| Send + state re-check | `convex/whatsapp.ts` `notifyManualPaymentReminder` + `getManualReminderContext` |
-| Intro copy (EN/BM, system message) | `convex/lib/whatsappCopy.ts` `paymentReminderIntro` |
-| Stamp | `orders.lastManualReminderAt` (schema widened dev-only, optional forever — no backfill) |
-| UI | `src/routes/app.orders.$shortId.tsx` — button + disabled-with-reason + "Last reminded Xh ago" + 24h-delivery helper on the unpaid Payment card |
-
-### Design decisions
-
-- **Separate stamp (`lastManualReminderAt`) from the auto `paymentReminderSentAt`.**
-  The two triggers never corrupt each other's once-only logic. To avoid
-  double-messaging, the **auto cron skips** an order the seller manually reminded
-  within the 3-day lead window (`PAYMENT_REMINDER_LEAD_DAYS`) — a manual nudge on
-  day 9 suppresses the day-11 auto nudge; a manual nudge on day 5 doesn't.
-- **Atomic compare-and-set cooldown.** `prepareManualReminder` re-reads
-  `lastManualReminderAt` and stamps in one mutation, so two fast taps can't both
-  slip past the 6h gate. The button also disables while a send is in flight.
-- **Best-effort delivery, eligibility is the only hard feedback.** The send rides
-  the WABA `session_message` gateway (kill switch / caps / opt-outs apply) and
-  `sendPaymentMessage` swallows Meta errors — same posture as every session send,
-  including the auto nudge. So the action surfaces only the **eligibility** block
-  reasons; actual delivery carries the standing caveat (session texts may not
-  reach a buyer you haven't messaged in ~24h), shown as helper copy under the
-  button. A paused store is already flagged by the WABA kill-switch banner.
-- **Scope = confirmed online/storefront orders.** Counter checkout sends payment
-  details at scan and has its own document resend, so the button stays on the
-  Payment card (which never renders for a `pending` or fully-paid order).
-
-## Tests
-
-- `convex/lib/paymentReminder.test.ts` — predicate matrix (status ×
-  paymentStatus × mockup gate × age × stamp × reachability) for **both**
-  `isPaymentReminderDue` (incl. the manual-suppresses-auto rule) and
-  `manualReminderEligibility` (blocks + 6h cooldown boundary + precedence).
-- `convex/paymentReminders.test.ts` — cron sweep (stamps once, skips
-  young/paid/aged-out) + send action (body content; claimed-in-the-gap never
-  nagged).
-- `convex/manualPaymentReminder.test.ts` — the seller action end-to-end (sends
-  the full message + stamps; cooldown rejects a second tap without sending;
-  claimed order blocked; requires auth).
+Any WhatsApp revival needs an approved **utility template** (deliverability
+outside the 24h window is otherwise not real) *and* a pricing decision — it
+changes the unit economics of every plan, so it is a ticket, not an
+implementation detail. See
+[`one-message-per-order.md`](./one-message-per-order.md#if-you-are-adding-a-feature).

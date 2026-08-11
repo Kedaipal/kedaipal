@@ -295,8 +295,8 @@ export function BookDeliveryCard({
 					) : (
 						<p className="text-muted-foreground">
 							Finding a rider… this usually takes a few minutes. When one picks
-							up, the buyer gets the shipped message with live tracking
-							automatically.
+							up, the order moves itself to Shipped and the live tracking link
+							appears on the buyer&apos;s order page — nothing for you to do.
 						</p>
 					)}
 					<div className="flex items-center justify-between text-xs text-muted-foreground">
@@ -363,12 +363,14 @@ export function BookDeliveryCard({
 							</a>
 						) : null}
 					</div>
-					{/* Rider's drop-off photo (proof of delivery) — the buyer got the
-					    same shot on WhatsApp. Tap opens full size. */}
+					{/* Rider's drop-off photo (proof of delivery) — not sent anywhere;
+					    the same shot renders on the buyer's order page, and the caption
+					    says so. Tap opens full size. */}
 					{completedJob.podImageUrls?.length ? (
 						<div className="flex flex-col gap-1.5">
 							<p className="text-xs text-muted-foreground">
-								Delivery photo from the rider
+								Delivery photo from the rider — the buyer sees this on their
+								order page too
 							</p>
 							<div className="flex gap-2">
 								{completedJob.podImageUrls.map((url) => (

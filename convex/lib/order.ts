@@ -108,3 +108,24 @@ export function isMockupGateClosed(order: MockupGateFields): boolean {
 		order.mockupWaivedAt === undefined
 	);
 }
+
+/**
+ * Is the order's price still unknown because the seller hasn't quoted the custom
+ * work yet? A *narrower* question than `isMockupGateClosed`, and the one the
+ * confirmation push asks (86eyd63r8, one-message-per-order).
+ *
+ * The seller names the price when they **submit** the mockup — `submitMockup`
+ * folds `quotedAmount` into `total` there, before the buyer has approved
+ * anything. So `submitted` (and `changes_requested`, which can only follow a
+ * submit) already carries a real total, even though the *gate* stays closed
+ * until sign-off. That's why the order's single WhatsApp message fires at
+ * submit: it's the earliest moment the message can state a true price AND the
+ * moment the buyer needs the tracking link to go approve.
+ *
+ * Only `pending` — quote never entered — is genuinely unsettled. A waiver
+ * settles it too (the seller has given up on sign-off and proceeds at the
+ * standing total).
+ */
+export function isMockupPriceUnsettled(order: MockupGateFields): boolean {
+	return order.mockupStatus === "pending" && order.mockupWaivedAt === undefined;
+}

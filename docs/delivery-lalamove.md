@@ -311,9 +311,10 @@ secrets → verify → act → ack. Lalamove-specific twists:
   provider truth via a `lastEventAt` guard; the **order never regresses** —
   `picked_up` → `shipped` only from confirmed/packed, `completed` →
   `delivered` only from confirmed/packed/shipped, cancelled orders are never
-  touched, and transitions ride the exported `applyStatusTransition` so
-  WhatsApp notify, stage vocabulary, activation stamping and orderEvents all
-  come free.
+  touched, and transitions ride the exported `applyStatusTransition` so stage
+  vocabulary, activation stamping and orderEvents all come free. (It used to
+  carry a WhatsApp notify too — removed by `86eyd63r8`; see the note under the
+  event table.)
 ### Event-by-event: when it fires, what we do, who is told
 
 | Event | When Lalamove sends it | What we do | Vendor sees | Buyer sees |
@@ -321,13 +322,13 @@ secrets → verify → act → ack. Lalamove-specific twists:
 | `ORDER_STATUS_CHANGED: ASSIGNING_DRIVER` | booking placed / driver bailed and rematching | job pill | "Finding rider" on the order card (live) | nothing — matching churn is noise |
 | `DRIVER_ASSIGNED` | a driver accepted | driver name/phone/plate + shareLink onto the job; link mirrored to `orders.carrierTrackingUrl` (fill-if-unset) | driver row + Call + Live tracking on the card | nothing yet — deliberate: drivers can still bail; the buyer promise starts at pickup |
 | `ORDER_STATUS_CHANGED: ON_GOING` | driver is **heading to the VENDOR** to collect (not to the buyer yet) | job pill | "Rider on the way" (to *you*) | nothing |
-| `ORDER_STATUS_CHANGED: PICKED_UP` | rider has the goods, now heading to the buyer | **order → `shipped`** via `applyStatusTransition` (which also drops a stale `currentStageId` — see note below) | inbox/status flips reactively + orderEvents row | **WhatsApp shipped message with the live-tracking link** — this is the moment the buyer's tracking starts |
-| `ORDER_STATUS_CHANGED: COMPLETED` | goods handed to the buyer | **order → `delivered`** | inbox/status flips reactively + timeline row (no chime — see note); the dispatch card settles to a green **Delivered** summary — booking cost (seller's actual spend), rider name/plate, and a "Trip details" link — never an empty card | **WhatsApp delivered message** |
+| `ORDER_STATUS_CHANGED: PICKED_UP` | rider has the goods, now heading to the buyer | **order → `shipped`** via `applyStatusTransition` (which also drops a stale `currentStageId` — see note below) | inbox/status flips reactively + orderEvents row | order page flips to Shipped and the **live-tracking link appears** on it — reactively, no message (`86eyd63r8`) |
+| `ORDER_STATUS_CHANGED: COMPLETED` | goods handed to the buyer | **order → `delivered`** | inbox/status flips reactively + timeline row (no chime — see note); the dispatch card settles to a green **Delivered** summary — booking cost (seller's actual spend), rider name/plate, and a "Trip details" link — never an empty card | order page flips to Delivered — no message (`86eyd63r8`) |
 | `ORDER_STATUS_CHANGED: EXPIRED` | no driver found in Lalamove's matching window | job → failed + reason | **email** (`deliveryJobFailed`) + **browser alert** + amber card + one-tap Rebook | nothing (order unchanged — buyer was never told a rider existed) |
 | `ORDER_STATUS_CHANGED: CANCELED / REJECTED` | booking cancelled (by vendor on Lalamove's side, by Lalamove, or step 1 of a clone) | job → failed + reason | same failure surfaces as EXPIRED | nothing |
 | `ORDER_AMOUNT_CHANGED` | **after** matching/completion when the final charge differs from the quote — waiting-time fees, priority fee/tip added, toll adjustments | `costActual` updated on the job | the card's "Booking cost" updates reactively (the drift ledger vs buyer-paid fee) | nothing — buyer price is frozen |
 | `ORDER_REPLACED` | Lalamove's **cancel-and-clone**: for post-match adjustments THEY cancel the original and re-create it under a new orderId (sequence: CANCELED old → ORDER_REPLACED → clone's own events) | job repointed to the new id, **revived** to "assigning", stale failure cleared | card returns to active; if the clone-cancel briefly emailed a failure, the booking visibly recovers (rare, self-healing) | nothing |
-| `POD_STATUS_CHANGED` | rider uploaded the drop-off photo / signature | trigger only — the truth is read from `GET /v3/orders` by the idempotent `fetchPodImages` (also scheduled at COMPLETED, whichever lands first wins; the loser's blobs are cleaned) | photo thumbnails on the delivered dispatch card | **WhatsApp photo follow-up** to the delivered message ("Delivered! 📸 …", EN+BM) |
+| `POD_STATUS_CHANGED` | rider uploaded the drop-off photo / signature | trigger only — the truth is read from `GET /v3/orders` by the idempotent `fetchPodImages` (also scheduled at COMPLETED, whichever lands first wins; the loser's blobs are cleaned) | photo thumbnails on the delivered dispatch card | **"Delivery photo" card on the order page** — page-only (`86eyd63r8`) |
 | `WALLET_BALANCE_CHANGED` | vendor wallet balance moved | logged only (proactive low-balance banner = named follow-up) | — | — |
 | `ORDER_CREATED` (undocumented but real) | at booking | logged only | — | — |
 
@@ -341,13 +342,22 @@ same idempotent fetch) `lalamove.fetchPodImages` reads
 them as **our** blobs (`deliveryJobs.podImageStorageIds` — Lalamove's URL
 lifetime is undocumented, never hotlink), retrying up to 3× at 2-min
 intervals since the upload can lag the status event. Then: the **buyer**
-gets the photo on WhatsApp as a follow-up to the delivered message
-(`notifyDeliveryPhoto`, transactional, caption EN+BM) **and** a "Delivery
-photo" card on the tracking page (`orders.get` resolves `podImageUrls` on
-delivered delivery orders only — one indexed read on that end-state, the
-hot tracking path pays nothing), and the **vendor** sees thumbnails on
-the delivered dispatch card ("Delivery photo from the rider", tap for
-full size). Races are settled in `storePodImages` (first
+sees a "Delivery photo" card on their order page (`orders.get` resolves
+`podImageUrls` on delivered delivery orders only — one indexed read on
+that end-state, the hot tracking path pays nothing), and the **vendor**
+sees thumbnails on the delivered dispatch card ("Delivery photo from the
+rider… the buyer sees this on their order page", tap for full size).
+
+**POD photos are page-only since [`86eyd63r8`](https://app.clickup.com/t/86eyd63r8).**
+`whatsapp.notifyDeliveryPhoto` — the WhatsApp follow-up that used to carry
+these shots to the buyer ("Delivered! 📸 …", EN+BM) — is **deleted**. It was
+the one send in the codebase that produced **N messages from a single event**
+(up to 3 images, one send each), which is exactly the shape that stops being
+affordable when Meta bills per delivered message from 1 Oct 2026. The order's
+one WhatsApp went out at confirmation; the photo lands on the page that
+message linked to. `fetchPodImages` still downloads and stores the blobs
+identically — only the send was removed. See
+[`one-message-per-order.md`](./one-message-per-order.md). Races are settled in `storePodImages` (first
 set wins, loser's blobs deleted); order/account delete cascades remove the
 blobs. Sandbox never produces a POD (no riders), so the photo path is a
 **first-prod-booking check**; all parsing/storage/race logic is
@@ -364,19 +374,25 @@ status change (same-status replays keep within-anchor custom stages), and
 stored stage whose anchor is BEHIND the canonical status — which also heals
 any already-stale rows with no migration.
 
-**Why the buyer only hears at PICKED_UP and COMPLETED:** those are the two
+**Why only PICKED_UP and COMPLETED move the order:** those are the two
 promises a buyer cares about ("your food is moving" / "it arrived"), and
 they're irreversible. Everything earlier (matching, assignment, rider
-heading to the stall) can churn — notifying it would send the buyer
-false-starts.
+heading to the stall) can churn — flipping the order on it would show the
+buyer false-starts. This reasoning used to govern which events **messaged**
+the buyer; since `86eyd63r8` nothing messages them, so it now governs which
+events move the **order status** their page reflects. The bar is the same one
+and the answer didn't change.
 
 **Why COMPLETED doesn't chime the vendor:** `delivered` is the expected
 happy path — the inbox shows it reactively and the interruption budget
 (chime + system notification) is reserved for events needing ACTION: new
 order, failed booking. Payment is orthogonal: a delivered-but-unpaid order
-(cash on hand-over, pay-later) stays `unpaid` and the existing payment
-machinery (claim buttons, reminder cron, manual reminder) carries it — the
-rider never collects money for us (Lalamove COD is not enabled).
+(cash on hand-over, pay-later) stays `unpaid` and the buyer settles from
+their order page ("How to pay" + "I've paid"); the automatic and manual
+payment reminders that used to back this up are **gone** (`86eyd63r8` — see
+[`payment-reminder.md`](./payment-reminder.md)), so chasing is the seller's
+own message to send. The rider never collects money for us (Lalamove COD is
+not enabled).
 
 Terminal failures email the seller (EN+BM `deliveryJobFailed` template),
 raise a browser alert on devices with order alerts on, leave the order
@@ -396,8 +412,10 @@ only ever written by the webhook handler, and ASSIGNING_DRIVER lands
 seconds after booking), the order-detail stepper's advance into a
 **shipped- or delivered-anchored** stage renders **disabled-with-reason**
 ("…moves to Shipped on its own when the rider picks up") — a manual tap
-would message the buyer early and, for shipped, without the live-tracking
-link. Confirm/packed advances are never gated (pre-pickup work is the
+would flip the buyer's order page to "on the way" before the rider has the
+goods and, for shipped, without the live-tracking link on it. (Pre-`86eyd63r8`
+it would also have fired a premature WhatsApp; the page-only consequence is
+the one that remains, and it's still worth blocking.) Confirm/packed advances are never gated (pre-pickup work is the
 seller's), same-anchor custom-stage moves stay free, and a small
 **"Update manually" confirm-gated escape** stays reachable so a webhook
 that dies mid-delivery never strands the order. Webhook-less sellers
@@ -469,13 +487,13 @@ node --env-file=.env.local scripts/lalamove-simulate-webhook.mjs <providerOrderI
 Failure paths: `CANCELED` / `EXPIRED` / `REJECTED` (job fails + one-tap
 rebook); `POD` fires the proof-of-delivery trigger (sandbox has no rider
 photo, so the fetch comes back empty — the photo path is a
-first-prod-booking check). `PICKED_UP` / `COMPLETED` really message the
-order's buyer number — book a test order with your own number to see them
-land.
+first-prod-booking check). `PICKED_UP` / `COMPLETED` move the real order, so
+watch the buyer's order page and the inbox — they no longer send the buyer
+anything (`86eyd63r8`).
 
-To actually see the **POD photo** on its three surfaces (buyer WhatsApp,
-buyer tracking page, vendor card) without a real rider, inject a stand-in
-through the same pipeline — no Lalamove credentials needed:
+To actually see the **POD photo** on both its surfaces (the buyer's order
+page, the vendor card) without a real rider, inject a stand-in through the
+same pipeline — no Lalamove credentials needed:
 
 ```bash
 npx convex run lalamove:devInjectPodImage '{"providerOrderId":"<providerOrderId>"}'

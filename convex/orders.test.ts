@@ -2421,18 +2421,15 @@ describe("orders — custom quote + decline", () => {
 		expect(after?.status).not.toBe("cancelled");
 		expect(await totalSpent(t, retailer._id)).toBe(10000);
 
-		// The buyer is nudged to pay for the remaining ready-made items over
-		// WhatsApp (the gate just opened on a still-unpaid order).
+		// No WhatsApp nudge (86eyd63r8): this legacy order (no push) already had
+		// its one message — the inbound confirm reply — and the recomputed total
+		// shows on the buyer's order page. Nothing new may be scheduled.
 		const jobs = await t.run((ctx) =>
 			ctx.db.system.query("_scheduled_functions").collect(),
 		);
 		expect(
-			jobs.some(
-				(j) =>
-					j.name.includes("notifyPaymentDue") &&
-					(j.args as Array<{ reason?: string }>)[0]?.reason === "declined",
-			),
-		).toBe(true);
+			jobs.filter((j) => j.name.startsWith("whatsapp")),
+		).toEqual([]);
 
 		// Gate is open — the order can now be packed.
 		await asA(t).mutation(api.orders.updateStatus, {
@@ -2774,10 +2771,10 @@ describe("orders — Phase 2 stage advance (advanceToStage)", () => {
 		const retailer = await seedRetailer(t, USER_A);
 		await asA(t).mutation(api.retailers.updateSettings, {
 			orderStages: [
-				{ anchor: "confirmed", label: { en: "Accepted" }, notify: true },
-				{ anchor: "packed", label: { en: "Cleaning" }, notify: false },
-				{ anchor: "packed", label: { en: "Drying" }, notify: true },
-				{ anchor: "delivered", label: { en: "Collected" }, notify: true },
+				{ anchor: "confirmed", label: { en: "Accepted" }},
+				{ anchor: "packed", label: { en: "Cleaning" }},
+				{ anchor: "packed", label: { en: "Drying" }},
+				{ anchor: "delivered", label: { en: "Collected" }},
 			],
 		});
 		const me = await asA(t).query(api.retailers.getMyRetailer);
@@ -4224,113 +4221,6 @@ describe("fulfilment date", () => {
 			today + 1 * DAY_MS,
 			today,
 		]);
-	});
-});
-
-describe("sendOrderDocumentToBuyer", () => {
-	function installWaFetchMock() {
-		const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
-		const original = globalThis.fetch;
-		globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
-			const body = init?.body ? JSON.parse(init.body as string) : {};
-			calls.push({ url: String(url), body });
-			return new Response("{}", { status: 200 });
-		}) as unknown as typeof fetch;
-		return {
-			calls,
-			restore: () => {
-				globalThis.fetch = original;
-			},
-		};
-	}
-
-	async function seedOrder(
-		t: ReturnType<typeof setup>,
-		retailerId: Id<"retailers">,
-		cust: { name?: string; waPhone?: string },
-	): Promise<string> {
-		const productId = await seedProduct(t, USER_A, retailerId);
-		const { shortId } = await t.mutation(api.orders.create, {
-			retailerId,
-			items: [{ productId, quantity: 1 }],
-			currency: "MYR",
-			channel: "whatsapp",
-			customer: cust,
-			deliveryAddress: validAddress,
-		});
-		return shortId;
-	}
-
-	test("paid order → sends a Receipt PDF document to the buyer's WhatsApp", async () => {
-		process.env.WHATSAPP_ACCESS_TOKEN = "test-token";
-		process.env.WHATSAPP_PHONE_NUMBER_ID = "test-phone-id";
-		const t = setup();
-		const retailer = await seedRetailer(t, USER_A);
-		const shortId = await seedOrder(t, retailer._id, customer);
-		// Settle it so the document renders as a receipt.
-		await t.run(async (ctx) => {
-			const o = await ctx.db
-				.query("orders")
-				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
-				.first();
-			await ctx.db.patch(o!._id, {
-				paymentStatus: "received",
-				paymentReceivedAt: Date.now(),
-			});
-		});
-
-		const fetchMock = installWaFetchMock();
-		const res = await t
-			.withIdentity({ subject: USER_A })
-			.action(api.orders.sendOrderDocumentToBuyer, { shortId });
-		expect(res.ok).toBe(true);
-		const doc = fetchMock.calls.find((c) => c.body.type === "document");
-		expect(doc).toBeTruthy();
-		const document = doc!.body.document as { filename: string; link: string };
-		expect(document.filename).toBe(`Receipt-${shortId}.pdf`);
-		expect(doc!.body.to).toBe(customer.waPhone);
-		fetchMock.restore();
-	});
-
-	test("unpaid order → sends an Invoice-named document", async () => {
-		process.env.WHATSAPP_ACCESS_TOKEN = "test-token";
-		process.env.WHATSAPP_PHONE_NUMBER_ID = "test-phone-id";
-		const t = setup();
-		const retailer = await seedRetailer(t, USER_A);
-		const shortId = await seedOrder(t, retailer._id, customer);
-
-		const fetchMock = installWaFetchMock();
-		const res = await t
-			.withIdentity({ subject: USER_A })
-			.action(api.orders.sendOrderDocumentToBuyer, { shortId });
-		expect(res.ok).toBe(true);
-		const doc = fetchMock.calls.find((c) => c.body.type === "document");
-		expect((doc!.body.document as { filename: string }).filename).toBe(
-			`Invoice-${shortId}.pdf`,
-		);
-		fetchMock.restore();
-	});
-
-	test("returns no_phone when the order has no buyer phone", async () => {
-		const t = setup();
-		const retailer = await seedRetailer(t, USER_A);
-		const shortId = await seedOrder(t, retailer._id, { name: "Ali" });
-		const res = await t
-			.withIdentity({ subject: USER_A })
-			.action(api.orders.sendOrderDocumentToBuyer, { shortId });
-		expect(res).toEqual({ ok: false, reason: "no_phone" });
-	});
-
-	test("a non-owner cannot send another store's order document", async () => {
-		const t = setup();
-		const retailer = await seedRetailer(t, USER_A);
-		await seedRetailer(t, USER_B);
-		const shortId = await seedOrder(t, retailer._id, customer);
-		await expect(
-			t
-				.withIdentity({ subject: USER_B })
-				.action(api.orders.sendOrderDocumentToBuyer, { shortId }),
-		).rejects.toThrow(/Forbidden/);
 	});
 });
 
@@ -6039,7 +5929,7 @@ describe("orders — deferred push for non-final totals (86eyfq0w5)", () => {
 		fetchMock.restore();
 	});
 
-	test("legacy flow (env unset) is untouched: pending order, free-form prompt on approval", async () => {
+	test("legacy flow (env unset): pending order, and approval sends nothing (86eyd63r8)", async () => {
 		delete process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE;
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
@@ -6071,8 +5961,14 @@ describe("orders — deferred push for non-final totals (86eyfq0w5)", () => {
 			quotedAmount: 5000,
 		});
 		await t.mutation(api.orders.approveMockup, { token: await tk(t, shortId) });
-		expect(await scheduled(t, "notifyPaymentDue")).toHaveLength(1);
+		// 86eyd63r8: the legacy free-form payment prompt is gone with every other
+		// follow-up send. A no-push order's one message stays the inbound confirm
+		// reply; approval only opens the gate, and payment lives on the order page.
 		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toEqual([]);
+		const jobs = await t.run((ctx) =>
+			ctx.db.system.query("_scheduled_functions").collect(),
+		);
+		expect(jobs.filter((j) => j.name.startsWith("whatsapp"))).toEqual([]);
 	});
 });
 

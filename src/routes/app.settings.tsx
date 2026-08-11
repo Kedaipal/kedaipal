@@ -624,17 +624,25 @@ function SettingsRoute() {
 					<div className="flex flex-col gap-6 pt-2">
 						<InfoBanner title="How WhatsApp works on Kedaipal">
 							<p>
-								All automated order messages (confirmations, packed, shipped,
-								delivered) are sent from{" "}
+								Every order sends the buyer{" "}
+								<span className="font-medium text-foreground">
+									one WhatsApp message
+								</span>{" "}
+								— the confirmation — from{" "}
 								<span className="font-medium text-foreground">
 									Kedaipal's shared WhatsApp Business number
 								</span>{" "}
-								on your behalf — no Meta account needed.
+								on your behalf, no Meta account needed.
+							</p>
+							<p>
+								That message links to the buyer's own order page, which updates
+								itself. Packing, shipping, payment and cancellation no longer
+								send a WhatsApp — the buyer sees them on that page.
 							</p>
 							<p>
 								Add your personal WhatsApp number below so buyers can reach you
-								directly. It appears as a tappable contact link in automated
-								messages.
+								directly. It appears as a tappable contact link on their order
+								page.
 							</p>
 						</InfoBanner>
 
@@ -669,13 +677,13 @@ function SettingsRoute() {
 								onSave={(paymentMethods) => updateSettings({ paymentMethods })}
 							/>
 						</Card>
-						{/* Surfaces the automatic nudge so the behaviour is never a
-						    surprise — see docs/payment-reminder.md. */}
+						{/* Says plainly that nothing chases the buyer for us, so a seller
+						    never assumes a nudge went out that didn't. */}
 						<p className="px-1 text-xs text-muted-foreground">
-							Unpaid orders get one automatic WhatsApp reminder 11 days after
-							ordering — 3 days before the 14-day payment window closes. Buyers
-							who tapped “I've paid” (or whose payment you've confirmed) are
-							never reminded.
+							Kedaipal doesn't chase unpaid orders. Each order gets one WhatsApp
+							— the confirmation — and it links the buyer to their order page,
+							where these payment details and the “I've paid” button live. To
+							nudge someone, message them yourself.
 						</p>
 					</div>
 				) : null}
@@ -1544,15 +1552,17 @@ function PaymentMethodsForm({
 	);
 }
 
-const TEMPLATE_LABELS: Record<TemplateKey, string> = {
-	confirm: "Order confirmation",
-	packed: "Packed",
-	shipped: "Shipped",
-	delivered: "Delivered",
-	cancelled: "Cancelled",
-	unknownFallback: "Unknown message reply",
+// Only the keys still in TEMPLATE_KEYS are editable — the status/fallback copy
+// no longer has a sender, so it has no label here either. Partial + fallback so
+// a key added back to TEMPLATE_KEYS renders instead of crashing.
+const TEMPLATE_LABELS: Partial<Record<TemplateKey, string>> = {
+	confirm: "Your reply",
 };
 
+// The card earns its place on one narrow job: a buyer who types their order
+// number into the shared number gets this reply. The order's own confirmation is
+// a fixed Meta template and is NOT editable here — if TEMPLATE_KEYS ever empties
+// out, delete this card rather than shipping an editor that changes nothing.
 function MessageTemplatesForm({
 	current,
 	onSave,
@@ -1594,10 +1604,14 @@ function MessageTemplatesForm({
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
 			<div className="flex flex-col gap-1">
 				<h3 className="text-sm font-semibold text-foreground">
-					WhatsApp message templates
+					Reply when a buyer messages their order number
 				</h3>
 				<p className="text-xs text-muted-foreground leading-relaxed">
-					Override the default copy. Use{" "}
+					The confirmation your buyers receive is a fixed Meta-approved template
+					— WhatsApp's rule for messaging someone who hasn't replied yet — so it
+					can't be customised. This copy is the reply sent when a buyer writes
+					their order number (e.g.{" "}
+					<code className="font-mono">ORD-1234</code>) to our shared number. Use{" "}
 					<code className="font-mono">{"{shortId}"}</code> and{" "}
 					<code className="font-mono">{"{storeName}"}</code> as variables. Leave
 					blank to use the default.
@@ -1629,7 +1643,7 @@ function MessageTemplatesForm({
 						<label key={key} className="flex flex-col gap-1">
 							<div className="flex items-center justify-between">
 								<span className="text-sm font-medium">
-									{TEMPLATE_LABELS[key]}
+									{TEMPLATE_LABELS[key] ?? key}
 								</span>
 								{value ? (
 									<button
@@ -1649,14 +1663,6 @@ function MessageTemplatesForm({
 								maxLength={1000}
 								className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 							/>
-							{key === "confirm" ? (
-								<p className="text-xs text-muted-foreground leading-relaxed">
-									The very first confirmation for an online order is sent from
-									a fixed Meta-approved template (WhatsApp's rule for
-									messaging a buyer who hasn't replied yet). Your copy here
-									takes over from the buyer's first reply onward.
-								</p>
-							) : null}
 						</label>
 					);
 				})}
@@ -1681,7 +1687,6 @@ type StageDraft = {
 	descEn: string;
 	descMs: string;
 	descZh: string;
-	notify: boolean;
 };
 
 function seedToDraft(s: OrderStage): StageDraft {
@@ -1697,7 +1702,6 @@ function seedToDraft(s: OrderStage): StageDraft {
 		descEn: s.description?.en ?? "",
 		descMs: s.description?.ms ?? "",
 		descZh: s.description?.zh ?? "",
-		notify: s.notify,
 	};
 }
 
@@ -1720,7 +1724,6 @@ function draftsToStages(drafts: StageDraft[]): OrderStage[] {
 					},
 				}
 			: {}),
-		notify: d.notify,
 		sortOrder: i,
 	}));
 }
@@ -1785,7 +1788,6 @@ function StageEditor({
 				descEn: "",
 				descMs: "",
 				descZh: "",
-				notify: false, // intermediate stages default off (DECISION 2)
 			},
 		]);
 	}
@@ -1935,15 +1937,9 @@ function StageEditor({
 					</span>
 					<select
 						value={d.anchor}
-						onChange={(e) => {
-							const anchor = e.target.value as StageAnchor;
-							// Confirmed stages never WhatsApp the buyer, so clear notify
-							// when switching to it (keeps the count + UI honest).
-							update(d._key, {
-								anchor,
-								...(anchor === "confirmed" ? { notify: false } : {}),
-							});
-						}}
+						onChange={(e) =>
+							update(d._key, { anchor: e.target.value as StageAnchor })
+						}
 						className="min-h-11 rounded-xl border border-input bg-background px-4 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 					>
 						{STAGE_ANCHORS.map((a) => (
@@ -2003,26 +1999,6 @@ function StageEditor({
 					</label>
 				</div>
 
-				{d.anchor === "confirmed" ? (
-					// Confirmed = the order-accepted moment; the buyer is already
-					// messaged by the confirmation/payment flow, so no per-stage toggle.
-					<p className="text-xs text-muted-foreground">
-						Buyers are notified automatically when the order is confirmed.
-					</p>
-				) : (
-					<label className="flex items-center gap-2 text-sm">
-						<input
-							type="checkbox"
-							checked={d.notify}
-							onChange={(e) => update(d._key, { notify: e.target.checked })}
-							className="size-4"
-						/>
-						<span>
-							Send the buyer a WhatsApp when the order enters this stage
-						</span>
-					</label>
-				)}
-
 				{/* Destructive action lives at the bottom (out of the toggle header) so
 				    it can't be hit while quick-expanding/collapsing. */}
 				<button
@@ -2055,6 +2031,15 @@ function StageEditor({
 					Add stage
 				</Button>
 			</div>
+
+			{/* Stages used to be able to fire a WhatsApp each. They can't any more, so
+			    say what they still do — otherwise a seller who relied on stage pings
+			    just sees the toggle gone. */}
+			<p className="text-xs text-muted-foreground leading-relaxed">
+				Stages are your own words for the steps an order goes through. They name
+				the steps on the buyer's order page too — advancing a stage updates that
+				page instantly, but doesn't send the buyer a WhatsApp.
+			</p>
 
 			{drafts.length === 0 ? (
 				<p className="rounded-xl border border-dashed border-input bg-muted/20 px-4 py-4 text-center text-sm text-muted-foreground">
@@ -2143,7 +2128,8 @@ function LocaleForm({
 					))}
 				</select>
 				<span className="text-xs text-muted-foreground">
-					Used for order confirmations and shipping updates sent to shoppers.
+					Used for the order confirmation buyers receive and for their order
+					page.
 				</span>
 			</label>
 
@@ -2307,7 +2293,7 @@ function WaPhoneForm({
 					<field.PhoneField
 						label="Your contact WhatsApp number"
 						required
-						description="Shown to buyers in order confirmations and updates so they can reach you directly."
+						description="Shown to buyers on their order page (and in the order confirmation) so they can message you directly."
 					/>
 				)}
 			</form.AppField>

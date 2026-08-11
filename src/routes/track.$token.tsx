@@ -201,8 +201,8 @@ function OrderNotFound() {
 		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-3 px-5 text-center">
 			<h1 className="text-2xl font-bold">Order not found</h1>
 			<p className="text-sm text-muted-foreground">
-				This tracking link is invalid or has expired. Please use the latest link
-				from your WhatsApp chat with the store.
+				This tracking link is invalid or has expired. Please use the link from
+				your WhatsApp order confirmation, or message the store for a new one.
 			</p>
 		</main>
 	);
@@ -330,7 +330,7 @@ function TrackingRoute() {
 	const paymentStatus = (order.paymentStatus ?? "unpaid") as PaymentStatus;
 	const paymentConfig = getPaymentConfig(paymentStatus);
 	// While a custom item still awaits mockup approval, the price isn't final, so
-	// the payment ask is held back (no live "I've paid" — see the bot flow too).
+	// the payment ask is held back (no live "I've paid").
 	// Gate opens on approval or seller waiver. Shared gate — same source as the
 	// server (lib/order). `mockupGateOpen` is the distinct "actively opened"
 	// concept used only for the receipt below.
@@ -556,9 +556,9 @@ function TrackingRoute() {
 									Awaiting delivery charge
 								</Button>
 								<p className="text-xs opacity-80">
-									{order.storeName || "The seller"} is confirming your delivery
-									charge on WhatsApp — payment opens with the final total right
-									after.
+									{order.storeName || "The seller"} is still working out your
+									delivery charge — payment opens here with the final total as
+									soon as they set it.
 								</p>
 							</>
 						) : (
@@ -572,21 +572,29 @@ function TrackingRoute() {
 					) : null}
 
 					{paymentStatus === "claimed" ? (
-						<div className="flex items-center justify-between gap-3 text-sm">
-							<p className="opacity-80">
-								Awaiting store confirmation
-								{order.paymentClaimedAt
-									? ` · ${formatRelativeTime(order.paymentClaimedAt)}`
-									: ""}
+						<>
+							<div className="flex items-center justify-between gap-3 text-sm">
+								<p className="opacity-80">
+									Awaiting store confirmation
+									{order.paymentClaimedAt
+										? ` · ${formatRelativeTime(order.paymentClaimedAt)}`
+										: ""}
+								</p>
+								<button
+									type="button"
+									onClick={() => setClaimingPayment(true)}
+									className="shrink-0 font-medium underline-offset-2 hover:underline"
+								>
+									Update proof
+								</button>
+							</div>
+							{/* The confirmation is the order's only WhatsApp (86eyd63r8) —
+							    "payment received" is a page state now, so say where to look
+							    instead of leaving the buyer waiting on a message. */}
+							<p className="text-xs opacity-80">
+								{`This page updates the moment ${order.storeName || "the store"} confirms your payment.`}
 							</p>
-							<button
-								type="button"
-								onClick={() => setClaimingPayment(true)}
-								className="shrink-0 font-medium underline-offset-2 hover:underline"
-							>
-								Update proof
-							</button>
-						</div>
+						</>
 					) : null}
 				</section>
 			) : null}
@@ -787,8 +795,9 @@ function TrackingRoute() {
 				</div>
 			) : null}
 
-			{/* Rider drop-off photo (proof of delivery) — same shot the WhatsApp
-			    delivered follow-up carried; only exists on delivered rider orders. */}
+			{/* Rider drop-off photo (proof of delivery) — this page is the ONLY
+			    place the buyer sees it (86eyd63r8 removed the WhatsApp delivered
+			    follow-up); only exists on delivered rider orders. */}
 			{order.podImageUrls?.length ? (
 				<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
@@ -1050,8 +1059,8 @@ function TrackingRoute() {
 				{deliveryFeeHeld ? (
 					<p className="px-3 text-xs text-muted-foreground">
 						Your address is outside the store&apos;s standard delivery zones —
-						they&apos;ll confirm the delivery charge with you on WhatsApp and
-						it&apos;ll be added to this total.
+						once they set the delivery charge it&apos;s added to this total,
+						right here on this page.
 					</p>
 				) : null}
 				{/* Buyer self-serves a PDF receipt — generated on demand from this
@@ -1194,6 +1203,11 @@ type TrackedOrder = NonNullable<
  * there is nothing left for the buyer to send, so this card says exactly that
  * (and offers a plain open-WhatsApp anchor for buyers who want the chat now).
  * No auto-redirect anywhere on this path.
+ *
+ * Since 86eyd63r8 that push is the order's ONLY outbound message — no status
+ * updates, no payment prompts — so the card also has to hand the buyer this
+ * page as the thing to keep. Overstating what WhatsApp will carry (the old copy
+ * pointed at the chat for "how to pay") would strand them.
  */
 function ConfirmationSentCard({
 	ms,
@@ -1219,8 +1233,8 @@ function ConfirmationSentCard({
 			</div>
 			<p className="text-sm text-muted-foreground">
 				{ms
-					? "Tak perlu hantar apa-apa — semak WhatsApp anda untuk pengesahan dan cara membayar. Halaman ini sentiasa menunjukkan status terkini pesanan anda."
-					: "Nothing to send — check your WhatsApp for the confirmation and how to pay. This page always shows your order's latest status."}
+					? "Tak perlu hantar apa-apa. Itulah satu-satunya mesej yang kami hantar — selebihnya ada di sini: cara membayar, status terkini dan resit anda. Simpan pautan ini."
+					: "Nothing to send. That's the only message we'll send you — everything else is here: how to pay, your latest status, and your receipt. Keep this link."}
 			</p>
 			<Button asChild variant="outline" className="h-11 w-full">
 				<a
@@ -1242,6 +1256,10 @@ function ConfirmationSentCard({
  * (whose template states the total) deliberately waits. Say so, or the
  * checkout promise of "confirmation lands in your WhatsApp" looks broken.
  * The mockup/fee sections further down the page carry the actual next step.
+ *
+ * That deferred push is the order's one and only message (86eyd63r8), so the
+ * card also tells the buyer to hold on to this page — it's where the price,
+ * the mockup and the payment details actually land.
  */
 function PushDeferredCard({ ms }: { ms: boolean }) {
 	return (
@@ -1253,8 +1271,8 @@ function PushDeferredCard({ ms }: { ms: boolean }) {
 				</p>
 				<p className="text-sm">
 					{ms
-						? "Kami akan hantar pengesahan WhatsApp anda sebaik sahaja harga disahkan."
-						: "We'll send your WhatsApp confirmation as soon as your price is confirmed."}
+						? "Kami akan hantar satu pengesahan WhatsApp sebaik sahaja harga disahkan. Simpan pautan ini — pesanan anda ada di halaman ini."
+						: "We'll send one WhatsApp confirmation as soon as your price is confirmed. Keep this link — your order lives on this page."}
 				</p>
 			</div>
 		</section>
@@ -1376,11 +1394,11 @@ function PushFailedCard({
 			<p className="text-sm text-amber-950/90 dark:text-amber-100/90">
 				{unreachable
 					? ms
-						? `Kami tak dapat hantar ke ${pretty} — nombor itu mungkin tersilap taip atau tiada WhatsApp. Pesanan anda tetap disahkan dan butiran di bawah adalah muktamad.`
-						: `We couldn't deliver it to ${pretty} — that number may have a typo, or no WhatsApp account. Your order is still confirmed and everything below is final.`
+						? `Kami tak dapat hantar ke ${pretty} — nombor itu mungkin tersilap taip atau tiada WhatsApp. Pesanan anda tetap disahkan dan butiran di bawah adalah muktamad. Simpan pautan ini — ini halaman pesanan anda.`
+						: `We couldn't deliver it to ${pretty} — that number may have a typo, or no WhatsApp account. Your order is still confirmed and everything below is final. Keep this link — this page is your order.`
 					: ms
-						? `Masalah di pihak kami, bukan nombor anda. Pesanan anda telah disahkan dan ${storeName} sudah menerimanya — anda masih boleh membayar di bawah.`
-						: `That's a problem on our side, not with your number. Your order is confirmed and ${storeName} already has it — you can still pay below.`}
+						? `Masalah di pihak kami, bukan nombor anda. Pesanan anda telah disahkan dan ${storeName} sudah menerimanya — anda masih boleh membayar di bawah. Simpan pautan ini — ini halaman pesanan anda.`
+						: `That's a problem on our side, not with your number. Your order is confirmed and ${storeName} already has it — you can still pay below. Keep this link — this page is your order.`}
 			</p>
 
 			{unreachable ? (
@@ -1569,8 +1587,8 @@ function SendOrderCard({
 			</div>
 			<p className="text-sm text-muted-foreground">
 				{ms
-					? `Pesanan anda telah disimpan. Hantar di WhatsApp supaya ${storeName} boleh sahkan pesanan dan hubungi anda.`
-					: `Your order is saved. Send it on WhatsApp so ${storeName} can confirm it and reach you.`}
+					? `Pesanan anda telah disimpan. Hantar di WhatsApp supaya ${storeName} boleh sahkan pesanan — selepas itu ikut pesanan anda di halaman ini. Simpan pautan ini.`
+					: `Your order is saved. Send it on WhatsApp so ${storeName} can confirm it — after that you follow the order on this page. Keep this link.`}
 			</p>
 			{sending ? (
 				<Button className="h-12 w-full text-base" disabled>
@@ -1623,7 +1641,13 @@ function SendOrderCard({
 	);
 }
 
-/** Buyer-facing mockup review: approve or request changes on the seller's proof. */
+/**
+ * Buyer-facing mockup review: approve or request changes on the seller's proof.
+ * Nothing here sends the buyer a WhatsApp (86eyd63r8) — the order's one message
+ * already went out when the seller submitted the mockup, and every follow-up
+ * (a revised mockup, the unlocked payment) lands on this page. Toasts must say
+ * what changes HERE, never promise a chat message.
+ */
 function MockupReview({
 	token,
 	order,
@@ -1647,7 +1671,7 @@ function MockupReview({
 		setBusy(true);
 		try {
 			await approve({ token });
-			toast.success("Mockup approved — thank you!");
+			toast.success("Mockup approved — the seller will start your order.");
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -1672,7 +1696,7 @@ function MockupReview({
 		setBusy(true);
 		try {
 			await requestChanges({ token, note: note.trim() || undefined });
-			toast.success("Sent — the seller will update your mockup");
+			toast.success("Request sent — the updated mockup appears on this page.");
 			setShowNote(false);
 			setNote("");
 		} catch (err) {

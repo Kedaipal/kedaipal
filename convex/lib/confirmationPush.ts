@@ -20,6 +20,37 @@
  */
 export type PushFailureKind = "unreachable" | "system";
 
+/**
+ * Lifecycle of the order's single outbound message, mirroring
+ * `orders.confirmationPushStatus` in the schema. Undefined on the wire means a
+ * legacy order (no push path — the template env is unset), whose one message
+ * was the free-form reply to the buyer's own `ORD-` WhatsApp.
+ */
+export type ConfirmationPushStatus =
+	| "deferred"
+	| "sending"
+	| "sent"
+	| "failed"
+	| "recovered";
+
+/**
+ * Does the confirmation push own this order's one message (86eyd63r8)?
+ *
+ * True whenever the push has been sent, is in flight, or is merely waiting on a
+ * final price — in all of those cases the buyer has had, or will have, their
+ * message and any free-form reply on top would be a second billable send.
+ *
+ * False for a legacy order (`undefined` — no push path, so the inbound reply IS
+ * the one message) and for `failed`: that push never reached anyone, so the
+ * buyer writing in is exactly the recovery route, and their reply is the only
+ * message they'll get.
+ */
+export function pushOwnsTheMessage(
+	status: ConfirmationPushStatus | undefined,
+): boolean {
+	return status !== undefined && status !== "failed";
+}
+
 /** Backoff before attempts 2, 3 and 4. Deliberately minutes, not hours: the
  * buyer is looking at the order page now, and a confirmation that lands 20
  * minutes later is worth little. Four attempts inside ~10 minutes covers the

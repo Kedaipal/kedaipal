@@ -330,8 +330,8 @@ export function PickupLocationEditDialog({
 								placeholder="Start typing an address in Malaysia…"
 								description={
 									hasCoords
-										? "✓ Pinned via Google Maps — buyers will get a tappable location pin in WhatsApp."
-										: "Pick a Google suggestion to enable the WhatsApp location pin. You can also type freely if your spot isn't on Google yet."
+										? "✓ Pinned via Google Maps — buyers get one-tap Waze and Google Maps directions on their order page."
+										: "Pick a Google suggestion so buyers get one-tap Waze / Google Maps directions on their order page. You can also type freely if your spot isn't on Google yet — buyers then just see the address."
 								}
 								onSelect={handleAutocompleteSelect}
 								onTextChange={handleManualAddressEdit}

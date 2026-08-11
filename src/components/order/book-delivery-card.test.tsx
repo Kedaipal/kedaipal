@@ -92,7 +92,9 @@ describe("BookDeliveryCard — completed job", () => {
 		];
 		render(<BookDeliveryCard order={deliveredOrder} />);
 
-		expect(screen.getByText("Delivery photo from the rider")).toBeTruthy();
+		expect(
+			screen.getByText(/Delivery photo from the rider/),
+		).toBeTruthy();
 		const shots = screen.getAllByAltText("Proof of delivery");
 		expect(shots).toHaveLength(2);
 		expect(shots[0].closest("a")?.getAttribute("href")).toBe(
