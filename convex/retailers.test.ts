@@ -1505,3 +1505,46 @@ describe("seller WhatsApp order alerts config (86eyhw9zy)", () => {
 		expect(retailer?.notifyWaPhoneOptedOut).toBe(false);
 	});
 });
+
+/**
+ * The store's own contact number became MY-only with the `+60` plate that now
+ * fronts every phone field (86eyknr2r). It isn't cosmetic: `waPhone` is the
+ * sender contact Lalamove falls back to, and Lalamove requires `+60`, so a
+ * non-MY value was never a supported case — it just failed later and quietly.
+ */
+describe("retailers.updateSettings — waPhone is a Malaysian mobile", () => {
+	test.each([
+		["the bare national number the +60 plate asks for", "12-345 6789"],
+		["a local number with the trunk 0", "012-345 6789"],
+		["a fully-keyed international number", "60123456789"],
+	])("accepts %s and stores one canonical form", async (_label, typed) => {
+		const t = setup();
+		const asUser = await seed(t, USER_A, `wa-phone-${typed.length}`);
+		await asUser.mutation(api.retailers.updateSettings, { waPhone: typed });
+		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		expect(retailer?.waPhone).toBe("60123456789");
+	});
+
+	test.each([
+		["a landline — no WhatsApp account can exist on it", "03-8888 1234"],
+		["a Singapore mobile", "+65 8123 4567"],
+		["a US number that merely starts with 1", "+1 555 234 5678"],
+	])("rejects %s", async (_label, typed) => {
+		const t = setup();
+		const asUser = await seed(t, USER_A, "wa-phone-reject");
+		await expect(
+			asUser.mutation(api.retailers.updateSettings, { waPhone: typed }),
+		).rejects.toThrow(/Malaysian mobile/i);
+	});
+
+	test("blank still clears the number — tightening never traps a seller", async () => {
+		const t = setup();
+		const asUser = await seed(t, USER_A, "wa-phone-clear");
+		await asUser.mutation(api.retailers.updateSettings, {
+			waPhone: "012-345 6789",
+		});
+		await asUser.mutation(api.retailers.updateSettings, { waPhone: "" });
+		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		expect(retailer?.waPhone).toBeUndefined();
+	});
+});

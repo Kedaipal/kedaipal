@@ -44,6 +44,7 @@ import { OnlinePaymentsCard } from "../components/settings/online-payments-card"
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { MyPhonePrefix } from "../components/ui/my-phone-input";
 import { Skeleton } from "../components/ui/skeleton";
 import { SortableList } from "../components/ui/sortable-list";
 import {
@@ -54,6 +55,7 @@ import { useRevealOnAdd } from "../hooks/useRevealOnAdd";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { useUpdateSettings } from "../hooks/useUpdateSettings";
 import { convexErrorMessage } from "../lib/format";
+import { normalizeMyDigits, toMyNationalInput } from "../lib/phone";
 import {
 	ANCHOR_UI_LABELS,
 	collectStageConfigErrors,
@@ -2312,7 +2314,9 @@ function WaPhoneForm({
 	onSave: (waPhone: string) => Promise<unknown>;
 }) {
 	const form = useAppForm({
-		defaultValues: { waPhone: current },
+		// Seeded as the national part — the field wears a fixed `+60` plate, so
+		// the stored `60…` form would render the country code twice.
+		defaultValues: { waPhone: toMyNationalInput(current) },
 		validators: { onChange: settingsWaPhoneFormSchema },
 		onSubmit: async ({ value }) => {
 			try {
@@ -2332,10 +2336,15 @@ function WaPhoneForm({
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
 			<form.AppField name="waPhone">
 				{(field) => (
-					<field.PhoneField
+					<field.TextField
 						label="Your contact WhatsApp number"
+						type="tel"
+						inputMode="tel"
+						autoComplete="tel"
+						prefix={<MyPhonePrefix />}
+						placeholder="12-345 6789"
 						required
-						description="Shown to buyers in order confirmations and updates so they can reach you directly."
+						description="Shown to buyers in order confirmations and updates so they can reach you directly. Malaysian mobile — it's also the sender contact when a rider collects from you."
 					/>
 				)}
 			</form.AppField>
@@ -2348,10 +2357,11 @@ function WaPhoneForm({
 				})}
 			>
 				{({ canSubmit, isSubmitting, values }) => {
-					// Compare digits-only: PhoneField keeps state in E.164 (`+60…`)
-					// while `current` is stored without the `+`.
+					// Compare digits-only, both normalized to the stored `60…` form:
+					// the field holds the national part beside the plate, `current`
+					// carries the country code.
 					const dirty =
-						values.waPhone.replace(/\D/g, "") !== current.replace(/\D/g, "");
+						normalizeMyDigits(values.waPhone) !== normalizeMyDigits(current);
 					return (
 						<Button
 							type="submit"

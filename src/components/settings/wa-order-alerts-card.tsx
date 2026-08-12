@@ -17,10 +17,11 @@ import { MessageCircle } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { convexErrorMessage, formatMyMobile } from "../../lib/format";
+import { toMyNationalInput } from "../../lib/phone";
 import { myWaPhoneCheckoutSchema } from "../../lib/schemas";
 import { ProBadge } from "../app/pro-gate";
 import { Button } from "../ui/button";
-import { Input } from "../ui/input";
+import { MyPhoneInput } from "../ui/my-phone-input";
 
 type WaOrderAlertsPatch = {
 	notifyWaPhone?: string;
@@ -48,8 +49,12 @@ export function WaOrderAlertsCard({
 	onSave: (patch: WaOrderAlertsPatch) => Promise<unknown>;
 }) {
 	// Seed from the saved alert number, else the store's WhatsApp contact — the
-	// overwhelmingly common case is "alert me on my own number".
-	const [phone, setPhone] = useState(currentPhone || fallbackPhone);
+	// overwhelmingly common case is "alert me on my own number". Both are stored
+	// in the `60…` form, so they go through `toMyNationalInput` or the field
+	// would read `+60 | 601159399791`.
+	const [phone, setPhone] = useState(
+		toMyNationalInput(currentPhone || fallbackPhone),
+	);
 	const [phoneError, setPhoneError] = useState<string | null>(null);
 	const [editingNumber, setEditingNumber] = useState(false);
 	const [saving, setSaving] = useState(false);
@@ -86,18 +91,15 @@ export function WaOrderAlertsCard({
 
 	const phoneInput = (
 		<div className="flex flex-col gap-1">
-			<Input
-				type="tel"
-				inputMode="tel"
-				autoComplete="tel"
+			<MyPhoneInput
 				value={phone}
 				disabled={!canUse || saving}
-				onChange={(e) => {
-					setPhone(e.target.value);
+				isError={phoneError !== null}
+				onChange={(next) => {
+					setPhone(next);
 					if (phoneError) setPhoneError(null);
 				}}
-				placeholder="e.g. 012-345 6789"
-				className="h-11 max-w-xs"
+				className="max-w-xs"
 			/>
 			{phoneError ? (
 				<p className="text-xs font-medium text-destructive">{phoneError}</p>
@@ -188,7 +190,7 @@ export function WaOrderAlertsCard({
 									className="h-11"
 									onClick={() => {
 										setEditingNumber(false);
-										setPhone(currentPhone || fallbackPhone);
+										setPhone(toMyNationalInput(currentPhone || fallbackPhone));
 										setPhoneError(null);
 									}}
 								>
@@ -216,7 +218,7 @@ export function WaOrderAlertsCard({
 									variant="outline"
 									className="h-11"
 									onClick={() => {
-										setPhone(currentPhone || fallbackPhone);
+										setPhone(toMyNationalInput(currentPhone || fallbackPhone));
 										setEditingNumber(true);
 									}}
 								>

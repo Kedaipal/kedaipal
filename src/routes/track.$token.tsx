@@ -41,6 +41,7 @@ import { ManualPaymentDialog } from "../components/storefront/manual-payment-dia
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { CopyButton } from "../components/ui/copy-button";
+import { MyPhoneInput } from "../components/ui/my-phone-input";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { getConvexHttpClient } from "../lib/convex-server";
@@ -1644,16 +1645,17 @@ function PushFailedCard({
 						>
 							{ms ? "Nombor WhatsApp anda" : "Your WhatsApp number"}
 						</label>
-						<input
+						{/* Same plated control as the storefront checkout field this is
+						    repairing — the buyer has already met it once, and it's the
+						    only shape `assertValidMyMobile` behind it accepts. Its own
+						    neutral chrome inside the amber card, so the control reads as
+						    a control and not as part of the warning. */}
+						<MyPhoneInput
 							id="repair-wa-phone"
-							type="tel"
-							inputMode="tel"
-							autoComplete="tel"
 							ref={phoneInputRef}
 							value={value}
-							onChange={(e) => setValue(e.target.value)}
-							placeholder="e.g. 012-345 6789"
-							className="h-12 rounded-xl border border-amber-300 bg-white px-4 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50 dark:border-amber-700 dark:bg-amber-950"
+							onChange={setValue}
+							className="bg-white dark:bg-amber-950"
 						/>
 						<div className="flex gap-2">
 							<Button

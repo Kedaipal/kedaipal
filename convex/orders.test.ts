@@ -583,7 +583,7 @@ describe("orders", () => {
 				customer: { name: "Ali", waPhone: "abc" },
 				deliveryAddress: validAddress,
 			}),
-		).rejects.toThrow(/WhatsApp number/);
+		).rejects.toThrow(/Malaysian mobile/i);
 	});
 
 	test("create decrements product stock by ordered quantity", async () => {
@@ -5886,13 +5886,19 @@ describe("orders — confirmation push at create (86eyf1rck)", () => {
 		expect((await orderBy(t, shortId))?.customer.waPhone).toBe("60123456789");
 	});
 
-	test("junk phone is rejected", async () => {
+	test("junk phone is rejected, and never told to add a country code", async () => {
+		// The field wears a fixed `+60` plate, so "8–15 digits, with country code"
+		// (the loose normalizer's own message) would contradict the badge the
+		// buyer is looking at. `assertValidMyMobile` owns one message (86eyknr2r).
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const productId = await seedProduct(t, USER_A, retailer._id);
 		await expect(
 			createWith(t, retailer._id, productId, "12345"),
-		).rejects.toThrow(/WhatsApp number/);
+		).rejects.toThrow(/Malaysian mobile/i);
+		await expect(
+			createWith(t, retailer._id, productId, "not-a-phone"),
+		).rejects.toThrow(/Malaysian mobile/i);
 	});
 
 	test("get serves checkoutPhone for the failed-push recovery card (confirmed order)", async () => {

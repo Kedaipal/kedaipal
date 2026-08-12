@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizeMyDigits } from "./phone";
 
 /**
  * Client-side Zod schemas for forms. These mirror server-side validators in
@@ -6,46 +7,20 @@ import { z } from "zod";
  * Convex. Server still re-validates — never trust the client.
  */
 
-// Match `convex/lib/slug.ts` assertValidWaPhone — strip formatting then
-// require 8–15 digits.
-export const waPhoneSchema = z
-	.string()
-	.transform((s) => s.replace(/[\s\-()+]/g, ""))
-	.pipe(
-		z
-			.string()
-			.regex(
-				/^\d{8,15}$/,
-				"WhatsApp number must be 8–15 digits, with country code (e.g. 60123456789)",
-			),
-	);
-
-// Optional variant — empty string is allowed and becomes undefined.
-export const waPhoneOptionalSchema = z
-	.string()
-	.optional()
-	.transform((s) => (s && s.trim().length > 0 ? s : undefined))
-	.pipe(waPhoneSchema.optional());
-
-// Buyer's WhatsApp number at storefront checkout (86eyf1rck). Mirrors the
-// server's `assertValidMyMobile` normalization (strip separators, local
-// `0xx…` → `60xx…`, bare NSN `1xx…` → `60xx…`) and then requires a Malaysian
-// MOBILE shape — 601X plus 8–9 digits — so the confirmation push can actually
-// reach a WhatsApp account. Malaysia-only for v1, consistent with the counter
-// manual bind and the Lalamove rider-contact constraint. The server re-validates.
+// The one MY-mobile schema, mirroring the server's `assertValidMyMobile`
+// (86eyf1rck buyer checkout; extended to every plated field by 86eyknr2r).
+// Normalizes the way a Malaysian actually types — local `0xx…` → `60xx…`, bare
+// NSN `1xx…` → `60xx…`, full `60xx…` untouched — then requires a Malaysian
+// MOBILE shape (601X plus 8–9 digits). A landline (`03-…`) clears a bare digit
+// count but can never receive WhatsApp, and every field using this schema
+// exists so a WhatsApp message reaches it. The server re-validates.
 //
-// The bare-NSN arm exists because the field renders a `+60` prefix: a buyer who
-// reads that badge and types "12-345 6789" must not be rejected. Pinned to 9–10
-// digits so it can't swallow a foreign number that merely starts with 1.
+// The bare-NSN arm exists because these fields render a `+60` plate: someone
+// who reads that badge and types "12-345 6789" must not be rejected. Pinned to
+// 9–10 digits so it can't swallow a foreign number that merely starts with 1.
 export const myWaPhoneCheckoutSchema = z
 	.string()
-	.transform((s) => {
-		const digits = s.replace(/\D/g, "");
-		if (digits.startsWith("60")) return digits;
-		if (digits.startsWith("0")) return `60${digits.slice(1)}`;
-		if (/^1\d{8,9}$/.test(digits)) return `60${digits}`;
-		return digits;
-	})
+	.transform(normalizeMyDigits)
 	.pipe(
 		z
 			.string()
@@ -55,8 +30,22 @@ export const myWaPhoneCheckoutSchema = z
 			),
 	);
 
+// Optional variant for a FORM field (blank is fine, anything typed must be a MY
+// mobile). Deliberately a `refine`, not `.optional().transform(…)`: TanStack
+// Form validates without replacing state, so a schema whose input type is
+// `string | undefined` no longer matches a field that is always a string — and
+// a transform here would describe a normalization that never happens. The
+// caller sends the raw text; the server normalizes.
+export const myWaPhoneFormOptionalSchema = z
+	.string()
+	.refine(
+		(s) =>
+			s.trim().length === 0 || /^601\d{8,9}$/.test(normalizeMyDigits(s)),
+		"Enter a Malaysian mobile number (e.g. 012-345 6789)",
+	);
+
 export const settingsWaPhoneFormSchema = z.object({
-	waPhone: waPhoneSchema,
+	waPhone: myWaPhoneCheckoutSchema,
 });
 
 export type SettingsWaPhoneFormValues = z.input<
