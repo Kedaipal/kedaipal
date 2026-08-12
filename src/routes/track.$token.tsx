@@ -108,6 +108,65 @@ function formatRelativeTime(epochMs: number | undefined): string {
 	return `${Math.floor(diff / day)}d ago`;
 }
 
+type GatewayPaymentIssue = {
+	kind: "amount_mismatch" | "paid_after_cancel";
+	paidAmountSen: number;
+	paidCurrency: string;
+	paymentId: string;
+	at: number;
+};
+
+/**
+ * Copy for an authentic online payment the order couldn't apply (PR #178
+ * review, finding 1). Before this the buyer saw a plain "unpaid" card with
+ * Pay-now still armed right after their money left — an invitation to pay
+ * twice. One author for both render sites (inside the payment card while the
+ * order is live, standalone once it's cancelled or already claimed).
+ *
+ * Both variants end on "don't pay again" and name the store as the party
+ * acting, because there is nothing useful the BUYER can do here — re-paying
+ * makes it worse, and the resolution is a human reconciling in HitPay.
+ */
+function gatewayIssueCopy(
+	issue: GatewayPaymentIssue,
+	storeName: string,
+	orderTotal: number,
+	orderCurrency: string,
+): { heading: string; body: string } {
+	const store = storeName || "The store";
+	const paid = formatPrice(issue.paidAmountSen, issue.paidCurrency);
+	if (issue.kind === "paid_after_cancel") {
+		return {
+			heading: "We received a payment for a cancelled order",
+			body: `Your ${paid} payment went through after this order was cancelled, so it hasn't been applied to anything. ${store} has been notified and will arrange a refund with you — please don't pay again.`,
+		};
+	}
+	return {
+		heading: "We're checking your payment",
+		body: `Your ${paid} payment came through, but this order's total is now ${formatPrice(orderTotal, orderCurrency)}, so it hasn't been confirmed automatically. ${store} has been notified and will settle the difference with you — please don't pay again.`,
+	};
+}
+
+/** The payment reference both sides quote — same chip the confirmed card
+ * shows, so a buyer reads one number whether the payment landed or stalled. */
+function GatewayIssueReference({ paymentId }: { paymentId: string }) {
+	return (
+		<div className="rounded-lg border border-black/5 bg-white/60 px-2.5 py-1.5">
+			<div className="flex items-center justify-between gap-2">
+				<p className="text-[10px] font-medium uppercase tracking-wider opacity-70">
+					Payment ref
+				</p>
+				<CopyButton
+					value={paymentId}
+					ariaLabel="Copy payment reference"
+					successMessage="Payment reference copied"
+				/>
+			</div>
+			<p className="break-all font-mono text-xs">{paymentId}</p>
+		</div>
+	);
+}
+
 export const Route = createFileRoute("/track/$token")({
 	// ?send=1 — set only by checkout's post-create navigation: auto-fire the
 	// "Send on WhatsApp" handoff once the page mounts. The component strips it
@@ -393,6 +452,21 @@ function TrackingRoute() {
 	// confirm the delivery charge (out-of-range "arrange" order), so the total
 	// isn't final and "I've paid" stays held — same posture as the mockup gate.
 	const deliveryFeeHeld = order.deliveryFeePending === true;
+	// An authentic online payment the server refused to auto-apply (PR #178
+	// review, finding 1). It outranks the mockup/delivery-fee holds in the
+	// payment card: those say "the price isn't final yet", but here the buyer's
+	// money has ALREADY moved, and telling them to wait for a price while
+	// leaving Pay-now armed is how they end up paying twice.
+	const gatewayIssue = order.gatewayPaymentIssue;
+	const gatewayIssueUnresolved =
+		gatewayIssue !== undefined && paymentStatus !== "received";
+	// The payment card is hidden entirely on a cancelled order, and its
+	// `claimed` branch has no room for this — so those cases get a card of
+	// their own rather than losing the notice.
+	const gatewayIssueInPaymentCard =
+		gatewayIssueUnresolved && !isCancelled && paymentStatus === "unpaid";
+	const gatewayIssueStandalone =
+		gatewayIssueUnresolved && !gatewayIssueInPaymentCard;
 
 	// Receipt reconciliation for the custom-work quote (order-level, minor units).
 	// The made-to-order line is snapshotted at price 0, so the quote would
@@ -639,7 +713,28 @@ function TrackingRoute() {
 					) : null}
 
 					{paymentStatus === "unpaid" ? (
-						mockupGateClosed ? (
+						gatewayIssueInPaymentCard && gatewayIssue ? (
+							// Deliberately FIRST — and deliberately no Pay-now and no
+							// bank-transfer fallback. Every payment affordance here is the
+							// wrong move once the money has already left the buyer.
+							(() => {
+								const copy = gatewayIssueCopy(
+									gatewayIssue,
+									order.storeName,
+									order.total,
+									order.currency,
+								);
+								return (
+									<>
+										<Button disabled className="h-12 w-full text-base">
+											{copy.heading}
+										</Button>
+										<p className="text-xs opacity-80">{copy.body}</p>
+										<GatewayIssueReference paymentId={gatewayIssue.paymentId} />
+									</>
+								);
+							})()
+						) : mockupGateClosed ? (
 							<>
 								<Button disabled className="h-12 w-full text-base">
 									{order.mockupStatus === "submitted"
@@ -737,6 +832,36 @@ function TrackingRoute() {
 					) : null}
 				</section>
 			) : null}
+
+			{/* Unapplied online payment on an order whose payment card can't carry
+			    the notice — cancelled (card hidden) or already claimed by hand. The
+			    buyer's money moved either way, so the acknowledgement can't depend
+			    on which card happens to render. */}
+			{gatewayIssueStandalone && gatewayIssue
+				? (() => {
+						const copy = gatewayIssueCopy(
+							gatewayIssue,
+							order.storeName,
+							order.total,
+							order.currency,
+						);
+						return (
+							<section className="mt-4 flex flex-col gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-amber-950">
+								<div className="flex items-center gap-3">
+									<HandCoins className="size-5 shrink-0 text-amber-600" />
+									<div className="min-w-0 flex-1">
+										<p className="text-xs font-semibold uppercase tracking-widest text-amber-700">
+											Payment
+										</p>
+										<p className="font-semibold">{copy.heading}</p>
+									</div>
+								</div>
+								<p className="text-xs opacity-80">{copy.body}</p>
+								<GatewayIssueReference paymentId={gatewayIssue.paymentId} />
+							</section>
+						);
+					})()
+				: null}
 
 			{/* Mockup approval — buyer reviews the seller's proof before production. */}
 			{!isCancelled && order.mockupStatus !== undefined ? (

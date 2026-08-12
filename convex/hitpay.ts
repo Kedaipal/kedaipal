@@ -71,6 +71,9 @@ type CheckoutContext = {
 	 * reconcile checks it too, so a lost webhook can't strand that payment. */
 	previousRequestId: string | undefined;
 	gatewayPaymentId: string | undefined;
+	/** An authentic payment already landed on this order that we couldn't
+	 * auto-apply — minting a second link would invite a second payment. */
+	hasUnresolvedPaymentIssue: boolean;
 };
 
 /** Everything both public actions need, resolved in one transaction. The
@@ -114,6 +117,7 @@ export const getCheckoutContext = internalQuery({
 					: null,
 			previousRequestId: order.gatewayPreviousRequestId,
 			gatewayPaymentId: order.gatewayPaymentId,
+			hasUnresolvedPaymentIssue: order.gatewayPaymentIssue !== undefined,
 		};
 	},
 });
@@ -320,6 +324,17 @@ export const createCheckout = action({
 				"You've already told the store you paid — they're checking it now.",
 			);
 		}
+		if (context.hasUnresolvedPaymentIssue) {
+			// A payment for this order already landed and couldn't be applied
+			// (PR #178 review, finding 1). The buyer's page hides Pay-now in this
+			// state; this refuses the direct call, because the one outcome we must
+			// never produce is a second real payment on top of the stuck one. The
+			// seller clears it by accepting the payment (mark received) or by
+			// refunding and tapping "Mark as resolved".
+			throw new ConvexError(
+				"A payment for this order is still being checked by the store — please don't pay again until they confirm.",
+			);
+		}
 		if (!context.holdsOpen) {
 			// Mirrors claimPayment's holds: the total isn't final yet, so no
 			// payment request may exist for it. The page hides Pay-now in these
@@ -425,31 +440,68 @@ export const createCheckout = action({
 			);
 		}
 		if (recorded.replacedRequestId) {
-			// Best-effort: kill the replaced link at HitPay so the stale price
-			// can't be paid at all (sandbox-verified DELETE). Failure is fine —
-			// the previous-id correlation above still catches a payment on it.
-			await fetch(
-				`${HITPAY_API_BASE[context.credentials.mode]}/payment-requests/${recorded.replacedRequestId}`,
-				{
-					method: "DELETE",
-					headers: {
-						"X-BUSINESS-API-KEY": context.credentials.apiKey,
-						"X-Requested-With": "XMLHttpRequest",
-					},
-				},
-			)
-				.then((r) => {
-					if (!r.ok) {
-						console.warn("hitpay.createCheckout: stale-link delete rejected", {
-							status: r.status,
-						});
-					}
-				})
-				.catch((err) => {
-					console.warn("hitpay.createCheckout: stale-link delete failed", err);
-				});
+			await deletePaymentRequest(
+				context.credentials,
+				recorded.replacedRequestId,
+				"createCheckout",
+			);
 		}
 		return { url: request.url };
+	},
+});
+
+/**
+ * Kill a payment request at HitPay so its hosted link stops accepting money
+ * (sandbox-verified DELETE). Best-effort by design: failure is logged, never
+ * thrown, because the caller's real guarantee is elsewhere — the order keeps
+ * the dead id in `gatewayPreviousRequestId`, so a payment that slips through
+ * anyway still correlates and still reaches `receiveGatewayPayment`'s amount
+ * check rather than vanishing as an unknown webhook.
+ */
+async function deletePaymentRequest(
+	credentials: HitpayCredentials,
+	requestId: string,
+	caller: string,
+): Promise<void> {
+	try {
+		const response = await fetch(
+			`${HITPAY_API_BASE[credentials.mode]}/payment-requests/${requestId}`,
+			{
+				method: "DELETE",
+				headers: {
+					"X-BUSINESS-API-KEY": credentials.apiKey,
+					"X-Requested-With": "XMLHttpRequest",
+				},
+			},
+		);
+		if (!response.ok) {
+			console.warn(`hitpay.${caller}: stale-link delete rejected`, {
+				status: response.status,
+			});
+		}
+	} catch (err) {
+		console.warn(`hitpay.${caller}: stale-link delete failed`, err);
+	}
+}
+
+/**
+ * Void the live payment request on an order whose total just moved (PR #178
+ * review, finding 1). Scheduled by the re-pricing mutations via
+ * `voidStaleGatewayRequest` — a link minted at the old price stays payable at
+ * HitPay for up to an hour, and letting the buyer complete it produces a real
+ * payment nobody can auto-apply. Killing the link turns that into a plain
+ * "this link expired, tap Pay now again" at the CORRECT price, which is
+ * strictly better than money moving at the wrong one.
+ */
+export const voidRequest = internalAction({
+	args: { retailerId: v.id("retailers"), requestId: v.string() },
+	handler: async (ctx, { retailerId, requestId }): Promise<void> => {
+		const context: { credentials: HitpayCredentials } | null =
+			await ctx.runQuery(internal.hitpay.getRefreshContext, { retailerId });
+		// Seller disconnected HitPay between the re-price and now — nothing to
+		// call with. The order already holds the id for webhook correlation.
+		if (!context) return;
+		await deletePaymentRequest(context.credentials, requestId, "voidRequest");
 	},
 });
 
@@ -464,7 +516,16 @@ export const verifyCheckout = action({
 	handler: async (
 		ctx,
 		{ token },
-	): Promise<{ paymentStatus: "received" | "unpaid" }> => {
+	): Promise<{
+		paymentStatus: "received" | "unpaid";
+		/** An authentic payment was found but deliberately NOT applied (PR #178
+		 * review, finding 1). Flattening this to "unpaid" told the buyer their
+		 * money had gone nowhere and left Pay-now armed — the double-payment
+		 * path. The durable surface is `orders.gatewayPaymentIssue` (the webhook
+		 * discovers this far more often than the redirect does, with no client
+		 * watching); this field just lets the returning buyer skip the flash. */
+		issue?: "amount_mismatch" | "paid_after_cancel";
+	}> => {
 		await rateLimiter.limit(ctx, "gatewayVerify", {
 			key: token,
 			throws: true,
@@ -498,20 +559,30 @@ export const verifyCheckout = action({
 				: null);
 		if (!settled) return { paymentStatus: "unpaid" };
 
-		const result: { applied: boolean; reason?: string } =
-			await ctx.runMutation(internal.orders.receiveGatewayPayment, {
-				orderId: context.orderId,
-				paymentId: settled.paymentId,
-				amountSen: settled.amountSen,
-				currency: settled.currency,
-				paymentType: settled.paymentType,
-			});
-		return {
-			paymentStatus:
-				result.applied || result.reason === "duplicate"
-					? "received"
-					: "unpaid",
-		};
+		const result: {
+			applied: boolean;
+			reason?: "duplicate" | "amount_mismatch" | "cancelled" | "gone";
+		} = await ctx.runMutation(internal.orders.receiveGatewayPayment, {
+			orderId: context.orderId,
+			paymentId: settled.paymentId,
+			amountSen: settled.amountSen,
+			currency: settled.currency,
+			paymentType: settled.paymentType,
+		});
+		// `duplicate` = this payment (or a manual mark) already settled the order,
+		// so "received" is the truth. `gone` is NOT that — the order was
+		// hard-deleted mid-flight, nothing was applied, and claiming "received"
+		// would be a lie; the page 404s on its own.
+		if (result.applied || result.reason === "duplicate") {
+			return { paymentStatus: "received" };
+		}
+		if (result.reason === "amount_mismatch") {
+			return { paymentStatus: "unpaid", issue: "amount_mismatch" };
+		}
+		if (result.reason === "cancelled") {
+			return { paymentStatus: "unpaid", issue: "paid_after_cancel" };
+		}
+		return { paymentStatus: "unpaid" };
 	},
 });
 

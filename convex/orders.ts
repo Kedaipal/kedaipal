@@ -2918,6 +2918,70 @@ export const setShipmentTracking = mutation({
 });
 
 /**
+ * Every mutation that RE-PRICES an order must call this (PR #178 review,
+ * finding 1). A HitPay request is minted lazily on the buyer's tap and stays
+ * payable at HitPay for up to an hour, frozen at the total it was minted for —
+ * so any re-price in between leaves a live link at the wrong price. Paying it
+ * produces an authentic payment `receiveGatewayPayment` refuses to apply:
+ * money moved, the order stays unpaid, and a human has to reconcile it.
+ *
+ * Killing the link instead turns that into "this link expired, tap Pay now
+ * again" at the CORRECT price — a failed payment the buyer can retry beats a
+ * successful one at the wrong number. That is also why this is preferred over
+ * simply refusing to re-price while a request is live: refusing would block the
+ * seller from fixing a delivery charge for up to an hour, and would do nothing
+ * about the buyer-driven re-prices (address / pickup-point edits) that open the
+ * same window.
+ *
+ * The dead id is deliberately KEPT in `gatewayPreviousRequestId`: HitPay can
+ * ignore or race our delete, and an authentic late payment must still resolve
+ * to this order (the webhook reads that index) and reach the amount check.
+ * Clearing it outright would turn such a payment into an unknown-ack-200 —
+ * money moved and nothing recorded, strictly worse than a surfaced mismatch.
+ */
+async function voidStaleGatewayRequest(
+	ctx: MutationCtx,
+	order: Doc<"orders">,
+	newTotal: number,
+): Promise<void> {
+	// Same price = the minted link is still exactly right; a re-price that
+	// lands on the old number (fee corrected back) must not cost the buyer
+	// their open checkout.
+	if (newTotal === order.total) return;
+	await releaseGatewayRequest(ctx, order);
+}
+
+/** The unconditional half of `voidStaleGatewayRequest` — retire whatever live
+ * request the order holds, keeping its id correlatable. Separate because
+ * `clearGatewayPaymentIssue` must retire the request even though no re-price
+ * happened: that request is the one the unapplied payment landed on, and
+ * HitPay may treat it as settled, so the next tap must mint a fresh one rather
+ * than reuse a link that could refuse the buyer. */
+async function releaseGatewayRequest(
+	ctx: MutationCtx,
+	order: Doc<"orders">,
+): Promise<void> {
+	// A settled order's request is history: `createCheckout` already refuses on
+	// `received`, so there's no second payment to prevent, and asking HitPay to
+	// delete a request it has taken money on is a pointless rejected call.
+	if ((order.paymentStatus ?? "unpaid") === "received") return;
+	const requestId = order.gatewayRequestId;
+	if (!requestId) return;
+	await ctx.db.patch(order._id, {
+		gatewayPreviousRequestId: requestId,
+		gatewayRequestId: undefined,
+		gatewayCheckoutUrl: undefined,
+		gatewayRequestedAmount: undefined,
+		gatewayRequestedCurrency: undefined,
+		gatewayRequestedAt: undefined,
+	});
+	await ctx.scheduler.runAfter(0, internal.hitpay.voidRequest, {
+		retailerId: order.retailerId,
+		requestId,
+	});
+}
+
+/**
  * Public mutation that lets the shopper edit their delivery address while the
  * order is still pending. Trust model mirrors the tracking page: the shortId
  * is the capability — anyone who knows it can edit. Once the order moves out
@@ -3020,6 +3084,8 @@ export const updateDeliveryAddress = mutation({
 			});
 
 		const now = Date.now();
+		// The buyer may have a HitPay link open at the OLD price right now.
+		await voidStaleGatewayRequest(ctx, order, total);
 		await ctx.db.patch(order._id, {
 			deliveryAddress: sanitized,
 			deliverySnapshot: resolved.snapshot,
@@ -3091,6 +3157,10 @@ export const setDeliveryFee = mutation({
 				customerId: order.customerId,
 				delta: total - order.total,
 			});
+		// Correcting a charge on an order the buyer can already pay (holds clear,
+		// nothing claimed yet) is exactly the window that produced a mispriced
+		// live link — kill it before the total moves under the buyer.
+		await voidStaleGatewayRequest(ctx, order, total);
 		await ctx.db.patch(orderId, {
 			deliverySnapshot: snapshot,
 			deliveryFee: snapshot?.fee,
@@ -3184,6 +3254,9 @@ export const updatePickupLocation = mutation({
 				customerId: order.customerId,
 				delta: total - order.total,
 			});
+		// A paid→free (or free→paid) point switch moves the total, so any live
+		// HitPay link is now mispriced.
+		await voidStaleGatewayRequest(ctx, order, total);
 		await ctx.db.patch(order._id, {
 			pickupLocationId: location._id,
 			pickupSnapshot: snapshot,
@@ -3324,6 +3397,14 @@ async function applyPaymentReceived(
 		...extraPatch,
 		paymentStatus: "received",
 		paymentReceivedAt: now,
+		// The single retirement point for an unresolved gateway payment (PR #178
+		// review, finding 1). Whatever route settles the order — the seller
+		// reconciling the odd payment in their HitPay dashboard and marking it
+		// received by hand, or a correctly-priced payment landing afterwards —
+		// the buyer's "we're checking a payment" card and the seller's amber note
+		// must both retire, and this is the one function every receive path runs
+		// through. Unconditional: clearing an unset field is a no-op.
+		gatewayPaymentIssue: undefined,
 		updatedAt: now,
 	};
 	if (paymentMethod) patch.paymentMethod = paymentMethod;
@@ -3421,6 +3502,13 @@ export const markPaymentReceived = mutation({
  *    `applyPaymentReceived` (auto-confirm, activation, WhatsApp receipt).
  * Deliberately NO hold guards here: checkout creation enforces them, and
  * money that has already moved must never be silently dropped.
+ *
+ * Both refusals also freeze `gatewayPaymentIssue` onto the order (PR #178
+ * review, finding 1). The event note + seller email alone made this a silent
+ * state: the buyer's page still read plain "unpaid" with Pay-now live — an
+ * invitation to pay a second time — and the seller's only signal was an email.
+ * The stamp is what the buyer's and seller's cards render from, so the surface
+ * is identical whether the WEBHOOK or the redirect reconcile found the payment.
  */
 export const receiveGatewayPayment = internalMutation({
 	args: {
@@ -3435,10 +3523,13 @@ export const receiveGatewayPayment = internalMutation({
 		{ orderId, paymentId, amountSen, currency, paymentType },
 	): Promise<{
 		applied: boolean;
-		reason?: "duplicate" | "amount_mismatch" | "cancelled";
+		reason?: "duplicate" | "amount_mismatch" | "cancelled" | "gone";
 	}> => {
 		const order = await ctx.db.get(orderId);
-		if (!order) return { applied: false, reason: "duplicate" };
+		// Distinct from "duplicate" on purpose: the order was hard-deleted between
+		// the correlating query and this mutation. Nothing was applied and nothing
+		// CAN be, so the caller must not report it to the buyer as "received".
+		if (!order) return { applied: false, reason: "gone" };
 		if (
 			order.gatewayPaymentId === paymentId ||
 			order.paymentStatus === "received"
@@ -3459,6 +3550,16 @@ export const receiveGatewayPayment = internalMutation({
 				status: order.status,
 				note: `gateway_paid_after_cancel: paid ${(amountSen / 100).toFixed(2)} ${currency.toUpperCase()} on the cancelled order (hitpay ${paymentId})`,
 				createdAt: now,
+			});
+			await ctx.db.patch(orderId, {
+				gatewayPaymentIssue: {
+					kind: "paid_after_cancel",
+					paidAmountSen: amountSen,
+					paidCurrency: currency.toUpperCase(),
+					paymentId,
+					at: now,
+				},
+				updatedAt: now,
 			});
 			await ctx.scheduler.runAfter(
 				0,
@@ -3485,6 +3586,16 @@ export const receiveGatewayPayment = internalMutation({
 				status: order.status,
 				note: `gateway_amount_mismatch: paid ${(amountSen / 100).toFixed(2)} ${currency.toUpperCase()}, order total ${(order.total / 100).toFixed(2)} ${order.currency.toUpperCase()} (hitpay ${paymentId})`,
 				createdAt: now,
+			});
+			await ctx.db.patch(orderId, {
+				gatewayPaymentIssue: {
+					kind: "amount_mismatch",
+					paidAmountSen: amountSen,
+					paidCurrency: currency.toUpperCase(),
+					paymentId,
+					at: now,
+				},
+				updatedAt: now,
 			});
 			await ctx.scheduler.runAfter(
 				0,
@@ -3514,6 +3625,50 @@ export const receiveGatewayPayment = internalMutation({
 			},
 		});
 		return { applied: true };
+	},
+});
+
+/**
+ * Seller (or admin act-as): retire an unresolved gateway payment notice
+ * (PR #178 review, finding 1) WITHOUT marking the order paid.
+ *
+ * `applyPaymentReceived` covers the case where the seller accepts the odd
+ * payment. The other real outcome has no such path: the seller refunds it in
+ * HitPay and wants the customer to pay again properly. Since an unresolved
+ * issue blocks `createCheckout` (so the buyer can't be charged twice while it
+ * stands), without this the refund would leave the buyer permanently unable to
+ * pay online — the exact dead end this finding is about, just moved one step
+ * later. The seller is the only party who knows the money was returned, so
+ * they own the switch.
+ *
+ * Deliberately not subscription- or plan-gated: clearing a warning is never a
+ * paid feature, and a past-due store must still be able to unblock a customer.
+ */
+export const clearGatewayPaymentIssue = mutation({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<void> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) throw new ConvexError("Order not found");
+		const access = await requireRetailerAccess(ctx, order.retailerId);
+		const issue = order.gatewayPaymentIssue;
+		if (!issue) return; // already resolved (e.g. a payment landed) — no-op
+		const now = Date.now();
+		// Retire the request the odd payment landed on, so the buyer's next tap
+		// mints a fresh link instead of reusing one HitPay may already consider
+		// settled (the reuse window is blind to that).
+		await releaseGatewayRequest(ctx, order);
+		await ctx.db.patch(orderId, {
+			gatewayPaymentIssue: undefined,
+			updatedAt: now,
+		});
+		// The money really moved, so the trail must outlive the notice.
+		await ctx.db.insert("orderEvents", {
+			orderId,
+			status: order.status,
+			note: `gateway_issue_resolved_by_seller: ${issue.kind}, paid ${(issue.paidAmountSen / 100).toFixed(2)} ${issue.paidCurrency} (hitpay ${issue.paymentId})`,
+			createdAt: now,
+		});
+		await logAdminAction(ctx, access, "orders.clearGatewayPaymentIssue", orderId);
 	},
 });
 
@@ -3737,6 +3892,9 @@ export const submitMockup = mutation({
 				delta: total - order.total,
 			});
 
+		// A WAIVED mockup opens the payment gate without reaching "approved", so
+		// the buyer can hold a live link while the seller re-quotes here.
+		await voidStaleGatewayRequest(ctx, order, total);
 		await ctx.db.patch(orderId, {
 			mockupStatus: "submitted",
 			// Source of truth is the array; the singular stays in sync as [0] for
@@ -3808,6 +3966,7 @@ export const updateMockupQuote = mutation({
 				customerId: order.customerId,
 				delta: total - order.total,
 			});
+		await voidStaleGatewayRequest(ctx, order, total);
 		await ctx.db.patch(orderId, {
 			mockupQuotedAmount: effectiveQuote,
 			subtotal,
@@ -4066,6 +4225,7 @@ export const declineMockupItem = mutation({
 				customerId: order.customerId,
 				delta: total - order.total,
 			});
+		await voidStaleGatewayRequest(ctx, order, total);
 		await ctx.db.patch(order._id, {
 			items: kept,
 			subtotal,
