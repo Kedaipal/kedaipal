@@ -58,22 +58,54 @@ afterEach(() => {
 });
 
 /**
- * Every scheduled job that would put a message on the buyer's WhatsApp.
- * Deliberately matches the whole `whatsapp:` module rather than an allow-list of
- * known senders — a newly added `notifyWhatever` shows up here without anyone
- * remembering to update this helper.
+ * Sends that are NOT governed by one-message-per-order, each for a stated
+ * reason. Everything else in the `whatsapp:` module counts as a buyer message.
  *
- * `handleInbound` is excluded: it is the webhook entry point (it *reacts* to the
- * buyer messaging us), not a proactive send, and its own reply is asserted
- * separately below.
+ * Keeping this as a subtraction (rather than an allow-list of known buyer
+ * sends) is deliberate: a newly added `notifyWhatever` trips the gate without
+ * anyone remembering to update this helper. Adding a name here is a conscious
+ * act that should be argued for in review.
  */
+const NOT_BUYER_SENDS = [
+	// The webhook entry point — it *reacts* to the buyer messaging us rather
+	// than pushing to them. Its reply is asserted separately below.
+	"handleInbound",
+	// Seller alerts (86eyhw9zy) go to the RETAILER's own number, not the
+	// buyer's. The policy caps what we push at a customer; a seller opting in
+	// to be pinged about their own shop is a different budget and a different
+	// consent. See docs/order-notifications.md.
+	"notifySellerNewOrder",
+	"notifySellerPaymentClaim",
+	// Not order-scoped at all — a one-time welcome to a founding seller.
+	"notifyFoundingWelcome",
+	// Seller-DRIVEN, one human tap per send, window-boxed to days 11–14
+	// (docs/payment-reminder.md). Nothing schedules it; it only ever appears
+	// here if someone automates it, which is exactly what must not happen —
+	// so it is asserted absent in its own suite rather than excused here.
+] as const;
+
+/** Every scheduled job that would put a message on the BUYER's WhatsApp. */
 async function waJobs(t: ReturnType<typeof setup>): Promise<string[]> {
 	const jobs = await t.run((ctx) =>
 		ctx.db.system.query("_scheduled_functions").collect(),
 	);
 	return jobs
 		.map((j) => j.name)
-		.filter((n) => n.startsWith("whatsapp") && !n.includes("handleInbound"));
+		.filter(
+			(n) =>
+				n.startsWith("whatsapp") &&
+				!NOT_BUYER_SENDS.some((excluded) => n.includes(excluded)),
+		);
+}
+
+/** Seller-facing alert jobs — the counterpart to `waJobs`. */
+async function sellerAlertJobs(
+	t: ReturnType<typeof setup>,
+): Promise<string[]> {
+	const jobs = await t.run((ctx) =>
+		ctx.db.system.query("_scheduled_functions").collect(),
+	);
+	return jobs.map((j) => j.name).filter((n) => n.includes("notifySeller"));
 }
 
 async function seedStore(t: ReturnType<typeof setup>, slug: string) {
@@ -179,6 +211,37 @@ describe("one message per order — the whole lifecycle", () => {
 		});
 
 		expect(await waJobs(t)).toEqual(before);
+	});
+
+	test("the seller's own alerts still fire — they are not the buyer's budget", async () => {
+		// Guards the exclusion in NOT_BUYER_SENDS from becoming a blind spot: if
+		// someone deletes the seller alerts, waJobs would stay green while the
+		// feature silently vanished. Assert them positively instead.
+		const t = setup();
+		const asUser = t.withIdentity({ subject: USER });
+		const retailerId = await seedStore(t, "seller-alerts");
+		const productId = await seedProduct(t, retailerId);
+		const { orderId } = await placeOrder(t, retailerId, productId);
+
+		expect(await sellerAlertJobs(t)).toEqual([
+			"whatsapp:notifySellerNewOrder",
+		]);
+		// …and the buyer's single message is unaffected by it.
+		expect(await waJobs(t)).toEqual(["whatsapp:notifyStorefrontOrderCreated"]);
+
+		// The buyer says they've paid → the seller's second alert.
+		await t.mutation(api.orders.claimPayment, {
+			token: await tokenOf(t, orderId),
+		});
+
+		expect(await sellerAlertJobs(t)).toEqual([
+			"whatsapp:notifySellerNewOrder",
+			"whatsapp:notifySellerPaymentClaim",
+		]);
+		expect(await waJobs(t)).toEqual(["whatsapp:notifyStorefrontOrderCreated"]);
+		// Nothing about the seller being pinged reaches the buyer.
+		await asUser.mutation(api.orders.markPaymentReceived, { orderId });
+		expect(await waJobs(t)).toEqual(["whatsapp:notifyStorefrontOrderCreated"]);
 	});
 
 	test("advancing through custom stages messages nobody", async () => {

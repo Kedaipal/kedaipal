@@ -14,6 +14,11 @@ import {
 	type RetailerEmailKey,
 } from "./lib/emailCopy";
 import { formatFulfilmentDateTime } from "./lib/fulfilmentDate";
+import { sellerWaAlertWillAttempt } from "./lib/sellerAlerts";
+import {
+	sellerNewOrderTemplateName,
+	sellerPaymentClaimTemplateName,
+} from "./lib/whatsapp";
 import { deriveMapsUrl } from "./lib/mapsUrl";
 import type { PickupSnapshot } from "./lib/whatsappCopy";
 
@@ -50,6 +55,13 @@ export const getOrderForRetailerEmail = internalQuery({
 		mockupChangeNote: string | undefined;
 		requiresMockup: boolean;
 		deliveryFeePending: boolean;
+		// Seller-alert reach (86eyd63r8): lets the email suppress itself when the
+		// seller's WhatsApp alert is going to cover this event. Raw ingredients,
+		// not a verdict — the two events have separate templates, so each action
+		// applies sellerWaAlertWillAttempt with its own env check.
+		orderWaAlerts: boolean | undefined;
+		notifyWaPhone: string | undefined;
+		isCounterOrder: boolean;
 	} | null> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) return null;
@@ -78,6 +90,9 @@ export const getOrderForRetailerEmail = internalQuery({
 			// Delivery charge awaiting the seller — drives the action line on the
 			// newOrder / orderConfirmed alerts. See docs/fulfilment.md.
 			deliveryFeePending: order.deliveryFeePending === true,
+			orderWaAlerts: retailer.orderWaAlerts,
+			notifyWaPhone: retailer.notifyWaPhone,
+			isCounterOrder: order.source === "counter",
 		};
 	},
 });
@@ -224,8 +239,14 @@ export const notifyMockupDeclined = internalAction({
  * because of an outbound issue.
  */
 export const notifyRetailerOrderAlert = internalAction({
-	args: { orderId: v.id("orders") },
-	handler: async (ctx, { orderId }): Promise<void> => {
+	args: {
+		orderId: v.id("orders"),
+		// Set by notifySellerNewOrder when the WhatsApp alert gives up, so the
+		// seller still hears about the order. Bypasses the suppression below —
+		// without it this email would no-op exactly when it's needed most.
+		force: v.optional(v.boolean()),
+	},
+	handler: async (ctx, { orderId, force }): Promise<void> => {
 		let meta: {
 			shortId: string;
 			status: Doc<"orders">["status"];
@@ -243,6 +264,10 @@ export const notifyRetailerOrderAlert = internalAction({
 			locale: Locale;
 			requiresMockup: boolean;
 			deliveryFeePending: boolean;
+			// Seller-alert reach — drives the WhatsApp-first suppression below.
+			orderWaAlerts: boolean | undefined;
+			notifyWaPhone: string | undefined;
+			isCounterOrder: boolean;
 		} | null = null;
 		try {
 			meta = await ctx.runQuery(internal.email.getOrderForRetailerEmail, {
@@ -262,6 +287,18 @@ export const notifyRetailerOrderAlert = internalAction({
 			console.warn(
 				`Email retailer alert skipped: notifyEmail is empty (orderId=${orderId}, shortId=${meta.shortId})`,
 			);
+			return;
+		}
+		// WhatsApp is the seller's channel for this event; email is the fallback
+		// (86eyd63r8). Stay quiet when the WA alert is actually going out —
+		// unless it already tried and failed, which is what `force` means.
+		if (
+			force !== true &&
+			sellerWaAlertWillAttempt(meta, {
+				templateConfigured: sellerNewOrderTemplateName() !== undefined,
+				isCounterOrder: meta.isCounterOrder,
+			})
+		) {
 			return;
 		}
 
@@ -325,8 +362,12 @@ export const notifyRetailerOrderAlert = internalAction({
  * conditions and swallow-errors pattern as `notifyRetailerOrderAlert`.
  */
 export const notifyPaymentClaimed = internalAction({
-	args: { orderId: v.id("orders") },
-	handler: async (ctx, { orderId }): Promise<void> => {
+	args: {
+		orderId: v.id("orders"),
+		/** See notifyRetailerOrderAlert.force — the WA-alert failure fallback. */
+		force: v.optional(v.boolean()),
+	},
+	handler: async (ctx, { orderId, force }): Promise<void> => {
 		let meta: {
 			shortId: string;
 			status: Doc<"orders">["status"];
@@ -341,6 +382,10 @@ export const notifyPaymentClaimed = internalAction({
 			locale: Locale;
 			paymentReference: string | undefined;
 			paymentProofStorageId: string | undefined;
+			// Seller-alert reach — drives the WhatsApp-first suppression below.
+			orderWaAlerts: boolean | undefined;
+			notifyWaPhone: string | undefined;
+			isCounterOrder: boolean;
 		} | null = null;
 		try {
 			meta = await ctx.runQuery(internal.email.getOrderForRetailerEmail, {
@@ -360,6 +405,17 @@ export const notifyPaymentClaimed = internalAction({
 			console.warn(
 				`Email payment-claimed skipped: notifyEmail is empty (orderId=${orderId}, shortId=${meta.shortId})`,
 			);
+			return;
+		}
+		// Same WhatsApp-first rule as the new-order alert. NOTE: no counter
+		// exclusion here — a claim on a counter pay-later order lands hours after
+		// the sale, so the seller genuinely needs telling either way.
+		if (
+			force !== true &&
+			sellerWaAlertWillAttempt(meta, {
+				templateConfigured: sellerPaymentClaimTemplateName() !== undefined,
+			})
+		) {
 			return;
 		}
 

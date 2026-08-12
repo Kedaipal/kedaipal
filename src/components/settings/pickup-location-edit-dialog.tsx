@@ -10,6 +10,8 @@ import {
 	normalizePriceInput,
 	parsePriceInput,
 } from "../../lib/format";
+import { toMyNationalInput } from "../../lib/phone";
+import { myWaPhoneFormOptionalSchema } from "../../lib/schemas";
 import { ProBadge } from "../app/pro-gate";
 import { submitThenFocusError } from "../forms/focus-error";
 import { useAppForm } from "../forms/form";
@@ -18,6 +20,7 @@ import {
 	type GoogleSelectedAddress,
 } from "../forms/google-address-autocomplete";
 import { Button } from "../ui/button";
+import { MyPhonePrefix } from "../ui/my-phone-input";
 
 interface PickupLocationEditDialogProps {
 	open: boolean;
@@ -133,7 +136,8 @@ export function PickupLocationEditDialog({
 			scheduleNote: location?.scheduleNote ?? "",
 			notes: location?.notes ?? "",
 			managerName: location?.managerName ?? "",
-			managerWaPhone: location?.managerWaPhone ?? "",
+			// National part only — the field wears a fixed `+60` plate.
+			managerWaPhone: toMyNationalInput(location?.managerWaPhone),
 		},
 		// Label errors render on the field itself (aria-invalid + message beneath);
 		// the address + fee inputs aren't shared fields, so they carry their own
@@ -145,7 +149,10 @@ export function PickupLocationEditDialog({
 				scheduleNote: z.string(),
 				notes: z.string(),
 				managerName: z.string(),
-				managerWaPhone: z.string(),
+				// Optional, but a number that IS typed must be a MY mobile — the
+				// field wears the `+60` plate and the server asserts the same shape,
+				// so failing fast here beats a round-trip to learn it.
+				managerWaPhone: myWaPhoneFormOptionalSchema,
 			}),
 		},
 		onSubmit: async ({ value }) => {
@@ -483,9 +490,14 @@ export function PickupLocationEditDialog({
 								</form.AppField>
 								<form.AppField name="managerWaPhone">
 									{(field) => (
-										<field.PhoneField
+										<field.TextField
 											label="Manager WhatsApp number"
-											description="Include country code, e.g. 60123456789."
+											type="tel"
+											inputMode="tel"
+											autoComplete="tel"
+											prefix={<MyPhonePrefix />}
+											placeholder="12-345 6789"
+											description="Optional — whoever is at this point when a buyer or rider needs to reach it."
 										/>
 									)}
 								</form.AppField>

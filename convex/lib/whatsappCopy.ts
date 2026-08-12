@@ -141,6 +141,23 @@ export const waCopy: Record<Locale, LocaleCopy> = {
 
 export const pickLocale = pickLocaleBase;
 
+/**
+ * Which APPROVED Meta template language a store's locale maps to. Templates are
+ * approved per language and only EN + BM variants exist today, so a zh store's
+ * template sends ride EN until the Mandarin phase submits zh variants (the copy
+ * catalog above is already zh-complete; the Meta templates are not).
+ *
+ * An exhaustive Record, not a ternary: a 4th locale must be a compile error
+ * here rather than a silent English fallback (the 86eybjw5n rule). This is the
+ * ONE author of template language for every template send — the buyer
+ * confirmation push and the seller order alerts alike.
+ */
+export const TEMPLATE_LANGUAGE: Record<Locale, "en" | "ms"> = {
+	en: "en",
+	ms: "ms",
+	zh: "en",
+};
+
 // ---------------------------------------------------------------------------
 // System messages — locale-aware, NOT retailer-overridable.
 //

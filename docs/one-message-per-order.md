@@ -17,6 +17,12 @@ payment reminder, available on the order page only on days 11–14 of the
 open-payment window, at most once per 24h — every send is a human tap. See
 [`payment-reminder.md`](./payment-reminder.md).
 
+**Scope note — this governs BUYER messages.** The seller's own order alerts
+(`86eyhw9zy`: new order + payment claim, to the retailer's `notifyWaPhone`) are
+a separate budget and a separate consent, and are unaffected by this policy.
+They also now *replace* the equivalent seller emails rather than duplicating
+them — see [`order-notifications.md`](./order-notifications.md).
+
 The buyer's one message is the Meta-approved utility template
 `order_confirmation_utility` (`WHATSAPP_ORDER_CONFIRM_TEMPLATE`) — body params
 shortId / store / total, URL button = the **tracking token**. Its whole job is

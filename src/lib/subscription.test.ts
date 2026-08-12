@@ -3,6 +3,7 @@ import { UNLIMITED } from "../../convex/lib/plans";
 import {
 	hasFeature,
 	hasSubscribed,
+	isCrmLocked,
 	orderCapState,
 	resolveBannerState,
 	type SubscriptionView,
@@ -220,6 +221,7 @@ describe("hasFeature (client plan gate)", () => {
 				radiusDelivery: false,
 				delivery: false,
 				onlinePayments: false,
+				waOrderAlerts: false,
 			},
 		});
 		expect(hasFeature(starter, "crm")).toBe(false);
@@ -229,6 +231,7 @@ describe("hasFeature (client plan gate)", () => {
 		expect(hasFeature(starter, "insights")).toBe(false);
 		expect(hasFeature(starter, "radiusDelivery")).toBe(false);
 		expect(hasFeature(starter, "onlinePayments")).toBe(false);
+		expect(hasFeature(starter, "waOrderAlerts")).toBe(false);
 		const pro = sub({
 			features: {
 				crm: true,
@@ -239,6 +242,7 @@ describe("hasFeature (client plan gate)", () => {
 				radiusDelivery: true,
 				delivery: true,
 				onlinePayments: true,
+				waOrderAlerts: true,
 			},
 		});
 		expect(hasFeature(pro, "crm")).toBe(true);
@@ -247,10 +251,53 @@ describe("hasFeature (client plan gate)", () => {
 		expect(hasFeature(pro, "insights")).toBe(true);
 		expect(hasFeature(pro, "radiusDelivery")).toBe(true);
 		expect(hasFeature(pro, "onlinePayments")).toBe(true);
+		expect(hasFeature(pro, "waOrderAlerts")).toBe(true);
 	});
 
 	test("fails open when the subscription/features are missing (loading, comped)", () => {
 		expect(hasFeature(undefined, "crm")).toBe(true);
 		expect(hasFeature(sub({}), "crm")).toBe(true);
+	});
+});
+
+describe("isCrmLocked", () => {
+	const starterSub = sub({
+		features: {
+			crm: false,
+			orderInbox: false,
+			chargeablePickup: false,
+			categories: false,
+			insights: false,
+			radiusDelivery: false,
+			delivery: false,
+			onlinePayments: false,
+			waOrderAlerts: false,
+		},
+	});
+
+	test("locks a loaded Starter payload (the order-detail crash guard)", () => {
+		expect(isCrmLocked({ actingAsAdmin: false, subscription: starterSub })).toBe(
+			true,
+		);
+	});
+
+	test("never locks while the payload is still loading (no wall flash)", () => {
+		expect(isCrmLocked(undefined)).toBe(false);
+		expect(isCrmLocked(null)).toBe(false);
+	});
+
+	test("admin act-as sees through the gate (server bypasses it too)", () => {
+		expect(isCrmLocked({ actingAsAdmin: true, subscription: starterSub })).toBe(
+			false,
+		);
+	});
+
+	test("Pro / fail-open payloads are never locked", () => {
+		expect(
+			isCrmLocked({
+				actingAsAdmin: false,
+				subscription: sub({ features: undefined }),
+			}),
+		).toBe(false);
 	});
 });

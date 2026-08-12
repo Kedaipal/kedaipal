@@ -164,9 +164,65 @@ every payment-request create), so:
   `gatewayPaidCancelled` seller email (refund via HitPay dashboard), no
   state flip, no buyer WhatsApp. The seller's own `markPaymentReceived`
   keeps no such guard on purpose — that's a deliberate human act.
-- Accepted v1 buyer-side gap: a buyer who paid a stale link sees the page
-  still asking for payment (only the seller is emailed) until the seller
-  settles it — the sheet/manual claim remains their self-serve signal.
+- **A re-price kills the live link** (PR #178 review, finding 1). A request
+  is frozen at the total it was minted for, so any mutation that moves the
+  total calls `voidStaleGatewayRequest`: the id moves to
+  `gatewayPreviousRequestId` (correlation kept — see above), the live
+  `gatewayRequestId`/`gatewayCheckoutUrl` are cleared so the 55-min reuse
+  window can't hand the stale price to another tap, and a scheduled
+  `hitpay.voidRequest` best-effort `DELETE`s it at HitPay. Wired into
+  **every** re-pricing site — `setDeliveryFee`, `updateDeliveryAddress`,
+  `updatePickupLocation`, `submitMockup`, `updateMockupQuote`, and the
+  custom-decline remainder path — and it no-ops when the new total equals
+  the old, so correcting a fee back to its original value doesn't cost the
+  buyer their open checkout. A **waived** mockup opens the payment gate
+  without reaching `approved`, which is why the mockup paths need it too.
+  Rationale for voiding rather than *refusing to re-price while a link is
+  live*: refusing would block a seller from fixing a delivery charge for up
+  to an hour, and would do nothing about the buyer-driven re-prices
+  (address / pickup-point edits) that open the same window. A failed
+  payment the buyer can retry at the right price beats a successful one at
+  the wrong price.
+
+### The unapplied-payment state (`orders.gatewayPaymentIssue`)
+
+Both refusals above — `amount_mismatch` and `paid_after_cancel` — mean real
+money moved and the order is *not* paid. Until PR #178 this was **silent**:
+an `orderEvents` note plus a seller email, while the buyer kept a plain
+"unpaid" page with **Pay now still armed**, an open invitation to pay twice.
+It is now frozen onto the order as `gatewayPaymentIssue`
+(`{kind, paidAmountSen, paidCurrency, paymentId, at}`) — persisted rather
+than derived, because the **webhook** discovers it far more often than the
+redirect does, with no client watching, and the surface has to survive a
+reload.
+
+- **Buyer** (`/track/<token>`): the payment card's unpaid branch renders the
+  notice *first* — ahead of the mockup and delivery-fee holds, since those
+  say "the price isn't final" while here the money has already gone — as a
+  disabled button + explanation + the copyable payment ref, with **no
+  Pay-now and no bank-transfer fallback**. A cancelled or already-`claimed`
+  order gets the same copy as a standalone amber card, because the payment
+  card is hidden or has no room. One `gatewayIssueCopy` author for both.
+- **Seller** (order detail): amber section in the `confirmationPushStatus`
+  family, naming the paid amount vs the current total, the ref to search in
+  HitPay, and which action to take.
+- **Server-enforced, not just hidden**: `createCheckout` refuses while an
+  issue is unresolved, so a direct call can't mint a second payable link on
+  top of the stuck payment.
+- **Two exits.** Accepting the payment (`markPaymentReceived`, or a later
+  correct payment) clears it via `applyPaymentReceived` — the single
+  retirement point every receive path runs through. Refunding instead has
+  its own: `orders.clearGatewayPaymentIssue` (owner-or-admin, "Mark as
+  resolved" on the amber card) retires the notice **without** marking the
+  order paid, writes a `gateway_issue_resolved_by_seller` event, and
+  releases the request the odd payment landed on so the buyer's next tap
+  mints a *fresh* link rather than reusing one HitPay may already treat as
+  settled. Without this exit, blocking Pay-now would trap a refunded buyer
+  with no way to pay at all.
+- `verifyCheckout` returns the verdict (`issue: "amount_mismatch" |
+  "paid_after_cancel"`) instead of flattening it to `"unpaid"`, and
+  distinguishes `gone` (order hard-deleted mid-flight — **not** "received")
+  from `duplicate` (already settled — genuinely "received").
 
 ## Verified against the real sandbox (7 Aug 2026)
 

@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { AUP_VERSION, PRIVACY_VERSION, TERMS_VERSION } from "./lib/legal";
@@ -1372,5 +1372,177 @@ describe("retailers.checkEmailHasStore (admin onboard pre-check)", () => {
 				.withIdentity({ subject: "u_random" })
 				.query(api.retailers.checkEmailHasStore, { email: "vendor@example.com" }),
 		).rejects.toThrow(/not authorized/i);
+	});
+});
+
+describe("seller WhatsApp order alerts config (86eyhw9zy)", () => {
+	afterEach(() => {
+		delete process.env.WHATSAPP_SELLER_NEW_ORDER_TEMPLATE;
+		delete process.env.WHATSAPP_CHECKOUT_PHONE;
+	});
+
+	test("saves a local-form MY mobile normalized and enables in one call; availability mirrors the template env", async () => {
+		const t = setup();
+		const asUser = await seed(t, USER_A, "wa-alerts-happy");
+		await asUser.mutation(api.retailers.updateSettings, {
+			notifyWaPhone: "012-345 6789",
+			orderWaAlerts: true,
+		});
+		// Env unset → the settings card stays hidden even though config is saved.
+		let retailer = await asUser.query(api.retailers.getMyRetailer);
+		expect(retailer?.notifyWaPhone).toBe("60123456789");
+		expect(retailer?.orderWaAlerts).toBe(true);
+		expect(retailer?.waOrderAlertsAvailable).toBe(false);
+
+		process.env.WHATSAPP_SELLER_NEW_ORDER_TEMPLATE = "seller_new_order_utility";
+		retailer = await asUser.query(api.retailers.getMyRetailer);
+		expect(retailer?.waOrderAlertsAvailable).toBe(true);
+	});
+
+	test("rejects landlines, garbage, and the shared WABA's own number", async () => {
+		const t = setup();
+		const asUser = await seed(t, USER_A, "wa-alerts-invalid");
+		// Landline (03-…) — a WhatsApp alert can never reach it.
+		await expect(
+			asUser.mutation(api.retailers.updateSettings, {
+				notifyWaPhone: "0388881234",
+			}),
+		).rejects.toThrow(/mobile/i);
+		await expect(
+			asUser.mutation(api.retailers.updateSettings, {
+				notifyWaPhone: "not a phone",
+			}),
+		).rejects.toThrow(/digits|mobile/i);
+		process.env.WHATSAPP_CHECKOUT_PHONE = "60111222333";
+		await expect(
+			asUser.mutation(api.retailers.updateSettings, {
+				notifyWaPhone: "011-1222 333",
+			}),
+		).rejects.toThrow(/Kedaipal's own WhatsApp number/i);
+	});
+
+	test("enabling requires a number (same call or already saved)", async () => {
+		const t = setup();
+		const asUser = await seed(t, USER_A, "wa-alerts-no-phone");
+		await expect(
+			asUser.mutation(api.retailers.updateSettings, { orderWaAlerts: true }),
+		).rejects.toThrow(/number/i);
+		// Number in the same call is enough (covered by the happy-path test);
+		// number saved earlier is too.
+		await asUser.mutation(api.retailers.updateSettings, {
+			notifyWaPhone: "0198765432",
+		});
+		await asUser.mutation(api.retailers.updateSettings, { orderWaAlerts: true });
+		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		expect(retailer?.orderWaAlerts).toBe(true);
+	});
+
+	test("Starter can't enable (Pro gate) but can always disable", async () => {
+		const t = setup();
+		const asUser = await seed(t, USER_A, "wa-alerts-starter");
+		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		// Saving the number alone is un-gated (it's inert without the toggle).
+		await asUser.mutation(api.retailers.updateSettings, {
+			notifyWaPhone: "0198765432",
+		});
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.first();
+			if (!sub) throw new Error("no subscription row");
+			await ctx.db.patch(sub._id, { plan: "starter", status: "active" });
+		});
+		await expect(
+			asUser.mutation(api.retailers.updateSettings, { orderWaAlerts: true }),
+		).rejects.toThrow(/Pro plan/i);
+		// A downgraded seller with the toggle already on can still turn it off.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, { orderWaAlerts: true });
+		});
+		await asUser.mutation(api.retailers.updateSettings, {
+			orderWaAlerts: false,
+		});
+		const after = await asUser.query(api.retailers.getMyRetailer);
+		expect(after?.orderWaAlerts).toBe(false);
+	});
+
+	test("clearing the number switches the alerts off with it", async () => {
+		const t = setup();
+		const asUser = await seed(t, USER_A, "wa-alerts-clear");
+		await asUser.mutation(api.retailers.updateSettings, {
+			notifyWaPhone: "0198765432",
+			orderWaAlerts: true,
+		});
+		await asUser.mutation(api.retailers.updateSettings, { notifyWaPhone: "" });
+		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		expect(retailer?.notifyWaPhone).toBeUndefined();
+		expect(retailer?.orderWaAlerts).toBe(false);
+	});
+
+	test("a STOP'd alert number is surfaced on the payload (and cleared by START)", async () => {
+		const t = setup();
+		const asUser = await seed(t, USER_A, "wa-alerts-optout");
+		await asUser.mutation(api.retailers.updateSettings, {
+			notifyWaPhone: "0198765432",
+		});
+		const optOutId = await t.run(async (ctx) =>
+			ctx.db.insert("optOuts", {
+				waPhone: "60198765432",
+				source: "stop_keyword",
+				createdAt: Date.now(),
+			}),
+		);
+		let retailer = await asUser.query(api.retailers.getMyRetailer);
+		expect(retailer?.notifyWaPhoneOptedOut).toBe(true);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(optOutId, { reactivatedAt: Date.now() });
+		});
+		retailer = await asUser.query(api.retailers.getMyRetailer);
+		expect(retailer?.notifyWaPhoneOptedOut).toBe(false);
+	});
+});
+
+/**
+ * The store's own contact number became MY-only with the `+60` plate that now
+ * fronts every phone field (86eyknr2r). It isn't cosmetic: `waPhone` is the
+ * sender contact Lalamove falls back to, and Lalamove requires `+60`, so a
+ * non-MY value was never a supported case — it just failed later and quietly.
+ */
+describe("retailers.updateSettings — waPhone is a Malaysian mobile", () => {
+	test.each([
+		["the bare national number the +60 plate asks for", "12-345 6789"],
+		["a local number with the trunk 0", "012-345 6789"],
+		["a fully-keyed international number", "60123456789"],
+	])("accepts %s and stores one canonical form", async (_label, typed) => {
+		const t = setup();
+		const asUser = await seed(t, USER_A, `wa-phone-${typed.length}`);
+		await asUser.mutation(api.retailers.updateSettings, { waPhone: typed });
+		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		expect(retailer?.waPhone).toBe("60123456789");
+	});
+
+	test.each([
+		["a landline — no WhatsApp account can exist on it", "03-8888 1234"],
+		["a Singapore mobile", "+65 8123 4567"],
+		["a US number that merely starts with 1", "+1 555 234 5678"],
+	])("rejects %s", async (_label, typed) => {
+		const t = setup();
+		const asUser = await seed(t, USER_A, "wa-phone-reject");
+		await expect(
+			asUser.mutation(api.retailers.updateSettings, { waPhone: typed }),
+		).rejects.toThrow(/Malaysian mobile/i);
+	});
+
+	test("blank still clears the number — tightening never traps a seller", async () => {
+		const t = setup();
+		const asUser = await seed(t, USER_A, "wa-phone-clear");
+		await asUser.mutation(api.retailers.updateSettings, {
+			waPhone: "012-345 6789",
+		});
+		await asUser.mutation(api.retailers.updateSettings, { waPhone: "" });
+		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		expect(retailer?.waPhone).toBeUndefined();
 	});
 });

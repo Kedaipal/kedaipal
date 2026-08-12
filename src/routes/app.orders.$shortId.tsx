@@ -58,6 +58,7 @@ import {
 	DeliveryAddressDisplay,
 	formatAddressInline,
 } from "../components/storefront/delivery-address-display";
+import { ProBadge } from "../components/app/pro-gate";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
@@ -94,6 +95,7 @@ import {
 	stageLabel,
 } from "../lib/orderStatus";
 import { suppressNextOrderConfirmedToast } from "../lib/orderToastSuppression";
+import { isCrmLocked } from "../lib/subscription";
 
 export const Route = createFileRoute("/app/orders/$shortId")({
 	component: OrderDetailRoute,
@@ -274,6 +276,9 @@ function OrderDetailRoute() {
 	const updateStatus = useMutation(api.orders.updateStatus);
 	const advanceToStage = useMutation(api.orders.advanceToStage);
 	const markPaymentReceived = useMutation(api.orders.markPaymentReceived);
+	const clearGatewayPaymentIssue = useMutation(
+		api.orders.clearGatewayPaymentIssue,
+	);
 	const cancelRiderBooking = useAction(api.lalamove.cancelBooking);
 	const sendPaymentReminder = useAction(api.orders.sendPaymentReminder);
 	const [sendingReminder, setSendingReminder] = useState(false);
@@ -368,9 +373,16 @@ function OrderDetailRoute() {
 	// in orders.advanceToStage.
 	const awaitingCollection =
 		collectionService && order?.collectedAt === undefined;
+	// Pro gate (CRM). Skipped until the retailer payload resolves AND the plan
+	// allows it — `customers.get` throws `assertPlanFeature` for Starter, and a
+	// route-level useQuery throw takes the whole order page down (the exact bug
+	// this guard fixes; customers list/detail carry the same skip).
+	const crmLocked = isCrmLocked(retailer);
 	const crmCustomer = useQuery(
 		api.customers.get,
-		order?.customerId ? { customerId: order.customerId } : "skip",
+		retailer && !crmLocked && order?.customerId
+			? { customerId: order.customerId }
+			: "skip",
 	);
 	// Holds the id of the in-flight advance target ("cancel" for cancellation).
 	const [pending, setPending] = useState<string | null>(null);
@@ -813,6 +825,95 @@ function OrderDetailRoute() {
 				</section>
 			) : null}
 
+			{/* An authentic online payment the server refused to auto-apply (PR #178
+			    review, finding 1). Amber like the confirmation-push note: money has
+			    moved, the order is NOT paid, and only a human can close the gap.
+			    Until now the seller's only signal was an email — on a product whose
+			    whole premise is that sellers don't read email. Clears itself the
+			    moment any receive path settles the order (applyPaymentReceived). */}
+			{order.gatewayPaymentIssue ? (
+				<section className="flex gap-3 rounded-2xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-800 dark:bg-amber-950/50">
+					<HandCoins className="size-5 shrink-0 text-amber-600 dark:text-amber-400" />
+					<div className="min-w-0 flex-1">
+						<p className="text-xs font-semibold uppercase tracking-widest text-amber-700 dark:text-amber-300">
+							{order.gatewayPaymentIssue.kind === "paid_after_cancel"
+								? "Paid after you cancelled"
+								: "Online payment doesn't match this order"}
+						</p>
+						{order.gatewayPaymentIssue.kind === "paid_after_cancel" ? (
+							<p className="mt-1 text-sm text-amber-950 dark:text-amber-100">
+								<b>
+									{formatPrice(
+										order.gatewayPaymentIssue.paidAmountSen,
+										order.gatewayPaymentIssue.paidCurrency,
+									)}
+								</b>{" "}
+								came through online after this order was cancelled, so nothing
+								was applied to it. Refund it from your HitPay dashboard using
+								the reference below. The customer has been told not to pay
+								again.
+							</p>
+						) : (
+							<p className="mt-1 text-sm text-amber-950 dark:text-amber-100">
+								The customer paid{" "}
+								<b>
+									{formatPrice(
+										order.gatewayPaymentIssue.paidAmountSen,
+										order.gatewayPaymentIssue.paidCurrency,
+									)}
+								</b>{" "}
+								online, but this order&apos;s total is{" "}
+								<b>{formatPrice(order.total, order.currency)}</b> — usually a
+								checkout link opened before the price changed. It was{" "}
+								<b>not</b> confirmed automatically. Check it in your HitPay
+								dashboard: accept it with &ldquo;Mark payment received&rdquo;
+								below, or refund it there. The customer has been told not to
+								pay again.
+							</p>
+						)}
+						<div className="mt-2 flex items-start justify-between gap-2">
+							<p className="min-w-0 break-all font-mono text-xs text-amber-900/80 dark:text-amber-200/80">
+								Ref {order.gatewayPaymentIssue.paymentId}
+							</p>
+							<CopyButton
+								value={order.gatewayPaymentIssue.paymentId}
+								ariaLabel="Copy payment reference"
+								successMessage="Payment reference copied"
+								className="-my-2"
+							/>
+						</div>
+						{/* The exit for the seller who REFUNDED rather than accepted.
+						    Online payment is blocked while this notice stands (so the
+						    customer can't be charged twice), so without a way to retire
+						    it a refund would leave them unable to pay at all. Names the
+						    consequence rather than just "Dismiss". */}
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={pending !== null}
+							onClick={async () => {
+								setPending("clear-gateway-issue");
+								try {
+									await clearGatewayPaymentIssue({ orderId: order._id });
+									toast.success("Payment notice cleared");
+								} catch (err) {
+									toast.error(convexErrorMessage(err));
+								} finally {
+									setPending(null);
+								}
+							}}
+							className="mt-3 border-amber-300 bg-transparent text-amber-900 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-100 dark:hover:bg-amber-900/50"
+						>
+							Mark as resolved
+						</Button>
+						<p className="mt-1.5 text-xs text-amber-800/80 dark:text-amber-200/70">
+							Clears this notice and lets the customer pay online again — use it
+							once you&apos;ve refunded them.
+						</p>
+					</div>
+				</section>
+			) : null}
+
 			{/* Shopper's note + optional custom-line reference photo — front-and-centre
 			    so it isn't missed when fulfilling. Plain text, escaped by React. */}
 			{order.customerNote || order.customerImageStorageId ? (
@@ -1172,6 +1273,10 @@ function OrderDetailRoute() {
 							aria-label="View customer profile"
 						>
 							{avatarRow}
+							{/* Starter: the profile link lands on the customers upgrade
+							    wall — badge it so the tap is never a surprise (the CRM
+							    stats line above stays hidden for the same reason). */}
+							{crmLocked ? <ProBadge className="shrink-0" /> : null}
 							<ChevronRight className="size-4.5 shrink-0 text-muted-foreground/60" />
 						</Link>
 					) : (
@@ -1305,7 +1410,8 @@ function OrderDetailRoute() {
 					</div>
 				) : null}
 				{/* Frozen delivery charge — annotated with how it was priced (band
-				    distance / manual) so the number is auditable at a glance. */}
+				    distance / zone + weight / manual) so the number is auditable at
+				    a glance. */}
 				{order.deliveryFee && order.deliveryFee > 0 ? (
 					<div className="flex items-center justify-between px-3 text-sm text-muted-foreground">
 						<span>
@@ -1313,9 +1419,18 @@ function OrderDetailRoute() {
 							{order.deliverySnapshot?.mode === "radius" &&
 							order.deliverySnapshot.distanceKm !== undefined
 								? ` — ${order.deliverySnapshot.distanceKm} km`
-								: order.deliverySnapshot?.mode === "manual"
-									? " — set by you"
-									: ""}
+								: order.deliverySnapshot?.mode === "weight"
+									? ` — ${[
+											order.deliverySnapshot.zoneName,
+											order.deliverySnapshot.chargeableKg !== undefined
+												? `${order.deliverySnapshot.chargeableKg} kg`
+												: undefined,
+										]
+											.filter(Boolean)
+											.join(" · ")}`
+									: order.deliverySnapshot?.mode === "manual"
+										? " — set by you"
+										: ""}
 						</span>
 						<span className="tabular-nums">
 							{formatPrice(order.deliveryFee, order.currency)}
@@ -1793,7 +1908,8 @@ const MAX_MOCKUP_IMAGES = 5;
 /**
  * Amber action card for a fee-pending delivery order (86extzdr8): the charge
  * couldn't be resolved automatically on an "arrange" store — radius mode:
- * beyond the bands / no map pin; lalamove mode: no live quote / no map pin.
+ * beyond the bands / no map pin; lalamove mode: no live quote / no map pin;
+ * weight mode (86eyeea1n): unserved state / overweight / unweighable cart.
  * The explanation keys on the order's FROZEN `deliveryFeePendingReason` (a
  * Lalamove store must never read "outside your delivery bands"). The seller
  * agrees the charge with the buyer in chat, enters it here (0 = deliver
@@ -1802,6 +1918,8 @@ const MAX_MOCKUP_IMAGES = 5;
  * legacy order (no push) already had its single message, so setting the fee
  * there just updates the buyer's order page; the copy branches on that so it
  * never promises a message that won't be sent.
+ * The missing_weights copy names the FIX (set parcel weights), not just the
+ * state — it's the one reason the seller can make never happen again.
  */
 const FEE_PENDING_REASON_COPY: Record<
 	NonNullable<Doc<"orders">["deliveryFeePendingReason"]> | "unknown",
@@ -1813,6 +1931,16 @@ const FEE_PENDING_REASON_COPY: Record<
 		"The buyer's address has no map pin, so no charge could be worked out yet.",
 	unquotable:
 		"A live Lalamove price couldn't be fetched for this address, so no charge was applied yet.",
+	no_state:
+		"The order has no delivery address yet, so no zone could be matched for the charge.",
+	unserved_state:
+		"The buyer's state isn't in any of your delivery zones, so no charge was applied yet.",
+	over_bands:
+		"This order weighs more than your heaviest weight band, so no charge was applied yet.",
+	missing_weights:
+		"Some items have no parcel weight set, so the charge couldn't be calculated — add weights in Products to price future orders automatically.",
+	custom_item:
+		"This order includes a custom item, so its weight isn't known until you've agreed the details.",
 	// Orders from before the reason was stored — stay mode-neutral.
 	unknown: "No delivery charge could be applied to this order automatically.",
 };
