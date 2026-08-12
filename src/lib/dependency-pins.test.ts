@@ -21,6 +21,13 @@ const allSpecs = Object.entries({
 // packages are the same hazard as a dist-tag: any lockfile re-resolution
 // jumps the framework untested. They stay exact-pinned; upgrades are a
 // deliberate, lockstep task (86eyjadza) with a buyer-surface regression pass.
+// Clerk rides the same freeze because it PEER-depends on the pinned TanStack
+// family: @clerk/tanstack-react-start@1.5.0 requires react-start >=1.167.17
+// while we pin 1.167.16, and pnpm installs an unmet peer with only a warning.
+// A caret range here silently resolved onto exactly that during the 86eyetz94
+// security bump — an auth SDK running against a framework version its own
+// changelog says it needs a fix from. Upgrading Clerk past 1.4.x is therefore
+// part of the lockstep TanStack task (86eyjadza), not a range that drifts.
 const EXACT_PINNED = [
 	"@tanstack/react-router",
 	"@tanstack/react-start",
@@ -28,6 +35,7 @@ const EXACT_PINNED = [
 	"@tanstack/react-devtools",
 	"@tanstack/devtools-vite",
 	"@tanstack/router-plugin",
+	"@clerk/tanstack-react-start",
 ];
 
 describe("dependency pins", () => {
@@ -42,7 +50,7 @@ describe("dependency pins", () => {
 		}
 	});
 
-	test("TanStack router/start packages are exact-pinned", () => {
+	test("peer-coupled framework packages are exact-pinned", () => {
 		for (const name of EXACT_PINNED) {
 			const spec = pkg.dependencies[name] ?? pkg.devDependencies[name];
 			expect(spec, `${name} missing from package.json`).toBeDefined();
