@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import { isUnlimited } from "../../../convex/lib/plans";
+import { buildWaContactLink } from "../../lib/contact";
 import { formatPrice } from "../../lib/format";
 import { LEGAL_CONTACT_EMAIL } from "../../lib/legal";
 import {
@@ -202,18 +203,16 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 
 
 					{/* Starter → Pro upgrade (manual sub: routes the request to Arif on WA). */}
-					{sub?.plan === "starter" &&
-					sub.status === "active" &&
-					instructions?.whatsappPhone ? (
+					{sub?.plan === "starter" && sub.status === "active" ? (
 						<div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
 							<p className="text-xs text-muted-foreground">
 								Want 500 orders/month, the customer database and the order
 								inbox? Move up to Pro.
 							</p>
 							<a
-								href={`https://wa.me/${instructions.whatsappPhone.replace(/\D/g, "")}?text=${encodeURIComponent(
+								href={buildWaContactLink(
 									`Hi, I'd like to upgrade from Starter to Pro for my Kedaipal store (/${retailer.slug}).`,
-								)}`}
+								)}
 								target="_blank"
 								rel="noopener noreferrer"
 								className="inline-flex h-9 w-fit shrink-0 items-center gap-1.5 rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
@@ -304,19 +303,17 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 								Message us on WhatsApp to receive payment details.
 							</p>
 						)}
-						{instructions?.whatsappPhone ? (
-							<a
-								href={`https://wa.me/${instructions.whatsappPhone.replace(/\D/g, "")}?text=${encodeURIComponent(
-									`Hi, I've paid invoice ${pending.invoiceNumber} for my Kedaipal store (/${retailer.slug}).`,
-								)}`}
-								target="_blank"
-								rel="noopener noreferrer"
-								className="mt-4 inline-flex h-10 w-fit items-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
-							>
-								<ExternalLink className="size-4" />
-								I've paid — notify us
-							</a>
-						) : null}
+						<a
+							href={buildWaContactLink(
+								`Hi, I've paid invoice ${pending.invoiceNumber} for my Kedaipal store (/${retailer.slug}).`,
+							)}
+							target="_blank"
+							rel="noopener noreferrer"
+							className="mt-4 inline-flex h-10 w-fit items-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
+						>
+							<ExternalLink className="size-4" />
+							I've paid — notify us
+						</a>
 					</div>
 				</section>
 			) : null}
@@ -327,8 +324,7 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 			{!adminOwnAccount &&
 			!pending &&
 			!sub?.comped &&
-			(sub?.status === "trialing" || sub?.status === "past_due") &&
-			instructions?.whatsappPhone ? (
+			(sub?.status === "trialing" || sub?.status === "past_due") ? (
 				<section className="flex flex-col gap-3 rounded-2xl border border-input bg-background p-5 lg:p-6">
 					<div>
 						<p className="text-sm font-medium">
@@ -342,11 +338,11 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 						</p>
 					</div>
 					<a
-						href={`https://wa.me/${instructions.whatsappPhone.replace(/\D/g, "")}?text=${encodeURIComponent(
+						href={buildWaContactLink(
 							sub.status === "past_due"
 								? `Hi, I'd like to renew my Kedaipal subscription for my store (/${retailer.slug}).`
 								: `Hi, I'd like to choose a plan for my Kedaipal store (/${retailer.slug}).`,
-						)}`}
+						)}
 						target="_blank"
 						rel="noopener noreferrer"
 						className="inline-flex h-10 w-fit items-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
@@ -430,19 +426,17 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 					</div>
 				</div>
 				<div className="flex flex-col gap-2 sm:flex-row">
-					{instructions?.whatsappPhone ? (
-						<a
-							href={`https://wa.me/${instructions.whatsappPhone.replace(/\D/g, "")}?text=${encodeURIComponent(
-								`Hi, I have a billing question about my Kedaipal store (/${retailer.slug}).`,
-							)}`}
-							target="_blank"
-							rel="noopener noreferrer"
-							className="inline-flex h-11 w-fit items-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
-						>
-							<MessageCircle className="size-4" />
-							Contact support on WhatsApp
-						</a>
-					) : null}
+					<a
+						href={buildWaContactLink(
+							`Hi, I have a billing question about my Kedaipal store (/${retailer.slug}).`,
+						)}
+						target="_blank"
+						rel="noopener noreferrer"
+						className="inline-flex h-11 w-fit items-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
+					>
+						<MessageCircle className="size-4" />
+						Contact support on WhatsApp
+					</a>
 					<a
 						href={`mailto:${LEGAL_CONTACT_EMAIL}?subject=${encodeURIComponent(
 							`Billing question — /${retailer.slug}`,

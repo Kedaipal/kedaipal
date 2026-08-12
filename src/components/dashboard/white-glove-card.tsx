@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from "convex/react";
 import { Award, X } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
+import { buildWaContactLink } from "../../lib/contact";
 
 /**
  * One-time celebratory card shown to a freshly-minted Founding Member, prompting
@@ -10,22 +11,15 @@ import { api } from "../../../convex/_generated/api";
  */
 export function WhiteGloveCard({ slug }: { slug: string }) {
 	const status = useQuery(api.foundingMembers.myStatus, {});
-	const instructions = useQuery(
-		api.billing.paymentInstructions,
-		status && !status.whiteGloveScheduled ? {} : "skip",
-	);
 	const markScheduled = useMutation(
 		api.foundingMembers.markWhiteGloveScheduled,
 	);
 
 	if (!status || status.whiteGloveScheduled) return null;
 
-	const phone = instructions?.whatsappPhone;
-	const waUrl = phone
-		? `https://wa.me/${phone.replace(/\D/g, "")}?text=${encodeURIComponent(
-				`Hi Arif! I'm Founding Member #${status.rank} (/${slug}) — I'd like to schedule my white-glove onboarding call.`,
-			)}`
-		: undefined;
+	const waUrl = buildWaContactLink(
+		`Hi Arif! I'm Founding Member #${status.rank} (/${slug}) — I'd like to schedule my white-glove onboarding call.`,
+	);
 
 	return (
 		<section className="relative flex items-start gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-5 dark:border-amber-800 dark:bg-amber-950/40">
@@ -48,17 +42,15 @@ export function WhiteGloveCard({ slug }: { slug: string }) {
 						most out of Kedaipal.
 					</p>
 				</div>
-				{waUrl ? (
-					<a
-						href={waUrl}
-						target="_blank"
-						rel="noopener noreferrer"
-						onClick={() => markScheduled({})}
-						className="inline-flex h-9 w-fit items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
-					>
-						Schedule your call
-					</a>
-				) : null}
+				<a
+					href={waUrl}
+					target="_blank"
+					rel="noopener noreferrer"
+					onClick={() => markScheduled({})}
+					className="inline-flex h-9 w-fit items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
+				>
+					Schedule your call
+				</a>
 			</div>
 		</section>
 	);

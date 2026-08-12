@@ -383,13 +383,18 @@ backfill no longer mints comped subscriptions.
   `wa.me`. Pure decision in `resolveBannerState`), Billing settings tab
   (`billing-tab.tsx` — plan/status, pending invoice + how-to-pay, founding ribbon,
   history, **+ an always-on "Questions about billing?" support card** — WhatsApp
-  (`billing.paymentInstructions.whatsappPhone`) + email (`hello@kedaipal.com`) —
+  (`SUPPORT_WA_NUMBER`, `src/lib/contact.ts`) + email (`hello@kedaipal.com`) —
   rendered for **every** retailer regardless of plan/tier/status so they can
   always reach us). Pure helpers + tests in `src/lib/subscription.ts`. **Remaining (light):**
   the dashboard's one-time "Schedule your white-glove call" CTA on rank assignment
   (the day-14 pay nudge is already covered by the banner).
   **Payment details are admin-editable in the UI** (not env) — see Phase 4.
-  Only the WA number stays env (`WHATSAPP_CHECKOUT_PHONE`).
+  **The support WA number is the constant `SUPPORT_WA_NUMBER`** (`src/lib/contact.ts`),
+  shared with the landing/pricing founding CTAs. It is deliberately NOT
+  `WHATSAPP_CHECKOUT_PHONE`: that env var is the shared-WABA sender that talks to
+  *buyers*, so a seller messaging it reaches the order bot, not a human
+  (ClickUp `86eyjuvyu`). `billing.paymentInstructions` carries no phone at all —
+  every seller→Kedaipal CTA in `/app` builds its link with `buildWaContactLink`.
 - **Phase 4 (in progress):** **`billingConfig`** singleton table + `convex/billing.ts`
   (`paymentInstructions` reads the table + resolves the QR from Convex storage;
   admin `getBillingConfig`/`updateBillingConfig`/`generateQrUploadUrl`; `amIAdmin`

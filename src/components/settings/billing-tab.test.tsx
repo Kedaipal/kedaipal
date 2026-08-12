@@ -4,6 +4,7 @@ import { useQuery } from "convex/react";
 import { type FunctionReference, getFunctionName } from "convex/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../../convex/_generated/api";
+import { SUPPORT_WA_NUMBER } from "../../lib/contact";
 import { BillingTab } from "./billing-tab";
 
 // Auto-mock convex/react so we can drive each useQuery by its function reference.
@@ -46,7 +47,9 @@ function mockQueries({ isAdmin }: { isAdmin: boolean }) {
 		const name = getFunctionName(ref);
 		if (name === NAME.amIAdmin) return isAdmin;
 		if (name === NAME.invoices) return [];
-		if (name === NAME.instructions) return { whatsappPhone: "+60123456789" };
+		// Bank/DuitNow details only — the support number is a constant, never a
+		// server value (see SUPPORT_WA_NUMBER).
+		if (name === NAME.instructions) return { bankName: "Maybank" };
 		return undefined;
 	}) as unknown as typeof useQuery);
 }
@@ -78,5 +81,38 @@ describe("BillingTab admin plan suppression", () => {
 		expect(screen.getByText("Current plan")).toBeTruthy();
 		expect(screen.getByText("Past due")).toBeTruthy();
 		expect(screen.queryByText("Admin account")).toBeNull();
+	});
+});
+
+describe("BillingTab support WhatsApp number", () => {
+	/** ClickUp 86eyjuvyu: every seller→Kedaipal CTA must reach the support number,
+	 * never the buyer-facing WABA checkout sender (WHATSAPP_CHECKOUT_PHONE). */
+	it("points every WhatsApp CTA at SUPPORT_WA_NUMBER", () => {
+		mockQueries({ isAdmin: false });
+		render(<BillingTab retailer={retailer()} />);
+		const waLinks = screen
+			.getAllByRole("link")
+			.map((a) => a.getAttribute("href") ?? "")
+			.filter((href) => href.startsWith("https://wa.me/"));
+		expect(waLinks.length).toBeGreaterThan(0);
+		for (const href of waLinks) {
+			expect(href.startsWith(`https://wa.me/${SUPPORT_WA_NUMBER}?`)).toBe(true);
+		}
+	});
+
+	it("renders the support card even with no billing config", () => {
+		// The CTA used to hang off a server-provided phone, so an unset env var
+		// silently removed the seller's only way to reach us.
+		vi.mocked(useQuery).mockImplementation(((
+			ref: FunctionReference<"query">,
+		) => {
+			const name = getFunctionName(ref);
+			if (name === getFunctionName(api.invoices.myInvoices)) return [];
+			if (name === getFunctionName(api.billing.paymentInstructions))
+				return null;
+			return false;
+		}) as unknown as typeof useQuery);
+		render(<BillingTab retailer={retailer()} />);
+		expect(screen.getByText("Contact support on WhatsApp")).toBeTruthy();
 	});
 });

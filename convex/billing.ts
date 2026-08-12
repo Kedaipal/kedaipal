@@ -26,16 +26,19 @@ async function loadConfig(ctx: QueryCtx): Promise<Doc<"billingConfig"> | null> {
 
 /**
  * Retailer-facing payment instructions for the billing page. Reads the global
- * config + resolves the QR to a URL + the WA number from env. Auth-gated (a
- * signed-in retailer). Returns empty-ish when nothing is configured — the UI
- * shows a "message us for details" fallback.
+ * config + resolves the QR to a URL. Auth-gated (a signed-in retailer). Returns
+ * empty-ish when nothing is configured — the UI shows a "message us for
+ * details" fallback.
+ *
+ * Deliberately carries NO WhatsApp number: seller→Kedaipal support CTAs use the
+ * constant `SUPPORT_WA_NUMBER` (`src/lib/contact.ts`), never the buyer-facing
+ * `WHATSAPP_CHECKOUT_PHONE` WABA sender.
  */
 export const paymentInstructions = query({
 	args: {},
 	handler: async (
 		ctx,
 	): Promise<{
-		whatsappPhone?: string;
 		bankName?: string;
 		bankAccountName?: string;
 		bankAccountNumber?: string;
@@ -50,10 +53,7 @@ export const paymentInstructions = query({
 			const url = await ctx.storage.getUrl(cfg.qrImageStorageId);
 			qrUrl = url ?? undefined;
 		}
-		const waPhone = process.env.WHATSAPP_CHECKOUT_PHONE;
 		return {
-			whatsappPhone:
-				waPhone && waPhone.trim().length > 0 ? waPhone.trim() : undefined,
 			bankName: cfg?.bankName,
 			bankAccountName: cfg?.bankAccountName,
 			bankAccountNumber: cfg?.bankAccountNumber,
