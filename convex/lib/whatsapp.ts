@@ -33,6 +33,25 @@ export function orderConfirmTemplateName(): string | undefined {
 }
 
 /**
+ * Seller WhatsApp order alerts (86eyhw9zy) — the Meta-approved utility
+ * templates that notify the SELLER's own number (sellers have no open service
+ * window with the shared WABA, so free-form text can't reach them). Same
+ * env-gating posture as the buyer confirm template above: unset ⇒ that alert
+ * is silently unavailable (settings card hidden, sends skipped), so the code
+ * ships decoupled from Meta template review.
+ */
+export function sellerNewOrderTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_SELLER_NEW_ORDER_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/** See sellerNewOrderTemplateName — the buyer-says-they've-paid sibling. */
+export function sellerPaymentClaimTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_SELLER_PAYMENT_CLAIM_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/**
  * A failed Cloud API send, carrying the machine-readable bits a caller needs to
  * decide whether retrying could ever help: the HTTP status and Meta's own error
  * code. Without these a caller can only regex the message text, and the two

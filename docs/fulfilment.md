@@ -181,15 +181,113 @@ feature-matrix additions.
 
 ### Parked / future
 
-- **`weight_tiers`** (the original ticket's variable mode) stays parked — the radius comment
-  superseded it; `productVariants.parcelWeightG` remains ready if demand returns.
+- **`weight_tiers` — SHIPPED as the weight/zone rate card** (Aug 2026, `86eyeea1n`) — the
+  demand returned exactly as predicted (frozen sellers with national J&T demand); see the
+  section below. `productVariants.parcelWeightG` is now load-bearing.
 - **Provider-quoted shipping — SHIPPED for Lalamove** (Jul 2026, `86eyb5hrf`): exactly the
   predicted evolution — `deliveryConfig` gained a `mode: "lalamove"` arm +
   `deliverySnapshot.mode: "lalamove"`, same resolver, same totals seam. Live rider quote at
   checkout + one-tap dispatch + webhook auto-transitions; flat/radius stay for self-delivery
   and parcel-postage sellers. See [`docs/delivery-lalamove.md`](./delivery-lalamove.md).
-  J&T/parcel couriers remain future (DelyvaX is the named aggregator candidate).
 - Sue's routing-accurate map integration stays parked until 3+ customers ask.
+
+## Delivery charge — weight/zone courier rate card (2026-08-11, ClickUp `86eyeea1n`)
+
+The fourth `deliveryConfig` pricing mode: the seller copies their **parcel courier's
+published rate card** (J&T ambient, DD Cold Chain, Ninja Cold, Celsius…) into Kedaipal as
+**zones of Malaysian states × ascending weight bands**, and checkout prices every order from
+the buyer's address **state** and the cart's summed **variant parcel weight**. Built for the
+frozen/outstation cohort (Lopes Viral JB + Wagyu Walid, both shipping ambient J&T with
+polystyrene + ice — Lalamove is intra-city only, radius prices distance not courier zones).
+**No courier API, no wallet, no booking** — dispatch stays manual and pairs with the manual
+courier + tracking number flow (`86eyehvk4`, section below). **All-tier** (decided with Arif
+11 Aug 2026): a pricing mode with zero provider cost is the correctness fix for outstation
+sellers, exactly like flat; radius stays the Pro row.
+
+### Shape (`convex/lib/delivery.ts`)
+
+```
+{ mode: "weight",
+  zones: [{ name, states: MyState[], bands: [{ maxKg, fee }], freeAbove? }],
+  onOutOfBands:  "block" | "arrange",   // state in no zone, or cart beyond the last band
+  onUnpriceable: "block" | "arrange" }  // weight unknowable: missing weights / custom line
+```
+
+- **Zones partition states** — a state lives in at most ONE zone (`sanitizeDeliveryConfig`
+  rejects overlaps; the settings chips make them unrepresentable). States in no zone are
+  **unserved** (peninsular-only couriers exist) and follow `onOutOfBands`.
+- **Bands mirror courier box tiers** ("up to 5 kg = RM30"; S 5 / M 10 / L 20). `maxKg` is
+  1dp-sanitized and **inclusive**, compared in integer grams (`grams <= round(maxKg*1000)`)
+  so 3.1 kg vs an up-to-3.1 band can't lose to float noise. Fee 0 = free band (radius
+  precedent). Caps: `DELIVERY_ZONES_MAX` 8, `DELIVERY_BANDS_MAX` 10/zone, kg ≤ 1000.
+- **Cart weight** = `summarizeCartWeight` over `{parcelWeightG, quantity, isCustom}` lines:
+  Σ grams × qty, but **never a silent underweigh** — one custom/price-on-quote line →
+  `custom_item` (weight unknowable by design), one weightless non-custom line →
+  `missing_weights`; both resolve per `onUnpriceable`.
+- **Per-zone `freeAbove`** (the marketplace-parity lever — "free shipping above RM150 to
+  West MY", funded from the ~14% TikTok take a direct order escapes): checked after the zone
+  match, **before** weight — the promise is deliberately unconditional, waiving the fee even
+  for overweight/unweighable carts (settings copy says so). Never applies to unserved states.
+- **No coordinates anywhere**: the state is already canonical on every delivery address
+  (`assertValidAddress` enforces `MY_STATES`; Google picks normalize via `normalizeMyState`,
+  manual entry has a state select) — so **manually-typed addresses price fine**, unlike
+  radius/lalamove. The checkout's manual-entry escape hatch stays open for every weight-mode
+  reason (`pinRequiredBlock` in checkout-form.tsx lists the pin-shaped reasons only).
+
+### Resolution + order plumbing
+
+Same one-resolver-three-callers seam as flat/radius: the public `delivery.quote` (args grew
+`state?` + `items: [{variantId, quantity}]` — the server reads variant weights itself, so a
+tampered client only mispriced its own preview; response still fee-only), `orders.create`
+(weights collected in the existing variant-validation loop; authoritative), and
+`updateDeliveryAddress` (re-weighs the order's frozen lines against live variant weights —
+a state change can land in another zone's bands). Snapshot: `deliverySnapshot.mode:
+"weight"` + audit `zoneName`/`chargeableKg` (gram precision)/`bandMaxKg`; buyer reads strip
+it like the radius km audit. `DeliveryQuoteReason` gained `no_state` (quote-preview before
+an address; reaches an order only via address-less protocol callers), `unserved_state`,
+`over_bands`, `missing_weights`, `custom_item` — all stored on `deliveryFeePendingReason`
+with cause-true copy on the seller's fee-pending card (missing_weights names the fix: set
+weights in Products) and per-reason blocked copy at checkout (an overweight cart never
+tells the buyer to "fix" a good address).
+
+### Seller UX
+
+Settings → Fulfilment → Delivery charge gains the **"By weight & zone"** card: zone cards
+(name, MY_STATES membership chips — claimed states grey out with a visible legend, no
+hover-only tooltip), band rows ("Up to _ kg → RM _"), per-zone free-above, an **uncovered
+states** summary line that phrases the consequence per `onOutOfBands`, two block/arrange
+radio groups (out-of-card vs can't-weigh), and a **"Use the J&T template"** seeder
+(`src/lib/weight-zone-seed.ts`: West/East MY pre-filled from J&T's published ambient rates,
+Aug 2026, seeded slightly ABOVE the public card so an unedited template never undercharges;
+a test pins that the template survives the sanitizer byte-identical). Volumetric weight is
+explicitly out of scope; the helper copy says to pick the safer band.
+
+**Parcel weight got a real UI** (it was CSV-import-only before this): `VariantRow` carries
+`parcelWeightG`, editable per choice under the product editor's **Advanced** disclosure —
+and on weight-mode stores (`ProductForm.weightMode`, from the dashboard retailer's
+`deliveryConfig.mode`) it's **promoted to its own "Parcel weight" block** above Advanced,
+since a missed weight strands checkout on `missing_weights`. Blank = 0 = unset, submitted
+explicitly (never `undefined`, which would hit `saveVariantGrid`'s preserve-on-update
+path); new grid combos inherit row 0's weight. The wizard stays weight-free by design
+(create-only; sellers set weights on edit or via the import sheet's `weight_grams`).
+
+### Tests
+
+`convex/lib/delivery.test.ts` (resolver: zone match, gram-exact inclusive bounds,
+over/unserved/no-state/missing/custom holds, unconditional threshold, zero-fee band;
+sanitizer: partition/dedupe/caps/rounding; `summarizeCartWeight`), `convex/orders.test.ts`
+("orders — weight/zone delivery charge": coordless create + audit snapshot + buyer strip,
+arrange holds w/ frozen reasons, block messages, custom-line hold, freeAbove boundary,
+re-zone address re-price, public quote incl. garbage-state → `no_state`),
+`convex/planGating.test.ts` (weight saves on Starter — pins the all-tier call),
+`src/lib/weight-zone-seed.test.ts` (template partition/ascending/sanitizer-stable).
+
+### Deliberately out of scope (v1)
+
+- **Local rider layer** (radius-style bands inside the Lalamove zone + zone×weight beyond
+  it — the ticket's layered revision): follow-up PR after this lands; gating it Pro
+  (`radiusDelivery`) keeps the radius gate honest, since the local layer IS radius pricing.
+- EasyParcel booking/AWB = phase 2 (`86eyehvnj`), volumetric weight, live courier rates.
 
 ## Manual courier + tracking number on shipped (2026-07-29, ClickUp `86eyehvk4`)
 

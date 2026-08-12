@@ -2,6 +2,7 @@ import { httpRouter } from "convex/server";
 import { internal } from "./_generated/api";
 import { httpAction } from "./_generated/server";
 import { getAdapter } from "./lib/channels/registry";
+import { decimalStringToSen, verifyHitpayWebhook } from "./lib/hitpay";
 import { extractWebhookOrderId } from "./lib/lalamove";
 import {
 	parseLalamoveWebhookEnvelope,
@@ -233,6 +234,109 @@ http.route({
 			eventType: envelope.eventType,
 			data: envelope.data,
 			eventTimestamp: envelope.timestamp,
+		});
+		return new Response("ok", { status: 200 });
+	}),
+});
+
+/**
+ * HitPay v1 completion webhook (86eyb6z3a, docs/hitpay-gateway.md) — the URL
+ * is passed per payment request at mint time, so sellers register nothing.
+ *
+ * Mirrors the Lalamove route's per-retailer-secret posture: the form-encoded
+ * body carries `payment_request_id`, which resolves the order (and through it
+ * the seller's webhook salt) BEFORE verification; the `hmac` field is then
+ * HMAC-SHA256 over the sorted key+value concatenation with that salt.
+ *  - unknown request id → 200 ack (a request we never minted, or an order
+ *    already hard-deleted — nothing to act on, and HitPay retries wouldn't
+ *    help);
+ *  - ours but no salt (seller disconnected mid-flight) → 500, fail closed;
+ *  - bad hmac → 401;
+ *  - authentic + completed → `orders.receiveGatewayPayment` (idempotent,
+ *    amount-checked there — the single judge shared with verifyCheckout),
+ *    then a best-effort method enrichment (the v1 payload has no rail info).
+ */
+http.route({
+	path: "/webhook/hitpay",
+	method: "POST",
+	handler: httpAction(async (ctx, req) => {
+		const rawBody = await req.text();
+		const fields: Record<string, string> = {};
+		for (const [key, value] of new URLSearchParams(rawBody)) {
+			fields[key] = value;
+		}
+
+		const requestId = fields.payment_request_id;
+		if (!requestId) {
+			console.log("HitPay webhook: no payment_request_id, acking", {
+				bytes: rawBody.length,
+			});
+			return new Response("ok", { status: 200 });
+		}
+
+		const context = await ctx.runQuery(internal.hitpay.getWebhookContext, {
+			paymentRequestId: requestId,
+		});
+		if (!context) {
+			console.log("HitPay webhook: no matching order, ignoring", {
+				requestId,
+			});
+			return new Response("ok", { status: 200 });
+		}
+		if (!context.salt) {
+			console.error(
+				"HitPay webhook rejected: no verifying salt for a request we minted",
+				{ requestId },
+			);
+			return new Response("server misconfigured", { status: 500 });
+		}
+
+		const valid = await verifyHitpayWebhook(fields, context.salt);
+		if (!valid) {
+			console.warn("HitPay webhook rejected: invalid hmac", { requestId });
+			return new Response("invalid signature", { status: 401 });
+		}
+
+		if (fields.status !== "completed") {
+			// Authentic but not a settlement (failed/expired) — nothing changes on
+			// the order; the buyer can simply pay again from the order page.
+			console.log("HitPay webhook: non-completed status, acking", {
+				requestId,
+				status: fields.status,
+			});
+			return new Response("ok", { status: 200 });
+		}
+		const amountSen = decimalStringToSen(fields.amount ?? "");
+		if (amountSen === null || !fields.payment_id) {
+			// Authentic yet malformed — log loudly, ack so HitPay doesn't hammer a
+			// payload we can never parse; the redirect reconcile still settles it.
+			console.error("HitPay webhook: malformed completed payload", {
+				requestId,
+				amount: fields.amount,
+			});
+			return new Response("ok", { status: 200 });
+		}
+
+		const result = await ctx.runMutation(
+			internal.orders.receiveGatewayPayment,
+			{
+				orderId: context.orderId,
+				paymentId: fields.payment_id,
+				amountSen,
+				currency: fields.currency ?? "",
+			},
+		);
+		if (result.applied) {
+			// v1 webhooks don't carry the payment rail — fetch it off the status
+			// API so the Method filter / Insights donut see the real value.
+			await ctx.scheduler.runAfter(0, internal.hitpay.enrichPaymentMethod, {
+				orderId: context.orderId,
+			});
+		}
+		console.log("HitPay webhook processed", {
+			requestId,
+			applied: result.applied,
+			reason: result.reason,
 		});
 		return new Response("ok", { status: 200 });
 	}),

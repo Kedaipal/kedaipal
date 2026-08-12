@@ -9,7 +9,7 @@ import {
 	requireRetailerAccess,
 } from "./lib/auth";
 import { assertValidMapsUrl } from "./lib/mapsUrl";
-import { assertValidWaPhone } from "./lib/slug";
+import { assertValidMyMobile } from "./lib/slug";
 import { assertPlanFeature, assertSubscriptionActive } from "./subscriptions";
 
 const LABEL_MAX = 60;
@@ -166,12 +166,17 @@ function sanitizeFee(raw: number | undefined): number | undefined {
 	return raw === 0 ? undefined : raw;
 }
 
+/**
+ * The point's contact is a Malaysian mobile (86eyknr2r) — the field renders the
+ * `+60` plate, and the number exists so a buyer or a rider can WhatsApp whoever
+ * is standing at the pickup point.
+ */
 function sanitizeManagerWaPhone(raw: string | undefined): string | undefined {
 	if (raw === undefined) return undefined;
 	const trimmed = raw.trim();
 	if (trimmed.length === 0) return undefined;
 	try {
-		return assertValidWaPhone(trimmed);
+		return assertValidMyMobile(trimmed);
 	} catch (err) {
 		throw new ConvexError((err as Error).message);
 	}

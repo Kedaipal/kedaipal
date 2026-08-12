@@ -93,6 +93,9 @@ export async function requireRetailerAccess(
  *
  * `action` is a stable dotted label (e.g. "products.create"); `targetId` is the
  * affected doc id when known (updates/deletes/post-insert creates).
+ *
+ * For IRREVERSIBLE erasures use `logDestructiveAdminAction` — those are traced
+ * regardless of ownership.
  */
 export async function logAdminAction(
 	ctx: MutationCtx,
@@ -101,6 +104,34 @@ export async function logAdminAction(
 	targetId?: string,
 ): Promise<void> {
 	if (!access.actingAsAdmin) return;
+	await insertAuditRow(ctx, access, action, targetId);
+}
+
+/**
+ * Like `logAdminAction`, but records the row even when the admin OWNS the store.
+ * Reserved for irreversible erasures (`orders.hardDelete`, `orders.bulkDeleteOrders`).
+ *
+ * The owner-write no-op is the right default for ordinary edits — they're routine
+ * and recoverable — but a permanent record deletion must always answer "who did
+ * this?", and the deleted row is not around to ask. These mutations are gated on
+ * admin membership (`isAdmin`), so an own-store call is still an admin acting;
+ * it just didn't arrive through act-as. ClickUp `86eyhz189`.
+ */
+export async function logDestructiveAdminAction(
+	ctx: MutationCtx,
+	access: RetailerAccess,
+	action: string,
+	targetId?: string,
+): Promise<void> {
+	await insertAuditRow(ctx, access, action, targetId);
+}
+
+async function insertAuditRow(
+	ctx: MutationCtx,
+	access: RetailerAccess,
+	action: string,
+	targetId: string | undefined,
+): Promise<void> {
 	await ctx.db.insert("adminAuditLog", {
 		adminUserId: access.userId,
 		retailerId: access.retailer._id,

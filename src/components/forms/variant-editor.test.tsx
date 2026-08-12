@@ -35,6 +35,7 @@ const singleVariant: VariantEditorState = {
 			active: true,
 			blockWhenOutOfStock: true,
 			requiresProof: false,
+			parcelWeightG: "",
 			imageStorageIds: [],
 		},
 	],
@@ -51,6 +52,7 @@ const withOptions: VariantEditorState = {
 		active: true,
 		blockWhenOutOfStock: true,
 		requiresProof: false,
+		parcelWeightG: "",
 		imageStorageIds: [],
 	})),
 	customLine: null,
@@ -275,6 +277,7 @@ describe("VariantEditor — vary per choice", () => {
 				active: true,
 				blockWhenOutOfStock: i < 2, // 2 track, 1 made-to-order
 				requiresProof: false,
+				parcelWeightG: "",
 				imageStorageIds: [],
 			})),
 			customLine: null,

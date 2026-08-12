@@ -9,6 +9,7 @@ import {
 	renderPickupBlock,
 	renderStageUpdate,
 	renderSystemMessage,
+	TEMPLATE_LANGUAGE,
 	waCopy,
 } from "./whatsappCopy";
 
@@ -33,6 +34,24 @@ describe("pickLocale", () => {
 	test("covers every locale in LOCALES round-trip", () => {
 		for (const locale of LOCALES) {
 			expect(pickLocale(locale)).toBe(locale);
+		}
+	});
+});
+
+// The ONE author of template language for every Meta template send (buyer
+// confirmation push + seller order alerts). Only EN/BM variants are approved,
+// so zh must ride EN — naming an unapproved language makes Meta reject the
+// send outright, which would silently kill a zh store's alerts.
+describe("TEMPLATE_LANGUAGE", () => {
+	test("maps each store locale to an APPROVED template language", () => {
+		expect(TEMPLATE_LANGUAGE.en).toBe("en");
+		expect(TEMPLATE_LANGUAGE.ms).toBe("ms");
+		expect(TEMPLATE_LANGUAGE.zh).toBe("en");
+	});
+
+	test("every locale resolves — no undefined can reach a send", () => {
+		for (const locale of LOCALES) {
+			expect(["en", "ms"]).toContain(TEMPLATE_LANGUAGE[locale]);
 		}
 	});
 });

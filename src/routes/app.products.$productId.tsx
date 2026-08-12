@@ -1,6 +1,13 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
-import { Archive, ArchiveRestore, ArrowLeft, Eye } from "lucide-react";
+import {
+	Archive,
+	ArchiveRestore,
+	ArrowLeft,
+	Eye,
+	Info,
+	Trash2,
+} from "lucide-react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
@@ -15,8 +22,18 @@ import {
 } from "../components/forms/product-form";
 import { ProductDetailSheet } from "../components/storefront/product-detail-sheet";
 import { Button } from "../components/ui/button";
+import { ConfirmDialog } from "../components/ui/confirm-dialog";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "../components/ui/dialog";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { convexErrorMessage } from "../lib/format";
 import { draftPreviewOverlay } from "../lib/product-preview";
 import { type ProductStatus, productStatus } from "../lib/product-status";
 import { hasFeature } from "../lib/subscription";
@@ -119,6 +136,10 @@ function EditProductRoute() {
 	const saveVariantGrid = useMutation(api.products.saveVariantGrid);
 	const setProductCategories = useMutation(api.categories.setProductCategories);
 	const archive = useMutation(api.products.archive);
+	const deletePermanently = useMutation(api.products.deletePermanently);
+	const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+	const [whyCantDeleteOpen, setWhyCantDeleteOpen] = useState(false);
+	const [deleting, setDeleting] = useState(false);
 	// Buyer-eye preview: mounts the REAL storefront detail sheet in-page (the
 	// same bottom sheet buyers get) — no new tab — rendered from the form's
 	// LIVE DRAFT so unsaved edits show exactly as buyers would see them after
@@ -138,6 +159,10 @@ function EditProductRoute() {
 	}
 
 	const status = productStatus(product);
+	// Stamped the first time this product appeared on any order (and never
+	// cleared, not even if that order was cancelled). The server refuses the
+	// delete on the same field — this only decides which state the UI shows.
+	const hasSold = product.orderedAt !== undefined;
 
 	function openPreview() {
 		const draft = formDraftRef.current?.();
@@ -243,6 +268,7 @@ function EditProductRoute() {
 						// Resolved per-variant server-side (override ?? product default).
 						blockWhenOutOfStock: vr.blockWhenOutOfStock,
 						requiresProof: vr.requiresProof,
+						parcelWeightG: vr.parcelWeightG,
 						imageStorageIds: vr.imageStorageIds,
 						imageUrls: vr.imageUrls,
 						isCustom: vr.isCustom,
@@ -250,34 +276,40 @@ function EditProductRoute() {
 						customPrompt: vr.customPrompt,
 					})),
 				}}
+				// Weight/zone-priced store (86eyeea1n): parcel weight is promoted to
+				// a first-class field in the editor — a weightless item strands that
+				// store's checkout on "missing weights".
+				weightMode={retailer.deliveryConfig?.mode === "weight"}
 				submitLabel="Save changes"
 				stickyAction={
+					// Labelled, and NOT tinted red — an icon-only red button here read
+					// as "delete", when archive is the reversible, gentle action. The
+					// word is the disambiguation; red is reserved for the true
+					// destructive CTA below the form.
 					product.active ? (
 						<Button
 							type="button"
 							variant="outline"
-							size="icon"
-							className="size-12 shrink-0 rounded-xl bg-background text-destructive hover:bg-destructive/10 hover:text-destructive"
-							aria-label="Archive product"
+							className="h-12 shrink-0 gap-2 rounded-xl bg-background px-4"
 							onClick={async () => {
 								await archive({ productId: product._id });
 								navigate({ to: "/app/products" });
 							}}
 						>
-							<Archive className="size-5" />
+							<Archive className="size-4" />
+							Archive
 						</Button>
 					) : (
 						<Button
 							type="button"
 							variant="outline"
-							size="icon"
-							className="size-12 shrink-0 rounded-xl bg-background"
-							aria-label="Restore product"
+							className="h-12 shrink-0 gap-2 rounded-xl bg-background px-4"
 							onClick={async () => {
 								await update({ productId: product._id, active: true });
 							}}
 						>
-							<ArchiveRestore className="size-5" />
+							<ArchiveRestore className="size-4" />
+							Restore
 						</Button>
 					)
 				}
@@ -327,6 +359,97 @@ function EditProductRoute() {
 						id: "product-preview",
 					})
 				}
+			/>
+
+			{/* Permanent delete — the only way to free a slot under the product cap
+			    (archiving keeps it). A single quiet row below the form, NOT beside
+			    Save/Archive in the sticky bar (a destructive control next to routine
+			    ones invites the misclick) and NOT a boxed "danger zone" (a whole
+			    section for one button over-announces it). Sold products keep the
+			    control visible but blocked — tapping opens the WHY dialog instead of
+			    a dead disabled button, because the shared Button's
+			    `disabled:pointer-events-none` means a disabled control can't even
+			    show a hover tooltip, and a reason you can't reach on a phone is a
+			    reason that doesn't exist. The dialog also offers Archive, so the
+			    blocked path ends in the right action rather than a shrug. */}
+			{hasSold ? (
+				<Button
+					type="button"
+					variant="ghost"
+					onClick={() => setWhyCantDeleteOpen(true)}
+					className="h-11 self-start gap-2 px-3 text-sm font-medium text-muted-foreground"
+				>
+					<Trash2 className="size-4" aria-hidden="true" />
+					Delete permanently
+					<Info className="size-4" aria-hidden="true" />
+				</Button>
+			) : (
+				<Button
+					type="button"
+					variant="ghost"
+					onClick={() => setConfirmDeleteOpen(true)}
+					disabled={deleting}
+					className="h-11 self-start gap-2 px-3 text-sm font-medium text-destructive hover:bg-destructive/10 hover:text-destructive"
+				>
+					<Trash2 className="size-4" aria-hidden="true" />
+					{deleting ? "Deleting…" : "Delete permanently"}
+				</Button>
+			)}
+
+			<Dialog open={whyCantDeleteOpen} onOpenChange={setWhyCantDeleteOpen}>
+				<DialogContent className="sm:max-w-sm">
+					<DialogHeader>
+						<DialogTitle>This product can't be deleted</DialogTitle>
+						<DialogDescription>
+							It has been ordered before, and those orders still reference it —
+							deleting it would break their history. Products with order history
+							can only be archived: that takes them off your storefront and
+							counter, but keeps their records (and their slot toward your
+							product limit).
+						</DialogDescription>
+					</DialogHeader>
+					<DialogFooter>
+						<Button
+							variant="outline"
+							onClick={() => setWhyCantDeleteOpen(false)}
+						>
+							Close
+						</Button>
+						{product.active ? (
+							<Button
+								onClick={async () => {
+									await archive({ productId: product._id });
+									navigate({ to: "/app/products" });
+								}}
+							>
+								<Archive className="size-4" />
+								Archive instead
+							</Button>
+						) : null}
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+
+			<ConfirmDialog
+				open={confirmDeleteOpen}
+				onOpenChange={setConfirmDeleteOpen}
+				title={`Delete "${product.name}"?`}
+				description="This removes the product, its options and its photos for good. It has never been ordered, so no order history is affected. This can't be undone."
+				confirmLabel="Delete permanently"
+				destructive
+				onConfirm={async () => {
+					setDeleting(true);
+					try {
+						await deletePermanently({ productId: product._id });
+						toast.success("Product deleted.");
+						navigate({ to: "/app/products" });
+					} catch (err) {
+						toast.error(convexErrorMessage(err));
+						throw err; // keeps the dialog open so the seller can retry
+					} finally {
+						setDeleting(false);
+					}
+				}}
 			/>
 		</div>
 	);

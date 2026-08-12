@@ -206,11 +206,53 @@ the currently-installed `act` (0.2.8x) is flagged for CVE-2026-34041/34042;
 `brew upgrade act` before using it that way. For this workflow it isn't worth
 it: the gate is three pnpm commands, and `pnpm gate` tests them honestly.
 
-**Note:** `pnpm lint` scans `src/` per `biome.json`. The config excludes
-`.claude/**` — without that, Biome walks into any Claude Code worktree left
-under `.claude/worktrees/` and aborts with "Found a nested root
-configuration". If lint ever fails that way again, a stray nested worktree is
-the cause.
+**Note: nested Claude Code worktrees are excluded from BOTH lint and tests.**
+`.claude/worktrees/` is gitignored but sits *inside* the repo, and neither
+Biome (`useIgnoreFile: false`) nor vitest reads `.gitignore` — so each tool
+needs its own exclusion:
+
+- `biome.json` excludes `**/.claude/**`; without it Biome walks into a
+  leftover worktree and aborts with "Found a nested root configuration".
+- `vitest.config.ts` excludes `**/.claude/**` (PR #178 review); without it
+  vitest **collects those worktrees' test files as if they were ours** — 694
+  extra files in the main checkout as of Aug 2026, injecting hundreds of
+  phantom failures from code that isn't on the current branch and making
+  `pnpm gate` unusable there. CI never saw this (fresh clone, no worktrees);
+  it only bit local runs in the main checkout.
+
+If lint or tests fail in ways that don't match your diff, a stray nested
+worktree is the first thing to suspect.
+
+## Dependency pinning — TanStack is exact-pinned (2026-08-07, ClickUp 86eyjadx7)
+
+`package.json` used to spec six TanStack packages as the `latest` dist-tag.
+The lockfile kept CI honest (`--frozen-lockfile`), but a dist-tag re-resolves
+on **any** lockfile touch — a `pnpm add` of an unrelated package on a dev
+machine silently jumped the whole framework to whatever shipped that morning,
+riding into an unrelated PR untested.
+
+That stopped being hypothetical on 4 Aug 2026: TanStack shipped a ground-up
+**lane-scheduler rewrite** of loader/preload/redirect/SSR-status handling as a
+*patch* release tagged "Fix" (`react-router@1.170.19`,
+[PR #7805](https://github.com/TanStack/router/pull/7805), 27 issues closed) —
+exactly the machinery the buyer-page-resilience work (86eyheqzv) depends on.
+Since TanStack ships breaking changes in patches, **no semver range protects
+us**; only exact pins do.
+
+The rules, enforced by `src/lib/dependency-pins.test.ts` (runs in the gate):
+
+- **No dependency may use a dist-tag or wildcard spec** (`latest`, `next`,
+  `*`) — every spec states a concrete version.
+- **The TanStack router/start family is exact-pinned** (no `^`/`~`):
+  `react-router`, `react-start`, `react-router-devtools`, `react-devtools`,
+  `devtools-vite`, `router-plugin`. Upgrades are a deliberate task — bump the
+  whole family **in lockstep** to one release, run the gate, and regression-test
+  the buyer surfaces (see ClickUp 86eyjadza for the checklist).
+
+`@tanstack/react-router-ssr-query` was removed in the same change — it was
+imported nowhere (a scaffold leftover), and it was the only thing pulling
+`@tanstack/react-query`/`query-core` into the lockfile. If a future change
+adopts TanStack Query directly, add it as a first-class pinned dependency.
 
 ## Known gaps (deferred to the full CI/CD ticket)
 

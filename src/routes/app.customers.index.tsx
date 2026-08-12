@@ -14,7 +14,7 @@ import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
-import { hasFeature } from "../lib/subscription";
+import { isCrmLocked } from "../lib/subscription";
 
 // Pro-tier feature: the whole route is plan-gated (server lock in
 // convex/customers.ts via assertPlanFeature; this renders the upgrade wall for
@@ -40,10 +40,7 @@ function CustomersRoute() {
 
 	// Plan gate (Pro+). Queries are skipped while locked so the server gate is
 	// never tripped in normal use; admin act-as sees through it.
-	const crmLocked =
-		!!retailer &&
-		!retailer.actingAsAdmin &&
-		!hasFeature(retailer.subscription, "crm");
+	const crmLocked = isCrmLocked(retailer);
 
 	const listed = usePaginatedQuery(
 		api.customers.list,
