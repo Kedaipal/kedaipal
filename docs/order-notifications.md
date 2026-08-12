@@ -43,6 +43,14 @@ Register the button URL via Meta's **Add variable** control — never hand-type
 `shortId` (the seller is Clerk-authenticated on /app), never the buyer's
 capability token.
 
+These are the **first URL buttons on a non-`/track/` path**, so the Worker's
+pre-router rescue was generalised to cover them (PR #178 review, finding 2):
+`rescuePlaceholderUrl` now strips a leading `{{n}}` from *any* path segment,
+so a mis-registration here 301s to `/app/orders/ORD-XXXX` instead of
+307-looping the seller out of their own order. That is a **safety net for
+links already sent**, not a substitute for registering the button properly —
+see [`buyer-page-resilience.md`](./buyer-page-resilience.md).
+
 ### Language: EN + BM, driven by `retailers.locale`
 
 Both templates are submitted with **English and Bahasa Malaysia** variants and
