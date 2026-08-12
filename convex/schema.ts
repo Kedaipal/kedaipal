@@ -1054,6 +1054,33 @@ export default defineSchema({
 		gatewayRequestedCurrency: v.optional(v.string()),
 		gatewayRequestedAt: v.optional(v.number()),
 		gatewayPaymentId: v.optional(v.string()),
+		// An AUTHENTIC gateway payment that `receiveGatewayPayment` refused to
+		// apply (PR #178 review, finding 1). Money has moved and the order is
+		// still not `received`, so both sides need to be told: without this the
+		// buyer sits on a plain "unpaid" page with Pay-now live and pays twice,
+		// while the seller's only signal is an email. Persisted (not just an
+		// `orderEvents` note) because the discovery can happen on the WEBHOOK —
+		// no client is watching — and the surface has to survive a reload.
+		// Cleared by `applyPaymentReceived`, so any resolution (seller reconciles
+		// and marks it received by hand, or a correctly-priced payment lands)
+		// retires the cards in one place.
+		gatewayPaymentIssue: v.optional(
+			v.object({
+				kind: v.union(
+					// Paid amount/currency ≠ the order's total at receive time —
+					// a link minted before a re-price, paid after it.
+					v.literal("amount_mismatch"),
+					// Authentic payment on an order that was cancelled first.
+					v.literal("paid_after_cancel"),
+				),
+				paidAmountSen: v.number(),
+				paidCurrency: v.string(),
+				// The HitPay payment id — the reference BOTH sides quote when they
+				// talk to each other or to HitPay support.
+				paymentId: v.string(),
+				at: v.number(),
+			}),
+		),
 		// Mockup/proof approval — a third independent dimension (like payment),
 		// gating the confirmed→packed transition for made-to-order orders.
 		// Undefined = order has no proof-required item (no gate). See

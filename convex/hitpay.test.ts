@@ -1006,3 +1006,225 @@ describe("verifyCheckout + method enrichment", () => {
 		expect(row?.paymentMethod).toBe("bank_transfer");
 	});
 });
+
+/**
+ * PR #178 review, finding 1 — an authentic payment the order can't apply used
+ * to be a SILENT state: an orderEvents note + a seller email, while the buyer
+ * kept a plain "unpaid" page with Pay-now armed. These pin the durable stamp,
+ * both exits out of it, and the re-price guard that stops it arising.
+ */
+describe("unapplied gateway payments are surfaced, not silent", () => {
+	async function seedPayable(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await connectHitpay(t, USER_A);
+		const order = await seedOrder(t, retailer._id, productId);
+		await stampRequest(t, order.orderId, { amount: order.total });
+		return { retailer, ...order };
+	}
+
+	function post(t: ReturnType<typeof setup>, body: string) {
+		return t.fetch("/webhook/hitpay", {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded" },
+			body,
+		});
+	}
+
+	test("a mismatched amount freezes the issue onto the order and reaches the buyer", async () => {
+		const t = setup();
+		const { orderId, token } = await seedPayable(t);
+		await post(
+			t,
+			await signedWebhookBody(webhookFields("req_0001", { amount: "1.00" })),
+		);
+
+		const row = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(row?.gatewayPaymentIssue).toMatchObject({
+			kind: "amount_mismatch",
+			paidAmountSen: 100,
+			paidCurrency: "MYR",
+			paymentId: "pay_0001",
+		});
+		// The unauthenticated buyer read must carry it — that read is the ONLY
+		// thing the tracking page renders from, and the webhook discovers this
+		// with no client watching.
+		const buyerOrder = await t.query(api.orders.get, { token });
+		expect(buyerOrder?.gatewayPaymentIssue?.kind).toBe("amount_mismatch");
+	});
+
+	test("Pay-now is refused server-side while an issue is unresolved", async () => {
+		const t = setup();
+		const { token } = await seedPayable(t);
+		await post(
+			t,
+			await signedWebhookBody(webhookFields("req_0001", { amount: "1.00" })),
+		);
+		// Not merely hidden in the UI: a direct call must not mint a second
+		// payable link on top of money that already moved.
+		await expect(
+			t.action(api.hitpay.createCheckout, { token }),
+		).rejects.toThrow(/don't pay again/i);
+	});
+
+	test("accepting the payment by hand retires the notice", async () => {
+		const t = setup();
+		const { orderId } = await seedPayable(t);
+		await post(
+			t,
+			await signedWebhookBody(webhookFields("req_0001", { amount: "1.00" })),
+		);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.orders.markPaymentReceived, { orderId });
+		const row = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(row?.paymentStatus).toBe("received");
+		expect(row?.gatewayPaymentIssue).toBeUndefined();
+	});
+
+	test("refunding instead: the seller clears it, which re-arms Pay-now", async () => {
+		const t = setup();
+		const { orderId, token } = await seedPayable(t);
+		await post(
+			t,
+			await signedWebhookBody(webhookFields("req_0001", { amount: "1.00" })),
+		);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.orders.clearGatewayPaymentIssue, { orderId });
+
+		const row = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(row?.gatewayPaymentIssue).toBeUndefined();
+		// Still unpaid — clearing the notice must never imply the money landed.
+		expect(row?.paymentStatus ?? "unpaid").toBe("unpaid");
+		const events = await t.run(async (ctx) =>
+			ctx.db
+				.query("orderEvents")
+				.withIndex("by_order", (q) => q.eq("orderId", orderId))
+				.collect(),
+		);
+		expect(
+			events.some((e) =>
+				e.note?.startsWith("gateway_issue_resolved_by_seller"),
+			),
+		).toBe(true);
+
+		// The request the odd payment landed on is retired too — HitPay may
+		// consider it settled, so reusing its URL could refuse the buyer.
+		expect(row?.gatewayRequestId).toBeUndefined();
+		expect(row?.gatewayPreviousRequestId).toBe("req_0001");
+
+		// The whole point of the exit: the buyer can pay again afterwards, on a
+		// FRESH link rather than the retired one.
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(
+						JSON.stringify({
+							id: "req_after_refund",
+							url: "https://checkout.sandbox.hit-pay.com/fresh",
+							status: "pending",
+						}),
+						{ status: 200 },
+					),
+			),
+		);
+		const { url } = await t.action(api.hitpay.createCheckout, { token });
+		expect(url).toBe("https://checkout.sandbox.hit-pay.com/fresh");
+	});
+
+	test("clearing is owner-or-admin only", async () => {
+		const t = setup();
+		const { orderId } = await seedPayable(t);
+		await post(
+			t,
+			await signedWebhookBody(webhookFields("req_0001", { amount: "1.00" })),
+		);
+		await expect(
+			t
+				.withIdentity({ subject: "user_stranger" })
+				.mutation(api.orders.clearGatewayPaymentIssue, { orderId }),
+		).rejects.toThrow();
+	});
+
+	test("a payment after cancellation stamps its own kind", async () => {
+		const t = setup();
+		const { orderId, total } = await seedPayable(t);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.orders.updateStatus, {
+			orderId,
+			status: "cancelled",
+		});
+		await post(
+			t,
+			await signedWebhookBody(
+				webhookFields("req_0001", { amount: (total / 100).toFixed(2) }),
+			),
+		);
+		const row = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(row?.gatewayPaymentIssue?.kind).toBe("paid_after_cancel");
+		expect(row?.status).toBe("cancelled");
+	});
+
+	test("a re-price voids the live link but KEEPS it correlatable", async () => {
+		const t = setup();
+		const { orderId, total } = await seedPayable(t);
+		const asA = t.withIdentity({ subject: USER_A });
+		// The review's exact scenario: the buyer holds a link minted at `total`
+		// while the seller corrects the delivery charge.
+		await asA.mutation(api.orders.setDeliveryFee, { orderId, fee: 1000 });
+
+		const row = await t.run(async (ctx) => ctx.db.get(orderId));
+		// The live link is gone, so the 55-min reuse window can't hand the stale
+		// price to another tap...
+		expect(row?.gatewayRequestId).toBeUndefined();
+		expect(row?.gatewayCheckoutUrl).toBeUndefined();
+		// ...but the id survives, or a payment that beat our DELETE would arrive
+		// as an unknown webhook and be silently dropped.
+		expect(row?.gatewayPreviousRequestId).toBe("req_0001");
+		expect(row?.total).toBe(total + 1000);
+
+		// Prove the correlation still works end to end.
+		expect(
+			(
+				await post(
+					t,
+					await signedWebhookBody(
+						webhookFields("req_0001", { amount: (total / 100).toFixed(2) }),
+					),
+				)
+			).status,
+		).toBe(200);
+		const after = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(after?.gatewayPaymentIssue?.kind).toBe("amount_mismatch");
+	});
+
+	test("a re-price that lands on the same total leaves the link alone", async () => {
+		const t = setup();
+		const { orderId } = await seedPayable(t);
+		const asA = t.withIdentity({ subject: USER_A });
+		// fee 0 on an order that already has none — nothing moved, so the buyer
+		// must not lose the checkout they have open.
+		await asA.mutation(api.orders.setDeliveryFee, { orderId, fee: 0 });
+		const row = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(row?.gatewayRequestId).toBe("req_0001");
+		expect(row?.gatewayPreviousRequestId).toBeUndefined();
+	});
+
+	test("a vanished order reports `gone`, never `duplicate`", async () => {
+		const t = setup();
+		const { orderId } = await seedPayable(t);
+		await t.run(async (ctx) => {
+			await ctx.db.delete(orderId);
+		});
+		// `duplicate` means "already settled" and verifyCheckout maps it to
+		// "received" — reporting that for an order that no longer exists would
+		// tell the buyer their payment landed on nothing.
+		const result = await t.mutation(internal.orders.receiveGatewayPayment, {
+			orderId,
+			paymentId: "pay_9999",
+			amountSen: 100,
+			currency: "MYR",
+		});
+		expect(result).toEqual({ applied: false, reason: "gone" });
+	});
+});

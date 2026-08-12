@@ -25,13 +25,33 @@ Two-part fix:
 1. **Server-side rescue (this repo — makes every already-sent button work,
    since those links are frozen in buyers' chats):** custom Worker entry
    `src/server-entry.ts` (wired via wrangler `main`) 301s a polluted
-   `/track` path to the clean-token URL *before* the router sees it —
-   handles percent-encoded and literal brace forms, preserves the query
+   path to the clean URL *before* the router sees it — handles
+   percent-encoded and literal brace forms, preserves the query
    string, logs a `console.warn` per rescue so the rate is visible in the
    Worker's log stream. Pure logic + tests in `convex/lib/trackingToken.ts`;
    `orderByToken` (the single `by_tracking_token` reader) normalizes too, as
    defence in depth. Tokens are crypto-random alphanumerics — braces can
    never legitimately appear, so stripping is unambiguous.
+
+   **The rescue is route-agnostic** (`rescuePlaceholderUrl`, generalised in
+   PR #178 review, finding 2). It shipped as a `/track/`-only fix because
+   that was the button that broke, but the failure is a property of *any*
+   template whose URL button is registered with hand-typed braces — and the
+   seller order alerts (`86eyhw9zy`) added the first URL buttons on a
+   different path, `https://kedaipal.com/app/orders/{{1}}`. A `/track/`-only
+   rescue would have let the identical mis-registration recur as a fresh
+   incident, this time 307-looping the **seller** out of their own order.
+   So it now strips a leading `{{n}}` run from *any* path segment; a segment
+   that is a placeholder and nothing else (`/app/orders/{{1}}` — the
+   parameter never arrived) is left alone to 404, since there is no
+   destination to guess. No legitimate Kedaipal path can contain braces
+   (slugs, shortIds and tracking tokens are all generated from
+   alphanumerics), so this is safe everywhere.
+
+   **Every new URL-button template must still be registered via Meta's Add
+   variable control** — the rescue is a safety net for links already sent,
+   not a licence to hand-type `{{1}}`. A polluted link costs a 301 on every
+   tap and only works while the Worker entry survives.
 2. **Meta-side correction (seller/ops):** re-register the template's button
    URL so the variable is recognized — in WhatsApp Manager the URL field must
    be built with the **Add variable** control (base

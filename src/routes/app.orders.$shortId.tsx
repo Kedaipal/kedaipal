@@ -305,6 +305,9 @@ function OrderDetailRoute() {
 	const updateStatus = useMutation(api.orders.updateStatus);
 	const advanceToStage = useMutation(api.orders.advanceToStage);
 	const markPaymentReceived = useMutation(api.orders.markPaymentReceived);
+	const clearGatewayPaymentIssue = useMutation(
+		api.orders.clearGatewayPaymentIssue,
+	);
 	const sendPaymentReminder = useAction(api.orders.sendPaymentReminder);
 	const cancelRiderBooking = useAction(api.lalamove.cancelBooking);
 	const deleteOrder = useMutation(api.orders.deleteOrder);
@@ -876,6 +879,95 @@ function OrderDetailRoute() {
 								way, check the number with them.
 							</p>
 						)}
+					</div>
+				</section>
+			) : null}
+
+			{/* An authentic online payment the server refused to auto-apply (PR #178
+			    review, finding 1). Amber like the confirmation-push note: money has
+			    moved, the order is NOT paid, and only a human can close the gap.
+			    Until now the seller's only signal was an email — on a product whose
+			    whole premise is that sellers don't read email. Clears itself the
+			    moment any receive path settles the order (applyPaymentReceived). */}
+			{order.gatewayPaymentIssue ? (
+				<section className="flex gap-3 rounded-2xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-800 dark:bg-amber-950/50">
+					<HandCoins className="size-5 shrink-0 text-amber-600 dark:text-amber-400" />
+					<div className="min-w-0 flex-1">
+						<p className="text-xs font-semibold uppercase tracking-widest text-amber-700 dark:text-amber-300">
+							{order.gatewayPaymentIssue.kind === "paid_after_cancel"
+								? "Paid after you cancelled"
+								: "Online payment doesn't match this order"}
+						</p>
+						{order.gatewayPaymentIssue.kind === "paid_after_cancel" ? (
+							<p className="mt-1 text-sm text-amber-950 dark:text-amber-100">
+								<b>
+									{formatPrice(
+										order.gatewayPaymentIssue.paidAmountSen,
+										order.gatewayPaymentIssue.paidCurrency,
+									)}
+								</b>{" "}
+								came through online after this order was cancelled, so nothing
+								was applied to it. Refund it from your HitPay dashboard using
+								the reference below. The customer has been told not to pay
+								again.
+							</p>
+						) : (
+							<p className="mt-1 text-sm text-amber-950 dark:text-amber-100">
+								The customer paid{" "}
+								<b>
+									{formatPrice(
+										order.gatewayPaymentIssue.paidAmountSen,
+										order.gatewayPaymentIssue.paidCurrency,
+									)}
+								</b>{" "}
+								online, but this order&apos;s total is{" "}
+								<b>{formatPrice(order.total, order.currency)}</b> — usually a
+								checkout link opened before the price changed. It was{" "}
+								<b>not</b> confirmed automatically. Check it in your HitPay
+								dashboard: accept it with &ldquo;Mark payment received&rdquo;
+								below, or refund it there. The customer has been told not to
+								pay again.
+							</p>
+						)}
+						<div className="mt-2 flex items-start justify-between gap-2">
+							<p className="min-w-0 break-all font-mono text-xs text-amber-900/80 dark:text-amber-200/80">
+								Ref {order.gatewayPaymentIssue.paymentId}
+							</p>
+							<CopyButton
+								value={order.gatewayPaymentIssue.paymentId}
+								ariaLabel="Copy payment reference"
+								successMessage="Payment reference copied"
+								className="-my-2"
+							/>
+						</div>
+						{/* The exit for the seller who REFUNDED rather than accepted.
+						    Online payment is blocked while this notice stands (so the
+						    customer can't be charged twice), so without a way to retire
+						    it a refund would leave them unable to pay at all. Names the
+						    consequence rather than just "Dismiss". */}
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={pending !== null}
+							onClick={async () => {
+								setPending("clear-gateway-issue");
+								try {
+									await clearGatewayPaymentIssue({ orderId: order._id });
+									toast.success("Payment notice cleared");
+								} catch (err) {
+									toast.error(convexErrorMessage(err));
+								} finally {
+									setPending(null);
+								}
+							}}
+							className="mt-3 border-amber-300 bg-transparent text-amber-900 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-100 dark:hover:bg-amber-900/50"
+						>
+							Mark as resolved
+						</Button>
+						<p className="mt-1.5 text-xs text-amber-800/80 dark:text-amber-200/70">
+							Clears this notice and lets the customer pay online again — use it
+							once you&apos;ve refunded them.
+						</p>
 					</div>
 				</section>
 			) : null}
