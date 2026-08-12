@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { cn } from "../../lib/utils";
 import { Field, FieldDescription, FieldError, FieldLabel } from "../ui/field";
 import { Input } from "../ui/input";
+import { InputPrefixFrame } from "../ui/input-prefix-frame";
 import { useFieldContext } from "./form";
 
 interface TextFieldProps {
@@ -68,26 +69,13 @@ export function TextField({
 				{required ? <span className="ml-0.5 text-destructive">*</span> : null}
 			</FieldLabel>
 			{prefix ? (
-				// Mirrors the `field` input variant's chrome on the WRAPPER so the
-				// prefix and the input read as one control. Focus + invalid styling
-				// has to be lifted here too — a `bare` input paints neither.
-				// `overflow-hidden` lets the prefix plate fill the rounded corner.
-				<div
-					className={cn(
-						"flex min-h-11 items-center overflow-hidden rounded-xl border border-input bg-transparent transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50 dark:bg-input/30",
-						disabled && "cursor-not-allowed bg-input/50 opacity-50",
-						isInvalid &&
-							"border-destructive ring-3 ring-destructive/20 dark:border-destructive/50 dark:ring-destructive/40",
-					)}
+				<InputPrefixFrame
+					prefix={prefix}
+					invalid={isInvalid}
+					disabled={disabled}
 				>
-					{/* The plate + right rule is what makes the fixed part obviously
-					    fixed. `select-none` so a drag-select of the number doesn't
-					    sweep the dial code into the copy. */}
-					<span className="flex select-none items-center gap-1.5 self-stretch border-r border-input bg-muted/60 px-3 text-muted-foreground">
-						{prefix}
-					</span>
 					{input}
-				</div>
+				</InputPrefixFrame>
 			) : (
 				input
 			)}

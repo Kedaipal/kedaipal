@@ -86,6 +86,12 @@ export type PlanFeatures = {
 	 * un-gated (downgrade never traps), and a connected store's buyer-facing
 	 * Pay-now keeps working on every tier (buyer flow never varies by plan). */
 	onlinePayments: boolean;
+	/** Seller WhatsApp order alerts (86eyhw9zy): a WA template to the seller's
+	 * own number on new order + payment claim. Pro because each alert is a
+	 * billable Meta send (absorbed into the plan — decided 7 Aug 2026, no
+	 * add-on SKU). Gates only ENABLING the toggle — disabling and clearing the
+	 * number stay un-gated so a downgraded seller is never trapped. */
+	waOrderAlerts: boolean;
 };
 
 export type PlanFeature = keyof PlanFeatures;
@@ -100,6 +106,7 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		radiusDelivery: false,
 		delivery: false,
 		onlinePayments: false,
+		waOrderAlerts: false,
 	},
 	pro: {
 		crm: true,
@@ -110,6 +117,7 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		radiusDelivery: true,
 		delivery: true,
 		onlinePayments: true,
+		waOrderAlerts: true,
 	},
 	scale: {
 		crm: true,
@@ -120,6 +128,7 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		radiusDelivery: true,
 		delivery: true,
 		onlinePayments: true,
+		waOrderAlerts: true,
 	},
 };
 

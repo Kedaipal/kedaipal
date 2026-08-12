@@ -43,6 +43,10 @@ export type VariantRow = {
 	blockWhenOutOfStock: boolean;
 	/** Orders containing this variant are gated on buyer mockup approval. */
 	requiresProof: boolean;
+	/** Parcel weight in grams as typed ("" = unset). Feeds weight/zone delivery
+	 * pricing (86eyeea1n): a cart holding a weightless item can't be priced
+	 * there, so weight-mode stores get this field promoted out of Advanced. */
+	parcelWeightG: string;
 	/** Stored Convex storage ids (0 or 1 for the grid). Submitted to the server. */
 	imageStorageIds: string[];
 	/** Preview URL only (object URL or existing image URL); not submitted. */
@@ -84,7 +88,7 @@ export type VariantIssue = {
 	where: "row" | "option" | "custom";
 	/** Row index (rows), axis index (options); 0 for the custom line. */
 	index: number;
-	field: "price" | "stock" | "name" | "values";
+	field: "price" | "stock" | "name" | "values" | "weight";
 	message: string;
 };
 
@@ -94,6 +98,10 @@ interface VariantEditorProps {
 	currency: string;
 	/** Submit-time issues to render inline (cleared by the parent on any edit). */
 	issues?: VariantIssue[];
+	/** The store prices delivery by weight/zone (86eyeea1n) — promotes the
+	 * parcel-weight inputs out of Advanced into their own labelled block, since
+	 * a weightless item strands that store's checkout on "missing weights". */
+	weightMode?: boolean;
 }
 
 /** Tiny inline error line under the offending input. */
@@ -144,6 +152,7 @@ export function emptyRow(optionValues: string[]): VariantRow {
 		// is opt-out. Mockup approval is opt-in.
 		blockWhenOutOfStock: true,
 		requiresProof: false,
+		parcelWeightG: "",
 		imageStorageIds: [],
 	};
 }
@@ -165,14 +174,16 @@ export function rebuildRows(
 	// the grid when the first value lands.
 	if (cartesian(options).length === 0) return prev;
 	const byLabel = new Map(prev.map((r) => [variantLabel(r.optionValues), r]));
-	// When the seller adds their first axis, carry the price/stock they may have
-	// already typed in single-variant mode into every generated row. SKU + image
-	// stay per-row blank — those must be unique per variant.
+	// When the seller adds their first axis, carry the price/stock/weight they
+	// may have already typed in single-variant mode into every generated row.
+	// SKU + image stay per-row blank — those must be unique per variant.
 	const seed =
 		prev.length === 1 && prev[0].optionValues.length === 0 ? prev[0] : null;
 	// New combinations added to an existing grid inherit the first row's
 	// fulfilment + approval flags — a made-to-order product must not silently
-	// grow a stock-tracked row just because a value was added.
+	// grow a stock-tracked row just because a value was added — and its parcel
+	// weight, so a weight-mode store's new flavour doesn't silently strand
+	// checkout on "missing weights" (the seller adjusts if it differs).
 	const flagDonor = prev[0] ?? null;
 	return cartesian(options).map((optionValues) => {
 		const existing = byLabel.get(variantLabel(optionValues));
@@ -185,6 +196,7 @@ export function rebuildRows(
 				stock: seed.stock,
 				blockWhenOutOfStock: seed.blockWhenOutOfStock,
 				requiresProof: seed.requiresProof,
+				parcelWeightG: seed.parcelWeightG,
 			};
 		}
 		if (flagDonor) {
@@ -192,6 +204,7 @@ export function rebuildRows(
 				...base,
 				blockWhenOutOfStock: flagDonor.blockWhenOutOfStock,
 				requiresProof: flagDonor.requiresProof,
+				parcelWeightG: flagDonor.parcelWeightG,
 			};
 		}
 		return base;
@@ -520,6 +533,7 @@ export function VariantEditor({
 	onChange,
 	currency,
 	issues = [],
+	weightMode = false,
 }: VariantEditorProps) {
 	const { options, rows, customLine } = value;
 	const hasOptions = options.length > 0;
@@ -557,23 +571,32 @@ export function VariantEditor({
 	);
 	// Advanced disclosure — collapsed by default (zero pixels for the common
 	// case), forced open when it holds pre-existing config or a submit issue
-	// points inside it.
+	// points inside it. Parcel weight counts only when it LIVES here (weight
+	// mode promotes it to its own block outside).
 	const [advOpen, setAdvOpen] = useState(
 		() =>
 			customLine !== null ||
 			options.length > 1 ||
 			someProof ||
-			rows.some((r) => r.sku.trim().length > 0 || !r.active),
+			rows.some(
+				(r) =>
+					r.sku.trim().length > 0 ||
+					!r.active ||
+					(!weightMode && r.parcelWeightG.trim().length > 0),
+			),
 	);
 	useEffect(() => {
 		if (
 			issues.some(
-				(i) => i.where === "custom" || (i.where === "option" && i.index > 0),
+				(i) =>
+					i.where === "custom" ||
+					(i.where === "option" && i.index > 0) ||
+					(!weightMode && i.where === "row" && i.field === "weight"),
 			)
 		) {
 			setAdvOpen(true);
 		}
-	}, [issues]);
+	}, [issues, weightMode]);
 
 	// Merge a partial into the full editor state — preserves sibling fields
 	// (notably `customLine`) that a given setter doesn't touch.
@@ -613,6 +636,31 @@ export function VariantEditor({
 		update({
 			rows: rows.map((r, i) => (i === index ? { ...r, ...patch } : r)),
 		});
+	}
+
+	// Parcel-weight input — one author for its three mounts (the weight-mode
+	// block, the Advanced per-choice line, the Advanced single-item field), so
+	// the binding and the issue anchor can't drift between them.
+	function renderWeightInput(i: number, row: VariantRow) {
+		const issue = issueFor("row", i, "weight");
+		return (
+			<span className="flex flex-col gap-1">
+				<span className="flex items-center gap-1.5">
+					<Input
+						type="text"
+						inputMode="numeric"
+						placeholder="500"
+						value={row.parcelWeightG}
+						onChange={(e) => setRow(i, { parcelWeightG: e.target.value })}
+						className="h-9 w-24"
+						aria-invalid={issue ? true : undefined}
+						aria-label={`Parcel weight in grams for ${variantLabel(row.optionValues) || "this product"}`}
+					/>
+					<span className="text-xs text-muted-foreground">g</span>
+				</span>
+				<IssueText message={issue} />
+			</span>
+		);
 	}
 
 	// --- Mode switch (the "What kind of product is it?" question) -------------
@@ -1310,6 +1358,39 @@ export function VariantEditor({
 				</div>
 			) : null}
 
+			{/* Parcel weight, promoted (86eyeea1n): when the store prices delivery
+			    by weight/zone this is a first-class field — buried in Advanced it
+			    WILL be missed, and every miss strands an order on "missing
+			    weights". Everyone else keeps it tucked inside Advanced below.
+			    Made-to-order-only products have no rows (their custom line's
+			    weight is unknowable by design — the resolver holds those orders
+			    for a seller-confirmed charge), so the block hides itself. */}
+			{weightMode && gridReady && rows.length > 0 ? (
+				<div className="flex flex-col gap-2.5 rounded-xl border border-border p-4">
+					<span className="flex flex-col">
+						<span className="text-sm font-semibold">Parcel weight</span>
+						<span className="text-xs text-muted-foreground">
+							Your store prices delivery by weight — checkout charges each
+							item&apos;s parcel weight × quantity. An item without a weight
+							can&apos;t be priced automatically.
+						</span>
+					</span>
+					<ul className="flex flex-col gap-2">
+						{rows.map((row, i) => (
+							<li
+								key={variantLabel(row.optionValues) || "single"}
+								className="flex items-center justify-between gap-3"
+							>
+								<span className="min-w-0 flex-1 truncate text-sm">
+									{variantLabel(row.optionValues) || "This product"}
+								</span>
+								{renderWeightInput(i, row)}
+							</li>
+						))}
+					</ul>
+				</div>
+			) : null}
+
 			{/* Advanced — everything the everyday seller never needs, present and
 			    labelled (discoverability rule) but zero pixels until opened.
 			    NOT rendered for made-to-order: that type has no matrix, so every
@@ -1578,6 +1659,12 @@ export function VariantEditor({
 														/>
 														Mockup approval
 													</label>
+													{!weightMode ? (
+														<span className="flex items-center gap-1.5">
+															Parcel weight
+															{renderWeightInput(i, row)}
+														</span>
+													) : null}
 												</div>
 											</li>
 										))}
@@ -1596,6 +1683,15 @@ export function VariantEditor({
 										onChange={(e) => setRow(0, { sku: e.target.value })}
 									/>
 								</label>
+							) : null}
+							{!hasOptions && !weightMode && rows[0] ? (
+								<div className="flex flex-col gap-1 text-sm font-medium">
+									Parcel weight{" "}
+									<span className="font-normal text-muted-foreground">
+										(grams, optional — prices delivery on courier-rate stores)
+									</span>
+									{renderWeightInput(0, rows[0])}
+								</div>
 							) : null}
 						</div>
 					) : null}

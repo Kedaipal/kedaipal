@@ -39,10 +39,12 @@ import { useAppForm } from "../components/forms/form";
 import { BillingTab } from "../components/settings/billing-tab";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
 import { NotificationsCard } from "../components/settings/notifications-card";
+import { WaOrderAlertsCard } from "../components/settings/wa-order-alerts-card";
 import { OnlinePaymentsCard } from "../components/settings/online-payments-card";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { MyPhonePrefix } from "../components/ui/my-phone-input";
 import { Skeleton } from "../components/ui/skeleton";
 import { SortableList } from "../components/ui/sortable-list";
 import {
@@ -53,6 +55,7 @@ import { useRevealOnAdd } from "../hooks/useRevealOnAdd";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { useUpdateSettings } from "../hooks/useUpdateSettings";
 import { convexErrorMessage } from "../lib/format";
+import { normalizeMyDigits, toMyNationalInput } from "../lib/phone";
 import {
 	ANCHOR_UI_LABELS,
 	collectStageConfigErrors,
@@ -581,6 +584,27 @@ function SettingsRoute() {
 						<Card>
 							<NotificationsCard />
 						</Card>
+						{/* Notification surfaces live together: browser (above), WhatsApp,
+						    email (below). The WA card only mounts when the deployment has
+						    an approved seller template configured (86eyhw9zy). */}
+						{retailer.waOrderAlertsAvailable ? (
+							<Card>
+								<WaOrderAlertsCard
+									enabled={retailer.orderWaAlerts === true}
+									currentPhone={retailer.notifyWaPhone ?? ""}
+									fallbackPhone={retailer.waPhone ?? ""}
+									optedOut={retailer.notifyWaPhoneOptedOut === true}
+									canUse={hasFeature(retailer.subscription, "waOrderAlerts")}
+									onSave={(patch) => updateSettings(patch)}
+								/>
+							</Card>
+						) : null}
+						<Card>
+							<NotifyEmailForm
+								current={retailer.notifyEmail ?? ""}
+								onSave={(notifyEmail) => updateSettings({ notifyEmail })}
+							/>
+						</Card>
 						<Card>
 							<StoreDescriptionForm
 								current={retailer.storeDescription ?? ""}
@@ -602,12 +626,6 @@ function SettingsRoute() {
 								onSave={(coverImageStorageId) =>
 									updateSettings({ coverImageStorageId })
 								}
-							/>
-						</Card>
-						<Card>
-							<NotifyEmailForm
-								current={retailer.notifyEmail ?? ""}
-								onSave={(notifyEmail) => updateSettings({ notifyEmail })}
 							/>
 						</Card>
 						<Card>
@@ -2138,7 +2156,7 @@ function LocaleForm({
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
 			<label className="flex flex-col gap-2">
-				<span className="text-sm font-medium">WhatsApp message language</span>
+				<span className="text-sm font-medium">Message language</span>
 				<select
 					value={value}
 					onChange={(e) => setValue(e.target.value as Locale)}
@@ -2150,8 +2168,12 @@ function LocaleForm({
 						</option>
 					))}
 				</select>
+				{/* The field reaches further than its old "sent to shoppers" copy
+				    admitted: retailer email alerts have always rendered in it, and
+				    the WhatsApp order alerts (86eyhw9zy) now do too. */}
 				<span className="text-xs text-muted-foreground">
-					Used for order confirmations and shipping updates sent to shoppers.
+					Used for order confirmations and shipping updates sent to shoppers —
+					and for the order alerts we send you by email and WhatsApp.
 				</span>
 			</label>
 
@@ -2292,7 +2314,9 @@ function WaPhoneForm({
 	onSave: (waPhone: string) => Promise<unknown>;
 }) {
 	const form = useAppForm({
-		defaultValues: { waPhone: current },
+		// Seeded as the national part — the field wears a fixed `+60` plate, so
+		// the stored `60…` form would render the country code twice.
+		defaultValues: { waPhone: toMyNationalInput(current) },
 		validators: { onChange: settingsWaPhoneFormSchema },
 		onSubmit: async ({ value }) => {
 			try {
@@ -2312,10 +2336,15 @@ function WaPhoneForm({
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
 			<form.AppField name="waPhone">
 				{(field) => (
-					<field.PhoneField
+					<field.TextField
 						label="Your contact WhatsApp number"
+						type="tel"
+						inputMode="tel"
+						autoComplete="tel"
+						prefix={<MyPhonePrefix />}
+						placeholder="12-345 6789"
 						required
-						description="Shown to buyers in order confirmations and updates so they can reach you directly."
+						description="Shown to buyers in order confirmations and updates so they can reach you directly. Malaysian mobile — it's also the sender contact when a rider collects from you."
 					/>
 				)}
 			</form.AppField>
@@ -2328,10 +2357,11 @@ function WaPhoneForm({
 				})}
 			>
 				{({ canSubmit, isSubmitting, values }) => {
-					// Compare digits-only: PhoneField keeps state in E.164 (`+60…`)
-					// while `current` is stored without the `+`.
+					// Compare digits-only, both normalized to the stored `60…` form:
+					// the field holds the national part beside the plate, `current`
+					// carries the country code.
 					const dirty =
-						values.waPhone.replace(/\D/g, "") !== current.replace(/\D/g, "");
+						normalizeMyDigits(values.waPhone) !== normalizeMyDigits(current);
 					return (
 						<Button
 							type="submit"
