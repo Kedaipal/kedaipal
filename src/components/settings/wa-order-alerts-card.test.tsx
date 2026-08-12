@@ -36,7 +36,7 @@ describe("WaOrderAlertsCard", () => {
 
 	it("turning on saves the normalized number + the toggle in one patch", async () => {
 		const onSave = renderCard();
-		fireEvent.change(screen.getByPlaceholderText("e.g. 012-345 6789"), {
+		fireEvent.change(screen.getByPlaceholderText("12-345 6789"), {
 			target: { value: "019-876 5432" },
 		});
 		fireEvent.click(
@@ -52,7 +52,7 @@ describe("WaOrderAlertsCard", () => {
 
 	it("rejects a non-mobile number inline without calling onSave", async () => {
 		const onSave = renderCard();
-		fireEvent.change(screen.getByPlaceholderText("e.g. 012-345 6789"), {
+		fireEvent.change(screen.getByPlaceholderText("12-345 6789"), {
 			target: { value: "03-8888 1234" },
 		});
 		fireEvent.click(
@@ -66,10 +66,17 @@ describe("WaOrderAlertsCard", () => {
 
 	it("prefills from the store's WhatsApp contact so most sellers just tap once", () => {
 		renderCard({ fallbackPhone: "60123456789" });
+		// Seeded as the NATIONAL part: the field wears a fixed `+60` plate, so
+		// the stored `60…` form would render the country code twice (86eyknr2r).
 		expect(
-			(screen.getByPlaceholderText("e.g. 012-345 6789") as HTMLInputElement)
-				.value,
-		).toBe("60123456789");
+			(screen.getByPlaceholderText("12-345 6789") as HTMLInputElement).value,
+		).toBe("12-345 6789");
+	});
+
+	it("renders the Malaysian +60 plate, so nobody retypes the country code", () => {
+		renderCard();
+		expect(screen.getByText("+60")).toBeDefined();
+		expect(screen.getByRole("img", { name: "Malaysia" })).toBeDefined();
 	});
 
 	it("Starter sees disabled-with-reason + the Pro chip, never a dead click", () => {
