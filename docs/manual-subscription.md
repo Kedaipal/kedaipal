@@ -308,22 +308,27 @@ Fails closed when unset. Server check mandatory; client hiding cosmetic.
 ## Pricing / caps — single source of truth
 
 `convex/lib/plans.ts`. Starter RM79 / Pro RM149 / Scale RM299; founding Pro RM104
-(Scale RM209, unreachable at launch). Annual = 10 months charged. Caps per
-CLAUDE.md: Starter 100/1/0, Pro 500/2/100, Scale 2000/5/500 — all finite since
-Arif's 2026-06-28 decision dropped Scale's "unlimited" (kept an upsell ceiling for
-a future Enterprise tier and stopped contradicting Scale's ~1,300/mo tagline). The
+(Scale RM209, unreachable at launch). Caps per CLAUDE.md: Starter 100/1/0, Pro
+500/2/100, Scale 2000/5/500 — all finite since Arif's 2026-06-28 decision dropped
+Scale's "unlimited" (kept an upsell ceiling for a future Enterprise tier). The
 `UNLIMITED`/`isUnlimited` sentinel stays exported for that future tier but no v1
 plan uses it. Scale is **not selectable** at v1 (`isPlanSelectable`) and grants
 **no** Founding badge (`planQualifiesForFounding`, Arif's 2026-05-28 decision).
 
-> **Display ≠ backend cap (ClickUp 86ey4gaju).** The public pricing surface was
-> repositioned so Scale reads as the **supplier/distributor** tier: it shows
-> **"from RM299"** with an active-reseller band table (299 / 499 / 799 / custom)
-> and **"Unlimited orders / broadcasts"** in the copy. This is presentation only —
-> `PLAN_CAPS.scale` stays **2000/5/500** here until the separate Scale build
-> (active-reseller counting + banded billing) ships and flips Scale from "Coming
-> soon" to purchasable. The billing amount (`PLAN_MONTHLY_PRICE.scale = 29900`)
-> equals the lowest band. See [`pricing.md`](./pricing.md).
+> **Scale = flat multi-outlet tier (ClickUp 86eyb9zwt, supersedes 86ey4gaju).**
+> The public pricing surface shows Scale as the **multi-outlet / high-volume** tier
+> at **RM299/mo flat** (no bands, no metering; the reseller band table was removed
+> after the 1 Jul ICP audit). Scale stays "Coming soon" — not purchasable — until
+> the separate Scale build (multi-outlet management, outlet counting, RM49/mo
+> additional-outlet billing) ships. See [`pricing.md`](./pricing.md).
+
+> **Display order allowances ≠ backend cap (ClickUp 86eye2ccu).** The pricing page
+> advertises the *decided* monthly allowances **Starter 100 / Pro 200 / Scale ~400**
+> ahead of enforcement (Arif, 9 Aug 2026: copy first, so the page never advertises a
+> number the business can't hold). `PLAN_CAPS.scale.orderCap` stays **2,000** until
+> `86eye2ccu` ships the soft-cap meter, so display copy and the constant deliberately
+> diverge in the meantime. Annual billing is hidden on the page until recurring
+> billing (`86eyb6z4r`) ships. See [`pricing.md`](./pricing.md).
 
 ## `PaymentProvider` seam
 
