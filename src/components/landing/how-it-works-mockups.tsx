@@ -1,4 +1,4 @@
-import { Inbox } from "lucide-react";
+import { Inbox, Plus, ShoppingBag, SlidersHorizontal } from "lucide-react";
 import { m } from "../../paraglide/messages";
 import { AppImage } from "../ui/app-image";
 import { QrPattern } from "./landing-ui";
@@ -118,7 +118,8 @@ export function BrowseMockup() {
 						<p className="text-sm font-bold">
 							{m.how_mockup_2_product_1_price()}
 						</p>
-						<span className="mt-auto flex h-9 items-center justify-center rounded-[10px] bg-primary text-xs font-semibold text-primary-foreground">
+						<span className="mt-auto flex h-9 items-center justify-center gap-1 rounded-[10px] bg-primary text-xs font-semibold text-primary-foreground">
+							<Plus className="size-3.5" />
 							{m.how_mockup_2_product_1_cta()}
 						</span>
 					</div>
@@ -128,7 +129,9 @@ export function BrowseMockup() {
 						<span className="font-mono text-[9px] text-muted-foreground/70">
 							kek lapis photo
 						</span>
-						<span className="absolute left-1.5 top-1.5 rounded-full bg-card/85 px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-wide text-muted-foreground">
+						{/* Bottom-left like the real ProductCard's min-quantity chip —
+						    top-left is where its stock badges live. */}
+						<span className="absolute bottom-1.5 left-1.5 rounded-full bg-card/85 px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-wide text-muted-foreground">
 							{m.how_mockup_2_product_2_badge()}
 						</span>
 					</div>
@@ -142,7 +145,8 @@ export function BrowseMockup() {
 							</span>{" "}
 							{m.how_mockup_2_product_2_price()}
 						</p>
-						<span className="mt-auto flex h-9 items-center justify-center rounded-[10px] border border-border bg-card text-xs font-semibold">
+						<span className="mt-auto flex h-9 items-center justify-center gap-1 rounded-[10px] border border-border bg-card text-xs font-semibold">
+							<SlidersHorizontal className="size-3.5" />
 							{m.how_mockup_2_product_2_cta()}
 						</span>
 					</div>
@@ -150,8 +154,8 @@ export function BrowseMockup() {
 			</div>
 
 			<div className="flex items-center gap-3 border-t border-border bg-card px-4 py-3">
-				<span className="relative flex size-10 shrink-0 items-center justify-center rounded-full bg-muted text-[15px]">
-					🛍
+				<span className="relative flex size-10 shrink-0 items-center justify-center rounded-full bg-muted">
+					<ShoppingBag className="size-4" />
 					<span className="absolute -right-0.5 -top-0.5 flex size-[17px] items-center justify-center rounded-full bg-primary text-[9px] font-bold text-primary-foreground">
 						{m.how_mockup_2_cart_count()}
 					</span>
