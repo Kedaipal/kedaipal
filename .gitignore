@@ -23,3 +23,13 @@ graphify-out/
 # work in them either: task worktrees are siblings of the repo root
 # (../kedaipal-wt-<ticket>), branched off origin/staging.
 .claude/worktrees/
+
+# design-sync (claude.ai/design) — staged converter, build output, and
+# machine-local cache/verification state. The durable set (config.json,
+# NOTES.md, conventions.md, previews/, overrides/) is NOT listed here and
+# stays committed.
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
