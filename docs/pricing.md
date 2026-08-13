@@ -1,8 +1,10 @@
-# Pricing surface — tiers, Scale banding, Enterprise-hidden
+# Pricing surface — tiers, Scale multi-outlet, Enterprise-hidden
 
 The public pricing presentation. Backend caps + billing live in
 [`manual-subscription.md`](./manual-subscription.md); this doc is the **display**
-contract. Repositioning tracked in ClickUp `86ey4gaju`.
+contract. Scale's multi-outlet repositioning tracked in ClickUp `86eyb9zwt`
+(supersedes the reseller-banded positioning from `86ey4gaju`); the order-allowance
+numbers come from the caps ticket `86eye2ccu`.
 
 ## Where it renders
 
@@ -10,47 +12,74 @@ contract. Repositioning tracked in ClickUp `86ey4gaju`.
   comparison table + FAQ.
 - **`src/components/landing/pricing-teaser.tsx`** — the landing-page teaser; same
   three tiers, links to the full page.
-- **`src/lib/resellerBands.ts`** — single source of truth for the Scale band table
-  (299 / 499 / 799 / custom), shared by both surfaces so the numbers can't drift.
-- **`src/components/landing/reseller-band-table.tsx`** — the shared band-table UI.
-- Copy lives in `messages/en.json` + `messages/ms.json` (`pricing_*` for the
-  teaser, `pricingpage_*` for the full page). Both locales are kept in lockstep —
-  no mid-card English fallback.
+- Copy lives in `messages/en.json` + `messages/ms.json` + `messages/zh.json`
+  (`pricing_*` for the teaser, `pricingpage_*` for the full page). All three
+  locales are kept in lockstep — the i18n parity test fails otherwise, and a card
+  must never fall back to English mid-render.
 
 ## The three public tiers
 
-| Tier | Price | Positioning | Orders (display) | Seats |
-| --- | --- | --- | --- | --- |
-| **Starter** | RM79/mo | Single home seller, just starting | 100/mo | 1 |
-| **Pro** | RM149/mo (founding RM104) | Established single shop | 500/mo | 2 |
-| **Scale** | **from RM299/mo — Coming soon** | Supplier / distributor with a reseller network | **Unlimited** | 5 |
+| Tier | Price | Positioning | Orders (display) | Seats | Outlets |
+| --- | --- | --- | --- | --- | --- |
+| **Starter** | RM79/mo | Single home seller, just starting | 100/mo | 1 | 1 |
+| **Pro** | RM149/mo (founding RM104) | Established single shop | 200/mo | 2 | 1 |
+| **Scale** | **RM299/mo flat — Coming soon** (founding RM209) | Multi-outlet / high-volume seller | ~400/mo | 5 | Up to 3 (+RM49/mo each additional) |
 
-Pro copy deliberately **does not** imply reseller/wholesale features — those are
-Scale's differentiator.
-
-## Scale = banded supplier tier (Coming soon)
-
-Scale is priced on **active resellers** (a reseller who placed ≥1 order that
-month), in bands, not a live per-seat meter:
-
-| Active resellers | Price/mo |
-| --- | --- |
-| Up to 10 | RM299 |
-| 11–30 | RM499 |
-| 31–75 | RM799 |
-| 75+ | Custom (talk to us) |
+All three prices are **flat** — no metering (Arif, 19 Jul 2026). The 1 Jul ICP
+audit disqualified reseller/wholesale networks; our real payers outgrow Pro on
+**outlets and team size** (the StoreHub axis), so Scale is the multi-outlet tier.
+All reseller-band copy, the band table, and its i18n keys were **removed** (the old
+`src/lib/resellerBands.ts` + `reseller-band-table.tsx` are deleted).
 
 Presentation rules:
 
-- The Scale card anchors on **"from RM299"** and **ignores the monthly/annual
-  toggle** — an annual number would be misleading before banded billing exists.
-- The card is **not purchasable**: the CTA is a disabled **"Coming soon"** panel
+- **Annual billing is hidden** (`SHOW_ANNUAL_TOGGLE = false` in `pricing.tsx`).
+  There are no recurring-billing rails behind an annual price yet (HitPay
+  recurring `86eyb6z4r` unbuilt) and a permanent visible % discount undercuts the
+  flat-price posture (Arif, 28 Jul + 9 Aug 2026). Monthly is the only cycle. Flip
+  the constant to re-expose the toggle; if reinstated, frame the saving as
+  "2 months free", never a percentage.
+- Scale is **not purchasable**: the CTA is a disabled **"Coming soon"** panel
   (trials are Pro-only), on both the full page and the teaser.
-- **"Unlimited orders / broadcasts"** is copy only. The backend cap stays
-  `PLAN_CAPS.scale = 2000/5/500` until the separate Scale build (active-reseller
-  counting + banded billing) ships and flips Scale to purchasable. Founding on
-  Scale follows the band the member lands on (RM209 / 349 / 559) — founding price
-  logic is not hardcoded to Pro (`FOUNDING_MONTHLY_PRICE` covers pro + scale).
+- **Tier CTAs are plan-aware for signed-in sellers** (`resolveTierCta` in
+  `src/lib/pricing-cta.ts`): signed-out → trial link. For a signed-in seller,
+  ownership is judged on **status, not just `plan`** — a trial stamps
+  `plan:"pro"` on day one, so `plan` alone is "the tier being trialed", not
+  owned. Only an **active** paid subscriber (or a **comped** account) of a tier
+  gets the disabled **"Current plan"** pill; a trialing / past_due / cancelled
+  seller gets an actionable **"Subscribe"** on every tier; an owner of another
+  tier gets **"Upgrade"** (higher) or **"Manage plan"** (lower). All actionable
+  CTAs route to **Settings → Billing** (`?tab=billing`), which owns the manual
+  contact-Arif flow. While Clerk auth + the plan query are still resolving, the
+  purchasable-tier buttons show a **spinner** (`Button isLoading`) instead of a
+  label, so a signed-in seller's CTA doesn't flip trial → dashboard → final on one
+  refresh — the SSR render is the spinner too, so hydration matches. A storeless
+  admin / genuinely-null plan then falls back to "Go to Dashboard". The full page
+  reads plan/status via the narrow `retailers.getMyPlan` query (not the heavy
+  `getMyRetailer` payload) so a marketing route doesn't sign storage URLs just to
+  read an enum; the landing teaser stays plan-agnostic (a lighter surface that
+  links here).
+- **Order allowances lead enforcement.** The page advertises the *decided*
+  allowances — **Starter 100 / Pro 200 / Scale ~400** (caps ticket `86eye2ccu`) —
+  ahead of the soft-cap meter that ticket ships. `PLAN_CAPS` still reads **Pro 500
+  / Scale 2,000** until then — and that constant is the denominator the shipped
+  billing-tab order meter renders — so both Pro (500→200) and Scale (2,000→400)
+  copy deliberately diverge from the constant, and a Pro seller sees "200
+  orders/mo" here but "N of 500" in Settings → Billing until `86eye2ccu` drops
+  both caps. The page never advertises a number the business can't hold, and never
+  shows "Unlimited". Cap numbers stay off the hero price; they live in the
+  tier-card allowance line and the comparison table.
+- Each tier card carries **"Flat price. We never take a cut of your sales."** — the
+  value posture vs the metered/commission competitors.
+- The comparison table carries a live **Insights row** (Starter –, Pro ✓, Scale ✓,
+  no Coming soon badge): the strongest shipped Pro differentiator. The old "Sales
+  reports" row was deleted per the 11 Jul Insights tiering decision.
+- Scale-only rows (Outlets "Up to 3", custom domain, production calendar, priority
+  support, higher broadcast quota) carry **Coming soon** badges until the Scale
+  build ships. "Additional outlets RM49/mo each" is display copy only — the billing
+  lever ships with that build.
+- Founding is generic across plans: `FOUNDING_MONTHLY_PRICE` covers pro (RM104) +
+  scale (RM209), 30% lifetime — not hardcoded to Pro.
 
 ## Enterprise — hidden
 
@@ -63,5 +92,5 @@ plan uses it.
 
 ## Mobile-first
 
-Cards stack single-column and the band table is 2 columns only, so nothing scrolls
-horizontally on a phone; tap targets stay ≥44px.
+Cards stack single-column, the comparison table scrolls inside its own container,
+and tap targets stay ≥44px.
