@@ -7,7 +7,12 @@ import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { Button } from "../ui/button";
 import { FadeIn } from "./fade-in";
-import { Sticker } from "./landing-ui";
+import {
+	carouselSlideClass,
+	carouselTrackClass,
+	GuaranteeLine,
+	Sticker,
+} from "./landing-ui";
 
 const TOTAL_FOUNDING_SPOTS = 10;
 
@@ -46,10 +51,14 @@ function getTiers(): TeaserTier[] {
 			price: 149,
 			foundingPrice: 104,
 			tagline: m.pricing_tier_pro_tagline(),
+			// Online payments + Lalamove lead here now that both are shipped — they
+			// are the two Pro capabilities a seller can picture immediately, and
+			// radius-band fees are the narrower story of the same delivery feature.
 			features: [
 				m.pricing_feat_everything_starter(),
+				m.pricing_feat_online_payments(),
 				m.pricing_feat_crm(),
-				m.pricing_feat_radius(),
+				m.pricing_feat_lalamove(),
 				m.pricing_feat_insights(),
 				m.pricing_feat_2_users(),
 			],
@@ -110,11 +119,20 @@ export function PricingTeaser() {
 				</FadeIn>
 
 				<FadeIn delay={0.1}>
-					<div className="mt-12 grid items-stretch gap-4 md:grid-cols-3 lg:gap-0">
+					{/* Mobile: tier cards as a snap carousel (cheapest first, Pro
+					    peeking with its "Most popular" badge). pt-4 keeps the badge —
+					    absolutely positioned above the card edge — from being clipped
+					    by the scroller. */}
+					<div
+						className={carouselTrackClass(
+							"mt-12 pt-4 md:mt-12 md:grid md:grid-cols-3 md:items-stretch md:gap-4 md:pt-0 lg:gap-0",
+						)}
+					>
 						{tiers.map((tier) => (
 							<div
 								key={tier.id}
 								className={cn(
+									carouselSlideClass(),
 									"relative flex flex-col rounded-3xl p-7",
 									tier.popular
 										? "z-10 bg-primary text-primary-foreground shadow-2xl lg:-my-5 lg:scale-[1.02]"
@@ -219,6 +237,11 @@ export function PricingTeaser() {
 											)}
 										</Button>
 									)}
+									{/* The guarantee rides the tier a visitor is most likely to
+									    pick, directly under its CTA (86eye3p6z §B). */}
+									{tier.popular && !tier.comingSoon ? (
+										<GuaranteeLine className="mt-2.5 text-[11.5px] leading-relaxed text-primary-foreground/65" />
+									) : null}
 								</div>
 							</div>
 						))}

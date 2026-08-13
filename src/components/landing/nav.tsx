@@ -83,28 +83,19 @@ function NavAuthCta() {
 			</Button>
 		);
 	}
+	// One ask in the nav (86eye3p6z §C). Returning sellers still reach sign-in
+	// from the sign-up screen's own "already have an account?" link, so the path
+	// survives without a second button competing with the trial CTA.
 	return (
-		<>
-			<Button
-				asChild
-				variant="ghost"
-				size="lg"
-				className="hidden rounded-full md:inline-flex"
-			>
-				<Link to="/sign-in/$" params={{ _splat: "" }}>
-					{m.nav_sign_in()}
-				</Link>
-			</Button>
-			<Button
-				asChild
-				size="lg"
-				className="hidden rounded-full px-5 md:inline-flex"
-			>
-				<Link to="/sign-up/$" params={{ _splat: "" }}>
-					{m.nav_start_free()}
-				</Link>
-			</Button>
-		</>
+		<Button
+			asChild
+			size="lg"
+			className="hidden rounded-full px-5 md:inline-flex"
+		>
+			<Link to="/sign-up/$" params={{ _splat: "" }}>
+				{m.nav_start_free()}
+			</Link>
+		</Button>
 	);
 }
 
@@ -121,23 +112,11 @@ function MobileMenuAuthCta({ onClose }: { onClose: () => void }) {
 		);
 	}
 	return (
-		<div className="flex flex-col gap-2">
-			<Button
-				asChild
-				variant="outline"
-				size="lg"
-				className="h-12 w-full rounded-full"
-			>
-				<Link to="/sign-in/$" params={{ _splat: "" }} onClick={onClose}>
-					{m.nav_sign_in()}
-				</Link>
-			</Button>
-			<Button asChild size="lg" className="h-12 w-full rounded-full">
-				<Link to="/sign-up/$" params={{ _splat: "" }} onClick={onClose}>
-					{m.nav_start_free()}
-				</Link>
-			</Button>
-		</div>
+		<Button asChild size="lg" className="h-12 w-full rounded-full">
+			<Link to="/sign-up/$" params={{ _splat: "" }} onClick={onClose}>
+				{m.nav_start_free()}
+			</Link>
+		</Button>
 	);
 }
 
@@ -196,15 +175,16 @@ export function Nav() {
 							priority
 						/>
 					</Link>
+					{/* The cost calculator left the nav (86eye3p6z): five links plus the
+					    locale switcher and the CTA crowded the bar between md and ~lg,
+					    and `/cost` now has a better front door — the money-math block's
+					    own CTA, where a visitor is already thinking about the number. */}
 					<div className="hidden items-center gap-1 md:flex">
 						{navLinks.map((link) => (
 							<a key={link.href} href={link.href} className={linkClass}>
 								{link.label}
 							</a>
 						))}
-						<Link to="/cost" className={linkClass}>
-							{m.nav_cost()}
-						</Link>
 						<Link to="/pricing" className={linkClass}>
 							{m.nav_pricing()}
 						</Link>
@@ -238,9 +218,6 @@ export function Nav() {
 									{link.label}
 								</a>
 							))}
-							<Link to="/cost" onClick={closeMenu} className={mobileLinkClass}>
-								{m.nav_cost()}
-							</Link>
 							<Link
 								to="/pricing"
 								onClick={closeMenu}

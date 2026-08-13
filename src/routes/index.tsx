@@ -1,5 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { CounterCheckout } from "../components/landing/counter-checkout";
 import { Faq } from "../components/landing/faq";
 import { FeatureGrid } from "../components/landing/feature-grid";
 import { FinalCta } from "../components/landing/final-cta";
@@ -7,8 +6,10 @@ import { Footer } from "../components/landing/footer";
 import { FoundingTen } from "../components/landing/founding-ten";
 import { Hero } from "../components/landing/hero";
 import { HowItWorks } from "../components/landing/how-it-works";
+import { MoneyMath } from "../components/landing/money-math";
 import { Nav } from "../components/landing/nav";
 import { PaymentHandshake } from "../components/landing/payment-handshake";
+import { PaymentMethods } from "../components/landing/payment-methods";
 import { PricingTeaser } from "../components/landing/pricing-teaser";
 import { ProblemStrip } from "../components/landing/problem-strip";
 import { RealSellers } from "../components/landing/real-sellers";
@@ -70,7 +71,7 @@ const jsonLd = [
 				name: "How are payments handled?",
 				acceptedAnswer: {
 					"@type": "Answer",
-					text: "Your customers pay you directly — bank transfer, DuitNow QR, e-wallet or cash. Kedaipal sends your payment details with every confirmation, tracks the “I've paid” handshake, and issues the receipt. Kedaipal never touches your order money. Online payment at checkout is coming next.",
+					text: "Two ways. Connect your own HitPay account and buyers tap Pay now — DuitNow QR, FPX, cards, e-wallets — with the money settling straight to you and the order marking itself paid. Or take bank transfer / cash: Kedaipal sends your payment details, tracks the “I've paid” handshake, and issues the receipt. Kedaipal never touches your order money.",
 				},
 			},
 			{
@@ -151,9 +152,13 @@ function Landing() {
 			<ProblemStrip />
 			<PaymentHandshake />
 			<HowItWorks />
-			<CounterCheckout />
 			<FeatureGrid />
 			<FoundingTen />
+			{/* Cost context, then the rails, then the price — a visitor must know
+			    what a marketplace already takes and how their customers will
+			    actually pay BEFORE they meet RM79/149/299 (ClickUp 86eye3p6z). */}
+			<MoneyMath />
+			<PaymentMethods />
 			<PricingTeaser />
 			<Faq />
 			<FinalCta />
