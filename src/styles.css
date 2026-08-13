@@ -178,6 +178,8 @@
 		var(--border);
 	--color-destructive:
 		var(--destructive);
+	--color-destructive-foreground:
+		var(--destructive-foreground);
 	--color-accent-foreground:
 		var(--accent-foreground);
 	--color-accent:
