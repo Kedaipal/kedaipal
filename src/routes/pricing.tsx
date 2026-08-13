@@ -1,7 +1,10 @@
 import { useAuth } from "@clerk/tanstack-react-start";
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { useQuery } from "convex/react";
 import { ArrowRight, Check, Minus, Quote, Sparkles, Star } from "lucide-react";
 import { useState } from "react";
+import { api } from "../../convex/_generated/api";
+import type { Plan } from "../../convex/lib/plans";
 import { FadeIn } from "../components/landing/fade-in";
 import { Footer } from "../components/landing/footer";
 import {
@@ -12,6 +15,7 @@ import {
 import { Nav } from "../components/landing/nav";
 import { Button } from "../components/ui/button";
 import { buildWaContactLink } from "../lib/contact";
+import { resolveTierCta } from "../lib/pricing-cta";
 import { cn } from "../lib/utils";
 import { m } from "../paraglide/messages";
 
@@ -300,13 +304,30 @@ function FeatureCell({ value }: { value: FeatureValue }) {
 	return <span className="text-sm font-medium text-foreground">{value}</span>;
 }
 
-function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
-	const { isSignedIn } = useAuth();
+function TierCard({
+	tier,
+	cycle,
+	isSignedIn,
+	currentPlan,
+}: {
+	tier: Tier;
+	cycle: Cycle;
+	isSignedIn: boolean;
+	/** The signed-in seller's live plan, or null when signed out / not yet
+	 * resolved (loading, or a storeless admin) — the CTA falls back safely then. */
+	currentPlan: Plan | null;
+}) {
 	// Scale is the flat multi-outlet tier (RM299/mo — Arif, 19 Jul 2026), still
 	// not purchasable, so only its CTA differs (a disabled "Coming soon" panel).
 	// See docs/pricing.md.
 	const isScale = tier.id === "scale";
 	const price = cycle === "annual" ? tier.annual : tier.monthly;
+
+	// CTA is plan-aware for signed-in sellers: their current tier is a disabled
+	// "Current plan" pill, a higher tier says "Upgrade" and a lower one "Manage
+	// plan" — both routing to Settings → Billing, which owns the manual
+	// contact-Arif upgrade flow (billing is manual in v1). See docs/pricing.md.
+	const cta = resolveTierCta(tier.id, { isScale, isSignedIn, currentPlan });
 
 	return (
 		<div
@@ -426,12 +447,26 @@ function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 			</ul>
 
 			<div className="mt-6">
-				{isScale ? (
+				{cta === "coming_soon" ? (
 					// Scale is not yet purchasable — a disabled "Coming soon" panel
 					// replaces the CTA (mirrors the landing teaser). Trials are
 					// Pro-only, so a trial link here would be wrong.
 					<div className="flex h-11 w-full items-center justify-center rounded-full border border-dashed border-border bg-muted/40 text-sm font-semibold text-muted-foreground">
 						{m.pricingpage_coming_soon()}
+					</div>
+				) : cta === "current" ? (
+					// The seller is already on this tier — a non-actionable pill, not a
+					// link, so the card doesn't pretend there's something to do here.
+					<div
+						className={cn(
+							"flex h-11 w-full items-center justify-center gap-1.5 rounded-full border text-sm font-semibold",
+							tier.popular
+								? "border-primary-foreground/20 bg-primary-foreground/10 text-primary-foreground/80"
+								: "border-border bg-muted/40 text-muted-foreground",
+						)}
+					>
+						<Check className="size-4" />
+						{m.pricingpage_current_plan()}
 					</div>
 				) : (
 					<Button
@@ -444,13 +479,23 @@ function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 						)}
 						variant={tier.popular ? "default" : "outline"}
 					>
-						{isSignedIn ? (
+						{cta === "trial" ? (
+							<Link to="/sign-up/$" params={{ _splat: "" }}>
+								{tier.cta} <ArrowRight className="size-4" />
+							</Link>
+						) : cta === "dashboard" ? (
+							// Signed in but plan not resolved (loading / storeless admin) —
+							// safe fallback to the dashboard, no wrong upgrade label.
 							<Link to="/app">
 								{m.nav_go_to_dashboard()} <ArrowRight className="size-4" />
 							</Link>
 						) : (
-							<Link to="/sign-up/$" params={{ _splat: "" }}>
-								{tier.cta} <ArrowRight className="size-4" />
+							// upgrade | manage → Settings → Billing (manual upgrade flow).
+							<Link to="/app/settings" search={{ tab: "billing" }}>
+								{cta === "upgrade"
+									? m.pricingpage_cta_upgrade()
+									: m.pricingpage_cta_manage_plan()}{" "}
+								<ArrowRight className="size-4" />
 							</Link>
 						)}
 					</Button>
@@ -462,6 +507,14 @@ function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 
 function PricingPage() {
 	const [cycle, setCycle] = useState<Cycle>("monthly");
+	const { isSignedIn } = useAuth();
+	// Only signed-in sellers need their plan; skip the query for visitors. null
+	// while loading or for a storeless admin → the card CTA falls back safely.
+	const retailer = useQuery(
+		api.retailers.getMyRetailer,
+		isSignedIn ? {} : "skip",
+	);
+	const currentPlan: Plan | null = retailer?.subscription?.plan ?? null;
 	const tiers = useTiers();
 	const features = useFeatures();
 	const faqs = useFaqs();
@@ -536,7 +589,13 @@ function PricingPage() {
 					<FadeIn>
 						<div className="grid items-stretch gap-6 md:grid-cols-3 lg:gap-5">
 							{tiers.map((tier) => (
-								<TierCard key={tier.id} tier={tier} cycle={cycle} />
+								<TierCard
+									key={tier.id}
+									tier={tier}
+									cycle={cycle}
+									isSignedIn={isSignedIn ?? false}
+									currentPlan={currentPlan}
+								/>
 							))}
 						</div>
 					</FadeIn>

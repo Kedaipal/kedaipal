@@ -41,6 +41,14 @@ Presentation rules:
   "2 months free", never a percentage.
 - Scale is **not purchasable**: the CTA is a disabled **"Coming soon"** panel
   (trials are Pro-only), on both the full page and the teaser.
+- **Tier CTAs are plan-aware for signed-in sellers** (`resolveTierCta` in
+  `src/lib/pricing-cta.ts`): signed-out → trial link; a seller's current tier →
+  disabled "Current plan" pill; a higher tier → **"Upgrade"**, a lower one →
+  "Manage plan", both routing to **Settings → Billing** (`?tab=billing`), which
+  owns the manual contact-Arif upgrade flow. Plan not yet resolved (loading /
+  storeless admin) falls back to "Go to Dashboard". The full page reads the plan
+  from `getMyRetailer`; the landing teaser stays plan-agnostic (a lighter
+  marketing surface that links here for the full breakdown).
 - **Order allowances lead enforcement.** The page advertises the *decided*
   allowances — **Starter 100 / Pro 200 / Scale ~400** (caps ticket `86eye2ccu`) —
   ahead of the soft-cap meter that ticket ships. `PLAN_CAPS.scale.orderCap` still
