@@ -50,11 +50,15 @@ Presentation rules:
   seller gets an actionable **"Subscribe"** on every tier; an owner of another
   tier gets **"Upgrade"** (higher) or **"Manage plan"** (lower). All actionable
   CTAs route to **Settings → Billing** (`?tab=billing`), which owns the manual
-  contact-Arif flow. Plan not yet resolved (loading / storeless admin) falls back
-  to "Go to Dashboard". The full page reads plan/status via the narrow
-  `retailers.getMyPlan` query (not the heavy `getMyRetailer` payload) so a
-  marketing route doesn't sign storage URLs just to read an enum; the landing
-  teaser stays plan-agnostic (a lighter surface that links here).
+  contact-Arif flow. While Clerk auth + the plan query are still resolving, the
+  purchasable-tier buttons show a **spinner** (`Button isLoading`) instead of a
+  label, so a signed-in seller's CTA doesn't flip trial → dashboard → final on one
+  refresh — the SSR render is the spinner too, so hydration matches. A storeless
+  admin / genuinely-null plan then falls back to "Go to Dashboard". The full page
+  reads plan/status via the narrow `retailers.getMyPlan` query (not the heavy
+  `getMyRetailer` payload) so a marketing route doesn't sign storage URLs just to
+  read an enum; the landing teaser stays plan-agnostic (a lighter surface that
+  links here).
 - **Order allowances lead enforcement.** The page advertises the *decided*
   allowances — **Starter 100 / Pro 200 / Scale ~400** (caps ticket `86eye2ccu`) —
   ahead of the soft-cap meter that ticket ships. `PLAN_CAPS` still reads **Pro 500

@@ -309,6 +309,7 @@ function TierCard({
 	cycle,
 	isSignedIn,
 	subscription,
+	pending,
 }: {
 	tier: Tier;
 	cycle: Cycle;
@@ -316,6 +317,9 @@ function TierCard({
 	/** The signed-in seller's plan/status, or null when signed out / not yet
 	 * resolved (loading, or a storeless admin) — the CTA falls back safely then. */
 	subscription: SubscriptionView | null;
+	/** Auth/plan still resolving — show a spinner instead of a (soon-to-change)
+	 * label on the purchasable tiers. Scale ignores it (auth-independent). */
+	pending: boolean;
 }) {
 	// Scale is the flat multi-outlet tier (RM299/mo — Arif, 19 Jul 2026), still
 	// not purchasable, so only its CTA differs (a disabled "Coming soon" panel).
@@ -455,6 +459,22 @@ function TierCard({
 					<div className="flex h-11 w-full items-center justify-center rounded-full border border-dashed border-border bg-muted/40 text-sm font-semibold text-muted-foreground">
 						{m.pricingpage_coming_soon()}
 					</div>
+				) : pending ? (
+					// Auth/plan still resolving — a spinner holds the button's place so
+					// the label doesn't flip trial → dashboard → final on one refresh.
+					<Button
+						size="lg"
+						isLoading
+						aria-label={m.pricingpage_cta_loading()}
+						variant={tier.popular ? "default" : "outline"}
+						className={cn(
+							"h-11 w-full rounded-full",
+							!tier.popular &&
+								"border-border bg-background text-foreground hover:bg-muted",
+						)}
+					>
+						{m.pricingpage_cta_trial()}
+					</Button>
 				) : cta === "current" ? (
 					// The seller is already on this tier — a non-actionable pill, not a
 					// link, so the card doesn't pretend there's something to do here.
@@ -511,16 +531,21 @@ function TierCard({
 
 function PricingPage() {
 	const [cycle, setCycle] = useState<Cycle>("monthly");
-	const { isSignedIn } = useAuth();
+	const { isLoaded, isSignedIn } = useAuth();
 	// Only signed-in sellers need their plan; skip the query for visitors. A
 	// narrow read (plan/status/comped) — not the heavy getMyRetailer payload — on
 	// this public marketing route. null while loading / storeless admin → the
 	// card CTA falls back safely.
 	const planState = useQuery(
 		api.retailers.getMyPlan,
-		isSignedIn ? {} : "skip",
+		isLoaded && isSignedIn ? {} : "skip",
 	);
 	const subscription: SubscriptionView | null = planState ?? null;
+	// Until Clerk has loaded AND (for a signed-in seller) the plan query resolves,
+	// the final CTA is unknown — show a spinner in the button rather than flipping
+	// the label through trial → dashboard → final on a single refresh.
+	const ctaPending =
+		!isLoaded || (isSignedIn === true && planState === undefined);
 	const tiers = useTiers();
 	const features = useFeatures();
 	const faqs = useFaqs();
@@ -601,6 +626,7 @@ function PricingPage() {
 									cycle={cycle}
 									isSignedIn={isSignedIn ?? false}
 									subscription={subscription}
+									pending={ctaPending}
 								/>
 							))}
 						</div>
