@@ -61,7 +61,9 @@ describe("pricing copy stays aligned with the flat multi-outlet Scale", () => {
 		for (const [locale, catalog] of catalogs) {
 			expect(catalog.pricingpage_ordercap_starter, locale).toContain("100");
 			expect(catalog.pricingpage_ordercap_pro, locale).toContain("200");
-			// Scale is number-free fit copy — no cap value the code doesn't enforce.
+			// The Scale tier-CARD allowance line is number-free fit copy (the old
+			// "Unlimited"/"2,000" is gone). The comparison-table cell still prints a
+			// concrete "400" — that lives as a literal in pricing.tsx, not here.
 			expect(catalog.pricingpage_ordercap_pro, locale).not.toContain("500");
 			expect(catalog.pricingpage_ordercap_scale, locale).not.toMatch(/\d/);
 		}

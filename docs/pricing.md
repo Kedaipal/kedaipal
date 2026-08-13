@@ -42,20 +42,29 @@ Presentation rules:
 - Scale is **not purchasable**: the CTA is a disabled **"Coming soon"** panel
   (trials are Pro-only), on both the full page and the teaser.
 - **Tier CTAs are plan-aware for signed-in sellers** (`resolveTierCta` in
-  `src/lib/pricing-cta.ts`): signed-out → trial link; a seller's current tier →
-  disabled "Current plan" pill; a higher tier → **"Upgrade"**, a lower one →
-  "Manage plan", both routing to **Settings → Billing** (`?tab=billing`), which
-  owns the manual contact-Arif upgrade flow. Plan not yet resolved (loading /
-  storeless admin) falls back to "Go to Dashboard". The full page reads the plan
-  from `getMyRetailer`; the landing teaser stays plan-agnostic (a lighter
-  marketing surface that links here for the full breakdown).
+  `src/lib/pricing-cta.ts`): signed-out → trial link. For a signed-in seller,
+  ownership is judged on **status, not just `plan`** — a trial stamps
+  `plan:"pro"` on day one, so `plan` alone is "the tier being trialed", not
+  owned. Only an **active** paid subscriber (or a **comped** account) of a tier
+  gets the disabled **"Current plan"** pill; a trialing / past_due / cancelled
+  seller gets an actionable **"Subscribe"** on every tier; an owner of another
+  tier gets **"Upgrade"** (higher) or **"Manage plan"** (lower). All actionable
+  CTAs route to **Settings → Billing** (`?tab=billing`), which owns the manual
+  contact-Arif flow. Plan not yet resolved (loading / storeless admin) falls back
+  to "Go to Dashboard". The full page reads plan/status via the narrow
+  `retailers.getMyPlan` query (not the heavy `getMyRetailer` payload) so a
+  marketing route doesn't sign storage URLs just to read an enum; the landing
+  teaser stays plan-agnostic (a lighter surface that links here).
 - **Order allowances lead enforcement.** The page advertises the *decided*
   allowances — **Starter 100 / Pro 200 / Scale ~400** (caps ticket `86eye2ccu`) —
-  ahead of the soft-cap meter that ticket ships. `PLAN_CAPS.scale.orderCap` still
-  reads 2,000 until then, so copy and the constant deliberately diverge. The page
-  never advertises a number the business can't hold, and never shows "Unlimited".
-  Cap numbers stay off the hero price; they live in the tier-card allowance line
-  and the comparison table.
+  ahead of the soft-cap meter that ticket ships. `PLAN_CAPS` still reads **Pro 500
+  / Scale 2,000** until then — and that constant is the denominator the shipped
+  billing-tab order meter renders — so both Pro (500→200) and Scale (2,000→400)
+  copy deliberately diverge from the constant, and a Pro seller sees "200
+  orders/mo" here but "N of 500" in Settings → Billing until `86eye2ccu` drops
+  both caps. The page never advertises a number the business can't hold, and never
+  shows "Unlimited". Cap numbers stay off the hero price; they live in the
+  tier-card allowance line and the comparison table.
 - Each tier card carries **"Flat price. We never take a cut of your sales."** — the
   value posture vs the metered/commission competitors.
 - The comparison table carries a live **Insights row** (Starter –, Pro ✓, Scale ✓,

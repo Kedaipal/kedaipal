@@ -4,7 +4,6 @@ import { useQuery } from "convex/react";
 import { ArrowRight, Check, Minus, Quote, Sparkles, Star } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
-import type { Plan } from "../../convex/lib/plans";
 import { FadeIn } from "../components/landing/fade-in";
 import { Footer } from "../components/landing/footer";
 import {
@@ -16,6 +15,7 @@ import { Nav } from "../components/landing/nav";
 import { Button } from "../components/ui/button";
 import { buildWaContactLink } from "../lib/contact";
 import { resolveTierCta } from "../lib/pricing-cta";
+import type { SubscriptionView } from "../lib/subscription";
 import { cn } from "../lib/utils";
 import { m } from "../paraglide/messages";
 
@@ -308,14 +308,14 @@ function TierCard({
 	tier,
 	cycle,
 	isSignedIn,
-	currentPlan,
+	subscription,
 }: {
 	tier: Tier;
 	cycle: Cycle;
 	isSignedIn: boolean;
-	/** The signed-in seller's live plan, or null when signed out / not yet
+	/** The signed-in seller's plan/status, or null when signed out / not yet
 	 * resolved (loading, or a storeless admin) — the CTA falls back safely then. */
-	currentPlan: Plan | null;
+	subscription: SubscriptionView | null;
 }) {
 	// Scale is the flat multi-outlet tier (RM299/mo — Arif, 19 Jul 2026), still
 	// not purchasable, so only its CTA differs (a disabled "Coming soon" panel).
@@ -323,11 +323,12 @@ function TierCard({
 	const isScale = tier.id === "scale";
 	const price = cycle === "annual" ? tier.annual : tier.monthly;
 
-	// CTA is plan-aware for signed-in sellers: their current tier is a disabled
-	// "Current plan" pill, a higher tier says "Upgrade" and a lower one "Manage
-	// plan" — both routing to Settings → Billing, which owns the manual
-	// contact-Arif upgrade flow (billing is manual in v1). See docs/pricing.md.
-	const cta = resolveTierCta(tier.id, { isScale, isSignedIn, currentPlan });
+	// CTA is plan-aware for signed-in sellers: only an active/comped owner of this
+	// tier gets the disabled "Current plan" pill; trial/lapsed sellers get an
+	// actionable "Subscribe", and owners of another tier get "Upgrade"/"Manage
+	// plan" — all routing to Settings → Billing, which owns the manual contact-Arif
+	// flow (billing is manual in v1). See docs/pricing.md + src/lib/pricing-cta.ts.
+	const cta = resolveTierCta(tier.id, { isScale, isSignedIn, subscription });
 
 	return (
 		<div
@@ -490,11 +491,14 @@ function TierCard({
 								{m.nav_go_to_dashboard()} <ArrowRight className="size-4" />
 							</Link>
 						) : (
-							// upgrade | manage → Settings → Billing (manual upgrade flow).
+							// subscribe | upgrade | manage → Settings → Billing (the manual
+							// contact-Arif conversion/upgrade flow).
 							<Link to="/app/settings" search={{ tab: "billing" }}>
-								{cta === "upgrade"
-									? m.pricingpage_cta_upgrade()
-									: m.pricingpage_cta_manage_plan()}{" "}
+								{cta === "subscribe"
+									? m.pricingpage_cta_subscribe()
+									: cta === "upgrade"
+										? m.pricingpage_cta_upgrade()
+										: m.pricingpage_cta_manage_plan()}{" "}
 								<ArrowRight className="size-4" />
 							</Link>
 						)}
@@ -508,13 +512,15 @@ function TierCard({
 function PricingPage() {
 	const [cycle, setCycle] = useState<Cycle>("monthly");
 	const { isSignedIn } = useAuth();
-	// Only signed-in sellers need their plan; skip the query for visitors. null
-	// while loading or for a storeless admin → the card CTA falls back safely.
-	const retailer = useQuery(
-		api.retailers.getMyRetailer,
+	// Only signed-in sellers need their plan; skip the query for visitors. A
+	// narrow read (plan/status/comped) — not the heavy getMyRetailer payload — on
+	// this public marketing route. null while loading / storeless admin → the
+	// card CTA falls back safely.
+	const planState = useQuery(
+		api.retailers.getMyPlan,
 		isSignedIn ? {} : "skip",
 	);
-	const currentPlan: Plan | null = retailer?.subscription?.plan ?? null;
+	const subscription: SubscriptionView | null = planState ?? null;
 	const tiers = useTiers();
 	const features = useFeatures();
 	const faqs = useFaqs();
@@ -594,7 +600,7 @@ function PricingPage() {
 									tier={tier}
 									cycle={cycle}
 									isSignedIn={isSignedIn ?? false}
-									currentPlan={currentPlan}
+									subscription={subscription}
 								/>
 							))}
 						</div>

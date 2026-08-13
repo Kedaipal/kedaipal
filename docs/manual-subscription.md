@@ -325,10 +325,13 @@ plan uses it. Scale is **not selectable** at v1 (`isPlanSelectable`) and grants
 > **Display order allowances ≠ backend cap (ClickUp 86eye2ccu).** The pricing page
 > advertises the *decided* monthly allowances **Starter 100 / Pro 200 / Scale ~400**
 > ahead of enforcement (Arif, 9 Aug 2026: copy first, so the page never advertises a
-> number the business can't hold). `PLAN_CAPS.scale.orderCap` stays **2,000** until
-> `86eye2ccu` ships the soft-cap meter, so display copy and the constant deliberately
-> diverge in the meantime. Annual billing is hidden on the page until recurring
-> billing (`86eyb6z4r`) ships. See [`pricing.md`](./pricing.md).
+> number the business can't hold). `PLAN_CAPS` still reads **Pro 500 / Scale 2,000**
+> until `86eye2ccu` ships the lower caps — and that constant is the denominator the
+> **billing-tab order meter** renders — so until then a Pro seller reads "200
+> orders/mo" on `/pricing` but "N of 500" in Settings → Billing. Both Pro (500→200)
+> and Scale (2,000→400) diverge; `86eye2ccu` must drop both. Annual billing is hidden
+> on the page until recurring billing (`86eyb6z4r`) ships. See
+> [`pricing.md`](./pricing.md).
 
 ## `PaymentProvider` seam
 
