@@ -14,8 +14,15 @@ produces no failing test and no error in the logs. This doc makes the check expl
 
 ## Policy
 
-1. **`pnpm audit --prod` is the gate.** `--prod` matters: it scopes to what can actually
+1. **`pnpm audit --prod` is the check.** `--prod` matters: it scopes to what can actually
    reach production. Dev-only tooling advisories are real but a different risk class.
+   It is **run by hand** — at the monthly pass below, and on any PR that touches
+   `package.json`. It is deliberately **not** in the CI gate yet: the prod tree currently
+   carries 1 critical and 31 high (all transitive, see posture below), so a blocking step
+   would fail every build from day one, and a non-blocking one is a warning nobody reads.
+   Wiring it in properly means first clearing or explicitly allow-listing today's findings,
+   then failing on anything new — its own ticket, and the reason the `shadcn` cleanup below
+   is the highest-value prerequisite.
 2. **Critical and high advisories in runtime dependencies are fixed on sight** — not
    scheduled, not batched into a quarterly upgrade.
 3. **Monthly bump pass.** One reviewed PR per month for routine drift. Without a cadence,
