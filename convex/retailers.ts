@@ -812,6 +812,31 @@ export const getMyRetailer = query({
 });
 
 /**
+ * Minimal plan read for the public `/pricing` page's plan-aware tier CTA — just
+ * the three enum bits it needs, without `getMyRetailer`'s heavy payload (signed
+ * logo/cover/QR storage URLs, usage row, opt-out lookup) held open as a live
+ * subscription on a marketing route. Identity-gated; `null` for an
+ * unauthenticated caller or a user with no store. Fail-open comped mirrors
+ * `resolveAccess`. See `src/lib/pricing-cta.ts`.
+ */
+export const getMyPlan = query({
+	args: {},
+	handler: async (
+		ctx,
+	): Promise<Pick<AccessState, "plan" | "status" | "comped"> | null> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) return null;
+		const retailer = await ctx.db
+			.query("retailers")
+			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+			.first();
+		if (!retailer) return null;
+		const access = resolveAccess(await loadSubscription(ctx, retailer._id));
+		return { plan: access.plan, status: access.status, comped: access.comped };
+	},
+});
+
+/**
  * Admin act-as read: returns THAT store's dashboard payload (with
  * `actingAsAdmin: true` so the "Acting as {store}" banner renders) instead of the
  * caller's own — the single read powering white-glove onboarding. Admin-only and

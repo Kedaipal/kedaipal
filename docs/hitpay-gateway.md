@@ -39,8 +39,19 @@ nothing here gets rebuilt.
    (`PLAN_FEATURES.onlinePayments`); pause/disconnect never are, and
    pause keeps the keys so resuming is one tap. The card links the
    **print-ready vendor guide** `/guides/hitpay-setup.html` (86eyjmhby,
-   Lalamove-guide precedent): sign-up → KYC (SSM) → enable MY methods →
-   copy key + salt → connect → RM1 test → **cancel the test order**. That
+   Lalamove-guide precedent — real embedded screenshots, every claim checked
+   against HitPay's live site + docs Aug 2026): sign-up at
+   `dashboard.hit-pay.com/register` → KYC (SSM profile + IC + **selfie
+   match**; no path exists for an unregistered seller) → methods (**DuitNow
+   auto-activates** for verified MY merchants; FPX/cards manual under the
+   sidebar's **Payment Methods**) → copy **API Key + Salt** from the
+   sidebar's **API Keys** → connect → small real test → **cancel the test
+   order**. Two facts the first draft got wrong and that change what we tell
+   sellers: **HitPay cannot refund DuitNow at all** (their docs, verbatim —
+   and DuitNow is the rail most MY buyers use, so the guide's test step now
+   makes the seller choose a refundable method or accept the loss), and
+   payouts are **T+2 calendar days for DuitNow/e-wallets, T+1 business day
+   for cards and FPX, minimum RM5** (not the "T+2/T+3" we'd printed). That
    last step is load-bearing, not tidiness: the webhook acts only on
    `status === "completed"`, so a HitPay refund is acked and ignored and
    the order stays `received` forever — phantom collected revenue in
