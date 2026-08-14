@@ -14,9 +14,23 @@ import { PricingTeaser } from "../components/landing/pricing-teaser";
 import { ProblemStrip } from "../components/landing/problem-strip";
 import { RealSellers } from "../components/landing/real-sellers";
 
-const SEO_TITLE = "Kedaipal — WhatsApp Order Hub for Home Sellers in Malaysia";
+/**
+ * "Home sellers" was the pre-Jul-2026 ICP. The feature-grounded cohort is a
+ * behaviour, not a venue — multi-outlet stalls, central kitchens and service
+ * shops all match it and none of them sell from home. Keep this and the
+ * Organization description below on the pattern, never on a venue or vertical.
+ */
+const SEO_TITLE = "Kedaipal — WhatsApp Order Hub for Malaysian Sellers";
+/**
+ * Mirrors the hero: the two pains, then the promise. Kept at ~145 chars — Google
+ * truncates around 155-160, and the old copy ran to 167, so "no Meta setup" (the
+ * structural differentiator vs WATI/SleekFlow/EasyStore) was being cut off in
+ * SERP exactly where it does the most work. "order, job and booking" is the same
+ * vocabulary breadth as `hero_subhead`, so a service or campsite seller
+ * recognises themselves in the snippet.
+ */
 const SEO_DESC =
-	"Stop losing orders. Stop chasing payments. Every order and payment on one dashboard, through the WhatsApp your customers already use. 14-day free trial, no Meta setup.";
+	"Stop losing orders. Stop chasing payments. Every order, job and booking — and every payment — in one dashboard. 14-day free trial, no Meta setup.";
 const SITE_URL = "https://kedaipal.com";
 const OG_IMAGE = `${SITE_URL}/og-image.png`;
 const LOGO_URL = `${SITE_URL}/android-chrome-512x512.png`;
@@ -34,7 +48,7 @@ const jsonLd = [
 		url: SITE_URL,
 		logo: LOGO_URL,
 		description:
-			"B2B SaaS order hub for home sellers. Stop losing orders buried in WhatsApp — real storefront, real order pipeline, no Meta setup needed.",
+			"B2B SaaS order hub for Malaysian sellers who take made-to-order, dated and booked work in WhatsApp — bakers, frozen-food sellers, market stalls, service shops and campsites. Real storefront, real order pipeline, no Meta setup needed.",
 	},
 	{
 		"@context": "https://schema.org",

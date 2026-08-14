@@ -151,6 +151,51 @@ free-processing word.
 A compact repeat lives in the footer (`PaymentStripCompact`), same array,
 marks only.
 
+### Where the marks come from, and the raster trap
+
+Every mark under `public/img/payment/` comes from **Shopify's MIT-licensed
+`payment_icons` set**, via HitPay's fork (`hit-pay/payment_icons`) — the same
+source the Settings chips already used. Take marks from there rather than from a
+search result: the set is drawn on one 38×24 artboard, which is what makes a
+single `CARD_MARK` height normalise the row instead of producing the ransom-note
+effect the brand rules warn about.
+
+**The recurring defect is a raster wearing an `.svg` extension.** Several
+entries upstream are a base64 PNG wrapped in an `<svg>` shell. ShopeePay was
+already documented as a wordmark chip for this reason — and auditing the rest
+(14 Aug 2026) found **`paynow.svg` had the same defect and was already wired
+into the config with a `src`**, sitting behind `visible: false` where nothing
+rendered it. Flipping that one word would have shipped a raster onto the
+landing. PayNow is now demoted to a chip; the file stays on disk because the
+Settings card still points at it.
+
+So the rule is now a test, not tribal knowledge: `payment-methods.test.ts`
+parses **every** referenced file (including invisible rows — an invisible row is
+one word away from rendering) and fails on an `<image>` tag or a `data:image/*`
+payload. Verified red against the real PayNow file, green after.
+
+Promoted from chip to real mark in the same pass: **Apple Pay, Google Pay,
+ShopeePay** (genuine vector replacing the shell) **and Atome**, plus `src` wired
+for **WeChat Pay** and **QRIS** so the deferred cross-border rows are a
+one-word flip. Apple's mark is the exception the `CARD_MARK` note anticipates —
+a 165.521×105.965 artboard — but its *ratio* matches the card artboard to within
+a pixel at `h-7`, and ratio is what `w-auto` keys on, so it correctly uses
+`CARD_MARK` anyway.
+
+Still chips, each for a stated reason:
+
+- **MayBank QRPay, PromptPay** — the only upstream vector is a base64 PNG shell.
+- **SPayLater, GrabPay PayLater** — no mark in the set at all; lender brands
+  rather than rails, and neither publishes a redistributable vector.
+- **Alipay+** — the set ships `alipay.svg`, but Alipay+ is the cross-border
+  *acquiring network*, not the Alipay wallet. Using the wallet's mark would name
+  the wrong company, which is worse than a chip.
+
+Note this reverses the earlier documented call that Apple Pay and Google Pay
+must stay wordmarks because we held no redistributable vector. We do now, and it
+is used as-published — never recoloured or redrawn, which is what both brand
+guidelines actually require.
+
 ## Copy corrections that rode along
 
 The catalogs still described a product from three months ago:
@@ -163,8 +208,54 @@ The catalogs still described a product from three months ago:
   (`docs/payment-handshake.md`).
 - `bento_delivery_body` and `how_step_2_body` didn't mention live Lalamove
   rider quotes; `how_step_3_body` still ended at "files it in your inbox".
-- `hero_subhead` was F&B-only. Broadened to the Jul 2026 feature-grounded ICP
-  (cake decorators, frozen food, **service bookings**, market stalls).
+- `pricingpage_faq_a3` answered "How does cold-chain Lalamove integration
+  work?" with "ETA: Q4 2026" while this same page now lists **Lalamove
+  delivery** as a shipped Pro row and the teaser leads Pro with "Lalamove
+  rider booking". Rider booking shipped in `86eyb5hrf`. The question was also
+  built on a premise that never shipped in that shape: there is no cold-chain
+  *van* or *flag* anywhere in the Lalamove code (`LalamoveVehicleType` is
+  `MOTORCYCLE | CAR`) and Lalamove is intra-city — frozen/outstation is served
+  by the **weight/zone courier rate cards** (`86eyeea1n`, all-tier) plus manual
+  consignment numbers (`86eyehvk4`). So the Q+A pair was rewritten in all three
+  locales to describe both rails as they actually exist, rather than
+  re-dating a roadmap item that was superseded, not delayed.
+- `hero_subhead` was F&B-only. Broadened to the Jul 2026 feature-grounded ICP —
+  then re-grounded again to lead with the **pattern** rather than a vertical
+  list, because every post-Jul strategy doc says to: the ICP sentence of record
+  is *"seller who takes made-to-order or dated/booking orders, closes them + gets
+  paid manually in WhatsApp DM, and sells both online and at a physical
+  counter"*, and the YC draft puts it as *"the real segment is behavioral, not
+  vertical."* The subhead now opens on that behaviour, names the verticals as
+  proof it travels, and adds **"sell both online and at a counter"** — half the
+  pattern, previously missing from the hero entirely.
+- **"Service bookings" was an over-claim and is now "service jobs"**
+  (`hero_subhead`, `hero_marquee`, and `proof_card_4_heading`, which read
+  "Bookings, not just products"). Bookings are spec'd, not built: the 7 Aug
+  codebase audit found *"zero concept"* of slot/calendar booking —
+  `orders.fulfilmentDate` is a date with no capacity or slots, "booking" in the
+  schema means Lalamove rider dispatch, and there is nowhere for a seller to
+  declare themselves a service business. The vertical's build gate fired on
+  Sengloh/THG's payment (6 Aug, `86eyj70z1` / `86eyhwb03` / `86eyj7102`), so
+  this copy can come back — **when the feature does**. What is shipped and
+  therefore claimable today is dated made-to-order *jobs*: fulfilment date +
+  time, min-notice, mockup approval, custom order stages, and collection
+  (`86eyg0n8e`). Note the founding member behind the service cards is
+  **Bearcamp = outdoor-gear laundry** (tent/sleeping-bag wash, waterproofing,
+  repair) — *not* campsite booking, which is Sengloh; two sales docs
+  (`kedaipal-pitch-cheat-sheet`, the A5 brochure) have them crossed and should
+  be corrected at source.
+- `SEO_TITLE` and the Organization JSON-LD description both said **"home
+  sellers"**, the pre-Jul ICP. Multi-outlet stalls, central kitchens and
+  service shops all match the cohort and none of them sell from home — and
+  `SEO_TITLE` is the line Google renders. Both now name the behaviour. The
+  remaining "home seller" mentions (`pricingpage_tier_pro_tagline`,
+  `pricingpage_testimonial_attrib`) are lower-stakes; the testimonial one is an
+  explicit placeholder awaiting the first Founding 10 quote.
+- The **zh `hero_marquee` never got re-seeded** with the real cohort when EN and
+  MS did — it still listed headscarves, skincare, handicrafts, electronics and
+  home decor from the pre-ICP era. Locale *parity* tests only assert that keys
+  exist in every catalog, so a stale translation of a live key passes silently.
+  Now mirrors EN.
 - Tier taglines now carry their order allowance (100 / 200 / **400**). Scale's
   card line was deliberately number-free after the flat multi-outlet
   repositioning (`86eyb9zwt`) while the comparison table already printed 400 —

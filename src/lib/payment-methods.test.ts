@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -43,6 +43,28 @@ describe("landing payment-method catalogue", () => {
 				broken.push(`${method.id}: missing ${method.src}`);
 		}
 		expect(broken, broken.join("\n")).toEqual([]);
+	});
+
+	it("rejects a raster wearing an .svg extension", () => {
+		// The recurring defect in this catalogue: several upstream "SVGs" are a
+		// base64 PNG inside an <svg> shell. It passes the endsWith(".svg") check
+		// above, renders blurry at 2×, and defeats the whole reason the landing
+		// bans rasters. ShopeePay shipped as a wordmark for exactly this reason,
+		// and PayNow sat mis-configured behind `visible: false` — so the rule is
+		// checked here rather than trusted to whoever adds the next rail.
+		//
+		// Deliberately scans EVERY row with a `src`, not just visible ones: an
+		// invisible row is one word away from rendering.
+		const rasters: string[] = [];
+		for (const method of PAYMENT_METHODS) {
+			if (!method.src) continue;
+			const path = join(PUBLIC_DIR, method.src);
+			if (!existsSync(path)) continue; // reported by the test above
+			const svg = readFileSync(path, "utf8");
+			if (/<image\b/i.test(svg) || /data:image\/(png|jpe?g|gif|webp);base64/i.test(svg))
+				rasters.push(`${method.id}: ${method.src} embeds a raster`);
+		}
+		expect(rasters, rasters.join("\n")).toEqual([]);
 	});
 
 	it("normalises optical size wherever a mark renders", () => {
