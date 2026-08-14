@@ -58,7 +58,7 @@
 	"bento_delivery_title": "Delivery & pickup, your rules",
 	"bento_delivery_body": "Free, flat-fee or distance-band delivery — or live Lalamove rider quotes at checkout with one-tap booking. Multiple pickup points, each with its own fee.",
 	"bento_delivery_chip_free": "Free above RM 100",
-	"bento_delivery_chip_band": "0–5 km · RM 8",
+	"bento_delivery_chip_rider": "Rider quote · RM 12",
 	"bento_inbox_title": "Order inbox + customer memory",
 	"bento_inbox_body": "Search, filter, bulk-update every order. One tap on a customer shows their full history, spend and your private notes — auto-captured from WhatsApp. No more “wait, who is this again?”",
 	"bento_inbox_stats": "12 orders · RM 1,240 lifetime",

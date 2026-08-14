@@ -239,7 +239,7 @@ export function FeatureGrid() {
 									{m.bento_delivery_chip_free()}
 								</span>
 								<span className="rounded-full bg-muted px-3 py-1.5 text-xs font-semibold text-foreground/80">
-									{m.bento_delivery_chip_band()}
+									{m.bento_delivery_chip_rider()}
 								</span>
 							</div>
 						</CardShell>

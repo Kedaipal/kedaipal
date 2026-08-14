@@ -208,6 +208,18 @@ The catalogs still described a product from three months ago:
   (`docs/payment-handshake.md`).
 - `bento_delivery_body` and `how_step_2_body` didn't mention live Lalamove
   rider quotes; `how_step_3_body` still ended at "files it in your inbox".
+- **The delivery bento card named Lalamove in a sentence but showed neither of
+  its two skimmable chips.** `bento_delivery_body` says "live Lalamove rider
+  quotes at checkout with one-tap booking", but the chips underneath it read
+  "Free above RM 100" and "0–5 km · RM 8" — flat-fee and radius-band, the two
+  modes every WhatsApp-order competitor already has. A reader who skims chips
+  instead of paragraphs (which is the point of putting chips there — see the
+  handshake card's order-confirm mock, the counter card's QR + pairing code,
+  every other card in this grid) would never learn the feature exists.
+  `bento_delivery_chip_band` is now `bento_delivery_chip_rider` ("Rider quote ·
+  RM 12"), replacing the radius chip rather than adding a third — two chips
+  reads as "here's the range" (set-your-own vs. real-time), and the radius case
+  sits between them without needing its own pill.
 - `pricingpage_faq_a3` answered "How does cold-chain Lalamove integration
   work?" with "ETA: Q4 2026" while this same page now lists **Lalamove
   delivery** as a shipped Pro row and the teaser leads Pro with "Lalamove
