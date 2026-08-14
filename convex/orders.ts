@@ -47,7 +47,7 @@ import {
 	minOrderValueShortfall,
 	minQuantityMessage,
 } from "./lib/minOrderRules";
-import { orderBucket } from "./lib/orderBuckets";
+import { isUnseenOrder, orderBucket } from "./lib/orderBuckets";
 import { type CsvOrder, ordersToCsv } from "./lib/orderCsv";
 import {
 	type ManualReminderBlock,
@@ -1186,14 +1186,29 @@ export const create = mutation({
 });
 
 /**
- * Returns the count of pending and confirmed orders for the retailer's dashboard tab indicators.
+ * Counts for the retailer's dashboard chrome.
+ *
+ * `newOrders` is what the nav badge renders: the same "New" definition the
+ * inbox chip and the Home tile use (`orderBucket` → "new") — `pending` plus a
+ * confirmation-push order the seller hasn't opened yet. It's a NOTIFICATION
+ * count, so working through the orders drives it to zero; `pending + confirmed`
+ * (what the badge used to show) counts orders the seller is actively working
+ * and therefore only ever climbs. See docs/order-inbox.md.
+ *
+ * `pending`/`confirmed` stay on the payload as raw status counts — the order
+ * toasts (src/hooks/useOrderToastNotifications.ts) announce on their deltas.
  */
 export const countActionable = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (
 		ctx,
 		{ retailerId },
-	): Promise<{ pending: number; confirmed: number; mockupPending: number }> => {
+	): Promise<{
+		newOrders: number;
+		pending: number;
+		confirmed: number;
+		mockupPending: number;
+	}> => {
 		await requireRetailerAccess(ctx, retailerId);
 
 		const [pendingRows, confirmedRows, mockupRows] = await Promise.all([
@@ -1225,6 +1240,9 @@ export const countActionable = query({
 		]);
 
 		return {
+			// Unseen push-path orders are a subset of `confirmedRows`, already in
+			// memory — no extra read to add the badge's count.
+			newOrders: pendingRows.length + confirmedRows.filter(isUnseenOrder).length,
 			pending: pendingRows.length,
 			confirmed: confirmedRows.length,
 			mockupPending: mockupRows.length,

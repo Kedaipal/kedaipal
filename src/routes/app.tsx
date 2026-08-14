@@ -53,7 +53,9 @@ function AppShell() {
 		api.orders.countActionable,
 		retailer ? { retailerId: retailer._id } : "skip",
 	);
-	const actionableCount = (counts?.pending ?? 0) + (counts?.confirmed ?? 0);
+	// The nav badge counts UNSEEN orders (the inbox's "New" bucket), not the whole
+	// working pipeline — see orders.countActionable for why.
+	const newOrdersCount = counts?.newOrders ?? 0;
 	const isAdminResult = useQuery(api.billing.amIAdmin);
 	const isAdmin = isAdminResult ?? false;
 	// A Kedaipal admin on their OWN store runs the app for free (never soft-locked
@@ -135,7 +137,7 @@ function AppShell() {
 		<div className="flex min-h-dvh">
 			<Sidebar
 				retailer={retailer}
-				actionableCount={actionableCount}
+				newOrdersCount={newOrdersCount}
 				isAdmin={isAdmin}
 				adminBadge={adminOwnStore}
 			/>
@@ -178,7 +180,7 @@ function AppShell() {
 					<OrderNotificationsBridge retailerId={retailer?._id} />
 				</main>
 				<BottomNav
-					actionableCount={actionableCount}
+					newOrdersCount={newOrdersCount}
 					// Admin tabs when there's no seller store to run, OR whenever an admin
 					// is inside the admin area — so every admin page is reachable on mobile.
 					adminNav={!retailer || (isAdmin && onAdminRoute)}
