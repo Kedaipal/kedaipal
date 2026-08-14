@@ -7,7 +7,7 @@ import { buildWaContactLink } from "../../lib/contact";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { FadeIn } from "./fade-in";
-import { ctaPillClass, Sticker } from "./landing-ui";
+import { Sticker } from "./landing-ui";
 
 const TOTAL_SPOTS = 10;
 
@@ -114,12 +114,15 @@ export function FoundingTen() {
 
 						<div className="relative mt-10 flex justify-center">
 							{/* Applying for a founding spot is a conversation, not a signup —
-							    open a WhatsApp chat with a prefilled message. */}
+							    open a WhatsApp chat with a prefilled message. A text link,
+							    not a pill: "Start 14-day free trial" is the page's only
+							    primary button (86eye3p6z §C), and a founding spot is a
+							    different, heavier commitment that shouldn't compete with it. */}
 							<a
 								href={buildWaContactLink(m.founding_wa_message(), supportWa)}
 								target="_blank"
 								rel="noopener noreferrer"
-								className={ctaPillClass("accent")}
+								className="group inline-flex min-h-11 items-center gap-1.5 text-[15px] font-semibold text-accent underline-offset-4 hover:underline"
 							>
 								{m.founding_cta()}
 								<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />

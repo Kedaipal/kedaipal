@@ -1,5 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { CounterCheckout } from "../components/landing/counter-checkout";
 import { Faq } from "../components/landing/faq";
 import { FeatureGrid } from "../components/landing/feature-grid";
 import { FinalCta } from "../components/landing/final-cta";
@@ -7,15 +6,31 @@ import { Footer } from "../components/landing/footer";
 import { FoundingTen } from "../components/landing/founding-ten";
 import { Hero } from "../components/landing/hero";
 import { HowItWorks } from "../components/landing/how-it-works";
+import { MoneyMath } from "../components/landing/money-math";
 import { Nav } from "../components/landing/nav";
 import { PaymentHandshake } from "../components/landing/payment-handshake";
+import { PaymentMethods } from "../components/landing/payment-methods";
 import { PricingTeaser } from "../components/landing/pricing-teaser";
 import { ProblemStrip } from "../components/landing/problem-strip";
 import { RealSellers } from "../components/landing/real-sellers";
 
-const SEO_TITLE = "Kedaipal — WhatsApp Order Hub for Home Sellers in Malaysia";
+/**
+ * "Home sellers" was the pre-Jul-2026 ICP. The feature-grounded cohort is a
+ * behaviour, not a venue — multi-outlet stalls, central kitchens and service
+ * shops all match it and none of them sell from home. Keep this and the
+ * Organization description below on the pattern, never on a venue or vertical.
+ */
+const SEO_TITLE = "Kedaipal — WhatsApp Order Hub for Malaysian Sellers";
+/**
+ * Mirrors the hero: the two pains, then the promise. Kept at ~145 chars — Google
+ * truncates around 155-160, and the old copy ran to 167, so "no Meta setup" (the
+ * structural differentiator vs WATI/SleekFlow/EasyStore) was being cut off in
+ * SERP exactly where it does the most work. "order, job and booking" is the same
+ * vocabulary breadth as `hero_subhead`, so a service or campsite seller
+ * recognises themselves in the snippet.
+ */
 const SEO_DESC =
-	"Stop losing orders. Stop chasing payments. Every order and payment on one dashboard, through the WhatsApp your customers already use. 14-day free trial, no Meta setup.";
+	"Stop losing orders. Stop chasing payments. Every order, job and booking — and every payment — in one dashboard. 14-day free trial, no Meta setup.";
 const SITE_URL = "https://kedaipal.com";
 const OG_IMAGE = `${SITE_URL}/og-image.png`;
 const LOGO_URL = `${SITE_URL}/android-chrome-512x512.png`;
@@ -33,7 +48,7 @@ const jsonLd = [
 		url: SITE_URL,
 		logo: LOGO_URL,
 		description:
-			"B2B SaaS order hub for home sellers. Stop losing orders buried in WhatsApp — real storefront, real order pipeline, no Meta setup needed.",
+			"B2B SaaS order hub for Malaysian sellers who take made-to-order, dated and booked work in WhatsApp — bakers, frozen-food sellers, market stalls, service shops and campsites. Real storefront, real order pipeline, no Meta setup needed.",
 	},
 	{
 		"@context": "https://schema.org",
@@ -70,7 +85,7 @@ const jsonLd = [
 				name: "How are payments handled?",
 				acceptedAnswer: {
 					"@type": "Answer",
-					text: "Your customers pay you directly — bank transfer, DuitNow QR, e-wallet or cash. Kedaipal sends your payment details with every confirmation, tracks the “I've paid” handshake, and issues the receipt. Kedaipal never touches your order money. Online payment at checkout is coming next.",
+					text: "Two ways. Connect your own HitPay account and buyers tap Pay now — DuitNow QR, FPX, cards, e-wallets — with the money settling straight to you and the order marking itself paid. Or take bank transfer / cash: Kedaipal sends your payment details, tracks the “I've paid” handshake, and issues the receipt. Kedaipal never touches your order money.",
 				},
 			},
 			{
@@ -151,9 +166,13 @@ function Landing() {
 			<ProblemStrip />
 			<PaymentHandshake />
 			<HowItWorks />
-			<CounterCheckout />
 			<FeatureGrid />
 			<FoundingTen />
+			{/* Cost context, then the rails, then the price — a visitor must know
+			    what a marketplace already takes and how their customers will
+			    actually pay BEFORE they meet RM79/149/299 (ClickUp 86eye3p6z). */}
+			<MoneyMath />
+			<PaymentMethods />
 			<PricingTeaser />
 			<Faq />
 			<FinalCta />

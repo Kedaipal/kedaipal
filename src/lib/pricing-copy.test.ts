@@ -9,8 +9,8 @@ import zh from "../../messages/zh.json";
  *   1. Scale is the flat multi-outlet tier — reseller-band language is dead and
  *      must not creep back in any locale.
  *   2. No tier ever advertises "Unlimited" — every allowance is finite.
- *   3. The decided order allowances (Starter 100 / Pro 200 / Scale number-free)
- *      hold. Note these are display numbers from the caps ticket 86eye2ccu and
+ *   3. The decided order allowances (Starter 100 / Pro 200 / Scale 400) hold.
+ *      Note these are display numbers from the caps ticket 86eye2ccu and
  *      deliberately lead PLAN_CAPS enforcement, so this asserts the *copy*, not
  *      the backend constant.
  * Key parity across locales is covered separately by i18n.test.ts.
@@ -57,15 +57,17 @@ describe("pricing copy stays aligned with the flat multi-outlet Scale", () => {
 		expect(offenders, offenders.join("\n")).toEqual([]);
 	});
 
-	it("advertises the decided order allowances (100 / 200 / number-free Scale)", () => {
+	it("advertises the decided order allowances (100 / 200 / 400)", () => {
 		for (const [locale, catalog] of catalogs) {
 			expect(catalog.pricingpage_ordercap_starter, locale).toContain("100");
 			expect(catalog.pricingpage_ordercap_pro, locale).toContain("200");
-			// The Scale tier-CARD allowance line is number-free fit copy (the old
-			// "Unlimited"/"2,000" is gone). The comparison-table cell still prints a
-			// concrete "400" — that lives as a literal in pricing.tsx, not here.
+			// Scale's card allowance was deliberately number-free after the flat
+			// multi-outlet repositioning (86eyb9zwt), while the comparison table
+			// already printed a concrete 400 — two answers to the same question on
+			// one page. The funnel redesign (86eye3p6z) settles it on 400
+			// everywhere, so the card line now carries the number too.
 			expect(catalog.pricingpage_ordercap_pro, locale).not.toContain("500");
-			expect(catalog.pricingpage_ordercap_scale, locale).not.toMatch(/\d/);
+			expect(catalog.pricingpage_ordercap_scale, locale).toContain("400");
 		}
 	});
 });

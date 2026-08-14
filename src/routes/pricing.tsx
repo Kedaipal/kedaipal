@@ -10,8 +10,10 @@ import { Footer } from "../components/landing/footer";
 import {
 	ctaPillClass,
 	Eyebrow,
+	GuaranteeLine,
 	Sticker,
 } from "../components/landing/landing-ui";
+import { MoneyMathRow } from "../components/landing/money-math";
 import { Nav } from "../components/landing/nav";
 import { Button } from "../components/ui/button";
 import { useSupportWaNumber } from "../hooks/useSupportWaNumber";
@@ -27,6 +29,8 @@ const SEO_DESC =
 const SITE_URL = "https://kedaipal.com";
 const PAGE_URL = `${SITE_URL}/pricing`;
 const OG_IMAGE = `${SITE_URL}/og-image.png`;
+
+const TOTAL_FOUNDING_SPOTS = 10;
 
 // Annual billing is hidden until tokenised recurring ships (HitPay recurring
 // 86eyb6z4r). There are no recurring rails behind an annual price today, and a
@@ -193,6 +197,14 @@ function useFeatures(): Feature[] {
 			scale: true,
 		},
 		{
+			// Shipped (HitPay gateway, 86eyb6z3a) — BYO seller accounts, Pro-gated
+			// via PLAN_FEATURES.onlinePayments.
+			label: m.pricingpage_feat_online_payments(),
+			starter: false,
+			pro: true,
+			scale: true,
+		},
+		{
 			label: m.pricingpage_feat_inventory(),
 			starter: true,
 			pro: true,
@@ -201,6 +213,13 @@ function useFeatures(): Feature[] {
 		{
 			label: m.pricingpage_feat_variants(),
 			starter: true,
+			pro: true,
+			scale: true,
+		},
+		{
+			// Shipped (86ey81n63) — PLAN_FEATURES.categories.
+			label: m.pricingpage_feat_categories(),
+			starter: false,
 			pro: true,
 			scale: true,
 		},
@@ -240,11 +259,34 @@ function useFeatures(): Feature[] {
 			scale: true,
 		},
 		{
+			// Shipped and un-gated (payment reminder, 86ey570am): the nudge protects
+			// the seller's cash on every plan, so it carries no PLAN_FEATURES entry.
+			// It sat here as a Pro-only "Coming soon" long after it went live.
 			label: m.pricingpage_feat_reminders(),
+			starter: true,
+			pro: true,
+			scale: true,
+		},
+		{
+			// Shipped (86extzdr8) — PLAN_FEATURES.radiusDelivery.
+			label: m.pricingpage_feat_radius(),
 			starter: false,
 			pro: true,
 			scale: true,
-			comingSoon: true,
+		},
+		{
+			// Shipped (86eyb5hrf) — PLAN_FEATURES.delivery. BYO Lalamove keys.
+			label: m.pricingpage_feat_lalamove(),
+			starter: false,
+			pro: true,
+			scale: true,
+		},
+		{
+			// Shipped (86eyhw9zy) — PLAN_FEATURES.waOrderAlerts.
+			label: m.pricingpage_feat_wa_alerts(),
+			starter: false,
+			pro: true,
+			scale: true,
 		},
 		{
 			label: m.pricingpage_feat_broadcasts(),
@@ -312,10 +354,13 @@ function TierCard({
 	isSignedIn,
 	subscription,
 	pending,
+	foundingRemaining,
 }: {
 	tier: Tier;
 	cycle: Cycle;
 	isSignedIn: boolean;
+	/** Live founding-spot count — never a hardcoded number (86eye3p6z §D). */
+	foundingRemaining: number;
 	/** The signed-in seller's plan/status, or null when signed out / not yet
 	 * resolved (loading, or a storeless admin) — the CTA falls back safely then. */
 	subscription: SubscriptionView | null;
@@ -418,7 +463,7 @@ function TierCard({
 								: "text-muted-foreground",
 						)}
 					>
-						{m.pricingpage_founding_detail({ spots: 10 })}
+						{m.pricingpage_founding_detail({ spots: foundingRemaining })}
 					</p>
 				</div>
 			)}
@@ -526,6 +571,13 @@ function TierCard({
 						)}
 					</Button>
 				)}
+				{/* The guarantee rides the tier a visitor is most likely to pick,
+				    directly under its CTA (86eye3p6z §B) — and only while that CTA is
+				    still an invitation. A seller already on this plan has been
+				    onboarded; promising them a first order would read as a bug. */}
+				{tier.popular && cta !== "coming_soon" && cta !== "current" ? (
+					<GuaranteeLine className="mt-2.5 text-[11.5px] leading-relaxed text-primary-foreground/65" />
+				) : null}
 			</div>
 		</div>
 	);
@@ -547,6 +599,13 @@ function PricingPage() {
 	// the label through trial → dashboard → final on a single refresh.
 	const ctaPending =
 		!isLoaded || (isSignedIn === true && planState === undefined);
+	// Live founding-spot count — the same public query the landing's Founding 10
+	// section reads. Scarcity that looks approximate reads as fake, so this page
+	// must never print a hardcoded number (86eye3p6z §D). All-open is the honest
+	// fallback while loading / on SSR: never a fake "taken".
+	const foundingRemaining =
+		useQuery(convexQuery(api.foundingMembers.getSpotsRemaining, {})).data ??
+		TOTAL_FOUNDING_SPOTS;
 	const tiers = useTiers();
 	const features = useFeatures();
 	const faqs = useFaqs();
@@ -616,6 +675,11 @@ function PricingPage() {
 				</div>
 			</section>
 
+			{/* Cost context before the numbers — the compact sibling of the landing's
+			    money-math block, so RM79/149/299 arrive next to what a marketplace
+			    already takes (86eye3p6z §A). */}
+			<MoneyMathRow />
+
 			{/* Tier cards */}
 			<section>
 				<div className="mx-auto max-w-6xl px-5 py-16 md:px-8">
@@ -629,6 +693,7 @@ function PricingPage() {
 									isSignedIn={isSignedIn ?? false}
 									subscription={subscription}
 									pending={ctaPending}
+									foundingRemaining={foundingRemaining}
 								/>
 							))}
 						</div>
@@ -661,16 +726,22 @@ function PricingPage() {
 								<p className="mt-2 text-sm leading-relaxed text-cta-mesh-foreground/65">
 									{m.pricingpage_banner_body()}{" "}
 									<span className="font-semibold text-cta-mesh-foreground">
-										{m.pricingpage_banner_spots()}
+										{m.founding_remaining({
+											remaining: foundingRemaining,
+											total: TOTAL_FOUNDING_SPOTS,
+										})}
 									</span>
 								</p>
 							</div>
 							<div className="relative shrink-0">
+								{/* Text link, not a pill — the tier cards and the closing CTA
+								    already carry this page's buttons, and a founding spot is a
+								    conversation rather than a checkout (86eye3p6z §C). */}
 								<a
 									href={buildWaContactLink(m.founding_wa_message(), supportWa)}
 									target="_blank"
 									rel="noopener noreferrer"
-									className={ctaPillClass("accent")}
+									className="group inline-flex min-h-11 items-center gap-1.5 text-[15px] font-semibold text-accent underline-offset-4 hover:underline"
 								>
 									{m.pricingpage_banner_cta()}{" "}
 									<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
@@ -820,7 +891,7 @@ function PricingPage() {
 						<p className="mx-auto mt-4 max-w-lg text-base text-muted-foreground">
 							{m.pricingpage_cta_sub()}
 						</p>
-						<div className="mt-8 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
+						<div className="mt-8 flex flex-col items-center gap-3.5">
 							<Link
 								to="/sign-up/$"
 								params={{ _splat: "" }}
@@ -829,7 +900,12 @@ function PricingPage() {
 								{m.pricingpage_cta_trial_btn()}{" "}
 								<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
 							</Link>
-							<Link to="/" hash="how" className={ctaPillClass("outline")}>
+							<GuaranteeLine className="max-w-md text-[13px] leading-relaxed text-muted-foreground" />
+							<Link
+								to="/"
+								hash="how"
+								className="text-sm font-medium text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
+							>
 								{m.pricingpage_cta_how()}
 							</Link>
 						</div>

@@ -3,6 +3,7 @@ import { Instagram, Mail, Music2 } from "lucide-react";
 import { LEGAL_CONTACT_EMAIL } from "../../lib/legal";
 import { m } from "../../paraglide/messages";
 import { AppImage } from "../ui/app-image";
+import { PaymentStripCompact } from "./payment-methods";
 
 export function Footer() {
 	const contactLinkClass =
@@ -81,7 +82,14 @@ export function Footer() {
 						</nav>
 					</div>
 				</div>
-				<div className="mt-10 border-t border-white/10 pt-6 text-xs text-primary-foreground/50">
+				{/* Compact repeat of the payment strip (86eye3p6z §G) — the rails are
+				    a trust signal wherever a visitor stops reading, and the footer is
+				    where the "can my customers actually pay me?" question surfaces
+				    last. Same config array as the full section on `/`. */}
+				<div className="mt-10 border-t border-white/10 pt-6">
+					<PaymentStripCompact />
+				</div>
+				<div className="mt-6 border-t border-white/10 pt-6 text-xs text-primary-foreground/50">
 					<p>{m.footer_copyright({ year: new Date().getFullYear() })}</p>
 				</div>
 			</div>

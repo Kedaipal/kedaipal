@@ -1,12 +1,10 @@
 import { useAuth } from "@clerk/tanstack-react-start";
 import { Link } from "@tanstack/react-router";
 import { motion, useReducedMotion } from "framer-motion";
-import { ArrowRight, Bell, Check } from "lucide-react";
-import { useState } from "react";
+import { ArrowRight, BellOff, Check } from "lucide-react";
 import { m } from "../../paraglide/messages";
-import { Input } from "../ui/input";
 import { HeroPhone } from "./hero-phone";
-import { ctaPillClass, Marquee, Sticker } from "./landing-ui";
+import { ctaPillClass, GuaranteeLine, Marquee, Sticker } from "./landing-ui";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
@@ -32,43 +30,8 @@ function getMarqueeItems(): string[] {
 		.filter(Boolean);
 }
 
-function SlugClaimForm() {
-	const [slug, setSlug] = useState("");
-	return (
-		<div className="flex flex-col gap-3">
-			<div className="flex h-16 items-center overflow-hidden rounded-full border border-border bg-card shadow-md transition-all duration-200 focus-within:border-accent focus-within:shadow-[0_0_0_4px_hsl(160_84%_39%_/_0.12)]">
-				<span className="select-none whitespace-nowrap pl-5 text-sm font-semibold text-muted-foreground">
-					kedaipal.com/
-				</span>
-				<Input
-					type="text"
-					value={slug}
-					onChange={(e) =>
-						setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
-					}
-					placeholder={m.hero_slug_placeholder()}
-					variant="bare"
-					className="min-w-0 flex-1 py-3 pr-2 text-sm font-semibold placeholder:text-muted-foreground/40"
-				/>
-				<Link
-					to="/sign-up/$"
-					params={{ _splat: slug ? `?store=${slug}` : "" }}
-					className="m-2 flex h-12 shrink-0 items-center gap-1.5 rounded-full bg-accent px-4 text-sm font-bold text-accent-foreground transition-colors hover:bg-accent/90 sm:px-6"
-				>
-					<span className="hidden sm:inline">{m.hero_cta_primary()}</span>
-					<ArrowRight className="size-4" />
-				</Link>
-			</div>
-			<a
-				href="#how"
-				className="inline-flex w-fit items-center gap-1 text-sm font-medium text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
-			>
-				{m.hero_cta_secondary()}
-				<ArrowRight className="size-4" />
-			</a>
-		</div>
-	);
-}
+const secondaryLinkClass =
+	"inline-flex items-center gap-1 text-sm font-medium text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline";
 
 function TrustLine() {
 	const items = m.hero_trust().split("·");
@@ -91,12 +54,10 @@ function FloatingBubble({
 	children,
 	className,
 	delay = 0,
-	float = true,
 }: {
 	children: React.ReactNode;
 	className?: string;
 	delay?: number;
-	float?: boolean;
 }) {
 	const shouldReduceMotion = useReducedMotion();
 	if (shouldReduceMotion) {
@@ -110,7 +71,7 @@ function FloatingBubble({
 			transition={{ duration: 0.55, delay, ease: EASE }}
 		>
 			<motion.div
-				animate={float ? { y: [0, -7, 0] } : undefined}
+				animate={{ y: [0, -7, 0] }}
 				transition={{
 					duration: 4.5,
 					repeat: Infinity,
@@ -143,30 +104,39 @@ function PhoneStage() {
 				</motion.div>
 			)}
 
-			{/* New order sticker */}
+			{/* Missed order — the revenue the buried inbox already cost. */}
 			<FloatingBubble
 				delay={1.15}
-				className="absolute -right-3 top-2 sm:-right-10"
+				className="absolute -right-3 top-2 sm:-right-9"
 			>
-				<Sticker tone="accent" rotate={4} className="text-[11px]">
-					<Bell className="size-3.5" />
-					{m.hero_phone_badge()}
+				<Sticker tone="destructive" rotate={4} className="text-[11px]">
+					<BellOff className="size-3.5" />
+					{m.hero_pain_missed()}
 				</Sticker>
 			</FloatingBubble>
 
-			{/* Paid bubble — WhatsApp green */}
+			{/* The payment chase, in the seller's own words. */}
 			<FloatingBubble
 				delay={1.35}
-				className="absolute -right-4 bottom-16 sm:-right-12"
+				className="absolute -right-4 -bottom-3 sm:-right-12"
 			>
-				<div className="rotate-2 rounded-2xl rounded-tr-sm border border-border bg-[#DCF8C6] px-3 py-2 shadow-lg">
+				<div className="rotate-2 rounded-2xl rounded-tr-sm border border-amber-300 bg-amber-50 px-3 py-2 shadow-lg">
 					<p className="text-[11px] font-bold text-slate-800">
-						{m.hero_bubble_paid_title()}
+						{m.hero_pain_chase()}
 					</p>
-					<p className="mt-0.5 text-[10px] font-semibold text-emerald-700">
-						{m.hero_bubble_paid_sub()}
+					<p className="mt-0.5 text-[10px] font-semibold text-amber-700">
+						{m.hero_pain_chase_sub()}
 					</p>
 				</div>
+			</FloatingBubble>
+
+			<FloatingBubble
+				delay={1.5}
+				className="absolute -left-3 bottom-8 sm:-left-8"
+			>
+				<Sticker tone="destructive" rotate={-3} className="text-[11px]">
+					{m.problem_chat_unread()}
+				</Sticker>
 			</FloatingBubble>
 		</div>
 	);
@@ -208,19 +178,47 @@ export function Hero() {
 						{m.hero_subhead()}
 					</motion.p>
 
-					<motion.div variants={revealUp}>
+					{/* Exactly one primary button on the page (86eye3p6z §C). The old
+					    slug-claim form and the founding-spot pill are now text links in
+					    their own sections, so the visitor is never asked to choose
+					    between three different commitments. */}
+					<motion.div variants={revealUp} className="flex flex-col gap-3">
 						{isSignedIn ? (
-							<div className="flex flex-col gap-3 sm:flex-row">
-								<Link to="/app" className={ctaPillClass("accent")}>
+							<>
+								<Link to="/app" className={`${ctaPillClass("accent")} w-fit`}>
 									{m.nav_go_to_dashboard()}
 									<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
 								</Link>
-								<a href="#how" className={ctaPillClass("outline")}>
+								<a href="#how" className={secondaryLinkClass}>
 									{m.hero_cta_secondary()}
+									<ArrowRight className="size-3.5" />
 								</a>
-							</div>
+							</>
 						) : (
-							<SlugClaimForm />
+							<>
+								<Link
+									to="/sign-up/$"
+									params={{ _splat: "" }}
+									className={`${ctaPillClass("accent")} w-fit`}
+								>
+									{m.final_cta()}
+									<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
+								</Link>
+								<GuaranteeLine className="max-w-md text-[13px] leading-relaxed text-muted-foreground" />
+								<div className="flex flex-wrap gap-x-5 gap-y-2">
+									<Link
+										to="/sign-up/$"
+										params={{ _splat: "" }}
+										className={secondaryLinkClass}
+									>
+										{m.hero_cta_primary()}
+									</Link>
+									<a href="#how" className={secondaryLinkClass}>
+										{m.hero_cta_secondary()}
+										<ArrowRight className="size-3.5" />
+									</a>
+								</div>
+							</>
 						)}
 					</motion.div>
 

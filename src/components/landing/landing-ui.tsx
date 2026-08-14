@@ -1,5 +1,7 @@
+import { ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "../../lib/utils";
+import { m } from "../../paraglide/messages";
 
 /**
  * Shared primitives for the landing page redesign. Everything uses the
@@ -22,6 +24,63 @@ export function ctaPillClass(
 			"border-2 border-border bg-background text-foreground hover:border-foreground/25 hover:bg-muted focus-visible:ring-ring/20",
 	} as const;
 	return cn(base, variants[variant]);
+}
+
+/**
+ * The one answer to the "another dead app" fear — white-glove onboarding,
+ * stated as a promise, directly under the primary CTA (ClickUp 86eye3p6z §B).
+ *
+ * There is exactly ONE author of this sentence (`guarantee_line`) because the
+ * WhatsApp outreach ladder makes the same promise word-for-word; a second copy
+ * would drift and we'd be promising two different things to the same seller.
+ * Callers pass their own colour/size via `className` — the surfaces it lands on
+ * are light, navy and mint.
+ */
+export function GuaranteeLine({ className }: { className?: string }) {
+	return (
+		<p className={cn("flex items-start gap-2", className)}>
+			<ShieldCheck className="mt-0.5 size-4 shrink-0 text-accent" />
+			<span className="font-medium">{m.guarantee_line()}</span>
+		</p>
+	);
+}
+
+/**
+ * Mobile-only horizontal snap carousel (86eye3p6z follow-up: the stacked
+ * landing sections made the mobile page enormously long). Below `md` the
+ * track is a full-bleed snap scroller — same mechanics as the storefront's
+ * category rail: `-mx-5/px-5` slides cards under the screen edge, and
+ * `scroll-pl-5` keeps the snapped rest position aligned with the section
+ * padding (snap measures from the padding box). At `md` it resets to whatever
+ * the caller's `desktop` classes say (usually the original grid), so desktop
+ * is untouched.
+ *
+ * Slides are sized at 85% so the next card always peeks — that peek IS the
+ * "swipe for more" affordance, which is also why carousel slides must NOT be
+ * individually FadeIn-wrapped: a peeking slide sits inside FadeIn's -80px
+ * viewport inset and would hold at opacity 0 until swiped, hiding the
+ * affordance. Wrap the whole track in one FadeIn instead.
+ */
+export function carouselTrackClass(desktop: string) {
+	return cn(
+		"-mx-5 flex snap-x snap-mandatory scroll-pl-5 gap-4 overflow-x-auto px-5 pb-3 pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+		"md:mx-0 md:snap-none md:overflow-visible md:px-0 md:pb-0 md:pt-0",
+		desktop,
+	);
+}
+
+/**
+ * A slide inside `carouselTrackClass` — full-size again at `md`.
+ *
+ * `relative` is load-bearing: slides carry absolutely-positioned descendants
+ * (`sr-only` spans, mockup badges), and with no positioned ancestor inside the
+ * track those resolve their containing block ABOVE the scroller — an absolute
+ * element escapes an ancestor's overflow clip unless that ancestor chain
+ * contains its containing block, so a slide scrolled to x≈900 widened the
+ * whole PAGE to 978px. Positioning the slide pins them inside it.
+ */
+export function carouselSlideClass(extra?: string) {
+	return cn("relative w-[85%] shrink-0 snap-start sm:w-[60%] md:w-auto", extra);
 }
 
 /** Decorative QR pattern — a grid of squares standing in for a real code. */

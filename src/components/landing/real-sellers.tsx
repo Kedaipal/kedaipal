@@ -1,7 +1,7 @@
-import { CalendarCheck, ChefHat, Fish, QrCode, Star } from "lucide-react";
+import { CalendarCheck, QrCode, Star } from "lucide-react";
 import { m } from "../../paraglide/messages";
 import { FadeIn } from "./fade-in";
-import { Eyebrow } from "./landing-ui";
+import { carouselSlideClass, carouselTrackClass, Eyebrow } from "./landing-ui";
 
 /**
  * "Real sellers, real orders" proof bar. Replaces the old placeholder
@@ -9,6 +9,12 @@ import { Eyebrow } from "./landing-ui";
  * quotes we don't have consent for yet, this proves the pattern with real
  * (unnamed) seller archetypes and one honest stat card. See
  * `messages/en.json` → `proof_*` for the copy.
+ *
+ * Two archetypes, not four (86eye3p6z): the central-kitchen and fruit-&-fish
+ * cards restated the same "orders land in one inbox" point the others already
+ * make, and four near-identical cards read as padding. The pair that stays is
+ * deliberately one stall and one SERVICE business — the broadened, non-F&B ICP
+ * is the claim this section has to carry.
  */
 export function RealSellers() {
 	const archetypes = [
@@ -17,18 +23,6 @@ export function RealSellers() {
 			label: m.proof_card_1_label(),
 			heading: m.proof_card_1_heading(),
 			body: m.proof_card_1_body(),
-		},
-		{
-			icon: ChefHat,
-			label: m.proof_card_2_label(),
-			heading: m.proof_card_2_heading(),
-			body: m.proof_card_2_body(),
-		},
-		{
-			icon: Fish,
-			label: m.proof_card_3_label(),
-			heading: m.proof_card_3_heading(),
-			body: m.proof_card_3_body(),
 		},
 		{
 			icon: CalendarCheck,
@@ -57,10 +51,18 @@ export function RealSellers() {
 					</p>
 				</div>
 
-				<div className="mt-12 grid gap-5 md:mt-14 lg:grid-cols-3">
-					<div className="grid gap-5 sm:grid-cols-2 lg:col-span-2">
-						{archetypes.map((a, i) => (
-							<FadeIn key={a.label} delay={i * 0.08} className="h-full">
+				{/* One flat track: with only two archetype cards left, the nested
+				    2×2-beside-stat grid collapsed to three equal columns anyway —
+				    flattening lets the same three children be carousel slides on
+				    mobile and grid cells at md+ with no wrapper gymnastics. */}
+				<FadeIn className="mt-12 md:mt-14">
+					<div
+						className={carouselTrackClass(
+							"md:grid md:grid-cols-2 md:gap-5 lg:grid-cols-3",
+						)}
+					>
+						{archetypes.map((a) => (
+							<div key={a.label} className={carouselSlideClass("h-full")}>
 								<div className="h-full rounded-3xl border border-border bg-card p-7 shadow-sm transition-shadow duration-200 hover:shadow-md">
 									<div className="flex size-12 items-center justify-center rounded-2xl bg-accent/10 text-accent">
 										<a.icon className="size-6" />
@@ -73,46 +75,50 @@ export function RealSellers() {
 										{a.body}
 									</p>
 								</div>
-							</FadeIn>
+							</div>
 						))}
-					</div>
 
-					<FadeIn delay={0.32}>
-						<div className="flex h-full flex-col rounded-3xl bg-cta-mesh p-7 text-cta-mesh-foreground shadow-lg md:p-9">
-							<p className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-widest text-accent">
-								<Star className="size-3.5 fill-accent" aria-hidden />
-								{m.proof_stat_label()}
-							</p>
-							<h3
-								className="mt-4 text-xl font-bold md:text-2xl"
-								style={{ letterSpacing: "-0.02em" }}
-							>
-								{m.proof_stat_heading()}
-							</h3>
-							<p className="mt-2 text-sm leading-relaxed text-cta-mesh-foreground/65">
-								{m.proof_stat_body()}
-							</p>
-							<div className="mt-6 space-y-3 border-t border-white/10 pt-5">
-								<div className="flex items-center justify-between gap-2">
-									<span className="text-sm text-cta-mesh-foreground/65">
-										{m.proof_stat_1_label()}
-									</span>
-									<span className="text-base font-bold">
-										{m.proof_stat_1_value()}
-									</span>
-								</div>
-								<div className="flex items-center justify-between gap-2">
-									<span className="text-sm text-cta-mesh-foreground/65">
-										{m.proof_stat_2_label()}
-									</span>
-									<span className="text-base font-bold">
-										{m.proof_stat_2_value()}
-									</span>
+						<div
+							className={carouselSlideClass(
+								"h-full md:col-span-2 lg:col-span-1",
+							)}
+						>
+							<div className="flex h-full flex-col rounded-3xl bg-cta-mesh p-7 text-cta-mesh-foreground shadow-lg md:p-9">
+								<p className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-widest text-accent">
+									<Star className="size-3.5 fill-accent" aria-hidden />
+									{m.proof_stat_label()}
+								</p>
+								<h3
+									className="mt-4 text-xl font-bold md:text-2xl"
+									style={{ letterSpacing: "-0.02em" }}
+								>
+									{m.proof_stat_heading()}
+								</h3>
+								<p className="mt-2 text-sm leading-relaxed text-cta-mesh-foreground/65">
+									{m.proof_stat_body()}
+								</p>
+								<div className="mt-6 space-y-3 border-t border-white/10 pt-5">
+									<div className="flex items-center justify-between gap-2">
+										<span className="text-sm text-cta-mesh-foreground/65">
+											{m.proof_stat_1_label()}
+										</span>
+										<span className="text-base font-bold">
+											{m.proof_stat_1_value()}
+										</span>
+									</div>
+									<div className="flex items-center justify-between gap-2">
+										<span className="text-sm text-cta-mesh-foreground/65">
+											{m.proof_stat_2_label()}
+										</span>
+										<span className="text-base font-bold">
+											{m.proof_stat_2_value()}
+										</span>
+									</div>
 								</div>
 							</div>
 						</div>
-					</FadeIn>
-				</div>
+					</div>
+				</FadeIn>
 			</div>
 		</section>
 	);
