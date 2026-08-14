@@ -13,6 +13,7 @@ import {
 } from "../components/landing/landing-ui";
 import { Nav } from "../components/landing/nav";
 import { Button } from "../components/ui/button";
+import { useSupportWaNumber } from "../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../lib/contact";
 import { resolveTierCta } from "../lib/pricing-cta";
 import type { SubscriptionView } from "../lib/subscription";
@@ -549,6 +550,7 @@ function PricingPage() {
 	const tiers = useTiers();
 	const features = useFeatures();
 	const faqs = useFaqs();
+	const supportWa = useSupportWaNumber();
 
 	return (
 		<main className="min-h-dvh bg-background text-foreground">
@@ -665,7 +667,7 @@ function PricingPage() {
 							</div>
 							<div className="relative shrink-0">
 								<a
-									href={buildWaContactLink(m.founding_wa_message())}
+									href={buildWaContactLink(m.founding_wa_message(), supportWa)}
 									target="_blank"
 									rel="noopener noreferrer"
 									className={ctaPillClass("accent")}

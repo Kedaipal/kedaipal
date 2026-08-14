@@ -1,8 +1,8 @@
 import { Link } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
 import { ExternalLink, Sparkles } from "lucide-react";
 import type { ReactNode } from "react";
-import { api } from "../../../convex/_generated/api";
+import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
+import { buildWaContactLink } from "../../lib/contact";
 
 /**
  * Upgrade surfaces for plan-gated (Pro-and-above) features. Two shapes:
@@ -28,12 +28,11 @@ export function ProFeatureWall({
 	blurb: string;
 	bullets?: string[];
 }) {
-	const instructions = useQuery(api.billing.paymentInstructions, {});
-	const waUrl = instructions?.whatsappPhone
-		? `https://wa.me/${instructions.whatsappPhone.replace(/\D/g, "")}?text=${encodeURIComponent(
-				`Hi, I'd like to upgrade to Pro for my Kedaipal store (/${slug}).`,
-			)}`
-		: undefined;
+	const supportWa = useSupportWaNumber();
+	const waUrl = buildWaContactLink(
+		`Hi, I'd like to upgrade to Pro for my Kedaipal store (/${slug}).`,
+		supportWa,
+	);
 	return (
 		<div className="flex flex-col items-center gap-4 rounded-2xl border border-dashed border-border px-6 py-12 text-center">
 			<div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
@@ -57,17 +56,15 @@ export function ProFeatureWall({
 				</ul>
 			) : null}
 			<div className="mt-1 flex flex-col gap-2 sm:flex-row">
-				{waUrl ? (
-					<a
-						href={waUrl}
-						target="_blank"
-						rel="noopener noreferrer"
-						className="inline-flex h-11 items-center justify-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
-					>
-						<ExternalLink className="size-4" />
-						Upgrade to Pro
-					</a>
-				) : null}
+				<a
+					href={waUrl}
+					target="_blank"
+					rel="noopener noreferrer"
+					className="inline-flex h-11 items-center justify-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
+				>
+					<ExternalLink className="size-4" />
+					Upgrade to Pro
+				</a>
 				<Link
 					to="/app/settings"
 					search={{ tab: "billing" }}
