@@ -86,6 +86,7 @@ const withOptions: VariantEditorState = {
 		active: true,
 		blockWhenOutOfStock: true,
 		requiresProof: false,
+		parcelWeightG: "",
 		imageStorageIds: [],
 	})),
 	customLine: null,

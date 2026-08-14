@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { MyPhoneInput } from "../components/ui/my-phone-input";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage } from "../lib/format";
 import {
@@ -221,16 +222,13 @@ function OnboardingForm() {
 
 				{assisted ? (
 					<Field label="WhatsApp number">
-						<Input
-							type="tel"
-							inputMode="tel"
+						<MyPhoneInput
 							value={waPhone}
-							onChange={(e) => setWaPhone(e.target.value)}
-							placeholder="e.g. 60123456789"
-							variant="field"
+							onChange={setWaPhone}
 						/>
 						<span className="text-xs text-muted-foreground">
-							The number buyers reach you on. Leave blank to add it later.
+							The Malaysian mobile buyers reach you on. Leave blank to add it
+							later.
 						</span>
 					</Field>
 				) : null}

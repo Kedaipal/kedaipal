@@ -31,6 +31,7 @@ How the product actually works. Read in this order.
 |---|---|
 | [messaging-channels.md](./messaging-channels.md) | ChannelAdapter seam — WhatsApp as one of N channels; how a 2nd channel lands. |
 | [whatsapp-webhook-security.md](./whatsapp-webhook-security.md) | Inbound webhook signature verification (HMAC-SHA256), fail-closed. |
+| [dependency-security.md](./dependency-security.md) | `pnpm audit` policy, current advisory posture, why Clerk + TanStack are exact-pinned. |
 | [email-notifications.md](./email-notifications.md) | Retailer email alerts (Resend) — new order, confirmed, payment claimed. |
 
 ## Roadmaps (designed / in-progress)

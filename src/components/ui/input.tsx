@@ -15,8 +15,11 @@ const inputVariants = cva(
 				// Mobile-first dashboard form field: ≥44px tap target, roomier.
 				field: "min-h-11 rounded-xl px-4 text-base",
 				// Unstyled child of a composite control (e.g. a "kedaipal.com/" slug
-				// box) — the wrapping element owns the border, background and ring.
-				bare: "h-auto rounded-none border-0 bg-transparent px-0 focus-visible:border-input focus-visible:ring-0",
+				// box, or the `+60` phone plate) — the wrapping element owns the
+				// border, background and ring. That includes the INVALID ring: the
+				// attribute stays on the input for assistive tech, but painting it
+				// here too would draw a second destructive outline inside the frame.
+				bare: "h-auto rounded-none border-0 bg-transparent px-0 focus-visible:border-input focus-visible:ring-0 aria-invalid:border-0 aria-invalid:ring-0",
 			},
 		},
 		defaultVariants: {

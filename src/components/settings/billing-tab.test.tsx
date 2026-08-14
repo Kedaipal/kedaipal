@@ -1,21 +1,16 @@
 // @vitest-environment jsdom
-
 import { useQuery } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import { type FunctionReference, getFunctionName } from "convex/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../../convex/_generated/api";
+import { DEFAULT_SUPPORT_WA_NUMBER } from "../../lib/contact";
 import { BillingTab } from "./billing-tab";
 
-// The tab now reads via `useQuery(convexQuery(api.x, args)).data`. We mock the
-// adapter's `convexQuery` to pass the function ref straight through, then drive
-// TanStack's `useQuery` by that ref's stable name — same name-keyed, synchronous
-// shape as the old convex/react mock (no QueryClientProvider needed).
+// Reads go via `useQuery(convexQuery(api.x, args)).data` — mock the adapter
+// pair (convexQuery passes the ref through; useQuery answers by function name).
 vi.mock("@convex-dev/react-query", () => ({
-	convexQuery: (fn: FunctionReference<"query">, args: unknown) => ({
-		__fn: fn,
-		args,
-	}),
+	convexQuery: (fn: unknown, args: unknown) => ({ __fn: fn, args }),
 }));
 vi.mock("@tanstack/react-query", () => ({ useQuery: vi.fn() }));
 
@@ -43,26 +38,51 @@ function retailer(overrides: Partial<Retailer> = {}): Retailer {
 	} as unknown as Retailer;
 }
 
-/** Wire the three reads the tab makes, keyed by function name (the generated
- * `api` proxy hands back a fresh reference per access, so `===` on the reference
- * itself is unreliable — match on the stable name instead). The mocked
- * `convexQuery` handed `useQuery` a `{ __fn }` wrapper we read the name off. */
-function mockQueries({ isAdmin }: { isAdmin: boolean }) {
+/** A number that is deliberately NOT the built-in default, so an assertion
+ * against it proves the link followed the configured value. */
+const CONFIGURED_WA = "60111111111";
+
+/** Wire the four useQuery calls the tab makes, keyed by function name (the
+ * generated `api` proxy hands back a fresh reference per access, so `===` on the
+ * reference itself is unreliable — match on the stable name instead). */
+function mockQueries({
+	isAdmin,
+	// `null` = the query hasn't resolved (SSR / first paint), which reaches the
+	// component as `undefined`. Passing `undefined` here can't express that —
+	// the destructuring default would swallow it.
+	supportWa = CONFIGURED_WA,
+}: {
+	isAdmin: boolean;
+	supportWa?: string | null;
+}) {
 	const NAME = {
 		amIAdmin: getFunctionName(api.billing.amIAdmin),
 		invoices: getFunctionName(api.invoices.myInvoices),
 		instructions: getFunctionName(api.billing.paymentInstructions),
+		supportWa: getFunctionName(api.contact.supportWhatsapp),
 	};
 	vi.mocked(useQuery).mockImplementation(((opts: {
 		__fn: FunctionReference<"query">;
 	}) => {
 		const name = getFunctionName(opts.__fn);
-		if (name === NAME.amIAdmin) return { data: isAdmin, isPending: false };
-		if (name === NAME.invoices) return { data: [], isPending: false };
-		if (name === NAME.instructions)
-			return { data: { whatsappPhone: "+60123456789" }, isPending: false };
-		return { data: undefined, isPending: true };
+		const data = (() => {
+			if (name === NAME.amIAdmin) return isAdmin;
+			if (name === NAME.invoices) return [];
+			// Bank/DuitNow details only — the support number has its own query.
+			if (name === NAME.instructions) return { bankName: "Maybank" };
+			if (name === NAME.supportWa) return supportWa ?? undefined;
+			return undefined;
+		})();
+		return { data, isPending: false };
 	}) as unknown as typeof useQuery);
+}
+
+/** Every wa.me href the tab renders. */
+function waLinks(): string[] {
+	return screen
+		.getAllByRole("link")
+		.map((a) => a.getAttribute("href") ?? "")
+		.filter((href) => href.startsWith("https://wa.me/"));
 }
 
 describe("BillingTab admin plan suppression", () => {
@@ -92,5 +112,52 @@ describe("BillingTab admin plan suppression", () => {
 		expect(screen.getByText("Current plan")).toBeTruthy();
 		expect(screen.getByText("Past due")).toBeTruthy();
 		expect(screen.queryByText("Admin account")).toBeNull();
+	});
+});
+
+describe("BillingTab support WhatsApp number", () => {
+	/** ClickUp 86eyjuvyu: every seller→Kedaipal CTA must reach the number an
+	 * operator configured (`SUPPORT_WA_PHONE`), never the buyer-facing WABA
+	 * checkout sender (`WHATSAPP_CHECKOUT_PHONE`) and never a hardcoded value. */
+	it("points every WhatsApp CTA at the configured support number", () => {
+		mockQueries({ isAdmin: false });
+		render(<BillingTab retailer={retailer()} />);
+		const links = waLinks();
+		expect(links.length).toBeGreaterThan(0);
+		for (const href of links) {
+			expect(href.startsWith(`https://wa.me/${CONFIGURED_WA}?`)).toBe(true);
+		}
+	});
+
+	it("falls back to the default number before the query resolves", () => {
+		// SSR and first paint have no answer yet; the CTA must still be live.
+		mockQueries({ isAdmin: false, supportWa: null });
+		render(<BillingTab retailer={retailer()} />);
+		const links = waLinks();
+		expect(links.length).toBeGreaterThan(0);
+		for (const href of links) {
+			expect(
+				href.startsWith(`https://wa.me/${DEFAULT_SUPPORT_WA_NUMBER}?`),
+			).toBe(true);
+		}
+	});
+
+	it("renders the support card even with no billing config", () => {
+		// The CTA used to hang off a server-provided phone, so an unset env var
+		// silently removed the seller's only way to reach us.
+		vi.mocked(useQuery).mockImplementation(((opts: {
+			__fn: FunctionReference<"query">;
+		}) => {
+			const name = getFunctionName(opts.__fn);
+			const data = (() => {
+				if (name === getFunctionName(api.invoices.myInvoices)) return [];
+				if (name === getFunctionName(api.billing.paymentInstructions))
+					return null;
+				return false;
+			})();
+			return { data, isPending: false };
+		}) as unknown as typeof useQuery);
+		render(<BillingTab retailer={retailer()} />);
+		expect(screen.getByText("Contact support on WhatsApp")).toBeTruthy();
 	});
 });

@@ -2,6 +2,7 @@ import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Star } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
+import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../../lib/contact";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
@@ -17,6 +18,7 @@ export function FoundingTen() {
 	const remaining =
 		useQuery(convexQuery(api.foundingMembers.getSpotsRemaining, {})).data ??
 		TOTAL_SPOTS;
+	const supportWa = useSupportWaNumber();
 	const spotsTaken = TOTAL_SPOTS - remaining;
 	const SPOTS = Array.from({ length: TOTAL_SPOTS }, (_, i) => ({
 		n: i + 1,
@@ -114,7 +116,7 @@ export function FoundingTen() {
 							{/* Applying for a founding spot is a conversation, not a signup —
 							    open a WhatsApp chat with a prefilled message. */}
 							<a
-								href={buildWaContactLink(m.founding_wa_message())}
+								href={buildWaContactLink(m.founding_wa_message(), supportWa)}
 								target="_blank"
 								rel="noopener noreferrer"
 								className={ctaPillClass("accent")}

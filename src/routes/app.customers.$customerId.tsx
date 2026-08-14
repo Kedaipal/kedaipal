@@ -13,7 +13,7 @@ import {
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { getDisplayName } from "../lib/customer";
-import { hasFeature } from "../lib/subscription";
+import { isCrmLocked } from "../lib/subscription";
 
 export const Route = createFileRoute("/app/customers/$customerId")({
 	component: CustomerDetailRoute,
@@ -25,10 +25,7 @@ function CustomerDetailRoute() {
 	const retailer = useDashboardRetailer();
 	// Plan gate (Pro+) — mirrors the list route; queries skipped while locked so
 	// the server gate (assertPlanFeature) is never tripped in normal use.
-	const crmLocked =
-		!!retailer &&
-		!retailer.actingAsAdmin &&
-		!hasFeature(retailer.subscription, "crm");
+	const crmLocked = isCrmLocked(retailer);
 	// Held while the retailer payload is loading too — the plan isn't known yet,
 	// and firing the query for a Starter seller would hit the server gate.
 	const customer = useQuery(

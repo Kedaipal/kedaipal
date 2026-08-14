@@ -146,11 +146,6 @@ export function PricingTeaser() {
 									{tier.name}
 								</p>
 								<div className="mt-3 flex items-end gap-1">
-									{tier.id === "scale" && (
-										<span className="mb-1 text-sm text-muted-foreground">
-											{m.pricing_price_from()}
-										</span>
-									)}
 									<span className="text-4xl font-bold tracking-tight">
 										RM {tier.price}
 									</span>

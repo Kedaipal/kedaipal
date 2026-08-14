@@ -201,6 +201,7 @@ function NewProductRoute() {
 				draftRef={formDraftRef}
 				currency={retailer.currency}
 				submitLabel="Create product"
+				weightMode={retailer.deliveryConfig?.mode === "weight"}
 				onSubmit={handleCreate}
 			/>
 		</div>

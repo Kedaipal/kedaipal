@@ -839,6 +839,31 @@ describe("pickupLocations — store manager contact", () => {
 		expect(row?.managerWaPhone).toBe("60123456789");
 	});
 
+	test("create accepts the bare national number the +60 plate asks for", async () => {
+		// The field renders a fixed `+60` plate (86eyknr2r), so "12-345 6789" is
+		// exactly what a seller who reads the badge types. It must normalize to
+		// the same stored form as a fully-keyed number, or the plate lies.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+
+		const { pickupLocationId } = await asUser.mutation(
+			api.pickupLocations.create,
+			{
+				retailerId: retailer._id,
+				label: "Main",
+				address: "12 Jln Tun Razak, KL",
+				managerWaPhone: "12-345 6789",
+			},
+		);
+		const rows = await asUser.query(api.pickupLocations.listForRetailer, {
+			retailerId: retailer._id,
+		});
+		expect(
+			rows.find((r) => r._id === pickupLocationId)?.managerWaPhone,
+		).toBe("60123456789");
+	});
+
 	test("create rejects an invalid manager phone", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
@@ -851,8 +876,29 @@ describe("pickupLocations — store manager contact", () => {
 				address: "12 Jln Tun Razak, KL",
 				managerWaPhone: "not-a-phone",
 			}),
-		).rejects.toThrow(/8.{1,3}15/);
+		).rejects.toThrow(/Malaysian mobile/i);
 	});
+
+	test.each([
+		["a landline — clears a digit count but has no WhatsApp", "03-8888 1234"],
+		["a Singapore mobile", "+65 8123 4567"],
+	])(
+		"create rejects %s, matching the +60 plate on the field",
+		async (_label, phone) => {
+			const t = setup();
+			const retailer = await seedRetailer(t, USER_A);
+			const asUser = t.withIdentity({ subject: USER_A });
+
+			await expect(
+				asUser.mutation(api.pickupLocations.create, {
+					retailerId: retailer._id,
+					label: "Main",
+					address: "12 Jln Tun Razak, KL",
+					managerWaPhone: phone,
+				}),
+			).rejects.toThrow(/Malaysian mobile/i);
+		},
+	);
 
 	test("update with empty string clears manager fields", async () => {
 		const t = setup();

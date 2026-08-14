@@ -13,9 +13,12 @@ import {
 } from "./customers";
 import {
 	orderConfirmTemplateName,
+	sellerNewOrderTemplateName,
+	sellerPaymentClaimTemplateName,
 	WhatsAppSendError,
 } from "./lib/whatsapp";
 import { classifyPushFailure } from "./lib/confirmationPush";
+import { formatFulfilmentDateTime } from "./lib/fulfilmentDate";
 import { type GuardedSender, makeGuardedSender } from "./wabaProtection";
 import { stampRetailerActivation } from "./lib/activation";
 import { classifyOptOutKeyword } from "./lib/wabaLimits";
@@ -38,6 +41,7 @@ import {
 	renderPickupBlock,
 	renderStageUpdate,
 	renderSystemMessage,
+	TEMPLATE_LANGUAGE,
 	type DeliveryMethod,
 	type Locale,
 	type MessageTemplates,
@@ -1560,6 +1564,225 @@ export const notifyFoundingWelcome = internalAction({
 	},
 });
 
+// --- Seller order alerts (86eyhw9zy, docs/order-notifications.md) -----------
+
+/**
+ * Internal query for the seller-alert actions: order essentials + the
+ * retailer's alert config. Mirrors email.getOrderForRetailerEmail but returns
+ * `notifyWaPhone` + the opt-in flag instead of `notifyEmail`.
+ */
+export const getOrderForSellerAlert = internalQuery({
+	args: { orderId: v.id("orders") },
+	handler: async (
+		ctx,
+		{ orderId },
+	): Promise<{
+		retailerId: Id<"retailers">;
+		shortId: string;
+		status: Doc<"orders">["status"];
+		source: "storefront" | "counter" | undefined;
+		customerName: string;
+		total: number;
+		currency: string;
+		fulfilmentDate: number | undefined;
+		fulfilmentTimeMinutes: number | undefined;
+		notifyWaPhone: string | undefined;
+		orderWaAlerts: boolean;
+		locale: Locale;
+	} | null> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) return null;
+		const retailer = await ctx.db.get(order.retailerId);
+		if (!retailer) return null;
+		// Meta rejects template parameters containing newlines, tabs, or 4+
+		// consecutive spaces — and the buyer's name is the FIRST buyer-controlled
+		// string to enter a template param (the confirm push's params are all
+		// system-controlled). sanitizeCustomerName trims ends but never interior
+		// whitespace, so a pasted "Ali\tBaba" would kill the whole send (terminal
+		// per classifyPushFailure). Collapse here, at the one choke point both
+		// alert actions read; whitespace-only degenerates to the placeholder
+		// rather than an empty param (also a Meta rejection).
+		const rawName = order.customer.name ?? "";
+		const customerName = rawName.replace(/\s+/g, " ").trim() || "Anonymous";
+		return {
+			retailerId: order.retailerId,
+			shortId: order.shortId,
+			status: order.status,
+			source: order.source,
+			customerName,
+			total: order.total,
+			currency: order.currency,
+			fulfilmentDate: order.fulfilmentDate,
+			fulfilmentTimeMinutes: order.fulfilmentTimeMinutes,
+			notifyWaPhone: retailer.notifyWaPhone,
+			orderWaAlerts: retailer.orderWaAlerts === true,
+			locale: (retailer.locale as Locale | undefined) ?? "en",
+		};
+	},
+});
+
+/**
+ * Seller WhatsApp order alerts (86eyhw9zy): scheduled by orders.create beside
+ * the retailer email alert. Sends the opted-in seller ONE utility template on
+ * their own `notifyWaPhone` the moment a storefront order lands. Counter
+ * orders are excluded — the seller (or their cashier) is standing there
+ * creating them, the same posture as the min-order/notice exemptions. Sellers
+ * rarely hold an open 24h service window with the shared WABA, so the message
+ * must be a Meta-approved template; env unset ⇒ silently unavailable.
+ *
+ * Category is `utility_template`, NOT `transactional` — a seller alert is not
+ * part of the buyer order promise, so it respects the kill switch, caps,
+ * quality halt and global opt-outs (and it counts in the same cap bucket as
+ * buyer messages, per the ticket's 7 Aug 2026 decision). The retailer email
+ * alert still fires independently this phase, so a gated/failed WA alert never
+ * means zero notification — replacing the email (with automatic fallback on WA
+ * failure) is the follow-up ticket.
+ */
+export const notifySellerNewOrder = internalAction({
+	args: {
+		orderId: v.id("orders"),
+		// 1-based; the scheduler passes attempt+1 when retrying a transient
+		// failure (same contract as notifyStorefrontOrderCreated).
+		attempt: v.optional(v.number()),
+	},
+	handler: async (ctx, { orderId, attempt: attemptArg }): Promise<void> => {
+		const attempt = attemptArg ?? 1;
+		const templateName = sellerNewOrderTemplateName();
+		if (!templateName) return; // alert path inactive — nothing to send
+		const meta = await ctx
+			.runQuery(internal.whatsapp.getOrderForSellerAlert, { orderId })
+			.catch((err) => {
+				console.error("WA seller new-order lookup failed", err);
+				return null;
+			});
+		if (!meta || !meta.orderWaAlerts || !meta.notifyWaPhone) return;
+		// Defence in depth: the create site never schedules this for counter
+		// orders in the first place.
+		if (meta.source === "counter") return;
+		// An order cancelled before a retry lands must not ping the seller.
+		if (meta.status === "cancelled") return;
+
+		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
+		// Storefront checkout always captures a fulfilment date; the dash keeps
+		// the template param non-empty (Meta rejects empty parameters) on any
+		// legacy edge that reaches here without one.
+		const fulfilment =
+			meta.fulfilmentDate !== undefined
+				? formatFulfilmentDateTime(
+						meta.fulfilmentDate,
+						meta.fulfilmentTimeMinutes,
+					)
+				: "—";
+		const wa = makeGuardedSender(ctx, meta.retailerId, "utility_template");
+		try {
+			const receipt = await wa.send(meta.notifyWaPhone, {
+				kind: "template",
+				templateName,
+				// Same store-locale switch the retailer's EMAIL alerts already use
+				// (renderRetailerEmail) — a BM seller reads BM on both channels.
+				languageCode: TEMPLATE_LANGUAGE[pickLocale(meta.locale)],
+				bodyParams: [meta.shortId, meta.customerName, money, fulfilment],
+				// The approved button URL is https://kedaipal.com/app/orders/{{1}} —
+				// Meta appends ONLY this suffix (the shortId; the seller is
+				// authenticated, so no capability token is involved).
+				urlButtonParam: meta.shortId,
+			});
+			if (receipt?.blocked) return; // gateway logged it; the email still fired
+		} catch (err) {
+			// Retry a blip; give up immediately on anything Meta will reject
+			// identically next time. No stamp on final failure — the retailer
+			// email alert fired independently, so the seller was still notified.
+			const outcome = classifyPushFailure(
+				err instanceof WhatsAppSendError
+					? {
+							httpStatus: err.httpStatus,
+							metaCode: err.metaCode,
+							responded: err.responded,
+						}
+					: { responded: true },
+				attempt,
+			);
+			console.error("WA seller new-order alert failed", {
+				shortId: meta.shortId,
+				attempt,
+				outcome,
+				err,
+			});
+			if (outcome.retry) {
+				await ctx.scheduler.runAfter(
+					outcome.delayMs,
+					internal.whatsapp.notifySellerNewOrder,
+					{ orderId, attempt: attempt + 1 },
+				);
+			}
+		}
+	},
+});
+
+/**
+ * The buyer-says-they've-paid sibling of notifySellerNewOrder — scheduled by
+ * orders.claimPayment beside the payment-claimed email. Unlike the new-order
+ * alert this INCLUDES counter orders: a pay-later claim lands hours after the
+ * sale, when nobody is standing at the counter, so the standing-there
+ * exclusion doesn't apply. Same template/env/category posture.
+ */
+export const notifySellerPaymentClaim = internalAction({
+	args: {
+		orderId: v.id("orders"),
+		attempt: v.optional(v.number()),
+	},
+	handler: async (ctx, { orderId, attempt: attemptArg }): Promise<void> => {
+		const attempt = attemptArg ?? 1;
+		const templateName = sellerPaymentClaimTemplateName();
+		if (!templateName) return; // alert path inactive — nothing to send
+		const meta = await ctx
+			.runQuery(internal.whatsapp.getOrderForSellerAlert, { orderId })
+			.catch((err) => {
+				console.error("WA seller payment-claim lookup failed", err);
+				return null;
+			});
+		if (!meta || !meta.orderWaAlerts || !meta.notifyWaPhone) return;
+		if (meta.status === "cancelled") return;
+
+		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
+		const wa = makeGuardedSender(ctx, meta.retailerId, "utility_template");
+		try {
+			const receipt = await wa.send(meta.notifyWaPhone, {
+				kind: "template",
+				templateName,
+				languageCode: TEMPLATE_LANGUAGE[pickLocale(meta.locale)],
+				bodyParams: [meta.customerName, meta.shortId, money],
+				urlButtonParam: meta.shortId,
+			});
+			if (receipt?.blocked) return;
+		} catch (err) {
+			const outcome = classifyPushFailure(
+				err instanceof WhatsAppSendError
+					? {
+							httpStatus: err.httpStatus,
+							metaCode: err.metaCode,
+							responded: err.responded,
+						}
+					: { responded: true },
+				attempt,
+			);
+			console.error("WA seller payment-claim alert failed", {
+				shortId: meta.shortId,
+				attempt,
+				outcome,
+				err,
+			});
+			if (outcome.retry) {
+				await ctx.scheduler.runAfter(
+					outcome.delayMs,
+					internal.whatsapp.notifySellerPaymentClaim,
+					{ orderId, attempt: attempt + 1 },
+				);
+			}
+		}
+	},
+});
+
 // --- Counter Checkout (docs/counter-checkout.md) ----------------------------
 
 /** Load the data needed to send a buyer their counter-order confirmation. */
@@ -1664,9 +1887,7 @@ export const notifyStorefrontOrderCreated = internalAction({
 			(await ctx.runMutation(internal.orders.ensureTrackingToken, { orderId }));
 		if (!trackingToken) return; // order vanished — don't ship a dead link
 		const locale = pickLocale(meta.locale);
-		// Only EN + BM template variants are approved; zh rides EN until the
-		// Mandarin phase 2/3 submits (and this map gains) a zh variant.
-		const languageCode = locale === "ms" ? "ms" : "en";
+		const languageCode = TEMPLATE_LANGUAGE[locale];
 		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
 
 		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");

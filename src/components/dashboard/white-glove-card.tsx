@@ -3,6 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useMutation } from "convex/react";
 import { Award, X } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
+import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
+import { buildWaContactLink } from "../../lib/contact";
 
 /**
  * One-time celebratory card shown to a freshly-minted Founding Member, prompting
@@ -12,24 +14,17 @@ import { api } from "../../../convex/_generated/api";
  */
 export function WhiteGloveCard({ slug }: { slug: string }) {
 	const status = useQuery(convexQuery(api.foundingMembers.myStatus, {})).data;
-	const instructions = useQuery(
-		convexQuery(
-			api.billing.paymentInstructions,
-			status && !status.whiteGloveScheduled ? {} : "skip",
-		),
-	).data;
+	const supportWa = useSupportWaNumber();
 	const markScheduled = useMutation(
 		api.foundingMembers.markWhiteGloveScheduled,
 	);
 
 	if (!status || status.whiteGloveScheduled) return null;
 
-	const phone = instructions?.whatsappPhone;
-	const waUrl = phone
-		? `https://wa.me/${phone.replace(/\D/g, "")}?text=${encodeURIComponent(
-				`Hi Arif! I'm Founding Member #${status.rank} (/${slug}) — I'd like to schedule my white-glove onboarding call.`,
-			)}`
-		: undefined;
+	const waUrl = buildWaContactLink(
+		`Hi Arif! I'm Founding Member #${status.rank} (/${slug}) — I'd like to schedule my white-glove onboarding call.`,
+		supportWa,
+	);
 
 	return (
 		<section className="relative flex items-start gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-5 dark:border-amber-800 dark:bg-amber-950/40">
@@ -52,17 +47,15 @@ export function WhiteGloveCard({ slug }: { slug: string }) {
 						most out of Kedaipal.
 					</p>
 				</div>
-				{waUrl ? (
-					<a
-						href={waUrl}
-						target="_blank"
-						rel="noopener noreferrer"
-						onClick={() => markScheduled({})}
-						className="inline-flex h-9 w-fit items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
-					>
-						Schedule your call
-					</a>
-				) : null}
+				<a
+					href={waUrl}
+					target="_blank"
+					rel="noopener noreferrer"
+					onClick={() => markScheduled({})}
+					className="inline-flex h-9 w-fit items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
+				>
+					Schedule your call
+				</a>
 			</div>
 		</section>
 	);

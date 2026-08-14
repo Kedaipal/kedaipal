@@ -1,8 +1,7 @@
-import { convexQuery } from "@convex-dev/react-query";
-import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { PartyPopper } from "lucide-react";
-import { api } from "../../../convex/_generated/api";
+import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
+import { buildWaContactLink } from "../../lib/contact";
 
 /**
  * One-time celebratory banner shown once the store is ACTIVATED — i.e. its first
@@ -21,16 +20,11 @@ export function FirstOrderCelebration({
 	slug: string;
 	storeName: string;
 }) {
-	const instructions = useQuery(
-		convexQuery(api.billing.paymentInstructions, {}),
-	).data;
-
-	const phone = instructions?.whatsappPhone;
-	const testimonialUrl = phone
-		? `https://wa.me/${phone.replace(/\D/g, "")}?text=${encodeURIComponent(
-				`Hi! ${storeName} (/${slug}) just received our first order through Kedaipal 🎉 Happy to share a testimonial!`,
-			)}`
-		: undefined;
+	const supportWa = useSupportWaNumber();
+	const testimonialUrl = buildWaContactLink(
+		`Hi! ${storeName} (/${slug}) just received our first order through Kedaipal 🎉 Happy to share a testimonial!`,
+		supportWa,
+	);
 
 	return (
 		<section className="relative overflow-hidden rounded-2xl border border-emerald-300 bg-emerald-50 p-5 dark:border-emerald-800 dark:bg-emerald-950/40">
@@ -57,16 +51,14 @@ export function FirstOrderCelebration({
 						>
 							View your orders
 						</Link>
-						{testimonialUrl ? (
-							<a
-								href={testimonialUrl}
-								target="_blank"
-								rel="noopener noreferrer"
-								className="inline-flex h-9 items-center rounded-lg border border-emerald-300 px-3.5 text-sm font-medium text-emerald-900 hover:bg-emerald-100 dark:border-emerald-700 dark:text-emerald-200 dark:hover:bg-emerald-900"
-							>
-								Loving it? Send a testimonial
-							</a>
-						) : null}
+						<a
+							href={testimonialUrl}
+							target="_blank"
+							rel="noopener noreferrer"
+							className="inline-flex h-9 items-center rounded-lg border border-emerald-300 px-3.5 text-sm font-medium text-emerald-900 hover:bg-emerald-100 dark:border-emerald-700 dark:text-emerald-200 dark:hover:bg-emerald-900"
+						>
+							Loving it? Send a testimonial
+						</a>
 					</div>
 				</div>
 			</div>

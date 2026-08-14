@@ -2,6 +2,14 @@
 
 **ClickUp:** [`86eydh0dy`](https://app.clickup.com/t/86eydh0dy) · **Status:** dev
 
+> **STANDING RULE — all new frontend reads follow this pattern.** Any new
+> component/hook/route that reads Convex data uses
+> `useQuery(convexQuery(api.x, args)).data`, never plain `useQuery` from
+> `convex/react`. Its tests mock the adapter pair (see §Tests). Mutations,
+> actions, imperative `useConvex`, and `usePaginatedQuery` stay on
+> `convex/react`. Following this at write-time is what makes sure the caching
+> migration never has to be repeated.
+
 ## Why
 
 The dashboard felt slow "even navigating to a page I've loaded before." Root cause:
