@@ -604,7 +604,8 @@ function PricingPage() {
 	// must never print a hardcoded number (86eye3p6z §D). All-open is the honest
 	// fallback while loading / on SSR: never a fake "taken".
 	const foundingRemaining =
-		useQuery(api.foundingMembers.getSpotsRemaining) ?? TOTAL_FOUNDING_SPOTS;
+		useQuery(convexQuery(api.foundingMembers.getSpotsRemaining, {})).data ??
+		TOTAL_FOUNDING_SPOTS;
 	const tiers = useTiers();
 	const features = useFeatures();
 	const faqs = useFaqs();
