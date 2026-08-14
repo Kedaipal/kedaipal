@@ -11,6 +11,7 @@ import {
 	DEFAULT_INPUTS,
 	FOUNDING_PRICE_RM,
 } from "#/lib/calculator";
+import { useSupportWaNumber } from "#/hooks/useSupportWaNumber";
 import { buildWaContactLink } from "#/lib/contact";
 import { formatPrice } from "#/lib/format";
 import { cn } from "#/lib/utils";
@@ -21,12 +22,12 @@ function rm(major: number): string {
 	return formatPrice(Math.round(major * 100), "MYR");
 }
 
-function buildWaLink(monthlyCost: number): string {
+function buildWaLink(monthlyCost: number, supportWa: string): string {
 	const message = m.cost_wa_message({
 		cost: rm(monthlyCost),
 		price: FOUNDING_PRICE_RM,
 	});
-	return buildWaContactLink(message);
+	return buildWaContactLink(message, supportWa);
 }
 
 interface SliderRowProps {
@@ -88,6 +89,7 @@ export function CostCalculator({
 		onInputsChange?.(next);
 	};
 
+	const supportWa = useSupportWaNumber();
 	const result = computeStatusQuoCost(inputs);
 	const ratioLabel = `${result.ratio.toFixed(1)}×`;
 
@@ -182,7 +184,7 @@ export function CostCalculator({
 									className="h-11 w-full rounded-full"
 								>
 									<a
-										href={buildWaLink(result.total)}
+										href={buildWaLink(result.total, supportWa)}
 										target="_blank"
 										rel="noopener noreferrer"
 									>
@@ -196,7 +198,7 @@ export function CostCalculator({
 								className="h-12 w-full rounded-full text-sm sm:text-base"
 							>
 								<a
-									href={buildWaLink(result.total)}
+									href={buildWaLink(result.total, supportWa)}
 									target="_blank"
 									rel="noopener noreferrer"
 								>

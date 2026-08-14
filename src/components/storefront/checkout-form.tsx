@@ -1,6 +1,8 @@
+import { convexQuery } from "@convex-dev/react-query";
 import { useStore } from "@tanstack/react-form";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import { Clock, Package, ShoppingBag, Truck } from "lucide-react";
 import {
 	type FormEvent,
@@ -47,8 +49,8 @@ import {
 import { useLiveDeliveryQuote } from "../../lib/use-live-delivery-quote";
 import { submitThenFocusError } from "../forms/focus-error";
 import { useAppForm } from "../forms/form";
-import { MyPhonePrefix } from "../ui/my-phone-input";
 import { Button } from "../ui/button";
+import { MyPhonePrefix } from "../ui/my-phone-input";
 import { AddressFieldset } from "./address-fieldset";
 import {
 	CheckoutSummary,
@@ -210,7 +212,9 @@ export function CheckoutPage({
 	// Live public catalog — caps the summary's quantity steppers at real stock
 	// for hard-block variants. A cart line whose product left the public list
 	// (hidden/archived since add) gets no cap; orders.create stays the judge.
-	const listedProducts = useQuery(api.products.list, { retailerId });
+	const listedProducts = useQuery(
+		convexQuery(api.products.list, { retailerId }),
+	).data;
 	const stockByVariant = useMemo(() => {
 		const map = new Map<string, { onHand: number; hardBlock: boolean }>();
 		for (const product of listedProducts ?? []) {
@@ -585,25 +589,27 @@ export function CheckoutPage({
 	const lngNum = watchedLng.trim().length > 0 ? Number(watchedLng) : NaN;
 	const hasCoords = Number.isFinite(latNum) && Number.isFinite(lngNum);
 	const deliveryQuote: PublicDeliveryQuote | undefined = useQuery(
-		api.delivery.quote,
-		deliveryAvailable && watchedMethod === "delivery"
-			? {
-					retailerId,
-					latitude: hasCoords ? latNum : undefined,
-					longitude: hasCoords ? lngNum : undefined,
-					state:
-						watchedState.trim().length > 0 ? watchedState.trim() : undefined,
-					// Weight-mode input: the server reads each variant's parcel weight
-					// itself, so the quote re-runs whenever the cart changes — two
-					// carts with the same subtotal can weigh differently.
-					items: cart.items.map((item) => ({
-						variantId: item.variantId,
-						quantity: item.quantity,
-					})),
-					subtotal: cart.total,
-				}
-			: "skip",
-	);
+		convexQuery(
+			api.delivery.quote,
+			deliveryAvailable && watchedMethod === "delivery"
+				? {
+						retailerId,
+						latitude: hasCoords ? latNum : undefined,
+						longitude: hasCoords ? lngNum : undefined,
+						state:
+							watchedState.trim().length > 0 ? watchedState.trim() : undefined,
+						// Weight-mode input: the server reads each variant's parcel weight
+						// itself, so the quote re-runs whenever the cart changes — two
+						// carts with the same subtotal can weigh differently.
+						items: cart.items.map((item) => ({
+							variantId: item.variantId,
+							quantity: item.quantity,
+						})),
+						subtotal: cart.total,
+					}
+				: "skip",
+		),
+	).data;
 	const rawQuote = watchedMethod === "delivery" ? deliveryQuote : undefined;
 
 	// --- Live Lalamove quote (86eyb5hrf) ------------------------------------

@@ -1,6 +1,7 @@
 import { useAuth } from "@clerk/tanstack-react-start";
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
 import { ArrowRight, Check, Sparkles, Star } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import { cn } from "../../lib/utils";
@@ -87,7 +88,8 @@ export function PricingTeaser() {
 	// Live founding-spot count, same public query the Founding 10 section uses.
 	// Defaults to all-open while loading / on SSR — the honest fallback.
 	const remaining =
-		useQuery(api.foundingMembers.getSpotsRemaining) ?? TOTAL_FOUNDING_SPOTS;
+		useQuery(convexQuery(api.foundingMembers.getSpotsRemaining, {})).data ??
+		TOTAL_FOUNDING_SPOTS;
 
 	return (
 		<section

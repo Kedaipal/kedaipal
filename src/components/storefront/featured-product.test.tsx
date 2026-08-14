@@ -34,9 +34,16 @@ vi.mock("@tanstack/react-router", () => ({
 // popularProducts carries `since`.
 let productsResult: unknown;
 let popularResult: unknown;
-vi.mock("convex/react", () => ({
-	useQuery: (_fn: unknown, args: Record<string, unknown>) =>
-		args && "since" in args ? popularResult : productsResult,
+// Reads go through the adapter — convexQuery passes args through, and the
+// useQuery stub answers by args shape (the popular query carries `since`).
+vi.mock("@convex-dev/react-query", () => ({
+	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
+}));
+vi.mock("@tanstack/react-query", () => ({
+	useQuery: (opts: { args: Record<string, unknown> }) => ({
+		data: opts.args && "since" in opts.args ? popularResult : productsResult,
+		isPending: false,
+	}),
 }));
 vi.mock("sonner", () => ({
 	toast: { success: vi.fn(), error: vi.fn() },

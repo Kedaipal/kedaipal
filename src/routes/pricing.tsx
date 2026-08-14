@@ -1,6 +1,7 @@
 import { useAuth } from "@clerk/tanstack-react-start";
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
 import { ArrowRight, Check, Minus, Quote, Sparkles, Star } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
@@ -15,6 +16,7 @@ import {
 import { MoneyMathRow } from "../components/landing/money-math";
 import { Nav } from "../components/landing/nav";
 import { Button } from "../components/ui/button";
+import { useSupportWaNumber } from "../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../lib/contact";
 import { resolveTierCta } from "../lib/pricing-cta";
 import type { SubscriptionView } from "../lib/subscription";
@@ -589,9 +591,8 @@ function PricingPage() {
 	// this public marketing route. null while loading / storeless admin → the
 	// card CTA falls back safely.
 	const planState = useQuery(
-		api.retailers.getMyPlan,
-		isLoaded && isSignedIn ? {} : "skip",
-	);
+		convexQuery(api.retailers.getMyPlan, isLoaded && isSignedIn ? {} : "skip"),
+	).data;
 	const subscription: SubscriptionView | null = planState ?? null;
 	// Until Clerk has loaded AND (for a signed-in seller) the plan query resolves,
 	// the final CTA is unknown — show a spinner in the button rather than flipping
@@ -607,6 +608,7 @@ function PricingPage() {
 	const tiers = useTiers();
 	const features = useFeatures();
 	const faqs = useFaqs();
+	const supportWa = useSupportWaNumber();
 
 	return (
 		<main className="min-h-dvh bg-background text-foreground">
@@ -735,7 +737,7 @@ function PricingPage() {
 								    already carry this page's buttons, and a founding spot is a
 								    conversation rather than a checkout (86eye3p6z §C). */}
 								<a
-									href={buildWaContactLink(m.founding_wa_message())}
+									href={buildWaContactLink(m.founding_wa_message(), supportWa)}
 									target="_blank"
 									rel="noopener noreferrer"
 									className="group inline-flex min-h-11 items-center gap-1.5 text-[15px] font-semibold text-accent underline-offset-4 hover:underline"

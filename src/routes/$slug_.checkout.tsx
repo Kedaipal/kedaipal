@@ -1,10 +1,11 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
 	createFileRoute,
 	Link,
 	notFound,
 	redirect,
 } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
 import { ArrowLeft } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import { CheckoutPage } from "../components/storefront/checkout-form";
@@ -118,13 +119,15 @@ function CheckoutRoute() {
 	const { slug } = Route.useParams();
 	// Live query keeps the page reactive after the SSR'd loader response —
 	// same pattern as the store home and category pages.
-	const result = useQuery(api.retailers.getRetailerBySlug, { slug });
+	const result = useQuery(
+		convexQuery(api.retailers.getRetailerBySlug, { slug }),
+	).data;
 	const retailer = result?.status === "ok" ? result.retailer : undefined;
 	// Same per-retailer cart as the browse pages — this page reviews it.
 	const cart = useCart(retailer?._id);
-	const pickupLocations = useQuery(api.pickupLocations.listActivePublicBySlug, {
-		slug,
-	});
+	const pickupLocations = useQuery(
+		convexQuery(api.pickupLocations.listActivePublicBySlug, { slug }),
+	).data;
 
 	// Hold the skeleton until BOTH the store and the persisted cart are known.
 	// Without the cart gate the first committed render shows the empty-cart

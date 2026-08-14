@@ -20,7 +20,11 @@ import { useEffect, useRef, useState } from "react";
 import { cn } from "../../lib/utils";
 
 export interface BottomNavProps {
-	actionableCount: number;
+	// Orders the seller hasn't looked at yet (the inbox's "New" bucket). A badge
+	// is a notification, so it must be able to reach zero by working the orders —
+	// counting the whole in-progress pipeline would only ever climb. Same count as
+	// the inbox "New" chip + the Home tile. See docs/order-inbox.md.
+	newOrdersCount: number;
 	// Show the admin tabs (Sellers / Billing / WABA) instead of the seller nav.
 	// True for a storeless admin (no seller store to manage) AND for any admin
 	// while they're on an /app/admin route — so an admin can move between ALL
@@ -61,7 +65,7 @@ const MORE_ROUTES = [
 ] as const;
 
 export function BottomNav({
-	actionableCount,
+	newOrdersCount,
 	adminNav,
 	hasStore,
 	crmLocked,
@@ -112,7 +116,12 @@ export function BottomNav({
 					to: "/app/orders",
 					label: "Orders",
 					icon: ShoppingBag,
-					badge: actionableCount,
+					badge: newOrdersCount,
+					// A badge must land on exactly what it counted — an unfiltered
+					// inbox would make the seller re-find it. Only when there IS
+					// something new: otherwise the tab would filter the inbox down to
+					// an empty "New" list every time it's used for plain navigation.
+					search: newOrdersCount > 0 ? { bucket: "new" as const } : undefined,
 				},
 				{ to: "/app/checkout", label: "Counter", icon: QrCode },
 				{
@@ -151,7 +160,12 @@ function NavTab({ tab }: { tab: Tab }) {
 		<Link
 			to={to}
 			search={search}
-			activeOptions={exact ? { exact: true } : undefined}
+			// includeSearch defaults to TRUE, and a link that carries `search`
+			// (the Orders badge's ?bucket=new) would then only read active when
+			// the URL matches that exact search — going dark on /app/orders,
+			// on other buckets, and on order detail. Active state is about
+			// WHERE the seller is, never which filter is applied.
+			activeOptions={{ exact: exact ?? false, includeSearch: false }}
 			activeProps={{ className: "text-foreground" }}
 			inactiveProps={{ className: "text-muted-foreground" }}
 			className="relative flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 text-[10px]"

@@ -1,4 +1,5 @@
-import { useQuery } from "convex/react";
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
 	ChefHat,
 	ChevronLeft,
@@ -614,7 +615,9 @@ export function ProductWizard({
 	);
 	// Categories are only offered on review when the store actually has some —
 	// a brand-new seller shouldn't meet a whole new concept mid-wizard.
-	const categories = useQuery(api.categories.listForRetailer, { retailerId });
+	const categories = useQuery(
+		convexQuery(api.categories.listForRetailer, { retailerId }),
+	).data;
 	const hasCategories = (categories?.filter((c) => c.active).length ?? 0) > 0;
 
 	// Track blob: preview URLs so they're revoked on overwrite/remove/unmount.
