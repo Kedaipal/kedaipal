@@ -160,7 +160,12 @@ function NavTab({ tab }: { tab: Tab }) {
 		<Link
 			to={to}
 			search={search}
-			activeOptions={exact ? { exact: true } : undefined}
+			// includeSearch defaults to TRUE, and a link that carries `search`
+			// (the Orders badge's ?bucket=new) would then only read active when
+			// the URL matches that exact search — going dark on /app/orders,
+			// on other buckets, and on order detail. Active state is about
+			// WHERE the seller is, never which filter is applied.
+			activeOptions={{ exact: exact ?? false, includeSearch: false }}
 			activeProps={{ className: "text-foreground" }}
 			inactiveProps={{ className: "text-muted-foreground" }}
 			className="relative flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 text-[10px]"

@@ -107,6 +107,18 @@ describe("BottomNav — 5-tab bar + More sheet", () => {
 		expect(router.state.location.search).toEqual({});
 	});
 
+	it("Orders reads active on /app/orders even while the badge carries a search filter", async () => {
+		// includeSearch defaults to true in TanStack Router, so the badge's
+		// `search={{bucket:"new"}}` would otherwise switch the tab OFF whenever
+		// the URL isn't exactly ?bucket=new — e.g. right after tapping the badge
+		// and opening an order, or after switching to the "All" chip. Active
+		// state must track WHERE the seller is, not which filter is applied.
+		renderNav({ newOrdersCount: 3 }, "/app/orders");
+		await waitFor(() => expect(screen.getByText("Orders")).toBeTruthy());
+		expect(screen.getByText("Orders").className).toContain("font-bold");
+		expect(screen.getByText("Home").className).not.toContain("font-bold");
+	});
+
 	it("marks Insights with a Pro chip when the plan locks it", async () => {
 		renderNav({ insightsLocked: true });
 		await waitFor(() => expect(screen.getByText("Insights")).toBeTruthy());

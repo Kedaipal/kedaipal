@@ -304,7 +304,11 @@ function SidebarLink({
 			to={to}
 			search={search}
 			onClick={onClick}
-			activeOptions={exact ? { exact: true } : undefined}
+			// includeSearch defaults to TRUE, so a link carrying `search` (Orders'
+			// ?bucket=new, Settings' ?tab=store) would only read active on that
+			// exact search — dark on other buckets/tabs and on child routes.
+			// Active state is about WHERE the seller is, never which filter/tab.
+			activeOptions={{ exact: exact ?? false, includeSearch: false }}
 			title={collapsed ? label : undefined}
 			className={cn(
 				"group relative flex h-10 items-center rounded-lg text-sm transition-colors",
