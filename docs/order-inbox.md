@@ -41,6 +41,21 @@ the full inbox. See [`manual-subscription.md`](./manual-subscription.md)
   when the seller opens the order — the moment they've actually seen it. It
   deliberately does **not** bump `updatedAt`, which would corrupt the
   time-in-status badge.
+- **The nav badge counts New, not the pipeline** ([`86eyjfazz`](https://app.clickup.com/t/86eyjfazz)) —
+  the Orders badge in the sidebar + mobile bottom nav used to render
+  `pending + confirmed`, which counts orders the seller has already accepted and
+  is actively working, so on a healthy store it only ever climbed. A badge is a
+  **notification**: it must mean "N things you haven't looked at" and working
+  through them must drive it to zero, or the seller learns to ignore the one
+  surface meant to tell them an order landed. It now reads
+  `orders.countActionable.newOrders` — the same `pending`-OR-unseen definition
+  above — so the **badge, the New chip and the Home "New orders" tile share one
+  rule** and can't disagree. It's computed from rows `countActionable` already
+  collects (no extra read), and tapping it navigates to `/app/orders?bucket=new`
+  so the seller lands on exactly what was counted — but only while the count is
+  non-zero, so the tab stays plain navigation the rest of the time.
+  `pending`/`confirmed` stay on the payload as raw status counts: the order
+  toasts (`useOrderToastNotifications`) announce on their deltas.
 - **Payment status is an orthogonal filter + badge, NOT a bucket** — an order can
   be "confirmed" *and* "unpaid", so pulling it into its own bucket would yank it
   out of In-progress while still being worked. Payment is a multi-select filter.
@@ -213,6 +228,11 @@ and escalates for `pending` **or** unseen.
   skips no-ops, skips mockup-gated when bulking to packed, bulk-cancel restores
   stock, foreign-order batch is rejected (owner-only).
 - `order-bulk-bar.test.tsx` — count + clear + the "Mark as" action menu.
+- `convex/orders.test.ts` → "the nav badge count …" — `countActionable.newOrders`
+  tracks the New bucket: counts pending + unseen push orders, drops as each is
+  opened, never re-inflates as a seen order advances, and a legacy confirmed
+  order is never counted. `bottom-nav.test.tsx` covers the badge value + that it
+  lands on `?bucket=new` (and doesn't filter when there's nothing new).
 
 ## Phase 2 — bulk actions (shipped)
 
