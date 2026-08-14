@@ -1,5 +1,7 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useAction, useMutation, useQuery } from "convex/react";
+import { useAction, useMutation } from "convex/react";
 import {
 	ArrowLeft,
 	ArrowRight,
@@ -45,6 +47,7 @@ import {
 	manualReminderEligibility,
 } from "../../convex/lib/paymentReminder";
 import type { PickupSnapshot } from "../../convex/lib/whatsappCopy";
+import { ProBadge } from "../components/app/pro-gate";
 import { FulfilmentDateBadge } from "../components/dashboard/fulfilment-date-badge";
 import {
 	PageHeader,
@@ -62,7 +65,6 @@ import {
 	DeliveryAddressDisplay,
 	formatAddressInline,
 } from "../components/storefront/delivery-address-display";
-import { ProBadge } from "../components/app/pro-gate";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
@@ -301,7 +303,7 @@ function OrderProgressStepper({
 function OrderDetailRoute() {
 	const { shortId } = Route.useParams();
 	const navigate = useNavigate();
-	const order = useQuery(api.orders.get, { shortId });
+	const order = useQuery(convexQuery(api.orders.get, { shortId })).data;
 	const updateStatus = useMutation(api.orders.updateStatus);
 	const advanceToStage = useMutation(api.orders.advanceToStage);
 	const markPaymentReceived = useMutation(api.orders.markPaymentReceived);
@@ -326,29 +328,35 @@ function OrderDetailRoute() {
 	// the inbox bulk bar so the two surfaces can't drift — this is discoverability,
 	// the server is the guard.
 	const retailer = useDashboardRetailer();
-	const amIAdmin = useQuery(api.billing.amIAdmin);
+	const amIAdmin = useQuery(convexQuery(api.billing.amIAdmin, {})).data;
 	const canHardDelete = canHardDeleteOrders({
 		actingAsAdmin: retailer?.actingAsAdmin,
 		amIAdmin,
 	});
 	const proofUrl = useQuery(
-		api.orders.getPaymentProofUrl,
-		order?.paymentProofStorageId ? { orderId: order._id } : "skip",
-	);
+		convexQuery(
+			api.orders.getPaymentProofUrl,
+			order?.paymentProofStorageId ? { orderId: order._id } : "skip",
+		),
+	).data;
 	const customerImageUrl = useQuery(
-		api.orders.getCustomerImageUrl,
-		order?.customerImageStorageId ? { shortId } : "skip",
-	);
+		convexQuery(
+			api.orders.getCustomerImageUrl,
+			order?.customerImageStorageId ? { shortId } : "skip",
+		),
+	).data;
 	// CRM context for the customer card ("8 orders · RM 1,240") — answers "who is
 	// this?" without leaving the order.
 	// Active Lalamove booking awareness for the cancel dialog (same query the
 	// BookDeliveryCard subscribes to — Convex dedupes identical subscriptions).
 	const dispatchInfo = useQuery(
-		api.lalamove.getDeliveryJob,
-		order?.deliveryMethod === "delivery" && order.shortId
-			? { shortId: order.shortId }
-			: "skip",
-	);
+		convexQuery(
+			api.lalamove.getDeliveryJob,
+			order?.deliveryMethod === "delivery" && order.shortId
+				? { shortId: order.shortId }
+				: "skip",
+		),
+	).data;
 	const hasActiveRiderBooking =
 		!!dispatchInfo?.job && isActiveJobStatus(dispatchInfo.job.status);
 	// Rider dispatch IS this vendor's delivery method (they picked Lalamove as
@@ -407,11 +415,13 @@ function OrderDetailRoute() {
 	// this guard fixes; customers list/detail carry the same skip).
 	const crmLocked = isCrmLocked(retailer);
 	const crmCustomer = useQuery(
-		api.customers.get,
-		retailer && !crmLocked && order?.customerId
-			? { customerId: order.customerId }
-			: "skip",
-	);
+		convexQuery(
+			api.customers.get,
+			retailer && !crmLocked && order?.customerId
+				? { customerId: order.customerId }
+				: "skip",
+		),
+	).data;
 	// Holds the id of the in-flight advance target ("cancel" for cancellation).
 	const [pending, setPending] = useState<string | null>(null);
 	// The mark-shipped prompt (courier + tracking number, optional). Opened
@@ -922,11 +932,10 @@ function OrderDetailRoute() {
 								</b>{" "}
 								online, but this order&apos;s total is{" "}
 								<b>{formatPrice(order.total, order.currency)}</b> — usually a
-								checkout link opened before the price changed. It was{" "}
-								<b>not</b> confirmed automatically. Check it in your HitPay
-								dashboard: accept it with &ldquo;Mark payment received&rdquo;
-								below, or refund it there. The customer has been told not to
-								pay again.
+								checkout link opened before the price changed. It was <b>not</b>{" "}
+								confirmed automatically. Check it in your HitPay dashboard:
+								accept it with &ldquo;Mark payment received&rdquo; below, or
+								refund it there. The customer has been told not to pay again.
 							</p>
 						)}
 						<div className="mt-2 flex items-start justify-between gap-2">
@@ -2025,9 +2034,9 @@ function MockupCard({ order }: { order: Doc<"orders"> }) {
 	const submitMockup = useMutation(api.orders.submitMockup);
 	const updateMockupQuote = useMutation(api.orders.updateMockupQuote);
 	const waiveMockup = useMutation(api.orders.waiveMockup);
-	const mockupUrls = useQuery(api.orders.getMockupUrls, {
-		shortId: order.shortId,
-	});
+	const mockupUrls = useQuery(
+		convexQuery(api.orders.getMockupUrls, { shortId: order.shortId }),
+	).data;
 	const [uploading, setUploading] = useState(false);
 	const [waiving, setWaiving] = useState(false);
 	const [savingPrice, setSavingPrice] = useState(false);
@@ -2417,9 +2426,11 @@ function NotifyManagerCard({
 	// the order (legacy orders), in which case we fall back to the snapshot-
 	// only Copy flow.
 	const liveLocation = useQuery(
-		api.pickupLocations.getOwnedById,
-		pickupLocationId ? { pickupLocationId } : "skip",
-	);
+		convexQuery(
+			api.pickupLocations.getOwnedById,
+			pickupLocationId ? { pickupLocationId } : "skip",
+		),
+	).data;
 	const managerName = liveLocation?.managerName?.trim();
 	const managerWaPhone = liveLocation?.managerWaPhone?.trim();
 	// Phone is the gate — without it there's no wa.me link to open. Name is

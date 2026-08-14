@@ -37,8 +37,12 @@ const categories: Array<{
 	productCount: number;
 	imageUrl?: string;
 }> = [];
-vi.mock("convex/react", () => ({
-	useQuery: () => categories,
+// The rail reads via `useQuery(convexQuery(...)).data` — stub the adapter pair.
+vi.mock("@convex-dev/react-query", () => ({
+	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
+}));
+vi.mock("@tanstack/react-query", () => ({
+	useQuery: () => ({ data: categories, isPending: false }),
 }));
 
 afterEach(() => {

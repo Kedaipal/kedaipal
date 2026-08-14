@@ -1,5 +1,7 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import {
 	Archive,
@@ -73,9 +75,11 @@ function MobileBackLink() {
 function CategoriesRoute() {
 	const retailer = useDashboardRetailer();
 	const categories = useQuery(
-		api.categories.listForRetailer,
-		retailer ? { retailerId: retailer._id } : "skip",
-	);
+		convexQuery(
+			api.categories.listForRetailer,
+			retailer ? { retailerId: retailer._id } : "skip",
+		),
+	).data;
 
 	const [dialog, setDialog] = useState<
 		{ open: true; category: CategoryRow | undefined } | { open: false }

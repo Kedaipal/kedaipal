@@ -1,5 +1,6 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
@@ -152,9 +153,11 @@ export function OrderNotificationsBridge({
 	const prefs = useNotifyPrefs();
 	const navigate = useNavigate();
 	const activity = useQuery(
-		api.notifications.latestActivity,
-		retailerId && prefs.enabled ? { retailerId } : "skip",
-	);
+		convexQuery(
+			api.notifications.latestActivity,
+			retailerId && prefs.enabled ? { retailerId } : "skip",
+		),
+	).data;
 	const baseline = useRef<{
 		orderAt: number;
 		failedAt: number;
@@ -192,10 +195,7 @@ export function OrderNotificationsBridge({
 			});
 		}
 
-		if (
-			activity.newestFailedBooking &&
-			failedAt > baseline.current.failedAt
-		) {
+		if (activity.newestFailedBooking && failedAt > baseline.current.failedAt) {
 			const { shortId, reason } = activity.newestFailedBooking;
 			if (prefs.sound) playChime();
 			flashTitle(`⚠️ Rider booking failed — ${shortId}`);

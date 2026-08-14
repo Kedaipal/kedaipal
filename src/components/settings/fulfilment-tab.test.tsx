@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+
+import { useQuery } from "@tanstack/react-query";
 import {
 	cleanup,
 	fireEvent,
@@ -7,7 +9,7 @@ import {
 	waitFor,
 	within,
 } from "@testing-library/react";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import { type FunctionReference, getFunctionName } from "convex/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../../convex/_generated/api";
@@ -21,6 +23,12 @@ import { FulfilmentTab } from "./fulfilment-tab";
 // These tests render the real tab and assert the mutation args carry the
 // acted-as id (and that the checklist stamp skips under act-as).
 vi.mock("convex/react");
+// The tab reads via `useQuery(convexQuery(...)).data` — mock the adapter pair
+// (convexQuery passes the ref through; useQuery answers by function name).
+vi.mock("@convex-dev/react-query", () => ({
+	convexQuery: (fn: unknown, args: unknown) => ({ __fn: fn, args }),
+}));
+vi.mock("@tanstack/react-query", () => ({ useQuery: vi.fn() }));
 // The address autocomplete loads the Google Places script on mount — inert
 // stub; nothing here exercises it (default charge mode is "free").
 vi.mock("../forms/google-address-autocomplete", () => ({
@@ -47,10 +55,12 @@ describe("FulfilmentTab act-as wiring", () => {
 	beforeEach(() => {
 		updateSettings = vi.fn().mockResolvedValue({ ok: true });
 		markSeen = vi.fn().mockResolvedValue({ updated: true });
-		vi.mocked(useQuery).mockImplementation(((
-			ref: FunctionReference<"query">,
-		) =>
-			getFunctionName(ref) === NAME.listLocations ? [] : undefined) as never);
+		vi.mocked(useQuery).mockImplementation(((opts: {
+			__fn: FunctionReference<"query">;
+		}) => ({
+			data: getFunctionName(opts.__fn) === NAME.listLocations ? [] : undefined,
+			isPending: false,
+		})) as never);
 		vi.mocked(useMutation).mockImplementation(((
 			ref: FunctionReference<"mutation">,
 		) => {
@@ -137,10 +147,12 @@ describe("Collection service toggle (86eyg0n8e)", () => {
 
 	beforeEach(() => {
 		updateSettings = vi.fn().mockResolvedValue({ ok: true });
-		vi.mocked(useQuery).mockImplementation(((
-			ref: FunctionReference<"query">,
-		) =>
-			getFunctionName(ref) === NAME.listLocations ? [] : undefined) as never);
+		vi.mocked(useQuery).mockImplementation(((opts: {
+			__fn: FunctionReference<"query">;
+		}) => ({
+			data: getFunctionName(opts.__fn) === NAME.listLocations ? [] : undefined,
+			isPending: false,
+		})) as never);
 		vi.mocked(useMutation).mockImplementation(((
 			ref: FunctionReference<"mutation">,
 		) =>

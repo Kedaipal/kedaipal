@@ -34,7 +34,9 @@ interface SidebarProps {
 	// Null when a Kedaipal admin has no store of their own — the dashboard chrome
 	// still renders (admin links + user menu), just without the seller sections.
 	retailer: Retailer | null;
-	actionableCount: number;
+	// Orders the seller hasn't looked at yet — the inbox's "New" bucket. See the
+	// note on BottomNavProps: a badge is a notification, not a pipeline gauge.
+	newOrdersCount: number;
 	isAdmin?: boolean;
 	// True when an admin is viewing their OWN store — the tier pill reads "Admin"
 	// instead of the store's trial/plan state. False while acting-as a seller.
@@ -43,7 +45,7 @@ interface SidebarProps {
 
 export function Sidebar({
 	retailer,
-	actionableCount,
+	newOrdersCount,
 	isAdmin,
 	adminBadge,
 }: SidebarProps) {
@@ -138,7 +140,13 @@ export function Sidebar({
 							icon={ShoppingBag}
 							label="Orders"
 							collapsed={collapsed}
-							badge={actionableCount}
+							badge={newOrdersCount}
+							// Land on exactly what the badge counted — but only while
+							// there IS something new, so the link stays plain navigation
+							// the rest of the time. Mirrors the bottom nav.
+							search={
+								newOrdersCount > 0 ? { bucket: "new" as const } : undefined
+							}
 						/>
 						<SidebarLink
 							to="/app/checkout"
@@ -296,7 +304,11 @@ function SidebarLink({
 			to={to}
 			search={search}
 			onClick={onClick}
-			activeOptions={exact ? { exact: true } : undefined}
+			// includeSearch defaults to TRUE, so a link carrying `search` (Orders'
+			// ?bucket=new, Settings' ?tab=store) would only read active on that
+			// exact search — dark on other buckets/tabs and on child routes.
+			// Active state is about WHERE the seller is, never which filter/tab.
+			activeOptions={{ exact: exact ?? false, includeSearch: false }}
 			title={collapsed ? label : undefined}
 			className={cn(
 				"group relative flex h-10 items-center rounded-lg text-sm transition-colors",

@@ -1,5 +1,6 @@
 import { m } from "../../paraglide/messages";
 import { FadeIn } from "./fade-in";
+import { carouselSlideClass, carouselTrackClass } from "./landing-ui";
 
 /** Decorative pile of "buried" chats — the pain made visible. */
 function BuriedChats() {
@@ -59,21 +60,32 @@ export function ProblemStrip() {
 					</FadeIn>
 				</div>
 
-				<div className="mt-16 grid gap-px overflow-hidden rounded-3xl border border-white/10 bg-white/10 md:mt-20 md:grid-cols-3">
-					{problems.map((p, i) => (
-						<FadeIn key={p.title} delay={i * 0.1} className="h-full">
-							<div className="relative h-full bg-primary p-7 text-primary-foreground md:p-9">
-								<span className="text-5xl font-black leading-none text-destructive/80 md:text-6xl">
-									{String(i + 1).padStart(2, "0")}
-								</span>
-								<h3 className="mt-4 text-lg font-bold md:text-xl">{p.title}</h3>
-								<p className="mt-3 text-sm leading-relaxed text-primary-foreground/60">
-									{p.body}
-								</p>
+				{/* Mobile: snap carousel of individually-bordered cards. md+: the
+				    original joined grid (parent border + gap-px showing the hairline
+				    ground through), so each card sheds its own border there. */}
+				<FadeIn className="mt-16 md:mt-20">
+					<div
+						className={carouselTrackClass(
+							"md:grid md:grid-cols-3 md:gap-px md:overflow-hidden md:rounded-3xl md:border md:border-white/10 md:bg-white/10",
+						)}
+					>
+						{problems.map((p, i) => (
+							<div key={p.title} className={carouselSlideClass("h-full")}>
+								<div className="relative h-full overflow-hidden rounded-3xl border border-white/10 bg-primary p-7 text-primary-foreground md:rounded-none md:border-0 md:p-9">
+									<span className="text-5xl font-black leading-none text-destructive/80 md:text-6xl">
+										{String(i + 1).padStart(2, "0")}
+									</span>
+									<h3 className="mt-4 text-lg font-bold md:text-xl">
+										{p.title}
+									</h3>
+									<p className="mt-3 text-sm leading-relaxed text-primary-foreground/60">
+										{p.body}
+									</p>
+								</div>
 							</div>
-						</FadeIn>
-					))}
-				</div>
+						))}
+					</div>
+				</FadeIn>
 			</div>
 		</section>
 	);

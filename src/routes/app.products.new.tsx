@@ -1,10 +1,11 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import { useRef, useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { PageHeader } from "../components/dashboard/page-header";
-import { Button } from "../components/ui/button";
 import {
 	ProductForm,
 	type ProductFormDraft,
@@ -13,9 +14,10 @@ import {
 import {
 	formDraftToWizardState,
 	ProductWizard,
-	type wizardHandoff,
 	type WizardState,
+	type wizardHandoff,
 } from "../components/forms/product-wizard";
+import { Button } from "../components/ui/button";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { hasFeature } from "../lib/subscription";
 
@@ -41,9 +43,11 @@ function NewProductRoute() {
 	// whole product and only then bounce off the server gate is the dead end this
 	// route would otherwise have. Tiny query (six numbers, no catalog).
 	const cap = useQuery(
-		api.products.capState,
-		retailer ? { retailerId: retailer._id } : "skip",
-	);
+		convexQuery(
+			api.products.capState,
+			retailer ? { retailerId: retailer._id } : "skip",
+		),
+	).data;
 	const create = useMutation(api.products.create);
 	const setProductCategories = useMutation(api.categories.setProductCategories);
 	// Wizard → full form: the wizard's whole draft — basics as initialValues
@@ -99,7 +103,11 @@ function NewProductRoute() {
 
 	function openFullForm(handoff: ReturnType<typeof wizardHandoff>) {
 		setWizardDraft(handoff);
-		navigate({ to: "/app/products/new", search: { form: "full" }, replace: true });
+		navigate({
+			to: "/app/products/new",
+			search: { form: "full" },
+			replace: true,
+		});
 	}
 
 	function switchBackToWizard() {

@@ -1,5 +1,7 @@
+import { convexQuery } from "@convex-dev/react-query";
 import { useStore } from "@tanstack/react-form";
-import { useMutation, useQuery } from "convex/react";
+import { useQuery } from "@tanstack/react-query";
+import { useMutation } from "convex/react";
 import { X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { type FormEvent, useState } from "react";
@@ -80,9 +82,11 @@ export function AddressEditDialog({
 	// 27 Jul — an address change must show the buyer the new rider price, never
 	// drop the order onto a seller-calculates path).
 	const deliveryQuote = useQuery(
-		api.delivery.quote,
-		open && retailerId ? { retailerId, subtotal } : "skip",
-	);
+		convexQuery(
+			api.delivery.quote,
+			open && retailerId ? { retailerId, subtotal } : "skip",
+		),
+	).data;
 	const isLiveMode = deliveryQuote?.kind === "live";
 
 	const form = useAppForm({

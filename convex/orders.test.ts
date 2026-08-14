@@ -6610,6 +6610,111 @@ describe("orders — the seller's unseen-order signal survives confirm-at-create
 		expect(inProgress.orders.map((o) => o.shortId)).toEqual([shortId]);
 	});
 
+	test("the nav badge count (countActionable.newOrders) matches the New bucket", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const asA = t.withIdentity({ subject: USER_A });
+		const place = async () => {
+			const { shortId } = await t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer: { name: "Ali", waPhone: "60123456789" },
+				deliveryAddress: validAddress,
+			});
+			return t.run(async (ctx) => {
+				const o = await ctx.db
+					.query("orders")
+					.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+					.first();
+				return o!._id;
+			});
+		};
+		const badge = async () =>
+			(
+				await asA.query(api.orders.countActionable, {
+					retailerId: retailer._id,
+				})
+			).newOrders;
+
+		const first = await place();
+		const second = await place();
+		expect(await badge()).toBe(2);
+
+		// Opening an order retires it from the badge — the whole point: working
+		// through the orders drives the count to zero.
+		await asA.mutation(api.orders.markSeen, { orderId: first });
+		expect(await badge()).toBe(1);
+		await asA.mutation(api.orders.markSeen, { orderId: second });
+		expect(await badge()).toBe(0);
+
+		// Advancing a seen order through the pipeline never re-inflates it (the
+		// old `pending + confirmed` badge climbed here and never came back down).
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: first,
+			status: "packed",
+		});
+		expect(await badge()).toBe(0);
+
+		// And it agrees with the inbox chip it mirrors.
+		const inbox = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		expect(inbox.counts.new).toBe(0);
+	});
+
+	test("the nav badge counts a legacy pending order and ignores a worked confirmed one", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const asA = t.withIdentity({ subject: USER_A });
+		// Template env unset → legacy `pending` orders.
+		const place = async () => {
+			const { shortId } = await t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer: { name: "Ali", waPhone: "60123456789" },
+				deliveryAddress: validAddress,
+			});
+			return t.run(async (ctx) => {
+				const o = await ctx.db
+					.query("orders")
+					.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+					.first();
+				return o!._id;
+			});
+		};
+		const badge = async () =>
+			(
+				await asA.query(api.orders.countActionable, {
+					retailerId: retailer._id,
+				})
+			).newOrders;
+
+		const orderId = await place();
+		expect(await badge()).toBe(1);
+
+		// Confirming it = the seller has picked it up. A legacy confirmed order
+		// carries no `confirmationPushStatus`, so it's never "unseen".
+		await asA.mutation(api.orders.updateStatus, {
+			orderId,
+			status: "confirmed",
+		});
+		expect(await badge()).toBe(0);
+		// The raw status counts the toasts read are untouched.
+		const counts = await asA.query(api.orders.countActionable, {
+			retailerId: retailer._id,
+		});
+		expect(counts.pending).toBe(0);
+		expect(counts.confirmed).toBe(1);
+	});
+
 	test("markSeen is idempotent and never un-sets", async () => {
 		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
 		const t = setup();

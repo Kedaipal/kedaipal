@@ -1,4 +1,5 @@
-import { useQuery } from "convex/react";
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Component, type ReactNode } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
@@ -77,13 +78,17 @@ function FeaturedProductInner({
 	storeSlug: string;
 	cart: UseCart;
 }) {
-	const products = useQuery(api.products.list, { retailerId });
+	const products = useQuery(
+		convexQuery(api.products.list, { retailerId }),
+	).data;
 	// MYT-midnight-aligned anchor: every buyer on the same date sends the same
 	// args, so the query result is cached once per store per day.
-	const popular = useQuery(api.products.popularProducts, {
-		retailerId,
-		since: popularSince(),
-	});
+	const popular = useQuery(
+		convexQuery(api.products.popularProducts, {
+			retailerId,
+			since: popularSince(),
+		}),
+	).data;
 
 	if (!products || !popular || popular.length === 0) return null;
 	const byId = new Map(products.map((p) => [p._id as string, p]));
