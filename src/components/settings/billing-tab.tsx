@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import { isUnlimited } from "../../../convex/lib/plans";
+import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../../lib/contact";
 import { formatPrice } from "../../lib/format";
 import { LEGAL_CONTACT_EMAIL } from "../../lib/legal";
@@ -43,6 +44,7 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 	const isAdmin = useQuery(api.billing.amIAdmin) ?? false;
 	const invoices = useQuery(api.invoices.myInvoices, {}) ?? [];
 	const instructions = useQuery(api.billing.paymentInstructions, {});
+	const supportWa = useSupportWaNumber();
 
 	// A Kedaipal admin on their OWN store runs the app for free and is never on a
 	// tier — no trial, plan, cap or invoice applies. Mirror the shell chrome (which
@@ -212,6 +214,7 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 							<a
 								href={buildWaContactLink(
 									`Hi, I'd like to upgrade from Starter to Pro for my Kedaipal store (/${retailer.slug}).`,
+									supportWa,
 								)}
 								target="_blank"
 								rel="noopener noreferrer"
@@ -306,6 +309,7 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 						<a
 							href={buildWaContactLink(
 								`Hi, I've paid invoice ${pending.invoiceNumber} for my Kedaipal store (/${retailer.slug}).`,
+								supportWa,
 							)}
 							target="_blank"
 							rel="noopener noreferrer"
@@ -342,6 +346,7 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 							sub.status === "past_due"
 								? `Hi, I'd like to renew my Kedaipal subscription for my store (/${retailer.slug}).`
 								: `Hi, I'd like to choose a plan for my Kedaipal store (/${retailer.slug}).`,
+								supportWa,
 						)}
 						target="_blank"
 						rel="noopener noreferrer"
@@ -429,6 +434,7 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 					<a
 						href={buildWaContactLink(
 							`Hi, I have a billing question about my Kedaipal store (/${retailer.slug}).`,
+							supportWa,
 						)}
 						target="_blank"
 						rel="noopener noreferrer"

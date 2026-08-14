@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { ExternalLink, Sparkles } from "lucide-react";
 import type { ReactNode } from "react";
+import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../../lib/contact";
 
 /**
@@ -27,8 +28,10 @@ export function ProFeatureWall({
 	blurb: string;
 	bullets?: string[];
 }) {
+	const supportWa = useSupportWaNumber();
 	const waUrl = buildWaContactLink(
 		`Hi, I'd like to upgrade to Pro for my Kedaipal store (/${slug}).`,
+		supportWa,
 	);
 	return (
 		<div className="flex flex-col items-center gap-4 rounded-2xl border border-dashed border-border px-6 py-12 text-center">

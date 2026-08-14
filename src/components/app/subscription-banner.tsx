@@ -3,6 +3,7 @@ import { useQuery } from "convex/react";
 import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../../../convex/_generated/api";
+import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../../lib/contact";
 import { formatPrice } from "../../lib/format";
 import {
@@ -59,6 +60,9 @@ export function SubscriptionBanner({
 					? `subwarn:cap:${new Date(now).toISOString().slice(0, 7)}`
 					: null;
 	const [dismissed, dismiss] = useDismissed(dismissKey);
+	// Read above the early returns — the past-due CTA that uses it is built inside
+	// a branch, where a hook can't go.
+	const supportWa = useSupportWaNumber();
 
 	if (state.kind === "none") return null;
 
@@ -101,6 +105,7 @@ export function SubscriptionBanner({
 	if (state.kind === "pastDue") {
 		const waUrl = buildWaContactLink(
 			`Hi, I'd like to settle my Kedaipal subscription for my store (/${slug}).`,
+			supportWa,
 		);
 		return (
 			<div className="flex flex-col gap-2 border-b border-red-200 bg-red-50 px-5 py-3 dark:border-red-900 dark:bg-red-950/40 sm:flex-row sm:items-center sm:justify-between lg:px-8">

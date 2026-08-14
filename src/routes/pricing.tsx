@@ -12,6 +12,7 @@ import {
 import { Nav } from "../components/landing/nav";
 import { ResellerBandTable } from "../components/landing/reseller-band-table";
 import { Button } from "../components/ui/button";
+import { useSupportWaNumber } from "../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../lib/contact";
 import { cn } from "../lib/utils";
 import { m } from "../paraglide/messages";
@@ -447,6 +448,7 @@ function PricingPage() {
 	const tiers = useTiers();
 	const features = useFeatures();
 	const faqs = useFaqs();
+	const supportWa = useSupportWaNumber();
 
 	return (
 		<main className="min-h-dvh bg-background text-foreground">
@@ -553,7 +555,7 @@ function PricingPage() {
 							</div>
 							<div className="relative shrink-0">
 								<a
-									href={buildWaContactLink(m.founding_wa_message())}
+									href={buildWaContactLink(m.founding_wa_message(), supportWa)}
 									target="_blank"
 									rel="noopener noreferrer"
 									className={ctaPillClass("accent")}

@@ -4,7 +4,7 @@ import { useQuery } from "convex/react";
 import { type FunctionReference, getFunctionName } from "convex/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../../convex/_generated/api";
-import { SUPPORT_WA_NUMBER } from "../../lib/contact";
+import { DEFAULT_SUPPORT_WA_NUMBER } from "../../lib/contact";
 import { BillingTab } from "./billing-tab";
 
 // Auto-mock convex/react so we can drive each useQuery by its function reference.
@@ -34,24 +34,46 @@ function retailer(overrides: Partial<Retailer> = {}): Retailer {
 	} as unknown as Retailer;
 }
 
-/** Wire the three useQuery calls the tab makes, keyed by function name (the
+/** A number that is deliberately NOT the built-in default, so an assertion
+ * against it proves the link followed the configured value. */
+const CONFIGURED_WA = "60111111111";
+
+/** Wire the four useQuery calls the tab makes, keyed by function name (the
  * generated `api` proxy hands back a fresh reference per access, so `===` on the
  * reference itself is unreliable — match on the stable name instead). */
-function mockQueries({ isAdmin }: { isAdmin: boolean }) {
+function mockQueries({
+	isAdmin,
+	// `null` = the query hasn't resolved (SSR / first paint), which reaches the
+	// component as `undefined`. Passing `undefined` here can't express that —
+	// the destructuring default would swallow it.
+	supportWa = CONFIGURED_WA,
+}: {
+	isAdmin: boolean;
+	supportWa?: string | null;
+}) {
 	const NAME = {
 		amIAdmin: getFunctionName(api.billing.amIAdmin),
 		invoices: getFunctionName(api.invoices.myInvoices),
 		instructions: getFunctionName(api.billing.paymentInstructions),
+		supportWa: getFunctionName(api.contact.supportWhatsapp),
 	};
 	vi.mocked(useQuery).mockImplementation(((ref: FunctionReference<"query">) => {
 		const name = getFunctionName(ref);
 		if (name === NAME.amIAdmin) return isAdmin;
 		if (name === NAME.invoices) return [];
-		// Bank/DuitNow details only — the support number is a constant, never a
-		// server value (see SUPPORT_WA_NUMBER).
+		// Bank/DuitNow details only — the support number has its own query.
 		if (name === NAME.instructions) return { bankName: "Maybank" };
+		if (name === NAME.supportWa) return supportWa ?? undefined;
 		return undefined;
 	}) as unknown as typeof useQuery);
+}
+
+/** Every wa.me href the tab renders. */
+function waLinks(): string[] {
+	return screen
+		.getAllByRole("link")
+		.map((a) => a.getAttribute("href") ?? "")
+		.filter((href) => href.startsWith("https://wa.me/"));
 }
 
 describe("BillingTab admin plan suppression", () => {
@@ -85,18 +107,29 @@ describe("BillingTab admin plan suppression", () => {
 });
 
 describe("BillingTab support WhatsApp number", () => {
-	/** ClickUp 86eyjuvyu: every seller→Kedaipal CTA must reach the support number,
-	 * never the buyer-facing WABA checkout sender (WHATSAPP_CHECKOUT_PHONE). */
-	it("points every WhatsApp CTA at SUPPORT_WA_NUMBER", () => {
+	/** ClickUp 86eyjuvyu: every seller→Kedaipal CTA must reach the number an
+	 * operator configured (`SUPPORT_WA_PHONE`), never the buyer-facing WABA
+	 * checkout sender (`WHATSAPP_CHECKOUT_PHONE`) and never a hardcoded value. */
+	it("points every WhatsApp CTA at the configured support number", () => {
 		mockQueries({ isAdmin: false });
 		render(<BillingTab retailer={retailer()} />);
-		const waLinks = screen
-			.getAllByRole("link")
-			.map((a) => a.getAttribute("href") ?? "")
-			.filter((href) => href.startsWith("https://wa.me/"));
-		expect(waLinks.length).toBeGreaterThan(0);
-		for (const href of waLinks) {
-			expect(href.startsWith(`https://wa.me/${SUPPORT_WA_NUMBER}?`)).toBe(true);
+		const links = waLinks();
+		expect(links.length).toBeGreaterThan(0);
+		for (const href of links) {
+			expect(href.startsWith(`https://wa.me/${CONFIGURED_WA}?`)).toBe(true);
+		}
+	});
+
+	it("falls back to the default number before the query resolves", () => {
+		// SSR and first paint have no answer yet; the CTA must still be live.
+		mockQueries({ isAdmin: false, supportWa: null });
+		render(<BillingTab retailer={retailer()} />);
+		const links = waLinks();
+		expect(links.length).toBeGreaterThan(0);
+		for (const href of links) {
+			expect(
+				href.startsWith(`https://wa.me/${DEFAULT_SUPPORT_WA_NUMBER}?`),
+			).toBe(true);
 		}
 	});
 

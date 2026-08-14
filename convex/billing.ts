@@ -30,8 +30,8 @@ async function loadConfig(ctx: QueryCtx): Promise<Doc<"billingConfig"> | null> {
  * empty-ish when nothing is configured — the UI shows a "message us for
  * details" fallback.
  *
- * Deliberately carries NO WhatsApp number: seller→Kedaipal support CTAs use the
- * constant `SUPPORT_WA_NUMBER` (`src/lib/contact.ts`), never the buyer-facing
+ * Deliberately carries NO WhatsApp number: seller→Kedaipal support CTAs read
+ * `contact.supportWhatsapp` (`SUPPORT_WA_PHONE`), never the buyer-facing
  * `WHATSAPP_CHECKOUT_PHONE` WABA sender.
  */
 export const paymentInstructions = query({

@@ -305,6 +305,44 @@ checks `identity.subject` against `ADMIN_USER_IDS` (comma-separated Clerk subs).
 Fails closed when unset. Server check mandatory; client hiding cosmetic.
 **Dev setup:** `npx convex env set ADMIN_USER_IDS <your-clerk-sub>`.
 
+## Support WhatsApp number (`SUPPORT_WA_PHONE`) — ClickUp `86eyjuvyu`
+
+Every **seller→Kedaipal** CTA — billing support, Starter→Pro upgrade, "I've
+paid", choose/renew plan, the past-due and sending-paused banners, the Pro
+feature wall, the white-glove call, the first-order testimonial, and the
+landing/pricing/cost founding CTAs — opens a `wa.me` chat on **one** number,
+served by the public query **`contact.supportWhatsapp`**.
+
+**It is deliberately NOT `WHATSAPP_CHECKOUT_PHONE`.** That env var is the shared
+WABA sender that talks to *buyers*; a seller messaging it reaches the order bot,
+not a human. Until Aug 2026 the billing CTAs read it (via
+`billing.paymentInstructions.whatsappPhone`) and every one of them pointed at
+the wrong number — that field is now gone, and `paymentInstructions` carries
+bank/DuitNow/QR details only.
+
+**To change the number** (no deploy, takes effect on the next query):
+
+```bash
+npx convex env set SUPPORT_WA_PHONE "018-473 5095"
+```
+
+- Any Malaysian spelling is accepted (`018…`, `18…`, `+60 18-473 5095`) and
+  normalized to the wa.me form by `resolveSupportWaNumber`
+  (`convex/lib/contact.ts`).
+- A value that isn't a MY mobile is **rejected, logged, and ignored** in favour
+  of `DEFAULT_SUPPORT_WA_NUMBER` — a typo must never leave a seller with a dead
+  link. Check the Convex logs for `SUPPORT_WA_PHONE is not a valid…` after
+  setting it.
+- Unset ⇒ the same default, so a deployment that never sets it still works.
+- The query is **unauthenticated** (landing/pricing render to signed-out
+  visitors) and the number is public by nature — it's printed on those pages.
+
+**When the number changes for good, also update `DEFAULT_SUPPORT_WA_NUMBER`** in
+the next PR: SSR and the first client paint use the constant until the query
+resolves, so server-rendered HTML would otherwise carry the old number for a
+few hundred ms. The env var is the instant lever; the constant is the
+deploy-time floor.
+
 ## Pricing / caps — single source of truth
 
 `convex/lib/plans.ts`. Starter RM79 / Pro RM149 / Scale RM299; founding Pro RM104
@@ -383,18 +421,13 @@ backfill no longer mints comped subscriptions.
   `wa.me`. Pure decision in `resolveBannerState`), Billing settings tab
   (`billing-tab.tsx` — plan/status, pending invoice + how-to-pay, founding ribbon,
   history, **+ an always-on "Questions about billing?" support card** — WhatsApp
-  (`SUPPORT_WA_NUMBER`, `src/lib/contact.ts`) + email (`hello@kedaipal.com`) —
+  (`contact.supportWhatsapp`) + email (`hello@kedaipal.com`) —
   rendered for **every** retailer regardless of plan/tier/status so they can
   always reach us). Pure helpers + tests in `src/lib/subscription.ts`. **Remaining (light):**
   the dashboard's one-time "Schedule your white-glove call" CTA on rank assignment
   (the day-14 pay nudge is already covered by the banner).
   **Payment details are admin-editable in the UI** (not env) — see Phase 4.
-  **The support WA number is the constant `SUPPORT_WA_NUMBER`** (`src/lib/contact.ts`),
-  shared with the landing/pricing founding CTAs. It is deliberately NOT
-  `WHATSAPP_CHECKOUT_PHONE`: that env var is the shared-WABA sender that talks to
-  *buyers*, so a seller messaging it reaches the order bot, not a human
-  (ClickUp `86eyjuvyu`). `billing.paymentInstructions` carries no phone at all —
-  every seller→Kedaipal CTA in `/app` builds its link with `buildWaContactLink`.
+  The support WA number is **`SUPPORT_WA_PHONE`** — see below.
 - **Phase 4 (in progress):** **`billingConfig`** singleton table + `convex/billing.ts`
   (`paymentInstructions` reads the table + resolves the QR from Convex storage;
   admin `getBillingConfig`/`updateBillingConfig`/`generateQrUploadUrl`; `amIAdmin`

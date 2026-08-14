@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from "convex/react";
 import { Award, X } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
+import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../../lib/contact";
 
 /**
@@ -11,6 +12,7 @@ import { buildWaContactLink } from "../../lib/contact";
  */
 export function WhiteGloveCard({ slug }: { slug: string }) {
 	const status = useQuery(api.foundingMembers.myStatus, {});
+	const supportWa = useSupportWaNumber();
 	const markScheduled = useMutation(
 		api.foundingMembers.markWhiteGloveScheduled,
 	);
@@ -19,6 +21,7 @@ export function WhiteGloveCard({ slug }: { slug: string }) {
 
 	const waUrl = buildWaContactLink(
 		`Hi Arif! I'm Founding Member #${status.rank} (/${slug}) — I'd like to schedule my white-glove onboarding call.`,
+		supportWa,
 	);
 
 	return (

@@ -1,4 +1,5 @@
 import { AlertOctagon, MessageCircle } from "lucide-react";
+import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../../lib/contact";
 import { Button } from "../ui/button";
 
@@ -24,12 +25,16 @@ export function SendingPausedBanner({
 	reason?: string;
 	slug: string;
 }) {
+	// Above the early return — hooks can't live behind a conditional.
+	const supportWa = useSupportWaNumber();
+
 	if (!paused) return null;
 
 	const waUrl = buildWaContactLink(
 		`Hi Kedaipal! My store (/${slug}) WhatsApp sending is paused${
 			reason ? ` — reason given: "${reason}"` : ""
 		}. Could you help me get it sorted?`,
+		supportWa,
 	);
 
 	return (

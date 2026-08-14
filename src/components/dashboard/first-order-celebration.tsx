@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { PartyPopper } from "lucide-react";
+import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../../lib/contact";
 
 /**
@@ -19,8 +20,10 @@ export function FirstOrderCelebration({
 	slug: string;
 	storeName: string;
 }) {
+	const supportWa = useSupportWaNumber();
 	const testimonialUrl = buildWaContactLink(
 		`Hi! ${storeName} (/${slug}) just received our first order through Kedaipal 🎉 Happy to share a testimonial!`,
+		supportWa,
 	);
 
 	return (
