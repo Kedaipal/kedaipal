@@ -17,15 +17,12 @@ import {
 	adjustAggregatesForTotalChange,
 	decrementAggregatesForCancel,
 	linkOrderToCustomer,
+	moveOrderToPhone,
 } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
+import { stampProductsOrdered } from "./lib/productOrdered";
 import { assertValidAddress } from "./lib/address";
 import { requireCustomerName } from "./lib/customer";
-import {
-	isActiveJobStatus,
-	isRiderManagedTransition,
-	riderDrivesOrderStatus,
-} from "./lib/lalamove";
 import { assertPlanFeature } from "./subscriptions";
 import {
 	recordOrderCancelled,
@@ -35,11 +32,13 @@ import {
 	adminUserIds,
 	isAdmin,
 	logAdminAction,
+	logDestructiveAdminAction,
 	type RetailerAccess,
 	requireRetailerAccess,
 } from "./lib/auth";
 import {
 	assertValidFulfilmentDate,
+	assertValidFulfilmentTime,
 	matchesFulfilmentWindow,
 } from "./lib/fulfilmentDate";
 import {
@@ -48,7 +47,7 @@ import {
 	minOrderValueShortfall,
 	minQuantityMessage,
 } from "./lib/minOrderRules";
-import { statusToBucket } from "./lib/orderBuckets";
+import { isUnseenOrder, orderBucket } from "./lib/orderBuckets";
 import { type CsvOrder, ordersToCsv } from "./lib/orderCsv";
 import {
 	type ManualReminderBlock,
@@ -64,15 +63,25 @@ import {
 	computeOrderTotals,
 	generateShortId,
 	generateTrackingToken,
+	isCollectionGateClosed,
 	isMockupGateClosed,
 } from "./lib/order";
+import { normalizeTrackingToken } from "./lib/trackingToken";
 import {
+	type CartWeightItem,
+	type CartWeightSummary,
 	DELIVERY_FEE_MAX,
 	type DeliveryConfig,
+	type DeliveryQuoteReason,
 	type LiveProviderQuote,
 	resolveDeliveryQuote,
+	summarizeCartWeight,
 } from "./lib/delivery";
-import { CHECKOUT_QUOTE_MAX_AGE_MS } from "./lib/lalamove";
+import {
+	CHECKOUT_QUOTE_MAX_AGE_MS,
+	isActiveJobStatus,
+	isRiderManagedTransition,
+} from "./lib/lalamove";
 import { resolveShipmentFields } from "./lib/couriers";
 import {
 	anchorOrdinal,
@@ -89,9 +98,18 @@ import {
 	orderToReceiptData,
 } from "./lib/pdf/document";
 import { buildOrderReceiptPdf } from "./lib/pdf/render";
-import { orderPaymentMethodValidator } from "./lib/paymentMethod";
+import {
+	type OrderPaymentMethod,
+	orderPaymentMethodValidator,
+} from "./lib/paymentMethod";
+import {
+	HITPAY_MIN_AMOUNT_SEN,
+	hitpayCheckoutConfigured,
+	mapHitpayPaymentType,
+} from "./lib/hitpay";
 import { rateLimiter } from "./lib/rateLimiter";
-import { assertValidWaPhone } from "./lib/slug";
+import { assertValidMyMobile } from "./lib/slug";
+import { orderConfirmTemplateName } from "./lib/whatsapp";
 import { variantLabel } from "./lib/variant";
 import { renderSystemMessage } from "./lib/whatsappCopy";
 import { makeGuardedSender } from "./wabaProtection";
@@ -141,28 +159,64 @@ function resolveMockupImageIds(order: Doc<"orders">): string[] {
 type DeliverySnapshot = NonNullable<Doc<"orders">["deliverySnapshot"]>;
 
 /**
+ * Buyer-facing refusal copy per blocked-quote reason ("block" policies only —
+ * "arrange" policies land pending instead). The weight-mode reasons keep the
+ * store in the sentence: the buyer's next move is contacting the seller, not
+ * fixing their own input.
+ */
+function blockedDeliveryMessage(
+	reason: DeliveryQuoteReason,
+	state: string | undefined,
+): string {
+	const messages: Record<DeliveryQuoteReason, string> = {
+		no_coords:
+			"Pick your address from the suggestions so we can calculate the delivery fee",
+		unquotable:
+			"We couldn't price delivery to that address right now — please try again",
+		out_of_range: "That address is outside this store's delivery area",
+		no_state: "Add a delivery address so we can calculate the delivery fee",
+		unserved_state: state
+			? `This store doesn't deliver to ${state}`
+			: "This store doesn't deliver to that state",
+		over_bands:
+			"This order is heavier than the store's delivery rates — contact the store on WhatsApp to arrange it",
+		missing_weights:
+			"The store can't price delivery for this order yet — contact them on WhatsApp to arrange it",
+		custom_item:
+			"This order includes a custom item, so the store confirms its delivery fee directly — contact them on WhatsApp",
+	};
+	return messages[reason];
+}
+
+/**
  * Resolve the delivery charge for a delivery order against the retailer's
  * config and freeze it into snapshot form. Shared by `create` and the buyer's
  * address re-price so both spell the outcome identically:
  *  - fee → a frozen `deliverySnapshot` (mirrored to `deliveryFee`);
  *  - free → nothing stored (0 is never stored — one spelling of free);
- *  - "arrange" out-of-range / coord-less / unquotable → `pending: true` +
- *    the frozen `pendingReason` (drives the seller card's explanation — a
- *    Lalamove store must never read "outside your delivery bands"; the
- *    seller confirms the charge later via setDeliveryFee, payment ask held);
+ *  - "arrange" out-of-range / coord-less / unquotable / unserved / overweight /
+ *    unweighable → `pending: true` + the frozen `pendingReason` (drives the
+ *    seller card's explanation — a Lalamove store must never read "outside
+ *    your delivery bands"; the seller confirms the charge later via
+ *    setDeliveryFee, payment ask held);
  *  - "block" → ConvexError, mirroring the storefront's disabled submit.
  */
 function resolveDeliveryForOrder(
 	retailer: Doc<"retailers">,
 	subtotal: number,
-	address: { latitude?: number; longitude?: number } | undefined,
+	address:
+		| { latitude?: number; longitude?: number; state?: string }
+		| undefined,
+	// Cart parcel-weight summary (pricing mode "weight" only) — from
+	// summarizeCartWeight over the order's resolved variants.
+	cartWeight?: CartWeightSummary,
 	// Live Lalamove quote loaded from its server-side deliveryQuotes row
 	// (pricing mode "lalamove" only) — see loadCheckoutDeliveryQuote.
 	liveQuote?: LiveProviderQuote,
 ): {
 	snapshot: DeliverySnapshot | undefined;
 	pending: boolean;
-	pendingReason?: "out_of_range" | "no_coords" | "unquotable";
+	pendingReason?: DeliveryQuoteReason;
 } {
 	const config = retailer.deliveryConfig as DeliveryConfig | undefined;
 	if (config?.mode === "radius" && !retailer.businessAddress) {
@@ -180,16 +234,12 @@ function resolveDeliveryForOrder(
 			address?.latitude !== undefined && address.longitude !== undefined
 				? { latitude: address.latitude, longitude: address.longitude }
 				: undefined,
+		state: address?.state,
+		cartWeight,
 		liveQuote,
 	});
 	if (quote.kind === "blocked") {
-		throw new ConvexError(
-			quote.reason === "no_coords"
-				? "Pick your address from the suggestions so we can calculate the delivery fee"
-				: quote.reason === "unquotable"
-					? "We couldn't price delivery to that address right now — please try again"
-					: "That address is outside this store's delivery area",
-		);
+		throw new ConvexError(blockedDeliveryMessage(quote.reason, address?.state));
 	}
 	if (quote.kind === "pending") {
 		return { snapshot: undefined, pending: true, pendingReason: quote.reason };
@@ -201,6 +251,9 @@ function resolveDeliveryForOrder(
 				mode: quote.mode,
 				distanceKm: quote.distanceKm,
 				bandMaxKm: quote.bandMaxKm,
+				zoneName: quote.zoneName,
+				chargeableKg: quote.chargeableKg,
+				bandMaxKg: quote.bandMaxKg,
 				quotationId: quote.quotationId,
 				vehicleType: quote.vehicleType,
 				quotedAt: quote.quotedAt,
@@ -299,15 +352,19 @@ type OrderItemSnapshot = {
  * shortId-as-capability (shortId is ~1M combinations, enumerable). See
  * docs/infra-cost-scaling.md §6.
  */
-async function orderByToken(
+export async function orderByToken(
 	ctx: QueryCtx | MutationCtx,
 	trackingToken: string,
 ): Promise<Doc<"orders"> | null> {
+	// Defence in depth for placeholder-polluted links (86eyheqzv): the server
+	// entry 301s `/track/{{1}}<token>` before the router, but any polluted
+	// token that reaches a query directly still resolves. Tokens never contain
+	// braces, so stripping is unambiguous.
+	const token = normalizeTrackingToken(trackingToken);
+	if (token.length === 0) return null;
 	return ctx.db
 		.query("orders")
-		.withIndex("by_tracking_token", (q) =>
-			q.eq("trackingToken", trackingToken),
-		)
+		.withIndex("by_tracking_token", (q) => q.eq("trackingToken", token))
 		.first();
 }
 
@@ -370,6 +427,175 @@ export const ensureTrackingToken = internalMutation({
 	},
 });
 
+/**
+ * Send-site stamp for the storefront confirmation push (86eyf1rck): "sent"
+ * (with Meta's wamid, when echoed) or "failed" (the send itself errored).
+ * Drives the tracking page's state card and the seller-side delivery note.
+ */
+/**
+ * Transactional claim for a deferred confirmation push (86eyfq0w5). Called by
+ * the gate-open mutations (mockup approve/waive/decline-with-remainder,
+ * setDeliveryFee) in the SAME transaction as their gate patch: it re-reads the
+ * order (ctx.db.get sees this transaction's own writes), and only when NO hold
+ * remains flips deferred → sending and schedules the one send.
+ *
+ * The flip IS the de-dup. Convex mutations are serializable, so exactly one
+ * gate-open transaction can ever observe "deferred" with both holds clear —
+ * a second gate event racing in (seller sets the fee a second after the buyer
+ * approves the mockup) serializes after the winner, sees "sending", and
+ * schedules nothing. That's what makes "double-hold sends exactly once" hold
+ * under concurrency, not just under the tidy orderings tests produce; a claim
+ * inside the ACTION couldn't guarantee it, because two in-flight actions read
+ * their metadata before either outcome commits.
+ */
+async function claimDeferredPush(
+	ctx: MutationCtx,
+	orderId: Id<"orders">,
+): Promise<void> {
+	const fresh = await ctx.db.get(orderId);
+	if (!fresh || fresh.confirmationPushStatus !== "deferred") return;
+	if (fresh.status === "cancelled") return;
+	if (isMockupGateClosed(fresh) || fresh.deliveryFeePending === true) return;
+	await ctx.db.patch(orderId, {
+		confirmationPushStatus: "sending",
+		updatedAt: Date.now(),
+	});
+	await ctx.scheduler.runAfter(
+		0,
+		internal.whatsapp.notifyStorefrontOrderCreated,
+		{ orderId },
+	);
+}
+
+export const recordConfirmationPush = internalMutation({
+	args: {
+		orderId: v.id("orders"),
+		status: v.union(v.literal("sent"), v.literal("failed")),
+		wamid: v.optional(v.string()),
+		// Required in practice for "failed" — drives whether the buyer is asked
+		// to fix their number or merely told we're having trouble.
+		failureKind: v.optional(
+			v.union(v.literal("unreachable"), v.literal("system")),
+		),
+	},
+	handler: async (
+		ctx,
+		{ orderId, status, wamid, failureKind },
+	): Promise<void> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) return;
+		// The buyer may have reached us by another route while attempts were in
+		// flight (manual send / corrected number) — never overwrite that.
+		if (order.confirmationPushStatus === "recovered") return;
+		await ctx.db.patch(orderId, {
+			confirmationPushStatus: status,
+			confirmationPushFailureKind: status === "failed" ? failureKind : undefined,
+			confirmationPushAt: Date.now(),
+			confirmationPushWamid: wamid,
+			updatedAt: Date.now(),
+		});
+	},
+});
+
+/**
+ * Webhook-side stamp: Meta's `statuses` webhook reported `failed` for an
+ * outbound message. Statuses arrive for EVERY message the shared number sends,
+ * so this is a cheap indexed probe — no matching order (not a confirmation
+ * push) is the common case and a silent no-op. Only a push still believed
+ * "sent" flips to "failed": "recovered" must never regress on a late/replayed
+ * webhook event.
+ */
+export const markConfirmationPushFailed = internalMutation({
+	args: {
+		wamid: v.string(),
+		errorDetail: v.optional(v.string()),
+	},
+	handler: async (ctx, { wamid, errorDetail }): Promise<void> => {
+		const order = await ctx.db
+			.query("orders")
+			.withIndex("by_confirmation_wamid", (q) =>
+				q.eq("confirmationPushWamid", wamid),
+			)
+			.first();
+		if (!order || order.confirmationPushStatus !== "sent") return;
+		console.warn("WA confirmation push failed for order", {
+			shortId: order.shortId,
+			errorDetail,
+		});
+		await ctx.db.patch(order._id, {
+			confirmationPushStatus: "failed",
+			// Meta accepted the send then failed to DELIVER it — that's the number,
+			// not us, so the buyer gets the repair affordance.
+			confirmationPushFailureKind: "unreachable",
+			updatedAt: Date.now(),
+		});
+	},
+});
+
+/**
+ * Buyer repairs the WhatsApp number on their own order after the confirmation
+ * push failed to reach it (86eyf1rck).
+ *
+ * This is the direct fix for the only failure this feature can't self-heal: a
+ * typo'd number. Without it the buyer's only route is to send us a wa.me
+ * message so the inbound path can infer their real number — a workaround for a
+ * missing edit control. Authorized by the tracking token exactly like
+ * `updateDeliveryAddress`, and deliberately scoped to `failed` pushes: there is
+ * no reason to rewrite the number on a healthy order, and keeping the window
+ * that narrow means a leaked token can't quietly redirect a seller's
+ * order messages.
+ *
+ * On success the order moves to the new number (carrying its CRM aggregates via
+ * the shared `moveOrderToPhone`) and the push is re-scheduled from attempt 1,
+ * so the buyer gets their confirmation without doing anything else.
+ */
+export const updateBuyerPhone = mutation({
+	args: { token: v.string(), waPhone: v.string() },
+	handler: async (ctx, { token, waPhone }): Promise<void> => {
+		// Each accepted save costs an outbound template send.
+		await rateLimiter.limit(ctx, "buyerPhoneUpdate", {
+			key: token,
+			throws: true,
+		});
+
+		const order = await orderByToken(ctx, token);
+		if (!order) throw new ConvexError("Order not found");
+		if (order.confirmationPushStatus !== "failed") {
+			throw new ConvexError(
+				"This order's WhatsApp number can't be changed right now",
+			);
+		}
+
+		let normalized: string;
+		try {
+			normalized = assertValidMyMobile(waPhone);
+		} catch (err) {
+			throw new ConvexError((err as Error).message);
+		}
+		if (normalized === order.customer.waPhone) {
+			throw new ConvexError(
+				"That's the same number we already tried — check the digits and try again",
+			);
+		}
+
+		await moveOrderToPhone(ctx, { order, newPhone: normalized });
+		// Back to "sending" so the buyer sees the attempt in flight rather than a
+		// stale failure, and a late webhook for the OLD message can't re-fail it
+		// (markConfirmationPushFailed only acts on a push still believed "sent").
+		await ctx.db.patch(order._id, {
+			confirmationPushStatus: "sending",
+			confirmationPushFailureKind: undefined,
+			confirmationPushWamid: undefined,
+			updatedAt: Date.now(),
+		});
+		await ctx.scheduler.runAfter(
+			0,
+			internal.whatsapp.notifyStorefrontOrderCreated,
+			{ orderId: order._id },
+		);
+	},
+});
+
 export const create = mutation({
 	args: {
 		retailerId: v.id("retailers"),
@@ -402,6 +628,10 @@ export const create = mutation({
 		// need to pass it; the storefront UI requires it. Validated against the
 		// retailer's notice window when present. See convex/lib/fulfilmentDate.ts.
 		fulfilmentDate: v.optional(v.number()),
+		// What time on that day (minutes since MYT midnight) — captured for
+		// delivery orders; ignored on self-collect (their moment is governed by
+		// the pickup point's own schedule). See the schema comment.
+		fulfilmentTimeMinutes: v.optional(v.number()),
 		// Optional free-text instruction the shopper typed at checkout.
 		customerNote: v.optional(v.string()),
 		// Optional reference image the buyer attached for a custom line, uploaded
@@ -424,6 +654,11 @@ export const create = mutation({
 		// wa.me message from the STORED numbers (never its preview quote).
 		deliveryFee?: number;
 		deliveryFeePending?: boolean;
+		// True when the order was committed as `confirmed` at create and the WABA
+		// confirmation push was scheduled (86eyf1rck) — checkout then navigates to
+		// the tracking page WITHOUT ?send=1 (no wa.me handoff needed). False/absent
+		// = the legacy buyer-sends-first flow (phone missing or template env unset).
+		confirmedAtCreate?: boolean;
 	}> => {
 		// Rate limit FIRST — public endpoint, throttle per storefront before any DB reads.
 		await rateLimiter.limit(ctx, "orderCreate", {
@@ -463,12 +698,18 @@ export const create = mutation({
 			}
 		}
 
-		// Customer waPhone is optional at checkout — the WhatsApp webhook
-		// stamps it automatically when the shopper sends the order message.
+		// Customer waPhone: the storefront form requires it (86eyf1rck — the
+		// confirmation push needs a reachable number), but it stays optional at
+		// the protocol level so legacy callers/tests keep working; a phone-less
+		// order simply rides the old buyer-sends-first wa.me flow, where the
+		// WhatsApp webhook stamps the number on the inbound message. MY-aware
+		// normalization (assertValidMyMobile): buyers type local numbers
+		// ("012-345 6789"), and the stored form must match what Meta delivers
+		// inbound (60…) or the customer record would fork.
 		let customerWaPhone: string | undefined;
 		if (args.customer.waPhone) {
 			try {
-				customerWaPhone = assertValidWaPhone(args.customer.waPhone);
+				customerWaPhone = assertValidMyMobile(args.customer.waPhone);
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
 			}
@@ -565,6 +806,9 @@ export const create = mutation({
 		// per-line product id/name/qty + the flags the shared rules need. Checked
 		// after the loop (the rules judge summed quantities + the subtotal).
 		const ruleItems: MinRuleItem[] = [];
+		// Parcel-weight inputs (86eyeea1n, pricing mode "weight") — collected from
+		// the same resolved variants so the fee weighs exactly what was ordered.
+		const weightItems: CartWeightItem[] = [];
 		for (const item of args.items) {
 			if (!Number.isInteger(item.quantity) || item.quantity < 1)
 				throw new ConvexError("Quantity must be a positive integer");
@@ -646,6 +890,11 @@ export const create = mutation({
 				isCustom: variant.isCustom,
 				quoteOnRequest: variantRequiresProof === true && variant.price === 0,
 			});
+			weightItems.push({
+				parcelWeightG: variant.parcelWeightG,
+				quantity: item.quantity,
+				isCustom: variant.isCustom === true,
+			});
 		}
 
 		const itemSubtotal = snapshotItems.reduce(
@@ -689,17 +938,33 @@ export const create = mutation({
 				throw new ConvexError((err as Error).message);
 			}
 		}
+		// Fulfilment time (86eyg0n8e follow-up): kept only where it means
+		// something — a delivery order WITH a date. Range-only validation by
+		// design (see assertValidFulfilmentTime): "is the moment still ahead"
+		// is judged at checkout client-side and again at dispatch, where a past
+		// moment simply books "now" — a strict server check here would let
+		// clock skew or a long-idle form reject a legitimate checkout.
+		let sanitizedFulfilmentTime: number | undefined;
+		if (
+			args.fulfilmentTimeMinutes !== undefined &&
+			sanitizedFulfilmentDate !== undefined &&
+			effectiveDeliveryMethod === "delivery"
+		) {
+			try {
+				sanitizedFulfilmentTime = assertValidFulfilmentTime(
+					args.fulfilmentTimeMinutes,
+				);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
 
 		// Delivery charge (86extzdr8): resolved server-side at create — the
 		// authoritative price, whatever the client previewed. Needs the item
 		// subtotal (flat free-above threshold), so it runs after the item loop.
 		let deliverySnapshot: DeliverySnapshot | undefined;
 		let deliveryFeePending = false;
-		let deliveryFeePendingReason:
-			| "out_of_range"
-			| "no_coords"
-			| "unquotable"
-			| undefined;
+		let deliveryFeePendingReason: DeliveryQuoteReason | undefined;
 		if (effectiveDeliveryMethod === "delivery") {
 			// itemSubtotal is hoisted above (shared with the min-order rules).
 			const liveQuote = await loadCheckoutDeliveryQuote(
@@ -712,12 +977,23 @@ export const create = mutation({
 				retailer,
 				itemSubtotal,
 				sanitizedAddress,
+				summarizeCartWeight(weightItems),
 				liveQuote,
 			);
 			deliverySnapshot = resolved.snapshot;
 			deliveryFeePending = resolved.pending;
 			deliveryFeePendingReason = resolved.pendingReason;
 		}
+		// Frozen trip direction (86eyg0n8e): stamped from the store's live
+		// collection-service setting so buyer surfaces (tracking labels, WA
+		// confirm) stay true to what this order promised even if the seller
+		// toggles the mode later — the pickupSnapshot posture. Standard stays
+		// unset (one spelling for the default; every pre-existing order).
+		const deliveryDirection =
+			effectiveDeliveryMethod === "delivery" &&
+			retailer.deliveryBooking?.deliveryDirection === "collection"
+				? ("collection" as const)
+				: undefined;
 
 		// The chosen pickup point's frozen fee and the delivery charge ride the
 		// same extras seam as the mockup quote — total = subtotal + fees from the
@@ -761,6 +1037,29 @@ export const create = mutation({
 		// → a collision check would be theatre; just generate it.
 		const trackingToken = generateTrackingToken();
 
+		// Confirmation-push path (86eyf1rck): with a reachable buyer number AND
+		// the approved template configured, the order is COMMITTED the moment the
+		// buyer taps "Place order" — inserted as `confirmed`, activation stamped,
+		// and Kedaipal's WABA pushes the confirmation template (scheduled below).
+		// No step depends on the buyer surviving Meta's wa.me interstitial.
+		// Template env unset ⇒ exact legacy behaviour (pending + ?send=1 handoff).
+		//
+		// The push TIMING depends on whether the total is final (86eyfq0w5). The
+		// approved template states "Total: {{3}}" — false while a price is
+		// outstanding (a price-on-quote line is RM 0.00 until quoted; a
+		// fee-pending total grows by the arranged fee). So a non-final order still
+		// COMMITS here exactly like any other — confirmed, activation, customer
+		// link, no wa.me step anywhere — but its push is stamped "deferred" and
+		// fires from the gate-open sites (mockup approve/waive/decline,
+		// setDeliveryFee) once the price is agreed, replacing the free-form
+		// payment prompt those sites used to send (which a push-path buyer's
+		// window-less chat couldn't receive anyway). The message is then always
+		// sent with a true, final total.
+		const totalIsFinal = !requiresMockup && !deliveryFeePending;
+		const confirmedAtCreate =
+			customerWaPhone !== undefined &&
+			orderConfirmTemplateName() !== undefined;
+
 		const orderId = await ctx.db.insert("orders", {
 			retailerId: args.retailerId,
 			shortId,
@@ -769,11 +1068,12 @@ export const create = mutation({
 			subtotal,
 			total,
 			currency: args.currency,
-			status: "pending",
+			status: confirmedAtCreate ? "confirmed" : "pending",
 			channel: args.channel,
 			source: "storefront",
 			customer: sanitizedCustomer,
 			deliveryMethod: effectiveDeliveryMethod,
+			deliveryDirection,
 			deliveryAddress: sanitizedAddress,
 			pickupLocationId: resolvedPickupLocationId,
 			pickupSnapshot: sanitizedPickupSnapshot,
@@ -783,6 +1083,7 @@ export const create = mutation({
 			deliveryFeePending: deliveryFeePending || undefined,
 			deliveryFeePendingReason,
 			fulfilmentDate: sanitizedFulfilmentDate,
+			fulfilmentTimeMinutes: sanitizedFulfilmentTime,
 			customerNote: sanitizedCustomerNote,
 			// Only keep the buyer image when the order actually has a custom line —
 			// guards a stray id on a non-custom order.
@@ -790,6 +1091,16 @@ export const create = mutation({
 				? args.customerImageStorageId
 				: undefined,
 			mockupStatus: requiresMockup ? "pending" : undefined,
+			// Stamped in the SAME transaction as the insert so the push state is
+			// never ambiguous: a confirmed storefront order with no stamp would be
+			// indistinguishable from one whose send is still in flight, and the
+			// tracking page needs to tell the buyer which it is. Non-final totals
+			// start "deferred" — the send waits for the price to be confirmed.
+			confirmationPushStatus: confirmedAtCreate
+				? totalIsFinal
+					? "sending"
+					: "deferred"
+				: undefined,
 			statusChangedAt: now,
 			createdAt: now,
 			updatedAt: now,
@@ -800,10 +1111,27 @@ export const create = mutation({
 			status: "pending",
 			createdAt: now,
 		});
+		if (confirmedAtCreate) {
+			// The timeline keeps both beats — placed, then confirmed — mirroring
+			// what the legacy inbound-confirm path produced.
+			await ctx.db.insert("orderEvents", {
+				orderId,
+				status: "confirmed",
+				note: "Confirmed at checkout",
+				createdAt: now,
+			});
+			// First order reaching confirmed activates the store (one-time stamp) —
+			// the same milestone confirmOrderFromWhatsApp stamps on the legacy path.
+			await stampRetailerActivation(ctx, args.retailerId, now);
+		}
 
 		// Meter the order against the retailer's monthly usage (SOFT cap — the
 		// nudge banner, never a block on this public mutation).
 		await recordOrderCreated(ctx, args.retailerId, now);
+
+		// Mark every product on this order as having sold, so it can no longer be
+		// permanently deleted out from under the order lines that now reference it.
+		await stampProductsOrdered(ctx, snapshotItems, now);
 
 		// Link to the aggregated customer record when we already know the phone.
 		// Phone-less orders (link-in-bio checkout) are linked later when the
@@ -826,24 +1154,62 @@ export const create = mutation({
 			{ orderId },
 		);
 
+		// Seller WhatsApp order alert (86eyhw9zy) — storefront orders only, so
+		// counter checkout (its own create path) never schedules one. The action
+		// itself checks the opt-in toggle + template env and no-ops otherwise.
+		await ctx.scheduler.runAfter(
+			0,
+			internal.whatsapp.notifySellerNewOrder,
+			{ orderId },
+		);
+
+		// The buyer's WhatsApp confirmation — the ONE outbound message this order
+		// sends (Meta bills per message from Oct 2026). Fire-and-forget like the
+		// email; a send failure stamps confirmationPushStatus, never fails create.
+		// A deferred (non-final-total) order schedules nothing here — its push
+		// fires from the gate-open sites once the price is confirmed.
+		if (confirmedAtCreate && totalIsFinal) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.whatsapp.notifyStorefrontOrderCreated,
+				{ orderId },
+			);
+		}
+
 		return {
 			shortId,
 			trackingToken,
 			deliveryFee: deliverySnapshot?.fee,
 			deliveryFeePending: deliveryFeePending || undefined,
+			confirmedAtCreate: confirmedAtCreate || undefined,
 		};
 	},
 });
 
 /**
- * Returns the count of pending and confirmed orders for the retailer's dashboard tab indicators.
+ * Counts for the retailer's dashboard chrome.
+ *
+ * `newOrders` is what the nav badge renders: the same "New" definition the
+ * inbox chip and the Home tile use (`orderBucket` → "new") — `pending` plus a
+ * confirmation-push order the seller hasn't opened yet. It's a NOTIFICATION
+ * count, so working through the orders drives it to zero; `pending + confirmed`
+ * (what the badge used to show) counts orders the seller is actively working
+ * and therefore only ever climbs. See docs/order-inbox.md.
+ *
+ * `pending`/`confirmed` stay on the payload as raw status counts — the order
+ * toasts (src/hooks/useOrderToastNotifications.ts) announce on their deltas.
  */
 export const countActionable = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (
 		ctx,
 		{ retailerId },
-	): Promise<{ pending: number; confirmed: number; mockupPending: number }> => {
+	): Promise<{
+		newOrders: number;
+		pending: number;
+		confirmed: number;
+		mockupPending: number;
+	}> => {
 		await requireRetailerAccess(ctx, retailerId);
 
 		const [pendingRows, confirmedRows, mockupRows] = await Promise.all([
@@ -875,6 +1241,9 @@ export const countActionable = query({
 		]);
 
 		return {
+			// Unseen push-path orders are a subset of `confirmedRows`, already in
+			// memory — no extra read to add the badge's count.
+			newOrders: pendingRows.length + confirmedRows.filter(isUnseenOrder).length,
 			pending: pendingRows.length,
 			confirmed: confirmedRows.length,
 			mockupPending: mockupRows.length,
@@ -910,6 +1279,16 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 	// delivered delivery orders; the buyer sees the same shot the WhatsApp
 	// follow-up carried, the seller the same thumbnails as the dispatch card.
 	podImageUrls?: string[];
+	// Live collection-rider strip (86eyg0n8e) — present only while a rider is
+	// ACTIVELY collecting from the buyer on a collection order; the tracking
+	// page renders it as a transient card, never a status. Driver phone, cost
+	// and provider ids deliberately never cross.
+	collectionRider?: {
+		status: "assigning" | "ongoing" | "picked_up";
+		driverName?: string;
+		plateNumber?: string;
+		shareLink?: string;
+	};
 };
 
 export const get = query({
@@ -940,9 +1319,18 @@ export const get = query({
 		const isBuyerRead = token !== undefined;
 		// Rider drop-off photo (Lalamove POD) — one indexed read, and only on
 		// the delivered end-state of delivery orders, so the hot pending/active
-		// tracking path pays nothing.
+		// tracking path pays nothing. Collection orders (86eyg0n8e) never
+		// surface it here: their POD shows the rider dropping the buyer's gear
+		// at the SELLER's doorstep — captioning that "taken by your rider at
+		// drop-off" once the seller manually marks the order delivered would
+		// read as nonsense to the buyer. The seller still sees it on the
+		// dispatch card (getDeliveryJob).
 		let podImageUrls: string[] | undefined;
-		if (order.status === "delivered" && order.deliveryMethod === "delivery") {
+		if (
+			order.status === "delivered" &&
+			order.deliveryMethod === "delivery" &&
+			order.deliveryDirection !== "collection"
+		) {
 			const jobs = await ctx.db
 				.query("deliveryJobs")
 				.withIndex("by_order", (q) => q.eq("orderId", order._id))
@@ -958,17 +1346,72 @@ export const get = query({
 				if (resolved.length > 0) podImageUrls = resolved;
 			}
 		}
+		// Live collection-rider strip (86eyg0n8e): while a rider is actively
+		// collecting FROM this buyer, the tracking page shows the trip live —
+		// the buyer's only window into "who is knocking and when", since
+		// collection orders never mirror a tracking URL and never auto-advance.
+		// Read from the live job row so it can't go stale (the whole reason the
+		// mirror was skipped); one indexed read, collection orders only, and the
+		// strip vanishes the moment the job leaves its active states. Exposes
+		// trip state + driver name/plate + Lalamove's buyer-facing share page —
+		// never the driver's phone, cost or provider ids.
+		let collectionRider:
+			| {
+					status: "assigning" | "ongoing" | "picked_up";
+					driverName?: string;
+					plateNumber?: string;
+					shareLink?: string;
+			  }
+			| undefined;
+		if (
+			order.deliveryMethod === "delivery" &&
+			order.deliveryDirection === "collection" &&
+			order.status !== "cancelled"
+		) {
+			const jobs = await ctx.db
+				.query("deliveryJobs")
+				.withIndex("by_order", (q) => q.eq("orderId", order._id))
+				.collect();
+			// The ACTIVE row, never .first() — failed attempts keep their rows.
+			const active = jobs.find((j) => isActiveJobStatus(j.status));
+			if (
+				active &&
+				(active.status === "assigning" ||
+					active.status === "ongoing" ||
+					active.status === "picked_up")
+			) {
+				collectionRider = {
+					status: active.status,
+					driverName: active.driver?.name,
+					plateNumber: active.driver?.plateNumber || undefined,
+					shareLink: active.shareLink,
+				};
+			}
+		}
 		return {
 			...order,
 			podImageUrls,
+			collectionRider,
 			deliverySnapshot: isBuyerRead ? undefined : order.deliverySnapshot,
+			// Meta's message id has no buyer use and this read is unauthenticated —
+			// strip it on the token path alongside the delivery snapshot. The
+			// buyer-facing cards branch on `confirmationPushStatus`, never the wamid.
+			confirmationPushWamid: isBuyerRead
+				? undefined
+				: order.confirmationPushWamid,
 			statusLabels: retailer?.statusLabels as StatusLabels | undefined,
 			orderStages: retailer?.orderStages as OrderStage[] | undefined,
 			retailerLocale: (retailer?.locale ?? "en") as Locale,
 			storeName: retailer?.storeName ?? "",
 			retailerWaPhone: retailer?.waPhone,
+			// Served while the order still needs (or benefits from) a path into the
+			// shared-number chat: pending = the legacy manual/auto Send card; a
+			// confirmation-push order keeps it for the "Open WhatsApp" anchor
+			// ("sent") and the manual-send recovery card ("failed"). The cards
+			// themselves gate on status + confirmationPushStatus.
 			checkoutPhone:
-				order.status === "pending"
+				order.status === "pending" ||
+				order.confirmationPushStatus !== undefined
 					? (process.env.WHATSAPP_CHECKOUT_PHONE ?? retailer?.waPhone)
 					: undefined,
 		};
@@ -1281,13 +1724,34 @@ export const getPaymentMethods = query({
 	handler: async (
 		ctx,
 		{ token },
-	): Promise<Array<PaymentMethod & { qrImageUrl?: string }> | null> => {
+	): Promise<{
+		methods: Array<PaymentMethod & { qrImageUrl?: string }>;
+		// Whether THIS order can be paid through the seller's HitPay checkout
+		// right now (86eyb6z3a) — connection on + credentials stored + payment
+		// still open + both price holds clear + total within HitPay's floor.
+		// Server-side truth for the buyer's "Pay now" button; createCheckout
+		// re-checks everything, so this is presentation, not authorization.
+		gatewayAvailable: boolean;
+		// The ACCOUNT's enabled rails (probed truth, see schema) so the Pay-now
+		// explainer names only methods this seller actually offers. Undefined =
+		// not yet probed → the page uses a generic "bank or eWallet" line.
+		gatewayMethods?: string[];
+	} | null> => {
 		const order = await orderByToken(ctx, token);
 		if (!order) return null;
 		const retailer = await ctx.db.get(order.retailerId);
 		if (!retailer) return null;
+
+		const gatewayAvailable =
+			hitpayCheckoutConfigured(retailer.hitpay) &&
+			order.status !== "cancelled" &&
+			(order.paymentStatus ?? "unpaid") === "unpaid" &&
+			!isMockupGateClosed(order) &&
+			order.deliveryFeePending !== true &&
+			order.total >= HITPAY_MIN_AMOUNT_SEN;
+
 		const methods = resolvePaymentMethods(retailer);
-		if (methods.length === 0) return null;
+		if (methods.length === 0 && !gatewayAvailable) return null;
 
 		const resolved: Array<PaymentMethod & { qrImageUrl?: string }> = [];
 		for (const m of methods) {
@@ -1298,7 +1762,13 @@ export const getPaymentMethods = query({
 			}
 			resolved.push({ ...m, qrImageUrl });
 		}
-		return resolved;
+		return {
+			methods: resolved,
+			gatewayAvailable,
+			gatewayMethods: gatewayAvailable
+				? retailer.hitpay?.paymentMethods
+				: undefined,
+		};
 	},
 });
 
@@ -1509,7 +1979,7 @@ export const searchOrders = query({
 			unpaidAmount: 0,
 		};
 		for (const o of all) {
-			const b = statusToBucket(o.status);
+			const b = orderBucket(o);
 			counts[b]++;
 			if (needsMockup(o.mockupStatus)) counts.mockupPending++;
 			const open = b === "new" || b === "in_progress";
@@ -1633,6 +2103,7 @@ function orderToCsvSource(o: Doc<"orders">): CsvOrder {
 		paymentStatus: o.paymentStatus,
 		paymentMethod: o.paymentMethod,
 		deliveryMethod: o.deliveryMethod,
+		deliveryDirection: o.deliveryDirection,
 		customer: o.customer,
 		items: o.items,
 		subtotal: o.subtotal,
@@ -1876,6 +2347,13 @@ async function riderOwnsTransition(
 	targetAnchor: "confirmed" | "packed" | "shipped" | "delivered",
 ): Promise<boolean> {
 	if (!isRiderManagedTransition(targetAnchor, order.status)) return false;
+	// Collection orders (86eyg0n8e): the rider drives the FRONT of the flow —
+	// the webhook moves the JOB only, and the order stays the seller's to
+	// advance by hand throughout — so this gate would both lie ("it updates
+	// itself" never comes true) and strand. Read from the ORDER's frozen
+	// direction, never the store's live setting, mirroring the client: a mode
+	// switch must not re-gate (or un-gate) in-flight orders.
+	if (order.deliveryDirection === "collection") return false;
 	// An order can hold SEVERAL job rows: a failed booking's released row is kept
 	// on purpose (it doubles as the amber "failed" card) and `reserveBooking`
 	// then lets the seller rebook, so a live rider is routinely NOT the oldest
@@ -1887,14 +2365,19 @@ async function riderOwnsTransition(
 		.query("deliveryJobs")
 		.withIndex("by_order", (q) => q.eq("orderId", order._id))
 		.collect();
-	const active = jobs.find((j) => isActiveJobStatus(j.status));
-	return !!active && riderDrivesOrderStatus(active);
+	// Gated from the moment of BOOKING, not from the first webhook event — the
+	// same rule as the client (86eyg0n8e): requiring `lastEventAt` left the gate
+	// off during exactly the window it matters most, between placing the booking
+	// and the first event landing. The confirm-gated override is what protects
+	// the webhook-less seller instead, and cancelling the booking lifts the gate
+	// outright, so neither can be stranded.
+	return jobs.some((j) => isActiveJobStatus(j.status));
 }
 
 /** Seller-facing message for a blocked manual advance. The order-detail
  * stepper offers an explicit "Update manually" confirm that overrides it. */
 const RIDER_GATE_MESSAGE =
-	"A Lalamove rider is on this order — it updates itself when the rider picks up or drops off. Open the order and use “Update manually” if the automatic update didn't arrive.";
+	"A Lalamove rider is on this order — with your Lalamove webhook set up, it updates itself when the rider picks up or drops off. Open the order and use “Update manually” to move it yourself.";
 
 // Exported for the Lalamove webhook's auto-transitions (convex/lalamove.ts) —
 // rider picked up → shipped, completed → delivered ride the SAME path as a
@@ -1928,7 +2411,16 @@ export async function applyStatusTransition(
 		courierName: string;
 		trackingNo: string;
 		currentStageId: string | undefined;
+		confirmationPushStatus: undefined;
 	}> = { status, statusChangedAt: now, updatedAt: now };
+	// A deferred push is a PROMISE about the future ("your confirmation is
+	// coming once the price is confirmed") — cancelling the order invalidates
+	// it, so clear the stamp or the buyer's page keeps making a claim about an
+	// order that no longer exists. Terminal states (sent/failed/recovered) are
+	// history, not promises, and survive cancellation untouched.
+	if (status === "cancelled" && order.confirmationPushStatus === "deferred") {
+		patch.confirmationPushStatus = undefined;
+	}
 	// Courier fields describe a parcel shipment, so they only apply to delivery
 	// orders (undefined deliveryMethod reads as delivery, per the rest of the
 	// file). The UI never offers them on self-collect; if they arrive anyway they
@@ -1982,6 +2474,26 @@ export async function applyStatusTransition(
 	// docs/delivery-lalamove.md ("Prompt to book on packed") + BookDeliveryCard.
 }
 
+/**
+ * Stamp an order as seen by the seller (86eyf1rck). Idempotent set-if-unset.
+ *
+ * Confirmation-push orders are born `confirmed`, so `pending` no longer marks
+ * "haven't looked at this yet" — this does. Called when the seller opens the
+ * order, which is the moment they've actually looked at it; that drains it from
+ * the New bucket, the Home tile and the age escalation. Never un-set, so an
+ * order can't bounce back to "new" after being read.
+ */
+export const markSeen = mutation({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<void> => {
+		const { order } = await requireOrderAccess(ctx, orderId);
+		if (order.seenAt !== undefined) return;
+		// No updatedAt bump: "the seller looked at it" isn't an order change, and
+		// touching updatedAt would corrupt the time-in-status badge.
+		await ctx.db.patch(order._id, { seenAt: Date.now() });
+	},
+});
+
 export const updateStatus = mutation({
 	args: {
 		orderId: v.id("orders"),
@@ -2020,10 +2532,24 @@ export const updateStatus = mutation({
 			);
 		}
 
-		// Rider gate: the webhook drives shipped/delivered while a booking is
-		// live. Cancelling is never gated (not a rider-managed anchor). Sits
-		// before the transition so the manual courier fields above can't land on
-		// an order a rider already owns.
+		// Collection gate (86eyg0n8e) — the goods are still with the buyer, so no
+		// production status can be true. Cancelling stays open (same posture as
+		// the mockup gate above). Checked before the rider gate so a collection
+		// order's active trip always gets THIS message, never the rider one.
+		if (
+			status !== "cancelled" &&
+			anchorOrdinal(status) >= anchorOrdinal("packed") &&
+			isCollectionGateClosed(order)
+		) {
+			throw new ConvexError(
+				"This order is still with your customer — send a rider to collect it first. If the items are already with you, use “I already have the items” on the order page.",
+			);
+		}
+
+		// Rider gate: a live Lalamove booking drives shipped/delivered. Cancelling
+		// is never gated (not a rider-managed anchor). Sits before the transition
+		// so the manual courier fields above can't land on an order a rider
+		// already owns.
 		if (
 			!overrideRiderGate &&
 			status !== "cancelled" &&
@@ -2057,13 +2583,32 @@ export const bulkUpdateStatus = mutation({
 	handler: async (
 		ctx,
 		{ orderIds, status },
-	): Promise<{ updated: number; skipped: number }> => {
-		if (orderIds.length === 0) return { updated: 0, skipped: 0 };
+	): Promise<{
+		updated: number;
+		skipped: number;
+		/** Of `skipped`, how many were collection orders whose items are still
+		 * with the buyer — the one skip reason the seller can act on, so the
+		 * toast can name it instead of leaving a silent no-op. */
+		skippedAwaitingCollection: number;
+		/** Of `skipped`, how many had a live Lalamove rider driving the order —
+		 * named for the same reason: a silent skip is hidden behaviour, and the
+		 * fix (wait for the rider, or override from the order page) is per-order. */
+		skippedRiderManaged: number;
+	}> => {
+		if (orderIds.length === 0)
+			return {
+				updated: 0,
+				skipped: 0,
+				skippedAwaitingCollection: 0,
+				skippedRiderManaged: 0,
+			};
 		if (orderIds.length > 100)
 			throw new ConvexError("Too many orders selected (max 100)");
 
 		let updated = 0;
 		let skipped = 0;
+		let skippedAwaitingCollection = 0;
+		let skippedRiderManaged = 0;
 		// The inbox multi-select is single-retailer, so every id resolves to the
 		// same access descriptor; keep the last one for a single batch audit row.
 		let batchAccess: RetailerAccess | undefined;
@@ -2089,6 +2634,18 @@ export const bulkUpdateStatus = mutation({
 				skipped++;
 				continue;
 			}
+			// A collection order whose items haven't arrived can't be moved into
+			// production in bulk either — skipped, not fatal, so the rest of the
+			// batch still lands (mockup-gate posture).
+			if (
+				status !== "cancelled" &&
+				anchorOrdinal(status) >= anchorOrdinal("packed") &&
+				isCollectionGateClosed(order)
+			) {
+				skipped++;
+				skippedAwaitingCollection++;
+				continue;
+			}
 			// A live rider owns shipped/delivered — skip rather than message the
 			// buyer early without a tracking link. Deliberately no bulk override:
 			// overriding is a per-order judgement call (did THIS order's automatic
@@ -2098,6 +2655,7 @@ export const bulkUpdateStatus = mutation({
 				(await riderOwnsTransition(ctx, order, status))
 			) {
 				skipped++;
+				skippedRiderManaged++;
 				continue;
 			}
 			await applyStatusTransition(ctx, order, status);
@@ -2105,7 +2663,7 @@ export const bulkUpdateStatus = mutation({
 		}
 		if (batchAccess)
 			await logAdminAction(ctx, batchAccess, "orders.bulkUpdateStatus");
-		return { updated, skipped };
+		return { updated, skipped, skippedAwaitingCollection, skippedRiderManaged };
 	},
 });
 
@@ -2205,8 +2763,11 @@ async function deleteOrderCascade(
  * — an admin can erase orders in ANY store, including one they personally own
  * (which resolves via the owner branch, so `actingAsAdmin` is false there). The
  * dashboard hides the action for sellers, but this guard — not the hidden UI —
- * is the real boundary. Admin act-as writes (a store they don't own) are audited.
- * ClickUp `86eyaqzpd` (admin-only restriction) atop `86ey8fr8t` (the erase).
+ * is the real boundary. EVERY erase is audited, including one in a store the
+ * admin owns (`logDestructiveAdminAction`) — the deleted row can't be asked who
+ * removed it, so the trace has to be unconditional.
+ * ClickUp `86eyaqzpd` (admin-only restriction) atop `86ey8fr8t` (the erase),
+ * `86eyhz189` (always audited).
  */
 export const deleteOrder = mutation({
 	args: { orderId: v.id("orders") },
@@ -2214,20 +2775,27 @@ export const deleteOrder = mutation({
 		const { order, access } = await requireOrderAccess(ctx, orderId);
 		if (!(await isAdmin(ctx))) throw new Error("Forbidden");
 		await deleteOrderCascade(ctx, order);
-		await logAdminAction(ctx, access, "orders.hardDelete", orderId);
+		await logDestructiveAdminAction(ctx, access, "orders.hardDelete", orderId);
 	},
 });
 
 /**
  * Bulk hard-delete (the inbox multi-select) — **Kedaipal admin only**, same
- * policy as the single `deleteOrder`. Capped at 100/batch, one batch audit row.
+ * policy as the single `deleteOrder`. Capped at 100/batch.
  * No plan gate: permanent erasure is an admin ops action, not a paid feature.
  *
  * The admin gate is checked ONCE up front (`isAdmin` — one caller identity for
  * the whole batch, cheaper than per-order and ownership-agnostic so an admin can
  * bulk-erase in a store they own too). The per-order `requireRetailerAccess`
- * stays: it confirms each order's retailer exists and supplies `batchAccess` for
- * the audit row (an admin passes it for every store, so it never rejects here).
+ * stays: it confirms each order's retailer exists and supplies the access record
+ * for that order's audit row (an admin passes it for every store, so it never
+ * rejects here).
+ *
+ * Audit is ONE ROW PER ERASED ORDER, not one per batch (86eyhz189). A batch row
+ * could only carry a single `retailerId`, so a batch spanning two stores would
+ * file the whole erase under whichever store happened to be last — and a bare
+ * count answers "how many" when the question an irreversible delete raises is
+ * "WHICH order is gone". Per-order rows are correct across stores by construction.
  */
 export const bulkDeleteOrders = mutation({
 	args: { orderIds: v.array(v.id("orders")) },
@@ -2238,16 +2806,19 @@ export const bulkDeleteOrders = mutation({
 		if (!(await isAdmin(ctx))) throw new Error("Forbidden");
 
 		let deleted = 0;
-		let batchAccess: RetailerAccess | undefined;
 		for (const orderId of orderIds) {
 			const order = await ctx.db.get(orderId);
 			if (!order) throw new ConvexError("Order not found");
-			batchAccess = await requireRetailerAccess(ctx, order.retailerId);
+			const access = await requireRetailerAccess(ctx, order.retailerId);
 			await deleteOrderCascade(ctx, order);
+			await logDestructiveAdminAction(
+				ctx,
+				access,
+				"orders.bulkDeleteOrders",
+				orderId,
+			);
 			deleted++;
 		}
-		if (batchAccess)
-			await logAdminAction(ctx, batchAccess, "orders.bulkDeleteOrders");
 		return { deleted };
 	},
 });
@@ -2281,8 +2852,14 @@ export const advanceToStage = mutation({
 		carrierTrackingUrl: v.optional(v.string()),
 		courierName: v.optional(v.string()),
 		trackingNo: v.optional(v.string()),
+		// Collection service escape (86eyg0n8e): the seller asserts the items are
+		// already with them — they collected in person, or the rider's webhook
+		// never reported. Stamps `collectedAt` so the order unblocks for good
+		// instead of asking again at every stage. Ignored on standard orders.
+		markCollected: v.optional(v.boolean()),
 		// Set by the order-detail "Update manually" confirm — the seller asserts
-		// the rider's automatic update never landed. See riderOwnsTransition.
+		// the rider's automatic update never landed (or they have no webhook and
+		// are moving it themselves). See riderOwnsTransition.
 		overrideRiderGate: v.optional(v.boolean()),
 	},
 	handler: async (
@@ -2294,6 +2871,7 @@ export const advanceToStage = mutation({
 			carrierTrackingUrl,
 			courierName,
 			trackingNo,
+			markCollected,
 			overrideRiderGate,
 		},
 	): Promise<void> => {
@@ -2328,8 +2906,27 @@ export const advanceToStage = mutation({
 			);
 		}
 
+		// Collection gate (86eyg0n8e): on a COLLECTION order the rider brings the
+		// goods IN, so nothing downstream ("packed", "cleaning", "ready") can be
+		// true before they arrive. The seller books the rider first and the order
+		// waits. Same anchor-ordinal shape as the mockup gate above, and the same
+		// escape posture: `markCollected` lets a seller who fetched the items
+		// themselves (or whose webhook never reported) proceed — which stamps the
+		// arrival, so this asks once, not at every stage. Standard delivery is
+		// untouched: the rider takes goods OUT, so packing precedes the trip.
+		const collectingFromBuyer =
+			isCollectionGateClosed(order) &&
+			anchorOrdinal(targetStatus) >= anchorOrdinal("packed");
+		if (collectingFromBuyer && markCollected !== true) {
+			throw new ConvexError(
+				"This order is still with your customer — send a rider to collect it first. If the items are already with you, use “I already have the items” on the order page.",
+			);
+		}
+
 		// Rider gate — same rule as updateStatus. Within-anchor stage moves don't
 		// change canonical status, so isRiderManagedTransition lets them through.
+		// Checked after the collection gate, and never fires on collection orders
+		// (riderOwnsTransition rules them out by the order's frozen direction).
 		if (
 			!overrideRiderGate &&
 			(await riderOwnsTransition(ctx, order, targetStatus))
@@ -2348,7 +2945,12 @@ export const advanceToStage = mutation({
 			trackingNo: string;
 			statusChangedAt: number;
 			updatedAt: number;
+			collectedAt: number;
 		}> = { status: targetStatus, currentStageId: stage.id, updatedAt: now };
+		// Set-if-unset, so a later manual advance can't move the arrival moment.
+		if (collectingFromBuyer && markCollected === true) {
+			patch.collectedAt = now;
+		}
 		// Reset the status clock only when the canonical status actually changes
 		// (a within-anchor stage move keeps the same "Pending/Confirmed/…" bucket).
 		if (statusChanged) patch.statusChangedAt = now;
@@ -2454,6 +3056,70 @@ export const setShipmentTracking = mutation({
 });
 
 /**
+ * Every mutation that RE-PRICES an order must call this (PR #178 review,
+ * finding 1). A HitPay request is minted lazily on the buyer's tap and stays
+ * payable at HitPay for up to an hour, frozen at the total it was minted for —
+ * so any re-price in between leaves a live link at the wrong price. Paying it
+ * produces an authentic payment `receiveGatewayPayment` refuses to apply:
+ * money moved, the order stays unpaid, and a human has to reconcile it.
+ *
+ * Killing the link instead turns that into "this link expired, tap Pay now
+ * again" at the CORRECT price — a failed payment the buyer can retry beats a
+ * successful one at the wrong number. That is also why this is preferred over
+ * simply refusing to re-price while a request is live: refusing would block the
+ * seller from fixing a delivery charge for up to an hour, and would do nothing
+ * about the buyer-driven re-prices (address / pickup-point edits) that open the
+ * same window.
+ *
+ * The dead id is deliberately KEPT in `gatewayPreviousRequestId`: HitPay can
+ * ignore or race our delete, and an authentic late payment must still resolve
+ * to this order (the webhook reads that index) and reach the amount check.
+ * Clearing it outright would turn such a payment into an unknown-ack-200 —
+ * money moved and nothing recorded, strictly worse than a surfaced mismatch.
+ */
+async function voidStaleGatewayRequest(
+	ctx: MutationCtx,
+	order: Doc<"orders">,
+	newTotal: number,
+): Promise<void> {
+	// Same price = the minted link is still exactly right; a re-price that
+	// lands on the old number (fee corrected back) must not cost the buyer
+	// their open checkout.
+	if (newTotal === order.total) return;
+	await releaseGatewayRequest(ctx, order);
+}
+
+/** The unconditional half of `voidStaleGatewayRequest` — retire whatever live
+ * request the order holds, keeping its id correlatable. Separate because
+ * `clearGatewayPaymentIssue` must retire the request even though no re-price
+ * happened: that request is the one the unapplied payment landed on, and
+ * HitPay may treat it as settled, so the next tap must mint a fresh one rather
+ * than reuse a link that could refuse the buyer. */
+async function releaseGatewayRequest(
+	ctx: MutationCtx,
+	order: Doc<"orders">,
+): Promise<void> {
+	// A settled order's request is history: `createCheckout` already refuses on
+	// `received`, so there's no second payment to prevent, and asking HitPay to
+	// delete a request it has taken money on is a pointless rejected call.
+	if ((order.paymentStatus ?? "unpaid") === "received") return;
+	const requestId = order.gatewayRequestId;
+	if (!requestId) return;
+	await ctx.db.patch(order._id, {
+		gatewayPreviousRequestId: requestId,
+		gatewayRequestId: undefined,
+		gatewayCheckoutUrl: undefined,
+		gatewayRequestedAmount: undefined,
+		gatewayRequestedCurrency: undefined,
+		gatewayRequestedAt: undefined,
+	});
+	await ctx.scheduler.runAfter(0, internal.hitpay.voidRequest, {
+		retailerId: order.retailerId,
+		requestId,
+	});
+}
+
+/**
  * Public mutation that lets the shopper edit their delivery address while the
  * order is still pending. Trust model mirrors the tracking page: the shortId
  * is the capability — anyone who knows it can edit. Once the order moves out
@@ -2500,12 +3166,12 @@ export const updateDeliveryAddress = mutation({
 		// fee is a function of where the order goes, so the fee follows the
 		// address exactly like the pickup fee follows the point (see
 		// updatePickupLocation). Blocked destinations throw (the old address —
-		// and its total — stay untouched); a radius "arrange" out-of-range edit
-		// flips the order back to fee-pending. A lalamove-priced edit needs the
-		// live quote loaded above or it throws — an address change can never
-		// silently drop the buyer onto a seller-calculates path. Pending-only
-		// gate above means no payment has been asked for yet, so the total is
-		// still safe to move.
+		// and its total — stay untouched); a radius/weight "arrange" edit flips
+		// the order back to fee-pending. A lalamove-priced edit needs the live
+		// quote loaded above or it throws — an address change can never silently
+		// drop the buyer onto a seller-calculates path. Pending-only gate above
+		// means no payment has been asked for yet, so the total is still safe to
+		// move.
 		const retailer = await ctx.db.get(order.retailerId);
 		if (!retailer) throw new ConvexError("Store not found");
 		const liveQuote = await loadCheckoutDeliveryQuote(
@@ -2514,10 +3180,33 @@ export const updateDeliveryAddress = mutation({
 			deliveryQuoteId,
 			sanitized,
 		);
+		// Weight-mode re-price (86eyeea1n) weighs the ORDER's frozen lines against
+		// live variant weights — a state change can move the order to another
+		// zone's bands, so the weight must be summed again, not read off the old
+		// snapshot. A line whose variant is gone (legacy pre-variant orders)
+		// reads weightless and resolves per onUnpriceable — never a silent
+		// underweigh.
+		let cartWeight: CartWeightSummary | undefined;
+		if (retailer.deliveryConfig?.mode === "weight") {
+			const weightItems: CartWeightItem[] = await Promise.all(
+				order.items.map(async (item): Promise<CartWeightItem> => {
+					const variant = item.variantId
+						? await ctx.db.get(item.variantId)
+						: null;
+					return {
+						parcelWeightG: variant?.parcelWeightG ?? 0,
+						quantity: item.quantity,
+						isCustom: variant?.isCustom === true,
+					};
+				}),
+			);
+			cartWeight = summarizeCartWeight(weightItems);
+		}
 		const resolved = resolveDeliveryForOrder(
 			retailer,
 			order.subtotal,
 			sanitized,
+			cartWeight,
 			liveQuote,
 		);
 		const { subtotal, total } = computeOrderTotals(order.items, {
@@ -2533,6 +3222,8 @@ export const updateDeliveryAddress = mutation({
 			});
 
 		const now = Date.now();
+		// The buyer may have a HitPay link open at the OLD price right now.
+		await voidStaleGatewayRequest(ctx, order, total);
 		await ctx.db.patch(order._id, {
 			deliveryAddress: sanitized,
 			deliverySnapshot: resolved.snapshot,
@@ -2604,6 +3295,10 @@ export const setDeliveryFee = mutation({
 				customerId: order.customerId,
 				delta: total - order.total,
 			});
+		// Correcting a charge on an order the buyer can already pay (holds clear,
+		// nothing claimed yet) is exactly the window that produced a mispriced
+		// live link — kill it before the total moves under the buyer.
+		await voidStaleGatewayRequest(ctx, order, total);
 		await ctx.db.patch(orderId, {
 			deliverySnapshot: snapshot,
 			deliveryFee: snapshot?.fee,
@@ -2619,11 +3314,15 @@ export const setDeliveryFee = mutation({
 			note: `delivery_fee_set (fee ${fee})`,
 			createdAt: now,
 		});
-		// Release the held payment ask — but only when this set actually resolved
-		// a pending charge, the buyer already got their confirm (status past
-		// "pending"), and the mockup gate isn't ALSO holding payment (that path
-		// sends its own prompt on approve/waive, which re-checks this flag).
-		if (
+		// Release the held payment ask. A push-path order (86eyfq0w5) gets its
+		// DEFERRED confirmation template — the action re-checks the mockup hold,
+		// so a doubly-held order sends exactly once, after both clear. Legacy
+		// orders keep the free-form held-payment ask, with the original guards
+		// (fee actually resolved, buyer already confirmed, mockup not also
+		// holding — that path prompts via notifyPaymentDue).
+		if (wasPending && order.confirmationPushStatus === "deferred") {
+			await claimDeferredPush(ctx, orderId);
+		} else if (
 			wasPending &&
 			order.status !== "pending" &&
 			!isMockupGateClosed(order) &&
@@ -2693,6 +3392,9 @@ export const updatePickupLocation = mutation({
 				customerId: order.customerId,
 				delta: total - order.total,
 			});
+		// A paid→free (or free→paid) point switch moves the total, so any live
+		// HitPay link is now mispriced.
+		await voidStaleGatewayRequest(ctx, order, total);
 		await ctx.db.patch(order._id, {
 			pickupLocationId: location._id,
 			pickupSnapshot: snapshot,
@@ -2788,8 +3490,93 @@ export const claimPayment = mutation({
 			internal.email.notifyPaymentClaimed,
 			{ orderId: order._id },
 		);
+
+		// Seller WhatsApp payment-claim alert (86eyhw9zy). Counter pay-later
+		// orders included — a claim lands hours after the sale, when nobody is
+		// standing at the counter. The action checks toggle + template env.
+		await ctx.scheduler.runAfter(
+			0,
+			internal.whatsapp.notifySellerPaymentClaim,
+			{ orderId: order._id },
+		);
 	},
 });
+
+/**
+ * The one author of the payment-received state change, shared by the seller's
+ * `markPaymentReceived` and the HitPay gateway's webhook receive (86eyb6z3a) so
+ * the two paths can never drift: paymentStatus → received, pending orders
+ * auto-confirm (+ the activation stamp), the orderEvents row is written, and
+ * `notifyPaymentReceived` is scheduled — deliberately NOT `notifyStatusChange`,
+ * so an auto-confirm sends exactly one WhatsApp message.
+ *
+ * Callers own their guards: the seller path throws on the mockup/delivery-fee
+ * holds (the money hasn't moved yet, so refusing is safe); the gateway path
+ * enforces those holds at CHECKOUT-CREATION time instead, because by webhook
+ * time the buyer's money has already moved and refusing to record it would be
+ * a lie. Callers also own idempotency (skip when already `received`).
+ */
+async function applyPaymentReceived(
+	ctx: MutationCtx,
+	order: Doc<"orders">,
+	opts: {
+		now: number;
+		paymentMethod?: OrderPaymentMethod;
+		/** Detail folded into the non-auto-confirm event note. */
+		noteDetail?: string;
+		/** Extra fields written in the same patch (gateway ids). */
+		extraPatch?: Partial<Doc<"orders">>;
+	},
+): Promise<void> {
+	const { now, paymentMethod, noteDetail, extraPatch } = opts;
+	const shouldAutoConfirm = order.status === "pending";
+
+	const patch: Partial<Doc<"orders">> = {
+		...extraPatch,
+		paymentStatus: "received",
+		paymentReceivedAt: now,
+		// The single retirement point for an unresolved gateway payment (PR #178
+		// review, finding 1). Whatever route settles the order — the seller
+		// reconciling the odd payment in their HitPay dashboard and marking it
+		// received by hand, or a correctly-priced payment landing afterwards —
+		// the buyer's "we're checking a payment" card and the seller's amber note
+		// must both retire, and this is the one function every receive path runs
+		// through. Unconditional: clearing an unset field is a no-op.
+		gatewayPaymentIssue: undefined,
+		updatedAt: now,
+	};
+	if (paymentMethod) patch.paymentMethod = paymentMethod;
+	if (shouldAutoConfirm) {
+		patch.status = "confirmed";
+	}
+	await ctx.db.patch(order._id, patch);
+
+	if (shouldAutoConfirm) {
+		await ctx.db.insert("orderEvents", {
+			orderId: order._id,
+			status: "confirmed",
+			note: "payment_received_auto_confirm",
+			createdAt: now,
+		});
+		// First order reaching confirmed activates the store (one-time stamp).
+		await stampRetailerActivation(ctx, order.retailerId, now);
+	} else {
+		await ctx.db.insert("orderEvents", {
+			orderId: order._id,
+			status: order.status,
+			note: noteDetail && noteDetail.length > 0
+				? `payment_received: ${noteDetail}`
+				: "payment_received",
+			createdAt: now,
+		});
+	}
+
+	await ctx.scheduler.runAfter(
+		0,
+		internal.whatsapp.notifyPaymentReceived,
+		{ orderId: order._id },
+	);
+}
 
 /**
  * Retailer-only mutation: mark that the payment has landed in the bank app.
@@ -2830,47 +3617,222 @@ export const markPaymentReceived = mutation({
 			);
 		}
 
-		const now = Date.now();
-		const trimmedNote = note?.trim();
-		const shouldAutoConfirm = order.status === "pending";
+		await applyPaymentReceived(ctx, order, {
+			now: Date.now(),
+			paymentMethod,
+			noteDetail: note?.trim(),
+		});
+		await logAdminAction(ctx, access, "orders.confirmPayment", orderId);
+	},
+});
 
-		const patch: Partial<Doc<"orders">> = {
-			paymentStatus: "received",
-			paymentReceivedAt: now,
-			updatedAt: now,
-		};
-		if (paymentMethod) patch.paymentMethod = paymentMethod;
-		if (shouldAutoConfirm) {
-			patch.status = "confirmed";
+/**
+ * Internal receive path for a settled HitPay charge (86eyb6z3a) — called by
+ * the `/webhook/hitpay` route and the redirect-return reconcile action, both
+ * of which have already VERIFIED the event (HMAC / authenticated status
+ * fetch). This mutation is the single judge of what an authentic event is
+ * allowed to do:
+ *  - idempotent by `gatewayPaymentId` (duplicate deliveries no-op);
+ *  - the paid amount+currency must echo the order's CURRENT total — a stale
+ *    checkout link paid after a re-price records an event + emails the seller
+ *    instead of auto-receiving (the money moved; a human reconciles it);
+ *  - otherwise it applies the exact `markPaymentReceived` semantics via
+ *    `applyPaymentReceived` (auto-confirm, activation, WhatsApp receipt).
+ * Deliberately NO hold guards here: checkout creation enforces them, and
+ * money that has already moved must never be silently dropped.
+ *
+ * Both refusals also freeze `gatewayPaymentIssue` onto the order (PR #178
+ * review, finding 1). The event note + seller email alone made this a silent
+ * state: the buyer's page still read plain "unpaid" with Pay-now live — an
+ * invitation to pay a second time — and the seller's only signal was an email.
+ * The stamp is what the buyer's and seller's cards render from, so the surface
+ * is identical whether the WEBHOOK or the redirect reconcile found the payment.
+ */
+export const receiveGatewayPayment = internalMutation({
+	args: {
+		orderId: v.id("orders"),
+		paymentId: v.string(),
+		amountSen: v.number(),
+		currency: v.string(),
+		paymentType: v.optional(v.string()),
+	},
+	handler: async (
+		ctx,
+		{ orderId, paymentId, amountSen, currency, paymentType },
+	): Promise<{
+		applied: boolean;
+		reason?: "duplicate" | "amount_mismatch" | "cancelled" | "gone";
+	}> => {
+		const order = await ctx.db.get(orderId);
+		// Distinct from "duplicate" on purpose: the order was hard-deleted between
+		// the correlating query and this mutation. Nothing was applied and nothing
+		// CAN be, so the caller must not report it to the buyer as "received".
+		if (!order) return { applied: false, reason: "gone" };
+		if (
+			order.gatewayPaymentId === paymentId ||
+			order.paymentStatus === "received"
+		) {
+			// Duplicate webhook delivery, or the seller already marked it by hand.
+			return { applied: false, reason: "duplicate" };
 		}
-		await ctx.db.patch(orderId, patch);
 
-		if (shouldAutoConfirm) {
-			await ctx.db.insert("orderEvents", {
-				orderId,
-				status: "confirmed",
-				note: "payment_received_auto_confirm",
-				createdAt: now,
-			});
-			// First order reaching confirmed activates the store (one-time stamp).
-			await stampRetailerActivation(ctx, order.retailerId, now);
-		} else {
+		const now = Date.now();
+		if (order.status === "cancelled") {
+			// Pay-after-cancel (PR #172 review, finding 2): createCheckout refuses
+			// cancelled orders, but a link minted BEFORE the cancel stays payable
+			// at HitPay for up to an hour. An authentic late payment must never
+			// resurrect the order or WhatsApp the buyer "payment received" — it
+			// needs a human and a refund. Event + seller email, no state flip.
 			await ctx.db.insert("orderEvents", {
 				orderId,
 				status: order.status,
-				note: trimmedNote && trimmedNote.length > 0
-					? `payment_received: ${trimmedNote}`
-					: "payment_received",
+				note: `gateway_paid_after_cancel: paid ${(amountSen / 100).toFixed(2)} ${currency.toUpperCase()} on the cancelled order (hitpay ${paymentId})`,
 				createdAt: now,
 			});
+			await ctx.db.patch(orderId, {
+				gatewayPaymentIssue: {
+					kind: "paid_after_cancel",
+					paidAmountSen: amountSen,
+					paidCurrency: currency.toUpperCase(),
+					paymentId,
+					at: now,
+				},
+				updatedAt: now,
+			});
+			await ctx.scheduler.runAfter(
+				0,
+				internal.email.notifyGatewayPaymentIssue,
+				{
+					orderId,
+					kind: "paid_after_cancel",
+					paidAmountSen: amountSen,
+					paidCurrency: currency.toUpperCase(),
+					paymentId,
+				},
+			);
+			return { applied: false, reason: "cancelled" };
+		}
+		if (
+			amountSen !== order.total ||
+			currency.toUpperCase() !== order.currency.toUpperCase()
+		) {
+			// Authentic payment, wrong number — the buyer paid an outdated checkout
+			// link (total re-priced after mint) or a tampered/foreign request.
+			// Record + tell the seller; never auto-receive a mismatched amount.
+			await ctx.db.insert("orderEvents", {
+				orderId,
+				status: order.status,
+				note: `gateway_amount_mismatch: paid ${(amountSen / 100).toFixed(2)} ${currency.toUpperCase()}, order total ${(order.total / 100).toFixed(2)} ${order.currency.toUpperCase()} (hitpay ${paymentId})`,
+				createdAt: now,
+			});
+			await ctx.db.patch(orderId, {
+				gatewayPaymentIssue: {
+					kind: "amount_mismatch",
+					paidAmountSen: amountSen,
+					paidCurrency: currency.toUpperCase(),
+					paymentId,
+					at: now,
+				},
+				updatedAt: now,
+			});
+			await ctx.scheduler.runAfter(
+				0,
+				internal.email.notifyGatewayPaymentIssue,
+				{
+					orderId,
+					kind: "amount_mismatch",
+					paidAmountSen: amountSen,
+					paidCurrency: currency.toUpperCase(),
+					paymentId,
+				},
+			);
+			return { applied: false, reason: "amount_mismatch" };
 		}
 
-		await ctx.scheduler.runAfter(
-			0,
-			internal.whatsapp.notifyPaymentReceived,
-			{ orderId },
-		);
-		await logAdminAction(ctx, access, "orders.confirmPayment", orderId);
+		await applyPaymentReceived(ctx, order, {
+			now,
+			// A gateway settlement is always a known settlement — unknown rails
+			// stamp "other" rather than staying blank (see mapHitpayPaymentType).
+			paymentMethod: mapHitpayPaymentType(paymentType) ?? "other",
+			noteDetail: `hitpay${paymentType ? ` (${paymentType})` : ""}`,
+			extraPatch: {
+				gatewayPaymentId: paymentId,
+				// The HitPay payment id doubles as the transfer reference the seller
+				// can look up in their HitPay dashboard.
+				paymentReference: paymentId,
+			},
+		});
+		return { applied: true };
+	},
+});
+
+/**
+ * Seller (or admin act-as): retire an unresolved gateway payment notice
+ * (PR #178 review, finding 1) WITHOUT marking the order paid.
+ *
+ * `applyPaymentReceived` covers the case where the seller accepts the odd
+ * payment. The other real outcome has no such path: the seller refunds it in
+ * HitPay and wants the customer to pay again properly. Since an unresolved
+ * issue blocks `createCheckout` (so the buyer can't be charged twice while it
+ * stands), without this the refund would leave the buyer permanently unable to
+ * pay online — the exact dead end this finding is about, just moved one step
+ * later. The seller is the only party who knows the money was returned, so
+ * they own the switch.
+ *
+ * Deliberately not subscription- or plan-gated: clearing a warning is never a
+ * paid feature, and a past-due store must still be able to unblock a customer.
+ */
+export const clearGatewayPaymentIssue = mutation({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<void> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) throw new ConvexError("Order not found");
+		const access = await requireRetailerAccess(ctx, order.retailerId);
+		const issue = order.gatewayPaymentIssue;
+		if (!issue) return; // already resolved (e.g. a payment landed) — no-op
+		const now = Date.now();
+		// Retire the request the odd payment landed on, so the buyer's next tap
+		// mints a fresh link instead of reusing one HitPay may already consider
+		// settled (the reuse window is blind to that).
+		await releaseGatewayRequest(ctx, order);
+		await ctx.db.patch(orderId, {
+			gatewayPaymentIssue: undefined,
+			updatedAt: now,
+		});
+		// The money really moved, so the trail must outlive the notice.
+		await ctx.db.insert("orderEvents", {
+			orderId,
+			status: order.status,
+			note: `gateway_issue_resolved_by_seller: ${issue.kind}, paid ${(issue.paidAmountSen / 100).toFixed(2)} ${issue.paidCurrency} (hitpay ${issue.paymentId})`,
+			createdAt: now,
+		});
+		await logAdminAction(ctx, access, "orders.clearGatewayPaymentIssue", orderId);
+	},
+});
+
+/**
+ * Late method enrichment for webhook-received payments (86eyb6z3a): the v1
+ * completion webhook carries no payment_type, so the receive stamps "other"
+ * and the reconcile action follows up with the status fetch's real rail.
+ * Only upgrades an "other" stamp on the SAME settled payment — never rewrites
+ * a seller's hand-picked method.
+ */
+export const recordGatewayMethod = internalMutation({
+	args: {
+		orderId: v.id("orders"),
+		paymentId: v.string(),
+		paymentType: v.string(),
+	},
+	handler: async (ctx, { orderId, paymentId, paymentType }): Promise<void> => {
+		const order = await ctx.db.get(orderId);
+		if (!order) return;
+		if (order.gatewayPaymentId !== paymentId) return;
+		if (order.paymentMethod !== undefined && order.paymentMethod !== "other") {
+			return;
+		}
+		const method = mapHitpayPaymentType(paymentType);
+		if (!method || method === order.paymentMethod) return;
+		await ctx.db.patch(orderId, { paymentMethod: method });
 	},
 });
 
@@ -3068,6 +4030,9 @@ export const submitMockup = mutation({
 				delta: total - order.total,
 			});
 
+		// A WAIVED mockup opens the payment gate without reaching "approved", so
+		// the buyer can hold a live link while the seller re-quotes here.
+		await voidStaleGatewayRequest(ctx, order, total);
 		await ctx.db.patch(orderId, {
 			mockupStatus: "submitted",
 			// Source of truth is the array; the singular stays in sync as [0] for
@@ -3139,6 +4104,7 @@ export const updateMockupQuote = mutation({
 				customerId: order.customerId,
 				delta: total - order.total,
 			});
+		await voidStaleGatewayRequest(ctx, order, total);
 		await ctx.db.patch(orderId, {
 			mockupQuotedAmount: effectiveQuote,
 			subtotal,
@@ -3186,12 +4152,19 @@ export const approveMockup = mutation({
 		await ctx.scheduler.runAfter(0, internal.email.notifyMockupApproved, {
 			orderId: order._id,
 		});
-		// Gate is now open → send the buyer the payment prompt that was deferred
-		// at confirm time (the "I've paid" CTA over WhatsApp).
-		await ctx.scheduler.runAfter(0, internal.whatsapp.notifyPaymentDue, {
-			orderId: order._id,
-			reason: "approved",
-		});
+		// Gate is now open → the price is agreed. A push-path order (86eyfq0w5)
+		// gets its DEFERRED confirmation template now — first and only message,
+		// carrying the final quoted total (the action re-checks the fee hold, so
+		// a doubly-held order sends exactly once). Legacy orders keep the
+		// free-form payment prompt their open chat can actually receive.
+		if (order.confirmationPushStatus === "deferred") {
+			await claimDeferredPush(ctx, order._id);
+		} else {
+			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyPaymentDue, {
+				orderId: order._id,
+				reason: "approved",
+			});
+		}
 	},
 });
 
@@ -3261,12 +4234,17 @@ export const waiveMockup = mutation({
 			note: "mockup_waived",
 			createdAt: now,
 		});
-		// Gate forced open without buyer approval → the buyer still needs to pay,
-		// so send the payment prompt deferred at confirm time.
-		await ctx.scheduler.runAfter(0, internal.whatsapp.notifyPaymentDue, {
-			orderId,
-			reason: "waived",
-		});
+		// Gate forced open without buyer approval → the buyer still needs to pay.
+		// Push-path orders get their deferred confirmation template (86eyfq0w5);
+		// legacy orders get the free-form payment prompt.
+		if (order.confirmationPushStatus === "deferred") {
+			await claimDeferredPush(ctx, orderId);
+		} else {
+			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyPaymentDue, {
+				orderId,
+				reason: "waived",
+			});
+		}
 		await logAdminAction(ctx, access, "orders.waiveMockup", orderId);
 	},
 });
@@ -3352,6 +4330,13 @@ export const declineMockupItem = mutation({
 				status: "cancelled",
 				mockupStatus: undefined,
 				mockupQuotedAmount: undefined,
+				// The deferred-push promise dies with the order (see
+				// applyStatusTransition's cancel branch — this cancel path bypasses
+				// that helper, so it clears the stamp itself).
+				confirmationPushStatus:
+					order.confirmationPushStatus === "deferred"
+						? undefined
+						: order.confirmationPushStatus,
 				updatedAt: now,
 			});
 			await ctx.db.insert("orderEvents", {
@@ -3378,6 +4363,7 @@ export const declineMockupItem = mutation({
 				customerId: order.customerId,
 				delta: total - order.total,
 			});
+		await voidStaleGatewayRequest(ctx, order, total);
 		await ctx.db.patch(order._id, {
 			items: kept,
 			subtotal,
@@ -3395,10 +4381,13 @@ export const declineMockupItem = mutation({
 		await ctx.scheduler.runAfter(0, internal.email.notifyMockupDeclined, {
 			orderId: order._id,
 		});
-		// The gate is now open and the buyer owes for the ready-made remainder, but
-		// they may close the page — nudge them with the payment prompt over
-		// WhatsApp. Skip if payment was already taken (e.g. seller marked received).
-		if ((order.paymentStatus ?? "unpaid") === "unpaid")
+		// The gate is now open and the buyer owes for the ready-made remainder.
+		// Push-path orders get their deferred confirmation template now — even if
+		// somehow already paid, it's still the order's first (and correct)
+		// message. Legacy unpaid orders get the free-form payment nudge.
+		if (order.confirmationPushStatus === "deferred") {
+			await claimDeferredPush(ctx, order._id);
+		} else if ((order.paymentStatus ?? "unpaid") === "unpaid")
 			await ctx.scheduler.runAfter(0, internal.whatsapp.notifyPaymentDue, {
 				orderId: order._id,
 				reason: "declined",
@@ -3424,5 +4413,50 @@ export const getMockupUrls = query({
 			resolveMockupImageIds(order).map((id) => ctx.storage.getUrl(id)),
 		);
 		return urls.filter((u): u is string => u !== null);
+	},
+});
+
+/**
+ * One-shot backfill (86eyg0n8e): stamp `collectedAt` on COLLECTION orders whose
+ * rider already completed the trip before that field existed.
+ *
+ *   npx convex run orders:backfillCollectionCollectedAt
+ *
+ * Without it, such an order sits behind the collection gate forever — the rider
+ * genuinely brought the goods in, but nothing recorded WHEN, so the seller would
+ * have to take the "I already have the items" escape on an order that needs no
+ * escape. The arrival moment is taken from the job's last webhook event (its
+ * completion), falling back to the job's `updatedAt`.
+ *
+ * **Production is a no-op** — the collection service has never shipped there, so
+ * no order carries `deliveryDirection: "collection"` yet. This exists for dev
+ * deployments that tested the flow before the field landed. Idempotent: only
+ * touches rows where `collectedAt` is unset.
+ */
+export const backfillCollectionCollectedAt = internalMutation({
+	args: {},
+	handler: async (ctx): Promise<{ scanned: number; stamped: number }> => {
+		const jobs = await ctx.db
+			.query("deliveryJobs")
+			.filter((q) => q.eq(q.field("status"), "completed"))
+			.collect();
+		let stamped = 0;
+		for (const job of jobs) {
+			if (job.deliveryDirection !== "collection") continue;
+			const order = await ctx.db.get(job.orderId);
+			if (!order) continue;
+			if (order.deliveryDirection !== "collection") continue;
+			if (order.collectedAt !== undefined) continue;
+			await ctx.db.patch(order._id, {
+				collectedAt: job.lastEventAt ?? job.updatedAt,
+				updatedAt: Date.now(),
+			});
+			stamped++;
+		}
+		console.log("[orders] collectedAt backfill", {
+			scanned: jobs.length,
+			stamped,
+		});
+		return { scanned: jobs.length, stamped };
 	},
 });

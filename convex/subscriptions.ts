@@ -178,6 +178,8 @@ const FEATURE_LABEL: Record<PlanFeature, string> = {
 	insights: "Seller Insights",
 	radiusDelivery: "Distance-based delivery pricing",
 	delivery: "Lalamove delivery booking",
+	onlinePayments: "Online payments (HitPay)",
+	waOrderAlerts: "WhatsApp order alerts",
 };
 
 /**

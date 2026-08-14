@@ -33,6 +33,7 @@ import {
 	DialogTitle,
 } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
+import { MyPhoneInput } from "../components/ui/my-phone-input";
 import { Skeleton } from "../components/ui/skeleton";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage, formatPrice } from "../lib/format";
@@ -365,16 +366,15 @@ function OnboardClientCard() {
 			</label>
 
 			<div className="grid gap-4 sm:grid-cols-2">
-				<label className="flex flex-col gap-1 text-sm font-medium">
+				<label
+					htmlFor="new-retailer-wa-phone"
+					className="flex flex-col gap-1 text-sm font-medium"
+				>
 					<span className="min-h-5">WhatsApp number</span>
-					<Input
-						type="tel"
-						inputMode="tel"
+					<MyPhoneInput
+						id="new-retailer-wa-phone"
 						value={waPhone}
-						onChange={(e) => setWaPhone(e.target.value)}
-						placeholder="60123456789"
-						variant="field"
-						className="font-mono"
+						onChange={setWaPhone}
 					/>
 				</label>
 				<label className="flex flex-col gap-1 text-sm font-medium">

@@ -1,11 +1,10 @@
 import { createFileRoute, notFound } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import {
 	BadgeCheck,
 	CalendarDays,
 	CheckCircle,
 	Clock,
-	Download,
 	ExternalLink,
 	HandCoins,
 	Hourglass,
@@ -21,24 +20,33 @@ import {
 	Truck,
 	XCircle,
 } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import {
+	type FormEvent,
+	type ReactNode,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { isSafeTrackingUrl } from "../../convex/lib/couriers";
-import { formatFulfilmentDate } from "../../convex/lib/fulfilmentDate";
+import { formatFulfilmentDateTime } from "../../convex/lib/fulfilmentDate";
 import { isMockupGateClosed } from "../../convex/lib/order";
+import { describeGatewayMethods } from "../../convex/lib/hitpay";
+import { paymentMethodLabel } from "../../convex/lib/paymentMethod";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
-import { IvePaidDialog } from "../components/storefront/ive-paid-dialog";
+import { ManualPaymentDialog } from "../components/storefront/manual-payment-dialog";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { CopyButton } from "../components/ui/copy-button";
+import { MyPhoneInput } from "../components/ui/my-phone-input";
 import { Skeleton } from "../components/ui/skeleton";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { getConvexHttpClient } from "../lib/convex-server";
-import { qrFilenameBase, saveImageFromUrl } from "../lib/download";
-import { convexErrorMessage, formatPrice } from "../lib/format";
+import { ssrRead } from "../lib/ssr-read";
+import { convexErrorMessage, formatMyMobile, formatPrice } from "../lib/format";
 import {
 	deriveMapsUrl,
 	googleMapsNavUrl,
@@ -55,7 +63,7 @@ import {
 	stageDescription,
 	stageLabel,
 } from "../lib/orderStatus";
-import { createWaAutoOpen } from "../lib/wa-auto-open";
+import { createWaAutoOpen, isWhatsAppWebview } from "../lib/wa-auto-open";
 import { buildOrderWaMessage, waOrderUrl } from "../lib/wa-order-message";
 
 type PaymentStatus = "unpaid" | "claimed" | "received";
@@ -101,27 +109,103 @@ function formatRelativeTime(epochMs: number | undefined): string {
 	return `${Math.floor(diff / day)}d ago`;
 }
 
+type GatewayPaymentIssue = {
+	kind: "amount_mismatch" | "paid_after_cancel";
+	paidAmountSen: number;
+	paidCurrency: string;
+	paymentId: string;
+	at: number;
+};
+
+/**
+ * Copy for an authentic online payment the order couldn't apply (PR #178
+ * review, finding 1). Before this the buyer saw a plain "unpaid" card with
+ * Pay-now still armed right after their money left — an invitation to pay
+ * twice. One author for both render sites (inside the payment card while the
+ * order is live, standalone once it's cancelled or already claimed).
+ *
+ * Both variants end on "don't pay again" and name the store as the party
+ * acting, because there is nothing useful the BUYER can do here — re-paying
+ * makes it worse, and the resolution is a human reconciling in HitPay.
+ */
+function gatewayIssueCopy(
+	issue: GatewayPaymentIssue,
+	storeName: string,
+	orderTotal: number,
+	orderCurrency: string,
+): { heading: string; body: string } {
+	const store = storeName || "The store";
+	const paid = formatPrice(issue.paidAmountSen, issue.paidCurrency);
+	if (issue.kind === "paid_after_cancel") {
+		return {
+			heading: "We received a payment for a cancelled order",
+			body: `Your ${paid} payment went through after this order was cancelled, so it hasn't been applied to anything. ${store} has been notified and will arrange a refund with you — please don't pay again.`,
+		};
+	}
+	return {
+		heading: "We're checking your payment",
+		body: `Your ${paid} payment came through, but this order's total is now ${formatPrice(orderTotal, orderCurrency)}, so it hasn't been confirmed automatically. ${store} has been notified and will settle the difference with you — please don't pay again.`,
+	};
+}
+
+/** The payment reference both sides quote — same chip the confirmed card
+ * shows, so a buyer reads one number whether the payment landed or stalled. */
+function GatewayIssueReference({ paymentId }: { paymentId: string }) {
+	return (
+		<div className="rounded-lg border border-black/5 bg-white/60 px-2.5 py-1.5">
+			<div className="flex items-center justify-between gap-2">
+				<p className="text-[10px] font-medium uppercase tracking-wider opacity-70">
+					Payment ref
+				</p>
+				<CopyButton
+					value={paymentId}
+					ariaLabel="Copy payment reference"
+					successMessage="Payment reference copied"
+				/>
+			</div>
+			<p className="break-all font-mono text-xs">{paymentId}</p>
+		</div>
+	);
+}
+
 export const Route = createFileRoute("/track/$token")({
 	// ?send=1 — set only by checkout's post-create navigation: auto-fire the
 	// "Send on WhatsApp" handoff once the page mounts. The component strips it
 	// (replace) before navigating away, so refresh / back-from-WhatsApp never
 	// re-triggers the redirect.
-	validateSearch: (search: Record<string, unknown>): { send?: 1 } => ({
+	validateSearch: (
+		search: Record<string, unknown>,
+	): { send?: 1; status?: string; reference?: string } => ({
 		send: search.send === 1 || search.send === "1" ? 1 : undefined,
+		// HitPay redirect-return params (86eyb6z3a): their PRESENCE triggers a
+		// server-side verify against HitPay's status API; the values themselves
+		// are display-only and never trusted.
+		status: typeof search.status === "string" ? search.status : undefined,
+		reference:
+			typeof search.reference === "string" ? search.reference : undefined,
 	}),
-	loader: async ({ params }) => {
-		const client = getConvexHttpClient();
-		const order = await client.query(api.orders.get, {
-			token: params.token,
-		});
-		if (!order) throw notFound();
+	loader: async ({ params }): Promise<{ shortId: string | null }> => {
+		const read = await ssrRead(() =>
+			getConvexHttpClient().query(api.orders.get, { token: params.token }),
+		);
+		// Transient upstream failure ≠ bad token: this loader only feeds head()
+		// meta — the page's real data is the client's reactive query — so a blip
+		// soft-degrades to the shell instead of dead-ending the buyer's WhatsApp
+		// link on an error page (86eyheqzv). Only a definitive null (the query
+		// answered: no such token) is a 404.
+		if (!read.ok) return { shortId: null };
+		if (!read.value) throw notFound();
 		// Surface only the human-readable shortId to the page head — never echo the
 		// secret token into a title/canonical that could leak via referrer/history.
-		return { shortId: order.shortId };
+		return { shortId: read.value.shortId };
 	},
 	head: ({ loaderData }) => ({
 		meta: [
-			{ title: `Order ${loaderData?.shortId ?? ""} — Kedaipal` },
+			{
+				title: loaderData?.shortId
+					? `Order ${loaderData.shortId} — Kedaipal`
+					: "Your order — Kedaipal",
+			},
 			// noindex + no canonical: the URL carries a capability token, so it must
 			// never be indexed or advertised.
 			{ name: "robots", content: "noindex" },
@@ -254,7 +338,11 @@ function TrackingSkeleton() {
 
 function TrackingRoute() {
 	const { token } = Route.useParams();
-	const { send } = Route.useSearch();
+	const {
+		send,
+		status: returnStatus,
+		reference: returnReference,
+	} = Route.useSearch();
 	const navigate = Route.useNavigate();
 	const order = useQuery(api.orders.get, { token });
 	// Only subscribe to payment methods when the "How to pay" section can actually
@@ -268,27 +356,57 @@ function TrackingRoute() {
 		(order.paymentStatus ?? "unpaid") !== "received" &&
 		!isMockupGateClosed(order) &&
 		order.deliveryFeePending !== true;
-	const paymentMethods = useQuery(
+	const paymentInfo = useQuery(
 		api.orders.getPaymentMethods,
 		showPaymentSection ? { token } : "skip",
 	);
+	const paymentMethods = paymentInfo?.methods ?? [];
+	// The seller's HitPay checkout can take THIS order's payment right now
+	// (86eyb6z3a) — connection on, price holds clear, payment still open.
+	const gatewayAvailable = paymentInfo?.gatewayAvailable === true;
+	// Name only the rails this account actually has enabled (probed truth);
+	// null falls back to a generic line rather than promising methods the
+	// seller never switched on.
+	const gatewayMethodsLabel = describeGatewayMethods(
+		paymentInfo?.gatewayMethods,
+	);
 	const [editingAddress, setEditingAddress] = useState(false);
+	// The manual-payment sheet (methods + I've-paid proof in one door) — opened
+	// by the payment card's primary button on manual stores, the bank-transfer
+	// fallback on gateway stores, and "Update proof" on a claimed order.
 	const [claimingPayment, setClaimingPayment] = useState(false);
-	// Index of the payment-QR currently being saved (spinner on that button only).
-	const [savingQrIndex, setSavingQrIndex] = useState<number | null>(null);
+	const createGatewayCheckout = useAction(api.hitpay.createCheckout);
+	const verifyGatewayCheckout = useAction(api.hitpay.verifyCheckout);
+	const [payingNow, setPayingNow] = useState(false);
+	// Landing back from HitPay's checkout (?status&reference appended to the
+	// redirect): show a "confirming" state while ONE server-side verify runs —
+	// the params themselves are never trusted, and the reactive order query
+	// flips the card the moment the webhook or the verify records the payment.
+	const gatewayReturn =
+		returnStatus !== undefined || returnReference !== undefined;
+	const [confirmingGateway, setConfirmingGateway] = useState(gatewayReturn);
+	const verifiedOnReturn = useRef(false);
+	useEffect(() => {
+		if (!gatewayReturn || verifiedOnReturn.current) return;
+		verifiedOnReturn.current = true;
+		// Strip the return params immediately (replace) so refresh/back lands on
+		// a plain tracking URL instead of re-firing the verify.
+		navigate({ search: {}, replace: true });
+		verifyGatewayCheckout({ token })
+			.catch(() => undefined)
+			.finally(() => setConfirmingGateway(false));
+	}, [gatewayReturn, navigate, verifyGatewayCheckout, token]);
 
-	async function handleSaveQr(label: string, url: string, index: number) {
-		setSavingQrIndex(index);
+	async function handlePayNow() {
+		setPayingNow(true);
 		try {
-			const outcome = await saveImageFromUrl(url, qrFilenameBase(label));
-			if (outcome === "downloaded") {
-				toast.success("QR saved — open it from your downloads to scan.");
-			} else if (outcome === "failed") {
-				toast.error("Couldn't save the QR — please try again.");
-			}
-			// "shared" → the OS sheet took over; "cancelled" → intentional. Silent.
-		} finally {
-			setSavingQrIndex(null);
+			const { url } = await createGatewayCheckout({ token });
+			// Same-tab on purpose: the WhatsApp in-app browser has no tab UI, and
+			// HitPay redirects straight back here when the payment settles.
+			window.location.assign(url);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+			setPayingNow(false);
 		}
 	}
 
@@ -301,6 +419,10 @@ function TrackingRoute() {
 
 	const deliveryMethod = (order.deliveryMethod ?? "delivery") as DeliveryMethod;
 	const isSelfCollect = deliveryMethod === "self_collect";
+	// Collection service (86eyg0n8e, frozen at order create): the rider picks
+	// up FROM this buyer's address — every "Deliver…" label flips to collection
+	// wording so the page never claims something is being sent to them.
+	const isCollection = order.deliveryDirection === "collection";
 	const statusConfig = getStatusConfig(
 		deliveryMethod,
 		order.statusLabels,
@@ -308,6 +430,14 @@ function TrackingRoute() {
 	);
 	const config = statusConfig[order.status];
 	const isCancelled = order.status === "cancelled";
+	// Pending-only, deliberately — and that now excludes fee-pending orders,
+	// since the confirmation push commits them as `confirmed` at create
+	// (86eyfq0w5). Locked call (Zaki, 31 Jul): a `deliveryFeePending` order is
+	// one the SELLER is actively pricing (often alongside a mockup), so letting
+	// the buyer move the destination underneath would invalidate the quote
+	// they're mid-way through settling. Out-of-range buyers go through the
+	// store ("Contact the store to change this address"), not a silent
+	// re-price. Don't "fix" this by widening the gate without re-deciding it.
 	const canEditAddress = order.status === "pending" && !isSelfCollect;
 	const paymentStatus = (order.paymentStatus ?? "unpaid") as PaymentStatus;
 	const paymentConfig = getPaymentConfig(paymentStatus);
@@ -323,6 +453,21 @@ function TrackingRoute() {
 	// confirm the delivery charge (out-of-range "arrange" order), so the total
 	// isn't final and "I've paid" stays held — same posture as the mockup gate.
 	const deliveryFeeHeld = order.deliveryFeePending === true;
+	// An authentic online payment the server refused to auto-apply (PR #178
+	// review, finding 1). It outranks the mockup/delivery-fee holds in the
+	// payment card: those say "the price isn't final yet", but here the buyer's
+	// money has ALREADY moved, and telling them to wait for a price while
+	// leaving Pay-now armed is how they end up paying twice.
+	const gatewayIssue = order.gatewayPaymentIssue;
+	const gatewayIssueUnresolved =
+		gatewayIssue !== undefined && paymentStatus !== "received";
+	// The payment card is hidden entirely on a cancelled order, and its
+	// `claimed` branch has no room for this — so those cases get a card of
+	// their own rather than losing the notice.
+	const gatewayIssueInPaymentCard =
+		gatewayIssueUnresolved && !isCancelled && paymentStatus === "unpaid";
+	const gatewayIssueStandalone =
+		gatewayIssueUnresolved && !gatewayIssueInPaymentCard;
 
 	// Receipt reconciliation for the custom-work quote (order-level, minor units).
 	// The made-to-order line is snapshotted at price 0, so the quote would
@@ -432,28 +577,55 @@ function TrackingRoute() {
 				})}
 			</p>
 
-			{/* WhatsApp handoff — the ONE action for a fresh storefront order.
-			    Checkout can't open wa.me itself (popup blockers eat window.open
-			    after the awaited createOrder — see src/lib/wa-order-message.ts),
-			    so it lands the buyer here and THIS anchor tap — a fresh user
-			    gesture — carries the order to the seller's WhatsApp. Shown while
-			    the order is still pending (checkoutPhone is only served then), so
-			    it doubles as recovery for any buyer who bailed before sending.
-			    Counter orders bind via QR scan and never need this. */}
-			{order.status === "pending" &&
-			order.checkoutPhone &&
+			{/* Confirmation state for storefront orders (86eyf1rck). The order is
+			    already committed in every branch below — none of this blocks the
+			    buyer from reading the order or paying, because the confirmation
+			    MESSAGE failing is not a reason to withhold their receipt.
+			      - pending → the legacy Send card: on the pre-push flow checkout
+			        can't open wa.me itself (popup blockers eat window.open after the
+			        awaited createOrder — see src/lib/wa-order-message.ts), so the
+			        buyer sends from here.
+			      - push "sending" → quiet "on its way" line (attempts, incl. retries,
+			        are in flight; nothing is asked of the buyer).
+			      - push "sent" → "Order placed ✓" success card.
+			      - push "failed" → cause-aware card: an unreachable number offers the
+			        repair (edit it), a system fault only informs.
+			      - push "recovered" → nothing (we've reached them).
+			    Counter orders bind via QR scan and never render any of these. */}
+			{order.checkoutPhone &&
 			(order.source ?? "storefront") === "storefront" ? (
-				<SendOrderCard
-					order={order}
-					checkoutPhone={order.checkoutPhone}
-					autoSend={send === 1}
-					onAutoSendConsumed={() =>
-						// Drop ?send=1 from the URL (and history, via replace) the moment
-						// the auto-attempt starts, so back/refresh lands on a plain
-						// tracking URL instead of re-firing the redirect.
-						navigate({ search: {}, replace: true })
-					}
-				/>
+				order.status === "pending" ? (
+					<SendOrderCard
+						order={order}
+						checkoutPhone={order.checkoutPhone}
+						autoSend={send === 1}
+						onAutoSendConsumed={() =>
+							// Drop ?send=1 from the URL (and history, via replace) the moment
+							// the auto-attempt starts, so back/refresh lands on a plain
+							// tracking URL instead of re-firing the redirect.
+							navigate({ search: {}, replace: true })
+						}
+					/>
+				) : order.confirmationPushStatus === "failed" ? (
+					<PushFailedCard token={token} order={order} />
+				) : order.confirmationPushStatus === "sending" ? (
+					<PushSendingCard
+						ms={order.retailerLocale === "ms"}
+						waPhone={order.customer.waPhone}
+					/>
+				) : order.confirmationPushStatus === "deferred" &&
+					order.status === "confirmed" ? (
+					// Confirmed-only, like the `sent` arm: the card promises a future
+					// message, which is false on a cancelled order (belt — cancel also
+					// clears the stamp) and stale noise once fulfilment moves on.
+					<PushDeferredCard ms={order.retailerLocale === "ms"} />
+				) : order.confirmationPushStatus === "sent" &&
+					order.status === "confirmed" ? (
+					<ConfirmationSentCard
+						ms={order.retailerLocale === "ms"}
+						checkoutPhone={order.checkoutPhone}
+					/>
+				) : null
 			) : null}
 
 			{/* Current status card */}
@@ -491,8 +663,79 @@ function TrackingRoute() {
 						) : null}
 					</div>
 
+					{/* Settlement detail — the rail the buyer paid on (TnG / FPX /
+					    card…) and, for gateway settlements, the HitPay reference the
+					    seller's order detail also shows (86eyjmhby), so both sides quote
+					    one number when a payment question comes up.
+
+					    Both are facets of the SAME fact ("this is how it was paid"), so
+					    they're one child of the card's `gap-3` column with their own
+					    tight spacing — as separate children the card's gap pushed the
+					    ref far enough from "Paid via" to read as unrelated. The ref sits
+					    on its own quiet surface because it's a value to copy, not prose:
+					    tone-agnostic white/border (never a hardcoded emerald that could
+					    disagree with `paymentConfig.tone`), and the mono string itself
+					    drops the muted opacity so a 36-char id stays legible while its
+					    label stays secondary to the "Payment Confirmed" headline. */}
+					{paymentStatus === "received" &&
+					(order.paymentMethod || order.gatewayPaymentId) ? (
+						<div className="flex flex-col gap-1.5">
+							{order.paymentMethod ? (
+								<p className="text-xs opacity-80">
+									Paid via {paymentMethodLabel(order.paymentMethod)}
+								</p>
+							) : null}
+							{order.gatewayPaymentId ? (
+								<div className="rounded-lg border border-black/5 bg-white/60 px-2.5 py-1.5">
+									{/* Copy sits beside the LABEL, not the value, so the id gets
+									    the chip's full width — a 36-char HitPay reference then
+									    renders complete at 375px instead of truncating, and a
+									    half-shown reference number can't be matched against a
+									    banking-app entry, which is the whole job. `break-all`
+									    only engages if an id ever outgrows one line. The Copy
+									    text stays visible at every width: icon-only is a 38px
+									    target, under the 44px mobile rule. */}
+									<div className="flex items-center justify-between gap-2">
+										<p className="text-[10px] font-medium uppercase tracking-wider opacity-70">
+											Payment ref
+										</p>
+										<CopyButton
+											value={order.gatewayPaymentId}
+											ariaLabel="Copy payment reference"
+											successMessage="Payment reference copied"
+										/>
+									</div>
+									<p className="break-all font-mono text-xs">
+										{order.gatewayPaymentId}
+									</p>
+								</div>
+							) : null}
+						</div>
+					) : null}
+
 					{paymentStatus === "unpaid" ? (
-						mockupGateClosed ? (
+						gatewayIssueInPaymentCard && gatewayIssue ? (
+							// Deliberately FIRST — and deliberately no Pay-now and no
+							// bank-transfer fallback. Every payment affordance here is the
+							// wrong move once the money has already left the buyer.
+							(() => {
+								const copy = gatewayIssueCopy(
+									gatewayIssue,
+									order.storeName,
+									order.total,
+									order.currency,
+								);
+								return (
+									<>
+										<Button disabled className="h-12 w-full text-base">
+											{copy.heading}
+										</Button>
+										<p className="text-xs opacity-80">{copy.body}</p>
+										<GatewayIssueReference paymentId={gatewayIssue.paymentId} />
+									</>
+								);
+							})()
+						) : mockupGateClosed ? (
 							<>
 								<Button disabled className="h-12 w-full text-base">
 									{order.mockupStatus === "submitted"
@@ -516,13 +759,58 @@ function TrackingRoute() {
 									after.
 								</p>
 							</>
+						) : confirmingGateway ? (
+							// Just back from HitPay — one server-side verify is in flight.
+							// If it (or the webhook) finds the payment, the reactive query
+							// flips this card to Confirmed; otherwise the buttons return.
+							<>
+								<Button disabled isLoading className="h-12 w-full text-base">
+									Confirming your payment…
+								</Button>
+								<p className="text-xs opacity-80">
+									Checking with HitPay — this usually takes a few seconds.
+								</p>
+							</>
+						) : gatewayAvailable ? (
+							<>
+								<Button
+									onClick={handlePayNow}
+									isLoading={payingNow}
+									className="h-12 w-full text-base"
+								>
+									{payingNow
+										? "Opening secure checkout…"
+										: `Pay now · ${formatPrice(order.total, order.currency)}`}
+								</Button>
+								<p className="text-xs opacity-80">
+									{gatewayMethodsLabel
+										? `Pay by ${gatewayMethodsLabel} on `
+										: "Pay in your banking or eWallet app on "}
+									{order.storeName || "the store"}'s secure HitPay page — your
+									order confirms automatically.
+								</p>
+								<button
+									type="button"
+									onClick={() => setClaimingPayment(true)}
+									className="self-start text-sm font-medium underline-offset-2 hover:underline"
+								>
+									Paid by bank transfer instead? Tell the store
+								</button>
+							</>
 						) : (
-							<Button
-								onClick={() => setClaimingPayment(true)}
-								className="h-12 w-full text-base"
-							>
-								I've paid
-							</Button>
+							<>
+								<Button
+									onClick={() => setClaimingPayment(true)}
+									className="h-12 w-full text-base"
+								>
+									Pay now · {formatPrice(order.total, order.currency)}
+								</Button>
+								<p className="text-xs opacity-80">
+									Bank transfer or QR — pay in your banking app, then attach
+									the receipt so {order.storeName || "the store"} can confirm
+									it.
+								</p>
+							</>
 						)
 					) : null}
 
@@ -546,106 +834,102 @@ function TrackingRoute() {
 				</section>
 			) : null}
 
-			{/* How to pay — the seller's payment methods (banks + QRs) with one-tap
-			    copy on each account number (the MY bank-transfer friction point).
-			    Shown while a payment is still due and not deferred behind a closed
-			    mockup gate; hidden once received/cancelled or when none configured. */}
-			{!isCancelled &&
-			!mockupGateClosed &&
-			!deliveryFeeHeld &&
-			paymentStatus !== "received" &&
-			paymentMethods &&
-			paymentMethods.length > 0 ? (
-				<section className="mt-4 flex flex-col gap-4 rounded-2xl border border-border bg-card p-4">
-					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-						How to pay
-					</p>
-					{paymentMethods.map((m, i) => (
-						<div
-							// biome-ignore lint/suspicious/noArrayIndexKey: payment methods are a render-stable embedded array with no stable id; label+index is fine and stable within a render
-							key={`${m.label}-${i}`}
-							className="flex flex-col gap-2 border-border [&:not(:first-of-type)]:border-t [&:not(:first-of-type)]:pt-4"
-						>
-							<p className="text-sm font-semibold">{m.label}</p>
-							{m.type === "bank" ? (
-								<>
-									{m.bankName && m.bankName !== m.label ? (
-										<div className="flex items-baseline justify-between gap-3 text-sm">
-											<span className="text-muted-foreground">Bank</span>
-											<span className="font-medium">{m.bankName}</span>
-										</div>
-									) : null}
-									{m.bankAccountName ? (
-										<div className="flex items-baseline justify-between gap-3 text-sm">
-											<span className="text-muted-foreground">Name</span>
-											<span className="text-right font-medium">
-												{m.bankAccountName}
-											</span>
-										</div>
-									) : null}
-									{m.bankAccountNumber ? (
-										<div className="flex items-center justify-between gap-2 rounded-xl bg-muted/50 px-3 py-2.5">
-											<div className="min-w-0">
-												<p className="text-xs text-muted-foreground">
-													Account number
-												</p>
-												<p className="break-all font-mono text-base font-semibold">
-													{m.bankAccountNumber}
-												</p>
-											</div>
-											<CopyButton
-												value={m.bankAccountNumber}
-												ariaLabel="Copy account number"
-												successMessage="Account number copied"
-											/>
-										</div>
-									) : null}
-								</>
-							) : m.qrImageUrl ? (
-								<div className="flex flex-col items-center gap-1.5">
-									<ZoomableImage
-										src={m.qrImageUrl}
-										alt={`${m.label} QR code`}
-										caption={m.label}
-										className="max-h-56 w-auto rounded-lg border border-border bg-white"
-									/>
-									<p className="text-xs text-muted-foreground">
-										Tap to enlarge &amp; scan
-									</p>
-									<Button
-										type="button"
-										variant="outline"
-										onClick={() =>
-											m.qrImageUrl
-												? handleSaveQr(m.label, m.qrImageUrl, i)
-												: undefined
-										}
-										isLoading={savingQrIndex === i}
-										disabled={savingQrIndex !== null}
-										className="mt-0.5 h-11 rounded-full px-5"
-									>
-										{savingQrIndex !== i && <Download className="size-4" />}
-										Save QR
-									</Button>
-									<p className="max-w-64 text-center text-xs text-muted-foreground">
-										Paying on this phone? Save the QR to your gallery, then scan
-										it from inside TNG eWallet or your banking app.
-									</p>
+			{/* Unapplied online payment on an order whose payment card can't carry
+			    the notice — cancelled (card hidden) or already claimed by hand. The
+			    buyer's money moved either way, so the acknowledgement can't depend
+			    on which card happens to render. */}
+			{gatewayIssueStandalone && gatewayIssue
+				? (() => {
+						const copy = gatewayIssueCopy(
+							gatewayIssue,
+							order.storeName,
+							order.total,
+							order.currency,
+						);
+						return (
+							<section className="mt-4 flex flex-col gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-amber-950">
+								<div className="flex items-center gap-3">
+									<HandCoins className="size-5 shrink-0 text-amber-600" />
+									<div className="min-w-0 flex-1">
+										<p className="text-xs font-semibold uppercase tracking-widest text-amber-700">
+											Payment
+										</p>
+										<p className="font-semibold">{copy.heading}</p>
+									</div>
 								</div>
-							) : null}
-							{m.note ? (
-								<p className="whitespace-pre-line break-words text-sm text-muted-foreground">
-									{m.note}
-								</p>
-							) : null}
-						</div>
-					))}
-				</section>
-			) : null}
+								<p className="text-xs opacity-80">{copy.body}</p>
+								<GatewayIssueReference paymentId={gatewayIssue.paymentId} />
+							</section>
+						);
+					})()
+				: null}
 
 			{/* Mockup approval — buyer reviews the seller's proof before production. */}
 			{!isCancelled && order.mockupStatus !== undefined ? (
 				<MockupReview token={token} order={order} />
+			) : null}
+
+			{/* Live collection rider (86eyg0n8e) — while a rider is actively on
+			    the way to collect FROM this buyer. Reads the live job, so it
+			    appears when the store books and vanishes when the trip ends —
+			    deliberately a transient strip, not a status: the order's
+			    lifecycle stays the seller's. */}
+			{!isCancelled &&
+			!order.collectionRider &&
+			order.collectedAt !== undefined ? (
+				<section className="mt-6 flex items-start gap-3 rounded-2xl border border-border bg-card p-4">
+					<Truck className="mt-0.5 size-5 shrink-0 text-accent" />
+					<p className="text-sm text-foreground">
+						{/* Provenance-neutral: `collectedAt` means "the goods are with
+						    the seller", and the seller may have collected in person —
+						    naming a rider would assert a trip that never happened. The
+						    live strip below narrates the real trip when there is one. */}
+						<span className="font-medium">Collected</span> — your items are with{" "}
+						{order.storeName || "the store"}. They&apos;ll update this page as
+						your order progresses.
+					</p>
+				</section>
+			) : null}
+
+			{!isCancelled && order.collectionRider ? (
+				<section className="mt-6 flex flex-col gap-2 rounded-2xl border border-accent/40 bg-accent/5 p-4">
+					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+						Collection rider
+					</p>
+					<div className="flex items-start gap-3">
+						<Truck className="mt-0.5 size-5 shrink-0 text-accent" />
+						<div className="min-w-0 flex-1">
+							<p className="text-sm font-medium text-foreground">
+								{order.collectionRider.status === "assigning"
+									? "Finding a rider to collect your items — this usually takes a few minutes."
+									: order.collectionRider.status === "ongoing"
+										? `${order.collectionRider.driverName ?? "Your rider"} is on the way to your address to collect.`
+										: `Collected — your items are on the way to ${order.storeName || "the store"}.`}
+							</p>
+							{order.collectionRider.plateNumber &&
+							order.collectionRider.status !== "picked_up" ? (
+								<p className="mt-0.5 text-xs text-muted-foreground">
+									Look for plate{" "}
+									<span className="font-mono font-medium text-foreground">
+										{order.collectionRider.plateNumber}
+									</span>
+									.
+								</p>
+							) : null}
+						</div>
+					</div>
+					{isSafeTrackingUrl(order.collectionRider.shareLink) ? (
+						<a
+							href={order.collectionRider.shareLink}
+							target="_blank"
+							rel="noopener noreferrer"
+							className="flex items-center justify-center gap-2 rounded-xl border border-accent/40 bg-card px-4 py-2.5 text-sm font-semibold text-accent transition-colors hover:bg-accent/10"
+						>
+							Track your rider
+							<ExternalLink className="size-3" />
+						</a>
+					) : null}
+				</section>
 			) : null}
 
 			{/* Progress timeline — not shown for cancelled orders */}
@@ -823,12 +1107,13 @@ function TrackingRoute() {
 				</section>
 			) : null}
 
-			{/* Delivery address — shown for delivery orders that have an address */}
+			{/* Delivery address — shown for delivery orders that have an address.
+			    Collection orders: this is where the rider collects FROM. */}
 			{!isSelfCollect && order.deliveryAddress ? (
 				<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 					<div className="flex items-center justify-between">
 						<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-							Deliver to
+							{isCollection ? "Collect from" : "Deliver to"}
 						</p>
 						{canEditAddress ? (
 							<button
@@ -875,7 +1160,9 @@ function TrackingRoute() {
 					? order.pickupSnapshot?.locationType === "drop_off"
 						? "Drop-off"
 						: "Self Collect"
-					: "Delivery"}
+					: isCollection
+						? "Collection from your address"
+						: "Delivery"}
 			</div>
 
 			{/* Fulfilment date the buyer chose — reassures them the seller has it. */}
@@ -886,9 +1173,16 @@ function TrackingRoute() {
 						? order.pickupSnapshot?.locationType === "drop_off"
 							? "Meet on "
 							: "Collect on "
-						: "Delivery on "}
+						: isCollection
+							? order.collectedAt !== undefined
+								? "Collected on "
+								: "We collect on "
+							: "Delivery on "}
 					<span className="font-semibold">
-						{formatFulfilmentDate(order.fulfilmentDate)}
+						{formatFulfilmentDateTime(
+							order.fulfilmentDate,
+							order.fulfilmentTimeMinutes,
+						)}
 					</span>
 				</div>
 			) : null}
@@ -901,13 +1195,17 @@ function TrackingRoute() {
 				retailerId={order.retailerId}
 				subtotal={order.subtotal}
 				fulfilmentDate={order.fulfilmentDate}
+				fulfilmentTimeMinutes={order.fulfilmentTimeMinutes}
+				collectsFromCustomer={isCollection}
 			/>
 
-			<IvePaidDialog
+			<ManualPaymentDialog
 				open={claimingPayment}
 				onClose={() => setClaimingPayment(false)}
 				token={token}
 				shortId={order.shortId}
+				storeName={order.storeName || "the store"}
+				methods={paymentMethods}
 				hasExistingClaim={paymentStatus === "claimed"}
 			/>
 
@@ -978,7 +1276,7 @@ function TrackingRoute() {
 				{/* Frozen delivery charge — same reconciliation rule as the pickup fee. */}
 				{order.deliveryFee && order.deliveryFee > 0 ? (
 					<div className="flex items-center justify-between px-3 text-sm text-muted-foreground">
-						<span>Delivery fee</span>
+						<span>{isCollection ? "Collection fee" : "Delivery fee"}</span>
 						<span className="tabular-nums">
 							{formatPrice(order.deliveryFee, order.currency)}
 						</span>
@@ -1144,6 +1442,275 @@ type TrackedOrder = NonNullable<
 >;
 
 /**
+ * Fresh-arrival success state for the confirmation-push flow (86eyf1rck): the
+ * order committed at checkout and Kedaipal's WABA pushed the confirmation —
+ * there is nothing left for the buyer to send, so this card says exactly that
+ * (and offers a plain open-WhatsApp anchor for buyers who want the chat now).
+ * No auto-redirect anywhere on this path.
+ */
+function ConfirmationSentCard({
+	ms,
+	checkoutPhone,
+}: {
+	ms: boolean;
+	checkoutPhone: string;
+}) {
+	return (
+		<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-accent/40 bg-accent/5 p-4">
+			<div className="flex items-center gap-3">
+				<CheckCircle className="size-5 shrink-0 text-accent" />
+				<div className="min-w-0 flex-1">
+					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+						{ms ? "Pesanan diterima" : "Order placed"}
+					</p>
+					<p className="font-semibold">
+						{ms
+							? "Pengesahan dihantar ke WhatsApp anda"
+							: "Confirmation sent to your WhatsApp"}
+					</p>
+				</div>
+			</div>
+			<p className="text-sm text-muted-foreground">
+				{ms
+					? "Tak perlu hantar apa-apa — semak WhatsApp anda untuk pengesahan dan cara membayar. Halaman ini sentiasa menunjukkan status terkini pesanan anda."
+					: "Nothing to send — check your WhatsApp for the confirmation and how to pay. This page always shows your order's latest status."}
+			</p>
+			<Button asChild variant="outline" className="h-11 w-full">
+				<a
+					href={`https://wa.me/${checkoutPhone}`}
+					target="_blank"
+					rel="noopener noreferrer"
+				>
+					<MessageCircle className="size-4" />
+					{ms ? "Buka WhatsApp" : "Open WhatsApp"}
+				</a>
+			</Button>
+		</section>
+	);
+}
+
+/**
+ * Order committed but its price isn't final yet (86eyfq0w5) — a mockup quote
+ * or an arranged delivery fee is outstanding, so the WhatsApp confirmation
+ * (whose template states the total) deliberately waits. Say so, or the
+ * checkout promise of "confirmation lands in your WhatsApp" looks broken.
+ * The mockup/fee sections further down the page carry the actual next step.
+ */
+function PushDeferredCard({ ms }: { ms: boolean }) {
+	return (
+		<section className="mt-6 flex items-center gap-3 rounded-2xl border border-border bg-card p-4">
+			<CheckCircle className="size-5 shrink-0 text-accent" />
+			<div className="min-w-0 flex-1">
+				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+					{ms ? "Pesanan diterima" : "Order placed"}
+				</p>
+				<p className="text-sm">
+					{ms
+						? "Kami akan hantar pengesahan WhatsApp anda sebaik sahaja harga disahkan."
+						: "We'll send your WhatsApp confirmation as soon as your price is confirmed."}
+				</p>
+			</div>
+		</section>
+	);
+}
+
+/**
+ * Confirmation push in flight (86eyf1rck), including retries. Deliberately a
+ * quiet line rather than a spinner-and-progress affair: the order is confirmed,
+ * nothing is required of the buyer, and the only reason to mention it at all is
+ * that checkout promised a WhatsApp message — so silence here would read as the
+ * promise being broken.
+ */
+function PushSendingCard({
+	ms,
+	waPhone,
+}: {
+	ms: boolean;
+	waPhone: string | undefined;
+}) {
+	const pretty = waPhone ? formatMyMobile(waPhone) : "";
+	return (
+		<section className="mt-6 flex items-center gap-3 rounded-2xl border border-border bg-card p-4">
+			<Loader2 className="size-5 shrink-0 animate-spin text-muted-foreground" />
+			<div className="min-w-0 flex-1">
+				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+					{ms ? "Pesanan diterima" : "Order placed"}
+				</p>
+				<p className="text-sm">
+					{ms
+						? `Menghantar pengesahan ke WhatsApp ${pretty}…`
+						: `Sending your confirmation to ${pretty} on WhatsApp…`}
+				</p>
+			</div>
+		</section>
+	);
+}
+
+/**
+ * The confirmation push gave up (86eyf1rck). Two very different truths behind
+ * one status, so two very different asks:
+ *
+ *  - `unreachable` — the number can't receive WhatsApp (typo'd, no account).
+ *    Only the buyer can fix that, so the primary action is **editing the
+ *    number**, which re-sends immediately. The wa.me send stays as a quiet
+ *    secondary route (it also repairs the number, via the inbound path).
+ *  - `system` — Meta or us. The buyer's number is fine and asking them to do
+ *    anything would be passing our failure to them, so this state only informs.
+ *
+ * Amber, not the accent palette: this is a warning, and an earlier revision
+ * rendered it in the mint success colour, which read as "all good".
+ * Crucially it does NOT gate the page — the order is confirmed and the payment
+ * block below stays reachable. Withholding a buyer's receipt because we
+ * couldn't send a message would invert the whole point of the feature.
+ */
+function PushFailedCard({
+	token,
+	order,
+}: {
+	token: string;
+	order: TrackedOrder;
+}) {
+	const ms = order.retailerLocale === "ms";
+	const storeName = order.storeName || (ms ? "kedai" : "the store");
+	const unreachable = order.confirmationPushFailureKind !== "system";
+	const pretty = order.customer.waPhone
+		? formatMyMobile(order.customer.waPhone)
+		: "";
+	const updatePhone = useMutation(api.orders.updateBuyerPhone);
+	const [editing, setEditing] = useState(false);
+	const [value, setValue] = useState("");
+	const [busy, setBusy] = useState(false);
+	// Focus on open rather than autoFocus: the field only mounts when the buyer
+	// taps "Update my number", so this is a response to their action, not a
+	// page-load surprise. One-shot — a callback ref would re-fire every keystroke.
+	const phoneInputRef = useRef<HTMLInputElement>(null);
+	useEffect(() => {
+		if (editing) phoneInputRef.current?.focus();
+	}, [editing]);
+
+	async function handleSave(e: FormEvent) {
+		e.preventDefault();
+		setBusy(true);
+		try {
+			await updatePhone({ token, waPhone: value.trim() });
+			toast.success(
+				ms
+					? "Nombor dikemas kini — pengesahan sedang dihantar"
+					: "Number updated — sending your confirmation now",
+			);
+			setEditing(false);
+			setValue("");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	return (
+		<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-800 dark:bg-amber-950/50">
+			<div className="flex items-center gap-3">
+				<MessageCircle className="size-5 shrink-0 text-amber-600 dark:text-amber-400" />
+				<div className="min-w-0 flex-1">
+					<p className="text-xs font-semibold uppercase tracking-widest text-amber-700 dark:text-amber-300">
+						{ms ? "Pesanan diterima" : "Order placed"}
+					</p>
+					<p className="font-semibold text-amber-950 dark:text-amber-100">
+						{unreachable
+							? ms
+								? "Pengesahan WhatsApp tak sampai"
+								: "Your WhatsApp confirmation didn't arrive"
+							: ms
+								? "Pengesahan WhatsApp tertunda"
+								: "Your WhatsApp confirmation is delayed"}
+					</p>
+				</div>
+			</div>
+			<p className="text-sm text-amber-950/90 dark:text-amber-100/90">
+				{unreachable
+					? ms
+						? `Kami tak dapat hantar ke ${pretty} — nombor itu mungkin tersilap taip atau tiada WhatsApp. Pesanan anda tetap disahkan dan butiran di bawah adalah muktamad.`
+						: `We couldn't deliver it to ${pretty} — that number may have a typo, or no WhatsApp account. Your order is still confirmed and everything below is final.`
+					: ms
+						? `Masalah di pihak kami, bukan nombor anda. Pesanan anda telah disahkan dan ${storeName} sudah menerimanya — anda masih boleh membayar di bawah.`
+						: `That's a problem on our side, not with your number. Your order is confirmed and ${storeName} already has it — you can still pay below.`}
+			</p>
+
+			{unreachable ? (
+				editing ? (
+					<form onSubmit={handleSave} className="flex flex-col gap-2">
+						<label
+							htmlFor="repair-wa-phone"
+							className="text-xs font-medium text-amber-950 dark:text-amber-100"
+						>
+							{ms ? "Nombor WhatsApp anda" : "Your WhatsApp number"}
+						</label>
+						{/* Same plated control as the storefront checkout field this is
+						    repairing — the buyer has already met it once, and it's the
+						    only shape `assertValidMyMobile` behind it accepts. Its own
+						    neutral chrome inside the amber card, so the control reads as
+						    a control and not as part of the warning. */}
+						<MyPhoneInput
+							id="repair-wa-phone"
+							ref={phoneInputRef}
+							value={value}
+							onChange={setValue}
+							className="bg-white dark:bg-amber-950"
+						/>
+						<div className="flex gap-2">
+							<Button
+								type="submit"
+								isLoading={busy}
+								disabled={busy || value.trim().length === 0}
+								className="h-11 flex-1"
+							>
+								{ms ? "Simpan & hantar" : "Save & resend"}
+							</Button>
+							<Button
+								type="button"
+								variant="outline"
+								onClick={() => setEditing(false)}
+								disabled={busy}
+								className="h-11"
+							>
+								{ms ? "Batal" : "Cancel"}
+							</Button>
+						</div>
+					</form>
+				) : (
+					<Button
+						type="button"
+						onClick={() => {
+							setValue("");
+							setEditing(true);
+						}}
+						className="h-12 w-full text-base"
+					>
+						{ms ? "Kemas kini nombor" : "Update my number"}
+					</Button>
+				)
+			) : null}
+
+			{/* Secondary route, kept because it also repairs the number (the inbound
+			    ORD message relinks the sender) and costs nothing to offer. Never the
+			    primary ask — that would make our delivery problem the buyer's job. */}
+			{order.checkoutPhone ? (
+				<a
+					href={`https://wa.me/${order.checkoutPhone}`}
+					target="_blank"
+					rel="noopener noreferrer"
+					className="text-center text-xs font-medium text-amber-800 underline dark:text-amber-300"
+				>
+					{ms
+						? "Atau mesej kami di WhatsApp"
+						: "Or message us on WhatsApp instead"}
+				</a>
+			) : null}
+		</section>
+	);
+}
+
+/**
  * "Send your order on WhatsApp" — completes the storefront checkout handoff.
  * The wa.me message is rebuilt from the order's frozen snapshot on every
  * render, so this survives refreshes and lost sessions (no client state to
@@ -1182,9 +1749,11 @@ function SendOrderCard({
 		deliveryFee: order.deliveryFee,
 		deliveryFeePending: order.deliveryFeePending,
 		deliveryMethod: order.deliveryMethod,
+		deliveryDirection: order.deliveryDirection,
 		deliveryAddress: order.deliveryAddress,
 		pickupSnapshot: order.pickupSnapshot,
 		fulfilmentDate: order.fulfilmentDate,
+		fulfilmentTimeMinutes: order.fulfilmentTimeMinutes,
 		customerNote: order.customerNote,
 		quotePending:
 			order.mockupStatus !== undefined &&
@@ -1192,7 +1761,17 @@ function SendOrderCard({
 			order.mockupWaivedAt == null,
 	});
 	const waUrl = waOrderUrl(checkoutPhone, message);
-	const [sending, setSending] = useState(autoSend);
+	// Inside WhatsApp's own in-app browser the wa.me auto-redirect hits a
+	// "Continue to chat" interstitial + open-app prompt while the buyer is
+	// ALREADY in WhatsApp — most bail there. Skip the auto-fire entirely and
+	// render the manual button (a deliberate tap survives the interstitial far
+	// better than a surprise redirect). Mount-only read: the UA can't change.
+	const [inWaWebview] = useState(
+		() =>
+			typeof navigator !== "undefined" &&
+			isWhatsAppWebview(navigator.userAgent),
+	);
+	const [sending, setSending] = useState(autoSend && !inWaWebview);
 
 	// Auto-fire the handoff exactly once per checkout arrival. Mount-only by
 	// design: `autoSend` is fixed at mount (the search param is stripped before
@@ -1200,7 +1779,10 @@ function SendOrderCard({
 	// biome-ignore lint/correctness/useExhaustiveDependencies: mount-only auto-attempt, see above
 	useEffect(() => {
 		if (!autoSend) return;
+		// Consume ?send=1 even when skipping (WA webview), so refresh/back
+		// lands on a plain tracking URL either way.
 		onAutoSendConsumed();
+		if (inWaWebview) return;
 		const ctrl = createWaAutoOpen({
 			openUrl: () => window.location.assign(waUrl),
 			onSettled: () => setSending(false),
@@ -1259,20 +1841,40 @@ function SendOrderCard({
 					</a>
 				</Button>
 			)}
-			<div className="flex items-center justify-between gap-2 rounded-xl bg-muted/50 px-3 py-2.5">
-				<p className="text-xs text-muted-foreground">
-					{ms
-						? "WhatsApp tak terbuka? Salin pautan dan buka dalam pelayar anda."
-						: "WhatsApp didn't open? Copy the link and open it in your browser."}
-				</p>
-				<CopyButton
-					value={waUrl}
-					ariaLabel={ms ? "Salin pautan WhatsApp" : "Copy WhatsApp link"}
-					successMessage={
-						ms ? "Pautan WhatsApp disalin" : "WhatsApp link copied"
-					}
-				/>
-			</div>
+			{inWaWebview ? (
+				// WA in-app browser: a wa.me link is exactly what just failed to open,
+				// so the fallback copies the MESSAGE BODY — the buyer pastes it
+				// straight into the store's chat they came from.
+				<div className="flex items-center justify-between gap-2 rounded-xl bg-muted/50 px-3 py-2.5">
+					<p className="text-xs text-muted-foreground">
+						{ms
+							? "Butang tak berfungsi? Salin mesej pesanan dan tampal terus dalam chat WhatsApp."
+							: "Button not working? Copy your order message and paste it into the WhatsApp chat."}
+					</p>
+					<CopyButton
+						value={message}
+						ariaLabel={ms ? "Salin mesej pesanan" : "Copy order message"}
+						successMessage={
+							ms ? "Mesej pesanan disalin" : "Order message copied"
+						}
+					/>
+				</div>
+			) : (
+				<div className="flex items-center justify-between gap-2 rounded-xl bg-muted/50 px-3 py-2.5">
+					<p className="text-xs text-muted-foreground">
+						{ms
+							? "WhatsApp tak terbuka? Salin pautan dan buka dalam pelayar anda."
+							: "WhatsApp didn't open? Copy the link and open it in your browser."}
+					</p>
+					<CopyButton
+						value={waUrl}
+						ariaLabel={ms ? "Salin pautan WhatsApp" : "Copy WhatsApp link"}
+						successMessage={
+							ms ? "Pautan WhatsApp disalin" : "WhatsApp link copied"
+						}
+					/>
+				</div>
+			)}
 		</section>
 	);
 }

@@ -9,6 +9,7 @@ import {
 	renderPickupBlock,
 	renderStageUpdate,
 	renderSystemMessage,
+	TEMPLATE_LANGUAGE,
 	waCopy,
 } from "./whatsappCopy";
 
@@ -33,6 +34,24 @@ describe("pickLocale", () => {
 	test("covers every locale in LOCALES round-trip", () => {
 		for (const locale of LOCALES) {
 			expect(pickLocale(locale)).toBe(locale);
+		}
+	});
+});
+
+// The ONE author of template language for every Meta template send (buyer
+// confirmation push + seller order alerts). Only EN/BM variants are approved,
+// so zh must ride EN — naming an unapproved language makes Meta reject the
+// send outright, which would silently kill a zh store's alerts.
+describe("TEMPLATE_LANGUAGE", () => {
+	test("maps each store locale to an APPROVED template language", () => {
+		expect(TEMPLATE_LANGUAGE.en).toBe("en");
+		expect(TEMPLATE_LANGUAGE.ms).toBe("ms");
+		expect(TEMPLATE_LANGUAGE.zh).toBe("en");
+	});
+
+	test("every locale resolves — no undefined can reach a send", () => {
+		for (const locale of LOCALES) {
+			expect(["en", "ms"]).toContain(TEMPLATE_LANGUAGE[locale]);
 		}
 	});
 });
@@ -727,5 +746,54 @@ describe("shipped courier line — manual courier + tracking no (86eyehvk4)", ()
 				deliveryMethod: "delivery",
 			}),
 		).toBe("Sent via , track with ");
+	});
+});
+
+describe("collection service (86eyg0n8e) — confirm wording", () => {
+	test("a collection delivery order says collection is being arranged, not 'when it ships' (all locales)", () => {
+		for (const locale of ["en", "ms", "zh"] as const) {
+			const standard = waCopy[locale].confirm({
+				shortId: "ORD-AB23",
+				storeName: "Bearcamp",
+				deliveryMethod: "delivery",
+			});
+			const collection = waCopy[locale].confirm({
+				shortId: "ORD-AB23",
+				storeName: "Bearcamp",
+				deliveryMethod: "delivery",
+				deliveryDirection: "collection",
+			});
+			expect(collection).not.toBe(standard);
+		}
+		expect(
+			waCopy.en.confirm({
+				shortId: "ORD-AB23",
+				storeName: "Bearcamp",
+				deliveryMethod: "delivery",
+				deliveryDirection: "collection",
+			}),
+		).toContain("collection from your address");
+	});
+
+	test("direction never leaks into self-collect / drop-off branches", () => {
+		// A defensive impossibility (direction is only stamped on delivery
+		// orders) — but if it ever appears, pickup wording must still win.
+		const out = waCopy.en.confirm({
+			shortId: "ORD-AB23",
+			storeName: "Bearcamp",
+			deliveryMethod: "self_collect",
+			deliveryDirection: "collection",
+		});
+		expect(out).toContain("ready for pickup");
+	});
+
+	test("an explicit 'standard' direction keeps the shipping wording", () => {
+		const out = waCopy.en.confirm({
+			shortId: "ORD-AB23",
+			storeName: "Bearcamp",
+			deliveryMethod: "delivery",
+			deliveryDirection: "standard",
+		});
+		expect(out).toContain("when it ships");
 	});
 });

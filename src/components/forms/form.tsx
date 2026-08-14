@@ -1,9 +1,9 @@
 import { createFormHook, createFormHookContexts } from "@tanstack/react-form";
 import { DateField } from "./date-field";
-import { PhoneField } from "./phone-field";
 import { SelectField } from "./select-field";
 import { TextField } from "./text-field";
 import { TextareaField } from "./textarea-field";
+import { TimeField } from "./time-field";
 
 /**
  * TanStack Form composition factory.
@@ -26,8 +26,8 @@ export const { useAppForm, withFieldGroup } = createFormHook({
 		TextField,
 		TextareaField,
 		SelectField,
-		PhoneField,
 		DateField,
+		TimeField,
 	},
 	formComponents: {},
 });

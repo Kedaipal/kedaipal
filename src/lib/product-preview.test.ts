@@ -20,6 +20,7 @@ function draft(partial: Partial<ProductFormDraft> = {}): ProductFormDraft {
 					active: true,
 					blockWhenOutOfStock: true,
 					requiresProof: false,
+					parcelWeightG: "",
 					imageStorageIds: [],
 				},
 				{
@@ -30,6 +31,7 @@ function draft(partial: Partial<ProductFormDraft> = {}): ProductFormDraft {
 					active: true,
 					blockWhenOutOfStock: true,
 					requiresProof: false,
+					parcelWeightG: "",
 					imageStorageIds: [],
 				},
 			],

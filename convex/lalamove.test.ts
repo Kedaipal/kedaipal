@@ -659,6 +659,7 @@ describe("updateSettings — deliveryBooking guards", () => {
 			vehicleType: "CAR",
 			hasCredentials: true,
 			promptBookOnPacked: false,
+			deliveryDirection: "standard",
 			apiKeyHint: "abcd",
 		});
 		// The raw secret must never appear anywhere in the owner payload.
@@ -1057,5 +1058,651 @@ describe("proof of delivery — buyer tracking page (orders.get)", () => {
 		await seedJob(t, retailer._id, orderId, { status: "picked_up" });
 		const order = await t.query(api.orders.get, { token: "tok_pod_test_456" });
 		expect(order?.podImageUrls).toBeUndefined();
+	});
+});
+
+describe("collection service (86eyg0n8e) — reversed trips", () => {
+	const asUser = (t: ReturnType<typeof setup>) =>
+		t.withIdentity({ subject: USER });
+	const BUYER_ADDRESS = {
+		line1: "12 Jln Mawar 3",
+		city: "Petaling Jaya",
+		state: "Selangor",
+		postcode: "47301",
+		latitude: 3.1073,
+		longitude: 101.6067,
+	};
+
+	/** A fully bookable collection-service store: pinned outlet, BYO keys,
+	 * MY seller phone, direction "collection". */
+	async function seedCollectionStore(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				waPhone: "60198765432",
+				businessAddress: {
+					label: "Bearcamp Wash Bay",
+					latitude: 3.139,
+					longitude: 101.6869,
+				},
+				deliveryBooking: {
+					enabled: true,
+					vehicleType: "MOTORCYCLE" as const,
+					deliveryDirection: "collection" as const,
+					apiKey: "pk_test_collect",
+					apiSecret: "sk_test_collect",
+				},
+			});
+		});
+		return retailer;
+	}
+
+	test("webhook PICKED_UP + COMPLETED move the JOB only — order status and tracking link untouched", async () => {
+		const t = setup();
+		const retailer = await seedCollectionStore(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			deliveryDirection: "collection",
+		});
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			deliveryDirection: "collection",
+		});
+
+		await t.mutation(internal.lalamove.applyWebhookEvent, {
+			jobId,
+			eventType: "ORDER_STATUS_CHANGED",
+			data: statusEvent("PICKED_UP", "2026-08-02T04:00:00.000Z"),
+			eventTimestamp: Date.parse("2026-08-02T04:00:00.000Z"),
+		});
+		let state = await t.run(async (ctx) => ({
+			order: await ctx.db.get(orderId),
+			job: await ctx.db.get(jobId),
+		}));
+		// The job follows the rider; the order is the seller's to advance.
+		expect(state.job?.status).toBe("picked_up");
+		expect(state.order?.status).toBe("confirmed");
+		expect(state.order?.carrierTrackingUrl).toBeUndefined();
+
+		await t.mutation(internal.lalamove.applyWebhookEvent, {
+			jobId,
+			eventType: "ORDER_STATUS_CHANGED",
+			data: statusEvent("COMPLETED", "2026-08-02T05:00:00.000Z"),
+			eventTimestamp: Date.parse("2026-08-02T05:00:00.000Z"),
+		});
+		state = await t.run(async (ctx) => ({
+			order: await ctx.db.get(orderId),
+			job: await ctx.db.get(jobId),
+		}));
+		expect(state.job?.status).toBe("completed");
+		expect(state.order?.status).toBe("confirmed"); // still not "delivered"
+		expect(state.order?.carrierTrackingUrl).toBeUndefined();
+	});
+
+	test("DRIVER_ASSIGNED stores the driver on the job but never mirrors the link onto a collection order", async () => {
+		const t = setup();
+		const retailer = await seedCollectionStore(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			deliveryDirection: "collection",
+		});
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			deliveryDirection: "collection",
+		});
+
+		await t.mutation(internal.lalamove.applyWebhookEvent, {
+			jobId,
+			eventType: "DRIVER_ASSIGNED",
+			data: {
+				order: { orderId: "LLM-1", shareLink: SHARE },
+				driver: { name: "Farid", phone: "+60161234567", plateNumber: "WXY 1234" },
+			},
+			eventTimestamp: Date.now(),
+		});
+
+		const { order, job } = await t.run(async (ctx) => ({
+			order: await ctx.db.get(orderId),
+			job: await ctx.db.get(jobId),
+		}));
+		expect(job?.driver?.name).toBe("Farid");
+		expect(job?.shareLink).toBe(SHARE); // seller card keeps live tracking
+		expect(order?.carrierTrackingUrl).toBeUndefined(); // buyer surfaces don't
+	});
+
+	test("getDispatchContext swaps stops AND contacts for a collection store", async () => {
+		const t = setup();
+		const retailer = await seedCollectionStore(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			deliveryAddress: BUYER_ADDRESS,
+			deliveryDirection: "collection",
+			deliveryFee: 1350,
+		});
+		const shortId = await t.run(async (ctx) => {
+			const order = await ctx.db.get(orderId);
+			return order?.shortId ?? "";
+		});
+
+		const context = await asUser(t).query(
+			internal.lalamove.getDispatchContext,
+			{ shortId },
+		);
+		if (!context.ok) throw new Error(`expected ok, got ${context.reason}`);
+		// Origin = the BUYER's pin; destination = the outlet.
+		expect(context.origin.latitude).toBe(BUYER_ADDRESS.latitude);
+		expect(context.origin.longitude).toBe(BUYER_ADDRESS.longitude);
+		expect(context.destination.latitude).toBe(3.139);
+		expect(context.destination.address).toBe("Bearcamp Wash Bay");
+		// Sender = the buyer (rider's pickup contact); recipient = the store.
+		expect(context.sender).toEqual({ name: "Aisha", phone: "+60123456789" });
+		expect(context.recipient.name).toBe("Fruit Hut");
+		expect(context.recipient.phone).toBe("+60198765432");
+		// Order ref still rides the recipient remarks (the hand-over stop).
+		expect(context.recipient.remarks).toContain("ORD-");
+		expect(context.deliveryDirection).toBe("collection");
+	});
+
+	test("getDispatchContext stays store→buyer for a standard store (regression pin)", async () => {
+		const t = setup();
+		const retailer = await seedCollectionStore(t);
+		await t.run(async (ctx) => {
+			const row = await ctx.db.get(retailer._id);
+			const booking = row?.deliveryBooking;
+			if (!booking) throw new Error("seed missing booking");
+			await ctx.db.patch(retailer._id, {
+				deliveryBooking: { ...booking, deliveryDirection: undefined },
+			});
+		});
+		const orderId = await seedOrder(t, retailer._id, {
+			deliveryAddress: BUYER_ADDRESS,
+		});
+		const shortId = await t.run(async (ctx) => {
+			const order = await ctx.db.get(orderId);
+			return order?.shortId ?? "";
+		});
+
+		const context = await asUser(t).query(
+			internal.lalamove.getDispatchContext,
+			{ shortId },
+		);
+		if (!context.ok) throw new Error(`expected ok, got ${context.reason}`);
+		expect(context.origin.label).toBe("Bearcamp Wash Bay");
+		expect(context.destination.latitude).toBe(BUYER_ADDRESS.latitude);
+		expect(context.sender.name).toBe("Fruit Hut");
+		expect(context.recipient.name).toBe("Aisha");
+		expect(context.deliveryDirection).toBe("standard");
+	});
+
+	test("reserveBooking stamps the job's frozen direction; standard stays unset", async () => {
+		const t = setup();
+		const retailer = await seedCollectionStore(t);
+		const orderA = await seedOrder(t, retailer._id);
+		const orderB = await seedOrder(t, retailer._id);
+
+		const collectionJob = await t.mutation(internal.lalamove.reserveBooking, {
+			orderId: orderA,
+			retailerId: retailer._id,
+			quotationId: "quot-c",
+			vehicleType: "MOTORCYCLE",
+			deliveryDirection: "collection",
+		});
+		const standardJob = await t.mutation(internal.lalamove.reserveBooking, {
+			orderId: orderB,
+			retailerId: retailer._id,
+			quotationId: "quot-s",
+			vehicleType: "MOTORCYCLE",
+			deliveryDirection: "standard",
+		});
+
+		const { a, b } = await t.run(async (ctx) => ({
+			a: await ctx.db.get(collectionJob),
+			b: await ctx.db.get(standardJob),
+		}));
+		expect(a?.deliveryDirection).toBe("collection");
+		expect(b?.deliveryDirection).toBeUndefined(); // one spelling for default
+	});
+
+	test("getDeliveryJob splits store-now vs trip-then, so a switched mode never rewrites history", async () => {
+		const t = setup();
+		const retailer = await seedCollectionStore(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			deliveryDirection: "collection",
+		});
+		// A completed COLLECTION job… then the seller flips the store back to
+		// standard — the card must still describe what actually happened.
+		await seedJob(t, retailer._id, orderId, {
+			status: "completed",
+			deliveryDirection: "collection",
+		});
+		await t.run(async (ctx) => {
+			const row = await ctx.db.get(retailer._id);
+			const booking = row?.deliveryBooking;
+			if (!booking) throw new Error("seed missing booking");
+			await ctx.db.patch(retailer._id, {
+				deliveryBooking: { ...booking, deliveryDirection: undefined },
+			});
+		});
+		const shortId = await t.run(async (ctx) => {
+			const order = await ctx.db.get(orderId);
+			return order?.shortId ?? "";
+		});
+		const dispatch = await asUser(t).query(api.lalamove.getDeliveryJob, {
+			shortId,
+		});
+		// The store would book a STANDARD delivery now…
+		expect(dispatch?.deliveryDirection).toBe("standard");
+		// …but this trip was a collection, and the card describes it as one.
+		expect(dispatch?.job?.deliveryDirection).toBe("collection");
+	});
+
+	test("the inverse: a pre-collection job on a now-collection store still reads standard", async () => {
+		const t = setup();
+		const retailer = await seedCollectionStore(t);
+		const orderId = await seedOrder(t, retailer._id);
+		// A job booked before collection mode existed carries no direction.
+		await seedJob(t, retailer._id, orderId, { status: "completed" });
+		const shortId = await t.run(async (ctx) => {
+			const order = await ctx.db.get(orderId);
+			return order?.shortId ?? "";
+		});
+		const dispatch = await asUser(t).query(api.lalamove.getDeliveryJob, {
+			shortId,
+		});
+		expect(dispatch?.deliveryDirection).toBe("collection"); // store today
+		expect(dispatch?.job?.deliveryDirection).toBe("standard"); // that trip
+	});
+
+	test("orders.create freezes deliveryDirection from the store setting", async () => {
+		const t = setup();
+		const retailer = await seedCollectionStore(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				deliveryConfig: {
+					mode: "lalamove" as const,
+					onUnquotable: "block" as const,
+				},
+			});
+		});
+		const productId = await asUser(t).mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Tent Wash",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			blockWhenOutOfStock: false,
+			requiresProof: false,
+			variants: [{ optionValues: [], price: 8000, onHand: 100 }],
+		});
+		const quoteId = await t.mutation(internal.lalamove.saveCheckoutQuote, {
+			retailerId: retailer._id,
+			quotationId: "quot-col",
+			fee: 1500,
+			vehicleType: "MOTORCYCLE",
+			latitude: BUYER_ADDRESS.latitude,
+			longitude: BUYER_ADDRESS.longitude,
+		});
+		const result = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Aisha", waPhone: "60123456789" },
+			deliveryMethod: "delivery",
+			deliveryAddress: BUYER_ADDRESS,
+			deliveryQuoteId: quoteId,
+		});
+		const order = await t.run(async (ctx) => {
+			const orders = await ctx.db.query("orders").collect();
+			return orders.find((o) => o.shortId === result.shortId);
+		});
+		expect(order?.deliveryDirection).toBe("collection");
+	});
+
+	test("orders.get hides the POD photo from the buyer on a collection order (it shows the SELLER's doorstep)", async () => {
+		const t = setup();
+		const retailer = await seedCollectionStore(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			status: "delivered",
+			trackingToken: "tok_collect_pod_1",
+			deliveryDirection: "collection",
+		});
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			status: "completed",
+			deliveryDirection: "collection",
+		});
+		const storageId = await t.run(async (ctx) =>
+			ctx.storage.store(new Blob(["outlet-doorstep-photo"])),
+		);
+		await t.mutation(internal.lalamove.storePodImages, {
+			jobId,
+			storageIds: [storageId],
+		});
+
+		const order = await t.query(api.orders.get, { token: "tok_collect_pod_1" });
+		expect(order?.podImageUrls).toBeUndefined();
+		// The seller's dispatch card still gets the photo.
+		const shortId = order?.shortId ?? "";
+		const dispatch = await asUser(t).query(api.lalamove.getDeliveryJob, {
+			shortId,
+		});
+		expect(dispatch?.job?.podImageUrls).toHaveLength(1);
+	});
+
+	test("updateSettings: direction survives a booking-off save, explicit standard clears it, slug flag follows", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			businessAddress: { label: "Wash Bay", latitude: 3.1, longitude: 101.6 },
+			deliveryBooking: {
+				enabled: true,
+				vehicleType: "MOTORCYCLE",
+				apiKey: "pk_test_dir",
+				apiSecret: "sk_test_dir",
+				deliveryDirection: "collection",
+			},
+		});
+		let summary = (await asUser(t).query(api.retailers.getMyRetailer))
+			?.deliveryBooking;
+		expect(summary?.deliveryDirection).toBe("collection");
+		let pub = await t.query(api.retailers.getRetailerBySlug, {
+			slug: retailer.slug,
+		});
+		expect(
+			pub.status === "ok" && pub.retailer.deliveryCollectsFromCustomer,
+		).toBe(true);
+
+		// Booking off WITHOUT the field (the pricing-mode-switch save shape) —
+		// the stored direction must survive for the switch back.
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			deliveryBooking: { enabled: false, vehicleType: "MOTORCYCLE" },
+		});
+		summary = (await asUser(t).query(api.retailers.getMyRetailer))
+			?.deliveryBooking;
+		expect(summary?.deliveryDirection).toBe("collection");
+
+		// Explicit standard clears it (stored as unset — one default spelling).
+		await asUser(t).mutation(api.retailers.updateSettings, {
+			deliveryBooking: {
+				enabled: true,
+				vehicleType: "MOTORCYCLE",
+				deliveryDirection: "standard",
+			},
+		});
+		const raw = await t.run(async (ctx) => ctx.db.get(retailer._id));
+		expect(raw?.deliveryBooking?.deliveryDirection).toBeUndefined();
+		pub = await t.query(api.retailers.getRetailerBySlug, {
+			slug: retailer.slug,
+		});
+		expect(
+			pub.status === "ok" && pub.retailer.deliveryCollectsFromCustomer,
+		).toBe(false);
+	});
+});
+
+describe("collection service — live rider strip (orders.get)", () => {
+	async function collectionOrderWithJob(
+		t: ReturnType<typeof setup>,
+		jobOverrides: Partial<Doc<"deliveryJobs">>,
+	) {
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			trackingToken: "tok_rider_strip",
+			deliveryDirection: "collection",
+		});
+		await seedJob(t, retailer._id, orderId, {
+			deliveryDirection: "collection",
+			...jobOverrides,
+		});
+		return orderId;
+	}
+
+	test("active collection job → buyer sees trip state + driver + share link, nothing sensitive", async () => {
+		const t = setup();
+		await collectionOrderWithJob(t, {
+			status: "ongoing",
+			driver: { name: "Farid", phone: "+60161234567", plateNumber: "WXY 1234" },
+			shareLink: SHARE,
+		});
+		const order = await t.query(api.orders.get, { token: "tok_rider_strip" });
+		expect(order?.collectionRider).toEqual({
+			status: "ongoing",
+			driverName: "Farid",
+			plateNumber: "WXY 1234",
+			shareLink: SHARE,
+		});
+		// The rider's own phone never crosses to the buyer payload.
+		expect(JSON.stringify(order?.collectionRider)).not.toContain(
+			"60161234567",
+		);
+	});
+
+	test("strip vanishes once the trip ends (completed job)", async () => {
+		const t = setup();
+		await collectionOrderWithJob(t, { status: "completed" });
+		const order = await t.query(api.orders.get, { token: "tok_rider_strip" });
+		expect(order?.collectionRider).toBeUndefined();
+	});
+
+	test("standard delivery orders never get the strip (their tracking is the shipped message)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			trackingToken: "tok_rider_std",
+		});
+		await seedJob(t, retailer._id, orderId, { status: "ongoing" });
+		const order = await t.query(api.orders.get, { token: "tok_rider_std" });
+		expect(order?.collectionRider).toBeUndefined();
+	});
+});
+
+describe("collection service — collectedAt (the goods-arrived stamp)", () => {
+	test("a COMPLETED collection stamps the order without advancing it; replays never move it", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			deliveryDirection: "collection",
+		});
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			deliveryDirection: "collection",
+		});
+		const event = {
+			jobId,
+			eventType: "ORDER_STATUS_CHANGED",
+			data: statusEvent("COMPLETED", "2026-08-02T05:00:00.000Z"),
+			eventTimestamp: Date.parse("2026-08-02T05:00:00.000Z"),
+		};
+		await t.mutation(internal.lalamove.applyWebhookEvent, event);
+		const first = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(first?.collectedAt).toBe(Date.parse("2026-08-02T05:00:00.000Z"));
+		// A stamp is not a status change — the lifecycle stays the seller's.
+		expect(first?.status).toBe("confirmed");
+
+		// A later replay (Lalamove retries for 24h) must not rewrite the moment.
+		await t.mutation(internal.lalamove.applyWebhookEvent, {
+			...event,
+			data: statusEvent("COMPLETED", "2026-08-03T05:00:00.000Z"),
+			eventTimestamp: Date.parse("2026-08-03T05:00:00.000Z"),
+		});
+		const second = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(second?.collectedAt).toBe(first?.collectedAt);
+	});
+
+	test("a standard delivery never gets the stamp (it reaches `delivered` instead)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, { status: "shipped" });
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			status: "picked_up",
+		});
+		await t.mutation(internal.lalamove.applyWebhookEvent, {
+			jobId,
+			eventType: "ORDER_STATUS_CHANGED",
+			data: statusEvent("COMPLETED", "2026-08-02T05:00:00.000Z"),
+			eventTimestamp: Date.parse("2026-08-02T05:00:00.000Z"),
+		});
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.collectedAt).toBeUndefined();
+		expect(order?.status).toBe("delivered");
+	});
+
+	test("the buyer's tracking read exposes it, so the page can say 'Collected on'", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			trackingToken: "tok_collected_at",
+			deliveryDirection: "collection",
+			collectedAt: Date.parse("2026-08-02T05:00:00.000Z"),
+		});
+		void orderId;
+		const order = await t.query(api.orders.get, { token: "tok_collected_at" });
+		expect(order?.collectedAt).toBe(Date.parse("2026-08-02T05:00:00.000Z"));
+	});
+});
+
+describe("collection service — booking freezes the direction onto the order", () => {
+	test("an order placed as STANDARD, booked after the seller switched, becomes a collection order", async () => {
+		// Zaki's own dev-testing path: place test orders, then flip the toggle.
+		// Dispatch reads the store's LIVE mode, but every gate and label reads the
+		// ORDER — so without this the rider genuinely collects from the buyer
+		// while the order still calls itself a delivery, invisible to the status
+		// gate and to the buyer's live-rider strip.
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id); // no direction
+		await t.mutation(internal.lalamove.reserveBooking, {
+			orderId,
+			retailerId: retailer._id,
+			quotationId: "quot-switch",
+			vehicleType: "MOTORCYCLE",
+			deliveryDirection: "collection",
+		});
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.deliveryDirection).toBe("collection");
+	});
+
+	test("a STANDARD booking never touches the order's direction", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			deliveryDirection: "collection",
+		});
+		await t.mutation(internal.lalamove.reserveBooking, {
+			orderId,
+			retailerId: retailer._id,
+			quotationId: "quot-std",
+			vehicleType: "MOTORCYCLE",
+			deliveryDirection: "standard",
+		});
+		// Set-if-unset, never un-set: a standard booking can't erase a collection
+		// order's nature (its buyer was told "we collect from you").
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.deliveryDirection).toBe("collection");
+	});
+});
+
+describe("scheduled dispatch (86eyg0n8e follow-up)", () => {
+	const asUser = (t: ReturnType<typeof setup>) =>
+		t.withIdentity({ subject: USER });
+
+	test("getDispatchContext composes the buyer's moment; timeless orders carry none", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				waPhone: "60198765432",
+				businessAddress: {
+					label: "Fruit Hut HQ",
+					latitude: 3.139,
+					longitude: 101.6869,
+				},
+				deliveryBooking: {
+					enabled: true,
+					vehicleType: "MOTORCYCLE" as const,
+					apiKey: "pk_test_sched",
+					apiSecret: "sk_test_sched",
+				},
+			});
+		});
+		const day = 1_790_000_000_000 - (1_790_000_000_000 % 86_400_000) - 8 * 3_600_000;
+		const withTime = await seedOrder(t, retailer._id, {
+			deliveryAddress: {
+				line1: "12 Jln Mawar 3",
+				city: "PJ",
+				state: "Selangor",
+				postcode: "47301",
+				latitude: 3.1,
+				longitude: 101.6,
+			},
+			fulfilmentDate: day,
+			fulfilmentTimeMinutes: 930,
+		});
+		const shortId = await t.run(async (ctx) => {
+			const o = await ctx.db.get(withTime);
+			return o?.shortId ?? "";
+		});
+		const context = await asUser(t).query(
+			internal.lalamove.getDispatchContext,
+			{ shortId },
+		);
+		if (!context.ok) throw new Error(`expected ok, got ${context.reason}`);
+		expect(context.requestedMoment).toBe(day + 930 * 60_000);
+
+		// Date without time — the pre-existing behaviour: nothing to schedule.
+		const dateOnly = await seedOrder(t, retailer._id, {
+			deliveryAddress: {
+				line1: "12 Jln Mawar 3",
+				city: "PJ",
+				state: "Selangor",
+				postcode: "47301",
+				latitude: 3.1,
+				longitude: 101.6,
+			},
+			fulfilmentDate: day,
+		});
+		const shortId2 = await t.run(async (ctx) => {
+			const o = await ctx.db.get(dateOnly);
+			return o?.shortId ?? "";
+		});
+		const context2 = await asUser(t).query(
+			internal.lalamove.getDispatchContext,
+			{ shortId: shortId2 },
+		);
+		if (!context2.ok) throw new Error(`expected ok, got ${context2.reason}`);
+		expect(context2.requestedMoment).toBeUndefined();
+	});
+
+	test("reserveBooking stamps the schedule; the card payload exposes it", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		const at = Date.now() + 3 * 3_600_000;
+		await t.mutation(internal.lalamove.reserveBooking, {
+			orderId,
+			retailerId: retailer._id,
+			quotationId: "quot-sched",
+			vehicleType: "MOTORCYCLE",
+			scheduledAt: at,
+		});
+		const shortId = await t.run(async (ctx) => {
+			const o = await ctx.db.get(orderId);
+			return o?.shortId ?? "";
+		});
+		const dispatch = await asUser(t).query(api.lalamove.getDeliveryJob, {
+			shortId,
+		});
+		expect(dispatch?.job?.scheduledAt).toBe(at);
+
+		// An immediate booking stays unset — every pre-existing job's shape.
+		const orderB = await seedOrder(t, retailer._id);
+		await t.mutation(internal.lalamove.reserveBooking, {
+			orderId: orderB,
+			retailerId: retailer._id,
+			quotationId: "quot-now",
+			vehicleType: "MOTORCYCLE",
+		});
+		const jobB = await t.run(async (ctx) => {
+			const jobs = await ctx.db
+				.query("deliveryJobs")
+				.withIndex("by_order", (q) => q.eq("orderId", orderB))
+				.collect();
+			return jobs[0];
+		});
+		expect(jobB?.scheduledAt).toBeUndefined();
 	});
 });

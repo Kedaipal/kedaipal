@@ -79,3 +79,10 @@ hidden product to a non-owner (full to the owner).
 Per the ticket: no changes to price logic, custom-price-approval, or variant
 logic. (The custom-price-approval-with-variants bug on counter checkout is a
 separate parked Q2 item.)
+
+## Product pages (86eybrhrt PR2)
+
+The public product page's read — `products.getPublicBySlug` — applies the same
+rules as `list`: a hidden (or category-suppressed, or archived) product's URL
+answers null → 404. A hidden product **keeps its slug** while hidden, so no
+new product can take over its URL and un-hiding revives the original link.

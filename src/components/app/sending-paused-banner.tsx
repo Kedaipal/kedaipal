@@ -1,6 +1,6 @@
-import { useQuery } from "convex/react";
 import { AlertOctagon, MessageCircle } from "lucide-react";
-import { api } from "../../../convex/_generated/api";
+import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
+import { buildWaContactLink } from "../../lib/contact";
 import { Button } from "../ui/button";
 
 /**
@@ -25,23 +25,17 @@ export function SendingPausedBanner({
 	reason?: string;
 	slug: string;
 }) {
-	// Only fetch the support number when actually paused (skip the query on every
-	// dashboard load for the common, un-paused case).
-	const instructions = useQuery(
-		api.billing.paymentInstructions,
-		paused ? {} : "skip",
-	);
+	// Above the early return — hooks can't live behind a conditional.
+	const supportWa = useSupportWaNumber();
 
 	if (!paused) return null;
 
-	const phone = instructions?.whatsappPhone?.replace(/\D/g, "");
-	const waUrl = phone
-		? `https://wa.me/${phone}?text=${encodeURIComponent(
-				`Hi Kedaipal! My store (/${slug}) WhatsApp sending is paused${
-					reason ? ` — reason given: "${reason}"` : ""
-				}. Could you help me get it sorted?`,
-			)}`
-		: undefined;
+	const waUrl = buildWaContactLink(
+		`Hi Kedaipal! My store (/${slug}) WhatsApp sending is paused${
+			reason ? ` — reason given: "${reason}"` : ""
+		}. Could you help me get it sorted?`,
+		supportWa,
+	);
 
 	return (
 		<div className="flex flex-col gap-3 border-b border-red-200 bg-red-50 px-5 py-3 dark:border-red-900 dark:bg-red-950/40 sm:flex-row sm:items-start sm:justify-between lg:px-8">
@@ -63,14 +57,12 @@ export function SendingPausedBanner({
 					</p>
 				</div>
 			</div>
-			{waUrl ? (
-				<Button asChild size="sm" className="w-full shrink-0 sm:w-auto">
-					<a href={waUrl} target="_blank" rel="noopener noreferrer">
-						<MessageCircle className="size-4" />
-						Contact support
-					</a>
-				</Button>
-			) : null}
+			<Button asChild size="sm" className="w-full shrink-0 sm:w-auto">
+				<a href={waUrl} target="_blank" rel="noopener noreferrer">
+					<MessageCircle className="size-4" />
+					Contact support
+				</a>
+			</Button>
 		</div>
 	);
 }

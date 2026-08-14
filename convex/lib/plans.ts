@@ -24,8 +24,12 @@ export function planQualifiesForFounding(plan: Plan): boolean {
 export type PlanCaps = {
 	/** Monthly order cap. SOFT in v1 — drives a dashboard nudge, never blocks the
 	 * public storefront. All tiers are finite (Arif's 2026-06-28 decision dropped
-	 * Scale's "unlimited" — keeps an upsell ceiling for a future Enterprise tier and
-	 * stops contradicting Scale's own ~1,300/mo tagline). */
+	 * Scale's "unlimited"). NOTE: the pricing page advertises the *decided*
+	 * allowances 100/200/400 (caps ticket 86eye2ccu) ahead of enforcement. These
+	 * constants still read Pro 500 / Scale 2,000 until 86eye2ccu ships the lower
+	 * caps — and this is the value the shipped billing-tab order meter renders as
+	 * its denominator — so the advertised copy and this constant deliberately
+	 * diverge for BOTH Pro and Scale in the meantime. */
 	orderCap: number;
 	/** Hard cap on dashboard users. */
 	userCap: number;
@@ -80,6 +84,18 @@ export type PlanFeatures = {
 	 * trap a downgraded seller), and buyer-side fee rendering + an order's
 	 * frozen fee are all-tier (buyer flow never varies by seller plan). */
 	delivery: boolean;
+	/** HitPay online payments (86eyb6z3a): connecting the seller's own HitPay
+	 * account so buyers get a hosted Pay-now checkout that auto-confirms
+	 * payment. Gates only CONNECTING/ENABLING — disabling + clearing keys stay
+	 * un-gated (downgrade never traps), and a connected store's buyer-facing
+	 * Pay-now keeps working on every tier (buyer flow never varies by plan). */
+	onlinePayments: boolean;
+	/** Seller WhatsApp order alerts (86eyhw9zy): a WA template to the seller's
+	 * own number on new order + payment claim. Pro because each alert is a
+	 * billable Meta send (absorbed into the plan — decided 7 Aug 2026, no
+	 * add-on SKU). Gates only ENABLING the toggle — disabling and clearing the
+	 * number stay un-gated so a downgraded seller is never trapped. */
+	waOrderAlerts: boolean;
 };
 
 export type PlanFeature = keyof PlanFeatures;
@@ -93,6 +109,8 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		insights: false,
 		radiusDelivery: false,
 		delivery: false,
+		onlinePayments: false,
+		waOrderAlerts: false,
 	},
 	pro: {
 		crm: true,
@@ -102,6 +120,8 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		insights: true,
 		radiusDelivery: true,
 		delivery: true,
+		onlinePayments: true,
+		waOrderAlerts: true,
 	},
 	scale: {
 		crm: true,
@@ -111,6 +131,8 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		insights: true,
 		radiusDelivery: true,
 		delivery: true,
+		onlinePayments: true,
+		waOrderAlerts: true,
 	},
 };
 

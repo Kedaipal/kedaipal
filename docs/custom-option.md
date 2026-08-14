@@ -17,10 +17,20 @@ This feature lets a product offer **one** custom / made-to-order line that lives
 existing mockup-approval + re-quote machinery (`requiresProof` → `mockupStatus`)
 end-to-end, so there is **no new order-flow code**.
 
-> When NOT to use it: a product that is *only* bespoke (no standard variants)
-> should just be a single made-to-order variant with **Require mockup approval**
-> on — that's the existing path. The custom option is for "standard catalog **plus**
-> a bespoke line on the same product."
+> A product that is *only* bespoke (no standard variants) is the **"Made to
+> order" product type** — the third answer to "What kind of product is it?" in
+> both editors (ClickUp `86eyfq04j`). It is **this same custom line, as the
+> product's only variant**: no cartesian matrix at all, which the server allows
+> for exactly that shape (`validateVariantSet`'s `customOnly`). So everything
+> below — the buyer's request box, the "Choose" routing that stops a one-tap
+> quick-add, the qty-1 cart line, mockup approval, the min-order exemption —
+> applies to it unchanged, by construction rather than by a parallel code path.
+> See
+> [`product-setup-wizard.md`](./product-setup-wizard.md#the-made-to-order-product-type-2026-08-02-clickup-86eyfq04j).
+>
+> The **checkbox** below is therefore only for the other case: a standard
+> catalog **plus** a bespoke line on the same product. It isn't offered on a
+> made-to-order product, which already is that line.
 
 ## 2. Data model
 
@@ -76,14 +86,25 @@ out of the grid rows.
 
 ## 5. Buyer UX (`product-detail-sheet.tsx` + `product-card.tsx` + `product-grid.tsx`)
 
-- The detail sheet shows a separated, **self-contained "Custom order" card** below
-  the standard variant picker (and standalone for no-axes products): a zoomable
-  image, label, price ("from RM x" / "Price on quote"), a **"Your request"
-  textarea** (the seller's `customPrompt` is its placeholder — so the buyer can
-  type their size/colour/design spec, capped at 280 chars), and **its own "Request
-  custom order" button**. It is **independent** of the axis pills — *not* mutually
-  exclusive — so a buyer can add a standard variant **and** request the custom line
-  in one visit. The bottom sticky "Add to cart" drives only the standard variant.
+- The product page (and the seller's draft-preview sheet) shows a separated,
+  **self-contained "Custom order" card** below the standard variant picker: a
+  zoomable image, label, price ("from RM x" / "Price on quote"), a **"Your
+  request" textarea** (the seller's `customPrompt` is its placeholder — so the
+  buyer can type their size/colour/design spec, capped at 280 chars), and **its
+  own "Request custom order" button**. It is **independent** of the axis pills —
+  *not* mutually exclusive — so a buyer can add a standard variant **and**
+  request the custom line in one visit. The purchase bar's "Add to cart" drives
+  only the standard variant.
+- **Where that CTA lives depends on whether the line IS the product.** One
+  component decides, for both views: `PurchaseActions` renders the stepper +
+  "Add to cart" when the product sells a standard line, and **"Request custom
+  order"** when it doesn't (a made-to-order product — see
+  [`product-setup-wizard.md`](./product-setup-wizard.md#the-made-to-order-product-type-2026-08-02-clickup-86eyfq04j)).
+  So the bar always holds exactly one CTA, wherever the buyer's thumb already
+  is, and `CustomOrderCard` renders its own button **only** in the
+  catalog-plus-bespoke case — never both. On a made-to-order product the card
+  also drops its identity row (thumbnail / label / price): the page heading
+  already carries all three, and it states the mockup gate instead.
 - The buyer's request rides the cart line (`CartItem.note`) and is folded —
   labelled by item — into the order's **`customerNote`** at checkout via
   `composeCustomerNote` (`src/lib/order-note.ts`), so it reaches the seller through
@@ -114,6 +135,45 @@ out of the grid rows.
   existing seller mockup-submit → re-quote → buyer-approve flow handles spec +
   final price. **Zero order-flow changes.** (See `docs/proof-approval.md`.)
 
+### 5b. "From" — a custom line's price is a STARTING price (ClickUp `86eyhn4mr`)
+
+The custom card said "from RM 40", but every *other* price surface printed the
+same number bare — so a made-to-order product (whose only variant IS the custom
+line) showed a headline **`RM 40.00`** that reads as the bill. BearCamp's
+variable-priced services (tent cleaning/repair) is where it hurt: the mockup
+quote is **added on top** (`computeOrderTotals` extras), so the printed number
+can only ever go up.
+
+One pure predicate is the whole feature: **`hasStartingPrice(variants)`**
+(`src/lib/variant.ts`) — *an **active** custom line priced **> 0***. Priced at 0
+it stays "Price on quote" (`hasQuotePricing` already covers that, and "From RM
+0" would be worse); a **standard** variant is always a fixed price, so a bespoke
+line beside a catalog never makes the *selected* size negotiable.
+
+Every surface that prints a price now agrees:
+
+| Surface | Before | After |
+|---|---|---|
+| Product page + detail sheet headline | `RM 40.00` | **From** `RM 40.00` (shared `PriceLabel`, "From" as a small muted word — never part of the big number) |
+| Storefront grid card | `RM 40.00` | `From RM 40.00` (`showFrom` gained the predicate; the existing lowercase "from" for price *ranges* is now "From" too, one vocabulary) |
+| Checkout receipt line | `40.00` | `From 40.00` |
+| Checkout TOTAL (both the receipt block and the mobile bar) | `RM 40.00` | `RM 40.00 + your quote` — via the shared `pendingTotalParts`, which also lists a pending delivery fee, so a cart with both reads `+ your quote + delivery` |
+| Product JSON-LD | flat `Offer.price` | `AggregateOffer` with `lowPrice` and **no** `highPrice` (a flat price would promise a total the mockup can exceed) |
+| Seller product list | `RM 40.00` | `From RM 40.00`, and an all-quote product finally says `Price on quote` instead of `RM 0.00` |
+| Edit form summary strip | `One item · No price yet · + custom option` (the made-to-order shape fell through every branch) | `Made to order · From RM 40` |
+| Wizard review preview | `RM 120` | `From RM 120` |
+
+Seller-side discoverability: the made-to-order price field is labelled
+**"Starting price"** in both editors (it already was under Advanced; the
+made-to-order card said just "Price"), and both helpers now say *"Buyers see
+'From RM …', so they know the final price comes with the mockup."*
+
+**Not changed:** a **non-custom** variant with mockup approval and a fixed price
+still prints that price bare — the seller set an amount for a specific size and
+`submitMockup` explicitly makes the re-quote optional there. Counter checkout is
+also untouched: it shows "Custom price" because the cashier types the real
+amount at the point of sale.
+
 ## 6. Edge cases
 
 - **No-axes default + custom** = two `[]`-keyed rows, disambiguated by `isCustom`
@@ -140,7 +200,16 @@ out of the grid rows.
   a no-axes default + custom coexist and reconcile by identity (no fuse, `_id`
   preserved); rejects >1 custom line; rejects a custom line tied to option values.
 - `src/lib/variant.test.ts` → "custom line": `getCustomLine`; the custom row never
-  shadows the default on the empty selection; excluded from axis availability.
+  shadows the default on the empty selection; excluded from axis availability;
+  `hasStartingPrice` (priced custom line yes / RM0 no / standard-only no /
+  deactivated custom line no).
+- `src/components/storefront/product-card.test.tsx` +
+  `product-purchase.test.tsx` → the "From" prefix on a starting price, the bare
+  price on a *selected* standard variant, and "Price on quote" still winning at
+  RM0. `checkout-summary.test.tsx` → "From 40.00" on the line and
+  `+ your quote [+ delivery]` on the total.
+- `src/lib/product-summary.test.ts` + `src/components/forms/product-wizard.test.ts`
+  → the seller-side strip/preview print the same "From".
 - `src/components/forms/variant-editor.test.tsx` → "custom line": the card appears
   only after opt-in and stays out of the grid; seeds from an existing line.
 - `src/components/storefront/product-detail-sheet.test.tsx`: custom line is an

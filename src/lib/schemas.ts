@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizeMyDigits } from "./phone";
 
 /**
  * Client-side Zod schemas for forms. These mirror server-side validators in
@@ -6,29 +7,45 @@ import { z } from "zod";
  * Convex. Server still re-validates — never trust the client.
  */
 
-// Match `convex/lib/slug.ts` assertValidWaPhone — strip formatting then
-// require 8–15 digits.
-export const waPhoneSchema = z
+// The one MY-mobile schema, mirroring the server's `assertValidMyMobile`
+// (86eyf1rck buyer checkout; extended to every plated field by 86eyknr2r).
+// Normalizes the way a Malaysian actually types — local `0xx…` → `60xx…`, bare
+// NSN `1xx…` → `60xx…`, full `60xx…` untouched — then requires a Malaysian
+// MOBILE shape (601X plus 8–9 digits). A landline (`03-…`) clears a bare digit
+// count but can never receive WhatsApp, and every field using this schema
+// exists so a WhatsApp message reaches it. The server re-validates.
+//
+// The bare-NSN arm exists because these fields render a `+60` plate: someone
+// who reads that badge and types "12-345 6789" must not be rejected. Pinned to
+// 9–10 digits so it can't swallow a foreign number that merely starts with 1.
+export const myWaPhoneCheckoutSchema = z
 	.string()
-	.transform((s) => s.replace(/[\s\-()+]/g, ""))
+	.transform(normalizeMyDigits)
 	.pipe(
 		z
 			.string()
 			.regex(
-				/^\d{8,15}$/,
-				"WhatsApp number must be 8–15 digits, with country code (e.g. 60123456789)",
+				/^601\d{8,9}$/,
+				"Enter a Malaysian mobile number (e.g. 012-345 6789)",
 			),
 	);
 
-// Optional variant — empty string is allowed and becomes undefined.
-export const waPhoneOptionalSchema = z
+// Optional variant for a FORM field (blank is fine, anything typed must be a MY
+// mobile). Deliberately a `refine`, not `.optional().transform(…)`: TanStack
+// Form validates without replacing state, so a schema whose input type is
+// `string | undefined` no longer matches a field that is always a string — and
+// a transform here would describe a normalization that never happens. The
+// caller sends the raw text; the server normalizes.
+export const myWaPhoneFormOptionalSchema = z
 	.string()
-	.optional()
-	.transform((s) => (s && s.trim().length > 0 ? s : undefined))
-	.pipe(waPhoneSchema.optional());
+	.refine(
+		(s) =>
+			s.trim().length === 0 || /^601\d{8,9}$/.test(normalizeMyDigits(s)),
+		"Enter a Malaysian mobile number (e.g. 012-345 6789)",
+	);
 
 export const settingsWaPhoneFormSchema = z.object({
-	waPhone: waPhoneSchema,
+	waPhone: myWaPhoneCheckoutSchema,
 });
 
 export type SettingsWaPhoneFormValues = z.input<
@@ -144,6 +161,9 @@ export const checkoutFormSchema = z
 			.trim()
 			.min(3, "Your name must be at least 3 characters")
 			.max(60, "Name must be at most 60 characters"),
+		// Required so the order is reachable the moment it's placed — the
+		// confirmation lands in THIS number's WhatsApp (86eyf1rck).
+		waPhone: myWaPhoneCheckoutSchema,
 		deliveryMethod: deliveryMethodSchema,
 		address: addressFormFieldsSchema,
 		// Convex id of the chosen pickup location when deliveryMethod is
@@ -157,6 +177,11 @@ export const checkoutFormSchema = z
 		// the precise range check lives in the submit handler — here we only require
 		// that a day was picked. Empty string = nothing chosen yet.
 		fulfilmentDate: z.string().min(1, "Pick when you need this order"),
+		// "HH:MM" — the delivery-order time (86eyg0n8e follow-up). Prefilled and
+		// only rendered for delivery, so emptiness is a cleared field; the form
+		// enforces it at submit (a schema .min here would block pickup orders,
+		// which never render the input).
+		fulfilmentTime: z.string(),
 		// Optional free-text instruction for the seller. Always a string in form
 		// state (empty allowed); trimmed to undefined at submit. Cap mirrors the
 		// server (MAX_CUSTOMER_NOTE in convex/orders.ts).

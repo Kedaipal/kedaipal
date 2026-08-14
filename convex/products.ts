@@ -1,7 +1,14 @@
 import { ConvexError, v } from "convex/values";
-import { MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
+import { isMytMidnight, MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
 import type { Doc, Id } from "./_generated/dataModel";
-import { mutation, type MutationCtx, query, type QueryCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
+import {
+	internalMutation,
+	mutation,
+	type MutationCtx,
+	query,
+	type QueryCtx,
+} from "./_generated/server";
 import {
 	adminUserIds,
 	logAdminAction,
@@ -13,7 +20,19 @@ import {
 	isProductVisible,
 } from "./lib/categoryCounts";
 import { sanitizeMinQuantity } from "./lib/minOrderRules";
+import {
+	assertProductCap,
+	MAX_PRODUCTS_PER_RETAILER,
+	productCapState,
+} from "./lib/productCap";
+import { deleteProductCascade } from "./lib/productDelete";
+import {
+	POPULAR_SCAN_CAP,
+	POPULAR_TOP_CANDIDATES,
+	rankPopularProducts,
+} from "./lib/popularProducts";
 import { rateLimiter } from "./lib/rateLimiter";
+import { SLUG_MAX, SLUG_MIN, slugify } from "./lib/slug";
 import { assertSubscriptionActive } from "./subscriptions";
 import {
 	cartesian,
@@ -43,7 +62,6 @@ function sanitizeMinNoticeDays(raw: number | undefined): number | undefined {
 const MAX_IMAGES_PER_PRODUCT = 5;
 const MAX_IMAGES_PER_VARIANT = 3;
 const MAX_BULK_IMPORT_BATCH = 50;
-const MAX_PRODUCTS_PER_RETAILER = 50;
 const MAX_SKU_LENGTH = 60;
 
 /**
@@ -80,6 +98,23 @@ async function assertVariantSkuUnique(
 		.first();
 	if (existing && existing._id !== excludeVariantId)
 		throw new ConvexError(`SKU "${sku}" is already used by another variant`);
+}
+
+/**
+ * How many products this store holds — TOTAL rows, active AND archived, which
+ * is exactly what the cap counts (see convex/lib/productCap.ts for why). One
+ * author so the gate, the import preview and the dashboard counter can't
+ * disagree about what "used" means.
+ */
+async function countProductsForRetailer(
+	ctx: QueryCtx | MutationCtx,
+	retailerId: Id<"retailers">,
+): Promise<number> {
+	const rows = await ctx.db
+		.query("products")
+		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+		.collect();
+	return rows.length;
 }
 
 async function requireUserId(ctx: QueryCtx | MutationCtx): Promise<string> {
@@ -151,9 +186,29 @@ async function loadVariants(ctx: QueryCtx, productId: Id<"products">) {
 export async function productWithVariants(
 	ctx: QueryCtx,
 	product: Doc<"products">,
-	opts: { activeOnly: boolean },
+	opts: { activeOnly: boolean; forOwner?: boolean },
 ) {
 	const base = await withImageUrls(ctx, product);
+	// Seller-only fields are stripped unless the caller is an owner/admin surface.
+	// `orderedAt` is sales-derived — it says whether a product has EVER sold and
+	// when it first did — and this helper's `...base` spread feeds the public,
+	// unauthenticated reads (`list`, `getPublicBySlug`, the category page). Left
+	// in, anyone could diff a store's catalog for the SKUs that have never sold a
+	// single unit. That's the same line `popularProducts` already draws by
+	// returning ids only so sales volume never crosses the public wire.
+	//
+	// NOT keyed off `activeOnly`: the two look interchangeable but aren't —
+	// `listForCounter` is owner-gated and still passes `activeOnly: true`, so
+	// reusing it as an owner proxy would be right by accident today and wrong the
+	// next time a surface mixes them. This is also the seam for any future
+	// seller-only column: add it to the destructure, not to the payload.
+	// Typed as `typeof base` (where `orderedAt` is already optional) rather than
+	// letting TS infer a union: a Convex query has ONE return type regardless of
+	// the runtime auth branch, so the shape has to admit the field being absent.
+	// The stripped object is assignable precisely because the field is optional.
+	const { orderedAt: _orderedAt, ...publicBase } = base;
+	const visibleBase: typeof base =
+		opts.forOwner === true ? base : publicBase;
 	const all = await loadVariants(ctx, product._id);
 	// Resolve the per-variant flags, falling back to the (deprecated) product-level
 	// defaults so legacy variants that predate the per-variant columns keep behaving
@@ -184,7 +239,10 @@ export async function productWithVariants(
 		.filter((vr) => vr.active)
 		.some((vr) => (vr.blockWhenOutOfStock ? vr.onHand > 0 : true));
 	return {
-		...base,
+		...visibleBase,
+		// Always usable by the storefront's product-page links, even before the
+		// slug backfill has stamped this row.
+		slug: effectiveSlug(product),
 		variants,
 		variantCount: variants.length,
 		priceFrom: prices.length ? Math.min(...prices) : 0,
@@ -193,6 +251,58 @@ export async function productWithVariants(
 		totalOnHand,
 		inStock,
 	};
+}
+
+/**
+ * Allocate a unique, permanent URL slug for a product within its retailer —
+ * /$slug/p/<productSlug> (86eybrhrt PR2). Auto-derived from the name (never a
+ * seller input) and STABLE once assigned: renames don't touch it, so a link a
+ * seller pasted into WhatsApp keeps working. Uniqueness spans the retailer's
+ * ENTIRE catalog incl. archived/hidden rows — restoring a product must never
+ * find its URL stolen. Name collisions suffix -2, -3, … (category precedent).
+ */
+async function ensureUniqueProductSlug(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	name: string,
+	excludeProductId?: Id<"products">,
+): Promise<string> {
+	// Degenerate names (emoji-only, 1–2 chars after slugification) pad into the
+	// shared 3–32 slug shape instead of failing product creation over a URL.
+	let base = slugify(name);
+	if (base.length < SLUG_MIN) base = base.length > 0 ? `item-${base}` : "item";
+	// Bounded past the per-store product cap — a clash loop can't run away. Only
+	// reachable if a store's whole catalog shares one slug base, and an
+	// admin-exempt store sitting above the cap just gets the same clear throw
+	// below rather than an unbounded scan.
+	for (let n = 1; n <= MAX_PRODUCTS_PER_RETAILER + 10; n++) {
+		const suffix = n === 1 ? "" : `-${n}`;
+		const trimmed = base.slice(0, SLUG_MAX - suffix.length).replace(/-+$/, "");
+		const candidate = `${trimmed}${suffix}`;
+		const clash = await ctx.db
+			.query("products")
+			.withIndex("by_retailer_slug", (q) =>
+				q.eq("retailerId", retailerId).eq("slug", candidate),
+			)
+			.unique();
+		if (!clash || clash._id === excludeProductId) return candidate;
+	}
+	throw new ConvexError("Could not allocate a unique product link");
+}
+
+/**
+ * The slug a product is addressable by RIGHT NOW. Stored slug when it has one;
+ * otherwise derived from the name on the fly. Legacy rows created before slugs
+ * existed only get a stored one when they're next edited or when
+ * `backfillProductSlugs` runs — without this fallback they'd be un-openable
+ * between a deploy and that backfill, since the storefront's only product view
+ * is the URL-addressed page. Derived slugs resolve through the name-match arm
+ * of `getPublicBySlug`.
+ */
+function effectiveSlug(product: Doc<"products">): string {
+	if (product.slug !== undefined) return product.slug;
+	const base = slugify(product.name);
+	return base.length >= SLUG_MIN ? base : `item-${product._id.slice(0, 6)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -286,6 +396,33 @@ function validateCustomLine(variant: VariantInput): VariantInput {
 	};
 }
 
+function plural(n: number, word: string): string {
+	return n === 1 ? word : `${word}s`;
+}
+
+/** "Options [Size: S, M]" / "A product with no options" — names what the server rebuilt the grid from. */
+function describeAxes(options: OptionAxis[]): string {
+	if (options.length === 0) return "A product with no options";
+	return `Options [${options.map((a) => `${a.name}: ${a.values.join(", ")}`).join("] × [")}]`;
+}
+
+/**
+ * Render a combo list for an error, with the empty tuple shown as
+ * "(no options)". Truncated — at the 50-variant cap the full list is a ~1KB
+ * string in a seller-facing banner, and the first few already identify the
+ * mismatch.
+ */
+const MAX_COMBOS_IN_ERROR = 6;
+function describeCombos(combos: readonly (readonly string[])[]): string {
+	if (combos.length === 0) return "none";
+	const shown = combos
+		.slice(0, MAX_COMBOS_IN_ERROR)
+		.map((c) => (c.length === 0 ? "(no options)" : `"${variantLabel(c)}"`))
+		.join(", ");
+	const rest = combos.length - MAX_COMBOS_IN_ERROR;
+	return rest > 0 ? `${shown} …and ${rest} more` : shown;
+}
+
 /**
  * Validate a full set of variant inputs. The set is split into the cartesian
  * MATRIX (isCustom falsy) and an optional CUSTOM line (isCustom true). The matrix
@@ -304,13 +441,31 @@ function validateVariantSet(
 
 	if (customLines.length > 1)
 		throw new ConvexError("A product can have at most one custom option");
-	if (matrix.length === 0)
+
+	/**
+	 * A product's sellable lines are the cartesian **matrix ∪ the custom line**,
+	 * so a product whose ONLY line is bespoke is legitimate — that's the "Made to
+	 * order" product type (ClickUp `86eyfq04j`): a tent wash, a commissioned
+	 * cake. It carries no matrix because there is nothing to enumerate; the
+	 * custom line IS the offer, which is what gives the buyer the request box and
+	 * the qty-1 lock for free.
+	 *
+	 * Requires no axes: axes with an empty matrix would be a grid describing
+	 * combinations nothing sells. Everything else keeps the exact old rules, and
+	 * this only ever LOOSENS them, so no stored product becomes invalid.
+	 */
+	const customOnly =
+		matrix.length === 0 && customLines.length === 1 && options.length === 0;
+
+	if (matrix.length === 0 && !customOnly)
 		throw new ConvexError("A product needs at least one variant");
 
 	const expected = cartesian(options); // includes [[]] for no-axes products
-	if (matrix.length !== expected.length)
+	if (!customOnly && matrix.length !== expected.length)
 		throw new ConvexError(
-			`Expected ${expected.length} variants for these options, got ${matrix.length}`,
+			`${describeAxes(options)} makes ${expected.length} ${plural(expected.length, "combination")} ` +
+				`(${describeCombos(expected)}), but ${matrix.length} ${plural(matrix.length, "variant")} ` +
+				`arrived (${describeCombos(matrix.map((vr) => vr.optionValues))}).`,
 		);
 
 	const seenCombos: string[][] = [];
@@ -355,10 +510,14 @@ function validateVariantSet(
 
 	// Confirm every expected combination is present (covers the "missing combo"
 	// case that the count check alone can't catch once duplicates are ruled out).
-	for (const combo of expected) {
+	// Skipped for a custom-only product: `cartesian([])` is `[[]]`, so this would
+	// demand the empty matrix row the made-to-order type exists to avoid.
+	for (const combo of customOnly ? [] : expected) {
 		if (!cleaned.some((vr) => sameOptionValues(vr.optionValues, combo)))
 			throw new ConvexError(
-				`Missing variant for combination "${variantLabel(combo)}"`,
+				`Missing variant for combination "${variantLabel(combo)}" — ` +
+					`${describeAxes(options)} needs ${describeCombos(expected)}, ` +
+					`but only ${describeCombos(cleaned.map((vr) => vr.optionValues))} arrived.`,
 			);
 	}
 
@@ -440,7 +599,29 @@ export const listForCounter = query({
 			.collect();
 		rows.sort(bySortOrder);
 		return Promise.all(
-			rows.map((row) => productWithVariants(ctx, row, { activeOnly: true })),
+			rows.map((row) =>
+				// Owner-gated read (counter checkout), so seller-only fields are safe.
+				productWithVariants(ctx, row, { activeOnly: true, forOwner: true }),
+			),
+		);
+	},
+});
+
+/**
+ * Just the store's product-cap state — a handful of numbers, no catalog. The
+ * create surfaces (`/app/products/new`) need to know whether there's room
+ * before letting a seller build a product they couldn't save, and pulling the
+ * whole hydrated catalog (variants + signed image URLs) to derive one integer
+ * would be absurd. The products list keeps deriving it from the `listAll` it
+ * already holds; both go through `productCapState`, so the flags can't drift.
+ */
+export const capState = query({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }) => {
+		const access = await requireRetailerOwnership(ctx, retailerId);
+		return productCapState(
+			await countProductsForRetailer(ctx, retailerId),
+			access.actingAsAdmin,
 		);
 	},
 });
@@ -455,7 +636,10 @@ export const listAll = query({
 			.collect();
 		rows.sort(byActiveThenSort);
 		return Promise.all(
-			rows.map((row) => productWithVariants(ctx, row, { activeOnly: false })),
+				// Owner-gated dashboard read — seller-only fields stay in.
+			rows.map((row) =>
+				productWithVariants(ctx, row, { activeOnly: false, forOwner: true }),
+			),
 		);
 	},
 });
@@ -480,8 +664,21 @@ export const get = query({
 		// that they never leak through a public query. Both the seller's own
 		// `hidden` toggle and category suppression (`hiddenByCategory`) apply.
 		// Owner/admin still see it to edit. See docs/hidden-products.md.
-		if ((row.hidden || row.hiddenByCategory) && !canEdit) return null;
-		return productWithVariants(ctx, row, { activeOnly: !canEdit });
+		//
+		// `!row.active` (archived) is in the same bucket and was missing: every
+		// other public read excludes archived products (`list` and
+		// `getPublicBySlug` both scope to `active`), so a bare id was the one way
+		// to pull an archived product's full public payload. Pre-existing, found
+		// in the PR #155 review.
+		if ((!row.active || row.hidden || row.hiddenByCategory) && !canEdit)
+			return null;
+		// Shared endpoint: the same `canEdit` that decides whether inactive variants
+		// are visible also decides whether seller-only fields are. An
+		// unauthenticated buyer hitting this by id gets the public shape.
+		return productWithVariants(ctx, row, {
+			activeOnly: !canEdit,
+			forOwner: canEdit,
+		});
 	},
 });
 
@@ -516,15 +713,15 @@ export const create = mutation({
 		if (!access.actingAsAdmin)
 			await assertSubscriptionActive(ctx, args.retailerId);
 
-		const existingCount = await ctx.db
-			.query("products")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", args.retailerId))
-			.collect()
-			.then((r) => r.length);
-		if (existingCount >= MAX_PRODUCTS_PER_RETAILER)
-			throw new ConvexError(
-				`Maximum ${MAX_PRODUCTS_PER_RETAILER} products per retailer`,
-			);
+		// Product cap — counts archived rows too, so deleting (not archiving) is
+		// what frees a slot. An admin operating the store (act-as) is exempt: a
+		// white-glove Enterprise catalog gets stocked past the ceiling by hand,
+		// the same posture as the subscription soft-lock bypass above.
+		assertProductCap(
+			await countProductsForRetailer(ctx, args.retailerId),
+			1,
+			access.actingAsAdmin,
+		);
 
 		if (args.name.trim().length === 0) throw new ConvexError("Name is required");
 		if (args.imageStorageIds.length > MAX_IMAGES_PER_PRODUCT)
@@ -543,6 +740,7 @@ export const create = mutation({
 		const productId = await ctx.db.insert("products", {
 			retailerId: args.retailerId,
 			name: args.name.trim(),
+			slug: await ensureUniqueProductSlug(ctx, args.retailerId, args.name),
 			description: args.description,
 			currency: args.currency,
 			imageStorageIds: args.imageStorageIds,
@@ -655,6 +853,20 @@ export const update = mutation({
 			// 0/1 sanitize to undefined, which patch treats as "remove the field" —
 			// so sending 0 clears the rule (one spelling for "no minimum").
 			updates.minQuantity = sanitizeMinQuantity(fields.minQuantity);
+
+		// Lazy slug convergence for legacy rows (pre-slug catalog): the first
+		// edit gives the product its permanent URL, using the freshest name.
+		// Existing slugs are STABLE — a rename never rewrites them, so links a
+		// seller already shared keep working. backfillProductSlugs covers rows
+		// that are never edited.
+		if (ownedProduct.slug === undefined) {
+			updates.slug = await ensureUniqueProductSlug(
+				ctx,
+				ownedProduct.retailerId,
+				(updates.name as string | undefined) ?? ownedProduct.name,
+				productId,
+			);
+		}
 
 		// Keep the denormalized category counts accurate when this edit flips the
 		// product's storefront visibility (active and/or hidden). Compute the
@@ -891,6 +1103,57 @@ export const archive = mutation({
 	},
 });
 
+/**
+ * Permanently erase a product — the escape valve that makes the product cap an
+ * honest contract rather than a one-way ratchet (86eyjmf4q). Distinct from
+ * `archive`, which only takes a product off the storefront and KEEPS its slot:
+ * the cap counts total rows, so deleting is the ONLY way to free one.
+ *
+ * **Refuses once the product has ever been ordered** (`orderedAt` set). Order
+ * lines carry `items[].productId` as a hard reference beside the frozen
+ * name/price snapshot, so erasing a sold product would orphan those references
+ * (Insights groups top products by productId and resolves the row for its
+ * thumbnail). A sold product is archived instead — history stays intact. That
+ * still leaves every row that actually clogs a cap deletable: test products,
+ * typos, duplicated imports, and seasonal SKUs that never sold.
+ *
+ * Owner-OR-admin, matching `archive` — this is a seller's own catalog
+ * housekeeping, NOT the admin-only posture of the order hard delete (orders are
+ * financial records; a never-sold product is not). Deliberately not
+ * subscription-gated for the same reason `archive` isn't: reducing is always
+ * allowed, so a past_due or downgraded seller is never trapped.
+ */
+export const deletePermanently = mutation({
+	args: { productId: v.id("products") },
+	handler: async (ctx, { productId }): Promise<void> => {
+		const userId = await requireUserId(ctx);
+		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
+		const { product, access } = await requireProductOwnership(ctx, productId);
+
+		if (product.orderedAt !== undefined)
+			throw new ConvexError(
+				"This product has been ordered before, so it can't be deleted — its past orders still reference it. Archive it instead to take it off your storefront.",
+			);
+
+		// Decrement the categories this product was counted in BEFORE the cascade
+		// drops its junction rows (the bump reads them to know which categories to
+		// touch). Archived/hidden products were never counted, so nothing to undo.
+		if (isProductVisible(product))
+			await bumpCategoryCountsForProduct(ctx, productId, -1);
+
+		await deleteProductCascade(ctx, product);
+		// `logAdminAction` (owner writes not logged), NOT the always-audit
+		// `logDestructiveAdminAction` that `orders.hardDelete` uses — deliberate.
+		// That one exists because an order erase is admin-only and destroys a
+		// financial record, so it must always answer "who did this?". This
+		// mutation is owner-or-admin by design, so always-auditing would file
+		// every seller's routine typo cleanup into `adminAuditLog` under an
+		// `adminUserId` that isn't an admin. A never-sold product also leaves no
+		// history to reconstruct — that's precisely what `orderedAt` guarantees.
+		await logAdminAction(ctx, access, "products.deletePermanently", productId);
+	},
+});
+
 // ---------------------------------------------------------------------------
 // Bulk import — variant-aware (one-row-per-variant; see
 // docs/bulk-product-upload-roadmap.md + product-variants.md §9).
@@ -1019,17 +1282,15 @@ export const bulkUpsert = mutation({
 			});
 		}
 
-		// Product cap — only creates count.
+		// Product cap — only the rows that would be INSERTED consume a slot; a
+		// sheet that just updates existing products by SKU never touches it.
+		// Admin act-as is exempt (see products.create).
 		const insertCount = classified.filter((x) => x.c.mode === "create").length;
-		const existingCount = await ctx.db
-			.query("products")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", args.retailerId))
-			.collect()
-			.then((r) => r.length);
-		if (existingCount + insertCount > MAX_PRODUCTS_PER_RETAILER)
-			throw new ConvexError(
-				`Would exceed the ${MAX_PRODUCTS_PER_RETAILER}-product limit per retailer (currently ${existingCount}, +${insertCount} new)`,
-			);
+		assertProductCap(
+			await countProductsForRetailer(ctx, args.retailerId),
+			insertCount,
+			access.actingAsAdmin,
+		);
 
 		const now = Date.now();
 		let created = 0;
@@ -1048,6 +1309,11 @@ export const bulkUpsert = mutation({
 				const productId = await ctx.db.insert("products", {
 					retailerId: args.retailerId,
 					name: product.name.trim(),
+					slug: await ensureUniqueProductSlug(
+						ctx,
+						args.retailerId,
+						product.name,
+					),
 					description: product.description,
 					currency: args.currency,
 					imageStorageIds: [],
@@ -1121,7 +1387,7 @@ export const bulkUpsertPreview = query({
 		products: v.array(importProductValidator),
 	},
 	handler: async (ctx, args) => {
-		await requireRetailerOwnership(ctx, args.retailerId);
+		const access = await requireRetailerOwnership(ctx, args.retailerId);
 		const products = args.products as ImportProduct[];
 		if (totalImportVariants(products) > MAX_BULK_IMPORT_BATCH)
 			throw new ConvexError(
@@ -1229,6 +1495,15 @@ export const bulkUpsertPreview = query({
 				variants: variantsTotal,
 				autoFilled: autoFilledTotal,
 			},
+			// Cap state so the import screen can warn BEFORE the seller confirms —
+			// the sheet is chunked across several bulkUpsert calls, so without this
+			// a too-large import would half-apply and then throw partway through.
+			// Same for every chunk (no writes happen during a preview), so the
+			// client can read it off any one of them.
+			cap: productCapState(
+				await countProductsForRetailer(ctx, args.retailerId),
+				access.actingAsAdmin,
+			),
 		};
 	},
 });
@@ -1287,5 +1562,261 @@ export const reorder = mutation({
 			}
 		}
 		await logAdminAction(ctx, access, "products.reorder", retailerId);
+	},
+});
+
+// ---------------------------------------------------------------------------
+// Product pages — /$slug/p/<productSlug> (86eybrhrt PR2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Public product-page read. Applies the exact storefront visibility rules of
+ * `list` (active, not hidden, not category-suppressed) so a counter-only or
+ * archived product's URL answers null (→ 404) instead of leaking it. Unknown
+ * slug → null. Same `productWithVariants` shape as `list`, so the page, the
+ * grid and the detail sheet can never disagree about a product.
+ */
+export const getPublicBySlug = query({
+	args: { retailerId: v.id("retailers"), slug: v.string() },
+	handler: async (ctx, { retailerId, slug }) => {
+		const normalized = slug.trim().toLowerCase();
+		if (normalized.length === 0) return null;
+		const indexed = await ctx.db
+			.query("products")
+			.withIndex("by_retailer_slug", (q) =>
+				q.eq("retailerId", retailerId).eq("slug", normalized),
+			)
+			.unique();
+		// Fallback for rows the slug backfill hasn't stamped yet: match on the
+		// slug derived from the name. Bounded by the 50-product cap. A HIT on a
+		// migrated catalog never reaches here (the index arm answers first); a
+		// MISS — an unknown or probed slug — always does, which is the same
+		// bounded scan `list` already runs on every storefront page load.
+		// Keeps every product addressable the moment the page ships,
+		// independent of when the backfill is run.
+		const row =
+			indexed ??
+			(
+				await ctx.db
+					.query("products")
+					.withIndex("by_retailer_active", (q) =>
+						q.eq("retailerId", retailerId).eq("active", true),
+					)
+					.collect()
+			).find((p) => p.slug === undefined && effectiveSlug(p) === normalized);
+		if (
+			!row ||
+			!row.active ||
+			row.hidden === true ||
+			row.hiddenByCategory === true
+		)
+			return null;
+		return productWithVariants(ctx, row, { activeOnly: true });
+	},
+});
+
+/**
+ * Every storefront-visible product as `{storeSlug, productSlug, updatedAt}` for
+ * `/sitemap.xml`. Without this the product pages would be undiscoverable: the
+ * grid's `<Link>`s make them crawlable once a bot is already on a storefront,
+ * but the sitemap is what tells Google the pages exist at all — and the pages
+ * carry `robots: index, follow`, a canonical and `Product` JSON-LD that are
+ * inert until something points at them.
+ *
+ * Same visibility rules as `list`, applied per retailer (active, not hidden,
+ * not category-suppressed) — a counter-only or archived product must not appear
+ * in a public sitemap any more than it appears on the storefront. Slug-less
+ * legacy rows are SKIPPED rather than emitted via `effectiveSlug`: a derived
+ * slug is a temporary address, and publishing one to a crawler risks indexing a
+ * URL the backfill is about to change. Cross-retailer scan, like
+ * `retailers.listSlugsForSitemap` — the route caches for an hour.
+ */
+export const listForSitemap = query({
+	args: {},
+	handler: async (
+		ctx,
+	): Promise<
+		Array<{ storeSlug: string; productSlug: string; updatedAt: number }>
+	> => {
+		const retailers = await ctx.db.query("retailers").collect();
+		const out: Array<{
+			storeSlug: string;
+			productSlug: string;
+			updatedAt: number;
+		}> = [];
+		for (const retailer of retailers) {
+			const rows = await ctx.db
+				.query("products")
+				.withIndex("by_retailer_active", (q) =>
+					q.eq("retailerId", retailer._id).eq("active", true),
+				)
+				.filter((q) =>
+					q.and(
+						q.neq(q.field("hidden"), true),
+						q.neq(q.field("hiddenByCategory"), true),
+					),
+				)
+				.collect();
+			for (const row of rows) {
+				if (row.slug === undefined) continue;
+				out.push({
+					storeSlug: retailer.slug,
+					productSlug: row.slug,
+					updatedAt: row._creationTime,
+				});
+			}
+		}
+		return out;
+	},
+});
+
+/**
+ * PUBLIC (unauthenticated storefront) — ranked product-id candidates for the
+ * landing's "Popular this week" feature card (86eybrhrt PR3). Real order data,
+ * zero seller curation; ranking + thresholds live in `lib/popularProducts.ts`.
+ *
+ * Returns ONLY ids, and only ids of products the storefront actually lists —
+ * no sales counts ever cross the public wire, and an archived or counter-only
+ * product is never named to an unauthenticated caller.
+ *
+ * **Visibility is filtered before the cap, and that order matters.** Ranking
+ * reads `orders.items[].productId` with no product lookup, so counter-only
+ * SKUs (hidden from the storefront, fully counter-sellable, and their orders
+ * count) rank like anything else. Capping to ten first and letting the client
+ * discard them — which is what this did until the PR #155 review — spends
+ * slots on products that can never render, with nothing to back-fill them: a
+ * stall seller whose top ten are counter-only got an empty shelf.
+ *
+ * Live stock and minimum-quantity stay a CLIENT concern: they change by the
+ * minute and the client already has them reactively in `products.list`, so
+ * re-deriving them here would just be a staler copy.
+ *
+ * Cache discipline (the insights precedent): `since` must be an MYT-midnight
+ * epoch — every buyer on the same date sends identical args and shares one
+ * cached result, instead of a per-pageview `Date.now()` fragmenting the
+ * cache. The newest-first `take(POPULAR_SCAN_CAP)` bounds the indexed read
+ * whatever window a hand-rolled client asks for.
+ */
+export const popularProducts = query({
+	args: { retailerId: v.id("retailers"), since: v.number() },
+	handler: async (ctx, { retailerId, since }) => {
+		if (!isMytMidnight(since)) {
+			throw new ConvexError("since must be an MYT-midnight epoch");
+		}
+		const recent = await ctx.db
+			.query("orders")
+			.withIndex("by_retailer", (q) =>
+				q.eq("retailerId", retailerId).gte("_creationTime", since),
+			)
+			.order("desc")
+			.take(POPULAR_SCAN_CAP);
+		const ranked = rankPopularProducts(
+			recent.map((o) => ({ status: o.status, items: o.items })),
+		);
+		if (ranked.length === 0) return [];
+		// Exactly `list`'s visibility rules, read the same way (one indexed query
+		// over this retailer's active products, capped small) so the shelf and
+		// the grid can never disagree about what's public.
+		const listable = await ctx.db
+			.query("products")
+			.withIndex("by_retailer_active", (q) =>
+				q.eq("retailerId", retailerId).eq("active", true),
+			)
+			.filter((q) =>
+				q.and(
+					q.neq(q.field("hidden"), true),
+					q.neq(q.field("hiddenByCategory"), true),
+				),
+			)
+			.collect();
+		const listableIds = new Set<string>(listable.map((p) => p._id));
+		return ranked
+			.filter((id) => listableIds.has(id))
+			.slice(0, POPULAR_TOP_CANDIDATES);
+	},
+});
+
+/**
+ * One-shot backfill: give every legacy product (created before slugs existed)
+ * its permanent URL. Idempotent (rows with a slug are skipped) and batched +
+ * self-scheduling to stay inside transaction limits. Run once per deployment
+ * after the schema lands:
+ *
+ *   npx convex run products:backfillProductSlugs
+ *
+ * Until it has run, slug-less rows stay reachable through `effectiveSlug` (the
+ * derived name-slug arm of `getPublicBySlug`) — nothing 404s, the URLs just
+ * aren't stored yet. Run it right after the deploy anyway: `ensureUniqueProductSlug`
+ * only sees STORED slugs, so until every row has one a brand-new product can be
+ * handed the slug a legacy row is currently answering to, and the older product's
+ * link would resolve to the newer one.
+ */
+export const backfillProductSlugs = internalMutation({
+	args: { cursor: v.optional(v.string()) },
+	handler: async (ctx, { cursor }): Promise<void> => {
+		const page = await ctx.db
+			.query("products")
+			.paginate({ numItems: 25, cursor: cursor ?? null });
+		for (const row of page.page) {
+			if (row.slug !== undefined) continue;
+			const slug = await ensureUniqueProductSlug(
+				ctx,
+				row.retailerId,
+				row.name,
+				row._id,
+			);
+			await ctx.db.patch(row._id, { slug });
+		}
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(0, internal.products.backfillProductSlugs, {
+				cursor: page.continueCursor,
+			});
+		}
+	},
+});
+
+/**
+ * One-shot backfill for `products.orderedAt` (86eyjmf4q). Existing products
+ * predate the stamp, so without this every one of them would look "never
+ * ordered" and `deletePermanently` would happily erase a product that live
+ * order lines still reference. Run once per deployment after the schema lands:
+ *
+ *   npx convex run products:backfillProductOrderedAt
+ *
+ * Paginates ORDERS (the source of truth) rather than products, since the fact
+ * lives in `orders.items[]` and there's no index from a product back to its
+ * orders. Batched + self-scheduling to stay inside transaction limits, like the
+ * slug backfill above. Converges on the EARLIEST order per product, because
+ * page order is not chronological — the stamp is only read as a boolean today,
+ * but a half-true timestamp is the kind of thing a later feature trips over.
+ */
+export const backfillProductOrderedAt = internalMutation({
+	args: { cursor: v.optional(v.string()) },
+	handler: async (ctx, { cursor }): Promise<void> => {
+		const page = await ctx.db
+			.query("orders")
+			.paginate({ numItems: 25, cursor: cursor ?? null });
+		for (const order of page.page) {
+			// Cancelled orders count: the line still names the product, so erasing
+			// it would orphan that reference exactly as a live order would.
+			const orderedAt = order.createdAt;
+			const seen = new Set<string>();
+			for (const item of order.items) {
+				if (seen.has(item.productId)) continue;
+				seen.add(item.productId);
+				const product = await ctx.db.get(item.productId);
+				if (!product) continue; // already erased with its store
+				if (product.orderedAt !== undefined && product.orderedAt <= orderedAt)
+					continue;
+				await ctx.db.patch(item.productId, { orderedAt });
+			}
+		}
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.products.backfillProductOrderedAt,
+				{ cursor: page.continueCursor },
+			);
+		}
 	},
 });

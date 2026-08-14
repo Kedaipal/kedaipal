@@ -16,8 +16,46 @@ the full inbox. See [`manual-subscription.md`](./manual-subscription.md)
 
 ## Decisions (locked with the CTO)
 
-- **Buckets are fulfilment-based**, not a mix of axes: **All / New (pending) /
+- **Buckets are fulfilment-based**, not a mix of axes: **All / New /
   In progress (confirmed·packed·shipped) / Completed (delivered) / Cancelled**.
+- **"New" means "the seller hasn't dealt with it yet."** That was originally
+  synonymous with `pending`, because an order sat there until the buyer's
+  WhatsApp message confirmed it. The confirmation push (86eyf1rck) commits
+  storefront orders as `confirmed` at checkout, which would have made
+  `counts.new` permanently 0 and silently deleted the whole unseen-order
+  signal — the Home tile, the "needs attention" row, the New chip, and the
+  amber-at-4h/red-at-24h age escalation that exists precisely because this is
+  the "missed an order" window. So New is now **`pending` OR unseen**:
+
+  ```
+  isUnseenOrder(o) = o.status === "confirmed"
+                  && o.confirmationPushStatus !== undefined  // took the push path
+                  && o.seenAt === undefined                  // seller hasn't opened it
+  ```
+
+  Gating on `confirmationPushStatus` rather than status alone is what makes
+  this backfill-free: it matches exactly the orders that skipped `pending`, so
+  the historical `confirmed` backlog can't flood the bucket, and counter orders
+  (also born confirmed, but rung up by a seller standing right there) never
+  carry the flag. `orders.seenAt` is stamped set-if-unset by `orders.markSeen`
+  when the seller opens the order — the moment they've actually seen it. It
+  deliberately does **not** bump `updatedAt`, which would corrupt the
+  time-in-status badge.
+- **The nav badge counts New, not the pipeline** ([`86eyjfazz`](https://app.clickup.com/t/86eyjfazz)) —
+  the Orders badge in the sidebar + mobile bottom nav used to render
+  `pending + confirmed`, which counts orders the seller has already accepted and
+  is actively working, so on a healthy store it only ever climbed. A badge is a
+  **notification**: it must mean "N things you haven't looked at" and working
+  through them must drive it to zero, or the seller learns to ignore the one
+  surface meant to tell them an order landed. It now reads
+  `orders.countActionable.newOrders` — the same `pending`-OR-unseen definition
+  above — so the **badge, the New chip and the Home "New orders" tile share one
+  rule** and can't disagree. It's computed from rows `countActionable` already
+  collects (no extra read), and tapping it navigates to `/app/orders?bucket=new`
+  so the seller lands on exactly what was counted — but only while the count is
+  non-zero, so the tab stays plain navigation the rest of the time.
+  `pending`/`confirmed` stay on the payload as raw status counts: the order
+  toasts (`useOrderToastNotifications`) announce on their deltas.
 - **Payment status is an orthogonal filter + badge, NOT a bucket** — an order can
   be "confirmed" *and* "unpaid", so pulling it into its own bucket would yank it
   out of In-progress while still being worked. Payment is a multi-select filter.
@@ -109,8 +147,17 @@ returns **the filtered page plus the per-bucket counts in a single subscription*
 
 Shared pure logic lives in **`convex/lib/orderBuckets.ts`** (no Convex imports —
 imported by both the query and the UI, same as `isMockupGateClosed`):
-`BUCKET_STATUSES`, `statusToBucket`, `INBOX_BUCKETS`, and the time-in-status
-helpers (`statusAgeMs`, `formatStatusAge`, `statusAgeSeverity`).
+`BUCKET_STATUSES`, `statusToBucket`, **`orderBucket`**, **`isUnseenOrder`**,
+`INBOX_BUCKETS`, and the time-in-status helpers (`statusAgeMs`,
+`formatStatusAge`, `statusAgeSeverity`).
+
+`statusToBucket(status)` is the pure status mapping; **`orderBucket(order)`** is
+what anything seller-facing must use — it also routes an unseen push-path order
+to "New". Both the counts loop in `searchOrders` and the inbox predicate in
+`orderInboxFilter.ts` go through `orderBucket`, so a chip count can never
+disagree with the list beneath it, and an order is in exactly one bucket.
+`statusAgeSeverity` accepts either a bare status (legacy callers) or the order,
+and escalates for `pending` **or** unseen.
 
 ## Frontend
 
@@ -181,6 +228,11 @@ helpers (`statusAgeMs`, `formatStatusAge`, `statusAgeSeverity`).
   skips no-ops, skips mockup-gated when bulking to packed, bulk-cancel restores
   stock, foreign-order batch is rejected (owner-only).
 - `order-bulk-bar.test.tsx` — count + clear + the "Mark as" action menu.
+- `convex/orders.test.ts` → "the nav badge count …" — `countActionable.newOrders`
+  tracks the New bucket: counts pending + unseen push orders, drops as each is
+  opened, never re-inflates as a seen order advances, and a legacy confirmed
+  order is never counted. `bottom-nav.test.tsx` covers the badge value + that it
+  lands on `?bucket=new` (and doesn't filter when there's nothing new).
 
 ## Phase 2 — bulk actions (shipped)
 

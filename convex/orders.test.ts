@@ -1,8 +1,8 @@
 /// <reference types="vite/client" />
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { api } from "./_generated/api";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { todayMytMidnight } from "./lib/fulfilmentDate";
 import { sortInboxOrders } from "./lib/orderInboxFilter";
@@ -76,6 +76,7 @@ async function seedProduct(
 		blockWhenOutOfStock: boolean;
 		requiresProof: boolean;
 		minNoticeDays: number;
+		parcelWeightG: number;
 	}> = {},
 ): Promise<Id<"products">> {
 	const asUser = t.withIdentity({ subject: userId });
@@ -93,6 +94,7 @@ async function seedProduct(
 				optionValues: [],
 				price: overrides.price ?? 12000,
 				onHand: overrides.stock ?? 100,
+				parcelWeightG: overrides.parcelWeightG,
 			},
 		],
 	});
@@ -233,10 +235,12 @@ describe("orders", () => {
 				],
 			});
 		});
-		const methods = await t.query(api.orders.getPaymentMethods, { token: await tk(t, shortId) });
-		expect(methods).toHaveLength(2);
-		expect(methods?.[0].label).toBe("Maybank");
-		expect(methods?.[1].bankAccountNumber).toBe("8001-2233");
+		const result = await t.query(api.orders.getPaymentMethods, { token: await tk(t, shortId) });
+		expect(result?.methods).toHaveLength(2);
+		expect(result?.methods[0].label).toBe("Maybank");
+		expect(result?.methods[1].bankAccountNumber).toBe("8001-2233");
+		// No HitPay connection on this store → the gateway path is off.
+		expect(result?.gatewayAvailable).toBe(false);
 
 		// Legacy single object is still read (synthesized into one method).
 		await t.run(async (ctx) => {
@@ -249,9 +253,9 @@ describe("orders", () => {
 			});
 		});
 		const legacy = await t.query(api.orders.getPaymentMethods, { token: await tk(t, shortId) });
-		expect(legacy).toHaveLength(1);
-		expect(legacy?.[0].label).toBe("Hong Leong");
-		expect(legacy?.[0].bankAccountNumber).toBe("9000-1111"); // trimmed
+		expect(legacy?.methods).toHaveLength(1);
+		expect(legacy?.methods[0].label).toBe("Hong Leong");
+		expect(legacy?.methods[0].bankAccountNumber).toBe("9000-1111"); // trimmed
 
 		// Unknown order → null.
 		expect(
@@ -579,7 +583,7 @@ describe("orders", () => {
 				customer: { name: "Ali", waPhone: "abc" },
 				deliveryAddress: validAddress,
 			}),
-		).rejects.toThrow(/WhatsApp number/);
+		).rejects.toThrow(/Malaysian mobile/i);
 	});
 
 	test("create decrements product stock by ordered quantity", async () => {
@@ -3267,7 +3271,7 @@ describe("orders — bulk status", () => {
 			orderIds: [o1._id, o2._id, o3._id],
 			status: "confirmed",
 		});
-		expect(res).toEqual({ updated: 2, skipped: 1 });
+		expect(res).toMatchObject({ updated: 2, skipped: 1 });
 		for (const id of [o1._id, o2._id, o3._id]) {
 			expect((await t.run((ctx) => ctx.db.get(id)))?.status).toBe("confirmed");
 		}
@@ -3297,7 +3301,7 @@ describe("orders — bulk status", () => {
 			orderIds: [plain._id, gated._id],
 			status: "packed",
 		});
-		expect(res).toEqual({ updated: 1, skipped: 1 });
+		expect(res).toMatchObject({ updated: 1, skipped: 1 });
 		expect((await t.run((ctx) => ctx.db.get(plain._id)))?.status).toBe("packed");
 		// Gated order is untouched (mockup not approved).
 		expect((await t.run((ctx) => ctx.db.get(gated._id)))?.status).toBe(
@@ -3673,6 +3677,42 @@ describe("orders — bulk hard delete", () => {
 		}
 	});
 
+	test("audits one row per erased order, filed under that order's own store", async () => {
+		// The old code wrote ONE row using whichever access happened to be last in
+		// the loop, so a batch spanning two stores filed the whole erase under the
+		// second store and named no orders at all. Per-order rows are correct across
+		// stores by construction (86eyhz189).
+		const t = setup();
+		const rA = await seedRetailer(t, USER_A);
+		const rB = await seedRetailer(t, USER_B);
+		const pA = await seedProduct(t, USER_A, rA._id, { stock: 100 });
+		const pB = await seedProduct(t, USER_B, rB._id, { stock: 100 });
+		const aIds = [await mk(t, rA._id, pA), await mk(t, rA._id, pA)];
+		const bIds = [await mk(t, rB._id, pB)];
+
+		await t
+			.withIdentity({ subject: ADMIN })
+			.mutation(api.orders.bulkDeleteOrders, { orderIds: [...aIds, ...bIds] });
+
+		const rowsFor = (retailerId: Id<"retailers">) =>
+			t.run((ctx) =>
+				ctx.db
+					.query("adminAuditLog")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+					.collect(),
+			);
+		const auditA = await rowsFor(rA._id);
+		const auditB = await rowsFor(rB._id);
+		expect(auditA.map((r) => r.targetId).sort()).toEqual([...aIds].sort());
+		expect(auditB.map((r) => r.targetId)).toEqual(bIds);
+		for (const row of [...auditA, ...auditB]) {
+			expect(row).toMatchObject({
+				adminUserId: ADMIN,
+				action: "orders.bulkDeleteOrders",
+			});
+		}
+	});
+
 	test("a plain owner cannot bulk delete — Forbidden, orders untouched", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
@@ -3749,16 +3789,22 @@ describe("orders — hard delete (admin owns the store)", () => {
 			.mutation(api.orders.deleteOrder, { orderId });
 		expect(await t.run((ctx) => ctx.db.get(orderId))).toBeNull();
 
-		// NOT audited: erasing your own store's order is an owner write
-		// (actingAsAdmin:false), and the audit log traces cross-store white-glove
-		// writes only — logAdminAction no-ops here by design.
+		// AUDITED even though this is an owner write (actingAsAdmin:false). The
+		// ordinary `logAdminAction` no-ops here — an irreversible erase uses
+		// `logDestructiveAdminAction` precisely so ownership can't suppress the
+		// trace, since the deleted row can't be asked who removed it (86eyhz189).
 		const audit = await t.run((ctx) =>
 			ctx.db
 				.query("adminAuditLog")
 				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
 				.collect(),
 		);
-		expect(audit).toHaveLength(0);
+		expect(audit).toHaveLength(1);
+		expect(audit[0]).toMatchObject({
+			adminUserId: USER_A,
+			action: "orders.hardDelete",
+			targetId: orderId,
+		});
 	});
 
 	test("an admin can bulk hard-delete orders in a store they own", async () => {
@@ -3776,6 +3822,21 @@ describe("orders — hard delete (admin owns the store)", () => {
 		for (const id of ids) {
 			expect(await t.run((ctx) => ctx.db.get(id))).toBeNull();
 		}
+
+		// One audit row PER erased order (not one per batch), own-store included —
+		// so the log answers WHICH orders are gone, not just how many.
+		const audit = await t.run((ctx) =>
+			ctx.db
+				.query("adminAuditLog")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.collect(),
+		);
+		expect(audit).toHaveLength(2);
+		expect(audit.map((r) => r.action)).toEqual([
+			"orders.bulkDeleteOrders",
+			"orders.bulkDeleteOrders",
+		]);
+		expect(audit.map((r) => r.targetId).sort()).toEqual([...ids].sort());
 	});
 });
 
@@ -4912,6 +4973,328 @@ describe("orders — delivery charge", () => {
 	});
 });
 
+describe("orders — weight/zone delivery charge (86eyeea1n)", () => {
+	const WEIGHT_CONFIG: {
+		mode: "weight";
+		zones: {
+			name: string;
+			states: string[];
+			bands: { maxKg: number; fee: number }[];
+			freeAbove?: number;
+		}[];
+		onOutOfBands: "block" | "arrange";
+		onUnpriceable: "block" | "arrange";
+	} = {
+		mode: "weight",
+		zones: [
+			{
+				name: "West Malaysia",
+				states: ["Selangor", "WP Kuala Lumpur"],
+				bands: [
+					{ maxKg: 3, fee: 800 },
+					{ maxKg: 10, fee: 2000 },
+				],
+			},
+			{
+				name: "East Malaysia",
+				states: ["Sabah", "Sarawak"],
+				bands: [{ maxKg: 5, fee: 6600 }],
+				freeAbove: 100000,
+			},
+		],
+		onOutOfBands: "arrange",
+		onUnpriceable: "arrange",
+	};
+
+	async function seedWeightRetailer(
+		t: ReturnType<typeof setup>,
+		config: typeof WEIGHT_CONFIG = WEIGHT_CONFIG,
+	) {
+		const retailer = await seedRetailer(t, USER_A);
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.retailers.updateSettings, { deliveryConfig: config });
+		return retailer;
+	}
+
+	/** The single-variant product's variantId (the public quote takes cart lines). */
+	async function variantOf(
+		t: ReturnType<typeof setup>,
+		productId: Id<"products">,
+	): Promise<Id<"productVariants">> {
+		return t.run(async (ctx) => {
+			const vr = await ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", productId))
+				.first();
+			if (!vr) throw new Error("variant missing");
+			return vr._id;
+		});
+	}
+
+	test("state + summed weight pick the fee — with a COORDINATE-LESS manual address (the mode's whole point)", async () => {
+		const t = setup();
+		const retailer = await seedWeightRetailer(t);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			parcelWeightG: 500,
+		});
+
+		// 3 × 500 g = 1.5 kg → West "up to 3 kg" band. validAddress carries a
+		// state but NO lat/lng — weight mode must price it anyway.
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 3 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: validAddress,
+		});
+		expect(created.deliveryFee).toBe(800);
+		expect(created.deliveryFeePending).toBeUndefined();
+
+		// Seller path: full snapshot incl. the zone/weight audit.
+		const sellerOrder = await t
+			.withIdentity({ subject: USER_A })
+			.query(api.orders.get, { shortId: created.shortId });
+		expect(sellerOrder?.deliverySnapshot).toMatchObject({
+			fee: 800,
+			mode: "weight",
+			zoneName: "West Malaysia",
+			chargeableKg: 1.5,
+			bandMaxKg: 3,
+		});
+		expect(sellerOrder?.total).toBe(3 * 12000 + 800);
+
+		// Buyer path: fee mirror only, snapshot stripped (same posture as radius).
+		const buyerOrder = await t.query(api.orders.get, {
+			token: await tk(t, created.shortId),
+		});
+		expect(buyerOrder?.deliveryFee).toBe(800);
+		expect(buyerOrder?.deliverySnapshot).toBeUndefined();
+	});
+
+	test("unserved state on an 'arrange' store lands fee-pending with the frozen reason", async () => {
+		const t = setup();
+		const retailer = await seedWeightRetailer(t);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			parcelWeightG: 500,
+		});
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: { ...validAddress, state: "Kelantan" },
+		});
+		expect(created.deliveryFee).toBeUndefined();
+		expect(created.deliveryFeePending).toBe(true);
+		const sellerOrder = await t
+			.withIdentity({ subject: USER_A })
+			.query(api.orders.get, { shortId: created.shortId });
+		expect(sellerOrder?.deliveryFeePending).toBe(true);
+		expect(sellerOrder?.deliveryFeePendingReason).toBe("unserved_state");
+	});
+
+	test("'block' policies refuse checkout with cause-true messages", async () => {
+		const t = setup();
+		const retailer = await seedWeightRetailer(t, {
+			...WEIGHT_CONFIG,
+			onOutOfBands: "block",
+			onUnpriceable: "block",
+		});
+		const weighted = await seedProduct(t, USER_A, retailer._id, {
+			parcelWeightG: 6000,
+			name: "Frozen bundle",
+		});
+		const weightless = await seedProduct(t, USER_A, retailer._id, {
+			name: "No-weight item",
+		});
+		const base = {
+			retailerId: retailer._id,
+			currency: "MYR",
+			channel: "whatsapp" as const,
+			customer,
+			deliveryMethod: "delivery" as const,
+		};
+		// 2 × 6 kg = 12 kg > the 10 kg last band → overweight.
+		await expect(
+			t.mutation(api.orders.create, {
+				...base,
+				items: [{ productId: weighted, quantity: 2 }],
+				deliveryAddress: validAddress,
+			}),
+		).rejects.toThrow(/heavier than the store's delivery rates/);
+		// Unserved state names the state.
+		await expect(
+			t.mutation(api.orders.create, {
+				...base,
+				items: [{ productId: weighted, quantity: 1 }],
+				deliveryAddress: { ...validAddress, state: "Kelantan" },
+			}),
+		).rejects.toThrow(/doesn't deliver to Kelantan/);
+		// A weightless item can't be priced.
+		await expect(
+			t.mutation(api.orders.create, {
+				...base,
+				items: [{ productId: weightless, quantity: 1 }],
+				deliveryAddress: validAddress,
+			}),
+		).rejects.toThrow(/can't price delivery/);
+	});
+
+	test("a custom / price-on-quote line makes the cart unpriceable (never silently underweighed)", async () => {
+		const t = setup();
+		const retailer = await seedWeightRetailer(t);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const productId = await asUser.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Custom hamper",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			blockWhenOutOfStock: false,
+			requiresProof: true,
+			variants: [
+				{ optionValues: [], price: 12000, onHand: 0, parcelWeightG: 500 },
+				{
+					optionValues: [],
+					price: 0,
+					onHand: 0,
+					isCustom: true,
+					customLabel: "Bespoke",
+				},
+			],
+		});
+		const rows = await t.run(async (ctx) =>
+			ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", productId))
+				.collect(),
+		);
+		const customVariant = rows.find((r) => r.isCustom);
+		if (!customVariant) throw new Error("custom variant missing");
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, variantId: customVariant._id, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: validAddress,
+		});
+		expect(created.deliveryFeePending).toBe(true);
+		const sellerOrder = await t
+			.withIdentity({ subject: USER_A })
+			.query(api.orders.get, { shortId: created.shortId });
+		expect(sellerOrder?.deliveryFeePendingReason).toBe("custom_item");
+	});
+
+	test("per-zone freeAbove ships free at the boundary", async () => {
+		const t = setup();
+		const retailer = await seedWeightRetailer(t);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			parcelWeightG: 500,
+			price: 50000,
+		});
+		// 2 × RM500 = RM1,000 == East's freeAbove → free.
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 2 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: { ...validAddress, state: "Sabah" },
+		});
+		expect(created.deliveryFee).toBeUndefined();
+		expect(created.deliveryFeePending).toBeUndefined();
+		const order = await t.query(api.orders.get, {
+			token: await tk(t, created.shortId),
+		});
+		expect(order?.total).toBe(order?.subtotal);
+	});
+
+	test("address re-price follows the ZONE: Selangor → Sabah re-weighs and re-prices; unserved flips to fee-pending", async () => {
+		const t = setup();
+		const retailer = await seedWeightRetailer(t);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			parcelWeightG: 500,
+		});
+		const created = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 3 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: validAddress,
+		});
+		expect(created.deliveryFee).toBe(800);
+		const token = await tk(t, created.shortId);
+
+		// Selangor → Sabah: same 1.5 kg, East zone's band prices it.
+		await t.mutation(api.orders.updateDeliveryAddress, {
+			token,
+			deliveryAddress: { ...validAddress, state: "Sabah" },
+		});
+		let order = await t.query(api.orders.get, { token });
+		expect(order?.deliveryFee).toBe(6600);
+		expect(order?.total).toBe(3 * 12000 + 6600);
+
+		// Sabah → Kelantan (unserved, arrange): fee cleared, hold opens.
+		await t.mutation(api.orders.updateDeliveryAddress, {
+			token,
+			deliveryAddress: { ...validAddress, state: "Kelantan" },
+		});
+		order = await t.query(api.orders.get, { token });
+		expect(order?.deliveryFee).toBeUndefined();
+		expect(order?.deliveryFeePending).toBe(true);
+		expect(order?.total).toBe(3 * 12000);
+		const sellerOrder = await t
+			.withIdentity({ subject: USER_A })
+			.query(api.orders.get, { shortId: created.shortId });
+		expect(sellerOrder?.deliveryFeePendingReason).toBe("unserved_state");
+	});
+
+	test("the public delivery.quote prices by state + cart lines and strips zone internals", async () => {
+		const t = setup();
+		const retailer = await seedWeightRetailer(t);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			parcelWeightG: 500,
+		});
+		const variantId = await variantOf(t, productId);
+
+		const priced = await t.query(api.delivery.quote, {
+			retailerId: retailer._id,
+			subtotal: 24000,
+			state: "Selangor",
+			items: [{ variantId, quantity: 2 }],
+		});
+		expect(priced).toEqual({ kind: "fee", fee: 800 });
+
+		// Before any address exists (no state) the quote holds per onUnpriceable —
+		// the checkout renders "Enter address", never a fee guess.
+		const preAddress = await t.query(api.delivery.quote, {
+			retailerId: retailer._id,
+			subtotal: 24000,
+			items: [{ variantId, quantity: 2 }],
+		});
+		expect(preAddress).toEqual({ kind: "pending", reason: "no_state" });
+
+		// An unrecognized state string reads as ABSENT, never as unserved.
+		const garbageState = await t.query(api.delivery.quote, {
+			retailerId: retailer._id,
+			subtotal: 24000,
+			state: "Jakarta",
+			items: [{ variantId, quantity: 2 }],
+		});
+		expect(garbageState).toEqual({ kind: "pending", reason: "no_state" });
+	});
+});
+
 describe("per-product fulfilment notice (minNoticeDays)", () => {
 	test("a cart item's override raises the whole order's earliest date", async () => {
 		const t = setup();
@@ -5190,10 +5573,13 @@ describe("minimum order rules", () => {
 });
 
 /**
- * The rider gate: while a Lalamove booking is live AND its webhook has proven
- * itself (`lastEventAt` set), the seller's manual shipped/delivered advance is
- * refused server-side. Client-side gating alone was insufficient — the inbox
- * bulk bar reaches the same transitions with no gate at all.
+ * The rider gate: while a Lalamove booking is ACTIVE, the seller's manual
+ * shipped/delivered advance is refused server-side. Gated from the moment of
+ * BOOKING — no `lastEventAt` requirement (86eyg0n8e client rule; the
+ * confirm-gated override protects the webhook-less seller instead). Client-side
+ * gating alone was insufficient — the inbox bulk bar reaches the same
+ * transitions with no gate at all. Collection orders are never gated: their
+ * rider drives the FRONT of the flow and the order stays manual throughout.
  *
  * Why it matters beyond a stray notification: `SHIPPABLE_FROM` in
  * convex/lalamove.ts is {confirmed, packed}, so once the order reads "shipped"
@@ -5281,9 +5667,46 @@ describe("orders — Lalamove rider gate on manual advances", () => {
 		);
 	});
 
-	test("a webhook-less booking keeps manual control (documented degraded path)", async () => {
+	// The 86eyg0n8e booking-moment rule: `lastEventAt` unset (no webhook event
+	// yet — or no webhook at all) still gates, because the window between
+	// booking and the first event is exactly when a seller can click through a
+	// live trip. The override confirm is the webhook-less seller's escape.
+	test("a webhook-less booking gates too — the override confirm is the escape", async () => {
 		const t = setup();
 		const { order } = await orderWithJob(t, { status: "ongoing" });
+		await expect(
+			asA(t).mutation(api.orders.updateStatus, {
+				orderId: order._id,
+				status: "shipped",
+			}),
+		).rejects.toThrow(/Lalamove rider/);
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "shipped",
+			overrideRiderGate: true,
+		});
+		expect((await t.run((ctx) => ctx.db.get(order._id)))?.status).toBe(
+			"shipped",
+		);
+	});
+
+	// Collection orders (86eyg0n8e): the rider collects FROM the buyer — the
+	// webhook moves the JOB only, so the seller advances the order by hand
+	// throughout and the rider gate must never fire (judged off the ORDER's
+	// frozen deliveryDirection). collectedAt is stamped so the collection gate
+	// itself is open and this isolates the rider gate.
+	test("a collection order is never rider-gated, even with an active job", async () => {
+		const t = setup();
+		const { order } = await orderWithJob(t, {
+			status: "picked_up",
+			lastEventAt: 1_753_500_000_000,
+		});
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order._id, {
+				deliveryDirection: "collection",
+				collectedAt: 1_753_500_000_000,
+			});
+		});
 		await asA(t).mutation(api.orders.updateStatus, {
 			orderId: order._id,
 			status: "shipped",
@@ -5397,7 +5820,12 @@ describe("orders — Lalamove rider gate on manual advances", () => {
 			orderIds: [gated._id, plain._id],
 			status: "shipped",
 		});
-		expect(res).toEqual({ updated: 1, skipped: 1 });
+		expect(res).toEqual({
+			updated: 1,
+			skipped: 1,
+			skippedAwaitingCollection: 0,
+			skippedRiderManaged: 1,
+		});
 		expect((await t.run((ctx) => ctx.db.get(gated._id)))?.status).toBe("packed");
 		expect((await t.run((ctx) => ctx.db.get(plain._id)))?.status).toBe(
 			"shipped",
@@ -5626,5 +6054,1401 @@ describe("orders — shipment tracking is delivery-only (PR #151 review)", () =>
 		expect(updated?.status).toBe("shipped");
 		expect(updated?.courierName).toBeUndefined();
 		expect(updated?.trackingNo).toBeUndefined();
+	});
+});
+
+describe("orders — confirmation push at create (86eyf1rck)", () => {
+	afterEach(() => {
+		delete process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE;
+		delete process.env.WHATSAPP_CHECKOUT_PHONE;
+	});
+
+	async function createWith(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+		waPhone?: string,
+	) {
+		return t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone },
+			deliveryAddress: validAddress,
+		});
+	}
+
+	async function orderBy(t: ReturnType<typeof setup>, shortId: string) {
+		return t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+	}
+
+	test("template env + phone → committed as confirmed, activation stamped, customer linked", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const result = await createWith(t, retailer._id, productId, "60123456789");
+		expect(result.confirmedAtCreate).toBe(true);
+
+		const order = await orderBy(t, result.shortId);
+		expect(order?.status).toBe("confirmed");
+		expect(order?.customerId).toBeDefined();
+		// Timeline keeps both beats: placed, then confirmed at checkout.
+		const events = await t.run(async (ctx) =>
+			ctx.db
+				.query("orderEvents")
+				.filter((q) => q.eq(q.field("orderId"), order!._id))
+				.collect(),
+		);
+		expect(events.map((e) => e.status)).toEqual(["pending", "confirmed"]);
+		// First confirmed order activates the store (same milestone as the legacy
+		// inbound-confirm path).
+		const freshRetailer = await t.run(async (ctx) => ctx.db.get(retailer._id));
+		expect(freshRetailer?.activatedAt).toBeTypeOf("number");
+	});
+
+	test("template env set but NO phone → legacy pending flow", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const result = await createWith(t, retailer._id, productId, undefined);
+		expect(result.confirmedAtCreate).toBeUndefined();
+		expect((await orderBy(t, result.shortId))?.status).toBe("pending");
+	});
+
+	test("template env unset → degrades to today's pending + wa.me flow even with a phone", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const result = await createWith(t, retailer._id, productId, "60123456789");
+		expect(result.confirmedAtCreate).toBeUndefined();
+		const order = await orderBy(t, result.shortId);
+		expect(order?.status).toBe("pending");
+		expect(order?.confirmationPushStatus).toBeUndefined();
+	});
+
+	test("local-format MY number is normalized to the inbound (60…) form", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await createWith(
+			t,
+			retailer._id,
+			productId,
+			"012-345 6789",
+		);
+		expect((await orderBy(t, shortId))?.customer.waPhone).toBe("60123456789");
+	});
+
+	test("junk phone is rejected, and never told to add a country code", async () => {
+		// The field wears a fixed `+60` plate, so "8–15 digits, with country code"
+		// (the loose normalizer's own message) would contradict the badge the
+		// buyer is looking at. `assertValidMyMobile` owns one message (86eyknr2r).
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await expect(
+			createWith(t, retailer._id, productId, "12345"),
+		).rejects.toThrow(/Malaysian mobile/i);
+		await expect(
+			createWith(t, retailer._id, productId, "not-a-phone"),
+		).rejects.toThrow(/Malaysian mobile/i);
+	});
+
+	test("get serves checkoutPhone for the failed-push recovery card (confirmed order)", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		process.env.WHATSAPP_CHECKOUT_PHONE = "601155555555";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await createWith(
+			t,
+			retailer._id,
+			productId,
+			"60123456789",
+		);
+		const order = await orderBy(t, shortId);
+
+		// Push believed sent → checkoutPhone still served (Open-WhatsApp anchor).
+		await t.mutation(internal.orders.recordConfirmationPush, {
+			orderId: order!._id,
+			status: "sent",
+			wamid: "wamid.X1",
+		});
+		let viewed = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(viewed?.status).toBe("confirmed");
+		expect(viewed?.checkoutPhone).toBe("601155555555");
+		expect(viewed?.confirmationPushStatus).toBe("sent");
+
+		// Push failed → the manual Send card needs the wa.me target.
+		await t.mutation(internal.orders.markConfirmationPushFailed, {
+			wamid: "wamid.X1",
+		});
+		viewed = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(viewed?.confirmationPushStatus).toBe("failed");
+		expect(viewed?.checkoutPhone).toBe("601155555555");
+	});
+
+	test("get hides checkoutPhone on a confirmed legacy order (no push state)", async () => {
+		process.env.WHATSAPP_CHECKOUT_PHONE = "601155555555";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await createWith(
+			t,
+			retailer._id,
+			productId,
+			"60123456789",
+		);
+		const order = await orderBy(t, shortId);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order!._id, { status: "confirmed" });
+		});
+		const viewed = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(viewed?.checkoutPhone).toBeUndefined();
+	});
+});
+
+describe("orders — buyer repairs their number after a failed push (86eyf1rck)", () => {
+	afterEach(() => {
+		delete process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE;
+	});
+
+	/** Order committed via the push path, then stamped as a failed push. */
+	async function seedFailedPush(t: ReturnType<typeof setup>) {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			// Typo: 019… instead of the buyer's real 012…
+			customer: { name: "Ali", waPhone: "0199999999" },
+			deliveryAddress: validAddress,
+		});
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		await t.mutation(internal.orders.recordConfirmationPush, {
+			orderId: order!._id,
+			status: "failed",
+			failureKind: "unreachable",
+		});
+		return { retailer, shortId, orderId: order!._id, staleCustomerId: order!.customerId! };
+	}
+
+	test("corrects the number, moves the CRM history, and re-queues the push", async () => {
+		const t = setup();
+		const { shortId, orderId, staleCustomerId } = await seedFailedPush(t);
+
+		await t.mutation(api.orders.updateBuyerPhone, {
+			token: await tk(t, shortId),
+			waPhone: "012-345 6789",
+		});
+
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		// Normalized to the inbound form, and back in flight (not stuck failed).
+		expect(order?.customer.waPhone).toBe("60123456789");
+		expect(order?.confirmationPushStatus).toBe("sending");
+		expect(order?.confirmationPushFailureKind).toBeUndefined();
+		// A late statuses webhook for the OLD message can't re-fail this order.
+		expect(order?.confirmationPushWamid).toBeUndefined();
+
+		// CRM: the order moved off the typo'd record onto the real one.
+		expect(order?.customerId).toBeDefined();
+		expect(order?.customerId).not.toBe(staleCustomerId);
+		const stale = await t.run(async (ctx) => ctx.db.get(staleCustomerId));
+		expect(stale?.orderCount).toBe(0);
+		expect(stale?.totalSpent).toBe(0);
+		const real = await t.run(async (ctx) => ctx.db.get(order!.customerId!));
+		expect(real?.waPhone).toBe("60123456789");
+		expect(real?.orderCount).toBe(1);
+		expect(real?.totalSpent).toBe(12000);
+	});
+
+	test("rejects an invalid number", async () => {
+		const t = setup();
+		const { shortId } = await seedFailedPush(t);
+		await expect(
+			t.mutation(api.orders.updateBuyerPhone, {
+				token: await tk(t, shortId),
+				waPhone: "03-1234 5678",
+			}),
+		).rejects.toThrow(/Malaysian mobile/);
+	});
+
+	test("rejects re-submitting the same number that already failed", async () => {
+		const t = setup();
+		const { shortId } = await seedFailedPush(t);
+		await expect(
+			t.mutation(api.orders.updateBuyerPhone, {
+				token: await tk(t, shortId),
+				waPhone: "0199999999",
+			}),
+		).rejects.toThrow(/same number/);
+	});
+
+	test("is closed unless the push actually failed — a healthy order's number can't be rewritten", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		// status is "sending" straight out of create — not a repairable state.
+		await expect(
+			t.mutation(api.orders.updateBuyerPhone, {
+				token: await tk(t, shortId),
+				waPhone: "0117654321",
+			}),
+		).rejects.toThrow(/can't be changed/);
+
+		const orderId = await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			return o!._id;
+		});
+		await t.mutation(internal.orders.recordConfirmationPush, {
+			orderId,
+			status: "sent",
+			wamid: "wamid.OK",
+		});
+		await expect(
+			t.mutation(api.orders.updateBuyerPhone, {
+				token: await tk(t, shortId),
+				waPhone: "0117654321",
+			}),
+		).rejects.toThrow(/can't be changed/);
+	});
+
+	test("an unknown token can't reach another order", async () => {
+		const t = setup();
+		await seedFailedPush(t);
+		await expect(
+			t.mutation(api.orders.updateBuyerPhone, {
+				token: "__no_such_order__",
+				waPhone: "012-345 6789",
+			}),
+		).rejects.toThrow(/not found/);
+	});
+});
+
+describe("orders — deferred push for non-final totals (86eyfq0w5)", () => {
+	// Fake timers: scheduled actions must NOT auto-fire (the suite asserts WHAT
+	// was scheduled via _scheduled_functions, then runs actions manually).
+	beforeEach(() => {
+		vi.useFakeTimers();
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		process.env.WHATSAPP_ACCESS_TOKEN = "test-token";
+		process.env.WHATSAPP_PHONE_NUMBER_ID = "test-phone-id";
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+		delete process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE;
+	});
+
+	/** Names of not-yet-run scheduled functions matching `needle`. */
+	async function scheduled(t: ReturnType<typeof setup>, needle: string) {
+		return t.run(async (ctx) => {
+			const rows = await ctx.db.system.query("_scheduled_functions").collect();
+			return rows
+				.filter(
+					(r) => r.state.kind === "pending" && r.name.includes(needle),
+				)
+				.map((r) => r.name);
+		});
+	}
+
+	function installWamidFetchMock(wamid: string) {
+		const calls: Array<{ url: string; body: unknown }> = [];
+		const original = globalThis.fetch;
+		globalThis.fetch = vi.fn(async (url: unknown, init?: RequestInit) => {
+			const body = init?.body ? JSON.parse(init.body as string) : null;
+			calls.push({ url: String(url), body });
+			if (String(url).includes("graph.facebook.com")) {
+				return new Response(JSON.stringify({ messages: [{ id: wamid }] }), {
+					status: 200,
+				});
+			}
+			return new Response("{}", { status: 200 });
+		}) as unknown as typeof fetch;
+		return {
+			waCalls: () => calls.filter((c) => c.url.includes("graph.facebook.com")),
+			restore: () => {
+				globalThis.fetch = original;
+			},
+		};
+	}
+
+	async function orderIdOf(t: ReturnType<typeof setup>, shortId: string) {
+		return t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			if (!o) throw new Error("order missing");
+			return o._id;
+		});
+	}
+
+	/** Storefront order for a requiresProof (price-on-quote gate) product. */
+	async function mockupOrder(
+		t: ReturnType<typeof setup>,
+		opts: { feePending?: boolean } = {},
+	) {
+		const retailer = await seedRetailer(t, USER_A);
+		if (opts.feePending) {
+			await t.run(async (ctx) => {
+				await ctx.db.patch(retailer._id, {
+					businessAddress: {
+						label: "Kedai, Semenyih, Selangor",
+						latitude: 2.9073303,
+						longitude: 101.8333674,
+					},
+					deliveryConfig: {
+						mode: "radius",
+						bands: [{ maxKm: 5, fee: 500 }],
+						outOfRange: "arrange",
+					},
+				});
+			});
+		}
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			requiresProof: true,
+			blockWhenOutOfStock: false,
+		});
+		const result = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		return { retailer, ...result, orderId: await orderIdOf(t, result.shortId) };
+	}
+
+	test("mockup order COMMITS at create (no wa.me anywhere) with the push deferred, not scheduled", async () => {
+		const t = setup();
+		const { orderId, confirmedAtCreate } = await mockupOrder(t);
+		// The bug this ticket kills: this used to fall back to pending + ?send=1.
+		expect(confirmedAtCreate).toBe(true);
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.status).toBe("confirmed");
+		expect(order?.mockupStatus).toBe("pending");
+		expect(order?.confirmationPushStatus).toBe("deferred");
+		// Nothing queued — the price isn't final, so no message may exist yet.
+		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toEqual([]);
+	});
+
+	test("fee-pending order commits with the push deferred too", async () => {
+		const t = setup();
+		const { orderId, confirmedAtCreate } = await mockupOrder(t, {
+			feePending: true,
+		});
+		expect(confirmedAtCreate).toBe(true);
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.status).toBe("confirmed");
+		expect(order?.deliveryFeePending).toBe(true);
+		expect(order?.confirmationPushStatus).toBe("deferred");
+		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toEqual([]);
+	});
+
+	test("standard final-total order still pushes at create", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		const orderId = await orderIdOf(t, shortId);
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.confirmationPushStatus).toBe("sending");
+		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toHaveLength(1);
+	});
+
+	test("mockup approval fires the deferred template with the final quoted total — and NOT the free-form prompt", async () => {
+		const t = setup();
+		const { orderId, shortId } = await mockupOrder(t);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.orders.submitMockup, {
+			orderId,
+			storageIds: ["m1"],
+			quotedAmount: 5000,
+		});
+		await t.mutation(api.orders.approveMockup, { token: await tk(t, shortId) });
+
+		// The gate-open transaction CLAIMED the push (deferred → sending) and
+		// scheduled it — not the legacy prompt. The claim being transactional is
+		// the double-send guard: a racing second gate event serializes after
+		// this, sees "sending", and schedules nothing.
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(orderId)))
+				?.confirmationPushStatus,
+		).toBe("sending");
+		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toHaveLength(1);
+		expect(await scheduled(t, "notifyPaymentDue")).toEqual([]);
+
+		const fetchMock = installWamidFetchMock("wamid.DEF1");
+		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, { orderId });
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		const money = `MYR ${((order?.total ?? 0) / 100).toFixed(2)}`;
+		// Scope to THIS order's sends: scheduled jobs left over from earlier
+		// real-timer tests in this file can settle during this test's awaits and
+		// drop their (other-shortId) messages into the same global fetch mock.
+		// A free-form prompt for THIS order would still carry this shortId and
+		// fail the length check, so the "template, not prompt" claim holds.
+		const wa = fetchMock
+			.waCalls()
+			.filter((c) => JSON.stringify(c.body).includes(shortId));
+		expect(wa).toHaveLength(1);
+		const body = wa[0].body as {
+			type: string;
+			template: {
+				components: Array<{ type: string; parameters: Array<{ text: string }> }>;
+			};
+		};
+		expect(body.type).toBe("template");
+		expect(body.template.components[0].parameters.map((x) => x.text)).toEqual([
+			shortId,
+			"Test Store",
+			money,
+		]);
+		// Quote folded into the announced total.
+		expect(order?.total).toBe(12000 + 5000);
+		expect(order?.confirmationPushStatus).toBe("sent");
+		fetchMock.restore();
+	});
+
+	test("seller waiving the mockup fires the deferred push too", async () => {
+		const t = setup();
+		const { orderId } = await mockupOrder(t);
+		const asA = t.withIdentity({ subject: USER_A });
+		// Waiver needs a submitted mockup + the 48h grace elapsed since
+		// submission — submit, then backdate the submission stamp.
+		await asA.mutation(api.orders.submitMockup, {
+			orderId,
+			storageIds: ["m1"],
+			quotedAmount: 5000,
+		});
+		await t.run(async (ctx) => {
+			await ctx.db.patch(orderId, {
+				mockupSubmittedAt: Date.now() - 49 * 3600_000,
+			});
+		});
+		await asA.mutation(api.orders.waiveMockup, { orderId });
+		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toHaveLength(1);
+		expect(await scheduled(t, "notifyPaymentDue")).toEqual([]);
+	});
+
+	test("declining the custom item fires the push for the ready-made remainder; custom-only decline cancels and sends nothing", async () => {
+		// Remainder case: custom line + a standard line in one order.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const customProduct = await seedProduct(t, USER_A, retailer._id, {
+			name: "Custom cake",
+			requiresProof: true,
+			blockWhenOutOfStock: false,
+		});
+		const standardProduct = await seedProduct(t, USER_A, retailer._id, {
+			name: "Brownies box",
+		});
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [
+				{ productId: customProduct, quantity: 1 },
+				{ productId: standardProduct, quantity: 1 },
+			],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		const orderId = await orderIdOf(t, shortId);
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(orderId)))
+				?.confirmationPushStatus,
+		).toBe("deferred");
+		await t.mutation(api.orders.declineMockupItem, {
+			token: await tk(t, shortId),
+		});
+		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toHaveLength(1);
+		expect(await scheduled(t, "notifyPaymentDue")).toEqual([]);
+
+		// Custom-only case: declining everything IS a cancellation — the order's
+		// confirmation must never exist. (The action's cancelled guard is the
+		// second line of defence; here the site simply never schedules it.)
+		const t2 = setup();
+		const { orderId: soloId, shortId: soloShort } = await mockupOrder(t2);
+		await t2.mutation(api.orders.declineMockupItem, {
+			token: await tk(t2, soloShort),
+		});
+		const solo = await t2.run(async (ctx) => ctx.db.get(soloId));
+		expect(solo?.status).toBe("cancelled");
+		expect(solo?.confirmationPushStatus).toBeUndefined();
+		expect(await scheduled(t2, "notifyStorefrontOrderCreated")).toEqual([]);
+	});
+
+	test("double hold (mockup + fee) sends exactly once, after BOTH clear", async () => {
+		const t = setup();
+		const { orderId, shortId } = await mockupOrder(t, { feePending: true });
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.orders.submitMockup, {
+			orderId,
+			storageIds: ["m1"],
+			quotedAmount: 5000,
+		});
+		await t.mutation(api.orders.approveMockup, { token: await tk(t, shortId) });
+
+		// Gate 1 open, gate 2 (fee) still held → the site must NOT claim: the
+		// order stays deferred and nothing is scheduled at all.
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(orderId)))
+				?.confirmationPushStatus,
+		).toBe("deferred");
+		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toEqual([]);
+
+		// Seller sets the fee → BOTH gates now clear inside that transaction →
+		// it wins the claim and schedules the one send.
+		await asA.mutation(api.orders.setDeliveryFee, { orderId, fee: 700 });
+		expect(await scheduled(t, "notifyDeliveryFeeSet")).toEqual([]);
+		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toHaveLength(1);
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(orderId)))
+				?.confirmationPushStatus,
+		).toBe("sending");
+		const fetchMock = installWamidFetchMock("wamid.DBL1");
+		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, { orderId });
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(fetchMock.waCalls()).toHaveLength(1);
+		expect(order?.confirmationPushStatus).toBe("sent");
+		// Announced total = base + quote + fee.
+		expect(order?.total).toBe(12000 + 5000 + 700);
+		fetchMock.restore();
+	});
+
+	test("the action refuses to send while a hold is open, whoever schedules it", async () => {
+		const t = setup();
+		const { orderId } = await mockupOrder(t);
+		// Force the state a bug would need: sending-stamped but the mockup gate
+		// still closed. The claim path can't produce this; the action is the
+		// last line of defence against a wrong "Total: {{3}}" going out.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(orderId, { confirmationPushStatus: "sending" });
+		});
+		const fetchMock = installWamidFetchMock("wamid.HELD");
+		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, { orderId });
+		expect(fetchMock.waCalls()).toHaveLength(0);
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(orderId)))
+				?.confirmationPushStatus,
+		).toBe("sending");
+		fetchMock.restore();
+	});
+
+	test("cancelled while deferred → the confirmation never sends", async () => {
+		const t = setup();
+		const { orderId } = await mockupOrder(t);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.orders.updateStatus, {
+			orderId,
+			status: "cancelled",
+		});
+		// The deferred stamp is cleared on cancel — the "confirmation coming"
+		// promise must not outlive the order (the tracking card keys on it).
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(orderId)))
+				?.confirmationPushStatus,
+		).toBeUndefined();
+		const fetchMock = installWamidFetchMock("wamid.NOPE");
+		await t.action(internal.whatsapp.notifyStorefrontOrderCreated, { orderId });
+		expect(fetchMock.waCalls()).toHaveLength(0);
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(orderId)))
+				?.confirmationPushStatus,
+		).not.toBe("sent");
+		fetchMock.restore();
+	});
+
+	test("legacy flow (env unset) is untouched: pending order, free-form prompt on approval", async () => {
+		delete process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE;
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			requiresProof: true,
+			blockWhenOutOfStock: false,
+		});
+		const { shortId, confirmedAtCreate } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		expect(confirmedAtCreate).toBeUndefined();
+		const orderId = await orderIdOf(t, shortId);
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.status).toBe("pending");
+		expect(order?.confirmationPushStatus).toBeUndefined();
+		// Confirm via the legacy inbound path, then approve — the old prompt runs.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(orderId, { status: "confirmed" });
+		});
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.orders.submitMockup, {
+			orderId,
+			storageIds: ["m1"],
+			quotedAmount: 5000,
+		});
+		await t.mutation(api.orders.approveMockup, { token: await tk(t, shortId) });
+		expect(await scheduled(t, "notifyPaymentDue")).toHaveLength(1);
+		expect(await scheduled(t, "notifyStorefrontOrderCreated")).toEqual([]);
+	});
+});
+
+describe("orders — repairing a CANCELLED order's number (86eyf1rck)", () => {
+	afterEach(() => {
+		delete process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE;
+	});
+
+	test("moves the phone but never re-counts aggregates the cancel already reversed", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+
+		// A real earlier order from the SAME (typo'd) number, so a stray decrement
+		// would visibly eat its count/spend rather than just flooring at zero.
+		await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "0199999999" },
+			deliveryAddress: validAddress,
+		});
+		// The order that gets cancelled, then repaired.
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "0199999999" },
+			deliveryAddress: validAddress,
+		});
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		const typoCustomerId = order!.customerId!;
+		// Two orders on that record before anything else happens.
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(typoCustomerId)))?.orderCount,
+		).toBe(2);
+
+		// Push fails, THEN the seller cancels (which reverses this order's
+		// aggregates but leaves confirmationPushStatus alone).
+		await t.mutation(internal.orders.recordConfirmationPush, {
+			orderId: order!._id,
+			status: "failed",
+			failureKind: "unreachable",
+		});
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: order!._id,
+			status: "cancelled",
+		});
+		const afterCancel = await t.run(async (ctx) => ctx.db.get(typoCustomerId));
+		expect(afterCancel?.orderCount).toBe(1);
+		const spentAfterCancel = afterCancel!.totalSpent;
+
+		// The buyer repairs the number on the (now cancelled) order.
+		await t.mutation(api.orders.updateBuyerPhone, {
+			token: await tk(t, shortId),
+			waPhone: "012-345 6789",
+		});
+
+		const repaired = await t.run(async (ctx) => ctx.db.get(order!._id));
+		// Phone still moves, so any later contact reaches the buyer…
+		expect(repaired?.customer.waPhone).toBe("60123456789");
+		// …but the surviving order's count/spend is untouched — no second decrement.
+		const typoRecord = await t.run(async (ctx) => ctx.db.get(typoCustomerId));
+		expect(typoRecord?.orderCount).toBe(1);
+		expect(typoRecord?.totalSpent).toBe(spentAfterCancel);
+		// And a cancelled order is never credited to the new customer.
+		const newRecord = await t.run(async (ctx) =>
+			ctx.db
+				.query("customers")
+				.withIndex("by_retailer_phone", (q) =>
+					q.eq("retailerId", retailer._id).eq("waPhone", "60123456789"),
+				)
+				.unique(),
+		);
+		expect(newRecord).toBeNull();
+	});
+});
+
+describe("orders — the seller's unseen-order signal survives confirm-at-create (86eyf1rck)", () => {
+	afterEach(() => {
+		delete process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE;
+	});
+
+	test("a push-path order counts as New until the seller opens it", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		const asA = t.withIdentity({ subject: USER_A });
+		const orderId = await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			return o!._id;
+		});
+
+		// Born `confirmed`, yet the seller hasn't looked at it — so it must still
+		// register as new work, not vanish into "in progress".
+		const before = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "new",
+		});
+		expect(before.counts.new).toBe(1);
+		expect(before.counts.in_progress).toBe(0);
+		expect(before.orders.map((o) => o.shortId)).toEqual([shortId]);
+
+		await asA.mutation(api.orders.markSeen, { orderId });
+
+		const after = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "new",
+		});
+		expect(after.counts.new).toBe(0);
+		expect(after.counts.in_progress).toBe(1);
+		expect(after.orders).toHaveLength(0);
+		// Exactly one bucket at a time — it's now in the in-progress list.
+		const inProgress = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "in_progress",
+		});
+		expect(inProgress.orders.map((o) => o.shortId)).toEqual([shortId]);
+	});
+
+	test("the nav badge count (countActionable.newOrders) matches the New bucket", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const asA = t.withIdentity({ subject: USER_A });
+		const place = async () => {
+			const { shortId } = await t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer: { name: "Ali", waPhone: "60123456789" },
+				deliveryAddress: validAddress,
+			});
+			return t.run(async (ctx) => {
+				const o = await ctx.db
+					.query("orders")
+					.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+					.first();
+				return o!._id;
+			});
+		};
+		const badge = async () =>
+			(
+				await asA.query(api.orders.countActionable, {
+					retailerId: retailer._id,
+				})
+			).newOrders;
+
+		const first = await place();
+		const second = await place();
+		expect(await badge()).toBe(2);
+
+		// Opening an order retires it from the badge — the whole point: working
+		// through the orders drives the count to zero.
+		await asA.mutation(api.orders.markSeen, { orderId: first });
+		expect(await badge()).toBe(1);
+		await asA.mutation(api.orders.markSeen, { orderId: second });
+		expect(await badge()).toBe(0);
+
+		// Advancing a seen order through the pipeline never re-inflates it (the
+		// old `pending + confirmed` badge climbed here and never came back down).
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: first,
+			status: "packed",
+		});
+		expect(await badge()).toBe(0);
+
+		// And it agrees with the inbox chip it mirrors.
+		const inbox = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		expect(inbox.counts.new).toBe(0);
+	});
+
+	test("the nav badge counts a legacy pending order and ignores a worked confirmed one", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const asA = t.withIdentity({ subject: USER_A });
+		// Template env unset → legacy `pending` orders.
+		const place = async () => {
+			const { shortId } = await t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer: { name: "Ali", waPhone: "60123456789" },
+				deliveryAddress: validAddress,
+			});
+			return t.run(async (ctx) => {
+				const o = await ctx.db
+					.query("orders")
+					.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+					.first();
+				return o!._id;
+			});
+		};
+		const badge = async () =>
+			(
+				await asA.query(api.orders.countActionable, {
+					retailerId: retailer._id,
+				})
+			).newOrders;
+
+		const orderId = await place();
+		expect(await badge()).toBe(1);
+
+		// Confirming it = the seller has picked it up. A legacy confirmed order
+		// carries no `confirmationPushStatus`, so it's never "unseen".
+		await asA.mutation(api.orders.updateStatus, {
+			orderId,
+			status: "confirmed",
+		});
+		expect(await badge()).toBe(0);
+		// The raw status counts the toasts read are untouched.
+		const counts = await asA.query(api.orders.countActionable, {
+			retailerId: retailer._id,
+		});
+		expect(counts.pending).toBe(0);
+		expect(counts.confirmed).toBe(1);
+	});
+
+	test("markSeen is idempotent and never un-sets", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		const asA = t.withIdentity({ subject: USER_A });
+		const orderId = await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			return o!._id;
+		});
+		await asA.mutation(api.orders.markSeen, { orderId });
+		const first = await t.run(async (ctx) => (await ctx.db.get(orderId))?.seenAt);
+		await asA.mutation(api.orders.markSeen, { orderId });
+		expect(
+			await t.run(async (ctx) => (await ctx.db.get(orderId))?.seenAt),
+		).toBe(first);
+	});
+
+	test("markSeen refuses a store the caller doesn't own", async () => {
+		process.env.WHATSAPP_ORDER_CONFIRM_TEMPLATE = "order_confirmation_utility";
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		const orderId = await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			return o!._id;
+		});
+		await seedRetailer(t, USER_B);
+		await expect(
+			t.withIdentity({ subject: USER_B }).mutation(api.orders.markSeen, {
+				orderId,
+			}),
+		).rejects.toThrow(/forbidden/i);
+	});
+
+	test("legacy confirmed orders don't retroactively become New (no backfill needed)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		// Template env unset → legacy pending order, then confirmed as before.
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		const asA = t.withIdentity({ subject: USER_A });
+		const orderId = await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			return o!._id;
+		});
+		await asA.mutation(api.orders.updateStatus, {
+			orderId,
+			status: "confirmed",
+		});
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		// No confirmationPushStatus → never treated as unseen.
+		expect(res.counts.new).toBe(0);
+		expect(res.counts.in_progress).toBe(1);
+	});
+});
+
+describe("orders — collection gate on advanceToStage (86eyg0n8e)", () => {
+	const asA = (t: ReturnType<typeof setup>) =>
+		t.withIdentity({ subject: USER_A });
+
+	/** An order whose rider collects FROM the buyer — the goods are not with
+	 * the seller until a rider brings them in. */
+	async function collectionOrder(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		if (!order) throw new Error("no order");
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order._id, { deliveryDirection: "collection" });
+		});
+		return { retailer, order, shortId };
+	}
+
+	test("production stages are refused while the items are still with the buyer", async () => {
+		const t = setup();
+		const { order } = await collectionOrder(t);
+		// Accepting the order is NOT fulfilment — confirming stays open.
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: "default:confirmed",
+		});
+		for (const stageId of [
+			"default:packed",
+			"default:shipped",
+			"default:delivered",
+		]) {
+			await expect(
+				asA(t).mutation(api.orders.advanceToStage, {
+					orderId: order._id,
+					stageId,
+				}),
+			).rejects.toThrow(/still with your customer/i);
+		}
+	});
+
+	test("the escape lets a seller who fetched the items proceed, and stamps the arrival once", async () => {
+		const t = setup();
+		const { order, shortId } = await collectionOrder(t);
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: "default:packed",
+			markCollected: true,
+		});
+		const after = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(after?.status).toBe("packed");
+		expect(after?.collectedAt).toBeGreaterThan(0);
+
+		// Asked once: every later stage moves without the escape…
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: "default:shipped",
+		});
+		const later = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(later?.status).toBe("shipped");
+		// …and the arrival moment never moves.
+		expect(later?.collectedAt).toBe(after?.collectedAt);
+		void shortId;
+	});
+
+	test("a rider-collected order needs no escape (collectedAt already stamped)", async () => {
+		const t = setup();
+		const { order } = await collectionOrder(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(order._id, { collectedAt: Date.now() });
+		});
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: "default:packed",
+		});
+		const after = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(after?.status).toBe("packed");
+	});
+
+	test("STANDARD delivery is untouched — packing precedes the trip (regression pin)", async () => {
+		const t = setup();
+		const { order } = await plainOrderForCollectionSuite(t);
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: order._id,
+			stageId: "default:packed",
+		});
+		const after = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(after?.status).toBe("packed");
+		expect(after?.collectedAt).toBeUndefined();
+	});
+
+	/** Same seed, no direction — the control for the pin above. */
+	async function plainOrderForCollectionSuite(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		if (!order) throw new Error("no order");
+		return { retailer, order, shortId };
+	}
+});
+
+describe("orders — the collection gate holds on EVERY status write path", () => {
+	const asA = (t: ReturnType<typeof setup>) =>
+		t.withIdentity({ subject: USER_A });
+
+	async function collectionOrders(t: ReturnType<typeof setup>, n = 1) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const ids = [];
+		for (let i = 0; i < n; i++) {
+			const { shortId } = await t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+			});
+			const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+			if (!o) throw new Error("no order");
+			await t.run(async (ctx) => {
+				await ctx.db.patch(o._id, { deliveryDirection: "collection" });
+			});
+			ids.push(o._id);
+		}
+		return { retailer, ids };
+	}
+
+	test("updateStatus can't pack an order still with the buyer, but can still cancel it", async () => {
+		const t = setup();
+		const { ids } = await collectionOrders(t);
+		await expect(
+			asA(t).mutation(api.orders.updateStatus, {
+				orderId: ids[0],
+				status: "packed",
+			}),
+		).rejects.toThrow(/still with your customer/i);
+		// Cancelling is never gated — an order must always be escapable.
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: ids[0],
+			status: "cancelled",
+		});
+		const after = await t.run(async (ctx) => ctx.db.get(ids[0]));
+		expect(after?.status).toBe("cancelled");
+	});
+
+	test("bulkUpdateStatus SKIPS an un-collected order instead of failing the batch", async () => {
+		const t = setup();
+		const { ids } = await collectionOrders(t, 2);
+		// One order's goods have arrived; the other's haven't.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(ids[0], { collectedAt: Date.now() });
+		});
+		const res = await asA(t).mutation(api.orders.bulkUpdateStatus, {
+			orderIds: ids,
+			status: "packed",
+		});
+		expect(res).toMatchObject({ updated: 1, skipped: 1 });
+		const rows = await t.run(async (ctx) => [
+			await ctx.db.get(ids[0]),
+			await ctx.db.get(ids[1]),
+		]);
+		expect(rows[0]?.status).toBe("packed");
+		// Untouched (test orders start `pending`), and crucially NOT errored.
+		expect(rows[1]?.status).toBe("pending");
+	});
+
+	test("STANDARD orders bulk-pack exactly as before (regression pin)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		if (!o) throw new Error("no order");
+		const res = await asA(t).mutation(api.orders.bulkUpdateStatus, {
+			orderIds: [o._id],
+			status: "packed",
+		});
+		expect(res).toMatchObject({ updated: 1, skipped: 0 });
+	});
+});
+
+describe("orders — collection gate: the remaining edges", () => {
+	const asA = (t: ReturnType<typeof setup>) =>
+		t.withIdentity({ subject: USER_A });
+
+	/** One store, many orders — an account can only own one retailer. */
+	async function seedStore(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		return { retailer, productId };
+	}
+
+	async function order(
+		t: ReturnType<typeof setup>,
+		collection: boolean,
+		store?: { retailer: { _id: Id<"retailers"> }; productId: Id<"products"> },
+	) {
+		const { retailer, productId } = store ?? (await seedStore(t));
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		if (!o) throw new Error("no order");
+		if (collection) {
+			await t.run(async (ctx) => {
+				await ctx.db.patch(o._id, { deliveryDirection: "collection" });
+			});
+		}
+		return o;
+	}
+
+	test("markCollected is INERT on a standard order — it must never stamp arrival", async () => {
+		// collectedAt mutes the due-date badge and flips buyer copy; a standard
+		// order must never acquire it through this escape.
+		const t = setup();
+		const o = await order(t, false);
+		await asA(t).mutation(api.orders.advanceToStage, {
+			orderId: o._id,
+			stageId: "default:packed",
+			markCollected: true,
+		});
+		const after = await t.run(async (ctx) => ctx.db.get(o._id));
+		expect(after?.status).toBe("packed");
+		expect(after?.collectedAt).toBeUndefined();
+	});
+
+	test("the backfill is idempotent and never touches a standard order", async () => {
+		const t = setup();
+		const store = await seedStore(t);
+		const collectionOrder = await order(t, true, store);
+		const standardOrder = await order(t, false, store);
+		const at = 1_785_000_000_000;
+		await t.run(async (ctx) => {
+			const mk = async (orderId: typeof collectionOrder._id, dir?: string) => {
+				await ctx.db.insert("deliveryJobs", {
+					orderId,
+					retailerId: collectionOrder.retailerId,
+					provider: "lalamove" as const,
+					providerOrderId: `LLM-${orderId}`,
+					status: "completed" as const,
+					costActual: 1000,
+					quotationId: "q",
+					vehicleType: "MOTORCYCLE",
+					...(dir ? { deliveryDirection: dir as "collection" } : {}),
+					lastEventAt: at,
+					createdAt: at,
+					updatedAt: at,
+				});
+			};
+			await mk(collectionOrder._id, "collection");
+			await mk(standardOrder._id);
+		});
+
+		const first = await t.mutation(
+			internal.orders.backfillCollectionCollectedAt,
+			{},
+		);
+		expect(first.stamped).toBe(1);
+		const stamped = await t.run(async (ctx) => ctx.db.get(collectionOrder._id));
+		expect(stamped?.collectedAt).toBe(at);
+		const untouched = await t.run(async (ctx) => ctx.db.get(standardOrder._id));
+		expect(untouched?.collectedAt).toBeUndefined();
+
+		// Running twice must not move the arrival moment.
+		const second = await t.mutation(
+			internal.orders.backfillCollectionCollectedAt,
+			{},
+		);
+		expect(second.stamped).toBe(0);
+		const again = await t.run(async (ctx) => ctx.db.get(collectionOrder._id));
+		expect(again?.collectedAt).toBe(at);
+	});
+});
+
+describe("orders — fulfilment time at create (86eyg0n8e follow-up)", () => {
+	async function store(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		return { retailer, productId };
+	}
+
+	function tomorrowMidnight() {
+		// The validator's window is [today+notice, today+30] — tomorrow is
+		// always inside it regardless of when the test runs.
+		return (
+			Math.floor((Date.now() + 8 * 3600_000) / 86_400_000) * 86_400_000 -
+			8 * 3600_000 +
+			86_400_000
+		);
+	}
+
+	test("a delivery order keeps its time; the moment composes with the day", async () => {
+		const t = setup();
+		const { retailer, productId } = await store(t);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: validAddress,
+			fulfilmentDate: tomorrowMidnight(),
+			fulfilmentTimeMinutes: 15 * 60 + 30,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(o?.fulfilmentTimeMinutes).toBe(930);
+	});
+
+	test("self-collect ignores a stray time — the point's schedule governs pickup hours", async () => {
+		const t = setup();
+		const { retailer, productId } = await store(t);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: tomorrowMidnight(),
+			fulfilmentTimeMinutes: 930,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(o?.fulfilmentTimeMinutes).toBeUndefined();
+	});
+
+	test("an out-of-range time is refused, a timeless delivery order is not", async () => {
+		const t = setup();
+		const { retailer, productId } = await store(t);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryMethod: "delivery",
+				deliveryAddress: validAddress,
+				fulfilmentDate: tomorrowMidnight(),
+				fulfilmentTimeMinutes: 1440,
+			}),
+		).rejects.toThrow(/time of day/i);
+		// No time at all = the pre-existing date-only order, unchanged.
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: validAddress,
+			fulfilmentDate: tomorrowMidnight(),
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(o?.fulfilmentTimeMinutes).toBeUndefined();
 	});
 });

@@ -2,7 +2,10 @@
 // conversion, response parsing, status normalization. See lalamove.ts.
 import { createHmac } from "node:crypto";
 import { describe, expect, test } from "vitest";
+import { EARLIEST_FULFILMENT_LEAD_MINUTES } from "./fulfilmentDate";
 import {
+	MIN_SCHEDULE_LEAD_MS,
+	resolveScheduleAt,
 	buildLalamoveHeaders,
 	buildPlaceOrderBody,
 	buildQuotationBody,
@@ -440,5 +443,43 @@ describe("proof of delivery", () => {
 		expect(parsePodImages(null)).toEqual([]);
 		expect(parsePodImages({})).toEqual([]);
 		expect(parsePodImages({ data: { stops: "nope" } })).toEqual([]);
+	});
+});
+
+describe("resolveScheduleAt (86eyg0n8e follow-up)", () => {
+	const NOW = 1_785_000_000_000;
+	const MIN = 60_000;
+
+	test("a comfortably future moment schedules for exactly then", () => {
+		expect(resolveScheduleAt(NOW + 90 * MIN, NOW)).toBe(NOW + 90 * MIN);
+	});
+
+	test("past and imminent moments book now — the buyer's ask is already due", () => {
+		expect(resolveScheduleAt(NOW - 5 * MIN, NOW)).toBeUndefined();
+		expect(resolveScheduleAt(NOW, NOW)).toBeUndefined();
+		expect(resolveScheduleAt(NOW + 14 * MIN, NOW)).toBeUndefined();
+	});
+
+	test("exactly at the lead boundary schedules", () => {
+		expect(resolveScheduleAt(NOW + 15 * MIN, NOW)).toBe(NOW + 15 * MIN);
+	});
+
+	test("the threshold tracks the checkout floor — one number, not two", () => {
+		// Measured on the MY sandbox: Lalamove itself accepts +1 min and
+		// refuses only past / >30 days. This threshold is OUR product choice,
+		// and it must equal what the buyer was allowed to pick.
+		expect(MIN_SCHEDULE_LEAD_MS).toBe(
+			EARLIEST_FULFILMENT_LEAD_MINUTES * 60_000,
+		);
+	});
+
+	test("beyond Lalamove's ~30-day window books now rather than erroring", () => {
+		expect(
+			resolveScheduleAt(NOW + 31 * 24 * 60 * MIN, NOW),
+		).toBeUndefined();
+	});
+
+	test("no moment = the pre-existing immediate booking", () => {
+		expect(resolveScheduleAt(undefined, NOW)).toBeUndefined();
 	});
 });

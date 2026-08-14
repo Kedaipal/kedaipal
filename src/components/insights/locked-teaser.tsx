@@ -1,4 +1,5 @@
 import { ExternalLink, Lock, TrendingUp } from "lucide-react";
+import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../../lib/contact";
 import { KpiRow } from "./kpi-row";
 
@@ -16,8 +17,10 @@ export function LockedTeaser({
 	currency: string;
 	slug: string;
 }) {
+	const supportWa = useSupportWaNumber();
 	const upgradeUrl = buildWaContactLink(
 		`Hi, I'd like to upgrade to Pro to unlock Business insights for my Kedaipal store (/${slug}).`,
+		supportWa,
 	);
 
 	return (

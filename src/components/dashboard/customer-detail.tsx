@@ -13,6 +13,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
+import { MASK_PII } from "../../lib/analytics-privacy";
 import { formatPhone, getDisplayName } from "../../lib/customer";
 import {
 	convexErrorMessage,
@@ -51,7 +52,7 @@ export function CustomerDetail({
 	);
 
 	return (
-		<div className="flex flex-col gap-5 lg:max-w-3xl">
+		<div {...MASK_PII} className="flex flex-col gap-5 lg:max-w-3xl">
 			{/* Profile header — this page exists so the seller can recognise and
 			    reply: identity centred, WhatsApp as the hero action. */}
 			<section className="flex flex-col items-center gap-2.5 rounded-2xl border border-border bg-card p-5">

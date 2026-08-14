@@ -232,6 +232,8 @@ describe("plan gating — CRM (Pro+)", () => {
 			insights: true,
 			radiusDelivery: true,
 			delivery: true,
+			onlinePayments: true,
+			waOrderAlerts: true,
 		});
 
 		await setPlan(t, retailer._id, "starter");
@@ -244,6 +246,8 @@ describe("plan gating — CRM (Pro+)", () => {
 			insights: false,
 			radiusDelivery: false,
 			delivery: false,
+			onlinePayments: false,
+			waOrderAlerts: false,
 		});
 	});
 
@@ -265,6 +269,8 @@ describe("plan gating — CRM (Pro+)", () => {
 			insights: true,
 			radiusDelivery: true,
 		delivery: true,
+		onlinePayments: true,
+		waOrderAlerts: true,
 		});
 		// subscriptions.current (billing nav) resolves the same way.
 		const current = await asAdmin.query(api.subscriptions.current, {});
@@ -330,6 +336,30 @@ describe("plan gating — radius delivery pricing (Pro+)", () => {
 		const me = await asA.query(api.retailers.getMyRetailer);
 		expect(me?.deliveryConfig?.mode).toBe("radius");
 		expect(me?.businessAddress?.latitude).toBe(3.0);
+	});
+
+	test("weight/zone pricing is ALL-TIER — a Starter saves a courier rate card (86eyeea1n, decided with Arif 11 Aug)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await setPlan(t, retailer._id, "starter");
+
+		await asA.mutation(api.retailers.updateSettings, {
+			deliveryConfig: {
+				mode: "weight",
+				zones: [
+					{
+						name: "West Malaysia",
+						states: ["Selangor"],
+						bands: [{ maxKg: 3, fee: 800 }],
+					},
+				],
+				onOutOfBands: "arrange",
+				onUnpriceable: "arrange",
+			},
+		});
+		const me = await asA.query(api.retailers.getMyRetailer);
+		expect(me?.deliveryConfig?.mode).toBe("weight");
 	});
 
 	test("downgraded Starter can still CLEAR a radius config (never trapped)", async () => {

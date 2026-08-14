@@ -15,8 +15,14 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import type { PublicDeliveryQuote } from "../../../convex/delivery";
 import {
 	assertValidFulfilmentDate,
+	defaultFulfilmentTimeMinutes,
+	formatFulfilmentTime,
 	fulfilmentDateBounds,
+	hhmmFromMinutes,
+	MINUTES_PER_DAY,
+	minSelectableTimeMinutes,
 	mytMidnightFromYmd,
+	timeMinutesFromHhmm,
 	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
 import {
@@ -24,20 +30,31 @@ import {
 	minOrderValueShortfall,
 } from "../../../convex/lib/minOrderRules";
 import type { UseCart } from "../../hooks/useCart";
+import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { quickPickDays } from "../../lib/checkout-dates";
-import { convexErrorMessage, formatPrice } from "../../lib/format";
+import {
+	convexErrorMessage,
+	formatMyMobile,
+	formatPrice,
+} from "../../lib/format";
 import { composeCustomerNote } from "../../lib/order-note";
 import {
 	type CheckoutAddressValues,
 	checkoutFormSchema,
 	emptyAddress,
+	myWaPhoneCheckoutSchema,
 } from "../../lib/schemas";
 import { useLiveDeliveryQuote } from "../../lib/use-live-delivery-quote";
 import { submitThenFocusError } from "../forms/focus-error";
 import { useAppForm } from "../forms/form";
+import { MyPhonePrefix } from "../ui/my-phone-input";
 import { Button } from "../ui/button";
 import { AddressFieldset } from "./address-fieldset";
-import { CheckoutSummary, CheckoutTotals } from "./checkout-summary";
+import {
+	CheckoutSummary,
+	CheckoutTotals,
+	pendingTotalParts,
+} from "./checkout-summary";
 import {
 	PickupLocationRadioList,
 	PickupSummaryCard,
@@ -53,8 +70,19 @@ interface CheckoutPageProps {
 	storeName: string;
 	storeSlug: string;
 	checkoutPhone: string | undefined;
+	/** Store locale — localizes the buyer-facing PDPA line under the phone
+	 * field (the rest of checkout is EN pending the storefront i18n phase). */
+	locale: string;
+	/** Confirmation-push path active (86eyf1rck): the CTA promises a WhatsApp
+	 * confirmation FROM Kedaipal instead of the wa.me send-it-yourself step. */
+	confirmPushEnabled: boolean;
 	offerSelfCollect: boolean;
 	offerDelivery: boolean;
+	/** Collection-service store (86eyg0n8e): the rider collects FROM the
+	 * buyer's address — every "delivery" label on this form flips to
+	 * collection wording so the buyer isn't told something is being sent to
+	 * them. Public flag `deliveryCollectsFromCustomer` on the slug payload. */
+	collectsFromCustomer: boolean;
 	minFulfilmentNoticeDays: number | undefined;
 	/** Store-wide minimum order value (minor units) — checkout blocks below it.
 	 * See convex/lib/minOrderRules.ts. */
@@ -155,12 +183,18 @@ export function CheckoutPage({
 	storeName,
 	storeSlug,
 	checkoutPhone,
+	locale,
+	confirmPushEnabled,
 	offerSelfCollect,
 	offerDelivery,
+	collectsFromCustomer,
 	minFulfilmentNoticeDays,
 	minOrderValue,
 	pickupLocations,
 }: CheckoutPageProps) {
+	// The route reserves exactly this bar's height as bottom padding — see the
+	// bar's own comment near the bottom of this component.
+	const barRef = usePublishedHeight<HTMLDivElement>("--storefront-bar-h");
 	const createOrder = useMutation(api.orders.create);
 	const navigate = useNavigate();
 	// Success path clears the cart, which would flash the empty-cart state for
@@ -287,6 +321,9 @@ export function CheckoutPage({
 	const form = useAppForm({
 		defaultValues: {
 			name: "",
+			// Buyer's WhatsApp number (86eyf1rck) — required: the confirmation
+			// push (or the wa.me fallback) is how the order reaches a chat at all.
+			waPhone: "",
 			deliveryMethod: defaultMethod,
 			address: loadSavedAddress(),
 			// Empty when delivery, the chosen id when self-collect with 2+ options,
@@ -298,6 +335,13 @@ export function CheckoutPage({
 			// zero taps while pre-order buyers just pick a later date. Server
 			// re-validates the live window either way.
 			fulfilmentDate: minYmd,
+			// "HH:MM" the rider should arrive (delivery orders, 86eyg0n8e
+			// follow-up). Prefilled — today rounds ~an hour out to the next
+			// half-hour; a future first-allowed day defaults 10:00 AM — so the
+			// required field never costs a tap unless the buyer cares.
+			fulfilmentTime: hhmmFromMinutes(
+				defaultFulfilmentTimeMinutes(mytMidnightFromYmd(minYmd)),
+			),
 			// Optional free-text instruction for the seller (local form state — the
 			// note is order-level, not a cart item, so it doesn't belong in useCart).
 			note: "",
@@ -357,6 +401,41 @@ export function CheckoutPage({
 				return;
 			}
 
+			// Fulfilment time (delivery orders): the input is prefilled and
+			// floored, so failures here are a cleared field or a form that sat
+			// past its chosen slot. The dispatch rule absorbs near-past moments
+			// (books "now"), so only reject what's nonsense to promise.
+			let fulfilmentTimeMinutes: number | undefined;
+			if (value.deliveryMethod === "delivery") {
+				const parsed = timeMinutesFromHhmm(value.fulfilmentTime);
+				if (Number.isNaN(parsed)) {
+					setServerError(
+						collectsFromCustomer
+							? "Pick a collection time."
+							: "Pick a delivery time.",
+					);
+					return;
+				}
+				// Judge against the FLOOR, not merely "the past": the input's own
+				// `min` would otherwise block submit with the browser's native
+				// message. The ticking repair above normally keeps this from
+				// firing at all — this is the raced-clock backstop, in our words.
+				const floor = minSelectableTimeMinutes(fulfilmentEpoch);
+				if (parsed < floor) {
+					const verb = collectsFromCustomer ? "collect" : "deliver";
+					setServerError(
+						// Past midnight-minus-the-lead there is no valid slot left
+						// today at all, so naming an "earliest time" would be
+						// nonsense — send them to tomorrow instead.
+						floor >= MINUTES_PER_DAY
+							? `There's no time left to ${verb} today — pick tomorrow.`
+							: `The earliest we can ${verb} is ${formatFulfilmentTime(floor)} — pick that or later.`,
+					);
+					return;
+				}
+				fulfilmentTimeMinutes = parsed;
+			}
+
 			const trimmedNote = value.note?.trim();
 			const generalNote =
 				trimmedNote && trimmedNote.length > 0 ? trimmedNote : undefined;
@@ -371,7 +450,7 @@ export function CheckoutPage({
 			)?.customImageStorageId;
 
 			try {
-				const { trackingToken } = await createOrder({
+				const { trackingToken, confirmedAtCreate } = await createOrder({
 					retailerId,
 					items: cart.items.map((i) => ({
 						variantId: i.variantId,
@@ -381,11 +460,16 @@ export function CheckoutPage({
 					channel: "whatsapp",
 					customer: {
 						name: value.name?.trim() || undefined,
+						// Raw as typed — the server normalizes ("012-345 6789" →
+						// "60123456789") via assertValidMyWaPhone, the same bridge the
+						// counter manual bind uses.
+						waPhone: value.waPhone.trim(),
 					},
 					deliveryMethod: value.deliveryMethod,
 					deliveryAddress: sanitizedAddress,
 					pickupLocationId: resolvedPickupLocationId,
 					fulfilmentDate: fulfilmentEpoch,
+					fulfilmentTimeMinutes,
 					customerNote,
 					customerImageStorageId,
 					// Live Lalamove quote (86eyb5hrf): pass the server-side quote row
@@ -405,14 +489,17 @@ export function CheckoutPage({
 				// after the awaited createOrder round-trip we're outside the submit
 				// tap's transient user activation, so popup blockers (iOS Safari,
 				// IG/FB in-app webviews) silently swallow a new tab — order created,
-				// buyer stranded. The tracking page shows the "Send order on
-				// WhatsApp" anchor instead; ?send=1 makes it auto-fire the wa.me
-				// redirect (same-tab, never popup-blocked) so the buyer still lands
-				// in WhatsApp without an extra tap. See docs/order-lifecycle.md.
+				// buyer stranded. Push path (confirmedAtCreate): the order is already
+				// committed + confirmed and Kedaipal's WABA is pushing the
+				// confirmation, so the tracking page shows the "Order placed ✓" state
+				// — NO ?send=1, no wa.me redirect anywhere. Legacy path: ?send=1
+				// auto-fires the wa.me redirect (same-tab, never popup-blocked) so
+				// the buyer still lands in WhatsApp without an extra tap. See
+				// docs/order-lifecycle.md.
 				navigate({
 					to: "/track/$token",
 					params: { token: trackingToken },
-					search: { send: 1 },
+					search: confirmedAtCreate ? {} : { send: 1 },
 				});
 			} catch (err) {
 				setServerError(convexErrorMessage(err));
@@ -436,17 +523,64 @@ export function CheckoutPage({
 	}
 
 	// --- Live delivery-charge preview (86extzdr8) ---------------------------
-	// Watch the method + the coordinates the Google autocomplete stamped into
-	// form state (three primitive selectors so keystrokes elsewhere don't
-	// re-render the page), and quote the fee server-side. The server strips
-	// distances (privacy) and orders.create re-resolves authoritatively — this
-	// is display + gating only.
+	// Watch the method + the coordinates/state the Google autocomplete (or the
+	// manual form) stamped into form state (primitive selectors so keystrokes
+	// elsewhere don't re-render the page), and quote the fee server-side. The
+	// server strips distances/zone internals (privacy) and orders.create
+	// re-resolves authoritatively — this is display + gating only.
 	const watchedMethod = useStore(form.store, (s) => s.values.deliveryMethod);
 	const watchedLat = useStore(form.store, (s) => s.values.address.latitude);
 	const watchedLng = useStore(form.store, (s) => s.values.address.longitude);
+	// Weight-mode stores zone-match on the STATE — a manual address (no pin)
+	// prices fine there, so the state rides along beside the coordinates.
+	const watchedState = useStore(form.store, (s) => s.values.address.state);
 	// The chosen day PRICES the live quote (pre-orders quote as a scheduled
 	// pickup on that day) — date changes re-quote just like address changes.
 	const watchedDate = useStore(form.store, (s) => s.values.fulfilmentDate);
+	const watchedTime = useStore(form.store, (s) => s.values.fulfilmentTime);
+	// Parsed once for the two consumers below; NaN (cleared field) reads as
+	// "no time" so the quote falls back to the day-level pricing.
+	const watchedTimeMinutes = (() => {
+		const t = timeMinutesFromHhmm(watchedTime);
+		return Number.isNaN(t) ? undefined : t;
+	})();
+	// The time's floor moves with the chosen DAY (today is floored to ~30 min
+	// out; other days are free). When a date change — chip tap, picker, the
+	// midnight bump above — leaves the chosen slot behind the floor, pull it
+	// up to that day's default rather than letting submit bounce it. Only
+	// ever adjusts an INVALID slot; a deliberately chosen future time is
+	// never touched.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: form identity is stable; values read fresh inside.
+	useEffect(() => {
+		if (!watchedDate) return;
+		const dayEpoch = mytMidnightFromYmd(watchedDate);
+		if (Number.isNaN(dayEpoch)) return;
+		const repair = () => {
+			const current = timeMinutesFromHhmm(
+				form.store.state.values.fulfilmentTime,
+			);
+			const floor = minSelectableTimeMinutes(dayEpoch);
+			if (Number.isNaN(current) || current < floor) {
+				form.setFieldValue(
+					"fulfilmentTime",
+					hhmmFromMinutes(defaultFulfilmentTimeMinutes(dayEpoch)),
+				);
+			}
+		};
+		repair();
+		// The floor MOVES with the wall clock, so a prefilled time goes stale
+		// while the buyer fills in the rest of the form — and the input's own
+		// `min` would then block submit with the browser's native message
+		// instead of ours. Re-run the repair on a tick, and whenever the buyer
+		// returns to the tab (mobile checkouts get backgrounded constantly).
+		// Only ever moves a value that has already become impossible.
+		const timer = setInterval(repair, 30_000);
+		document.addEventListener("visibilitychange", repair);
+		return () => {
+			clearInterval(timer);
+			document.removeEventListener("visibilitychange", repair);
+		};
+	}, [watchedDate]);
 	const latNum = watchedLat.trim().length > 0 ? Number(watchedLat) : NaN;
 	const lngNum = watchedLng.trim().length > 0 ? Number(watchedLng) : NaN;
 	const hasCoords = Number.isFinite(latNum) && Number.isFinite(lngNum);
@@ -457,6 +591,15 @@ export function CheckoutPage({
 					retailerId,
 					latitude: hasCoords ? latNum : undefined,
 					longitude: hasCoords ? lngNum : undefined,
+					state:
+						watchedState.trim().length > 0 ? watchedState.trim() : undefined,
+					// Weight-mode input: the server reads each variant's parcel weight
+					// itself, so the quote re-runs whenever the cart changes — two
+					// carts with the same subtotal can weigh differently.
+					items: cart.items.map((item) => ({
+						variantId: item.variantId,
+						quantity: item.quantity,
+					})),
 					subtotal: cart.total,
 				}
 			: "skip",
@@ -480,6 +623,7 @@ export function CheckoutPage({
 				.join(", ");
 		},
 		fulfilmentDate: watchedDate ? mytMidnightFromYmd(watchedDate) : undefined,
+		fulfilmentTimeMinutes: watchedTimeMinutes,
 	});
 
 	// Collapse the two sources into ONE shape for the breakdown + submit gate.
@@ -523,16 +667,25 @@ export function CheckoutPage({
 
 	// --- Can this store accept a hand-typed address? (86eye50qv) ------------
 	// While the buyer has NO pin, the live quote already answers exactly that
-	// question: a store that can't price a pin-less address answers "blocked".
-	// That's true for a live Lalamove quote and for radius bands set to block
-	// out-of-range — the two modes where a manually-typed address is a dead end
-	// (it can never be quoted, so checkout would refuse it anyway). Everything
-	// else (flat, free, radius-arrange) doesn't need coordinates, so the manual
-	// escape hatch stays. Held back until the quote resolves so the disclosure
-	// appears rather than flickering away.
+	// question: a store that can't price a pin-less address answers "blocked"
+	// with a PIN-shaped reason. That's true for a live Lalamove quote and for
+	// radius bands set to block out-of-range — the two modes where a
+	// manually-typed address is a dead end (it can never be quoted, so checkout
+	// would refuse it anyway). Everything else — flat, free, radius-arrange,
+	// and ALL of weight mode (86eyeea1n: it prices from the state, which the
+	// manual form provides) — doesn't need coordinates, so the manual escape
+	// hatch stays. Weight-mode blocked reasons (no state yet / unserved state /
+	// overweight / unweighable) must NOT hide it: manual entry is how the buyer
+	// supplies or fixes the state in the first place. Held back until the quote
+	// resolves so the disclosure appears rather than flickering away.
+	const pinRequiredBlock =
+		quoteForDelivery?.kind === "blocked" &&
+		(quoteForDelivery.reason === "no_coords" ||
+			quoteForDelivery.reason === "unquotable" ||
+			quoteForDelivery.reason === "out_of_range" ||
+			quoteForDelivery.reason === "store_unavailable");
 	const allowManualAddressEntry =
-		rawQuote !== undefined &&
-		!(!hasCoords && quoteForDelivery?.kind === "blocked");
+		rawQuote !== undefined && !(!hasCoords && pinRequiredBlock);
 
 	// Stock eroded under a persisted cart (qty 5, seller drops to 2): the line
 	// shows "Only 2 in stock" with `+` disabled, but the order would still be
@@ -582,6 +735,27 @@ export function CheckoutPage({
 		);
 	}
 
+	// The one-line CTA reason for a blocked quote. Weight-mode blocks aren't
+	// always the ADDRESS's fault — an overweight cart or an unpriceable item
+	// must not send the buyer off to "fix" a perfectly good address.
+	const feeNounShort = collectsFromCustomer ? "collection fee" : "delivery fee";
+	const deliveryBlockedLine = (() => {
+		if (quoteForDelivery?.kind !== "blocked") return null;
+		switch (quoteForDelivery.reason) {
+			case "no_state":
+				return `Choose your state so we can calculate your ${feeNounShort}`;
+			case "over_bands":
+				return "This order is too heavy for the store's delivery rates — see your order summary";
+			case "missing_weights":
+			case "custom_item":
+				return `Your ${feeNounShort} can't be worked out for this order — see your order summary`;
+			default:
+				return collectsFromCustomer
+					? "We can't collect from this address — see your order summary"
+					: "We can't deliver to this address — see your order summary";
+		}
+	})();
+
 	// Why the CTA is disabled, in the buyer's words. Ordered by what they'd fix
 	// first. `null` = nothing blocking (or the only gap is a field the form
 	// already marks inline, like the name).
@@ -594,12 +768,14 @@ export function CheckoutPage({
 				: overStockLine
 					? `Only ${stockCapFor(overStockLine.variantId)} × ${overStockLine.name} left — lower the quantity to continue`
 					: addressIncomplete
-						? "Add your delivery address to continue"
+						? collectsFromCustomer
+							? "Add your collection address to continue"
+							: "Add your delivery address to continue"
 						: quoteForDelivery?.kind === "calculating"
-							? "Calculating your delivery fee…"
-							: deliveryBlocked
-								? "We can't deliver to this address — see your order summary"
-								: null;
+							? collectsFromCustomer
+								? "Calculating your collection fee…"
+								: "Calculating your delivery fee…"
+							: (deliveryBlockedLine ?? null);
 
 	const submitButton = (
 		<form.Subscribe
@@ -628,7 +804,13 @@ export function CheckoutPage({
 					}
 					className="h-12 w-full text-base"
 				>
-					{isSubmitting ? "Sending…" : "Send order on WhatsApp"}
+					{isSubmitting
+						? confirmPushEnabled
+							? "Placing order…"
+							: "Sending…"
+						: confirmPushEnabled
+							? "Place order"
+							: "Send order on WhatsApp"}
 				</Button>
 			)}
 		</form.Subscribe>
@@ -640,25 +822,45 @@ export function CheckoutPage({
 			{blockedReason}
 		</p>
 	) : null;
-	// The handoff is a two-step by design (tracking page fires the wa.me link)
-	// — say what happens next so the CTA never feels like a bait-and-switch.
-	const reassurance = (
-		<p className="text-center text-xs text-muted-foreground">
-			Opens WhatsApp to confirm with {storeName} — nothing is paid yet.
-		</p>
+	const privacyPolicyLink = (
+		<a
+			href="/privacy"
+			target="_blank"
+			rel="noopener noreferrer"
+			className="underline hover:text-foreground"
+		>
+			Privacy Policy
+		</a>
 	);
-	const privacyLine = (
+	// Say what happens next so the CTA never feels like a bait-and-switch.
+	// Push path: the order commits here and the confirmation is pushed TO the
+	// buyer's WhatsApp — no redirect. Legacy path: the handoff is a two-step by
+	// design (tracking page fires the wa.me link).
+	//
+	// DESKTOP only. On mobile this rode along in the fixed bottom bar, where two
+	// full sentences of small print pushed the CTA up and buried the total; the
+	// bar gets `finePrintCompact` instead. Nothing is lost by dropping it there:
+	// "confirmation lands in your WhatsApp" is already the phone field's own
+	// description, three thumb-scrolls up.
+	const finePrint = (
+		<>
+			<p className="text-center text-xs text-muted-foreground">
+				{confirmPushEnabled
+					? `Your order goes straight to ${storeName} — confirmation lands in your WhatsApp. Nothing is paid yet.`
+					: `Opens WhatsApp to confirm with ${storeName} — nothing is paid yet.`}
+			</p>
+			<p className="text-center text-xs text-muted-foreground">
+				By placing this order, you agree to our {privacyPolicyLink}.
+			</p>
+		</>
+	);
+	// The mobile bar's whole fine print: the consent line, which is the only
+	// part we can't drop, and which ends on the link so it reads as one
+	// sentence. The reassurance stays desktop-only (the phone field's own
+	// description already promises the WhatsApp confirmation).
+	const finePrintCompact = (
 		<p className="text-center text-xs text-muted-foreground">
-			By placing this order, you agree to our{" "}
-			<a
-				href="/privacy"
-				target="_blank"
-				rel="noopener noreferrer"
-				className="underline hover:text-foreground"
-			>
-				Privacy Policy
-			</a>
-			.
+			By placing this order, you agree to our {privacyPolicyLink}.
 		</p>
 	);
 
@@ -706,39 +908,88 @@ export function CheckoutPage({
 							const pickupFee = pickupFeeOf(selectedPickup);
 							const quote =
 								deliveryMethod === "delivery" ? quoteForDelivery : undefined;
-							const blockedCopy =
-								quote?.kind === "blocked"
-									? quote.reason === "out_of_range"
-										? // Live-quote stores: the COURIER doesn't reach here, and
-											// retrying the same address never will — say so, and point
-											// at the two things that actually work.
-											isLiveMode
-											? `This address is too far — our delivery rider service doesn't cover it. Try an address closer to ${storeName}${
+							// Collection stores talk about collecting FROM the buyer —
+							// the failure stories are otherwise identical.
+							const feeNoun = collectsFromCustomer
+								? "collection fee"
+								: "delivery fee";
+							const blockedCopy = (() => {
+								if (quote?.kind !== "blocked") return undefined;
+								switch (quote.reason) {
+									case "out_of_range":
+										// Live-quote stores: the COURIER doesn't reach here, and
+										// retrying the same address never will — say so, and point
+										// at the two things that actually work.
+										return isLiveMode
+											? `This address is too far — our ${
+													collectsFromCustomer ? "collection" : "delivery"
+												} rider service doesn't cover it. Try an address closer to ${storeName}${
 													selfCollectAvailable ? ", or choose pickup" : ""
 												}.`
-											: `This address is outside ${storeName}'s delivery area.${
+											: `This address is outside ${storeName}'s ${
+													collectsFromCustomer ? "collection" : "delivery"
+												} area.${
 													selfCollectAvailable
 														? " Pickup is still available."
 														: ""
-												}`
-										: quote.reason === "store_unavailable"
-											? // Seller-side breakage — not the buyer's fault, not
-												// fixable by retrying. Give them the two real ways out.
-												`Delivery pricing isn't working for this store right now — it's on ${storeName}'s side, not yours. ${
-													selfCollectAvailable
-														? "Choose pickup, or message"
-														: "Message"
-												} the store on WhatsApp to sort it out.`
-											: quote.reason === "unquotable"
-												? "We couldn't calculate the delivery fee right now — re-pick your address to retry, or try again shortly."
-												: // no_coords. Worth saying only once the buyer has an address
-													// at all — on an untouched form the reason line above the
-													// CTA already says "add your address", and two versions of
-													// the same nudge is noise.
-													addressIncomplete
-													? undefined
-													: "Pick your address from the Google suggestions so we can calculate your delivery fee."
-									: undefined;
+												}`;
+									case "store_unavailable":
+										// Seller-side breakage — not the buyer's fault, not
+										// fixable by retrying. Give them the two real ways out.
+										return `${
+											collectsFromCustomer ? "Collection" : "Delivery"
+										} pricing isn't working for this store right now — it's on ${storeName}'s side, not yours. ${
+											selfCollectAvailable
+												? "Choose pickup, or message"
+												: "Message"
+										} the store on WhatsApp to sort it out.`;
+									case "unquotable":
+										return `We couldn't calculate the ${feeNoun} right now — re-pick your address to retry, or try again shortly.`;
+									// Weight-mode blocks (86eyeea1n) ------------------------
+									case "unserved_state":
+										return `${storeName} doesn't ${
+											collectsFromCustomer ? "collect from" : "deliver to"
+										} ${
+											watchedState.trim().length > 0
+												? watchedState.trim()
+												: "that state"
+										} yet.${
+											selfCollectAvailable ? " Pickup is still available." : ""
+										}`;
+									case "over_bands":
+										return `This order is heavier than ${storeName}'s delivery rates cover. Remove some items${
+											selfCollectAvailable ? ", choose pickup," : ""
+										} or message the store on WhatsApp to arrange it.`;
+									case "missing_weights":
+										// Seller config gap (unset parcel weights) — the buyer
+										// can't fix it, so frame it like store_unavailable.
+										return `The ${feeNoun} can't be calculated for these items right now — it's on ${storeName}'s side, not yours. ${
+											selfCollectAvailable
+												? "Choose pickup, or message"
+												: "Message"
+										} the store on WhatsApp to sort it out.`;
+									case "custom_item":
+										return `Your order includes a custom item, so ${storeName} confirms the ${feeNoun} with you directly. ${
+											selfCollectAvailable
+												? "Choose pickup, or message"
+												: "Message"
+										} them on WhatsApp to arrange it.`;
+									case "no_state":
+										// Like no_coords below: worth saying only once the buyer
+										// has an address at all.
+										return addressIncomplete
+											? undefined
+											: `Choose your state so we can calculate your ${feeNoun}.`;
+									default:
+										// no_coords. Worth saying only once the buyer has an
+										// address at all — on an untouched form the reason line
+										// above the CTA already says "add your address", and two
+										// versions of the same nudge is noise.
+										return addressIncomplete
+											? undefined
+											: `Pick your address from the Google suggestions so we can calculate your ${feeNoun}.`;
+								}
+							})();
 							return (
 								<CheckoutSummary
 									cart={cart}
@@ -755,6 +1006,10 @@ export function CheckoutPage({
 											quote={quote}
 											blockedCopy={blockedCopy}
 											minRuleAlerts={minRuleAlerts}
+											collectsFromCustomer={
+												deliveryMethod === "delivery" && collectsFromCustomer
+											}
+											awaitingQuote={hasCustomLine}
 										/>
 									}
 									footer={
@@ -763,8 +1018,7 @@ export function CheckoutPage({
 										<div className="mt-4 hidden flex-col gap-3 lg:flex">
 											{blockedReasonLine}
 											{submitButton}
-											{reassurance}
-											{privacyLine}
+											{finePrint}
 										</div>
 									}
 								/>
@@ -787,6 +1041,85 @@ export function CheckoutPage({
 								/>
 							)}
 						</form.AppField>
+						<form.AppField name="waPhone">
+							{(field) => (
+								<field.TextField
+									label="WhatsApp number"
+									type="tel"
+									inputMode="tel"
+									autoComplete="tel"
+									// The plate says the country code is handled, so the
+									// placeholder shows the rest. A buyer who ignores it and
+									// types the full "012-345 6789" (or "60123…") is still
+									// normalized to the same number — see myWaPhoneCheckoutSchema.
+									prefix={<MyPhonePrefix />}
+									placeholder="12-345 6789"
+									required
+									description={
+										confirmPushEnabled
+											? "Your order confirmation lands in this WhatsApp."
+											: `${storeName} reaches you on this WhatsApp about your order.`
+									}
+								/>
+							)}
+						</form.AppField>
+						{/* Echo the NORMALIZED number back once it parses. The whole point
+						    of capturing a phone here is that the confirmation reaches it,
+						    and the realistic failure is a transposed digit — which the
+						    buyer can only catch if they see the number grouped the way
+						    they'd read it. Costs nothing and blocks nobody (a genuinely
+						    unreachable number still degrades to the recovery card). */}
+						<form.Subscribe selector={(s) => s.values.waPhone}>
+							{(typed) => {
+								const parsed = myWaPhoneCheckoutSchema.safeParse(typed ?? "");
+								if (!parsed.success) return null;
+								const pretty = formatMyMobile(parsed.data);
+								return (
+									<p className="text-sm font-medium text-accent-emphasis">
+										{locale === "ms"
+											? confirmPushEnabled
+												? `Pengesahan akan dihantar ke ${pretty} — pastikan nombor ini betul.`
+												: `${storeName} akan hubungi anda di ${pretty} — pastikan nombor ini betul.`
+											: confirmPushEnabled
+												? `We'll send your confirmation to ${pretty} — check it's right.`
+												: `${storeName} will reach you at ${pretty} — check it's right.`}
+									</p>
+								);
+							}}
+						</form.Subscribe>
+						{/* PDPA notice-at-collection — the buyer-facing line the WhatsApp
+						    flows carry via privacyNoticeLine; localized to the store
+						    locale like the tracking page (rest of checkout copy is EN
+						    pending the storefront i18n phase). */}
+						<p className="text-xs text-muted-foreground">
+							{locale === "ms" ? (
+								<>
+									Nombor anda digunakan untuk pesanan ini sahaja — pengesahan
+									dan status pesanan dihantar ke WhatsApp anda.{" "}
+									<a
+										href="/privacy"
+										target="_blank"
+										rel="noopener noreferrer"
+										className="underline hover:text-foreground"
+									>
+										Dasar Privasi
+									</a>
+								</>
+							) : (
+								<>
+									Your number is used for this order only — confirmations and
+									status updates go to your WhatsApp.{" "}
+									<a
+										href="/privacy"
+										target="_blank"
+										rel="noopener noreferrer"
+										className="underline hover:text-foreground"
+									>
+										Privacy Policy
+									</a>
+								</>
+							)}
+						</p>
 					</CheckoutSection>
 
 					<CheckoutSection
@@ -795,7 +1128,9 @@ export function CheckoutPage({
 							bothAvailable
 								? "How do you want to get it?"
 								: deliveryAvailable
-									? "Delivery address"
+									? collectsFromCustomer
+										? "Collection address"
+										: "Delivery address"
 									: "Pickup point"
 						}
 					>
@@ -805,34 +1140,47 @@ export function CheckoutPage({
 						    → pickup picker). The settings invariant keeps ≥1 on offer. */}
 						{bothAvailable ? (
 							<form.AppField name="deliveryMethod">
-								{(field) => (
-									<div className="grid grid-cols-2 gap-2">
-										<button
-											type="button"
-											onClick={() => field.handleChange("delivery")}
-											className={`flex flex-col items-center gap-1.5 rounded-xl border-2 px-3 py-3 text-sm font-medium transition-colors ${
-												field.state.value === "delivery"
-													? "border-accent bg-accent/5 text-accent"
-													: "border-border bg-card text-muted-foreground hover:border-accent/40"
-											}`}
-										>
-											<Truck className="size-5" />
-											Delivery
-										</button>
-										<button
-											type="button"
-											onClick={() => field.handleChange("self_collect")}
-											className={`flex flex-col items-center gap-1.5 rounded-xl border-2 px-3 py-3 text-sm font-medium transition-colors ${
-												field.state.value === "self_collect"
-													? "border-accent bg-accent/5 text-accent"
-													: "border-border bg-card text-muted-foreground hover:border-accent/40"
-											}`}
-										>
-											<Package className="size-5" />
-											Pickup
-										</button>
-									</div>
-								)}
+								{(field) => {
+									// Segmented control, not two bordered tiles: this sits INSIDE
+									// a bordered CheckoutSection, and a boxed choice inside a box
+									// reads as two competing cards. Same shell the product
+									// editor's mode switcher uses (`bg-muted p-1`, raised
+									// `bg-background` on the selected segment) — selection is
+									// carried by fill + elevation, no extra border anywhere.
+									const segment = (active: boolean) =>
+										`flex flex-col items-center gap-1.5 rounded-lg px-3 py-3 text-sm font-medium transition-colors ${
+											active
+												? "bg-background text-accent-emphasis shadow-sm"
+												: "text-muted-foreground hover:text-foreground"
+										}`;
+									return (
+										<div className="grid grid-cols-2 gap-1 rounded-xl bg-muted p-1">
+											<button
+												type="button"
+												aria-pressed={field.state.value === "delivery"}
+												onClick={() => field.handleChange("delivery")}
+												className={segment(field.state.value === "delivery")}
+											>
+												<Truck className="size-5" aria-hidden />
+												{/* On a collection store this segment means "a rider
+												    comes to me", so "Delivery" would contradict the
+												    line right under it. */}
+												{collectsFromCustomer ? "Collection" : "Delivery"}
+											</button>
+											<button
+												type="button"
+												aria-pressed={field.state.value === "self_collect"}
+												onClick={() => field.handleChange("self_collect")}
+												className={segment(
+													field.state.value === "self_collect",
+												)}
+											>
+												<Package className="size-5" aria-hidden />
+												Pickup
+											</button>
+										</div>
+									);
+								}}
 							</form.AppField>
 						) : null}
 
@@ -846,11 +1194,28 @@ export function CheckoutPage({
 								{(deliveryMethod) =>
 									deliveryMethod === "delivery" ? (
 										<div className="flex flex-col gap-2">
+											{collectsFromCustomer ? (
+												<p className="rounded-lg bg-accent/5 px-3 py-2 text-xs text-foreground">
+													{storeName} collects from you — a rider picks your
+													items up at this address and brings them to the store.
+												</p>
+											) : null}
 											<AddressFieldset
 												form={form}
 												fields="address"
 												retailerId={retailerId}
 												allowManualEntry={allowManualAddressEntry}
+												// Only when the section heading is the method question
+												// ("How do you want to get it?") — a delivery-only store
+												// already has "Delivery address" as its section title.
+												legend={
+													bothAvailable
+														? collectsFromCustomer
+															? "Collection address"
+															: "Delivery address"
+														: undefined
+												}
+												collectsFromCustomer={collectsFromCustomer}
 											/>
 											{/* Live-quote (rider) stores: set the expectation BEFORE
 											    the buyer types a far-away address and hits a wall.
@@ -860,10 +1225,9 @@ export function CheckoutPage({
 											    a radius we could quote. */}
 											{isLiveMode ? (
 												<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-													Delivery is by rider, so the fee depends on your
-													address — you&apos;ll see it here once you pick a
-													suggestion. Addresses outside the rider&apos;s
-													coverage can&apos;t be delivered
+													{collectsFromCustomer
+														? "Collection is by rider, so the fee depends on your address — you'll see it here once you pick a suggestion. Addresses outside the rider's coverage can't be collected from"
+														: "Delivery is by rider, so the fee depends on your address — you'll see it here once you pick a suggestion. Addresses outside the rider's coverage can't be delivered"}
 													{selfCollectAvailable ? " — pick up instead" : ""}.
 												</p>
 											) : null}
@@ -931,7 +1295,9 @@ export function CheckoutPage({
 													? isDropOff
 														? "When should we meet?"
 														: "When will you collect?"
-													: "When do you need it delivered?"
+													: collectsFromCustomer
+														? "When should we collect it?"
+														: "When do you need it delivered?"
 										}
 									>
 										{selectedPickup?.scheduleNote ? (
@@ -976,33 +1342,73 @@ export function CheckoutPage({
 												})}
 											</div>
 										) : null}
-										<form.AppField name="fulfilmentDate">
-											{(field) => (
-												<field.DateField
-													label="Date"
-													min={minYmd}
-													max={maxYmd}
-													required
-													description={
-														// Custom carts: the date is the buyer's ASK — the
-														// seller settles the final date in the design
-														// conversation. A notice floor raised by a cart
-														// item is explained, never silent.
-														hasCustomLine
-															? `Your requested date — the seller confirms the final date with you after the design is agreed.${
-																	cartNoticeDays > 0
-																		? ` Items in your cart need at least ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice.`
-																		: ""
-																}`
-															: cartNoticeDays > (minFulfilmentNoticeDays ?? 0)
-																? `An item in your cart needs ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice — that's the earliest date you can pick.`
-																: isDropOff
-																	? "Pick the date you'll meet at the drop-off point."
-																	: "Pick the date you need this order."
-													}
-												/>
-											)}
-										</form.AppField>
+										{/* Delivery orders pair the date with a TIME (86eyg0n8e
+										    follow-up): a rider arriving at — or collecting from —
+										    the buyer shouldn't be an all-day window. Pickup keeps
+										    date-only: the point's own schedule governs its hours. */}
+										<div
+											className={
+												deliveryMethod === "delivery"
+													? "grid grid-cols-2 gap-3"
+													: undefined
+											}
+										>
+											<form.AppField name="fulfilmentDate">
+												{(field) => (
+													<field.DateField
+														label="Date"
+														min={minYmd}
+														max={maxYmd}
+														required
+														description={
+															// Custom carts: the date is the buyer's ASK — the
+															// seller settles the final date in the design
+															// conversation. A notice floor raised by a cart
+															// item is explained, never silent.
+															hasCustomLine
+																? `Your requested date — the seller confirms the final date with you after the design is agreed.${
+																		cartNoticeDays > 0
+																			? ` Items in your cart need at least ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice.`
+																			: ""
+																	}`
+																: cartNoticeDays >
+																		(minFulfilmentNoticeDays ?? 0)
+																	? `An item in your cart needs ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice — that's the earliest date you can pick.`
+																	: isDropOff
+																		? "Pick the date you'll meet at the drop-off point."
+																		: "Pick the date you need this order."
+														}
+													/>
+												)}
+											</form.AppField>
+											{deliveryMethod === "delivery" ? (
+												<form.AppField name="fulfilmentTime">
+													{(field) => (
+														<field.TimeField
+															label="Time"
+															required
+															min={(() => {
+																if (!watchedDate) return undefined;
+																const day = mytMidnightFromYmd(watchedDate);
+																if (Number.isNaN(day)) return undefined;
+																const floor = minSelectableTimeMinutes(day);
+																// Last half-hour of the day: no valid floor
+																// exists ("24:00" isn't a time) — the floor
+																// effect has already bumped the value.
+																return floor < 1440
+																	? hhmmFromMinutes(floor)
+																	: undefined;
+															})()}
+															description={
+																collectsFromCustomer
+																	? "When the rider should come to you."
+																	: "When you'd like it to arrive."
+															}
+														/>
+													)}
+												</form.AppField>
+											) : null}
+										</div>
 									</CheckoutSection>
 								);
 							}}
@@ -1041,15 +1447,23 @@ export function CheckoutPage({
 				</div>
 			</div>
 
-			{/* Mobile sticky CTA — total + send, always in thumb reach. Desktop
-			    uses the summary card's own footer instead. STICKY, not fixed: a
-			    fixed bottom-0 element pins to the LAYOUT viewport, so a phone
-			    browser's expanding bottom toolbar (scroll-up gesture) covers the
-			    bar's lower edge; sticky is laid out in flow and tracks the VISUAL
-			    viewport, so it rides toolbar changes cleanly — and needs no
-			    clearance padding under the page. (The design system's rule #4
-			    prescribes sticky for exactly this.) */}
-			<div className="sticky bottom-0 z-30 -mx-5 mt-6 border-t border-border bg-background/95 px-5 py-3 shadow-[0_-12px_30px_rgba(15,23,42,0.08)] backdrop-blur pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:hidden">
+			{/* Mobile CTA bar — total + send, always in thumb reach. Desktop uses
+			    the summary card's own footer instead.
+
+			    FIXED, matching the storefront CartBar exactly (cart-bar.tsx):
+			    fixed keeps the bar OUT of document flow, so the powered-by footer
+			    renders as ordinary page content ABOVE it — the same stacking the
+			    store home has. A sticky bar sits IN flow, which pushes the footer
+			    below it and makes the badge look welded to the bar. The route
+			    reserves clearance equal to `--storefront-bar-h`, which this bar
+			    publishes as it's measured — so the gap under the footer badge is
+			    the footer's own padding and nothing else, whatever height the bar
+			    happens to be (the reassurance + privacy lines wrap at narrow
+			    widths, and a blocked CTA adds a reason line). */}
+			<div
+				ref={barRef}
+				className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 px-5 py-3 shadow-[0_-12px_30px_rgba(15,23,42,0.08)] backdrop-blur pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:hidden"
+			>
 				<div className="mx-auto flex max-w-xl flex-col gap-2">
 					<form.Subscribe
 						selector={(s) => ({
@@ -1067,6 +1481,15 @@ export function CheckoutPage({
 							const quote =
 								deliveryMethod === "delivery" ? quoteForDelivery : undefined;
 							const deliveryFee = quote?.kind === "fee" ? quote.fee : 0;
+							// Same "not the final bill" list as the receipt block above,
+							// from the same helper — the two totals sit on one screen at
+							// desktop widths and must never disagree.
+							const pendingParts = pendingTotalParts({
+								awaitingQuote: hasCustomLine,
+								quotePending: quote?.kind === "pending",
+								collectsFromCustomer:
+									deliveryMethod === "delivery" && collectsFromCustomer,
+							});
 							return (
 								<div className="flex items-center justify-between">
 									<span className="text-sm text-muted-foreground">Total</span>
@@ -1075,10 +1498,10 @@ export function CheckoutPage({
 											cart.total + pickupFee + deliveryFee,
 											cart.currency,
 										)}
-										{quote?.kind === "pending" ? (
+										{pendingParts.length > 0 ? (
 											<span className="text-xs font-medium text-muted-foreground">
 												{" "}
-												+ delivery
+												+ {pendingParts.join(" + ")}
 											</span>
 										) : null}
 									</span>
@@ -1088,8 +1511,7 @@ export function CheckoutPage({
 					</form.Subscribe>
 					{blockedReasonLine}
 					{submitButton}
-					{reassurance}
-					{privacyLine}
+					{finePrintCompact}
 				</div>
 			</div>
 		</form>

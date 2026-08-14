@@ -11,6 +11,7 @@
  */
 import type { Id } from "./_generated/dataModel";
 import { internalMutation, type MutationCtx } from "./_generated/server";
+import { slugify } from "./lib/slug";
 import { cartesian, variantLabel } from "./lib/variant";
 
 const SEED_SLUG = "trailgear";
@@ -93,6 +94,8 @@ export const run = internalMutation({
 			const productId = await ctx.db.insert("products", {
 				retailerId,
 				name: p.name,
+				// Seed names are distinct, so plain slugify is collision-free here.
+				slug: slugify(p.name),
 				description: p.description,
 				currency: "MYR",
 				imageStorageIds: [],

@@ -444,11 +444,15 @@ export async function buildOrderReceiptPdf(
 		);
 		y -= 18;
 	}
-	// Delivery charge — same labelled-row rule as the pickup fee.
+	// Delivery charge — same labelled-row rule as the pickup fee. Collection
+	// orders (86eyg0n8e) print "Collection fee": the rider collected FROM the
+	// buyer, so "Delivery fee" would read backwards on their receipt.
+	const chargeNoun =
+		data.deliveryDirection === "collection" ? "Collection" : "Delivery";
 	if (data.deliveryFee && data.deliveryFee > 0) {
 		totalsRow(
 			d,
-			"Delivery fee",
+			`${chargeNoun} fee`,
 			formatMoney(data.deliveryFee, data.currency),
 			y,
 		);
@@ -457,7 +461,7 @@ export async function buildOrderReceiptPdf(
 	// Fee-pending order: the invoice total is not final — say so on paper so
 	// the printed number is never mistaken for the amount owed.
 	if (data.deliveryFeePending) {
-		totalsRow(d, "Delivery charge", "To be confirmed", y);
+		totalsRow(d, `${chargeNoun} charge`, "To be confirmed", y);
 		y -= 18;
 	}
 	y = totalBar(d, "Total", formatMoney(data.total, data.currency), y);
@@ -465,7 +469,7 @@ export async function buildOrderReceiptPdf(
 		draw(
 			d.page,
 			d.font,
-			"Delivery charge to be confirmed by the seller — it will be added to this total.",
+			`${chargeNoun} charge to be confirmed by the seller — it will be added to this total.`,
 			MARGIN,
 			y + 4,
 			8.5,

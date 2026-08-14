@@ -16,11 +16,43 @@ interface BadgeOrder {
 	mockupStatus?: string;
 	/** Checkout surface — counter orders get a defaulted date, so no date badge. */
 	source?: string;
+	/** Seen-state: a confirmation-push order the seller hasn't opened escalates
+	 * on age exactly as a `pending` order used to (86eyf1rck). */
+	seenAt?: number;
+	confirmationPushStatus?: string;
+	/** Collection service (86eyg0n8e) — see isCollectedCollection below. */
+	deliveryDirection?: string;
+	collectedAt?: number;
 }
 
 /** A terminal order is finished — its due date can no longer be "late". */
 function isTerminalStatus(status: string): boolean {
 	return status === "delivered" || status === "cancelled";
+}
+
+/**
+ * A COLLECTION order's fulfilment date is the day the rider collects FROM the
+ * buyer — the START of the seller's work, not a deadline to finish it. Once
+ * the goods are in (`collectedAt`, stamped by the rider webhook) that date is
+ * history, so the urgency colouring must stop.
+ *
+ * Without this, every in-flight collection order goes permanently red: the
+ * date passes on day one and the only other mute is `delivered`, which a
+ * collection order never reaches on its own (the webhook deliberately doesn't
+ * advance it — 86eyg0n8e). A three-week tent clean would show "Overdue" for
+ * three weeks, and because this badge is a strict priority list it would also
+ * suppress every other contextual badge underneath — exactly the alarm
+ * fatigue the badge diet exists to prevent.
+ *
+ * Deliberately keyed on the goods arriving, not on the order status: a seller
+ * may anchor their own "Collected" stage at `confirmed`, so status proves
+ * nothing. Before collection a passed date still reads red — that genuinely
+ * means "the collection day came and went and nothing has arrived".
+ */
+function isCollectedCollection(order: BadgeOrder): boolean {
+	return (
+		order.deliveryDirection === "collection" && order.collectedAt !== undefined
+	);
 }
 
 /**
@@ -58,12 +90,16 @@ export function OrderContextBadge({
 			<FulfilmentDateBadge
 				epoch={order.fulfilmentDate}
 				now={now}
-				muted={isTerminalStatus(order.status)}
+				muted={isTerminalStatus(order.status) || isCollectedCollection(order)}
 			/>
 		);
 	}
 	const severity = statusAgeSeverity(
-		order.status as OrderStatus,
+		{
+			status: order.status as OrderStatus,
+			seenAt: order.seenAt,
+			confirmationPushStatus: order.confirmationPushStatus,
+		},
 		statusAgeMs(order, now),
 	);
 	if (severity !== "normal") {

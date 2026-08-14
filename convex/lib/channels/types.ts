@@ -35,7 +35,53 @@ export type OutboundMessage =
 			url: string;
 			/** Optional image header shown above the CTA body. */
 			imageUrl?: string;
+	  }
+	| {
+			/** A provider-approved message template (WhatsApp utility template
+			 * today) — the ONLY message shape a business may push to a user with
+			 * no open service window. Wording is fixed at approval; only the
+			 * positional `bodyParams` and the URL button's suffix are dynamic. */
+			kind: "template";
+			templateName: string;
+			/** Provider language code the template was approved under ("en"/"ms"). */
+			languageCode: string;
+			/** Positional {{n}} body values, in order. */
+			bodyParams: string[];
+			/** Value appended to the template's approved dynamic-URL button (a
+			 * SEPARATE parameter namespace from the body's {{n}} — for the order
+			 * confirmation this is the tracking TOKEN, not the shortId). */
+			urlButtonParam?: string;
 	  };
+
+/**
+ * What a completed send tells the caller. `providerMessageId` (Meta's
+ * `wamid…`) is the key the provider's later status webhooks reference — store
+ * it when delivery failure needs to find its way back to a record (e.g. the
+ * order-confirmation push). Undefined when the provider didn't echo one.
+ */
+export type SendReceipt = {
+	providerMessageId?: string;
+	/** Set by the WABA gateway when it suppressed the send (opt-out, cap,
+	 * pause, quality halt) — the message never reached the provider. Callers
+	 * that stamp delivery state must check this: a blocked send resolves
+	 * normally rather than throwing, so treating "no throw" as "sent" would
+	 * record a message that was never attempted. */
+	blocked?: string;
+};
+
+/**
+ * Normalized outbound-delivery status event (WhatsApp `statuses` webhook).
+ * Emitted for EVERY message the number sends — consumers correlate by
+ * `providerMessageId` and ignore events they don't recognise.
+ */
+export type StatusEvent = {
+	providerMessageId: string;
+	status: "sent" | "delivered" | "read" | "failed";
+	/** The recipient the event is about (phone for WhatsApp). */
+	recipientId?: string;
+	/** Provider error summary — only populated on `failed`. */
+	errorDetail?: string;
+};
 
 /**
  * Normalized inbound message, channel-independent. `channelUserId` is the
@@ -65,10 +111,14 @@ export type ChannelCapabilities = {
 export interface ChannelAdapter {
 	readonly channel: Channel;
 	readonly capabilities: ChannelCapabilities;
-	/** Deliver a normalized message to `to` (the channelUserId / address). */
-	send(to: string, msg: OutboundMessage): Promise<void>;
+	/** Deliver a normalized message to `to` (the channelUserId / address).
+	 * Resolves with a receipt when the provider echoes a message id. */
+	send(to: string, msg: OutboundMessage): Promise<SendReceipt | undefined>;
 	/** Parse a verified raw webhook body into normalized inbound envelopes. */
 	parseInbound(rawBody: string, headers: Headers): InboundEnvelope[];
+	/** Parse a verified raw webhook body into outbound-delivery status events
+	 * (empty for bodies that carry none). */
+	parseStatuses(rawBody: string): StatusEvent[];
 	/** Verify the raw webhook body genuinely came from the provider. */
 	verifySignature(rawBody: string, headers: Headers): Promise<boolean>;
 }

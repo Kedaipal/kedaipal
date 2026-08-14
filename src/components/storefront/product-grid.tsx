@@ -2,22 +2,49 @@ import { Link } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import { ChevronRight, Search, X } from "lucide-react";
 import { type ReactNode, useState } from "react";
-import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
-import { variantLabel } from "../../lib/variant";
 import { Input } from "../ui/input";
 import { ProductCard, type StorefrontProduct } from "./product-card";
-import {
-	ProductDetailSheet,
-	type StorefrontVariant,
-} from "./product-detail-sheet";
+import { quickAddProductToCart } from "./product-purchase";
 
-/** Product-card grid — denser on desktop so a product card never outweighs a
- * category hero card (categories are the highlight, products the inventory). */
-const GRID_CLASS =
-	"grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6";
+/** Product-card grid — 4 columns on desktop (86eybrhrt PR3). The old 5/6-col
+ * density existed so cards never outweighed the category hero tiles; those
+ * tiles are now a compact carousel (category-rail.tsx), so the products ARE
+ * the page and get tiles ~50% larger. */
+const GRID_CLASS = "grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4";
+
+/**
+ * The "All products" rule that hands merchandising over to the full catalog.
+ *
+ * It lives beside the grid it labels, NOT inside whichever section happens to
+ * sit above it — it was briefly owned by the popular shelf, which meant it
+ * disappeared along with the shelf on any store under the qualifying-orders
+ * threshold, leaving category tiles 4px from the first product row. That's not
+ * an edge case: it's every newly-onboarded seller and every quiet week.
+ *
+ * Render it as the last child of `beforeGrid`, after a `peer`-marked wrapper
+ * holding the merchandising sections. `peer-[:not(:empty)]` then shows it only
+ * when at least one of those sections actually rendered — the wrapper is
+ * genuinely `:empty` when they all return null (React renders no nodes, and
+ * JSX drops the whitespace between them), so all four combinations are right
+ * with no extra queries or prop-drilling.
+ */
+export function AllProductsDivider() {
+	return (
+		<div
+			aria-hidden
+			className="hidden items-center gap-3 pb-4 pt-5 peer-[:not(:empty)]:flex"
+		>
+			<span className="h-px flex-1 bg-border" />
+			<span className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">
+				All products
+			</span>
+			<span className="h-px flex-1 bg-border" />
+		</div>
+	);
+}
 
 interface ProductGridProps {
 	retailerId: Id<"retailers">;
@@ -25,8 +52,8 @@ interface ProductGridProps {
 	/**
 	 * Pre-filtered product set (the nested category page passes the category's
 	 * own products in within-category order). When set, the grid skips its own
-	 * `products.list` query and renders these — same cards, search, detail
-	 * sheet and cart-add, no forked component.
+	 * `products.list` query and renders these — same cards, search, product
+	 * links and cart-add, no forked component.
 	 */
 	products?: StorefrontProduct[];
 	/**
@@ -37,19 +64,16 @@ interface ProductGridProps {
 	 */
 	beforeGrid?: ReactNode;
 	/**
-	 * Store slug for category deep links. When set, the search also matches
-	 * CATEGORY names — matching categories render as tappable tiles above the
-	 * product results. (Shares the rail's `listActivePublic` subscription, so
-	 * no extra read cost.)
+	 * Store slug — every card links to `/{storeSlug}/p/{productSlug}`, and the
+	 * search also matches CATEGORY names, rendering matches as tappable tiles
+	 * above the product results. (Shares the rail's `listActivePublic`
+	 * subscription, so no extra read cost.)
+	 *
+	 * Required: a card with nowhere to link is a dead tile, so there's no
+	 * meaningful grid without it. Both mount points (store home, category page)
+	 * have the slug in hand.
 	 */
-	storeSlug?: string;
-	/**
-	 * Proceed to checkout. The detail sheet's "Go to checkout" CTA calls this
-	 * (after the grid closes the sheet), so a buyer can proceed straight from a
-	 * product without hunting for the cart bar. The routes navigate to the
-	 * checkout page (/$slug/checkout — 86eybrhrt PR1).
-	 */
-	onRequestCheckout?: () => void;
+	storeSlug: string;
 }
 
 export function ProductGrid({
@@ -58,7 +82,6 @@ export function ProductGrid({
 	products: productsOverride,
 	beforeGrid,
 	storeSlug,
-	onRequestCheckout,
 }: ProductGridProps) {
 	// `products.list` returns active products already sorted by the retailer's
 	// `sortOrder` (set via the dashboard reorder). We render in that order — the
@@ -71,13 +94,7 @@ export function ProductGrid({
 	const products = productsOverride ?? listed;
 	// Same query the CategoryRail subscribes to — Convex dedupes identical
 	// (query, args) subscriptions, so this costs nothing extra.
-	const categories = useQuery(
-		api.categories.listActivePublic,
-		storeSlug ? { retailerId } : "skip",
-	);
-	const [openProduct, setOpenProduct] = useState<StorefrontProduct | null>(
-		null,
-	);
+	const categories = useQuery(api.categories.listActivePublic, { retailerId });
 	const [searchQuery, setSearchQuery] = useState("");
 
 	if (products === undefined) {
@@ -109,69 +126,18 @@ export function ProductGrid({
 		: products;
 	// Category-name matches surface as tappable tiles above product results.
 	const matchedCategories =
-		searchQuery && storeSlug && categories
+		searchQuery && categories
 			? categories.filter((c) =>
 					c.name.toLowerCase().includes(searchQuery.toLowerCase()),
 				)
 			: [];
 
-	const addVariant = (
-		p: StorefrontProduct,
-		variant: StorefrontVariant,
-		qty: number,
-		custom?: { note?: string; imageStorageId?: string },
-	) => {
-		// The custom line has no optionValues — label it with its custom name so the
-		// cart + order can tell it apart from the default variant.
-		const label = variant.isCustom
-			? (variant.customLabel ?? "Custom")
-			: variantLabel(variant.optionValues);
-		// Re-requesting an already-in-cart custom line updates the note, not the qty.
-		const updatingCustom =
-			variant.isCustom === true &&
-			cart.items.some((i) => i.variantId === variant._id);
-		cart.addItem(
-			{
-				variantId: variant._id,
-				productId: p._id,
-				name: p.name,
-				optionLabel: label || undefined,
-				price: variant.price,
-				currency: p.currency,
-				imageUrl: variant.imageUrls[0] ?? p.imageUrls[0],
-				quoteOnRequest: variant.requiresProof === true && variant.price === 0,
-				minNoticeDays: p.minNoticeDays,
-				isCustom: variant.isCustom,
-				minQuantity: p.minQuantity,
-				note: custom?.note,
-				customImageStorageId: custom?.imageStorageId,
-			},
-			qty,
-		);
-		toast.success(
-			updatingCustom
-				? "Custom request updated"
-				: `Added ${qty > 1 ? `${qty} × ` : ""}${label ? `${p.name} — ${label}` : p.name} to cart`,
-		);
-	};
-
-	// Quick-add only fires for single-variant products (multi-variant cards open
-	// the sheet instead), so the sole variant is unambiguous. A product with a
-	// minimum order quantity tops the cart up to it in one tap (the card shows a
-	// "Min N" chip, so the bigger add is expected); once met, +1 as usual. The
-	// top-up is clamped to the variant's remaining stock (hard-block only) so a
-	// single tap can never put more in the cart than can actually be bought.
-	const quickAdd = (p: StorefrontProduct) => {
-		const variant = p.variants[0];
-		if (!variant) return;
-		const inCart = cart.quantityForProduct(p._id);
-		const remainingToMin = (p.minQuantity ?? 1) - inCart;
-		const stockLeft =
-			variant.blockWhenOutOfStock === true
-				? Math.max(1, variant.onHand - inCart)
-				: Number.POSITIVE_INFINITY;
-		addVariant(p, variant, Math.max(1, Math.min(remainingToMin, stockLeft)));
-	};
+	// One-tap add — quick-add only fires for single-variant products
+	// (multi-variant cards link to the product page instead). The shared helper
+	// (cart-line snapshot, toast, min-quantity top-up, stock clamp) also serves
+	// the landing's featured card, so the two buttons can't drift. See
+	// product-purchase.tsx.
+	const quickAdd = (p: StorefrontProduct) => quickAddProductToCart(cart, p);
 
 	return (
 		<>
@@ -186,7 +152,7 @@ export function ProductGrid({
 						value={searchQuery}
 						onChange={(e) => setSearchQuery(e.target.value)}
 						placeholder={
-							storeSlug && categories && categories.length > 0
+							categories && categories.length > 0
 								? "Search products & categories…"
 								: "Search products…"
 						}
@@ -220,8 +186,7 @@ export function ProductGrid({
 							<Link
 								key={category._id}
 								to="/$slug/c/$categorySlug"
-								// biome-ignore lint/style/noNonNullAssertion: matchedCategories is only non-empty when storeSlug is set
-								params={{ slug: storeSlug!, categorySlug: category.slug }}
+								params={{ slug: storeSlug, categorySlug: category.slug }}
 								className="flex h-11 items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 transition-colors hover:border-accent/50"
 							>
 								<span className="text-[13.5px] font-semibold">
@@ -268,11 +233,19 @@ export function ProductGrid({
 				</div>
 			) : (
 				<div className={GRID_CLASS}>
+					{/* Opening a product goes to its PAGE on EVERY breakpoint, and the
+					    card owns that link itself — a real `<Link>`, so it's crawlable,
+					    ⌘-clickable and prefetched on hover. A modal on mobile hid the one
+					    thing PR2 exists to give buyers: the product's URL in the address
+					    bar, which is how sharing actually happens on a phone. `slug` is
+					    always present — every write path assigns one and the server
+					    derives a fallback for un-backfilled rows (effectiveSlug).
+					    See docs/storefront-product-pages.md. */}
 					{filtered.map((product, index) => (
 						<ProductCard
 							key={product._id}
 							product={product}
-							onOpen={setOpenProduct}
+							storeSlug={storeSlug}
 							onQuickAdd={quickAdd}
 							cartQuantity={cart.quantityForProduct(product._id)}
 							cartSubtotal={cart.subtotalForProduct(product._id)}
@@ -283,36 +256,6 @@ export function ProductGrid({
 					))}
 				</div>
 			)}
-
-			<ProductDetailSheet
-				product={openProduct}
-				retailerId={retailerId}
-				// Units of this product already in the cart — the sheet's stepper
-				// defaults to the REMAINING amount toward the product's minimum.
-				cartQuantity={
-					openProduct ? cart.quantityForProduct(openProduct._id) : 0
-				}
-				// Whole-cart summary drives the footer "Go to checkout" CTA.
-				cartItemCount={cart.itemCount}
-				cartTotal={cart.total}
-				onClose={() => setOpenProduct(null)}
-				// Stay open after adding so a buyer can add a standard variant AND
-				// request the custom line from the same product without reopening. The
-				// toast + cart bar confirm the add; they close via the X when done.
-				onAdd={(p, variant, qty, custom) => addVariant(p, variant, qty, custom)}
-				// Close the product sheet, then hand off to the checkout page. The
-				// navigation is deferred a tick so this dialog's teardown (focus
-				// restore, scroll unlock) finishes before the route transition —
-				// the gap is imperceptible (no exit anim).
-				onCheckout={
-					onRequestCheckout
-						? () => {
-								setOpenProduct(null);
-								setTimeout(onRequestCheckout, 0);
-							}
-						: undefined
-				}
-			/>
 		</>
 	);
 }

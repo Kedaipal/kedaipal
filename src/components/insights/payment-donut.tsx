@@ -13,9 +13,9 @@ const RADIUS = 42;
 const STROKE = 16;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
-// Opacity ramp — up to 6 methods (cash/duitnow/tng/bank_transfer/card/other) plus
-// "unspecified". Darkest = largest slice.
-const OPACITY_RAMP = [1, 0.72, 0.5, 0.36, 0.24, 0.16, 0.1];
+// Opacity ramp — up to 7 methods (cash/duitnow/tng/bank_transfer/fpx/card/other)
+// plus "unspecified". Darkest = largest slice.
+const OPACITY_RAMP = [1, 0.72, 0.5, 0.36, 0.24, 0.16, 0.1, 0.06];
 
 function methodLabel(method: string): string {
 	if (method === "unspecified") return "Online / other";

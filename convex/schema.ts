@@ -25,6 +25,18 @@ export default defineSchema({
 		// When unset, the retailer simply receives no email notifications —
 		// behaviour mirrors the WhatsApp waPhone field above.
 		notifyEmail: v.optional(v.string()),
+		// Seller WhatsApp order alerts (86eyhw9zy): the MY mobile that receives
+		// them. Deliberately SEPARATE from `waPhone` (the buyer-facing store
+		// contact / wa.me fallback / Lalamove sender) so a multi-person store can
+		// route alerts to whoever runs orders — same split as notifyEmail vs the
+		// Clerk email. Stored in the normalized inbound form ("60…", via
+		// assertValidMyMobile). Unset ⇒ no WhatsApp alerts.
+		notifyWaPhone: v.optional(v.string()),
+		// Opt-in switch for the seller WhatsApp order alerts (new order +
+		// payment claim, sent as Meta utility templates to notifyWaPhone).
+		// Off/unset by default — each alert is a billable Meta send. Enabling is
+		// Pro-gated (PLAN_FEATURES.waOrderAlerts); disabling is always allowed.
+		orderWaAlerts: v.optional(v.boolean()),
 		// Convex storage ID for the store's logo. Public — surfaced on the
 		// storefront header, dashboard hero, and as the OG image fallback.
 		logoStorageId: v.optional(v.string()),
@@ -230,9 +242,10 @@ export default defineSchema({
 		// behaviour, no migration). "flat" = one fee per delivery order with an
 		// optional free-above-subtotal threshold (all-tier). "radius" = distance
 		// bands from `businessAddress` priced by straight-line km (Pro-gated on
-		// SET; clearing stays un-gated — chargeablePickup posture). Validated by
-		// sanitizeDeliveryConfig; resolved per-order by resolveDeliveryQuote and
-		// FROZEN onto orders.deliverySnapshot. See convex/lib/delivery.ts.
+		// SET; clearing stays un-gated — chargeablePickup posture). "weight" =
+		// the seller's parcel-courier rate card (all-tier — see below). Validated
+		// by sanitizeDeliveryConfig; resolved per-order by resolveDeliveryQuote
+		// and FROZEN onto orders.deliverySnapshot. See convex/lib/delivery.ts.
 		deliveryConfig: v.optional(
 			v.union(
 				v.object({
@@ -244,6 +257,33 @@ export default defineSchema({
 					mode: v.literal("radius"),
 					bands: v.array(v.object({ maxKm: v.number(), fee: v.number() })),
 					outOfRange: v.union(v.literal("block"), v.literal("arrange")),
+				}),
+				// Weight/zone courier rate card (86eyeea1n, frozen/outstation
+				// sellers): named zones of MY_STATES states, each with ascending
+				// weight bands (maxKg inclusive ≈ the courier's box tier, fee in
+				// sen) and an optional per-zone free-above-subtotal threshold.
+				// Priced from the buyer's address STATE + the cart's summed variant
+				// parcelWeightG — no coordinates, no courier API; dispatch stays
+				// manual. All-tier (a pricing mode with zero provider cost —
+				// correctness for outstation sellers, decided with Arif 11 Aug).
+				// onOutOfBands = state in no zone OR cart beyond the last band;
+				// onUnpriceable = weight unknowable (missing parcel weights or a
+				// custom line). Both: "block" refuses checkout, "arrange" lands
+				// deliveryFeePending.
+				v.object({
+					mode: v.literal("weight"),
+					zones: v.array(
+						v.object({
+							name: v.string(),
+							states: v.array(v.string()),
+							bands: v.array(
+								v.object({ maxKg: v.number(), fee: v.number() }),
+							),
+							freeAbove: v.optional(v.number()),
+						}),
+					),
+					onOutOfBands: v.union(v.literal("block"), v.literal("arrange")),
+					onUnpriceable: v.union(v.literal("block"), v.literal("arrange")),
 				}),
 				// Live provider quote at checkout (86eyb5hrf): the buyer pays the
 				// REAL Lalamove price for their address, fetched via the public
@@ -284,6 +324,50 @@ export default defineSchema({
 				// spend — client-side, no server auto-booking). Undefined = off:
 				// the seller books manually from the Book button.
 				promptBookOnPacked: v.optional(v.boolean()),
+				// Which way riders travel (86eyg0n8e, Bearcamp collection service):
+				// "collection" reverses the trip — the rider picks up FROM the
+				// buyer's address and drops off AT businessAddress (gear-cleaning /
+				// repair services). Undefined = "standard" (rider delivers to the
+				// buyer; every existing seller). Lives HERE — not on the
+				// deliveryConfig "lalamove" arm — because pricing-mode switches
+				// rebuild that arm wholesale while this object merges per-field
+				// (promptBookOnPacked precedent), so the setting survives a
+				// temporary switch to flat pricing. Dispatch swaps stops/contacts,
+				// the webhook stops driving order status (picked_up ≠ delivered to
+				// the customer), and buyer-facing labels flip via the per-order
+				// freeze on orders.deliveryDirection.
+				deliveryDirection: v.optional(
+					v.union(v.literal("standard"), v.literal("collection")),
+				),
+			}),
+		),
+		// HitPay online payments (86eyb6z3a) — BYO-ONLY like deliveryBooking above:
+		// `apiKey`/`salt` are the seller's OWN HitPay credentials (plain fields per
+		// current convention; never exposed to clients — reads emit only a
+		// HitpaySummary). Sandbox vs production is inferred from the key prefix
+		// ("test_" → sandbox, verified against a live sandbox key). `enabled` false
+		// pauses the buyer's Pay-now button WITHOUT wiping the keys, so a seller
+		// can switch online payments off and back on instantly. Enabling is
+		// Pro-gated; disabling/clearing never is (downgrade never traps), and an
+		// order's gateway fields keep working on every tier. `connectedAt` stamps
+		// the first save that stored a full credential. See docs/hitpay-gateway.md.
+		hitpay: v.optional(
+			v.object({
+				enabled: v.boolean(),
+				apiKey: v.optional(v.string()),
+				salt: v.optional(v.string()),
+				connectedAt: v.optional(v.number()),
+				// The ACCOUNT's enabled payment methods, as HitPay resolves them for
+				// this key (e.g. ["duitnow","touch_n_go"]). Learned from a throwaway
+				// probe request at connect time (which doubles as key validation)
+				// and refreshed opportunistically from every real checkout mint —
+				// the settings chips and the buyer's Pay-now copy only ever name
+				// rails from this list, so the UI can't promise methods the seller
+				// hasn't enabled. `methodsCheckedAt` set with NO list = the probe
+				// ran and the key was rejected (surfaces "check your key" in the
+				// card). Cleared whenever the stored key changes.
+				paymentMethods: v.optional(v.array(v.string())),
+				methodsCheckedAt: v.optional(v.number()),
 			}),
 		),
 		// Minimum days' notice the retailer needs before a fulfilment date. Drives
@@ -366,6 +450,14 @@ export default defineSchema({
 		// separate narrow migration. See docs/product-variants.md §5.
 		sku: v.optional(v.string()),
 		name: v.string(),
+		// URL slug for the public product page — /$slug/p/<productSlug>
+		// (86eybrhrt PR2). Auto-generated from the name at create (never a seller
+		// input), unique per retailer, and STABLE across renames so shared
+		// WhatsApp links keep working. Optional during the widen: legacy rows are
+		// filled by products.backfillProductSlugs; reads fall back to the in-place
+		// sheet when absent. Archived/hidden products KEEP their slug (restoring
+		// one must not find its URL stolen).
+		slug: v.optional(v.string()),
 		// Product-level rich text rendered as sanitized markdown on the storefront
 		// (specs + "what's included"). NOT the home for store-wide FAQ.
 		description: v.optional(v.string()),
@@ -428,6 +520,22 @@ export default defineSchema({
 		minNoticeDays: v.optional(v.number()),
 		// DEPRECATED — moved to productVariants.requiresProof (per-variant).
 		requiresProof: v.optional(v.boolean()),
+		// When this product first appeared on a real order (set-if-unset at both
+		// order-create sites — storefront + counter — and never cleared, not even
+		// when that order is cancelled or hard-deleted: "was it ever sold?" is a
+		// question about history, and a cancelled order still has a frozen line
+		// naming this product).
+		//
+		// Its only job is to answer that question in O(1). `products.deletePermanently`
+		// refuses once it's set, because `orders.items[].productId` is a hard
+		// reference alongside the frozen name/price snapshot — erasing a product
+		// that past orders point at would orphan those references (Insights groups
+		// top products by productId and resolves the row for its thumbnail). A
+		// product that HAS sold is archived instead, which keeps its slot under the
+		// product cap. Undefined = never ordered (also the legacy default; the
+		// products:backfillProductOrderedAt one-shot fills existing rows).
+		// See convex/lib/productCap.ts + docs/product-cap.md.
+		orderedAt: v.optional(v.number()),
 		channel: v.union(v.literal("whatsapp")),
 		sortOrder: v.number(),
 		createdAt: v.number(),
@@ -435,7 +543,8 @@ export default defineSchema({
 	})
 		.index("by_retailer", ["retailerId"])
 		.index("by_retailer_active", ["retailerId", "active"])
-		.index("by_retailer_sku", ["retailerId", "sku"]),
+		.index("by_retailer_sku", ["retailerId", "sku"])
+		.index("by_retailer_slug", ["retailerId", "slug"]),
 
 	/**
 	 * First-class sellable unit. Every product resolves to ≥1 variant — a
@@ -664,6 +773,27 @@ export default defineSchema({
 		deliveryMethod: v.optional(
 			v.union(v.literal("delivery"), v.literal("self_collect")),
 		),
+		// Which way the rider travels on a delivery order (86eyg0n8e). Frozen at
+		// create from the retailer's deliveryBooking.deliveryDirection so a later
+		// settings toggle never relabels a placed order (pickupSnapshot posture).
+		// "collection" = the rider collects FROM the buyer's address and brings
+		// the order TO the seller (Bearcamp gear-wash); buyer surfaces read
+		// "Collect from" / collection copy off this. Undefined = standard
+		// delivery (every pre-existing order).
+		deliveryDirection: v.optional(
+			v.union(v.literal("standard"), v.literal("collection")),
+		),
+		// When a COLLECTION rider actually dropped the buyer's items with the
+		// seller (86eyg0n8e). Stamped by the Lalamove webhook off the completed
+		// job — a timestamp, NOT a status change: the order lifecycle stays the
+		// seller's. It is the only ORDER-level record that the goods arrived, so
+		// it powers (a) muting the fulfilment-date badge — that date is the
+		// COLLECTION day, the start of the seller's work rather than a deadline,
+		// so it would otherwise show red "Overdue" for the whole healthy service
+		// window on every collection order — and (b) the buyer's persistent
+		// "Collected on …" line, which outlives the transient live-rider strip.
+		// Set once, never cleared.
+		collectedAt: v.optional(v.number()),
 		// Structured shipping address. Required when deliveryMethod === "delivery"
 		// and forbidden when "self_collect" — invariant enforced in orders.create.
 		// Validated/sanitized server-side via convex/lib/address.ts.
@@ -741,10 +871,12 @@ export default defineSchema({
 		// Frozen delivery-charge resolution at order create (delivery orders
 		// only) — mirrors the pickupSnapshot posture: a later config/address edit
 		// never rewrites a placed order. `mode` records HOW the fee was priced:
-		// "flat" / "radius" (auto-resolved from the retailer's deliveryConfig) or
-		// "manual" (seller set it on an out-of-range "arrange" order, or adjusted
-		// it pre-payment). `distanceKm`/`bandMaxKm` audit the radius math. Unset →
-		// free delivery (0 is never stored). See convex/lib/delivery.ts.
+		// "flat" / "radius" / "weight" (auto-resolved from the retailer's
+		// deliveryConfig) or "manual" (seller set it on an out-of-range "arrange"
+		// order, or adjusted it pre-payment). `distanceKm`/`bandMaxKm` audit the
+		// radius math; `zoneName`/`chargeableKg`/`bandMaxKg` audit the weight
+		// math. Unset → free delivery (0 is never stored). See
+		// convex/lib/delivery.ts.
 		deliverySnapshot: v.optional(
 			v.object({
 				fee: v.number(),
@@ -757,9 +889,17 @@ export default defineSchema({
 					// RE-quotes (Lalamove honours quotes 5 min), so these are a
 					// paper trail, never booking inputs.
 					v.literal("lalamove"),
+					// Weight/zone rate card (86eyeea1n).
+					v.literal("weight"),
 				),
 				distanceKm: v.optional(v.number()),
 				bandMaxKm: v.optional(v.number()),
+				// Weight-mode audit trail (mode "weight" only): which zone priced
+				// the order, the cart's summed parcel weight (kg, gram precision)
+				// and the band it landed in.
+				zoneName: v.optional(v.string()),
+				chargeableKg: v.optional(v.number()),
+				bandMaxKg: v.optional(v.number()),
 				// Provider-quote audit trail (mode "lalamove" only).
 				quotationId: v.optional(v.string()),
 				vehicleType: v.optional(v.string()),
@@ -771,12 +911,13 @@ export default defineSchema({
 		// `total` via computeOrderTotals. Unset → no fee.
 		deliveryFee: v.optional(v.number()),
 		// True while the delivery charge is still to be confirmed by the seller —
-		// a RADIUS-mode "arrange via WhatsApp" order (out of range / no
-		// coordinates). Lalamove-priced stores never set this (strict since
-		// 27 Jul: no live quote → checkout/address-edit refused, so the seller
-		// never calculates a charge). While set, the payment ask is held and
-		// payment claim/receive are gated (the total is not final yet) — mirrors
-		// the mockup gate. Cleared by orders.setDeliveryFee.
+		// a RADIUS- or WEIGHT-mode "arrange via WhatsApp" order (out of range /
+		// no coordinates / unserved state / overweight / unweighable cart).
+		// Lalamove-priced stores never set this (strict since 27 Jul: no live
+		// quote → checkout/address-edit refused, so the seller never calculates
+		// a charge). While set, the payment ask is held and payment
+		// claim/receive are gated (the total is not final yet) — mirrors the
+		// mockup gate. Cleared by orders.setDeliveryFee.
 		deliveryFeePending: v.optional(v.boolean()),
 		// WHY the charge is pending, frozen at the resolve that set the flag —
 		// drives the seller card's explanation (never claims "outside your
@@ -792,6 +933,20 @@ export default defineSchema({
 				// LEGACY (pre-27 Jul lalamove rows): no live provider quote. New
 				// lalamove orders refuse instead of landing pending.
 				v.literal("unquotable"),
+				// Weight mode (86eyeea1n): order carries no delivery address, so
+				// there's no state to zone-match (the no_coords parallel — reachable
+				// only via legacy/protocol callers; the storefront always sends an
+				// address).
+				v.literal("no_state"),
+				// Weight mode: buyer's state is in none of the seller's zones.
+				v.literal("unserved_state"),
+				// Weight mode: the cart outweighs the zone's heaviest band.
+				v.literal("over_bands"),
+				// Weight mode: a non-custom item has no parcel weight set.
+				v.literal("missing_weights"),
+				// Weight mode: the cart holds a custom / price-on-quote line, so
+				// its weight is unknowable until the seller quotes.
+				v.literal("custom_item"),
 			),
 		),
 		// When the buyer needs the order — their answer to "When do you need this?
@@ -802,6 +957,18 @@ export default defineSchema({
 		// sorts to the bottom of the date-ascending inbox). Validated server-side
 		// to a whole MYT day within [today + retailer notice, today + 30 days].
 		fulfilmentDate: v.optional(v.number()),
+		// WHAT TIME on that day (86eyg0n8e follow-up) — minutes since MYT
+		// midnight (0..1439), captured at checkout for DELIVERY orders (both
+		// directions: the rider's arrival at the buyer, or the collection from
+		// them, shouldn't be an all-day window). Deliberately a separate field:
+		// `fulfilmentDate` must stay a whole midnight (the validator enforces
+		// it, and the inbox sort / due-today counts / urgency badges all
+		// compare midnights), so the time composes with it via
+		// composeFulfilmentMoment and can never drift from the day. Absent on
+		// legacy, counter and self-collect orders — every consumer treats
+		// "no time" as the old date-only behaviour. Drives the Lalamove
+		// scheduled booking default (past moments book "now").
+		fulfilmentTimeMinutes: v.optional(v.number()),
 		// Free-text instruction the shopper attached at checkout ("no onions",
 		// "deliver after 5pm"). Optional; absent on orders created before this
 		// field. Distinct from deliveryAddress.notes (address/gate detail, delivery
@@ -862,6 +1029,58 @@ export default defineSchema({
 		// auto-cron skip an order the seller already nudged. Undefined = never
 		// manually reminded. See docs/payment-reminder.md.
 		lastManualReminderAt: v.optional(v.number()),
+		// HitPay hosted-checkout payment request (86eyb6z3a) — the LATEST request
+		// minted for this order. Lazy: created when the buyer taps "Pay now" on the
+		// order page (never at order create), replaced when it expires or the total
+		// changes — so a request always prices the CURRENT total, and an old link
+		// that still gets paid is caught by the receive mutation's amount check
+		// (event + seller email, no auto-receive). `gatewayPaymentId` is the
+		// settled HitPay payment id — the webhook's idempotency key, and the
+		// "paid online" marker on the seller's order detail. HitPay-only today;
+		// widen to a provider union if a second gateway ever lands.
+		gatewayRequestId: v.optional(v.string()),
+		// The most recently REPLACED request id (PR #172 review, finding 1).
+		// HitPay keeps a replaced link payable until its 60-min expiry (we
+		// best-effort DELETE it, but that can fail), so a payment on the old
+		// link must stay correlatable: the webhook resolves this index too and
+		// funnels into receiveGatewayPayment, whose amount check then applies
+		// it (same total — the double-mint race) or records the mismatch event
+		// + seller email (paid a stale price). Only ONE generation is kept —
+		// a third mint drops the oldest id, whose link has at most minutes of
+		// expiry left by then.
+		gatewayPreviousRequestId: v.optional(v.string()),
+		gatewayCheckoutUrl: v.optional(v.string()),
+		gatewayRequestedAmount: v.optional(v.number()), // minor units at mint time
+		gatewayRequestedCurrency: v.optional(v.string()),
+		gatewayRequestedAt: v.optional(v.number()),
+		gatewayPaymentId: v.optional(v.string()),
+		// An AUTHENTIC gateway payment that `receiveGatewayPayment` refused to
+		// apply (PR #178 review, finding 1). Money has moved and the order is
+		// still not `received`, so both sides need to be told: without this the
+		// buyer sits on a plain "unpaid" page with Pay-now live and pays twice,
+		// while the seller's only signal is an email. Persisted (not just an
+		// `orderEvents` note) because the discovery can happen on the WEBHOOK —
+		// no client is watching — and the surface has to survive a reload.
+		// Cleared by `applyPaymentReceived`, so any resolution (seller reconciles
+		// and marks it received by hand, or a correctly-priced payment lands)
+		// retires the cards in one place.
+		gatewayPaymentIssue: v.optional(
+			v.object({
+				kind: v.union(
+					// Paid amount/currency ≠ the order's total at receive time —
+					// a link minted before a re-price, paid after it.
+					v.literal("amount_mismatch"),
+					// Authentic payment on an order that was cancelled first.
+					v.literal("paid_after_cancel"),
+				),
+				paidAmountSen: v.number(),
+				paidCurrency: v.string(),
+				// The HitPay payment id — the reference BOTH sides quote when they
+				// talk to each other or to HitPay support.
+				paymentId: v.string(),
+				at: v.number(),
+			}),
+		),
 		// Mockup/proof approval — a third independent dimension (like payment),
 		// gating the confirmed→packed transition for made-to-order orders.
 		// Undefined = order has no proof-required item (no gate). See
@@ -897,6 +1116,54 @@ export default defineSchema({
 		// status transition. Optional: pre-inbox orders fall back to updatedAt /
 		// createdAt at read time, so no backfill. See docs/order-inbox.md.
 		statusChangedAt: v.optional(v.number()),
+		// WABA confirmation push (86eyf1rck) — the template message Kedaipal sends
+		// the buyer at storefront checkout, replacing the buyer-initiated wa.me
+		// handoff. Lifecycle:
+		//   "sending"   — stamped in the same transaction as the insert, so the
+		//                 state is never ambiguous while attempts are in flight
+		//                 (the action retries transient failures with backoff).
+		//   "sent"      — Meta accepted it; may still flip to "failed" if the
+		//                 statuses webhook reports undelivered.
+		//   "failed"    — terminal after retries. `confirmationPushFailureKind`
+		//                 says whose problem it is, which drives whether the
+		//                 buyer is asked to fix their number or merely informed.
+		//   "recovered" — a failed push whose buyer then reached us anyway (manual
+		//                 wa.me send, or corrected their number), so the chat
+		//                 exists and both warnings clear.
+		// Undefined = legacy order or push path inactive (template env unset).
+		// Widen-only, no backfill.
+		confirmationPushStatus: v.optional(
+			v.union(
+				//   "deferred" — order committed at create but its total isn't final
+				//                yet (mockup price-on-quote / delivery-fee-pending);
+				//                the push fires when the price is confirmed
+				//                (86eyfq0w5) so the template's total is always true.
+				v.literal("deferred"),
+				v.literal("sending"),
+				v.literal("sent"),
+				v.literal("failed"),
+				v.literal("recovered"),
+			),
+		),
+		// Set alongside a "failed" status. "unreachable" = the number can't
+		// receive (typo'd / not on WhatsApp) so the buyer can repair it;
+		// "system" = our side or Meta's, so we never blame the buyer's number.
+		confirmationPushFailureKind: v.optional(
+			v.union(v.literal("unreachable"), v.literal("system")),
+		),
+		confirmationPushAt: v.optional(v.number()),
+		// When the seller first opened this order (86eyf1rck). Before the
+		// confirmation push, `pending` WAS the seller's "haven't looked at it yet"
+		// signal — the New bucket, the Home tile and the amber/red age escalation
+		// all keyed on it. Push-path orders skip `pending` entirely, so that signal
+		// would silently die; this stamp replaces it. Scoped to push-path orders at
+		// read time (see orderBuckets.isUnseenOrder), so legacy and counter orders
+		// need no backfill and behave exactly as before.
+		seenAt: v.optional(v.number()),
+		// Meta's message id (wamid) for the confirmation push. The statuses
+		// webhook identifies messages ONLY by this id, so it's the correlation key
+		// that lets a delivery failure find its order (see by_confirmation_wamid).
+		confirmationPushWamid: v.optional(v.string()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
@@ -906,7 +1173,14 @@ export default defineSchema({
 		.index("by_retailer_mockup", ["retailerId", "mockupStatus"])
 		.index("by_shortId", ["shortId"])
 		.index("by_tracking_token", ["trackingToken"])
-		.index("by_customer", ["customerId"]),
+		.index("by_customer", ["customerId"])
+		.index("by_confirmation_wamid", ["confirmationPushWamid"])
+		// HitPay webhook correlation: the completion callback identifies itself
+		// only by payment_request_id (mirrors by_confirmation_wamid's role).
+		// The previous-id twin keeps payments on a REPLACED (re-priced /
+		// double-minted) link correlatable instead of silently 200-acked.
+		.index("by_gateway_request", ["gatewayRequestId"])
+		.index("by_gateway_previous_request", ["gatewayPreviousRequestId"]),
 
 	/**
 	 * Retailer-managed library of self-collect pickup locations. Frozen onto
@@ -1049,6 +1323,15 @@ export default defineSchema({
 		costActual: v.number(),
 		quotationId: v.string(),
 		vehicleType: v.string(),
+		// Trip direction frozen at reserve time (86eyg0n8e). "collection" = this
+		// booking picked up FROM the buyer and dropped off AT the seller, so the
+		// webhook must update THIS row only — picked_up/completed never advance
+		// the order (arriving at the seller's outlet is not "delivered" to the
+		// customer) and the POD photo is never WhatsApp'd to the buyer (it shows
+		// the seller's own doorstep). Undefined = standard (every existing job).
+		deliveryDirection: v.optional(
+			v.union(v.literal("standard"), v.literal("collection")),
+		),
 		driver: v.optional(
 			v.object({
 				name: v.string(),
@@ -1071,6 +1354,13 @@ export default defineSchema({
 		// out-of-order guard (events older than this only fill gaps, never
 		// regress fields).
 		lastEventAt: v.optional(v.number()),
+		// The pickup moment this booking was SCHEDULED for (86eyg0n8e
+		// follow-up): the `scheduleAt` sent to Lalamove, from the order's
+		// fulfilment date+time when that moment was still ahead at dispatch.
+		// Unset = an immediate booking (every pre-existing job). Display-only
+		// on our side — the card says "Scheduled · 3:30 PM" instead of sitting
+		// on "Finding rider" for hours; Lalamove owns the actual timing.
+		scheduledAt: v.optional(v.number()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})

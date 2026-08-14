@@ -65,18 +65,172 @@ Public mutation (no auth — the storefront is anonymous). Steps, in order ([`co
 1. **Rate limit first** — `orderCreate` keyed by `retailerId` (token bucket: burst 5, 30/min). Throttle before any DB reads. See [`validation-and-rate-limits.md`](./validation-and-rate-limits.md).
 2. **Delivery-method invariant** — `delivery` requires `deliveryAddress`; `self_collect` forbids it. Default method is `delivery`.
 3. **Address validation** — `assertValidAddress` (Malaysia-only) sanitizes and trims.
-4. **Phone validation** — `assertValidWaPhone` if a phone was provided (optional at checkout).
+4. **Phone validation** — `assertValidMyMobile` if a phone was provided (MY-aware: a local `012-345 6789` normalizes to the `60…` form Meta delivers inbound, so the customer record can't fork). The storefront form **requires** the phone (86eyf1rck — the confirmation push needs a reachable number, gated client-side by the mirrored `myWaPhoneCheckoutSchema`; both require a MY **mobile** shape, since a landline can never receive WhatsApp); the arg stays optional at the protocol level so legacy callers/tests ride the old flow.
 5. **Item validation** — 1–100 items. Each item names a **variant** by `variantId` (preferred) or a single-variant product's `productId` (resolved to its sole variant; ambiguous for multi-variant products → rejected). The variant + its parent product must belong to the retailer, both be `active`, and match the order currency. **Stock is enforced only when the variant hard-blocks** — `variant.blockWhenOutOfStock ?? product.blockWhenOutOfStock` resolves true. Made-to-order variants (frozen pack-to-order, metal prints, a "Custom" size) never block, even when a sibling variant in the same listing does. Quantities for the same variant across multiple line items are summed before the (conditional) `onHand` check. Each line snapshots `{productId, variantId, name, variantLabel, price, quantity}`.
 6. **Compute totals** — `computeOrderTotals` (currently `total === subtotal`).
 7. **Reserve stock** — for **hard-block variants only** (resolved per-variant), patch each variant's `onHand` down within the same transaction (atomic; rolls back on any failure). Variants are re-fetched fresh to avoid stale values. Made-to-order variants are never decremented.
 8. **Collision-safe `shortId`** — up to 3 attempts via `generateShortId`; throws if all collide.
-9. **Insert order** (`status: "pending"`) + a `pending` `orderEvents` row.
+9. **Insert order** — `status: "confirmed"` when the **confirmation-push path is active** (buyer phone present AND `WHATSAPP_ORDER_CONFIRM_TEMPLATE` set — see the next section), else `status: "pending"`. Always writes a `pending` `orderEvents` row; the push path adds a `"Confirmed at checkout"` `confirmed` event and stamps `stampRetailerActivation` (the same milestone the legacy inbound-confirm path stamps).
 10. **Early customer link** — if a phone is known, `linkOrderToCustomer` creates/updates the customer and stamps `customerId`. Phone-less orders are linked later (see confirmation).
 11. **Fire-and-forget email** — schedule `notifyRetailerOrderAlert`.
+12. **Confirmation push** (push path only) — schedule `whatsapp.notifyStorefrontOrderCreated` (see the next section).
 
-Returns `{ shortId, trackingToken }`.
+Returns `{ shortId, trackingToken, confirmedAtCreate? }` — checkout navigates to `/track/<token>` **without** `?send=1` when `confirmedAtCreate` is true.
 
-### The WhatsApp handoff — why checkout never calls `window.open`
+### The confirmation push — the order commits at "Place order" (86eyf1rck)
+
+Since Meta's WhatsApp in-app browser rollout, a store link opened inside a
+WhatsApp thread hits a "Continue to chat" interstitial when it tries to bounce
+back via `wa.me` — buyers bail and the order strands as `pending` with no
+phone. So the storefront no longer depends on the buyer's send at all:
+
+- **Checkout requires a MY WhatsApp mobile number** ("Who's ordering?" card,
+  echoed back formatted for typo-spotting, PDPA notice line beneath, EN/BM by
+  store locale). Client gate `myWaPhoneCheckoutSchema` (`src/lib/schemas.ts`),
+  server re-validates with `assertValidMyMobile` — the stricter sibling of
+  `assertValidMyWaPhone` that also demands a MY **mobile** prefix, because a
+  landline satisfies the 8–15-digit rule but can never receive WhatsApp.
+- **Every storefront order takes this path** — including custom/made-to-order
+  and fee-pending orders. What varies is push **timing** (86eyfq0w5): the
+  approved template states "Total: {{3}}", so an order whose total isn't final
+  yet (a price-on-quote line is RM 0.00 until quoted; a fee-pending total grows
+  by the arranged fee) commits identically at create but its push is stamped
+  **`deferred`** and fires once the price is confirmed — from the gate-open
+  sites (mockup approve / waive / decline-with-remainder, `setDeliveryFee`),
+  where it **replaces** the legacy free-form payment prompt (which a push-path
+  buyer's window-less chat couldn't receive anyway). The de-dup is the
+  **transactional claim** (`claimDeferredPush` in `convex/orders.ts`): inside
+  the same mutation that opened a gate, the order is re-read and — only when
+  NO hold remains — flipped `deferred → sending` and the send scheduled.
+  Mutations are serializable, so exactly one gate-open transaction can win the
+  flip; a second gate event racing in (fee set a second after the mockup
+  approval) serializes after the winner, sees `sending`, and schedules
+  nothing — that's what makes a doubly-held order send exactly once **under
+  concurrency**, not just in tidy orderings. `notifyStorefrontOrderCreated`
+  keeps a hold guard as defence-in-depth (a wrong "Total" is the one mistake
+  this feature must never make) plus a cancelled-order guard. **Cancelling a
+  deferred order clears the stamp** (both `applyStatusTransition` and
+  `declineMockupItem`'s custom-only cancel): the stamp is a promise about a
+  future message, and the promise dies with the order — the tracking page's
+  deferred card additionally renders only while `confirmed`. A custom-only
+  order whose buyer declines the item is a cancellation — no confirmation ever
+  exists. Legacy orders (env unset, buyer messaged first) keep the free-form
+  `notifyPaymentDue` / `notifyDeliveryFeeSet` prompts unchanged.
+- **The order inserts as `confirmed`** and Kedaipal's WABA pushes the
+  confirmation — the Meta-approved **utility template**
+  `order_confirmation_utility` (EN + BM variants; body params `shortId`,
+  `storeName`, formatted total; the dynamic URL button carries the **tracking
+  token** — its own parameter namespace, never a body slot). Sent by
+  `whatsapp.notifyStorefrontOrderCreated` via
+  `makeGuardedSender(ctx, retailerId, "transactional")`; the log row records
+  category `utility_template` + the template name (per-template cost
+  accounting for Meta's Oct-2026 per-message billing). This is the order's
+  **one** outbound message — payment details stay on the order page
+  (86ey98ju1 posture); the buyer's reply opens the free service window, from
+  which point the seller's custom confirm template copy applies (noted inline
+  in the Settings template editor).
+- **A seller's custom `confirm` template override does NOT apply to the
+  push** — template wording is fixed at Meta approval. Their copy takes over
+  from the first in-window message onward.
+- **Config switch:** `WHATSAPP_ORDER_CONFIRM_TEMPLATE` (Convex env; set to the
+  approved template name). Unset ⇒ everything below this point degrades to the
+  legacy `pending` + `?send=1` handoff — the code ships decoupled from Meta
+  review. `retailers.getRetailerBySlug` exposes `confirmPushEnabled` so
+  checkout copy is truthful pre-submit ("Place order" vs "Send order on
+  WhatsApp").
+
+**Outcome stamps** (`orders.confirmationPushStatus` / `confirmationPushAt` /
+`confirmationPushWamid` / `confirmationPushFailureKind`):
+
+- `"deferred"` — total not final at create (mockup quote / delivery fee
+  outstanding); the push fires when the price is confirmed. Flipped to
+  `"sending"` by the winning gate-open transaction (`claimDeferredPush`), so
+  the buyer's page never claims "sending…" mid-negotiation; cleared on
+  cancel.
+- `"sending"` — stamped in the **same transaction as the insert** (or on a
+  deferred push passing its guards), so the state is never ambiguous while
+  attempts (including retries) are in flight. Without it, a confirmed order
+  with no stamp is indistinguishable from one still sending, and the tracking
+  page can't tell the buyer which.
+- `"sent"` — Meta accepted the send; the wamid is stored because the
+  **`statuses` webhook** (same `POST /webhook/whatsapp`, `value.statuses`)
+  identifies messages only by it. A later `failed` event →
+  `orders.markConfirmationPushFailed` (indexed probe on
+  `by_confirmation_wamid`; no-ops for ordinary sends) flips it to `"failed"`
+  with kind `unreachable` — Meta accepted then failed to *deliver*, which is
+  the number, not us.
+- `"failed"` — terminal, after retries. `confirmationPushFailureKind` records
+  whose problem it is (see below).
+- `"recovered"` — the buyer reached us anyway, by either repair route. Clears
+  both the buyer card and the seller note.
+
+**Retries — a blip must never become the buyer's job.** `notifyStorefrontOrderCreated`
+takes a 1-based `attempt` and reschedules itself with backoff
+(30s → 2m → 8m, `convex/lib/confirmationPush.ts`). The classifier is pure and
+unit-tested, and splits three ways:
+
+| Cause | Behaviour |
+| --- | --- |
+| No response / 5xx / 408 / 429 / throttle codes (130429, 131048, 131056, 80007) | Retry, then give up as `system` |
+| Unreachable recipient (131026, 131030, 131047, 131051) | Terminal immediately, `unreachable` |
+| Template problems (132000/132001/132005/132007/132012/132015/132016/…) | Terminal immediately, `system` |
+| Any other 4xx | Terminal, `system` |
+
+The load-bearing rule is the **double-send guard**: Meta exposes no idempotency
+key, so we only retry when the evidence says nothing was delivered — a request
+that never got a response, or a status Meta returns *instead of* accepting the
+message. An ambiguous 2xx is never retried. An in-flight retry also re-reads the
+order and bails if it's already `sent`/`recovered`.
+
+**Two repair routes for a wrong number**, both funnelling through the shared
+`customers.moveOrderToPhone` so they can't diverge (each moves the CRM
+aggregates off the wrong record onto the right one):
+
+1. **`orders.updateBuyerPhone`** (token capability, same trust model as
+   `updateDeliveryAddress`) — the buyer corrects the number on their own order
+   page; the push is re-queued from attempt 1. Gated to `failed` pushes only:
+   there's no reason to rewrite a healthy order's number, and the narrow window
+   means a leaked token can't quietly redirect a seller's order messages.
+   Rate-limited (`buyerPhoneUpdate`) because every accepted save costs a send.
+2. **Inbound ORD message** — `confirmOrderFromWhatsApp` treats an ORD ref sent
+   to the shared number, for an order whose push *failed*, as proof of
+   ownership and adopts the sender's number. Deliberately narrow: a healthy
+   order's number is never overwritten by a forwarded message, and a
+   late/replayed `failed` webhook never regresses `recovered`.
+
+**Address editing stops at `pending`** — which, on the push path, means a
+buyer can no longer edit their own address once the order commits. Deliberate
+(Zaki, 31 Jul): a `deliveryFeePending` order is one the **seller** is actively
+pricing, often alongside a mockup, so a buyer moving the destination underneath
+would invalidate the quote mid-settlement. Out-of-range buyers go through the
+store, not a silent re-price. Revisit only as an explicit decision.
+
+**Buyer-facing states** (`src/routes/track.$token.tsx`) — none of which gate the
+page. The order is confirmed in every branch and the payment block stays
+reachable: withholding a buyer's receipt because we couldn't send a *message*
+would invert the point of the feature.
+
+| State | What the buyer sees |
+| --- | --- |
+| `deferred` | Quiet "Order placed ✓ — we'll send your WhatsApp confirmation as soon as your price is confirmed." Nothing asked. |
+| `sending` | Quiet "Sending your confirmation to +60 …" line. Nothing asked. |
+| `sent` | "Order placed ✓ — confirmation sent to your WhatsApp" + optional open-chat anchor. **No auto-redirect anywhere on this path.** |
+| `failed` + `unreachable` | Amber card naming the number, **"Update my number"** (saves → re-sends), plus a quiet "or message us" link. |
+| `failed` + `system` | Amber card stating it's our fault, the order is confirmed, and they can still pay. **No action demanded.** |
+| `recovered` | Nothing. |
+
+The seller's order detail mirrors the same split, so a system fault never sends
+them chasing a customer whose number was fine.
+
+`orders.get` serves `checkoutPhone` while `pending` **or** whenever a push stamp
+exists (the anchor + repair routes need the wa.me target).
+
+### The WhatsApp handoff — the legacy / fallback path
+
+Everything in this section is now the **fallback**: it runs when the push path
+is inactive (template env unset, or a rare phone-less direct create) and as
+the **recovery surface** for failed pushes and legacy pending orders. The
+mechanics are unchanged:
 
 The storefront checkout **does not** open `wa.me` itself. `window.open` after
 the awaited `orders.create` round-trip falls outside the submit tap's
@@ -95,16 +249,21 @@ WhatsApp"** card ([`src/routes/track.$token.tsx`](../src/routes/track.$token.tsx
 - The CTA is a plain **anchor** to the `wa.me` deep link — tapping it is a
   fresh user gesture, which browsers always allow.
 - A **copy-link fallback** covers webviews that refuse to open WhatsApp at
-  all (the buyer pastes it into a real browser).
+  all (the buyer pastes it into a real browser). Inside **WhatsApp's own
+  in-app browser** (`isWhatsAppWebview`, UA sniff) the row instead copies the
+  **order message body** ("Copy order message") — a `wa.me` link is exactly
+  what just failed there; the buyer pastes the message straight into the chat
+  they came from. EN/BM.
 - The message is **rebuilt from the order's frozen snapshot** on every render
   (`src/lib/wa-order-message.ts` — items, address/pickup, note, fulfilment
   date), so the handoff survives refreshes and lost sessions, and doubles as
   recovery for any pending order where the buyer bailed before sending.
 - `orders.get` serves `checkoutPhone` (same `WHATSAPP_CHECKOUT_PHONE` →
-  `retailers.waPhone` fallback as the storefront) **only while the order is
-  `pending`**, so the card hides itself reactively the moment the bot
-  confirms. Counter orders are created `confirmed` (buyer binds via QR scan)
-  and never see it.
+  `retailers.waPhone` fallback as the storefront) while the order is
+  `pending` **or carries any `confirmationPushStatus`** (the push-path
+  success anchor + failed-push recovery card need the wa.me target); the
+  cards themselves gate on status + push state. Counter orders are created
+  `confirmed` with no push stamp (buyer binds via QR scan) and never see it.
 
 **Auto-fire on arrival (`?send=1`):** checkout navigates to
 `/track/<token>?send=1`, and the card **auto-triggers the handoff** so the
@@ -121,7 +280,10 @@ navigating away**, and returning from WhatsApp (bfcache `pageshow` /
 `visibilitychange`) also settles the button — so refresh or back never
 re-fires the redirect or leaves the button stuck loading. Only checkout
 sets `?send=1`; organic visits to a pending order get the manual card
-unchanged.
+unchanged. **Inside WhatsApp's in-app browser the auto-fire is skipped
+entirely** (`isWhatsAppWebview` — the redirect would bounce the buyer into a
+"Continue to chat" interstitial while they're already in WhatsApp); the
+manual button renders immediately and `?send=1` is still consumed.
 
 ## WhatsApp confirmation
 
@@ -133,6 +295,12 @@ Inbound flow lives in [`convex/whatsapp.ts`](../convex/whatsapp.ts), entered fro
 - `confirmOrderFromWhatsApp` (internal mutation) is **idempotent**:
   - If `pending`, transitions to `confirmed` and writes a `"Confirmed via WhatsApp"` event.
   - Stamps `order.customer.waPhone` if it was empty (link-in-bio backfill).
+  - **Failed-push recovery (86eyf1rck)** — if the order's
+    `confirmationPushStatus` is `"failed"`, the inbound ORD ref proves the
+    sender owns the order: their number **replaces** the typo'd checkout
+    number, the customer record is relinked (old aggregates decremented), and
+    the status flips to `"recovered"`. Only a failed push unlocks this — a
+    healthy order's number is never overwritten.
   - **Late customer link** — if `customerId` is still null, normalizes the phone and calls `linkOrderToCustomer`. Orders already linked at checkout are skipped (no double counting).
   - Refreshes the customer's `waProfileName` from the sender's pushname (never clobbers a retailer-edited `name`).
 - The reply is rendered in the retailer's locale (`en`/`ms`) and sent as a **CTA message** ("I've paid" button → tracking page). It degrades to plain text when interactive buttons aren't available (e.g. non-HTTPS `APP_URL` in dev). A **hard-coded, non-overridable** transfer-reference line is always appended (see [`payment-handshake.md`](./payment-handshake.md#transfer-reference)). A payment QR is sent as a follow-up image if configured.
@@ -161,18 +329,31 @@ though they own the store. The gate is admin membership, **not**
 `access.actingAsAdmin`: an admin can erase orders in **any** store, including one
 they personally own (which resolves via `requireRetailerAccess`'s owner branch,
 where `actingAsAdmin` is `false` — the earlier `actingAsAdmin` guard wrongly
-blocked that case). An admin erase on a store they **don't** own drops an
-`adminAuditLog` row (action `orders.hardDelete` / `orders.bulkDeleteOrders`) —
-that's the white-glove trail `logAdminAction` records; an admin erasing their own
-store's order is an owner write and isn't audited. ClickUp `86ey8fr8t` (the
-erase), `86eyaqzpd` (admin-only restriction).
+blocked that case). ClickUp `86ey8fr8t` (the erase), `86eyaqzpd` (admin-only
+restriction), `86eyhz189` (always audited + own-store UI).
+
+**Every erase is audited** — an `adminAuditLog` row per erased order (action
+`orders.hardDelete` / `orders.bulkDeleteOrders`, `targetId` = the order id),
+**including one in a store the admin owns**. That's the one place the ordinary
+`logAdminAction` policy is deliberately overridden: it no-ops on owner writes
+(routine, recoverable, not worth tracing), but an irreversible erase must always
+answer "who did this?" — and the deleted row isn't around to be asked. Hence
+`logDestructiveAdminAction` (`convex/lib/auth.ts`), which shares one inserter with
+`logAdminAction` and differs only in skipping the ownership no-op. Since these
+mutations are gated on admin membership, an own-store erase is still an admin
+acting; it just didn't arrive through act-as.
+
+Bulk writes **one row per erased order, not one per batch**. A batch row can only
+carry a single `retailerId`, so a batch spanning two stores would file the whole
+erase under whichever store happened to be last — and a bare count answers "how
+many" when the question an irreversible delete raises is "*which* order is gone".
+Per-order rows are correct across stores by construction.
 
 **Why admin-only:** a hard delete is irreversible (no tombstone) and wipes
 invoice / receipt / revenue-driving data. Leaving it in seller hands meant a
-disputed or fat-fingered order could vanish with no oversight and no audit row
-(owner writes aren't audited). Sellers keep **Cancel** — tombstoned and buyer-
-notified — as their way to make an order go away; permanent erasure sits with
-Kedaipal.
+disputed or fat-fingered order could vanish with no oversight. Sellers keep
+**Cancel** — tombstoned and buyer-notified — as their way to make an order go
+away; permanent erasure sits with Kedaipal.
 
 **It is silent** — unlike cancel, NO WhatsApp/email is sent. (That's the reason
 delete isn't "cancel-then-remove": you don't want to ping the buyer of a junk
@@ -217,18 +398,31 @@ so a stale client can't sneak an erase through mid-flow.
 
 **UI (hidden, not just disabled):** the "Delete permanently" danger action in the
 order-detail More-actions section and the "Delete permanently" item in the inbox
-bulk bar **render only under an admin act-as session** (`retailer.actingAsAdmin`);
-a plain seller never sees either — there's no confusion about what they can undo.
-`getRetailerForAdmin` sets `actingAsAdmin: true` for *any* act-as target, so an
-admin sees the action even when acting-as a store they own — matching the
-server's ownership-agnostic gate. The server guard, not the hidden UI, is the
-real boundary. Under act-as the
-actions work as before: each behind its own confirm dialog, making clear the
+bulk bar render for **Kedaipal admins only**, via the shared
+`canHardDeleteOrders({ actingAsAdmin, amIAdmin })` (`src/lib/admin-actions.ts`) —
+one rule for both surfaces so they can't drift, `false` until the checks resolve
+so nothing flashes in mid-load. A plain seller never sees either, so there's no
+confusion about what they can undo. The
+two-part condition mirrors the server's ownership-agnostic gate: `actingAsAdmin`
+is the fast path (already on the retailer payload, so another store's order detail
+renders the action with no extra round-trip), and `amIAdmin` adds the **own-store**
+case, which act-as can't express — an admin viewing their own store resolves
+through the owner branch, so `actingAsAdmin` is `false` there. Before `86eyhz189`
+the UI gated on `actingAsAdmin` alone, which meant an admin had to open
+`/app/admin/sellers` and act-as *their own store* to delete an order in it —
+functional (`getRetailerForAdmin` sets `actingAsAdmin: true` for any act-as
+target) but a pointless detour, since the server never required it. The server
+guard, not the hidden UI, is the real boundary. The
+actions work the same either way: each behind its own confirm dialog, making clear the
 buyer is NOT notified and it can't be undone (with an extra warning when the order
 is paid/delivered — it'll vanish from CSV/revenue records). On the order-detail
 page the More-actions panel collapses on desktop for a terminal order in a plain
 seller session (Cancel gone, Delete hidden, receipt lives in the header), so it
-never opens to an empty divider.
+never opens to an empty divider. The helper line under the order-detail button
+names both facts an admin can't otherwise see — that sellers don't get this
+action, and that the erase is recorded in the admin log — since the action now
+appears on an admin's own store, where there's no act-as banner to signal that
+they're looking at something a seller wouldn't.
 
 **Type-to-confirm safety gate:** because this is the one irreversible action in
 the dashboard, both delete confirm dialogs pass `confirmPhrase="DELETE"` to the

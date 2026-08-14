@@ -180,6 +180,7 @@ import { reserveFoundingRank } from "./foundingMembers";
 import { DEFAULT_LOCALE, type Locale } from "./lib/locale";
 import { MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
 import { sanitizeMinOrderValue } from "./lib/minOrderRules";
+import { deleteProductCascade } from "./lib/productDelete";
 import { rateLimiter } from "./lib/rateLimiter";
 import { capsForPlan, DAY_MS, TRIAL_DAYS } from "./lib/plans";
 import {
@@ -194,6 +195,14 @@ import {
 	sanitizeDeliveryConfig,
 } from "./lib/delivery";
 import { resolveLalamoveCredentials } from "./lib/lalamove";
+import {
+	type HitpayConfig,
+	resolveHitpayCredentials,
+} from "./lib/hitpay";
+import {
+	orderConfirmTemplateName,
+	sellerNewOrderTemplateName,
+} from "./lib/whatsapp";
 import { ordersThisMonth } from "./subscriptionUsage";
 import {
 	assertSupportedCurrency,
@@ -210,9 +219,10 @@ import {
 import { STORE_DESCRIPTION_MAX } from "./lib/storeProfile";
 import {
 	assertValidEmail,
+	assertValidMyMobile,
 	assertValidSlug,
 	assertValidStoreName,
-	assertValidWaPhone,
+	normalizeWaPhone,
 } from "./lib/slug";
 import {
 	AUP_VERSION,
@@ -250,6 +260,19 @@ const deliveryConfigValidator = v.union(
 		outOfRange: v.union(v.literal("block"), v.literal("arrange")),
 	}),
 	v.object({
+		mode: v.literal("weight"),
+		zones: v.array(
+			v.object({
+				name: v.string(),
+				states: v.array(v.string()),
+				bands: v.array(v.object({ maxKg: v.number(), fee: v.number() })),
+				freeAbove: v.optional(v.number()),
+			}),
+		),
+		onOutOfBands: v.union(v.literal("block"), v.literal("arrange")),
+		onUnpriceable: v.union(v.literal("block"), v.literal("arrange")),
+	}),
+	v.object({
 		mode: v.literal("lalamove"),
 		onUnquotable: v.union(v.literal("arrange"), v.literal("block")),
 	}),
@@ -266,12 +289,17 @@ const deliveryBookingValidator = v.object({
 	apiSecret: v.optional(v.string()),
 	// undefined = keep the stored preference (same posture as the key fields).
 	promptBookOnPacked: v.optional(v.boolean()),
+	// undefined = keep the stored direction (86eyg0n8e — see schema comment).
+	deliveryDirection: v.optional(
+		v.union(v.literal("standard"), v.literal("collection")),
+	),
 });
 
 type DeliveryBooking = {
 	enabled: boolean;
 	vehicleType: "MOTORCYCLE" | "CAR";
 	promptBookOnPacked?: boolean;
+	deliveryDirection?: "standard" | "collection";
 	apiKey?: string;
 	apiSecret?: string;
 };
@@ -284,6 +312,9 @@ export type DeliveryBookingSummary = {
 	vehicleType: "MOTORCYCLE" | "CAR";
 	hasCredentials: boolean;
 	promptBookOnPacked: boolean;
+	/** Collection service (86eyg0n8e): riders collect FROM the buyer and drop
+	 * off AT the seller. Undefined-on-the-row reads as "standard" here. */
+	deliveryDirection: "standard" | "collection";
 	/** Last 4 chars of the seller's own key ("…a1b2") so the settings UI can
 	 * show which key is stored without exposing it. */
 	apiKeyHint?: string;
@@ -298,7 +329,55 @@ function summarizeDeliveryBooking(
 		vehicleType: booking.vehicleType,
 		hasCredentials: resolveLalamoveCredentials(booking) !== null,
 		promptBookOnPacked: booking.promptBookOnPacked === true,
+		deliveryDirection: booking.deliveryDirection ?? "standard",
 		apiKeyHint: booking.apiKey ? booking.apiKey.slice(-4) : undefined,
+	};
+}
+
+// HitPay connection (86eyb6z3a). `null` clears; enabling requires resolvable
+// credentials and is Pro-gated. Secrets never leave the server — reads expose
+// only a summary (see HitpaySummary). `connectedAt` is server-stamped, so the
+// wire validator deliberately omits it.
+const hitpayValidator = v.object({
+	enabled: v.boolean(),
+	// undefined = keep the stored value; empty string = clear (logoStorageId
+	// posture, mirrored from deliveryBooking's key semantics).
+	apiKey: v.optional(v.string()),
+	salt: v.optional(v.string()),
+});
+
+/** Owner-read summary of the HitPay connection — the API key + webhook salt
+ * NEVER cross to the client. BYO-only: `hasCredentials` is "is the seller's
+ * own key pair stored". `mode` is inferred from the key prefix so the settings
+ * card can badge a sandbox connection. */
+export type HitpaySummary = {
+	enabled: boolean;
+	hasCredentials: boolean;
+	mode?: "sandbox" | "production";
+	/** Last 4 chars of the stored API key ("…a1b2") for the settings UI. */
+	apiKeyHint?: string;
+	connectedAt?: number;
+	/** The ACCOUNT's enabled rails (probed at connect, refreshed by mints) —
+	 * the settings chips render from this, never from a hardcoded set.
+	 * `methodsCheckedAt` set with NO list = the probe ran and the key was
+	 * rejected (drives the "check your key" warning). */
+	paymentMethods?: string[];
+	methodsCheckedAt?: number;
+};
+
+function summarizeHitpay(
+	config: HitpayConfig | undefined,
+): HitpaySummary | undefined {
+	if (!config) return undefined;
+	const credentials = resolveHitpayCredentials(config);
+	return {
+		enabled: config.enabled,
+		hasCredentials: credentials !== null,
+		mode: credentials?.mode,
+		apiKeyHint: config.apiKey ? config.apiKey.slice(-4) : undefined,
+		connectedAt: config.connectedAt,
+		paymentMethods: config.paymentMethods,
+		methodsCheckedAt: config.methodsCheckedAt,
 	};
 }
 
@@ -476,7 +555,30 @@ type RetailerPublic = {
 	storeDescription?: string;
 	waPhone?: string;
 	notifyEmail?: string;
+	// Seller WhatsApp order alerts (86eyhw9zy) — OWNER-only alert config: the
+	// receiving MY mobile + the opt-in flag, plus two derived bits the settings
+	// card needs: `waOrderAlertsAvailable` (an approved seller template is
+	// configured on this deployment — card hidden otherwise) and
+	// `notifyWaPhoneOptedOut` (the saved number holds a global STOP opt-out, so
+	// the gateway would suppress every alert — the card must say so instead of
+	// letting the toggle silently do nothing). Never on the by-slug payload.
+	notifyWaPhone?: string;
+	orderWaAlerts?: boolean;
+	waOrderAlertsAvailable?: boolean;
+	notifyWaPhoneOptedOut?: boolean;
 	checkoutPhone?: string;
+	// Whether the storefront confirmation-push path is active (86eyf1rck —
+	// approved WA template configured): checkout then promises "confirmation
+	// lands in your WhatsApp" instead of the wa.me handoff. Public-safe (a
+	// deployment-level flag, not seller data); only the by-slug payload sets it.
+	confirmPushEnabled?: boolean;
+	// Collection-service store (86eyg0n8e): the rider collects FROM the buyer's
+	// address and brings the order TO the seller (Bearcamp gear-wash). Flips
+	// checkout copy ("Collection address — where should we collect from?") and
+	// the wa.me line. Public-safe — a one-bit service-model fact, no location
+	// data; derived from deliveryBooking.deliveryDirection, which itself never
+	// crosses to the public payload. Only the by-slug payload sets it.
+	deliveryCollectsFromCustomer?: boolean;
 	logoStorageId?: string;
 	logoUrl?: string;
 	// Wide cover/banner. Public-safe — the storefront header hero and the PRIMARY
@@ -515,6 +617,10 @@ type RetailerPublic = {
 	// Lalamove booking summary (86eyb5hrf) — OWNER-only like the two fields
 	// above, and secret-free (see DeliveryBookingSummary).
 	deliveryBooking?: DeliveryBookingSummary;
+	// HitPay connection summary (86eyb6z3a) — OWNER-only and secret-free like
+	// deliveryBooking. Buyers learn "gateway available" per-order through
+	// orders.getPaymentMethods, never from a retailer payload.
+	hitpay?: HitpaySummary;
 	// Minimum days' notice before a fulfilment date — drives the storefront date
 	// picker's earliest selectable day. Undefined → 0 (same-day allowed).
 	minFulfilmentNoticeDays?: number;
@@ -624,6 +730,21 @@ async function buildRetailerPublic(
 		.withIndex("by_retailer", (q) => q.eq("retailerId", row._id))
 		.first();
 	const usedOrders = await ordersThisMonth(ctx, row._id);
+	// Seller WA alerts (86eyhw9zy): surface whether the saved number holds an
+	// active global STOP opt-out — the WABA gateway would suppress every alert,
+	// so the settings card warns instead of the toggle silently doing nothing.
+	let notifyWaPhoneOptedOut = false;
+	const alertPhone = row.notifyWaPhone;
+	if (alertPhone) {
+		const optOut = await ctx.db
+			.query("optOuts")
+			.withIndex("by_phone", (q) =>
+				q.eq("waPhone", normalizeWaPhone(alertPhone)),
+			)
+			.order("desc")
+			.first();
+		notifyWaPhoneOptedOut = !!optOut && optOut.reactivatedAt === undefined;
+	}
 	return {
 		_id: row._id,
 		slug: row.slug,
@@ -631,6 +752,10 @@ async function buildRetailerPublic(
 		storeDescription: row.storeDescription,
 		waPhone: row.waPhone,
 		notifyEmail: row.notifyEmail,
+		notifyWaPhone: row.notifyWaPhone,
+		orderWaAlerts: row.orderWaAlerts,
+		waOrderAlertsAvailable: sellerNewOrderTemplateName() !== undefined,
+		notifyWaPhoneOptedOut,
 		logoStorageId: row.logoStorageId,
 		logoUrl,
 		coverImageStorageId: row.coverImageStorageId,
@@ -646,6 +771,7 @@ async function buildRetailerPublic(
 		deliveryConfig: row.deliveryConfig as DeliveryConfig | undefined,
 		businessAddress: row.businessAddress,
 		deliveryBooking: summarizeDeliveryBooking(row.deliveryBooking),
+		hitpay: summarizeHitpay(row.hitpay as HitpayConfig | undefined),
 		minFulfilmentNoticeDays: row.minFulfilmentNoticeDays,
 		minOrderValue: row.minOrderValue,
 		pickupSetupSeen: row.pickupSetupSeen,
@@ -682,6 +808,31 @@ export const getMyRetailer = query({
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) return null;
 		return loadRetailerForUser(ctx, identity.subject);
+	},
+});
+
+/**
+ * Minimal plan read for the public `/pricing` page's plan-aware tier CTA — just
+ * the three enum bits it needs, without `getMyRetailer`'s heavy payload (signed
+ * logo/cover/QR storage URLs, usage row, opt-out lookup) held open as a live
+ * subscription on a marketing route. Identity-gated; `null` for an
+ * unauthenticated caller or a user with no store. Fail-open comped mirrors
+ * `resolveAccess`. See `src/lib/pricing-cta.ts`.
+ */
+export const getMyPlan = query({
+	args: {},
+	handler: async (
+		ctx,
+	): Promise<Pick<AccessState, "plan" | "status" | "comped"> | null> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) return null;
+		const retailer = await ctx.db
+			.query("retailers")
+			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+			.first();
+		if (!retailer) return null;
+		const access = resolveAccess(await loadSubscription(ctx, retailer._id));
+		return { plan: access.plan, status: access.status, comped: access.comped };
 	},
 });
 
@@ -745,6 +896,12 @@ export const getRetailerBySlug = query({
 					storeDescription: active.storeDescription,
 					waPhone: active.waPhone,
 					checkoutPhone: process.env.WHATSAPP_CHECKOUT_PHONE ?? active.waPhone,
+					confirmPushEnabled: orderConfirmTemplateName() !== undefined,
+					// Service-model bit only — the booking config itself stays
+					// owner-only (see the RetailerPublic comment).
+					deliveryCollectsFromCustomer:
+						(active.deliveryBooking as DeliveryBooking | undefined)
+							?.deliveryDirection === "collection",
 					logoStorageId: active.logoStorageId,
 					logoUrl,
 					coverImageStorageId: active.coverImageStorageId,
@@ -962,7 +1119,7 @@ export const createRetailer = mutation({
 		try { storeName = assertValidStoreName(args.storeName); } catch (err) { throw new ConvexError((err as Error).message); }
 		try { slug = assertValidSlug(args.slug); } catch (err) { throw new ConvexError((err as Error).message); }
 		if (args.waPhone && args.waPhone.trim().length > 0) {
-			try { waPhone = assertValidWaPhone(args.waPhone); } catch (err) { throw new ConvexError((err as Error).message); }
+			try { waPhone = assertValidMyMobile(args.waPhone); } catch (err) { throw new ConvexError((err as Error).message); }
 		}
 
 		// Prefill notifyEmail from Clerk identity if available. Swallow validation
@@ -1067,6 +1224,12 @@ export const updateSettings = mutation({
 		storeDescription: v.optional(v.string()),
 		waPhone: v.optional(v.string()),
 		notifyEmail: v.optional(v.string()),
+		// Seller WhatsApp order alerts (86eyhw9zy). notifyWaPhone: blank clears
+		// (and switches the alerts off with it); undefined = no change; validated
+		// as a MY mobile and normalized to the inbound "60…" form. orderWaAlerts:
+		// enabling is Pro-gated + requires a number; disabling always allowed.
+		notifyWaPhone: v.optional(v.string()),
+		orderWaAlerts: v.optional(v.boolean()),
 		currency: v.optional(v.string()),
 		locale: v.optional(
 			v.union(v.literal("en"), v.literal("ms"), v.literal("zh")),
@@ -1096,6 +1259,9 @@ export const updateSettings = mutation({
 		// traps); enabling requires business address + resolvable credentials and
 		// is Pro-gated. Undefined = no change.
 		deliveryBooking: v.optional(v.union(deliveryBookingValidator, v.null())),
+		// HitPay connection (86eyb6z3a). `null` clears (un-gated); enabling
+		// requires resolvable credentials and is Pro-gated. Undefined = no change.
+		hitpay: v.optional(v.union(hitpayValidator, v.null())),
 		// Minimum days' notice before a fulfilment date. Clamped to [0, 30].
 		minFulfilmentNoticeDays: v.optional(v.number()),
 		// Store-wide minimum order value (minor units). 0 clears (no minimum);
@@ -1131,6 +1297,8 @@ export const updateSettings = mutation({
 			storeDescription: string | undefined;
 			waPhone: string | undefined;
 			notifyEmail: string | undefined;
+			notifyWaPhone: string | undefined;
+			orderWaAlerts: boolean;
 			logoStorageId: string | undefined;
 			coverImageStorageId: string | undefined;
 			currency: SupportedCurrency;
@@ -1145,6 +1313,7 @@ export const updateSettings = mutation({
 			deliveryConfig: DeliveryConfig | undefined;
 			businessAddress: BusinessAddress | undefined;
 			deliveryBooking: DeliveryBooking | undefined;
+			hitpay: HitpayConfig | undefined;
 			minFulfilmentNoticeDays: number;
 			minOrderValue: number | undefined;
 			updatedAt: number;
@@ -1158,7 +1327,7 @@ export const updateSettings = mutation({
 		}
 		if (args.waPhone !== undefined) {
 			if (args.waPhone.trim().length > 0) {
-				try { patch.waPhone = assertValidWaPhone(args.waPhone); } catch (err) { throw new ConvexError((err as Error).message); }
+				try { patch.waPhone = assertValidMyMobile(args.waPhone); } catch (err) { throw new ConvexError((err as Error).message); }
 			} else {
 				patch.waPhone = undefined;
 			}
@@ -1168,6 +1337,54 @@ export const updateSettings = mutation({
 				try { patch.notifyEmail = assertValidEmail(args.notifyEmail); } catch (err) { throw new ConvexError((err as Error).message); }
 			} else {
 				patch.notifyEmail = undefined;
+			}
+		}
+		if (args.notifyWaPhone !== undefined) {
+			if (args.notifyWaPhone.trim().length > 0) {
+				let alertPhone: string;
+				try {
+					alertPhone = assertValidMyMobile(args.notifyWaPhone);
+				} catch (err) {
+					throw new ConvexError((err as Error).message);
+				}
+				// The shared WABA can't message itself — catch the pasted-the-wrong-
+				// number mistake instead of letting every alert silently die.
+				const checkoutPhone = process.env.WHATSAPP_CHECKOUT_PHONE;
+				if (checkoutPhone && normalizeWaPhone(checkoutPhone) === alertPhone) {
+					throw new ConvexError(
+						"That's Kedaipal's own WhatsApp number — enter the number that should receive your order alerts.",
+					);
+				}
+				patch.notifyWaPhone = alertPhone;
+			} else {
+				patch.notifyWaPhone = undefined;
+				// Clearing the number switches the alerts off with it — an enabled
+				// toggle with nowhere to send would be a silent no-op.
+				if (retailer.orderWaAlerts && args.orderWaAlerts === undefined) {
+					patch.orderWaAlerts = false;
+				}
+			}
+		}
+		if (args.orderWaAlerts !== undefined) {
+			if (args.orderWaAlerts) {
+				// Enabling is the Pro surface (each alert is a billable Meta send);
+				// admin act-as bypasses for white-glove, mirroring the soft-lock.
+				// Disabling below stays un-gated — downgrade never traps.
+				if (!access.actingAsAdmin) {
+					await assertPlanFeature(ctx, retailer._id, "waOrderAlerts");
+				}
+				const effectivePhone =
+					args.notifyWaPhone !== undefined
+						? patch.notifyWaPhone
+						: retailer.notifyWaPhone;
+				if (!effectivePhone) {
+					throw new ConvexError(
+						"Add the WhatsApp number that should receive order alerts first.",
+					);
+				}
+				patch.orderWaAlerts = true;
+			} else {
+				patch.orderWaAlerts = false;
 			}
 		}
 		if (args.currency !== undefined) {
@@ -1297,6 +1514,13 @@ export const updateSettings = mutation({
 						await assertPlanFeature(ctx, retailer._id, "radiusDelivery");
 					}
 				}
+				// Weight/zone pricing (86eyeea1n) deliberately carries NO plan gate
+				// and NO businessAddress requirement — it prices from the buyer's
+				// state + cart weight alone, costs Kedaipal nothing per order, and
+				// is the correctness fix for outstation parcel sellers (all-tier,
+				// decided with Arif 11 Aug). sanitizeDeliveryConfig above already
+				// guarantees ≥1 zone with ≥1 state + ≥1 band, so a stored weight
+				// config can never be dead weight.
 				if (clean.mode === "lalamove") {
 					// Live-quote pricing rides the booking config (credentials +
 					// vehicle + origin) — require booking enabled in the effective
@@ -1344,6 +1568,16 @@ export const updateSettings = mutation({
 						args.deliveryBooking.promptBookOnPacked ??
 						prev?.promptBookOnPacked ??
 						undefined,
+					// "standard" normalizes to unset so the default has one spelling
+					// (the sanitizeFee 0→unset posture); undefined keeps the stored
+					// direction — a pricing-mode switch away and back can't reset a
+					// collection store to standard.
+					deliveryDirection:
+						args.deliveryBooking.deliveryDirection === undefined
+							? prev?.deliveryDirection
+							: args.deliveryBooking.deliveryDirection === "collection"
+								? "collection"
+								: undefined,
 					apiKey:
 						args.deliveryBooking.apiKey === undefined
 							? prev?.apiKey
@@ -1397,6 +1631,79 @@ export const updateSettings = mutation({
 					}
 				}
 				patch.deliveryBooking = clean;
+			}
+		}
+		if (args.hitpay !== undefined) {
+			if (args.hitpay === null) {
+				// Disconnecting is always allowed (downgrade never traps). An order
+				// with a still-open checkout link degrades gracefully: without the
+				// salt the webhook can't verify, so a late payment surfaces in
+				// HitPay's own dashboard and the seller marks it received by hand —
+				// see docs/hitpay-gateway.md.
+				patch.hitpay = undefined;
+			} else {
+				// Key semantics mirror deliveryBooking: `undefined` = keep the
+				// stored value (toggling enabled never silently wipes keys), empty
+				// string = clear.
+				const prev = retailer.hitpay as HitpayConfig | undefined;
+				const nextApiKey =
+					args.hitpay.apiKey === undefined
+						? prev?.apiKey
+						: args.hitpay.apiKey.trim() || undefined;
+				// A changed key is a different account — its probed method list is
+				// someone else's truth. Drop it and let the probe repopulate; a
+				// pause/resume (key untouched) keeps it.
+				const keyChanged = nextApiKey !== prev?.apiKey;
+				const clean: HitpayConfig = {
+					enabled: args.hitpay.enabled,
+					apiKey: nextApiKey,
+					salt:
+						args.hitpay.salt === undefined
+							? prev?.salt
+							: args.hitpay.salt.trim() || undefined,
+					connectedAt: prev?.connectedAt,
+					paymentMethods: keyChanged ? undefined : prev?.paymentMethods,
+					methodsCheckedAt: keyChanged ? undefined : prev?.methodsCheckedAt,
+				};
+				// Half a credential can neither create checkouts nor verify
+				// webhooks — refuse it at save time with a clear message.
+				if (!!clean.apiKey !== !!clean.salt) {
+					throw new ConvexError(
+						"Enter both the HitPay API key and the salt (or clear both) — they sit side by side on HitPay's API Keys page.",
+					);
+				}
+				const credentials = resolveHitpayCredentials(clean);
+				if (clean.enabled) {
+					// BYO-only: the seller's own key pair is required — Kedaipal has
+					// no HitPay account in the money path.
+					if (!credentials) {
+						throw new ConvexError(
+							"Paste your HitPay API key and salt to turn on online payments.",
+						);
+					}
+					// Pro gate on ENABLING (disabling/clearing stays un-gated; admin
+					// act-as bypasses for white-glove setup).
+					if (!access.actingAsAdmin) {
+						await assertPlanFeature(ctx, retailer._id, "onlinePayments");
+					}
+				}
+				// First save that stores a full credential stamps the connection
+				// time; clearing the credential clears the stamp with it.
+				clean.connectedAt = credentials
+					? (prev?.connectedAt ?? Date.now())
+					: undefined;
+				patch.hitpay = clean;
+				// Probe the account (validates the key + learns its enabled payment
+				// methods) whenever a credential is stored and the truth is missing
+				// or belongs to a replaced key. Post-commit via the scheduler, so
+				// the action reads the row this save writes.
+				if (credentials && clean.methodsCheckedAt === undefined) {
+					await ctx.scheduler.runAfter(
+						0,
+						internal.hitpay.refreshAccountMethods,
+						{ retailerId: retailer._id },
+					);
+				}
 			}
 		}
 		// Refuse clearing the business address out from under a live radius
@@ -1871,23 +2178,16 @@ export const deleteUser = internalMutation({
 			await ctx.db.delete(order._id);
 		}
 
-		// Products → their variants (+ variant images) and image files.
+		// Products → their variants (+ variant images), image files and category
+		// memberships, via the shared cascade so this can't drift from the
+		// surgical products.deletePermanently. Category `productCount` is
+		// deliberately NOT maintained here — the category rows themselves are
+		// deleted a few lines below, so decrementing them first is pure waste.
 		const products = await ctx.db
 			.query("products")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 			.collect();
-		for (const product of products) {
-			const variants = await ctx.db
-				.query("productVariants")
-				.withIndex("by_product", (q) => q.eq("productId", product._id))
-				.collect();
-			for (const variant of variants) {
-				for (const imageId of variant.imageStorageIds) await deleteFile(imageId);
-				await ctx.db.delete(variant._id);
-			}
-			for (const imageId of product.imageStorageIds) await deleteFile(imageId);
-			await ctx.db.delete(product._id);
-		}
+		for (const product of products) await deleteProductCascade(ctx, product);
 
 		// Categories + product↔category junction rows (+ tile images).
 		const junctionRows = await ctx.db

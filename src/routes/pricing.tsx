@@ -1,7 +1,9 @@
 import { useAuth } from "@clerk/tanstack-react-start";
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { useQuery } from "convex/react";
 import { ArrowRight, Check, Minus, Quote, Sparkles, Star } from "lucide-react";
 import { useState } from "react";
+import { api } from "../../convex/_generated/api";
 import { FadeIn } from "../components/landing/fade-in";
 import { Footer } from "../components/landing/footer";
 import {
@@ -10,18 +12,27 @@ import {
 	Sticker,
 } from "../components/landing/landing-ui";
 import { Nav } from "../components/landing/nav";
-import { ResellerBandTable } from "../components/landing/reseller-band-table";
 import { Button } from "../components/ui/button";
+import { useSupportWaNumber } from "../hooks/useSupportWaNumber";
 import { buildWaContactLink } from "../lib/contact";
+import { resolveTierCta } from "../lib/pricing-cta";
+import type { SubscriptionView } from "../lib/subscription";
 import { cn } from "../lib/utils";
 import { m } from "../paraglide/messages";
 
 const SEO_TITLE = "Pricing — Kedaipal WhatsApp Order Hub";
 const SEO_DESC =
-	"Simple, transparent pricing for WhatsApp sellers. Start with a 14-day free trial. Starter from RM79/mo, Pro RM149/mo, Scale from RM299/mo. Founding 10 spots available.";
+	"Simple, transparent pricing for WhatsApp sellers. Start with a 14-day free trial. Starter RM79/mo, Pro RM149/mo, Scale RM299/mo flat. Founding 10 spots available.";
 const SITE_URL = "https://kedaipal.com";
 const PAGE_URL = `${SITE_URL}/pricing`;
 const OG_IMAGE = `${SITE_URL}/og-image.png`;
+
+// Annual billing is hidden until tokenised recurring ships (HitPay recurring
+// 86eyb6z4r). There are no recurring rails behind an annual price today, and a
+// permanent visible % discount undercuts the flat-price value posture (Arif,
+// 28 Jul + 9 Aug 2026). Flip to true to re-expose the monthly/annual toggle;
+// if reinstated, frame the saving as "2 months free", never a percentage.
+const SHOW_ANNUAL_TOGGLE = false;
 
 export const Route = createFileRoute("/pricing")({
 	head: () => ({
@@ -133,16 +144,27 @@ interface Feature {
 function useFeatures(): Feature[] {
 	return [
 		{
+			// Decided allowances (Starter 100 / Pro 200 / Scale 400) from the caps
+			// ticket 86eye2ccu. Copy leads enforcement (Arif, 9 Aug 2026): PLAN_CAPS
+			// still reads 2,000 for Scale until that ticket ships the soft-cap meter,
+			// but the page must never advertise a number the business can't hold.
 			label: m.pricingpage_feat_orders_per_month(),
 			starter: "100",
-			pro: "500",
-			scale: m.pricingpage_unlimited(),
+			pro: "200",
+			scale: "400",
 		},
 		{
 			label: m.pricingpage_feat_team_members(),
 			starter: "1",
 			pro: "2",
 			scale: "5",
+			comingSoon: true,
+		},
+		{
+			label: m.pricingpage_feat_outlets(),
+			starter: "1",
+			pro: "1",
+			scale: m.pricingpage_val_outlets_scale(),
 			comingSoon: true,
 		},
 		{
@@ -200,6 +222,14 @@ function useFeatures(): Feature[] {
 			scale: true,
 		},
 		{
+			// Shipped (Seller Insights v1, 86ey5tfrz) — live, so no Coming soon
+			// badge. The strongest shipped Pro differentiator; must be on the table.
+			label: m.pricingpage_feat_insights(),
+			starter: false,
+			pro: true,
+			scale: true,
+		},
+		{
 			// Shipped (fulfilment date at checkout, 86expm524) — and it's part of
 			// the core order flow on EVERY storefront, so it's honestly all-tier:
 			// the buyer-facing checkout doesn't vary by the seller's plan.
@@ -220,27 +250,6 @@ function useFeatures(): Feature[] {
 			starter: false,
 			pro: m.pricingpage_val_broadcast_pro(),
 			scale: m.pricingpage_val_broadcast_scale(),
-			comingSoon: true,
-		},
-		{
-			label: m.pricingpage_feat_tiered(),
-			starter: false,
-			pro: false,
-			scale: true,
-			comingSoon: true,
-		},
-		{
-			label: m.pricingpage_feat_reseller(),
-			starter: false,
-			pro: false,
-			scale: true,
-			comingSoon: true,
-		},
-		{
-			label: m.pricingpage_feat_reports(),
-			starter: false,
-			pro: false,
-			scale: true,
 			comingSoon: true,
 		},
 		{
@@ -296,13 +305,35 @@ function FeatureCell({ value }: { value: FeatureValue }) {
 	return <span className="text-sm font-medium text-foreground">{value}</span>;
 }
 
-function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
-	const { isSignedIn } = useAuth();
-	// Scale is banded on active resellers (Coming soon), so it always anchors on
-	// "from RM299" and ignores the monthly/annual toggle — an annual number would
-	// be misleading before banded billing ships. See docs/pricing.md.
+function TierCard({
+	tier,
+	cycle,
+	isSignedIn,
+	subscription,
+	pending,
+}: {
+	tier: Tier;
+	cycle: Cycle;
+	isSignedIn: boolean;
+	/** The signed-in seller's plan/status, or null when signed out / not yet
+	 * resolved (loading, or a storeless admin) — the CTA falls back safely then. */
+	subscription: SubscriptionView | null;
+	/** Auth/plan still resolving — show a spinner instead of a (soon-to-change)
+	 * label on the purchasable tiers. Scale ignores it (auth-independent). */
+	pending: boolean;
+}) {
+	// Scale is the flat multi-outlet tier (RM299/mo — Arif, 19 Jul 2026), still
+	// not purchasable, so only its CTA differs (a disabled "Coming soon" panel).
+	// See docs/pricing.md.
 	const isScale = tier.id === "scale";
 	const price = cycle === "annual" ? tier.annual : tier.monthly;
+
+	// CTA is plan-aware for signed-in sellers: only an active/comped owner of this
+	// tier gets the disabled "Current plan" pill; trial/lapsed sellers get an
+	// actionable "Subscribe", and owners of another tier get "Upgrade"/"Manage
+	// plan" — all routing to Settings → Billing, which owns the manual contact-Arif
+	// flow (billing is manual in v1). See docs/pricing.md + src/lib/pricing-cta.ts.
+	const cta = resolveTierCta(tier.id, { isScale, isSignedIn, subscription });
 
 	return (
 		<div
@@ -334,14 +365,7 @@ function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 			</p>
 
 			<div className="mt-3 flex items-end gap-1">
-				{isScale && (
-					<span className="mb-1 text-sm text-muted-foreground">
-						{m.pricingpage_price_from()}
-					</span>
-				)}
-				<span className="text-4xl font-bold tracking-tight">
-					RM {isScale ? tier.monthly : price}
-				</span>
+				<span className="text-4xl font-bold tracking-tight">RM {price}</span>
 				<span
 					className={cn(
 						"mb-1 text-sm",
@@ -353,7 +377,7 @@ function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 					{m.pricing_per_month()}
 				</span>
 			</div>
-			{cycle === "annual" && !isScale && (
+			{cycle === "annual" && (
 				<p className="mt-0.5 text-xs text-accent">
 					{m.pricingpage_billed_annual({ total: tier.annual * 10 })}
 				</p>
@@ -368,7 +392,14 @@ function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 				{tier.tagline}
 			</p>
 
-			{isScale && <ResellerBandTable className="mt-4" />}
+			<p
+				className={cn(
+					"mt-2 text-xs font-medium",
+					tier.popular ? "text-primary-foreground/70" : "text-accent-emphasis",
+				)}
+			>
+				{m.pricingpage_flat_price_note()}
+			</p>
 
 			{tier.founding && (
 				<div className="mt-4 rounded-xl border border-accent/40 bg-accent/10 px-4 py-3">
@@ -405,15 +436,59 @@ function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 						{m.pricingpage_soon()}
 					</span>
 				</li>
+				{isScale && (
+					<>
+						<li className="flex items-center gap-2 text-sm text-muted-foreground">
+							<Check className="size-4 shrink-0 text-muted-foreground/50" />
+							{m.pricingpage_scale_outlets()}
+							<span className="rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-400">
+								{m.pricingpage_soon()}
+							</span>
+						</li>
+						<li className="pl-6 text-xs text-muted-foreground/80">
+							{m.pricingpage_scale_outlet_addon()}
+						</li>
+					</>
+				)}
 			</ul>
 
 			<div className="mt-6">
-				{isScale ? (
-					// Scale is banded + not yet purchasable — a disabled "Coming soon"
-					// panel replaces the CTA (mirrors the landing teaser). Trials are
+				{cta === "coming_soon" ? (
+					// Scale is not yet purchasable — a disabled "Coming soon" panel
+					// replaces the CTA (mirrors the landing teaser). Trials are
 					// Pro-only, so a trial link here would be wrong.
 					<div className="flex h-11 w-full items-center justify-center rounded-full border border-dashed border-border bg-muted/40 text-sm font-semibold text-muted-foreground">
 						{m.pricingpage_coming_soon()}
+					</div>
+				) : pending ? (
+					// Auth/plan still resolving — a spinner holds the button's place so
+					// the label doesn't flip trial → dashboard → final on one refresh.
+					<Button
+						size="lg"
+						isLoading
+						aria-label={m.pricingpage_cta_loading()}
+						variant={tier.popular ? "default" : "outline"}
+						className={cn(
+							"h-11 w-full rounded-full",
+							!tier.popular &&
+								"border-border bg-background text-foreground hover:bg-muted",
+						)}
+					>
+						{m.pricingpage_cta_trial()}
+					</Button>
+				) : cta === "current" ? (
+					// The seller is already on this tier — a non-actionable pill, not a
+					// link, so the card doesn't pretend there's something to do here.
+					<div
+						className={cn(
+							"flex h-11 w-full items-center justify-center gap-1.5 rounded-full border text-sm font-semibold",
+							tier.popular
+								? "border-primary-foreground/20 bg-primary-foreground/10 text-primary-foreground/80"
+								: "border-border bg-muted/40 text-muted-foreground",
+						)}
+					>
+						<Check className="size-4" />
+						{m.pricingpage_current_plan()}
 					</div>
 				) : (
 					<Button
@@ -426,13 +501,26 @@ function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 						)}
 						variant={tier.popular ? "default" : "outline"}
 					>
-						{isSignedIn ? (
+						{cta === "trial" ? (
+							<Link to="/sign-up/$" params={{ _splat: "" }}>
+								{tier.cta} <ArrowRight className="size-4" />
+							</Link>
+						) : cta === "dashboard" ? (
+							// Signed in but plan not resolved (loading / storeless admin) —
+							// safe fallback to the dashboard, no wrong upgrade label.
 							<Link to="/app">
 								{m.nav_go_to_dashboard()} <ArrowRight className="size-4" />
 							</Link>
 						) : (
-							<Link to="/sign-up/$" params={{ _splat: "" }}>
-								{tier.cta} <ArrowRight className="size-4" />
+							// subscribe | upgrade | manage → Settings → Billing (the manual
+							// contact-Arif conversion/upgrade flow).
+							<Link to="/app/settings" search={{ tab: "billing" }}>
+								{cta === "subscribe"
+									? m.pricingpage_cta_subscribe()
+									: cta === "upgrade"
+										? m.pricingpage_cta_upgrade()
+										: m.pricingpage_cta_manage_plan()}{" "}
+								<ArrowRight className="size-4" />
 							</Link>
 						)}
 					</Button>
@@ -444,9 +532,25 @@ function TierCard({ tier, cycle }: { tier: Tier; cycle: Cycle }) {
 
 function PricingPage() {
 	const [cycle, setCycle] = useState<Cycle>("monthly");
+	const { isLoaded, isSignedIn } = useAuth();
+	// Only signed-in sellers need their plan; skip the query for visitors. A
+	// narrow read (plan/status/comped) — not the heavy getMyRetailer payload — on
+	// this public marketing route. null while loading / storeless admin → the
+	// card CTA falls back safely.
+	const planState = useQuery(
+		api.retailers.getMyPlan,
+		isLoaded && isSignedIn ? {} : "skip",
+	);
+	const subscription: SubscriptionView | null = planState ?? null;
+	// Until Clerk has loaded AND (for a signed-in seller) the plan query resolves,
+	// the final CTA is unknown — show a spinner in the button rather than flipping
+	// the label through trial → dashboard → final on a single refresh.
+	const ctaPending =
+		!isLoaded || (isSignedIn === true && planState === undefined);
 	const tiers = useTiers();
 	const features = useFeatures();
 	const faqs = useFaqs();
+	const supportWa = useSupportWaNumber();
 
 	return (
 		<main className="min-h-dvh bg-background text-foreground">
@@ -474,38 +578,41 @@ function PricingPage() {
 						</p>
 					</FadeIn>
 
-					{/* Billing toggle */}
-					<FadeIn delay={0.1}>
-						<div className="mt-8 inline-flex items-center rounded-full border border-border bg-card p-1.5 shadow-sm">
-							<button
-								type="button"
-								onClick={() => setCycle("monthly")}
-								className={cn(
-									"rounded-full px-5 py-2 text-sm font-semibold transition-colors",
-									cycle === "monthly"
-										? "bg-primary text-primary-foreground"
-										: "text-muted-foreground hover:text-foreground",
-								)}
-							>
-								{m.pricingpage_toggle_monthly()}
-							</button>
-							<button
-								type="button"
-								onClick={() => setCycle("annual")}
-								className={cn(
-									"relative rounded-full px-5 py-2 text-sm font-semibold transition-colors",
-									cycle === "annual"
-										? "bg-primary text-primary-foreground"
-										: "text-muted-foreground hover:text-foreground",
-								)}
-							>
-								{m.pricingpage_toggle_annual()}
-								<span className="absolute -right-1 -top-2 rotate-3 rounded-full bg-accent px-1.5 py-0.5 text-[9px] font-bold uppercase leading-none text-accent-foreground">
-									-17%
-								</span>
-							</button>
-						</div>
-					</FadeIn>
+					{/* Billing toggle — hidden until recurring billing ships; see
+					    SHOW_ANNUAL_TOGGLE. Monthly is the only cycle meanwhile. */}
+					{SHOW_ANNUAL_TOGGLE && (
+						<FadeIn delay={0.1}>
+							<div className="mt-8 inline-flex items-center rounded-full border border-border bg-card p-1.5 shadow-sm">
+								<button
+									type="button"
+									onClick={() => setCycle("monthly")}
+									className={cn(
+										"rounded-full px-5 py-2 text-sm font-semibold transition-colors",
+										cycle === "monthly"
+											? "bg-primary text-primary-foreground"
+											: "text-muted-foreground hover:text-foreground",
+									)}
+								>
+									{m.pricingpage_toggle_monthly()}
+								</button>
+								<button
+									type="button"
+									onClick={() => setCycle("annual")}
+									className={cn(
+										"relative rounded-full px-5 py-2 text-sm font-semibold transition-colors",
+										cycle === "annual"
+											? "bg-primary text-primary-foreground"
+											: "text-muted-foreground hover:text-foreground",
+									)}
+								>
+									{m.pricingpage_toggle_annual()}
+									<span className="absolute -right-1 -top-2 rotate-3 rounded-full bg-accent px-1.5 py-0.5 text-[9px] font-bold uppercase leading-none text-accent-foreground">
+										-17%
+									</span>
+								</button>
+							</div>
+						</FadeIn>
+					)}
 				</div>
 			</section>
 
@@ -515,7 +622,14 @@ function PricingPage() {
 					<FadeIn>
 						<div className="grid items-stretch gap-6 md:grid-cols-3 lg:gap-5">
 							{tiers.map((tier) => (
-								<TierCard key={tier.id} tier={tier} cycle={cycle} />
+								<TierCard
+									key={tier.id}
+									tier={tier}
+									cycle={cycle}
+									isSignedIn={isSignedIn ?? false}
+									subscription={subscription}
+									pending={ctaPending}
+								/>
 							))}
 						</div>
 					</FadeIn>
@@ -553,7 +667,7 @@ function PricingPage() {
 							</div>
 							<div className="relative shrink-0">
 								<a
-									href={buildWaContactLink(m.founding_wa_message())}
+									href={buildWaContactLink(m.founding_wa_message(), supportWa)}
 									target="_blank"
 									rel="noopener noreferrer"
 									className={ctaPillClass("accent")}

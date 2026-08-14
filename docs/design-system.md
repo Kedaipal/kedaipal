@@ -36,7 +36,9 @@ Dark mode: `.dark` class on an ancestor; **mint becomes `primary`**. Every new s
 1. **≥44px tap targets** for anything interactive. ⚠️ **`Button`'s own sizes top out at `h-9` = 36px** — even `size="lg"` and `size="icon"` do **not** clear 44px. For any primary *touch* target, add the **`tap-target`** utility (or `min-h-11`) to the button, or use the Input `field` variant for fields. (Mouse-only desktop controls may stay compact — 44px is a touch rule.) Icon-only buttons should use `size="icon"` + `tap-target`, not a text size like `lg`.
 2. **Single-column by default**, widen at `sm:`/`lg:`. Never design desktop-first and shrink.
 3. **Safe areas:** bottom-anchored bars use `pb-[max(0.75rem,env(safe-area-inset-bottom))]` (or the `safe-bottom` utility). See [`bottom-nav.tsx`](../src/components/dashboard/bottom-nav.tsx).
-4. **Sticky primary action** on long flows (`sticky bottom-0` + border + `bg-background`), not a button lost at the bottom of a scroll.
+4. **Bottom-anchored primary action** on long flows (border + `bg-background`), not a button lost at the bottom of a scroll. **`fixed inset-x-0 bottom-0`** — every action bar in the app does this ([`cart-bar.tsx`](../src/components/storefront/cart-bar.tsx), the product page's purchase bar, [`checkout-form.tsx`](../src/components/storefront/checkout-form.tsx), the cost calculator, the orders bulk bar). Out of flow means the page's own footer renders as ordinary content **above** the floating bar, so every page stacks the same way — a `sticky` bar sits IN flow and shoves the footer below it, which reads as welded and inconsistent with its sibling pages.
+   - A fixed bar is out of flow, so **the page must reserve its height**: measure it with [`usePublishedHeight`](../src/hooks/usePublishedHeight.ts) and pad with `pb-[var(--storefront-bar-h,…)]` rather than hardcoding a guess that rots as the bar's content wraps. A `display:none` bar measures `0px` and `var(…, fallback)` only fires when the property is *unset*, so pair it with a breakpoint override (`lg:pb-10`).
+   - `sticky bottom-0` is for a bar that's the **last element in its own scroll container with nothing after it** — the dashboard [`bottom-nav.tsx`](../src/components/dashboard/bottom-nav.tsx), which has no footer to stack against.
 5. Bottom nav / desktop sidebar swap at `lg` (`lg:hidden` / `hidden lg:flex`).
 
 ## Primitives — reach for these first
@@ -48,9 +50,10 @@ Don't hand-roll what exists. From [`src/components/ui/`](../src/components/ui/):
 | Text input | `Input` | `variant="field"` = **mobile form field (≥44px)**; `default` = compact toolbar; `bare` = child of a composite. `isError` sets `aria-invalid`. |
 | Form row | `Field` + `FieldLabel` / `FieldContent` / `FieldDescription` / `FieldError` | **always** compose forms with these — don't hand-write label+input+error. `FieldError` takes an `errors` array (TanStack Form shape). |
 | Textarea | `Textarea` | |
-| Phone | `PhoneInput` | MY-aware; use everywhere a WA number is entered. |
+| Phone | `MyPhoneInput` (plain state) / `TextField prefix={<MyPhonePrefix />}` (form-bound) | **every** Malaysian phone field — see below. |
+| Composite control | `InputPrefixFrame` | one border owning a fixed plate + a `bare` input (the `+60` plate, an "RM"). |
 | Modal | `Dialog*` | `DialogFooter` is full-bleed + reverses on mobile. Confirm-only flows → `ConfirmDialog`. |
-| Popover / menu | `Popover`, `DropdownMenu*` (radix), `Command` (cmdk) | `DropdownMenu` = a keyboard-navigable action menu (trigger → items). Use to group related actions behind one control instead of a row of competing buttons (e.g. the counter-checkout header's "New order"). Open a `Dialog` from an item via controlled state in `onSelect` — the menu→dialog focus handoff is clean. |
+| Popover / menu | `Popover`, `DropdownMenu*` (radix) | `DropdownMenu` = a keyboard-navigable action menu (trigger → items). Use to group related actions behind one control instead of a row of competing buttons (e.g. the counter-checkout header's "New order"). Open a `Dialog` from an item via controlled state in `onSelect` — the menu→dialog focus handoff is clean. |
 | Copy-to-clipboard | `CopyButton` | one-tap copy w/ feedback (order IDs, bank details). |
 | Reorderable list | `SortableList` | **the** sorting standard (@dnd-kit, mobile-safe). **Never** arrow-button reordering. |
 | Loading state | `Skeleton` | prefer skeletons over spinners for content. |
@@ -62,6 +65,17 @@ If a primitive is missing, **add it to `src/components/ui/`** — don't inline a
 
 ### Images always render via `AppImage` (2026-07-24)
 `src/components/ui/app-image.tsx` — skeleton placeholder while loading → fade-in on load → a labelled, terminal fallback (muted box + icon + the alt text) on a dead URL or unset `src`, instead of a blank box. Two sizing modes: **`fill` (default)** — `aspect` is the wrapper's box, the image crops to fill it (`objectFit="cover"|"contain"`); use for photo thumbnails, avatars, banners. **`fill={false}`** — `aspect` becomes the image's OWN intrinsic-ratio classes (e.g. `"h-8 w-auto"`) instead of a box to stretch into; use for fixed-height, auto-width brand-mark SVGs (forcing those through `w-full` inside an auto-width wrapper is the classic "percentage width in an indefinite container" CSS trap). `priority` (LCP candidates — storefront cover, first product-grid row) skips the lazy-loading hint. Local upload previews (`blob:`/`data:` URLs) auto-skip the skeleton (already instant). **Exceptions:** `store-poster.tsx` (print/PDF-export surface — a lazy or opacity-0 image can print blank; has its own `new Image()` onload/onerror gating) and `landing/responsive-image.tsx` (a build-time `<picture>`/srcset wrapper for static optimized assets — a different concern from `AppImage`'s runtime Convex-hosted URLs).
+
+### Every phone field wears the `+60` plate (2026-08-12, ClickUp `86eyknr2r`)
+`src/components/ui/my-phone-input.tsx` — flag, fixed `+60`, a rule, then what the user types, as every payment/ride app in this market renders it (Grab, Shopee, Touch 'n Go, Stripe). Before this the repo had **three** shapes for one question: this plate (storefront checkout only), a bare `<input type="tel">` with a placeholder, and a 250-country searchable combobox — a control with one valid answer for a Malaysia-only product. The combobox and its `react-phone-number-input` + `cmdk` dependencies are gone.
+
+**Two hosts, one plate, so they can't drift.** Form-bound fields use `TextField` with `prefix={<MyPhonePrefix />}`; plain-`useState` forms use `MyPhoneInput` (value/onChange). Both render through `InputPrefixFrame`, which owns the border, focus ring and invalid state — the inner control is `variant="bare"` and the `bare` variant deliberately paints **no** invalid ring of its own (it keeps `aria-invalid` for assistive tech, but a second destructive outline inside the frame is a bug, not emphasis).
+
+**The plate is a promise about what the field accepts.** Only put it on a field whose server validator is `assertValidMyMobile` (`convex/lib/slug.ts`) — which takes the bare national number the plate asks for (`12-345 6789`), a local `012-…`, and a full `60…`, and rejects a landline. Adding the plate to a field that still accepts any country tells the user to do something the save then refuses. The loose `assertValidWaPhone` survives only where a number arrives from somewhere other than a Kedaipal form (inbound Meta messages, the counter's store-QR scan, the CRM rows keyed off them).
+
+**Seeding from the DB goes through `toMyNationalInput`** (`src/lib/phone.ts`) — numbers are stored as `601159399791`, and rendering that beside the plate reads `+60 | 601159399791`. Comparisons ("is this dirty?") go through `normalizeMyDigits`, the same pure normalizer `myWaPhoneCheckoutSchema` runs, so a dirty-check and a validator can't disagree.
+
+**Deliberate exception:** the counter checkout's manual buyer bind keeps a bare input. It normalizes through `assertValidMyWaPhone`, which passes a foreign number through by design — a cashier may be serving a walk-in who isn't Malaysian.
 
 ## Patterns & anti-patterns
 - **Focus:** every interactive element needs the visible ring (`focus-visible:ring-3 ring-ring/50`) — primitives already do; preserve it on custom elements.

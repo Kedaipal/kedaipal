@@ -3,7 +3,11 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { CartItem, UseCart } from "../../hooks/useCart";
-import { CheckoutSummary, CheckoutTotals } from "./checkout-summary";
+import {
+	CheckoutSummary,
+	type CheckoutQuoteView,
+	CheckoutTotals,
+} from "./checkout-summary";
 
 afterEach(cleanup);
 
@@ -136,6 +140,28 @@ describe("CheckoutSummary (order ticket)", () => {
 		expect(cart.removeItem).toHaveBeenCalledWith("vc");
 	});
 
+	/** A PRICED custom line is the seller's starting price, so the receipt can't
+	 * print it as the settled amount (86eyhn4mr). */
+	it("prefixes From on a priced custom line", () => {
+		const cart = makeCart([
+			makeItem({
+				variantId: "vc",
+				name: "Tent wash",
+				isCustom: true,
+				price: 4000,
+				quantity: 1,
+			}),
+		]);
+		renderSummary(cart);
+		expect(screen.getByText("From 40.00")).toBeTruthy();
+	});
+
+	it("leaves an ordinary line's amount bare", () => {
+		const cart = makeCart([makeItem({ variantId: "v1", quantity: 1 })]);
+		renderSummary(cart);
+		expect(screen.getByText("45.00")).toBeTruthy();
+	});
+
 	it("pre-expands a shortfall line so the fixing stepper is already showing", () => {
 		const cart = makeCart([
 			makeItem({ variantId: "v1", quantity: 2 }),
@@ -230,6 +256,47 @@ describe("CheckoutTotals", () => {
 		expect(screen.getByText("FREE")).toBeTruthy();
 	});
 
+	/** A custom line means this total isn't the bill yet (86eyhn4mr) — the same
+	 * posture the pending delivery fee already had. */
+	it("names an open quote on the total", () => {
+		render(
+			<CheckoutTotals
+				subtotal={4000}
+				currency="MYR"
+				pickupFee={0}
+				awaitingQuote
+			/>,
+		);
+		expect(screen.getByText("+ your quote")).toBeTruthy();
+	});
+
+	it("lists both holds when the quote AND the delivery fee are open", () => {
+		render(
+			<CheckoutTotals
+				subtotal={4000}
+				currency="MYR"
+				pickupFee={0}
+				awaitingQuote
+				quote={{ kind: "pending", reason: "out_of_range" }}
+			/>,
+		);
+		// Neither may silently win — the buyer is waiting on two numbers.
+		expect(screen.getByText("+ your quote + delivery")).toBeTruthy();
+	});
+
+	it("says collection, not delivery, on a collection-service store", () => {
+		render(
+			<CheckoutTotals
+				subtotal={4000}
+				currency="MYR"
+				pickupFee={0}
+				collectsFromCustomer
+				quote={{ kind: "pending", reason: "out_of_range" }}
+			/>,
+		);
+		expect(screen.getByText("+ collection")).toBeTruthy();
+	});
+
 	it("renders blocked copy as an alert", () => {
 		render(
 			<CheckoutTotals
@@ -243,5 +310,52 @@ describe("CheckoutTotals", () => {
 		expect(screen.getByRole("alert").textContent).toContain(
 			"outside the delivery area",
 		);
+	});
+});
+
+describe("checkout summary — 31 Jul bug fixes (86eyfq04j)", () => {
+	it("gives every product row a caret that flips when expanded", () => {
+		const cart = makeCart([makeItem({ variantId: "v1" })]);
+		const { container } = render(
+			<CheckoutSummary cart={cart} storeName="K Frozen Food" />,
+		);
+		// The rows have been tappable since the ticket redesign; the only cue was
+		// a caption under the whole list, so nobody found them.
+		const caret = () => container.querySelector("li svg.lucide-chevron-down");
+		expect(caret()).toBeTruthy();
+		expect(caret()?.getAttribute("class")).not.toContain("rotate-180");
+		fireEvent.click(screen.getByRole("button", { expanded: false }));
+		expect(caret()?.getAttribute("class")).toContain("rotate-180");
+	});
+
+	it("marks the delivery charge with a truck in every quote state", () => {
+		const quotes: CheckoutQuoteView[] = [
+			{ kind: "fee", fee: 800 },
+			{ kind: "free", reason: "threshold" },
+			{ kind: "pending", reason: "unquotable" },
+			{ kind: "calculating" },
+		];
+		for (const quote of quotes) {
+			const { container, unmount } = render(
+				<CheckoutTotals
+					subtotal={9000}
+					currency="MYR"
+					pickupFee={0}
+					quote={quote}
+				/>,
+			);
+			expect(
+				container.querySelector("svg.lucide-truck"),
+				`expected a truck for quote kind ${quote?.kind}`,
+			).toBeTruthy();
+			unmount();
+		}
+	});
+
+	it("marks a pickup charge with its own glyph, so one fee row isn't the odd one out", () => {
+		const { container } = render(
+			<CheckoutTotals subtotal={9000} currency="MYR" pickupFee={200} />,
+		);
+		expect(container.querySelector("svg.lucide-package")).toBeTruthy();
 	});
 });

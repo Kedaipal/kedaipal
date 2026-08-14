@@ -187,6 +187,29 @@ describe("orderToReceiptData", () => {
 		// Received → a receipt.
 		expect(data.paid).toBe(true);
 	});
+
+	test("carries the trip direction so the charge row can read 'Collection fee' (86eyg0n8e)", () => {
+		const collection = orderToReceiptData({
+			order: {
+				...baseOrder,
+				paymentStatus: "received",
+				deliveryFee: 1000,
+				deliveryDirection: "collection" as const,
+			},
+			storeName: "Bearcamp",
+			paymentMethods: [],
+		});
+		expect(collection.deliveryDirection).toBe("collection");
+		expect(collection.deliveryFee).toBe(1000);
+		// A standard order carries no direction — the renderer's default branch
+		// keeps printing "Delivery fee".
+		const standard = orderToReceiptData({
+			order: { ...baseOrder, paymentStatus: "received", deliveryFee: 1000 },
+			storeName: "Sweet Co",
+			paymentMethods: [],
+		});
+		expect(standard.deliveryDirection).toBeUndefined();
+	});
 });
 
 describe("invoiceToSubscriptionData", () => {

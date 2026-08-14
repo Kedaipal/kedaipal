@@ -20,6 +20,9 @@ export const ORDER_PAYMENT_METHODS = [
 	"duitnow",
 	"tng",
 	"bank_transfer",
+	// FPX (online-banking checkout rail) — distinct from a manual bank transfer:
+	// stamped by the HitPay gateway (86eyb6z3a), never hand-picked at a counter.
+	"fpx",
 	"card",
 	"other",
 ] as const;
@@ -32,6 +35,7 @@ export const PAYMENT_METHOD_LABELS: Record<OrderPaymentMethod, string> = {
 	duitnow: "DuitNow",
 	tng: "Touch 'n Go",
 	bank_transfer: "Bank transfer",
+	fpx: "FPX",
 	card: "Card",
 	other: "Other",
 };
@@ -42,6 +46,7 @@ export const orderPaymentMethodValidator = v.union(
 	v.literal("duitnow"),
 	v.literal("tng"),
 	v.literal("bank_transfer"),
+	v.literal("fpx"),
 	v.literal("card"),
 	v.literal("other"),
 );

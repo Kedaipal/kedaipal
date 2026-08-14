@@ -13,7 +13,7 @@ import {
 	renderRetailerEmail,
 	type RetailerEmailKey,
 } from "./lib/emailCopy";
-import { formatFulfilmentDate } from "./lib/fulfilmentDate";
+import { formatFulfilmentDateTime } from "./lib/fulfilmentDate";
 import { deriveMapsUrl } from "./lib/mapsUrl";
 import type { PickupSnapshot } from "./lib/whatsappCopy";
 
@@ -38,8 +38,10 @@ export const getOrderForRetailerEmail = internalQuery({
 		currency: string;
 		customerName: string;
 		deliveryMethod: DeliveryMethod;
+		deliveryDirection: "standard" | "collection" | undefined;
 		pickupSnapshot: PickupSnapshot | undefined;
 		fulfilmentDate: number | undefined;
+		fulfilmentTimeMinutes: number | undefined;
 		notifyEmail: string | undefined;
 		storeName: string;
 		locale: Locale;
@@ -61,8 +63,10 @@ export const getOrderForRetailerEmail = internalQuery({
 			currency: order.currency,
 			customerName: order.customer.name ?? "Anonymous",
 			deliveryMethod: (order.deliveryMethod as DeliveryMethod | undefined) ?? "delivery",
+			deliveryDirection: order.deliveryDirection,
 			pickupSnapshot: order.pickupSnapshot,
 			fulfilmentDate: order.fulfilmentDate,
+			fulfilmentTimeMinutes: order.fulfilmentTimeMinutes,
 			notifyEmail: retailer.notifyEmail,
 			storeName: retailer.storeName,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
@@ -95,6 +99,7 @@ async function sendMockupSellerEmail(
 		currency: string;
 		customerName: string;
 		deliveryMethod: DeliveryMethod;
+		deliveryDirection: "standard" | "collection" | undefined;
 		notifyEmail: string | undefined;
 		storeName: string;
 		locale: Locale;
@@ -118,6 +123,7 @@ async function sendMockupSellerEmail(
 		totalFormatted,
 		customerName: meta.customerName,
 		deliveryMethod: meta.deliveryMethod,
+		deliveryDirection: meta.deliveryDirection,
 		storeName: meta.storeName,
 		dashboardUrl,
 		mockupChangeNote: meta.mockupChangeNote,
@@ -149,6 +155,7 @@ export const notifyDeliveryJobFailed = internalAction({
 			currency: string;
 			customerName: string;
 			deliveryMethod: DeliveryMethod;
+			deliveryDirection: "standard" | "collection" | undefined;
 			notifyEmail: string | undefined;
 			storeName: string;
 			locale: Locale;
@@ -173,6 +180,7 @@ export const notifyDeliveryJobFailed = internalAction({
 				totalFormatted,
 				customerName: meta.customerName,
 				deliveryMethod: meta.deliveryMethod,
+				deliveryDirection: meta.deliveryDirection,
 				storeName: meta.storeName,
 				dashboardUrl,
 				jobFailureReason: reason,
@@ -226,8 +234,10 @@ export const notifyRetailerOrderAlert = internalAction({
 			currency: string;
 			customerName: string;
 			deliveryMethod: DeliveryMethod;
+			deliveryDirection: "standard" | "collection" | undefined;
 			pickupSnapshot: PickupSnapshot | undefined;
 			fulfilmentDate: number | undefined;
+		fulfilmentTimeMinutes: number | undefined;
 			notifyEmail: string | undefined;
 			storeName: string;
 			locale: Locale;
@@ -266,13 +276,17 @@ export const notifyRetailerOrderAlert = internalAction({
 			totalFormatted,
 			customerName: meta.customerName,
 			deliveryMethod: meta.deliveryMethod,
+			deliveryDirection: meta.deliveryDirection,
 			storeName: meta.storeName,
 			dashboardUrl,
 			requiresMockup: meta.requiresMockup,
 			deliveryFeePending: meta.deliveryFeePending,
 			fulfilmentDateLabel:
 				meta.fulfilmentDate !== undefined
-					? formatFulfilmentDate(meta.fulfilmentDate)
+					? formatFulfilmentDateTime(
+							meta.fulfilmentDate,
+							meta.fulfilmentTimeMinutes,
+						)
 					: undefined,
 			// Pickup point detail for the kind-aware "Method:" label + the
 			// where/when block. Only meaningful for pickup orders; emailCopy
@@ -321,6 +335,7 @@ export const notifyPaymentClaimed = internalAction({
 			currency: string;
 			customerName: string;
 			deliveryMethod: DeliveryMethod;
+			deliveryDirection: "standard" | "collection" | undefined;
 			notifyEmail: string | undefined;
 			storeName: string;
 			locale: Locale;
@@ -374,6 +389,7 @@ export const notifyPaymentClaimed = internalAction({
 				totalFormatted,
 				customerName: meta.customerName,
 				deliveryMethod: meta.deliveryMethod,
+				deliveryDirection: meta.deliveryDirection,
 				storeName: meta.storeName,
 				dashboardUrl,
 				paymentReference: meta.paymentReference,
@@ -386,6 +402,99 @@ export const notifyPaymentClaimed = internalAction({
 		} catch (err) {
 			console.error(
 				`Email payment-claimed failed (shortId=${meta.shortId}, to=${meta.notifyEmail}): ${
+					err instanceof Error ? err.message : String(err)
+				}`,
+			);
+		}
+	},
+});
+
+/**
+ * Scheduled by orders.receiveGatewayPayment (86eyb6z3a) for the two gateway
+ * states that need a human because money moved but auto-receiving would lie:
+ *  - "amount_mismatch" — an authentic payment that doesn't match the order's
+ *    current total (stale re-priced link);
+ *  - "paid_after_cancel" — an authentic payment on an order cancelled after
+ *    the link was minted (needs a refund, never a resurrection).
+ * Same lookup/skip/swallow pattern as `notifyPaymentClaimed`.
+ */
+export const notifyGatewayPaymentIssue = internalAction({
+	args: {
+		orderId: v.id("orders"),
+		kind: v.union(
+			v.literal("amount_mismatch"),
+			v.literal("paid_after_cancel"),
+		),
+		paidAmountSen: v.number(),
+		paidCurrency: v.string(),
+		paymentId: v.string(),
+	},
+	handler: async (
+		ctx,
+		{ orderId, kind, paidAmountSen, paidCurrency, paymentId },
+	): Promise<void> => {
+		let meta: {
+			shortId: string;
+			status: Doc<"orders">["status"];
+			itemCount: number;
+			total: number;
+			currency: string;
+			customerName: string;
+			deliveryMethod: DeliveryMethod;
+			deliveryDirection: "standard" | "collection" | undefined;
+			notifyEmail: string | undefined;
+			storeName: string;
+			locale: Locale;
+			paymentReference: string | undefined;
+			paymentProofStorageId: string | undefined;
+		} | null = null;
+		try {
+			meta = await ctx.runQuery(internal.email.getOrderForRetailerEmail, {
+				orderId,
+			});
+		} catch (err) {
+			console.error("Email gateway-mismatch lookup failed", err);
+			return;
+		}
+		if (!meta) {
+			console.error(
+				`Email gateway-mismatch skipped: no order meta (orderId=${orderId})`,
+			);
+			return;
+		}
+		if (!meta.notifyEmail) {
+			console.warn(
+				`Email gateway-mismatch skipped: notifyEmail is empty (orderId=${orderId}, shortId=${meta.shortId})`,
+			);
+			return;
+		}
+
+		const totalFormatted = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
+		const gatewayPaidFormatted = `${paidCurrency} ${(paidAmountSen / 100).toFixed(2)}`;
+		const dashboardUrl = `${process.env.SITE_URL ?? "https://kedaipal.com"}/app/orders/${meta.shortId}`;
+
+		const { subject, html, text } = renderRetailerEmail(
+			meta.locale,
+			kind === "paid_after_cancel" ? "gatewayPaidCancelled" : "gatewayMismatch",
+			{
+				shortId: meta.shortId,
+				itemCount: meta.itemCount,
+				totalFormatted,
+				customerName: meta.customerName,
+				deliveryMethod: meta.deliveryMethod,
+				deliveryDirection: meta.deliveryDirection,
+				storeName: meta.storeName,
+				dashboardUrl,
+				paymentReference: paymentId,
+				gatewayPaidFormatted,
+			},
+		);
+
+		try {
+			await sendEmail(meta.notifyEmail, subject, html, text);
+		} catch (err) {
+			console.error(
+				`Email gateway-mismatch failed (shortId=${meta.shortId}, to=${meta.notifyEmail}): ${
 					err instanceof Error ? err.message : String(err)
 				}`,
 			);

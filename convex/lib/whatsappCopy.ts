@@ -19,6 +19,11 @@ export type CopyVars = {
 	courierName?: string;
 	trackingNo?: string;
 	deliveryMethod?: DeliveryMethod;
+	// The order's frozen trip direction (orders.deliveryDirection, 86eyg0n8e).
+	// "collection" = the rider collects FROM the buyer (gear-wash stores) — the
+	// confirm's "we'll update you when it ships" line flips to collection
+	// wording. Only meaningful on delivery orders; undefined = standard.
+	deliveryDirection?: "standard" | "collection";
 	// The order's frozen pickup kind (pickupSnapshot.locationType). Only
 	// meaningful when deliveryMethod is self_collect; undefined (legacy
 	// snapshots / delivery orders) reads as self-collect, matching
@@ -36,6 +41,12 @@ export type CopyVars = {
 /** True when the order is fulfilled at a drop-off point (meetup), not the seller's place. */
 function isDropOff(v: Pick<CopyVars, "deliveryMethod" | "pickupKind">): boolean {
 	return v.deliveryMethod === "self_collect" && v.pickupKind === "drop_off";
+}
+
+/** True when the rider collects FROM the buyer (86eyg0n8e). Direction is only
+ * ever stamped on delivery orders, so the flag alone decides. */
+function isCollection(v: Pick<CopyVars, "deliveryDirection">): boolean {
+	return v.deliveryDirection === "collection";
 }
 
 export type StatusKey = "packed" | "shipped" | "delivered" | "cancelled";
@@ -100,12 +111,14 @@ export function privacyNoticeLine(locale: Locale): string {
 
 export const waCopy: Record<Locale, LocaleCopy> = {
 	en: {
-		confirm: ({ shortId, storeName, contactPhone, trackingUrl, deliveryMethod, pickupKind }) => {
+		confirm: ({ shortId, storeName, contactPhone, trackingUrl, deliveryMethod, deliveryDirection, pickupKind }) => {
 			const method = isDropOff({ deliveryMethod, pickupKind })
 				? "We'll let you know when it's ready at the drop-off point."
 				: deliveryMethod === "self_collect"
 					? "We'll let you know when it's ready for pickup."
-					: "We'll update you when it ships.";
+					: isCollection({ deliveryDirection })
+						? "We'll update you once collection from your address is arranged."
+						: "We'll update you when it ships.";
 			return `✅ Order ${shortId} confirmed. ${method} — ${storeName}${trackingUrl ? `\n\nTrack your order & make payment here: ${trackingUrl}` : ""}${contactLine(contactPhone, "en")}`;
 		},
 		status: {
@@ -139,12 +152,14 @@ export const waCopy: Record<Locale, LocaleCopy> = {
 			"Hi! To place an order, browse our catalog and tap Checkout — you'll be sent back here with an order ID.",
 	},
 	ms: {
-		confirm: ({ shortId, storeName, contactPhone, trackingUrl, deliveryMethod, pickupKind }) => {
+		confirm: ({ shortId, storeName, contactPhone, trackingUrl, deliveryMethod, deliveryDirection, pickupKind }) => {
 			const method = isDropOff({ deliveryMethod, pickupKind })
 				? "Kami akan maklumkan apabila sedia di lokasi penyerahan."
 				: deliveryMethod === "self_collect"
 					? "Kami akan maklumkan apabila sedia untuk diambil."
-					: "Kami akan maklumkan apabila dihantar.";
+					: isCollection({ deliveryDirection })
+						? "Kami akan maklumkan apabila kutipan dari alamat anda diatur."
+						: "Kami akan maklumkan apabila dihantar.";
 			return `✅ Pesanan ${shortId} telah disahkan. ${method} — ${storeName}${trackingUrl ? `\n\nJejak pesanan & buat pembayaran di sini: ${trackingUrl}` : ""}${contactLine(contactPhone, "ms")}`;
 		},
 		status: {
@@ -178,12 +193,14 @@ export const waCopy: Record<Locale, LocaleCopy> = {
 			"Hai! Untuk membuat pesanan, layari katalog kami dan tekan Checkout — anda akan dikembalikan ke sini dengan ID pesanan.",
 	},
 	zh: {
-		confirm: ({ shortId, storeName, contactPhone, trackingUrl, deliveryMethod, pickupKind }) => {
+		confirm: ({ shortId, storeName, contactPhone, trackingUrl, deliveryMethod, deliveryDirection, pickupKind }) => {
 			const method = isDropOff({ deliveryMethod, pickupKind })
 				? "东西准备好后，我们会通知您到交收点拿。"
 				: deliveryMethod === "self_collect"
 					? "东西准备好后，我们会通知您来拿。"
-					: "发货后我们会通知您。";
+					: isCollection({ deliveryDirection })
+						? "安排好上门取件后，我们会通知您。"
+						: "发货后我们会通知您。";
 			return `✅ 订单 ${shortId} 已确认。${method} —— ${storeName}${trackingUrl ? `\n\n查看订单状态和付款：${trackingUrl}` : ""}${contactLine(contactPhone, "zh")}`;
 		},
 		status: {
@@ -219,6 +236,23 @@ export const waCopy: Record<Locale, LocaleCopy> = {
 };
 
 export const pickLocale = pickLocaleBase;
+
+/**
+ * Which APPROVED Meta template language a store's locale maps to. Templates are
+ * approved per language and only EN + BM variants exist today, so a zh store's
+ * template sends ride EN until the Mandarin phase submits zh variants (the copy
+ * catalog above is already zh-complete; the Meta templates are not).
+ *
+ * An exhaustive Record, not a ternary: a 4th locale must be a compile error
+ * here rather than a silent English fallback (the 86eybjw5n rule). This is the
+ * ONE author of template language for every template send — the buyer
+ * confirmation push and the seller order alerts alike.
+ */
+export const TEMPLATE_LANGUAGE: Record<Locale, "en" | "ms"> = {
+	en: "en",
+	ms: "ms",
+	zh: "en",
+};
 
 // ---------------------------------------------------------------------------
 // System messages — locale-aware, NOT retailer-overridable.
