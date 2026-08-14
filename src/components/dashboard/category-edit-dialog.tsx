@@ -1,4 +1,6 @@
-import { useMutation, useQuery } from "convex/react";
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
+import { useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { EyeOff, ImagePlus, X } from "lucide-react";
 import { Dialog } from "radix-ui";
@@ -313,9 +315,9 @@ export function CategoryEditDialog({
  * flagged so their position is never silently lost.
  */
 function ArrangeProducts({ categoryId }: { categoryId: Id<"categories"> }) {
-	const products = useQuery(api.categories.listProductsForCategory, {
-		categoryId,
-	});
+	const products = useQuery(
+		convexQuery(api.categories.listProductsForCategory, { categoryId }),
+	).data;
 	const reorderProducts = useMutation(api.categories.reorderProducts);
 	const [localOrder, setLocalOrder] = useState<Id<"products">[] | null>(null);
 

@@ -1,5 +1,6 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
 import { ChevronRight, Search, X } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { api } from "../../../convex/_generated/api";
@@ -88,13 +89,14 @@ export function ProductGrid({
 	// search filter below preserves it — so the storefront reflects the seller's
 	// chosen sequence.
 	const listed = useQuery(
-		api.products.list,
-		productsOverride ? "skip" : { retailerId },
-	);
+		convexQuery(api.products.list, productsOverride ? "skip" : { retailerId }),
+	).data;
 	const products = productsOverride ?? listed;
 	// Same query the CategoryRail subscribes to — Convex dedupes identical
 	// (query, args) subscriptions, so this costs nothing extra.
-	const categories = useQuery(api.categories.listActivePublic, { retailerId });
+	const categories = useQuery(
+		convexQuery(api.categories.listActivePublic, { retailerId }),
+	).data;
 	const [searchQuery, setSearchQuery] = useState("");
 
 	if (products === undefined) {

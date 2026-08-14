@@ -1,5 +1,7 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import { Download, X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useEffect, useRef } from "react";
@@ -28,9 +30,11 @@ export function StorefrontQrDialog({
 	storefrontUrl,
 }: StorefrontQrDialogProps) {
 	const actAsRetailerId = useActAsRetailerId();
-	const storeQr = useQuery(api.counterCheckout.getStoreQr, {
-		retailerId: actAsRetailerId,
-	});
+	const storeQr = useQuery(
+		convexQuery(api.counterCheckout.getStoreQr, {
+			retailerId: actAsRetailerId,
+		}),
+	).data;
 	const ensureToken = useMutation(api.counterCheckout.ensureCounterQrToken);
 	const ensured = useRef(false);
 

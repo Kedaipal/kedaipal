@@ -1,4 +1,5 @@
-import { useQuery } from "convex/react";
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { api } from "../../convex/_generated/api";
 import { DEFAULT_SUPPORT_WA_NUMBER } from "../lib/contact";
 
@@ -16,5 +17,8 @@ import { DEFAULT_SUPPORT_WA_NUMBER } from "../lib/contact";
  * or after an early return, where a hook can't go.
  */
 export function useSupportWaNumber(): string {
-	return useQuery(api.contact.supportWhatsapp) ?? DEFAULT_SUPPORT_WA_NUMBER;
+	return (
+		useQuery(convexQuery(api.contact.supportWhatsapp, {})).data ??
+		DEFAULT_SUPPORT_WA_NUMBER
+	);
 }

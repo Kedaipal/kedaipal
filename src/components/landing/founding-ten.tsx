@@ -1,4 +1,5 @@
-import { useQuery } from "convex/react";
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Star } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
@@ -15,7 +16,8 @@ export function FoundingTen() {
 	// while loading + SSR — the honest fallback is "spots available", never a fake
 	// "taken". See docs/manual-subscription.md.
 	const remaining =
-		useQuery(api.foundingMembers.getSpotsRemaining) ?? TOTAL_SPOTS;
+		useQuery(convexQuery(api.foundingMembers.getSpotsRemaining, {})).data ??
+		TOTAL_SPOTS;
 	const supportWa = useSupportWaNumber();
 	const spotsTaken = TOTAL_SPOTS - remaining;
 	const SPOTS = Array.from({ length: TOTAL_SPOTS }, (_, i) => ({

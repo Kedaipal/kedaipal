@@ -1,5 +1,6 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
 import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../../../convex/_generated/api";
@@ -36,9 +37,8 @@ export function SubscriptionBanner({
 	const skipInvoice =
 		!subscription || subscription.comped || subscription.status === "past_due";
 	const pending = useQuery(
-		api.invoices.myNextDueInvoice,
-		skipInvoice ? "skip" : {},
-	);
+		convexQuery(api.invoices.myNextDueInvoice, skipInvoice ? "skip" : {}),
+	).data;
 
 	const now = Date.now();
 	const state = resolveBannerState(

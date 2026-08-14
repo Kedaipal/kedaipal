@@ -1,4 +1,5 @@
-import { useQuery } from "convex/react";
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import type { FunctionReturnType } from "convex/server";
 import {
 	Award,
@@ -41,9 +42,12 @@ function formatDate(ms: number): string {
  * and invoice history. See docs/manual-subscription.md. */
 export function BillingTab({ retailer }: { retailer: Retailer }) {
 	const sub = retailer.subscription;
-	const isAdmin = useQuery(api.billing.amIAdmin) ?? false;
-	const invoices = useQuery(api.invoices.myInvoices, {}) ?? [];
-	const instructions = useQuery(api.billing.paymentInstructions, {});
+	const isAdmin = useQuery(convexQuery(api.billing.amIAdmin, {})).data ?? false;
+	const invoices =
+		useQuery(convexQuery(api.invoices.myInvoices, {})).data ?? [];
+	const instructions = useQuery(
+		convexQuery(api.billing.paymentInstructions, {}),
+	).data;
 	const supportWa = useSupportWaNumber();
 
 	// A Kedaipal admin on their OWN store runs the app for free and is never on a
@@ -203,7 +207,6 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 						</div>
 					) : null}
 
-
 					{/* Starter → Pro upgrade (manual sub: routes the request to Arif on WA). */}
 					{sub?.plan === "starter" && sub.status === "active" ? (
 						<div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
@@ -346,7 +349,7 @@ export function BillingTab({ retailer }: { retailer: Retailer }) {
 							sub.status === "past_due"
 								? `Hi, I'd like to renew my Kedaipal subscription for my store (/${retailer.slug}).`
 								: `Hi, I'd like to choose a plan for my Kedaipal store (/${retailer.slug}).`,
-								supportWa,
+							supportWa,
 						)}
 						target="_blank"
 						rel="noopener noreferrer"

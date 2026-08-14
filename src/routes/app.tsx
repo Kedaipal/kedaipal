@@ -1,11 +1,13 @@
 import { RedirectToSignIn, Show } from "@clerk/tanstack-react-start";
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
 	createFileRoute,
 	Outlet,
 	useLocation,
 	useNavigate,
 } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import { useEffect, useRef } from "react";
 import { api } from "../../convex/_generated/api";
 import { ActingAsBanner } from "../components/admin/acting-as-banner";
@@ -50,13 +52,15 @@ function AppShell() {
 	const retailer = useDashboardRetailer();
 	const actingAsAdmin = retailer?.actingAsAdmin === true;
 	const counts = useQuery(
-		api.orders.countActionable,
-		retailer ? { retailerId: retailer._id } : "skip",
-	);
+		convexQuery(
+			api.orders.countActionable,
+			retailer ? { retailerId: retailer._id } : "skip",
+		),
+	).data;
 	// The nav badge counts UNSEEN orders (the inbox's "New" bucket), not the whole
 	// working pipeline — see orders.countActionable for why.
 	const newOrdersCount = counts?.newOrders ?? 0;
-	const isAdminResult = useQuery(api.billing.amIAdmin);
+	const isAdminResult = useQuery(convexQuery(api.billing.amIAdmin, {})).data;
 	const isAdmin = isAdminResult ?? false;
 	// A Kedaipal admin on their OWN store runs the app for free (never soft-locked
 	// server-side), so the chrome swaps the trial/past-due nag for an "Admin" badge

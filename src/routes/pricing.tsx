@@ -1,6 +1,7 @@
 import { useAuth } from "@clerk/tanstack-react-start";
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useQuery } from "convex/react";
 import { ArrowRight, Check, Minus, Quote, Sparkles, Star } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
@@ -538,9 +539,8 @@ function PricingPage() {
 	// this public marketing route. null while loading / storeless admin → the
 	// card CTA falls back safely.
 	const planState = useQuery(
-		api.retailers.getMyPlan,
-		isLoaded && isSignedIn ? {} : "skip",
-	);
+		convexQuery(api.retailers.getMyPlan, isLoaded && isSignedIn ? {} : "skip"),
+	).data;
 	const subscription: SubscriptionView | null = planState ?? null;
 	// Until Clerk has loaded AND (for a signed-in seller) the plan query resolves,
 	// the final CTA is unknown — show a spinner in the button rather than flipping

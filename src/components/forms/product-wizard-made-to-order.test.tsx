@@ -12,8 +12,14 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("convex/react", () => ({
-	useQuery: () => undefined,
 	useMutation: () => vi.fn(),
+}));
+// The wizard reads categories via the adapter — stub it to "loading".
+vi.mock("@convex-dev/react-query", () => ({
+	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
+}));
+vi.mock("@tanstack/react-query", () => ({
+	useQuery: () => ({ data: undefined, isPending: true }),
 }));
 
 import { ProductWizard, type WizardState } from "./product-wizard";

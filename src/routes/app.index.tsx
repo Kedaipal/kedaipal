@@ -1,5 +1,7 @@
+import { convexQuery } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import {
 	ArrowRight,
 	Banknote,
@@ -134,30 +136,38 @@ function DashboardSkeleton() {
 function DashboardHome() {
 	const retailer = useDashboardRetailer();
 	const products = useQuery(
-		api.products.listAll,
-		retailer ? { retailerId: retailer._id } : "skip",
-	);
+		convexQuery(
+			api.products.listAll,
+			retailer ? { retailerId: retailer._id } : "skip",
+		),
+	).data;
 	// One inbox snapshot powers the whole "today strip" + attention list — the
 	// same counts seam the orders inbox subscribes to (see orders.searchOrders).
 	const inboxSnapshot = useQuery(
-		api.orders.searchOrders,
-		retailer
-			? { retailerId: retailer._id, bucket: "all" as const, limit: 1 }
-			: "skip",
-	);
+		convexQuery(
+			api.orders.searchOrders,
+			retailer
+				? { retailerId: retailer._id, bucket: "all" as const, limit: 1 }
+				: "skip",
+		),
+	).data;
 	const pickupStatus = useQuery(
-		api.pickupLocations.hasAnyActive,
-		retailer ? { retailerId: retailer._id } : "skip",
-	);
+		convexQuery(
+			api.pickupLocations.hasAnyActive,
+			retailer ? { retailerId: retailer._id } : "skip",
+		),
+	).data;
 	const recentOrdersPage = useQuery(
-		api.orders.listByRetailer,
-		retailer
-			? {
-					retailerId: retailer._id,
-					paginationOpts: { numItems: 5, cursor: null },
-				}
-			: "skip",
-	);
+		convexQuery(
+			api.orders.listByRetailer,
+			retailer
+				? {
+						retailerId: retailer._id,
+						paginationOpts: { numItems: 5, cursor: null },
+					}
+				: "skip",
+		),
+	).data;
 	const [copied, setCopied] = useState(false);
 	const [qrOpen, setQrOpen] = useState(false);
 	// Which "Optional extras" row is expanded (accordion — one at a time, all
