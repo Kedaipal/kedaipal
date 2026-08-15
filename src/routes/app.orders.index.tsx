@@ -443,14 +443,20 @@ function OrdersRoute() {
 		setBulkBusy(true);
 		try {
 			const res = await bulkUpdateStatus({ orderIds: ids, status });
+			// Name the actionable skip reasons — a bare "skipped 2" leaves the
+			// seller guessing why their bulk action half-worked.
+			const skipReasons = [
+				res.skippedAwaitingCollection > 0
+					? `${res.skippedAwaitingCollection} still with your customer`
+					: null,
+				res.skippedRiderManaged > 0
+					? `${res.skippedRiderManaged} with a rider on the way`
+					: null,
+			].filter(Boolean);
 			toast.success(
 				res.skipped > 0
-					? // Name the actionable reason — a bare "skipped 2" leaves the
-						// seller guessing why their bulk action half-worked.
-						`Updated ${res.updated} · skipped ${res.skipped}${
-							res.skippedAwaitingCollection > 0
-								? ` (${res.skippedAwaitingCollection} still with your customer)`
-								: ""
+					? `Updated ${res.updated} · skipped ${res.skipped}${
+							skipReasons.length > 0 ? ` (${skipReasons.join(", ")})` : ""
 						}`
 					: `Updated ${res.updated} order${res.updated === 1 ? "" : "s"}`,
 			);

@@ -529,10 +529,15 @@ function OrderDetailRoute() {
 		Date.now(),
 	);
 
+	// Three independent optional extras ride this one seam: the mark-shipped
+	// dialog supplies courier fields, `markCollected` is the collection-gate
+	// escape, and `overrideRiderGate` is only ever true from the "Update
+	// manually" confirm below — the server refuses a rider-managed advance
+	// without it.
 	async function handleAdvance(
 		stageId: string,
 		shipment?: ShipmentFields,
-		opts?: { markCollected?: boolean },
+		opts?: { markCollected?: boolean; overrideRiderGate?: boolean },
 	) {
 		if (!order) return;
 		setPending(stageId);
@@ -542,6 +547,7 @@ function OrderDetailRoute() {
 				stageId,
 				...shipment,
 				...(opts?.markCollected ? { markCollected: true } : {}),
+				...(opts?.overrideRiderGate ? { overrideRiderGate: true } : {}),
 			});
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -1739,7 +1745,9 @@ function OrderDetailRoute() {
 					}. Only do this if the automatic update didn't come through.`}
 					confirmLabel={`Mark as ${stageLabel(nextStage, "en")}`}
 					cancelLabel="Keep automatic"
-					onConfirm={() => handleAdvance(nextStage.id)}
+					onConfirm={() =>
+						handleAdvance(nextStage.id, undefined, { overrideRiderGate: true })
+					}
 				/>
 			) : null}
 
