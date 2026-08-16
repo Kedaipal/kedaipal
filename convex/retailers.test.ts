@@ -1548,3 +1548,28 @@ describe("retailers.updateSettings — waPhone is a Malaysian mobile", () => {
 		expect(retailer?.waPhone).toBeUndefined();
 	});
 });
+
+/**
+ * `retailers.storeType` (booking bundle S1; spec 86eyj70z1 decision 5): the
+ * "What does your store sell?" default. Its ONLY consumer is the wizard's
+ * pre-selected kind card — setting or clearing it must never touch products.
+ */
+describe("storeType", () => {
+	test("sets, reads back, and clears via null", async () => {
+		const t = setup();
+		const asUser = t.withIdentity({ subject: "user_storetype" });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: "Lembah Riverside Camp",
+			slug: "lembah-riverside",
+		});
+		await asUser.mutation(api.retailers.updateSettings, {
+			storeType: "booking",
+		});
+		let retailer = await asUser.query(api.retailers.getMyRetailer);
+		expect(retailer?.storeType).toBe("booking");
+
+		await asUser.mutation(api.retailers.updateSettings, { storeType: null });
+		retailer = await asUser.query(api.retailers.getMyRetailer);
+		expect(retailer?.storeType).toBeUndefined();
+	});
+});

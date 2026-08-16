@@ -20,6 +20,7 @@ import {
 	isProductVisible,
 } from "./lib/categoryCounts";
 import { sanitizeMinQuantity } from "./lib/minOrderRules";
+import { effectiveKind, sanitizeCapacityPerNight } from "./lib/productKind";
 import {
 	assertProductCap,
 	MAX_PRODUCTS_PER_RETAILER,
@@ -701,6 +702,16 @@ export const create = mutation({
 		hidden: v.optional(v.boolean()),
 		// Minimum order quantity (summed across variants). 0/1 normalize to unset.
 		minQuantity: v.optional(v.number()),
+		// Kind + booking config land together at create and the kind is immutable
+		// after (update deliberately has no kind arg) — see schema comment.
+		kind: v.optional(
+			v.union(
+				v.literal("physical"),
+				v.literal("service"),
+				v.literal("booking"),
+			),
+		),
+		booking: v.optional(v.object({ capacityPerNight: v.number() })),
 		variants: v.array(variantInputValidator),
 	},
 	handler: async (ctx, args): Promise<Id<"products">> => {
@@ -730,6 +741,29 @@ export const create = mutation({
 		const options = normalizeOptionsOrThrow(args.options);
 		const variants = validateVariantSet(options, args.variants);
 
+		// Kind ⟷ booking config travel together, both directions: a booking
+		// listing with no capacity has no availability semantics, and capacity on
+		// a non-booking product is dead config waiting to mislead (86eyj70z1).
+		const kind = args.kind ?? undefined;
+		let booking: { capacityPerNight: number } | undefined;
+		if (kind === "booking") {
+			if (!args.booking)
+				throw new ConvexError("A booking listing needs a per-night capacity");
+			try {
+				booking = {
+					capacityPerNight: sanitizeCapacityPerNight(
+						args.booking.capacityPerNight,
+					),
+				};
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		} else if (args.booking) {
+			throw new ConvexError(
+				"Capacity only applies to a booking listing — pick the Booking kind first",
+			);
+		}
+
 		// Cross-variant SKU uniqueness against the rest of this retailer's catalog.
 		for (const variant of variants) {
 			if (variant.sku)
@@ -750,6 +784,11 @@ export const create = mutation({
 			minNoticeDays: sanitizeMinNoticeDays(args.minNoticeDays),
 			hidden: args.hidden,
 			minQuantity: sanitizeMinQuantity(args.minQuantity),
+			// "physical" stays UNSET (the legacy default) so pre-kind and post-kind
+			// rows read identically — one spelling for the default, minQuantity's
+			// 0-normalizes-to-unset posture.
+			kind: kind === "physical" ? undefined : kind,
+			booking,
 			sortOrder: args.sortOrder,
 			active: true,
 			channel: "whatsapp",
@@ -814,6 +853,12 @@ export const update = mutation({
 		hidden: v.optional(v.boolean()),
 		// Minimum order quantity. 0 (or 1) clears the rule; undefined = no change.
 		minQuantity: v.optional(v.number()),
+		// Per-night capacity edit for a BOOKING listing. The kind itself is
+		// immutable (no kind arg here, by design); capacity is the one booking
+		// knob a seller re-tunes. Rejected on non-booking products. A lowered
+		// capacity never cancels existing bookings (86eyj70z1 edge case) — the
+		// availability module simply stops taking new requests past it.
+		booking: v.optional(v.object({ capacityPerNight: v.number() })),
 	},
 	handler: async (ctx, { productId, ...fields }): Promise<void> => {
 		const userId = await requireUserId(ctx);
@@ -853,6 +898,21 @@ export const update = mutation({
 			// 0/1 sanitize to undefined, which patch treats as "remove the field" —
 			// so sending 0 clears the rule (one spelling for "no minimum").
 			updates.minQuantity = sanitizeMinQuantity(fields.minQuantity);
+		if (fields.booking !== undefined) {
+			if (effectiveKind(ownedProduct.kind) !== "booking")
+				throw new ConvexError(
+					"Capacity only applies to a booking listing",
+				);
+			try {
+				updates.booking = {
+					capacityPerNight: sanitizeCapacityPerNight(
+						fields.booking.capacityPerNight,
+					),
+				};
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
 
 		// Lazy slug convergence for legacy rows (pre-slug catalog): the first
 		// edit gives the product its permanent URL, using the freshest name.

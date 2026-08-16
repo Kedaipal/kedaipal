@@ -146,6 +146,8 @@ function wizard(partial: Partial<WizardState>): WizardState {
 		name: "Kuih lapis",
 		description: "",
 		images: [],
+		kindCard: "physical",
+		capacityPerNight: "1",
 		shape: null,
 		editor: { options: [], rows: [row([])], customLine: null },
 		fulfilmentAnswered: true,

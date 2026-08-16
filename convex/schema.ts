@@ -50,6 +50,18 @@ export default defineSchema({
 		locale: v.optional(
 			v.union(v.literal("en"), v.literal("ms"), v.literal("zh")),
 		),
+		// "What does your store sell?" (Settings → Store) — same enum as
+		// products.kind, and its only job is to set the DEFAULT kind pre-selected
+		// for NEW products in the wizard. Never gates or re-types existing
+		// products; unset = today's behaviour exactly (wizard opens unanswered).
+		// See convex/lib/productKind.ts + docs/booking.md.
+		storeType: v.optional(
+			v.union(
+				v.literal("physical"),
+				v.literal("service"),
+				v.literal("booking"),
+			),
+		),
 		// Per-retailer overrides for WhatsApp message copy. Any key omitted falls
 		// back to the default catalog in convex/lib/whatsappCopy.ts.
 		// Variables supported in templates: {shortId}, {storeName}.
@@ -518,6 +530,36 @@ export default defineSchema({
 		// no override (0 is normalized to unset — one spelling). Capped at
 		// MAX_NOTICE_DAYS. Counter checkout ignores notice entirely (unchanged).
 		minNoticeDays: v.optional(v.number()),
+		// What KIND of thing this is — the vocabulary + question router locked in
+		// the booking spec (86eyj70z1 decision 5). Unset = physical (legacy
+		// default, zero migration). "Food" is a wizard card, never a stored value
+		// (it routes to "physical" + re-words the preparation question), so no
+		// feature can ever branch on food. Kind changes which wizard steps show
+		// and what words render — NEVER a behaviour fork into a parallel product
+		// system. Immutable after create in v1 (a kind flip on an ordered product
+		// would leave orders whose semantics don't match the row — archive +
+		// recreate is the escape hatch). See convex/lib/productKind.ts +
+		// docs/booking.md.
+		kind: v.optional(
+			v.union(
+				v.literal("physical"),
+				v.literal("service"),
+				v.literal("booking"),
+			),
+		),
+		// Booking-kind config (86eyj70z1 decision 2): a site/plot IS a product;
+		// capacityPerNight counts interchangeable units bookable for the same
+		// night ("Standard Plot ×5" = one product, capacity 5, usually 1).
+		// Only present when kind === "booking" (enforced in create/update).
+		// Availability = overlapping non-declined bookings per night vs this
+		// capacity, checked by the shared availability module (S2); the security
+		// deposit field joins this object in S5. Public-safe — buyers price and
+		// book against it.
+		booking: v.optional(
+			v.object({
+				capacityPerNight: v.number(),
+			}),
+		),
 		// DEPRECATED — moved to productVariants.requiresProof (per-variant).
 		requiresProof: v.optional(v.boolean()),
 		// When this product first appeared on a real order (set-if-unset at both

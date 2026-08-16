@@ -257,6 +257,10 @@ function EditProductRoute() {
 					name: product.name,
 					description: product.description,
 					hidden: product.hidden,
+					kind: product.kind,
+					capacityPerNight: product.booking
+						? String(product.booking.capacityPerNight)
+						: undefined,
 					minNoticeDays: product.minNoticeDays,
 					minQuantity: product.minQuantity,
 					categoryIds,
@@ -330,6 +334,9 @@ function EditProductRoute() {
 						// 0 clears the rule (blank input) — server normalizes to unset.
 						minQuantity: values.minQuantity ?? 0,
 						imageStorageIds: values.imageStorageIds,
+						// Booking capacity (kind itself is immutable — update has no
+						// kind arg by design). undefined on non-booking = no change.
+						booking: values.booking,
 					});
 					await saveVariantGrid({
 						productId: product._id,

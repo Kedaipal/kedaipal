@@ -20,6 +20,9 @@ export type SummaryInput = {
 	/** The product's bespoke line, if it offers one — its price is the seller's
 	 * starting price, so the strip needs the value, not just its presence. */
 	customLine: { price: string } | null;
+	/** Booking kind describes itself in booking words ("Booking · 5 spots/night
+	 * · RM 80/night") — kind + capacity, when the caller has them. */
+	booking?: { capacityPerNight: string } | null;
 };
 
 /** "12" / "12.50" — trailing .00 dropped so the strip reads like speech. */
@@ -28,10 +31,25 @@ function formatMajor(n: number): string {
 }
 
 export function describeProduct(
-	{ options, rows, customLine }: SummaryInput,
+	{ options, rows, customLine, booking }: SummaryInput,
 	currency: string,
 ): string {
 	const parts: string[] = [];
+
+	// A booking listing speaks its own vocabulary: capacity per night + a
+	// per-night price ("Booking · 5 spots/night · RM 80/night"). Choices, stock
+	// words and the bespoke line don't exist on this kind by construction.
+	if (booking) {
+		const price = parsePriceInput(rows[0]?.price.trim() ?? "");
+		const cap = booking.capacityPerNight.trim() || "1";
+		return [
+			"Booking",
+			`${cap} spot${cap === "1" ? "" : "s"}/night`,
+			price && price > 0
+				? `${currency} ${formatMajor(price)}/night`
+				: "No price yet",
+		].join(" · ");
+	}
 
 	// A made-to-order product describes itself: no choices, no stock, and a
 	// price that doesn't exist yet by design. Reading "One item · Made fresh ·

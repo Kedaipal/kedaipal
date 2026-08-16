@@ -4,6 +4,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import {
 	ArrowLeft,
+	CalendarRange,
 	ChevronDown,
 	ChevronRight,
 	ClipboardList,
@@ -18,6 +19,8 @@ import {
 	ShieldCheck,
 	Store,
 	Trash2,
+	UtensilsCrossed,
+	Wrench,
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useCallback, useState } from "react";
 import { toast } from "sonner";
@@ -54,6 +57,7 @@ import {
 	useDashboardRetailer,
 } from "../hooks/useDashboardRetailer";
 import { useRevealOnAdd } from "../hooks/useRevealOnAdd";
+import { cn } from "../lib/utils";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { useUpdateSettings } from "../hooks/useUpdateSettings";
 import { convexErrorMessage } from "../lib/format";
@@ -615,6 +619,12 @@ function SettingsRoute() {
 								}
 							/>
 						</Card>
+						<Card>
+							<StoreTypeForm
+								current={retailer.storeType}
+								onSave={(storeType) => updateSettings({ storeType })}
+							/>
+						</Card>
 						{slugRenameForm}
 						<Card>
 							<LogoForm
@@ -902,6 +912,101 @@ function StoreDescriptionForm({
 				{saving ? "Saving…" : "Save description"}
 			</Button>
 		</form>
+	);
+}
+
+/**
+ * "What does your store sell?" (86eyj70z1 decision 5) — sets the DEFAULT kind
+ * pre-selected for NEW products in the wizard, nothing else: existing products
+ * never re-type, and every kind stays pickable per product. Four cards mirror
+ * the wizard's step 0 exactly (Food stores as `physical` — it's a vocabulary
+ * router, never a stored value). Tap to save; tap the selected card again to
+ * clear.
+ */
+function StoreTypeForm({
+	current,
+	onSave,
+}: {
+	current: "physical" | "service" | "booking" | undefined;
+	onSave: (
+		storeType: "physical" | "service" | "booking" | null,
+	) => Promise<unknown>;
+}) {
+	const [saving, setSaving] = useState(false);
+	// Three cards, not the wizard's four: Food is a wizard-session router that
+	// stores as `physical`, so here (where only the stored default matters) the
+	// two share one card — two lit cards for one saved value would read broken.
+	const cards = [
+		{
+			value: "physical" as const,
+			icon: <UtensilsCrossed className="size-4" aria-hidden />,
+			label: "Food & physical goods",
+			hint: "Cakes, kuih, frozen, gear, packaged items",
+		},
+		{
+			value: "service" as const,
+			icon: <Wrench className="size-4" aria-hidden />,
+			label: "Service",
+			hint: "Cleaning, wash, repair",
+		},
+		{
+			value: "booking" as const,
+			icon: <CalendarRange className="size-4" aria-hidden />,
+			label: "Booking",
+			hint: "Campsite, venue, homestay, rental",
+		},
+	];
+	async function pick(value: "physical" | "service" | "booking") {
+		setSaving(true);
+		try {
+			// Tapping the selected type again clears it (back to no default).
+			await onSave(current === value ? null : value);
+			toast.success(
+				current === value ? "Store type cleared." : "Store type saved.",
+			);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
+		}
+	}
+	return (
+		<div className="flex flex-col gap-4">
+			<SectionHeading
+				title="What does your store sell?"
+				description="Pre-selects the matching type when you add a new product — you can still pick a different type per product, and existing products never change. Tap again to clear."
+			/>
+			<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+				{cards.map((card) => {
+					const selected = current === card.value;
+					return (
+						<button
+							key={card.label}
+							type="button"
+							disabled={saving}
+							aria-pressed={selected}
+							onClick={() => pick(card.value)}
+							className={cn(
+								"flex min-h-11 items-center gap-3 rounded-xl border p-3 text-left transition-colors disabled:opacity-60",
+								selected
+									? "border-accent bg-accent/10"
+									: "border-border hover:border-accent/60",
+							)}
+						>
+							<span className="text-accent-emphasis">{card.icon}</span>
+							<span className="min-w-0">
+								<span className="block text-sm font-semibold">
+									{card.label}
+								</span>
+								<span className="block truncate text-xs text-muted-foreground">
+									{card.hint}
+								</span>
+							</span>
+						</button>
+					);
+				})}
+			</div>
+		</div>
 	);
 }
 
