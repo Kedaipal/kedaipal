@@ -22,6 +22,7 @@ import { formatFulfilmentDateTime } from "./lib/fulfilmentDate";
 import { type GuardedSender, makeGuardedSender } from "./wabaProtection";
 import { stampRetailerActivation } from "./lib/activation";
 import { classifyOptOutKeyword } from "./lib/wabaLimits";
+import { redactPhone } from "./lib/logRedaction";
 import { isMockupGateClosed } from "./lib/order";
 import {
 	type OrderStage,
@@ -409,10 +410,12 @@ export const handleInbound = internalAction({
 		profileName: v.optional(v.string()),
 	},
 	handler: async (ctx, { fromPhone, text, profileName }): Promise<void> => {
+		// Redacted: platform logs must never carry the buyer's phone or message
+		// body (see convex/lib/logRedaction.ts). Length + intent logs below give
+		// the same end-to-end observability the old preview did.
 		console.log("WA inbound received", {
-			fromPhone,
+			fromPhone: redactPhone(fromPhone),
 			textLength: text.length,
-			textPreview: text.slice(0, 120),
 		});
 
 		const fallback = (): string =>
@@ -477,7 +480,10 @@ export const handleInbound = internalAction({
 				internal.counterCheckout.startSessionFromStoreQr,
 				{ token: intent.token, waPhone: fromPhone, profileName },
 			);
-			console.log("WA store-qr scan", { fromPhone, result: start.result });
+			console.log("WA store-qr scan", {
+				fromPhone: redactPhone(fromPhone),
+				result: start.result,
+			});
 			if (start.result === "not_found") {
 				// Unknown/rotated poster token — generic hint, no store leaked.
 				try {
@@ -510,7 +516,9 @@ export const handleInbound = internalAction({
 		}
 
 		if (intent.kind === "unknown") {
-			console.log("WA inbound unknown intent → fallback", { fromPhone });
+			console.log("WA inbound unknown intent → fallback", {
+			fromPhone: redactPhone(fromPhone),
+		});
 			try {
 				await wa.send(fromPhone, { kind: "text", body: fallback() });
 			} catch (err) {
@@ -520,15 +528,25 @@ export const handleInbound = internalAction({
 		}
 
 		const shortId = intent.shortId;
-		console.log("WA inbound parsed shortId", { fromPhone, shortId });
+		console.log("WA inbound parsed shortId", {
+			fromPhone: redactPhone(fromPhone),
+			shortId,
+		});
 		const result = await ctx.runMutation(
 			internal.whatsapp.confirmOrderFromWhatsApp,
 			{ shortId, fromPhone, profileName },
 		);
-		console.log("WA confirm result", { fromPhone, shortId, ...result });
+		console.log("WA confirm result", {
+			fromPhone: redactPhone(fromPhone),
+			shortId,
+			...result,
+		});
 
 		if (!result.matched) {
-			console.log("WA confirm not matched → fallback", { shortId, fromPhone });
+			console.log("WA confirm not matched → fallback", {
+				shortId,
+				fromPhone: redactPhone(fromPhone),
+			});
 			try {
 				await wa.send(fromPhone, { kind: "text", body: fallback() });
 			} catch (err) {

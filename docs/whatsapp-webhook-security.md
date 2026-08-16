@@ -62,3 +62,22 @@ npx convex env set WHATSAPP_APP_SECRET <value> --prod   # production
 
 - **Webhook POST path is not rate-limited.** Signature verification makes forgery infeasible, but a flood of unsigned requests still hits the verify path. Low risk (rejected cheaply at the edge); add a rate limit if abuse appears.
 - **401 vs 403.** Mismatches return `401`; `403` is arguably more semantically precise but immaterial to Meta, which ignores failed-delivery response bodies.
+
+## Logs never carry PII (2026-08-16, ClickUp 86eyn25gd)
+
+Convex platform logs live **outside** the schema — their retention is the
+platform's, they're visible to anyone with dashboard access, and they feed any
+log-drain integration. Since the PDPA 2024 amendments made breach notification
+mandatory, PII copied into logs widens what an incident touches. So:
+
+- Every `console.*` that references a buyer identity goes through
+  [`redactPhone`](../convex/lib/logRedaction.ts) — last four digits only,
+  enough to correlate against a known order or customer row.
+- Message **bodies are never logged** — only their length. The webhook entry
+  log (`convex/http.ts`) carries `firstTextLength` + `firstHasProfileName`;
+  the per-message intent logs in `handleInbound` (store-qr scan / parsed
+  shortId / confirm result) provide the end-to-end observability the old
+  60–120-char text previews used to.
+
+A raw `fromPhone`/`waPhone`/text-preview value in a log line is a
+review-blocking bug.
