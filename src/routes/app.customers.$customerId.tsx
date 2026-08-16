@@ -12,6 +12,7 @@ import {
 } from "../components/dashboard/page-header";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { MASK_PII } from "../lib/analytics-privacy";
 import { getDisplayName } from "../lib/customer";
 import { isCrmLocked } from "../lib/subscription";
 
@@ -79,7 +80,9 @@ function CustomerDetailRoute() {
 	const currency = retailer?.currency ?? "MYR";
 
 	return (
-		<div className="flex flex-col gap-5 lg:gap-6">
+		// MASK_PII on the route wrapper: the buyer's name renders in the desktop
+		// PageHeader (no rest-props to tag it directly) AND the mobile <h2>.
+		<div {...MASK_PII} className="flex flex-col gap-5 lg:gap-6">
 			<PageHeader
 				title={displayName}
 				subtitle={`${customer.orderCount} order${

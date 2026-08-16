@@ -20,6 +20,7 @@ import {
 	formatFulfilmentDateTime,
 	todayMytMidnight,
 } from "../../../convex/lib/fulfilmentDate";
+import { MASK_PII } from "../../lib/analytics-privacy";
 import { dispatchBlockCopy } from "../../lib/dispatch-block";
 import { formatPrice } from "../../lib/format";
 import { ProBadge } from "../app/pro-gate";
@@ -367,7 +368,8 @@ export function BookDeliveryCard({
 				<div className="flex flex-col gap-2 text-sm">
 					{activeJob.driver ? (
 						<div className="flex items-center justify-between gap-3">
-							<span className="flex items-center gap-2">
+							{/* MASK_PII: the rider is a third party. */}
+							<span {...MASK_PII} className="flex items-center gap-2">
 								<Bike className="size-4 text-accent" />
 								<span className="font-medium">{activeJob.driver.name}</span>
 								{activeJob.driver.plateNumber ? (
@@ -453,7 +455,10 @@ export function BookDeliveryCard({
 						</p>
 					) : null}
 					{completedJob.driver ? (
-						<div className="flex items-center gap-2 text-xs text-muted-foreground">
+						<div
+							{...MASK_PII}
+							className="flex items-center gap-2 text-xs text-muted-foreground"
+						>
 							<Bike className="size-3.5 text-accent" />
 							<span className="font-medium text-foreground">
 								{completedJob.driver.name}

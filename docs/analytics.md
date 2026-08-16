@@ -91,15 +91,38 @@ dashboard setting for that subtree:
 
 | Surface | File |
 | --- | --- |
-| Customer list rows | `src/components/dashboard/customer-card.tsx` |
+| Customer list — mobile cards | `src/components/dashboard/customer-card.tsx` |
+| Customer list — desktop table | `src/components/dashboard/customer-list.tsx` |
 | Customer detail (name, phone, notes) | `src/components/dashboard/customer-detail.tsx` |
+| Customer detail route header (name in PageHeader + mobile h2) | `src/routes/app.customers.$customerId.tsx` |
 | Delivery address + notes (order detail *and* tracking page) | `src/components/storefront/delivery-address-display.tsx` |
-| Order detail — buyer note / reference photo | `src/routes/app.orders.$shortId.tsx` |
-| Order detail — customer + CRM block | `src/routes/app.orders.$shortId.tsx` |
+| Order detail — buyer note / reference photo, customer + CRM block, push-failed card (phone), mockup change note, notify-manager message | `src/routes/app.orders.$shortId.tsx` |
+| Orders inbox — buyer name on every card | `src/routes/app.orders.index.tsx` |
+| Home — recent-orders buyer names | `src/routes/app.index.tsx` |
+| Counter — open-sessions list, both BuyerCard branches, 3 dialog descriptions | `src/routes/app.checkout.tsx` |
+| Done screen — resend button label + helper copy | `src/components/order/send-order-document.tsx` |
+| Lalamove rider name/plate (third-party PII) | `src/components/order/book-delivery-card.tsx` |
+| Pickup-point manager name + phone (third-party PII) | `src/components/settings/fulfilment-tab.tsx` |
+| Storefront checkout — the phone-echo line (the one rendered-text PII on the storefront; inputs are auto-masked) | `src/components/storefront/checkout-form.tsx` |
 
-`grep -rn MASK_PII src` audits coverage. **Any new surface that renders a
-customer's name, phone, address, or notes must carry it** — this is a
-fail-closed convention only if it's applied.
+`grep -rn MASK_PII src` audits coverage, and
+`src/lib/analytics-privacy.test.tsx` **pins a minimum spread count per file**
+— deleting a mask goes red, and a new PII surface must be added to that table.
+**Any new surface that renders a customer's name, phone, address, or notes
+must carry it.**
+
+Three limits of masking, encoded as conventions rather than attributes:
+
+- **Dialogs portal to `document.body`** — an ancestor's mask can't reach a
+  `ConfirmDialog`/`DialogDescription`; the mask must ride the description
+  node itself (see the three counter-checkout dialogs).
+- **Toasts also portal** outside every masked subtree — so toast copy never
+  interpolates a buyer name (pinned by test).
+- **Masking covers text nodes, not attributes** — `href`s like the Maps link,
+  `wa.me` deep links, and `tel:` still embed the address/phone in the DOM
+  snapshot. Those are attribute values on interaction elements Clarity does
+  not display as text, accepted as-is; don't move PII into visible text near
+  them.
 
 ### 3. Disclosure
 
