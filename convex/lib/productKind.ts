@@ -49,6 +49,28 @@ export function sanitizeCapacityPerNight(n: number): number {
 	return n;
 }
 
+
+/** Ceiling on the refundable security deposit (sen) — RM 10,000, the same
+ * fat-finger guard as sanitizeFee's fee ceiling. */
+export const MAX_SECURITY_DEPOSIT = 1_000_000;
+
+/**
+ * Validate a booking listing's refundable security deposit (sen). Integer,
+ * ≥ 0, ≤ RM 10,000; 0 normalizes to undefined so "no deposit" has exactly one
+ * spelling (the sanitizeFee posture). Throws seller-facing copy.
+ */
+export function sanitizeSecurityDeposit(
+	n: number | undefined,
+): number | undefined {
+	if (n === undefined) return undefined;
+	if (!Number.isInteger(n) || n < 0 || n > MAX_SECURITY_DEPOSIT) {
+		throw new Error(
+			"Security deposit must be between RM 0 and RM 10,000",
+		);
+	}
+	return n === 0 ? undefined : n;
+}
+
 /**
  * The rendered noun for one sellable row of this kind — the vocabulary half
  * of the kind decision. Copy reads "listing" for bookings ("2 listings",

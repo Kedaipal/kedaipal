@@ -586,6 +586,11 @@ export default defineSchema({
 		booking: v.optional(
 			v.object({
 				capacityPerNight: v.number(),
+				// Refundable security deposit (sen) collected ON TOP of the stay
+				// price in the one payment at approval (86eyn4kee; distinct from
+				// the parked partial-payment deposit 86eyhwb03). Optional; 0 is
+				// normalized to unset so "no deposit" has one spelling.
+				securityDeposit: v.optional(v.number()),
 			}),
 		),
 		// DEPRECATED — moved to productVariants.requiresProof (per-variant).
@@ -883,6 +888,18 @@ export default defineSchema({
 		// The seller's decline reason, quoted VERBATIM to the guest (required at
 		// decline — a silent no is a dead end for someone planning a trip).
 		bookingDeclineReason: v.optional(v.string()),
+		// Refundable security deposit (sen) FROZEN from the listing at request
+		// time (snapshot posture — a later policy edit never changes a placed
+		// booking). Part of `total` (one payment at approval) but NEVER revenue:
+		// CRM totalSpent + Insights subtract it (revenueExcludingDeposit).
+		securityDeposit: v.optional(v.number()),
+		// Deposit settlement after check-out (delivered): the moment the seller
+		// recorded the outcome. keptAmount (sen, ≤ securityDeposit) + its
+		// required reason exist only on a partial/full keep; returnedAt alone =
+		// fully returned. One-shot — settling twice is refused.
+		securityDepositReturnedAt: v.optional(v.number()),
+		securityDepositKeptAmount: v.optional(v.number()),
+		securityDepositKeptReason: v.optional(v.string()),
 		// Which way the rider travels on a delivery order (86eyg0n8e). Frozen at
 		// create from the retailer's deliveryBooking.deliveryDirection so a later
 		// settings toggle never relabels a placed order (pickupSnapshot posture).

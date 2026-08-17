@@ -1185,6 +1185,63 @@ function TrackingRoute() {
 				</section>
 			) : null}
 
+			{/* Security-deposit outcome (86eyn4kee): the seller settled it after
+			    check-out — returned in full (mint) or partly kept with their
+			    reason (amber, with the split). While unsettled the totals row +
+			    receipt already state the hold; a cancelled-but-paid booking gets
+			    the refund context instead (the deposit rides the one refund
+			    conversation — Kedaipal never moves the money). */}
+			{isBooking && order.securityDeposit && order.securityDeposit > 0 ? (
+				order.securityDepositReturnedAt !== undefined ? (
+					(order.securityDepositKeptAmount ?? 0) > 0 ? (
+						<section className="mt-6 flex flex-col gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/60 dark:bg-amber-950/30">
+							<p className="text-sm font-bold text-amber-900 dark:text-amber-200">
+								{ms
+									? `${formatPrice(order.securityDepositKeptAmount ?? 0, order.currency)} daripada deposit anda ditahan`
+									: `${formatPrice(order.securityDepositKeptAmount ?? 0, order.currency)} of your deposit was kept`}
+							</p>
+							{order.securityDepositKeptReason ? (
+								<blockquote className="border-l-2 border-amber-300 pl-3 text-sm text-amber-900/90 dark:border-amber-700 dark:text-amber-200/90">
+									{order.securityDepositKeptReason}
+								</blockquote>
+							) : null}
+							<p className="text-xs text-amber-900/80 dark:text-amber-200/80">
+								{ms
+									? `Baki ${formatPrice((order.securityDeposit ?? 0) - (order.securityDepositKeptAmount ?? 0), order.currency)} daripada deposit ${formatPrice(order.securityDeposit ?? 0, order.currency)} dipulangkan kepada anda. Hubungi ${order.storeName} jika ada soalan.`
+									: `The remaining ${formatPrice((order.securityDeposit ?? 0) - (order.securityDepositKeptAmount ?? 0), order.currency)} of your ${formatPrice(order.securityDeposit ?? 0, order.currency)} deposit is returned to you. Contact ${order.storeName} with any questions.`}
+							</p>
+						</section>
+					) : (
+						<section className="mt-6 flex items-start gap-2.5 rounded-2xl border border-accent/40 bg-accent/5 p-4">
+							<CheckCircle
+								className="mt-0.5 size-4 shrink-0 text-accent-emphasis"
+								aria-hidden
+							/>
+							<div className="flex flex-col gap-0.5">
+								<p className="text-sm font-bold">
+									{ms
+										? "Deposit sekuriti dipulangkan"
+										: "Security deposit returned"}
+								</p>
+								<p className="text-xs text-muted-foreground">
+									{ms
+										? `${order.storeName} telah memulangkan deposit ${formatPrice(order.securityDeposit, order.currency)} anda sepenuhnya.`
+										: `${order.storeName} returned your ${formatPrice(order.securityDeposit, order.currency)} deposit in full.`}
+								</p>
+							</div>
+						</section>
+					)
+				) : isCancelled && paymentStatus === "received" ? (
+					<section className="mt-6 rounded-2xl border border-border bg-card p-4">
+						<p className="text-sm leading-relaxed text-muted-foreground">
+							{ms
+								? `Bayaran anda termasuk deposit sekuriti ${formatPrice(order.securityDeposit, order.currency)} (dipulangkan). ${order.storeName} akan uruskan bayaran balik terus dengan anda.`
+								: `Your payment included the ${formatPrice(order.securityDeposit, order.currency)} refundable security deposit. ${order.storeName} will arrange the refund with you directly.`}
+						</p>
+					</section>
+				) : null
+			) : null}
+
 			{/* Pickup location — shown for self-collect orders that have a snapshot.
 			    Reads the frozen snapshot (not the live pickupLocations row) so a
 			    retailer edit after the order was placed never rewrites history. */}
@@ -1412,6 +1469,20 @@ function TrackingRoute() {
 					<div className="flex items-center justify-between gap-3 px-3 text-sm text-muted-foreground">
 						<span>Delivery charge</span>
 						<span className="text-right">To be confirmed</span>
+					</div>
+				) : null}
+				{/* Refundable security deposit (booking) — inside the total, named
+				    so the stay never reads as costing more than it does. */}
+				{order.securityDeposit && order.securityDeposit > 0 ? (
+					<div className="flex items-center justify-between px-3 text-sm text-muted-foreground">
+						<span>
+							{ms
+								? "Deposit sekuriti (dipulangkan)"
+								: "Security deposit (refundable)"}
+						</span>
+						<span className="tabular-nums">
+							{formatPrice(order.securityDeposit, order.currency)}
+						</span>
 					</div>
 				) : null}
 				<div className="flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2.5 text-sm font-bold">

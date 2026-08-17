@@ -2346,6 +2346,35 @@ describe("product kind + booking config", () => {
 		expect(physical?.booking).toBeUndefined();
 	});
 
+	test("security deposit: stored in sen, 0 normalizes to unset, bad values refused (S5)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const listingId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Hilltop Plot" }),
+			kind: "booking" as const,
+			booking: { capacityPerNight: 2, securityDeposit: 10_000 },
+		});
+		let listing = await asA.query(api.products.get, { productId: listingId });
+		expect(listing?.booking?.securityDeposit).toBe(10_000);
+		// 0 clears — "no deposit" has one spelling (sanitizeFee posture).
+		await asA.mutation(api.products.update, {
+			productId: listingId,
+			booking: { capacityPerNight: 2, securityDeposit: 0 },
+		});
+		listing = await asA.query(api.products.get, { productId: listingId });
+		expect(listing?.booking?.securityDeposit).toBeUndefined();
+		// Non-integer / negative / over the RM10k ceiling: refused.
+		for (const bad of [10.5, -1, 1_000_001]) {
+			await expect(
+				asA.mutation(api.products.update, {
+					productId: listingId,
+					booking: { capacityPerNight: 2, securityDeposit: bad },
+				}),
+			).rejects.toThrow(/RM 0 and RM 10,000/);
+		}
+	});
+
 	test("booking kind without capacity is refused", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);

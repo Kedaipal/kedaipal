@@ -98,6 +98,9 @@ export type OrderReceiptData = {
 	// True while the delivery charge awaits seller confirmation — the invoice
 	// prints a "to be confirmed" note so the total never reads as final.
 	deliveryFeePending?: boolean;
+	// Refundable security deposit (sen) on a booking order — its own totals
+	// row labelled refundable, so the paper never overstates the price.
+	securityDeposit?: number;
 	total: number; // sen
 	currency: string;
 	fulfilmentDate?: number;
@@ -141,6 +144,7 @@ type OrderForReceipt = {
 	deliveryFee?: number;
 	deliveryDirection?: "standard" | "collection";
 	deliveryFeePending?: boolean;
+	securityDeposit?: number;
 	total: number;
 	currency: string;
 	fulfilmentDate?: number;
@@ -231,6 +235,10 @@ export function orderToReceiptData(args: {
 				: undefined,
 		deliveryDirection: order.deliveryDirection,
 		deliveryFeePending: order.deliveryFeePending === true || undefined,
+		securityDeposit:
+			order.securityDeposit && order.securityDeposit > 0
+				? order.securityDeposit
+				: undefined,
 		total: order.total,
 		currency: order.currency,
 		fulfilmentDate: order.fulfilmentDate,

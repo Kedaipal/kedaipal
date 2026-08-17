@@ -39,6 +39,7 @@ import {
 	BookingRequestCard,
 	BookingResolutionNote,
 } from "../components/order/booking-request-card";
+import { SecurityDepositCard } from "../components/order/security-deposit-card";
 import {
 	isActiveJobStatus,
 	isRiderManagedTransition,
@@ -719,6 +720,10 @@ function OrderDetailRoute() {
 					reason={order.bookingDeclineReason}
 				/>
 			) : null}
+
+			{/* Security deposit (S5): the amber return card once the stay checks
+			    out, the settled outcome after, refund context on a paid cancel. */}
+			<SecurityDepositCard order={order} />
 			{order.status === "booking_requested" ? null : (
 			<OrderProgressStepper
 				stages={stages}
@@ -1484,6 +1489,16 @@ function OrderDetailRoute() {
 						<span>Delivery charge</span>
 						<span className="text-right font-medium">
 							To be set — see above
+						</span>
+					</div>
+				) : null}
+				{/* Refundable deposit inside the total — held money, returned after
+				    check-out (the card above tracks the return). */}
+				{order.securityDeposit && order.securityDeposit > 0 ? (
+					<div className="flex items-center justify-between px-3 text-sm text-muted-foreground">
+						<span>Security deposit (refundable)</span>
+						<span className="tabular-nums">
+							{formatPrice(order.securityDeposit, order.currency)}
 						</span>
 					</div>
 				) : null}

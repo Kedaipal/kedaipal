@@ -71,6 +71,7 @@ describe("orderToCsvRow", () => {
 		// seller's bookkeeping template must keep matching on names.
 		expect(CSV_COLUMNS).toContain("Delivery fee");
 		expect(CSV_COLUMNS).not.toContain("Collection fee");
+		expect(CSV_COLUMNS).toContain("Security deposit");
 		// Standard + pickup rows are untouched.
 		expect(orderToCsvRow(base)[CSV_COLUMNS.indexOf("Fulfilment")]).toBe(
 			"delivery",
@@ -152,6 +153,36 @@ describe("orderToCsvRow", () => {
 		expect(row[CSV_COLUMNS.indexOf("Customer")]).toBe("Walk-in customer");
 		expect(row[CSV_COLUMNS.indexOf("Fulfilment date")]).toBe("");
 		expect(row[CSV_COLUMNS.indexOf("Total")]).toBe("0.00");
+	});
+});
+
+describe("orderToCsvRow — security deposit (86eyn4kee)", () => {
+	test("prints the frozen deposit and 0.00 when absent, so columns subtract cleanly", () => {
+		const booking = orderToCsvRow({
+			shortId: "ORD-9001",
+			createdAt: JUN_30_MYT,
+			status: "confirmed",
+			deliveryMethod: "booking",
+			customer: { name: "Guest", waPhone: "+60123456789" },
+			items: [{ name: "Riverside Plot", quantity: 2 }],
+			subtotal: 16_000,
+			securityDeposit: 10_000,
+			total: 26_000,
+			currency: "MYR",
+		});
+		expect(booking[CSV_COLUMNS.indexOf("Security deposit")]).toBe("100.00");
+		const plain = orderToCsvRow({
+			shortId: "ORD-9002",
+			createdAt: JUN_30_MYT,
+			status: "confirmed",
+			deliveryMethod: "delivery",
+			customer: { name: "Aisha", waPhone: "+60123456789" },
+			items: [{ name: "Cake", quantity: 1 }],
+			subtotal: 5_000,
+			total: 5_000,
+			currency: "MYR",
+		});
+		expect(plain[CSV_COLUMNS.indexOf("Security deposit")]).toBe("0.00");
 	});
 });
 

@@ -41,6 +41,7 @@ export function BookingRequestCard({
 		shortId: string;
 		createdAt: number;
 		total: number;
+		securityDeposit?: number;
 		currency: string;
 		bookingCheckIn?: number;
 		bookingCheckOut?: number;
@@ -141,6 +142,13 @@ export function BookingRequestCard({
 							{formatPrice(order.total, order.currency)}
 						</span>
 					</div>
+					{(order.securityDeposit ?? 0) > 0 ? (
+						<p className="text-xs text-muted-foreground">
+							incl.{" "}
+							{formatPrice(order.securityDeposit ?? 0, order.currency)}{" "}
+							refundable security deposit — returned after check-out.
+						</p>
+					) : null}
 				</div>
 			) : null}
 

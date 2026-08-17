@@ -20,7 +20,11 @@ import {
 	isProductVisible,
 } from "./lib/categoryCounts";
 import { sanitizeMinQuantity } from "./lib/minOrderRules";
-import { effectiveKind, sanitizeCapacityPerNight } from "./lib/productKind";
+import {
+	effectiveKind,
+	sanitizeCapacityPerNight,
+	sanitizeSecurityDeposit,
+} from "./lib/productKind";
 import {
 	assertProductCap,
 	MAX_PRODUCTS_PER_RETAILER,
@@ -717,7 +721,12 @@ export const create = mutation({
 				v.literal("booking"),
 			),
 		),
-		booking: v.optional(v.object({ capacityPerNight: v.number() })),
+		booking: v.optional(
+			v.object({
+				capacityPerNight: v.number(),
+				securityDeposit: v.optional(v.number()),
+			}),
+		),
 		variants: v.array(variantInputValidator),
 	},
 	handler: async (ctx, args): Promise<Id<"products">> => {
@@ -751,7 +760,9 @@ export const create = mutation({
 		// listing with no capacity has no availability semantics, and capacity on
 		// a non-booking product is dead config waiting to mislead (86eyj70z1).
 		const kind = args.kind ?? undefined;
-		let booking: { capacityPerNight: number } | undefined;
+		let booking:
+			| { capacityPerNight: number; securityDeposit?: number }
+			| undefined;
 		if (kind === "booking") {
 			if (!args.booking)
 				throw new ConvexError("A booking listing needs a per-night capacity");
@@ -759,6 +770,9 @@ export const create = mutation({
 				booking = {
 					capacityPerNight: sanitizeCapacityPerNight(
 						args.booking.capacityPerNight,
+					),
+					securityDeposit: sanitizeSecurityDeposit(
+						args.booking.securityDeposit,
 					),
 				};
 			} catch (err) {
@@ -864,7 +878,12 @@ export const update = mutation({
 		// knob a seller re-tunes. Rejected on non-booking products. A lowered
 		// capacity never cancels existing bookings (86eyj70z1 edge case) — the
 		// availability module simply stops taking new requests past it.
-		booking: v.optional(v.object({ capacityPerNight: v.number() })),
+		booking: v.optional(
+			v.object({
+				capacityPerNight: v.number(),
+				securityDeposit: v.optional(v.number()),
+			}),
+		),
 	},
 	handler: async (ctx, { productId, ...fields }): Promise<void> => {
 		const userId = await requireUserId(ctx);
@@ -913,6 +932,9 @@ export const update = mutation({
 				updates.booking = {
 					capacityPerNight: sanitizeCapacityPerNight(
 						fields.booking.capacityPerNight,
+					),
+					securityDeposit: sanitizeSecurityDeposit(
+						fields.booking.securityDeposit,
 					),
 				};
 			} catch (err) {

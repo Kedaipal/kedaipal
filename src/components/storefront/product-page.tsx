@@ -3,6 +3,7 @@ import { ArrowLeft, CalendarRange } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
+import { formatPrice } from "../../lib/format";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
@@ -131,11 +132,31 @@ export function ProductPageView({
 					) : null}
 
 					{isBooking ? (
-						<p className="mt-4 rounded-xl bg-accent/5 px-3 py-2.5 text-sm leading-relaxed text-muted-foreground">
-							Pick your dates on the next step — you&apos;ll see live
-							availability on a calendar, and nothing is paid until the seller
-							approves your request.
-						</p>
+						<div className="mt-4 flex flex-col gap-2">
+							{(product.booking?.securityDeposit ?? 0) > 0 ? (
+								// Stated BEFORE requesting — the deposit must never be a
+								// surprise at payment time (86eyn4kee).
+								<p className="rounded-xl border border-border bg-card px-3 py-2.5 text-sm leading-relaxed">
+									<span className="font-semibold">
+										+{" "}
+										{formatPrice(
+											product.booking?.securityDeposit ?? 0,
+											product.currency,
+										)}{" "}
+										refundable security deposit
+									</span>
+									<span className="text-muted-foreground">
+										{" "}
+										— collected with your payment, returned after check-out.
+									</span>
+								</p>
+							) : null}
+							<p className="rounded-xl bg-accent/5 px-3 py-2.5 text-sm leading-relaxed text-muted-foreground">
+								Pick your dates on the next step — you&apos;ll see live
+								availability on a calendar, and nothing is paid until the
+								seller approves your request.
+							</p>
+						</div>
 					) : (
 						<>
 							<OptionPills pp={pp} />

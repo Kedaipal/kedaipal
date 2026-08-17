@@ -96,6 +96,26 @@ describe("reduceInsights — revenue split", () => {
 		expect(agg.orderCount).toBe(2);
 	});
 
+	test("the security deposit is excluded from earned, trend and collected", () => {
+		const agg = reduceInsights(
+			[
+				// RM160 stay + RM100 deposit, paid — revenue is the stay only.
+				order({
+					total: 26_000,
+					securityDeposit: 10_000,
+					status: "delivered",
+					paymentStatus: "received",
+				}),
+				order({ total: 5_000, status: "confirmed" }),
+			],
+			{ from: D1, bucketing: "day" },
+		);
+		expect(agg.earned).toBe(21_000);
+		expect(agg.collected).toBe(16_000);
+		expect(agg.trend.reduce((sum, b) => sum + b.earned, 0)).toBe(21_000);
+		expect(agg.payments.reduce((sum, p) => sum + p.revenue, 0)).toBe(16_000);
+	});
+
 	test("collected counts only received revenue orders", () => {
 		const agg = reduceInsights(
 			[

@@ -251,7 +251,12 @@ export const requestBooking = mutation({
 				quantity: nights,
 			},
 		];
-		const { subtotal, total } = computeOrderTotals(items, {});
+		// The refundable security deposit rides the one payment (86eyn4kee):
+		// frozen from the listing NOW (snapshot posture — a later policy edit
+		// never changes a placed booking) and folded into `total` through the
+		// extras seam. Held money — every revenue surface subtracts it.
+		const securityDeposit = product.booking?.securityDeposit;
+		const { subtotal, total } = computeOrderTotals(items, { securityDeposit });
 		const now = Date.now();
 
 		let shortId: string | null = null;
@@ -286,6 +291,7 @@ export const requestBooking = mutation({
 			bookingCheckIn: args.checkIn,
 			bookingCheckOut: args.checkOut,
 			bookingProductId: product._id,
+			securityDeposit,
 			// The check-in day IS the order's due date — the inbox sort, due-today
 			// strip and urgency badges all read fulfilmentDate, so a request for
 			// this weekend surfaces exactly like an order due this weekend.
@@ -314,7 +320,9 @@ export const requestBooking = mutation({
 			retailerId: args.retailerId,
 			waPhone,
 			orderId,
-			orderTotal: total,
+			// Held money is not spend — totalSpent counts the stay, not the
+			// deposit the seller hands back (revenueExcludingDeposit rule).
+			orderTotal: total - (securityDeposit ?? 0),
 			orderCreatedAt: now,
 			customerName: name,
 		});
@@ -435,6 +443,65 @@ export const declineBookingRequest = mutation({
 			{ note: `Booking declined: ${trimmed}` },
 		);
 		await logAdminAction(ctx, access, "bookings.decline", orderId);
+	},
+});
+
+/**
+ * Record the security-deposit outcome after check-out (86eyn4kee). One shot:
+ * "Mark returned" (keptAmount 0) or a partial/full keep (validated ≤ the
+ * frozen deposit, reason REQUIRED — it renders verbatim on the guest's page).
+ * The actual money movement stays off-platform (Kedaipal never touches order
+ * money); this stamps the record both sides see. Delivered-only: before
+ * check-out there is nothing to return yet, and a cancelled-after-payment
+ * booking settles the WHOLE payment in one refund conversation (the order
+ * page states that context), not a deposit-only split.
+ */
+export const settleSecurityDeposit = mutation({
+	args: {
+		orderId: v.id("orders"),
+		/** Sen kept by the seller; 0 = fully returned. */
+		keptAmount: v.number(),
+		reason: v.optional(v.string()),
+	},
+	handler: async (ctx, { orderId, keptAmount, reason }): Promise<void> => {
+		const { order, access } = await requireOrderAccess(ctx, orderId);
+		if (!access.actingAsAdmin)
+			await assertSubscriptionActive(ctx, order.retailerId);
+
+		const deposit = order.securityDeposit ?? 0;
+		if (order.deliveryMethod !== "booking" || deposit <= 0)
+			throw new ConvexError("This order has no security deposit");
+		if (order.securityDepositReturnedAt !== undefined)
+			throw new ConvexError("The deposit is already settled");
+		if (order.status !== "delivered")
+			throw new ConvexError(
+				"Settle the deposit after check-out — mark the stay as checked out first",
+			);
+		if (order.paymentStatus !== "received")
+			throw new ConvexError(
+				"The deposit was never collected — there's nothing to return",
+			);
+		if (!Number.isInteger(keptAmount) || keptAmount < 0 || keptAmount > deposit)
+			throw new ConvexError(
+				"The kept amount can't exceed the deposit collected",
+			);
+		const trimmed = reason?.trim() ?? "";
+		if (keptAmount > 0 && trimmed.length === 0)
+			throw new ConvexError(
+				"Add a short reason — the guest sees it with the deduction",
+			);
+		if (trimmed.length > BOOKING_DECLINE_REASON_MAX)
+			throw new ConvexError(
+				`Keep the reason under ${BOOKING_DECLINE_REASON_MAX} characters`,
+			);
+
+		await ctx.db.patch(order._id, {
+			securityDepositReturnedAt: Date.now(),
+			securityDepositKeptAmount: keptAmount > 0 ? keptAmount : undefined,
+			securityDepositKeptReason: keptAmount > 0 ? trimmed : undefined,
+			updatedAt: Date.now(),
+		});
+		await logAdminAction(ctx, access, "bookings.settleDeposit", orderId);
 	},
 });
 

@@ -70,6 +70,7 @@ import {
 	generateTrackingToken,
 	isCollectionGateClosed,
 	isMockupGateClosed,
+	revenueExcludingDeposit,
 } from "./lib/order";
 import { normalizeTrackingToken } from "./lib/trackingToken";
 import {
@@ -2163,6 +2164,7 @@ function orderToCsvSource(o: Doc<"orders">): CsvOrder {
 		subtotal: o.subtotal,
 		pickupFee: o.pickupFee,
 		deliveryFee: o.deliveryFee,
+		securityDeposit: o.securityDeposit,
 		total: o.total,
 		currency: o.currency,
 		customerNote: o.customerNote,
@@ -2367,7 +2369,7 @@ async function reverseCancellationEffects(
 	if (order.customerId) {
 		await decrementAggregatesForCancel(ctx, {
 			customerId: order.customerId,
-			orderTotal: order.total,
+			orderTotal: revenueExcludingDeposit(order),
 		});
 	}
 
@@ -4401,7 +4403,7 @@ export const declineMockupItem = mutation({
 			if (order.status !== "cancelled" && order.customerId)
 				await decrementAggregatesForCancel(ctx, {
 					customerId: order.customerId,
-					orderTotal: order.total,
+					orderTotal: revenueExcludingDeposit(order),
 				});
 			// Un-meter on the first transition into cancelled (mirrors
 			// applyStatusTransition — this cancel path bypasses that helper).

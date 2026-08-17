@@ -464,6 +464,17 @@ export async function buildOrderReceiptPdf(
 		totalsRow(d, `${chargeNoun} charge`, "To be confirmed", y);
 		y -= 18;
 	}
+	// Booking security deposit: held money inside the total — named refundable
+	// so the receipt never reads as the stay costing more than it does.
+	if (data.securityDeposit && data.securityDeposit > 0) {
+		totalsRow(
+			d,
+			"Security deposit (refundable)",
+			formatMoney(data.securityDeposit, data.currency),
+			y,
+		);
+		y -= 18;
+	}
 	y = totalBar(d, "Total", formatMoney(data.total, data.currency), y);
 	if (data.deliveryFeePending) {
 		draw(

@@ -261,6 +261,9 @@ function EditProductRoute() {
 					capacityPerNight: product.booking
 						? String(product.booking.capacityPerNight)
 						: undefined,
+					securityDeposit: product.booking?.securityDeposit
+						? (product.booking.securityDeposit / 100).toFixed(2)
+						: undefined,
 					minNoticeDays: product.minNoticeDays,
 					minQuantity: product.minQuantity,
 					categoryIds,

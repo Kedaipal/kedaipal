@@ -135,6 +135,9 @@ export function BookingCheckoutForm({
 	}
 
 	const pricePerNight = product.variants[0]?.price ?? product.priceFrom ?? 0;
+	// Refundable security deposit — stated HERE, before the request, and part
+	// of "Total when approved" (one payment; 86eyn4kee).
+	const securityDeposit = product.booking?.securityDeposit ?? 0;
 	const nights =
 		selection.checkIn !== undefined && selection.checkOut !== undefined
 			? Math.round((selection.checkOut - selection.checkIn) / DAY_MS)
@@ -210,10 +213,21 @@ export function BookingCheckoutForm({
 								{nights} night{nights === 1 ? "" : "s"}
 							</span>
 						</div>
+						{securityDeposit > 0 ? (
+							<div className="flex items-baseline gap-1.5">
+								<span>Security deposit (refundable)</span>
+								<span className="flex-1 border-b-2 border-dotted border-border" />
+								<span className="font-medium">
+									{formatPrice(securityDeposit, product.currency)}
+								</span>
+							</div>
+						) : null}
 						<div className="flex items-baseline gap-1.5 border-t-2 border-dashed border-border pt-2 font-heading text-base font-extrabold">
 							<span>Total when approved</span>
 							<span className="flex-1 border-b-2 border-dotted border-border" />
-							<span>{formatPrice(stayTotal, product.currency)}</span>
+							<span>
+								{formatPrice(stayTotal + securityDeposit, product.currency)}
+							</span>
 						</div>
 					</>
 				) : (
@@ -225,6 +239,9 @@ export function BookingCheckoutForm({
 			<p className="text-xs leading-relaxed text-muted-foreground">
 				Nothing is charged now — you pay after {storeName} approves your
 				request.
+				{securityDeposit > 0
+					? " The security deposit is returned after check-out."
+					: ""}
 			</p>
 		</div>
 	);

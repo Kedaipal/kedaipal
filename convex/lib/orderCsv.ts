@@ -51,6 +51,10 @@ export type CsvOrder = {
 	/** Frozen delivery charge (minor units) — same "0.00 never blank" rule as
 	 * pickupFee so the totals identity sums. */
 	deliveryFee?: number;
+	/** Refundable booking security deposit (minor units) — same "0.00 never
+	 * blank" rule; held money, so a bookkeeper can subtract the column to get
+	 * revenue (Insights already does). */
+	securityDeposit?: number;
 	total: number;
 	currency: string;
 	customerNote?: string;
@@ -78,6 +82,7 @@ export const CSV_COLUMNS = [
 	"Subtotal",
 	"Pickup fee",
 	"Delivery fee",
+	"Security deposit",
 	"Total",
 	"Currency",
 	"Note",
@@ -112,6 +117,7 @@ export function orderToCsvRow(o: CsvOrder): string[] {
 		csvAmount(o.subtotal),
 		csvAmount(o.pickupFee ?? 0),
 		csvAmount(o.deliveryFee ?? 0),
+		csvAmount(o.securityDeposit ?? 0),
 		csvAmount(o.total),
 		o.currency,
 		o.customerNote ?? "",

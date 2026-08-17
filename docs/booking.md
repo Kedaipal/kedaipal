@@ -381,6 +381,85 @@ all / unblock restores + rebooks + is idempotent, `sellerCalendar` shapes
 - No drag-to-select (two-tap, mobile-first), no week/agenda view, no
   recurring blocks (a season is one ≤366-day block).
 
+## S5 — security deposit end-to-end (`86eyn4kee`)
+
+Sengloh's original ask: the refundable damage hold, collected ON TOP of the
+stay price **in the same single payment** at approval (distinct from the
+parked partial-payment deposit `86eyhwb03`). Held money, never revenue.
+
+### Schema + money plumbing
+
+- **`products.booking.securityDeposit`** (sen, optional; `sanitizeSecurityDeposit`
+  in `productKind.ts` — integer 0..RM10,000, 0 normalizes to unset). The
+  wizard's booking pricing step and the edit form's booking card both carry
+  the field (shipped HERE, not S1 — an input that does nothing until its
+  machinery exists is worse than hidden). Handoff carries it both ways.
+- **`orders.securityDeposit`** — FROZEN at request time (snapshot posture; a
+  policy edit never changes a placed booking; pinned by test). Rides the
+  `computeOrderTotals` **extras seam** (quotedAmount/pickupFee/deliveryFee
+  precedent), so `total = nights × price + deposit` — ONE payment at
+  approval, zero new payment states; the S3 approve message needs no change
+  (its total is the total).
+- **`revenueExcludingDeposit`** (`convex/lib/order.ts`) — the ONE author of
+  the revenue figure: CRM `totalSpent` (link / cancel-decrement /
+  `moveOrderToPhone` / backfill) and Insights (earned, trend, collected,
+  payment slices via `InsightsOrderInput.securityDeposit`) all subtract the
+  deposit. Recompute-delta sites (`total - order.total`) need no netting —
+  the deposit is frozen, so it cancels out of any difference.
+
+### Stated before, lined everywhere after
+
+- **Pre-request** (never a surprise at payment): the product page's booking
+  box states "+ RM100 refundable security deposit — collected with your
+  payment, returned after check-out"; the booking checkout receipt carries a
+  deposit line, folds it into "Total when approved", and the nothing-charged
+  footer names the return.
+- **Own line on every money surface:** buyer tracking totals (EN/BM), seller
+  order-detail totals, the S3 request card ("incl. RM100 refundable…"),
+  receipt/invoice PDF ("Security deposit (refundable)" row), CSV
+  **"Security deposit"** column (0.00 never blank, so a bookkeeper can
+  subtract the column — the identity the header comment documents).
+
+### Return tracking
+
+**`bookings.settleSecurityDeposit`** (owner-or-admin, soft-locked, act-as
+audited, ONE shot): guards — booking order with a deposit, **`delivered`**
+(check-out) and **paid** only (before check-out there's nothing to return; a
+cancelled-after-payment booking settles the whole payment in one refund
+conversation instead — both order pages state that context); `keptAmount`
+integer 0..deposit, reason REQUIRED on any keep (≤200, quoted verbatim to the
+guest). Stamps `securityDepositReturnedAt` + `securityDepositKeptAmount/
+KeptReason` (unset on a full return).
+
+Seller: **`SecurityDepositCard`** on order detail — amber "RM X to return"
+card at delivered+paid (the card IS the v1 reminder; no nudge cron), **Mark
+returned in full** / **Keep part of it…** (dialog: amount ≤ deposit +
+required reason, destructive-styled confirm), then the settled outcome note
+(mint returned / amber kept with the split). Buyer: the tracking page shows
+the same outcome (mint full-return card / amber kept card with the reason
+blockquote and returned-remainder line, EN/BM).
+
+### Explicit divergences
+
+- The ticket's "ONE WA note on settle" is **deferred with the S3 template
+  batch**: booking guests never message the WABA (no wa.me handoff), so
+  there is no session window days after check-out — a session send would
+  silently fail exactly when it matters. The outcome lives on the order page
+  both sides already hold; the WA ping joins the Meta-template registration
+  follow-up (and the standing no-new-WA-sends posture).
+- Partial keep ships (ticket recommended it pending Arif); a full keep is
+  the same path with `keptAmount === deposit`.
+
+### S5 tests
+
+`convex/bookings.test.ts` ("security deposit"): frozen at request + inside
+the one total + policy-edit immunity + CRM spend excludes it; settle guards
+(pre-checkout / unpaid / over-deposit / keep-without-reason / double-settle)
+and both outcomes; depositless refusal. `convex/products.test.ts`: stored in
+sen, 0-clears, ceiling refusals. `convex/lib/insights.test.ts`: earned /
+trend / collected / payment slices all net of deposit.
+`convex/lib/orderCsv.test.ts`: the column + 0.00 default.
+
 ### What S2 deliberately does NOT do
 
 The seller's Approve/Decline surfaces, tracking-page request states and every

@@ -55,8 +55,9 @@ export interface ProductFormSubmitValues {
 	// Product kind (86eyj70z1). Set at create by the wizard; immutable after —
 	// the edit route never sends it to `products.update` (which has no kind arg).
 	kind?: ProductKind;
-	// Booking-kind config — travels with kind at create; capacity-only on edit.
-	booking?: { capacityPerNight: number };
+	// Booking-kind config — travels with kind at create; capacity + deposit
+	// stay editable. securityDeposit in sen; 0 clears (server normalizes).
+	booking?: { capacityPerNight: number; securityDeposit?: number };
 	// Per-product fulfilment-notice override (days). undefined = no override —
 	// the store-level setting rules. Checkout takes the max across the cart.
 	minNoticeDays?: number;
@@ -112,6 +113,9 @@ export type ProductFormDraft = {
 	kind: ProductKind;
 	/** Booking capacity, as typed (only meaningful when kind === "booking"). */
 	capacityPerNight: string;
+	/** Booking security deposit (RM, as typed; blank/absent = none). Optional
+	 * so pre-S5 draft literals (tests, stored handoffs) stay valid. */
+	securityDeposit?: string;
 	categoryIds: Id<"categories">[];
 	images: ProductImage[];
 	editor: VariantEditorState;
@@ -135,6 +139,9 @@ interface ProductFormProps {
 		kind?: ProductKind;
 		/** Booking capacity as a string draft ("5") — wizard handoff + edit seed. */
 		capacityPerNight?: string;
+		/** Booking security deposit as an RM string draft ("100") — wizard
+		 * handoff + edit seed. Blank/undefined = none. */
+		securityDeposit?: string;
 		minNoticeDays?: number;
 		minQuantity?: number;
 		categoryIds?: Id<"categories">[];
@@ -626,6 +633,9 @@ export function ProductForm({
 	const [capacityDraft, setCapacityDraft] = useState(
 		initialValues?.capacityPerNight ?? "1",
 	);
+	const [depositDraft, setDepositDraft] = useState(
+		initialValues?.securityDeposit ?? "",
+	);
 	// Draft as a string so the input can be cleared while typing; parsed at
 	// submit (blank/0 = no override).
 	const [minNoticeDraft, setMinNoticeDraft] = useState(
@@ -695,7 +705,7 @@ export function ProductForm({
 			const variants = "variants" in built ? built.variants : [];
 			// Min-quantity / capacity input invalid → inline error already on screen.
 			if (!minQtyValid) return;
-			if (isBooking && !capacityValid) return;
+			if (isBooking && (!capacityValid || !depositValid)) return;
 
 			try {
 				const minNoticeParsed = Number.parseInt(minNoticeDraft, 10);
@@ -705,7 +715,14 @@ export function ProductForm({
 					hidden,
 					kind,
 					booking: isBooking
-						? { capacityPerNight: Number(capacityDraft.trim()) }
+						? {
+								capacityPerNight: Number(capacityDraft.trim()),
+								// Sen; 0 = clear (the server normalizes 0 → unset).
+								securityDeposit:
+									depositParsed !== null && depositParsed > 0
+										? Math.round(depositParsed * 100)
+										: 0,
+							}
 						: undefined,
 					minNoticeDays:
 						Number.isInteger(minNoticeParsed) && minNoticeParsed > 0
@@ -739,6 +756,7 @@ export function ProductForm({
 			hidden,
 			kind,
 			capacityPerNight: capacityDraft,
+			securityDeposit: depositDraft,
 			categoryIds,
 			images,
 			editor,
@@ -766,6 +784,15 @@ export function ProductForm({
 		Number.isInteger(capacityParsed) &&
 		capacityParsed >= 1 &&
 		capacityParsed <= MAX_CAPACITY_PER_NIGHT;
+
+	// Booking security deposit — blank = none; else a price 0..RM10,000
+	// (mirrors the server's sanitizeSecurityDeposit ceiling).
+	const depositTrimmed = depositDraft.trim();
+	const depositParsed =
+		depositTrimmed.length === 0 ? 0 : parsePriceInput(depositTrimmed);
+	const depositValid =
+		depositTrimmed.length === 0 ||
+		(depositParsed !== null && depositParsed >= 0 && depositParsed <= 10_000);
 
 	// Minimum order quantity — blank clears; whole number ≤ MIN_QUANTITY_MAX.
 	const minQtyTrimmed = minQty.trim();
@@ -953,6 +980,34 @@ export function ProductForm({
 							How many bookings can share the same night — e.g. 5 identical
 							plots = 5. Requests stop once a night is full. Lowering it never
 							cancels bookings you&apos;ve already accepted.
+						</p>
+					</div>
+					<div className="flex flex-col gap-1.5 border-t border-border pt-4">
+						<label htmlFor="booking-deposit" className="text-sm font-medium">
+							Security deposit ({currency}){" "}
+							<span className="font-normal text-muted-foreground">
+								(optional)
+							</span>
+						</label>
+						<Input
+							id="booking-deposit"
+							inputMode="decimal"
+							placeholder="0.00"
+							value={depositDraft}
+							onChange={(e) => setDepositDraft(e.target.value)}
+							variant="field"
+							isError={!depositValid}
+							className="w-40"
+						/>
+						{!depositValid ? (
+							<p className="text-xs text-destructive">
+								Enter an amount between RM 0 and RM 10,000, or leave blank.
+							</p>
+						) : null}
+						<p className="text-xs leading-relaxed text-muted-foreground">
+							A refundable hold collected with the booking payment and
+							returned after check-out. Guests see it before they request —
+							changing it never affects bookings already placed.
 						</p>
 					</div>
 				</ProductStepCard>

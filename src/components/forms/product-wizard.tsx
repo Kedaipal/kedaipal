@@ -120,6 +120,9 @@ export type WizardState = {
 	kindCard: KindCard | null;
 	/** Booking kind only — per-night capacity, as typed. Prefilled "1". */
 	capacityPerNight: string;
+	/** Booking kind only — refundable security deposit (RM, as typed; blank =
+	 * none). Collected with the payment, returned after check-out (S5). */
+	securityDeposit: string;
 	/** Step 2 — "What kind of product is it?" null until answered. */
 	shape: ProductShape | null;
 	/** The shared draft substrate (options + rows + custom line). */
@@ -150,6 +153,7 @@ export function emptyWizardState(defaultKind?: ProductKind): WizardState {
 		images: [],
 		kindCard,
 		capacityPerNight: "1",
+		securityDeposit: "",
 		shape: null,
 		editor: {
 			options: [],
@@ -309,6 +313,17 @@ export function wizardStepIssues(
 				field: "capacityPerNight",
 				message: `Enter a whole number between 1 and ${MAX_CAPACITY_PER_NIGHT}.`,
 			});
+		}
+		const depositRaw = state.securityDeposit.trim();
+		if (depositRaw.length > 0) {
+			const dep = parsePriceInput(depositRaw);
+			if (dep === null || dep < 0 || dep > 10_000) {
+				issues.push({
+					field: "securityDeposit",
+					message:
+						"Enter an amount between RM 0 and RM 10,000, or leave blank.",
+				});
+			}
 		}
 		const notice = state.minNoticeDays.trim();
 		if (notice.length > 0) {
@@ -470,7 +485,15 @@ export function buildWizardSubmitValues(
 		// Kind + capacity travel together (the server enforces the same pairing).
 		booking:
 			kind === "booking" && Number.isInteger(capacity)
-				? { capacityPerNight: capacity }
+				? {
+						capacityPerNight: capacity,
+						securityDeposit: (() => {
+							const dep = parsePriceInput(state.securityDeposit.trim());
+							return dep !== null && dep > 0
+								? Math.round(dep * 100)
+								: undefined;
+						})(),
+					}
 				: undefined,
 		// Blank → undefined (no rule); the server normalizes 0/1 to unset.
 		// A booking listing never carries a min quantity — one request = one
@@ -514,6 +537,7 @@ export function wizardHandoff(state: WizardState): {
 			hidden: state.hidden,
 			kind: wizardKind(state),
 			capacityPerNight: state.capacityPerNight,
+			securityDeposit: state.securityDeposit,
 			categoryIds: state.categoryIds,
 			imageStorageIds: state.images.map((i) => i.id),
 			imageUrls: state.images.map((i) => i.url),
@@ -540,6 +564,7 @@ export function formDraftToWizardState(draft: ProductFormDraft): WizardState {
 		// affordance only; locked in 86eyj70z1).
 		kindCard: cardFromKind(draft.kind),
 		capacityPerNight: draft.capacityPerNight,
+		securityDeposit: draft.securityDeposit ?? "",
 		// The form's substrate IS the answer — nothing to re-ask. Axes present =
 		// the buyer picks; one never-out-of-stock, mockup-gated row = made to
 		// order; anything else = a single item.
@@ -1586,6 +1611,30 @@ export function ProductWizard({
 								all booked.
 							</span>
 						</label>
+						<label className="flex flex-col gap-1.5 text-sm font-medium">
+							<span>
+								Security deposit{" "}
+								<span className="font-normal text-muted-foreground">
+									(optional)
+								</span>
+							</span>
+							<span className="flex items-center gap-3">
+								<span className="text-sm text-muted-foreground">
+									{currency}
+								</span>
+								<PriceInput
+									value={state.securityDeposit}
+									onChange={(v) => patch({ securityDeposit: v })}
+									className="h-11 w-28 text-right"
+									invalid={!!issueFor("securityDeposit")}
+								/>
+							</span>
+							<IssueText message={issueFor("securityDeposit")} />
+							<span className="text-xs font-normal text-muted-foreground">
+								A refundable hold collected with the booking payment and
+								returned after check-out. Guests see it before they request.
+							</span>
+						</label>
 						<label className="flex flex-col gap-1 text-sm font-medium">
 							Minimum notice{" "}
 							<span className="font-normal text-muted-foreground">
@@ -2002,6 +2051,15 @@ export function ProductWizard({
 												value: `${state.capacityPerNight.trim() || "1"} per night`,
 												step: 3,
 											},
+											...(state.securityDeposit.trim().length > 0
+												? [
+														{
+															label: "Deposit",
+															value: `RM ${state.securityDeposit.trim()} (refundable)`,
+															step: 3,
+														},
+													]
+												: []),
 											...(state.minNoticeDays.trim().length > 0
 												? [
 														{

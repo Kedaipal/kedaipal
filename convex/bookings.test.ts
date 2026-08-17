@@ -26,7 +26,7 @@ const day = (offset: number) => today() + offset * DAY_MS;
 
 async function seedBookingStore(
 	t: ReturnType<typeof convexTest>,
-	opts: { capacity?: number } = {},
+	opts: { capacity?: number; securityDeposit?: number } = {},
 ) {
 	const asOwner = t.withIdentity({ subject: USER });
 	await asOwner.mutation(api.retailers.createRetailer, {
@@ -42,7 +42,10 @@ async function seedBookingStore(
 		imageStorageIds: [],
 		sortOrder: 0,
 		kind: "booking" as const,
-		booking: { capacityPerNight: opts.capacity ?? 1 },
+		booking: {
+			capacityPerNight: opts.capacity ?? 1,
+			securityDeposit: opts.securityDeposit,
+		},
 		variants: [{ optionValues: [], price: 8000, onHand: 0 }],
 	});
 	return { t, asOwner, retailer, productId };
@@ -487,5 +490,143 @@ describe("approve / decline (S3)", () => {
 			token: third.trackingToken,
 		});
 		expect(buyerRead?.bookingContext).toBeUndefined();
+	});
+});
+
+describe("security deposit (S5)", () => {
+	async function requestWithDeposit(deposit: number | undefined) {
+		const seeded = await seedBookingStore(setup(), {
+			securityDeposit: deposit,
+		});
+		const { t, asOwner, retailer, productId } = seeded;
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(3),
+			checkOut: day(5), // 2 nights × RM80
+			customer: guest(1),
+		});
+		const order = await asOwner.query(api.orders.get, { shortId });
+		if (!order) throw new Error("order missing");
+		return { ...seeded, shortId, order };
+	}
+
+	test("frozen at request, inside the one total, excluded from CRM spend", async () => {
+		const { asOwner, retailer, order, productId } =
+			await requestWithDeposit(10_000);
+		expect(order.subtotal).toBe(16_000);
+		expect(order.securityDeposit).toBe(10_000);
+		expect(order.total).toBe(26_000); // stay + deposit, one payment
+		// A later policy edit never rewrites the placed booking.
+		await asOwner.mutation(api.products.update, {
+			productId,
+			booking: { capacityPerNight: 1, securityDeposit: 55_500 },
+		});
+		const after = await asOwner.query(api.orders.get, {
+			shortId: order.shortId,
+		});
+		expect(after?.securityDeposit).toBe(10_000);
+		// CRM: held money is not spend.
+		const customers = await asOwner.query(api.customers.list, {
+			retailerId: retailer._id,
+			sort: "recency",
+			paginationOpts: { numItems: 50, cursor: null },
+		});
+		expect(customers.page[0]?.totalSpent).toBe(16_000);
+	});
+
+	test("settle: delivered+paid only, kept ≤ deposit, reason on keep, one shot", async () => {
+		const { asOwner, order } = await requestWithDeposit(10_000);
+		await asOwner.mutation(api.bookings.approveBookingRequest, {
+			orderId: order._id,
+		});
+		// Before check-out: refused with the cause.
+		await expect(
+			asOwner.mutation(api.bookings.settleSecurityDeposit, {
+				orderId: order._id,
+				keptAmount: 0,
+			}),
+		).rejects.toThrow(/checked out/i);
+		await asOwner.mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "delivered",
+		});
+		// Checked out but never paid: nothing to return.
+		await expect(
+			asOwner.mutation(api.bookings.settleSecurityDeposit, {
+				orderId: order._id,
+				keptAmount: 0,
+			}),
+		).rejects.toThrow(/never collected/i);
+		await asOwner.mutation(api.orders.markPaymentReceived, {
+			orderId: order._id,
+		});
+		// Keep gates: over the deposit / keep without a reason.
+		await expect(
+			asOwner.mutation(api.bookings.settleSecurityDeposit, {
+				orderId: order._id,
+				keptAmount: 10_001,
+				reason: "too much",
+			}),
+		).rejects.toThrow(/exceed/i);
+		await expect(
+			asOwner.mutation(api.bookings.settleSecurityDeposit, {
+				orderId: order._id,
+				keptAmount: 4_000,
+			}),
+		).rejects.toThrow(/reason/i);
+		// Partial keep records the split + reason.
+		await asOwner.mutation(api.bookings.settleSecurityDeposit, {
+			orderId: order._id,
+			keptAmount: 4_000,
+			reason: "Broken camp chair",
+		});
+		const settled = await asOwner.query(api.orders.get, {
+			shortId: order.shortId,
+		});
+		expect(settled?.securityDepositReturnedAt).toBeDefined();
+		expect(settled?.securityDepositKeptAmount).toBe(4_000);
+		expect(settled?.securityDepositKeptReason).toBe("Broken camp chair");
+		// One shot.
+		await expect(
+			asOwner.mutation(api.bookings.settleSecurityDeposit, {
+				orderId: order._id,
+				keptAmount: 0,
+			}),
+		).rejects.toThrow(/already settled/i);
+	});
+
+	test("mark-returned-in-full stamps no kept fields; depositless orders refuse", async () => {
+		const { asOwner, order } = await requestWithDeposit(10_000);
+		await asOwner.mutation(api.bookings.approveBookingRequest, {
+			orderId: order._id,
+		});
+		await asOwner.mutation(api.orders.updateStatus, {
+			orderId: order._id,
+			status: "delivered",
+		});
+		await asOwner.mutation(api.orders.markPaymentReceived, {
+			orderId: order._id,
+		});
+		await asOwner.mutation(api.bookings.settleSecurityDeposit, {
+			orderId: order._id,
+			keptAmount: 0,
+		});
+		const settled = await asOwner.query(api.orders.get, {
+			shortId: order.shortId,
+		});
+		expect(settled?.securityDepositReturnedAt).toBeDefined();
+		expect(settled?.securityDepositKeptAmount).toBeUndefined();
+		expect(settled?.securityDepositKeptReason).toBeUndefined();
+
+		const plain = await requestWithDeposit(undefined);
+		expect(plain.order.total).toBe(16_000);
+		expect(plain.order.securityDeposit).toBeUndefined();
+		await expect(
+			plain.asOwner.mutation(api.bookings.settleSecurityDeposit, {
+				orderId: plain.order._id,
+				keptAmount: 0,
+			}),
+		).rejects.toThrow(/no security deposit/i);
 	});
 });
