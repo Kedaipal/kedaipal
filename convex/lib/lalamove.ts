@@ -13,6 +13,7 @@
 //    1dp precision) — converted to integer sen at this boundary, like every
 //    other money field in the repo.
 
+import { decryptSecret } from "./credentialCrypto";
 import { EARLIEST_FULFILMENT_LEAD_MINUTES } from "./fulfilmentDate";
 
 export type LalamoveEnv = "sandbox" | "production";
@@ -55,6 +56,19 @@ export function resolveLalamoveCredentials(
 	const apiKey = booking?.apiKey?.trim();
 	const apiSecret = booking?.apiSecret?.trim();
 	if (!apiKey || !apiSecret) return null;
+	return { apiKey, apiSecret, env: inferLalamoveEnv(apiKey) };
+}
+
+/** Decrypt-at-use (86eyn25gk): stored values may be ciphertext, so `env`
+ * must be re-inferred from the PLAINTEXT key (ciphertext never starts with
+ * `pk_test_`, so trusting the pre-decrypt env would point sandbox keys at
+ * the production host). Called by `callLalamove` right before every request;
+ * plaintext legacy rows pass through unchanged. */
+export async function decryptLalamoveCredentials(
+	credentials: LalamoveCredentials,
+): Promise<LalamoveCredentials> {
+	const apiKey = await decryptSecret(credentials.apiKey);
+	const apiSecret = await decryptSecret(credentials.apiSecret);
 	return { apiKey, apiSecret, env: inferLalamoveEnv(apiKey) };
 }
 

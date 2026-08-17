@@ -1,8 +1,10 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
+import { encryptSecret } from "./credentialCrypto";
 import {
 	buildPaymentRequestParams,
 	computeHitpayHmac,
 	decimalStringToSen,
+	decryptHitpayCredentials,
 	describeGatewayMethods,
 	hitpayCheckoutConfigured,
 	inferHitpayMode,
@@ -213,5 +215,41 @@ describe("v1 webhook hmac", () => {
 		expect(await verifyHitpayWebhook(payload, "other-salt")).toBe(false);
 		expect(await verifyHitpayWebhook(fields, salt)).toBe(false);
 		expect(await verifyHitpayWebhook(payload, "")).toBe(false);
+	});
+});
+
+describe("decryptHitpayCredentials (86eyn25gk)", () => {
+	test("re-infers mode from the PLAINTEXT key — ciphertext would always read production", async () => {
+		vi.stubEnv(
+			"CREDENTIALS_ENCRYPTION_KEY",
+			btoa("0123456789abcdef0123456789abcdef"),
+		);
+		try {
+			const stored = resolveHitpayCredentials({
+				apiKey: await encryptSecret("test_abc123"),
+				salt: await encryptSecret("s1"),
+			});
+			// Pre-decrypt, the sync resolver can only see ciphertext: presence is
+			// right, mode is not — which is exactly why actions must decrypt.
+			expect(stored).not.toBeNull();
+			expect(stored?.mode).toBe("production");
+			const live = await decryptHitpayCredentials(stored!);
+			expect(live).toEqual({
+				apiKey: "test_abc123",
+				salt: "s1",
+				mode: "sandbox",
+			});
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	test("legacy plaintext rows pass through unchanged", async () => {
+		const live = await decryptHitpayCredentials({
+			apiKey: "test_plain",
+			salt: "s2",
+			mode: "sandbox",
+		});
+		expect(live).toEqual({ apiKey: "test_plain", salt: "s2", mode: "sandbox" });
 	});
 });
