@@ -14,19 +14,28 @@ import { LOCALES, type Locale } from "./locale";
 
 export type { Locale } from "./locale";
 
-export type DeliveryMethod = "delivery" | "self_collect";
+export type DeliveryMethod = "delivery" | "self_collect" | "booking";
 
 /** The six canonical statuses a label can be attached to. */
 export type OrderStatus =
 	| "pending"
+	// Booking kind's request state (86eyj70z1) — pre-approval, pre-payment.
+	// Not seller-customizable (deliberately absent from ORDER_STATUS_KEYS):
+	// its wording is part of the request-to-book contract, not store voice.
+	| "booking_requested"
 	| "confirmed"
 	| "packed"
 	| "shipped"
 	| "delivered"
 	| "cancelled";
 
-/** Statuses a seller can transition an order INTO (drives the action buttons). */
-export type TransitionTarget = Exclude<OrderStatus, "pending">;
+/** Statuses a seller can transition an order INTO (drives the action buttons).
+ * `booking_requested` is excluded like `pending`: orders are born into it,
+ * never moved into it — its exits are the approve/decline mutations. */
+export type TransitionTarget = Exclude<
+	OrderStatus,
+	"pending" | "booking_requested"
+>;
 
 /** Per-locale override map. Any omitted/blank key falls back to defaults. */
 export type StatusLabelMap = Partial<Record<OrderStatus, string | undefined>>;
@@ -55,6 +64,7 @@ export const STATUS_LABEL_MAX_LENGTH = 24;
 const BASE_DEFAULTS: Record<Locale, Record<OrderStatus, string>> = {
 	en: {
 		pending: "Order Received",
+		booking_requested: "Awaiting Approval",
 		confirmed: "Confirmed",
 		packed: "Packed",
 		shipped: "On the Way",
@@ -63,6 +73,7 @@ const BASE_DEFAULTS: Record<Locale, Record<OrderStatus, string>> = {
 	},
 	ms: {
 		pending: "Pesanan Diterima",
+		booking_requested: "Menunggu Kelulusan",
 		confirmed: "Disahkan",
 		packed: "Dibungkus",
 		shipped: "Dalam Perjalanan",
@@ -71,6 +82,7 @@ const BASE_DEFAULTS: Record<Locale, Record<OrderStatus, string>> = {
 	},
 	zh: {
 		pending: "订单已收到",
+		booking_requested: "等待批准",
 		confirmed: "已确认",
 		packed: "已打包",
 		shipped: "配送中",
@@ -96,6 +108,24 @@ const SELF_COLLECT_DEFAULTS: Record<Locale, Partial<Record<OrderStatus, string>>
 			delivered: "已领取",
 		},
 	};
+
+// Booking preset — a stay's lifecycle in stay words. Only the two stages whose
+// delivery wording would lie ("On the Way"/"Delivered" for a campsite stay);
+// packed is skipped by the booking stepper entirely (S3).
+const BOOKING_DEFAULTS: Record<Locale, Partial<Record<OrderStatus, string>>> = {
+	en: {
+		shipped: "Checked In",
+		delivered: "Checked Out",
+	},
+	ms: {
+		shipped: "Daftar Masuk",
+		delivered: "Daftar Keluar",
+	},
+	zh: {
+		shipped: "已入住",
+		delivered: "已退房",
+	},
+};
 
 // Buttons are imperative; labels are nouns. Most transitions render as
 // "Mark as {label}"; confirm/cancel keep dedicated system verbs so we never put
@@ -130,6 +160,10 @@ export function defaultStatusLabel(
 ): string {
 	if (deliveryMethod === "self_collect") {
 		const preset = SELF_COLLECT_DEFAULTS[locale][status];
+		if (preset) return preset;
+	}
+	if (deliveryMethod === "booking") {
+		const preset = BOOKING_DEFAULTS[locale][status];
 		if (preset) return preset;
 	}
 	return BASE_DEFAULTS[locale][status];

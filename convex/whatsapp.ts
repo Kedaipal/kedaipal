@@ -710,7 +710,15 @@ export const notifyStatusChange = internalAction({
 		if (!meta) return;
 		if (!meta.customerWaPhone) return;
 		const status = meta.status;
-		if (status === "pending" || status === "confirmed") return;
+		// booking_requested sends nothing from this path: request-time silence is
+		// the spec's notification matrix (the approve/decline sends are their own
+		// messages, S3), and no template exists for it.
+		if (
+			status === "pending" ||
+			status === "confirmed" ||
+			status === "booking_requested"
+		)
+			return;
 
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
 		const trackingToken =

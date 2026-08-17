@@ -17,7 +17,7 @@
 
 /** Malaysia is UTC+8 year-round (no daylight saving). */
 export const MYT_OFFSET_MS = 8 * 60 * 60 * 1000;
-const DAY_MS = 24 * 60 * 60 * 1000;
+export const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Hard ceiling on how far ahead a buyer can schedule (v1, hardcoded). */
 export const MAX_NOTICE_DAYS = 30;

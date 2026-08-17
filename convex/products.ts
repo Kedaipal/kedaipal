@@ -600,10 +600,16 @@ export const listForCounter = query({
 			.collect();
 		rows.sort(bySortOrder);
 		return Promise.all(
-			rows.map((row) =>
-				// Owner-gated read (counter checkout), so seller-only fields are safe.
-				productWithVariants(ctx, row, { activeOnly: true, forOwner: true }),
-			),
+			rows
+				// Booking listings never sell at the counter (86eyj70z1/S2): a stay
+				// needs the calendar + request-to-book flow, and the counter has no
+				// date-range UI. A walk-in guest books on the storefront instead —
+				// revisit only if a real seller asks for counter bookings.
+				.filter((row) => effectiveKind(row.kind) !== "booking")
+				.map((row) =>
+					// Owner-gated read (counter checkout), so seller-only fields are safe.
+					productWithVariants(ctx, row, { activeOnly: true, forOwner: true }),
+				),
 		);
 	},
 });

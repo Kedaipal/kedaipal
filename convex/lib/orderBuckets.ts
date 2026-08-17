@@ -6,6 +6,10 @@
 
 export type OrderStatus =
 	| "pending"
+	// Booking kind only (86eyj70z1): a date-range request awaiting the
+	// seller's approve/decline. Terminal exits are confirmed (approve) or
+	// cancelled (decline / 24 h expiry / buyer cancel).
+	| "booking_requested"
 	| "confirmed"
 	| "packed"
 	| "shipped"
@@ -16,7 +20,9 @@ export type OrderStatus =
 export type OrderBucket = "new" | "in_progress" | "completed" | "cancelled";
 
 export const BUCKET_STATUSES: Record<OrderBucket, OrderStatus[]> = {
-	new: ["pending"],
+	// A booking request IS the needs-action new order — it has a 24 h clock on
+	// it, which is exactly what the New bucket's age escalation was built for.
+	new: ["pending", "booking_requested"],
 	in_progress: ["confirmed", "packed", "shipped"],
 	completed: ["delivered"],
 	cancelled: ["cancelled"],
@@ -65,7 +71,7 @@ export const INBOX_BUCKETS: { key: OrderBucket; label: string }[] = [
  * `orderBucket` for anything the seller sees — it also routes an unseen
  * push-path order to "new". */
 export function statusToBucket(status: OrderStatus): OrderBucket {
-	if (status === "pending") return "new";
+	if (status === "pending" || status === "booking_requested") return "new";
 	if (status === "delivered") return "completed";
 	if (status === "cancelled") return "cancelled";
 	return "in_progress"; // confirmed / packed / shipped
@@ -118,10 +124,14 @@ export function statusAgeSeverity(
 	order: OrderStatus | BucketableOrder,
 	ms: number,
 ): StatusAgeSeverity {
+	// Booking requests share the window: amber at 4 h, red at 24 h — which is
+	// the moment the expiry cron kills the hold, so red means "about to lapse".
 	const risky =
 		typeof order === "string"
-			? order === "pending"
-			: order.status === "pending" || isUnseenOrder(order);
+			? order === "pending" || order === "booking_requested"
+			: order.status === "pending" ||
+				order.status === "booking_requested" ||
+				isUnseenOrder(order);
 	if (!risky) return "normal";
 	const hrs = ms / 3_600_000;
 	if (hrs >= 24) return "urgent";

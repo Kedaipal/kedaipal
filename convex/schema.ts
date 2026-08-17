@@ -778,6 +778,14 @@ export default defineSchema({
 		currency: v.string(),
 		status: v.union(
 			v.literal("pending"),
+			// Booking kind only (86eyj70z1 decision 3): a date-range request the
+			// seller must approve before anything is payable — the deliberate
+			// carve-out from confirm-at-create, because booking inventory is scarce
+			// and needs vetting. Soft-holds capacity from the moment it exists.
+			// Exits: approve → confirmed (+ the ONE payment ask, S3), decline /
+			// 24 h expiry / buyer cancel → cancelled (hold released). Never reached
+			// by non-booking orders.
+			v.literal("booking_requested"),
 			v.literal("confirmed"),
 			v.literal("packed"),
 			v.literal("shipped"),
@@ -810,11 +818,31 @@ export default defineSchema({
 			waPhone: v.optional(v.string()),
 		}),
 		// How the customer receives the order. "delivery" = shipped via carrier;
-		// "self_collect" = customer picks up from the store. Defaults to "delivery"
-		// for orders created before this field existed.
+		// "self_collect" = customer picks up from the store; "booking" = a
+		// date-range stay/visit at the seller's venue (booking kind — nothing is
+		// shipped or collected; the guest shows up on check-in day). Defaults to
+		// "delivery" for orders created before this field existed.
 		deliveryMethod: v.optional(
-			v.union(v.literal("delivery"), v.literal("self_collect")),
+			v.union(
+				v.literal("delivery"),
+				v.literal("self_collect"),
+				v.literal("booking"),
+			),
 		),
+		// --- Booking request (booking kind, 86eyj70z1) -----------------------
+		// The spec's `bookingRange {checkIn, checkOut}` FLATTENED to top-level
+		// fields so the capacity scan can ride an index (arrays/objects can't be
+		// index keys; the overlap query needs checkIn range-scans). Both are
+		// MYT-midnight epoch-ms, frozen at create (snapshot posture — capacity or
+		// price edits never rewrite a placed request). checkOut is EXCLUSIVE: the
+		// stay occupies the nights [checkIn, checkOut), so a 25→27 stay is 2
+		// nights and the 27th is free for someone else's check-in.
+		bookingCheckIn: v.optional(v.number()),
+		bookingCheckOut: v.optional(v.number()),
+		// Denormalized from items[0].productId purely so `by_booking_product` can
+		// exist — the per-night capacity count asks "which bookings of THIS
+		// listing overlap these nights", and an array field can't be indexed.
+		bookingProductId: v.optional(v.id("products")),
 		// Which way the rider travels on a delivery order (86eyg0n8e). Frozen at
 		// create from the retailer's deliveryBooking.deliveryDirection so a later
 		// settings toggle never relabels a placed order (pickupSnapshot posture).
@@ -1222,7 +1250,16 @@ export default defineSchema({
 		// The previous-id twin keeps payments on a REPLACED (re-priced /
 		// double-minted) link correlatable instead of silently 200-acked.
 		.index("by_gateway_request", ["gatewayRequestId"])
-		.index("by_gateway_previous_request", ["gatewayPreviousRequestId"]),
+		.index("by_gateway_previous_request", ["gatewayPreviousRequestId"])
+		// Capacity scan (booking kind): bookings of one listing whose stay
+		// overlaps a window. checkIn is the range key — the scan reads
+		// [windowStart − MAX_BOOKING_NIGHTS, windowEnd) and filters the overlap
+		// in memory, so it's bounded by the max stay length, never the table.
+		.index("by_booking_product", ["bookingProductId", "bookingCheckIn"])
+		// Expiry cron (booking kind): un-actioned requests older than the
+		// approval window. Equality on status + the implicit _creationTime range
+		// = a scan bounded to exactly the stale rows.
+		.index("by_status", ["status"]),
 
 	/**
 	 * Retailer-managed library of self-collect pickup locations. Frozen onto
@@ -1289,6 +1326,7 @@ export default defineSchema({
 		orderId: v.id("orders"),
 		status: v.union(
 			v.literal("pending"),
+			v.literal("booking_requested"),
 			v.literal("confirmed"),
 			v.literal("packed"),
 			v.literal("shipped"),

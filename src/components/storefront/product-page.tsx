@@ -1,10 +1,11 @@
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, CalendarRange } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { AppImage } from "../ui/app-image";
+import { Button } from "../ui/button";
 import { Markdown } from "../ui/markdown";
 import { ZoomableImage } from "../ui/zoomable-image";
 import type { StorefrontProduct } from "./product-card";
@@ -64,6 +65,10 @@ export function ProductPageView({
 	});
 	const goToCheckout = () =>
 		navigate({ to: "/$slug/checkout", params: { slug: storeSlug } });
+	// Booking listing (S2 `86eyn4kbw`): the stay is picked on the calendar at
+	// the next step, so the whole cart machinery below (options, stepper,
+	// quick-add, go-to-checkout) is replaced by ONE door — "Request to book".
+	const isBooking = product.kind === "booking";
 	// The route reserves exactly this bar's height as bottom padding — see the
 	// bar's own comment below.
 	const barRef = usePublishedHeight<HTMLDivElement>("--storefront-bar-h");
@@ -104,7 +109,14 @@ export function ProductPageView({
 							{product.name}
 						</h1>
 						<div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-							<PriceLabel value={pp.priceLabel} className="text-2xl" />
+							<span className="flex items-baseline gap-1">
+								<PriceLabel value={pp.priceLabel} className="text-2xl" />
+								{isBooking ? (
+									<span className="text-sm font-medium text-muted-foreground">
+										/night
+									</span>
+								) : null}
+							</span>
 							<ShareLinkChip url={canonicalUrl} />
 						</div>
 					</div>
@@ -118,14 +130,24 @@ export function ProductPageView({
 						<ProductDescription text={product.description} />
 					) : null}
 
-					<OptionPills pp={pp} />
-					<PurchaseHints pp={pp} />
-					<CustomOrderCard
-						pp={pp}
-						onAdd={(p, variant, qty, custom) =>
-							addVariantToCart(cart, p, variant, qty, custom)
-						}
-					/>
+					{isBooking ? (
+						<p className="mt-4 rounded-xl bg-accent/5 px-3 py-2.5 text-sm leading-relaxed text-muted-foreground">
+							Pick your dates on the next step — you&apos;ll see live
+							availability on a calendar, and nothing is paid until the seller
+							approves your request.
+						</p>
+					) : (
+						<>
+							<OptionPills pp={pp} />
+							<PurchaseHints pp={pp} />
+							<CustomOrderCard
+								pp={pp}
+								onAdd={(p, variant, qty, custom) =>
+									addVariantToCart(cart, p, variant, qty, custom)
+								}
+							/>
+						</>
+					)}
 
 					{/* Purchase controls — fixed bottom bar on mobile (thumb reach),
 					    in-flow under the buy box on desktop (`lg:static`). One block,
@@ -145,19 +167,39 @@ export function ProductPageView({
 						className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 px-5 py-4 shadow-[0_-12px_30px_rgba(15,23,42,0.08)] backdrop-blur pb-[max(1rem,env(safe-area-inset-bottom))] lg:static lg:z-auto lg:mt-6 lg:border-t-0 lg:bg-transparent lg:p-0 lg:shadow-none lg:backdrop-blur-none"
 					>
 						<div className="mx-auto max-w-xl lg:mx-0 lg:max-w-none">
-							<TotalPreviewRow pp={pp} />
-							<PurchaseActions
-								pp={pp}
-								onAdd={(p, variant, qty, custom) =>
-									addVariantToCart(cart, p, variant, qty, custom)
-								}
-							/>
-							<GoToCheckoutBar
-								cartItemCount={cart.itemCount}
-								cartTotal={cart.total}
-								currency={product.currency}
-								onCheckout={goToCheckout}
-							/>
+							{isBooking ? (
+								<div className="flex flex-col gap-1.5">
+									<Button asChild className="tap-target h-12 w-full">
+										<Link
+											to="/$slug/checkout"
+											params={{ slug: storeSlug }}
+											search={{ booking: product.slug }}
+										>
+											<CalendarRange className="size-4" aria-hidden />
+											Request to book
+										</Link>
+									</Button>
+									<p className="text-center text-xs text-muted-foreground">
+										Seller confirms within 24 hours — nothing is paid yet.
+									</p>
+								</div>
+							) : (
+								<>
+									<TotalPreviewRow pp={pp} />
+									<PurchaseActions
+										pp={pp}
+										onAdd={(p, variant, qty, custom) =>
+											addVariantToCart(cart, p, variant, qty, custom)
+										}
+									/>
+									<GoToCheckoutBar
+										cartItemCount={cart.itemCount}
+										cartTotal={cart.total}
+										currency={product.currency}
+										onCheckout={goToCheckout}
+									/>
+								</>
+							)}
 						</div>
 					</div>
 				</div>

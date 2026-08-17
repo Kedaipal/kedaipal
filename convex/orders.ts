@@ -132,7 +132,7 @@ const addressValidator = v.object({
 });
 
 const MAX_ITEMS_PER_ORDER = 100;
-const MAX_CUSTOMER_NOTE = 500;
+export const MAX_CUSTOMER_NOTE = 500;
 const SHORT_ID_RETRIES = 3;
 // Up to 5 mockup images per order (designs/angles, or one per item in a
 // multi-part custom order) — mirrors the product-image cap. See docs/proof-approval.md.
@@ -2523,6 +2523,16 @@ export const updateStatus = mutation({
 	): Promise<void> => {
 		const { order, access } = await requireOrderAccess(ctx, orderId);
 
+		// Booking-request gate (86eyj70z1): a request's only exits are the
+		// approve/decline mutations (which fire the one confirmation + payment
+		// ask) — or cancel. A raw forward transition would confirm the booking
+		// while sending the guest nothing, stranding the whole payment flow.
+		if (order.status === "booking_requested" && status !== "cancelled") {
+			throw new ConvexError(
+				"This is a booking request — approve or decline it from the order page instead",
+			);
+		}
+
 		// Mockup gate: a proof-required order can't move into production (packed)
 		// until the buyer has approved the mockup or the seller has waived it.
 		// Gates only the forward production step — cancelling is always allowed.
@@ -2627,6 +2637,12 @@ export const bulkUpdateStatus = mutation({
 			// Skip no-ops + transitions blocked by the mockup gate (don't fail the
 			// whole batch on one ineligible order).
 			if (order.status === status) {
+				skipped++;
+				continue;
+			}
+			// A booking request only exits via approve/decline (or cancel) — bulk
+			// skips it rather than confirming a stay with no guest message.
+			if (order.status === "booking_requested" && status !== "cancelled") {
 				skipped++;
 				continue;
 			}
@@ -2881,13 +2897,24 @@ export const advanceToStage = mutation({
 		if (order.status === "cancelled") {
 			throw new ConvexError("A cancelled order can't be advanced.");
 		}
+		// Booking-request gate (86eyj70z1): the stepper never advances a request —
+		// approve/decline are its only doors, so the guest always gets the one
+		// confirmation + payment ask.
+		if (order.status === "booking_requested") {
+			throw new ConvexError(
+				"This is a booking request — approve or decline it from the order page instead",
+			);
+		}
 
 		const stages = resolveStages({
 			orderStages: retailer.orderStages as OrderStage[] | undefined,
 			labels: retailer.statusLabels as StatusLabels | undefined,
 			deliveryMethod:
-				(order.deliveryMethod as "delivery" | "self_collect" | undefined) ??
-				"delivery",
+				(order.deliveryMethod as
+					| "delivery"
+					| "self_collect"
+					| "booking"
+					| undefined) ?? "delivery",
 		});
 		const stage = stages.find((s) => s.id === stageId);
 		if (!stage) throw new ConvexError("Unknown stage for this order.");
