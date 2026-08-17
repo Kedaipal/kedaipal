@@ -138,8 +138,10 @@ the strict rule). See
 | Seller dispatch card | `src/components/order/book-delivery-card.tsx` |
 | Seller setup (4th pricing mode inside Delivery charge) | `src/components/settings/fulfilment-tab.tsx` (`DeliveryChargeSection`) |
 
-Schema: `retailers.deliveryBooking { enabled, vehicleType, apiKey?, apiSecret? }`
-(plain fields, accepted for v1 — flagged in the ticket), `deliverySnapshot`
+Schema: `retailers.deliveryBooking { enabled, vehicleType, apiKey?, apiSecret?, apiKeyHint? }`
+(**encrypted at rest since 86eyn25gk** — the hint is stamped at save from the
+plaintext; see [`docs/credential-encryption.md`](./credential-encryption.md)),
+`deliverySnapshot`
 gains mode `"lalamove"` + `quotationId`/`vehicleType`/`quotedAt` audit
 fields, and two new tables: `deliveryQuotes` (transient server-side checkout
 quote record) and `deliveryJobs` (the booking ledger — indexes `by_order`,
@@ -149,10 +151,15 @@ quote record) and `deliveryJobs` (the booking ledger — indexes `by_order`,
 
 `resolveLalamoveCredentials(booking)` — the seller's own key pair on the
 retailer row is the ONLY source; absent/half → `null` (feature unavailable,
-checkout falls back gracefully). **No deployment env vars** — sandbox vs
+checkout falls back gracefully). **No per-seller env vars** — sandbox vs
 production is inferred from Lalamove's own key prefix (`pk_test_…` →
 sandbox, else production), so a key can never be pointed at the wrong API
-host and one store can run sandbox keys while another runs prod.
+host and one store can run sandbox keys while another runs prod. Since
+86eyn25gk the stored pair is **encrypted at rest**: the sync resolver is a
+presence check only, and `callLalamove` decrypts via
+`decryptLalamoveCredentials` (re-inferring env from the PLAINTEXT key) right
+before every request — see
+[`docs/credential-encryption.md`](./credential-encryption.md).
 `updateSettings` enforces: enabling requires business address + both key
 parts; half a credential is refused at save time; clearing keys while
 enabled is refused (nothing to fall back to); key fields follow the

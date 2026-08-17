@@ -2,6 +2,7 @@ import { httpRouter } from "convex/server";
 import { internal } from "./_generated/api";
 import { httpAction } from "./_generated/server";
 import { getAdapter } from "./lib/channels/registry";
+import { decryptSecret } from "./lib/credentialCrypto";
 import { decimalStringToSen, verifyHitpayWebhook } from "./lib/hitpay";
 import { extractWebhookOrderId } from "./lib/lalamove";
 import {
@@ -207,7 +208,9 @@ http.route({
 				rawBody,
 				envelope,
 				path,
-				apiSecret,
+				// Stored secrets may be encrypted at rest (86eyn25gk); the
+				// signature is always over the plaintext secret.
+				apiSecret: await decryptSecret(apiSecret),
 			});
 			if (result.valid) {
 				verified = true;
@@ -291,7 +294,12 @@ http.route({
 			return new Response("server misconfigured", { status: 500 });
 		}
 
-		const valid = await verifyHitpayWebhook(fields, context.salt);
+		// The stored salt may be encrypted at rest (86eyn25gk) — HitPay signs
+		// with the plaintext, so decrypt before verifying.
+		const valid = await verifyHitpayWebhook(
+			fields,
+			await decryptSecret(context.salt),
+		);
 		if (!valid) {
 			console.warn("HitPay webhook rejected: invalid hmac", { requestId });
 			return new Response("invalid signature", { status: 401 });

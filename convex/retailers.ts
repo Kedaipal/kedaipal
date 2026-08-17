@@ -194,9 +194,11 @@ import {
 	type DeliveryConfig,
 	sanitizeDeliveryConfig,
 } from "./lib/delivery";
+import { isEncrypted } from "./lib/credentialCrypto";
 import { resolveLalamoveCredentials } from "./lib/lalamove";
 import {
 	type HitpayConfig,
+	inferHitpayMode,
 	resolveHitpayCredentials,
 } from "./lib/hitpay";
 import {
@@ -302,6 +304,9 @@ type DeliveryBooking = {
 	deliveryDirection?: "standard" | "collection";
 	apiKey?: string;
 	apiSecret?: string;
+	/** Stamped at save from the plaintext key (86eyn25gk) — the stored key may
+	 * be ciphertext, which a query can't slice a hint from. */
+	apiKeyHint?: string;
 };
 
 /** Owner-read summary of the booking config — the API secret NEVER crosses
@@ -330,7 +335,13 @@ function summarizeDeliveryBooking(
 		hasCredentials: resolveLalamoveCredentials(booking) !== null,
 		promptBookOnPacked: booking.promptBookOnPacked === true,
 		deliveryDirection: booking.deliveryDirection ?? "standard",
-		apiKeyHint: booking.apiKey ? booking.apiKey.slice(-4) : undefined,
+		// Stored hint first (86eyn25gk — the key may be ciphertext); slicing is
+		// only valid on a legacy still-plaintext row.
+		apiKeyHint:
+			booking.apiKeyHint ??
+			(booking.apiKey && !isEncrypted(booking.apiKey)
+				? booking.apiKey.slice(-4)
+				: undefined),
 	};
 }
 
@@ -370,11 +381,16 @@ function summarizeHitpay(
 ): HitpaySummary | undefined {
 	if (!config) return undefined;
 	const credentials = resolveHitpayCredentials(config);
+	// Stored mode/hint first (86eyn25gk — the key may be ciphertext, whose
+	// prefix would always read "production"); deriving is only valid on a
+	// legacy still-plaintext row.
+	const plaintextKey =
+		config.apiKey && !isEncrypted(config.apiKey) ? config.apiKey : undefined;
 	return {
 		enabled: config.enabled,
 		hasCredentials: credentials !== null,
-		mode: credentials?.mode,
-		apiKeyHint: config.apiKey ? config.apiKey.slice(-4) : undefined,
+		mode: config.mode ?? (plaintextKey ? inferHitpayMode(plaintextKey) : undefined),
+		apiKeyHint: config.apiKeyHint ?? plaintextKey?.slice(-4),
 		connectedAt: config.connectedAt,
 		paymentMethods: config.paymentMethods,
 		methodsCheckedAt: config.methodsCheckedAt,
@@ -1586,6 +1602,17 @@ export const updateSettings = mutation({
 						args.deliveryBooking.apiSecret === undefined
 							? prev?.apiSecret
 							: args.deliveryBooking.apiSecret.trim() || undefined,
+					// The last-4 hint is derivable only from PLAINTEXT (86eyn25gk):
+					// stamp it when a key is typed, keep the stored one otherwise
+					// (falling back to slicing a legacy still-plaintext row), drop it
+					// with the key.
+					apiKeyHint:
+						args.deliveryBooking.apiKey === undefined
+							? (prev?.apiKeyHint ??
+								(prev?.apiKey && !isEncrypted(prev.apiKey)
+									? prev.apiKey.slice(-4)
+									: undefined))
+							: args.deliveryBooking.apiKey.trim().slice(-4) || undefined,
 				};
 				// A key without its secret (or vice versa) can never authenticate —
 				// refuse half a credential up front so the failure is at save time
@@ -1652,7 +1679,10 @@ export const updateSettings = mutation({
 						: args.hitpay.apiKey.trim() || undefined;
 				// A changed key is a different account — its probed method list is
 				// someone else's truth. Drop it and let the probe repopulate; a
-				// pause/resume (key untouched) keeps it.
+				// pause/resume (key untouched) keeps it. Note: once the stored key
+				// is ciphertext (86eyn25gk), re-typing the SAME key also reads as
+				// "changed" (plaintext vs ciphertext) — the probe refires and the
+				// list repopulates in seconds, matching the rotate-keys flow.
 				const keyChanged = nextApiKey !== prev?.apiKey;
 				const clean: HitpayConfig = {
 					enabled: args.hitpay.enabled,
@@ -1661,6 +1691,25 @@ export const updateSettings = mutation({
 						args.hitpay.salt === undefined
 							? prev?.salt
 							: args.hitpay.salt.trim() || undefined,
+					// Hint + mode are derivable only from PLAINTEXT (86eyn25gk) —
+					// stamp on type, keep stored otherwise (legacy plaintext rows
+					// still derive), drop with the key.
+					apiKeyHint:
+						args.hitpay.apiKey === undefined
+							? (prev?.apiKeyHint ??
+								(prev?.apiKey && !isEncrypted(prev.apiKey)
+									? prev.apiKey.slice(-4)
+									: undefined))
+							: nextApiKey?.slice(-4),
+					mode:
+						args.hitpay.apiKey === undefined
+							? (prev?.mode ??
+								(prev?.apiKey && !isEncrypted(prev.apiKey)
+									? inferHitpayMode(prev.apiKey)
+									: undefined))
+							: nextApiKey
+								? inferHitpayMode(nextApiKey)
+								: undefined,
 					connectedAt: prev?.connectedAt,
 					paymentMethods: keyChanged ? undefined : prev?.paymentMethods,
 					methodsCheckedAt: keyChanged ? undefined : prev?.methodsCheckedAt,
@@ -1781,6 +1830,22 @@ export const updateSettings = mutation({
 		}
 
 		await ctx.db.patch(retailer._id, patch);
+		// Encrypt-at-rest (86eyn25gk): a save that stored a plaintext credential
+		// schedules the encrypt action (mutations never touch crypto.subtle).
+		// Args carry only the id — scheduled args persist in system tables.
+		const storedPlaintextCredential = [
+			patch.deliveryBooking?.apiKey,
+			patch.deliveryBooking?.apiSecret,
+			(patch.hitpay as HitpayConfig | undefined)?.apiKey,
+			(patch.hitpay as HitpayConfig | undefined)?.salt,
+		].some((value) => value !== undefined && !isEncrypted(value));
+		if (storedPlaintextCredential) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.credentials.encryptRetailerCredentials,
+				{ retailerId: retailer._id },
+			);
+		}
 		await logAdminAction(ctx, access, "retailers.updateSettings", retailer._id);
 		return { ok: true };
 	},
