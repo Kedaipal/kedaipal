@@ -843,6 +843,18 @@ export default defineSchema({
 		// exist — the per-night capacity count asks "which bookings of THIS
 		// listing overlap these nights", and an array field can't be indexed.
 		bookingProductId: v.optional(v.id("products")),
+		// HOW a request left `booking_requested` when it didn't get approved —
+		// "declined" (seller said no, reason below) or "expired" (the 24 h window
+		// lapsed). Both land the order in `cancelled`; this marker is what lets
+		// the buyer's page say the true thing ("Request declined: …" vs "Request
+		// expired") instead of a generic cancellation. Unset on approved bookings
+		// and on ordinary cancels.
+		bookingResolution: v.optional(
+			v.union(v.literal("declined"), v.literal("expired")),
+		),
+		// The seller's decline reason, quoted VERBATIM to the guest (required at
+		// decline — a silent no is a dead end for someone planning a trip).
+		bookingDeclineReason: v.optional(v.string()),
 		// Which way the rider travels on a delivery order (86eyg0n8e). Frozen at
 		// create from the retailer's deliveryBooking.deliveryDirection so a later
 		// settings toggle never relabels a placed order (pickupSnapshot posture).

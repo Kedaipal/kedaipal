@@ -39,8 +39,13 @@ import {
 import {
 	assertValidFulfilmentDate,
 	assertValidFulfilmentTime,
+	DAY_MS,
 	matchesFulfilmentWindow,
 } from "./lib/fulfilmentDate";
+import {
+	countBookedPerNight,
+	holdsCapacity,
+} from "./lib/bookingAvailability";
 import {
 	collectMinQuantityShortfalls,
 	type MinRuleItem,
@@ -1257,6 +1262,14 @@ export const countActionable = query({
 // `locale` so the client resolver (src/lib/orderStatus.ts) has everything to
 // render relabelled stages. See docs/order-status-customization.md.
 export type OrderWithStatusLabels = Doc<"orders"> & {
+	// Booking capacity context (S3) — SELLER path only, for the approve card's
+	// "N of M sites already booked those nights" line. Never on the buyer/token
+	// path: per-night counts don't cross the public wire (locked).
+	bookingContext?: {
+		capacityPerNight: number;
+		peakOtherBookings: number;
+		nights: number;
+	};
 	statusLabels?: StatusLabels;
 	// Phase 2: the retailer's configured stages (undefined => buyer/seller
 	// resolve the synthesized defaults from statusLabels). Drives the tracking
@@ -1267,6 +1280,9 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 	// store" CTA on the tracking page (buyers otherwise only ever hear from the
 	// shared Kedaipal WABA). `retailerWaPhone` undefined => the CTA is hidden.
 	storeName: string;
+	// The storefront slug — the tracking page's way back to the store (the
+	// declined/expired booking cards link "Try different dates" there).
+	retailerSlug?: string;
 	retailerWaPhone?: string;
 	// The shared Kedaipal checkout number (same resolution as the storefront's
 	// getRetailerBySlug), included ONLY while the order is still `pending`: it
@@ -1388,10 +1404,47 @@ export const get = query({
 				};
 			}
 		}
+		// Booking capacity context (S3) — seller path only: "how full are those
+		// nights already?" is what makes an informed approve, and it's exactly
+		// the count the availability module keeps. Excludes THIS order's own
+		// hold (it occupies every night of its own stay), so the line reads
+		// "3 of 5 sites already booked", never a self-inflated 4. Never on the
+		// buyer path — per-night counts don't cross the public wire (locked).
+		let bookingContext:
+			| { capacityPerNight: number; peakOtherBookings: number; nights: number }
+			| undefined;
+		if (
+			!isBuyerRead &&
+			order.deliveryMethod === "booking" &&
+			order.bookingProductId !== undefined &&
+			order.bookingCheckIn !== undefined &&
+			order.bookingCheckOut !== undefined
+		) {
+			const listing = await ctx.db.get(order.bookingProductId);
+			const counts = await countBookedPerNight(
+				ctx,
+				order.bookingProductId,
+				order.bookingCheckIn,
+				order.bookingCheckOut,
+			);
+			const ownHold = holdsCapacity(order.status) ? 1 : 0;
+			let peak = 0;
+			for (const count of counts.values()) {
+				peak = Math.max(peak, count - ownHold);
+			}
+			bookingContext = {
+				capacityPerNight: listing?.booking?.capacityPerNight ?? 1,
+				peakOtherBookings: peak,
+				nights: Math.round(
+					(order.bookingCheckOut - order.bookingCheckIn) / DAY_MS,
+				),
+			};
+		}
 		return {
 			...order,
 			podImageUrls,
 			collectionRider,
+			bookingContext,
 			deliverySnapshot: isBuyerRead ? undefined : order.deliverySnapshot,
 			// Meta's message id has no buyer use and this read is unauthenticated —
 			// strip it on the token path alongside the delivery snapshot. The
@@ -1403,6 +1456,7 @@ export const get = query({
 			orderStages: retailer?.orderStages as OrderStage[] | undefined,
 			retailerLocale: (retailer?.locale ?? "en") as Locale,
 			storeName: retailer?.storeName ?? "",
+			retailerSlug: retailer?.slug,
 			retailerWaPhone: retailer?.waPhone,
 			// Served while the order still needs (or benefits from) a path into the
 			// shared-number chat: pending = the legacy manual/auto Send card; a
@@ -2134,7 +2188,7 @@ async function assertExportAccess(
  * access descriptor so mutations can attribute admin-on-behalf writes. Throws
  * "Order not found" / "Forbidden" to match the pre-existing inline checks.
  */
-async function requireOrderAccess(
+export async function requireOrderAccess(
 	ctx: QueryCtx | MutationCtx,
 	orderId: Id<"orders">,
 ): Promise<{ order: Doc<"orders">; access: RetailerAccess }> {

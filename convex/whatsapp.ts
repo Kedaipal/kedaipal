@@ -215,6 +215,11 @@ export const getOrderWithRetailer = internalQuery({
 		// push must NOT fire — the template's total would be wrong.
 		mockupGateClosed: boolean;
 		deliveryFeePending: boolean;
+		// Booking request resolutions (S3): set = this cancel is a decline/expiry,
+		// which carries its own buyer messaging — the generic cancelled send must
+		// not fire on top (and couldn't land anyway: request-stage guests have no
+		// session window).
+		bookingResolution: Doc<"orders">["bookingResolution"];
 	} | null> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) return null;
@@ -248,6 +253,7 @@ export const getOrderWithRetailer = internalQuery({
 			confirmationPushStatus: order.confirmationPushStatus,
 			mockupGateClosed: isMockupGateClosed(order),
 			deliveryFeePending: order.deliveryFeePending === true,
+			bookingResolution: order.bookingResolution,
 		};
 	},
 });
@@ -690,6 +696,7 @@ export const notifyStatusChange = internalAction({
 			carrierTrackingUrl: string | undefined;
 			courierName: string | undefined;
 			trackingNo: string | undefined;
+			bookingResolution: Doc<"orders">["bookingResolution"];
 			deliveryMethod: DeliveryMethod;
 			pickupKind: PickupKind | undefined;
 			locale: Locale;
@@ -719,6 +726,13 @@ export const notifyStatusChange = internalAction({
 			status === "booking_requested"
 		)
 			return;
+		// A declined/expired booking request lands in `cancelled` — but the
+		// generic cancelled message is wrong copy AND unsendable (the guest never
+		// messaged the WABA, so there is no session window). The tracking page
+		// states the resolution + reason; a dedicated decline/expiry template is
+		// the Meta-registration follow-up. A seller cancelling an APPROVED booking
+		// carries no resolution marker, so it keeps today's behaviour.
+		if (status === "cancelled" && meta.bookingResolution !== undefined) return;
 
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
 		const trackingToken =

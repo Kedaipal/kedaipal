@@ -17,7 +17,7 @@ follow the core independently.
 | --- | --- | --- |
 | S1 `86eyn4kap` | Schema + kind-first wizard + booking listing setup | ✅ built (this doc) |
 | S2 `86eyn4kbw` | Availability module + buyer calendar (Variant A) + request-to-book | ✅ built (this doc) |
-| S3 `86eyn4kcn` | Approve/decline + WA copy set + buyer tracking states | — |
+| S3 `86eyn4kcn` | Approve/decline + WA copy set + buyer tracking states | ✅ built (this doc) |
 | S4 `86eyn4kdb` | Seller month calendar + `bookingBlocks` | — |
 | S5 `86eyn4kee` | Security deposit end-to-end | — |
 | S6 `86eyn4kf2` | ICS calendar feed + Settings connect card | — |
@@ -199,6 +199,93 @@ escalation (amber 4 h / red 24 h) now doubles as the seller's countdown.
 - **Counter**: `products.listForCounter` filters booking listings out — the
   counter has no date-range UI; a walk-in guest books on the storefront.
   Revisit if a real seller asks.
+
+## S3 — approve / decline + buyer states (`86eyn4kcn`)
+
+### The two exits
+
+**`bookings.approveBookingRequest`** (owner-or-admin, soft-locked like every
+seller write): `booking_requested` → `confirmed` through `applyStatusTransition`
+(timeline beat, activation stamp, stage reset — `notifyStatusChange` skips
+`confirmed`, so nothing generic goes out), then the guest's ONE message — the
+**existing confirmation template + push machinery** (`notifyStorefrontOrderCreated`:
+stamps, 30s/2m/8m retries, delivery-webhook correlation, all inherited) whose
+button lands on the payable order page. That IS "confirmed + payment ask in one
+message": the template states the total (always final for bookings — no
+mockup/fee holds by construction) and the page carries Pay-now/manual. Template
+env unset ⇒ approve still works, page still payable, no automatic message
+(the storefront's own legacy posture).
+
+**`bookings.declineBookingRequest`**: reason REQUIRED (≤200 chars, quoted
+verbatim to the guest — a silent no dead-ends someone planning a trip), stamps
+**`bookingResolution: "declined"` + `bookingDeclineReason`**, then the one
+cancel path releases the hold. The expiry cron stamps
+`bookingResolution: "expired"` the same way. Both markers exist so the buyer's
+page can say the TRUE thing — and so `notifyStatusChange` **suppresses the
+generic cancelled message** on resolution cancels (wrong copy, and the guest
+never messaged the WABA, so there's no session window for it to land in
+anyway). A seller cancelling an APPROVED booking carries no marker and keeps
+today's behaviour. `assertStillRequested` gives cause-true refusals: approve at
+hour 25 reads "expired — ask the guest to book again", never a generic error.
+
+### Seller surfaces
+
+- **`BookingRequestCard`** takes the stepper's slot while `booking_requested`
+  (the stepper can't move it — the server refuses): amber card with the
+  request badge, **"Expires in Nh"** countdown (red ≤4h — the same clock the
+  cron kills), check-in/check-out/nights/total in the ticket skin, the
+  **capacity context line** ("2 of 5 spots already booked on those nights" —
+  new seller-only `orders.get.bookingContext`, computed from the availability
+  module minus this order's own hold; never on the buyer path), and
+  Approve (primary) / Decline… (outline). The decline dialog: quick-reason
+  chips + free text, reason-required submit. After a non-approval resolution,
+  **`BookingResolutionNote`** keeps the why (incl. the typed reason) visible
+  on the cancelled order.
+- Fulfilment card reads "Booking · 2 nights · 25 Sep → 27 Sep" with a
+  calendar icon and a "Check-in" date chip; the **booking stepper skips
+  "Packed"** (synthesized stages filter the anchor — Confirmed → Checked In →
+  Checked Out; a seller's own configured stages are untouched).
+- Seller WA alert: `requestBooking` schedules the existing 86eyhw9zy
+  new-order template (env-gated; its button opens the order page where
+  Approve/Decline leads). A booking-worded template is a Meta-registration
+  follow-up.
+
+### Buyer tracking states (design §2)
+
+- **Awaiting**: amber "Request sent" card — "{store} usually confirms within
+  24 hours — we'll WhatsApp you either way. Nothing has been charged."
+  (EN/BM). The **payment card is suppressed** while requested — an armed Pay
+  button on a request would be a lie.
+- **Declined**: "Request declined" + the seller's reason as a blockquote +
+  "Nothing was charged." + **"Try different dates"** → the storefront (new
+  `retailerSlug` on the order payload).
+- **Expired**: same card shape with the 24-hour explanation.
+- **Approved**: the existing payment card takes over (Pay now / manual) —
+  plus the "Your stay" card (check-in/check-out/nights, frozen fields), the
+  booking's stand-in for the address/pickup blocks.
+- Timeline: the first node reads "Awaiting Approval" (the swept status label,
+  seller-locale aware) instead of "Order Received"; `booking_requested` sits
+  at position 0.
+
+### Deferred WA messages (explicit divergence)
+
+The spec's matrix gives the buyer a WA ping at request-sent and at
+declined/expired. All three need **Meta-approved templates** (the guest has
+no session window until they message first), which don't exist yet — same
+boat as the confirm template before 86eyf1rck. v1 ships the STATES on the
+page the buyer already holds (they land on it at request time, and the
+approve message links back to it); the request-ack / declined / expired
+templates are the Meta-registration follow-up with Arif, wired the day the
+envs exist. The approve message needs NO new template (it reuses the live
+confirm template).
+
+### S3 tests
+
+`convex/bookings.test.ts` ("approve / decline"): approve happy path +
+no-push-without-env + double-approve refusal; decline reason gates +
+resolution stamps + released nights + already-declined refusal; expiry stamps
+the resolution + hour-25 approve names it; bookingContext on the seller read
+only.
 
 ### What S2 deliberately does NOT do
 

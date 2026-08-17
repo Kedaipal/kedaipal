@@ -284,7 +284,15 @@ export function synthesizeDefaultStages(opts: {
 	labels?: StatusLabels;
 	deliveryMethod?: DeliveryMethod;
 }): OrderStage[] {
-	return STAGE_ANCHORS.map((anchor, i) => ({
+	// A booking's default flow is Confirmed → Checked In → Checked Out —
+	// "Packed" is meaningless for a stay, so the synthesized route skips that
+	// anchor (a seller's own configured stages are untouched; they may anchor
+	// whatever vocabulary they like).
+	const anchors =
+		opts.deliveryMethod === "booking"
+			? STAGE_ANCHORS.filter((anchor) => anchor !== "packed")
+			: STAGE_ANCHORS;
+	return anchors.map((anchor, i) => ({
 		id: defaultStageId(anchor),
 		anchor,
 		label: {

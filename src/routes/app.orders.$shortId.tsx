@@ -4,6 +4,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useAction, useMutation } from "convex/react";
 import {
 	ArrowLeft,
+	CalendarRange,
 	ArrowRight,
 	BadgeCheck,
 	Ban,
@@ -29,7 +30,15 @@ import { type ChangeEvent, type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
-import { formatFulfilmentTime } from "../../convex/lib/fulfilmentDate";
+import {
+	DAY_MS,
+	formatFulfilmentDate,
+	formatFulfilmentTime,
+} from "../../convex/lib/fulfilmentDate";
+import {
+	BookingRequestCard,
+	BookingResolutionNote,
+} from "../components/order/booking-request-card";
 import {
 	isActiveJobStatus,
 	isRiderManagedTransition,
@@ -166,7 +175,9 @@ function OrderDetailSkeleton() {
 	);
 }
 
-type DeliveryMethod = "delivery" | "self_collect";
+// Local mirror of the shared union (src/lib/orderStatus.ts) — a route-level
+// alias so the file reads standalone.
+type DeliveryMethod = "delivery" | "self_collect" | "booking";
 
 type PaymentStatus = "unpaid" | "claimed" | "received";
 
@@ -469,6 +480,7 @@ function OrderDetailRoute() {
 
 	const deliveryMethod = (order.deliveryMethod ?? "delivery") as DeliveryMethod;
 	const isSelfCollect = deliveryMethod === "self_collect";
+	const isBooking = deliveryMethod === "booking";
 	// Dashboard chrome is English-only (per the i18n scope), so resolve seller-
 	// facing labels in EN — a retailer's EN custom labels still flow through.
 	// The buyer tracking page resolves in the store's locale instead.
@@ -695,6 +707,19 @@ function OrderDetailRoute() {
 				/>
 			</div>
 
+			{/* A booking request's stage control IS approve/decline (S3): the
+			    stepper can't move it (the server refuses), so its slot holds the
+			    request card until the seller answers. Once resolved without an
+			    approval, a quiet note keeps the WHY visible on the cancelled order. */}
+			{order.status === "booking_requested" ? (
+				<BookingRequestCard order={order} />
+			) : order.bookingResolution !== undefined ? (
+				<BookingResolutionNote
+					resolution={order.bookingResolution}
+					reason={order.bookingDeclineReason}
+				/>
+			) : null}
+			{order.status === "booking_requested" ? null : (
 			<OrderProgressStepper
 				stages={stages}
 				currentIndex={currentIdx}
@@ -860,6 +885,7 @@ function OrderDetailRoute() {
 					) : undefined
 				}
 			/>
+			)}
 
 			{/* Confirmation push failed (86eyf1rck). Amber like the payment claim: it
 			    needs the seller's eyes. Two causes, two different things for the
@@ -1315,7 +1341,9 @@ function OrderDetailRoute() {
 			{/* Delivery method */}
 			<section className="flex items-center gap-3 rounded-2xl border border-border bg-card p-4">
 				<div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted">
-					{isSelfCollect ? (
+					{isBooking ? (
+						<CalendarRange className="size-4 text-muted-foreground" />
+					) : isSelfCollect ? (
 						<Package className="size-4 text-muted-foreground" />
 					) : (
 						<Truck className="size-4 text-muted-foreground" />
@@ -1326,24 +1354,31 @@ function OrderDetailRoute() {
 						Fulfillment
 					</p>
 					<p className="text-sm font-medium">
-						{isSelfCollect
-							? order.pickupSnapshot?.locationType === "drop_off"
-								? "Drop-off"
-								: "Self Collect"
-							: collectionService
-								? "Collection"
-								: "Delivery"}
+						{isBooking
+							? order.bookingCheckIn !== undefined &&
+								order.bookingCheckOut !== undefined
+								? `Booking · ${Math.round((order.bookingCheckOut - order.bookingCheckIn) / DAY_MS)} night${Math.round((order.bookingCheckOut - order.bookingCheckIn) / DAY_MS) === 1 ? "" : "s"} · ${formatFulfilmentDate(order.bookingCheckIn)} → ${formatFulfilmentDate(order.bookingCheckOut)}`
+								: "Booking"
+							: isSelfCollect
+								? order.pickupSnapshot?.locationType === "drop_off"
+									? "Drop-off"
+									: "Self Collect"
+								: collectionService
+									? "Collection"
+									: "Delivery"}
 					</p>
 					{order.fulfilmentDate !== undefined && order.source !== "counter" ? (
 						<div className="flex items-center gap-1.5">
 							<span className="text-xs text-muted-foreground">
-								{isSelfCollect
-									? order.pickupSnapshot?.locationType === "drop_off"
-										? "Meet on"
-										: "Collect on"
-									: collectionService
-										? "Collect on"
-										: "Deliver on"}
+								{isBooking
+									? "Check-in"
+									: isSelfCollect
+										? order.pickupSnapshot?.locationType === "drop_off"
+											? "Meet on"
+											: "Collect on"
+										: collectionService
+											? "Collect on"
+											: "Deliver on"}
 							</span>
 							<FulfilmentDateBadge
 								epoch={order.fulfilmentDate}

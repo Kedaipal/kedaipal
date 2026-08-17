@@ -1,6 +1,6 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute, notFound } from "@tanstack/react-router";
+import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { useAction, useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import {
@@ -33,7 +33,11 @@ import {
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { isSafeTrackingUrl } from "../../convex/lib/couriers";
-import { formatFulfilmentDateTime } from "../../convex/lib/fulfilmentDate";
+import {
+	DAY_MS,
+	formatFulfilmentDate,
+	formatFulfilmentDateTime,
+} from "../../convex/lib/fulfilmentDate";
 import { describeGatewayMethods } from "../../convex/lib/hitpay";
 import { isMockupGateClosed } from "../../convex/lib/order";
 import { paymentMethodLabel } from "../../convex/lib/paymentMethod";
@@ -218,7 +222,7 @@ export const Route = createFileRoute("/track/$token")({
 	component: TrackingRoute,
 });
 
-type DeliveryMethod = "delivery" | "self_collect";
+type DeliveryMethod = "delivery" | "self_collect" | "booking";
 
 type StatusCfg = { label: string; icon: ReactNode; color: string };
 
@@ -235,6 +239,11 @@ function getStatusConfig(
 	return {
 		pending: {
 			label: label("pending"),
+			icon: <Clock className="size-5" />,
+			color: "text-amber-500",
+		},
+		booking_requested: {
+			label: label("booking_requested"),
 			icon: <Clock className="size-5" />,
 			color: "text-amber-500",
 		},
@@ -424,6 +433,10 @@ function TrackingRoute() {
 
 	const deliveryMethod = (order.deliveryMethod ?? "delivery") as DeliveryMethod;
 	const isSelfCollect = deliveryMethod === "self_collect";
+	// Booking kind (S3): the page speaks stay language — range card, request
+	// states, and no payment surface until the seller approves.
+	const isBooking = deliveryMethod === "booking";
+	const ms = order.retailerLocale === "ms";
 	// Collection service (86eyg0n8e, frozen at order create): the rider picks
 	// up FROM this buyer's address — every "Deliver…" label flips to collection
 	// wording so the page never claims something is being sent to them.
@@ -511,8 +524,14 @@ function TrackingRoute() {
 		? stages.findIndex((s) => s.id === currentStage.id)
 		: -1;
 	// Combined position into the rendered list: 0 = pending node, 1..N = stages.
+	// A booking request sits at position 0 too — its "received" node reads
+	// "Awaiting Approval" (below) until the seller answers.
 	const currentPos =
-		order.status === "pending" ? 0 : stageIdx >= 0 ? stageIdx + 1 : 0;
+		order.status === "pending" || order.status === "booking_requested"
+			? 0
+			: stageIdx >= 0
+				? stageIdx + 1
+				: 0;
 
 	const timelineNodes: Array<{
 		key: string;
@@ -524,7 +543,11 @@ function TrackingRoute() {
 	}> = [
 		{
 			key: "pending",
-			label: statusConfig.pending.label,
+			// A booking's first beat is the request, not "Order Received" — reuse
+			// the swept status label so a seller's locale flows through.
+			label: isBooking
+				? statusConfig.booking_requested.label
+				: statusConfig.pending.label,
 			icon: statusConfig.pending.icon,
 			isDone: true, // any order on this page has at least been received
 			isCurrent: currentPos === 0,
@@ -633,6 +656,64 @@ function TrackingRoute() {
 				) : null
 			) : null}
 
+			{/* Booking request states (S3, design 86eym0pjg §2): the request's own
+			    lifecycle, stated where the buyer lands. While awaiting, the payment
+			    card below is suppressed — nothing is payable until the seller
+			    approves, and an armed Pay button on a request would be a lie. */}
+			{isBooking && order.status === "booking_requested" ? (
+				<section className="mt-6 flex flex-col gap-2 rounded-2xl border border-amber-300 bg-card p-4 dark:border-amber-800">
+					<span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+						<Clock className="size-3.5" aria-hidden />
+						{ms ? "Menunggu kelulusan" : "Awaiting approval"}
+					</span>
+					<p className="font-heading text-lg font-extrabold leading-tight">
+						{ms ? "Permintaan dihantar" : "Request sent"}
+					</p>
+					<p className="text-sm leading-relaxed text-muted-foreground">
+						{ms
+							? `${order.storeName} biasanya mengesahkan dalam masa 24 jam — kami akan WhatsApp anda sama ada diterima atau tidak. Tiada bayaran dibuat lagi.`
+							: `${order.storeName} usually confirms within 24 hours — we'll WhatsApp you either way. Nothing has been charged.`}
+					</p>
+				</section>
+			) : null}
+			{isBooking && order.bookingResolution !== undefined ? (
+				<section className="mt-6 flex flex-col gap-2 rounded-2xl border border-border bg-card p-4">
+					<span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-[11px] font-semibold text-muted-foreground">
+						{order.bookingResolution === "declined"
+							? ms
+								? "Permintaan ditolak"
+								: "Request declined"
+							: ms
+								? "Permintaan tamat tempoh"
+								: "Request expired"}
+					</span>
+					{order.bookingResolution === "declined" &&
+					order.bookingDeclineReason ? (
+						<blockquote className="border-l-2 border-border pl-3 text-sm italic text-muted-foreground">
+							“{order.bookingDeclineReason}”
+						</blockquote>
+					) : order.bookingResolution === "expired" ? (
+						<p className="text-sm leading-relaxed text-muted-foreground">
+							{ms
+								? "Penjual tidak menjawab dalam masa 24 jam, jadi tarikh anda dilepaskan."
+								: "The seller didn't respond within 24 hours, so your dates were released."}
+						</p>
+					) : null}
+					<p className="text-sm font-medium">
+						{ms ? "Tiada bayaran dibuat." : "Nothing was charged."}
+					</p>
+					{order.retailerSlug ? (
+						<Link
+							to="/$slug"
+							params={{ slug: order.retailerSlug }}
+							className="mt-1 inline-flex h-11 w-fit items-center rounded-lg border border-border bg-background px-4 text-sm font-semibold transition-colors hover:bg-muted"
+						>
+							{ms ? "Cuba tarikh lain" : "Try different dates"}
+						</Link>
+					) : null}
+				</section>
+			) : null}
+
 			{/* Current status card */}
 			<div className="mt-6 flex items-center gap-3 rounded-2xl border border-border bg-card p-4">
 				<span className={config?.color}>{config?.icon}</span>
@@ -648,8 +729,10 @@ function TrackingRoute() {
 				</div>
 			</div>
 
-			{/* Payment card — independent of fulfilment status. Hidden once cancelled. */}
-			{!isCancelled ? (
+			{/* Payment card — independent of fulfilment status. Hidden once cancelled,
+			    and held back on a booking REQUEST: nothing is payable until the seller
+			    approves (the awaiting card above says so). */}
+			{!isCancelled && order.status !== "booking_requested" ? (
 				<section
 					className={`mt-4 flex flex-col gap-3 rounded-2xl border p-4 ${paymentConfig.tone}`}
 				>
@@ -1060,6 +1143,45 @@ function TrackingRoute() {
 					<p className="text-xs text-muted-foreground">
 						Taken by your rider at drop-off.
 					</p>
+				</section>
+			) : null}
+
+			{/* The stay itself — a booking's equivalent of the address/pickup blocks.
+			    Frozen at request (bookingCheckIn/Out never change after create). */}
+			{isBooking &&
+			order.bookingCheckIn !== undefined &&
+			order.bookingCheckOut !== undefined ? (
+				<section className="mt-6 flex flex-col gap-2 rounded-2xl border border-border bg-card p-4">
+					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+						{ms ? "Penginapan anda" : "Your stay"}
+					</p>
+					<div className="flex flex-col gap-1.5 text-sm tabular-nums">
+						<div className="flex items-baseline gap-1.5">
+							<span className="font-medium">
+								{ms ? "Daftar masuk" : "Check-in"}
+							</span>
+							<span className="flex-1 border-b-2 border-dotted border-border" />
+							<span className="font-semibold">
+								{formatFulfilmentDate(order.bookingCheckIn)}
+							</span>
+						</div>
+						<div className="flex items-baseline gap-1.5">
+							<span className="font-medium">
+								{ms ? "Daftar keluar" : "Check-out"}
+							</span>
+							<span className="flex-1 border-b-2 border-dotted border-border" />
+							<span className="font-semibold">
+								{formatFulfilmentDate(order.bookingCheckOut)}
+							</span>
+						</div>
+						<p className="text-xs text-muted-foreground">
+							{Math.round(
+								(order.bookingCheckOut - order.bookingCheckIn) / DAY_MS,
+							)}{" "}
+							{ms ? "malam" : "night(s)"} ·{" "}
+							{order.items[0]?.name ?? (ms ? "penyenaraian" : "listing")}
+						</p>
+					</div>
 				</section>
 			) : null}
 

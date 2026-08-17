@@ -346,3 +346,146 @@ describe("counter exclusion", () => {
 		expect(counter.find((p) => p._id === productId)).toBeUndefined();
 	});
 });
+
+describe("approve / decline (S3)", () => {
+	test("approve: request → confirmed, timeline beat, no push without the template env", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup());
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(3),
+			checkOut: day(5),
+			customer: guest(1),
+		});
+		const order = await asOwner.query(api.orders.get, { shortId });
+		if (!order) throw new Error("order missing");
+		await asOwner.mutation(api.bookings.approveBookingRequest, {
+			orderId: order._id,
+		});
+		const approved = await asOwner.query(api.orders.get, { shortId });
+		expect(approved?.status).toBe("confirmed");
+		// Template env unset in tests ⇒ no push stamped/scheduled — the order
+		// page still shows approved + payable (documented legacy posture).
+		expect(approved?.confirmationPushStatus).toBeUndefined();
+		// Approving twice is a cause-true refusal, not a silent no-op.
+		await expect(
+			asOwner.mutation(api.bookings.approveBookingRequest, {
+				orderId: order._id,
+			}),
+		).rejects.toThrow(/already approved/);
+	});
+
+	test("decline requires a reason, stamps the resolution and frees the nights", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup());
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(3),
+			checkOut: day(5),
+			customer: guest(1),
+		});
+		const order = await asOwner.query(api.orders.get, { shortId });
+		if (!order) throw new Error("order missing");
+		await expect(
+			asOwner.mutation(api.bookings.declineBookingRequest, {
+				orderId: order._id,
+				reason: "   ",
+			}),
+		).rejects.toThrow(/reason/i);
+		await asOwner.mutation(api.bookings.declineBookingRequest, {
+			orderId: order._id,
+			reason: "Closed for a private event that weekend",
+		});
+		const declined = await asOwner.query(api.orders.get, { shortId });
+		expect(declined?.status).toBe("cancelled");
+		expect(declined?.bookingResolution).toBe("declined");
+		expect(declined?.bookingDeclineReason).toBe(
+			"Closed for a private event that weekend",
+		);
+		// The hold is gone — the same nights book again.
+		await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(3),
+			checkOut: day(5),
+			customer: guest(2),
+		});
+		// A resolved request refuses further action with the true cause.
+		await expect(
+			asOwner.mutation(api.bookings.approveBookingRequest, {
+				orderId: order._id,
+			}),
+		).rejects.toThrow(/already declined/);
+	});
+
+	test("the expiry sweep stamps the resolution the buyer page reads", async () => {
+		vi.useFakeTimers();
+		try {
+			const { t, asOwner, retailer, productId } = await seedBookingStore(
+				setup(),
+			);
+			const { shortId } = await t.mutation(api.bookings.requestBooking, {
+				retailerId: retailer._id,
+				productId,
+				checkIn: day(10),
+				checkOut: day(12),
+				customer: guest(1),
+			});
+			vi.advanceTimersByTime(25 * 60 * 60 * 1000);
+			await t.mutation(internal.bookings.expireStaleRequests, {});
+			const expired = await asOwner.query(api.orders.get, { shortId });
+			expect(expired?.status).toBe("cancelled");
+			expect(expired?.bookingResolution).toBe("expired");
+			// Approving at hour 25 names the expiry, not a generic error.
+			const order = await asOwner.query(api.orders.get, { shortId });
+			if (!order) throw new Error("order missing");
+			await expect(
+				asOwner.mutation(api.bookings.approveBookingRequest, {
+					orderId: order._id,
+				}),
+			).rejects.toThrow(/expired/);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("capacity context reaches the seller read, never the buyer token read", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup(), {
+			capacity: 5,
+		});
+		await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(3),
+			checkOut: day(5),
+			customer: guest(1),
+		});
+		await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(4),
+			checkOut: day(6),
+			customer: guest(2),
+		});
+		const third = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(4),
+			checkOut: day(5),
+			customer: guest(3),
+		});
+		const sellerRead = await asOwner.query(api.orders.get, {
+			shortId: third.shortId,
+		});
+		// Night 4 holds all three stays — two besides this order.
+		expect(sellerRead?.bookingContext).toEqual({
+			capacityPerNight: 5,
+			peakOtherBookings: 2,
+			nights: 1,
+		});
+		const buyerRead = await t.query(api.orders.get, {
+			token: third.trackingToken,
+		});
+		expect(buyerRead?.bookingContext).toBeUndefined();
+	});
+});

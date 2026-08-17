@@ -48,12 +48,23 @@ import {
 	generateShortId,
 	generateTrackingToken,
 } from "./lib/order";
+import { logAdminAction } from "./lib/auth";
 import { effectiveKind } from "./lib/productKind";
 import { stampProductsOrdered } from "./lib/productOrdered";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidMyMobile } from "./lib/slug";
-import { applyStatusTransition, MAX_CUSTOMER_NOTE } from "./orders";
+import { orderConfirmTemplateName } from "./lib/whatsapp";
+import {
+	applyStatusTransition,
+	MAX_CUSTOMER_NOTE,
+	requireOrderAccess,
+} from "./orders";
+import { assertSubscriptionActive } from "./subscriptions";
 import { recordOrderCreated } from "./subscriptionUsage";
+
+/** Decline reasons are quoted verbatim in the guest's page (and, once the
+ * dedicated template is registered, their WhatsApp) — bounded like a note. */
+export const BOOKING_DECLINE_REASON_MAX = 200;
 
 const SHORT_ID_RETRIES = 3;
 
@@ -312,14 +323,122 @@ export const requestBooking = mutation({
 			customerName: name,
 		});
 
-		// Seller attention: the standard new-order email (booking-aware copy is
-		// S3's sweep) + the WhatsApp approve/decline alert (S3). Browser alerts
-		// ride the client's existing new-order watch for free.
+		// Seller attention: the standard new-order email + the seller WhatsApp
+		// alert (86eyhw9zy plumbing — env-gated utility template whose button
+		// opens the order page, where Approve/Decline leads; a booking-worded
+		// template is a Meta-registration follow-up). Browser alerts ride the
+		// client's existing new-order watch for free.
 		await ctx.scheduler.runAfter(0, internal.email.notifyRetailerOrderAlert, {
+			orderId,
+		});
+		await ctx.scheduler.runAfter(0, internal.whatsapp.notifySellerNewOrder, {
 			orderId,
 		});
 
 		return { shortId, trackingToken };
+	},
+});
+
+/** Cause-true refusals for acting on a request that is no longer one. */
+function assertStillRequested(order: {
+	status: string;
+	bookingResolution?: "declined" | "expired";
+}): void {
+	if (order.status === "booking_requested") return;
+	if (order.bookingResolution === "expired") {
+		throw new ConvexError(
+			"This request expired after 24 hours and the dates were released — ask the guest to book again",
+		);
+	}
+	if (order.bookingResolution === "declined") {
+		throw new ConvexError("This request was already declined");
+	}
+	if (order.status === "cancelled") {
+		throw new ConvexError("This booking was cancelled");
+	}
+	throw new ConvexError("This booking was already approved");
+}
+
+/**
+ * Approve a booking request (86eyj70z1 decision 3): the request becomes a
+ * confirmed order and the guest gets the ONE combined message — the same
+ * confirmation template + payment machinery the storefront push uses, whose
+ * button lands on the payable order page. Never two messages.
+ */
+export const approveBookingRequest = mutation({
+	args: { orderId: v.id("orders") },
+	handler: async (ctx, { orderId }): Promise<void> => {
+		const { order, access } = await requireOrderAccess(ctx, orderId);
+		assertStillRequested(order);
+		if (!access.actingAsAdmin)
+			await assertSubscriptionActive(ctx, order.retailerId);
+
+		// The one transition path: timeline event, activation stamp, stage reset.
+		// notifyStatusChange skips `confirmed`, so nothing generic goes out.
+		await applyStatusTransition(ctx, order, "confirmed", {
+			note: "Booking approved",
+		});
+
+		// The confirm+pay message rides the EXACT storefront-push machinery
+		// (stamps, retries, delivery webhooks) — a booking's total is always
+		// final at approval (no mockup/fee holds by construction), so the
+		// template's "Total: {{3}}" is true. Env unset ⇒ no automatic message
+		// (the order page still shows approved + Pay now; posture matches the
+		// storefront's legacy fallback).
+		if (order.customer.waPhone && orderConfirmTemplateName() !== undefined) {
+			await ctx.db.patch(order._id, { confirmationPushStatus: "sending" });
+			await ctx.scheduler.runAfter(
+				0,
+				internal.whatsapp.notifyStorefrontOrderCreated,
+				{ orderId },
+			);
+		}
+		await logAdminAction(ctx, access, "bookings.approve", orderId);
+	},
+});
+
+/**
+ * Decline a booking request. The reason is REQUIRED — it's quoted verbatim on
+ * the guest's page (a silent no is a dead end for someone planning a trip) —
+ * and the hold releases through the one cancel path. The seller gets no
+ * notification of their own action (signal-over-noise matrix).
+ */
+export const declineBookingRequest = mutation({
+	args: { orderId: v.id("orders"), reason: v.string() },
+	handler: async (ctx, { orderId, reason }): Promise<void> => {
+		const { order, access } = await requireOrderAccess(ctx, orderId);
+		assertStillRequested(order);
+		if (!access.actingAsAdmin)
+			await assertSubscriptionActive(ctx, order.retailerId);
+
+		const trimmed = reason.trim();
+		if (trimmed.length === 0) {
+			throw new ConvexError(
+				"Add a short reason — the guest sees it with the decline",
+			);
+		}
+		if (trimmed.length > BOOKING_DECLINE_REASON_MAX) {
+			throw new ConvexError(
+				`Keep the reason under ${BOOKING_DECLINE_REASON_MAX} characters`,
+			);
+		}
+
+		// Resolution FIRST, then the transition: the cancel path's scheduled
+		// notify reads the marker after this mutation commits, which is what
+		// keeps the generic "order cancelled" message (wrong copy, and no
+		// session window to land in) from firing on top of the page's own
+		// declined state.
+		await ctx.db.patch(order._id, {
+			bookingResolution: "declined",
+			bookingDeclineReason: trimmed,
+		});
+		await applyStatusTransition(
+			ctx,
+			{ ...order, bookingResolution: "declined" },
+			"cancelled",
+			{ note: `Booking declined: ${trimmed}` },
+		);
+		await logAdminAction(ctx, access, "bookings.decline", orderId);
 	},
 });
 
@@ -342,6 +461,10 @@ export const expireStaleRequests = internalMutation({
 			)
 			.take(50);
 		for (const order of stale) {
+			// The resolution marker is what the buyer's page reads ("Request
+			// expired", never a bare "cancelled") and what suppresses the generic
+			// cancelled send (no window to land in anyway).
+			await ctx.db.patch(order._id, { bookingResolution: "expired" });
 			await applyStatusTransition(ctx, order, "cancelled", {
 				note: "Booking request expired — not answered within 24 hours",
 			});
