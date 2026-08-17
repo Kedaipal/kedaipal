@@ -32,7 +32,7 @@ import {
 	mutation,
 	query,
 } from "./_generated/server";
-import { requireAdmin } from "./lib/auth";
+import { logGlobalAdminAction, requireAdmin } from "./lib/auth";
 import { getAdapter } from "./lib/channels/registry";
 import type { OutboundMessage, SendReceipt } from "./lib/channels/types";
 import { sendEmail } from "./lib/email";
@@ -481,6 +481,82 @@ export const adminResumeRetailer = mutation({
 	handler: async (ctx, { retailerId }): Promise<void> => {
 		await requireAdmin(ctx);
 		await doResume(ctx, retailerId);
+	},
+});
+
+// ---------------------------------------------------------------------------
+// Manual opt-out (86eyn25gu — PDPA audit L3). The keyword path only works for
+// buyers who text the shared number themselves; a counter buyer whose number
+// the cashier typed has no self-serve way to withdraw consent. Same scope as
+// a STOP: non-transactional sends suppressed across every store on the shared
+// number; transactional order updates keep delivering (core promise).
+// `manual_admin` was declared in the optOuts schema from day one — this is
+// its first caller. Audited via logGlobalAdminAction with the LAST FOUR
+// digits as targetId (the audit log has no retention, so it never carries a
+// full phone; the optOuts row holds the full number).
+// ---------------------------------------------------------------------------
+
+export const adminOptOutStatus = query({
+	args: { waPhone: v.string() },
+	handler: async (ctx, { waPhone }) => {
+		await requireAdmin(ctx);
+		const phone = normalizeWaPhone(waPhone);
+		const latest = await ctx.db
+			.query("optOuts")
+			.withIndex("by_phone", (q) => q.eq("waPhone", phone))
+			.order("desc")
+			.first();
+		return latest && latest.reactivatedAt === undefined
+			? {
+					optedOut: true as const,
+					source: latest.source,
+					since: latest.createdAt,
+				}
+			: { optedOut: false as const };
+	},
+});
+
+export const adminRegisterOptOut = mutation({
+	args: { waPhone: v.string() },
+	handler: async (ctx, { waPhone }): Promise<void> => {
+		const adminId = await requireAdmin(ctx);
+		const phone = normalizeWaPhone(waPhone);
+		if (!/^\d{8,15}$/.test(phone)) {
+			throw new Error("Enter a valid WhatsApp number");
+		}
+		if (await isOptedOut(ctx, phone)) return; // idempotent
+		await ctx.db.insert("optOuts", {
+			waPhone: phone,
+			source: "manual_admin",
+			createdAt: Date.now(),
+		});
+		await logGlobalAdminAction(
+			ctx,
+			adminId,
+			"wabaProtection.manualOptOut",
+			`…${phone.slice(-4)}`,
+		);
+	},
+});
+
+export const adminReactivateOptIn = mutation({
+	args: { waPhone: v.string() },
+	handler: async (ctx, { waPhone }): Promise<void> => {
+		const adminId = await requireAdmin(ctx);
+		const phone = normalizeWaPhone(waPhone);
+		const latest = await ctx.db
+			.query("optOuts")
+			.withIndex("by_phone", (q) => q.eq("waPhone", phone))
+			.order("desc")
+			.first();
+		if (!latest || latest.reactivatedAt !== undefined) return; // idempotent
+		await ctx.db.patch(latest._id, { reactivatedAt: Date.now() });
+		await logGlobalAdminAction(
+			ctx,
+			adminId,
+			"wabaProtection.manualOptIn",
+			`…${phone.slice(-4)}`,
+		);
 	},
 });
 

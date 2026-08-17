@@ -262,6 +262,82 @@ describe("admin vendor list + at-a-glance stats", () => {
 	});
 });
 
+describe("admin manual opt-out (86eyn25gu)", () => {
+	test("non-admin rejected; opt-out registers manual_admin + audits last-4 only; re-activate restores", async () => {
+		const t = setup();
+
+		// Non-admin is rejected (ADMIN_USER_IDS unset → no one is admin).
+		await expect(
+			t
+				.withIdentity({ subject: "not_admin" })
+				.mutation(api.wabaProtection.adminRegisterOptOut, { waPhone: BUYER }),
+		).rejects.toThrow();
+
+		process.env.ADMIN_USER_IDS = USER;
+		const asAdmin = t.withIdentity({ subject: USER });
+
+		// Garbage input is refused before touching the table.
+		await expect(
+			asAdmin.mutation(api.wabaProtection.adminRegisterOptOut, {
+				waPhone: "not-a-phone",
+			}),
+		).rejects.toThrow();
+
+		expect(
+			await asAdmin.query(api.wabaProtection.adminOptOutStatus, {
+				waPhone: BUYER,
+			}),
+		).toMatchObject({ optedOut: false });
+
+		await asAdmin.mutation(api.wabaProtection.adminRegisterOptOut, {
+			waPhone: BUYER,
+		});
+		// Idempotent — a double-tap never inserts a second row.
+		await asAdmin.mutation(api.wabaProtection.adminRegisterOptOut, {
+			waPhone: BUYER,
+		});
+
+		expect(
+			await asAdmin.query(api.wabaProtection.adminOptOutStatus, {
+				waPhone: BUYER,
+			}),
+		).toMatchObject({ optedOut: true, source: "manual_admin" });
+		const optRows = await t.run(async (ctx) =>
+			ctx.db.query("optOuts").collect(),
+		);
+		expect(optRows).toHaveLength(1);
+
+		// Audited globally (no retailerId) with the LAST FOUR digits only — the
+		// audit log has no retention, so a full phone must never land in it.
+		const audits = await t.run(async (ctx) =>
+			ctx.db.query("adminAuditLog").collect(),
+		);
+		const optOutAudits = audits.filter(
+			(a) => a.action === "wabaProtection.manualOptOut",
+		);
+		expect(optOutAudits).toHaveLength(1);
+		expect(optOutAudits[0].targetId).toBe(`…${BUYER.slice(-4)}`);
+		expect(optOutAudits[0].targetId).not.toContain(BUYER);
+		expect(optOutAudits[0].retailerId).toBeUndefined();
+
+		// Re-activate restores sends and is audited the same way.
+		await asAdmin.mutation(api.wabaProtection.adminReactivateOptIn, {
+			waPhone: BUYER,
+		});
+		expect(
+			await asAdmin.query(api.wabaProtection.adminOptOutStatus, {
+				waPhone: BUYER,
+			}),
+		).toMatchObject({ optedOut: false });
+		const audits2 = await t.run(async (ctx) =>
+			ctx.db.query("adminAuditLog").collect(),
+		);
+		expect(
+			audits2.some((a) => a.action === "wabaProtection.manualOptIn"),
+		).toBe(true);
+	});
+});
+
 describe("guarded send end-to-end", () => {
 	test("transactional diagnostic still sends while the retailer is paused", async () => {
 		const t = setup();
